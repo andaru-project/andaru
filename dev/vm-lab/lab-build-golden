@@ -1,0 +1,70 @@
+#!/bin/sh
+# lab-build-golden <cloud|nocloud> [--force]
+#
+# Builds an immutable golden from the pristine, checksum-verified image in
+# images/. This is the ONLY thing that ever boots a golden: prepare once,
+# power off, chmod a-w. Every test run afterwards uses a copy-on-write overlay.
+set -eu
+. "$(dirname "$0")/lab-common.sh"
+
+[ $# -ge 1 ] || die "usage: lab-build-golden <cloud|nocloud> [--force]"
+flavor=$1; force=${2:-}
+flavor_check "$flavor"
+require_tools
+
+img=$(image_name_for "$flavor")
+src="$LAB_IMAGES/$img"
+[ -f "$src" ] || die "pristine image missing: $src (run lab-setup)"
+golden=$(golden_path "$flavor")
+if [ -e "$golden" ]; then
+    [ "$force" = "--force" ] || die "$golden exists (pass --force to rebuild)"
+    chmod u+w "$golden"; rm -f "$golden"
+fi
+
+# Verify the pristine source against the published checksum before every build.
+( cd "$LAB_IMAGES" && grep " $img\$" SHA512SUMS | shasum -a 512 -c - ) \
+    || die "pristine image failed SHA512 verification"
+
+mkdir -p "$LAB_GOLDEN" "$LAB_LOGS" "$LAB_RUN"
+rd="$LAB_RUN/_golden-$flavor"; rm -rf "$rd"; mkdir -p "$rd"
+sock="$rd/serial.sock"; pid="$rd/qemu.pid"; qlog="$rd/qemu.log"
+vars="$rd/vars.fd"
+log="$LAB_LOGS/golden-$flavor-$(date -u +%Y%m%dT%H%M%SZ).log"
+
+echo "== copying $src -> $golden"
+cp "$src" "$golden"; chmod u+w "$golden"
+echo "== resizing to 10G"
+qemu-img resize "$golden" 10G
+
+cp "$LAB_VARS_TEMPLATE" "$vars"; chmod u+w "$vars"
+echo "== booting golden for one-time preparation"
+qemu_boot "$flavor" "$golden" "$vars" "$sock" "$pid" "$qlog"
+wait_for_sock "$sock" 20
+
+# The nocloud image boots an *interactive* systemd-firstboot wizard on the
+# serial console; lab-drive.exp answers it (timezone skipped, root password
+# set). Left alone it prints "No password entered, skipping." and root ends up
+# with no usable password, so a later `root` login is refused outright.
+set +e
+"$LAB_SCRIPTS/lab-drive.exp" "$sock" "$log" "$LAB_ROOT_PW" \
+    300 1800 "$LAB_SCRIPTS/golden-prep-$flavor.cmds" --poweroff
+rc=$?
+set -e
+
+# Wait for QEMU to actually exit so nothing is still writing to the golden.
+qpid=$(cat "$pid" 2>/dev/null || echo)
+i=0
+while [ -n "$qpid" ] && kill -0 "$qpid" 2>/dev/null; do
+    i=$((i + 1))
+    [ "$i" -gt 90 ] && { echo "golden VM did not exit; killing" >&2; kill -9 "$qpid" 2>/dev/null || true; rc=2; break; }
+    sleep 1
+done
+rm -rf "$rd"
+
+[ "$rc" -eq 0 ] || die "golden preparation failed (rc=$rc); see $log"
+
+chmod a-w "$golden"
+echo "== golden ready (read-only): $golden"
+ls -l "$golden"
+shasum -a 256 "$golden" | tee "$golden.sha256"
+echo "== transcript: $log"

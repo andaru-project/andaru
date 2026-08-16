@@ -1,0 +1,13 @@
+#!/bin/sh
+# lab-console <test-name> -- interactive serial console. Detach with ctrl-c.
+set -eu
+. "$(dirname "$0")/lab-common.sh"
+
+[ $# -eq 1 ] || die "usage: lab-console <test-name>"
+name=$1
+read_meta "$name"
+vm_running "$name" || die "'$name' is not running (lab-boot it first)"
+sock=$(sock_path "$name")
+[ -S "$sock" ] || die "no serial socket at $sock"
+echo "attaching to $sock -- press enter for a prompt, ctrl-c to detach" >&2
+exec nc -U "$sock"

@@ -1,0 +1,19 @@
+#!/bin/sh
+# lab-stop <test-name> -- power the VM off (ACPI first, then kill).
+set -eu
+. "$(dirname "$0")/lab-common.sh"
+
+[ $# -eq 1 ] || die "usage: lab-stop <test-name>"
+name=$1
+read_meta "$name"
+vm_running "$name" || { echo "'$name' not running"; exit 0; }
+pid=$(cat "$(pid_path "$name")")
+kill "$pid" 2>/dev/null || true          # qemu treats SIGTERM as a clean shutdown
+i=0
+while kill -0 "$pid" 2>/dev/null; do
+    i=$((i + 1))
+    [ "$i" -gt 60 ] && { echo "forcing kill -9 $pid" >&2; kill -9 "$pid" 2>/dev/null || true; break; }
+    sleep 1
+done
+rm -f "$(pid_path "$name")" "$(sock_path "$name")"
+echo "stopped '$name'"

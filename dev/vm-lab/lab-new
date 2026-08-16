@@ -1,0 +1,23 @@
+#!/bin/sh
+# lab-new <cloud|nocloud> <test-name> -- fresh overlay + private UEFI vars.
+set -eu
+. "$(dirname "$0")/lab-common.sh"
+
+[ $# -eq 2 ] || die "usage: lab-new <cloud|nocloud> <test-name>"
+flavor=$1; name=$2
+flavor_check "$flavor"
+case "$name" in *[!A-Za-z0-9._-]*|'') die "test name must be [A-Za-z0-9._-]+" ;; esac
+
+golden=$(golden_path "$flavor")
+[ -f "$golden" ] || die "golden $golden not built yet (see scripts/lab-build-golden)"
+disk=$(disk_path "$name"); vars=$(vars_path "$name")
+[ -e "$disk" ] && die "overlay $disk already exists (lab-destroy or lab-reset it)"
+
+mkdir -p "$LAB_OVERLAYS" "$LAB_FW" "$(rundir "$name")"
+qemu-img create -f qcow2 -F qcow2 -b "$golden" "$disk" >/dev/null
+# UEFI vars are written by the guest, so every run needs its own copy.
+cp "$LAB_VARS_TEMPLATE" "$vars"; chmod u+w "$vars"
+printf 'LAB_FLAVOR=%s\nLAB_GOLDEN_SRC=%s\nLAB_CREATED=%s\n' \
+    "$flavor" "$golden" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$(meta_path "$name")"
+echo "created overlay $disk (backing $golden)"
+echo "created vars    $vars"

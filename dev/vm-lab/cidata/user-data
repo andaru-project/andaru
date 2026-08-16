@@ -1,0 +1,21 @@
+#cloud-config
+# Andaru lab seed. Serial console is the ONLY control channel for this VM:
+# no SSH keys are seeded, password auth over SSH is off, and the ssh server is
+# disabled outright. When the network is the system under test, an SSH session
+# is part of the system under test.
+hostname: andaru-cloud
+chpasswd:
+  expire: false
+  users:
+    - name: root
+      password: andaru
+      type: text
+ssh_pwauth: false
+disable_root: true
+package_update: false
+package_upgrade: false
+runcmd:
+  - [ systemctl, disable, --now, ssh.service ]
+  - [ systemctl, mask, ssh.service ]
+  - [ sh, -c, "grep -q '^ttyAMA0$' /etc/securetty 2>/dev/null || echo ttyAMA0 >> /etc/securetty" ]
+  - [ touch, /var/lib/andaru-golden-prepared ]

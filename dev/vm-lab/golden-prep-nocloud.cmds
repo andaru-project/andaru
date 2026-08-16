@@ -1,0 +1,47 @@
+# One command per line. Runs once, inside the nocloud golden, over the console.
+cat /etc/debian_version
+ROOTDEV=$(findmnt -no SOURCE /); echo "rootdev=$ROOTDEV"
+DISK=/dev/$(lsblk -no pkname "$ROOTDEV"); PNUM=$(echo "${ROOTDEV#/dev/}" | grep -o '[0-9]*$'); echo "disk=$DISK pnum=$PNUM"
+df -h / | tail -1
+# Record the stock package set and apt index state so the post-purge comparison
+# below can prove the finished golden is back where it started.
+dpkg-query -W -f='${binary:Package} ${Version}\n' | sort > /root/pkgs-before.txt; wc -l < /root/pkgs-before.txt
+ls -1A /var/lib/apt/lists > /root/lists-before.txt; wc -l < /root/lists-before.txt
+# The stock nocloud image ships no partition editor at all -- no sfdisk, fdisk,
+# parted or growpart -- and no cloud-init to grow anything, so `qemu-img resize`
+# alone leaves root at ~2.8 G. Install the packaged tool, grow, then purge it
+# again; apt resolves whatever partition tooling growpart needs.
+# NOTE: every apt/dpkg invocation below takes `</dev/null` and redirects its
+# output to a file. This is load-bearing, not tidiness. The console driver
+# pipelines: it queues its exit-status sentinel line into the guest tty before
+# the command has finished. dpkg reads from stdin, and on a serial tty it
+# drains that queued line out of the input buffer -- the sentinel never reaches
+# the shell and the driver aborts with "lost rc sentinel". `</dev/null` gives
+# dpkg an immediate EOF instead, leaving the tty input queue untouched.
+apt-get -qq update </dev/null >/root/apt.log 2>&1
+DEBIAN_FRONTEND=noninteractive apt-get -y -qq install cloud-guest-utils </dev/null >>/root/apt.log 2>&1
+dpkg-query -W -f='${binary:Package} ${Version}\n' | sort > /root/pkgs-installed.txt; comm -13 /root/pkgs-before.txt /root/pkgs-installed.txt
+growpart "$DISK" "$PNUM"
+partx -u "$DISK"
+resize2fs "$ROOTDEV"
+df -h / | tail -1
+# Back to a stock package set: purge the package plus everything it pulled in.
+DEBIAN_FRONTEND=noninteractive apt-get -y -qq purge cloud-guest-utils </dev/null >>/root/apt.log 2>&1
+DEBIAN_FRONTEND=noninteractive apt-get -y -qq autoremove --purge </dev/null >>/root/apt.log 2>&1
+apt-get -qq clean </dev/null >>/root/apt.log 2>&1
+# Drop only the apt index files that `apt-get update` added, leaving anything
+# the stock image shipped in place.
+( cd /var/lib/apt/lists && ls -1A | grep -vxF -f /root/lists-before.txt | tr '\n' '\0' | xargs -0 rm -rf ) || true
+dpkg-query -W -f='${binary:Package} ${Version}\n' | sort > /root/pkgs-after.txt; wc -l < /root/pkgs-after.txt
+diff /root/pkgs-before.txt /root/pkgs-after.txt && echo "PKGSET-IDENTICAL-TO-STOCK" || echo "PKGSET-DIFFERS-FROM-STOCK"
+echo "rc-state-residue=$(dpkg -l | awk '$1 ~ /^rc/' | wc -l)"
+ls -1A /var/lib/apt/lists > /root/lists-after.txt; diff /root/lists-before.txt /root/lists-after.txt && echo "APTLISTS-IDENTICAL-TO-STOCK" || echo "APTLISTS-DIFFER-FROM-STOCK"
+test -f /etc/securetty && (grep -q '^ttyAMA0$' /etc/securetty || echo ttyAMA0 >> /etc/securetty); echo "securetty: $(test -f /etc/securetty && echo present || echo absent)"
+passwd -S root
+touch /var/lib/andaru-golden-prepared
+# Leave no prep residue in the golden: these scratch files and this session's
+# shell history would otherwise become part of every future test run.
+rm -f /root/apt.log /root/pkgs-before.txt /root/pkgs-installed.txt /root/pkgs-after.txt /root/lists-before.txt /root/lists-after.txt
+export HISTFILE=/dev/null; rm -f /root/.bash_history
+ls -1A /root
+sync

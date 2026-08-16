@@ -1,0 +1,33 @@
+#!/bin/sh
+# lab-run <test-name> <script-file> -- drive the serial console non-interactively.
+#
+# Every non-blank, non-# line of <script-file> is one shell command. The full
+# console transcript lands in logs/. Exit: 0 all commands ok, 1 a command
+# failed, 2 the driver failed (login, timeout, hard deadline).
+#
+# LAB_CMD_TIMEOUT (default 120s) caps a single command.
+# LAB_DEADLINE    (default 900s) is the hard cap for the whole session.
+set -eu
+. "$(dirname "$0")/lab-common.sh"
+
+[ $# -ge 2 ] || die "usage: lab-run <test-name> <script-file> [--poweroff]"
+name=$1; script=$2; shift 2
+read_meta "$name"
+[ -f "$script" ] || die "no such script file: $script"
+vm_running "$name" || die "'$name' is not running (lab-boot it first)"
+
+mkdir -p "$LAB_LOGS"
+log="$LAB_LOGS/$name-$(basename "$script" | tr -c 'A-Za-z0-9._-' '-')-$(date -u +%Y%m%dT%H%M%SZ).log"
+{
+    echo "=== lab-run $name <- $script"
+    echo "=== flavor=$LAB_FLAVOR started=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+} > "$log"
+
+set +e
+"$LAB_SCRIPTS/lab-drive.exp" "$(sock_path "$name")" "$log" "$LAB_ROOT_PW" \
+    "${LAB_CMD_TIMEOUT:-120}" "${LAB_DEADLINE:-900}" "$script" "$@"
+rc=$?
+set -e
+echo "=== exit=$rc finished=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$log"
+echo "transcript: $log" >&2
+exit $rc

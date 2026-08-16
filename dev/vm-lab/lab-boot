@@ -1,0 +1,21 @@
+#!/bin/sh
+# lab-boot <test-name> -- boot the overlay headless, serial on a unix socket.
+set -eu
+. "$(dirname "$0")/lab-common.sh"
+
+[ $# -eq 1 ] || die "usage: lab-boot <test-name>"
+name=$1
+read_meta "$name"
+vm_running "$name" && die "'$name' already running (pid $(cat "$(pid_path "$name")"))"
+
+rd=$(rundir "$name"); mkdir -p "$rd" "$LAB_LOGS"
+sock=$(sock_path "$name"); pid=$(pid_path "$name"); log="$rd/qemu.log"
+: > "$log"
+qemu_boot "$LAB_FLAVOR" "$(disk_path "$name")" "$(vars_path "$name")" "$sock" "$pid" "$log"
+wait_for_sock "$sock" 20
+
+echo "booted '$name' (flavor $LAB_FLAVOR, pid $(cat "$pid"))"
+echo "  serial socket : $sock"
+echo "  qemu log      : $log"
+echo "  attach        : $LAB_SCRIPTS/lab-console $name"
+echo "  drive a script: $LAB_SCRIPTS/lab-run $name <script-file>"

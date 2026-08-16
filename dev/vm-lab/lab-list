@@ -1,0 +1,12 @@
+#!/bin/sh
+# lab-list -- show every overlay and whether it is running.
+set -eu
+. "$(dirname "$0")/lab-common.sh"
+printf '%-24s %-9s %-9s %s\n' NAME FLAVOR STATE PID
+for m in "$LAB_OVERLAYS"/*.meta; do
+    [ -e "$m" ] || { echo "(no overlays)"; exit 0; }
+    n=$(basename "$m" .meta)
+    ( read_meta "$n"
+      if vm_running "$n"; then s=running; p=$(cat "$(pid_path "$n")"); else s=stopped; p=-; fi
+      printf '%-24s %-9s %-9s %s\n' "$n" "$LAB_FLAVOR" "$s" "$p" )
+done

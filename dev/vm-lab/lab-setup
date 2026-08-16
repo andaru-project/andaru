@@ -1,0 +1,101 @@
+#!/bin/sh
+# lab-setup [--force-goldens]
+#
+# Single bootstrap entry point: from a fresh clone on an Apple-silicon Mac with
+# QEMU installed, this downloads both Debian images, verifies them against the
+# published SHA512SUMS, vendors the EDK2 firmware, builds the cloud-init seed
+# ISO and prepares both goldens -- with no manual steps.
+#
+# Idempotent: an already-downloaded image that still matches its checksum is not
+# re-fetched, and an already-built golden that still matches its .sha256 sidecar
+# is left alone rather than clobbered. Pass --force-goldens to rebuild both
+# goldens from the pristine images anyway.
+#
+# All VM data lands in $ANDARU_LAB_DIR (default ~/vm/andaru), never in the
+# git checkout.
+set -eu
+. "$(dirname "$0")/lab-common.sh"
+
+force=${1:-}
+[ -z "$force" ] || [ "$force" = "--force-goldens" ] || die "usage: lab-setup [--force-goldens]"
+
+require_tools
+echo "== lab directory: $LAB_ROOT"
+mkdir -p "$LAB_IMAGES" "$LAB_GOLDEN" "$LAB_OVERLAYS" "$LAB_SEEDS" "$LAB_FW" "$LAB_LOGS" "$LAB_RUN"
+
+# --- firmware -----------------------------------------------------------
+# Vendored so a QEMU upgrade cannot silently change guest firmware behaviour
+# underneath a golden that was prepared with the old one.
+if [ ! -f "$LAB_CODE_FD" ] || [ ! -f "$LAB_VARS_TEMPLATE" ]; then
+    share=$(qemu_share_dir)
+    echo "== vendoring EDK2 firmware from $share"
+    cp "$share/edk2-aarch64-code.fd" "$LAB_CODE_FD"
+    cp "$share/edk2-arm-vars.fd" "$LAB_VARS_TEMPLATE"
+    chmod a-w "$LAB_CODE_FD" "$LAB_VARS_TEMPLATE"
+else
+    echo "== firmware already vendored in $LAB_FW"
+fi
+
+# --- pristine images ----------------------------------------------------
+echo "== fetching $LAB_IMAGE_BASE_URL/SHA512SUMS"
+curl -fsSL -o "$LAB_IMAGES/SHA512SUMS.new" "$LAB_IMAGE_BASE_URL/SHA512SUMS"
+mv "$LAB_IMAGES/SHA512SUMS.new" "$LAB_IMAGES/SHA512SUMS"
+
+for flavor in cloud nocloud; do
+    img=$(image_name_for "$flavor")
+    dst="$LAB_IMAGES/$img"
+    if [ -f "$dst" ] && ( cd "$LAB_IMAGES" && grep " $img\$" SHA512SUMS | shasum -a 512 -c - >/dev/null 2>&1 ); then
+        echo "== $img already present and verified"
+        continue
+    fi
+    echo "== downloading $img"
+    [ -e "$dst" ] && chmod u+w "$dst" || true
+    curl -fL --progress-bar -o "$dst" "$LAB_IMAGE_BASE_URL/$img"
+    ( cd "$LAB_IMAGES" && grep " $img\$" SHA512SUMS | shasum -a 512 -c - ) \
+        || die "$img failed SHA512 verification against the published SHA512SUMS"
+    # Pristine downloads are never modified; the goldens are built from copies.
+    chmod a-w "$dst"
+done
+
+# --- cloud-init seed ISO (cloud flavor only) ----------------------------
+# NoCloud datasource, volume label CIDATA. The seed deliberately seeds no SSH
+# keys, turns SSH password auth off, and disables + masks ssh.service.
+seed="$LAB_SEEDS/cloud-seed.iso"
+rebuild_seed=0
+[ -f "$seed" ] || rebuild_seed=1
+for f in "$LAB_SCRIPTS"/cidata/*; do
+    [ "$f" -nt "$seed" ] && rebuild_seed=1 || true
+done
+if [ "$rebuild_seed" = 1 ]; then
+    echo "== building $seed"
+    rm -rf "$LAB_SEEDS/cidata"
+    mkdir -p "$LAB_SEEDS/cidata"
+    cp "$LAB_SCRIPTS"/cidata/* "$LAB_SEEDS/cidata/"
+    [ -e "$seed" ] && chmod u+w "$seed" || true
+    rm -f "$seed"
+    hdiutil makehybrid -quiet -o "$seed" -iso -joliet \
+        -default-volume-name CIDATA "$LAB_SEEDS/cidata"
+    chmod a-w "$seed"
+else
+    echo "== seed ISO already current"
+fi
+
+# --- goldens ------------------------------------------------------------
+for flavor in cloud nocloud; do
+    golden=$(golden_path "$flavor")
+    if [ "$force" != "--force-goldens" ] && [ -f "$golden" ] && [ -f "$golden.sha256" ] \
+       && ( cd "$LAB_GOLDEN" && shasum -a 256 -c "$golden.sha256" >/dev/null 2>&1 ); then
+        echo "== golden '$flavor' already built and verified; skipping"
+        continue
+    fi
+    echo "== building golden '$flavor' (this boots the image once, then seals it)"
+    if [ -e "$golden" ]; then
+        "$LAB_SCRIPTS/lab-build-golden" "$flavor" --force
+    else
+        "$LAB_SCRIPTS/lab-build-golden" "$flavor"
+    fi
+done
+
+echo
+echo "== lab ready in $LAB_ROOT"
+echo "   next: $LAB_SCRIPTS/lab-new nocloud mytest && $LAB_SCRIPTS/lab-boot mytest"

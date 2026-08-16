@@ -1,0 +1,17 @@
+# Required verification probes plus the baseline inventory, all over the console.
+cat /etc/debian_version
+ip -br link
+systemctl is-system-running || true
+hostnamectl --static
+echo "--- packages ---"
+for p in ifupdown dhcpcd-base nftables cloud-init netplan.io systemd openssh-server; do printf '%-16s ' "$p"; dpkg-query -W -f='${db:Status-Status}\n' "$p" 2>/dev/null || echo not-installed; done
+echo "--- units ---"
+for u in systemd-networkd.service systemd-resolved.service cloud-init.service nftables.service networking.service dhcpcd.service ssh.service; do printf '%-28s enabled=%-12s active=%s\n' "$u" "$(systemctl is-enabled $u 2>&1 | tail -1)" "$(systemctl is-active $u 2>&1 | tail -1)"; done
+echo "--- netplan/config ---"
+ls -1 /etc/netplan/ 2>/dev/null || echo "no /etc/netplan"
+ls -1 /etc/systemd/network/ 2>/dev/null || echo "no /etc/systemd/network"
+test -f /etc/network/interfaces && echo "/etc/network/interfaces PRESENT" || echo "/etc/network/interfaces absent"
+echo "--- listening sockets (should be no sshd) ---"
+ss -ltnp 2>/dev/null | head -10
+echo "--- contamination marker ---"
+test -e /root/CONTAMINATED && echo "CONTAMINATED PRESENT" || echo "CONTAMINATED absent"

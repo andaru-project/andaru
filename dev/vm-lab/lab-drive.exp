@@ -1,0 +1,154 @@
+#!/usr/bin/expect -f
+# Serial-console driver for the Andaru lab.
+#
+# usage: lab-drive.exp <socket> <transcript> <password> <cmd-timeout> <hard-deadline> <script-file> [--poweroff]
+#
+# Drives a guest exclusively over its serial console: answers Debian's
+# systemd-firstboot wizard if it is up, logs in as root, runs
+# each line of <script-file> as one shell command, and records the exit status
+# of every one. There is no SSH fallback anywhere in this lab, so this script
+# is the whole control channel.
+#
+# exit 0 = every command returned 0
+# exit 1 = at least one command returned non-zero
+# exit 2 = driver failure (no login, timeout, deadline exceeded)
+
+if {$argc < 6} {
+    puts stderr "usage: lab-drive.exp <sock> <log> <pw> <cmd-timeout> <deadline> <script> \[--poweroff\]"
+    exit 2
+}
+set sock       [lindex $argv 0]
+set logfile    [lindex $argv 1]
+set password   [lindex $argv 2]
+set cmdtimeout [lindex $argv 3]
+set deadline   [expr {[clock seconds] + [lindex $argv 4]}]
+set scriptfile [lindex $argv 5]
+set poweroff   [expr {[lsearch $argv "--poweroff"] >= 0}]
+
+# The guest echoes what we type, so every sentinel we match on is written in a
+# split form that does not match its own echo.
+set PROMPT "LABRDY># "
+set PROMPT_CMD {export PS1='LAB''RDY># '}
+set RC_CMD     {echo "LABR""C=$?"}
+
+proc remaining {} {
+    global deadline
+    return [expr {$deadline - [clock seconds]}]
+}
+# Never wait longer than the hard deadline allows.
+proc budget {want} {
+    set left [remaining]
+    if {$left <= 0} {
+        puts stderr "\nlab-drive: HARD DEADLINE exceeded"
+        exit 2
+    }
+    return [expr {$want < $left ? $want : $left}]
+}
+
+set fh [open $scriptfile r]
+set body [read $fh]
+close $fh
+
+log_file -a $logfile
+set send_slow {1 .002}
+
+spawn -noecho nc -U $sock
+set timeout [budget 5]
+
+# --- login ---------------------------------------------------------------
+# Nudge the console, then handle: login prompt, password prompt, or a shell
+# that is already open (getty autologin / prior session).
+set tries 0
+send "\r"
+set logged_in 0
+while {!$logged_in} {
+    set timeout [budget 20]
+    expect {
+        -re {Press any key to proceed} { send "\r" }
+        -re {new root password again}   { send "$password\r" }
+        -re {new root password}         { send "$password\r" }
+        -re {new (locale|system locale|keymap|timezone|hostname)[^\r\n]*empty to skip} { send "\r" }
+        -re {[Ll]ogin: *$} {
+            incr tries
+            if {$tries > 4} { puts stderr "\nlab-drive: login loop"; exit 2 }
+            send "root\r"
+        }
+        -re {[Pp]assword: *$} { send "$password\r" }
+        -re {Login incorrect}  { puts stderr "\nlab-drive: bad root password"; exit 2 }
+        -re {root@[^\r\n]*[#$] *$} { set logged_in 1 }
+        -re {\n[^\r\n]*[#$] $}     { set logged_in 1 }
+        timeout {
+            if {[remaining] < 5} { puts stderr "\nlab-drive: deadline during login"; exit 2 }
+            send "\r"
+        }
+    }
+}
+
+# --- stable, machine-readable shell -------------------------------------
+# Wide terminal so long output lines are not wrapped into the sentinels.
+send "stty cols 200 rows 50 2>/dev/null; export TERM=dumb SYSTEMD_PAGER=cat SYSTEMD_COLORS=0 PAGER=cat DEBIAN_FRONTEND=noninteractive\r"
+set timeout [budget 15]
+expect -re {[#$] $} {}
+
+send "$PROMPT_CMD\r"
+set timeout [budget 15]
+expect {
+    $PROMPT {}
+    timeout { puts stderr "\nlab-drive: prompt marker never appeared"; exit 2 }
+}
+# Swallow the second prompt that follows the echoed command.
+set timeout [budget 3]
+expect { $PROMPT {} timeout {} }
+
+# --- run the command script ---------------------------------------------
+set failures 0
+set n 0
+foreach line [split $body "\n"] {
+    set cmd [string trim $line]
+    if {$cmd eq "" || [string index $cmd 0] eq "#"} { continue }
+    incr n
+
+    send -- "$cmd\r"
+    set timeout [budget $cmdtimeout]
+    expect {
+        $PROMPT {}
+        timeout {
+            puts stderr "\nlab-drive: TIMEOUT after ${cmdtimeout}s on: $cmd"
+            exit 2
+        }
+    }
+
+    send -- "$RC_CMD\r"
+    set rc -1
+    # The driver runs one step ahead: the $PROMPT match above is satisfied by
+    # the prompt that was already in the buffer, so it returns immediately and
+    # $RC_CMD sits in the guest's tty input queue until the command finishes.
+    # That makes THIS wait -- not the one above -- the real per-command cap, so
+    # it gets the full command budget. A short fixed timeout here silently
+    # capped every command at that value instead (an apt-get install blew it).
+    set timeout [budget $cmdtimeout]
+    expect {
+        -re {LABRC=([0-9]+)} { set rc $expect_out(1,string) }
+        timeout { puts stderr "\nlab-drive: lost rc sentinel after: $cmd"; exit 2 }
+    }
+    set timeout [budget 10]
+    expect { $PROMPT {} timeout {} }
+
+    if {$rc != 0} {
+        incr failures
+        puts stderr "lab-drive: rc=$rc from: $cmd"
+    }
+}
+
+if {$poweroff} {
+    send "poweroff\r"
+    set timeout [budget 60]
+    expect {
+        -re {reboot: Power down|Powering off|System halted} {}
+        eof {}
+        timeout { puts stderr "lab-drive: poweroff did not confirm" }
+    }
+}
+
+puts stderr "\nlab-drive: $n command(s), $failures failure(s)"
+exit [expr {$failures > 0 ? 1 : 0}]

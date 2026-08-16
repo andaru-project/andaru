@@ -1,0 +1,11 @@
+#!/bin/sh
+# lab-reset <test-name> -- destroy and recreate the overlay from the same golden.
+set -eu
+. "$(dirname "$0")/lab-common.sh"
+
+[ $# -eq 1 ] || die "usage: lab-reset <test-name>"
+name=$1
+read_meta "$name"
+flavor=$LAB_FLAVOR
+"$LAB_SCRIPTS/lab-destroy" "$name"
+"$LAB_SCRIPTS/lab-new" "$flavor" "$name"

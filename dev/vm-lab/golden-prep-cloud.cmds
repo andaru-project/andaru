@@ -1,0 +1,8 @@
+# One command per line. Runs once, inside the cloud golden, over the console.
+cloud-init status --wait
+cat /etc/debian_version
+df -h / | tail -1
+systemctl is-enabled ssh.service || echo "ssh not enabled (intended)"
+test -f /var/lib/andaru-golden-prepared && echo "seed runcmd ran"
+passwd -S root
+sync

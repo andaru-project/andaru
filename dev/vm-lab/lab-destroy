@@ -1,0 +1,17 @@
+#!/bin/sh
+# lab-destroy <test-name> -- stop the VM and remove its overlay + vars.
+# Never touches images/ or golden/.
+set -eu
+. "$(dirname "$0")/lab-common.sh"
+
+[ $# -eq 1 ] || die "usage: lab-destroy <test-name>"
+name=$1
+read_meta "$name"
+vm_running "$name" && "$LAB_SCRIPTS/lab-stop" "$name"
+for f in "$(disk_path "$name")" "$(vars_path "$name")" "$(meta_path "$name")"; do
+    case "$f" in
+        "$LAB_OVERLAYS"/*|"$LAB_FW"/*) rm -f "$f"; echo "removed $f" ;;
+        *) die "refusing to remove $f (outside overlays/ and fw/)" ;;
+    esac
+done
+rm -rf "$(rundir "$name")"
