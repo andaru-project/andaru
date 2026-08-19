@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/andaru-icon.svg" alt="Andaru" width="192">
+</p>
+
 # andaru
 Andaru — a Free Software firewall platform for Debian
 
