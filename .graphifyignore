@@ -1,0 +1,7 @@
+# Corpus: documentation, the development lab, and (once they exist) source trees.
+# Tool state, assets, VM data and dotfiles stay out.
+.serena/
+.codegraph/
+assets/
+LICENSE
+dev/vm-lab/cidata/
