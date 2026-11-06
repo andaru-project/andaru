@@ -9,8 +9,6 @@ usage() {
 main() {
 	# shellcheck source=scripts/agent/agent_env.sh
 	. "$(dirname "$0")/agent_env.sh"
-	# shellcheck source=scripts/agent/resolve-graphify.sh
-	. "$(dirname "$0")/resolve-graphify.sh"
 	scrub_git_env
 	[ "$#" -le 1 ] || usage
 	require_tool git
@@ -29,8 +27,7 @@ main() {
 	# its cost, what .graphifyignore allows) is a judgement call, so defer it to an
 	# AI-assisted `/graphify` run rather than picking a default unattended.
 	if [ -f "$root/graphify-out/graph.json" ]; then
-		graphify_bin=$(resolve_graphify_launcher) || exit 1
-		"$graphify_bin" update "$root" || exit $?
+		sh "$(dirname "$0")/check-graph-fresh.sh" --refresh "$root" || exit $?
 	else
 		echo "No Graphify root graph in $root; run /graphify in your AI assistant to build one." >&2
 	fi

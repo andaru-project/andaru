@@ -16,7 +16,6 @@ Describe 'ensure-graphify-merge-driver.sh'
     stubdir="$fixture/bin"
     mkdir -p "$stubdir"
     uv_log="$fixture/uv.log"
-    graphify_log="$fixture/graphify.log"
 
     # Pins the exact install line: changing it (e.g. dropping the leiden extra,
     # which silently degrades clustering to Louvain) turns this suite red.
@@ -34,19 +33,27 @@ case "$*" in
   *) exit 9 ;;
 esac
 UV
+    # Registration never runs the Graphify CLI: `graphify hook install` would drop
+    # rebuild hooks the tracked .githooks retire. Any call trips this stub.
     cat > "$stubdir/graphify" <<'GRAPHIFY'
 #!/bin/sh
-printf '%s\t%s\n' "$PWD" "$*" >> "$GRAPHIFY_LOG"
-[ "$#" -eq 2 ] && [ "$1" = hook ] && [ "$2" = install ] || exit 91
-case "${GRAPHIFY_DRIVER_MODE:-valid}" in
-  valid) git config --local merge.graphify.driver 'graphify merge-driver %O %A %B' ;;
-  malformed) git config --local merge.graphify.driver 'graphify merge-driver %O %A' ;;
-  missing) : ;;
-  *) exit 92 ;;
-esac
+touch "$GRAPHIFY_CALLED"
+exit 91
 GRAPHIFY
-    chmod +x "$stubdir/uv" "$stubdir/graphify"
-    export UV_LOG="$uv_log" GRAPHIFY_LOG="$graphify_log" UV_TOOL_BIN_FIXTURE="$stubdir"
+    real_git=$(command -v git)
+    gitstub="$fixture/gitstub"
+    mkdir -p "$gitstub"
+    cat > "$gitstub/git" <<'GIT'
+#!/bin/sh
+case "${GIT_STUB_MODE:-}:$*" in
+  write:*' config merge.graphify.driver '*) exit 1 ;;
+  readback:*' config --local --get merge.graphify.driver') printf '%s\n' 'graphify merge-driver %O %A'; exit 0 ;;
+esac
+exec "$REAL_GIT" "$@"
+GIT
+    chmod +x "$stubdir/uv" "$stubdir/graphify" "$gitstub/git"
+    graphify_called="$fixture/graphify-called"
+    export UV_LOG="$uv_log" UV_TOOL_BIN_FIXTURE="$stubdir" GRAPHIFY_CALLED="$graphify_called"
     PATH="$stubdir:$PATH"
     export PATH
   }
@@ -55,88 +62,78 @@ GRAPHIFY
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  It 'installs Graphify with the Leiden backend and configures the requested Git root'
+  driver() { git_fixture -C "$repo" config --get merge.graphify.driver; }
+
+  It 'installs Graphify with the Leiden backend and registers its launcher as the union merge driver'
     When run sh "$script_abs" "$repo"
     The status should equal 0
     The contents of file "$uv_log" should equal 'tool install --upgrade graphifyy[leiden]>=0.9.60'
-    The contents of file "$graphify_log" should equal "$(printf '%s\thook install' "$repo")"
-    The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should include 'graphify merge-driver %O %A %B'
+    The value "$(git_fixture -C "$repo" config --get merge.graphify.name)" should equal 'graphify graph.json union merge'
+    The result of function driver should equal "\"$stubdir/graphify\" merge-driver %O %A %B"
+    The path "$graphify_called" should not be exist
   End
 
-  Context 'driver validation failures'
-    Parameters
-      'missing'
-      'malformed'
-    End
-
-    It "fails loudly when the installed driver is $1"
-      export GRAPHIFY_DRIVER_MODE="$1"
-      When run sh "$script_abs" "$repo"
-      The status should equal 1
-      The stderr should include 'merge.graphify.driver'
-      The stderr should include 'graphify merge-driver %O %A %B'
-    End
+  It 'never runs `graphify hook install`: no rebuild hooks appear in core.hooksPath'
+    git_fixture -C "$repo" config core.hooksPath .githooks
+    mkdir -p "$repo/.githooks"
+    When run sh "$script_abs" "$repo"
+    The status should equal 0
+    The path "$repo/.githooks/post-commit" should not be exist
+    The path "$repo/.githooks/post-checkout" should not be exist
+    The path "$graphify_called" should not be exist
   End
 
-  It 'uses the off-PATH uv launcher when graphify is not on PATH'
+  It 'registers the uv-installed launcher, not a stale graphify earlier on PATH'
     uv_tool_bin="$fixture/uv tool bin"
     mkdir -p "$uv_tool_bin"
     cp "$stubdir/graphify" "$uv_tool_bin/graphify"
-    off_path="$fixture/off path"
-    mkdir -p "$off_path"
-    for tool in dirname git sh; do
-      ln -s "$(command -v "$tool")" "$off_path/$tool"
-    done
-    ln -s "$stubdir/uv" "$off_path/uv"
-    When run env PATH="$off_path" UV_TOOL_BIN_FIXTURE="$uv_tool_bin" \
-      UV_PROGRESS_FIXTURE=1 sh "$script_abs" "$repo"
+    When run env UV_TOOL_BIN_FIXTURE="$uv_tool_bin" UV_PROGRESS_FIXTURE=1 sh "$script_abs" "$repo"
     The status should equal 0
     The stderr should include 'uv progress'
-    The contents of file "$graphify_log" should equal "$(printf '%s\thook install' "$repo")"
-    The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should include 'graphify merge-driver %O %A %B'
+    The result of function driver should equal "\"$uv_tool_bin/graphify\" merge-driver %O %A %B"
   End
 
-  It 'uses the launcher uv installed, not a stale graphify earlier on PATH'
-    stale="$fixture/stale"
-    mkdir -p "$stale"
-    cat > "$stale/graphify" <<'STALE'
-#!/bin/sh
-printf 'stale\t%s\n' "$*" >> "$GRAPHIFY_LOG"
-exit 93
-STALE
-    chmod +x "$stale/graphify"
-    When run env PATH="$stale:$PATH" sh "$script_abs" "$repo"
-    The status should equal 0
-    The contents of file "$graphify_log" should equal "$(printf '%s\thook install' "$repo")"
-  End
-
-  It 'absolutizes a relative uv tool directory before entering the target'
+  It 'absolutizes a relative uv tool directory against the caller, never the target'
     caller="$fixture/caller"
-    mkdir -p "$caller/relbin"
+    mkdir -p "$caller/relbin" "$repo/relbin"
     cp "$stubdir/graphify" "$caller/relbin/graphify"
-
-    # A same-named launcher inside the target must never run.
-    decoy_marker="$fixture/decoy-executed"
-    mkdir -p "$repo/relbin"
-    cat > "$repo/relbin/graphify" <<'DECOY'
-#!/bin/sh
-touch "$DECOY_MARKER"
-"$GIT_TOOL" config --local merge.graphify.driver 'graphify merge-driver %O %A %B'
-DECOY
-    chmod +x "$repo/relbin/graphify"
-
-    tool_path="$fixture/relative-tools"
-    mkdir -p "$tool_path"
-    for tool in dirname git touch; do
-      ln -s "$(command -v "$tool")" "$tool_path/$tool"
-    done
-    ln -s "$(command -v dash || command -v sh)" "$tool_path/sh"
-    ln -s "$stubdir/uv" "$tool_path/uv"
-    When run env PATH="$tool_path" UV_TOOL_BIN_FIXTURE=relbin GIT_TOOL="$tool_path/git" \
-      DECOY_MARKER="$decoy_marker" sh -c 'cd "$1" && exec sh "$2" "$3"' _ \
+    cp "$stubdir/graphify" "$repo/relbin/graphify"
+    When run env UV_TOOL_BIN_FIXTURE=relbin sh -c 'cd "$1" && exec sh "$2" "$3"' _ \
       "$caller" "$script_abs" "$repo"
     The status should equal 0
-    The contents of file "$graphify_log" should equal "$(printf '%s\thook install' "$repo")"
-    The path "$decoy_marker" should not be exist
+    The result of function driver should equal "\"$caller/relbin/graphify\" merge-driver %O %A %B"
+  End
+
+  Context 'registration failures'
+    Parameters
+      write    'git refuses to record the driver'
+      readback 'the recorded driver reads back malformed'
+    End
+
+    It "fails loudly when $2"
+      When run env PATH="$gitstub:$PATH" REAL_GIT="$real_git" GIT_STUB_MODE="$1" sh "$script_abs" "$repo"
+      The status should equal 1
+      The stderr should include 'merge.graphify.driver'
+      The stderr should include 'merge-driver %O %A %B'
+    End
+  End
+
+  Context 'launcher path the driver string cannot carry'
+    # git hands the string to sh inside double quotes, and expands %-sequences
+    # (%O %A %B) anywhere in it, quoted or not: such a driver registers but never runs.
+    Parameters
+      "uv\$bin"  'a shell metacharacter'
+      'uv%Abin'  'a git %-sequence'
+    End
+
+    It "fails closed on $2 in the launcher path"
+      uv_tool_bin="$fixture/$1"
+      mkdir -p "$uv_tool_bin"
+      cp "$stubdir/graphify" "$uv_tool_bin/graphify"
+      When run env UV_TOOL_BIN_FIXTURE="$uv_tool_bin" sh "$script_abs" "$repo"
+      The status should equal 1
+      The stderr should include 'cannot be quoted'
+      The value "$(driver)" should equal ''
+    End
   End
 End

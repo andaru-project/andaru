@@ -1,0 +1,26 @@
+#!/bin/sh
+# Root graph freshness: the commit that moves code moves the graph.
+#
+# Any staged change other than graphify-out/graph.json itself rebuilds the graph in
+# place (PYTHONHASHSEED=0, through the resolved launcher) and stages it, so the
+# pre-push gate, which rebuilds and compares, finds it fresh. Decided by git's own
+# index diff, not a newline listing: a path holding a newline could otherwise pose
+# as the graph. Synchronous, so a rebase/merge/cherry-pick in progress is no reason
+# to skip. Graphify is mandatory: a failed rebuild or a missing launcher fails the
+# commit. Bypass in an emergency with `git commit --no-verify`.
+#
+# Enable: sh scripts/setup-hooks.sh
+
+set -u
+
+root=$(git rev-parse --show-toplevel) || exit 1
+cd "$root" || exit 1
+
+git diff --cached --quiet -- . ':!graphify-out/graph.json' && exit 0
+
+printf '[pre-commit] graph freshness (rebuild graphify-out/graph.json and stage it)\n'
+if sh scripts/agent/check-graph-fresh.sh --refresh && git add -- graphify-out/graph.json; then
+	exit 0
+fi
+printf '[pre-commit] FAILED: graph freshness. Fix it, or bypass with: git commit --no-verify\n' >&2
+exit 1

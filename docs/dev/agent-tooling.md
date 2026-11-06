@@ -17,10 +17,28 @@ sh scripts/setup-hooks.sh
 ```
 
 This needs `uv`. It installs Graphify with its native Leiden clustering backend,
-installs Graphify's rebuild hooks and graph merge driver into the clone, and
+points `core.hooksPath` at the tracked `.githooks/`, registers the graph merge
+driver, removes any rebuild hooks `graphify hook install` left behind, and
 builds the CodeGraph index when `codegraph` is installed. For a new linked
 worktree, run `sh scripts/agent/init-worktree-tools.sh <worktree>` (needs
-`codegraph`) to build that worktree's own CodeGraph index and refresh its graph.
+`codegraph`) to build that worktree's own CodeGraph index and warm its graph cache.
+
+## Graph freshness
+
+The committed `graphify-out/graph.json` always equals
+`PYTHONHASHSEED=0 graphify update .` run on the commit's own tree.
+`scripts/agent/check-graph-fresh.sh` checks that (or, with `--refresh`, rebuilds
+in place), and two tracked hooks enforce it:
+
+- **pre-commit** rebuilds and stages the graph whenever anything else is staged.
+- **pre-push** checks out each pushed tip into a scratch worktree under
+  `../.andaru_worktrees/.graph-check-<sha7>` and refuses the push if its graph is
+  stale. A rebase replays commits without the pre-commit rebuild, so refresh and
+  commit the graph after rebasing.
+
+`graphify update` re-extracts code only; it keeps the documentation nodes already
+in the graph. After a documentation change, run an AI-assisted `/graphify --update`
+to refresh them, then commit.
 
 ## Decisions
 
@@ -37,13 +55,12 @@ worktree, run `sh scripts/agent/init-worktree-tools.sh <worktree>` (needs
   wired in from the start.
 - **The graph is tracked.** `graphify-out/graph.json` is committed so a fresh
   clone can query it without a rebuild. Parallel updates merge through the
-  `graphify` union merge driver (`.gitattributes`), which `setup-hooks.sh`
-  registers in each clone. Graphify's post-commit hook refreshes the code layer
-  after each commit in the primary checkout only; it skips linked worktrees,
-  which refresh through `init-worktree-tools.sh`. Documentation changes need an
-  AI-assisted `/graphify --update`.
-- **No freshness gate yet.** Nothing enforces that the committed graph equals a
-  rebuild of the tree. Revisit once there is CI to run the check in.
-- **Hooks are not tracked.** Graphify pins each machine's interpreter path into
-  its hooks, so they are installed into the clone's own hooks directory rather
-  than committed.
+  `graphify` union merge driver (`.gitattributes`), registered by
+  `setup-hooks.sh` with two `git config` writes. The driver only keeps conflict
+  markers out of the graph; the hooks rebuild it.
+- **The hooks are tracked; Graphify's own are not used.** `graphify hook install`
+  writes post-commit and post-checkout rebuild hooks that run in the background,
+  skip linked worktrees, and pin each machine's interpreter path. The tracked
+  pre-commit and pre-push hooks replace them and run in every worktree.
+- **No CI gate yet.** The hooks are the only enforcement; add the same
+  `check-graph-fresh.sh` run to CI once CI exists.
