@@ -33,8 +33,9 @@ in place), and two tracked hooks enforce it:
 - **pre-commit** rebuilds and stages the graph whenever anything else is staged.
 - **pre-push** checks out each pushed tip into a scratch worktree under
   `../.andaru_worktrees/.graph-check-<sha7>` and refuses the push if its graph is
-  stale. A rebase replays commits without the pre-commit rebuild, so refresh and
-  commit the graph after rebasing.
+  stale. A rebase replays commits without the pre-commit rebuild, and a clean
+  merge commits the merge driver's union rather than a rebuild, so after either
+  run `sh scripts/agent/check-graph-fresh.sh --refresh` and commit the graph.
 
 `graphify update` re-extracts code only; it keeps the documentation nodes already
 in the graph. After a documentation change, run an AI-assisted `/graphify --update`
