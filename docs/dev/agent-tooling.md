@@ -42,8 +42,11 @@ in place), and two tracked hooks enforce it:
   run `sh scripts/agent/check-graph-fresh.sh --refresh` and commit the graph.
 
 `graphify update` re-extracts code only; it keeps the documentation nodes already
-in the graph. After a documentation change, run `/graphify --update` in your AI
-assistant to refresh them, then commit. That command comes from Graphify's
+in the graph. The freshness gate therefore proves the code layer only: a concept
+removed from a document stays in the graph and still passes the gate, whether an
+edit removed it or a merge's union brought it back. After a documentation change
+or a merge that touched documentation, run `/graphify --update` in your AI
+assistant to refresh those nodes, then commit. That command comes from Graphify's
 assistant skill, which `setup-hooks.sh` does not install: run
 `graphify install --platform <name>` once for your assistant (for example
 `claude`, `codex`, `cursor`, or `agents`; `graphify --help` lists them all).
