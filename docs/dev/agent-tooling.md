@@ -19,9 +19,9 @@ sh scripts/setup-hooks.sh
 This needs `uv`. It installs Graphify with its native Leiden clustering backend,
 points `core.hooksPath` at the tracked `.githooks/`, registers the graph merge
 driver, removes any rebuild hooks `graphify hook install` left behind, and
-builds the CodeGraph index when `codegraph` is installed. For a new linked
-worktree, run `sh scripts/agent/init-worktree-tools.sh <worktree>` (needs
-`codegraph`) to build that worktree's own CodeGraph index and warm its graph cache.
+builds the CodeGraph index when `codegraph` is installed. Each linked worktree
+needs its own CodeGraph index: run `sh scripts/agent/ensure-codegraph.sh
+<worktree>`.
 
 ## Graph freshness
 
@@ -31,6 +31,10 @@ The committed `graphify-out/graph.json` always equals
 in place), and two tracked hooks enforce it:
 
 - **pre-commit** rebuilds and stages the graph whenever anything else is staged.
+  The rebuild reads the working tree, so the hook refuses to run while there are
+  unstaged changes or untracked files; stash them with `git stash -k -u` first.
+  After a partial `git commit <path>`, the graph update lands only in that commit;
+  run `git add graphify-out/graph.json` before staging anything else.
 - **pre-push** checks out each pushed tip into a scratch worktree under
   `../.andaru_worktrees/.graph-check-<sha7>` and refuses the push if its graph is
   stale. A rebase replays commits without the pre-commit rebuild, and a clean
@@ -38,8 +42,11 @@ in place), and two tracked hooks enforce it:
   run `sh scripts/agent/check-graph-fresh.sh --refresh` and commit the graph.
 
 `graphify update` re-extracts code only; it keeps the documentation nodes already
-in the graph. After a documentation change, run an AI-assisted `/graphify --update`
-to refresh them, then commit.
+in the graph. After a documentation change, run `/graphify --update` in your AI
+assistant to refresh them, then commit. That command comes from Graphify's
+assistant skill, which `setup-hooks.sh` does not install: run
+`graphify install --platform <name>` once for your assistant (for example
+`claude`, `codex`, `cursor`, or `agents`; `graphify --help` lists them all).
 
 ## Decisions
 

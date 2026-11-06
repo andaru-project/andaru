@@ -97,7 +97,7 @@ main() {
 		echo 'check-graph-fresh.sh: graph is fresh' >&2
 		exit 0
 	fi
-	echo "check-graph-fresh.sh: STALE: graphify-out/graph.json differs from a rebuild of this tree; run 'PYTHONHASHSEED=0 graphify update .' and commit graphify-out/graph.json" >&2
+	echo "check-graph-fresh.sh: STALE: graphify-out/graph.json differs from a rebuild of this tree; run 'sh scripts/agent/check-graph-fresh.sh --refresh' on a clean tree and commit graphify-out/graph.json" >&2
 	exit 1
 }
 

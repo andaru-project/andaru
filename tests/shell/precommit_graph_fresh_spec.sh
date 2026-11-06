@@ -4,7 +4,8 @@
 # scripts/agent/check-graph-fresh.sh --refresh and stages the result, so the commit
 # and its graph always agree. Only the graph itself staged, or nothing staged,
 # rebuilds nothing. A rebase/merge/cherry-pick in progress changes nothing because
-# the rebuild is synchronous. A failed, tool-less, or missing checker fails the commit.
+# the rebuild is synchronous. A failed, tool-less, or missing checker fails the
+# commit, and so does a dirty tree, whose unstaged bytes would leak into the graph.
 
 Describe '.githooks/pre-commit root-graph refresh'
   gitc() { git_fixture -C "$repo" "$@"; }
@@ -18,7 +19,7 @@ Describe '.githooks/pre-commit root-graph refresh'
     gitc config commit.gpgsign false
     mkdir -p "$repo/.githooks" "$repo/src" "$repo/scripts/agent" "$repo/graphify-out"
     cp "$SHELLSPEC_PROJECT_ROOT/.githooks/pre-commit" "$repo/.githooks/pre-commit"
-    check_log="$repo/check-graph-fresh.log"
+    check_log="$repo.check-graph-fresh.log"
     export GRAPH_CHECK_LOG="$check_log"
     cat > "$repo/scripts/agent/check-graph-fresh.sh" <<'CHECK'
 #!/bin/sh
@@ -27,12 +28,12 @@ printf '%s\n' "$*" >> "$GRAPH_CHECK_LOG"
 printf 'rebuilt graph\n' > graphify-out/graph.json
 CHECK
     printf 'committed graph\n' > "$repo/graphify-out/graph.json"
-    gitc add graphify-out/graph.json
+    gitc add .githooks/pre-commit graphify-out/graph.json scripts/agent/check-graph-fresh.sh
     gitc commit -q -m seed --no-verify
     printf 'content\n' > "$repo/src/ok.txt"
   }
   cleanup() {
-    rm -rf "$repo"
+    rm -rf "$repo" "$check_log"
     unset GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GRAPH_CHECK_LOG GRAPH_CHECK_RC
   }
   Before 'make_repo'
@@ -71,6 +72,7 @@ CHECK
   End
 
   It 'rebuilds when the lone staged path merely SPLITS into graph.json lines: the guard is decided NUL-safe'
+    rm -f "$repo/src/ok.txt"
     mkdir -p "$repo/graphify-out/graph.json
 graphify-out"
     printf 'not the graph\n' > "$repo/graphify-out/graph.json
@@ -129,11 +131,40 @@ graphify-out/graph.json"
   End
 
   It 'fails a tree that ships no checker'
-    rm -f "$repo/scripts/agent/check-graph-fresh.sh"
+    gitc rm -q scripts/agent/check-graph-fresh.sh
     gitc add src/ok.txt
     When run sh -c "cd '$repo' && sh .githooks/pre-commit"
     The status should equal 1
     The output should include '[pre-commit] graph freshness'
     The stderr should include '[pre-commit] FAILED: graph freshness'
+  End
+
+  Context 'a dirty tree fails the commit before any rebuild'
+    Parameters
+      unstaged  'an unstaged edit to a tracked file'
+      untracked 'an untracked file'
+    End
+
+    It "refuses $2"
+      gitc add src/ok.txt
+      case "$1" in
+        unstaged) printf 'edit\n' >> "$repo/scripts/agent/check-graph-fresh.sh" ;;
+        untracked) printf 'new\n' > "$repo/src/new.txt" ;;
+      esac
+      When run sh -c "cd '$repo' && sh .githooks/pre-commit"
+      The status should equal 1
+      The stderr should include 'git stash -k -u'
+      The file "$check_log" should not be exist
+      The result of function staged_graph should equal ''
+    End
+  End
+
+  It 'ignores an unstaged change to the graph itself'
+    gitc add src/ok.txt
+    printf 'local graph\n' > "$repo/graphify-out/graph.json"
+    When run sh -c "cd '$repo' && sh .githooks/pre-commit"
+    The status should equal 0
+    The output should include '[pre-commit] graph freshness'
+    The result of function staged_graph should equal 'graphify-out/graph.json'
   End
 End

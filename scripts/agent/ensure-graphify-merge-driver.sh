@@ -32,8 +32,9 @@ main() {
 
 	# The shared installer installs Graphify and returns the launcher a rebuild must use.
 	graphify_bin=$(sh "$(dirname "$0")/ensure-graphify.sh" "$root") || {
+		rc=$?
 		echo "ensure-graphify-merge-driver.sh: Graphify setup failed for '$root'" >&2
-		exit 1
+		exit "$rc"
 	}
 	# git hands the driver string to a shell, so the launcher path is quoted, and
 	# expands %-sequences (%O %A %B) even inside the quotes; a path that the string

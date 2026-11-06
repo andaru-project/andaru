@@ -89,7 +89,7 @@ GRAPHIFY
     When run sh "$script_abs" "$worktree"
     The status should equal 1
     The stderr should include 'STALE'
-    The stderr should include "PYTHONHASHSEED=0 graphify update ."
+    The stderr should include "check-graph-fresh.sh --refresh"
     The contents of file "$graph" should equal 'committed graph'
     The result of function graph_status should equal ''
     The result of function leftovers should equal ''

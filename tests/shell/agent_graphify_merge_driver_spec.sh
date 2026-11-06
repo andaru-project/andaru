@@ -106,14 +106,14 @@ GIT
 
   Context 'registration failures'
     Parameters
-      write    'git refuses to record the driver'
-      readback 'the recorded driver reads back malformed'
+      write    'git refuses to record the driver'       'cannot record merge.graphify.driver'
+      readback 'the recorded driver reads back malformed' 'must read back as'
     End
 
     It "fails loudly when $2"
       When run env PATH="$gitstub:$PATH" REAL_GIT="$real_git" GIT_STUB_MODE="$1" sh "$script_abs" "$repo"
       The status should equal 1
-      The stderr should include 'merge.graphify.driver'
+      The stderr should include "$3"
       The stderr should include 'merge-driver %O %A %B'
     End
   End
@@ -135,5 +135,17 @@ GIT
       The stderr should include 'cannot be quoted'
       The value "$(driver)" should equal ''
     End
+  End
+
+  It 'propagates the installer exit code when uv is missing'
+    no_uv="$fixture/no-uv"
+    mkdir -p "$no_uv"
+    for tool in dirname git sh; do
+      ln -s "$(command -v "$tool")" "$no_uv/$tool"
+    done
+    When run env PATH="$no_uv" sh "$script_abs" "$repo"
+    The status should equal 4
+    The stderr should include 'TOOL-MISSING: uv'
+    The value "$(driver)" should equal ''
   End
 End

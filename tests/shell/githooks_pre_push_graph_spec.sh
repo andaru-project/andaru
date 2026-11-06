@@ -1,21 +1,23 @@
 #shellcheck shell=sh
-# .githooks/pre-push root-graph freshness gate: a push that
-# publishes anything is refused unless scripts/agent/check-graph-fresh.sh exits 0
-# for the TREE OF EVERY PUSHED TIP -- stale (1), no graph (2) and missing
-# Graphify (4) all refuse with the checker's own message. Each distinct tip is
-# checked out into a detached scratch worktree under the sibling worktrees root
-# (<repo-parent>/.<repo>_worktrees/.graph-check-<sha7>), graded there, and the scratch is removed whatever the verdict. The
-# checked-out tree is never what is graded: uncommitted bytes or another branch
-# at HEAD would launder a stale commit. Intermediate commits of a multi-commit
-# push are not graded. The gate runs only for a tip
-# whose OWN tree ships the checker: the checkout's checker is the executable and
-# decides nothing about whether a tip is graded.
+# .githooks/pre-push root-graph freshness gate: a push that publishes anything
+# is refused unless scripts/agent/check-graph-fresh.sh exits 0 for the TREE
+# OF EVERY PUSHED TIP -- stale (1), no graph (2) and missing Graphify (4)
+# all refuse with the checker's own message. Each distinct tip is checked
+# out into a detached scratch worktree under the sibling worktrees root
+# (<repo-parent>/.<repo>_worktrees/.graph-check-<sha7>), graded there, and the
+# scratch is removed whatever the verdict. The checked-out tree is never what
+# is graded: uncommitted bytes or another branch at HEAD would launder a stale
+# commit. Intermediate commits of a multi-commit push are not graded. The gate
+# runs only for a tip whose OWN tree ships the checker: the checkout's checker
+# is the executable and decides nothing about whether a tip is graded.
 #
-# Fixture: a bare remote and clone A whose devel commits scripts/agent/check-graph-fresh.sh
-# as a stub that logs each call (cwd and the graded path) and grades the graph
-# bytes of the tree it is handed: 'fresh graph' passes, anything else is stale,
-# absent is exit 2; GRAPH_CHECK_RC forces a verdict. Direct rows feed the hook its
-# stdin contract; the money rows run a real `git push` through core.hooksPath and
+# Fixture: a bare remote and clone A whose devel commits
+# scripts/agent/check-graph-fresh.sh as a stub that logs each call (cwd and
+# the graded path) and grades the graph bytes of the tree it is handed: 'fresh
+# graph' passes, anything else is stale, absent is exit 2; GRAPH_CHECK_RC
+# forces a verdict, and GRAPH_CHECK_SLEEP parks it mid-grade (announced by
+# GRAPH_CHECK_MARK) for the signal row. Direct rows feed the hook its stdin
+# contract; the money rows run a real `git push` through core.hooksPath and
 # read the remote afterwards.
 
 Describe 'pre-push root-graph freshness gate'
@@ -39,6 +41,10 @@ Describe 'pre-push root-graph freshness gate'
 target=${1:-.}
 printf 'check:%s:%s\n' "$PWD" "$*" >> "$GRAPH_CHECK_LOG"
 [ ! -e "$target/graphify-out/cache/warm" ] || printf 'cache:warm\n' >> "$GRAPH_CHECK_LOG"
+if [ -n "${GRAPH_CHECK_SLEEP:-}" ]; then
+  printf '%s\n' "$$" > "$GRAPH_CHECK_MARK.tmp" && mv "$GRAPH_CHECK_MARK.tmp" "$GRAPH_CHECK_MARK"
+  exec sleep "$GRAPH_CHECK_SLEEP"
+fi
 rc=${GRAPH_CHECK_RC:-}
 if [ -z "$rc" ]; then
   if [ ! -f "$target/graphify-out/graph.json" ]; then rc=2
@@ -48,7 +54,7 @@ if [ -z "$rc" ]; then
 fi
 case "$rc" in
   0) echo 'check-graph-fresh.sh: graph is fresh' >&2 ;;
-  1) echo "check-graph-fresh.sh: STALE: graphify-out/graph.json differs from a rebuild of this tree; run 'PYTHONHASHSEED=0 graphify update .' and commit graphify-out/graph.json" >&2 ;;
+  1) echo "check-graph-fresh.sh: STALE: graphify-out/graph.json differs from a rebuild of this tree; run 'sh scripts/agent/check-graph-fresh.sh --refresh' on a clean tree and commit graphify-out/graph.json" >&2 ;;
   2) echo 'check-graph-fresh.sh: no root graph; run /graphify' >&2 ;;
   4) echo 'TOOL-MISSING: graphify' >&2 ;;
 esac
@@ -65,7 +71,7 @@ CHECK
 
   cleanup() {
     rm -rf "$base"
-    unset GRAPH_CHECK_LOG GRAPH_CHECK_RC
+    unset GRAPH_CHECK_LOG GRAPH_CHECK_RC GRAPH_CHECK_SLEEP GRAPH_CHECK_MARK
   }
 
   BeforeEach 'setup'
@@ -116,7 +122,7 @@ CHECK
     When run human_hook "refs/heads/devel $a_local refs/heads/devel $remote_tip"
     The status should equal 1
     The stderr should include 'STALE'
-    The stderr should include "PYTHONHASHSEED=0 graphify update ."
+    The stderr should include "check-graph-fresh.sh --refresh"
     The result of function scratch_leftovers should equal ''
   End
 
@@ -267,6 +273,55 @@ CHECK
     The stderr should not include 'check-graph-fresh.sh'
     The value "$(remote_has rel)" should equal 'yes'
     The file "$check_log" should not be exist
+    The result of function scratch_leftovers should equal ''
+  End
+
+  # A linked worktree shares the primary's git dir: the scratch must land next to
+  # the PRIMARY clone, and a relative core.hooksPath must resolve to the tree the
+  # push runs from.
+  It 'cuts the scratch next to the primary clone when a real push runs from a linked worktree'
+    linked_push() {
+      cd "${base}/A" && mkdir -p .githooks && cp "$hook" .githooks/pre-push \
+        && git_fixture add .githooks/pre-push && git_fixture commit -q -m hook \
+        && git_fixture worktree add -q -b linkbr "${base}/linked" devel \
+        && cd "${base}/linked" && git_fixture config core.hooksPath .githooks \
+        && git push -q origin linkbr
+    }
+    linked_tip() { git_fixture -C "${base}/linked" rev-parse HEAD; }
+    When run linked_push
+    The status should equal 0
+    The stderr should include 'graph is fresh'
+    The value "$(remote_has linkbr)" should equal 'yes'
+    The contents of file "$check_log" should equal "check:${base}/linked:$(scratch_of "$(linked_tip)")"
+    The path "${base}/.linked_worktrees" should not be exist
+    The result of function scratch_leftovers should equal ''
+  End
+
+  # TERM lands while the checker runs: the hook defers its trap until the checker
+  # ends, so the checker is stopped too. Without the trap the hook dies on the
+  # signal with its EXIT trap unrun and the scratch stays behind.
+  It 'reaps the scratch worktree and fails when the hook is terminated mid-grade'
+    terminated_hook() {
+      export GRAPH_CHECK_SLEEP=30 GRAPH_CHECK_MARK="${base}/checker.pid"
+      cd "${base}/A" || return 1
+      printf '%s\n' "refs/heads/devel $a_local refs/heads/devel $remote_tip" > "${base}/stdin"
+      sh "$hook" origin "${base}/remote.git" < "${base}/stdin" 2>/dev/null &
+      hook_pid=$!
+      tries=0
+      while [ ! -s "$GRAPH_CHECK_MARK" ] && [ "$tries" -lt 100 ]; do
+        sleep 0.1
+        tries=$((tries + 1))
+      done
+      if [ ! -s "$GRAPH_CHECK_MARK" ]; then
+        kill -KILL "$hook_pid" 2>/dev/null
+        return 99
+      fi
+      kill -TERM "$hook_pid"
+      kill -TERM "$(cat "$GRAPH_CHECK_MARK")" 2>/dev/null
+      wait "$hook_pid"
+    }
+    When run terminated_hook
+    The status should equal 1
     The result of function scratch_leftovers should equal ''
   End
 End

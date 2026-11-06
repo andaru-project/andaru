@@ -7,7 +7,10 @@
 # index diff, not a newline listing: a path holding a newline could otherwise pose
 # as the graph. Synchronous, so a rebase/merge/cherry-pick in progress is no reason
 # to skip. Graphify is mandatory: a failed rebuild or a missing launcher fails the
-# commit. Bypass in an emergency with `git commit --no-verify`.
+# commit. The rebuild reads the working tree, not the index, so unstaged edits or
+# untracked files would leak into the staged graph: the hook refuses them (stash
+# them, `git stash -k -u`, and commit again). Bypass in an emergency with
+# `git commit --no-verify`.
 #
 # Enable: sh scripts/setup-hooks.sh
 
@@ -17,6 +20,12 @@ root=$(git rev-parse --show-toplevel) || exit 1
 cd "$root" || exit 1
 
 git diff --cached --quiet -- . ':!graphify-out/graph.json' && exit 0
+
+if ! git diff --quiet -- . ':!graphify-out/graph.json' ||
+	[ -n "$(git ls-files --others --exclude-standard)" ]; then
+	printf '[pre-commit] FAILED: graph freshness: unstaged changes or untracked files would leak into the graph rebuild. Stash them (git stash -k -u) and commit again.\n' >&2
+	exit 1
+fi
 
 printf '[pre-commit] graph freshness (rebuild graphify-out/graph.json and stage it)\n'
 if sh scripts/agent/check-graph-fresh.sh --refresh && git add -- graphify-out/graph.json; then
