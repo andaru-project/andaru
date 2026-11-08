@@ -19,3 +19,7 @@ dev/vm-lab/lab-setup
 AI-assisted work uses Graphify and CodeGraph indexes; run
 `sh scripts/setup-hooks.sh` once per clone. See
 [docs/dev/agent-tooling.md](docs/dev/agent-tooling.md).
+
+## Design research
+
+- [Extension contracts: reuse, avoid, unresolved](docs/research/extension-contract.md)
