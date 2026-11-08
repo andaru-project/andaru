@@ -114,6 +114,8 @@ The [Traefik worked example](traefik-manifest-spike.md) now exercises dynamic en
 
 The subsequent [Podman/Compose VM spike](podman-compose-spike.md) runs a rootless subset with Docker Compose against Podman, verifies application behaviour and offline image restoration, and retains a snapshot-protected Debian lab. It also demonstrates health-check argument translation failures, lost original client IPs and an archive naming pitfall. This is not proof of unrestricted Compose compatibility or the final appliance networking policy.
 
+The [client-IP networking follow-up](container-client-ip-spike.md) then proves an IPv4/TCP source-preserving path with direct rootless pasta or slirp, without new host firewall tables. Rootful bridge preserves addresses too but changes host forwarding/rules and needs FORWARD policy. Prefer further qualification of a rootless ingress profile; multi-service connectivity, IPv6/UDP and the full policy boundary are not settled by this comparison.
+
 ## Evidence limits
 
 The comparative survey above is documentation/source research, not a sandbox escape test or performance benchmark. Separate Traefik and Podman/Compose probes cover only the versions, topology and behaviours explicitly documented in their reports. No current or future extension format is certified safe by this report; Andaru's own runtime, UI and full rollback behaviour still require focused qualification when implemented.
