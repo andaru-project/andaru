@@ -6,6 +6,8 @@
 
 This is a bounded runtime spike for [Andaru #13](https://github.com/andaru-project/andaru/issues/13), extending the [native Traefik example](traefik-manifest-spike.md). It does not approve all Compose features or settle Andaru's container networking model. In particular, this rootless bridge did **not preserve the external client's IP address**, which matters for reverse-proxy ACLs, logging and future per-client DNS policy.
 
+The follow-up [client-IP networking spike](container-client-ip-spike.md) distinguishes that named-bridge result from direct rootless pasta and source-preserving slirp. Both direct modes preserved IPv4 client addresses under an INPUT-policy check; rootful bridge also preserved them but required FORWARD filtering and changed host network state. These are bounded alternatives, not a claim that the original bridge now preserves addresses.
+
 ## Retained test environment
 
 At the owner's request, the VM is a persistent development lab, not disposable:
