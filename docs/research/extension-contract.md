@@ -2,9 +2,9 @@
 
 ## Scope and conclusion
 
-Research for [Andaru #13](https://github.com/andaru-project/andaru/issues/13), not an approved extension specification. Compare pfSense/OPNsense, OpenWrt, and Cockpit; use nfsense/nfSensei as supplementary references. Distinguish documented design lessons from our recommendations: no maintainer is assumed to endorse Andaru's choices.
+Research for [Andaru #13](https://github.com/andaru-project/andaru/issues/13), not an approved extension specification. Compare pfSense/OPNsense, OpenWrt, Cockpit, and Unraid; use nfsense/nfSensei as supplementary references. Distinguish documented design lessons from our recommendations: no maintainer is assumed to endorse Andaru's choices.
 
-**Recommendation:** reuse declarative package/page metadata, named backend operations, configuration schemas and migrations, and explicit permissions. Keep extensions out of the privileged engine. Do not build a universal plugin framework or compatibility shim for another firewall.
+**Recommendation:** use a small declarative manifest to generate Andaru's management page, with named backend operations, configuration schemas/migrations and explicit permissions. Keep extension code out of the privileged engine and Andaru frontend. Link an application's own WebUI separately. Do not build a universal plugin framework or compatibility shim for another firewall.
 
 Andaru already requires an API-first GUI, restricted extension services, namespaced secrets, administrator-assigned shared secrets, explicit extension installation on restore, compatibility-first updates, and complete offline recovery. These constraints remain the baseline rather than conclusions of this research.
 
@@ -44,6 +44,16 @@ Cockpit's [package documentation](https://docs.cockpit-project.org/cockpit-guide
 
 **Andaru lesson:** stable extension identifiers, namespaced routes/menu entries, declared API requirements, and a clearly documented public surface. Do not treat a hidden menu item as authorization or permit a manifest to silently replace core pages.
 
+### Unraid: approachable declarative controls, not a model to copy
+
+Unraid's [official container guide](https://docs.unraid.net/unraid-os/using-unraid-to/run-docker-containers/managing-and-customizing-containers/) presents a template-driven form for network mode, port and volume mappings, and environment variables. It also documents a separate WebUI link, project/support links, logs and lifecycle controls, persistent application data, and container health status.
+
+The [template implementation, pinned at `b135287`](https://github.com/unraid/webgui/blob/b135287c706a30da44f71cc7820615209e83e9a0/emhttp/plugins/dynamix.docker.manager/include/CreateDocker.php#L594-L637), binds `Name`, `Target`, `Default`, `Description`, `Type`, `Display`, `Required`, `Mask`, and `Value` to generated controls. Types include paths, ports, variables, labels and devices; basic/advanced display modes reduce visible complexity. `Mask` switches an input to password display: it is not evidence of separate secret storage. The [same source](https://github.com/unraid/webgui/blob/b135287c706a30da44f71cc7820615209e83e9a0/emhttp/plugins/dynamix.docker.manager/include/CreateDocker.php#L1151-L1169) exposes extra runtime parameters and post arguments.
+
+These are inspirations for authoring and user experience, **not** an endorsement of Unraid's XML, security boundary, or full runtime configuration model. The guide recommends arranging startup order with wait times; Andaru should instead use bounded readiness checks where a dependency genuinely requires them. Do not infer that Unraid supplies Andaru's proposed JSON Schema validation or conditional-field rules.
+
+**Andaru lesson:** generate approachable controls with labels, descriptions, defaults and advanced grouping; explicitly bind settings to runtime inputs. Separate semantic validation from presentation, masking from secret handling, and requested ports/mounts from permission to expose host resources. No arbitrary extra-arguments field as an escape from policy.
+
 ### systemd: packaging and runtime confinement are separate
 
 [systemd-sysext(8), version 257](https://www.freedesktop.org/software/systemd/man/257/systemd-sysext.html) says system extensions merge files into host `/usr` and `/opt`, imply **no security isolation**, and are not a generic package/dependency framework. Its host/extension compatibility metadata is not an Andaru API compatibility contract.
@@ -70,17 +80,35 @@ nfSensei's [homepage](https://nfsensei.org/) describes NFPacks with declarative 
 
 1. Importing extension code into the root engine, exposing arbitrary execution endpoints, or allowing raw privileged service configuration as an escape hatch.
 2. Equating signing, a systemd unit, a filesystem image, or hiding navigation with a security boundary. Each protects a different part of the system.
-3. Giving third-party JavaScript the main administrator session without an explicit frontend isolation decision. An out-of-process backend does not isolate same-origin browser code.
+3. Injecting third-party JavaScript into Andaru's administrator session. Generate management controls from validated metadata and link the application's own WebUI separately; an out-of-process backend does not isolate same-origin browser code.
 4. Binding settings and backups to a distro package name, absolute host path, or current internal database layout. Preserve stable extension identity and typed exports.
 5. Promising compatibility without migration fixtures and contract checks, or discovering incompatible extensions only after switching the core deployment.
 
 ## Unresolved before specifying the contract
 
 1. **Installation trust:** curated native packages with privileged scripts versus restricted artifacts. An admin installation prompt must describe any trust beyond the sandboxed runtime.
-2. **Frontend boundary:** unrestricted pages need a considered origin/frame/broker policy; schema-rendered forms are another option. Curation alone does not enforce secret isolation.
+2. **Frontend details:** following the owner's clarification, Andaru generates the management page from declarative metadata; the application's own WebUI is linked separately, not injected as executable UI code into Andaru. Specify allowed field/visibility rules and safe WebUI URLs. Do not forward the Andaru session or credentials to that application.
 3. **Privileged requests:** define the first concrete operations needed by a real extension, including pfBlockerNG. Centralized nft ownership means extensions request approved resources rather than installing their own global rulesets.
 4. **Compatibility mechanisms:** capability/version declarations, migration guarantees, deprecation/support windows and extension contract tests implementing the approved update policy. Stay additive where possible; no invented promise of indefinite support.
 5. **State/recovery:** distinguish settings, secrets, durable extension data and disposable caches; validate the backup/restore interface and package/dependency recovery with a representative extension.
+
+## Where this leads Andaru
+
+The owner's container-add-on direction narrows the design: an installable add-on needs Andaru integration metadata; importing arbitrary Compose files is not supported. An application may have its own WebUI, linked from its generated Andaru page. The following is a research-derived contract outline, not a finalized manifest schema.
+
+| Part | Responsibility |
+| --- | --- |
+| Identity and compatibility | Stable add-on/instance identity, package version, supported Andaru API and documented capabilities |
+| Settings and presentation | JSON Schema for types, defaults and constraints; separate declarative grouping, help text, ordering and conditional visibility; the API validates every save |
+| Runtime bindings | Native-service or Compose-backed workload; typed bindings to environment values, configuration files, secret references, approved network exposure and storage |
+| Management page | Andaru-generated settings, lifecycle, logs and health controls; optional link to the application's separate WebUI |
+| State and recovery | Identify settings, secrets, durable data and caches; migrations and backup ownership; retain compatible executable/image artifacts and dependencies for offline recovery |
+
+For Compose add-ons, generated `.env` files and runtime configuration are disposable realizations, not another source of truth. Prefer mounted secret files when supported; environment-only applications still require secret-store inputs and redacted previews/logs/exports. Validate the fully resolved workload, not merely visible form values: hidden or conditional controls cannot authorize privileged containers, host mounts, runtime-socket access or additional networking.
+
+Compose is a workload format, not a promise of interchangeable engines. [Podman's Compose command](https://docs.podman.io/en/latest/markdown/podman-compose.1.html) delegates to an external provider. [Docker's firewall documentation](https://docs.docker.com/engine/network/packet-filtering-firewalls/) describes host firewall/forwarding changes and warns that disabling its firewall integration can break networking. Keep Podman preferred and Docker a potential supported backend, but prove a supported networking model for each without bypassing Andaru policy. Container images must be retained by resolved identity/digest for recovery; an image tag alone is insufficient.
+
+**Next design step:** exercise this outline against one small Compose application with persistent data, one secret and a WebUI link, then a native-service example. Specify only the common integration fields those examples need; do not create a generic form language, arbitrary script runner or a replacement for Compose. Runtime networking, installation trust and compatibility/migration guarantees remain the consequential open decisions.
 
 ## Evidence limits
 
