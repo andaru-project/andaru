@@ -199,3 +199,5 @@ Ephemeral document checks parsed the named collections and checked unique names.
 ## Remaining qualification
 
 Compose/Podman/Docker compatibility, rootless operation, systemd confinement/credentials, actual certificate rotation, log rotation, Andaru-generated forms/API validation, and offline image/state recovery are not proven by this native-binary probe. It establishes that the proposed bindings have real Traefik counterparts; it does not establish a production-ready Andaru integration.
+
+A subsequent [Debian VM Podman/Compose spike](podman-compose-spike.md) exercises a rootless Compose subset, file secrets, systemd lifecycle, guest firewall interaction and offline image round trips. It also finds health-check argument and original-client-IP limitations. Those results qualify only the versions and topology documented there, not the full Andaru integration.
