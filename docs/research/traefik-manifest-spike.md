@@ -35,6 +35,12 @@ The following defines the needed integration metadata, not a runnable package. F
   "id": "org.andaru.traefik",
   "name": "Traefik",
   "version": "3.7.17",
+  "requires": [
+    {
+      "name": "andaru.extension-api",
+      "version": ">=1.0.0 <2.0.0"
+    }
+  ],
   "runtime": {
     "type": "compose",
     "file": "compose.yaml"
@@ -168,11 +174,15 @@ The following defines the needed integration metadata, not a runnable package. F
 
 The singleton `runtime` and `webui` are objects; named collections are arrays. Array order is presentation order and names must be unique within their collection. Scalars, singleton descriptors, and object-valued settings are not converted into arrays merely because they contain JSON objects.
 
-An ephemeral document check parsed all eight named collections, checked unique names, derived standard JSON Schema, validated sample settings and rejected missing required fields. It also exposed a validation limit: the local Python validator accepted `bad` followed by a backtick and `host` for `format: hostname`. Do not assume a schema's format annotation is enforced; qualify the production validator's format support and explicit semantic checks before allowing values into routing templates.
+`manifestVersion` identifies the manifest format and `version` the add-on release. The separate `requires` entry declares the supported Andaru extension/API contract. Its name and range are illustrative, not a claim that API 1.0.0 exists. Compatibility preflight must enforce it before installation or core activation, retaining the approved rule that an incompatible installed extension blocks the core upgrade.
+
+Ephemeral document checks parsed the named collections and checked unique names. A settings-schema check derived standard JSON Schema, validated sample settings and rejected missing required fields. It also exposed a validation limit: the local Python validator accepted `bad` followed by a backtick and `host` for `format: hostname`. Do not assume a schema's format annotation is enforced; qualify the production validator's format support and explicit semantic checks before allowing values into routing templates.
 
 ## Binding responsibilities
 
 - **Environment values:** the packaged dynamic routing template uses Traefik's `env` function for the hostname and upstream. These are validated settings, not arbitrary user-authored template source. Template substitutions must produce valid routing rules/URLs; Go templates do not provide automatic YAML or routing-expression escaping. Format checks alone do not authorize arbitrary network access.
+
+  **The environment-bound `/hostname`, `/dashboardHostname` and `/upstreamUrl` settings require a replacement process with updated environment, or container recreation for this Compose-backed sketch.** Watching/replacing a dynamic file does not change the running process's environment. [Docker Compose explicitly documents](https://docs.docker.com/reference/cli/docker/compose/restart/) that `compose restart` does not apply environment changes. The observed reload changed a literal response header in the file, not these environment values. To make routing-setting edits reloadable instead, render their validated values into the watched file rather than supplying them through environment variables; that is an alternative binding, not behaviour proved by this sketch.
 - **Credential files:** the packaged configuration points `basicAuth.usersFile` at an engine-assigned runtime file. The probe supplied an htpasswd record manually; creating records, selecting an assigned shared secret, rotation and Andaru/systemd delivery remain design work. Never return the record through the settings API or configuration export.
 - **Certificates:** the selected reference resolves to certificate/key files accessible only to the permitted runtime. The packaged template uses `certFile` and `keyFile`; the GUI sees the reference and public metadata, not key material. Certificate rotation was not tested.
 - **Log files:** the application configuration writes to two files under the engine-assigned logs directory. Manifest paths are relative to declared storage, not arbitrary host paths. The central viewer can show Logs → Add-ons → Traefik → Application / Access. Backend authorization, safe file opening, cursor/rotation handling and bounded reads are required but not implemented by this example.
@@ -181,7 +191,7 @@ An ephemeral document check parsed all eight named collections, checked unique n
 ## What this changes in the design
 
 1. A small `.env` interface is useful, but it is not a complete reverse-proxy model. Multiple routers, upstreams and middlewares need structured array settings and typed file generation/bindings, not a giant free-form text field or a growing expression language.
-2. Distinguish restart-required install/static settings from reloadable routing changes. Do not promise every save can be applied with a file reload.
+2. Classify the chosen binding, not merely the Traefik feature: these environment-bound routing settings require process replacement/container recreation even though the file provider is reloadable. Literal validated routing values written into the watched file can use the reload path; install/static settings still require restart as appropriate.
 3. One application can expose several log streams and a separate private metrics endpoint. Keep their discovery and permissions explicit rather than assuming logs live in one global directory or metrics share the public application listener.
 4. Start with the file provider, no Docker-socket discovery, and explicit listeners. Container-provider access is a separate privilege and networking decision.
 5. No ACME account was created and no certificate was obtained over the Internet. If ACME is later enabled, its state contains private material and belongs under secret-aware backup/recovery policy, not ordinary unencrypted application-data export.
