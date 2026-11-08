@@ -12,7 +12,23 @@ Used the existing persistent Debian 13.7 VM 114 `andaru-lab` on `proxmox-4`: Pod
 
 Each new Compose project ran one Traefik instance with read-only configuration and credential mounts, no-new-privileges, dropped capabilities and its own logs. A temporary HTTP server served only a dedicated test-content directory. It was bound on the guest and protected against external access by a guest firewall rule. This avoided changing the original Compose workload while permitting each network mode to reach the same backend.
 
-Requests came from a separate machine, not guest/container loopback. TLS certificates and hostnames were verified, authenticated root requests returned the expected backend body with 200, and unauthenticated requests returned 401. Unique request paths were correlated with Traefik's access-log `ClientHost` field. We also supplied forged `X-Forwarded-For` and `Forwarded` headers, but measured the actual peer field, never those headers. The unique paths could return the static backend's 404; their correlation, not a fabricated application success, established which connection was logged.
+Requests came from a separate machine, not guest/container loopback. TLS certificates and hostnames were verified, authenticated root requests returned the expected backend body with 200, and unauthenticated requests returned 401. Unique request paths were correlated with Traefik's access logs. The initial check used `ClientHost`, but that field can be header-derived and is not sufficient peer evidence; review follow-up checked the retained `ClientAddr` values as described below. We also supplied forged `X-Forwarded-For` and `Forwarded` headers. The unique paths could return the static backend's 404; their correlation, not a fabricated application success, established which connection was logged.
+
+### Peer-field and trust-setting verification
+
+Traefik 3.7.17's [access logger](https://github.com/traefik/traefik/blob/v3.7.17/pkg/middlewares/accesslog/logger.go#L279-L284) records `req.RemoteAddr` in `ClientAddr`, but may overwrite `ClientHost` with `X-Forwarded-For`. The conclusions below therefore use the host parsed from `ClientAddr`, not `ClientHost`.
+
+Inspection of the retained forged-header request records found:
+
+| Mode | Correlated request path | `ClientAddr` host matches the external test client | Recorded source port |
+| --- | --- | --- | --- |
+| Direct pasta | `/source-pasta` | Yes | 33604 |
+| Source-preserving slirp | `/source-slirp` | Yes | 56510 |
+| Rootful bridge | `/rootful-source` | Yes | 33344 |
+
+The records' `ClientHost` values also matched, but are not used as independent proof. All three retained static configurations were identical and set only the listening address under each entrypoint: no `forwardedHeaders` or `proxyProtocol` override. Their retained commands selected that configuration file, their environment bindings were only `APP_HOST` and `APP_UPSTREAM`, and the retained image's environment contained only `PATH`. In the [pinned entrypoint defaults](https://github.com/traefik/traefik/blob/v3.7.17/pkg/config/static/entrypoints.go), forwarded-header trust is insecure=false with no trusted IPs and PROXY protocol is unset; the [listener code](https://github.com/traefik/traefik/blob/v3.7.17/pkg/server/server_entrypoint_tcp.go#L547-L552) activates PROXY handling only when configured. No header/PROXY override was found that could explain these peer addresses.
+
+This verification used the original retained logs/configuration after the spike containers were removed; no replacement traffic or runtime configuration change was needed. It confirms the existing IPv4 conclusions while correcting the original description of the log field.
 
 ## Compared modes
 

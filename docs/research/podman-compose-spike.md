@@ -88,7 +88,7 @@ A dedicated guest-only nftables input rule dropped external connections to the p
 
 The guest's stateless ruleset was byte-identical across the tested Compose recreations, offline recovery and user-service restart. The lab's own boot-time firewall unit restored the same policy before networking on a subsequent boot. This does not mean Podman never writes firewall rules: the result applies to this **rootless** topology, not rootful bridge networking, IPv6 policy, or a complete router dataplane.
 
-An external request with a unique path was then correlated to its access-log entry. Traefik logged the rootless bridge address `10.89.0.3`, not the external client's address. Do not use this topology for source-IP-based controls without a separately tested client-identity solution. Accepting untrusted forwarded headers is not a solution.
+An external request with a unique path was then correlated to its access-log entry. A later inspection of that retained record confirmed that the peer field `ClientAddr` contained the rootless bridge address `10.89.0.3`, not the external client's address (`ClientHost` matched too, but can be header-derived). Do not use this topology for source-IP-based controls without a separately tested client-identity solution. Accepting untrusted forwarded headers is not a solution.
 
 ## Offline image recovery
 
