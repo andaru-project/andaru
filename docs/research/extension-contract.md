@@ -99,19 +99,21 @@ The owner's container-add-on direction narrows the design: an installable add-on
 | Part | Responsibility |
 | --- | --- |
 | Identity and compatibility | Stable add-on/instance identity, package version, supported Andaru API and documented capabilities |
-| Settings and presentation | JSON Schema for types, defaults and constraints; separate declarative grouping, help text, ordering and conditional visibility; the API validates every save |
+| Settings and presentation | Ordered property objects carry JSON Schema fragments for types, defaults and constraints; derive standard JSON Schema without duplicate definitions. Separate grouping, help and conditional visibility; array order determines presentation and the API validates every save |
 | Runtime bindings | Native-service or Compose-backed workload; typed bindings to environment values, configuration files, secret references, approved network exposure and storage |
-| Management page | Andaru-generated settings, lifecycle, logs and health controls; optional link to the application's separate WebUI |
+| Management page | Andaru-generated settings, lifecycle, logs and health controls; optional link to the application's separate WebUI; named log sources for the central viewer and declared metric endpoints |
 | State and recovery | Identify settings, secrets, durable data and caches; migrations and backup ownership; retain compatible executable/image artifacts and dependencies for offline recovery |
 
 For Compose add-ons, generated `.env` files and runtime configuration are disposable realizations, not another source of truth. Prefer mounted secret files when supported; environment-only applications still require secret-store inputs and redacted previews/logs/exports. Validate the fully resolved workload, not merely visible form values: hidden or conditional controls cannot authorize privileged containers, host mounts, runtime-socket access or additional networking.
 
 Compose is a workload format, not a promise of interchangeable engines. [Podman's Compose command](https://docs.podman.io/en/latest/markdown/podman-compose.1.html) delegates to an external provider. [Docker's firewall documentation](https://docs.docker.com/engine/network/packet-filtering-firewalls/) describes host firewall/forwarding changes and warns that disabling its firewall integration can break networking. Keep Podman preferred and Docker a potential supported backend, but prove a supported networking model for each without bypassing Andaru policy. Container images must be retained by resolved identity/digest for recovery; an image tag alone is insufficient.
 
-**Next design step:** exercise this outline against one small Compose application with persistent data, one secret and a WebUI link, then a native-service example. Specify only the common integration fields those examples need; do not create a generic form language, arbitrary script runner or a replacement for Compose. Runtime networking, installation trust and compatibility/migration guarantees remain the consequential open decisions.
+**Next design step:** use the native-process evidence below to qualify a small packaged Compose application with persistent data, a secret and a WebUI link. Specify only the common integration fields those examples need; do not create a generic form language, arbitrary script runner or a replacement for Compose. Runtime networking, installation trust and compatibility/migration guarantees remain the consequential open decisions.
+
+The [Traefik worked example](traefik-manifest-spike.md) now exercises dynamic environment templates, verified TLS, file credentials, dashboard routing, structured logs, metrics and directory-based reload using a native binary. Its illustrative manifest uses ordered arrays of objects for named collections. This is runtime evidence for the application bindings, not qualification of a Compose engine, Andaru runner or generated GUI.
 
 ## Evidence limits
 
-This is documentation/source research, not an installation, sandbox escape test, or performance benchmark. No current or future extension format is certified safe by this report. Concrete runtime, UI and rollback behaviour still require focused VM/browser qualification when implemented.
+The comparative survey above is documentation/source research, not a sandbox escape test or performance benchmark. The separately documented Traefik probe is limited to the native process and behaviours explicitly listed there. No current or future extension format is certified safe by this report; Andaru runtime, UI and rollback behaviour still require focused VM/browser qualification when implemented.
 
 Sources include moving upstream branches and live documentation; verify them against the supported release when implementing. OpenWrt release notes and the systemd 257 manual provide version-specific anchors. A representative package example is not an exhaustive audit of that ecosystem.
