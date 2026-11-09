@@ -96,6 +96,8 @@ nfSensei's [homepage](https://nfsensei.org/) describes NFPacks with declarative 
 
 The owner's container-add-on direction narrows the design: an installable add-on needs Andaru integration metadata; importing arbitrary Compose files is not supported. An application may have its own WebUI, linked from its generated Andaru page. The following is a research-derived contract outline, not a finalized manifest schema.
 
+The contract will only be frozen with Andaru 1.0. All current examples and decisions are provisional and may change as prototypes reveal problems. Backward-compatibility principles below describe the intended released contract, not a requirement to preserve today's sketches or build pre-1.0 migration machinery.
+
 | Part | Responsibility |
 | --- | --- |
 | Identity and compatibility | Stable add-on/instance identity, package version, supported Andaru API and documented capabilities |
