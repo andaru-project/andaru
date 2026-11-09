@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Andaru · Traefik manifest lab</title>
+<style>
+:root { --ink:#17212c; --muted:#526171; --line:#c9d0d8; --paper:#fff; --ground:#f2f4f6; --nav:#152330; --accent:#ffb21c; --error:#9c2430; }
+* { box-sizing:border-box; }
+body { margin:0; color:var(--ink); background:var(--ground); font:16px/1.5 system-ui,sans-serif; }
+button,input,select { font:inherit; }
+button,input,select { min-height:44px; border:1px solid var(--line); border-radius:4px; }
+button { color:var(--ink); background:var(--paper); padding:.5rem .75rem; cursor:pointer; }
+button:hover { border-color:var(--ink); }
+button:disabled { opacity:.55; cursor:default; }
+:focus-visible { outline:3px solid #286899; outline-offset:3px; }
+a { color:#17577d; }
+header { background:var(--nav); color:white; padding:1rem 1.5rem; display:flex; align-items:center; gap:1rem; flex-wrap:wrap; }
+.brand { font-size:1.25rem; font-weight:750; border-left:5px solid var(--accent); padding-left:.75rem; }
+.badge { color:#ffcc68; font-size:.875rem; }
+header .selectors { margin-left:auto; display:flex; flex-wrap:wrap; gap:1rem; }
+header label { display:flex; align-items:center; gap:.5rem; }
+header select { background:white; color:var(--ink); max-width:100%; padding:.25rem; }
+.intro { background:#fff6df; border-bottom:1px solid #d5b46b; padding:1rem 1.5rem; }
+.intro p { margin:.25rem 0; max-width:100ch; }
+.shell { max-width:1440px; margin:auto; display:grid; grid-template-columns:190px minmax(0,1fr); }
+nav { padding:1.5rem 1rem; }
+nav h2 { color:var(--muted); text-transform:uppercase; font-size:.8rem; letter-spacing:.08em; margin:0 0 .5rem; }
+nav button { width:100%; text-align:left; margin:.25rem 0; border-color:transparent; background:transparent; }
+nav button[aria-current="page"] { background:var(--paper); border-color:var(--line); border-left:4px solid #805100; font-weight:650; }
+nav .nested { padding-left:1rem; }
+main { min-width:0; padding:1.5rem; }
+h1 { margin:0; font-size:1.75rem; }
+h2 { font-size:1.1rem; margin:0 0 .75rem; }
+h3 { font-size:1rem; margin:1rem 0 .5rem; }
+p { margin:.5rem 0; }
+.muted,small { color:var(--muted); }
+.toolbar { display:flex; flex-wrap:wrap; gap:.5rem; margin:1rem 0; }
+.workspace { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:1.25rem; align-items:start; }
+.panel { padding:1.25rem; background:var(--paper); border:1px solid var(--line); border-radius:5px; min-width:0; }
+.field { margin-bottom:1.25rem; }
+.field:last-child { margin-bottom:0; }
+.field label { display:block; font-weight:600; margin-bottom:.375rem; }
+.field input,.field select { width:100%; padding:.5rem .625rem; color:var(--ink); background:white; }
+.field input[aria-invalid="true"],.field select[aria-invalid="true"] { border:2px solid var(--error); }
+.field small { display:block; margin-top:.375rem; overflow-wrap:anywhere; }
+.error { color:var(--error); font-size:.9rem; margin-top:.25rem; }
+#validation { border-left:4px solid #426652; padding:.5rem .75rem; margin:.75rem 0; }
+#validation.invalid { border-color:var(--error); }
+#error-list { margin:.5rem 0; padding-left:1.25rem; }
+#error-list button { padding:0; min-height:32px; border:0; background:none; color:var(--error); text-decoration:underline; text-align:left; }
+pre { margin:.5rem 0; padding:.75rem; background:#f2f4f6; border:1px solid #d7dde3; border-radius:3px; font-size:.85rem; white-space:pre-wrap; overflow-wrap:anywhere; }
+.preview-note { font-size:.9rem; }
+.walkthroughs { margin-top:1.25rem; }
+.tabs { display:flex; flex-wrap:wrap; gap:.5rem; }
+.tabs button[aria-selected="true"] { background:var(--nav); color:white; }
+#steps { display:flex; flex-direction:column; align-items:stretch; gap:.5rem; margin-top:.75rem; }
+#steps button { text-align:left; }
+#notice { min-height:1.5rem; margin:.75rem 0; font-size:.9rem; }
+details { margin-top:1.25rem; }
+summary { cursor:pointer; padding:.5rem 0; }
+footer { padding:1.5rem; color:var(--muted); font-size:.875rem; }
+@media(max-width:1100px) { .workspace { grid-template-columns:minmax(0,1fr); } }
+@media(max-width:640px) { .shell { grid-template-columns:minmax(0,1fr); } nav { padding:1rem 1rem 0; } main { padding:1rem; } header,.intro { padding:1rem; } header .selectors { margin-left:0; width:100%; } .panel { padding:1rem; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">ANDARU</div><span class="badge">Throwaway manifest lab · pre-1.0</span>
+  <div class="selectors">
+    <label for="locale">Language <select id="locale"><option value="en">English</option><option value="pt">Português</option></select></label>
+    <label for="runtime">Preview runtime <select id="runtime"></select></label>
+  </div>
+</header>
+<section class="intro" aria-label="Prototype scope">
+  <p><strong>Question:</strong> can the provisional Traefik manifest describe useful menus, editable controls, validation and process bindings?</p>
+  <p>Everything stays in memory. No save, apply, installation, process launch or real secrets. Reference choices are labelled demo fixtures, not authorization checks. The contract remains changeable until Andaru 1.0.</p>
+</section>
+<div class="shell">
+  <nav aria-label="Add-on pages"><h2 id="parent-title">Services</h2><div id="navigation"></div></nav>
+  <main>
+    <h1 id="page-title" tabindex="-1"></h1>
+    <p class="muted">Controls come from the recorded manifest. Edit either page; the preview includes settings from both.</p>
+    <div class="toolbar"><button id="load-example" type="button">Load example values</button><button id="reset" type="button">Reset to defaults</button></div>
+    <div id="notice" role="status" aria-live="polite"></div>
+    <div class="workspace">
+      <section class="panel" aria-label="Generated settings"><form id="settings" novalidate></form></section>
+      <section class="panel" aria-labelledby="preview-title">
+        <h2 id="preview-title">Binding preview — not executed</h2>
+        <p id="runtime-note" class="preview-note"></p>
+        <div id="validation"><strong id="validation-summary"></strong><ul id="error-list"></ul></div>
+        <div id="bindings">
+          <h3>Environment</h3><pre id="environment"></pre>
+          <h3>Argument vector</h3><pre id="arguments"></pre>
+          <h3>Unresolved resources — references only</h3><pre id="resources"></pre>
+        </div>
+        <h3>Current editor values</h3><pre id="state"></pre>
+        <p class="muted preview-note">This is not an API, permission system or production validator. ASCII hostname and HTTP(S) URL checks cover this sample only. No certificate coverage or network reachability is verified.</p>
+      </section>
+    </div>
+    <section class="panel walkthroughs" aria-labelledby="walkthrough-title">
+      <h2 id="walkthrough-title">Guided cases</h2><div class="tabs" id="scenarios" role="tablist" aria-label="Guided cases"></div>
+      <div id="walkthrough" role="tabpanel"><p id="scenario-description"></p><div id="steps"></div></div>
+    </section>
+    <details><summary>Embedded source manifest</summary><pre id="manifest-source"></pre></details>
+  </main>
+</div>
+<footer>Standalone prototype. Reloading discards edits. No external resources, storage, cookies or backend requests. English literals stay literal when the locale changes.</footer>
+<script id="manifest" type="application/json">{
+  "manifestVersion": 1,
+  "id": "org.andaru.traefik",
+  "name": "Traefik",
+  "version": "1.0.0",
+  "application": {
+    "name": "Traefik",
+    "version": "3.7.17"
+  },
+  "requires": [
+    {
+      "name": "andaru.extension-api",
+      "version": "\u003e=1.0.0 \u003c2.0.0"
+    }
+  ],
+  "permissions": [
+    {
+      "name": "view",
+      "title": "View configuration and status"
+    },
+    {
+      "name": "configure",
+      "title": "Edit configuration"
+    },
+    {
+      "name": "apply",
+      "title": "Apply configuration"
+    },
+    {
+      "name": "manage",
+      "title": "Start, stop and restart Traefik"
+    },
+    {
+      "name": "logs",
+      "title": "Read logs"
+    },
+    {
+      "name": "metrics",
+      "title": "Read metrics"
+    }
+  ],
+  "menu": {
+    "parent": "andaru.services",
+    "id": "traefik",
+    "title": "Traefik",
+    "permissions": {
+      "view": "view",
+      "edit": "configure",
+      "apply": "apply",
+      "manage": "manage"
+    },
+    "properties": [
+      {
+        "name": "dashboardHostname",
+        "type": "string",
+        "format": "hostname",
+        "required": true,
+        "title": {
+          "i18n": "settings.dashboardHostname.title"
+        },
+        "binding": {
+          "type": "environment",
+          "name": "APP_DASHBOARD_HOST"
+        }
+      },
+      {
+        "name": "certificate",
+        "type": "certificate-reference",
+        "required": true,
+        "title": "TLS certificate",
+        "binding": {
+          "type": "certificate-files",
+          "name": "tls"
+        }
+      },
+      {
+        "name": "dashboardCredentials",
+        "type": "secret-reference",
+        "required": true,
+        "title": "Dashboard credentials",
+        "binding": {
+          "type": "file",
+          "name": "dashboardAuth",
+          "format": "htpasswd"
+        }
+      },
+      {
+        "name": "logLevel",
+        "type": "enum",
+        "title": {
+          "i18n": "settings.logLevel.title"
+        },
+        "options": [
+          {
+            "value": "DEBUG",
+            "title": {
+              "i18n": "logLevels.debug"
+            }
+          },
+          {
+            "value": "INFO",
+            "title": {
+              "i18n": "logLevels.info"
+            }
+          },
+          {
+            "value": "WARN",
+            "title": {
+              "i18n": "logLevels.warning"
+            }
+          },
+          {
+            "value": "ERROR",
+            "title": {
+              "i18n": "logLevels.error"
+            }
+          }
+        ],
+        "minItems": 1,
+        "maxItems": 1,
+        "default": [
+          "INFO"
+        ],
+        "ui": {
+          "control": "select"
+        },
+        "binding": {
+          "type": "argument",
+          "name": "--log.level"
+        }
+      }
+    ],
+    "children": [
+      {
+        "id": "proxy",
+        "title": {
+          "i18n": "pages.proxy.title"
+        },
+        "permissions": {
+          "view": "view",
+          "edit": "configure",
+          "apply": "apply"
+        },
+        "properties": [
+          {
+            "name": "hostname",
+            "type": "string",
+            "format": "hostname",
+            "required": true,
+            "title": "Public hostname",
+            "binding": {
+              "type": "environment",
+              "name": "APP_HOST"
+            }
+          },
+          {
+            "name": "upstreamUrl",
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https?://",
+            "required": true,
+            "title": "Upstream service",
+            "binding": {
+              "type": "environment",
+              "name": "APP_UPSTREAM"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "storage": [
+    {
+      "name": "logs",
+      "purpose": "logs",
+      "backup": false
+    }
+  ],
+  "endpoints": [
+    {
+      "name": "https",
+      "protocol": "https",
+      "port": 8443,
+      "exposure": "managed"
+    },
+    {
+      "name": "telemetry",
+      "protocol": "http",
+      "port": 9080,
+      "exposure": "internal"
+    }
+  ],
+  "runtimes": [
+    {
+      "name": "native",
+      "type": "native",
+      "executable": "native/traefik",
+      "identity": "dedicated-user",
+      "settingsActivation": "restart",
+      "applicationLog": {
+        "type": "journal"
+      }
+    },
+    {
+      "name": "container",
+      "type": "container",
+      "provider": "compose",
+      "file": "container/compose.yaml",
+      "service": "traefik",
+      "settingsActivation": "recreate",
+      "applicationLog": {
+        "type": "container"
+      }
+    }
+  ],
+  "logs": [
+    {
+      "name": "application",
+      "title": "Application",
+      "permission": "logs",
+      "source": {
+        "type": "runtime"
+      },
+      "format": "json-lines"
+    },
+    {
+      "name": "access",
+      "title": "Access",
+      "permission": "logs",
+      "source": {
+        "type": "file",
+        "storage": "logs",
+        "path": "access.jsonl"
+      },
+      "format": "json-lines"
+    }
+  ],
+  "metrics": [
+    {
+      "name": "application",
+      "title": "Traefik",
+      "permission": "metrics",
+      "endpoint": "telemetry",
+      "path": "/metrics",
+      "format": "prometheus"
+    }
+  ],
+  "health": {
+    "endpoint": "telemetry",
+    "path": "/ping",
+    "expectedStatus": 200
+  },
+  "webui": {
+    "title": "Open Traefik dashboard",
+    "permission": "view",
+    "endpoint": "https",
+    "hostnameSetting": "/dashboardHostname",
+    "path": "/dashboard/"
+  },
+  "recovery": {
+    "retainPreviousRuntime": true,
+    "requiresInternet": false
+  }
+}</script>
+<script>
+'use strict';
+// Throwaway contract probe: manifest → in-memory settings → validation/binding preview.
+const manifest = JSON.parse(document.getElementById('manifest').textContent);
+const translations = {
+  en: {
+    'settings.dashboardHostname.title':'Dashboard hostname', 'settings.logLevel.title':'Log level',
+    'logLevels.debug':'Debug', 'logLevels.info':'Information', 'logLevels.warning':'Warning',
+    'logLevels.error':'Error', 'pages.proxy.title':'Reverse proxy'
+  },
+  pt: {
+    'settings.dashboardHostname.title':'Nome do painel', 'settings.logLevel.title':'Nível de registro',
+    'logLevels.debug':'Depuração', 'logLevels.info':'Informação', 'logLevels.warning':'Aviso',
+    'logLevels.error':'Erro', 'pages.proxy.title':'Proxy reverso'
+  }
+};
+// Fixture IDs and labels only. No private keys, passwords, hashes or credential contents.
+const referenceChoices = {
+  'certificate-reference':[{value:'certificate:demo-lab',title:'Demo certificate · *.andaru.test'}],
+  'secret-reference':[{value:'secret:demo-dashboard',title:'Demo dashboard credential reference'}]
+};
+const flatten = page => [page,...(page.children || []).flatMap(flatten)];
+const pages = flatten(manifest.menu);
+const properties = pages.flatMap(page => (page.properties || []).map(property => ({...property,page:page.id})));
+const defaults = () => Object.fromEntries(properties.filter(p => 'default' in p).map(p => [p.name,structuredClone(p.default)]));
+const exampleValues = () => ({...defaults(),dashboardHostname:'dashboard.andaru.test',certificate:'certificate:demo-lab',dashboardCredentials:'secret:demo-dashboard',hostname:'app.andaru.test',upstreamUrl:'http://127.0.0.1:28080'});
+const title = (text,locale) => typeof text === 'string' ? text : translations[locale]?.[text.i18n] ?? translations.en[text.i18n] ?? `[missing: ${text.i18n}]`;
+function hasUserinfo(value) {
+  if (/^\s*https?:\/\/[^/?#]*@/i.test(value)) return true;
+  try { const url=new URL(value); return Boolean(url.username || url.password); }
+  catch { return false; }
+}
+function validate(values) {
+  const errors = [];
+  for (const p of properties) {
+    const value = values[p.name];
+    const error = message => errors.push({name:p.name,page:p.page,message});
+    if (value === undefined) { if (p.required) error('A value is required.'); continue; }
+    if (value === null) { error('Null is not a setting value.'); continue; }
+    if (p.type === 'enum') {
+      if (!Array.isArray(value)) { error('Select option values as an array.'); continue; }
+      if (new Set(value).size !== value.length) error('Duplicate selections are not allowed.');
+      if (value.some(item => !p.options.some(option => option.value === item))) error('Select a declared option.');
+      if (value.length < (p.minItems ?? 0) || value.length > (p.maxItems ?? Infinity)) error(`Select ${p.minItems}–${p.maxItems} option(s).`);
+    } else if (p.type.endsWith('-reference')) {
+      if (!referenceChoices[p.type]?.some(option => option.value === value)) error('Choose a known demo reference.');
+    } else if (p.type === 'string') {
+      if (typeof value !== 'string') { error('Use a text value.'); continue; }
+      // shortcut: ASCII hostnames only; qualify IDNA/format handling in the real validator.
+      if (p.format === 'hostname' && (value.length > 253 || !value.split('.').every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label)))) error('Use a valid ASCII hostname, without spaces or routing syntax.');
+      if (p.pattern && !new RegExp(p.pattern).test(value)) error('The value does not match the declared pattern.');
+      if (p.format === 'uri') {
+        try {
+          const url = new URL(value);
+          if (!['http:','https:'].includes(url.protocol) || value !== value.trim() || /[\s\\]/.test(value)) error('Use an absolute HTTP(S) URL without whitespace or backslashes.');
+          if (hasUserinfo(value)) error('Embedded URL credentials are rejected; use a secret reference.');
+        } catch { error('Use a valid absolute HTTP(S) URL.'); }
+      }
+    } else { error(`This prototype does not implement ${p.type}.`); }
+  }
+  return errors;
+}
+function inspect(values) {
+  const resolved = {...defaults(),...values};
+  const errors = validate(resolved);
+  if (errors.length) return {values:resolved,errors};
+  const environment = {}, args = [], resources = [];
+  for (const p of properties) {
+    const value = resolved[p.name], binding = p.binding;
+    if (value === undefined || !binding) continue;
+    const scalar = p.type === 'enum' ? value[0] : value;
+    if (binding.type === 'environment') environment[binding.name ?? p.name] = scalar;
+    else if (binding.type === 'argument') args.push(binding.name,String(scalar));
+    else resources.push({binding:binding.name,delivery:binding.type,reference:value,...(binding.format ? {format:binding.format} : {})});
+  }
+  return {values:resolved,errors,environment,args,resources};
+}
+function visibleValues(values) {
+  return Object.fromEntries(Object.entries(values).map(([name,value]) => {
+    const p = properties.find(item => item.name === name);
+    return [name,p?.format === 'uri' && typeof value === 'string' && hasUserinfo(value) ? '[rejected: embedded URL credentials]' : value];
+  }));
+}
+let state = {values:exampleValues(),page:manifest.menu.id,locale:'en',runtime:'native',scenario:0,step:0,message:'Example values loaded. Log level comes from the manifest default.'};
+const scenarios = [
+  {title:'Valid configuration',description:'Follow one setting across pages and runtime previews. No process is launched.',steps:[
+    ['Load a complete example',() => { state.values=exampleValues(); }],
+    ['Edit the public hostname',() => { state.page='proxy'; state.values.hostname='service.andaru.test'; }],
+    ['Preview the container variant',() => { state.runtime='container'; }]
+  ]},
+  {title:'Rejected inputs',description:'Invalid values anywhere in the menu withhold all process bindings. Errors link back to their field.',steps:[
+    ['Try routing syntax inside a hostname',() => { state.values=exampleValues(); state.page='proxy'; state.values.hostname='bad`host'; }],
+    ['Repair the hostname, clear the enum',() => { state.values.hostname='app.andaru.test'; state.values.logLevel=[]; state.page=manifest.menu.id; }],
+    ['Try credentials embedded in the upstream URL',() => { state.values.logLevel=['INFO']; state.values.upstreamUrl='https://demo-user:demo-not-a-secret@backend.andaru.test/'; state.page='proxy'; }],
+    ['Restore the valid upstream URL',() => { state.values.upstreamUrl='http://127.0.0.1:28080'; }]
+  ]},
+  {title:'Localization & defaults',description:'Only localized titles change. Literal English stays literal; identifiers and process values do not change.',steps:[
+    ['Reset to manifest defaults',() => { state.values=defaults(); }],
+    ['Switch localized titles to Portuguese',() => { state.locale='pt'; }],
+    ['Fill the required example values',() => { state.values=exampleValues(); }],
+    ['Select Debug while keeping its wire value',() => { state.values.logLevel=['DEBUG']; }]
+  ]}
+];
+const setText = (node,text) => { node.textContent=title(text,state.locale); node.lang=typeof text === 'string' || !translations[state.locale]?.[text.i18n] ? 'en' : state.locale; return node; };
+const el = (tag,text) => { const node=document.createElement(tag); return text === undefined ? node : setText(node,text); };
+const byId = id => document.getElementById(id);
+function renderNavigation() {
+  byId('navigation').replaceChildren();
+  for (const page of pages) {
+    const button=el('button',page.title); button.type='button'; button.dataset.page=page.id;
+    if (page !== manifest.menu) button.className='nested';
+    if (page.id === state.page) button.setAttribute('aria-current','page');
+    button.onclick=() => { state.page=page.id; state.message='Page changed; settings retained.'; render(); byId('page-title').focus(); };
+    byId('navigation').append(button);
+  }
+}
+function renderForm() {
+  const page=pages.find(item => item.id === state.page);
+  setText(byId('page-title'),page.title);
+  const form=byId('settings'); form.replaceChildren();
+  for (const p of page.properties || []) {
+    const field=el('div'); field.className='field';
+    const label=el('label',p.title); label.htmlFor=p.name;
+    let input;
+    if (p.type === 'enum' || p.type.endsWith('-reference')) {
+      input=el('select');
+      const blank=el('option','Choose…'); blank.value=''; input.append(blank);
+      const options=p.type === 'enum' ? p.options : referenceChoices[p.type];
+      for (const option of options) { const node=el('option',option.title); node.value=option.value; input.append(node); }
+      input.value=p.type === 'enum' ? state.values[p.name]?.[0] ?? '' : state.values[p.name] ?? '';
+    } else { input=el('input'); input.type='text'; input.value=state.values[p.name] ?? ''; input.autocomplete='off'; input.spellcheck=false; }
+    input.id=p.name; input.name=p.name;
+    const help=el('small',`${p.type} · ${p.binding.type}: ${p.binding.name ?? p.name}`); help.id=`${p.name}-help`;
+    const error=el('div'); error.id=`${p.name}-error`; error.className='error';
+    input.setAttribute('aria-describedby',`${help.id} ${error.id}`);
+    if (p.required || p.minItems > 0) input.setAttribute('aria-required','true');
+    const change=() => { state.values[p.name]=p.type === 'enum' ? (input.value ? [input.value] : []) : input.value; state.message=`Edited ${title(p.title,state.locale)}. Nothing saved or applied.`; updatePreview(); };
+    input.addEventListener(input.tagName === 'SELECT' ? 'change' : 'input',change);
+    field.append(label,input,help,error); form.append(field);
+  }
+}
+function updatePreview() {
+  const result=inspect(state.values);
+  byId('notice').textContent=state.message;
+  const runtime=manifest.runtimes.find(item => item.name === state.runtime);
+  byId('runtime-note').textContent=`Selected variant: ${runtime.type}. A real settings apply would ${runtime.settingsActivation}; this page does neither.`;
+  byId('validation').classList.toggle('invalid',result.errors.length > 0);
+  byId('validation-summary').textContent=result.errors.length ? `${result.errors.length} validation issue(s) — binding preview withheld` : 'All six sample settings are valid — preview available';
+  byId('error-list').replaceChildren();
+  for (const error of result.errors) {
+    const item=el('li'),button=el('button',`${error.name}: ${error.message}`); button.type='button';
+    button.onclick=() => { state.page=error.page; render(); byId(error.name).focus(); };
+    item.append(button); byId('error-list').append(item);
+  }
+  for (const p of properties) {
+    const input=byId(p.name); if (!input) continue;
+    const errors=result.errors.filter(error => error.name === p.name);
+    input.setAttribute('aria-invalid',String(errors.length > 0));
+    byId(`${p.name}-error`).textContent=errors.map(error => error.message).join(' ');
+  }
+  byId('bindings').hidden=result.errors.length > 0;
+  for (const [id,value] of [['environment',result.environment],['arguments',result.args],['resources',result.resources]]) byId(id).textContent=result.errors.length ? '' : JSON.stringify(value,null,2);
+  byId('state').textContent=JSON.stringify(visibleValues(result.values),null,2);
+}
+function renderWalkthrough() {
+  const tabs=byId('scenarios'); tabs.replaceChildren();
+  scenarios.forEach((scenario,index) => {
+    const button=el('button',scenario.title); button.type='button'; button.id=`scenario-${index}`;
+    button.setAttribute('role','tab'); button.setAttribute('aria-controls','walkthrough'); button.setAttribute('aria-selected',String(state.scenario === index));
+    button.onclick=() => { state={values:defaults(),page:manifest.menu.id,locale:'en',runtime:'native',scenario:index,step:0,message:'Walkthrough reset to manifest defaults. Use the numbered steps.'}; render(); byId(`scenario-${index}`).focus(); };
+    button.onkeydown=event => { if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') { event.preventDefault(); byId(`scenario-${(index+(event.key === 'ArrowRight' ? 1 : scenarios.length-1))%scenarios.length}`).click(); } };
+    tabs.append(button);
+  });
+  const scenario=scenarios[state.scenario];
+  byId('walkthrough').setAttribute('aria-labelledby',`scenario-${state.scenario}`);
+  byId('scenario-description').textContent=scenario.description;
+  byId('steps').replaceChildren();
+  scenario.steps.forEach(([label,action],index) => {
+    const button=el('button',`${index+1}. ${label}${index < state.step ? ' — done' : ''}`); button.type='button'; button.disabled=index !== state.step;
+    button.onclick=() => { action(); state.step=index+1; state.message=label+'. Preview updated; no external action.'; render(); const next=byId('steps').children[state.step]; if (next) next.focus(); else byId('page-title').focus(); };
+    byId('steps').append(button);
+  });
+}
+function render() {
+  byId('locale').value=state.locale; byId('runtime').value=state.runtime;
+  renderNavigation(); renderForm(); updatePreview(); renderWalkthrough();
+}
+for (const runtime of manifest.runtimes) { const option=el('option',runtime.type); option.value=runtime.name; byId('runtime').append(option); }
+byId('locale').onchange=event => { state.locale=event.target.value; state.message='Localized titles changed; identifiers and values retained.'; render(); };
+byId('runtime').onchange=event => { state.runtime=event.target.value; state.message='Runtime preview changed; no process launched.'; updatePreview(); };
+byId('load-example').onclick=() => { state.values=exampleValues(); state.message='Complete demo values loaded; reference contents do not exist in this page.'; render(); };
+byId('reset').onclick=() => { state.values=defaults(); state.message='Only manifest defaults remain. Required values need to be filled.'; render(); };
+byId('settings').onsubmit=event => event.preventDefault();
+byId('manifest-source').textContent=JSON.stringify(manifest,null,2);
+render();
+</script>
+</body>
+</html>
