@@ -2,7 +2,7 @@
 
 ## Status and purpose
 
-Research and a proposed design direction for [Andaru #12](https://github.com/andaru-project/andaru/issues/12), not a selected dependency stack or implemented application. The owner approved comparing frontend foundations and sketching the shell, Interfaces, Firewall Rules and Apply Review. All current contracts and visual choices remain provisional until Andaru 1.0. No framework is installed by this report.
+Research and a design direction for [Andaru #12](https://github.com/andaru-project/andaru/issues/12). The owner subsequently [selected Go + React/TypeScript/Vite/Mantine](https://github.com/andaru-project/andaru/issues/12#issuecomment-6752595186), then explicitly deferred mockups and prioritized a solid core/API. The layout ideas below remain references, not prerequisites or a frozen design. All current contracts and visual choices remain provisional until Andaru 1.0. No framework is installed by this report.
 
 The question is not which JavaScript framework can talk to Go: ordinary browser clients can all consume a Go HTTP API. The useful distinction is which combination minimizes the work and ongoing ownership needed for accessible forms, ordered policy tables, live status, Andaru branding and offline appliance delivery.
 
@@ -126,7 +126,7 @@ Cover initial loading, empty configuration, read-only access, field validation, 
 
 ## Readiness checkpoint
 
-Choose a working frontend/component foundation, then exercise the shell and these three page patterns against representative lab data before production implementation. Visual approval and actual integration should be separate from marketing screenshots or component-count comparisons. The first production slice still needs a written implementation plan covering the API/privilege boundary, authentication, safe configuration save/apply and real Debian VM verification. No complete plugin platform, author CI, SSR layer, GraphQL service or final design-system catalogue is a prerequisite.
+Do not block core implementation on mockups or visual approval. Start with a real engine/API slice and test the presentation layer when it has useful secured endpoints to consume; make a reasonable initial interface and refine it from use. The [first core API implementation plan](../superpowers/plans/2026-11-09-core-api.md) begins with the root-local engine/CLI and live interface inventory, then the existing roadmap adds saved configuration, safe apply/recovery and the network-facing authenticated client. When frontend work begins, qualify the actual selected components, local assets, keyboard behaviour and CSP as part of that implementation. No complete plugin platform, author CI, SSR layer, GraphQL service or final design-system catalogue is a prerequisite.
 
 ## Evidence limits
 
