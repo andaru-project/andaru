@@ -16,7 +16,7 @@ Requests came from a separate machine, not guest/container loopback. TLS certifi
 
 ### Peer-field and trust-setting verification
 
-Traefik 3.7.17's [access logger](https://github.com/traefik/traefik/blob/v3.7.17/pkg/middlewares/accesslog/logger.go#L279-L284) records `req.RemoteAddr` in `ClientAddr`, but may overwrite `ClientHost` with `X-Forwarded-For`. The conclusions below therefore use the host parsed from `ClientAddr`, not `ClientHost`.
+Traefik 3.7.17's [access logger](https://github.com/traefik/traefik/blob/v3.7.17/pkg/middlewares/accesslog/logger.go#L273-L278) records `req.RemoteAddr` in `ClientAddr`, but may overwrite `ClientHost` with `X-Forwarded-For`. The conclusions below therefore use the host parsed from `ClientAddr`, not `ClientHost`.
 
 Inspection of the retained forged-header request records found:
 
@@ -26,7 +26,7 @@ Inspection of the retained forged-header request records found:
 | Source-preserving slirp | `/source-slirp` | Yes | 56510 |
 | Rootful bridge | `/rootful-source` | Yes | 33344 |
 
-The records' `ClientHost` values also matched, but are not used as independent proof. All three retained static configurations were identical and set only the listening address under each entrypoint: no `forwardedHeaders` or `proxyProtocol` override. Their retained commands selected that configuration file, their environment bindings were only `APP_HOST` and `APP_UPSTREAM`, and the retained image's environment contained only `PATH`. In the [pinned entrypoint defaults](https://github.com/traefik/traefik/blob/v3.7.17/pkg/config/static/entrypoints.go), forwarded-header trust is insecure=false with no trusted IPs and PROXY protocol is unset; the [listener code](https://github.com/traefik/traefik/blob/v3.7.17/pkg/server/server_entrypoint_tcp.go#L547-L552) activates PROXY handling only when configured. No header/PROXY override was found that could explain these peer addresses.
+The records' `ClientHost` values also matched, but are not used as independent proof. All three retained static configurations were identical and set only the listening address under each entrypoint: no `forwardedHeaders` or `proxyProtocol` override. Their retained commands selected that configuration file, their environment bindings were only `APP_HOST` and `APP_UPSTREAM`, and the retained image's environment contained only `PATH`. In the [pinned entrypoint defaults](https://github.com/traefik/traefik/blob/v3.7.17/pkg/config/static/entrypoints.go), forwarded-header trust is insecure=false with no trusted IPs and PROXY protocol is unset; the [listener code](https://github.com/traefik/traefik/blob/v3.7.17/pkg/server/server_entrypoint_tcp.go#L541-L546) activates PROXY handling only when configured. No header/PROXY override was found that could explain these peer addresses.
 
 This verification used the original retained logs/configuration after the spike containers were removed; no replacement traffic or runtime configuration change was needed. It confirms the existing IPv4 conclusions while correcting the original description of the log field.
 
@@ -86,6 +86,8 @@ The corrected rootful service used `user: "1000:1000"`, matching the file owner,
 3. Keep source-preserving slirp as a documented alternative, not another default or performance claim. Its host-loopback option requests real additional access and must not become an implicit general privilege grant.
 4. Do not adopt rootful bridge merely to recover source IPs. If later required, model DNAT/FORWARD, runtime-owned rules, global forwarding changes and teardown explicitly; an INPUT-only policy is insufficient.
 5. Preserve real socket identity rather than accepting client-supplied forwarding headers. This result removes an IPv4/TCP blocker for Traefik, not the qualification work for IPv6, UDP, DNS group policies, throughput or failure recovery.
+
+The follow-up [pasta dual-stack spike](pasta-dualstack-spike.md) now exercises IPv6 HTTPS and IPv4/IPv6 UDP sender identity with guest firewall checks. It extends the transport evidence without claiming DNS protocol, low-port, performance or complete appliance-policy qualification.
 
 ## Cleanup and retained evidence
 
