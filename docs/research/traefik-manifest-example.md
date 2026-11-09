@@ -51,6 +51,7 @@ The [original Traefik probe](traefik-manifest-spike.md), [Podman/Compose qualifi
         "format": "hostname",
         "required": true,
         "title": { "i18n": "settings.dashboardHostname.title" },
+        "description": { "i18n": "settings.dashboardHostname.description" },
         "binding": {
           "type": "environment",
           "name": "APP_DASHBOARD_HOST"
@@ -61,6 +62,7 @@ The [original Traefik probe](traefik-manifest-spike.md), [Podman/Compose qualifi
         "type": "certificate-reference",
         "required": true,
         "title": "TLS certificate",
+        "description": "The TLS certificate must cover **both hostnames**:\n- the dashboard hostname;\n- the public reverse-proxy hostname.\n\nOnly the reference is shown here; private key material is delivered to the permitted runtime.",
         "binding": {
           "type": "certificate-files",
           "name": "tls"
@@ -71,6 +73,7 @@ The [original Traefik probe](traefik-manifest-spike.md), [Podman/Compose qualifi
         "type": "secret-reference",
         "required": true,
         "title": "Dashboard credentials",
+        "description": { "i18n": "settings.dashboardCredentials.description" },
         "binding": {
           "type": "file",
           "name": "dashboardAuth",
@@ -81,11 +84,28 @@ The [original Traefik probe](traefik-manifest-spike.md), [Podman/Compose qualifi
         "name": "logLevel",
         "type": "enum",
         "title": { "i18n": "settings.logLevel.title" },
+        "description": { "i18n": "settings.logLevel.description" },
         "options": [
-          { "value": "DEBUG", "title": { "i18n": "logLevels.debug" } },
-          { "value": "INFO", "title": { "i18n": "logLevels.info" } },
-          { "value": "WARN", "title": { "i18n": "logLevels.warning" } },
-          { "value": "ERROR", "title": { "i18n": "logLevels.error" } }
+          {
+            "value": "DEBUG",
+            "title": { "i18n": "logLevels.debug" },
+            "description": { "i18n": "logLevels.debug.description" }
+          },
+          {
+            "value": "INFO",
+            "title": { "i18n": "logLevels.info" },
+            "description": "Routine operational information, plus warnings and errors."
+          },
+          {
+            "value": "WARN",
+            "title": { "i18n": "logLevels.warning" },
+            "description": { "i18n": "logLevels.warning.description" }
+          },
+          {
+            "value": "ERROR",
+            "title": { "i18n": "logLevels.error" },
+            "description": "Errors only; routine events and warnings are omitted."
+          }
         ],
         "minItems": 1,
         "maxItems": 1,
@@ -115,6 +135,7 @@ The [original Traefik probe](traefik-manifest-spike.md), [Podman/Compose qualifi
             "format": "hostname",
             "required": true,
             "title": "Public hostname",
+            "description": "The **public hostname** matched by this reverse-proxy route, for example `app.example.net`. DNS and network exposure must be configured separately.",
             "binding": {
               "type": "environment",
               "name": "APP_HOST"
@@ -127,6 +148,7 @@ The [original Traefik probe](traefik-manifest-spike.md), [Podman/Compose qualifi
             "pattern": "^https?://",
             "required": true,
             "title": "Upstream service",
+            "description": { "i18n": "settings.upstreamUrl.description" },
             "binding": {
               "type": "environment",
               "name": "APP_UPSTREAM"
@@ -242,6 +264,10 @@ Each page explicitly binds its view/edit/apply operations to declared permission
 Property `name` is the stable stored-setting identifier, unique across this example's add-on and independent of page placement or translated titles. `/hostname` continues to identify the same setting if its property moves to another page. Grouping nested object-valued settings needs its own definition before implementation; this example uses flat setting names.
 
 Every human-facing title, label, description and help text accepts either literal English or exactly `{ "i18n": "non-empty.key" }`, with no additional object fields. Option titles follow the same rule. No reserved string prefixes or escaping conventions apply. Keys resolve in the add-on's translation resources with English as the fallback locale. Translation resource packaging, locale selection and missing-key diagnostics remain a subsequent design step; this document does not supply a translation bundle.
+
+Each property can supply a `description` explaining its purpose; enum options can supply their own descriptions. Description values use the same literal-English-string or explicit i18n-reference shape as titles. Resolve localization before rendering Markdown. Descriptions support Markdown, not arbitrary HTML: disable raw/inline HTML in the parser, escape source tags, reject unsafe link schemes and sanitize generated markup using established tooling. Code blocks are text, never executable. Titles and identifiers are not Markdown.
+
+Show field descriptions visibly beneath their controls and associate them through `aria-describedby`, not only a hover tooltip. For a single-select enum, also show the selected option's description and update it when the selection or locale changes. A missing optional description renders no empty help block. The example gives all six fields and all four log-level options descriptions; translation resource packaging remains provisional.
 
 ### Property types, validation and process bindings
 
