@@ -245,7 +245,32 @@ Authors declare `type` and constraints directly, not a JSON Schema fragment wrap
 
 `type: "enum"` means an array of selected option values. Duplicate option values invalidate the manifest; duplicate submitted selections invalidate settings, including API submissions. Uniqueness is invariant, with no `unique` option. `minItems` and `maxItems` constrain selection count. The example requires exactly one log level and stores it as, for example, `["INFO"]`. Its argument binding infers the sole scalar and produces two argument-vector elements, `--log.level` and `INFO`; there is no `encoding: single` setting. Multiple selections require explicit serialization such as a joined environment value or repeated arguments. The exact multi-selection syntax is not specified by this example.
 
-Properties carry their own optional `binding`; there is no duplicate top-level `inputs` mapping. Environment variables and CLI arguments are the application integration boundary. An environment binding may omit `name` to use the property name unchanged. An unbound property is not automatically passed to the process. Arguments are passed as an argument vector, never through a shell. Presence-only flags, boolean/number/date serialization, absent/empty values and binding collisions require explicit wire rules; this example does not choose incidental language conversions. User-supplied custom argument overrides are deferred.
+Properties carry their own optional `binding`; there is no duplicate top-level `inputs` mapping. Environment variables and CLI arguments are the application integration boundary. An environment binding may omit `name` to use the property name unchanged. An unbound property is not automatically passed to the process. Arguments are passed as an argument vector, never through a shell. User-supplied custom argument overrides are deferred.
+
+The approved serialization defaults for environment variables and value-taking arguments are:
+
+| Value | Process representation |
+| --- | --- |
+| String | Unchanged text |
+| Boolean | `true` or `false` |
+| Integer / number | Locale-independent numeric text, without grouping separators |
+| Date / date-time | ISO 8601 text matching the declared date/date-time type |
+| Exactly one enum selection | Its sole scalar value, without an `encoding: single` setting |
+| Multiple enum selections | Explicit joining or repeated arguments, not an implicit conversion |
+
+Application-specific conversion remains the builder's responsibility. Presence-only CLI arguments use `style: "flag"` on a boolean property's argument binding:
+
+```json
+{
+  "type": "argument",
+  "name": "--accesslog",
+  "style": "flag"
+}
+```
+
+For this binding, `true` includes `--accesslog` and `false` omits it. Use this style only when absence has the intended application meaning; otherwise pass an explicit boolean value. Ordinary value-taking argument bindings must not silently treat booleans as presence-only flags.
+
+Resolve declared defaults during settings validation and persist the resulting values, not silently at process startup. After default resolution, a missing required setting rejects the save; a missing optional setting without a default emits no binding. Explicit `false`, `0` and `""` are retained when valid under the property's constraints, not treated as missing by a truthiness check. Only `style: "flag"` intentionally omits `false`. Persisted settings do not silently change when a later manifest changes a default.
 
 File/credential delivery also lives on the relevant property. `secret-reference` selects an extension-owned secret or an explicitly administrator-assigned shared secret, not arbitrary access to another extension's store. `certificate-reference` likewise requires ownership or explicit administrator assignment; access to a core-owned certificate is never implied by a `configure` grant. Re-check reference authorization on save and apply, including before delivering the private key. The `htpasswd` file binding delivers existing authorized credential material; it is not an instruction to put a password/hash in ordinary settings or generate one from a reference string. Certificate-file delivery supplies the certificate and key separately. The GUI sees references and permitted public metadata/fingerprints, never the private key or resolved secret. Opaque reference strings are not permissions merely because they validate syntactically.
 
@@ -277,6 +302,6 @@ Extension-data backup is optional and enabled by default; this example declares 
 
 ## Next design step
 
-Define the remaining binding wire rules: boolean/number/date and enum serialization, absent/empty values, argument/environment name collisions, and how assigned credential/storage paths are passed through that same interface. Then specify the validation and lifecycle contract against this example before implementing a runner. Reuse existing binary/container probes; do not revive native descriptors, template machinery or preprocessing hooks.
+Define manifest validation and preflight against this example: identifier and binding-name rules/collisions, compatible property/control/binding combinations, exact numeric/date wire formats and argument placement, multi-selection encoding syntax, and delivery of assigned credential/storage paths through the same interface. Null handling is not defined by the missing/empty rules and must not be silently equated with absence. Use the agreed lifecycle boundary before implementing a runner. Reuse existing binary/container probes; do not revive native descriptors, template machinery or preprocessing hooks.
 
 Full i18n packaging, broad form/control vocabulary, OS-package installation, advanced multi-route configuration, ACME, container-socket discovery and runtime switching are outside this example. The next step should not silently add them.
