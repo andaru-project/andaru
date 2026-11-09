@@ -23,3 +23,4 @@ AI-assisted work uses Graphify and CodeGraph indexes; run
 ## Design research
 
 - [Extension contracts: reuse, avoid, unresolved](docs/research/extension-contract.md)
+- [Web UI foundation: technology and interaction direction](docs/research/web-ui-foundation.md)
