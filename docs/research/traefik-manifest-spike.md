@@ -43,7 +43,7 @@ Ephemeral checks of the original sketch parsed its named collections and checked
 
 ## What this changes in the design
 
-1. A small `.env` interface is useful, but it is not a complete reverse-proxy model. Multiple routers, upstreams and middlewares need structured array settings and typed file generation/bindings, not a giant free-form text field or a growing expression language.
+1. A small `.env` interface is useful, but it is not a complete reverse-proxy model. Multiple routers, upstreams and middlewares need structured settings. Following the owner's subsequent decision, Andaru passes environment/arguments and authorized resource paths; generating application files is the builder's responsibility, not a platform template/file-generation framework.
 2. Classify the chosen binding, not merely the Traefik feature: these environment-bound routing settings require process replacement/container recreation even though the file provider is reloadable. Literal validated routing values written into the watched file can use the reload path; install/static settings still require restart as appropriate.
 3. One application can expose several log streams and a separate private metrics endpoint. Keep their discovery and permissions explicit rather than assuming logs live in one global directory or metrics share the public application listener.
 4. Start with the file provider, no Docker-socket discovery, and explicit listeners. Container-provider access is a separate privilege and networking decision.
