@@ -163,6 +163,9 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -c -tags=integration -o "$BUILD_DI
 ```
 
 Run that test executable as root in the lab. The UID/GID 65534 helper uses an owned traversable sandbox and deliberately relaxed **test-only** socket permissions after startup, proving `SO_PEERCRED` independently of filesystem access. Other cases cover existing files/symlinks/live/stale sockets, incorrect owners/ancestors, umask-independent modes, replacement preservation, cancellation, forced connection closure and clean restart. Production gets no permission-bypass or test-helper flag.
+The store's non-root helper copies its executable into a root-owned traversable
+sandbox and explicitly sets mode `0755`, so direct `go test` runs also work when
+Go's build directory is private or the caller uses a restrictive umask.
 
 The store and engine fault suites require root plus `unshare`/`mount` in the lab.
 Mounts and ENOSPC are isolated in private test mount namespaces, never granted

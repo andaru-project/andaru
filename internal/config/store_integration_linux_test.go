@@ -383,10 +383,41 @@ func TestStoreInitializationAndPaths(t *testing.T) {
 	})
 	t.Run("nonroot has no filesystem side effect", func(t *testing.T) {
 		r := ownedDir(t)
-		os.Chmod(r, 01777)
+		if err := os.Chmod(r, os.ModeSticky|0777); err != nil {
+			t.Fatal(err)
+		}
 		p := filepath.Join(r, "new")
-		exe, _ := os.Executable()
-		cmd := exec.Command(exe, "--store-unprivileged", p)
+		exe, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		input, err := os.Open(exe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer input.Close()
+		helperDir := ownedDir(t)
+		if err := os.Chmod(helperDir, 0711); err != nil {
+			t.Fatal(err)
+		}
+		helper := filepath.Join(helperDir, "unprivileged-helper")
+		output, err := os.OpenFile(helper, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0700)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.Copy(output, input); err != nil {
+			output.Close()
+			t.Fatal(err)
+		}
+		if err := output.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(helper, 0755); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, helper, "--store-unprivileged", p)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: 65534, Gid: 65534, Groups: []uint32{}}}
 		if out, e := cmd.CombinedOutput(); e != nil {
 			t.Fatalf("child %v %s", e, out)
