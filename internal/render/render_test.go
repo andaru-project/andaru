@@ -1,9 +1,11 @@
 package render
 
 import (
+	"embed"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io/fs"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -13,6 +15,9 @@ import (
 
 	"github.com/andaru-project/andaru/internal/host"
 )
+
+//go:embed testdata
+var testdata embed.FS
 
 var update = flag.Bool("update", false, "rewrite golden files")
 
@@ -30,11 +35,11 @@ func links(rows ...observed) []host.LinkStatus {
 
 func fixture(t *testing.T, name string) Input {
 	t.Helper()
-	declaration, err := os.ReadFile(filepath.Join("testdata", name+".json"))
+	declaration, err := testdata.ReadFile("testdata/" + name + ".json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(filepath.Join("testdata", name+".links.json"))
+	raw, err := testdata.ReadFile("testdata/" + name + ".links.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +79,7 @@ func golden(result Result) string {
 }
 
 func TestNetworkGolden(t *testing.T) {
-	names, err := filepath.Glob("testdata/*.links.json")
+	names, err := fs.Glob(testdata, "testdata/*.links.json")
 	if err != nil || len(names) == 0 {
 		t.Fatalf("no fixtures: %v", err)
 	}
@@ -87,8 +92,9 @@ func TestNetworkGolden(t *testing.T) {
 				if err := os.WriteFile(file, []byte(got), 0o644); err != nil {
 					t.Fatal(err)
 				}
+				return
 			}
-			want, err := os.ReadFile(file)
+			want, err := testdata.ReadFile("testdata/" + name + ".golden")
 			if err != nil || got != string(want) {
 				t.Fatalf("golden mismatch (%v); run go test -update and review the diff.\n%s", err, got)
 			}
