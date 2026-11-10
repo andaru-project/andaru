@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  native-linux:
+    name: linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+            machine: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            machine: aarch64
+    steps:
+      - name: Check out
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify native architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "${{ matrix.machine }}"
+          test "$(go env GOARCH)" = "${{ matrix.arch }}"
+
+      - name: Vet and unprivileged tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          go vet ./...
+          go test ./...
+          go test -race ./...
+
+      - name: Build and run root integration suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          build=$(mktemp -d)
+          trap 'rm -rf -- "$build"' EXIT
+          art=$(sudo mktemp -d /var/tmp/andaru-ci-XXXXXX)
+          trap 'rm -rf -- "$build"; sudo rm -rf -- "$art"' EXIT
+          CGO_ENABLED=0 go build -o "$build/andaru" ./cmd/andaru
+          CGO_ENABLED=0 go test -c -tags=integration -o "$build/config.test" ./internal/config
+          CGO_ENABLED=0 go test -c -tags=integration -o "$build/engine.test" ./internal/engine
+          CGO_ENABLED=0 go test -c -tags=integration -o "$build/ctl.test" ./cmd/andaru
+          sudo install -o root -g root -m 0755 -t "$art" \
+            "$build/andaru" "$build/config.test" "$build/engine.test" "$build/ctl.test"
+          sudo env -u TMPDIR "$art/config.test" -test.v -test.timeout=120s
+          sudo env -u TMPDIR ANDARU_TEST_BINARY="$art/andaru" "$art/engine.test" -test.v -test.timeout=120s
+          sudo env -u TMPDIR "$art/ctl.test" -test.v -test.timeout=120s

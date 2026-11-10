@@ -13,7 +13,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o "$BUILD_DIR/andaru-arm64" ./cm
 go test ./...
 ```
 
-Linux amd64 is the runtime qualification target; arm64 is currently cross-build-only. Go selects the required patched toolchain through its normal verified toolchain mechanism if the installed compiler is older. Build in a task-owned worktree; do not write binaries into tracked source directories.
+CI targets native Linux amd64 and arm64 on Ubuntu 24.04; the persistent Debian lab remains a separate amd64 qualification environment. Native CI does not establish ARM appliance boot or Debian arm64 qualification. Go selects the required patched toolchain through its normal verified toolchain mechanism if the installed compiler is older. Build in a task-owned worktree; do not write binaries into tracked source directories.
 
 ## Run and inspect
 
@@ -153,6 +153,20 @@ sudo journalctl -u andaru-engine.service
 SIGINT/SIGTERM cancels request contexts, gives HTTP shutdown up to 3 seconds, then closes held connections if necessary. systemd supplies a 5-second stop budget. This unit's current lack of network-administration capabilities is deliberate: a later realizer must request only the privileges its actual mutation path requires.
 
 ## Verification
+
+GitHub Actions runs the same native test job concurrently on `ubuntu-24.04`
+(amd64) and `ubuntu-24.04-arm` (arm64) for pull requests targeting `main` and
+pushes to `main`.
+The workflow verifies the native architecture, runs `go vet`, ordinary and race
+suites without elevated privileges, then builds the CGO-disabled program and
+executes all three integration binaries as root. The engine fault test receives
+that built program through `ANDARU_TEST_BINARY`; no integration cases are skipped.
+Race tests retain native CGO support. Privileged tests run only on disposable
+GitHub-hosted VMs. ENOSPC phases use private mount namespaces; other cases use
+disposable temporary directories.
+
+The runner labels and passwordless `sudo` are documented in
+[GitHub's hosted-runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
 
 The ordinary suite runs without elevated privileges. Explicit kernel-credential/lifecycle tests use an integration build tag and require root; they fail clearly rather than silently skipping the proof. Build the test executable on the developer host and transfer it to the Debian VM, without installing a Go compiler there:
 
