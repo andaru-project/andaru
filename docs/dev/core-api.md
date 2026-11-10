@@ -169,13 +169,19 @@ What is rendered:
 
 ### Trying a PPPoE line by hand
 
-The preview is not exercised against a live line. To test one before apply exists, as root on a host running the standard Debian kernel with `ppp` installed and systemd-networkd active:
+The preview is not exercised against a live line. Until apply and rollback exist you can try one by hand, as root, on a host running the standard Debian kernel with `ppp` installed and systemd-networkd active. **This changes live networking with no rollback and no Andaru packet filter. Do it from the console, not over the network you are about to change.**
 
-1. Write each previewed file to its `path` with its `mode`, creating `/run/andaru/ppp` as `0700`. In the `.options` file replace the word `<redacted>` with the password, keeping the quotes; escape `\` and `"` with a backslash.
+- pppd installs an IPv4 default route. It can replace the route your management session uses.
+- Write **only the WAN-side files**: the WAN NIC's `.network`, the VLAN's `.netdev` and `.network`, the `pp…` `.network`, the `.options` file and the `.service`. Do not write a LAN `.network` that has `IPv6SendRA=yes` or `DHCPPrefixDelegation=yes`: it turns on IPv6 forwarding and announces a prefix, and nothing filters the forwarded traffic yet.
+- Do not stop or restart `andaru-engine` during the test. `/run/andaru` is its runtime directory, and systemd deletes it, including `ppp/*.options`, when the engine stops.
+
+Steps:
+
+1. Write each chosen file to its `path` with its `mode`, creating `/run/andaru/ppp` as `0700`. In the `.options` file replace the word `<redacted>` with the password, keeping the quotes; escape `\` and `"` with a backslash.
 2. `networkctl reload`, then `systemctl daemon-reload` and `systemctl start andaru-pppoe-<pp-name>.service`.
 3. Watch `journalctl -fu andaru-pppoe-<pp-name>.service` and `networkctl status <pp-name>`.
 
-To undo: stop the unit, delete the files you wrote, `systemctl daemon-reload`, `networkctl reload`, and `networkctl delete` any `vl…`/`br…`/`bo…` device that was created. Everything is under `/run`, so a reboot also clears it. Expect the `[DHCPv6]` keys to be the part that depends on your provider.
+To undo: stop the unit, delete the files you wrote, `systemctl daemon-reload`, `networkctl reload`, and `networkctl delete` the `vl…` device. Everything is under `/run`, so a reboot also clears it. Expect the `[DHCPv6]` keys to be the part that depends on your provider.
 
 ## Supervision
 

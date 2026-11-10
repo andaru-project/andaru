@@ -34,15 +34,23 @@ func Network(in Input) (Result, error) {
 			r.find("warning", "DEPENDENCY_UNAVAILABLE", fmt.Sprintf("/segments/%d/link", i), "Not rendered: the segment's link is unavailable.")
 		}
 	}
+	sessions := 0
 	for i, l := range r.d.Links {
 		if !r.rendered[l.ID] {
 			continue
 		}
 		if l.Kind == "pppoe" {
+			sessions++
 			r.pppoe(i)
 		} else {
 			r.networkd(i)
 		}
+	}
+	if sessions > 0 && (!in.Facts.PPPDaemon || !in.Facts.PPPoEPlugin) {
+		r.find("error", "TOOL_MISSING", "", "pppd or its pppoe.so plugin is not installed; install the ppp package.")
+	}
+	if sessions > 0 && !in.Facts.PPPDevice {
+		r.find("error", "KERNEL_SUPPORT_MISSING", "", "The running kernel has no PPP support (/dev/ppp is absent). Debian cloud kernels omit it; install the standard linux-image package.")
 	}
 	for _, path := range in.Facts.ForeignFiles {
 		r.find("error", "FOREIGN_CONFIGURATION", "", "A network configuration file not written by Andaru would override or conflict with it: "+path)

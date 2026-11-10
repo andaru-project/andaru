@@ -165,3 +165,22 @@ func TestPPPoEMTU(t *testing.T) {
 		}
 	}
 }
+
+func TestHostWidePPPFindingsAreRaisedOnce(t *testing.T) {
+	in := change(t, fixture(t, "owner"), func(d map[string]any) {
+		second := map[string]any{"id": "lnk_00000007-0000-4000-8000-000000000007", "name": "second", "kind": "pppoe", "mtu": 1492, "enabled": true,
+			"parent": item(d, "links", 3)["id"], "username": "u", "password": map[string]any{"secret": "WAN_PASSWORD"}}
+		d["links"] = append(d["links"].([]any), second)
+		d["segments"] = append(d["segments"].([]any), map[string]any{"id": "seg_00000007-0000-4000-8000-000000000007", "name": "second", "link": second["id"], "zone": "z",
+			"addressing": map[string]any{"ipv4": map[string]any{"mode": "ppp"}, "ipv6": map[string]any{"mode": "none"}}})
+	})
+	in.Facts = host.RealizerFacts{}
+	count := map[string]int{}
+	result := render(t, in)
+	for _, f := range result.Findings {
+		count[f.Code]++
+	}
+	if count["TOOL_MISSING"] != 1 || count["KERNEL_SUPPORT_MISSING"] != 1 {
+		t.Fatalf("two PPPoE links repeated a host-wide finding: %v\n%s", count, golden(result))
+	}
+}

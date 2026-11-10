@@ -36,7 +36,7 @@ func ownerTopology(password string) string {
 
 type previewHost struct {
 	linkReads, factReads int
-	linkErr              error
+	linkErr, factErr     error
 }
 
 func (p *previewHost) links(context.Context) ([]host.LinkStatus, error) {
@@ -48,7 +48,7 @@ func (p *previewHost) links(context.Context) ([]host.LinkStatus, error) {
 }
 func (p *previewHost) facts() (host.RealizerFacts, error) {
 	p.factReads++
-	return host.RealizerFacts{ForeignFiles: []string{"/run/systemd/network/10-netplan-eth0.network"}, PPPDaemon: true, PPPoEPlugin: true, PPPDevice: true}, nil
+	return host.RealizerFacts{ForeignFiles: []string{"/run/systemd/network/10-netplan-eth0.network"}, PPPDaemon: true, PPPoEPlugin: true, PPPDevice: true}, p.factErr
 }
 
 func previewFixture(t *testing.T) (http.Handler, *config.Store, *previewHost) {
@@ -135,7 +135,7 @@ func TestPreviewHTTPContract(t *testing.T) {
 	if post := configCall(h, "POST", "/api/v1/preview/network", "{}", ""); post.Code != 405 || post.Header().Get("Allow") != "GET, HEAD" {
 		t.Fatalf("POST: %d", post.Code)
 	}
-	for _, query := range []string{"?savedVersion=x", "?savedVersion=1&savedVersion=1", "?other=1", "?savedVersion=01"} {
+	for _, query := range []string{"?savedVersion=x", "?savedVersion=1&savedVersion=1", "?other=1", "?savedVersion=01", "?savedVersion=%zz", "?savedVersion=1;x=2", "?savedVersion="} {
 		assertAPIError(t, configCall(h, "GET", "/api/v1/preview/network"+query, "", ""), 400, "INVALID_REQUEST")
 	}
 	assertAPIError(t, configCall(h, "GET", "/api/v1/preview/network?savedVersion=99", "", ""), 404, "NOT_FOUND")
@@ -189,6 +189,9 @@ func TestPreviewFailuresAndAuthorization(t *testing.T) {
 	if strings.Contains(w.Body.String(), "private tool stderr") || strings.Contains(w.Body.String(), `"files"`) {
 		t.Fatalf("failure leaked detail or a partial preview: %s", w.Body)
 	}
+	observed.linkErr, observed.factErr = nil, errors.New("private directory error")
+	assertAPIError(t, configCall(h, "GET", "/api/v1/preview/network", "", ""), 503, "INVENTORY_UNAVAILABLE")
+	observed.linkErr = errors.New("private tool stderr")
 	// The saved version is checked before the host is read.
 	assertAPIError(t, configCall(h, "GET", "/api/v1/preview/network?savedVersion=99", "", ""), 404, "NOT_FOUND")
 	before := *observed

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"net/url"
 
 	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/host"
@@ -40,7 +41,13 @@ func newPreviewHandler(store *config.Store, readLinks func(context.Context) ([]h
 			return
 		}
 		var version *config.Version
-		for key, values := range r.URL.Query() {
+		// url.Values from r.URL.Query() silently drops malformed pairs; a typo must not preview the head.
+		query, err := url.ParseQuery(r.URL.RawQuery)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Invalid preview query.")
+			return
+		}
+		for key, values := range query {
 			parsed, err := config.ParseVersion(values[0])
 			if key != "savedVersion" || len(values) != 1 || err != nil {
 				writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Invalid preview query.")

@@ -90,7 +90,11 @@ func (r *renderer) addressing(id string, ppp bool) (sections []section, sources 
 		network = append(network, "IPv6AcceptRA=no")
 		announceable := true
 		for _, a := range v6.Addresses {
-			if p, e := netip.ParsePrefix(a); e == nil && p.Bits() == 64 {
+			p, e := netip.ParsePrefix(a)
+			if e == nil && p.Addr().IsLinkLocalUnicast() {
+				continue // every link already has fe80::/64; announcing it is meaningless
+			}
+			if e == nil && p.Bits() == 64 {
 				prefixes = append(prefixes, section{"IPv6Prefix", []string{"Prefix=" + p.Masked().String()}})
 			} else {
 				announceable = false
@@ -102,12 +106,13 @@ func (r *renderer) addressing(id string, ppp bool) (sections []section, sources 
 	case "slaac", "dhcp6":
 		network = append(network, "IPv6AcceptRA=yes")
 		accept = []string{"UseDNS=no", "UseDomains=no"}
+		if v6.Mode == "dhcp6" && ppp {
+			// Some providers send no router advertisement on PPP and expect a bare solicit.
+			dhcp6 = append(dhcp6, "WithoutRA=solicit")
+		}
+		// Also for SLAAC: a router advertisement with the managed or other flag starts DHCPv6 by itself.
+		dhcp6 = append(dhcp6, ignoreOffered...)
 		if v6.Mode == "dhcp6" {
-			if ppp {
-				// Some providers send no router advertisement on PPP and expect a bare solicit.
-				dhcp6 = append(dhcp6, "WithoutRA=solicit")
-			}
-			dhcp6 = append(dhcp6, ignoreOffered...)
 			if v6.RequestPrefixLength != nil {
 				dhcp6 = append(dhcp6, fmt.Sprintf("PrefixDelegationHint=::/%d", *v6.RequestPrefixLength))
 			}

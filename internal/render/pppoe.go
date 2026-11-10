@@ -78,18 +78,15 @@ func (r *renderer) pppoe(i int) {
 	name, parent := r.name[l.ID], r.name[l.Parent]
 	si := r.segment[l.ID]
 	a := r.d.Segments[si].Addressing
-	password := r.in.Secrets[l.Password.Secret]
+	password := ""
+	if l.Password != nil {
+		password = r.in.Secrets[l.Password.Secret]
+	}
 	if len(l.Username) > credentialLimit {
 		r.find("error", "CREDENTIAL_TOO_LONG", linkPath(i, "username"), "pppd truncates user names longer than 255 bytes; authentication would fail.")
 	}
 	if len(password) > credentialLimit {
 		r.find("error", "CREDENTIAL_TOO_LONG", linkPath(i, "password"), "pppd truncates passwords longer than 255 bytes; authentication would fail.")
-	}
-	if !r.in.Facts.PPPDaemon || !r.in.Facts.PPPoEPlugin {
-		r.find("error", "TOOL_MISSING", "", "pppd or its pppoe.so plugin is not installed; install the ppp package.")
-	}
-	if !r.in.Facts.PPPDevice {
-		r.find("error", "KERNEL_SUPPORT_MISSING", "", "The running kernel has no PPP support (/dev/ppp is absent). Debian cloud kernels omit it; install the standard linux-image package.")
 	}
 	options := func(passwordWord string) string {
 		lines := []string{

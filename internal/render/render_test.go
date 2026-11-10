@@ -267,3 +267,69 @@ func TestEmptyDeclaration(t *testing.T) {
 		t.Fatal("undecodable declaration rendered")
 	}
 }
+
+func TestUpstreamOffersIgnoredOnSLAAC(t *testing.T) {
+	// A router advertisement with the managed flag starts DHCPv6 even on a SLAAC segment.
+	network := fileEnding(t, render(t, fixture(t, "bond")), "bo000000030000.network").Content
+	if !strings.Contains(network, "[DHCPv6]\nUseDNS=no\nUseNTP=no\nUseHostname=no\nUseDomains=no\n") || strings.Contains(network, "WithoutRA") {
+		t.Fatalf("SLAAC uplink would adopt provider DNS/NTP through RA-triggered DHCPv6:\n%s", network)
+	}
+}
+
+func TestOutputOrderIsCanonical(t *testing.T) {
+	in := change(t, fixture(t, "pppoe-1492"), func(d map[string]any) {
+		slices.Reverse(d["links"].([]any))
+		v := item(d, "segments", 1)["addressing"].(map[string]any)
+		v["ipv4"] = map[string]any{"mode": "static", "addresses": []any{"192.0.2.9/24", "192.0.2.1/24"}}
+		v["ipv6"] = map[string]any{"mode": "static", "addresses": []any{"2001:db8:0:9::1/64", "2001:db8:0:1::1/64"}, "ra": map[string]any{"enabled": true, "managed": false, "otherInfo": false}}
+	})
+	in.Links = append(in.Links, links(observed{"ens19", "", "52:54:00:aa:bb:02"})...)
+	in.Facts.ForeignFiles = []string{"/etc/systemd/network/b.network", "/etc/systemd/network/a.network"}
+	in = change(t, in, func(d map[string]any) {
+		d["links"] = append(d["links"].([]any),
+			map[string]any{"id": "lnk_00000009-0000-4000-8000-000000000009", "name": "gone", "kind": "ethernet", "mtu": 1500, "enabled": true, "permanentMac": "52:54:00:aa:bb:99"},
+			map[string]any{"id": "lnk_00000000-0000-4000-8000-000000000000", "name": "spare", "kind": "ethernet", "mtu": 1500, "enabled": true, "permanentMac": "52:54:00:aa:bb:02"})
+	})
+	result := render(t, in)
+	parent := fileEnding(t, result, "ens18.network").Content
+	bridge := fileEnding(t, result, "br000000050000.network").Content
+	for content, ordered := range map[string][]string{
+		parent: {"VLAN=vl000000020000", "VLAN=vl000000040000"},
+		bridge: {"Address=192.0.2.1/24", "Address=192.0.2.9/24", "Address=2001:db8:0:1::1/64", "Address=2001:db8:0:9::1/64", "Prefix=2001:db8:0:1::/64", "Prefix=2001:db8:0:9::/64"},
+	} {
+		last := -1
+		for _, line := range ordered {
+			at := strings.Index(content, line+"\n")
+			if at <= last {
+				t.Fatalf("%q out of order in:\n%s", line, content)
+			}
+			last = at
+		}
+	}
+	if len(result.Resolved) != 2 || result.Resolved[0].Interface != "ens19" || result.Resolved[1].Interface != "ens18" {
+		t.Fatalf("resolutions not ordered by link ID: %+v", result.Resolved)
+	}
+	if len(result.Findings) != 3 || result.Findings[0].Message >= result.Findings[1].Message || result.Findings[1].Path != "" || result.Findings[2].Code != "HARDWARE_MISSING" {
+		t.Fatalf("findings not ordered by path, code, message: %+v", result.Findings)
+	}
+}
+
+func TestDeclaredLinksDerivingOneNameCollide(t *testing.T) {
+	in := change(t, fixture(t, "bridge"), func(d map[string]any) {
+		d["links"] = append(d["links"].([]any), map[string]any{"id": "lnk_00000003-0000-4000-9000-000000000009", "name": "twin", "kind": "vlan", "mtu": 1500, "enabled": true, "parent": item(d, "links", 1)["id"], "vlanId": 11})
+	})
+	result := render(t, in)
+	if !hasFinding(result, "error", "NAME_COLLISION", "/links/2") || !hasFinding(result, "error", "NAME_COLLISION", "/links/4") || hasFile(result, "vl000000030000.netdev") {
+		t.Fatalf("two links deriving vl000000030000 must both be refused: %s", golden(result))
+	}
+}
+
+func TestLinkLocalAddressIsNotAnnounced(t *testing.T) {
+	in := change(t, fixture(t, "bridge"), func(d map[string]any) {
+		item(d, "segments", 0)["addressing"].(map[string]any)["ipv6"].(map[string]any)["addresses"] = []any{"fe80::1/64", "2001:db8:0:1::1/64"}
+	})
+	network := fileEnding(t, render(t, in), "br000000040000.network").Content
+	if strings.Contains(network, "fe80::/64") || !strings.Contains(network, "Prefix=2001:db8:0:1::/64") || !strings.Contains(network, "Address=fe80::1/64") {
+		t.Fatalf("a link-local prefix must not be advertised:\n%s", network)
+	}
+}

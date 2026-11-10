@@ -34,6 +34,12 @@ func TestReadRealizerFacts(t *testing.T) {
 	if err != nil || !slices.Equal(got.ForeignFiles, want) || !got.PPPDaemon || !got.PPPoEPlugin || got.PPPDevice {
 		t.Fatalf("%v %+v", err, got)
 	}
+	if err = os.WriteFile(filepath.Join(root, "ppp"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if kernel, err := readRealizerFacts(etc, run, filepath.Join(root, "pppd"), filepath.Join(root, "*", "pppoe.so"), filepath.Join(root, "ppp")); err != nil || !kernel.PPPDevice {
+		t.Fatalf("present PPP device not observed: %v %+v", err, kernel)
+	}
 	empty, err := readRealizerFacts(filepath.Join(root, "absent"), filepath.Join(root, "absent2"), "/absent", "/absent/*", "/absent")
 	if err != nil || empty.ForeignFiles == nil || len(empty.ForeignFiles) != 0 || empty.PPPDaemon || empty.PPPoEPlugin {
 		t.Fatalf("missing directories are an empty host, not an error: %v %+v", err, empty)

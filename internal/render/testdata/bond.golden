@@ -25,6 +25,12 @@ UseNTP=no
 UseHostname=no
 UseDomains=no
 
+[DHCPv6]
+UseDNS=no
+UseNTP=no
+UseHostname=no
+UseDomains=no
+
 [IPv6AcceptRA]
 UseDNS=no
 UseDomains=no
