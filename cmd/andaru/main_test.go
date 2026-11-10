@@ -107,6 +107,8 @@ func TestInvalidArgumentsAreUsageErrors(t *testing.T) {
 	for _, args := range [][]string{
 		nil, {"unknown"}, {"engine", "extra"}, {"engine", "--socket", "relative"},
 		{"ctl"}, {"ctl", "unknown"}, {"ctl", "links", "extra"}, {"ctl", "--socket", "relative", "links"},
+		{"engine", "--state-dir", "relative"}, {"engine", "--state-dir", "/tmp/../tmp"},
+		{"engine", "--state-dir"}, {"ctl", "--state-dir", "/tmp", "links"},
 	} {
 		var out, diagnostics bytes.Buffer
 		if code := run(context.Background(), args, &out, &diagnostics); code != 2 || out.Len() != 0 || diagnostics.Len() == 0 {

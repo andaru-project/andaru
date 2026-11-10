@@ -26,7 +26,7 @@ func TestAPILinksContractAndFailures(t *testing.T) {
 			Flags: []string{"UP"}, LinkAddress: "02:00:00:00:00:02",
 			Addresses: []host.AddressStatus{{Family: "ipv4", Address: "192.0.2.7", PrefixLength: 24, Scope: "global"}},
 		}}, nil
-	})
+	}, http.NotFoundHandler())
 	status := httptest.NewRecorder()
 	h.ServeHTTP(status, rootRequest(http.MethodGet, "/api/v1/status/links"))
 	if status.Code != http.StatusOK || status.Header().Get("Cache-Control") != "no-store" || !strings.HasPrefix(status.Header().Get("Content-Type"), "application/json") {
@@ -64,10 +64,11 @@ func TestAPILinksContractAndFailures(t *testing.T) {
 	if err := json.Unmarshal(doc.Body.Bytes(), &openapi); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(openapi.OpenAPI, "3.1.") || len(openapi.Paths) != 2 || openapi.Paths["/api/v1/status/links"] == nil || openapi.Paths["/api/v1/openapi.json"] == nil {
+	if !strings.HasPrefix(openapi.OpenAPI, "3.1.") || openapi.Paths["/api/v1/status/links"] == nil || openapi.Paths["/api/v1/openapi.json"] == nil {
 		t.Fatalf("published paths/version do not describe this API: %s", doc.Body)
 	}
-	for path, raw := range openapi.Paths {
+	for _, path := range []string{"/api/v1/status/links", "/api/v1/openapi.json"} {
+		raw := openapi.Paths[path]
 		var operations map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &operations); err != nil {
 			t.Fatal(err)
@@ -105,7 +106,7 @@ func TestAPILinksContractAndFailures(t *testing.T) {
 	}
 	failed := newHandler(func(context.Context) ([]host.LinkStatus, error) {
 		return nil, errors.New("private /root/path and tool stderr")
-	})
+	}, http.NotFoundHandler())
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
 		w := httptest.NewRecorder()
 		failed.ServeHTTP(w, rootRequest(method, "/api/v1/status/links"))
@@ -177,7 +178,7 @@ func assertAPIError(t *testing.T, w *httptest.ResponseRecorder, status int, code
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Error.Code != code || body.Error.Message == "" || body.Error.Details == nil || len(body.Error.Details) != 0 {
+	if body.Error.Code != code || body.Error.Message == "" || body.Error.Details == nil {
 		t.Fatalf("wrong error envelope: %s", w.Body)
 	}
 	if w.Header().Get("Cache-Control") != "no-store" || !strings.HasPrefix(w.Header().Get("Content-Type"), "application/json") {
@@ -198,7 +199,7 @@ func TestAPIDeniesUnverifiedPeerBeforeRead(t *testing.T) {
 		} {
 			t.Run(identity.name+" "+route.method+" "+route.path, func(t *testing.T) {
 				reads := 0
-				h := newHandler(func(context.Context) ([]host.LinkStatus, error) { reads++; return []host.LinkStatus{}, nil })
+				h := newHandler(func(context.Context) ([]host.LinkStatus, error) { reads++; return []host.LinkStatus{}, nil }, http.NotFoundHandler())
 				r := httptest.NewRequest(route.method, route.path, nil)
 				if identity.value != nil {
 					r = r.WithContext(context.WithValue(r.Context(), peerKey{}, identity.value))
@@ -218,7 +219,7 @@ func TestAPIDeniesUnverifiedPeerBeforeRead(t *testing.T) {
 }
 
 func TestAPIEmptySnapshotIsAnArray(t *testing.T) {
-	h := newHandler(func(context.Context) ([]host.LinkStatus, error) { return nil, nil })
+	h := newHandler(func(context.Context) ([]host.LinkStatus, error) { return nil, nil }, http.NotFoundHandler())
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, rootRequest(http.MethodGet, "/api/v1/status/links"))
 	var body struct {
@@ -240,7 +241,7 @@ func TestAPIPropagatesRequestCancellation(t *testing.T) {
 			t.Error("inventory received a detached context")
 		}
 		return nil, ctx.Err()
-	})
+	}, http.NotFoundHandler())
 	r := rootRequest(http.MethodGet, "/api/v1/status/links").WithContext(context.WithValue(ctx, peerKey{}, peerIdentity{uid: 0, verified: true}))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)

@@ -30,7 +30,7 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	usage := "usage: andaru engine [--socket PATH] | andaru ctl [--socket PATH] links|openapi"
+	usage := "usage: andaru engine [--socket PATH] [--state-dir PATH] | andaru ctl [--socket PATH] links|openapi"
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, usage)
 		return 2
@@ -46,6 +46,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	socket := flags.String("socket", defaultSocket, "absolute local engine socket path")
+	stateDir := "/var/lib/andaru"
+	if args[0] == "engine" {
+		flags.StringVar(&stateDir, "state-dir", stateDir, "absolute private state directory")
+	}
 	if err := flags.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -61,7 +65,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, usage)
 			return 2
 		}
-		if err := engine.Serve(ctx, *socket); err != nil {
+		if !filepath.IsAbs(stateDir) || filepath.Clean(stateDir) != stateDir {
+			fmt.Fprintln(stderr, "state-dir must be a canonical absolute path")
+			return 2
+		}
+		if err := engine.Serve(ctx, *socket, stateDir); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}

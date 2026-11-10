@@ -3,13 +3,22 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "info": {
     "title": "Andaru local engine API",
-    "version": "0.1.0-dev",
-    "description": "Experimental read-only engine API. Served only over a Unix socket, not TCP. Every operation requires a verified UID 0 peer from Linux SO_PEERCRED. There is no HTTP identity header, cookie or token authentication in this increment. Runtime link indexes/names are observations, not persistent configuration identities. The contract remains provisional until Andaru 1.0.",
-    "license": {"name": "GNU AGPLv3", "url": "https://github.com/andaru-project/andaru/blob/main/LICENSE"}
+    "version": "0.2.0-dev",
+    "description": "Experimental root-local engine API over Unix sockets only. Verified UID 0 SO_PEERCRED authorizes every route. Network status is observed; configuration writes create durable saved versions and never activate networking. No application accounts, HTTP identity headers, cookie/token authentication, live-generation/apply or backup service is implemented. Contracts remain provisional until Andaru 1.0.",
+    "license": {
+      "name": "GNU AGPLv3",
+      "url": "https://github.com/andaru-project/andaru/blob/main/LICENSE"
+    }
   },
-  "servers": [{"url": "/"}],
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
   "x-andaru-transport": "unix",
-  "x-andaru-peer-uids": [0],
+  "x-andaru-peer-uids": [
+    0
+  ],
   "paths": {
     "/api/v1/status/links": {
       "get": {
@@ -17,16 +26,41 @@
         "summary": "Read the complete current host link/address snapshot",
         "description": "Reads Debian iproute2 in the engine's host namespace. Failure is explicit, never a partial snapshot or a stale cache. Addresses retain host bits. The bounded full snapshot is not paginated.",
         "responses": {
-          "200": {"description": "Observed links, ordered by ifIndex", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/LinksResponse"}}}},
-          "403": {"$ref": "#/components/responses/Forbidden"},
-          "405": {"$ref": "#/components/responses/MethodNotAllowed"},
-          "503": {"$ref": "#/components/responses/InventoryUnavailable"}
+          "200": {
+            "description": "Observed links, ordered by ifIndex",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinksResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/InventoryUnavailable"
+          }
         }
       },
       "head": {
         "operationId": "headObservedLinks",
         "summary": "Check the authorized inventory read without returning a body",
-        "responses": {"200": {"description": "Inventory read succeeded; no body"}, "403": {"description": "Peer denied; no body"}, "503": {"description": "Inventory unavailable; no body"}}
+        "responses": {
+          "200": {
+            "description": "Inventory read succeeded; no body"
+          },
+          "403": {
+            "description": "Peer denied; no body"
+          },
+          "503": {
+            "description": "Inventory unavailable; no body"
+          }
+        }
       }
     },
     "/api/v1/openapi.json": {
@@ -34,65 +68,1840 @@
         "operationId": "getOpenAPI",
         "summary": "Read this implemented API contract",
         "responses": {
-          "200": {"description": "OpenAPI 3.1 document", "content": {"application/json": {"schema": {"type": "object", "required": ["openapi", "info", "paths", "components"], "properties": {"openapi": {"type": "string"}, "info": {"type": "object"}, "paths": {"type": "object"}, "components": {"type": "object"}}}}}},
-          "403": {"$ref": "#/components/responses/Forbidden"},
-          "405": {"$ref": "#/components/responses/MethodNotAllowed"}
+          "200": {
+            "description": "OpenAPI 3.1 document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "openapi",
+                    "info",
+                    "paths",
+                    "components"
+                  ],
+                  "properties": {
+                    "openapi": {
+                      "type": "string"
+                    },
+                    "info": {
+                      "type": "object"
+                    },
+                    "paths": {
+                      "type": "object"
+                    },
+                    "components": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          }
         }
       },
       "head": {
         "operationId": "headOpenAPI",
         "summary": "Check authorized contract availability without returning a body",
-        "responses": {"200": {"description": "Contract is available; no body"}, "403": {"description": "Peer denied; no body"}}
+        "responses": {
+          "200": {
+            "description": "Contract is available; no body"
+          },
+          "403": {
+            "description": "Peer denied; no body"
+          }
+        }
       }
+    },
+    "/api/v1/schema": {
+      "get": {
+        "operationId": "getConfigurationSchema",
+        "responses": {
+          "200": {
+            "description": "Saved state; never applied networking",
+            "content": {
+              "application/schema+json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "$schema",
+                    "$defs"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "head": {
+        "operationId": "headGetConfigurationSchema",
+        "responses": {
+          "200": {
+            "description": "Saved state; never applied networking"
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/config": {
+      "get": {
+        "operationId": "getSavedConfiguration",
+        "responses": {
+          "200": {
+            "description": "Saved state; never applied networking",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SnapshotResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "head": {
+        "operationId": "headGetSavedConfiguration",
+        "responses": {
+          "200": {
+            "description": "Saved state; never applied networking"
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/config/{collection}": {
+      "get": {
+        "operationId": "listSavedObjects",
+        "responses": {
+          "200": {
+            "description": "Saved state; never applied networking",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "head": {
+        "operationId": "headListSavedObjects",
+        "responses": {
+          "200": {
+            "description": "Saved state; never applied networking"
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createSavedObject",
+        "responses": {
+          "201": {
+            "description": "Saved state; never applied networking",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "/api/v1/schema#/$defs/objectWrite"
+              }
+            }
+          }
+        }
+      },
+      "parameters": [
+        {
+          "in": "path",
+          "name": "collection",
+          "required": true,
+          "schema": {
+            "enum": [
+              "links",
+              "segments",
+              "zones"
+            ]
+          }
+        }
+      ]
+    },
+    "/api/v1/config/{collection}/{id}": {
+      "get": {
+        "operationId": "getSavedObject",
+        "responses": {
+          "200": {
+            "description": "Saved state; never applied networking",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Strong quoted <id>.<object version>"
+              },
+              "Andaru-Saved-Version": {
+                "schema": {
+                  "$ref": "#/components/schemas/Version"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "head": {
+        "operationId": "headGetSavedObject",
+        "responses": {
+          "200": {
+            "description": "Saved state; never applied networking",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Strong quoted <id>.<object version>"
+              },
+              "Andaru-Saved-Version": {
+                "schema": {
+                  "$ref": "#/components/schemas/Version"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "replaceSavedObject",
+        "responses": {
+          "200": {
+            "description": "Saved state; never applied networking",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "/api/v1/schema#/$defs/objectWrite"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact strong object ETag; no wildcard/weak/list form."
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "deleteSavedObject",
+        "responses": {
+          "200": {
+            "description": "Saved state; never applied networking",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Acknowledgement"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact strong object ETag; no wildcard/weak/list form."
+          }
+        ]
+      },
+      "parameters": [
+        {
+          "in": "path",
+          "name": "collection",
+          "required": true,
+          "schema": {
+            "enum": [
+              "links",
+              "segments",
+              "zones"
+            ]
+          }
+        },
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "/api/v1/config/changes": {
+      "post": {
+        "operationId": "saveAtomicChanges",
+        "responses": {
+          "200": {
+            "description": "Saved state; never applied networking",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SaveResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "/api/v1/schema#/$defs/changes"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/versions": {
+      "get": {
+        "operationId": "listSavedVersions",
+        "responses": {
+          "200": {
+            "description": "Saved state; never applied networking",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "schema": {
+              "$ref": "#/components/schemas/Version"
+            }
+          }
+        ]
+      },
+      "head": {
+        "operationId": "headListSavedVersions",
+        "responses": {
+          "200": {
+            "description": "Saved state; never applied networking"
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/versions/{id}": {
+      "get": {
+        "operationId": "getSavedVersion",
+        "responses": {
+          "200": {
+            "description": "Saved state; never applied networking",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "head": {
+        "operationId": "headGetSavedVersion",
+        "responses": {
+          "200": {
+            "description": "Saved state; never applied networking"
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "parameters": [
+        {
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/Version"
+          }
+        }
+      ]
     }
   },
   "components": {
     "schemas": {
       "LinksResponse": {
-        "type": "object", "additionalProperties": false, "required": ["items"],
-        "properties": {"items": {"type": "array", "items": {"$ref": "#/components/schemas/LinkStatus"}}}
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LinkStatus"
+            }
+          }
+        }
       },
       "LinkStatus": {
-        "type": "object", "additionalProperties": false,
-        "required": ["ifIndex", "name", "linkType", "mtu", "operState", "flags", "addresses"],
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ifIndex",
+          "name",
+          "linkType",
+          "mtu",
+          "operState",
+          "flags",
+          "addresses"
+        ],
         "properties": {
-          "ifIndex": {"type": "integer", "minimum": 1, "description": "Observed kernel index; not persistent identity"},
-          "name": {"type": "string", "minLength": 1},
-          "linkType": {"type": "string", "minLength": 1},
-          "mtu": {"type": "integer", "minimum": 0},
-          "operState": {"type": "string", "minLength": 1, "description": "Observed tool state, including UNKNOWN where reported"},
-          "flags": {"type": "array", "items": {"type": "string"}},
-          "linkAddress": {"type": "string", "description": "Current link-layer address if supplied, not a permanent MAC promise"},
-          "addresses": {"type": "array", "items": {"$ref": "#/components/schemas/AddressStatus"}}
+          "ifIndex": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Observed kernel index; not persistent identity"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "linkType": {
+            "type": "string",
+            "minLength": 1
+          },
+          "mtu": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "operState": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Observed tool state, including UNKNOWN where reported"
+          },
+          "flags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "linkAddress": {
+            "type": "string",
+            "description": "Current link-layer address if supplied, not a permanent MAC promise"
+          },
+          "addresses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AddressStatus"
+            }
+          }
         }
       },
       "AddressStatus": {
-        "type": "object", "additionalProperties": false, "required": ["family", "address", "prefixLength", "scope"],
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "family",
+          "address",
+          "prefixLength",
+          "scope"
+        ],
         "properties": {
-          "family": {"type": "string", "enum": ["ipv4", "ipv6"]},
-          "address": {"type": "string", "description": "Host IP address, not a network-masked prefix"},
-          "prefixLength": {"type": "integer", "minimum": 0, "maximum": 128},
-          "scope": {"type": "string", "minLength": 1}
+          "family": {
+            "type": "string",
+            "enum": [
+              "ipv4",
+              "ipv6"
+            ]
+          },
+          "address": {
+            "type": "string",
+            "description": "Host IP address, not a network-masked prefix"
+          },
+          "prefixLength": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 128
+          },
+          "scope": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "allOf": [
-          {"if": {"properties": {"family": {"const": "ipv4"}}}, "then": {"properties": {"address": {"format": "ipv4"}, "prefixLength": {"maximum": 32}}}},
-          {"if": {"properties": {"family": {"const": "ipv6"}}}, "then": {"properties": {"address": {"format": "ipv6"}}}}
+          {
+            "if": {
+              "properties": {
+                "family": {
+                  "const": "ipv4"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "address": {
+                  "format": "ipv4"
+                },
+                "prefixLength": {
+                  "maximum": 32
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "family": {
+                  "const": "ipv6"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "address": {
+                  "format": "ipv6"
+                }
+              }
+            }
+          }
         ]
       },
-      "ErrorDetail": {"type": "object", "additionalProperties": false, "required": ["path", "message"], "properties": {"path": {"type": "string"}, "message": {"type": "string"}}},
+      "ErrorDetail": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "message"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
       "ErrorEnvelope": {
-        "type": "object", "additionalProperties": false, "required": ["error"],
-        "properties": {"error": {"type": "object", "additionalProperties": false, "required": ["code", "message", "details"], "properties": {
-          "code": {"type": "string", "enum": ["FORBIDDEN", "NOT_FOUND", "METHOD_NOT_ALLOWED", "INVENTORY_UNAVAILABLE"]},
-          "message": {"type": "string"},
-          "details": {"type": "array", "description": "Empty for this read-only API", "items": {"$ref": "#/components/schemas/ErrorDetail"}}
-        }}}
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "message",
+              "details"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "FORBIDDEN",
+                  "NOT_FOUND",
+                  "METHOD_NOT_ALLOWED",
+                  "INVENTORY_UNAVAILABLE",
+                  "INVALID_REQUEST",
+                  "PRECONDITION_FAILED",
+                  "REQUEST_TOO_LARGE",
+                  "VALIDATION_FAILED",
+                  "PRECONDITION_REQUIRED",
+                  "STORE_UNAVAILABLE"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "details": {
+                "type": "array",
+                "description": "Safe field errors with request-relative JSON Pointers; empty for non-field failures.",
+                "items": {
+                  "$ref": "#/components/schemas/ErrorDetail"
+                }
+              },
+              "current": {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "object",
+                      "secret"
+                    ]
+                  },
+                  "collection": {
+                    "enum": [
+                      "links",
+                      "segments",
+                      "zones"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "$ref": "#/components/schemas/Version"
+                  },
+                  "deleted": {
+                    "type": "boolean"
+                  },
+                  "value": {
+                    "$ref": "/api/v1/schema#/$defs/objectViewValue"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      },
+      "Version": {
+        "type": "string",
+        "pattern": "^(0|[1-9][0-9]{0,18})$"
+      },
+      "ObjectResponse": {
+        "$ref": "/api/v1/schema#/$defs/objectView"
+      },
+      "CollectionResponse": {
+        "$ref": "/api/v1/schema#/$defs/collectionView"
+      },
+      "SnapshotResponse": {
+        "$ref": "/api/v1/schema#/$defs/snapshotView"
+      },
+      "ChangedObject": {
+        "type": "object",
+        "required": [
+          "collection",
+          "id"
+        ],
+        "properties": {
+          "collection": {
+            "enum": [
+              "links",
+              "segments",
+              "zones"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "deleted": {
+            "type": "boolean"
+          },
+          "value": {
+            "$ref": "/api/v1/schema#/$defs/objectViewValue"
+          },
+          "version": {
+            "$ref": "#/components/schemas/Version"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SaveResult": {
+        "type": "object",
+        "required": [
+          "state",
+          "savedVersion",
+          "items",
+          "created"
+        ],
+        "properties": {
+          "state": {
+            "const": "saved"
+          },
+          "savedVersion": {
+            "$ref": "#/components/schemas/Version"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChangedObject"
+            }
+          },
+          "created": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "Acknowledgement": {
+        "type": "object",
+        "required": [
+          "state",
+          "savedVersion"
+        ],
+        "properties": {
+          "state": {
+            "const": "saved"
+          },
+          "savedVersion": {
+            "$ref": "#/components/schemas/Version"
+          }
+        },
+        "additionalProperties": false
+      },
+      "VersionInfo": {
+        "type": "object",
+        "required": [
+          "id",
+          "createdAt",
+          "actor",
+          "changedObjectCount"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Version"
+          },
+          "parentId": {
+            "$ref": "#/components/schemas/Version"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "changedObjectCount": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "HistoryResponse": {
+        "type": "object",
+        "required": [
+          "state",
+          "items"
+        ],
+        "properties": {
+          "state": {
+            "const": "saved"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VersionInfo"
+            }
+          },
+          "nextBefore": {
+            "$ref": "#/components/schemas/Version"
+          }
+        },
+        "additionalProperties": false
+      },
+      "VersionResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/VersionInfo"
+          },
+          {
+            "type": "object",
+            "required": [
+              "state",
+              "value",
+              "changes"
+            ],
+            "properties": {
+              "state": {
+                "const": "saved"
+              },
+              "value": {
+                "$ref": "/api/v1/schema#/$defs/declarationView"
+              },
+              "changes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "collection",
+                    "id"
+                  ],
+                  "properties": {
+                    "collection": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "created": {
+                      "type": "boolean"
+                    },
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        ]
       }
     },
     "responses": {
-      "Forbidden": {"description": "Missing, unverified or non-root Unix peer; JSON error for GET, no body for HEAD", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
-      "MethodNotAllowed": {"description": "Unsupported method; Allow: GET, HEAD", "headers": {"Allow": {"schema": {"type": "string", "const": "GET, HEAD"}}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
-      "InventoryUnavailable": {"description": "Command, parsing, size or deadline failure; never a partial success", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}
+      "Forbidden": {
+        "description": "Missing, unverified or non-root Unix peer; JSON error for GET, no body for HEAD",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "MethodNotAllowed": {
+        "description": "Unsupported method; Allow: GET, HEAD",
+        "headers": {
+          "Allow": {
+            "schema": {
+              "type": "string",
+              "const": "GET, HEAD"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "InventoryUnavailable": {
+        "description": "Command, parsing, size or deadline failure; never a partial success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      }
     }
   }
 }

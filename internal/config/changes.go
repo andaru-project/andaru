@@ -71,6 +71,9 @@ func DecodeChanges(data []byte) (Changes, error) {
 }
 func ObjectChange(op, collection, id string, expected *Version, body []byte) (Changes, error) {
 	c := Changes{single: true, Operations: []Operation{{Op: op, Collection: collection, ID: id, ExpectedVersion: expected}}}
+	if op == "create" {
+		c.Operations[0].LocalID = "object"
+	}
 	if op == "delete" {
 		if len(strings.TrimSpace(string(body))) != 0 {
 			return c, fault("INVALID_REQUEST", "", "Delete has no body.")

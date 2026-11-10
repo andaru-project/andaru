@@ -12,13 +12,42 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/host"
 	"github.com/andaru-project/andaru/internal/securefs"
 )
 
 // Serve runs the root-local engine API without opening an IP listener.
-func Serve(ctx context.Context, socketPath string) error {
-	return serveUnix(ctx, socketPath, newHandler(host.ReadLinks))
+func Serve(ctx context.Context, socketPath, stateDir string) (result error) {
+	if os.Geteuid() != 0 {
+		return errors.New("the engine requires root")
+	}
+	store, err := config.Open(ctx, stateDir)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := store.Close(); err != nil && result == nil {
+			result = err
+		}
+	}()
+	lifetime, cancel := context.WithCancelCause(ctx)
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		select {
+		case err := <-store.Failure():
+			cancel(err)
+		case <-lifetime.Done():
+		}
+	}()
+	defer func() { cancel(context.Canceled); <-stopped }()
+	err = serveUnix(lifetime, socketPath, newHandler(host.ReadLinks, newConfigurationHandler(store)))
+	cause := context.Cause(lifetime)
+	if cause != nil && !errors.Is(cause, context.Canceled) && !errors.Is(cause, context.DeadlineExceeded) {
+		return cause
+	}
+	return err
 }
 
 func serveUnix(ctx context.Context, socketPath string, handler http.Handler) (result error) {
