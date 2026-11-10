@@ -1,0 +1,33 @@
+### /run/systemd/network/50-andaru-ens18.network 0644 secret=false sources=/links/0
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:01
+
+[Link]
+RequiredForOnline=no
+MTUBytes=1500
+ActivationPolicy=always-down
+
+[Network]
+LLDP=no
+LinkLocalAddressing=no
+IPv6AcceptRA=no
+
+### /run/systemd/network/50-andaru-ens19.network 0644 secret=false sources=/links/1
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:02
+
+[Link]
+RequiredForOnline=no
+MTUBytes=1500
+
+[Network]
+LLDP=no
+LinkLocalAddressing=no
+IPv6AcceptRA=no
+
+### resolved lnk_00000001-0000-4000-8000-000000000001 -> ens18
+### resolved lnk_00000002-0000-4000-8000-000000000002 -> ens19
+### warning DEPENDENCY_UNAVAILABLE "/links/3/parent" Not rendered: the parent link is unavailable.
+### warning DEPENDENCY_UNAVAILABLE "/segments/0/link" Not rendered: the segment's link is unavailable.
+### warning DEPENDENCY_UNAVAILABLE "/segments/1/link" Not rendered: the segment's link is unavailable.
+### realizable=true
