@@ -42,7 +42,7 @@ func Serve(ctx context.Context, socketPath, stateDir string) (result error) {
 		}
 	}()
 	defer func() { cancel(context.Canceled); <-stopped }()
-	err = serveUnix(lifetime, socketPath, newHandler(host.ReadLinks, newConfigurationHandler(store)))
+	err = serveUnix(lifetime, socketPath, newHandler(host.ReadLinks, newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts)))
 	cause := context.Cause(lifetime)
 	if cause != nil && !errors.Is(cause, context.Canceled) && !errors.Is(cause, context.DeadlineExceeded) {
 		return cause
