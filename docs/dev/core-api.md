@@ -58,6 +58,7 @@ The actual OpenAPI 3.1 document is embedded from [`internal/engine/openapi.json`
 | `POST /api/v1/config/changes` | All-or-nothing batch, including references between new objects |
 | `GET /api/v1/versions` | Bounded saved history, default 50/max 100; exclusive `before` cursor |
 | `GET /api/v1/versions/{id}` | Secret-free immutable saved snapshot |
+| `GET /api/v1/preview/network` | Files a saved version would hand to systemd-networkd and pppd on this host, redacted, with findings; `state:"preview"`; optional `?savedVersion=N` |
 
 GET resources support HEAD without a body. Unsupported methods return `405 METHOD_NOT_ALLOWED` with the resource's `Allow` methods; unknown resources return `404 NOT_FOUND`. Missing/unverified/non-root peers get `403 FORBIDDEN` before routing/body processing. Inventory failures return `503 INVENTORY_UNAVAILABLE`, never an empty/partial success. Errors share `{"error":{"code":"...","message":"...","details":[]}}`; field details use safe request-relative JSON Pointers and conflicts may add redacted `error.current`. JSON responses are `no-store`; diagnostics never quote secret values.
 
@@ -65,7 +66,7 @@ GET resources support HEAD without a body. Unsupported methods return `405 METHO
 
 Each link contains `ifIndex`, `name`, `linkType`, `mtu`, `operState`, `flags`, optional `linkAddress`, and `addresses`. Addresses contain `family` (`ipv4`/`ipv6`), the host `address`, `prefixLength` and `scope`. Empty lists are `[]`, not `null`. Links are ordered by current kernel index; address-list order is not policy order. These are observations, **not** immutable configuration IDs or permanent-MAC identity. Loopback `UNKNOWN` and an all-zero link-layer address are preserved when reported. An absent link-layer address is omitted, not invented.
 
-The engine runs exactly `/usr/bin/ip -j address show` through an argument vector, without a shell or command override. It ignores unrelated tool JSON fields, validates required link/address data and fails the entire read on invalid data. Fixed bounds are a 2-second child deadline, 4 MiB stdout, 4 KiB retained stderr, and a 5-second/8 MiB CLI response budget. No stale snapshot cache is used.
+The engine runs exactly `/usr/bin/ip -d -j address show` through an argument vector, without a shell or command override. It ignores unrelated tool JSON fields, validates required link/address data and fails the entire read on invalid data. Fixed bounds are a 2-second child deadline, 4 MiB stdout, 4 KiB retained stderr, and a 5-second/8 MiB CLI response budget. No stale snapshot cache is used.
 
 Any stderr diagnostic from the fixed inventory command also fails the read, even
 with exit status zero: iproute2 can report an interrupted, inconsistent netlink
@@ -134,6 +135,47 @@ live-generation protections. Failed publication can retain a root-only orphan
 secret document. `secure_delete` is enabled but does not erase retained history
 or promise forensic removal from WALs, snapshots, SSDs or backups. No secret
 export, encrypted backup, independent-store restore or migration service exists.
+
+## Network preview
+
+`andaru ctl preview network [--saved-version N]` shows exactly which files Andaru would give systemd-networkd and pppd for a saved version on this host, and what would stop them working. **It changes nothing**: no file is written under `/run`, nothing is reloaded or started, and no state is stored. Applying, rollback and boot are later work.
+
+```sh
+sudo andaru ctl preview network | jq -r '.files[] | "### \(.path) \(.mode)\n\(.content)"'
+sudo andaru ctl preview network | jq '.realizable, .findings'
+```
+
+The response has `state: "preview"`, the `savedVersion` rendered, `realizable` (true when no finding is an error), `resolved` (which kernel interface currently carries each declared permanent MAC), `files` and `findings`. Each file has its destination `path`, `mode`, `content` and the declaration objects it came from. A file marked `secret` shows `<redacted>` where the real file holds a secret; no command exports the real value.
+
+What is rendered:
+
+- **Ethernet, VLAN, bridge, bond:** `/run/systemd/network/50-andaru-<name>.netdev` and `.network`. Physical NICs are matched by `PermanentMACAddress=` and never renamed. Virtual links get a derived name: `vl`, `br`, `bo` or `pp` plus the first 12 hex digits of the link ID. Your own `name` and `description` never appear in a rendered file.
+- **PPPoE:** pppd runs the session and owns IPv4; networkd keeps IPv6 (router discovery, DHCPv6, prefix delegation) on the PPP interface. Three files: `/run/andaru/ppp/<pp-name>.options` (mode `0600`, secret), `/run/systemd/system/andaru-pppoe-<pp-name>.service`, and a `.network` with `KeepConfiguration=yes` so networkd leaves pppd's address and default route alone. The split follows [systemd#481](https://github.com/systemd/systemd/issues/481).
+- Provider-offered DNS, NTP, hostname and search domains are ignored on purpose; those are later areas.
+
+| Finding | Severity | Meaning and remedy |
+| --- | --- | --- |
+| `HARDWARE_MISSING` | error | No physical interface has the declared permanent MAC. Fit the card or correct `permanentMac`. |
+| `HARDWARE_AMBIGUOUS` | error | Several physical interfaces report that MAC (cloned VMs). Give them distinct MACs. |
+| `NAME_COLLISION` | error | A derived interface name is already used by something else. Remove or rename the foreign interface. |
+| `FOREIGN_CONFIGURATION` | error | A networkd file Andaru did not write exists in `/etc/systemd/network` or `/run/systemd/network` (netplan on cloud images). It would override or conflict; the takeover step removes it. |
+| `TOOL_MISSING` | error | A PPPoE link needs `pppd` and its `pppoe.so` plugin: install `ppp`. |
+| `KERNEL_SUPPORT_MISSING` | error | `/dev/ppp` is absent. Debian's cloud kernel (`linux-image-cloud-*`) has no PPP; install `linux-image-amd64` or `linux-image-arm64` and boot it. |
+| `INTERFACE_NAME_UNSUPPORTED` | error | A PPPoE parent NIC has a kernel name outside `[A-Za-z0-9_.:-]`. |
+| `CREDENTIAL_TOO_LONG` | error | pppd truncates user names and passwords over 255 bytes. |
+| `UNSUPPORTED_COMBINATION` | error or warning | A PPPoE segment may use IPv4 `ppp`/`none` and IPv6 `none`/`slaac`/`dhcp6`, at least one of them, without RA. A PPPoE link with no segment is left out (warning). |
+| `DEPENDENCY_UNAVAILABLE` | warning | Something was left out because a link it needs is missing, ambiguous or disabled. A bridge or bond keeps its remaining members. |
+| `RA_PREFIX_UNSUPPORTED` | warning | Router advertisements were requested where nothing can be announced. |
+
+### Trying a PPPoE line by hand
+
+The preview is not exercised against a live line. To test one before apply exists, as root on a host running the standard Debian kernel with `ppp` installed and systemd-networkd active:
+
+1. Write each previewed file to its `path` with its `mode`, creating `/run/andaru/ppp` as `0700`. In the `.options` file replace the word `<redacted>` with the password, keeping the quotes; escape `\` and `"` with a backslash.
+2. `networkctl reload`, then `systemctl daemon-reload` and `systemctl start andaru-pppoe-<pp-name>.service`.
+3. Watch `journalctl -fu andaru-pppoe-<pp-name>.service` and `networkctl status <pp-name>`.
+
+To undo: stop the unit, delete the files you wrote, `systemctl daemon-reload`, `networkctl reload`, and `networkctl delete` any `vl…`/`br…`/`bo…` device that was created. Everything is under `/run`, so a reboot also clears it. Expect the `[DHCPv6]` keys to be the part that depends on your provider.
 
 ## Supervision
 
@@ -263,3 +305,18 @@ Two advisories exist in unimported packages of transitive `x/text v0.14.0`:
 [GO-2026-5970](https://pkg.go.dev/vuln/GO-2026-5970). Neither affected package
 is imported by this build. Review by 2026-12-10 or before changing text/auth/i18n
 dependencies; this is a reachability-based deferral, not a clean-module claim.
+
+### Network-preview Debian lab qualification
+
+On 2026-11-10 the CGO-disabled amd64 build of code commit `98d163088e90ad1d7f2bb35334f0d46bf781c0bd` (`vcs.modified=false`, SHA-256 `100144bd45741b98ffd03d673ee2e408f5624267f2860d4b4edfff5ff067f7bc`) replaced the previous lab binary (`e7d3a7d2…`, kept beside the staged artifacts) on VM 114. Snapshot `pre-ppp-20261110-185944` was taken first. Because Debian's cloud kernel has no PPP support, the VM now boots `linux-image-amd64` (6.12.116); `ppp` 2.5.2 is installed.
+
+Executed as root on that VM:
+
+- All four tagged suites passed: store, engine (against the installed-style binary), CLI and render.
+- **pppd, no link:** in a private network namespace with a dummy parent interface, `pppd file <rendered> logfd 1 dryrun` accepted the rendered options for PPPoE over a VLAN and directly on a NIC named `enx-1.2`, and reported back the interface name, MTU/MRU and a user name containing quotes, a backslash, `#`, spaces and a newline. The password printed as `??????`. An appended unknown option made it exit 2.
+- **systemd:** `systemd-analyze verify` accepted each rendered unit with no output, the `BindsTo=` device name equalled `systemd-escape --path`, and an unknown key produced a warning.
+- **networkd:** a private `systemd-networkd` in its own network and mount namespaces logged `Successfully loaded.` for every rendered `.netdev` and `.network` of all seven fixtures with no parse complaint, and reported an injected unknown key. Host links were identical before and after.
+- **Installed path:** a synthetic topology was saved through the CLI: the VM's real `eth0` MAC as a 1508-byte WAN NIC, VLAN 6, PPPoE at 1500 with `kpn@internet`, and a LAN NIC with an absent MAC. `andaru ctl preview network` resolved the WAN NIC to `eth0`; rendered its `.network`, the VLAN `.netdev`/`.network`, the pppd options (password shown as `<redacted>`), the service unit and the PPP `.network`; reported `FOREIGN_CONFIGURATION` for both netplan files, `HARDWARE_MISSING` for the LAN NIC and `DEPENDENCY_UNAVAILABLE` for what depends on it; and raised neither `TOOL_MISSING` nor `KERNEL_SUPPORT_MISSING`. A UID 65534 caller got exit 1 and no output.
+- The stateless nft ruleset, both forwarding sysctls, interface addresses, `/run/systemd/network` and the absence of `/run/andaru/ppp` and of any Andaru unit were identical before and after. The synthetic objects were deleted, leaving saved version 9 with an empty topology; two unused test secrets remain under the retention policy.
+
+The three tool proofs run on this lab, **not in CI**: the hosted runners are Ubuntu 24.04, whose pppd and systemd are not the Debian 13 versions these files target. CI runs the golden-file, findings, redaction, API and CLI tests on amd64 and arm64. Linux arm64 was cross-built, not run on Debian. No PPPoE discovery packet was sent and no session was established; a real line remains the owner's test. The engine is active and still not boot-enabled.
