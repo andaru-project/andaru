@@ -322,3 +322,34 @@ func (s *Store) Version(ctx context.Context, id Version) (result VersionView, er
 	}
 	return result, nil
 }
+
+// RealizationInput carries secret values for rendering. It has no JSON form
+// and must never be serialised or logged.
+type RealizationInput struct {
+	SavedVersion Version
+	Value        json.RawMessage
+	Secrets      map[string]string
+}
+
+// RealizationInput returns one saved version with the secrets its links
+// reference. A nil version means the saved head.
+func (s *Store) RealizationInput(ctx context.Context, version *Version) (result RealizationInput, err error) {
+	id := Version("")
+	if version != nil {
+		id = *version
+	}
+	err = s.read(ctx, id, nil, func(state savedState, _ VersionInfo) error {
+		view, e := publicSnapshot(state)
+		if e != nil {
+			return e
+		}
+		result = RealizationInput{SavedVersion: state.Version, Value: view.Value, Secrets: map[string]string{}}
+		for _, l := range state.Config.Links {
+			if l.Password != nil {
+				result.Secrets[l.Password.Secret] = state.Secrets.Scopes["core"][l.Password.Secret].Value
+			}
+		}
+		return nil
+	})
+	return
+}

@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -822,4 +823,50 @@ func enospPhase(phase string) error {
 		return fmt.Errorf("invalid recovered head")
 	}
 	return nil
+}
+
+func TestStoreRealizationInput(t *testing.T) {
+	s := openTestStore(t, ownedDir(t))
+	ctx := context.Background()
+	r, err := s.Save(ctx, "unix:uid:0", networkInput(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := r.Created["l2"]
+	got, _, err := s.Get(ctx, "links", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value map[string]any
+	if err = json.Unmarshal(got.Value, &value); err != nil {
+		t.Fatal(err)
+	}
+	value["password"] = map[string]any{"secret": "WAN_PASSWORD", "set": "TEST_ONLY_SECOND", "expectedVersion": "1"}
+	body, _ := json.Marshal(value)
+	change, err := ObjectChange("replace", "links", id, &got.Version, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Save(ctx, "unix:uid:0", change); err != nil {
+		t.Fatal(err)
+	}
+	head, err := s.RealizationInput(ctx, nil)
+	if err != nil || head.SavedVersion != "2" || len(head.Secrets) != 1 || head.Secrets["WAN_PASSWORD"] != "TEST_ONLY_SECOND" {
+		t.Fatalf("head input: %v version=%s names=%d", err, head.SavedVersion, len(head.Secrets))
+	}
+	snapshot, err := s.Snapshot(ctx)
+	if err != nil || !bytes.Equal(head.Value, snapshot.Value) || bytes.Contains(head.Value, []byte("TEST_ONLY_SECOND")) {
+		t.Fatalf("declaration is not the public snapshot: %v", err)
+	}
+	first := Version("1")
+	old, err := s.RealizationInput(ctx, &first)
+	if err != nil || old.SavedVersion != "1" || old.Secrets["WAN_PASSWORD"] != "TEST_ONLY_FIRST" {
+		t.Fatalf("version 1 did not keep its own secret: %v", err)
+	}
+	missing := Version("9")
+	_, err = s.RealizationInput(ctx, &missing)
+	var f *Fault
+	if !errors.As(err, &f) || f.Code != "NOT_FOUND" {
+		t.Fatalf("unknown version: %v", err)
+	}
 }
