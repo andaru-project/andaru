@@ -7,6 +7,10 @@ Andaru — a Free Software firewall platform for Debian
 
 ## Development
 
+The root-local engine API and CLI are documented in
+[docs/dev/core-api.md](docs/dev/core-api.md), including build, service installation,
+security boundaries, and the current implementation limits.
+
 A two-VM QEMU lab (Debian 13 arm64, serial console only) is used for repeated,
 reproducible testing against the two baselines Andaru must handle. The scripts
 are in [`dev/vm-lab/`](dev/vm-lab); see [docs/dev/vm-lab.md](docs/dev/vm-lab.md)
