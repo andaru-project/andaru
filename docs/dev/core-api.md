@@ -225,6 +225,16 @@ never raw driver messages, input values or hashes. Duplicate `If-Match` field
 lines are rejected. An interrupted first initialization with only an empty,
 root-owned private marker can restart; unmarked data is still refused.
 
+Review fixes were requalified on the same retained VM using code commit
+`880fb575a20b696f4f6047cbddae8ce11ca9e9f4` (`vcs.modified=false`),
+binary SHA-256
+`e7d3a7d28f73232cdc9bf0157d56f28d8f643327faae9e109fddff248ed61c4c`.
+All three root integration binaries passed again, including the installed engine's
+ENOSPC fence/drain/reopen test. Eight fresh SIGKILL samples again yielded five
+old-complete and three new-complete pairs. The saved snapshot stayed at version 7,
+and the exact host-network baseline stayed unchanged. The installed CLI also
+exited `1` on SIGINT while waiting for stdin without submitting a save.
+
 The cleanup batch left **saved version 7 with an empty topology**; the fake
 `WAN_PASSWORD` test secret remains unused under the stated retention policy.
 The service is active. Linux arm64 was cross-built, not run. No real network
