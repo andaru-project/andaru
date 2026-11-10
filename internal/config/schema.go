@@ -18,7 +18,10 @@ var SchemaBundle []byte
 //go:embed secret-schema.json
 var secretSchema []byte
 
-type schemaSet struct{ declaration, write, changes, secret *jsonschema.Schema }
+type schemaSet struct {
+	declaration, write, changes, secret *jsonschema.Schema
+	objects                             map[string]*jsonschema.Schema
+}
 
 var schemas = sync.OnceValues(func() (*schemaSet, error) {
 	c := jsonschema.NewCompiler()
@@ -47,6 +50,14 @@ var schemas = sync.OnceValues(func() (*schemaSet, error) {
 	}
 	if s.secret, e = c.Compile("https://andaru.invalid/private/config-secrets-v1"); e != nil {
 		return nil, e
+	}
+	s.objects = make(map[string]*jsonschema.Schema, 3)
+	for collection, kind := range map[string]string{"links": "link", "segments": "segment", "zones": "zone"} {
+		object, err := c.Compile(schemaURI + "#/$defs/" + kind + "Write")
+		if err != nil {
+			return nil, err
+		}
+		s.objects[collection] = object
 	}
 	return &s, nil
 })
