@@ -13,6 +13,9 @@ func TestReadRealizerFacts(t *testing.T) {
 	for _, path := range []string{
 		filepath.Join(etc, "99-admin.link"), filepath.Join(etc, "notes.txt"),
 		filepath.Join(run, "10-netplan-eth0.network"), filepath.Join(run, "50-andaru-x.network"),
+		// A drop-in is merged over Andaru's own file, from /etc or /run alike; Andaru never writes one.
+		filepath.Join(etc, "50-andaru-x.network.d", "override.conf"), filepath.Join(etc, "50-andaru-x.network.d", "README"),
+		filepath.Join(run, "50-andaru-x.network.d", "10-other.conf"), filepath.Join(etc, "unrelated.d", "x.conf"),
 		filepath.Join(root, "pppd"), filepath.Join(root, "2.5.2", "pppoe.so"),
 	} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -30,7 +33,10 @@ func TestReadRealizerFacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := readRealizerFacts(etc, run, filepath.Join(root, "pppd"), filepath.Join(root, "*", "pppoe.so"), filepath.Join(root, "ppp"))
-	want := []string{filepath.Join(etc, "50-andaru-y.network"), filepath.Join(etc, "99-admin.link"), filepath.Join(run, "10-netplan-eth0.network")}
+	want := []string{
+		filepath.Join(etc, "50-andaru-x.network.d", "override.conf"), filepath.Join(etc, "50-andaru-y.network"), filepath.Join(etc, "99-admin.link"),
+		filepath.Join(run, "10-netplan-eth0.network"), filepath.Join(run, "50-andaru-x.network.d", "10-other.conf"),
+	}
 	if err != nil || !slices.Equal(got.ForeignFiles, want) || !got.PPPDaemon || !got.PPPoEPlugin || got.PPPDevice {
 		t.Fatalf("%v %+v", err, got)
 	}

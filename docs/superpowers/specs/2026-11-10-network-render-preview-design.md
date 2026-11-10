@@ -204,9 +204,9 @@ An object is unavailable when it is a missing or ambiguous NIC, a disabled link,
 | `HARDWARE_MISSING` | error | no observed physical link has the declared permanent MAC |
 | `HARDWARE_AMBIGUOUS` | error | several observed physical links share it |
 | `NAME_COLLISION` | error | derived names clash, or an observed link of another kind has the name |
-| `FOREIGN_CONFIGURATION` | error | a `.network`, `.netdev` or `.link` file exists in `/etc/systemd/network`, or one without the `50-andaru-` prefix exists in `/run/systemd/network` (netplan's output on cloud images); one finding per file, naming it |
+| `FOREIGN_CONFIGURATION` | error | a `.network`, `.netdev` or `.link` file exists in `/etc/systemd/network`, or one without the `50-andaru-` prefix exists in `/run/systemd/network` (netplan's output on cloud images), or a `<file>.d/*.conf` drop-in exists in either directory; one finding per file, naming it |
 | `TOOL_MISSING` | error | a PPPoE link is rendered and pppd or its plugin is absent |
-| `KERNEL_SUPPORT_MISSING` | error | a PPPoE link is rendered and `/dev/ppp` is absent |
+| `KERNEL_SUPPORT_MISSING` | error | a PPPoE link is rendered and `/dev/ppp` is absent; the message suggests loading `ppp_generic` before replacing the kernel |
 | `INTERFACE_NAME_UNSUPPORTED` | error | a PPPoE link's parent interface has a kernel name outside `[A-Za-z0-9_.:-]` |
 | `CREDENTIAL_TOO_LONG` | error | a rendered PPPoE username or password exceeds 255 bytes |
 | `UNSUPPORTED_COMBINATION` | error; warning for a PPPoE link with no segment | addressing on a PPPoE segment that this slice cannot realize |

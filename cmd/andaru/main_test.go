@@ -152,6 +152,8 @@ func TestCtlPreviewUsageAndReplyBoundary(t *testing.T) {
 	for _, args := range [][]string{
 		{"preview"}, {"preview", "other"}, {"preview", "network", "extra"},
 		{"preview", "network", "--saved-version", "x"}, {"preview", "network", "--saved-version", "01"}, {"preview", "network", "--version", "1"},
+		// An unset shell variable must not silently preview the head.
+		{"preview", "network", "--saved-version", ""}, {"preview", "network", "--saved-version="},
 	} {
 		var out, diag bytes.Buffer
 		argv := append([]string{"ctl", "--socket", filepath.Join(t.TempDir(), "missing.sock")}, args...)

@@ -35,10 +35,21 @@ func readRealizerFacts(etcDir, runDir, pppd, pluginGlob, device string) (Realize
 		}
 		for _, entry := range entries {
 			name := entry.Name()
-			networkd := slices.Contains([]string{".network", ".netdev", ".link"}, filepath.Ext(name))
+			base, dropInDir := strings.CutSuffix(name, ".d")
+			if !slices.Contains([]string{".network", ".netdev", ".link"}, filepath.Ext(base)) {
+				continue
+			}
+			if dropInDir {
+				// networkd merges <file>.d/*.conf over the file from any directory, so a drop-in overrides even Andaru's own files.
+				dropIns, err := filepath.Glob(filepath.Join(dir, name, "*.conf"))
+				if err != nil {
+					return RealizerFacts{}, fmt.Errorf("list network configuration: %w", err)
+				}
+				facts.ForeignFiles = append(facts.ForeignFiles, dropIns...)
+				continue
+			}
 			// networkd reads /etc before /run, so anything there overrides Andaru; in /run only Andaru's prefix is its own.
-			own := dir == runDir && strings.HasPrefix(name, "50-andaru-")
-			if networkd && !own && !entry.IsDir() {
+			if !entry.IsDir() && (dir == etcDir || !strings.HasPrefix(name, "50-andaru-")) {
 				facts.ForeignFiles = append(facts.ForeignFiles, filepath.Join(dir, name))
 			}
 		}

@@ -122,7 +122,13 @@ func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 		}
 		fs := flag.NewFlagSet("preview network", flag.ContinueOnError)
 		fs.SetOutput(stderr)
-		saved := fs.String("saved-version", "", "saved version to render (default: the saved head)")
+		// A flag given as "" (an unset shell variable) must be refused, not read as "the head".
+		var saved *config.Version
+		fs.Func("saved-version", "saved version to render (default: the saved head)", func(s string) error {
+			v, e := config.ParseVersion(s)
+			saved = &v
+			return e
+		})
 		if e := fs.Parse(args[2:]); e != nil {
 			return req, e
 		}
@@ -131,12 +137,8 @@ func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 		}
 		req.path = "/api/v1/preview/network"
 		req.kind = "preview"
-		if *saved != "" {
-			v, e := config.ParseVersion(*saved)
-			if e != nil {
-				return req, errUsage
-			}
-			req.path += "?" + url.Values{"savedVersion": {string(v)}}.Encode()
+		if saved != nil {
+			req.path += "?" + url.Values{"savedVersion": {string(*saved)}}.Encode()
 		}
 		return req, nil
 	}

@@ -158,9 +158,9 @@ What is rendered:
 | `HARDWARE_MISSING` | error | No physical interface has the declared permanent MAC. Fit the card or correct `permanentMac`. |
 | `HARDWARE_AMBIGUOUS` | error | Several physical interfaces report that MAC (cloned VMs). Give them distinct MACs. |
 | `NAME_COLLISION` | error | A derived interface name is already used by something else. Remove or rename the foreign interface. |
-| `FOREIGN_CONFIGURATION` | error | A networkd file Andaru did not write exists in `/etc/systemd/network` or `/run/systemd/network` (netplan on cloud images). It would override or conflict; the takeover step removes it. |
+| `FOREIGN_CONFIGURATION` | error | A networkd file Andaru did not write exists in `/etc/systemd/network` or `/run/systemd/network` (netplan on cloud images), or a `<file>.d/*.conf` drop-in exists there. It would override or conflict; the takeover step removes it. |
 | `TOOL_MISSING` | error | A PPPoE link needs `pppd` and its `pppoe.so` plugin: install `ppp`. |
-| `KERNEL_SUPPORT_MISSING` | error | `/dev/ppp` is absent. Debian's cloud kernel (`linux-image-cloud-*`) has no PPP; install `linux-image-amd64` or `linux-image-arm64` and boot it. |
+| `KERNEL_SUPPORT_MISSING` | error | `/dev/ppp` is absent. Try `modprobe ppp_generic`. If the module does not exist, the kernel has no PPP: Debian's cloud kernel (`linux-image-cloud-*`) omits it, so install `linux-image-amd64` or `linux-image-arm64` and boot it. |
 | `INTERFACE_NAME_UNSUPPORTED` | error | A PPPoE parent NIC has a kernel name outside `[A-Za-z0-9_.:-]`. |
 | `CREDENTIAL_TOO_LONG` | error | pppd truncates user names and passwords over 255 bytes. |
 | `UNSUPPORTED_COMBINATION` | error or warning | A PPPoE segment may use IPv4 `ppp`/`none` and IPv6 `none`/`slaac`/`dhcp6`, at least one of them, without RA. A PPPoE link with no segment is left out (warning). |

@@ -50,7 +50,7 @@ func Network(in Input) (Result, error) {
 		r.find("error", "TOOL_MISSING", "", "pppd or its pppoe.so plugin is not installed; install the ppp package.")
 	}
 	if sessions > 0 && !in.Facts.PPPDevice {
-		r.find("error", "KERNEL_SUPPORT_MISSING", "", "The running kernel has no PPP support (/dev/ppp is absent). Debian cloud kernels omit it; install the standard linux-image package.")
+		r.find("error", "KERNEL_SUPPORT_MISSING", "", "/dev/ppp is absent, so pppd cannot start. Try `modprobe ppp_generic`; if the module does not exist (Debian cloud kernels omit it), install the standard linux-image package.")
 	}
 	for _, path := range in.Facts.ForeignFiles {
 		r.find("error", "FOREIGN_CONFIGURATION", "", "A network configuration file not written by Andaru would override or conflict with it: "+path)
