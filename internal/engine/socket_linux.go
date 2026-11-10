@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/andaru-project/andaru/internal/host"
+	"github.com/andaru-project/andaru/internal/securefs"
 )
 
 // Serve runs the root-local engine API without opening an IP listener.
@@ -31,7 +32,7 @@ func serveUnix(ctx context.Context, socketPath string, handler http.Handler) (re
 		return nil
 	}
 	parent := filepath.Dir(socketPath)
-	if err := trustedAncestors(filepath.Dir(parent)); err != nil {
+	if err := securefs.CheckAncestors(filepath.Dir(parent)); err != nil {
 		return err
 	}
 	if err := os.Mkdir(parent, 0700); err != nil && !os.IsExist(err) {
@@ -41,7 +42,7 @@ func serveUnix(ctx context.Context, socketPath string, handler http.Handler) (re
 	if err != nil {
 		return fmt.Errorf("inspect engine runtime directory: %w", err)
 	}
-	if !info.IsDir() || info.Mode().Perm() != 0700 || !rootOwned(info) {
+	if !info.IsDir() || info.Mode().Perm() != 0700 || !securefs.RootOwned(info) {
 		return errors.New("engine socket parent must be a root-owned directory with mode 0700, not a symlink")
 	}
 	if _, err := os.Lstat(socketPath); err == nil {
@@ -55,7 +56,7 @@ func serveUnix(ctx context.Context, socketPath string, handler http.Handler) (re
 	}
 	listener.SetUnlinkOnClose(false)
 	owned, err := os.Lstat(socketPath)
-	if err != nil || owned.Mode()&os.ModeSocket == 0 || !rootOwned(owned) {
+	if err != nil || owned.Mode()&os.ModeSocket == 0 || !securefs.RootOwned(owned) {
 		_ = listener.Close()
 		return errors.New("cannot establish ownership of the bound engine socket")
 	}
@@ -111,28 +112,6 @@ func serveUnix(ctx context.Context, socketPath string, handler http.Handler) (re
 	return serveErr
 }
 
-func rootOwned(info os.FileInfo) bool {
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	return ok && stat.Uid == 0
-}
-
-// A private leaf is insufficient if another user can rename its ancestor.
-func trustedAncestors(path string) error {
-	for {
-		info, err := os.Lstat(path)
-		if err != nil {
-			return fmt.Errorf("inspect engine socket ancestor: %w", err)
-		}
-		if !info.IsDir() || !rootOwned(info) || (info.Mode().Perm()&0022 != 0 && info.Mode()&os.ModeSticky == 0) {
-			return errors.New("engine socket ancestors must be canonical root-controlled directories")
-		}
-		if path == "/" {
-			return nil
-		}
-		path = filepath.Dir(path)
-	}
-}
-
 func removeOwnedSocket(path string, owned os.FileInfo) error {
 	current, err := os.Lstat(path)
 	if os.IsNotExist(err) {
@@ -141,7 +120,7 @@ func removeOwnedSocket(path string, owned os.FileInfo) error {
 	if err != nil {
 		return fmt.Errorf("inspect engine socket on shutdown: %w", err)
 	}
-	if current.Mode()&os.ModeSocket == 0 || !rootOwned(current) || !os.SameFile(owned, current) {
+	if current.Mode()&os.ModeSocket == 0 || !securefs.RootOwned(current) || !os.SameFile(owned, current) {
 		slog.Warn("engine socket endpoint changed; leaving replacement untouched", "path", path)
 		return nil
 	}

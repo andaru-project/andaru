@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,13 +10,12 @@ import (
 	"testing"
 )
 
+//go:embed testdata/network.json
+var networkFixture []byte
+
 func fixtureBytes(t *testing.T) []byte {
 	t.Helper()
-	b, e := os.ReadFile("testdata/network.json")
-	if e != nil {
-		t.Fatal(e)
-	}
-	return b
+	return networkFixture
 }
 func fixtureMap(t *testing.T) map[string]any {
 	t.Helper()
