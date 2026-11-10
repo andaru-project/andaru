@@ -1,0 +1,1233 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://andaru.invalid/api/v1/schema",
+  "$ref": "#/$defs/declaration",
+  "$defs": {
+    "linkID": {
+      "type": "string",
+      "pattern": "^lnk_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "linkRef": {
+      "type": "string",
+      "pattern": "^(lnk_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|@[A-Za-z][A-Za-z0-9_]{0,31})$"
+    },
+    "segmentID": {
+      "type": "string",
+      "pattern": "^seg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "segmentRef": {
+      "type": "string",
+      "pattern": "^(seg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|@[A-Za-z][A-Za-z0-9_]{0,31})$"
+    },
+    "zoneID": {
+      "type": "string",
+      "pattern": "^zon_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "zoneRef": {
+      "type": "string",
+      "pattern": "^(zon_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|@[A-Za-z][A-Za-z0-9_]{0,31})$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18})$"
+    },
+    "secretName": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+    },
+    "identity": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "secretRef": {
+      "type": "object",
+      "properties": {
+        "secret": {
+          "$ref": "#/$defs/secretName"
+        }
+      },
+      "required": [
+        "secret"
+      ],
+      "additionalProperties": false
+    },
+    "secretWrite": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/secretRef"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "secret": {
+              "$ref": "#/$defs/secretName"
+            },
+            "set": {
+              "type": "string",
+              "maxLength": 4096
+            },
+            "expectedVersion": {
+              "$ref": "#/$defs/version"
+            }
+          },
+          "required": [
+            "secret",
+            "set"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "secretView": {
+      "type": "object",
+      "properties": {
+        "secret": {
+          "$ref": "#/$defs/secretName"
+        },
+        "isSet": {
+          "const": true
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "version": {
+          "$ref": "#/$defs/version"
+        }
+      },
+      "required": [
+        "secret",
+        "isSet",
+        "updatedAt",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "linkCommon": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/linkID"
+            },
+            "kind": {
+              "type": "string"
+            },
+            "mtu": {
+              "type": "integer",
+              "minimum": 68,
+              "maximum": 65535
+            },
+            "enabled": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "mtu",
+            "enabled"
+          ]
+        }
+      ]
+    },
+    "ethernetFields": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/linkCommon"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "permanentMac": {
+              "type": "string",
+              "minLength": 11,
+              "maxLength": 32
+            },
+            "kind": {
+              "const": "ethernet"
+            }
+          },
+          "required": [
+            "permanentMac"
+          ]
+        }
+      ]
+    },
+    "vlanFields": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/linkCommon"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "parent": {
+              "$ref": "#/$defs/linkRef"
+            },
+            "vlanId": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4094
+            },
+            "kind": {
+              "const": "vlan"
+            }
+          },
+          "required": [
+            "parent",
+            "vlanId"
+          ]
+        }
+      ]
+    },
+    "bridgeFields": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/linkCommon"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "members": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/linkRef"
+              },
+              "minItems": 0,
+              "uniqueItems": true
+            },
+            "kind": {
+              "const": "bridge"
+            }
+          },
+          "required": [
+            "members"
+          ]
+        }
+      ]
+    },
+    "bondFields": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/linkCommon"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "members": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/linkRef"
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "mode": {
+              "enum": [
+                "balance-rr",
+                "active-backup",
+                "balance-xor",
+                "broadcast",
+                "802.3ad",
+                "balance-tlb",
+                "balance-alb"
+              ]
+            },
+            "kind": {
+              "const": "bond"
+            }
+          },
+          "required": [
+            "members",
+            "mode"
+          ]
+        }
+      ]
+    },
+    "pppoeFields": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/linkCommon"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "parent": {
+              "$ref": "#/$defs/linkRef"
+            },
+            "username": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "kind": {
+              "const": "pppoe"
+            }
+          },
+          "required": [
+            "parent",
+            "username"
+          ]
+        }
+      ]
+    },
+    "linkStored": {
+      "oneOf": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/ethernetFields"
+            },
+            {
+              "type": "object",
+              "properties": {},
+              "required": [
+                "id"
+              ]
+            }
+          ],
+          "unevaluatedProperties": false
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/vlanFields"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "parent": {
+                  "$ref": "#/$defs/linkID"
+                }
+              },
+              "required": [
+                "id"
+              ]
+            }
+          ],
+          "unevaluatedProperties": false
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/bridgeFields"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "members": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/linkID"
+                  },
+                  "minItems": 0
+                }
+              },
+              "required": [
+                "id"
+              ]
+            }
+          ],
+          "unevaluatedProperties": false
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/bondFields"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "members": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/linkID"
+                  },
+                  "minItems": 0
+                }
+              },
+              "required": [
+                "id"
+              ]
+            }
+          ],
+          "unevaluatedProperties": false
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/pppoeFields"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "parent": {
+                  "$ref": "#/$defs/linkID"
+                }
+              },
+              "required": [
+                "id"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "password": {
+                  "$ref": "#/$defs/secretRef"
+                }
+              },
+              "required": [
+                "password"
+              ]
+            }
+          ],
+          "unevaluatedProperties": false
+        }
+      ]
+    },
+    "linkWrite": {
+      "oneOf": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/ethernetFields"
+            }
+          ],
+          "unevaluatedProperties": false
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/vlanFields"
+            }
+          ],
+          "unevaluatedProperties": false
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/bridgeFields"
+            }
+          ],
+          "unevaluatedProperties": false
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/bondFields"
+            }
+          ],
+          "unevaluatedProperties": false
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/pppoeFields"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "password": {
+                  "$ref": "#/$defs/secretWrite"
+                }
+              },
+              "required": []
+            }
+          ],
+          "unevaluatedProperties": false
+        }
+      ]
+    },
+    "linkView": {
+      "oneOf": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/ethernetFields"
+            },
+            {
+              "type": "object",
+              "properties": {},
+              "required": [
+                "id"
+              ]
+            }
+          ],
+          "unevaluatedProperties": false
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/vlanFields"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "parent": {
+                  "$ref": "#/$defs/linkID"
+                }
+              },
+              "required": [
+                "id"
+              ]
+            }
+          ],
+          "unevaluatedProperties": false
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/bridgeFields"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "members": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/linkID"
+                  },
+                  "minItems": 0
+                }
+              },
+              "required": [
+                "id"
+              ]
+            }
+          ],
+          "unevaluatedProperties": false
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/bondFields"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "members": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/linkID"
+                  },
+                  "minItems": 0
+                }
+              },
+              "required": [
+                "id"
+              ]
+            }
+          ],
+          "unevaluatedProperties": false
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/pppoeFields"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "parent": {
+                  "$ref": "#/$defs/linkID"
+                }
+              },
+              "required": [
+                "id"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "password": {
+                  "$ref": "#/$defs/secretView"
+                }
+              },
+              "required": [
+                "password"
+              ]
+            }
+          ],
+          "unevaluatedProperties": false
+        }
+      ]
+    },
+    "ra": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "managed": {
+          "type": "boolean"
+        },
+        "otherInfo": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled",
+        "managed",
+        "otherInfo"
+      ],
+      "additionalProperties": false
+    },
+    "ipv4": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "const": "none"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "const": "dhcp"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "const": "ppp"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "const": "static"
+            },
+            "addresses": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 64
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "gateway": {
+              "type": "string",
+              "format": "ipv4"
+            }
+          },
+          "required": [
+            "mode",
+            "addresses"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ipv6": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "const": "none"
+            },
+            "ra": {
+              "$ref": "#/$defs/ra"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "const": "static"
+            },
+            "ra": {
+              "$ref": "#/$defs/ra"
+            },
+            "addresses": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 64
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "gateway": {
+              "type": "string",
+              "format": "ipv6"
+            }
+          },
+          "required": [
+            "mode",
+            "addresses"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "const": "slaac"
+            },
+            "ra": {
+              "$ref": "#/$defs/ra"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "const": "dhcp6"
+            },
+            "ra": {
+              "$ref": "#/$defs/ra"
+            },
+            "requestPrefixLength": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "const": "delegated"
+            },
+            "ra": {
+              "$ref": "#/$defs/ra"
+            },
+            "from": {
+              "$ref": "#/$defs/segmentRef"
+            },
+            "subnetId": {
+              "type": "string",
+              "pattern": "^[0-9A-Fa-f]{1,4}$"
+            }
+          },
+          "required": [
+            "mode",
+            "from",
+            "subnetId"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "addressing": {
+      "type": "object",
+      "properties": {
+        "ipv4": {
+          "$ref": "#/$defs/ipv4"
+        },
+        "ipv6": {
+          "$ref": "#/$defs/ipv6"
+        }
+      },
+      "required": [
+        "ipv4",
+        "ipv6"
+      ],
+      "additionalProperties": false
+    },
+    "segmentFields": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/segmentID"
+            },
+            "link": {
+              "$ref": "#/$defs/linkRef"
+            },
+            "zone": {
+              "$ref": "#/$defs/zoneRef"
+            },
+            "addressing": {
+              "$ref": "#/$defs/addressing"
+            }
+          },
+          "required": [
+            "link",
+            "zone",
+            "addressing"
+          ]
+        }
+      ]
+    },
+    "zoneFields": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/zoneID"
+            }
+          },
+          "required": []
+        }
+      ]
+    },
+    "segmentStored": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/segmentFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "link": {
+              "$ref": "#/$defs/linkID"
+            },
+            "zone": {
+              "$ref": "#/$defs/zoneID"
+            },
+            "addressing": {
+              "properties": {
+                "ipv6": {
+                  "properties": {
+                    "from": {
+                      "$ref": "#/$defs/segmentID"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "zoneStored": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/zoneFields"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "required": [
+            "id"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "objectStored": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/linkStored"
+        },
+        {
+          "$ref": "#/$defs/segmentStored"
+        },
+        {
+          "$ref": "#/$defs/zoneStored"
+        }
+      ]
+    },
+    "segmentWrite": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/segmentFields"
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "zoneWrite": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/zoneFields"
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "objectWrite": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/linkWrite"
+        },
+        {
+          "$ref": "#/$defs/segmentWrite"
+        },
+        {
+          "$ref": "#/$defs/zoneWrite"
+        }
+      ]
+    },
+    "segmentView": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/segmentFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "link": {
+              "$ref": "#/$defs/linkID"
+            },
+            "zone": {
+              "$ref": "#/$defs/zoneID"
+            },
+            "addressing": {
+              "properties": {
+                "ipv6": {
+                  "properties": {
+                    "from": {
+                      "$ref": "#/$defs/segmentID"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "zoneView": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/zoneFields"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "required": [
+            "id"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "objectView": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/objectViewValue"
+        },
+        "version": {
+          "$ref": "#/$defs/version"
+        }
+      },
+      "required": [
+        "value",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "declaration": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/linkStored"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        },
+        "segments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/segmentStored"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        },
+        "zones": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/zoneStored"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "links",
+        "segments",
+        "zones"
+      ],
+      "additionalProperties": false
+    },
+    "declarationView": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/linkView"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        },
+        "segments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/segmentView"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        },
+        "zones": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/zoneView"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "links",
+        "segments",
+        "zones"
+      ],
+      "additionalProperties": false
+    },
+    "changes": {
+      "type": "object",
+      "properties": {
+        "operations": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "create"
+                  },
+                  "collection": {
+                    "enum": [
+                      "links",
+                      "segments",
+                      "zones"
+                    ]
+                  },
+                  "localId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9_]{0,31}$"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/objectWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "replace"
+                  },
+                  "collection": {
+                    "enum": [
+                      "links",
+                      "segments",
+                      "zones"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/objectWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "delete"
+                  },
+                  "collection": {
+                    "enum": [
+                      "links",
+                      "segments",
+                      "zones"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 100
+        }
+      },
+      "required": [
+        "operations"
+      ],
+      "additionalProperties": false
+    },
+    "objectViewValue": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/linkView"
+        },
+        {
+          "$ref": "#/$defs/segmentView"
+        },
+        {
+          "$ref": "#/$defs/zoneView"
+        }
+      ]
+    },
+    "collectionView": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "const": "saved"
+        },
+        "savedVersion": {
+          "$ref": "#/$defs/version"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/objectView"
+          },
+          "minItems": 0
+        }
+      },
+      "required": [
+        "state",
+        "savedVersion",
+        "items"
+      ],
+      "additionalProperties": false
+    },
+    "snapshotView": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "const": "saved"
+        },
+        "savedVersion": {
+          "$ref": "#/$defs/version"
+        },
+        "value": {
+          "$ref": "#/$defs/declarationView"
+        },
+        "unusedSecrets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/secretName"
+          },
+          "minItems": 0
+        }
+      },
+      "required": [
+        "state",
+        "savedVersion",
+        "value",
+        "unusedSecrets"
+      ],
+      "additionalProperties": false
+    }
+  }
+}
