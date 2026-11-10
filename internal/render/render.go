@@ -55,7 +55,3 @@ func Network(in Input) (Result, error) {
 	r.result.Realizable = !slices.ContainsFunc(r.result.Findings, func(f Finding) bool { return f.Severity == "error" })
 	return r.result, nil
 }
-
-// PPPoE is rendered by a later change; until then such links are left out.
-func (r *renderer) visitPPPoE(i int, named bool) {}
-func (r *renderer) pppoe(i int)                  {}

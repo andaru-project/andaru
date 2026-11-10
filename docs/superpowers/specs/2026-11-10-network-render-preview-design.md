@@ -97,7 +97,7 @@ networkd has no PPPoE client and will not get one: systemd#481 has been open sin
 - **pppd**, started by a systemd service, owns the session: discovery, authentication, the IPv4 address and the IPv4 default route.
 - **A `.network` file matching the PPP interface** tells networkd to leave pppd's configuration alone.
 
-A PPPoE link is rendered when it is enabled and has a segment. Supported segment addressing is IPv4 `ppp` or `none` and IPv6 `none`, `slaac` or `dhcp6`, with at least one family in use and RA off. Anything else the saved model permits on a PPPoE segment (IPv6 `static` or `delegated`, RA, both families `none`) is an `UNSUPPORTED_COMBINATION` error and the link is not rendered. A PPPoE link without a segment is not rendered and gets the same code as a warning. Each rendered link produces three files.
+A PPPoE link is rendered when it is enabled and has a segment. Supported segment addressing is IPv4 `ppp` or `none` and IPv6 `none`, `slaac` or `dhcp6`, with at least one family in use and RA off. Anything else the saved model permits on a PPPoE segment (IPv6 `static` or `delegated`, RA, both families `none`) is an `UNSUPPORTED_COMBINATION` error and the link is not rendered. A PPPoE link without a segment is not rendered and gets the same code as a warning. A parent interface whose kernel name contains anything outside `[A-Za-z0-9_.:-]` is refused with `INTERFACE_NAME_UNSUPPORTED`: the name is written into a unit, a device-unit name and a pppd word, which each quote differently, and predictable interface names never need it. Each rendered link produces three files.
 
 1. **`/run/andaru/ppp/<pp-name>.options`**, mode `0600`, marked secret:
 
@@ -207,6 +207,7 @@ An object is unavailable when it is a missing or ambiguous NIC, a disabled link,
 | `FOREIGN_CONFIGURATION` | error | a `.network`, `.netdev` or `.link` file exists in `/etc/systemd/network`, or one without the `50-andaru-` prefix exists in `/run/systemd/network` (netplan's output on cloud images); one finding per file, naming it |
 | `TOOL_MISSING` | error | a PPPoE link is rendered and pppd or its plugin is absent |
 | `KERNEL_SUPPORT_MISSING` | error | a PPPoE link is rendered and `/dev/ppp` is absent |
+| `INTERFACE_NAME_UNSUPPORTED` | error | a PPPoE link's parent interface has a kernel name outside `[A-Za-z0-9_.:-]` |
 | `CREDENTIAL_TOO_LONG` | error | a rendered PPPoE username or password exceeds 255 bytes |
 | `UNSUPPORTED_COMBINATION` | error; warning for a PPPoE link with no segment | addressing on a PPPoE segment that this slice cannot realize |
 | `DEPENDENCY_UNAVAILABLE` | warning | an object or member was left out because something it references is unavailable |
