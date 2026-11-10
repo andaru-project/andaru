@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 
+	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/host"
 )
 
@@ -24,22 +26,20 @@ type linksResponse struct {
 	Items []host.LinkStatus `json:"items"`
 }
 
-type errorDetail struct {
-	Path    string `json:"path"`
-	Message string `json:"message"`
-}
+type errorDetail = config.FieldError
 
 type errorBody struct {
-	Code    string        `json:"code"`
-	Message string        `json:"message"`
-	Details []errorDetail `json:"details"`
+	Code    string          `json:"code"`
+	Message string          `json:"message"`
+	Details []errorDetail   `json:"details"`
+	Current *config.Current `json:"current,omitempty"`
 }
 
 type errorResponse struct {
 	Error errorBody `json:"error"`
 }
 
-func newHandler(readLinks func(context.Context) ([]host.LinkStatus, error)) http.Handler {
+func newHandler(readLinks func(context.Context) ([]host.LinkStatus, error), configuration http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
@@ -47,6 +47,10 @@ func newHandler(readLinks func(context.Context) ([]host.LinkStatus, error)) http
 		peer, _ := r.Context().Value(peerKey{}).(peerIdentity)
 		if !peer.verified || peer.uid != 0 {
 			writeError(w, r, http.StatusForbidden, "FORBIDDEN", "Root Unix peer credentials are required.")
+			return
+		}
+		if r.URL.Path == "/api/v1/schema" || r.URL.Path == "/api/v1/config" || strings.HasPrefix(r.URL.Path, "/api/v1/config/") || r.URL.Path == "/api/v1/versions" || strings.HasPrefix(r.URL.Path, "/api/v1/versions/") {
+			configuration.ServeHTTP(w, r)
 			return
 		}
 		if r.URL.Path != "/api/v1/status/links" && r.URL.Path != "/api/v1/openapi.json" {

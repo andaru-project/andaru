@@ -1,0 +1,137 @@
+{
+  "operations": [
+    {
+      "op": "create",
+      "collection": "links",
+      "localId": "l0",
+      "value": {
+        "name": "uplink",
+        "kind": "ethernet",
+        "mtu": 1500,
+        "enabled": true,
+        "permanentMac": "52:54:00:aa:bb:01"
+      }
+    },
+    {
+      "op": "create",
+      "collection": "links",
+      "localId": "l1",
+      "value": {
+        "name": "wan-vlan",
+        "kind": "vlan",
+        "mtu": 1500,
+        "enabled": true,
+        "parent": "@l0",
+        "vlanId": 6
+      }
+    },
+    {
+      "op": "create",
+      "collection": "links",
+      "localId": "l2",
+      "value": {
+        "name": "wan-ppp",
+        "kind": "pppoe",
+        "mtu": 1492,
+        "enabled": true,
+        "parent": "@l1",
+        "username": "TEST_ONLY",
+        "password": {
+          "secret": "WAN_PASSWORD",
+          "set": "TEST_ONLY_FIRST",
+          "expectedVersion": "0"
+        }
+      }
+    },
+    {
+      "op": "create",
+      "collection": "links",
+      "localId": "l3",
+      "value": {
+        "name": "lan-vlan",
+        "kind": "vlan",
+        "mtu": 1500,
+        "enabled": true,
+        "parent": "@l0",
+        "vlanId": 10
+      }
+    },
+    {
+      "op": "create",
+      "collection": "links",
+      "localId": "l4",
+      "value": {
+        "name": "lan-bridge",
+        "kind": "bridge",
+        "mtu": 1500,
+        "enabled": true,
+        "members": [
+          "@l3"
+        ]
+      }
+    },
+    {
+      "op": "create",
+      "collection": "segments",
+      "localId": "s0",
+      "value": {
+        "name": "wan",
+        "link": "@l2",
+        "zone": "@z0",
+        "addressing": {
+          "ipv4": {
+            "mode": "ppp"
+          },
+          "ipv6": {
+            "mode": "dhcp6",
+            "requestPrefixLength": 48
+          }
+        }
+      }
+    },
+    {
+      "op": "create",
+      "collection": "segments",
+      "localId": "s1",
+      "value": {
+        "name": "lan",
+        "link": "@l4",
+        "zone": "@z1",
+        "addressing": {
+          "ipv4": {
+            "mode": "static",
+            "addresses": [
+              "192.0.2.7/24"
+            ]
+          },
+          "ipv6": {
+            "mode": "delegated",
+            "from": "@s0",
+            "subnetId": "abba",
+            "ra": {
+              "enabled": true,
+              "managed": false,
+              "otherInfo": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "op": "create",
+      "collection": "zones",
+      "localId": "z0",
+      "value": {
+        "name": "wan"
+      }
+    },
+    {
+      "op": "create",
+      "collection": "zones",
+      "localId": "z1",
+      "value": {
+        "name": "lan"
+      }
+    }
+  ]
+}

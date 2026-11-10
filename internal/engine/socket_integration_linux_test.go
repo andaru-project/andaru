@@ -22,30 +22,43 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if slices.Contains(os.Args, "--engine-enosp") {
+		if err := engineENOSP(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	if i := slices.Index(os.Args, "--peer-helper"); i >= 0 {
 		client := unixTestClient(os.Args[i+1])
-		req, err := http.NewRequest(http.MethodGet, "http://unix/api/v1/status/links", nil)
-		if err != nil {
-			os.Exit(92)
+		for _, route := range []struct{ method, path string }{
+			{"GET", "/api/v1/status/links"}, {"GET", "/api/v1/schema"},
+			{"GET", "/api/v1/versions"}, {"POST", "/api/v1/config/zones"},
+		} {
+			req, err := http.NewRequest(route.method, "http://unix"+route.path, strings.NewReader("{}"))
+			if err != nil {
+				os.Exit(92)
+			}
+			req.Header.Set("X-UID", "0")
+			req.Header.Set("X-User", "root")
+			req.Header.Set("Authorization", "Bearer root")
+			response, err := client.Do(req)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(93)
+			}
+			var body struct {
+				Error struct {
+					Code string `json:"code"`
+				} `json:"error"`
+			}
+			err = json.NewDecoder(response.Body).Decode(&body)
+			response.Body.Close()
+			if err != nil || response.StatusCode != 403 || body.Error.Code != "FORBIDDEN" {
+				os.Exit(94)
+			}
 		}
-		req.Header.Set("X-UID", "0")
-		req.Header.Set("X-User", "root")
-		req.Header.Set("Authorization", "Bearer root")
-		response, err := client.Do(req)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(93)
-		}
-		defer response.Body.Close()
-		var body struct {
-			Error struct {
-				Code string `json:"code"`
-			} `json:"error"`
-		}
-		if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
-			os.Exit(94)
-		}
-		fmt.Printf("%d %s\n", response.StatusCode, body.Error.Code)
+		fmt.Println("403 FORBIDDEN")
 		os.Exit(0)
 	}
 	os.Exit(m.Run())
@@ -134,7 +147,7 @@ func startTestEngine(t *testing.T, path string, handler http.Handler) *runningTe
 	go func() {
 		defer close(e.done)
 		if handler == nil {
-			e.err = Serve(ctx, path)
+			e.err = Serve(ctx, path, filepath.Join(privateTestDir(t), "state"))
 		} else {
 			e.err = serveUnix(ctx, path, handler)
 		}
@@ -231,7 +244,7 @@ func TestUnixAPISocketLifecycle(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		err := Serve(ctx, path)
+		err := Serve(ctx, path, filepath.Join(privateTestDir(t), "state"))
 		body, readErr := os.ReadFile(path)
 		if err == nil || readErr != nil || string(body) != "keep" {
 			t.Fatalf("unrelated file changed: %q %v %v", body, err, readErr)
@@ -249,7 +262,7 @@ func TestUnixAPISocketLifecycle(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		if err := Serve(ctx, path); err == nil {
+		if err := Serve(ctx, path, filepath.Join(privateTestDir(t), "state")); err == nil {
 			t.Fatal("existing symlink accepted")
 		}
 		if got, err := os.Readlink(path); err != nil || got != target {
@@ -281,7 +294,7 @@ func TestUnixAPISocketLifecycle(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			if err := Serve(ctx, path); err == nil {
+			if err := Serve(ctx, path, filepath.Join(privateTestDir(t), "state")); err == nil {
 				t.Fatal("pre-existing endpoint accepted")
 			}
 			after, err := os.Lstat(path)
@@ -328,7 +341,7 @@ func TestUnixAPISocketLifecycle(t *testing.T) {
 			path := filepath.Join(parent, "engine.sock")
 			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 			defer cancel()
-			if err := Serve(ctx, path); err == nil {
+			if err := Serve(ctx, path, filepath.Join(privateTestDir(t), "state")); err == nil {
 				t.Fatal("untrusted ancestor accepted")
 			}
 			if _, err := os.Lstat(path); !os.IsNotExist(err) {
@@ -346,7 +359,7 @@ func TestUnixAPISocketLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 		path := filepath.Join(parent, "engine.sock")
-		if err := Serve(context.Background(), path); err == nil {
+		if err := Serve(context.Background(), path, filepath.Join(privateTestDir(t), "state")); err == nil {
 			t.Fatal("permissive parent accepted")
 		}
 		if _, err := os.Lstat(path); !os.IsNotExist(err) {
@@ -367,7 +380,7 @@ func TestUnixAPISocketLifecycle(t *testing.T) {
 		if err := os.Symlink(target, parent); err != nil {
 			t.Fatal(err)
 		}
-		if err := Serve(context.Background(), filepath.Join(parent, "engine.sock")); err == nil {
+		if err := Serve(context.Background(), filepath.Join(parent, "engine.sock"), filepath.Join(privateTestDir(t), "state")); err == nil {
 			t.Fatal("symlink parent accepted")
 		}
 	})
@@ -377,7 +390,7 @@ func TestUnixAPISocketLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer os.Chown(parent, 0, 0)
-		if err := Serve(context.Background(), filepath.Join(parent, "engine.sock")); err == nil {
+		if err := Serve(context.Background(), filepath.Join(parent, "engine.sock"), filepath.Join(privateTestDir(t), "state")); err == nil {
 			t.Fatal("foreign-owned parent accepted")
 		}
 	})
@@ -398,7 +411,7 @@ func TestUnixAPISocketLifecycle(t *testing.T) {
 		path := filepath.Join(parent, "engine.sock")
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		if err := Serve(ctx, path); err == nil {
+		if err := Serve(ctx, path, filepath.Join(privateTestDir(t), "state")); err == nil {
 			t.Fatal("an ancestor could let another user rename the private directory")
 		}
 		if _, err := os.Lstat(path); !os.IsNotExist(err) {
@@ -446,7 +459,7 @@ func TestUnixAPIShutdownCancelsReadsAndClosesHeldConnections(t *testing.T) {
 		<-ctx.Done()
 		close(cancelled)
 		return nil, ctx.Err()
-	})
+	}, http.NotFoundHandler())
 	path := filepath.Join(privateTestDir(t), "run", "engine.sock")
 	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/held-test-request" {
