@@ -91,3 +91,26 @@ func TestCtlTransportFailureHasNoSuccessOutput(t *testing.T) {
 		t.Fatalf("missing engine became success: exit=%d stdout=%q stderr=%q", code, out.String(), diagnostics.String())
 	}
 }
+
+func TestEnvelopeAcceptsEmptyCollections(t *testing.T) {
+	for operation, body := range map[string]string{
+		"links":   `{"items":[]}`,
+		"openapi": `{"openapi":"3.1.1","paths":{}}`,
+	} {
+		if !validEnvelope(operation, []byte(body)) {
+			t.Fatalf("%s rejected a valid empty collection", operation)
+		}
+	}
+}
+
+func TestInvalidArgumentsAreUsageErrors(t *testing.T) {
+	for _, args := range [][]string{
+		nil, {"unknown"}, {"engine", "extra"}, {"engine", "--socket", "relative"},
+		{"ctl"}, {"ctl", "unknown"}, {"ctl", "links", "extra"}, {"ctl", "--socket", "relative", "links"},
+	} {
+		var out, diagnostics bytes.Buffer
+		if code := run(context.Background(), args, &out, &diagnostics); code != 2 || out.Len() != 0 || diagnostics.Len() == 0 {
+			t.Fatalf("%q: exit=%d stdout=%q stderr=%q", args, code, out.String(), diagnostics.String())
+		}
+	}
+}

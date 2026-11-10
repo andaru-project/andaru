@@ -297,6 +297,49 @@ func TestUnixAPISocketLifecycle(t *testing.T) {
 			}
 		})
 	}
+	for _, symlink := range []bool{false, true} {
+		name := "writable ancestor"
+		if symlink {
+			name = "symlink ancestor"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := privateTestDir(t)
+			ancestor := filepath.Join(root, "ancestor")
+			target := filepath.Join(root, "target")
+			if err := os.Mkdir(target, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if symlink {
+				if err := os.Symlink(target, ancestor); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := os.Mkdir(ancestor, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(ancestor, 0777); err != nil {
+					t.Fatal(err)
+				}
+			}
+			parent := filepath.Join(ancestor, "private")
+			if err := os.Mkdir(parent, 0700); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(parent, "engine.sock")
+			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			defer cancel()
+			if err := Serve(ctx, path); err == nil {
+				t.Fatal("untrusted ancestor accepted")
+			}
+			if _, err := os.Lstat(path); !os.IsNotExist(err) {
+				t.Fatalf("endpoint created despite untrusted ancestor: %v", err)
+			}
+			info, err := os.Lstat(ancestor)
+			if err != nil || (symlink && info.Mode()&os.ModeSymlink == 0) || (!symlink && info.Mode().Perm() != 0777) {
+				t.Fatalf("ancestor changed: %v", err)
+			}
+		})
+	}
 	t.Run("unsafe parent", func(t *testing.T) {
 		parent := privateTestDir(t)
 		if err := os.Chmod(parent, 0755); err != nil {

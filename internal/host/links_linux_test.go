@@ -35,6 +35,9 @@ func TestMain(m *testing.M) {
 			if mode == "oversize" {
 				time.Sleep(5 * time.Second)
 			}
+		case "interrupted":
+			_, _ = io.WriteString(os.Stdout, "[]")
+			_, _ = io.WriteString(os.Stderr, "Dump was interrupted and may be inconsistent.\n")
 		case "stderr":
 			_, _ = io.WriteString(os.Stderr, "stderr-proof:"+strings.Repeat("x", 8192)+":stderr-proof")
 			os.Exit(42)
@@ -111,6 +114,7 @@ func TestParseLinksRejectsInvalidInventory(t *testing.T) {
 		{"bad address", func(v map[string]any) { v["addr_info"].([]any)[0].(map[string]any)["local"] = "not-an-ip" }},
 		{"unknown family", func(v map[string]any) { v["addr_info"].([]any)[0].(map[string]any)["family"] = "packet" }},
 		{"family mismatch", func(v map[string]any) { v["addr_info"].([]any)[0].(map[string]any)["family"] = "inet6" }},
+		{"IPv6 literal in IPv4 family", func(v map[string]any) { v["addr_info"].([]any)[0].(map[string]any)["local"] = "2001:db8::7" }},
 		{"negative prefix", func(v map[string]any) { v["addr_info"].([]any)[0].(map[string]any)["prefixlen"] = -1 }},
 		{"ipv4 prefix", func(v map[string]any) { v["addr_info"].([]any)[0].(map[string]any)["prefixlen"] = 33 }},
 		{"ipv6 prefix", func(v map[string]any) {
@@ -181,9 +185,13 @@ func TestReadCommandBoundsAndCancellation(t *testing.T) {
 		pidFile := filepath.Join(t.TempDir(), "pid")
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
+		started := time.Now()
 		body, err := readCommand(ctx, executable, "--inventory-helper", "oversize", pidFile)
 		if !errors.Is(err, errOutputLimit) || body != nil {
 			t.Fatalf("oversize not rejected at the reader: bytes=%d err=%v", len(body), err)
+		}
+		if elapsed := time.Since(started); elapsed >= 2*time.Second {
+			t.Fatalf("oversize child survived until its context deadline: %v", elapsed)
 		}
 		assertReaped(t, pidFile)
 	})
@@ -191,6 +199,12 @@ func TestReadCommandBoundsAndCancellation(t *testing.T) {
 		body, err := readCommand(context.Background(), executable, "--inventory-helper", "exit")
 		if err == nil || body != nil {
 			t.Fatalf("failed command became partial success: %q, %v", body, err)
+		}
+	})
+	t.Run("successful exit with incomplete dump warning", func(t *testing.T) {
+		body, err := readCommand(context.Background(), executable, "--inventory-helper", "interrupted")
+		if err == nil || body != nil || !strings.Contains(err.Error(), "interrupted") {
+			t.Fatalf("incomplete dump became success: %q, %v", body, err)
 		}
 	})
 	t.Run("stderr retained but bounded", func(t *testing.T) {

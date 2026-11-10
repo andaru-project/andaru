@@ -60,6 +60,10 @@ Each link contains `ifIndex`, `name`, `linkType`, `mtu`, `operState`, `flags`, o
 
 The engine runs exactly `/usr/bin/ip -j address show` through an argument vector, without a shell or command override. It ignores unrelated tool JSON fields, validates required link/address data and fails the entire read on invalid data. Fixed bounds are a 2-second child deadline, 4 MiB stdout, 4 KiB retained stderr, and a 5-second/8 MiB CLI response budget. No stale snapshot cache is used.
 
+Any stderr diagnostic from the fixed inventory command also fails the read, even
+with exit status zero: iproute2 can report an interrupted, inconsistent netlink
+dump that way. The API returns `503`, not a potentially incomplete snapshot.
+
 ## Supervision
 
 The source unit is [`packaging/systemd/andaru-engine.service`](../../packaging/systemd/andaru-engine.service). It expects the trusted binary at `/usr/bin/andaru`; Debian package construction is a later increment, not an installer hidden in the API.

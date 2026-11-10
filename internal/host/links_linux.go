@@ -175,5 +175,8 @@ func readCommand(ctx context.Context, executable string, args ...string) ([]byte
 	if waitErr != nil {
 		return nil, fmt.Errorf("interface inventory command: %w: %s", waitErr, stderr.data)
 	}
+	if len(stderr.data) != 0 {
+		return nil, fmt.Errorf("interface inventory command warning: %s", stderr.data)
+	}
 	return data, nil
 }
