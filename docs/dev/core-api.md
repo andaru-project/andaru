@@ -181,4 +181,48 @@ Executed proof:
 - Stopping the service removed its socket; the CLI then exited `1` with empty stdout. Restart became ready within the bounded check. Unsupported command exit was `2`; a non-root engine invocation was refused without creating its endpoint.
 - The original stateless nft ruleset, both forwarding sysctls and management link/address state were unchanged. No link, bridge, VLAN, forwarding or filtering configuration was applied.
 
-That earlier qualification left the lab engine active and not boot-enabled; it did not exercise saved writes. Subsequent actual guest test binaries have exercised the new declaration, store, API and CLI against real SQLite, including six SIGKILL boundaries, both publication ENOSPC failures, old secret values, competing/disjoint edits, peer checks, actual engine exit/reopen and CLI persistence across restart. These test sandboxes do not activate network configuration. The final supervised deployment qualification is recorded separately below when exercised. No reboot, snapshot restore, encrypted-backup or complete [firewall MVP](https://github.com/andaru-project/andaru/issues/1) claim follows from these tests.
+That earlier qualification left the lab engine active and not boot-enabled; it did not exercise saved writes. The subsequent saved-configuration qualification below is separate evidence. Neither qualification proves a reboot, snapshot restore, encrypted backup or complete [firewall MVP](https://github.com/andaru-project/andaru/issues/1).
+
+### Saved-configuration Debian lab qualification
+
+On 2026-11-10 the Go 1.27.3, CGO-disabled amd64 build of code commit
+`3946ba35c207f0e9f97b4c6e2f05539cd1af4e45` was installed under systemd in
+VM 114 after verified snapshot `pre-saved-config-20261110-074903`.
+Binary SHA-256:
+`a39578271b28c4ad8900df4f64237bf219353360a355ce5bdeb195180ede1ad0`.
+The installed unit SHA-256 was
+`5ef41ec9e7d533a4571e6ac2dca7423bb0361b8ecf6d1801402af75d55cde61e`.
+Previous owned binary/unit copies remain with the task's staged lab artifacts.
+
+Executed evidence:
+
+- All ordinary and race-enabled Go suites passed. The final config, engine and
+  CLI integration binaries all passed as root in Debian; engine fencing invoked
+  the installed `/usr/bin/andaru`, not a simulated server.
+- Native installed CLI commands created a VLAN/PPPoE/delegated-IPv6 declaration,
+  changed a shared named password, versioned both referrers, retained disjoint
+  edits, rejected stale/A→B→A edits and an atomic stale batch, and retained saved
+  state through service restart. Non-root access was denied.
+- Deterministic test helpers covered six crash boundaries and ENOSPC at both
+  publication stages. A separate actual-engine test read `503`, observed drain
+  and exit `1`, then reopened a valid pair after space was restored.
+- Eight SIGKILL samples against the unmodified installed engine, after actual
+  secret-bearing HTTP request transmission at 0/1/2/5/10/20/50/100 ms, produced
+  five old-complete and three new-complete outcomes. Every restart passed engine
+  document/hash/reference validation. Sampling is not arbitrary power-loss proof.
+- Independent pre/post observations matched exactly for stateless nft rules,
+  IPv4/IPv6 forwarding and management link/address state (`lo`, `eth0`).
+  The unit retained zero effective capabilities, `NoNewPrivs=1`, a Unix-only
+  listener and root-only runtime/state permissions. Boot enablement stayed disabled.
+
+The cleanup batch left **saved version 7 with an empty topology**; the fake
+`WAN_PASSWORD` test secret remains unused under the stated retention policy.
+The service is active. Linux arm64 was cross-built, not run. No real network
+configuration, reboot or recovery restore was performed.
+
+`govulncheck v1.9.0` reported zero symbol-level and imported-package findings.
+Two advisories exist in unimported packages of transitive `x/text v0.14.0`:
+[GO-2026-6629](https://pkg.go.dev/vuln/GO-2026-6629) and
+[GO-2026-5970](https://pkg.go.dev/vuln/GO-2026-5970). Neither affected package
+is imported by this build. Review by 2026-12-10 or before changing text/auth/i18n
+dependencies; this is a reachability-based deferral, not a clean-module claim.
