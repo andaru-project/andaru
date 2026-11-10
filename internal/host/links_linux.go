@@ -40,13 +40,20 @@ type LinkStatus struct {
 	Flags       []string        `json:"flags"`
 	LinkAddress string          `json:"linkAddress,omitempty"`
 	Addresses   []AddressStatus `json:"addresses"`
+	// Kind is the kernel link kind (vlan, bridge, ...); empty for physical devices.
+	Kind string `json:"-"`
+	// PermanentAddress is the hardware address a device cannot change; virtual links inherit theirs.
+	PermanentAddress string `json:"-"`
 }
+
+// -d adds linkinfo: without it a VLAN is indistinguishable from the NIC whose MAC it inherits.
+var linkInventoryArgs = []string{"-d", "-j", "address", "show"}
 
 // ReadLinks reads the host namespace using Debian's read-only iproute2 interface.
 func ReadLinks(ctx context.Context) ([]LinkStatus, error) {
 	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
-	data, err := readCommand(ctx, "/usr/bin/ip", "-j", "address", "show")
+	data, err := readCommand(ctx, "/usr/bin/ip", linkInventoryArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -61,14 +68,18 @@ type toolAddress struct {
 }
 
 type toolLink struct {
-	IfIndex     int           `json:"ifindex"`
-	Name        string        `json:"ifname"`
-	LinkType    string        `json:"link_type"`
-	MTU         *int          `json:"mtu"`
-	OperState   string        `json:"operstate"`
-	Flags       []string      `json:"flags"`
-	LinkAddress string        `json:"address"`
-	Addresses   []toolAddress `json:"addr_info"`
+	IfIndex     int      `json:"ifindex"`
+	Name        string   `json:"ifname"`
+	LinkType    string   `json:"link_type"`
+	MTU         *int     `json:"mtu"`
+	OperState   string   `json:"operstate"`
+	Flags       []string `json:"flags"`
+	LinkAddress string   `json:"address"`
+	Permanent   string   `json:"permaddr"`
+	LinkInfo    struct {
+		Kind string `json:"info_kind"`
+	} `json:"linkinfo"`
+	Addresses []toolAddress `json:"addr_info"`
 }
 
 func parseLinks(data []byte) ([]LinkStatus, error) {
@@ -105,6 +116,7 @@ func parseLinks(data []byte) ([]LinkStatus, error) {
 			IfIndex: value.IfIndex, Name: value.Name, LinkType: value.LinkType,
 			MTU: *value.MTU, OperState: value.OperState, Flags: value.Flags,
 			LinkAddress: value.LinkAddress, Addresses: make([]AddressStatus, len(value.Addresses)),
+			Kind: value.LinkInfo.Kind, PermanentAddress: cmp.Or(value.Permanent, value.LinkAddress),
 		}
 		for j, record := range value.Addresses {
 			address, err := netip.ParseAddr(record.Local)
