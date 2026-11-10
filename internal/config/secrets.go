@@ -77,7 +77,7 @@ func validateSecrets(doc secretDocument, head Version) error {
 		return e
 	}
 	if e = s.secret.Validate(instance); e != nil {
-		return fault("VALIDATION_FAILED", "/password", "Invalid secret document.")
+		return validationError{{Path: "", Message: "Invalid secret document."}}
 	}
 	h, e := strconv.ParseInt(string(head), 10, 64)
 	if e != nil {
@@ -87,7 +87,7 @@ func validateSecrets(doc secretDocument, head Version) error {
 		n, e := strconv.ParseInt(string(v.Version), 10, 64)
 		_, te := time.Parse(time.RFC3339Nano, v.UpdatedAt)
 		if !validSecretName(name) || e != nil || n <= 0 || n > h || te != nil || len(v.Value) > 4096 || strings.ContainsRune(v.Value, 0) {
-			return fault("VALIDATION_FAILED", "/password", "Invalid secret value or version.")
+			return validationError{{Path: "", Message: "Invalid secret value or version."}}
 		}
 	}
 	return nil

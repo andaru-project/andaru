@@ -157,6 +157,60 @@ func TestConfigurationHTTPContract(t *testing.T) {
 	assertAPIError(t, configCall(h, "DELETE", path, "", newtag), 412, "PRECONDITION_FAILED")
 }
 
+func TestConfigurationHTTPPreconditionEdges(t *testing.T) {
+	h, _ := configurationFixture(t)
+	id := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/zones", `{"name":"A"}`, "")))
+	path := "/api/v1/config/zones/" + id
+	original := `"` + id + `.1"`
+	if w := configCall(h, "PUT", path, `{"name":"B"}`, original); w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	if w := configCall(h, "PUT", path, `{"name":"A"}`, `"`+id+`.2"`); w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	// Content is back to the original, but the original version is stale.
+	assertAPIError(t, configCall(h, "PUT", path, `{"name":"A"}`, original), 412, "PRECONDITION_FAILED")
+	assertAPIError(t, configCall(h, "DELETE", path, "", original), 412, "PRECONDITION_FAILED")
+
+	for _, repeated := range [][]string{{`"` + id + `.3"`, `"` + id + `.3"`}, {`"` + id + `.3"`, ""}} {
+		r := rootRequest("PUT", path)
+		r.Body = io.NopCloser(strings.NewReader(`{"name":"C"}`))
+		for _, tag := range repeated {
+			r.Header.Add("If-Match", tag)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		assertAPIError(t, w, 400, "INVALID_REQUEST")
+	}
+	if w := configCall(h, "GET", path, "", ""); !strings.Contains(w.Body.String(), `"name":"A"`) {
+		t.Fatal("rejected write changed saved state")
+	}
+
+	missing := "zon_00000000-0000-4000-8000-000000000001"
+	batch := fmt.Sprintf(`{"operations":[{"op":"replace","collection":"zones","id":%q,"expectedVersion":"1","value":{"name":"stale"}},{"op":"replace","collection":"zones","id":%q,"expectedVersion":"1","value":{"name":"gone"}}]}`, id, missing)
+	w := configCall(h, "POST", "/api/v1/config/changes", batch, "")
+	assertAPIError(t, w, 404, "NOT_FOUND")
+	if !strings.Contains(w.Body.String(), "/operations/1/id") {
+		t.Fatalf("404 did not point at the missing operation: %s", w.Body)
+	}
+}
+
+func TestConfigurationHTTPSecretNameSchemaFailureIsRedacted(t *testing.T) {
+	h, _ := configurationFixture(t)
+	const sentinel = "TEST_ONLY-BAD-NAME-SENTINEL"
+	link := `{"name":"ppp","kind":"pppoe","mtu":1492,"enabled":true,"parent":"lnk_00000000-0000-4000-8000-000000000001","username":"TEST_ONLY","password":{"secret":"` + sentinel + `","set":"` + sentinel + `","expectedVersion":"0"}}`
+	for path, body := range map[string]string{
+		"/api/v1/config/changes": `{"operations":[{"op":"create","collection":"links","value":` + link + `}]}`,
+		"/api/v1/config/links":   link,
+	} {
+		w := configCall(h, "POST", path, body, "")
+		assertAPIError(t, w, 422, "VALIDATION_FAILED")
+		if strings.Contains(w.Body.String(), sentinel) {
+			t.Fatalf("%s failure exposed secret material: %s", path, w.Body)
+		}
+	}
+}
+
 func TestConfigurationHTTPConcurrencyAndSecrets(t *testing.T) {
 	h, _ := configurationFixture(t)
 	raw := `{"operations":[{"op":"create","collection":"links","localId":"port","value":{"name":"port","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"52:54:00:00:00:01"}},{"op":"create","collection":"links","localId":"ppp","value":{"name":"ppp","kind":"pppoe","mtu":1492,"enabled":true,"parent":"@port","username":"TEST_ONLY","password":{"secret":"WAN_PASSWORD","set":"TEST_ONLY_HTTP_SECRET","expectedVersion":"0"}}}]}`

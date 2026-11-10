@@ -144,7 +144,7 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 				if r.Method == "DELETE" {
 					op = "delete"
 				}
-				version, e = objectPrecondition(id, r.Header.Get("If-Match"))
+				version, e = objectPrecondition(id, r.Header.Values("If-Match"))
 			}
 			if e == nil {
 				changes, e = config.ObjectChange(op, collection, id, version, raw)
@@ -187,7 +187,14 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 		writeError(w, r, 503, "STORE_UNAVAILABLE", "Saved response is unavailable; read current state before retrying.")
 	})
 }
-func objectPrecondition(id, tag string) (*config.Version, error) {
+func objectPrecondition(id string, tags []string) (*config.Version, error) {
+	if len(tags) == 0 {
+		return nil, nil
+	}
+	if len(tags) != 1 {
+		return nil, &config.Fault{Code: "INVALID_REQUEST"}
+	}
+	tag := tags[0]
 	if tag == "" {
 		return nil, nil
 	}

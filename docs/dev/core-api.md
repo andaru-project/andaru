@@ -102,6 +102,8 @@ The initial network API uses only the core scope. A reference is
 Send secret-bearing JSON through stdin from protected storage, **never argv**.
 Read-back `isSet`, `updatedAt` and `version` are metadata, not write commands.
 Omitting a PPPoE password on replacement retains its reference.
+Cancelled stdin reads exit without sending a request. A blocked reader may remain
+until the short-lived CLI process exits; the command never retries a save.
 
 Every replace/delete requires an explicit object version. The CLI constructs the
 strong `If-Match`; the server returns `428` if missing, `412` if stale and `422`
@@ -214,6 +216,14 @@ Executed evidence:
   IPv4/IPv6 forwarding and management link/address state (`lo`, `eth0`).
   The unit retained zero effective capabilities, `NoNewPrivs=1`, a Unix-only
   listener and root-only runtime/state permissions. Boot enablement stayed disabled.
+
+The final adversarial review added regression coverage for detached publication,
+cancelled preparation, consistent collection snapshots, A→B→A concurrency, batch
+error precedence, secret-schema redaction and isolated topology constraints.
+Storage failures journal trusted stage labels and numeric SQLite/OS error codes,
+never raw driver messages, input values or hashes. Duplicate `If-Match` field
+lines are rejected. An interrupted first initialization with only an empty,
+root-owned private marker can restart; unmarked data is still refused.
 
 The cleanup batch left **saved version 7 with an empty topology**; the fake
 `WAN_PASSWORD` test secret remains unused under the stated retention policy.

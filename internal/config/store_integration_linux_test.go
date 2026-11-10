@@ -4,12 +4,14 @@ package config
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"database/sql"
 	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"os"
 	"os/exec"
@@ -81,6 +83,131 @@ func networkInput(t *testing.T) Changes {
 }
 func createZone(name string) Changes {
 	return Changes{Operations: []Operation{{Op: "create", Collection: "zones", Value: json.RawMessage(`{"name":"` + name + `"}`)}}}
+}
+
+func TestStorePreparationCancellation(t *testing.T) {
+	s := openTestStore(t, ownedDir(t))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := s.Save(ctx, "unix:uid:0", createZone("cancelled")); err == nil {
+		t.Fatal("cancelled preparation published")
+	}
+	head, err := s.Snapshot(context.Background())
+	if err != nil || head.SavedVersion != "0" || s.fenced.Load() {
+		t.Fatalf("cancelled preparation changed state or fenced: %v %+v", err, head)
+	}
+	if result, err := s.Save(context.Background(), "unix:uid:0", createZone("healthy")); err != nil || result.SavedVersion != "1" {
+		t.Fatalf("cancelled preparation poisoned next save: %v %+v", err, result)
+	}
+}
+
+func TestStorePublicationOutlivesRequest(t *testing.T) {
+	s := openTestStore(t, ownedDir(t))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p, err := s.prepareSave(ctx, "unix:uid:0", networkInput(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	cancel()
+	result, err := p.publish(ctx)
+	if err != nil || result.SavedVersion != "1" {
+		t.Fatalf("request cancellation interrupted prepared publication: %v %+v", err, result)
+	}
+	p.Close()
+	head, err := s.Snapshot(context.Background())
+	if err != nil || head.SavedVersion != "1" {
+		t.Fatalf("detached publication not durable: %v %+v", err, head)
+	}
+}
+
+func TestInitializationInterruptedMarker(t *testing.T) {
+	for _, foreign := range []bool{false, true} {
+		t.Run(fmt.Sprint("extra-data-", foreign), func(t *testing.T) {
+			root := ownedDir(t)
+			stage := filepath.Join(root, ".configuration-init")
+			if err := os.Mkdir(stage, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(stage, "init.marker"), nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if foreign {
+				if err := os.WriteFile(filepath.Join(stage, "config.db"), []byte("DO_NOT_DELETE"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if store, err := Open(context.Background(), root); err == nil {
+					store.Close()
+					t.Fatal("accepted unmarked data")
+				}
+				raw, err := os.ReadFile(filepath.Join(stage, "config.db"))
+				if err != nil || string(raw) != "DO_NOT_DELETE" {
+					t.Fatal("modified unmarked data")
+				}
+			} else {
+				store := openTestStore(t, root)
+				head, err := store.Snapshot(context.Background())
+				if err != nil || head.SavedVersion != "0" {
+					t.Fatalf("marker-only interruption did not recover: %v %+v", err, head)
+				}
+			}
+		})
+	}
+}
+
+func TestCollectionReadsOneSavedVersion(t *testing.T) {
+	s := openTestStore(t, ownedDir(t))
+	initial, err := s.Save(context.Background(), "unix:uid:0", Changes{Operations: []Operation{
+		{Op: "create", Collection: "zones", LocalID: "a", Value: json.RawMessage(`{"name":"a-0"}`)},
+		{Op: "create", Collection: "zones", LocalID: "b", Value: json.RawMessage(`{"name":"b-0"}`)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	writes := make(chan error, 1)
+	go func() {
+		<-start
+		version := initial.SavedVersion
+		for i := 1; i <= 20; i++ {
+			result, err := s.Save(context.Background(), "unix:uid:0", Changes{Operations: []Operation{
+				{Op: "replace", Collection: "zones", ID: initial.Created["a"], ExpectedVersion: &version, Value: json.RawMessage(fmt.Sprintf(`{"name":"a-%d"}`, i))},
+				{Op: "replace", Collection: "zones", ID: initial.Created["b"], ExpectedVersion: &version, Value: json.RawMessage(fmt.Sprintf(`{"name":"b-%d"}`, i))},
+			}})
+			if err != nil {
+				writes <- err
+				return
+			}
+			version = result.SavedVersion
+		}
+		writes <- nil
+	}()
+	close(start)
+	for i := 0; i < 30; i++ {
+		view, err := s.List(context.Background(), "zones")
+		if err != nil || len(view.Items) != 2 {
+			t.Fatalf("collection read: %v %+v", err, view)
+		}
+		for _, object := range view.Items {
+			if object.Version != view.SavedVersion {
+				t.Fatalf("mixed object/head versions: %+v", view)
+			}
+			var zone struct {
+				Name string `json:"name"`
+			}
+			if err := json.Unmarshal(object.Value, &zone); err != nil {
+				t.Fatal(err)
+			}
+			var n int
+			if _, err := fmt.Sscanf(zone.Name[2:], "%d", &n); err != nil || fmt.Sprint(n+1) != string(view.SavedVersion) {
+				t.Fatalf("mixed object contents: %+v", view)
+			}
+		}
+	}
+	if err := <-writes; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestStoreInitializationAndPaths(t *testing.T) {
@@ -617,6 +744,10 @@ func enospPhase(phase string) error {
 	if !os.IsTimeout(e) && !strings.Contains(e.Error(), "no space left") {
 		return e
 	}
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
 	if phase == "secret" {
 		e = p.commitSecrets(context.Background())
 	} else {
@@ -626,6 +757,9 @@ func enospPhase(phase string) error {
 		return fmt.Errorf("full filesystem became success")
 	}
 	p.Close()
+	if !strings.Contains(logs.String(), "sqlite_code=13") || !strings.Contains(logs.String(), "stage=") || strings.Contains(logs.String(), "TEST_ONLY_FIRST") {
+		return fmt.Errorf("missing safe storage diagnosis: %s", logs.String())
+	}
 	select {
 	case <-s.Failure():
 	default:

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -223,7 +224,7 @@ func TestSecretViewsAndErrors(t *testing.T) {
 	if bytes.Contains(raw, []byte("TEST_ONLY_OLD_VALUE")) || !bytes.Contains(raw, []byte(`"secret":"WAN_PASSWORD"`)) {
 		t.Fatal("view leaked value or lost named reference")
 	}
-	for _, pw := range []map[string]any{{"secret": "other/SCOPE"}, {"secret": "WAN_PASSWORD", "isSet": true}, {"secret": "WAN_PASSWORD", "set": "TEST_ONLY_DO_NOT_LOG"}, {"secret": "WAN_PASSWORD", "set": "TEST_ONLY_DO_NOT_LOG", "expectedVersion": "*"}} {
+	for _, pw := range []map[string]any{{"secret": "other/SCOPE"}, {"secret": "WAN_PASSWORD", "isSet": true}, {"secret": "WAN_PASSWORD", "set": "TEST_ONLY_DO_NOT_LOG"}, {"secret": "WAN_PASSWORD", "set": "TEST_ONLY_DO_NOT_LOG", "expectedVersion": "*"}, {"secret": "TEST_ONLY_DO_NOT_LOG-name", "set": "TEST_ONLY_DO_NOT_LOG", "expectedVersion": "0"}} {
 		s := seededState(t)
 		c := changedLink(t, s, pppID, "7", map[string]any{"password": pw})
 		var logs bytes.Buffer
@@ -231,13 +232,72 @@ func TestSecretViewsAndErrors(t *testing.T) {
 		slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 		_, e := prepareChanges(&s, c, "8", fixedTime)
 		slog.SetDefault(old)
-		if e == nil {
-			t.Fatal("accepted bad secret command")
+		var f *Fault
+		if !errors.As(e, &f) {
+			t.Fatalf("wanted fault for bad secret command; got %v", e)
 		}
-		if strings.Contains(e.Error()+logs.String(), "TEST_ONLY_DO_NOT_LOG") {
+		wire, e := json.Marshal(f)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if strings.Contains(string(wire)+logs.String(), "TEST_ONLY_DO_NOT_LOG") {
 			t.Fatal("diagnostic disclosed submitted secret")
 		}
 	}
+}
+
+func batchChanges(t *testing.T, parts ...Changes) Changes {
+	t.Helper()
+	var ops []Operation
+	for _, p := range parts {
+		ops = append(ops, p.Operations...)
+	}
+	raw, e := json.Marshal(Changes{Operations: ops})
+	if e != nil {
+		t.Fatal(e)
+	}
+	c, e := DecodeChanges(raw)
+	if e != nil {
+		t.Fatal(e)
+	}
+	return c
+}
+
+func TestSecretFaultRebasesToSettingOperation(t *testing.T) {
+	s := seededState(t)
+	keep := changedLink(t, s, secondPPP, "7", map[string]any{})
+	bad := changedLink(t, s, pppID, "7", map[string]any{"password": map[string]any{"secret": "WAN_PASSWORD", "set": "TEST_ONLY_BAD\u0000VALUE", "expectedVersion": "7"}})
+	_, e := prepareChanges(&s, batchChanges(t, keep, bad), "8", fixedTime)
+	f := requireFault(t, e, "VALIDATION_FAILED")
+	if len(f.Details) != 1 || f.Details[0].Path != "/operations/1/value/password" {
+		t.Fatalf("secret fault not rebased to setting operation: %+v", f.Details)
+	}
+}
+
+func TestSecretDocumentLimitIsRequestTooLarge(t *testing.T) {
+	s := seededState(t)
+	value := strings.Repeat("A", 4096)
+	stamp := fixedTime.Add(-time.Hour).Format(time.RFC3339Nano)
+	for i := range 990 {
+		s.Secrets.Scopes["core"][fmt.Sprintf("BULK_%04d", i)] = secretEntry{Kind: "password", Value: value, UpdatedAt: stamp, Version: "7"}
+	}
+	for i := 990; ; i++ {
+		raw, err := json.Marshal(s.Secrets)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(raw) >= documentLimit-3000 {
+			break
+		}
+		n := min(4096, documentLimit-len(raw)-2000)
+		s.Secrets.Scopes["core"][fmt.Sprintf("BULK_%04d", i)] = secretEntry{Kind: "password", Value: value[:n], UpdatedAt: stamp, Version: "7"}
+	}
+	if err := validateSecrets(s.Secrets, "7"); err != nil {
+		t.Fatalf("invalid starting secret store: %v", err)
+	}
+	c := changedLink(t, s, pppID, "7", map[string]any{"password": map[string]any{"secret": "WAN_PASSWORD", "set": value, "expectedVersion": "7"}})
+	_, e := prepareChanges(&s, c, "8", fixedTime)
+	requireFault(t, e, "REQUEST_TOO_LARGE")
 }
 
 func TestObjectChangeStrictnessAndPointers(t *testing.T) {

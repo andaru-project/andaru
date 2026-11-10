@@ -35,22 +35,22 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 		if errors.Is(e, sql.ErrNoRows) && id != "" {
 			return state, info, fault("NOT_FOUND", "", "Saved version does not exist.")
 		}
-		return state, info, unavailable()
+		return state, info, diagnostic("load-config-scan", e)
 	}
 	if number < 0 || schemaVersion != 1 || len(ch) != 32 || len(sh) != 32 || len(cb) > documentLimit {
-		return state, info, unavailable()
+		return state, info, diagnostic("load-config-metadata", nil)
 	}
 	hash := sha256.Sum256(cb)
 	if !bytes.Equal(hash[:], ch) {
-		return state, info, unavailable()
+		return state, info, diagnostic("load-config-hash", nil)
 	}
 	d, e := decodeDeclaration(cb)
 	if e != nil {
-		return state, info, unavailable()
+		return state, info, diagnostic("load-config-schema", e)
 	}
 	canonicalBody, e := canonical(d)
 	if e != nil || !bytes.Equal(canonicalBody, cb) {
-		return state, info, unavailable()
+		return state, info, diagnostic("load-config-canonical", e)
 	}
 	state.Version = Version(strconv.FormatInt(number, 10))
 	info.ID = state.Version
@@ -62,38 +62,41 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 	state.configBody = cb
 	sec, e := s.secretDB.Conn(ctx)
 	if e != nil {
-		return state, info, unavailable()
+		return state, info, diagnostic("load-secret-connect", e)
 	}
 	defer sec.Close()
 	if e = verifyPragmas(ctx, sec, true); e != nil {
-		return state, info, unavailable()
+		return state, info, e
 	}
 	var sb []byte
-	if e = sec.QueryRowContext(ctx, "SELECT body FROM documents WHERE sha256=?", sh).Scan(&sb); e != nil || len(sb) > documentLimit {
-		return state, info, unavailable()
+	if e = sec.QueryRowContext(ctx, "SELECT body FROM documents WHERE sha256=?", sh).Scan(&sb); e != nil {
+		return state, info, diagnostic("load-secret-lookup", e)
+	}
+	if len(sb) > documentLimit {
+		return state, info, diagnostic("load-secret-lookup-size", nil)
 	}
 	hash = sha256.Sum256(sb)
 	if !bytes.Equal(hash[:], sh) {
-		return state, info, unavailable()
+		return state, info, diagnostic("load-secret-hash", nil)
 	}
 	if _, e = decodeStrictLimit(sb, documentLimit); e != nil {
-		return state, info, unavailable()
+		return state, info, diagnostic("load-secret-strict", e)
 	}
 	if e = json.Unmarshal(sb, &state.Secrets); e != nil {
-		return state, info, unavailable()
+		return state, info, diagnostic("load-secret-strict", e)
 	}
 	if e = validateSecrets(state.Secrets, state.Version); e != nil {
-		return state, info, unavailable()
+		return state, info, diagnostic("load-secret-schema", e)
 	}
 	canonicalSecret, e := canonical(state.Secrets)
 	if e != nil || !bytes.Equal(canonicalSecret, sb) {
-		return state, info, unavailable()
+		return state, info, diagnostic("load-secret-canonical", e)
 	}
 	state.secretBody = sb
 	for _, l := range d.Links {
 		if l.Password != nil {
 			if _, ok := state.Secrets.Scopes["core"][l.Password.Secret]; !ok {
-				return state, info, unavailable()
+				return state, info, diagnostic("load-secret-missing-ref", nil)
 			}
 		}
 	}
@@ -121,7 +124,7 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 		raw, _ := json.Marshal(ids)
 		rows, e := conn.QueryContext(ctx, `SELECT c.object_id,c.version_id,c.deleted FROM object_changes c WHERE c.collection=? AND c.object_id IN (SELECT value FROM json_each(?)) AND c.version_id=(SELECT max(n.version_id) FROM object_changes n WHERE n.collection=c.collection AND n.object_id=c.object_id AND n.version_id<=?)`, col, string(raw), number)
 		if e != nil {
-			return state, info, unavailable()
+			return state, info, diagnostic("load-object-metadata-query", e)
 		}
 		for rows.Next() {
 			var oid string
@@ -129,24 +132,24 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 			var deleted bool
 			if e = rows.Scan(&oid, &version, &deleted); e != nil {
 				rows.Close()
-				return state, info, unavailable()
+				return state, info, diagnostic("load-object-metadata-scan", e)
 			}
 			if version <= 0 || version > number {
 				rows.Close()
-				return state, info, unavailable()
+				return state, info, diagnostic("load-object-metadata-range", nil)
 			}
 			state.Versions[objectKey{col, oid}] = objectVersion{Version: Version(strconv.FormatInt(version, 10)), Deleted: deleted}
 		}
 		e = rows.Err()
 		rows.Close()
 		if e != nil {
-			return state, info, unavailable()
+			return state, info, diagnostic("load-object-metadata-rows", e)
 		}
 	}
 	for key := range active {
 		meta, ok := state.Versions[key]
 		if !ok || meta.Deleted {
-			return state, info, unavailable()
+			return state, info, diagnostic("load-object-metadata-missing", nil)
 		}
 	}
 	return state, info, nil
@@ -161,11 +164,11 @@ func (s *Store) read(ctx context.Context, id Version, requested []objectKey, fn 
 	defer release()
 	conn, e := s.configDB.Conn(ctx)
 	if e != nil {
-		return unavailable()
+		return diagnostic("read-config-connect", e)
 	}
 	defer conn.Close()
 	if e = verifyPragmas(ctx, conn, false); e != nil {
-		return unavailable()
+		return e
 	}
 	state, info, e := s.loadState(ctx, conn, id, requested)
 	if e != nil {
@@ -240,15 +243,15 @@ func (s *Store) History(ctx context.Context, before *Version, limit int) (result
 	defer release()
 	conn, e := s.configDB.Conn(ctx)
 	if e != nil {
-		return result, unavailable()
+		return result, diagnostic("history-config-connect", e)
 	}
 	defer conn.Close()
 	if e = verifyPragmas(ctx, conn, false); e != nil {
-		return result, unavailable()
+		return result, e
 	}
 	rows, e := conn.QueryContext(ctx, "SELECT id,parent_id,created_at,actor,changed_object_count FROM versions WHERE id<? ORDER BY id DESC LIMIT ?", upper, limit+1)
 	if e != nil {
-		return result, unavailable()
+		return result, diagnostic("history-query", e)
 	}
 	defer rows.Close()
 	result = HistoryView{State: "saved", Items: []VersionInfo{}}
@@ -257,7 +260,7 @@ func (s *Store) History(ctx context.Context, before *Version, limit int) (result
 		var parent sql.NullInt64
 		var info VersionInfo
 		if e = rows.Scan(&number, &parent, &info.CreatedAt, &info.Actor, &info.ChangedObjectCount); e != nil {
-			return result, unavailable()
+			return result, diagnostic("history-scan", e)
 		}
 		info.ID = Version(fmt.Sprint(number))
 		if parent.Valid {
@@ -272,7 +275,7 @@ func (s *Store) History(ctx context.Context, before *Version, limit int) (result
 		result.Items = append(result.Items, info)
 	}
 	if e = rows.Err(); e != nil {
-		return result, unavailable()
+		return result, diagnostic("history-rows", e)
 	}
 	return result, nil
 }
@@ -289,7 +292,7 @@ func (s *Store) Version(ctx context.Context, id Version) (result VersionView, er
 	defer release()
 	conn, e := s.configDB.Conn(ctx)
 	if e != nil {
-		return result, unavailable()
+		return result, diagnostic("version-config-connect", e)
 	}
 	defer conn.Close()
 	state, info, e := s.loadState(ctx, conn, id, nil)
@@ -304,18 +307,18 @@ func (s *Store) Version(ctx context.Context, id Version) (result VersionView, er
 	number, _ := strconvVersion(id)
 	rows, e := conn.QueryContext(ctx, "SELECT collection,object_id,created,deleted FROM object_changes WHERE version_id=? ORDER BY collection,object_id", number)
 	if e != nil {
-		return result, unavailable()
+		return result, diagnostic("version-changes-query", e)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var change objectChange
 		if e = rows.Scan(&change.Collection, &change.ID, &change.Created, &change.Deleted); e != nil {
-			return result, unavailable()
+			return result, diagnostic("version-changes-scan", e)
 		}
 		result.Changes = append(result.Changes, change)
 	}
 	if e = rows.Err(); e != nil {
-		return result, unavailable()
+		return result, diagnostic("version-changes-rows", e)
 	}
 	return result, nil
 }

@@ -62,16 +62,27 @@ func openDatabase(ctx context.Context, path, mode string, secret bool) (*sql.DB,
 	return db, nil
 }
 func verifyPragmas(ctx context.Context, c *sql.Conn, secret bool) error {
-	for pragma, want := range map[string]string{"journal_mode": "wal", "synchronous": "2", "foreign_keys": "1", "busy_timeout": "2000"} {
+	for _, p := range []struct{ name, want, stage string }{
+		{"journal_mode", "wal", "pragma-journal-mode"},
+		{"synchronous", "2", "pragma-synchronous"},
+		{"foreign_keys", "1", "pragma-foreign-keys"},
+		{"busy_timeout", "2000", "pragma-busy-timeout"},
+	} {
 		var value string
-		if e := c.QueryRowContext(ctx, "PRAGMA "+pragma).Scan(&value); e != nil || value != want {
-			return unavailable()
+		if e := c.QueryRowContext(ctx, "PRAGMA "+p.name).Scan(&value); e != nil {
+			return diagnostic(p.stage+"-query", e)
+		}
+		if value != p.want {
+			return diagnostic(p.stage+"-mismatch", nil)
 		}
 	}
 	if secret {
 		var v int
-		if e := c.QueryRowContext(ctx, "PRAGMA secure_delete").Scan(&v); e != nil || v != 1 {
-			return unavailable()
+		if e := c.QueryRowContext(ctx, "PRAGMA secure_delete").Scan(&v); e != nil {
+			return diagnostic("pragma-secure-delete-query", e)
+		}
+		if v != 1 {
+			return diagnostic("pragma-secure-delete-mismatch", nil)
 		}
 	}
 	return nil
@@ -89,8 +100,11 @@ func probeDatabase(ctx context.Context, path string, app int) error {
 	if e = db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); e != nil {
 		return e
 	}
-	if actual != app || version != 1 {
-		return unavailable()
+	if actual != app {
+		return diagnostic("probe-application-id-mismatch", nil)
+	}
+	if version != 1 {
+		return diagnostic("probe-layout-version-incompatible", nil)
 	}
 	return nil
 }

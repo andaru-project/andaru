@@ -19,30 +19,17 @@ var SchemaBundle []byte
 var secretSchema []byte
 
 type schemaSet struct {
-	declaration, write, changes, secret *jsonschema.Schema
-	objects                             map[string]*jsonschema.Schema
+	declaration, changes, secret *jsonschema.Schema
+	objects                      map[string]*jsonschema.Schema
 }
 
 var schemas = sync.OnceValues(func() (*schemaSet, error) {
-	c := jsonschema.NewCompiler()
-	c.DefaultDraft(jsonschema.Draft2020)
-	c.AssertFormat()
-	c.UseLoader(jsonschema.SchemeURLLoader{})
-	for uri, raw := range map[string][]byte{schemaURI: SchemaBundle, "https://andaru.invalid/private/config-secrets-v1": secretSchema} {
-		v, e := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
-		if e != nil {
-			return nil, e
-		}
-		if e = c.AddResource(uri, v); e != nil {
-			return nil, e
-		}
-	}
-	var s schemaSet
-	var e error
-	if s.declaration, e = c.Compile(schemaURI + "#/$defs/declaration"); e != nil {
+	c, e := newSchemaCompiler(map[string][]byte{schemaURI: SchemaBundle, "https://andaru.invalid/private/config-secrets-v1": secretSchema})
+	if e != nil {
 		return nil, e
 	}
-	if s.write, e = c.Compile(schemaURI + "#/$defs/objectWrite"); e != nil {
+	var s schemaSet
+	if s.declaration, e = c.Compile(schemaURI + "#/$defs/declaration"); e != nil {
 		return nil, e
 	}
 	if s.changes, e = c.Compile(schemaURI + "#/$defs/changes"); e != nil {
@@ -62,19 +49,22 @@ var schemas = sync.OnceValues(func() (*schemaSet, error) {
 	return &s, nil
 })
 
-func compileSchema(raw []byte, uri string) (*jsonschema.Schema, error) {
+// newSchemaCompiler is the only schema compiler setup; the empty URL loader refuses every external reference.
+func newSchemaCompiler(resources map[string][]byte) (*jsonschema.Compiler, error) {
 	c := jsonschema.NewCompiler()
 	c.DefaultDraft(jsonschema.Draft2020)
 	c.AssertFormat()
 	c.UseLoader(jsonschema.SchemeURLLoader{})
-	v, e := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
-	if e != nil {
-		return nil, e
+	for uri, raw := range resources {
+		v, e := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
+		if e != nil {
+			return nil, e
+		}
+		if e = c.AddResource(uri, v); e != nil {
+			return nil, e
+		}
 	}
-	if e = c.AddResource(uri, v); e != nil {
-		return nil, e
-	}
-	return c.Compile(uri)
+	return c, nil
 }
 func schemaErrors(err error) error {
 	var ve *jsonschema.ValidationError

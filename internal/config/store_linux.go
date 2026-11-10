@@ -6,7 +6,6 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,9 +35,9 @@ func unavailable() *Fault {
 	return fault("STORE_UNAVAILABLE", "", "Configuration storage is unavailable; inspect the engine journal.")
 }
 func (s *Store) Failure() <-chan error { return s.failure }
-func (s *Store) fail() error {
+func (s *Store) fail(stage string, cause error) error {
 	if s.fenced.CompareAndSwap(false, true) {
-		slog.Error("configuration store write fenced")
+		diagnostic(stage, cause)
 		s.failure <- unavailable()
 	}
 	return unavailable()
@@ -91,7 +90,7 @@ func Open(ctx context.Context, stateDir string) (*Store, error) {
 			return nil, e
 		}
 		if e = initializePair(ctx, stage); e != nil {
-			return nil, unavailable()
+			return nil, diagnostic("initialize-pair", e)
 		}
 		if e = publishInitial(stage, final); e != nil {
 			return nil, e
@@ -107,30 +106,30 @@ func Open(ctx context.Context, stateDir string) (*Store, error) {
 		app  int
 	}{{"config.db", configApp}, {"secrets.db", secretApp}} {
 		if e = probeDatabase(ctx, filepath.Join(final, role.name), role.app); e != nil {
-			return nil, unavailable()
+			return nil, diagnostic("probe-"+role.name, e)
 		}
 	}
 	cfg, e := openDatabase(ctx, filepath.Join(final, "config.db"), "rw", false)
 	if e != nil {
-		return nil, unavailable()
+		return nil, diagnostic("open-config", e)
 	}
 	sec, e := openDatabase(ctx, filepath.Join(final, "secrets.db"), "rw", true)
 	if e != nil {
 		cfg.Close()
-		return nil, unavailable()
+		return nil, diagnostic("open-secret", e)
 	}
 	s := &Store{root: stateDir, configDB: cfg, secretDB: sec, lock: lock, gate: make(chan struct{}, 1), failure: make(chan error, 1)}
 	s.gate <- struct{}{}
 	conn, e := s.configDB.Conn(ctx)
 	if e != nil {
 		s.Close()
-		return nil, unavailable()
+		return nil, diagnostic("open-config-connect", e)
 	}
 	_, _, e = s.loadState(ctx, conn, "", nil)
 	conn.Close()
 	if e != nil {
 		s.Close()
-		return nil, unavailable()
+		return nil, e
 	}
 	success = true
 	return s, nil
@@ -238,7 +237,12 @@ func newStaging(root string) (string, error) {
 		if e != nil {
 			return "", e
 		}
-		if len(entries) > 0 {
+		emptyMarker := false
+		if len(entries) == 1 && entries[0].Name() == "init.marker" {
+			st, err := os.Lstat(filepath.Join(stage, "init.marker"))
+			emptyMarker = err == nil && privateFile(st) && st.Size() == 0
+		}
+		if len(entries) > 0 && !emptyMarker {
 			if e = checkMembers(stage, false); e != nil {
 				return "", e
 			}
@@ -350,14 +354,14 @@ func (p *pendingSave) commitSecrets(ctx context.Context) error {
 	defer cancel()
 	conn, e := p.s.secretDB.Conn(ctx)
 	if e != nil {
-		return p.s.fail()
+		return p.s.fail("publish-secret-connect", e)
 	}
 	defer conn.Close()
 	if e = verifyPragmas(ctx, conn, true); e != nil {
-		return p.s.fail()
+		return p.s.fail("publish-secret-pragmas", e)
 	}
 	if _, e = conn.ExecContext(ctx, "BEGIN IMMEDIATE"); e != nil {
-		return p.s.fail()
+		return p.s.fail("publish-secret-begin", e)
 	}
 	ok := false
 	defer func() {
@@ -366,10 +370,10 @@ func (p *pendingSave) commitSecrets(ctx context.Context) error {
 		}
 	}()
 	if e = putDocument(ctx, conn, p.prepared.SecretBody); e != nil {
-		return p.s.fail()
+		return p.s.fail("publish-secret-document", e)
 	}
 	if _, e = conn.ExecContext(ctx, "COMMIT"); e != nil {
-		return p.s.fail()
+		return p.s.fail("publish-secret-commit", e)
 	}
 	ok = true
 	p.secretReady = true
@@ -382,10 +386,10 @@ func (p *pendingSave) commitConfiguration(ctx context.Context) (SaveResult, erro
 	ctx, cancel := context.WithDeadline(ctx, p.deadline)
 	defer cancel()
 	if e := publishVersion(ctx, p.conn, p.prepared, p.actor); e != nil {
-		return SaveResult{}, p.s.fail()
+		return SaveResult{}, p.s.fail("publish-config-version", e)
 	}
 	if _, e := p.conn.ExecContext(ctx, "COMMIT"); e != nil {
-		return SaveResult{}, p.s.fail()
+		return SaveResult{}, p.s.fail("publish-config-commit", e)
 	}
 	p.active = false
 	return resultView(p.prepared)
@@ -406,7 +410,7 @@ func (p *pendingSave) Close() error {
 				cancel()
 				if e != nil {
 					p.conn.Raw(func(any) error { return driver.ErrBadConn })
-					result = p.s.fail()
+					result = p.s.fail("prepare-rollback", e)
 				}
 			}
 		}
@@ -431,10 +435,14 @@ func (s *Store) Save(ctx context.Context, actor string, input Changes) (result S
 	if p.prepared.Noop {
 		return resultView(p.prepared)
 	}
+	return p.publish(ctx)
+}
+
+func (p *pendingSave) publish(ctx context.Context) (SaveResult, error) {
 	pub, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
-	if e = p.commitSecrets(pub); e != nil {
-		return result, e
+	if err := p.commitSecrets(pub); err != nil {
+		return SaveResult{}, err
 	}
 	return p.commitConfiguration(pub)
 }

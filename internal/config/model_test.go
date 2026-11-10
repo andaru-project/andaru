@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -73,10 +74,6 @@ func TestNetworkConstraints(t *testing.T) {
 		{"VLAN oversized MTU", func(d map[string]any) { item(linksOf(d), 1)["mtu"] = 1501 }},
 		{"PPP oversized MTU", func(d map[string]any) { item(linksOf(d), 2)["mtu"] = 1493 }},
 		{"IPv6 too small MTU", func(d map[string]any) { item(linksOf(d), 4)["mtu"] = 1279 }},
-		{"parent cycle", func(d map[string]any) {
-			item(linksOf(d), 1)["parent"] = item(linksOf(d), 3)["id"]
-			item(linksOf(d), 3)["parent"] = item(linksOf(d), 1)["id"]
-		}},
 		{"missing parent", func(d map[string]any) { item(linksOf(d), 1)["parent"] = "lnk_00000000-0000-4000-8000-999999999999" }},
 		{"enslaved VLAN parent", func(d map[string]any) { item(linksOf(d), 1)["parent"] = item(linksOf(d), 3)["id"] }},
 		{"segment enslaved member", func(d map[string]any) { item(segmentsOf(d), 1)["link"] = item(linksOf(d), 3)["id"] }},
@@ -143,6 +140,61 @@ func addSegment(d map[string]any, n, lnk string, a4, a6 map[string]any) {
 	d["segments"] = append(segmentsOf(d), map[string]any{"id": "seg_00000000-0000-4000-8000-00000000000" + n, "name": "extra" + n, "link": lnk, "zone": item(d["zones"].([]any), 0)["id"], "addressing": map[string]any{"ipv4": a4, "ipv6": a6}})
 }
 
+func addLink(d map[string]any, n string, fields map[string]any) {
+	l := map[string]any{"id": "lnk_00000000-0000-4000-8000-00000000000" + n, "name": "extra-link-" + n, "kind": "ethernet", "mtu": 1500, "enabled": true}
+	for k, v := range fields {
+		l[k] = v
+	}
+	d["links"] = append(linksOf(d), l)
+}
+
+func TestConstraintErrorPaths(t *testing.T) {
+	cases := []struct {
+		name   string
+		change func(map[string]any)
+		want   string
+	}{
+		{"parent cycle", func(d map[string]any) {
+			addLink(d, "6", map[string]any{"kind": "vlan", "vlanId": 20})
+			addLink(d, "7", map[string]any{"kind": "vlan", "vlanId": 21})
+			item(linksOf(d), 5)["parent"] = item(linksOf(d), 6)["id"]
+			item(linksOf(d), 6)["parent"] = item(linksOf(d), 5)["id"]
+		}, "/links/5"},
+		{"duplicate permanent MAC", func(d map[string]any) {
+			addLink(d, "6", map[string]any{"permanentMac": "52:54:00:aa:bb:01"})
+		}, "/links/5/permanentMac"},
+		{"empty bond", func(d map[string]any) {
+			addLink(d, "6", map[string]any{"kind": "bond", "mode": "active-backup", "members": []any{}})
+		}, "/links/5/members"},
+		{"member with two masters", func(d map[string]any) {
+			addLink(d, "6", map[string]any{"kind": "bridge", "members": []any{item(linksOf(d), 3)["id"]}})
+		}, "/links/5/members"},
+		{"two segments on one link", func(d map[string]any) {
+			addSegment(d, "3", item(segmentsOf(d), 0)["link"].(string), map[string]any{"mode": "none"}, map[string]any{"mode": "none"})
+		}, "/segments/2/link"},
+		{"duplicate local address", func(d map[string]any) {
+			v4(d, 1)["addresses"] = []any{"192.0.2.7/24", "192.0.2.7/25"}
+		}, "/segments/1/addressing/ipv4/addresses/1"},
+		{"PPPoE IPv4 mode mismatch", func(d map[string]any) {
+			item(segmentsOf(d), 0)["addressing"].(map[string]any)["ipv4"] = map[string]any{"mode": "static", "addresses": []any{"198.51.100.9/24"}}
+		}, "/segments/0/addressing/ipv4/mode"},
+		{"RA with IPv6 none", func(d map[string]any) {
+			item(segmentsOf(d), 1)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "none", "ra": map[string]any{"enabled": true, "managed": false, "otherInfo": true}}
+		}, "/segments/1/addressing/ipv6/ra"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := fixtureMap(t)
+			tc.change(d)
+			_, e := decodeMap(t, d)
+			ve, _ := e.(validationError)
+			if !slices.ContainsFunc(ve, func(detail FieldError) bool { return detail.Path == tc.want }) {
+				t.Fatalf("error %v; fields %+v; want %+v", e, ve, tc.want)
+			}
+		})
+	}
+}
+
 func TestCanonicalNetworkRoundTrip(t *testing.T) {
 	d := fixtureMap(t)
 	item(d["zones"].([]any), 0)["description"] = "<safe> €"
@@ -182,7 +234,11 @@ func TestSchemaLoaderIsOffline(t *testing.T) {
 		t.Fatal(e)
 	}
 	raw := []byte(`{"$schema":"https://json-schema.org/draft/2020-12/schema","$ref":"file://` + path + `"}`)
-	if _, e := compileSchema(raw, "https://andaru.invalid/test"); e == nil {
+	c, e := newSchemaCompiler(map[string][]byte{"https://andaru.invalid/test": raw})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e := c.Compile("https://andaru.invalid/test"); e == nil {
 		t.Fatal("read unregistered filesystem schema")
 	}
 }

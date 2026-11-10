@@ -322,7 +322,7 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 	deleted := map[objectKey]bool{}
 	var createKeys []objectKey
 	changedSecrets := map[string]bool{}
-	sets := map[string]bool{}
+	setters := map[string]objectKey{}
 	for i, op := range input.Operations {
 		key := keys[i]
 		origins[key] = i
@@ -336,10 +336,10 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 			if pw, ok := value["password"].(map[string]any); ok {
 				name, _ := pw["secret"].(string)
 				if set, ok := pw["set"].(string); ok {
-					if sets[name] {
+					if _, dup := setters[name]; dup {
 						return empty, fault("VALIDATION_FAILED", input.path(i, "/password", true), "Duplicate secret set command.")
 					}
-					sets[name] = true
+					setters[name] = key
 					old, exists := current.Secrets.Scopes["core"][name]
 					if !exists || old.Value != set {
 						current.Secrets.Scopes["core"][name] = secretEntry{Kind: "password", Value: set, UpdatedAt: now.UTC().Format(time.RFC3339Nano), Version: next}
@@ -394,7 +394,14 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 		}
 	}
 	if e = validateSecrets(current.Secrets, next); e != nil {
-		return empty, e
+		var failure validationError
+		if errors.Is(e, errTooLarge) {
+			return empty, boundaryFault(e)
+		}
+		if !errors.As(e, &failure) {
+			return empty, e
+		}
+		return empty, rebaseSecrets(failure, current.Secrets, next, setters, origins, input)
 	}
 	cb, e := canonical(d)
 	if e != nil {
@@ -615,4 +622,19 @@ func rebaseValidation(details validationError, d *declaration, origins map[objec
 		}
 	}
 	return f
+}
+
+// rebaseSecrets blames the earliest batch operation whose own secret entry fails validation.
+func rebaseSecrets(failure validationError, doc secretDocument, head Version, setters map[string]objectKey, origins map[objectKey]int, input Changes) *Fault {
+	best := -1
+	for name, key := range setters {
+		one := secretDocument{SchemaVersion: doc.SchemaVersion, Scopes: map[string]map[string]secretEntry{"core": {name: doc.Scopes["core"][name]}}}
+		if validateSecrets(one, head) != nil && (best < 0 || origins[key] < best) {
+			best = origins[key]
+		}
+	}
+	if best < 0 {
+		best = 0
+	}
+	return fault("VALIDATION_FAILED", input.path(best, "/password", true), failure[0].Message)
 }

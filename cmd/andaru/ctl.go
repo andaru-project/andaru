@@ -153,6 +153,26 @@ func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 	}
 	return req, errUsage
 }
+
+// readInput bounds stdin to the request limit and abandons the read when ctx ends.
+// shortcut: a blocked read keeps its goroutine until the reader unblocks; the CLI exits right after, so upgrade only if runCtl becomes long-lived.
+func readInput(ctx context.Context, r io.Reader) ([]byte, error) {
+	type result struct {
+		data []byte
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		data, err := io.ReadAll(io.LimitReader(r, (1<<20)+1))
+		done <- result{data, err}
+	}()
+	select {
+	case res := <-done:
+		return res.data, res.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
 func runCtl(ctx context.Context, socket string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	spec, e := ctlOperation(args, stderr)
 	if e != nil {
@@ -164,7 +184,7 @@ func runCtl(ctx context.Context, socket string, args []string, stdin io.Reader, 
 	}
 	var payload []byte
 	if spec.body {
-		payload, e = io.ReadAll(io.LimitReader(stdin, (1<<20)+1))
+		payload, e = readInput(ctx, stdin)
 		if e != nil || len(payload) > 1<<20 {
 			fmt.Fprintln(stderr, "request input could not be read within its size limit")
 			return 1
