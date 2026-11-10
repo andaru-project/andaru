@@ -147,3 +147,43 @@ func TestCtlConfigurationReplyBoundary(t *testing.T) {
 		t.Fatal("stdin was not bounded before transmission")
 	}
 }
+
+func TestCtlPreviewUsageAndReplyBoundary(t *testing.T) {
+	for _, args := range [][]string{
+		{"preview"}, {"preview", "other"}, {"preview", "network", "extra"},
+		{"preview", "network", "--saved-version", "x"}, {"preview", "network", "--saved-version", "01"}, {"preview", "network", "--version", "1"},
+	} {
+		var out, diag bytes.Buffer
+		argv := append([]string{"ctl", "--socket", filepath.Join(t.TempDir(), "missing.sock")}, args...)
+		if code := run(context.Background(), argv, strings.NewReader(""), &out, &diag); code != 2 || out.Len() != 0 {
+			t.Fatalf("usage %v exit=%d stdout=%s", args, code, out.String())
+		}
+	}
+	valid := `{"state":"preview","savedVersion":"3","realizable":true,"resolved":[],"files":[],"findings":[]}`
+	for name, body := range map[string]string{
+		"saved state passed off as a preview": `{"state":"saved","savedVersion":"3","realizable":true,"resolved":[],"files":[],"findings":[]}`,
+		"null files":                          `{"state":"preview","savedVersion":"3","realizable":true,"resolved":[],"files":null,"findings":[]}`,
+		"findings not a list":                 `{"state":"preview","savedVersion":"3","realizable":true,"resolved":[],"files":[],"findings":{}}`,
+		"no verdict":                          `{"state":"preview","savedVersion":"3","resolved":[],"files":[],"findings":[]}`,
+		"bad version":                         `{"state":"preview","savedVersion":"x","realizable":true,"resolved":[],"files":[],"findings":[]}`,
+		"":                                    valid,
+	} {
+		var query string
+		path := replySocket(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			query = r.URL.RequestURI()
+			_, _ = io.WriteString(w, body)
+		}))
+		var out, diag bytes.Buffer
+		code := run(context.Background(), []string{"ctl", "--socket", path, "preview", "network", "--saved-version", "3"}, strings.NewReader(""), &out, &diag)
+		if query != "/api/v1/preview/network?savedVersion=3" {
+			t.Fatalf("wrong request: %s", query)
+		}
+		if name == "" {
+			if code != 0 || strings.TrimSpace(out.String()) != valid {
+				t.Fatalf("valid preview rejected: exit=%d %s %s", code, out.String(), diag.String())
+			}
+		} else if code != 1 || out.Len() != 0 {
+			t.Fatalf("%s: became output: exit=%d %s", name, code, out.String())
+		}
+	}
+}
