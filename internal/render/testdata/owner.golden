@@ -1,0 +1,147 @@
+### /run/andaru/ppp/pp000000030000.options 0600 secret=true sources=/links/2,/segments/0
+plugin pppoe.so
+nic-vl000000020000
+ifname pp000000030000
+linkname pp000000030000
+user "kpn@internet"
+password "kpn"
+noauth
+nolog
+hide-password
+persist
+maxfail 0
+holdoff 10
+lcp-echo-interval 15
+lcp-echo-failure 4
+mtu 1500
+mru 1500
+noipdefault
+defaultroute
++ipv6
+ipv6cp-use-persistent
+
+### /run/andaru/ppp/pp000000030000.options (as shown)
+plugin pppoe.so
+nic-vl000000020000
+ifname pp000000030000
+linkname pp000000030000
+user "kpn@internet"
+password "<redacted>"
+noauth
+nolog
+hide-password
+persist
+maxfail 0
+holdoff 10
+lcp-echo-interval 15
+lcp-echo-failure 4
+mtu 1500
+mru 1500
+noipdefault
+defaultroute
++ipv6
+ipv6cp-use-persistent
+
+### /run/systemd/network/50-andaru-ens18.network 0644 secret=false sources=/links/0
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:01
+
+[Link]
+RequiredForOnline=no
+MTUBytes=1508
+
+[Network]
+LLDP=no
+VLAN=vl000000020000
+LinkLocalAddressing=no
+IPv6AcceptRA=no
+
+### /run/systemd/network/50-andaru-ens19.network 0644 secret=false sources=/links/3,/segments/1
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:02
+
+[Link]
+RequiredForOnline=no
+MTUBytes=1500
+
+[Network]
+LLDP=no
+Address=192.0.2.1/24
+IPv6AcceptRA=no
+DHCPPrefixDelegation=yes
+IPv6SendRA=yes
+
+[DHCPPrefixDelegation]
+UplinkInterface=pp000000030000
+SubnetId=0x1
+Assign=yes
+
+[IPv6SendRA]
+Managed=no
+OtherInformation=yes
+
+### /run/systemd/network/50-andaru-pp000000030000.network 0644 secret=false sources=/links/2,/segments/0
+[Match]
+Name=pp000000030000
+Type=ppp
+
+[Link]
+RequiredForOnline=no
+
+[Network]
+KeepConfiguration=yes
+DHCP=ipv6
+IPv6AcceptRA=yes
+
+[DHCPv6]
+WithoutRA=solicit
+UseDNS=no
+UseNTP=no
+UseHostname=no
+UseDomains=no
+PrefixDelegationHint=::/48
+
+[IPv6AcceptRA]
+UseDNS=no
+UseDomains=no
+
+### /run/systemd/network/50-andaru-vl000000020000.netdev 0644 secret=false sources=/links/1
+[NetDev]
+Name=vl000000020000
+Kind=vlan
+
+[VLAN]
+Id=6
+
+### /run/systemd/network/50-andaru-vl000000020000.network 0644 secret=false sources=/links/1
+[Match]
+Name=vl000000020000
+
+[Link]
+RequiredForOnline=no
+MTUBytes=1508
+
+[Network]
+LLDP=no
+LinkLocalAddressing=no
+IPv6AcceptRA=no
+
+### /run/systemd/system/andaru-pppoe-pp000000030000.service 0644 secret=false sources=/links/2,/segments/0
+[Unit]
+Description=Andaru PPPoE session pp000000030000
+BindsTo=sys-subsystem-net-devices-vl000000020000.device
+Wants=systemd-networkd.service
+After=sys-subsystem-net-devices-vl000000020000.device systemd-networkd.service
+
+[Service]
+Type=notify
+ExecStartPre=/usr/lib/systemd/systemd-networkd-wait-online --interface=vl000000020000:carrier --timeout=60
+ExecStart=/usr/sbin/pppd file /run/andaru/ppp/pp000000030000.options nodetach up_sdnotify
+ExecReload=/bin/kill -HUP $MAINPID
+SuccessExitStatus=5
+Restart=on-failure
+RestartSec=5
+
+### resolved lnk_00000001-0000-4000-8000-000000000001 -> ens18
+### resolved lnk_00000004-0000-4000-8000-000000000004 -> ens19
+### realizable=true

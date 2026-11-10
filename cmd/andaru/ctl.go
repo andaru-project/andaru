@@ -26,7 +26,7 @@ type ctlRequest struct {
 }
 
 var objectIDPattern = regexp.MustCompile(`^(lnk|seg|zon)_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
-var errUsage = errors.New("usage: andaru ctl [--socket PATH] links|openapi|config <show|list|get|create|replace|delete|changes>|versions <list|get>")
+var errUsage = errors.New("usage: andaru ctl [--socket PATH] links|openapi|config <show|list|get|create|replace|delete|changes>|versions <list|get>|preview network [--saved-version N]")
 
 func collectionName(s string) bool { return s == "links" || s == "segments" || s == "zones" }
 func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
@@ -113,6 +113,32 @@ func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 			}
 		default:
 			return req, errUsage
+		}
+		return req, nil
+	}
+	if args[0] == "preview" {
+		if args[1] != "network" {
+			return req, errUsage
+		}
+		fs := flag.NewFlagSet("preview network", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		// A flag given as "" (an unset shell variable) must be refused, not read as "the head".
+		var saved *config.Version
+		fs.Func("saved-version", "saved version to render (default: the saved head)", func(s string) error {
+			v, e := config.ParseVersion(s)
+			saved = &v
+			return e
+		})
+		if e := fs.Parse(args[2:]); e != nil {
+			return req, e
+		}
+		if fs.NArg() != 0 {
+			return req, errUsage
+		}
+		req.path = "/api/v1/preview/network"
+		req.kind = "preview"
+		if saved != nil {
+			req.path += "?" + url.Values{"savedVersion": {string(*saved)}}.Encode()
 		}
 		return req, nil
 	}
@@ -331,6 +357,14 @@ func validEnvelope(kind string, body []byte) bool {
 			}
 		}
 		return v.NextBefore == nil || validVersion(*v.NextBefore)
+	case "preview":
+		var v struct {
+			State                     string
+			SavedVersion              config.Version
+			Realizable                *bool
+			Resolved, Files, Findings []json.RawMessage
+		}
+		return json.Unmarshal(body, &v) == nil && v.State == "preview" && validVersion(v.SavedVersion) && v.Realizable != nil && v.Resolved != nil && v.Files != nil && v.Findings != nil
 	case "version":
 		var v config.VersionView
 		return json.Unmarshal(body, &v) == nil && v.State == "saved" && validVersion(v.ID) && v.Changes != nil && validDeclarationView(v.Value)

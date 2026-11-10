@@ -109,6 +109,13 @@ func TestCtlConfigurationRoundTrip(t *testing.T) {
 		t.Fatal("stale CLI write became success")
 	}
 	call(fmt.Sprintf(`{"name":"ppp","kind":"pppoe","mtu":1492,"enabled":true,"parent":%q,"username":"TEST_ONLY","password":{"secret":"WAN_PASSWORD","set":"TEST_ONLY_CLI","expectedVersion":"0"}}`, pid), "config", "create", "links")
+	preview := call("", "preview", "network")
+	if !bytes.Contains(preview, []byte(`"state":"preview"`)) || !bytes.Contains(preview, []byte(`"code":"HARDWARE_MISSING"`)) {
+		t.Fatalf("preview did not report the absent test NIC: %s", preview)
+	}
+	if first := call("", "preview", "network", "--saved-version", "1"); !bytes.Contains(first, []byte(`"savedVersion":"1"`)) {
+		t.Fatalf("preview ignored the requested version: %s", first)
+	}
 	call(fmt.Sprintf(`{"operations":[{"op":"replace","collection":"zones","id":%q,"expectedVersion":%q,"value":{"name":"batch-name"}}]}`, zid, edited.Version), "config", "changes")
 	call("", "versions", "list", "--limit", "2")
 	old := call("", "versions", "get", "1")

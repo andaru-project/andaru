@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "links": [
+    {
+      "id": "lnk_00000001-0000-4000-8000-000000000001",
+      "name": "modem",
+      "kind": "ethernet",
+      "mtu": 1500,
+      "enabled": true,
+      "permanentMac": "52:54:00:aa:bb:01"
+    },
+    {
+      "id": "lnk_00000002-0000-4000-8000-000000000002",
+      "name": "dsl",
+      "kind": "pppoe",
+      "mtu": 1492,
+      "enabled": true,
+      "parent": "lnk_00000001-0000-4000-8000-000000000001",
+      "username": "kpn@internet",
+      "password": {
+        "secret": "WAN_PASSWORD",
+        "isSet": true,
+        "updatedAt": "2026-11-10T12:00:00Z",
+        "version": "1"
+      }
+    }
+  ],
+  "segments": [
+    {
+      "id": "seg_00000001-0000-4000-8000-000000000001",
+      "name": "wan",
+      "link": "lnk_00000002-0000-4000-8000-000000000002",
+      "zone": "zon_00000001-0000-4000-8000-000000000001",
+      "addressing": {
+        "ipv4": {
+          "mode": "ppp"
+        },
+        "ipv6": {
+          "mode": "none"
+        }
+      }
+    }
+  ],
+  "zones": [
+    {
+      "id": "zon_00000001-0000-4000-8000-000000000001",
+      "name": "wan"
+    },
+    {
+      "id": "zon_00000002-0000-4000-8000-000000000002",
+      "name": "lan"
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+### /run/systemd/network/50-andaru-ens18.network 0644 secret=false sources=/links/0,/segments/0
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:01
+
+[Link]
+RequiredForOnline=no
+MTUBytes=1500
+
+[Network]
+LLDP=no
+DHCP=yes
+IPv6AcceptRA=yes
+
+[DHCPv4]
+UseDNS=no
+UseNTP=no
+UseHostname=no
+UseDomains=no
+
+[DHCPv6]
+UseDNS=no
+UseNTP=no
+UseHostname=no
+UseDomains=no
+PrefixDelegationHint=::/56
+
+[IPv6AcceptRA]
+UseDNS=no
+UseDomains=no
+
+### /run/systemd/network/50-andaru-ens19.network 0644 secret=false sources=/links/1,/segments/1
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:02
+
+[Link]
+RequiredForOnline=no
+MTUBytes=1500
+
+[Network]
+LLDP=no
+Address=192.0.2.1/24
+IPv6AcceptRA=no
+DHCPPrefixDelegation=yes
+IPv6SendRA=yes
+
+[DHCPPrefixDelegation]
+UplinkInterface=ens18
+SubnetId=0xbeef
+Assign=yes
+
+[IPv6SendRA]
+Managed=no
+OtherInformation=yes
+
+### resolved lnk_00000001-0000-4000-8000-000000000001 -> ens18
+### resolved lnk_00000002-0000-4000-8000-000000000002 -> ens19
+### realizable=true

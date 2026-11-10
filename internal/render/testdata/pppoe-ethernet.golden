@@ -1,0 +1,86 @@
+### /run/andaru/ppp/pp000000020000.options 0600 secret=true sources=/links/1,/segments/0
+plugin pppoe.so
+nic-enx-1.2
+ifname pp000000020000
+linkname pp000000020000
+user "kpn@internet"
+password "kpn"
+noauth
+nolog
+hide-password
+persist
+maxfail 0
+holdoff 10
+lcp-echo-interval 15
+lcp-echo-failure 4
+mtu 1492
+mru 1492
+noipdefault
+defaultroute
+noipv6
+
+### /run/andaru/ppp/pp000000020000.options (as shown)
+plugin pppoe.so
+nic-enx-1.2
+ifname pp000000020000
+linkname pp000000020000
+user "kpn@internet"
+password "<redacted>"
+noauth
+nolog
+hide-password
+persist
+maxfail 0
+holdoff 10
+lcp-echo-interval 15
+lcp-echo-failure 4
+mtu 1492
+mru 1492
+noipdefault
+defaultroute
+noipv6
+
+### /run/systemd/network/50-andaru-enx-1.2.network 0644 secret=false sources=/links/0
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:01
+
+[Link]
+RequiredForOnline=no
+MTUBytes=1500
+
+[Network]
+LLDP=no
+LinkLocalAddressing=no
+IPv6AcceptRA=no
+
+### /run/systemd/network/50-andaru-pp000000020000.network 0644 secret=false sources=/links/1,/segments/0
+[Match]
+Name=pp000000020000
+Type=ppp
+
+[Link]
+RequiredForOnline=no
+
+[Network]
+KeepConfiguration=yes
+LinkLocalAddressing=no
+IPv6AcceptRA=no
+
+### /run/systemd/system/andaru-pppoe-pp000000020000.service 0644 secret=false sources=/links/1,/segments/0
+[Unit]
+Description=Andaru PPPoE session pp000000020000
+BindsTo=sys-subsystem-net-devices-enx\x2d1.2.device
+Wants=systemd-networkd.service
+After=sys-subsystem-net-devices-enx\x2d1.2.device systemd-networkd.service
+
+[Service]
+Type=notify
+ExecStartPre=/usr/lib/systemd/systemd-networkd-wait-online --interface=enx-1.2:carrier --timeout=60
+ExecStart=/usr/sbin/pppd file /run/andaru/ppp/pp000000020000.options nodetach up_sdnotify
+ExecReload=/bin/kill -HUP $MAINPID
+SuccessExitStatus=5
+Restart=on-failure
+RestartSec=5
+
+### resolved lnk_00000001-0000-4000-8000-000000000001 -> enx-1.2
+### realizable=true

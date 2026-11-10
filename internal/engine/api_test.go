@@ -157,6 +157,10 @@ func assertRequiredSchema(t *testing.T, raw json.RawMessage, value map[string]an
 			if _, ok := field.([]any); !ok {
 				t.Fatalf("field %s is not an array: %#v", name, field)
 			}
+		case "boolean":
+			if _, ok := field.(bool); !ok {
+				t.Fatalf("field %s is not a boolean: %#v", name, field)
+			}
 		default:
 			t.Fatalf("missing/unsupported published type for %s: %q", name, schema.Properties[name].Type)
 		}

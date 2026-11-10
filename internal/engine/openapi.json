@@ -3,7 +3,7 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "info": {
     "title": "Andaru local engine API",
-    "version": "0.2.0-dev",
+    "version": "0.3.0-dev",
     "description": "Experimental root-local engine API over Unix sockets only. Verified UID 0 SO_PEERCRED authorizes every route. Network status is observed; configuration writes create durable saved versions and never activate networking. No application accounts, HTTP identity headers, cookie/token authentication, live-generation/apply or backup service is implemented. Contracts remain provisional until Andaru 1.0.",
     "license": {
       "name": "GNU AGPLv3",
@@ -1437,6 +1437,168 @@
           }
         }
       ]
+    },
+    "/api/v1/preview/network": {
+      "get": {
+        "operationId": "previewNetwork",
+        "summary": "Preview how a saved network configuration would be realized on this host",
+        "parameters": [
+          {
+            "name": "savedVersion",
+            "in": "query",
+            "required": false,
+            "description": "Saved version to render; the saved head when omitted.",
+            "schema": {
+              "$ref": "#/components/schemas/Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Files that would be handed to systemd-networkd and pppd, with secrets redacted. Nothing is written, reloaded or started.",
+            "headers": {
+              "Andaru-Saved-Version": {
+                "schema": {
+                  "$ref": "#/components/schemas/Version"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "head": {
+        "operationId": "headPreviewNetwork",
+        "parameters": [
+          {
+            "name": "savedVersion",
+            "in": "query",
+            "required": false,
+            "description": "Saved version to render; the saved head when omitted.",
+            "schema": {
+              "$ref": "#/components/schemas/Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Files that would be handed to systemd-networkd and pppd, with secrets redacted. Nothing is written, reloaded or started.",
+            "headers": {
+              "Andaru-Saved-Version": {
+                "schema": {
+                  "$ref": "#/components/schemas/Version"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1861,6 +2023,149 @@
             }
           }
         ]
+      },
+      "Resolution": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "link",
+          "interface"
+        ],
+        "properties": {
+          "link": {
+            "type": "string",
+            "description": "Declared Ethernet link ID"
+          },
+          "interface": {
+            "type": "string",
+            "description": "Kernel interface currently carrying that permanent MAC"
+          }
+        }
+      },
+      "RenderedFile": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "mode",
+          "secret",
+          "content",
+          "sources"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Destination a later apply would write"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "0644",
+              "0600"
+            ]
+          },
+          "secret": {
+            "type": "boolean",
+            "description": "True when the real file holds a secret; content then shows <redacted> in its place"
+          },
+          "content": {
+            "type": "string"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "JSON Pointers into the saved snapshot value"
+          }
+        }
+      },
+      "Finding": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "severity",
+          "code",
+          "path",
+          "message"
+        ],
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": [
+              "error",
+              "warning"
+            ]
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "HARDWARE_MISSING",
+              "HARDWARE_AMBIGUOUS",
+              "NAME_COLLISION",
+              "FOREIGN_CONFIGURATION",
+              "TOOL_MISSING",
+              "KERNEL_SUPPORT_MISSING",
+              "INTERFACE_NAME_UNSUPPORTED",
+              "CREDENTIAL_TOO_LONG",
+              "UNSUPPORTED_COMBINATION",
+              "DEPENDENCY_UNAVAILABLE",
+              "RA_PREFIX_UNSUPPORTED"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "description": "JSON Pointer into the saved snapshot value; empty for host-wide findings"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "PreviewResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "state",
+          "savedVersion",
+          "realizable",
+          "resolved",
+          "files",
+          "findings"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "const": "preview",
+            "description": "Never saved, applied or live state"
+          },
+          "savedVersion": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$"
+          },
+          "realizable": {
+            "type": "boolean",
+            "description": "True when no finding is an error"
+          },
+          "resolved": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Resolution"
+            }
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RenderedFile"
+            }
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            }
+          }
+        }
       }
     },
     "responses": {

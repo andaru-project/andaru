@@ -2,6 +2,7 @@ package host
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -243,5 +244,41 @@ func assertReaped(t *testing.T, pidFile string) {
 			_, _ = syscall.Wait4(pid, &status, 0, nil)
 		}
 		t.Fatal(fmt.Sprintf("child was not reaped: pid=%d wait=%d err=%v", pid, got, err))
+	}
+}
+
+//go:embed testdata/ip-d-j-address.json
+var detailedInventory []byte
+
+func TestParseLinksObservesKindAndPermanentAddress(t *testing.T) {
+	got, err := parseLinks(detailedInventory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"lo": "", "d0": "dummy", "v6": "vlan", "br0": "bridge"}
+	for _, link := range got {
+		if link.Kind != want[link.Name] || link.PermanentAddress != link.LinkAddress {
+			t.Fatalf("%s: kind=%q permanent=%q address=%q", link.Name, link.Kind, link.PermanentAddress, link.LinkAddress)
+		}
+	}
+	// ip prints permaddr only when it differs from the current address.
+	changed, err := parseLinks([]byte(`[{"ifindex":2,"ifname":"eth1","link_type":"ether","operstate":"UP","mtu":1500,"flags":[],"address":"02:11:22:33:44:55","permaddr":"52:54:00:aa:bb:02","addr_info":[]}]`))
+	if err != nil || changed[0].PermanentAddress != "52:54:00:aa:bb:02" || changed[0].LinkAddress != "02:11:22:33:44:55" {
+		t.Fatalf("permaddr not preferred: %#v %v", changed, err)
+	}
+	body, err := json.Marshal(append(got, changed...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leaked := range []string{"Kind", "PermanentAddress", "permaddr", "52:54:00:aa:bb:02", "dummy"} {
+		if strings.Contains(string(body), leaked) {
+			t.Fatalf("status response changed: found %q", leaked)
+		}
+	}
+}
+
+func TestLinkInventoryArgs(t *testing.T) {
+	if !slices.Equal(linkInventoryArgs, []string{"-d", "-j", "address", "show"}) {
+		t.Fatalf("inventory must request link details: %v", linkInventoryArgs)
 	}
 }

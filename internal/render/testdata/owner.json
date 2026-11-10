@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "links": [
+    {
+      "id": "lnk_00000001-0000-4000-8000-000000000001",
+      "name": "wan0",
+      "kind": "ethernet",
+      "mtu": 1508,
+      "enabled": true,
+      "permanentMac": "52:54:00:aa:bb:01"
+    },
+    {
+      "id": "lnk_00000002-0000-4000-8000-000000000002",
+      "name": "kpn",
+      "kind": "vlan",
+      "mtu": 1508,
+      "enabled": true,
+      "parent": "lnk_00000001-0000-4000-8000-000000000001",
+      "vlanId": 6
+    },
+    {
+      "id": "lnk_00000003-0000-4000-8000-000000000003",
+      "name": "pppoe",
+      "kind": "pppoe",
+      "mtu": 1500,
+      "enabled": true,
+      "parent": "lnk_00000002-0000-4000-8000-000000000002",
+      "username": "kpn@internet",
+      "password": {
+        "secret": "WAN_PASSWORD",
+        "isSet": true,
+        "updatedAt": "2026-11-10T12:00:00Z",
+        "version": "1"
+      }
+    },
+    {
+      "id": "lnk_00000004-0000-4000-8000-000000000004",
+      "name": "lan0",
+      "kind": "ethernet",
+      "mtu": 1500,
+      "enabled": true,
+      "permanentMac": "52:54:00:aa:bb:02"
+    }
+  ],
+  "segments": [
+    {
+      "id": "seg_00000001-0000-4000-8000-000000000001",
+      "name": "wan",
+      "link": "lnk_00000003-0000-4000-8000-000000000003",
+      "zone": "zon_00000001-0000-4000-8000-000000000001",
+      "addressing": {
+        "ipv4": {
+          "mode": "ppp"
+        },
+        "ipv6": {
+          "mode": "dhcp6",
+          "requestPrefixLength": 48
+        }
+      }
+    },
+    {
+      "id": "seg_00000002-0000-4000-8000-000000000002",
+      "name": "lan",
+      "link": "lnk_00000004-0000-4000-8000-000000000004",
+      "zone": "zon_00000002-0000-4000-8000-000000000002",
+      "addressing": {
+        "ipv4": {
+          "mode": "static",
+          "addresses": [
+            "192.0.2.1/24"
+          ]
+        },
+        "ipv6": {
+          "mode": "delegated",
+          "from": "seg_00000001-0000-4000-8000-000000000001",
+          "subnetId": "1",
+          "ra": {
+            "enabled": true,
+            "managed": false,
+            "otherInfo": true
+          }
+        }
+      }
+    }
+  ],
+  "zones": [
+    {
+      "id": "zon_00000001-0000-4000-8000-000000000001",
+      "name": "wan"
+    },
+    {
+      "id": "zon_00000002-0000-4000-8000-000000000002",
+      "name": "lan"
+    }
+  ]
+}
