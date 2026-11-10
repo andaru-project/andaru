@@ -1,0 +1,98 @@
+{
+  "openapi": "3.1.1",
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "info": {
+    "title": "Andaru local engine API",
+    "version": "0.1.0-dev",
+    "description": "Experimental read-only engine API. Served only over a Unix socket, not TCP. Every operation requires a verified UID 0 peer from Linux SO_PEERCRED. There is no HTTP identity header, cookie or token authentication in this increment. Runtime link indexes/names are observations, not persistent configuration identities. The contract remains provisional until Andaru 1.0.",
+    "license": {"name": "GNU AGPLv3", "url": "https://github.com/andaru-project/andaru/blob/main/LICENSE"}
+  },
+  "servers": [{"url": "/"}],
+  "x-andaru-transport": "unix",
+  "x-andaru-peer-uids": [0],
+  "paths": {
+    "/api/v1/status/links": {
+      "get": {
+        "operationId": "listObservedLinks",
+        "summary": "Read the complete current host link/address snapshot",
+        "description": "Reads Debian iproute2 in the engine's host namespace. Failure is explicit, never a partial snapshot or a stale cache. Addresses retain host bits. The bounded full snapshot is not paginated.",
+        "responses": {
+          "200": {"description": "Observed links, ordered by ifIndex", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/LinksResponse"}}}},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "405": {"$ref": "#/components/responses/MethodNotAllowed"},
+          "503": {"$ref": "#/components/responses/InventoryUnavailable"}
+        }
+      },
+      "head": {
+        "operationId": "headObservedLinks",
+        "summary": "Check the authorized inventory read without returning a body",
+        "responses": {"200": {"description": "Inventory read succeeded; no body"}, "403": {"description": "Peer denied; no body"}, "503": {"description": "Inventory unavailable; no body"}}
+      }
+    },
+    "/api/v1/openapi.json": {
+      "get": {
+        "operationId": "getOpenAPI",
+        "summary": "Read this implemented API contract",
+        "responses": {
+          "200": {"description": "OpenAPI 3.1 document", "content": {"application/json": {"schema": {"type": "object", "required": ["openapi", "info", "paths", "components"], "properties": {"openapi": {"type": "string"}, "info": {"type": "object"}, "paths": {"type": "object"}, "components": {"type": "object"}}}}}},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "405": {"$ref": "#/components/responses/MethodNotAllowed"}
+        }
+      },
+      "head": {
+        "operationId": "headOpenAPI",
+        "summary": "Check authorized contract availability without returning a body",
+        "responses": {"200": {"description": "Contract is available; no body"}, "403": {"description": "Peer denied; no body"}}
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "LinksResponse": {
+        "type": "object", "additionalProperties": false, "required": ["items"],
+        "properties": {"items": {"type": "array", "items": {"$ref": "#/components/schemas/LinkStatus"}}}
+      },
+      "LinkStatus": {
+        "type": "object", "additionalProperties": false,
+        "required": ["ifIndex", "name", "linkType", "mtu", "operState", "flags", "addresses"],
+        "properties": {
+          "ifIndex": {"type": "integer", "minimum": 1, "description": "Observed kernel index; not persistent identity"},
+          "name": {"type": "string", "minLength": 1},
+          "linkType": {"type": "string", "minLength": 1},
+          "mtu": {"type": "integer", "minimum": 0},
+          "operState": {"type": "string", "minLength": 1, "description": "Observed tool state, including UNKNOWN where reported"},
+          "flags": {"type": "array", "items": {"type": "string"}},
+          "linkAddress": {"type": "string", "description": "Current link-layer address if supplied, not a permanent MAC promise"},
+          "addresses": {"type": "array", "items": {"$ref": "#/components/schemas/AddressStatus"}}
+        }
+      },
+      "AddressStatus": {
+        "type": "object", "additionalProperties": false, "required": ["family", "address", "prefixLength", "scope"],
+        "properties": {
+          "family": {"type": "string", "enum": ["ipv4", "ipv6"]},
+          "address": {"type": "string", "description": "Host IP address, not a network-masked prefix"},
+          "prefixLength": {"type": "integer", "minimum": 0, "maximum": 128},
+          "scope": {"type": "string", "minLength": 1}
+        },
+        "allOf": [
+          {"if": {"properties": {"family": {"const": "ipv4"}}}, "then": {"properties": {"address": {"format": "ipv4"}, "prefixLength": {"maximum": 32}}}},
+          {"if": {"properties": {"family": {"const": "ipv6"}}}, "then": {"properties": {"address": {"format": "ipv6"}}}}
+        ]
+      },
+      "ErrorDetail": {"type": "object", "additionalProperties": false, "required": ["path", "message"], "properties": {"path": {"type": "string"}, "message": {"type": "string"}}},
+      "ErrorEnvelope": {
+        "type": "object", "additionalProperties": false, "required": ["error"],
+        "properties": {"error": {"type": "object", "additionalProperties": false, "required": ["code", "message", "details"], "properties": {
+          "code": {"type": "string", "enum": ["FORBIDDEN", "NOT_FOUND", "METHOD_NOT_ALLOWED", "INVENTORY_UNAVAILABLE"]},
+          "message": {"type": "string"},
+          "details": {"type": "array", "description": "Empty for this read-only API", "items": {"$ref": "#/components/schemas/ErrorDetail"}}
+        }}}
+      }
+    },
+    "responses": {
+      "Forbidden": {"description": "Missing, unverified or non-root Unix peer; JSON error for GET, no body for HEAD", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+      "MethodNotAllowed": {"description": "Unsupported method; Allow: GET, HEAD", "headers": {"Allow": {"schema": {"type": "string", "const": "GET, HEAD"}}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+      "InventoryUnavailable": {"description": "Command, parsing, size or deadline failure; never a partial success", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}
+    }
+  }
+}
