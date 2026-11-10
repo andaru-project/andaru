@@ -155,13 +155,15 @@ SIGINT/SIGTERM cancels request contexts, gives HTTP shutdown up to 3 seconds, th
 ## Verification
 
 GitHub Actions runs the same native test job concurrently on `ubuntu-24.04`
-(amd64) and `ubuntu-24.04-arm` (arm64) for pull requests and pushes to `main`.
+(amd64) and `ubuntu-24.04-arm` (arm64) for pull requests targeting `main` and
+pushes to `main`.
 The workflow verifies the native architecture, runs `go vet`, ordinary and race
 suites without elevated privileges, then builds the CGO-disabled program and
 executes all three integration binaries as root. The engine fault test receives
 that built program through `ANDARU_TEST_BINARY`; no integration cases are skipped.
 Race tests retain native CGO support. Privileged tests run only on disposable
-GitHub-hosted VMs, with the existing private mount-namespace isolation.
+GitHub-hosted VMs. ENOSPC phases use private mount namespaces; other cases use
+disposable temporary directories.
 
 The runner labels and passwordless `sudo` are documented in
 [GitHub's hosted-runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
