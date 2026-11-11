@@ -172,3 +172,19 @@ func TestReadIfupdownAutoIsNotHotplug(t *testing.T) {
 		t.Fatalf("got %+v, problems %+v", got, problems)
 	}
 }
+
+// Without an inet6 stanza ifupdown leaves router advertisements on, so the kernel takes a SLAAC address;
+// proposing "none" would silently drop it (found on lab VM 117).
+func TestReadIfupdownKeepsKernelSLAAC(t *testing.T) {
+	links := ifupdownLinks()
+	links[0].Addresses = append(links[0].Addresses, AddressStatus{Family: "ipv6", Address: "2a02:a466:79a7:beef:be24:11ff:fe38:7137", PrefixLength: 64, Scope: "global"})
+	got, problems := ReadIfupdown(fixture.Root(t, "ifupdown-static"), links, nil)
+	if len(problems) != 0 || len(got) != 1 || got[0].IPv6.Mode != "slaac" {
+		t.Fatalf("got %+v, problems %+v", got, problems)
+	}
+	// A DHCPv6 /128 alone is no SLAAC address.
+	links[0].Addresses[1].PrefixLength = 128
+	if got, _ := ReadIfupdown(fixture.Root(t, "ifupdown-static"), links, nil); got[0].IPv6.Mode != "none" {
+		t.Fatalf("a /128 read as SLAAC: %+v", got[0].IPv6)
+	}
+}

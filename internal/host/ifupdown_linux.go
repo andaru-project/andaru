@@ -167,6 +167,7 @@ func ReadIfupdown(root string, links []LinkStatus, defaultRoutes []string) ([]If
 
 	byName := map[string]*IfupdownInterface{}
 	var names []string
+	inet6 := map[string]bool{}
 	for _, s := range f.stanzas {
 		if s.name == "lo" {
 			if s.family != "inet" || s.method != "loopback" || len(s.options) > 0 {
@@ -194,6 +195,7 @@ func ReadIfupdown(root string, links []LinkStatus, defaultRoutes []string) ([]If
 			byName[s.name] = i
 			names = append(names, s.name)
 		}
+		inet6[s.name] = inet6[s.name] || s.family == "inet6"
 		allowed := []string{"address", "gateway"}
 		switch s.family + " " + s.method {
 		case "inet dhcp":
@@ -235,6 +237,13 @@ func ReadIfupdown(root string, links []LinkStatus, defaultRoutes []string) ([]If
 	for _, name := range names {
 		i := byName[name]
 		i.Hotplug = f.hotplug[name] && !f.auto[name]
+		// Without an inet6 stanza ifupdown leaves router advertisements on, so the kernel may hold a SLAAC address.
+		at := slices.IndexFunc(links, func(l LinkStatus) bool { return l.Name == name })
+		if !inet6[name] && slices.ContainsFunc(links[at].Addresses, func(a AddressStatus) bool {
+			return a.Family == "ipv6" && a.Scope == "global" && a.PrefixLength != 128
+		}) {
+			i.IPv6.Mode = "slaac"
+		}
 		if i.DHCP {
 			f.identity(i)
 		}
