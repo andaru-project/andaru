@@ -411,3 +411,5 @@ On 2026-11-11 the CGO-disabled amd64 build of code commit `30d9c88` (SHA-256 `56
 Also observed: `systemd-run --wait` returns the command's exit status, and the timer's unit and the on-demand rollback unit coexist.
 
 Not run on the lab: an apply without `--takeover` while netplan is still in place (unit-tested as `TAKEOVER_MISMATCH`), a host with `/var` on its own filesystem, and any baseline other than this cloud image. No PPPoE session and no forwarding were involved. The VM is left taken over, on a confirmed generation, with the engine and boot unit enabled.
+
+After the adversarial review, code commit `da58646` (SHA-256 `ba401579ed371c5dccddf23dd8011c18c8a93b2dfb4f024f51eb7c495bea5a3b`) replaced that binary. On the VM an apply went live with its timer's service carrying `Restart=on-failure` and `RestartSec=10s`, and was confirmed from a new session; the reboot and rollback steps above were not repeated with this build.
