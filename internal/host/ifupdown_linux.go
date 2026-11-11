@@ -214,6 +214,9 @@ func ReadIfupdown(root string, links []LinkStatus, defaultRoutes []string) ([]If
 		case "inet dhcp":
 			i.IPv4.Mode, i.DHCP, allowed = "dhcp", true, []string{"hostname"}
 			if h := s.options["hostname"]; h != "" {
+				if !validHostname(h) {
+					f.problem(s.file, "hostname", "networkd can only send a DNS host name, not "+strconv.Quote(h)+".")
+				}
 				i.Identity = &DHCPIdentity{Hostname: h}
 			}
 		case "inet static", "inet6 static":
@@ -296,7 +299,9 @@ func (f *ifupdownFiles) identity(i *IfupdownInterface) {
 				duid = true
 			case "hostname":
 				// With a name dhcpcd sends it instead of the machine's; the stanza's own option still wins.
-				if len(words) > 1 && (i.Identity == nil || i.Identity.Hostname == "") {
+				if len(words) > 1 && !validHostname(strings.Join(words[1:], " ")) {
+					f.problem(dhcpcdConf, "hostname", "networkd can only send a DNS host name, not "+strconv.Quote(strings.Join(words[1:], " "))+".")
+				} else if len(words) > 1 && (i.Identity == nil || i.Identity.Hostname == "") {
 					if i.Identity == nil {
 						i.Identity = &DHCPIdentity{}
 					}
@@ -323,6 +328,21 @@ func (f *ifupdownFiles) identity(i *IfupdownInterface) {
 		}
 		i.Identity.DUID = raw
 	}
+}
+
+// hostnameLabel is one label of a DNS host name (RFC 1123), the only form networkd's Hostname= takes.
+var hostnameLabel = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
+
+func validHostname(name string) bool {
+	if len(name) > 253 {
+		return false
+	}
+	for label := range strings.SplitSeq(strings.TrimSuffix(name, "."), ".") {
+		if !hostnameLabel.MatchString(label) {
+			return false
+		}
+	}
+	return true
 }
 
 // DhcpcdRunning reports whether dhcpcd's pid file for nic names a live dhcpcd.
