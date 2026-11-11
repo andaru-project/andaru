@@ -56,13 +56,17 @@ func TestReadNetplanProblems(t *testing.T) {
 	}{
 		"glob match binds two": {nil, append(labLink(v4), LinkStatus{IfIndex: 3, Name: "eth1", LinkType: "ether", LinkAddress: "02:00:00:00:00:02", PermanentAddress: "02:00:00:00:00:02"}),
 			append(labBind, Managed{Name: "eth1", NetworkFile: labBind[0].NetworkFile}), "[Match]"},
-		"changed MAC": {nil, []LinkStatus{{IfIndex: 2, Name: "eth0", LinkAddress: "02:00:00:00:00:09", PermanentAddress: labMAC}}, labBind, "MACAddress"},
-		"DHCP and static IPv4": {map[string]string{"10-netplan-eth0.network": strings.Replace(string(base), "[Network]\n", "[Network]\nDHCP=ipv4\n", 1)}, labLink(v4), labBind, "DHCP"},
-		"extra route": {map[string]string{"10-netplan-eth0.network": string(base) + "\n[Route]\nDestination=192.0.2.0/24\nGateway=10.0.0.2\n"}, labLink(v4), labBind, "[Route]"},
-		"unknown key": {map[string]string{"10-netplan-eth0.network": strings.Replace(string(base), "[Network]\n", "[Network]\nVLAN=v6\n", 1)}, labLink(v4), labBind, "VLAN"},
-		"routing domain": {map[string]string{"10-netplan-eth0.network": strings.Replace(string(base), "Domains=lab.example", "Domains=~corp", 1)}, labLink(v4), labBind, "Domains"},
-		"netdev": {map[string]string{"10-netplan-br0.netdev": "[NetDev]\nName=br0\nKind=bridge\n"}, labLink(v4), labBind, ".netdev"},
-		"configures nothing": {nil, labLink(v4), nil, "configures no interface"},
+		"changed MAC":              {nil, []LinkStatus{{IfIndex: 2, Name: "eth0", LinkAddress: "02:00:00:00:00:09", PermanentAddress: labMAC}}, labBind, "MACAddress"},
+		"DHCP and static IPv4":     {map[string]string{"10-netplan-eth0.network": strings.Replace(string(base), "[Network]\n", "[Network]\nDHCP=ipv4\n", 1)}, labLink(v4), labBind, "DHCP"},
+		"extra route":              {map[string]string{"10-netplan-eth0.network": string(base) + "\n[Route]\nDestination=192.0.2.0/24\nGateway=10.0.0.2\n"}, labLink(v4), labBind, "[Route]"},
+		"unknown key":              {map[string]string{"10-netplan-eth0.network": strings.Replace(string(base), "[Network]\n", "[Network]\nVLAN=v6\n", 1)}, labLink(v4), labBind, "VLAN"},
+		"routing domain":           {map[string]string{"10-netplan-eth0.network": strings.Replace(string(base), "Domains=lab.example", "Domains=~corp", 1)}, labLink(v4), labBind, "Domains"},
+		"netdev":                   {map[string]string{"10-netplan-br0.netdev": "[NetDev]\nName=br0\nKind=bridge\n"}, labLink(v4), labBind, ".netdev"},
+		"configures nothing":       {nil, labLink(v4), nil, "configures no interface"},
+		"link setting":             {map[string]string{"10-netplan-eth0.link": "[Match]\nPermanentMACAddress=" + labMAC + "\n\n[Link]\nName=eth0\nWakeOnLan=magic\n"}, labLink(v4), labBind, "WakeOnLan"},
+		"default route under DHCP": {map[string]string{"10-netplan-eth0.network": strings.Replace(string(base), "Address=10.0.1.19/16\n", "DHCP=ipv4\n", 1)}, labLink(v4), labBind, "Gateway"},
+		"custom DHCP metric":       {map[string]string{"10-netplan-eth0.network": string(base) + "\n[DHCP]\nRouteMetric=500\n"}, labLink(v4), labBind, "RouteMetric"},
+		"address without prefix":   {map[string]string{"10-netplan-eth0.network": strings.Replace(string(base), "Address=10.0.1.19/16", "Address=10.0.1.19", 1)}, labLink(v4), labBind, "Address"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
@@ -104,5 +108,18 @@ func TestReadNetplanAcrossFiles(t *testing.T) {
 		if !slices.ContainsFunc(problems, func(p NetplanProblem) bool { return strings.Contains(p.Message, want) }) {
 			t.Fatalf("problems = %+v, want one about %s", problems, want)
 		}
+	}
+}
+
+func TestReadNetplanAcceptsItsDefaults(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "run/systemd/network")
+	_ = os.MkdirAll(dir, 0o755)
+	body := "[Match]\nPermanentMACAddress=" + labMAC + "\nName=eth0\n\n[Network]\nDHCP=yes\nLinkLocalAddressing=ipv6\n\n[DHCPv4]\nRouteMetric=100\nUseMTU=true\n"
+	_ = os.WriteFile(filepath.Join(dir, "10-netplan-eth0.network"), []byte(body), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "10-netplan-eth0.link"), []byte("[Match]\nPermanentMACAddress="+labMAC+"\n\n[Link]\nName=eth0\nWakeOnLan=off\nMTUBytes=9000\n"), 0o644)
+	got, problems := ReadNetplan(root, labLink(v4), labBind, "eth0")
+	if len(problems) != 0 || len(got) != 1 || got[0].MTU != 9000 || got[0].IPv4.Mode != "dhcp" || got[0].IPv6.Mode != "dhcp6" {
+		t.Fatalf("got %+v, problems %+v", got, problems)
 	}
 }

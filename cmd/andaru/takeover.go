@@ -148,11 +148,19 @@ func commit(ctx context.Context, c takeoverClient, p proposal, ops []config.Oper
 		fmt.Fprintln(out, "The configuration was saved meanwhile from another session; nothing changed. Run andaru ctl takeover again.")
 		return 1
 	}
+	var refused *apiError
 	if err != nil {
 		fmt.Fprintln(out, err)
+		if !errors.As(err, &refused) {
+			fmt.Fprintln(out, "The save may have happened anyway; check with: andaru ctl versions list")
+		}
 		return 1
 	}
 	reply, err := c.Apply(ctx, saved, timeout)
+	if err != nil && !errors.As(err, &refused) {
+		fmt.Fprintf(out, "The configuration is saved as version %s; whether the apply started is unknown: %s\nCheck with: andaru ctl applies list\n", saved, printable(err.Error()))
+		return 1
+	}
 	if err != nil || reply.State != "awaiting_confirmation" {
 		reason := reply.Reason
 		if err != nil {
@@ -215,7 +223,8 @@ func runTakeover(ctx context.Context, socket string, args []string, stdin io.Rea
 		fmt.Fprintln(stderr, "usage: andaru ctl takeover [--accept-detected] [--confirm-timeout S]")
 		return 2
 	}
-	if !*accept && !isTerminal(stdin, stdout) {
+	// huh would fall back to line prompts on a dumb terminal, where end of input reads as Back forever.
+	if !*accept && (!isTerminal(stdin, stdout) || os.Getenv("TERM") == "dumb") {
 		fmt.Fprintln(stderr, "andaru ctl takeover asks questions and needs a terminal; use --accept-detected to take over with the detected settings.")
 		return 2
 	}

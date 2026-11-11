@@ -140,6 +140,11 @@ func TestProposalStates(t *testing.T) {
 	if got := b.proposal(t); got.State != "saved-not-applied" || len(got.Operations) != 0 {
 		t.Fatalf("proposal = %+v", got)
 	}
+	// A saved zone alone is a hand-made object too; the proposal's zones could collide with it.
+	b.head = `{"schemaVersion":1,"links":[],"segments":[],"zones":[{"id":"zon_00000001-0000-4000-8000-000000000001","name":"wan"}]}`
+	if got := b.proposal(t); got.State != "saved-not-applied" || len(got.Operations) != 0 {
+		t.Fatalf("zones only: proposal = %+v", got)
+	}
 
 	for _, pointers := range []string{
 		`{"confirmed":1,"lastKnownGood":null,"pending":null,"live":1,"takeover":true}`,

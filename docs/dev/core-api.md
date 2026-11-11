@@ -476,3 +476,18 @@ On 2026-11-11 the CGO-disabled amd64 build of code commit `40affb6` (SHA-256 `aa
 | Same takeover confirmed from a new session, then rebooted | Same address on `ens18`, servers as declared, a name resolved, `/etc/netplan` empty, boot in 6.0 s. |
 
 Not run on the lab: a host where systemd-resolved does not manage `/etc/resolv.conf` (unit-tested: the check is skipped and the preview warns). The VM was reset to `base-netplan-static-20261111` afterwards. On this ZFS-backed VM only the most recent snapshot can be rolled back to, so the older DHCP base `base-netplan-20261111` is now reachable only by cloning from it.
+
+### Takeover assistant Debian lab qualification
+
+On 2026-11-11 CGO-disabled amd64 builds of this branch were installed on VM 114 at snapshot `base-netplan-static-20261111` (static 10.0.1.19/16, gateway, two DNS servers, a search domain), reset to that snapshot between runs. A 5-per-second ping ran during each takeover.
+
+| Step | Result |
+| --- | --- |
+| `andaru ctl takeover` over `ssh -t` (80×24), every detected value accepted, **Apply** | 0 pings lost. Review showed the exact `.network` file; confirmed from a new SSH session. After a reboot: same address on `ens18`, the declared DNS servers, a name resolved, `/etc/netplan` empty. |
+| Same, **Quit** at review | Exit 1, "Nothing was changed"; no save, no apply. |
+| On the serial console (`ttyS0`, which reports a 0×0 size, `TERM=vt100`), **Apply**, not confirmed | 0 pings lost; the timer rolled back after 120 seconds; the next run reported `saved-not-applied` and changed nothing. |
+| A second session saved a zone while the assistant waited at review, then **Apply** | "saved meanwhile from another session"; exit 1, nothing applied, the other session's save kept. |
+| Proxmox cloud-init switched to DHCP (netplan `dhcp4`/`dhcp6`), `andaru ctl takeover --accept-detected` | 0 pings lost; IPv4 DHCP and DHCPv6 rendered with the offered DNS; confirmed and rebooted: same addresses on `ens18`, a name resolved. |
+| The final build of the branch (SHA-256 `be0c457e475fc6dc52b62f27b6e5cc77e4e1130d70cd08170cdcbb7653c91218`), `--accept-detected --confirm-timeout 30` on the static base, not confirmed | Applied; the timer rolled it back and `live` returned to `null`. |
+
+Two defects found on the lab were fixed with tests before this record: the review counted the preview's `FOREIGN_CONFIGURATION` findings for the netplan files a takeover replaces, so **Apply** was never offered, and on the serial console's 0×0 size the forms had no room to draw.

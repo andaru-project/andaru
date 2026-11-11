@@ -303,3 +303,17 @@ func TestClosingTheTerminalWritesNothing(t *testing.T) {
 		t.Fatal("something was saved after the terminal closed")
 	}
 }
+
+// huh turns a dumb terminal into line prompts whose EOF reads as Back, which would loop forever.
+func TestTakeoverRefusesADumbTerminal(t *testing.T) {
+	_, tty, err := pty.Open()
+	if err != nil {
+		t.Skip("no pseudo-terminal:", err)
+	}
+	defer tty.Close()
+	t.Setenv("TERM", "dumb")
+	var diag bytes.Buffer
+	if code := runTakeover(context.Background(), filepath.Join(t.TempDir(), "absent.sock"), nil, tty, tty, &diag); code != 2 || !strings.Contains(diag.String(), "--accept-detected") {
+		t.Fatalf("exit %d: %s", code, diag.String())
+	}
+}

@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -146,6 +148,7 @@ func TestCommit(t *testing.T) {
 		"draft refused":          {fakeClient{draft: draft{ApplyFindings: []finding{{Severity: "error", Code: "WOULD_UNCONFIGURE", Path: "eth0", Message: "x"}}}}, 1, []string{"applies", "draft"}, "WOULD_UNCONFIGURE"},
 		"head moved":             {fakeClient{saveErr: &apiError{Status: 412, Code: "PRECONDITION_FAILED"}}, 1, []string{"applies", "draft", "save"}, "saved meanwhile"},
 		"apply refused":          {fakeClient{apply: live, applyErr: &apiError{Status: 422, Code: "APPLY_REFUSED"}}, 1, []string{"applies", "draft", "save", "apply 10"}, "andaru ctl apply network --saved-version 10 --takeover"},
+		"apply unreachable":      {fakeClient{applyErr: errors.New("could not reach the local engine")}, 1, []string{"applies", "draft", "save", "apply 10"}, "whether the apply started is unknown"},
 		"activation fails":       {fakeClient{apply: applyReply{ID: "1", State: "failed", Reason: "eth0 lost its IPv4 address", Files: []json.RawMessage{}}}, 1, []string{"applies", "draft", "save", "apply 10"}, "saved as version 10 but not live"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -205,5 +208,57 @@ func TestAcceptDetectedRefusesWithoutWriting(t *testing.T) {
 	}
 	if !errors.Is(&apiError{Status: 412}, errHeadMoved) {
 		t.Fatal("a 412 must read as the head having moved")
+	}
+}
+
+// The real client against a socket that decodes requests as the engine does.
+func TestHTTPTakeoverClientSpeaksTheEngineContract(t *testing.T) {
+	p := labProposal(t)
+	var saves int
+	socket := replySocket(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		switch r.Method + " " + r.URL.Path {
+		case "POST /api/v1/config/changes":
+			changes, err := config.DecodeChanges(body)
+			if err != nil || changes.ExpectedSavedVersion == nil || *changes.ExpectedSavedVersion != "9" || len(changes.Operations) != len(p.Operations) {
+				t.Errorf("save body %s: %v", body, err)
+			}
+			if saves++; saves == 1 {
+				w.WriteHeader(http.StatusPreconditionFailed)
+				io.WriteString(w, `{"error":{"code":"PRECONDITION_FAILED","message":"stale","details":[]}}`)
+				return
+			}
+			io.WriteString(w, `{"savedVersion":"10"}`)
+		case "POST /api/v1/applies":
+			var apply struct {
+				SavedVersion          string `json:"savedVersion"`
+				Takeover              bool   `json:"takeover"`
+				ConfirmTimeoutSeconds int    `json:"confirmTimeoutSeconds"`
+			}
+			d := json.NewDecoder(bytes.NewReader(body))
+			d.DisallowUnknownFields()
+			if err := d.Decode(&apply); err != nil || apply.SavedVersion != "10" || !apply.Takeover || apply.ConfirmTimeoutSeconds != 90 {
+				t.Errorf("apply body %s: %v", body, err)
+			}
+			io.WriteString(w, `{"id":"1","state":"awaiting_confirmation","deadline":"d","files":[]}`)
+		case "GET /api/v1/applies":
+			io.WriteString(w, `{"pointers":{"confirmed":null,"lastKnownGood":null,"pending":"4","live":"4"},"items":[]}`)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	c := &httpTakeoverClient{socket: socket}
+	ctx := context.Background()
+	if _, err := c.Save(ctx, p.Operations, p.SavedVersion); !errors.Is(err, errHeadMoved) {
+		t.Fatalf("a 412 reads as %v", err)
+	}
+	if v, err := c.Save(ctx, p.Operations, p.SavedVersion); err != nil || v != "10" {
+		t.Fatalf("save = %q, %v", v, err)
+	}
+	if reply, err := c.Apply(ctx, "10", 90); err != nil || reply.State != "awaiting_confirmation" {
+		t.Fatalf("apply = %+v, %v", reply, err)
+	}
+	if pending, err := c.Applies(ctx); err != nil || pending != "4" {
+		t.Fatalf("pending = %q, %v", pending, err)
 	}
 }

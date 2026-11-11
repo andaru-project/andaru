@@ -139,7 +139,9 @@ func (h *takeoverHandler) serveProposal(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var saved struct {
-		Links []json.RawMessage `json:"links"`
+		Links    []json.RawMessage `json:"links"`
+		Segments []json.RawMessage `json:"segments"`
+		Zones    []json.RawMessage `json:"zones"`
 	}
 	_ = json.Unmarshal(input.Value, &saved)
 	unsupported := func(path, message string) {
@@ -149,7 +151,7 @@ func (h *takeoverHandler) serveProposal(w http.ResponseWriter, r *http.Request) 
 	switch {
 	case pointers.Takeover || pointers.Pending != nil || pointers.Confirmed != nil:
 		view.State = "taken-over"
-	case len(saved.Links) > 0:
+	case len(saved.Links)+len(saved.Segments)+len(saved.Zones) > 0:
 		view.State = "saved-not-applied"
 	}
 	if view.State != "" {

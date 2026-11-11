@@ -2,6 +2,7 @@ package host
 
 import (
 	"bufio"
+	"cmp"
 	"fmt"
 	"net/netip"
 	"os"
@@ -32,14 +33,28 @@ type NetplanProblem struct{ File, Key, Message string }
 
 const netplanRuntime = "/run/systemd/network/"
 
-// Keys netplan writes that the declaration covers; anything else is a problem rather than silently dropped.
-var netplanKeys = map[string][]string{
-	"Match":   {"PermanentMACAddress", "MACAddress", "Name"},
-	"Link":    {"MTUBytes", "Name", "WakeOnLan"},
-	"Network": {"DHCP", "Address", "Gateway", "DNS", "Domains", "LinkLocalAddressing", "IPv6AcceptRA"},
-	"Route":   {"Destination", "Gateway"},
+// Keys netplan writes that the declaration covers, with the only values accepted where a value matters;
+// anything else is a problem rather than silently dropped.
+var netplanKeys = map[string]map[string][]string{
+	"Match":   {"PermanentMACAddress": nil, "MACAddress": nil, "Name": nil},
+	"Link":    {"MTUBytes": nil, "Name": nil, "WakeOnLan": {"off"}},
+	"Network": {"DHCP": nil, "Address": nil, "Gateway": nil, "DNS": nil, "Domains": nil, "LinkLocalAddressing": nil, "IPv6AcceptRA": nil},
+	"Route":   {"Destination": nil, "Gateway": nil},
 	// netplan's defaults for DHCP links; they change nothing Andaru renders differently.
-	"DHCP": {"RouteMetric", "UseMTU"}, "DHCPv4": {"RouteMetric", "UseMTU"},
+	"DHCP": {"RouteMetric": {"100"}, "UseMTU": {"true"}}, "DHCPv4": {"RouteMetric": {"100"}, "UseMTU": {"true"}},
+}
+
+// checkKeys reports every key, or value, of u that netplanKeys does not cover.
+func checkKeys(u unit, problem func(key, message string)) {
+	for section, keys := range u {
+		name, _, _ := strings.Cut(section, "#")
+		for key, values := range keys {
+			allowed, ok := netplanKeys[name][key]
+			if !ok || (allowed != nil && slices.ContainsFunc(values, func(v string) bool { return !slices.Contains(allowed, v) })) {
+				problem("["+name+"] "+key, "This setting cannot be expressed in Andaru's configuration yet.")
+			}
+		}
+	}
 }
 
 type unit map[string]map[string][]string
@@ -60,7 +75,7 @@ func readUnit(path string) (unit, error) {
 			section = line[1 : len(line)-1]
 			if section == "Route" {
 				// Each [Route] is its own route; keep them apart.
-				section = "Route" + strconv.Itoa(len(u))
+				section = "Route#" + strconv.Itoa(len(u))
 			}
 			if u[section] == nil {
 				u[section] = map[string][]string{}
@@ -103,6 +118,7 @@ func ReadNetplan(root string, links []LinkStatus, managed []Managed, defaultRout
 				problem("", err.Error())
 				continue
 			}
+			checkKeys(u, problem)
 			if n, err := strconv.Atoi(first(u["Link"]["MTUBytes"])); err == nil {
 				mtus[strings.ToLower(first(u["Match"]["PermanentMACAddress"]))] = n
 			}
@@ -119,14 +135,7 @@ func ReadNetplan(root string, links []LinkStatus, managed []Managed, defaultRout
 			problem("", err.Error())
 			continue
 		}
-		for section, keys := range u {
-			name := strings.TrimRightFunc(section, func(r rune) bool { return r >= '0' && r <= '9' })
-			for key := range keys {
-				if !slices.Contains(netplanKeys[name], key) {
-					problem("["+name+"] "+key, "This setting cannot be expressed in Andaru's configuration yet.")
-				}
-			}
-		}
+		checkKeys(u, problem)
 		var bound []Managed
 		for _, m := range managed {
 			if m.NetworkFile == file {
@@ -159,9 +168,12 @@ func ReadNetplan(root string, links []LinkStatus, managed []Managed, defaultRout
 		dhcp := first(network["DHCP"])
 		var v4, v6 []string
 		for _, a := range network["Address"] {
-			if p, err := netip.ParsePrefix(a); err == nil && p.Addr().Is4() {
+			switch p, err := netip.ParsePrefix(a); {
+			case err != nil:
+				problem("Address", "An address without a prefix length cannot be expressed: "+a)
+			case p.Addr().Is4():
 				v4 = append(v4, a)
-			} else {
+			default:
 				v6 = append(v6, a)
 			}
 		}
@@ -195,6 +207,9 @@ func ReadNetplan(root string, links []LinkStatus, managed []Managed, defaultRout
 		default:
 			n.IPv4.Mode = "none"
 		}
+		if n.IPv4.Mode != "static" && gateway(false) != "" {
+			problem("Gateway", "An IPv4 gateway without static IPv4 addresses cannot be expressed: "+gateway(false))
+		}
 		ra := first(network["IPv6AcceptRA"])
 		liveSLAAC := slices.ContainsFunc(link.Addresses, func(a AddressStatus) bool {
 			return a.Family == "ipv6" && a.Scope == "global" && a.PrefixLength != 128
@@ -211,6 +226,9 @@ func ReadNetplan(root string, links []LinkStatus, managed []Managed, defaultRout
 			n.IPv6.Mode = "slaac"
 		default:
 			n.IPv6.Mode = "none"
+		}
+		if n.IPv6.Mode != "static" && gateway(true) != "" {
+			problem("Gateway", "An IPv6 gateway without static IPv6 addresses cannot be expressed: "+gateway(true))
 		}
 		n.DNS = network["DNS"]
 		for _, d := range network["Domains"] {
@@ -238,5 +256,9 @@ func ReadNetplan(root string, links []LinkStatus, managed []Managed, defaultRout
 	if len(dns) > 1 {
 		problems = append(problems, NetplanProblem{netplanRuntime, "DNS", "More than one interface sets DNS servers (" + strings.Join(dns, ", ") + "); Andaru takes the host's DNS servers from one."})
 	}
+	// Map iteration found them; report them in a stable order.
+	slices.SortFunc(problems, func(a, b NetplanProblem) int {
+		return cmp.Or(strings.Compare(a.File, b.File), strings.Compare(a.Key, b.Key), strings.Compare(a.Message, b.Message))
+	})
 	return found, problems
 }
