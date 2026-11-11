@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-//go:embed static dhcp
+//go:embed static dhcp ifupdown-dhcp ifupdown-static
 var files embed.FS
 
 // Root copies the named fixture into a fresh directory and returns it, for use as a host root.
