@@ -69,3 +69,43 @@ func TestParseManaged(t *testing.T) {
 		t.Fatal("a reply that is not networkctl's object was accepted")
 	}
 }
+
+func TestReadBaseline(t *testing.T) {
+	root := t.TempDir()
+	for path, body := range map[string]string{
+		"usr/sbin/netplan":                            "",
+		"lib/netplan/PLACEHOLDER":                     "",
+		"usr/lib/netplan/PLACEHOLDER":                 "",
+		"run/netplan/x.yaml":                          "network: {}\n",
+		"run/systemd/network/10-netplan-eth0.network": "[Network]\nDHCP=ipv4\n",
+		"run/systemd/network/10-netplan-eth1.network": "[Network]\nAddress=192.0.2.2/24\nDNS=1.1.1.1\n",
+		"run/systemd/network/10-netplan-eth2.network": "[Network]\nDomains=example.org\n",
+		"run/systemd/network/50-andaru-eth3.network":  "[Network]\nDNS=9.9.9.9\n",
+	} {
+		full := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := readBaseline(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Netplan || got.Ifupdown ||
+		!slices.Equal(got.StrayYAML, []string{"/run/netplan/x.yaml"}) ||
+		!slices.Equal(got.StaticDNS, []string{"/run/systemd/network/10-netplan-eth1.network", "/run/systemd/network/10-netplan-eth2.network"}) {
+		t.Fatalf("baseline = %+v", got)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "sbin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "sbin/ifup"), nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := readBaseline(root); !got.Ifupdown {
+		t.Fatal("ifupdown not seen")
+	}
+}

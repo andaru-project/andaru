@@ -102,3 +102,49 @@ func ReadManaged(ctx context.Context) ([]Managed, error) {
 	}
 	return ParseManaged(data)
 }
+
+// Baseline describes who configured the network before Andaru, as far as a takeover must know.
+type Baseline struct {
+	Netplan  bool
+	Ifupdown bool
+	// StrayYAML is netplan configuration outside /etc/netplan, which a takeover would not move away.
+	StrayYAML []string
+	// StaticDNS lists netplan-generated .network files that set DNS= or Domains=, which Andaru cannot reproduce yet.
+	StaticDNS []string
+}
+
+// ReadBaseline inspects the host without changing it.
+func ReadBaseline() (Baseline, error) { return readBaseline("") }
+
+func readBaseline(root string) (Baseline, error) {
+	exists := func(path string) bool { _, err := os.Stat(root + path); return err == nil }
+	b := Baseline{Netplan: exists("/usr/sbin/netplan"), Ifupdown: exists("/sbin/ifup"), StrayYAML: []string{}, StaticDNS: []string{}}
+	for _, dir := range []string{"/run/netplan", "/lib/netplan", "/usr/lib/netplan"} {
+		found, err := filepath.Glob(root + dir + "/*.yaml")
+		if err != nil {
+			return Baseline{}, err
+		}
+		for _, path := range found {
+			b.StrayYAML = append(b.StrayYAML, strings.TrimPrefix(path, root))
+		}
+	}
+	generated, err := filepath.Glob(root + "/run/systemd/network/10-netplan-*.network")
+	if err != nil {
+		return Baseline{}, err
+	}
+	for _, path := range generated {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return Baseline{}, fmt.Errorf("read baseline network file: %w", err)
+		}
+		for line := range strings.SplitSeq(string(data), "\n") {
+			if strings.HasPrefix(line, "DNS=") || strings.HasPrefix(line, "Domains=") {
+				b.StaticDNS = append(b.StaticDNS, strings.TrimPrefix(path, root))
+				break
+			}
+		}
+	}
+	slices.Sort(b.StrayYAML)
+	slices.Sort(b.StaticDNS)
+	return b, nil
+}
