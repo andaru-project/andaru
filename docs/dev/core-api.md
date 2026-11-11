@@ -518,3 +518,21 @@ On 2026-11-11 CGO-disabled amd64 builds of this branch were installed on VM 114 
 | The final build of the branch (SHA-256 `be0c457e475fc6dc52b62f27b6e5cc77e4e1130d70cd08170cdcbb7653c91218`), `--accept-detected --confirm-timeout 30` on the static base, not confirmed | Applied; the timer rolled it back and `live` returned to `null`. |
 
 Two defects found on the lab were fixed with tests before this record: the review counted the preview's `FOREIGN_CONFIGURATION` findings for the netplan files a takeover replaces, so **Apply** was never offered, and on the serial console's 0×0 size the forms had no room to draw.
+
+### ifupdown takeover Debian lab qualification
+
+On 2026-11-11 CGO-disabled amd64 builds of this branch were installed on VM 117: Debian 13 converted to the installer's layout (ifupdown 0.8.44, dhcpcd 10.1, `allow-hotplug ens18`, `inet dhcp`, `inet6 auto`). A 5-per-second ping ran from another host during each takeover. The DHCPv6 address is `2a02:a466:79a7:beef::11e3/128`.
+
+| Step | Result |
+| --- | --- |
+| Snapshot `base-ifupdown-dhcp-20261111`, `andaru ctl takeover --accept-detected` | Refused with `RESOLVED_NOT_IN_CHARGE` only. |
+| `apt install systemd-resolved` on a host where it was never installed, then a reboot; snapshotted while stopped as `base-ifupdown-resolved-20261112` | resolv.conf became resolved's stub and resolved got the DHCP-provided server and domain only after the reboot. |
+| `andaru ctl takeover` over `ssh -t` (80×24), every detected value accepted, not confirmed | The review showed the identity lines and both `TAKEOVER_LIMIT` warnings. 0 of 600 pings lost; same IPv4 lease, the DHCPv6 address back within seconds, names resolved. The timer handed back to ifupdown: networkd stopped, dhcpcd running, same IPv4 and DHCPv6 addresses. |
+| The same, applied with a 30-second timeout and pinged across the rollback | 1 of 578 pings lost at the hand-back (0.2 s). The probe without `KeepConfiguration=dynamic-on-stop` had lost IPv4 for 7.4 s. |
+| Applied, then rebooted before confirming | Came up on ifupdown with the same addresses; the generation reads `rolled_back` (`reboot`). |
+| From the resolved base, `andaru ctl takeover` on the serial console (`ttyS0`), confirmed from an SSH session, rebooted | Same IPv4 and DHCPv6 addresses on networkd, `networking.service` and `ifup@ens18.service` masked, names resolved, boot in 6.1 s. A later apply adding a VLAN with a static address was confirmed and kept `ens18`'s address. |
+| `systemd-networkd` masked, `--accept-detected` | Activation failed; the host was handed back to ifupdown (dhcpcd running, same addresses, no Andaru file) after a 2.8 s IPv4 gap, and the generation reads `failed`. |
+| The installer's static stanza (`10.0.1.13/16`, gateway `10.0.0.1`, no `inet6`), resolved installed afterwards; snapshotted as `base-ifupdown-static-20261112` | resolved has no servers on such a host. `--accept-detected` is refused with `DNS_REQUIRED` ("uses these now: none"). |
+| `andaru ctl takeover` on that host, "these servers" entered in the assistant, confirmed | Same address and default route, the entered servers and search domain in use, names resolved, 0 of 200 pings lost. The first run dropped the SLAAC address the kernel had taken without an `inet6` stanza; the reader now detects it as SLAAC and the rerun kept it. |
+
+The VM was left at `base-ifupdown-static-20261112`, its newest snapshot. On this ZFS-backed VM only the newest snapshot can be rolled back to, so the DHCP and resolved bases are now reachable only by cloning.
