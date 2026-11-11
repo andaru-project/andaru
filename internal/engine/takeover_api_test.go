@@ -305,6 +305,15 @@ func TestDraftShowsTakeoverLimits(t *testing.T) {
 	if len(limits) != 2 || !strings.Contains(strings.Join(limits, " "), "SLAAC") || !strings.Contains(strings.Join(limits, " "), "if-up.d") {
 		t.Fatalf("limits = %q", limits)
 	}
+	// The kernel's SLAAC address on a static host is EUI-64, as networkd's: nothing changes.
+	b := newDebianBench(t, "ifupdown-static")
+	b.addresses = append(b.addresses, host.AddressStatus{Family: "ipv6", Address: "2001:db8::be24:11ff:fe38:7137", PrefixLength: 64, Scope: "global"})
+	b.draftValue = strings.Replace(b.draftValue, `"ipv4":{"mode":"dhcp"}`, `"ipv4":{"mode":"static","addresses":["10.0.1.13/16"],"gateway":"10.0.0.1"}`, 1)
+	for _, f := range b.postDraft(t).Findings {
+		if f.Code == "TAKEOVER_LIMIT" && strings.Contains(f.Message, "SLAAC") {
+			t.Fatalf("SLAAC limit on a static host: %s", f.Message)
+		}
+	}
 }
 
 func TestIdentityComesFromTheCapturedBaseline(t *testing.T) {

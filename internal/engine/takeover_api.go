@@ -403,8 +403,9 @@ func ifupdownLimits(ifupdown []host.IfupdownInterface) []render.Finding {
 		return render.Finding{Severity: "warning", Code: "TAKEOVER_LIMIT", Message: message}
 	}
 	out := []render.Finding{limit("Scripts in /etc/network/if-up.d and if-down.d stop running once the takeover is confirmed.")}
-	if slices.ContainsFunc(ifupdown, func(i host.IfupdownInterface) bool { return i.IPv6.Mode == "slaac" }) {
-		out = append(out, limit("SLAAC IPv6 addresses change at the takeover, so a session on one is cut; DHCP and DHCPv6 addresses are kept."))
+	// dhcpcd derives private SLAAC addresses and networkd EUI-64 ones; the kernel's own SLAAC addresses do not change.
+	if slices.ContainsFunc(ifupdown, func(i host.IfupdownInterface) bool { return i.IPv6.Mode == "slaac" && i.DHCP }) {
+		out = append(out, limit("dhcpcd's SLAAC IPv6 addresses change at the takeover, so a session on one is cut; DHCP and DHCPv6 addresses are kept."))
 	}
 	return out
 }

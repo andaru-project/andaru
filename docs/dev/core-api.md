@@ -295,7 +295,7 @@ A host the Debian installer set up configures its network with ifupdown and dhcp
 - **DNS:** with DHCP or `inet6 auto` the host keeps the offered servers. On an all-static host declare `dns` on a segment (`DNS_REQUIRED` lists the servers in use now).
 - **Activation** stops dhcpcd without dropping its addresses, starts networkd and applies the files. **A rollback, or a failed activation, hands the interfaces back to ifupdown** through `ifup@<nic>.service` or `networking.service`, and is recorded only once their IPv4 addresses are back; until then the timer retries it.
 - **Confirming** enables `systemd-networkd`, disables `systemd-networkd-wait-online` and masks `networking.service` and `ifup@.service`. `/etc/network/interfaces` is left as it was and ifupdown stays installed. If no generation is usable at boot, boot removes the masks and starts ifupdown again.
-- **Limits:** SLAAC addresses change at the takeover (dhcpcd and networkd derive them differently), so an IPv6 session on one is cut; scripts in `if-up.d` and `if-down.d` stop running after confirmation; a rollback can cut IPv4 for several seconds while ifupdown asks for the lease again. The review shows these as `TAKEOVER_LIMIT` warnings.
+- **Limits:** SLAAC addresses dhcpcd made change at the takeover (dhcpcd derives private ones, networkd EUI-64 ones), so an IPv6 session on one is cut; the kernel's own SLAAC address on an interface without an `inet6` stanza is kept; scripts in `if-up.d` and `if-down.d` stop running after confirmation; a rollback can cut IPv4 for several seconds while ifupdown asks for the lease again. The review shows these as `TAKEOVER_LIMIT` warnings.
 
 To undo a confirmed ifupdown takeover by hand, from the console:
 
