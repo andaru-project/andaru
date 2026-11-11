@@ -775,6 +775,9 @@
         },
         "ipv6": {
           "$ref": "#/$defs/ipv6"
+        },
+        "dns": {
+          "$ref": "#/$defs/dns"
         }
       },
       "required": [
@@ -1226,6 +1229,33 @@
         "savedVersion",
         "value",
         "unusedSecrets"
+      ],
+      "additionalProperties": false
+    },
+    "dns": {
+      "type": "object",
+      "properties": {
+        "servers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "minItems": 1,
+          "maxItems": 8
+        },
+        "searchDomains": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 253
+          },
+          "maxItems": 8
+        }
+      },
+      "required": [
+        "servers"
       ],
       "additionalProperties": false
     }
