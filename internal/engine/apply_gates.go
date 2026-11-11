@@ -71,11 +71,15 @@ func applyFindings(in gateInput) []render.Finding {
 			if len(bound) > 0 && len(missing) == 0 {
 				continue
 			}
-			where := "the interface it configures"
-			if len(missing) > 0 {
-				where = strings.Join(missing, ", ")
+			switch {
+			case len(bound) > 1:
+				// Only one segment may declare DNS, so a file shared by several interfaces can never be satisfied.
+				baseline(path, "This file sets DNS servers or search domains for several interfaces ("+strings.Join(bound, ", ")+"), which cannot be taken over yet.")
+			case len(bound) == 0:
+				baseline(path, "This file sets DNS servers or search domains but configures no interface now; the host could lose its resolver.")
+			default:
+				baseline(path, `This file sets DNS servers or search domains. Declare "dns" on the segment of `+bound[0]+`; without it the host would lose its resolver.`)
 			}
-			baseline(path, `This file sets DNS servers. Declare "dns" on the segment of `+where+`; without it the host would lose its resolver.`)
 		}
 	}
 	for _, path := range in.Facts.ForeignFiles {

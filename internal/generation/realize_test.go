@@ -36,6 +36,7 @@ type fakeNetworkd struct {
 
 	dns     map[string][]string     // what resolved reports per interface
 	editDNS func([]string) []string // distorts that report
+	offered map[string][]string     // servers resolved has from DHCP, for links whose file declares none
 }
 
 func (f *fakeNetworkd) netFiles() map[string]string {
@@ -138,7 +139,7 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 	case command == "resolvectl dns":
 		out := "Global:\n"
 		for i, device := range slices.Sorted(maps.Keys(f.devices)) {
-			servers := f.dns[device]
+			servers := append(slices.Clone(f.dns[device]), f.offered[device]...)
 			if f.editDNS != nil && len(servers) > 0 {
 				servers = f.editDNS(slices.Clone(servers))
 			}
@@ -705,5 +706,18 @@ func TestDNSCheckSkipped(t *testing.T) {
 	}
 	if b.net.ran("resolvectl") != 0 {
 		t.Fatalf("resolved was asked about a generation that declares no DNS: %q", b.net.argv)
+	}
+}
+
+func TestDNSCheckIgnoresFilesThatDeclareNone(t *testing.T) {
+	b := newBench(t)
+	b.net.devices["eth1"] = true
+	b.live(one)
+	// eth1 keeps DHCP-offered servers; only the file that declares DNS is held to its list.
+	b.net.editDNS = nil
+	id := b.gen(false, map[string]string{"50-andaru-eth0.network": uplinkDNS, "50-andaru-eth1.network": "[Match]\nName=eth1\n\n[Network]\nDHCP=ipv4\n"})
+	b.net.offered = map[string][]string{"eth1": {"10.0.0.53"}}
+	if err := b.r.Activate(t.Context(), id); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -97,3 +97,17 @@ func TestDNSRoundTrip(t *testing.T) {
 		t.Fatalf("canonical = %s, %v", out, e)
 	}
 }
+
+// A batch may edit only the earlier of two declaring segments; the error must land on an object the batch touched.
+func TestSecondDNSDeclarerBlamesBoth(t *testing.T) {
+	d := fixtureMap(t)
+	setDNS(d, 0, []any{"192.0.2.53"})
+	setDNS(d, 1, []any{"192.0.2.54"})
+	_, e := decodeMap(t, d)
+	ve, _ := e.(validationError)
+	for _, path := range []string{"/segments/0/addressing/dns", "/segments/1/addressing/dns"} {
+		if !slices.Contains(ve, FieldError{Path: path, Message: "Only one segment may declare DNS servers."}) {
+			t.Fatalf("no error at %s: %+v", path, ve)
+		}
+	}
+}

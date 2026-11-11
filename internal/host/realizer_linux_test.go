@@ -34,7 +34,20 @@ func TestReadRealizerFacts(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(etc, "50-andaru-y.network"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got, err := readRealizerFacts(etc, run, filepath.Join(root, "pppd"), filepath.Join(root, "*", "pppoe.so"), filepath.Join(root, "ppp"))
+	// The real wiring: the fact must come from the host's own resolv.conf.
+	if err := os.MkdirAll(filepath.Join(root, "run/systemd/resolve"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "run/systemd/resolve/stub-resolv.conf"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../run/systemd/resolve/stub-resolv.conf", filepath.Join(etc, "resolv.conf")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readRealizerFacts(etc, run, filepath.Join(root, "pppd"), filepath.Join(root, "*", "pppoe.so"), filepath.Join(root, "ppp"), root)
+	if !got.ResolvedInCharge {
+		t.Fatal("systemd-resolved manages resolv.conf, yet the facts say it does not")
+	}
 	want := []string{
 		filepath.Join(etc, "50-andaru-x.network.d", "override.conf"), filepath.Join(etc, "50-andaru-y.network"), filepath.Join(etc, "99-admin.link"),
 		filepath.Join(run, "10-netplan-eth0.network"), filepath.Join(run, "50-andaru-x.network.d", "10-other.conf"),
@@ -45,14 +58,14 @@ func TestReadRealizerFacts(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(root, "ppp"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if kernel, err := readRealizerFacts(etc, run, filepath.Join(root, "pppd"), filepath.Join(root, "*", "pppoe.so"), filepath.Join(root, "ppp")); err != nil || !kernel.PPPDevice {
+	if kernel, err := readRealizerFacts(etc, run, filepath.Join(root, "pppd"), filepath.Join(root, "*", "pppoe.so"), filepath.Join(root, "ppp"), root); err != nil || !kernel.PPPDevice {
 		t.Fatalf("present PPP device not observed: %v %+v", err, kernel)
 	}
-	empty, err := readRealizerFacts(filepath.Join(root, "absent"), filepath.Join(root, "absent2"), "/absent", "/absent/*", "/absent")
-	if err != nil || empty.ForeignFiles == nil || len(empty.ForeignFiles) != 0 || empty.PPPDaemon || empty.PPPoEPlugin {
+	empty, err := readRealizerFacts(filepath.Join(root, "absent"), filepath.Join(root, "absent2"), "/absent", "/absent/*", "/absent", filepath.Join(root, "absent"))
+	if err != nil || empty.ForeignFiles == nil || len(empty.ForeignFiles) != 0 || empty.PPPDaemon || empty.PPPoEPlugin || empty.ResolvedInCharge {
 		t.Fatalf("missing directories are an empty host, not an error: %v %+v", err, empty)
 	}
-	if _, err = readRealizerFacts(filepath.Join(root, "pppd"), run, "", "", ""); err == nil {
+	if _, err = readRealizerFacts(filepath.Join(root, "pppd"), run, "", "", "", root); err == nil {
 		t.Fatal("an unreadable configuration directory was reported as empty")
 	}
 }
@@ -144,13 +157,15 @@ func TestResolvedInCharge(t *testing.T) {
 	}{
 		"absolute link to the stub":       {map[string]string{"etc/resolv.conf": "/run/systemd/resolve/stub-resolv.conf"}, []string{"run/systemd/resolve/stub-resolv.conf"}, true},
 		"relative link, Debian's default": {map[string]string{"etc/resolv.conf": "../run/systemd/resolve/stub-resolv.conf"}, []string{"run/systemd/resolve/stub-resolv.conf"}, true},
-		"static stub in /usr/lib":         {map[string]string{"etc/resolv.conf": "/usr/lib/systemd/resolv.conf"}, []string{"usr/lib/systemd/resolv.conf"}, true},
-		"chain of two links":              {map[string]string{"etc/resolv.conf": "resolv.link", "etc/resolv.link": "/run/systemd/resolve/resolv.conf"}, []string{"run/systemd/resolve/resolv.conf"}, true},
-		"plain file":                      {nil, []string{"etc/resolv.conf"}, false},
-		"link to another manager":         {map[string]string{"etc/resolv.conf": "/run/resolvconf/resolv.conf"}, []string{"run/resolvconf/resolv.conf"}, false},
-		"dangling link":                   {map[string]string{"etc/resolv.conf": "/run/systemd/resolve/stub-resolv.conf"}, nil, false},
-		"link loop":                       {map[string]string{"etc/resolv.conf": "loop", "etc/loop": "resolv.conf"}, nil, false},
-		"no file":                         {nil, nil, false},
+		// A link to resolved's static file says nothing about resolved running; only its /run files do.
+		"static stub in /usr/lib":            {map[string]string{"etc/resolv.conf": "/usr/lib/systemd/resolv.conf"}, []string{"usr/lib/systemd/resolv.conf"}, false},
+		"directory where the stub should be": {map[string]string{"etc/resolv.conf": "/run/systemd/resolve/stub-resolv.conf"}, []string{"run/systemd/resolve/stub-resolv.conf/x"}, false},
+		"chain of two links":                 {map[string]string{"etc/resolv.conf": "resolv.link", "etc/resolv.link": "/run/systemd/resolve/resolv.conf"}, []string{"run/systemd/resolve/resolv.conf"}, true},
+		"plain file":                         {nil, []string{"etc/resolv.conf"}, false},
+		"link to another manager":            {map[string]string{"etc/resolv.conf": "/run/resolvconf/resolv.conf"}, []string{"run/resolvconf/resolv.conf"}, false},
+		"dangling link":                      {map[string]string{"etc/resolv.conf": "/run/systemd/resolve/stub-resolv.conf"}, nil, false},
+		"link loop":                          {map[string]string{"etc/resolv.conf": "loop", "etc/loop": "resolv.conf"}, nil, false},
+		"no file":                            {nil, nil, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
@@ -191,7 +206,15 @@ func TestParseResolvedDNS(t *testing.T) {
 	if err != nil || len(got) != 2 || len(got["eth0"]) != 0 || !slices.Equal(got["vl0aa29874febd"], []netip.Addr{netip.MustParseAddr("192.0.2.53")}) {
 		t.Fatalf("servers = %v, %v", got, err)
 	}
-	for _, bad := range []string{"eth0: 192.0.2.53\n", "Link 2 (eth0): not-an-address\n", "Link 2 eth0: 192.0.2.53\n"} {
+	// Another link may carry servers in forms Andaru never writes; that must not hide the link being verified.
+	got, err = ParseResolvedDNS([]byte("Link 2 (eth0): 192.0.2.53\nLink 3 (eth1): 1.1.1.1#one.one.one.one 192.0.2.9:5353\nLink 4 (a)b): 192.0.2.54\n"))
+	if err != nil || !slices.Equal(got["eth0"], []netip.Addr{netip.MustParseAddr("192.0.2.53")}) || !slices.Equal(got["a)b"], []netip.Addr{netip.MustParseAddr("192.0.2.54")}) {
+		t.Fatalf("servers = %v, %v", got, err)
+	}
+	if slices.Equal(got["eth1"], []netip.Addr{netip.MustParseAddr("1.1.1.1"), netip.MustParseAddr("192.0.2.9")}) || len(got["eth1"]) != 2 {
+		t.Fatalf("an unreadable server must stay unequal to any declared one: %v", got["eth1"])
+	}
+	for _, bad := range []string{"eth0: 192.0.2.53\n", "Link 2 eth0: 192.0.2.53\n"} {
 		if _, err := ParseResolvedDNS([]byte(bad)); err == nil {
 			t.Fatalf("accepted %q", bad)
 		}

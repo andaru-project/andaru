@@ -250,3 +250,20 @@ func TestStaticDNSRefusalSaysWhatToDeclare(t *testing.T) {
 		t.Fatalf("findings = %+v", findings)
 	}
 }
+
+func TestStaticDNSGateLooksOnlyAtTheFilesInterfaces(t *testing.T) {
+	in := staticDNS(map[string]string{"eth0": "DNS=192.0.2.53\n", "eth1": ""}, "eth0")
+	// eth1 is configured by another netplan file that sets no DNS; it owes nothing.
+	in.Managed = append(in.Managed, host.Managed{Name: "eth1", NetworkFile: "/run/systemd/network/10-netplan-lan.network", State: "configured"})
+	in.Links = append(in.Links, global("eth1", ""))
+	if findings := applyFindings(in); len(findings) != 0 {
+		t.Fatalf("findings = %+v", findings)
+	}
+	// One file for several interfaces cannot be satisfied while only one segment may declare DNS: say so.
+	findings := applyFindings(staticDNS(map[string]string{"eth0": "DNS=192.0.2.53\n", "eth1": ""}, "eth0", "eth1"))
+	if !slices.ContainsFunc(findings, func(f render.Finding) bool {
+		return f.Code == "TAKEOVER_UNSUPPORTED_BASELINE" && strings.Contains(f.Message, "several interfaces") && !strings.Contains(f.Message, "Declare")
+	}) {
+		t.Fatalf("findings = %+v", findings)
+	}
+}

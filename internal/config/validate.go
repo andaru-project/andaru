@@ -172,7 +172,7 @@ func validateTopology(d *declaration) []FieldError {
 	hosts := map[string]bool{}
 	prefixes := map[string][]netip.Prefix{}
 	delegations := map[string]bool{}
-	declaredDNS := false
+	firstDNS := ""
 	for i := range d.Segments {
 		s := &d.Segments[i]
 		p := fmt.Sprintf("/segments/%d", i)
@@ -224,10 +224,13 @@ func validateTopology(d *declaration) []FieldError {
 				bad(path, "A segment without addresses cannot reach DNS servers.")
 			}
 			// systemd-resolved asks every link that has servers, so two segments would split the host's lookups.
-			if declaredDNS {
+			// Both declarers are named: a batch may have edited either one.
+			if firstDNS != "" {
 				bad(path, "Only one segment may declare DNS servers.")
+				bad(firstDNS, "Only one segment may declare DNS servers.")
+			} else {
+				firstDNS = path
 			}
-			declaredDNS = true
 			seen := map[netip.Addr]bool{}
 			for j, raw := range dns.Servers {
 				a, e := netip.ParseAddr(raw)
@@ -243,7 +246,7 @@ func validateTopology(d *declaration) []FieldError {
 			}
 			for j, name := range dns.SearchDomains {
 				// The pattern admits no whitespace, so a name can never start a new line in a rendered file.
-				if len(name) > 253 || !searchDomain.MatchString(name) {
+				if !searchDomain.MatchString(name) {
 					bad(fmt.Sprintf("%s/searchDomains/%d", path, j), "Invalid search domain.")
 				} else if slices.Contains(dns.SearchDomains[:j], name) {
 					bad(fmt.Sprintf("%s/searchDomains/%d", path, j), "Search domain is listed twice.")

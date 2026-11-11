@@ -227,10 +227,10 @@ One segment may say which DNS servers the firewall host itself asks, as netplan'
 
 - `servers` are tried in the order given; `searchDomains` is optional. **Only one segment may declare `dns`.**
 - On that segment the declared servers replace any offered by DHCP or router advertisements. Without `dns`, the host uses the offered ones.
-- An apply checks that systemd-resolved reports exactly these servers, in order, for the interface; otherwise it restores the previous files. It does not check that the servers answer.
+- An apply checks that systemd-resolved reports exactly these servers, in order, for the interface; otherwise it restores the previous files. It does not check that the servers answer, and it does not look at servers set globally in `resolved.conf` or on other interfaces, which resolved also asks.
 - This is the host's own resolver only. It gives LAN clients nothing.
 - It works where systemd-resolved manages `/etc/resolv.conf` (Debian cloud images). Elsewhere the preview warns with `DNS_NOT_APPLIED` and the host keeps using its `resolv.conf`.
-- To take over a netplan host that sets DNS servers, declare `dns` on the segment of the same interface.
+- To take over a netplan host that sets DNS servers, declare `dns` on the segment of the same interface. A netplan file that sets DNS for several interfaces at once cannot be taken over yet.
 
 ### Takeover
 
@@ -450,4 +450,4 @@ On 2026-11-11 the CGO-disabled amd64 build of code commit `40affb6` (SHA-256 `aa
 | `dns` declared with the servers in the opposite order to netplan's, takeover with a 30-second timeout | 0 of 100 pings lost. Address and static default route kept; servers were the declared ones in declared order; a name resolved. After the timer rollback netplan's files and netplan's server order were back and a name resolved. |
 | Same takeover confirmed from a new session, then rebooted | Same address on `ens18`, servers as declared, a name resolved, `/etc/netplan` empty, boot in 6.0 s. |
 
-Not run on the lab: a host where systemd-resolved does not manage `/etc/resolv.conf` (unit-tested: the check is skipped and the preview warns). The VM was reset to `base-netplan-20261111` afterwards.
+Not run on the lab: a host where systemd-resolved does not manage `/etc/resolv.conf` (unit-tested: the check is skipped and the preview warns). The VM was reset to `base-netplan-static-20261111` afterwards. On this ZFS-backed VM only the most recent snapshot can be rolled back to, so the older DHCP base `base-netplan-20261111` is now reachable only by cloning from it.
