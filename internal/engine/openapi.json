@@ -4372,7 +4372,9 @@
               "DEPENDENCY_UNAVAILABLE",
               "RA_PREFIX_UNSUPPORTED",
               "DNS_NOT_APPLIED",
-              "TAKEOVER_LIMIT"
+              "TAKEOVER_LIMIT",
+              "FOREIGN_FILTER",
+              "MANAGEMENT_REQUIRED"
             ]
           },
           "path": {
@@ -4657,7 +4659,9 @@
               "NETDEV_CHANGE_UNSUPPORTED",
               "RESOLVED_NOT_IN_CHARGE",
               "DNS_REQUIRED",
-              "DHCP_IDENTITY_UNKNOWN"
+              "DHCP_IDENTITY_UNKNOWN",
+              "FOREIGN_FILTER",
+              "MANAGEMENT_REQUIRED"
             ]
           },
           "path": {
@@ -4757,7 +4761,8 @@
           "resolved",
           "files",
           "findings",
-          "applyFindings"
+          "applyFindings",
+          "rules"
         ],
         "properties": {
           "state": {
@@ -4796,6 +4801,71 @@
             "description": "What the apply gates would refuse, judged as a takeover unless one is already confirmed.",
             "items": {
               "$ref": "#/components/schemas/ApplyFinding"
+            }
+          },
+          "rules": {
+            "type": "array",
+            "description": "The policy in execution order, references by name, for the review.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "chain",
+                "position",
+                "name",
+                "enabled",
+                "action",
+                "from",
+                "to",
+                "services",
+                "log"
+              ],
+              "properties": {
+                "chain": {
+                  "enum": [
+                    "input",
+                    "forward"
+                  ]
+                },
+                "position": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "name": {
+                  "type": "string"
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "action": {
+                  "enum": [
+                    "accept",
+                    "drop",
+                    "reject"
+                  ]
+                },
+                "from": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "to": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "services": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "log": {
+                  "type": "boolean"
+                }
+              }
             }
           }
         }

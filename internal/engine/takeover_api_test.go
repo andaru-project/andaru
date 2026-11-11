@@ -371,3 +371,61 @@ func TestProposalPrefillsDNSBesideKernelSLAAC(t *testing.T) {
 		t.Fatalf("operations = %s", raw)
 	}
 }
+
+// filterDraft is the static lab proposal with a starter rule, outbound NAT and management on eth0.
+const filterDraft = `{"schemaVersion":1,
+"links":[{"id":"lnk_00000001-0000-4000-8000-000000000001","name":"eth0","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"bc:24:11:89:01:10"}],
+"segments":[{"id":"seg_00000001-0000-4000-8000-000000000001","name":"eth0","link":"lnk_00000001-0000-4000-8000-000000000001","zone":"zon_00000001-0000-4000-8000-000000000001",
+"addressing":{"ipv4":{"mode":"static","addresses":["10.0.1.19/16"],"gateway":"10.0.0.1"},"ipv6":{"mode":"slaac"},"dns":{"servers":["172.16.53.53"]}}}],
+"zones":[{"id":"zon_00000001-0000-4000-8000-000000000001","name":"wan"}],
+"objects":{"addresses":[],"services":[{"id":"svc_00000001-0000-4000-8000-000000000001","name":"ping","protocol":"icmp","types":["echo-request"]}]},
+"policy":{"input":[{"id":"rul_00000001-0000-4000-8000-000000000001","name":"ping","enabled":true,"action":"accept","from":["zon_00000001-0000-4000-8000-000000000001"],"to":[],"services":["svc_00000001-0000-4000-8000-000000000001"],"log":false}],"forward":[]},
+"nat":{"outbound":{"mode":"automatic"}},
+"management":{"segment":"seg_00000001-0000-4000-8000-000000000001"}}`
+
+func TestFilterGates(t *testing.T) {
+	for name, tc := range map[string]struct {
+		edit func(b *takeoverBench)
+		code string
+	}{
+		"nftables.service enabled": {func(b *takeoverBench) { b.facts.FilterUnits = []string{"nftables.service"} }, "FOREIGN_FILTER"},
+		"nft missing":              {func(b *takeoverBench) { b.facts.NftTool = false }, "TOOL_MISSING"},
+		"no management": {func(b *takeoverBench) {
+			b.draftValue = strings.Replace(b.draftValue, `,
+"management":{"segment":"seg_00000001-0000-4000-8000-000000000001"}`, "", 1)
+		}, "MANAGEMENT_REQUIRED"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := newTakeoverBench(t, "static")
+			b.draftValue, b.facts.NftTool = filterDraft, true
+			tc.edit(b)
+			got := b.postDraft(t)
+			if !slices.ContainsFunc(got.ApplyFindings, func(f struct{ Code, Path string }) bool { return f.Code == tc.code }) {
+				t.Fatalf("apply findings %+v", got.ApplyFindings)
+			}
+		})
+	}
+}
+
+func TestDraftShowsRules(t *testing.T) {
+	b := newTakeoverBench(t, "static")
+	b.draftValue, b.facts.NftTool = filterDraft, true
+	w := httptest.NewRecorder()
+	r := rootRequest(http.MethodPost, "/api/v1/preview/network/draft")
+	r.Body = io.NopCloser(strings.NewReader(`{"operations":[{"op":"create","collection":"zones","localId":"wan","value":{"name":"wan"}}]}`))
+	b.handler().ServeHTTP(w, r)
+	var got struct {
+		Rules []struct {
+			Chain, Name, Action string
+			Position            int
+			From, To, Services  []string
+		}
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &got) != nil || len(got.Rules) != 1 {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	row := got.Rules[0]
+	if row.Chain != "input" || row.Position != 1 || row.Name != "ping" || row.Action != "accept" || !slices.Equal(row.From, []string{"wan"}) || !slices.Equal(row.Services, []string{"ping"}) || row.To == nil {
+		t.Fatalf("row %+v", row)
+	}
+}

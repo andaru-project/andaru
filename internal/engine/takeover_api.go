@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -352,6 +353,62 @@ func adapters(found []host.Detected, links []host.LinkStatus, required bool) []a
 type draftView struct {
 	previewResponse
 	ApplyFindings []render.Finding `json:"applyFindings"`
+	// Rules is the policy as the review shows it: each rule with its position and its references by name.
+	Rules []ruleRow `json:"rules"`
+}
+
+type ruleRow struct {
+	Chain    string   `json:"chain"`
+	Position int      `json:"position"`
+	Name     string   `json:"name"`
+	Enabled  bool     `json:"enabled"`
+	Action   string   `json:"action"`
+	From     []string `json:"from"`
+	To       []string `json:"to"`
+	Services []string `json:"services"`
+	Log      bool     `json:"log"`
+}
+
+// ruleTable lists a declaration's rules in execution order with the names of what they reference.
+func ruleTable(value json.RawMessage) []ruleRow {
+	type named struct{ ID, Name string }
+	var d struct {
+		Zones   []named
+		Objects struct{ Addresses, Services []named }
+		Policy  struct {
+			Input, Forward []struct {
+				Name, Action       string
+				Enabled, Log       bool
+				From, To, Services []string
+			}
+		}
+	}
+	_ = json.Unmarshal(value, &d)
+	names := map[string]string{}
+	for _, list := range [][]named{d.Zones, d.Objects.Addresses, d.Objects.Services} {
+		for _, n := range list {
+			names[n.ID] = n.Name
+		}
+	}
+	resolve := func(ids []string) []string {
+		out := []string{}
+		for _, id := range ids {
+			out = append(out, cmp.Or(names[id], id))
+		}
+		return out
+	}
+	rows := []ruleRow{}
+	for _, chain := range []string{"input", "forward"} {
+		list := d.Policy.Input
+		if chain == "forward" {
+			list = d.Policy.Forward
+		}
+		for i, r := range list {
+			rows = append(rows, ruleRow{Chain: chain, Position: i + 1, Name: r.Name, Enabled: r.Enabled, Action: r.Action,
+				From: resolve(r.From), To: resolve(r.To), Services: resolve(r.Services), Log: r.Log})
+		}
+	}
+	return rows
 }
 
 func (h *takeoverHandler) serveDraft(w http.ResponseWriter, r *http.Request) {
@@ -385,7 +442,7 @@ func (h *takeoverHandler) judge(w http.ResponseWriter, r *http.Request, input co
 			if gate.Takeover && gate.fromIfupdown() {
 				gate.Result.Findings = append(gate.Result.Findings, ifupdownLimits(gate.Ifupdown)...)
 			}
-			writeJSON(w, r, http.StatusOK, draftView{previewResponse{State: "draft", SavedVersion: input.SavedVersion, Result: gate.Result}, findings})
+			writeJSON(w, r, http.StatusOK, draftView{previewResponse{State: "draft", SavedVersion: input.SavedVersion, Result: gate.Result}, findings, ruleTable(input.Value)})
 			return
 		}
 	}
