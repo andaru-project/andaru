@@ -2,6 +2,7 @@ package generation
 
 import (
 	"errors"
+	"github.com/andaru-project/andaru/internal/host"
 	"os"
 	"path/filepath"
 	"slices"
@@ -247,5 +248,33 @@ func TestActivateIfupdownNeedsDNSServers(t *testing.T) {
 	}
 	if g := b.read(id); g.State.State != Failed || !strings.Contains(g.State.Reason, "no DNS server") {
 		t.Fatalf("state = %+v", g.State)
+	}
+}
+
+// An interface ifupdown gained after the apply was judged has no file in the generation; masking ifupdown would strand it.
+func TestActivateIfupdownRefusesAnUndeclaredInterface(t *testing.T) {
+	b := debian(t)
+	b.net.devices["eth1"] = true
+	writeFile(t, filepath.Join(b.net.root, "etc/network/interfaces"), "allow-hotplug eth0\niface eth0 inet dhcp\nallow-hotplug eth1\niface eth1 inet static\n address 192.0.2.9/24\n")
+	id := b.ifupdownTakeover()
+	if err := b.r.Activate(t.Context(), id); err == nil || !strings.Contains(err.Error(), "eth1") {
+		t.Fatalf("activate: %v", err)
+	}
+	if b.net.ran("dhcpcd") != 0 {
+		t.Fatalf("handed over anyway: %q", b.net.argv)
+	}
+}
+
+// A static interface counts as back only with every address ifupdown gives it.
+func TestHasStaticNeedsEveryAddress(t *testing.T) {
+	i := host.IfupdownInterface{Detected: host.Detected{Name: "eth0", IPv4: host.Addressing{Mode: "static", Addresses: []string{"192.0.2.1/24"}},
+		IPv6: host.Addressing{Mode: "static", Addresses: []string{"2001:db8::1/64"}}}}
+	o := observation{links: []host.LinkStatus{{Name: "eth0", Addresses: []host.AddressStatus{{Family: "ipv4", Address: "192.0.2.1", PrefixLength: 24}}}}}
+	if hasStatic(o, i) {
+		t.Fatal("IPv6 missing but counted as back")
+	}
+	o.links[0].Addresses = append(o.links[0].Addresses, host.AddressStatus{Family: "ipv6", Address: "2001:db8::1", PrefixLength: 64})
+	if !hasStatic(o, i) {
+		t.Fatal("all addresses present but not counted as back")
 	}
 }

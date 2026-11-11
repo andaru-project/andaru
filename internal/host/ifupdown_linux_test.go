@@ -77,22 +77,24 @@ func TestReadIfupdownRefusals(t *testing.T) {
 		"manual bridge": {map[string]string{"etc/network/interfaces": dhcpStanza + "iface br0 inet manual\n"}, nil, "/etc/network/interfaces", ""},
 		"changed MAC": {nil, []LinkStatus{{IfIndex: 2, Name: "ens18", LinkType: "ether", LinkAddress: "02:00:00:00:00:09", PermanentAddress: ifupdownMAC}},
 			"/etc/network/interfaces", ""},
-		"absent interface":     {map[string]string{"etc/network/interfaces": dhcpStanza + "iface ens19 inet dhcp\n"}, nil, "/etc/network/interfaces", ""},
-		"no dhcpcd running":    {map[string]string{"run/dhcpcd/ens18.pid": ""}, nil, "/run/dhcpcd/ens18.pid", "DHCP_IDENTITY_UNKNOWN"},
-		"stale pid":            {map[string]string{"proc/602/comm": "sshd\n"}, nil, "/run/dhcpcd/ens18.pid", "DHCP_IDENTITY_UNKNOWN"},
-		"clientid":             {map[string]string{"etc/dhcpcd.conf": "duid\nclientid\n"}, nil, "/etc/dhcpcd.conf", "DHCP_IDENTITY_UNKNOWN"},
-		"iaid":                 {map[string]string{"etc/dhcpcd.conf": "duid\niaid 1\n"}, nil, "/etc/dhcpcd.conf", "DHCP_IDENTITY_UNKNOWN"},
-		"anonymous":            {map[string]string{"etc/dhcpcd.conf": "duid\nanonymous\n"}, nil, "/etc/dhcpcd.conf", "DHCP_IDENTITY_UNKNOWN"},
-		"interface block":      {map[string]string{"etc/dhcpcd.conf": "duid\ninterface ens18\n static ip_address=10.0.1.13/16\n"}, nil, "/etc/dhcpcd.conf", "DHCP_IDENTITY_UNKNOWN"},
-		"no duid directive":    {map[string]string{"etc/dhcpcd.conf": "hostname\n"}, nil, "/etc/dhcpcd.conf", "DHCP_IDENTITY_UNKNOWN"},
-		"no dhcpcd.conf":       {map[string]string{"etc/dhcpcd.conf": ""}, nil, "/etc/dhcpcd.conf", "DHCP_IDENTITY_UNKNOWN"},
-		"short DUID":           {map[string]string{"var/lib/dhcpcd/duid": "00:01\n"}, nil, "/var/lib/dhcpcd/duid", "DHCP_IDENTITY_UNKNOWN"},
-		"DUID not hex":         {map[string]string{"var/lib/dhcpcd/duid": "00:01:zz:01\n"}, nil, "/var/lib/dhcpcd/duid", "DHCP_IDENTITY_UNKNOWN"},
-		"no DUID":              {map[string]string{"var/lib/dhcpcd/duid": ""}, nil, "/var/lib/dhcpcd/duid", "DHCP_IDENTITY_UNKNOWN"},
-		"cloud-init file":      {map[string]string{"etc/network/interfaces.d/50-cloud-init": "auto lo\n"}, nil, "/etc/network/interfaces.d/50-cloud-init", ""},
-		"dhcpcd.service":       {map[string]string{"etc/systemd/system/multi-user.target.wants/dhcpcd.service": "x"}, nil, "/etc/systemd/system/multi-user.target.wants/dhcpcd.service", ""},
-		"NetworkManager":       {map[string]string{"etc/systemd/system/multi-user.target.wants/NetworkManager.service": "x"}, nil, "/etc/systemd/system/multi-user.target.wants/NetworkManager.service", ""},
-		"unknown inet6 method": {map[string]string{"etc/network/interfaces": dhcpStanza + "iface ens18 inet6 dhcp\n"}, nil, "/etc/network/interfaces", ""},
+		"absent interface":         {map[string]string{"etc/network/interfaces": dhcpStanza + "iface ens19 inet dhcp\n"}, nil, "/etc/network/interfaces", ""},
+		"no dhcpcd running":        {map[string]string{"run/dhcpcd/ens18.pid": ""}, nil, "/run/dhcpcd/ens18.pid", "DHCP_IDENTITY_UNKNOWN"},
+		"stale pid":                {map[string]string{"proc/602/comm": "sshd\n"}, nil, "/run/dhcpcd/ens18.pid", "DHCP_IDENTITY_UNKNOWN"},
+		"clientid":                 {map[string]string{"etc/dhcpcd.conf": "duid\nclientid\n"}, nil, "/etc/dhcpcd.conf", "DHCP_IDENTITY_UNKNOWN"},
+		"iaid":                     {map[string]string{"etc/dhcpcd.conf": "duid\niaid 1\n"}, nil, "/etc/dhcpcd.conf", "DHCP_IDENTITY_UNKNOWN"},
+		"anonymous":                {map[string]string{"etc/dhcpcd.conf": "duid\nanonymous\n"}, nil, "/etc/dhcpcd.conf", "DHCP_IDENTITY_UNKNOWN"},
+		"interface block":          {map[string]string{"etc/dhcpcd.conf": "duid\ninterface ens18\n static ip_address=10.0.1.13/16\n"}, nil, "/etc/dhcpcd.conf", "DHCP_IDENTITY_UNKNOWN"},
+		"no duid directive":        {map[string]string{"etc/dhcpcd.conf": "hostname\n"}, nil, "/etc/dhcpcd.conf", "DHCP_IDENTITY_UNKNOWN"},
+		"no dhcpcd.conf":           {map[string]string{"etc/dhcpcd.conf": ""}, nil, "/etc/dhcpcd.conf", "DHCP_IDENTITY_UNKNOWN"},
+		"short DUID":               {map[string]string{"var/lib/dhcpcd/duid": "00:01\n"}, nil, "/var/lib/dhcpcd/duid", "DHCP_IDENTITY_UNKNOWN"},
+		"DUID not hex":             {map[string]string{"var/lib/dhcpcd/duid": "00:01:zz:01\n"}, nil, "/var/lib/dhcpcd/duid", "DHCP_IDENTITY_UNKNOWN"},
+		"no DUID":                  {map[string]string{"var/lib/dhcpcd/duid": ""}, nil, "/var/lib/dhcpcd/duid", "DHCP_IDENTITY_UNKNOWN"},
+		"cloud-init file":          {map[string]string{"etc/network/interfaces.d/50-cloud-init": "auto lo\n"}, nil, "/etc/network/interfaces.d/50-cloud-init", ""},
+		"dhcpcd.service":           {map[string]string{"etc/systemd/system/multi-user.target.wants/dhcpcd.service": "x"}, nil, "/etc/systemd/system/multi-user.target.wants/dhcpcd.service", ""},
+		"NetworkManager":           {map[string]string{"etc/systemd/system/multi-user.target.wants/NetworkManager.service": "x"}, nil, "/etc/systemd/system/multi-user.target.wants/NetworkManager.service", ""},
+		"two inet stanzas":         {map[string]string{"etc/network/interfaces": "allow-hotplug ens18\niface ens18 inet static\n address 10.0.1.13/16\niface ens18 inet static\n address 10.0.2.13/16\n"}, nil, "/etc/network/interfaces", ""},
+		"neither auto nor hotplug": {map[string]string{"etc/network/interfaces": "iface ens18 inet dhcp\n"}, nil, "/etc/network/interfaces", ""},
+		"unknown inet6 method":     {map[string]string{"etc/network/interfaces": dhcpStanza + "iface ens18 inet6 dhcp\n"}, nil, "/etc/network/interfaces", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			links := tc.links
@@ -186,5 +188,32 @@ func TestReadIfupdownKeepsKernelSLAAC(t *testing.T) {
 	links[0].Addresses[1].PrefixLength = 128
 	if got, _ := ReadIfupdown(fixture.Root(t, "ifupdown-static"), links, nil); got[0].IPv6.Mode != "none" {
 		t.Fatalf("a /128 read as SLAAC: %+v", got[0].IPv6)
+	}
+}
+
+// Relative sources resolve from the directory of the file naming them, and source-directory paths may be globs.
+func TestReadIfupdownSourcePaths(t *testing.T) {
+	got, problems := ReadIfupdown(edit(t, "ifupdown-dhcp", map[string]string{
+		"etc/network/interfaces":         "source interfaces.d/*\nsource-directory /etc/network/site*\n",
+		"etc/network/interfaces.d/ens18": "source extra\n",
+		"etc/network/interfaces.d/extra": "allow-hotplug ens18\n",
+		"etc/network/sites/ens18-v4":     "iface ens18 inet dhcp\n",
+	}), ifupdownLinks(), nil)
+	if len(problems) != 0 || len(got) != 1 || !got[0].Hotplug || got[0].File != "/etc/network/sites/ens18-v4" {
+		t.Fatalf("got %+v, problems %+v", got, problems)
+	}
+}
+
+// dhcpcd sends the name dhcpcd.conf gives; networkd must send the same.
+func TestReadIfupdownDhcpcdHostname(t *testing.T) {
+	got, problems := ReadIfupdown(edit(t, "ifupdown-dhcp", map[string]string{"etc/dhcpcd.conf": "duid\nhostname gateway.example\n"}), ifupdownLinks(), nil)
+	if len(problems) != 0 || got[0].Identity == nil || got[0].Identity.Hostname != "gateway.example" {
+		t.Fatalf("got %+v, problems %+v", got, problems)
+	}
+	// The stanza's own hostname wins, as ifup passes it to dhcpcd.
+	got, _ = ReadIfupdown(edit(t, "ifupdown-dhcp", map[string]string{"etc/dhcpcd.conf": "duid\nhostname gateway.example\n",
+		"etc/network/interfaces": "allow-hotplug ens18\niface ens18 inet dhcp\n hostname fw\n"}), ifupdownLinks(), nil)
+	if got[0].Identity.Hostname != "fw" {
+		t.Fatalf("got %+v", got[0].Identity)
 	}
 }

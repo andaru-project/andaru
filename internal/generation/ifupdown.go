@@ -111,11 +111,11 @@ func (r Realizer) handBack(ctx context.Context, b IfupdownBaseline) error {
 	return errors.Join(failures...)
 }
 
-// hasStatic reports that a static interface still has its first IPv4 or IPv6 address.
+// hasStatic reports that a static interface has every address ifupdown gives it.
 func hasStatic(o observation, i host.IfupdownInterface) bool {
 	l, ok := o.link(i.Name)
 	want := slices.Concat(i.IPv4.Addresses, i.IPv6.Addresses)
-	return ok && len(want) > 0 && slices.ContainsFunc(l.Addresses, func(a host.AddressStatus) bool {
-		return fmt.Sprintf("%s/%d", a.Address, a.PrefixLength) == want[0]
+	return ok && len(want) > 0 && !slices.ContainsFunc(want, func(w string) bool {
+		return !slices.ContainsFunc(l.Addresses, func(a host.AddressStatus) bool { return fmt.Sprintf("%s/%d", a.Address, a.PrefixLength) == w })
 	})
 }

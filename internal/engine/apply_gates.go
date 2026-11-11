@@ -38,7 +38,13 @@ type gateInput struct {
 }
 
 // fromIfupdown reports a host that ifupdown, and nothing else, still configures: the Debian installer's.
+// Once a generation is live Andaru runs the host, even if a failed confirmation left ifupdown unmasked.
 func (in gateInput) fromIfupdown() bool {
+	return in.ifupdownHost() && in.Live == nil
+}
+
+// ifupdownHost reports a host set up with ifupdown and no netplan, whose ifupdown is not masked.
+func (in gateInput) ifupdownHost() bool {
 	return in.Baseline.Ifupdown && !in.Baseline.IfupdownMasked && !in.Baseline.Netplan
 }
 
@@ -58,9 +64,13 @@ func applyFindings(in gateInput) []render.Finding {
 	}
 	if in.Takeover && in.fromIfupdown() {
 		unsupported = append(unsupported, ifupdownFindings(in.IfupdownProblems, in.Facts, in.Managed)...)
+		// networkd is stopped, so nothing binds these files now; started, it would apply them beside Andaru's.
+		for _, path := range in.Facts.ForeignFiles {
+			baseline(path, "This network configuration file was not written by Andaru and would take effect when the takeover starts systemd-networkd.")
+		}
 	}
 	netplanFiles := 0
-	if in.Takeover && !in.fromIfupdown() {
+	if in.Takeover && !in.ifupdownHost() {
 		if !in.Baseline.Netplan {
 			baseline("/usr/sbin/netplan", "Only a netplan-configured host can be taken over; netplan is not installed.")
 		}
@@ -130,10 +140,12 @@ func applyFindings(in gateInput) []render.Finding {
 
 	var declared struct {
 		Links []struct {
+			ID      string `json:"id"`
 			Kind    string `json:"kind"`
 			Enabled bool   `json:"enabled"`
 		} `json:"links"`
 		Segments []struct {
+			Link       string `json:"link"`
 			Addressing struct {
 				DNS  json.RawMessage `json:"dns"`
 				IPv4 struct {
@@ -185,6 +197,10 @@ func applyFindings(in gateInput) []render.Finding {
 		}
 	}
 	if in.Takeover && in.fromIfupdown() {
+		enabled := map[string]bool{}
+		for _, l := range declared.Links {
+			enabled[l.ID] = l.Enabled
+		}
 		// Confirmation masks ifupdown for every interface, so one left out would never come up again.
 		for _, i := range in.Ifupdown {
 			if _, ok := rendered(networkDir + "50-andaru-" + i.Name + ".network"); !ok {
@@ -193,6 +209,9 @@ func applyFindings(in gateInput) []render.Finding {
 		}
 		offered, declaresDNS := false, false
 		for _, s := range declared.Segments {
+			if !enabled[s.Link] {
+				continue // a disabled link's segment is not rendered
+			}
 			offered = offered || s.Addressing.IPv4.Mode == "dhcp" || s.Addressing.IPv6.Mode == "slaac" || s.Addressing.IPv6.Mode == "dhcp6"
 			declaresDNS = declaresDNS || len(s.Addressing.DNS) > 0
 		}

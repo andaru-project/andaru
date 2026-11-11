@@ -336,6 +336,12 @@ func (r Realizer) Activate(ctx context.Context, id int) error {
 		if ifupdown, err = r.captureIfupdown(ctx, p); err != nil {
 			return err
 		}
+		// Confirmation masks ifupdown for every interface, so each must be in this generation; one added since the apply was judged is not.
+		for _, i := range ifupdown.Interfaces {
+			if !slices.ContainsFunc(g.Files, func(f FileEntry) bool { return f.Path == "/run/systemd/network/50-andaru-"+i.Name+".network" }) {
+				return fmt.Errorf("activate %d: ifupdown now configures %s, which this generation does not; apply again", id, i.Name)
+			}
+		}
 	case g.Takeover:
 		if err := r.captureBaseline(p); err != nil {
 			return err

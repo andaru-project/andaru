@@ -64,11 +64,13 @@ func (f *ifupdownFiles) read(path string, depth int) {
 		f.problem(path, "source", "Sources nest more than 8 levels deep.")
 		return
 	}
+	// Only a file sourcing one of the files that led to it loops; reading one file twice does not.
 	if f.seen[path] {
-		f.problem(path, "source", "This file is sourced again, which would loop.")
+		f.problem(path, "source", "This file sources itself through its includes, which would loop.")
 		return
 	}
 	f.seen[path] = true
+	defer delete(f.seen, path)
 	info, err := os.Lstat(f.root + path)
 	if depth == 0 && errors.Is(err, fs.ErrNotExist) {
 		f.problem(path, "", "ifupdown's configuration file does not exist.")
@@ -111,24 +113,26 @@ func (f *ifupdownFiles) read(path string, depth int) {
 				f.problem(path, words[0], "Unreadable line: "+line)
 				continue
 			}
+			// A relative path is relative to the directory of the file naming it, and either form may be a glob.
 			target := words[1]
 			if !filepath.IsAbs(target) {
-				target = filepath.Join(ifupdownDir, target)
+				target = filepath.Join(filepath.Dir(path), target)
 			}
+			found, _ := filepath.Glob(f.root + target)
 			var matches []string
-			if words[0] == "source" {
-				found, _ := filepath.Glob(f.root + target)
-				for _, m := range found {
-					matches = append(matches, strings.TrimPrefix(m, f.root))
+			for _, m := range found {
+				m = strings.TrimPrefix(m, f.root)
+				if words[0] == "source" {
+					matches = append(matches, m)
+					continue
 				}
-			} else {
-				entries, err := os.ReadDir(f.root + target)
-				if err != nil && !errors.Is(err, fs.ErrNotExist) {
-					f.problem(target, "source-directory", err.Error())
+				entries, err := os.ReadDir(f.root + m)
+				if err != nil {
+					f.problem(m, "source-directory", err.Error())
 				}
 				for _, e := range entries {
 					if sourceDirName.MatchString(e.Name()) {
-						matches = append(matches, filepath.Join(target, e.Name()))
+						matches = append(matches, filepath.Join(m, e.Name()))
 					}
 				}
 			}
@@ -170,6 +174,7 @@ func ReadIfupdown(root string, links []LinkStatus, defaultRoutes []string) ([]If
 	byName := map[string]*IfupdownInterface{}
 	var names []string
 	inet6 := map[string]bool{}
+	families := map[string]bool{}
 	for _, s := range f.stanzas {
 		if s.name == "lo" {
 			if s.family != "inet" || s.method != "loopback" || len(s.options) > 0 {
@@ -198,6 +203,12 @@ func ReadIfupdown(root string, links []LinkStatus, defaultRoutes []string) ([]If
 			names = append(names, s.name)
 		}
 		inet6[s.name] = inet6[s.name] || s.family == "inet6"
+		// ifupdown applies several stanzas of one family together; one address per family is all Andaru takes from it.
+		if families[s.name+" "+s.family] {
+			f.problem(s.file, "iface "+s.name, "A second "+s.family+" stanza for "+s.name+" cannot be taken over yet.")
+			continue
+		}
+		families[s.name+" "+s.family] = true
 		allowed := []string{"address", "gateway"}
 		switch s.family + " " + s.method {
 		case "inet dhcp":
@@ -238,6 +249,11 @@ func ReadIfupdown(root string, links []LinkStatus, defaultRoutes []string) ([]If
 	var out []IfupdownInterface
 	for _, name := range names {
 		i := byName[name]
+		if !f.hotplug[name] && !f.auto[name] {
+			// Only a hand-run ifup raises it; neither networking.service nor udev would on a hand-back.
+			f.problem(i.File, "iface "+name, name+" is neither auto nor allow-hotplug, so ifupdown does not raise it by itself.")
+			continue
+		}
 		i.Hotplug = f.hotplug[name] && !f.auto[name]
 		// Without an inet6 stanza ifupdown leaves router advertisements on, so the kernel may hold a SLAAC address.
 		at := slices.IndexFunc(links, func(l LinkStatus) bool { return l.Name == name })
@@ -278,6 +294,14 @@ func (f *ifupdownFiles) identity(i *IfupdownInterface) {
 			switch words[0] {
 			case "duid":
 				duid = true
+			case "hostname":
+				// With a name dhcpcd sends it instead of the machine's; the stanza's own option still wins.
+				if len(words) > 1 && (i.Identity == nil || i.Identity.Hostname == "") {
+					if i.Identity == nil {
+						i.Identity = &DHCPIdentity{}
+					}
+					i.Identity.Hostname = words[1]
+				}
 			case "clientid", "iaid", "anonymous", "interface":
 				unknown(dhcpcdConf, "dhcpcd.conf sets "+words[0]+", so the identity dhcpcd uses is not the one Andaru can reproduce.")
 			}

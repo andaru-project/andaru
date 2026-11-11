@@ -340,7 +340,25 @@ func TestIfupdownGates(t *testing.T) {
 			return in
 		}, []want{{"WOULD_UNCONFIGURE", "ens19"}}},
 		"all static without dns": {static(false), []want{{"DNS_REQUIRED", ""}}},
-		"all static with dns":    {static(true), nil},
+		"leftover netplan file": {func() gateInput {
+			in := debian()
+			in.Facts.ForeignFiles = []string{"/run/systemd/network/10-netplan-ens18.network"}
+			in.Result.Findings = foreign(in.Facts.ForeignFiles...)
+			return in
+		}, []want{{"FOREIGN_CONFIGURATION", ""}, {"TAKEOVER_UNSUPPORTED_BASELINE", "/run/systemd/network/10-netplan-ens18.network"}}},
+		"dhcp only on a disabled link": {func() gateInput {
+			in := static(false)()
+			in.Declaration = []byte(`{"links":[{"id":"a","kind":"ethernet","enabled":true},{"id":"b","kind":"ethernet","enabled":false}],"segments":[{"link":"a","addressing":{"ipv4":{"mode":"static"},"ipv6":{"mode":"none"}}},{"link":"b","addressing":{"ipv4":{"mode":"dhcp"},"ipv6":{"mode":"none"}}}]}`)
+			return in
+		}, []want{{"DNS_REQUIRED", ""}}},
+		"generation already live": {func() gateInput {
+			// A confirmation that failed before masking ifupdown leaves it unmasked; Andaru already runs the host.
+			in := debian()
+			in.Live = &generation.Generation{}
+			in.Managed = []host.Managed{{Name: "ens18", NetworkFile: debianFile, State: "configured"}}
+			return in
+		}, []want{{"TAKEOVER_MISMATCH", ""}}},
+		"all static with dns": {static(true), nil},
 		"without takeover": {func() gateInput {
 			in := debian()
 			in.Takeover = false
