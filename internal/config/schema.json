@@ -1289,6 +1289,355 @@
                   "id"
                 ],
                 "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "create"
+                  },
+                  "collection": {
+                    "enum": [
+                      "addresses"
+                    ]
+                  },
+                  "localId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9_]{0,31}$"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/addressWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "replace"
+                  },
+                  "collection": {
+                    "enum": [
+                      "addresses"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/addressWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "delete"
+                  },
+                  "collection": {
+                    "enum": [
+                      "addresses"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "create"
+                  },
+                  "collection": {
+                    "enum": [
+                      "services"
+                    ]
+                  },
+                  "localId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9_]{0,31}$"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/serviceWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "replace"
+                  },
+                  "collection": {
+                    "enum": [
+                      "services"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/serviceWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "delete"
+                  },
+                  "collection": {
+                    "enum": [
+                      "services"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "create"
+                  },
+                  "collection": {
+                    "enum": [
+                      "policy.input",
+                      "policy.forward"
+                    ]
+                  },
+                  "localId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9_]{0,31}$"
+                  },
+                  "before": {
+                    "$ref": "#/$defs/ruleID"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/ruleWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "replace"
+                  },
+                  "collection": {
+                    "enum": [
+                      "policy.input",
+                      "policy.forward"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/ruleWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "delete"
+                  },
+                  "collection": {
+                    "enum": [
+                      "policy.input",
+                      "policy.forward"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "order"
+                  },
+                  "collection": {
+                    "enum": [
+                      "policy.input",
+                      "policy.forward"
+                    ]
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  },
+                  "value": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/ruleID"
+                    },
+                    "minItems": 0,
+                    "maxItems": 10000
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "replace"
+                  },
+                  "collection": {
+                    "enum": [
+                      "management"
+                    ]
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/managementFields"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "replace"
+                  },
+                  "collection": {
+                    "enum": [
+                      "nat.outbound"
+                    ]
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/outboundFields"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "delete"
+                  },
+                  "collection": {
+                    "enum": [
+                      "management",
+                      "nat.outbound"
+                    ]
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection"
+                ],
+                "additionalProperties": false
               }
             ]
           },
