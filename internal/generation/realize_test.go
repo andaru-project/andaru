@@ -34,6 +34,8 @@ type fakeNetworkd struct {
 
 	noAddress, noRoute bool
 	stopped            bool // networkd is not running: networkctl fails
+	// ifupdown, for hosts the Debian installer set up: ifupFails makes ifup@ and networking.service raise nothing.
+	ifupFails bool
 
 	dns     map[string][]string     // what resolved reports per interface
 	editDNS func([]string) []string // distorts that report
@@ -99,6 +101,18 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 		if f.stopped {
 			return nil, errors.New("inactive")
 		}
+	case command == "systemctl start systemd-networkd.service":
+		f.stopped = false
+	case command == "systemctl stop systemd-networkd.service systemd-networkd.socket":
+		// KeepConfiguration=dynamic-on-stop: the addresses stay.
+		f.stopped, f.bound = true, map[string]string{}
+	case strings.HasPrefix(command, "dhcpcd -p -x "):
+		_ = os.Remove(filepath.Join(f.root, "run/dhcpcd", args[2]+".pid"))
+	case command == "systemctl restart ifup@eth0.service" || command == "systemctl restart networking.service":
+		if !f.ifupFails {
+			f.dhcpcd("eth0")
+			f.address["eth0"] = []string{"10.0.1.19/20"}
+		}
 	case strings.HasPrefix(command, "networkctl") && f.stopped:
 		return nil, errors.New("systemd-networkd is not running")
 	case command == "networkctl reload":
@@ -125,7 +139,7 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 	case command == "ip -d -j address show":
 		var links []map[string]any
 		for i, device := range slices.Sorted(maps.Keys(f.devices)) {
-			link := map[string]any{"ifindex": i + 2, "ifname": device, "link_type": "ether", "operstate": "UP", "mtu": 1500, "flags": []string{}, "address": "02:00:00:00:00:01"}
+			link := map[string]any{"ifindex": i + 2, "ifname": device, "link_type": "ether", "operstate": "UP", "mtu": 1500, "flags": []string{}, "address": "02:00:00:00:00:01", "permaddr": "02:00:00:00:00:01"}
 			if device != "eth0" && device != "eth1" {
 				link["linkinfo"] = map[string]string{"info_kind": "vlan"}
 			}
@@ -736,4 +750,12 @@ func TestObserveWithoutNetworkd(t *testing.T) {
 	if err != nil || len(o.managed) != 0 {
 		t.Fatalf("observation %+v, %v", o, err)
 	}
+}
+
+// dhcpcd is ifup starting dhcpcd for nic: its pid file names a live process.
+func (f *fakeNetworkd) dhcpcd(nic string) {
+	_ = os.MkdirAll(filepath.Join(f.root, "run/dhcpcd"), 0o755)
+	_ = os.MkdirAll(filepath.Join(f.root, "proc/602"), 0o755)
+	_ = os.WriteFile(filepath.Join(f.root, "run/dhcpcd", nic+".pid"), []byte("602\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(f.root, "proc/602/comm"), []byte("dhcpcd\n"), 0o644)
 }

@@ -40,6 +40,8 @@ type baselineManifest struct {
 type IfupdownBaseline struct {
 	Interfaces        []host.IfupdownInterface `json:"interfaces"`
 	NetworkdWasActive bool                     `json:"networkdWasActive"`
+	// Connected are the interfaces with a global IPv4 address before the takeover; a hand-back waits for them.
+	Connected []string `json:"connected"`
 }
 
 // ReadBaselineKind returns the kind of the captured baseline ("" when none was captured) and, for ifupdown, what it holds.
