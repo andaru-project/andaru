@@ -3,8 +3,8 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "info": {
     "title": "Andaru local engine API",
-    "version": "0.3.0-dev",
-    "description": "Experimental root-local engine API over Unix sockets only. Verified UID 0 SO_PEERCRED authorizes every route. Network status is observed; configuration writes create durable saved versions and never activate networking. No application accounts, HTTP identity headers, cookie/token authentication, live-generation/apply or backup service is implemented. Contracts remain provisional until Andaru 1.0.",
+    "version": "0.4.0-dev",
+    "description": "Experimental root-local engine API over Unix sockets only. Verified UID 0 SO_PEERCRED authorizes every route. Network status is observed; configuration writes create durable saved versions and never activate networking. An apply activates the saved head's network area as a live generation behind a rollback timer and needs explicit confirmation. No application accounts, HTTP identity headers, cookie/token authentication or backup service is implemented. Contracts remain provisional until Andaru 1.0.",
     "license": {
       "name": "GNU AGPLv3",
       "url": "https://github.com/andaru-project/andaru/blob/main/LICENSE"
@@ -1599,6 +1599,377 @@
           }
         }
       }
+    },
+    "/api/v1/applies": {
+      "get": {
+        "operationId": "listApplies",
+        "summary": "List applies and the generation pointers",
+        "responses": {
+          "200": {
+            "description": "Every apply, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppliesResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "applyNetwork",
+        "summary": "Activate the saved head's network configuration behind a rollback timer",
+        "description": "Synchronous: returns once the change is live and awaiting confirmation, or has failed and been undone. The work continues if the client disconnects. Confirm over a new connection; a session that survived the change does not show that a new one can be opened.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The apply, in state awaiting_confirmation, or failed with the previous configuration restored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Apply"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/applies/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,8}$"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getApply",
+        "responses": {
+          "200": {
+            "description": "One apply",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Apply"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/applies/{id}/confirmation": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,8}$"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "confirmApply",
+        "summary": "Keep a live apply; on a takeover, remove netplan and cloud-init as network writers",
+        "responses": {
+          "200": {
+            "description": "The confirmed apply; a non-empty reason means the takeover completes at the next boot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Apply"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/applies/{id}/rollback": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,8}$"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "rollBackApply",
+        "summary": "Restore what ran before a live apply without waiting for its deadline",
+        "responses": {
+          "200": {
+            "description": "The rolled-back apply",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Apply"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1784,7 +2155,11 @@
                   "REQUEST_TOO_LARGE",
                   "VALIDATION_FAILED",
                   "PRECONDITION_REQUIRED",
-                  "STORE_UNAVAILABLE"
+                  "STORE_UNAVAILABLE",
+                  "APPLY_REFUSED",
+                  "APPLY_IN_PROGRESS",
+                  "APPLY_NOT_AWAITING",
+                  "REALIZE_UNAVAILABLE"
                 ]
               },
               "message": {
@@ -1833,6 +2208,13 @@
                   }
                 },
                 "additionalProperties": false
+              },
+              "findings": {
+                "type": "array",
+                "description": "Why an apply was refused (APPLY_REFUSED only), in the preview's vocabulary.",
+                "items": {
+                  "$ref": "#/components/schemas/Finding"
+                }
               }
             }
           }
@@ -2163,6 +2545,194 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Finding"
+            }
+          }
+        }
+      },
+      "ApplyRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "savedVersion"
+        ],
+        "properties": {
+          "savedVersion": {
+            "$ref": "#/components/schemas/Version",
+            "description": "Must be the saved head: the version the operator previewed."
+          },
+          "takeover": {
+            "type": "boolean",
+            "default": false,
+            "description": "Replace netplan and cloud-init as the host's network configuration. Required exactly when netplan still configures the host."
+          },
+          "confirmTimeoutSeconds": {
+            "type": "integer",
+            "minimum": 30,
+            "maximum": 600,
+            "default": 120,
+            "description": "Seconds until the change is rolled back unless confirmed."
+          }
+        }
+      },
+      "Apply": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "savedVersion",
+          "takeover",
+          "state",
+          "previous",
+          "reason",
+          "createdAt",
+          "confirmTimeoutSeconds",
+          "files"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,8}$"
+          },
+          "savedVersion": {
+            "$ref": "#/components/schemas/Version"
+          },
+          "takeover": {
+            "type": "boolean"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "activating",
+              "awaiting_confirmation",
+              "confirmed",
+              "rolled_back",
+              "failed"
+            ],
+            "description": "awaiting_confirmation is live but will be rolled back at the deadline; only confirmed survives a reboot."
+          },
+          "previous": {
+            "oneOf": [
+              {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,8}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What was live before this apply; null is the pre-Andaru baseline."
+          },
+          "deadline": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Present while awaiting confirmation."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why the apply failed or was rolled back, or what remains to finish at the next boot; empty otherwise."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "confirmTimeoutSeconds": {
+            "type": "integer"
+          },
+          "files": {
+            "type": "array",
+            "description": "Files of this generation; their content is shown by the preview.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "mode"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "mode": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "AppliesResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "pointers",
+          "items"
+        ],
+        "properties": {
+          "pointers": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "confirmed",
+              "lastKnownGood",
+              "pending",
+              "live"
+            ],
+            "properties": {
+              "confirmed": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]{0,8}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The generation boot uses."
+              },
+              "lastKnownGood": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]{0,8}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The generation confirmed before it; boot falls back to it."
+              },
+              "pending": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]{0,8}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The apply awaiting confirmation, if any."
+              },
+              "live": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]{0,8}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "What runs now; null is the pre-Andaru baseline. Differs from confirmed after a boot fallback."
+              }
+            }
+          },
+          "items": {
+            "type": "array",
+            "description": "Every apply, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/Apply"
             }
           }
         }

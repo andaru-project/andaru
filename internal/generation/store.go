@@ -303,3 +303,16 @@ func (g Generation) verify(dir string) error {
 	}
 	return nil
 }
+
+// Contents returns a generation's files by destination path, each checked against the manifest.
+func Contents(dir string, g Generation) (map[string][]byte, error) {
+	out := make(map[string][]byte, len(g.Files))
+	for _, f := range g.Files {
+		data, err := g.content(dir, f)
+		if err != nil {
+			return nil, err
+		}
+		out[f.Path] = data
+	}
+	return out, nil
+}

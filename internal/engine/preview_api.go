@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/host"
@@ -21,9 +22,13 @@ type previewResponse struct {
 }
 
 // newSavedHandler serves everything that reads the saved store.
-func newSavedHandler(store *config.Store, readLinks func(context.Context) ([]host.LinkStatus, error), readFacts func() (host.RealizerFacts, error)) http.Handler {
+func newSavedHandler(store *config.Store, readLinks func(context.Context) ([]host.LinkStatus, error), readFacts func() (host.RealizerFacts, error), applies http.Handler) http.Handler {
 	configuration, preview := newConfigurationHandler(store), newPreviewHandler(store, readLinks, readFacts)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, appliesPath) {
+			applies.ServeHTTP(w, r)
+			return
+		}
 		if r.URL.Path == previewPath {
 			preview.ServeHTTP(w, r)
 			return

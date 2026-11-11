@@ -42,7 +42,9 @@ func Serve(ctx context.Context, socketPath, stateDir string) (result error) {
 		}
 	}()
 	defer func() { cancel(context.Canceled); <-stopped }()
-	err = serveUnix(lifetime, socketPath, newHandler(host.ReadLinks, newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts)))
+	read := hostReader{Links: host.ReadLinks, Facts: host.ReadRealizerFacts, Managed: host.ReadManaged, Baseline: host.ReadBaseline}
+	applies := newAppliesHandler(store.RealizationInput, read, newSystemdRunner(stateDir), stateDir)
+	err = serveUnix(lifetime, socketPath, newHandler(host.ReadLinks, newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, applies)))
 	cause := context.Cause(lifetime)
 	if cause != nil && !errors.Is(cause, context.Canceled) && !errors.Is(cause, context.DeadlineExceeded) {
 		return cause
