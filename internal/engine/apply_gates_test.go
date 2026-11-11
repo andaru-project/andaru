@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"slices"
 	"testing"
 
@@ -53,6 +54,18 @@ func taken() gateInput {
 
 func TestApplyFindings(t *testing.T) {
 	type want struct{ code, path string }
+	var contract struct {
+		Components struct {
+			Schemas map[string]struct {
+				Properties map[string]struct {
+					Enum []string `json:"enum"`
+				} `json:"properties"`
+			} `json:"schemas"`
+		} `json:"components"`
+	}
+	if err := json.Unmarshal(openAPIDocument, &contract); err != nil {
+		t.Fatal(err)
+	}
 	for name, row := range map[string]struct {
 		in   func() gateInput
 		want []want
@@ -177,6 +190,10 @@ func TestApplyFindings(t *testing.T) {
 			for _, f := range applyFindings(row.in()) {
 				if f.Severity != "error" || f.Message == "" {
 					t.Fatalf("finding %+v must be an explained error", f)
+				}
+				// A client validating against the served contract must not reject a refused apply.
+				if !slices.Contains(contract.Components.Schemas["ApplyFinding"].Properties["code"].Enum, f.Code) {
+					t.Fatalf("%s is not a code the contract's ApplyFinding admits", f.Code)
 				}
 				got = append(got, want{f.Code, f.Path})
 			}

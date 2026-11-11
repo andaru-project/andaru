@@ -129,7 +129,7 @@ func TestTakeoverRollbackRestoresBaselineExactly(t *testing.T) {
 		t.Fatalf("manifest does not record ownership: %s", data)
 	}
 	writeFile(t, path, strings.NewReplacer(uid, `"uid":0`, gid, `"gid":192`).Replace(string(data)))
-	if err := b.r.Rollback(t.Context(), id, "deadline"); err != nil {
+	if err := b.timerFires(id); err != nil {
 		t.Fatal(err)
 	}
 	b.wantDisk(netplan)
@@ -148,13 +148,13 @@ func TestTakeoverRollbackRestoresBaselineExactly(t *testing.T) {
 func TestSecondTakeoverAttemptRecaptures(t *testing.T) {
 	b := cloud(t)
 	id := b.takeover()
-	if err := b.r.Rollback(t.Context(), id, "deadline"); err != nil {
+	if err := b.timerFires(id); err != nil {
 		t.Fatal(err)
 	}
 	changed := netplanNetwork + "LinkLocalAddressing=ipv6\n"
 	writeFile(t, filepath.Join(b.net.root, netDir, "10-netplan-eth0.network"), changed)
 	second := b.takeover()
-	if err := b.r.Rollback(t.Context(), second, "deadline"); err != nil {
+	if err := b.timerFires(second); err != nil {
 		t.Fatal(err)
 	}
 	b.wantDisk(map[string]string{"10-netplan-eth0.network": changed, "10-netplan-eth0.link": netplanLink})
@@ -212,7 +212,7 @@ func TestConfirmRefusals(t *testing.T) {
 		t.Fatalf("after the deadline: %v", err)
 	}
 	b.wantPointers(0, 0, 1, 1)
-	if err := b.r.Rollback(t.Context(), id, "deadline"); err != nil {
+	if err := b.timerFires(id); err != nil {
 		t.Fatal(err)
 	}
 	if err := b.r.Confirm(t.Context(), id); !errors.Is(err, ErrWrongState) {
@@ -238,7 +238,7 @@ func TestRollbackAfterConfirmDoesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := len(b.net.argv)
-	if err := b.r.Rollback(t.Context(), id, "deadline"); !errors.Is(err, ErrWrongState) {
+	if err := b.timerFires(id); !errors.Is(err, ErrWrongState) {
 		t.Fatalf("a late timer rolled back a confirmed generation: %v", err)
 	}
 	b.wantDisk(one)
@@ -259,7 +259,7 @@ func TestRollbackQueuedBehindConfirm(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- b.r.Rollback(t.Context(), id, "deadline") }()
+	go func() { done <- b.timerFires(id) }()
 	time.Sleep(150 * time.Millisecond) // the timer is now waiting on the lock
 	if err := writeJSON(filepath.Join(b.dir, "pointers.json"), Pointers{Confirmed: &id, Live: &id}); err != nil {
 		t.Fatal(err)
@@ -403,4 +403,71 @@ func TestBootFallsBack(t *testing.T) {
 	if got := b.net.netFiles(); len(got) != 0 {
 		t.Fatalf("boot wrote unverified files: %v", slices.Collect(maps.Keys(got)))
 	}
+}
+
+func TestDeadlineRollbackWaitsForTheDeadline(t *testing.T) {
+	b := newBench(t)
+	b.live(one)
+	id := b.gen(false, two)
+	if err := b.r.Activate(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	// The timer was armed before activation; if it fires early the operator must still get the window they were shown.
+	if err := b.r.Rollback(t.Context(), id, "deadline"); err == nil || errors.Is(err, ErrWrongState) {
+		t.Fatalf("the timer rolled back before the deadline: %v", err)
+	}
+	b.wantDisk(two)
+	b.wantPointers(1, 0, id, id)
+	if err := b.r.Rollback(t.Context(), id, "requested"); err != nil {
+		t.Fatalf("an operator's rollback must not wait: %v", err)
+	}
+}
+
+func TestBootFinishesOnlyAConfirmedTakeover(t *testing.T) {
+	// A takeover that was rolled back leaves its baseline capture behind; that alone must not make boot remove netplan.
+	b := cloud(t)
+	id := b.takeover()
+	if err := b.r.Rollback(t.Context(), id, "requested"); err != nil {
+		t.Fatal(err)
+	}
+	for name := range netplan {
+		os.Remove(filepath.Join(b.net.root, netDir, name))
+	}
+	b.net.apply()
+	plain := b.gen(false, one)
+	if err := b.r.Activate(t.Context(), plain); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Confirm(t.Context(), plain); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(b.net.root, "run")); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Boot(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !b.exists("etc/netplan/50-cloud-init.yaml") || b.exists(cloudConfig) || b.net.ran("systemctl") != 0 {
+		t.Fatalf("boot made a takeover permanent that was never confirmed: %q", b.net.argv)
+	}
+
+	// A confirmed takeover stays one after later ordinary applies are confirmed on top of it.
+	b = cloud(t)
+	if err := b.r.Confirm(t.Context(), b.takeover()); err != nil {
+		t.Fatal(err)
+	}
+	second := b.gen(false, two)
+	if err := b.r.Activate(t.Context(), second); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Confirm(t.Context(), second); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(b.net.root, "etc/netplan/50-cloud-init.yaml"), netplanYAML) // cloud-init wrote it back
+	b.reboot()
+	if err := b.r.Boot(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	b.wantPermanent()
+	b.wantDisk(two)
 }

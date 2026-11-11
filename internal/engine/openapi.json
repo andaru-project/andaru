@@ -1663,7 +1663,7 @@
         },
         "responses": {
           "200": {
-            "description": "The apply, in state awaiting_confirmation, or failed with the previous configuration restored",
+            "description": "The apply: awaiting_confirmation when live; failed with the previous configuration restored; or activating when the previous files could not be restored and the armed rollback timer still owns the change",
             "content": {
               "application/json": {
                 "schema": {
@@ -2327,9 +2327,9 @@
               },
               "findings": {
                 "type": "array",
-                "description": "Why an apply was refused (APPLY_REFUSED only), in the preview's vocabulary.",
+                "description": "Why an apply was refused (APPLY_REFUSED only).",
                 "items": {
-                  "$ref": "#/components/schemas/Finding"
+                  "$ref": "#/components/schemas/ApplyFinding"
                 }
               }
             }
@@ -2850,6 +2850,54 @@
             "items": {
               "$ref": "#/components/schemas/Apply"
             }
+          }
+        }
+      },
+      "ApplyFinding": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "severity",
+          "code",
+          "path",
+          "message"
+        ],
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": [
+              "error",
+              "warning"
+            ]
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "HARDWARE_MISSING",
+              "HARDWARE_AMBIGUOUS",
+              "NAME_COLLISION",
+              "FOREIGN_CONFIGURATION",
+              "TOOL_MISSING",
+              "KERNEL_SUPPORT_MISSING",
+              "INTERFACE_NAME_UNSUPPORTED",
+              "CREDENTIAL_TOO_LONG",
+              "UNSUPPORTED_COMBINATION",
+              "DEPENDENCY_UNAVAILABLE",
+              "RA_PREFIX_UNSUPPORTED",
+              "BOOT_UNIT_DISABLED",
+              "TAKEOVER_UNSUPPORTED_BASELINE",
+              "TAKEOVER_MISMATCH",
+              "APPLY_UNSUPPORTED",
+              "WOULD_UNCONFIGURE",
+              "NETDEV_CHANGE_UNSUPPORTED"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "description": "What the finding is about: a JSON Pointer into the saved snapshot value, an interface name, a systemd unit name or a host file path; empty for host-wide findings."
+          },
+          "message": {
+            "type": "string"
           }
         }
       }

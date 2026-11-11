@@ -422,6 +422,10 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) error {
 	if err != nil {
 		return err
 	}
+	// The timer is armed before activation, so it can fire inside the window the operator was shown; it retries until the deadline.
+	if reason == "deadline" && g.State.State == Awaiting && g.Deadline != nil && r.Now().Before(*g.Deadline) {
+		return fmt.Errorf("roll back %d: the confirmation deadline has not passed", id)
+	}
 	// from is this generation whatever the live pointer says: a kill may have left the pointer behind the files.
 	from := make([]placed, 0, len(g.Files))
 	for _, f := range g.Files {

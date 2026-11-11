@@ -106,6 +106,17 @@ func TestReadBaseline(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "sbin/ifup"), nil, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// A masked unit is a link to /dev/null: it resolves, and it never runs.
+	wanted := filepath.Join(root, "etc/systemd/system/sysinit.target.wants/andaru-network-boot.service")
+	if err := os.Remove(wanted); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/dev/null", wanted); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := readBaseline(root); got.BootUnit {
+		t.Fatal("a masked boot unit counted as enabled")
+	}
 	if got, _ := readBaseline(root); !got.Ifupdown {
 		t.Fatal("ifupdown not seen")
 	}

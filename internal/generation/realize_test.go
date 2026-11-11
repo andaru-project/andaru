@@ -374,7 +374,7 @@ func TestRollbackRestoresPreviousAndDeletesDevices(t *testing.T) {
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.r.Rollback(t.Context(), id, "deadline"); err != nil {
+	if err := b.timerFires(id); err != nil {
 		t.Fatal(err)
 	}
 	b.wantDisk(one)
@@ -395,7 +395,7 @@ func TestRollbackSurvivesFailingReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.net.fail = "networkctl"
-	if err := b.r.Rollback(t.Context(), id, "deadline"); err != nil {
+	if err := b.timerFires(id); err != nil {
 		t.Fatal(err)
 	}
 	b.wantDisk(one)
@@ -418,7 +418,7 @@ func TestRollbackIsNoOpUnlessPending(t *testing.T) {
 	never := b.gen(false, two)
 	before := len(b.net.argv)
 	for _, id := range []int{1, rolled, never, 99} {
-		if err := b.r.Rollback(t.Context(), id, "deadline"); !errors.Is(err, ErrWrongState) {
+		if err := b.timerFires(id); !errors.Is(err, ErrWrongState) {
 			t.Fatalf("rollback %d: %v", id, err)
 		}
 	}
@@ -443,7 +443,7 @@ func TestRollbackFallsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(b.dir, "1", "files", "50-andaru-eth0.network"), "evil")
-	if err := b.r.Rollback(t.Context(), id, "deadline"); err != nil {
+	if err := b.timerFires(id); err != nil {
 		t.Fatal(err)
 	}
 	b.wantDisk(map[string]string{"50-andaru-eth0.network": uplinkStatic})
@@ -463,7 +463,7 @@ func TestRollbackWithNothingUsableLeavesFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(b.dir, "1", "files", "50-andaru-eth0.network"), "evil")
-	if err := b.r.Rollback(t.Context(), id, "deadline"); err == nil {
+	if err := b.timerFires(id); err == nil {
 		t.Fatal("rollback reported success with nothing to restore")
 	}
 	// Removing the files would take the host off the network; what runs now at least works.
@@ -481,7 +481,7 @@ func TestFirstApplyWithoutBaselineRollsBackToNothing(t *testing.T) {
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.r.Rollback(t.Context(), id, "deadline"); err != nil {
+	if err := b.timerFires(id); err != nil {
 		t.Fatal(err)
 	}
 	b.wantDisk(map[string]string{"10-other.network": "[Match]\nName=eth9\n"})
@@ -516,7 +516,7 @@ func TestKillPoints(t *testing.T) {
 			}
 			// The timer fires later, with nothing left of the killed process.
 			b.r.failAt = nil
-			if err := b.r.Rollback(t.Context(), id, "deadline"); err != nil && !errors.Is(err, ErrWrongState) {
+			if err := b.timerFires(id); err != nil && !errors.Is(err, ErrWrongState) {
 				t.Fatal(err)
 			}
 			b.wantDisk(one)
@@ -588,4 +588,10 @@ func TestConfirmRepairsLivePointer(t *testing.T) {
 	}
 	// A stale live pointer would make the next apply replace the wrong files.
 	b.wantPointers(id, 1, 0, id)
+}
+
+// timerFires is the rollback timer running after the confirmation deadline.
+func (b *bench) timerFires(id int) error {
+	b.now = b.now.Add(10 * time.Minute)
+	return b.r.Rollback(b.t.Context(), id, "deadline")
 }

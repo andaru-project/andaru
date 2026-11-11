@@ -61,7 +61,8 @@ func (r Realizer) baseline() (set []placed, captured bool, err error) {
 // captureBaseline copies netplan's files out of /run. Until a generation has been
 // confirmed each attempt captures afresh, so a netplan change between attempts is kept.
 func (r Realizer) captureBaseline(p Pointers) error {
-	if p.Confirmed != nil || p.LastKnownGood != nil {
+	// Once a takeover is confirmed netplan's files are gone for good; what is in /run then is not a baseline.
+	if p.Takeover {
 		return nil
 	}
 	paths, err := filepath.Glob(r.Root + "/run/systemd/network/10-netplan-*")
@@ -125,6 +126,7 @@ func (r Realizer) Confirm(ctx context.Context, id int) error {
 	// Pointers first: once they name this generation a late timer and the next boot both keep it.
 	// Live is set too: a kill during activation may have left it behind the files.
 	p.LastKnownGood, p.Confirmed, p.Pending, p.Live = p.Confirmed, &id, nil, &id
+	p.Takeover = p.Takeover || g.Takeover
 	if err := r.writePointers("confirm:pointers", p); err != nil {
 		return err
 	}
@@ -240,7 +242,7 @@ func (r Realizer) Boot(ctx context.Context) error {
 		return r.writePointers("boot:pointers", p)
 	}
 	base, captured, baseErr := r.baseline()
-	if captured {
+	if p.Takeover {
 		if err := r.makePermanent(ctx, false); err != nil {
 			slog.Error("finish the takeover", "error", err)
 		}

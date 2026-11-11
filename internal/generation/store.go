@@ -58,6 +58,8 @@ type Pointers struct {
 	LastKnownGood *int `json:"lastKnownGood"`
 	Pending       *int `json:"pending"`
 	Live          *int `json:"live"`
+	// Takeover records that a takeover was confirmed, so boot keeps netplan and cloud-init out for good.
+	Takeover bool `json:"takeover"`
 }
 
 type Generation struct {
