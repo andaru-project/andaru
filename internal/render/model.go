@@ -49,6 +49,10 @@ type segment struct {
 	Addressing struct {
 		IPv4 ipv4 `json:"ipv4"`
 		IPv6 ipv6 `json:"ipv6"`
+		DNS  *struct {
+			Servers       []string `json:"servers"`
+			SearchDomains []string `json:"searchDomains"`
+		} `json:"dns"`
 	} `json:"addressing"`
 }
 type declaration struct {

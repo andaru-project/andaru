@@ -354,3 +354,33 @@ func TestLinkLocalAddressIsNotAnnounced(t *testing.T) {
 		t.Fatalf("a link-local prefix must not be advertised:\n%s", network)
 	}
 }
+
+func TestDeclaredDNSReplacesOffered(t *testing.T) {
+	result := render(t, fixture(t, "dhcp-dns"))
+	declaring, other := fileEnding(t, result, "ens18.network").Content, fileEnding(t, result, "ens19.network").Content
+	if !strings.Contains(declaring, "\nDNS=192.0.2.53\n") || strings.Contains(declaring, "\nDomains=") || strings.Contains(declaring, "UseDNS=yes") || strings.Count(declaring, "UseDNS=no") != 3 {
+		t.Fatalf("declared servers must replace offered ones in every section:\n%s", declaring)
+	}
+	// A second uplink keeps contributing what its DHCP server offers.
+	if strings.Contains(other, "DNS=192") || !strings.Contains(other, "UseDNS=yes") || strings.Contains(other, "UseDNS=no") {
+		t.Fatalf("a segment without declared DNS changed:\n%s", other)
+	}
+}
+
+func TestDNSOrderIsDeclared(t *testing.T) {
+	network := fileEnding(t, render(t, fixture(t, "static-dns")), "ens18.network").Content
+	want := "Address=192.0.2.10/24\nGateway=192.0.2.1\nDNS=192.0.2.53\nDNS=2001:db8::53\nDomains=b.example a.example\n"
+	if !strings.Contains(network, want) {
+		t.Fatalf("want, in this order:\n%s\ngot:\n%s", want, network)
+	}
+}
+
+func TestDNSOnUnrealisableLink(t *testing.T) {
+	in := fixture(t, "static-dns")
+	in.Links = nil
+	for _, f := range render(t, in).Files {
+		if strings.Contains(f.Content, "DNS=") {
+			t.Fatalf("%s names DNS servers for an interface that does not exist:\n%s", f.Path, f.Content)
+		}
+	}
+}

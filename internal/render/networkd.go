@@ -38,9 +38,12 @@ func yesNo(v bool) string {
 	return "no"
 }
 
-// shortcut: the host uses provider DNS for its own lookups; revisit when the DNS area owns the resolver.
-// NTP, hostname and domains stay ignored: those are later areas.
-var ignoreOffered = []string{"UseDNS=yes", "UseNTP=no", "UseHostname=no", "UseDomains=no"}
+// offered says what a segment takes from DHCP and router advertisements. NTP, hostname and domains
+// are later areas. DNS servers are taken unless the segment declares its own.
+// shortcut: the host uses provider or declared DNS for its own lookups; revisit when the DNS area owns the resolver.
+func offered(useDNS string) []string {
+	return []string{"UseDNS=" + useDNS, "UseNTP=no", "UseHostname=no", "UseDomains=no"}
+}
 
 // addressing renders one link's segment. ppp marks a pppd-owned interface:
 // IPv4 comes from pppd and DHCPv6 must not wait for a router advertisement.
@@ -78,10 +81,21 @@ func (r *renderer) addressing(id string, ppp bool) (sections []section, sources 
 			network = append(network, "Gateway="+g)
 		}
 	}
+	useDNS := "yes"
+	if dns := s.Addressing.DNS; dns != nil {
+		// Declared order is the order servers are tried in.
+		for _, server := range dns.Servers {
+			network = append(network, "DNS="+server)
+		}
+		if len(dns.SearchDomains) > 0 {
+			network = append(network, "Domains="+strings.Join(dns.SearchDomains, " "))
+		}
+		useDNS = "no"
+	}
 	var dhcp4, dhcp6, accept, delegation, send []string
 	var prefixes []section
 	if v4.Mode == "dhcp" {
-		dhcp4 = ignoreOffered
+		dhcp4 = offered(useDNS)
 	}
 	sendRA := v6.RA != nil && v6.RA.Enabled
 	switch v6.Mode {
@@ -106,13 +120,13 @@ func (r *renderer) addressing(id string, ppp bool) (sections []section, sources 
 		}
 	case "slaac", "dhcp6":
 		network = append(network, "IPv6AcceptRA=yes")
-		accept = []string{"UseDNS=yes", "UseDomains=no"}
+		accept = []string{"UseDNS=" + useDNS, "UseDomains=no"}
 		if v6.Mode == "dhcp6" && ppp {
 			// Some providers send no router advertisement on PPP and expect a bare solicit.
 			dhcp6 = append(dhcp6, "WithoutRA=solicit")
 		}
 		// Also for SLAAC: a router advertisement with the managed or other flag starts DHCPv6 by itself.
-		dhcp6 = append(dhcp6, ignoreOffered...)
+		dhcp6 = append(dhcp6, offered(useDNS)...)
 		if v6.Mode == "dhcp6" {
 			if v6.RequestPrefixLength != nil {
 				dhcp6 = append(dhcp6, fmt.Sprintf("PrefixDelegationHint=::/%d", *v6.RequestPrefixLength))
