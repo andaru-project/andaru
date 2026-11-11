@@ -61,6 +61,11 @@ The actual OpenAPI 3.1 document is embedded from [`internal/engine/openapi.json`
 | `GET /api/v1/preview/network` | Files a saved version would hand to systemd-networkd and pppd on this host, redacted, with findings; `state:"preview"`; optional `?savedVersion=N` |
 | `GET /api/v1/takeover/proposal` | What a first takeover of this host would save, as a change batch, with the host's adapters, its `state` and findings; writes nothing |
 | `POST /api/v1/preview/network/draft` | The files and findings a change batch would produce if saved now, as the preview and an apply would judge them; saves nothing |
+| `GET/POST /api/v1/config/{addresses\|services}`, `…/{id}` | Address and service objects for the packet filter |
+| `GET/POST /api/v1/config/policy/{input\|forward}` | A rule list in execution order with its `version`; `POST ?before=<rule id>` places a new rule |
+| `GET/PUT/DELETE /api/v1/config/policy/{chain}/{id}` | One rule, version-checked like any object |
+| `PUT /api/v1/config/policy/{chain}/order` | Reorder a list: every rule ID once, `If-Match: "order.N"` |
+| `GET/PUT/DELETE /api/v1/config/management`, `/api/v1/config/nat/outbound` | Single objects, `If-Match: "management.N"` / `"nat.outbound.N"`, `0` while unset |
 
 GET resources support HEAD without a body. Unsupported methods return `405 METHOD_NOT_ALLOWED` with the resource's `Allow` methods; unknown resources return `404 NOT_FOUND`. Missing/unverified/non-root peers get `403 FORBIDDEN` before routing/body processing. Inventory failures return `503 INVENTORY_UNAVAILABLE`, never an empty/partial success. Errors share `{"error":{"code":"...","message":"...","details":[]}}`; field details use safe request-relative JSON Pointers and conflicts may add redacted `error.current`. JSON responses are `no-store`; diagnostics never quote secret values.
 
@@ -219,6 +224,8 @@ What happens, in order:
 | `RESOLVED_NOT_IN_CHARGE` | An ifupdown host's `/etc/resolv.conf` is not managed by systemd-resolved, which becomes the host's resolver. Run `apt install systemd-resolved` first. |
 | `DHCP_IDENTITY_UNKNOWN` | An ifupdown host's DHCP client is not dhcpcd with its default identity settings, so networkd could not keep the lease. |
 | `DNS_REQUIRED` | No interface of the ifupdown host takes DNS servers from DHCP or router advertisements, and no segment declares `dns`. The message lists the servers in use now. |
+| `MANAGEMENT_REQUIRED` | Rules or outbound NAT are declared without `management.segment`, or the management segment's interface is unavailable. |
+| `FOREIGN_FILTER` | `nftables.service`, `firewalld` or `ufw` is enabled and would replace or override Andaru's filter. |
 | `APPLY_UNSUPPORTED` | PPPoE links, delegated prefixes and router advertisements wait for the firewall. |
 | `NETDEV_CHANGE_UNSUPPORTED` | An existing VLAN, bridge or bond would change. Remove it in one apply and add it again in the next. |
 | `BOOT_UNIT_DISABLED` | `andaru-network-boot.service` is not enabled, so a confirmed configuration would not return after a reboot. |
@@ -240,6 +247,26 @@ sudo andaru ctl takeover --accept-detected  # no questions: take over exactly wh
 Quitting, pressing Ctrl+C or losing the session before **Apply** writes nothing. Without a terminal the assistant refuses and points to `--accept-detected`, which applies only when the detection is complete and nothing would refuse it.
 
 The assistant only takes over: on a host already taken over, or with a configuration already saved, it says what to run instead and changes nothing. It cannot express everything netplan or ifupdown can; when it meets a construct it cannot reproduce, such as a non-default route, a routing policy, a MAC change, DNS set on several interfaces in one file, or an ifupdown hook, it lists it as an error and does not offer **Apply**. If a save from another session lands between the proposal and **Apply**, nothing is applied and the assistant asks to be run again. If the apply fails after the save, it prints the saved version and the command to retry.
+
+### Packet filter
+
+Andaru filters with its own nftables table, `inet andaru`, applied, confirmed and rolled back together with the network files of the same generation. Design and limits: [packet filter and outbound NAT](../superpowers/specs/2026-11-12-packet-filter-design.md).
+
+```sh
+sudo andaru ctl config list policy/forward              # rules in execution order, and the list's version
+printf '%s\n' '{"name":"web","protocol":"tcp","ports":["80","443"]}' | sudo andaru ctl config create services
+sudo andaru ctl config order forward --version 12 "$RULE_B" "$RULE_A"
+sudo andaru ctl preview network                          # shows "nft:inet/andaru" beside the networkd files
+```
+
+- **The filter switches on with `management.segment`.** While it is unset there is no table and nothing forwards, as before; rules or outbound NAT without it are refused with `MANAGEMENT_REQUIRED`. SSH (22/tcp) is always accepted on the management segment, from `allowedSources` when set; no rule can remove that.
+- **Objects:** addresses are hosts, networks, ranges or one-level groups of those; services are tcp/udp ports and ranges, icmp/icmpv6 types, or groups.
+- **Rules:** `policy.input` (to the firewall) and `policy.forward` (through it), tried in list order: `accept`, `drop` or `reject`, `from`/`to` zones or addresses (empty means any), `services`, `log` (to the kernel log). A rule matches IPv4 and IPv6 alike unless its addresses are of one family. Reordering is its own version-checked operation, so two sessions cannot reorder past each other.
+- **Fixed rules, before every rule:** established and related accepted, invalid dropped, loopback and ICMPv6 neighbour discovery accepted, DHCPv6 replies accepted; everything unmatched is dropped. The firewall's own outgoing traffic is not filtered.
+- **Outbound NAT** `automatic` masquerades IPv4 forwarded out of every segment with a default route (a static gateway, DHCP or PPPoE). IPv6 is routed, not translated.
+- **Applying:** the filter is loaded before the networkd files, and when going back to a generation without one, or to the pre-Andaru baseline, the table is deleted only after the files. Boot loads the confirmed filter before networkd starts; a filter that does not load makes boot fall back to the last-known-good generation, files and filter together.
+- **Refused:** `nft` missing (`TOOL_MISSING`; install `nftables`), or `nftables.service`, `firewalld` or `ufw` enabled (`FOREIGN_FILTER`): Debian's `/etc/nftables.conf` begins with `flush ruleset`. Other tables, such as Podman's, are never touched.
+- **The assistant** proposes starter rules for the LAN (to any; ping and DNS to the firewall), outbound NAT, and the management adapter your SSH session arrives on, and shows the rule table in its review.
 
 ### Host DNS servers
 
