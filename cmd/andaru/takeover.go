@@ -306,9 +306,3 @@ func (c *httpTakeoverClient) Apply(ctx context.Context, saved config.Version, ti
 	err = c.do(ctx, http.MethodPost, "/api/v1/applies", body, 160*time.Second, &reply)
 	return
 }
-
-// interactive asks the operator; the forms arrive with the next change.
-func interactive(ctx context.Context, c takeoverClient, p proposal, timeout int, stdin io.Reader, stdout io.Writer, hold func()) int {
-	fmt.Fprintln(stdout, "The interactive assistant is not built yet; use --accept-detected.")
-	return 1
-}
