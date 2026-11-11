@@ -190,45 +190,54 @@ func ReadNetplan(root string, links []LinkStatus, managed []Managed, defaultRout
 			gateways = append(gateways, keys["Gateway"]...)
 		}
 		gateway := func(v6 bool) string {
+			var family []string
 			for _, g := range gateways {
-				if a, err := netip.ParseAddr(g); err == nil && a.Is6() == v6 {
-					return g
+				if a, err := netip.ParseAddr(g); err == nil && a.Is6() == v6 && !slices.Contains(family, g) {
+					family = append(family, g)
 				}
 			}
-			return ""
+			if len(family) > 1 {
+				slices.Sort(family) // route sections come from a map; keep the finding stable
+				problem("Gateway", "Several default gateways in one address family cannot be expressed: "+strings.Join(family, ", "))
+			}
+			return first(family)
 		}
+		gateway4, gateway6 := gateway(false), gateway(true)
 		switch {
 		case (dhcp == "yes" || dhcp == "ipv4") && len(v4) > 0:
 			problem("DHCP", "IPv4 is both DHCP and static here.")
 		case dhcp == "yes" || dhcp == "ipv4":
 			n.IPv4.Mode = "dhcp"
 		case len(v4) > 0:
-			n.IPv4 = Addressing{"static", v4, gateway(false)}
+			n.IPv4 = Addressing{"static", v4, gateway4}
 		default:
 			n.IPv4.Mode = "none"
 		}
-		if n.IPv4.Mode != "static" && gateway(false) != "" {
-			problem("Gateway", "An IPv4 gateway without static IPv4 addresses cannot be expressed: "+gateway(false))
+		if n.IPv4.Mode != "static" && n.IPv4.Mode != "" && gateway4 != "" {
+			problem("Gateway", "An IPv4 gateway without static IPv4 addresses cannot be expressed: "+gateway4)
 		}
 		ra := first(network["IPv6AcceptRA"])
 		liveSLAAC := slices.ContainsFunc(link.Addresses, func(a AddressStatus) bool {
 			return a.Family == "ipv6" && a.Scope == "global" && a.PrefixLength != 128
 		})
+		// Without IPv6AcceptRA= networkd accepts router advertisements, so a live SLAAC address means they are in use.
+		acceptsRA := ra == "yes" || (ra == "" && first(network["LinkLocalAddressing"]) != "no" && liveSLAAC)
 		switch {
 		case (dhcp == "yes" || dhcp == "ipv6") && len(v6) > 0:
 			problem("DHCP", "IPv6 is both DHCPv6 and static here.")
 		case dhcp == "yes" || dhcp == "ipv6":
 			n.IPv6.Mode = "dhcp6"
+		case len(v6) > 0 && acceptsRA:
+			problem("IPv6AcceptRA", "Static IPv6 addresses together with router advertisements cannot be expressed; Andaru's static IPv6 ignores them.")
 		case len(v6) > 0:
-			n.IPv6 = Addressing{"static", v6, gateway(true)}
-		// Without IPv6AcceptRA= networkd accepts router advertisements, so a live SLAAC address means SLAAC is in use.
-		case ra == "yes" || (ra == "" && first(network["LinkLocalAddressing"]) != "no" && liveSLAAC):
+			n.IPv6 = Addressing{"static", v6, gateway6}
+		case acceptsRA:
 			n.IPv6.Mode = "slaac"
 		default:
 			n.IPv6.Mode = "none"
 		}
-		if n.IPv6.Mode != "static" && gateway(true) != "" {
-			problem("Gateway", "An IPv6 gateway without static IPv6 addresses cannot be expressed: "+gateway(true))
+		if n.IPv6.Mode != "static" && n.IPv6.Mode != "" && gateway6 != "" {
+			problem("Gateway", "An IPv6 gateway without static IPv6 addresses cannot be expressed: "+gateway6)
 		}
 		n.DNS = network["DNS"]
 		for _, d := range network["Domains"] {
