@@ -85,7 +85,7 @@ func TestCreateRefusesForeignPath(t *testing.T) {
 		"/run/systemd/network/10-netplan-eth0.network",
 		"/run/systemd/network/50-andaru-x/../../etc/y.network",
 		"/run/systemd/system/andaru-pppoe-x.service",
-		"/run/systemd/network/50-andaru-a.link",
+		"/run/systemd/network/50-andaru-a.conf",
 	} {
 		dir := Dir(t.TempDir())
 		_, err := Create(dir, Manifest{Files: []FileEntry{{Path: path, Mode: "0644"}}}, map[string][]byte{path: []byte("x")})

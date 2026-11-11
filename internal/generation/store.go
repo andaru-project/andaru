@@ -70,7 +70,7 @@ type Generation struct {
 }
 
 var (
-	ownPath = regexp.MustCompile(`^/run/systemd/network/50-andaru-[^/]+\.(network|netdev)$`)
+	ownPath = regexp.MustCompile(`^/run/systemd/network/50-andaru-[^/]+\.(network|netdev|link)$`)
 	idName  = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
 )
 

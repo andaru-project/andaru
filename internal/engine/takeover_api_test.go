@@ -224,7 +224,7 @@ func TestDraftPreview(t *testing.T) {
 	if len(b.drafted) != 1 || len(b.drafted[0].Operations) != 1 {
 		t.Fatalf("drafted = %+v", b.drafted)
 	}
-	if len(reply.Files) != 1 || !strings.Contains(reply.Files[0].Content, "DNS=172.16.53.53") || reply.ApplyFindings == nil {
+	if len(reply.Files) != 2 || !strings.Contains(reply.Files[1].Content, "DNS=172.16.53.53") || reply.ApplyFindings == nil {
 		t.Fatalf("reply = %s", w.Body)
 	}
 	for _, f := range reply.ApplyFindings {
@@ -293,7 +293,7 @@ func (b *takeoverBench) postDraft(t *testing.T) draftReply {
 
 func TestDraftShowsTakeoverLimits(t *testing.T) {
 	got := newDebianBench(t, "ifupdown-dhcp").postDraft(t)
-	if len(got.ApplyFindings) != 0 || len(got.Files) != 1 || !strings.Contains(got.Files[0].Content, "DUIDRawData=00:01:32:87:03:54:bc:24:11:38:71:37") {
+	if len(got.ApplyFindings) != 0 || len(got.Files) != 2 || !strings.Contains(got.Files[1].Content, "DUIDRawData=00:01:32:87:03:54:bc:24:11:38:71:37") {
 		t.Fatalf("draft = %+v", got)
 	}
 	var limits []string
@@ -331,7 +331,7 @@ func TestIdentityComesFromTheCapturedBaseline(t *testing.T) {
 	// After confirmation ifupdown is masked and dhcpcd's own DUID may have changed or gone.
 	b.baseline.IfupdownMasked = true
 	got := b.postDraft(t)
-	if len(got.Files) != 1 || !strings.Contains(got.Files[0].Content, "DUIDRawData=aa:bb:cc\n") {
+	if len(got.Files) != 2 || !strings.Contains(got.Files[1].Content, "DUIDRawData=aa:bb:cc\n") {
 		t.Fatalf("files = %+v", got.Files)
 	}
 }

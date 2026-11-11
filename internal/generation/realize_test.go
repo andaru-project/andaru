@@ -31,6 +31,7 @@ type fakeNetworkd struct {
 	state   string
 	fail    string // commands starting with this fail
 	chowns  []string
+	onRun   func(command string) // called with every command, the lock held
 
 	noAddress, noRoute bool
 	stopped            bool // networkd is not running: networkctl fails
@@ -93,6 +94,9 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 	defer f.mu.Unlock()
 	command := filepath.Base(name) + " " + strings.Join(args, " ")
 	f.argv = append(f.argv, command)
+	if f.onRun != nil {
+		f.onRun(command)
+	}
 	if f.fail != "" && strings.HasPrefix(command, f.fail) {
 		return nil, errors.New(command + ": injected failure")
 	}

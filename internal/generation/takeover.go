@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/andaru-project/andaru/internal/host"
@@ -184,7 +186,7 @@ func (r Realizer) makePermanent(ctx context.Context, reload bool, kind string) e
 		}
 	}
 	// netplan's generator is what enables networkd on cloud images; without its YAML nothing else would.
-	step("permanent:enable", func() error {
+	enable := func() error {
 		// Andaru's links are never required for "online", so wait-online would hold every boot for its two-minute timeout.
 		var failures []error
 		for _, args := range [][]string{{"enable", "systemd-networkd.service"}, {"disable", "systemd-networkd-wait-online.service"}} {
@@ -195,8 +197,9 @@ func (r Realizer) makePermanent(ctx context.Context, reload bool, kind string) e
 			failures = append(failures, err)
 		}
 		return errors.Join(failures...)
-	})
+	}
 	if kind == "ifupdown" {
+		step("permanent:enable", enable)
 		// Neither the boot service nor udev's hotplug may raise a taken interface again; /etc/network/interfaces stays as it was.
 		step("permanent:mask", func() error {
 			args := []string{"mask", "networking.service", "ifup@.service"}
@@ -243,6 +246,8 @@ func (r Realizer) makePermanent(ctx context.Context, reload bool, kind string) e
 		}
 		return nil
 	})
+	// Last: its daemon reload reruns netplan's generator, which writes netplan's files back while the YAML exists.
+	step("permanent:enable", enable)
 	return errors.Join(failures...)
 }
 
@@ -309,6 +314,14 @@ func (r Realizer) Boot(ctx context.Context) error {
 		}
 		if err := r.place(nil, set); err != nil {
 			return err
+		}
+		if slices.ContainsFunc(set, func(f placed) bool { return strings.HasSuffix(f.path, ".link") }) {
+			// udev may have named the adapters before the .link files existed; they are down until networkd starts.
+			for _, args := range [][]string{{"control", "--reload"}, {"trigger", "--settle", "--action=add", "--subsystem-match=net"}} {
+				if _, err := r.Run(ctx, "/usr/bin/udevadm", args...); err != nil {
+					slog.Error("apply the adapter names", "error", err)
+				}
+			}
 		}
 		p.Live = id
 		if len(failures) > 0 {

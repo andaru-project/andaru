@@ -42,6 +42,13 @@ defaultroute
 +ipv6
 ipv6cp-use-persistent
 
+### /run/systemd/network/50-andaru-ens18.link 0644 secret=false sources=/links/0
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:01
+
+[Link]
+Name=ens18
+
 ### /run/systemd/network/50-andaru-ens18.network 0644 secret=false sources=/links/0
 [Match]
 PermanentMACAddress=52:54:00:aa:bb:01
@@ -55,6 +62,13 @@ LLDP=no
 VLAN=vl000000020000
 LinkLocalAddressing=no
 IPv6AcceptRA=no
+
+### /run/systemd/network/50-andaru-ens19.link 0644 secret=false sources=/links/3
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:02
+
+[Link]
+Name=ens19
 
 ### /run/systemd/network/50-andaru-ens19.network 0644 secret=false sources=/links/3,/segments/1
 [Match]
