@@ -220,3 +220,12 @@ func TestReadIfupdownDhcpcdHostname(t *testing.T) {
 		t.Fatalf("got %+v", got[0].Identity)
 	}
 }
+
+// The stanza's hostname overrides dhcpcd.conf's, so an unusable global one never reaches networkd.
+func TestReadIfupdownIgnoresAnOverriddenDhcpcdHostname(t *testing.T) {
+	got, problems := ReadIfupdown(edit(t, "ifupdown-dhcp", map[string]string{"etc/dhcpcd.conf": "duid\nhostname fw_1\n",
+		"etc/network/interfaces": "allow-hotplug ens18\niface ens18 inet dhcp\n hostname fw\n"}), ifupdownLinks(), nil)
+	if len(problems) != 0 || got[0].Identity.Hostname != "fw" {
+		t.Fatalf("got %+v, problems %+v", got, problems)
+	}
+}

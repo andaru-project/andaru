@@ -299,13 +299,17 @@ func (f *ifupdownFiles) identity(i *IfupdownInterface) {
 				duid = true
 			case "hostname":
 				// With a name dhcpcd sends it instead of the machine's; the stanza's own option still wins.
-				if len(words) > 1 && !validHostname(strings.Join(words[1:], " ")) {
-					f.problem(dhcpcdConf, "hostname", "networkd can only send a DNS host name, not "+strconv.Quote(strings.Join(words[1:], " "))+".")
-				} else if len(words) > 1 && (i.Identity == nil || i.Identity.Hostname == "") {
+				name := strings.Join(words[1:], " ")
+				switch {
+				case len(words) == 1 || i.Identity != nil && i.Identity.Hostname != "":
+					// No name, or the stanza's overrides it: nothing of this line reaches networkd.
+				case !validHostname(name):
+					f.problem(dhcpcdConf, "hostname", "networkd can only send a DNS host name, not "+strconv.Quote(name)+".")
+				default:
 					if i.Identity == nil {
 						i.Identity = &DHCPIdentity{}
 					}
-					i.Identity.Hostname = words[1]
+					i.Identity.Hostname = name
 				}
 			case "clientid", "iaid", "anonymous", "interface":
 				unknown(dhcpcdConf, "dhcpcd.conf sets "+words[0]+", so the identity dhcpcd uses is not the one Andaru can reproduce.")
