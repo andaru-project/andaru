@@ -183,7 +183,8 @@ func TestConfirmMovesPointersAndMakesPermanent(t *testing.T) {
 	}
 	b.wantPointers(1, 0, 0, 1)
 	b.wantPermanent()
-	if b.net.ran("systemctl enable systemd-networkd.service") != 1 {
+	// Andaru's links are not required for "online", so wait-online would hold every boot for its two-minute timeout.
+	if b.net.ran("systemctl enable systemd-networkd.service") != 1 || b.net.ran("systemctl disable systemd-networkd-wait-online.service") != 1 {
 		t.Fatalf("argv = %q", b.net.argv)
 	}
 	if g := b.read(id); g.State.State != Confirmed || g.Reason != "" {

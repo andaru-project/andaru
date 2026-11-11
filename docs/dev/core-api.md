@@ -138,7 +138,7 @@ export, encrypted backup, independent-store restore or migration service exists.
 
 ## Network preview
 
-`andaru ctl preview network [--saved-version N]` shows exactly which files Andaru would give systemd-networkd and pppd for a saved version on this host, and what would stop them working. **It changes nothing**: no file is written under `/run`, nothing is reloaded or started, and no state is stored. Applying, rollback and boot are later work.
+`andaru ctl preview network [--saved-version N]` shows exactly which files Andaru would give systemd-networkd and pppd for a saved version on this host, and what would stop them working. **It changes nothing**: no file is written under `/run`, nothing is reloaded or started, and no state is stored. Applying is a separate, explicit step: see [Applying and taking over](#applying-and-taking-over).
 
 ```sh
 sudo andaru ctl preview network | jq -r '.files[] | "### \(.path) \(.mode)\n\(.content)"'
@@ -182,6 +182,63 @@ Steps:
 3. Watch `journalctl -fu andaru-pppoe-<pp-name>.service` and `networkctl status <pp-name>`.
 
 To undo: stop the unit, delete the files you wrote, `systemctl daemon-reload`, `networkctl reload`, and `networkctl delete` the `vl…` device. Everything is under `/run`, so a reboot also clears it. Expect the `[DHCPv6]` keys to be the part that depends on your provider.
+
+## Applying and taking over
+
+An apply makes the saved head's network configuration live. Design and limits: [network takeover and confirmed apply](../superpowers/specs/2026-11-11-network-takeover-apply-design.md).
+
+```sh
+sudo andaru ctl preview network                      # note the savedVersion and the findings
+sudo andaru ctl apply network --saved-version 12     # add --takeover on a host netplan still configures
+# from a NEW terminal or SSH session:
+sudo andaru ctl applies confirm 1
+```
+
+What happens, in order:
+
+1. **Checks.** `--saved-version` must be the saved head, so you apply what you previewed. The apply is refused (`APPLY_REFUSED`, with findings) if the preview has errors, if an interface that has an address now would be left unconfigured, or if it needs something not yet supported.
+2. **A rollback timer is armed first**, owned by systemd, not by the engine. It fires 60 seconds after the confirmation deadline.
+3. **The files are swapped and networkd reloaded.** Andaru then checks that every file is in use, static addresses are present, and the interfaces that had an IPv4 address and default route still have them. If not, it restores the previous files at once and the apply reads `failed`.
+4. **You confirm from a new session** within the timeout (default 120 seconds, `--confirm-timeout 30`–`600`). A session that survived the change does not show that a new one can be opened; opening one is the test. Without confirmation the previous configuration returns, including after an engine crash or a reboot.
+
+`andaru ctl applies list` shows every apply and four pointers: `confirmed` (what boot uses), `lastKnownGood` (the one before it), `pending`, and `live` (what runs now; `null` is the pre-Andaru configuration). `andaru ctl applies rollback ID` undoes a pending apply without waiting.
+
+| Finding | Meaning |
+| --- | --- |
+| `WOULD_UNCONFIGURE` | A physical interface with an address is not configured by the saved configuration. Declare it as an enabled Ethernet link with a segment. |
+| `TAKEOVER_MISMATCH` | netplan still configures the host and `--takeover` was not given, or it was given with nothing to take over. |
+| `TAKEOVER_UNSUPPORTED_BASELINE` | The host is not a plain netplan-on-networkd host: ifupdown is installed, netplan YAML lives outside `/etc/netplan`, a non-netplan network file exists, or netplan set static DNS. |
+| `APPLY_UNSUPPORTED` | PPPoE links, delegated prefixes and router advertisements wait for the firewall. |
+| `NETDEV_CHANGE_UNSUPPORTED` | An existing VLAN, bridge or bond would change. Remove it in one apply and add it again in the next. |
+
+### Takeover
+
+`--takeover` replaces netplan's generated files under `/run/systemd/network`. **Until you confirm, nothing outside `/run` changes, so a reboot returns the host to netplan.** Confirming then enables `systemd-networkd` (netplan's generator was doing that), writes `/etc/cloud/cloud.cfg.d/99-andaru-network.cfg` (`network: {config: disabled}`) and moves `/etc/netplan/*.yaml` to `/var/lib/andaru/generations/baseline/netplan/`. The packages stay installed.
+
+Boot needs `andaru-network-boot.service` ([unit](../../packaging/systemd/andaru-network-boot.service)) installed and enabled **before** the takeover: it copies the confirmed generation into `/run` before networkd starts. If that generation is damaged it uses the last-known-good one, and `live` then differs from `confirmed`.
+
+What changes for the host after a takeover:
+
+- On cloud images the interface name changes at the next reboot (`eth0` becomes `ens18`): netplan was pinning it. Andaru matches by permanent MAC, so the configuration follows.
+- The host keeps DHCP-provided DNS servers. NTP servers and hostname from DHCP are ignored.
+- `network-online.target` no longer waits for an uplink.
+- An apply interrupts IPv6 on the touched interface for about two seconds; IPv4 was uninterrupted on the lab.
+
+To undo a confirmed takeover by hand, from the console:
+
+```sh
+sudo systemctl disable --now andaru-engine.service andaru-network-boot.service
+sudo mv /var/lib/andaru/generations/baseline/netplan/*.yaml /etc/netplan/
+sudo rm /etc/cloud/cloud.cfg.d/99-andaru-network.cfg
+sudo rm -r /var/lib/andaru/generations
+sudo reboot
+```
+
+### How it is built
+
+The engine keeps its sandbox and never writes outside its state directory. It stores each generation under `/var/lib/andaru/generations/<n>/` and asks systemd to run `andaru realize activate|rollback|confirm N` in a transient unit; the timer runs `andaru realize rollback N deadline` the same way. `pointers.json` in that directory is the single commit point, and `realize` re-reads it under a lock before acting, so a timer that fires after a confirmation does nothing. Because the engine can ask systemd to run commands, it is root-equivalent; the sandbox is hardening, not a boundary.
+
+These behaviours are proven on the Debian lab VM, not in CI: see [the lab qualification](#network-takeover-debian-lab-qualification).
 
 ## Supervision
 

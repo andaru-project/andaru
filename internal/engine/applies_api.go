@@ -201,7 +201,7 @@ func (h *appliesHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The change must not die with the connection that asked for it: that connection is what the change may cut.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*realizeLimit)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), realizeLimit)
 	defer cancel()
 	h.mu.Lock()
 	defer h.mu.Unlock()
