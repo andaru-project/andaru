@@ -225,21 +225,21 @@ What happens, in order:
 
 ### Taking over with the assistant
 
-On a netplan host with no saved network configuration yet, the assistant asks the questions and does the rest. Design and limits: [interactive takeover](../superpowers/specs/2026-11-11-interactive-takeover-design.md).
+On a host with no saved network configuration yet, set up by netplan or by the Debian installer's ifupdown, the assistant asks the questions and does the rest. Design and limits: [interactive takeover](../superpowers/specs/2026-11-11-interactive-takeover-design.md).
 
 ```sh
 sudo andaru ctl takeover                    # questions, pre-filled with what the host uses now
 sudo andaru ctl takeover --accept-detected  # no questions: take over exactly what was detected
 ```
 
-1. **Detect.** The engine reads the files netplan generated and proposes one Ethernet link and segment per adapter, with its zone (`wan` for the adapter carrying the default route, `lan` for the others), addressing and DNS servers.
-2. **Ask.** Which adapters to keep (an adapter with an address cannot be left out), then per adapter its zone, IPv4 (DHCP, static addresses and gateway, or none) and IPv6 (none, SLAAC, DHCPv6, or a static IPv6 kept as detected), the host's DNS servers, and the confirmation timeout. It runs in any terminal, including the serial console; a console that reports no size is treated as 80×24.
+1. **Detect.** The engine reads the files netplan generated, or `/etc/network/interfaces`, and proposes one Ethernet link and segment per adapter, with its zone (`wan` for the adapter carrying the default route, `lan` for the others), addressing and DNS servers. On an all-static ifupdown host it proposes the DNS servers systemd-resolved uses now.
+2. **Ask.** Which adapters to keep (an adapter with an address cannot be left out, and on an ifupdown host none can), then per adapter its zone, IPv4 (DHCP, static addresses and gateway, or none) and IPv6 (none, SLAAC, DHCPv6, or a static IPv6 kept as detected), the host's DNS servers, and the confirmation timeout. It runs in any terminal, including the serial console; a console that reports no size is treated as 80×24.
 3. **Review.** The assistant shows, per adapter, what runs now and what will run, then the exact files and every finding, from a draft that saves nothing. **Back** is preselected; **Apply** is offered only when nothing would refuse the apply.
 4. **Apply.** The answers are saved, guarded by the saved version the proposal was made from, and applied as `andaru ctl apply network --takeover` would, with the rollback timer. Confirm from a new session as usual. From the save on, a dropped session no longer stops the assistant.
 
 Quitting, pressing Ctrl+C or losing the session before **Apply** writes nothing. Without a terminal the assistant refuses and points to `--accept-detected`, which applies only when the detection is complete and nothing would refuse it.
 
-The assistant only takes over: on a host already taken over, or with a configuration already saved, it says what to run instead and changes nothing. It cannot express everything netplan can; when it meets a construct it cannot reproduce, such as a non-default route, a routing policy, a MAC change or DNS set on several interfaces in one file, it lists it as an error and does not offer **Apply**. If a save from another session lands between the proposal and **Apply**, nothing is applied and the assistant asks to be run again. If the apply fails after the save, it prints the saved version and the command to retry.
+The assistant only takes over: on a host already taken over, or with a configuration already saved, it says what to run instead and changes nothing. It cannot express everything netplan or ifupdown can; when it meets a construct it cannot reproduce, such as a non-default route, a routing policy, a MAC change, DNS set on several interfaces in one file, or an ifupdown hook, it lists it as an error and does not offer **Apply**. If a save from another session lands between the proposal and **Apply**, nothing is applied and the assistant asks to be run again. If the apply fails after the save, it prints the saved version and the command to retry.
 
 ### Host DNS servers
 
@@ -279,6 +279,30 @@ To undo a confirmed takeover by hand, from the console:
 sudo systemctl disable --now andaru-engine.service andaru-network-boot.service
 sudo mv /var/lib/andaru/generations/baseline/netplan/*.yaml /etc/netplan/
 sudo rm /etc/cloud/cloud.cfg.d/99-andaru-network.cfg
+sudo systemctl enable systemd-networkd-wait-online.service
+sudo rm -r /var/lib/andaru/generations
+sudo reboot
+```
+
+### Taking over an ifupdown host
+
+A host the Debian installer set up configures its network with ifupdown and dhcpcd, without netplan. `--takeover` (and the assistant) accept it when it has only the installer's shapes. Design and limits: [taking over a default Debian install](../superpowers/specs/2026-11-11-ifupdown-takeover-design.md).
+
+- **Accepted:** `/etc/network/interfaces` and the files it sources with `auto`, `allow-hotplug`, `source`, `source-directory`, `iface lo inet loopback`, and per physical interface `inet dhcp` (option `hostname`) or `inet static` and `inet6 auto` or `inet6 static` (options `address` with a prefix length, and `gateway`). Anything else, a NetworkManager or `dhcpcd.service` beside ifupdown, or a cloud-init file in `interfaces.d`, is `TAKEOVER_UNSUPPORTED_BASELINE`.
+- **Before you start:** `sudo apt install systemd-resolved`, then reboot, so resolved has the DHCP-provided servers. resolved becomes the host's resolver and must be in charge first (`RESOLVED_NOT_IN_CHARGE` otherwise).
+- **Leases are kept:** networkd presents dhcpcd's DHCP identity (its DUID and an IAID from the MAC), so the DHCP server hands out the same IPv4 lease and DHCPv6 address. That needs dhcpcd running for each DHCP interface with its default identity settings (`DHCP_IDENTITY_UNKNOWN` otherwise). The review shows the identity lines.
+- **Every interface with an `iface` stanza must be declared** (`WOULD_UNCONFIGURE` otherwise): confirming masks ifupdown for all of them.
+- **DNS:** with DHCP or `inet6 auto` the host keeps the offered servers. On an all-static host declare `dns` on a segment (`DNS_REQUIRED` lists the servers in use now).
+- **Activation** stops dhcpcd without dropping its addresses, starts networkd and applies the files. **A rollback, or a failed activation, hands the interfaces back to ifupdown** through `ifup@<nic>.service` or `networking.service`, and is recorded only once their IPv4 addresses are back; until then the timer retries it.
+- **Confirming** enables `systemd-networkd`, disables `systemd-networkd-wait-online` and masks `networking.service` and `ifup@.service`. `/etc/network/interfaces` is left as it was and ifupdown stays installed. If no generation is usable at boot, boot removes the masks and starts ifupdown again.
+- **Limits:** SLAAC addresses change at the takeover (dhcpcd and networkd derive them differently), so an IPv6 session on one is cut; scripts in `if-up.d` and `if-down.d` stop running after confirmation; a rollback can cut IPv4 for several seconds while ifupdown asks for the lease again. The review shows these as `TAKEOVER_LIMIT` warnings.
+
+To undo a confirmed ifupdown takeover by hand, from the console:
+
+```sh
+sudo systemctl disable --now andaru-engine.service andaru-network-boot.service
+sudo systemctl unmask networking.service ifup@.service
+sudo systemctl disable systemd-networkd.service
 sudo systemctl enable systemd-networkd-wait-online.service
 sudo rm -r /var/lib/andaru/generations
 sudo reboot
