@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -122,11 +124,23 @@ func ParseManaged(data []byte) ([]Managed, error) {
 	return managed, nil
 }
 
-// ReadManaged asks the running networkd which links it configures.
+// ReadManaged asks the running networkd which links it configures; none when networkd is stopped.
 func ReadManaged(ctx context.Context) ([]Managed, error) {
 	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
-	data, err := readCommand(ctx, "/usr/bin/networkctl", "list", "--json=short")
+	return readManaged(ctx, readCommand)
+}
+
+func readManaged(ctx context.Context, run func(context.Context, string, ...string) ([]byte, error)) ([]Managed, error) {
+	// networkctl fails outright while networkd is stopped, which is normal on a host ifupdown still configures.
+	if _, err := run(ctx, "/usr/bin/systemctl", "is-active", "--quiet", "systemd-networkd.service"); err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			return []Managed{}, nil
+		}
+		return nil, err
+	}
+	data, err := run(ctx, "/usr/bin/networkctl", "list", "--json=short")
 	if err != nil {
 		return nil, err
 	}
@@ -137,6 +151,8 @@ func ReadManaged(ctx context.Context) ([]Managed, error) {
 type Baseline struct {
 	Netplan  bool
 	Ifupdown bool
+	// IfupdownMasked reports that networking.service is masked, as a confirmed ifupdown takeover leaves it.
+	IfupdownMasked bool
 	// BootUnit reports that the unit which puts the confirmed generation into /run at boot is enabled.
 	BootUnit bool
 	// StrayYAML is netplan configuration outside /etc/netplan, which a takeover would not move away.
@@ -157,6 +173,9 @@ func readBaseline(root string) (Baseline, error) {
 		Netplan: exists("/usr/sbin/netplan"), Ifupdown: exists("/sbin/ifup"),
 		BootUnit:  err == nil && wanted.Mode().IsRegular() && (maskErr != nil || override.Mode().IsRegular()),
 		StrayYAML: []string{}, StaticDNS: []string{},
+	}
+	if target, err := os.Readlink(root + "/etc/systemd/system/networking.service"); err == nil && target == "/dev/null" {
+		b.IfupdownMasked = true
 	}
 	for _, dir := range []string{"/run/netplan", "/lib/netplan", "/usr/lib/netplan"} {
 		found, err := filepath.Glob(root + dir + "/*.yaml")
@@ -190,44 +209,88 @@ func readBaseline(root string) (Baseline, error) {
 
 var resolvedLink = regexp.MustCompile(`^Link \d+ \((.+)\):(.*)$`)
 
-// ParseResolvedDNS reads `resolvectl dns`: the servers systemd-resolved uses per interface, in order.
-// The Global line is ignored: Andaru configures servers per link only. A server in a form Andaru never
-// writes (a port, a TLS name) becomes the zero Addr: it equals no declared server, and it cannot spoil
-// the reading of another link.
-func ParseResolvedDNS(data []byte) (map[string][]netip.Addr, error) {
-	servers := map[string][]netip.Addr{}
-	// current is the interface whose list is being read; "" inside the global list, "\x00" before any header.
-	current := "\x00"
+// ParseResolvectl reads the output of `resolvectl dns` or `resolvectl domain`: the global entries and each
+// interface's, in order. resolvectl wraps a long list onto indented lines.
+func ParseResolvectl(data []byte) (global []string, links map[string][]string, err error) {
+	global, links = []string{}, map[string][]string{}
+	current, started := "", false
 	for line := range strings.SplitSeq(string(data), "\n") {
 		fields := line
 		switch {
 		case strings.TrimSpace(line) == "":
 			continue
 		case strings.HasPrefix(line, "Global:"):
-			current = ""
-			continue
+			current, started, fields = "", true, strings.TrimPrefix(line, "Global:")
 		case line[0] == ' ' || line[0] == '\t':
-			// resolvectl wraps a long list onto indented lines.
-			if current == "\x00" {
-				return nil, fmt.Errorf("unexpected resolvectl line %q", line)
+			if !started {
+				return nil, nil, fmt.Errorf("unexpected resolvectl line %q", line)
 			}
 		default:
 			m := resolvedLink.FindStringSubmatch(line)
 			if m == nil {
-				return nil, fmt.Errorf("unexpected resolvectl line %q", line)
+				return nil, nil, fmt.Errorf("unexpected resolvectl line %q", line)
 			}
-			current, fields = m[1], m[2]
-			servers[current] = []netip.Addr{}
+			current, started, fields = m[1], true, m[2]
+			links[current] = []string{}
 		}
 		if current == "" {
-			continue
+			global = append(global, strings.Fields(fields)...)
+		} else {
+			links[current] = append(links[current], strings.Fields(fields)...)
 		}
-		for _, field := range strings.Fields(fields) {
+	}
+	return global, links, nil
+}
+
+// ParseResolvedDNS reads `resolvectl dns`: the servers systemd-resolved uses per interface, in order.
+// The Global line is ignored: Andaru configures servers per link only. A server in a form Andaru never
+// writes (a port, a TLS name) becomes the zero Addr: it equals no declared server, and it cannot spoil
+// the reading of another link.
+func ParseResolvedDNS(data []byte) (map[string][]netip.Addr, error) {
+	_, links, err := ParseResolvectl(data)
+	if err != nil {
+		return nil, err
+	}
+	servers := map[string][]netip.Addr{}
+	for name, list := range links {
+		servers[name] = []netip.Addr{}
+		for _, field := range list {
 			a, _ := netip.ParseAddr(field)
-			servers[current] = append(servers[current], a)
+			servers[name] = append(servers[name], a)
 		}
 	}
 	return servers, nil
+}
+
+// ReadResolved returns every DNS server and search domain systemd-resolved has for the host:
+// the global ones first, then each interface's, by interface name, each once.
+func ReadResolved(ctx context.Context) (servers, domains []string, err error) {
+	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	read := func(verb string) ([]string, error) {
+		data, err := readCommand(ctx, "/usr/bin/resolvectl", verb)
+		if err != nil {
+			return nil, err
+		}
+		global, links, err := ParseResolvectl(data)
+		if err != nil {
+			return nil, err
+		}
+		out := []string{}
+		for _, name := range slices.Sorted(maps.Keys(links)) {
+			global = append(global, links[name]...)
+		}
+		for _, v := range global {
+			if !slices.Contains(out, v) {
+				out = append(out, v)
+			}
+		}
+		return out, nil
+	}
+	if servers, err = read("dns"); err == nil {
+		domains, err = read("domain")
+	}
+	return servers, domains, err
 }
 
 // ReadDefaultRoutes names the interfaces carrying an IPv4 default route, each once, in the kernel's order.

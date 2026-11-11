@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"strconv"
 	"syscall"
+
+	"github.com/andaru-project/andaru/internal/host"
 )
 
 const cloudInitDisable = "/etc/cloud/cloud.cfg.d/99-andaru-network.cfg"
@@ -28,8 +30,27 @@ type baselineFile struct {
 
 // baselineManifest records the files a takeover replaced, so a rollback can put them back exactly.
 type baselineManifest struct {
-	Kind  string         `json:"kind"`
-	Files []baselineFile `json:"files"`
+	Kind     string            `json:"kind"`
+	Files    []baselineFile    `json:"files"`
+	Ifupdown *IfupdownBaseline `json:"ifupdown,omitempty"`
+}
+
+// IfupdownBaseline is what an ifupdown takeover captured: enough to hand the host back to ifupdown,
+// and dhcpcd's identity, which every later generation keeps presenting.
+type IfupdownBaseline struct {
+	Interfaces        []host.IfupdownInterface `json:"interfaces"`
+	NetworkdWasActive bool                     `json:"networkdWasActive"`
+	// Connected are the interfaces with a global IPv4 address before the takeover; a hand-back waits for them.
+	Connected []string `json:"connected"`
+}
+
+// ReadBaselineKind returns the kind of the captured baseline ("" when none was captured) and, for ifupdown, what it holds.
+func ReadBaselineKind(dir string) (kind string, ifupdown *IfupdownBaseline, err error) {
+	var m baselineManifest
+	if _, err := readJSON(filepath.Join(dir, "baseline", "manifest.json"), &m); err != nil {
+		return "", nil, err
+	}
+	return m.Kind, m.Ifupdown, nil
 }
 
 func (r Realizer) baselineDir() string { return filepath.Join(r.dir(), "baseline") }
@@ -138,16 +159,20 @@ func (r Realizer) Confirm(ctx context.Context, id int) error {
 	if !g.Takeover {
 		return nil
 	}
-	if err := r.makePermanent(ctx, true); err != nil {
+	kind, _, err := ReadBaselineKind(r.dir())
+	if err == nil {
+		err = r.makePermanent(ctx, true, kind)
+	}
+	if err != nil {
 		state.Reason = "takeover not yet permanent: " + err.Error() + "; completes at the next boot"
 		return errors.Join(err, r.writeState("confirm:state-reason", id, state))
 	}
 	return nil
 }
 
-// makePermanent stops netplan and cloud-init from writing network configuration again.
-// Every step runs even after a failure and may be repeated; boot repeats all of them.
-func (r Realizer) makePermanent(ctx context.Context, reload bool) error {
+// makePermanent stops what configured the network before Andaru from doing it again: netplan and cloud-init,
+// or ifupdown. Every step runs even after a failure and may be repeated; boot repeats all of them.
+func (r Realizer) makePermanent(ctx context.Context, reload bool, kind string) error {
 	var failures []error
 	step := func(name string, do func() error) {
 		err := r.at(name)
@@ -171,6 +196,18 @@ func (r Realizer) makePermanent(ctx context.Context, reload bool) error {
 		}
 		return errors.Join(failures...)
 	})
+	if kind == "ifupdown" {
+		// Neither the boot service nor udev's hotplug may raise a taken interface again; /etc/network/interfaces stays as it was.
+		step("permanent:mask", func() error {
+			args := []string{"mask", "networking.service", "ifup@.service"}
+			if !reload {
+				args = []string{"mask", "--no-reload", "networking.service", "ifup@.service"}
+			}
+			_, err := r.Run(ctx, "/usr/bin/systemctl", args...)
+			return err
+		})
+		return errors.Join(failures...)
+	}
 	// cloud-init must be told before the YAML goes, or it writes the YAML back at the next boot.
 	step("permanent:cloud-init", func() error {
 		target := r.Root + cloudInitDisable
@@ -243,8 +280,9 @@ func (r Realizer) Boot(ctx context.Context) error {
 		return r.writePointers("boot:pointers", p)
 	}
 	base, captured, baseErr := r.baseline()
+	kind, ifupdown, kindErr := ReadBaselineKind(dir)
 	if p.Takeover {
-		if err := r.makePermanent(ctx, false); err != nil {
+		if err := errors.Join(kindErr, r.makePermanent(ctx, false, kind)); err != nil {
 			slog.Error("finish the takeover", "error", err)
 		}
 	}
@@ -278,6 +316,9 @@ func (r Realizer) Boot(ctx context.Context) error {
 		}
 		return r.writePointers("boot:pointers", p)
 	}
+	if kind == "ifupdown" && ifupdown != nil {
+		return r.bootIfupdown(ctx, p, *ifupdown, failures)
+	}
 	if !captured || baseErr != nil {
 		return errors.Join(append(failures, baseErr, errors.New("no generation is usable; the host has no managed interface"))...)
 	}
@@ -286,5 +327,25 @@ func (r Realizer) Boot(ctx context.Context) error {
 	}
 	p.Live = nil
 	slog.Error("booting the pre-Andaru baseline; no generation is usable", "error", errors.Join(failures...))
+	return r.writePointers("boot:pointers", p)
+}
+
+// bootIfupdown starts the host on its unchanged ifupdown configuration when no generation is usable.
+// Boot runs before networking.service, so it only queues the starts: waiting for them would deadlock.
+func (r Realizer) bootIfupdown(ctx context.Context, p Pointers, b IfupdownBaseline, failures []error) error {
+	run := func(args ...string) {
+		if _, err := r.Run(ctx, "/usr/bin/systemctl", args...); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	run("unmask", "networking.service", "ifup@.service")
+	run("start", "--no-block", "networking.service")
+	for _, i := range b.Interfaces {
+		if i.Hotplug {
+			run("start", "--no-block", "ifup@"+i.Name+".service")
+		}
+	}
+	p.Live = nil
+	slog.Error("booting on ifupdown; no generation is usable", "error", errors.Join(failures...))
 	return r.writePointers("boot:pointers", p)
 }

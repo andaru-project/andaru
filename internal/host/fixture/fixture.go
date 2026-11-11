@@ -1,6 +1,6 @@
-// Package netplanfixture holds the files netplan generated on the lab VM, embedded so that a test
+// Package fixture holds host files captured on the lab VMs, embedded so that a test
 // binary copied to another host still has them.
-package netplanfixture
+package fixture
 
 import (
 	"embed"
@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-//go:embed static dhcp
+//go:embed static dhcp ifupdown-dhcp ifupdown-static
 var files embed.FS
 
 // Root copies the named fixture into a fresh directory and returns it, for use as a host root.

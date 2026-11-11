@@ -1,7 +1,10 @@
 package render
 
 import (
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
+	"net"
 	"net/netip"
 	"slices"
 	"strings"
@@ -97,8 +100,18 @@ func (r *renderer) addressing(id string, ppp bool) (sections []section, sources 
 	}
 	var dhcp4, dhcp6, accept, delegation, send []string
 	var prefixes []section
+	identity := r.identity(id)
 	if v4.Mode == "dhcp" {
-		dhcp4 = offered(useDNS)
+		if identity != nil {
+			// Stopping networkd during a rollback must neither drop the address nor release the lease dhcpcd takes back.
+			network = append(network, "KeepConfiguration=dynamic-on-stop")
+			dhcp4 = append([]string{"ClientIdentifier=duid"}, identity...)
+			dhcp4 = append(dhcp4, "SendRelease=no")
+			if h := r.in.DHCPIdentity[r.mac(id)].Hostname; h != "" {
+				dhcp4 = append(dhcp4, "Hostname="+h)
+			}
+		}
+		dhcp4 = append(dhcp4, offered(useDNS)...)
 	}
 	sendRA := v6.RA != nil && v6.RA.Enabled
 	switch v6.Mode {
@@ -129,7 +142,7 @@ func (r *renderer) addressing(id string, ppp bool) (sections []section, sources 
 			dhcp6 = append(dhcp6, "WithoutRA=solicit")
 		}
 		// Also for SLAAC: a router advertisement with the managed or other flag starts DHCPv6 by itself.
-		dhcp6 = append(dhcp6, offered(useDNS)...)
+		dhcp6 = append(append(dhcp6, identity...), offered(useDNS)...)
 		if v6.Mode == "dhcp6" {
 			if v6.RequestPrefixLength != nil {
 				dhcp6 = append(dhcp6, fmt.Sprintf("PrefixDelegationHint=::/%d", *v6.RequestPrefixLength))
@@ -153,6 +166,33 @@ func (r *renderer) addressing(id string, ppp bool) (sections []section, sources 
 	}
 	sections = []section{{"Network", network}, {"DHCPv4", dhcp4}, {"DHCPv6", dhcp6}, {"IPv6AcceptRA", accept}, {"DHCPPrefixDelegation", delegation}, {"IPv6SendRA", send}}
 	return append(sections, prefixes...), sources
+}
+
+// mac is an Ethernet link's permanent MAC in lower case, "" for other kinds.
+func (r *renderer) mac(id string) string {
+	if l := r.d.Links[r.index[id]]; l.Kind == "ethernet" {
+		return strings.ToLower(l.PermanentMac)
+	}
+	return ""
+}
+
+// identity returns the DHCP identity lines dhcpcd used for this link, nil when there is none to keep.
+// The IAID is the MAC's last four bytes and the DUID splits into its type and the rest, as dhcpcd builds them.
+func (r *renderer) identity(id string) []string {
+	known, ok := r.in.DHCPIdentity[r.mac(id)]
+	mac, err := net.ParseMAC(r.mac(id))
+	if !ok || err != nil || len(mac) < 4 || len(known.DUID) < 3 {
+		return nil
+	}
+	raw := make([]string, len(known.DUID)-2)
+	for i, b := range known.DUID[2:] {
+		raw[i] = fmt.Sprintf("%02x", b)
+	}
+	return []string{
+		"IAID=0x" + hex.EncodeToString(mac[len(mac)-4:]),
+		fmt.Sprintf("DUIDType=%d", binary.BigEndian.Uint16(known.DUID)),
+		"DUIDRawData=" + strings.Join(raw, ":"),
+	}
 }
 
 func (r *renderer) segmentByID(id string) (segment, bool) {

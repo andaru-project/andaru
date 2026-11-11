@@ -1,11 +1,16 @@
 package host
 
 import (
+	"context"
 	_ "embed"
+	"errors"
+	"fmt"
 	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -241,5 +246,60 @@ func TestParseResolvedDNSWrapped(t *testing.T) {
 	}
 	if _, err := ParseResolvedDNS([]byte("        192.0.2.2\n")); err == nil {
 		t.Fatal("a continuation with nothing to continue was accepted")
+	}
+}
+
+// On a host still on ifupdown networkd is stopped, and networkctl then fails instead of listing nothing.
+func TestReadManagedWithoutNetworkd(t *testing.T) {
+	var asked []string
+	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		asked = append(asked, name+" "+strings.Join(args, " "))
+		if name == "/usr/bin/systemctl" {
+			return nil, fmt.Errorf("inactive: %w", &exec.ExitError{})
+		}
+		return nil, errors.New("networkctl must not be asked")
+	}
+	got, err := readManaged(context.Background(), run)
+	if err != nil || got == nil || len(got) != 0 || len(asked) != 1 || asked[0] != "/usr/bin/systemctl is-active --quiet systemd-networkd.service" {
+		t.Fatalf("got %v, %v after %q", got, err, asked)
+	}
+	run = func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		if name == "/usr/bin/systemctl" {
+			return nil, errors.New("cannot reach systemd")
+		}
+		return nil, nil
+	}
+	if _, err := readManaged(context.Background(), run); err == nil {
+		t.Fatal("a broken systemctl read as networkd stopped")
+	}
+}
+
+func TestParseResolvectl(t *testing.T) {
+	global, links, err := ParseResolvectl([]byte("Global: 192.0.2.1 2001:db8::1\nLink 2 (ens18): 192.0.2.53\n  192.0.2.54\nLink 3 (lo):\n"))
+	if err != nil || !slices.Equal(global, []string{"192.0.2.1", "2001:db8::1"}) || !slices.Equal(links["ens18"], []string{"192.0.2.53", "192.0.2.54"}) || links["lo"] == nil || len(links["lo"]) != 0 {
+		t.Fatalf("dns: %v %v %v", global, links, err)
+	}
+	global, links, err = ParseResolvectl([]byte("Global: lab.example\nLink 2 (ens18): corp.example ~.\n"))
+	if err != nil || !slices.Equal(global, []string{"lab.example"}) || !slices.Equal(links["ens18"], []string{"corp.example", "~."}) {
+		t.Fatalf("domain: %v %v %v", global, links, err)
+	}
+	if _, _, err := ParseResolvectl([]byte("garbage\n")); err == nil {
+		t.Fatal("garbage accepted")
+	}
+}
+
+func TestReadBaselineSeesMaskedIfupdown(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(root+"/etc/systemd/system", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := readBaseline(root); err != nil || b.IfupdownMasked {
+		t.Fatalf("unmasked: %+v %v", b, err)
+	}
+	if err := os.Symlink("/dev/null", root+"/etc/systemd/system/networking.service"); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := readBaseline(root); err != nil || !b.IfupdownMasked {
+		t.Fatalf("masked: %+v %v", b, err)
 	}
 }

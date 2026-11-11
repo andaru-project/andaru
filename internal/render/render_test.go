@@ -404,3 +404,28 @@ func TestDNSNotAppliedFinding(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderDHCPIdentity(t *testing.T) {
+	in := fixture(t, "ethernet-uplink")
+	without := render(t, in)
+	duid := []byte{0x00, 0x01, 0x00, 0x01, 0x32, 0x87, 0x03, 0x54, 0xbc, 0x24, 0x11, 0x38, 0x71, 0x37}
+	// The WAN takes DHCP and DHCPv6 and was taken from ifupdown; the LAN is static and has an identity it must not use.
+	in.DHCPIdentity = map[string]host.DHCPIdentity{"52:54:00:aa:bb:01": {DUID: duid, Hostname: "fw"}, "52:54:00:aa:bb:02": {DUID: duid}}
+	with := render(t, in)
+	wan := fileEnding(t, with, "50-andaru-ens18.network").Content
+	for _, want := range []string{
+		"KeepConfiguration=dynamic-on-stop\n",
+		"[DHCPv4]\nClientIdentifier=duid\nIAID=0x00aabb01\nDUIDType=1\nDUIDRawData=00:01:32:87:03:54:bc:24:11:38:71:37\nSendRelease=no\nHostname=fw\n",
+		"[DHCPv6]\nIAID=0x00aabb01\nDUIDType=1\nDUIDRawData=00:01:32:87:03:54:bc:24:11:38:71:37\n",
+	} {
+		if !strings.Contains(wan, want) {
+			t.Fatalf("missing %q in:\n%s", want, wan)
+		}
+	}
+	if lan := fileEnding(t, with, "50-andaru-ens19.network").Content; lan != fileEnding(t, without, "50-andaru-ens19.network").Content {
+		t.Fatalf("a static segment changed:\n%s", lan)
+	}
+	if golden(render(t, fixture(t, "ethernet-uplink"))) != golden(without) {
+		t.Fatal("rendering without identities is not stable")
+	}
+}

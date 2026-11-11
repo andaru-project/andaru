@@ -26,6 +26,8 @@ import (
 type adapter struct {
 	Name, PermanentMac, Summary string
 	Addressed                   bool
+	// Required: ifupdown configures it, and the takeover masks ifupdown for every interface.
+	Required bool
 }
 
 type finding struct{ Severity, Code, Path, Message string }

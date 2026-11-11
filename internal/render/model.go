@@ -66,6 +66,9 @@ type Input struct {
 	Secrets     map[string]string
 	Links       []host.LinkStatus
 	Facts       host.RealizerFacts
+	// DHCPIdentity is the DHCP client identity to present, by lower-case permanent MAC: a host taken over
+	// from dhcpcd keeps its leases only if networkd presents dhcpcd's identity.
+	DHCPIdentity map[string]host.DHCPIdentity
 }
 
 // File is one rendered file. Content is safe to show; Real is not.

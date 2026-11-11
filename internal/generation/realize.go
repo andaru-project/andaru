@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -39,6 +40,8 @@ type Realizer struct {
 	// VerifyWait is how long networkd gets to apply a generation; Poll is the interval between looks.
 	VerifyWait, Poll time.Duration
 	LockWait         time.Duration
+	// HandBackWait is how long ifupdown gets to bring interfaces back; 30 seconds when zero.
+	HandBackWait time.Duration
 	// failAt lets tests stop a verb before a named write, as a kill would.
 	failAt func(step string) error
 }
@@ -184,18 +187,24 @@ type observation struct {
 	route   string // interface of the IPv4 default route, if any
 	// dns is what systemd-resolved reports per interface; nil when it was not asked.
 	dns map[string][]netip.Addr
+	// servers reports that resolved has any server for the host, global or per interface.
+	servers bool
 }
 
 func (r Realizer) observe(ctx context.Context, withDNS bool) (observation, error) {
-	var o observation
-	data, err := r.Run(ctx, "/usr/bin/networkctl", "list", "--json=short")
+	o := observation{managed: []host.Managed{}}
+	// networkctl fails outright while networkd is stopped, as before an ifupdown takeover starts it.
+	if _, err := r.Run(ctx, "/usr/bin/systemctl", "is-active", "--quiet", "systemd-networkd.service"); err == nil {
+		data, err := r.Run(ctx, "/usr/bin/networkctl", "list", "--json=short")
+		if err == nil {
+			o.managed, err = host.ParseManaged(data)
+		}
+		if err != nil {
+			return o, err
+		}
+	}
+	data, err := r.Run(ctx, "/usr/bin/ip", "-d", "-j", "address", "show")
 	if err == nil {
-		o.managed, err = host.ParseManaged(data)
-	}
-	if err != nil {
-		return o, err
-	}
-	if data, err = r.Run(ctx, "/usr/bin/ip", "-d", "-j", "address", "show"); err == nil {
 		o.links, err = host.ParseLinks(data)
 	}
 	if err != nil {
@@ -216,6 +225,8 @@ func (r Realizer) observe(ctx context.Context, withDNS bool) (observation, error
 	if withDNS {
 		if data, err = r.Run(ctx, "/usr/bin/resolvectl", "dns"); err == nil {
 			o.dns, err = host.ParseResolvedDNS(data)
+			global, links, _ := host.ParseResolvectl(data)
+			o.servers = len(global) > 0 || slices.ContainsFunc(slices.Collect(maps.Values(links)), func(l []string) bool { return len(l) > 0 })
 		}
 		if err != nil {
 			return o, fmt.Errorf("ask systemd-resolved for its servers: %w", err)
@@ -317,7 +328,21 @@ func (r Realizer) Activate(ctx context.Context, id int) error {
 	if err != nil {
 		return err
 	}
-	if g.Takeover {
+	// fromIfupdown is the takeover of a host ifupdown configured: networkd is started and handed back by hand.
+	fromIfupdown := g.Takeover && g.Baseline == "ifupdown"
+	var ifupdown IfupdownBaseline
+	switch {
+	case fromIfupdown:
+		if ifupdown, err = r.captureIfupdown(ctx, p); err != nil {
+			return err
+		}
+		// Confirmation masks ifupdown for every interface, so each must be in this generation; one added since the apply was judged is not.
+		for _, i := range ifupdown.Interfaces {
+			if !slices.ContainsFunc(g.Files, func(f FileEntry) bool { return f.Path == "/run/systemd/network/50-andaru-"+i.Name+".network" }) {
+				return fmt.Errorf("activate %d: ifupdown now configures %s, which this generation does not; apply again", id, i.Name)
+			}
+		}
+	case g.Takeover:
 		if err := r.captureBaseline(p); err != nil {
 			return err
 		}
@@ -331,6 +356,10 @@ func (r Realizer) Activate(ctx context.Context, id int) error {
 		return err
 	}
 	names, route := before.connected()
+	if fromIfupdown {
+		// networkd binds nothing yet; the interfaces ifupdown gave an address are what must stay connected.
+		names, route = ifupdown.Connected, slices.Contains(ifupdown.Connected, before.route)
+	}
 
 	// State first: a kill before the pointer moves leaves a generation that was never pending.
 	if err := r.writeState("activate:state-activating", id, State{State: Activating, Previous: p.Live}); err != nil {
@@ -341,7 +370,15 @@ func (r Realizer) Activate(ctx context.Context, id int) error {
 		return err
 	}
 
-	reason := r.swapAndVerify(ctx, previous, next, names, route)
+	var reason string
+	if fromIfupdown {
+		if err := r.handOver(ctx, ifupdown); err != nil {
+			reason = err.Error()
+		}
+	}
+	if reason == "" {
+		reason = r.swapAndVerify(ctx, previous, next, names, route, fromIfupdown)
+	}
 	if reason == "" {
 		deadline := r.Now().Add(time.Duration(g.ConfirmTimeoutSeconds) * time.Second)
 		if err := r.writeState("activate:state-awaiting", id, State{State: Awaiting, Previous: p.Live, Deadline: &deadline}); err != nil {
@@ -356,6 +393,18 @@ func (r Realizer) Activate(ctx context.Context, id int) error {
 
 	restore, stop := context.WithTimeout(context.WithoutCancel(ctx), restoreLimit)
 	defer stop()
+	if fromIfupdown {
+		// The timer still owns this generation if the hand-back does not finish: its rollback repeats it.
+		restore, stop := context.WithTimeout(context.WithoutCancel(ctx), verbLimit)
+		defer stop()
+		if err := r.place(next, nil); err != nil {
+			return fmt.Errorf("activate %d: %s; removing its files failed: %w", id, reason, err)
+		}
+		if err := r.handBack(restore, ifupdown, next, p.Takeover); err != nil {
+			return fmt.Errorf("activate %d: %s; handing back to ifupdown failed: %w", id, reason, err)
+		}
+		return r.failed(id, p, reason)
+	}
 	restored, err := r.restorable(previous, p)
 	if err == nil {
 		err = r.place(next, restored)
@@ -368,6 +417,11 @@ func (r Realizer) Activate(ctx context.Context, id int) error {
 		// The old files are back on disk but networkd may still run the new ones: the timer keeps this generation until a reload succeeds.
 		return fmt.Errorf("activate %d: %s; reload after restoring failed: %w", id, reason, err)
 	}
+	return r.failed(id, p, reason)
+}
+
+// failed records an activation that was undone.
+func (r Realizer) failed(id int, p Pointers, reason string) error {
 	live := p.Live
 	p.Pending = nil
 	if err := r.writePointers("activate:pointers-failed", p); err != nil {
@@ -404,7 +458,8 @@ func declaredDNS(data []byte) []netip.Addr {
 	return servers
 }
 
-func (r Realizer) swapAndVerify(ctx context.Context, previous, next []placed, names []string, route bool) string {
+// needServers also requires systemd-resolved to report some DNS server, as a host taken from ifupdown has no other resolver.
+func (r Realizer) swapAndVerify(ctx context.Context, previous, next []placed, names []string, route, needServers bool) string {
 	if err := r.place(previous, next); err != nil {
 		return err.Error()
 	}
@@ -412,14 +467,16 @@ func (r Realizer) swapAndVerify(ctx context.Context, previous, next []placed, na
 		return err.Error()
 	}
 	// networkd hands DNS servers to systemd-resolved only; where resolved does not manage resolv.conf there is nothing to check.
-	withDNS := host.ResolvedInCharge(r.Root) && slices.ContainsFunc(next, func(f placed) bool { return len(declaredDNS(f.data)) > 0 })
+	withDNS := needServers || host.ResolvedInCharge(r.Root) && slices.ContainsFunc(next, func(f placed) bool { return len(declaredDNS(f.data)) > 0 })
 	verify, cancel := context.WithTimeout(ctx, r.VerifyWait)
 	defer cancel()
 	reason := "networkd was not observed"
 	for {
 		if o, err := r.observe(verify, withDNS); err != nil {
 			reason = err.Error()
-		} else if reason = o.unmet(next, names, route); reason == "" {
+		} else if reason = o.unmet(next, names, route); reason == "" && needServers && !o.servers {
+			reason = "systemd-resolved reports no DNS server for the host"
+		} else if reason == "" {
 			return ""
 		}
 		select {
@@ -479,7 +536,16 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) error {
 	if err := r.place(from, target); err != nil {
 		return err
 	}
-	if err := r.settle(ctx, from, target); err != nil {
+	kind, ifupdown, err := ReadBaselineKind(r.dir())
+	if err != nil {
+		return err
+	}
+	if live == nil && kind == "ifupdown" && ifupdown != nil {
+		// Back to ifupdown: the generation stays pending, and the timer retries, until its addresses are back.
+		if err := r.handBack(ctx, *ifupdown, from, p.Takeover); err != nil {
+			return fmt.Errorf("roll back %d: handing back to ifupdown: %w", id, err)
+		}
+	} else if err := r.settle(ctx, from, target); err != nil {
 		return fmt.Errorf("roll back %d: files restored, reload failed: %w", id, err)
 	}
 	if what != "" {

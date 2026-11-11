@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/andaru-project/andaru/internal/host/netplanfixture"
+	"github.com/andaru-project/andaru/internal/host/fixture"
 )
 
 const labMAC = "bc:24:11:89:01:10"
@@ -24,7 +24,7 @@ var (
 )
 
 func TestReadNetplanLabBases(t *testing.T) {
-	got, problems := ReadNetplan(netplanfixture.Root(t, "static"), labLink(v4, slaac, dhcp6), labBind, "eth0")
+	got, problems := ReadNetplan(fixture.Root(t, "static"), labLink(v4, slaac, dhcp6), labBind, "eth0")
 	if len(problems) != 0 || len(got) != 1 {
 		t.Fatalf("got %+v, problems %+v", got, problems)
 	}
@@ -39,17 +39,17 @@ func TestReadNetplanLabBases(t *testing.T) {
 		t.Fatalf("IPv6 = %+v", s.IPv6)
 	}
 
-	got, problems = ReadNetplan(netplanfixture.Root(t, "dhcp"), labLink(v4), labBind, "eth0")
+	got, problems = ReadNetplan(fixture.Root(t, "dhcp"), labLink(v4), labBind, "eth0")
 	if len(problems) != 0 || len(got) != 1 || got[0].IPv4.Mode != "dhcp" || got[0].IPv6.Mode != "none" || got[0].DNS != nil {
 		t.Fatalf("dhcp = %+v, %+v", got, problems)
 	}
-	if got, _ = ReadNetplan(netplanfixture.Root(t, "dhcp"), labLink(v4, slaac), labBind, "eth0"); got[0].IPv6.Mode != "slaac" {
+	if got, _ = ReadNetplan(fixture.Root(t, "dhcp"), labLink(v4, slaac), labBind, "eth0"); got[0].IPv6.Mode != "slaac" {
 		t.Fatalf("DHCPv4 with a live SLAAC address = %+v", got[0].IPv6)
 	}
 }
 
-func TestReadNetplanProblems(t *testing.T) {
-	base, _ := os.ReadFile(filepath.Join(netplanfixture.Root(t, "static"), "run/systemd/network/10-netplan-eth0.network"))
+func TestReadProblems(t *testing.T) {
+	base, _ := os.ReadFile(filepath.Join(fixture.Root(t, "static"), "run/systemd/network/10-netplan-eth0.network"))
 	for name, tc := range map[string]struct {
 		files   map[string]string
 		links   []LinkStatus
@@ -90,7 +90,7 @@ func TestReadNetplanProblems(t *testing.T) {
 				}
 			}
 			_, problems := ReadNetplan(root, tc.links, tc.managed, "eth0")
-			if !slices.ContainsFunc(problems, func(p NetplanProblem) bool {
+			if !slices.ContainsFunc(problems, func(p Problem) bool {
 				return strings.HasPrefix(p.File, "/run/systemd/network/") && strings.Contains(p.Key+" "+p.Message, tc.key)
 			}) {
 				t.Fatalf("problems = %+v, want one about %q", problems, tc.key)
@@ -111,7 +111,7 @@ func TestReadNetplanAcrossFiles(t *testing.T) {
 	managed := []Managed{{Name: "eth0", NetworkFile: "/run/systemd/network/10-netplan-eth0.network"}, {Name: "eth1", NetworkFile: "/run/systemd/network/10-netplan-eth1.network"}}
 	_, problems := ReadNetplan(root, links, managed, "eth0")
 	for _, want := range []string{"default route", "DNS"} {
-		if !slices.ContainsFunc(problems, func(p NetplanProblem) bool { return strings.Contains(p.Message, want) }) {
+		if !slices.ContainsFunc(problems, func(p Problem) bool { return strings.Contains(p.Message, want) }) {
 			t.Fatalf("problems = %+v, want one about %s", problems, want)
 		}
 	}
@@ -132,7 +132,7 @@ func TestReadNetplanAcceptsItsDefaults(t *testing.T) {
 
 // Wired 802.1X: netplan writes an ordinary .network file and keeps the credentials beside it.
 func TestReadNetplanRefusesWired8021X(t *testing.T) {
-	root := netplanfixture.Root(t, "static")
+	root := fixture.Root(t, "static")
 	if err := os.MkdirAll(filepath.Join(root, "run/netplan"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +140,7 @@ func TestReadNetplanRefusesWired8021X(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, problems := ReadNetplan(root, labLink(v4), labBind, "eth0")
-	if !slices.ContainsFunc(problems, func(p NetplanProblem) bool { return p.File == "/run/netplan/wpa-eth0.conf" }) {
+	if !slices.ContainsFunc(problems, func(p Problem) bool { return p.File == "/run/netplan/wpa-eth0.conf" }) {
 		t.Fatalf("problems = %+v", problems)
 	}
 }

@@ -20,7 +20,7 @@ type adapterForm struct {
 	zone, ip4, ip6        string
 	addresses, gateway    string
 	detectedIPv6, summary string
-	addressed             bool
+	addressed, required   bool
 }
 
 // formState is the answers in the shape the form fields bind to.
@@ -51,7 +51,7 @@ func newFormState(p proposal, a answers) *formState {
 			addresses: strings.Join(answer.IPv4.Addresses, ", "), gateway: answer.IPv4.Gateway, detectedIPv6: first.IPv6Mode,
 		}
 		if i := slices.IndexFunc(p.Adapters, func(x adapter) bool { return x.Name == answer.Name }); i >= 0 {
-			f.summary, f.addressed = p.Adapters[i].Summary, p.Adapters[i].Addressed
+			f.summary, f.addressed, f.required = p.Adapters[i].Summary, p.Adapters[i].Addressed, p.Adapters[i].Required
 		}
 		if answer.Keep {
 			s.kept = append(s.kept, id)
@@ -117,6 +117,23 @@ func validServers(s string) error {
 	return nil
 }
 
+// checkKept refuses an adapter selection that would cut the host off or strand an interface.
+func (s *formState) checkKept(kept []string) error {
+	if len(kept) == 0 {
+		return errors.New("keep at least one adapter")
+	}
+	for _, f := range s.adapters {
+		switch {
+		case slices.Contains(kept, f.id):
+		case f.required:
+			return fmt.Errorf("%s is configured by ifupdown; Andaru masks ifupdown for every interface it configures, so keep it", printable(f.name))
+		case f.addressed:
+			return fmt.Errorf("%s has an address now; leaving it out would cut it off", printable(f.name))
+		}
+	}
+	return nil
+}
+
 func (s *formState) questions() *huh.Form {
 	var options []huh.Option[string]
 	for _, f := range s.adapters {
@@ -126,17 +143,7 @@ func (s *formState) questions() *huh.Form {
 		Title("Network adapters to take over").
 		Description("Detected from this host's current configuration. Space toggles, Enter continues.").
 		Options(options...).Value(&s.kept).
-		Validate(func(kept []string) error {
-			if len(kept) == 0 {
-				return errors.New("keep at least one adapter")
-			}
-			for _, f := range s.adapters {
-				if f.addressed && !slices.Contains(kept, f.id) {
-					return fmt.Errorf("%s has an address now; leaving it out would cut it off", printable(f.name))
-				}
-			}
-			return nil
-		}))}
+		Validate(s.checkKept))}
 	for _, f := range s.adapters {
 		hidden := func() bool { return !slices.Contains(s.kept, f.id) }
 		ip6 := []huh.Option[string]{huh.NewOption("none", "none"), huh.NewOption("SLAAC", "slaac"), huh.NewOption("DHCPv6", "dhcp6")}

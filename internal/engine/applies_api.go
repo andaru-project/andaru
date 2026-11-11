@@ -38,6 +38,8 @@ type hostReader struct {
 	Baseline func() (host.Baseline, error)
 	// Route names the interfaces carrying an IPv4 default route.
 	Route func(context.Context) ([]string, error)
+	// Resolved returns the DNS servers and search domains systemd-resolved has for the host now.
+	Resolved func(context.Context) ([]string, []string, error)
 	// Root prefixes host files the engine reads directly; "" on a real host.
 	Root string
 }
@@ -249,6 +251,9 @@ func (h *appliesHandler) create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	manifest := generation.Manifest{SavedVersion: string(input.SavedVersion), CreatedAt: time.Now().UTC(), Takeover: request.Takeover, ConfirmTimeoutSeconds: timeout}
+	if request.Takeover {
+		manifest.Baseline = map[bool]string{false: "netplan", true: "ifupdown"}[gate.fromIfupdown()]
+	}
 	contents := map[string][]byte{}
 	for _, f := range gate.Result.Files {
 		manifest.Files = append(manifest.Files, generation.FileEntry{Path: f.Path, Mode: f.Mode})
