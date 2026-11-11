@@ -327,6 +327,18 @@ func TestActivateFailsVerificationAndRestores(t *testing.T) {
 				t.Fatal("activation succeeded")
 			}
 			b.wantDisk(one)
+			if name == "reload fails" {
+				// networkd may still run the new files, so the generation stays pending for the timer.
+				if b.pointers().Pending == nil {
+					t.Fatal("activation gave the generation up although networkd was never reloaded with the old files")
+				}
+				b.net.fail = ""
+				if err := b.timerFires(id); err != nil {
+					t.Fatal(err)
+				}
+				b.wantPointers(1, 0, 0, 1)
+				return
+			}
 			b.wantPointers(1, 0, 0, 1)
 			if g := b.read(id); g.State.State != Failed || g.Reason == "" {
 				t.Fatalf("state = %+v", g.State)
@@ -387,20 +399,29 @@ func TestRollbackRestoresPreviousAndDeletesDevices(t *testing.T) {
 	}
 }
 
-func TestRollbackSurvivesFailingReload(t *testing.T) {
+func TestRollbackStaysPendingUntilNetworkdReloads(t *testing.T) {
 	b := newBench(t)
 	b.live(one)
 	id := b.gen(false, two)
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
-	b.net.fail = "networkctl"
+	// Files on disk are not what networkd runs: until the reload succeeds the unconfirmed configuration is still live.
+	b.net.fail = "networkctl reload"
+	if err := b.timerFires(id); err == nil {
+		t.Fatal("rollback reported success although networkd still runs the unconfirmed configuration")
+	}
+	b.wantDisk(one)
+	if b.pointers().Pending == nil {
+		t.Fatal("the rollback gave up; the timer's retry would find nothing to do")
+	}
+	b.net.fail = ""
 	if err := b.timerFires(id); err != nil {
 		t.Fatal(err)
 	}
 	b.wantDisk(one)
 	b.wantPointers(1, 0, 0, 1)
-	if g := b.read(id); g.State.State != RolledBack || !strings.Contains(g.Reason, "injected failure") {
+	if g := b.read(id); g.State.State != RolledBack {
 		t.Fatalf("state = %+v", g.State)
 	}
 }

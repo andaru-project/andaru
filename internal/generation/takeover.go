@@ -125,7 +125,8 @@ func (r Realizer) Confirm(ctx context.Context, id int) error {
 	}
 	// Pointers first: once they name this generation a late timer and the next boot both keep it.
 	// Live is set too: a kill during activation may have left it behind the files.
-	p.LastKnownGood, p.Confirmed, p.Pending, p.Live = p.Confirmed, &id, nil, &id
+	// Last-known-good is what ran before this generation, which after a boot fallback is not the confirmed pointer.
+	p.LastKnownGood, p.Confirmed, p.Pending, p.Live = g.Previous, &id, nil, &id
 	p.Takeover = p.Takeover || g.Takeover
 	if err := r.writePointers("confirm:pointers", p); err != nil {
 		return err

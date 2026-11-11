@@ -471,3 +471,32 @@ func TestBootFinishesOnlyAConfirmedTakeover(t *testing.T) {
 	b.wantPermanent()
 	b.wantDisk(two)
 }
+
+func TestConfirmAfterFallbackKeepsTheUsableGeneration(t *testing.T) {
+	b := newBench(t)
+	b.live(one)
+	second := b.gen(false, two)
+	if err := b.r.Activate(t.Context(), second); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Confirm(t.Context(), second); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(b.dir, itoa(second), "files", "50-andaru-eth0.network"), "evil")
+	b.reboot()
+	if err := b.r.Boot(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	b.net.devices = map[string]bool{"eth0": true}
+	b.net.apply()
+	b.wantPointers(second, 1, 0, 1) // boot fell back to generation 1
+	third := b.gen(false, map[string]string{"50-andaru-eth0.network": uplinkStatic})
+	if err := b.r.Activate(t.Context(), third); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Confirm(t.Context(), third); err != nil {
+		t.Fatal(err)
+	}
+	// Last-known-good must be what actually ran before, not the corrupt generation the confirmed pointer still named.
+	b.wantPointers(third, 1, 0, third)
+}

@@ -351,7 +351,8 @@ func (r Realizer) Activate(ctx context.Context, id int) error {
 		return fmt.Errorf("activate %d: %s; restoring the previous files failed: %w", id, reason, err)
 	}
 	if err := r.settle(restore, next, restored); err != nil {
-		reason += "; reload after restoring: " + err.Error()
+		// The old files are back on disk but networkd may still run the new ones: the timer keeps this generation until a reload succeeds.
+		return fmt.Errorf("activate %d: %s; reload after restoring failed: %w", id, reason, err)
 	}
 	live := p.Live
 	p.Pending = nil
@@ -444,12 +445,13 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) error {
 		}
 		return fmt.Errorf("roll back %d: nothing to restore: %w", id, err)
 	}
-	// Files first: once they are back, a failing reload still leaves the next reload or boot correct.
+	// Files first: once they are back, any later reload or boot is correct. But only a reload makes networkd stop
+	// running the unconfirmed files, so until one succeeds the generation stays pending and the timer retries.
 	if err := r.place(from, target); err != nil {
 		return err
 	}
 	if err := r.settle(ctx, from, target); err != nil {
-		reason += "; " + err.Error()
+		return fmt.Errorf("roll back %d: files restored, reload failed: %w", id, err)
 	}
 	if what != "" {
 		reason += " (restored " + what + ")"
