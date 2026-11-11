@@ -303,3 +303,29 @@ func TestReadBaselineSeesMaskedIfupdown(t *testing.T) {
 		t.Fatalf("masked: %+v %v", b, err)
 	}
 }
+
+func TestFilterFacts(t *testing.T) {
+	root := t.TempDir()
+	read := func() RealizerFacts {
+		t.Helper()
+		f, err := readRealizerFacts(root+"/etc/systemd/network", root+"/run/systemd/network", root+"/pppd", root+"/none", root+"/dev/ppp", root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	if f := read(); f.NftTool || len(f.FilterUnits) != 0 {
+		t.Fatalf("empty host: %+v", f)
+	}
+	for _, p := range []string{"/usr/sbin/nft", "/etc/systemd/system/sysinit.target.wants/nftables.service", "/etc/systemd/system/multi-user.target.wants/ufw.service"} {
+		if err := os.MkdirAll(filepath.Dir(root+p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(root+p, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f := read(); !f.NftTool || !slices.Equal(f.FilterUnits, []string{"nftables.service", "ufw.service"}) {
+		t.Fatalf("facts %+v", f)
+	}
+}
