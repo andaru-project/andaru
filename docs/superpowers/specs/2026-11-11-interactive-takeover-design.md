@@ -73,13 +73,13 @@ Anything the declaration cannot express is an **error finding naming the file an
 
 Every string the host provides (interface names, domains, file paths) is shown with control characters escaped.
 
-`--plain` replaces the forms with numbered line prompts written for this command (not `huh`'s accessible mode, which reads past its prompt on a pipe and accepts defaults on end of input). End of input at any prompt exits 1 without writing anything. It does not need a terminal; without `--plain` and without a terminal the command exits 2 and points to `--plain` and `--accept-detected`.
+The command needs a terminal. Without one it exits 2, changing nothing, and points to `--accept-detected`. There is no line-prompt mode: `huh`'s accessible mode reads past its prompt on a pipe and accepts defaults on end of input, so it is not used. If the forms prove unusable on a serial console in the lab, a fallback is added then, with that failure as its reason.
 
 ### 3. Review (draft, saves nothing)
 
 `POST /api/v1/preview/network/draft` takes the change batch the operator built. The engine runs the save's own preparation against the saved head without publishing, renders the result, and runs the takeover gates, returning the preview shape plus the gate findings. The gate inputs are assembled by the same function the apply uses, extracted from the apply handler. A batch with a `password` field is refused: the draft never carries a secret.
 
-The review screen shows, per adapter, what changes ("DHCP → static 192.0.2.10/24"), the exact files and every finding. Actions: **Back**, **Quit**, and **Apply** only when no finding is an error. In `--plain` the operator must type `apply`; there is no default.
+The review screen shows, per adapter, what changes ("DHCP → static 192.0.2.10/24"), the exact files and every finding. Actions: **Back**, **Quit**, and **Apply** only when no finding is an error. Apply is never the preselected action.
 
 ### 4. Commit
 
@@ -112,13 +112,12 @@ Unit tests, in CI on both architectures:
 3. **Head guard:** a batch with a stale `expectedSavedVersion` is `412` and changes nothing; existing batches without it behave as before.
 4. **Draft:** a valid batch renders and the store's head and files are unchanged; a field error carries its path; gate findings appear; a `password` is refused; non-root is refused.
 5. **Answers to batch:** a plain function; keeping and leaving out adapters, mode changes, DNS choices.
-6. **`--plain` end to end** against a fake engine with all answers piped at once: completes; with too few answers: exits 1 with no write; typing anything but `apply` at review: no write; Back and Quit from every screen: no write.
-7. **Forms:** one smoke test drives the `huh` mode in a pseudo-terminal through to the review screen and quits.
+6. **Forms end to end in a pseudo-terminal** against a fake engine: the answers complete the flow and send exactly the batch; Back and Quit from every screen, and closing the terminal at any point before Apply, send no write.
 8. **After save:** apply refused, apply failed, and the process dying between save and apply each leave the reported state and printed advice the spec gives.
 
 On the lab, from snapshots, reset afterwards:
 
-9. Static netplan base (`base-netplan-static-20261111`): `andaru ctl takeover --plain` over SSH; the address, gateway and DNS are pre-filled; accepting them takes the host over with no ping lost; confirmed from a new session; a reboot keeps it.
+9. Static netplan base (`base-netplan-static-20261111`): `andaru ctl takeover` on the VM's serial console and over `ssh -t`; the address, gateway and DNS are pre-filled; accepting them takes the host over with no ping lost; confirmed from a new session; a reboot keeps it.
 10. Quit at review: no saved version, no generation, host unchanged.
 11. A second save from another session during review: the commit is refused with `412` and nothing is applied.
 12. `--accept-detected` on a DHCP netplan host (a clone of the DHCP base, reset afterwards): taken over without questions.
