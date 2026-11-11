@@ -28,7 +28,26 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 		case len(parts) == 2 && parts[0] == "config" && parts[1] == "changes":
 			route = "changes"
 			allowed = []string{"POST"}
-		case len(parts) >= 2 && parts[0] == "config" && (parts[1] == "links" || parts[1] == "segments" || parts[1] == "zones"):
+		case len(parts) == 3 && parts[0] == "config" && parts[1] == "nat" && parts[2] == "outbound",
+			len(parts) == 2 && parts[0] == "config" && parts[1] == "management":
+			// A singleton: one object without an ID, version-checked like any other.
+			collection = strings.Join(parts[1:], ".")
+			route, id = "singleton", collection
+			allowed = []string{"GET", "HEAD", "PUT", "DELETE"}
+		case len(parts) >= 3 && parts[0] == "config" && parts[1] == "policy" && (parts[2] == "input" || parts[2] == "forward"):
+			collection = "policy." + parts[2]
+			switch {
+			case len(parts) == 3:
+				route = "collection"
+				allowed = []string{"GET", "HEAD", "POST"}
+			case len(parts) == 4 && parts[3] == "order":
+				route, id = "order", "order"
+				allowed = []string{"PUT"}
+			case len(parts) == 4 && parts[3] != "":
+				route, id = "object", parts[3]
+				allowed = []string{"GET", "HEAD", "PUT", "DELETE"}
+			}
+		case len(parts) >= 2 && parts[0] == "config" && slices.Contains([]string{"links", "segments", "zones", "addresses", "services"}, parts[1]):
 			collection = parts[1]
 			if len(parts) == 2 {
 				route = "collection"
@@ -77,8 +96,11 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 				send(200, v, e)
 			case "collection":
 				v, e := store.List(r.Context(), collection)
+				if e == nil && v.Version != "" {
+					w.Header().Set("ETag", `"order.`+string(v.Version)+`"`)
+				}
 				send(200, v, e)
-			case "object":
+			case "object", "singleton":
 				v, head, e := store.Get(r.Context(), collection, id)
 				if e == nil {
 					w.Header().Set("ETag", `"`+id+"."+string(v.Version)+`"`)
@@ -139,15 +161,22 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 		} else {
 			op := "create"
 			var version *config.Version
-			if route == "object" {
-				op = "replace"
-				if r.Method == "DELETE" {
-					op = "delete"
+			if route != "collection" {
+				op = map[string]string{"PUT": "replace", "DELETE": "delete"}[r.Method]
+				if route == "order" {
+					op = "order"
 				}
 				version, e = objectPrecondition(id, r.Header.Values("If-Match"))
 			}
+			target := id
+			if route == "singleton" || route == "order" {
+				target = "" // the store versions these by collection
+			}
 			if e == nil {
-				changes, e = config.ObjectChange(op, collection, id, version, raw)
+				changes, e = config.ObjectChange(op, collection, target, version, raw)
+			}
+			if e == nil && route == "collection" && r.URL.Query().Has("before") {
+				changes, e = changes.Before(r.URL.Query().Get("before"))
 			}
 		}
 		if e != nil {
@@ -165,6 +194,14 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 			send(200, result, nil)
 			return
 		}
+		if route == "order" {
+			v, e := store.List(r.Context(), collection)
+			if e == nil {
+				w.Header().Set("ETag", `"order.`+string(v.Version)+`"`)
+			}
+			send(200, v, e)
+			return
+		}
 		if r.Method == "DELETE" {
 			send(200, struct {
 				State        string         `json:"state"`
@@ -176,7 +213,7 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 		if r.Method == "POST" {
 			status = 201
 			id = result.Created["object"]
-			w.Header().Set("Location", "/api/v1/config/"+collection+"/"+id)
+			w.Header().Set("Location", "/api/v1/config/"+strings.ReplaceAll(collection, ".", "/")+"/"+id)
 		}
 		for _, item := range result.Items {
 			if item.Collection == collection && item.ID == id {
@@ -205,7 +242,9 @@ func objectPrecondition(id string, tags []string) (*config.Version, error) {
 	if strings.ContainsAny(inner, "\" ,\r\n\t") {
 		return nil, &config.Fault{Code: "INVALID_REQUEST"}
 	}
-	identity, number, ok := strings.Cut(inner, ".")
+	// Singleton tags are named after their collection, which may itself contain a dot.
+	at := strings.LastIndex(inner, ".")
+	identity, number, ok := inner[:max(at, 0)], inner[at+1:], at > 0
 	if !ok || identity == "" {
 		return nil, &config.Fault{Code: "INVALID_REQUEST"}
 	}

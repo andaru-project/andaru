@@ -200,7 +200,8 @@ func (s *Store) List(ctx context.Context, collection string) (result CollectionV
 		}
 		slices.SortFunc(keys, compareKeys)
 		if slices.Contains(orderedCollections, collection) {
-			// A rule list is returned in execution order.
+			// A rule list is returned in execution order, with the version that guards that order.
+			result.Version = versionOf(&state, listKey(collection)).Version
 			keys = keys[:0]
 			list := state.Config.Policy.Input
 			if collection == "policy.forward" {

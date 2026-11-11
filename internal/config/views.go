@@ -13,6 +13,8 @@ type CollectionView struct {
 	State        string       `json:"state"`
 	SavedVersion Version      `json:"savedVersion"`
 	Items        []ObjectView `json:"items"`
+	// Version is a rule list's own version, which guards its order; empty for other collections.
+	Version Version `json:"version,omitempty"`
 }
 type SnapshotView struct {
 	State         string          `json:"state"`
@@ -122,7 +124,10 @@ func resultView(p preparedChange) (SaveResult, error) {
 	for _, key := range p.Results {
 		meta := p.State.Versions[key]
 		item := ChangedView{Collection: key.Collection, ID: key.ID, Deleted: meta.Deleted}
-		if !meta.Deleted {
+		if key == listKey(key.Collection) && slices.Contains(orderedCollections, key.Collection) {
+			// A list's order has a version but no value of its own.
+			item.Version = meta.Version
+		} else if !meta.Deleted {
 			v, e := viewObject(index[key], meta.Version, p.State.Secrets)
 			if e != nil {
 				return result, e

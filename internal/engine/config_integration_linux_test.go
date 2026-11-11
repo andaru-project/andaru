@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -116,7 +117,9 @@ func TestConfigurationHTTPContract(t *testing.T) {
 	}
 	expected := map[string][]string{"/api/v1/status/links": {"get", "head"}, "/api/v1/openapi.json": {"get", "head"}, "/api/v1/schema": {"get", "head"}, "/api/v1/config": {"get", "head"}, "/api/v1/config/{collection}": {"get", "head", "post"}, "/api/v1/config/{collection}/{id}": {"get", "head", "put", "delete"}, "/api/v1/config/changes": {"post"}, "/api/v1/versions": {"get", "head"}, "/api/v1/versions/{id}": {"get", "head"}, "/api/v1/preview/network": {"get", "head"},
 		"/api/v1/applies": {"get", "head", "post"}, "/api/v1/applies/{id}": {"get", "head"}, "/api/v1/applies/{id}/confirmation": {"post"}, "/api/v1/applies/{id}/rollback": {"post"},
-		"/api/v1/takeover/proposal": {"get", "head"}, "/api/v1/preview/network/draft": {"post"}}
+		"/api/v1/takeover/proposal": {"get", "head"}, "/api/v1/preview/network/draft": {"post"},
+		"/api/v1/config/policy/{chain}": {"get", "head", "post"}, "/api/v1/config/policy/{chain}/{id}": {"get", "head", "put", "delete"},
+		"/api/v1/config/policy/{chain}/order": {"put"}, "/api/v1/config/management": {"get", "head", "put", "delete"}, "/api/v1/config/nat/outbound": {"get", "head", "put", "delete"}}
 	if len(document.Paths) != len(expected) {
 		t.Fatalf("unimplemented or missing contract paths: %d", len(document.Paths))
 	}
@@ -433,4 +436,62 @@ func engineENOSP() error {
 	}
 	fmt.Println("engine 503, drained exit 1, complete reopen PASS")
 	return nil
+}
+
+func TestPolicyRoutes(t *testing.T) {
+	h, _ := configurationFixture(t)
+	rule := func(name string) string {
+		return `{"name":"` + name + `","enabled":true,"action":"accept","from":[],"to":[],"services":[],"log":false}`
+	}
+	expect := func(w *httptest.ResponseRecorder, status int) {
+		t.Helper()
+		if w.Code != status {
+			t.Fatalf("status %d, want %d: %s", w.Code, status, w.Body)
+		}
+	}
+	a := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/policy/forward", rule("a"), "")))
+	b := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/policy/forward", rule("b"), "")))
+	w := configCall(h, "POST", "/api/v1/config/policy/forward?before="+a, rule("c"), "")
+	expect(w, 201)
+	c := valueID(t, apiObject(t, w))
+
+	list := func() (ids []string, tag string) {
+		t.Helper()
+		w := configCall(h, "GET", "/api/v1/config/policy/forward", "", "")
+		expect(w, 200)
+		var v struct {
+			Items   []config.ObjectView
+			Version string
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &v); err != nil || v.Version == "" {
+			t.Fatalf("list %s: %v", w.Body, err)
+		}
+		for _, item := range v.Items {
+			ids = append(ids, valueID(t, item))
+		}
+		return ids, w.Header().Get("ETag")
+	}
+	ids, tag := list()
+	if !slices.Equal(ids, []string{c, a, b}) || tag == "" {
+		t.Fatalf("order %v tag %q", ids, tag)
+	}
+	expect(configCall(h, "PUT", "/api/v1/config/policy/forward/order", `["`+b+`","`+a+`","`+c+`"]`, ""), 428)
+	expect(configCall(h, "PUT", "/api/v1/config/policy/forward/order", `["`+b+`","`+a+`"]`, tag), 422)
+	expect(configCall(h, "PUT", "/api/v1/config/policy/forward/order", `["`+b+`","`+a+`","`+c+`"]`, tag), 200)
+	expect(configCall(h, "PUT", "/api/v1/config/policy/forward/order", `["`+c+`","`+a+`","`+b+`"]`, tag), 412)
+	if ids, _ = list(); !slices.Equal(ids, []string{b, a, c}) {
+		t.Fatalf("order after PUT %v", ids)
+	}
+
+	expect(configCall(h, "GET", "/api/v1/config/management", "", ""), 404)
+	expect(configCall(h, "PUT", "/api/v1/config/nat/outbound", `{"mode":"automatic"}`, `"nat.outbound.0"`), 200)
+	w = configCall(h, "GET", "/api/v1/config/nat/outbound", "", "")
+	expect(w, 200)
+	if !strings.Contains(w.Body.String(), `"automatic"`) {
+		t.Fatalf("outbound %s", w.Body)
+	}
+	addr := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/addresses", `{"name":"nas","kind":"host","address":"192.0.2.10"}`, "")))
+	expect(configCall(h, "GET", "/api/v1/config/addresses/"+addr, "", ""), 200)
+	expect(configCall(h, "POST", "/api/v1/config/services", `{"name":"dns","protocol":"udp","ports":["53"]}`, ""), 201)
+	expect(configCall(h, "GET", "/api/v1/config/policy/sideways", "", ""), 404)
 }

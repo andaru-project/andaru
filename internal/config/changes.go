@@ -92,6 +92,15 @@ func ObjectChange(op, collection, id string, expected *Version, body []byte) (Ch
 	c.wire = v
 	return c, nil
 }
+
+// Before places the single created rule of c ahead of the rule id.
+func (c Changes) Before(id string) (Changes, error) {
+	if len(c.Operations) != 1 || c.Operations[0].Op != "create" || id == "" {
+		return c, fault("INVALID_REQUEST", "", "before applies to creating one rule.")
+	}
+	c.Operations[0].Before = id
+	return c, nil
+}
 func (c Changes) path(i int, relative string, value bool) string {
 	if c.single {
 		return relative

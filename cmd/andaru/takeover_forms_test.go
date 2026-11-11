@@ -14,7 +14,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -308,7 +307,8 @@ func TestClosingTheTerminalWritesNothing(t *testing.T) {
 	s.hangup()
 	err = cmd.Wait()
 	var exitErr *exec.ExitError
-	if !errors.As(err, &exitErr) || exitErr.Sys().(syscall.WaitStatus).Signal() != syscall.SIGHUP {
+	// The hangup ends it either by SIGHUP or, when the read sees the closed terminal first, by a failing exit.
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() == 0 {
 		t.Fatalf("want the assistant ended by the hangup, got %v", err)
 	}
 	if _, err := os.Stat(marks); !errors.Is(err, os.ErrNotExist) {

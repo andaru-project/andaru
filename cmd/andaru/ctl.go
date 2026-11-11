@@ -13,7 +13,9 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/andaru-project/andaru/internal/config"
@@ -37,11 +39,18 @@ type applyReply struct {
 	Files    []json.RawMessage
 }
 
-var objectIDPattern = regexp.MustCompile(`^(lnk|seg|zon)_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+var objectIDPattern = regexp.MustCompile(`^(lnk|seg|zon|adr|svc|rul)_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 var applyIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
-var errUsage = errors.New("usage: andaru ctl [--socket PATH] links|openapi|config <show|list|get|create|replace|delete|changes>|versions <list|get>|preview network [--saved-version N]|apply network --saved-version N [--takeover] [--confirm-timeout S]|applies <list|get ID|confirm ID|rollback ID>|takeover [--accept-detected] [--confirm-timeout S]")
+var errUsage = errors.New("usage: andaru ctl [--socket PATH] links|openapi|config <show|list|get|create|replace|delete|changes|order>|versions <list|get>|preview network [--saved-version N]|apply network --saved-version N [--takeover] [--confirm-timeout S]|applies <list|get ID|confirm ID|rollback ID>|takeover [--accept-detected] [--confirm-timeout S]")
 
-func collectionName(s string) bool { return s == "links" || s == "segments" || s == "zones" }
+var ruleIDPattern = regexp.MustCompile(`^rul_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+
+func collectionName(s string) bool {
+	return slices.Contains([]string{"links", "segments", "zones", "addresses", "services", "policy/input", "policy/forward"}, s)
+}
+
+// singletonName names the configuration objects that exist at most once and have no ID.
+func singletonName(s string) bool { return s == "management" || s == "nat/outbound" }
 func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 	req := ctlRequest{method: "GET", status: 200}
 	if len(args) == 1 {
@@ -63,7 +72,12 @@ func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 		verb := args[1]
 		leaf := args[2:]
 		version := ""
-		if verb == "replace" || verb == "delete" {
+		chain := ""
+		if verb == "order" && len(leaf) > 0 {
+			// andaru ctl config order input|forward --version V <id>...: the chain comes before the flags.
+			chain, leaf = leaf[0], leaf[1:]
+		}
+		if verb == "replace" || verb == "delete" || verb == "order" {
 			fs := flag.NewFlagSet(verb, flag.ContinueOnError)
 			fs.SetOutput(stderr)
 			fs.StringVar(&version, "version", "", "explicit version returned by the object read")
@@ -71,9 +85,36 @@ func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 				return req, e
 			}
 			leaf = fs.Args()
-			if _, e := config.ParseVersion(version); e != nil {
+			// "0" is the version of a singleton not yet set.
+			if _, e := config.ParseVersion(version); e != nil && !(version == "0" && len(leaf) == 1 && singletonName(leaf[0])) {
 				return req, errUsage
 			}
+		}
+		if verb == "order" {
+			if chain != "input" && chain != "forward" {
+				return req, errUsage
+			}
+			for _, id := range leaf {
+				if !ruleIDPattern.MatchString(id) {
+					return req, errUsage
+				}
+			}
+			req.method, req.path, req.kind = "PUT", "/api/v1/config/policy/"+chain+"/order", "collection"
+			req.tag = `"order.` + version + `"`
+			req.payload, _ = json.Marshal(append([]string{}, leaf...))
+			return req, nil
+		}
+		if len(leaf) == 1 && singletonName(leaf[0]) && (verb == "get" || verb == "replace" || verb == "delete") {
+			req.path, req.kind = "/api/v1/config/"+leaf[0], "singleton"
+			switch verb {
+			case "replace":
+				req.method, req.body = "PUT", true
+				req.tag = `"` + strings.ReplaceAll(leaf[0], "/", ".") + "." + version + `"`
+			case "delete":
+				req.method, req.kind = "DELETE", "ack"
+				req.tag = `"` + strings.ReplaceAll(leaf[0], "/", ".") + "." + version + `"`
+			}
+			return req, nil
 		}
 		if verb == "show" && len(leaf) == 0 {
 			req.path = "/api/v1/config"
@@ -404,6 +445,10 @@ func validEnvelope(kind string, body []byte) bool {
 	case "snapshot":
 		var v config.SnapshotView
 		return json.Unmarshal(body, &v) == nil && v.State == "saved" && validVersion(v.SavedVersion) && v.UnusedSecrets != nil && validDeclarationView(v.Value)
+	case "singleton":
+		var v config.ObjectView
+		var value map[string]any
+		return json.Unmarshal(body, &v) == nil && validVersion(v.Version) && v.Version != "0" && json.Unmarshal(v.Value, &value) == nil
 	case "collection":
 		var v config.CollectionView
 		if json.Unmarshal(body, &v) != nil || v.State != "saved" || !validVersion(v.SavedVersion) || v.Items == nil {
