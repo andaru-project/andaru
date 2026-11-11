@@ -38,6 +38,8 @@ type hostReader struct {
 	Baseline func() (host.Baseline, error)
 	// Route names the interfaces carrying an IPv4 default route.
 	Route func(context.Context) ([]string, error)
+	// Resolved returns the DNS servers and search domains systemd-resolved has for the host now.
+	Resolved func(context.Context) ([]string, []string, error)
 	// Root prefixes host files the engine reads directly; "" on a real host.
 	Root string
 }

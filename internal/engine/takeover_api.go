@@ -231,7 +231,7 @@ func family(a host.Addressing) map[string]any {
 }
 
 // proposalOperations turns what netplan configures into one create-only change batch.
-func proposalOperations(found []host.NetplanInterface) []config.Operation {
+func proposalOperations(found []host.Detected) []config.Operation {
 	zones := map[string]bool{}
 	var links, segments []config.Operation
 	for i, n := range found {
@@ -273,7 +273,7 @@ func describe(a host.Addressing) string {
 	return "none"
 }
 
-func adapters(found []host.NetplanInterface, links []host.LinkStatus) []adapterView {
+func adapters(found []host.Detected, links []host.LinkStatus) []adapterView {
 	out := []adapterView{}
 	for _, n := range found {
 		summary := "IPv4 " + describe(n.IPv4) + ", IPv6 " + describe(n.IPv6)

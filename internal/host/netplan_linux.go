@@ -19,8 +19,8 @@ type Addressing struct {
 	Gateway   string
 }
 
-// NetplanInterface is what netplan configures on one physical interface, read from the files it generated.
-type NetplanInterface struct {
+// Detected is what the host configures on one physical interface, read from netplan's generated files or ifupdown's.
+type Detected struct {
 	File, Name, PermanentMAC string
 	MTU                      int
 	IPv4, IPv6               Addressing
@@ -28,8 +28,9 @@ type NetplanInterface struct {
 	DefaultRoute             bool
 }
 
-// NetplanProblem is something netplan configures that a takeover cannot express.
-type NetplanProblem struct{ File, Key, Message string }
+// Problem is something the host's configuration does that a takeover cannot express.
+// An empty Code means TAKEOVER_UNSUPPORTED_BASELINE.
+type Problem struct{ File, Key, Code, Message string }
 
 const netplanRuntime = "/run/systemd/network/"
 
@@ -100,20 +101,22 @@ func first(values []string) string {
 
 // ReadNetplan maps every netplan-generated file under root/run/systemd/network to the interface
 // networkd bound it to. defaultRoute names the interface carrying the IPv4 default route.
-func ReadNetplan(root string, links []LinkStatus, managed []Managed, defaultRoute string) ([]NetplanInterface, []NetplanProblem) {
-	var found []NetplanInterface
-	var problems []NetplanProblem
+func ReadNetplan(root string, links []LinkStatus, managed []Managed, defaultRoute string) ([]Detected, []Problem) {
+	var found []Detected
+	var problems []Problem
 	paths, _ := filepath.Glob(filepath.Join(root, netplanRuntime, "10-netplan-*"))
 	slices.Sort(paths)
 	// Wired 802.1X: netplan keeps the credentials and a wpa_supplicant unit beside an ordinary .network file.
 	wpa, _ := filepath.Glob(filepath.Join(root, "run/netplan/wpa-*.conf"))
 	for _, path := range wpa {
-		problems = append(problems, NetplanProblem{"/run/netplan/" + filepath.Base(path), "", "netplan authenticates this interface with 802.1X, which cannot be taken over yet."})
+		problems = append(problems, Problem{File: "/run/netplan/" + filepath.Base(path), Message: "netplan authenticates this interface with 802.1X, which cannot be taken over yet."})
 	}
 	mtus := map[string]int{}
 	for _, path := range paths {
 		file := netplanRuntime + filepath.Base(path)
-		problem := func(key, message string) { problems = append(problems, NetplanProblem{file, key, message}) }
+		problem := func(key, message string) {
+			problems = append(problems, Problem{File: file, Key: key, Message: message})
+		}
 		switch filepath.Ext(path) {
 		case ".netdev":
 			problem(".netdev", "netplan created a virtual device; bridges, bonds and VLANs made by netplan cannot be taken over yet.")
@@ -134,7 +137,9 @@ func ReadNetplan(root string, links []LinkStatus, managed []Managed, defaultRout
 			continue
 		}
 		file := netplanRuntime + filepath.Base(path)
-		problem := func(key, message string) { problems = append(problems, NetplanProblem{file, key, message}) }
+		problem := func(key, message string) {
+			problems = append(problems, Problem{File: file, Key: key, Message: message})
+		}
 		u, err := readUnit(path)
 		if err != nil {
 			problem("", err.Error())
@@ -165,7 +170,7 @@ func ReadNetplan(root string, links []LinkStatus, managed []Managed, defaultRout
 			problem("MACAddress", "The interface's MAC address was changed; Andaru matches the permanent one and does not change it.")
 			continue
 		}
-		n := NetplanInterface{File: file, Name: link.Name, PermanentMAC: strings.ToLower(link.PermanentAddress), MTU: link.MTU, DefaultRoute: link.Name == defaultRoute}
+		n := Detected{File: file, Name: link.Name, PermanentMAC: strings.ToLower(link.PermanentAddress), MTU: link.MTU, DefaultRoute: link.Name == defaultRoute}
 		if mtu, ok := mtus[n.PermanentMAC]; ok {
 			n.MTU = mtu
 		}
@@ -265,13 +270,13 @@ func ReadNetplan(root string, links []LinkStatus, managed []Managed, defaultRout
 		}
 	}
 	if len(routes) > 1 {
-		problems = append(problems, NetplanProblem{netplanRuntime, "Gateway", "More than one interface has an IPv4 default route (" + strings.Join(routes, ", ") + "); only one uplink can be taken over yet."})
+		problems = append(problems, Problem{File: netplanRuntime, Key: "Gateway", Message: "More than one interface has an IPv4 default route (" + strings.Join(routes, ", ") + "); only one uplink can be taken over yet."})
 	}
 	if len(dns) > 1 {
-		problems = append(problems, NetplanProblem{netplanRuntime, "DNS", "More than one interface sets DNS servers (" + strings.Join(dns, ", ") + "); Andaru takes the host's DNS servers from one."})
+		problems = append(problems, Problem{File: netplanRuntime, Key: "DNS", Message: "More than one interface sets DNS servers (" + strings.Join(dns, ", ") + "); Andaru takes the host's DNS servers from one."})
 	}
 	// Map iteration found them; report them in a stable order.
-	slices.SortFunc(problems, func(a, b NetplanProblem) int {
+	slices.SortFunc(problems, func(a, b Problem) int {
 		return cmp.Or(strings.Compare(a.File, b.File), strings.Compare(a.Key, b.Key), strings.Compare(a.Message, b.Message))
 	})
 	return found, problems

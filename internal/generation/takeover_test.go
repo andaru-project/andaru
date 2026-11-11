@@ -447,7 +447,7 @@ func TestBootFinishesOnlyAConfirmedTakeover(t *testing.T) {
 	if err := b.r.Boot(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if !b.exists("etc/netplan/50-cloud-init.yaml") || b.exists(cloudConfig) || b.net.ran("systemctl") != 0 {
+	if !b.exists("etc/netplan/50-cloud-init.yaml") || b.exists(cloudConfig) || b.net.ran("systemctl enable")+b.net.ran("systemctl disable") != 0 {
 		t.Fatalf("boot made a takeover permanent that was never confirmed: %q", b.net.argv)
 	}
 

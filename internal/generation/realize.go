@@ -187,15 +187,19 @@ type observation struct {
 }
 
 func (r Realizer) observe(ctx context.Context, withDNS bool) (observation, error) {
-	var o observation
-	data, err := r.Run(ctx, "/usr/bin/networkctl", "list", "--json=short")
+	o := observation{managed: []host.Managed{}}
+	// networkctl fails outright while networkd is stopped, as before an ifupdown takeover starts it.
+	if _, err := r.Run(ctx, "/usr/bin/systemctl", "is-active", "--quiet", "systemd-networkd.service"); err == nil {
+		data, err := r.Run(ctx, "/usr/bin/networkctl", "list", "--json=short")
+		if err == nil {
+			o.managed, err = host.ParseManaged(data)
+		}
+		if err != nil {
+			return o, err
+		}
+	}
+	data, err := r.Run(ctx, "/usr/bin/ip", "-d", "-j", "address", "show")
 	if err == nil {
-		o.managed, err = host.ParseManaged(data)
-	}
-	if err != nil {
-		return o, err
-	}
-	if data, err = r.Run(ctx, "/usr/bin/ip", "-d", "-j", "address", "show"); err == nil {
 		o.links, err = host.ParseLinks(data)
 	}
 	if err != nil {

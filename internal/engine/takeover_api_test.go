@@ -13,7 +13,7 @@ import (
 
 	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/host"
-	"github.com/andaru-project/andaru/internal/host/netplanfixture"
+	"github.com/andaru-project/andaru/internal/host/fixture"
 )
 
 const labMAC = "bc:24:11:89:01:10"
@@ -29,9 +29,9 @@ type takeoverBench struct {
 	reads       int
 }
 
-func newTakeoverBench(t *testing.T, fixture string) *takeoverBench {
+func newTakeoverBench(t *testing.T, name string) *takeoverBench {
 	return &takeoverBench{
-		root: netplanfixture.Root(t, fixture), state: t.TempDir(),
+		root: fixture.Root(t, name), state: t.TempDir(),
 		head:     `{"schemaVersion":1,"links":[],"segments":[],"zones":[]}`,
 		baseline: host.Baseline{Netplan: true, BootUnit: true},
 		routes:   []string{"eth0"},

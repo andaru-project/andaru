@@ -33,6 +33,7 @@ type fakeNetworkd struct {
 	chowns  []string
 
 	noAddress, noRoute bool
+	stopped            bool // networkd is not running: networkctl fails
 
 	dns     map[string][]string     // what resolved reports per interface
 	editDNS func([]string) []string // distorts that report
@@ -94,6 +95,12 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 		return nil, errors.New(command + ": injected failure")
 	}
 	switch {
+	case command == "systemctl is-active --quiet systemd-networkd.service":
+		if f.stopped {
+			return nil, errors.New("inactive")
+		}
+	case strings.HasPrefix(command, "networkctl") && f.stopped:
+		return nil, errors.New("systemd-networkd is not running")
 	case command == "networkctl reload":
 		if f.delay == 0 {
 			f.apply()
@@ -719,5 +726,14 @@ func TestDNSCheckIgnoresFilesThatDeclareNone(t *testing.T) {
 	b.net.offered = map[string][]string{"eth1": {"10.0.0.53"}}
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestObserveWithoutNetworkd(t *testing.T) {
+	b := newBench(t)
+	b.net.stopped = true
+	o, err := b.r.observe(context.Background(), false)
+	if err != nil || len(o.managed) != 0 {
+		t.Fatalf("observation %+v, %v", o, err)
 	}
 }

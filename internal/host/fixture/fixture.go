@@ -1,6 +1,6 @@
-// Package netplanfixture holds the files netplan generated on the lab VM, embedded so that a test
+// Package fixture holds host files captured on the lab VMs, embedded so that a test
 // binary copied to another host still has them.
-package netplanfixture
+package fixture
 
 import (
 	"embed"
