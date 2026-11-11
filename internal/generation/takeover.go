@@ -156,12 +156,16 @@ func (r Realizer) makePermanent(ctx context.Context, reload bool) error {
 	}
 	// netplan's generator is what enables networkd on cloud images; without its YAML nothing else would.
 	step("permanent:enable", func() error {
-		args := []string{"enable", "systemd-networkd.service"}
-		if !reload {
-			args = []string{"enable", "--no-reload", "systemd-networkd.service"}
+		// Andaru's links are never required for "online", so wait-online would hold every boot for its two-minute timeout.
+		var failures []error
+		for _, args := range [][]string{{"enable", "systemd-networkd.service"}, {"disable", "systemd-networkd-wait-online.service"}} {
+			if !reload {
+				args = []string{args[0], "--no-reload", args[1]}
+			}
+			_, err := r.Run(ctx, "/usr/bin/systemctl", args...)
+			failures = append(failures, err)
 		}
-		_, err := r.Run(ctx, "/usr/bin/systemctl", args...)
-		return err
+		return errors.Join(failures...)
 	})
 	// cloud-init must be told before the YAML goes, or it writes the YAML back at the next boot.
 	step("permanent:cloud-init", func() error {
