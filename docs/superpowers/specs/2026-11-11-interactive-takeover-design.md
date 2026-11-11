@@ -113,14 +113,14 @@ Unit tests, in CI on both architectures:
 4. **Draft:** a valid batch renders and the store's head and files are unchanged; a field error carries its path; gate findings appear; a `password` is refused; non-root is refused.
 5. **Answers to batch:** a plain function; keeping and leaving out adapters, mode changes, DNS choices.
 6. **Forms end to end in a pseudo-terminal** against a fake engine: the answers complete the flow and send exactly the batch; Back and Quit from every screen, and closing the terminal at any point before Apply, send no write.
-8. **After save:** apply refused, apply failed, and the process dying between save and apply each leave the reported state and printed advice the spec gives.
+7. **After save:** apply refused, apply failed, and the process dying between save and apply each leave the reported state and printed advice the spec gives.
 
 On the lab, from snapshots, reset afterwards:
 
-9. Static netplan base (`base-netplan-static-20261111`): `andaru ctl takeover` on the VM's serial console and over `ssh -t`; the address, gateway and DNS are pre-filled; accepting them takes the host over with no ping lost; confirmed from a new session; a reboot keeps it.
-10. Quit at review: no saved version, no generation, host unchanged.
-11. A second save from another session during review: the commit is refused with `412` and nothing is applied.
-12. `--accept-detected` on a DHCP netplan host (a clone of the DHCP base, reset afterwards): taken over without questions.
+8. Static netplan base (`base-netplan-static-20261111`): `andaru ctl takeover` on the VM's serial console and over `ssh -t`; the address, gateway and DNS are pre-filled; accepting them takes the host over with no ping lost; confirmed from a new session; a reboot keeps it.
+9. Quit at review: no saved version, no generation, host unchanged.
+10. A second save from another session during review: the commit is refused with `412` and nothing is applied.
+11. `--accept-detected` on a DHCP netplan host (a clone of the DHCP base, reset afterwards): taken over without questions.
 
 The owner then runs the forms interactively himself; what he wants changed becomes the next change, not a criterion of this one.
 
