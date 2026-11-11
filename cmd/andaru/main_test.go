@@ -3,13 +3,18 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/andaru-project/andaru/internal/generation"
 )
 
 func replySocket(t *testing.T, handler http.Handler) string {
@@ -187,5 +192,76 @@ func TestCtlPreviewUsageAndReplyBoundary(t *testing.T) {
 		} else if code != 1 || out.Len() != 0 {
 			t.Fatalf("%s: became output: exit=%d %s", name, code, out.String())
 		}
+	}
+}
+
+func TestRealizeUsageErrors(t *testing.T) {
+	for _, args := range [][]string{
+		{"realize"}, {"realize", "unknown"}, {"realize", "activate"}, {"realize", "activate", "0"},
+		{"realize", "activate", "01"}, {"realize", "activate", "abc"}, {"realize", "activate", "1", "extra"},
+		{"realize", "rollback", "3"}, {"realize", "confirm"}, {"realize", "boot", "1"},
+		{"realize", "--state-dir", "relative", "boot"},
+	} {
+		var out, diagnostics bytes.Buffer
+		if code := run(context.Background(), args, strings.NewReader(""), &out, &diagnostics); code != 2 || out.Len() != 0 || diagnostics.Len() == 0 {
+			t.Fatalf("%q: exit=%d stdout=%q stderr=%q", args, code, out.String(), diagnostics.String())
+		}
+	}
+	var diagnostics bytes.Buffer
+	run(context.Background(), nil, strings.NewReader(""), io.Discard, &diagnostics)
+	if !strings.Contains(diagnostics.String(), "andaru realize") {
+		t.Fatalf("usage omits realize: %q", diagnostics.String())
+	}
+}
+
+type fakeVerbs struct {
+	err   error
+	calls []string
+}
+
+func (f *fakeVerbs) Activate(_ context.Context, id int) error {
+	f.calls = append(f.calls, fmt.Sprint("activate ", id))
+	return f.err
+}
+func (f *fakeVerbs) Rollback(_ context.Context, id int, reason string) error {
+	f.calls = append(f.calls, fmt.Sprint("rollback ", id, " ", reason))
+	return f.err
+}
+func (f *fakeVerbs) Confirm(_ context.Context, id int) error {
+	f.calls = append(f.calls, fmt.Sprint("confirm ", id))
+	return f.err
+}
+func (f *fakeVerbs) Boot(context.Context) error { f.calls = append(f.calls, "boot"); return f.err }
+
+func TestRealizeExitCodes(t *testing.T) {
+	for _, row := range []struct {
+		args []string
+		err  error
+		call string
+		code int
+	}{
+		{[]string{"activate", "7"}, nil, "activate 7", 0},
+		{[]string{"activate", "7"}, errors.New("verification failed"), "activate 7", 1},
+		{[]string{"confirm", "7"}, nil, "confirm 7", 0},
+		// A timer firing after a confirmation must not leave a failed unit behind.
+		{[]string{"rollback", "7", "deadline"}, fmt.Errorf("roll back 7: %w", generation.ErrWrongState), "rollback 7 deadline", 0},
+		{[]string{"rollback", "7", "requested"}, errors.New("disk"), "rollback 7 requested", 1},
+		// Boot must never hold up sysinit.target.
+		{[]string{"boot"}, errors.New("nothing usable"), "boot", 0},
+	} {
+		verbs := &fakeVerbs{err: row.err}
+		var diagnostics bytes.Buffer
+		var dir string
+		code := realizeCommand(context.Background(), append([]string{"--state-dir", "/srv/state"}, row.args...), &diagnostics, func(stateDir string) (realizeVerbs, error) {
+			dir = stateDir
+			return verbs, nil
+		})
+		if code != row.code || !slices.Equal(verbs.calls, []string{row.call}) || dir != "/srv/state" || (row.err != nil) != (diagnostics.Len() > 0) {
+			t.Fatalf("%q: exit=%d calls=%q dir=%q stderr=%q", row.args, code, verbs.calls, dir, diagnostics.String())
+		}
+	}
+	code := realizeCommand(context.Background(), []string{"boot"}, io.Discard, func(string) (realizeVerbs, error) { return nil, errors.New("not root") })
+	if code != 1 {
+		t.Fatalf("a refused privilege check exited %d", code)
 	}
 }

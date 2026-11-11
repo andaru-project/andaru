@@ -25,7 +25,7 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	usage := "usage: andaru engine [--socket PATH] [--state-dir PATH] | andaru ctl [--socket PATH] links|openapi|config|versions|preview"
+	usage := "usage: andaru engine [--socket PATH] [--state-dir PATH] | andaru ctl [--socket PATH] links|openapi|config|versions|preview|apply|applies | andaru realize [--state-dir PATH] activate|rollback|confirm|boot"
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, usage)
 		return 2
@@ -33,6 +33,9 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprintln(stdout, usage)
 		return 0
+	}
+	if args[0] == "realize" {
+		return realizeCommand(ctx, args[1:], stderr, newRealizer)
 	}
 	if args[0] != "engine" && args[0] != "ctl" {
 		fmt.Fprintln(stderr, usage)
