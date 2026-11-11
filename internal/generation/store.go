@@ -35,6 +35,8 @@ type FileEntry struct {
 
 // Manifest is written once by the engine and never changed.
 type Manifest struct {
+	// Baseline is what a takeover generation replaces: "netplan" or "ifupdown"; empty on other generations.
+	Baseline              string      `json:"baseline,omitempty"`
 	ID                    int         `json:"id"`
 	SavedVersion          string      `json:"savedVersion"`
 	CreatedAt             time.Time   `json:"createdAt"`

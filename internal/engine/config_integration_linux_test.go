@@ -33,7 +33,7 @@ func configurationFixture(t *testing.T) (http.Handler, *config.Store) {
 		t.Fatal(e)
 	}
 	t.Cleanup(func() { s.Close() })
-	return newHandler(host.ReadLinks, newSavedHandler(s, host.ReadLinks, host.ReadRealizerFacts, http.NotFoundHandler())), s
+	return newHandler(host.ReadLinks, newSavedHandler(s, host.ReadLinks, host.ReadRealizerFacts, nil, http.NotFoundHandler())), s
 }
 func configCall(h http.Handler, method, path, body, tag string) *httptest.ResponseRecorder {
 	r := rootRequest(method, path)

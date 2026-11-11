@@ -21,8 +21,11 @@ type previewResponse struct {
 }
 
 // newSavedHandler serves everything that reads the saved store.
-func newSavedHandler(store *config.Store, readLinks func(context.Context) ([]host.LinkStatus, error), readFacts func() (host.RealizerFacts, error), applies http.Handler) http.Handler {
-	configuration, preview := newConfigurationHandler(store), newPreviewHandler(store, readLinks, readFacts)
+// identity, when not nil, returns the DHCP identities a preview renders with, as an apply would.
+type identitySource func(context.Context, []host.LinkStatus) (map[string]host.DHCPIdentity, error)
+
+func newSavedHandler(store *config.Store, readLinks func(context.Context) ([]host.LinkStatus, error), readFacts func() (host.RealizerFacts, error), identity identitySource, applies http.Handler) http.Handler {
+	configuration, preview := newConfigurationHandler(store), newPreviewHandler(store, readLinks, readFacts, identity)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isLivePath(r.URL.Path) {
 			applies.ServeHTTP(w, r)
@@ -37,7 +40,7 @@ func newSavedHandler(store *config.Store, readLinks func(context.Context) ([]hos
 }
 
 // newPreviewHandler renders a saved version for this host. It reads and never writes.
-func newPreviewHandler(store *config.Store, readLinks func(context.Context) ([]host.LinkStatus, error), readFacts func() (host.RealizerFacts, error)) http.Handler {
+func newPreviewHandler(store *config.Store, readLinks func(context.Context) ([]host.LinkStatus, error), readFacts func() (host.RealizerFacts, error), identity identitySource) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
@@ -70,12 +73,16 @@ func newPreviewHandler(store *config.Store, readLinks func(context.Context) ([]h
 		if err == nil {
 			facts, err = readFacts()
 		}
+		var dhcp map[string]host.DHCPIdentity
+		if err == nil && identity != nil {
+			dhcp, err = identity(r.Context(), links)
+		}
 		if err != nil {
 			slog.ErrorContext(r.Context(), "host inventory unavailable for preview", "error", err)
 			writeError(w, r, http.StatusServiceUnavailable, "INVENTORY_UNAVAILABLE", "Interface inventory is unavailable; inspect the engine journal.")
 			return
 		}
-		result, err := render.Network(render.Input{Declaration: input.Value, Secrets: input.Secrets, Links: links, Facts: facts})
+		result, err := render.Network(render.Input{Declaration: input.Value, Secrets: input.Secrets, Links: links, Facts: facts, DHCPIdentity: dhcp})
 		if err != nil {
 			// The error describes JSON structure only; secret values are not part of the declaration.
 			slog.ErrorContext(r.Context(), "saved declaration could not be rendered", "error", err)

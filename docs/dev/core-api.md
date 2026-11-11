@@ -215,7 +215,10 @@ What happens, in order:
 | --- | --- |
 | `WOULD_UNCONFIGURE` | A physical interface with an address is not configured by the saved configuration. Declare it as an enabled Ethernet link with a segment. |
 | `TAKEOVER_MISMATCH` | netplan still configures the host and `--takeover` was not given, or it was given with nothing to take over. |
-| `TAKEOVER_UNSUPPORTED_BASELINE` | The host is not a plain netplan-on-networkd host: ifupdown is installed, netplan YAML lives outside `/etc/netplan`, a non-netplan network file exists, netplan created a bridge, bond or VLAN, or netplan set DNS servers and the saved configuration declares none for that interface. |
+| `TAKEOVER_UNSUPPORTED_BASELINE` | The host is not one Andaru can take over: both netplan and ifupdown configure it, netplan YAML lives outside `/etc/netplan`, a network file that neither netplan nor Andaru wrote exists, netplan created a bridge, bond or VLAN, netplan set DNS servers and the saved configuration declares none for that interface, or `/etc/network/interfaces` uses something beyond the Debian installer's shapes (see [ifupdown hosts](#taking-over-an-ifupdown-host)). |
+| `RESOLVED_NOT_IN_CHARGE` | An ifupdown host's `/etc/resolv.conf` is not managed by systemd-resolved, which becomes the host's resolver. Run `apt install systemd-resolved` first. |
+| `DHCP_IDENTITY_UNKNOWN` | An ifupdown host's DHCP client is not dhcpcd with its default identity settings, so networkd could not keep the lease. |
+| `DNS_REQUIRED` | No interface of the ifupdown host takes DNS servers from DHCP or router advertisements, and no segment declares `dns`. The message lists the servers in use now. |
 | `APPLY_UNSUPPORTED` | PPPoE links, delegated prefixes and router advertisements wait for the firewall. |
 | `NETDEV_CHANGE_UNSUPPORTED` | An existing VLAN, bridge or bond would change. Remove it in one apply and add it again in the next. |
 | `BOOT_UNIT_DISABLED` | `andaru-network-boot.service` is not enabled, so a confirmed configuration would not return after a reboot. |

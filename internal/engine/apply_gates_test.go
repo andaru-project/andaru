@@ -267,3 +267,110 @@ func TestStaticDNSGateLooksOnlyAtTheFilesInterfaces(t *testing.T) {
 		t.Fatalf("findings = %+v", findings)
 	}
 }
+
+const debianFile = "/run/systemd/network/50-andaru-ens18.network"
+
+// debian is a host the Debian installer set up (ifupdown, dhcpcd) being taken over with its one NIC as a DHCP uplink.
+func debian() gateInput {
+	return gateInput{
+		Takeover:    true,
+		Declaration: []byte(`{"links":[{"kind":"ethernet","enabled":true}],"segments":[{"addressing":{"ipv4":{"mode":"dhcp"},"ipv6":{"mode":"slaac"}}}]}`),
+		Result:      render.Result{Files: []render.File{{Path: debianFile, Content: "[Match]\n"}}},
+		Links:       []host.LinkStatus{global("ens18", "")},
+		Managed:     []host.Managed{},
+		Facts:       host.RealizerFacts{ForeignFiles: []string{}, ResolvedInCharge: true},
+		Baseline:    host.Baseline{Ifupdown: true, BootUnit: true},
+		Ifupdown:    []host.IfupdownInterface{{Detected: host.Detected{Name: "ens18", IPv4: host.Addressing{Mode: "dhcp"}, IPv6: host.Addressing{Mode: "slaac"}}, Hotplug: true, DHCP: true}},
+	}
+}
+
+func TestIfupdownGates(t *testing.T) {
+	type want struct{ code, path string }
+	var contract struct {
+		Components struct {
+			Schemas map[string]struct {
+				Properties map[string]struct {
+					Enum []string `json:"enum"`
+				} `json:"properties"`
+			} `json:"schemas"`
+		} `json:"components"`
+	}
+	if err := json.Unmarshal(openAPIDocument, &contract); err != nil {
+		t.Fatal(err)
+	}
+	static := func(dns bool) func() gateInput {
+		return func() gateInput {
+			in := debian()
+			in.Declaration = []byte(`{"links":[{"kind":"ethernet","enabled":true}],"segments":[{"addressing":{"ipv4":{"mode":"static"},"ipv6":{"mode":"none"}}}]}`)
+			if dns {
+				in.Declaration = []byte(`{"links":[{"kind":"ethernet","enabled":true}],"segments":[{"addressing":{"ipv4":{"mode":"static"},"ipv6":{"mode":"none"},"dns":{"servers":["192.0.2.53"]}}}]}`)
+			}
+			in.CurrentDNS = []string{"192.0.2.53"}
+			return in
+		}
+	}
+	for name, row := range map[string]struct {
+		in   func() gateInput
+		want []want
+	}{
+		"recognised": {debian, nil},
+		"reader refusal": {func() gateInput {
+			in := debian()
+			in.IfupdownProblems = []host.Problem{{File: "/etc/network/interfaces", Key: "pre-up", Message: "no"}}
+			return in
+		}, []want{{"TAKEOVER_UNSUPPORTED_BASELINE", "/etc/network/interfaces"}}},
+		"identity unknown": {func() gateInput {
+			in := debian()
+			in.IfupdownProblems = []host.Problem{{File: "/etc/dhcpcd.conf", Code: "DHCP_IDENTITY_UNKNOWN", Message: "no"}}
+			return in
+		}, []want{{"DHCP_IDENTITY_UNKNOWN", "/etc/dhcpcd.conf"}}},
+		"resolved not in charge": {func() gateInput {
+			in := debian()
+			in.Facts.ResolvedInCharge = false
+			return in
+		}, []want{{"RESOLVED_NOT_IN_CHARGE", "/etc/resolv.conf"}}},
+		"networkd configures a link": {func() gateInput {
+			in := debian()
+			in.Managed = []host.Managed{{Name: "ens19", NetworkFile: "/usr/lib/systemd/network/80-container.network", State: "configured"}}
+			return in
+		}, []want{{"TAKEOVER_UNSUPPORTED_BASELINE", "/usr/lib/systemd/network/80-container.network"}}},
+		"stanza interface down and undeclared": {func() gateInput {
+			in := debian()
+			in.Ifupdown = append(in.Ifupdown, host.IfupdownInterface{Detected: host.Detected{Name: "ens19", IPv4: host.Addressing{Mode: "dhcp"}, IPv6: host.Addressing{Mode: "none"}}, DHCP: true})
+			return in
+		}, []want{{"WOULD_UNCONFIGURE", "ens19"}}},
+		"all static without dns": {static(false), []want{{"DNS_REQUIRED", ""}}},
+		"all static with dns":    {static(true), nil},
+		"without takeover": {func() gateInput {
+			in := debian()
+			in.Takeover = false
+			return in
+		}, []want{{"TAKEOVER_MISMATCH", ""}}},
+		"after a confirmed takeover": {func() gateInput {
+			in := debian()
+			in.Takeover, in.Baseline.IfupdownMasked, in.Ifupdown = false, true, nil
+			in.Managed = []host.Managed{{Name: "ens18", NetworkFile: debianFile, State: "configured"}}
+			return in
+		}, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var got []want
+			for _, f := range applyFindings(row.in()) {
+				if !slices.Contains(contract.Components.Schemas["ApplyFinding"].Properties["code"].Enum, f.Code) {
+					t.Fatalf("%s is not a code the contract's ApplyFinding admits", f.Code)
+				}
+				got = append(got, want{f.Code, f.Path})
+			}
+			if !slices.Equal(got, row.want) {
+				t.Fatalf("findings = %v\nwant %v", got, row.want)
+			}
+		})
+	}
+	findings := applyFindings(static(false)())
+	if !strings.Contains(findings[0].Message, "192.0.2.53") {
+		t.Fatalf("DNS_REQUIRED does not list the servers in use: %s", findings[0].Message)
+	}
+	if findings := applyFindings(func() gateInput { in := debian(); in.Takeover = false; return in }()); !strings.Contains(findings[0].Message, "ifupdown still configures") {
+		t.Fatalf("mismatch message: %s", findings[0].Message)
+	}
+}

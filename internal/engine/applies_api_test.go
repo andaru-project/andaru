@@ -181,7 +181,7 @@ func newApplyBench(t *testing.T) *applyBench {
 		return config.RealizationInput{SavedVersion: b.head, Value: json.RawMessage(b.declaration)}, nil
 	}
 	applies := newAppliesHandler(input, read, b, b.state)
-	b.h = newHandler(read.Links, newSavedHandler(nil, read.Links, read.Facts, applies))
+	b.h = newHandler(read.Links, newSavedHandler(nil, read.Links, read.Facts, nil, applies))
 	return b
 }
 

@@ -251,6 +251,9 @@ func (h *appliesHandler) create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	manifest := generation.Manifest{SavedVersion: string(input.SavedVersion), CreatedAt: time.Now().UTC(), Takeover: request.Takeover, ConfirmTimeoutSeconds: timeout}
+	if request.Takeover {
+		manifest.Baseline = map[bool]string{false: "netplan", true: "ifupdown"}[gate.fromIfupdown()]
+	}
 	contents := map[string][]byte{}
 	for _, f := range gate.Result.Files {
 		manifest.Files = append(manifest.Files, generation.FileEntry{Path: f.Path, Mode: f.Mode})

@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -29,6 +30,16 @@ type gateInput struct {
 	// Live is the generation in /run now, nil when nothing of Andaru's is; LiveFiles is its content by path.
 	Live      *generation.Generation
 	LiveFiles map[string][]byte
+	// Ifupdown is what ifupdown configures on a host it still configures alone, with what its reader refused.
+	Ifupdown         []host.IfupdownInterface
+	IfupdownProblems []host.Problem
+	// CurrentDNS is what systemd-resolved uses now, named when a takeover would leave the host without servers.
+	CurrentDNS []string
+}
+
+// fromIfupdown reports a host that ifupdown, and nothing else, still configures: the Debian installer's.
+func (in gateInput) fromIfupdown() bool {
+	return in.Baseline.Ifupdown && !in.Baseline.IfupdownMasked && !in.Baseline.Netplan
 }
 
 // applyFindings returns the findings that refuse this apply; none means it may proceed.
@@ -42,11 +53,14 @@ func applyFindings(in gateInput) []render.Finding {
 	baseline := func(path, message string) {
 		unsupported = append(unsupported, render.Finding{Severity: "error", Code: "TAKEOVER_UNSUPPORTED_BASELINE", Path: path, Message: message})
 	}
-	if in.Baseline.Ifupdown {
-		baseline("/sbin/ifup", "This host uses ifupdown, which Andaru cannot take over yet.")
+	if in.Baseline.Ifupdown && !in.Baseline.IfupdownMasked && in.Baseline.Netplan {
+		baseline("/sbin/ifup", "Both netplan and ifupdown configure this host; Andaru can take over one of them, not both.")
+	}
+	if in.Takeover && in.fromIfupdown() {
+		unsupported = append(unsupported, ifupdownFindings(in.IfupdownProblems, in.Facts, in.Managed)...)
 	}
 	netplanFiles := 0
-	if in.Takeover {
+	if in.Takeover && !in.fromIfupdown() {
 		if !in.Baseline.Netplan {
 			baseline("/usr/sbin/netplan", "Only a netplan-configured host can be taken over; netplan is not installed.")
 		}
@@ -106,8 +120,10 @@ func applyFindings(in gateInput) []render.Finding {
 	}
 	out = append(out, unsupported...)
 	switch {
-	case in.Takeover && len(in.Facts.ForeignFiles) == 0:
+	case in.Takeover && len(in.Facts.ForeignFiles) == 0 && !in.fromIfupdown():
 		refuse("TAKEOVER_MISMATCH", "", "There is no earlier network configuration to take over; apply without --takeover.")
+	case !in.Takeover && in.fromIfupdown():
+		refuse("TAKEOVER_MISMATCH", "", "ifupdown still configures this host; apply with --takeover to replace it.")
 	case !in.Takeover && netplanFiles > 0:
 		refuse("TAKEOVER_MISMATCH", "", "netplan still configures this host; apply with --takeover to replace it.")
 	}
@@ -119,6 +135,10 @@ func applyFindings(in gateInput) []render.Finding {
 		} `json:"links"`
 		Segments []struct {
 			Addressing struct {
+				DNS  json.RawMessage `json:"dns"`
+				IPv4 struct {
+					Mode string `json:"mode"`
+				} `json:"ipv4"`
 				IPv6 struct {
 					Mode string `json:"mode"`
 					RA   *struct {
@@ -164,10 +184,53 @@ func applyFindings(in gateInput) []render.Finding {
 			refuse("WOULD_UNCONFIGURE", m.Name, "This interface has an address now and the saved configuration does not configure it; applying could cut off your session. Declare it as an enabled Ethernet link with a segment.")
 		}
 	}
+	if in.Takeover && in.fromIfupdown() {
+		// Confirmation masks ifupdown for every interface, so one left out would never come up again.
+		for _, i := range in.Ifupdown {
+			if _, ok := rendered(networkDir + "50-andaru-" + i.Name + ".network"); !ok {
+				refuse("WOULD_UNCONFIGURE", i.Name, "ifupdown configures this interface and the takeover masks ifupdown, so it would never come up again. Declare it as an enabled Ethernet link with a segment.")
+			}
+		}
+		offered, declaresDNS := false, false
+		for _, s := range declared.Segments {
+			offered = offered || s.Addressing.IPv4.Mode == "dhcp" || s.Addressing.IPv6.Mode == "slaac" || s.Addressing.IPv6.Mode == "dhcp6"
+			declaresDNS = declaresDNS || len(s.Addressing.DNS) > 0
+		}
+		if !offered && !declaresDNS {
+			servers := "none"
+			if len(in.CurrentDNS) > 0 {
+				servers = strings.Join(in.CurrentDNS, ", ")
+			}
+			refuse("DNS_REQUIRED", "", `No interface takes DNS servers from DHCP or router advertisements, so declare "dns" on a segment; the host uses these now: `+servers+".")
+		}
+	}
 	for _, path := range slices.Sorted(maps.Keys(in.LiveFiles)) {
 		f, ok := rendered(path)
 		if ok && strings.HasSuffix(path, ".netdev") && f.Real() != string(in.LiveFiles[path]) {
 			refuse("NETDEV_CHANGE_UNSUPPORTED", path, "This device already exists and systemd-networkd does not change an existing device; changing it cannot be applied yet. Remove it in one apply and add it again in the next.")
+		}
+	}
+	return out
+}
+
+// ifupdownFindings refuses what makes an ifupdown host impossible to take over safely; the proposal shares it.
+func ifupdownFindings(problems []host.Problem, facts host.RealizerFacts, managed []host.Managed) []render.Finding {
+	var out []render.Finding
+	for _, p := range problems {
+		code, message := cmp.Or(p.Code, "TAKEOVER_UNSUPPORTED_BASELINE"), p.Message
+		if p.Key != "" {
+			message = p.Key + ": " + message
+		}
+		out = append(out, render.Finding{Severity: "error", Code: code, Path: p.File, Message: message})
+	}
+	if !facts.ResolvedInCharge {
+		out = append(out, render.Finding{Severity: "error", Code: "RESOLVED_NOT_IN_CHARGE", Path: "/etc/resolv.conf",
+			Message: "After the takeover systemd-resolved is the host's resolver, and it is not in charge yet. Run: apt install systemd-resolved"})
+	}
+	for _, m := range managed {
+		if !strings.HasPrefix(m.NetworkFile, networkDir+"50-andaru-") {
+			out = append(out, render.Finding{Severity: "error", Code: "TAKEOVER_UNSUPPORTED_BASELINE", Path: m.NetworkFile,
+				Message: "systemd-networkd configures " + m.Name + " from this file beside ifupdown."})
 		}
 	}
 	return out

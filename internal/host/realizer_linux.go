@@ -151,6 +151,8 @@ func readManaged(ctx context.Context, run func(context.Context, string, ...strin
 type Baseline struct {
 	Netplan  bool
 	Ifupdown bool
+	// IfupdownMasked reports that networking.service is masked, as a confirmed ifupdown takeover leaves it.
+	IfupdownMasked bool
 	// BootUnit reports that the unit which puts the confirmed generation into /run at boot is enabled.
 	BootUnit bool
 	// StrayYAML is netplan configuration outside /etc/netplan, which a takeover would not move away.
@@ -171,6 +173,9 @@ func readBaseline(root string) (Baseline, error) {
 		Netplan: exists("/usr/sbin/netplan"), Ifupdown: exists("/sbin/ifup"),
 		BootUnit:  err == nil && wanted.Mode().IsRegular() && (maskErr != nil || override.Mode().IsRegular()),
 		StrayYAML: []string{}, StaticDNS: []string{},
+	}
+	if target, err := os.Readlink(root + "/etc/systemd/system/networking.service"); err == nil && target == "/dev/null" {
+		b.IfupdownMasked = true
 	}
 	for _, dir := range []string{"/run/netplan", "/lib/netplan", "/usr/lib/netplan"} {
 		found, err := filepath.Glob(root + dir + "/*.yaml")

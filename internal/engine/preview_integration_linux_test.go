@@ -60,7 +60,7 @@ func previewFixture(t *testing.T) (http.Handler, *config.Store, *previewHost) {
 	}
 	t.Cleanup(func() { s.Close() })
 	h := &previewHost{}
-	return newHandler(h.links, newSavedHandler(s, h.links, h.facts, http.NotFoundHandler())), s, h
+	return newHandler(h.links, newSavedHandler(s, h.links, h.facts, nil, http.NotFoundHandler())), s, h
 }
 
 type previewBody struct {

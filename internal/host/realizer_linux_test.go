@@ -287,3 +287,19 @@ func TestParseResolvectl(t *testing.T) {
 		t.Fatal("garbage accepted")
 	}
 }
+
+func TestReadBaselineSeesMaskedIfupdown(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(root+"/etc/systemd/system", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := readBaseline(root); err != nil || b.IfupdownMasked {
+		t.Fatalf("unmasked: %+v %v", b, err)
+	}
+	if err := os.Symlink("/dev/null", root+"/etc/systemd/system/networking.service"); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := readBaseline(root); err != nil || !b.IfupdownMasked {
+		t.Fatalf("masked: %+v %v", b, err)
+	}
+}

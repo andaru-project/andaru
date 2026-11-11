@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"strconv"
 	"syscall"
+
+	"github.com/andaru-project/andaru/internal/host"
 )
 
 const cloudInitDisable = "/etc/cloud/cloud.cfg.d/99-andaru-network.cfg"
@@ -28,8 +30,25 @@ type baselineFile struct {
 
 // baselineManifest records the files a takeover replaced, so a rollback can put them back exactly.
 type baselineManifest struct {
-	Kind  string         `json:"kind"`
-	Files []baselineFile `json:"files"`
+	Kind     string            `json:"kind"`
+	Files    []baselineFile    `json:"files"`
+	Ifupdown *IfupdownBaseline `json:"ifupdown,omitempty"`
+}
+
+// IfupdownBaseline is what an ifupdown takeover captured: enough to hand the host back to ifupdown,
+// and dhcpcd's identity, which every later generation keeps presenting.
+type IfupdownBaseline struct {
+	Interfaces        []host.IfupdownInterface `json:"interfaces"`
+	NetworkdWasActive bool                     `json:"networkdWasActive"`
+}
+
+// ReadBaselineKind returns the kind of the captured baseline ("" when none was captured) and, for ifupdown, what it holds.
+func ReadBaselineKind(dir string) (kind string, ifupdown *IfupdownBaseline, err error) {
+	var m baselineManifest
+	if _, err := readJSON(filepath.Join(dir, "baseline", "manifest.json"), &m); err != nil {
+		return "", nil, err
+	}
+	return m.Kind, m.Ifupdown, nil
 }
 
 func (r Realizer) baselineDir() string { return filepath.Join(r.dir(), "baseline") }

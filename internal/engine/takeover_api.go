@@ -45,7 +45,21 @@ func gatherGate(ctx context.Context, read hostReader, dir string, pointers gener
 	if err != nil {
 		return gate, errors.Join(errInventory, err)
 	}
-	if gate.Result, err = render.Network(render.Input{Declaration: value, Secrets: secrets, Links: gate.Links, Facts: gate.Facts}); err != nil {
+	if gate.fromIfupdown() {
+		var routes []string
+		if routes, err = read.Route(ctx); err == nil && gate.Facts.ResolvedInCharge {
+			gate.CurrentDNS, _, err = read.Resolved(ctx)
+		}
+		if err != nil {
+			return gate, errors.Join(errInventory, err)
+		}
+		gate.Ifupdown, gate.IfupdownProblems = host.ReadIfupdown(read.Root, gate.Links, routes)
+	}
+	identity, err := identities(dir, gate.Ifupdown)
+	if err != nil {
+		return gate, errors.Join(errLive, err)
+	}
+	if gate.Result, err = render.Network(render.Input{Declaration: value, Secrets: secrets, Links: gate.Links, Facts: gate.Facts, DHCPIdentity: identity}); err != nil {
 		return gate, errors.Join(errRender, err)
 	}
 	if pointers.Live != nil {
@@ -59,6 +73,43 @@ func gatherGate(ctx context.Context, read hostReader, dir string, pointers gener
 		}
 	}
 	return gate, nil
+}
+
+// identities are the dhcpcd identities to render: those a takeover captured, else those of the host's ifupdown now.
+func identities(dir string, live []host.IfupdownInterface) (map[string]host.DHCPIdentity, error) {
+	kind, captured, err := generation.ReadBaselineKind(dir)
+	if err != nil {
+		return nil, err
+	}
+	if kind == "ifupdown" && captured != nil {
+		live = captured.Interfaces
+	}
+	out := map[string]host.DHCPIdentity{}
+	for _, i := range live {
+		if i.Identity != nil && len(i.Identity.DUID) > 0 {
+			out[i.PermanentMAC] = *i.Identity
+		}
+	}
+	return out, nil
+}
+
+// previewIdentities gives the saved-version preview the identities an apply would render with.
+func previewIdentities(read hostReader, dir string) func(context.Context, []host.LinkStatus) (map[string]host.DHCPIdentity, error) {
+	return func(ctx context.Context, links []host.LinkStatus) (map[string]host.DHCPIdentity, error) {
+		baseline, err := read.Baseline()
+		if err != nil {
+			return nil, err
+		}
+		var live []host.IfupdownInterface
+		if (gateInput{Baseline: baseline}).fromIfupdown() {
+			routes, err := read.Route(ctx)
+			if err != nil {
+				return nil, err
+			}
+			live, _ = host.ReadIfupdown(read.Root, links, routes)
+		}
+		return identities(dir, live)
+	}
 }
 
 // newLiveHandler serves the routes that look at or change the running host.
@@ -324,6 +375,9 @@ func (h *takeoverHandler) judge(w http.ResponseWriter, r *http.Request, input co
 			if findings == nil {
 				findings = []render.Finding{}
 			}
+			if gate.Takeover && gate.fromIfupdown() {
+				gate.Result.Findings = append(gate.Result.Findings, ifupdownLimits(gate.Ifupdown)...)
+			}
 			writeJSON(w, r, http.StatusOK, draftView{previewResponse{State: "draft", SavedVersion: input.SavedVersion, Result: gate.Result}, findings})
 			return
 		}
@@ -334,4 +388,16 @@ func (h *takeoverHandler) judge(w http.ResponseWriter, r *http.Request, input co
 		return
 	}
 	writeError(w, r, http.StatusServiceUnavailable, "REALIZE_UNAVAILABLE", "The apply machinery is unavailable; inspect the engine journal.")
+}
+
+// ifupdownLimits are what an operator accepts by taking over this ifupdown host; the assistant's review shows them.
+func ifupdownLimits(ifupdown []host.IfupdownInterface) []render.Finding {
+	limit := func(message string) render.Finding {
+		return render.Finding{Severity: "warning", Code: "TAKEOVER_LIMIT", Message: message}
+	}
+	out := []render.Finding{limit("Scripts in /etc/network/if-up.d and if-down.d stop running once the takeover is confirmed.")}
+	if slices.ContainsFunc(ifupdown, func(i host.IfupdownInterface) bool { return i.IPv6.Mode == "slaac" }) {
+		out = append(out, limit("SLAAC IPv6 addresses change at the takeover, so a session on one is cut; DHCP and DHCPv6 addresses are kept."))
+	}
+	return out
 }

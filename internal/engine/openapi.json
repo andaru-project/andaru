@@ -2793,7 +2793,8 @@
               "UNSUPPORTED_COMBINATION",
               "DEPENDENCY_UNAVAILABLE",
               "RA_PREFIX_UNSUPPORTED",
-              "DNS_NOT_APPLIED"
+              "DNS_NOT_APPLIED",
+              "TAKEOVER_LIMIT"
             ]
           },
           "path": {
@@ -3075,7 +3076,10 @@
               "TAKEOVER_MISMATCH",
               "APPLY_UNSUPPORTED",
               "WOULD_UNCONFIGURE",
-              "NETDEV_CHANGE_UNSUPPORTED"
+              "NETDEV_CHANGE_UNSUPPORTED",
+              "RESOLVED_NOT_IN_CHARGE",
+              "DNS_REQUIRED",
+              "DHCP_IDENTITY_UNKNOWN"
             ]
           },
           "path": {
