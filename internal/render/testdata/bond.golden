@@ -20,19 +20,19 @@ DHCP=ipv4
 IPv6AcceptRA=yes
 
 [DHCPv4]
-UseDNS=no
+UseDNS=yes
 UseNTP=no
 UseHostname=no
 UseDomains=no
 
 [DHCPv6]
-UseDNS=no
+UseDNS=yes
 UseNTP=no
 UseHostname=no
 UseDomains=no
 
 [IPv6AcceptRA]
-UseDNS=no
+UseDNS=yes
 UseDomains=no
 
 ### /run/systemd/network/50-andaru-ens18.network 0644 secret=false sources=/links/0

@@ -101,14 +101,14 @@ IPv6AcceptRA=yes
 
 [DHCPv6]
 WithoutRA=solicit
-UseDNS=no
+UseDNS=yes
 UseNTP=no
 UseHostname=no
 UseDomains=no
 PrefixDelegationHint=::/48
 
 [IPv6AcceptRA]
-UseDNS=no
+UseDNS=yes
 UseDomains=no
 
 ### /run/systemd/network/50-andaru-vl000000020000.netdev 0644 secret=false sources=/links/1

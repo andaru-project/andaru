@@ -271,8 +271,29 @@ func TestEmptyDeclaration(t *testing.T) {
 func TestUpstreamOffersIgnoredOnSLAAC(t *testing.T) {
 	// A router advertisement with the managed flag starts DHCPv6 even on a SLAAC segment.
 	network := fileEnding(t, render(t, fixture(t, "bond")), "bo000000030000.network").Content
-	if !strings.Contains(network, "[DHCPv6]\nUseDNS=no\nUseNTP=no\nUseHostname=no\nUseDomains=no\n") || strings.Contains(network, "WithoutRA") {
-		t.Fatalf("SLAAC uplink would adopt provider DNS/NTP through RA-triggered DHCPv6:\n%s", network)
+	if !strings.Contains(network, "[DHCPv6]\nUseDNS=yes\nUseNTP=no\nUseHostname=no\nUseDomains=no\n") || strings.Contains(network, "WithoutRA") {
+		t.Fatalf("SLAAC uplink would adopt provider NTP/hostname through RA-triggered DHCPv6:\n%s", network)
+	}
+}
+
+func TestHostKeepsOfferedDNS(t *testing.T) {
+	for _, f := range render(t, fixture(t, "ethernet-uplink")).Files {
+		if strings.Contains(f.Content, "UseDNS=no") {
+			t.Fatalf("%s would leave the host without a resolver:\n%s", f.Path, f.Content)
+		}
+		for _, name := range []string{"DHCPv4", "DHCPv6", "IPv6AcceptRA"} {
+			_, body, found := strings.Cut(f.Content, "["+name+"]\n")
+			if !found {
+				continue
+			}
+			body, _, _ = strings.Cut(body, "\n[")
+			if !strings.Contains(body, "UseDNS=yes\n") || !strings.Contains(body, "UseDomains=no") {
+				t.Fatalf("%s [%s] must keep offered DNS and ignore domains:\n%s", f.Path, name, body)
+			}
+			if name != "IPv6AcceptRA" && (!strings.Contains(body, "UseNTP=no") || !strings.Contains(body, "UseHostname=no")) {
+				t.Fatalf("%s [%s] adopts NTP or hostname:\n%s", f.Path, name, body)
+			}
+		}
 	}
 }
 
