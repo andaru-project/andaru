@@ -30,6 +30,7 @@ type formState struct {
 	dnsMode          string
 	servers, domains string
 	timeout          string
+	management       string // the link localId whose segment keeps SSH open
 }
 
 func fields(s string) []string {
@@ -62,7 +63,7 @@ func newFormState(p proposal, a answers) *formState {
 }
 
 func (s *formState) answers(base answers) answers {
-	a := answers{Adapters: map[string]adapterAnswer{}, Timeout: base.Timeout}
+	a := answers{Adapters: map[string]adapterAnswer{}, Timeout: base.Timeout, Management: s.management}
 	for _, f := range s.adapters {
 		answer := base.Adapters[f.id]
 		answer.Keep, answer.Zone, answer.IPv6Mode = slices.Contains(s.kept, f.id), f.zone, f.ip6
@@ -175,6 +176,17 @@ func (s *formState) questions() *huh.Form {
 			huh.NewInput().Title("DNS servers").Description("Tried in this order, separated by commas.").Value(&s.servers).Validate(validServers),
 			huh.NewInput().Title("Search domains").Description("Optional, separated by commas.").Value(&s.domains),
 		).WithHideFunc(func() bool { return s.dnsMode != "declared" }),
+		huh.NewGroup(huh.NewSelect[string]().Title("Management adapter").
+			Description("SSH stays open on this adapter whatever the rules say.").
+			OptionsFunc(func() []huh.Option[string] {
+				var options []huh.Option[string]
+				for _, f := range s.adapters {
+					if slices.Contains(s.kept, f.id) {
+						options = append(options, huh.NewOption(printable(f.name)+" ("+f.zone+")", f.id))
+					}
+				}
+				return options
+			}, &s.kept).Value(&s.management)),
 		huh.NewGroup(huh.NewInput().Title("Seconds to confirm").
 			Description("If you do not confirm from a new session in time, the previous configuration returns.").
 			Value(&s.timeout).Validate(func(v string) error {
@@ -219,6 +231,14 @@ func review(out io.Writer, s *formState, a answers, d draft, err error) {
 		}
 		fmt.Fprintln(out)
 	}
+	for _, f := range s.adapters {
+		if f.id == a.Management {
+			fmt.Fprintf(out, "Management: SSH stays open on %s.\n", printable(f.name))
+			if a.Adapters[f.id].Zone == "wan" {
+				fmt.Fprintln(out, "  warning: that adapter faces the uplink, so SSH is reachable from that network; restrict it with management.allowedSources after the takeover.")
+			}
+		}
+	}
 	fmt.Fprintf(out, "Confirm within %d seconds.\n", a.Timeout)
 	if err != nil {
 		fmt.Fprintf(out, "\nThis cannot be saved:\n%s\n", err)
@@ -228,6 +248,13 @@ func review(out io.Writer, s *formState, a answers, d draft, err error) {
 		fmt.Fprintf(out, "\n### %s (%s)\n", printable(f.Path), printable(f.Mode))
 		for line := range strings.Lines(f.Content) {
 			fmt.Fprintln(out, printable(strings.TrimSuffix(line, "\n")))
+		}
+	}
+	if len(d.Rules) > 0 {
+		fmt.Fprintln(out, "\nRules, in the order they are tried:")
+		for _, r := range d.Rules {
+			fmt.Fprintf(out, "  %s %d. %s from %s to %s services %s  (%s)\n", r.Chain, r.Position, r.Action,
+				printable(orAny(r.From)), printable(orAny(r.To)), printable(orAny(r.Services)), printable(r.Name))
 		}
 	}
 	for _, f := range d.shownFindings() {
@@ -292,4 +319,11 @@ func interactive(ctx context.Context, c takeoverClient, p proposal, timeout int,
 			return commit(ctx, c, p, ops, a.Timeout, stdout, hold)
 		}
 	}
+}
+
+func orAny(names []string) string {
+	if len(names) == 0 {
+		return "any"
+	}
+	return strings.Join(names, ", ")
 }

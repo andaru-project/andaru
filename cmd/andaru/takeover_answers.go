@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 
 	"github.com/andaru-project/andaru/internal/config"
@@ -31,6 +32,8 @@ type answers struct {
 	Adapters map[string]adapterAnswer // by the link's localId
 	DNS      *dnsAnswer
 	Timeout  int
+	// Management is the link localId whose segment keeps SSH open whatever the rules say.
+	Management string
 }
 
 type segmentValue struct {
@@ -63,6 +66,21 @@ func defaultAnswers(p proposal) answers {
 			names[op.LocalID] = v.Name
 		}
 	}
+	linkOf := map[string]string{}
+	management := ""
+	for _, op := range p.Operations {
+		switch op.Collection {
+		case "segments":
+			var v segmentValue
+			_ = json.Unmarshal(op.Value, &v)
+			linkOf[op.LocalID] = strings.TrimPrefix(v.Link, "@")
+		case "management":
+			var v struct{ Segment string }
+			_ = json.Unmarshal(op.Value, &v)
+			management = strings.TrimPrefix(v.Segment, "@")
+		}
+	}
+	a.Management = linkOf[management]
 	for _, op := range p.Operations {
 		if op.Collection != "segments" {
 			continue
@@ -93,7 +111,8 @@ func operation(op config.Operation, value map[string]any) config.Operation {
 
 // batch turns the proposal and the operator's answers into the change batch to save.
 func batch(p proposal, a answers) ([]config.Operation, error) {
-	var links, segments []config.Operation
+	var links, segments, filter []config.Operation
+	segmentOf := map[string]string{}
 	zones := map[string]bool{}
 	dnsTarget := -1
 	for _, op := range p.Operations {
@@ -124,6 +143,7 @@ func batch(p proposal, a answers) ([]config.Operation, error) {
 			if ip6 := addressing["ipv6"].(map[string]any); ip6["mode"] != answer.IPv6Mode {
 				addressing["ipv6"] = map[string]any{"mode": answer.IPv6Mode}
 			}
+			segmentOf[link] = op.LocalID
 			_, hadDNS := addressing["dns"]
 			delete(addressing, "dns")
 			if hadDNS || (dnsTarget < 0 && answer.Zone == "wan") {
@@ -147,11 +167,39 @@ func batch(p proposal, a answers) ([]config.Operation, error) {
 		v["addressing"].(map[string]any)["dns"] = dns
 		segments[dnsTarget] = operation(segments[dnsTarget], v)
 	}
+	for _, op := range p.Operations {
+		switch op.Collection {
+		case "services":
+			filter = append(filter, op)
+		case "policy.input", "policy.forward":
+			// A starter rule for a zone no adapter is in any more would reference nothing.
+			var v struct{ From, To []string }
+			_ = json.Unmarshal(op.Value, &v)
+			if !slices.ContainsFunc(append(v.From, v.To...), func(ref string) bool {
+				zone, isZone := strings.CutPrefix(ref, "@")
+				return isZone && (zone == "wan" || zone == "lan") && !zones[zone]
+			}) {
+				filter = append(filter, op)
+			}
+		case "nat.outbound":
+			if zones["wan"] {
+				filter = append(filter, op)
+			}
+		case "management":
+			segment, kept := segmentOf[a.Management]
+			if !kept {
+				return nil, errors.New("the management adapter must be kept")
+			}
+			v := object(op.Value)
+			v["segment"] = "@" + segment
+			filter = append(filter, operation(op, v))
+		}
+	}
 	var ops []config.Operation
 	for _, zone := range []string{"wan", "lan"} {
 		if zones[zone] {
 			ops = append(ops, config.Operation{Op: "create", Collection: "zones", LocalID: zone, Value: json.RawMessage(`{"name":"` + zone + `"}`)})
 		}
 	}
-	return append(append(ops, links...), segments...), nil
+	return slices.Concat(ops, links, segments, filter), nil
 }

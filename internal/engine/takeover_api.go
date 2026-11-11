@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"slices"
 	"strings"
 
@@ -269,7 +270,7 @@ func (h *takeoverHandler) serveProposal(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, r, http.StatusOK, view)
 		return
 	}
-	view.State, view.Operations, view.Adapters = "ready", proposalOperations(found), adapters(found, links, false)
+	view.State, view.Operations, view.Adapters = "ready", proposalOperations(found, viaInterface(links, r)), adapters(found, links, false)
 	writeJSON(w, r, http.StatusOK, view)
 }
 
@@ -289,8 +290,9 @@ func family(a host.Addressing) map[string]any {
 	return out
 }
 
-// proposalOperations turns what netplan configures into one create-only change batch.
-func proposalOperations(found []host.Detected) []config.Operation {
+// proposalOperations turns what the host configures into one change batch, with starter rules for the LAN,
+// outbound NAT for the uplink, and management on the segment of via, the interface the operator's session uses.
+func proposalOperations(found []host.Detected, via string) []config.Operation {
 	zones := map[string]bool{}
 	var links, segments []config.Operation
 	for i, n := range found {
@@ -317,7 +319,55 @@ func proposalOperations(found []host.Detected) []config.Operation {
 			ops = append(ops, create("zones", zone, map[string]any{"name": zone}))
 		}
 	}
-	return slices.Concat(ops, links, segments)
+	ops = slices.Concat(ops, links, segments)
+	if zones["lan"] {
+		ops = append(ops,
+			create("services", "ping", map[string]any{"name": "ping", "protocol": "icmp", "types": []string{"echo-request"}}),
+			create("services", "ping6", map[string]any{"name": "ping6", "protocol": "icmpv6", "types": []string{"echo-request"}}),
+			create("services", "dnsUdp", map[string]any{"name": "dns-udp", "protocol": "udp", "ports": []string{"53"}}),
+			create("services", "dnsTcp", map[string]any{"name": "dns-tcp", "protocol": "tcp", "ports": []string{"53"}}),
+			create("services", "dns", map[string]any{"name": "dns", "protocol": "group", "members": []string{"@dnsUdp", "@dnsTcp"}}),
+			create("policy.input", "lanToFirewall", starterRule("lan to firewall: ping and DNS", "@ping", "@ping6", "@dns")),
+			create("policy.forward", "lanOut", starterRule("lan to any")),
+		)
+	}
+	if zones["wan"] {
+		ops = append(ops, singleton("nat.outbound", map[string]any{"mode": "automatic"}))
+	}
+	// Management stays where the operator is: their session's segment, else the LAN, else the uplink.
+	management := slices.IndexFunc(found, func(n host.Detected) bool { return n.Name == via })
+	if management < 0 {
+		management = max(slices.IndexFunc(found, func(n host.Detected) bool { return !n.DefaultRoute }), 0)
+	}
+	if len(found) > 0 {
+		ops = append(ops, singleton("management", map[string]any{"segment": fmt.Sprintf("@seg%d", management+1)}))
+	}
+	return ops
+}
+
+// viaInterface names the interface holding the address in ?via=, the local end of the operator's SSH session.
+func viaInterface(links []host.LinkStatus, r *http.Request) string {
+	via, err := netip.ParseAddr(r.URL.Query().Get("via"))
+	if err != nil {
+		return ""
+	}
+	for _, l := range links {
+		if slices.ContainsFunc(l.Addresses, func(a host.AddressStatus) bool { return a.Address == via.Unmap().WithZone("").String() }) {
+			return l.Name
+		}
+	}
+	return ""
+}
+
+func starterRule(name string, services ...string) map[string]any {
+	return map[string]any{"name": name, "enabled": true, "action": "accept", "from": []string{"@lan"}, "to": []string{}, "services": append([]string{}, services...), "log": false}
+}
+
+// singleton sets a configuration object that exists at most once; a takeover sets it for the first time.
+func singleton(collection string, value any) config.Operation {
+	raw, _ := json.Marshal(value)
+	unset := config.Version("0")
+	return config.Operation{Op: "replace", Collection: collection, ExpectedVersion: &unset, Value: raw}
 }
 
 func describe(a host.Addressing) string {
@@ -503,6 +553,6 @@ func (h *takeoverHandler) proposeIfupdown(w http.ResponseWriter, r *http.Request
 			detected[uplink].DNS, detected[uplink].Domains = servers, slices.DeleteFunc(domains, func(d string) bool { return strings.HasPrefix(d, "~") })
 		}
 	}
-	view.State, view.Operations, view.Adapters = "ready", proposalOperations(detected), adapters(detected, links, true)
+	view.State, view.Operations, view.Adapters = "ready", proposalOperations(detected, viaInterface(links, r)), adapters(detected, links, true)
 	writeJSON(w, r, http.StatusOK, view)
 }

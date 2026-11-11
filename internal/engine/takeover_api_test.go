@@ -135,7 +135,9 @@ func TestProposalForTheLabBases(t *testing.T) {
 		{"op":"create","collection":"links","localId":"link1","value":{"name":"eth0","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"bc:24:11:89:01:10"}},
 		{"op":"create","collection":"segments","localId":"seg1","value":{"name":"eth0","link":"@link1","zone":"@wan","addressing":{
 			"ipv4":{"mode":"static","addresses":["10.0.1.19/16"],"gateway":"10.0.0.1"},"ipv6":{"mode":"slaac"},
-			"dns":{"servers":["172.16.53.53","fd00:53:53:53:53:53:53:53"],"searchDomains":["lab.example"]}}}}]`)
+			"dns":{"servers":["172.16.53.53","fd00:53:53:53:53:53:53:53"],"searchDomains":["lab.example"]}}}},
+		{"op":"replace","collection":"nat.outbound","expectedVersion":"0","value":{"mode":"automatic"}},
+		{"op":"replace","collection":"management","expectedVersion":"0","value":{"segment":"@seg1"}}]`)
 	if len(got.Adapters) != 1 || got.Adapters[0].Name != "eth0" || got.Adapters[0].PermanentMac != labMAC || !strings.Contains(got.Adapters[0].Summary, "static 10.0.1.19/16") || !strings.Contains(got.Adapters[0].Summary, "default route") || !got.Adapters[0].Addressed {
 		t.Fatalf("adapters = %+v", got.Adapters)
 	}
@@ -150,7 +152,9 @@ func TestProposalForTheLabBases(t *testing.T) {
 	sameJSON(t, got.Operations, `[
 		{"op":"create","collection":"zones","localId":"wan","value":{"name":"wan"}},
 		{"op":"create","collection":"links","localId":"link1","value":{"name":"eth0","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"bc:24:11:89:01:10"}},
-		{"op":"create","collection":"segments","localId":"seg1","value":{"name":"eth0","link":"@link1","zone":"@wan","addressing":{"ipv4":{"mode":"dhcp"},"ipv6":{"mode":"none"}}}}]`)
+		{"op":"create","collection":"segments","localId":"seg1","value":{"name":"eth0","link":"@link1","zone":"@wan","addressing":{"ipv4":{"mode":"dhcp"},"ipv6":{"mode":"none"}}}},
+		{"op":"replace","collection":"nat.outbound","expectedVersion":"0","value":{"mode":"automatic"}},
+		{"op":"replace","collection":"management","expectedVersion":"0","value":{"segment":"@seg1"}}]`)
 }
 
 func TestProposalStates(t *testing.T) {
@@ -344,7 +348,9 @@ func TestProposalForIfupdown(t *testing.T) {
 	sameJSON(t, got.Operations, `[
 		{"op":"create","collection":"zones","localId":"wan","value":{"name":"wan"}},
 		{"op":"create","collection":"links","localId":"link1","value":{"name":"ens18","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"`+debianMAC+`"}},
-		{"op":"create","collection":"segments","localId":"seg1","value":{"name":"ens18","link":"@link1","zone":"@wan","addressing":{"ipv4":{"mode":"dhcp"},"ipv6":{"mode":"slaac"}}}}]`)
+		{"op":"create","collection":"segments","localId":"seg1","value":{"name":"ens18","link":"@link1","zone":"@wan","addressing":{"ipv4":{"mode":"dhcp"},"ipv6":{"mode":"slaac"}}}},
+		{"op":"replace","collection":"nat.outbound","expectedVersion":"0","value":{"mode":"automatic"}},
+		{"op":"replace","collection":"management","expectedVersion":"0","value":{"segment":"@seg1"}}]`)
 
 	// A static install takes no DNS from anywhere: the servers in use now are proposed.
 	b := newDebianBench(t, "ifupdown-static")
@@ -352,7 +358,9 @@ func TestProposalForIfupdown(t *testing.T) {
 	sameJSON(t, b.proposal(t).Operations, `[
 		{"op":"create","collection":"zones","localId":"wan","value":{"name":"wan"}},
 		{"op":"create","collection":"links","localId":"link1","value":{"name":"ens18","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"`+debianMAC+`"}},
-		{"op":"create","collection":"segments","localId":"seg1","value":{"name":"ens18","link":"@link1","zone":"@wan","addressing":{"ipv4":{"mode":"static","addresses":["10.0.1.13/16"],"gateway":"10.0.0.1"},"ipv6":{"mode":"none"},"dns":{"servers":["192.0.2.53","2001:db8::53"]}}}}]`)
+		{"op":"create","collection":"segments","localId":"seg1","value":{"name":"ens18","link":"@link1","zone":"@wan","addressing":{"ipv4":{"mode":"static","addresses":["10.0.1.13/16"],"gateway":"10.0.0.1"},"ipv6":{"mode":"none"},"dns":{"servers":["192.0.2.53","2001:db8::53"]}}}},
+		{"op":"replace","collection":"nat.outbound","expectedVersion":"0","value":{"mode":"automatic"}},
+		{"op":"replace","collection":"management","expectedVersion":"0","value":{"segment":"@seg1"}}]`)
 
 	b = newDebianBench(t, "ifupdown-dhcp")
 	b.facts.ResolvedInCharge = false
@@ -427,5 +435,41 @@ func TestDraftShowsRules(t *testing.T) {
 	row := got.Rules[0]
 	if row.Chain != "input" || row.Position != 1 || row.Name != "ping" || row.Action != "accept" || !slices.Equal(row.From, []string{"wan"}) || !slices.Equal(row.Services, []string{"ping"}) || row.To == nil {
 		t.Fatalf("row %+v", row)
+	}
+}
+
+// twoNICs is the lab VM with a second NIC: eth0 the static uplink, eth1 a DHCP-less LAN port.
+func twoNICs() []host.Detected {
+	return []host.Detected{
+		{Name: "eth0", PermanentMAC: labMAC, MTU: 1500, DefaultRoute: true, IPv4: host.Addressing{Mode: "static", Addresses: []string{"10.0.1.19/16"}, Gateway: "10.0.0.1"}, IPv6: host.Addressing{Mode: "slaac"}},
+		{Name: "eth1", PermanentMAC: "bc:24:11:89:01:11", MTU: 1500, IPv4: host.Addressing{Mode: "static", Addresses: []string{"192.168.40.1/24"}}, IPv6: host.Addressing{Mode: "none"}},
+	}
+}
+
+func TestProposalStarterRules(t *testing.T) {
+	raw, _ := json.Marshal(proposalOperations(twoNICs(), "eth0"))
+	var ops []json.RawMessage
+	_ = json.Unmarshal(raw, &ops)
+	sameJSON(t, ops, `[
+		{"op":"create","collection":"zones","localId":"wan","value":{"name":"wan"}},
+		{"op":"create","collection":"zones","localId":"lan","value":{"name":"lan"}},
+		{"op":"create","collection":"links","localId":"link1","value":{"name":"eth0","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"bc:24:11:89:01:10"}},
+		{"op":"create","collection":"links","localId":"link2","value":{"name":"eth1","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"bc:24:11:89:01:11"}},
+		{"op":"create","collection":"segments","localId":"seg1","value":{"name":"eth0","link":"@link1","zone":"@wan","addressing":{"ipv4":{"mode":"static","addresses":["10.0.1.19/16"],"gateway":"10.0.0.1"},"ipv6":{"mode":"slaac"}}}},
+		{"op":"create","collection":"segments","localId":"seg2","value":{"name":"eth1","link":"@link2","zone":"@lan","addressing":{"ipv4":{"mode":"static","addresses":["192.168.40.1/24"]},"ipv6":{"mode":"none"}}}},
+		{"op":"create","collection":"services","localId":"ping","value":{"name":"ping","protocol":"icmp","types":["echo-request"]}},
+		{"op":"create","collection":"services","localId":"ping6","value":{"name":"ping6","protocol":"icmpv6","types":["echo-request"]}},
+		{"op":"create","collection":"services","localId":"dnsUdp","value":{"name":"dns-udp","protocol":"udp","ports":["53"]}},
+		{"op":"create","collection":"services","localId":"dnsTcp","value":{"name":"dns-tcp","protocol":"tcp","ports":["53"]}},
+		{"op":"create","collection":"services","localId":"dns","value":{"name":"dns","protocol":"group","members":["@dnsUdp","@dnsTcp"]}},
+		{"op":"create","collection":"policy.input","localId":"lanToFirewall","value":{"name":"lan to firewall: ping and DNS","enabled":true,"action":"accept","from":["@lan"],"to":[],"services":["@ping","@ping6","@dns"],"log":false}},
+		{"op":"create","collection":"policy.forward","localId":"lanOut","value":{"name":"lan to any","enabled":true,"action":"accept","from":["@lan"],"to":[],"services":[],"log":false}},
+		{"op":"replace","collection":"nat.outbound","expectedVersion":"0","value":{"mode":"automatic"}},
+		{"op":"replace","collection":"management","expectedVersion":"0","value":{"segment":"@seg1"}}]`)
+
+	// From the serial console: the LAN segment is the management one.
+	raw, _ = json.Marshal(proposalOperations(twoNICs(), ""))
+	if !strings.Contains(string(raw), `"value":{"segment":"@seg2"}`) {
+		t.Fatalf("management without a session: %s", raw)
 	}
 }

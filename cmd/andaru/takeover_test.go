@@ -26,7 +26,12 @@ func labProposal(t *testing.T) proposal {
 		{"op":"create","collection":"links","localId":"link1","value":{"enabled":true,"kind":"ethernet","mtu":1500,"name":"eth0","permanentMac":"bc:24:11:89:01:10"}},
 		{"op":"create","collection":"links","localId":"link2","value":{"enabled":true,"kind":"ethernet","mtu":1500,"name":"eth1","permanentMac":"02:00:00:00:00:02"}},
 		{"op":"create","collection":"segments","localId":"seg1","value":{"addressing":{"dns":{"searchDomains":["lab.example"],"servers":["172.16.53.53"]},"ipv4":{"addresses":["10.0.1.19/16"],"gateway":"10.0.0.1","mode":"static"},"ipv6":{"mode":"slaac"}},"link":"@link1","name":"eth0","zone":"@wan"}},
-		{"op":"create","collection":"segments","localId":"seg2","value":{"addressing":{"ipv4":{"mode":"dhcp"},"ipv6":{"mode":"none"}},"link":"@link2","name":"eth1","zone":"@lan"}}]}`
+		{"op":"create","collection":"segments","localId":"seg2","value":{"addressing":{"ipv4":{"mode":"dhcp"},"ipv6":{"mode":"none"}},"link":"@link2","name":"eth1","zone":"@lan"}},
+		{"op":"create","collection":"services","localId":"ping","value":{"name":"ping","protocol":"icmp","types":["echo-request"]}},
+		{"op":"create","collection":"policy.input","localId":"lanToFirewall","value":{"action":"accept","enabled":true,"from":["@lan"],"log":false,"name":"lan to firewall","services":["@ping"],"to":[]}},
+		{"op":"create","collection":"policy.forward","localId":"lanOut","value":{"action":"accept","enabled":true,"from":["@lan"],"log":false,"name":"lan to any","services":[],"to":[]}},
+		{"op":"replace","collection":"nat.outbound","expectedVersion":"0","value":{"mode":"automatic"}},
+		{"op":"replace","collection":"management","expectedVersion":"0","value":{"segment":"@seg1"}}]}`
 	var p proposal
 	if err := json.Unmarshal([]byte(raw), &p); err != nil {
 		t.Fatal(err)
@@ -273,5 +278,44 @@ func TestAdapterRequiredCannotBeLeftOut(t *testing.T) {
 	}
 	if err := s.checkKept([]string{"link1", "link2"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The operator's management choice and zone changes carry into the batch; rules for a zone that is gone go too.
+func TestAnswersMoveManagementAndDropOrphanRules(t *testing.T) {
+	p := labProposal(t)
+	a := defaultAnswers(p)
+	if a.Management != "link1" {
+		t.Fatalf("management answer %q", a.Management)
+	}
+	a.Management = "link2"
+	ops, err := batch(p, a)
+	if err != nil || !strings.Contains(opsJSON(t, ops), `"value":{"segment":"@seg2"}`) {
+		t.Fatalf("management not moved: %v %s", err, opsJSON(t, ops))
+	}
+	lan := a.Adapters["link2"]
+	lan.Zone = "wan"
+	a.Adapters["link2"] = lan
+	ops, _ = batch(p, a)
+	if got := opsJSON(t, ops); strings.Contains(got, `"@lan"`) || !strings.Contains(got, `"nat.outbound"`) {
+		t.Fatalf("rules for a removed zone kept: %s", got)
+	}
+	gone := a.Adapters["link2"]
+	gone.Keep = false
+	a.Adapters["link2"] = gone
+	if _, err := batch(p, a); err == nil {
+		t.Fatal("management on an adapter left out was accepted")
+	}
+}
+
+func TestProposalCarriesTheSessionAddress(t *testing.T) {
+	var asked string
+	socket := replySocket(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = r.URL.RequestURI()
+		io.WriteString(w, `{"state":"ready","savedVersion":"9","adapters":[],"findings":[],"operations":[]}`)
+	}))
+	c := &httpTakeoverClient{socket: socket, via: "fe80::1%eth0"}
+	if _, err := c.Proposal(context.Background()); err != nil || asked != "/api/v1/takeover/proposal?via=fe80%3A%3A1%25eth0" {
+		t.Fatalf("asked %q: %v", asked, err)
 	}
 }

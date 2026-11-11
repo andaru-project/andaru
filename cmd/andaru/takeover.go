@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"slices"
@@ -46,6 +47,11 @@ type draft struct {
 	Findings     []finding
 	// ApplyFindings is what the apply gates would refuse, including the preview's errors that a takeover does not resolve.
 	ApplyFindings []finding
+	Rules         []struct {
+		Chain, Name, Action string
+		Position            int
+		From, To, Services  []string
+	}
 }
 
 var errHeadMoved = errors.New("the saved configuration changed")
@@ -233,7 +239,12 @@ func runTakeover(ctx context.Context, socket string, args []string, stdin io.Rea
 		fmt.Fprintln(stderr, "andaru ctl takeover asks questions and needs a terminal; use --accept-detected to take over with the detected settings.")
 		return 2
 	}
-	c := &httpTakeoverClient{socket: socket}
+	// The local end of the SSH session tells the engine which segment the operator manages the host through.
+	via := ""
+	if f := strings.Fields(os.Getenv("SSH_CONNECTION")); len(f) == 4 {
+		via = f[2]
+	}
+	c := &httpTakeoverClient{socket: socket, via: via}
 	p, err := c.Proposal(ctx)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -246,7 +257,7 @@ func runTakeover(ctx context.Context, socket string, args []string, stdin io.Rea
 	return interactive(ctx, c, p, *timeout, stdin, stdout, hold)
 }
 
-type httpTakeoverClient struct{ socket string }
+type httpTakeoverClient struct{ socket, via string }
 
 func (c *httpTakeoverClient) do(ctx context.Context, method, path string, body any, timeout time.Duration, out any) error {
 	var payload io.Reader
@@ -293,7 +304,11 @@ func (c *httpTakeoverClient) do(ctx context.Context, method, path string, body a
 }
 
 func (c *httpTakeoverClient) Proposal(ctx context.Context) (p proposal, err error) {
-	err = c.do(ctx, http.MethodGet, "/api/v1/takeover/proposal", nil, 15*time.Second, &p)
+	path := "/api/v1/takeover/proposal"
+	if c.via != "" {
+		path += "?via=" + url.QueryEscape(c.via)
+	}
+	err = c.do(ctx, http.MethodGet, path, nil, 15*time.Second, &p)
 	return
 }
 

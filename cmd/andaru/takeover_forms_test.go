@@ -165,6 +165,7 @@ var acceptAll = []struct{ marker, keys []string }{
 	{[]string{"eth1: IPv6"}, []string{enter}},
 	{[]string{"DNS servers for this host"}, []string{enter}},
 	{[]string{"Search domains"}, []string{enter, enter}},
+	{[]string{"Management adapter"}, []string{enter}},
 	{[]string{"Seconds to confirm"}, []string{enter}},
 }
 
