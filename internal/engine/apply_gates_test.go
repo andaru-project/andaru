@@ -161,7 +161,7 @@ func TestApplyFindings(t *testing.T) {
 		}, []want{{"FOREIGN_CONFIGURATION", ""}, {"FOREIGN_CONFIGURATION", ""}, {"TAKEOVER_UNSUPPORTED_BASELINE", netplanWAN}}},
 		"static DNS file configures no interface": {func() gateInput {
 			return staticDNS(map[string]string{"eth0": "DNS=192.0.2.53\n"})
-		}, []want{{"FOREIGN_CONFIGURATION", ""}, {"FOREIGN_CONFIGURATION", ""}, {"TAKEOVER_UNSUPPORTED_BASELINE", netplanWAN}, {"WOULD_UNCONFIGURE", ""}}[:3]},
+		}, []want{{"FOREIGN_CONFIGURATION", ""}, {"FOREIGN_CONFIGURATION", ""}, {"TAKEOVER_UNSUPPORTED_BASELINE", netplanWAN}}},
 		"only UseDNS mentions DNS": {func() gateInput {
 			return staticDNS(map[string]string{"eth0": "[DHCPv4]\nUseDNS=no\n"}, "eth0")
 		}, []want{{"FOREIGN_CONFIGURATION", ""}, {"FOREIGN_CONFIGURATION", ""}, {"TAKEOVER_UNSUPPORTED_BASELINE", netplanWAN}}},
