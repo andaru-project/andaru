@@ -10,6 +10,7 @@ import (
 
 	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/host"
+	"github.com/andaru-project/andaru/internal/render"
 )
 
 //go:embed openapi.json
@@ -33,6 +34,8 @@ type errorBody struct {
 	Message string          `json:"message"`
 	Details []errorDetail   `json:"details"`
 	Current *config.Current `json:"current,omitempty"`
+	// Findings explain a refused apply in the preview's own vocabulary.
+	Findings []render.Finding `json:"findings,omitempty"`
 }
 
 type errorResponse struct {
@@ -49,7 +52,8 @@ func newHandler(readLinks func(context.Context) ([]host.LinkStatus, error), conf
 			writeError(w, r, http.StatusForbidden, "FORBIDDEN", "Root Unix peer credentials are required.")
 			return
 		}
-		if r.URL.Path == "/api/v1/schema" || r.URL.Path == "/api/v1/config" || strings.HasPrefix(r.URL.Path, "/api/v1/config/") || r.URL.Path == "/api/v1/versions" || strings.HasPrefix(r.URL.Path, "/api/v1/versions/") || r.URL.Path == previewPath {
+		saved := r.URL.Path == "/api/v1/schema" || r.URL.Path == "/api/v1/config" || strings.HasPrefix(r.URL.Path, "/api/v1/config/") || r.URL.Path == "/api/v1/versions" || strings.HasPrefix(r.URL.Path, "/api/v1/versions/") || r.URL.Path == previewPath
+		if saved || r.URL.Path == appliesPath || strings.HasPrefix(r.URL.Path, appliesPath+"/") {
 			configuration.ServeHTTP(w, r)
 			return
 		}

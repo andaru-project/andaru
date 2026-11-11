@@ -38,8 +38,9 @@ func yesNo(v bool) string {
 	return "no"
 }
 
-// upstream keeps networkd from adopting a provider's DNS, NTP, hostname or domains: those are later areas.
-var ignoreOffered = []string{"UseDNS=no", "UseNTP=no", "UseHostname=no", "UseDomains=no"}
+// shortcut: the host uses provider DNS for its own lookups; revisit when the DNS area owns the resolver.
+// NTP, hostname and domains stay ignored: those are later areas.
+var ignoreOffered = []string{"UseDNS=yes", "UseNTP=no", "UseHostname=no", "UseDomains=no"}
 
 // addressing renders one link's segment. ppp marks a pppd-owned interface:
 // IPv4 comes from pppd and DHCPv6 must not wait for a router advertisement.
@@ -105,7 +106,7 @@ func (r *renderer) addressing(id string, ppp bool) (sections []section, sources 
 		}
 	case "slaac", "dhcp6":
 		network = append(network, "IPv6AcceptRA=yes")
-		accept = []string{"UseDNS=no", "UseDomains=no"}
+		accept = []string{"UseDNS=yes", "UseDomains=no"}
 		if v6.Mode == "dhcp6" && ppp {
 			// Some providers send no router advertisement on PPP and expect a bare solicit.
 			dhcp6 = append(dhcp6, "WithoutRA=solicit")

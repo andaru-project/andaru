@@ -23,10 +23,23 @@ type ctlRequest struct {
 	method, path, kind, tag string
 	body                    bool
 	status                  int
+	// payload is a request body built from flags instead of stdin.
+	payload []byte
+	// apply marks the requests that change live networking: they take longer and their outcome needs explaining.
+	apply string
+}
+
+type applyReply struct {
+	ID       string
+	State    string
+	Deadline string
+	Reason   string
+	Files    []json.RawMessage
 }
 
 var objectIDPattern = regexp.MustCompile(`^(lnk|seg|zon)_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
-var errUsage = errors.New("usage: andaru ctl [--socket PATH] links|openapi|config <show|list|get|create|replace|delete|changes>|versions <list|get>|preview network [--saved-version N]")
+var applyIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
+var errUsage = errors.New("usage: andaru ctl [--socket PATH] links|openapi|config <show|list|get|create|replace|delete|changes>|versions <list|get>|preview network [--saved-version N]|apply network --saved-version N [--takeover] [--confirm-timeout S]|applies <list|get ID|confirm ID|rollback ID>")
 
 func collectionName(s string) bool { return s == "links" || s == "segments" || s == "zones" }
 func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
@@ -177,6 +190,57 @@ func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 		req.kind = "history"
 		return req, nil
 	}
+	if args[0] == "apply" {
+		if args[1] != "network" {
+			return req, errUsage
+		}
+		fs := flag.NewFlagSet("apply network", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		// Required and never defaulted: the operator applies the version they previewed.
+		var saved *config.Version
+		fs.Func("saved-version", "saved version to apply; must be the saved head", func(s string) error {
+			v, e := config.ParseVersion(s)
+			saved = &v
+			return e
+		})
+		takeover := fs.Bool("takeover", false, "replace netplan and cloud-init as this host's network configuration")
+		timeout := fs.Int("confirm-timeout", 120, "seconds until the change is rolled back unless confirmed (30-600)")
+		if e := fs.Parse(args[2:]); e != nil {
+			return req, e
+		}
+		if fs.NArg() != 0 || saved == nil {
+			return req, errUsage
+		}
+		req.method, req.path, req.kind, req.apply = "POST", "/api/v1/applies", "apply", "apply"
+		req.payload, _ = json.Marshal(struct {
+			SavedVersion          config.Version `json:"savedVersion"`
+			Takeover              bool           `json:"takeover"`
+			ConfirmTimeoutSeconds int            `json:"confirmTimeoutSeconds"`
+		}{*saved, *takeover, *timeout})
+		return req, nil
+	}
+	if args[0] == "applies" {
+		if args[1] == "list" && len(args) == 2 {
+			req.path, req.kind = "/api/v1/applies", "applies"
+			return req, nil
+		}
+		if len(args) != 3 || !applyIDPattern.MatchString(args[2]) {
+			return req, errUsage
+		}
+		req.path, req.kind = "/api/v1/applies/"+args[2], "apply"
+		switch args[1] {
+		case "get":
+		case "confirm":
+			req.method, req.apply = "POST", "confirm"
+			req.path += "/confirmation"
+		case "rollback":
+			req.method, req.apply = "POST", "rollback"
+			req.path += "/rollback"
+		default:
+			return req, errUsage
+		}
+		return req, nil
+	}
 	return req, errUsage
 }
 
@@ -208,7 +272,7 @@ func runCtl(ctx context.Context, socket string, args []string, stdin io.Reader, 
 		fmt.Fprintln(stderr, errUsage)
 		return 2
 	}
-	var payload []byte
+	payload := spec.payload
 	if spec.body {
 		payload, e = readInput(ctx, stdin)
 		if e != nil || len(payload) > 1<<20 {
@@ -224,6 +288,10 @@ func runCtl(ctx context.Context, socket string, args []string, stdin io.Reader, 
 	if spec.method != "GET" {
 		timeout = 10 * time.Second
 	}
+	if spec.apply != "" {
+		// An apply waits for networkd to settle and may first wait behind the rollback of another.
+		timeout = 160 * time.Second
+	}
 	client := &http.Client{Transport: transport, Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	request, e := http.NewRequestWithContext(ctx, spec.method, "http://unix"+spec.path, bytes.NewReader(payload))
 	if e != nil {
@@ -238,9 +306,12 @@ func runCtl(ctx context.Context, socket string, args []string, stdin io.Reader, 
 	}
 	response, e := client.Do(request)
 	if e != nil {
-		if spec.method == "GET" {
+		switch {
+		case spec.apply != "":
+			fmt.Fprintln(stderr, "response unavailable; outcome may be unknown; run: andaru ctl applies list")
+		case spec.method == "GET":
 			fmt.Fprintln(stderr, "could not reach the local engine")
-		} else {
+		default:
 			fmt.Fprintln(stderr, "save response unavailable; outcome may be unknown; read current state before retrying")
 		}
 		return 1
@@ -272,6 +343,21 @@ func runCtl(ctx context.Context, socket string, args []string, stdin io.Reader, 
 			fmt.Fprintln(stderr, "could not finish engine response")
 			return 1
 		}
+	}
+	if spec.apply == "" {
+		return 0
+	}
+	var reply applyReply
+	_ = json.Unmarshal(body, &reply) // validEnvelope accepted it above
+	switch {
+	case spec.apply == "apply" && reply.State == "awaiting_confirmation":
+		// A session that survived the change does not show that a new one can be opened.
+		fmt.Fprintf(stderr, "Live until %s. From a NEW session, run: andaru ctl applies confirm %s\n", reply.Deadline, reply.ID)
+	case spec.apply == "apply":
+		fmt.Fprintf(stderr, "apply failed: %s\n", reply.Reason)
+		return 1
+	case reply.Reason != "" && spec.apply == "confirm":
+		fmt.Fprintln(stderr, reply.Reason)
 	}
 	return 0
 }
@@ -365,6 +451,23 @@ func validEnvelope(kind string, body []byte) bool {
 			Resolved, Files, Findings []json.RawMessage
 		}
 		return json.Unmarshal(body, &v) == nil && v.State == "preview" && validVersion(v.SavedVersion) && v.Realizable != nil && v.Resolved != nil && v.Files != nil && v.Findings != nil
+	case "apply":
+		var v applyReply
+		return json.Unmarshal(body, &v) == nil && applyIDPattern.MatchString(v.ID) && v.State != "" && v.Files != nil
+	case "applies":
+		var v struct {
+			Pointers map[string]*string
+			Items    []applyReply
+		}
+		if json.Unmarshal(body, &v) != nil || v.Pointers == nil || v.Items == nil {
+			return false
+		}
+		for _, item := range v.Items {
+			if !applyIDPattern.MatchString(item.ID) || item.State == "" || item.Files == nil {
+				return false
+			}
+		}
+		return true
 	case "version":
 		var v config.VersionView
 		return json.Unmarshal(body, &v) == nil && v.State == "saved" && validVersion(v.ID) && v.Changes != nil && validDeclarationView(v.Value)

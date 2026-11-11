@@ -8,9 +8,10 @@ Andaru — a Free Software firewall platform for Debian
 ## Development
 
 The root-local engine API and CLI expose observed interfaces and durable,
-version-checked saved network configuration, and preview the systemd-networkd and
-pppd files a saved version would produce. Neither saving nor previewing activates
-networking.
+version-checked saved network configuration, preview the systemd-networkd and
+pppd files a saved version would produce, and apply the network area behind a
+rollback timer that needs explicit confirmation, including taking a netplan
+cloud-image host over. Saving and previewing never activate networking.
 See [docs/dev/core-api.md](docs/dev/core-api.md) for commands, installation,
 security boundaries, and current limits.
 

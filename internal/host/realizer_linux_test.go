@@ -1,6 +1,7 @@
 package host
 
 import (
+	_ "embed"
 	"os"
 	"path/filepath"
 	"slices"
@@ -52,5 +53,84 @@ func TestReadRealizerFacts(t *testing.T) {
 	}
 	if _, err = readRealizerFacts(filepath.Join(root, "pppd"), run, "", "", ""); err == nil {
 		t.Fatal("an unreadable configuration directory was reported as empty")
+	}
+}
+
+//go:embed testdata/networkctl-list.json
+var networkctlList []byte
+
+func TestParseManaged(t *testing.T) {
+	got, err := ParseManaged(networkctlList)
+	want := []Managed{{Name: "eth0", NetworkFile: "/run/systemd/network/10-netplan-eth0.network", State: "configured"}}
+	if err != nil || !slices.Equal(got, want) {
+		t.Fatalf("managed = %+v, %v; want only the link networkd configures", got, err)
+	}
+	if _, err := ParseManaged([]byte(`[]`)); err == nil {
+		t.Fatal("a reply that is not networkctl's object was accepted")
+	}
+}
+
+func TestReadBaseline(t *testing.T) {
+	root := t.TempDir()
+	for path, body := range map[string]string{
+		"usr/sbin/netplan": "",
+		"etc/systemd/system/sysinit.target.wants/andaru-network-boot.service": "",
+		"lib/netplan/PLACEHOLDER":                     "",
+		"usr/lib/netplan/PLACEHOLDER":                 "",
+		"run/netplan/x.yaml":                          "network: {}\n",
+		"run/systemd/network/10-netplan-eth0.network": "[Network]\nDHCP=ipv4\n",
+		"run/systemd/network/10-netplan-eth1.network": "[Network]\nAddress=192.0.2.2/24\nDNS=1.1.1.1\n",
+		"run/systemd/network/10-netplan-eth2.network": "[Network]\nDomains=example.org\n",
+		"run/systemd/network/50-andaru-eth3.network":  "[Network]\nDNS=9.9.9.9\n",
+	} {
+		full := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := readBaseline(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Netplan || got.Ifupdown || !got.BootUnit ||
+		!slices.Equal(got.StrayYAML, []string{"/run/netplan/x.yaml"}) ||
+		!slices.Equal(got.StaticDNS, []string{"/run/systemd/network/10-netplan-eth1.network", "/run/systemd/network/10-netplan-eth2.network"}) {
+		t.Fatalf("baseline = %+v", got)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "sbin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "sbin/ifup"), nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A masked unit is a link to /dev/null: it resolves, and it never runs.
+	wanted := filepath.Join(root, "etc/systemd/system/sysinit.target.wants/andaru-network-boot.service")
+	if err := os.Remove(wanted); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/dev/null", wanted); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := readBaseline(root); got.BootUnit {
+		t.Fatal("a masked boot unit counted as enabled")
+	}
+	// Or the mask sits beside a wants link that still points at the vendor unit.
+	if err := os.Remove(wanted); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(wanted, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/dev/null", filepath.Join(root, "etc/systemd/system/andaru-network-boot.service")); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := readBaseline(root); got.BootUnit {
+		t.Fatal("a unit masked in /etc/systemd/system counted as enabled")
+	}
+	if got, _ := readBaseline(root); !got.Ifupdown {
+		t.Fatal("ifupdown not seen")
 	}
 }

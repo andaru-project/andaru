@@ -1,6 +1,8 @@
 package host
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -59,4 +61,99 @@ func readRealizerFacts(etcDir, runDir, pppd, pluginGlob, device string) (Realize
 	plugins, _ := filepath.Glob(pluginGlob)
 	facts.PPPDaemon, facts.PPPoEPlugin, facts.PPPDevice = exists(pppd), len(plugins) > 0, exists(device)
 	return facts, nil
+}
+
+// Managed is a link systemd-networkd configures and the file it took the configuration from.
+type Managed struct {
+	Name, NetworkFile string
+	// State is networkd's administrative state; "configured" once the file has been applied.
+	State string
+}
+
+// ParseManaged reads `networkctl list --json=short`, keeping only links bound to a .network file.
+func ParseManaged(data []byte) ([]Managed, error) {
+	var reply struct {
+		Interfaces []struct {
+			Name, NetworkFile, AdministrativeState string
+		}
+	}
+	if err := json.Unmarshal(data, &reply); err != nil {
+		return nil, fmt.Errorf("decode networkd link list: %w", err)
+	}
+	if reply.Interfaces == nil {
+		return nil, errors.New("networkd link list has no Interfaces")
+	}
+	managed := []Managed{}
+	for _, link := range reply.Interfaces {
+		if link.NetworkFile != "" {
+			managed = append(managed, Managed{Name: link.Name, NetworkFile: link.NetworkFile, State: link.AdministrativeState})
+		}
+	}
+	return managed, nil
+}
+
+// ReadManaged asks the running networkd which links it configures.
+func ReadManaged(ctx context.Context) ([]Managed, error) {
+	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	data, err := readCommand(ctx, "/usr/bin/networkctl", "list", "--json=short")
+	if err != nil {
+		return nil, err
+	}
+	return ParseManaged(data)
+}
+
+// Baseline describes who configured the network before Andaru, as far as a takeover must know.
+type Baseline struct {
+	Netplan  bool
+	Ifupdown bool
+	// BootUnit reports that the unit which puts the confirmed generation into /run at boot is enabled.
+	BootUnit bool
+	// StrayYAML is netplan configuration outside /etc/netplan, which a takeover would not move away.
+	StrayYAML []string
+	// StaticDNS lists netplan-generated .network files that set DNS= or Domains=, which Andaru cannot reproduce yet.
+	StaticDNS []string
+}
+
+// ReadBaseline inspects the host without changing it.
+func ReadBaseline() (Baseline, error) { return readBaseline("") }
+
+func readBaseline(root string) (Baseline, error) {
+	exists := func(path string) bool { _, err := os.Stat(root + path); return err == nil }
+	// A masked unit is a link to /dev/null, which exists but is no unit file; the mask may also sit beside the wants link.
+	wanted, err := os.Stat(root + "/etc/systemd/system/sysinit.target.wants/andaru-network-boot.service")
+	override, maskErr := os.Stat(root + "/etc/systemd/system/andaru-network-boot.service")
+	b := Baseline{
+		Netplan: exists("/usr/sbin/netplan"), Ifupdown: exists("/sbin/ifup"),
+		BootUnit:  err == nil && wanted.Mode().IsRegular() && (maskErr != nil || override.Mode().IsRegular()),
+		StrayYAML: []string{}, StaticDNS: []string{},
+	}
+	for _, dir := range []string{"/run/netplan", "/lib/netplan", "/usr/lib/netplan"} {
+		found, err := filepath.Glob(root + dir + "/*.yaml")
+		if err != nil {
+			return Baseline{}, err
+		}
+		for _, path := range found {
+			b.StrayYAML = append(b.StrayYAML, strings.TrimPrefix(path, root))
+		}
+	}
+	generated, err := filepath.Glob(root + "/run/systemd/network/10-netplan-*.network")
+	if err != nil {
+		return Baseline{}, err
+	}
+	for _, path := range generated {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return Baseline{}, fmt.Errorf("read baseline network file: %w", err)
+		}
+		for line := range strings.SplitSeq(string(data), "\n") {
+			if strings.HasPrefix(line, "DNS=") || strings.HasPrefix(line, "Domains=") {
+				b.StaticDNS = append(b.StaticDNS, strings.TrimPrefix(path, root))
+				break
+			}
+		}
+	}
+	slices.Sort(b.StrayYAML)
+	slices.Sort(b.StaticDNS)
+	return b, nil
 }

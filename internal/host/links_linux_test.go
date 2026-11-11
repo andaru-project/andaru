@@ -62,7 +62,7 @@ func TestParseLinksPreservesHostAddresses(t *testing.T) {
 	 {"ifindex":1,"ifname":"lo","link_type":"loopback","operstate":"UNKNOWN","mtu":65536,"flags":["LOOPBACK"],"address":"00:00:00:00:00:00","addr_info":[]},
 	 {"ifindex":3,"ifname":"veth-test","link_type":"ether","operstate":"DOWN","mtu":1500,"addr_info":[]}
 	]`)
-	got, err := parseLinks(data)
+	got, err := ParseLinks(data)
 	if err != nil || len(got) != 3 {
 		t.Fatalf("snapshot: %#v, %v", got, err)
 	}
@@ -133,20 +133,20 @@ func TestParseLinksRejectsInvalidInventory(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, err := parseLinks(body)
+			got, err := ParseLinks(body)
 			if err == nil || got != nil {
 				t.Fatalf("accepted invalid/partial inventory: %#v, %v", got, err)
 			}
 		})
 	}
 	for _, body := range []string{"[", "null", "{}", "[] {}"} {
-		if got, err := parseLinks([]byte(body)); err == nil || got != nil {
+		if got, err := ParseLinks([]byte(body)); err == nil || got != nil {
 			t.Fatalf("accepted malformed inventory %q: %#v, %v", body, got, err)
 		}
 	}
 	body, _ := json.Marshal([]any{validToolLink()})
 	body = []byte(strings.Replace(string(body), "eth0", "eth"+string([]byte{0xff}), 1))
-	if got, err := parseLinks(body); err == nil || got != nil {
+	if got, err := ParseLinks(body); err == nil || got != nil {
 		t.Fatalf("invalid UTF-8 was silently replaced: %#v, %v", got, err)
 	}
 	for _, pair := range [][]any{
@@ -154,7 +154,7 @@ func TestParseLinksRejectsInvalidInventory(t *testing.T) {
 		{validToolLinkWithIndex(2, "eth0"), validToolLinkWithIndex(3, "eth0")},
 	} {
 		body, _ := json.Marshal(pair)
-		if got, err := parseLinks(body); err == nil || got != nil {
+		if got, err := ParseLinks(body); err == nil || got != nil {
 			t.Fatalf("accepted duplicate identity: %#v, %v", got, err)
 		}
 	}
@@ -178,7 +178,7 @@ func TestReadCommandBoundsAndCancellation(t *testing.T) {
 		if err != nil || len(body) != 4*1024*1024 {
 			t.Fatalf("exact boundary rejected: bytes=%d err=%v", len(body), err)
 		}
-		if _, err := parseLinks(body); err != nil {
+		if _, err := ParseLinks(body); err != nil {
 			t.Fatalf("boundary JSON corrupted: %v", err)
 		}
 	})
@@ -251,7 +251,7 @@ func assertReaped(t *testing.T, pidFile string) {
 var detailedInventory []byte
 
 func TestParseLinksObservesKindAndPermanentAddress(t *testing.T) {
-	got, err := parseLinks(detailedInventory)
+	got, err := ParseLinks(detailedInventory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +262,7 @@ func TestParseLinksObservesKindAndPermanentAddress(t *testing.T) {
 		}
 	}
 	// ip prints permaddr only when it differs from the current address.
-	changed, err := parseLinks([]byte(`[{"ifindex":2,"ifname":"eth1","link_type":"ether","operstate":"UP","mtu":1500,"flags":[],"address":"02:11:22:33:44:55","permaddr":"52:54:00:aa:bb:02","addr_info":[]}]`))
+	changed, err := ParseLinks([]byte(`[{"ifindex":2,"ifname":"eth1","link_type":"ether","operstate":"UP","mtu":1500,"flags":[],"address":"02:11:22:33:44:55","permaddr":"52:54:00:aa:bb:02","addr_info":[]}]`))
 	if err != nil || changed[0].PermanentAddress != "52:54:00:aa:bb:02" || changed[0].LinkAddress != "02:11:22:33:44:55" {
 		t.Fatalf("permaddr not preferred: %#v %v", changed, err)
 	}

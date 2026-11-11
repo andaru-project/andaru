@@ -12,20 +12,20 @@ DHCP=yes
 IPv6AcceptRA=yes
 
 [DHCPv4]
-UseDNS=no
+UseDNS=yes
 UseNTP=no
 UseHostname=no
 UseDomains=no
 
 [DHCPv6]
-UseDNS=no
+UseDNS=yes
 UseNTP=no
 UseHostname=no
 UseDomains=no
 PrefixDelegationHint=::/56
 
 [IPv6AcceptRA]
-UseDNS=no
+UseDNS=yes
 UseDomains=no
 
 ### /run/systemd/network/50-andaru-ens19.network 0644 secret=false sources=/links/1,/segments/1

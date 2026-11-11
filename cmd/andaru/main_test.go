@@ -3,13 +3,18 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/andaru-project/andaru/internal/generation"
 )
 
 func replySocket(t *testing.T, handler http.Handler) string {
@@ -187,5 +192,151 @@ func TestCtlPreviewUsageAndReplyBoundary(t *testing.T) {
 		} else if code != 1 || out.Len() != 0 {
 			t.Fatalf("%s: became output: exit=%d %s", name, code, out.String())
 		}
+	}
+}
+
+func TestRealizeUsageErrors(t *testing.T) {
+	for _, args := range [][]string{
+		{"realize"}, {"realize", "unknown"}, {"realize", "activate"}, {"realize", "activate", "0"},
+		{"realize", "activate", "01"}, {"realize", "activate", "abc"}, {"realize", "activate", "1", "extra"},
+		{"realize", "rollback", "3"}, {"realize", "confirm"}, {"realize", "boot", "1"},
+		{"realize", "--state-dir", "relative", "boot"},
+	} {
+		var out, diagnostics bytes.Buffer
+		if code := run(context.Background(), args, strings.NewReader(""), &out, &diagnostics); code != 2 || out.Len() != 0 || diagnostics.Len() == 0 {
+			t.Fatalf("%q: exit=%d stdout=%q stderr=%q", args, code, out.String(), diagnostics.String())
+		}
+	}
+	var diagnostics bytes.Buffer
+	run(context.Background(), nil, strings.NewReader(""), io.Discard, &diagnostics)
+	if !strings.Contains(diagnostics.String(), "andaru realize") {
+		t.Fatalf("usage omits realize: %q", diagnostics.String())
+	}
+}
+
+type fakeVerbs struct {
+	err   error
+	calls []string
+}
+
+func (f *fakeVerbs) Activate(_ context.Context, id int) error {
+	f.calls = append(f.calls, fmt.Sprint("activate ", id))
+	return f.err
+}
+func (f *fakeVerbs) Rollback(_ context.Context, id int, reason string) error {
+	f.calls = append(f.calls, fmt.Sprint("rollback ", id, " ", reason))
+	return f.err
+}
+func (f *fakeVerbs) Confirm(_ context.Context, id int) error {
+	f.calls = append(f.calls, fmt.Sprint("confirm ", id))
+	return f.err
+}
+func (f *fakeVerbs) Boot(context.Context) error { f.calls = append(f.calls, "boot"); return f.err }
+
+func TestRealizeExitCodes(t *testing.T) {
+	for _, row := range []struct {
+		args []string
+		err  error
+		call string
+		code int
+	}{
+		{[]string{"activate", "7"}, nil, "activate 7", 0},
+		{[]string{"activate", "7"}, errors.New("verification failed"), "activate 7", 1},
+		{[]string{"confirm", "7"}, nil, "confirm 7", 0},
+		// A timer firing after a confirmation must not leave a failed unit behind.
+		{[]string{"rollback", "7", "deadline"}, fmt.Errorf("roll back 7: %w", generation.ErrWrongState), "rollback 7 deadline", 0},
+		{[]string{"rollback", "7", "requested"}, errors.New("disk"), "rollback 7 requested", 1},
+		// Boot must never hold up sysinit.target.
+		{[]string{"boot"}, errors.New("nothing usable"), "boot", 0},
+	} {
+		verbs := &fakeVerbs{err: row.err}
+		var diagnostics bytes.Buffer
+		var dir string
+		code := realizeCommand(context.Background(), append([]string{"--state-dir", "/srv/state"}, row.args...), &diagnostics, func(stateDir string) (realizeVerbs, error) {
+			dir = stateDir
+			return verbs, nil
+		})
+		if code != row.code || !slices.Equal(verbs.calls, []string{row.call}) || dir != "/srv/state" || (row.err != nil) != (diagnostics.Len() > 0) {
+			t.Fatalf("%q: exit=%d calls=%q dir=%q stderr=%q", row.args, code, verbs.calls, dir, diagnostics.String())
+		}
+	}
+	code := realizeCommand(context.Background(), []string{"boot"}, io.Discard, func(string) (realizeVerbs, error) { return nil, errors.New("not root") })
+	if code != 1 {
+		t.Fatalf("a refused privilege check exited %d", code)
+	}
+}
+
+func TestCtlApplyUsageErrors(t *testing.T) {
+	for _, args := range [][]string{
+		{"apply"}, {"apply", "firewall", "--saved-version", "7"}, {"apply", "network"},
+		// An unset shell variable must not apply anything.
+		{"apply", "network", "--saved-version", ""}, {"apply", "network", "--saved-version", "07"},
+		{"apply", "network", "--saved-version", "7", "--confirm-timeout", "abc"}, {"apply", "network", "--saved-version", "7", "extra"},
+		{"applies"}, {"applies", "get"}, {"applies", "confirm", "x"}, {"applies", "confirm", "0"}, {"applies", "rollback", "01"},
+		{"applies", "list", "extra"}, {"applies", "unknown", "1"}, {"applies", "confirm", "1", "extra"},
+	} {
+		var out, diag bytes.Buffer
+		argv := append([]string{"ctl", "--socket", filepath.Join(t.TempDir(), "missing.sock")}, args...)
+		if code := run(context.Background(), argv, strings.NewReader(""), &out, &diag); code != 2 || out.Len() != 0 {
+			t.Fatalf("usage %v exit=%d stdout=%s", args, code, out.String())
+		}
+	}
+}
+
+func TestCtlApplyAndApplies(t *testing.T) {
+	const awaiting = `{"id":"3","savedVersion":"7","takeover":true,"state":"awaiting_confirmation","previous":null,"deadline":"2026-11-11T12:02:00Z","reason":"","createdAt":"2026-11-11T12:00:00Z","confirmTimeoutSeconds":60,"files":[]}`
+	const failed = `{"id":"3","savedVersion":"7","takeover":true,"state":"failed","previous":null,"reason":"eth0 lost its IPv4 address","createdAt":"2026-11-11T12:00:00Z","confirmTimeoutSeconds":60,"files":[]}`
+	const pending = `{"id":"3","savedVersion":"7","takeover":true,"state":"confirmed","previous":null,"reason":"takeover not yet permanent: disk; completes at the next boot","createdAt":"2026-11-11T12:00:00Z","confirmTimeoutSeconds":60,"files":[]}`
+	const list = `{"pointers":{"confirmed":null,"lastKnownGood":null,"pending":"3","live":"3"},"items":[]}`
+	for _, row := range []struct {
+		name         string
+		args         []string
+		reply        string
+		method, path string
+		body         string
+		code         int
+		stdout       bool
+		stderrHas    string
+	}{
+		{"apply", []string{"apply", "network", "--saved-version", "7", "--takeover", "--confirm-timeout", "60"}, awaiting,
+			"POST", "/api/v1/applies", `{"savedVersion":"7","takeover":true,"confirmTimeoutSeconds":60}`, 0, true,
+			"Live until 2026-11-11T12:02:00Z. From a NEW session, run: andaru ctl applies confirm 3\n"},
+		{"apply defaults", []string{"apply", "network", "--saved-version", "7"}, awaiting,
+			"POST", "/api/v1/applies", `{"savedVersion":"7","takeover":false,"confirmTimeoutSeconds":120}`, 0, true, "applies confirm 3"},
+		{"apply failed", []string{"apply", "network", "--saved-version", "7"}, failed,
+			"POST", "/api/v1/applies", `{"savedVersion":"7","takeover":false,"confirmTimeoutSeconds":120}`, 1, true, "apply failed: eth0 lost its IPv4 address\n"},
+		{"confirm", []string{"applies", "confirm", "3"}, strings.Replace(awaiting, "awaiting_confirmation", "confirmed", 1), "POST", "/api/v1/applies/3/confirmation", "", 0, true, ""},
+		{"confirm not yet permanent", []string{"applies", "confirm", "3"}, pending, "POST", "/api/v1/applies/3/confirmation", "", 0, true, "completes at the next boot"},
+		{"rollback", []string{"applies", "rollback", "3"}, strings.Replace(awaiting, "awaiting_confirmation", "rolled_back", 1), "POST", "/api/v1/applies/3/rollback", "", 0, true, ""},
+		{"get", []string{"applies", "get", "3"}, awaiting, "GET", "/api/v1/applies/3", "", 0, true, ""},
+		{"list", []string{"applies", "list"}, list, "GET", "/api/v1/applies", "", 0, true, ""},
+		{"list with null items", []string{"applies", "list"}, `{"pointers":{},"items":null}`, "GET", "/api/v1/applies", "", 1, false, "invalid"},
+		{"apply without a state", []string{"applies", "get", "3"}, `{"id":"3","files":[]}`, "GET", "/api/v1/applies/3", "", 1, false, "invalid"},
+		{"apply with null files", []string{"applies", "get", "3"}, strings.Replace(awaiting, `"files":[]`, `"files":null`, 1), "GET", "/api/v1/applies/3", "", 1, false, "invalid"},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			var method, path, body string
+			socket := replySocket(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				data, _ := io.ReadAll(r.Body)
+				method, path, body = r.Method, r.URL.RequestURI(), string(data)
+				_, _ = io.WriteString(w, row.reply)
+			}))
+			var out, diag bytes.Buffer
+			code := run(context.Background(), append([]string{"ctl", "--socket", socket}, row.args...), strings.NewReader("ignored"), &out, &diag)
+			if method != row.method || path != row.path || body != row.body {
+				t.Fatalf("request = %s %s %s", method, path, body)
+			}
+			if code != row.code || (out.Len() > 0) != row.stdout || !strings.Contains(diag.String(), row.stderrHas) || (row.stderrHas == "" && diag.Len() != 0) {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, out.String(), diag.String())
+			}
+			if row.stdout && strings.TrimSpace(out.String()) != row.reply {
+				t.Fatalf("stdout = %q", out.String())
+			}
+		})
+	}
+	var out, diag bytes.Buffer
+	missing := filepath.Join(t.TempDir(), "missing.sock")
+	if code := run(context.Background(), []string{"ctl", "--socket", missing, "applies", "confirm", "3"}, strings.NewReader(""), &out, &diag); code != 1 || !strings.Contains(diag.String(), "andaru ctl applies list") {
+		t.Fatalf("exit=%d stderr=%q", code, diag.String())
 	}
 }
