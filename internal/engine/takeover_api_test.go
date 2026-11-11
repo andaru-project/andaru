@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -27,9 +28,18 @@ type takeoverBench struct {
 	reads       int
 }
 
+// netplanFixture locates the fixture beside this file: the root suite runs the test binary from the repository root.
+func netplanFixture(t *testing.T, name string) string {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate the test source")
+	}
+	return filepath.Join(filepath.Dir(file), "../host/testdata/netplan", name)
+}
+
 func newTakeoverBench(t *testing.T, fixture string) *takeoverBench {
 	return &takeoverBench{
-		root: "../host/testdata/netplan/" + fixture, state: t.TempDir(),
+		root: netplanFixture(t, fixture), state: t.TempDir(),
 		head:     `{"schemaVersion":1,"links":[],"segments":[],"zones":[]}`,
 		baseline: host.Baseline{Netplan: true, BootUnit: true},
 		addresses: []host.AddressStatus{
