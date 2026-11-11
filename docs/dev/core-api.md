@@ -59,6 +59,8 @@ The actual OpenAPI 3.1 document is embedded from [`internal/engine/openapi.json`
 | `GET /api/v1/versions` | Bounded saved history, default 50/max 100; exclusive `before` cursor |
 | `GET /api/v1/versions/{id}` | Secret-free immutable saved snapshot |
 | `GET /api/v1/preview/network` | Files a saved version would hand to systemd-networkd and pppd on this host, redacted, with findings; `state:"preview"`; optional `?savedVersion=N` |
+| `GET /api/v1/takeover/proposal` | What a first takeover of this host would save, as a change batch, with the host's adapters, its `state` and findings; writes nothing |
+| `POST /api/v1/preview/network/draft` | The files and findings a change batch would produce if saved now, as the preview and an apply would judge them; saves nothing |
 
 GET resources support HEAD without a body. Unsupported methods return `405 METHOD_NOT_ALLOWED` with the resource's `Allow` methods; unknown resources return `404 NOT_FOUND`. Missing/unverified/non-root peers get `403 FORBIDDEN` before routing/body processing. Inventory failures return `503 INVENTORY_UNAVAILABLE`, never an empty/partial success. Errors share `{"error":{"code":"...","message":"...","details":[]}}`; field details use safe request-relative JSON Pointers and conflicts may add redacted `error.current`. JSON responses are `no-store`; diagnostics never quote secret values.
 
@@ -114,6 +116,11 @@ referrers together. Unrelated object edits do not invalidate one another.
 Single-object GET/HEAD ETags cover only that object; the global snapshot version
 is `Andaru-Saved-Version`, not part of the ETag-covered body. Transformed write
 responses return versions but no ETag.
+
+A change batch may carry `"expectedSavedVersion": "N"`: the batch is then refused
+with `412` at `/expectedSavedVersion`, before any operation, unless N is still
+the saved head. The takeover assistant uses it so a save from another session
+between its proposal and its commit is never overwritten.
 
 Requests are bounded to 1 MiB, depth 32 and 100 operations; each stored document
 to 4 MiB and the declaration to 10,000 objects. Nulls, duplicate keys, malformed
@@ -212,6 +219,24 @@ What happens, in order:
 | `APPLY_UNSUPPORTED` | PPPoE links, delegated prefixes and router advertisements wait for the firewall. |
 | `NETDEV_CHANGE_UNSUPPORTED` | An existing VLAN, bridge or bond would change. Remove it in one apply and add it again in the next. |
 | `BOOT_UNIT_DISABLED` | `andaru-network-boot.service` is not enabled, so a confirmed configuration would not return after a reboot. |
+
+### Taking over with the assistant
+
+On a netplan host with no saved network configuration yet, the assistant asks the questions and does the rest. Design and limits: [interactive takeover](../superpowers/specs/2026-11-11-interactive-takeover-design.md).
+
+```sh
+sudo andaru ctl takeover                    # questions, pre-filled with what the host uses now
+sudo andaru ctl takeover --accept-detected  # no questions: take over exactly what was detected
+```
+
+1. **Detect.** The engine reads the files netplan generated and proposes one Ethernet link and segment per adapter, with its zone (`wan` for the adapter carrying the default route, `lan` for the others), addressing and DNS servers.
+2. **Ask.** Which adapters to keep (an adapter with an address cannot be left out), then per adapter its zone, IPv4 (DHCP, static addresses and gateway, or none) and IPv6 (none, SLAAC, DHCPv6, or a static IPv6 kept as detected), the host's DNS servers, and the confirmation timeout. It runs in any terminal, including the serial console; a console that reports no size is treated as 80×24.
+3. **Review.** The assistant shows, per adapter, what runs now and what will run, then the exact files and every finding, from a draft that saves nothing. **Back** is preselected; **Apply** is offered only when nothing would refuse the apply.
+4. **Apply.** The answers are saved, guarded by the saved version the proposal was made from, and applied as `andaru ctl apply network --takeover` would, with the rollback timer. Confirm from a new session as usual. From the save on, a dropped session no longer stops the assistant.
+
+Quitting, pressing Ctrl+C or losing the session before **Apply** writes nothing. Without a terminal the assistant refuses and points to `--accept-detected`, which applies only when the detection is complete and nothing would refuse it.
+
+The assistant only takes over: on a host already taken over, or with a configuration already saved, it says what to run instead and changes nothing. It cannot express everything netplan can; when it meets a construct it cannot reproduce, such as a non-default route, a routing policy, a MAC change or DNS set on several interfaces in one file, it lists it as an error and does not offer **Apply**. If a save from another session lands between the proposal and **Apply**, nothing is applied and the assistant asks to be run again. If the apply fails after the save, it prints the saved version and the command to retry.
 
 ### Host DNS servers
 
@@ -451,3 +476,18 @@ On 2026-11-11 the CGO-disabled amd64 build of code commit `40affb6` (SHA-256 `aa
 | Same takeover confirmed from a new session, then rebooted | Same address on `ens18`, servers as declared, a name resolved, `/etc/netplan` empty, boot in 6.0 s. |
 
 Not run on the lab: a host where systemd-resolved does not manage `/etc/resolv.conf` (unit-tested: the check is skipped and the preview warns). The VM was reset to `base-netplan-static-20261111` afterwards. On this ZFS-backed VM only the most recent snapshot can be rolled back to, so the older DHCP base `base-netplan-20261111` is now reachable only by cloning from it.
+
+### Takeover assistant Debian lab qualification
+
+On 2026-11-11 CGO-disabled amd64 builds of this branch were installed on VM 114 at snapshot `base-netplan-static-20261111` (static 10.0.1.19/16, gateway, two DNS servers, a search domain), reset to that snapshot between runs. A 5-per-second ping ran during each takeover.
+
+| Step | Result |
+| --- | --- |
+| `andaru ctl takeover` over `ssh -t` (80×24), every detected value accepted, **Apply** | 0 pings lost. Review showed the exact `.network` file; confirmed from a new SSH session. After a reboot: same address on `ens18`, the declared DNS servers, a name resolved, `/etc/netplan` empty. |
+| Same, **Quit** at review | Exit 1, "Nothing was changed"; no save, no apply. |
+| On the serial console (`ttyS0`, which reports a 0×0 size, `TERM=vt100`), **Apply**, not confirmed | 0 pings lost; the timer rolled back after 120 seconds; the next run reported `saved-not-applied` and changed nothing. |
+| A second session saved a zone while the assistant waited at review, then **Apply** | "saved meanwhile from another session"; exit 1, nothing applied, the other session's save kept. |
+| Proxmox cloud-init switched to DHCP (netplan `dhcp4`/`dhcp6`), `andaru ctl takeover --accept-detected` | 0 pings lost; IPv4 DHCP and DHCPv6 rendered with the offered DNS; confirmed and rebooted: same addresses on `ens18`, a name resolved. |
+| The final build of the branch (SHA-256 `be0c457e475fc6dc52b62f27b6e5cc77e4e1130d70cd08170cdcbb7653c91218`), `--accept-detected --confirm-timeout 30` on the static base, not confirmed | Applied; the timer rolled it back and `live` returned to `null`. |
+
+Two defects found on the lab were fixed with tests before this record: the review counted the preview's `FOREIGN_CONFIGURATION` findings for the netplan files a takeover replaces, so **Apply** was never offered, and on the serial console's 0×0 size the forms had no room to draw.

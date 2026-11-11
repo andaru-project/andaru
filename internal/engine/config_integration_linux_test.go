@@ -115,7 +115,8 @@ func TestConfigurationHTTPContract(t *testing.T) {
 		t.Fatal(e)
 	}
 	expected := map[string][]string{"/api/v1/status/links": {"get", "head"}, "/api/v1/openapi.json": {"get", "head"}, "/api/v1/schema": {"get", "head"}, "/api/v1/config": {"get", "head"}, "/api/v1/config/{collection}": {"get", "head", "post"}, "/api/v1/config/{collection}/{id}": {"get", "head", "put", "delete"}, "/api/v1/config/changes": {"post"}, "/api/v1/versions": {"get", "head"}, "/api/v1/versions/{id}": {"get", "head"}, "/api/v1/preview/network": {"get", "head"},
-		"/api/v1/applies": {"get", "head", "post"}, "/api/v1/applies/{id}": {"get", "head"}, "/api/v1/applies/{id}/confirmation": {"post"}, "/api/v1/applies/{id}/rollback": {"post"}}
+		"/api/v1/applies": {"get", "head", "post"}, "/api/v1/applies/{id}": {"get", "head"}, "/api/v1/applies/{id}/confirmation": {"post"}, "/api/v1/applies/{id}/rollback": {"post"},
+		"/api/v1/takeover/proposal": {"get", "head"}, "/api/v1/preview/network/draft": {"post"}}
 	if len(document.Paths) != len(expected) {
 		t.Fatalf("unimplemented or missing contract paths: %d", len(document.Paths))
 	}

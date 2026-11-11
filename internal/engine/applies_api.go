@@ -18,7 +18,6 @@ import (
 	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/generation"
 	"github.com/andaru-project/andaru/internal/host"
-	"github.com/andaru-project/andaru/internal/render"
 )
 
 const (
@@ -37,6 +36,10 @@ type hostReader struct {
 	Facts    func() (host.RealizerFacts, error)
 	Managed  func(context.Context) ([]host.Managed, error)
 	Baseline func() (host.Baseline, error)
+	// Route names the interfaces carrying an IPv4 default route.
+	Route func(context.Context) ([]string, error)
+	// Root prefixes host files the engine reads directly; "" on a real host.
+	Root string
 }
 
 type applyFile struct {
@@ -224,36 +227,19 @@ func (h *appliesHandler) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusConflict, "APPLY_IN_PROGRESS", "Apply "+strconv.Itoa(*pointers.Pending)+" is awaiting confirmation; confirm it or roll it back first.")
 		return
 	}
-	gate := gateInput{Takeover: request.Takeover, Declaration: input.Value}
-	if gate.Links, err = h.read.Links(ctx); err == nil {
-		gate.Facts, err = h.read.Facts()
-	}
-	if err == nil {
-		gate.Managed, err = h.read.Managed(ctx)
-	}
-	if err == nil {
-		gate.Baseline, err = h.read.Baseline()
-	}
-	if err != nil {
+	gate, err := gatherGate(ctx, h.read, h.dir, pointers, input.Value, input.Secrets, request.Takeover)
+	switch {
+	case errors.Is(err, errInventory):
 		slog.ErrorContext(ctx, "host inventory unavailable for apply", "error", err)
 		writeError(w, r, http.StatusServiceUnavailable, "INVENTORY_UNAVAILABLE", "Interface inventory is unavailable; inspect the engine journal.")
 		return
-	}
-	if gate.Result, err = render.Network(render.Input{Declaration: input.Value, Secrets: input.Secrets, Links: gate.Links, Facts: gate.Facts}); err != nil {
+	case errors.Is(err, errRender):
 		slog.ErrorContext(ctx, "saved declaration could not be rendered", "error", err)
 		writeError(w, r, http.StatusServiceUnavailable, "STORE_UNAVAILABLE", "Saved configuration is unavailable; inspect the engine journal.")
 		return
-	}
-	if pointers.Live != nil {
-		live, err := generation.Read(h.dir, *pointers.Live)
-		if err == nil {
-			gate.Live = &live
-			gate.LiveFiles, err = generation.Contents(h.dir, live)
-		}
-		if err != nil {
-			h.unavailable(w, r, "read the live generation", err)
-			return
-		}
+	case err != nil:
+		h.unavailable(w, r, "read the live generation", err)
+		return
 	}
 	if findings := applyFindings(gate); len(findings) > 0 {
 		writeJSON(w, r, http.StatusUnprocessableEntity, errorResponse{Error: errorBody{

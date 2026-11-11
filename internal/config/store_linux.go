@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -290,6 +291,8 @@ type pendingSave struct {
 	actor                       string
 	active, secretReady, closed bool
 	deadline                    time.Time
+	// head is the saved version the batch was prepared against.
+	head Version
 }
 
 func (s *Store) prepareSave(ctx context.Context, actor string, input Changes) (*pendingSave, error) {
@@ -331,6 +334,7 @@ func (s *Store) prepareSave(ctx context.Context, actor string, input Changes) (*
 	if e != nil {
 		return nil, e
 	}
+	p.head = current.Version
 	n, e := strconvVersion(current.Version)
 	if e != nil || n == int64(^uint64(0)>>1) {
 		return nil, unavailable()
@@ -445,4 +449,32 @@ func (p *pendingSave) publish(ctx context.Context) (SaveResult, error) {
 		return SaveResult{}, err
 	}
 	return p.commitConfiguration(pub)
+}
+
+// Draft prepares a change batch against the saved head exactly as Save does and returns
+// the declaration it would produce, without publishing anything. A draft is only shown,
+// so it may not carry a secret value.
+func (s *Store) Draft(ctx context.Context, input Changes) (RealizationInput, error) {
+	for i, op := range input.Operations {
+		var value map[string]json.RawMessage
+		if json.Unmarshal(op.Value, &value) == nil && value["password"] != nil {
+			return RealizationInput{}, fault("VALIDATION_FAILED", input.path(i, "/password", true), "A draft cannot carry a password.")
+		}
+	}
+	p, e := s.prepareSave(ctx, "unix:uid:0", input)
+	if e != nil {
+		return RealizationInput{}, e
+	}
+	defer p.Close()
+	view, e := publicSnapshot(p.prepared.State)
+	if e != nil {
+		return RealizationInput{}, e
+	}
+	result := RealizationInput{SavedVersion: p.head, Value: view.Value, Secrets: map[string]string{}}
+	for _, l := range p.prepared.State.Config.Links {
+		if l.Password != nil {
+			result.Secrets[l.Password.Secret] = p.prepared.State.Secrets.Scopes["core"][l.Password.Secret].Value
+		}
+	}
+	return result, nil
 }

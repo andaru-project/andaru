@@ -320,3 +320,37 @@ func TestObjectChangeStrictnessAndPointers(t *testing.T) {
 		t.Fatalf("wrong batch pointer: %+v", f.Details)
 	}
 }
+
+// A batch built from what the operator saw must not merge with a save that landed since.
+func TestExpectedSavedVersion(t *testing.T) {
+	stale, current := Version("6"), Version("7")
+	for name, tc := range map[string]struct {
+		expected *Version
+		wantCode string
+	}{"stale": {&stale, "PRECONDITION_FAILED"}, "current": {&current, ""}, "absent": {nil, ""}} {
+		t.Run(name, func(t *testing.T) {
+			s := seededState(t)
+			c := batchChanges(t, Changes{Operations: []Operation{{Op: "create", Collection: "zones", Value: json.RawMessage(`{"name":"extra"}`)}}})
+			c.ExpectedSavedVersion = tc.expected
+			_, e := prepareChanges(&s, c, "8", fixedTime)
+			if tc.wantCode == "" {
+				if e != nil {
+					t.Fatal(e)
+				}
+				return
+			}
+			if f := requireFault(t, e, tc.wantCode); f.Details == nil || f.Details[0].Path != "/expectedSavedVersion" {
+				t.Fatalf("fault = %+v", f)
+			}
+		})
+	}
+	raw := []byte(`{"expectedSavedVersion":"7","operations":[{"op":"create","collection":"zones","value":{"name":"x"}}]}`)
+	if c, e := DecodeChanges(raw); e != nil || c.ExpectedSavedVersion == nil || *c.ExpectedSavedVersion != "7" {
+		t.Fatalf("decode = %+v, %v", c, e)
+	}
+	s := seededState(t)
+	bad, _ := DecodeChanges([]byte(`{"expectedSavedVersion":"07","operations":[{"op":"create","collection":"zones","value":{"name":"x"}}]}`))
+	if _, e := prepareChanges(&s, bad, "8", fixedTime); e == nil {
+		t.Fatal("a malformed expectedSavedVersion was accepted")
+	}
+}

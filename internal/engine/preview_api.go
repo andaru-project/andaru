@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"strings"
 
 	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/host"
@@ -25,7 +24,7 @@ type previewResponse struct {
 func newSavedHandler(store *config.Store, readLinks func(context.Context) ([]host.LinkStatus, error), readFacts func() (host.RealizerFacts, error), applies http.Handler) http.Handler {
 	configuration, preview := newConfigurationHandler(store), newPreviewHandler(store, readLinks, readFacts)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, appliesPath) {
+		if isLivePath(r.URL.Path) {
 			applies.ServeHTTP(w, r)
 			return
 		}

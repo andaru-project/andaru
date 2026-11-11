@@ -39,7 +39,7 @@ type applyReply struct {
 
 var objectIDPattern = regexp.MustCompile(`^(lnk|seg|zon)_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 var applyIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
-var errUsage = errors.New("usage: andaru ctl [--socket PATH] links|openapi|config <show|list|get|create|replace|delete|changes>|versions <list|get>|preview network [--saved-version N]|apply network --saved-version N [--takeover] [--confirm-timeout S]|applies <list|get ID|confirm ID|rollback ID>")
+var errUsage = errors.New("usage: andaru ctl [--socket PATH] links|openapi|config <show|list|get|create|replace|delete|changes>|versions <list|get>|preview network [--saved-version N]|apply network --saved-version N [--takeover] [--confirm-timeout S]|applies <list|get ID|confirm ID|rollback ID>|takeover [--accept-detected] [--confirm-timeout S]")
 
 func collectionName(s string) bool { return s == "links" || s == "segments" || s == "zones" }
 func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
@@ -264,6 +264,9 @@ func readInput(ctx context.Context, r io.Reader) ([]byte, error) {
 	}
 }
 func runCtl(ctx context.Context, socket string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "takeover" {
+		return runTakeover(ctx, socket, args[1:], stdin, stdout, stderr)
+	}
 	spec, e := ctlOperation(args, stderr)
 	if e != nil {
 		if errors.Is(e, flag.ErrHelp) {

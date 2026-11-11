@@ -1,0 +1,14 @@
+[Match]
+PermanentMACAddress=bc:24:11:89:01:10
+Name=eth0
+
+[Network]
+LinkLocalAddressing=ipv6
+Address=10.0.1.19/16
+DNS=172.16.53.53
+DNS=fd00:53:53:53:53:53:53:53
+Domains=lab.example
+
+[Route]
+Destination=0.0.0.0/0
+Gateway=10.0.0.1

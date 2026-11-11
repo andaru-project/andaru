@@ -53,7 +53,7 @@ func newHandler(readLinks func(context.Context) ([]host.LinkStatus, error), conf
 			return
 		}
 		saved := r.URL.Path == "/api/v1/schema" || r.URL.Path == "/api/v1/config" || strings.HasPrefix(r.URL.Path, "/api/v1/config/") || r.URL.Path == "/api/v1/versions" || strings.HasPrefix(r.URL.Path, "/api/v1/versions/") || r.URL.Path == previewPath
-		if saved || r.URL.Path == appliesPath || strings.HasPrefix(r.URL.Path, appliesPath+"/") {
+		if saved || isLivePath(r.URL.Path) {
 			configuration.ServeHTTP(w, r)
 			return
 		}

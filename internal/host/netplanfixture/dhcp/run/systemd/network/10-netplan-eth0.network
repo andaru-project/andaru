@@ -1,0 +1,11 @@
+[Match]
+PermanentMACAddress=bc:24:11:89:01:10
+Name=eth0
+
+[Network]
+DHCP=ipv4
+LinkLocalAddressing=ipv6
+
+[DHCP]
+RouteMetric=100
+UseMTU=true
