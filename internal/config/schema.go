@@ -95,7 +95,7 @@ func schemaErrors(err error) error {
 	return details
 }
 func safePointer(tokens []string) string {
-	const fields = " schemaVersion links segments zones id name description kind mtu enabled permanentMac parent vlanId members mode username password secret set expectedVersion isSet updatedAt version addressing ipv4 ipv6 addresses gateway requestPrefixLength from subnetId ra managed otherInfo dns servers searchDomains op collection localId operations state savedVersion value items unusedSecrets "
+	const fields = " schemaVersion links segments zones objects policy nat management outbound segment allowedSources input forward action to services log protocol ports types address prefix first last before order id name description kind mtu enabled permanentMac parent vlanId members mode username password secret set expectedVersion isSet updatedAt version addressing ipv4 ipv6 addresses gateway requestPrefixLength from subnetId ra managed otherInfo dns servers searchDomains op collection localId operations state savedVersion value items unusedSecrets "
 	var b strings.Builder
 	for _, t := range tokens {
 		if _, e := strconv.ParseUint(t, 10, 32); e != nil && !strings.Contains(fields, " "+t+" ") {
@@ -125,7 +125,7 @@ func decodeDeclaration(raw []byte) (declaration, error) {
 	if e = json.Unmarshal(raw, &d); e != nil {
 		return d, validationError{{Path: "", Message: "Expected bounded integer fields."}}
 	}
-	if details := validateTopology(&d); len(details) > 0 {
+	if details := append(validateTopology(&d), validatePolicy(&d)...); len(details) > 0 {
 		return declaration{}, validationError(details)
 	}
 	normalizeDeclaration(&d)

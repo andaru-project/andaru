@@ -1014,6 +1014,73 @@
           },
           "minItems": 0,
           "maxItems": 10000
+        },
+        "objects": {
+          "type": "object",
+          "properties": {
+            "addresses": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/addressStored"
+              },
+              "minItems": 0,
+              "maxItems": 10000
+            },
+            "services": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/serviceStored"
+              },
+              "minItems": 0,
+              "maxItems": 10000
+            }
+          },
+          "required": [
+            "addresses",
+            "services"
+          ],
+          "additionalProperties": false
+        },
+        "policy": {
+          "type": "object",
+          "properties": {
+            "input": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ruleStored"
+              },
+              "minItems": 0,
+              "maxItems": 10000
+            },
+            "forward": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ruleStored"
+              },
+              "minItems": 0,
+              "maxItems": 10000
+            }
+          },
+          "required": [
+            "input",
+            "forward"
+          ],
+          "additionalProperties": false
+        },
+        "nat": {
+          "type": "object",
+          "properties": {
+            "outbound": {
+              "$ref": "#/$defs/outboundFields"
+            }
+          },
+          "required": [
+            "outbound"
+          ],
+          "additionalProperties": false
+        },
+        "management": {
+          "$ref": "#/$defs/managementFields"
         }
       },
       "required": [
@@ -1053,6 +1120,73 @@
           },
           "minItems": 0,
           "maxItems": 10000
+        },
+        "objects": {
+          "type": "object",
+          "properties": {
+            "addresses": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/addressStored"
+              },
+              "minItems": 0,
+              "maxItems": 10000
+            },
+            "services": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/serviceStored"
+              },
+              "minItems": 0,
+              "maxItems": 10000
+            }
+          },
+          "required": [
+            "addresses",
+            "services"
+          ],
+          "additionalProperties": false
+        },
+        "policy": {
+          "type": "object",
+          "properties": {
+            "input": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ruleStored"
+              },
+              "minItems": 0,
+              "maxItems": 10000
+            },
+            "forward": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ruleStored"
+              },
+              "minItems": 0,
+              "maxItems": 10000
+            }
+          },
+          "required": [
+            "input",
+            "forward"
+          ],
+          "additionalProperties": false
+        },
+        "nat": {
+          "type": "object",
+          "properties": {
+            "outbound": {
+              "$ref": "#/$defs/outboundFields"
+            }
+          },
+          "required": [
+            "outbound"
+          ],
+          "additionalProperties": false
+        },
+        "management": {
+          "$ref": "#/$defs/managementFields"
         }
       },
       "required": [
@@ -1259,6 +1393,301 @@
       },
       "required": [
         "servers"
+      ],
+      "additionalProperties": false
+    },
+    "addressID": {
+      "type": "string",
+      "pattern": "^adr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "addressRef": {
+      "type": "string",
+      "pattern": "^(adr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|@[A-Za-z][A-Za-z0-9_]{0,31})$"
+    },
+    "serviceID": {
+      "type": "string",
+      "pattern": "^svc_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "serviceRef": {
+      "type": "string",
+      "pattern": "^(svc_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|@[A-Za-z][A-Za-z0-9_]{0,31})$"
+    },
+    "ruleID": {
+      "type": "string",
+      "pattern": "^rul_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "ruleRef": {
+      "type": "string",
+      "pattern": "^(rul_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|@[A-Za-z][A-Za-z0-9_]{0,31})$"
+    },
+    "policyRef": {
+      "type": "string",
+      "pattern": "^((zon|adr)_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|@[A-Za-z][A-Za-z0-9_]{0,31})$"
+    },
+    "addressFields": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/addressID"
+            },
+            "kind": {
+              "enum": [
+                "host",
+                "network",
+                "range",
+                "group"
+              ]
+            },
+            "address": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "prefix": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "first": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "last": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "members": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/addressRef"
+              },
+              "minItems": 0,
+              "maxItems": 1000
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "serviceFields": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/serviceID"
+            },
+            "protocol": {
+              "enum": [
+                "tcp",
+                "udp",
+                "icmp",
+                "icmpv6",
+                "group"
+              ]
+            },
+            "ports": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 11
+              },
+              "minItems": 0,
+              "maxItems": 64
+            },
+            "types": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 32
+              },
+              "minItems": 0,
+              "maxItems": 32
+            },
+            "members": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/serviceRef"
+              },
+              "minItems": 0,
+              "maxItems": 1000
+            }
+          },
+          "required": [
+            "protocol"
+          ]
+        }
+      ]
+    },
+    "ruleFields": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/ruleID"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "action": {
+              "enum": [
+                "accept",
+                "drop",
+                "reject"
+              ]
+            },
+            "from": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/policyRef"
+              },
+              "minItems": 0,
+              "maxItems": 1000
+            },
+            "to": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/policyRef"
+              },
+              "minItems": 0,
+              "maxItems": 1000
+            },
+            "services": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/serviceRef"
+              },
+              "minItems": 0,
+              "maxItems": 1000
+            },
+            "log": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "enabled",
+            "action",
+            "from",
+            "to",
+            "services",
+            "log"
+          ]
+        }
+      ]
+    },
+    "addressStored": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/addressFields"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "required": [
+            "id"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "addressWrite": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/addressFields"
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "serviceStored": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/serviceFields"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "required": [
+            "id"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "serviceWrite": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/serviceFields"
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "ruleStored": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ruleFields"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "required": [
+            "id"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "ruleWrite": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ruleFields"
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "managementFields": {
+      "type": "object",
+      "properties": {
+        "segment": {
+          "$ref": "#/$defs/segmentRef"
+        },
+        "allowedSources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/addressRef"
+          },
+          "minItems": 0,
+          "maxItems": 1000
+        }
+      },
+      "required": [
+        "segment"
+      ],
+      "additionalProperties": false
+    },
+    "outboundFields": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "enum": [
+            "none",
+            "automatic"
+          ]
+        }
+      },
+      "required": [
+        "mode"
       ],
       "additionalProperties": false
     }
