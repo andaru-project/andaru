@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 )
 
@@ -244,7 +245,16 @@ func interactive(ctx context.Context, c takeoverClient, p proposal, timeout int,
 		}
 		return 1
 	}
-	run := func(f *huh.Form) error { return f.WithInput(stdin).WithOutput(stdout).RunWithContext(ctx) }
+	// A serial console reports a 0x0 size, which would leave the forms no room; assume the classic 80x24.
+	size := tea.WithFilter(func(_ tea.Model, msg tea.Msg) tea.Msg {
+		if s, ok := msg.(tea.WindowSizeMsg); ok && (s.Width == 0 || s.Height == 0) {
+			return tea.WindowSizeMsg{Width: 80, Height: 24}
+		}
+		return msg
+	})
+	run := func(f *huh.Form) error {
+		return f.WithProgramOptions(size).WithInput(stdin).WithOutput(stdout).RunWithContext(ctx) // WithProgramOptions replaces earlier options
+	}
 	a := defaultAnswers(p)
 	a.Timeout = timeout
 	for {

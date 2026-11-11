@@ -230,7 +230,7 @@ sudo andaru ctl takeover --accept-detected  # no questions: take over exactly wh
 ```
 
 1. **Detect.** The engine reads the files netplan generated and proposes one Ethernet link and segment per adapter, with its zone (`wan` for the adapter carrying the default route, `lan` for the others), addressing and DNS servers.
-2. **Ask.** Which adapters to keep (an adapter with an address cannot be left out), then per adapter its zone, IPv4 (DHCP, static addresses and gateway, or none) and IPv6 (none, SLAAC, DHCPv6, or a static IPv6 kept as detected), the host's DNS servers, and the confirmation timeout. The interface runs in a terminal; on the serial console use a terminal type such as `vt100`.
+2. **Ask.** Which adapters to keep (an adapter with an address cannot be left out), then per adapter its zone, IPv4 (DHCP, static addresses and gateway, or none) and IPv6 (none, SLAAC, DHCPv6, or a static IPv6 kept as detected), the host's DNS servers, and the confirmation timeout. It runs in any terminal, including the serial console; a console that reports no size is treated as 80×24.
 3. **Review.** The assistant shows, per adapter, what runs now and what will run, then the exact files and every finding, from a draft that saves nothing. **Back** is preselected; **Apply** is offered only when nothing would refuse the apply.
 4. **Apply.** The answers are saved, guarded by the saved version the proposal was made from, and applied as `andaru ctl apply network --takeover` would, with the rollback timer. Confirm from a new session as usual. From the save on, a dropped session no longer stops the assistant.
 

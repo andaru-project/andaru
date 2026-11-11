@@ -110,13 +110,20 @@ func (s *screen) press(keys ...string) {
 
 // runAssistant starts the assistant on a fresh pseudo-terminal and returns its screen and exit code.
 func runAssistant(t *testing.T, c *fakeClient) (*screen, <-chan int) {
+	return runAssistantSized(t, c, &pty.Winsize{Rows: 60, Cols: 200})
+}
+
+// runAssistantSized starts the assistant on a terminal of the given size; nil leaves it 0x0, as a serial console reports.
+func runAssistantSized(t *testing.T, c *fakeClient, size *pty.Winsize) (*screen, <-chan int) {
 	t.Setenv("TERM", "xterm-256color") // huh falls back to numbered prompts on a dumb terminal
 	master, tty, err := pty.Open()
 	if err != nil {
 		t.Skip("no pseudo-terminal:", err)
 	}
-	if err := pty.Setsize(master, &pty.Winsize{Rows: 60, Cols: 200}); err != nil {
-		t.Fatal(err)
+	if size != nil {
+		if err := pty.Setsize(master, size); err != nil {
+			t.Fatal(err)
+		}
 	}
 	s := &screen{t: t, master: master, stop: make(chan struct{}), stopped: make(chan struct{})}
 	go s.collect()
@@ -186,6 +193,17 @@ func TestAssistantAppliesExactlyTheDetectedBatch(t *testing.T) {
 	}
 	if c.head != "9" {
 		t.Fatalf("save guarded by %q, want the proposal's version 9", c.head)
+	}
+}
+
+func TestAssistantWorksOnATerminalWithoutSize(t *testing.T) {
+	c := &fakeClient{apply: applyReply{ID: "1", State: "awaiting_confirmation", Deadline: "d"}}
+	s, done := runAssistantSized(t, c, nil)
+	walk(s, len(acceptAll))
+	s.await("What now?")
+	s.press(down, down, enter)
+	if code := exit(t, done); code != 0 || !slices.Contains(c.calls, "save") {
+		t.Fatalf("exit %d, calls %v", code, c.calls)
 	}
 }
 
