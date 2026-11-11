@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -21,14 +23,16 @@ type RealizerFacts struct {
 	PPPoEPlugin  bool
 	// PPPDevice reports /dev/ppp; Debian cloud kernels ship without PPP.
 	PPPDevice bool
+	// ResolvedInCharge reports that systemd-resolved manages /etc/resolv.conf, so DNS= in a .network file is used.
+	ResolvedInCharge bool
 }
 
 // ReadRealizerFacts inspects the host without changing it.
 func ReadRealizerFacts() (RealizerFacts, error) {
-	return readRealizerFacts("/etc/systemd/network", "/run/systemd/network", "/usr/sbin/pppd", "/usr/lib/pppd/*/pppoe.so", "/dev/ppp")
+	return readRealizerFacts("/etc/systemd/network", "/run/systemd/network", "/usr/sbin/pppd", "/usr/lib/pppd/*/pppoe.so", "/dev/ppp", "")
 }
 
-func readRealizerFacts(etcDir, runDir, pppd, pluginGlob, device string) (RealizerFacts, error) {
+func readRealizerFacts(etcDir, runDir, pppd, pluginGlob, device, root string) (RealizerFacts, error) {
 	facts := RealizerFacts{ForeignFiles: []string{}}
 	for _, dir := range []string{etcDir, runDir} {
 		entries, err := os.ReadDir(dir)
@@ -60,7 +64,33 @@ func readRealizerFacts(etcDir, runDir, pppd, pluginGlob, device string) (Realize
 	exists := func(path string) bool { _, err := os.Stat(path); return err == nil }
 	plugins, _ := filepath.Glob(pluginGlob)
 	facts.PPPDaemon, facts.PPPoEPlugin, facts.PPPDevice = exists(pppd), len(plugins) > 0, exists(device)
+	facts.ResolvedInCharge = ResolvedInCharge(root)
 	return facts, nil
+}
+
+// ResolvedInCharge reports whether <root>/etc/resolv.conf, with every symbolic link followed inside root,
+// is a file systemd-resolved maintains under /run. networkd only hands DNS servers to resolved; nothing else
+// reads them. resolved's static file under /usr/lib exists whether or not resolved runs, so it does not count.
+func ResolvedInCharge(root string) bool {
+	path := "/etc/resolv.conf"
+	for range 8 {
+		info, err := os.Lstat(root + path)
+		if err != nil {
+			return false
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			return info.Mode().IsRegular() && strings.HasPrefix(path, "/run/systemd/resolve/")
+		}
+		target, err := os.Readlink(root + path)
+		if err != nil {
+			return false
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(path), target)
+		}
+		path = filepath.Clean(target)
+	}
+	return false
 }
 
 // Managed is a link systemd-networkd configures and the file it took the configuration from.
@@ -111,7 +141,7 @@ type Baseline struct {
 	BootUnit bool
 	// StrayYAML is netplan configuration outside /etc/netplan, which a takeover would not move away.
 	StrayYAML []string
-	// StaticDNS lists netplan-generated .network files that set DNS= or Domains=, which Andaru cannot reproduce yet.
+	// StaticDNS lists netplan-generated .network files that set DNS= or Domains=; a takeover must declare DNS for their interfaces.
 	StaticDNS []string
 }
 
@@ -156,4 +186,46 @@ func readBaseline(root string) (Baseline, error) {
 	slices.Sort(b.StrayYAML)
 	slices.Sort(b.StaticDNS)
 	return b, nil
+}
+
+var resolvedLink = regexp.MustCompile(`^Link \d+ \((.+)\):(.*)$`)
+
+// ParseResolvedDNS reads `resolvectl dns`: the servers systemd-resolved uses per interface, in order.
+// The Global line is ignored: Andaru configures servers per link only. A server in a form Andaru never
+// writes (a port, a TLS name) becomes the zero Addr: it equals no declared server, and it cannot spoil
+// the reading of another link.
+func ParseResolvedDNS(data []byte) (map[string][]netip.Addr, error) {
+	servers := map[string][]netip.Addr{}
+	// current is the interface whose list is being read; "" inside the global list, "\x00" before any header.
+	current := "\x00"
+	for line := range strings.SplitSeq(string(data), "\n") {
+		fields := line
+		switch {
+		case strings.TrimSpace(line) == "":
+			continue
+		case strings.HasPrefix(line, "Global:"):
+			current = ""
+			continue
+		case line[0] == ' ' || line[0] == '\t':
+			// resolvectl wraps a long list onto indented lines.
+			if current == "\x00" {
+				return nil, fmt.Errorf("unexpected resolvectl line %q", line)
+			}
+		default:
+			m := resolvedLink.FindStringSubmatch(line)
+			if m == nil {
+				return nil, fmt.Errorf("unexpected resolvectl line %q", line)
+			}
+			current, fields = m[1], m[2]
+			servers[current] = []netip.Addr{}
+		}
+		if current == "" {
+			continue
+		}
+		for _, field := range strings.Fields(fields) {
+			a, _ := netip.ParseAddr(field)
+			servers[current] = append(servers[current], a)
+		}
+	}
+	return servers, nil
 }

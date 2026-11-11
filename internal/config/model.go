@@ -78,9 +78,16 @@ type ipv6 struct {
 	SubnetID            string         `json:"subnetId,omitempty"`
 	RA                  *advertisement `json:"ra,omitempty"`
 }
+
+// dns is what the host itself asks; it serves no client. Order is the order servers are tried in.
+type dns struct {
+	Servers       []string `json:"servers"`
+	SearchDomains []string `json:"searchDomains,omitempty"`
+}
 type addressing struct {
 	IPv4 ipv4 `json:"ipv4"`
 	IPv6 ipv6 `json:"ipv6"`
+	DNS  *dns `json:"dns,omitempty"`
 }
 type segment struct {
 	identity

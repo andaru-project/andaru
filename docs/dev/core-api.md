@@ -166,6 +166,7 @@ What is rendered:
 | `UNSUPPORTED_COMBINATION` | error or warning | A PPPoE segment may use IPv4 `ppp`/`none` and IPv6 `none`/`slaac`/`dhcp6`, at least one of them, without RA. A PPPoE link with no segment is left out (warning). |
 | `DEPENDENCY_UNAVAILABLE` | warning | Something was left out because a link it needs is missing, ambiguous or disabled. A bridge or bond keeps its remaining members. |
 | `RA_PREFIX_UNSUPPORTED` | warning | Router advertisements were requested where nothing can be announced. |
+| `DNS_NOT_APPLIED` | warning | A segment declares DNS servers, but this host's `/etc/resolv.conf` is not managed by systemd-resolved, so they are saved and not used. |
 
 ### Trying a PPPoE line by hand
 
@@ -207,10 +208,29 @@ What happens, in order:
 | --- | --- |
 | `WOULD_UNCONFIGURE` | A physical interface with an address is not configured by the saved configuration. Declare it as an enabled Ethernet link with a segment. |
 | `TAKEOVER_MISMATCH` | netplan still configures the host and `--takeover` was not given, or it was given with nothing to take over. |
-| `TAKEOVER_UNSUPPORTED_BASELINE` | The host is not a plain netplan-on-networkd host: ifupdown is installed, netplan YAML lives outside `/etc/netplan`, a non-netplan network file exists, or netplan set static DNS. |
+| `TAKEOVER_UNSUPPORTED_BASELINE` | The host is not a plain netplan-on-networkd host: ifupdown is installed, netplan YAML lives outside `/etc/netplan`, a non-netplan network file exists, netplan created a bridge, bond or VLAN, or netplan set DNS servers and the saved configuration declares none for that interface. |
 | `APPLY_UNSUPPORTED` | PPPoE links, delegated prefixes and router advertisements wait for the firewall. |
 | `NETDEV_CHANGE_UNSUPPORTED` | An existing VLAN, bridge or bond would change. Remove it in one apply and add it again in the next. |
 | `BOOT_UNIT_DISABLED` | `andaru-network-boot.service` is not enabled, so a confirmed configuration would not return after a reboot. |
+
+### Host DNS servers
+
+One segment may say which DNS servers the firewall host itself asks, as netplan's `nameservers:` does. Design and limits: [static DNS servers for the host](../superpowers/specs/2026-11-11-static-host-dns-design.md).
+
+```json
+"addressing": {
+  "ipv4": {"mode": "static", "addresses": ["192.0.2.10/24"], "gateway": "192.0.2.1"},
+  "ipv6": {"mode": "none"},
+  "dns": {"servers": ["192.0.2.53", "2001:db8::53"], "searchDomains": ["example.org"]}
+}
+```
+
+- `servers` are tried in the order given; `searchDomains` is optional. **Only one segment may declare `dns`.**
+- On that segment the declared servers replace any offered by DHCP or router advertisements. Without `dns`, the host uses the offered ones.
+- An apply checks that systemd-resolved reports exactly these servers, in order, for the interface; otherwise it restores the previous files. It does not check that the servers answer, and it does not look at servers set globally in `resolved.conf` or on other interfaces, which resolved also asks.
+- This is the host's own resolver only. It gives LAN clients nothing.
+- It works where systemd-resolved manages `/etc/resolv.conf` (Debian cloud images). Elsewhere the preview warns with `DNS_NOT_APPLIED` and the host keeps using its `resolv.conf`.
+- To take over a netplan host that sets DNS servers, declare `dns` on the segment of the same interface. A netplan file that sets DNS for several interfaces at once cannot be taken over yet.
 
 ### Takeover
 
@@ -221,7 +241,7 @@ Boot needs `andaru-network-boot.service` ([unit](../../packaging/systemd/andaru-
 What changes for the host after a takeover:
 
 - On cloud images the interface name changes at the next reboot (`eth0` becomes `ens18`): netplan was pinning it. Andaru matches by permanent MAC, so the configuration follows.
-- The host keeps DHCP-provided DNS servers. NTP servers and hostname from DHCP are ignored.
+- The host uses the DNS servers you declare, or the DHCP-provided ones when you declare none. NTP servers and hostname from DHCP are ignored.
 - `network-online.target` no longer waits for an uplink.
 - An apply interrupts IPv6 on the touched interface for about two seconds; IPv4 was uninterrupted on the lab.
 
@@ -417,3 +437,17 @@ After the adversarial review, code commit `da58646` (SHA-256 `ba401579ed371c5dcc
 Afterwards the VM was shut down, rolled back to the pre-takeover snapshot and snapshotted again while stopped as `base-netplan-20261111` (disk only), so the next qualification starts from the netplan baseline. Lab rule: snapshot a stopped VM at its base state, and shut down, roll back and start to reset it when testing is done.
 
 After the bot reviews, code commit `7e4b94f` (SHA-256 `06a3ad873a3eef6bcabc2a08dc921daeef414b7acb9eef56f9a45195cd18d4d2`) was installed on the VM reset to `base-netplan-20261111`. A takeover with a 30-second timeout stayed live when its rollback was run by hand before the deadline (the command exited non-zero), and the timer rolled it back afterwards. A second takeover was confirmed from a new session, `pointers.json` recorded `"takeover":true`, and the VM rebooted in 6.3 s onto Andaru's file with DNS resolving. The VM was then reset to the base snapshot again.
+
+### Static host DNS Debian lab qualification
+
+On 2026-11-11 the CGO-disabled amd64 build of code commit `40affb6` (SHA-256 `aaff74d3adcff79f81759501fa40ec72a3ae2686eb2f3decb9a94d4d918cb042`) was installed on VM 114. "Servers" below is the output of `resolvectl dns` for the interface; a 5-per-second ping ran during each takeover.
+
+| Step | Result |
+| --- | --- |
+| DHCP uplink (snapshot `base-netplan-20261111`), `dns` declared as the two lab servers in the opposite order to the DHCP-offered one, takeover with a 30-second timeout | 0 of 100 pings lost. Servers were the declared ones in declared order; the search domain was set; a name resolved. After the timer rollback the servers were the DHCP-offered ones and the search domain was gone. |
+| VM switched to a Proxmox cloud-init static address, gateway, two name servers and a search domain; snapshotted while stopped as `base-netplan-static-20261111` | netplan's generated file carries `Address=`, `DNS=`, `Domains=` and a default route. |
+| Static address and gateway declared, no `dns`, `--takeover` | Refused: `TAKEOVER_UNSUPPORTED_BASELINE` on netplan's file, telling the operator to declare `dns` on the segment of `eth0`. |
+| `dns` declared with the servers in the opposite order to netplan's, takeover with a 30-second timeout | 0 of 100 pings lost. Address and static default route kept; servers were the declared ones in declared order; a name resolved. After the timer rollback netplan's files and netplan's server order were back and a name resolved. |
+| Same takeover confirmed from a new session, then rebooted | Same address on `ens18`, servers as declared, a name resolved, `/etc/netplan` empty, boot in 6.0 s. |
+
+Not run on the lab: a host where systemd-resolved does not manage `/etc/resolv.conf` (unit-tested: the check is skipped and the preview warns). The VM was reset to `base-netplan-static-20261111` afterwards. On this ZFS-backed VM only the most recent snapshot can be rolled back to, so the older DHCP base `base-netplan-20261111` is now reachable only by cloning from it.

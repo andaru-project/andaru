@@ -36,7 +36,7 @@ This follows the network preview ([PR #27](https://github.com/andaru-project/and
 | In this slice | Later slices |
 | --- | --- |
 | Live generations on disk with confirmed / last-known-good pointers | Firewall, DHCP, DNS and system areas; cross-area checks |
-| `andaru ctl apply network`, with `--takeover` for the netplan baseline | ifupdown baseline; baselines with static DNS (both refused with a clear message) |
+| `andaru ctl apply network`, with `--takeover` for the netplan baseline | ifupdown baseline (refused with a clear message) |
 | Rollback timer armed first; confirm; early rollback | Forwarding: RA, prefix delegation and PPPoE are refused until a fail-closed filter exists |
 | Boot oneshot that copies the confirmed generation, with fallback | Management election and lockout analysis; setup wizard, administrator, TLS (#14) |
 | Lab proof including reboots and an engine kill | Changing an existing virtual device; generation pruning; idempotency keys |
@@ -145,12 +145,12 @@ The request is synchronous. If the client disconnects, the work continues and `G
 
 ### Takeover
 
-Recognised baseline in this slice: **netplan on networkd, DHCP for DNS.** All of:
+Recognised baseline in this slice: **netplan on networkd.** All of:
 
 - `/usr/sbin/netplan` exists and `/sbin/ifup` does not;
 - netplan YAML exists only in `/etc/netplan`, not in `/run/netplan`, `/lib/netplan` or `/usr/lib/netplan`;
 - every foreign file is `/run/systemd/network/10-netplan-*`, with no drop-ins, and `/etc/systemd/network` is empty;
-- no baseline `.network` file sets `DNS=` or `Domains=`. Andaru cannot reproduce static DNS until the DNS area exists, and the host would be left without a resolver.
+- a baseline `.network` file that sets `DNS=` or `Domains=` is accepted only when the saved configuration declares DNS servers for that interface ([static DNS servers for the host](2026-11-11-static-host-dns-design.md)); otherwise the host would be left without a resolver.
 
 Anything else is `TAKEOVER_UNSUPPORTED_BASELINE`, naming what was found.
 
@@ -249,7 +249,7 @@ The lab is left taken over and confirmed, as the baseline for the next slices.
 
 - **IPv6 sessions are interrupted for about 2 seconds** by any apply that touches an interface's file. IPv4 was hitless in the probe; that is one DHCP topology on virtio, not a guarantee.
 - **Confirmation over a new connection is the operator's assertion.** Verification checks IPv4 addresses and the IPv4 default route only; a change that keeps both but breaks reachability is caught by the timer, not by the engine.
-- **Only the netplan-on-networkd baseline with DHCP-provided DNS.** ifupdown hosts and static-DNS cloud hosts are refused.
+- **Only the netplan-on-networkd baseline.** ifupdown hosts are refused, and so are netplan hosts with static DNS unless the saved configuration declares DNS servers.
 - **No forwarding, no PPPoE, no change to an existing VLAN, bridge or bond** can be applied yet, so this cannot bring up your WAN.
 - **Behaviour changes from netplan:** NTP servers and hostname from DHCP are ignored, `network-online.target` no longer waits for an uplink, and the interface name changes at the first reboot on cloud images.
 - **Not tested:** a separate `/var` filesystem (the unit declares the mount dependency), and any baseline other than the lab's.

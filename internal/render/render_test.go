@@ -21,7 +21,7 @@ var testdata embed.FS
 
 var update = flag.Bool("update", false, "rewrite golden files")
 
-var allFacts = host.RealizerFacts{PPPDaemon: true, PPPoEPlugin: true, PPPDevice: true}
+var allFacts = host.RealizerFacts{PPPDaemon: true, PPPoEPlugin: true, PPPDevice: true, ResolvedInCharge: true}
 
 type observed struct{ Name, Kind, MAC string }
 
@@ -352,5 +352,55 @@ func TestLinkLocalAddressIsNotAnnounced(t *testing.T) {
 	network := fileEnding(t, render(t, in), "br000000040000.network").Content
 	if strings.Contains(network, "fe80::/64") || !strings.Contains(network, "Prefix=2001:db8:0:1::/64") || !strings.Contains(network, "Address=fe80::1/64") {
 		t.Fatalf("a link-local prefix must not be advertised:\n%s", network)
+	}
+}
+
+func TestDeclaredDNSReplacesOffered(t *testing.T) {
+	result := render(t, fixture(t, "dhcp-dns"))
+	declaring, other := fileEnding(t, result, "ens18.network").Content, fileEnding(t, result, "ens19.network").Content
+	if !strings.Contains(declaring, "\nDNS=192.0.2.53\n") || strings.Contains(declaring, "\nDomains=") || strings.Contains(declaring, "UseDNS=yes") || strings.Count(declaring, "UseDNS=no") != 3 {
+		t.Fatalf("declared servers must replace offered ones in every section:\n%s", declaring)
+	}
+	// A second uplink keeps contributing what its DHCP server offers.
+	if strings.Contains(other, "DNS=192") || !strings.Contains(other, "UseDNS=yes") || strings.Contains(other, "UseDNS=no") {
+		t.Fatalf("a segment without declared DNS changed:\n%s", other)
+	}
+}
+
+func TestDNSOrderIsDeclared(t *testing.T) {
+	network := fileEnding(t, render(t, fixture(t, "static-dns")), "ens18.network").Content
+	want := "Address=192.0.2.10/24\nGateway=192.0.2.1\nDNS=192.0.2.53\nDNS=2001:db8::53\nDomains=b.example a.example\n"
+	if !strings.Contains(network, want) {
+		t.Fatalf("want, in this order:\n%s\ngot:\n%s", want, network)
+	}
+}
+
+func TestDNSOnUnrealisableLink(t *testing.T) {
+	in := fixture(t, "static-dns")
+	in.Links = nil
+	for _, f := range render(t, in).Files {
+		if strings.Contains(f.Content, "DNS=") {
+			t.Fatalf("%s names DNS servers for an interface that does not exist:\n%s", f.Path, f.Content)
+		}
+	}
+}
+
+func TestDNSNotAppliedFinding(t *testing.T) {
+	in := fixture(t, "static-dns")
+	in.Facts.ResolvedInCharge = false
+	result := render(t, in)
+	want := Finding{"warning", "DNS_NOT_APPLIED", "/segments/0/addressing/dns", "This host's /etc/resolv.conf is not managed by systemd-resolved, so these servers are saved but not used."}
+	if !slices.Equal(result.Findings, []Finding{want}) || !result.Realizable {
+		t.Fatalf("findings = %+v, realizable = %v", result.Findings, result.Realizable)
+	}
+	if got := render(t, fixture(t, "static-dns")).Findings; len(got) != 0 {
+		t.Fatalf("resolved is in charge, yet: %+v", got)
+	}
+	in = fixture(t, "ethernet-uplink")
+	in.Facts.ResolvedInCharge = false
+	for _, f := range render(t, in).Findings {
+		if f.Code == "DNS_NOT_APPLIED" {
+			t.Fatal("a configuration that declares no DNS was warned about it")
+		}
 	}
 }

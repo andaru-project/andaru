@@ -54,7 +54,32 @@ func applyFindings(in gateInput) []render.Finding {
 			baseline(path, "netplan configuration outside /etc/netplan would keep generating network files after the takeover.")
 		}
 		for _, path := range in.Baseline.StaticDNS {
-			baseline(path, "This file sets DNS servers or search domains, which Andaru cannot reproduce yet; the host would lose its resolver.")
+			// netplan names its file after its own id, so the interfaces come from networkd's binding, never from the name.
+			var bound, missing []string
+			for _, m := range in.Managed {
+				if m.NetworkFile != path {
+					continue
+				}
+				bound = append(bound, m.Name)
+				declares := slices.ContainsFunc(in.Result.Files, func(f render.File) bool {
+					return f.Path == networkDir+"50-andaru-"+m.Name+".network" && (strings.HasPrefix(f.Real(), "DNS=") || strings.Contains(f.Real(), "\nDNS="))
+				})
+				if !declares {
+					missing = append(missing, m.Name)
+				}
+			}
+			if len(bound) > 0 && len(missing) == 0 {
+				continue
+			}
+			switch {
+			case len(bound) > 1:
+				// Only one segment may declare DNS, so a file shared by several interfaces can never be satisfied.
+				baseline(path, "This file sets DNS servers or search domains for several interfaces ("+strings.Join(bound, ", ")+"), which cannot be taken over yet.")
+			case len(bound) == 0:
+				baseline(path, "This file sets DNS servers or search domains but configures no interface now; the host could lose its resolver.")
+			default:
+				baseline(path, `This file sets DNS servers or search domains. Declare "dns" on the segment of `+bound[0]+`; without it the host would lose its resolver.`)
+			}
 		}
 	}
 	for _, path := range in.Facts.ForeignFiles {

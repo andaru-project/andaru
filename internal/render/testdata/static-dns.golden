@@ -1,0 +1,20 @@
+### /run/systemd/network/50-andaru-ens18.network 0644 secret=false sources=/links/0,/segments/0
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:01
+
+[Link]
+RequiredForOnline=no
+MTUBytes=1500
+
+[Network]
+LLDP=no
+Address=192.0.2.10/24
+Gateway=192.0.2.1
+DNS=192.0.2.53
+DNS=2001:db8::53
+Domains=b.example a.example
+LinkLocalAddressing=no
+IPv6AcceptRA=no
+
+### resolved lnk_00000001-0000-4000-8000-000000000001 -> ens18
+### realizable=true

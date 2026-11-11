@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -171,6 +172,7 @@ func validateTopology(d *declaration) []FieldError {
 	hosts := map[string]bool{}
 	prefixes := map[string][]netip.Prefix{}
 	delegations := map[string]bool{}
+	firstDNS := ""
 	for i := range d.Segments {
 		s := &d.Segments[i]
 		p := fmt.Sprintf("/segments/%d", i)
@@ -214,6 +216,41 @@ func validateTopology(d *declaration) []FieldError {
 					bad(p+"/addressing/ipv6/subnetId", "Delegated subnet is already assigned.")
 				}
 				delegations[key] = true
+			}
+		}
+		if dns := s.Addressing.DNS; dns != nil {
+			path := p + "/addressing/dns"
+			if s.Addressing.IPv4.Mode == "none" && a6.Mode == "none" {
+				bad(path, "A segment without addresses cannot reach DNS servers.")
+			}
+			// systemd-resolved asks every link that has servers, so two segments would split the host's lookups.
+			// Both declarers are named: a batch may have edited either one.
+			if firstDNS != "" {
+				bad(path, "Only one segment may declare DNS servers.")
+				bad(firstDNS, "Only one segment may declare DNS servers.")
+			} else {
+				firstDNS = path
+			}
+			seen := map[netip.Addr]bool{}
+			for j, raw := range dns.Servers {
+				a, e := netip.ParseAddr(raw)
+				switch {
+				case e != nil || a.Zone() != "" || a.Is4In6() || !validUnicast(a) || a.IsLinkLocalUnicast():
+					bad(fmt.Sprintf("%s/servers/%d", path, j), "Invalid DNS server address.")
+				case seen[a]:
+					bad(fmt.Sprintf("%s/servers/%d", path, j), "DNS server is listed twice.")
+				default:
+					seen[a] = true
+					dns.Servers[j] = a.String()
+				}
+			}
+			for j, name := range dns.SearchDomains {
+				// The pattern admits no whitespace, so a name can never start a new line in a rendered file.
+				if !searchDomain.MatchString(name) {
+					bad(fmt.Sprintf("%s/searchDomains/%d", path, j), "Invalid search domain.")
+				} else if slices.Contains(dns.SearchDomains[:j], name) {
+					bad(fmt.Sprintf("%s/searchDomains/%d", path, j), "Search domain is listed twice.")
+				}
 			}
 		}
 		for family, addresses := range map[int][]string{4: s.Addressing.IPv4.Addresses, 6: a6.Addresses} {
@@ -285,6 +322,9 @@ func hostKey(a netip.Addr, owner string) string {
 	}
 	return a.String()
 }
+
+var searchDomain = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$`)
+
 func validUnicast(a netip.Addr) bool {
 	return a.IsValid() && !a.IsUnspecified() && !a.IsLoopback() && !a.IsMulticast() && !(a.Is4() && a.As4() == [4]byte{255, 255, 255, 255})
 }
