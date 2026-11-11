@@ -283,7 +283,10 @@ func TestAssistantHelper(t *testing.T) {
 
 func TestClosingTheTerminalWritesNothing(t *testing.T) {
 	marks := filepath.Join(t.TempDir(), "marks")
-	cmd := exec.Command(os.Args[0], "-test.run=^TestAssistantHelper$")
+	// The deadline kills a helper that ignores the hangup, so a regression fails here instead of stalling the suite.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestAssistantHelper$")
 	cmd.Env = append(os.Environ(), "ANDARU_ASSISTANT_MARKS="+marks, "TERM=xterm-256color")
 	master, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 60, Cols: 200})
 	if err != nil {
@@ -291,6 +294,15 @@ func TestClosingTheTerminalWritesNothing(t *testing.T) {
 	}
 	s := &screen{t: t, master: master, stop: make(chan struct{}), stopped: make(chan struct{})}
 	go s.collect()
+	t.Cleanup(func() {
+		select {
+		case <-s.stop:
+		default:
+			s.hangup()
+		}
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
 	walk(s, len(acceptAll))
 	s.await("What now?")
 	s.hangup()
