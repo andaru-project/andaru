@@ -120,11 +120,12 @@ func ReadBaseline() (Baseline, error) { return readBaseline("") }
 
 func readBaseline(root string) (Baseline, error) {
 	exists := func(path string) bool { _, err := os.Stat(root + path); return err == nil }
-	// A masked unit is a link to /dev/null, which exists but is no unit file.
+	// A masked unit is a link to /dev/null, which exists but is no unit file; the mask may also sit beside the wants link.
 	wanted, err := os.Stat(root + "/etc/systemd/system/sysinit.target.wants/andaru-network-boot.service")
+	override, maskErr := os.Stat(root + "/etc/systemd/system/andaru-network-boot.service")
 	b := Baseline{
 		Netplan: exists("/usr/sbin/netplan"), Ifupdown: exists("/sbin/ifup"),
-		BootUnit:  err == nil && wanted.Mode().IsRegular(),
+		BootUnit:  err == nil && wanted.Mode().IsRegular() && (maskErr != nil || override.Mode().IsRegular()),
 		StrayYAML: []string{}, StaticDNS: []string{},
 	}
 	for _, dir := range []string{"/run/netplan", "/lib/netplan", "/usr/lib/netplan"} {

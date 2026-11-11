@@ -117,6 +117,19 @@ func TestReadBaseline(t *testing.T) {
 	if got, _ := readBaseline(root); got.BootUnit {
 		t.Fatal("a masked boot unit counted as enabled")
 	}
+	// Or the mask sits beside a wants link that still points at the vendor unit.
+	if err := os.Remove(wanted); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(wanted, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/dev/null", filepath.Join(root, "etc/systemd/system/andaru-network-boot.service")); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := readBaseline(root); got.BootUnit {
+		t.Fatal("a unit masked in /etc/systemd/system counted as enabled")
+	}
 	if got, _ := readBaseline(root); !got.Ifupdown {
 		t.Fatal("ifupdown not seen")
 	}
