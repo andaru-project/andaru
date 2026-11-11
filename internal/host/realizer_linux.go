@@ -196,18 +196,35 @@ var resolvedLink = regexp.MustCompile(`^Link \d+ \((.+)\):(.*)$`)
 // the reading of another link.
 func ParseResolvedDNS(data []byte) (map[string][]netip.Addr, error) {
 	servers := map[string][]netip.Addr{}
-	for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
-		if line == "" || strings.HasPrefix(line, "Global:") {
+	// current is the interface whose list is being read; "" inside the global list, "\x00" before any header.
+	current := "\x00"
+	for line := range strings.SplitSeq(string(data), "\n") {
+		fields := line
+		switch {
+		case strings.TrimSpace(line) == "":
+			continue
+		case strings.HasPrefix(line, "Global:"):
+			current = ""
+			continue
+		case line[0] == ' ' || line[0] == '\t':
+			// resolvectl wraps a long list onto indented lines.
+			if current == "\x00" {
+				return nil, fmt.Errorf("unexpected resolvectl line %q", line)
+			}
+		default:
+			m := resolvedLink.FindStringSubmatch(line)
+			if m == nil {
+				return nil, fmt.Errorf("unexpected resolvectl line %q", line)
+			}
+			current, fields = m[1], m[2]
+			servers[current] = []netip.Addr{}
+		}
+		if current == "" {
 			continue
 		}
-		m := resolvedLink.FindStringSubmatch(line)
-		if m == nil {
-			return nil, fmt.Errorf("unexpected resolvectl line %q", line)
-		}
-		servers[m[1]] = []netip.Addr{}
-		for _, field := range strings.Fields(m[2]) {
+		for _, field := range strings.Fields(fields) {
 			a, _ := netip.ParseAddr(field)
-			servers[m[1]] = append(servers[m[1]], a)
+			servers[current] = append(servers[current], a)
 		}
 	}
 	return servers, nil

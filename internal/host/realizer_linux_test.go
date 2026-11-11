@@ -220,3 +220,26 @@ func TestParseResolvedDNS(t *testing.T) {
 		}
 	}
 }
+
+//go:embed testdata/resolvectl-dns-wrapped.txt
+var resolvectlWrapped []byte
+
+// resolvectl wraps a long server list onto indented lines, at 80 columns when it has no terminal.
+func TestParseResolvedDNSWrapped(t *testing.T) {
+	got, err := ParseResolvedDNS(resolvectlWrapped)
+	var want []netip.Addr
+	for _, s := range []string{"2001:db8:1111:2222:3333:4444:5555:1", "2001:db8:1111:2222:3333:4444:5555:2", "2001:db8:1111:2222:3333:4444:5555:3", "2001:db8:1111:2222:3333:4444:5555:4", "192.0.2.53"} {
+		want = append(want, netip.MustParseAddr(s))
+	}
+	if err != nil || !slices.Equal(got["d0"], want) || len(got["eth0"]) != 2 {
+		t.Fatalf("servers = %v, %v", got, err)
+	}
+	// A wrapped global list belongs to no interface.
+	got, err = ParseResolvedDNS([]byte("Global: 192.0.2.1\n        192.0.2.2\nLink 2 (eth0): 192.0.2.53\n"))
+	if err != nil || len(got) != 1 || !slices.Equal(got["eth0"], []netip.Addr{netip.MustParseAddr("192.0.2.53")}) {
+		t.Fatalf("servers = %v, %v", got, err)
+	}
+	if _, err := ParseResolvedDNS([]byte("        192.0.2.2\n")); err == nil {
+		t.Fatal("a continuation with nothing to continue was accepted")
+	}
+}
