@@ -909,4 +909,13 @@ func TestFilterObjectsPersist(t *testing.T) {
 	if r.Name != "a" || list.Items[0].Version == "" {
 		t.Fatalf("first rule %+v version %q", r, list.Items[0].Version)
 	}
+	// The declaration preview and apply render from carries the filter too.
+	in, e := s.RealizationInput(ctx, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var d declaration
+	if e = json.Unmarshal(in.Value, &d); e != nil || len(d.Policy.Forward) != 2 || d.NAT.Outbound.Mode != "automatic" {
+		t.Fatalf("realization input lost the filter: %s %v", in.Value, e)
+	}
 }

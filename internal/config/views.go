@@ -104,7 +104,11 @@ func publicSnapshot(s savedState) (SnapshotView, error) {
 		Links         []json.RawMessage `json:"links"`
 		Segments      []segment         `json:"segments"`
 		Zones         []zone            `json:"zones"`
-	}{s.Config.SchemaVersion, links, s.Config.Segments, s.Config.Zones}
+		Objects       objectSet         `json:"objects,omitzero"`
+		Policy        policy            `json:"policy,omitzero"`
+		NAT           natSettings       `json:"nat,omitzero"`
+		Management    *management       `json:"management,omitempty"`
+	}{s.Config.SchemaVersion, links, s.Config.Segments, s.Config.Zones, s.Config.Objects, s.Config.Policy, s.Config.NAT, s.Config.Management}
 	raw, e := json.Marshal(d)
 	if e != nil {
 		return SnapshotView{}, e
