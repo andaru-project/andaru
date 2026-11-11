@@ -1160,6 +1160,9 @@
           },
           "minItems": 1,
           "maxItems": 100
+        },
+        "expectedSavedVersion": {
+          "$ref": "#/$defs/version"
         }
       },
       "required": [

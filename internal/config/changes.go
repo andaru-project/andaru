@@ -20,9 +20,11 @@ type Operation struct {
 	Value           json.RawMessage `json:"value,omitempty"`
 }
 type Changes struct {
-	Operations []Operation `json:"operations"`
-	single     bool
-	wire       any
+	// ExpectedSavedVersion guards the whole batch: it is refused if the saved head moved.
+	ExpectedSavedVersion *Version    `json:"expectedSavedVersion,omitempty"`
+	Operations           []Operation `json:"operations"`
+	single               bool
+	wire                 any
 }
 type Current struct {
 	Kind       string          `json:"kind"`
@@ -173,6 +175,14 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 	var empty preparedChange
 	if len(input.Operations) == 0 || len(input.Operations) > 100 {
 		return empty, fault("VALIDATION_FAILED", "/operations", "Expected 1 to 100 operations.")
+	}
+	if v := input.ExpectedSavedVersion; v != nil {
+		if _, e := ParseVersion(string(*v)); e != nil {
+			return empty, fault("VALIDATION_FAILED", "/expectedSavedVersion", "Invalid saved version.")
+		}
+		if *v != current.Version {
+			return empty, fault("PRECONDITION_FAILED", "/expectedSavedVersion", "The saved configuration changed since this batch was built.")
+		}
 	}
 	if current.configBody == nil {
 		b, e := canonical(current.Config)
