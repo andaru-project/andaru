@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -38,7 +39,7 @@ type draft struct {
 	SavedVersion config.Version
 	Files        []struct{ Path, Mode, Content string }
 	Findings     []finding
-	// ApplyFindings is what the apply gates would refuse.
+	// ApplyFindings is what the apply gates would refuse, including the preview's errors that a takeover does not resolve.
 	ApplyFindings []finding
 }
 
@@ -93,16 +94,19 @@ func findingLine(f finding) string {
 	return line + ": " + printable(f.Message)
 }
 
-func errorFindings(lists ...[]finding) []finding {
+func errorFindings(list []finding) []finding {
 	var out []finding
-	for _, list := range lists {
-		for _, f := range list {
-			if f.Severity == "error" {
-				out = append(out, f)
-			}
+	for _, f := range list {
+		if f.Severity == "error" {
+			out = append(out, f)
 		}
 	}
 	return out
+}
+
+// shownFindings are the gates' refusals and the preview's warnings; the preview's errors reach the gates.
+func (d draft) shownFindings() []finding {
+	return append(slices.DeleteFunc(slices.Clone(d.Findings), func(f finding) bool { return f.Severity == "error" }), d.ApplyFindings...)
 }
 
 type takeoverClient interface {
@@ -130,7 +134,7 @@ func commit(ctx context.Context, c takeoverClient, p proposal, ops []config.Oper
 		fmt.Fprintln(out, err)
 		return 1
 	}
-	if refused := errorFindings(d.Findings, d.ApplyFindings); len(refused) > 0 {
+	if refused := errorFindings(d.ApplyFindings); len(refused) > 0 {
 		fmt.Fprintln(out, "This cannot be applied:")
 		for _, f := range refused {
 			fmt.Fprintln(out, "  "+findingLine(f))

@@ -222,7 +222,7 @@ func review(out io.Writer, s *formState, a answers, d draft, err error) {
 			fmt.Fprintln(out, printable(strings.TrimSuffix(line, "\n")))
 		}
 	}
-	for _, f := range append(slices.Clone(d.Findings), d.ApplyFindings...) {
+	for _, f := range d.shownFindings() {
 		fmt.Fprintln(out, "  "+findingLine(f))
 	}
 }
@@ -262,7 +262,7 @@ func interactive(ctx context.Context, c takeoverClient, p proposal, timeout int,
 		review(stdout, s, a, d, err)
 		// Back is preselected: a stray Enter never applies.
 		choice := "back"
-		allowed := err == nil && len(errorFindings(d.Findings, d.ApplyFindings)) == 0
+		allowed := err == nil && len(errorFindings(d.ApplyFindings)) == 0
 		if err := run(s.reviewForm(&choice, allowed)); err != nil {
 			fmt.Fprintln(stdout, "Nothing was changed.")
 			return 1

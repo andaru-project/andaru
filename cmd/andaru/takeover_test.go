@@ -139,12 +139,14 @@ func TestCommit(t *testing.T) {
 		calls     []string
 		outputHas string
 	}{
-		"live":             {fakeClient{apply: live}, 0, []string{"applies", "draft", "save", "apply 10"}, "andaru ctl applies confirm 1"},
-		"pending apply":    {fakeClient{pending: "4"}, 1, []string{"applies"}, "Apply 4 is awaiting confirmation"},
-		"draft refused":    {fakeClient{draft: draft{ApplyFindings: []finding{{Severity: "error", Code: "WOULD_UNCONFIGURE", Path: "eth0", Message: "x"}}}}, 1, []string{"applies", "draft"}, "WOULD_UNCONFIGURE"},
-		"head moved":       {fakeClient{saveErr: &apiError{Status: 412, Code: "PRECONDITION_FAILED"}}, 1, []string{"applies", "draft", "save"}, "saved meanwhile"},
-		"apply refused":    {fakeClient{apply: live, applyErr: &apiError{Status: 422, Code: "APPLY_REFUSED"}}, 1, []string{"applies", "draft", "save", "apply 10"}, "andaru ctl apply network --saved-version 10 --takeover"},
-		"activation fails": {fakeClient{apply: applyReply{ID: "1", State: "failed", Reason: "eth0 lost its IPv4 address", Files: []json.RawMessage{}}}, 1, []string{"applies", "draft", "save", "apply 10"}, "saved as version 10 but not live"},
+		"live": {fakeClient{apply: live}, 0, []string{"applies", "draft", "save", "apply 10"}, "andaru ctl applies confirm 1"},
+		// The preview flags netplan's files; the apply gates know a takeover replaces them.
+		"netplan files replaced": {fakeClient{apply: live, draft: draft{Findings: []finding{{Severity: "error", Code: "FOREIGN_CONFIGURATION", Message: "x"}}}}, 0, []string{"applies", "draft", "save", "apply 10"}, "andaru ctl applies confirm 1"},
+		"pending apply":          {fakeClient{pending: "4"}, 1, []string{"applies"}, "Apply 4 is awaiting confirmation"},
+		"draft refused":          {fakeClient{draft: draft{ApplyFindings: []finding{{Severity: "error", Code: "WOULD_UNCONFIGURE", Path: "eth0", Message: "x"}}}}, 1, []string{"applies", "draft"}, "WOULD_UNCONFIGURE"},
+		"head moved":             {fakeClient{saveErr: &apiError{Status: 412, Code: "PRECONDITION_FAILED"}}, 1, []string{"applies", "draft", "save"}, "saved meanwhile"},
+		"apply refused":          {fakeClient{apply: live, applyErr: &apiError{Status: 422, Code: "APPLY_REFUSED"}}, 1, []string{"applies", "draft", "save", "apply 10"}, "andaru ctl apply network --saved-version 10 --takeover"},
+		"activation fails":       {fakeClient{apply: applyReply{ID: "1", State: "failed", Reason: "eth0 lost its IPv4 address", Files: []json.RawMessage{}}}, 1, []string{"applies", "draft", "save", "apply 10"}, "saved as version 10 but not live"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := tc.client
