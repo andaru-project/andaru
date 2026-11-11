@@ -1,6 +1,7 @@
 package generation
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -125,5 +126,72 @@ func TestRollbackStaysPendingUntilAddressesReturn(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(b.net.root, "run/dhcpcd/eth0.pid")); err != nil {
 		t.Fatal("dhcpcd not back")
+	}
+}
+
+func (b *bench) confirmIfupdown() int {
+	b.t.Helper()
+	id := b.ifupdownTakeover()
+	if err := b.r.Activate(b.t.Context(), id); err != nil {
+		b.t.Fatal(err)
+	}
+	if err := b.r.Confirm(b.t.Context(), id); err != nil {
+		b.t.Fatal(err)
+	}
+	return id
+}
+
+func TestConfirmIfupdownMasks(t *testing.T) {
+	b := debian(t)
+	b.confirmIfupdown()
+	if b.net.ran("systemctl enable systemd-networkd.service") != 1 || b.net.ran("systemctl mask networking.service ifup@.service") != 1 {
+		t.Fatalf("commands = %q", b.net.argv)
+	}
+	if !b.exists("etc/network/interfaces") || b.exists(cloudConfig) {
+		t.Fatal("confirm touched ifupdown's files or wrote cloud-init's")
+	}
+}
+
+func TestConfirmIfupdownRepeatsAfterKill(t *testing.T) {
+	b := debian(t)
+	id := b.ifupdownTakeover()
+	if err := b.r.Activate(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	b.r.failAt = func(step string) error {
+		if step == "permanent:mask" {
+			return errors.New("killed")
+		}
+		return nil
+	}
+	if err := b.r.Confirm(t.Context(), id); err == nil {
+		t.Fatal("confirm hid the failed mask")
+	}
+	b.r.failAt = nil
+	b.reboot()
+	if err := b.r.Boot(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if b.net.ran("systemctl mask --no-reload networking.service ifup@.service") != 1 {
+		t.Fatalf("boot did not mask ifupdown: %q", b.net.argv)
+	}
+}
+
+func TestBootFallsBackToIfupdown(t *testing.T) {
+	b := debian(t)
+	id := b.confirmIfupdown()
+	writeFile(t, filepath.Join(b.dir, itoa(id), "files", "50-andaru-eth0.network"), "evil")
+	b.reboot()
+	if err := b.r.Boot(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// Boot runs before networking.service; waiting for it would deadlock.
+	for _, want := range []string{"systemctl unmask networking.service ifup@.service", "systemctl start --no-block networking.service", "systemctl start --no-block ifup@eth0.service"} {
+		if b.net.ran(want) != 1 {
+			t.Fatalf("%q not run: %q", want, b.net.argv)
+		}
+	}
+	if len(b.net.netFiles()) != 0 || b.pointers().Live != nil {
+		t.Fatalf("files %v pointers %+v", b.net.netFiles(), b.pointers())
 	}
 }

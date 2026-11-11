@@ -3,7 +3,7 @@ Description=Andaru confirmed network generation
 DefaultDependencies=no
 RequiresMountsFor=/var/lib/andaru
 ConditionPathExists=/var/lib/andaru/generations/pointers.json
-Before=systemd-networkd.service network-pre.target cloud-init-local.service shutdown.target
+Before=systemd-networkd.service networking.service network-pre.target cloud-init-local.service shutdown.target
 Conflicts=shutdown.target
 
 [Service]
