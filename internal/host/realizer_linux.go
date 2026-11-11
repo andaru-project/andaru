@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -183,4 +185,31 @@ func readBaseline(root string) (Baseline, error) {
 	slices.Sort(b.StrayYAML)
 	slices.Sort(b.StaticDNS)
 	return b, nil
+}
+
+var resolvedLink = regexp.MustCompile(`^Link \d+ \(([^)]+)\):(.*)$`)
+
+// ParseResolvedDNS reads `resolvectl dns`: the servers systemd-resolved uses per interface, in order.
+// The Global line is ignored: Andaru configures servers per link only.
+func ParseResolvedDNS(data []byte) (map[string][]netip.Addr, error) {
+	servers := map[string][]netip.Addr{}
+	for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
+		if line == "" || strings.HasPrefix(line, "Global:") {
+			continue
+		}
+		m := resolvedLink.FindStringSubmatch(line)
+		if m == nil {
+			return nil, fmt.Errorf("unexpected resolvectl line %q", line)
+		}
+		servers[m[1]] = []netip.Addr{}
+		for _, field := range strings.Fields(m[2]) {
+			// resolved may print a port or a server name after the address; neither can come from Andaru's files.
+			a, err := netip.ParseAddr(field)
+			if err != nil {
+				return nil, fmt.Errorf("unexpected resolvectl server %q", field)
+			}
+			servers[m[1]] = append(servers[m[1]], a)
+		}
+	}
+	return servers, nil
 }

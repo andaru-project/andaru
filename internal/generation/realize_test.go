@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -32,6 +33,9 @@ type fakeNetworkd struct {
 	chowns  []string
 
 	noAddress, noRoute bool
+
+	dns     map[string][]string     // what resolved reports per interface
+	editDNS func([]string) []string // distorts that report
 }
 
 func (f *fakeNetworkd) netFiles() map[string]string {
@@ -54,6 +58,7 @@ func (f *fakeNetworkd) apply() {
 			f.devices[strings.TrimPrefix(device, "50-andaru-")] = true
 		}
 	}
+	f.dns = map[string][]string{}
 	for _, name := range slices.Sorted(maps.Keys(files)) {
 		if !strings.HasSuffix(name, ".network") {
 			continue
@@ -70,6 +75,9 @@ func (f *fakeNetworkd) apply() {
 				}
 				if strings.HasPrefix(l, "DHCP=") {
 					f.address[iface] = append(f.address[iface], "10.0.1.19/20")
+				}
+				if server, ok := strings.CutPrefix(l, "DNS="); ok {
+					f.dns[iface] = append(f.dns[iface], server)
 				}
 			}
 		}
@@ -127,6 +135,16 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 			links = append(links, link)
 		}
 		return json.Marshal(links)
+	case command == "resolvectl dns":
+		out := "Global:\n"
+		for i, device := range slices.Sorted(maps.Keys(f.devices)) {
+			servers := f.dns[device]
+			if f.editDNS != nil && len(servers) > 0 {
+				servers = f.editDNS(slices.Clone(servers))
+			}
+			out += fmt.Sprintf("Link %d (%s): %s\n", i+2, device, strings.Join(servers, " "))
+		}
+		return []byte(out), nil
 	case command == "ip -j route show default":
 		if f.noRoute || f.noAddress || len(f.address["eth0"]) == 0 {
 			return []byte("[]"), nil
@@ -172,6 +190,14 @@ func newBench(t *testing.T) *bench {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(b.dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// As on a Debian cloud image: resolv.conf is systemd-resolved's stub.
+	writeFile(t, filepath.Join(root, "run/systemd/resolve/stub-resolv.conf"), "nameserver 127.0.0.53\n")
+	if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../run/systemd/resolve/stub-resolv.conf", filepath.Join(root, "etc/resolv.conf")); err != nil {
 		t.Fatal(err)
 	}
 	b.r = Realizer{
@@ -615,4 +641,69 @@ func TestConfirmRepairsLivePointer(t *testing.T) {
 func (b *bench) timerFires(id int) error {
 	b.now = b.now.Add(10 * time.Minute)
 	return b.r.Rollback(b.t.Context(), id, "deadline")
+}
+
+const uplinkDNS = uplinkStatic + "DNS=192.0.2.53\nDNS=2001:db8::53\n"
+
+func TestActivateVerifiesDNS(t *testing.T) {
+	b := newBench(t)
+	b.live(one)
+	id := b.gen(false, map[string]string{"50-andaru-eth0.network": uplinkDNS})
+	if err := b.r.Activate(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if b.net.ran("resolvectl dns") == 0 {
+		t.Fatalf("the declared servers were never checked: %q", b.net.argv)
+	}
+}
+
+func TestActivateFailsOnWrongDNS(t *testing.T) {
+	for name, breakIt := range map[string]func(*fakeNetworkd){
+		// Leftover DHCP servers mean the change did not take effect.
+		"superset":        func(f *fakeNetworkd) { f.editDNS = func(s []string) []string { return append(s, "10.0.0.1") } },
+		"subset":          func(f *fakeNetworkd) { f.editDNS = func(s []string) []string { return s[:1] } },
+		"other order":     func(f *fakeNetworkd) { f.editDNS = func(s []string) []string { return []string{s[1], s[0]} } },
+		"resolved silent": func(f *fakeNetworkd) { f.fail = "resolvectl" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := newBench(t)
+			b.live(one)
+			b.r.VerifyWait = 60 * time.Millisecond
+			breakIt(b.net)
+			id := b.gen(false, map[string]string{"50-andaru-eth0.network": uplinkDNS})
+			if err := b.r.Activate(t.Context(), id); err == nil {
+				t.Fatal("activation succeeded although resolved does not have the declared servers")
+			}
+			b.wantDisk(one)
+			b.wantPointers(1, 0, 0, 1)
+		})
+	}
+}
+
+func TestDNSCheckSkipped(t *testing.T) {
+	b := newBench(t)
+	b.live(one)
+	// A default Debian install: resolv.conf is a plain file nobody rewrites.
+	resolv := filepath.Join(b.net.root, "etc/resolv.conf")
+	if err := os.Remove(resolv); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, resolv, "nameserver 192.0.2.53\n")
+	b.net.fail = "resolvectl"
+	if err := b.r.Activate(t.Context(), b.gen(false, map[string]string{"50-andaru-eth0.network": uplinkDNS})); err != nil {
+		t.Fatal(err)
+	}
+	if b.net.ran("resolvectl") != 0 {
+		t.Fatalf("resolved was asked although it does not manage resolv.conf: %q", b.net.argv)
+	}
+
+	b = newBench(t)
+	b.live(one)
+	b.net.fail = "resolvectl"
+	if err := b.r.Activate(t.Context(), b.gen(false, two)); err != nil {
+		t.Fatal(err)
+	}
+	if b.net.ran("resolvectl") != 0 {
+		t.Fatalf("resolved was asked about a generation that declares no DNS: %q", b.net.argv)
+	}
 }

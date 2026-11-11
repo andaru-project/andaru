@@ -2,6 +2,7 @@ package host
 
 import (
 	_ "embed"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -174,5 +175,25 @@ func TestResolvedInCharge(t *testing.T) {
 				t.Fatalf("ResolvedInCharge = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+//go:embed testdata/resolvectl-dns.txt
+var resolvectlDNS []byte
+
+func TestParseResolvedDNS(t *testing.T) {
+	got, err := ParseResolvedDNS(resolvectlDNS)
+	want := []netip.Addr{netip.MustParseAddr("172.16.53.53"), netip.MustParseAddr("fd00:53:53:53:53:53:53:53")}
+	if err != nil || len(got) != 1 || !slices.Equal(got["eth0"], want) {
+		t.Fatalf("servers = %v, %v", got, err)
+	}
+	got, err = ParseResolvedDNS([]byte("Global: 192.0.2.1\nLink 2 (eth0):\nLink 3 (vl0aa29874febd): 192.0.2.53\n"))
+	if err != nil || len(got) != 2 || len(got["eth0"]) != 0 || !slices.Equal(got["vl0aa29874febd"], []netip.Addr{netip.MustParseAddr("192.0.2.53")}) {
+		t.Fatalf("servers = %v, %v", got, err)
+	}
+	for _, bad := range []string{"eth0: 192.0.2.53\n", "Link 2 (eth0): not-an-address\n", "Link 2 eth0: 192.0.2.53\n"} {
+		if _, err := ParseResolvedDNS([]byte(bad)); err == nil {
+			t.Fatalf("accepted %q", bad)
+		}
 	}
 }

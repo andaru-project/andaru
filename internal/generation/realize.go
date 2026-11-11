@@ -182,9 +182,11 @@ type observation struct {
 	links   []host.LinkStatus
 	managed []host.Managed
 	route   string // interface of the IPv4 default route, if any
+	// dns is what systemd-resolved reports per interface; nil when it was not asked.
+	dns map[string][]netip.Addr
 }
 
-func (r Realizer) observe(ctx context.Context) (observation, error) {
+func (r Realizer) observe(ctx context.Context, withDNS bool) (observation, error) {
 	var o observation
 	data, err := r.Run(ctx, "/usr/bin/networkctl", "list", "--json=short")
 	if err == nil {
@@ -210,6 +212,14 @@ func (r Realizer) observe(ctx context.Context) (observation, error) {
 	}
 	if len(routes) > 0 {
 		o.route = routes[0].Dev
+	}
+	if withDNS {
+		if data, err = r.Run(ctx, "/usr/bin/resolvectl", "dns"); err == nil {
+			o.dns, err = host.ParseResolvedDNS(data)
+		}
+		if err != nil {
+			return o, fmt.Errorf("ask systemd-resolved for its servers: %w", err)
+		}
 	}
 	return o, nil
 }
@@ -265,6 +275,10 @@ func (o observation) unmet(set []placed, names []string, route bool) string {
 				return m.Name + " does not have " + value
 			}
 		}
+		// Exactly the declared servers, in order: leftover offered ones mean the change did not take effect.
+		if want := declaredDNS(f.data); o.dns != nil && len(want) > 0 && !slices.Equal(o.dns[m.Name], want) {
+			return fmt.Sprintf("%s resolves through %v, not the declared %v", m.Name, o.dns[m.Name], want)
+		}
 	}
 	for _, name := range names {
 		if l, ok := o.link(name); !ok || !globalIPv4(l) {
@@ -312,7 +326,7 @@ func (r Realizer) Activate(ctx context.Context, id int) error {
 	if err != nil {
 		return err
 	}
-	before, err := r.observe(ctx)
+	before, err := r.observe(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -377,6 +391,19 @@ func (r Realizer) restorable(previous []placed, p Pointers) ([]placed, error) {
 	return r.files(g)
 }
 
+// declaredDNS returns the servers a .network file names, in order.
+func declaredDNS(data []byte) []netip.Addr {
+	var servers []netip.Addr
+	for line := range strings.SplitSeq(string(data), "\n") {
+		if value, ok := strings.CutPrefix(line, "DNS="); ok {
+			if a, err := netip.ParseAddr(value); err == nil {
+				servers = append(servers, a)
+			}
+		}
+	}
+	return servers
+}
+
 func (r Realizer) swapAndVerify(ctx context.Context, previous, next []placed, names []string, route bool) string {
 	if err := r.place(previous, next); err != nil {
 		return err.Error()
@@ -384,11 +411,13 @@ func (r Realizer) swapAndVerify(ctx context.Context, previous, next []placed, na
 	if err := r.settle(ctx, previous, next); err != nil {
 		return err.Error()
 	}
+	// networkd hands DNS servers to systemd-resolved only; where resolved does not manage resolv.conf there is nothing to check.
+	withDNS := host.ResolvedInCharge(r.Root) && slices.ContainsFunc(next, func(f placed) bool { return len(declaredDNS(f.data)) > 0 })
 	verify, cancel := context.WithTimeout(ctx, r.VerifyWait)
 	defer cancel()
 	reason := "networkd was not observed"
 	for {
-		if o, err := r.observe(verify); err != nil {
+		if o, err := r.observe(verify, withDNS); err != nil {
 			reason = err.Error()
 		} else if reason = o.unmet(next, names, route); reason == "" {
 			return ""
