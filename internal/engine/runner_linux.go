@@ -46,7 +46,8 @@ func (s systemdRunner) command(verb string, id int, extra ...string) []string {
 
 func (s systemdRunner) Arm(ctx context.Context, id, seconds int) error {
 	// AccuracySec defaults to a minute, which would let the rollback fire that much late.
-	args := []string{"--quiet", "--collect", "--unit=andaru-rollback-" + strconv.Itoa(id), "--on-active=" + strconv.Itoa(seconds), "--timer-property=AccuracySec=1s", "-p", realizeRuntime}
+	// A rollback that fails once (lock held, /run full) is tried again: nothing else undoes an unconfirmed change.
+	args := []string{"--quiet", "--collect", "--unit=andaru-rollback-" + strconv.Itoa(id), "--on-active=" + strconv.Itoa(seconds), "--timer-property=AccuracySec=1s", "-p", realizeRuntime, "-p", "Restart=on-failure", "-p", "RestartSec=10"}
 	return s.exec(ctx, "/usr/bin/systemd-run", append(args, s.command("rollback", id, "deadline")...)...)
 }
 

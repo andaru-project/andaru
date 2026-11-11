@@ -549,3 +549,43 @@ func TestLockSerialises(t *testing.T) {
 		t.Fatalf("argv = %q", b.net.argv)
 	}
 }
+
+func TestPlaceWritesBeforeItRemoves(t *testing.T) {
+	b := newBench(t)
+	b.live(one)
+	renamed := map[string]string{"50-andaru-ens18.network": uplinkDHCP}
+	id := b.gen(false, renamed)
+	killed := errors.New("killed")
+	b.r.failAt = func(step string) error {
+		if step == "place:remove" {
+			return killed
+		}
+		return nil
+	}
+	if err := b.r.Activate(t.Context(), id); err == nil {
+		t.Fatal("the kill point was never reached")
+	}
+	// A networkd restart at this instant must still find a complete configuration.
+	if got := b.net.netFiles(); got["50-andaru-eth0.network"] == "" {
+		t.Fatalf("the old file was removed before the new set was complete: %v", got)
+	}
+}
+
+func TestConfirmRepairsLivePointer(t *testing.T) {
+	b := newBench(t)
+	b.live(one)
+	id := b.gen(false, two)
+	b.r.failAt = func(step string) error {
+		if step == "activate:pointers-live" {
+			return errors.New("killed")
+		}
+		return nil
+	}
+	_ = b.r.Activate(t.Context(), id)
+	b.r.failAt = nil
+	if err := b.r.Confirm(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	// A stale live pointer would make the next apply replace the wrong files.
+	b.wantPointers(id, 1, 0, id)
+}

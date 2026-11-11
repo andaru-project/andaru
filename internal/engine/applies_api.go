@@ -201,10 +201,10 @@ func (h *appliesHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The change must not die with the connection that asked for it: that connection is what the change may cut.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), realizeLimit)
-	defer cancel()
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), realizeLimit)
+	defer cancel()
 
 	input, err := h.input(ctx, nil)
 	if err != nil {
@@ -281,14 +281,15 @@ func (h *appliesHandler) create(w http.ResponseWriter, r *http.Request) {
 	runErr := h.runner.Realize(ctx, "activate", id)
 	g, err := generation.Read(h.dir, id)
 	if err != nil || (g.State.State == generation.Failed && g.Reason == "never started") {
-		h.runner.Disarm(ctx, id)
+		// Whether the unit ran is unknown, so the timer stays armed: it does nothing when there is nothing to undo.
 		h.unavailable(w, r, "activate generation", errors.Join(runErr, err))
 		return
 	}
 	if runErr != nil {
 		slog.WarnContext(ctx, "activation did not succeed", "generation", id, "error", runErr)
 	}
-	if g.State.State != generation.Awaiting {
+	// Only a generation realize has finished with may lose its timer; one still pending has nothing else to undo it.
+	if g.State.State == generation.Failed {
 		h.runner.Disarm(ctx, id)
 	}
 	writeJSON(w, r, http.StatusOK, viewApply(g))
@@ -296,10 +297,11 @@ func (h *appliesHandler) create(w http.ResponseWriter, r *http.Request) {
 
 // finish confirms or rolls back a pending apply. realize decides; the engine reports what it finds afterwards.
 func (h *appliesHandler) finish(w http.ResponseWriter, r *http.Request, id int, action string) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), realizeLimit)
-	defer cancel()
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	// Started after the wait for the mutex, so a queued request keeps its full time.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), realizeLimit)
+	defer cancel()
 	before, err := generation.Read(h.dir, id)
 	if errors.Is(err, fs.ErrNotExist) {
 		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")

@@ -123,7 +123,8 @@ func (r Realizer) Confirm(ctx context.Context, id int) error {
 		return fmt.Errorf("confirm %d: %w", id, ErrWrongState)
 	}
 	// Pointers first: once they name this generation a late timer and the next boot both keep it.
-	p.LastKnownGood, p.Confirmed, p.Pending = p.Confirmed, &id, nil
+	// Live is set too: a kill during activation may have left it behind the files.
+	p.LastKnownGood, p.Confirmed, p.Pending, p.Live = p.Confirmed, &id, nil, &id
 	if err := r.writePointers("confirm:pointers", p); err != nil {
 		return err
 	}

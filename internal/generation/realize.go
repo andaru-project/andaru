@@ -129,16 +129,8 @@ func has(set []placed, path string) bool {
 	return slices.ContainsFunc(set, func(f placed) bool { return f.path == path })
 }
 
-// place swaps files only: what from has and to lacks goes, to's files are written.
+// place swaps files only. It writes before it removes, so /run never holds less than one complete configuration.
 func (r Realizer) place(from, to []placed) error {
-	for _, f := range from {
-		if has(to, f.path) {
-			continue
-		}
-		if err := os.Remove(r.Root + f.path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
-	}
 	for _, f := range to {
 		target := r.Root + f.path
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -151,6 +143,17 @@ func (r Realizer) place(from, to []placed) error {
 			if err := r.Chown(target, f.uid, f.gid); err != nil {
 				return err
 			}
+		}
+	}
+	if err := r.at("place:remove"); err != nil {
+		return err
+	}
+	for _, f := range from {
+		if has(to, f.path) {
+			continue
+		}
+		if err := os.Remove(r.Root + f.path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
 		}
 	}
 	return nil

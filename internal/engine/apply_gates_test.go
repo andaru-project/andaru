@@ -37,7 +37,7 @@ func lab() gateInput {
 		Links:       []host.LinkStatus{global("eth0", "")},
 		Managed:     []host.Managed{{Name: "eth0", NetworkFile: netplanFile, State: "configured"}},
 		Facts:       host.RealizerFacts{ForeignFiles: netplan},
-		Baseline:    host.Baseline{Netplan: true},
+		Baseline:    host.Baseline{Netplan: true, BootUnit: true},
 	}
 }
 
@@ -140,6 +140,17 @@ func TestApplyFindings(t *testing.T) {
 			in.Baseline.StaticDNS = []string{netplanFile}
 			return in
 		}, []want{{"FOREIGN_CONFIGURATION", ""}, {"FOREIGN_CONFIGURATION", ""}, {"TAKEOVER_UNSUPPORTED_BASELINE", netplanFile}}},
+		"netplan created a device": {func() gateInput {
+			in := lab()
+			in.Facts.ForeignFiles = append(in.Facts.ForeignFiles, "/run/systemd/network/10-netplan-br0.netdev")
+			in.Result.Findings = foreign(in.Facts.ForeignFiles...)
+			return in
+		}, []want{{"FOREIGN_CONFIGURATION", ""}, {"FOREIGN_CONFIGURATION", ""}, {"FOREIGN_CONFIGURATION", ""}, {"TAKEOVER_UNSUPPORTED_BASELINE", "/run/systemd/network/10-netplan-br0.netdev"}}},
+		"boot unit not enabled": {func() gateInput {
+			in := taken()
+			in.Baseline.BootUnit = false
+			return in
+		}, []want{{"BOOT_UNIT_DISABLED", "andaru-network-boot.service"}}},
 		"forwarding and PPP": {func() gateInput {
 			in := taken()
 			in.Declaration = []byte(`{"links":[{"kind":"ethernet","enabled":true},{"kind":"pppoe","enabled":true},{"kind":"pppoe","enabled":false}],

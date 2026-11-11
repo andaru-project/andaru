@@ -197,7 +197,7 @@ sudo andaru ctl applies confirm 1
 What happens, in order:
 
 1. **Checks.** `--saved-version` must be the saved head, so you apply what you previewed. The apply is refused (`APPLY_REFUSED`, with findings) if the preview has errors, if an interface that has an address now would be left unconfigured, or if it needs something not yet supported.
-2. **A rollback timer is armed first**, owned by systemd, not by the engine. It fires 60 seconds after the confirmation deadline.
+2. **A rollback timer is armed first**, owned by systemd, not by the engine. It is set for the timeout plus 60 seconds from the start of the apply, so it fires at most 60 seconds after the confirmation deadline, and it retries every 10 seconds if the rollback fails.
 3. **The files are swapped and networkd reloaded.** Andaru then checks that every file is in use, static addresses are present, and the interfaces that had an IPv4 address and default route still have them. If not, it restores the previous files at once and the apply reads `failed`.
 4. **You confirm from a new session** within the timeout (default 120 seconds, `--confirm-timeout 30`–`600`). A session that survived the change does not show that a new one can be opened; opening one is the test. Without confirmation the previous configuration returns, including after an engine crash or a reboot.
 
@@ -210,6 +210,7 @@ What happens, in order:
 | `TAKEOVER_UNSUPPORTED_BASELINE` | The host is not a plain netplan-on-networkd host: ifupdown is installed, netplan YAML lives outside `/etc/netplan`, a non-netplan network file exists, or netplan set static DNS. |
 | `APPLY_UNSUPPORTED` | PPPoE links, delegated prefixes and router advertisements wait for the firewall. |
 | `NETDEV_CHANGE_UNSUPPORTED` | An existing VLAN, bridge or bond would change. Remove it in one apply and add it again in the next. |
+| `BOOT_UNIT_DISABLED` | `andaru-network-boot.service` is not enabled, so a confirmed configuration would not return after a reboot. |
 
 ### Takeover
 

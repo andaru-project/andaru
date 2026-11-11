@@ -73,7 +73,8 @@ func TestParseManaged(t *testing.T) {
 func TestReadBaseline(t *testing.T) {
 	root := t.TempDir()
 	for path, body := range map[string]string{
-		"usr/sbin/netplan":                            "",
+		"usr/sbin/netplan": "",
+		"etc/systemd/system/sysinit.target.wants/andaru-network-boot.service": "",
 		"lib/netplan/PLACEHOLDER":                     "",
 		"usr/lib/netplan/PLACEHOLDER":                 "",
 		"run/netplan/x.yaml":                          "network: {}\n",
@@ -94,7 +95,7 @@ func TestReadBaseline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.Netplan || got.Ifupdown ||
+	if !got.Netplan || got.Ifupdown || !got.BootUnit ||
 		!slices.Equal(got.StrayYAML, []string{"/run/netplan/x.yaml"}) ||
 		!slices.Equal(got.StaticDNS, []string{"/run/systemd/network/10-netplan-eth1.network", "/run/systemd/network/10-netplan-eth2.network"}) {
 		t.Fatalf("baseline = %+v", got)

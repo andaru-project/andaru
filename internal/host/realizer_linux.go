@@ -107,6 +107,8 @@ func ReadManaged(ctx context.Context) ([]Managed, error) {
 type Baseline struct {
 	Netplan  bool
 	Ifupdown bool
+	// BootUnit reports that the unit which puts the confirmed generation into /run at boot is enabled.
+	BootUnit bool
 	// StrayYAML is netplan configuration outside /etc/netplan, which a takeover would not move away.
 	StrayYAML []string
 	// StaticDNS lists netplan-generated .network files that set DNS= or Domains=, which Andaru cannot reproduce yet.
@@ -118,7 +120,11 @@ func ReadBaseline() (Baseline, error) { return readBaseline("") }
 
 func readBaseline(root string) (Baseline, error) {
 	exists := func(path string) bool { _, err := os.Stat(root + path); return err == nil }
-	b := Baseline{Netplan: exists("/usr/sbin/netplan"), Ifupdown: exists("/sbin/ifup"), StrayYAML: []string{}, StaticDNS: []string{}}
+	b := Baseline{
+		Netplan: exists("/usr/sbin/netplan"), Ifupdown: exists("/sbin/ifup"),
+		BootUnit:  exists("/etc/systemd/system/sysinit.target.wants/andaru-network-boot.service"),
+		StrayYAML: []string{}, StaticDNS: []string{},
+	}
 	for _, dir := range []string{"/run/netplan", "/lib/netplan", "/usr/lib/netplan"} {
 		found, err := filepath.Glob(root + dir + "/*.yaml")
 		if err != nil {

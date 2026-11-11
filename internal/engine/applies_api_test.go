@@ -41,6 +41,7 @@ type applyBench struct {
 	beforeVerb func()
 	unbound    bool // networkd never binds the new files
 	hostDown   bool
+	stuck      bool // activation fails and cannot restore: the generation stays pending
 }
 
 func (b *applyBench) note(format string, args ...any) {
@@ -114,6 +115,12 @@ func (b *applyBench) Realize(ctx context.Context, verb string, id int, extra ...
 	if err := ctx.Err(); err != nil || b.skip {
 		return errors.Join(err, errors.New("the unit did not run"))
 	}
+	if b.stuck && verb == "activate" {
+		dir := filepath.Join(generation.Dir(b.state), fmt.Sprint(id))
+		_ = os.WriteFile(filepath.Join(dir, "state.json"), []byte(`{"state":"activating","previous":null}`), 0o600)
+		_ = os.WriteFile(filepath.Join(dir, "..", "pointers.json"), fmt.Appendf(nil, `{"confirmed":null,"lastKnownGood":null,"pending":%d,"live":null}`, id), 0o600)
+		return errors.New("restoring the previous files failed")
+	}
 	var err error
 	switch r := b.realizer(); verb {
 	case "activate":
@@ -162,7 +169,7 @@ func newApplyBench(t *testing.T) *applyBench {
 			return host.RealizerFacts{ForeignFiles: b.netFiles("10-netplan-*")}, nil
 		},
 		Managed:  func(context.Context) ([]host.Managed, error) { return b.managed(), nil },
-		Baseline: func() (host.Baseline, error) { return host.Baseline{Netplan: true}, nil },
+		Baseline: func() (host.Baseline, error) { return host.Baseline{Netplan: true, BootUnit: true}, nil },
 	}
 	input := func(_ context.Context, version *config.Version) (config.RealizationInput, error) {
 		b.mu.Lock()
@@ -316,7 +323,8 @@ func TestApplyWhenRealizeCannotRun(t *testing.T) {
 
 	b.armErr, b.skip, b.calls = nil, true, nil
 	assertAPIError(t, b.call(http.MethodPost, "/api/v1/applies", takeoverBody), http.StatusServiceUnavailable, "REALIZE_UNAVAILABLE")
-	if !slices.Equal(b.calls, []string{"arm 2 180", "activate 2", "disarm 2"}) {
+	// Whether the unit ran is unknown here, so the timer stays: it does nothing if there is nothing to undo.
+	if !slices.Equal(b.calls, []string{"arm 2 180", "activate 2"}) {
 		t.Fatalf("calls = %q", b.calls)
 	}
 
@@ -485,7 +493,8 @@ func TestSystemdRunnerUnitNamesAreDistinct(t *testing.T) {
 		units[call[i]] = true
 	}
 	arm := strings.Join(argv[0], " ")
-	if !strings.Contains(arm, "--unit=andaru-rollback-3 --on-active=180 --timer-property=AccuracySec=1s") || !strings.HasSuffix(arm, "/usr/bin/andaru realize --state-dir /srv/state rollback 3 deadline") {
+	// A rollback that fails once (lock held, /run full) must be tried again: nothing else will undo the change.
+	if !strings.Contains(arm, "-p Restart=on-failure -p RestartSec=10") || !strings.Contains(arm, "--unit=andaru-rollback-3 --on-active=180 --timer-property=AccuracySec=1s") || !strings.HasSuffix(arm, "/usr/bin/andaru realize --state-dir /srv/state rollback 3 deadline") {
 		t.Fatalf("arm = %q", arm)
 	}
 	if early := strings.Join(argv[3], " "); !strings.Contains(early, " --wait ") || !strings.HasSuffix(early, "/usr/bin/andaru realize --state-dir /srv/state rollback 3 requested") {
@@ -516,5 +525,18 @@ func TestOpenAPIDescribesApplies(t *testing.T) {
 				t.Fatalf("%s %s is not described", method, path)
 			}
 		}
+	}
+}
+
+func TestApplyKeepsTimerWhileActivationIsUnresolved(t *testing.T) {
+	b := newApplyBench(t)
+	// Activation failed and could not put the old files back: the generation stays pending and only the timer can undo it.
+	b.stuck = true
+	got := b.apply(takeoverBody)
+	if got.State != generation.Activating {
+		t.Fatalf("apply = %+v", got)
+	}
+	if !slices.Equal(b.calls, []string{"arm 1 180", "activate 1"}) {
+		t.Fatalf("calls = %q; the timer is the only thing left that can restore the host", b.calls)
 	}
 }
