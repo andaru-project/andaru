@@ -278,3 +278,39 @@ func TestHasStaticNeedsEveryAddress(t *testing.T) {
 		t.Fatal("all addresses present but not counted as back")
 	}
 }
+
+// networkd keeps a device whose .netdev is gone; handing back must delete the ones the takeover made.
+func TestHandBackDeletesTakeoverDevices(t *testing.T) {
+	b := debian(t)
+	files := map[string]string{"50-andaru-eth0.network": uplinkDHCP, "50-andaru-vl0.netdev": vlanDevice, "50-andaru-vl0.network": vlanNetwork}
+	id := create(t, b.dir, Manifest{SavedVersion: "7", Takeover: true, Baseline: "ifupdown", ConfirmTimeoutSeconds: 120}, files)
+	if err := b.r.Activate(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Rollback(t.Context(), id, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	if b.net.ran("networkctl delete vl0") != 1 {
+		t.Fatalf("device left behind: %q", b.net.argv)
+	}
+}
+
+// After a confirmed takeover ifupdown is masked; falling back to it at runtime must unmask it first.
+func TestRollbackToIfupdownBaselineUnmasks(t *testing.T) {
+	b := debian(t)
+	first := b.confirmIfupdown()
+	second := b.gen(false, two)
+	if err := b.r.Activate(t.Context(), second); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(b.dir, itoa(first), "files", "50-andaru-eth0.network"), "evil")
+	b.net.argv = nil
+	if err := b.r.Rollback(t.Context(), second, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	unmask := slices.Index(b.net.argv, "systemctl unmask networking.service ifup@.service")
+	restart := slices.IndexFunc(b.net.argv, func(a string) bool { return strings.HasPrefix(a, "systemctl restart") })
+	if unmask < 0 || restart < 0 || unmask > restart {
+		t.Fatalf("commands = %q", b.net.argv)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/andaru-project/andaru/internal/host"
@@ -65,11 +66,25 @@ func (r Realizer) handOver(ctx context.Context, b IfupdownBaseline) error {
 // handBack returns the interfaces to ifupdown after Andaru's files are gone. Every step runs even after an
 // earlier one failed, and an interface already back is left alone, so the timer can repeat it safely.
 // Only ifupdown's own units raise interfaces: a dhcpcd started from a realize unit dies with that unit.
-func (r Realizer) handBack(ctx context.Context, b IfupdownBaseline) error {
+// removed are the files just taken out of /run: the devices they made are deleted while networkd still runs.
+// After a confirmed takeover ifupdown is masked, so it is unmasked first, as boot does.
+func (r Realizer) handBack(ctx context.Context, b IfupdownBaseline, removed []placed, confirmed bool) error {
 	var failures []error
 	run := func(name string, args ...string) {
 		if _, err := r.Run(ctx, name, args...); err != nil {
 			failures = append(failures, err)
+		}
+	}
+	if confirmed {
+		run("/usr/bin/systemctl", "unmask", "networking.service", "ifup@.service")
+	}
+	// networkd keeps a device whose .netdev is gone, so delete the takeover's devices while it still runs.
+	// No reload: with the files gone it could drop the addresses that stopping networkd keeps.
+	if _, err := r.Run(ctx, "/usr/bin/systemctl", "is-active", "--quiet", "systemd-networkd.service"); err == nil {
+		for _, f := range removed {
+			if name, ok := strings.CutSuffix(filepath.Base(f.path), ".netdev"); ok {
+				run("/usr/bin/networkctl", "delete", strings.TrimPrefix(name, "50-andaru-"))
+			}
 		}
 	}
 	if b.NetworkdWasActive {

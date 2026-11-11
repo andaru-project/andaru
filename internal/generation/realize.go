@@ -400,7 +400,7 @@ func (r Realizer) Activate(ctx context.Context, id int) error {
 		if err := r.place(next, nil); err != nil {
 			return fmt.Errorf("activate %d: %s; removing its files failed: %w", id, reason, err)
 		}
-		if err := r.handBack(restore, ifupdown); err != nil {
+		if err := r.handBack(restore, ifupdown, next, p.Takeover); err != nil {
 			return fmt.Errorf("activate %d: %s; handing back to ifupdown failed: %w", id, reason, err)
 		}
 		return r.failed(id, p, reason)
@@ -542,7 +542,7 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) error {
 	}
 	if live == nil && kind == "ifupdown" && ifupdown != nil {
 		// Back to ifupdown: the generation stays pending, and the timer retries, until its addresses are back.
-		if err := r.handBack(ctx, *ifupdown); err != nil {
+		if err := r.handBack(ctx, *ifupdown, from, p.Takeover); err != nil {
 			return fmt.Errorf("roll back %d: handing back to ifupdown: %w", id, err)
 		}
 	} else if err := r.settle(ctx, from, target); err != nil {
