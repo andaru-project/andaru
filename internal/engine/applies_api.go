@@ -36,8 +36,8 @@ type hostReader struct {
 	Facts    func() (host.RealizerFacts, error)
 	Managed  func(context.Context) ([]host.Managed, error)
 	Baseline func() (host.Baseline, error)
-	// Route names the interface carrying the IPv4 default route.
-	Route func(context.Context) (string, error)
+	// Route names the interfaces carrying an IPv4 default route.
+	Route func(context.Context) ([]string, error)
 	// Root prefixes host files the engine reads directly; "" on a real host.
 	Root string
 }

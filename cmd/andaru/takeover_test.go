@@ -18,7 +18,7 @@ import (
 func labProposal(t *testing.T) proposal {
 	t.Helper()
 	raw := `{"state":"ready","savedVersion":"9","adapters":[
-		{"name":"eth0","permanentMac":"bc:24:11:89:01:10","summary":"IPv4 static 10.0.1.19/16, IPv6 SLAAC, default route"},
+		{"name":"eth0","permanentMac":"bc:24:11:89:01:10","summary":"IPv4 static 10.0.1.19/16, IPv6 SLAAC, default route","addressed":true},
 		{"name":"eth1","permanentMac":"02:00:00:00:00:02","summary":"IPv4 DHCP, IPv6 none"}],
 	"findings":[],"operations":[
 		{"op":"create","collection":"zones","localId":"wan","value":{"name":"wan"}},

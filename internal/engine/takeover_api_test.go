@@ -8,12 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/host"
+	"github.com/andaru-project/andaru/internal/host/netplanfixture"
 )
 
 const labMAC = "bc:24:11:89:01:10"
@@ -23,25 +23,18 @@ type takeoverBench struct {
 	root, state string
 	head        string
 	baseline    host.Baseline
+	routes      []string
 	addresses   []host.AddressStatus
 	drafted     []config.Changes
 	reads       int
 }
 
-// netplanFixture locates the fixture beside this file: the root suite runs the test binary from the repository root.
-func netplanFixture(t *testing.T, name string) string {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the test source")
-	}
-	return filepath.Join(filepath.Dir(file), "../host/testdata/netplan", name)
-}
-
 func newTakeoverBench(t *testing.T, fixture string) *takeoverBench {
 	return &takeoverBench{
-		root: netplanFixture(t, fixture), state: t.TempDir(),
+		root: netplanfixture.Root(t, fixture), state: t.TempDir(),
 		head:     `{"schemaVersion":1,"links":[],"segments":[],"zones":[]}`,
 		baseline: host.Baseline{Netplan: true, BootUnit: true},
+		routes:   []string{"eth0"},
 		addresses: []host.AddressStatus{
 			{Family: "ipv4", Address: "10.0.1.19", PrefixLength: 16, Scope: "global"},
 			{Family: "ipv6", Address: "2a02:a466:79a7:beef:be24:11ff:fe89:110", PrefixLength: 64, Scope: "global"},
@@ -63,7 +56,7 @@ func (b *takeoverBench) handler() http.Handler {
 			return []host.Managed{{Name: "eth0", NetworkFile: "/run/systemd/network/10-netplan-eth0.network", State: "configured"}}, nil
 		},
 		Baseline: func() (host.Baseline, error) { return b.baseline, nil },
-		Route:    func(context.Context) (string, error) { return "eth0", nil },
+		Route:    func(context.Context) ([]string, error) { return b.routes, nil },
 	}
 	head := func(context.Context, *config.Version) (config.RealizationInput, error) {
 		b.reads++
@@ -88,8 +81,11 @@ type proposalReply struct {
 	State        string            `json:"state"`
 	SavedVersion string            `json:"savedVersion"`
 	Operations   []json.RawMessage `json:"operations"`
-	Adapters     []struct{ Name, PermanentMac, Summary string }
-	Findings     []struct{ Severity, Code, Path, Message string }
+	Adapters     []struct {
+		Name, PermanentMac, Summary string
+		Addressed                   bool
+	}
+	Findings []struct{ Severity, Code, Path, Message string }
 }
 
 func (b *takeoverBench) proposal(t *testing.T) proposalReply {
@@ -131,12 +127,16 @@ func TestProposalForTheLabBases(t *testing.T) {
 		{"op":"create","collection":"segments","localId":"seg1","value":{"name":"eth0","link":"@link1","zone":"@wan","addressing":{
 			"ipv4":{"mode":"static","addresses":["10.0.1.19/16"],"gateway":"10.0.0.1"},"ipv6":{"mode":"slaac"},
 			"dns":{"servers":["172.16.53.53","fd00:53:53:53:53:53:53:53"],"searchDomains":["lab.example"]}}}}]`)
-	if len(got.Adapters) != 1 || got.Adapters[0].Name != "eth0" || got.Adapters[0].PermanentMac != labMAC || !strings.Contains(got.Adapters[0].Summary, "static 10.0.1.19/16") || !strings.Contains(got.Adapters[0].Summary, "default route") {
+	if len(got.Adapters) != 1 || got.Adapters[0].Name != "eth0" || got.Adapters[0].PermanentMac != labMAC || !strings.Contains(got.Adapters[0].Summary, "static 10.0.1.19/16") || !strings.Contains(got.Adapters[0].Summary, "default route") || !got.Adapters[0].Addressed {
 		t.Fatalf("adapters = %+v", got.Adapters)
 	}
 
 	b = newTakeoverBench(t, "dhcp")
-	b.addresses = b.addresses[:1]
+	b.addresses = nil // unplugged: DHCP configured, no address now
+	if got = b.proposal(t); len(got.Adapters) != 1 || got.Adapters[0].Addressed {
+		t.Fatalf("unplugged adapter = %+v", got.Adapters)
+	}
+	b.addresses = []host.AddressStatus{{Family: "ipv4", Address: "10.0.1.19", PrefixLength: 16, Scope: "global"}}
 	got = b.proposal(t)
 	sameJSON(t, got.Operations, `[
 		{"op":"create","collection":"zones","localId":"wan","value":{"name":"wan"}},
@@ -172,6 +172,13 @@ func TestProposalStates(t *testing.T) {
 		}
 	}
 
+	// Two default-route interfaces: which one is the uplink is not known.
+	b = newTakeoverBench(t, "dhcp")
+	b.routes = []string{"eth0", "eth1"}
+	if got := b.proposal(t); got.State != "unsupported" || len(got.Operations) != 0 || !strings.Contains(got.Findings[0].Message, "eth0, eth1") {
+		t.Fatalf("two default routes = %+v", got)
+	}
+
 	b = newTakeoverBench(t, "static")
 	b.baseline = host.Baseline{Ifupdown: true}
 	got := b.proposal(t)
@@ -180,12 +187,10 @@ func TestProposalStates(t *testing.T) {
 	}
 
 	b = newTakeoverBench(t, "static")
-	b.root = t.TempDir()
-	dir := filepath.Join(b.root, "run/systemd/network")
-	_ = os.MkdirAll(dir, 0o755)
-	base, _ := os.ReadFile("../host/testdata/netplan/static/run/systemd/network/10-netplan-eth0.network")
-	_ = os.WriteFile(filepath.Join(dir, "10-netplan-eth0.network"), base, 0o644)
-	_ = os.WriteFile(filepath.Join(dir, "10-netplan-br0.netdev"), []byte("[NetDev]\nName=br0\n"), 0o644)
+	// The bench root is a private copy of the fixture; add netplan's bridge beside it.
+	if err := os.WriteFile(filepath.Join(b.root, "run/systemd/network/10-netplan-br0.netdev"), []byte("[NetDev]\nName=br0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	got = b.proposal(t)
 	if got.State != "unsupported" || len(got.Operations) != 0 || got.Findings[0].Code != "TAKEOVER_UNSUPPORTED_BASELINE" || got.Findings[0].Severity != "error" || got.Findings[0].Path != "/run/systemd/network/10-netplan-br0.netdev" {
 		t.Fatalf("netdev = %+v", got)

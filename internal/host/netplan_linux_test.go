@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/andaru-project/andaru/internal/host/netplanfixture"
 )
 
 const labMAC = "bc:24:11:89:01:10"
@@ -22,7 +24,7 @@ var (
 )
 
 func TestReadNetplanLabBases(t *testing.T) {
-	got, problems := ReadNetplan("testdata/netplan/static", labLink(v4, slaac, dhcp6), labBind, "eth0")
+	got, problems := ReadNetplan(netplanfixture.Root(t, "static"), labLink(v4, slaac, dhcp6), labBind, "eth0")
 	if len(problems) != 0 || len(got) != 1 {
 		t.Fatalf("got %+v, problems %+v", got, problems)
 	}
@@ -37,17 +39,17 @@ func TestReadNetplanLabBases(t *testing.T) {
 		t.Fatalf("IPv6 = %+v", s.IPv6)
 	}
 
-	got, problems = ReadNetplan("testdata/netplan/dhcp", labLink(v4), labBind, "eth0")
+	got, problems = ReadNetplan(netplanfixture.Root(t, "dhcp"), labLink(v4), labBind, "eth0")
 	if len(problems) != 0 || len(got) != 1 || got[0].IPv4.Mode != "dhcp" || got[0].IPv6.Mode != "none" || got[0].DNS != nil {
 		t.Fatalf("dhcp = %+v, %+v", got, problems)
 	}
-	if got, _ = ReadNetplan("testdata/netplan/dhcp", labLink(v4, slaac), labBind, "eth0"); got[0].IPv6.Mode != "slaac" {
+	if got, _ = ReadNetplan(netplanfixture.Root(t, "dhcp"), labLink(v4, slaac), labBind, "eth0"); got[0].IPv6.Mode != "slaac" {
 		t.Fatalf("DHCPv4 with a live SLAAC address = %+v", got[0].IPv6)
 	}
 }
 
 func TestReadNetplanProblems(t *testing.T) {
-	base, _ := os.ReadFile("testdata/netplan/static/run/systemd/network/10-netplan-eth0.network")
+	base, _ := os.ReadFile(filepath.Join(netplanfixture.Root(t, "static"), "run/systemd/network/10-netplan-eth0.network"))
 	for name, tc := range map[string]struct {
 		files   map[string]string
 		links   []LinkStatus
@@ -67,6 +69,7 @@ func TestReadNetplanProblems(t *testing.T) {
 		"default route under DHCP":   {map[string]string{"10-netplan-eth0.network": strings.Replace(string(base), "Address=10.0.1.19/16\n", "DHCP=ipv4\n", 1)}, labLink(v4), labBind, "Gateway"},
 		"custom DHCP metric":         {map[string]string{"10-netplan-eth0.network": string(base) + "\n[DHCP]\nRouteMetric=500\n"}, labLink(v4), labBind, "RouteMetric"},
 		"address without prefix":     {map[string]string{"10-netplan-eth0.network": strings.Replace(string(base), "Address=10.0.1.19/16", "Address=10.0.1.19", 1)}, labLink(v4), labBind, "Address"},
+		"IPv4 link-local":            {map[string]string{"10-netplan-eth0.network": strings.Replace(string(base), "LinkLocalAddressing=ipv6", "LinkLocalAddressing=ipv4", 1)}, labLink(v4), labBind, "LinkLocalAddressing"},
 		"two IPv4 gateways":          {map[string]string{"10-netplan-eth0.network": string(base) + "\n[Route]\nDestination=0.0.0.0/0\nGateway=10.0.0.2\n"}, labLink(v4), labBind, "gateways"},
 		"static IPv6 with RA":        {map[string]string{"10-netplan-eth0.network": strings.Replace(string(base), "[Network]\n", "[Network]\nAddress=2001:db8::5/64\nIPv6AcceptRA=yes\n", 1)}, labLink(v4), labBind, "router advertisements"},
 		"static IPv6, RA by default": {map[string]string{"10-netplan-eth0.network": strings.Replace(string(base), "[Network]\n", "[Network]\nAddress=2001:db8::5/64\n", 1)}, labLink(v4, slaac), labBind, "router advertisements"},
@@ -124,5 +127,20 @@ func TestReadNetplanAcceptsItsDefaults(t *testing.T) {
 	got, problems := ReadNetplan(root, labLink(v4), labBind, "eth0")
 	if len(problems) != 0 || len(got) != 1 || got[0].MTU != 9000 || got[0].IPv4.Mode != "dhcp" || got[0].IPv6.Mode != "dhcp6" {
 		t.Fatalf("got %+v, problems %+v", got, problems)
+	}
+}
+
+// Wired 802.1X: netplan writes an ordinary .network file and keeps the credentials beside it.
+func TestReadNetplanRefusesWired8021X(t *testing.T) {
+	root := netplanfixture.Root(t, "static")
+	if err := os.MkdirAll(filepath.Join(root, "run/netplan"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "run/netplan/wpa-eth0.conf"), []byte("network={}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, problems := ReadNetplan(root, labLink(v4), labBind, "eth0")
+	if !slices.ContainsFunc(problems, func(p NetplanProblem) bool { return p.File == "/run/netplan/wpa-eth0.conf" }) {
+		t.Fatalf("problems = %+v", problems)
 	}
 }

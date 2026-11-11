@@ -113,6 +113,8 @@ type adapterView struct {
 	Name         string `json:"name"`
 	PermanentMac string `json:"permanentMac"`
 	Summary      string `json:"summary"`
+	// Addressed: the adapter has a global address now, so leaving it out would cut it off.
+	Addressed bool `json:"addressed"`
 }
 
 type proposalView struct {
@@ -161,7 +163,7 @@ func (h *takeoverHandler) serveProposal(w http.ResponseWriter, r *http.Request) 
 	baseline, err := h.read.Baseline()
 	var links []host.LinkStatus
 	var managed []host.Managed
-	var route string
+	var routes []string
 	if err == nil {
 		links, err = h.read.Links(ctx)
 	}
@@ -169,7 +171,7 @@ func (h *takeoverHandler) serveProposal(w http.ResponseWriter, r *http.Request) 
 		managed, err = h.read.Managed(ctx)
 	}
 	if err == nil {
-		route, err = h.read.Route(ctx)
+		routes, err = h.read.Route(ctx)
 	}
 	if err != nil {
 		slog.ErrorContext(ctx, "host inventory unavailable for the takeover proposal", "error", err)
@@ -186,7 +188,14 @@ func (h *takeoverHandler) serveProposal(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, r, http.StatusOK, view)
 		return
 	}
-	found, problems := host.ReadNetplan(h.read.Root, links, managed, route)
+	if len(routes) > 1 {
+		unsupported("/run/systemd/network", "More than one interface has an IPv4 default route ("+strings.Join(routes, ", ")+"); only one uplink can be taken over yet.")
+	}
+	if view.State != "" {
+		writeJSON(w, r, http.StatusOK, view)
+		return
+	}
+	found, problems := host.ReadNetplan(h.read.Root, links, managed, strings.Join(routes, ""))
 	for _, p := range problems {
 		message := p.Message
 		if p.Key != "" {
@@ -201,7 +210,7 @@ func (h *takeoverHandler) serveProposal(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, r, http.StatusOK, view)
 		return
 	}
-	view.State, view.Operations, view.Adapters = "ready", proposalOperations(found), adapters(found)
+	view.State, view.Operations, view.Adapters = "ready", proposalOperations(found), adapters(found, links)
 	writeJSON(w, r, http.StatusOK, view)
 }
 
@@ -264,7 +273,7 @@ func describe(a host.Addressing) string {
 	return "none"
 }
 
-func adapters(found []host.NetplanInterface) []adapterView {
+func adapters(found []host.NetplanInterface, links []host.LinkStatus) []adapterView {
 	out := []adapterView{}
 	for _, n := range found {
 		summary := "IPv4 " + describe(n.IPv4) + ", IPv6 " + describe(n.IPv6)
@@ -274,7 +283,10 @@ func adapters(found []host.NetplanInterface) []adapterView {
 		if len(n.DNS) > 0 {
 			summary += ", DNS " + strings.Join(n.DNS, " ")
 		}
-		out = append(out, adapterView{Name: n.Name, PermanentMac: n.PermanentMAC, Summary: summary})
+		addressed := slices.ContainsFunc(links, func(l host.LinkStatus) bool {
+			return l.Name == n.Name && slices.ContainsFunc(l.Addresses, func(a host.AddressStatus) bool { return a.Scope == "global" })
+		})
+		out = append(out, adapterView{Name: n.Name, PermanentMac: n.PermanentMAC, Summary: summary, Addressed: addressed})
 	}
 	return out
 }

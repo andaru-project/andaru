@@ -38,7 +38,7 @@ const netplanRuntime = "/run/systemd/network/"
 var netplanKeys = map[string]map[string][]string{
 	"Match":   {"PermanentMACAddress": nil, "MACAddress": nil, "Name": nil},
 	"Link":    {"MTUBytes": nil, "Name": nil, "WakeOnLan": {"off"}},
-	"Network": {"DHCP": nil, "Address": nil, "Gateway": nil, "DNS": nil, "Domains": nil, "LinkLocalAddressing": nil, "IPv6AcceptRA": nil},
+	"Network": {"DHCP": nil, "Address": nil, "Gateway": nil, "DNS": nil, "Domains": nil, "LinkLocalAddressing": {"ipv6", "no"}, "IPv6AcceptRA": nil},
 	"Route":   {"Destination": nil, "Gateway": nil},
 	// netplan's defaults for DHCP links; they change nothing Andaru renders differently.
 	"DHCP": {"RouteMetric": {"100"}, "UseMTU": {"true"}}, "DHCPv4": {"RouteMetric": {"100"}, "UseMTU": {"true"}},
@@ -105,6 +105,11 @@ func ReadNetplan(root string, links []LinkStatus, managed []Managed, defaultRout
 	var problems []NetplanProblem
 	paths, _ := filepath.Glob(filepath.Join(root, netplanRuntime, "10-netplan-*"))
 	slices.Sort(paths)
+	// Wired 802.1X: netplan keeps the credentials and a wpa_supplicant unit beside an ordinary .network file.
+	wpa, _ := filepath.Glob(filepath.Join(root, "run/netplan/wpa-*.conf"))
+	for _, path := range wpa {
+		problems = append(problems, NetplanProblem{"/run/netplan/" + filepath.Base(path), "", "netplan authenticates this interface with 802.1X, which cannot be taken over yet."})
+	}
 	mtus := map[string]int{}
 	for _, path := range paths {
 		file := netplanRuntime + filepath.Base(path)

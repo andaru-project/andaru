@@ -49,9 +49,9 @@ func newFormState(p proposal, a answers) *formState {
 		id, answer, first := op.LocalID, a.Adapters[op.LocalID], detected.Adapters[op.LocalID]
 		f := &adapterForm{id: id, name: answer.Name, zone: answer.Zone, ip4: answer.IPv4.Mode, ip6: answer.IPv6Mode,
 			addresses: strings.Join(answer.IPv4.Addresses, ", "), gateway: answer.IPv4.Gateway, detectedIPv6: first.IPv6Mode,
-			addressed: first.IPv4.Mode != "none" || first.IPv6Mode != "none"}
+		}
 		if i := slices.IndexFunc(p.Adapters, func(x adapter) bool { return x.Name == answer.Name }); i >= 0 {
-			f.summary = p.Adapters[i].Summary
+			f.summary, f.addressed = p.Adapters[i].Summary, p.Adapters[i].Addressed
 		}
 		if answer.Keep {
 			s.kept = append(s.kept, id)

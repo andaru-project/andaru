@@ -23,7 +23,10 @@ import (
 	"github.com/andaru-project/andaru/internal/config"
 )
 
-type adapter struct{ Name, PermanentMac, Summary string }
+type adapter struct {
+	Name, PermanentMac, Summary string
+	Addressed                   bool
+}
 
 type finding struct{ Severity, Code, Path, Message string }
 

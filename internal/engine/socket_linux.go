@@ -42,7 +42,7 @@ func Serve(ctx context.Context, socketPath, stateDir string) (result error) {
 		}
 	}()
 	defer func() { cancel(context.Canceled); <-stopped }()
-	read := hostReader{Links: host.ReadLinks, Facts: host.ReadRealizerFacts, Managed: host.ReadManaged, Baseline: host.ReadBaseline, Route: host.ReadDefaultRoute}
+	read := hostReader{Links: host.ReadLinks, Facts: host.ReadRealizerFacts, Managed: host.ReadManaged, Baseline: host.ReadBaseline, Route: host.ReadDefaultRoutes}
 	applies := newAppliesHandler(store.RealizationInput, read, newSystemdRunner(stateDir), stateDir)
 	live := newLiveHandler(applies, newTakeoverHandler(store.RealizationInput, store.Draft, read, stateDir))
 	err = serveUnix(lifetime, socketPath, newHandler(host.ReadLinks, newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, live)))

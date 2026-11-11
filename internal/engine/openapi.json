@@ -3131,7 +3131,8 @@
               "required": [
                 "name",
                 "permanentMac",
-                "summary"
+                "summary",
+                "addressed"
               ],
               "properties": {
                 "name": {
@@ -3142,6 +3143,10 @@
                 },
                 "summary": {
                   "type": "string"
+                },
+                "addressed": {
+                  "type": "boolean",
+                  "description": "The adapter has a global address now; leaving it out would cut it off."
                 }
               }
             }
