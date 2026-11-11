@@ -360,3 +360,14 @@ func TestProposalForIfupdown(t *testing.T) {
 		t.Fatalf("resolved not in charge = %+v", got)
 	}
 }
+
+// The kernel's own SLAAC address says nothing about DNS: router advertisements may carry no servers.
+func TestProposalPrefillsDNSBesideKernelSLAAC(t *testing.T) {
+	b := newDebianBench(t, "ifupdown-static")
+	b.addresses = append(b.addresses, host.AddressStatus{Family: "ipv6", Address: "2001:db8::be24:11ff:fe38:7137", PrefixLength: 64, Scope: "global"})
+	b.resolved = []string{"192.0.2.53"}
+	raw, _ := json.Marshal(b.proposal(t).Operations)
+	if !strings.Contains(string(raw), `"ipv6":{"mode":"slaac"}`) || !strings.Contains(string(raw), `"dns":{"servers":["192.0.2.53"]}`) {
+		t.Fatalf("operations = %s", raw)
+	}
+}

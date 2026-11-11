@@ -26,6 +26,8 @@ type IfupdownInterface struct {
 	Hotplug  bool          // allow-hotplug; false means auto (or neither)
 	DHCP     bool          // inet dhcp
 	Identity *DHCPIdentity // set when DHCP
+	// KernelSLAAC: no inet6 stanza, but the kernel took a SLAAC address; it says nothing about DNS servers.
+	KernelSLAAC bool
 }
 
 const (
@@ -242,7 +244,7 @@ func ReadIfupdown(root string, links []LinkStatus, defaultRoutes []string) ([]If
 		if !inet6[name] && slices.ContainsFunc(links[at].Addresses, func(a AddressStatus) bool {
 			return a.Family == "ipv6" && a.Scope == "global" && a.PrefixLength != 128
 		}) {
-			i.IPv6.Mode = "slaac"
+			i.IPv6.Mode, i.KernelSLAAC = "slaac", true
 		}
 		if i.DHCP {
 			f.identity(i)

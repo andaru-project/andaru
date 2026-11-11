@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -110,7 +111,7 @@ func TestRollbackStaysPendingUntilAddressesReturn(t *testing.T) {
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
-	b.net.ifupFails, b.net.address["eth0"] = true, nil
+	b.net.ifupFails = true
 	if err := b.r.Rollback(t.Context(), id, "operator"); err == nil {
 		t.Fatal("rolled back without the address")
 	}
@@ -193,5 +194,58 @@ func TestBootFallsBackToIfupdown(t *testing.T) {
 	}
 	if len(b.net.netFiles()) != 0 || b.pointers().Live != nil {
 		t.Fatalf("files %v pointers %+v", b.net.netFiles(), b.pointers())
+	}
+}
+
+// Restarting networking.service runs ifdown -a first, so it must not run while an auto interface is already back.
+func TestHandBackSkipsNetworkingWhenAutoIsUp(t *testing.T) {
+	b := debian(t)
+	writeFile(t, filepath.Join(b.net.root, "etc/network/interfaces"), "auto eth0\niface eth0 inet dhcp\n")
+	id := b.ifupdownTakeover()
+	if err := b.r.Activate(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	b.net.dhcpcd("eth0")
+	if err := b.r.Rollback(t.Context(), id, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	if b.net.ran("systemctl restart networking.service") != 0 {
+		t.Fatalf("bounced an auto interface that was back: %q", b.net.argv)
+	}
+	// Down, it is raised by networking.service.
+	b = debian(t)
+	writeFile(t, filepath.Join(b.net.root, "etc/network/interfaces"), "auto eth0\niface eth0 inet dhcp\n")
+	id = b.ifupdownTakeover()
+	if err := b.r.Activate(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Rollback(t.Context(), id, "operator"); err != nil || b.net.ran("systemctl restart networking.service") != 1 {
+		t.Fatalf("auto interface not raised: %v %q", err, b.net.argv)
+	}
+}
+
+// A failed activation whose hand-back fails leaves the generation to the armed timer, never the host without network.
+func TestActivateIfupdownHandBackFailureStaysPending(t *testing.T) {
+	b := debian(t)
+	b.net.fail, b.net.ifupFails = "systemctl start systemd-networkd", true
+	id := b.ifupdownTakeover()
+	if err := b.r.Activate(t.Context(), id); err == nil {
+		t.Fatal("activation succeeded")
+	}
+	if p, g := b.pointers(), b.read(id); p.Pending == nil || *p.Pending != id || g.State.State == Failed {
+		t.Fatalf("pointers %+v state %+v", p, g.State)
+	}
+}
+
+// After an ifupdown takeover resolved is the only resolver; activation without any server is no success.
+func TestActivateIfupdownNeedsDNSServers(t *testing.T) {
+	b := debian(t)
+	b.net.offered = nil
+	id := b.ifupdownTakeover()
+	if err := b.r.Activate(t.Context(), id); err == nil {
+		t.Fatal("activated with no DNS server")
+	}
+	if g := b.read(id); g.State.State != Failed || !strings.Contains(g.State.Reason, "no DNS server") {
+		t.Fatalf("state = %+v", g.State)
 	}
 }

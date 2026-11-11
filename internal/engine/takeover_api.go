@@ -433,7 +433,7 @@ func (h *takeoverHandler) proposeIfupdown(w http.ResponseWriter, r *http.Request
 	offered := false
 	for i, f := range found {
 		detected[i] = f.Detected
-		offered = offered || f.DHCP || f.IPv6.Mode == "slaac"
+		offered = offered || f.DHCP || f.IPv6.Mode == "slaac" && !f.KernelSLAAC
 	}
 	if !offered {
 		// Nothing offers servers after the takeover, so propose the ones in use; none leaves the choice to the operator.

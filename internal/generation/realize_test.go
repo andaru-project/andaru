@@ -109,6 +109,8 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 	case strings.HasPrefix(command, "dhcpcd -p -x "):
 		_ = os.Remove(filepath.Join(f.root, "run/dhcpcd", args[2]+".pid"))
 	case command == "systemctl restart ifup@eth0.service" || command == "systemctl restart networking.service":
+		// The restart runs ifdown first, which flushes the address; only a working ifup brings it back.
+		f.address["eth0"] = nil
 		if !f.ifupFails {
 			f.dhcpcd("eth0")
 			f.address["eth0"] = []string{"10.0.1.19/20"}
