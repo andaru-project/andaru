@@ -24,8 +24,12 @@ func create(t *testing.T, dir string, m Manifest, files map[string]string) int {
 	contents := map[string][]byte{}
 	m.Files = nil
 	for name, body := range files {
-		m.Files = append(m.Files, FileEntry{Path: netDir + name, Mode: "0644"})
-		contents[netDir+name] = []byte(body)
+		path := netDir + name
+		if name == filterEntry {
+			path = name // the filter is a generation entry, not a file under /run
+		}
+		m.Files = append(m.Files, FileEntry{Path: path, Mode: "0644"})
+		contents[path] = []byte(body)
 	}
 	id, err := Create(dir, m, contents)
 	if err != nil {

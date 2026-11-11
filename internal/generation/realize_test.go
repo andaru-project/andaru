@@ -8,6 +8,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -37,6 +38,8 @@ type fakeNetworkd struct {
 	stopped            bool // networkd is not running: networkctl fails
 	// ifupdown, for hosts the Debian installer set up: ifupFails makes ifup@ and networking.service raise nothing.
 	ifupFails bool
+	// table is the comment of the loaded inet andaru table, "" when none is loaded; tableComment overrides what nft reports.
+	table, tableComment string
 
 	dns     map[string][]string     // what resolved reports per interface
 	editDNS func([]string) []string // distorts that report
@@ -105,6 +108,28 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 		if f.stopped {
 			return nil, errors.New("inactive")
 		}
+	case strings.HasPrefix(command, "nft -f "):
+		data, err := os.ReadFile(args[1])
+		if err != nil {
+			return nil, err
+		}
+		if m := regexp.MustCompile(`comment "([^"]+)"`).FindSubmatch(data); m != nil {
+			f.table = string(m[1])
+		}
+	case command == "nft -j list table inet andaru":
+		if f.table == "" {
+			return nil, errors.New("no such table")
+		}
+		comment := f.table
+		if f.tableComment != "" {
+			comment = f.tableComment
+		}
+		return []byte(`{"nftables":[{"metainfo":{}},{"table":{"family":"inet","name":"andaru","comment":"` + comment + `"}}]}`), nil
+	case command == "nft delete table inet andaru":
+		if f.table == "" {
+			return nil, errors.New("no such table")
+		}
+		f.table = ""
 	case command == "systemctl start systemd-networkd.service":
 		f.stopped = false
 	case command == "systemctl stop systemd-networkd.service systemd-networkd.socket":

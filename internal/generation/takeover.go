@@ -324,6 +324,11 @@ func (r Realizer) Boot(ctx context.Context) error {
 				}
 			}
 		}
+		// A candidate whose filter does not load is unusable: never its files without its filter.
+		if path, comment, ok, err := r.filter(g); err != nil || ok && r.loadFilter(ctx, path, comment) != nil {
+			failures = append(failures, fmt.Errorf("generation %d: its packet filter does not load", *id))
+			continue
+		}
 		if err := r.place(nil, set); err != nil {
 			return err
 		}

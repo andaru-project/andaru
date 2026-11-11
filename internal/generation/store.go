@@ -77,7 +77,7 @@ var (
 // Dir is where generations live under the engine's state directory.
 func Dir(stateDir string) string { return filepath.Join(stateDir, "generations") }
 
-func allowed(path string) bool { return ownPath.MatchString(path) }
+func allowed(path string) bool { return ownPath.MatchString(path) || path == filterEntry }
 
 func is(p *int, id int) bool { return p != nil && *p == id }
 
