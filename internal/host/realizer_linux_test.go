@@ -1,6 +1,7 @@
 package host
 
 import (
+	_ "embed"
 	"os"
 	"path/filepath"
 	"slices"
@@ -52,5 +53,19 @@ func TestReadRealizerFacts(t *testing.T) {
 	}
 	if _, err = readRealizerFacts(filepath.Join(root, "pppd"), run, "", "", ""); err == nil {
 		t.Fatal("an unreadable configuration directory was reported as empty")
+	}
+}
+
+//go:embed testdata/networkctl-list.json
+var networkctlList []byte
+
+func TestParseManaged(t *testing.T) {
+	got, err := ParseManaged(networkctlList)
+	want := []Managed{{Name: "eth0", NetworkFile: "/run/systemd/network/10-netplan-eth0.network", State: "configured"}}
+	if err != nil || !slices.Equal(got, want) {
+		t.Fatalf("managed = %+v, %v; want only the link networkd configures", got, err)
+	}
+	if _, err := ParseManaged([]byte(`[]`)); err == nil {
+		t.Fatal("a reply that is not networkctl's object was accepted")
 	}
 }

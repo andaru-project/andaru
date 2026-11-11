@@ -57,7 +57,7 @@ func ReadLinks(ctx context.Context) ([]LinkStatus, error) {
 	if err != nil {
 		return nil, err
 	}
-	return parseLinks(data)
+	return ParseLinks(data)
 }
 
 type toolAddress struct {
@@ -82,7 +82,8 @@ type toolLink struct {
 	Addresses []toolAddress `json:"addr_info"`
 }
 
-func parseLinks(data []byte) ([]LinkStatus, error) {
+// ParseLinks decodes `ip -d -j address show`.
+func ParseLinks(data []byte) ([]LinkStatus, error) {
 	// encoding/json otherwise replaces invalid UTF-8, inventing a different name.
 	if !utf8.Valid(data) {
 		return nil, errors.New("interface inventory contains invalid UTF-8")

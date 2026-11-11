@@ -1,6 +1,8 @@
 package host
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -59,4 +61,44 @@ func readRealizerFacts(etcDir, runDir, pppd, pluginGlob, device string) (Realize
 	plugins, _ := filepath.Glob(pluginGlob)
 	facts.PPPDaemon, facts.PPPoEPlugin, facts.PPPDevice = exists(pppd), len(plugins) > 0, exists(device)
 	return facts, nil
+}
+
+// Managed is a link systemd-networkd configures and the file it took the configuration from.
+type Managed struct {
+	Name, NetworkFile string
+	// State is networkd's administrative state; "configured" once the file has been applied.
+	State string
+}
+
+// ParseManaged reads `networkctl list --json=short`, keeping only links bound to a .network file.
+func ParseManaged(data []byte) ([]Managed, error) {
+	var reply struct {
+		Interfaces []struct {
+			Name, NetworkFile, AdministrativeState string
+		}
+	}
+	if err := json.Unmarshal(data, &reply); err != nil {
+		return nil, fmt.Errorf("decode networkd link list: %w", err)
+	}
+	if reply.Interfaces == nil {
+		return nil, errors.New("networkd link list has no Interfaces")
+	}
+	managed := []Managed{}
+	for _, link := range reply.Interfaces {
+		if link.NetworkFile != "" {
+			managed = append(managed, Managed{Name: link.Name, NetworkFile: link.NetworkFile, State: link.AdministrativeState})
+		}
+	}
+	return managed, nil
+}
+
+// ReadManaged asks the running networkd which links it configures.
+func ReadManaged(ctx context.Context) ([]Managed, error) {
+	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	data, err := readCommand(ctx, "/usr/bin/networkctl", "list", "--json=short")
+	if err != nil {
+		return nil, err
+	}
+	return ParseManaged(data)
 }
