@@ -134,3 +134,45 @@ func TestReadBaseline(t *testing.T) {
 		t.Fatal("ifupdown not seen")
 	}
 }
+
+func TestResolvedInCharge(t *testing.T) {
+	for name, tc := range map[string]struct {
+		links map[string]string // path under root -> link target
+		files []string
+		want  bool
+	}{
+		"absolute link to the stub":       {map[string]string{"etc/resolv.conf": "/run/systemd/resolve/stub-resolv.conf"}, []string{"run/systemd/resolve/stub-resolv.conf"}, true},
+		"relative link, Debian's default": {map[string]string{"etc/resolv.conf": "../run/systemd/resolve/stub-resolv.conf"}, []string{"run/systemd/resolve/stub-resolv.conf"}, true},
+		"static stub in /usr/lib":         {map[string]string{"etc/resolv.conf": "/usr/lib/systemd/resolv.conf"}, []string{"usr/lib/systemd/resolv.conf"}, true},
+		"chain of two links":              {map[string]string{"etc/resolv.conf": "resolv.link", "etc/resolv.link": "/run/systemd/resolve/resolv.conf"}, []string{"run/systemd/resolve/resolv.conf"}, true},
+		"plain file":                      {nil, []string{"etc/resolv.conf"}, false},
+		"link to another manager":         {map[string]string{"etc/resolv.conf": "/run/resolvconf/resolv.conf"}, []string{"run/resolvconf/resolv.conf"}, false},
+		"dangling link":                   {map[string]string{"etc/resolv.conf": "/run/systemd/resolve/stub-resolv.conf"}, nil, false},
+		"link loop":                       {map[string]string{"etc/resolv.conf": "loop", "etc/loop": "resolv.conf"}, nil, false},
+		"no file":                         {nil, nil, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range tc.files {
+				full := filepath.Join(root, path)
+				if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(full, nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for path, target := range tc.links {
+				if err := os.Symlink(target, filepath.Join(root, path)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := ResolvedInCharge(root); got != tc.want {
+				t.Fatalf("ResolvedInCharge = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

@@ -21,7 +21,7 @@ var testdata embed.FS
 
 var update = flag.Bool("update", false, "rewrite golden files")
 
-var allFacts = host.RealizerFacts{PPPDaemon: true, PPPoEPlugin: true, PPPDevice: true}
+var allFacts = host.RealizerFacts{PPPDaemon: true, PPPoEPlugin: true, PPPDevice: true, ResolvedInCharge: true}
 
 type observed struct{ Name, Kind, MAC string }
 
@@ -381,6 +381,26 @@ func TestDNSOnUnrealisableLink(t *testing.T) {
 	for _, f := range render(t, in).Files {
 		if strings.Contains(f.Content, "DNS=") {
 			t.Fatalf("%s names DNS servers for an interface that does not exist:\n%s", f.Path, f.Content)
+		}
+	}
+}
+
+func TestDNSNotAppliedFinding(t *testing.T) {
+	in := fixture(t, "static-dns")
+	in.Facts.ResolvedInCharge = false
+	result := render(t, in)
+	want := Finding{"warning", "DNS_NOT_APPLIED", "/segments/0/addressing/dns", "This host's /etc/resolv.conf is not managed by systemd-resolved, so these servers are saved but not used."}
+	if !slices.Equal(result.Findings, []Finding{want}) || !result.Realizable {
+		t.Fatalf("findings = %+v, realizable = %v", result.Findings, result.Realizable)
+	}
+	if got := render(t, fixture(t, "static-dns")).Findings; len(got) != 0 {
+		t.Fatalf("resolved is in charge, yet: %+v", got)
+	}
+	in = fixture(t, "ethernet-uplink")
+	in.Facts.ResolvedInCharge = false
+	for _, f := range render(t, in).Findings {
+		if f.Code == "DNS_NOT_APPLIED" {
+			t.Fatal("a configuration that declares no DNS was warned about it")
 		}
 	}
 }

@@ -83,6 +83,9 @@ func (r *renderer) addressing(id string, ppp bool) (sections []section, sources 
 	}
 	useDNS := "yes"
 	if dns := s.Addressing.DNS; dns != nil {
+		if !r.in.Facts.ResolvedInCharge {
+			r.find("warning", "DNS_NOT_APPLIED", fmt.Sprintf("/segments/%d/addressing/dns", si), "This host's /etc/resolv.conf is not managed by systemd-resolved, so these servers are saved but not used.")
+		}
 		// Declared order is the order servers are tried in.
 		for _, server := range dns.Servers {
 			network = append(network, "DNS="+server)

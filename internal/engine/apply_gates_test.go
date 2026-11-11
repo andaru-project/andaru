@@ -2,7 +2,9 @@ package engine
 
 import (
 	"encoding/json"
+	"maps"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/andaru-project/andaru/internal/generation"
@@ -148,6 +150,21 @@ func TestApplyFindings(t *testing.T) {
 			in.Baseline.StrayYAML = []string{"/run/netplan/x.yaml"}
 			return in
 		}, []want{{"FOREIGN_CONFIGURATION", ""}, {"FOREIGN_CONFIGURATION", ""}, {"TAKEOVER_UNSUPPORTED_BASELINE", "/run/netplan/x.yaml"}}},
+		"static DNS declared for the interface netplan's file configures": {func() gateInput {
+			return staticDNS(map[string]string{"eth0": "DNS=192.0.2.53\n"}, "eth0")
+		}, nil},
+		"static DNS declared on another interface only": {func() gateInput {
+			return staticDNS(map[string]string{"eth0": "", "eth1": "DNS=192.0.2.53\n"}, "eth0")
+		}, []want{{"FOREIGN_CONFIGURATION", ""}, {"FOREIGN_CONFIGURATION", ""}, {"TAKEOVER_UNSUPPORTED_BASELINE", netplanWAN}}},
+		"static DNS file configures two interfaces, one declared": {func() gateInput {
+			return staticDNS(map[string]string{"eth0": "DNS=192.0.2.53\n", "eth1": ""}, "eth0", "eth1")
+		}, []want{{"FOREIGN_CONFIGURATION", ""}, {"FOREIGN_CONFIGURATION", ""}, {"TAKEOVER_UNSUPPORTED_BASELINE", netplanWAN}}},
+		"static DNS file configures no interface": {func() gateInput {
+			return staticDNS(map[string]string{"eth0": "DNS=192.0.2.53\n"})
+		}, []want{{"FOREIGN_CONFIGURATION", ""}, {"FOREIGN_CONFIGURATION", ""}, {"TAKEOVER_UNSUPPORTED_BASELINE", netplanWAN}, {"WOULD_UNCONFIGURE", ""}}[:3]},
+		"only UseDNS mentions DNS": {func() gateInput {
+			return staticDNS(map[string]string{"eth0": "[DHCPv4]\nUseDNS=no\n"}, "eth0")
+		}, []want{{"FOREIGN_CONFIGURATION", ""}, {"FOREIGN_CONFIGURATION", ""}, {"TAKEOVER_UNSUPPORTED_BASELINE", netplanWAN}}},
 		"static DNS in the baseline": {func() gateInput {
 			in := lab()
 			in.Baseline.StaticDNS = []string{netplanFile}
@@ -201,5 +218,35 @@ func TestApplyFindings(t *testing.T) {
 				t.Fatalf("findings = %v\nwant %v", got, row.want)
 			}
 		})
+	}
+}
+
+// netplanWAN is named after netplan's own id for the interface, which need not be the kernel's name.
+const netplanWAN = "/run/systemd/network/10-netplan-wan.network"
+
+// staticDNS is a netplan host whose one generated file sets DNS servers. rendered gives the content of
+// Andaru's file per interface; bound lists the interfaces networkd has bound to netplan's file.
+func staticDNS(rendered map[string]string, bound ...string) gateInput {
+	in := lab()
+	in.Facts.ForeignFiles = []string{"/run/systemd/network/10-netplan-wan.link", netplanWAN}
+	in.Result.Findings = foreign(in.Facts.ForeignFiles...)
+	in.Baseline.StaticDNS = []string{netplanWAN}
+	in.Result.Files, in.Managed, in.Links = nil, nil, nil
+	for _, name := range slices.Sorted(maps.Keys(rendered)) {
+		in.Result.Files = append(in.Result.Files, render.File{Path: networkDir + "50-andaru-" + name + ".network", Content: "[Match]\n\n[Network]\n" + rendered[name]})
+	}
+	for _, name := range bound {
+		in.Managed = append(in.Managed, host.Managed{Name: name, NetworkFile: netplanWAN, State: "configured"})
+		in.Links = append(in.Links, global(name, ""))
+	}
+	return in
+}
+
+func TestStaticDNSRefusalSaysWhatToDeclare(t *testing.T) {
+	findings := applyFindings(staticDNS(map[string]string{"eth0": ""}, "eth0"))
+	if !slices.ContainsFunc(findings, func(f render.Finding) bool {
+		return f.Code == "TAKEOVER_UNSUPPORTED_BASELINE" && strings.Contains(f.Message, `"dns"`) && strings.Contains(f.Message, "eth0")
+	}) {
+		t.Fatalf("findings = %+v", findings)
 	}
 }

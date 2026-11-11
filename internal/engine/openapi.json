@@ -2608,7 +2608,8 @@
               "CREDENTIAL_TOO_LONG",
               "UNSUPPORTED_COMBINATION",
               "DEPENDENCY_UNAVAILABLE",
-              "RA_PREFIX_UNSUPPORTED"
+              "RA_PREFIX_UNSUPPORTED",
+              "DNS_NOT_APPLIED"
             ]
           },
           "path": {
@@ -2884,6 +2885,7 @@
               "UNSUPPORTED_COMBINATION",
               "DEPENDENCY_UNAVAILABLE",
               "RA_PREFIX_UNSUPPORTED",
+              "DNS_NOT_APPLIED",
               "BOOT_UNIT_DISABLED",
               "TAKEOVER_UNSUPPORTED_BASELINE",
               "TAKEOVER_MISMATCH",

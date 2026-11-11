@@ -21,6 +21,8 @@ type RealizerFacts struct {
 	PPPoEPlugin  bool
 	// PPPDevice reports /dev/ppp; Debian cloud kernels ship without PPP.
 	PPPDevice bool
+	// ResolvedInCharge reports that systemd-resolved manages /etc/resolv.conf, so DNS= in a .network file is used.
+	ResolvedInCharge bool
 }
 
 // ReadRealizerFacts inspects the host without changing it.
@@ -60,7 +62,32 @@ func readRealizerFacts(etcDir, runDir, pppd, pluginGlob, device string) (Realize
 	exists := func(path string) bool { _, err := os.Stat(path); return err == nil }
 	plugins, _ := filepath.Glob(pluginGlob)
 	facts.PPPDaemon, facts.PPPoEPlugin, facts.PPPDevice = exists(pppd), len(plugins) > 0, exists(device)
+	facts.ResolvedInCharge = ResolvedInCharge("")
 	return facts, nil
+}
+
+// ResolvedInCharge reports whether <root>/etc/resolv.conf, with every symbolic link followed inside root,
+// is one of systemd-resolved's files. networkd only hands DNS servers to resolved; nothing else reads them.
+func ResolvedInCharge(root string) bool {
+	path := "/etc/resolv.conf"
+	for range 8 {
+		info, err := os.Lstat(root + path)
+		if err != nil {
+			return false
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			return info.Mode().IsRegular() && (strings.HasPrefix(path, "/run/systemd/resolve/") || path == "/usr/lib/systemd/resolv.conf")
+		}
+		target, err := os.Readlink(root + path)
+		if err != nil {
+			return false
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(path), target)
+		}
+		path = filepath.Clean(target)
+	}
+	return false
 }
 
 // Managed is a link systemd-networkd configures and the file it took the configuration from.
