@@ -262,3 +262,16 @@ func TestHTTPTakeoverClientSpeaksTheEngineContract(t *testing.T) {
 		t.Fatalf("pending = %q, %v", pending, err)
 	}
 }
+
+// ifupdown is masked for every interface it configures, so the assistant must keep each one.
+func TestAdapterRequiredCannotBeLeftOut(t *testing.T) {
+	p := labProposal(t)
+	p.Adapters[1].Required = true
+	s := newFormState(p, defaultAnswers(p))
+	if err := s.checkKept([]string{"link1"}); err == nil || !strings.Contains(err.Error(), "ifupdown") {
+		t.Fatalf("leaving out a required adapter: %v", err)
+	}
+	if err := s.checkKept([]string{"link1", "link2"}); err != nil {
+		t.Fatal(err)
+	}
+}

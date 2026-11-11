@@ -68,6 +68,10 @@ func (f *ifupdownFiles) read(path string, depth int) {
 	}
 	f.seen[path] = true
 	info, err := os.Lstat(f.root + path)
+	if depth == 0 && errors.Is(err, fs.ErrNotExist) {
+		f.problem(path, "", "ifupdown's configuration file does not exist.")
+		return
+	}
 	if err != nil || !info.Mode().IsRegular() {
 		f.problem(path, "source", "Only regular files can be sourced, not symbolic links or anything else.")
 		return

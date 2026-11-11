@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -91,7 +92,7 @@ type proposalReply struct {
 	Operations   []json.RawMessage `json:"operations"`
 	Adapters     []struct {
 		Name, PermanentMac, Summary string
-		Addressed                   bool
+		Addressed, Required         bool
 	}
 	Findings []struct{ Severity, Code, Path, Message string }
 }
@@ -187,11 +188,12 @@ func TestProposalStates(t *testing.T) {
 		t.Fatalf("two default routes = %+v", got)
 	}
 
+	// netplan and ifupdown both configure the host: neither can be taken over alone.
 	b = newTakeoverBench(t, "static")
-	b.baseline = host.Baseline{Ifupdown: true}
+	b.baseline = host.Baseline{Netplan: true, Ifupdown: true}
 	got := b.proposal(t)
-	if got.State != "unsupported" || len(got.Operations) != 0 || len(got.Findings) == 0 || !strings.Contains(got.Findings[0].Message, "later release") {
-		t.Fatalf("ifupdown = %+v", got)
+	if got.State != "unsupported" || len(got.Operations) != 0 || len(got.Findings) != 1 || got.Findings[0].Path != "/sbin/ifup" {
+		t.Fatalf("netplan and ifupdown = %+v", got)
 	}
 
 	b = newTakeoverBench(t, "static")
@@ -322,5 +324,30 @@ func TestIdentityComesFromTheCapturedBaseline(t *testing.T) {
 	got := b.postDraft(t)
 	if len(got.Files) != 1 || !strings.Contains(got.Files[0].Content, "DUIDRawData=aa:bb:cc\n") {
 		t.Fatalf("files = %+v", got.Files)
+	}
+}
+
+func TestProposalForIfupdown(t *testing.T) {
+	got := newDebianBench(t, "ifupdown-dhcp").proposal(t)
+	if got.State != "ready" || len(got.Adapters) != 1 || !got.Adapters[0].Required || !got.Adapters[0].Addressed {
+		t.Fatalf("dhcp = %+v", got)
+	}
+	sameJSON(t, got.Operations, `[
+		{"op":"create","collection":"zones","localId":"wan","value":{"name":"wan"}},
+		{"op":"create","collection":"links","localId":"link1","value":{"name":"ens18","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"`+debianMAC+`"}},
+		{"op":"create","collection":"segments","localId":"seg1","value":{"name":"ens18","link":"@link1","zone":"@wan","addressing":{"ipv4":{"mode":"dhcp"},"ipv6":{"mode":"slaac"}}}}]`)
+
+	// A static install takes no DNS from anywhere: the servers in use now are proposed.
+	b := newDebianBench(t, "ifupdown-static")
+	b.resolved = []string{"192.0.2.53", "2001:db8::53"}
+	sameJSON(t, b.proposal(t).Operations, `[
+		{"op":"create","collection":"zones","localId":"wan","value":{"name":"wan"}},
+		{"op":"create","collection":"links","localId":"link1","value":{"name":"ens18","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"`+debianMAC+`"}},
+		{"op":"create","collection":"segments","localId":"seg1","value":{"name":"ens18","link":"@link1","zone":"@wan","addressing":{"ipv4":{"mode":"static","addresses":["10.0.1.13/16"],"gateway":"10.0.0.1"},"ipv6":{"mode":"none"},"dns":{"servers":["192.0.2.53","2001:db8::53"]}}}}]`)
+
+	b = newDebianBench(t, "ifupdown-dhcp")
+	b.facts.ResolvedInCharge = false
+	if got := b.proposal(t); got.State != "unsupported" || len(got.Operations) != 0 || !slices.ContainsFunc(got.Findings, func(f struct{ Severity, Code, Path, Message string }) bool { return f.Code == "RESOLVED_NOT_IN_CHARGE" }) {
+		t.Fatalf("resolved not in charge = %+v", got)
 	}
 }

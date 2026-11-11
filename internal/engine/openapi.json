@@ -3136,7 +3136,8 @@
                 "name",
                 "permanentMac",
                 "summary",
-                "addressed"
+                "addressed",
+                "required"
               ],
               "properties": {
                 "name": {
@@ -3151,6 +3152,10 @@
                 "addressed": {
                   "type": "boolean",
                   "description": "The adapter has a global address now; leaving it out would cut it off."
+                },
+                "required": {
+                  "type": "boolean",
+                  "description": "ifupdown configures the adapter, and the takeover masks ifupdown for every interface, so it cannot be left out."
                 }
               }
             }

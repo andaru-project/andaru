@@ -166,6 +166,8 @@ type adapterView struct {
 	Summary      string `json:"summary"`
 	// Addressed: the adapter has a global address now, so leaving it out would cut it off.
 	Addressed bool `json:"addressed"`
+	// Required: ifupdown configures it, and the takeover masks ifupdown for every interface.
+	Required bool `json:"required"`
 }
 
 type proposalView struct {
@@ -230,8 +232,9 @@ func (h *takeoverHandler) serveProposal(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	switch {
-	case baseline.Ifupdown:
-		unsupported("/sbin/ifup", "This host is configured with ifupdown; taking over an ifupdown host comes in a later release.")
+	case baseline.Ifupdown && !baseline.IfupdownMasked && baseline.Netplan:
+		unsupported("/sbin/ifup", "Both netplan and ifupdown configure this host; Andaru can take over one of them, not both.")
+	case (gateInput{Baseline: baseline}).fromIfupdown():
 	case !baseline.Netplan:
 		unsupported("/usr/sbin/netplan", "Only a netplan-configured host can be taken over by the assistant.")
 	}
@@ -244,6 +247,10 @@ func (h *takeoverHandler) serveProposal(w http.ResponseWriter, r *http.Request) 
 	}
 	if view.State != "" {
 		writeJSON(w, r, http.StatusOK, view)
+		return
+	}
+	if (gateInput{Baseline: baseline}).fromIfupdown() {
+		h.proposeIfupdown(w, r, view, links, managed, routes)
 		return
 	}
 	found, problems := host.ReadNetplan(h.read.Root, links, managed, strings.Join(routes, ""))
@@ -261,7 +268,7 @@ func (h *takeoverHandler) serveProposal(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, r, http.StatusOK, view)
 		return
 	}
-	view.State, view.Operations, view.Adapters = "ready", proposalOperations(found), adapters(found, links)
+	view.State, view.Operations, view.Adapters = "ready", proposalOperations(found), adapters(found, links, false)
 	writeJSON(w, r, http.StatusOK, view)
 }
 
@@ -324,7 +331,7 @@ func describe(a host.Addressing) string {
 	return "none"
 }
 
-func adapters(found []host.Detected, links []host.LinkStatus) []adapterView {
+func adapters(found []host.Detected, links []host.LinkStatus, required bool) []adapterView {
 	out := []adapterView{}
 	for _, n := range found {
 		summary := "IPv4 " + describe(n.IPv4) + ", IPv6 " + describe(n.IPv6)
@@ -337,7 +344,7 @@ func adapters(found []host.Detected, links []host.LinkStatus) []adapterView {
 		addressed := slices.ContainsFunc(links, func(l host.LinkStatus) bool {
 			return l.Name == n.Name && slices.ContainsFunc(l.Addresses, func(a host.AddressStatus) bool { return a.Scope == "global" })
 		})
-		out = append(out, adapterView{Name: n.Name, PermanentMac: n.PermanentMAC, Summary: summary, Addressed: addressed})
+		out = append(out, adapterView{Name: n.Name, PermanentMac: n.PermanentMAC, Summary: summary, Addressed: addressed, Required: required})
 	}
 	return out
 }
@@ -400,4 +407,44 @@ func ifupdownLimits(ifupdown []host.IfupdownInterface) []render.Finding {
 		out = append(out, limit("SLAAC IPv6 addresses change at the takeover, so a session on one is cut; DHCP and DHCPv6 addresses are kept."))
 	}
 	return out
+}
+
+// proposeIfupdown proposes taking over what ifupdown configures, refusing as the apply gates would.
+func (h *takeoverHandler) proposeIfupdown(w http.ResponseWriter, r *http.Request, view proposalView, links []host.LinkStatus, managed []host.Managed, routes []string) {
+	ctx := r.Context()
+	facts, err := h.read.Facts()
+	if err != nil {
+		slog.ErrorContext(ctx, "host inventory unavailable for the takeover proposal", "error", err)
+		writeError(w, r, http.StatusServiceUnavailable, "INVENTORY_UNAVAILABLE", "Interface inventory is unavailable; inspect the engine journal.")
+		return
+	}
+	found, problems := host.ReadIfupdown(h.read.Root, links, routes)
+	view.Findings = append(view.Findings, ifupdownFindings(problems, facts, managed)...)
+	if len(found) == 0 && len(view.Findings) == 0 {
+		view.Findings = append(view.Findings, render.Finding{Severity: "error", Code: "TAKEOVER_UNSUPPORTED_BASELINE", Path: "/etc/network/interfaces", Message: "ifupdown configures no interface here."})
+	}
+	if len(view.Findings) > 0 {
+		view.State = "unsupported"
+		writeJSON(w, r, http.StatusOK, view)
+		return
+	}
+	detected := make([]host.Detected, len(found))
+	offered := false
+	for i, f := range found {
+		detected[i] = f.Detected
+		offered = offered || f.DHCP || f.IPv6.Mode == "slaac"
+	}
+	if !offered {
+		// Nothing offers servers after the takeover, so propose the ones in use; none leaves the choice to the operator.
+		servers, domains, err := h.read.Resolved(ctx)
+		if err != nil {
+			slog.ErrorContext(ctx, "ask systemd-resolved for the host's servers", "error", err)
+		}
+		uplink := max(slices.IndexFunc(detected, func(d host.Detected) bool { return d.DefaultRoute }), 0)
+		if len(servers) > 0 {
+			detected[uplink].DNS, detected[uplink].Domains = servers, slices.DeleteFunc(domains, func(d string) bool { return strings.HasPrefix(d, "~") })
+		}
+	}
+	view.State, view.Operations, view.Adapters = "ready", proposalOperations(detected), adapters(detected, links, true)
+	writeJSON(w, r, http.StatusOK, view)
 }
