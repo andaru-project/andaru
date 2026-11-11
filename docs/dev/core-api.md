@@ -213,7 +213,7 @@ What happens, in order:
 
 ### Takeover
 
-`--takeover` replaces netplan's generated files under `/run/systemd/network`. **Until you confirm, nothing outside `/run` changes, so a reboot returns the host to netplan.** Confirming then enables `systemd-networkd` (netplan's generator was doing that), writes `/etc/cloud/cloud.cfg.d/99-andaru-network.cfg` (`network: {config: disabled}`) and moves `/etc/netplan/*.yaml` to `/var/lib/andaru/generations/baseline/netplan/`. The packages stay installed.
+`--takeover` replaces netplan's generated files under `/run/systemd/network`. **Until you confirm, nothing outside `/run` changes, so a reboot returns the host to netplan.** Confirming then enables `systemd-networkd` (netplan's generator was doing that), disables `systemd-networkd-wait-online` (no Andaru interface is required for "online", so it would hold every boot for its two-minute timeout), writes `/etc/cloud/cloud.cfg.d/99-andaru-network.cfg` (`network: {config: disabled}`) and moves `/etc/netplan/*.yaml` to `/var/lib/andaru/generations/baseline/netplan/`. The packages stay installed.
 
 Boot needs `andaru-network-boot.service` ([unit](../../packaging/systemd/andaru-network-boot.service)) installed and enabled **before** the takeover: it copies the confirmed generation into `/run` before networkd starts. If that generation is damaged it uses the last-known-good one, and `live` then differs from `confirmed`.
 
@@ -230,6 +230,7 @@ To undo a confirmed takeover by hand, from the console:
 sudo systemctl disable --now andaru-engine.service andaru-network-boot.service
 sudo mv /var/lib/andaru/generations/baseline/netplan/*.yaml /etc/netplan/
 sudo rm /etc/cloud/cloud.cfg.d/99-andaru-network.cfg
+sudo systemctl enable systemd-networkd-wait-online.service
 sudo rm -r /var/lib/andaru/generations
 sudo reboot
 ```
@@ -385,3 +386,27 @@ Executed as root on that VM:
 After the adversarial review, code commit `1ec0a3aa91a29fe34cba5ee6569049544abb7acf` (`vcs.modified=false`, SHA-256 `909f9822d6e1b809f14d4f775c02ec517ca5211853647608d9df50312566daa2`) replaced that binary. The tagged engine and render suites passed again on the VM, including the private networkd load of the changed SLAAC output, and the installed CLI previewed the empty saved topology with only the two netplan findings. After the bot review, code commit `5ebcebbe9f828b23f384a357db9d8755f7e4a900` (SHA-256 `6791d4927bec7fcfe984edc0413b2cc522c9b702915cdef57deea033bfda1b24`) replaced it in turn; the tagged CLI and engine suites passed on the VM and `--saved-version ""` exited 2.
 
 The three tool proofs run on this lab, **not in CI**: the hosted runners are Ubuntu 24.04, whose pppd and systemd are not the Debian 13 versions these files target. CI runs the golden-file, findings, redaction, API and CLI tests on amd64 and arm64. Linux arm64 was cross-built, not run on Debian. No PPPoE discovery packet was sent and no session was established; a real line remains the owner's test. The engine is active and still not boot-enabled.
+
+### Network-takeover Debian lab qualification
+
+On 2026-11-11 the CGO-disabled amd64 build of code commit `30d9c88` (SHA-256 `563eb8b4ddca49ac2bdc1ee77d01d6087485cac7c7829b378941e8ee7f7961ae`) was installed on VM 114 with both units enabled, behind snapshot `pre-takeover-20261111-063101`. The VM's NIC was saved as a DHCPv4 + SLAAC Ethernet uplink. A 5-per-second ping ran from another host during each change; confirmations were sent over a new SSH connection.
+
+| Step | Result |
+| --- | --- |
+| Empty configuration with `--takeover` | Refused: `WOULD_UNCONFIGURE` for `eth0`. |
+| Takeover, not confirmed (30 s) | Live in about 1 second. The timer restored both netplan files with their owner, group and mode. 0 of 650 pings lost. |
+| Takeover, reboot before the deadline | Back on netplan; the apply reads `rolled_back`, reason `reboot`; `/etc/netplan` untouched. |
+| Takeover, confirmed | 0 of 100 pings lost. `/etc/netplan` empty, cloud-init network configuration disabled, networkd enabled, DNS resolving, no timer left. |
+| Reboot | Same address on `ens18`, bound to Andaru's file, no netplan file in `/run`. The boot unit finished before networkd started. Boot took 5.8 s. `systemd-analyze verify` printed nothing for the boot unit. |
+| `cloud-init clean`, reboot | `/etc/netplan` stayed empty; same result. (cloud-init regenerated the SSH host keys, as it does on a first boot.) |
+| Add VLAN 99 with `192.0.2.1/24`, early `applies rollback` | Rolled back while the timer was armed; the VLAN device was deleted. |
+| Same apply, engine killed, not confirmed | The timer rolled back with the engine stopped; device deleted. 0 of 600 pings lost across both. |
+| Same apply confirmed, reboot | VLAN present with its address; `lastKnownGood` is the takeover generation. |
+| Confirmed generation corrupted, reboot | Boot placed last-known-good and logged the fallback; `live` differs from `confirmed`. |
+| Changed VLAN id; PPPoE link declared; stale `--saved-version` | `NETDEV_CHANGE_UNSUPPORTED`; `APPLY_UNSUPPORTED`; `412 PRECONDITION_FAILED`. |
+
+**Found on the lab and fixed:** `systemd-networkd-wait-online` is enabled on the cloud image independently of netplan. With no interface required for "online" it ran to its 120-second timeout on every boot and delayed SSH by two minutes. A confirmed takeover now disables it.
+
+Also observed: `systemd-run --wait` returns the command's exit status, and the timer's unit and the on-demand rollback unit coexist.
+
+Not run on the lab: an apply without `--takeover` while netplan is still in place (unit-tested as `TAKEOVER_MISMATCH`), a host with `/var` on its own filesystem, and any baseline other than this cloud image. No PPPoE session and no forwarding were involved. The VM is left taken over, on a confirmed generation, with the engine and boot unit enabled.
