@@ -229,3 +229,23 @@ func ParseResolvedDNS(data []byte) (map[string][]netip.Addr, error) {
 	}
 	return servers, nil
 }
+
+// ReadDefaultRoute names the interface carrying the IPv4 default route, or "" when there is none.
+func ReadDefaultRoute(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	data, err := readCommand(ctx, "/usr/bin/ip", "-j", "route", "show", "default")
+	if err != nil {
+		return "", err
+	}
+	var routes []struct {
+		Dev string `json:"dev"`
+	}
+	if err := json.Unmarshal(data, &routes); err != nil {
+		return "", fmt.Errorf("decode default routes: %w", err)
+	}
+	if len(routes) == 0 {
+		return "", nil
+	}
+	return routes[0].Dev, nil
+}

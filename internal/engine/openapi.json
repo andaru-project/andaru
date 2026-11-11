@@ -2086,6 +2086,190 @@
           }
         }
       }
+    },
+    "/api/v1/takeover/proposal": {
+      "get": {
+        "operationId": "proposeTakeover",
+        "summary": "Describe what the host does now as a change batch the takeover assistant can offer",
+        "responses": {
+          "200": {
+            "description": "Read-only; nothing is saved or applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TakeoverProposal"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "head": {
+        "operationId": "headProposeTakeover",
+        "responses": {
+          "200": {
+            "description": "No body"
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/preview/network/draft": {
+      "post": {
+        "operationId": "previewDraft",
+        "summary": "Render and judge a change batch without saving it",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "/api/v1/schema#/$defs/changes"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The batch as it would be rendered on this host; nothing is saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2900,6 +3084,127 @@
           },
           "message": {
             "type": "string"
+          }
+        }
+      },
+      "ChangeOperation": {
+        "type": "object",
+        "description": "One operation of a change batch, as POST /api/v1/config/changes accepts it.",
+        "additionalProperties": true
+      },
+      "TakeoverProposal": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "state",
+          "savedVersion",
+          "operations",
+          "adapters",
+          "findings"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "taken-over",
+              "saved-not-applied",
+              "unsupported"
+            ],
+            "description": "Only ready carries a proposal."
+          },
+          "savedVersion": {
+            "$ref": "#/components/schemas/Version"
+          },
+          "operations": {
+            "type": "array",
+            "description": "A create-only change batch describing what the host does now; send it to the draft preview and then to /api/v1/config/changes.",
+            "items": {
+              "$ref": "#/components/schemas/ChangeOperation"
+            }
+          },
+          "adapters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "permanentMac",
+                "summary"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "permanentMac": {
+                  "type": "string"
+                },
+                "summary": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "findings": {
+            "type": "array",
+            "description": "Why the host cannot be taken over as it stands.",
+            "items": {
+              "$ref": "#/components/schemas/ApplyFinding"
+            }
+          }
+        }
+      },
+      "DraftResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "state",
+          "savedVersion",
+          "realizable",
+          "resolved",
+          "files",
+          "findings",
+          "applyFindings"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "const": "draft",
+            "description": "Rendered from a batch that was not saved."
+          },
+          "savedVersion": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$"
+          },
+          "realizable": {
+            "type": "boolean",
+            "description": "True when no finding is an error"
+          },
+          "resolved": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Resolution"
+            }
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RenderedFile"
+            }
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            }
+          },
+          "applyFindings": {
+            "type": "array",
+            "description": "What the apply gates would refuse, judged as a takeover unless one is already confirmed.",
+            "items": {
+              "$ref": "#/components/schemas/ApplyFinding"
+            }
           }
         }
       }
