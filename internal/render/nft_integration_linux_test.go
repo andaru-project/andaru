@@ -248,3 +248,30 @@ func TestOneToOneInNamespace(t *testing.T) {
 	}
 	wait(inside, "10.2.0.1")
 }
+
+// Codex's case: forward A (self:2222 to the firewall's SSH, auto rule) and forward B (a routed address's 2222 to the
+// same SSH, filterRule none). B's connections must meet the policy, not A's rule.
+func TestForwardRuleAdmitsOnlyItsOwnTranslations(t *testing.T) {
+	l := newLab(t)
+	in := change(t, fixture(t, "nat-port-forwards"), func(d map[string]any) {
+		addresses := d["objects"].(map[string]any)["addresses"].([]any)
+		addresses = append(addresses, map[string]any{"id": "adr_00000008-0000-4000-8000-000000000008", "name": "routed", "kind": "host", "address": "10.9.9.9"})
+		d["objects"].(map[string]any)["addresses"] = addresses
+		nat := d["nat"].(map[string]any)
+		forwards := nat["portForwards"].([]any)
+		b := map[string]any{"id": "pfw_00000009-0000-4000-8000-000000000009", "name": "routed-ssh", "enabled": true,
+			"ingressZones": []any{"zon_00000001-0000-4000-8000-000000000001"}, "protocol": "tcp", "from": []any{},
+			"to": map[string]any{"address": "adr_00000008-0000-4000-8000-000000000008"}, "ports": "2222",
+			"target": map[string]any{"address": "10.1.0.1"}, "targetPort": 22, "filterRule": "none"}
+		nat["portForwards"] = []any{forwards[3], b}
+	})
+	l.load(in)
+	l.must(l.wan, "ip", "route", "add", "10.9.9.9/32", "via", "10.1.0.1")
+	l.listen(l.fw, 22)
+	if !l.connects(l.wan, "10.1.0.1", 2222) {
+		t.Fatal("forward A did not connect")
+	}
+	if l.connects(l.wan, "10.9.9.9", 2222) {
+		t.Error("forward B, which has no rule, was admitted by forward A's rule")
+	}
+}

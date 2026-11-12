@@ -117,7 +117,7 @@ Every rendered line carries the object's ID as its comment, so counters (#15) an
   - with `to: self`, it matches any firewall address except the static addresses of the other segments (a set). A client asking the firewall's own LAN address is therefore not redirected. Shortcut: on a host with a second uplink whose address is learned by DHCP or PPPoE, reflection also fires for that uplink's address; nft cannot name another interface's dynamic address. Multi-WAN is not in the MVP.
 - **Associated filter rule (`filterRule: auto`):** rendered right after the fixed rules and before the policy:
   - in `forward` for a host target, in `input` for a firewall target (a translated connection to the firewall is local delivery);
-  - it matches `ct status dnat`, the original destination port (and the original address, when `to` is an address), the translated address and port, the ingress zones and `from`;
+  - it matches the connection mark its forward set when translating (the low 16 bits of `ct mark`, the forward's position plus one), the translated address and port, the ingress zones and `from`. `ct status dnat` alone would also admit what another forward or a 1:1 entry translated to the same host and port;
   - it accepts only connections that came through this forward, so the inside host is not exposed directly. The lab confirmed this.
 
   It is derived, not stored, so it can never drift from the forward. The GUI shows it under the forward. With `none`, the operator writes a policy rule.

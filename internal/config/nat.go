@@ -29,15 +29,16 @@ func validateNAT(d *declaration) []FieldError {
 	for _, a := range d.Objects.Addresses {
 		addresses[a.ID] = a
 	}
-	// hasV4 says whether an address object can match IPv4: everything here is IPv4.
-	var hasV4 func(id string) bool
-	hasV4 = func(id string) bool {
+	// hasV4 says whether an address object can match IPv4: everything here is IPv4. Groups hold no groups (the
+	// policy validator refuses them, but this runs regardless), so one level is followed and never more.
+	var hasV4 func(id string, nested bool) bool
+	hasV4 = func(id string, nested bool) bool {
 		a, ok := addresses[id]
 		switch {
 		case !ok:
 			return false
 		case a.Kind == "group":
-			return slices.ContainsFunc(a.Members, hasV4)
+			return !nested && slices.ContainsFunc(a.Members, func(m string) bool { return hasV4(m, true) })
 		case a.Kind == "network":
 			p, e := netip.ParsePrefix(a.Prefix)
 			return e == nil && p.Addr().Is4()
@@ -51,7 +52,7 @@ func validateNAT(d *declaration) []FieldError {
 	ref := func(path, id string) {
 		if _, ok := addresses[id]; !ok {
 			bad(path, "Expected an existing address.")
-		} else if !hasV4(id) {
+		} else if !hasV4(id, false) {
 			bad(path, "Expected an address with IPv4 addresses; inbound NAT is IPv4 only.")
 		}
 	}

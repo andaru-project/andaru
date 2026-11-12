@@ -51,19 +51,19 @@ func TestPortForwardRendering(t *testing.T) {
 	script := table(t, render(t, fixture(t, "nat-port-forwards")))
 	inOrder(t, chainOf(t, script, "prerouting"),
 		"type nat hook prerouting priority dstnat;",
-		`iifname @`+natWAN+` meta nfproto ipv4 fib daddr . iif type local tcp dport 8080 log prefix "andaru `+pfwWeb+` " dnat ip to 192.0.2.10:80 comment "`+pfwWeb+`"`,
+		`iifname @`+natWAN+` meta nfproto ipv4 fib daddr . iif type local tcp dport 8080 ct mark set ct mark & 0xffff0000 | 0x00000001 log prefix "andaru `+pfwWeb+` " dnat ip to 192.0.2.10:80 comment "`+pfwWeb+`"`,
 		`iifname @`+natWAN+` ip saddr @`+natBlocked+` meta nfproto ipv4 fib daddr . iif type local tcp dport 1000-1001 accept comment "`+pfwSkip+`"`,
-		`iifname @`+natWAN+` meta nfproto ipv4 fib daddr . iif type local tcp dport 1000-1001 dnat ip addr . port to tcp dport map { 1000 : 192.0.2.10 . 2000, 1001 : 192.0.2.10 . 2001 } comment "`+pfwRange+`"`,
-		`iifname @`+natWAN+` meta nfproto ipv4 fib daddr . iif type local tcp dport 2222 redirect to :22 comment "`+pfwSSH+`"`,
+		`iifname @`+natWAN+` meta nfproto ipv4 fib daddr . iif type local tcp dport 1000-1001 ct mark set ct mark & 0xffff0000 | 0x00000003 dnat ip addr . port to tcp dport map { 1000 : 192.0.2.10 . 2000, 1001 : 192.0.2.10 . 2001 } comment "`+pfwRange+`"`,
+		`iifname @`+natWAN+` meta nfproto ipv4 fib daddr . iif type local tcp dport 2222 ct mark set ct mark & 0xffff0000 | 0x00000004 redirect to :22 comment "`+pfwSSH+`"`,
 	)
 	inOrder(t, chainOf(t, script, "forward"),
 		"ct state invalid drop",
-		`iifname @`+natWAN+` ct status dnat ct original proto-dst 8080 ip daddr 192.0.2.10 tcp dport 80 accept comment "`+pfwWeb+`"`,
-		`iifname @`+natWAN+` ct status dnat ct original proto-dst 1000-1001 ip daddr 192.0.2.10 tcp dport 2000-2001 accept comment "`+pfwRange+`"`,
+		`iifname @`+natWAN+` ct mark & 0x0000ffff == 0x00000001 ip daddr 192.0.2.10 tcp dport 80 accept comment "`+pfwWeb+`"`,
+		`iifname @`+natWAN+` ct mark & 0x0000ffff == 0x00000003 ip daddr 192.0.2.10 tcp dport 2000-2001 accept comment "`+pfwRange+`"`,
 	)
 	inOrder(t, chainOf(t, script, "input"),
 		"iif lo accept",
-		`iifname @`+natWAN+` ct status dnat ct original proto-dst 2222 meta nfproto ipv4 tcp dport 22 accept comment "`+pfwSSH+`"`,
+		`iifname @`+natWAN+` ct mark & 0x0000ffff == 0x00000004 meta nfproto ipv4 tcp dport 22 accept comment "`+pfwSSH+`"`,
 	)
 	if strings.Contains(script, pfwOff) {
 		t.Fatalf("a disabled forward rendered:\n%s", script)
@@ -115,9 +115,9 @@ func TestTCPUDPForward(t *testing.T) {
 		delete(f[0].(map[string]any), "targetPort")
 	})))
 	inOrder(t, chainOf(t, script, "prerouting"),
-		`iifname @`+natWAN+` meta nfproto ipv4 fib daddr . iif type local meta l4proto { tcp, udp } th dport 53 log prefix "andaru `+pfwWeb+` " dnat ip to 192.0.2.10 comment "`+pfwWeb+`"`)
+		`iifname @`+natWAN+` meta nfproto ipv4 fib daddr . iif type local meta l4proto { tcp, udp } th dport 53 ct mark set ct mark & 0xffff0000 | 0x00000001 log prefix "andaru `+pfwWeb+` " dnat ip to 192.0.2.10 comment "`+pfwWeb+`"`)
 	inOrder(t, chainOf(t, script, "forward"),
-		`iifname @`+natWAN+` ct status dnat ct original proto-dst 53 ip daddr 192.0.2.10 meta l4proto { tcp, udp } th dport 53 accept comment "`+pfwWeb+`"`)
+		`iifname @`+natWAN+` ct mark & 0x0000ffff == 0x00000001 ip daddr 192.0.2.10 meta l4proto { tcp, udp } th dport 53 accept comment "`+pfwWeb+`"`)
 }
 
 func TestAddressTo(t *testing.T) {
@@ -125,9 +125,9 @@ func TestAddressTo(t *testing.T) {
 		f[0].(map[string]any)["to"] = map[string]any{"address": "adr_00000007-0000-4000-8000-000000000007"}
 	})))
 	inOrder(t, chainOf(t, script, "prerouting"),
-		`iifname @`+natWAN+` ip daddr @`+natBlocked+` tcp dport 8080 log prefix "andaru `+pfwWeb+` " dnat ip to 192.0.2.10:80 comment "`+pfwWeb+`"`)
+		`iifname @`+natWAN+` ip daddr @`+natBlocked+` tcp dport 8080 ct mark set ct mark & 0xffff0000 | 0x00000001 log prefix "andaru `+pfwWeb+` " dnat ip to 192.0.2.10:80 comment "`+pfwWeb+`"`)
 	inOrder(t, chainOf(t, script, "forward"),
-		`iifname @`+natWAN+` ct status dnat ct original ip daddr @`+natBlocked+` ct original proto-dst 8080 ip daddr 192.0.2.10 tcp dport 80 accept comment "`+pfwWeb+`"`)
+		`iifname @`+natWAN+` ct mark & 0x0000ffff == 0x00000001 ip daddr 192.0.2.10 tcp dport 80 accept comment "`+pfwWeb+`"`)
 }
 
 // A target that is one of the firewall's own addresses is local delivery: its rule goes in input.
@@ -149,8 +149,8 @@ const (
 func TestOneToOneRendering(t *testing.T) {
 	script := table(t, render(t, fixture(t, "nat-one-to-one")))
 	inOrder(t, chainOf(t, script, "prerouting"),
-		`iifname @`+natWAN+` meta nfproto ipv4 fib daddr . iif type local tcp dport 8080 dnat ip to 192.0.2.10:80 comment "`+pfwWeb+`"`,
-		`iifname @internal fib daddr type local ip daddr != @internal_4 tcp dport 8080 dnat ip to 192.0.2.10:80 comment "`+pfwWeb+`"`,
+		`iifname @`+natWAN+` meta nfproto ipv4 fib daddr . iif type local tcp dport 8080 ct mark set ct mark & 0xffff0000 | 0x00000001 dnat ip to 192.0.2.10:80 comment "`+pfwWeb+`"`,
+		`iifname @internal fib daddr type local ip daddr != @internal_4 tcp dport 8080 ct mark set ct mark & 0xffff0000 | 0x00000001 dnat ip to 192.0.2.10:80 comment "`+pfwWeb+`"`,
 		`iifname @`+natWAN+` dnat ip to ip daddr map { 10.0.1.29 : 192.0.2.30 } comment "`+otoServer+`"`,
 		`iifname @internal dnat ip to ip daddr map { 10.0.1.29 : 192.0.2.30 } comment "`+otoServer+`"`,
 		// The exclusion of 192.0.2.31 carves its external counterpart out of the mapping.
@@ -229,7 +229,7 @@ func TestSelfRangeWithoutShift(t *testing.T) {
 		f[3].(map[string]any)["targetPort"] = 1000
 	})))
 	inOrder(t, chainOf(t, script, "prerouting"),
-		`iifname @`+natWAN+` meta nfproto ipv4 fib daddr . iif type local tcp dport 1000-1001 redirect comment "`+pfwSSH+`"`)
+		`iifname @`+natWAN+` meta nfproto ipv4 fib daddr . iif type local tcp dport 1000-1001 ct mark set ct mark & 0xffff0000 | 0x00000004 redirect comment "`+pfwSSH+`"`)
 }
 
 // Reflection keeps the forward's source match, as pfSense's reflection rdr does.
@@ -238,7 +238,7 @@ func TestReflectionKeepsTheSource(t *testing.T) {
 		d["nat"].(map[string]any)["portForwards"].([]any)[0].(map[string]any)["from"] = []any{"adr_00000007-0000-4000-8000-000000000007"}
 	})))
 	inOrder(t, chainOf(t, script, "prerouting"),
-		`iifname @internal ip saddr @`+natPartner+` fib daddr type local ip daddr != @internal_4 tcp dport 8080 dnat ip to 192.0.2.10:80 comment "`+pfwWeb+`"`)
+		`iifname @internal ip saddr @`+natPartner+` fib daddr type local ip daddr != @internal_4 tcp dport 8080 ct mark set ct mark & 0xffff0000 | 0x00000001 dnat ip to 192.0.2.10:80 comment "`+pfwWeb+`"`)
 }
 
 // An exclusion carves its hosts out of later entries of its own zone only.
@@ -254,6 +254,20 @@ func TestOneToOneExclusionStaysInItsZone(t *testing.T) {
 // A self forward's associated rule must not admit a connection a 1:1 entry translated to the same host and port.
 func TestSelfRuleExcludesOneToOneTraffic(t *testing.T) {
 	forward := chainOf(t, table(t, render(t, fixture(t, "nat-one-to-one"))), "forward")
+	// The forward marks what it translates; its rule admits that mark only, never a 1:1 translation.
 	inOrder(t, forward,
-		`iifname @`+natWAN+` ct status dnat ct original ip daddr != @one_to_one_4 ct original proto-dst 8080 ip daddr 192.0.2.10 tcp dport 80 accept comment "`+pfwWeb+`"`)
+		`iifname @`+natWAN+` ct mark & 0x0000ffff == 0x00000001 ip daddr 192.0.2.10 tcp dport 80 accept comment "`+pfwWeb+`"`)
+	if strings.Contains(forward, "one_to_one") {
+		t.Fatalf("the 1:1 blacklist would drop a forward on an extra WAN address:\n%s", forward)
+	}
+}
+
+// Two forwards to the same target and port: each rule admits only what its own forward translated.
+func TestEachRuleAdmitsItsOwnForward(t *testing.T) {
+	script := table(t, render(t, fixture(t, "nat-port-forwards")))
+	inOrder(t, chainOf(t, script, "prerouting"),
+		`iifname @`+natWAN+` meta nfproto ipv4 fib daddr . iif type local tcp dport 8080 ct mark set ct mark & 0xffff0000 | 0x00000001 log prefix "andaru `+pfwWeb+` " dnat ip to 192.0.2.10:80 comment "`+pfwWeb+`"`,
+		`iifname @`+natWAN+` meta nfproto ipv4 fib daddr . iif type local tcp dport 2222 ct mark set ct mark & 0xffff0000 | 0x00000004 redirect to :22 comment "`+pfwSSH+`"`)
+	inOrder(t, chainOf(t, script, "input"),
+		`iifname @`+natWAN+` ct mark & 0x0000ffff == 0x00000004 meta nfproto ipv4 tcp dport 22 accept comment "`+pfwSSH+`"`)
 }

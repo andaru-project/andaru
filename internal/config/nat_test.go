@@ -248,3 +248,21 @@ func TestShiftedRangeBudgetCountsReflection(t *testing.T) {
 	setNAT(d, "portForwards", forward(d, map[string]any{"ports": "1-32768", "targetPort": 2, "reflection": true}))
 	accepted(t, d)
 }
+
+// A group naming itself is refused by the policy validator; the NAT validator must still return, not recurse forever.
+func TestNATSurvivesASelfReferencingGroup(t *testing.T) {
+	d := natFixture(t)
+	addresses := d["objects"].(map[string]any)["addresses"].([]any)
+	addresses[0] = map[string]any{"id": natPeer, "name": "peer", "kind": "group", "members": []any{natPeer}}
+	setNAT(d, "portForwards", forward(d, map[string]any{"from": []any{natPeer}}))
+	done := make(chan error, 1)
+	go func() { _, e := decodeMap(t, d); done <- e }()
+	select {
+	case e := <-done:
+		if e == nil {
+			t.Fatal("a self-referencing group was accepted")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("validation did not return")
+	}
+}

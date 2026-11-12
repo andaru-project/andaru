@@ -80,12 +80,11 @@ EmitDomains=no
 table inet andaru {}
 delete table inet andaru
 table inet andaru {
-	comment "sha256:29a820c6be0e0872d141f816963d5f58d34b75d23660efc5765c5c59321e9a5f"
+	comment "sha256:32f06104eeca5eafe7ccb1457806b518ad28917ce91bb18ccde1a9bbffee1daa"
 	set adr_00000007_0000_4000_8000_000000000007_4 { type ipv4_addr; flags interval; auto-merge; elements = { 198.51.100.7 }; }
 	set zon_00000001_0000_4000_8000_000000000001 { type ifname; elements = { "ens18" }; }
 	set zon_00000002_0000_4000_8000_000000000002 { type ifname; elements = { "ens19" }; }
 	set uplinks { type ifname; elements = { "ens18" }; }
-	set one_to_one_4 { type ipv4_addr; flags interval; auto-merge; elements = { 10.0.1.29/32, 203.0.113.16/28 }; }
 	set internal { type ifname; elements = { "ens19" }; }
 	set internal_4 { type ipv4_addr; elements = { 192.0.2.1 }; }
 	chain input {
@@ -105,13 +104,13 @@ table inet andaru {
 		type filter hook forward priority filter; policy drop;
 		ct state established,related accept
 		ct state invalid drop
-		iifname @zon_00000001_0000_4000_8000_000000000001 ct status dnat ct original ip daddr != @one_to_one_4 ct original proto-dst 8080 ip daddr 192.0.2.10 tcp dport 80 accept comment "pfw_00000001-0000-4000-8000-000000000001"
+		iifname @zon_00000001_0000_4000_8000_000000000001 ct mark & 0x0000ffff == 0x00000001 ip daddr 192.0.2.10 tcp dport 80 accept comment "pfw_00000001-0000-4000-8000-000000000001"
 		iifname @zon_00000002_0000_4000_8000_000000000002 accept comment "rul_00000003-0000-4000-8000-000000000003"
 	}
 	chain prerouting {
 		type nat hook prerouting priority dstnat;
-		iifname @zon_00000001_0000_4000_8000_000000000001 meta nfproto ipv4 fib daddr . iif type local tcp dport 8080 dnat ip to 192.0.2.10:80 comment "pfw_00000001-0000-4000-8000-000000000001"
-		iifname @internal fib daddr type local ip daddr != @internal_4 tcp dport 8080 dnat ip to 192.0.2.10:80 comment "pfw_00000001-0000-4000-8000-000000000001"
+		iifname @zon_00000001_0000_4000_8000_000000000001 meta nfproto ipv4 fib daddr . iif type local tcp dport 8080 ct mark set ct mark & 0xffff0000 | 0x00000001 dnat ip to 192.0.2.10:80 comment "pfw_00000001-0000-4000-8000-000000000001"
+		iifname @internal fib daddr type local ip daddr != @internal_4 tcp dport 8080 ct mark set ct mark & 0xffff0000 | 0x00000001 dnat ip to 192.0.2.10:80 comment "pfw_00000001-0000-4000-8000-000000000001"
 		iifname @zon_00000001_0000_4000_8000_000000000001 dnat ip to ip daddr map { 10.0.1.29 : 192.0.2.30 } comment "oto_00000002-0000-4000-8000-000000000002"
 		iifname @internal dnat ip to ip daddr map { 10.0.1.29 : 192.0.2.30 } comment "oto_00000002-0000-4000-8000-000000000002"
 		iifname @zon_00000001_0000_4000_8000_000000000001 ip saddr @adr_00000007_0000_4000_8000_000000000007_4 ip daddr != { 203.0.113.31 } dnat ip prefix to ip daddr map { 203.0.113.16/28 : 192.0.2.16/28 } comment "oto_00000003-0000-4000-8000-000000000003"

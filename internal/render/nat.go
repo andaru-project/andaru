@@ -40,18 +40,7 @@ func portMatch(protocol string, first, last int) string {
 // the forward chain (an inside host) or the input chain (the firewall itself).
 func (f *filter) portForwards() (prerouting, forward, input []string) {
 	own := f.r.ownStatic()
-	// ct status dnat says a connection was translated, not by whom: a self forward's rule must not admit what a
-	// 1:1 entry translated to the same host and port, so the 1:1 external addresses are named.
-	var externals []string
-	for _, o := range f.r.d.NAT.OneToOne {
-		if o.Enabled && !o.NoBinat {
-			externals = append(externals, prefixOf(o.External).String())
-		}
-	}
-	if len(externals) > 0 {
-		f.set("one_to_one_4", "ipv4_addr", "interval", externals)
-	}
-	for _, pf := range f.r.d.NAT.PortForwards {
+	for i, pf := range f.r.d.NAT.PortForwards {
 		if !pf.Enabled {
 			continue
 		}
@@ -73,14 +62,13 @@ func (f *filter) portForwards() (prerouting, forward, input []string) {
 			}
 		}
 		// fib matches either family: the guard keeps an IPv4 forward to self off the firewall's IPv6 addresses.
-		to, original := "meta nfproto ipv4 fib daddr . iif type local", ""
-		if len(externals) > 0 {
-			original = "ct original ip daddr != @one_to_one_4 "
-		}
+		to := "meta nfproto ipv4 fib daddr . iif type local"
 		if !pf.To.Self {
 			to = "ip daddr @" + setName(pf.To.Address) + "_4"
-			original = "ct original ip daddr @" + setName(pf.To.Address) + "_4 "
 		}
+		// ct status dnat says a connection was translated, not by whom: each forward marks what it translates in the
+		// low 16 bits of the connection mark, and its rule admits that mark only. The high bits are left to others.
+		mark := fmt.Sprintf("0x%08x", i+1)
 		var action string
 		tfirst := first
 		if pf.TargetPort != nil {
@@ -110,8 +98,15 @@ func (f *filter) portForwards() (prerouting, forward, input []string) {
 				action += ":" + strconv.Itoa(tfirst)
 			}
 		}
+		if !pf.NoRedirect && pf.FilterRule == "auto" {
+			action = "ct mark set ct mark & 0xffff0000 | " + mark + " " + action
+		}
 		if pf.Log && !pf.NoRedirect {
-			action = fmt.Sprintf("log prefix %q ", "andaru "+pf.ID+" ") + action
+			action = strings.Replace(action, " dnat ", fmt.Sprintf(" log prefix %q dnat ", "andaru "+pf.ID+" "), 1)
+			action = strings.Replace(action, " redirect", fmt.Sprintf(" log prefix %q redirect", "andaru "+pf.ID+" "), 1)
+			if !strings.Contains(action, "log prefix") {
+				action = fmt.Sprintf("log prefix %q ", "andaru "+pf.ID+" ") + action
+			}
 		}
 		comment := fmt.Sprintf("comment %q", pf.ID)
 		for _, zone := range pf.IngressZones {
@@ -121,17 +116,13 @@ func (f *filter) portForwards() (prerouting, forward, input []string) {
 				if pf.NoRedirect || pf.FilterRule != "auto" {
 					continue
 				}
-				// Bound to this forward: only connections it translated, from its sources, to its target.
-				ports := strconv.Itoa(first)
-				if last != first {
-					ports += "-" + strconv.Itoa(last)
-				}
+				// Bound to this forward: only connections it translated (its mark), from its sources, to its target.
 				// The translated address names the family; a local target has none, so the rule says it.
 				daddr := "meta nfproto ipv4"
 				if !local {
 					daddr = "ip daddr " + pf.Target.Address
 				}
-				rule := slices.DeleteFunc([]string{"iifname @" + setName(zone), from, "ct status dnat", original + "ct original proto-dst " + ports, daddr, portMatch(pf.Protocol, tfirst, tlast), "accept", comment}, func(s string) bool { return s == "" })
+				rule := slices.DeleteFunc([]string{"iifname @" + setName(zone), from, "ct mark & 0x0000ffff == " + mark, daddr, portMatch(pf.Protocol, tfirst, tlast), "accept", comment}, func(s string) bool { return s == "" })
 				if local {
 					input = append(input, strings.Join(rule, " "))
 				} else {
@@ -146,7 +137,7 @@ func (f *filter) portForwards() (prerouting, forward, input []string) {
 			if pf.To.Self {
 				to = "fib daddr type local ip daddr != @internal_4"
 			}
-			bare := strings.TrimPrefix(action, fmt.Sprintf("log prefix %q ", "andaru "+pf.ID+" "))
+			bare := strings.Replace(action, fmt.Sprintf("log prefix %q ", "andaru "+pf.ID+" "), "", 1)
 			for _, from := range froms {
 				parts := slices.DeleteFunc([]string{"iifname @internal", from, to, portMatch(pf.Protocol, first, last), bare, comment}, func(s string) bool { return s == "" })
 				prerouting = append(prerouting, strings.Join(parts, " "))
