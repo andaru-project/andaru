@@ -144,13 +144,25 @@ func (r Realizer) sysctl(path, value string) error {
 
 // dropFilter removes table inet andaru; a table already gone is success.
 func (r Realizer) dropFilter(ctx context.Context) error {
-	if _, err := r.Run(ctx, "/usr/sbin/nft", "-j", "list", "table", "inet", "andaru"); err != nil {
-		// nft reports an absent table as ENOENT on stderr, which the runner puts in its error; anything else may leave it loaded.
-		if strings.Contains(err.Error(), "Error: No such file or directory") {
-			return nil
-		}
+	loaded, err := r.tableLoaded(ctx)
+	if err != nil || !loaded {
 		return err
 	}
+	return r.deleteTable(ctx)
+}
+
+// tableLoaded reports whether table inet andaru exists. Without nft installed Andaru never loaded one.
+func (r Realizer) tableLoaded(ctx context.Context) (bool, error) {
+	_, err := r.Run(ctx, "/usr/sbin/nft", "-j", "list", "table", "inet", "andaru")
+	// nft reports an absent table as ENOENT on stderr, which the runner puts in its error; anything else may leave it loaded.
+	if err != nil && (errors.Is(err, fs.ErrNotExist) || strings.Contains(err.Error(), "Error: No such file or directory")) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// deleteTable switches forwarding off and removes the loaded table.
+func (r Realizer) deleteTable(ctx context.Context) error {
 	// Forwarding was Andaru's, switched on with its filter; it goes before the filter does.
 	for _, path := range []string{ipv4Forwarding, ipv6Forwarding} {
 		if err := r.sysctl(path, "0\n"); err != nil {
@@ -176,8 +188,13 @@ func (r Realizer) toward(ctx context.Context, target *Generation, place func() e
 			return place()
 		}
 	}
-	if err := place(); err != nil {
+	// nft must answer before any file moves, or the files could end up under a filter that cannot be removed.
+	loaded, err := r.tableLoaded(ctx)
+	if err != nil {
 		return err
 	}
-	return r.dropFilter(ctx)
+	if err := place(); err != nil || !loaded {
+		return err
+	}
+	return r.deleteTable(ctx)
 }

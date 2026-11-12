@@ -142,6 +142,15 @@ func TestPolicyValidation(t *testing.T) {
 			}
 			fwd(d, 0)["from"], fwd(d, 0)["to"], fwd(d, 0)["services"] = rep(adrHost, 17), rep(adrHost, 16), rep(svcDNS, 16)
 		}, "/policy/forward/0"},
+		// 64 x 64 combinations, each rendered once per family: 8192 lines.
+		"rule expanding past the line cap by family": {func(d map[string]any) {
+			zone := item(d["zones"].([]any), 0)["id"]
+			from, to := make([]any, 64), make([]any, 64)
+			for i := range from {
+				from[i], to[i] = zone, zone
+			}
+			fwd(d, 0)["from"], fwd(d, 0)["to"], fwd(d, 0)["services"] = from, to, []any{}
+		}, "/policy/forward/0"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := policyFixture(t)

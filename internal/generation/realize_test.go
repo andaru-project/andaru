@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -41,6 +42,7 @@ type fakeNetworkd struct {
 	// table is the comment of the loaded inet andaru table, "" when none is loaded; tableComment overrides what nft reports.
 	table, tableComment string
 	script              string // what nft -f last loaded
+	noNft               bool   // nft is not installed
 
 	dns     map[string][]string     // what resolved reports per interface
 	editDNS func([]string) []string // distorts that report
@@ -98,6 +100,9 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 	defer f.mu.Unlock()
 	command := filepath.Base(name) + " " + strings.Join(args, " ")
 	f.argv = append(f.argv, command)
+	if f.noNft && filepath.Base(name) == "nft" {
+		return nil, &fs.PathError{Op: "fork/exec", Path: name, Err: syscall.ENOENT}
+	}
 	if f.onRun != nil {
 		f.onRun(command)
 	}

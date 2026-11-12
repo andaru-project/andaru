@@ -228,7 +228,8 @@ func validatePolicy(d *declaration) []FieldError {
 				bad(p+"/services", "No service is of the family of the rule's addresses, so this rule can never match.")
 			}
 			// Each from x to x service combination is one nft line; a runaway rule would exhaust the host's filter.
-			if max(1, len(r.From))*max(1, len(r.To))*max(1, leaves) > maxRuleLines {
+			// Times two: a reference holding both families renders one line per family.
+			if 2*max(1, len(r.From))*max(1, len(r.To))*max(1, leaves) > maxRuleLines {
 				bad(p, "This rule expands to too many filter lines. Use address groups or fewer services.")
 			}
 		}

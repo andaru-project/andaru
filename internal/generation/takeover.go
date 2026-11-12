@@ -328,6 +328,9 @@ func (r Realizer) Boot(ctx context.Context) error {
 		path, comment, ok, err := r.filter(g)
 		if err == nil && ok {
 			err = r.loadFilter(ctx, path, comment)
+		} else if err == nil {
+			// An earlier candidate's filter may have half-loaded; this generation runs without one.
+			err = r.dropFilter(ctx)
 		}
 		if err != nil {
 			failures = append(failures, fmt.Errorf("generation %d: its packet filter does not load: %w", *id, err))

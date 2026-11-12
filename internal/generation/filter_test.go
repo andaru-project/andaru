@@ -297,3 +297,55 @@ func TestRollbackSkipsGenerationWhoseFilterFails(t *testing.T) {
 		t.Fatalf("table %q, pointers %+v", b.net.table, b.pointers())
 	}
 }
+
+// Without nft installed Andaru never loaded a table, so a host without a filter applies as before.
+func TestNoNftMeansNoTable(t *testing.T) {
+	b := newBench(t)
+	b.net.noNft = true
+	if err := b.r.Activate(t.Context(), b.gen(false, one)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Removing the filter checks nft works before any file moves: files must never run under a filter that stays.
+func TestRemovingTheFilterChecksNftFirst(t *testing.T) {
+	b := newBench(t)
+	first := b.gen(false, filtered(one, "aa"))
+	if err := b.r.Activate(t.Context(), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Confirm(t.Context(), first); err != nil {
+		t.Fatal(err)
+	}
+	b.net.argv, b.net.fail = nil, "nft -j list"
+	if err := b.r.Activate(t.Context(), b.gen(false, one)); err == nil || b.index("networkctl reload") >= 0 {
+		t.Fatalf("files moved while the filter could not be removed: %v %q", err, b.net.argv)
+	}
+}
+
+// A confirmed filter that half-loaded at boot must not stay over last-known-good's unfiltered files.
+func TestBootDropsHalfLoadedFilterForUnfilteredFallback(t *testing.T) {
+	b := cloud(t)
+	first := b.gen(true, one)
+	if err := b.r.Activate(t.Context(), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Confirm(t.Context(), first); err != nil {
+		t.Fatal(err)
+	}
+	second := b.gen(false, filtered(one, "aa"))
+	if err := b.r.Activate(t.Context(), second); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Confirm(t.Context(), second); err != nil {
+		t.Fatal(err)
+	}
+	b.reboot()
+	b.net.table, b.net.tableComment = "", "sha256:other"
+	if err := b.r.Boot(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if live := b.pointers().Live; live == nil || *live != first || b.net.table != "" {
+		t.Fatalf("live %v, table %q", live, b.net.table)
+	}
+}
