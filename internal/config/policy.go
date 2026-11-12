@@ -180,6 +180,8 @@ func validatePolicy(d *declaration) []FieldError {
 				for j, ref := range refs {
 					switch {
 					case zones[ref]:
+						// A zone is an alternative that matches either family.
+						f[4], f[6] = true, true
 					case addresses[ref] != nil:
 						for family := range families[ref] {
 							f[family] = true

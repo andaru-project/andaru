@@ -104,6 +104,12 @@ func TestSingletonVersions(t *testing.T) {
 	if s.Config.NAT.Outbound.Mode != "automatic" {
 		t.Fatal("outbound NAT not set")
 	}
+	// none is a saved value of its own, not the absence of one: it keeps a version to replace it by.
+	p := mustRun(t, &s, `{"operations":[{"op":"replace","collection":"nat.outbound","expectedVersion":"`+string(s.Versions[listKey("nat.outbound")].Version)+`","value":{"mode":"none"}}]}`)
+	if r, e := resultView(p); e != nil || len(r.Items) != 1 || r.Items[0].Version != s.Version {
+		t.Fatalf("result %+v %v", r, e)
+	}
+	mustRun(t, &s, `{"operations":[{"op":"replace","collection":"nat.outbound","expectedVersion":"`+string(s.Version)+`","value":{"mode":"automatic"}}]}`)
 	mustRun(t, &s, `{"operations":[{"op":"delete","collection":"management","expectedVersion":"`+string(s.Versions[objectKey{"management", "management"}].Version)+`"}]}`)
 	if s.Config.Management != nil {
 		t.Fatal("management not removed")

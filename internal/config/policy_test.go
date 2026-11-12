@@ -166,3 +166,13 @@ func TestRuleRevalidatedWhenGroupChanges(t *testing.T) {
 		t.Fatalf("after the group changed family: %v", err)
 	}
 }
+
+// A zone on one side matches either family, whatever addresses stand beside it.
+func TestZoneBesideAnAddressMatchesBothFamilies(t *testing.T) {
+	d := policyFixture(t)
+	r := item(d["policy"].(map[string]any)["forward"].([]any), 0)
+	r["from"], r["to"] = []any{item(d["zones"].([]any), 0)["id"], adrHost}, []any{adrNet6}
+	if _, err := decodeMap(t, d); err != nil {
+		t.Fatalf("a zone alternative was ignored: %v", err)
+	}
+}

@@ -49,9 +49,6 @@ func normalizeDeclaration(d *declaration) {
 	if len(d.Policy.Input)+len(d.Policy.Forward) == 0 {
 		d.Policy = policy{}
 	}
-	if d.NAT.Outbound.Mode == "none" {
-		d.NAT = natSettings{}
-	}
 	if d.Management != nil {
 		slices.Sort(d.Management.AllowedSources)
 	}
