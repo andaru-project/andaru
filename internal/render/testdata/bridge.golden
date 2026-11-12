@@ -28,6 +28,13 @@ Prefix=2001:db8:0:1::/64
 [IPv6Prefix]
 Prefix=2001:db8:0:2::/64
 
+### /run/systemd/network/50-andaru-ens18.link 0644 secret=false sources=/links/0
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:01
+
+[Link]
+Name=ens18
+
 ### /run/systemd/network/50-andaru-ens18.network 0644 secret=false sources=/links/0
 [Match]
 PermanentMACAddress=52:54:00:aa:bb:01
@@ -41,6 +48,13 @@ LLDP=no
 Bridge=br000000040000
 LinkLocalAddressing=no
 IPv6AcceptRA=no
+
+### /run/systemd/network/50-andaru-ens19.link 0644 secret=false sources=/links/1
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:02
+
+[Link]
+Name=ens19
 
 ### /run/systemd/network/50-andaru-ens19.network 0644 secret=false sources=/links/1
 [Match]

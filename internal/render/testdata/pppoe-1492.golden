@@ -71,6 +71,13 @@ Assign=yes
 Managed=no
 OtherInformation=yes
 
+### /run/systemd/network/50-andaru-ens18.link 0644 secret=false sources=/links/0
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:01
+
+[Link]
+Name=ens18
+
 ### /run/systemd/network/50-andaru-ens18.network 0644 secret=false sources=/links/0
 [Match]
 PermanentMACAddress=52:54:00:aa:bb:01

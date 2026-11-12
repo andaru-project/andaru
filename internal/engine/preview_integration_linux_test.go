@@ -95,7 +95,7 @@ func TestPreviewHTTPContract(t *testing.T) {
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &body) != nil {
 		t.Fatalf("preview: %d %s", w.Code, w.Body)
 	}
-	if body.State != "preview" || body.SavedVersion != "1" || w.Header().Get("Andaru-Saved-Version") != "1" || body.Realizable == nil || *body.Realizable || len(body.Resolved) != 2 || len(body.Files) != 7 {
+	if body.State != "preview" || body.SavedVersion != "1" || w.Header().Get("Andaru-Saved-Version") != "1" || body.Realizable == nil || *body.Realizable || len(body.Resolved) != 2 || len(body.Files) != 9 {
 		t.Fatalf("envelope: %+v", body)
 	}
 	var options, foreign, tooLong bool

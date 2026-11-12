@@ -156,7 +156,7 @@ The response has `state: "preview"`, the `savedVersion` rendered, `realizable` (
 
 What is rendered:
 
-- **Ethernet, VLAN, bridge, bond:** `/run/systemd/network/50-andaru-<name>.netdev` and `.network`. Physical NICs are matched by `PermanentMACAddress=` and never renamed. Virtual links get a derived name: `vl`, `br`, `bo` or `pp` plus the first 12 hex digits of the link ID. Your own `name` and `description` never appear in a rendered file.
+- **Ethernet, VLAN, bridge, bond:** `/run/systemd/network/50-andaru-<name>.netdev` and `.network`. Physical NICs are matched by `PermanentMACAddress=`, and a `.link` file keeps the name each has now across reboots: after a takeover nothing else names them (netplan's own `.link` files did until then), and the boot service has udev apply Andaru's before networkd starts. Virtual links get a derived name: `vl`, `br`, `bo` or `pp` plus the first 12 hex digits of the link ID. Your own `name` and `description` never appear in a rendered file.
 - **PPPoE:** pppd runs the session and owns IPv4; networkd keeps IPv6 (router discovery, DHCPv6, prefix delegation) on the PPP interface. Three files: `/run/andaru/ppp/<pp-name>.options` (mode `0600`, secret), `/run/systemd/system/andaru-pppoe-<pp-name>.service`, and a `.network` with `KeepConfiguration=yes` so networkd leaves pppd's address and default route alone. The split follows [systemd#481](https://github.com/systemd/systemd/issues/481).
 - Provider-offered DNS, NTP, hostname and search domains are ignored on purpose; those are later areas.
 
@@ -268,7 +268,7 @@ Boot needs `andaru-network-boot.service` ([unit](../../packaging/systemd/andaru-
 
 What changes for the host after a takeover:
 
-- On cloud images the interface name changes at the next reboot (`eth0` becomes `ens18`): netplan was pinning it. Andaru matches by permanent MAC, so the configuration follows.
+- Interface names stay as they were (`eth0` on cloud images, where netplan pinned it): Andaru's `.link` files keep them across reboots.
 - The host uses the DNS servers you declare, or the DHCP-provided ones when you declare none. NTP servers and hostname from DHCP are ignored.
 - `network-online.target` no longer waits for an uplink.
 - An apply interrupts IPv6 on the touched interface for about two seconds; IPv4 was uninterrupted on the lab.

@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/andaru-project/andaru/internal/host"
@@ -184,7 +186,7 @@ func (r Realizer) makePermanent(ctx context.Context, reload bool, kind string) e
 		}
 	}
 	// netplan's generator is what enables networkd on cloud images; without its YAML nothing else would.
-	step("permanent:enable", func() error {
+	enable := func() error {
 		// Andaru's links are never required for "online", so wait-online would hold every boot for its two-minute timeout.
 		var failures []error
 		for _, args := range [][]string{{"enable", "systemd-networkd.service"}, {"disable", "systemd-networkd-wait-online.service"}} {
@@ -195,8 +197,9 @@ func (r Realizer) makePermanent(ctx context.Context, reload bool, kind string) e
 			failures = append(failures, err)
 		}
 		return errors.Join(failures...)
-	})
+	}
 	if kind == "ifupdown" {
+		step("permanent:enable", enable)
 		// Neither the boot service nor udev's hotplug may raise a taken interface again; /etc/network/interfaces stays as it was.
 		step("permanent:mask", func() error {
 			args := []string{"mask", "networking.service", "ifup@.service"}
@@ -243,6 +246,8 @@ func (r Realizer) makePermanent(ctx context.Context, reload bool, kind string) e
 		}
 		return nil
 	})
+	// Last: its daemon reload reruns netplan's generator, which writes netplan's files back while the YAML exists.
+	step("permanent:enable", enable)
 	return errors.Join(failures...)
 }
 
@@ -305,6 +310,18 @@ func (r Realizer) Boot(ctx context.Context) error {
 		for _, path := range stale {
 			if err := os.Remove(path); err != nil {
 				failures = append(failures, err)
+			}
+		}
+		// The adapters get their names first, so everything after sees the final ones: udev may have named them
+		// before the .link files existed, and they are down until networkd starts.
+		if links := slices.DeleteFunc(slices.Clone(set), func(f placed) bool { return !strings.HasSuffix(f.path, ".link") }); len(links) > 0 {
+			if err := r.place(nil, links); err != nil {
+				return err
+			}
+			for _, args := range [][]string{{"control", "--reload"}, {"trigger", "--settle", "--action=add", "--subsystem-match=net"}} {
+				if _, err := r.Run(ctx, "/usr/bin/udevadm", args...); err != nil {
+					slog.Error("apply the adapter names", "error", err)
+				}
 			}
 		}
 		if err := r.place(nil, set); err != nil {

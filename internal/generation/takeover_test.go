@@ -329,6 +329,53 @@ func TestBootCompletesInterruptedConfirm(t *testing.T) {
 	}
 }
 
+func TestConfirmRemovesNetplanBeforeReloading(t *testing.T) {
+	b := cloud(t)
+	id := b.takeover()
+	// A daemon reload reruns netplan's generator, which writes its files back while the YAML exists.
+	b.net.onRun = func(command string) {
+		if command == "systemctl enable systemd-networkd.service" && b.exists("etc/netplan/50-cloud-init.yaml") {
+			b.generate()
+		}
+	}
+	if err := b.r.Confirm(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(b.net.root, netDir, "10-netplan-*")); len(left) != 0 {
+		t.Fatalf("netplan's files came back: %v", left)
+	}
+}
+
+func TestBootRenamesAdaptersBeforeNetworkd(t *testing.T) {
+	b := cloud(t)
+	link := "50-andaru-eth0.link"
+	id := b.gen(true, map[string]string{"50-andaru-eth0.network": uplinkDHCP, link: "[Match]\nPermanentMACAddress=02:00:00:00:00:01\n\n[Link]\nName=eth0\n"})
+	if err := b.r.Activate(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Confirm(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	b.reboot()
+	// Without netplan's .link files the kernel names come back unless udev applies Andaru's before networkd starts.
+	renamed := false
+	b.net.onRun = func(command string) {
+		if command == "udevadm trigger --settle --action=add --subsystem-match=net" {
+			// Named before anything else is placed, so what follows sees the final names.
+			renamed = b.exists(netDir+link) && !b.exists(netDir+"50-andaru-eth0.network")
+		}
+	}
+	if err := b.r.Boot(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// udev reads the new .link files only after the reload, so the trigger must come after it.
+	reload := slices.Index(b.net.argv, "udevadm control --reload")
+	trigger := slices.Index(b.net.argv, "udevadm trigger --settle --action=add --subsystem-match=net")
+	if !renamed || b.net.ran("udevadm control --reload") != 1 || reload < 0 || trigger < reload {
+		t.Fatalf("adapters not renamed after the .link files were placed: %q", b.net.argv)
+	}
+}
+
 func TestBootContinuesWhenPermanentStepFails(t *testing.T) {
 	b := cloud(t)
 	if err := b.r.Confirm(t.Context(), b.takeover()); err != nil {

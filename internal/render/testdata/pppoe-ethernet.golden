@@ -40,6 +40,13 @@ noipdefault
 defaultroute
 noipv6
 
+### /run/systemd/network/50-andaru-enx-1.2.link 0644 secret=false sources=/links/0
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:01
+
+[Link]
+Name=enx-1.2
+
 ### /run/systemd/network/50-andaru-enx-1.2.network 0644 secret=false sources=/links/0
 [Match]
 PermanentMACAddress=52:54:00:aa:bb:01
