@@ -41,7 +41,7 @@ var schemas = sync.OnceValues(func() (*schemaSet, error) {
 	}
 	s.objects = make(map[string]*jsonschema.Schema, 3)
 	for collection, kind := range map[string]string{"links": "link", "segments": "segment", "zones": "zone", "addresses": "address", "services": "service",
-		"policy.input": "rule", "policy.forward": "rule", "management": "managementFields#", "nat.outbound": "outboundFields#", "dhcp": "dhcp", "dns": "dnsService#"} {
+		"policy.input": "rule", "policy.forward": "rule", "management": "managementFields#", "nat.outbound": "outboundFields#", "dhcp": "dhcp", "dns": "dnsService#", "nat.portForwards": "portForward", "nat.oneToOne": "oneToOne"} {
 		kind, whole := strings.CutSuffix(kind, "#")
 		if !whole {
 			kind += "Write"

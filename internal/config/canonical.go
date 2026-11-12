@@ -48,6 +48,13 @@ func normalizeDeclaration(d *declaration) {
 	if len(d.Objects.Addresses)+len(d.Objects.Services) == 0 {
 		d.Objects = objectSet{}
 	}
+	// An empty list is no list, so a declaration that never had NAT entries keeps its bytes.
+	if len(d.NAT.PortForwards) == 0 {
+		d.NAT.PortForwards = nil
+	}
+	if len(d.NAT.OneToOne) == 0 {
+		d.NAT.OneToOne = nil
+	}
 	for i := range d.NAT.PortForwards {
 		if !d.NAT.PortForwards[i].NoRedirect && d.NAT.PortForwards[i].FilterRule == "" {
 			d.NAT.PortForwards[i].FilterRule = "auto"

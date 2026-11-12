@@ -958,3 +958,49 @@ func TestServiceChangesTableAdded(t *testing.T) {
 		t.Fatalf("dns %+v %v", o, e)
 	}
 }
+
+// A store made before inbound NAT gains its table on open; forwards then persist with their order and history.
+func TestNATListsPersist(t *testing.T) {
+	path := ownedDir(t)
+	ctx := context.Background()
+	s := openTestStore(t, path)
+	if _, e := s.Save(ctx, "unix:uid:0", networkInput(t)); e != nil {
+		t.Fatal(e)
+	}
+	s.Close()
+	db, e := openDatabase(ctx, filepath.Join(path, "configuration", "config.db"), "rw", false)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = db.ExecContext(ctx, "DROP TABLE nat_changes"); e != nil {
+		t.Fatal(e)
+	}
+	db.Close()
+
+	s = openTestStore(t, path)
+	zones, e := s.List(ctx, "zones")
+	if e != nil || len(zones.Items) == 0 {
+		t.Fatalf("zones %+v %v", zones, e)
+	}
+	var z zone
+	_ = json.Unmarshal(zones.Items[0].Value, &z)
+	if _, e = s.Save(ctx, "unix:uid:0", Changes{Operations: []Operation{
+		{Op: "create", Collection: "nat.portForwards", LocalID: "a", Value: json.RawMessage(forwardValue("a", "8080", z.ID))},
+	}}); e != nil {
+		t.Fatalf("save after the table was added: %v", e)
+	}
+	s.Close()
+	s = openTestStore(t, path)
+	list, e := s.List(ctx, "nat.portForwards")
+	if e != nil || len(list.Items) != 1 || list.Version == "" {
+		t.Fatalf("forwards %+v %v", list, e)
+	}
+	history, e := s.History(ctx, nil, 1)
+	if e != nil || len(history.Items) != 1 {
+		t.Fatalf("history %+v %v", history, e)
+	}
+	v, e := s.Version(ctx, history.Items[0].ID)
+	if e != nil || !slices.ContainsFunc(v.Changes, func(c objectChange) bool { return c.Collection == "nat.portForwards" && c.Created }) {
+		t.Fatalf("version changes %+v %v", v.Changes, e)
+	}
+}

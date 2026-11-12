@@ -119,8 +119,8 @@ func Open(ctx context.Context, stateDir string) (*Store, error) {
 		cfg.Close()
 		return nil, diagnostic("open-secret", e)
 	}
-	// A store made before the packet filter lacks policy_changes; adding it is the whole migration.
-	if _, e = cfg.ExecContext(ctx, policyDDL+serviceDDL); e != nil {
+	// A store made before the packet filter, the services or inbound NAT lacks their tables; adding them is the whole migration.
+	if _, e = cfg.ExecContext(ctx, policyDDL+serviceDDL+natDDL); e != nil {
 		cfg.Close()
 		sec.Close()
 		return nil, diagnostic("open-config-policy-table", e)

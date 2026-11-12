@@ -146,7 +146,7 @@ func initialState() savedState {
 // Ordered collections keep their order; their list is versioned under {collection, collection}.
 // Singletons are versioned the same way and written with replace or delete.
 var (
-	orderedCollections = []string{"policy.input", "policy.forward"}
+	orderedCollections = []string{"policy.input", "policy.forward", "nat.portForwards", "nat.oneToOne"}
 	singletons         = []string{"management", "nat.outbound", "dns"}
 	collections        = append([]string{"links", "segments", "zones", "addresses", "services", "dhcp"}, append(slices.Clone(orderedCollections), singletons...)...)
 )
@@ -170,7 +170,7 @@ func newID(collection string) (string, error) {
 	}
 	b[6] = (b[6] & 15) | 64
 	b[8] = (b[8] & 63) | 128
-	prefix := map[string]string{"links": "lnk", "segments": "seg", "zones": "zon", "addresses": "adr", "services": "svc", "policy.input": "rul", "policy.forward": "rul", "dhcp": "dhp"}[collection]
+	prefix := map[string]string{"links": "lnk", "segments": "seg", "zones": "zon", "addresses": "adr", "services": "svc", "policy.input": "rul", "policy.forward": "rul", "dhcp": "dhp", "nat.portForwards": "pfw", "nat.oneToOne": "oto"}[collection]
 	return fmt.Sprintf("%s_%x-%x-%x-%x-%x", prefix, b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
 func rank(code string) int {
@@ -210,6 +210,12 @@ func objects(d *declaration) map[objectKey]any {
 	}
 	for i := range d.Policy.Forward {
 		m[objectKey{"policy.forward", d.Policy.Forward[i].ID}] = &d.Policy.Forward[i]
+	}
+	for i := range d.NAT.PortForwards {
+		m[objectKey{"nat.portForwards", d.NAT.PortForwards[i].ID}] = &d.NAT.PortForwards[i]
+	}
+	for i := range d.NAT.OneToOne {
+		m[objectKey{"nat.oneToOne", d.NAT.OneToOne[i].ID}] = &d.NAT.OneToOne[i]
 	}
 	if d.Management != nil {
 		m[listKey("management")] = d.Management
@@ -489,41 +495,19 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 		return empty, e
 	}
 	for _, col := range orderedCollections {
-		list := &d.Policy.Input
-		if col == "policy.forward" {
-			list = &d.Policy.Forward
+		var f *Fault
+		switch col {
+		case "policy.input":
+			f = rewriteOrdered(&d.Policy.Input, col, func(x rule) string { return x.ID }, input, keys, orders, writes, deleted, createKeys)
+		case "policy.forward":
+			f = rewriteOrdered(&d.Policy.Forward, col, func(x rule) string { return x.ID }, input, keys, orders, writes, deleted, createKeys)
+		case "nat.portForwards":
+			f = rewriteOrdered(&d.NAT.PortForwards, col, func(x portForward) string { return x.ID }, input, keys, orders, writes, deleted, createKeys)
+		case "nat.oneToOne":
+			f = rewriteOrdered(&d.NAT.OneToOne, col, func(x oneToOne) string { return x.ID }, input, keys, orders, writes, deleted, createKeys)
 		}
-		if *list, e = rewrite(*list, col, writes, deleted, createKeys, func(x rule) string { return x.ID }); e != nil {
-			return empty, e
-		}
-		for i, op := range input.Operations {
-			if op.Collection != col {
-				continue
-			}
-			switch {
-			case op.Op == "create" && op.Before != "":
-				at := slices.IndexFunc(*list, func(r rule) bool { return r.ID == op.Before })
-				from := slices.IndexFunc(*list, func(r rule) bool { return r.ID == keys[i].ID })
-				if at < 0 {
-					return empty, fault("VALIDATION_FAILED", input.path(i, "/before", false), "Expected a rule of the same list.")
-				}
-				r := (*list)[from]
-				*list = slices.Insert(slices.Delete(*list, from, from+1), at, r)
-			case op.Op == "order":
-				ids := orders[i]
-				if len(ids) != len(*list) {
-					return empty, fault("VALIDATION_FAILED", input.path(i, "", true), "The order must name every rule of the list exactly once.")
-				}
-				placed := make([]rule, 0, len(ids))
-				for _, id := range ids {
-					j := slices.IndexFunc(*list, func(r rule) bool { return r.ID == id })
-					if j < 0 || slices.ContainsFunc(placed, func(r rule) bool { return r.ID == id }) {
-						return empty, fault("VALIDATION_FAILED", input.path(i, "", true), "The order must name every rule of the list exactly once.")
-					}
-					placed = append(placed, (*list)[j])
-				}
-				*list = placed
-			}
+		if f != nil {
+			return empty, f
 		}
 	}
 	if deleted[listKey("management")] {
@@ -755,6 +739,15 @@ func resolveReferences(v map[string]any, col string, labels map[string]string) {
 		resolveAll(v, "allowedSources")
 	case "dns":
 		resolveAll(v, "segments")
+	case "nat.portForwards":
+		resolveAll(v, "ingressZones")
+		resolveAll(v, "from")
+		if to, ok := v["to"].(map[string]any); ok {
+			resolve(to, "address")
+		}
+	case "nat.oneToOne":
+		resolve(v, "zone")
+		resolveAll(v, "destination")
 	}
 	if col == "segments" {
 		resolve(v, "link")
@@ -783,7 +776,10 @@ func owner(d *declaration, path string) (objectKey, string) {
 		if len(p) > 1 && p[1] == "outbound" {
 			return listKey("nat.outbound"), rest(2)
 		}
-		return objectKey{}, ""
+		if len(p) < 2 {
+			return objectKey{}, ""
+		}
+		p = append([]string{"nat." + p[1]}, p[2:]...)
 	case "objects":
 		p = p[1:]
 	case "policy":
@@ -817,6 +813,10 @@ func owner(d *declaration, path string) (objectKey, string) {
 		id = d.Policy.Forward[n].ID
 	case col == "dhcp" && n < len(d.DHCP):
 		id = d.DHCP[n].ID
+	case col == "nat.portForwards" && n < len(d.NAT.PortForwards):
+		id = d.NAT.PortForwards[n].ID
+	case col == "nat.oneToOne" && n < len(d.NAT.OneToOne):
+		id = d.NAT.OneToOne[n].ID
 	}
 	if id == "" {
 		return objectKey{}, ""
@@ -900,4 +900,47 @@ func rebaseSecrets(failure validationError, doc secretDocument, head Version, se
 		best = 0
 	}
 	return fault("VALIDATION_FAILED", input.path(best, "/password", true), failure[0].Message)
+}
+
+// rewriteOrdered applies a batch's writes to one ordered list, then its placements (before) and reorders.
+func rewriteOrdered[T any](list *[]T, col string, idOf func(T) string, input Changes, keys []objectKey, orders map[int][]string,
+	writes map[objectKey][]byte, deleted map[objectKey]bool, created []objectKey) *Fault {
+	var e error
+	if *list, e = rewrite(*list, col, writes, deleted, created, idOf); e != nil {
+		var f *Fault
+		if errors.As(e, &f) {
+			return f
+		}
+		return fault("VALIDATION_FAILED", "", "Invalid typed object.")
+	}
+	for i, op := range input.Operations {
+		if op.Collection != col {
+			continue
+		}
+		switch {
+		case op.Op == "create" && op.Before != "":
+			at := slices.IndexFunc(*list, func(r T) bool { return idOf(r) == op.Before })
+			from := slices.IndexFunc(*list, func(r T) bool { return idOf(r) == keys[i].ID })
+			if at < 0 {
+				return fault("VALIDATION_FAILED", input.path(i, "/before", false), "Expected an entry of the same list.")
+			}
+			r := (*list)[from]
+			*list = slices.Insert(slices.Delete(*list, from, from+1), at, r)
+		case op.Op == "order":
+			ids := orders[i]
+			if len(ids) != len(*list) {
+				return fault("VALIDATION_FAILED", input.path(i, "", true), "The order must name every entry of the list exactly once.")
+			}
+			placed := make([]T, 0, len(ids))
+			for _, id := range ids {
+				j := slices.IndexFunc(*list, func(r T) bool { return idOf(r) == id })
+				if j < 0 || slices.ContainsFunc(placed, func(r T) bool { return idOf(r) == id }) {
+					return fault("VALIDATION_FAILED", input.path(i, "", true), "The order must name every entry of the list exactly once.")
+				}
+				placed = append(placed, (*list)[j])
+			}
+			*list = placed
+		}
+	}
+	return nil
 }

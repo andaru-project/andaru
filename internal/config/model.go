@@ -169,7 +169,7 @@ type outbound struct {
 	Mode string `json:"mode"`
 }
 type natSettings struct {
-	Outbound     outbound      `json:"outbound"`
+	Outbound     outbound      `json:"outbound,omitzero"`
 	PortForwards []portForward `json:"portForwards,omitempty"`
 	OneToOne     []oneToOne    `json:"oneToOne,omitempty"`
 }
