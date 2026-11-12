@@ -349,3 +349,24 @@ func TestBootDropsHalfLoadedFilterForUnfilteredFallback(t *testing.T) {
 		t.Fatalf("live %v, table %q", live, b.net.table)
 	}
 }
+
+// A candidate dropped for its filter leaves none of its files behind, .link files included.
+func TestBootRemovesTheLinksOfAnUnusableCandidate(t *testing.T) {
+	b := cloud(t)
+	link := "50-andaru-eth9.link"
+	id := b.gen(true, filtered(map[string]string{"50-andaru-eth0.network": uplinkDHCP, link: "[Match]\nPermanentMACAddress=02:00:00:00:00:09\n\n[Link]\nName=eth9\n"}, "aa"))
+	if err := b.r.Activate(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Confirm(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	b.reboot()
+	b.net.fail = "nft -f"
+	if err := b.r.Boot(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if b.exists(netDir + link) {
+		t.Fatal("the unusable candidate's .link file stayed")
+	}
+}
