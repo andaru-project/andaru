@@ -21,7 +21,7 @@ This is not implemented behaviour yet. Contracts stay provisional until Andaru 1
   - the 1:1 host was reachable from the WAN and left through its external address.
 
 - **What pfBlockerNG does on pfSense** (read from `pfblockerng.inc`): its DNSBL web server listens on a virtual IP, by default on the loopback interface `lo0`. Clients reach that address through the firewall, and no NAT is needed. When the VIP lives on a real interface instead, it adds two port forwards: VIP:80 and VIP:443 go to `127.0.0.1` on its web server's ports, with association "pass" and Pure-NAT reflection. Its DNS redirect forwards port 53 of `(self)` to `127.0.0.1:53`. Both target the firewall itself.
-- **Linux differs from FreeBSD here:** `dnat` to `127.0.0.0/8` from a non-loopback interface is dropped as a martian unless `route_localnet` is set on that interface (kernel `ip-sysctl` documentation; a container probe was inconclusive, so the plan's first task confirms it). A VIP on the loopback interface with an ordinary address (pfBlockerNG auto-creates its sinkhole VIP from `172.16.53.1`, `192.168.53.1`, `10.53.53.1` or `fd00:53:53:53:53:53:53:1`, the first that collides with nothing) is local delivery and needs nothing.
+- **Linux differs from FreeBSD here:** `dnat` to `127.0.0.0/8` from a non-loopback interface is dropped as a martian unless `route_localnet` is set on that interface (probed in a Debian 13 network namespace, 2026-11-12: the translated connection timed out with `route_localnet=0` and connected with `1`; a `/32` on `lo` connected with nothing set). A VIP on the loopback interface with an ordinary address (pfBlockerNG auto-creates its sinkhole VIP from `172.16.53.1`, `192.168.53.1`, `10.53.53.1` or `fd00:53:53:53:53:53:53:1`, the first that collides with nothing) is local delivery and needs nothing.
 
 ## Scope
 
@@ -94,7 +94,7 @@ These copy pfSense's rules.
 - `127.0.0.0/8` is refused as a target. Use a loopback virtual IP instead: Linux drops connections translated to the loopback range from another interface, and enabling `route_localnet` to allow it weakens a protection.
 
 **1:1:**
-- `external` may not contain any of the firewall's static addresses, since that would take over the firewall's own traffic. Addresses learned by DHCP or PPPoE are only known when the configuration is rendered: an `external` containing one is a render error, `ONE_TO_ONE_OWN_ADDRESS`, so an apply or the boot re-render refuses it.
+- `external` may not contain a segment's first static address, which the firewall's own traffic and the outbound masquerade use. A segment's extra addresses may be 1:1 external addresses: that is pfSense's IP alias for 1:1, and how an address on the WAN subnet reaches the firewall. Addresses learned by DHCP or PPPoE are only known when the configuration is rendered: an `external` containing one is a render error, `ONE_TO_ONE_OWN_ADDRESS`, so an apply or the boot re-render refuses it.
 - `external` may not overlap another enabled 1:1 entry.
 - `internal` may not contain the firewall's own address on that segment.
 

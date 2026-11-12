@@ -304,6 +304,27 @@ printf '%s\n' '{"mode":"recursive","segments":["'"$LAN"'"]}' | sudo andaru ctl c
 - **Takeover:** with Unbound installed and a static LAN segment, the proposal includes the DNS service: forwarding to the host's declared servers, or recursive when they came from DHCP. With Kea installed it offers DHCP on each static LAN segment (the upper half of the subnet); the assistant asks for each, yes by default, while `--accept-detected` never turns DHCP on.
 - Inspect leases with `sudo cat /run/andaru-leases/leases.conf` or Kea's socket until a status page exists.
 
+### Inbound NAT
+
+Port forwards and 1:1 NAT, with pfSense's semantics, IPv4 only. Both need the packet filter, so a management segment. Design: [inbound NAT](../superpowers/specs/2026-11-12-inbound-nat-design.md).
+
+```sh
+# WAN port 8080 to the web server's port 80, from anywhere; its filter rule comes with it.
+printf '%s\n' '{"name":"web","enabled":true,"ingressZones":["'"$WAN_ZONE"'"],"protocol":"tcp","from":[],"to":{"self":true},"ports":"8080","target":{"address":"192.168.40.10"},"targetPort":80}' \
+  | sudo andaru ctl config create nat/port-forwards
+# A public address on the WAN segment mapped both ways to an inside host.
+printf '%s\n' '{"name":"server","enabled":true,"zone":"'"$WAN_ZONE"'","external":"203.0.113.20","internal":"192.168.40.30","destination":[]}' \
+  | sudo andaru ctl config create nat/one-to-one
+sudo andaru ctl config order nat/port-forwards --version "$V" "$ID2" "$ID1"
+```
+
+- **`self`** names the firewall on the interface the connection arrives on: as a forward's `to` it follows a DHCP or PPPoE address without a re-render; as its `target` it redirects to the firewall itself.
+- **Port forwards** are evaluated in list order, first match. `ports` is one port or a `first-last` range; `targetPort` shifts a range by the same offset. `noRedirect` exempts matching connections from the forwards after it. `from` takes address objects, with `fromNegated`. A `target` may be an inside host or one of the firewall's own addresses; `127.0.0.0/8` is refused (Linux drops such translations from other interfaces) — use an address on the loopback interface, as a virtual IP will (#37).
+- **Associated rule:** with `filterRule: auto` (the default) each forward gets a rule placed before the policy, in `forward`, or in `input` for the firewall itself. It admits only connections the forward translated, so the inside host is not reachable directly. `none` leaves it to the policy.
+- **1:1** maps an address or a prefix in both directions within one zone, optionally only for `destination` peers. `noBinat` exempts hosts from the entries after it; they leave through the outbound masquerade. Write the policy rule that admits the traffic yourself, as in pfSense.
+- **1:1 addresses** must already reach the firewall: an extra static address on the WAN segment (never its first, which the firewall's own traffic uses) or a block the provider routes to it. `PROXY_ARP_REQUIRED` warns about an address on the WAN subnet the firewall does not hold.
+- **Reflection** (`reflection: true`, Pure NAT) lets internal clients use the outside address; the server then sees the firewall as the client. Split DNS is the alternative that keeps the client's address.
+
 ### IPv6 on the LAN
 
 A LAN segment numbers itself from a prefix the WAN's DHCPv6 client receives, or from static addresses, and advertises itself as a router. Design: [IPv6 for the LAN](../superpowers/specs/2026-11-12-ipv6-lan-design.md).
