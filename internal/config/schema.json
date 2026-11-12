@@ -787,6 +787,19 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 64
+            },
+            "prefixOnly": {
+              "type": "boolean"
+            },
+            "withoutRA": {
+              "type": "boolean"
+            },
+            "sendRelease": {
+              "type": "boolean"
+            },
+            "duid": {
+              "type": "string",
+              "pattern": "^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){3,129}$"
             }
           },
           "required": [
@@ -809,6 +822,16 @@
             "subnetId": {
               "type": "string",
               "pattern": "^[0-9A-Fa-f]{1,4}$"
+            },
+            "addresses": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 64
+              },
+              "minItems": 1,
+              "uniqueItems": true
             }
           },
           "required": [

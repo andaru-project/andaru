@@ -103,6 +103,10 @@ type ipv6 struct {
 	From                string         `json:"from,omitempty"`
 	SubnetID            string         `json:"subnetId,omitempty"`
 	RA                  *advertisement `json:"ra,omitempty"`
+	PrefixOnly          bool           `json:"prefixOnly,omitempty"`
+	WithoutRA           bool           `json:"withoutRA,omitempty"`
+	SendRelease         bool           `json:"sendRelease,omitempty"`
+	DUID                string         `json:"duid,omitempty"`
 }
 
 // dns is what the host itself asks; it serves no client. Order is the order servers are tried in.

@@ -3,6 +3,8 @@ package config
 import (
 	"encoding/json"
 	"maps"
+
+	"slices"
 	"strings"
 	"testing"
 )
@@ -244,4 +246,22 @@ func mustDecode(t *testing.T, raw []byte) declaration {
 		t.Fatal(e)
 	}
 	return d
+}
+
+func TestDNSServesAnIPv6OnlySegment(t *testing.T) {
+	d := servicesFixture(t)
+	delete(d, "dhcp")
+	lan := item(segmentsOf(d), 1)["addressing"].(map[string]any)
+	lan["ipv4"] = map[string]any{"mode": "none"}
+	v6(d, 1)["addresses"] = []any{"fd00:a5d:1::1/64"}
+	if _, e := decodeMap(t, d); e != nil {
+		t.Fatalf("IPv6-only LAN refused: %v", e)
+	}
+	lan["ipv6"] = map[string]any{"mode": "slaac"}
+	_, e := decodeMap(t, d)
+	if ve, _ := e.(validationError); !slices.ContainsFunc(ve, func(f FieldError) bool {
+		return f.Path == "/dns/segments/0" && f.Message == "Expected an existing segment with a static IPv4 or IPv6 address."
+	}) {
+		t.Fatalf("got %v", e)
+	}
 }

@@ -320,3 +320,40 @@ func TestAdvertisementModes(t *testing.T) {
 		}
 	}
 }
+
+func TestDelegatedStableAddress(t *testing.T) {
+	d := fixtureMap(t)
+	v6(d, 1)["addresses"] = []any{"fd00:a5d:1::1/64"}
+	if _, e := decodeMap(t, d); e != nil {
+		t.Fatalf("stable address refused: %v", e)
+	}
+	addLink(d, "6", map[string]any{"permanentMac": "52:54:00:aa:bb:66"})
+	addSegment(d, "3", "lnk_00000000-0000-4000-8000-000000000006", map[string]any{"mode": "none"}, map[string]any{"mode": "static", "addresses": []any{"fd00:a5d:1::1/64"}})
+	_, e := decodeMap(t, d)
+	if ve, _ := e.(validationError); !slices.ContainsFunc(ve, func(f FieldError) bool { return f.Message == "Local address is already assigned." }) {
+		t.Fatalf("duplicate accepted: %v", e)
+	}
+}
+
+func TestDHCPv6ClientOptions(t *testing.T) {
+	d := fixtureMap(t)
+	for k, v := range map[string]any{"prefixOnly": true, "withoutRA": true, "sendRelease": true, "duid": "00:04:AA:bb:cc:dd"} {
+		v6(d, 0)[k] = v
+	}
+	got, e := decodeMap(t, d)
+	if a := got.Segments[0].Addressing.IPv6; e != nil || !a.PrefixOnly || !a.WithoutRA || !a.SendRelease || a.DUID != "00:04:aa:bb:cc:dd" {
+		t.Fatalf("%v %+v", e, a)
+	}
+	for _, bad := range []string{"xyz", "00:04"} {
+		d := fixtureMap(t)
+		v6(d, 0)["duid"] = bad
+		if _, e := decodeMap(t, d); e == nil {
+			t.Fatalf("duid %q accepted", bad)
+		}
+	}
+	d = fixtureMap(t)
+	item(segmentsOf(d), 0)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "slaac", "prefixOnly": true}
+	if _, e := decodeMap(t, d); e == nil {
+		t.Fatal("prefixOnly accepted on slaac")
+	}
+}
