@@ -345,6 +345,13 @@ func TestIdentityComesFromTheConfirmedCapture(t *testing.T) {
 	if got := b.postDraft(t); len(got.Files) != 2 || !strings.Contains(got.Files[1].Content, "DUIDRawData=00:01:32:87:03:54:bc:24:11:38:71:37\n") {
 		t.Fatalf("stale capture rendered: %+v", got.Files)
 	}
+	// The saved-version preview judges the capture the same way.
+	read := hostReader{Root: b.root, Baseline: func() (host.Baseline, error) { return b.baseline, nil },
+		Route: func(context.Context) ([]string, error) { return b.routes, nil }}
+	ids, err := previewIdentities(read, filepath.Join(b.state, "generations"))(t.Context(), []host.LinkStatus{{Name: b.nic, PermanentAddress: b.mac}})
+	if err != nil || string(ids[debianMAC].DUID) == string([]byte{0, 1, 0xaa, 0xbb, 0xcc}) {
+		t.Fatalf("preview rendered the stale capture: %+v %v", ids, err)
+	}
 	// After confirmation ifupdown is masked and dhcpcd's own DUID may have changed or gone.
 	b.baseline.IfupdownMasked = true
 	if err := os.WriteFile(filepath.Join(b.state, "generations", "pointers.json"), []byte(`{"confirmed":null,"lastKnownGood":null,"pending":null,"live":null,"takeover":true}`), 0o600); err != nil {

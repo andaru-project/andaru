@@ -39,8 +39,8 @@ func TestActivateStartsServicesAfterNetworkd(t *testing.T) {
 func TestAnchorUpdateFailureLeavesTheCheckToUnbound(t *testing.T) {
 	b := newBench(t)
 	b.net.fail = "unbound-helper"
-	if err := b.r.Activate(t.Context(), b.gen(false, served(`{"Dhcp4":{}}`))); err != nil {
-		t.Fatal(err)
+	if err := b.r.Activate(t.Context(), b.gen(false, served(`{"Dhcp4":{}}`))); err != nil || b.index("unbound-checkconf") < 0 {
+		t.Fatalf("%v; the check did not run after the helper failed: %q", err, b.net.argv)
 	}
 }
 
@@ -60,7 +60,7 @@ func TestKeaCheckWaitsForLateInterfaces(t *testing.T) {
 	b := newBench(t)
 	// networkctl reload returns before networkd has created every VLAN and bridge: Kea refuses an absent interface.
 	checks := 0
-	b.net.fail = "kea-dhcp4 -t"
+	b.net.fail, b.net.failWith = "kea-dhcp4 -t", "interface 'vlan99' doesn't exist in the system"
 	b.net.onRun = func(command string) {
 		if command == "kea-dhcp4 -t "+keaFile {
 			if checks++; checks == 3 {
@@ -71,6 +71,10 @@ func TestKeaCheckWaitsForLateInterfaces(t *testing.T) {
 	id := b.gen(false, served(`{"Dhcp4":{}}`))
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatalf("activation failed while the served interface was still being created: %v", err)
+	}
+	// Any other refusal is final at once: retrying a bad configuration only delays the rollback.
+	if checks != 3 {
+		t.Fatalf("checked %d times", checks)
 	}
 	if b.index("systemctl restart kea-dhcp4-server.service") < 0 {
 		t.Fatalf("Kea not started: %q", b.net.argv)
@@ -184,5 +188,19 @@ func TestRemovingDHCPClearsLeaseNames(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(filepath.Join(b.net.root, leasesDir, "leases.conf")); string(data) != "server:\n" {
 		t.Fatalf("old names kept: %q", data)
+	}
+}
+
+func TestBadKeaConfigFailsWithoutWaiting(t *testing.T) {
+	b := newBench(t)
+	b.net.fail = "kea-dhcp4 -t"
+	checks := 0
+	b.net.onRun = func(command string) {
+		if command == "kea-dhcp4 -t "+keaFile {
+			checks++
+		}
+	}
+	if err := b.r.Activate(t.Context(), b.gen(false, served(`{"Dhcp4":{}}`))); err == nil || checks != 1 {
+		t.Fatalf("a refused configuration was retried %d times (%v)", checks, err)
 	}
 }

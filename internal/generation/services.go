@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -79,10 +80,16 @@ func (r Realizer) services(ctx context.Context, from, to []placed) error {
 	case kea:
 		// Kea refuses an interface that does not exist, and networkctl reload returns before networkd has
 		// created every VLAN and bridge.
+		var refused error
 		if err := r.waitFor(ctx, func() error {
 			_, err := r.Run(ctx, "/usr/sbin/kea-dhcp4", "-t", keaFile)
+			if err != nil && !strings.Contains(err.Error(), "doesn't exist in the system") {
+				refused = err // anything else is the configuration itself: no point waiting
+				return nil
+			}
 			return err
-		}); err != nil {
+		}); err != nil || refused != nil {
+			err = cmp.Or(refused, err)
 			return fmt.Errorf("the DHCP server refuses its configuration: %w", err)
 		}
 		if _, err := r.Run(ctx, "/usr/bin/systemctl", "restart", "kea-dhcp4-server.service"); err != nil {
