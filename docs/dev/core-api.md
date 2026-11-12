@@ -318,6 +318,7 @@ A LAN segment numbers itself from a prefix the WAN's DHCPv6 client receives, or 
 - **WAN DHCPv6 client:** `requestPrefixLength`, `prefixOnly` (`UseAddress=no`), `withoutRA` (solicit without waiting for an advertisement), `sendRelease` (default false: a release makes many providers hand out a new prefix), `duid` (hex, replaces the captured DHCPv6 identity).
 - **DNS service:** listens on each served segment's stable IPv6 address and answers whatever source reaches it there; which clients may is the input policy's job. A segment may be served by IPv6 alone.
 - **Filter:** link-local multicast listener discovery is accepted on every interface. Neighbour discovery was already.
+- **Prefix changes:** networkd advertises the new delegated prefix at once but does not deprecate the old one, so clients keep the old address until its preferred lifetime from the lease ends. The unique local address keeps DNS working throughout.
 - **Not offered:** advertisement intervals (networkd has none), extra advertised subnets, DHCPv6 server modes (next slice).
 
 ### Host DNS servers

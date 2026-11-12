@@ -91,7 +91,7 @@ func applyFindings(in gateInput) []render.Finding {
 				}
 				bound = append(bound, m.Name)
 				declares := slices.ContainsFunc(in.Result.Files, func(f render.File) bool {
-					return f.Path == networkDir+"50-andaru-"+m.Name+".network" && (strings.HasPrefix(f.Real(), "DNS=") || strings.Contains(f.Real(), "\nDNS="))
+					return f.Path == networkDir+"50-andaru-"+m.Name+".network" && len(generation.DeclaredDNS([]byte(f.Real()))) > 0
 				})
 				if !declares {
 					missing = append(missing, m.Name)

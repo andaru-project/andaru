@@ -438,3 +438,11 @@ func TestStaticDNSSatisfiedByTheDNSService(t *testing.T) {
 		t.Fatalf("findings = %+v", findings)
 	}
 }
+
+// A server advertised to clients is not the host's: the netplan host would still lose its resolvers.
+func TestAdvertisedDNSIsNotTheHostsDeclaration(t *testing.T) {
+	findings := applyFindings(staticDNS(map[string]string{"eth0": "IPv6SendRA=yes\n\n[IPv6SendRA]\nDNS=fd00:beef:1::1\n"}, "eth0"))
+	if !slices.ContainsFunc(findings, func(f render.Finding) bool { return f.Code == "TAKEOVER_UNSUPPORTED_BASELINE" }) {
+		t.Fatalf("findings = %+v", findings)
+	}
+}

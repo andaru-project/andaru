@@ -19,7 +19,7 @@ Not implemented behaviour. Contracts remain provisional until Andaru 1.0.
 ### Probes behind it
 
 - systemd-networkd 257 (Debian 13), from its manual: `[IPv6SendRA]` offers `Managed`, `OtherInformation`, `RouterLifetimeSec`, `RouterPreference`, `HopLimit`, `ReachableTimeSec`, `RetransmitSec`, `UplinkInterface`, `EmitDNS`/`DNS`, `EmitDomains`/`Domains`, `DNSLifetimeSec`; `[IPv6Prefix]` offers `Prefix`, `AddressAutoconfiguration`, `ValidLifetimeSec`, `PreferredLifetimeSec`, `Assign`; `[IPv6PREF64Prefix]` offers `Prefix`, `LifetimeSec`; `[DHCPv6]` offers `PrefixDelegationHint`, `UseAddress`, `WithoutRA`, `SendRelease`, `DUIDType`, `DUIDRawData`; `[DHCPPrefixDelegation]` offers `UplinkInterface`, `SubnetId`, `Announce`, `Assign`, `Token`. There is no setting for the advertisement interval; networkd uses RFC 4861's defaults.
-- networkd re-announces a delegated prefix when the upstream changes it and deprecates the old one by itself; nothing in Andaru has to react to a prefix change in this slice.
+- networkd re-announces a delegated prefix when the upstream changes it, but does not deprecate the old one: the lab (networkd 257, 2026-11-12) showed clients keeping the old address preferred until the lease's own preferred lifetime ran out. Clients picked the new prefix as source address. Nothing in Andaru reacts to a prefix change in this slice; deprecating the old prefix belongs with the prefix watcher (slice 3).
 - Probed in privileged `debian:trixie` containers (unbound 1.26.2-0+deb13u1, systemd 257.13-1~deb13u1), 2026-11-12:
   - Unbound with `ip-freebind: yes` and `interface: fd00:a5d:1::1` starts before the address exists and answers once it appears.
   - `interface-action: fd00:a5d:1::1 allow` answers clients from any prefix on the link; `access-control: fd00:a5d:1::/64 allow` alone refuses a client numbered from the delegated prefix. `interface-action` must name the listener as `interface:` does: naming the interface (`lan0`) stops Unbound from starting, and `interface: lan0` resolves the addresses once at startup.
@@ -111,3 +111,4 @@ The `APPLY_UNSUPPORTED` refusals for `delegated` and for advertisements are remo
 - `dhcp6c`'s debug, authentication and raw option settings are not offered.
 - Extra advertised subnets ("RA Subnets") wait for a use case.
 - High availability is out of scope for the MVP.
+- A replaced delegated prefix is not advertised with zero lifetimes, so clients keep it until it expires (pfSense's radvd deprecates it). Slice 3's prefix watcher can do it.
