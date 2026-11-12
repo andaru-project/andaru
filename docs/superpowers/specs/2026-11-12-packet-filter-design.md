@@ -136,7 +136,7 @@ The ordering rule is **tighten first, loosen last**.
 
 - **Activate:** after the timer is armed, `realize` loads the generation's script with `nft -f` from the generation directory, then places the networkd files and reloads. A load error changes nothing (the transaction aborts); activation fails before any network file moves, reporting nft's message and the rule ID read from the failing line's comment.
 - **Verification** adds one check: `nft -j list table inet andaru` reports the table comment of this generation's script. The existing checks (files bound, addresses, default route) are unchanged, and confirmation from a new session proves the management path.
-- **Rollback / failed activation to a generation:** that generation's script is loaded first, then its files. **To the baseline** (no Andaru table): networkd files first, which turns forwarding off, then `nft delete table inet andaru`.
+- **Rollback / failed activation to a generation:** that generation's script is loaded first, then its files. **To the baseline** (no Andaru table): networkd files first, then forwarding off (`net.ipv4.conf.all.forwarding` and its IPv6 counterpart, since networkd leaves forwarding as it was when a file omits it), then `nft delete table inet andaru`.
 - **Boot:** `andaru realize boot` loads the confirmed generation's script before placing its files; the boot unit already runs before `network-pre.target`, so no interface comes up unfiltered. If the script does not load, boot falls back to the last-known-good generation as a whole; with nothing usable, to the baseline (no table, no forwarding), as today.
 - **Engine:** never runs `nft`; its sandbox has no capabilities. Only `realize` (root, transient unit) loads rules.
 

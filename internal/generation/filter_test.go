@@ -89,8 +89,10 @@ func TestRollbackToBaselineDeletesTableLast(t *testing.T) {
 	if reload, drop := b.index("networkctl reload"), b.index("nft delete table inet andaru"); reload < 0 || drop < reload {
 		t.Fatalf("the table went before the files: %q", b.net.argv)
 	}
-	if b.net.table != "" || b.forwarding() != "0\n" {
-		t.Fatalf("table %q, IPv6 forwarding %q on the baseline", b.net.table, b.forwarding())
+	// networkd leaves IPv4Forwarding= as it was when a file omits it, so nothing would stop routing unfiltered.
+	v4, _ := os.ReadFile(filepath.Join(b.net.root, ipv4Forwarding))
+	if b.net.table != "" || b.forwarding() != "0\n" || string(v4) != "0\n" {
+		t.Fatalf("table %q, forwarding v6 %q v4 %q on the baseline", b.net.table, b.forwarding(), v4)
 	}
 }
 

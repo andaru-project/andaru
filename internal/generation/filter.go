@@ -24,6 +24,9 @@ const filterEntry = "nft:inet/andaru"
 // IPv6Forwarding= does not route IPv6 by itself. It is on exactly while Andaru's filter is loaded.
 const ipv6Forwarding = "/proc/sys/net/ipv6/conf/all/forwarding"
 
+// ipv4Forwarding is the IPv4 switch for every interface at once; networkd only ever turns it on.
+const ipv4Forwarding = "/proc/sys/net/ipv4/conf/all/forwarding"
+
 var (
 	tableComment  = regexp.MustCompile(`comment "([^"]+)"`)
 	interfaceLine = regexp.MustCompile(`(?m)^# interface (\S+) (\S+)$`)
@@ -87,7 +90,7 @@ func (r Realizer) loadFilter(ctx context.Context, path, comment string) error {
 	}
 	for _, item := range listing.Nftables {
 		if item.Table != nil && item.Table.Comment == comment {
-			return r.ipv6Forwarding("1\n")
+			return r.sysctl(ipv6Forwarding, "1\n")
 		}
 	}
 	return fmt.Errorf("the loaded packet filter is not this generation's")
@@ -121,9 +124,9 @@ func (r Realizer) currentNames(ctx context.Context, script []byte) ([]byte, erro
 	return []byte(strings.NewReplacer(pairs...).Replace(string(script))), nil
 }
 
-// ipv6Forwarding sets the global IPv6 switch; a kernel booted without IPv6 has no switch to set.
-func (r Realizer) ipv6Forwarding(value string) error {
-	f, err := os.OpenFile(filepath.Join(r.Root, ipv6Forwarding), os.O_WRONLY|os.O_TRUNC, 0)
+// sysctl writes a kernel switch; one that does not exist (IPv6 on a kernel booted without it) has nothing to set.
+func (r Realizer) sysctl(path, value string) error {
+	f, err := os.OpenFile(filepath.Join(r.Root, path), os.O_WRONLY|os.O_TRUNC, 0)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
@@ -139,9 +142,11 @@ func (r Realizer) dropFilter(ctx context.Context) error {
 	if _, err := r.Run(ctx, "/usr/sbin/nft", "-j", "list", "table", "inet", "andaru"); err != nil {
 		return nil
 	}
-	// Forwarding was Andaru's, switched on with its filter.
-	if err := r.ipv6Forwarding("0\n"); err != nil {
-		return err
+	// Forwarding was Andaru's, switched on with its filter; it goes before the filter does.
+	for _, path := range []string{ipv4Forwarding, ipv6Forwarding} {
+		if err := r.sysctl(path, "0\n"); err != nil {
+			return err
+		}
 	}
 	_, err := r.Run(ctx, "/usr/sbin/nft", "delete", "table", "inet", "andaru")
 	return err
