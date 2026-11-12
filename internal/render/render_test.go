@@ -660,3 +660,11 @@ func TestStaticIPv6DNSAnswersItsSubnet(t *testing.T) {
 		t.Fatalf("static listener open to every source:\n%s", conf)
 	}
 }
+
+// Every static subnet is advertised, so clients numbered from any of them reach the advertised DNS server.
+func TestStaticIPv6DNSAnswersEverySubnet(t *testing.T) {
+	in := change(t, fixture(t, "ipv6-lan"), func(d map[string]any) {
+		item(d, "segments", 2)["addressing"].(map[string]any)["ipv6"].(map[string]any)["addresses"] = []any{"fd00:a5d:2::1/64", "fd00:a5d:3::1/64"}
+	})
+	lines(t, fileContent(t, render(t, in), "/run/andaru-unbound/andaru.conf"), "\taccess-control: fd00:a5d:2::/64 allow", "\taccess-control: fd00:a5d:3::/64 allow")
+}

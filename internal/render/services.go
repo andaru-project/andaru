@@ -165,7 +165,17 @@ func (r *renderer) services() {
 				// allowed; applying a delegated segment requires the filter, which decides who reaches it.
 				acl = append(acl, "\tinterface-action: "+own.Addr().String()+" allow")
 			} else {
-				acl = append(acl, "\taccess-control: "+own.Masked().String()+" allow")
+				// Every static subnet is advertised, so each one's clients may ask.
+				for _, s := range r.d.Segments {
+					if s.ID != id {
+						continue
+					}
+					for _, raw := range slices.Sorted(slices.Values(s.Addressing.IPv6.Addresses)) {
+						if p, err := netip.ParsePrefix(raw); err == nil && p.Addr().Is6() && !p.Addr().IsLinkLocalUnicast() {
+							acl = append(acl, "\taccess-control: "+p.Masked().String()+" allow")
+						}
+					}
+				}
 			}
 		}
 	}
