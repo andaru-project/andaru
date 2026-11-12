@@ -1,9 +1,9 @@
 package render
 
 import (
-	"hash/fnv"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"net/netip"
 	"slices"
 	"strings"
