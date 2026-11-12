@@ -24,7 +24,7 @@ This is not implemented behaviour yet. Contracts stay provisional until Andaru 1
 
 | In this slice | Later |
 | --- | --- |
-| IPv4 port forwards, including port ranges, a firewall target, exclusions ("no redirect") and logging | IPv6 port forwards (NAT66), NPt |
+| IPv4 port forwards, including port ranges, exclusions ("no redirect") and logging | IPv6 port forwards (NAT66), NPt; redirects to the firewall itself (DNS interception arrives with pfBlockerNG) |
 | An associated filter rule, kept in step with the forward | pfSense's "add unassociated rule" and "pass" (write a policy rule instead) |
 | IPv4 1:1 NAT for single addresses and subnets, with a destination restriction and exclusions | Proxy ARP and other virtual IPs (#37) |
 | Reflection in pfSense's Pure-NAT mode, per rule, off by default | NAT+Proxy reflection, a system-wide reflection default |
@@ -49,10 +49,10 @@ Both lists live under `nat` next to `outbound`. They are ordered: position is ev
 | `ingressZones` | Zone IDs whose interfaces the connection arrives on; at least one. |
 | `protocol` | `tcp`, `udp` or `tcp-udp`. |
 | `from` | Address IDs. Empty means any source. `fromNegated: true` matches every source except these. |
-| `to` | The destination as the client sees it. Either `{"segmentAddress": <segment ID>}`, the segment's current IPv4 address (pfSense's "WAN address"; it follows DHCP and PPPoE changes without a re-render; the segment's zone must be one of `ingressZones`), or `{"address": <address ID>}` (an IPv4 host, network, range or group). Omitted means any destination, which is how DNS interception is written (`target: {"firewall": true}`). |
+| `to` | The destination as the client sees it. Either `{"segmentAddress": <segment ID>}`, the segment's current IPv4 address (pfSense's "WAN address"; it follows DHCP and PPPoE changes without a re-render; the segment's zone must be one of `ingressZones`), or `{"address": <address ID>}` (an IPv4 host, network, range or group). Required. |
 | `ports` | One port, or one `first-last` range, 1–65535. |
 | `noRedirect` | An exclusion: matching connections are left untranslated and later forwards are not consulted. An exclusion has no target, filter rule or reflection. |
-| `target` | `{"address": "<IPv4>"}` for a host, or `{"firewall": true}` to redirect to the firewall itself (for example, DNS interception). Required unless `noRedirect`. |
+| `target` | The IPv4 address of the inside host. Required unless `noRedirect`. |
 | `targetPort` | First target port. A range is shifted by the same offset, pfSense's rule; the last port must stay ≤ 65535. Default: the original ports. |
 | `filterRule` | `auto` (default) or `none`. See below. |
 | `reflection` | Pure-NAT reflection for clients on internal segments. Default `false`. |
@@ -76,9 +76,7 @@ These copy pfSense's rules.
 
 **Port forwards:**
 - Two enabled forwards that are not exclusions may not overlap: same `from`, same `to`, a shared ingress zone and protocol, and overlapping port ranges. This is pfSense's rule (`firewall_nat.inc:513-521`); forwards that differ in source or destination are allowed, and their order decides.
-- `reflection` is refused when `to` is omitted: a catch-all destination would capture every internal connection to that port.
 - `target` must be IPv4, like everything in this slice.
-- A forward that redirects to the firewall may not use `reflection`.
 
 **1:1:**
 - `external` may not contain any of the firewall's static addresses, since that would take over the firewall's own traffic. Addresses learned by DHCP or PPPoE are only known when the configuration is rendered: an `external` containing one is a render error, `ONE_TO_ONE_OWN_ADDRESS`, so an apply or the boot re-render refuses it.
@@ -94,7 +92,7 @@ These copy pfSense's rules.
 Every rendered line carries the object's ID as its comment, so counters (#15) and the GUI can tie a packet back to a rule.
 
 - **`prerouting`** is a new `type nat hook prerouting priority dstnat` chain. It holds:
-  1. port forwards, in order: an exclusion renders as `accept`, and a forward as `dnat ip to` or `redirect to`. `to: segmentAddress` matches the segment's interface and `fib daddr . iif type local`, so it fires only on that segment's own address. A shifted range renders a per-port `dnat ip addr . port to … map`;
+  1. port forwards, in order: an exclusion renders as `accept`, and a forward as `dnat ip to`. `to: segmentAddress` matches the segment's interface and `fib daddr . iif type local`, so it fires only on that segment's own address. A shifted range renders a per-port `dnat ip addr . port to … map`;
   2. then the 1:1 `dnat ip [prefix] to ip daddr map` lines.
 
   Port forwards come first, so a forward on a 1:1 external address wins for its ports. That is my call; pf evaluates `rdr` and `binat` in the order the ruleset lists them, and pfSense emits `binat` first.
@@ -103,7 +101,7 @@ Every rendered line carries the object's ID as its comment, so counters (#15) an
   - with a static `to`, it matches that address;
   - with `to: segmentAddress`, it matches any firewall address except the static addresses of the other segments (a set). A client asking the firewall's own LAN address is therefore not redirected. Shortcut: on a host with a second uplink whose address is learned by DHCP or PPPoE, reflection also fires for that uplink's address; nft cannot name another interface's dynamic address. Multi-WAN is not in the MVP.
 - **Associated filter rule (`filterRule: auto`):** rendered right after the fixed rules and before the policy:
-  - in `forward` for a host target, in `input` for a firewall target;
+  - in `forward`;
   - it matches `ct status dnat`, the original destination port (and the original address, when `to` is an address), the translated address and port, the ingress zones and `from`;
   - it accepts only connections that came through this forward, so the inside host is not exposed directly. The lab confirmed this.
 
@@ -132,20 +130,19 @@ The paths are `/api/v1/config/nat/port-forwards` and `/api/v1/config/nat/one-to-
 
 ## Testing
 
-- **Unit:** validation of every field and rule above; rendered tables (goldens) covering every forward kind, exclusions, shifted ranges, the firewall target, both reflection forms, 1:1 for an address and a prefix with a destination restriction, `noBinat`, the associated rule in `forward` and `input`, and the `PROXY_ARP_REQUIRED` warning.
+- **Unit:** validation of every field and rule above; rendered tables (goldens) covering every forward kind, exclusions, shifted ranges, both reflection forms, 1:1 for an address and a prefix with a destination restriction, `noBinat`, the associated rule, and the `PROXY_ARP_REQUIRED` warning.
 - **Integration:** `nft -c` and the namespace filter test load every golden table.
 - **Debian lab:** VM 114 is the firewall, VM 117 the LAN server, and the PD router (LXC 118, whose management NIC sits on the lab network) the WAN client. The lab covers:
   1. a forward to VM 117;
   2. a direct connection to its address, which must be dropped;
   3. a shifted range;
-  4. a redirect to the firewall's own DNS service;
-  5. reflection from the LAN;
-  6. 1:1 with a second static WAN address, in both directions;
-  7. a reboot.
+  4. reflection from the LAN;
+  5. 1:1 with a second static WAN address, in both directions;
+  6. a reboot.
 
 ## Gaps against pfSense, stated
 
 - NAT+Proxy reflection is not offered; Pure NAT and split DNS (DNS overrides, once they exist) cover the use.
 - "Add unassociated rule" and "pass" are not offered; `filterRule: none` plus a policy rule covers both.
-- Source-port matching, port aliases on the target and HA sync are not offered.
+- Source-port matching, port aliases on the target, redirects to the firewall itself and HA sync are not offered.
 - Proxy ARP waits for #37.
