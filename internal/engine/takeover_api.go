@@ -178,9 +178,9 @@ type proposalView struct {
 	Operations   []config.Operation `json:"operations"`
 	Starter      []config.Operation `json:"starter"`
 	// DHCP offers a server per static LAN segment; it is never part of Operations, so taking over without questions serves none.
-	DHCP []config.Operation `json:"dhcp"`
-	Adapters     []adapterView      `json:"adapters"`
-	Findings     []render.Finding   `json:"findings"`
+	DHCP     []config.Operation `json:"dhcp"`
+	Adapters []adapterView      `json:"adapters"`
+	Findings []render.Finding   `json:"findings"`
 }
 
 func (h *takeoverHandler) serveProposal(w http.ResponseWriter, r *http.Request) {
@@ -411,7 +411,9 @@ func offer(n host.Detected) (map[string]string, bool) {
 	if a := uint32(own[0])<<24 | uint32(own[1])<<16 | uint32(own[2])<<8 | uint32(own[3]); a >= first {
 		first, last = start+1, start+size/2-1
 	}
-	addr := func(v uint32) string { return netip.AddrFrom4([4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)}).String() }
+	addr := func(v uint32) string {
+		return netip.AddrFrom4([4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)}).String()
+	}
 	return map[string]string{"first": addr(first), "last": addr(last)}, true
 }
 

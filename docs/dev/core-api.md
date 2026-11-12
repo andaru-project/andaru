@@ -66,6 +66,8 @@ The actual OpenAPI 3.1 document is embedded from [`internal/engine/openapi.json`
 | `GET/PUT/DELETE /api/v1/config/policy/{chain}/{id}` | One rule, version-checked like any object |
 | `PUT /api/v1/config/policy/{chain}/order` | Reorder a list: every rule ID once, `If-Match: "order.N"`; replies with the new `order` and its `version` |
 | `GET/PUT/DELETE /api/v1/config/management`, `/api/v1/config/nat/outbound` | Single objects, `If-Match: "management.N"` / `"nat.outbound.N"`, `0` while unset |
+| `GET/POST /api/v1/config/dhcp`, `GET/PUT/DELETE /api/v1/config/dhcp/{id}` | DHCP servers, one per served segment |
+| `GET/PUT/DELETE /api/v1/config/dns` | The DNS service, `If-Match: "dns.N"`, `0` while unset |
 
 GET resources support HEAD without a body. Unsupported methods return `405 METHOD_NOT_ALLOWED` with the resource's `Allow` methods; unknown resources return `404 NOT_FOUND`. Missing/unverified/non-root peers get `403 FORBIDDEN` before routing/body processing. Inventory failures return `503 INVENTORY_UNAVAILABLE`, never an empty/partial success. Errors share `{"error":{"code":"...","message":"...","details":[]}}`; field details use safe request-relative JSON Pointers and conflicts may add redacted `error.current`. JSON responses are `no-store`; diagnostics never quote secret values.
 
@@ -225,6 +227,7 @@ What happens, in order:
 | `DHCP_IDENTITY_UNKNOWN` | An ifupdown host's DHCP client is not dhcpcd with its default identity settings, so networkd could not keep the lease. |
 | `DNS_REQUIRED` | No interface of the ifupdown host takes DNS servers from DHCP or router advertisements, and no segment declares `dns`. The message lists the servers in use now. |
 | `MANAGEMENT_REQUIRED` | Rules or outbound NAT are declared without `management.segment`, or the management segment's interface is unavailable. |
+| `DHCP_WITHOUT_DNS` | (warning) A DHCP server hands out no DNS server: the DNS service does not serve its segment and `dnsServers` is empty. |
 | `FOREIGN_FILTER` | `nftables.service`, `firewalld` or `ufw` is enabled and would replace or override Andaru's filter. |
 | `APPLY_UNSUPPORTED` | PPPoE links, delegated prefixes and router advertisements wait for the firewall. |
 | `NETDEV_CHANGE_UNSUPPORTED` | An existing VLAN, bridge or bond would change. Remove it in one apply and add it again in the next. |
@@ -267,6 +270,32 @@ sudo andaru ctl preview network                          # shows "nft:inet/andar
 - **Applying:** the filter is loaded before the networkd files, and when going back to a generation without one, or to the pre-Andaru baseline, the table is deleted only after the files, with IPv4 and IPv6 forwarding switched off just before it. Boot loads the confirmed filter before networkd starts, with each adapter's name looked up again by its MAC, so a card the kernel names differently after a reboot keeps its rules; a filter that does not load makes boot fall back to the last-known-good generation, files and filter together.
 - **Refused:** `nft` missing (`TOOL_MISSING`; install `nftables`), or `nftables.service`, `firewalld` or `ufw` enabled (`FOREIGN_FILTER`): Debian's `/etc/nftables.conf` begins with `flush ruleset`. Other tables, such as Podman's, are never touched.
 - **The assistant** proposes starter rules for the LAN (to any; ping and DNS to the firewall), outbound NAT, and the management adapter your SSH session arrives on, and shows the rule table in its review.
+
+### DHCP and DNS
+
+Andaru runs Debian's Kea as the LAN's DHCPv4 server and Unbound as its DNS service; the firewall itself resolves through the same service. Both are configured only from the confirmed generation, applied, confirmed, rolled back and booted with the network and the filter. Design: [DHCP and DNS for the LAN](../superpowers/specs/2026-11-12-dhcp-dns-design.md).
+
+```sh
+sudo apt install kea-dhcp4-server unbound
+# Once, beside andaru-engine.service (packaging/):
+sudo install -m 0644 packaging/systemd/kea-dhcp4-server.service.d/andaru.conf -D /etc/systemd/system/kea-dhcp4-server.service.d/andaru.conf
+sudo install -m 0644 packaging/unbound/andaru.conf /etc/unbound/unbound.conf.d/andaru.conf
+sudo install -m 0644 packaging/tmpfiles.d/andaru.conf /usr/lib/tmpfiles.d/andaru.conf
+sudo install -m 0755 packaging/kea/andaru-lease-event -D /usr/share/kea/scripts/andaru-lease-event
+sudo install -m 0644 packaging/systemd/andaru-leases.path packaging/systemd/andaru-leases.service /etc/systemd/system/
+sudo systemd-tmpfiles --create andaru.conf && sudo systemctl daemon-reload && sudo systemctl enable --now andaru-leases.path
+
+printf '%s\n' '{"name":"lan","segment":"'"$LAN"'","ranges":[{"first":"192.168.40.128","last":"192.168.40.254"}]}' | sudo andaru ctl config create dhcp
+printf '%s\n' '{"mode":"recursive","segments":["'"$LAN"'"]}' | sudo andaru ctl config replace --version 0 dns
+```
+
+- **`dhcp`**, one entry per served segment, which needs a static IPv4 address: `ranges`, `leaseTime` (seconds, default 7200), `staticLeases` (`mac`, `address`, optional `hostname`), optional `dnsServers`. Clients get the segment's address as router and, when the DNS service serves the segment, as DNS server; otherwise `DHCP_WITHOUT_DNS` warns.
+- **`dns`**: `mode` `recursive` or `forward` with `upstreams` (`do53`, or `dot` with the certificate's `tlsName`; one protocol for all), `segments` it serves (may be empty: the firewall only), `localDomain` (default `home.arpa`), `searchDomains`, `registerLeases` (default true). While it is declared no segment may carry `addressing.dns`: the host's servers are the upstreams, and links stop taking DNS servers from DHCP.
+- **Lease names:** a client's hostname is published as `<name>.<localDomain>`, A and PTR, for a third of its lease time. Kea's `run_script` hook only touches `/run/kea/andaru-leases-changed`; `andaru-leases.path` then runs `andaru realize leases`, which reads every lease over Kea's socket and rewrites `/run/andaru-leases/leases.conf`. Only a valid name label is published; static lease names win over lease names, and the most recently renewed lease wins a name.
+- **Applying:** after networkd reloads, Kea's and Unbound's own checkers judge the new files; a refusal, or a daemon that does not come up, restores the previous generation. A generation without `dhcp` stops Kea; without `dns`, Unbound falls back to Debian's default and the host's resolver is what it was. Leases stay in Kea's `/var/lib/kea`.
+- **Filter:** with the filter on, DHCP requests are accepted on served segments by a fixed rule; DNS is governed by rules (the takeover's starter rule allows it from the LAN).
+- **Takeover:** with Unbound installed and a static LAN segment, the proposal includes the DNS service: forwarding to the host's declared servers, or recursive when they came from DHCP. With Kea installed it offers DHCP on each static LAN segment (the upper half of the subnet); the assistant asks for each, yes by default, while `--accept-detected` never turns DHCP on.
+- Inspect leases with `sudo cat /run/andaru-leases/leases.conf` or Kea's socket until a status page exists.
 
 ### Host DNS servers
 
