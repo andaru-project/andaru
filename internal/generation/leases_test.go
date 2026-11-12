@@ -197,3 +197,17 @@ func TestStaticNamesWinAcrossSubnets(t *testing.T) {
 		t.Fatalf("a lease took another segment's static name: %q", got)
 	}
 }
+
+// A reload that failed is retried at the next sync, though the file already holds the names.
+func TestFailedReloadIsRetried(t *testing.T) {
+	b := newBench(t)
+	b.kea(lease{"192.168.40.130", "laptop-1", 0, 1, 7200, 100})
+	b.net.fail = "unbound-control reload_keep_cache"
+	if err := b.r.SyncLeases(t.Context()); err == nil {
+		t.Fatal("a failed reload passed")
+	}
+	b.net.fail, b.net.argv = "", nil
+	if err := b.r.SyncLeases(t.Context()); err != nil || b.index("unbound-control reload_keep_cache") < 0 {
+		t.Fatalf("reload not retried: %v %q", err, b.net.argv)
+	}
+}

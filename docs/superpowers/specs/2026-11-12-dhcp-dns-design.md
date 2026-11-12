@@ -53,7 +53,7 @@ Both additions are optional top-level sections; a declaration without them reali
 | --- | --- |
 | `mode` | `recursive` (asks the root servers itself) or `forward` (asks `upstreams`). |
 | `upstreams` | Required and non-empty in `forward`, absent in `recursive`. Ordered list of `{address, protocol, tlsName}`: `protocol` `do53` or `dot`; `tlsName` is the name the upstream's certificate must carry and is required for `dot`; `address` is an IPv4 or IPv6 address, optionally with a port. `doh` and `doq` are reserved values the schema refuses for now. |
-| `segments` | Segment IDs whose clients it serves. It listens on each one's static IPv4 address; at least one. The firewall's loopback is always served. |
+| `segments` | Segment IDs whose clients it serves. It listens on each one's static IPv4 address. It may be empty: the service then resolves for the firewall alone, which a takeover that leaves the LAN out needs. The firewall's loopback is always served. |
 | `localDomain` | The domain local names live in: lease names, static lease names, and what DHCP hands out as domain name. Default `home.arpa` (RFC 8375). |
 | `searchDomains` | The firewall's own search list, as `addressing.dns.searchDomains` was. Optional. |
 | `registerLeases` | Publish DHCP clients' hostnames. Default `true`. |

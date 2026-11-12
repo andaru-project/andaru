@@ -173,6 +173,10 @@ func TestProposalStates(t *testing.T) {
 	if got := b.proposal(t); got.State != "saved-not-applied" || len(got.Operations) != 0 {
 		t.Fatalf("nat only: proposal = %+v", got)
 	}
+	b.head = `{"schemaVersion":1,"links":[],"segments":[],"zones":[],"dns":{"mode":"recursive","segments":[]}}`
+	if got := b.proposal(t); got.State != "saved-not-applied" || len(got.Operations) != 0 {
+		t.Fatalf("dns only: proposal = %+v", got)
+	}
 
 	for _, pointers := range []string{
 		`{"confirmed":1,"lastKnownGood":null,"pending":null,"live":1,"takeover":true}`,

@@ -86,6 +86,19 @@ func TestServiceValidation(t *testing.T) {
 			dns(d)["mode"] = "forward"
 			dns(d)["upstreams"] = []any{map[string]any{"address": "fe80::1%a\n\tforward-addr: 6.6.6.6", "protocol": "do53"}}
 		}, "/dns/upstreams/0/address"},
+		"range holds another own address": {func(d map[string]any) {
+			v4(d, 1)["addresses"] = []any{"192.0.2.7/24", "192.0.2.150/24"}
+		}, "/dhcp/0/ranges/0"},
+		"static lease on another own address": {func(d map[string]any) {
+			v4(d, 1)["addresses"] = []any{"192.0.2.7/24", "192.0.2.10/24"}
+		}, "/dhcp/0/staticLeases/0/address"},
+		"static hostname twice": {func(d map[string]any) {
+			entry(d)["staticLeases"] = append(entry(d)["staticLeases"].([]any), map[string]any{"mac": "02:00:00:00:00:11", "address": "192.0.2.11", "hostname": "NAS"})
+		}, "/dhcp/0/staticLeases/1/hostname"},
+		"local domain leaves no room for a name": {func(d map[string]any) {
+			l := strings.Repeat("a", 60)
+			dns(d)["localDomain"] = l + "." + l + "." + l + "." + l
+		}, "/dns/localDomain"},
 		"bad local domain": {func(d map[string]any) { dns(d)["localDomain"] = "bad..name" }, "/dns/localDomain"},
 		"host DNS beside the service": {func(d map[string]any) {
 			item(segmentsOf(d), 1)["addressing"].(map[string]any)["dns"] = map[string]any{"servers": []any{"192.0.2.53"}}

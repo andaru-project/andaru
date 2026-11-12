@@ -1,6 +1,7 @@
 package generation
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -45,6 +46,7 @@ type fakeNetworkd struct {
 	script              string // what nft -f last loaded
 	noNft               bool   // nft is not installed
 	keaDead             bool   // Kea starts but never answers on its socket
+	keaSockets          string // what Kea reports of its DHCP sockets; "ready" when empty
 	kea                 net.Listener
 
 	dns     map[string][]string     // what resolved reports per interface
@@ -157,7 +159,7 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 						if err != nil {
 							return
 						}
-						c.Write([]byte(`{"result":0,"text":"Kea is up"}`))
+						c.Write([]byte(`{"result":0,"arguments":{"sockets":{"status":"` + cmp.Or(f.keaSockets, "ready") + `"}}}`))
 						c.Close()
 					}
 				}()

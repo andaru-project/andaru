@@ -2,6 +2,7 @@ package generation
 
 import (
 	"maps"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -122,5 +123,36 @@ func TestUnboundRefusalRestoresThePrevious(t *testing.T) {
 	id := b.gen(false, served(`{"Dhcp4":{}}`))
 	if err := b.r.Activate(t.Context(), id); err == nil || b.read(id).State.State != Failed || b.exists(unboundFile[1:]) {
 		t.Fatalf("activated a configuration Unbound refuses: %v", err)
+	}
+}
+
+// Kea answers its socket while it is still failing to bind; only "ready" sockets serve.
+func TestKeaSocketsNotReadyFailsActivation(t *testing.T) {
+	b := newBench(t)
+	b.net.keaSockets = "retrying"
+	id := b.gen(false, served(`{"Dhcp4":{}}`))
+	if err := b.r.Activate(t.Context(), id); err == nil || b.read(id).State.State != Failed {
+		t.Fatalf("activation passed with sockets retrying: %v", err)
+	}
+}
+
+// Without DHCP the old clients' names go before Unbound starts again.
+func TestRemovingDHCPClearsLeaseNames(t *testing.T) {
+	b := newBench(t)
+	first := b.gen(false, served(`{"Dhcp4":{}}`))
+	if err := b.r.Activate(t.Context(), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Confirm(t.Context(), first); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(b.net.root, leasesDir, "leases.conf"), "server:\n\tlocal-data: \"old.home.arpa. 60 IN A 192.168.40.9\"\n")
+	noKea := served("")
+	delete(noKea, keaFile)
+	if err := b.r.Activate(t.Context(), b.gen(false, noKea)); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(b.net.root, leasesDir, "leases.conf")); string(data) != "server:\n" {
+		t.Fatalf("old names kept: %q", data)
 	}
 }

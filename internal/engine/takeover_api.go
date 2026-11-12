@@ -206,10 +206,12 @@ func (h *takeoverHandler) serveProposal(w http.ResponseWriter, r *http.Request) 
 		Policy     json.RawMessage   `json:"policy"`
 		NAT        json.RawMessage   `json:"nat"`
 		Management json.RawMessage   `json:"management"`
+		DHCP       json.RawMessage   `json:"dhcp"`
+		DNS        json.RawMessage   `json:"dns"`
 	}
 	_ = json.Unmarshal(input.Value, &saved)
 	// A saved filter section counts too: the proposal would otherwise activate saved rules the review never shows, or collide with a saved singleton.
-	filterSaved := len(saved.Objects)+len(saved.Policy)+len(saved.NAT)+len(saved.Management) > 0
+	filterSaved := len(saved.Objects)+len(saved.Policy)+len(saved.NAT)+len(saved.Management)+len(saved.DHCP)+len(saved.DNS) > 0
 	unsupported := func(path, message string) {
 		view.State = "unsupported"
 		view.Findings = append(view.Findings, render.Finding{Severity: "error", Code: "TAKEOVER_UNSUPPORTED_BASELINE", Path: path, Message: message})

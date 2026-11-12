@@ -44,7 +44,13 @@ jobs:
           test "$(go env GOARCH)" = "${{ matrix.arch }}"
 
       - name: Install nftables, Kea and Unbound for the packet filter and service tests (unit tests check the lease file with Unbound)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends nftables kea-dhcp4-server unbound
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends nftables kea-dhcp4-server unbound
+          # The packaged AppArmor rules let kea-dhcp4 read /run/andaru-kea, where the tool test stages its files.
+          if [ -d /etc/apparmor.d/local ] && command -v apparmor_parser >/dev/null; then
+            sudo install -m 0644 packaging/apparmor/usr.sbin.kea-dhcp4 packaging/apparmor/usr.sbin.unbound /etc/apparmor.d/local/
+            sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.kea-dhcp4 /etc/apparmor.d/usr.sbin.unbound
+          fi
       - name: Vet and unprivileged tests
         shell: bash
         run: |

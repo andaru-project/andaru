@@ -17,12 +17,18 @@ func TestServiceGoldensPassTheirTools(t *testing.T) {
 			t.Skipf("%s not installed", tool)
 		}
 	}
+	// Debian's and Ubuntu's AppArmor profiles let kea-dhcp4 read only its own directories and, with
+	// packaging/apparmor installed, Andaru's: the configuration is staged where it lives on a host.
+	if err := os.MkdirAll("/run/andaru-kea", 0o755); err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range []string{"services-recursive", "services-forward-dot", "services-static-leases"} {
 		dir := t.TempDir()
 		for _, f := range render(t, fixture(t, name)).Files {
 			switch f.Path {
 			case keaPath:
-				path := filepath.Join(dir, "kea.conf")
+				path := "/run/andaru-kea/test-" + name + ".conf"
+				t.Cleanup(func() { os.Remove(path) })
 				// kea-dhcp4 -t refuses interfaces this host lacks and hooks it cannot load: the fixtures name
 				// amd64's hook directory and cards that are not here.
 				hooks, _ := filepath.Glob("/usr/lib/*/kea/hooks")

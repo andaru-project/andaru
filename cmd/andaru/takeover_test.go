@@ -469,3 +469,22 @@ func TestFormAsksForDHCP(t *testing.T) {
 		t.Fatal("a no still serves DHCP")
 	}
 }
+
+// A recursive proposal with search domains is accepted as detected and keeps its domains.
+func TestRecursiveProposalKeepsSearchDomains(t *testing.T) {
+	p := servedProposal(t)
+	for i, op := range p.Operations {
+		if op.Collection == "dns" {
+			p.Operations[i].Value = json.RawMessage(`{"mode":"recursive","searchDomains":["lab.example"],"segments":["@seg2"]}`)
+		}
+	}
+	d := defaultAnswers(p)
+	a := newFormState(p, d).answers(d)
+	got := opsJSON(t, mustBatch(t, p, a))
+	if !strings.Contains(got, `"mode":"recursive","searchDomains":["lab.example"]`) {
+		t.Fatalf("detected recursive DNS changed: %s", got)
+	}
+	if err := validServers(newFormState(p, d).servers); newFormState(p, d).dnsMode == "declared" && err != nil {
+		t.Fatalf("the form asks for servers the proposal has none of: %v", err)
+	}
+}

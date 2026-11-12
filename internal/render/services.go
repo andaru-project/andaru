@@ -1,6 +1,7 @@
 package render
 
 import (
+	"hash/fnv"
 	"encoding/json"
 	"fmt"
 	"net/netip"
@@ -108,7 +109,7 @@ func (r *renderer) services() {
 			reservations = append(reservations, res)
 		}
 		subnets = append(subnets, map[string]any{
-			"id": i + 1, "subnet": own.Masked().String(), "pools": pools, "valid-lifetime": e.LeaseTime,
+			"id": subnetID(e.Segment), "subnet": own.Masked().String(), "pools": pools, "valid-lifetime": e.LeaseTime,
 			"reservations": reservations, "option-data": options,
 			// The lease sync reads this, so it needs nothing but Kea's own configuration.
 			"user-context": map[string]any{"andaru": map[string]any{"domain": domain, "register": register && dnsServes(e.Segment)}},
@@ -172,4 +173,13 @@ func (r *renderer) services() {
 		resolve = append(resolve, "Domains="+strings.Join(d.DNS.SearchDomains, " "))
 	}
 	r.file(resolvedPath, "0644", ini(section{"Resolve", resolve}), []string{"/dns"})
+}
+
+// subnetID is the served segment's Kea subnet ID. Kea's leases name their subnet by it, so it must not change
+// when other entries come or go; it is derived from the segment's identity.
+// shortcut: two segments hashing alike would share an ID (about 1 in 10^7 for 64 entries); allocate IDs in the declaration if that ever bites.
+func subnetID(segment string) uint32 {
+	h := fnv.New32a()
+	h.Write([]byte(segment))
+	return h.Sum32()%4294967294 + 1 // Kea's range is 1 to 4294967294
 }

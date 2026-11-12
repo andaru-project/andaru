@@ -3,6 +3,7 @@ package generation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -143,8 +144,11 @@ func (r Realizer) syncLeases(ctx context.Context) error {
 	if !r.active(ctx, "unbound.service") {
 		return nil // Unbound reads the file when it starts
 	}
-	_, err = r.Run(ctx, "/usr/sbin/unbound-control", "reload_keep_cache")
-	return err
+	if _, err = r.Run(ctx, "/usr/sbin/unbound-control", "reload_keep_cache"); err != nil {
+		// Unbound still serves the old names; without the file the next sync writes it and reloads again.
+		return errors.Join(err, os.Remove(path))
+	}
+	return nil
 }
 
 // leaseRecords turns assigned leases with valid names into A and PTR records, sorted.

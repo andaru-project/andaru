@@ -1,6 +1,7 @@
 package generation
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -90,6 +91,10 @@ func (r Realizer) services(ctx context.Context, from, to []placed) error {
 		if _, err := r.Run(ctx, "/usr/bin/systemctl", "stop", "kea-dhcp4-server.service"); err != nil {
 			return fmt.Errorf("stop the DHCP server: %w", err)
 		}
+		// No sync runs without Kea, so its clients' names go now, before Unbound starts again.
+		if err := writeAtomic(r.Root+leasesDir+"/leases.conf", []byte("server:\n"), 0o644); err != nil {
+			return err
+		}
 	}
 	if unbound || hadUnbound {
 		if unbound {
@@ -151,14 +156,21 @@ func (r Realizer) keaStatus(ctx context.Context) error {
 		return err
 	}
 	var reply struct {
-		Result int    `json:"result"`
-		Text   string `json:"text"`
+		Result    int    `json:"result"`
+		Text      string `json:"text"`
+		Arguments struct {
+			Sockets struct{ Status string } `json:"sockets"`
+		} `json:"arguments"`
 	}
 	if err := json.NewDecoder(c).Decode(&reply); err != nil {
 		return err
 	}
 	if reply.Result != 0 {
 		return fmt.Errorf("%d: %s", reply.Result, reply.Text)
+	}
+	// Kea answers while it still retries, or has failed, to bind its DHCP sockets.
+	if s := reply.Arguments.Sockets.Status; s != "ready" {
+		return fmt.Errorf("its DHCP sockets are %s", cmp.Or(s, "unknown"))
 	}
 	return nil
 }

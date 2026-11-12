@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"regexp"
 	"slices"
+	"strings"
 )
 
 // dnsLabel is one name label: what a static lease's hostname may be and what a lease name is cut to.
@@ -14,16 +15,26 @@ var dnsLabel = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$
 
 // servedPrefix is a segment's first static IPv4 address with its prefix; ok is false for any other segment.
 func servedPrefix(d *declaration, id string) (netip.Prefix, bool) {
-	i := slices.IndexFunc(d.Segments, func(s segment) bool { return s.ID == id })
-	if i < 0 || d.Segments[i].Addressing.IPv4.Mode != "static" {
+	all := ownAddresses(d, id)
+	if len(all) == 0 {
 		return netip.Prefix{}, false
 	}
+	return all[0], true
+}
+
+// ownAddresses are a static segment's IPv4 addresses, none of which DHCP may hand out.
+func ownAddresses(d *declaration, id string) []netip.Prefix {
+	i := slices.IndexFunc(d.Segments, func(s segment) bool { return s.ID == id })
+	if i < 0 || d.Segments[i].Addressing.IPv4.Mode != "static" {
+		return nil
+	}
+	var out []netip.Prefix
 	for _, raw := range d.Segments[i].Addressing.IPv4.Addresses {
 		if p, e := netip.ParsePrefix(raw); e == nil && p.Addr().Is4() {
-			return p, true
+			out = append(out, p)
 		}
 	}
-	return netip.Prefix{}, false
+	return out
 }
 
 // validateServices checks the DHCP and DNS sections against each other and the topology.
@@ -36,6 +47,8 @@ func validateServices(d *declaration) []FieldError {
 	}
 	served := map[string]bool{}
 	seen := map[string]bool{}
+	// Static lease names share the local domain, so one name names one device across every segment.
+	names := map[string]bool{}
 	for i, e := range d.DHCP {
 		p := fmt.Sprintf("/dhcp/%d", i)
 		if seen[e.ID] {
@@ -58,6 +71,10 @@ func validateServices(d *declaration) []FieldError {
 		}
 		served[e.Segment] = true
 		subnet := own.Masked()
+		mine := ownAddresses(d, e.Segment)
+		holdsOwn := func(first, last netip.Addr) bool {
+			return slices.ContainsFunc(mine, func(p netip.Prefix) bool { return !p.Addr().Less(first) && !last.Less(p.Addr()) })
+		}
 		// The subnet's own network and broadcast addresses are never a host's.
 		edge := func(a netip.Addr) bool {
 			b, n := a.As4(), subnet.Addr().As4()
@@ -79,8 +96,8 @@ func validateServices(d *declaration) []FieldError {
 				bad(rp, "The first address comes after the last.")
 			case !subnet.Contains(first) || !subnet.Contains(last):
 				bad(rp, "The range must lie inside the segment's subnet.")
-			case !own.Addr().Less(first) && !last.Less(own.Addr()):
-				bad(rp, "The range holds the segment's own address.")
+			case holdsOwn(first, last):
+				bad(rp, "The range holds one of the segment's own addresses.")
 			case edge(first) || edge(last):
 				bad(rp, "The range holds the subnet's network or broadcast address.")
 			case slices.ContainsFunc(taken, func(t [2]netip.Addr) bool { return !last.Less(t[0]) && !t[1].Less(first) }):
@@ -109,8 +126,8 @@ func validateServices(d *declaration) []FieldError {
 			switch {
 			case err != nil || !a.Is4() || !subnet.Contains(a):
 				bad(lp+"/address", "Expected an IPv4 address inside the segment's subnet.")
-			case a == own.Addr():
-				bad(lp+"/address", "This is the segment's own address.")
+			case holdsOwn(a, a):
+				bad(lp+"/address", "This is one of the segment's own addresses.")
 			case edge(a):
 				bad(lp+"/address", "This is the subnet's network or broadcast address.")
 			case addresses[a]:
@@ -120,6 +137,10 @@ func validateServices(d *declaration) []FieldError {
 			}
 			if l.Hostname != "" && !dnsLabel.MatchString(l.Hostname) {
 				bad(lp+"/hostname", "Expected one name label: letters, digits and inner hyphens.")
+			} else if name := strings.ToLower(l.Hostname); name != "" && names[name] {
+				bad(lp+"/hostname", "Another static lease already has this name.")
+			} else {
+				names[name] = true
 			}
 		}
 	}
@@ -167,8 +188,9 @@ func validateServices(d *declaration) []FieldError {
 			bad(fmt.Sprintf("/dns/segments/%d", j), "Expected an existing segment with a static IPv4 address.")
 		}
 	}
-	if s.LocalDomain != "" && !searchDomain.MatchString(s.LocalDomain) {
-		bad("/dns/localDomain", "Invalid domain name.")
+	// A name label (up to 63 characters) and a dot go in front of it, within DNS's 253.
+	if s.LocalDomain != "" && (!searchDomain.MatchString(s.LocalDomain) || len(s.LocalDomain) > 253-64) {
+		bad("/dns/localDomain", "Invalid domain name, or too long to hold a name in front of it (189 characters at most).")
 	}
 	for j, name := range s.SearchDomains {
 		if !searchDomain.MatchString(name) {

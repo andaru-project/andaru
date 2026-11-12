@@ -49,7 +49,8 @@ func fields(s string) []string {
 
 func newFormState(p proposal, a answers) *formState {
 	s := &formState{dnsMode: "offered", timeout: strconv.Itoa(a.Timeout), management: a.Management}
-	if a.DNS != nil {
+	// Search domains alone do not make servers: a recursive DNS service has none to ask for.
+	if a.DNS != nil && (len(a.DNS.Servers) > 0 || !service(p)) {
 		s.dnsMode, s.servers, s.domains = "declared", strings.Join(a.DNS.Servers, ", "), strings.Join(a.DNS.SearchDomains, ", ")
 	}
 	s.service, s.dhcp = service(p), map[string]*bool{}
@@ -106,6 +107,8 @@ func (s *formState) answers(base answers) answers {
 	}
 	if s.dnsMode == "declared" {
 		a.DNS = &dnsAnswer{Servers: fields(s.servers), SearchDomains: fields(s.domains)}
+	} else if s.service && base.DNS != nil {
+		a.DNS = &dnsAnswer{SearchDomains: base.DNS.SearchDomains} // recursive, with the detected search domains
 	}
 	if len(s.dhcp) > 0 {
 		a.DHCP = map[string]bool{}
