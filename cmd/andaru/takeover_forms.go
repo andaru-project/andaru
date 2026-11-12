@@ -182,7 +182,8 @@ func (s *formState) questions() *huh.Form {
 				var options []huh.Option[string]
 				for _, f := range s.adapters {
 					if slices.Contains(s.kept, f.id) {
-						options = append(options, huh.NewOption(printable(f.name)+" ("+f.zone+")", f.id))
+						// No zone in the label: the options refresh only when s.kept changes, so a zone would go stale.
+						options = append(options, huh.NewOption(printable(f.name), f.id))
 					}
 				}
 				return options

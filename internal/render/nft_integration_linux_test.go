@@ -143,7 +143,12 @@ func TestFilterInNamespace(t *testing.T) {
 	if !l.connects(l.lan, "10.1.0.2", 80) {
 		t.Fatal("the LAN cannot reach the WAN")
 	}
-	if seen, _ := os.ReadFile(peers); strings.TrimSpace(string(seen)) != "10.1.0.1" {
+	// The server records the peer after accept, which can land after the client returns.
+	var seen []byte
+	for end := time.Now().Add(2 * time.Second); time.Now().Before(end) && strings.TrimSpace(string(seen)) != "10.1.0.1"; time.Sleep(20 * time.Millisecond) {
+		seen, _ = os.ReadFile(peers)
+	}
+	if strings.TrimSpace(string(seen)) != "10.1.0.1" {
 		t.Errorf("the WAN saw %q, want the masqueraded 10.1.0.1", seen)
 	}
 	if l.connects(l.lan, "10.1.0.2", 8080) {

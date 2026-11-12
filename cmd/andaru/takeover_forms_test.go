@@ -307,6 +307,9 @@ func TestClosingTheTerminalWritesNothing(t *testing.T) {
 	s.await("What now?")
 	s.hangup()
 	err = cmd.Wait()
+	if ctx.Err() != nil {
+		t.Fatalf("the assistant ignored the hangup until the test deadline killed it: %v", err)
+	}
 	var exitErr *exec.ExitError
 	// The hangup ends it either by SIGHUP or, when the read sees the closed terminal first, by a failing exit.
 	if !errors.As(err, &exitErr) || exitErr.ExitCode() == 0 {

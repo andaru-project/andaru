@@ -196,11 +196,17 @@ func (h *takeoverHandler) serveProposal(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var saved struct {
-		Links    []json.RawMessage `json:"links"`
-		Segments []json.RawMessage `json:"segments"`
-		Zones    []json.RawMessage `json:"zones"`
+		Links      []json.RawMessage `json:"links"`
+		Segments   []json.RawMessage `json:"segments"`
+		Zones      []json.RawMessage `json:"zones"`
+		Objects    json.RawMessage   `json:"objects"`
+		Policy     json.RawMessage   `json:"policy"`
+		NAT        json.RawMessage   `json:"nat"`
+		Management json.RawMessage   `json:"management"`
 	}
 	_ = json.Unmarshal(input.Value, &saved)
+	// A saved filter section counts too: the proposal would otherwise activate saved rules the review never shows, or collide with a saved singleton.
+	filterSaved := len(saved.Objects)+len(saved.Policy)+len(saved.NAT)+len(saved.Management) > 0
 	unsupported := func(path, message string) {
 		view.State = "unsupported"
 		view.Findings = append(view.Findings, render.Finding{Severity: "error", Code: "TAKEOVER_UNSUPPORTED_BASELINE", Path: path, Message: message})
@@ -208,7 +214,7 @@ func (h *takeoverHandler) serveProposal(w http.ResponseWriter, r *http.Request) 
 	switch {
 	case pointers.Takeover || pointers.Pending != nil || pointers.Confirmed != nil:
 		view.State = "taken-over"
-	case len(saved.Links)+len(saved.Segments)+len(saved.Zones) > 0:
+	case len(saved.Links)+len(saved.Segments)+len(saved.Zones) > 0 || filterSaved:
 		view.State = "saved-not-applied"
 	}
 	if view.State != "" {

@@ -139,3 +139,21 @@ func TestReferencedObjectsCannotBeDeleted(t *testing.T) {
 		}
 	}
 }
+
+func TestFilterFaultsRebaseToTheWritingOperation(t *testing.T) {
+	s := seededState(t)
+	_, e := run(t, &s, `{"operations":[
+		{"op":"replace","collection":"nat.outbound","expectedVersion":"0","value":{"mode":"automatic"}},
+		{"op":"create","collection":"services","value":{"name":"bad","protocol":"tcp","ports":["0"]}}]}`)
+	f := requireFault(t, e, "VALIDATION_FAILED")
+	if len(f.Details) != 1 || f.Details[0].Path != "/operations/1/value/ports/0" {
+		t.Fatalf("service fault not rebased to its operation: %+v", f.Details)
+	}
+	_, e = run(t, &s, `{"operations":[
+		{"op":"create","collection":"services","value":{"name":"ok","protocol":"tcp","ports":["80"]}},
+		{"op":"replace","collection":"nat.outbound","expectedVersion":"0","value":{"mode":"bogus"}}]}`)
+	f = requireFault(t, e, "VALIDATION_FAILED")
+	if len(f.Details) != 1 || f.Details[0].Path != "/operations/1/value/mode" {
+		t.Fatalf("singleton fault not rebased to its operation: %+v", f.Details)
+	}
+}

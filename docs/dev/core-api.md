@@ -64,7 +64,7 @@ The actual OpenAPI 3.1 document is embedded from [`internal/engine/openapi.json`
 | `GET/POST /api/v1/config/{addresses\|services}`, `…/{id}` | Address and service objects for the packet filter |
 | `GET/POST /api/v1/config/policy/{input\|forward}` | A rule list in execution order with its `version`; `POST ?before=<rule id>` places a new rule |
 | `GET/PUT/DELETE /api/v1/config/policy/{chain}/{id}` | One rule, version-checked like any object |
-| `PUT /api/v1/config/policy/{chain}/order` | Reorder a list: every rule ID once, `If-Match: "order.N"` |
+| `PUT /api/v1/config/policy/{chain}/order` | Reorder a list: every rule ID once, `If-Match: "order.N"`; replies with the new `order` and its `version` |
 | `GET/PUT/DELETE /api/v1/config/management`, `/api/v1/config/nat/outbound` | Single objects, `If-Match: "management.N"` / `"nat.outbound.N"`, `0` while unset |
 
 GET resources support HEAD without a body. Unsupported methods return `405 METHOD_NOT_ALLOWED` with the resource's `Allow` methods; unknown resources return `404 NOT_FOUND`. Missing/unverified/non-root peers get `403 FORBIDDEN` before routing/body processing. Inventory failures return `503 INVENTORY_UNAVAILABLE`, never an empty/partial success. Errors share `{"error":{"code":"...","message":"...","details":[]}}`; field details use safe request-relative JSON Pointers and conflicts may add redacted `error.current`. JSON responses are `no-store`; diagnostics never quote secret values.

@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -166,7 +167,7 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 				if route == "order" {
 					op = "order"
 				}
-				version, e = objectPrecondition(id, r.Header.Values("If-Match"))
+				version, e = objectPrecondition(id, r.Header.Values("If-Match"), route != "object")
 			}
 			target := id
 			if route == "singleton" || route == "order" {
@@ -195,11 +196,21 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 			return
 		}
 		if route == "order" {
-			v, e := store.List(r.Context(), collection)
-			if e == nil {
-				w.Header().Set("ETag", `"order.`+string(v.Version)+`"`)
+			// Built from this save alone: re-reading could return a later save's list.
+			var order []string
+			for _, item := range result.Items {
+				if item.Collection == collection && item.ID == collection && json.Unmarshal(raw, &order) == nil {
+					w.Header().Set("ETag", `"order.`+string(item.Version)+`"`)
+					send(200, struct {
+						State        string         `json:"state"`
+						SavedVersion config.Version `json:"savedVersion"`
+						Version      config.Version `json:"version"`
+						Order        []string       `json:"order"`
+					}{"saved", result.SavedVersion, item.Version, order}, nil)
+					return
+				}
 			}
-			send(200, v, e)
+			writeError(w, r, 503, "STORE_UNAVAILABLE", "Saved response is unavailable; read current state before retrying.")
 			return
 		}
 		if r.Method == "DELETE" {
@@ -224,7 +235,7 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 		writeError(w, r, 503, "STORE_UNAVAILABLE", "Saved response is unavailable; read current state before retrying.")
 	})
 }
-func objectPrecondition(id string, tags []string) (*config.Version, error) {
+func objectPrecondition(id string, tags []string, whole bool) (*config.Version, error) {
 	if len(tags) == 0 {
 		return nil, nil
 	}
@@ -253,6 +264,10 @@ func objectPrecondition(id string, tags []string) (*config.Version, error) {
 		return nil, &config.Fault{Code: "INVALID_REQUEST"}
 	}
 	if identity != id {
+		if whole {
+			// A singleton's or list's tag names that resource alone; another's must not pass as "unset".
+			return nil, &config.Fault{Code: "PRECONDITION_FAILED"}
+		}
 		v = "0"
 	}
 	return &v, nil

@@ -2963,7 +2963,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CollectionResponse"
+                  "$ref": "#/components/schemas/OrderResponse"
                 }
               }
             }
@@ -3365,6 +3365,17 @@
             }
           }
         },
+        "parameters": [
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Singleton ETag \"<collection>.<version>\" (\"<collection>.0\" while unset); no wildcard/weak/list form."
+          }
+        ],
         "description": "A single object without an ID; If-Match \"<collection>.<version>\", \"\u20260\" while unset."
       },
       "delete": {
@@ -3471,6 +3482,17 @@
             }
           }
         },
+        "parameters": [
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Singleton ETag \"<collection>.<version>\" (\"<collection>.0\" while unset); no wildcard/weak/list form."
+          }
+        ],
         "description": "A single object without an ID; If-Match \"<collection>.<version>\", \"\u20260\" while unset."
       }
     },
@@ -3740,6 +3762,17 @@
             }
           }
         },
+        "parameters": [
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Singleton ETag \"<collection>.<version>\" (\"<collection>.0\" while unset); no wildcard/weak/list form."
+          }
+        ],
         "description": "A single object without an ID; If-Match \"<collection>.<version>\", \"\u20260\" while unset."
       },
       "delete": {
@@ -3846,6 +3879,17 @@
             }
           }
         },
+        "parameters": [
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Singleton ETag \"<collection>.<version>\" (\"<collection>.0\" while unset); no wildcard/weak/list form."
+          }
+        ],
         "description": "A single object without an ID; If-Match \"<collection>.<version>\", \"\u20260\" while unset."
       }
     }
@@ -4066,7 +4110,13 @@
                     "enum": [
                       "links",
                       "segments",
-                      "zones"
+                      "zones",
+                      "addresses",
+                      "services",
+                      "policy.input",
+                      "policy.forward",
+                      "management",
+                      "nat.outbound"
                     ]
                   },
                   "id": {
@@ -4108,6 +4158,35 @@
       "CollectionResponse": {
         "$ref": "/api/v1/schema#/$defs/collectionView"
       },
+      "OrderResponse": {
+        "type": "object",
+        "required": [
+          "state",
+          "savedVersion",
+          "version",
+          "order"
+        ],
+        "properties": {
+          "state": {
+            "const": "saved"
+          },
+          "savedVersion": {
+            "$ref": "#/components/schemas/Version"
+          },
+          "version": {
+            "$ref": "#/components/schemas/Version",
+            "description": "The list's version after this save; the next If-Match is \"order.<version>\"."
+          },
+          "order": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The rule IDs in the order this request saved."
+          }
+        },
+        "additionalProperties": false
+      },
       "SnapshotResponse": {
         "$ref": "/api/v1/schema#/$defs/snapshotView"
       },
@@ -4122,7 +4201,13 @@
             "enum": [
               "links",
               "segments",
-              "zones"
+              "zones",
+              "addresses",
+              "services",
+              "policy.input",
+              "policy.forward",
+              "management",
+              "nat.outbound"
             ]
           },
           "id": {

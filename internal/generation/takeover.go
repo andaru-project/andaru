@@ -325,8 +325,12 @@ func (r Realizer) Boot(ctx context.Context) error {
 			}
 		}
 		// A candidate whose filter does not load is unusable: never its files without its filter.
-		if path, comment, ok, err := r.filter(g); err != nil || ok && r.loadFilter(ctx, path, comment) != nil {
-			failures = append(failures, fmt.Errorf("generation %d: its packet filter does not load", *id))
+		path, comment, ok, err := r.filter(g)
+		if err == nil && ok {
+			err = r.loadFilter(ctx, path, comment)
+		}
+		if err != nil {
+			failures = append(failures, fmt.Errorf("generation %d: its packet filter does not load: %w", *id, err))
 			continue
 		}
 		if err := r.place(nil, set); err != nil {
@@ -337,6 +341,10 @@ func (r Realizer) Boot(ctx context.Context) error {
 			slog.Error("boot fell back to an older generation", "generation", *id, "error", errors.Join(failures...))
 		}
 		return r.writePointers("boot:pointers", p)
+	}
+	// A candidate's filter can fail after nft accepted it (readback, sysctl); no generation runs, so neither does a filter.
+	if err := r.dropFilter(ctx); err != nil {
+		failures = append(failures, err)
 	}
 	if kind == "ifupdown" && ifupdown != nil {
 		return r.bootIfupdown(ctx, p, *ifupdown, failures)

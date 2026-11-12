@@ -736,6 +736,61 @@ func resolveReferences(v map[string]any, col string, labels map[string]string) {
 		}
 	}
 }
+
+// owner maps a validation path to the object or singleton it names and the path below it.
+func owner(d *declaration, path string) (objectKey, string) {
+	p := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	rest := func(from int) string {
+		if from >= len(p) {
+			return ""
+		}
+		return "/" + strings.Join(p[from:], "/")
+	}
+	switch p[0] {
+	case "management":
+		return listKey("management"), rest(1)
+	case "nat":
+		if len(p) > 1 && p[1] == "outbound" {
+			return listKey("nat.outbound"), rest(2)
+		}
+		return objectKey{}, ""
+	case "objects":
+		p = p[1:]
+	case "policy":
+		if len(p) < 2 {
+			return objectKey{}, ""
+		}
+		p = append([]string{"policy." + p[1]}, p[2:]...)
+	}
+	if len(p) < 2 {
+		return objectKey{}, ""
+	}
+	n, e := strconv.Atoi(p[1])
+	if e != nil || n < 0 {
+		return objectKey{}, ""
+	}
+	id := ""
+	switch col := p[0]; {
+	case col == "links" && n < len(d.Links):
+		id = d.Links[n].ID
+	case col == "segments" && n < len(d.Segments):
+		id = d.Segments[n].ID
+	case col == "zones" && n < len(d.Zones):
+		id = d.Zones[n].ID
+	case col == "addresses" && n < len(d.Objects.Addresses):
+		id = d.Objects.Addresses[n].ID
+	case col == "services" && n < len(d.Objects.Services):
+		id = d.Objects.Services[n].ID
+	case col == "policy.input" && n < len(d.Policy.Input):
+		id = d.Policy.Input[n].ID
+	case col == "policy.forward" && n < len(d.Policy.Forward):
+		id = d.Policy.Forward[n].ID
+	}
+	if id == "" {
+		return objectKey{}, ""
+	}
+	return objectKey{p[0], id}, rest(2)
+}
 func rebaseValidation(details validationError, d *declaration, origins map[objectKey]int, input Changes) *Fault {
 	f := fault("VALIDATION_FAILED", "", "")
 	bestOp := len(input.Operations)
@@ -752,38 +807,20 @@ func rebaseValidation(details validationError, d *declaration, origins map[objec
 		return ""
 	}
 	for _, detail := range details {
-		parts := strings.SplitN(strings.TrimPrefix(detail.Path, "/"), "/", 3)
 		path := detail.Path
 		i := -1
-		key := objectKey{}
-		if len(parts) >= 2 {
-			n, e := strconv.Atoi(parts[1])
-			if e == nil {
-				switch parts[0] {
-				case "links":
-					if n >= 0 && n < len(d.Links) {
-						key = objectKey{"links", d.Links[n].ID}
-					}
-				case "segments":
-					if n >= 0 && n < len(d.Segments) {
-						key = objectKey{"segments", d.Segments[n].ID}
-					}
-				case "zones":
-					if n >= 0 && n < len(d.Zones) {
-						key = objectKey{"zones", d.Zones[n].ID}
-					}
-				}
-				if op, ok := origins[key]; ok {
-					i = op
-					tail := ""
-					if len(parts) == 3 {
-						tail = "/" + parts[2]
-					}
-					path = input.path(i, tail, true)
-				}
-			}
+		key, tail := owner(d, detail.Path)
+		op, ok := origins[key]
+		if ok {
+			path = input.path(op, tail, true)
+		} else if op, ok = origins[listKey(key.Collection)]; ok && key.Collection != "" {
+			// A rule no operation wrote may still have been moved by an order operation.
+			path = input.path(op, "", true)
 		}
-		if i < 0 && len(parts) == 3 && parts[2] == "name" {
+		if ok {
+			i = op
+		}
+		if i < 0 && tail == "/name" {
 			name := nameOf(index[key])
 			for candidate, op := range origins {
 				if candidate.Collection == key.Collection && name != "" && nameOf(index[candidate]) == name && (i < 0 || op < i) {

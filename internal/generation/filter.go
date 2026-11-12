@@ -112,11 +112,16 @@ func (r Realizer) currentNames(ctx context.Context, script []byte) ([]byte, erro
 		return nil, err
 	}
 	var pairs []string
-	for _, c := range cards {
+	for n, c := range cards {
 		was, mac := string(c[1]), string(c[2])
 		// Virtual links inherit their parent's MAC; only the card itself carries its name.
 		i := slices.IndexFunc(links, func(l host.LinkStatus) bool { return l.Kind == "" && strings.EqualFold(l.PermanentAddress, mac) })
-		if i >= 0 && links[i].Name != was {
+		switch {
+		case i < 0:
+			// Fail closed: ':' is invalid in an interface name, so the absent card's rules match nothing.
+			// Numbered, not named after it: nft refuses names over 15 characters.
+			pairs = append(pairs, `"`+was+`"`, `"gone:`+strconv.Itoa(n)+`"`)
+		case links[i].Name != was:
 			pairs = append(pairs, `"`+was+`"`, `"`+links[i].Name+`"`)
 		}
 	}
@@ -140,7 +145,11 @@ func (r Realizer) sysctl(path, value string) error {
 // dropFilter removes table inet andaru; a table already gone is success.
 func (r Realizer) dropFilter(ctx context.Context) error {
 	if _, err := r.Run(ctx, "/usr/sbin/nft", "-j", "list", "table", "inet", "andaru"); err != nil {
-		return nil
+		// nft reports an absent table as ENOENT on stderr, which the runner puts in its error; anything else may leave it loaded.
+		if strings.Contains(err.Error(), "Error: No such file or directory") {
+			return nil
+		}
+		return err
 	}
 	// Forwarding was Andaru's, switched on with its filter; it goes before the filter does.
 	for _, path := range []string{ipv4Forwarding, ipv6Forwarding} {

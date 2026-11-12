@@ -372,3 +372,28 @@ func TestConfigFilterCollections(t *testing.T) {
 		}
 	}
 }
+
+func TestSaveEnvelopeAcceptsFilterResults(t *testing.T) {
+	rule := `{"id":"rul_00000001-0000-4000-8000-000000000001","name":"r","action":"accept"}`
+	save := `{"state":"saved","savedVersion":"4","created":{},"items":[
+		{"collection":"policy.forward","id":"rul_00000001-0000-4000-8000-000000000001","value":` + rule + `,"version":"4"},
+		{"collection":"policy.forward","id":"policy.forward","version":"4"},
+		{"collection":"management","id":"management","value":{"segment":"seg_00000001-0000-4000-8000-000000000001"},"version":"4"},
+		{"collection":"nat.outbound","id":"nat.outbound","deleted":true}]}`
+	if !validEnvelope("save", []byte(save)) {
+		t.Fatal("save reply with filter items rejected")
+	}
+	for name, bad := range map[string]string{
+		"slash collection":   `{"collection":"policy/forward","id":"policy.forward","version":"4"}`,
+		"singleton bad id":   `{"collection":"management","id":"mgmt","value":{},"version":"4"}`,
+		"order with no vers": `{"collection":"policy.input","id":"policy.input"}`,
+	} {
+		if validEnvelope("save", []byte(`{"state":"saved","savedVersion":"4","created":{},"items":[`+bad+`]}`)) {
+			t.Fatalf("%s accepted", name)
+		}
+	}
+	order := `{"state":"saved","savedVersion":"5","version":"5","order":["rul_00000001-0000-4000-8000-000000000001"]}`
+	if !validEnvelope("order", []byte(order)) {
+		t.Fatal("order reply rejected")
+	}
+}

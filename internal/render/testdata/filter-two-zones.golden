@@ -76,7 +76,7 @@ OtherInformation=yes
 table inet andaru {}
 delete table inet andaru
 table inet andaru {
-	comment "sha256:415ec2965925cd18250eac694309127edf477eae43c42ad9395323c1134fecce"
+	comment "sha256:f0bafc789879369d0f8491afa2b3b33955331e72a13d9ed2de4b6f31d7608343"
 	set zon_00000001_0000_4000_8000_000000000001 { type ifname; elements = { "ens18" }; }
 	set zon_00000002_0000_4000_8000_000000000002 { type ifname; elements = { "ens19" }; }
 	set uplinks { type ifname; elements = { "ens18" }; }
@@ -100,7 +100,7 @@ table inet andaru {
 	}
 	chain postrouting {
 		type nat hook postrouting priority srcnat;
-		oifname @uplinks meta nfproto ipv4 masquerade
+		fib saddr type != local oifname @uplinks meta nfproto ipv4 masquerade
 	}
 }
 

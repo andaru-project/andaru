@@ -51,6 +51,24 @@ func collectionName(s string) bool {
 
 // singletonName names the configuration objects that exist at most once and have no ID.
 func singletonName(s string) bool { return s == "management" || s == "nat/outbound" }
+
+// validChanged checks one batch-result item as the store emits it: filter collections are dotted,
+// a singleton's or a list order's ID is its collection, and a list order carries only a version.
+func validChanged(item config.ChangedView) bool {
+	switch item.Collection {
+	case "management", "nat.outbound":
+		var value map[string]any
+		return item.ID == item.Collection && (item.Deleted || validVersion(item.Version) && item.Version != "0" && json.Unmarshal(item.Value, &value) == nil)
+	case "policy.input", "policy.forward":
+		if item.ID == item.Collection {
+			return validVersion(item.Version) && item.Version != "0"
+		}
+	case "links", "segments", "zones", "addresses", "services":
+	default:
+		return false
+	}
+	return objectIDPattern.MatchString(item.ID) && (item.Deleted || validObject(config.ObjectView{Value: item.Value, Version: item.Version}))
+}
 func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 	req := ctlRequest{method: "GET", status: 200}
 	if len(args) == 1 {
@@ -99,7 +117,7 @@ func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 					return req, errUsage
 				}
 			}
-			req.method, req.path, req.kind = "PUT", "/api/v1/config/policy/"+chain+"/order", "collection"
+			req.method, req.path, req.kind = "PUT", "/api/v1/config/policy/"+chain+"/order", "order"
 			req.tag = `"order.` + version + `"`
 			req.payload, _ = json.Marshal(append([]string{}, leaf...))
 			return req, nil
@@ -466,14 +484,18 @@ func validEnvelope(kind string, body []byte) bool {
 			return false
 		}
 		for _, item := range v.Items {
-			if !objectIDPattern.MatchString(item.ID) || !collectionName(item.Collection) {
-				return false
-			}
-			if !item.Deleted && !validObject(config.ObjectView{Value: item.Value, Version: item.Version}) {
+			if !validChanged(item) {
 				return false
 			}
 		}
 		return true
+	case "order":
+		var v struct {
+			State                 string
+			SavedVersion, Version config.Version
+			Order                 []string
+		}
+		return json.Unmarshal(body, &v) == nil && v.State == "saved" && validVersion(v.SavedVersion) && validVersion(v.Version) && v.Version != "0" && v.Order != nil
 	case "ack":
 		var v struct {
 			State        string

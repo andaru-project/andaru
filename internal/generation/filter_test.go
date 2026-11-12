@@ -159,14 +159,14 @@ func TestBootFallsBackWhenTheFilterDoesNotLoad(t *testing.T) {
 
 func TestFilterFollowsRenamedAdapters(t *testing.T) {
 	b := newBench(t)
-	// Rendered while the card with this MAC was eth7 and another card was present; the kernel now calls the first eth0.
+	// Rendered while the card with this MAC was eth7 and another card (now absent) was eth9; the kernel now calls the first eth0.
 	s := "# interface eth7 02:00:00:00:00:01\n# interface eth9 02:00:00:00:00:99\n" +
 		strings.Replace(script("aa"), "\tcomment", "\tset uplinks { type ifname; elements = { \"eth7\", \"eth9\" }; }\n\tcomment", 1)
 	id := b.gen(false, map[string]string{"50-andaru-eth0.network": uplinkDHCP, filterEntry: s})
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(b.net.script, `{ "eth0", "eth9" }`) || b.net.table != "sha256:aa" {
+	if !strings.Contains(b.net.script, `{ "eth0", "gone:1" }`) || b.net.table != "sha256:aa" {
 		t.Fatalf("loaded %q, table %q", b.net.script, b.net.table)
 	}
 }
@@ -203,5 +203,97 @@ func TestFilterWithoutIPv6(t *testing.T) {
 	}
 	if err := b.r.Rollback(t.Context(), id, "operator"); err != nil || b.net.table != "" {
 		t.Fatalf("rollback %v, table %q left", err, b.net.table)
+	}
+}
+
+// A failed listing is not an absent table: the filter may still be loaded, so the rollback must not report success.
+func TestRollbackKeepsPendingWhenTableListFails(t *testing.T) {
+	b := newBench(t)
+	id := b.gen(false, filtered(one, "aa"))
+	if err := b.r.Activate(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	b.net.fail = "nft -j list"
+	if err := b.r.Rollback(t.Context(), id, "operator"); err == nil || b.net.table != "sha256:aa" || b.pointers().Pending == nil {
+		t.Fatalf("rollback %v, table %q, pointers %+v", err, b.net.table, b.pointers())
+	}
+}
+
+// The card rendered as eth0 is gone and the one rendered as eth7 is now eth0: eth0's rules must not reach it.
+func TestFilterFailsClosedForAbsentCard(t *testing.T) {
+	b := newBench(t)
+	s := "# interface eth0 02:00:00:00:00:99\n# interface eth7 02:00:00:00:00:01\n" +
+		strings.Replace(script("aa"), "\tcomment", "\tset uplinks { type ifname; elements = { \"eth0\", \"eth7\" }; }\n\tcomment", 1)
+	id := b.gen(false, map[string]string{"50-andaru-eth0.network": uplinkDHCP, filterEntry: s})
+	if err := b.r.Activate(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.net.script, `{ "gone:0", "eth0" }`) {
+		t.Fatalf("loaded %q", b.net.script)
+	}
+}
+
+func TestBootReportsWhyTheFilterFailed(t *testing.T) {
+	b := newBench(t)
+	id := b.gen(false, filtered(one, "aa"))
+	if err := b.r.Activate(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Confirm(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	b.reboot()
+	b.net.table = ""
+	b.net.fail = "nft -f"
+	if err := b.r.Boot(t.Context()); err == nil || !strings.Contains(err.Error(), "injected failure") {
+		t.Fatalf("boot error %v", err)
+	}
+}
+
+// nft took the filter but its readback failed: booting the baseline must not leave that table behind.
+func TestBootOnBaselineDropsHalfLoadedFilter(t *testing.T) {
+	b := cloud(t)
+	id := b.gen(true, filtered(one, "aa"))
+	if err := b.r.Activate(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Confirm(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	b.reboot()
+	b.net.table = ""
+	b.net.tableComment = "sha256:other"
+	if err := b.r.Boot(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if b.net.table != "" || b.pointers().Live != nil {
+		t.Fatalf("table %q, live %v on the baseline", b.net.table, b.pointers().Live)
+	}
+	b.wantDisk(netplan)
+}
+
+// A previous generation whose filter does not load gives way to last-known-good, files and filter both.
+func TestRollbackSkipsGenerationWhoseFilterFails(t *testing.T) {
+	b := newBench(t)
+	first, second := b.gen(false, filtered(one, "11")), b.gen(false, filtered(two, "22"))
+	for _, id := range []int{first, second} {
+		if err := b.r.Activate(t.Context(), id); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.r.Confirm(t.Context(), id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	third := b.gen(false, filtered(map[string]string{"50-andaru-eth0.network": uplinkStatic}, "33"))
+	if err := b.r.Activate(t.Context(), third); err != nil {
+		t.Fatal(err)
+	}
+	b.net.fail = "nft -f " + filepath.Join(b.dir, itoa(second))
+	if err := b.timerFires(third); err != nil {
+		t.Fatal(err)
+	}
+	b.wantDisk(one)
+	if b.net.table != "sha256:11" || deref(b.pointers().Live) != first {
+		t.Fatalf("table %q, pointers %+v", b.net.table, b.pointers())
 	}
 }

@@ -542,8 +542,11 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) error {
 			from = append(from, placed{path: f.Path})
 		}
 	}
-	target, live, what, err := r.fallback(p, g.Previous)
+	target, live, what, loaded, err := r.fallback(ctx, p, g.Previous)
 	if err != nil {
+		if errors.Is(err, errFilterLoad) {
+			return fmt.Errorf("roll back %d: %w", id, err) // still pending: the timer tries again
+		}
 		p.Pending = nil
 		if e := r.writePointers("rollback:pointers", p); e != nil {
 			return e
@@ -557,16 +560,10 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) error {
 	if err != nil {
 		return err
 	}
-	var restoring *Generation
-	if live != nil {
-		if t, err := read(dir, *live, p); err == nil {
-			restoring = &t
-		}
-	}
 	// Files first: once they are back, any later reload or boot is correct. But only a reload makes networkd stop
 	// running the unconfirmed files, so until one succeeds the generation stays pending and the timer retries.
-	// The restored generation's filter loads before them; going back to none, the table goes after them.
-	if err := r.toward(ctx, restoring, func() error {
+	// fallback already loaded the restored generation's filter; going back to none, the table goes after the files.
+	restore := func() error {
 		if err := r.place(from, target); err != nil {
 			return err
 		}
@@ -581,7 +578,13 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) error {
 			return fmt.Errorf("files restored, reload failed: %w", err)
 		}
 		return nil
-	}); err != nil {
+	}
+	if loaded {
+		err = restore()
+	} else {
+		err = r.toward(ctx, nil, restore)
+	}
+	if err != nil {
 		return fmt.Errorf("roll back %d: %w", id, err)
 	}
 	if what != "" {
@@ -595,8 +598,9 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) error {
 }
 
 // fallback picks what to restore: the previous generation, else last-known-good, else the captured baseline.
+// A generation is chosen only once its filter has loaded (loaded true), so one whose filter fails gives way to the next.
 // what is empty when the choice is the one the generation recorded.
-func (r Realizer) fallback(p Pointers, previous *int) (set []placed, live *int, what string, err error) {
+func (r Realizer) fallback(ctx context.Context, p Pointers, previous *int) (set []placed, live *int, what string, loaded bool, err error) {
 	var failures []error
 	for _, candidate := range []struct {
 		id   *int
@@ -609,21 +613,34 @@ func (r Realizer) fallback(p Pointers, previous *int) (set []placed, live *int, 
 		if err == nil {
 			set, err = r.files(g)
 		}
+		var path, comment string
+		var ok bool
 		if err == nil {
-			return set, candidate.id, candidate.what, nil
+			path, comment, ok, err = r.filter(g)
+		}
+		if err == nil && ok {
+			if err = r.loadFilter(ctx, path, comment); err != nil {
+				err = fmt.Errorf("%w: %w", errFilterLoad, err)
+			}
+		}
+		if err == nil {
+			return set, candidate.id, candidate.what, ok, nil
 		}
 		failures = append(failures, err)
 	}
 	set, captured, err := r.baseline()
 	if err != nil {
-		return nil, nil, "", errors.Join(append(failures, err)...)
+		return nil, nil, "", false, errors.Join(append(failures, err)...)
 	}
 	if previous == nil {
-		return set, nil, "", nil // also "no files" when Andaru's first apply had no baseline to replace
+		return set, nil, "", false, nil // also "no files" when Andaru's first apply had no baseline to replace
 	}
 	if !captured {
 		// Removing every file would take the host off the network; what runs now at least works.
-		return nil, nil, "", errors.Join(failures...)
+		return nil, nil, "", false, errors.Join(failures...)
 	}
-	return set, nil, "baseline", nil
+	return set, nil, "baseline", false, nil
 }
+
+// errFilterLoad marks a generation whose filter nft did not take, which a later try may: rollback stays pending.
+var errFilterLoad = errors.New("its packet filter does not load")

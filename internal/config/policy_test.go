@@ -132,6 +132,16 @@ func TestPolicyValidation(t *testing.T) {
 			d["management"].(map[string]any)["allowedSources"] = []any{item(d["zones"].([]any), 0)["id"]}
 		}, "/management/allowedSources/0"},
 		"unknown NAT mode": {func(d map[string]any) { d["nat"].(map[string]any)["outbound"].(map[string]any)["mode"] = "hybrid" }, "/nat/outbound/mode"},
+		"rule expanding past the line cap": {func(d map[string]any) {
+			rep := func(id string, n int) []any {
+				out := make([]any, n)
+				for i := range out {
+					out[i] = id
+				}
+				return out
+			}
+			fwd(d, 0)["from"], fwd(d, 0)["to"], fwd(d, 0)["services"] = rep(adrHost, 17), rep(adrHost, 16), rep(svcDNS, 16)
+		}, "/policy/forward/0"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := policyFixture(t)

@@ -495,3 +495,135 @@ func TestPolicyRoutes(t *testing.T) {
 	expect(configCall(h, "POST", "/api/v1/config/services", `{"name":"dns","protocol":"udp","ports":["53"]}`, ""), 201)
 	expect(configCall(h, "GET", "/api/v1/config/policy/sideways", "", ""), 404)
 }
+
+func TestFilterRoutesMatchTheContract(t *testing.T) {
+	h, _ := configurationFixture(t)
+	instance, e := jsonschema.UnmarshalJSON(bytes.NewReader(configCall(h, "GET", "/api/v1/schema", "", "").Body.Bytes()))
+	if e != nil {
+		t.Fatal(e)
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.UseLoader(jsonschema.SchemeURLLoader{})
+	compiler.AssertFormat()
+	if e = compiler.AddResource("https://andaru.invalid/api/v1/schema", instance); e != nil {
+		t.Fatal(e)
+	}
+	conforms := func(def, doc string) {
+		t.Helper()
+		sch, e := compiler.Compile("https://andaru.invalid/api/v1/schema#/$defs/" + def)
+		if e != nil {
+			t.Fatal(e)
+		}
+		v, e := jsonschema.UnmarshalJSON(strings.NewReader(doc))
+		if e != nil {
+			t.Fatal(e)
+		}
+		if e = sch.Validate(v); e != nil {
+			t.Fatalf("%s violates %s: %v", doc, def, e)
+		}
+	}
+	rule := `{"name":"a","enabled":true,"action":"accept","from":[],"to":[],"services":[],"log":false}`
+	for _, body := range []string{rule, `{"name":"nas","kind":"host","address":"192.0.2.10"}`, `{"name":"dns","protocol":"udp","ports":["53"]}`,
+		`{"segment":"seg_00000001-0000-4000-8000-000000000001"}`, `{"mode":"automatic"}`} {
+		conforms("objectWrite", body)
+	}
+	for path, body := range map[string]string{
+		"/api/v1/config/policy/forward": rule, "/api/v1/config/addresses": `{"name":"nas","kind":"host","address":"192.0.2.10"}`,
+		"/api/v1/config/services": `{"name":"dns","protocol":"udp","ports":["53"]}`,
+	} {
+		w := configCall(h, "POST", path, body, "")
+		if w.Code != 201 {
+			t.Fatalf("%s: %d %s", path, w.Code, w.Body)
+		}
+		conforms("objectView", w.Body.String())
+	}
+	w := configCall(h, "PUT", "/api/v1/config/nat/outbound", `{"mode":"automatic"}`, `"nat.outbound.0"`)
+	if w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	conforms("objectView", w.Body.String())
+	conforms("objectView", configCall(h, "GET", "/api/v1/config/nat/outbound", "", "").Body.String())
+	// A rule list carries its own order version.
+	list := configCall(h, "GET", "/api/v1/config/policy/forward", "", "")
+	if !strings.Contains(list.Body.String(), `"version"`) {
+		t.Fatalf("list lacks its version: %s", list.Body)
+	}
+	conforms("collectionView", list.Body.String())
+
+	var api struct {
+		Paths      map[string]map[string]json.RawMessage
+		Components struct {
+			Schemas map[string]json.RawMessage
+		}
+	}
+	if e := json.Unmarshal(configCall(h, "GET", "/api/v1/openapi.json", "", "").Body.Bytes(), &api); e != nil {
+		t.Fatal(e)
+	}
+	for _, path := range []string{"/api/v1/config/management", "/api/v1/config/nat/outbound"} {
+		for _, method := range []string{"put", "delete"} {
+			var op struct {
+				Parameters []struct {
+					Name     string
+					Required bool
+				}
+			}
+			if e := json.Unmarshal(api.Paths[path][method], &op); e != nil || len(op.Parameters) != 1 || op.Parameters[0].Name != "If-Match" || !op.Parameters[0].Required {
+				t.Fatalf("%s %s declares no required If-Match: %s", method, path, api.Paths[path][method])
+			}
+		}
+	}
+	var changed struct {
+		Properties struct{ Collection struct{ Enum []string } }
+	}
+	var envelope struct {
+		Properties struct {
+			Error struct {
+				Properties struct {
+					Current struct {
+						Properties struct{ Collection struct{ Enum []string } }
+					}
+				}
+			}
+		}
+	}
+	if e := json.Unmarshal(api.Components.Schemas["ChangedObject"], &changed); e != nil {
+		t.Fatal(e)
+	}
+	if e := json.Unmarshal(api.Components.Schemas["ErrorEnvelope"], &envelope); e != nil {
+		t.Fatal(e)
+	}
+	for _, enum := range [][]string{changed.Properties.Collection.Enum, envelope.Properties.Error.Properties.Current.Properties.Collection.Enum} {
+		for _, name := range []string{"addresses", "services", "policy.input", "policy.forward", "management", "nat.outbound"} {
+			if !slices.Contains(enum, name) {
+				t.Fatalf("collection enum %v lacks %s", enum, name)
+			}
+		}
+	}
+}
+
+func TestSingletonAndOrderTagsAreNotInterchangeable(t *testing.T) {
+	h, _ := configurationFixture(t)
+	// Another resource's tag must not pass as "unset" (version 0).
+	assertAPIError(t, configCall(h, "PUT", "/api/v1/config/nat/outbound", `{"mode":"automatic"}`, `"management.1"`), 412, "PRECONDITION_FAILED")
+	assertAPIError(t, configCall(h, "GET", "/api/v1/config/nat/outbound", "", ""), 404, "NOT_FOUND")
+	assertAPIError(t, configCall(h, "PUT", "/api/v1/config/policy/forward/order", `[]`, `"nat.outbound.0"`), 412, "PRECONDITION_FAILED")
+
+	rule := func(name string) string {
+		return `{"name":"` + name + `","enabled":true,"action":"accept","from":[],"to":[],"services":[],"log":false}`
+	}
+	a := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/policy/forward", rule("a"), "")))
+	b := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/policy/forward", rule("b"), "")))
+	tag := configCall(h, "GET", "/api/v1/config/policy/forward", "", "").Header().Get("ETag")
+	w := configCall(h, "PUT", "/api/v1/config/policy/forward/order", `["`+b+`","`+a+`"]`, tag)
+	var reply struct {
+		SavedVersion, Version string
+		Order                 []string
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &reply) != nil || !slices.Equal(reply.Order, []string{b, a}) ||
+		reply.Version != reply.SavedVersion || w.Header().Get("ETag") != `"order.`+reply.Version+`"` {
+		t.Fatalf("order reply %d %s %v", w.Code, w.Body, w.Header())
+	}
+	if got := configCall(h, "GET", "/api/v1/config/policy/forward", "", "").Header().Get("ETag"); got != w.Header().Get("ETag") {
+		t.Fatalf("order reply tag %q, list tag %q", w.Header().Get("ETag"), got)
+	}
+}

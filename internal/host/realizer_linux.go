@@ -77,9 +77,14 @@ func readRealizerFacts(etcDir, runDir, pppd, pluginGlob, device, root string) (R
 	facts.NftTool = exists(root + "/usr/sbin/nft")
 	facts.FilterUnits = []string{}
 	for _, unit := range competingFilters {
-		for _, target := range []string{"sysinit.target.wants", "multi-user.target.wants"} {
-			if _, err := os.Lstat(root + "/etc/systemd/system/" + target + "/" + unit); err == nil && !slices.Contains(facts.FilterUnits, unit) {
-				facts.FilterUnits = append(facts.FilterUnits, unit)
+		// Persistent (/etc) and runtime (/run) enablement, through either a wants or a requires link.
+	links:
+		for _, base := range []string{"/etc/systemd/system/", "/run/systemd/system/"} {
+			for _, target := range []string{"sysinit.target.wants", "multi-user.target.wants", "sysinit.target.requires", "multi-user.target.requires"} {
+				if _, err := os.Lstat(root + base + target + "/" + unit); err == nil {
+					facts.FilterUnits = append(facts.FilterUnits, unit)
+					break links
+				}
 			}
 		}
 	}

@@ -8,6 +8,9 @@ import (
 	"strings"
 )
 
+// maxRuleLines caps the nft lines one rule renders to.
+const maxRuleLines = 4096
+
 // ICMP types a service may name; nft knows them by these names.
 var icmpTypes = map[string][]string{
 	"icmp":   {"echo-request", "echo-reply", "destination-unreachable", "time-exceeded", "parameter-problem", "timestamp-request", "timestamp-reply"},
@@ -197,7 +200,7 @@ func validatePolicy(d *declaration) []FieldError {
 				bad(p+"/to", "The source and destination addresses are of different families, so this rule can never match.")
 			}
 			// The families a service can match: icmp only IPv4, icmpv6 only IPv6, ports both.
-			offered := map[int]bool{}
+			offered, leaves := map[int]bool{}, 0
 			for j, ref := range r.Services {
 				s := services[ref]
 				if s == nil {
@@ -209,10 +212,13 @@ func validatePolicy(d *declaration) []FieldError {
 						switch member.Protocol {
 						case "icmp":
 							offered[4] = true
+							leaves++
 						case "icmpv6":
 							offered[6] = true
+							leaves++
 						case "tcp", "udp":
 							offered[4], offered[6] = true, true
+							leaves++
 						}
 					}
 				}
@@ -220,6 +226,10 @@ func validatePolicy(d *declaration) []FieldError {
 			meets := func(f int) bool { return (len(from) == 0 || from[f]) && (len(to) == 0 || to[f]) && offered[f] }
 			if len(offered) > 0 && !meets(4) && !meets(6) {
 				bad(p+"/services", "No service is of the family of the rule's addresses, so this rule can never match.")
+			}
+			// Each from x to x service combination is one nft line; a runaway rule would exhaust the host's filter.
+			if max(1, len(r.From))*max(1, len(r.To))*max(1, leaves) > maxRuleLines {
+				bad(p, "This rule expands to too many filter lines. Use address groups or fewer services.")
 			}
 		}
 	}

@@ -121,7 +121,8 @@ func (r *renderer) filterChains() {
 	chain("input", "type filter hook input priority filter; policy drop;", input)
 	chain("forward", "type filter hook forward priority filter; policy drop;", forward)
 	if d.NAT.Outbound.Mode == "automatic" {
-		chain("postrouting", "type nat hook postrouting priority srcnat;", []string{"oifname @uplinks meta nfproto ipv4 masquerade"})
+		// fib saddr type != local keeps host-originated traffic out of the masquerade.
+		chain("postrouting", "type nat hook postrouting priority srcnat;", []string{"fib saddr type != local oifname @uplinks meta nfproto ipv4 masquerade"})
 	}
 	// Created, deleted and defined in one file, which nft -f applies as one transaction.
 	head := "table inet andaru {}\ndelete table inet andaru\ntable inet andaru {\n"

@@ -168,6 +168,11 @@ func TestProposalStates(t *testing.T) {
 	if got := b.proposal(t); got.State != "saved-not-applied" || len(got.Operations) != 0 {
 		t.Fatalf("zones only: proposal = %+v", got)
 	}
+	// Saved filter sections alone are a saved configuration: ready would activate saved rules or fail on expectedVersion 0.
+	b.head = `{"schemaVersion":1,"links":[],"segments":[],"zones":[],"nat":{"outbound":{"mode":"none"}}}`
+	if got := b.proposal(t); got.State != "saved-not-applied" || len(got.Operations) != 0 {
+		t.Fatalf("nat only: proposal = %+v", got)
+	}
 
 	for _, pointers := range []string{
 		`{"confirmed":1,"lastKnownGood":null,"pending":null,"live":1,"takeover":true}`,

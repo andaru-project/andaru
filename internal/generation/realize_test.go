@@ -120,7 +120,7 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 		}
 	case command == "nft -j list table inet andaru":
 		if f.table == "" {
-			return nil, errors.New("no such table")
+			return nil, errors.New("nft [-j list table inet andaru]: exit status 1: Error: No such file or directory")
 		}
 		comment := f.table
 		if f.tableComment != "" {
@@ -129,7 +129,7 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 		return []byte(`{"nftables":[{"metainfo":{}},{"table":{"family":"inet","name":"andaru","comment":"` + comment + `"}}]}`), nil
 	case command == "nft delete table inet andaru":
 		if f.table == "" {
-			return nil, errors.New("no such table")
+			return nil, errors.New("nft [delete table inet andaru]: exit status 1: Error: No such file or directory")
 		}
 		f.table = ""
 	case command == "systemctl start systemd-networkd.service":

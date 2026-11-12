@@ -918,6 +918,21 @@
         },
         {
           "$ref": "#/$defs/zoneWrite"
+        },
+        {
+          "$ref": "#/$defs/addressWrite"
+        },
+        {
+          "$ref": "#/$defs/serviceWrite"
+        },
+        {
+          "$ref": "#/$defs/ruleWrite"
+        },
+        {
+          "$ref": "#/$defs/managementFields"
+        },
+        {
+          "$ref": "#/$defs/outboundFields"
         }
       ]
     },
@@ -1663,6 +1678,21 @@
         },
         {
           "$ref": "#/$defs/zoneView"
+        },
+        {
+          "$ref": "#/$defs/addressStored"
+        },
+        {
+          "$ref": "#/$defs/serviceStored"
+        },
+        {
+          "$ref": "#/$defs/ruleStored"
+        },
+        {
+          "$ref": "#/$defs/managementFields"
+        },
+        {
+          "$ref": "#/$defs/outboundFields"
         }
       ]
     },
@@ -1681,6 +1711,9 @@
             "$ref": "#/$defs/objectView"
           },
           "minItems": 0
+        },
+        "version": {
+          "$ref": "#/$defs/version"
         }
       },
       "required": [

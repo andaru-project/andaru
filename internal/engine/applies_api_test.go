@@ -86,7 +86,7 @@ func (b *applyBench) tool(_ context.Context, name string, args ...string) ([]byt
 		return []byte(`[{"dst":"default","dev":"eth0"}]`), nil
 	case "nft -j list table inet andaru":
 		// No test here loads a filter.
-		return nil, errors.New("no such table")
+		return nil, errors.New("nft [-j list table inet andaru]: exit status 1: Error: No such file or directory")
 	}
 	return nil, nil
 }

@@ -329,3 +329,23 @@ func TestFilterFacts(t *testing.T) {
 		t.Fatalf("facts %+v", f)
 	}
 }
+
+// A unit enabled for this boot only, or pulled in by a requires link, still replaces Andaru's ruleset.
+func TestFilterFactsRuntimeAndRequires(t *testing.T) {
+	for _, link := range []string{"run/systemd/system/multi-user.target.wants/nftables.service", "etc/systemd/system/sysinit.target.requires/nftables.service"} {
+		root := t.TempDir()
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, link)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, link), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		f, err := readRealizerFacts(root+"/etc/systemd/network", root+"/run/systemd/network", root+"/pppd", root+"/none", root+"/dev/ppp", root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(f.FilterUnits, []string{"nftables.service"}) {
+			t.Errorf("%s: facts %+v", link, f)
+		}
+	}
+}
