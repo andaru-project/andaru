@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -348,9 +349,12 @@ func TestIdentityComesFromTheConfirmedCapture(t *testing.T) {
 	// The saved-version preview judges the capture the same way.
 	read := hostReader{Root: b.root, Baseline: func() (host.Baseline, error) { return b.baseline, nil },
 		Route: func(context.Context) ([]string, error) { return b.routes, nil }}
-	ids, err := previewIdentities(read, filepath.Join(b.state, "generations"))(t.Context(), []host.LinkStatus{{Name: b.nic, PermanentAddress: b.mac}})
-	if err != nil || string(ids[debianMAC].DUID) == string([]byte{0, 1, 0xaa, 0xbb, 0xcc}) {
-		t.Fatalf("preview rendered the stale capture: %+v %v", ids, err)
+	ids, err := previewIdentities(read, filepath.Join(b.state, "generations"))(t.Context(), []host.LinkStatus{{IfIndex: 2, Name: b.nic, LinkType: "ether", MTU: 1500, LinkAddress: b.mac, PermanentAddress: b.mac, Addresses: b.addresses}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if live, ok := ids[debianMAC]; !ok || fmt.Sprintf("% x", live.DUID) != "00 01 00 01 32 87 03 54 bc 24 11 38 71 37" {
+		t.Fatalf("preview did not use dhcpcd's live identity: %+v", ids)
 	}
 	// After confirmation ifupdown is masked and dhcpcd's own DUID may have changed or gone.
 	b.baseline.IfupdownMasked = true
