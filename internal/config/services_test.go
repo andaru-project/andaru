@@ -76,6 +76,14 @@ func TestServiceValidation(t *testing.T) {
 			dns(d)["upstreams"] = []any{map[string]any{"address": "dns.example", "protocol": "do53"}}
 		}, "/dns/upstreams/0/address"},
 		"dns on a segment without static": {func(d map[string]any) { dns(d)["segments"] = []any{wan(d)} }, "/dns/segments/0"},
+		"range ends on the broadcast": {func(d map[string]any) { item(entry(d)["ranges"].([]any), 0)["last"] = "192.0.2.255" }, "/dhcp/0/ranges/0"},
+		"range starts on the network": {func(d map[string]any) { item(entry(d)["ranges"].([]any), 0)["first"] = "192.0.2.0" }, "/dhcp/0/ranges/0"},
+		"static lease on the broadcast": {func(d map[string]any) { lease(d)["address"] = "192.0.2.255" }, "/dhcp/0/staticLeases/0/address"},
+		"dns segment twice": {func(d map[string]any) { dns(d)["segments"] = []any{dns(d)["segments"].([]any)[0], dns(d)["segments"].([]any)[0]} }, "/dns/segments/1"},
+		"upstream with a zone": {func(d map[string]any) {
+			dns(d)["mode"] = "forward"
+			dns(d)["upstreams"] = []any{map[string]any{"address": "fe80::1%a\n\tforward-addr: 6.6.6.6", "protocol": "do53"}}
+		}, "/dns/upstreams/0/address"},
 		"bad local domain":                {func(d map[string]any) { dns(d)["localDomain"] = "bad..name" }, "/dns/localDomain"},
 		"host DNS beside the service": {func(d map[string]any) {
 			item(segmentsOf(d), 1)["addressing"].(map[string]any)["dns"] = map[string]any{"servers": []any{"192.0.2.53"}}

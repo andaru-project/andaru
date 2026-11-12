@@ -164,6 +164,7 @@ func applyFindings(in gateInput) []render.Finding {
 				} `json:"ipv6"`
 			} `json:"addressing"`
 		} `json:"segments"`
+		DNS json.RawMessage `json:"dns"`
 	}
 	// The renderer decoded the same bytes already; an undecodable declaration never gets here.
 	_ = json.Unmarshal(in.Declaration, &declared)
@@ -220,7 +221,8 @@ func applyFindings(in gateInput) []render.Finding {
 			offered = offered || s.Addressing.IPv4.Mode == "dhcp" || s.Addressing.IPv6.Mode == "slaac" || s.Addressing.IPv6.Mode == "dhcp6"
 			declaresDNS = declaresDNS || len(s.Addressing.DNS) > 0
 		}
-		if !offered && !declaresDNS {
+		// The DNS service resolves for the host.
+		if !offered && !declaresDNS && len(declared.DNS) == 0 {
 			servers := "none"
 			if len(in.CurrentDNS) > 0 {
 				servers = strings.Join(in.CurrentDNS, ", ")

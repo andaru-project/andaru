@@ -23,8 +23,13 @@ func TestServiceGoldensPassTheirTools(t *testing.T) {
 			switch f.Path {
 			case keaPath:
 				path := filepath.Join(dir, "kea.conf")
-				// kea-dhcp4 -t refuses interfaces this host lacks; the fixtures' cards are not here.
-				content := strings.ReplaceAll(f.Content, `"ens19"`, `"lo"`)
+				// kea-dhcp4 -t refuses interfaces this host lacks and hooks it cannot load: the fixtures name
+				// amd64's hook directory and cards that are not here.
+				hooks, _ := filepath.Glob("/usr/lib/*/kea/hooks")
+				if len(hooks) == 0 {
+					t.Skip("no Kea hook directory")
+				}
+				content := strings.ReplaceAll(strings.ReplaceAll(f.Content, `"ens19"`, `"lo"`), allFacts.KeaHooks, hooks[0])
 				if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 					t.Fatal(err)
 				}

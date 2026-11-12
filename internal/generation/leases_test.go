@@ -184,3 +184,16 @@ func TestLeaseFileLoadsInUnbound(t *testing.T) {
 		t.Fatalf("unbound-checkconf: %s", out)
 	}
 }
+
+// A reserved name on one segment is not taken by a lease on another.
+func TestStaticNamesWinAcrossSubnets(t *testing.T) {
+	b := newBench(t)
+	b.kea(lease{"192.168.50.9", "nas", 0, 2, 7200, 100})
+	writeFile(t, filepath.Join(b.net.root, keaFile), strings.Replace(leaseKea, `"register":false`, `"register":true`, 1))
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.leaseNames(); strings.Contains(got, "nas.") {
+		t.Fatalf("a lease took another segment's static name: %q", got)
+	}
+}

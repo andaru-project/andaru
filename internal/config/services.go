@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/binary"
 	"fmt"
 	"net"
 	"net/netip"
@@ -57,6 +58,12 @@ func validateServices(d *declaration) []FieldError {
 		}
 		served[e.Segment] = true
 		subnet := own.Masked()
+		// The subnet's own network and broadcast addresses are never a host's.
+		edge := func(a netip.Addr) bool {
+			b, n := a.As4(), subnet.Addr().As4()
+			host := binary.BigEndian.Uint32(b[:]) - binary.BigEndian.Uint32(n[:])
+			return own.Bits() <= 30 && (host == 0 || host == 1<<(32-own.Bits())-1)
+		}
 		if e.LeaseTime != 0 && (e.LeaseTime < 300 || e.LeaseTime > 604800) {
 			bad(p+"/leaseTime", "Expected 300 to 604800 seconds.")
 		}
@@ -74,6 +81,8 @@ func validateServices(d *declaration) []FieldError {
 				bad(rp, "The range must lie inside the segment's subnet.")
 			case !own.Addr().Less(first) && !last.Less(own.Addr()):
 				bad(rp, "The range holds the segment's own address.")
+			case edge(first) || edge(last):
+				bad(rp, "The range holds the subnet's network or broadcast address.")
 			case slices.ContainsFunc(taken, func(t [2]netip.Addr) bool { return !last.Less(t[0]) && !t[1].Less(first) }):
 				bad(rp, "The range overlaps another range.")
 			default:
@@ -102,6 +111,8 @@ func validateServices(d *declaration) []FieldError {
 				bad(lp+"/address", "Expected an IPv4 address inside the segment's subnet.")
 			case a == own.Addr():
 				bad(lp+"/address", "This is the segment's own address.")
+			case edge(a):
+				bad(lp+"/address", "This is the subnet's network or broadcast address.")
 			case addresses[a]:
 				bad(lp+"/address", "This address already has a static lease.")
 			default:
@@ -131,10 +142,15 @@ func validateServices(d *declaration) []FieldError {
 	}
 	for j, u := range s.Upstreams {
 		up := fmt.Sprintf("/dns/upstreams/%d", j)
-		if _, err := netip.ParseAddr(u.Address); err != nil {
-			if _, err := netip.ParseAddrPort(u.Address); err != nil {
-				bad(up+"/address", "Expected an IP address, optionally with a port.")
-			}
+		a, err := netip.ParseAddr(u.Address)
+		if err != nil {
+			var ap netip.AddrPort
+			ap, err = netip.ParseAddrPort(u.Address)
+			a = ap.Addr()
+		}
+		// A zone could carry any text into the rendered file, and an upstream needs none.
+		if err != nil || a.Zone() != "" {
+			bad(up+"/address", "Expected an IP address, optionally with a port.")
 		}
 		if u.Protocol == "dot" && !searchDomain.MatchString(u.TLSName) {
 			bad(up+"/tlsName", "DNS over TLS needs the name the upstream's certificate carries.")
@@ -145,7 +161,9 @@ func validateServices(d *declaration) []FieldError {
 		}
 	}
 	for j, id := range s.Segments {
-		if _, ok := servedPrefix(d, id); !ok {
+		if slices.Contains(s.Segments[:j], id) {
+			bad(fmt.Sprintf("/dns/segments/%d", j), "This segment is listed twice.")
+		} else if _, ok := servedPrefix(d, id); !ok {
 			bad(fmt.Sprintf("/dns/segments/%d", j), "Expected an existing segment with a static IPv4 address.")
 		}
 	}

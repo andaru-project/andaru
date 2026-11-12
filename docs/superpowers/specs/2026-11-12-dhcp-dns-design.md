@@ -88,7 +88,7 @@ Everything below belongs to the generation, exactly as the network files and the
 
 | Path | Content |
 | --- | --- |
-| `/run/andaru-kea/kea-dhcp4.conf` | Kea's whole configuration: interfaces of the served segments, one `subnet4` per `dhcp` entry with its pools, reservations and options, a memfile lease database at Kea's default `/var/lib/kea/kea-leases4.csv`, the control socket `/run/kea/kea4.sock`, `lease_cmds` and `run_script` hooks. |
+| `/run/andaru-kea/kea-dhcp4.conf` | Kea's whole configuration: interfaces of the served segments, one `subnet4` per `dhcp` entry with its pools, reservations and options, a memfile lease database at Kea's default `/var/lib/kea/kea-leases4.csv`, the control socket `/run/kea/kea4-ctrl-socket (Debian's name, which its AppArmor profile allows)`, `lease_cmds` and `run_script` hooks. |
 | `/run/andaru-unbound/andaru.conf` | Unbound `server:` settings (interfaces, access control for the served segments' subnets and loopback, `local-zone` for `localDomain`, static lease records) and either recursion or a `forward-zone` for `.` with the upstreams (`forward-tls-upstream` for `dot`, verified against `/etc/ssl/certs/ca-certificates.crt`). |
 | `/run/systemd/resolved.conf.d/50-andaru.conf` | `DNS=127.0.0.1` and `::1`, `Domains=` with `searchDomains`, so the firewall resolves through the DNS service. Links stop taking DNS from DHCP (`UseDNS=no`). |
 
@@ -123,7 +123,7 @@ When the filter is on, the input chain gains one fixed rule per served segment: 
 
 - **Trigger.** Kea's `run_script` hook (`sync: false`) calls `andaru-lease-event` on `leases4_committed`, `lease4_release`, `lease4_expire` and `lease4_decline`. The script only marks that leases changed; it starts no Andaru process. This avoids pfSense's process per event.
 - **Sync.** `andaru-leases.path` starts `andaru realize leases` when the marker changes. It waits one second for more changes, then:
-  1. asks Kea for every lease (`lease4-get-all` over `/run/kea/kea4.sock`);
+  1. asks Kea for every lease (`lease4-get-all` over `/run/kea/kea4-ctrl-socket`);
   2. keeps leases in state 0 (assigned) with a hostname, in subnets whose segment `dns` serves;
   3. builds `<first label of hostname>.<localDomain>` with an A record and a PTR record each, TTL a third of the lease's valid lifetime (as RFC 4702 suggests and pfSense does);
   4. writes `/run/andaru-leases/leases.conf` atomically when the record set changed, and runs `unbound-control reload_keep_cache`;

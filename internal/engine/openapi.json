@@ -4862,7 +4862,8 @@
               "DNS_NOT_APPLIED",
               "TAKEOVER_LIMIT",
               "FOREIGN_FILTER",
-              "MANAGEMENT_REQUIRED"
+              "MANAGEMENT_REQUIRED",
+              "DHCP_WITHOUT_DNS"
             ]
           },
           "path": {
@@ -5149,7 +5150,8 @@
               "DNS_REQUIRED",
               "DHCP_IDENTITY_UNKNOWN",
               "FOREIGN_FILTER",
-              "MANAGEMENT_REQUIRED"
+              "MANAGEMENT_REQUIRED",
+              "DHCP_WITHOUT_DNS"
             ]
           },
           "path": {

@@ -1,11 +1,12 @@
 package generation
 
 import (
-	"bytes"
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
-	"io/fs"
+	"io"
+	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"time"
@@ -29,11 +30,12 @@ func find(set []placed, path string) (placed, bool) {
 	return placed{}, false
 }
 
-// changed reports a file that appears, goes, or differs; an entry known only by its path counts as different.
+// changed reports a file that the new set carries or the old one did: what ran before is known only by its
+// paths, so a daemon whose file is present is always given the new one.
 func changed(from, to []placed, path string) bool {
-	a, was := find(from, path)
-	b, is := find(to, path)
-	return was != is || is && (a.data == nil || !bytes.Equal(a.data, b.data))
+	_, was := find(from, path)
+	_, is := find(to, path)
+	return was || is
 }
 
 // waitFor polls check until it succeeds or VerifyWait passes.
@@ -73,27 +75,23 @@ func (r Realizer) services(ctx context.Context, from, to []placed) error {
 		return err
 	}
 	switch {
-	case kea && (changed(from, to, keaFile) || !r.active(ctx, "kea-dhcp4-server.service")):
+	case kea:
 		if _, err := r.Run(ctx, "/usr/sbin/kea-dhcp4", "-t", keaFile); err != nil {
 			return fmt.Errorf("the DHCP server refuses its configuration: %w", err)
 		}
 		if _, err := r.Run(ctx, "/usr/bin/systemctl", "restart", "kea-dhcp4-server.service"); err != nil {
 			return fmt.Errorf("start the DHCP server: %w", err)
 		}
-		if err := r.waitFor(ctx, func() error {
-			if !r.active(ctx, "kea-dhcp4-server.service") {
-				return errors.New("the DHCP server is not running")
-			}
-			return nil
-		}); err != nil {
-			return err
+		// systemd reports Kea active as soon as it forks; only its own answer says it serves.
+		if err := r.waitFor(ctx, func() error { return r.keaStatus(ctx) }); err != nil {
+			return fmt.Errorf("the DHCP server is not answering: %w", err)
 		}
 	case !kea && hadKea:
 		if _, err := r.Run(ctx, "/usr/bin/systemctl", "stop", "kea-dhcp4-server.service"); err != nil {
 			return fmt.Errorf("stop the DHCP server: %w", err)
 		}
 	}
-	if unbound && (changed(from, to, unboundFile) || !r.active(ctx, "unbound.service")) || !unbound && hadUnbound {
+	if unbound || hadUnbound {
 		if unbound {
 			if _, err := r.Run(ctx, "/usr/sbin/unbound-checkconf"); err != nil {
 				return fmt.Errorf("the DNS service refuses its configuration: %w", err)
@@ -118,9 +116,9 @@ func (r Realizer) services(ctx context.Context, from, to []placed) error {
 		}
 	}
 	if kea {
-		// The path unit runs the lease sync; /run/kea exists once Kea has started.
-		if err := os.WriteFile(r.Root+leaseMarker, nil, 0o644); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
+		// Started, not signalled: root never writes into Kea's own directory, where _kea could plant a link.
+		if _, err := r.Run(ctx, "/usr/bin/systemctl", "start", "--no-block", "andaru-leases.service"); err != nil {
+			slog.Warn("start the lease sync", "error", err)
 		}
 	}
 	return nil
@@ -132,6 +130,35 @@ func (r Realizer) serviceDirs() error {
 		if err := os.MkdirAll(r.Root+dir, 0o755); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// keaStatus asks Kea over its control socket whether it runs.
+func (r Realizer) keaStatus(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	var d net.Dialer
+	c, err := d.DialContext(ctx, "unix", r.Root+keaSocket)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = c.SetDeadline(deadline)
+	}
+	if _, err := io.WriteString(c, `{"command":"status-get"}`); err != nil {
+		return err
+	}
+	var reply struct {
+		Result int    `json:"result"`
+		Text   string `json:"text"`
+	}
+	if err := json.NewDecoder(c).Decode(&reply); err != nil {
+		return err
+	}
+	if reply.Result != 0 {
+		return fmt.Errorf("%d: %s", reply.Result, reply.Text)
 	}
 	return nil
 }

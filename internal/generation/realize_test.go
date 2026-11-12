@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"maps"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -43,6 +44,8 @@ type fakeNetworkd struct {
 	table, tableComment string
 	script              string // what nft -f last loaded
 	noNft               bool   // nft is not installed
+	keaDead             bool   // Kea starts but never answers on its socket
+	kea                 net.Listener
 
 	dns     map[string][]string     // what resolved reports per interface
 	editDNS func([]string) []string // distorts that report
@@ -139,6 +142,27 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 		f.table = ""
 	case command == "systemctl restart kea-dhcp4-server.service":
 		_ = os.MkdirAll(filepath.Join(f.root, "run/kea"), 0o750)
+		if f.kea != nil {
+			f.kea.Close()
+			f.kea = nil
+		}
+		path := filepath.Join(f.root, "run/kea/kea4-ctrl-socket")
+		_ = os.Remove(path)
+		if !f.keaDead {
+			if l, err := net.Listen("unix", path); err == nil {
+				f.kea = l
+				go func() {
+					for {
+						c, err := l.Accept()
+						if err != nil {
+							return
+						}
+						c.Write([]byte(`{"result":0,"text":"Kea is up"}`))
+						c.Close()
+					}
+				}()
+			}
+		}
 	case command == "systemctl start systemd-networkd.service":
 		f.stopped = false
 	case command == "systemctl stop systemd-networkd.service systemd-networkd.socket":

@@ -60,6 +60,9 @@ func (r *renderer) services() {
 	if d.DNS != nil && !r.in.Facts.UnboundTool {
 		r.find("error", "TOOL_MISSING", "/dns", "The DNS service is not installed; install the unbound package.")
 	}
+	if d.DNS != nil && !r.in.Facts.ResolvedInCharge {
+		r.find("warning", "DNS_NOT_APPLIED", "/dns", "This host's /etc/resolv.conf is not managed by systemd-resolved, so the host itself does not use the DNS service; the LAN does.")
+	}
 	dnsServes := func(segment string) bool { return d.DNS != nil && slices.Contains(d.DNS.Segments, segment) }
 	register := d.DNS != nil && (d.DNS.RegisterLeases == nil || *d.DNS.RegisterLeases)
 

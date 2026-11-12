@@ -462,3 +462,13 @@ func TestDHCPWithoutDNS(t *testing.T) {
 		}
 	}
 }
+
+// Without systemd-resolved in charge the host does not use the DNS service, though the LAN does.
+func TestDNSServiceNotUsedByTheHost(t *testing.T) {
+	in := fixture(t, "services-recursive")
+	in.Facts.ResolvedInCharge = false
+	got := render(t, in)
+	if !slices.ContainsFunc(got.Findings, func(f Finding) bool { return f.Code == "DNS_NOT_APPLIED" && f.Path == "/dns" }) || !got.Realizable {
+		t.Fatalf("findings %+v", got.Findings)
+	}
+}

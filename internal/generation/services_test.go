@@ -28,8 +28,9 @@ func TestActivateStartsServicesAfterNetworkd(t *testing.T) {
 		}
 		last = i
 	}
-	if !b.exists("run/kea/andaru-leases-changed") || !b.exists("run/andaru-leases") {
-		t.Fatal("lease sync not signalled or its directory missing")
+	// The sync is started, never signalled by a write as root into Kea's own directory.
+	if b.index("systemctl start --no-block andaru-leases.service") < 0 || b.exists("run/kea/andaru-leases-changed") || !b.exists("run/andaru-leases") {
+		t.Fatalf("lease sync not started or its directory missing: %q", b.net.argv)
 	}
 }
 
@@ -47,7 +48,8 @@ func TestInvalidServiceConfigRestoresThePrevious(t *testing.T) {
 
 func TestKeaNotRunningFailsActivation(t *testing.T) {
 	b := newBench(t)
-	b.net.fail = "systemctl is-active --quiet kea-dhcp4-server.service"
+	// systemd reports a Type=simple unit active at fork; only Kea's own answer says it serves.
+	b.net.keaDead = true
 	id := b.gen(false, served(`{"Dhcp4":{}}`))
 	if err := b.r.Activate(t.Context(), id); err == nil || b.read(id).State.State != Failed {
 		t.Fatalf("activation survived a DHCP server that does not run: %v", err)
@@ -111,5 +113,14 @@ func TestBootCreatesServiceDirectories(t *testing.T) {
 		if !b.exists(path) {
 			t.Fatalf("%s missing after boot", path)
 		}
+	}
+}
+
+func TestUnboundRefusalRestoresThePrevious(t *testing.T) {
+	b := newBench(t)
+	b.net.fail = "unbound-checkconf"
+	id := b.gen(false, served(`{"Dhcp4":{}}`))
+	if err := b.r.Activate(t.Context(), id); err == nil || b.read(id).State.State != Failed || b.exists(unboundFile[1:]) {
+		t.Fatalf("activated a configuration Unbound refuses: %v", err)
 	}
 }

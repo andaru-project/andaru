@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"net"
 	"os"
@@ -47,6 +48,9 @@ type keaLease struct {
 
 // keaLeases asks Kea for every lease over its control socket.
 func (r Realizer) keaLeases(ctx context.Context) ([]keaLease, error) {
+	// A wedged Kea must not hold every later sync: the oneshot unit has no start timeout.
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	var d net.Dialer
 	c, err := d.DialContext(ctx, "unix", r.Root+keaSocket)
 	if err != nil {
@@ -146,29 +150,28 @@ func (r Realizer) syncLeases(ctx context.Context) error {
 // leaseRecords turns assigned leases with valid names into A and PTR records, sorted.
 // Reserved names win over leases; between two leases with one name, the most recently renewed wins.
 func leaseRecords(cfg keaConfig, leases []keaLease) []string {
-	type subnet struct {
-		domain string
-		taken  map[string]bool
-	}
-	subnets := map[int]subnet{}
+	// Reserved names are taken on every segment: they share one domain.
+	domains, taken := map[int]string{}, map[string]bool{}
 	for _, s := range cfg.Dhcp4.Subnet4 {
-		if !s.UserContext.Andaru.Register || s.UserContext.Andaru.Domain == "" {
-			continue
-		}
-		taken := map[string]bool{}
 		for _, res := range s.Reservations {
 			taken[strings.ToLower(res.Hostname)] = true
 		}
-		subnets[s.ID] = subnet{s.UserContext.Andaru.Domain, taken}
+		if s.UserContext.Andaru.Register && s.UserContext.Andaru.Domain != "" {
+			domains[s.ID] = s.UserContext.Andaru.Domain
+		}
 	}
 	newest := map[string]keaLease{}
 	for _, l := range leases {
-		s, ok := subnets[l.Subnet]
+		domain, ok := domains[l.Subnet]
 		label, _, _ := strings.Cut(strings.ToLower(l.Hostname), ".")
-		if !ok || l.State != 0 || !leaseLabel.MatchString(label) || s.taken[label] || net.ParseIP(l.Address).To4() == nil {
+		if !ok || l.State != 0 || l.Hostname == "" {
 			continue
 		}
-		name := label + "." + s.domain + "."
+		if !leaseLabel.MatchString(label) || taken[label] {
+			slog.Debug("lease name not published", "address", l.Address, "hostname", l.Hostname)
+			continue
+		}
+		name := label + "." + domain + "."
 		if old, seen := newest[name]; !seen || l.Cltt > old.Cltt {
 			newest[name] = l
 		}

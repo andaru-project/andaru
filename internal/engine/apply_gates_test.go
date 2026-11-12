@@ -314,6 +314,12 @@ func TestIfupdownGates(t *testing.T) {
 		want []want
 	}{
 		"recognised": {debian, nil},
+		// The DNS service resolves for the host, so it declares the host's DNS.
+		"static with the DNS service": {func() gateInput {
+			in := static(false)()
+			in.Declaration = []byte(`{"links":[{"kind":"ethernet","enabled":true}],"segments":[{"addressing":{"ipv4":{"mode":"static"},"ipv6":{"mode":"none"}}}],"dns":{"mode":"recursive","segments":[]}}`)
+			return in
+		}, nil},
 		"reader refusal": {func() gateInput {
 			in := debian()
 			in.IfupdownProblems = []host.Problem{{File: "/etc/network/interfaces", Key: "pre-up", Message: "no"}}
