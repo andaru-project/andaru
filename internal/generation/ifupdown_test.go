@@ -330,3 +330,21 @@ func TestActivateIfupdownFailureStopsServices(t *testing.T) {
 		t.Fatalf("Kea left serving: %q", b.net.argv)
 	}
 }
+
+// Rolling a takeover back to ifupdown stops the DHCP server it started.
+func TestRollbackToIfupdownStopsServices(t *testing.T) {
+	b := debian(t)
+	files := map[string]string{keaFile: `{"Dhcp4":{}}`}
+	maps.Copy(files, one)
+	id := create(b.t, b.dir, Manifest{SavedVersion: "7", Takeover: true, Baseline: "ifupdown", ConfirmTimeoutSeconds: 120}, files)
+	if err := b.r.Activate(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	b.net.argv = nil
+	if err := b.r.Rollback(t.Context(), id, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	if b.index("systemctl stop kea-dhcp4-server.service") < 0 || b.read(id).State.State != RolledBack {
+		t.Fatalf("Kea left serving: %q", b.net.argv)
+	}
+}

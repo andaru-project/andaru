@@ -233,3 +233,16 @@ func TestLeaseSyncWaitsForGenerationChanges(t *testing.T) {
 		t.Fatalf("sync after the change: %v %q", err, b.leaseNames())
 	}
 }
+
+// A stopped Unbound reads the file when it starts; the sync writes it and asks nothing of Unbound.
+func TestStoppedUnboundIsNotReloaded(t *testing.T) {
+	b := newBench(t)
+	b.kea(lease{"192.168.40.130", "laptop-1", 0, 1, 7200, 100})
+	b.net.fail = "systemctl is-active --quiet unbound.service"
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.leaseNames(); !strings.Contains(got, "laptop-1.home.arpa.") || b.index("unbound-control") >= 0 {
+		t.Fatalf("leases file %q, argv %q", got, b.net.argv)
+	}
+}

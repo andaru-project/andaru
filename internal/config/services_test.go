@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"maps"
 	"strings"
 	"testing"
 )
@@ -181,5 +182,25 @@ func TestSnapshotCarriesServices(t *testing.T) {
 	view, err := publicSnapshot(s)
 	if err != nil || !strings.Contains(string(view.Value), `"dhcp":[`) || !strings.Contains(string(view.Value), `"dns":{`) {
 		t.Fatalf("snapshot lost the services: %s %v", view.Value, err)
+	}
+}
+
+// The offer is the half of the subnet without the firewall's own address, never the network or broadcast address.
+func TestDHCPOffer(t *testing.T) {
+	for address, want := range map[string]map[string]string{
+		"192.168.1.1/24":   {"first": "192.168.1.128", "last": "192.168.1.254"},
+		"192.168.1.128/24": {"first": "192.168.1.1", "last": "192.168.1.127"},
+		"192.168.1.254/24": {"first": "192.168.1.1", "last": "192.168.1.127"},
+		"10.0.0.1/29":      {"first": "10.0.0.4", "last": "10.0.0.6"},
+		"10.0.0.6/29":      {"first": "10.0.0.1", "last": "10.0.0.3"},
+		"10.0.0.1/30":      nil,
+		"10.0.0.1/32":      nil,
+		"2001:db8::1/64":   nil,
+		"192.168.1.1":      nil,
+	} {
+		got, ok := DHCPOffer(address)
+		if ok != (want != nil) || !maps.Equal(got, want) {
+			t.Errorf("DHCPOffer(%s) = %v, %v; want %v", address, got, ok, want)
+		}
 	}
 }
