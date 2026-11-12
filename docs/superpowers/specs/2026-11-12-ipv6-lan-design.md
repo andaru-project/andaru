@@ -47,12 +47,16 @@ Replaces `{enabled, managed, otherInfo}`:
 | `priority` | `low`, `medium` (default), `high`. |
 | `routerLifetime` | Seconds, 0 or 4–9000 (RFC 4861). Default 1800. 0 announces that this is not a default router. |
 | `validLifetime`, `preferredLifetime` | Seconds for an advertised static prefix. Defaults 86400 and 14400 (pfSense's). Preferred must not exceed valid. Refused on `delegated` segments: networkd advertises a delegated prefix with the lifetimes of the upstream lease and has no setting to change them. |
-| `dns` | `{servers, searchDomains}`. Omitted: the firewall's own DNS service when it serves this segment, with `dns.localDomain` and `dns.searchDomains`; otherwise nothing. `servers: []` advertises none. |
+| `dns` | `{servers, searchDomains}`. Omitted: the firewall's own DNS service, at the segment's stable address (below), when it serves this segment, with `dns.localDomain` and `dns.searchDomains`; otherwise nothing. `servers: []` advertises none. |
 | `pref64` | Optional NAT64 prefix (`/32`, `/40`, `/48`, `/56`, `/64` or `/96`). |
 
 Old saved versions still decode: `enabled: false` becomes `disabled`; `enabled: true` becomes `managed` when `managed` is set, `stateless` when only `otherInfo` is set, otherwise `unmanaged`. A write uses the new form only. Since advertisements could never be applied, this mapping only keeps old saved versions readable.
 
 `router` and `unmanaged` on `static` without a `/64` that is not link-local, and on `slaac` or `dhcp6`, stay render-time warnings (`RA_PREFIX_UNSUPPORTED`), as today, so every old saved version still validates.
+
+### `addressing.ipv6` on a `delegated` segment
+
+`addresses` becomes allowed next to `from` and `subnetId`: static addresses the segment keeps whatever the upstream prefix is, normally one in a unique local `/64` (RFC 4193, `fd00::/8`). Its `/64` is advertised alongside the delegated prefix with the same mode. The firewall's DNS service and the advertised DNS server use this address, so clients keep a working resolver when the provider renumbers. Without one, the segment gets no IPv6 DNS from the firewall, and a warning says so.
 
 ### `addressing.ipv6` on a `dhcp6` segment
 
@@ -70,14 +74,14 @@ Old saved versions still decode: `enabled: false` becomes `disabled`; `enabled: 
 
 - **`delegated`**: as today (`DHCPPrefixDelegation=yes`, `UplinkInterface`, `SubnetId`, `Assign=yes`), plus `Announce=` following the advertisement mode.
 - **Advertisements** render into `[IPv6SendRA]`, one `[IPv6Prefix]` per static `/64`, `[IPv6PREF64Prefix]` when set. `router` sends no prefix (`Announce=no` on delegated segments) and sets neither flag; `unmanaged` announces the prefix with autoconfiguration on.
-- **DNS:** `EmitDNS=yes` with the servers, or `DNS=_link_local` when the firewall's DNS service answers; `EmitDomains=yes` with the domains.
+- **DNS:** `EmitDNS=yes` with the servers, or the segment's stable address when the firewall's DNS service answers; `EmitDomains=yes` with the domains.
 - **WAN client:** the new fields add their `[DHCPv6]` lines; `duid` replaces the captured `DUIDType`/`DUIDRawData`.
 
 ### DNS service
 
 A segment listed in `dns.segments` is served when it has a static IPv4 address, IPv6 `static` or `delegated`, or both; an IPv6-only LAN is served. On IPv4 the service listens on the static address, as today. DHCPv4 still needs the static IPv4 address; its rule does not change.
 
-On a served segment with IPv6, Unbound also answers on the segment's interface over IPv6, accepting queries that arrive on that interface whatever their source address (`interface-action`), because a delegated prefix is not known when the configuration is written. Which listener form Unbound 1.22 accepts for a link-local address (scoped address or interface name, with `ip-freebind`) is the first probe of the plan.
+On a served segment with IPv6, Unbound also listens on the segment's first static IPv6 address that is not link-local (with `ip-freebind`, as for IPv4) and accepts queries from that address's `/64` and, on a delegated segment, from any source arriving on its interface (`interface-action`), because the delegated prefix is not known when the configuration is written.
 
 ### Filter
 
