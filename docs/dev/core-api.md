@@ -608,3 +608,16 @@ On 2026-11-12, VM 114 (Debian 13, netplan static, `eth0` WAN at `10.0.1.19/16`) 
 - **Foreign filter:** with `nftables.service` enabled, the preview reported `FOREIGN_FILTER nftables.service` and the apply was refused with `APPLY_REFUSED`.
 
 The lab also found that the saved declaration did not carry the filter (fixed with a test), and that before #33 a confirmed takeover lost the adapter names at the next reboot.
+
+### DHCP and DNS Debian lab qualification
+
+On 2026-11-12, VM 114 (Debian 13, netplan static, `eth0` WAN at `10.0.1.19/16`, `eth1` LAN at `192.168.40.1/24` on an isolated VLAN, `kea-dhcp4-server` 2.6.3, `unbound` 1.26.2, the packaged files above) with a Debian client on the LAN:
+
+- **Takeover:** the proposal carried the DNS service forwarding to the host's two declared servers and a DHCP offer of `192.168.40.128–192.168.40.254`; `--accept-detected` took over without DHCP, and the firewall then resolved through Unbound (`DNS Servers: 127.0.0.1 ::1`). The DHCP entry was added with `andaru ctl config create dhcp`, with a static lease, and applied.
+- **Client:** it got `192.168.40.128` with the firewall as router and DNS server and `home.arpa` as domain, resolved Internet names through the firewall and fetched `http://deb.debian.org/`.
+- **Lease names:** the client's hostname resolved forward and reverse as `<name>.home.arpa`, from the client and from the firewall, and the static lease's name `nas.home.arpa` too. Removing the lease in Kea removed the name at the next sync.
+- **DNS over TLS:** forwarding to a `dot` upstream resolved; a wrong `tlsName` failed resolution (`SERVFAIL`) while the apply itself succeeded; the right name resolved again. The lab reaches port 853 only on its own resolver, which was used.
+- **Unconfirmed apply:** deleting the DHCP entry stopped Kea; nobody confirmed, the timer rolled back, and Kea served again with its file and the filter's DHCP rule.
+- **Reboot:** Kea and Unbound came back with the firewall resolving through Unbound, the client got its lease again, and its name was published.
+
+The lab found and this branch fixes: the saved declaration dropped the new sections, a netplan host with DNS servers was refused although the service resolves for it, Unbound did not bind the LAN address after a reload, Debian's AppArmor profiles blocked both daemons from Andaru's files, and resolved started before the boot unit placed its drop-in. The assistant's DHCP question is covered by tests, not driven in the lab.
