@@ -4292,9 +4292,9 @@
         "description": "A single object without an ID; If-Match \"<collection>.<version>\", \"…0\" while unset."
       }
     },
-    "/api/v1/config/nat/port-forwards": {
+    "/api/v1/config/nat/{list}": {
       "get": {
-        "operationId": "listSavedObjectsPortForwards",
+        "operationId": "listSavedObjectsNATEntries",
         "responses": {
           "200": {
             "description": "Saved state; never applied networking",
@@ -4360,7 +4360,7 @@
         "description": "Rules in execution order; `version` and the `ETag` (\"order.N\") guard the list's order."
       },
       "head": {
-        "operationId": "headListSavedObjectsPortForwards",
+        "operationId": "headListSavedObjectsNATEntries",
         "responses": {
           "200": {
             "description": "Saved state; never applied networking"
@@ -4418,7 +4418,7 @@
         }
       },
       "post": {
-        "operationId": "createSavedObjectPortForwards",
+        "operationId": "createSavedObjectNATEntries",
         "responses": {
           "201": {
             "description": "Saved state; never applied networking",
@@ -4542,11 +4542,24 @@
             }
           }
         ]
-      }
+      },
+      "parameters": [
+        {
+          "name": "list",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "enum": [
+              "port-forwards",
+              "one-to-one"
+            ]
+          }
+        }
+      ]
     },
-    "/api/v1/config/nat/port-forwards/{id}": {
+    "/api/v1/config/nat/{list}/{id}": {
       "get": {
-        "operationId": "getSavedObjectPortForwards",
+        "operationId": "getSavedObjectNATEntry",
         "responses": {
           "200": {
             "description": "Saved state; never applied networking",
@@ -4624,7 +4637,7 @@
         }
       },
       "head": {
-        "operationId": "headGetSavedObjectPortForwards",
+        "operationId": "headGetSavedObjectNATEntry",
         "responses": {
           "200": {
             "description": "Saved state; never applied networking",
@@ -4695,7 +4708,7 @@
         }
       },
       "put": {
-        "operationId": "replaceSavedObjectPortForwards",
+        "operationId": "replaceSavedObjectNATEntry",
         "responses": {
           "200": {
             "description": "Saved state; never applied networking",
@@ -4821,7 +4834,7 @@
         ]
       },
       "delete": {
-        "operationId": "deleteSavedObjectPortForwards",
+        "operationId": "deleteSavedObjectNATEntry",
         "responses": {
           "200": {
             "description": "Saved state; never applied networking",
@@ -4938,6 +4951,17 @@
       },
       "parameters": [
         {
+          "name": "list",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "enum": [
+              "port-forwards",
+              "one-to-one"
+            ]
+          }
+        },
+        {
           "name": "id",
           "in": "path",
           "required": true,
@@ -4947,9 +4971,9 @@
         }
       ]
     },
-    "/api/v1/config/nat/port-forwards/order": {
+    "/api/v1/config/nat/{list}/order": {
       "put": {
-        "operationId": "orderPortForwards",
+        "operationId": "orderNATEntries",
         "responses": {
           "200": {
             "description": "Saved state; never applied networking",
@@ -5077,794 +5101,20 @@
           }
         ],
         "description": "Reorder the list. The body is every rule ID of the list, once, in the new order; If-Match is the list's ETag."
-      }
-    },
-    "/api/v1/config/nat/one-to-one": {
-      "get": {
-        "operationId": "listSavedObjectsOneToOne",
-        "responses": {
-          "200": {
-            "description": "Saved state; never applied networking",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CollectionResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "405": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "description": "Rules in execution order; `version` and the `ETag` (\"order.N\") guard the list's order."
-      },
-      "head": {
-        "operationId": "headListSavedObjectsOneToOne",
-        "responses": {
-          "200": {
-            "description": "Saved state; never applied networking"
-          },
-          "400": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "405": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "operationId": "createSavedObjectOneToOne",
-        "responses": {
-          "201": {
-            "description": "Saved state; never applied networking",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ObjectResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "405": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "412": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "428": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "/api/v1/schema#/$defs/objectWrite"
-              }
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "before",
-            "in": "query",
-            "required": false,
-            "description": "Create the entry ahead of this entry of the same list; without it the entry is appended.",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
-    "/api/v1/config/nat/one-to-one/{id}": {
-      "get": {
-        "operationId": "getSavedObjectOneToOne",
-        "responses": {
-          "200": {
-            "description": "Saved state; never applied networking",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ObjectResponse"
-                }
-              }
-            },
-            "headers": {
-              "ETag": {
-                "schema": {
-                  "type": "string"
-                },
-                "description": "Strong quoted <id>.<object version>"
-              },
-              "Andaru-Saved-Version": {
-                "schema": {
-                  "$ref": "#/components/schemas/Version"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "405": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        }
-      },
-      "head": {
-        "operationId": "headGetSavedObjectOneToOne",
-        "responses": {
-          "200": {
-            "description": "Saved state; never applied networking",
-            "headers": {
-              "ETag": {
-                "schema": {
-                  "type": "string"
-                },
-                "description": "Strong quoted <id>.<object version>"
-              },
-              "Andaru-Saved-Version": {
-                "schema": {
-                  "$ref": "#/components/schemas/Version"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "405": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        }
-      },
-      "put": {
-        "operationId": "replaceSavedObjectOneToOne",
-        "responses": {
-          "200": {
-            "description": "Saved state; never applied networking",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ObjectResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "405": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "412": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "428": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "/api/v1/schema#/$defs/objectWrite"
-              }
-            }
-          }
-        },
-        "parameters": [
-          {
-            "in": "header",
-            "name": "If-Match",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "Exact strong object ETag; no wildcard/weak/list form."
-          }
-        ]
-      },
-      "delete": {
-        "operationId": "deleteSavedObjectOneToOne",
-        "responses": {
-          "200": {
-            "description": "Saved state; never applied networking",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Acknowledgement"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "405": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "412": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "428": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "parameters": [
-          {
-            "in": "header",
-            "name": "If-Match",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "Exact strong object ETag; no wildcard/weak/list form."
-          }
-        ]
       },
       "parameters": [
         {
-          "name": "id",
+          "name": "list",
           "in": "path",
           "required": true,
           "schema": {
-            "type": "string"
+            "enum": [
+              "port-forwards",
+              "one-to-one"
+            ]
           }
         }
       ]
-    },
-    "/api/v1/config/nat/one-to-one/order": {
-      "put": {
-        "operationId": "orderOneToOne",
-        "responses": {
-          "200": {
-            "description": "Saved state; never applied networking",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OrderResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "405": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "412": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "428": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "parameters": [
-          {
-            "in": "header",
-            "name": "If-Match",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "Exact strong object ETag; no wildcard/weak/list form."
-          }
-        ],
-        "description": "Reorder the list. The body is every rule ID of the list, once, in the new order; If-Match is the list's ETag."
-      }
     }
   },
   "components": {

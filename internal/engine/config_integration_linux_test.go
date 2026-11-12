@@ -119,7 +119,7 @@ func TestConfigurationHTTPContract(t *testing.T) {
 		"/api/v1/applies": {"get", "head", "post"}, "/api/v1/applies/{id}": {"get", "head"}, "/api/v1/applies/{id}/confirmation": {"post"}, "/api/v1/applies/{id}/rollback": {"post"},
 		"/api/v1/takeover/proposal": {"get", "head"}, "/api/v1/preview/network/draft": {"post"},
 		"/api/v1/config/policy/{chain}": {"get", "head", "post"}, "/api/v1/config/policy/{chain}/{id}": {"get", "head", "put", "delete"},
-		"/api/v1/config/policy/{chain}/order": {"put"}, "/api/v1/config/management": {"get", "head", "put", "delete"}, "/api/v1/config/nat/outbound": {"get", "head", "put", "delete"}, "/api/v1/config/dns": {"get", "head", "put", "delete"}}
+		"/api/v1/config/policy/{chain}/order": {"put"}, "/api/v1/config/nat/{list}": {"get", "head", "post"}, "/api/v1/config/nat/{list}/{id}": {"get", "head", "put", "delete"}, "/api/v1/config/nat/{list}/order": {"put"}, "/api/v1/config/management": {"get", "head", "put", "delete"}, "/api/v1/config/nat/outbound": {"get", "head", "put", "delete"}, "/api/v1/config/dns": {"get", "head", "put", "delete"}}
 	if len(document.Paths) != len(expected) {
 		t.Fatalf("unimplemented or missing contract paths: %d", len(document.Paths))
 	}
