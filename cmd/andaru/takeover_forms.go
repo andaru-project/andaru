@@ -38,7 +38,7 @@ func fields(s string) []string {
 }
 
 func newFormState(p proposal, a answers) *formState {
-	s := &formState{dnsMode: "offered", timeout: strconv.Itoa(a.Timeout)}
+	s := &formState{dnsMode: "offered", timeout: strconv.Itoa(a.Timeout), management: a.Management}
 	if a.DNS != nil {
 		s.dnsMode, s.servers, s.domains = "declared", strings.Join(a.DNS.Servers, ", "), strings.Join(a.DNS.SearchDomains, ", ")
 	}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -86,7 +87,7 @@ func (r Realizer) loadFilter(ctx context.Context, path, comment string) error {
 	}
 	for _, item := range listing.Nftables {
 		if item.Table != nil && item.Table.Comment == comment {
-			return os.WriteFile(filepath.Join(r.Root, ipv6Forwarding), []byte("1\n"), 0o644)
+			return r.ipv6Forwarding("1\n")
 		}
 	}
 	return fmt.Errorf("the loaded packet filter is not this generation's")
@@ -120,13 +121,26 @@ func (r Realizer) currentNames(ctx context.Context, script []byte) ([]byte, erro
 	return []byte(strings.NewReplacer(pairs...).Replace(string(script))), nil
 }
 
+// ipv6Forwarding sets the global IPv6 switch; a kernel booted without IPv6 has no switch to set.
+func (r Realizer) ipv6Forwarding(value string) error {
+	f, err := os.OpenFile(filepath.Join(r.Root, ipv6Forwarding), os.O_WRONLY|os.O_TRUNC, 0)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	_, err = f.WriteString(value)
+	return errors.Join(err, f.Close())
+}
+
 // dropFilter removes table inet andaru; a table already gone is success.
 func (r Realizer) dropFilter(ctx context.Context) error {
 	if _, err := r.Run(ctx, "/usr/sbin/nft", "-j", "list", "table", "inet", "andaru"); err != nil {
 		return nil
 	}
 	// Forwarding was Andaru's, switched on with its filter.
-	if err := os.WriteFile(filepath.Join(r.Root, ipv6Forwarding), []byte("0\n"), 0o644); err != nil {
+	if err := r.ipv6Forwarding("0\n"); err != nil {
 		return err
 	}
 	_, err := r.Run(ctx, "/usr/sbin/nft", "delete", "table", "inet", "andaru")

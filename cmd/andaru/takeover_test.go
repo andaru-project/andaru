@@ -353,3 +353,13 @@ func TestSSHConnectionSurvivesSudo(t *testing.T) {
 		t.Fatalf("outside SSH got %q", got)
 	}
 }
+
+// The form starts from the management answer, so accepting it or going back keeps the SSH-derived choice.
+func TestFormKeepsTheManagementAnswer(t *testing.T) {
+	p := labProposal(t)
+	a := defaultAnswers(p)
+	a.Management = "link2"
+	if got := newFormState(p, a).answers(a).Management; got != "link2" {
+		t.Fatalf("management %q", got)
+	}
+}

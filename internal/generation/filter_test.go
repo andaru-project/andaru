@@ -188,3 +188,18 @@ func TestBootLoadsFilterAfterRenaming(t *testing.T) {
 		t.Fatalf("filter loaded before the cards were named: %q", b.net.argv)
 	}
 }
+
+// A host booted with ipv6.disable=1 has no IPv6 sysctls; the filter still loads and is still removed.
+func TestFilterWithoutIPv6(t *testing.T) {
+	b := newBench(t)
+	if err := os.RemoveAll(filepath.Join(b.net.root, "proc")); err != nil {
+		t.Fatal(err)
+	}
+	id := b.gen(false, filtered(one, "aa"))
+	if err := b.r.Activate(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Rollback(t.Context(), id, "operator"); err != nil || b.net.table != "" {
+		t.Fatalf("rollback %v, table %q left", err, b.net.table)
+	}
+}
