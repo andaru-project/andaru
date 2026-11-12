@@ -199,3 +199,24 @@ func validateServices(d *declaration) []FieldError {
 	}
 	return out
 }
+
+// DHCPOffer is the range a takeover proposes for a static address: the upper half of its subnet without the
+// address itself and the broadcast address, or the lower half when the address is in the upper one.
+func DHCPOffer(address string) (map[string]string, bool) {
+	p, err := netip.ParsePrefix(address)
+	if err != nil || !p.Addr().Is4() || p.Bits() > 29 {
+		return nil, false
+	}
+	base, own := p.Masked().Addr().As4(), p.Addr().As4()
+	start, size := binary.BigEndian.Uint32(base[:]), uint32(1)<<(32-p.Bits())
+	first, last := start+size/2, start+size-2
+	if binary.BigEndian.Uint32(own[:]) >= first {
+		first, last = start+1, start+size/2-1
+	}
+	addr := func(v uint32) string {
+		var b [4]byte
+		binary.BigEndian.PutUint32(b[:], v)
+		return netip.AddrFrom4(b).String()
+	}
+	return map[string]string{"first": addr(first), "last": addr(last)}, true
+}

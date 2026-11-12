@@ -395,28 +395,12 @@ func proposalOperations(found []host.Detected, via string, tools host.RealizerFa
 	return ops, dhcp
 }
 
-// offer is the DHCP range proposed for a static segment: the upper half of its subnet without its own and the
-// broadcast address, or the lower half when the segment's own address is in the upper one.
+// offer is the DHCP range proposed for a static segment.
 func offer(n host.Detected) (map[string]string, bool) {
 	if n.IPv4.Mode != "static" || len(n.IPv4.Addresses) == 0 {
 		return nil, false
 	}
-	p, err := netip.ParsePrefix(n.IPv4.Addresses[0])
-	if err != nil || !p.Addr().Is4() || p.Bits() > 29 {
-		return nil, false
-	}
-	base := p.Masked().Addr().As4()
-	start := uint32(base[0])<<24 | uint32(base[1])<<16 | uint32(base[2])<<8 | uint32(base[3])
-	size := uint32(1) << (32 - p.Bits())
-	first, last := start+size/2, start+size-2
-	own := p.Addr().As4()
-	if a := uint32(own[0])<<24 | uint32(own[1])<<16 | uint32(own[2])<<8 | uint32(own[3]); a >= first {
-		first, last = start+1, start+size/2-1
-	}
-	addr := func(v uint32) string {
-		return netip.AddrFrom4([4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)}).String()
-	}
-	return map[string]string{"first": addr(first), "last": addr(last)}, true
+	return config.DHCPOffer(n.IPv4.Addresses[0])
 }
 
 // viaInterface names the interface holding the address in ?via=, the local end of the operator's SSH session.

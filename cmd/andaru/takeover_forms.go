@@ -40,7 +40,7 @@ type formState struct {
 
 // dhcpOffer is one DHCP server the proposal offers, on the segment of link.
 type dhcpOffer struct {
-	segment, link, title string
+	segment, link, title string // title is the adapter's name
 }
 
 func fields(s string) []string {
@@ -72,7 +72,7 @@ func newFormState(p proposal, a answers) *formState {
 		serve := a.DHCP == nil || a.DHCP[v.Segment] // yes until the operator says otherwise
 		s.dhcp[v.Segment] = &serve
 		s.offers = append(s.offers, &dhcpOffer{v.Segment, linkOf[v.Segment],
-			fmt.Sprintf("Serve DHCP on %s (%s–%s)?", printable(v.Name), v.Ranges[0].First, v.Ranges[0].Last)})
+			printable(v.Name)})
 	}
 	detected := defaultAnswers(p)
 	for _, op := range p.Operations {
@@ -222,7 +222,9 @@ func (s *formState) questions() *huh.Form {
 		).WithHideFunc(func() bool { return s.dnsMode != "declared" }),
 	)
 	for _, o := range s.offers {
-		groups = append(groups, huh.NewGroup(huh.NewConfirm().Title(o.title).Value(s.dhcp[o.segment])).
+		// The range follows the address answered above, so the review shows it, not this question.
+		groups = append(groups, huh.NewGroup(huh.NewConfirm().Title("Serve DHCP on "+o.title+"?").
+			Description("It hands out the half of the subnet without the firewall's address; ranges can be changed afterwards with andaru ctl.").Value(s.dhcp[o.segment])).
 			WithHideFunc(func() bool { return !slices.Contains(s.kept, o.link) }))
 	}
 	groups = append(groups,
@@ -289,7 +291,7 @@ func review(out io.Writer, s *formState, a answers, d draft, err error) {
 	}
 	for _, o := range s.offers {
 		if a.DHCP[o.segment] && slices.Contains(s.kept, o.link) {
-			fmt.Fprintf(out, "DHCP: %s\n", strings.TrimSuffix(strings.TrimPrefix(o.title, "Serve DHCP on "), "?"))
+			fmt.Fprintf(out, "DHCP: served on %s (its range is in the DHCP server's file below)\n", o.title)
 		}
 	}
 	for _, f := range s.adapters {

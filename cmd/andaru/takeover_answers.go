@@ -249,9 +249,25 @@ func batch(p proposal, a answers) ([]config.Operation, error) {
 		}
 	}
 	for _, op := range p.DHCP {
-		segment := strings.TrimPrefix(object(op.Value)["segment"].(string), "@")
-		if a.DHCP["@"+segment] && slices.Contains(slices.Collect(maps.Values(segmentOf)), segment) {
-			filter = append(filter, op)
+		v := object(op.Value)
+		segment := strings.TrimPrefix(v["segment"].(string), "@")
+		link := ""
+		for l, s := range segmentOf {
+			if s == segment {
+				link = l
+			}
+		}
+		if !a.DHCP["@"+segment] || link == "" {
+			continue
+		}
+		// The range follows the address the operator answered; a segment no longer static gets none.
+		ip4 := a.Adapters[link].IPv4
+		if ip4.Mode != "static" || len(ip4.Addresses) == 0 {
+			continue
+		}
+		if r, ok := config.DHCPOffer(ip4.Addresses[0]); ok {
+			v["ranges"] = []any{map[string]any{"first": r["first"], "last": r["last"]}}
+			filter = append(filter, operation(op, v))
 		}
 	}
 	var ops []config.Operation

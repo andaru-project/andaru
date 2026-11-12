@@ -398,6 +398,12 @@ func servedProposal(t *testing.T) proposal {
 			delete(v["addressing"].(map[string]any), "dns")
 			p.Operations[i] = operation(op, v)
 		}
+		// The DNS service and DHCP are offered only on a static LAN.
+		if op.Collection == "segments" && op.LocalID == "seg2" {
+			v := object(op.Value)
+			v["addressing"].(map[string]any)["ipv4"] = map[string]any{"mode": "static", "addresses": []any{"192.168.40.1/24"}}
+			p.Operations[i] = operation(op, v)
+		}
 	}
 	p.Operations = append(p.Operations, config.Operation{Op: "replace", Collection: "dns", ExpectedVersion: ptr(config.Version("0")),
 		Value: json.RawMessage(`{"mode":"forward","searchDomains":["lab.example"],"segments":["@seg2"],"upstreams":[{"address":"172.16.53.53","protocol":"do53"}]}`)})
@@ -486,5 +492,18 @@ func TestRecursiveProposalKeepsSearchDomains(t *testing.T) {
 	}
 	if err := validServers(newFormState(p, d).servers); newFormState(p, d).dnsMode == "declared" && err != nil {
 		t.Fatalf("the form asks for servers the proposal has none of: %v", err)
+	}
+}
+
+// An offer follows the address the operator gives the segment, not the detected one.
+func TestDHCPOfferFollowsTheAnsweredAddress(t *testing.T) {
+	p := servedProposal(t)
+	a := defaultAnswers(p)
+	lan := a.Adapters["link2"]
+	lan.IPv4 = family{Mode: "static", Addresses: []string{"192.168.50.1/24"}}
+	a.Adapters["link2"] = lan
+	a.DHCP = map[string]bool{"@seg2": true}
+	if got := opsJSON(t, mustBatch(t, p, a)); !strings.Contains(got, `"ranges":[{"first":"192.168.50.128","last":"192.168.50.254"}]`) {
+		t.Fatalf("offer did not follow the address: %s", got)
 	}
 }
