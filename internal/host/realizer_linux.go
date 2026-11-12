@@ -31,6 +31,10 @@ type RealizerFacts struct {
 	NftTool bool
 	// FilterUnits are the enabled services that would replace or override Andaru's filter.
 	FilterUnits []string
+	// KeaTool and UnboundTool report the DHCP server and the DNS service, which Debian packages separately.
+	KeaTool, UnboundTool bool
+	// KeaHooks is the directory holding Kea's run_script hook, which kea-common puts under the architecture's triplet.
+	KeaHooks string
 }
 
 // competingFilters flush or own the whole ruleset; Debian's nftables.service starts with "flush ruleset".
@@ -75,6 +79,11 @@ func readRealizerFacts(etcDir, runDir, pppd, pluginGlob, device, root string) (R
 	facts.PPPDaemon, facts.PPPoEPlugin, facts.PPPDevice = exists(pppd), len(plugins) > 0, exists(device)
 	facts.ResolvedInCharge = ResolvedInCharge(root)
 	facts.NftTool = exists(root + "/usr/sbin/nft")
+	facts.KeaTool = exists(root + "/usr/sbin/kea-dhcp4")
+	if hooks, _ := filepath.Glob(root + "/usr/lib/*/kea/hooks/libdhcp_run_script.so"); len(hooks) > 0 {
+		facts.KeaHooks = strings.TrimPrefix(filepath.Dir(hooks[0]), root)
+	}
+	facts.UnboundTool = exists(root + "/usr/sbin/unbound")
 	facts.FilterUnits = []string{}
 	for _, unit := range competingFilters {
 		// Persistent (/etc) and runtime (/run) enablement, through either a wants or a requires link.

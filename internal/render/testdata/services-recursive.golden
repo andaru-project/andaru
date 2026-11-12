@@ -1,0 +1,183 @@
+### /run/andaru-kea/kea-dhcp4.conf 0644 secret=false sources=/dhcp
+{
+  "Dhcp4": {
+    "control-socket": {
+      "socket-name": "/run/kea/kea4.sock",
+      "socket-type": "unix"
+    },
+    "hooks-libraries": [
+      {
+        "library": "/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so"
+      },
+      {
+        "library": "/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_run_script.so",
+        "parameters": {
+          "name": "/usr/share/kea/scripts/andaru-lease-event",
+          "sync": false
+        }
+      }
+    ],
+    "interfaces-config": {
+      "interfaces": [
+        "ens19"
+      ],
+      "service-sockets-max-retries": 30,
+      "service-sockets-retry-wait-time": 2000
+    },
+    "lease-database": {
+      "lfc-interval": 3600,
+      "persist": true,
+      "type": "memfile"
+    },
+    "subnet4": [
+      {
+        "id": 1,
+        "option-data": [
+          {
+            "data": "192.168.40.1",
+            "name": "routers"
+          },
+          {
+            "data": "192.168.40.1",
+            "name": "domain-name-servers"
+          },
+          {
+            "data": "home.arpa",
+            "name": "domain-name"
+          }
+        ],
+        "pools": [
+          {
+            "pool": "192.168.40.128 - 192.168.40.254"
+          }
+        ],
+        "reservations": [],
+        "subnet": "192.168.40.0/24",
+        "user-context": {
+          "andaru": {
+            "domain": "home.arpa",
+            "register": true
+          }
+        },
+        "valid-lifetime": 7200
+      }
+    ]
+  }
+}
+
+### /run/andaru-unbound/andaru.conf 0644 secret=false sources=/dhcp,/dns
+server:
+	interface: 127.0.0.1
+	interface: ::1
+	# Unbound may start before networkd has the addresses.
+	ip-freebind: yes
+	interface: 192.168.40.1
+	access-control: 127.0.0.0/8 allow
+	access-control: ::1/128 allow
+	access-control: 192.168.40.0/24 allow
+	local-zone: "home.arpa." static
+
+### /run/systemd/network/50-andaru-ens18.link 0644 secret=false sources=/links/0
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:01
+
+[Link]
+Name=ens18
+
+### /run/systemd/network/50-andaru-ens18.network 0644 secret=false sources=/links/0,/segments/0
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:01
+
+[Link]
+RequiredForOnline=no
+MTUBytes=1500
+
+[Network]
+LLDP=no
+IPv4Forwarding=yes
+IPv6Forwarding=yes
+DHCP=yes
+IPv6AcceptRA=yes
+
+[DHCPv4]
+UseDNS=no
+UseNTP=no
+UseHostname=no
+UseDomains=no
+
+[DHCPv6]
+UseDNS=no
+UseNTP=no
+UseHostname=no
+UseDomains=no
+PrefixDelegationHint=::/56
+
+[IPv6AcceptRA]
+UseDNS=no
+UseDomains=no
+
+### /run/systemd/network/50-andaru-ens19.link 0644 secret=false sources=/links/1
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:02
+
+[Link]
+Name=ens19
+
+### /run/systemd/network/50-andaru-ens19.network 0644 secret=false sources=/links/1,/segments/1
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:02
+
+[Link]
+RequiredForOnline=no
+MTUBytes=1500
+
+[Network]
+LLDP=no
+IPv4Forwarding=yes
+IPv6Forwarding=yes
+Address=192.168.40.1/24
+LinkLocalAddressing=no
+IPv6AcceptRA=no
+
+### /run/systemd/resolved.conf.d/50-andaru.conf 0644 secret=false sources=/dns
+[Resolve]
+DNS=127.0.0.1 ::1
+
+### nft:inet/andaru 0644 secret=false sources=/management,/nat,/policy
+# interface ens18 52:54:00:aa:bb:01
+# interface ens19 52:54:00:aa:bb:02
+table inet andaru {}
+delete table inet andaru
+table inet andaru {
+	comment "sha256:424cf7d500b8ef9a7517309ed202d1817cb5366545bb1fb74c2440303aa34767"
+	set zon_00000001_0000_4000_8000_000000000001 { type ifname; elements = { "ens18" }; }
+	set zon_00000002_0000_4000_8000_000000000002 { type ifname; elements = { "ens19" }; }
+	set uplinks { type ifname; elements = { "ens18" }; }
+	chain input {
+		type filter hook input priority filter; policy drop;
+		ct state established,related accept
+		ct state invalid drop
+		iif lo accept
+		icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept
+		ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept
+		iifname "ens19" udp sport 68 udp dport 67 accept
+		iifname "ens19" tcp dport 22 accept
+		iifname @zon_00000002_0000_4000_8000_000000000002 icmp type { echo-request } accept comment "rul_00000001-0000-4000-8000-000000000001"
+		iifname @zon_00000002_0000_4000_8000_000000000002 udp dport { 53 } accept comment "rul_00000002-0000-4000-8000-000000000002"
+		iifname @zon_00000002_0000_4000_8000_000000000002 tcp dport { 53 } accept comment "rul_00000002-0000-4000-8000-000000000002"
+	}
+	chain forward {
+		type filter hook forward priority filter; policy drop;
+		ct state established,related accept
+		ct state invalid drop
+		iifname @zon_00000002_0000_4000_8000_000000000002 accept comment "rul_00000003-0000-4000-8000-000000000003"
+	}
+	chain postrouting {
+		type nat hook postrouting priority srcnat;
+		fib saddr type != local oifname @uplinks meta nfproto ipv4 masquerade
+	}
+}
+
+### resolved lnk_00000001-0000-4000-8000-000000000001 -> ens18
+### resolved lnk_00000002-0000-4000-8000-000000000002 -> ens19
+### realizable=true

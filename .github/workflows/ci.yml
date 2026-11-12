@@ -52,8 +52,8 @@ jobs:
           go test ./...
           go test -race ./...
 
-      - name: Install nftables for the packet filter tests
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends nftables
+      - name: Install nftables, Kea and Unbound for the packet filter and service tests
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends nftables kea-dhcp4-server unbound
       - name: Build and run root integration suites
         shell: bash
         run: |
@@ -73,4 +73,4 @@ jobs:
           sudo env -u TMPDIR ANDARU_TEST_BINARY="$art/andaru" "$art/engine.test" -test.v -test.timeout=120s
           sudo env -u TMPDIR "$art/ctl.test" -test.v -test.timeout=120s
           # The pppd and networkd tool proofs in this binary are lab proofs; CI runs the filter ones.
-          sudo env -u TMPDIR "$art/render.test" -test.v -test.timeout=120s -test.run "FilterInNamespace|NftScriptIsValid"
+          sudo env -u TMPDIR "$art/render.test" -test.v -test.timeout=120s -test.run "FilterInNamespace|NftScriptIsValid|ServiceGoldensPassTheirTools"

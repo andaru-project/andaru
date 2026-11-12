@@ -42,8 +42,7 @@ func yesNo(v bool) string {
 }
 
 // offered says what a segment takes from DHCP and router advertisements. NTP, hostname and domains
-// are later areas. DNS servers are taken unless the segment declares its own.
-// shortcut: the host uses provider or declared DNS for its own lookups; revisit when the DNS area owns the resolver.
+// are later areas. DNS servers are taken unless the segment declares its own or the DNS service resolves for the host.
 func offered(useDNS string) []string {
 	return []string{"UseDNS=" + useDNS, "UseNTP=no", "UseHostname=no", "UseDomains=no"}
 }
@@ -84,7 +83,7 @@ func (r *renderer) addressing(id string, ppp bool) (sections []section, sources 
 			network = append(network, "Gateway="+g)
 		}
 	}
-	useDNS := "yes"
+	useDNS := yesNo(r.d.DNS == nil)
 	if dns := s.Addressing.DNS; dns != nil {
 		if !r.in.Facts.ResolvedInCharge {
 			r.find("warning", "DNS_NOT_APPLIED", fmt.Sprintf("/segments/%d/addressing/dns", si), "This host's /etc/resolv.conf is not managed by systemd-resolved, so these servers are saved but not used.")

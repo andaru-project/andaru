@@ -89,6 +89,12 @@ func (r *renderer) filterChains() {
 		"icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept",
 		"ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept",
 	}
+	// DHCP requests come from clients without an address yet, which no rule could name.
+	for _, e := range d.DHCP {
+		if name, _, ok := r.served(e.Segment); ok {
+			input = append(input, fmt.Sprintf("iifname %q udp sport 68 udp dport 67 accept", name))
+		}
+	}
 	if len(d.Management.AllowedSources) == 0 {
 		input = append(input, fmt.Sprintf("iifname %q tcp dport 22 accept", mgmt))
 	}
