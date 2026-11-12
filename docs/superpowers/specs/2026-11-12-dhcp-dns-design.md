@@ -138,8 +138,8 @@ When the filter is on, the input chain gains one fixed rule per served segment: 
 The takeover proposal gains, when the host has a LAN segment with a static IPv4 address:
 
 - `dns`: `forward` with the host's current DNS servers as `do53` upstreams when it has declared ones; otherwise `recursive`, because servers a DHCP uplink hands out change and Unbound cannot follow them. `segments` are the LAN segments; `searchDomains` as detected. The segment's `addressing.dns` moves into this object instead of being proposed on the segment.
-- `dhcp` on each LAN segment with a static IPv4 address: one range covering the upper half of the subnet, without the segment's own address and the broadcast address (192.168.40.1/24 gets 192.168.40.128–192.168.40.254), lease time default.
-- The review shows the DHCP ranges and the DNS mode; the assistant asks one yes/no question per LAN segment: serve DHCP there. Editing ranges is done afterwards with `andaru ctl`.
+- A proposed `dhcp` entry for each LAN segment with a static IPv4 address: one range covering the upper half of the subnet, without the segment's own address and the broadcast address (192.168.40.1/24 gets 192.168.40.128–192.168.40.254), lease time default. It travels beside the change batch, like the starter rules, and is **not** in the batch itself: `--accept-detected` never turns on a DHCP server, because the LAN may already have one.
+- The assistant asks one yes/no question per such segment, "Serve DHCP on <segment> (<range>)?", defaulting to yes; a yes adds the entry to the batch. The review shows the DHCP ranges and the DNS mode. Editing ranges, and turning DHCP on after an `--accept-detected` takeover, is done with `andaru ctl`.
 
 Without a LAN segment with a static address the proposal is as today.
 
@@ -160,7 +160,7 @@ Without a LAN segment with a static address the proposal is as today.
 
 ### Lab (Debian 13 VM with a LAN client, as for the packet filter)
 
-1. Takeover with the assistant on the two-NIC VM: the client gets an address in the proposed range, the router and DNS options point at the firewall, and the firewall's `resolvectl` shows `127.0.0.1`.
+1. Takeover with the assistant on the two-NIC VM, answering yes to DHCP: the client gets an address in the proposed range, the router and DNS options point at the firewall, and the firewall's `resolvectl` shows `127.0.0.1`.
 2. The client resolves an Internet name through the firewall and reaches the test endpoint; the firewall resolves too.
 3. The client's hostname resolves from the firewall and from the client as `<name>.home.arpa`, forward and reverse; releasing the lease removes it.
 4. A static lease gets its address and its name.
@@ -178,6 +178,8 @@ Without a LAN segment with a static address the proposal is as today.
 
 ## Calls made in writing this (owner may correct)
 
+Owner ruling, 2026-11-12: DHCP is never part of `--accept-detected`; the assistant asks per LAN segment, defaulting to yes.
+
 - Lease sync runs as a privileged oneshot started by a systemd path unit, like every other host change, not inside the unprivileged engine.
 - Rendered files go to root-owned 0755 directories beside `/run/andaru`, not inside it.
 - No name for the firewall itself in this slice: the declaration has no hostname yet.
@@ -187,5 +189,5 @@ Without a LAN segment with a static address the proposal is as today.
 - Lease files stay at Kea's default `/var/lib/kea` rather than Andaru's storage as #4 prefers: it is Debian's state directory for that unit, and Kea 3.0 restricts lease files to it.
 - Collision rule: declaration first, then the newest lease.
 - `home.arpa` as the default local domain.
-- The upper half of the subnet as the proposed range; DHCP is a yes/no question in the assistant, range editing via the CLI.
+- The upper half of the subnet as the proposed range; range editing via the CLI.
 - DHCP accepted by a fixed input rule; DNS left to rules.
