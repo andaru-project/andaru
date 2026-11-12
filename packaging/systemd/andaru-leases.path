@@ -1,0 +1,8 @@
+[Unit]
+Description=Andaru DHCP lease names
+
+[Path]
+PathModified=/run/kea/andaru-leases-changed
+
+[Install]
+WantedBy=multi-user.target

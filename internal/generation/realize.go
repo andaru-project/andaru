@@ -42,8 +42,12 @@ type Realizer struct {
 	LockWait         time.Duration
 	// HandBackWait is how long ifupdown gets to bring interfaces back; 30 seconds when zero.
 	HandBackWait time.Duration
+	// LeaseSettle is how long the lease sync waits for more lease events before it reads.
+	LeaseSettle time.Duration
 	// failAt lets tests stop a verb before a named write, as a kill would.
 	failAt func(step string) error
+	// afterLeaseRead lets tests act while a lease sync is running.
+	afterLeaseRead func()
 }
 
 // placed is one file as it must exist under /run.

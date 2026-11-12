@@ -1,12 +1,12 @@
 package generation
 
 import (
-	"strings"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 

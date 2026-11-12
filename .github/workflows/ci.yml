@@ -43,6 +43,8 @@ jobs:
           test "$(uname -m)" = "${{ matrix.machine }}"
           test "$(go env GOARCH)" = "${{ matrix.arch }}"
 
+      - name: Install nftables, Kea and Unbound for the packet filter and service tests (unit tests check the lease file with Unbound)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends nftables kea-dhcp4-server unbound
       - name: Vet and unprivileged tests
         shell: bash
         run: |
@@ -52,8 +54,6 @@ jobs:
           go test ./...
           go test -race ./...
 
-      - name: Install nftables, Kea and Unbound for the packet filter and service tests
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends nftables kea-dhcp4-server unbound
       - name: Build and run root integration suites
         shell: bash
         run: |

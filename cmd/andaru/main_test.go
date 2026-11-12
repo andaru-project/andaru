@@ -232,6 +232,10 @@ func (f *fakeVerbs) Confirm(_ context.Context, id int) error {
 	return f.err
 }
 func (f *fakeVerbs) Boot(context.Context) error { f.calls = append(f.calls, "boot"); return f.err }
+func (f *fakeVerbs) SyncLeases(context.Context) error {
+	f.calls = append(f.calls, "leases")
+	return f.err
+}
 
 func TestRealizeExitCodes(t *testing.T) {
 	for _, row := range []struct {
@@ -248,6 +252,8 @@ func TestRealizeExitCodes(t *testing.T) {
 		{[]string{"rollback", "7", "requested"}, errors.New("disk"), "rollback 7 requested", 1},
 		// Boot must never hold up sysinit.target.
 		{[]string{"boot"}, errors.New("nothing usable"), "boot", 0},
+		// A failed lease sync shows on its unit; the path unit runs it again at the next lease event.
+		{[]string{"leases"}, errors.New("Kea not answering"), "leases", 1},
 	} {
 		verbs := &fakeVerbs{err: row.err}
 		var diagnostics bytes.Buffer

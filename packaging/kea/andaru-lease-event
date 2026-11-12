@@ -1,0 +1,4 @@
+#!/bin/sh
+# Installed as /usr/share/kea/scripts/andaru-lease-event, mode 0755.
+# Kea runs this on lease events as _kea; it only marks that leases changed, and andaru-leases.path does the rest.
+exec touch /run/kea/andaru-leases-changed
