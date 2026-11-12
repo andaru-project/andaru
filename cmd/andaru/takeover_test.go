@@ -363,3 +363,28 @@ func TestFormKeepsTheManagementAnswer(t *testing.T) {
 		t.Fatalf("management %q", got)
 	}
 }
+
+// Every adapter detected as an uplink: choosing LAN for one in the assistant still brings the LAN its starter rules.
+func TestAnswersAddStarterRulesForANewLAN(t *testing.T) {
+	p := labProposal(t)
+	p.Starter = slices.DeleteFunc(slices.Clone(p.Operations), func(op config.Operation) bool {
+		return !slices.Contains([]string{"services", "policy.input", "policy.forward", "nat.outbound"}, op.Collection)
+	})
+	p.Operations = slices.DeleteFunc(p.Operations, func(op config.Operation) bool {
+		return op.Collection == "services" || op.Collection == "policy.input" || op.Collection == "policy.forward" || op.LocalID == "lan"
+	})
+	a := defaultAnswers(p)
+	wan := a.Adapters["link2"]
+	wan.Zone = "wan"
+	a.Adapters["link2"] = wan
+	ops, err := batch(p, a)
+	if err != nil || strings.Contains(opsJSON(t, ops), `"lanOut"`) {
+		t.Fatalf("starter rules without a LAN: %v %s", err, opsJSON(t, ops))
+	}
+	lan := a.Adapters["link2"]
+	lan.Zone = "lan"
+	a.Adapters["link2"] = lan
+	if ops, err = batch(p, a); err != nil || !strings.Contains(opsJSON(t, ops), `"lanOut"`) || !strings.Contains(opsJSON(t, ops), `"localId":"ping"`) {
+		t.Fatalf("a LAN chosen in the assistant got no starter rules: %v %s", err, opsJSON(t, ops))
+	}
+}

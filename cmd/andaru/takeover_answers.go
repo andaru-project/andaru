@@ -167,10 +167,19 @@ func batch(p proposal, a answers) ([]config.Operation, error) {
 		v["addressing"].(map[string]any)["dns"] = dns
 		segments[dnsTarget] = operation(segments[dnsTarget], v)
 	}
+	// Starter objects the detection left out (no LAN or no uplink detected) join when the answers add that zone.
+	proposed := map[string]bool{}
 	for _, op := range p.Operations {
+		proposed[op.Collection+"/"+op.LocalID] = true
+	}
+	extra := slices.DeleteFunc(slices.Clone(p.Starter), func(op config.Operation) bool { return proposed[op.Collection+"/"+op.LocalID] })
+	for _, op := range slices.Concat(p.Operations, extra) {
 		switch op.Collection {
 		case "services":
-			filter = append(filter, op)
+			// The starter services serve only the LAN's starter rules.
+			if zones["lan"] {
+				filter = append(filter, op)
+			}
 		case "policy.input", "policy.forward":
 			// A starter rule for a zone no adapter is in any more would reference nothing.
 			var v struct{ From, To []string }

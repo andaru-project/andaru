@@ -40,6 +40,7 @@ type proposal struct {
 	State        string             `json:"state"`
 	SavedVersion config.Version     `json:"savedVersion"`
 	Operations   []config.Operation `json:"operations"`
+	Starter      []config.Operation `json:"starter"`
 	Adapters     []adapter          `json:"adapters"`
 	Findings     []finding          `json:"findings"`
 }

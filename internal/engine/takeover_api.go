@@ -176,13 +176,14 @@ type proposalView struct {
 	State        string             `json:"state"`
 	SavedVersion config.Version     `json:"savedVersion"`
 	Operations   []config.Operation `json:"operations"`
+	Starter      []config.Operation `json:"starter"`
 	Adapters     []adapterView      `json:"adapters"`
 	Findings     []render.Finding   `json:"findings"`
 }
 
 func (h *takeoverHandler) serveProposal(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	view := proposalView{Operations: []config.Operation{}, Adapters: []adapterView{}, Findings: []render.Finding{}}
+	view := proposalView{Operations: []config.Operation{}, Starter: starterOperations(), Adapters: []adapterView{}, Findings: []render.Finding{}}
 	input, err := h.head(ctx, nil)
 	if err != nil {
 		writeConfigurationError(w, r, err)
@@ -298,6 +299,21 @@ func family(a host.Addressing) map[string]any {
 
 // proposalOperations turns what the host configures into one change batch, with starter rules for the LAN,
 // outbound NAT for the uplink, and management on the segment of via, the interface the operator's session uses.
+// starterOperations are the LAN's starter services and rules, then outbound NAT for the uplinks.
+// The proposal carries all of them, so a client that changes the zones can add what the detection left out.
+func starterOperations() []config.Operation {
+	return []config.Operation{
+		create("services", "ping", map[string]any{"name": "ping", "protocol": "icmp", "types": []string{"echo-request"}}),
+		create("services", "ping6", map[string]any{"name": "ping6", "protocol": "icmpv6", "types": []string{"echo-request"}}),
+		create("services", "dnsUdp", map[string]any{"name": "dns-udp", "protocol": "udp", "ports": []string{"53"}}),
+		create("services", "dnsTcp", map[string]any{"name": "dns-tcp", "protocol": "tcp", "ports": []string{"53"}}),
+		create("services", "dns", map[string]any{"name": "dns", "protocol": "group", "members": []string{"@dnsUdp", "@dnsTcp"}}),
+		create("policy.input", "lanToFirewall", starterRule("lan to firewall: ping and DNS", "@ping", "@ping6", "@dns")),
+		create("policy.forward", "lanOut", starterRule("lan to any")),
+		singleton("nat.outbound", map[string]any{"mode": "automatic"}),
+	}
+}
+
 func proposalOperations(found []host.Detected, via string) []config.Operation {
 	zones := map[string]bool{}
 	var links, segments []config.Operation
@@ -326,19 +342,12 @@ func proposalOperations(found []host.Detected, via string) []config.Operation {
 		}
 	}
 	ops = slices.Concat(ops, links, segments)
+	starter := starterOperations()
 	if zones["lan"] {
-		ops = append(ops,
-			create("services", "ping", map[string]any{"name": "ping", "protocol": "icmp", "types": []string{"echo-request"}}),
-			create("services", "ping6", map[string]any{"name": "ping6", "protocol": "icmpv6", "types": []string{"echo-request"}}),
-			create("services", "dnsUdp", map[string]any{"name": "dns-udp", "protocol": "udp", "ports": []string{"53"}}),
-			create("services", "dnsTcp", map[string]any{"name": "dns-tcp", "protocol": "tcp", "ports": []string{"53"}}),
-			create("services", "dns", map[string]any{"name": "dns", "protocol": "group", "members": []string{"@dnsUdp", "@dnsTcp"}}),
-			create("policy.input", "lanToFirewall", starterRule("lan to firewall: ping and DNS", "@ping", "@ping6", "@dns")),
-			create("policy.forward", "lanOut", starterRule("lan to any")),
-		)
+		ops = append(ops, starter[:7]...)
 	}
 	if zones["wan"] {
-		ops = append(ops, singleton("nat.outbound", map[string]any{"mode": "automatic"}))
+		ops = append(ops, starter[7])
 	}
 	// Management stays where the operator is: their session's segment, else the LAN, else the uplink.
 	management := slices.IndexFunc(found, func(n host.Detected) bool { return n.Name == via })

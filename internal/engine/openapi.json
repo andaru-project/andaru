@@ -4770,6 +4770,7 @@
           "state",
           "savedVersion",
           "operations",
+          "starter",
           "adapters",
           "findings"
         ],
@@ -4790,6 +4791,13 @@
           "operations": {
             "type": "array",
             "description": "A create-only change batch describing what the host does now; send it to the draft preview and then to /api/v1/config/changes.",
+            "items": {
+              "$ref": "#/components/schemas/ChangeOperation"
+            }
+          },
+          "starter": {
+            "type": "array",
+            "description": "The LAN's starter services and rules and outbound NAT, whether or not the detection put them in operations; a client that changes an adapter's zone adds the ones operations left out.",
             "items": {
               "$ref": "#/components/schemas/ChangeOperation"
             }
