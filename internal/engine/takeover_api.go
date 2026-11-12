@@ -328,7 +328,8 @@ func proposalOperations(found []host.Detected, via string, tools host.RealizerFa
 	var lan, servers, domains []string
 	for i, n := range found {
 		servers, domains = append(servers, n.DNS...), append(domains, n.Domains...)
-		if _, ok := offer(n); ok && !n.DefaultRoute {
+		// The DNS service needs only a static IPv4 address (config.servedPrefix); a DHCP range needs a /29.
+		if n.IPv4.Mode == "static" && len(n.IPv4.Addresses) > 0 && !n.DefaultRoute {
 			lan = append(lan, fmt.Sprintf("@seg%d", i+1))
 		}
 	}

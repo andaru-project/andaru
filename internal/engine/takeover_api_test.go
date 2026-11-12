@@ -510,3 +510,17 @@ func TestProposalServesTheLAN(t *testing.T) {
 		t.Fatalf("dns: %s", raw)
 	}
 }
+
+// A /30 LAN has no room for a DHCP range, but the DNS service needs only its static address.
+func TestProposalServesDNSOnASmallLAN(t *testing.T) {
+	nics := twoNICs()
+	nics[1].IPv4.Addresses = []string{"192.168.40.1/30"}
+	ops, dhcp := proposalOperations(nics, "eth0", host.RealizerFacts{KeaTool: true, UnboundTool: true})
+	raw, _ := json.Marshal(ops)
+	if !strings.Contains(string(raw), `"collection":"dns","expectedVersion":"0","value":{"mode":"recursive","segments":["@seg2"]}`) {
+		t.Fatalf("dns: %s", raw)
+	}
+	if len(dhcp) != 0 {
+		t.Fatalf("dhcp offer on a /30: %+v", dhcp)
+	}
+}
