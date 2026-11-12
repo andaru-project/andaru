@@ -47,6 +47,27 @@ func TestInvalidServiceConfigRestoresThePrevious(t *testing.T) {
 	}
 }
 
+func TestKeaCheckWaitsForLateInterfaces(t *testing.T) {
+	b := newBench(t)
+	// networkctl reload returns before networkd has created every VLAN and bridge: Kea refuses an absent interface.
+	checks := 0
+	b.net.fail = "kea-dhcp4 -t"
+	b.net.onRun = func(command string) {
+		if command == "kea-dhcp4 -t "+keaFile {
+			if checks++; checks == 3 {
+				b.net.fail = ""
+			}
+		}
+	}
+	id := b.gen(false, served(`{"Dhcp4":{}}`))
+	if err := b.r.Activate(t.Context(), id); err != nil {
+		t.Fatalf("activation failed while the served interface was still being created: %v", err)
+	}
+	if b.index("systemctl restart kea-dhcp4-server.service") < 0 {
+		t.Fatalf("Kea not started: %q", b.net.argv)
+	}
+}
+
 func TestKeaNotRunningFailsActivation(t *testing.T) {
 	b := newBench(t)
 	// systemd reports a Type=simple unit active at fork; only Kea's own answer says it serves.

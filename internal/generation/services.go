@@ -77,7 +77,12 @@ func (r Realizer) services(ctx context.Context, from, to []placed) error {
 	}
 	switch {
 	case kea:
-		if _, err := r.Run(ctx, "/usr/sbin/kea-dhcp4", "-t", keaFile); err != nil {
+		// Kea refuses an interface that does not exist, and networkctl reload returns before networkd has
+		// created every VLAN and bridge.
+		if err := r.waitFor(ctx, func() error {
+			_, err := r.Run(ctx, "/usr/sbin/kea-dhcp4", "-t", keaFile)
+			return err
+		}); err != nil {
 			return fmt.Errorf("the DHCP server refuses its configuration: %w", err)
 		}
 		if _, err := r.Run(ctx, "/usr/bin/systemctl", "restart", "kea-dhcp4-server.service"); err != nil {
