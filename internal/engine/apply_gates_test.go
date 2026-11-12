@@ -183,16 +183,25 @@ func TestApplyFindings(t *testing.T) {
 		}, []want{{"BOOT_UNIT_DISABLED", "andaru-network-boot.service"}}},
 		"forwarding and PPP": {func() gateInput {
 			in := taken()
-			in.Declaration = []byte(`{"links":[{"kind":"ethernet","enabled":true},{"kind":"pppoe","enabled":true},{"kind":"pppoe","enabled":false}],
+			in.Declaration = []byte(`{"management":{"segment":"seg"},"links":[{"kind":"ethernet","enabled":true},{"kind":"pppoe","enabled":true},{"kind":"pppoe","enabled":false}],
 				"segments":[{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"delegated","ra":{"mode":"unmanaged"}}}},
 				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"enabled":true,"managed":false,"otherInfo":false}}}},
 				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"enabled":false,"managed":true,"otherInfo":true}}}},
 				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"mode":"router"}}}}]}`)
 			return in
 		}, []want{{"APPLY_UNSUPPORTED", "/links/1"}}},
-		"advertisement modes needing the DHCPv6 server": {func() gateInput {
+		// Without the filter IPv6 forwarding stays off, so an advertised default router would drop everything.
+		"advertisements without the filter": {func() gateInput {
 			in := taken()
 			in.Declaration = []byte(`{"links":[{"kind":"ethernet","enabled":true}],"segments":[
+				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"mode":"unmanaged"}}}},
+				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"delegated"}}},
+				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"mode":"disabled"}}}}]}`)
+			return in
+		}, []want{{"APPLY_UNSUPPORTED", "/segments/0/addressing/ipv6/ra/mode"}, {"APPLY_UNSUPPORTED", "/segments/1/addressing/ipv6/mode"}}},
+		"advertisement modes needing the DHCPv6 server": {func() gateInput {
+			in := taken()
+			in.Declaration = []byte(`{"management":{"segment":"seg"},"links":[{"kind":"ethernet","enabled":true}],"segments":[
 				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"mode":"managed"}}}},
 				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"mode":"assisted"}}}},
 				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"delegated","ra":{"mode":"stateless"}}}},

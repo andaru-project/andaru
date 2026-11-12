@@ -209,6 +209,17 @@ func TestDHCPOffer(t *testing.T) {
 
 // A version saved before advertisement modes still loads as stored; the next write stores the mode.
 func TestLegacyAdvertisementSurvivesHistory(t *testing.T) {
+	// history.go refuses a version whose canonical re-encoding differs from its stored bytes: false fields must survive.
+	d := fixtureMap(t)
+	v6(d, 1)["ra"] = map[string]any{"enabled": false, "managed": false, "otherInfo": false}
+	raw, _ := json.Marshal(d)
+	off, e := canonical(mustDecode(t, raw))
+	if e != nil {
+		t.Fatal(e)
+	}
+	if again, e := canonical(mustDecode(t, off)); e != nil || string(again) != string(off) || !strings.Contains(string(off), `"ra":{"enabled":false,"managed":false,"otherInfo":false}`) {
+		t.Fatalf("disabled legacy version does not round-trip (%v):\n%s", e, off)
+	}
 	stored, e := canonical(mustDecode(t, fixtureBytes(t)))
 	if e != nil {
 		t.Fatal(e)

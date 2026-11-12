@@ -267,9 +267,14 @@ func TestAdvertisementModes(t *testing.T) {
 		"all options": {func(d map[string]any) {
 			static(d, map[string]any{"mode": "unmanaged", "priority": "high", "routerLifetime": 0, "validLifetime": 600, "preferredLifetime": 300, "pref64": "64:ff9b::/96", "dns": map[string]any{"servers": []any{"fd00:1::1"}, "searchDomains": []any{"home.arpa"}}})
 		}, ""},
-		"unknown mode":  {func(d map[string]any) { static(d, map[string]any{"mode": "sometimes"}) }, "schema"},
-		"lifetime 3":    {func(d map[string]any) { static(d, map[string]any{"mode": "router", "routerLifetime": 3}) }, ra + "/routerLifetime"},
-		"lifetime 9001": {func(d map[string]any) { static(d, map[string]any{"mode": "router", "routerLifetime": 9001}) }, ra + "/routerLifetime"},
+		"unknown mode":                      {func(d map[string]any) { static(d, map[string]any{"mode": "sometimes"}) }, "schema"},
+		"lifetime 3":                        {func(d map[string]any) { static(d, map[string]any{"mode": "router", "routerLifetime": 3}) }, ra + "/routerLifetime"},
+		"lifetime 9001":                     {func(d map[string]any) { static(d, map[string]any{"mode": "router", "routerLifetime": 9001}) }, ra + "/routerLifetime"},
+		"valid below the default preferred": {func(d map[string]any) { static(d, map[string]any{"mode": "unmanaged", "validLifetime": 600}) }, ra + "/preferredLifetime"},
+		"preferred above the default valid": {func(d map[string]any) { static(d, map[string]any{"mode": "unmanaged", "preferredLifetime": 90000}) }, ra + "/preferredLifetime"},
+		"advertised IPv4 DNS server": {func(d map[string]any) {
+			static(d, map[string]any{"mode": "unmanaged", "dns": map[string]any{"servers": []any{"192.0.2.53"}}})
+		}, ra + "/dns/servers/0"},
 		"preferred over valid": {func(d map[string]any) {
 			static(d, map[string]any{"mode": "unmanaged", "validLifetime": 600, "preferredLifetime": 700})
 		}, ra + "/preferredLifetime"},

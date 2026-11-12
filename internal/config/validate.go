@@ -214,7 +214,8 @@ func validateTopology(d *declaration) []FieldError {
 						bad(path+"/"+field, "The upstream lease sets a delegated prefix's lifetimes.")
 					}
 				}
-			} else if ra.PreferredLifetime != nil && *ra.PreferredLifetime > cmp.Or(ptrValue(ra.ValidLifetime), 86400) {
+			} else if (ra.PreferredLifetime != nil || ra.ValidLifetime != nil) && cmp.Or(ptrValue(ra.PreferredLifetime), 14400) > cmp.Or(ptrValue(ra.ValidLifetime), 86400) {
+				// networkd ignores the whole prefix otherwise, defaults included.
 				bad(path+"/preferredLifetime", "The preferred lifetime cannot exceed the valid lifetime.")
 			}
 			if ra.PREF64 != "" {
@@ -225,6 +226,11 @@ func validateTopology(d *declaration) []FieldError {
 			}
 			if ra.DNS != nil {
 				validateDNSList(path+"/dns", ra.DNS, bad)
+				for j, raw := range ra.DNS.Servers {
+					if a, e := netip.ParseAddr(raw); e == nil && a.Is4() {
+						bad(fmt.Sprintf("%s/dns/servers/%d", path, j), "Router advertisements carry IPv6 DNS servers only.")
+					}
+				}
 			}
 		}
 		if a6.Mode == "delegated" {

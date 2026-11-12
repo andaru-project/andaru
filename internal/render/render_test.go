@@ -639,3 +639,4 @@ func TestDelegatedWithoutStableAddressWarns(t *testing.T) {
 func TestMulticastListenerRule(t *testing.T) {
 	lines(t, golden(render(t, fixture(t, "filter-two-zones"))), "\t\tip6 saddr fe80::/10 icmpv6 type { mld-listener-query, mld-listener-report, mld-listener-done, mld2-listener-report } accept")
 }
+
