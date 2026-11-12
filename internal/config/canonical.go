@@ -48,6 +48,11 @@ func normalizeDeclaration(d *declaration) {
 	if len(d.Objects.Addresses)+len(d.Objects.Services) == 0 {
 		d.Objects = objectSet{}
 	}
+	for i := range d.NAT.PortForwards {
+		if !d.NAT.PortForwards[i].NoRedirect && d.NAT.PortForwards[i].FilterRule == "" {
+			d.NAT.PortForwards[i].FilterRule = "auto"
+		}
+	}
 	if len(d.Policy.Input)+len(d.Policy.Forward) == 0 {
 		d.Policy = policy{}
 	}

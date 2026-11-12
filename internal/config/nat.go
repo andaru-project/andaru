@@ -1,0 +1,218 @@
+package config
+
+import (
+	"fmt"
+	"net/netip"
+	"slices"
+	"strconv"
+	"strings"
+)
+
+// validateNAT checks the port forwards and 1:1 entries against the zones, address objects and the
+// firewall's own static addresses, with pfSense's rules.
+func validateNAT(d *declaration) []FieldError {
+	var out []FieldError
+	bad := func(path, msg string) {
+		if len(out) < 100 {
+			out = append(out, FieldError{path, msg})
+		}
+	}
+	zones := map[string]bool{}
+	for _, z := range d.Zones {
+		zones[z.ID] = true
+	}
+	addresses := map[string]address{}
+	for _, a := range d.Objects.Addresses {
+		addresses[a.ID] = a
+	}
+	// hasV4 says whether an address object can match IPv4: everything here is IPv4.
+	var hasV4 func(id string) bool
+	hasV4 = func(id string) bool {
+		a, ok := addresses[id]
+		switch {
+		case !ok:
+			return false
+		case a.Kind == "group":
+			return slices.ContainsFunc(a.Members, hasV4)
+		case a.Kind == "network":
+			p, e := netip.ParsePrefix(a.Prefix)
+			return e == nil && p.Addr().Is4()
+		case a.Kind == "range":
+			v, e := netip.ParseAddr(a.First)
+			return e == nil && v.Is4()
+		}
+		v, e := netip.ParseAddr(a.Address)
+		return e == nil && v.Is4()
+	}
+	ref := func(path, id string) {
+		if _, ok := addresses[id]; !ok {
+			bad(path, "Expected an existing address.")
+		} else if !hasV4(id) {
+			bad(path, "Expected an address with IPv4 addresses; inbound NAT is IPv4 only.")
+		}
+	}
+	unique := func(prefix string, i int, v identity, seen map[string]bool) {
+		if seen[v.ID] {
+			bad(fmt.Sprintf("%s/%d/id", prefix, i), "Duplicate object identity.")
+		}
+		if invalidText(v.Name, true) {
+			bad(fmt.Sprintf("%s/%d/name", prefix, i), "Control or format characters are not allowed.")
+		}
+		if seen["name:"+v.Name] {
+			bad(fmt.Sprintf("%s/%d/name", prefix, i), "Name already exists in this collection.")
+		}
+		seen[v.ID], seen["name:"+v.Name] = true, true
+	}
+
+	type span struct{ first, last int }
+	spans := make([]span, len(d.NAT.PortForwards))
+	seen := map[string]bool{}
+	for i, f := range d.NAT.PortForwards {
+		p := fmt.Sprintf("/nat/portForwards/%d", i)
+		unique("/nat/portForwards", i, f.identity, seen)
+		if len(f.IngressZones) == 0 {
+			bad(p+"/ingressZones", "Expected at least one zone.")
+		}
+		for j, z := range f.IngressZones {
+			if !zones[z] {
+				bad(fmt.Sprintf("%s/ingressZones/%d", p, j), "Expected an existing zone.")
+			}
+		}
+		for j, a := range f.From {
+			ref(fmt.Sprintf("%s/from/%d", p, j), a)
+		}
+		if f.To.Address != "" {
+			ref(p+"/to/address", f.To.Address)
+		}
+		first, last, ok := portSpan(f.Ports)
+		if !ok {
+			bad(p+"/ports", "Expected a port or a first-last range within 1-65535.")
+		}
+		spans[i] = span{first, last}
+		switch {
+		case f.NoRedirect && (f.Target != nil || f.TargetPort != nil):
+			bad(p+"/target", "An exclusion translates nothing, so it has no target.")
+		case !f.NoRedirect && f.Target == nil:
+			bad(p+"/target", "Expected a target.")
+		case f.Target != nil && !f.Target.Self:
+			a, e := netip.ParseAddr(f.Target.Address)
+			switch {
+			case e != nil || !a.Is4():
+				bad(p+"/target/address", "Expected an IPv4 address; inbound NAT is IPv4 only.")
+			case a.IsLoopback():
+				// Linux drops a connection translated to 127.0.0.0/8 from another interface unless route_localnet is set.
+				bad(p+"/target/address", "Loopback addresses cannot be targets. Use an address on the loopback interface instead.")
+			case !validUnicast(a):
+				bad(p+"/target/address", "Expected a unicast address.")
+			}
+		}
+		if f.TargetPort != nil && ok && *f.TargetPort+last-first > 65535 {
+			bad(p+"/targetPort", "The shifted range would end past port 65535.")
+		}
+	}
+	// pfSense refuses two forwards that would catch the same connections: same source, destination, an
+	// ingress zone, a protocol and overlapping ports. Forwards differing in any of those are ordered.
+	sameFrom := func(a, b portForward) bool {
+		return a.FromNegated == b.FromNegated && slices.Equal(slices.Sorted(slices.Values(a.From)), slices.Sorted(slices.Values(b.From)))
+	}
+	protocols := func(p string) []string {
+		if p == "tcp-udp" {
+			return []string{"tcp", "udp"}
+		}
+		return []string{p}
+	}
+	for j, b := range d.NAT.PortForwards {
+		for i, a := range d.NAT.PortForwards[:j] {
+			if !a.Enabled || !b.Enabled || a.NoRedirect || b.NoRedirect || !sameFrom(a, b) || a.To != b.To ||
+				!slices.ContainsFunc(a.IngressZones, func(z string) bool { return slices.Contains(b.IngressZones, z) }) ||
+				!slices.ContainsFunc(protocols(a.Protocol), func(p string) bool { return slices.Contains(protocols(b.Protocol), p) }) {
+				continue
+			}
+			if spans[i].first <= spans[j].last && spans[j].first <= spans[i].last && spans[i].first > 0 && spans[j].first > 0 {
+				bad(fmt.Sprintf("/nat/portForwards/%d/ports", j), fmt.Sprintf("These ports overlap port forward %q for the same connections.", a.Name))
+				break
+			}
+		}
+	}
+
+	// own holds the firewall's static IPv4 addresses: 1:1 must not take them over.
+	var own []netip.Addr
+	for _, s := range d.Segments {
+		if s.Addressing.IPv4.Mode != "static" {
+			continue
+		}
+		for _, raw := range s.Addressing.IPv4.Addresses {
+			if p, e := netip.ParsePrefix(raw); e == nil {
+				own = append(own, p.Addr())
+			}
+		}
+	}
+	holdsOwn := func(p netip.Prefix) bool { return slices.ContainsFunc(own, p.Contains) }
+	externals := make([]netip.Prefix, len(d.NAT.OneToOne))
+	seen = map[string]bool{}
+	for i, o := range d.NAT.OneToOne {
+		p := fmt.Sprintf("/nat/oneToOne/%d", i)
+		unique("/nat/oneToOne", i, o.identity, seen)
+		if !zones[o.Zone] {
+			bad(p+"/zone", "Expected an existing zone.")
+		}
+		for j, a := range o.Destination {
+			ref(fmt.Sprintf("%s/destination/%d", p, j), a)
+		}
+		internal, ok := prefix4(o.Internal)
+		if !ok {
+			bad(p+"/internal", "Expected an IPv4 address or a prefix with its host bits zero.")
+		} else if holdsOwn(internal) {
+			bad(p+"/internal", "This range holds one of the firewall's own addresses.")
+		}
+		if o.NoBinat {
+			if o.External != "" {
+				bad(p+"/external", "An exclusion maps nothing, so it has no external address.")
+			}
+			continue
+		}
+		external, extOK := prefix4(o.External)
+		switch {
+		case !extOK:
+			bad(p+"/external", "Expected an IPv4 address or a prefix with its host bits zero.")
+		case holdsOwn(external):
+			bad(p+"/external", "This range holds one of the firewall's own addresses, which 1:1 NAT would take over.")
+		case ok && external.Bits() != internal.Bits():
+			bad(p+"/internal", "Expected a prefix of the same length as the external one.")
+		}
+		if !extOK || !o.Enabled {
+			continue
+		}
+		externals[i] = external
+		for k, other := range externals[:i] {
+			if other.IsValid() && other.Overlaps(external) {
+				bad(p+"/external", fmt.Sprintf("This range overlaps 1:1 entry %q.", d.NAT.OneToOne[k].Name))
+				break
+			}
+		}
+	}
+	return out
+}
+
+// portSpan parses "port" or "first-last" within 1-65535.
+func portSpan(s string) (int, int, bool) {
+	lo, hi, isRange := strings.Cut(s, "-")
+	if !isRange {
+		hi = lo
+	}
+	a, e1 := strconv.Atoi(lo)
+	b, e2 := strconv.Atoi(hi)
+	if e1 != nil || e2 != nil || a < 1 || b > 65535 || a > b || strconv.Itoa(a) != lo || strconv.Itoa(b) != hi {
+		return 0, 0, false
+	}
+	return a, b, true
+}
+
+// prefix4 parses an IPv4 address (as a /32) or an IPv4 prefix with its host bits zero.
+func prefix4(s string) (netip.Prefix, bool) {
+	if a, e := netip.ParseAddr(s); e == nil {
+		return netip.PrefixFrom(a, 32), a.Is4()
+	}
+	p, e := netip.ParsePrefix(s)
+	return p, e == nil && p.Addr().Is4() && p == p.Masked()
+}

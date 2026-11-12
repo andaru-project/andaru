@@ -1169,6 +1169,22 @@
           "properties": {
             "outbound": {
               "$ref": "#/$defs/outboundFields"
+            },
+            "portForwards": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/portForwardStored"
+              },
+              "minItems": 0,
+              "maxItems": 10000
+            },
+            "oneToOne": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/oneToOneStored"
+              },
+              "minItems": 0,
+              "maxItems": 10000
             }
           },
           "required": [
@@ -2489,6 +2505,246 @@
         "servers"
       ],
       "additionalProperties": false
+    },
+    "portForwardID": {
+      "type": "string",
+      "pattern": "^pfw_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "oneToOneID": {
+      "type": "string",
+      "pattern": "^oto_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "portForwardFields": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/portForwardID"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "ingressZones": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/zoneRef"
+              },
+              "minItems": 0,
+              "maxItems": 64
+            },
+            "protocol": {
+              "enum": [
+                "tcp",
+                "udp",
+                "tcp-udp"
+              ]
+            },
+            "from": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/addressRef"
+              },
+              "minItems": 0,
+              "maxItems": 1000
+            },
+            "fromNegated": {
+              "type": "boolean"
+            },
+            "to": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "self": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "self"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "address": {
+                      "$ref": "#/$defs/addressRef"
+                    }
+                  },
+                  "required": [
+                    "address"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "ports": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 11
+            },
+            "noRedirect": {
+              "type": "boolean"
+            },
+            "target": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "self": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "self"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "address": {
+                      "type": "string",
+                      "minLength": 7,
+                      "maxLength": 18
+                    }
+                  },
+                  "required": [
+                    "address"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "targetPort": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "filterRule": {
+              "enum": [
+                "auto",
+                "none"
+              ]
+            },
+            "reflection": {
+              "type": "boolean"
+            },
+            "log": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "enabled",
+            "ingressZones",
+            "protocol",
+            "from",
+            "to",
+            "ports"
+          ]
+        }
+      ]
+    },
+    "portForwardStored": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/portForwardFields"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "required": [
+            "id"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "portForwardWrite": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/portForwardFields"
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "oneToOneFields": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/oneToOneID"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "zone": {
+              "$ref": "#/$defs/zoneRef"
+            },
+            "external": {
+              "type": "string",
+              "minLength": 7,
+              "maxLength": 18
+            },
+            "internal": {
+              "type": "string",
+              "minLength": 7,
+              "maxLength": 18
+            },
+            "destination": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/addressRef"
+              },
+              "minItems": 0,
+              "maxItems": 1000
+            },
+            "noBinat": {
+              "type": "boolean"
+            },
+            "reflection": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "enabled",
+            "zone",
+            "internal",
+            "destination"
+          ]
+        }
+      ]
+    },
+    "oneToOneStored": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/oneToOneFields"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "required": [
+            "id"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "oneToOneWrite": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/oneToOneFields"
+        }
+      ],
+      "unevaluatedProperties": false
     }
   }
 }
