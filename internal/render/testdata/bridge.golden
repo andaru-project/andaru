@@ -23,6 +23,8 @@ RouterPreference=medium
 RouterLifetimeSec=1800
 Managed=yes
 OtherInformation=no
+EmitDNS=no
+EmitDomains=no
 
 [IPv6Prefix]
 Prefix=2001:db8:0:1::/64

@@ -198,6 +198,25 @@ func (r *renderer) addressing(id string, ppp bool) (sections []section, sources 
 				prefixes[i].lines = append(prefixes[i].lines, "AddressAutoconfiguration=no")
 			}
 		}
+		var servers, domains []string
+		if ra.DNS != nil {
+			servers, domains = ra.DNS.Servers, ra.DNS.SearchDomains
+		} else if r.d.DNS != nil && slices.Contains(r.d.DNS.Segments, s.ID) {
+			if _, own, ok := r.servedV6(s.ID); ok {
+				servers = []string{own.String()}
+			} else {
+				r.find("warning", "RA_DNS_UNAVAILABLE", base+"/addresses", "Add a static unique local address so clients can reach the DNS service over IPv6.")
+			}
+			domains = append([]string{r.d.DNS.LocalDomain}, r.d.DNS.SearchDomains...)
+		}
+		send = append(send, "EmitDNS="+yesNo(len(servers) > 0))
+		if len(servers) > 0 {
+			send = append(send, "DNS="+strings.Join(servers, " "))
+		}
+		send = append(send, "EmitDomains="+yesNo(len(domains) > 0))
+		if len(domains) > 0 {
+			send = append(send, "Domains="+strings.Join(domains, " "))
+		}
 		slices.SortFunc(prefixes, func(a, b section) int { return strings.Compare(a.lines[0], b.lines[0]) })
 		if ra.PREF64 != "" {
 			prefixes = append(prefixes, section{"IPv6PREF64Prefix", []string{"Prefix=" + ra.PREF64}})

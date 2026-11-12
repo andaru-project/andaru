@@ -150,7 +150,7 @@ DNS=127.0.0.1 ::1
 table inet andaru {}
 delete table inet andaru
 table inet andaru {
-	comment "sha256:424cf7d500b8ef9a7517309ed202d1817cb5366545bb1fb74c2440303aa34767"
+	comment "sha256:30ead1ce0d1086cbb054143bbb4d1e6d547429b681292664a922ebc097230be3"
 	set zon_00000001_0000_4000_8000_000000000001 { type ifname; elements = { "ens18" }; }
 	set zon_00000002_0000_4000_8000_000000000002 { type ifname; elements = { "ens19" }; }
 	set uplinks { type ifname; elements = { "ens18" }; }
@@ -161,6 +161,7 @@ table inet andaru {
 		iif lo accept
 		icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept
 		ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept
+		ip6 saddr fe80::/10 icmpv6 type { mld-listener-query, mld-listener-report, mld-listener-done, mld2-listener-report } accept
 		iifname "ens19" udp sport 68 udp dport 67 accept
 		iifname "ens19" tcp dport 22 accept
 		iifname @zon_00000002_0000_4000_8000_000000000002 icmp type { echo-request } accept comment "rul_00000001-0000-4000-8000-000000000001"

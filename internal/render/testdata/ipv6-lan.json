@@ -103,5 +103,17 @@
       "id": "zon_00000002-0000-4000-8000-000000000002",
       "name": "lan"
     }
-  ]
+  ],
+  "dns": {
+    "mode": "recursive",
+    "segments": [
+      "seg_00000002-0000-4000-8000-000000000002",
+      "seg_00000003-0000-4000-8000-000000000003"
+    ],
+    "localDomain": "home.arpa",
+    "searchDomains": [
+      "example.org"
+    ],
+    "registerLeases": true
+  }
 }

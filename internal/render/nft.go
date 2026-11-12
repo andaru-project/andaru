@@ -88,6 +88,8 @@ func (r *renderer) filterChains() {
 		"iif lo accept",
 		"icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept",
 		"ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept",
+		// Multicast listener discovery never leaves the link, and RFC 4890 says not to drop it.
+		"ip6 saddr fe80::/10 icmpv6 type { mld-listener-query, mld-listener-report, mld-listener-done, mld2-listener-report } accept",
 	}
 	// DHCP requests come from clients without an address yet, which no rule could name.
 	for _, e := range d.DHCP {

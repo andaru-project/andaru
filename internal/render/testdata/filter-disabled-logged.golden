@@ -73,6 +73,8 @@ RouterPreference=medium
 RouterLifetimeSec=1800
 Managed=no
 OtherInformation=yes
+EmitDNS=no
+EmitDomains=no
 
 ### nft:inet/andaru 0644 secret=false sources=/management,/nat,/policy
 # interface ens18 52:54:00:aa:bb:01
@@ -80,7 +82,7 @@ OtherInformation=yes
 table inet andaru {}
 delete table inet andaru
 table inet andaru {
-	comment "sha256:6e3aeed2b44ca5a7541ee683135fef3d8f0738429dcf1484286608d66452cdae"
+	comment "sha256:c342c15d6061636c41366052e5934a5465ac1540bd2bdc17e253b041f2a4122b"
 	set zon_00000001_0000_4000_8000_000000000001 { type ifname; elements = { "ens18" }; }
 	set zon_00000002_0000_4000_8000_000000000002 { type ifname; elements = { "ens19" }; }
 	set uplinks { type ifname; elements = { "ens18" }; }
@@ -91,6 +93,7 @@ table inet andaru {
 		iif lo accept
 		icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept
 		ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept
+		ip6 saddr fe80::/10 icmpv6 type { mld-listener-query, mld-listener-report, mld-listener-done, mld2-listener-report } accept
 		iifname "ens19" tcp dport 22 accept
 		iifname @zon_00000002_0000_4000_8000_000000000002 icmp type { echo-request } accept comment "rul_00000001-0000-4000-8000-000000000001"
 		iifname @zon_00000002_0000_4000_8000_000000000002 udp dport { 53 } accept comment "rul_00000002-0000-4000-8000-000000000002"

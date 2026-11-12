@@ -69,6 +69,8 @@ RouterPreference=medium
 RouterLifetimeSec=1800
 Managed=no
 OtherInformation=yes
+EmitDNS=no
+EmitDomains=no
 
 ### resolved lnk_00000001-0000-4000-8000-000000000001 -> ens18
 ### resolved lnk_00000002-0000-4000-8000-000000000002 -> ens19

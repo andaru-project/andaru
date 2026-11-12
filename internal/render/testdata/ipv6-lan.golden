@@ -1,3 +1,19 @@
+### /run/andaru-unbound/andaru.conf 0644 secret=false sources=/dhcp,/dns
+server:
+	interface: 127.0.0.1
+	interface: ::1
+	# Unbound may start before networkd has the addresses.
+	ip-freebind: yes
+	interface: 192.168.40.1
+	interface: fd00:a5d:1::1
+	interface: fd00:a5d:2::1
+	access-control: 127.0.0.0/8 allow
+	access-control: ::1/128 allow
+	access-control: 192.168.40.0/24 allow
+	interface-action: fd00:a5d:1::1 allow
+	interface-action: fd00:a5d:2::1 allow
+	local-zone: "home.arpa." static
+
 ### /run/systemd/network/50-andaru-ens18.link 0644 secret=false sources=/links/0
 [Match]
 PermanentMACAddress=52:54:00:aa:bb:01
@@ -19,7 +35,7 @@ DHCP=yes
 IPv6AcceptRA=yes
 
 [DHCPv4]
-UseDNS=yes
+UseDNS=no
 UseNTP=no
 UseHostname=no
 UseDomains=no
@@ -28,7 +44,7 @@ UseDomains=no
 WithoutRA=solicit
 DUIDType=4
 DUIDRawData=aa:bb:cc:dd
-UseDNS=yes
+UseDNS=no
 UseNTP=no
 UseHostname=no
 UseDomains=no
@@ -37,7 +53,7 @@ UseAddress=no
 SendRelease=no
 
 [IPv6AcceptRA]
-UseDNS=yes
+UseDNS=no
 UseDomains=no
 
 ### /run/systemd/network/50-andaru-ens19.link 0644 secret=false sources=/links/1
@@ -74,6 +90,10 @@ RouterPreference=high
 RouterLifetimeSec=1800
 Managed=no
 OtherInformation=no
+EmitDNS=yes
+DNS=fd00:a5d:1::1
+EmitDomains=yes
+Domains=home.arpa example.org
 
 [IPv6Prefix]
 Prefix=fd00:a5d:1::/64
@@ -104,9 +124,18 @@ RouterPreference=medium
 RouterLifetimeSec=0
 Managed=no
 OtherInformation=no
+EmitDNS=yes
+DNS=fd00:a5d:2::1
+EmitDomains=yes
+Domains=home.arpa example.org
 
 [IPv6PREF64Prefix]
 Prefix=64:ff9b::/96
+
+### /run/systemd/resolved.conf.d/50-andaru.conf 0644 secret=false sources=/dns
+[Resolve]
+DNS=127.0.0.1 ::1
+Domains=example.org
 
 ### resolved lnk_00000001-0000-4000-8000-000000000001 -> ens18
 ### resolved lnk_00000002-0000-4000-8000-000000000002 -> ens19

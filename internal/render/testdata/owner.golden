@@ -96,6 +96,8 @@ RouterPreference=medium
 RouterLifetimeSec=1800
 Managed=no
 OtherInformation=yes
+EmitDNS=no
+EmitDomains=no
 
 ### /run/systemd/network/50-andaru-pp000000030000.network 0644 secret=false sources=/links/2,/segments/0
 [Match]

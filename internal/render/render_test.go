@@ -594,3 +594,48 @@ func TestLegacyAdvertisementRenders(t *testing.T) {
 	})
 	lines(t, networkFile(t, render(t, in), "ens20"), "Managed=no", "OtherInformation=no", "Prefix=fd00:a5d:2::/64", "ValidLifetimeSec=86400")
 }
+
+func fileContent(t *testing.T, result Result, path string) string {
+	t.Helper()
+	for _, f := range result.Files {
+		if f.Path == path {
+			return f.Content
+		}
+	}
+	t.Fatalf("no %s: %s", path, golden(result))
+	return ""
+}
+
+func TestDNSOverIPv6(t *testing.T) {
+	result := render(t, fixture(t, "ipv6-lan"))
+	lines(t, fileContent(t, result, "/run/andaru-unbound/andaru.conf"),
+		"\tinterface: fd00:a5d:1::1", "\tinterface-action: fd00:a5d:1::1 allow", "\tinterface: fd00:a5d:2::1", "\tinterface-action: fd00:a5d:2::1 allow")
+	lines(t, networkFile(t, result, "ens19"), "EmitDNS=yes", "DNS=fd00:a5d:1::1", "EmitDomains=yes", "Domains=home.arpa example.org")
+}
+
+func TestAdvertisedDNSOverride(t *testing.T) {
+	ra := func(dns map[string]any) string {
+		return networkFile(t, render(t, change(t, fixture(t, "ipv6-lan"), func(d map[string]any) {
+			item(d, "segments", 1)["addressing"].(map[string]any)["ipv6"].(map[string]any)["ra"] = map[string]any{"mode": "unmanaged", "dns": dns}
+		})), "ens19")
+	}
+	lines(t, ra(map[string]any{"servers": []any{}}), "EmitDNS=no", "EmitDomains=no")
+	lines(t, ra(map[string]any{"servers": []any{"2001:db8::53"}, "searchDomains": []any{"example.net"}}), "DNS=2001:db8::53", "Domains=example.net")
+}
+
+func TestDelegatedWithoutStableAddressWarns(t *testing.T) {
+	result := render(t, change(t, fixture(t, "ipv6-lan"), func(d map[string]any) {
+		delete(item(d, "segments", 1)["addressing"].(map[string]any)["ipv6"].(map[string]any), "addresses")
+	}))
+	lan := networkFile(t, result, "ens19")
+	lines(t, lan, "EmitDNS=no")
+	if !slices.ContainsFunc(result.Findings, func(f Finding) bool {
+		return f.Code == "RA_DNS_UNAVAILABLE" && f.Severity == "warning" && f.Path == "/segments/1/addressing/ipv6/addresses"
+	}) {
+		t.Fatalf("findings %+v", result.Findings)
+	}
+}
+
+func TestMulticastListenerRule(t *testing.T) {
+	lines(t, golden(render(t, fixture(t, "filter-two-zones"))), "\t\tip6 saddr fe80::/10 icmpv6 type { mld-listener-query, mld-listener-report, mld-listener-done, mld2-listener-report } accept")
+}

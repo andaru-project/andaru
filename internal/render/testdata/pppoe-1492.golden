@@ -73,6 +73,8 @@ RouterPreference=medium
 RouterLifetimeSec=1800
 Managed=no
 OtherInformation=yes
+EmitDNS=no
+EmitDomains=no
 
 ### /run/systemd/network/50-andaru-ens18.link 0644 secret=false sources=/links/0
 [Match]
