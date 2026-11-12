@@ -346,6 +346,17 @@ func TestIfupdownGates(t *testing.T) {
 			return in
 		}, []want{{"WOULD_UNCONFIGURE", "ens19"}}},
 		"all static without dns": {static(false), []want{{"DNS_REQUIRED", ""}}},
+		// Servers offered by DHCP alone are enough; the recognised row has router advertisements as well.
+		"dns from dhcp": {func() gateInput {
+			in := static(false)()
+			in.Declaration = []byte(`{"links":[{"kind":"ethernet","enabled":true}],"segments":[{"addressing":{"ipv4":{"mode":"dhcp"},"ipv6":{"mode":"none"}}}]}`)
+			return in
+		}, nil},
+		"dns from dhcp6": {func() gateInput {
+			in := static(false)()
+			in.Declaration = []byte(`{"links":[{"kind":"ethernet","enabled":true}],"segments":[{"addressing":{"ipv4":{"mode":"static"},"ipv6":{"mode":"dhcp6"}}}]}`)
+			return in
+		}, nil},
 		"leftover netplan file": {func() gateInput {
 			in := debian()
 			in.Facts.ForeignFiles = []string{"/run/systemd/network/10-netplan-ens18.network"}
