@@ -116,9 +116,13 @@ func validateNAT(d *declaration) []FieldError {
 		}
 		// A shifted range renders one map entry per port, zone and source; the whole configuration has a budget.
 		if f.Enabled && f.TargetPort != nil && ok && *f.TargetPort != first && last != first {
-			lines := len(f.IngressZones)
+			sources := 1
 			if !f.FromNegated {
-				lines *= max(1, len(f.From))
+				sources = max(1, len(f.From))
+			}
+			lines := len(f.IngressZones) * sources
+			if f.Reflection {
+				lines += sources // the reflection copy, once for internal clients
 			}
 			if budget -= (last - first + 1) * lines; budget < 0 {
 				bad(p+"/targetPort", fmt.Sprintf("Shifted port ranges render more than %d map entries in all. Keep the ports, or shift fewer.", maxNATMapEntries))

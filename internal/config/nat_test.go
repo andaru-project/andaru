@@ -238,3 +238,13 @@ func TestManyForwardsValidateQuickly(t *testing.T) {
 		t.Fatalf("validating 5000 forwards took %v", took)
 	}
 }
+
+// Reflection renders the shifted map again for internal clients, so it counts against the budget too.
+func TestShiftedRangeBudgetCountsReflection(t *testing.T) {
+	d := natFixture(t)
+	setNAT(d, "portForwards", forward(d, map[string]any{"ports": "1-40000", "targetPort": 2, "reflection": true}))
+	refusedAt(t, d, "/nat/portForwards/0/targetPort")
+	d = natFixture(t)
+	setNAT(d, "portForwards", forward(d, map[string]any{"ports": "1-32768", "targetPort": 2, "reflection": true}))
+	accepted(t, d)
+}
