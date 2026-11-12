@@ -14,7 +14,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -166,6 +165,7 @@ var acceptAll = []struct{ marker, keys []string }{
 	{[]string{"eth1: IPv6"}, []string{enter}},
 	{[]string{"DNS servers for this host"}, []string{enter}},
 	{[]string{"Search domains"}, []string{enter, enter}},
+	{[]string{"Management adapter"}, []string{enter}},
 	{[]string{"Seconds to confirm"}, []string{enter}},
 }
 
@@ -307,8 +307,12 @@ func TestClosingTheTerminalWritesNothing(t *testing.T) {
 	s.await("What now?")
 	s.hangup()
 	err = cmd.Wait()
+	if ctx.Err() != nil {
+		t.Fatalf("the assistant ignored the hangup until the test deadline killed it: %v", err)
+	}
 	var exitErr *exec.ExitError
-	if !errors.As(err, &exitErr) || exitErr.Sys().(syscall.WaitStatus).Signal() != syscall.SIGHUP {
+	// The hangup ends it either by SIGHUP or, when the read sees the closed terminal first, by a failing exit.
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() == 0 {
 		t.Fatalf("want the assistant ended by the hangup, got %v", err)
 	}
 	if _, err := os.Stat(marks); !errors.Is(err, os.ErrNotExist) {

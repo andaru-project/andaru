@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -26,7 +28,12 @@ func labProposal(t *testing.T) proposal {
 		{"op":"create","collection":"links","localId":"link1","value":{"enabled":true,"kind":"ethernet","mtu":1500,"name":"eth0","permanentMac":"bc:24:11:89:01:10"}},
 		{"op":"create","collection":"links","localId":"link2","value":{"enabled":true,"kind":"ethernet","mtu":1500,"name":"eth1","permanentMac":"02:00:00:00:00:02"}},
 		{"op":"create","collection":"segments","localId":"seg1","value":{"addressing":{"dns":{"searchDomains":["lab.example"],"servers":["172.16.53.53"]},"ipv4":{"addresses":["10.0.1.19/16"],"gateway":"10.0.0.1","mode":"static"},"ipv6":{"mode":"slaac"}},"link":"@link1","name":"eth0","zone":"@wan"}},
-		{"op":"create","collection":"segments","localId":"seg2","value":{"addressing":{"ipv4":{"mode":"dhcp"},"ipv6":{"mode":"none"}},"link":"@link2","name":"eth1","zone":"@lan"}}]}`
+		{"op":"create","collection":"segments","localId":"seg2","value":{"addressing":{"ipv4":{"mode":"dhcp"},"ipv6":{"mode":"none"}},"link":"@link2","name":"eth1","zone":"@lan"}},
+		{"op":"create","collection":"services","localId":"ping","value":{"name":"ping","protocol":"icmp","types":["echo-request"]}},
+		{"op":"create","collection":"policy.input","localId":"lanToFirewall","value":{"action":"accept","enabled":true,"from":["@lan"],"log":false,"name":"lan to firewall","services":["@ping"],"to":[]}},
+		{"op":"create","collection":"policy.forward","localId":"lanOut","value":{"action":"accept","enabled":true,"from":["@lan"],"log":false,"name":"lan to any","services":[],"to":[]}},
+		{"op":"replace","collection":"nat.outbound","expectedVersion":"0","value":{"mode":"automatic"}},
+		{"op":"replace","collection":"management","expectedVersion":"0","value":{"segment":"@seg1"}}]}`
 	var p proposal
 	if err := json.Unmarshal([]byte(raw), &p); err != nil {
 		t.Fatal(err)
@@ -273,5 +280,111 @@ func TestAdapterRequiredCannotBeLeftOut(t *testing.T) {
 	}
 	if err := s.checkKept([]string{"link1", "link2"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The operator's management choice and zone changes carry into the batch; rules for a zone that is gone go too.
+func TestAnswersMoveManagementAndDropOrphanRules(t *testing.T) {
+	p := labProposal(t)
+	a := defaultAnswers(p)
+	if a.Management != "link1" {
+		t.Fatalf("management answer %q", a.Management)
+	}
+	a.Management = "link2"
+	ops, err := batch(p, a)
+	if err != nil || !strings.Contains(opsJSON(t, ops), `"value":{"segment":"@seg2"}`) {
+		t.Fatalf("management not moved: %v %s", err, opsJSON(t, ops))
+	}
+	lan := a.Adapters["link2"]
+	lan.Zone = "wan"
+	a.Adapters["link2"] = lan
+	ops, _ = batch(p, a)
+	if got := opsJSON(t, ops); strings.Contains(got, `"@lan"`) || !strings.Contains(got, `"nat.outbound"`) {
+		t.Fatalf("rules for a removed zone kept: %s", got)
+	}
+	for id, ad := range a.Adapters {
+		ad.Zone = "lan"
+		a.Adapters[id] = ad
+	}
+	if ops, err = batch(p, a); err != nil || strings.Contains(opsJSON(t, ops), `"nat.outbound"`) {
+		t.Fatalf("outbound NAT without an uplink: %v %s", err, opsJSON(t, ops))
+	}
+	gone := a.Adapters["link2"]
+	gone.Keep = false
+	a.Adapters["link2"] = gone
+	if _, err := batch(p, a); err == nil {
+		t.Fatal("management on an adapter left out was accepted")
+	}
+}
+
+func TestProposalCarriesTheSessionAddress(t *testing.T) {
+	var asked string
+	socket := replySocket(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = r.URL.RequestURI()
+		io.WriteString(w, `{"state":"ready","savedVersion":"9","adapters":[],"findings":[],"operations":[]}`)
+	}))
+	c := &httpTakeoverClient{socket: socket, via: "fe80::1%eth0"}
+	if _, err := c.Proposal(context.Background()); err != nil || asked != "/api/v1/takeover/proposal?via=fe80%3A%3A1%25eth0" {
+		t.Fatalf("asked %q: %v", asked, err)
+	}
+}
+
+func TestSSHConnectionSurvivesSudo(t *testing.T) {
+	proc := t.TempDir()
+	write := func(pid, name, content string) {
+		if err := os.MkdirAll(filepath.Join(proc, pid), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(proc, pid, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// sudo (40) dropped the variable; the login shell (30) under sshd (20) still has it. A command name may hold ") ".
+	write("40", "environ", "HOME=/root\x00SUDO_USER=andaru\x00")
+	write("40", "stat", "40 (sudo) S 30 40 30 0")
+	write("30", "environ", "USER=andaru\x00SSH_CONNECTION=10.0.0.5 51000 10.0.1.19 22\x00")
+	write("30", "stat", "30 (ba) sh) S 20 30 30 0")
+	write("20", "environ", "")
+	write("20", "stat", "20 (sshd) S 1 20 20 0")
+	if got := sshConnection(proc, 40); got != "10.0.0.5 51000 10.0.1.19 22" {
+		t.Fatalf("got %q", got)
+	}
+	if got := sshConnection(proc, 20); got != "" {
+		t.Fatalf("outside SSH got %q", got)
+	}
+}
+
+// The form starts from the management answer, so accepting it or going back keeps the SSH-derived choice.
+func TestFormKeepsTheManagementAnswer(t *testing.T) {
+	p := labProposal(t)
+	a := defaultAnswers(p)
+	a.Management = "link2"
+	if got := newFormState(p, a).answers(a).Management; got != "link2" {
+		t.Fatalf("management %q", got)
+	}
+}
+
+// Every adapter detected as an uplink: choosing LAN for one in the assistant still brings the LAN its starter rules.
+func TestAnswersAddStarterRulesForANewLAN(t *testing.T) {
+	p := labProposal(t)
+	p.Starter = slices.DeleteFunc(slices.Clone(p.Operations), func(op config.Operation) bool {
+		return !slices.Contains([]string{"services", "policy.input", "policy.forward", "nat.outbound"}, op.Collection)
+	})
+	p.Operations = slices.DeleteFunc(p.Operations, func(op config.Operation) bool {
+		return op.Collection == "services" || op.Collection == "policy.input" || op.Collection == "policy.forward" || op.LocalID == "lan"
+	})
+	a := defaultAnswers(p)
+	wan := a.Adapters["link2"]
+	wan.Zone = "wan"
+	a.Adapters["link2"] = wan
+	ops, err := batch(p, a)
+	if err != nil || strings.Contains(opsJSON(t, ops), `"lanOut"`) {
+		t.Fatalf("starter rules without a LAN: %v %s", err, opsJSON(t, ops))
+	}
+	lan := a.Adapters["link2"]
+	lan.Zone = "lan"
+	a.Adapters["link2"] = lan
+	if ops, err = batch(p, a); err != nil || !strings.Contains(opsJSON(t, ops), `"lanOut"`) || !strings.Contains(opsJSON(t, ops), `"localId":"ping"`) {
+		t.Fatalf("a LAN chosen in the assistant got no starter rules: %v %s", err, opsJSON(t, ops))
 	}
 }

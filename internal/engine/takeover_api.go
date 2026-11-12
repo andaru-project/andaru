@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"slices"
 	"strings"
 
@@ -174,13 +176,14 @@ type proposalView struct {
 	State        string             `json:"state"`
 	SavedVersion config.Version     `json:"savedVersion"`
 	Operations   []config.Operation `json:"operations"`
+	Starter      []config.Operation `json:"starter"`
 	Adapters     []adapterView      `json:"adapters"`
 	Findings     []render.Finding   `json:"findings"`
 }
 
 func (h *takeoverHandler) serveProposal(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	view := proposalView{Operations: []config.Operation{}, Adapters: []adapterView{}, Findings: []render.Finding{}}
+	view := proposalView{Operations: []config.Operation{}, Starter: starterOperations(), Adapters: []adapterView{}, Findings: []render.Finding{}}
 	input, err := h.head(ctx, nil)
 	if err != nil {
 		writeConfigurationError(w, r, err)
@@ -194,11 +197,17 @@ func (h *takeoverHandler) serveProposal(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var saved struct {
-		Links    []json.RawMessage `json:"links"`
-		Segments []json.RawMessage `json:"segments"`
-		Zones    []json.RawMessage `json:"zones"`
+		Links      []json.RawMessage `json:"links"`
+		Segments   []json.RawMessage `json:"segments"`
+		Zones      []json.RawMessage `json:"zones"`
+		Objects    json.RawMessage   `json:"objects"`
+		Policy     json.RawMessage   `json:"policy"`
+		NAT        json.RawMessage   `json:"nat"`
+		Management json.RawMessage   `json:"management"`
 	}
 	_ = json.Unmarshal(input.Value, &saved)
+	// A saved filter section counts too: the proposal would otherwise activate saved rules the review never shows, or collide with a saved singleton.
+	filterSaved := len(saved.Objects)+len(saved.Policy)+len(saved.NAT)+len(saved.Management) > 0
 	unsupported := func(path, message string) {
 		view.State = "unsupported"
 		view.Findings = append(view.Findings, render.Finding{Severity: "error", Code: "TAKEOVER_UNSUPPORTED_BASELINE", Path: path, Message: message})
@@ -206,7 +215,7 @@ func (h *takeoverHandler) serveProposal(w http.ResponseWriter, r *http.Request) 
 	switch {
 	case pointers.Takeover || pointers.Pending != nil || pointers.Confirmed != nil:
 		view.State = "taken-over"
-	case len(saved.Links)+len(saved.Segments)+len(saved.Zones) > 0:
+	case len(saved.Links)+len(saved.Segments)+len(saved.Zones) > 0 || filterSaved:
 		view.State = "saved-not-applied"
 	}
 	if view.State != "" {
@@ -268,7 +277,7 @@ func (h *takeoverHandler) serveProposal(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, r, http.StatusOK, view)
 		return
 	}
-	view.State, view.Operations, view.Adapters = "ready", proposalOperations(found), adapters(found, links, false)
+	view.State, view.Operations, view.Adapters = "ready", proposalOperations(found, viaInterface(links, r)), adapters(found, links, false)
 	writeJSON(w, r, http.StatusOK, view)
 }
 
@@ -288,8 +297,24 @@ func family(a host.Addressing) map[string]any {
 	return out
 }
 
-// proposalOperations turns what netplan configures into one create-only change batch.
-func proposalOperations(found []host.Detected) []config.Operation {
+// proposalOperations turns what the host configures into one change batch, with starter rules for the LAN,
+// outbound NAT for the uplink, and management on the segment of via, the interface the operator's session uses.
+// starterOperations are the LAN's starter services and rules, then outbound NAT for the uplinks.
+// The proposal carries all of them, so a client that changes the zones can add what the detection left out.
+func starterOperations() []config.Operation {
+	return []config.Operation{
+		create("services", "ping", map[string]any{"name": "ping", "protocol": "icmp", "types": []string{"echo-request"}}),
+		create("services", "ping6", map[string]any{"name": "ping6", "protocol": "icmpv6", "types": []string{"echo-request"}}),
+		create("services", "dnsUdp", map[string]any{"name": "dns-udp", "protocol": "udp", "ports": []string{"53"}}),
+		create("services", "dnsTcp", map[string]any{"name": "dns-tcp", "protocol": "tcp", "ports": []string{"53"}}),
+		create("services", "dns", map[string]any{"name": "dns", "protocol": "group", "members": []string{"@dnsUdp", "@dnsTcp"}}),
+		create("policy.input", "lanToFirewall", starterRule("lan to firewall: ping and DNS", "@ping", "@ping6", "@dns")),
+		create("policy.forward", "lanOut", starterRule("lan to any")),
+		singleton("nat.outbound", map[string]any{"mode": "automatic"}),
+	}
+}
+
+func proposalOperations(found []host.Detected, via string) []config.Operation {
 	zones := map[string]bool{}
 	var links, segments []config.Operation
 	for i, n := range found {
@@ -316,7 +341,48 @@ func proposalOperations(found []host.Detected) []config.Operation {
 			ops = append(ops, create("zones", zone, map[string]any{"name": zone}))
 		}
 	}
-	return slices.Concat(ops, links, segments)
+	ops = slices.Concat(ops, links, segments)
+	starter := starterOperations()
+	if zones["lan"] {
+		ops = append(ops, starter[:7]...)
+	}
+	if zones["wan"] {
+		ops = append(ops, starter[7])
+	}
+	// Management stays where the operator is: their session's segment, else the LAN, else the uplink.
+	management := slices.IndexFunc(found, func(n host.Detected) bool { return n.Name == via })
+	if management < 0 {
+		management = max(slices.IndexFunc(found, func(n host.Detected) bool { return !n.DefaultRoute }), 0)
+	}
+	if len(found) > 0 {
+		ops = append(ops, singleton("management", map[string]any{"segment": fmt.Sprintf("@seg%d", management+1)}))
+	}
+	return ops
+}
+
+// viaInterface names the interface holding the address in ?via=, the local end of the operator's SSH session.
+func viaInterface(links []host.LinkStatus, r *http.Request) string {
+	via, err := netip.ParseAddr(r.URL.Query().Get("via"))
+	if err != nil {
+		return ""
+	}
+	for _, l := range links {
+		if slices.ContainsFunc(l.Addresses, func(a host.AddressStatus) bool { return a.Address == via.Unmap().WithZone("").String() }) {
+			return l.Name
+		}
+	}
+	return ""
+}
+
+func starterRule(name string, services ...string) map[string]any {
+	return map[string]any{"name": name, "enabled": true, "action": "accept", "from": []string{"@lan"}, "to": []string{}, "services": append([]string{}, services...), "log": false}
+}
+
+// singleton sets a configuration object that exists at most once; a takeover sets it for the first time.
+func singleton(collection string, value any) config.Operation {
+	raw, _ := json.Marshal(value)
+	unset := config.Version("0")
+	return config.Operation{Op: "replace", Collection: collection, ExpectedVersion: &unset, Value: raw}
 }
 
 func describe(a host.Addressing) string {
@@ -352,6 +418,62 @@ func adapters(found []host.Detected, links []host.LinkStatus, required bool) []a
 type draftView struct {
 	previewResponse
 	ApplyFindings []render.Finding `json:"applyFindings"`
+	// Rules is the policy as the review shows it: each rule with its position and its references by name.
+	Rules []ruleRow `json:"rules"`
+}
+
+type ruleRow struct {
+	Chain    string   `json:"chain"`
+	Position int      `json:"position"`
+	Name     string   `json:"name"`
+	Enabled  bool     `json:"enabled"`
+	Action   string   `json:"action"`
+	From     []string `json:"from"`
+	To       []string `json:"to"`
+	Services []string `json:"services"`
+	Log      bool     `json:"log"`
+}
+
+// ruleTable lists a declaration's rules in execution order with the names of what they reference.
+func ruleTable(value json.RawMessage) []ruleRow {
+	type named struct{ ID, Name string }
+	var d struct {
+		Zones   []named
+		Objects struct{ Addresses, Services []named }
+		Policy  struct {
+			Input, Forward []struct {
+				Name, Action       string
+				Enabled, Log       bool
+				From, To, Services []string
+			}
+		}
+	}
+	_ = json.Unmarshal(value, &d)
+	names := map[string]string{}
+	for _, list := range [][]named{d.Zones, d.Objects.Addresses, d.Objects.Services} {
+		for _, n := range list {
+			names[n.ID] = n.Name
+		}
+	}
+	resolve := func(ids []string) []string {
+		out := []string{}
+		for _, id := range ids {
+			out = append(out, cmp.Or(names[id], id))
+		}
+		return out
+	}
+	rows := []ruleRow{}
+	for _, chain := range []string{"input", "forward"} {
+		list := d.Policy.Input
+		if chain == "forward" {
+			list = d.Policy.Forward
+		}
+		for i, r := range list {
+			rows = append(rows, ruleRow{Chain: chain, Position: i + 1, Name: r.Name, Enabled: r.Enabled, Action: r.Action,
+				From: resolve(r.From), To: resolve(r.To), Services: resolve(r.Services), Log: r.Log})
+		}
+	}
+	return rows
 }
 
 func (h *takeoverHandler) serveDraft(w http.ResponseWriter, r *http.Request) {
@@ -385,7 +507,7 @@ func (h *takeoverHandler) judge(w http.ResponseWriter, r *http.Request, input co
 			if gate.Takeover && gate.fromIfupdown() {
 				gate.Result.Findings = append(gate.Result.Findings, ifupdownLimits(gate.Ifupdown)...)
 			}
-			writeJSON(w, r, http.StatusOK, draftView{previewResponse{State: "draft", SavedVersion: input.SavedVersion, Result: gate.Result}, findings})
+			writeJSON(w, r, http.StatusOK, draftView{previewResponse{State: "draft", SavedVersion: input.SavedVersion, Result: gate.Result}, findings, ruleTable(input.Value)})
 			return
 		}
 	}
@@ -446,6 +568,6 @@ func (h *takeoverHandler) proposeIfupdown(w http.ResponseWriter, r *http.Request
 			detected[uplink].DNS, detected[uplink].Domains = servers, slices.DeleteFunc(domains, func(d string) bool { return strings.HasPrefix(d, "~") })
 		}
 	}
-	view.State, view.Operations, view.Adapters = "ready", proposalOperations(detected), adapters(detected, links, true)
+	view.State, view.Operations, view.Adapters = "ready", proposalOperations(detected, viaInterface(links, r)), adapters(detected, links, true)
 	writeJSON(w, r, http.StatusOK, view)
 }

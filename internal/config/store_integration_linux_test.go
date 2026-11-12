@@ -870,3 +870,52 @@ func TestStoreRealizationInput(t *testing.T) {
 		t.Fatalf("unknown version: %v", err)
 	}
 }
+
+// A store made before the filter gains its table on open; filter objects then persist with their versions and order.
+func TestFilterObjectsPersist(t *testing.T) {
+	path := ownedDir(t)
+	ctx := context.Background()
+	s := openTestStore(t, path)
+	if _, e := s.Save(ctx, "unix:uid:0", networkInput(t)); e != nil {
+		t.Fatal(e)
+	}
+	s.Close()
+	db, e := openDatabase(ctx, filepath.Join(path, "configuration", "config.db"), "rw", false)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = db.ExecContext(ctx, "DROP TABLE policy_changes"); e != nil {
+		t.Fatal(e)
+	}
+	db.Close()
+
+	s = openTestStore(t, path)
+	zero := Version("0")
+	if _, e = s.Save(ctx, "unix:uid:0", Changes{Operations: []Operation{
+		{Op: "create", Collection: "policy.forward", LocalID: "a", Value: json.RawMessage(`{"name":"a","enabled":true,"action":"accept","from":[],"to":[],"services":[],"log":false}`)},
+		{Op: "create", Collection: "policy.forward", LocalID: "b", Value: json.RawMessage(`{"name":"b","enabled":true,"action":"drop","from":[],"to":[],"services":[],"log":false}`)},
+		{Op: "replace", Collection: "nat.outbound", ExpectedVersion: &zero, Value: json.RawMessage(`{"mode":"automatic"}`)},
+	}}); e != nil {
+		t.Fatalf("save after the table was added: %v", e)
+	}
+	s.Close()
+	s = openTestStore(t, path)
+	list, e := s.List(ctx, "policy.forward")
+	if e != nil || len(list.Items) != 2 {
+		t.Fatalf("rules %+v %v", list, e)
+	}
+	var r rule
+	_ = json.Unmarshal(list.Items[0].Value, &r)
+	if r.Name != "a" || list.Items[0].Version == "" {
+		t.Fatalf("first rule %+v version %q", r, list.Items[0].Version)
+	}
+	// The declaration preview and apply render from carries the filter too.
+	in, e := s.RealizationInput(ctx, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var d declaration
+	if e = json.Unmarshal(in.Value, &d); e != nil || len(d.Policy.Forward) != 2 || d.NAT.Outbound.Mode != "automatic" {
+		t.Fatalf("realization input lost the filter: %s %v", in.Value, e)
+	}
+}

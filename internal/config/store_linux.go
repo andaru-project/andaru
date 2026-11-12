@@ -119,6 +119,12 @@ func Open(ctx context.Context, stateDir string) (*Store, error) {
 		cfg.Close()
 		return nil, diagnostic("open-secret", e)
 	}
+	// A store made before the packet filter lacks policy_changes; adding it is the whole migration.
+	if _, e = cfg.ExecContext(ctx, policyDDL); e != nil {
+		cfg.Close()
+		sec.Close()
+		return nil, diagnostic("open-config-policy-table", e)
+	}
 	s := &Store{root: stateDir, configDB: cfg, secretDB: sec, lock: lock, gate: make(chan struct{}, 1), failure: make(chan error, 1)}
 	s.gate <- struct{}{}
 	conn, e := s.configDB.Conn(ctx)

@@ -105,13 +105,17 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 	for k := range active {
 		wanted[k] = true
 	}
+	// Lists and singletons carry versions even when empty or unset.
+	for _, col := range append(slices.Clone(orderedCollections), singletons...) {
+		wanted[listKey(col)] = true
+	}
 	for _, k := range requested {
 		if validCollection(k.Collection) {
 			wanted[k] = true
 		}
 	}
 	state.Versions = make(map[objectKey]objectVersion, len(wanted))
-	for _, col := range []string{"links", "segments", "zones"} {
+	for _, col := range collections {
 		ids := []string{}
 		for key := range wanted {
 			if key.Collection == col {
@@ -122,7 +126,8 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 			continue
 		}
 		raw, _ := json.Marshal(ids)
-		rows, e := conn.QueryContext(ctx, `SELECT c.object_id,c.version_id,c.deleted FROM object_changes c WHERE c.collection=? AND c.object_id IN (SELECT value FROM json_each(?)) AND c.version_id=(SELECT max(n.version_id) FROM object_changes n WHERE n.collection=c.collection AND n.object_id=c.object_id AND n.version_id<=?)`, col, string(raw), number)
+		table := changeTable(col)
+		rows, e := conn.QueryContext(ctx, `SELECT c.object_id,c.version_id,c.deleted FROM `+table+` c WHERE c.collection=? AND c.object_id IN (SELECT value FROM json_each(?)) AND c.version_id=(SELECT max(n.version_id) FROM `+table+` n WHERE n.collection=c.collection AND n.object_id=c.object_id AND n.version_id<=?)`, col, string(raw), number)
 		if e != nil {
 			return state, info, diagnostic("load-object-metadata-query", e)
 		}
@@ -194,6 +199,18 @@ func (s *Store) List(ctx context.Context, collection string) (result CollectionV
 			}
 		}
 		slices.SortFunc(keys, compareKeys)
+		if slices.Contains(orderedCollections, collection) {
+			// A rule list is returned in execution order, with the version that guards that order.
+			result.Version = versionOf(&state, listKey(collection)).Version
+			keys = keys[:0]
+			list := state.Config.Policy.Input
+			if collection == "policy.forward" {
+				list = state.Config.Policy.Forward
+			}
+			for _, r := range list {
+				keys = append(keys, objectKey{collection, r.ID})
+			}
+		}
 		for _, key := range keys {
 			v, e := viewObject(index[key], state.Versions[key].Version, state.Secrets)
 			if e != nil {
@@ -305,7 +322,7 @@ func (s *Store) Version(ctx context.Context, id Version) (result VersionView, er
 	}
 	result = VersionView{State: "saved", VersionInfo: info, Value: snapshot.Value, Changes: []objectChange{}}
 	number, _ := strconvVersion(id)
-	rows, e := conn.QueryContext(ctx, "SELECT collection,object_id,created,deleted FROM object_changes WHERE version_id=? ORDER BY collection,object_id", number)
+	rows, e := conn.QueryContext(ctx, "SELECT collection,object_id,created,deleted FROM object_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM policy_changes WHERE version_id=? ORDER BY 1,2", number, number)
 	if e != nil {
 		return result, diagnostic("version-changes-query", e)
 	}

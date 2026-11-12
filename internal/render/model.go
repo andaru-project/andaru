@@ -46,6 +46,7 @@ type ipv6 struct {
 type segment struct {
 	ID         string `json:"id"`
 	Link       string `json:"link"`
+	Zone       string `json:"zone"`
 	Addressing struct {
 		IPv4 ipv4 `json:"ipv4"`
 		IPv6 ipv6 `json:"ipv6"`
@@ -55,10 +56,46 @@ type segment struct {
 		} `json:"dns"`
 	} `json:"addressing"`
 }
+type address struct {
+	ID, Kind, Address, Prefix, First, Last string
+	Members                                []string
+}
+type service struct {
+	ID, Protocol          string
+	Ports, Types, Members []string
+}
+type rule struct {
+	ID, Action         string
+	Enabled, Log       bool
+	From, To, Services []string
+}
 type declaration struct {
 	Links    []link    `json:"links"`
 	Segments []segment `json:"segments"`
+	Zones    []struct {
+		ID string `json:"id"`
+	} `json:"zones"`
+	Objects struct {
+		Addresses []address `json:"addresses"`
+		Services  []service `json:"services"`
+	} `json:"objects"`
+	Policy struct {
+		Input   []rule `json:"input"`
+		Forward []rule `json:"forward"`
+	} `json:"policy"`
+	NAT struct {
+		Outbound struct {
+			Mode string `json:"mode"`
+		} `json:"outbound"`
+	} `json:"nat"`
+	Management *struct {
+		Segment        string   `json:"segment"`
+		AllowedSources []string `json:"allowedSources"`
+	} `json:"management"`
 }
+
+// filtered reports that the declaration switches the packet filter on: a management segment is set.
+func (d declaration) filtered() bool { return d.Management != nil && d.Management.Segment != "" }
 
 // Input is everything a render depends on. Secrets holds real values.
 type Input struct {

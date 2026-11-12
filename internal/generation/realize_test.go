@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -37,6 +39,10 @@ type fakeNetworkd struct {
 	stopped            bool // networkd is not running: networkctl fails
 	// ifupdown, for hosts the Debian installer set up: ifupFails makes ifup@ and networking.service raise nothing.
 	ifupFails bool
+	// table is the comment of the loaded inet andaru table, "" when none is loaded; tableComment overrides what nft reports.
+	table, tableComment string
+	script              string // what nft -f last loaded
+	noNft               bool   // nft is not installed
 
 	dns     map[string][]string     // what resolved reports per interface
 	editDNS func([]string) []string // distorts that report
@@ -94,6 +100,9 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 	defer f.mu.Unlock()
 	command := filepath.Base(name) + " " + strings.Join(args, " ")
 	f.argv = append(f.argv, command)
+	if f.noNft && filepath.Base(name) == "nft" {
+		return nil, &fs.PathError{Op: "fork/exec", Path: name, Err: syscall.ENOENT}
+	}
 	if f.onRun != nil {
 		f.onRun(command)
 	}
@@ -105,6 +114,29 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 		if f.stopped {
 			return nil, errors.New("inactive")
 		}
+	case strings.HasPrefix(command, "nft -f "):
+		data, err := os.ReadFile(args[1])
+		if err != nil {
+			return nil, err
+		}
+		f.script = string(data)
+		if m := regexp.MustCompile(`comment "([^"]+)"`).FindSubmatch(data); m != nil {
+			f.table = string(m[1])
+		}
+	case command == "nft -j list table inet andaru":
+		if f.table == "" {
+			return nil, errors.New("nft [-j list table inet andaru]: exit status 1: Error: No such file or directory")
+		}
+		comment := f.table
+		if f.tableComment != "" {
+			comment = f.tableComment
+		}
+		return []byte(`{"nftables":[{"metainfo":{}},{"table":{"family":"inet","name":"andaru","comment":"` + comment + `"}}]}`), nil
+	case command == "nft delete table inet andaru":
+		if f.table == "" {
+			return nil, errors.New("nft [delete table inet andaru]: exit status 1: Error: No such file or directory")
+		}
+		f.table = ""
 	case command == "systemctl start systemd-networkd.service":
 		f.stopped = false
 	case command == "systemctl stop systemd-networkd.service systemd-networkd.socket":
@@ -220,6 +252,8 @@ func newBench(t *testing.T) *bench {
 	if err := os.MkdirAll(b.dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	writeFile(t, filepath.Join(root, ipv6Forwarding), "0\n")
+	writeFile(t, filepath.Join(root, ipv4Forwarding), "1\n") // as the filtered generation's networkd files left it
 	// As on a Debian cloud image: resolv.conf is systemd-resolved's stub.
 	writeFile(t, filepath.Join(root, "run/systemd/resolve/stub-resolv.conf"), "nameserver 127.0.0.53\n")
 	if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {

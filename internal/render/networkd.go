@@ -248,6 +248,10 @@ func (r *renderer) networkd(i int) {
 		network = append(network, key+r.name[m])
 	}
 	sections, sources := r.addressing(l.ID, false)
+	if _, segmented := r.segment[l.ID]; segmented && r.d.filtered() {
+		// Forwarding only together with the filter: nothing may route unfiltered.
+		network = append(network, "IPv4Forwarding=yes", "IPv6Forwarding=yes")
+	}
 	sections[0].lines = append(network, sections[0].lines...)
 	r.file(networkDir+name+".network", "0644", ini(append([]section{{"Match", []string{match}}, {"Link", settings}}, sections...)...), append(sources, self))
 }

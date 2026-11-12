@@ -314,7 +314,8 @@ func (r Realizer) Boot(ctx context.Context) error {
 		}
 		// The adapters get their names first, so everything after sees the final ones: udev may have named them
 		// before the .link files existed, and they are down until networkd starts.
-		if links := slices.DeleteFunc(slices.Clone(set), func(f placed) bool { return !strings.HasSuffix(f.path, ".link") }); len(links) > 0 {
+		links := slices.DeleteFunc(slices.Clone(set), func(f placed) bool { return !strings.HasSuffix(f.path, ".link") })
+		if len(links) > 0 {
 			if err := r.place(nil, links); err != nil {
 				return err
 			}
@@ -324,6 +325,22 @@ func (r Realizer) Boot(ctx context.Context) error {
 				}
 			}
 		}
+		// A candidate whose filter does not load is unusable: never its files without its filter.
+		path, comment, ok, err := r.filter(g)
+		if err == nil && ok {
+			err = r.loadFilter(ctx, path, comment)
+		} else if err == nil {
+			// An earlier candidate's filter may have half-loaded; this generation runs without one.
+			err = r.dropFilter(ctx)
+		}
+		if err != nil {
+			failures = append(failures, fmt.Errorf("generation %d: its packet filter does not load: %w", *id, err))
+			// None of an unusable candidate's files may stay, its adapter names included.
+			if err := r.place(links, nil); err != nil {
+				failures = append(failures, err)
+			}
+			continue
+		}
 		if err := r.place(nil, set); err != nil {
 			return err
 		}
@@ -332,6 +349,10 @@ func (r Realizer) Boot(ctx context.Context) error {
 			slog.Error("boot fell back to an older generation", "generation", *id, "error", errors.Join(failures...))
 		}
 		return r.writePointers("boot:pointers", p)
+	}
+	// A candidate's filter can fail after nft accepted it (readback, sysctl); no generation runs, so neither does a filter.
+	if err := r.dropFilter(ctx); err != nil {
+		failures = append(failures, err)
 	}
 	if kind == "ifupdown" && ifupdown != nil {
 		return r.bootIfupdown(ctx, p, *ifupdown, failures)

@@ -84,6 +84,9 @@ func (b *applyBench) tool(_ context.Context, name string, args ...string) ([]byt
 		return []byte(`[{"ifindex":2,"ifname":"eth0","link_type":"ether","operstate":"UP","mtu":1500,"flags":[],"address":"52:54:00:aa:bb:01","addr_info":[{"family":"inet","local":"10.0.1.19","prefixlen":20,"scope":"global"}]}]`), nil
 	case "ip -j route show default":
 		return []byte(`[{"dst":"default","dev":"eth0"}]`), nil
+	case "nft -j list table inet andaru":
+		// No test here loads a filter.
+		return nil, errors.New("nft [-j list table inet andaru]: exit status 1: Error: No such file or directory")
 	}
 	return nil, nil
 }

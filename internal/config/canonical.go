@@ -34,4 +34,22 @@ func normalizeDeclaration(d *declaration) {
 		slices.Sort(d.Segments[i].Addressing.IPv4.Addresses)
 		slices.Sort(d.Segments[i].Addressing.IPv6.Addresses)
 	}
+	// Objects are sets; policy lists are ordered and keep their order.
+	slices.SortFunc(d.Objects.Addresses, func(a, b address) int { return strings.Compare(a.ID, b.ID) })
+	slices.SortFunc(d.Objects.Services, func(a, b service) int { return strings.Compare(a.ID, b.ID) })
+	for i := range d.Objects.Addresses {
+		slices.Sort(d.Objects.Addresses[i].Members)
+	}
+	for i := range d.Objects.Services {
+		slices.Sort(d.Objects.Services[i].Members)
+	}
+	if len(d.Objects.Addresses)+len(d.Objects.Services) == 0 {
+		d.Objects = objectSet{}
+	}
+	if len(d.Policy.Input)+len(d.Policy.Forward) == 0 {
+		d.Policy = policy{}
+	}
+	if d.Management != nil {
+		slices.Sort(d.Management.AllowedSources)
+	}
 }

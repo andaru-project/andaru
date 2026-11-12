@@ -162,7 +162,7 @@ func applyFindings(in gateInput) []render.Finding {
 	}
 	// The renderer decoded the same bytes already; an undecodable declaration never gets here.
 	_ = json.Unmarshal(in.Declaration, &declared)
-	const filter = " It waits for the firewall: nothing may forward or face a provider unfiltered."
+	const filter = " It is not supported by the packet filter yet."
 	for i, l := range declared.Links {
 		if l.Kind == "pppoe" && l.Enabled {
 			refuse("APPLY_UNSUPPORTED", fmt.Sprintf("/links/%d", i), "PPPoE links cannot be applied yet."+filter)

@@ -39,8 +39,13 @@ var schemas = sync.OnceValues(func() (*schemaSet, error) {
 		return nil, e
 	}
 	s.objects = make(map[string]*jsonschema.Schema, 3)
-	for collection, kind := range map[string]string{"links": "link", "segments": "segment", "zones": "zone"} {
-		object, err := c.Compile(schemaURI + "#/$defs/" + kind + "Write")
+	for collection, kind := range map[string]string{"links": "link", "segments": "segment", "zones": "zone", "addresses": "address", "services": "service",
+		"policy.input": "rule", "policy.forward": "rule", "management": "managementFields#", "nat.outbound": "outboundFields#"} {
+		kind, whole := strings.CutSuffix(kind, "#")
+		if !whole {
+			kind += "Write"
+		}
+		object, err := c.Compile(schemaURI + "#/$defs/" + kind)
 		if err != nil {
 			return nil, err
 		}
@@ -95,7 +100,7 @@ func schemaErrors(err error) error {
 	return details
 }
 func safePointer(tokens []string) string {
-	const fields = " schemaVersion links segments zones id name description kind mtu enabled permanentMac parent vlanId members mode username password secret set expectedVersion isSet updatedAt version addressing ipv4 ipv6 addresses gateway requestPrefixLength from subnetId ra managed otherInfo dns servers searchDomains op collection localId operations state savedVersion value items unusedSecrets "
+	const fields = " schemaVersion links segments zones objects policy nat management outbound segment allowedSources input forward action to services log protocol ports types address prefix first last before order id name description kind mtu enabled permanentMac parent vlanId members mode username password secret set expectedVersion isSet updatedAt version addressing ipv4 ipv6 addresses gateway requestPrefixLength from subnetId ra managed otherInfo dns servers searchDomains op collection localId operations state savedVersion value items unusedSecrets "
 	var b strings.Builder
 	for _, t := range tokens {
 		if _, e := strconv.ParseUint(t, 10, 32); e != nil && !strings.Contains(fields, " "+t+" ") {
@@ -125,7 +130,7 @@ func decodeDeclaration(raw []byte) (declaration, error) {
 	if e = json.Unmarshal(raw, &d); e != nil {
 		return d, validationError{{Path: "", Message: "Expected bounded integer fields."}}
 	}
-	if details := validateTopology(&d); len(details) > 0 {
+	if details := append(validateTopology(&d), validatePolicy(&d)...); len(details) > 0 {
 		return declaration{}, validationError(details)
 	}
 	normalizeDeclaration(&d)

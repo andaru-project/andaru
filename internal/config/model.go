@@ -96,11 +96,66 @@ type segment struct {
 	Addressing addressing `json:"addressing"`
 }
 type zone struct{ identity }
+
+// address is a filter address object: one host, network or range, or a group of those.
+type address struct {
+	identity
+	Kind    string   `json:"kind"`
+	Address string   `json:"address,omitempty"`
+	Prefix  string   `json:"prefix,omitempty"`
+	First   string   `json:"first,omitempty"`
+	Last    string   `json:"last,omitempty"`
+	Members []string `json:"members,omitempty"`
+}
+
+// service is a filter service object: tcp or udp ports, icmp or icmpv6 types, or a group of those.
+type service struct {
+	identity
+	Protocol string   `json:"protocol"`
+	Ports    []string `json:"ports,omitempty"`
+	Types    []string `json:"types,omitempty"`
+	Members  []string `json:"members,omitempty"`
+}
+
+// rule is one policy rule; its position in its list is its execution order.
+type rule struct {
+	identity
+	Enabled  bool     `json:"enabled"`
+	Action   string   `json:"action"`
+	From     []string `json:"from"`
+	To       []string `json:"to"`
+	Services []string `json:"services"`
+	Log      bool     `json:"log"`
+}
+type objectSet struct {
+	Addresses []address `json:"addresses"`
+	Services  []service `json:"services"`
+}
+type policy struct {
+	Input   []rule `json:"input"`
+	Forward []rule `json:"forward"`
+}
+type outbound struct {
+	Mode string `json:"mode"`
+}
+type natSettings struct {
+	Outbound outbound `json:"outbound"`
+}
+type management struct {
+	Segment        string   `json:"segment"`
+	AllowedSources []string `json:"allowedSources,omitempty"`
+}
+
+// The filter sections are omitted while empty, so a declaration without a filter keeps its form.
 type declaration struct {
-	SchemaVersion int       `json:"schemaVersion"`
-	Links         []link    `json:"links"`
-	Segments      []segment `json:"segments"`
-	Zones         []zone    `json:"zones"`
+	SchemaVersion int         `json:"schemaVersion"`
+	Links         []link      `json:"links"`
+	Segments      []segment   `json:"segments"`
+	Zones         []zone      `json:"zones"`
+	Objects       objectSet   `json:"objects,omitzero"`
+	Policy        policy      `json:"policy,omitzero"`
+	NAT           natSettings `json:"nat,omitzero"`
+	Management    *management `json:"management,omitempty"`
 }
 
 func emptyDeclaration() declaration {

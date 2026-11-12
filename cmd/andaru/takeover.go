@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,9 +11,12 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -36,6 +40,7 @@ type proposal struct {
 	State        string             `json:"state"`
 	SavedVersion config.Version     `json:"savedVersion"`
 	Operations   []config.Operation `json:"operations"`
+	Starter      []config.Operation `json:"starter"`
 	Adapters     []adapter          `json:"adapters"`
 	Findings     []finding          `json:"findings"`
 }
@@ -46,6 +51,11 @@ type draft struct {
 	Findings     []finding
 	// ApplyFindings is what the apply gates would refuse, including the preview's errors that a takeover does not resolve.
 	ApplyFindings []finding
+	Rules         []struct {
+		Chain, Name, Action string
+		Position            int
+		From, To, Services  []string
+	}
 }
 
 var errHeadMoved = errors.New("the saved configuration changed")
@@ -233,7 +243,12 @@ func runTakeover(ctx context.Context, socket string, args []string, stdin io.Rea
 		fmt.Fprintln(stderr, "andaru ctl takeover asks questions and needs a terminal; use --accept-detected to take over with the detected settings.")
 		return 2
 	}
-	c := &httpTakeoverClient{socket: socket}
+	// The local end of the SSH session tells the engine which segment the operator manages the host through.
+	via := ""
+	if f := strings.Fields(cmp.Or(os.Getenv("SSH_CONNECTION"), sshConnection("/proc", os.Getppid()))); len(f) == 4 {
+		via = f[2]
+	}
+	c := &httpTakeoverClient{socket: socket, via: via}
 	p, err := c.Proposal(ctx)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -246,7 +261,33 @@ func runTakeover(ctx context.Context, socket string, args []string, stdin io.Rea
 	return interactive(ctx, c, p, *timeout, stdin, stdout, hold)
 }
 
-type httpTakeoverClient struct{ socket string }
+// sshConnection finds SSH_CONNECTION in the nearest ancestor that has it: sudo drops it from its own environment.
+func sshConnection(proc string, pid int) string {
+	for pid > 1 {
+		dir := filepath.Join(proc, strconv.Itoa(pid))
+		env, _ := os.ReadFile(filepath.Join(dir, "environ"))
+		for _, kv := range bytes.Split(env, []byte{0}) {
+			if v, ok := bytes.CutPrefix(kv, []byte("SSH_CONNECTION=")); ok {
+				return string(v)
+			}
+		}
+		stat, err := os.ReadFile(filepath.Join(dir, "stat"))
+		if err != nil {
+			return ""
+		}
+		// After the command name, which may hold spaces and parentheses itself: state, then the parent's PID.
+		f := strings.Fields(string(stat[bytes.LastIndexByte(stat, ')')+1:]))
+		if len(f) < 2 {
+			return ""
+		}
+		if pid, err = strconv.Atoi(f[1]); err != nil {
+			return ""
+		}
+	}
+	return ""
+}
+
+type httpTakeoverClient struct{ socket, via string }
 
 func (c *httpTakeoverClient) do(ctx context.Context, method, path string, body any, timeout time.Duration, out any) error {
 	var payload io.Reader
@@ -293,7 +334,11 @@ func (c *httpTakeoverClient) do(ctx context.Context, method, path string, body a
 }
 
 func (c *httpTakeoverClient) Proposal(ctx context.Context) (p proposal, err error) {
-	err = c.do(ctx, http.MethodGet, "/api/v1/takeover/proposal", nil, 15*time.Second, &p)
+	path := "/api/v1/takeover/proposal"
+	if c.via != "" {
+		path += "?via=" + url.QueryEscape(c.via)
+	}
+	err = c.do(ctx, http.MethodGet, path, nil, 15*time.Second, &p)
 	return
 }
 

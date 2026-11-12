@@ -340,3 +340,60 @@ func TestCtlApplyAndApplies(t *testing.T) {
 		t.Fatalf("exit=%d stderr=%q", code, diag.String())
 	}
 }
+
+func TestConfigOrder(t *testing.T) {
+	a, b := "rul_00000001-0000-4000-8000-000000000001", "rul_00000002-0000-4000-8000-000000000002"
+	req, err := ctlOperation([]string{"config", "order", "forward", "--version", "7", b, a}, io.Discard)
+	if err != nil || req.method != "PUT" || req.path != "/api/v1/config/policy/forward/order" || req.tag != `"order.7"` || string(req.payload) != `["`+b+`","`+a+`"]` {
+		t.Fatalf("request %+v %v", req, err)
+	}
+	for _, args := range [][]string{
+		{"config", "order", "sideways", "--version", "7", a},
+		{"config", "order", "forward", a},
+		{"config", "order", "forward", "--version", "7", "zon_00000001-0000-4000-8000-000000000001"},
+	} {
+		if _, err := ctlOperation(args, io.Discard); err == nil {
+			t.Fatalf("%v accepted", args)
+		}
+	}
+}
+
+func TestConfigFilterCollections(t *testing.T) {
+	for args, want := range map[string]ctlRequest{
+		"config list policy/input":                                     {method: "GET", path: "/api/v1/config/policy/input", kind: "collection"},
+		"config create addresses":                                      {method: "POST", path: "/api/v1/config/addresses", kind: "object"},
+		"config get management":                                        {method: "GET", path: "/api/v1/config/management", kind: "singleton"},
+		"config replace --version 0 nat/outbound":                      {method: "PUT", path: "/api/v1/config/nat/outbound", kind: "singleton", tag: `"nat.outbound.0"`},
+		"config get services svc_00000001-0000-4000-8000-000000000001": {method: "GET", path: "/api/v1/config/services/svc_00000001-0000-4000-8000-000000000001", kind: "object"},
+	} {
+		req, err := ctlOperation(strings.Fields(args), io.Discard)
+		if err != nil || req.method != want.method || req.path != want.path || req.kind != want.kind || req.tag != want.tag {
+			t.Fatalf("%s: %+v %v", args, req, err)
+		}
+	}
+}
+
+func TestSaveEnvelopeAcceptsFilterResults(t *testing.T) {
+	rule := `{"id":"rul_00000001-0000-4000-8000-000000000001","name":"r","action":"accept"}`
+	save := `{"state":"saved","savedVersion":"4","created":{},"items":[
+		{"collection":"policy.forward","id":"rul_00000001-0000-4000-8000-000000000001","value":` + rule + `,"version":"4"},
+		{"collection":"policy.forward","id":"policy.forward","version":"4"},
+		{"collection":"management","id":"management","value":{"segment":"seg_00000001-0000-4000-8000-000000000001"},"version":"4"},
+		{"collection":"nat.outbound","id":"nat.outbound","deleted":true}]}`
+	if !validEnvelope("save", []byte(save)) {
+		t.Fatal("save reply with filter items rejected")
+	}
+	for name, bad := range map[string]string{
+		"slash collection":   `{"collection":"policy/forward","id":"policy.forward","version":"4"}`,
+		"singleton bad id":   `{"collection":"management","id":"mgmt","value":{},"version":"4"}`,
+		"order with no vers": `{"collection":"policy.input","id":"policy.input"}`,
+	} {
+		if validEnvelope("save", []byte(`{"state":"saved","savedVersion":"4","created":{},"items":[`+bad+`]}`)) {
+			t.Fatalf("%s accepted", name)
+		}
+	}
+	order := `{"state":"saved","savedVersion":"5","version":"5","order":["rul_00000001-0000-4000-8000-000000000001"]}`
+	if !validEnvelope("order", []byte(order)) {
+		t.Fatal("order reply rejected")
+	}
+}

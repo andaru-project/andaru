@@ -27,7 +27,14 @@ type RealizerFacts struct {
 	PPPDevice bool
 	// ResolvedInCharge reports that systemd-resolved manages /etc/resolv.conf, so DNS= in a .network file is used.
 	ResolvedInCharge bool
+	// NftTool reports /usr/sbin/nft, which loads the packet filter; cloud images ship without it.
+	NftTool bool
+	// FilterUnits are the enabled services that would replace or override Andaru's filter.
+	FilterUnits []string
 }
+
+// competingFilters flush or own the whole ruleset; Debian's nftables.service starts with "flush ruleset".
+var competingFilters = []string{"nftables.service", "firewalld.service", "ufw.service"}
 
 // ReadRealizerFacts inspects the host without changing it.
 func ReadRealizerFacts() (RealizerFacts, error) {
@@ -67,6 +74,20 @@ func readRealizerFacts(etcDir, runDir, pppd, pluginGlob, device, root string) (R
 	plugins, _ := filepath.Glob(pluginGlob)
 	facts.PPPDaemon, facts.PPPoEPlugin, facts.PPPDevice = exists(pppd), len(plugins) > 0, exists(device)
 	facts.ResolvedInCharge = ResolvedInCharge(root)
+	facts.NftTool = exists(root + "/usr/sbin/nft")
+	facts.FilterUnits = []string{}
+	for _, unit := range competingFilters {
+		// Persistent (/etc) and runtime (/run) enablement, through either a wants or a requires link.
+	links:
+		for _, base := range []string{"/etc/systemd/system/", "/run/systemd/system/"} {
+			for _, target := range []string{"sysinit.target.wants", "multi-user.target.wants", "sysinit.target.requires", "multi-user.target.requires"} {
+				if _, err := os.Lstat(root + base + target + "/" + unit); err == nil {
+					facts.FilterUnits = append(facts.FilterUnits, unit)
+					break links
+				}
+			}
+		}
+	}
 	return facts, nil
 }
 

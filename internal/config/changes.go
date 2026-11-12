@@ -18,6 +18,8 @@ type Operation struct {
 	LocalID         string          `json:"localId,omitempty"`
 	ExpectedVersion *Version        `json:"expectedVersion,omitempty"`
 	Value           json.RawMessage `json:"value,omitempty"`
+	// Before places a created rule ahead of this rule of the same list; without it the rule is appended.
+	Before string `json:"before,omitempty"`
 }
 type Changes struct {
 	// ExpectedSavedVersion guards the whole batch: it is refused if the saved head moved.
@@ -90,6 +92,15 @@ func ObjectChange(op, collection, id string, expected *Version, body []byte) (Ch
 	c.wire = v
 	return c, nil
 }
+
+// Before places the single created rule of c ahead of the rule id.
+func (c Changes) Before(id string) (Changes, error) {
+	if len(c.Operations) != 1 || c.Operations[0].Op != "create" || id == "" {
+		return c, fault("INVALID_REQUEST", "", "before applies to creating one rule.")
+	}
+	c.Operations[0].Before = id
+	return c, nil
+}
 func (c Changes) path(i int, relative string, value bool) string {
 	if c.single {
 		return relative
@@ -131,7 +142,27 @@ type preparedChange struct {
 func initialState() savedState {
 	return savedState{Version: "0", Config: emptyDeclaration(), Secrets: emptySecrets(), Versions: map[objectKey]objectVersion{}}
 }
-func validCollection(s string) bool { return s == "links" || s == "segments" || s == "zones" }
+
+// Ordered collections keep their order; their list is versioned under {collection, collection}.
+// Singletons are versioned the same way and written with replace or delete.
+var (
+	orderedCollections = []string{"policy.input", "policy.forward"}
+	singletons         = []string{"management", "nat.outbound"}
+	collections        = append([]string{"links", "segments", "zones", "addresses", "services"}, append(slices.Clone(orderedCollections), singletons...)...)
+)
+
+func validCollection(s string) bool { return slices.Contains(collections, s) }
+
+// listKey is the version key of an ordered list or a singleton.
+func listKey(collection string) objectKey { return objectKey{collection, collection} }
+
+// versionOf returns an object's version, "0" while it does not exist.
+func versionOf(s *savedState, key objectKey) objectVersion {
+	if v, ok := s.Versions[key]; ok {
+		return v
+	}
+	return objectVersion{Version: "0"}
+}
 func newID(collection string) (string, error) {
 	var b [16]byte
 	if _, e := rand.Read(b[:]); e != nil {
@@ -139,7 +170,7 @@ func newID(collection string) (string, error) {
 	}
 	b[6] = (b[6] & 15) | 64
 	b[8] = (b[8] & 63) | 128
-	prefix := map[string]string{"links": "lnk", "segments": "seg", "zones": "zon"}[collection]
+	prefix := map[string]string{"links": "lnk", "segments": "seg", "zones": "zon", "addresses": "adr", "services": "svc", "policy.input": "rul", "policy.forward": "rul"}[collection]
 	return fmt.Sprintf("%s_%x-%x-%x-%x-%x", prefix, b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
 func rank(code string) int {
@@ -167,6 +198,24 @@ func objects(d *declaration) map[objectKey]any {
 	}
 	for i := range d.Zones {
 		m[objectKey{"zones", d.Zones[i].ID}] = &d.Zones[i]
+	}
+	for i := range d.Objects.Addresses {
+		m[objectKey{"addresses", d.Objects.Addresses[i].ID}] = &d.Objects.Addresses[i]
+	}
+	for i := range d.Objects.Services {
+		m[objectKey{"services", d.Objects.Services[i].ID}] = &d.Objects.Services[i]
+	}
+	for i := range d.Policy.Input {
+		m[objectKey{"policy.input", d.Policy.Input[i].ID}] = &d.Policy.Input[i]
+	}
+	for i := range d.Policy.Forward {
+		m[objectKey{"policy.forward", d.Policy.Forward[i].ID}] = &d.Policy.Forward[i]
+	}
+	if d.Management != nil {
+		m[listKey("management")] = d.Management
+	}
+	if d.NAT.Outbound.Mode != "" {
+		m[listKey("nat.outbound")] = &d.NAT.Outbound
 	}
 	return m
 }
@@ -217,19 +266,55 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 	if e != nil {
 		return empty, fault("STORE_UNAVAILABLE", "", "Configuration schema unavailable.")
 	}
+	orders := map[int][]string{}
 	for i, op := range input.Operations {
-		if !validCollection(op.Collection) || (op.Op != "create" && op.Op != "replace" && op.Op != "delete") {
+		ordered, single := slices.Contains(orderedCollections, op.Collection), slices.Contains(singletons, op.Collection)
+		known := op.Op == "create" || op.Op == "replace" || op.Op == "delete" || op.Op == "order"
+		misplaced := op.Op == "order" && !ordered || single && op.Op == "create" || op.Before != "" && (op.Op != "create" || !ordered)
+		if !validCollection(op.Collection) || !known || misplaced {
 			pick(fault("VALIDATION_FAILED", input.path(i, "", false), "Unknown operation or collection."), i)
 			continue
 		}
 		key := objectKey{op.Collection, op.ID}
+		if single || op.Op == "order" {
+			// A singleton or a list order has no ID of its own; its version is the collection's.
+			key = listKey(op.Collection)
+			if op.ExpectedVersion == nil {
+				pick(fault("PRECONDITION_REQUIRED", input.path(i, "/expectedVersion", false), "Expected version is required."), i)
+			} else if v := versionOf(current, key); op.Op == "delete" && (v.Version == "0" || v.Deleted) {
+				pick(fault("NOT_FOUND", input.path(i, "", false), "Nothing is set to delete."), i)
+			} else if have := map[bool]Version{true: "0", false: v.Version}[v.Deleted]; have != *op.ExpectedVersion {
+				f := fault("PRECONDITION_FAILED", "", "")
+				f.Current = &Current{Kind: "object", Collection: key.Collection, ID: key.ID, Version: v.Version, Deleted: v.Deleted}
+				pick(f, i)
+			}
+			if duplicates[key] {
+				pick(fault("VALIDATION_FAILED", input.path(i, "", false), "Duplicate operation target."), i)
+			}
+			duplicates[key] = true
+			keys[i] = key
+			if op.Op == "order" {
+				var ids []string
+				if e := json.Unmarshal(op.Value, &ids); e != nil {
+					pick(fault("VALIDATION_FAILED", input.path(i, "", true), "Expected the list's rule IDs in their new order."), i)
+				}
+				orders[i] = ids
+				continue
+			}
+			if op.Op == "delete" {
+				if len(op.Value) > 0 {
+					pick(fault("VALIDATION_FAILED", input.path(i, "", false), "Delete accepts only the expected version."), i)
+				}
+				continue
+			}
+		}
 		keys[i] = key
 		if op.ExpectedVersion != nil {
 			if _, e := ParseVersion(string(*op.ExpectedVersion)); e != nil {
 				pick(fault("INVALID_REQUEST", input.path(i, "/expectedVersion", false), "Invalid version."), i)
 			}
 		}
-		if op.Op != "create" {
+		if op.Op != "create" && !single {
 			if op.ID == "" {
 				pick(fault("VALIDATION_FAILED", input.path(i, "/id", false), "Object ID is required."), i)
 			} else if op.ExpectedVersion == nil {
@@ -285,7 +370,7 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 	}
 	for i, op := range input.Operations {
 		value := values[i]
-		if value == nil {
+		if value == nil || op.Op == "order" {
 			continue
 		}
 		target := schema.objects[op.Collection]
@@ -298,6 +383,9 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 				f.Details[j].Path = input.path(i, f.Details[j].Path, true)
 			}
 			pick(f, i)
+			continue
+		}
+		if slices.Contains(singletons, op.Collection) {
 			continue
 		}
 		if op.Op == "create" {
@@ -338,6 +426,9 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 		origins[key] = i
 		if op.Op == "delete" {
 			deleted[key] = true
+			continue
+		}
+		if op.Op == "order" {
 			continue
 		}
 		value := values[i]
@@ -381,6 +472,66 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 	}
 	if d.Zones, e = rewrite(d.Zones, "zones", writes, deleted, createKeys, func(x zone) string { return x.ID }); e != nil {
 		return empty, e
+	}
+	if d.Objects.Addresses, e = rewrite(d.Objects.Addresses, "addresses", writes, deleted, createKeys, func(x address) string { return x.ID }); e != nil {
+		return empty, e
+	}
+	if d.Objects.Services, e = rewrite(d.Objects.Services, "services", writes, deleted, createKeys, func(x service) string { return x.ID }); e != nil {
+		return empty, e
+	}
+	for _, col := range orderedCollections {
+		list := &d.Policy.Input
+		if col == "policy.forward" {
+			list = &d.Policy.Forward
+		}
+		if *list, e = rewrite(*list, col, writes, deleted, createKeys, func(x rule) string { return x.ID }); e != nil {
+			return empty, e
+		}
+		for i, op := range input.Operations {
+			if op.Collection != col {
+				continue
+			}
+			switch {
+			case op.Op == "create" && op.Before != "":
+				at := slices.IndexFunc(*list, func(r rule) bool { return r.ID == op.Before })
+				from := slices.IndexFunc(*list, func(r rule) bool { return r.ID == keys[i].ID })
+				if at < 0 {
+					return empty, fault("VALIDATION_FAILED", input.path(i, "/before", false), "Expected a rule of the same list.")
+				}
+				r := (*list)[from]
+				*list = slices.Insert(slices.Delete(*list, from, from+1), at, r)
+			case op.Op == "order":
+				ids := orders[i]
+				if len(ids) != len(*list) {
+					return empty, fault("VALIDATION_FAILED", input.path(i, "", true), "The order must name every rule of the list exactly once.")
+				}
+				placed := make([]rule, 0, len(ids))
+				for _, id := range ids {
+					j := slices.IndexFunc(*list, func(r rule) bool { return r.ID == id })
+					if j < 0 || slices.ContainsFunc(placed, func(r rule) bool { return r.ID == id }) {
+						return empty, fault("VALIDATION_FAILED", input.path(i, "", true), "The order must name every rule of the list exactly once.")
+					}
+					placed = append(placed, (*list)[j])
+				}
+				*list = placed
+			}
+		}
+	}
+	if deleted[listKey("management")] {
+		d.Management = nil
+	} else if raw, ok := writes[listKey("management")]; ok {
+		var m management
+		if e := json.Unmarshal(raw, &m); e != nil {
+			return empty, fault("VALIDATION_FAILED", "", "Invalid typed object.")
+		}
+		d.Management = &m
+	}
+	if deleted[listKey("nat.outbound")] {
+		d.NAT = natSettings{}
+	} else if raw, ok := writes[listKey("nat.outbound")]; ok {
+		if e := json.Unmarshal(raw, &d.NAT.Outbound); e != nil {
+			return empty, fault("VALIDATION_FAILED", "", "Invalid typed object.")
+		}
 	}
 	raw, e := json.Marshal(d)
 	if e != nil {
@@ -435,6 +586,13 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 		resultSet[key] = true
 		if op.Op == "delete" {
 			changes[key] = objectChange{Collection: key.Collection, ID: key.ID, Deleted: true}
+			if slices.Contains(orderedCollections, op.Collection) {
+				changes[listKey(op.Collection)] = objectChange{Collection: op.Collection, ID: op.Collection}
+			}
+			continue
+		}
+		if op.Op == "order" {
+			changes[key] = objectChange{Collection: op.Collection, ID: op.Collection}
 			continue
 		}
 		old, exists := before[key]
@@ -446,6 +604,10 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 		}
 		if different {
 			changes[key] = objectChange{Collection: key.Collection, ID: key.ID, Created: op.Op == "create"}
+		}
+		// Any create, delete or reorder in an ordered list moves the list's own version.
+		if slices.Contains(orderedCollections, op.Collection) && op.Op != "replace" {
+			changes[listKey(op.Collection)] = objectChange{Collection: op.Collection, ID: op.Collection}
 		}
 	}
 	for _, l := range d.Links {
@@ -542,6 +704,28 @@ func resolveReferences(v map[string]any, col string, labels map[string]string) {
 			}
 		}
 	}
+	resolveAll := func(m map[string]any, k string) {
+		if list, ok := m[k].([]any); ok {
+			for i, s := range list {
+				if text, ok := s.(string); ok && strings.HasPrefix(text, "@") {
+					if id, ok := labels[text[1:]]; ok {
+						list[i] = id
+					}
+				}
+			}
+		}
+	}
+	switch col {
+	case "addresses", "services":
+		resolveAll(v, "members")
+	case "policy.input", "policy.forward":
+		resolveAll(v, "from")
+		resolveAll(v, "to")
+		resolveAll(v, "services")
+	case "management":
+		resolve(v, "segment")
+		resolveAll(v, "allowedSources")
+	}
 	if col == "segments" {
 		resolve(v, "link")
 		resolve(v, "zone")
@@ -551,6 +735,61 @@ func resolveReferences(v map[string]any, col string, labels map[string]string) {
 			}
 		}
 	}
+}
+
+// owner maps a validation path to the object or singleton it names and the path below it.
+func owner(d *declaration, path string) (objectKey, string) {
+	p := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	rest := func(from int) string {
+		if from >= len(p) {
+			return ""
+		}
+		return "/" + strings.Join(p[from:], "/")
+	}
+	switch p[0] {
+	case "management":
+		return listKey("management"), rest(1)
+	case "nat":
+		if len(p) > 1 && p[1] == "outbound" {
+			return listKey("nat.outbound"), rest(2)
+		}
+		return objectKey{}, ""
+	case "objects":
+		p = p[1:]
+	case "policy":
+		if len(p) < 2 {
+			return objectKey{}, ""
+		}
+		p = append([]string{"policy." + p[1]}, p[2:]...)
+	}
+	if len(p) < 2 {
+		return objectKey{}, ""
+	}
+	n, e := strconv.Atoi(p[1])
+	if e != nil || n < 0 {
+		return objectKey{}, ""
+	}
+	id := ""
+	switch col := p[0]; {
+	case col == "links" && n < len(d.Links):
+		id = d.Links[n].ID
+	case col == "segments" && n < len(d.Segments):
+		id = d.Segments[n].ID
+	case col == "zones" && n < len(d.Zones):
+		id = d.Zones[n].ID
+	case col == "addresses" && n < len(d.Objects.Addresses):
+		id = d.Objects.Addresses[n].ID
+	case col == "services" && n < len(d.Objects.Services):
+		id = d.Objects.Services[n].ID
+	case col == "policy.input" && n < len(d.Policy.Input):
+		id = d.Policy.Input[n].ID
+	case col == "policy.forward" && n < len(d.Policy.Forward):
+		id = d.Policy.Forward[n].ID
+	}
+	if id == "" {
+		return objectKey{}, ""
+	}
+	return objectKey{p[0], id}, rest(2)
 }
 func rebaseValidation(details validationError, d *declaration, origins map[objectKey]int, input Changes) *Fault {
 	f := fault("VALIDATION_FAILED", "", "")
@@ -568,38 +807,20 @@ func rebaseValidation(details validationError, d *declaration, origins map[objec
 		return ""
 	}
 	for _, detail := range details {
-		parts := strings.SplitN(strings.TrimPrefix(detail.Path, "/"), "/", 3)
 		path := detail.Path
 		i := -1
-		key := objectKey{}
-		if len(parts) >= 2 {
-			n, e := strconv.Atoi(parts[1])
-			if e == nil {
-				switch parts[0] {
-				case "links":
-					if n >= 0 && n < len(d.Links) {
-						key = objectKey{"links", d.Links[n].ID}
-					}
-				case "segments":
-					if n >= 0 && n < len(d.Segments) {
-						key = objectKey{"segments", d.Segments[n].ID}
-					}
-				case "zones":
-					if n >= 0 && n < len(d.Zones) {
-						key = objectKey{"zones", d.Zones[n].ID}
-					}
-				}
-				if op, ok := origins[key]; ok {
-					i = op
-					tail := ""
-					if len(parts) == 3 {
-						tail = "/" + parts[2]
-					}
-					path = input.path(i, tail, true)
-				}
-			}
+		key, tail := owner(d, detail.Path)
+		op, ok := origins[key]
+		if ok {
+			path = input.path(op, tail, true)
+		} else if op, ok = origins[listKey(key.Collection)]; ok && key.Collection != "" {
+			// A rule no operation wrote may still have been moved by an order operation.
+			path = input.path(op, "", true)
 		}
-		if i < 0 && len(parts) == 3 && parts[2] == "name" {
+		if ok {
+			i = op
+		}
+		if i < 0 && tail == "/name" {
 			name := nameOf(index[key])
 			for candidate, op := range origins {
 				if candidate.Collection == key.Collection && name != "" && nameOf(index[candidate]) == name && (i < 0 || op < i) {

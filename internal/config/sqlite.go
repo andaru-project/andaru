@@ -22,7 +22,23 @@ const configDDL = `CREATE TABLE documents(sha256 BLOB PRIMARY KEY CHECK(length(s
 CREATE TABLE versions(id INTEGER PRIMARY KEY,parent_id INTEGER REFERENCES versions(id),schema_version INTEGER NOT NULL,config_sha256 BLOB NOT NULL REFERENCES documents(sha256),secrets_sha256 BLOB NOT NULL CHECK(length(secrets_sha256)=32),created_at TEXT NOT NULL,actor TEXT NOT NULL,changed_object_count INTEGER NOT NULL);
 CREATE TABLE pointers(name TEXT PRIMARY KEY CHECK(name='saved'),version_id INTEGER NOT NULL REFERENCES versions(id));
 CREATE TABLE object_changes(collection TEXT NOT NULL CHECK(collection IN ('links','segments','zones')),object_id TEXT NOT NULL,version_id INTEGER NOT NULL REFERENCES versions(id),created INTEGER NOT NULL CHECK(created IN (0,1)),deleted INTEGER NOT NULL CHECK(deleted IN (0,1)),CHECK(NOT(created AND deleted)),PRIMARY KEY(collection,object_id,version_id));
-CREATE UNIQUE INDEX creation_identity ON object_changes(object_id) WHERE created=1;`
+CREATE UNIQUE INDEX creation_identity ON object_changes(object_id) WHERE created=1;
+` + policyDDL
+
+// policyDDL holds the versions of the filter's objects, lists and singletons. It is added beside
+// object_changes rather than widening that table's CHECK, so an existing store gains it with one
+// CREATE and an older engine, which never reads it, still opens the store.
+const policyDDL = `CREATE TABLE IF NOT EXISTS policy_changes(collection TEXT NOT NULL CHECK(collection IN ('addresses','services','policy.input','policy.forward','management','nat.outbound')),object_id TEXT NOT NULL,version_id INTEGER NOT NULL REFERENCES versions(id),created INTEGER NOT NULL CHECK(created IN (0,1)),deleted INTEGER NOT NULL CHECK(deleted IN (0,1)),CHECK(NOT(created AND deleted)),PRIMARY KEY(collection,object_id,version_id));
+CREATE UNIQUE INDEX IF NOT EXISTS policy_creation_identity ON policy_changes(object_id) WHERE created=1;`
+
+// changeTable is where a collection's object versions are recorded.
+func changeTable(collection string) string {
+	if collection == "links" || collection == "segments" || collection == "zones" {
+		return "object_changes"
+	}
+	return "policy_changes"
+}
+
 const secretDDL = `CREATE TABLE documents(sha256 BLOB PRIMARY KEY CHECK(length(sha256)=32),body BLOB NOT NULL);`
 
 func databaseURI(path, mode string, secret bool) string {
@@ -223,7 +239,7 @@ func publishVersion(ctx context.Context, c *sql.Conn, p preparedChange, actor st
 		return e
 	}
 	for _, change := range p.Changed {
-		if _, e = c.ExecContext(ctx, "INSERT INTO object_changes VALUES(?,?,?,?,?)", change.Collection, change.ID, next, change.Created, change.Deleted); e != nil {
+		if _, e = c.ExecContext(ctx, "INSERT INTO "+changeTable(change.Collection)+" VALUES(?,?,?,?,?)", change.Collection, change.ID, next, change.Created, change.Deleted); e != nil {
 			return e
 		}
 	}

@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -116,7 +117,9 @@ func TestConfigurationHTTPContract(t *testing.T) {
 	}
 	expected := map[string][]string{"/api/v1/status/links": {"get", "head"}, "/api/v1/openapi.json": {"get", "head"}, "/api/v1/schema": {"get", "head"}, "/api/v1/config": {"get", "head"}, "/api/v1/config/{collection}": {"get", "head", "post"}, "/api/v1/config/{collection}/{id}": {"get", "head", "put", "delete"}, "/api/v1/config/changes": {"post"}, "/api/v1/versions": {"get", "head"}, "/api/v1/versions/{id}": {"get", "head"}, "/api/v1/preview/network": {"get", "head"},
 		"/api/v1/applies": {"get", "head", "post"}, "/api/v1/applies/{id}": {"get", "head"}, "/api/v1/applies/{id}/confirmation": {"post"}, "/api/v1/applies/{id}/rollback": {"post"},
-		"/api/v1/takeover/proposal": {"get", "head"}, "/api/v1/preview/network/draft": {"post"}}
+		"/api/v1/takeover/proposal": {"get", "head"}, "/api/v1/preview/network/draft": {"post"},
+		"/api/v1/config/policy/{chain}": {"get", "head", "post"}, "/api/v1/config/policy/{chain}/{id}": {"get", "head", "put", "delete"},
+		"/api/v1/config/policy/{chain}/order": {"put"}, "/api/v1/config/management": {"get", "head", "put", "delete"}, "/api/v1/config/nat/outbound": {"get", "head", "put", "delete"}}
 	if len(document.Paths) != len(expected) {
 		t.Fatalf("unimplemented or missing contract paths: %d", len(document.Paths))
 	}
@@ -433,4 +436,194 @@ func engineENOSP() error {
 	}
 	fmt.Println("engine 503, drained exit 1, complete reopen PASS")
 	return nil
+}
+
+func TestPolicyRoutes(t *testing.T) {
+	h, _ := configurationFixture(t)
+	rule := func(name string) string {
+		return `{"name":"` + name + `","enabled":true,"action":"accept","from":[],"to":[],"services":[],"log":false}`
+	}
+	expect := func(w *httptest.ResponseRecorder, status int) {
+		t.Helper()
+		if w.Code != status {
+			t.Fatalf("status %d, want %d: %s", w.Code, status, w.Body)
+		}
+	}
+	a := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/policy/forward", rule("a"), "")))
+	b := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/policy/forward", rule("b"), "")))
+	w := configCall(h, "POST", "/api/v1/config/policy/forward?before="+a, rule("c"), "")
+	expect(w, 201)
+	c := valueID(t, apiObject(t, w))
+
+	list := func() (ids []string, tag string) {
+		t.Helper()
+		w := configCall(h, "GET", "/api/v1/config/policy/forward", "", "")
+		expect(w, 200)
+		var v struct {
+			Items   []config.ObjectView
+			Version string
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &v); err != nil || v.Version == "" {
+			t.Fatalf("list %s: %v", w.Body, err)
+		}
+		for _, item := range v.Items {
+			ids = append(ids, valueID(t, item))
+		}
+		return ids, w.Header().Get("ETag")
+	}
+	ids, tag := list()
+	if !slices.Equal(ids, []string{c, a, b}) || tag == "" {
+		t.Fatalf("order %v tag %q", ids, tag)
+	}
+	expect(configCall(h, "PUT", "/api/v1/config/policy/forward/order", `["`+b+`","`+a+`","`+c+`"]`, ""), 428)
+	expect(configCall(h, "PUT", "/api/v1/config/policy/forward/order", `["`+b+`","`+a+`"]`, tag), 422)
+	expect(configCall(h, "PUT", "/api/v1/config/policy/forward/order", `["`+b+`","`+a+`","`+c+`"]`, tag), 200)
+	expect(configCall(h, "PUT", "/api/v1/config/policy/forward/order", `["`+c+`","`+a+`","`+b+`"]`, tag), 412)
+	if ids, _ = list(); !slices.Equal(ids, []string{b, a, c}) {
+		t.Fatalf("order after PUT %v", ids)
+	}
+
+	expect(configCall(h, "GET", "/api/v1/config/management", "", ""), 404)
+	expect(configCall(h, "PUT", "/api/v1/config/nat/outbound", `{"mode":"automatic"}`, `"nat.outbound.0"`), 200)
+	w = configCall(h, "GET", "/api/v1/config/nat/outbound", "", "")
+	expect(w, 200)
+	if !strings.Contains(w.Body.String(), `"automatic"`) {
+		t.Fatalf("outbound %s", w.Body)
+	}
+	addr := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/addresses", `{"name":"nas","kind":"host","address":"192.0.2.10"}`, "")))
+	expect(configCall(h, "GET", "/api/v1/config/addresses/"+addr, "", ""), 200)
+	expect(configCall(h, "POST", "/api/v1/config/services", `{"name":"dns","protocol":"udp","ports":["53"]}`, ""), 201)
+	expect(configCall(h, "GET", "/api/v1/config/policy/sideways", "", ""), 404)
+}
+
+func TestFilterRoutesMatchTheContract(t *testing.T) {
+	h, _ := configurationFixture(t)
+	instance, e := jsonschema.UnmarshalJSON(bytes.NewReader(configCall(h, "GET", "/api/v1/schema", "", "").Body.Bytes()))
+	if e != nil {
+		t.Fatal(e)
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.UseLoader(jsonschema.SchemeURLLoader{})
+	compiler.AssertFormat()
+	if e = compiler.AddResource("https://andaru.invalid/api/v1/schema", instance); e != nil {
+		t.Fatal(e)
+	}
+	conforms := func(def, doc string) {
+		t.Helper()
+		sch, e := compiler.Compile("https://andaru.invalid/api/v1/schema#/$defs/" + def)
+		if e != nil {
+			t.Fatal(e)
+		}
+		v, e := jsonschema.UnmarshalJSON(strings.NewReader(doc))
+		if e != nil {
+			t.Fatal(e)
+		}
+		if e = sch.Validate(v); e != nil {
+			t.Fatalf("%s violates %s: %v", doc, def, e)
+		}
+	}
+	rule := `{"name":"a","enabled":true,"action":"accept","from":[],"to":[],"services":[],"log":false}`
+	for _, body := range []string{rule, `{"name":"nas","kind":"host","address":"192.0.2.10"}`, `{"name":"dns","protocol":"udp","ports":["53"]}`,
+		`{"segment":"seg_00000001-0000-4000-8000-000000000001"}`, `{"mode":"automatic"}`} {
+		conforms("objectWrite", body)
+	}
+	for path, body := range map[string]string{
+		"/api/v1/config/policy/forward": rule, "/api/v1/config/addresses": `{"name":"nas","kind":"host","address":"192.0.2.10"}`,
+		"/api/v1/config/services": `{"name":"dns","protocol":"udp","ports":["53"]}`,
+	} {
+		w := configCall(h, "POST", path, body, "")
+		if w.Code != 201 {
+			t.Fatalf("%s: %d %s", path, w.Code, w.Body)
+		}
+		conforms("objectView", w.Body.String())
+	}
+	w := configCall(h, "PUT", "/api/v1/config/nat/outbound", `{"mode":"automatic"}`, `"nat.outbound.0"`)
+	if w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	conforms("objectView", w.Body.String())
+	conforms("objectView", configCall(h, "GET", "/api/v1/config/nat/outbound", "", "").Body.String())
+	// A rule list carries its own order version.
+	list := configCall(h, "GET", "/api/v1/config/policy/forward", "", "")
+	if !strings.Contains(list.Body.String(), `"version"`) {
+		t.Fatalf("list lacks its version: %s", list.Body)
+	}
+	conforms("collectionView", list.Body.String())
+
+	var api struct {
+		Paths      map[string]map[string]json.RawMessage
+		Components struct {
+			Schemas map[string]json.RawMessage
+		}
+	}
+	if e := json.Unmarshal(configCall(h, "GET", "/api/v1/openapi.json", "", "").Body.Bytes(), &api); e != nil {
+		t.Fatal(e)
+	}
+	for _, path := range []string{"/api/v1/config/management", "/api/v1/config/nat/outbound"} {
+		for _, method := range []string{"put", "delete"} {
+			var op struct {
+				Parameters []struct {
+					Name     string
+					Required bool
+				}
+			}
+			if e := json.Unmarshal(api.Paths[path][method], &op); e != nil || len(op.Parameters) != 1 || op.Parameters[0].Name != "If-Match" || !op.Parameters[0].Required {
+				t.Fatalf("%s %s declares no required If-Match: %s", method, path, api.Paths[path][method])
+			}
+		}
+	}
+	var changed struct {
+		Properties struct{ Collection struct{ Enum []string } }
+	}
+	var envelope struct {
+		Properties struct {
+			Error struct {
+				Properties struct {
+					Current struct {
+						Properties struct{ Collection struct{ Enum []string } }
+					}
+				}
+			}
+		}
+	}
+	if e := json.Unmarshal(api.Components.Schemas["ChangedObject"], &changed); e != nil {
+		t.Fatal(e)
+	}
+	if e := json.Unmarshal(api.Components.Schemas["ErrorEnvelope"], &envelope); e != nil {
+		t.Fatal(e)
+	}
+	for _, enum := range [][]string{changed.Properties.Collection.Enum, envelope.Properties.Error.Properties.Current.Properties.Collection.Enum} {
+		for _, name := range []string{"addresses", "services", "policy.input", "policy.forward", "management", "nat.outbound"} {
+			if !slices.Contains(enum, name) {
+				t.Fatalf("collection enum %v lacks %s", enum, name)
+			}
+		}
+	}
+}
+
+func TestSingletonAndOrderTagsAreNotInterchangeable(t *testing.T) {
+	h, _ := configurationFixture(t)
+	// Another resource's tag must not pass as "unset" (version 0).
+	assertAPIError(t, configCall(h, "PUT", "/api/v1/config/nat/outbound", `{"mode":"automatic"}`, `"management.1"`), 412, "PRECONDITION_FAILED")
+	assertAPIError(t, configCall(h, "GET", "/api/v1/config/nat/outbound", "", ""), 404, "NOT_FOUND")
+	assertAPIError(t, configCall(h, "PUT", "/api/v1/config/policy/forward/order", `[]`, `"nat.outbound.0"`), 412, "PRECONDITION_FAILED")
+
+	rule := func(name string) string {
+		return `{"name":"` + name + `","enabled":true,"action":"accept","from":[],"to":[],"services":[],"log":false}`
+	}
+	a := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/policy/forward", rule("a"), "")))
+	b := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/policy/forward", rule("b"), "")))
+	tag := configCall(h, "GET", "/api/v1/config/policy/forward", "", "").Header().Get("ETag")
+	w := configCall(h, "PUT", "/api/v1/config/policy/forward/order", `["`+b+`","`+a+`"]`, tag)
+	var reply struct {
+		SavedVersion, Version string
+		Order                 []string
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &reply) != nil || !slices.Equal(reply.Order, []string{b, a}) ||
+		reply.Version != reply.SavedVersion || w.Header().Get("ETag") != `"order.`+reply.Version+`"` {
+		t.Fatalf("order reply %d %s %v", w.Code, w.Body, w.Header())
+	}
+	if got := configCall(h, "GET", "/api/v1/config/policy/forward", "", "").Header().Get("ETag"); got != w.Header().Get("ETag") {
+		t.Fatalf("order reply tag %q, list tag %q", w.Header().Get("ETag"), got)
+	}
 }
