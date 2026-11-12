@@ -21,7 +21,7 @@ This is not implemented behaviour yet. Contracts stay provisional until Andaru 1
   - the 1:1 host was reachable from the WAN and left through its external address.
 
 - **What pfBlockerNG does on pfSense** (read from `pfblockerng.inc`): its DNSBL web server listens on a virtual IP, by default on the loopback interface `lo0`. Clients reach that address through the firewall, and no NAT is needed. When the VIP lives on a real interface instead, it adds two port forwards: VIP:80 and VIP:443 go to `127.0.0.1` on its web server's ports, with association "pass" and Pure-NAT reflection. Its DNS redirect forwards port 53 of `(self)` to `127.0.0.1:53`. Both target the firewall itself.
-- **Linux differs from FreeBSD here:** `dnat` to `127.0.0.0/8` from a non-loopback interface is dropped as a martian unless `route_localnet` is set on that interface (kernel `ip-sysctl` documentation; a container probe was inconclusive, so the plan's first task confirms it). A VIP on the loopback interface with an ordinary address (pfBlockerNG's default, `10.10.10.1`) is local delivery and needs nothing.
+- **Linux differs from FreeBSD here:** `dnat` to `127.0.0.0/8` from a non-loopback interface is dropped as a martian unless `route_localnet` is set on that interface (kernel `ip-sysctl` documentation; a container probe was inconclusive, so the plan's first task confirms it). A VIP on the loopback interface with an ordinary address (pfBlockerNG auto-creates its sinkhole VIP from `172.16.53.1`, `192.168.53.1`, `10.53.53.1` or `fd00:53:53:53:53:53:53:1`, the first that collides with nothing) is local delivery and needs nothing.
 
 ## Scope
 
