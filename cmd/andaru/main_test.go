@@ -363,6 +363,9 @@ func TestConfigFilterCollections(t *testing.T) {
 		"config list policy/input":                                     {method: "GET", path: "/api/v1/config/policy/input", kind: "collection"},
 		"config create addresses":                                      {method: "POST", path: "/api/v1/config/addresses", kind: "object"},
 		"config get management":                                        {method: "GET", path: "/api/v1/config/management", kind: "singleton"},
+		"config replace --version 0 dns":                               {method: "PUT", path: "/api/v1/config/dns", kind: "singleton", tag: `"dns.0"`},
+		"config create dhcp":                                           {method: "POST", path: "/api/v1/config/dhcp", kind: "object"},
+		"config get dhcp dhp_00000001-0000-4000-8000-000000000001":     {method: "GET", path: "/api/v1/config/dhcp/dhp_00000001-0000-4000-8000-000000000001", kind: "object"},
 		"config replace --version 0 nat/outbound":                      {method: "PUT", path: "/api/v1/config/nat/outbound", kind: "singleton", tag: `"nat.outbound.0"`},
 		"config get services svc_00000001-0000-4000-8000-000000000001": {method: "GET", path: "/api/v1/config/services/svc_00000001-0000-4000-8000-000000000001", kind: "object"},
 	} {

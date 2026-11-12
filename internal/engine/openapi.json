@@ -623,7 +623,8 @@
               "segments",
               "zones",
               "addresses",
-              "services"
+              "services",
+              "dhcp"
             ]
           }
         }
@@ -1032,7 +1033,8 @@
               "segments",
               "zones",
               "addresses",
-              "services"
+              "services",
+              "dhcp"
             ]
           }
         },
@@ -3177,7 +3179,7 @@
             }
           }
         },
-        "description": "A single object without an ID; If-Match \"<collection>.<version>\", \"\u20260\" while unset."
+        "description": "A single object without an ID; If-Match \"<collection>.<version>\", \"…0\" while unset."
       },
       "head": {
         "operationId": "headGetSavedObjectManagement",
@@ -3249,7 +3251,7 @@
             }
           }
         },
-        "description": "A single object without an ID; If-Match \"<collection>.<version>\", \"\u20260\" while unset."
+        "description": "A single object without an ID; If-Match \"<collection>.<version>\", \"…0\" while unset."
       },
       "put": {
         "operationId": "replaceSavedObjectManagement",
@@ -3376,7 +3378,7 @@
             "description": "Singleton ETag \"<collection>.<version>\" (\"<collection>.0\" while unset); no wildcard/weak/list form."
           }
         ],
-        "description": "A single object without an ID; If-Match \"<collection>.<version>\", \"\u20260\" while unset."
+        "description": "A single object without an ID; If-Match \"<collection>.<version>\", \"…0\" while unset."
       },
       "delete": {
         "operationId": "deleteSavedObjectManagement",
@@ -3493,7 +3495,7 @@
             "description": "Singleton ETag \"<collection>.<version>\" (\"<collection>.0\" while unset); no wildcard/weak/list form."
           }
         ],
-        "description": "A single object without an ID; If-Match \"<collection>.<version>\", \"\u20260\" while unset."
+        "description": "A single object without an ID; If-Match \"<collection>.<version>\", \"…0\" while unset."
       }
     },
     "/api/v1/config/nat/outbound": {
@@ -3574,7 +3576,7 @@
             }
           }
         },
-        "description": "A single object without an ID; If-Match \"<collection>.<version>\", \"\u20260\" while unset."
+        "description": "A single object without an ID; If-Match \"<collection>.<version>\", \"…0\" while unset."
       },
       "head": {
         "operationId": "headGetSavedObjectOutboundNAT",
@@ -3646,7 +3648,7 @@
             }
           }
         },
-        "description": "A single object without an ID; If-Match \"<collection>.<version>\", \"\u20260\" while unset."
+        "description": "A single object without an ID; If-Match \"<collection>.<version>\", \"…0\" while unset."
       },
       "put": {
         "operationId": "replaceSavedObjectOutboundNAT",
@@ -3773,7 +3775,7 @@
             "description": "Singleton ETag \"<collection>.<version>\" (\"<collection>.0\" while unset); no wildcard/weak/list form."
           }
         ],
-        "description": "A single object without an ID; If-Match \"<collection>.<version>\", \"\u20260\" while unset."
+        "description": "A single object without an ID; If-Match \"<collection>.<version>\", \"…0\" while unset."
       },
       "delete": {
         "operationId": "deleteSavedObjectOutboundNAT",
@@ -3890,7 +3892,404 @@
             "description": "Singleton ETag \"<collection>.<version>\" (\"<collection>.0\" while unset); no wildcard/weak/list form."
           }
         ],
-        "description": "A single object without an ID; If-Match \"<collection>.<version>\", \"\u20260\" while unset."
+        "description": "A single object without an ID; If-Match \"<collection>.<version>\", \"…0\" while unset."
+      }
+    },
+    "/api/v1/config/dns": {
+      "get": {
+        "operationId": "getSavedObjectDNS",
+        "responses": {
+          "200": {
+            "description": "Saved state; never applied networking",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Strong quoted <id>.<object version>"
+              },
+              "Andaru-Saved-Version": {
+                "schema": {
+                  "$ref": "#/components/schemas/Version"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "A single object without an ID; If-Match \"<collection>.<version>\", \"…0\" while unset."
+      },
+      "head": {
+        "operationId": "headGetSavedObjectDNS",
+        "responses": {
+          "200": {
+            "description": "Saved state; never applied networking",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Strong quoted <id>.<object version>"
+              },
+              "Andaru-Saved-Version": {
+                "schema": {
+                  "$ref": "#/components/schemas/Version"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "A single object without an ID; If-Match \"<collection>.<version>\", \"…0\" while unset."
+      },
+      "put": {
+        "operationId": "replaceSavedObjectDNS",
+        "responses": {
+          "200": {
+            "description": "Saved state; never applied networking",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "/api/v1/schema#/$defs/objectWrite"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Singleton ETag \"<collection>.<version>\" (\"<collection>.0\" while unset); no wildcard/weak/list form."
+          }
+        ],
+        "description": "A single object without an ID; If-Match \"<collection>.<version>\", \"…0\" while unset."
+      },
+      "delete": {
+        "operationId": "deleteSavedObjectDNS",
+        "responses": {
+          "200": {
+            "description": "Saved state; never applied networking",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Acknowledgement"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Singleton ETag \"<collection>.<version>\" (\"<collection>.0\" while unset); no wildcard/weak/list form."
+          }
+        ],
+        "description": "A single object without an ID; If-Match \"<collection>.<version>\", \"…0\" while unset."
       }
     }
   },
@@ -4116,7 +4515,9 @@
                       "policy.input",
                       "policy.forward",
                       "management",
-                      "nat.outbound"
+                      "nat.outbound",
+                      "dhcp",
+                      "dns"
                     ]
                   },
                   "id": {
@@ -4207,7 +4608,9 @@
               "policy.input",
               "policy.forward",
               "management",
-              "nat.outbound"
+              "nat.outbound",
+              "dhcp",
+              "dns"
             ]
           },
           "id": {

@@ -30,7 +30,7 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 			route = "changes"
 			allowed = []string{"POST"}
 		case len(parts) == 3 && parts[0] == "config" && parts[1] == "nat" && parts[2] == "outbound",
-			len(parts) == 2 && parts[0] == "config" && parts[1] == "management":
+			len(parts) == 2 && parts[0] == "config" && (parts[1] == "management" || parts[1] == "dns"):
 			// A singleton: one object without an ID, version-checked like any other.
 			collection = strings.Join(parts[1:], ".")
 			route, id = "singleton", collection
@@ -48,7 +48,7 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 				route, id = "object", parts[3]
 				allowed = []string{"GET", "HEAD", "PUT", "DELETE"}
 			}
-		case len(parts) >= 2 && parts[0] == "config" && slices.Contains([]string{"links", "segments", "zones", "addresses", "services"}, parts[1]):
+		case len(parts) >= 2 && parts[0] == "config" && slices.Contains([]string{"links", "segments", "zones", "addresses", "services", "dhcp"}, parts[1]):
 			collection = parts[1]
 			if len(parts) == 2 {
 				route = "collection"

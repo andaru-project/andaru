@@ -53,6 +53,9 @@ func normalizeDeclaration(d *declaration) {
 	if d.Management != nil {
 		slices.Sort(d.Management.AllowedSources)
 	}
+	if len(d.DHCP) == 0 {
+		d.DHCP = nil // absent, so a declaration without DHCP keeps its form
+	}
 	slices.SortFunc(d.DHCP, func(a, b dhcpEntry) int { return strings.Compare(a.ID, b.ID) })
 	for i := range d.DHCP {
 		e := &d.DHCP[i]

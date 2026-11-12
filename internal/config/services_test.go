@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -109,5 +110,36 @@ func TestServiceDefaults(t *testing.T) {
 	normalizeDeclaration(&got)
 	if got.DHCP[0].LeaseTime != 7200 || got.DNS.LocalDomain != "home.arpa" || got.DNS.RegisterLeases == nil || !*got.DNS.RegisterLeases {
 		t.Fatalf("defaults %+v %+v", got.DHCP[0], got.DNS)
+	}
+}
+
+func TestServiceStoreVersions(t *testing.T) {
+	s := seededState(t)
+	lan := s.Config.Segments[1].ID
+	if v := versionOf(&s, listKey("dns")).Version; v != "0" {
+		t.Fatalf("absent dns at version %q", v)
+	}
+	p := mustRun(t, &s, `{"operations":[
+		{"op":"create","collection":"dhcp","localId":"lan","value":{"name":"lan","segment":"`+lan+`","ranges":[{"first":"192.0.2.100","last":"192.0.2.199"}]}},
+		{"op":"replace","collection":"dns","expectedVersion":"0","value":{"mode":"recursive","segments":["`+lan+`"]}}]}`)
+	id := p.Created["lan"]
+	if !strings.HasPrefix(id, "dhp_") || s.Config.DHCP[0].LeaseTime != 7200 || s.Config.DNS == nil || versionOf(&s, listKey("dns")).Version != s.Version {
+		t.Fatalf("created %q, %+v, dns %+v", id, s.Config.DHCP, s.Config.DNS)
+	}
+	mustRun(t, &s, `{"operations":[{"op":"replace","collection":"dhcp","id":"`+id+`","expectedVersion":"`+string(s.Version)+`","value":{"name":"lan","segment":"`+lan+`","ranges":[{"first":"192.0.2.150","last":"192.0.2.199"}],"leaseTime":3600}}]}`)
+	if s.Config.DHCP[0].LeaseTime != 3600 {
+		t.Fatalf("replace lost: %+v", s.Config.DHCP[0])
+	}
+	// A served segment cannot go while DHCP or DNS names it.
+	for _, batch := range []string{
+		`{"operations":[{"op":"delete","collection":"segments","id":"` + lan + `","expectedVersion":"7"}]}`,
+	} {
+		if _, e := run(t, &s, batch); e == nil {
+			t.Fatal("deleted a served segment")
+		}
+	}
+	mustRun(t, &s, `{"operations":[{"op":"delete","collection":"dhcp","id":"`+id+`","expectedVersion":"`+string(s.Version)+`"},{"op":"delete","collection":"dns","expectedVersion":"`+string(versionOf(&s, listKey("dns")).Version)+`"}]}`)
+	if len(s.Config.DHCP) != 0 || s.Config.DNS != nil {
+		t.Fatalf("not deleted: %+v %+v", s.Config.DHCP, s.Config.DNS)
 	}
 }

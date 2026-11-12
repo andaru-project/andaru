@@ -119,7 +119,7 @@ func TestConfigurationHTTPContract(t *testing.T) {
 		"/api/v1/applies": {"get", "head", "post"}, "/api/v1/applies/{id}": {"get", "head"}, "/api/v1/applies/{id}/confirmation": {"post"}, "/api/v1/applies/{id}/rollback": {"post"},
 		"/api/v1/takeover/proposal": {"get", "head"}, "/api/v1/preview/network/draft": {"post"},
 		"/api/v1/config/policy/{chain}": {"get", "head", "post"}, "/api/v1/config/policy/{chain}/{id}": {"get", "head", "put", "delete"},
-		"/api/v1/config/policy/{chain}/order": {"put"}, "/api/v1/config/management": {"get", "head", "put", "delete"}, "/api/v1/config/nat/outbound": {"get", "head", "put", "delete"}}
+		"/api/v1/config/policy/{chain}/order": {"put"}, "/api/v1/config/management": {"get", "head", "put", "delete"}, "/api/v1/config/nat/outbound": {"get", "head", "put", "delete"}, "/api/v1/config/dns": {"get", "head", "put", "delete"}}
 	if len(document.Paths) != len(expected) {
 		t.Fatalf("unimplemented or missing contract paths: %d", len(document.Paths))
 	}
@@ -625,5 +625,58 @@ func TestSingletonAndOrderTagsAreNotInterchangeable(t *testing.T) {
 	}
 	if got := configCall(h, "GET", "/api/v1/config/policy/forward", "", "").Header().Get("ETag"); got != w.Header().Get("ETag") {
 		t.Fatalf("order reply tag %q, list tag %q", w.Header().Get("ETag"), got)
+	}
+}
+
+func TestServiceRoutesMatchTheContract(t *testing.T) {
+	h, _ := configurationFixture(t)
+	instance, e := jsonschema.UnmarshalJSON(bytes.NewReader(configCall(h, "GET", "/api/v1/schema", "", "").Body.Bytes()))
+	if e != nil {
+		t.Fatal(e)
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.UseLoader(jsonschema.SchemeURLLoader{})
+	if e = compiler.AddResource("https://andaru.invalid/api/v1/schema", instance); e != nil {
+		t.Fatal(e)
+	}
+	conforms := func(def, doc string) {
+		t.Helper()
+		sch, e := compiler.Compile("https://andaru.invalid/api/v1/schema#/$defs/" + def)
+		if e != nil {
+			t.Fatal(e)
+		}
+		v, _ := jsonschema.UnmarshalJSON(strings.NewReader(doc))
+		if e = sch.Validate(v); e != nil {
+			t.Fatalf("%s violates %s: %v", doc, def, e)
+		}
+	}
+	batch := `{"operations":[
+		{"op":"create","collection":"links","localId":"l","value":{"name":"lan","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"02:00:00:00:00:02"}},
+		{"op":"create","collection":"zones","localId":"z","value":{"name":"lan"}},
+		{"op":"create","collection":"segments","localId":"s","value":{"name":"lan","link":"@l","zone":"@z","addressing":{"ipv4":{"mode":"static","addresses":["192.168.40.1/24"]},"ipv6":{"mode":"none"}}}}]}`
+	w := configCall(h, "POST", "/api/v1/config/changes", batch, "")
+	var saved config.SaveResult
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &saved) != nil {
+		t.Fatalf("seed: %d %s", w.Code, w.Body)
+	}
+	seg := saved.Created["s"]
+	dhcp := `{"name":"lan","segment":"` + seg + `","ranges":[{"first":"192.168.40.128","last":"192.168.40.254"}]}`
+	dns := `{"mode":"recursive","segments":["` + seg + `"]}`
+	conforms("objectWrite", dhcp)
+	conforms("objectWrite", dns)
+	if w = configCall(h, "POST", "/api/v1/config/dhcp", dhcp, ""); w.Code != 201 {
+		t.Fatalf("dhcp: %d %s", w.Code, w.Body)
+	}
+	conforms("objectView", w.Body.String())
+	if w = configCall(h, "PUT", "/api/v1/config/dns", dns, ""); w.Code != 428 {
+		t.Fatalf("dns without If-Match: %d %s", w.Code, w.Body)
+	}
+	if w = configCall(h, "PUT", "/api/v1/config/dns", dns, `"dns.0"`); w.Code != 200 {
+		t.Fatalf("dns: %d %s", w.Code, w.Body)
+	}
+	conforms("objectView", w.Body.String())
+	conforms("collectionView", configCall(h, "GET", "/api/v1/config/dhcp", "", "").Body.String())
+	if w = configCall(h, "GET", "/api/v1/config/dns", "", ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"localDomain":"home.arpa"`) {
+		t.Fatalf("dns read back: %d %s", w.Code, w.Body)
 	}
 }

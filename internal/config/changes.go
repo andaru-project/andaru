@@ -147,8 +147,8 @@ func initialState() savedState {
 // Singletons are versioned the same way and written with replace or delete.
 var (
 	orderedCollections = []string{"policy.input", "policy.forward"}
-	singletons         = []string{"management", "nat.outbound"}
-	collections        = append([]string{"links", "segments", "zones", "addresses", "services"}, append(slices.Clone(orderedCollections), singletons...)...)
+	singletons         = []string{"management", "nat.outbound", "dns"}
+	collections        = append([]string{"links", "segments", "zones", "addresses", "services", "dhcp"}, append(slices.Clone(orderedCollections), singletons...)...)
 )
 
 func validCollection(s string) bool { return slices.Contains(collections, s) }
@@ -170,7 +170,7 @@ func newID(collection string) (string, error) {
 	}
 	b[6] = (b[6] & 15) | 64
 	b[8] = (b[8] & 63) | 128
-	prefix := map[string]string{"links": "lnk", "segments": "seg", "zones": "zon", "addresses": "adr", "services": "svc", "policy.input": "rul", "policy.forward": "rul"}[collection]
+	prefix := map[string]string{"links": "lnk", "segments": "seg", "zones": "zon", "addresses": "adr", "services": "svc", "policy.input": "rul", "policy.forward": "rul", "dhcp": "dhp"}[collection]
 	return fmt.Sprintf("%s_%x-%x-%x-%x-%x", prefix, b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
 func rank(code string) int {
@@ -216,6 +216,12 @@ func objects(d *declaration) map[objectKey]any {
 	}
 	if d.NAT.Outbound.Mode != "" {
 		m[listKey("nat.outbound")] = &d.NAT.Outbound
+	}
+	for i := range d.DHCP {
+		m[objectKey{"dhcp", d.DHCP[i].ID}] = &d.DHCP[i]
+	}
+	if d.DNS != nil {
+		m[listKey("dns")] = d.DNS
 	}
 	return m
 }
@@ -476,6 +482,9 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 	if d.Objects.Addresses, e = rewrite(d.Objects.Addresses, "addresses", writes, deleted, createKeys, func(x address) string { return x.ID }); e != nil {
 		return empty, e
 	}
+	if d.DHCP, e = rewrite(d.DHCP, "dhcp", writes, deleted, createKeys, func(x dhcpEntry) string { return x.ID }); e != nil {
+		return empty, e
+	}
 	if d.Objects.Services, e = rewrite(d.Objects.Services, "services", writes, deleted, createKeys, func(x service) string { return x.ID }); e != nil {
 		return empty, e
 	}
@@ -532,6 +541,15 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 		if e := json.Unmarshal(raw, &d.NAT.Outbound); e != nil {
 			return empty, fault("VALIDATION_FAILED", "", "Invalid typed object.")
 		}
+	}
+	if deleted[listKey("dns")] {
+		d.DNS = nil
+	} else if raw, ok := writes[listKey("dns")]; ok {
+		var s dnsService
+		if e := json.Unmarshal(raw, &s); e != nil {
+			return empty, fault("VALIDATION_FAILED", "", "Invalid typed object.")
+		}
+		d.DNS = &s
 	}
 	raw, e := json.Marshal(d)
 	if e != nil {
@@ -722,9 +740,11 @@ func resolveReferences(v map[string]any, col string, labels map[string]string) {
 		resolveAll(v, "from")
 		resolveAll(v, "to")
 		resolveAll(v, "services")
-	case "management":
+	case "management", "dhcp":
 		resolve(v, "segment")
 		resolveAll(v, "allowedSources")
+	case "dns":
+		resolveAll(v, "segments")
 	}
 	if col == "segments" {
 		resolve(v, "link")
@@ -747,8 +767,8 @@ func owner(d *declaration, path string) (objectKey, string) {
 		return "/" + strings.Join(p[from:], "/")
 	}
 	switch p[0] {
-	case "management":
-		return listKey("management"), rest(1)
+	case "management", "dns":
+		return listKey(p[0]), rest(1)
 	case "nat":
 		if len(p) > 1 && p[1] == "outbound" {
 			return listKey("nat.outbound"), rest(2)
@@ -785,6 +805,8 @@ func owner(d *declaration, path string) (objectKey, string) {
 		id = d.Policy.Input[n].ID
 	case col == "policy.forward" && n < len(d.Policy.Forward):
 		id = d.Policy.Forward[n].ID
+	case col == "dhcp" && n < len(d.DHCP):
+		id = d.DHCP[n].ID
 	}
 	if id == "" {
 		return objectKey{}, ""

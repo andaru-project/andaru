@@ -929,10 +929,16 @@
           "$ref": "#/$defs/ruleWrite"
         },
         {
+          "$ref": "#/$defs/dhcpWrite"
+        },
+        {
           "$ref": "#/$defs/managementFields"
         },
         {
           "$ref": "#/$defs/outboundFields"
+        },
+        {
+          "$ref": "#/$defs/dnsService"
         }
       ]
     },
@@ -1656,12 +1662,118 @@
                 "type": "object",
                 "properties": {
                   "op": {
+                    "const": "create"
+                  },
+                  "collection": {
+                    "enum": [
+                      "dhcp"
+                    ]
+                  },
+                  "localId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9_]{0,31}$"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/dhcpWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "replace"
+                  },
+                  "collection": {
+                    "enum": [
+                      "dhcp"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/dhcpWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "delete"
+                  },
+                  "collection": {
+                    "enum": [
+                      "dhcp"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "replace"
+                  },
+                  "collection": {
+                    "enum": [
+                      "dns"
+                    ]
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/dnsService"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
                     "const": "delete"
                   },
                   "collection": {
                     "enum": [
                       "management",
-                      "nat.outbound"
+                      "nat.outbound",
+                      "dns"
                     ]
                   },
                   "expectedVersion": {
@@ -1709,10 +1821,16 @@
           "$ref": "#/$defs/ruleStored"
         },
         {
+          "$ref": "#/$defs/dhcpStored"
+        },
+        {
           "$ref": "#/$defs/managementFields"
         },
         {
           "$ref": "#/$defs/outboundFields"
+        },
+        {
+          "$ref": "#/$defs/dnsService"
         }
       ]
     },
