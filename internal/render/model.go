@@ -120,6 +120,8 @@ type declaration struct {
 		Outbound struct {
 			Mode string `json:"mode"`
 		} `json:"outbound"`
+		PortForwards []portForward `json:"portForwards"`
+		OneToOne     []oneToOne    `json:"oneToOne"`
 	} `json:"nat"`
 	Management *struct {
 		Segment        string   `json:"segment"`
@@ -127,6 +129,25 @@ type declaration struct {
 	} `json:"management"`
 	DHCP []dhcpEntry `json:"dhcp"`
 	DNS  *dnsService `json:"dns"`
+}
+
+type natPoint struct {
+	Self    bool   `json:"self"`
+	Address string `json:"address"`
+}
+type portForward struct {
+	ID, Protocol, Ports, FilterRule  string
+	Enabled, FromNegated, NoRedirect bool
+	Reflection, Log                  bool
+	IngressZones, From               []string
+	To                               natPoint
+	Target                           *natPoint
+	TargetPort                       *int
+}
+type oneToOne struct {
+	ID, Zone, External, Internal string
+	Enabled, NoBinat, Reflection bool
+	Destination                  []string
 }
 
 // filtered reports that the declaration switches the packet filter on: a management segment is set.

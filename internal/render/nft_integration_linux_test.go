@@ -162,3 +162,42 @@ func TestFilterInNamespace(t *testing.T) {
 		t.Errorf("the podman table was touched: %v %s", err, out)
 	}
 }
+
+// Port forwards in a real kernel: the WAN reaches the LAN host through the forward and the firewall through a
+// self target, sees nothing directly, and an excluded source is not translated.
+func TestPortForwardsInNamespace(t *testing.T) {
+	l := newLab(t)
+	in := change(t, fixture(t, "nat-port-forwards"), func(d map[string]any) {
+		for _, f := range d["nat"].(map[string]any)["portForwards"].([]any) {
+			if target, ok := f.(map[string]any)["target"].(map[string]any); ok && target["address"] != nil {
+				target["address"] = "10.2.0.2"
+			}
+		}
+		// The exclusion now names the WAN neighbour, so its connections on 1000-1001 stay untranslated.
+		addresses := d["objects"].(map[string]any)["addresses"].([]any)
+		addresses[len(addresses)-1].(map[string]any)["address"] = "10.1.0.2"
+	})
+	l.load(in)
+	peers := l.listen(l.lan, 80)
+	l.listen(l.lan, 2000)
+	l.listen(l.fw, 22)
+	if !l.connects(l.wan, "10.1.0.1", 8080) {
+		t.Fatal("the forward 8080 to the LAN host did not connect")
+	}
+	var seen []byte
+	for end := time.Now().Add(2 * time.Second); time.Now().Before(end) && strings.TrimSpace(string(seen)) == ""; time.Sleep(20 * time.Millisecond) {
+		seen, _ = os.ReadFile(peers)
+	}
+	if strings.TrimSpace(string(seen)) != "10.1.0.2" {
+		t.Errorf("the LAN host saw %q, want the real client 10.1.0.2", seen)
+	}
+	if l.connects(l.wan, "10.2.0.2", 80) {
+		t.Error("the LAN host was reachable directly; the associated rule must admit only translated connections")
+	}
+	if !l.connects(l.wan, "10.1.0.1", 2222) {
+		t.Error("the forward 2222 to the firewall's SSH did not connect")
+	}
+	if l.connects(l.wan, "10.1.0.1", 1000) {
+		t.Error("an excluded source was translated")
+	}
+}

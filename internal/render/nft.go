@@ -30,8 +30,8 @@ type filter struct {
 func (r *renderer) filterChains() {
 	d := r.d
 	if !d.filtered() {
-		if len(d.Policy.Input)+len(d.Policy.Forward) > 0 || d.NAT.Outbound.Mode == "automatic" {
-			r.find("error", "MANAGEMENT_REQUIRED", "/management", "Rules and outbound NAT take effect only with a management segment, which keeps SSH reachable whatever the rules say. Set management.segment.")
+		if len(d.Policy.Input)+len(d.Policy.Forward) > 0 || d.NAT.Outbound.Mode == "automatic" || len(d.NAT.PortForwards)+len(d.NAT.OneToOne) > 0 {
+			r.find("error", "MANAGEMENT_REQUIRED", "/management", "Rules and NAT take effect only with a management segment, which keeps SSH reachable whatever the rules say. Set management.segment.")
 		}
 		return
 	}
@@ -107,10 +107,13 @@ func (r *renderer) filterChains() {
 			input = append(input, fmt.Sprintf("iifname %q %s saddr @%s tcp dport 22 accept", mgmt, ipKey(fam), set))
 		}
 	}
+	prerouting, boundForward, boundInput := f.portForwards()
+	// A forward's own rule comes before the policy, so no later rule can shadow it.
+	input = append(input, boundInput...)
 	for _, rule := range d.Policy.Input {
 		input = append(input, f.rule(rule, false)...)
 	}
-	forward := []string{"ct state established,related accept", "ct state invalid drop"}
+	forward := append([]string{"ct state established,related accept", "ct state invalid drop"}, boundForward...)
 	for _, rule := range d.Policy.Forward {
 		forward = append(forward, f.rule(rule, true)...)
 	}
@@ -128,6 +131,9 @@ func (r *renderer) filterChains() {
 	}
 	chain("input", "type filter hook input priority filter; policy drop;", input)
 	chain("forward", "type filter hook forward priority filter; policy drop;", forward)
+	if len(prerouting) > 0 {
+		chain("prerouting", "type nat hook prerouting priority dstnat;", prerouting)
+	}
 	if d.NAT.Outbound.Mode == "automatic" {
 		// fib saddr type != local keeps host-originated traffic out of the masquerade.
 		chain("postrouting", "type nat hook postrouting priority srcnat;", []string{"fib saddr type != local oifname @uplinks meta nfproto ipv4 masquerade"})
