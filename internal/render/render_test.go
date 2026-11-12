@@ -472,3 +472,15 @@ func TestDNSServiceNotUsedByTheHost(t *testing.T) {
 		t.Fatalf("findings %+v", got.Findings)
 	}
 }
+
+// Two segments whose IDs hash alike still get distinct Kea subnet IDs.
+func TestSubnetIDsStayDistinct(t *testing.T) {
+	a, b := "seg_1681ba3f-6834-46cf-ab68-f2709e115554", "seg_dbdfc312-6c0d-4cb5-b245-ee0545ab1415"
+	if subnetID(a, nil) != subnetID(b, nil) {
+		t.Skip("the pair no longer collides")
+	}
+	used := map[uint32]bool{subnetID(a, nil): true}
+	if subnetID(b, used) == subnetID(a, nil) {
+		t.Fatal("colliding segments share a subnet ID")
+	}
+}

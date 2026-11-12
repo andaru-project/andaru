@@ -70,6 +70,7 @@ func (r *renderer) services() {
 	var interfaces []string
 	var subnets []map[string]any
 	var names []string // static lease records, published by the DNS service
+	ids := map[uint32]bool{}
 	for i, e := range d.DHCP {
 		name, own, ok := r.served(e.Segment)
 		if !ok {
@@ -109,7 +110,7 @@ func (r *renderer) services() {
 			reservations = append(reservations, res)
 		}
 		subnets = append(subnets, map[string]any{
-			"id": subnetID(e.Segment), "subnet": own.Masked().String(), "pools": pools, "valid-lifetime": e.LeaseTime,
+			"id": subnetID(e.Segment, ids), "subnet": own.Masked().String(), "pools": pools, "valid-lifetime": e.LeaseTime,
 			"reservations": reservations, "option-data": options,
 			// The lease sync reads this, so it needs nothing but Kea's own configuration.
 			"user-context": map[string]any{"andaru": map[string]any{"domain": domain, "register": register && dnsServes(e.Segment)}},
@@ -177,9 +178,16 @@ func (r *renderer) services() {
 
 // subnetID is the served segment's Kea subnet ID. Kea's leases name their subnet by it, so it must not change
 // when other entries come or go; it is derived from the segment's identity.
-// shortcut: two segments hashing alike would share an ID (about 1 in 10^7 for 64 entries); allocate IDs in the declaration if that ever bites.
-func subnetID(segment string) uint32 {
+// Two segments hashing alike take the next free ID in declaration order, recorded in used.
+func subnetID(segment string, used map[uint32]bool) uint32 {
 	h := fnv.New32a()
 	h.Write([]byte(segment))
-	return h.Sum32()%4294967294 + 1 // Kea's range is 1 to 4294967294
+	id := h.Sum32()%4294967294 + 1 // Kea's range is 1 to 4294967294
+	for used[id] {
+		id = id%4294967294 + 1
+	}
+	if used != nil {
+		used[id] = true
+	}
+	return id
 }
