@@ -2167,6 +2167,12 @@
         },
         {
           "$ref": "#/$defs/dnsService"
+        },
+        {
+          "$ref": "#/$defs/portForwardStored"
+        },
+        {
+          "$ref": "#/$defs/oneToOneStored"
         }
       ]
     },

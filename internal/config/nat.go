@@ -2,11 +2,15 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
 )
+
+// maxNATMapEntries caps the map entries shifted port ranges render, which grow with ports, zones and sources.
+const maxNATMapEntries = 65536
 
 // validateNAT checks the port forwards and 1:1 entries against the zones, address objects and the
 // firewall's own static addresses, with pfSense's rules.
@@ -66,6 +70,7 @@ func validateNAT(d *declaration) []FieldError {
 
 	type span struct{ first, last int }
 	spans := make([]span, len(d.NAT.PortForwards))
+	budget := maxNATMapEntries
 	seen := map[string]bool{}
 	for i, f := range d.NAT.PortForwards {
 		p := fmt.Sprintf("/nat/portForwards/%d", i)
@@ -109,30 +114,57 @@ func validateNAT(d *declaration) []FieldError {
 		if f.TargetPort != nil && ok && *f.TargetPort+last-first > 65535 {
 			bad(p+"/targetPort", "The shifted range would end past port 65535.")
 		}
+		// A shifted range renders one map entry per port, zone and source; the whole configuration has a budget.
+		if f.Enabled && f.TargetPort != nil && ok && *f.TargetPort != first && last != first {
+			lines := len(f.IngressZones)
+			if !f.FromNegated {
+				lines *= max(1, len(f.From))
+			}
+			if budget -= (last - first + 1) * lines; budget < 0 {
+				bad(p+"/targetPort", fmt.Sprintf("Shifted port ranges render more than %d map entries in all. Keep the ports, or shift fewer.", maxNATMapEntries))
+				budget = maxNATMapEntries // report once per crossing forward, not for every one after it
+			}
+		}
 	}
 	// pfSense refuses two forwards that would catch the same connections: same source, destination, an
-	// ingress zone, a protocol and overlapping ports. Forwards differing in any of those are ordered.
-	sameFrom := func(a, b portForward) bool {
-		return a.FromNegated == b.FromNegated && slices.Equal(slices.Sorted(slices.Values(a.From)), slices.Sorted(slices.Values(b.From)))
-	}
-	protocols := func(p string) []string {
-		if p == "tcp-udp" {
-			return []string{"tcp", "udp"}
+	// ingress zone, a protocol and overlapping ports. Forwards differing in any of those are ordered. Validation
+	// runs on every read, so the forwards are bucketed by those keys and each bucket swept in port order.
+	type entry struct{ index, first, last int }
+	buckets := map[string][]entry{}
+	for i, f := range d.NAT.PortForwards {
+		if !f.Enabled || f.NoRedirect || spans[i].first == 0 {
+			continue
 		}
-		return []string{p}
-	}
-	for j, b := range d.NAT.PortForwards {
-		for i, a := range d.NAT.PortForwards[:j] {
-			if !a.Enabled || !b.Enabled || a.NoRedirect || b.NoRedirect || !sameFrom(a, b) || a.To != b.To ||
-				!slices.ContainsFunc(a.IngressZones, func(z string) bool { return slices.Contains(b.IngressZones, z) }) ||
-				!slices.ContainsFunc(protocols(a.Protocol), func(p string) bool { return slices.Contains(protocols(b.Protocol), p) }) {
-				continue
-			}
-			if spans[i].first <= spans[j].last && spans[j].first <= spans[i].last && spans[i].first > 0 && spans[j].first > 0 {
-				bad(fmt.Sprintf("/nat/portForwards/%d/ports", j), fmt.Sprintf("These ports overlap port forward %q for the same connections.", a.Name))
-				break
+		from := strings.Join(slices.Sorted(slices.Values(f.From)), ",")
+		protocols := []string{f.Protocol}
+		if f.Protocol == "tcp-udp" {
+			protocols = []string{"tcp", "udp"}
+		}
+		for _, zone := range slices.Compact(slices.Sorted(slices.Values(f.IngressZones))) {
+			for _, protocol := range protocols {
+				key := fmt.Sprintf("%t|%s|%t|%s|%s|%s", f.FromNegated, from, f.To.Self, f.To.Address, zone, protocol)
+				buckets[key] = append(buckets[key], entry{i, spans[i].first, spans[i].last})
 			}
 		}
+	}
+	overlapping := map[int]int{}
+	for _, list := range buckets {
+		slices.SortFunc(list, func(a, b entry) int { return a.first - b.first })
+		reach := list[0]
+		for _, e := range list[1:] {
+			if e.first <= reach.last {
+				later, other := max(e.index, reach.index), min(e.index, reach.index)
+				if prev, seen := overlapping[later]; !seen || other < prev {
+					overlapping[later] = other
+				}
+			}
+			if e.last > reach.last {
+				reach = e
+			}
+		}
+	}
+	for _, j := range slices.Sorted(maps.Keys(overlapping)) {
+		bad(fmt.Sprintf("/nat/portForwards/%d/ports", j), fmt.Sprintf("These ports overlap port forward %q for the same connections.", d.NAT.PortForwards[overlapping[j]].Name))
 	}
 
 	// own holds the firewall's static IPv4 addresses; primary is each segment's first, which the firewall's own
@@ -173,6 +205,13 @@ func validateNAT(d *declaration) []FieldError {
 		if o.NoBinat {
 			if o.External != "" {
 				bad(p+"/external", "An exclusion maps nothing, so it has no external address.")
+			}
+			// It is matched on its internal hosts and zone alone; anything else would be silently ignored.
+			if len(o.Destination) > 0 {
+				bad(p+"/destination", "An exclusion applies to every peer; it has no destination.")
+			}
+			if o.Reflection {
+				bad(p+"/reflection", "An exclusion translates nothing, so it has no reflection.")
 			}
 			continue
 		}

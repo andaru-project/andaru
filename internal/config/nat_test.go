@@ -1,8 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"slices"
 	"testing"
+	"time"
 )
 
 const (
@@ -200,4 +202,39 @@ func TestNATReferencesBlockDeletion(t *testing.T) {
 	setNAT(d, "oneToOne", mapping(d, nil))
 	d["zones"] = d["zones"].([]any)[1:]
 	refusedAt(t, d, "/nat/oneToOne/0/zone")
+}
+
+// Shifted ranges render one map entry per port; the whole configuration has a budget.
+func TestShiftedRangeBudget(t *testing.T) {
+	d := natFixture(t)
+	setNAT(d, "portForwards", forward(d, map[string]any{"ports": "1-40000", "targetPort": 2}),
+		forward(d, map[string]any{"id": pfwB, "name": "web2", "from": []any{natPeer}, "ports": "1-40000", "targetPort": 2}))
+	refusedAt(t, d, "/nat/portForwards/1/targetPort")
+	d = natFixture(t)
+	setNAT(d, "portForwards", forward(d, map[string]any{"ports": "1-40000", "targetPort": 2}))
+	accepted(t, d)
+}
+
+// An exclusion is matched only on its internal hosts; conditions it cannot honour are refused.
+func TestOneToOneExclusionConditions(t *testing.T) {
+	for field, value := range map[string]any{"destination": []any{natPeer}, "reflection": true} {
+		d := natFixture(t)
+		setNAT(d, "oneToOne", mapping(d, map[string]any{"noBinat": true, "external": nil, "internal": "192.0.2.31", field: value}))
+		refusedAt(t, d, "/nat/oneToOne/0/"+field)
+	}
+}
+
+// Validation runs on every read: many forwards must not make it quadratic in practice.
+func TestManyForwardsValidateQuickly(t *testing.T) {
+	d := natFixture(t)
+	var list []any
+	for i := 0; i < 5000; i++ {
+		list = append(list, forward(d, map[string]any{"id": fmt.Sprintf("pfw_%08x-0000-4000-8000-000000000001", i+1), "name": fmt.Sprint("f", i), "ports": fmt.Sprint(i + 1)}))
+	}
+	setNAT(d, "portForwards", list...)
+	start := time.Now()
+	accepted(t, d)
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("validating 5000 forwards took %v", took)
+	}
 }

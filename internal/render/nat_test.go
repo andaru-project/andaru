@@ -240,3 +240,20 @@ func TestReflectionKeepsTheSource(t *testing.T) {
 	inOrder(t, chainOf(t, script, "prerouting"),
 		`iifname @internal ip saddr @`+natPartner+` fib daddr type local ip daddr != @internal_4 tcp dport 8080 dnat ip to 192.0.2.10:80 comment "`+pfwWeb+`"`)
 }
+
+// An exclusion carves its hosts out of later entries of its own zone only.
+func TestOneToOneExclusionStaysInItsZone(t *testing.T) {
+	script := table(t, render(t, change(t, fixture(t, "nat-one-to-one"), func(d map[string]any) {
+		d["nat"].(map[string]any)["oneToOne"].([]any)[0].(map[string]any)["zone"] = "zon_00000002-0000-4000-8000-000000000002"
+	})))
+	if strings.Contains(script, "192.0.2.31") {
+		t.Fatalf("an exclusion in the LAN zone carved hosts out of WAN entries:\n%s", script)
+	}
+}
+
+// A self forward's associated rule must not admit a connection a 1:1 entry translated to the same host and port.
+func TestSelfRuleExcludesOneToOneTraffic(t *testing.T) {
+	forward := chainOf(t, table(t, render(t, fixture(t, "nat-one-to-one"))), "forward")
+	inOrder(t, forward,
+		`iifname @`+natWAN+` ct status dnat ct original ip daddr != @one_to_one_4 ct original proto-dst 8080 ip daddr 192.0.2.10 tcp dport 80 accept comment "`+pfwWeb+`"`)
+}

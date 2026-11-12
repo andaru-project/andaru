@@ -694,7 +694,9 @@ func TestNATListRoutes(t *testing.T) {
 	forward := func(name, port string) string {
 		return `{"name":"` + name + `","enabled":true,"ingressZones":["` + zone + `"],"protocol":"tcp","from":[],"to":{"self":true},"ports":"` + port + `","target":{"address":"192.0.2.10"}}`
 	}
-	a := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/nat/port-forwards", forward("a", "8080"), "")))
+	created := configCall(h, "POST", "/api/v1/config/nat/port-forwards", forward("a", "8080"), "")
+	a := valueID(t, apiObject(t, created))
+	expect(configCall(h, "GET", created.Header().Get("Location"), "", ""), 200)
 	w := configCall(h, "POST", "/api/v1/config/nat/port-forwards?before="+a, forward("b", "8081"), "")
 	expect(w, 201)
 	b := valueID(t, apiObject(t, w))
@@ -730,6 +732,16 @@ func TestNATListRoutes(t *testing.T) {
 	served, _ := jsonschema.UnmarshalJSON(bytes.NewReader(configCall(h, "GET", "/api/v1/config", "", "").Body.Bytes()))
 	if e = snapshot.Validate(served); e != nil {
 		t.Fatalf("snapshot with NAT lists violates the schema: %v", e)
+	}
+	collection, e := compiler.Compile("https://andaru.invalid/api/v1/schema#/$defs/collectionView")
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, list := range []string{"port-forwards", "one-to-one"} {
+		served, _ := jsonschema.UnmarshalJSON(bytes.NewReader(configCall(h, "GET", "/api/v1/config/nat/"+list, "", "").Body.Bytes()))
+		if e = collection.Validate(served); e != nil {
+			t.Fatalf("%s list violates the schema: %v", list, e)
+		}
 	}
 	w = configCall(h, "GET", "/api/v1/config/nat/port-forwards/"+b, "", "")
 	expect(w, 200)

@@ -225,7 +225,8 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 		if r.Method == "POST" {
 			status = 201
 			id = result.Created["object"]
-			w.Header().Set("Location", "/api/v1/config/"+strings.ReplaceAll(collection, ".", "/")+"/"+id)
+			// The path the client used, which for the NAT lists is not the dotted collection name.
+			w.Header().Set("Location", strings.TrimSuffix(r.URL.Path, "/")+"/"+id)
 		}
 		for _, item := range result.Items {
 			if item.Collection == collection && item.ID == id {

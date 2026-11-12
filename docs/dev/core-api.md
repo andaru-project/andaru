@@ -65,7 +65,9 @@ The actual OpenAPI 3.1 document is embedded from [`internal/engine/openapi.json`
 | `GET/POST /api/v1/config/policy/{input\|forward}` | A rule list in execution order with its `version`; `POST ?before=<rule id>` places a new rule |
 | `GET/PUT/DELETE /api/v1/config/policy/{chain}/{id}` | One rule, version-checked like any object |
 | `PUT /api/v1/config/policy/{chain}/order` | Reorder a list: every rule ID once, `If-Match: "order.N"`; replies with the new `order` and its `version` |
-| `GET/POST /api/v1/config/nat/{port-forwards\|one-to-one}`, `…/{id}`, `…/order` | The inbound NAT lists, exactly as the policy lists |
+| `GET/POST /api/v1/config/nat/{port-forwards\|one-to-one}` | An inbound NAT list in evaluation order with its `version`; `POST ?before=<entry id>` places a new entry |
+| `GET/PUT/DELETE /api/v1/config/nat/{list}/{id}` | One NAT entry, version-checked like any object |
+| `PUT /api/v1/config/nat/{list}/order` | Reorder a NAT list, as for the policy lists |
 | `GET/PUT/DELETE /api/v1/config/management`, `/api/v1/config/nat/outbound` | Single objects, `If-Match: "management.N"` / `"nat.outbound.N"`, `0` while unset |
 | `GET/POST /api/v1/config/dhcp`, `GET/PUT/DELETE /api/v1/config/dhcp/{id}` | DHCP servers, one per served segment |
 | `GET/PUT/DELETE /api/v1/config/dns` | The DNS service, `If-Match: "dns.N"`, `0` while unset |

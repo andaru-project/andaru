@@ -40,6 +40,17 @@ func portMatch(protocol string, first, last int) string {
 // the forward chain (an inside host) or the input chain (the firewall itself).
 func (f *filter) portForwards() (prerouting, forward, input []string) {
 	own := f.r.ownStatic()
+	// ct status dnat says a connection was translated, not by whom: a self forward's rule must not admit what a
+	// 1:1 entry translated to the same host and port, so the 1:1 external addresses are named.
+	var externals []string
+	for _, o := range f.r.d.NAT.OneToOne {
+		if o.Enabled && !o.NoBinat {
+			externals = append(externals, prefixOf(o.External).String())
+		}
+	}
+	if len(externals) > 0 {
+		f.set("one_to_one_4", "ipv4_addr", "interval", externals)
+	}
 	for _, pf := range f.r.d.NAT.PortForwards {
 		if !pf.Enabled {
 			continue
@@ -63,6 +74,9 @@ func (f *filter) portForwards() (prerouting, forward, input []string) {
 		}
 		// fib matches either family: the guard keeps an IPv4 forward to self off the firewall's IPv6 addresses.
 		to, original := "meta nfproto ipv4 fib daddr . iif type local", ""
+		if len(externals) > 0 {
+			original = "ct original ip daddr != @one_to_one_4 "
+		}
 		if !pf.To.Self {
 			to = "ip daddr @" + setName(pf.To.Address) + "_4"
 			original = "ct original ip daddr @" + setName(pf.To.Address) + "_4 "
@@ -220,21 +234,21 @@ func (f *filter) oneToOne() (prerouting, postrouting []string) {
 		}
 		return field + " != { " + strings.Join(list, ", ") + " }"
 	}
-	var excluded []netip.Prefix
+	excluded := map[string][]netip.Prefix{} // per zone: an exclusion carves hosts out of its own zone's entries
 	for i, o := range r.d.NAT.OneToOne {
 		if !o.Enabled {
 			continue
 		}
 		internal := prefixOf(o.Internal)
 		if o.NoBinat {
-			excluded = append(excluded, internal)
+			excluded[o.Zone] = append(excluded[o.Zone], internal)
 			continue
 		}
 		external := prefixOf(o.External)
 		f.checkExternal(external, fmt.Sprintf("/nat/oneToOne/%d/external", i))
 		var outside, inside []string
 		whole := false
-		for _, x := range excluded {
+		for _, x := range excluded[o.Zone] {
 			switch {
 			case x.Bits() <= internal.Bits() && x.Contains(internal.Addr()):
 				whole = true
