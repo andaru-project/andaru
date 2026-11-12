@@ -1,3 +1,10 @@
+### /run/systemd/network/50-andaru-ens18.link 0644 secret=false sources=/links/0
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:01
+
+[Link]
+Name=ens18
+
 ### /run/systemd/network/50-andaru-ens18.network 0644 secret=false sources=/links/0,/segments/0
 [Match]
 PermanentMACAddress=52:54:00:aa:bb:01
@@ -29,6 +36,13 @@ PrefixDelegationHint=::/56
 [IPv6AcceptRA]
 UseDNS=yes
 UseDomains=no
+
+### /run/systemd/network/50-andaru-ens19.link 0644 secret=false sources=/links/1
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:02
+
+[Link]
+Name=ens19
 
 ### /run/systemd/network/50-andaru-ens19.network 0644 secret=false sources=/links/1,/segments/1
 [Match]

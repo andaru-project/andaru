@@ -168,3 +168,23 @@ func TestFilterFollowsRenamedAdapters(t *testing.T) {
 		t.Fatalf("loaded %q, table %q", b.net.script, b.net.table)
 	}
 }
+
+// The filter names interfaces, so it loads only once udev has given the cards their final names.
+func TestBootLoadsFilterAfterRenaming(t *testing.T) {
+	b := newBench(t)
+	files := filtered(map[string]string{"50-andaru-eth0.network": uplinkDHCP, "50-andaru-eth0.link": "[Match]\nPermanentMACAddress=02:00:00:00:00:01\n\n[Link]\nName=eth0\n"}, "aa")
+	id := b.gen(false, files)
+	if err := b.r.Activate(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Confirm(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	b.reboot()
+	if err := b.r.Boot(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if trigger, load := b.index("udevadm trigger"), b.index("nft -f"); trigger < 0 || load < trigger {
+		t.Fatalf("filter loaded before the cards were named: %q", b.net.argv)
+	}
+}
