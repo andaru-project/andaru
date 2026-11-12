@@ -184,11 +184,22 @@ func TestApplyFindings(t *testing.T) {
 		"forwarding and PPP": {func() gateInput {
 			in := taken()
 			in.Declaration = []byte(`{"links":[{"kind":"ethernet","enabled":true},{"kind":"pppoe","enabled":true},{"kind":"pppoe","enabled":false}],
-				"segments":[{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"delegated"}}},
-				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"enabled":true}}}},
-				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"enabled":false}}}}]}`)
+				"segments":[{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"delegated","ra":{"mode":"unmanaged"}}}},
+				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"enabled":true,"managed":false,"otherInfo":false}}}},
+				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"enabled":false,"managed":true,"otherInfo":true}}}},
+				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"mode":"router"}}}}]}`)
 			return in
-		}, []want{{"APPLY_UNSUPPORTED", "/links/1"}, {"APPLY_UNSUPPORTED", "/segments/0/addressing/ipv6/mode"}, {"APPLY_UNSUPPORTED", "/segments/1/addressing/ipv6/ra/enabled"}}},
+		}, []want{{"APPLY_UNSUPPORTED", "/links/1"}}},
+		"advertisement modes needing the DHCPv6 server": {func() gateInput {
+			in := taken()
+			in.Declaration = []byte(`{"links":[{"kind":"ethernet","enabled":true}],"segments":[
+				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"mode":"managed"}}}},
+				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"mode":"assisted"}}}},
+				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"delegated","ra":{"mode":"stateless"}}}},
+				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"enabled":true,"managed":true,"otherInfo":false}}}},
+				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"enabled":true,"managed":false,"otherInfo":true}}}}]}`)
+			return in
+		}, []want{{"APPLY_UNSUPPORTED", "/segments/0/addressing/ipv6/ra/mode"}, {"APPLY_UNSUPPORTED", "/segments/1/addressing/ipv6/ra/mode"}, {"APPLY_UNSUPPORTED", "/segments/2/addressing/ipv6/ra/mode"}, {"APPLY_UNSUPPORTED", "/segments/3/addressing/ipv6/ra/mode"}, {"APPLY_UNSUPPORTED", "/segments/4/addressing/ipv6/ra/mode"}}},
 		"existing device would change": {func() gateInput {
 			in := taken()
 			in.LiveFiles[vlanNetdev] = []byte("[NetDev]\nKind=vlan\n\n[VLAN]\nId=6\n")

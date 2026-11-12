@@ -159,7 +159,8 @@ func applyFindings(in gateInput) []render.Finding {
 				IPv6 struct {
 					Mode string `json:"mode"`
 					RA   *struct {
-						Enabled bool `json:"enabled"`
+						Mode                        string `json:"mode"`
+						Enabled, Managed, OtherInfo bool   // the form saved before modes
 					} `json:"ra"`
 				} `json:"ipv6"`
 			} `json:"addressing"`
@@ -175,12 +176,9 @@ func applyFindings(in gateInput) []render.Finding {
 		}
 	}
 	for i, s := range declared.Segments {
-		v6 := s.Addressing.IPv6
-		if v6.Mode == "delegated" {
-			refuse("APPLY_UNSUPPORTED", fmt.Sprintf("/segments/%d/addressing/ipv6/mode", i), "Delegated prefixes cannot be applied yet."+filter)
-		}
-		if v6.RA != nil && v6.RA.Enabled {
-			refuse("APPLY_UNSUPPORTED", fmt.Sprintf("/segments/%d/addressing/ipv6/ra/enabled", i), "Router advertisements cannot be applied yet."+filter)
+		ra := s.Addressing.IPv6.RA
+		if ra != nil && (slices.Contains([]string{"managed", "assisted", "stateless"}, ra.Mode) || ra.Mode == "" && ra.Enabled && (ra.Managed || ra.OtherInfo)) {
+			refuse("APPLY_UNSUPPORTED", fmt.Sprintf("/segments/%d/addressing/ipv6/ra/mode", i), "This router advertisement mode needs the DHCPv6 server, which is not available yet.")
 		}
 	}
 

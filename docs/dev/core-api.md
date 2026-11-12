@@ -180,6 +180,7 @@ What is rendered:
 | `UNSUPPORTED_COMBINATION` | error or warning | A PPPoE segment may use IPv4 `ppp`/`none` and IPv6 `none`/`slaac`/`dhcp6`, at least one of them, without RA. A PPPoE link with no segment is left out (warning). |
 | `DEPENDENCY_UNAVAILABLE` | warning | Something was left out because a link it needs is missing, ambiguous or disabled. A bridge or bond keeps its remaining members. |
 | `RA_PREFIX_UNSUPPORTED` | warning | Router advertisements were requested where nothing can be announced. |
+| `RA_DNS_UNAVAILABLE` | warning | The DNS service serves a delegated segment that has no static IPv6 address, so its advertisements carry no DNS server. |
 | `DNS_NOT_APPLIED` | warning | A segment declares DNS servers, but this host's `/etc/resolv.conf` is not managed by systemd-resolved, so they are saved and not used. |
 
 ### Trying a PPPoE line by hand
@@ -229,7 +230,7 @@ What happens, in order:
 | `MANAGEMENT_REQUIRED` | Rules or outbound NAT are declared without `management.segment`, or the management segment's interface is unavailable. |
 | `DHCP_WITHOUT_DNS` | (warning) A DHCP server hands out no DNS server: the DNS service does not serve its segment and `dnsServers` is empty. |
 | `FOREIGN_FILTER` | `nftables.service`, `firewalld` or `ufw` is enabled and would replace or override Andaru's filter. |
-| `APPLY_UNSUPPORTED` | PPPoE links, delegated prefixes and router advertisements wait for the firewall. |
+| `APPLY_UNSUPPORTED` | PPPoE links wait for the firewall; router advertisement modes `managed`, `assisted` and `stateless` wait for the DHCPv6 server. |
 | `NETDEV_CHANGE_UNSUPPORTED` | An existing VLAN, bridge or bond would change. Remove it in one apply and add it again in the next. |
 | `BOOT_UNIT_DISABLED` | `andaru-network-boot.service` is not enabled, so a confirmed configuration would not return after a reboot. |
 
@@ -300,6 +301,24 @@ printf '%s\n' '{"mode":"recursive","segments":["'"$LAN"'"]}' | sudo andaru ctl c
 - **Filter:** with the filter on, DHCP requests are accepted on served segments by a fixed rule; DNS is governed by rules (the takeover's starter rule allows it from the LAN).
 - **Takeover:** with Unbound installed and a static LAN segment, the proposal includes the DNS service: forwarding to the host's declared servers, or recursive when they came from DHCP. With Kea installed it offers DHCP on each static LAN segment (the upper half of the subnet); the assistant asks for each, yes by default, while `--accept-detected` never turns DHCP on.
 - Inspect leases with `sudo cat /run/andaru-leases/leases.conf` or Kea's socket until a status page exists.
+
+### IPv6 on the LAN
+
+A LAN segment numbers itself from a prefix the WAN's DHCPv6 client receives, or from static addresses, and advertises itself as a router. Design: [IPv6 for the LAN](../superpowers/specs/2026-11-12-ipv6-lan-design.md).
+
+```sh
+# WAN: ask for a /56 and no address of its own.
+... "ipv6":{"mode":"dhcp6","requestPrefixLength":56,"prefixOnly":true}
+# LAN: subnet 0 of the delegated prefix, a stable unique local /64 for DNS, SLAAC for clients.
+... "ipv6":{"mode":"delegated","from":"<wan segment>","subnetId":"0","addresses":["fd12:3456:789a:1::1/64"],"ra":{"mode":"unmanaged"}}
+```
+
+- **`ra`**: `mode` `disabled`, `router` (no prefix announced), `unmanaged` (SLAAC); `managed`, `assisted`, `stateless` are saved but refused at apply until the DHCPv6 server exists. Options: `priority` (`low`, `medium`, `high`), `routerLifetime` (0 or 4–9000 s, default 1800), `validLifetime`/`preferredLifetime` (static prefixes only, default 86400/14400; a delegated prefix keeps the lease's), `dns` (`servers`, `searchDomains`), `pref64`. Versions saved with the older `{enabled, managed, otherInfo}` still load; writing the segment stores the mode.
+- **Advertised DNS:** without `ra.dns`, a segment the DNS service serves advertises its first static IPv6 address and the local and search domains. Give a delegated segment a static unique local address (RFC 4193): the delegated prefix can change, the unique local address does not. Without one, `RA_DNS_UNAVAILABLE` warns.
+- **WAN DHCPv6 client:** `requestPrefixLength`, `prefixOnly` (`UseAddress=no`), `withoutRA` (solicit without waiting for an advertisement), `sendRelease` (default false: a release makes many providers hand out a new prefix), `duid` (hex, replaces the captured DHCPv6 identity).
+- **DNS service:** listens on each served segment's stable IPv6 address and answers whatever source reaches it there; which clients may is the input policy's job. A segment may be served by IPv6 alone.
+- **Filter:** link-local multicast listener discovery is accepted on every interface. Neighbour discovery was already.
+- **Not offered:** advertisement intervals (networkd has none), extra advertised subnets, DHCPv6 server modes (next slice).
 
 ### Host DNS servers
 
