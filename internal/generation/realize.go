@@ -417,6 +417,10 @@ func (r Realizer) Activate(ctx context.Context, id int) error {
 			if err := r.handBack(restore, ifupdown, next, p.Takeover); err != nil {
 				return fmt.Errorf("handing back to ifupdown failed: %w", err)
 			}
+			// What the generation started goes too: ifupdown knows nothing of Kea or Unbound.
+			if err := r.services(restore, next, nil); err != nil {
+				return fmt.Errorf("stopping its services failed: %w", err)
+			}
 			return nil
 		}); err != nil {
 			return fmt.Errorf("activate %d: %s; %w", id, reason, err)
