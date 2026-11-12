@@ -26,7 +26,11 @@ needs its own CodeGraph index: run `sh scripts/agent/ensure-codegraph.sh
 ## Graph freshness
 
 The committed `graphify-out/graph.json` always equals
-`PYTHONHASHSEED=0 graphify update .` run on the commit's own tree.
+`PYTHONHASHSEED=0 graphify update .` run on the commit's own tree in a fresh
+checkout. The checker removes the worktree's untracked `graphify-out/manifest.json`
+and `.graphify_build_state.json` first: an incremental update from them can
+disagree with the rebuild of a fresh checkout. It does not force the rebuild, which
+would switch off graphify's shrink guard.
 `scripts/agent/check-graph-fresh.sh` checks that (or, with `--refresh`, rebuilds
 in place), and two tracked hooks enforce it:
 

@@ -27,6 +27,9 @@ Describe 'check-graph-fresh.sh'
     cat > "$stubdir/graphify" <<'GRAPHIFY'
 #!/bin/sh
 printf 'update:%s:hashseed=%s\n' "${2:-}" "${PYTHONHASHSEED:-unset}" >> "$GRAPHIFY_LOG"
+printf 'force=%s manifest=%s state=%s\n' "${GRAPHIFY_FORCE:-unset}" \
+  "$([ -e "$2/graphify-out/manifest.json" ] && echo kept || echo gone)" \
+  "$([ -e "$2/graphify-out/.graphify_build_state.json" ] && echo kept || echo gone)" >> "$GRAPHIFY_LOG.inputs"
 [ "${1:-}" = update ] || exit 9
 [ -z "${GRAPHIFY_STUB_GRAPH:-}" ] || printf '%s\n' "$GRAPHIFY_STUB_GRAPH" > "$2/graphify-out/graph.json"
 [ -z "${GRAPHIFY_STUB_SIGNAL:-}" ] || kill -s "$GRAPHIFY_STUB_SIGNAL" "$PPID"
@@ -74,6 +77,19 @@ GRAPHIFY
     The status should equal 0
     The stderr should include 'graph is fresh'
     The contents of file "$graphify_log" should equal "update:$worktree:hashseed=0"
+  End
+
+  # An incremental update reads the worktree's local manifest and can attribute a symbol to another file than
+  # a clean rebuild does, so the pre-commit refresh and the pre-push check would disagree. Forcing the rebuild
+  # instead would also switch off graphify's shrink guard.
+  It 'rebuilds as a fresh checkout would: no local manifest, no force'
+    export GRAPHIFY_STUB_GRAPH='committed graph'
+    printf '{}' > "$worktree/graphify-out/manifest.json"
+    printf '{}' > "$worktree/graphify-out/.graphify_build_state.json"
+    When run env GRAPHIFY_FORCE=1 sh "$script_abs" "$worktree"
+    The status should equal 0
+    The stderr should include 'graph is fresh'
+    The contents of file "$graphify_log.inputs" should equal "force=unset manifest=gone state=gone"
   End
 
   It 'overrides a PYTHONHASHSEED inherited from the caller'

@@ -2,7 +2,7 @@
 # Root graph freshness: the commit that moves code moves the graph.
 #
 # Any staged change other than graphify-out/graph.json itself rebuilds the graph in
-# place (PYTHONHASHSEED=0, through the resolved launcher) and stages it, so the
+# place (PYTHONHASHSEED=0, as a fresh checkout would, through the resolved launcher) and stages it, so the
 # pre-push gate, which rebuilds and compares, finds it fresh. Decided by git's own
 # index diff, not a newline listing: a path holding a newline could otherwise pose
 # as the graph. Synchronous, so a rebase/merge/cherry-pick in progress is no reason
