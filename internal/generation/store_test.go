@@ -1,6 +1,7 @@
 package generation
 
 import (
+	"strings"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -25,6 +26,9 @@ func create(t *testing.T, dir string, m Manifest, files map[string]string) int {
 	m.Files = nil
 	for name, body := range files {
 		path := netDir + name
+		if strings.HasPrefix(name, "/") {
+			path = name // a service file outside networkd's directory
+		}
 		if name == filterEntry {
 			path = name // the filter is a generation entry, not a file under /run
 		}

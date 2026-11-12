@@ -137,6 +137,8 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 			return nil, errors.New("nft [delete table inet andaru]: exit status 1: Error: No such file or directory")
 		}
 		f.table = ""
+	case command == "systemctl restart kea-dhcp4-server.service":
+		_ = os.MkdirAll(filepath.Join(f.root, "run/kea"), 0o750)
 	case command == "systemctl start systemd-networkd.service":
 		f.stopped = false
 	case command == "systemctl stop systemd-networkd.service systemd-networkd.socket":

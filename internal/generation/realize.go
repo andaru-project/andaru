@@ -181,7 +181,7 @@ func (r Realizer) settle(ctx context.Context, from, to []placed) error {
 			slog.Warn("delete network device", "device", name, "error", err)
 		}
 	}
-	return nil
+	return r.services(ctx, from, to)
 }
 
 type observation struct {
@@ -572,7 +572,7 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) error {
 			if err := r.handBack(ctx, *ifupdown, from, p.Takeover); err != nil {
 				return fmt.Errorf("handing back to ifupdown: %w", err)
 			}
-			return nil
+			return r.services(ctx, from, nil)
 		}
 		if err := r.settle(ctx, from, target); err != nil {
 			return fmt.Errorf("files restored, reload failed: %w", err)
