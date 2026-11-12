@@ -51,10 +51,10 @@ func TestPortForwardRendering(t *testing.T) {
 	script := table(t, render(t, fixture(t, "nat-port-forwards")))
 	inOrder(t, chainOf(t, script, "prerouting"),
 		"type nat hook prerouting priority dstnat;",
-		`iifname @`+natWAN+` fib daddr . iif type local tcp dport 8080 log prefix "andaru `+pfwWeb+` " dnat ip to 192.0.2.10:80 comment "`+pfwWeb+`"`,
-		`iifname @`+natWAN+` ip saddr @`+natBlocked+` fib daddr . iif type local tcp dport 1000-1001 accept comment "`+pfwSkip+`"`,
-		`iifname @`+natWAN+` fib daddr . iif type local tcp dport 1000-1001 dnat ip addr . port to tcp dport map { 1000 : 192.0.2.10 . 2000, 1001 : 192.0.2.10 . 2001 } comment "`+pfwRange+`"`,
-		`iifname @`+natWAN+` fib daddr . iif type local tcp dport 2222 redirect to :22 comment "`+pfwSSH+`"`,
+		`iifname @`+natWAN+` meta nfproto ipv4 fib daddr . iif type local tcp dport 8080 log prefix "andaru `+pfwWeb+` " dnat ip to 192.0.2.10:80 comment "`+pfwWeb+`"`,
+		`iifname @`+natWAN+` ip saddr @`+natBlocked+` meta nfproto ipv4 fib daddr . iif type local tcp dport 1000-1001 accept comment "`+pfwSkip+`"`,
+		`iifname @`+natWAN+` meta nfproto ipv4 fib daddr . iif type local tcp dport 1000-1001 dnat ip addr . port to tcp dport map { 1000 : 192.0.2.10 . 2000, 1001 : 192.0.2.10 . 2001 } comment "`+pfwRange+`"`,
+		`iifname @`+natWAN+` meta nfproto ipv4 fib daddr . iif type local tcp dport 2222 redirect to :22 comment "`+pfwSSH+`"`,
 	)
 	inOrder(t, chainOf(t, script, "forward"),
 		"ct state invalid drop",
@@ -63,7 +63,7 @@ func TestPortForwardRendering(t *testing.T) {
 	)
 	inOrder(t, chainOf(t, script, "input"),
 		"iif lo accept",
-		`iifname @`+natWAN+` ct status dnat ct original proto-dst 2222 tcp dport 22 accept comment "`+pfwSSH+`"`,
+		`iifname @`+natWAN+` ct status dnat ct original proto-dst 2222 meta nfproto ipv4 tcp dport 22 accept comment "`+pfwSSH+`"`,
 	)
 	if strings.Contains(script, pfwOff) {
 		t.Fatalf("a disabled forward rendered:\n%s", script)
@@ -115,7 +115,7 @@ func TestTCPUDPForward(t *testing.T) {
 		delete(f[0].(map[string]any), "targetPort")
 	})))
 	inOrder(t, chainOf(t, script, "prerouting"),
-		`iifname @`+natWAN+` fib daddr . iif type local meta l4proto { tcp, udp } th dport 53 log prefix "andaru `+pfwWeb+` " dnat ip to 192.0.2.10 comment "`+pfwWeb+`"`)
+		`iifname @`+natWAN+` meta nfproto ipv4 fib daddr . iif type local meta l4proto { tcp, udp } th dport 53 log prefix "andaru `+pfwWeb+` " dnat ip to 192.0.2.10 comment "`+pfwWeb+`"`)
 	inOrder(t, chainOf(t, script, "forward"),
 		`iifname @`+natWAN+` ct status dnat ct original proto-dst 53 ip daddr 192.0.2.10 meta l4proto { tcp, udp } th dport 53 accept comment "`+pfwWeb+`"`)
 }
@@ -149,7 +149,7 @@ const (
 func TestOneToOneRendering(t *testing.T) {
 	script := table(t, render(t, fixture(t, "nat-one-to-one")))
 	inOrder(t, chainOf(t, script, "prerouting"),
-		`iifname @`+natWAN+` fib daddr . iif type local tcp dport 8080 dnat ip to 192.0.2.10:80 comment "`+pfwWeb+`"`,
+		`iifname @`+natWAN+` meta nfproto ipv4 fib daddr . iif type local tcp dport 8080 dnat ip to 192.0.2.10:80 comment "`+pfwWeb+`"`,
 		`iifname @internal fib daddr type local ip daddr != @internal_4 tcp dport 8080 dnat ip to 192.0.2.10:80 comment "`+pfwWeb+`"`,
 		`iifname @`+natWAN+` dnat ip to ip daddr map { 10.0.1.29 : 192.0.2.30 } comment "`+otoServer+`"`,
 		`iifname @internal dnat ip to ip daddr map { 10.0.1.29 : 192.0.2.30 } comment "`+otoServer+`"`,
@@ -220,4 +220,23 @@ func TestOneToOneLearnedAddress(t *testing.T) {
 	if r.Realizable || !findingAt(r, "ONE_TO_ONE_OWN_ADDRESS", "/nat/oneToOne/2/external") || findingAt(r, "ONE_TO_ONE_OWN_ADDRESS", "/nat/oneToOne/1/external") {
 		t.Fatalf("findings %+v", r.Findings)
 	}
+}
+
+// A range kept on the same ports needs no port change: every port goes to itself, not to the first.
+func TestSelfRangeWithoutShift(t *testing.T) {
+	script := table(t, render(t, natChange(t, func(f []any) {
+		f[3].(map[string]any)["ports"] = "1000-1001"
+		f[3].(map[string]any)["targetPort"] = 1000
+	})))
+	inOrder(t, chainOf(t, script, "prerouting"),
+		`iifname @`+natWAN+` meta nfproto ipv4 fib daddr . iif type local tcp dport 1000-1001 redirect comment "`+pfwSSH+`"`)
+}
+
+// Reflection keeps the forward's source match, as pfSense's reflection rdr does.
+func TestReflectionKeepsTheSource(t *testing.T) {
+	script := table(t, render(t, change(t, fixture(t, "nat-one-to-one"), func(d map[string]any) {
+		d["nat"].(map[string]any)["portForwards"].([]any)[0].(map[string]any)["from"] = []any{"adr_00000007-0000-4000-8000-000000000007"}
+	})))
+	inOrder(t, chainOf(t, script, "prerouting"),
+		`iifname @internal ip saddr @`+natPartner+` fib daddr type local ip daddr != @internal_4 tcp dport 8080 dnat ip to 192.0.2.10:80 comment "`+pfwWeb+`"`)
 }

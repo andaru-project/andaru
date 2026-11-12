@@ -83,7 +83,7 @@ EmitDomains=no
 table inet andaru {}
 delete table inet andaru
 table inet andaru {
-	comment "sha256:4a8e2669a3b144df109a0efd60b60f2f4b7cda04ab8535d5ce8cc12b63b32ec1"
+	comment "sha256:f9f2837b46ee3053454c8a6aa42514b3f0e30a299e5c9d8829d124c77e58d383"
 	set adr_00000007_0000_4000_8000_000000000007_4 { type ipv4_addr; flags interval; auto-merge; elements = { 198.51.100.7 }; }
 	set zon_00000001_0000_4000_8000_000000000001 { type ifname; elements = { "ens18" }; }
 	set zon_00000002_0000_4000_8000_000000000002 { type ifname; elements = { "ens19" }; }
@@ -97,7 +97,7 @@ table inet andaru {
 		ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept
 		ip6 saddr fe80::/10 icmpv6 type { mld-listener-query, mld-listener-report, mld-listener-done, mld2-listener-report } accept
 		iifname "ens19" tcp dport 22 accept
-		iifname @zon_00000001_0000_4000_8000_000000000001 ct status dnat ct original proto-dst 2222 tcp dport 22 accept comment "pfw_00000004-0000-4000-8000-000000000004"
+		iifname @zon_00000001_0000_4000_8000_000000000001 ct status dnat ct original proto-dst 2222 meta nfproto ipv4 tcp dport 22 accept comment "pfw_00000004-0000-4000-8000-000000000004"
 		iifname @zon_00000002_0000_4000_8000_000000000002 icmp type { echo-request } accept comment "rul_00000001-0000-4000-8000-000000000001"
 		iifname @zon_00000002_0000_4000_8000_000000000002 udp dport { 53 } accept comment "rul_00000002-0000-4000-8000-000000000002"
 		iifname @zon_00000002_0000_4000_8000_000000000002 tcp dport { 53 } accept comment "rul_00000002-0000-4000-8000-000000000002"
@@ -112,10 +112,10 @@ table inet andaru {
 	}
 	chain prerouting {
 		type nat hook prerouting priority dstnat;
-		iifname @zon_00000001_0000_4000_8000_000000000001 fib daddr . iif type local tcp dport 8080 log prefix "andaru pfw_00000001-0000-4000-8000-000000000001 " dnat ip to 192.0.2.10:80 comment "pfw_00000001-0000-4000-8000-000000000001"
-		iifname @zon_00000001_0000_4000_8000_000000000001 ip saddr @adr_00000007_0000_4000_8000_000000000007_4 fib daddr . iif type local tcp dport 1000-1001 accept comment "pfw_00000002-0000-4000-8000-000000000002"
-		iifname @zon_00000001_0000_4000_8000_000000000001 fib daddr . iif type local tcp dport 1000-1001 dnat ip addr . port to tcp dport map { 1000 : 192.0.2.10 . 2000, 1001 : 192.0.2.10 . 2001 } comment "pfw_00000003-0000-4000-8000-000000000003"
-		iifname @zon_00000001_0000_4000_8000_000000000001 fib daddr . iif type local tcp dport 2222 redirect to :22 comment "pfw_00000004-0000-4000-8000-000000000004"
+		iifname @zon_00000001_0000_4000_8000_000000000001 meta nfproto ipv4 fib daddr . iif type local tcp dport 8080 log prefix "andaru pfw_00000001-0000-4000-8000-000000000001 " dnat ip to 192.0.2.10:80 comment "pfw_00000001-0000-4000-8000-000000000001"
+		iifname @zon_00000001_0000_4000_8000_000000000001 ip saddr @adr_00000007_0000_4000_8000_000000000007_4 meta nfproto ipv4 fib daddr . iif type local tcp dport 1000-1001 accept comment "pfw_00000002-0000-4000-8000-000000000002"
+		iifname @zon_00000001_0000_4000_8000_000000000001 meta nfproto ipv4 fib daddr . iif type local tcp dport 1000-1001 dnat ip addr . port to tcp dport map { 1000 : 192.0.2.10 . 2000, 1001 : 192.0.2.10 . 2001 } comment "pfw_00000003-0000-4000-8000-000000000003"
+		iifname @zon_00000001_0000_4000_8000_000000000001 meta nfproto ipv4 fib daddr . iif type local tcp dport 2222 redirect to :22 comment "pfw_00000004-0000-4000-8000-000000000004"
 	}
 	chain postrouting {
 		type nat hook postrouting priority srcnat;

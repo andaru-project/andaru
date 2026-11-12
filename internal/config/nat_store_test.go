@@ -47,3 +47,16 @@ func TestNATListsBehaveLikePolicyLists(t *testing.T) {
 		t.Fatal("a NAT list change moved the forward policy's version")
 	}
 }
+
+// Deleting outbound NAT is about outbound NAT only: the forwards and 1:1 entries stay.
+func TestDeletingOutboundKeepsNATLists(t *testing.T) {
+	s := seededState(t)
+	zone := s.Config.Zones[0].ID
+	mustRun(t, &s, `{"operations":[{"op":"create","collection":"nat.portForwards","localId":"a","value":`+forwardValue("a", "8080", zone)+`},
+		{"op":"create","collection":"nat.oneToOne","localId":"o","value":{"name":"o","enabled":true,"zone":"`+zone+`","external":"203.0.113.20","internal":"192.0.2.30","destination":[]}},
+		{"op":"replace","collection":"nat.outbound","expectedVersion":"0","value":{"mode":"automatic"}}]}`)
+	mustRun(t, &s, `{"operations":[{"op":"delete","collection":"nat.outbound","expectedVersion":"`+string(versionOf(&s, listKey("nat.outbound")).Version)+`"}]}`)
+	if len(s.Config.NAT.PortForwards) != 1 || len(s.Config.NAT.OneToOne) != 1 || s.Config.NAT.Outbound.Mode != "" {
+		t.Fatalf("after deleting outbound: %+v", s.Config.NAT)
+	}
+}

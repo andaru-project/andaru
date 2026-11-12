@@ -94,7 +94,7 @@ These copy pfSense's rules.
 - `127.0.0.0/8` is refused as a target. Use a loopback virtual IP instead: Linux drops connections translated to the loopback range from another interface, and enabling `route_localnet` to allow it weakens a protection.
 
 **1:1:**
-- `external` may not contain a segment's first static address, which the firewall's own traffic and the outbound masquerade use. A segment's extra addresses may be 1:1 external addresses: that is pfSense's IP alias for 1:1, and how an address on the WAN subnet reaches the firewall. Addresses learned by DHCP or PPPoE are only known when the configuration is rendered: an `external` containing one is a render error, `ONE_TO_ONE_OWN_ADDRESS`, so an apply or the boot re-render refuses it.
+- `external` may not contain a segment's first static address, which the firewall's own traffic and the outbound masquerade use. A segment's extra addresses may be 1:1 external addresses: that is pfSense's IP alias for 1:1, and how an address on the WAN subnet reaches the firewall. Addresses learned by DHCP or PPPoE are only known when the configuration is rendered: an `external` containing one is a render error, `ONE_TO_ONE_OWN_ADDRESS`, so a preview or an apply refuses it. Boot loads the confirmed table unchanged, so an address learned after the last apply is not caught there.
 - `external` may not overlap another enabled 1:1 entry.
 - `internal` may not contain the firewall's own address on that segment.
 

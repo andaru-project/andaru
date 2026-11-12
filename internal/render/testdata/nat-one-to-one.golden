@@ -80,7 +80,7 @@ EmitDomains=no
 table inet andaru {}
 delete table inet andaru
 table inet andaru {
-	comment "sha256:8fead1be77c680f2f6e7380c2aebbe2590644e1ef6a83c9c71658d98362e4d2e"
+	comment "sha256:303762f78904497109ec0a7dbf279c05ad0a52052f00547bdae89a9d32b2cc2b"
 	set adr_00000007_0000_4000_8000_000000000007_4 { type ipv4_addr; flags interval; auto-merge; elements = { 198.51.100.7 }; }
 	set zon_00000001_0000_4000_8000_000000000001 { type ifname; elements = { "ens18" }; }
 	set zon_00000002_0000_4000_8000_000000000002 { type ifname; elements = { "ens19" }; }
@@ -109,7 +109,7 @@ table inet andaru {
 	}
 	chain prerouting {
 		type nat hook prerouting priority dstnat;
-		iifname @zon_00000001_0000_4000_8000_000000000001 fib daddr . iif type local tcp dport 8080 dnat ip to 192.0.2.10:80 comment "pfw_00000001-0000-4000-8000-000000000001"
+		iifname @zon_00000001_0000_4000_8000_000000000001 meta nfproto ipv4 fib daddr . iif type local tcp dport 8080 dnat ip to 192.0.2.10:80 comment "pfw_00000001-0000-4000-8000-000000000001"
 		iifname @internal fib daddr type local ip daddr != @internal_4 tcp dport 8080 dnat ip to 192.0.2.10:80 comment "pfw_00000001-0000-4000-8000-000000000001"
 		iifname @zon_00000001_0000_4000_8000_000000000001 dnat ip to ip daddr map { 10.0.1.29 : 192.0.2.30 } comment "oto_00000002-0000-4000-8000-000000000002"
 		iifname @internal dnat ip to ip daddr map { 10.0.1.29 : 192.0.2.30 } comment "oto_00000002-0000-4000-8000-000000000002"

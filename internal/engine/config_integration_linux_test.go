@@ -712,6 +712,25 @@ func TestNATListRoutes(t *testing.T) {
 	if !strings.HasPrefix(o, "oto_") {
 		t.Fatalf("1:1 id %q", o)
 	}
+	// The whole snapshot, NAT lists included, still matches the served schema.
+	rawSchema := configCall(h, "GET", "/api/v1/schema", "", "")
+	instance, e := jsonschema.UnmarshalJSON(bytes.NewReader(rawSchema.Body.Bytes()))
+	if e != nil {
+		t.Fatal(e)
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.UseLoader(jsonschema.SchemeURLLoader{})
+	if e = compiler.AddResource("https://andaru.invalid/api/v1/schema", instance); e != nil {
+		t.Fatal(e)
+	}
+	snapshot, e := compiler.Compile("https://andaru.invalid/api/v1/schema#/$defs/snapshotView")
+	if e != nil {
+		t.Fatal(e)
+	}
+	served, _ := jsonschema.UnmarshalJSON(bytes.NewReader(configCall(h, "GET", "/api/v1/config", "", "").Body.Bytes()))
+	if e = snapshot.Validate(served); e != nil {
+		t.Fatalf("snapshot with NAT lists violates the schema: %v", e)
+	}
 	w = configCall(h, "GET", "/api/v1/config/nat/port-forwards/"+b, "", "")
 	expect(w, 200)
 	expect(configCall(h, "DELETE", "/api/v1/config/nat/port-forwards/"+b, "", w.Header().Get("ETag")), 200)

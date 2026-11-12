@@ -520,7 +520,7 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 		d.Management = &m
 	}
 	if deleted[listKey("nat.outbound")] {
-		d.NAT = natSettings{}
+		d.NAT.Outbound = outbound{}
 	} else if raw, ok := writes[listKey("nat.outbound")]; ok {
 		if e := json.Unmarshal(raw, &d.NAT.Outbound); e != nil {
 			return empty, fault("VALIDATION_FAILED", "", "Invalid typed object.")

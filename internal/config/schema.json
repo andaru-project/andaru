@@ -1305,11 +1305,25 @@
           "properties": {
             "outbound": {
               "$ref": "#/$defs/outboundFields"
+            },
+            "portForwards": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/portForwardStored"
+              },
+              "minItems": 0,
+              "maxItems": 10000
+            },
+            "oneToOne": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/oneToOneStored"
+              },
+              "minItems": 0,
+              "maxItems": 10000
             }
           },
-          "required": [
-            "outbound"
-          ],
+          "required": [],
           "additionalProperties": false
         },
         "management": {

@@ -61,7 +61,8 @@ func (f *filter) portForwards() (prerouting, forward, input []string) {
 				}
 			}
 		}
-		to, original := "fib daddr . iif type local", ""
+		// fib matches either family: the guard keeps an IPv4 forward to self off the firewall's IPv6 addresses.
+		to, original := "meta nfproto ipv4 fib daddr . iif type local", ""
 		if !pf.To.Self {
 			to = "ip daddr @" + setName(pf.To.Address) + "_4"
 			original = "ct original ip daddr @" + setName(pf.To.Address) + "_4 "
@@ -79,9 +80,9 @@ func (f *filter) portForwards() (prerouting, forward, input []string) {
 			action = "accept"
 		case pf.Target.Self:
 			action = "redirect"
-			if pf.TargetPort != nil {
+			if pf.TargetPort != nil && tfirst != first {
 				action = "redirect to :" + strconv.Itoa(tfirst)
-				if last != first && tfirst != first {
+				if last != first {
 					action = "redirect to " + key + " dport map { " + portMap(first, last, tfirst, "") + " }"
 				}
 			}
@@ -111,7 +112,8 @@ func (f *filter) portForwards() (prerouting, forward, input []string) {
 				if last != first {
 					ports += "-" + strconv.Itoa(last)
 				}
-				daddr := ""
+				// The translated address names the family; a local target has none, so the rule says it.
+				daddr := "meta nfproto ipv4"
 				if !local {
 					daddr = "ip daddr " + pf.Target.Address
 				}
@@ -131,7 +133,10 @@ func (f *filter) portForwards() (prerouting, forward, input []string) {
 				to = "fib daddr type local ip daddr != @internal_4"
 			}
 			bare := strings.TrimPrefix(action, fmt.Sprintf("log prefix %q ", "andaru "+pf.ID+" "))
-			prerouting = append(prerouting, strings.Join([]string{"iifname @internal", to, portMatch(pf.Protocol, first, last), bare, comment}, " "))
+			for _, from := range froms {
+				parts := slices.DeleteFunc([]string{"iifname @internal", from, to, portMatch(pf.Protocol, first, last), bare, comment}, func(s string) bool { return s == "" })
+				prerouting = append(prerouting, strings.Join(parts, " "))
+			}
 		}
 	}
 	return
