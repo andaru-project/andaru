@@ -179,6 +179,7 @@ Without a LAN segment with a static address the proposal is as today.
 ## Calls made in writing this (owner may correct)
 
 Owner ruling, 2026-11-12: DHCP is never part of `--accept-detected`; the assistant asks per LAN segment, defaulting to yes.
+Owner ruling, 2026-11-12, on approving this design: DHCPv6 and router advertisements are the next slice.
 
 - Lease sync runs as a privileged oneshot started by a systemd path unit, like every other host change, not inside the unprivileged engine.
 - Rendered files go to root-owned 0755 directories beside `/run/andaru`, not inside it.
