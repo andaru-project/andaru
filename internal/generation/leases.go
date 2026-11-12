@@ -106,6 +106,12 @@ func (r Realizer) SyncLeases(ctx context.Context) error {
 }
 
 func (r Realizer) syncLeases(ctx context.Context) error {
+	// One snapshot of configuration and leases, never published across a generation change that removed them.
+	unlock, err := r.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	records := []string{}
 	raw, err := os.ReadFile(r.Root + keaFile)
 	switch {

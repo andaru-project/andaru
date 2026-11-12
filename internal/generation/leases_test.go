@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const leaseKea = `{"Dhcp4":{"subnet4":[
@@ -209,5 +210,26 @@ func TestFailedReloadIsRetried(t *testing.T) {
 	b.net.fail, b.net.argv = "", nil
 	if err := b.r.SyncLeases(t.Context()); err != nil || b.index("unbound-control reload_keep_cache") < 0 {
 		t.Fatalf("reload not retried: %v %q", err, b.net.argv)
+	}
+}
+
+// A sync waits for a generation change in progress, so it never publishes names that change just removed.
+func TestLeaseSyncWaitsForGenerationChanges(t *testing.T) {
+	b := newBench(t)
+	b.kea(lease{"192.168.40.130", "laptop-1", 0, 1, 7200, 100})
+	unlock, err := b.r.lock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- b.r.SyncLeases(t.Context()) }()
+	select {
+	case <-done:
+		t.Fatal("the sync ran during a generation change")
+	case <-time.After(300 * time.Millisecond):
+	}
+	unlock()
+	if err := <-done; err != nil || !strings.Contains(b.leaseNames(), "laptop-1") {
+		t.Fatalf("sync after the change: %v %q", err, b.leaseNames())
 	}
 }
