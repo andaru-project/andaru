@@ -368,7 +368,10 @@ func TestBootRenamesAdaptersBeforeNetworkd(t *testing.T) {
 	if err := b.r.Boot(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if !renamed || b.net.ran("udevadm control --reload") != 1 {
+	// udev reads the new .link files only after the reload, so the trigger must come after it.
+	reload := slices.Index(b.net.argv, "udevadm control --reload")
+	trigger := slices.Index(b.net.argv, "udevadm trigger --settle --action=add --subsystem-match=net")
+	if !renamed || b.net.ran("udevadm control --reload") != 1 || reload < 0 || trigger < reload {
 		t.Fatalf("adapters not renamed after the .link files were placed: %q", b.net.argv)
 	}
 }
