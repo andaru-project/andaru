@@ -20,6 +20,11 @@ Not implemented behaviour. Contracts remain provisional until Andaru 1.0.
 
 - systemd-networkd 257 (Debian 13), from its manual: `[IPv6SendRA]` offers `Managed`, `OtherInformation`, `RouterLifetimeSec`, `RouterPreference`, `HopLimit`, `ReachableTimeSec`, `RetransmitSec`, `UplinkInterface`, `EmitDNS`/`DNS`, `EmitDomains`/`Domains`, `DNSLifetimeSec`; `[IPv6Prefix]` offers `Prefix`, `AddressAutoconfiguration`, `ValidLifetimeSec`, `PreferredLifetimeSec`, `Assign`; `[IPv6PREF64Prefix]` offers `Prefix`, `LifetimeSec`; `[DHCPv6]` offers `PrefixDelegationHint`, `UseAddress`, `WithoutRA`, `SendRelease`, `DUIDType`, `DUIDRawData`; `[DHCPPrefixDelegation]` offers `UplinkInterface`, `SubnetId`, `Announce`, `Assign`, `Token`. There is no setting for the advertisement interval; networkd uses RFC 4861's defaults.
 - networkd re-announces a delegated prefix when the upstream changes it and deprecates the old one by itself; nothing in Andaru has to react to a prefix change in this slice.
+- Probed in privileged `debian:trixie` containers (unbound 1.26.2-0+deb13u1, systemd 257.13-1~deb13u1), 2026-11-12:
+  - Unbound with `ip-freebind: yes` and `interface: fd00:a5d:1::1` starts before the address exists and answers once it appears.
+  - `interface-action: fd00:a5d:1::1 allow` answers clients from any prefix on the link; `access-control: fd00:a5d:1::/64 allow` alone refuses a client numbered from the delegated prefix. `interface-action` must name the listener as `interface:` does: naming the interface (`lan0`) stops Unbound from starting, and `interface: lan0` resolves the addresses once at startup.
+  - networkd's RA with `[IPv6Prefix]`, `EmitDNS=yes DNS=<ULA>` and `EmitDomains=yes` carries the prefix (`onlink, auto`), RDNSS and DNSSL options, with no M/O flags.
+  - With `DHCPPrefixDelegation=yes` and a Kea DHCPv6 upstream delegating a `/56`, `Announce=no` sends the RA with the ULA prefix only (before and after the lease) while the segment still takes an address from the delegated `/64`; `Announce=yes` adds the delegated `/64` next to the ULA.
 - The lab uplink answers no prefix-delegation request (30 s probe, no reply), so qualification needs its own delegating router.
 
 ## Scope
@@ -81,7 +86,7 @@ Old saved versions still decode: `enabled: false` becomes `disabled`; `enabled: 
 
 A segment listed in `dns.segments` is served when it has a static IPv4 address, IPv6 `static` or `delegated`, or both; an IPv6-only LAN is served. On IPv4 the service listens on the static address, as today. DHCPv4 still needs the static IPv4 address; its rule does not change.
 
-On a served segment with IPv6, Unbound also listens on the segment's first static IPv6 address that is not link-local (with `ip-freebind`, as for IPv4) and accepts queries from that address's `/64` and, on a delegated segment, from any source arriving on its interface (`interface-action`), because the delegated prefix is not known when the configuration is written.
+On a served segment with IPv6, Unbound also listens on the segment's first static IPv6 address that is not link-local (with `ip-freebind`, as for IPv4) and accepts every query that reaches that listener (`interface-action: <address> allow`), because a delegated prefix is not known when the configuration is written. Only the segment's link can reach the address: the filter accepts DNS on its interface alone.
 
 ### Filter
 
