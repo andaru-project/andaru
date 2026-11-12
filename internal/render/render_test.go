@@ -21,7 +21,7 @@ var testdata embed.FS
 
 var update = flag.Bool("update", false, "rewrite golden files")
 
-var allFacts = host.RealizerFacts{PPPDaemon: true, PPPoEPlugin: true, PPPDevice: true, ResolvedInCharge: true, NftTool: true}
+var allFacts = host.RealizerFacts{PPPDaemon: true, PPPoEPlugin: true, PPPDevice: true, ResolvedInCharge: true, NftTool: true, KeaTool: true, UnboundTool: true, KeaHooks: "/usr/lib/x86_64-linux-gnu/kea/hooks"}
 
 type observed struct{ Name, Kind, MAC string }
 
@@ -427,5 +427,60 @@ func TestRenderDHCPIdentity(t *testing.T) {
 	}
 	if golden(render(t, fixture(t, "ethernet-uplink"))) != golden(without) {
 		t.Fatal("rendering without identities is not stable")
+	}
+}
+
+func TestServiceToolsMissing(t *testing.T) {
+	in := fixture(t, "services-recursive")
+	in.Facts.KeaTool, in.Facts.UnboundTool = false, false
+	got := render(t, in)
+	paths := map[string]bool{}
+	for _, f := range got.Findings {
+		if f.Code == "TOOL_MISSING" {
+			paths[f.Path] = true
+		}
+	}
+	if !paths["/dhcp"] || !paths["/dns"] || got.Realizable {
+		t.Fatalf("findings %+v", got.Findings)
+	}
+}
+
+// A segment the DNS service does not serve, with no servers listed, hands out none and says so.
+func TestDHCPWithoutDNS(t *testing.T) {
+	in := fixture(t, "services-recursive")
+	var d map[string]any
+	_ = json.Unmarshal(in.Declaration, &d)
+	delete(d, "dns")
+	in.Declaration, _ = json.Marshal(d)
+	got := render(t, in)
+	if !slices.ContainsFunc(got.Findings, func(f Finding) bool { return f.Code == "DHCP_WITHOUT_DNS" && f.Path == "/dhcp/0/dnsServers" }) {
+		t.Fatalf("findings %+v", got.Findings)
+	}
+	for _, f := range got.Files {
+		if strings.Contains(f.Content, "domain-name-servers") || f.Path == unboundPath || f.Path == resolvedPath {
+			t.Fatalf("%s rendered without the DNS service", f.Path)
+		}
+	}
+}
+
+// Without systemd-resolved in charge the host does not use the DNS service, though the LAN does.
+func TestDNSServiceNotUsedByTheHost(t *testing.T) {
+	in := fixture(t, "services-recursive")
+	in.Facts.ResolvedInCharge = false
+	got := render(t, in)
+	if !slices.ContainsFunc(got.Findings, func(f Finding) bool { return f.Code == "DNS_NOT_APPLIED" && f.Path == "/dns" }) || !got.Realizable {
+		t.Fatalf("findings %+v", got.Findings)
+	}
+}
+
+// Two segments whose IDs hash alike still get distinct Kea subnet IDs.
+func TestSubnetIDsStayDistinct(t *testing.T) {
+	a, b := "seg_1681ba3f-6834-46cf-ab68-f2709e115554", "seg_dbdfc312-6c0d-4cb5-b245-ee0545ab1415"
+	if subnetID(a, nil) != subnetID(b, nil) {
+		t.Skip("the pair no longer collides")
+	}
+	used := map[uint32]bool{subnetID(a, nil): true}
+	if subnetID(b, used) == subnetID(a, nil) {
+		t.Fatal("colliding segments share a subnet ID")
 	}
 }

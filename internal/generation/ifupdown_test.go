@@ -3,6 +3,7 @@ package generation
 import (
 	"errors"
 	"github.com/andaru-project/andaru/internal/host"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -312,5 +313,20 @@ func TestRollbackToIfupdownBaselineUnmasks(t *testing.T) {
 	restart := slices.IndexFunc(b.net.argv, func(a string) bool { return strings.HasPrefix(a, "systemctl restart") })
 	if unmask < 0 || restart < 0 || unmask > restart {
 		t.Fatalf("commands = %q", b.net.argv)
+	}
+}
+
+// A failed ifupdown takeover undoes the services it started, as a rollback does.
+func TestActivateIfupdownFailureStopsServices(t *testing.T) {
+	b := debian(t)
+	b.net.fail = "unbound-checkconf"
+	files := map[string]string{keaFile: `{"Dhcp4":{}}`, unboundFile: "server:\n"}
+	maps.Copy(files, one)
+	id := create(b.t, b.dir, Manifest{SavedVersion: "7", Takeover: true, Baseline: "ifupdown", ConfirmTimeoutSeconds: 120}, files)
+	if err := b.r.Activate(t.Context(), id); err == nil {
+		t.Fatal("activation succeeded with Unbound refusing")
+	}
+	if b.index("systemctl stop kea-dhcp4-server.service") < 0 || b.read(id).State.State != Failed {
+		t.Fatalf("Kea left serving: %q", b.net.argv)
 	}
 }

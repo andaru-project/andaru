@@ -173,6 +173,10 @@ func TestProposalStates(t *testing.T) {
 	if got := b.proposal(t); got.State != "saved-not-applied" || len(got.Operations) != 0 {
 		t.Fatalf("nat only: proposal = %+v", got)
 	}
+	b.head = `{"schemaVersion":1,"links":[],"segments":[],"zones":[],"dns":{"mode":"recursive","segments":[]}}`
+	if got := b.proposal(t); got.State != "saved-not-applied" || len(got.Operations) != 0 {
+		t.Fatalf("dns only: proposal = %+v", got)
+	}
 
 	for _, pointers := range []string{
 		`{"confirmed":1,"lastKnownGood":null,"pending":null,"live":1,"takeover":true}`,
@@ -452,7 +456,8 @@ func twoNICs() []host.Detected {
 }
 
 func TestProposalStarterRules(t *testing.T) {
-	raw, _ := json.Marshal(proposalOperations(twoNICs(), "eth0"))
+	ops0, dhcp0 := proposalOperations(twoNICs(), "eth0", host.RealizerFacts{})
+	raw, _ := json.Marshal(ops0)
 	var ops []json.RawMessage
 	_ = json.Unmarshal(raw, &ops)
 	sameJSON(t, ops, `[
@@ -472,9 +477,36 @@ func TestProposalStarterRules(t *testing.T) {
 		{"op":"replace","collection":"nat.outbound","expectedVersion":"0","value":{"mode":"automatic"}},
 		{"op":"replace","collection":"management","expectedVersion":"0","value":{"segment":"@seg1"}}]`)
 
+	// Without Kea and Unbound installed the takeover proposes no DNS service and no DHCP server.
+	if dhcp0 != nil || strings.Contains(string(raw), `"collection":"dns"`) {
+		t.Fatalf("services proposed without their daemons: %s %v", raw, dhcp0)
+	}
 	// From the serial console: the LAN segment is the management one.
-	raw, _ = json.Marshal(proposalOperations(twoNICs(), ""))
+	ops0, _ = proposalOperations(twoNICs(), "", host.RealizerFacts{})
+	raw, _ = json.Marshal(ops0)
 	if !strings.Contains(string(raw), `"value":{"segment":"@seg2"}`) {
 		t.Fatalf("management without a session: %s", raw)
+	}
+}
+
+// With both daemons installed the LAN gets the DNS service, which takes over the host's servers, and a DHCP offer.
+func TestProposalServesTheLAN(t *testing.T) {
+	nics := twoNICs()
+	nics[0].DNS, nics[0].Domains = []string{"172.16.53.53"}, []string{"lab.example"}
+	ops, dhcp := proposalOperations(nics, "eth0", host.RealizerFacts{KeaTool: true, UnboundTool: true})
+	raw, _ := json.Marshal(ops)
+	if !strings.Contains(string(raw), `{"op":"replace","collection":"dns","expectedVersion":"0","value":{"mode":"forward","searchDomains":["lab.example"],"segments":["@seg2"],"upstreams":[{"address":"172.16.53.53","protocol":"do53"}]}}`) || strings.Contains(string(raw), `"servers"`) {
+		t.Fatalf("dns: %s", raw)
+	}
+	offer, _ := json.Marshal(dhcp)
+	if string(offer) != `[{"op":"create","collection":"dhcp","localId":"dhcp2","value":{"name":"eth1","ranges":[{"first":"192.168.40.128","last":"192.168.40.254"}],"segment":"@seg2"}}]` {
+		t.Fatalf("dhcp offer %s", offer)
+	}
+	// A host that learned its servers from DHCP gets a recursive resolver: those servers change.
+	nics[0].DNS = nil
+	ops, _ = proposalOperations(nics, "eth0", host.RealizerFacts{KeaTool: true, UnboundTool: true})
+	raw, _ = json.Marshal(ops)
+	if !strings.Contains(string(raw), `"value":{"mode":"recursive","searchDomains":["lab.example"],"segments":["@seg2"]}`) {
+		t.Fatalf("dns: %s", raw)
 	}
 }

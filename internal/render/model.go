@@ -92,6 +92,8 @@ type declaration struct {
 		Segment        string   `json:"segment"`
 		AllowedSources []string `json:"allowedSources"`
 	} `json:"management"`
+	DHCP []dhcpEntry `json:"dhcp"`
+	DNS  *dnsService `json:"dns"`
 }
 
 // filtered reports that the declaration switches the packet filter on: a management segment is set.

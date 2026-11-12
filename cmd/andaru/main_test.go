@@ -232,6 +232,10 @@ func (f *fakeVerbs) Confirm(_ context.Context, id int) error {
 	return f.err
 }
 func (f *fakeVerbs) Boot(context.Context) error { f.calls = append(f.calls, "boot"); return f.err }
+func (f *fakeVerbs) SyncLeases(context.Context) error {
+	f.calls = append(f.calls, "leases")
+	return f.err
+}
 
 func TestRealizeExitCodes(t *testing.T) {
 	for _, row := range []struct {
@@ -248,6 +252,8 @@ func TestRealizeExitCodes(t *testing.T) {
 		{[]string{"rollback", "7", "requested"}, errors.New("disk"), "rollback 7 requested", 1},
 		// Boot must never hold up sysinit.target.
 		{[]string{"boot"}, errors.New("nothing usable"), "boot", 0},
+		// A failed lease sync shows on its unit; the path unit runs it again at the next lease event.
+		{[]string{"leases"}, errors.New("Kea not answering"), "leases", 1},
 	} {
 		verbs := &fakeVerbs{err: row.err}
 		var diagnostics bytes.Buffer
@@ -363,6 +369,9 @@ func TestConfigFilterCollections(t *testing.T) {
 		"config list policy/input":                                     {method: "GET", path: "/api/v1/config/policy/input", kind: "collection"},
 		"config create addresses":                                      {method: "POST", path: "/api/v1/config/addresses", kind: "object"},
 		"config get management":                                        {method: "GET", path: "/api/v1/config/management", kind: "singleton"},
+		"config replace --version 0 dns":                               {method: "PUT", path: "/api/v1/config/dns", kind: "singleton", tag: `"dns.0"`},
+		"config create dhcp":                                           {method: "POST", path: "/api/v1/config/dhcp", kind: "object"},
+		"config get dhcp dhp_00000001-0000-4000-8000-000000000001":     {method: "GET", path: "/api/v1/config/dhcp/dhp_00000001-0000-4000-8000-000000000001", kind: "object"},
 		"config replace --version 0 nat/outbound":                      {method: "PUT", path: "/api/v1/config/nat/outbound", kind: "singleton", tag: `"nat.outbound.0"`},
 		"config get services svc_00000001-0000-4000-8000-000000000001": {method: "GET", path: "/api/v1/config/services/svc_00000001-0000-4000-8000-000000000001", kind: "object"},
 	} {

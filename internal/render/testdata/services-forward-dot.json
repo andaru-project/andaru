@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 1,
+  "links": [
+    {
+      "id": "lnk_00000001-0000-4000-8000-000000000001",
+      "name": "wan0",
+      "kind": "ethernet",
+      "mtu": 1500,
+      "enabled": true,
+      "permanentMac": "52:54:00:aa:bb:01"
+    },
+    {
+      "id": "lnk_00000002-0000-4000-8000-000000000002",
+      "name": "lan0",
+      "kind": "ethernet",
+      "mtu": 1500,
+      "enabled": true,
+      "permanentMac": "52:54:00:aa:bb:02"
+    }
+  ],
+  "segments": [
+    {
+      "id": "seg_00000001-0000-4000-8000-000000000001",
+      "name": "wan",
+      "link": "lnk_00000001-0000-4000-8000-000000000001",
+      "zone": "zon_00000001-0000-4000-8000-000000000001",
+      "addressing": {
+        "ipv4": {
+          "mode": "dhcp"
+        },
+        "ipv6": {
+          "mode": "dhcp6",
+          "requestPrefixLength": 56
+        }
+      }
+    },
+    {
+      "id": "seg_00000002-0000-4000-8000-000000000002",
+      "name": "lan",
+      "link": "lnk_00000002-0000-4000-8000-000000000002",
+      "zone": "zon_00000002-0000-4000-8000-000000000002",
+      "addressing": {
+        "ipv4": {
+          "mode": "static",
+          "addresses": [
+            "192.168.40.1/24"
+          ]
+        },
+        "ipv6": {
+          "mode": "none"
+        }
+      }
+    }
+  ],
+  "zones": [
+    {
+      "id": "zon_00000001-0000-4000-8000-000000000001",
+      "name": "wan"
+    },
+    {
+      "id": "zon_00000002-0000-4000-8000-000000000002",
+      "name": "lan"
+    }
+  ],
+  "dhcp": [
+    {
+      "id": "dhp_00000001-0000-4000-8000-000000000001",
+      "name": "lan",
+      "segment": "seg_00000002-0000-4000-8000-000000000002",
+      "ranges": [
+        {
+          "first": "192.168.40.128",
+          "last": "192.168.40.254"
+        }
+      ],
+      "leaseTime": 3600
+    }
+  ],
+  "dns": {
+    "mode": "forward",
+    "upstreams": [
+      {
+        "address": "9.9.9.9",
+        "protocol": "dot",
+        "tlsName": "dns.quad9.net"
+      },
+      {
+        "address": "[2620:fe::fe]:853",
+        "protocol": "dot",
+        "tlsName": "dns.quad9.net"
+      }
+    ],
+    "segments": [
+      "seg_00000002-0000-4000-8000-000000000002"
+    ],
+    "localDomain": "lan.example",
+    "searchDomains": [
+      "lan.example"
+    ],
+    "registerLeases": false
+  }
+}

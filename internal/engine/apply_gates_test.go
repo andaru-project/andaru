@@ -314,6 +314,12 @@ func TestIfupdownGates(t *testing.T) {
 		want []want
 	}{
 		"recognised": {debian, nil},
+		// The DNS service resolves for the host, so it declares the host's DNS.
+		"static with the DNS service": {func() gateInput {
+			in := static(false)()
+			in.Declaration = []byte(`{"links":[{"kind":"ethernet","enabled":true}],"segments":[{"addressing":{"ipv4":{"mode":"static"},"ipv6":{"mode":"none"}}}],"dns":{"mode":"recursive","segments":[]}}`)
+			return in
+		}, nil},
 		"reader refusal": {func() gateInput {
 			in := debian()
 			in.IfupdownProblems = []host.Problem{{File: "/etc/network/interfaces", Key: "pre-up", Message: "no"}}
@@ -390,5 +396,14 @@ func TestIfupdownGates(t *testing.T) {
 	}
 	if findings := applyFindings(func() gateInput { in := debian(); in.Takeover = false; return in }()); !strings.Contains(findings[0].Message, "ifupdown still configures") {
 		t.Fatalf("mismatch message: %s", findings[0].Message)
+	}
+}
+
+// With the DNS service the host resolves through it, so netplan's DNS servers owe no segment a declaration.
+func TestStaticDNSSatisfiedByTheDNSService(t *testing.T) {
+	in := staticDNS(map[string]string{"eth0": ""}, "eth0")
+	in.Result.Files = append(in.Result.Files, render.File{Path: "/run/systemd/resolved.conf.d/50-andaru.conf", Content: "[Resolve]\nDNS=127.0.0.1 ::1\n"})
+	if findings := applyFindings(in); len(findings) != 0 {
+		t.Fatalf("findings = %+v", findings)
 	}
 }

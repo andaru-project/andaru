@@ -177,13 +177,15 @@ type proposalView struct {
 	SavedVersion config.Version     `json:"savedVersion"`
 	Operations   []config.Operation `json:"operations"`
 	Starter      []config.Operation `json:"starter"`
-	Adapters     []adapterView      `json:"adapters"`
-	Findings     []render.Finding   `json:"findings"`
+	// DHCP offers a server per static LAN segment; it is never part of Operations, so taking over without questions serves none.
+	DHCP     []config.Operation `json:"dhcp"`
+	Adapters []adapterView      `json:"adapters"`
+	Findings []render.Finding   `json:"findings"`
 }
 
 func (h *takeoverHandler) serveProposal(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	view := proposalView{Operations: []config.Operation{}, Starter: starterOperations(), Adapters: []adapterView{}, Findings: []render.Finding{}}
+	view := proposalView{Operations: []config.Operation{}, Starter: starterOperations(), DHCP: []config.Operation{}, Adapters: []adapterView{}, Findings: []render.Finding{}}
 	input, err := h.head(ctx, nil)
 	if err != nil {
 		writeConfigurationError(w, r, err)
@@ -204,10 +206,12 @@ func (h *takeoverHandler) serveProposal(w http.ResponseWriter, r *http.Request) 
 		Policy     json.RawMessage   `json:"policy"`
 		NAT        json.RawMessage   `json:"nat"`
 		Management json.RawMessage   `json:"management"`
+		DHCP       json.RawMessage   `json:"dhcp"`
+		DNS        json.RawMessage   `json:"dns"`
 	}
 	_ = json.Unmarshal(input.Value, &saved)
 	// A saved filter section counts too: the proposal would otherwise activate saved rules the review never shows, or collide with a saved singleton.
-	filterSaved := len(saved.Objects)+len(saved.Policy)+len(saved.NAT)+len(saved.Management) > 0
+	filterSaved := len(saved.Objects)+len(saved.Policy)+len(saved.NAT)+len(saved.Management)+len(saved.DHCP)+len(saved.DNS) > 0
 	unsupported := func(path, message string) {
 		view.State = "unsupported"
 		view.Findings = append(view.Findings, render.Finding{Severity: "error", Code: "TAKEOVER_UNSUPPORTED_BASELINE", Path: path, Message: message})
@@ -277,7 +281,9 @@ func (h *takeoverHandler) serveProposal(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, r, http.StatusOK, view)
 		return
 	}
-	view.State, view.Operations, view.Adapters = "ready", proposalOperations(found, viaInterface(links, r)), adapters(found, links, false)
+	facts, _ := h.read.Facts() // without them the proposal offers no services, as before
+	view.State, view.Adapters = "ready", adapters(found, links, false)
+	view.Operations, view.DHCP = proposalOperations(found, viaInterface(links, r), facts)
 	writeJSON(w, r, http.StatusOK, view)
 }
 
@@ -314,9 +320,19 @@ func starterOperations() []config.Operation {
 	}
 }
 
-func proposalOperations(found []host.Detected, via string) []config.Operation {
+// With Unbound installed it proposes the DNS service for the LAN, which takes over the host's servers; with Kea,
+// a DHCP offer per static LAN segment, returned apart because a takeover without questions must not start serving DHCP.
+func proposalOperations(found []host.Detected, via string, tools host.RealizerFacts) (ops, dhcp []config.Operation) {
 	zones := map[string]bool{}
 	var links, segments []config.Operation
+	var lan, servers, domains []string
+	for i, n := range found {
+		servers, domains = append(servers, n.DNS...), append(domains, n.Domains...)
+		if _, ok := offer(n); ok && !n.DefaultRoute {
+			lan = append(lan, fmt.Sprintf("@seg%d", i+1))
+		}
+	}
+	service := tools.UnboundTool && len(lan) > 0
 	for i, n := range found {
 		zone := "lan"
 		if n.DefaultRoute {
@@ -326,7 +342,7 @@ func proposalOperations(found []host.Detected, via string) []config.Operation {
 		link := fmt.Sprintf("link%d", i+1)
 		links = append(links, create("links", link, map[string]any{"name": n.Name, "kind": "ethernet", "mtu": n.MTU, "enabled": true, "permanentMac": n.PermanentMAC}))
 		addressing := map[string]any{"ipv4": family(n.IPv4), "ipv6": family(n.IPv6)}
-		if len(n.DNS) > 0 {
+		if len(n.DNS) > 0 && !service {
 			dns := map[string]any{"servers": n.DNS}
 			if len(n.Domains) > 0 {
 				dns["searchDomains"] = n.Domains
@@ -335,7 +351,6 @@ func proposalOperations(found []host.Detected, via string) []config.Operation {
 		}
 		segments = append(segments, create("segments", fmt.Sprintf("seg%d", i+1), map[string]any{"name": n.Name, "link": "@" + link, "zone": "@" + zone, "addressing": addressing}))
 	}
-	var ops []config.Operation
 	for _, zone := range []string{"wan", "lan"} {
 		if zones[zone] {
 			ops = append(ops, create("zones", zone, map[string]any{"name": zone}))
@@ -349,6 +364,21 @@ func proposalOperations(found []host.Detected, via string) []config.Operation {
 	if zones["wan"] {
 		ops = append(ops, starter[7])
 	}
+	if service {
+		dns := map[string]any{"mode": "recursive", "segments": lan}
+		if len(servers) > 0 {
+			// Servers a DHCP uplink hands out change, and the service could not follow them; declared ones stay.
+			var upstreams []map[string]any
+			for _, s := range servers {
+				upstreams = append(upstreams, map[string]any{"address": s, "protocol": "do53"})
+			}
+			dns["mode"], dns["upstreams"] = "forward", upstreams
+		}
+		if len(domains) > 0 {
+			dns["searchDomains"] = domains
+		}
+		ops = append(ops, singleton("dns", dns))
+	}
 	// Management stays where the operator is: their session's segment, else the LAN, else the uplink.
 	management := slices.IndexFunc(found, func(n host.Detected) bool { return n.Name == via })
 	if management < 0 {
@@ -357,7 +387,20 @@ func proposalOperations(found []host.Detected, via string) []config.Operation {
 	if len(found) > 0 {
 		ops = append(ops, singleton("management", map[string]any{"segment": fmt.Sprintf("@seg%d", management+1)}))
 	}
-	return ops
+	for i, n := range found {
+		if r, ok := offer(n); ok && tools.KeaTool && !n.DefaultRoute {
+			dhcp = append(dhcp, create("dhcp", fmt.Sprintf("dhcp%d", i+1), map[string]any{"name": n.Name, "segment": fmt.Sprintf("@seg%d", i+1), "ranges": []map[string]string{r}}))
+		}
+	}
+	return ops, dhcp
+}
+
+// offer is the DHCP range proposed for a static segment.
+func offer(n host.Detected) (map[string]string, bool) {
+	if n.IPv4.Mode != "static" || len(n.IPv4.Addresses) == 0 {
+		return nil, false
+	}
+	return config.DHCPOffer(slices.Min(n.IPv4.Addresses)) // the served subnet: first in canonical order
 }
 
 // viaInterface names the interface holding the address in ?via=, the local end of the operator's SSH session.
@@ -568,6 +611,7 @@ func (h *takeoverHandler) proposeIfupdown(w http.ResponseWriter, r *http.Request
 			detected[uplink].DNS, detected[uplink].Domains = servers, slices.DeleteFunc(domains, func(d string) bool { return strings.HasPrefix(d, "~") })
 		}
 	}
-	view.State, view.Operations, view.Adapters = "ready", proposalOperations(detected, viaInterface(links, r)), adapters(detected, links, true)
+	view.State, view.Adapters = "ready", adapters(detected, links, true)
+	view.Operations, view.DHCP = proposalOperations(detected, viaInterface(links, r), facts)
 	writeJSON(w, r, http.StatusOK, view)
 }

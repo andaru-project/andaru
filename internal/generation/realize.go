@@ -42,8 +42,12 @@ type Realizer struct {
 	LockWait         time.Duration
 	// HandBackWait is how long ifupdown gets to bring interfaces back; 30 seconds when zero.
 	HandBackWait time.Duration
+	// LeaseSettle is how long the lease sync waits for more lease events before it reads.
+	LeaseSettle time.Duration
 	// failAt lets tests stop a verb before a named write, as a kill would.
 	failAt func(step string) error
+	// afterLeaseRead lets tests act while a lease sync is running.
+	afterLeaseRead func()
 }
 
 // placed is one file as it must exist under /run.
@@ -181,7 +185,7 @@ func (r Realizer) settle(ctx context.Context, from, to []placed) error {
 			slog.Warn("delete network device", "device", name, "error", err)
 		}
 	}
-	return nil
+	return r.services(ctx, from, to)
 }
 
 type observation struct {
@@ -413,6 +417,10 @@ func (r Realizer) Activate(ctx context.Context, id int) error {
 			if err := r.handBack(restore, ifupdown, next, p.Takeover); err != nil {
 				return fmt.Errorf("handing back to ifupdown failed: %w", err)
 			}
+			// What the generation started goes too: ifupdown knows nothing of Kea or Unbound.
+			if err := r.services(restore, next, nil); err != nil {
+				return fmt.Errorf("stopping its services failed: %w", err)
+			}
 			return nil
 		}); err != nil {
 			return fmt.Errorf("activate %d: %s; %w", id, reason, err)
@@ -572,7 +580,7 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) error {
 			if err := r.handBack(ctx, *ifupdown, from, p.Takeover); err != nil {
 				return fmt.Errorf("handing back to ifupdown: %w", err)
 			}
-			return nil
+			return r.services(ctx, from, nil)
 		}
 		if err := r.settle(ctx, from, target); err != nil {
 			return fmt.Errorf("files restored, reload failed: %w", err)

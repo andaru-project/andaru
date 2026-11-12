@@ -265,6 +265,9 @@ func (r Realizer) Boot(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := r.serviceDirs(); err != nil {
+		slog.Error("create the service directories", "error", err)
+	}
 	if p.Pending != nil {
 		// /run was emptied by the reboot, so an unconfirmed generation is already gone; only the record remains.
 		id := *p.Pending

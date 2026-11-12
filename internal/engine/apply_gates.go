@@ -77,7 +77,12 @@ func applyFindings(in gateInput) []render.Finding {
 		for _, path := range in.Baseline.StrayYAML {
 			baseline(path, "netplan configuration outside /etc/netplan would keep generating network files after the takeover.")
 		}
+		// Through the DNS service the host keeps a resolver whatever netplan's files said.
+		resolves := slices.ContainsFunc(in.Result.Files, func(f render.File) bool { return f.Path == "/run/systemd/resolved.conf.d/50-andaru.conf" })
 		for _, path := range in.Baseline.StaticDNS {
+			if resolves {
+				break
+			}
 			// netplan names its file after its own id, so the interfaces come from networkd's binding, never from the name.
 			var bound, missing []string
 			for _, m := range in.Managed {
@@ -159,6 +164,7 @@ func applyFindings(in gateInput) []render.Finding {
 				} `json:"ipv6"`
 			} `json:"addressing"`
 		} `json:"segments"`
+		DNS json.RawMessage `json:"dns"`
 	}
 	// The renderer decoded the same bytes already; an undecodable declaration never gets here.
 	_ = json.Unmarshal(in.Declaration, &declared)
@@ -215,7 +221,8 @@ func applyFindings(in gateInput) []render.Finding {
 			offered = offered || s.Addressing.IPv4.Mode == "dhcp" || s.Addressing.IPv6.Mode == "slaac" || s.Addressing.IPv6.Mode == "dhcp6"
 			declaresDNS = declaresDNS || len(s.Addressing.DNS) > 0
 		}
-		if !offered && !declaresDNS {
+		// The DNS service resolves for the host.
+		if !offered && !declaresDNS && len(declared.DNS) == 0 {
 			servers := "none"
 			if len(in.CurrentDNS) > 0 {
 				servers = strings.Join(in.CurrentDNS, ", ")

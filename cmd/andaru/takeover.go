@@ -41,6 +41,7 @@ type proposal struct {
 	SavedVersion config.Version     `json:"savedVersion"`
 	Operations   []config.Operation `json:"operations"`
 	Starter      []config.Operation `json:"starter"`
+	DHCP         []config.Operation `json:"dhcp"`
 	Adapters     []adapter          `json:"adapters"`
 	Findings     []finding          `json:"findings"`
 }

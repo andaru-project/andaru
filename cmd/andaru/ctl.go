@@ -39,31 +39,31 @@ type applyReply struct {
 	Files    []json.RawMessage
 }
 
-var objectIDPattern = regexp.MustCompile(`^(lnk|seg|zon|adr|svc|rul)_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+var objectIDPattern = regexp.MustCompile(`^(lnk|seg|zon|adr|svc|rul|dhp)_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 var applyIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
 var errUsage = errors.New("usage: andaru ctl [--socket PATH] links|openapi|config <show|list|get|create|replace|delete|changes|order>|versions <list|get>|preview network [--saved-version N]|apply network --saved-version N [--takeover] [--confirm-timeout S]|applies <list|get ID|confirm ID|rollback ID>|takeover [--accept-detected] [--confirm-timeout S]")
 
 var ruleIDPattern = regexp.MustCompile(`^rul_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 func collectionName(s string) bool {
-	return slices.Contains([]string{"links", "segments", "zones", "addresses", "services", "policy/input", "policy/forward"}, s)
+	return slices.Contains([]string{"links", "segments", "zones", "addresses", "services", "dhcp", "policy/input", "policy/forward"}, s)
 }
 
 // singletonName names the configuration objects that exist at most once and have no ID.
-func singletonName(s string) bool { return s == "management" || s == "nat/outbound" }
+func singletonName(s string) bool { return s == "management" || s == "nat/outbound" || s == "dns" }
 
 // validChanged checks one batch-result item as the store emits it: filter collections are dotted,
 // a singleton's or a list order's ID is its collection, and a list order carries only a version.
 func validChanged(item config.ChangedView) bool {
 	switch item.Collection {
-	case "management", "nat.outbound":
+	case "management", "nat.outbound", "dns":
 		var value map[string]any
 		return item.ID == item.Collection && (item.Deleted || validVersion(item.Version) && item.Version != "0" && json.Unmarshal(item.Value, &value) == nil)
 	case "policy.input", "policy.forward":
 		if item.ID == item.Collection {
 			return validVersion(item.Version) && item.Version != "0"
 		}
-	case "links", "segments", "zones", "addresses", "services":
+	case "links", "segments", "zones", "addresses", "services", "dhcp":
 	default:
 		return false
 	}

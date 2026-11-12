@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -917,5 +918,43 @@ func TestFilterObjectsPersist(t *testing.T) {
 	var d declaration
 	if e = json.Unmarshal(in.Value, &d); e != nil || len(d.Policy.Forward) != 2 || d.NAT.Outbound.Mode != "automatic" {
 		t.Fatalf("realization input lost the filter: %s %v", in.Value, e)
+	}
+}
+
+// A store made before DHCP and DNS gains their version table when opened.
+func TestServiceChangesTableAdded(t *testing.T) {
+	path := ownedDir(t)
+	ctx := context.Background()
+	s := openTestStore(t, path)
+	if _, e := s.Save(ctx, "unix:uid:0", networkInput(t)); e != nil {
+		t.Fatal(e)
+	}
+	s.Close()
+	db, e := openDatabase(ctx, filepath.Join(path, "configuration", "config.db"), "rw", false)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = db.ExecContext(ctx, "DROP TABLE service_changes"); e != nil {
+		t.Fatal(e)
+	}
+	db.Close()
+	s = openTestStore(t, path)
+	snap, e := s.Snapshot(ctx)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var d declaration
+	_ = json.Unmarshal(snap.Value, &d)
+	// Segment IDs are random, so their order is too: pick the static one.
+	lan := d.Segments[slices.IndexFunc(d.Segments, func(s segment) bool { return s.Addressing.IPv4.Mode == "static" })].ID
+	zero := Version("0")
+	if _, e = s.Save(ctx, "unix:uid:0", Changes{Operations: []Operation{
+		{Op: "replace", Collection: "dns", ExpectedVersion: &zero, Value: json.RawMessage(`{"mode":"recursive","segments":["` + lan + `"]}`)},
+	}}); e != nil {
+		raw, _ := json.Marshal(e)
+		t.Fatalf("save after the table was added: %v %s", e, raw)
+	}
+	if o, _, e := s.Get(ctx, "dns", "dns"); e != nil || o.Version == "0" {
+		t.Fatalf("dns %+v %v", o, e)
 	}
 }

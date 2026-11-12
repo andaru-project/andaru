@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -31,6 +32,15 @@ type formState struct {
 	servers, domains string
 	timeout          string
 	management       string // the link localId whose segment keeps SSH open
+	// service: the host resolves through the DNS service, so "offered" means it resolves recursively.
+	service bool
+	offers  []*dhcpOffer
+	dhcp    map[string]*bool // by the offer's segment reference
+}
+
+// dhcpOffer is one DHCP server the proposal offers, on the segment of link.
+type dhcpOffer struct {
+	segment, link, title string // title is the adapter's name
 }
 
 func fields(s string) []string {
@@ -39,8 +49,30 @@ func fields(s string) []string {
 
 func newFormState(p proposal, a answers) *formState {
 	s := &formState{dnsMode: "offered", timeout: strconv.Itoa(a.Timeout), management: a.Management}
-	if a.DNS != nil {
+	// Search domains alone do not make servers: a recursive DNS service has none to ask for.
+	if a.DNS != nil && (len(a.DNS.Servers) > 0 || !service(p)) {
 		s.dnsMode, s.servers, s.domains = "declared", strings.Join(a.DNS.Servers, ", "), strings.Join(a.DNS.SearchDomains, ", ")
+	}
+	s.service, s.dhcp = service(p), map[string]*bool{}
+	linkOf := map[string]string{}
+	for _, op := range p.Operations {
+		if op.Collection == "segments" {
+			linkOf["@"+op.LocalID] = strings.TrimPrefix(object(op.Value)["link"].(string), "@")
+		}
+	}
+	for _, op := range p.DHCP {
+		var v struct {
+			Name, Segment string
+			Ranges        []struct{ First, Last string }
+		}
+		_ = json.Unmarshal(op.Value, &v)
+		if len(v.Ranges) == 0 {
+			continue
+		}
+		serve := a.DHCP == nil || a.DHCP[v.Segment] // yes until the operator says otherwise
+		s.dhcp[v.Segment] = &serve
+		s.offers = append(s.offers, &dhcpOffer{v.Segment, linkOf[v.Segment],
+			printable(v.Name)})
 	}
 	detected := defaultAnswers(p)
 	for _, op := range p.Operations {
@@ -75,6 +107,14 @@ func (s *formState) answers(base answers) answers {
 	}
 	if s.dnsMode == "declared" {
 		a.DNS = &dnsAnswer{Servers: fields(s.servers), SearchDomains: fields(s.domains)}
+	} else if s.service && base.DNS != nil {
+		a.DNS = &dnsAnswer{SearchDomains: base.DNS.SearchDomains} // recursive, with the detected search domains
+	}
+	if len(s.dhcp) > 0 {
+		a.DHCP = map[string]bool{}
+		for segment, serve := range s.dhcp {
+			a.DHCP[segment] = *serve
+		}
 	}
 	if n, err := strconv.Atoi(strings.TrimSpace(s.timeout)); err == nil {
 		a.Timeout = n
@@ -168,14 +208,26 @@ func (s *formState) questions() *huh.Form {
 			).WithHideFunc(hidden),
 		)
 	}
+	offered := huh.NewOption("use what DHCP and router advertisements offer", "offered")
+	if s.service {
+		offered = huh.NewOption("resolve on its own (recursive)", "offered")
+	}
 	groups = append(groups,
 		huh.NewGroup(huh.NewSelect[string]().Title("DNS servers for this host").
-			Options(huh.NewOption("use what DHCP and router advertisements offer", "offered"), huh.NewOption("these servers", "declared")).
+			Options(offered, huh.NewOption("these servers", "declared")).
 			Value(&s.dnsMode)),
 		huh.NewGroup(
 			huh.NewInput().Title("DNS servers").Description("Tried in this order, separated by commas.").Value(&s.servers).Validate(validServers),
 			huh.NewInput().Title("Search domains").Description("Optional, separated by commas.").Value(&s.domains),
 		).WithHideFunc(func() bool { return s.dnsMode != "declared" }),
+	)
+	for _, o := range s.offers {
+		// The range follows the address answered above, so the review shows it, not this question.
+		groups = append(groups, huh.NewGroup(huh.NewConfirm().Title("Serve DHCP on "+o.title+"?").
+			Description("It hands out the half of the subnet without the firewall's address; ranges can be changed afterwards with andaru ctl.").Value(s.dhcp[o.segment])).
+			WithHideFunc(func() bool { return !slices.Contains(s.kept, o.link) }))
+	}
+	groups = append(groups,
 		huh.NewGroup(huh.NewSelect[string]().Title("Management adapter").
 			Description("SSH stays open on this adapter whatever the rules say.").
 			OptionsFunc(func() []huh.Option[string] {
@@ -223,14 +275,24 @@ func review(out io.Writer, s *formState, a answers, d draft, err error) {
 		}
 		fmt.Fprintf(out, "  after: zone %s, IPv4 %s, IPv6 %s\n", answer.Zone, printable(describeFamily(answer.IPv4)), answer.IPv6Mode)
 	}
-	if a.DNS == nil {
+	switch {
+	case s.service && (a.DNS == nil || len(a.DNS.Servers) == 0):
+		fmt.Fprintln(out, "\nDNS service: resolves on its own (recursive); the host and the LAN use it")
+	case s.service:
+		fmt.Fprintf(out, "\nDNS service: forwards to %s; the host and the LAN use it\n", printable(strings.Join(a.DNS.Servers, ", ")))
+	case a.DNS == nil:
 		fmt.Fprintln(out, "\nDNS: what DHCP and router advertisements offer")
-	} else {
+	default:
 		fmt.Fprintf(out, "\nDNS: %s", printable(strings.Join(a.DNS.Servers, ", ")))
 		if len(a.DNS.SearchDomains) > 0 {
 			fmt.Fprintf(out, "; search %s", printable(strings.Join(a.DNS.SearchDomains, ", ")))
 		}
 		fmt.Fprintln(out)
+	}
+	for _, o := range s.offers {
+		if a.DHCP[o.segment] && slices.Contains(s.kept, o.link) {
+			fmt.Fprintf(out, "DHCP: served on %s (its range is in the DHCP server's file below)\n", o.title)
+		}
 	}
 	for _, f := range s.adapters {
 		if f.id == a.Management {

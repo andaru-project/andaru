@@ -34,6 +34,13 @@ type answers struct {
 	Timeout  int
 	// Management is the link localId whose segment keeps SSH open whatever the rules say.
 	Management string
+	// DHCP is the operator's yes to each DHCP offer, by the offer's segment reference.
+	DHCP map[string]bool
+}
+
+// service reports a proposal that resolves through the DNS service, whose upstreams are then the host's servers.
+func service(p proposal) bool {
+	return slices.ContainsFunc(p.Operations, func(op config.Operation) bool { return op.Collection == "dns" })
 }
 
 type segmentValue struct {
@@ -78,6 +85,18 @@ func defaultAnswers(p proposal) answers {
 			var v struct{ Segment string }
 			_ = json.Unmarshal(op.Value, &v)
 			management = strings.TrimPrefix(v.Segment, "@")
+		case "dns":
+			var v struct {
+				Upstreams     []struct{ Address string }
+				SearchDomains []string
+			}
+			_ = json.Unmarshal(op.Value, &v)
+			if len(v.Upstreams)+len(v.SearchDomains) > 0 {
+				a.DNS = &dnsAnswer{SearchDomains: v.SearchDomains}
+				for _, u := range v.Upstreams {
+					a.DNS.Servers = append(a.DNS.Servers, u.Address)
+				}
+			}
 		}
 	}
 	a.Management = linkOf[management]
@@ -155,7 +174,7 @@ func batch(p proposal, a answers) ([]config.Operation, error) {
 	if len(segments) == 0 {
 		return nil, errors.New("at least one adapter must be kept")
 	}
-	if a.DNS != nil {
+	if a.DNS != nil && !service(p) {
 		if dnsTarget < 0 {
 			dnsTarget = 0
 		}
@@ -194,6 +213,33 @@ func batch(p proposal, a answers) ([]config.Operation, error) {
 			if zones["wan"] {
 				filter = append(filter, op)
 			}
+		case "dns":
+			// The service serves the LAN segments still kept; the operator's servers are its upstreams.
+			v := object(op.Value)
+			served := []any{}
+			for _, ref := range v["segments"].([]any) {
+				// It listens on the segment's static address, so a segment the operator made dynamic drops out.
+				for link, segment := range segmentOf {
+					if "@"+segment == ref && a.Adapters[link].IPv4.Mode == "static" {
+						served = append(served, ref)
+					}
+				}
+			}
+			v["segments"] = served
+			delete(v, "upstreams")
+			delete(v, "searchDomains")
+			v["mode"] = "recursive"
+			if a.DNS != nil && len(a.DNS.Servers) > 0 {
+				var upstreams []any
+				for _, s := range a.DNS.Servers {
+					upstreams = append(upstreams, map[string]any{"address": s, "protocol": "do53"})
+				}
+				v["mode"], v["upstreams"] = "forward", upstreams
+			}
+			if a.DNS != nil && len(a.DNS.SearchDomains) > 0 {
+				v["searchDomains"] = a.DNS.SearchDomains
+			}
+			filter = append(filter, operation(op, v))
 		case "management":
 			segment, kept := segmentOf[a.Management]
 			if !kept {
@@ -201,6 +247,28 @@ func batch(p proposal, a answers) ([]config.Operation, error) {
 			}
 			v := object(op.Value)
 			v["segment"] = "@" + segment
+			filter = append(filter, operation(op, v))
+		}
+	}
+	for _, op := range p.DHCP {
+		v := object(op.Value)
+		segment := strings.TrimPrefix(v["segment"].(string), "@")
+		link := ""
+		for l, s := range segmentOf {
+			if s == segment {
+				link = l
+			}
+		}
+		if !a.DHCP["@"+segment] || link == "" {
+			continue
+		}
+		// The range follows the address the operator answered; a segment no longer static gets none.
+		ip4 := a.Adapters[link].IPv4
+		if ip4.Mode != "static" || len(ip4.Addresses) == 0 {
+			continue
+		}
+		if r, ok := config.DHCPOffer(slices.Min(ip4.Addresses)); ok { // the served subnet: first in canonical order
+			v["ranges"] = []any{map[string]any{"first": r["first"], "last": r["last"]}}
 			filter = append(filter, operation(op, v))
 		}
 	}

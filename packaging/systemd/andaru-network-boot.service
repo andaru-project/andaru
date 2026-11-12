@@ -5,7 +5,7 @@ RequiresMountsFor=/var/lib/andaru
 # Its lock and pointers are written under /var/lib/andaru, so the root file system must be writable.
 After=systemd-remount-fs.service
 ConditionPathExists=/var/lib/andaru/generations/pointers.json
-Before=systemd-networkd.service networking.service network-pre.target cloud-init-local.service shutdown.target
+Before=systemd-networkd.service systemd-resolved.service networking.service network-pre.target cloud-init-local.service shutdown.target
 Conflicts=shutdown.target
 
 [Service]
