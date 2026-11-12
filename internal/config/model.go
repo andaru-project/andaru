@@ -65,10 +65,36 @@ type ipv4 struct {
 	Gateway   string   `json:"gateway,omitempty"`
 }
 type advertisement struct {
-	Enabled   bool `json:"enabled"`
-	Managed   bool `json:"managed"`
-	OtherInfo bool `json:"otherInfo"`
+	Mode              string `json:"mode,omitempty"`
+	Priority          string `json:"priority,omitempty"`
+	RouterLifetime    *int   `json:"routerLifetime,omitempty"`
+	ValidLifetime     *int   `json:"validLifetime,omitempty"`
+	PreferredLifetime *int   `json:"preferredLifetime,omitempty"`
+	DNS               *dns   `json:"dns,omitempty"`
+	PREF64            string `json:"pref64,omitempty"`
+	// The form saved before modes existed. It loads unchanged, so old versions keep their bytes, and a write replaces it.
+	Enabled   *bool `json:"enabled,omitempty"`
+	Managed   *bool `json:"managed,omitempty"`
+	OtherInfo *bool `json:"otherInfo,omitempty"`
 }
+
+// mode is the advertisement mode, the legacy form mapped onto it; none at all is "disabled".
+func (a *advertisement) mode() string {
+	switch {
+	case a == nil:
+		return "disabled"
+	case a.Mode != "":
+		return a.Mode
+	case !*a.Enabled: // the schema requires all three legacy fields together
+		return "disabled"
+	case *a.Managed:
+		return "managed"
+	case *a.OtherInfo:
+		return "stateless"
+	}
+	return "unmanaged"
+}
+
 type ipv6 struct {
 	Mode                string         `json:"mode"`
 	Addresses           []string       `json:"addresses,omitempty"`

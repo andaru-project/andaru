@@ -573,24 +573,77 @@
       ]
     },
     "ra": {
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "type": "boolean"
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "managed": {
+              "type": "boolean"
+            },
+            "otherInfo": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "enabled",
+            "managed",
+            "otherInfo"
+          ],
+          "additionalProperties": false
         },
-        "managed": {
-          "type": "boolean"
-        },
-        "otherInfo": {
-          "type": "boolean"
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "enum": [
+                "disabled",
+                "router",
+                "unmanaged",
+                "managed",
+                "assisted",
+                "stateless"
+              ]
+            },
+            "priority": {
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ]
+            },
+            "routerLifetime": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65535
+            },
+            "validLifetime": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4294967294
+            },
+            "preferredLifetime": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4294967294
+            },
+            "dns": {
+              "$ref": "#/$defs/dns"
+            },
+            "pref64": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 64
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "additionalProperties": false
         }
-      },
-      "required": [
-        "enabled",
-        "managed",
-        "otherInfo"
-      ],
-      "additionalProperties": false
+      ]
     },
     "ipv4": {
       "oneOf": [

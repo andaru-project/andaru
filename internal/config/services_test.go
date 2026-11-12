@@ -204,3 +204,44 @@ func TestDHCPOffer(t *testing.T) {
 		}
 	}
 }
+
+// A version saved before advertisement modes still loads as stored; the next write stores the mode.
+func TestLegacyAdvertisementSurvivesHistory(t *testing.T) {
+	stored, e := canonical(mustDecode(t, fixtureBytes(t)))
+	if e != nil {
+		t.Fatal(e)
+	}
+	// history.go refuses a version whose canonical re-encoding differs from its stored bytes.
+	again, e := decodeDeclaration(stored)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if b, _ := canonical(again); string(b) != string(stored) || !strings.Contains(string(stored), `"ra":{"enabled":true,"managed":false,"otherInfo":true}`) {
+		t.Fatalf("legacy version does not round-trip:\n%s", stored)
+	}
+	s := seededState(t)
+	// An unrelated write leaves the segment's stored form alone.
+	mustRun(t, &s, `{"operations":[{"op":"replace","collection":"zones","id":"`+s.Config.Zones[0].ID+`","expectedVersion":"7","value":{"name":"outside"}}]}`)
+	if s.Config.Segments[1].Addressing.IPv6.RA.Mode != "" {
+		t.Fatalf("untouched segment rewritten: %+v", s.Config.Segments[1].Addressing.IPv6.RA)
+	}
+	// Writing the segment, even with the legacy form, stores the mode.
+	seg, _ := json.Marshal(s.Config.Segments[1])
+	var value map[string]any
+	_ = json.Unmarshal(seg, &value)
+	delete(value, "id")
+	body, _ := json.Marshal(value)
+	mustRun(t, &s, `{"operations":[{"op":"replace","collection":"segments","id":"`+s.Config.Segments[1].ID+`","expectedVersion":"7","value":`+string(body)+`}]}`)
+	if b, _ := json.Marshal(s.Config.Segments[1].Addressing.IPv6.RA); string(b) != `{"mode":"stateless"}` {
+		t.Fatalf("written ra = %s", b)
+	}
+}
+
+func mustDecode(t *testing.T, raw []byte) declaration {
+	t.Helper()
+	d, e := decodeDeclaration(raw)
+	if e != nil {
+		t.Fatal(e)
+	}
+	return d
+}

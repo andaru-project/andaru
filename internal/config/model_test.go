@@ -253,3 +253,70 @@ func TestCanonicalDocumentSize(t *testing.T) {
 		t.Fatal("newline escaped the document limit")
 	}
 }
+
+func TestAdvertisementModes(t *testing.T) {
+	const ra = "/segments/1/addressing/ipv6/ra"
+	static := func(d map[string]any, ra map[string]any) {
+		item(segmentsOf(d), 1)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "static", "addresses": []any{"fd00:1::1/64"}, "ra": ra}
+	}
+	for name, tc := range map[string]struct {
+		change func(map[string]any)
+		want   string // "" accepts; "schema" is any schema refusal
+	}{
+		"unmanaged": {func(d map[string]any) { static(d, map[string]any{"mode": "unmanaged"}) }, ""},
+		"all options": {func(d map[string]any) {
+			static(d, map[string]any{"mode": "unmanaged", "priority": "high", "routerLifetime": 0, "validLifetime": 600, "preferredLifetime": 300, "pref64": "64:ff9b::/96", "dns": map[string]any{"servers": []any{"fd00:1::1"}, "searchDomains": []any{"home.arpa"}}})
+		}, ""},
+		"unknown mode":  {func(d map[string]any) { static(d, map[string]any{"mode": "sometimes"}) }, "schema"},
+		"lifetime 3":    {func(d map[string]any) { static(d, map[string]any{"mode": "router", "routerLifetime": 3}) }, ra + "/routerLifetime"},
+		"lifetime 9001": {func(d map[string]any) { static(d, map[string]any{"mode": "router", "routerLifetime": 9001}) }, ra + "/routerLifetime"},
+		"preferred over valid": {func(d map[string]any) {
+			static(d, map[string]any{"mode": "unmanaged", "validLifetime": 600, "preferredLifetime": 700})
+		}, ra + "/preferredLifetime"},
+		"pref64 length": {func(d map[string]any) { static(d, map[string]any{"mode": "unmanaged", "pref64": "64:ff9b::/97"}) }, ra + "/pref64"},
+		"pref64 IPv4":   {func(d map[string]any) { static(d, map[string]any{"mode": "unmanaged", "pref64": "10.0.0.0/8"}) }, ra + "/pref64"},
+		"advertised DNS server": {func(d map[string]any) {
+			static(d, map[string]any{"mode": "unmanaged", "dns": map[string]any{"servers": []any{"nope"}}})
+		}, ra + "/dns/servers/0"},
+		"lifetimes on delegated": {func(d map[string]any) { v6(d, 1)["ra"] = map[string]any{"mode": "unmanaged", "validLifetime": 600} }, ra + "/validLifetime"},
+		"without IPv6": {func(d map[string]any) {
+			item(segmentsOf(d), 1)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "none", "ra": map[string]any{"mode": "unmanaged"}}
+		}, ra},
+		"disabled without IPv6": {func(d map[string]any) {
+			item(segmentsOf(d), 1)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "none", "ra": map[string]any{"mode": "disabled"}}
+		}, ""},
+		"legacy and new mixed": {func(d map[string]any) {
+			v6(d, 1)["ra"] = map[string]any{"mode": "router", "enabled": true, "managed": false, "otherInfo": false}
+		}, "schema"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := fixtureMap(t)
+			tc.change(d)
+			_, e := decodeMap(t, d)
+			ve, isValidation := e.(validationError)
+			switch {
+			case tc.want == "" && e != nil:
+				t.Fatalf("refused: %v %+v", e, ve)
+			case tc.want == "schema" && e == nil:
+				t.Fatal("accepted")
+			case tc.want != "" && tc.want != "schema" && (!isValidation || !slices.ContainsFunc(ve, func(f FieldError) bool { return f.Path == tc.want })):
+				t.Fatalf("error %v; fields %+v; want %s", e, ve, tc.want)
+			}
+		})
+	}
+	for raw, want := range map[string]string{
+		`{"enabled":true,"managed":false,"otherInfo":true}`:   "stateless",
+		`{"enabled":true,"managed":true,"otherInfo":true}`:    "managed",
+		`{"enabled":true,"managed":false,"otherInfo":false}`:  "unmanaged",
+		`{"enabled":false,"managed":false,"otherInfo":false}`: "disabled",
+	} {
+		d := fixtureMap(t)
+		var a any
+		_ = json.Unmarshal([]byte(raw), &a)
+		v6(d, 1)["ra"] = a
+		got, e := decodeMap(t, d)
+		if e != nil || got.Segments[1].Addressing.IPv6.RA.mode() != want {
+			t.Fatalf("%s: %v, mode %q, want %q", raw, e, got.Segments[1].Addressing.IPv6.RA.mode(), want)
+		}
+	}
+}

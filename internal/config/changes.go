@@ -551,6 +551,16 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 		}
 		d.DNS = &s
 	}
+	// A written segment stores its advertisement in the current form; loading keeps old versions byte for byte,
+	// and an untouched segment keeps its bytes so an unchanged batch stays a no-op.
+	for i := range d.Segments {
+		if _, written := writes[objectKey{"segments", d.Segments[i].ID}]; !written {
+			continue
+		}
+		if ra := d.Segments[i].Addressing.IPv6.RA; ra != nil && ra.Mode == "" {
+			d.Segments[i].Addressing.IPv6.RA = &advertisement{Mode: ra.mode()}
+		}
+	}
 	raw, e := json.Marshal(d)
 	if e != nil {
 		return empty, e

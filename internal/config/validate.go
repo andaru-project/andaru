@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cmp"
 	"fmt"
 	"net"
 	"net/netip"
@@ -197,10 +198,35 @@ func validateTopology(d *declaration) []FieldError {
 		if !zones[s.Zone] {
 			bad(p+"/zone", "Zone reference does not exist.")
 		}
-		if s.Addressing.IPv6.RA != nil && s.Addressing.IPv6.RA.Enabled && s.Addressing.IPv6.Mode == "none" {
-			bad(p+"/addressing/ipv6/ra", "Router advertisements require IPv6.")
-		}
 		a6 := &s.Addressing.IPv6
+		if ra := a6.RA; ra != nil {
+			path := p + "/addressing/ipv6/ra"
+			if ra.mode() != "disabled" && a6.Mode == "none" {
+				bad(path, "Router advertisements require IPv6.")
+			}
+			if l := ra.RouterLifetime; l != nil && *l != 0 && (*l < 4 || *l > 9000) {
+				bad(path+"/routerLifetime", "Expected 0, or 4 to 9000 seconds.")
+			}
+			if a6.Mode == "delegated" {
+				// networkd has no setting for them: the upstream lease decides.
+				for field, set := range map[string]bool{"validLifetime": ra.ValidLifetime != nil, "preferredLifetime": ra.PreferredLifetime != nil} {
+					if set {
+						bad(path+"/"+field, "The upstream lease sets a delegated prefix's lifetimes.")
+					}
+				}
+			} else if ra.PreferredLifetime != nil && *ra.PreferredLifetime > cmp.Or(ptrValue(ra.ValidLifetime), 86400) {
+				bad(path+"/preferredLifetime", "The preferred lifetime cannot exceed the valid lifetime.")
+			}
+			if ra.PREF64 != "" {
+				prefix, e := netip.ParsePrefix(ra.PREF64)
+				if e != nil || !prefix.Addr().Is6() || prefix.Addr().Is4In6() || prefix.Addr().Zone() != "" || prefix != prefix.Masked() || !slices.Contains([]int{32, 40, 48, 56, 64, 96}, prefix.Bits()) {
+					bad(path+"/pref64", "Expected an IPv6 prefix of length 32, 40, 48, 56, 64 or 96.")
+				}
+			}
+			if ra.DNS != nil {
+				validateDNSList(path+"/dns", ra.DNS, bad)
+			}
+		}
 		if a6.Mode == "delegated" {
 			source, ok := segments[a6.From]
 			if !ok || source.ID == s.ID || source.Addressing.IPv6.Mode != "dhcp6" {
@@ -231,27 +257,7 @@ func validateTopology(d *declaration) []FieldError {
 			} else {
 				firstDNS = path
 			}
-			seen := map[netip.Addr]bool{}
-			for j, raw := range dns.Servers {
-				a, e := netip.ParseAddr(raw)
-				switch {
-				case e != nil || a.Zone() != "" || a.Is4In6() || !validUnicast(a) || a.IsLinkLocalUnicast():
-					bad(fmt.Sprintf("%s/servers/%d", path, j), "Invalid DNS server address.")
-				case seen[a]:
-					bad(fmt.Sprintf("%s/servers/%d", path, j), "DNS server is listed twice.")
-				default:
-					seen[a] = true
-					dns.Servers[j] = a.String()
-				}
-			}
-			for j, name := range dns.SearchDomains {
-				// The pattern admits no whitespace, so a name can never start a new line in a rendered file.
-				if !searchDomain.MatchString(name) {
-					bad(fmt.Sprintf("%s/searchDomains/%d", path, j), "Invalid search domain.")
-				} else if slices.Contains(dns.SearchDomains[:j], name) {
-					bad(fmt.Sprintf("%s/searchDomains/%d", path, j), "Search domain is listed twice.")
-				}
-			}
+			validateDNSList(path, dns, bad)
 		}
 		for family, addresses := range map[int][]string{4: s.Addressing.IPv4.Addresses, 6: a6.Addresses} {
 			for j, raw := range addresses {
@@ -349,4 +355,36 @@ func validLocal(p netip.Prefix) bool {
 }
 func escapePointer(s string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(s, "~", "~0"), "/", "~1")
+}
+
+// validateDNSList checks a list of DNS servers and search domains, normalising the addresses.
+func validateDNSList(path string, dns *dns, bad func(string, string)) {
+	seen := map[netip.Addr]bool{}
+	for j, raw := range dns.Servers {
+		a, e := netip.ParseAddr(raw)
+		switch {
+		case e != nil || a.Zone() != "" || a.Is4In6() || !validUnicast(a) || a.IsLinkLocalUnicast():
+			bad(fmt.Sprintf("%s/servers/%d", path, j), "Invalid DNS server address.")
+		case seen[a]:
+			bad(fmt.Sprintf("%s/servers/%d", path, j), "DNS server is listed twice.")
+		default:
+			seen[a] = true
+			dns.Servers[j] = a.String()
+		}
+	}
+	for j, name := range dns.SearchDomains {
+		// The pattern admits no whitespace, so a name can never start a new line in a rendered file.
+		if !searchDomain.MatchString(name) {
+			bad(fmt.Sprintf("%s/searchDomains/%d", path, j), "Invalid search domain.")
+		} else if slices.Contains(dns.SearchDomains[:j], name) {
+			bad(fmt.Sprintf("%s/searchDomains/%d", path, j), "Search domain is listed twice.")
+		}
+	}
+}
+
+func ptrValue(p *int) int {
+	if p == nil {
+		return 0
+	}
+	return *p
 }
