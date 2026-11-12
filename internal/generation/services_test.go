@@ -20,7 +20,7 @@ func TestActivateStartsServicesAfterNetworkd(t *testing.T) {
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
-	order := []string{"networkctl reload", "kea-dhcp4 -t " + keaFile, "systemctl restart kea-dhcp4-server.service", "unbound-checkconf", "systemctl restart unbound.service", "systemctl try-reload-or-restart systemd-resolved.service"}
+	order := []string{"networkctl reload", "kea-dhcp4 -t " + keaFile, "systemctl restart kea-dhcp4-server.service", "unbound-helper root_trust_anchor_update", "unbound-checkconf", "systemctl restart unbound.service", "systemctl try-reload-or-restart systemd-resolved.service"}
 	last := -1
 	for _, c := range order {
 		i := b.index(c)
@@ -35,6 +35,15 @@ func TestActivateStartsServicesAfterNetworkd(t *testing.T) {
 	}
 }
 
+// The unit's own anchor update fails quietly (ExecStartPre=-); unbound-checkconf judges the result.
+func TestAnchorUpdateFailureLeavesTheCheckToUnbound(t *testing.T) {
+	b := newBench(t)
+	b.net.fail = "unbound-helper"
+	if err := b.r.Activate(t.Context(), b.gen(false, served(`{"Dhcp4":{}}`))); err != nil || b.index("unbound-checkconf") < 0 {
+		t.Fatalf("%v; the check did not run after the helper failed: %q", err, b.net.argv)
+	}
+}
+
 func TestInvalidServiceConfigRestoresThePrevious(t *testing.T) {
 	b := newBench(t)
 	b.net.fail = "kea-dhcp4 -t"
@@ -44,6 +53,31 @@ func TestInvalidServiceConfigRestoresThePrevious(t *testing.T) {
 	}
 	if b.exists(keaFile[1:]) || b.index("systemctl restart kea-dhcp4-server.service") >= 0 || b.read(id).State.State != Failed {
 		t.Fatalf("Kea started or its file stayed: %q %+v", b.net.argv, b.read(id).State)
+	}
+}
+
+func TestKeaCheckWaitsForLateInterfaces(t *testing.T) {
+	b := newBench(t)
+	// networkctl reload returns before networkd has created every VLAN and bridge: Kea refuses an absent interface.
+	checks := 0
+	b.net.fail, b.net.failWith = "kea-dhcp4 -t", "interface 'vlan99' doesn't exist in the system"
+	b.net.onRun = func(command string) {
+		if command == "kea-dhcp4 -t "+keaFile {
+			if checks++; checks == 3 {
+				b.net.fail = ""
+			}
+		}
+	}
+	id := b.gen(false, served(`{"Dhcp4":{}}`))
+	if err := b.r.Activate(t.Context(), id); err != nil {
+		t.Fatalf("activation failed while the served interface was still being created: %v", err)
+	}
+	// Any other refusal is final at once: retrying a bad configuration only delays the rollback.
+	if checks != 3 {
+		t.Fatalf("checked %d times", checks)
+	}
+	if b.index("systemctl restart kea-dhcp4-server.service") < 0 {
+		t.Fatalf("Kea not started: %q", b.net.argv)
 	}
 }
 
@@ -154,5 +188,19 @@ func TestRemovingDHCPClearsLeaseNames(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(filepath.Join(b.net.root, leasesDir, "leases.conf")); string(data) != "server:\n" {
 		t.Fatalf("old names kept: %q", data)
+	}
+}
+
+func TestBadKeaConfigFailsWithoutWaiting(t *testing.T) {
+	b := newBench(t)
+	b.net.fail = "kea-dhcp4 -t"
+	checks := 0
+	b.net.onRun = func(command string) {
+		if command == "kea-dhcp4 -t "+keaFile {
+			checks++
+		}
+	}
+	if err := b.r.Activate(t.Context(), b.gen(false, served(`{"Dhcp4":{}}`))); err == nil || checks != 1 {
+		t.Fatalf("a refused configuration was retried %d times (%v)", checks, err)
 	}
 }

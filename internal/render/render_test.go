@@ -484,3 +484,18 @@ func TestSubnetIDsStayDistinct(t *testing.T) {
 		t.Fatal("colliding segments share a subnet ID")
 	}
 }
+
+// A static lease's name is published only by a DNS service that serves its segment.
+func TestStaticLeaseNameNeedsTheDNSService(t *testing.T) {
+	in := fixture(t, "services-static-leases")
+	if got := fileEnding(t, render(t, in), unboundPath).Content; !strings.Contains(got, "nas.home.arpa.") {
+		t.Fatalf("served segment's name missing:\n%s", got)
+	}
+	var d map[string]any
+	_ = json.Unmarshal(in.Declaration, &d)
+	d["dns"].(map[string]any)["segments"] = []any{}
+	in.Declaration, _ = json.Marshal(d)
+	if got := fileEnding(t, render(t, in), unboundPath).Content; strings.Contains(got, "nas.home.arpa.") {
+		t.Fatalf("a segment the DNS service does not serve published a name:\n%s", got)
+	}
+}

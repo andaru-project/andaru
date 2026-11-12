@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -329,7 +330,7 @@ func TestDraftShowsTakeoverLimits(t *testing.T) {
 	}
 }
 
-func TestIdentityComesFromTheCapturedBaseline(t *testing.T) {
+func TestIdentityComesFromTheConfirmedCapture(t *testing.T) {
 	b := newDebianBench(t, "ifupdown-dhcp")
 	captured := generation.IfupdownBaseline{Interfaces: []host.IfupdownInterface{{Detected: host.Detected{Name: "ens18", PermanentMAC: debianMAC},
 		DHCP: true, Identity: &host.DHCPIdentity{DUID: []byte{0, 1, 0xaa, 0xbb, 0xcc}}}}}
@@ -341,8 +342,25 @@ func TestIdentityComesFromTheCapturedBaseline(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// A failed takeover leaves its capture behind while ifupdown still runs the host: what dhcpcd presents now wins.
+	if got := b.postDraft(t); len(got.Files) != 2 || !strings.Contains(got.Files[1].Content, "DUIDRawData=00:01:32:87:03:54:bc:24:11:38:71:37\n") {
+		t.Fatalf("stale capture rendered: %+v", got.Files)
+	}
+	// The saved-version preview judges the capture the same way.
+	read := hostReader{Root: b.root, Baseline: func() (host.Baseline, error) { return b.baseline, nil },
+		Route: func(context.Context) ([]string, error) { return b.routes, nil }}
+	ids, err := previewIdentities(read, filepath.Join(b.state, "generations"))(t.Context(), []host.LinkStatus{{IfIndex: 2, Name: b.nic, LinkType: "ether", MTU: 1500, LinkAddress: b.mac, PermanentAddress: b.mac, Addresses: b.addresses}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if live, ok := ids[debianMAC]; !ok || fmt.Sprintf("% x", live.DUID) != "00 01 00 01 32 87 03 54 bc 24 11 38 71 37" {
+		t.Fatalf("preview did not use dhcpcd's live identity: %+v", ids)
+	}
 	// After confirmation ifupdown is masked and dhcpcd's own DUID may have changed or gone.
 	b.baseline.IfupdownMasked = true
+	if err := os.WriteFile(filepath.Join(b.state, "generations", "pointers.json"), []byte(`{"confirmed":null,"lastKnownGood":null,"pending":null,"live":null,"takeover":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	got := b.postDraft(t)
 	if len(got.Files) != 2 || !strings.Contains(got.Files[1].Content, "DUIDRawData=aa:bb:cc\n") {
 		t.Fatalf("files = %+v", got.Files)
@@ -508,5 +526,19 @@ func TestProposalServesTheLAN(t *testing.T) {
 	raw, _ = json.Marshal(ops)
 	if !strings.Contains(string(raw), `"value":{"mode":"recursive","searchDomains":["lab.example"],"segments":["@seg2"]}`) {
 		t.Fatalf("dns: %s", raw)
+	}
+}
+
+// A /30 LAN has no room for a DHCP range, but the DNS service needs only its static address.
+func TestProposalServesDNSOnASmallLAN(t *testing.T) {
+	nics := twoNICs()
+	nics[1].IPv4.Addresses = []string{"192.168.40.1/30"}
+	ops, dhcp := proposalOperations(nics, "eth0", host.RealizerFacts{KeaTool: true, UnboundTool: true})
+	raw, _ := json.Marshal(ops)
+	if !strings.Contains(string(raw), `"collection":"dns","expectedVersion":"0","value":{"mode":"recursive","segments":["@seg2"]}`) {
+		t.Fatalf("dns: %s", raw)
+	}
+	if len(dhcp) != 0 {
+		t.Fatalf("dhcp offer on a /30: %+v", dhcp)
 	}
 }

@@ -266,6 +266,34 @@ func TestActivateIfupdownRefusesAnUndeclaredInterface(t *testing.T) {
 	}
 }
 
+// ifupdown that changed into something the reader refuses since the apply was judged is not captured or taken over.
+func TestActivateIfupdownRefusesAChangedBaseline(t *testing.T) {
+	b := debian(t)
+	writeFile(t, filepath.Join(b.net.root, "etc/network/interfaces"), "allow-hotplug eth0\niface eth0 inet dhcp\n pre-up true\n")
+	id := b.ifupdownTakeover()
+	if err := b.r.Activate(t.Context(), id); err == nil || !strings.Contains(err.Error(), "ifupdown changed since the apply was judged") {
+		t.Fatalf("activate: %v", err)
+	}
+	if kind, _, _ := ReadBaselineKind(b.dir); kind != "" || b.net.ran("dhcpcd") != 0 || b.pointers().Pending != nil {
+		t.Fatalf("baseline %q, commands %q", kind, b.net.argv)
+	}
+}
+
+// After confirmation ifupdown is masked and only the capture knows how to hand back; without one there is nothing to trust.
+func TestActivateIfupdownRefusesAConfirmedTakeoverWithoutItsBaseline(t *testing.T) {
+	b := debian(t)
+	b.confirmIfupdown()
+	writeFile(t, filepath.Join(b.dir, "baseline", "manifest.json"), `{"kind":"netplan","files":[]}`)
+	b.net.argv = nil
+	id := b.ifupdownTakeover()
+	if err := b.r.Activate(t.Context(), id); err == nil || !strings.Contains(err.Error(), "recorded no ifupdown baseline") {
+		t.Fatalf("activate: %v", err)
+	}
+	if b.net.ran("dhcpcd") != 0 || b.pointers().Pending != nil {
+		t.Fatalf("commands %q", b.net.argv)
+	}
+}
+
 // A static interface counts as back only with every address ifupdown gives it.
 func TestHasStaticNeedsEveryAddress(t *testing.T) {
 	i := host.IfupdownInterface{Detected: host.Detected{Name: "eth0", IPv4: host.Addressing{Mode: "static", Addresses: []string{"192.0.2.1/24"}},
@@ -327,6 +355,24 @@ func TestActivateIfupdownFailureStopsServices(t *testing.T) {
 		t.Fatal("activation succeeded with Unbound refusing")
 	}
 	if b.index("systemctl stop kea-dhcp4-server.service") < 0 || b.read(id).State.State != Failed {
+		t.Fatalf("Kea left serving: %q", b.net.argv)
+	}
+}
+
+// Rolling a takeover back to ifupdown stops the DHCP server it started.
+func TestRollbackToIfupdownStopsServices(t *testing.T) {
+	b := debian(t)
+	files := map[string]string{keaFile: `{"Dhcp4":{}}`}
+	maps.Copy(files, one)
+	id := create(b.t, b.dir, Manifest{SavedVersion: "7", Takeover: true, Baseline: "ifupdown", ConfirmTimeoutSeconds: 120}, files)
+	if err := b.r.Activate(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	b.net.argv = nil
+	if err := b.r.Rollback(t.Context(), id, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	if b.index("systemctl stop kea-dhcp4-server.service") < 0 || b.read(id).State.State != RolledBack {
 		t.Fatalf("Kea left serving: %q", b.net.argv)
 	}
 }

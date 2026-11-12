@@ -25,17 +25,18 @@ import (
 type fakeNetworkd struct {
 	root string
 
-	mu      sync.Mutex
-	argv    []string
-	delay   int // list calls before a reload takes effect; negative: never
-	waiting int // 0: nothing scheduled
-	bound   map[string]string
-	address map[string][]string
-	devices map[string]bool
-	state   string
-	fail    string // commands starting with this fail
-	chowns  []string
-	onRun   func(command string) // called with every command, the lock held
+	mu       sync.Mutex
+	argv     []string
+	delay    int // list calls before a reload takes effect; negative: never
+	waiting  int // 0: nothing scheduled
+	bound    map[string]string
+	address  map[string][]string
+	devices  map[string]bool
+	state    string
+	fail     string // commands starting with this fail
+	failWith string // the failure's text, "injected failure" when empty
+	chowns   []string
+	onRun    func(command string) // called with every command, the lock held
 
 	noAddress, noRoute bool
 	stopped            bool // networkd is not running: networkctl fails
@@ -112,7 +113,7 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 		f.onRun(command)
 	}
 	if f.fail != "" && strings.HasPrefix(command, f.fail) {
-		return nil, errors.New(command + ": injected failure")
+		return nil, errors.New(command + ": " + cmp.Or(f.failWith, "injected failure"))
 	}
 	switch {
 	case command == "systemctl is-active --quiet systemd-networkd.service":
