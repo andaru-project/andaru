@@ -507,3 +507,15 @@ func TestDHCPOfferFollowsTheAnsweredAddress(t *testing.T) {
 		t.Fatalf("offer did not follow the address: %s", got)
 	}
 }
+
+// A LAN the operator turns to DHCP is no longer served by the DNS service, which needs its static address.
+func TestDNSServiceDropsANoLongerStaticSegment(t *testing.T) {
+	p := servedProposal(t)
+	a := defaultAnswers(p)
+	lan := a.Adapters["link2"]
+	lan.IPv4 = family{Mode: "dhcp"}
+	a.Adapters["link2"] = lan
+	if got := opsJSON(t, mustBatch(t, p, a)); !strings.Contains(got, `"segments":[]`) {
+		t.Fatalf("a DHCP segment stayed in the DNS service: %s", got)
+	}
+}

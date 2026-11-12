@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"maps"
 	"slices"
 	"strings"
 
@@ -219,8 +218,11 @@ func batch(p proposal, a answers) ([]config.Operation, error) {
 			v := object(op.Value)
 			served := []any{}
 			for _, ref := range v["segments"].([]any) {
-				if slices.Contains(slices.Collect(maps.Values(segmentOf)), strings.TrimPrefix(ref.(string), "@")) {
-					served = append(served, ref)
+				// It listens on the segment's static address, so a segment the operator made dynamic drops out.
+				for link, segment := range segmentOf {
+					if "@"+segment == ref && a.Adapters[link].IPv4.Mode == "static" {
+						served = append(served, ref)
+					}
 				}
 			}
 			v["segments"] = served
