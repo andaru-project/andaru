@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"encoding/json/jsontext"
+	"net/netip"
 	"slices"
 	"strings"
 )
@@ -52,4 +53,30 @@ func normalizeDeclaration(d *declaration) {
 	if d.Management != nil {
 		slices.Sort(d.Management.AllowedSources)
 	}
+	slices.SortFunc(d.DHCP, func(a, b dhcpEntry) int { return strings.Compare(a.ID, b.ID) })
+	for i := range d.DHCP {
+		e := &d.DHCP[i]
+		slices.SortFunc(e.Ranges, func(a, b dhcpRange) int { return compareAddr(a.First, b.First) })
+		slices.SortFunc(e.StaticLeases, func(a, b staticLease) int { return strings.Compare(a.MAC, b.MAC) })
+		if e.LeaseTime == 0 {
+			e.LeaseTime = 7200
+		}
+	}
+	if d.DNS != nil {
+		slices.Sort(d.DNS.Segments)
+		if d.DNS.LocalDomain == "" {
+			d.DNS.LocalDomain = "home.arpa"
+		}
+		if d.DNS.RegisterLeases == nil {
+			register := true
+			d.DNS.RegisterLeases = &register
+		}
+	}
+}
+
+// compareAddr orders addresses numerically; validation has already parsed them.
+func compareAddr(a, b string) int {
+	x, _ := netip.ParseAddr(a)
+	y, _ := netip.ParseAddr(b)
+	return x.Compare(y)
 }

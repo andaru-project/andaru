@@ -146,6 +146,40 @@ type management struct {
 	AllowedSources []string `json:"allowedSources,omitempty"`
 }
 
+// dhcpEntry serves DHCPv4 on one segment.
+type dhcpEntry struct {
+	identity
+	Segment      string        `json:"segment"`
+	Ranges       []dhcpRange   `json:"ranges"`
+	LeaseTime    int           `json:"leaseTime,omitzero"`
+	DNSServers   []string      `json:"dnsServers,omitempty"`
+	StaticLeases []staticLease `json:"staticLeases,omitempty"`
+}
+type dhcpRange struct {
+	First string `json:"first"`
+	Last  string `json:"last"`
+}
+type staticLease struct {
+	MAC      string `json:"mac"`
+	Address  string `json:"address"`
+	Hostname string `json:"hostname,omitempty"`
+}
+
+// dnsService is the DNS service for the firewall and the segments it serves; it names no backend.
+type dnsService struct {
+	Mode           string     `json:"mode"`
+	Upstreams      []upstream `json:"upstreams,omitempty"`
+	Segments       []string   `json:"segments"`
+	LocalDomain    string     `json:"localDomain,omitempty"`
+	SearchDomains  []string   `json:"searchDomains,omitempty"`
+	RegisterLeases *bool      `json:"registerLeases,omitempty"`
+}
+type upstream struct {
+	Address  string `json:"address"`
+	Protocol string `json:"protocol"`
+	TLSName  string `json:"tlsName,omitempty"`
+}
+
 // The filter sections are omitted while empty, so a declaration without a filter keeps its form.
 type declaration struct {
 	SchemaVersion int         `json:"schemaVersion"`
@@ -156,6 +190,8 @@ type declaration struct {
 	Policy        policy      `json:"policy,omitzero"`
 	NAT           natSettings `json:"nat,omitzero"`
 	Management    *management `json:"management,omitempty"`
+	DHCP          []dhcpEntry `json:"dhcp,omitzero"`
+	DNS           *dnsService `json:"dns,omitempty"`
 }
 
 func emptyDeclaration() declaration {
