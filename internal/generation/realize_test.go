@@ -40,6 +40,7 @@ type fakeNetworkd struct {
 	ifupFails bool
 	// table is the comment of the loaded inet andaru table, "" when none is loaded; tableComment overrides what nft reports.
 	table, tableComment string
+	script              string // what nft -f last loaded
 
 	dns     map[string][]string     // what resolved reports per interface
 	editDNS func([]string) []string // distorts that report
@@ -113,6 +114,7 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 		if err != nil {
 			return nil, err
 		}
+		f.script = string(data)
 		if m := regexp.MustCompile(`comment "([^"]+)"`).FindSubmatch(data); m != nil {
 			f.table = string(m[1])
 		}

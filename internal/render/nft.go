@@ -126,7 +126,14 @@ func (r *renderer) filterChains() {
 	// Created, deleted and defined in one file, which nft -f applies as one transaction.
 	head := "table inet andaru {}\ndelete table inet andaru\ntable inet andaru {\n"
 	sum := sha256.Sum256([]byte(head + body.String() + "}\n"))
-	script := head + "\tcomment \"sha256:" + hex.EncodeToString(sum[:]) + "\"\n" + body.String() + "}\n"
+	// Each card's name now and its MAC, so the filter can follow a card the kernel names differently at boot.
+	var cards strings.Builder
+	for _, l := range d.Links {
+		if l.Kind == "ethernet" && r.rendered[l.ID] {
+			fmt.Fprintf(&cards, "# interface %s %s\n", r.name[l.ID], l.PermanentMac)
+		}
+	}
+	script := cards.String() + head + "\tcomment \"sha256:" + hex.EncodeToString(sum[:]) + "\"\n" + body.String() + "}\n"
 	r.file(nftPath, "0644", script, []string{"/policy", "/nat", "/management"})
 }
 

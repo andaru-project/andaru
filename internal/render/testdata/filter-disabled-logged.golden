@@ -57,6 +57,8 @@ Managed=no
 OtherInformation=yes
 
 ### nft:inet/andaru 0644 secret=false sources=/management,/nat,/policy
+# interface ens18 52:54:00:aa:bb:01
+# interface ens19 52:54:00:aa:bb:02
 table inet andaru {}
 delete table inet andaru
 table inet andaru {

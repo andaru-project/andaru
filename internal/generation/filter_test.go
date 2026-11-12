@@ -147,3 +147,17 @@ func TestBootFallsBackWhenTheFilterDoesNotLoad(t *testing.T) {
 }
 
 var _ = errors.New
+
+func TestFilterFollowsRenamedAdapters(t *testing.T) {
+	b := newBench(t)
+	// Rendered while the card with this MAC was eth7 and another card was present; the kernel now calls the first eth0.
+	s := "# interface eth7 02:00:00:00:00:01\n# interface eth9 02:00:00:00:00:99\n" +
+		strings.Replace(script("aa"), "\tcomment", "\tset uplinks { type ifname; elements = { \"eth7\", \"eth9\" }; }\n\tcomment", 1)
+	id := b.gen(false, map[string]string{"50-andaru-eth0.network": uplinkDHCP, filterEntry: s})
+	if err := b.r.Activate(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.net.script, `{ "eth0", "eth9" }`) || b.net.table != "sha256:aa" {
+		t.Fatalf("loaded %q, table %q", b.net.script, b.net.table)
+	}
+}

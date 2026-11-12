@@ -1,18 +1,28 @@
 package generation
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
+	"strings"
+
+	"github.com/andaru-project/andaru/internal/host"
 )
 
 // filterEntry is a generation's packet filter: an nft script loaded from the generation directory, never placed in /run.
 const filterEntry = "nft:inet/andaru"
 
-var tableComment = regexp.MustCompile(`comment "([^"]+)"`)
+var (
+	tableComment  = regexp.MustCompile(`comment "([^"]+)"`)
+	interfaceLine = regexp.MustCompile(`(?m)^# interface (\S+) (\S+)$`)
+)
 
 // filter returns the generation's script and its table comment; ok is false for a generation without a filter.
 func (r Realizer) filter(g Generation) (path, comment string, ok bool, err error) {
@@ -35,6 +45,26 @@ func (r Realizer) filter(g Generation) (path, comment string, ok bool, err error
 
 // loadFilter replaces table inet andaru with the generation's in one transaction, then checks the kernel has it.
 func (r Realizer) loadFilter(ctx context.Context, path, comment string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("load the packet filter: %w", err)
+	}
+	renamed, err := r.currentNames(ctx, data)
+	if err != nil {
+		return fmt.Errorf("load the packet filter: %w", err)
+	}
+	if !bytes.Equal(renamed, data) {
+		f, err := os.CreateTemp(r.dir(), "filter-*.nft")
+		if err != nil {
+			return err
+		}
+		defer os.Remove(f.Name())
+		_, err = f.Write(renamed)
+		if err = errors.Join(err, f.Close()); err != nil {
+			return err
+		}
+		path = f.Name()
+	}
 	if _, err := r.Run(ctx, "/usr/sbin/nft", "-f", path); err != nil {
 		return fmt.Errorf("load the packet filter: %w", err)
 	}
@@ -56,6 +86,34 @@ func (r Realizer) loadFilter(ctx context.Context, path, comment string) error {
 		}
 	}
 	return fmt.Errorf("the loaded packet filter is not this generation's")
+}
+
+// currentNames rewrites the interface names in a filter to what the kernel calls each card now, found by its
+// permanent MAC: a reboot can name a card differently from when the filter was rendered (its .link file not applied).
+func (r Realizer) currentNames(ctx context.Context, script []byte) ([]byte, error) {
+	cards := interfaceLine.FindAllSubmatch(script, -1)
+	if len(cards) == 0 {
+		return script, nil
+	}
+	out, err := r.Run(ctx, "/usr/bin/ip", "-d", "-j", "address", "show")
+	if err != nil {
+		return nil, err
+	}
+	links, err := host.ParseLinks(out)
+	if err != nil {
+		return nil, err
+	}
+	var pairs []string
+	for _, c := range cards {
+		was, mac := string(c[1]), string(c[2])
+		// Virtual links inherit their parent's MAC; only the card itself carries its name.
+		i := slices.IndexFunc(links, func(l host.LinkStatus) bool { return l.Kind == "" && strings.EqualFold(l.PermanentAddress, mac) })
+		if i >= 0 && links[i].Name != was {
+			pairs = append(pairs, `"`+was+`"`, `"`+links[i].Name+`"`)
+		}
+	}
+	// Names appear only quoted; one Replacer swaps two cards' names without clobbering.
+	return []byte(strings.NewReplacer(pairs...).Replace(string(script))), nil
 }
 
 // dropFilter removes table inet andaru; a table already gone is success.
