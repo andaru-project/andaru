@@ -20,7 +20,7 @@ func TestActivateStartsServicesAfterNetworkd(t *testing.T) {
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
-	order := []string{"networkctl reload", "kea-dhcp4 -t " + keaFile, "systemctl restart kea-dhcp4-server.service", "unbound-checkconf", "systemctl restart unbound.service", "systemctl try-reload-or-restart systemd-resolved.service"}
+	order := []string{"networkctl reload", "kea-dhcp4 -t " + keaFile, "systemctl restart kea-dhcp4-server.service", "unbound-helper root_trust_anchor_update", "unbound-checkconf", "systemctl restart unbound.service", "systemctl try-reload-or-restart systemd-resolved.service"}
 	last := -1
 	for _, c := range order {
 		i := b.index(c)
@@ -32,6 +32,15 @@ func TestActivateStartsServicesAfterNetworkd(t *testing.T) {
 	// The sync is started, never signalled by a write as root into Kea's own directory.
 	if b.index("systemctl start --no-block andaru-leases.service") < 0 || b.exists("run/kea/andaru-leases-changed") || !b.exists("run/andaru-leases") {
 		t.Fatalf("lease sync not started or its directory missing: %q", b.net.argv)
+	}
+}
+
+// The unit's own anchor update fails quietly (ExecStartPre=-); unbound-checkconf judges the result.
+func TestAnchorUpdateFailureLeavesTheCheckToUnbound(t *testing.T) {
+	b := newBench(t)
+	b.net.fail = "unbound-helper"
+	if err := b.r.Activate(t.Context(), b.gen(false, served(`{"Dhcp4":{}}`))); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -103,6 +103,8 @@ func (r Realizer) services(ctx context.Context, from, to []placed) error {
 	}
 	if unbound || hadUnbound {
 		if unbound {
+			// Debian's config names root.key, which only the unit's ExecStartPre creates; run it, ignoring failure as the unit does.
+			_, _ = r.Run(ctx, "/usr/libexec/unbound-helper", "root_trust_anchor_update")
 			if _, err := r.Run(ctx, "/usr/sbin/unbound-checkconf"); err != nil {
 				return fmt.Errorf("the DNS service refuses its configuration: %w", err)
 			}
