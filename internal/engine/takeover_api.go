@@ -57,7 +57,7 @@ func gatherGate(ctx context.Context, read hostReader, dir string, pointers gener
 		}
 		gate.Ifupdown, gate.IfupdownProblems = host.ReadIfupdown(read.Root, gate.Links, routes)
 	}
-	identity, err := identities(dir, gate.Ifupdown)
+	identity, err := identities(dir, pointers.Takeover, gate.Ifupdown)
 	if err != nil {
 		return gate, errors.Join(errLive, err)
 	}
@@ -77,14 +77,17 @@ func gatherGate(ctx context.Context, read hostReader, dir string, pointers gener
 	return gate, nil
 }
 
-// identities are the dhcpcd identities to render: those a takeover captured, else those of the host's ifupdown now.
-func identities(dir string, live []host.IfupdownInterface) (map[string]host.DHCPIdentity, error) {
-	kind, captured, err := generation.ReadBaselineKind(dir)
-	if err != nil {
-		return nil, err
-	}
-	if kind == "ifupdown" && captured != nil {
-		live = captured.Interfaces
+// identities are the dhcpcd identities to render: those a confirmed takeover captured, else those of the host's
+// ifupdown now. A capture left by a takeover that failed or was rolled back may be stale, as the realizer knows too.
+func identities(dir string, takenOver bool, live []host.IfupdownInterface) (map[string]host.DHCPIdentity, error) {
+	if takenOver {
+		kind, captured, err := generation.ReadBaselineKind(dir)
+		if err != nil {
+			return nil, err
+		}
+		if kind == "ifupdown" && captured != nil {
+			live = captured.Interfaces
+		}
 	}
 	out := map[string]host.DHCPIdentity{}
 	for _, i := range live {
@@ -102,6 +105,10 @@ func previewIdentities(read hostReader, dir string) func(context.Context, []host
 		if err != nil {
 			return nil, err
 		}
+		pointers, _, err := generation.List(dir)
+		if err != nil {
+			return nil, err
+		}
 		var live []host.IfupdownInterface
 		if (gateInput{Baseline: baseline}).fromIfupdown() {
 			routes, err := read.Route(ctx)
@@ -110,7 +117,7 @@ func previewIdentities(read hostReader, dir string) func(context.Context, []host
 			}
 			live, _ = host.ReadIfupdown(read.Root, links, routes)
 		}
-		return identities(dir, live)
+		return identities(dir, pointers.Takeover, live)
 	}
 }
 

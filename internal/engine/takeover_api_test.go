@@ -329,7 +329,7 @@ func TestDraftShowsTakeoverLimits(t *testing.T) {
 	}
 }
 
-func TestIdentityComesFromTheCapturedBaseline(t *testing.T) {
+func TestIdentityComesFromTheConfirmedCapture(t *testing.T) {
 	b := newDebianBench(t, "ifupdown-dhcp")
 	captured := generation.IfupdownBaseline{Interfaces: []host.IfupdownInterface{{Detected: host.Detected{Name: "ens18", PermanentMAC: debianMAC},
 		DHCP: true, Identity: &host.DHCPIdentity{DUID: []byte{0, 1, 0xaa, 0xbb, 0xcc}}}}}
@@ -341,8 +341,15 @@ func TestIdentityComesFromTheCapturedBaseline(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// A failed takeover leaves its capture behind while ifupdown still runs the host: what dhcpcd presents now wins.
+	if got := b.postDraft(t); len(got.Files) != 2 || !strings.Contains(got.Files[1].Content, "DUIDRawData=00:01:32:87:03:54:bc:24:11:38:71:37\n") {
+		t.Fatalf("stale capture rendered: %+v", got.Files)
+	}
 	// After confirmation ifupdown is masked and dhcpcd's own DUID may have changed or gone.
 	b.baseline.IfupdownMasked = true
+	if err := os.WriteFile(filepath.Join(b.state, "generations", "pointers.json"), []byte(`{"confirmed":null,"lastKnownGood":null,"pending":null,"live":null,"takeover":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	got := b.postDraft(t)
 	if len(got.Files) != 2 || !strings.Contains(got.Files[1].Content, "DUIDRawData=aa:bb:cc\n") {
 		t.Fatalf("files = %+v", got.Files)
