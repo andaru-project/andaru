@@ -268,7 +268,7 @@ Boot needs `andaru-network-boot.service` ([unit](../../packaging/systemd/andaru-
 
 What changes for the host after a takeover:
 
-- On cloud images the interface name changes at the next reboot (`eth0` becomes `ens18`): netplan was pinning it. Andaru matches by permanent MAC, so the configuration follows.
+- Interface names stay as they were (`eth0` on cloud images, where netplan pinned it): Andaru's `.link` files keep them across reboots.
 - The host uses the DNS servers you declare, or the DHCP-provided ones when you declare none. NTP servers and hostname from DHCP are ignored.
 - `network-online.target` no longer waits for an uplink.
 - An apply interrupts IPv6 on the touched interface for about two seconds; IPv4 was uninterrupted on the lab.
