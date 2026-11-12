@@ -5174,6 +5174,7 @@
           "savedVersion",
           "operations",
           "starter",
+          "dhcp",
           "adapters",
           "findings"
         ],
@@ -5201,6 +5202,13 @@
           "starter": {
             "type": "array",
             "description": "The LAN's starter services and rules and outbound NAT, whether or not the detection put them in operations; a client that changes an adapter's zone adds the ones operations left out.",
+            "items": {
+              "$ref": "#/components/schemas/ChangeOperation"
+            }
+          },
+          "dhcp": {
+            "type": "array",
+            "description": "A DHCP server offered per static LAN segment. Never part of operations, so taking over without questions serves no DHCP; a client that accepts an offer adds it to the batch.",
             "items": {
               "$ref": "#/components/schemas/ChangeOperation"
             }

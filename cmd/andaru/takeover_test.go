@@ -388,3 +388,84 @@ func TestAnswersAddStarterRulesForANewLAN(t *testing.T) {
 		t.Fatalf("a LAN chosen in the assistant got no starter rules: %v %s", err, opsJSON(t, ops))
 	}
 }
+
+// servedProposal is the lab proposal as a host with Kea and Unbound gets it.
+func servedProposal(t *testing.T) proposal {
+	p := labProposal(t)
+	for i, op := range p.Operations {
+		if op.Collection == "segments" && op.LocalID == "seg1" {
+			v := object(op.Value)
+			delete(v["addressing"].(map[string]any), "dns")
+			p.Operations[i] = operation(op, v)
+		}
+	}
+	p.Operations = append(p.Operations, config.Operation{Op: "replace", Collection: "dns", ExpectedVersion: ptr(config.Version("0")),
+		Value: json.RawMessage(`{"mode":"forward","searchDomains":["lab.example"],"segments":["@seg2"],"upstreams":[{"address":"172.16.53.53","protocol":"do53"}]}`)})
+	p.DHCP = []config.Operation{{Op: "create", Collection: "dhcp", LocalID: "dhcp2",
+		Value: json.RawMessage(`{"name":"eth1","ranges":[{"first":"192.168.40.128","last":"192.168.40.254"}],"segment":"@seg2"}`)}}
+	return p
+}
+
+func ptr[T any](v T) *T { return &v }
+
+func TestAcceptDetectedServesNoDHCP(t *testing.T) {
+	p := servedProposal(t)
+	ops, err := batch(p, defaultAnswers(p))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := opsJSON(t, ops), opsJSON(t, p.Operations); got != want {
+		t.Fatalf("defaults changed the batch:\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestAnswersAddDHCPForKeptSegments(t *testing.T) {
+	p := servedProposal(t)
+	a := defaultAnswers(p)
+	a.DHCP = map[string]bool{"@seg2": true}
+	ops, err := batch(p, a)
+	if err != nil || !strings.Contains(opsJSON(t, ops), `"collection":"dhcp"`) {
+		t.Fatalf("DHCP not added: %v %s", err, opsJSON(t, ops))
+	}
+	// Leaving the LAN out takes its DHCP server and its place in the DNS service with it.
+	lan := a.Adapters["link2"]
+	lan.Keep = false
+	a.Adapters["link2"] = lan
+	a.Management = "link1"
+	ops, err = batch(p, a)
+	if got := opsJSON(t, ops); err != nil || strings.Contains(got, `"collection":"dhcp"`) || !strings.Contains(got, `"segments":[]`) {
+		t.Fatalf("left-out LAN still served: %v %s", err, got)
+	}
+	// Servers the operator gives become the service's upstreams; none makes it recursive.
+	a = defaultAnswers(p)
+	a.DNS = &dnsAnswer{Servers: []string{"192.0.2.53"}}
+	if got := opsJSON(t, mustBatch(t, p, a)); !strings.Contains(got, `"upstreams":[{"address":"192.0.2.53","protocol":"do53"}]`) || strings.Contains(got, `"servers"`) {
+		t.Fatalf("servers not upstreams: %s", got)
+	}
+	a.DNS = nil
+	if got := opsJSON(t, mustBatch(t, p, a)); !strings.Contains(got, `"mode":"recursive"`) || strings.Contains(got, `"upstreams"`) {
+		t.Fatalf("no servers but not recursive: %s", got)
+	}
+}
+
+func mustBatch(t *testing.T, p proposal, a answers) []config.Operation {
+	t.Helper()
+	ops, err := batch(p, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ops
+}
+
+// The assistant asks per offer, yes by default; a no serves nothing there.
+func TestFormAsksForDHCP(t *testing.T) {
+	p := servedProposal(t)
+	s := newFormState(p, defaultAnswers(p))
+	if a := s.answers(defaultAnswers(p)); !a.DHCP["@seg2"] {
+		t.Fatalf("DHCP not offered by default: %+v", a.DHCP)
+	}
+	*s.dhcp["@seg2"] = false
+	if a := s.answers(defaultAnswers(p)); a.DHCP["@seg2"] {
+		t.Fatal("a no still serves DHCP")
+	}
+}
