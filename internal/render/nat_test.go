@@ -271,3 +271,26 @@ func TestEachRuleAdmitsItsOwnForward(t *testing.T) {
 	inOrder(t, chainOf(t, script, "input"),
 		`iifname @`+natWAN+` ct mark & 0x0000ffff == 0x00000004 meta nfproto ipv4 tcp dport 22 accept comment "`+pfwSSH+`"`)
 }
+
+// A 1:1 entry restricted to peers keeps that restriction on its reflection copy.
+func TestOneToOneReflectionKeepsDestination(t *testing.T) {
+	script := table(t, render(t, change(t, fixture(t, "nat-one-to-one"), func(d map[string]any) {
+		d["nat"].(map[string]any)["oneToOne"].([]any)[2].(map[string]any)["reflection"] = true
+	})))
+	inOrder(t, chainOf(t, script, "prerouting"),
+		`iifname @internal ip saddr @`+natPartner+` ip daddr != { 203.0.113.31 } dnat ip prefix to ip daddr map { 203.0.113.16/28 : 192.0.2.16/28 } comment "`+otoBlock+`"`)
+}
+
+// A target the firewall learned by DHCP is local delivery too: its rule goes in input.
+func TestForwardToALearnedFirewallAddress(t *testing.T) {
+	in := natChange(t, func(f []any) { f[0].(map[string]any)["target"] = map[string]any{"address": "203.0.113.5"} })
+	for i := range in.Links {
+		if in.Links[i].Name == "ens18" {
+			in.Links[i].Addresses = append(in.Links[i].Addresses, host.AddressStatus{Family: "ipv4", Address: "203.0.113.5", PrefixLength: 24, Scope: "global"})
+		}
+	}
+	script := table(t, render(t, in))
+	if strings.Contains(chainOf(t, script, "forward"), pfwWeb) || !strings.Contains(chainOf(t, script, "input"), pfwWeb) {
+		t.Fatalf("learned address target:\n%s", script)
+	}
+}

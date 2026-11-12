@@ -8,9 +8,16 @@ import (
 	"strings"
 )
 
-// ownStatic is the firewall's static IPv4 addresses: a translation to one of them is local delivery.
+// ownStatic is the firewall's IPv4 addresses, declared and learned: a translation to one of them is local delivery.
 func (r *renderer) ownStatic() []netip.Addr {
 	var out []netip.Addr
+	for _, l := range r.in.Links {
+		for _, a := range l.Addresses {
+			if v, e := netip.ParseAddr(a.Address); e == nil && a.Family == "ipv4" {
+				out = append(out, v)
+			}
+		}
+	}
 	for _, s := range r.d.Segments {
 		if s.Addressing.IPv4.Mode != "static" {
 			continue
@@ -269,7 +276,9 @@ func (f *filter) oneToOne() (prerouting, postrouting []string) {
 		}
 		if o.Reflection {
 			f.reflection = true
-			prerouting = append(prerouting, join("iifname @internal", not("ip daddr", outside), "dnat "+kw+" to ip daddr map { "+in+" }", comment))
+			for _, s := range sources {
+				prerouting = append(prerouting, join("iifname @internal", s, not("ip daddr", outside), "dnat "+kw+" to ip daddr map { "+in+" }", comment))
+			}
 		}
 		for _, p := range peers {
 			postrouting = append(postrouting, join("oifname @"+setName(o.Zone), p, not("ip saddr", inside), "snat "+kw+" to ip saddr map { "+out+" }", comment))
