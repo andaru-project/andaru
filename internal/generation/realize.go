@@ -404,8 +404,6 @@ func (r Realizer) Activate(ctx context.Context, id int) error {
 		return nil
 	}
 
-	restore, stop := context.WithTimeout(context.WithoutCancel(ctx), restoreLimit)
-	defer stop()
 	if fromIfupdown {
 		// The timer still owns this generation if the hand-back does not finish: its rollback repeats it.
 		restore, stop := context.WithTimeout(context.WithoutCancel(ctx), verbLimit)
@@ -427,6 +425,8 @@ func (r Realizer) Activate(ctx context.Context, id int) error {
 		}
 		return r.failed(id, p, reason)
 	}
+	restore, stop := context.WithTimeout(context.WithoutCancel(ctx), restoreLimit)
+	defer stop()
 	var earlier *Generation
 	if p.Live != nil {
 		if g, err := read(dir, *p.Live, p); err == nil {
