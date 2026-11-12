@@ -179,7 +179,7 @@
   },
   "nat": {
     "outbound": {
-      "mode": "automatic"
+      "mode": "none"
     }
   },
   "management": {

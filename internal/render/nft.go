@@ -151,6 +151,10 @@ func (f *filter) set(name, typ, flags string, elements []string) {
 	if flags != "" {
 		s += " flags " + flags + ";"
 	}
+	if flags == "interval" {
+		// Overlapping elements, such as a host inside a network of the same group, are merged rather than refused.
+		s += " auto-merge;"
+	}
 	if len(elements) > 0 {
 		s += " elements = { " + strings.Join(elements, ", ") + " };"
 	}

@@ -247,6 +247,7 @@ func newBench(t *testing.T) *bench {
 	if err := os.MkdirAll(b.dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	writeFile(t, filepath.Join(root, ipv6Forwarding), "0\n")
 	// As on a Debian cloud image: resolv.conf is systemd-resolved's stub.
 	writeFile(t, filepath.Join(root, "run/systemd/resolve/stub-resolv.conf"), "nameserver 127.0.0.53\n")
 	if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {

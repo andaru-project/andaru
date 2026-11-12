@@ -62,7 +62,7 @@ OtherInformation=yes
 table inet andaru {}
 delete table inet andaru
 table inet andaru {
-	comment "sha256:771c028beeed1cd56bbb324f6b76c27439fbe5d58919ab740014b6035090aeeb"
+	comment "sha256:6e3aeed2b44ca5a7541ee683135fef3d8f0738429dcf1484286608d66452cdae"
 	set zon_00000001_0000_4000_8000_000000000001 { type ifname; elements = { "ens18" }; }
 	set zon_00000002_0000_4000_8000_000000000002 { type ifname; elements = { "ens19" }; }
 	set uplinks { type ifname; elements = { "ens18" }; }
@@ -84,10 +84,6 @@ table inet andaru {
 		ct state invalid drop
 		iifname @zon_00000001_0000_4000_8000_000000000001 oifname @zon_00000002_0000_4000_8000_000000000002 log prefix "andaru rul_00000008-0000-4000-8000-000000000008 " drop comment "rul_00000008-0000-4000-8000-000000000008"
 		iifname @zon_00000002_0000_4000_8000_000000000002 accept comment "rul_00000003-0000-4000-8000-000000000003"
-	}
-	chain postrouting {
-		type nat hook postrouting priority srcnat;
-		oifname @uplinks meta nfproto ipv4 masquerade
 	}
 }
 

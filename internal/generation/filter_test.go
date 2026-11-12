@@ -1,7 +1,7 @@
 package generation
 
 import (
-	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -46,6 +46,10 @@ func TestActivateLoadsFilterFirst(t *testing.T) {
 	if b.net.table != "sha256:aa" || b.read(id).State.State != Awaiting {
 		t.Fatalf("table %q state %+v", b.net.table, b.read(id).State)
 	}
+	// networkd's per-interface IPv6Forwarding= does not route IPv6; only the global switch does.
+	if b.forwarding() != "1\n" {
+		t.Fatalf("IPv6 forwarding %q with the filter loaded", b.forwarding())
+	}
 	if b.exists(netDir + "/andaru") {
 		t.Fatal("the filter entry was placed as a file")
 	}
@@ -85,9 +89,14 @@ func TestRollbackToBaselineDeletesTableLast(t *testing.T) {
 	if reload, drop := b.index("networkctl reload"), b.index("nft delete table inet andaru"); reload < 0 || drop < reload {
 		t.Fatalf("the table went before the files: %q", b.net.argv)
 	}
-	if b.net.table != "" {
-		t.Fatal("table left loaded on the baseline")
+	if b.net.table != "" || b.forwarding() != "0\n" {
+		t.Fatalf("table %q, IPv6 forwarding %q on the baseline", b.net.table, b.forwarding())
 	}
+}
+
+func (b *bench) forwarding() string {
+	data, _ := os.ReadFile(filepath.Join(b.net.root, ipv6Forwarding))
+	return string(data)
 }
 
 func TestRollbackToGenerationLoadsItsFilterFirst(t *testing.T) {
@@ -145,8 +154,6 @@ func TestBootFallsBackWhenTheFilterDoesNotLoad(t *testing.T) {
 	}
 	b.wantDisk(one)
 }
-
-var _ = errors.New
 
 func TestFilterFollowsRenamedAdapters(t *testing.T) {
 	b := newBench(t)

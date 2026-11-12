@@ -53,7 +53,7 @@ jobs:
           go test -race ./...
 
       - name: Install nftables for the packet filter tests
-        run: sudo apt-get install -y --no-install-recommends nftables
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends nftables
       - name: Build and run root integration suites
         shell: bash
         run: |

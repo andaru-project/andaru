@@ -194,10 +194,30 @@ func validatePolicy(d *declaration) []FieldError {
 			if len(from) > 0 && len(to) > 0 && !(from[4] && to[4]) && !(from[6] && to[6]) {
 				bad(p+"/to", "The source and destination addresses are of different families, so this rule can never match.")
 			}
+			// The families a service can match: icmp only IPv4, icmpv6 only IPv6, ports both.
+			offered := map[int]bool{}
 			for j, ref := range r.Services {
-				if services[ref] == nil {
+				s := services[ref]
+				if s == nil {
 					bad(fmt.Sprintf("%s/services/%d", p, j), "Expected an existing service.")
+					continue
 				}
+				for _, m := range append([]string{ref}, s.Members...) {
+					if member := services[m]; member != nil {
+						switch member.Protocol {
+						case "icmp":
+							offered[4] = true
+						case "icmpv6":
+							offered[6] = true
+						case "tcp", "udp":
+							offered[4], offered[6] = true, true
+						}
+					}
+				}
+			}
+			meets := func(f int) bool { return (len(from) == 0 || from[f]) && (len(to) == 0 || to[f]) && offered[f] }
+			if len(offered) > 0 && !meets(4) && !meets(6) {
+				bad(p+"/services", "No service is of the family of the rule's addresses, so this rule can never match.")
 			}
 		}
 	}

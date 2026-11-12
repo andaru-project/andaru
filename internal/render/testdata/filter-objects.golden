@@ -62,12 +62,13 @@ OtherInformation=yes
 table inet andaru {}
 delete table inet andaru
 table inet andaru {
-	comment "sha256:6f6b272b4a2178172b6ab72f2d8fe167e45a177900d74bfac1a6fcaf2fae0a88"
-	set adr_00000001_0000_4000_8000_000000000001_4 { type ipv4_addr; flags interval; elements = { 192.0.2.10 }; }
-	set adr_00000002_0000_4000_8000_000000000002_6 { type ipv6_addr; flags interval; elements = { 2001:db8::/64 }; }
-	set adr_00000003_0000_4000_8000_000000000003_4 { type ipv4_addr; flags interval; elements = { 192.0.2.20-192.0.2.29 }; }
-	set adr_00000004_0000_4000_8000_000000000004_4 { type ipv4_addr; flags interval; elements = { 192.0.2.10 }; }
-	set adr_00000004_0000_4000_8000_000000000004_6 { type ipv6_addr; flags interval; elements = { 2001:db8::/64 }; }
+	comment "sha256:6ef0aca60798c51770c6b097788e05153449a1ab46afde6a2700b00f58d4f220"
+	set adr_00000001_0000_4000_8000_000000000001_4 { type ipv4_addr; flags interval; auto-merge; elements = { 192.0.2.10 }; }
+	set adr_00000002_0000_4000_8000_000000000002_6 { type ipv6_addr; flags interval; auto-merge; elements = { 2001:db8::/64 }; }
+	set adr_00000003_0000_4000_8000_000000000003_4 { type ipv4_addr; flags interval; auto-merge; elements = { 192.0.2.20-192.0.2.29 }; }
+	set adr_00000004_0000_4000_8000_000000000004_4 { type ipv4_addr; flags interval; auto-merge; elements = { 192.0.2.10, 192.0.2.0/24 }; }
+	set adr_00000004_0000_4000_8000_000000000004_6 { type ipv6_addr; flags interval; auto-merge; elements = { 2001:db8::/64 }; }
+	set adr_00000005_0000_4000_8000_000000000005_4 { type ipv4_addr; flags interval; auto-merge; elements = { 192.0.2.0/24 }; }
 	set zon_00000001_0000_4000_8000_000000000001 { type ifname; elements = { "ens18" }; }
 	set zon_00000002_0000_4000_8000_000000000002 { type ifname; elements = { "ens19" }; }
 	set uplinks { type ifname; elements = { "ens18" }; }

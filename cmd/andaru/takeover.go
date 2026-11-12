@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,7 +14,9 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -241,7 +244,7 @@ func runTakeover(ctx context.Context, socket string, args []string, stdin io.Rea
 	}
 	// The local end of the SSH session tells the engine which segment the operator manages the host through.
 	via := ""
-	if f := strings.Fields(os.Getenv("SSH_CONNECTION")); len(f) == 4 {
+	if f := strings.Fields(cmp.Or(os.Getenv("SSH_CONNECTION"), sshConnection("/proc", os.Getppid()))); len(f) == 4 {
 		via = f[2]
 	}
 	c := &httpTakeoverClient{socket: socket, via: via}
@@ -255,6 +258,32 @@ func runTakeover(ctx context.Context, socket string, args []string, stdin io.Rea
 		return acceptDetected(ctx, c, p, *timeout, stdout, hold)
 	}
 	return interactive(ctx, c, p, *timeout, stdin, stdout, hold)
+}
+
+// sshConnection finds SSH_CONNECTION in the nearest ancestor that has it: sudo drops it from its own environment.
+func sshConnection(proc string, pid int) string {
+	for pid > 1 {
+		dir := filepath.Join(proc, strconv.Itoa(pid))
+		env, _ := os.ReadFile(filepath.Join(dir, "environ"))
+		for _, kv := range bytes.Split(env, []byte{0}) {
+			if v, ok := bytes.CutPrefix(kv, []byte("SSH_CONNECTION=")); ok {
+				return string(v)
+			}
+		}
+		stat, err := os.ReadFile(filepath.Join(dir, "stat"))
+		if err != nil {
+			return ""
+		}
+		// After the command name, which may hold spaces and parentheses itself: state, then the parent's PID.
+		f := strings.Fields(string(stat[bytes.LastIndexByte(stat, ')')+1:]))
+		if len(f) < 2 {
+			return ""
+		}
+		if pid, err = strconv.Atoi(f[1]); err != nil {
+			return ""
+		}
+	}
+	return ""
 }
 
 type httpTakeoverClient struct{ socket, via string }

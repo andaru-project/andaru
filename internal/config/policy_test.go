@@ -117,6 +117,12 @@ func TestPolicyValidation(t *testing.T) {
 			d["policy"].(map[string]any)["input"] = []any{map[string]any{"id": "rul_00000003-0000-4000-8000-000000000003", "name": "c", "enabled": true, "action": "accept", "from": []any{}, "to": []any{adrHost}, "services": []any{}, "log": false}}
 		}, "/policy/input/0/to"},
 		"families never meet": {func(d map[string]any) { fwd(d, 0)["from"] = []any{adrHost}; fwd(d, 0)["to"] = []any{adrNet6} }, "/policy/forward/0/to"},
+		"service family never meets": {func(d map[string]any) {
+			svc(d, 0)["protocol"] = "icmp"
+			delete(svc(d, 0), "ports")
+			svc(d, 0)["types"] = []any{"echo-request"}
+			fwd(d, 0)["from"], fwd(d, 0)["to"], fwd(d, 0)["services"] = []any{adrNet6}, []any{}, []any{svcDNS}
+		}, "/policy/forward/0/services"},
 		"duplicate rule name": {func(d map[string]any) { fwd(d, 1)["name"] = "b" }, "/policy/forward/1/name"},
 		"unknown action":      {func(d map[string]any) { fwd(d, 0)["action"] = "allow" }, "/policy/forward/0/action"},
 		"management on nothing": {func(d map[string]any) {

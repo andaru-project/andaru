@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -300,6 +302,13 @@ func TestAnswersMoveManagementAndDropOrphanRules(t *testing.T) {
 	if got := opsJSON(t, ops); strings.Contains(got, `"@lan"`) || !strings.Contains(got, `"nat.outbound"`) {
 		t.Fatalf("rules for a removed zone kept: %s", got)
 	}
+	for id, ad := range a.Adapters {
+		ad.Zone = "lan"
+		a.Adapters[id] = ad
+	}
+	if ops, err = batch(p, a); err != nil || strings.Contains(opsJSON(t, ops), `"nat.outbound"`) {
+		t.Fatalf("outbound NAT without an uplink: %v %s", err, opsJSON(t, ops))
+	}
 	gone := a.Adapters["link2"]
 	gone.Keep = false
 	a.Adapters["link2"] = gone
@@ -317,5 +326,30 @@ func TestProposalCarriesTheSessionAddress(t *testing.T) {
 	c := &httpTakeoverClient{socket: socket, via: "fe80::1%eth0"}
 	if _, err := c.Proposal(context.Background()); err != nil || asked != "/api/v1/takeover/proposal?via=fe80%3A%3A1%25eth0" {
 		t.Fatalf("asked %q: %v", asked, err)
+	}
+}
+
+func TestSSHConnectionSurvivesSudo(t *testing.T) {
+	proc := t.TempDir()
+	write := func(pid, name, content string) {
+		if err := os.MkdirAll(filepath.Join(proc, pid), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(proc, pid, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// sudo (40) dropped the variable; the login shell (30) under sshd (20) still has it. A command name may hold ") ".
+	write("40", "environ", "HOME=/root\x00SUDO_USER=andaru\x00")
+	write("40", "stat", "40 (sudo) S 30 40 30 0")
+	write("30", "environ", "USER=andaru\x00SSH_CONNECTION=10.0.0.5 51000 10.0.1.19 22\x00")
+	write("30", "stat", "30 (ba) sh) S 20 30 30 0")
+	write("20", "environ", "")
+	write("20", "stat", "20 (sshd) S 1 20 20 0")
+	if got := sshConnection(proc, 40); got != "10.0.0.5 51000 10.0.1.19 22" {
+		t.Fatalf("got %q", got)
+	}
+	if got := sshConnection(proc, 20); got != "" {
+		t.Fatalf("outside SSH got %q", got)
 	}
 }

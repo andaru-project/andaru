@@ -19,6 +19,10 @@ import (
 // filterEntry is a generation's packet filter: an nft script loaded from the generation directory, never placed in /run.
 const filterEntry = "nft:inet/andaru"
 
+// ipv6Forwarding is the kernel's global IPv6 switch, under the realizer's root: networkd's per-interface
+// IPv6Forwarding= does not route IPv6 by itself. It is on exactly while Andaru's filter is loaded.
+const ipv6Forwarding = "/proc/sys/net/ipv6/conf/all/forwarding"
+
 var (
 	tableComment  = regexp.MustCompile(`comment "([^"]+)"`)
 	interfaceLine = regexp.MustCompile(`(?m)^# interface (\S+) (\S+)$`)
@@ -82,7 +86,7 @@ func (r Realizer) loadFilter(ctx context.Context, path, comment string) error {
 	}
 	for _, item := range listing.Nftables {
 		if item.Table != nil && item.Table.Comment == comment {
-			return nil
+			return os.WriteFile(filepath.Join(r.Root, ipv6Forwarding), []byte("1\n"), 0o644)
 		}
 	}
 	return fmt.Errorf("the loaded packet filter is not this generation's")
@@ -120,6 +124,10 @@ func (r Realizer) currentNames(ctx context.Context, script []byte) ([]byte, erro
 func (r Realizer) dropFilter(ctx context.Context) error {
 	if _, err := r.Run(ctx, "/usr/sbin/nft", "-j", "list", "table", "inet", "andaru"); err != nil {
 		return nil
+	}
+	// Forwarding was Andaru's, switched on with its filter.
+	if err := os.WriteFile(filepath.Join(r.Root, ipv6Forwarding), []byte("0\n"), 0o644); err != nil {
+		return err
 	}
 	_, err := r.Run(ctx, "/usr/sbin/nft", "delete", "table", "inet", "andaru")
 	return err
