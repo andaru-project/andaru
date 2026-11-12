@@ -20,6 +20,9 @@ This is not implemented behaviour yet. Contracts stay provisional until Andaru 1
   - a LAN client connecting to the firewall's own LAN address on the forwarded port was not redirected;
   - the 1:1 host was reachable from the WAN and left through its external address.
 
+- **What pfBlockerNG does on pfSense** (read from `pfblockerng.inc`): its DNSBL web server listens on a virtual IP, by default on the loopback interface `lo0`. Clients reach that address through the firewall, and no NAT is needed. When the VIP lives on a real interface instead, it adds two port forwards: VIP:80 and VIP:443 go to `127.0.0.1` on its web server's ports, with association "pass" and Pure-NAT reflection. Its DNS redirect forwards port 53 of `(self)` to `127.0.0.1:53`. Both target the firewall itself.
+- **Linux differs from FreeBSD here:** `dnat` to `127.0.0.0/8` from a non-loopback interface is dropped as a martian unless `route_localnet` is set on that interface. A VIP on the loopback interface with an ordinary address (pfBlockerNG's default, `10.10.10.1`) is local delivery and needs nothing.
+
 ## Scope
 
 | In this slice | Later |
@@ -77,7 +80,8 @@ These copy pfSense's rules.
 **Port forwards:**
 - Two enabled forwards that are not exclusions may not overlap: same `from`, same `to`, a shared ingress zone and protocol, and overlapping port ranges. This is pfSense's rule (`firewall_nat.inc:513-521`); forwards that differ in source or destination are allowed, and their order decides.
 - `target` must be IPv4, like everything in this slice.
-- An `address` target is a firewall target when it is one of the firewall's static addresses (and, with #37, a virtual IP); otherwise it is a host target.
+- An `address` target is a firewall target when it is one of the firewall's static addresses or, with #37, a virtual IP, including one on the loopback interface. Otherwise it is a host target.
+- `127.0.0.0/8` is refused as a target. Use a loopback virtual IP instead: Linux drops connections translated to the loopback range from another interface, and enabling `route_localnet` to allow it weakens a protection.
 
 **1:1:**
 - `external` may not contain any of the firewall's static addresses, since that would take over the firewall's own traffic. Addresses learned by DHCP or PPPoE are only known when the configuration is rendered: an `external` containing one is a render error, `ONE_TO_ONE_OWN_ADDRESS`, so an apply or the boot re-render refuses it.
