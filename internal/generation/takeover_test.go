@@ -361,7 +361,8 @@ func TestBootRenamesAdaptersBeforeNetworkd(t *testing.T) {
 	renamed := false
 	b.net.onRun = func(command string) {
 		if command == "udevadm trigger --settle --action=add --subsystem-match=net" {
-			renamed = b.exists(netDir + link)
+			// Named before anything else is placed, so what follows sees the final names.
+			renamed = b.exists(netDir+link) && !b.exists(netDir+"50-andaru-eth0.network")
 		}
 	}
 	if err := b.r.Boot(t.Context()); err != nil {

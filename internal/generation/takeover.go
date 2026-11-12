@@ -312,16 +312,20 @@ func (r Realizer) Boot(ctx context.Context) error {
 				failures = append(failures, err)
 			}
 		}
-		if err := r.place(nil, set); err != nil {
-			return err
-		}
-		if slices.ContainsFunc(set, func(f placed) bool { return strings.HasSuffix(f.path, ".link") }) {
-			// udev may have named the adapters before the .link files existed; they are down until networkd starts.
+		// The adapters get their names first, so everything after sees the final ones: udev may have named them
+		// before the .link files existed, and they are down until networkd starts.
+		if links := slices.DeleteFunc(slices.Clone(set), func(f placed) bool { return !strings.HasSuffix(f.path, ".link") }); len(links) > 0 {
+			if err := r.place(nil, links); err != nil {
+				return err
+			}
 			for _, args := range [][]string{{"control", "--reload"}, {"trigger", "--settle", "--action=add", "--subsystem-match=net"}} {
 				if _, err := r.Run(ctx, "/usr/bin/udevadm", args...); err != nil {
 					slog.Error("apply the adapter names", "error", err)
 				}
 			}
+		}
+		if err := r.place(nil, set); err != nil {
+			return err
 		}
 		p.Live = id
 		if len(failures) > 0 {
