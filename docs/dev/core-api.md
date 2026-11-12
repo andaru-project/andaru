@@ -180,6 +180,7 @@ What is rendered:
 | `UNSUPPORTED_COMBINATION` | error or warning | A PPPoE segment may use IPv4 `ppp`/`none` and IPv6 `none`/`slaac`/`dhcp6`, at least one of them, without RA. A PPPoE link with no segment is left out (warning). |
 | `DEPENDENCY_UNAVAILABLE` | warning | Something was left out because a link it needs is missing, ambiguous or disabled. A bridge or bond keeps its remaining members. |
 | `RA_PREFIX_UNSUPPORTED` | warning | Router advertisements were requested where nothing can be announced. |
+| `RA_DNS_UNAVAILABLE` | warning | The DNS service serves a delegated segment that has no static IPv6 address, so its advertisements carry no DNS server. |
 | `DNS_NOT_APPLIED` | warning | A segment declares DNS servers, but this host's `/etc/resolv.conf` is not managed by systemd-resolved, so they are saved and not used. |
 
 ### Trying a PPPoE line by hand
@@ -229,7 +230,7 @@ What happens, in order:
 | `MANAGEMENT_REQUIRED` | Rules or outbound NAT are declared without `management.segment`, or the management segment's interface is unavailable. |
 | `DHCP_WITHOUT_DNS` | (warning) A DHCP server hands out no DNS server: the DNS service does not serve its segment and `dnsServers` is empty. |
 | `FOREIGN_FILTER` | `nftables.service`, `firewalld` or `ufw` is enabled and would replace or override Andaru's filter. |
-| `APPLY_UNSUPPORTED` | PPPoE links, delegated prefixes and router advertisements wait for the firewall. |
+| `APPLY_UNSUPPORTED` | PPPoE links wait for the firewall; router advertisement modes `managed`, `assisted` and `stateless` wait for the DHCPv6 server; advertisements and delegated prefixes need the packet filter, so a management segment, since IPv6 forwarding stays off without it. |
 | `NETDEV_CHANGE_UNSUPPORTED` | An existing VLAN, bridge or bond would change. Remove it in one apply and add it again in the next. |
 | `BOOT_UNIT_DISABLED` | `andaru-network-boot.service` is not enabled, so a confirmed configuration would not return after a reboot. |
 
@@ -300,6 +301,25 @@ printf '%s\n' '{"mode":"recursive","segments":["'"$LAN"'"]}' | sudo andaru ctl c
 - **Filter:** with the filter on, DHCP requests are accepted on served segments by a fixed rule; DNS is governed by rules (the takeover's starter rule allows it from the LAN).
 - **Takeover:** with Unbound installed and a static LAN segment, the proposal includes the DNS service: forwarding to the host's declared servers, or recursive when they came from DHCP. With Kea installed it offers DHCP on each static LAN segment (the upper half of the subnet); the assistant asks for each, yes by default, while `--accept-detected` never turns DHCP on.
 - Inspect leases with `sudo cat /run/andaru-leases/leases.conf` or Kea's socket until a status page exists.
+
+### IPv6 on the LAN
+
+A LAN segment numbers itself from a prefix the WAN's DHCPv6 client receives, or from static addresses, and advertises itself as a router. Design: [IPv6 for the LAN](../superpowers/specs/2026-11-12-ipv6-lan-design.md).
+
+```sh
+# WAN: ask for a /56 and no address of its own.
+... "ipv6":{"mode":"dhcp6","requestPrefixLength":56,"prefixOnly":true}
+# LAN: subnet 0 of the delegated prefix, a stable unique local /64 for DNS, SLAAC for clients.
+... "ipv6":{"mode":"delegated","from":"<wan segment>","subnetId":"0","addresses":["fd12:3456:789a:1::1/64"],"ra":{"mode":"unmanaged"}}
+```
+
+- **`ra`**: `mode` `disabled`, `router` (no prefix announced), `unmanaged` (SLAAC); `managed`, `assisted`, `stateless` are saved but refused at apply until the DHCPv6 server exists. Options: `priority` (`low`, `medium`, `high`), `routerLifetime` (0 or 4–9000 s, default 1800), `validLifetime`/`preferredLifetime` (static prefixes only, default 86400/14400; a delegated prefix keeps the lease's), `dns` (`servers`, `searchDomains`), `pref64`. Versions saved with the older `{enabled, managed, otherInfo}` still load; writing the segment stores the mode.
+- **Advertised DNS:** without `ra.dns`, a segment the DNS service serves advertises its first static IPv6 address and the local and search domains. Give a delegated segment a static unique local address (RFC 4193): the delegated prefix can change, the unique local address does not. Without one, `RA_DNS_UNAVAILABLE` warns.
+- **WAN DHCPv6 client:** `requestPrefixLength`, `prefixOnly` (`UseAddress=no`), `withoutRA` (solicit without waiting for an advertisement), `sendRelease` (default false: a release makes many providers hand out a new prefix), `duid` (hex, types 1 to 4 with the length each needs; replaces the captured DHCPv6 identity). A `dhcp6` segment always solicits (`DHCPv6Client=always`), whatever flags the upstream advertisement carries.
+- **DNS service:** listens on each served segment's stable IPv6 address. On a static segment it answers that subnet, as for IPv4; on a delegated one, whose prefix is unknown in advance, it answers whatever source reaches it there, and the filter (required for delegated segments) decides who may. A segment may be served by IPv6 alone.
+- **Filter:** link-local multicast listener discovery is accepted on every interface. Neighbour discovery was already.
+- **Prefix changes:** networkd advertises the new delegated prefix at once but does not deprecate the old one, so clients keep the old address until its preferred lifetime from the lease ends. The unique local address keeps DNS working throughout.
+- **Not offered:** advertisement intervals (networkd has none), extra advertised subnets, DHCPv6 server modes (next slice).
 
 ### Host DNS servers
 
@@ -621,3 +641,23 @@ On 2026-11-12, VM 114 (Debian 13, netplan static, `eth0` WAN at `10.0.1.19/16`, 
 - **Reboot:** Kea and Unbound came back with the firewall resolving through Unbound, the client got its lease again, and its name was published.
 
 The lab found and this branch fixes: the saved declaration dropped the new sections, a netplan host with DNS servers was refused although the service resolves for it, Unbound did not bind the LAN address after a reload, Debian's AppArmor profiles blocked both daemons from Andaru's files, and resolved started before the boot unit placed its drop-in. The assistant's DHCP question is covered by tests, not driven in the lab.
+
+### IPv6 LAN Debian lab qualification
+
+On 2026-11-12 the CGO-disabled amd64 build of code commit `3ad4ac3` (`vcs.modified=false`, SHA-256 `96dd007dc8e1f18f3652e5e160357608d9509374af544510e2ebee3987a846d4`) was installed on VM 114 at snapshot `base-netplan-static-20261111`, set up as in the DHCP and DNS qualification (`eth0` WAN at `10.0.1.19/16`, `eth1` LAN at `192.168.40.1/24` on VLAN 4093, systemd 257.13, `unbound` 1.26.2), with a third adapter, `ens20`, on VLAN 4092. There an LXC router stands in for the provider: Kea DHCPv6 2.6.3 delegates `/56`s from `fd00:a5d::/49` (renew 300 s, preferred 900 s, valid 1800 s) and routes each to the requesting router, and radvd advertises `fd00:a5d:ffff::/64` with the M and O flags; the router is `fd00:a5d:ffff::1`. There is no IPv6 internet. The LAN client, VM 117, ran systemd-networkd with `192.168.40.2/24`, `IPv6AcceptRA=yes` and `UseDNS=yes`. The prefix change was recorded earlier the same day on the build of `c3783db` (SHA-256 `ec3800cb…`), with the same setup; the guests were reset to their snapshots in between.
+
+- **Takeover:** `--accept-detected` took over `eth0` and `eth1`, confirmed from a new SSH session. netplan did not configure `ens20`, so it was not proposed.
+- **Configuration** with `andaru ctl config`: a link for `ens20`'s MAC (named `eth2`; the adapter kept its kernel name, `Name=ens20`) and a `wan` segment with IPv4 `none` and `{"mode":"dhcp6","requestPrefixLength":56,"prefixOnly":true}`; the LAN `{"mode":"delegated","from":"<ens20 segment>","subnetId":"0","addresses":["fd00:beef:1::1/64"],"ra":{"mode":"unmanaged"}}`. The takeover's `dns.segments` already held the LAN. The preview had no findings and rendered `UseAddress=no`, `SendRelease=no`, `PrefixDelegationHint=::/56`; `UplinkInterface=ens20`, `SubnetId=0x0`, `Announce=yes`; `EmitDNS=yes`, `DNS=fd00:beef:1::1`, `Domains=home.arpa lab.example`; `Prefix=fd00:beef:1::/64`; and Unbound's `interface: fd00:beef:1::1` with `interface-action: fd00:beef:1::1 allow`.
+- **Apply:** verified on its own within 3 seconds and was confirmed from a new SSH session; `resolvectl dns` still listed no server for `eth1`. On `c3783db` the same apply had failed after 30 seconds with `not verified in time: eth1 resolves through [], not the declared [fd00:beef:1::1]`.
+- **Delegation:** within 3 seconds of the apply, `ens20: DHCP: received delegated prefix fd00:a5d::/56` and `eth1: DHCP-PD address fd00:a5d::be24:11ff:fe71:745/64 (valid for 29min 59s, preferred for 14min 59s)`. On `c3783db` also `unreachable fd00:a5d::/56 dev lo proto dhcp` and, on the router, `fd00:a5d::/56 via fe80::be24:11ff:fe53:9dd5 dev eth1`.
+- **Client:** `fd00:a5d::be24:11ff:fe38:7137/64` with the lease's lifetimes and `fd00:beef:1:0:be24:11ff:fe38:7137/64` with valid 3600 s and preferred 1800 s (networkd's defaults: a delegated segment's stable prefix takes no lifetimes); `DNS: fd00:beef:1::1`, search domains `home.arpa` and `lab.example`. `dig AAAA debian.org @fd00:beef:1::1` returned four records, also from the delegated source address; `ping -6 fd00:a5d:ffff::1` answered 3 of 3 (`ttl=63`) through the starter rule.
+- **Prefix change** (on `c3783db`): the router's pool became `fd00:a5d:100::/56` and Kea restarted. `networkctl renew ens20` sent Kea nothing, twice; at the renew timer Kea logged `DHCP6_PD_LEASE_RENEW … fd00:a5d:100::/56` and zeroed the old lease. `eth1` swapped to `fd00:a5d:100:0:be24:11ff:fe17:6841/64` at once; the client gained `fd00:a5d:100:0:be24:11ff:fe38:7137/64`, chose it as source, and `dig` against the unique local address answered. **The old prefix was not deprecated:** the next advertisement, solicited and captured, carried only `fd00:a5d:100::/64` and `fd00:beef:1::/64`, with no zero-lifetime entry for `fd00:a5d::/64`. The client kept `fd00:a5d::be24:11ff:fe38:7137/64` preferred until the lease's preferred lifetime ran out, 10 minutes after the change (`deprecated … preferred_lft 0sec`, `valid_lft 883sec`). The stand-in router kept routing the old `/56`, as its hook saw no deleted lease.
+- **Reboot:** the boot unit placed generation 2 (`confirmed` and `live` 2); 4 seconds after networkd started, `ens20: DHCP: received delegated prefix fd00:a5d::/56` and `eth1: DHCP-PD address fd00:a5d::be24:11ff:fe71:745/64`, beside `fd00:beef:1::1/64`, and Unbound listened on `[fd00:beef:1::1]:53`. The client's `dig` answered and its ping went through, as after the reboot on `c3783db`, which followed the prefix change.
+
+The lab found and this branch fixes: the apply's check read every `DNS=` line of a `.network` file, so the `[IPv6SendRA]` section's advertised server counted as the host's own, and where systemd-resolved is the resolver every apply that advertised a DNS server failed.
+
+The lab found, not yet fixed:
+
+- networkd 257 does not deprecate a replaced delegated prefix, as the design expects it to: clients keep the old address preferred for the rest of the lease's preferred lifetime, hours at many providers, while the provider no longer routes it.
+- After the failed apply's rollback on `c3783db`, `eth1`, IPv6 `none` in generation 1, still had `fd00:a5d::be24:11ff:fe17:6841/64` (1721 s valid) when the next apply began.
+- `networkctl renew` sends no DHCPv6 message in systemd 257, so the prefix change waited for the renew timer.

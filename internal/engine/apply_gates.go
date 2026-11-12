@@ -91,7 +91,7 @@ func applyFindings(in gateInput) []render.Finding {
 				}
 				bound = append(bound, m.Name)
 				declares := slices.ContainsFunc(in.Result.Files, func(f render.File) bool {
-					return f.Path == networkDir+"50-andaru-"+m.Name+".network" && (strings.HasPrefix(f.Real(), "DNS=") || strings.Contains(f.Real(), "\nDNS="))
+					return f.Path == networkDir+"50-andaru-"+m.Name+".network" && len(generation.DeclaredDNS([]byte(f.Real()))) > 0
 				})
 				if !declares {
 					missing = append(missing, m.Name)
@@ -159,12 +159,16 @@ func applyFindings(in gateInput) []render.Finding {
 				IPv6 struct {
 					Mode string `json:"mode"`
 					RA   *struct {
-						Enabled bool `json:"enabled"`
+						Mode                        string `json:"mode"`
+						Enabled, Managed, OtherInfo bool   // the form saved before modes
 					} `json:"ra"`
 				} `json:"ipv6"`
 			} `json:"addressing"`
 		} `json:"segments"`
-		DNS json.RawMessage `json:"dns"`
+		DNS        json.RawMessage `json:"dns"`
+		Management struct {
+			Segment string `json:"segment"`
+		} `json:"management"`
 	}
 	// The renderer decoded the same bytes already; an undecodable declaration never gets here.
 	_ = json.Unmarshal(in.Declaration, &declared)
@@ -175,12 +179,16 @@ func applyFindings(in gateInput) []render.Finding {
 		}
 	}
 	for i, s := range declared.Segments {
-		v6 := s.Addressing.IPv6
-		if v6.Mode == "delegated" {
-			refuse("APPLY_UNSUPPORTED", fmt.Sprintf("/segments/%d/addressing/ipv6/mode", i), "Delegated prefixes cannot be applied yet."+filter)
+		ra := s.Addressing.IPv6.RA
+		advertised := ra != nil && ra.Mode != "disabled" && (ra.Mode != "" || ra.Enabled)
+		if ra != nil && (slices.Contains([]string{"managed", "assisted", "stateless"}, ra.Mode) || ra.Mode == "" && ra.Enabled && (ra.Managed || ra.OtherInfo)) {
+			refuse("APPLY_UNSUPPORTED", fmt.Sprintf("/segments/%d/addressing/ipv6/ra/mode", i), "This router advertisement mode needs the DHCPv6 server, which is not available yet.")
+		} else if declared.Management.Segment == "" && advertised {
+			// IPv6 forwarding stays off without the filter: clients would send everything to a router that drops it.
+			refuse("APPLY_UNSUPPORTED", fmt.Sprintf("/segments/%d/addressing/ipv6/ra/mode", i), "Router advertisements need the packet filter, which needs a management segment. Set management.segment.")
 		}
-		if v6.RA != nil && v6.RA.Enabled {
-			refuse("APPLY_UNSUPPORTED", fmt.Sprintf("/segments/%d/addressing/ipv6/ra/enabled", i), "Router advertisements cannot be applied yet."+filter)
+		if declared.Management.Segment == "" && s.Addressing.IPv6.Mode == "delegated" && !advertised {
+			refuse("APPLY_UNSUPPORTED", fmt.Sprintf("/segments/%d/addressing/ipv6/mode", i), "A delegated prefix is routed, which needs the packet filter and so a management segment. Set management.segment.")
 		}
 	}
 

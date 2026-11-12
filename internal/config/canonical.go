@@ -34,6 +34,7 @@ func normalizeDeclaration(d *declaration) {
 	for i := range d.Segments {
 		slices.Sort(d.Segments[i].Addressing.IPv4.Addresses)
 		slices.Sort(d.Segments[i].Addressing.IPv6.Addresses)
+		d.Segments[i].Addressing.IPv6.DUID = strings.ToLower(d.Segments[i].Addressing.IPv6.DUID)
 	}
 	// Objects are sets; policy lists are ordered and keep their order.
 	slices.SortFunc(d.Objects.Addresses, func(a, b address) int { return strings.Compare(a.ID, b.ID) })

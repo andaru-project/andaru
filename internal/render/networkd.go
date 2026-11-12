@@ -1,6 +1,7 @@
 package render
 
 import (
+	"cmp"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -112,14 +113,12 @@ func (r *renderer) addressing(id string, ppp bool) (sections []section, sources 
 		}
 		dhcp4 = append(dhcp4, offered(useDNS)...)
 	}
-	sendRA := v6.RA != nil && v6.RA.Enabled
-	switch v6.Mode {
-	case "none":
-		network = append(network, "LinkLocalAddressing=no", "IPv6AcceptRA=no")
-	case "static":
-		network = append(network, "IPv6AcceptRA=no")
-		announceable := true
-		for _, a := range v6.Addresses {
+	mode := v6.RA.mode()
+	sendRA := mode != "disabled"
+	// A stable /64 on a static or delegated segment is announced unless the mode announces no prefix.
+	announce := func(addresses []string) bool {
+		ok := true
+		for _, a := range addresses {
 			p, e := netip.ParsePrefix(a)
 			if e == nil && p.Addr().IsLinkLocalUnicast() {
 				continue // every link already has fe80::/64; announcing it is meaningless
@@ -127,18 +126,39 @@ func (r *renderer) addressing(id string, ppp bool) (sections []section, sources 
 			if e == nil && p.Bits() == 64 {
 				prefixes = append(prefixes, section{"IPv6Prefix", []string{"Prefix=" + p.Masked().String()}})
 			} else {
-				announceable = false
+				ok = false
 			}
 		}
-		if sendRA && !announceable {
+		return ok
+	}
+	switch v6.Mode {
+	case "none":
+		network = append(network, "LinkLocalAddressing=no", "IPv6AcceptRA=no")
+	case "static":
+		network = append(network, "IPv6AcceptRA=no")
+		if !announce(v6.Addresses) && sendRA && mode != "router" {
 			r.find("warning", "RA_PREFIX_UNSUPPORTED", base+"/ra", "Only /64 subnets can be announced for address autoconfiguration.")
 		}
 	case "slaac", "dhcp6":
 		network = append(network, "IPv6AcceptRA=yes")
 		accept = []string{"UseDNS=" + useDNS, "UseDomains=no"}
-		if v6.Mode == "dhcp6" && ppp {
+		if v6.Mode == "dhcp6" {
+			// networkd otherwise follows the advertisement's flags, and an information request brings no prefix.
+			accept = append(accept, "DHCPv6Client=always")
+		}
+		if v6.Mode == "dhcp6" && (ppp || v6.WithoutRA) {
 			// Some providers send no router advertisement on PPP and expect a bare solicit.
 			dhcp6 = append(dhcp6, "WithoutRA=solicit")
+		}
+		if v6.Mode == "dhcp6" && v6.DUID != "" {
+			identity = slices.Clone(identity)
+			raw, _ := hex.DecodeString(strings.ReplaceAll(v6.DUID, ":", ""))
+			declared := []string{fmt.Sprintf("DUIDType=%d", binary.BigEndian.Uint16(raw)), "DUIDRawData=" + v6.DUID[6:]}
+			if i := slices.IndexFunc(identity, func(l string) bool { return strings.HasPrefix(l, "DUIDType=") }); i >= 0 {
+				identity = slices.Replace(identity, i, i+2, declared...) // keeps the captured IAID
+			} else {
+				identity = append(identity, declared...)
+			}
 		}
 		// Also for SLAAC: a router advertisement with the managed or other flag starts DHCPv6 by itself.
 		dhcp6 = append(append(dhcp6, identity...), offered(useDNS)...)
@@ -146,6 +166,11 @@ func (r *renderer) addressing(id string, ppp bool) (sections []section, sources 
 			if v6.RequestPrefixLength != nil {
 				dhcp6 = append(dhcp6, fmt.Sprintf("PrefixDelegationHint=::/%d", *v6.RequestPrefixLength))
 			}
+			if v6.PrefixOnly {
+				dhcp6 = append(dhcp6, "UseAddress=no")
+			}
+			// A release makes many providers hand out a new prefix, renumbering the LAN.
+			dhcp6 = append(dhcp6, "SendRelease="+yesNo(v6.SendRelease))
 		}
 		if sendRA {
 			r.find("warning", "RA_PREFIX_UNSUPPORTED", base+"/ra", "Router advertisements are not sent on an upstream-facing segment.")
@@ -154,14 +179,52 @@ func (r *renderer) addressing(id string, ppp bool) (sections []section, sources 
 	case "delegated":
 		up, _ := r.segmentByID(v6.From)
 		network = append(network, "IPv6AcceptRA=no", "DHCPPrefixDelegation=yes")
-		delegation = []string{"UplinkInterface=" + r.name[up.Link], "SubnetId=0x" + v6.SubnetID, "Assign=yes"}
+		announce(v6.Addresses)
+		delegation = []string{"UplinkInterface=" + r.name[up.Link], "SubnetId=0x" + v6.SubnetID, "Assign=yes", "Announce=" + yesNo(sendRA && mode != "router")}
 	}
-	if !sendRA {
+	if !sendRA || mode == "router" {
 		prefixes = nil
-	} else {
+	}
+	if sendRA {
+		ra := v6.RA
 		network = append(network, "IPv6SendRA=yes")
-		send = []string{"Managed=" + yesNo(v6.RA.Managed), "OtherInformation=" + yesNo(v6.RA.OtherInfo)}
+		send = []string{
+			"RouterPreference=" + cmp.Or(ra.Priority, "medium"),
+			fmt.Sprintf("RouterLifetimeSec=%d", deref(ra.RouterLifetime, 1800)),
+			"Managed=" + yesNo(mode == "managed" || mode == "assisted"),
+			"OtherInformation=" + yesNo(mode == "assisted" || mode == "stateless"),
+		}
+		for i := range prefixes {
+			if v6.Mode == "static" {
+				prefixes[i].lines = append(prefixes[i].lines, fmt.Sprintf("ValidLifetimeSec=%d", deref(ra.ValidLifetime, 86400)), fmt.Sprintf("PreferredLifetimeSec=%d", deref(ra.PreferredLifetime, 14400)))
+			}
+			if mode == "managed" {
+				prefixes[i].lines = append(prefixes[i].lines, "AddressAutoconfiguration=no")
+			}
+		}
+		var servers, domains []string
+		if ra.DNS != nil {
+			servers, domains = ra.DNS.Servers, ra.DNS.SearchDomains
+		} else if r.d.DNS != nil && slices.Contains(r.d.DNS.Segments, s.ID) {
+			if _, own, _, ok := r.servedV6(s.ID); ok {
+				servers = []string{own.Addr().String()}
+			} else {
+				r.find("warning", "RA_DNS_UNAVAILABLE", base+"/addresses", "Add a static unique local address so clients can reach the DNS service over IPv6.")
+			}
+			domains = append([]string{r.d.DNS.LocalDomain}, r.d.DNS.SearchDomains...)
+		}
+		send = append(send, "EmitDNS="+yesNo(len(servers) > 0))
+		if len(servers) > 0 {
+			send = append(send, "DNS="+strings.Join(servers, " "))
+		}
+		send = append(send, "EmitDomains="+yesNo(len(domains) > 0))
+		if len(domains) > 0 {
+			send = append(send, "Domains="+strings.Join(domains, " "))
+		}
 		slices.SortFunc(prefixes, func(a, b section) int { return strings.Compare(a.lines[0], b.lines[0]) })
+		if ra.PREF64 != "" {
+			prefixes = append(prefixes, section{"IPv6PREF64Prefix", []string{"Prefix=" + ra.PREF64}})
+		}
 	}
 	sections = []section{{"Network", network}, {"DHCPv4", dhcp4}, {"DHCPv6", dhcp6}, {"IPv6AcceptRA", accept}, {"DHCPPrefixDelegation", delegation}, {"IPv6SendRA", send}}
 	return append(sections, prefixes...), sources
@@ -253,4 +316,12 @@ func (r *renderer) networkd(i int) {
 	}
 	sections[0].lines = append(network, sections[0].lines...)
 	r.file(networkDir+name+".network", "0644", ini(append([]section{{"Match", []string{match}}, {"Link", settings}}, sections...)...), append(sources, self))
+}
+
+// deref is *p, or fallback when p is nil.
+func deref(p *int, fallback int) int {
+	if p == nil {
+		return fallback
+	}
+	return *p
 }

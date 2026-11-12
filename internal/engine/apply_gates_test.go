@@ -183,12 +183,32 @@ func TestApplyFindings(t *testing.T) {
 		}, []want{{"BOOT_UNIT_DISABLED", "andaru-network-boot.service"}}},
 		"forwarding and PPP": {func() gateInput {
 			in := taken()
-			in.Declaration = []byte(`{"links":[{"kind":"ethernet","enabled":true},{"kind":"pppoe","enabled":true},{"kind":"pppoe","enabled":false}],
-				"segments":[{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"delegated"}}},
-				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"enabled":true}}}},
-				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"enabled":false}}}}]}`)
+			in.Declaration = []byte(`{"management":{"segment":"seg"},"links":[{"kind":"ethernet","enabled":true},{"kind":"pppoe","enabled":true},{"kind":"pppoe","enabled":false}],
+				"segments":[{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"delegated","ra":{"mode":"unmanaged"}}}},
+				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"enabled":true,"managed":false,"otherInfo":false}}}},
+				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"enabled":false,"managed":true,"otherInfo":true}}}},
+				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"mode":"router"}}}}]}`)
 			return in
-		}, []want{{"APPLY_UNSUPPORTED", "/links/1"}, {"APPLY_UNSUPPORTED", "/segments/0/addressing/ipv6/mode"}, {"APPLY_UNSUPPORTED", "/segments/1/addressing/ipv6/ra/enabled"}}},
+		}, []want{{"APPLY_UNSUPPORTED", "/links/1"}}},
+		// Without the filter IPv6 forwarding stays off, so an advertised default router would drop everything.
+		"advertisements without the filter": {func() gateInput {
+			in := taken()
+			in.Declaration = []byte(`{"links":[{"kind":"ethernet","enabled":true}],"segments":[
+				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"mode":"unmanaged"}}}},
+				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"delegated"}}},
+				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"mode":"disabled"}}}}]}`)
+			return in
+		}, []want{{"APPLY_UNSUPPORTED", "/segments/0/addressing/ipv6/ra/mode"}, {"APPLY_UNSUPPORTED", "/segments/1/addressing/ipv6/mode"}}},
+		"advertisement modes needing the DHCPv6 server": {func() gateInput {
+			in := taken()
+			in.Declaration = []byte(`{"management":{"segment":"seg"},"links":[{"kind":"ethernet","enabled":true}],"segments":[
+				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"mode":"managed"}}}},
+				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"mode":"assisted"}}}},
+				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"delegated","ra":{"mode":"stateless"}}}},
+				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"enabled":true,"managed":true,"otherInfo":false}}}},
+				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"enabled":true,"managed":false,"otherInfo":true}}}}]}`)
+			return in
+		}, []want{{"APPLY_UNSUPPORTED", "/segments/0/addressing/ipv6/ra/mode"}, {"APPLY_UNSUPPORTED", "/segments/1/addressing/ipv6/ra/mode"}, {"APPLY_UNSUPPORTED", "/segments/2/addressing/ipv6/ra/mode"}, {"APPLY_UNSUPPORTED", "/segments/3/addressing/ipv6/ra/mode"}, {"APPLY_UNSUPPORTED", "/segments/4/addressing/ipv6/ra/mode"}}},
 		"existing device would change": {func() gateInput {
 			in := taken()
 			in.LiveFiles[vlanNetdev] = []byte("[NetDev]\nKind=vlan\n\n[VLAN]\nId=6\n")
@@ -415,6 +435,14 @@ func TestStaticDNSSatisfiedByTheDNSService(t *testing.T) {
 	in := staticDNS(map[string]string{"eth0": ""}, "eth0")
 	in.Result.Files = append(in.Result.Files, render.File{Path: "/run/systemd/resolved.conf.d/50-andaru.conf", Content: "[Resolve]\nDNS=127.0.0.1 ::1\n"})
 	if findings := applyFindings(in); len(findings) != 0 {
+		t.Fatalf("findings = %+v", findings)
+	}
+}
+
+// A server advertised to clients is not the host's: the netplan host would still lose its resolvers.
+func TestAdvertisedDNSIsNotTheHostsDeclaration(t *testing.T) {
+	findings := applyFindings(staticDNS(map[string]string{"eth0": "IPv6SendRA=yes\n\n[IPv6SendRA]\nDNS=fd00:beef:1::1\n"}, "eth0"))
+	if !slices.ContainsFunc(findings, func(f render.Finding) bool { return f.Code == "TAKEOVER_UNSUPPORTED_BASELINE" }) {
 		t.Fatalf("findings = %+v", findings)
 	}
 }

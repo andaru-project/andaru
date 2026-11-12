@@ -499,3 +499,172 @@ func TestStaticLeaseNameNeedsTheDNSService(t *testing.T) {
 		t.Fatalf("a segment the DNS service does not serve published a name:\n%s", got)
 	}
 }
+
+// networkFile is the rendered .network body for an interface name.
+func networkFile(t *testing.T, result Result, name string) string {
+	t.Helper()
+	for _, f := range result.Files {
+		if f.Path == "/run/systemd/network/50-andaru-"+name+".network" {
+			return f.Content
+		}
+	}
+	t.Fatalf("no .network for %s: %s", name, golden(result))
+	return ""
+}
+
+func lines(t *testing.T, body string, want ...string) {
+	t.Helper()
+	for _, w := range want {
+		if !strings.Contains(body, "\n"+w+"\n") {
+			t.Fatalf("missing %q in:\n%s", w, body)
+		}
+	}
+}
+
+func TestIPv6LANRendering(t *testing.T) {
+	result := render(t, fixture(t, "ipv6-lan"))
+	wan := networkFile(t, result, "ens18")
+	lines(t, wan, "UseAddress=no", "WithoutRA=solicit", "SendRelease=no", "PrefixDelegationHint=::/56", "DUIDType=3", "DUIDRawData=00:01:52:54:00:aa:bb:01", "DHCPv6Client=always")
+	lan := networkFile(t, result, "ens19")
+	lines(t, lan, "Address=fd00:a5d:1::1/64", "UplinkInterface=ens18", "SubnetId=0x0", "Assign=yes", "Announce=yes", "IPv6SendRA=yes", "RouterPreference=high", "RouterLifetimeSec=1800", "Managed=no", "OtherInformation=no", "Prefix=fd00:a5d:1::/64")
+	if strings.Contains(lan, "LifetimeSec=86400") {
+		t.Fatalf("the upstream lease sets delegated lifetimes:\n%s", lan)
+	}
+	lab := networkFile(t, result, "ens20")
+	lines(t, lab, "RouterLifetimeSec=0", "[IPv6PREF64Prefix]", "Prefix=64:ff9b::/96")
+	if strings.Contains(lab, "[IPv6Prefix]") {
+		t.Fatalf("router mode announced a prefix:\n%s", lab)
+	}
+}
+
+func TestRouterModeDoesNotAnnounceTheDelegatedPrefix(t *testing.T) {
+	in := change(t, fixture(t, "ipv6-lan"), func(d map[string]any) {
+		item(d, "segments", 1)["addressing"].(map[string]any)["ipv6"].(map[string]any)["ra"] = map[string]any{"mode": "router"}
+	})
+	lan := networkFile(t, render(t, in), "ens19")
+	lines(t, lan, "Announce=no", "IPv6SendRA=yes")
+	if strings.Contains(lan, "[IPv6Prefix]") {
+		t.Fatalf("router mode announced the stable prefix:\n%s", lan)
+	}
+}
+
+func TestAdvertisementFlags(t *testing.T) {
+	for mode, want := range map[string][]string{
+		"managed":   {"Managed=yes", "OtherInformation=no", "AddressAutoconfiguration=no"},
+		"assisted":  {"Managed=yes", "OtherInformation=yes"},
+		"stateless": {"Managed=no", "OtherInformation=yes"},
+	} {
+		in := change(t, fixture(t, "ipv6-lan"), func(d map[string]any) {
+			item(d, "segments", 2)["addressing"].(map[string]any)["ipv6"].(map[string]any)["ra"] = map[string]any{"mode": mode}
+		})
+		lab := networkFile(t, render(t, in), "ens20")
+		lines(t, lab, want...)
+		if mode != "managed" && strings.Contains(lab, "AddressAutoconfiguration=no") {
+			t.Fatalf("%s turned autoconfiguration off:\n%s", mode, lab)
+		}
+	}
+}
+
+func TestStaticPrefixLifetimes(t *testing.T) {
+	ra := func(v map[string]any) Input {
+		return change(t, fixture(t, "ipv6-lan"), func(d map[string]any) {
+			item(d, "segments", 2)["addressing"].(map[string]any)["ipv6"].(map[string]any)["ra"] = v
+		})
+	}
+	lines(t, networkFile(t, render(t, ra(map[string]any{"mode": "unmanaged"})), "ens20"), "ValidLifetimeSec=86400", "PreferredLifetimeSec=14400")
+	lines(t, networkFile(t, render(t, ra(map[string]any{"mode": "unmanaged", "validLifetime": 600, "preferredLifetime": 300})), "ens20"), "ValidLifetimeSec=600", "PreferredLifetimeSec=300")
+}
+
+func TestWithoutRAOnPPPRendersOnce(t *testing.T) {
+	in := change(t, fixture(t, "pppoe-1492"), func(d map[string]any) {
+		for _, s := range d["segments"].([]any) {
+			if v6 := s.(map[string]any)["addressing"].(map[string]any)["ipv6"].(map[string]any); v6["mode"] == "dhcp6" {
+				v6["withoutRA"] = true
+			}
+		}
+	})
+	if n := strings.Count(golden(render(t, in)), "WithoutRA=solicit"); n != 1 {
+		t.Fatalf("WithoutRA rendered %d times", n)
+	}
+}
+
+func TestLegacyAdvertisementRenders(t *testing.T) {
+	in := change(t, fixture(t, "ipv6-lan"), func(d map[string]any) {
+		item(d, "segments", 2)["addressing"].(map[string]any)["ipv6"].(map[string]any)["ra"] = map[string]any{"enabled": true, "managed": false, "otherInfo": false}
+	})
+	lines(t, networkFile(t, render(t, in), "ens20"), "Managed=no", "OtherInformation=no", "Prefix=fd00:a5d:2::/64", "ValidLifetimeSec=86400")
+}
+
+func fileContent(t *testing.T, result Result, path string) string {
+	t.Helper()
+	for _, f := range result.Files {
+		if f.Path == path {
+			return f.Content
+		}
+	}
+	t.Fatalf("no %s: %s", path, golden(result))
+	return ""
+}
+
+func TestDNSOverIPv6(t *testing.T) {
+	result := render(t, fixture(t, "ipv6-lan"))
+	lines(t, fileContent(t, result, "/run/andaru-unbound/andaru.conf"),
+		"\tinterface: fd00:a5d:1::1", "\tinterface-action: fd00:a5d:1::1 allow", "\tinterface: fd00:a5d:2::1", "\taccess-control: fd00:a5d:2::/64 allow")
+	lines(t, networkFile(t, result, "ens19"), "EmitDNS=yes", "DNS=fd00:a5d:1::1", "EmitDomains=yes", "Domains=home.arpa example.org")
+}
+
+func TestAdvertisedDNSOverride(t *testing.T) {
+	ra := func(dns map[string]any) string {
+		return networkFile(t, render(t, change(t, fixture(t, "ipv6-lan"), func(d map[string]any) {
+			item(d, "segments", 1)["addressing"].(map[string]any)["ipv6"].(map[string]any)["ra"] = map[string]any{"mode": "unmanaged", "dns": dns}
+		})), "ens19")
+	}
+	lines(t, ra(map[string]any{"servers": []any{}}), "EmitDNS=no", "EmitDomains=no")
+	lines(t, ra(map[string]any{"servers": []any{"2001:db8::53"}, "searchDomains": []any{"example.net"}}), "DNS=2001:db8::53", "Domains=example.net")
+}
+
+func TestDelegatedWithoutStableAddressWarns(t *testing.T) {
+	result := render(t, change(t, fixture(t, "ipv6-lan"), func(d map[string]any) {
+		delete(item(d, "segments", 1)["addressing"].(map[string]any)["ipv6"].(map[string]any), "addresses")
+	}))
+	lan := networkFile(t, result, "ens19")
+	lines(t, lan, "EmitDNS=no")
+	if !slices.ContainsFunc(result.Findings, func(f Finding) bool {
+		return f.Code == "RA_DNS_UNAVAILABLE" && f.Severity == "warning" && f.Path == "/segments/1/addressing/ipv6/addresses"
+	}) {
+		t.Fatalf("findings %+v", result.Findings)
+	}
+}
+
+func TestMulticastListenerRule(t *testing.T) {
+	lines(t, golden(render(t, fixture(t, "filter-two-zones"))), "\t\tip6 saddr fe80::/10 icmpv6 type { mld-listener-query, mld-listener-report, mld-listener-done, mld2-listener-report } accept")
+}
+
+// A DHCPv6 WAN solicits even when the upstream advertisement asks only for information, or no prefix comes.
+func TestDHCPv6WANSolicitsWithoutTheManagedFlag(t *testing.T) {
+	in := change(t, fixture(t, "ipv6-lan"), func(d map[string]any) {
+		delete(item(d, "segments", 0)["addressing"].(map[string]any)["ipv6"].(map[string]any), "withoutRA")
+	})
+	wan := networkFile(t, render(t, in), "ens18")
+	lines(t, wan, "UseAddress=no", "DHCPv6Client=always")
+	if strings.Contains(wan, "WithoutRA=") {
+		t.Fatalf("withoutRA not declared:\n%s", wan)
+	}
+}
+
+// A static IPv6 prefix is known, so the DNS service answers only it, as for IPv4; only a delegated one is open.
+func TestStaticIPv6DNSAnswersItsSubnet(t *testing.T) {
+	conf := fileContent(t, render(t, fixture(t, "ipv6-lan")), "/run/andaru-unbound/andaru.conf")
+	lines(t, conf, "\taccess-control: fd00:a5d:2::/64 allow", "\tinterface-action: fd00:a5d:1::1 allow")
+	if strings.Contains(conf, "interface-action: fd00:a5d:2::1") {
+		t.Fatalf("static listener open to every source:\n%s", conf)
+	}
+}
+
+// Every static subnet is advertised, so clients numbered from any of them reach the advertised DNS server.
+func TestStaticIPv6DNSAnswersEverySubnet(t *testing.T) {
+	in := change(t, fixture(t, "ipv6-lan"), func(d map[string]any) {
+		item(d, "segments", 2)["addressing"].(map[string]any)["ipv6"].(map[string]any)["addresses"] = []any{"fd00:a5d:2::1/64", "fd00:a5d:3::1/64"}
+	})
+	lines(t, fileContent(t, render(t, in), "/run/andaru-unbound/andaru.conf"), "\taccess-control: fd00:a5d:2::/64 allow", "\taccess-control: fd00:a5d:3::/64 allow")
+}

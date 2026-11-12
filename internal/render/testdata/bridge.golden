@@ -19,14 +19,24 @@ IPv6AcceptRA=no
 IPv6SendRA=yes
 
 [IPv6SendRA]
+RouterPreference=medium
+RouterLifetimeSec=1800
 Managed=yes
 OtherInformation=no
+EmitDNS=no
+EmitDomains=no
 
 [IPv6Prefix]
 Prefix=2001:db8:0:1::/64
+ValidLifetimeSec=86400
+PreferredLifetimeSec=14400
+AddressAutoconfiguration=no
 
 [IPv6Prefix]
 Prefix=2001:db8:0:2::/64
+ValidLifetimeSec=86400
+PreferredLifetimeSec=14400
+AddressAutoconfiguration=no
 
 ### /run/systemd/network/50-andaru-ens18.link 0644 secret=false sources=/links/0
 [Match]

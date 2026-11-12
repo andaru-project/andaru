@@ -32,10 +32,12 @@ UseNTP=no
 UseHostname=no
 UseDomains=no
 PrefixDelegationHint=::/56
+SendRelease=no
 
 [IPv6AcceptRA]
 UseDNS=yes
 UseDomains=no
+DHCPv6Client=always
 
 ### /run/systemd/network/50-andaru-ens19.link 0644 secret=false sources=/links/1
 [Match]
@@ -65,10 +67,15 @@ IPv6SendRA=yes
 UplinkInterface=ens18
 SubnetId=0xbeef
 Assign=yes
+Announce=yes
 
 [IPv6SendRA]
+RouterPreference=medium
+RouterLifetimeSec=1800
 Managed=no
 OtherInformation=yes
+EmitDNS=no
+EmitDomains=no
 
 ### nft:inet/andaru 0644 secret=false sources=/management,/nat,/policy
 # interface ens18 52:54:00:aa:bb:01
@@ -76,7 +83,7 @@ OtherInformation=yes
 table inet andaru {}
 delete table inet andaru
 table inet andaru {
-	comment "sha256:283356f1f4faf2e070ac1bb06da040ce17df9eac06703a534a0fc27305ec3c34"
+	comment "sha256:8c2dc4b133e67eec07a81367b08aa50a4da904292fd8b39017a80b903199535d"
 	set adr_00000001_0000_4000_8000_000000000001_4 { type ipv4_addr; flags interval; auto-merge; elements = { 192.0.2.10 }; }
 	set adr_00000002_0000_4000_8000_000000000002_6 { type ipv6_addr; flags interval; auto-merge; elements = { 2001:db8::/64 }; }
 	set adr_00000003_0000_4000_8000_000000000003_4 { type ipv4_addr; flags interval; auto-merge; elements = { 192.0.2.20-192.0.2.29 }; }
@@ -93,6 +100,7 @@ table inet andaru {
 		iif lo accept
 		icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept
 		ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept
+		ip6 saddr fe80::/10 icmpv6 type { mld-listener-query, mld-listener-report, mld-listener-done, mld2-listener-report } accept
 		iifname "ens19" tcp dport 22 accept
 		iifname @zon_00000002_0000_4000_8000_000000000002 icmp type { echo-request } accept comment "rul_00000001-0000-4000-8000-000000000001"
 		iifname @zon_00000002_0000_4000_8000_000000000002 udp dport { 53 } accept comment "rul_00000002-0000-4000-8000-000000000002"

@@ -30,10 +30,12 @@ UseNTP=no
 UseHostname=no
 UseDomains=no
 PrefixDelegationHint=::/56
+SendRelease=no
 
 [IPv6AcceptRA]
 UseDNS=yes
 UseDomains=no
+DHCPv6Client=always
 
 ### /run/systemd/network/50-andaru-ens19.link 0644 secret=false sources=/links/1
 [Match]
@@ -61,10 +63,15 @@ IPv6SendRA=yes
 UplinkInterface=ens18
 SubnetId=0xbeef
 Assign=yes
+Announce=yes
 
 [IPv6SendRA]
+RouterPreference=medium
+RouterLifetimeSec=1800
 Managed=no
 OtherInformation=yes
+EmitDNS=no
+EmitDomains=no
 
 ### resolved lnk_00000001-0000-4000-8000-000000000001 -> ens18
 ### resolved lnk_00000002-0000-4000-8000-000000000002 -> ens19

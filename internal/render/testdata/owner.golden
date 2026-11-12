@@ -89,10 +89,15 @@ IPv6SendRA=yes
 UplinkInterface=pp000000030000
 SubnetId=0x1
 Assign=yes
+Announce=yes
 
 [IPv6SendRA]
+RouterPreference=medium
+RouterLifetimeSec=1800
 Managed=no
 OtherInformation=yes
+EmitDNS=no
+EmitDomains=no
 
 ### /run/systemd/network/50-andaru-pp000000030000.network 0644 secret=false sources=/links/2,/segments/0
 [Match]
@@ -114,10 +119,12 @@ UseNTP=no
 UseHostname=no
 UseDomains=no
 PrefixDelegationHint=::/48
+SendRelease=no
 
 [IPv6AcceptRA]
 UseDNS=yes
 UseDomains=no
+DHCPv6Client=always
 
 ### /run/systemd/network/50-andaru-vl000000020000.netdev 0644 secret=false sources=/links/1
 [NetDev]

@@ -3,6 +3,8 @@ package config
 import (
 	"encoding/json"
 	"maps"
+
+	"slices"
 	"strings"
 	"testing"
 )
@@ -202,5 +204,75 @@ func TestDHCPOffer(t *testing.T) {
 		if ok != (want != nil) || !maps.Equal(got, want) {
 			t.Errorf("DHCPOffer(%s) = %v, %v; want %v", address, got, ok, want)
 		}
+	}
+}
+
+// A version saved before advertisement modes still loads as stored; the next write stores the mode.
+func TestLegacyAdvertisementSurvivesHistory(t *testing.T) {
+	// history.go refuses a version whose canonical re-encoding differs from its stored bytes: false fields must survive.
+	d := fixtureMap(t)
+	v6(d, 1)["ra"] = map[string]any{"enabled": false, "managed": false, "otherInfo": false}
+	raw, _ := json.Marshal(d)
+	off, e := canonical(mustDecode(t, raw))
+	if e != nil {
+		t.Fatal(e)
+	}
+	if again, e := canonical(mustDecode(t, off)); e != nil || string(again) != string(off) || !strings.Contains(string(off), `"ra":{"enabled":false,"managed":false,"otherInfo":false}`) {
+		t.Fatalf("disabled legacy version does not round-trip (%v):\n%s", e, off)
+	}
+	stored, e := canonical(mustDecode(t, fixtureBytes(t)))
+	if e != nil {
+		t.Fatal(e)
+	}
+	// history.go refuses a version whose canonical re-encoding differs from its stored bytes.
+	again, e := decodeDeclaration(stored)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if b, _ := canonical(again); string(b) != string(stored) || !strings.Contains(string(stored), `"ra":{"enabled":true,"managed":false,"otherInfo":true}`) {
+		t.Fatalf("legacy version does not round-trip:\n%s", stored)
+	}
+	s := seededState(t)
+	// An unrelated write leaves the segment's stored form alone.
+	mustRun(t, &s, `{"operations":[{"op":"replace","collection":"zones","id":"`+s.Config.Zones[0].ID+`","expectedVersion":"7","value":{"name":"outside"}}]}`)
+	if s.Config.Segments[1].Addressing.IPv6.RA.Mode != "" {
+		t.Fatalf("untouched segment rewritten: %+v", s.Config.Segments[1].Addressing.IPv6.RA)
+	}
+	// Writing the segment, even with the legacy form, stores the mode.
+	seg, _ := json.Marshal(s.Config.Segments[1])
+	var value map[string]any
+	_ = json.Unmarshal(seg, &value)
+	delete(value, "id")
+	body, _ := json.Marshal(value)
+	mustRun(t, &s, `{"operations":[{"op":"replace","collection":"segments","id":"`+s.Config.Segments[1].ID+`","expectedVersion":"7","value":`+string(body)+`}]}`)
+	if b, _ := json.Marshal(s.Config.Segments[1].Addressing.IPv6.RA); string(b) != `{"mode":"stateless"}` {
+		t.Fatalf("written ra = %s", b)
+	}
+}
+
+func mustDecode(t *testing.T, raw []byte) declaration {
+	t.Helper()
+	d, e := decodeDeclaration(raw)
+	if e != nil {
+		t.Fatal(e)
+	}
+	return d
+}
+
+func TestDNSServesAnIPv6OnlySegment(t *testing.T) {
+	d := servicesFixture(t)
+	delete(d, "dhcp")
+	lan := item(segmentsOf(d), 1)["addressing"].(map[string]any)
+	lan["ipv4"] = map[string]any{"mode": "none"}
+	v6(d, 1)["addresses"] = []any{"fd00:a5d:1::1/64"}
+	if _, e := decodeMap(t, d); e != nil {
+		t.Fatalf("IPv6-only LAN refused: %v", e)
+	}
+	lan["ipv6"] = map[string]any{"mode": "slaac"}
+	_, e := decodeMap(t, d)
+	if ve, _ := e.(validationError); !slices.ContainsFunc(ve, func(f FieldError) bool {
+		return f.Path == "/dns/segments/0" && f.Message == "Expected an existing segment with a static IPv4 or IPv6 address."
+	}) {
+		t.Fatalf("got %v", e)
 	}
 }

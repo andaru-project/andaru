@@ -294,7 +294,7 @@ func (o observation) unmet(set []placed, names []string, route bool) string {
 			}
 		}
 		// Exactly the declared servers, in order: leftover offered ones mean the change did not take effect.
-		if want := declaredDNS(f.data); o.dns != nil && len(want) > 0 && !slices.Equal(o.dns[m.Name], want) {
+		if want := DeclaredDNS(f.data); o.dns != nil && len(want) > 0 && !slices.Equal(o.dns[m.Name], want) {
 			return fmt.Sprintf("%s resolves through %v, not the declared %v", m.Name, o.dns[m.Name], want)
 		}
 	}
@@ -475,11 +475,16 @@ func (r Realizer) restorable(previous []placed, p Pointers) ([]placed, error) {
 	return r.files(g)
 }
 
-// declaredDNS returns the servers a .network file names, in order.
-func declaredDNS(data []byte) []netip.Addr {
+// DeclaredDNS returns the servers a .network file names, in order.
+func DeclaredDNS(data []byte) []netip.Addr {
 	var servers []netip.Addr
+	section := ""
 	for line := range strings.SplitSeq(string(data), "\n") {
-		if value, ok := strings.CutPrefix(line, "DNS="); ok {
+		if strings.HasPrefix(line, "[") {
+			section = line
+		}
+		// [IPv6SendRA] also has DNS=: the servers advertised to clients.
+		if value, ok := strings.CutPrefix(line, "DNS="); ok && section == "[Network]" {
 			if a, err := netip.ParseAddr(value); err == nil {
 				servers = append(servers, a)
 			}
@@ -497,7 +502,7 @@ func (r Realizer) swapAndVerify(ctx context.Context, previous, next []placed, na
 		return err.Error()
 	}
 	// networkd hands DNS servers to systemd-resolved only; where resolved does not manage resolv.conf there is nothing to check.
-	withDNS := needServers || host.ResolvedInCharge(r.Root) && slices.ContainsFunc(next, func(f placed) bool { return len(declaredDNS(f.data)) > 0 })
+	withDNS := needServers || host.ResolvedInCharge(r.Root) && slices.ContainsFunc(next, func(f placed) bool { return len(DeclaredDNS(f.data)) > 0 })
 	verify, cancel := context.WithTimeout(ctx, r.VerifyWait)
 	defer cancel()
 	reason := "networkd was not observed"

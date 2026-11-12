@@ -22,6 +22,21 @@ func servedPrefix(d *declaration, id string) (netip.Prefix, bool) {
 	return all[0], true
 }
 
+// servedV6 is a static or delegated segment's first static IPv6 address that is not link-local: the stable
+// address the DNS service listens on, whatever prefix the upstream delegates.
+func servedV6(d *declaration, id string) (netip.Prefix, bool) {
+	i := slices.IndexFunc(d.Segments, func(s segment) bool { return s.ID == id })
+	if i < 0 || (d.Segments[i].Addressing.IPv6.Mode != "static" && d.Segments[i].Addressing.IPv6.Mode != "delegated") {
+		return netip.Prefix{}, false
+	}
+	for _, raw := range slices.Sorted(slices.Values(d.Segments[i].Addressing.IPv6.Addresses)) {
+		if p, e := netip.ParsePrefix(raw); e == nil && p.Addr().Is6() && !p.Addr().IsLinkLocalUnicast() {
+			return p, true
+		}
+	}
+	return netip.Prefix{}, false
+}
+
 // ownAddresses are a static segment's IPv4 addresses, none of which DHCP may hand out.
 func ownAddresses(d *declaration, id string) []netip.Prefix {
 	i := slices.IndexFunc(d.Segments, func(s segment) bool { return s.ID == id })
@@ -186,7 +201,9 @@ func validateServices(d *declaration) []FieldError {
 		if slices.Contains(s.Segments[:j], id) {
 			bad(fmt.Sprintf("/dns/segments/%d", j), "This segment is listed twice.")
 		} else if _, ok := servedPrefix(d, id); !ok {
-			bad(fmt.Sprintf("/dns/segments/%d", j), "Expected an existing segment with a static IPv4 address.")
+			if _, ok := servedV6(d, id); !ok {
+				bad(fmt.Sprintf("/dns/segments/%d", j), "Expected an existing segment with a static IPv4 or IPv6 address.")
+			}
 		}
 	}
 	// A name label (up to 63 characters) and a dot go in front of it, within DNS's 253.

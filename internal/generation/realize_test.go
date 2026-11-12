@@ -828,3 +828,11 @@ func (f *fakeNetworkd) dhcpcd(nic string) {
 	_ = os.WriteFile(filepath.Join(f.root, "run/dhcpcd", nic+".pid"), []byte("602\n"), 0o644)
 	_ = os.WriteFile(filepath.Join(f.root, "proc/602/comm"), []byte("dhcpcd\n"), 0o644)
 }
+
+// An advertised DNS server is the clients' resolver, not the host's: only [Network] DNS= lines bind the host.
+func TestDeclaredDNSReadsOnlyTheHostsServers(t *testing.T) {
+	got := DeclaredDNS([]byte("[Network]\nDNS=192.0.2.53\nIPv6SendRA=yes\n\n[IPv6SendRA]\nEmitDNS=yes\nDNS=fd00:beef:1::1\n"))
+	if len(got) != 1 || got[0].String() != "192.0.2.53" {
+		t.Fatalf("declared = %v", got)
+	}
+}
