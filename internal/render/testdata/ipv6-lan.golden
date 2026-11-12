@@ -1,0 +1,114 @@
+### /run/systemd/network/50-andaru-ens18.link 0644 secret=false sources=/links/0
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:01
+
+[Link]
+Name=ens18
+
+### /run/systemd/network/50-andaru-ens18.network 0644 secret=false sources=/links/0,/segments/0
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:01
+
+[Link]
+RequiredForOnline=no
+MTUBytes=1500
+
+[Network]
+LLDP=no
+DHCP=yes
+IPv6AcceptRA=yes
+
+[DHCPv4]
+UseDNS=yes
+UseNTP=no
+UseHostname=no
+UseDomains=no
+
+[DHCPv6]
+WithoutRA=solicit
+DUIDType=4
+DUIDRawData=aa:bb:cc:dd
+UseDNS=yes
+UseNTP=no
+UseHostname=no
+UseDomains=no
+PrefixDelegationHint=::/56
+UseAddress=no
+SendRelease=no
+
+[IPv6AcceptRA]
+UseDNS=yes
+UseDomains=no
+
+### /run/systemd/network/50-andaru-ens19.link 0644 secret=false sources=/links/1
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:02
+
+[Link]
+Name=ens19
+
+### /run/systemd/network/50-andaru-ens19.network 0644 secret=false sources=/links/1,/segments/1
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:02
+
+[Link]
+RequiredForOnline=no
+MTUBytes=1500
+
+[Network]
+LLDP=no
+Address=192.168.40.1/24
+Address=fd00:a5d:1::1/64
+IPv6AcceptRA=no
+DHCPPrefixDelegation=yes
+IPv6SendRA=yes
+
+[DHCPPrefixDelegation]
+UplinkInterface=ens18
+SubnetId=0x0
+Assign=yes
+Announce=yes
+
+[IPv6SendRA]
+RouterPreference=high
+RouterLifetimeSec=1800
+Managed=no
+OtherInformation=no
+
+[IPv6Prefix]
+Prefix=fd00:a5d:1::/64
+
+### /run/systemd/network/50-andaru-ens20.link 0644 secret=false sources=/links/2
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:03
+
+[Link]
+Name=ens20
+
+### /run/systemd/network/50-andaru-ens20.network 0644 secret=false sources=/links/2,/segments/2
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:03
+
+[Link]
+RequiredForOnline=no
+MTUBytes=1500
+
+[Network]
+LLDP=no
+Address=fd00:a5d:2::1/64
+IPv6AcceptRA=no
+IPv6SendRA=yes
+
+[IPv6SendRA]
+RouterPreference=medium
+RouterLifetimeSec=0
+Managed=no
+OtherInformation=no
+
+[IPv6PREF64Prefix]
+Prefix=64:ff9b::/96
+
+### resolved lnk_00000001-0000-4000-8000-000000000001 -> ens18
+### resolved lnk_00000002-0000-4000-8000-000000000002 -> ens19
+### resolved lnk_00000003-0000-4000-8000-000000000003 -> ens20
+### realizable=true

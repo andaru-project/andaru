@@ -30,6 +30,7 @@ UseNTP=no
 UseHostname=no
 UseDomains=no
 PrefixDelegationHint=::/56
+SendRelease=no
 
 [IPv6AcceptRA]
 UseDNS=yes
@@ -61,8 +62,11 @@ IPv6SendRA=yes
 UplinkInterface=ens18
 SubnetId=0xbeef
 Assign=yes
+Announce=yes
 
 [IPv6SendRA]
+RouterPreference=medium
+RouterLifetimeSec=1800
 Managed=no
 OtherInformation=yes
 

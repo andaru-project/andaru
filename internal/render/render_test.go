@@ -499,3 +499,98 @@ func TestStaticLeaseNameNeedsTheDNSService(t *testing.T) {
 		t.Fatalf("a segment the DNS service does not serve published a name:\n%s", got)
 	}
 }
+
+// networkFile is the rendered .network body for an interface name.
+func networkFile(t *testing.T, result Result, name string) string {
+	t.Helper()
+	for _, f := range result.Files {
+		if f.Path == "/run/systemd/network/50-andaru-"+name+".network" {
+			return f.Content
+		}
+	}
+	t.Fatalf("no .network for %s: %s", name, golden(result))
+	return ""
+}
+
+func lines(t *testing.T, body string, want ...string) {
+	t.Helper()
+	for _, w := range want {
+		if !strings.Contains(body, "\n"+w+"\n") {
+			t.Fatalf("missing %q in:\n%s", w, body)
+		}
+	}
+}
+
+func TestIPv6LANRendering(t *testing.T) {
+	result := render(t, fixture(t, "ipv6-lan"))
+	wan := networkFile(t, result, "ens18")
+	lines(t, wan, "UseAddress=no", "WithoutRA=solicit", "SendRelease=no", "PrefixDelegationHint=::/56", "DUIDType=4", "DUIDRawData=aa:bb:cc:dd")
+	lan := networkFile(t, result, "ens19")
+	lines(t, lan, "Address=fd00:a5d:1::1/64", "UplinkInterface=ens18", "SubnetId=0x0", "Assign=yes", "Announce=yes", "IPv6SendRA=yes", "RouterPreference=high", "RouterLifetimeSec=1800", "Managed=no", "OtherInformation=no", "Prefix=fd00:a5d:1::/64")
+	if strings.Contains(lan, "LifetimeSec=86400") {
+		t.Fatalf("the upstream lease sets delegated lifetimes:\n%s", lan)
+	}
+	lab := networkFile(t, result, "ens20")
+	lines(t, lab, "RouterLifetimeSec=0", "[IPv6PREF64Prefix]", "Prefix=64:ff9b::/96")
+	if strings.Contains(lab, "[IPv6Prefix]") {
+		t.Fatalf("router mode announced a prefix:\n%s", lab)
+	}
+}
+
+func TestRouterModeDoesNotAnnounceTheDelegatedPrefix(t *testing.T) {
+	in := change(t, fixture(t, "ipv6-lan"), func(d map[string]any) {
+		item(d, "segments", 1)["addressing"].(map[string]any)["ipv6"].(map[string]any)["ra"] = map[string]any{"mode": "router"}
+	})
+	lan := networkFile(t, render(t, in), "ens19")
+	lines(t, lan, "Announce=no", "IPv6SendRA=yes")
+	if strings.Contains(lan, "[IPv6Prefix]") {
+		t.Fatalf("router mode announced the stable prefix:\n%s", lan)
+	}
+}
+
+func TestAdvertisementFlags(t *testing.T) {
+	for mode, want := range map[string][]string{
+		"managed":   {"Managed=yes", "OtherInformation=no", "AddressAutoconfiguration=no"},
+		"assisted":  {"Managed=yes", "OtherInformation=yes"},
+		"stateless": {"Managed=no", "OtherInformation=yes"},
+	} {
+		in := change(t, fixture(t, "ipv6-lan"), func(d map[string]any) {
+			item(d, "segments", 2)["addressing"].(map[string]any)["ipv6"].(map[string]any)["ra"] = map[string]any{"mode": mode}
+		})
+		lab := networkFile(t, render(t, in), "ens20")
+		lines(t, lab, want...)
+		if mode != "managed" && strings.Contains(lab, "AddressAutoconfiguration=no") {
+			t.Fatalf("%s turned autoconfiguration off:\n%s", mode, lab)
+		}
+	}
+}
+
+func TestStaticPrefixLifetimes(t *testing.T) {
+	ra := func(v map[string]any) Input {
+		return change(t, fixture(t, "ipv6-lan"), func(d map[string]any) {
+			item(d, "segments", 2)["addressing"].(map[string]any)["ipv6"].(map[string]any)["ra"] = v
+		})
+	}
+	lines(t, networkFile(t, render(t, ra(map[string]any{"mode": "unmanaged"})), "ens20"), "ValidLifetimeSec=86400", "PreferredLifetimeSec=14400")
+	lines(t, networkFile(t, render(t, ra(map[string]any{"mode": "unmanaged", "validLifetime": 600, "preferredLifetime": 300})), "ens20"), "ValidLifetimeSec=600", "PreferredLifetimeSec=300")
+}
+
+func TestWithoutRAOnPPPRendersOnce(t *testing.T) {
+	in := change(t, fixture(t, "pppoe-1492"), func(d map[string]any) {
+		for _, s := range d["segments"].([]any) {
+			if v6 := s.(map[string]any)["addressing"].(map[string]any)["ipv6"].(map[string]any); v6["mode"] == "dhcp6" {
+				v6["withoutRA"] = true
+			}
+		}
+	})
+	if n := strings.Count(golden(render(t, in)), "WithoutRA=solicit"); n != 1 {
+		t.Fatalf("WithoutRA rendered %d times", n)
+	}
+}
+
+func TestLegacyAdvertisementRenders(t *testing.T) {
+	in := change(t, fixture(t, "ipv6-lan"), func(d map[string]any) {
+		item(d, "segments", 2)["addressing"].(map[string]any)["ipv6"].(map[string]any)["ra"] = map[string]any{"enabled": true, "managed": false, "otherInfo": false}
+	})
+	lines(t, networkFile(t, render(t, in), "ens20"), "Managed=no", "OtherInformation=no", "Prefix=fd00:a5d:2::/64", "ValidLifetimeSec=86400")
+}

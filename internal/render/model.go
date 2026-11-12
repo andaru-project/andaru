@@ -25,10 +25,39 @@ type link struct {
 	} `json:"password"`
 }
 type advertisement struct {
+	Mode              string `json:"mode"`
+	Priority          string `json:"priority"`
+	RouterLifetime    *int   `json:"routerLifetime"`
+	ValidLifetime     *int   `json:"validLifetime"`
+	PreferredLifetime *int   `json:"preferredLifetime"`
+	DNS               *struct {
+		Servers       []string `json:"servers"`
+		SearchDomains []string `json:"searchDomains"`
+	} `json:"dns"`
+	PREF64 string `json:"pref64"`
+	// The form saved before modes existed.
 	Enabled   bool `json:"enabled"`
 	Managed   bool `json:"managed"`
 	OtherInfo bool `json:"otherInfo"`
 }
+
+// mode is the advertisement mode, the legacy form mapped onto it; none at all is "disabled".
+func (a *advertisement) mode() string {
+	switch {
+	case a == nil:
+		return "disabled"
+	case a.Mode != "":
+		return a.Mode
+	case !a.Enabled:
+		return "disabled"
+	case a.Managed:
+		return "managed"
+	case a.OtherInfo:
+		return "stateless"
+	}
+	return "unmanaged"
+}
+
 type ipv4 struct {
 	Mode      string   `json:"mode"`
 	Addresses []string `json:"addresses"`
@@ -42,6 +71,10 @@ type ipv6 struct {
 	From                string         `json:"from"`
 	SubnetID            string         `json:"subnetId"`
 	RA                  *advertisement `json:"ra"`
+	PrefixOnly          bool           `json:"prefixOnly"`
+	WithoutRA           bool           `json:"withoutRA"`
+	SendRelease         bool           `json:"sendRelease"`
+	DUID                string         `json:"duid"`
 }
 type segment struct {
 	ID         string `json:"id"`

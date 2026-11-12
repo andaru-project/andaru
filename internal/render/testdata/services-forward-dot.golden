@@ -115,6 +115,7 @@ UseNTP=no
 UseHostname=no
 UseDomains=no
 PrefixDelegationHint=::/56
+SendRelease=no
 
 [IPv6AcceptRA]
 UseDNS=no

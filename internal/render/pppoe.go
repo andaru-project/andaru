@@ -60,7 +60,7 @@ func (r *renderer) visitPPPoE(i int, named bool) {
 		r.find("error", "UNSUPPORTED_COMBINATION", base+"/ipv6/mode", "Not rendered: IPv6 on a PPPoE segment can be none, slaac or dhcp6.")
 		supported = false
 	}
-	if a.IPv6.RA != nil && a.IPv6.RA.Enabled {
+	if a.IPv6.RA.mode() != "disabled" {
 		r.find("error", "UNSUPPORTED_COMBINATION", base+"/ipv6/ra", "Not rendered: router advertisements cannot be sent on a PPPoE segment.")
 		supported = false
 	}
