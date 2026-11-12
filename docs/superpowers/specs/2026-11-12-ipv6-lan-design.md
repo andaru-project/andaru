@@ -36,7 +36,7 @@ Not implemented behaviour. Contracts remain provisional until Andaru 1.0.
 | Advertisement options: router priority, router lifetime, prefix lifetimes, DNS servers and search domains, PREF64 | Advertisement intervals (networkd has no setting), extra advertised subnets beyond the segment's own |
 | WAN DHCPv6 client: prefix only, without RA, send release, custom DUID | `dhcp6c` debug, authentication, raw options; prefix delegation from a non-DHCPv6 source |
 | The DNS service answering over IPv6 on served LANs | DNS names for IPv6 clients (slice 2) |
-| Filter rules router advertisements and delegated prefixes need | Takeover proposals with IPv6 on the LAN |
+| The fixed filter rule IPv6 multicast listeners need | Takeover proposals with IPv6 on the LAN |
 
 ## Declaration
 
@@ -86,14 +86,11 @@ Old saved versions still decode: `enabled: false` becomes `disabled`; `enabled: 
 
 A segment listed in `dns.segments` is served when it has a static IPv4 address, IPv6 `static` or `delegated`, or both; an IPv6-only LAN is served. On IPv4 the service listens on the static address, as today. DHCPv4 still needs the static IPv4 address; its rule does not change.
 
-On a served segment with IPv6, Unbound also listens on the segment's first static IPv6 address that is not link-local (with `ip-freebind`, as for IPv4) and accepts every query that reaches that listener (`interface-action: <address> allow`), because a delegated prefix is not known when the configuration is written. Only the segment's link can reach the address: the filter accepts DNS on its interface alone.
+On a served segment with IPv6, Unbound also listens on the segment's first static IPv6 address that is not link-local (with `ip-freebind`, as for IPv4) and accepts every query that reaches that listener (`interface-action: <address> allow`), because a delegated prefix is not known when the configuration is written. Which clients reach it stays the input policy's job, as for IPv4: the starter rule accepting DNS from the LAN to the firewall matches both families.
 
 ### Filter
 
-Added to the fixed input rules:
-
-- Multicast listener queries and reports from link-local sources (`fe80::/10`), on every interface: they never leave the link, and RFC 4890 says not to drop them.
-- DNS (UDP and TCP 53) from served segments over IPv6, matched by interface, like the existing DHCPv4 rule.
+Added to the fixed input rules: multicast listener queries, reports and dones from link-local sources (`fe80::/10`), on every interface. They never leave the link, and RFC 4890 says not to drop them. DNS stays governed by rules, as for IPv4.
 
 ICMPv6 errors about the firewall's own connections (packet too big, time exceeded, parameter problem) are already accepted as `ct state related`. Echo requests to the firewall stay the user's input policy, so the WAN does not answer pings by default, as in pfSense.
 
