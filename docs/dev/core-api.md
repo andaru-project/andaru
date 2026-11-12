@@ -563,3 +563,15 @@ On 2026-11-11 CGO-disabled amd64 builds of this branch were installed on VM 117:
 | `andaru ctl takeover` on that host, "these servers" entered in the assistant, confirmed | Same address and default route, the entered servers and search domain in use, names resolved, 0 of 200 pings lost. The first run dropped the SLAAC address the kernel had taken without an `inet6` stanza; the reader now detects it as SLAAC and the rerun kept it. |
 
 The VM was left at `base-ifupdown-static-20261112`, its newest snapshot. On this ZFS-backed VM only the newest snapshot can be rolled back to, so the DHCP and resolved bases are now reachable only by cloning.
+
+### Packet filter Debian lab qualification
+
+On 2026-11-12, VM 114 (Debian 13, netplan static, `eth0` WAN at `10.0.1.19/16`) gained a LAN adapter `eth1` at `192.168.40.1/24` on an isolated VLAN, with a Debian client at `192.168.40.2` behind it, and ran this branch together with [#33](https://github.com/andaru-project/andaru/pull/33) (adapter names kept after a netplan takeover):
+
+- **Takeover with starter rules:** `sudo andaru ctl takeover --accept-detected` over SSH (plain `sudo`, which drops `SSH_CONNECTION`) put management on `eth0`, loaded `inet andaru` with SSH, ping and DNS from the LAN, LAN to any and IPv4 masquerade, and set IPv6 forwarding; the WAN's SLAAC and DHCPv6 addresses stayed. The client reached `1.1.1.1` (ping and HTTP) through NAT, a WAN-side probe of port 8080 timed out, SSH stayed up and the confirm went through.
+- **Rules from the CLI:** an address object, a `drop` rule for ping to it, `config order forward` to put it first, apply and confirm: the client's ping to `1.1.1.1` was dropped while HTTP still worked. Disabling the rule (replace with `enabled: false`), apply and confirm restored the ping.
+- **Unconfirmed apply:** deleting the LAN rule and applying with a 30-second timer cut the client off; nobody confirmed, the timer rolled back, the previous table (same comment hash) was loaded again and the client was back.
+- **Reboot:** the boot service ran once, after the root was writable; udev renamed `ens18`/`ens19` to `eth0`/`eth1` from Andaru's `.link` files before the filter loaded (`iifname "eth0"`), and networkd started after it. The client had internet, the WAN probe was dropped and SSH worked.
+- **Foreign filter:** with `nftables.service` enabled, the preview reported `FOREIGN_FILTER nftables.service` and the apply was refused with `APPLY_REFUSED`.
+
+The lab also found that the saved declaration did not carry the filter (fixed with a test), and that before #33 a confirmed takeover lost the adapter names at the next reboot.
