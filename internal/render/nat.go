@@ -123,6 +123,16 @@ func (f *filter) portForwards() (prerouting, forward, input []string) {
 				}
 			}
 		}
+		if pf.Reflection && !pf.NoRedirect {
+			// Pure NAT reflection: internal clients asking the outside address reach the target too. With self, any
+			// firewall address but the internal segments' own, so asking the firewall's LAN address is not redirected.
+			f.reflection = true
+			if pf.To.Self {
+				to = "fib daddr type local ip daddr != @internal_4"
+			}
+			bare := strings.TrimPrefix(action, fmt.Sprintf("log prefix %q ", "andaru "+pf.ID+" "))
+			prerouting = append(prerouting, strings.Join([]string{"iifname @internal", to, portMatch(pf.Protocol, first, last), bare, comment}, " "))
+		}
 	}
 	return
 }
@@ -144,4 +154,169 @@ func spanOf(s string) (int, int) {
 	a, _ := strconv.Atoi(lo)
 	b, _ := strconv.Atoi(hi)
 	return a, b
+}
+
+// internalSegments are the usable segments that are not uplinks, with their interface and static IPv4 prefixes:
+// where reflected clients come from and where their replies must come back through the firewall.
+func (r *renderer) internalSegments() (names []string, prefixes []netip.Prefix, owners []string) {
+	for _, s := range r.d.Segments {
+		name, ok := r.name[s.Link]
+		if !ok || !r.usable[s.Link] || r.uplink(s) {
+			continue
+		}
+		names = append(names, name)
+		if s.Addressing.IPv4.Mode != "static" {
+			continue
+		}
+		for _, raw := range s.Addressing.IPv4.Addresses {
+			if p, e := netip.ParsePrefix(raw); e == nil && p.Addr().Is4() {
+				prefixes, owners = append(prefixes, p), append(owners, name)
+			}
+		}
+	}
+	return
+}
+
+// uplink is a segment outbound NAT leaves through: a static IPv4 gateway, DHCPv4 or a PPPoE link.
+func (r *renderer) uplink(s segment) bool {
+	return s.Addressing.IPv4.Gateway != "" || s.Addressing.IPv4.Mode == "dhcp" || r.d.Links[r.index[s.Link]].Kind == "pppoe"
+}
+
+func v4int(a netip.Addr) uint32 {
+	b := a.As4()
+	return uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+}
+
+func v4addr(n uint32) netip.Addr {
+	return netip.AddrFrom4([4]byte{byte(n >> 24), byte(n >> 16), byte(n >> 8), byte(n)})
+}
+
+// mapping renders a 1:1 map entry and the keyword its dnat or snat needs: an address alone, or the prefix form.
+func mapping(from, to netip.Prefix) (keyword, entry string) {
+	if from.Bits() == 32 {
+		return "ip", from.Addr().String() + " : " + to.Addr().String()
+	}
+	return "ip prefix", from.String() + " : " + to.String()
+}
+
+func host32(p netip.Prefix) string { return strings.TrimSuffix(p.String(), "/32") }
+
+// oneToOne renders the 1:1 entries in order: dnat in prerouting and snat in postrouting, both scoped to the entry's
+// zone. An exclusion carves its hosts out of the entries after it, in both directions, so they fall through to the
+// outbound masquerade.
+func (f *filter) oneToOne() (prerouting, postrouting []string) {
+	r := f.r
+	join := func(parts ...string) string {
+		return strings.Join(slices.DeleteFunc(parts, func(s string) bool { return s == "" }), " ")
+	}
+	not := func(field string, list []string) string {
+		if len(list) == 0 {
+			return ""
+		}
+		return field + " != { " + strings.Join(list, ", ") + " }"
+	}
+	var excluded []netip.Prefix
+	for i, o := range r.d.NAT.OneToOne {
+		if !o.Enabled {
+			continue
+		}
+		internal := prefixOf(o.Internal)
+		if o.NoBinat {
+			excluded = append(excluded, internal)
+			continue
+		}
+		external := prefixOf(o.External)
+		f.checkExternal(external, fmt.Sprintf("/nat/oneToOne/%d/external", i))
+		var outside, inside []string
+		whole := false
+		for _, x := range excluded {
+			switch {
+			case x.Bits() <= internal.Bits() && x.Contains(internal.Addr()):
+				whole = true
+			case internal.Overlaps(x):
+				// The excluded hosts and the external addresses they would map to.
+				inside = append(inside, host32(x))
+				outside = append(outside, host32(netip.PrefixFrom(v4addr(v4int(external.Addr())+v4int(x.Addr())-v4int(internal.Addr())), x.Bits())))
+			}
+		}
+		if whole {
+			continue
+		}
+		comment := fmt.Sprintf("comment %q", o.ID)
+		kw, in := mapping(external, internal)
+		_, out := mapping(internal, external)
+		// Each destination object is an alternative, one line each; none means any peer.
+		sources, peers := []string{""}, []string{""}
+		if len(o.Destination) > 0 {
+			sources, peers = nil, nil
+			for _, id := range o.Destination {
+				sources = append(sources, "ip saddr @"+setName(id)+"_4")
+				peers = append(peers, "ip daddr @"+setName(id)+"_4")
+			}
+		}
+		for _, s := range sources {
+			prerouting = append(prerouting, join("iifname @"+setName(o.Zone), s, not("ip daddr", outside), "dnat "+kw+" to ip daddr map { "+in+" }", comment))
+		}
+		if o.Reflection {
+			f.reflection = true
+			prerouting = append(prerouting, join("iifname @internal", not("ip daddr", outside), "dnat "+kw+" to ip daddr map { "+in+" }", comment))
+		}
+		for _, p := range peers {
+			postrouting = append(postrouting, join("oifname @"+setName(o.Zone), p, not("ip saddr", inside), "snat "+kw+" to ip saddr map { "+out+" }", comment))
+		}
+	}
+	return
+}
+
+func prefixOf(s string) netip.Prefix {
+	if a, e := netip.ParseAddr(s); e == nil {
+		return netip.PrefixFrom(a, 32)
+	}
+	p, _ := netip.ParsePrefix(s)
+	return p
+}
+
+// checkExternal reports a 1:1 external range holding an address the firewall uses now, and one on an uplink
+// subnet the firewall does not hold, which nothing would answer ARP for.
+func (f *filter) checkExternal(external netip.Prefix, path string) {
+	r := f.r
+	// Declared static addresses were judged when saved; only one learned since, by DHCP or PPPoE, is new here.
+	declared := map[netip.Addr]bool{}
+	for _, s := range r.d.Segments {
+		for _, raw := range s.Addressing.IPv4.Addresses {
+			if p, e := netip.ParsePrefix(raw); e == nil {
+				declared[p.Addr()] = true
+			}
+		}
+	}
+	for _, l := range r.in.Links {
+		for _, a := range l.Addresses {
+			if v, e := netip.ParseAddr(a.Address); e == nil && a.Family == "ipv4" && external.Contains(v) && !declared[v] {
+				r.find("error", "ONE_TO_ONE_OWN_ADDRESS", path, "This range holds "+v.String()+", an address the firewall uses now, whose traffic 1:1 NAT would take over.")
+				return
+			}
+		}
+	}
+	for _, s := range r.d.Segments {
+		if !r.uplink(s) || s.Addressing.IPv4.Mode != "static" {
+			continue
+		}
+		held := false
+		var subnet netip.Prefix
+		for _, raw := range s.Addressing.IPv4.Addresses {
+			p, e := netip.ParsePrefix(raw)
+			if e != nil {
+				continue
+			}
+			if p.Masked().Contains(external.Addr()) {
+				subnet = p.Masked()
+			}
+			if external.Bits() == 32 && p.Addr() == external.Addr() {
+				held = true
+			}
+		}
+		if subnet.IsValid() && !held {
+			r.find("warning", "PROXY_ARP_REQUIRED", path, "This address is on the "+subnet.String()+" uplink subnet but not assigned to the firewall, so nothing answers ARP for it. Add it to the segment's addresses; proxy ARP comes with virtual IPs (#37).")
+		}
+	}
 }

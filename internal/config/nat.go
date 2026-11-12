@@ -135,19 +135,24 @@ func validateNAT(d *declaration) []FieldError {
 		}
 	}
 
-	// own holds the firewall's static IPv4 addresses: 1:1 must not take them over.
-	var own []netip.Addr
+	// own holds the firewall's static IPv4 addresses; primary is each segment's first, which the firewall's own
+	// traffic and the outbound masquerade use. 1:1 may take over an extra address, pfSense's IP alias, but never these.
+	var own, primary []netip.Addr
 	for _, s := range d.Segments {
 		if s.Addressing.IPv4.Mode != "static" {
 			continue
 		}
-		for _, raw := range s.Addressing.IPv4.Addresses {
+		for j, raw := range slices.Sorted(slices.Values(s.Addressing.IPv4.Addresses)) {
 			if p, e := netip.ParsePrefix(raw); e == nil {
 				own = append(own, p.Addr())
+				if j == 0 {
+					primary = append(primary, p.Addr())
+				}
 			}
 		}
 	}
 	holdsOwn := func(p netip.Prefix) bool { return slices.ContainsFunc(own, p.Contains) }
+	holdsPrimary := func(p netip.Prefix) bool { return slices.ContainsFunc(primary, p.Contains) }
 	externals := make([]netip.Prefix, len(d.NAT.OneToOne))
 	seen = map[string]bool{}
 	for i, o := range d.NAT.OneToOne {
@@ -175,8 +180,8 @@ func validateNAT(d *declaration) []FieldError {
 		switch {
 		case !extOK:
 			bad(p+"/external", "Expected an IPv4 address or a prefix with its host bits zero.")
-		case holdsOwn(external):
-			bad(p+"/external", "This range holds one of the firewall's own addresses, which 1:1 NAT would take over.")
+		case holdsPrimary(external):
+			bad(p+"/external", "This range holds a segment's first address, which the firewall's own traffic uses and 1:1 NAT would take over.")
 		case ok && external.Bits() != internal.Bits():
 			bad(p+"/internal", "Expected a prefix of the same length as the external one.")
 		}

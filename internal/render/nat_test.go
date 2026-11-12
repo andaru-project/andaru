@@ -3,6 +3,8 @@ package render
 import (
 	"strings"
 	"testing"
+
+	"github.com/andaru-project/andaru/internal/host"
 )
 
 const (
@@ -135,5 +137,87 @@ func TestForwardToAFirewallAddress(t *testing.T) {
 	})))
 	if strings.Contains(chainOf(t, script, "forward"), pfwWeb) || !strings.Contains(chainOf(t, script, "input"), pfwWeb) {
 		t.Fatalf("firewall address target:\n%s", script)
+	}
+}
+
+const (
+	otoServer  = "oto_00000002-0000-4000-8000-000000000002"
+	otoBlock   = "oto_00000003-0000-4000-8000-000000000003"
+	natPartner = "adr_00000007_0000_4000_8000_000000000007_4"
+)
+
+func TestOneToOneRendering(t *testing.T) {
+	script := table(t, render(t, fixture(t, "nat-one-to-one")))
+	inOrder(t, chainOf(t, script, "prerouting"),
+		`iifname @`+natWAN+` fib daddr . iif type local tcp dport 8080 dnat ip to 192.0.2.10:80 comment "`+pfwWeb+`"`,
+		`iifname @internal fib daddr type local ip daddr != @internal_4 tcp dport 8080 dnat ip to 192.0.2.10:80 comment "`+pfwWeb+`"`,
+		`iifname @`+natWAN+` dnat ip to ip daddr map { 10.0.1.29 : 192.0.2.30 } comment "`+otoServer+`"`,
+		`iifname @internal dnat ip to ip daddr map { 10.0.1.29 : 192.0.2.30 } comment "`+otoServer+`"`,
+		// The exclusion of 192.0.2.31 carves its external counterpart out of the mapping.
+		`iifname @`+natWAN+` ip saddr @`+natPartner+` ip daddr != { 203.0.113.31 } dnat ip prefix to ip daddr map { 203.0.113.16/28 : 192.0.2.16/28 } comment "`+otoBlock+`"`,
+	)
+	inOrder(t, chainOf(t, script, "postrouting"),
+		`oifname @`+natWAN+` snat ip to ip saddr map { 192.0.2.30 : 10.0.1.29 } comment "`+otoServer+`"`,
+		`oifname @`+natWAN+` ip daddr @`+natPartner+` ip saddr != { 192.0.2.31 } snat ip prefix to ip saddr map { 192.0.2.16/28 : 203.0.113.16/28 } comment "`+otoBlock+`"`,
+		`oifname "ens19" ct status dnat ip saddr 192.0.2.0/24 masquerade comment "reflection"`,
+		// Excluded and unmapped hosts still leave through the outbound masquerade, after every 1:1 line.
+		"fib saddr type != local oifname @uplinks meta nfproto ipv4 masquerade",
+	)
+	if !strings.Contains(script, `set internal { type ifname; elements = { "ens19" }; }`) || !strings.Contains(script, `set internal_4 { type ipv4_addr; elements = { 192.0.2.1 }; }`) {
+		t.Fatalf("reflection sets:\n%s", script)
+	}
+}
+
+// Without reflection there is no hairpin masquerade and no reflection set.
+func TestNoReflectionNoHairpin(t *testing.T) {
+	script := table(t, render(t, change(t, fixture(t, "nat-one-to-one"), func(d map[string]any) {
+		nat := d["nat"].(map[string]any)
+		for _, list := range []string{"portForwards", "oneToOne"} {
+			for _, e := range nat[list].([]any) {
+				delete(e.(map[string]any), "reflection")
+			}
+		}
+	})))
+	if strings.Contains(script, "reflection") || strings.Contains(script, "@internal") {
+		t.Fatalf("reflection rendered without being asked for:\n%s", script)
+	}
+}
+
+func findingAt(result Result, code, path string) bool {
+	for _, f := range result.Findings {
+		if f.Code == code && f.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
+func TestProxyARPWarning(t *testing.T) {
+	external := func(addr string) Result {
+		return render(t, change(t, fixture(t, "nat-one-to-one"), func(d map[string]any) {
+			d["nat"].(map[string]any)["oneToOne"].([]any)[1].(map[string]any)["external"] = addr
+		}))
+	}
+	if r := external("10.0.1.50"); !findingAt(r, "PROXY_ARP_REQUIRED", "/nat/oneToOne/1/external") || !r.Realizable {
+		t.Fatalf("10.0.1.50: %+v", r.Findings)
+	}
+	if r := external("10.0.1.29"); findingAt(r, "PROXY_ARP_REQUIRED", "/nat/oneToOne/1/external") {
+		t.Fatalf("an address the WAN holds needs no proxy ARP: %+v", r.Findings)
+	}
+}
+
+// A WAN address learned by DHCP inside a 1:1 range would hand the firewall's own traffic to the inside host.
+func TestOneToOneLearnedAddress(t *testing.T) {
+	in := fixture(t, "nat-one-to-one")
+	for i := range in.Links {
+		if in.Links[i].Name == "ens18" {
+			// 10.0.1.29 is the declared extra WAN address the server's 1:1 uses: holding it is the point, not a conflict.
+			in.Links[i].Addresses = append(in.Links[i].Addresses, host.AddressStatus{Family: "ipv4", Address: "203.0.113.17", PrefixLength: 28, Scope: "global"},
+				host.AddressStatus{Family: "ipv4", Address: "10.0.1.29", PrefixLength: 16, Scope: "global"})
+		}
+	}
+	r := render(t, in)
+	if r.Realizable || !findingAt(r, "ONE_TO_ONE_OWN_ADDRESS", "/nat/oneToOne/2/external") || findingAt(r, "ONE_TO_ONE_OWN_ADDRESS", "/nat/oneToOne/1/external") {
+		t.Fatalf("findings %+v", r.Findings)
 	}
 }

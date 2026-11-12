@@ -174,6 +174,14 @@ func TestOneToOneValidation(t *testing.T) {
 			mapping(d, map[string]any{"id": otoB, "name": "two", "external": "203.0.113.20", "internal": "192.0.2.99"}))
 		refusedAt(t, d, "/nat/oneToOne/1/external")
 	})
+	// An extra address on the WAN is pfSense's IP alias for 1:1: the firewall holds it so ARP is answered.
+	t.Run("extra WAN address", func(t *testing.T) {
+		d := natFixture(t)
+		lan := v4(d, 1)
+		lan["addresses"] = []any{"192.0.2.7/24", "192.0.2.8/24"}
+		setNAT(d, "oneToOne", mapping(d, map[string]any{"external": "192.0.2.8", "internal": "198.18.0.30"}))
+		accepted(t, d)
+	})
 	t.Run("exclusion", func(t *testing.T) {
 		d := natFixture(t)
 		setNAT(d, "oneToOne", mapping(d, map[string]any{"id": otoB, "name": "skip", "noBinat": true, "external": nil, "internal": "192.0.2.31"}),
