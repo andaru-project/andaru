@@ -39,14 +39,13 @@ type applyReply struct {
 	Files    []json.RawMessage
 }
 
-var objectIDPattern = regexp.MustCompile(`^(lnk|seg|zon|adr|svc|rul|dhp)_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+var objectIDPattern = regexp.MustCompile(`^(lnk|seg|zon|adr|svc|rul|dhp|pfw|oto)_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 var applyIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
 var errUsage = errors.New("usage: andaru ctl [--socket PATH] links|openapi|config <show|list|get|create|replace|delete|changes|order>|versions <list|get>|preview network [--saved-version N]|apply network --saved-version N [--takeover] [--confirm-timeout S]|applies <list|get ID|confirm ID|rollback ID>|takeover [--accept-detected] [--confirm-timeout S]")
 
-var ruleIDPattern = regexp.MustCompile(`^rul_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 func collectionName(s string) bool {
-	return slices.Contains([]string{"links", "segments", "zones", "addresses", "services", "dhcp", "policy/input", "policy/forward"}, s)
+	return slices.Contains([]string{"links", "segments", "zones", "addresses", "services", "dhcp", "policy/input", "policy/forward", "nat/port-forwards", "nat/one-to-one"}, s)
 }
 
 // singletonName names the configuration objects that exist at most once and have no ID.
@@ -59,7 +58,7 @@ func validChanged(item config.ChangedView) bool {
 	case "management", "nat.outbound", "dns":
 		var value map[string]any
 		return item.ID == item.Collection && (item.Deleted || validVersion(item.Version) && item.Version != "0" && json.Unmarshal(item.Value, &value) == nil)
-	case "policy.input", "policy.forward":
+	case "policy.input", "policy.forward", "nat.portForwards", "nat.oneToOne":
 		if item.ID == item.Collection {
 			return validVersion(item.Version) && item.Version != "0"
 		}
@@ -92,7 +91,7 @@ func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 		version := ""
 		chain := ""
 		if verb == "order" && len(leaf) > 0 {
-			// andaru ctl config order input|forward --version V <id>...: the chain comes before the flags.
+			// andaru ctl config order input|forward|nat/port-forwards|nat/one-to-one --version V <id>...: the list comes before the flags.
 			chain, leaf = leaf[0], leaf[1:]
 		}
 		if verb == "replace" || verb == "delete" || verb == "order" {
@@ -109,15 +108,17 @@ func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 			}
 		}
 		if verb == "order" {
-			if chain != "input" && chain != "forward" {
+			path, prefix := map[string]string{"input": "policy/input", "forward": "policy/forward", "nat/port-forwards": "nat/port-forwards", "nat/one-to-one": "nat/one-to-one"}[chain],
+				map[string]string{"input": "rul_", "forward": "rul_", "nat/port-forwards": "pfw_", "nat/one-to-one": "oto_"}[chain]
+			if path == "" {
 				return req, errUsage
 			}
 			for _, id := range leaf {
-				if !ruleIDPattern.MatchString(id) {
+				if !objectIDPattern.MatchString(id) || !strings.HasPrefix(id, prefix) {
 					return req, errUsage
 				}
 			}
-			req.method, req.path, req.kind = "PUT", "/api/v1/config/policy/"+chain+"/order", "order"
+			req.method, req.path, req.kind = "PUT", "/api/v1/config/"+path+"/order", "order"
 			req.tag = `"order.` + version + `"`
 			req.payload, _ = json.Marshal(append([]string{}, leaf...))
 			return req, nil

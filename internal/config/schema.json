@@ -1015,6 +1015,12 @@
         },
         {
           "$ref": "#/$defs/dnsService"
+        },
+        {
+          "$ref": "#/$defs/portForwardWrite"
+        },
+        {
+          "$ref": "#/$defs/oneToOneWrite"
         }
       ]
     },

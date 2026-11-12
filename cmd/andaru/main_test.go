@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/andaru-project/andaru/internal/config"
 	"io"
 	"net"
 	"net/http"
@@ -404,5 +405,29 @@ func TestSaveEnvelopeAcceptsFilterResults(t *testing.T) {
 	order := `{"state":"saved","savedVersion":"5","version":"5","order":["rul_00000001-0000-4000-8000-000000000001"]}`
 	if !validEnvelope("order", []byte(order)) {
 		t.Fatal("order reply rejected")
+	}
+}
+
+func TestConfigNATLists(t *testing.T) {
+	a, b := "pfw_00000001-0000-4000-8000-000000000001", "pfw_00000002-0000-4000-8000-000000000002"
+	for args, want := range map[string]ctlRequest{
+		"config list nat/port-forwards":     {method: "GET", path: "/api/v1/config/nat/port-forwards", kind: "collection"},
+		"config create nat/one-to-one":      {method: "POST", path: "/api/v1/config/nat/one-to-one", kind: "object"},
+		"config get nat/port-forwards " + a: {method: "GET", path: "/api/v1/config/nat/port-forwards/" + a, kind: "object"},
+	} {
+		req, err := ctlOperation(strings.Fields(args), io.Discard)
+		if err != nil || req.method != want.method || req.path != want.path || req.kind != want.kind {
+			t.Fatalf("%s: %+v %v", args, req, err)
+		}
+	}
+	req, err := ctlOperation([]string{"config", "order", "nat/port-forwards", "--version", "7", b, a}, io.Discard)
+	if err != nil || req.path != "/api/v1/config/nat/port-forwards/order" || string(req.payload) != `["`+b+`","`+a+`"]` {
+		t.Fatalf("order %+v %v", req, err)
+	}
+	if _, err := ctlOperation([]string{"config", "order", "nat/port-forwards", "--version", "7", "rul_00000001-0000-4000-8000-000000000001"}, io.Discard); err == nil {
+		t.Fatal("a rule ID ordered a NAT list")
+	}
+	if !validChanged(config.ChangedView{Collection: "nat.portForwards", ID: "nat.portForwards", Version: "4"}) {
+		t.Fatal("a NAT list order result was refused")
 	}
 }

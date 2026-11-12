@@ -680,3 +680,39 @@ func TestServiceRoutesMatchTheContract(t *testing.T) {
 		t.Fatalf("dns read back: %d %s", w.Code, w.Body)
 	}
 }
+
+// The NAT lists are served exactly as the policy lists are.
+func TestNATListRoutes(t *testing.T) {
+	h, _ := configurationFixture(t)
+	expect := func(w *httptest.ResponseRecorder, status int) {
+		t.Helper()
+		if w.Code != status {
+			t.Fatalf("status %d, want %d: %s", w.Code, status, w.Body)
+		}
+	}
+	zone := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/zones", `{"name":"outside"}`, "")))
+	forward := func(name, port string) string {
+		return `{"name":"` + name + `","enabled":true,"ingressZones":["` + zone + `"],"protocol":"tcp","from":[],"to":{"self":true},"ports":"` + port + `","target":{"address":"192.0.2.10"}}`
+	}
+	a := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/nat/port-forwards", forward("a", "8080"), "")))
+	w := configCall(h, "POST", "/api/v1/config/nat/port-forwards?before="+a, forward("b", "8081"), "")
+	expect(w, 201)
+	b := valueID(t, apiObject(t, w))
+	w = configCall(h, "GET", "/api/v1/config/nat/port-forwards", "", "")
+	expect(w, 200)
+	if !strings.HasPrefix(a, "pfw_") || strings.Index(w.Body.String(), b) > strings.Index(w.Body.String(), a) {
+		t.Fatalf("list %s", w.Body)
+	}
+	tag := w.Header().Get("ETag")
+	expect(configCall(h, "PUT", "/api/v1/config/nat/port-forwards/order", `["`+a+`"]`, tag), 422)
+	expect(configCall(h, "PUT", "/api/v1/config/nat/port-forwards/order", `["`+a+`","`+b+`"]`, tag), 200)
+	expect(configCall(h, "PUT", "/api/v1/config/nat/port-forwards/order", `["`+b+`","`+a+`"]`, tag), 412)
+	o := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/nat/one-to-one",
+		`{"name":"o","enabled":true,"zone":"`+zone+`","external":"203.0.113.20","internal":"192.0.2.30","destination":[]}`, "")))
+	if !strings.HasPrefix(o, "oto_") {
+		t.Fatalf("1:1 id %q", o)
+	}
+	w = configCall(h, "GET", "/api/v1/config/nat/port-forwards/"+b, "", "")
+	expect(w, 200)
+	expect(configCall(h, "DELETE", "/api/v1/config/nat/port-forwards/"+b, "", w.Header().Get("ETag")), 200)
+}

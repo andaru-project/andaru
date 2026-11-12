@@ -35,8 +35,9 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 			collection = strings.Join(parts[1:], ".")
 			route, id = "singleton", collection
 			allowed = []string{"GET", "HEAD", "PUT", "DELETE"}
-		case len(parts) >= 3 && parts[0] == "config" && parts[1] == "policy" && (parts[2] == "input" || parts[2] == "forward"):
-			collection = "policy." + parts[2]
+		case len(parts) >= 3 && parts[0] == "config" && (parts[1] == "policy" && (parts[2] == "input" || parts[2] == "forward") ||
+			parts[1] == "nat" && (parts[2] == "port-forwards" || parts[2] == "one-to-one")):
+			collection = map[string]string{"input": "policy.input", "forward": "policy.forward", "port-forwards": "nat.portForwards", "one-to-one": "nat.oneToOne"}[parts[2]]
 			switch {
 			case len(parts) == 3:
 				route = "collection"
