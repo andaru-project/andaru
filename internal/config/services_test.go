@@ -99,6 +99,10 @@ func TestServiceValidation(t *testing.T) {
 			l := strings.Repeat("a", 60)
 			dns(d)["localDomain"] = l + "." + l + "." + l + "." + l
 		}, "/dns/localDomain"},
+		// The served subnet is the first address in canonical (sorted) order, as saved and rendered.
+		"served subnet is the canonical first": {func(d map[string]any) {
+			v4(d, 1)["addresses"] = []any{"192.0.2.7/24", "10.0.0.1/24"}
+		}, "/dhcp/0/ranges/0"},
 		"bad local domain": {func(d map[string]any) { dns(d)["localDomain"] = "bad..name" }, "/dns/localDomain"},
 		"host DNS beside the service": {func(d map[string]any) {
 			item(segmentsOf(d), 1)["addressing"].(map[string]any)["dns"] = map[string]any{"servers": []any{"192.0.2.53"}}

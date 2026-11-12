@@ -29,7 +29,8 @@ func ownAddresses(d *declaration, id string) []netip.Prefix {
 		return nil
 	}
 	var out []netip.Prefix
-	for _, raw := range d.Segments[i].Addressing.IPv4.Addresses {
+	// In the order the saved declaration keeps them, which decides the served subnet.
+	for _, raw := range slices.Sorted(slices.Values(d.Segments[i].Addressing.IPv4.Addresses)) {
 		if p, e := netip.ParsePrefix(raw); e == nil && p.Addr().Is4() {
 			out = append(out, p)
 		}

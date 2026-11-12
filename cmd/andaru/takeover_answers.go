@@ -265,7 +265,7 @@ func batch(p proposal, a answers) ([]config.Operation, error) {
 		if ip4.Mode != "static" || len(ip4.Addresses) == 0 {
 			continue
 		}
-		if r, ok := config.DHCPOffer(ip4.Addresses[0]); ok {
+		if r, ok := config.DHCPOffer(slices.Min(ip4.Addresses)); ok { // the served subnet: first in canonical order
 			v["ranges"] = []any{map[string]any{"first": r["first"], "last": r["last"]}}
 			filter = append(filter, operation(op, v))
 		}

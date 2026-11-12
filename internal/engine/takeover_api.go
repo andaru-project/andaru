@@ -400,7 +400,7 @@ func offer(n host.Detected) (map[string]string, bool) {
 	if n.IPv4.Mode != "static" || len(n.IPv4.Addresses) == 0 {
 		return nil, false
 	}
-	return config.DHCPOffer(n.IPv4.Addresses[0])
+	return config.DHCPOffer(slices.Min(n.IPv4.Addresses)) // the served subnet: first in canonical order
 }
 
 // viaInterface names the interface holding the address in ?via=, the local end of the operator's SSH session.
