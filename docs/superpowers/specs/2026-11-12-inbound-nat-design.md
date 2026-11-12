@@ -33,6 +33,16 @@ This is not implemented behaviour yet. Contracts stay provisional until Andaru 1
 | Reflection in pfSense's Pure-NAT mode, per rule, off by default | NAT+Proxy reflection, a system-wide reflection default |
 | Matching by source address objects, with negation | Source ports, port aliases on the target side, HA sync |
 
+## `self`
+
+`self` is pfSense's "This firewall (self)": the firewall, on whatever interface the rule applies to, in whatever IP version the rule matches. Andaru uses it wherever a rule names the firewall as an address:
+
+- a port forward's `to` and `target` (this slice);
+- the packet filter needs no `self`: `policy.input` is traffic to the firewall, on any interface, in both versions;
+- IPv6 port forwards, when they come, take `self` unchanged.
+
+It renders as `fib daddr . iif type local`, so it follows the interface's addresses as they change, and nothing re-renders when DHCP or PPPoE hands out a new one.
+
 ## Declaration
 
 Both lists live under `nat` next to `outbound`. They are ordered: position is evaluation order, and the first matching translation wins, as in pf. Objects follow the saved-configuration rules:
@@ -52,10 +62,10 @@ Both lists live under `nat` next to `outbound`. They are ordered: position is ev
 | `ingressZones` | Zone IDs whose interfaces the connection arrives on; at least one. |
 | `protocol` | `tcp`, `udp` or `tcp-udp`. |
 | `from` | Address IDs. Empty means any source. `fromNegated: true` matches every source except these. |
-| `to` | The destination as the client sees it. Either `{"segmentAddress": <segment ID>}`, the segment's current IPv4 address (pfSense's "WAN address"; it follows DHCP and PPPoE changes without a re-render; the segment's zone must be one of `ingressZones`), or `{"address": <address ID>}` (an IPv4 host, network, range or group). Required. |
+| `to` | The destination as the client sees it. Either `{"self": true}`, the firewall's own address on the interface the connection arrives on, whatever it is now (it follows DHCP and PPPoE changes without a re-render; pfSense's "This firewall (self)"), or `{"address": <address ID>}` (an IPv4 host, network, range or group). Required. |
 | `ports` | One port, or one `first-last` range, 1–65535. |
 | `noRedirect` | An exclusion: matching connections are left untranslated and later forwards are not consulted. An exclusion has no target, filter rule or reflection. |
-| `target` | Required unless `noRedirect`. One of: `{"address": "<IPv4>"}`, an inside host or one of the firewall's own static addresses; `{"firewall": true}`, the firewall's address on the interface the connection arrived on (it follows DHCP and PPPoE changes). Virtual IPs (#37) are firewall addresses too: when they exist, `address` may name one, with no change to this field. |
+| `target` | Required unless `noRedirect`. Either `{"address": "<IPv4>"}`, an inside host or one of the firewall's own static addresses, or `{"self": true}`, the firewall's address on the interface the connection arrived on. Virtual IPs (#37) are firewall addresses too: when they exist, `address` may name one, with no change to this field. |
 | `targetPort` | First target port. A range is shifted by the same offset, pfSense's rule; the last port must stay ≤ 65535. Default: the original ports. |
 | `filterRule` | `auto` (default) or `none`. See below. |
 | `reflection` | Pure-NAT reflection for clients on internal segments. Default `false`. |
@@ -97,14 +107,14 @@ These copy pfSense's rules.
 Every rendered line carries the object's ID as its comment, so counters (#15) and the GUI can tie a packet back to a rule.
 
 - **`prerouting`** is a new `type nat hook prerouting priority dstnat` chain. It holds:
-  1. port forwards, in order: an exclusion renders as `accept`; a forward renders as `dnat ip to` the target, or `redirect to` for `{"firewall": true}`. `to: segmentAddress` matches the segment's interface and `fib daddr . iif type local`, so it fires only on that segment's own address. A shifted range renders a per-port `dnat ip addr . port to … map`;
+  1. port forwards, in order: an exclusion renders as `accept`; a forward renders as `dnat ip to` the target, or `redirect to` for a `self` target. `to: self` matches `fib daddr . iif type local`: an address of the interface the connection arrived on. A shifted range renders a per-port `dnat ip addr . port to … map`;
   2. then the 1:1 `dnat ip [prefix] to ip daddr map` lines.
 
   Port forwards come first, so a forward on a 1:1 external address wins for its ports. That is my call; pf evaluates `rdr` and `binat` in the order the ruleset lists them, and pfSense emits `binat` first.
 - **`postrouting`** puts the 1:1 `snat … map` lines before the existing outbound masquerade, which the lab showed is required. When any reflection is on, it also adds one masquerade line per served IPv4 segment: `oifname <segment> ct status dnat ip saddr <its subnet> masquerade`. Replies to a hairpin connection then come back through the firewall.
 - **Reflection** adds a second `dnat` from the zones that are not uplinks:
   - with a static `to`, it matches that address;
-  - with `to: segmentAddress`, it matches any firewall address except the static addresses of the other segments (a set). A client asking the firewall's own LAN address is therefore not redirected. Shortcut: on a host with a second uplink whose address is learned by DHCP or PPPoE, reflection also fires for that uplink's address; nft cannot name another interface's dynamic address. Multi-WAN is not in the MVP.
+  - with `to: self`, it matches any firewall address except the static addresses of the other segments (a set). A client asking the firewall's own LAN address is therefore not redirected. Shortcut: on a host with a second uplink whose address is learned by DHCP or PPPoE, reflection also fires for that uplink's address; nft cannot name another interface's dynamic address. Multi-WAN is not in the MVP.
 - **Associated filter rule (`filterRule: auto`):** rendered right after the fixed rules and before the policy:
   - in `forward` for a host target, in `input` for a firewall target (a translated connection to the firewall is local delivery);
   - it matches `ct status dnat`, the original destination port (and the original address, when `to` is an address), the translated address and port, the ingress zones and `from`;
