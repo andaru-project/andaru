@@ -203,12 +203,8 @@ func (s *Store) List(ctx context.Context, collection string) (result CollectionV
 			// A rule list is returned in execution order, with the version that guards that order.
 			result.Version = versionOf(&state, listKey(collection)).Version
 			keys = keys[:0]
-			list := state.Config.Policy.Input
-			if collection == "policy.forward" {
-				list = state.Config.Policy.Forward
-			}
-			for _, r := range list {
-				keys = append(keys, objectKey{collection, r.ID})
+			for _, id := range orderedIDs(&state.Config, collection) {
+				keys = append(keys, objectKey{collection, id})
 			}
 		}
 		for _, key := range keys {
@@ -322,7 +318,7 @@ func (s *Store) Version(ctx context.Context, id Version) (result VersionView, er
 	}
 	result = VersionView{State: "saved", VersionInfo: info, Value: snapshot.Value, Changes: []objectChange{}}
 	number, _ := strconvVersion(id)
-	rows, e := conn.QueryContext(ctx, "SELECT collection,object_id,created,deleted FROM object_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM policy_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM service_changes WHERE version_id=? ORDER BY 1,2", number, number, number)
+	rows, e := conn.QueryContext(ctx, "SELECT collection,object_id,created,deleted FROM object_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM policy_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM service_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM nat_changes WHERE version_id=? ORDER BY 1,2", number, number, number, number)
 	if e != nil {
 		return result, diagnostic("version-changes-query", e)
 	}
@@ -369,4 +365,28 @@ func (s *Store) RealizationInput(ctx context.Context, version *Version) (result 
 		return nil
 	})
 	return
+}
+
+// orderedIDs is an ordered list's IDs in execution order.
+func orderedIDs(d *declaration, collection string) []string {
+	var ids []string
+	switch collection {
+	case "policy.input":
+		for _, r := range d.Policy.Input {
+			ids = append(ids, r.ID)
+		}
+	case "policy.forward":
+		for _, r := range d.Policy.Forward {
+			ids = append(ids, r.ID)
+		}
+	case "nat.portForwards":
+		for _, f := range d.NAT.PortForwards {
+			ids = append(ids, f.ID)
+		}
+	case "nat.oneToOne":
+		for _, o := range d.NAT.OneToOne {
+			ids = append(ids, o.ID)
+		}
+	}
+	return ids
 }

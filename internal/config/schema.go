@@ -41,7 +41,7 @@ var schemas = sync.OnceValues(func() (*schemaSet, error) {
 	}
 	s.objects = make(map[string]*jsonschema.Schema, 3)
 	for collection, kind := range map[string]string{"links": "link", "segments": "segment", "zones": "zone", "addresses": "address", "services": "service",
-		"policy.input": "rule", "policy.forward": "rule", "management": "managementFields#", "nat.outbound": "outboundFields#", "dhcp": "dhcp", "dns": "dnsService#"} {
+		"policy.input": "rule", "policy.forward": "rule", "management": "managementFields#", "nat.outbound": "outboundFields#", "dhcp": "dhcp", "dns": "dnsService#", "nat.portForwards": "portForward", "nat.oneToOne": "oneToOne"} {
 		kind, whole := strings.CutSuffix(kind, "#")
 		if !whole {
 			kind += "Write"
@@ -101,7 +101,7 @@ func schemaErrors(err error) error {
 	return details
 }
 func safePointer(tokens []string) string {
-	const fields = " schemaVersion links segments zones objects policy nat management dhcp dns ranges leaseTime dnsServers staticLeases mac hostname upstreams tlsName localDomain registerLeases outbound segment allowedSources input forward action to services log protocol ports types address prefix first last before order id name description kind mtu enabled permanentMac parent vlanId members mode username password secret set expectedVersion isSet updatedAt version addressing ipv4 ipv6 addresses gateway requestPrefixLength from subnetId ra managed otherInfo priority routerLifetime validLifetime preferredLifetime pref64 prefixOnly withoutRA sendRelease duid dns servers searchDomains op collection localId operations state savedVersion value items unusedSecrets "
+	const fields = " schemaVersion links segments zones objects policy nat management dhcp dns ranges leaseTime dnsServers staticLeases mac hostname upstreams tlsName localDomain registerLeases outbound segment allowedSources input forward action to services log protocol ports types address prefix first last before order id name description kind mtu enabled permanentMac parent vlanId members mode username password secret set expectedVersion isSet updatedAt version addressing ipv4 ipv6 addresses gateway requestPrefixLength from subnetId ra managed otherInfo priority routerLifetime validLifetime preferredLifetime pref64 portForwards oneToOne ingressZones fromNegated ports noRedirect target targetPort filterRule reflection self external internal destination noBinat prefixOnly withoutRA sendRelease duid dns servers searchDomains op collection localId operations state savedVersion value items unusedSecrets "
 	var b strings.Builder
 	for _, t := range tokens {
 		if _, e := strconv.ParseUint(t, 10, 32); e != nil && !strings.Contains(fields, " "+t+" ") {
@@ -131,7 +131,7 @@ func decodeDeclaration(raw []byte) (declaration, error) {
 	if e = json.Unmarshal(raw, &d); e != nil {
 		return d, validationError{{Path: "", Message: "Expected bounded integer fields."}}
 	}
-	if details := slices.Concat(validateTopology(&d), validatePolicy(&d), validateServices(&d)); len(details) > 0 {
+	if details := slices.Concat(validateTopology(&d), validatePolicy(&d), validateNAT(&d), validateServices(&d)); len(details) > 0 {
 		return declaration{}, validationError(details)
 	}
 	normalizeDeclaration(&d)

@@ -169,7 +169,51 @@ type outbound struct {
 	Mode string `json:"mode"`
 }
 type natSettings struct {
-	Outbound outbound `json:"outbound"`
+	Outbound     outbound      `json:"outbound,omitzero"`
+	PortForwards []portForward `json:"portForwards,omitempty"`
+	OneToOne     []oneToOne    `json:"oneToOne,omitempty"`
+}
+
+// natAddress is a port forward's destination as the client sees it: the firewall itself or an address object.
+type natAddress struct {
+	Self    bool   `json:"self,omitempty"`
+	Address string `json:"address,omitempty"`
+}
+
+// natTarget is where a port forward sends a connection: the firewall itself or a literal IPv4 address.
+type natTarget struct {
+	Self    bool   `json:"self,omitempty"`
+	Address string `json:"address,omitempty"`
+}
+
+// portForward is pfSense's port forward: first match in list order.
+type portForward struct {
+	identity
+	Enabled      bool       `json:"enabled"`
+	IngressZones []string   `json:"ingressZones"`
+	Protocol     string     `json:"protocol"`
+	From         []string   `json:"from"`
+	FromNegated  bool       `json:"fromNegated,omitempty"`
+	To           natAddress `json:"to"`
+	Ports        string     `json:"ports"`
+	NoRedirect   bool       `json:"noRedirect,omitempty"`
+	Target       *natTarget `json:"target,omitempty"`
+	TargetPort   *int       `json:"targetPort,omitempty"`
+	FilterRule   string     `json:"filterRule,omitempty"`
+	Reflection   bool       `json:"reflection,omitempty"`
+	Log          bool       `json:"log,omitempty"`
+}
+
+// oneToOne is pfSense's 1:1 NAT: one address or prefix mapped both ways.
+type oneToOne struct {
+	identity
+	Enabled     bool     `json:"enabled"`
+	Zone        string   `json:"zone"`
+	External    string   `json:"external,omitempty"`
+	Internal    string   `json:"internal"`
+	Destination []string `json:"destination"`
+	NoBinat     bool     `json:"noBinat,omitempty"`
+	Reflection  bool     `json:"reflection,omitempty"`
 }
 type management struct {
 	Segment        string   `json:"segment"`

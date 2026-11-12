@@ -162,3 +162,116 @@ func TestFilterInNamespace(t *testing.T) {
 		t.Errorf("the podman table was touched: %v %s", err, out)
 	}
 }
+
+// Port forwards in a real kernel: the WAN reaches the LAN host through the forward and the firewall through a
+// self target, sees nothing directly, and an excluded source is not translated.
+func TestPortForwardsInNamespace(t *testing.T) {
+	l := newLab(t)
+	in := change(t, fixture(t, "nat-port-forwards"), func(d map[string]any) {
+		for _, f := range d["nat"].(map[string]any)["portForwards"].([]any) {
+			if target, ok := f.(map[string]any)["target"].(map[string]any); ok && target["address"] != nil {
+				target["address"] = "10.2.0.2"
+			}
+		}
+		// The exclusion now names the WAN neighbour, so its connections on 1000-1001 stay untranslated.
+		addresses := d["objects"].(map[string]any)["addresses"].([]any)
+		addresses[len(addresses)-1].(map[string]any)["address"] = "10.1.0.2"
+	})
+	l.load(in)
+	peers := l.listen(l.lan, 80)
+	l.listen(l.lan, 2000)
+	l.listen(l.fw, 22)
+	if !l.connects(l.wan, "10.1.0.1", 8080) {
+		t.Fatal("the forward 8080 to the LAN host did not connect")
+	}
+	var seen []byte
+	for end := time.Now().Add(2 * time.Second); time.Now().Before(end) && strings.TrimSpace(string(seen)) == ""; time.Sleep(20 * time.Millisecond) {
+		seen, _ = os.ReadFile(peers)
+	}
+	if strings.TrimSpace(string(seen)) != "10.1.0.2" {
+		t.Errorf("the LAN host saw %q, want the real client 10.1.0.2", seen)
+	}
+	if l.connects(l.wan, "10.2.0.2", 80) {
+		t.Error("the LAN host was reachable directly; the associated rule must admit only translated connections")
+	}
+	if !l.connects(l.wan, "10.1.0.1", 2222) {
+		t.Error("the forward 2222 to the firewall's SSH did not connect")
+	}
+	if l.connects(l.wan, "10.1.0.1", 1000) {
+		t.Error("an excluded source was translated")
+	}
+}
+
+// 1:1 in a real kernel: the WAN reaches the inside host on its own external address, the host leaves through it,
+// and a LAN client reflected onto the external address is answered through the firewall.
+func TestOneToOneInNamespace(t *testing.T) {
+	l := newLab(t)
+	l.must(l.fw, "ip", "addr", "add", "10.1.0.29/24", "dev", "ens18")
+	in := change(t, fixture(t, "nat-one-to-one"), func(d map[string]any) {
+		segments := d["segments"].([]any)
+		segments[0].(map[string]any)["addressing"].(map[string]any)["ipv4"] = map[string]any{"mode": "static", "addresses": []any{"10.1.0.1/24", "10.1.0.29/24"}, "gateway": "10.1.0.2"}
+		segments[1].(map[string]any)["addressing"].(map[string]any)["ipv4"] = map[string]any{"mode": "static", "addresses": []any{"10.2.0.1/24"}}
+		nat := d["nat"].(map[string]any)
+		server := nat["oneToOne"].([]any)[1].(map[string]any)
+		server["external"], server["internal"] = "10.1.0.29", "10.2.0.2"
+		nat["oneToOne"] = nat["oneToOne"].([]any)[:2]
+		delete(nat, "portForwards")
+		// 1:1 has no associated rule: the policy admits the WAN to the host, as an operator would write it.
+		policy := d["policy"].(map[string]any)
+		policy["forward"] = append(policy["forward"].([]any), map[string]any{"id": "rul_00000009-0000-4000-8000-000000000009", "name": "to the server",
+			"enabled": true, "action": "accept", "from": []any{"zon_00000001-0000-4000-8000-000000000001"}, "to": []any{"zon_00000002-0000-4000-8000-000000000002"}, "services": []any{}, "log": false})
+	})
+	l.load(in)
+	wait := func(peers, want string) {
+		t.Helper()
+		var seen []byte
+		for end := time.Now().Add(2 * time.Second); time.Now().Before(end) && !strings.Contains(string(seen), want); time.Sleep(20 * time.Millisecond) {
+			seen, _ = os.ReadFile(peers)
+		}
+		if !strings.Contains(string(seen), want) {
+			t.Errorf("peers %q, want %s", seen, want)
+		}
+	}
+	inside := l.listen(l.lan, 80)
+	if !l.connects(l.wan, "10.1.0.29", 80) {
+		t.Fatal("the WAN did not reach the inside host on its external address")
+	}
+	wait(inside, "10.1.0.2")
+	outside := l.listen(l.wan, 81)
+	if !l.connects(l.lan, "10.1.0.2", 81) {
+		t.Fatal("the inside host could not reach the WAN")
+	}
+	wait(outside, "10.1.0.29")
+	// Reflection: the LAN host asks its own external address and is answered through the firewall.
+	if !l.connects(l.lan, "10.1.0.29", 80) {
+		t.Error("reflection to the external address did not connect")
+	}
+	wait(inside, "10.2.0.1")
+}
+
+// Codex's case: forward A (self:2222 to the firewall's SSH, auto rule) and forward B (a routed address's 2222 to the
+// same SSH, filterRule none). B's connections must meet the policy, not A's rule.
+func TestForwardRuleAdmitsOnlyItsOwnTranslations(t *testing.T) {
+	l := newLab(t)
+	in := change(t, fixture(t, "nat-port-forwards"), func(d map[string]any) {
+		addresses := d["objects"].(map[string]any)["addresses"].([]any)
+		addresses = append(addresses, map[string]any{"id": "adr_00000008-0000-4000-8000-000000000008", "name": "routed", "kind": "host", "address": "10.9.9.9"})
+		d["objects"].(map[string]any)["addresses"] = addresses
+		nat := d["nat"].(map[string]any)
+		forwards := nat["portForwards"].([]any)
+		b := map[string]any{"id": "pfw_00000009-0000-4000-8000-000000000009", "name": "routed-ssh", "enabled": true,
+			"ingressZones": []any{"zon_00000001-0000-4000-8000-000000000001"}, "protocol": "tcp", "from": []any{},
+			"to": map[string]any{"address": "adr_00000008-0000-4000-8000-000000000008"}, "ports": "2222",
+			"target": map[string]any{"address": "10.1.0.1"}, "targetPort": 22, "filterRule": "none"}
+		nat["portForwards"] = []any{forwards[3], b}
+	})
+	l.load(in)
+	l.must(l.wan, "ip", "route", "add", "10.9.9.9/32", "via", "10.1.0.1")
+	l.listen(l.fw, 22)
+	if !l.connects(l.wan, "10.1.0.1", 2222) {
+		t.Fatal("forward A did not connect")
+	}
+	if l.connects(l.wan, "10.9.9.9", 2222) {
+		t.Error("forward B, which has no rule, was admitted by forward A's rule")
+	}
+}

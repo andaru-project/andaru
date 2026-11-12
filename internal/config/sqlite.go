@@ -23,7 +23,7 @@ CREATE TABLE versions(id INTEGER PRIMARY KEY,parent_id INTEGER REFERENCES versio
 CREATE TABLE pointers(name TEXT PRIMARY KEY CHECK(name='saved'),version_id INTEGER NOT NULL REFERENCES versions(id));
 CREATE TABLE object_changes(collection TEXT NOT NULL CHECK(collection IN ('links','segments','zones')),object_id TEXT NOT NULL,version_id INTEGER NOT NULL REFERENCES versions(id),created INTEGER NOT NULL CHECK(created IN (0,1)),deleted INTEGER NOT NULL CHECK(deleted IN (0,1)),CHECK(NOT(created AND deleted)),PRIMARY KEY(collection,object_id,version_id));
 CREATE UNIQUE INDEX creation_identity ON object_changes(object_id) WHERE created=1;
-` + policyDDL + serviceDDL
+` + policyDDL + serviceDDL + natDDL
 
 // policyDDL holds the versions of the filter's objects, lists and singletons. It is added beside
 // object_changes rather than widening that table's CHECK, so an existing store gains it with one
@@ -35,6 +35,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS policy_creation_identity ON policy_changes(obj
 const serviceDDL = `CREATE TABLE IF NOT EXISTS service_changes(collection TEXT NOT NULL CHECK(collection IN ('dhcp','dns')),object_id TEXT NOT NULL,version_id INTEGER NOT NULL REFERENCES versions(id),created INTEGER NOT NULL CHECK(created IN (0,1)),deleted INTEGER NOT NULL CHECK(deleted IN (0,1)),CHECK(NOT(created AND deleted)),PRIMARY KEY(collection,object_id,version_id));
 CREATE UNIQUE INDEX IF NOT EXISTS service_creation_identity ON service_changes(object_id) WHERE created=1;`
 
+// natDDL holds the versions of the inbound NAT lists, added beside the others as policy_changes was.
+const natDDL = `CREATE TABLE IF NOT EXISTS nat_changes(collection TEXT NOT NULL CHECK(collection IN ('nat.portForwards','nat.oneToOne')),object_id TEXT NOT NULL,version_id INTEGER NOT NULL REFERENCES versions(id),created INTEGER NOT NULL CHECK(created IN (0,1)),deleted INTEGER NOT NULL CHECK(deleted IN (0,1)),CHECK(NOT(created AND deleted)),PRIMARY KEY(collection,object_id,version_id));
+CREATE UNIQUE INDEX IF NOT EXISTS nat_creation_identity ON nat_changes(object_id) WHERE created=1;`
+
 // changeTable is where a collection's object versions are recorded.
 func changeTable(collection string) string {
 	if collection == "links" || collection == "segments" || collection == "zones" {
@@ -42,6 +46,9 @@ func changeTable(collection string) string {
 	}
 	if collection == "dhcp" || collection == "dns" {
 		return "service_changes"
+	}
+	if collection == "nat.portForwards" || collection == "nat.oneToOne" {
+		return "nat_changes"
 	}
 	return "policy_changes"
 }

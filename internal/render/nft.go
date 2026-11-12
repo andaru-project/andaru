@@ -24,14 +24,16 @@ type filter struct {
 	sets     []string
 	families map[string]map[family][]string // address ID -> family -> nft elements
 	services map[string]service
+	// reflection is set once any NAT entry reflects; it adds the internal sets and the hairpin masquerade.
+	reflection bool
 }
 
 // filterChains renders the packet filter, or reports why it cannot; without a management segment there is none.
 func (r *renderer) filterChains() {
 	d := r.d
 	if !d.filtered() {
-		if len(d.Policy.Input)+len(d.Policy.Forward) > 0 || d.NAT.Outbound.Mode == "automatic" {
-			r.find("error", "MANAGEMENT_REQUIRED", "/management", "Rules and outbound NAT take effect only with a management segment, which keeps SSH reachable whatever the rules say. Set management.segment.")
+		if len(d.Policy.Input)+len(d.Policy.Forward) > 0 || d.NAT.Outbound.Mode == "automatic" || len(d.NAT.PortForwards)+len(d.NAT.OneToOne) > 0 {
+			r.find("error", "MANAGEMENT_REQUIRED", "/management", "Rules and NAT take effect only with a management segment, which keeps SSH reachable whatever the rules say. Set management.segment.")
 		}
 		return
 	}
@@ -107,10 +109,26 @@ func (r *renderer) filterChains() {
 			input = append(input, fmt.Sprintf("iifname %q %s saddr @%s tcp dport 22 accept", mgmt, ipKey(fam), set))
 		}
 	}
+	prerouting, boundForward, boundInput := f.portForwards()
+	binat, postrouting := f.oneToOne()
+	prerouting = append(prerouting, binat...)
+	if f.reflection {
+		names, prefixes, owners := r.internalSegments()
+		var own []string
+		for i, p := range prefixes {
+			own = append(own, p.Addr().String())
+			// Replies to a hairpin connection must come back through the firewall, not straight from the server.
+			postrouting = append(postrouting, fmt.Sprintf("oifname %q ct status dnat ip saddr %s masquerade comment %q", owners[i], p.Masked(), "reflection"))
+		}
+		f.set("internal", "ifname", "", quoted(names))
+		f.set("internal_4", "ipv4_addr", "", own)
+	}
+	// A forward's own rule comes before the policy, so no later rule can shadow it.
+	input = append(input, boundInput...)
 	for _, rule := range d.Policy.Input {
 		input = append(input, f.rule(rule, false)...)
 	}
-	forward := []string{"ct state established,related accept", "ct state invalid drop"}
+	forward := append([]string{"ct state established,related accept", "ct state invalid drop"}, boundForward...)
 	for _, rule := range d.Policy.Forward {
 		forward = append(forward, f.rule(rule, true)...)
 	}
@@ -128,9 +146,15 @@ func (r *renderer) filterChains() {
 	}
 	chain("input", "type filter hook input priority filter; policy drop;", input)
 	chain("forward", "type filter hook forward priority filter; policy drop;", forward)
+	if len(prerouting) > 0 {
+		chain("prerouting", "type nat hook prerouting priority dstnat;", prerouting)
+	}
 	if d.NAT.Outbound.Mode == "automatic" {
-		// fib saddr type != local keeps host-originated traffic out of the masquerade.
-		chain("postrouting", "type nat hook postrouting priority srcnat;", []string{"fib saddr type != local oifname @uplinks meta nfproto ipv4 masquerade"})
+		// fib saddr type != local keeps host-originated traffic out of the masquerade. It comes last, so a 1:1 snat wins.
+		postrouting = append(postrouting, "fib saddr type != local oifname @uplinks meta nfproto ipv4 masquerade")
+	}
+	if len(postrouting) > 0 {
+		chain("postrouting", "type nat hook postrouting priority srcnat;", postrouting)
 	}
 	// Created, deleted and defined in one file, which nft -f applies as one transaction.
 	head := "table inet andaru {}\ndelete table inet andaru\ntable inet andaru {\n"

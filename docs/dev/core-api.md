@@ -65,6 +65,9 @@ The actual OpenAPI 3.1 document is embedded from [`internal/engine/openapi.json`
 | `GET/POST /api/v1/config/policy/{input\|forward}` | A rule list in execution order with its `version`; `POST ?before=<rule id>` places a new rule |
 | `GET/PUT/DELETE /api/v1/config/policy/{chain}/{id}` | One rule, version-checked like any object |
 | `PUT /api/v1/config/policy/{chain}/order` | Reorder a list: every rule ID once, `If-Match: "order.N"`; replies with the new `order` and its `version` |
+| `GET/POST /api/v1/config/nat/{port-forwards\|one-to-one}` | An inbound NAT list in evaluation order with its `version`; `POST ?before=<entry id>` places a new entry |
+| `GET/PUT/DELETE /api/v1/config/nat/{list}/{id}` | One NAT entry, version-checked like any object |
+| `PUT /api/v1/config/nat/{list}/order` | Reorder a NAT list, as for the policy lists |
 | `GET/PUT/DELETE /api/v1/config/management`, `/api/v1/config/nat/outbound` | Single objects, `If-Match: "management.N"` / `"nat.outbound.N"`, `0` while unset |
 | `GET/POST /api/v1/config/dhcp`, `GET/PUT/DELETE /api/v1/config/dhcp/{id}` | DHCP servers, one per served segment |
 | `GET/PUT/DELETE /api/v1/config/dns` | The DNS service, `If-Match: "dns.N"`, `0` while unset |
@@ -180,6 +183,8 @@ What is rendered:
 | `UNSUPPORTED_COMBINATION` | error or warning | A PPPoE segment may use IPv4 `ppp`/`none` and IPv6 `none`/`slaac`/`dhcp6`, at least one of them, without RA. A PPPoE link with no segment is left out (warning). |
 | `DEPENDENCY_UNAVAILABLE` | warning | Something was left out because a link it needs is missing, ambiguous or disabled. A bridge or bond keeps its remaining members. |
 | `RA_PREFIX_UNSUPPORTED` | warning | Router advertisements were requested where nothing can be announced. |
+| `PROXY_ARP_REQUIRED` | warning | A 1:1 external address is on an uplink's subnet but not assigned to the firewall, so nothing answers ARP for it. Add it to the segment's addresses; proxy ARP comes with virtual IPs (#37). |
+| `ONE_TO_ONE_OWN_ADDRESS` | error | A 1:1 external range holds an address the firewall learned by DHCP or PPPoE; 1:1 NAT would take over its traffic. Checked at preview and apply; boot loads the confirmed table as it was. |
 | `RA_DNS_UNAVAILABLE` | warning | The DNS service serves a delegated segment that has no static IPv6 address, so its advertisements carry no DNS server. |
 | `DNS_NOT_APPLIED` | warning | A segment declares DNS servers, but this host's `/etc/resolv.conf` is not managed by systemd-resolved, so they are saved and not used. |
 
@@ -301,6 +306,27 @@ printf '%s\n' '{"mode":"recursive","segments":["'"$LAN"'"]}' | sudo andaru ctl c
 - **Filter:** with the filter on, DHCP requests are accepted on served segments by a fixed rule; DNS is governed by rules (the takeover's starter rule allows it from the LAN).
 - **Takeover:** with Unbound installed and a static LAN segment, the proposal includes the DNS service: forwarding to the host's declared servers, or recursive when they came from DHCP. With Kea installed it offers DHCP on each static LAN segment (the upper half of the subnet); the assistant asks for each, yes by default, while `--accept-detected` never turns DHCP on.
 - Inspect leases with `sudo cat /run/andaru-leases/leases.conf` or Kea's socket until a status page exists.
+
+### Inbound NAT
+
+Port forwards and 1:1 NAT, with pfSense's semantics, IPv4 only. Both need the packet filter, so a management segment. Design: [inbound NAT](../superpowers/specs/2026-11-12-inbound-nat-design.md).
+
+```sh
+# WAN port 8080 to the web server's port 80, from anywhere; its filter rule comes with it.
+printf '%s\n' '{"name":"web","enabled":true,"ingressZones":["'"$WAN_ZONE"'"],"protocol":"tcp","from":[],"to":{"self":true},"ports":"8080","target":{"address":"192.168.40.10"},"targetPort":80}' \
+  | sudo andaru ctl config create nat/port-forwards
+# A public address on the WAN segment mapped both ways to an inside host.
+printf '%s\n' '{"name":"server","enabled":true,"zone":"'"$WAN_ZONE"'","external":"203.0.113.20","internal":"192.168.40.30","destination":[]}' \
+  | sudo andaru ctl config create nat/one-to-one
+sudo andaru ctl config order nat/port-forwards --version "$V" "$ID2" "$ID1"
+```
+
+- **`self`** names the firewall on the interface the connection arrives on: as a forward's `to` it follows a DHCP or PPPoE address without a re-render; as its `target` it redirects to the firewall itself.
+- **Port forwards** are evaluated in list order, first match. `ports` is one port or a `first-last` range; `targetPort` shifts a range by the same offset. `noRedirect` exempts matching connections from the forwards after it. `from` takes address objects, with `fromNegated`. A `target` may be an inside host or one of the firewall's own addresses; `127.0.0.0/8` is refused (Linux drops such translations from other interfaces) — use an address on the loopback interface, as a virtual IP will (#37).
+- **Associated rule:** with `filterRule: auto` (the default) each forward gets a rule placed before the policy, in `forward`, or in `input` for the firewall itself. It admits only connections the forward translated, so the inside host is not reachable directly: the forward sets the low 16 bits of the connection mark to its position, and its rule matches that mark. The high 16 bits are left to other software. `none` leaves it to the policy.
+- **1:1** maps an address or a prefix in both directions within one zone, optionally only for `destination` peers. `noBinat` exempts hosts from the entries after it; they leave through the outbound masquerade. Write the policy rule that admits the traffic yourself, as in pfSense.
+- **1:1 addresses** must already reach the firewall: an extra static address on the WAN segment (never its first, which the firewall's own traffic uses) or a block the provider routes to it. `PROXY_ARP_REQUIRED` warns about an address on the WAN subnet the firewall does not hold.
+- **Reflection** (`reflection: true`, Pure NAT) lets internal clients use the outside address; the server then sees the firewall as the client. Split DNS is the alternative that keeps the client's address.
 
 ### IPv6 on the LAN
 
@@ -661,3 +687,21 @@ The lab found, not yet fixed:
 - networkd 257 does not deprecate a replaced delegated prefix, as the design expects it to: clients keep the old address preferred for the rest of the lease's preferred lifetime, hours at many providers, while the provider no longer routes it.
 - After the failed apply's rollback on `c3783db`, `eth1`, IPv6 `none` in generation 1, still had `fd00:a5d::be24:11ff:fe17:6841/64` (1721 s valid) when the next apply began.
 - `networkctl renew` sends no DHCPv6 message in systemd 257, so the prefix change waited for the renew timer.
+
+### Inbound NAT Debian lab qualification
+
+On 2026-11-12 the CGO-disabled amd64 build of code commit `6443d4e` (`vcs.modified=false`, SHA-256 `4cdc5f88a44c7bc95a566d6e40b24d9e61d010d006adb8a051d9f5a68514024d`) was installed on VM 114 at snapshot `base-netplan-static-20261111` (Debian 13, systemd 257.13, nftables 1.1.3), with `eth0` WAN at `10.0.1.19/16` and `eth1` LAN at `192.168.40.1/24` on VLAN 4093; DNS servers were removed from `eth1`'s netplan before the takeover. VM 117 (`base-ifupdown-static-20261112`) sat on the LAN at `192.168.40.2/24` via `192.168.40.1`, with `python3 -m http.server` on ports 80, 8000 and 8001. The WAN client was a host on the lab network, `10.0.0.30`, instead of the PD router, whose SSH key was not at hand. `10.0.1.29` was free: no answer to ping, the neighbour entry `INCOMPLETE` from the client and from VM 114, and no ARP entry or DHCP lease on the lab gateway.
+
+- **Takeover:** `--accept-detected`, confirmed from a new SSH session; `confirmed` and `live` 1.
+- **Forward:** `10.0.1.29/16` added to the WAN segment and a forward `web` (WAN, `to` `self`, tcp 8080 to `192.168.40.2:80`) created with `andaru ctl config`; the preview had no findings. Applied and confirmed: `prerouting` held `iifname @zon_… fib daddr . iif type local tcp dport 8080 dnat ip to 192.168.40.2:80` and `forward` `iifname @zon_… ct status dnat ct original proto-dst 8080 ip daddr 192.168.40.2 tcp dport 80 accept`. `curl http://10.0.1.19:8080/` returned VM 117's page, and its log showed the client, `10.0.0.30`.
+- **Direct connection:** with a route to `192.168.40.0/24` via `10.0.1.19` on the client, `curl http://192.168.40.2/` timed out; `tcpdump` on VM 114 saw five SYNs arrive on `eth0` and none leave. The route was removed.
+- **Shifted range:** WAN 9000–9001 to 8000: `dnat ip to tcp dport map { 9000 : 192.168.40.2 . 8000, 9001 : 192.168.40.2 . 8001 }`; port 9000 reached the 8000 listener and 9001 the 8001 one.
+- **To the firewall:** WAN `self:2222` to `self` port 22 rendered `redirect to :22` and, in `input`, `ct status dnat ct original proto-dst 2222 tcp dport 22 accept`; `ssh -p 2222` reached VM 114's sshd (`SSH_CONNECTION=10.0.0.30 … 10.0.1.19 22`). The management SSH rule comes first and also accepts port 22 on `eth0`, so `management.allowedSources` was then set to another host: port 22 timed out while `ssh -p 2222` still connected and confirmed that apply. The associated rule alone admits the forward. `allowedSources` was removed again.
+- **Reflection** on `web` added `iifname @internal fib daddr type local ip daddr != @internal_4 tcp dport 8080 dnat ip to 192.168.40.2:80` and `oifname "eth1" ct status dnat ip saddr 192.168.40.0/24 masquerade`. From VM 117, `curl http://10.0.1.19:8080/` returned its own page with `192.168.40.1` as the peer; `http://192.168.40.1:8080/` was not redirected (it timed out at the input policy).
+- **1:1** from `10.0.1.29` to `192.168.40.2` and a forward rule accepting the WAN zone to an address object for VM 117: `dnat ip to ip daddr map { 10.0.1.29 : 192.168.40.2 }` and `snat ip to ip saddr map { 192.168.40.2 : 10.0.1.29 }`. `curl http://10.0.1.29/` reached VM 117 (peer `10.0.0.30`); VM 117's ping and TCP connection to the client arrived as `10.0.1.29 > 10.0.0.30: ICMP echo request` and `10.0.1.29.51822 > 10.0.0.30.2223: Flags [S]`. The firewall's own traffic still left from `10.0.1.19`.
+- **Reboot:** the boot unit succeeded (`confirmed` and `live` 7, boot in 6.5 s); 8080, 9000, 9001, `ssh -p 2222`, reflection (peer `192.168.40.1`) and 1:1 in both directions worked again.
+- **Sources:** `web` with `from` set to another host and `fromNegated` rendered `ip saddr != @adr_…_4` in its `prerouting` and `forward` lines, and the client still reached VM 117. With `fromNegated` off it rendered `ip saddr @adr_…_4`: the client's `curl` timed out, but VM 117's reflected `curl` still reached itself.
+
+The lab found, and this branch fixes: **reflection ignored a forward's `from`**, so every internal client was reflected; the reflection line now carries the forward's source match, as pfSense's reflection `rdr` does (`from {$srcaddr}`, `filter.inc`). Review after the lab also fixed: deleting `nat.outbound` dropped the NAT lists, a `self` forward also matched IPv6, `GET /api/v1/config` broke the served schema once NAT lists existed, and a `self` target on an unshifted range sent every port to the first. The table rendered by the final build differs from the one above by `meta nfproto ipv4` in front of `fib daddr . iif type local`.
+
+Not run on the lab: UDP (unit-tested), logging, exclusions, 1:1 prefixes with `destination` and `noBinat` (rendered-table goldens, loaded by `nft -c`), and `PROXY_ARP_REQUIRED` (unit-tested).

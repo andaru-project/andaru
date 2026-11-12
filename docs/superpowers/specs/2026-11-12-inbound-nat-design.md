@@ -21,7 +21,7 @@ This is not implemented behaviour yet. Contracts stay provisional until Andaru 1
   - the 1:1 host was reachable from the WAN and left through its external address.
 
 - **What pfBlockerNG does on pfSense** (read from `pfblockerng.inc`): its DNSBL web server listens on a virtual IP, by default on the loopback interface `lo0`. Clients reach that address through the firewall, and no NAT is needed. When the VIP lives on a real interface instead, it adds two port forwards: VIP:80 and VIP:443 go to `127.0.0.1` on its web server's ports, with association "pass" and Pure-NAT reflection. Its DNS redirect forwards port 53 of `(self)` to `127.0.0.1:53`. Both target the firewall itself.
-- **Linux differs from FreeBSD here:** `dnat` to `127.0.0.0/8` from a non-loopback interface is dropped as a martian unless `route_localnet` is set on that interface (kernel `ip-sysctl` documentation; a container probe was inconclusive, so the plan's first task confirms it). A VIP on the loopback interface with an ordinary address (pfBlockerNG auto-creates its sinkhole VIP from `172.16.53.1`, `192.168.53.1`, `10.53.53.1` or `fd00:53:53:53:53:53:53:1`, the first that collides with nothing) is local delivery and needs nothing.
+- **Linux differs from FreeBSD here:** `dnat` to `127.0.0.0/8` from a non-loopback interface is dropped as a martian unless `route_localnet` is set on that interface (probed in a Debian 13 network namespace, 2026-11-12: the translated connection timed out with `route_localnet=0` and connected with `1`; a `/32` on `lo` connected with nothing set). A VIP on the loopback interface with an ordinary address (pfBlockerNG auto-creates its sinkhole VIP from `172.16.53.1`, `192.168.53.1`, `10.53.53.1` or `fd00:53:53:53:53:53:53:1`, the first that collides with nothing) is local delivery and needs nothing.
 
 ## Scope
 
@@ -94,7 +94,7 @@ These copy pfSense's rules.
 - `127.0.0.0/8` is refused as a target. Use a loopback virtual IP instead: Linux drops connections translated to the loopback range from another interface, and enabling `route_localnet` to allow it weakens a protection.
 
 **1:1:**
-- `external` may not contain any of the firewall's static addresses, since that would take over the firewall's own traffic. Addresses learned by DHCP or PPPoE are only known when the configuration is rendered: an `external` containing one is a render error, `ONE_TO_ONE_OWN_ADDRESS`, so an apply or the boot re-render refuses it.
+- `external` may not contain a segment's first static address, which the firewall's own traffic and the outbound masquerade use. A segment's extra addresses may be 1:1 external addresses: that is pfSense's IP alias for 1:1, and how an address on the WAN subnet reaches the firewall. Addresses learned by DHCP or PPPoE are only known when the configuration is rendered: an `external` containing one is a render error, `ONE_TO_ONE_OWN_ADDRESS`, so a preview or an apply refuses it. Boot loads the confirmed table unchanged, so an address learned after the last apply is not caught there.
 - `external` may not overlap another enabled 1:1 entry.
 - `internal` may not contain the firewall's own address on that segment.
 
@@ -117,7 +117,7 @@ Every rendered line carries the object's ID as its comment, so counters (#15) an
   - with `to: self`, it matches any firewall address except the static addresses of the other segments (a set). A client asking the firewall's own LAN address is therefore not redirected. Shortcut: on a host with a second uplink whose address is learned by DHCP or PPPoE, reflection also fires for that uplink's address; nft cannot name another interface's dynamic address. Multi-WAN is not in the MVP.
 - **Associated filter rule (`filterRule: auto`):** rendered right after the fixed rules and before the policy:
   - in `forward` for a host target, in `input` for a firewall target (a translated connection to the firewall is local delivery);
-  - it matches `ct status dnat`, the original destination port (and the original address, when `to` is an address), the translated address and port, the ingress zones and `from`;
+  - it matches the connection mark its forward set when translating (the low 16 bits of `ct mark`, the forward's position plus one), the translated address and port, the ingress zones and `from`. `ct status dnat` alone would also admit what another forward or a 1:1 entry translated to the same host and port;
   - it accepts only connections that came through this forward, so the inside host is not exposed directly. The lab confirmed this.
 
   It is derived, not stored, so it can never drift from the forward. The GUI shows it under the forward. With `none`, the operator writes a policy rule.

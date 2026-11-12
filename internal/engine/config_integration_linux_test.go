@@ -119,7 +119,7 @@ func TestConfigurationHTTPContract(t *testing.T) {
 		"/api/v1/applies": {"get", "head", "post"}, "/api/v1/applies/{id}": {"get", "head"}, "/api/v1/applies/{id}/confirmation": {"post"}, "/api/v1/applies/{id}/rollback": {"post"},
 		"/api/v1/takeover/proposal": {"get", "head"}, "/api/v1/preview/network/draft": {"post"},
 		"/api/v1/config/policy/{chain}": {"get", "head", "post"}, "/api/v1/config/policy/{chain}/{id}": {"get", "head", "put", "delete"},
-		"/api/v1/config/policy/{chain}/order": {"put"}, "/api/v1/config/management": {"get", "head", "put", "delete"}, "/api/v1/config/nat/outbound": {"get", "head", "put", "delete"}, "/api/v1/config/dns": {"get", "head", "put", "delete"}}
+		"/api/v1/config/policy/{chain}/order": {"put"}, "/api/v1/config/nat/{list}": {"get", "head", "post"}, "/api/v1/config/nat/{list}/{id}": {"get", "head", "put", "delete"}, "/api/v1/config/nat/{list}/order": {"put"}, "/api/v1/config/management": {"get", "head", "put", "delete"}, "/api/v1/config/nat/outbound": {"get", "head", "put", "delete"}, "/api/v1/config/dns": {"get", "head", "put", "delete"}}
 	if len(document.Paths) != len(expected) {
 		t.Fatalf("unimplemented or missing contract paths: %d", len(document.Paths))
 	}
@@ -679,4 +679,71 @@ func TestServiceRoutesMatchTheContract(t *testing.T) {
 	if w = configCall(h, "GET", "/api/v1/config/dns", "", ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"localDomain":"home.arpa"`) {
 		t.Fatalf("dns read back: %d %s", w.Code, w.Body)
 	}
+}
+
+// The NAT lists are served exactly as the policy lists are.
+func TestNATListRoutes(t *testing.T) {
+	h, _ := configurationFixture(t)
+	expect := func(w *httptest.ResponseRecorder, status int) {
+		t.Helper()
+		if w.Code != status {
+			t.Fatalf("status %d, want %d: %s", w.Code, status, w.Body)
+		}
+	}
+	zone := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/zones", `{"name":"outside"}`, "")))
+	forward := func(name, port string) string {
+		return `{"name":"` + name + `","enabled":true,"ingressZones":["` + zone + `"],"protocol":"tcp","from":[],"to":{"self":true},"ports":"` + port + `","target":{"address":"192.0.2.10"}}`
+	}
+	created := configCall(h, "POST", "/api/v1/config/nat/port-forwards", forward("a", "8080"), "")
+	a := valueID(t, apiObject(t, created))
+	expect(configCall(h, "GET", created.Header().Get("Location"), "", ""), 200)
+	w := configCall(h, "POST", "/api/v1/config/nat/port-forwards?before="+a, forward("b", "8081"), "")
+	expect(w, 201)
+	b := valueID(t, apiObject(t, w))
+	w = configCall(h, "GET", "/api/v1/config/nat/port-forwards", "", "")
+	expect(w, 200)
+	if !strings.HasPrefix(a, "pfw_") || strings.Index(w.Body.String(), b) > strings.Index(w.Body.String(), a) {
+		t.Fatalf("list %s", w.Body)
+	}
+	tag := w.Header().Get("ETag")
+	expect(configCall(h, "PUT", "/api/v1/config/nat/port-forwards/order", `["`+a+`"]`, tag), 422)
+	expect(configCall(h, "PUT", "/api/v1/config/nat/port-forwards/order", `["`+a+`","`+b+`"]`, tag), 200)
+	expect(configCall(h, "PUT", "/api/v1/config/nat/port-forwards/order", `["`+b+`","`+a+`"]`, tag), 412)
+	o := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/nat/one-to-one",
+		`{"name":"o","enabled":true,"zone":"`+zone+`","external":"203.0.113.20","internal":"192.0.2.30","destination":[]}`, "")))
+	if !strings.HasPrefix(o, "oto_") {
+		t.Fatalf("1:1 id %q", o)
+	}
+	// The whole snapshot, NAT lists included, still matches the served schema.
+	rawSchema := configCall(h, "GET", "/api/v1/schema", "", "")
+	instance, e := jsonschema.UnmarshalJSON(bytes.NewReader(rawSchema.Body.Bytes()))
+	if e != nil {
+		t.Fatal(e)
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.UseLoader(jsonschema.SchemeURLLoader{})
+	if e = compiler.AddResource("https://andaru.invalid/api/v1/schema", instance); e != nil {
+		t.Fatal(e)
+	}
+	snapshot, e := compiler.Compile("https://andaru.invalid/api/v1/schema#/$defs/snapshotView")
+	if e != nil {
+		t.Fatal(e)
+	}
+	served, _ := jsonschema.UnmarshalJSON(bytes.NewReader(configCall(h, "GET", "/api/v1/config", "", "").Body.Bytes()))
+	if e = snapshot.Validate(served); e != nil {
+		t.Fatalf("snapshot with NAT lists violates the schema: %v", e)
+	}
+	collection, e := compiler.Compile("https://andaru.invalid/api/v1/schema#/$defs/collectionView")
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, list := range []string{"port-forwards", "one-to-one"} {
+		served, _ := jsonschema.UnmarshalJSON(bytes.NewReader(configCall(h, "GET", "/api/v1/config/nat/"+list, "", "").Body.Bytes()))
+		if e = collection.Validate(served); e != nil {
+			t.Fatalf("%s list violates the schema: %v", list, e)
+		}
+	}
+	w = configCall(h, "GET", "/api/v1/config/nat/port-forwards/"+b, "", "")
+	expect(w, 200)
+	expect(configCall(h, "DELETE", "/api/v1/config/nat/port-forwards/"+b, "", w.Header().Get("ETag")), 200)
 }
