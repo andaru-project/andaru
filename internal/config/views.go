@@ -99,16 +99,18 @@ func publicSnapshot(s savedState) (SnapshotView, error) {
 			used[l.Password.Secret] = true
 		}
 	}
-	d := struct {
-		SchemaVersion int               `json:"schemaVersion"`
-		Links         []json.RawMessage `json:"links"`
-		Segments      []segment         `json:"segments"`
-		Zones         []zone            `json:"zones"`
-		Objects       objectSet         `json:"objects,omitzero"`
-		Policy        policy            `json:"policy,omitzero"`
-		NAT           natSettings       `json:"nat,omitzero"`
-		Management    *management       `json:"management,omitempty"`
-	}{s.Config.SchemaVersion, links, s.Config.Segments, s.Config.Zones, s.Config.Objects, s.Config.Policy, s.Config.NAT, s.Config.Management}
+	// The whole declaration, every section included, with each link as its secret-free view.
+	var d map[string]json.RawMessage
+	whole, e := json.Marshal(s.Config)
+	if e == nil {
+		e = json.Unmarshal(whole, &d)
+	}
+	if e != nil {
+		return SnapshotView{}, e
+	}
+	if d["links"], e = json.Marshal(links); e != nil {
+		return SnapshotView{}, e
+	}
 	raw, e := json.Marshal(d)
 	if e != nil {
 		return SnapshotView{}, e

@@ -17,7 +17,7 @@ import (
 // leaseLabel is what a client's hostname must be cut to before it is published; clients choose their names.
 var leaseLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
-const keaSocket = "/run/kea/kea4.sock"
+const keaSocket = "/run/kea/kea4-ctrl-socket"
 
 type keaConfig struct {
 	Dhcp4 struct {

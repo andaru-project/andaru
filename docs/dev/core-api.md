@@ -283,7 +283,11 @@ sudo install -m 0644 packaging/unbound/andaru.conf /etc/unbound/unbound.conf.d/a
 sudo install -m 0644 packaging/tmpfiles.d/andaru.conf /usr/lib/tmpfiles.d/andaru.conf
 sudo install -m 0755 packaging/kea/andaru-lease-event -D /usr/share/kea/scripts/andaru-lease-event
 sudo install -m 0644 packaging/systemd/andaru-leases.path packaging/systemd/andaru-leases.service /etc/systemd/system/
+# Debian's AppArmor profiles confine both daemons; these local rules let them read Andaru's files.
+sudo install -m 0644 packaging/apparmor/usr.sbin.kea-dhcp4 packaging/apparmor/usr.sbin.unbound /etc/apparmor.d/local/
+sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.kea-dhcp4 /etc/apparmor.d/usr.sbin.unbound
 sudo systemd-tmpfiles --create andaru.conf && sudo systemctl daemon-reload && sudo systemctl enable --now andaru-leases.path
+sudo systemctl restart kea-dhcp4-server unbound   # Kea stops until a generation declares DHCP
 
 printf '%s\n' '{"name":"lan","segment":"'"$LAN"'","ranges":[{"first":"192.168.40.128","last":"192.168.40.254"}]}' | sudo andaru ctl config create dhcp
 printf '%s\n' '{"mode":"recursive","segments":["'"$LAN"'"]}' | sudo andaru ctl config replace --version 0 dns

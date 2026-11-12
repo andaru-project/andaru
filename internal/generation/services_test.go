@@ -19,7 +19,7 @@ func TestActivateStartsServicesAfterNetworkd(t *testing.T) {
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
-	order := []string{"networkctl reload", "kea-dhcp4 -t " + keaFile, "systemctl restart kea-dhcp4-server.service", "unbound-checkconf", "unbound-control reload_keep_cache", "systemctl try-reload-or-restart systemd-resolved.service"}
+	order := []string{"networkctl reload", "kea-dhcp4 -t " + keaFile, "systemctl restart kea-dhcp4-server.service", "unbound-checkconf", "systemctl restart unbound.service", "systemctl try-reload-or-restart systemd-resolved.service"}
 	last := -1
 	for _, c := range order {
 		i := b.index(c)
@@ -72,7 +72,7 @@ func TestRollbackToBaselineStopsServices(t *testing.T) {
 			t.Fatalf("%s left on the baseline", path)
 		}
 	}
-	for _, c := range []string{"systemctl stop kea-dhcp4-server.service", "unbound-control reload_keep_cache", "systemctl try-reload-or-restart systemd-resolved.service"} {
+	for _, c := range []string{"systemctl stop kea-dhcp4-server.service", "systemctl restart unbound.service", "systemctl try-reload-or-restart systemd-resolved.service"} {
 		if b.index(c) < 0 {
 			t.Fatalf("%q not run: %q", c, b.net.argv)
 		}

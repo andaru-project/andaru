@@ -2,7 +2,7 @@
 {
   "Dhcp4": {
     "control-socket": {
-      "socket-name": "/run/kea/kea4.sock",
+      "socket-name": "/run/kea/kea4-ctrl-socket",
       "socket-type": "unix"
     },
     "hooks-libraries": [

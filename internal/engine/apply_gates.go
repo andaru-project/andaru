@@ -77,7 +77,12 @@ func applyFindings(in gateInput) []render.Finding {
 		for _, path := range in.Baseline.StrayYAML {
 			baseline(path, "netplan configuration outside /etc/netplan would keep generating network files after the takeover.")
 		}
+		// Through the DNS service the host keeps a resolver whatever netplan's files said.
+		resolves := slices.ContainsFunc(in.Result.Files, func(f render.File) bool { return f.Path == "/run/systemd/resolved.conf.d/50-andaru.conf" })
 		for _, path := range in.Baseline.StaticDNS {
+			if resolves {
+				break
+			}
 			// netplan names its file after its own id, so the interfaces come from networkd's binding, never from the name.
 			var bound, missing []string
 			for _, m := range in.Managed {

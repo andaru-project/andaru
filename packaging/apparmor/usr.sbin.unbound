@@ -1,0 +1,6 @@
+# Installed as /etc/apparmor.d/local/usr.sbin.unbound: Debian's profile includes it.
+# Unbound reads Andaru's settings and the published lease names from /run.
+/run/andaru-unbound/ r,
+/run/andaru-unbound/** r,
+/run/andaru-leases/ r,
+/run/andaru-leases/** r,

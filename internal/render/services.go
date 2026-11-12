@@ -115,7 +115,7 @@ func (r *renderer) services() {
 		kea := map[string]any{"Dhcp4": map[string]any{
 			// Kea starts before networkd has the addresses; it binds as they appear.
 			"interfaces-config": map[string]any{"interfaces": interfaces, "service-sockets-max-retries": 30, "service-sockets-retry-wait-time": 2000},
-			"control-socket":    map[string]any{"socket-type": "unix", "socket-name": "/run/kea/kea4.sock"},
+			"control-socket":    map[string]any{"socket-type": "unix", "socket-name": "/run/kea/kea4-ctrl-socket"},
 			"lease-database":    map[string]any{"type": "memfile", "persist": true, "lfc-interval": 3600},
 			"hooks-libraries": []map[string]any{
 				{"library": r.in.Facts.KeaHooks + "/libdhcp_lease_cmds.so"},

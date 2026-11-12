@@ -143,3 +143,16 @@ func TestServiceStoreVersions(t *testing.T) {
 		t.Fatalf("not deleted: %+v %+v", s.Config.DHCP, s.Config.DNS)
 	}
 }
+
+// The declaration preview, draft and apply render from carries DHCP and DNS.
+func TestSnapshotCarriesServices(t *testing.T) {
+	s := seededState(t)
+	lan := s.Config.Segments[1].ID
+	mustRun(t, &s, `{"operations":[
+		{"op":"create","collection":"dhcp","value":{"name":"lan","segment":"`+lan+`","ranges":[{"first":"192.0.2.100","last":"192.0.2.199"}]}},
+		{"op":"replace","collection":"dns","expectedVersion":"0","value":{"mode":"recursive","segments":["`+lan+`"]}}]}`)
+	view, err := publicSnapshot(s)
+	if err != nil || !strings.Contains(string(view.Value), `"dhcp":[`) || !strings.Contains(string(view.Value), `"dns":{`) {
+		t.Fatalf("snapshot lost the services: %s %v", view.Value, err)
+	}
+}

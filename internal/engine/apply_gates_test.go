@@ -392,3 +392,12 @@ func TestIfupdownGates(t *testing.T) {
 		t.Fatalf("mismatch message: %s", findings[0].Message)
 	}
 }
+
+// With the DNS service the host resolves through it, so netplan's DNS servers owe no segment a declaration.
+func TestStaticDNSSatisfiedByTheDNSService(t *testing.T) {
+	in := staticDNS(map[string]string{"eth0": ""}, "eth0")
+	in.Result.Files = append(in.Result.Files, render.File{Path: "/run/systemd/resolved.conf.d/50-andaru.conf", Content: "[Resolve]\nDNS=127.0.0.1 ::1\n"})
+	if findings := applyFindings(in); len(findings) != 0 {
+		t.Fatalf("findings = %+v", findings)
+	}
+}

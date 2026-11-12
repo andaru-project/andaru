@@ -99,13 +99,8 @@ func (r Realizer) services(ctx context.Context, from, to []placed) error {
 				return fmt.Errorf("the DNS service refuses its configuration: %w", err)
 			}
 		}
-		var err error
-		if r.active(ctx, "unbound.service") {
-			_, err = r.Run(ctx, "/usr/sbin/unbound-control", "reload_keep_cache")
-		} else if unbound {
-			_, err = r.Run(ctx, "/usr/bin/systemctl", "restart", "unbound.service")
-		}
-		if err != nil {
+		// A restart, not a reload: Unbound binds new interfaces only when it starts.
+		if _, err := r.Run(ctx, "/usr/bin/systemctl", "restart", "unbound.service"); err != nil {
 			return fmt.Errorf("reload the DNS service: %w", err)
 		}
 		if unbound {

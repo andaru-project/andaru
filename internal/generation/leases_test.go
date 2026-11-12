@@ -29,7 +29,7 @@ type lease struct {
 func (b *bench) kea(leases ...lease) *int {
 	b.t.Helper()
 	writeFile(b.t, filepath.Join(b.net.root, keaFile), leaseKea)
-	path := filepath.Join(b.net.root, "run/kea/kea4.sock")
+	path := filepath.Join(b.net.root, "run/kea/kea4-ctrl-socket")
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		b.t.Fatal(err)
 	}
