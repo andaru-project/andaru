@@ -630,7 +630,7 @@
               "maximum": 4294967294
             },
             "dns": {
-              "$ref": "#/$defs/dns"
+              "$ref": "#/$defs/raDns"
             },
             "pref64": {
               "type": "string",
@@ -2460,6 +2460,33 @@
       "required": [
         "mode",
         "segments"
+      ],
+      "additionalProperties": false
+    },
+    "raDns": {
+      "type": "object",
+      "properties": {
+        "servers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "minItems": 0,
+          "maxItems": 8
+        },
+        "searchDomains": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 253
+          },
+          "maxItems": 8
+        }
+      },
+      "required": [
+        "servers"
       ],
       "additionalProperties": false
     }

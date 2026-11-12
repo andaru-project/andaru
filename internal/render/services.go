@@ -52,20 +52,20 @@ func (r *renderer) served(id string) (string, netip.Prefix, bool) {
 	return "", netip.Prefix{}, false
 }
 
-// servedV6 is a usable static or delegated segment's interface name and first static IPv6 address that is not
-// link-local: the stable address the DNS service answers on, whatever prefix the upstream delegates.
-func (r *renderer) servedV6(id string) (string, netip.Addr, bool) {
+// servedV6 is a usable static or delegated segment's interface name, first static IPv6 address that is not
+// link-local (the stable address the DNS service answers on, whatever prefix the upstream delegates) and mode.
+func (r *renderer) servedV6(id string) (string, netip.Prefix, string, bool) {
 	for _, s := range r.d.Segments {
 		if s.ID != id || !r.usable[s.Link] || (s.Addressing.IPv6.Mode != "static" && s.Addressing.IPv6.Mode != "delegated") {
 			continue
 		}
 		for _, raw := range slices.Sorted(slices.Values(s.Addressing.IPv6.Addresses)) {
 			if p, err := netip.ParsePrefix(raw); err == nil && p.Addr().Is6() && !p.Addr().IsLinkLocalUnicast() {
-				return r.name[s.Link], p.Addr(), true
+				return r.name[s.Link], p, s.Addressing.IPv6.Mode, true
 			}
 		}
 	}
-	return "", netip.Addr{}, false
+	return "", netip.Prefix{}, "", false
 }
 
 // services renders the DHCP server, the DNS service and the host's resolver.
@@ -158,10 +158,15 @@ func (r *renderer) services() {
 			lines = append(lines, "\tinterface: "+own.Addr().String())
 			acl = append(acl, "\taccess-control: "+own.Masked().String()+" allow")
 		}
-		// A delegated prefix is unknown when this is written, so every source reaching the listener is allowed.
-		if _, own, ok := r.servedV6(id); ok {
-			lines = append(lines, "\tinterface: "+own.String())
-			acl = append(acl, "\tinterface-action: "+own.String()+" allow")
+		if _, own, mode, ok := r.servedV6(id); ok {
+			lines = append(lines, "\tinterface: "+own.Addr().String())
+			if mode == "delegated" {
+				// The delegated prefix is unknown when this is written, so every source reaching the listener is
+				// allowed; applying a delegated segment requires the filter, which decides who reaches it.
+				acl = append(acl, "\tinterface-action: "+own.Addr().String()+" allow")
+			} else {
+				acl = append(acl, "\taccess-control: "+own.Masked().String()+" allow")
+			}
 		}
 	}
 	lines = append(lines, acl...)

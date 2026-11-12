@@ -272,6 +272,9 @@ func TestAdvertisementModes(t *testing.T) {
 		"lifetime 9001":                     {func(d map[string]any) { static(d, map[string]any{"mode": "router", "routerLifetime": 9001}) }, ra + "/routerLifetime"},
 		"valid below the default preferred": {func(d map[string]any) { static(d, map[string]any{"mode": "unmanaged", "validLifetime": 600}) }, ra + "/preferredLifetime"},
 		"preferred above the default valid": {func(d map[string]any) { static(d, map[string]any{"mode": "unmanaged", "preferredLifetime": 90000}) }, ra + "/preferredLifetime"},
+		"no advertised DNS servers": {func(d map[string]any) {
+			static(d, map[string]any{"mode": "unmanaged", "dns": map[string]any{"servers": []any{}}})
+		}, ""},
 		"advertised IPv4 DNS server": {func(d map[string]any) {
 			static(d, map[string]any{"mode": "unmanaged", "dns": map[string]any{"servers": []any{"192.0.2.53"}}})
 		}, ra + "/dns/servers/0"},
@@ -342,14 +345,16 @@ func TestDelegatedStableAddress(t *testing.T) {
 
 func TestDHCPv6ClientOptions(t *testing.T) {
 	d := fixtureMap(t)
-	for k, v := range map[string]any{"prefixOnly": true, "withoutRA": true, "sendRelease": true, "duid": "00:04:AA:bb:cc:dd"} {
+	const uuid = "00:04:AA:bb:cc:dd:00:11:22:33:44:55:66:77:88:99:aa:bb"
+	for k, v := range map[string]any{"prefixOnly": true, "withoutRA": true, "sendRelease": true, "duid": uuid} {
 		v6(d, 0)[k] = v
 	}
 	got, e := decodeMap(t, d)
-	if a := got.Segments[0].Addressing.IPv6; e != nil || !a.PrefixOnly || !a.WithoutRA || !a.SendRelease || a.DUID != "00:04:aa:bb:cc:dd" {
+	if a := got.Segments[0].Addressing.IPv6; e != nil || !a.PrefixOnly || !a.WithoutRA || !a.SendRelease || a.DUID != strings.ToLower(uuid) {
 		t.Fatalf("%v %+v", e, a)
 	}
-	for _, bad := range []string{"xyz", "00:04"} {
+	// RFC 8415: a UUID is 16 bytes, a link-layer DUID needs a hardware type and an address, types run 1 to 4.
+	for _, bad := range []string{"xyz", "00:04", "00:04:aa:bb:cc:dd", "00:03:00:01", "00:00:aa:bb:cc:dd", "00:05:aa:bb:cc:dd"} {
 		d := fixtureMap(t)
 		v6(d, 0)["duid"] = bad
 		if _, e := decodeMap(t, d); e == nil {

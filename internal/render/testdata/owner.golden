@@ -124,6 +124,7 @@ SendRelease=no
 [IPv6AcceptRA]
 UseDNS=yes
 UseDomains=no
+DHCPv6Client=always
 
 ### /run/systemd/network/50-andaru-vl000000020000.netdev 0644 secret=false sources=/links/1
 [NetDev]

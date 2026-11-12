@@ -2,6 +2,8 @@ package config
 
 import (
 	"cmp"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"net/netip"
@@ -199,6 +201,9 @@ func validateTopology(d *declaration) []FieldError {
 			bad(p+"/zone", "Zone reference does not exist.")
 		}
 		a6 := &s.Addressing.IPv6
+		if a6.DUID != "" && !validDUID(a6.DUID) {
+			bad(p+"/addressing/ipv6/duid", "Expected a DUID of type 1 to 4 with the length its type needs (RFC 8415); a UUID (type 4) is 16 bytes.")
+		}
 		if ra := a6.RA; ra != nil {
 			path := p + "/addressing/ipv6/ra"
 			if ra.mode() != "disabled" && a6.Mode == "none" {
@@ -393,4 +398,24 @@ func ptrValue(p *int) int {
 		return 0
 	}
 	return *p
+}
+
+// validDUID checks a DHCPv6 DUID's type and the length its type needs (RFC 8415 section 11).
+func validDUID(s string) bool {
+	raw, e := hex.DecodeString(strings.ReplaceAll(s, ":", ""))
+	if e != nil || len(raw) < 3 {
+		return false
+	}
+	n := len(raw) - 2
+	switch binary.BigEndian.Uint16(raw) {
+	case 1: // hardware type, time, link-layer address
+		return n >= 7
+	case 2: // enterprise number, identifier
+		return n >= 5
+	case 3: // hardware type, link-layer address
+		return n >= 3
+	case 4:
+		return n == 16
+	}
+	return false
 }

@@ -142,6 +142,10 @@ func (r *renderer) addressing(id string, ppp bool) (sections []section, sources 
 	case "slaac", "dhcp6":
 		network = append(network, "IPv6AcceptRA=yes")
 		accept = []string{"UseDNS=" + useDNS, "UseDomains=no"}
+		if v6.Mode == "dhcp6" {
+			// networkd otherwise follows the advertisement's flags, and an information request brings no prefix.
+			accept = append(accept, "DHCPv6Client=always")
+		}
 		if v6.Mode == "dhcp6" && (ppp || v6.WithoutRA) {
 			// Some providers send no router advertisement on PPP and expect a bare solicit.
 			dhcp6 = append(dhcp6, "WithoutRA=solicit")
@@ -202,8 +206,8 @@ func (r *renderer) addressing(id string, ppp bool) (sections []section, sources 
 		if ra.DNS != nil {
 			servers, domains = ra.DNS.Servers, ra.DNS.SearchDomains
 		} else if r.d.DNS != nil && slices.Contains(r.d.DNS.Segments, s.ID) {
-			if _, own, ok := r.servedV6(s.ID); ok {
-				servers = []string{own.String()}
+			if _, own, _, ok := r.servedV6(s.ID); ok {
+				servers = []string{own.Addr().String()}
 			} else {
 				r.find("warning", "RA_DNS_UNAVAILABLE", base+"/addresses", "Add a static unique local address so clients can reach the DNS service over IPv6.")
 			}

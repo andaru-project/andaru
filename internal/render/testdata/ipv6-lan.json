@@ -41,7 +41,7 @@
           "requestPrefixLength": 56,
           "prefixOnly": true,
           "withoutRA": true,
-          "duid": "00:04:aa:bb:cc:dd"
+          "duid": "00:03:00:01:52:54:00:aa:bb:01"
         }
       }
     },

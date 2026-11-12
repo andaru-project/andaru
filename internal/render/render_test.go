@@ -524,7 +524,7 @@ func lines(t *testing.T, body string, want ...string) {
 func TestIPv6LANRendering(t *testing.T) {
 	result := render(t, fixture(t, "ipv6-lan"))
 	wan := networkFile(t, result, "ens18")
-	lines(t, wan, "UseAddress=no", "WithoutRA=solicit", "SendRelease=no", "PrefixDelegationHint=::/56", "DUIDType=4", "DUIDRawData=aa:bb:cc:dd")
+	lines(t, wan, "UseAddress=no", "WithoutRA=solicit", "SendRelease=no", "PrefixDelegationHint=::/56", "DUIDType=3", "DUIDRawData=00:01:52:54:00:aa:bb:01", "DHCPv6Client=always")
 	lan := networkFile(t, result, "ens19")
 	lines(t, lan, "Address=fd00:a5d:1::1/64", "UplinkInterface=ens18", "SubnetId=0x0", "Assign=yes", "Announce=yes", "IPv6SendRA=yes", "RouterPreference=high", "RouterLifetimeSec=1800", "Managed=no", "OtherInformation=no", "Prefix=fd00:a5d:1::/64")
 	if strings.Contains(lan, "LifetimeSec=86400") {
@@ -609,7 +609,7 @@ func fileContent(t *testing.T, result Result, path string) string {
 func TestDNSOverIPv6(t *testing.T) {
 	result := render(t, fixture(t, "ipv6-lan"))
 	lines(t, fileContent(t, result, "/run/andaru-unbound/andaru.conf"),
-		"\tinterface: fd00:a5d:1::1", "\tinterface-action: fd00:a5d:1::1 allow", "\tinterface: fd00:a5d:2::1", "\tinterface-action: fd00:a5d:2::1 allow")
+		"\tinterface: fd00:a5d:1::1", "\tinterface-action: fd00:a5d:1::1 allow", "\tinterface: fd00:a5d:2::1", "\taccess-control: fd00:a5d:2::/64 allow")
 	lines(t, networkFile(t, result, "ens19"), "EmitDNS=yes", "DNS=fd00:a5d:1::1", "EmitDomains=yes", "Domains=home.arpa example.org")
 }
 
@@ -638,4 +638,25 @@ func TestDelegatedWithoutStableAddressWarns(t *testing.T) {
 
 func TestMulticastListenerRule(t *testing.T) {
 	lines(t, golden(render(t, fixture(t, "filter-two-zones"))), "\t\tip6 saddr fe80::/10 icmpv6 type { mld-listener-query, mld-listener-report, mld-listener-done, mld2-listener-report } accept")
+}
+
+// A DHCPv6 WAN solicits even when the upstream advertisement asks only for information, or no prefix comes.
+func TestDHCPv6WANSolicitsWithoutTheManagedFlag(t *testing.T) {
+	in := change(t, fixture(t, "ipv6-lan"), func(d map[string]any) {
+		delete(item(d, "segments", 0)["addressing"].(map[string]any)["ipv6"].(map[string]any), "withoutRA")
+	})
+	wan := networkFile(t, render(t, in), "ens18")
+	lines(t, wan, "UseAddress=no", "DHCPv6Client=always")
+	if strings.Contains(wan, "WithoutRA=") {
+		t.Fatalf("withoutRA not declared:\n%s", wan)
+	}
+}
+
+// A static IPv6 prefix is known, so the DNS service answers only it, as for IPv4; only a delegated one is open.
+func TestStaticIPv6DNSAnswersItsSubnet(t *testing.T) {
+	conf := fileContent(t, render(t, fixture(t, "ipv6-lan")), "/run/andaru-unbound/andaru.conf")
+	lines(t, conf, "\taccess-control: fd00:a5d:2::/64 allow", "\tinterface-action: fd00:a5d:1::1 allow")
+	if strings.Contains(conf, "interface-action: fd00:a5d:2::1") {
+		t.Fatalf("static listener open to every source:\n%s", conf)
+	}
 }

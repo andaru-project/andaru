@@ -120,6 +120,7 @@ SendRelease=no
 [IPv6AcceptRA]
 UseDNS=no
 UseDomains=no
+DHCPv6Client=always
 
 ### /run/systemd/network/50-andaru-ens19.link 0644 secret=false sources=/links/1
 [Match]
