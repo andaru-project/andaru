@@ -2,8 +2,11 @@
 # Prove that the tracked root graph equals a rebuild of its tree, or refresh it in place.
 # Usage: check-graph-fresh.sh [--refresh] [WORKTREE]
 #
-# The rebuild is deterministic only under a fixed hash seed, so it always runs as
-# `PYTHONHASHSEED=0 graphify update <root>` through the shared launcher resolver.
+# The rebuild is deterministic only under a fixed hash seed and as a full rebuild, so it
+# always runs as `PYTHONHASHSEED=0 GRAPHIFY_FORCE=1 graphify update <root>` through the
+# shared launcher resolver. An incremental update reads the worktree's untracked
+# manifest and can attribute a symbol to a different file than a fresh checkout's
+# rebuild does, so the pre-commit refresh would disagree with the pre-push check.
 # Check mode saves graphify-out/graph.json aside, rebuilds, compares bytes, and puts
 # the saved copy back whenever the tree would otherwise be left changed: a stale,
 # failed, or interrupted rebuild. --refresh keeps the rebuilt graph. One run per
@@ -76,7 +79,7 @@ main() {
 	cp "$graph" "$saved" || exit 2
 	restore=1
 
-	PYTHONHASHSEED=0 "$graphify_bin" update "$root" >&2
+	PYTHONHASHSEED=0 GRAPHIFY_FORCE=1 "$graphify_bin" update "$root" >&2
 	rc=$?
 	if [ "$rc" -ne 0 ]; then
 		echo "check-graph-fresh.sh: rebuild failed (graphify update exited $rc); graphify-out/graph.json restored" >&2
