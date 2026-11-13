@@ -31,6 +31,7 @@ Kea 2.6.3 (Debian 13), 2026-11-13, a client running systemd-networkd 257 in a ne
   - `dns-servers` and `domain-search`;
   - `pd-pools` with `excluded-prefix`;
   - `valid-lifetime` and `preferred-lifetime`.
+- **networkd and foreign routes:** systemd-networkd 257 removes a route it did not create (protocol 188 here) when it restarts (probed). A link reconfiguration, which an apply causes, does the same (`ManageForeignRoutes=yes`, its default).
 - **Runtime:**
   - a `subnet6` must name its `interface`, or clients on the link get "could not select subnet";
   - leases persist across a restart;
@@ -59,7 +60,7 @@ One entry per served segment, beside `dhcp`. `schemaVersion` stays 1.
 | `ranges` | `first`, `last`: IPv6 addresses inside the served `/64`, not holding the segment's own addresses. Optional: a `stateless` segment serves options only. |
 | `leaseTime` | Valid lifetime in seconds, 300–604800, default 7200. The preferred lifetime is five-eighths of it, Kea's default ratio. |
 | `dnsServers` | IPv6 addresses. Default: the segment's stable address when the DNS service serves the segment. |
-| `staticLeases` | `duid` (hex, validated as in slice 1), `address` (inside the subnet, outside the ranges), `prefix` (inside a delegation pool, of its delegated length), `hostname` (a DNS label). At least one of `address` and `prefix`. |
+| `staticLeases` | `duid` (hex, validated as in slice 1), `address` (inside the subnet, outside the ranges), `prefix` (inside a delegation pool, of its delegated length), `hostname` (a DNS label). At least one of `address` and `prefix`. A hostname is unique among the DHCPv6 static leases; it may repeat a DHCPv4 static lease's, since one device has both. |
 | `prefixDelegation` | Optional: `prefix` (an IPv6 prefix the firewall owns and routes, for example a static `/48` from the provider or a unique local `/48`), `delegatedLength` (48–64, longer than the prefix), `excludedPrefix` (optional, RFC 6603). |
 
 **Validation:**
@@ -72,7 +73,7 @@ The domain search list is `dns.localDomain` followed by `dns.searchDomains`, as 
 
 ### Router advertisements
 
-`ra.mode` `managed`, `assisted` and `stateless` are applied when the segment has a `dhcp6` entry. Without one, the apply refuses them as now ("needs a DHCPv6 entry for this segment"). An entry with `ranges` and mode `unmanaged` or `router` is allowed: some clients ask for DHCPv6 without the flags. A warning, `DHCP6_UNANNOUNCED`, says clients that follow the flags will not ask.
+`ra.mode` `managed`, `assisted` and `stateless` are applied when the segment has a `dhcp6` entry. Without one, the apply refuses them as now ("needs a DHCPv6 entry for this segment"). An entry with `ranges` and mode `unmanaged`, `router` or `disabled` is allowed: some clients ask for DHCPv6 without the flags. A warning, `DHCP6_UNANNOUNCED`, says clients that follow the flags will not ask, and, for `disabled`, that clients get no default route. A `prefixDelegation` is refused at apply without the packet filter (a management segment): IPv6 forwarding stays off without it, as for delegated prefixes in slice 1.
 
 ## Realization
 
@@ -108,6 +109,12 @@ The domain search list is `dns.localDomain` followed by `dns.searchDomains`, as 
 3. **Install.** For every active IA_PD lease Kea lists (`state` 0), whose prefix has a believed next hop, the route `<prefix> via <next hop> dev <interface> proto 188` is installed with `ip -6 route replace`.
 4. **Remove.** Every route of protocol 188 that is not wanted is removed, and the table drops prefixes Kea no longer leases. Protocol number 188 marks Andaru's delegated-prefix routes, so nothing else is touched.
 
+**Pool route:** each delegation pool is also rendered into its segment's `.network` file as `[Route] Destination=<pool> Type=unreachable`, so traffic to a part of the pool nobody leases is refused at the firewall instead of following the default route out of the WAN (a routing loop with a provider's /48, a leak with a unique local pool). networkd owns that route.
+
+**Keeping the routes:** Andaru installs `/etc/systemd/networkd.conf.d/andaru.conf` with `ManageForeignRoutes=no`, so networkd leaves the delegated-prefix routes alone across restarts, package upgrades and applies. Andaru removes its own stale routes itself (step 4). This also leaves other software's routes alone, which networkd would otherwise delete when it restarts.
+
+**The event file:** root never opens a file in Kea's directory in place. The sync renames `/run/kea/andaru-pd-events` to `/run/andaru-leases/pd-events` (one tmpfs, so the rename is atomic and Kea's next append creates a new file), opens it with `O_NOFOLLOW`, refuses anything but a regular file owned by `_kea` and under 1 MiB, and parses each line strictly; an unparsable line is ignored.
+
 The table lives in `/var/lib`, so after a reboot the routes return as soon as Kea and the boot unit start the sync, without waiting for the routers to renew. A lease whose next hop was never seen (a lease from before this slice) gets its route at the router's next renewal.
 
 The routes follow leases, not generations. A rollback or an apply without the entry removes the routes the new generation no longer serves on the next sync, which the apply triggers.
@@ -118,7 +125,9 @@ A fixed input rule accepts DHCPv6 requests on served segments: `iifname <segment
 
 ### Lease names
 
-For IA_NA leases with a hostname that is a valid label, `andaru realize leases` publishes AAAA and PTR records, exactly as for DHCPv4 (static lease names win; the most recently renewed lease wins a name). Kea's DHCPv6 hostname comes from the client's FQDN option.
+For IA_NA leases with a hostname that is a valid label, `andaru realize leases` publishes AAAA and PTR records, exactly as for DHCPv4: the most recently renewed lease wins a name. Names are kept per record type: a static DHCPv4 name blocks dynamic A records for that name, a static DHCPv6 name blocks dynamic AAAA records, and neither blocks the other family. Static DHCPv6 names are rendered into the DNS service's configuration when it is written, as DHCPv4 static names are. Kea's DHCPv6 hostname comes from the client's FQDN option.
+
+**DNS behind a downstream router:** the DNS service's access list for a served segment also covers that segment's delegation pool, so hosts numbered from a delegated prefix can use it. The input policy decides which interfaces may reach it, as for every client.
 
 ## API and CLI
 
