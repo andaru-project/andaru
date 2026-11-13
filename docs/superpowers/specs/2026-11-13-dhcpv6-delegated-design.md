@@ -38,7 +38,7 @@ systemd-networkd 257 and Kea 2.6.3 (Debian 13), 2026-11-13, in containers: an up
 
 | In this slice | Later or never |
 | --- | --- |
-| `dhcp6` entries on `delegated` segments: ranges and static addresses written as interface-identifier suffixes | Static prefix leases on delegated segments (refused: the prefix changes with the provider's) |
+| `dhcp6` entries on `delegated` segments: ranges and static addresses written as interface-identifier suffixes | A literal static prefix on delegated segments (refused: a position in the pool is used instead) |
 | Prefix delegation from the WAN's prefix: a pool at a subnet ID of the WAN prefix | An excluded prefix on such a pool (refused) |
 | Following a prefix change: Kea reconfigured, routes and unreachable pool route updated, names follow the leases | Reconfigure messages to clients (Kea 2.6 sends none) |
 | Deprecating a replaced `/64` on every delegated segment that advertises prefixes | Shortening the old prefix's valid lifetime below RFC 4862's two hours |
@@ -53,7 +53,7 @@ systemd-networkd 257 and Kea 2.6.3 (Debian 13), 2026-11-13, in containers: an up
 | Field | Meaning |
 | --- | --- |
 | `ranges` | `first`, `last`: written as suffixes, IPv6 addresses whose first 64 bits are zero (`::1000` to `::1fff`). The current `/64` is put in front of them. |
-| `staticLeases` | `duid`, `address` (a suffix as above), `hostname`. `prefix` is refused ("A delegated segment's prefix changes with the provider's; delegated routers get one from the pool."). |
+| `staticLeases` | `duid`, `address` (a suffix as above), `prefixId` (hex: a position in the entry's pool, `0` being its first delegated prefix), `hostname`. At least one of `address` and `prefixId`. A literal `prefix` is refused ("A delegated segment's prefix changes with the provider's; name a position in the pool with prefixId."). Owner decision, 2026-11-13: a router keeps the same place in the pool whatever prefix the provider delegates. |
 | `leaseTime`, `dnsServers` | As on static segments. `dnsServers` default to the segment's stable unique local address when the DNS service serves the segment, as slice 1's advertisements do. |
 | `prefixDelegation` | `subnetId` (hex), `length` (the pool's prefix length), `delegatedLength` (`length` to 64). The pool is the WAN's prefix with `subnetId` placed at `length`: on a `/56`, `subnetId: "8", length: 60` is the sixteen `/64`s from subnet `0x80`. `prefix` and `excludedPrefix` are refused on a delegated segment. |
 
@@ -61,6 +61,7 @@ systemd-networkd 257 and Kea 2.6.3 (Debian 13), 2026-11-13, in containers: an up
 - A delegated segment's `subnetId` fits in `64 − requestPrefixLength` bits (pfSense's rule; slice 1 only checked 16 bits).
 - Suffixes lie in `::/64`, ranges hold none of the segment's own suffixes, and do not overlap each other.
 - `length` is longer than the WAN segment's `requestPrefixLength` (default 64 in slice 1: a pool needs a hint of 63 or shorter), and at most 64. `subnetId` fits in `length − requestPrefixLength` bits.
+- `prefixId` fits in `delegatedLength − length` bits and appears once per entry.
 - The pool overlaps no delegated segment's `/64` on the same WAN (each takes `subnetId` at 64), and no other pool.
 
 **Against the prefix actually delegated:** the declaration is judged against the requested length when it is saved, and against the current prefix (below) at apply and at run time:
@@ -86,7 +87,7 @@ One step, under the generation lock, used by the apply, by boot and by the path 
 
 1. **Read** each WAN's delegated prefix: the `unreachable … dev lo proto dhcp` route networkd installs for it (prefix and length; the route names no WAN, so it is matched to a WAN through that WAN's delegated segments' addresses), and, per delegated segment, its global address inside that prefix with the address's preferred and valid lifetimes. A prefix whose addresses are no longer preferred (preferred lifetime 0, as in graceful renumbering) is *replaced*, not current: of several, the current one is the preferred one.
 2. **Keep the last prefix while it is valid.** No prefix seen (at boot before the WAN's lease, during an outage): the last current prefix from `/var/lib/andaru/delegated-prefixes.json` is used until its stored valid lifetime ends. Only then are the delegated subnets left out of Kea's file.
-3. **Fill** the template: each delegated segment's `/64` and the pools, with the suffixes and subnet IDs. Kea's subnet IDs stay those of the generation, so a changed prefix keeps its subnet.
+3. **Fill** the template: each delegated segment's `/64`, the pools, and each `prefixId` as a Kea reservation of the prefix at that position, with the suffixes and subnet IDs. Kea's subnet IDs stay those of the generation, so a changed prefix keeps its subnet.
 4. **Write and reconfigure:** if the filled file differs from `/run/andaru-kea/kea-dhcp6.conf`, write it and send it to Kea with `config-set` on `/run/kea/kea6-ctrl-socket`. When Kea is not running yet, the unit's start reads the file. A refused `config-set` leaves Kea on its old configuration and fails the step.
 5. **Routes:** the unreachable pool routes for delegated pools are installed by this step with protocol 77, and slice 2's reconciliation counts them as held. Then the lease sync runs, which removes routes of leases Kea no longer lists. A pool left out of the file (step 2 expired) keeps its saved next hops in `pd-next-hops.json` until their leases go, so routes return without waiting for each router to renew.
 6. **Deprecate:** a `/64` a delegated segment had as current and has no longer is recorded in `/var/lib/andaru/replaced-prefixes.json` with its remaining valid lifetime. For ten minutes, each run advertises it on that segment with preferred lifetime 0, valid lifetime the smaller of 7200 and its remaining lifetime, and the segment's router lifetime (default 1800), M and O flags and router preference, from the segment's link-local address to `ff02::1`, only on segments whose advertisements announce prefixes (`unmanaged`, `managed`, `assisted`, `stateless`). The first is sent 5 seconds after the change is seen, after networkd's own advertisement listing the old prefix. It deprecates the addresses clients built themselves (SLAAC); a DHCPv6 address moves at the client's renewal.
@@ -122,6 +123,7 @@ The current and last prefixes, with their lifetimes, are kept in `/var/lib/andar
 - Fit against the current prefix: a `/56` for a `/48` request with subnet IDs `1` and `2` reports nothing; with `100` it warns `DELEGATED_PREFIX_TOO_SHORT` at apply and leaves that segment out at run time; the prefix view shows both.
 - No prefix seen: the saved one is served until its valid lifetime ends, and the next hops survive.
 - Static names on a delegated segment follow the prefix.
+- A `prefixId` reservation is filled at its position under the current prefix, and moves with it.
 
 ### Lab (Proxmox)
 
@@ -139,7 +141,7 @@ On VM 114 behind `pd-router` (LXC 118), with VM 117 as the client and a downstre
 
 ## Gaps against pfSense, stated
 
-- No static prefix leases on delegated segments.
+- pfSense delegates only from literal pools; Andaru also delegates from the WAN's prefix, with fixed positions.
 - Old leases stay until each client renews; Kea sends no Reconfigure.
 - The replaced prefix stays valid on clients for up to two hours (RFC 4862), deprecated.
 
