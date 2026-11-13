@@ -109,7 +109,7 @@ The current and last prefixes, with their lifetimes, are kept in `/var/lib/andar
 
 ## API and CLI
 
-- **The prefix view:** `GET /api/v1/state/prefixes` and `andaru ctl prefixes` list, per DHCPv6 WAN: the requested length, the current prefix with its preferred and valid lifetimes (or "none yet"), the subnet IDs and pool positions it leaves room for (`0` to `ff` on a `/56`), each delegated segment's `/64` and each pool's current range, and the parts that do not fit. The engine reads `/var/lib/andaru/delegated-prefixes.json`, which `andaru realize prefixes` writes; it needs no network access. The interactive assistant shows the same range beside the subnet ID it asks for.
+- **The prefix view:** `GET /api/v1/status/prefixes` and `andaru ctl prefixes` (beside `/api/v1/status/links` and `andaru ctl links`) list, per DHCPv6 WAN: the requested length, the current prefix with its preferred and valid lifetimes (or "none yet"), the subnet IDs and pool positions it leaves room for (`0` to `ff` on a `/56`), each delegated segment's `/64` and each pool's current range, and the parts that do not fit. The engine reads `/var/lib/andaru/delegated-prefixes.json`, which `andaru realize prefixes` writes; it needs no network access.
 - `andaru realize prefixes` is internal, like `andaru realize leases`.
 
 ## Acceptance
