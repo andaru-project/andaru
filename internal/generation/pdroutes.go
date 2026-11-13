@@ -80,7 +80,13 @@ func (r Realizer) syncKea6(ctx context.Context) ([]string, error) {
 		if leases, err = r.askLeases(ctx, kea6Socket, "lease6-get-all"); err != nil {
 			// Its own names and routes wait for it; the DHCPv4 names do not.
 			slog.Warn("ask the DHCPv6 server for its leases", "error", err)
-			return nil, nil
+			// The events are gone from Kea's directory: keep what they taught until the server answers.
+			table, _ := r.nextHops(cfg, events)
+			data, _ := json.Marshal(table)
+			if err := os.MkdirAll(r.Root+"/var/lib/andaru", 0o755); err != nil {
+				return nil, err
+			}
+			return nil, writeAtomic(r.Root+pdTable, data, 0o600)
 		}
 	}
 	if err := r.syncRoutes(ctx, cfg, leases, events); err != nil {
@@ -126,37 +132,7 @@ func lease6Records(cfg kea6Config, leases []keaLease) []string {
 // syncRoutes installs a route via the requesting router for each active delegated prefix whose next hop it
 // believes, and removes every route of its own protocol nobody holds.
 func (r Realizer) syncRoutes(ctx context.Context, cfg kea6Config, leases []keaLease, events []string) error {
-	table := map[string]nextHop{}
-	if data, err := os.ReadFile(r.Root + pdTable); err == nil {
-		_ = json.Unmarshal(data, &table) // a damaged table only costs routes until the routers renew
-	}
-	// What the generation lets a record claim: its interfaces, and the prefixes each may delegate.
-	pools := map[string][]netip.Prefix{}
-	for _, s := range cfg.Dhcp6.Subnet6 {
-		for _, p := range s.PDPools {
-			if a, err := netip.ParseAddr(p.Prefix); err == nil {
-				pools[s.Interface] = append(pools[s.Interface], netip.PrefixFrom(a, p.PrefixLen))
-			}
-		}
-	}
-	// A record names a served interface and a prefix of that segment's pool; a saved hop is judged again,
-	// since the generation may have changed since it was believed.
-	served := func(prefix netip.Prefix, hop nextHop) bool {
-		return slices.ContainsFunc(pools[hop.Dev], func(p netip.Prefix) bool { return p.Contains(prefix.Addr()) && p.Bits() <= prefix.Bits() })
-	}
-	for _, line := range events {
-		op, prefix, hop, ok := parseEvent(line)
-		switch {
-		case !ok:
-			slog.Warn("delegated prefix event ignored", "line", line)
-		case !served(prefix, hop):
-			slog.Warn("delegated prefix event outside the served pools", "prefix", prefix, "dev", hop.Dev)
-		case op == "del":
-			delete(table, prefix.String())
-		default:
-			table[prefix.String()] = hop
-		}
-	}
+	table, served := r.nextHops(cfg, events)
 	wanted := map[string]nextHop{}
 	for _, l := range leases {
 		if l.Type != "IA_PD" || l.State != 0 {
@@ -194,6 +170,43 @@ func (r Realizer) syncRoutes(ctx context.Context, cfg kea6Config, leases []keaLe
 		return err
 	}
 	return writeAtomic(r.Root+pdTable, data, 0o600)
+}
+
+// nextHops reads the saved next hops and applies the hook's events to them, with the test of what the
+// generation serves.
+func (r Realizer) nextHops(cfg kea6Config, events []string) (map[string]nextHop, func(netip.Prefix, nextHop) bool) {
+	table := map[string]nextHop{}
+	if data, err := os.ReadFile(r.Root + pdTable); err == nil {
+		_ = json.Unmarshal(data, &table) // a damaged table only costs routes until the routers renew
+	}
+	// What the generation lets a record claim: its interfaces, and the prefixes each may delegate.
+	pools := map[string][]netip.Prefix{}
+	for _, s := range cfg.Dhcp6.Subnet6 {
+		for _, p := range s.PDPools {
+			if a, err := netip.ParseAddr(p.Prefix); err == nil {
+				pools[s.Interface] = append(pools[s.Interface], netip.PrefixFrom(a, p.PrefixLen))
+			}
+		}
+	}
+	// A record names a served interface and a prefix of that segment's pool; a saved hop is judged again,
+	// since the generation may have changed since it was believed.
+	served := func(prefix netip.Prefix, hop nextHop) bool {
+		return slices.ContainsFunc(pools[hop.Dev], func(p netip.Prefix) bool { return p.Contains(prefix.Addr()) && p.Bits() <= prefix.Bits() })
+	}
+	for _, line := range events {
+		op, prefix, hop, ok := parseEvent(line)
+		switch {
+		case !ok:
+			slog.Warn("delegated prefix event ignored", "line", line)
+		case !served(prefix, hop):
+			slog.Warn("delegated prefix event outside the served pools", "prefix", prefix, "dev", hop.Dev)
+		case op == "del":
+			delete(table, prefix.String())
+		default:
+			table[prefix.String()] = hop
+		}
+	}
+	return table, served
 }
 
 // takeEvents moves the hook's file out of Kea's directory and reads it, believing nothing of a file that is

@@ -122,6 +122,11 @@ func (r Realizer) syncLeases(ctx context.Context) error {
 		return err
 	}
 	defer unlock()
+	// DHCPv6 first: its routes are reconciled even when the DHCPv4 server does not answer.
+	v6, err := r.syncKea6(ctx)
+	if err != nil {
+		return err
+	}
 	records := []string{}
 	raw, err := os.ReadFile(r.Root + keaFile)
 	switch {
@@ -142,10 +147,6 @@ func (r Realizer) syncLeases(ctx context.Context) error {
 			r.afterLeaseRead()
 		}
 		records = leaseRecords(cfg, leases)
-	}
-	v6, err := r.syncKea6(ctx)
-	if err != nil {
-		return err
 	}
 	records = append(records, v6...)
 	body := "server:\n"

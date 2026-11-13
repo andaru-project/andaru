@@ -318,8 +318,8 @@ func validateDHCP6(d *declaration, bad func(string, string)) {
 			}
 		}
 		for j, raw := range e.DNSServers {
-			if a, err := netip.ParseAddr(raw); err != nil || !a.Is6() || a.Is4In6() || a.Zone() != "" || a.IsLinkLocalUnicast() {
-				bad(fmt.Sprintf("%s/dnsServers/%d", p, j), "Expected an IPv6 address that is not link-local.")
+			if a, err := netip.ParseAddr(raw); err != nil || !a.Is6() || a.Is4In6() || a.Zone() != "" || a.IsLinkLocalUnicast() || !validUnicast(a) {
+				bad(fmt.Sprintf("%s/dnsServers/%d", p, j), "Expected a unicast IPv6 address that is not link-local.")
 			}
 		}
 		var pool netip.Prefix

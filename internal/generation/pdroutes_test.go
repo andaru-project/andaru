@@ -19,8 +19,14 @@ const kea6Served = `{"Dhcp6":{"subnet6":[{"id":1,"subnet":"fd00:1::/64","interfa
 	"reservations":[{"duid":"00:01:00:01:aa:bb:cc:dd:ee:ff","ip-addresses":["fd00:1::10"],"hostname":"printer"}],
 	"user-context":{"andaru":{"domain":"home.arpa","register":true}}}]}}`
 
-// keaUser stands for _kea: the owner of Kea's runtime directory and of what its hook writes there.
-const keaUser = 4242
+// keaUser stands for _kea: the owner of Kea's runtime directory and of what its hook writes there. Unprivileged
+// tests can only give their own files away to themselves.
+var keaUser = func() int {
+	if os.Getuid() == 0 {
+		return 4242
+	}
+	return os.Getuid()
+}()
 
 type lease6 struct {
 	Address   string `json:"ip-address"`
@@ -145,6 +151,9 @@ func TestPDEventFileHostile(t *testing.T) {
 			_ = os.Symlink(target, path)
 		},
 		"other owner": func(b *bench, path string) {
+			if os.Getuid() != 0 {
+				b.t.Skip("giving a file to another owner needs root")
+			}
 			writeFile(b.t, path, "add fd00:beef:1:100::/56 fe80::1 ens19\n")
 			_ = os.Chown(path, 0, 0)
 		},
@@ -290,5 +299,38 @@ func TestDHCPv4NamesSurviveADeadDHCPv6(t *testing.T) {
 	}
 	if !strings.Contains(b.leaseNames(), "laptop.home.arpa.") {
 		t.Fatalf("DHCPv4 names lost:\n%s", b.leaseNames())
+	}
+}
+
+// Events taken while the DHCPv6 server does not answer keep their next hops for when it does.
+func TestPDEventsSurviveADeadDHCPv6(t *testing.T) {
+	b := newBench(t)
+	writeFile(t, filepath.Join(b.net.root, kea6File), kea6Served)
+	if err := os.MkdirAll(filepath.Join(b.net.root, "run/kea"), 0o750); err != nil || os.Chown(filepath.Join(b.net.root, "run/kea"), keaUser, keaUser) != nil {
+		t.Fatal("Kea's directory")
+	}
+	b.events("add fd00:beef:1:100::/56 fe80::1 ens19")
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	b.kea6(pd("fd00:beef:1:100::/56"))
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if b.index("ip -6 route replace fd00:beef:1:100::/56 via fe80::1 dev ens19 proto 77") < 0 {
+		t.Fatalf("next hop lost while the server was down: %q", b.net.argv)
+	}
+}
+
+// A DHCPv4 server that does not answer still lets the sync remove the routes of a dropped DHCPv6.
+func TestPDRoutesRemovedWithADeadDHCPv4(t *testing.T) {
+	b := newBench(t)
+	writeFile(t, filepath.Join(b.net.root, keaFile), leaseKea)
+	b.net.routes = map[string]string{"fd00:beef:1:100::/56": "fe80::1 dev ens19"}
+	if err := b.r.SyncLeases(t.Context()); err == nil {
+		t.Fatal("a dead DHCPv4 server went unreported")
+	}
+	if b.index("ip -6 route del fd00:beef:1:100::/56 proto 77") < 0 {
+		t.Fatalf("route of a dropped DHCPv6 kept: %q", b.net.argv)
 	}
 }
