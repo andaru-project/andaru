@@ -7,4 +7,5 @@
 /{usr/,}bin/{dash,sh} mrix,
 /{usr/,}bin/touch mrix,
 owner /run/kea/andaru-leases-changed w,
-owner /run/kea/andaru-pd-events a,
+# w, not a: AppArmor grants creating the file only with write (found on the lab).
+owner /run/kea/andaru-pd-events w,
