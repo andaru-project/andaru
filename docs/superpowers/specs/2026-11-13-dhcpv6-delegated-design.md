@@ -9,6 +9,8 @@ Owner decisions, 2026-11-13:
 - **Approach A:** a systemd path unit starts a root one-shot on each prefix change. There is no long-running watcher daemon, and no new generation per prefix change.
 - **Kea is reconfigured in place** (`config-set` on its control socket) when the prefix changes. It is never restarted for that.
 - **The owner's setup:** the provider delegates a `/48` or a `/56`, and only on an explicit request (`requestPrefixLength`). A layout must therefore keep working when a `/56` arrives for a `/48` request (see "At run time" below).
+- **Work from the prefix actually delegated** (2026-11-13): providers rarely change it, so Andaru shows the current prefix and judges what the user enters against it. A mismatch with the configuration is reported, and tolerated where the layout still fits: subnet IDs `1` and `2` fit a `/48` and a `/56` alike.
+- **Three ways to use the prefix:** a full `/64` per segment or VLAN by subnet ID (16 bits on a `/48`, slice 1's `subnetId`), DHCPv6 on those segments, and delegating parts of it onwards (for example a `/56` of a `/48` to another router).
 
 Not implemented behaviour. Contracts remain provisional until Andaru 1.0.
 
@@ -16,7 +18,11 @@ Not implemented behaviour. Contracts remain provisional until Andaru 1.0.
 
 - [IPv6 for the LAN](2026-11-12-ipv6-lan-design.md): `delegated` segments (`from`, `subnetId`), the segment's stable unique local address that the DNS service listens on, and advertisement modes.
 - [DHCPv6 for the LAN](2026-11-13-dhcpv6-design.md): the `dhcp6` collection, Kea's DHCPv6 file and drop-in, the lease sync, routes to delegated prefixes (protocol 77, `ManageForeignRoutes=no`), and the unreachable pool route.
-- pfSense: "Track Interface" with DHCPv6 ranges written as interface-identifier suffixes (`services_dhcpv6.php`), and radvd deprecating a replaced prefix.
+- pfSense master, read 2026-11-13:
+  - **Subnet IDs:** "IPv6 Prefix ID" (`track6-prefix-id`) is hex, from 0 to 2^n − 1, where n is the *requested* delegation size (`dhcp6-ia-pd-len`, bits short of 64: 16 for a `/48`), and unique per tracked WAN (`interfaces.php`, `calculate_ipv6_delegation_length`). The actual delegation is not consulted.
+  - **DHCPv6 on a tracked interface:** ranges, DNS and NTP servers and static addresses are written with the upper 64 bits zero and merged with the interface's current prefix (`services_dhcpv6.php`, `merge_ipv6_delegated_prefix` in `services.inc`).
+  - **Prefix delegation pools:** a literal prefix (`pdprefix`, `pdprefixlen` 48–64, `pddellen`), never merged with the tracked prefix. pfSense cannot delegate onwards from a dynamic prefix; this slice can.
+  - radvd deprecates a replaced prefix.
 
 ### Probe behind it
 
@@ -51,12 +57,16 @@ systemd-networkd 257 and Kea 2.6.3 (Debian 13), 2026-11-13, in containers: an up
 | `leaseTime`, `dnsServers` | As on static segments. `dnsServers` default to the segment's stable unique local address when the DNS service serves the segment, as slice 1's advertisements do. |
 | `prefixDelegation` | `subnetId` (hex), `length` (the pool's prefix length), `delegatedLength` (`length` to 64). The pool is the WAN's prefix with `subnetId` placed at `length`: on a `/56`, `subnetId: "8", length: 60` is the sixteen `/64`s from subnet `0x80`. `prefix` and `excludedPrefix` are refused on a delegated segment. |
 
-**Validation:**
+**Validation (the saved declaration alone):**
+- A delegated segment's `subnetId` fits in `64 − requestPrefixLength` bits (pfSense's rule; slice 1 only checked 16 bits).
 - Suffixes lie in `::/64`, ranges hold none of the segment's own suffixes, and do not overlap each other.
 - `length` is longer than the WAN segment's `requestPrefixLength` (default 64 in slice 1: a pool needs a hint of 63 or shorter), and at most 64. `subnetId` fits in `length − requestPrefixLength` bits.
 - The pool overlaps no delegated segment's `/64` on the same WAN (each takes `subnetId` at 64), and no other pool.
 
-**At run time:** if the provider delegates a longer prefix than requested (a `/56` for a `/48`), a pool or a segment that does not fit is not served, and `andaru realize prefixes` logs a warning naming it. The guide advises keeping subnet IDs and pools inside the first `/56` when the provider may answer either way.
+**Against the prefix actually delegated:** the declaration is judged against the requested length when it is saved, and against the current prefix (below) at apply and at run time:
+- **Fits:** nothing is reported, even when the delegated length differs from the requested one.
+- **Does not fit** (a `/56` for a `/48` and a subnet ID above `ff`): the apply warns `DELEGATED_PREFIX_TOO_SHORT`, naming each segment and pool that will not be served, with the current prefix; the rest is applied. At run time the same parts are left out, `andaru realize prefixes` logs the warning, and the prefix view (below) shows it.
+- **No prefix known yet:** only the saved-declaration rules apply.
 
 ### Router advertisements
 
@@ -98,16 +108,18 @@ The current and last prefixes, with their lifetimes, are kept in `/var/lib/andar
 
 ## API and CLI
 
-No new endpoints. `andaru realize prefixes` is internal, like `andaru realize leases`.
+- **The prefix view:** `GET /api/v1/state/prefixes` and `andaru ctl prefixes` list, per DHCPv6 WAN: the requested length, the current prefix with its preferred and valid lifetimes (or "none yet"), the subnet IDs and pool positions it leaves room for (`0` to `ff` on a `/56`), each delegated segment's `/64` and each pool's current range, and the parts that do not fit. The engine reads `/var/lib/andaru/delegated-prefixes.json`, which `andaru realize prefixes` writes; it needs no network access. The interactive assistant shows the same range beside the subnet ID it asks for.
+- `andaru realize prefixes` is internal, like `andaru realize leases`.
 
 ## Acceptance
 
 ### Automated
 
-- Validation: suffix ranges and static addresses, refused `prefix` and `excludedPrefix`, pool length against the hint, pool overlapping a segment's `/64` or another pool.
+- Validation: subnet IDs against `requestPrefixLength`; suffix ranges and static addresses, refused `prefix` and `excludedPrefix`, pool length against the hint, pool overlapping a segment's `/64` or another pool.
 - Render: the template golden, and the documentation-prefix fill passing `kea-dhcp6 -t` in CI.
 - `realize prefixes` against a fake `ip -j` and a fake Kea socket: first fill, an unchanged prefix sends nothing, a changed prefix sends one `config-set` with the same subnet IDs, a too-long provider prefix leaves the pool out with a warning, a refused `config-set` fails the step, and the pool route is installed and kept by the lease sync.
 - Deprecation: the advertisement's bytes (prefix option with preferred 0 and the bounded valid lifetime, router lifetime, flags, source), sent only in the ten-minute window and only on segments announcing prefixes; graceful renumbering (old prefix still valid, not preferred) serves the new prefix and deprecates the old.
+- Fit against the current prefix: a `/56` for a `/48` request with subnet IDs `1` and `2` reports nothing; with `100` it warns `DELEGATED_PREFIX_TOO_SHORT` at apply and leaves that segment out at run time; the prefix view shows both.
 - No prefix seen: the saved one is served until its valid lifetime ends, and the next hops survive.
 - Static names on a delegated segment follow the prefix.
 
