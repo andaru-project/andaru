@@ -246,6 +246,9 @@ func validateTopology(d *declaration) []FieldError {
 			n, e := strconv.ParseUint(a6.SubnetID, 16, 16)
 			if e != nil {
 				bad(p+"/addressing/ipv6/subnetId", "Invalid hexadecimal subnet ID.")
+			} else if bits, ok := subnetBits(source); ok && bits < 16 && n>>bits != 0 {
+				// pfSense's rule: the requested length bounds the IDs. Without a request the delegated length decides at run time.
+				bad(p+"/addressing/ipv6/subnetId", fmt.Sprintf("Expected 0 to %x for a /%d request.", uint64(1)<<bits-1, 64-bits))
 			} else {
 				a6.SubnetID = strconv.FormatUint(n, 16)
 				key := a6.From + ":" + a6.SubnetID

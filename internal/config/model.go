@@ -231,13 +231,20 @@ type dhcp6Entry struct {
 	PrefixDelegation *prefixDelegation `json:"prefixDelegation,omitempty"`
 }
 type staticLease6 struct {
-	DUID     string `json:"duid"`
-	Address  string `json:"address,omitempty"`
-	Prefix   string `json:"prefix,omitempty"`
+	DUID    string `json:"duid"`
+	Address string `json:"address,omitempty"`
+	Prefix  string `json:"prefix,omitempty"`
+	// PrefixID is a position in the pool on a delegated segment, whose prefix changes with the provider's.
+	PrefixID string `json:"prefixId,omitempty"`
 	Hostname string `json:"hostname,omitempty"`
 }
+
+// prefixDelegation is a literal pool on a static segment, or on a delegated one a pool at SubnetID of Length
+// under the WAN's prefix.
 type prefixDelegation struct {
-	Prefix          string `json:"prefix"`
+	Prefix          string `json:"prefix,omitempty"`
+	SubnetID        string `json:"subnetId,omitempty"`
+	Length          int    `json:"length,omitzero"`
 	DelegatedLength int    `json:"delegatedLength"`
 	ExcludedPrefix  string `json:"excludedPrefix,omitempty"`
 }
