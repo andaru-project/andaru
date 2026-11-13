@@ -544,3 +544,31 @@ func TestPrefixesIdle(t *testing.T) {
 		t.Fatal("state written with nothing delegated")
 	}
 }
+
+// After a prefix change the old pool's leases are Kea's until their routers renew: their routes stay, and the old
+// pool stays unreachable, while the replaced prefix is valid.
+func TestOldPoolRoutedWhileValid(t *testing.T) {
+	b := newBench(t)
+	b.delegatedLAN("2001:db8:aa00::/48", -1)
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	b.prefix("2001:db8:bb00::/48", 3600, 7200)
+	b.r.SendRA = (&sent{}).record
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	conf := b.keaFile()
+	b.kea6(lease6{Address: "2001:db8:aa00:82::", PrefixLen: 64, Type: "IA_PD", Subnet: 7, Valid: 4000, Cltt: 100})
+	writeFile(t, filepath.Join(b.net.root, kea6File), conf)
+	writeFile(t, filepath.Join(b.net.root, pdTable), `{"2001:db8:aa00:82::/64":{"via":"fe80::1","dev":"ens19"}}`)
+	b.net.argv = nil
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"ip -6 route replace 2001:db8:aa00:82::/64 via fe80::1 dev ens19 proto 77", "ip -6 route replace unreachable 2001:db8:aa00:80::/60 proto 77"} {
+		if b.index(want) < 0 {
+			t.Fatalf("missing %q: %q", want, b.net.argv)
+		}
+	}
+}

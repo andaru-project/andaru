@@ -1,6 +1,8 @@
 [Unit]
 Description=Andaru delegated IPv6 prefixes
 After=systemd-networkd.service kea-dhcp6-server.service
+# networkd rewrites its link files several times a second while links come up; each run is idempotent.
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot

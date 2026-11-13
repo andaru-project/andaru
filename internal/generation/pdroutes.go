@@ -14,6 +14,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 )
@@ -88,7 +89,8 @@ func (r Realizer) syncKea6(ctx context.Context) ([]string, error) {
 		}
 	}
 	// The events are gone from Kea's directory: what they taught is saved before anything else can fail.
-	table, served := r.nextHops(cfg, events)
+	old := r.replacedPools()
+	table, served := r.nextHops(cfg, events, old)
 	if err := r.saveNextHops(table); err != nil {
 		return nil, err
 	}
@@ -100,7 +102,13 @@ func (r Realizer) syncKea6(ctx context.Context) ([]string, error) {
 			return r.publishedNames(true), nil
 		}
 	}
-	if err := r.syncRoutes(ctx, leases, table, served, delegatedPools(cfg), r.waitingInterfaces(cfg)); err != nil {
+	pools := delegatedPools(cfg)
+	for _, list := range old {
+		for _, p := range list {
+			pools[p.String()] = true
+		}
+	}
+	if err := r.syncRoutes(ctx, leases, table, served, pools, r.waitingInterfaces(cfg)); err != nil {
 		return nil, err
 	}
 	return lease6Records(cfg, leases), nil
@@ -169,6 +177,29 @@ func delegatedPools(cfg kea6Config) map[string]bool {
 		}
 	}
 	return pools
+}
+
+// replacedPools are the delegated pools under each WAN's previous prefix while it is valid, by interface: Kea
+// keeps their leases until the routers renew, so their routes stay until then.
+func (r Realizer) replacedPools() map[string][]netip.Prefix {
+	var tpl delegation.Template
+	raw, err := os.ReadFile(r.Root + kea6Template)
+	if err != nil || json.Unmarshal(raw, &tpl) != nil {
+		return nil
+	}
+	state, _ := delegation.ReadState(r.Root + delegatedState)
+	out := map[string][]netip.Prefix{}
+	for _, s := range tpl.Subnets {
+		last := state.WANs[s.Uplink].Last
+		if s.Pool == nil || last == nil || !last.Valid.After(r.Now()) {
+			continue
+		}
+		n, _ := strconv.ParseUint(s.Pool.SubnetID, 16, 16)
+		if p, ok := delegation.Place(last.Prefix, n, s.Pool.Length); ok {
+			out[s.Interface] = append(out[s.Interface], p)
+		}
+	}
+	return out
 }
 
 // waitingInterfaces are delegated segments the template serves but Kea's file leaves out: their prefix expired.
@@ -258,7 +289,7 @@ func (r Realizer) saveNextHops(table map[string]nextHop) error {
 
 // nextHops reads the saved next hops and applies the hook's events to them, with the test of what the
 // generation serves.
-func (r Realizer) nextHops(cfg kea6Config, events []string) (map[string]nextHop, func(netip.Prefix, nextHop) bool) {
+func (r Realizer) nextHops(cfg kea6Config, events []string, old map[string][]netip.Prefix) (map[string]nextHop, func(netip.Prefix, nextHop) bool) {
 	table := map[string]nextHop{}
 	if data, err := os.ReadFile(r.Root + pdTable); err == nil {
 		_ = json.Unmarshal(data, &table) // a damaged table only costs routes until the routers renew
@@ -271,6 +302,9 @@ func (r Realizer) nextHops(cfg kea6Config, events []string) (map[string]nextHop,
 				pools[s.Interface] = append(pools[s.Interface], netip.PrefixFrom(a, p.PrefixLen))
 			}
 		}
+	}
+	for iface, list := range old {
+		pools[iface] = append(pools[iface], list...)
 	}
 	// A record names a served interface and a prefix of that segment's pool; a saved hop is judged again,
 	// since the generation may have changed since it was believed.
