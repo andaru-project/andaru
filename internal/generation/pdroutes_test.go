@@ -294,11 +294,95 @@ func TestDHCPv4NamesSurviveADeadDHCPv6(t *testing.T) {
 	b := newBench(t)
 	b.kea(lease{"192.168.40.130", "laptop", 0, 1, 7200, 100})
 	writeFile(t, filepath.Join(b.net.root, kea6File), kea6Served)
+	old := "server:\n\tlocal-data: \"nas.home.arpa. 1333 IN AAAA fd00:1::1002\"\n\tlocal-data-ptr: \"fd00:1::1002 1333 nas.home.arpa.\"\n"
+	writeFile(t, filepath.Join(b.net.root, leasesDir, "leases.conf"), old)
 	if err := b.r.SyncLeases(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(b.leaseNames(), "laptop.home.arpa.") {
 		t.Fatalf("DHCPv4 names lost:\n%s", b.leaseNames())
+	}
+	// Its own names stay as they were, not dropped with every client's.
+	if !strings.Contains(b.leaseNames(), `"nas.home.arpa. 1333 IN AAAA fd00:1::1002"`) || !strings.Contains(b.leaseNames(), `"fd00:1::1002 1333 nas.home.arpa."`) {
+		t.Fatalf("DHCPv6 names dropped:\n%s", b.leaseNames())
+	}
+}
+
+// A DHCPv4 server that does not answer keeps its own names and still lets DHCPv6's be published.
+func TestDHCPv6NamesDuringADeadDHCPv4(t *testing.T) {
+	b := newBench(t)
+	writeFile(t, filepath.Join(b.net.root, keaFile), leaseKea)
+	old := "server:\n\tlocal-data: \"laptop.home.arpa. 2400 IN A 192.168.40.130\"\n\tlocal-data-ptr: \"192.168.40.130 2400 laptop.home.arpa.\"\n"
+	writeFile(t, filepath.Join(b.net.root, leasesDir, "leases.conf"), old)
+	b.kea6(lease6{Address: "fd00:1::1002", Type: "IA_NA", Hostname: "nas", Subnet: 1, Valid: 4000, Cltt: 100})
+	if err := b.r.SyncLeases(t.Context()); err == nil {
+		t.Fatal("a dead DHCPv4 server went unreported")
+	}
+	names := b.leaseNames()
+	for _, want := range []string{`"nas.home.arpa. 1333 IN AAAA fd00:1::1002"`, `"laptop.home.arpa. 2400 IN A 192.168.40.130"`, `"192.168.40.130 2400 laptop.home.arpa."`} {
+		if !strings.Contains(names, want) {
+			t.Fatalf("missing %s in:\n%s", want, names)
+		}
+	}
+}
+
+// A line the hook appends through a descriptor it opened before the sync moved the file still arrives.
+func TestPDEventAppendedLate(t *testing.T) {
+	b := newBench(t)
+	b.kea6(pd("fd00:beef:1:100::/56"), pd("fd00:beef:1:200::/56"))
+	path := b.events("add fd00:beef:1:100::/56 fe80::1 ens19")
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("add fd00:beef:1:200::/56 fe80::2 ens19\n"); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(b.net.root, leaseMarker), "")
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if b.index("ip -6 route replace fd00:beef:1:200::/56 via fe80::2 dev ens19 proto 77") < 0 {
+		t.Fatalf("late line lost: %q", b.net.argv)
+	}
+}
+
+// A sync that fails before it saves what the events taught leaves them for the next one.
+func TestPDEventsSurviveAFailedSync(t *testing.T) {
+	for name, fail := range map[string]func(b *bench) func(){
+		"bad configuration": func(b *bench) func() {
+			path := filepath.Join(b.net.root, kea6File)
+			writeFile(b.t, path, "{")
+			return func() { writeFile(b.t, path, kea6Served) }
+		},
+		"table not saved": func(b *bench) func() {
+			path := filepath.Join(b.net.root, pdTable)
+			if err := os.MkdirAll(filepath.Join(path, "x"), 0o755); err != nil {
+				b.t.Fatal(err)
+			}
+			return func() { os.RemoveAll(path) }
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := newBench(t)
+			b.kea6(pd("fd00:beef:1:100::/56"))
+			b.events("add fd00:beef:1:100::/56 fe80::1 ens19")
+			repair := fail(b)
+			if err := b.r.SyncLeases(t.Context()); err == nil {
+				t.Fatal("the failure went unreported")
+			}
+			repair()
+			if err := b.r.SyncLeases(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if b.index("ip -6 route replace fd00:beef:1:100::/56 via fe80::1 dev ens19 proto 77") < 0 {
+				t.Fatalf("next hop lost with the failed sync: %q", b.net.argv)
+			}
+		})
 	}
 }
 

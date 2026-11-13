@@ -115,6 +115,24 @@ func (r Realizer) SyncLeases(ctx context.Context) error {
 	}
 }
 
+// publishedNames returns the records of one family that the published file holds, for a server that does not
+// answer.
+func (r Realizer) publishedNames(v6 bool) []string {
+	data, _ := os.ReadFile(r.Root + leasesDir + "/leases.conf")
+	var out []string
+	for line := range strings.SplitSeq(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		fields := strings.Fields(line)
+		if len(fields) < 2 || !strings.HasPrefix(fields[0], "local-data") {
+			continue
+		}
+		if family6 := strings.Contains(line, " IN AAAA ") || (fields[0] == "local-data-ptr:" && strings.Contains(fields[1], ":")); family6 == v6 {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
 func (r Realizer) syncLeases(ctx context.Context) error {
 	// One snapshot of configuration and leases, never published across a generation change that removed them.
 	unlock, err := r.lock()
@@ -128,6 +146,7 @@ func (r Realizer) syncLeases(ctx context.Context) error {
 		return err
 	}
 	records := []string{}
+	var failed error
 	raw, err := os.ReadFile(r.Root + keaFile)
 	switch {
 	case os.IsNotExist(err):
@@ -141,7 +160,10 @@ func (r Realizer) syncLeases(ctx context.Context) error {
 		}
 		leases, err := r.keaLeases(ctx)
 		if err != nil {
-			return fmt.Errorf("ask the DHCP server for its leases: %w", err)
+			// Its names stay as published; DHCPv6's are still updated, and the failure is reported.
+			failed = fmt.Errorf("ask the DHCP server for its leases: %w", err)
+			records = r.publishedNames(false)
+			break
 		}
 		if r.afterLeaseRead != nil {
 			r.afterLeaseRead()
@@ -155,22 +177,22 @@ func (r Realizer) syncLeases(ctx context.Context) error {
 	}
 	path := r.Root + leasesDir + "/leases.conf"
 	if old, err := os.ReadFile(path); err == nil && string(old) == body {
-		return nil
+		return failed
 	}
 	if err := os.MkdirAll(r.Root+leasesDir, 0o755); err != nil {
-		return err
+		return errors.Join(failed, err)
 	}
 	if err := writeAtomic(path, []byte(body), 0o644); err != nil {
-		return err
+		return errors.Join(failed, err)
 	}
 	if !r.active(ctx, "unbound.service") {
-		return nil // Unbound reads the file when it starts
+		return failed // Unbound reads the file when it starts
 	}
 	if _, err = r.Run(ctx, "/usr/sbin/unbound-control", "reload_keep_cache"); err != nil {
 		// Unbound still serves the old names; without the file the next sync writes it and reloads again.
-		return errors.Join(err, os.Remove(path))
+		return errors.Join(failed, err, os.Remove(path))
 	}
-	return nil
+	return failed
 }
 
 // leaseRecords turns assigned leases with valid names into A and PTR records, sorted.

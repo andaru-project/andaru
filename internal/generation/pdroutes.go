@@ -21,6 +21,9 @@ const (
 	pdEvents = "/run/kea/andaru-pd-events"
 	// pdTaken is where root moves it before reading: never opened in Kea's own directory.
 	pdTaken = leasesDir + "/pd-events"
+	// pdPrev is the last batch applied, read once more: the hook may have appended through a descriptor it
+	// opened before the batch moved.
+	pdPrev = leasesDir + "/pd-events.prev"
 	// pdTable keeps the believed next hops, so routes return at boot before any router renews.
 	pdTable = "/var/lib/andaru/pd-next-hops.json"
 	// pdProto marks the routes Andaru installs for delegated prefixes; no other route is touched. 77 is assigned to
@@ -67,7 +70,7 @@ func (r Realizer) syncKea6(ctx context.Context) ([]string, error) {
 	var cfg kea6Config
 	var leases []keaLease
 	// Taken before the lease list: the hook runs after Kea commits, so any lease an event names is in the list.
-	events := r.takeEvents()
+	events, done := r.takeEvents()
 	raw, err := os.ReadFile(r.Root + kea6File)
 	running := err == nil
 	switch {
@@ -84,11 +87,12 @@ func (r Realizer) syncKea6(ctx context.Context) ([]string, error) {
 	if err := r.saveNextHops(table); err != nil {
 		return nil, err
 	}
+	done()
 	if running {
 		if leases, err = r.askLeases(ctx, kea6Socket, "lease6-get-all"); err != nil {
 			// Its own names and routes wait for it; the DHCPv4 names do not.
 			slog.Warn("ask the DHCPv6 server for its leases", "error", err)
-			return nil, nil
+			return r.publishedNames(true), nil
 		}
 	}
 	if err := r.syncRoutes(ctx, leases, table, served); err != nil {
@@ -214,37 +218,53 @@ func (r Realizer) nextHops(cfg kea6Config, events []string) (map[string]nextHop,
 	return table, served
 }
 
-// takeEvents moves the hook's file out of Kea's directory and reads it, believing nothing of a file that is
-// not a regular one owned by Kea, the owner of that directory, or that is too large.
-func (r Realizer) takeEvents() []string {
-	taken := r.Root + pdTaken
+// takeEvents moves the hook's file out of Kea's directory and returns the lines of the previous batch and of
+// this one, with what to call once their next hops are saved. A batch a failed sync left is read again before
+// any new one is taken.
+func (r Realizer) takeEvents() ([]string, func()) {
+	taken, prev := r.Root+pdTaken, r.Root+pdPrev
 	if err := os.MkdirAll(r.Root+leasesDir, 0o755); err != nil {
-		return nil
+		return nil, func() {}
 	}
-	if err := os.Rename(r.Root+pdEvents, taken); err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(taken); errors.Is(err, os.ErrNotExist) {
+		if err := os.Rename(r.Root+pdEvents, taken); err != nil && !errors.Is(err, os.ErrNotExist) {
 			slog.Warn("take the delegated prefix events", "error", err)
 		}
+	}
+	lines := append(r.readEvents(prev), r.readEvents(taken)...)
+	return lines, func() {
+		if err := os.Rename(taken, prev); errors.Is(err, os.ErrNotExist) {
+			os.Remove(prev)
+		}
+	}
+}
+
+// readEvents reads a batch in root's own directory, believing nothing of a file that is not a regular one
+// owned by Kea, the owner of its directory, or that is too large; a refused batch is deleted.
+func (r Realizer) readEvents(path string) []string {
+	// Root's own directory holds it, so what Lstat sees is what Open gets: a FIFO would block, a directory
+	// would stop every later rename.
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	// Root's own directory now holds it, so what Lstat sees is what Open gets: a FIFO would block, a directory
-	// would stop every later rename.
-	defer os.RemoveAll(taken)
-	if info, err := os.Lstat(taken); err != nil || !info.Mode().IsRegular() {
+	if err != nil || !info.Mode().IsRegular() {
 		slog.Warn("delegated prefix events refused: not a regular file")
+		os.RemoveAll(path)
 		return nil
 	}
 	dir, err := os.Stat(r.Root + "/run/kea")
 	if err != nil {
 		return nil
 	}
-	f, err := os.OpenFile(taken, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		slog.Warn("delegated prefix events refused", "error", err)
+		os.Remove(path)
 		return nil
 	}
 	defer f.Close()
-	info, err := f.Stat()
+	info, err = f.Stat()
 	if err != nil {
 		return nil
 	}
@@ -252,10 +272,11 @@ func (r Realizer) takeEvents() []string {
 	kea, _ := dir.Sys().(*syscall.Stat_t)
 	if !info.Mode().IsRegular() || !ok || kea == nil || owner.Uid != kea.Uid || info.Size() > pdEventsMax {
 		slog.Warn("delegated prefix events refused: not a regular file of Kea's, or too large")
+		os.Remove(path)
 		return nil
 	}
 	data, err := io.ReadAll(io.LimitReader(f, pdEventsMax))
-	if err != nil {
+	if err != nil || len(strings.TrimSpace(string(data))) == 0 {
 		return nil
 	}
 	return strings.Split(strings.TrimSpace(string(data)), "\n")
