@@ -44,11 +44,11 @@ type fakeNetworkd struct {
 	ifupFails bool
 	// table is the comment of the loaded inet andaru table, "" when none is loaded; tableComment overrides what nft reports.
 	table, tableComment string
-	script              string // what nft -f last loaded
-	noNft               bool   // nft is not installed
-	keaDead             bool   // Kea starts but never answers on its socket
-	keaSockets          string // what Kea reports of its DHCP sockets; "ready" when empty
-	kea                 net.Listener
+	script              string                  // what nft -f last loaded
+	noNft               bool                    // nft is not installed
+	keaDead             bool                    // Kea starts but never answers on its socket
+	keaSockets          string                  // what Kea reports of its DHCP sockets; "ready" when empty
+	keaBy               map[string]net.Listener // by control socket name
 
 	dns     map[string][]string     // what resolved reports per interface
 	editDNS func([]string) []string // distorts that report
@@ -143,17 +143,20 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 			return nil, errors.New("nft [delete table inet andaru]: exit status 1: Error: No such file or directory")
 		}
 		f.table = ""
-	case command == "systemctl restart kea-dhcp4-server.service":
+	case command == "systemctl restart kea-dhcp4-server.service" || command == "systemctl restart kea-dhcp6-server.service":
 		_ = os.MkdirAll(filepath.Join(f.root, "run/kea"), 0o750)
-		if f.kea != nil {
-			f.kea.Close()
-			f.kea = nil
+		socket := map[bool]string{false: "kea4-ctrl-socket", true: "kea6-ctrl-socket"}[strings.Contains(command, "dhcp6")]
+		if f.keaBy == nil {
+			f.keaBy = map[string]net.Listener{}
 		}
-		path := filepath.Join(f.root, "run/kea/kea4-ctrl-socket")
+		if l := f.keaBy[socket]; l != nil {
+			l.Close()
+		}
+		path := filepath.Join(f.root, "run/kea", socket)
 		_ = os.Remove(path)
 		if !f.keaDead {
 			if l, err := net.Listen("unix", path); err == nil {
-				f.kea = l
+				f.keaBy[socket] = l
 				go func() {
 					for {
 						c, err := l.Accept()

@@ -204,3 +204,66 @@ func TestBadKeaConfigFailsWithoutWaiting(t *testing.T) {
 		t.Fatalf("a refused configuration was retried %d times (%v)", checks, err)
 	}
 }
+
+func TestActivateStartsDHCPv6(t *testing.T) {
+	b := newBench(t)
+	id := b.gen(false, map[string]string{kea6File: `{"Dhcp6":{}}`})
+	if err := b.r.Activate(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	last := -1
+	for _, c := range []string{"networkctl reload", "kea-dhcp6 -t " + kea6File, "systemctl restart kea-dhcp6-server.service", "systemctl start --no-block andaru-leases.service"} {
+		i := b.index(c)
+		if i <= last {
+			t.Fatalf("%q out of order in %q", c, b.net.argv)
+		}
+		last = i
+	}
+}
+
+func TestDHCPv6CheckWaitsForLateInterfaces(t *testing.T) {
+	b := newBench(t)
+	checks := 0
+	b.net.fail, b.net.failWith = "kea-dhcp6 -t", "Specified network interface name vlan99 for subnet fd00:1::/64 is not present in the system"
+	b.net.onRun = func(command string) {
+		if command == "kea-dhcp6 -t "+kea6File {
+			if checks++; checks == 3 {
+				b.net.fail = ""
+			}
+		}
+	}
+	if err := b.r.Activate(t.Context(), b.gen(false, map[string]string{kea6File: `{"Dhcp6":{}}`})); err != nil || checks != 3 {
+		t.Fatalf("checked %d times: %v", checks, err)
+	}
+}
+
+func TestBadDHCPv6ConfigFailsWithoutWaiting(t *testing.T) {
+	b := newBench(t)
+	b.net.fail = "kea-dhcp6 -t"
+	checks := 0
+	b.net.onRun = func(command string) {
+		if command == "kea-dhcp6 -t "+kea6File {
+			checks++
+		}
+	}
+	if err := b.r.Activate(t.Context(), b.gen(false, map[string]string{kea6File: `{"Dhcp6":{}}`})); err == nil || checks != 1 {
+		t.Fatalf("a refused configuration was retried %d times (%v)", checks, err)
+	}
+}
+
+func TestGenerationWithoutDHCPv6StopsIt(t *testing.T) {
+	b := newBench(t)
+	first := b.gen(false, map[string]string{kea6File: `{"Dhcp6":{}}`})
+	if err := b.r.Activate(t.Context(), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Confirm(t.Context(), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Activate(t.Context(), b.gen(false, served(""))); err != nil {
+		t.Fatal(err)
+	}
+	if b.index("systemctl stop kea-dhcp6-server.service") < 0 {
+		t.Fatalf("DHCPv6 server left running: %q", b.net.argv)
+	}
+}
