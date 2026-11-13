@@ -446,3 +446,26 @@ func TestAdvertisedDNSIsNotTheHostsDeclaration(t *testing.T) {
 		t.Fatalf("findings = %+v", findings)
 	}
 }
+
+func TestDHCPv6Gates(t *testing.T) {
+	gate := func(declaration string) []string {
+		in := taken()
+		in.Declaration = []byte(declaration)
+		var got []string
+		for _, f := range applyFindings(in) {
+			got = append(got, f.Code+" "+f.Path)
+		}
+		return got
+	}
+	segs := `"segments":[{"id":"seg_a","addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"mode":"managed"}}}}]`
+	if got := gate(`{"management":{"segment":"seg_a"},"links":[{"kind":"ethernet","enabled":true}],` + segs + `,"dhcp6":[{"segment":"seg_a"}]}`); len(got) != 0 {
+		t.Fatalf("managed with a DHCPv6 entry: %v", got)
+	}
+	if got := gate(`{"management":{"segment":"seg_a"},"links":[{"kind":"ethernet","enabled":true}],` + segs + `}`); !slices.Equal(got, []string{"APPLY_UNSUPPORTED /segments/0/addressing/ipv6/ra/mode"}) {
+		t.Fatalf("managed without a DHCPv6 entry: %v", got)
+	}
+	plain := `"segments":[{"id":"seg_a","addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static"}}}]`
+	if got := gate(`{"links":[{"kind":"ethernet","enabled":true}],` + plain + `,"dhcp6":[{"segment":"seg_a","prefixDelegation":{"prefix":"fd00:beef::/48","delegatedLength":56}}]}`); !slices.Equal(got, []string{"APPLY_UNSUPPORTED /dhcp6/0/prefixDelegation"}) {
+		t.Fatalf("delegation without the filter: %v", got)
+	}
+}

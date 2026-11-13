@@ -150,6 +150,7 @@ func applyFindings(in gateInput) []render.Finding {
 			Enabled bool   `json:"enabled"`
 		} `json:"links"`
 		Segments []struct {
+			ID         string `json:"id"`
 			Link       string `json:"link"`
 			Addressing struct {
 				DNS  json.RawMessage `json:"dns"`
@@ -166,6 +167,7 @@ func applyFindings(in gateInput) []render.Finding {
 			} `json:"addressing"`
 		} `json:"segments"`
 		DNS        json.RawMessage `json:"dns"`
+		DHCP6      []dhcp6Gate     `json:"dhcp6"`
 		Management struct {
 			Segment string `json:"segment"`
 		} `json:"management"`
@@ -181,14 +183,21 @@ func applyFindings(in gateInput) []render.Finding {
 	for i, s := range declared.Segments {
 		ra := s.Addressing.IPv6.RA
 		advertised := ra != nil && ra.Mode != "disabled" && (ra.Mode != "" || ra.Enabled)
-		if ra != nil && (slices.Contains([]string{"managed", "assisted", "stateless"}, ra.Mode) || ra.Mode == "" && ra.Enabled && (ra.Managed || ra.OtherInfo)) {
-			refuse("APPLY_UNSUPPORTED", fmt.Sprintf("/segments/%d/addressing/ipv6/ra/mode", i), "This router advertisement mode needs the DHCPv6 server, which is not available yet.")
+		served := slices.IndexFunc(declared.DHCP6, func(e dhcp6Gate) bool { return e.Segment == s.ID }) >= 0
+		if ra != nil && !served && (slices.Contains([]string{"managed", "assisted", "stateless"}, ra.Mode) || ra.Mode == "" && ra.Enabled && (ra.Managed || ra.OtherInfo)) {
+			refuse("APPLY_UNSUPPORTED", fmt.Sprintf("/segments/%d/addressing/ipv6/ra/mode", i), "This router advertisement mode sends clients to a DHCPv6 server: it needs a DHCPv6 entry for this segment.")
 		} else if declared.Management.Segment == "" && advertised {
 			// IPv6 forwarding stays off without the filter: clients would send everything to a router that drops it.
 			refuse("APPLY_UNSUPPORTED", fmt.Sprintf("/segments/%d/addressing/ipv6/ra/mode", i), "Router advertisements need the packet filter, which needs a management segment. Set management.segment.")
 		}
 		if declared.Management.Segment == "" && s.Addressing.IPv6.Mode == "delegated" && !advertised {
 			refuse("APPLY_UNSUPPORTED", fmt.Sprintf("/segments/%d/addressing/ipv6/mode", i), "A delegated prefix is routed, which needs the packet filter and so a management segment. Set management.segment.")
+		}
+	}
+
+	for i, e := range declared.DHCP6 {
+		if declared.Management.Segment == "" && len(e.PrefixDelegation) > 0 && string(e.PrefixDelegation) != "null" {
+			refuse("APPLY_UNSUPPORTED", fmt.Sprintf("/dhcp6/%d/prefixDelegation", i), "Delegated prefixes are routed, which needs the packet filter and so a management segment. Set management.segment.")
 		}
 	}
 
@@ -268,4 +277,10 @@ func ifupdownFindings(problems []host.Problem, facts host.RealizerFacts, managed
 		}
 	}
 	return out
+}
+
+// dhcp6Gate is what the gates read of a DHCPv6 entry.
+type dhcp6Gate struct {
+	Segment          string          `json:"segment"`
+	PrefixDelegation json.RawMessage `json:"prefixDelegation"`
 }
