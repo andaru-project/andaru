@@ -78,6 +78,18 @@ func normalizeDeclaration(d *declaration) {
 			e.LeaseTime = 7200
 		}
 	}
+	if len(d.DHCP6) == 0 {
+		d.DHCP6 = nil
+	}
+	slices.SortFunc(d.DHCP6, func(a, b dhcp6Entry) int { return strings.Compare(a.ID, b.ID) })
+	for i := range d.DHCP6 {
+		e := &d.DHCP6[i]
+		slices.SortFunc(e.Ranges, func(a, b dhcpRange) int { return compareAddr(a.First, b.First) })
+		slices.SortFunc(e.StaticLeases, func(a, b staticLease6) int { return strings.Compare(a.DUID, b.DUID) })
+		if e.LeaseTime == 0 {
+			e.LeaseTime = 7200
+		}
+	}
 	if d.DNS != nil {
 		slices.Sort(d.DNS.Segments)
 		if d.DNS.LocalDomain == "" {

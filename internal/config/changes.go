@@ -148,7 +148,7 @@ func initialState() savedState {
 var (
 	orderedCollections = []string{"policy.input", "policy.forward", "nat.portForwards", "nat.oneToOne"}
 	singletons         = []string{"management", "nat.outbound", "dns"}
-	collections        = append([]string{"links", "segments", "zones", "addresses", "services", "dhcp"}, append(slices.Clone(orderedCollections), singletons...)...)
+	collections        = append([]string{"links", "segments", "zones", "addresses", "services", "dhcp", "dhcp6"}, append(slices.Clone(orderedCollections), singletons...)...)
 )
 
 func validCollection(s string) bool { return slices.Contains(collections, s) }
@@ -170,7 +170,7 @@ func newID(collection string) (string, error) {
 	}
 	b[6] = (b[6] & 15) | 64
 	b[8] = (b[8] & 63) | 128
-	prefix := map[string]string{"links": "lnk", "segments": "seg", "zones": "zon", "addresses": "adr", "services": "svc", "policy.input": "rul", "policy.forward": "rul", "dhcp": "dhp", "nat.portForwards": "pfw", "nat.oneToOne": "oto"}[collection]
+	prefix := map[string]string{"links": "lnk", "segments": "seg", "zones": "zon", "addresses": "adr", "services": "svc", "policy.input": "rul", "policy.forward": "rul", "dhcp": "dhp", "dhcp6": "dh6", "nat.portForwards": "pfw", "nat.oneToOne": "oto"}[collection]
 	return fmt.Sprintf("%s_%x-%x-%x-%x-%x", prefix, b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
 func rank(code string) int {
@@ -225,6 +225,9 @@ func objects(d *declaration) map[objectKey]any {
 	}
 	for i := range d.DHCP {
 		m[objectKey{"dhcp", d.DHCP[i].ID}] = &d.DHCP[i]
+	}
+	for i := range d.DHCP6 {
+		m[objectKey{"dhcp6", d.DHCP6[i].ID}] = &d.DHCP6[i]
 	}
 	if d.DNS != nil {
 		m[listKey("dns")] = d.DNS
@@ -491,6 +494,9 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 	if d.DHCP, e = rewrite(d.DHCP, "dhcp", writes, deleted, createKeys, func(x dhcpEntry) string { return x.ID }); e != nil {
 		return empty, e
 	}
+	if d.DHCP6, e = rewrite(d.DHCP6, "dhcp6", writes, deleted, createKeys, func(x dhcp6Entry) string { return x.ID }); e != nil {
+		return empty, e
+	}
 	if d.Objects.Services, e = rewrite(d.Objects.Services, "services", writes, deleted, createKeys, func(x service) string { return x.ID }); e != nil {
 		return empty, e
 	}
@@ -734,7 +740,7 @@ func resolveReferences(v map[string]any, col string, labels map[string]string) {
 		resolveAll(v, "from")
 		resolveAll(v, "to")
 		resolveAll(v, "services")
-	case "management", "dhcp":
+	case "management", "dhcp", "dhcp6":
 		resolve(v, "segment")
 		resolveAll(v, "allowedSources")
 	case "dns":
@@ -813,6 +819,8 @@ func owner(d *declaration, path string) (objectKey, string) {
 		id = d.Policy.Forward[n].ID
 	case col == "dhcp" && n < len(d.DHCP):
 		id = d.DHCP[n].ID
+	case col == "dhcp6" && n < len(d.DHCP6):
+		id = d.DHCP6[n].ID
 	case col == "nat.portForwards" && n < len(d.NAT.PortForwards):
 		id = d.NAT.PortForwards[n].ID
 	case col == "nat.oneToOne" && n < len(d.NAT.OneToOne):

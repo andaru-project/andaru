@@ -39,13 +39,12 @@ type applyReply struct {
 	Files    []json.RawMessage
 }
 
-var objectIDPattern = regexp.MustCompile(`^(lnk|seg|zon|adr|svc|rul|dhp|pfw|oto)_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+var objectIDPattern = regexp.MustCompile(`^(lnk|seg|zon|adr|svc|rul|dhp|pfw|oto|dh6)_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 var applyIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
 var errUsage = errors.New("usage: andaru ctl [--socket PATH] links|openapi|config <show|list|get|create|replace|delete|changes|order>|versions <list|get>|preview network [--saved-version N]|apply network --saved-version N [--takeover] [--confirm-timeout S]|applies <list|get ID|confirm ID|rollback ID>|takeover [--accept-detected] [--confirm-timeout S]")
 
-
 func collectionName(s string) bool {
-	return slices.Contains([]string{"links", "segments", "zones", "addresses", "services", "dhcp", "policy/input", "policy/forward", "nat/port-forwards", "nat/one-to-one"}, s)
+	return slices.Contains([]string{"links", "segments", "zones", "addresses", "services", "dhcp", "dhcp6", "policy/input", "policy/forward", "nat/port-forwards", "nat/one-to-one"}, s)
 }
 
 // singletonName names the configuration objects that exist at most once and have no ID.
@@ -62,7 +61,7 @@ func validChanged(item config.ChangedView) bool {
 		if item.ID == item.Collection {
 			return validVersion(item.Version) && item.Version != "0"
 		}
-	case "links", "segments", "zones", "addresses", "services", "dhcp":
+	case "links", "segments", "zones", "addresses", "services", "dhcp", "dhcp6":
 	default:
 		return false
 	}

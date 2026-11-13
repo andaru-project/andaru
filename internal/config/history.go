@@ -318,7 +318,7 @@ func (s *Store) Version(ctx context.Context, id Version) (result VersionView, er
 	}
 	result = VersionView{State: "saved", VersionInfo: info, Value: snapshot.Value, Changes: []objectChange{}}
 	number, _ := strconvVersion(id)
-	rows, e := conn.QueryContext(ctx, "SELECT collection,object_id,created,deleted FROM object_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM policy_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM service_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM nat_changes WHERE version_id=? ORDER BY 1,2", number, number, number, number)
+	rows, e := conn.QueryContext(ctx, "SELECT collection,object_id,created,deleted FROM object_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM policy_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM service_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM nat_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM dhcp6_changes WHERE version_id=? ORDER BY 1,2", number, number, number, number, number)
 	if e != nil {
 		return result, diagnostic("version-changes-query", e)
 	}

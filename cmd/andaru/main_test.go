@@ -431,3 +431,20 @@ func TestConfigNATLists(t *testing.T) {
 		t.Fatal("a NAT list order result was refused")
 	}
 }
+
+func TestConfigDHCPv6(t *testing.T) {
+	id := "dh6_00000001-0000-4000-8000-000000000001"
+	for args, want := range map[string]ctlRequest{
+		"config list dhcp6":      {method: "GET", path: "/api/v1/config/dhcp6", kind: "collection"},
+		"config create dhcp6":    {method: "POST", path: "/api/v1/config/dhcp6", kind: "object"},
+		"config get dhcp6 " + id: {method: "GET", path: "/api/v1/config/dhcp6/" + id, kind: "object"},
+	} {
+		req, err := ctlOperation(strings.Fields(args), io.Discard)
+		if err != nil || req.method != want.method || req.path != want.path || req.kind != want.kind {
+			t.Fatalf("%s: %+v %v", args, req, err)
+		}
+	}
+	if !validChanged(config.ChangedView{Collection: "dhcp6", ID: id, Deleted: true}) {
+		t.Fatal("a DHCPv6 result was refused")
+	}
+}

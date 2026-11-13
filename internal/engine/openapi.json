@@ -624,7 +624,7 @@
               "zones",
               "addresses",
               "services",
-              "dhcp"
+              "dhcp", "dhcp6"
             ]
           }
         }
@@ -1034,7 +1034,7 @@
               "zones",
               "addresses",
               "services",
-              "dhcp"
+              "dhcp", "dhcp6"
             ]
           }
         },
@@ -5340,7 +5340,7 @@
                       "policy.forward",
                       "management",
                       "nat.outbound",
-                      "dhcp",
+                      "dhcp", "dhcp6",
                       "dns"
                     ]
                   },
@@ -5433,7 +5433,7 @@
               "policy.forward",
               "management",
               "nat.outbound",
-              "dhcp",
+              "dhcp", "dhcp6",
               "dns"
             ]
           },

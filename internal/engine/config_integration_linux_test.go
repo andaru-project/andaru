@@ -747,3 +747,37 @@ func TestNATListRoutes(t *testing.T) {
 	expect(w, 200)
 	expect(configCall(h, "DELETE", "/api/v1/config/nat/port-forwards/"+b, "", w.Header().Get("ETag")), 200)
 }
+
+func TestDHCPv6Routes(t *testing.T) {
+	h, _ := configurationFixture(t)
+	zone := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/zones", `{"name":"inside"}`, "")))
+	link := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/links", `{"name":"lan9","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"52:54:00:aa:bb:99"}`, "")))
+	seg := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/segments", `{"name":"lan9","link":"`+link+`","zone":"`+zone+`","addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","addresses":["fd00:9::1/64"]}}}`, "")))
+	created := configCall(h, "POST", "/api/v1/config/dhcp6", `{"name":"lan9","segment":"`+seg+`","ranges":[{"first":"fd00:9::1000","last":"fd00:9::1fff"}]}`, "")
+	if created.Code != 201 || !strings.HasPrefix(valueID(t, apiObject(t, created)), "dh6_") {
+		t.Fatalf("create %d %s", created.Code, created.Body)
+	}
+	if w := configCall(h, "GET", created.Header().Get("Location"), "", ""); w.Code != 200 {
+		t.Fatalf("Location %d", w.Code)
+	}
+	rawSchema := configCall(h, "GET", "/api/v1/schema", "", "")
+	instance, e := jsonschema.UnmarshalJSON(bytes.NewReader(rawSchema.Body.Bytes()))
+	if e != nil {
+		t.Fatal(e)
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.UseLoader(jsonschema.SchemeURLLoader{})
+	if e = compiler.AddResource("https://andaru.invalid/api/v1/schema", instance); e != nil {
+		t.Fatal(e)
+	}
+	for view, path := range map[string]string{"snapshotView": "/api/v1/config", "collectionView": "/api/v1/config/dhcp6"} {
+		sch, e := compiler.Compile("https://andaru.invalid/api/v1/schema#/$defs/" + view)
+		if e != nil {
+			t.Fatal(e)
+		}
+		served, _ := jsonschema.UnmarshalJSON(bytes.NewReader(configCall(h, "GET", path, "", "").Body.Bytes()))
+		if e = sch.Validate(served); e != nil {
+			t.Fatalf("%s violates %s: %v", path, view, e)
+		}
+	}
+}

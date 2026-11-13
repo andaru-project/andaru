@@ -1004,3 +1004,54 @@ func TestNATListsPersist(t *testing.T) {
 		t.Fatalf("version changes %+v %v", v.Changes, e)
 	}
 }
+
+// A store made before DHCPv6 gains its table on open.
+func TestStoreWithoutDHCPv6TableOpens(t *testing.T) {
+	path := ownedDir(t)
+	ctx := context.Background()
+	s := openTestStore(t, path)
+	if _, e := s.Save(ctx, "unix:uid:0", networkInput(t)); e != nil {
+		t.Fatal(e)
+	}
+	s.Close()
+	db, e := openDatabase(ctx, filepath.Join(path, "configuration", "config.db"), "rw", false)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = db.ExecContext(ctx, "DROP TABLE dhcp6_changes"); e != nil {
+		t.Fatal(e)
+	}
+	db.Close()
+	s = openTestStore(t, path)
+	segments, e := s.List(ctx, "segments")
+	if e != nil {
+		t.Fatal(e)
+	}
+	var seg segment
+	for _, item := range segments.Items {
+		_ = json.Unmarshal(item.Value, &seg)
+		if seg.Addressing.IPv4.Mode == "static" {
+			break
+		}
+	}
+	seg.Addressing.IPv6 = ipv6{Mode: "static", Addresses: []string{"fd00:1::1/64"}}
+	value, _ := json.Marshal(map[string]any{"name": seg.Name, "link": seg.Link, "zone": seg.Zone, "addressing": seg.Addressing})
+	v := Version("0")
+	for _, item := range segments.Items {
+		var s2 segment
+		_ = json.Unmarshal(item.Value, &s2)
+		if s2.ID == seg.ID {
+			v = item.Version
+		}
+	}
+	if _, e = s.Save(ctx, "unix:uid:0", Changes{Operations: []Operation{
+		{Op: "replace", Collection: "segments", ID: seg.ID, ExpectedVersion: &v, Value: value},
+		{Op: "create", Collection: "dhcp6", LocalID: "d", Value: json.RawMessage(`{"name":"lan6","segment":"` + seg.ID + `"}`)},
+	}}); e != nil {
+		t.Fatalf("save after the table was added: %v", e)
+	}
+	list, e := s.List(ctx, "dhcp6")
+	if e != nil || len(list.Items) != 1 {
+		t.Fatalf("dhcp6 %+v %v", list, e)
+	}
+}
