@@ -46,6 +46,21 @@
             "$ref": "#/components/responses/InventoryUnavailable"
           }
         }
+      },
+      "head": {
+        "operationId": "headDelegatedPrefixes",
+        "summary": "Check the prefix view without returning a body",
+        "responses": {
+          "200": {
+            "description": "The view was read; no body"
+          },
+          "403": {
+            "description": "Peer denied; no body"
+          },
+          "503": {
+            "description": "The view is unavailable; no body"
+          }
+        }
       }
     },
     "/api/v1/status/links": {
