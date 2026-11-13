@@ -54,11 +54,18 @@ func advertisement(old netip.Prefix, valid uint32, routerLifetime uint16, manage
 }
 
 // recordReplaced adds the /64s the delegated segments lost since before, and drops entries past their window.
-func (r Realizer) recordReplaced(links []delegatedLink, before, after delegation.State) ([]replaced, error) {
+func (r Realizer) recordReplaced(links []delegatedLink, before, after delegation.State, now time.Time) ([]replaced, error) {
 	var list []replaced
 	raw, _ := os.ReadFile(r.Root + replacedPrefixes)
 	_ = json.Unmarshal(raw, &list) // a damaged list only costs deprecations already under way
-	now := r.Now()
+	current := map[string]netip.Prefix{}
+	for _, l := range links {
+		if c := after.WANs[l.Uplink].Current; c != nil {
+			if p, ok := delegation.Place(c.Prefix, l.SubnetID, 64); ok {
+				current[l.Interface] = p
+			}
+		}
+	}
 	for _, l := range links {
 		old, new := before.WANs[l.Uplink].Current, after.WANs[l.Uplink].Current
 		if old == nil || new != nil && new.Prefix == old.Prefix || !old.Valid.After(now) {
@@ -68,7 +75,10 @@ func (r Realizer) recordReplaced(links []delegatedLink, before, after delegation
 			list = append(list, replaced{l.Interface, p, now, old.Valid})
 		}
 	}
-	list = slices.DeleteFunc(list, func(d replaced) bool { return now.Sub(d.Seen) > deprecationWindow || !d.Valid.After(now) })
+	// A prefix that came back is current again: never advertise it deprecated.
+	list = slices.DeleteFunc(list, func(d replaced) bool {
+		return now.Sub(d.Seen) > deprecationWindow || !d.Valid.After(now) || current[d.Interface] == d.Prefix
+	})
 	data, _ := json.Marshal(list)
 	if bytes.Equal(data, raw) || len(list) == 0 && len(raw) == 0 {
 		return list, nil
@@ -78,12 +88,12 @@ func (r Realizer) recordReplaced(links []delegatedLink, before, after delegation
 
 // sendDeprecations advertises each recorded /64 on its segment, if the segment announces its delegated prefix.
 // A change seen in this run waits DeprecateAfter, so networkd's own advertisement listing it goes first.
-func (r Realizer) sendDeprecations(links []delegatedLink, list []replaced) {
+func (r Realizer) sendDeprecations(links []delegatedLink, list []replaced, now time.Time) {
 	send := r.SendRA
 	if send == nil {
 		send = sendRA
 	}
-	now, waited := r.Now(), false
+	waited := false
 	for _, d := range list {
 		for _, l := range links {
 			if l.Interface != d.Interface || !l.Announce {

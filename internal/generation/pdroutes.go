@@ -190,13 +190,14 @@ func (r Realizer) replacedPools() map[string][]netip.Prefix {
 	state, _ := delegation.ReadState(r.Root + delegatedState)
 	out := map[string][]netip.Prefix{}
 	for _, s := range tpl.Subnets {
-		last := state.WANs[s.Uplink].Last
-		if s.Pool == nil || last == nil || !last.Valid.After(r.Now()) {
+		if s.Pool == nil {
 			continue
 		}
 		n, _ := strconv.ParseUint(s.Pool.SubnetID, 16, 16)
-		if p, ok := delegation.Place(last.Prefix, n, s.Pool.Length); ok {
-			out[s.Interface] = append(out[s.Interface], p)
+		for _, old := range state.WANs[s.Uplink].Replaced {
+			if p, ok := delegation.Place(old.Prefix, n, s.Pool.Length); ok && old.Valid.After(r.Now()) {
+				out[s.Interface] = append(out[s.Interface], p)
+			}
 		}
 	}
 	return out

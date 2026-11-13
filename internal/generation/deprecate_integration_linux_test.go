@@ -18,8 +18,11 @@ func TestSendRAOnTheWire(t *testing.T) {
 	if os.Getuid() != 0 {
 		t.Skip("needs root for a veth pair and raw sockets")
 	}
+	if out, err := exec.Command("ip", "link", "add", "rav0", "type", "veth", "peer", "name", "rav1").CombinedOutput(); err != nil {
+		t.Fatalf("ip link add: %s", out)
+	}
+	t.Cleanup(func() { exec.Command("ip", "link", "del", "rav0").Run() })
 	for _, args := range [][]string{
-		{"link", "add", "rav0", "type", "veth", "peer", "name", "rav1"},
 		{"-6", "addr", "add", "fe80::a:1/64", "dev", "rav0", "nodad"},
 		{"link", "set", "rav0", "up"}, {"link", "set", "rav1", "up"},
 	} {
@@ -27,7 +30,6 @@ func TestSendRAOnTheWire(t *testing.T) {
 			t.Fatalf("ip %v: %s", args, out)
 		}
 	}
-	t.Cleanup(func() { exec.Command("ip", "link", "del", "rav0").Run() })
 	fd, err := unix.Socket(unix.AF_INET6, unix.SOCK_RAW, unix.IPPROTO_ICMPV6)
 	if err != nil {
 		t.Fatal(err)

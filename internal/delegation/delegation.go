@@ -43,11 +43,12 @@ type Held struct {
 	Valid     time.Time    `json:"valid"`
 }
 
-// WAN is what the sync saw on one WAN interface: the length it requested and its current and previous prefix.
+// WAN is what the sync saw on one WAN interface: the length it requested, its current prefix, and the prefixes
+// it replaced that are still valid, whose leases Kea holds until their routers renew.
 type WAN struct {
-	Requested int   `json:"requested"`
-	Current   *Held `json:"current,omitempty"`
-	Last      *Held `json:"last,omitempty"`
+	Requested int    `json:"requested"`
+	Current   *Held  `json:"current,omitempty"`
+	Replaced  []Held `json:"replaced,omitempty"`
 }
 
 // State is /var/lib/andaru/delegated-prefixes.json, keyed by WAN interface name.

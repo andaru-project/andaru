@@ -3,6 +3,7 @@ package generation
 import (
 	"cmp"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net/netip"
@@ -56,8 +57,14 @@ func ReadPrefixView(root string) (PrefixView, error) {
 		return PrefixView{}, err
 	}
 	var tpl delegation.Template
-	if raw, err := os.ReadFile(root + kea6Template); err == nil {
-		_ = json.Unmarshal(raw, &tpl)
+	switch raw, err := os.ReadFile(root + kea6Template); {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
+		return PrefixView{}, err
+	default:
+		if err := json.Unmarshal(raw, &tpl); err != nil {
+			return PrefixView{}, fmt.Errorf("read the DHCPv6 template: %w", err)
+		}
 	}
 	uplinks := maps.Clone(hints)
 	for _, l := range links {
@@ -72,7 +79,7 @@ func ReadPrefixView(root string) (PrefixView, error) {
 			w.Current = &HeldView{c.Prefix.String(), c.Preferred, c.Valid}
 			base, length = c.Prefix, c.Prefix.Bits()
 		}
-		bits := min(64-length, 16)
+		bits := max(0, min(64-length, 16))
 		w.SubnetIDs = IDRange{"0", strconv.FormatUint(uint64(1)<<bits-1, 16)}
 		place := func(iface, id string, at int, what string) PlaceView {
 			v := PlaceView{Interface: iface, SubnetID: id}

@@ -165,7 +165,7 @@ func TestPrefixesChange(t *testing.T) {
 	if k.count() != 2 || !strings.Contains(k.last(), `"2001:db8:bb00:1::/64"`) || !strings.Contains(k.last(), `"id": 7`) {
 		t.Fatalf("config-set %v", k.sent)
 	}
-	if w := b.prefixState().WANs["ens18"]; w.Last == nil || w.Last.Prefix != mustPrefix("2001:db8:aa00::/48") {
+	if w := b.prefixState().WANs["ens18"]; len(w.Replaced) != 1 || w.Replaced[0].Prefix != mustPrefix("2001:db8:aa00::/48") {
 		t.Fatalf("state %+v", w)
 	}
 }
@@ -570,5 +570,125 @@ func TestOldPoolRoutedWhileValid(t *testing.T) {
 		if b.index(want) < 0 {
 			t.Fatalf("missing %q: %q", want, b.net.argv)
 		}
+	}
+}
+
+// Back to the earlier prefix within the window: its /64 is current again and is not advertised deprecated.
+func TestPrefixBackIsNotDeprecated(t *testing.T) {
+	b := newBench(t)
+	s := &sent{}
+	b.r.SendRA = s.record
+	b.delegatedLAN("2001:db8:aa00::/48", -1)
+	for _, p := range []string{"", "2001:db8:bb00::/48", "2001:db8:aa00::/48"} {
+		if p != "" {
+			b.prefix(p, 3600, 7200)
+		}
+		if err := b.r.SyncPrefixes(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := s.list()
+	if len(got) == 0 || strings.HasPrefix(got[len(got)-1], "ens19 2001:db8:aa00:1::/64") && len(got) > 1 && strings.HasPrefix(got[len(got)-2], "ens19 2001:db8:aa00:1::/64") {
+		t.Fatalf("sent %v", got)
+	}
+	for _, line := range got[1:] {
+		if strings.HasPrefix(line, "ens19 2001:db8:aa00:1::/64") {
+			t.Fatalf("the current /64 was deprecated: %v", got)
+		}
+	}
+}
+
+// A fresh change waits for networkd's own advertisement even when the clock moves during the run.
+func TestDeprecationWaitsWithMovingClock(t *testing.T) {
+	b := newBench(t)
+	b.r.SendRA = (&sent{}).record
+	b.delegatedLAN("2001:db8:aa00::/48", -1)
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	b.prefix("2001:db8:bb00::/48", 3600, 7200)
+	start := b.now
+	b.r.Now = func() time.Time { start = start.Add(time.Millisecond); return start }
+	b.r.DeprecateAfter = 50 * time.Millisecond
+	began := time.Now()
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(began) < 50*time.Millisecond {
+		t.Fatal("sent without waiting for networkd's advertisement")
+	}
+}
+
+// The current prefix's lifetimes follow what networkd reports, also when it stops being preferred.
+func TestCurrentPrefixLifetimesRefreshed(t *testing.T) {
+	b := newBench(t)
+	b.delegatedLAN("2001:db8:aa00::/48", -1)
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	b.prefix("2001:db8:aa00::/48", 0, 300)
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	b.prefix("", 0, 0)
+	b.now = b.now.Add(10 * time.Minute)
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(b.keaFile(), "2001:db8:aa00:1::/64") {
+		t.Fatalf("an expired prefix is still served:\n%s", b.keaFile())
+	}
+}
+
+// Every replaced prefix still valid keeps its pool routed, not only the last one.
+func TestTwoChangesKeepBothOldPools(t *testing.T) {
+	b := newBench(t)
+	b.r.SendRA = (&sent{}).record
+	b.delegatedLAN("2001:db8:aa00::/48", -1)
+	for _, p := range []string{"", "2001:db8:bb00::/48", "2001:db8:cc00::/48"} {
+		if p != "" {
+			b.prefix(p, 3600, 7200)
+		}
+		if err := b.r.SyncPrefixes(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	conf := b.keaFile()
+	b.kea6()
+	writeFile(t, filepath.Join(b.net.root, kea6File), conf)
+	b.net.argv = nil
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for _, pool := range []string{"2001:db8:aa00:80::/60", "2001:db8:bb00:80::/60"} {
+		if b.index("ip -6 route replace unreachable "+pool+" proto 77") < 0 {
+			t.Fatalf("%s dropped: %q", pool, b.net.argv)
+		}
+	}
+}
+
+// A delegation longer than /64 can number nothing; it is not taken as the WAN's prefix.
+func TestPrefixLongerThan64Ignored(t *testing.T) {
+	b := newBench(t)
+	b.delegatedLAN("", -1)
+	b.net.pd = []string{"2001:db8:aa00::/80"}
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if w := b.prefixState().WANs["ens18"]; w.Current != nil {
+		t.Fatalf("took %v", w.Current.Prefix)
+	}
+	if _, err := ReadPrefixView(b.net.root); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A damaged template makes the view fail instead of omitting the pools.
+func TestPrefixViewDamagedTemplate(t *testing.T) {
+	b := newBench(t)
+	b.delegatedLAN("2001:db8:aa00::/48", -1)
+	writeFile(t, filepath.Join(b.net.root, kea6Template), "{")
+	if _, err := ReadPrefixView(b.net.root); err == nil {
+		t.Fatal("a damaged template went unreported")
 	}
 }

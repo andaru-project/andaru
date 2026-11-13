@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -136,7 +137,8 @@ func (r Realizer) readKernel(ctx context.Context, links []delegatedLink, wans ma
 	seen := map[string][]seenPrefix{}
 	for _, rt := range routes {
 		p, err := netip.ParsePrefix(rt.Dst)
-		if err != nil || !p.Addr().Is6() {
+		// A delegation longer than /64 numbers no segment.
+		if err != nil || !p.Addr().Is6() || p.Bits() > 64 {
 			continue
 		}
 		matched := false
@@ -188,6 +190,12 @@ func (r Realizer) currentPrefixes(ctx context.Context, links []delegatedLink, hi
 		w := state.WANs[up]
 		w.Requested = hints[up]
 		var best *seenPrefix
+		for _, s := range seen[up] {
+			// The current prefix follows what networkd reports, also once it is no longer preferred.
+			if s.numbersOneOfOurLAN && w.Current != nil && s.prefix == w.Current.Prefix {
+				w.Current = &delegation.Held{Prefix: s.prefix, Preferred: now.Add(time.Duration(s.preferred) * time.Second), Valid: now.Add(time.Duration(s.valid) * time.Second)}
+			}
+		}
 		for i, s := range seen[up] {
 			// Graceful renumbering keeps the old prefix valid but not preferred: the preferred one is current.
 			if s.numbersOneOfOurLAN && s.preferred > 0 && (best == nil || s.preferred > best.preferred) {
@@ -209,10 +217,13 @@ func (r Realizer) currentPrefixes(ctx context.Context, links []delegatedLink, hi
 				held.Preferred, held.Valid = now.Add(time.Hour), now.Add(time.Hour)
 			}
 			if w.Current != nil && w.Current.Prefix != held.Prefix {
-				w.Last = w.Current
+				w.Replaced = append(w.Replaced, *w.Current)
 			}
 			w.Current = held
 		}
+		w.Replaced = slices.DeleteFunc(w.Replaced, func(h delegation.Held) bool {
+			return !h.Valid.After(now) || w.Current != nil && h.Prefix == w.Current.Prefix
+		})
 		if w.Current != nil && w.Current.Valid.After(now) {
 			serve[up] = w.Current.Prefix
 		}
@@ -317,12 +328,13 @@ func (r Realizer) syncPrefixes(ctx context.Context, reconfigure bool) error {
 			}
 		}
 	}
-	list, err := r.recordReplaced(links, before, state)
+	now := r.Now() // one reading: sendDeprecations tells this run's fresh entries by it
+	list, err := r.recordReplaced(links, before, state, now)
 	if err != nil {
 		return err
 	}
 	if reconfigure {
-		r.sendDeprecations(links, list)
+		r.sendDeprecations(links, list, now)
 	}
 	return r.saveState(before, state)
 }
