@@ -69,6 +69,7 @@ func (r Realizer) syncKea6(ctx context.Context) ([]string, error) {
 	// Taken before the lease list: the hook runs after Kea commits, so any lease an event names is in the list.
 	events := r.takeEvents()
 	raw, err := os.ReadFile(r.Root + kea6File)
+	running := err == nil
 	switch {
 	case os.IsNotExist(err):
 	case err != nil:
@@ -77,19 +78,20 @@ func (r Realizer) syncKea6(ctx context.Context) ([]string, error) {
 		if err := json.Unmarshal(raw, &cfg); err != nil {
 			return nil, fmt.Errorf("read the DHCPv6 server's configuration: %w", err)
 		}
+	}
+	// The events are gone from Kea's directory: what they taught is saved before anything else can fail.
+	table, served := r.nextHops(cfg, events)
+	if err := r.saveNextHops(table); err != nil {
+		return nil, err
+	}
+	if running {
 		if leases, err = r.askLeases(ctx, kea6Socket, "lease6-get-all"); err != nil {
 			// Its own names and routes wait for it; the DHCPv4 names do not.
 			slog.Warn("ask the DHCPv6 server for its leases", "error", err)
-			// The events are gone from Kea's directory: keep what they taught until the server answers.
-			table, _ := r.nextHops(cfg, events)
-			data, _ := json.Marshal(table)
-			if err := os.MkdirAll(r.Root+"/var/lib/andaru", 0o755); err != nil {
-				return nil, err
-			}
-			return nil, writeAtomic(r.Root+pdTable, data, 0o600)
+			return nil, nil
 		}
 	}
-	if err := r.syncRoutes(ctx, cfg, leases, events); err != nil {
+	if err := r.syncRoutes(ctx, leases, table, served); err != nil {
 		return nil, err
 	}
 	return lease6Records(cfg, leases), nil
@@ -131,8 +133,7 @@ func lease6Records(cfg kea6Config, leases []keaLease) []string {
 
 // syncRoutes installs a route via the requesting router for each active delegated prefix whose next hop it
 // believes, and removes every route of its own protocol nobody holds.
-func (r Realizer) syncRoutes(ctx context.Context, cfg kea6Config, leases []keaLease, events []string) error {
-	table, served := r.nextHops(cfg, events)
+func (r Realizer) syncRoutes(ctx context.Context, leases []keaLease, table map[string]nextHop, served func(netip.Prefix, nextHop) bool) error {
 	wanted := map[string]nextHop{}
 	for _, l := range leases {
 		if l.Type != "IA_PD" || l.State != 0 {
@@ -165,7 +166,11 @@ func (r Realizer) syncRoutes(ctx context.Context, cfg kea6Config, leases []keaLe
 			}
 		}
 	}
-	data, _ := json.Marshal(wanted)
+	return r.saveNextHops(wanted)
+}
+
+func (r Realizer) saveNextHops(table map[string]nextHop) error {
+	data, _ := json.Marshal(table)
 	if err := os.MkdirAll(r.Root+"/var/lib/andaru", 0o755); err != nil {
 		return err
 	}

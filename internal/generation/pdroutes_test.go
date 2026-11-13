@@ -334,3 +334,21 @@ func TestPDRoutesRemovedWithADeadDHCPv4(t *testing.T) {
 		t.Fatalf("route of a dropped DHCPv6 kept: %q", b.net.argv)
 	}
 }
+
+// Events taken in a sync that fails to list the routes keep their next hops for the next one.
+func TestPDEventsSurviveAFailedRouteList(t *testing.T) {
+	b := newBench(t)
+	b.kea6(pd("fd00:beef:1:100::/56"))
+	b.events("add fd00:beef:1:100::/56 fe80::1 ens19")
+	b.net.fail = "ip -6 route show"
+	if err := b.r.SyncLeases(t.Context()); err == nil {
+		t.Fatal("a failed route list went unreported")
+	}
+	b.net.fail, b.net.argv = "", nil
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if b.index("ip -6 route replace fd00:beef:1:100::/56 via fe80::1 dev ens19 proto 77") < 0 {
+		t.Fatalf("next hop lost with the failed sync: %q", b.net.argv)
+	}
+}
