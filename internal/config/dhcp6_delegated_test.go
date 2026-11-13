@@ -53,12 +53,26 @@ func TestDHCPv6OnDelegated(t *testing.T) {
 		"pool id too wide":      {map[string]any{"staticLeases": nil, "prefixDelegation": pool("10000", 60, 64)}, p + "/prefixDelegation/subnetId"},
 		"prefix id too wide":    {map[string]any{"staticLeases": lease(map[string]any{"prefixId": "10"})}, p + "/staticLeases/0/prefixId"},
 		"pool covers the LAN":   {map[string]any{"staticLeases": nil, "prefixDelegation": pool("0", 60, 64)}, p + "/prefixDelegation/subnetId"},
+		"overlapping ranges":    {map[string]any{"ranges": []any{map[string]any{"first": "::1000", "last": "::1fff"}, map[string]any{"first": "::1800", "last": "::2fff"}}}, p + "/ranges/1"},
+		"address in a range":    {map[string]any{"staticLeases": lease(map[string]any{"address": "::1001"})}, p + "/staticLeases/0/address"},
+		"duplicate address": {map[string]any{"staticLeases": []any{
+			map[string]any{"duid": "00:01:00:01:aa:bb:cc:dd:ee:ff", "address": "::10"},
+			map[string]any{"duid": "00:01:00:01:aa:bb:cc:dd:ee:00", "address": "::10"}}}, p + "/staticLeases/1/address"},
 		"duplicate prefix id": {map[string]any{"staticLeases": []any{
 			map[string]any{"duid": "00:01:00:01:aa:bb:cc:dd:ee:ff", "prefixId": "1"},
 			map[string]any{"duid": "00:01:00:01:aa:bb:cc:dd:ee:00", "prefixId": "1"}}}, p + "/staticLeases/1/prefixId"},
 	} {
 		t.Run(name, func(t *testing.T) { refusedAt(t, delegatedFixture(t, tc.fields), tc.path) })
 	}
+	t.Run("pools overlap", func(t *testing.T) {
+		d := delegatedFixture(t, map[string]any{"staticLeases": nil})
+		addSegment(d, "3", "lnk_00000000-0000-4000-8000-000000000004", map[string]any{"mode": "none"},
+			map[string]any{"mode": "delegated", "from": item(segmentsOf(d), 0)["id"], "subnetId": "2"})
+		second := map[string]any{"id": "dh6_00000002-0000-4000-8000-000000000002", "name": "lan6b", "segment": "seg_00000000-0000-4000-8000-000000000003",
+			"prefixDelegation": map[string]any{"subnetId": "8", "length": 60, "delegatedLength": 64}}
+		d["dhcp6"] = append(d["dhcp6"].([]any), second)
+		refusedAt(t, d, "/dhcp6/1/prefixDelegation/subnetId")
+	})
 	t.Run("pool without a hint", func(t *testing.T) {
 		d := delegatedFixture(t, map[string]any{"staticLeases": nil})
 		delete(v6(d, 0), "requestPrefixLength")

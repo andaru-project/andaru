@@ -84,6 +84,9 @@ func (r Realizer) services(ctx context.Context, from, to []placed) error {
 		if err := r.syncPrefixes(ctx, false); err != nil {
 			return err
 		}
+		if err := r.checkTemplate(ctx); err != nil {
+			return err
+		}
 	}
 	for _, s := range []keaServer{
 		{keaFile, "/usr/sbin/kea-dhcp4", "kea-dhcp4-server.service", keaSocket, "DHCP server", kea, hadKea},
@@ -181,6 +184,22 @@ func (r Realizer) keaStatus(ctx context.Context, socket string) error {
 	return nil
 }
 
+// keaCheck runs Kea's own checker on file, waiting while it names an interface networkd has not created yet.
+func (r Realizer) keaCheck(ctx context.Context, tool, file, what string) error {
+	var refused error
+	if err := r.waitFor(ctx, func() error {
+		_, err := r.Run(ctx, tool, "-t", file)
+		if err != nil && !strings.Contains(err.Error(), "doesn't exist in the system") && !strings.Contains(err.Error(), "is not present in the system") {
+			refused = err // anything else is the configuration itself: no point waiting
+			return nil
+		}
+		return err
+	}); err != nil || refused != nil {
+		return fmt.Errorf("the %s refuses its configuration: %w", what, cmp.Or(refused, err))
+	}
+	return nil
+}
+
 // keaServer is one of Kea's two daemons and whether the generations carry its file.
 type keaServer struct {
 	file, tool, unit, socket, what string
@@ -193,16 +212,8 @@ func (r Realizer) keaServe(ctx context.Context, s keaServer) error {
 	case s.serve:
 		// Kea refuses an interface that does not exist, and networkctl reload returns before networkd has
 		// created every VLAN and bridge.
-		var refused error
-		if err := r.waitFor(ctx, func() error {
-			_, err := r.Run(ctx, s.tool, "-t", s.file)
-			if err != nil && !strings.Contains(err.Error(), "doesn't exist in the system") && !strings.Contains(err.Error(), "is not present in the system") {
-				refused = err // anything else is the configuration itself: no point waiting
-				return nil
-			}
+		if err := r.keaCheck(ctx, s.tool, s.file, s.what); err != nil {
 			return err
-		}); err != nil || refused != nil {
-			return fmt.Errorf("the %s refuses its configuration: %w", s.what, cmp.Or(refused, err))
 		}
 		if _, err := r.Run(ctx, "/usr/bin/systemctl", "restart", s.unit); err != nil {
 			return fmt.Errorf("start the %s: %w", s.what, err)

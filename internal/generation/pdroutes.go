@@ -190,11 +190,6 @@ func (r Realizer) waitingInterfaces(cfg kea6Config) map[string]bool {
 }
 
 func (r Realizer) syncRoutes(ctx context.Context, leases []keaLease, table map[string]nextHop, served func(netip.Prefix, nextHop) bool, pools, waiting map[string]bool) error {
-	for _, pool := range slices.Sorted(maps.Keys(pools)) {
-		if _, err := r.Run(ctx, "/usr/sbin/ip", "-6", "route", "replace", "unreachable", pool, "proto", pdProto); err != nil {
-			slog.Warn("install a delegation pool's route", "pool", pool, "error", err)
-		}
-	}
 	wanted := map[string]nextHop{}
 	for _, l := range leases {
 		if l.Type != "IA_PD" || l.State != 0 {
@@ -208,6 +203,15 @@ func (r Realizer) syncRoutes(ctx context.Context, leases []keaLease, table map[s
 		key := prefix.String()
 		if hop, ok := table[key]; ok && served(prefix, hop) {
 			wanted[key] = hop
+		}
+	}
+	for _, pool := range slices.Sorted(maps.Keys(pools)) {
+		// A pool handing out itself is its router's route while leased, which an unreachable one would replace.
+		if wanted[pool] != (nextHop{}) {
+			continue
+		}
+		if _, err := r.Run(ctx, "/usr/sbin/ip", "-6", "route", "replace", "unreachable", pool, "proto", pdProto); err != nil {
+			slog.Warn("install a delegation pool's route", "pool", pool, "error", err)
 		}
 	}
 	for _, key := range slices.Sorted(maps.Keys(wanted)) {

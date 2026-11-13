@@ -50,7 +50,7 @@ type PlaceView struct {
 // ReadPrefixView reads the saved prefixes and the live generation's files under root; it needs no network access.
 func ReadPrefixView(root string) (PrefixView, error) {
 	r := Realizer{Root: root}
-	links, hints := r.readDelegatedLinks()
+	links, hints, _ := r.readDelegatedLinks()
 	state, err := delegation.ReadState(root + delegatedState)
 	if err != nil {
 		return PrefixView{}, err

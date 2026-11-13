@@ -1,6 +1,7 @@
 package generation
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"slices"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -51,13 +53,11 @@ func advertisement(old netip.Prefix, valid uint32, routerLifetime uint16, manage
 	return b
 }
 
-// deprecate records the /64s the delegated segments lost since the last run and advertises every recorded one
-// still in its window, on segments that announce their delegated prefix.
-func (r Realizer) deprecate(links []delegatedLink, before, after delegation.State) error {
+// recordReplaced adds the /64s the delegated segments lost since before, and drops entries past their window.
+func (r Realizer) recordReplaced(links []delegatedLink, before, after delegation.State) ([]replaced, error) {
 	var list []replaced
-	if data, err := os.ReadFile(r.Root + replacedPrefixes); err == nil {
-		_ = json.Unmarshal(data, &list) // a damaged list only costs deprecations already under way
-	}
+	raw, _ := os.ReadFile(r.Root + replacedPrefixes)
+	_ = json.Unmarshal(raw, &list) // a damaged list only costs deprecations already under way
 	now := r.Now()
 	for _, l := range links {
 		old, new := before.WANs[l.Uplink].Current, after.WANs[l.Uplink].Current
@@ -68,19 +68,30 @@ func (r Realizer) deprecate(links []delegatedLink, before, after delegation.Stat
 			list = append(list, replaced{l.Interface, p, now, old.Valid})
 		}
 	}
+	list = slices.DeleteFunc(list, func(d replaced) bool { return now.Sub(d.Seen) > deprecationWindow || !d.Valid.After(now) })
+	data, _ := json.Marshal(list)
+	if bytes.Equal(data, raw) || len(list) == 0 && len(raw) == 0 {
+		return list, nil
+	}
+	return list, writeAtomic(r.Root+replacedPrefixes, data, 0o644)
+}
+
+// sendDeprecations advertises each recorded /64 on its segment, if the segment announces its delegated prefix.
+// A change seen in this run waits DeprecateAfter, so networkd's own advertisement listing it goes first.
+func (r Realizer) sendDeprecations(links []delegatedLink, list []replaced) {
 	send := r.SendRA
 	if send == nil {
 		send = sendRA
 	}
-	var kept []replaced
+	now, waited := r.Now(), false
 	for _, d := range list {
-		if now.Sub(d.Seen) > deprecationWindow || !d.Valid.After(now) {
-			continue
-		}
-		kept = append(kept, d)
 		for _, l := range links {
 			if l.Interface != d.Interface || !l.Announce {
 				continue
+			}
+			if d.Seen.Equal(now) && !waited {
+				time.Sleep(r.DeprecateAfter)
+				waited = true
 			}
 			valid := min(7200, uint32(d.Valid.Sub(now)/time.Second))
 			if err := send(l.Interface, advertisement(d.Prefix, valid, l.RouterLifetime, l.Managed, l.Other, l.Preference)); err != nil {
@@ -88,8 +99,6 @@ func (r Realizer) deprecate(links []delegatedLink, before, after delegation.Stat
 			}
 		}
 	}
-	data, _ := json.Marshal(kept)
-	return writeAtomic(r.Root+replacedPrefixes, data, 0o644)
 }
 
 // sendRA sends an ICMPv6 message to all nodes on ifname from its link-local address.

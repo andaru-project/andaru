@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/andaru-project/andaru/internal/delegation"
@@ -39,10 +40,10 @@ type delegatedLink struct {
 }
 
 // readDelegatedLinks parses Andaru's networkd files for the delegated segments and each uplink's requested length.
-func (r Realizer) readDelegatedLinks() ([]delegatedLink, map[string]int) {
+func (r Realizer) readDelegatedLinks() ([]delegatedLink, map[string]int, map[string]bool) {
 	paths, _ := filepath.Glob(r.Root + "/run/systemd/network/50-andaru-*.network")
 	var links []delegatedLink
-	hints := map[string]int{}
+	hints, wans := map[string]int{}, map[string]bool{}
 	for _, path := range paths {
 		name := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), "50-andaru-"), ".network")
 		data, err := os.ReadFile(path)
@@ -55,6 +56,9 @@ func (r Realizer) readDelegatedLinks() ([]delegatedLink, map[string]int) {
 			line = strings.TrimSpace(line)
 			if strings.HasPrefix(line, "[") {
 				section = line
+				if line == "[DHCPv6]" {
+					wans[name] = true // a DHCPv6 client, which may receive a prefix of its own
+				}
 				continue
 			}
 			key, value, _ := strings.Cut(line, "=")
@@ -88,7 +92,7 @@ func (r Realizer) readDelegatedLinks() ([]delegatedLink, map[string]int) {
 			links = append(links, l)
 		}
 	}
-	return links, hints
+	return links, hints, wans
 }
 
 // seenPrefix is a delegated prefix networkd holds and the lifetimes of the LAN addresses numbered from it.
@@ -100,7 +104,7 @@ type seenPrefix struct {
 
 // readKernel returns the prefixes networkd holds per uplink: its unreachable route for each, matched to an
 // uplink through the delegated LANs numbered from it.
-func (r Realizer) readKernel(ctx context.Context, links []delegatedLink) (map[string][]seenPrefix, error) {
+func (r Realizer) readKernel(ctx context.Context, links []delegatedLink, wans map[string]bool) (map[string][]seenPrefix, error) {
 	out, err := r.Run(ctx, "/usr/sbin/ip", "-j", "-6", "route", "show", "type", "unreachable", "proto", "dhcp")
 	if err != nil {
 		return nil, fmt.Errorf("list the delegated prefixes: %w", err)
@@ -149,9 +153,9 @@ func (r Realizer) readKernel(ctx context.Context, links []delegatedLink) (map[st
 				}
 			}
 		}
-		// shortcut: a prefix numbering none of the LANs (none fits it) is only placed when one uplink delegates;
-		// with several, it cannot be told whose it is until a LAN fits.
-		if !matched && len(uplinks) == 1 {
+		// A prefix numbering none of the LANs (none fits it) is placed only when the host has a single DHCPv6
+		// client, which is then the only one that can hold it: so the view and the apply can say it does not fit.
+		if !matched && len(uplinks) == 1 && len(wans) == 1 {
 			for up := range uplinks {
 				seen[up] = append(seen[up], seenPrefix{prefix: p})
 			}
@@ -163,14 +167,14 @@ func (r Realizer) readKernel(ctx context.Context, links []delegatedLink) (map[st
 // currentPrefixes decides each uplink's current prefix, updates the saved state, and returns the prefixes to
 // serve: the preferred one networkd holds, else the saved one while it is valid. Without kernel only the saved
 // state counts, as at boot before networkd runs.
-func (r Realizer) currentPrefixes(ctx context.Context, links []delegatedLink, hints map[string]int, kernel bool) (map[string]netip.Prefix, delegation.State, error) {
+func (r Realizer) currentPrefixes(ctx context.Context, links []delegatedLink, hints map[string]int, wans map[string]bool, kernel bool) (map[string]netip.Prefix, delegation.State, error) {
 	state, err := delegation.ReadState(r.Root + delegatedState)
 	if err != nil {
 		slog.Warn("read the saved delegated prefixes", "error", err)
 	}
 	seen := map[string][]seenPrefix{}
 	if kernel {
-		if seen, err = r.readKernel(ctx, links); err != nil {
+		if seen, err = r.readKernel(ctx, links, wans); err != nil {
 			return nil, state, err
 		}
 	}
@@ -269,6 +273,9 @@ func (r Realizer) fillKea6(prefixes map[string]netip.Prefix) ([]byte, bool, erro
 // SyncPrefixes follows the prefixes the WANs receive: Kea's DHCPv6 subnets on delegated segments, and the state
 // the engine shows. It runs on networkd's link changes, on a timer, and after the apply.
 func (r Realizer) SyncPrefixes(ctx context.Context) error {
+	if links, _, _ := r.readDelegatedLinks(); len(links) == 0 {
+		return nil // nothing delegated: the timer's run touches nothing
+	}
 	unlock, err := r.lock()
 	if err != nil {
 		return err
@@ -277,54 +284,54 @@ func (r Realizer) SyncPrefixes(ctx context.Context) error {
 	return r.syncPrefixes(ctx, true)
 }
 
-// syncPrefixes holds the lock. A reconfigure is sent to a running Kea and the file written only once Kea took
-// it; the apply passes reconfigure false, since it restarts Kea on the file itself.
+// syncPrefixes holds the lock. A running Kea is handed the new configuration first, and the file written only
+// once Kea took it; the apply passes reconfigure false, since it restarts Kea on the file itself. The state is
+// saved last, so a run that fails sees the same change again.
 func (r Realizer) syncPrefixes(ctx context.Context, reconfigure bool) error {
-	links, hints := r.readDelegatedLinks()
+	links, hints, wans := r.readDelegatedLinks()
+	if len(links) == 0 {
+		return nil
+	}
 	before, _ := delegation.ReadState(r.Root + delegatedState)
-	prefixes, state, err := r.currentPrefixes(ctx, links, hints, true)
+	prefixes, state, err := r.currentPrefixes(ctx, links, hints, wans, true)
 	if err != nil {
 		return err
 	}
-	if err := r.saveState(state); err != nil {
+	data, ok, err := r.fillKea6(prefixes)
+	if err != nil {
+		return err
+	}
+	if old, err := os.ReadFile(r.Root + kea6File); ok && (err != nil || !bytes.Equal(old, data)) {
+		if reconfigure {
+			if err := r.keaConfigSet(ctx, data); err != nil {
+				return err
+			}
+		}
+		if err := writeAtomic(r.Root+kea6File, data, 0o644); err != nil {
+			return err
+		}
+		if reconfigure {
+			// Names and pool routes follow the new prefix; Kea's reconfiguration fires no lease event.
+			if _, err := r.Run(ctx, "/usr/bin/systemctl", "start", "--no-block", "andaru-leases.service"); err != nil {
+				slog.Warn("start the lease sync", "error", err)
+			}
+		}
+	}
+	list, err := r.recordReplaced(links, before, state)
+	if err != nil {
 		return err
 	}
 	if reconfigure {
-		if changed := r.changed(links, before, state); changed {
-			time.Sleep(r.DeprecateAfter)
-		}
-		if err := r.deprecate(links, before, state); err != nil {
-			slog.Warn("record the replaced prefixes", "error", err)
-		}
+		r.sendDeprecations(links, list)
 	}
-	data, ok, err := r.fillKea6(prefixes)
-	if err != nil || !ok {
-		return err
-	}
-	if old, err := os.ReadFile(r.Root + kea6File); err == nil && bytes.Equal(old, data) {
-		return nil
-	}
-	if !reconfigure {
-		return writeAtomic(r.Root+kea6File, data, 0o644)
-	}
-	if err := r.keaConfigSet(ctx, data); err != nil {
-		return err
-	}
-	if err := writeAtomic(r.Root+kea6File, data, 0o644); err != nil {
-		return err
-	}
-	// Names and pool routes follow the new prefix; Kea's reconfiguration fires no lease event.
-	if _, err := r.Run(ctx, "/usr/bin/systemctl", "start", "--no-block", "andaru-leases.service"); err != nil {
-		slog.Warn("start the lease sync", "error", err)
-	}
-	return nil
+	return r.saveState(before, state)
 }
 
 // bootPrefixes fills Kea's file from the saved prefixes before networkd and Kea start, so Kea's first lease
 // sync still finds the delegated pools and keeps their next hops.
 func (r Realizer) bootPrefixes() error {
-	links, hints := r.readDelegatedLinks()
-	prefixes, _, _ := r.currentPrefixes(context.Background(), links, hints, false)
+	links, hints, wans := r.readDelegatedLinks()
+	prefixes, _, _ := r.currentPrefixes(context.Background(), links, hints, wans, false)
 	data, ok, err := r.fillKea6(prefixes)
 	if err != nil || !ok {
 		return err
@@ -332,20 +339,13 @@ func (r Realizer) bootPrefixes() error {
 	return writeAtomic(r.Root+kea6File, data, 0o644)
 }
 
-// changed reports whether a delegated segment's uplink has a new current prefix this run.
-func (r Realizer) changed(links []delegatedLink, before, after delegation.State) bool {
-	for _, l := range links {
-		if old, new := before.WANs[l.Uplink].Current, after.WANs[l.Uplink].Current; old != nil && (new == nil || new.Prefix != old.Prefix) {
-			return true
-		}
-	}
-	return false
-}
-
 func toFloat(v any) float64 { f, _ := v.(float64); return f }
 
-func (r Realizer) saveState(s delegation.State) error {
+func (r Realizer) saveState(before, s delegation.State) error {
 	data, _ := json.Marshal(s)
+	if old, _ := json.Marshal(before); bytes.Equal(old, data) {
+		return nil
+	}
 	if err := os.MkdirAll(filepath.Dir(r.Root+delegatedState), 0o755); err != nil {
 		return err
 	}
@@ -358,8 +358,11 @@ func (r Realizer) keaConfigSet(ctx context.Context, conf []byte) error {
 	defer cancel()
 	var d net.Dialer
 	c, err := d.DialContext(ctx, "unix", r.Root+kea6Socket)
+	if errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED) {
+		return nil // not running: it reads the file when it starts
+	}
 	if err != nil {
-		return nil
+		return fmt.Errorf("reconfigure the DHCPv6 server: %w", err)
 	}
 	defer c.Close()
 	if deadline, ok := ctx.Deadline(); ok {
@@ -379,4 +382,33 @@ func (r Realizer) keaConfigSet(ctx context.Context, conf []byte) error {
 		return fmt.Errorf("the DHCPv6 server refused the new prefix's configuration (%d): %s", reply.Result, reply.Text)
 	}
 	return nil
+}
+
+// kea6Check is where the apply has Kea's checker judge the delegated subnets, filled with a documentation prefix.
+const kea6Check = "/run/andaru-kea/kea-dhcp6.check.conf"
+
+// checkTemplate fills the delegated subnets under 2001:db8::/<requested length> and has Kea's checker judge them,
+// so a template Kea refuses fails the apply even before any prefix is known.
+func (r Realizer) checkTemplate(ctx context.Context) error {
+	links, hints, _ := r.readDelegatedLinks()
+	doc := map[string]netip.Prefix{}
+	for _, l := range links {
+		doc[l.Uplink] = netip.PrefixFrom(netip.MustParseAddr("2001:db8::"), cmpOr(hints[l.Uplink], 48))
+	}
+	data, ok, err := r.fillKea6(doc)
+	if err != nil || !ok {
+		return err
+	}
+	if err := writeAtomic(r.Root+kea6Check, data, 0o644); err != nil {
+		return err
+	}
+	defer os.Remove(r.Root + kea6Check)
+	return r.keaCheck(ctx, "/usr/sbin/kea-dhcp6", kea6Check, "DHCPv6 server")
+}
+
+func cmpOr(n, fallback int) int {
+	if n == 0 || n > 64 {
+		return fallback
+	}
+	return n
 }

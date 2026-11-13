@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -299,6 +300,8 @@ type bench struct {
 	net *fakeNetworkd
 	dir string
 	now time.Time
+	// keaRefuse makes the DHCPv6 fake refuse config-set while set.
+	keaRefuse *atomic.Bool
 }
 
 const (

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -75,7 +76,11 @@ func (b *bench) delegatedLAN(prefix string, result int) *keaSetter {
 			k.mu.Lock()
 			k.sent = append(k.sent, string(req["arguments"]))
 			k.mu.Unlock()
-			reply, _ := json.Marshal(map[string]any{"result": result, "text": "refused"})
+			answer := result
+			if b.keaRefuse != nil && b.keaRefuse.Load() {
+				answer = 1
+			}
+			reply, _ := json.Marshal(map[string]any{"result": answer, "text": "refused"})
 			c.Write(reply)
 			c.Close()
 		}
@@ -394,5 +399,148 @@ func TestPrefixChangeStartsLeaseSync(t *testing.T) {
 	}
 	if b.index("systemctl start --no-block andaru-leases.service") < 0 {
 		t.Fatalf("lease sync not started: %q", b.net.argv)
+	}
+}
+
+// A route networkd holds for another DHCPv6 WAN's prefix is never served on this WAN's LAN.
+func TestPrefixesForeignRouteIgnored(t *testing.T) {
+	b := newBench(t)
+	b.delegatedLAN("2001:db8:aa00::/48", -1)
+	writeFile(t, filepath.Join(b.net.root, netDir, "50-andaru-ens21.network"), "[Network]\nDHCP=yes\n\n[DHCPv6]\nUseDNS=no\n")
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	b.net.addr6[0]["preferred_life_time"] = 0 // an outage on this WAN
+	b.net.pd = append(b.net.pd, "2001:db8:ffff::/48")
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(b.keaFile(), "2001:db8:ffff") || b.prefixState().WANs["ens18"].Current.Prefix != mustPrefix("2001:db8:aa00::/48") {
+		t.Fatalf("another WAN's prefix served:\n%s", b.keaFile())
+	}
+}
+
+// A refused configuration is offered again on the next run, and the change it carries is still deprecated.
+func TestPrefixesRefusedThenRetried(t *testing.T) {
+	b := newBench(t)
+	s := &sent{}
+	b.r.SendRA = s.record
+	k := b.delegatedLAN("2001:db8:aa00::/48", 0)
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	b.prefix("2001:db8:bb00::/48", 3600, 7200)
+	b.keaRefuse = &atomic.Bool{}
+	b.keaRefuse.Store(true)
+	if err := b.r.SyncPrefixes(t.Context()); err == nil {
+		t.Fatal("refusal went unreported")
+	}
+	if len(s.list()) != 0 {
+		t.Fatalf("deprecated before Kea took the new prefix: %v", s.list())
+	}
+	b.keaRefuse.Store(false)
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.keaFile(), "2001:db8:bb00:1::/64") || k.count() != 3 || len(s.list()) != 1 {
+		t.Fatalf("not retried: %d config-sets, sent %v\n%s", k.count(), s.list(), b.keaFile())
+	}
+}
+
+// A change first seen by an apply is deprecated by the next prefix sync.
+func TestChangeSeenByApplyIsDeprecated(t *testing.T) {
+	b := newBench(t)
+	s := &sent{}
+	b.r.SendRA = s.record
+	b.delegatedLAN("2001:db8:aa00::/48", -1)
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	b.prefix("2001:db8:bb00::/48", 3600, 7200)
+	if err := b.r.syncPrefixes(t.Context(), false); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.list(); len(got) != 1 || !strings.HasPrefix(got[0], "ens19 2001:db8:aa00:1::/64") {
+		t.Fatalf("sent %v", got)
+	}
+}
+
+// The deprecation never extends an old address: at most two hours, as RFC 4862 lets a router shorten it.
+func TestDeprecationValidCapped(t *testing.T) {
+	b := newBench(t)
+	s := &sent{}
+	b.r.SendRA = s.record
+	b.delegatedLAN("", -1)
+	b.prefix("2001:db8:aa00::/48", 3600, 86400)
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	b.prefix("2001:db8:bb00::/48", 3600, 86400)
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.list(); len(got) != 1 || got[0] != "ens19 2001:db8:aa00:1::/64 valid 7200" {
+		t.Fatalf("sent %v", got)
+	}
+}
+
+// Boot fills Kea's file from the saved prefix before networkd and Kea start.
+func TestBootFillsDelegatedSubnets(t *testing.T) {
+	b := newBench(t)
+	b.delegatedLAN("2001:db8:aa00::/48", -1)
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	b.live(map[string]string{"50-andaru-ens18.network": wanNetwork, "50-andaru-ens19.network": lanNetwork, kea6File: kea6Base, kea6Template: templateBody})
+	b.prefix("", 0, 0)
+	if err := os.Remove(filepath.Join(b.net.root, kea6File)); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Boot(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.keaFile(), "2001:db8:aa00:1::/64") {
+		t.Fatalf("boot left Kea without the delegated subnet:\n%s", b.keaFile())
+	}
+}
+
+// The apply checks the delegated subnets with Kea's checker, filled with a documentation prefix.
+func TestActivateChecksTemplate(t *testing.T) {
+	b := newBench(t)
+	writeFile(t, filepath.Join(b.net.root, netDir, "50-andaru-ens18.network"), wanNetwork)
+	writeFile(t, filepath.Join(b.net.root, netDir, "50-andaru-ens19.network"), lanNetwork)
+	var checked string
+	b.net.onRun = func(command string) {
+		if command == "kea-dhcp6 -t "+kea6Check {
+			data, _ := os.ReadFile(filepath.Join(b.net.root, kea6Check))
+			checked = string(data)
+		}
+	}
+	if err := b.r.Activate(t.Context(), b.gen(false, map[string]string{kea6File: kea6Base, kea6Template: templateBody})); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(checked, `"subnet": "2001:db8:0:1::/64"`) {
+		t.Fatalf("template not checked: %q", checked)
+	}
+	b.net.fail, b.net.failWith = "kea-dhcp6 -t "+kea6Check, "Dhcp6 bad pool"
+	if err := b.r.Activate(t.Context(), b.gen(false, map[string]string{kea6File: kea6Base, kea6Template: templateBody})); err == nil {
+		t.Fatal("a template Kea refuses was applied")
+	}
+}
+
+// No delegated segment: the timer's run touches nothing.
+func TestPrefixesIdle(t *testing.T) {
+	b := newBench(t)
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.net.argv) != 0 {
+		t.Fatalf("ran %q", b.net.argv)
+	}
+	if _, err := os.Stat(filepath.Join(b.net.root, delegatedState)); !os.IsNotExist(err) {
+		t.Fatal("state written with nothing delegated")
 	}
 }
