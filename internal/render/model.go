@@ -127,8 +127,24 @@ type declaration struct {
 		Segment        string   `json:"segment"`
 		AllowedSources []string `json:"allowedSources"`
 	} `json:"management"`
-	DHCP []dhcpEntry `json:"dhcp"`
-	DNS  *dnsService `json:"dns"`
+	DHCP  []dhcpEntry  `json:"dhcp"`
+	DHCP6 []dhcp6Entry `json:"dhcp6"`
+	DNS   *dnsService  `json:"dns"`
+}
+
+type dhcp6Entry struct {
+	ID, Segment  string
+	Ranges       []struct{ First, Last string }
+	LeaseTime    int
+	DNSServers   []string
+	StaticLeases []struct {
+		DUID, Address, Prefix, Hostname string
+	}
+	PrefixDelegation *struct {
+		Prefix          string
+		DelegatedLength int
+		ExcludedPrefix  string
+	}
 }
 
 type natPoint struct {

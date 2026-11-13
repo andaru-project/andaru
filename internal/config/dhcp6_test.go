@@ -65,7 +65,9 @@ func TestDHCPv6Validation(t *testing.T) {
 		"delegated 47":          {map[string]any{"prefixDelegation": map[string]any{"prefix": "fd00:beef:1::/48", "delegatedLength": 47}}, p + "/prefixDelegation/delegatedLength"},
 		"delegated 65":          {map[string]any{"prefixDelegation": map[string]any{"prefix": "fd00:beef:1::/48", "delegatedLength": 65}}, p + "/prefixDelegation/delegatedLength"},
 		"pool overlaps segment": {map[string]any{"staticLeases": nil, "prefixDelegation": map[string]any{"prefix": "fd00::/16", "delegatedLength": 56}}, p + "/prefixDelegation/prefix"},
-		"excluded outside":      {map[string]any{"prefixDelegation": map[string]any{"prefix": "fd00:beef:1::/48", "delegatedLength": 56, "excludedPrefix": "fd00:dead::/64"}}, p + "/prefixDelegation/excludedPrefix"},
+		// Kea applies the excluded prefix at the same place in every delegated prefix, so it names that place in the first.
+		"excluded past the first": {map[string]any{"prefixDelegation": map[string]any{"prefix": "fd00:beef:1::/48", "delegatedLength": 56, "excludedPrefix": "fd00:beef:1:ff00::/64"}}, p + "/prefixDelegation/excludedPrefix"},
+		"excluded outside":        {map[string]any{"prefixDelegation": map[string]any{"prefix": "fd00:beef:1::/48", "delegatedLength": 56, "excludedPrefix": "fd00:dead::/64"}}, p + "/prefixDelegation/excludedPrefix"},
 	} {
 		t.Run(name, func(t *testing.T) { refusedAt(t, dhcp6Fixture(t, tc.fields), tc.path) })
 	}

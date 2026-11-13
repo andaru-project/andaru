@@ -11,6 +11,7 @@ import (
 
 const (
 	keaPath      = "/run/andaru-kea/kea-dhcp4.conf"
+	kea6Path     = "/run/andaru-kea/kea-dhcp6.conf"
 	unboundPath  = "/run/andaru-unbound/andaru.conf"
 	resolvedPath = "/run/systemd/resolved.conf.d/50-andaru.conf"
 )
@@ -148,6 +149,8 @@ func (r *renderer) services() {
 		r.file(keaPath, "0644", string(raw)+"\n", []string{"/dhcp"})
 	}
 
+	names = append(names, r.dhcp6(dnsServes, register)...)
+
 	if d.DNS == nil {
 		return
 	}
@@ -177,6 +180,12 @@ func (r *renderer) services() {
 					}
 				}
 			}
+		}
+	}
+	// Hosts behind a downstream router are numbered from the segment's delegation pool.
+	for _, e := range d.DHCP6 {
+		if _, _, _, ok := r.servedV6(e.Segment); ok && slices.Contains(d.DNS.Segments, e.Segment) && e.PrefixDelegation != nil {
+			acl = append(acl, "\taccess-control: "+e.PrefixDelegation.Prefix+" allow")
 		}
 	}
 	lines = append(lines, acl...)
@@ -226,4 +235,128 @@ func subnetID(segment string, used map[uint32]bool) uint32 {
 		used[id] = true
 	}
 	return id
+}
+
+// served6 is a usable segment's interface and the /64 DHCPv6 serves: its first static one that is not link-local.
+func (r *renderer) served6(id string) (string, netip.Prefix, bool) {
+	for _, s := range r.d.Segments {
+		if s.ID != id || !r.usable[s.Link] || s.Addressing.IPv6.Mode != "static" {
+			continue
+		}
+		for _, raw := range slices.Sorted(slices.Values(s.Addressing.IPv6.Addresses)) {
+			if p, err := netip.ParsePrefix(raw); err == nil && p.Addr().Is6() && !p.Addr().IsLinkLocalUnicast() && p.Bits() == 64 {
+				return r.name[s.Link], p, true
+			}
+		}
+	}
+	return "", netip.Prefix{}, false
+}
+
+// dhcp6 renders Kea's DHCPv6 configuration and returns the static lease names the DNS service publishes.
+func (r *renderer) dhcp6(dnsServes func(string) bool, register bool) (names []string) {
+	d := r.d
+	if len(d.DHCP6) == 0 {
+		return nil
+	}
+	if !r.in.Facts.Kea6Tool || r.in.Facts.KeaHooks == "" {
+		r.find("error", "TOOL_MISSING", "/dhcp6", "The DHCPv6 server is not installed; install the kea-dhcp6-server package.")
+	}
+	var interfaces []string
+	var subnets []map[string]any
+	ids := map[uint32]bool{}
+	for i, e := range d.DHCP6 {
+		name, own, ok := r.served6(e.Segment)
+		if !ok {
+			continue
+		}
+		if len(e.Ranges) > 0 {
+			if mode := r.raMode(e.Segment); mode != "managed" && mode != "assisted" {
+				r.find("warning", "DHCP6_UNANNOUNCED", fmt.Sprintf("/dhcp6/%d", i), "The segment's router advertisements do not tell clients to ask for addresses, so only clients that ask on their own get one; with advertisements disabled, clients also get no default route.")
+			}
+		}
+		interfaces = append(interfaces, name)
+		servers := e.DNSServers
+		if len(servers) == 0 && dnsServes(e.Segment) {
+			if _, stable, _, ok := r.servedV6(e.Segment); ok {
+				servers = []string{stable.Addr().String()}
+			}
+		}
+		var options []map[string]any
+		if len(servers) > 0 {
+			options = append(options, map[string]any{"name": "dns-servers", "data": strings.Join(servers, ", ")})
+		}
+		domain := ""
+		if d.DNS != nil {
+			domain = d.DNS.LocalDomain
+			options = append(options, map[string]any{"name": "domain-search", "data": strings.Join(append([]string{domain}, d.DNS.SearchDomains...), ", ")})
+		}
+		pools := []map[string]any{}
+		for _, rg := range e.Ranges {
+			pools = append(pools, map[string]any{"pool": rg.First + " - " + rg.Last})
+		}
+		var pdPools []map[string]any
+		if pd := e.PrefixDelegation; pd != nil {
+			pool, _ := netip.ParsePrefix(pd.Prefix)
+			entry := map[string]any{"prefix": pool.Addr().String(), "prefix-len": pool.Bits(), "delegated-len": pd.DelegatedLength}
+			if x, err := netip.ParsePrefix(pd.ExcludedPrefix); err == nil {
+				entry["excluded-prefix"], entry["excluded-prefix-len"] = x.Addr().String(), x.Bits()
+			}
+			pdPools = append(pdPools, entry)
+		}
+		reservations := []map[string]any{}
+		for _, l := range e.StaticLeases {
+			res := map[string]any{"duid": l.DUID}
+			if l.Address != "" {
+				res["ip-addresses"] = []string{l.Address}
+			}
+			if l.Prefix != "" {
+				res["prefixes"] = []string{l.Prefix}
+			}
+			if l.Hostname != "" {
+				res["hostname"] = l.Hostname
+				if l.Address != "" && dnsServes(e.Segment) {
+					fqdn := l.Hostname + "." + domain + "."
+					names = append(names, fmt.Sprintf("local-data: %q", fqdn+" 3600 IN AAAA "+l.Address), fmt.Sprintf("local-data-ptr: %q", l.Address+" 3600 "+fqdn))
+				}
+			}
+			reservations = append(reservations, res)
+		}
+		subnet := map[string]any{
+			"id": subnetID(e.Segment, ids), "subnet": own.Masked().String(), "interface": name, "pools": pools, "reservations": reservations,
+			// Kea's default ratio: the preferred lifetime is five-eighths of the valid one.
+			"valid-lifetime": e.LeaseTime, "preferred-lifetime": e.LeaseTime * 5 / 8, "option-data": options,
+			"user-context": map[string]any{"andaru": map[string]any{"domain": domain, "register": register && dnsServes(e.Segment)}},
+		}
+		if pdPools != nil {
+			subnet["pd-pools"] = pdPools
+		}
+		subnets = append(subnets, subnet)
+	}
+	if len(subnets) == 0 {
+		return names
+	}
+	kea := map[string]any{"Dhcp6": map[string]any{
+		// Kea never listens on an interface that was down when it started, unless it retries.
+		"interfaces-config": map[string]any{"interfaces": interfaces, "service-sockets-max-retries": 30, "service-sockets-retry-wait-time": 2000},
+		"control-socket":    map[string]any{"socket-type": "unix", "socket-name": "/run/kea/kea6-ctrl-socket"},
+		"lease-database":    map[string]any{"type": "memfile", "persist": true, "lfc-interval": 3600},
+		"hooks-libraries": []map[string]any{
+			{"library": r.in.Facts.KeaHooks + "/libdhcp_lease_cmds.so"},
+			{"library": r.in.Facts.KeaHooks + "/libdhcp_run_script.so", "parameters": map[string]any{"name": "/usr/share/kea/scripts/andaru-lease-event", "sync": false}},
+		},
+		"subnet6": subnets,
+	}}
+	raw, _ := json.MarshalIndent(kea, "", "  ")
+	r.file(kea6Path, "0644", string(raw)+"\n", []string{"/dhcp6"})
+	return names
+}
+
+// raMode is a segment's router advertisement mode.
+func (r *renderer) raMode(id string) string {
+	for _, s := range r.d.Segments {
+		if s.ID == id {
+			return s.Addressing.IPv6.RA.mode()
+		}
+	}
+	return "disabled"
 }

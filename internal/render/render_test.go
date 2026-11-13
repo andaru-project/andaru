@@ -21,7 +21,7 @@ var testdata embed.FS
 
 var update = flag.Bool("update", false, "rewrite golden files")
 
-var allFacts = host.RealizerFacts{PPPDaemon: true, PPPoEPlugin: true, PPPDevice: true, ResolvedInCharge: true, NftTool: true, KeaTool: true, UnboundTool: true, KeaHooks: "/usr/lib/x86_64-linux-gnu/kea/hooks"}
+var allFacts = host.RealizerFacts{PPPDaemon: true, PPPoEPlugin: true, PPPDevice: true, ResolvedInCharge: true, NftTool: true, KeaTool: true, Kea6Tool: true, UnboundTool: true, KeaHooks: "/usr/lib/x86_64-linux-gnu/kea/hooks"}
 
 type observed struct{ Name, Kind, MAC string }
 

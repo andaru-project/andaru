@@ -99,6 +99,11 @@ func (r *renderer) filterChains() {
 			input = append(input, fmt.Sprintf("iifname %q udp sport 68 udp dport 67 accept", name))
 		}
 	}
+	for _, e := range d.DHCP6 {
+		if name, _, ok := r.served6(e.Segment); ok {
+			input = append(input, fmt.Sprintf("iifname %q ip6 saddr fe80::/10 udp sport 546 udp dport 547 accept", name))
+		}
+	}
 	if len(d.Management.AllowedSources) == 0 {
 		input = append(input, fmt.Sprintf("iifname %q tcp dport 22 accept", mgmt))
 	}

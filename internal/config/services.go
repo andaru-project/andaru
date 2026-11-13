@@ -341,9 +341,11 @@ func validateDHCP6(d *declaration, bad func(string, string)) {
 				bad(pp+"/delegatedLength", "Expected 48 to 64, longer than the pool's prefix.")
 			}
 			if pd.ExcludedPrefix != "" {
+				// Kea applies it at the same place in every delegated prefix, so it is written inside the first one.
 				x, err := netip.ParsePrefix(pd.ExcludedPrefix)
-				if err != nil || !pool.IsValid() || !pool.Contains(x.Addr()) || x.Bits() <= pd.DelegatedLength || x != x.Masked() {
-					bad(pp+"/excludedPrefix", "Expected a prefix inside the pool, longer than the delegated length.")
+				first := netip.PrefixFrom(pool.Addr(), pd.DelegatedLength)
+				if err != nil || !pool.IsValid() || !first.Contains(x.Addr()) || x.Bits() <= pd.DelegatedLength || x != x.Masked() {
+					bad(pp+"/excludedPrefix", "Expected a prefix inside the pool's first delegated prefix, longer than the delegated length.")
 				}
 			}
 		}
