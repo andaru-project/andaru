@@ -51,8 +51,8 @@ type kea6Config struct {
 				PrefixLen int    `json:"prefix-len"`
 			} `json:"pd-pools"`
 			Reservations []struct {
-				Hostname string   `json:"hostname"`
-				Prefixes []string `json:"prefixes"`
+				Hostname    string   `json:"hostname"`
+				IPAddresses []string `json:"ip-addresses"`
 			} `json:"reservations"`
 			UserContext struct {
 				Andaru struct {
@@ -107,7 +107,10 @@ func lease6Records(cfg kea6Config, leases []keaLease) []string {
 	domains, taken := map[int]string{}, map[string]bool{}
 	for _, s := range cfg.Dhcp6.Subnet6 {
 		for _, res := range s.Reservations {
-			taken[strings.ToLower(res.Hostname)] = true
+			// Only a static address publishes the name; a static prefix alone leaves it to the dynamic lease.
+			if len(res.IPAddresses) > 0 {
+				taken[strings.ToLower(res.Hostname)] = true
+			}
 		}
 		if s.UserContext.Andaru.Register && s.UserContext.Andaru.Domain != "" {
 			domains[s.ID] = s.UserContext.Andaru.Domain

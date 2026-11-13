@@ -16,7 +16,8 @@ import (
 // kea6Config serves ens19 with fd00:1::/64 and delegates /56s from fd00:beef:1::/48.
 const kea6Served = `{"Dhcp6":{"subnet6":[{"id":1,"subnet":"fd00:1::/64","interface":"ens19",
 	"pd-pools":[{"prefix":"fd00:beef:1::","prefix-len":48,"delegated-len":56}],
-	"reservations":[{"duid":"00:01:00:01:aa:bb:cc:dd:ee:ff","ip-addresses":["fd00:1::10"],"hostname":"printer"}],
+	"reservations":[{"duid":"00:01:00:01:aa:bb:cc:dd:ee:ff","ip-addresses":["fd00:1::10"],"hostname":"printer"},
+		{"duid":"00:01:00:01:aa:bb:cc:dd:ee:01","prefixes":["fd00:beef:1:300::/56"],"hostname":"router"}],
 	"user-context":{"andaru":{"domain":"home.arpa","register":true}}}]}}`
 
 // keaUser stands for _kea: the owner of Kea's runtime directory and of what its hook writes there. Unprivileged
@@ -208,12 +209,14 @@ func TestDHCPv6Names(t *testing.T) {
 	b.kea(lease{"192.168.40.130", "laptop", 0, 1, 7200, 100})
 	// "nas" is a static DHCPv4 name, "printer" a static DHCPv6 one.
 	b.kea6(lease6{Address: "fd00:1::1001", Type: "IA_NA", Hostname: "printer.", Subnet: 1, Valid: 4000, Cltt: 100},
-		lease6{Address: "fd00:1::1002", Type: "IA_NA", Hostname: "nas", Subnet: 1, Valid: 4000, Cltt: 100})
+		lease6{Address: "fd00:1::1002", Type: "IA_NA", Hostname: "nas", Subnet: 1, Valid: 4000, Cltt: 100},
+		// A static lease of a prefix only publishes no name, so it must not hold back the dynamic one.
+		lease6{Address: "fd00:1::1003", Type: "IA_NA", Hostname: "router", Subnet: 1, Valid: 4000, Cltt: 100})
 	if err := b.r.SyncLeases(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	names := b.leaseNames()
-	for _, want := range []string{`"laptop.home.arpa. 2400 IN A 192.168.40.130"`, `"nas.home.arpa. 1333 IN AAAA fd00:1::1002"`, `"fd00:1::1002 1333 nas.home.arpa."`} {
+	for _, want := range []string{`"router.home.arpa. 1333 IN AAAA fd00:1::1003"`, `"laptop.home.arpa. 2400 IN A 192.168.40.130"`, `"nas.home.arpa. 1333 IN AAAA fd00:1::1002"`, `"fd00:1::1002 1333 nas.home.arpa."`} {
 		if !strings.Contains(names, want) {
 			t.Fatalf("missing %s in:\n%s", want, names)
 		}
