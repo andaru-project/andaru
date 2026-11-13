@@ -358,7 +358,8 @@ func (r *renderer) dhcp6(dnsServes func(string) bool, register bool) (names []st
 			sub := delegation.TemplateSubnet{
 				ID: subnetID(e.Segment, ids), Interface: name, Uplink: uplink, SubnetID: subnetHex, Ranges: []delegation.TemplateRange{},
 				Reservations: []delegation.TemplateReservation{}, Valid: e.LeaseTime, Preferred: e.LeaseTime * 5 / 8, Options: options,
-				UserContext: map[string]any{"andaru": map[string]any{"domain": domain, "register": register && dnsServes(e.Segment)}},
+				// names: the DNS service serves the segment, so the lease sync publishes its static names.
+				UserContext: map[string]any{"andaru": map[string]any{"domain": domain, "register": register && dnsServes(e.Segment), "names": dnsServes(e.Segment)}},
 			}
 			for _, rg := range e.Ranges {
 				sub.Ranges = append(sub.Ranges, delegation.TemplateRange{First: rg.First, Last: rg.Last})

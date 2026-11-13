@@ -26,7 +26,7 @@ const (
 	"ranges":[{"first":"::1000","last":"::1fff"}],
 	"reservations":[{"duid":"00:01:00:01:aa:bb:cc:dd:ee:ff","address":"::10","prefixId":"1","hostname":"router"}],
 	"pool":{"subnetId":"8","length":60,"delegatedLength":64},
-	"valid-lifetime":7200,"preferred-lifetime":4500,"option-data":[],"user-context":{"andaru":{"domain":"home.arpa","register":true}}}]}`
+	"valid-lifetime":7200,"preferred-lifetime":4500,"option-data":[],"user-context":{"andaru":{"domain":"home.arpa","register":true,"names":true}}}]}`
 )
 
 // keaSetter answers config-set on the DHCPv6 socket with result, recording the configurations it was sent.
@@ -286,3 +286,113 @@ func (l *lockedBuffer) Write(p []byte) (int, error) {
 	return l.b.Write(p)
 }
 func (l *lockedBuffer) String() string { l.mu.Lock(); defer l.mu.Unlock(); return l.b.String() }
+
+// filled is a delegated LAN filled with 2001:db8:aa00::/48 and Kea answering lease6-get-all with leases.
+func (b *bench) filled(leases ...lease6) {
+	b.t.Helper()
+	b.delegatedLAN("2001:db8:aa00::/48", -1)
+	if err := b.r.SyncPrefixes(b.t.Context()); err != nil {
+		b.t.Fatal(err)
+	}
+	conf := b.keaFile()
+	b.kea6(leases...)
+	writeFile(b.t, filepath.Join(b.net.root, kea6File), conf) // kea6 writes its own static configuration
+}
+
+func TestPoolRouteInstalled(t *testing.T) {
+	b := newBench(t)
+	b.filled()
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if b.index("ip -6 route replace unreachable 2001:db8:aa00:80::/60 proto 77") < 0 {
+		t.Fatalf("pool route not installed: %q", b.net.argv)
+	}
+}
+
+// The sweep of protocol 77 keeps the pool's unreachable route and the leased prefixes' routes, and parses both.
+func TestLeaseSyncKeepsPoolRoute(t *testing.T) {
+	b := newBench(t)
+	b.filled(lease6{Address: "2001:db8:aa00:82::", PrefixLen: 64, Type: "IA_PD", Subnet: 7, Valid: 4000, Cltt: 100})
+	writeFile(t, filepath.Join(b.net.root, pdTable), `{"2001:db8:aa00:82::/64":{"via":"fe80::1","dev":"ens19"}}`)
+	b.net.routes = map[string]string{"2001:db8:aa00:80::/60": "unreachable", "2001:db8:aa00:82::/64": "fe80::1 dev ens19", "2001:db8:dead:80::/60": "unreachable"}
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for _, kept := range []string{"2001:db8:aa00:80::/60", "2001:db8:aa00:82::/64"} {
+		if b.index("ip -6 route del "+kept+" proto 77") >= 0 || b.index("ip -6 route del unreachable "+kept+" proto 77") >= 0 {
+			t.Fatalf("%s removed: %q", kept, b.net.argv)
+		}
+	}
+	if b.index("ip -6 route del unreachable 2001:db8:dead:80::/60 proto 77") < 0 {
+		t.Fatalf("a pool no longer filled kept its route: %q", b.net.argv)
+	}
+}
+
+// A fixed prefix (prefixId) is routed like a dynamic one once leased.
+func TestFixedPrefixRouted(t *testing.T) {
+	b := newBench(t)
+	b.filled(lease6{Address: "2001:db8:aa00:81::", PrefixLen: 64, Type: "IA_PD", Subnet: 7, Valid: 4000, Cltt: 100})
+	b.events("add 2001:db8:aa00:81::/64 fe80::1 ens19")
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if b.index("ip -6 route replace 2001:db8:aa00:81::/64 via fe80::1 dev ens19 proto 77") < 0 {
+		t.Fatalf("fixed prefix not routed: %q", b.net.argv)
+	}
+	if !strings.Contains(b.keaFile(), `"2001:db8:aa00:81::/64"`) {
+		t.Fatalf("fixed prefix not reserved:\n%s", b.keaFile())
+	}
+}
+
+// A static name on a delegated segment is published at its current address, and moves with the prefix.
+func TestStaticNameOnDelegated(t *testing.T) {
+	b := newBench(t)
+	b.filled()
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"router.home.arpa. 3600 IN AAAA 2001:db8:aa00:1::10"`, `"2001:db8:aa00:1::10 3600 router.home.arpa."`} {
+		if !strings.Contains(b.leaseNames(), want) {
+			t.Fatalf("missing %s in:\n%s", want, b.leaseNames())
+		}
+	}
+	b.prefix("2001:db8:bb00::/48", 3600, 7200)
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.leaseNames(), "AAAA 2001:db8:bb00:1::10") || strings.Contains(b.leaseNames(), "2001:db8:aa00") {
+		t.Fatalf("name did not move:\n%s", b.leaseNames())
+	}
+}
+
+// With the prefix expired, the delegated subnet is left out of Kea's file, but its routers' next hops stay for
+// when it returns.
+func TestNextHopsSurviveExpiredPrefix(t *testing.T) {
+	b := newBench(t)
+	b.delegatedLAN("", -1)
+	writeFile(t, filepath.Join(b.net.root, pdTable), `{"2001:db8:aa00:82::/64":{"via":"fe80::1","dev":"ens19"}}`)
+	b.kea6()
+	writeFile(t, filepath.Join(b.net.root, kea6File), kea6Base)
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if hop := b.table()["2001:db8:aa00:82::/64"]; hop.Via != "fe80::1" {
+		t.Fatalf("next hop dropped: %+v", b.table())
+	}
+}
+
+// A changed Kea configuration starts the lease sync, which moves names and routes.
+func TestPrefixChangeStartsLeaseSync(t *testing.T) {
+	b := newBench(t)
+	b.delegatedLAN("2001:db8:aa00::/48", 0)
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if b.index("systemctl start --no-block andaru-leases.service") < 0 {
+		t.Fatalf("lease sync not started: %q", b.net.argv)
+	}
+}

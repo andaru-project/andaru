@@ -75,6 +75,7 @@
       "user-context": {
         "andaru": {
           "domain": "home.arpa",
+          "names": true,
           "register": true
         }
       }

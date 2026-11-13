@@ -296,12 +296,20 @@ func (r Realizer) syncPrefixes(ctx context.Context, reconfigure bool) error {
 	if old, err := os.ReadFile(r.Root + kea6File); err == nil && bytes.Equal(old, data) {
 		return nil
 	}
-	if reconfigure {
-		if err := r.keaConfigSet(ctx, data); err != nil {
-			return err
-		}
+	if !reconfigure {
+		return writeAtomic(r.Root+kea6File, data, 0o644)
 	}
-	return writeAtomic(r.Root+kea6File, data, 0o644)
+	if err := r.keaConfigSet(ctx, data); err != nil {
+		return err
+	}
+	if err := writeAtomic(r.Root+kea6File, data, 0o644); err != nil {
+		return err
+	}
+	// Names and pool routes follow the new prefix; Kea's reconfiguration fires no lease event.
+	if _, err := r.Run(ctx, "/usr/bin/systemctl", "start", "--no-block", "andaru-leases.service"); err != nil {
+		slog.Warn("start the lease sync", "error", err)
+	}
+	return nil
 }
 
 // bootPrefixes fills Kea's file from the saved prefixes before networkd and Kea start, so Kea's first lease

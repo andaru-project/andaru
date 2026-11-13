@@ -124,6 +124,13 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 			f.routes = map[string]string{}
 		}
 		f.routes[args[3]] = args[5] + " dev " + args[7]
+	case strings.HasPrefix(command, "ip -6 route replace unreachable ") && len(args) == 7:
+		if f.routes == nil {
+			f.routes = map[string]string{}
+		}
+		f.routes[args[4]] = "unreachable"
+	case strings.HasPrefix(command, "ip -6 route del unreachable ") && len(args) >= 5:
+		delete(f.routes, args[4])
 	case strings.HasPrefix(command, "ip -6 route del ") && len(args) >= 4:
 		delete(f.routes, args[3])
 	case command == "ip -j -6 route show type unreachable proto dhcp":
@@ -137,6 +144,10 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 	case command == "ip -6 route show proto 77":
 		var out strings.Builder
 		for _, p := range slices.Sorted(maps.Keys(f.routes)) {
+			if f.routes[p] == "unreachable" {
+				out.WriteString("unreachable " + p + " dev lo proto 77 metric 1024 pref medium\n")
+				continue
+			}
 			out.WriteString(p + " via " + f.routes[p] + " metric 1024 pref medium\n")
 		}
 		return []byte(out.String()), nil

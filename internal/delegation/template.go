@@ -74,9 +74,20 @@ func FillTemplate(raw []byte, prefixes map[string]netip.Prefix) (subnets []map[s
 		for _, r := range s.Ranges {
 			pools = append(pools, map[string]any{"pool": join(r.First) + " - " + join(r.Last)})
 		}
+		context := map[string]any{}
+		for k, v := range s.UserContext {
+			context[k] = v
+		}
+		andaru, _ := context["andaru"].(map[string]any)
+		marked := map[string]any{"delegated": true}
+		for k, v := range andaru {
+			marked[k] = v
+		}
+		// The lease sync tells these subnets apart: their pool routes and static names are root's to publish.
+		context["andaru"] = marked
 		subnet := map[string]any{
 			"id": s.ID, "subnet": lan.String(), "interface": s.Interface, "pools": pools,
-			"valid-lifetime": s.Valid, "preferred-lifetime": s.Preferred, "option-data": s.Options, "user-context": s.UserContext,
+			"valid-lifetime": s.Valid, "preferred-lifetime": s.Preferred, "option-data": s.Options, "user-context": context,
 		}
 		var pool netip.Prefix
 		if p := s.Pool; p != nil {
