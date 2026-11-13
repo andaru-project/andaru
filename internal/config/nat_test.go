@@ -234,7 +234,7 @@ func TestManyForwardsValidateQuickly(t *testing.T) {
 	setNAT(d, "portForwards", list...)
 	start := time.Now()
 	accepted(t, d)
-	if took := time.Since(start); took > 2*time.Second {
+	if took := time.Since(start); took > raceSlowdown*2*time.Second {
 		t.Fatalf("validating 5000 forwards took %v", took)
 	}
 }
