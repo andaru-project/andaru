@@ -79,6 +79,12 @@ func (r Realizer) services(ctx context.Context, from, to []placed) error {
 	if err := os.MkdirAll(r.Root+leasesDir, 0o755); err != nil {
 		return err
 	}
+	if _, ok := find(to, kea6Template); ok {
+		// Kea checks and starts on the file filled with the prefix the WAN holds now.
+		if err := r.syncPrefixes(ctx, false); err != nil {
+			return err
+		}
+	}
 	for _, s := range []keaServer{
 		{keaFile, "/usr/sbin/kea-dhcp4", "kea-dhcp4-server.service", keaSocket, "DHCP server", kea, hadKea},
 		{kea6File, "/usr/sbin/kea-dhcp6", "kea-dhcp6-server.service", kea6Socket, "DHCPv6 server", kea6, hadKea6},

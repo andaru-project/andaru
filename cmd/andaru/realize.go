@@ -16,7 +16,7 @@ import (
 	"github.com/andaru-project/andaru/internal/generation"
 )
 
-const realizeUsage = "usage: andaru realize [--state-dir PATH] activate N | rollback N REASON | confirm N | boot | leases"
+const realizeUsage = "usage: andaru realize [--state-dir PATH] activate N | rollback N REASON | confirm N | boot | leases | prefixes"
 
 var generationID = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
 
@@ -26,6 +26,7 @@ type realizeVerbs interface {
 	Confirm(ctx context.Context, id int) error
 	Boot(ctx context.Context) error
 	SyncLeases(ctx context.Context) error
+	SyncPrefixes(ctx context.Context) error
 }
 
 // newRealizer builds the privileged actor for the real host.
@@ -61,7 +62,7 @@ func realizeCommand(ctx context.Context, args []string, stderr io.Writer, build 
 		return usage()
 	}
 	verb, rest := flags.Arg(0), flags.Args()[1:]
-	want := map[string]int{"activate": 1, "rollback": 2, "confirm": 1, "boot": 0, "leases": 0}
+	want := map[string]int{"activate": 1, "rollback": 2, "confirm": 1, "boot": 0, "leases": 0, "prefixes": 0}
 	if n, known := want[verb]; !known || len(rest) != n || (n > 0 && !generationID.MatchString(rest[0])) {
 		return usage()
 	}
@@ -85,6 +86,8 @@ func realizeCommand(ctx context.Context, args []string, stderr io.Writer, build 
 		err = verbs.Boot(ctx)
 	case "leases":
 		err = verbs.SyncLeases(ctx)
+	case "prefixes":
+		err = verbs.SyncPrefixes(ctx)
 	}
 	if err == nil {
 		return 0

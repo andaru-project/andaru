@@ -237,6 +237,10 @@ func (f *fakeVerbs) SyncLeases(context.Context) error {
 	f.calls = append(f.calls, "leases")
 	return f.err
 }
+func (f *fakeVerbs) SyncPrefixes(context.Context) error {
+	f.calls = append(f.calls, "prefixes")
+	return f.err
+}
 
 func TestRealizeExitCodes(t *testing.T) {
 	for _, row := range []struct {
