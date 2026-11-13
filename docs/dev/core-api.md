@@ -307,6 +307,32 @@ printf '%s\n' '{"mode":"recursive","segments":["'"$LAN"'"]}' | sudo andaru ctl c
 - **Takeover:** with Unbound installed and a static LAN segment, the proposal includes the DNS service: forwarding to the host's declared servers, or recursive when they came from DHCP. With Kea installed it offers DHCP on each static LAN segment (the upper half of the subnet); the assistant asks for each, yes by default, while `--accept-detected` never turns DHCP on.
 - Inspect leases with `sudo cat /run/andaru-leases/leases.conf` or Kea's socket until a status page exists.
 
+### DHCPv6 and prefix delegation
+
+Kea's DHCPv6 server on LAN segments with a static IPv6 `/64`, including prefixes delegated to routers behind them. Design: [DHCPv6 for the LAN](../superpowers/specs/2026-11-13-dhcpv6-design.md).
+
+```sh
+sudo apt install kea-dhcp6-server
+# Once, beside the DHCP and DNS files (packaging/):
+sudo install -m 0644 packaging/systemd/kea-dhcp6-server.service.d/andaru.conf -D /etc/systemd/system/kea-dhcp6-server.service.d/andaru.conf
+sudo install -m 0644 packaging/systemd/networkd.conf.d/andaru.conf -D /etc/systemd/networkd.conf.d/andaru.conf
+sudo install -m 0644 packaging/iproute2/andaru.conf -D /etc/iproute2/rt_protos.d/andaru.conf
+sudo install -m 0755 packaging/kea/andaru-lease-event -D /usr/share/kea/scripts/andaru-lease-event
+sudo install -m 0644 packaging/apparmor/usr.sbin.kea-dhcp6 /etc/apparmor.d/local/
+sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.kea-dhcp6
+sudo systemctl daemon-reload && sudo systemctl restart systemd-networkd
+
+printf '%s\n' '{"name":"lan6","segment":"'"$LAN"'","ranges":[{"first":"fd00:beef:1::1000","last":"fd00:beef:1::1fff"}],"prefixDelegation":{"prefix":"fd00:beef:100::/48","delegatedLength":56}}' \
+  | sudo andaru ctl config create dhcp6
+```
+
+- **`dhcp6`**, one entry per segment with a static IPv6 `/64`: `ranges`, `leaseTime` (default 7200; the preferred lifetime is five-eighths of it), `dnsServers` (default: the segment's stable address when the DNS service serves it), `staticLeases` by `duid` with an `address`, a `prefix` and a `hostname`, and `prefixDelegation` (`prefix`, `delegatedLength` 48–64, optional `excludedPrefix` inside the first delegated prefix). The search list is the local domain and the DNS service's search domains.
+- **Router advertisements:** `managed`, `assisted` and `stateless` apply on a segment with an entry. With other modes `DHCP6_UNANNOUNCED` warns that clients following the flags will not ask.
+- **Delegated prefixes are routed via the router that asked for them.** Kea's hook appends the router's link-local address and interface to `/run/kea/andaru-pd-events`; `andaru realize leases` moves that file out of Kea's directory, believes a line only for a served interface, a link-local router and a prefix of that segment's pool, and installs `ip -6 route … proto 77` for each active lease. It removes every protocol 77 route nobody holds. The next hops are kept in `/var/lib/andaru/pd-next-hops.json`, so the routes return at boot. `ManageForeignRoutes=no` stops networkd deleting them on a restart or an apply.
+- **The pool is unreachable** where nobody leases it (`[Route] Type=unreachable` on the segment), so it never leaks out of the WAN. A delegation pool needs the packet filter, so a management segment.
+- **Names:** DHCPv6 address leases publish AAAA and PTR records. Names are kept per family: a static DHCPv4 name does not block a device's IPv6 name.
+- **Not offered:** DHCPv6 relays, DHCPv6 on delegated segments (next slice), NTP and custom options.
+
 ### Inbound NAT
 
 Port forwards and 1:1 NAT, with pfSense's semantics, IPv4 only. Both need the packet filter, so a management segment. Design: [inbound NAT](../superpowers/specs/2026-11-12-inbound-nat-design.md).
@@ -705,3 +731,23 @@ On 2026-11-12 the CGO-disabled amd64 build of code commit `6443d4e` (`vcs.modifi
 The lab found, and this branch fixes: **reflection ignored a forward's `from`**, so every internal client was reflected; the reflection line now carries the forward's source match, as pfSense's reflection `rdr` does (`from {$srcaddr}`, `filter.inc`). Review after the lab also fixed: deleting `nat.outbound` dropped the NAT lists, a `self` forward also matched IPv6, `GET /api/v1/config` broke the served schema once NAT lists existed, and a `self` target on an unshifted range sent every port to the first. The table rendered by the final build differs from the one above by `meta nfproto ipv4` in front of `fib daddr . iif type local`.
 
 Not run on the lab: UDP (unit-tested), logging, exclusions, 1:1 prefixes with `destination` and `noBinat` (rendered-table goldens, loaded by `nft -c`), and `PROXY_ARP_REQUIRED` (unit-tested).
+
+### DHCPv6 Debian lab qualification
+
+On 2026-11-13 the CGO-disabled amd64 build of code commit `6254e98` (`vcs.modified=false`, SHA-256 `d3182fc4c08d417898bd067c009c4d7d6552c51f9b0d9f330ae0ca2f6a710e1b`) was installed on VM 114 at snapshot `base-netplan-static-20261111` (Debian 13, systemd 257.13, `kea-dhcp6-server` 2.6.3, `unbound` 1.26.2, nftables 1.1.3), with `eth0` WAN at `10.0.1.19/16` and `eth1` LAN at `192.168.40.1/24` on VLAN 4093, the packaged files of both sections above, and the AppArmor fix below applied by hand. DNS servers were removed from `eth1`'s netplan before the takeover. On the LAN: VM 117 (`base-ifupdown-static-20261112`, moved to systemd-networkd: `192.168.40.2/24`, `IPv6AcceptRA=yes`) and a throwaway Debian 13 LXC router running networkd with `DHCP=ipv6`, `[DHCPv6] PrefixDelegationHint=::/56` and `SendRelease=yes` on `eth0`, and a dummy `lan0` with `DHCPPrefixDelegation=yes`.
+
+- **Takeover:** `--accept-detected`, confirmed from a new SSH session. Its DNS service already served the LAN; its starter input rule `lan to firewall: ping and DNS` was the only input rule.
+- **Configuration** with `andaru ctl config`: the LAN's IPv6 `{"mode":"static","addresses":["fd00:beef:1::1/64"],"ra":{"mode":"managed"}}` and the `dhcp6` entry of the example above. The preview had no findings and rendered `Managed=yes`, `[Route] Destination=fd00:beef:100::/48` `Type=unreachable`; a Kea subnet on `eth1` with `pd-pools` `fd00:beef:100::/48` `delegated-len` 56, `preferred-lifetime` 4500, `dns-servers` `fd00:beef:1::1` and `domain-search` `home.arpa, lab.example`; and Unbound's `access-control: fd00:beef:100::/48 allow`. Applied and confirmed: `unreachable fd00:beef:100::/48 dev lo proto static`.
+- **Client:** VM 117 first got `fd00:beef:1::1000/128` (valid 2 h, preferred 1 h 15 min) with `DHCPv6 Client DUID: DUID-EN/Vendor:0000ab11220eb653c48b0cf9`. networkd's client asks for a prefix by default, so it also got `fd00:beef:100::/56` and a route to it. A static lease for `00:02:00:00:ab:11:22:0e:b6:53:c4:8b:0c:f9` (`fd00:beef:1::10`, `client117`) was added and applied; after a networkd restart the client had `fd00:beef:1::10/128`. From the client, `dig AAAA client117.home.arpa @fd00:beef:1::1` answered `fd00:beef:1::10` and `dig -x` answered `client117.home.arpa.`; the router's name was published as `pd-client.home.arpa. 2400 IN AAAA fd00:beef:1::1000`.
+- **Delegation:** 4 seconds after the router's networkd started, `eth0: DHCP: received delegated prefix fd00:beef:100:100::/56` and `lan0: DHCP-PD address fd00:beef:100:100:f0dc:72ff:fe8d:42fa/64`. On the firewall `ip -6 route show proto 188` listed `fd00:beef:100:100::/56 via fe80::be24:11ff:feaa:4f25 dev eth1` beside VM 117's `/56`, and `pd-next-hops.json` held both. `ping -6 -I` from the `lan0` address to `fd00:beef:1::1` answered 3 of 3 through the starter rule; no rule was added.
+- **networkd restart:** both routes stayed and the ping went through.
+- **Reboot:** the boot unit finished at 11:12:42.90, networkd started at 43.57, Kea at 43.70, and `andaru-leases.service` finished at 44.99 (`confirmed` and `live` 3). Both routes were back and the ping went through; the router's last DHCPv6 exchange was at 11:11:13, before the reboot, and Kea logged no lease after it.
+- **Release:** stopping the router's networkd at 11:13:29.30 sent a release: `DHCP6_RELEASE_PD … prefix fd00:beef:100:100::/56 … was released properly` at 29.35. `andaru-leases.service` finished at 30.49, the route was gone and the table held only VM 117's prefix.
+- **Protocol 77:** with code commit `82654e0` (SHA-256 `54a4f3754fc8d2162af707bd7df0a2a9d14bd457bcaf9218ce0df04825128513`) and `/etc/iproute2/rt_protos.d/andaru.conf` installed, the router's next delegation showed both routes as `via … proto andaru`, with no protocol 188 route left. The ping answered 2 of 2.
+
+The lab found and this branch fixes:
+
+- The AppArmor rule let Kea's hook append to `/run/kea/andaru-pd-events` but not create it (`apparmor="DENIED" operation="mknod" … name="/run/kea/andaru-pd-events"`), so no route was installed. It now grants `w`.
+- Protocol 188 is `RTPROT_OSPF`, and `ip route` printed it as `proto ospf`. Removing every protocol 188 route nobody holds would have deleted a routing daemon's OSPF routes. The routes now use protocol 77, which no routing protocol is assigned, and it is named `andaru`.
+
+The lab ran on 188; only the protocol 77 check above ran on `82654e0`. When Kea started on the apply, `eth1`'s link-local address was not yet usable (`Failed to bind socket … fe80::be24:11ff:fe71:745/port=547: Cannot assign requested address`); the socket retry bound it, and the client's lease came 3 seconds later.

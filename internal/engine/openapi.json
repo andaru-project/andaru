@@ -624,7 +624,7 @@
               "zones",
               "addresses",
               "services",
-              "dhcp"
+              "dhcp", "dhcp6"
             ]
           }
         }
@@ -1034,7 +1034,7 @@
               "zones",
               "addresses",
               "services",
-              "dhcp"
+              "dhcp", "dhcp6"
             ]
           }
         },
@@ -5340,7 +5340,7 @@
                       "policy.forward",
                       "management",
                       "nat.outbound",
-                      "dhcp",
+                      "dhcp", "dhcp6",
                       "dns"
                     ]
                   },
@@ -5433,7 +5433,7 @@
               "policy.forward",
               "management",
               "nat.outbound",
-              "dhcp",
+              "dhcp", "dhcp6",
               "dns"
             ]
           },
@@ -5686,6 +5686,7 @@
               "RA_DNS_UNAVAILABLE",
               "PROXY_ARP_REQUIRED",
               "ONE_TO_ONE_OWN_ADDRESS",
+              "DHCP6_UNANNOUNCED",
               "DNS_NOT_APPLIED",
               "TAKEOVER_LIMIT",
               "FOREIGN_FILTER",
@@ -5969,6 +5970,7 @@
               "RA_DNS_UNAVAILABLE",
               "PROXY_ARP_REQUIRED",
               "ONE_TO_ONE_OWN_ADDRESS",
+              "DHCP6_UNANNOUNCED",
               "DNS_NOT_APPLIED",
               "BOOT_UNIT_DISABLED",
               "TAKEOVER_UNSUPPORTED_BASELINE",

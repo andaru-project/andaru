@@ -19,7 +19,10 @@ import (
 // leaseLabel is what a client's hostname must be cut to before it is published; clients choose their names.
 var leaseLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
-const keaSocket = "/run/kea/kea4-ctrl-socket"
+const (
+	keaSocket  = "/run/kea/kea4-ctrl-socket"
+	kea6Socket = "/run/kea/kea6-ctrl-socket"
+)
 
 type keaConfig struct {
 	Dhcp4 struct {
@@ -39,21 +42,28 @@ type keaConfig struct {
 }
 
 type keaLease struct {
-	Address  string `json:"ip-address"`
-	Hostname string `json:"hostname"`
-	State    int    `json:"state"`
-	Subnet   int    `json:"subnet-id"`
-	Valid    int    `json:"valid-lft"`
-	Cltt     int64  `json:"cltt"`
+	Address   string `json:"ip-address"`
+	PrefixLen int    `json:"prefix-len"`
+	Type      string `json:"type"` // DHCPv6 only: IA_NA or IA_PD
+	Hostname  string `json:"hostname"`
+	State     int    `json:"state"`
+	Subnet    int    `json:"subnet-id"`
+	Valid     int    `json:"valid-lft"`
+	Cltt      int64  `json:"cltt"`
 }
 
-// keaLeases asks Kea for every lease over its control socket.
+// keaLeases asks Kea's DHCPv4 server for every lease over its control socket.
 func (r Realizer) keaLeases(ctx context.Context) ([]keaLease, error) {
+	return r.askLeases(ctx, keaSocket, "lease4-get-all")
+}
+
+// askLeases asks one of Kea's servers for every lease.
+func (r Realizer) askLeases(ctx context.Context, socket, command string) ([]keaLease, error) {
 	// A wedged Kea must not hold every later sync: the oneshot unit has no start timeout.
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	var d net.Dialer
-	c, err := d.DialContext(ctx, "unix", r.Root+keaSocket)
+	c, err := d.DialContext(ctx, "unix", r.Root+socket)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +71,7 @@ func (r Realizer) keaLeases(ctx context.Context) ([]keaLease, error) {
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = c.SetDeadline(deadline)
 	}
-	if _, err := io.WriteString(c, `{"command":"lease4-get-all"}`); err != nil {
+	if _, err := io.WriteString(c, `{"command":"`+command+`"}`); err != nil {
 		return nil, err
 	}
 	var reply struct {
@@ -105,6 +115,24 @@ func (r Realizer) SyncLeases(ctx context.Context) error {
 	}
 }
 
+// publishedNames returns the records of one family that the published file holds, for a server that does not
+// answer.
+func (r Realizer) publishedNames(v6 bool) []string {
+	data, _ := os.ReadFile(r.Root + leasesDir + "/leases.conf")
+	var out []string
+	for line := range strings.SplitSeq(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		fields := strings.Fields(line)
+		if len(fields) < 2 || !strings.HasPrefix(fields[0], "local-data") {
+			continue
+		}
+		if family6 := strings.Contains(line, " IN AAAA ") || (fields[0] == "local-data-ptr:" && strings.Contains(fields[1], ":")); family6 == v6 {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
 func (r Realizer) syncLeases(ctx context.Context) error {
 	// One snapshot of configuration and leases, never published across a generation change that removed them.
 	unlock, err := r.lock()
@@ -112,7 +140,13 @@ func (r Realizer) syncLeases(ctx context.Context) error {
 		return err
 	}
 	defer unlock()
+	// DHCPv6 first: its routes are reconciled even when the DHCPv4 server does not answer.
+	v6, err := r.syncKea6(ctx)
+	if err != nil {
+		return err
+	}
 	records := []string{}
+	var failed error
 	raw, err := os.ReadFile(r.Root + keaFile)
 	switch {
 	case os.IsNotExist(err):
@@ -126,35 +160,39 @@ func (r Realizer) syncLeases(ctx context.Context) error {
 		}
 		leases, err := r.keaLeases(ctx)
 		if err != nil {
-			return fmt.Errorf("ask the DHCP server for its leases: %w", err)
+			// Its names stay as published; DHCPv6's are still updated, and the failure is reported.
+			failed = fmt.Errorf("ask the DHCP server for its leases: %w", err)
+			records = r.publishedNames(false)
+			break
 		}
 		if r.afterLeaseRead != nil {
 			r.afterLeaseRead()
 		}
 		records = leaseRecords(cfg, leases)
 	}
+	records = append(records, v6...)
 	body := "server:\n"
 	for _, line := range records {
 		body += "\t" + line + "\n"
 	}
 	path := r.Root + leasesDir + "/leases.conf"
 	if old, err := os.ReadFile(path); err == nil && string(old) == body {
-		return nil
+		return failed
 	}
 	if err := os.MkdirAll(r.Root+leasesDir, 0o755); err != nil {
-		return err
+		return errors.Join(failed, err)
 	}
 	if err := writeAtomic(path, []byte(body), 0o644); err != nil {
-		return err
+		return errors.Join(failed, err)
 	}
 	if !r.active(ctx, "unbound.service") {
-		return nil // Unbound reads the file when it starts
+		return failed // Unbound reads the file when it starts
 	}
 	if _, err = r.Run(ctx, "/usr/sbin/unbound-control", "reload_keep_cache"); err != nil {
 		// Unbound still serves the old names; without the file the next sync writes it and reloads again.
-		return errors.Join(err, os.Remove(path))
+		return errors.Join(failed, err, os.Remove(path))
 	}
-	return nil
+	return failed
 }
 
 // leaseRecords turns assigned leases with valid names into A and PTR records, sorted.

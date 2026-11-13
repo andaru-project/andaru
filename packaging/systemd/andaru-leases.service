@@ -1,6 +1,6 @@
 [Unit]
 Description=Andaru DHCP lease names in DNS
-After=kea-dhcp4-server.service unbound.service
+After=kea-dhcp4-server.service kea-dhcp6-server.service unbound.service
 
 [Service]
 Type=oneshot

@@ -45,11 +45,11 @@ jobs:
 
       - name: Install nftables, Kea and Unbound for the packet filter and service tests (unit tests check the lease file with Unbound)
         run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends nftables kea-dhcp4-server unbound
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends nftables kea-dhcp4-server kea-dhcp6-server unbound
           # The packaged AppArmor rules let kea-dhcp4 read /run/andaru-kea, where the tool test stages its files.
           if [ -d /etc/apparmor.d/local ] && command -v apparmor_parser >/dev/null; then
-            sudo install -m 0644 packaging/apparmor/usr.sbin.kea-dhcp4 packaging/apparmor/usr.sbin.unbound /etc/apparmor.d/local/
-            sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.kea-dhcp4 /etc/apparmor.d/usr.sbin.unbound
+            sudo install -m 0644 packaging/apparmor/usr.sbin.kea-dhcp4 packaging/apparmor/usr.sbin.kea-dhcp6 packaging/apparmor/usr.sbin.unbound /etc/apparmor.d/local/
+            sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.kea-dhcp4 /etc/apparmor.d/usr.sbin.kea-dhcp6 /etc/apparmor.d/usr.sbin.unbound
           fi
       - name: Vet and unprivileged tests
         shell: bash
@@ -79,4 +79,4 @@ jobs:
           sudo env -u TMPDIR ANDARU_TEST_BINARY="$art/andaru" "$art/engine.test" -test.v -test.timeout=120s
           sudo env -u TMPDIR "$art/ctl.test" -test.v -test.timeout=120s
           # The pppd and networkd tool proofs in this binary are lab proofs; CI runs the filter ones.
-          sudo env -u TMPDIR "$art/render.test" -test.v -test.timeout=120s -test.run "FilterInNamespace|NftScriptIsValid|ServiceGoldensPassTheirTools"
+          sudo env -u TMPDIR "$art/render.test" -test.v -test.timeout=120s -test.run "FilterInNamespace|NftScriptIsValid|ServiceGoldensPassTheirTools|DHCPv6GoldensPassKea"

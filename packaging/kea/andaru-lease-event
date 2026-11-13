@@ -1,4 +1,19 @@
 #!/bin/sh
 # Installed as /usr/share/kea/scripts/andaru-lease-event, mode 0755.
-# Kea runs this on lease events as _kea; it only marks that leases changed, and andaru-leases.path does the rest.
-exec touch /run/kea/andaru-leases-changed
+# Kea runs this on lease events as _kea. It marks that leases changed, and andaru-leases.path does the rest.
+# For DHCPv6 prefix delegation it also appends which router each prefix went to, since Kea's leases do not
+# record it: "add|del <prefix>/<length> <router's link-local address> <interface>". Andaru believes a line
+# only after checking it against the confirmed configuration and Kea's own leases.
+run=${ANDARU_KEA_RUN:-/run/kea}
+if [ "$1" = leases6_committed ]; then
+	pd() { # pd add|del LEASES6|DELETED_LEASES6 index
+		eval "type=\${$2_AT$3_TYPE:-} address=\${$2_AT$3_ADDRESS:-} length=\${$2_AT$3_PREFIX_LEN:-}"
+		[ "$type" = IA_PD ] && printf '%s %s/%s %s %s\n' "$1" "$address" "$length" "${QUERY6_REMOTE_ADDR:-}" "${QUERY6_IFACE_NAME:-}" >> "$run/andaru-pd-events"
+		return 0
+	}
+	i=0
+	while [ "$i" -lt "${DELETED_LEASES6_SIZE:-0}" ]; do pd del DELETED_LEASES6 "$i"; i=$((i + 1)); done
+	i=0
+	while [ "$i" -lt "${LEASES6_SIZE:-0}" ]; do pd add LEASES6 "$i"; i=$((i + 1)); done
+fi
+exec touch "$run/andaru-leases-changed"

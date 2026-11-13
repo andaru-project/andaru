@@ -78,7 +78,7 @@ var (
 func Dir(stateDir string) string { return filepath.Join(stateDir, "generations") }
 
 func allowed(path string) bool {
-	return ownPath.MatchString(path) || path == filterEntry || path == keaFile || path == unboundFile || path == resolvedFile
+	return ownPath.MatchString(path) || path == filterEntry || path == keaFile || path == kea6File || path == unboundFile || path == resolvedFile
 }
 
 func is(p *int, id int) bool { return p != nil && *p == id }

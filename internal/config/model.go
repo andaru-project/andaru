@@ -220,6 +220,28 @@ type management struct {
 	AllowedSources []string `json:"allowedSources,omitempty"`
 }
 
+// dhcp6Entry serves DHCPv6 on one segment with a static /64, and may delegate prefixes to routers on it.
+type dhcp6Entry struct {
+	identity
+	Segment          string            `json:"segment"`
+	Ranges           []dhcpRange       `json:"ranges,omitempty"`
+	LeaseTime        int               `json:"leaseTime,omitzero"`
+	DNSServers       []string          `json:"dnsServers,omitempty"`
+	StaticLeases     []staticLease6    `json:"staticLeases,omitempty"`
+	PrefixDelegation *prefixDelegation `json:"prefixDelegation,omitempty"`
+}
+type staticLease6 struct {
+	DUID     string `json:"duid"`
+	Address  string `json:"address,omitempty"`
+	Prefix   string `json:"prefix,omitempty"`
+	Hostname string `json:"hostname,omitempty"`
+}
+type prefixDelegation struct {
+	Prefix          string `json:"prefix"`
+	DelegatedLength int    `json:"delegatedLength"`
+	ExcludedPrefix  string `json:"excludedPrefix,omitempty"`
+}
+
 // dhcpEntry serves DHCPv4 on one segment.
 type dhcpEntry struct {
 	identity
@@ -256,16 +278,17 @@ type upstream struct {
 
 // The filter sections are omitted while empty, so a declaration without a filter keeps its form.
 type declaration struct {
-	SchemaVersion int         `json:"schemaVersion"`
-	Links         []link      `json:"links"`
-	Segments      []segment   `json:"segments"`
-	Zones         []zone      `json:"zones"`
-	Objects       objectSet   `json:"objects,omitzero"`
-	Policy        policy      `json:"policy,omitzero"`
-	NAT           natSettings `json:"nat,omitzero"`
-	Management    *management `json:"management,omitempty"`
-	DHCP          []dhcpEntry `json:"dhcp,omitzero"`
-	DNS           *dnsService `json:"dns,omitempty"`
+	SchemaVersion int          `json:"schemaVersion"`
+	Links         []link       `json:"links"`
+	Segments      []segment    `json:"segments"`
+	Zones         []zone       `json:"zones"`
+	Objects       objectSet    `json:"objects,omitzero"`
+	Policy        policy       `json:"policy,omitzero"`
+	NAT           natSettings  `json:"nat,omitzero"`
+	Management    *management  `json:"management,omitempty"`
+	DHCP          []dhcpEntry  `json:"dhcp,omitzero"`
+	DHCP6         []dhcp6Entry `json:"dhcp6,omitzero"`
+	DNS           *dnsService  `json:"dns,omitempty"`
 }
 
 func emptyDeclaration() declaration {
