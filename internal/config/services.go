@@ -262,6 +262,7 @@ func validateDHCP6(d *declaration, bad func(string, string)) {
 	names := map[string]bool{}
 	var pools []netip.Prefix
 	var own []netip.Prefix
+	wanPools := map[string][]netip.Prefix{}
 	for _, s := range d.Segments {
 		for _, raw := range s.Addressing.IPv6.Addresses {
 			if p, e := netip.ParsePrefix(raw); e == nil && !p.Addr().IsLinkLocalUnicast() {
@@ -281,6 +282,14 @@ func validateDHCP6(d *declaration, bad func(string, string)) {
 			bad(p+"/name", "Name already exists in this collection.")
 		}
 		seen[e.ID], seen["name:"+e.Name] = true, true
+		if wan, ok := delegatedFrom(d, e.Segment); ok {
+			if served[e.Segment] {
+				bad(p+"/segment", "This segment is already served by another DHCPv6 entry.")
+			}
+			served[e.Segment] = true
+			validateDelegatedDHCP6(d, wan, e, p, names, wanPools, bad)
+			continue
+		}
 		subnet, ok := servedV6Static(d, e.Segment)
 		switch {
 		case !ok:
@@ -325,6 +334,9 @@ func validateDHCP6(d *declaration, bad func(string, string)) {
 		var pool netip.Prefix
 		if pd := e.PrefixDelegation; pd != nil {
 			pp := p + "/prefixDelegation"
+			if pd.SubnetID != "" || pd.Length != 0 {
+				bad(pp, "A static segment's pool is a literal prefix: set prefix, not subnetId and length.")
+			}
 			v, err := netip.ParsePrefix(pd.Prefix)
 			switch {
 			case err != nil || !v.Addr().Is6() || v.Addr().Is4In6() || v != v.Masked() || v.Addr().IsLinkLocalUnicast():
@@ -361,6 +373,9 @@ func validateDHCP6(d *declaration, bad func(string, string)) {
 			default:
 				duids[duid] = true
 				e.StaticLeases[j].DUID = duid
+			}
+			if l.PrefixID != "" {
+				bad(lp+"/prefixId", "A static segment's static lease names its prefix: set prefix.")
 			}
 			if l.Address == "" && l.Prefix == "" {
 				bad(lp, "Expected an address, a prefix or both.")

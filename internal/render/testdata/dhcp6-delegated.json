@@ -1,0 +1,200 @@
+{
+  "schemaVersion": 1,
+  "links": [
+    {
+      "id": "lnk_00000001-0000-4000-8000-000000000001",
+      "name": "wan0",
+      "kind": "ethernet",
+      "mtu": 1500,
+      "enabled": true,
+      "permanentMac": "52:54:00:aa:bb:01"
+    },
+    {
+      "id": "lnk_00000002-0000-4000-8000-000000000002",
+      "name": "lan0",
+      "kind": "ethernet",
+      "mtu": 1500,
+      "enabled": true,
+      "permanentMac": "52:54:00:aa:bb:02"
+    }
+  ],
+  "segments": [
+    {
+      "id": "seg_00000001-0000-4000-8000-000000000001",
+      "name": "wan",
+      "link": "lnk_00000001-0000-4000-8000-000000000001",
+      "zone": "zon_00000001-0000-4000-8000-000000000001",
+      "addressing": {
+        "ipv4": {
+          "mode": "dhcp"
+        },
+        "ipv6": {
+          "mode": "dhcp6",
+          "requestPrefixLength": 48
+        }
+      }
+    },
+    {
+      "id": "seg_00000002-0000-4000-8000-000000000002",
+      "name": "lan",
+      "link": "lnk_00000002-0000-4000-8000-000000000002",
+      "zone": "zon_00000002-0000-4000-8000-000000000002",
+      "addressing": {
+        "ipv4": {
+          "mode": "static",
+          "addresses": [
+            "192.0.2.1/24"
+          ]
+        },
+        "ipv6": {
+          "mode": "delegated",
+          "from": "seg_00000001-0000-4000-8000-000000000001",
+          "subnetId": "1",
+          "addresses": [
+            "fd00:a5d:1::1/64"
+          ],
+          "ra": {
+            "mode": "managed"
+          }
+        }
+      }
+    }
+  ],
+  "zones": [
+    {
+      "id": "zon_00000001-0000-4000-8000-000000000001",
+      "name": "wan"
+    },
+    {
+      "id": "zon_00000002-0000-4000-8000-000000000002",
+      "name": "lan"
+    }
+  ],
+  "objects": {
+    "addresses": [],
+    "services": [
+      {
+        "id": "svc_00000001-0000-4000-8000-000000000001",
+        "name": "ping",
+        "protocol": "icmp",
+        "types": [
+          "echo-request"
+        ]
+      },
+      {
+        "id": "svc_00000002-0000-4000-8000-000000000002",
+        "name": "dns-udp",
+        "protocol": "udp",
+        "ports": [
+          "53"
+        ]
+      },
+      {
+        "id": "svc_00000003-0000-4000-8000-000000000003",
+        "name": "dns-tcp",
+        "protocol": "tcp",
+        "ports": [
+          "53"
+        ]
+      },
+      {
+        "id": "svc_00000004-0000-4000-8000-000000000004",
+        "name": "dns",
+        "protocol": "group",
+        "members": [
+          "svc_00000002-0000-4000-8000-000000000002",
+          "svc_00000003-0000-4000-8000-000000000003"
+        ]
+      }
+    ]
+  },
+  "policy": {
+    "input": [
+      {
+        "id": "rul_00000001-0000-4000-8000-000000000001",
+        "name": "lan ping",
+        "enabled": true,
+        "action": "accept",
+        "from": [
+          "zon_00000002-0000-4000-8000-000000000002"
+        ],
+        "to": [],
+        "services": [
+          "svc_00000001-0000-4000-8000-000000000001"
+        ],
+        "log": false
+      },
+      {
+        "id": "rul_00000002-0000-4000-8000-000000000002",
+        "name": "lan dns",
+        "enabled": true,
+        "action": "accept",
+        "from": [
+          "zon_00000002-0000-4000-8000-000000000002"
+        ],
+        "to": [],
+        "services": [
+          "svc_00000004-0000-4000-8000-000000000004"
+        ],
+        "log": false
+      }
+    ],
+    "forward": [
+      {
+        "id": "rul_00000003-0000-4000-8000-000000000003",
+        "name": "lan out",
+        "enabled": true,
+        "action": "accept",
+        "from": [
+          "zon_00000002-0000-4000-8000-000000000002"
+        ],
+        "to": [],
+        "services": [],
+        "log": false
+      }
+    ]
+  },
+  "nat": {
+    "outbound": {
+      "mode": "automatic"
+    }
+  },
+  "management": {
+    "segment": "seg_00000002-0000-4000-8000-000000000002"
+  },
+  "dns": {
+    "mode": "recursive",
+    "segments": [
+      "seg_00000002-0000-4000-8000-000000000002"
+    ],
+    "localDomain": "home.arpa",
+    "registerLeases": true
+  },
+  "dhcp6": [
+    {
+      "id": "dh6_00000001-0000-4000-8000-000000000001",
+      "name": "lan6",
+      "segment": "seg_00000002-0000-4000-8000-000000000002",
+      "ranges": [
+        {
+          "first": "::1000",
+          "last": "::1fff"
+        }
+      ],
+      "leaseTime": 7200,
+      "staticLeases": [
+        {
+          "duid": "00:01:00:01:aa:bb:cc:dd:ee:ff",
+          "address": "::10",
+          "prefixId": "1",
+          "hostname": "router"
+        }
+      ],
+      "prefixDelegation": {
+        "subnetId": "8",
+        "length": 60,
+        "delegatedLength": 64
+      }
+    }
+  ]
+}

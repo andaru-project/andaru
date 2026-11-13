@@ -347,6 +347,9 @@ func (r Realizer) Boot(ctx context.Context) error {
 		if err := r.place(nil, set); err != nil {
 			return err
 		}
+		if err := r.bootPrefixes(); err != nil {
+			slog.Error("fill the DHCPv6 subnets of delegated segments", "error", err)
+		}
 		p.Live = id
 		if len(failures) > 0 {
 			slog.Error("boot fell back to an older generation", "generation", *id, "error", errors.Join(failures...))

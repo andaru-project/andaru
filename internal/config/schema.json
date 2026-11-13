@@ -3167,6 +3167,10 @@
                     "type": "string",
                     "maxLength": 64
                   },
+                  "prefixId": {
+                    "type": "string",
+                    "pattern": "^[0-9A-Fa-f]{1,4}$"
+                  },
                   "hostname": {
                     "type": "string",
                     "maxLength": 63
@@ -3185,6 +3189,13 @@
                   "type": "string",
                   "maxLength": 64
                 },
+                "subnetId": {
+                  "type": "string",
+                  "pattern": "^[0-9A-Fa-f]{1,4}$"
+                },
+                "length": {
+                  "type": "integer"
+                },
                 "delegatedLength": {
                   "type": "integer"
                 },
@@ -3194,7 +3205,6 @@
                 }
               },
               "required": [
-                "prefix",
                 "delegatedLength"
               ],
               "additionalProperties": false

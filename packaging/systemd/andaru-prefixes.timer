@@ -1,0 +1,10 @@
+[Unit]
+Description=Andaru delegated IPv6 prefixes, repeated
+
+[Timer]
+# Repeats the deprecation of a replaced prefix and catches a missed link change.
+OnBootSec=10s
+OnUnitActiveSec=60s
+
+[Install]
+WantedBy=timers.target

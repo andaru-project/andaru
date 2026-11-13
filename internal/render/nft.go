@@ -100,7 +100,11 @@ func (r *renderer) filterChains() {
 		}
 	}
 	for _, e := range d.DHCP6 {
-		if name, _, ok := r.served6(e.Segment); ok {
+		name, _, ok := r.served6(e.Segment)
+		if !ok {
+			name, _, _, ok = r.delegated6(e.Segment)
+		}
+		if ok {
 			input = append(input, fmt.Sprintf("iifname %q ip6 saddr fe80::/10 udp sport 546 udp dport 547 accept", name))
 		}
 	}

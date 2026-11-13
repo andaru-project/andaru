@@ -44,6 +44,11 @@ type Realizer struct {
 	HandBackWait time.Duration
 	// LeaseSettle is how long the lease sync waits for more lease events before it reads.
 	LeaseSettle time.Duration
+	// DeprecateAfter is how long the prefix sync waits before advertising a prefix it just saw replaced, so
+	// networkd's own advertisement listing it, which would undo the deprecation, goes first.
+	DeprecateAfter time.Duration
+	// SendRA sends a router advertisement on an interface; nil sends it for real.
+	SendRA func(ifname string, body []byte) error
 	// failAt lets tests stop a verb before a named write, as a kill would.
 	failAt func(step string) error
 	// afterLeaseRead lets tests act while a lease sync is running.

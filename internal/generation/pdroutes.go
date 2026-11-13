@@ -1,6 +1,8 @@
 package generation
 
 import (
+	"github.com/andaru-project/andaru/internal/delegation"
+
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +14,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 )
@@ -58,6 +61,9 @@ type kea6Config struct {
 				Andaru struct {
 					Domain   string `json:"domain"`
 					Register bool   `json:"register"`
+					// Delegated subnets are filled by root: their pools' routes and static names are root's.
+					Delegated bool `json:"delegated"`
+					Names     bool `json:"names"`
 				} `json:"andaru"`
 			} `json:"user-context"`
 		} `json:"subnet6"`
@@ -83,7 +89,8 @@ func (r Realizer) syncKea6(ctx context.Context) ([]string, error) {
 		}
 	}
 	// The events are gone from Kea's directory: what they taught is saved before anything else can fail.
-	table, served := r.nextHops(cfg, events)
+	old := r.replacedPools()
+	table, served := r.nextHops(cfg, events, old)
 	if err := r.saveNextHops(table); err != nil {
 		return nil, err
 	}
@@ -95,7 +102,13 @@ func (r Realizer) syncKea6(ctx context.Context) ([]string, error) {
 			return r.publishedNames(true), nil
 		}
 	}
-	if err := r.syncRoutes(ctx, leases, table, served); err != nil {
+	pools := delegatedPools(cfg)
+	for _, list := range old {
+		for _, p := range list {
+			pools[p.String()] = true
+		}
+	}
+	if err := r.syncRoutes(ctx, leases, table, served, pools, r.waitingInterfaces(cfg)); err != nil {
 		return nil, err
 	}
 	return lease6Records(cfg, leases), nil
@@ -116,6 +129,19 @@ func lease6Records(cfg kea6Config, leases []keaLease) []string {
 			domains[s.ID] = s.UserContext.Andaru.Domain
 		}
 	}
+	var static []string
+	for _, s := range cfg.Dhcp6.Subnet6 {
+		if a := s.UserContext.Andaru; a.Delegated && a.Names && a.Domain != "" {
+			// The generation knew only their suffixes, so these static names are published here, at the current prefix.
+			for _, res := range s.Reservations {
+				if label := strings.ToLower(res.Hostname); len(res.IPAddresses) > 0 && leaseLabel.MatchString(label) {
+					name := label + "." + a.Domain + "."
+					static = append(static, fmt.Sprintf("local-data: %q", fmt.Sprintf("%s 3600 IN AAAA %s", name, res.IPAddresses[0])),
+						fmt.Sprintf("local-data-ptr: %q", fmt.Sprintf("%s 3600 %s", res.IPAddresses[0], name)))
+				}
+			}
+		}
+	}
 	newest := map[string]keaLease{}
 	for _, l := range leases {
 		domain, ok := domains[l.Subnet]
@@ -128,7 +154,7 @@ func lease6Records(cfg kea6Config, leases []keaLease) []string {
 			newest[name] = l
 		}
 	}
-	var out []string
+	out := static
 	for _, name := range slices.Sorted(maps.Keys(newest)) {
 		l := newest[name]
 		ttl := l.Valid / 3
@@ -140,7 +166,62 @@ func lease6Records(cfg kea6Config, leases []keaLease) []string {
 
 // syncRoutes installs a route via the requesting router for each active delegated prefix whose next hop it
 // believes, and removes every route of its own protocol nobody holds.
-func (r Realizer) syncRoutes(ctx context.Context, leases []keaLease, table map[string]nextHop, served func(netip.Prefix, nextHop) bool) error {
+// delegatedPools are the pools of delegated subnets, which networkd does not route: unreachable where unleased.
+func delegatedPools(cfg kea6Config) map[string]bool {
+	pools := map[string]bool{}
+	for _, s := range cfg.Dhcp6.Subnet6 {
+		for _, p := range s.PDPools {
+			if a, err := netip.ParseAddr(p.Prefix); err == nil && s.UserContext.Andaru.Delegated {
+				pools[netip.PrefixFrom(a, p.PrefixLen).String()] = true
+			}
+		}
+	}
+	return pools
+}
+
+// replacedPools are the delegated pools under each WAN's previous prefix while it is valid, by interface: Kea
+// keeps their leases until the routers renew, so their routes stay until then.
+func (r Realizer) replacedPools() map[string][]netip.Prefix {
+	var tpl delegation.Template
+	raw, err := os.ReadFile(r.Root + kea6Template)
+	if err != nil || json.Unmarshal(raw, &tpl) != nil {
+		return nil
+	}
+	state, _ := delegation.ReadState(r.Root + delegatedState)
+	out := map[string][]netip.Prefix{}
+	for _, s := range tpl.Subnets {
+		if s.Pool == nil {
+			continue
+		}
+		n, _ := strconv.ParseUint(s.Pool.SubnetID, 16, 16)
+		for _, old := range state.WANs[s.Uplink].Replaced {
+			if p, ok := delegation.Place(old.Prefix, n, s.Pool.Length); ok && old.Valid.After(r.Now()) {
+				out[s.Interface] = append(out[s.Interface], p)
+			}
+		}
+	}
+	return out
+}
+
+// waitingInterfaces are delegated segments the template serves but Kea's file leaves out: their prefix expired.
+// Their routers' next hops are kept for when it returns.
+func (r Realizer) waitingInterfaces(cfg kea6Config) map[string]bool {
+	var tpl delegation.Template
+	raw, err := os.ReadFile(r.Root + kea6Template)
+	if err != nil || json.Unmarshal(raw, &tpl) != nil {
+		return nil
+	}
+	waiting := map[string]bool{}
+	for _, s := range tpl.Subnets {
+		waiting[s.Interface] = true
+	}
+	for _, s := range cfg.Dhcp6.Subnet6 {
+		delete(waiting, s.Interface)
+	}
+	return waiting
+}
+
+func (r Realizer) syncRoutes(ctx context.Context, leases []keaLease, table map[string]nextHop, served func(netip.Prefix, nextHop) bool, pools, waiting map[string]bool) error {
 	wanted := map[string]nextHop{}
 	for _, l := range leases {
 		if l.Type != "IA_PD" || l.State != 0 {
@@ -156,6 +237,15 @@ func (r Realizer) syncRoutes(ctx context.Context, leases []keaLease, table map[s
 			wanted[key] = hop
 		}
 	}
+	for _, pool := range slices.Sorted(maps.Keys(pools)) {
+		// A pool handing out itself is its router's route while leased, which an unreachable one would replace.
+		if wanted[pool] != (nextHop{}) {
+			continue
+		}
+		if _, err := r.Run(ctx, "/usr/sbin/ip", "-6", "route", "replace", "unreachable", pool, "proto", pdProto); err != nil {
+			slog.Warn("install a delegation pool's route", "pool", pool, "error", err)
+		}
+	}
 	for _, key := range slices.Sorted(maps.Keys(wanted)) {
 		hop := wanted[key]
 		if _, err := r.Run(ctx, "/usr/sbin/ip", "-6", "route", "replace", key, "via", hop.Via, "dev", hop.Dev, "proto", pdProto); err != nil {
@@ -167,13 +257,27 @@ func (r Realizer) syncRoutes(ctx context.Context, leases []keaLease, table map[s
 		return fmt.Errorf("list the delegated prefix routes: %w", err)
 	}
 	for line := range strings.SplitSeq(string(out), "\n") {
-		if prefix, _, _ := strings.Cut(line, " "); prefix != "" && wanted[prefix] == (nextHop{}) {
-			if _, err := r.Run(ctx, "/usr/sbin/ip", "-6", "route", "del", prefix, "proto", pdProto); err != nil {
-				slog.Warn("remove a delegated prefix route", "prefix", prefix, "error", err)
+		fields := strings.Fields(line)
+		switch {
+		case len(fields) > 1 && fields[0] == "unreachable":
+			if !pools[fields[1]] {
+				if _, err := r.Run(ctx, "/usr/sbin/ip", "-6", "route", "del", "unreachable", fields[1], "proto", pdProto); err != nil {
+					slog.Warn("remove a delegation pool's route", "pool", fields[1], "error", err)
+				}
+			}
+		case len(fields) > 0 && wanted[fields[0]] == (nextHop{}):
+			if _, err := r.Run(ctx, "/usr/sbin/ip", "-6", "route", "del", fields[0], "proto", pdProto); err != nil {
+				slog.Warn("remove a delegated prefix route", "prefix", fields[0], "error", err)
 			}
 		}
 	}
-	return r.saveNextHops(wanted)
+	keep := maps.Clone(wanted)
+	for prefix, hop := range table {
+		if waiting[hop.Dev] {
+			keep[prefix] = hop
+		}
+	}
+	return r.saveNextHops(keep)
 }
 
 func (r Realizer) saveNextHops(table map[string]nextHop) error {
@@ -186,7 +290,7 @@ func (r Realizer) saveNextHops(table map[string]nextHop) error {
 
 // nextHops reads the saved next hops and applies the hook's events to them, with the test of what the
 // generation serves.
-func (r Realizer) nextHops(cfg kea6Config, events []string) (map[string]nextHop, func(netip.Prefix, nextHop) bool) {
+func (r Realizer) nextHops(cfg kea6Config, events []string, old map[string][]netip.Prefix) (map[string]nextHop, func(netip.Prefix, nextHop) bool) {
 	table := map[string]nextHop{}
 	if data, err := os.ReadFile(r.Root + pdTable); err == nil {
 		_ = json.Unmarshal(data, &table) // a damaged table only costs routes until the routers renew
@@ -199,6 +303,9 @@ func (r Realizer) nextHops(cfg kea6Config, events []string) (map[string]nextHop,
 				pools[s.Interface] = append(pools[s.Interface], netip.PrefixFrom(a, p.PrefixLen))
 			}
 		}
+	}
+	for iface, list := range old {
+		pools[iface] = append(pools[iface], list...)
 	}
 	// A record names a served interface and a prefix of that segment's pool; a saved hop is judged again,
 	// since the generation may have changed since it was believed.

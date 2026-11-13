@@ -331,7 +331,29 @@ printf '%s\n' '{"name":"lan6","segment":"'"$LAN"'","ranges":[{"first":"fd00:beef
 - **Delegated prefixes are routed via the router that asked for them.** Kea's hook appends the router's link-local address and interface to `/run/kea/andaru-pd-events`; `andaru realize leases` moves that file out of Kea's directory, believes a line only for a served interface, a link-local router and a prefix of that segment's pool, and installs `ip -6 route … proto 77` for each active lease. It removes every protocol 77 route nobody holds. The next hops are kept in `/var/lib/andaru/pd-next-hops.json`, so the routes return at boot. `ManageForeignRoutes=no` stops networkd deleting them on a restart or an apply.
 - **The pool is unreachable** where nobody leases it (`[Route] Type=unreachable` on the segment), so it never leaks out of the WAN. A delegation pool needs the packet filter, so a management segment.
 - **Names:** DHCPv6 address leases publish AAAA and PTR records. Names are kept per family: a static DHCPv4 name does not block a device's IPv6 name.
-- **Not offered:** DHCPv6 relays, DHCPv6 on delegated segments (next slice), NTP and custom options.
+- **Not offered:** DHCPv6 relays, NTP and custom options.
+
+### DHCPv6 on delegated prefixes
+
+Kea's DHCPv6 server, and prefix delegation onwards, on segments numbered from the prefix the WAN's DHCPv6 client receives (`delegated` segments). Andaru follows the prefix when the provider changes it, and tells clients to stop using the old one. Design: [DHCPv6 on delegated prefixes](../superpowers/specs/2026-11-13-dhcpv6-delegated-design.md).
+
+```sh
+# Once, beside the DHCPv6 files (packaging/):
+sudo install -m 0644 packaging/systemd/andaru-prefixes.path packaging/systemd/andaru-prefixes.timer packaging/systemd/andaru-prefixes.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now andaru-prefixes.path andaru-prefixes.timer
+
+# A /48 requested on the WAN; the LAN is subnet 1 of it, and routers behind it get /64s from the 16 at subnet 0x80.
+printf '%s\n' '{"name":"lan6","segment":"'"$LAN"'","ranges":[{"first":"::1000","last":"::1fff"}],"staticLeases":[{"duid":"00:01:00:01:aa:bb:cc:dd:ee:ff","prefixId":"1","hostname":"router"}],"prefixDelegation":{"subnetId":"8","length":60,"delegatedLength":64}}' \
+  | sudo andaru ctl config create dhcp6
+sudo andaru ctl prefixes
+```
+
+- **Suffixes and positions:** on a delegated segment, `ranges` and static `address`es are suffixes (the first 64 bits zero), put behind the segment's current `/64`. A `prefixDelegation` is a position in the WAN's prefix: `subnetId` at `length`, handing out prefixes of `delegatedLength`. A static lease's `prefixId` is a position in that pool, so a router keeps its place whatever prefix the provider delegates. Literal prefixes and an excluded prefix are refused there.
+- **What fits:** subnet IDs and pools are checked against the WAN's `requestPrefixLength` when saved (`0` to `ff` for a `/56` request), and against the prefix actually received at apply. A delegated segment saved earlier with a subnet ID wider than its WAN's request no longer validates. At apply, `kea-dhcp6 -t` judges the delegated subnets filled with `2001:db8::` at the requested length. When the provider delegates less than requested, what does not fit is reported (`DELEGATED_PREFIX_TOO_SHORT`) and not served; the rest is. To fit whichever answer the provider gives, keep subnet IDs and pools inside the first `/56`, for example a `/60` pool of `/64`s at `subnetId` `8`.
+- **Following the prefix:** `andaru realize prefixes` runs when networkd's link state changes (`andaru-prefixes.path`), every minute (`andaru-prefixes.timer`), at apply and at boot. It reads the prefix from networkd's `unreachable … proto dhcp` route and the LAN's address, fills the delegated subnets into Kea's file, and hands it to Kea with `config-set` without restarting it. Clients move to the new prefix when they renew; Kea returns their old lease with zero lifetimes. When no prefix is seen (at boot, during an outage), the last one is served until its valid lifetime ends, and the routers' next hops are kept.
+- **Deprecating the old prefix:** networkd stops listing a replaced prefix but never advertises it at lifetime zero, so clients keep it preferred. For ten minutes after a change, Andaru advertises each segment's old `/64` with preferred lifetime 0 (and the segment's own router lifetime and flags), so clients stop choosing addresses from it. RFC 4862 keeps it valid on clients for up to two hours.
+- **The prefix view:** `andaru ctl prefixes` (`GET /api/v1/status/prefixes`) shows each WAN's requested length, its current prefix and lifetimes, the subnet IDs it leaves room for, each delegated segment's `/64`, each pool's range, and what does not fit.
+- **Routes and names:** a delegated pool is unreachable where nobody leases it (`proto 77`, kept by the lease sync), leased prefixes are routed via the router that asked, and static names publish AAAA and PTR at the current address. After a change, the old pool's routes stay while Kea still holds their leases and the old prefix is valid, until each router renews.
 
 ### Inbound NAT
 
@@ -713,6 +735,19 @@ The lab found, not yet fixed:
 - networkd 257 does not deprecate a replaced delegated prefix, as the design expects it to: clients keep the old address preferred for the rest of the lease's preferred lifetime, hours at many providers, while the provider no longer routes it.
 - After the failed apply's rollback on `c3783db`, `eth1`, IPv6 `none` in generation 1, still had `fd00:a5d::be24:11ff:fe17:6841/64` (1721 s valid) when the next apply began.
 - `networkctl renew` sends no DHCPv6 message in systemd 257, so the prefix change waited for the renew timer.
+
+### Delegated DHCPv6 Debian lab qualification
+
+On 2026-11-13 the CGO-disabled amd64 builds of `a8d9c7b` and, after the review and lab fixes, `41b53ca` (SHA-256 `5203eecae5ff62d0015dc0112c5ca9c07dbc0e25bf3edd1483fffa0134cb7cbc`) were installed on VM 114, set up as in the IPv6 LAN qualification: `ens20` on VLAN 4092 behind the LXC router that delegates `/56`s from `fd00:a5d::/49` (renew 300 s, valid 1800 s), and the LAN on VLAN 4093. The WAN segment requested a `/56`; the LAN was `delegated` at subnet `1` with `ra.mode` `managed`, and its `dhcp6` entry had the ranges `::1000`–`::1fff`, a static lease `::10` for VM 117, a static lease at `prefixId` `1` for a downstream router (an LXC running networkd as a prefix-delegation client), and the pool `{"subnetId":"8","length":60,"delegatedLength":64}`.
+
+- **Apply:** `kea-dhcp6 -t` judged the template filled with `2001:db8:0:1::/64` and the pool `2001:db8:0:80::/60`; `andaru ctl prefixes` showed `fd00:a5d::/56`, subnet IDs `0`–`ff`, the LAN at `fd00:a5d:0:1::/64` and the pool at `fd00:a5d:0:80::/60`.
+- **Clients:** VM 117 took `fd00:a5d:0:1::10`, and `client117.home.arpa` answered AAAA and PTR. The router got `fd00:a5d:0:81::/64`, its fixed position, routed `via fe80::… dev eth1 proto andaru` beside `unreachable fd00:a5d:0:80::/60 proto andaru`; pings from behind it crossed the firewall.
+- **Prefix change:** with the router's pool moved to `fd00:a5d:100::/56`, at the WAN's renewal Kea took the new subnet by `config-set` (same process), Andaru advertised the old `/64` with preferred lifetime 0 eleven times over ten minutes (the first 108 ms after Kea took the new prefix), VM 117's old SLAAC address became `deprecated`, and its DHCPv6 address and both delegated prefixes moved at their renewals. The old pool's routes stayed until the old prefix's valid lifetime ended.
+- **Reboot** with the delegating router's Kea stopped: `andaru-prefixes.path` stayed active, Kea served `fd00:a5d:100:1::/64` from the saved prefix 0.1 s after it started, VM 117 got a lease before the WAN had a prefix, and the routes came back.
+
+The lab found and this branch fixes: the old pool's routes went a second after the change, while Kea still held its leases, so the old prefixes followed the default route; and networkd's burst of link-file rewrites at boot hit the service's start limit, which stopped the path unit.
+
+Not run on the lab: a prefix shorter than requested, graceful renumbering, the saved prefix expiring, and a `config-set` Kea refuses; unit tests cover them.
 
 ### Inbound NAT Debian lab qualification
 

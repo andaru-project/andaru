@@ -1,0 +1,9 @@
+[Unit]
+Description=Andaru delegated IPv6 prefixes on link changes
+
+[Path]
+# networkd replaces a link's state file when its delegated prefix changes, not when a lease only renews.
+PathChanged=/run/systemd/netif/links/
+
+[Install]
+WantedBy=multi-user.target

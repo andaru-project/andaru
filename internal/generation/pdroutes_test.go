@@ -439,3 +439,23 @@ func TestPDEventsSurviveAFailedRouteList(t *testing.T) {
 		t.Fatalf("next hop lost with the failed sync: %q", b.net.argv)
 	}
 }
+
+// A pool that hands out itself (delegated length = pool length) is routed to its router, not blackholed.
+func TestPoolOfOnePrefixNotBlackholed(t *testing.T) {
+	b := newBench(t)
+	b.delegatedLAN("2001:db8:aa00::/48", -1)
+	writeFile(t, filepath.Join(b.net.root, kea6Template), strings.Replace(templateBody, `"delegatedLength":64`, `"delegatedLength":60`, 1))
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	conf := b.keaFile()
+	b.kea6(lease6{Address: "2001:db8:aa00:80::", PrefixLen: 60, Type: "IA_PD", Subnet: 7, Valid: 4000, Cltt: 100})
+	writeFile(t, filepath.Join(b.net.root, kea6File), conf)
+	b.events("add 2001:db8:aa00:80::/60 fe80::1 ens19")
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if b.index("ip -6 route replace unreachable 2001:db8:aa00:80::/60 proto 77") >= 0 {
+		t.Fatalf("the leased prefix was blackholed: %q", b.net.argv)
+	}
+}

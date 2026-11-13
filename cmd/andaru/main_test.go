@@ -237,6 +237,10 @@ func (f *fakeVerbs) SyncLeases(context.Context) error {
 	f.calls = append(f.calls, "leases")
 	return f.err
 }
+func (f *fakeVerbs) SyncPrefixes(context.Context) error {
+	f.calls = append(f.calls, "prefixes")
+	return f.err
+}
 
 func TestRealizeExitCodes(t *testing.T) {
 	for _, row := range []struct {
@@ -446,5 +450,24 @@ func TestConfigDHCPv6(t *testing.T) {
 	}
 	if !validChanged(config.ChangedView{Collection: "dhcp6", ID: id, Deleted: true}) {
 		t.Fatal("a DHCPv6 result was refused")
+	}
+}
+
+// andaru ctl prefixes prints the engine's prefix view, and nothing that is not one.
+func TestCtlPrefixes(t *testing.T) {
+	var asked string
+	reply := `{"wans":[]}`
+	path := replySocket(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = r.URL.Path
+		_, _ = io.WriteString(w, reply)
+	}))
+	var out, diag bytes.Buffer
+	if code := run(context.Background(), []string{"ctl", "--socket", path, "prefixes"}, strings.NewReader(""), &out, &diag); code != 0 || asked != "/api/v1/status/prefixes" || !strings.Contains(out.String(), `"wans"`) {
+		t.Fatalf("%d %q %q %q", code, asked, out.String(), diag.String())
+	}
+	reply = `{"items":[]}`
+	out.Reset()
+	if code := run(context.Background(), []string{"ctl", "--socket", path, "prefixes"}, strings.NewReader(""), &out, &diag); code != 1 || out.Len() != 0 {
+		t.Fatal("a reply without wans became success")
 	}
 }

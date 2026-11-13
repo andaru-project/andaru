@@ -14,6 +14,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/andaru-project/andaru/internal/delegation"
 )
 
 // RealizerFacts are host observations that decide whether rendered network
@@ -37,6 +39,8 @@ type RealizerFacts struct {
 	Kea6Tool bool
 	// KeaHooks is the directory holding Kea's run_script hook, which kea-common puts under the architecture's triplet.
 	KeaHooks string
+	// Delegated is what the prefix sync last saw the WANs receive; a damaged file reads as nothing seen.
+	Delegated delegation.State
 }
 
 // competingFilters flush or own the whole ruleset; Debian's nftables.service starts with "flush ruleset".
@@ -87,6 +91,7 @@ func readRealizerFacts(etcDir, runDir, pppd, pluginGlob, device, root string) (R
 		facts.KeaHooks = strings.TrimPrefix(filepath.Dir(hooks[0]), root)
 	}
 	facts.UnboundTool = exists(root + "/usr/sbin/unbound")
+	facts.Delegated, _ = delegation.ReadState(root + "/var/lib/andaru/delegated-prefixes.json")
 	facts.FilterUnits = []string{}
 	for _, unit := range competingFilters {
 		// Persistent (/etc) and runtime (/run) enablement, through either a wants or a requires link.
