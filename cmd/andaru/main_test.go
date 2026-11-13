@@ -452,3 +452,22 @@ func TestConfigDHCPv6(t *testing.T) {
 		t.Fatal("a DHCPv6 result was refused")
 	}
 }
+
+// andaru ctl prefixes prints the engine's prefix view, and nothing that is not one.
+func TestCtlPrefixes(t *testing.T) {
+	var asked string
+	reply := `{"wans":[]}`
+	path := replySocket(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = r.URL.Path
+		_, _ = io.WriteString(w, reply)
+	}))
+	var out, diag bytes.Buffer
+	if code := run(context.Background(), []string{"ctl", "--socket", path, "prefixes"}, strings.NewReader(""), &out, &diag); code != 0 || asked != "/api/v1/status/prefixes" || !strings.Contains(out.String(), `"wans"`) {
+		t.Fatalf("%d %q %q %q", code, asked, out.String(), diag.String())
+	}
+	reply = `{"items":[]}`
+	out.Reset()
+	if code := run(context.Background(), []string{"ctl", "--socket", path, "prefixes"}, strings.NewReader(""), &out, &diag); code != 1 || out.Len() != 0 {
+		t.Fatal("a reply without wans became success")
+	}
+}

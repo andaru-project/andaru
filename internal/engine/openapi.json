@@ -20,6 +20,34 @@
     0
   ],
   "paths": {
+    "/api/v1/status/prefixes": {
+      "get": {
+        "operationId": "readDelegatedPrefixes",
+        "summary": "Read the prefixes the DHCPv6 WANs hold and where the delegated segments and pools sit in them",
+        "description": "Reads what andaru realize prefixes last saw and the live generation's files. A segment or pool with a null prefix does not fit the current prefix, or no prefix has been seen yet.",
+        "responses": {
+          "200": {
+            "description": "One entry per DHCPv6 WAN that requests a prefix or numbers a delegated segment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrefixesResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/InventoryUnavailable"
+          }
+        }
+      }
+    },
     "/api/v1/status/links": {
       "get": {
         "operationId": "listObservedLinks",
@@ -5119,6 +5147,145 @@
   },
   "components": {
     "schemas": {
+      "PrefixesResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "wans"
+        ],
+        "properties": {
+          "wans": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "interface",
+                "requested",
+                "current",
+                "subnetIds",
+                "segments",
+                "pools",
+                "notFitting"
+              ],
+              "properties": {
+                "interface": {
+                  "type": "string"
+                },
+                "requested": {
+                  "type": "integer",
+                  "description": "The requested prefix length; 0 when none is requested."
+                },
+                "current": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "prefix",
+                        "preferredUntil",
+                        "validUntil"
+                      ],
+                      "properties": {
+                        "prefix": {
+                          "type": "string"
+                        },
+                        "preferredUntil": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "validUntil": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  ]
+                },
+                "subnetIds": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "first",
+                    "last"
+                  ],
+                  "properties": {
+                    "first": {
+                      "type": "string"
+                    },
+                    "last": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "segments": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "interface",
+                      "subnetId",
+                      "prefix"
+                    ],
+                    "properties": {
+                      "interface": {
+                        "type": "string"
+                      },
+                      "subnetId": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{1,4}$"
+                      },
+                      "prefix": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "pools": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "interface",
+                      "subnetId",
+                      "prefix"
+                    ],
+                    "properties": {
+                      "interface": {
+                        "type": "string"
+                      },
+                      "subnetId": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{1,4}$"
+                      },
+                      "prefix": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "notFitting": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "LinksResponse": {
         "type": "object",
         "additionalProperties": false,

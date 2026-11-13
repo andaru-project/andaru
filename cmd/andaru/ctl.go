@@ -41,7 +41,7 @@ type applyReply struct {
 
 var objectIDPattern = regexp.MustCompile(`^(lnk|seg|zon|adr|svc|rul|dhp|pfw|oto|dh6)_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 var applyIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
-var errUsage = errors.New("usage: andaru ctl [--socket PATH] links|openapi|config <show|list|get|create|replace|delete|changes|order>|versions <list|get>|preview network [--saved-version N]|apply network --saved-version N [--takeover] [--confirm-timeout S]|applies <list|get ID|confirm ID|rollback ID>|takeover [--accept-detected] [--confirm-timeout S]")
+var errUsage = errors.New("usage: andaru ctl [--socket PATH] links|prefixes|openapi|config <show|list|get|create|replace|delete|changes|order>|versions <list|get>|preview network [--saved-version N]|apply network --saved-version N [--takeover] [--confirm-timeout S]|applies <list|get ID|confirm ID|rollback ID>|takeover [--accept-detected] [--confirm-timeout S]")
 
 func collectionName(s string) bool {
 	return slices.Contains([]string{"links", "segments", "zones", "addresses", "services", "dhcp", "dhcp6", "policy/input", "policy/forward", "nat/port-forwards", "nat/one-to-one"}, s)
@@ -74,6 +74,10 @@ func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 		case "links":
 			req.path = "/api/v1/status/links"
 			req.kind = "links"
+			return req, nil
+		case "prefixes":
+			req.path = "/api/v1/status/prefixes"
+			req.kind = "prefixes"
 			return req, nil
 		case "openapi":
 			req.path = "/api/v1/openapi.json"
@@ -453,6 +457,9 @@ func validEnvelope(kind string, body []byte) bool {
 	case "links":
 		var items []json.RawMessage
 		return json.Unmarshal(document["items"], &items) == nil && items != nil
+	case "prefixes":
+		var wans []json.RawMessage
+		return json.Unmarshal(document["wans"], &wans) == nil && wans != nil
 	case "openapi":
 		var version string
 		var paths map[string]json.RawMessage

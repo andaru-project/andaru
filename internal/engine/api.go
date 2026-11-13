@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"github.com/andaru-project/andaru/internal/generation"
+
 	"context"
 	_ "embed"
 	"encoding/json"
@@ -42,6 +44,9 @@ type errorResponse struct {
 	Error errorBody `json:"error"`
 }
 
+// prefixesRoot is where the prefix view reads the host's files; tests point it elsewhere.
+var prefixesRoot = ""
+
 func newHandler(readLinks func(context.Context) ([]host.LinkStatus, error), configuration http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -57,7 +62,7 @@ func newHandler(readLinks func(context.Context) ([]host.LinkStatus, error), conf
 			configuration.ServeHTTP(w, r)
 			return
 		}
-		if r.URL.Path != "/api/v1/status/links" && r.URL.Path != "/api/v1/openapi.json" {
+		if r.URL.Path != "/api/v1/status/links" && r.URL.Path != "/api/v1/status/prefixes" && r.URL.Path != "/api/v1/openapi.json" {
 			writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
 			return
 		}
@@ -71,6 +76,16 @@ func newHandler(readLinks func(context.Context) ([]host.LinkStatus, error), conf
 			if r.Method != http.MethodHead {
 				_, _ = w.Write(openAPIDocument)
 			}
+			return
+		}
+		if r.URL.Path == "/api/v1/status/prefixes" {
+			view, err := generation.ReadPrefixView(prefixesRoot)
+			if err != nil {
+				slog.ErrorContext(r.Context(), "delegated prefixes unavailable", "error", err)
+				writeError(w, r, http.StatusServiceUnavailable, "INVENTORY_UNAVAILABLE", "The delegated prefixes are unavailable; inspect the engine journal.")
+				return
+			}
+			writeJSON(w, r, http.StatusOK, view)
 			return
 		}
 		links, err := readLinks(r.Context())
