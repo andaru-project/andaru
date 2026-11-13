@@ -736,6 +736,19 @@ The lab found, not yet fixed:
 - After the failed apply's rollback on `c3783db`, `eth1`, IPv6 `none` in generation 1, still had `fd00:a5d::be24:11ff:fe17:6841/64` (1721 s valid) when the next apply began.
 - `networkctl renew` sends no DHCPv6 message in systemd 257, so the prefix change waited for the renew timer.
 
+### Delegated DHCPv6 Debian lab qualification
+
+On 2026-11-13 the CGO-disabled amd64 builds of `a8d9c7b` and, after the review and lab fixes, `41b53ca` (SHA-256 `5203eecae5ff62d0015dc0112c5ca9c07dbc0e25bf3edd1483fffa0134cb7cbc`) were installed on VM 114, set up as in the IPv6 LAN qualification: `ens20` on VLAN 4092 behind the LXC router that delegates `/56`s from `fd00:a5d::/49` (renew 300 s, valid 1800 s), and the LAN on VLAN 4093. The WAN segment requested a `/56`; the LAN was `delegated` at subnet `1` with `ra.mode` `managed`, and its `dhcp6` entry had the ranges `::1000`–`::1fff`, a static lease `::10` for VM 117, a static lease at `prefixId` `1` for a downstream router (an LXC running networkd as a prefix-delegation client), and the pool `{"subnetId":"8","length":60,"delegatedLength":64}`.
+
+- **Apply:** `kea-dhcp6 -t` judged the template filled with `2001:db8:0:1::/64` and the pool `2001:db8:0:80::/60`; `andaru ctl prefixes` showed `fd00:a5d::/56`, subnet IDs `0`–`ff`, the LAN at `fd00:a5d:0:1::/64` and the pool at `fd00:a5d:0:80::/60`.
+- **Clients:** VM 117 took `fd00:a5d:0:1::10`, and `client117.home.arpa` answered AAAA and PTR. The router got `fd00:a5d:0:81::/64`, its fixed position, routed `via fe80::… dev eth1 proto andaru` beside `unreachable fd00:a5d:0:80::/60 proto andaru`; pings from behind it crossed the firewall.
+- **Prefix change:** with the router's pool moved to `fd00:a5d:100::/56`, at the WAN's renewal Kea took the new subnet by `config-set` (same process), Andaru advertised the old `/64` with preferred lifetime 0 eleven times over ten minutes (the first 108 ms after Kea took the new prefix), VM 117's old SLAAC address became `deprecated`, and its DHCPv6 address and both delegated prefixes moved at their renewals. The old pool's routes stayed until the old prefix's valid lifetime ended.
+- **Reboot** with the delegating router's Kea stopped: `andaru-prefixes.path` stayed active, Kea served `fd00:a5d:100:1::/64` from the saved prefix 0.1 s after it started, VM 117 got a lease before the WAN had a prefix, and the routes came back.
+
+The lab found and this branch fixes: the old pool's routes went a second after the change, while Kea still held its leases, so the old prefixes followed the default route; and networkd's burst of link-file rewrites at boot hit the service's start limit, which stopped the path unit.
+
+Not run on the lab: a prefix shorter than requested, graceful renumbering, the saved prefix expiring, and a `config-set` Kea refuses; unit tests cover them.
+
 ### Inbound NAT Debian lab qualification
 
 On 2026-11-12 the CGO-disabled amd64 build of code commit `6443d4e` (`vcs.modified=false`, SHA-256 `4cdc5f88a44c7bc95a566d6e40b24d9e61d010d006adb8a051d9f5a68514024d`) was installed on VM 114 at snapshot `base-netplan-static-20261111` (Debian 13, systemd 257.13, nftables 1.1.3), with `eth0` WAN at `10.0.1.19/16` and `eth1` LAN at `192.168.40.1/24` on VLAN 4093; DNS servers were removed from `eth1`'s netplan before the takeover. VM 117 (`base-ifupdown-static-20261112`) sat on the LAN at `192.168.40.2/24` via `192.168.40.1`, with `python3 -m http.server` on ports 80, 8000 and 8001. The WAN client was a host on the lab network, `10.0.0.30`, instead of the PD router, whose SSH key was not at hand. `10.0.1.29` was free: no answer to ping, the neighbour entry `INCOMPLETE` from the client and from VM 114, and no ARP entry or DHCP lease on the lab gateway.
