@@ -49,7 +49,7 @@ type fakeNetworkd struct {
 	keaDead             bool                    // Kea starts but never answers on its socket
 	keaSockets          string                  // what Kea reports of its DHCP sockets; "ready" when empty
 	keaBy               map[string]net.Listener // by control socket name
-	routes              map[string]string       // protocol 188 routes: prefix to "via dev"
+	routes              map[string]string       // protocol 77 routes: prefix to "via dev"
 
 	dns     map[string][]string     // what resolved reports per interface
 	editDNS func([]string) []string // distorts that report
@@ -124,7 +124,7 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 		f.routes[args[3]] = args[5] + " dev " + args[7]
 	case strings.HasPrefix(command, "ip -6 route del ") && len(args) >= 4:
 		delete(f.routes, args[3])
-	case command == "ip -6 route show proto 188":
+	case command == "ip -6 route show proto 77":
 		var out strings.Builder
 		for _, p := range slices.Sorted(maps.Keys(f.routes)) {
 			out.WriteString(p + " via " + f.routes[p] + " metric 1024 pref medium\n")

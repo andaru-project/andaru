@@ -31,7 +31,7 @@ Kea 2.6.3 (Debian 13), 2026-11-13, a client running systemd-networkd 257 in a ne
   - `dns-servers` and `domain-search`;
   - `pd-pools` with `excluded-prefix`;
   - `valid-lifetime` and `preferred-lifetime`.
-- **networkd and foreign routes:** systemd-networkd 257 removes a route it did not create (protocol 188 here) when it restarts (probed). A link reconfiguration, which an apply causes, does the same (`ManageForeignRoutes=yes`, its default).
+- **networkd and foreign routes:** systemd-networkd 257 removes a route it did not create (protocol 77 here) when it restarts (probed). A link reconfiguration, which an apply causes, does the same (`ManageForeignRoutes=yes`, its default).
 - **Runtime:**
   - a `subnet6` must name its `interface`, or clients on the link get "could not select subnet";
   - leases persist across a restart;
@@ -106,8 +106,8 @@ The domain search list is `dns.localDomain` followed by `dns.searchDomains`, as 
    - its interface is a served segment of the confirmed generation;
    - its next hop is a link-local unicast address;
    - its prefix lies in that segment's delegation pool or one of its static prefixes.
-3. **Install.** For every active IA_PD lease Kea lists (`state` 0), whose prefix has a believed next hop, the route `<prefix> via <next hop> dev <interface> proto 188` is installed with `ip -6 route replace`.
-4. **Remove.** Every route of protocol 188 that is not wanted is removed, and the table drops prefixes Kea no longer leases. Protocol number 188 marks Andaru's delegated-prefix routes, so nothing else is touched.
+3. **Install.** For every active IA_PD lease Kea lists (`state` 0), whose prefix has a believed next hop, the route `<prefix> via <next hop> dev <interface> proto 77` is installed with `ip -6 route replace`.
+4. **Remove.** Every route of protocol 77 that is not wanted is removed, and the table drops prefixes Kea no longer leases. Protocol number 77 (named `andaru` in `rt_protos.d`) marks Andaru's delegated-prefix routes, so nothing else is touched.
 
 **Pool route:** each delegation pool is also rendered into its segment's `.network` file as `[Route] Destination=<pool> Type=unreachable`, so traffic to a part of the pool nobody leases is refused at the firewall instead of following the default route out of the WAN (a routing loop with a provider's /48, a leak with a unique local pool). networkd owns that route.
 
@@ -153,7 +153,7 @@ VM 114 is the firewall, with a static ULA `/64` on the LAN and a delegation pool
   - it gets a DHCPv6 address from the range, and a static lease by DUID;
   - its name resolves AAAA and PTR through the firewall.
 - A downstream router, a small Debian guest or container on the LAN running networkd with DHCPv6 prefix delegation:
-  - it gets a `/56`, and the firewall shows `fd00:beef:100:…::/56 via fe80::… proto 188`;
+  - it gets a `/56`, and the firewall shows `fd00:beef:100:…::/56 via fe80::… proto 77`;
   - a host behind it reaches the firewall's LAN address, through the policy;
   - after a firewall reboot the route is back before the router renews;
   - a release removes the route.

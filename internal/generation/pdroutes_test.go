@@ -88,7 +88,7 @@ func TestPDEventInstallsRoute(t *testing.T) {
 	if err := b.r.SyncLeases(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if b.index("ip -6 route replace fd00:beef:1:100::/56 via fe80::1 dev ens19 proto 188") < 0 {
+	if b.index("ip -6 route replace fd00:beef:1:100::/56 via fe80::1 dev ens19 proto 77") < 0 {
 		t.Fatalf("route not installed: %q", b.net.argv)
 	}
 	if hop := b.table()["fd00:beef:1:100::/56"]; hop.Via != "fe80::1" || hop.Dev != "ens19" {
@@ -164,7 +164,7 @@ func TestPDRouteRemoval(t *testing.T) {
 	if err := b.r.SyncLeases(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if b.index("ip -6 route del fd00:beef:1:300::/56 proto 188") < 0 {
+	if b.index("ip -6 route del fd00:beef:1:300::/56 proto 77") < 0 {
 		t.Fatalf("stale route kept: %q", b.net.argv)
 	}
 }
@@ -177,7 +177,7 @@ func TestPDRoutesAfterReboot(t *testing.T) {
 	if err := b.r.SyncLeases(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if b.index("ip -6 route replace fd00:beef:1:100::/56 via fe80::1 dev ens19 proto 188") < 0 {
+	if b.index("ip -6 route replace fd00:beef:1:100::/56 via fe80::1 dev ens19 proto 77") < 0 {
 		t.Fatalf("route not restored: %q", b.net.argv)
 	}
 }

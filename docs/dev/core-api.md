@@ -316,6 +316,7 @@ sudo apt install kea-dhcp6-server
 # Once, beside the DHCP and DNS files (packaging/):
 sudo install -m 0644 packaging/systemd/kea-dhcp6-server.service.d/andaru.conf -D /etc/systemd/system/kea-dhcp6-server.service.d/andaru.conf
 sudo install -m 0644 packaging/systemd/networkd.conf.d/andaru.conf -D /etc/systemd/networkd.conf.d/andaru.conf
+sudo install -m 0644 packaging/iproute2/andaru.conf -D /etc/iproute2/rt_protos.d/andaru.conf
 sudo install -m 0755 packaging/kea/andaru-lease-event -D /usr/share/kea/scripts/andaru-lease-event
 sudo install -m 0644 packaging/apparmor/usr.sbin.kea-dhcp6 /etc/apparmor.d/local/
 sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.kea-dhcp6
@@ -327,7 +328,7 @@ printf '%s\n' '{"name":"lan6","segment":"'"$LAN"'","ranges":[{"first":"fd00:beef
 
 - **`dhcp6`**, one entry per segment with a static IPv6 `/64`: `ranges`, `leaseTime` (default 7200; the preferred lifetime is five-eighths of it), `dnsServers` (default: the segment's stable address when the DNS service serves it), `staticLeases` by `duid` with an `address`, a `prefix` and a `hostname`, and `prefixDelegation` (`prefix`, `delegatedLength` 48–64, optional `excludedPrefix` inside the first delegated prefix). The search list is the local domain and the DNS service's search domains.
 - **Router advertisements:** `managed`, `assisted` and `stateless` apply on a segment with an entry. With other modes `DHCP6_UNANNOUNCED` warns that clients following the flags will not ask.
-- **Delegated prefixes are routed via the router that asked for them.** Kea's hook appends the router's link-local address and interface to `/run/kea/andaru-pd-events`; `andaru realize leases` moves that file out of Kea's directory, believes a line only for a served interface, a link-local router and a prefix of that segment's pool, and installs `ip -6 route … proto 188` for each active lease. It removes every protocol 188 route nobody holds. The next hops are kept in `/var/lib/andaru/pd-next-hops.json`, so the routes return at boot. `ManageForeignRoutes=no` stops networkd deleting them on a restart or an apply.
+- **Delegated prefixes are routed via the router that asked for them.** Kea's hook appends the router's link-local address and interface to `/run/kea/andaru-pd-events`; `andaru realize leases` moves that file out of Kea's directory, believes a line only for a served interface, a link-local router and a prefix of that segment's pool, and installs `ip -6 route … proto 77` for each active lease. It removes every protocol 77 route nobody holds. The next hops are kept in `/var/lib/andaru/pd-next-hops.json`, so the routes return at boot. `ManageForeignRoutes=no` stops networkd deleting them on a restart or an apply.
 - **The pool is unreachable** where nobody leases it (`[Route] Type=unreachable` on the segment), so it never leaks out of the WAN. A delegation pool needs the packet filter, so a management segment.
 - **Names:** DHCPv6 address leases publish AAAA and PTR records. Names are kept per family: a static DHCPv4 name does not block a device's IPv6 name.
 - **Not offered:** DHCPv6 relays, DHCPv6 on delegated segments (next slice), NTP and custom options.

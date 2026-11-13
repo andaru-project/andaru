@@ -23,8 +23,9 @@ const (
 	pdTaken = leasesDir + "/pd-events"
 	// pdTable keeps the believed next hops, so routes return at boot before any router renews.
 	pdTable = "/var/lib/andaru/pd-next-hops.json"
-	// pdProto marks the routes Andaru installs for delegated prefixes; no other route is touched.
-	pdProto = "188"
+	// pdProto marks the routes Andaru installs for delegated prefixes; no other route is touched. 77 is assigned to
+	// no routing daemon (FRR uses 186 to 198, so 188, OSPF, would delete its routes); rt_protos.d names it andaru.
+	pdProto = "77"
 	// pdEventsMax bounds what a hostile or runaway hook can make root read.
 	pdEventsMax = 1 << 20
 )
