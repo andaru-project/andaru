@@ -307,6 +307,31 @@ printf '%s\n' '{"mode":"recursive","segments":["'"$LAN"'"]}' | sudo andaru ctl c
 - **Takeover:** with Unbound installed and a static LAN segment, the proposal includes the DNS service: forwarding to the host's declared servers, or recursive when they came from DHCP. With Kea installed it offers DHCP on each static LAN segment (the upper half of the subnet); the assistant asks for each, yes by default, while `--accept-detected` never turns DHCP on.
 - Inspect leases with `sudo cat /run/andaru-leases/leases.conf` or Kea's socket until a status page exists.
 
+### DHCPv6 and prefix delegation
+
+Kea's DHCPv6 server on LAN segments with a static IPv6 `/64`, including prefixes delegated to routers behind them. Design: [DHCPv6 for the LAN](../superpowers/specs/2026-11-13-dhcpv6-design.md).
+
+```sh
+sudo apt install kea-dhcp6-server
+# Once, beside the DHCP and DNS files (packaging/):
+sudo install -m 0644 packaging/systemd/kea-dhcp6-server.service.d/andaru.conf -D /etc/systemd/system/kea-dhcp6-server.service.d/andaru.conf
+sudo install -m 0644 packaging/systemd/networkd.conf.d/andaru.conf -D /etc/systemd/networkd.conf.d/andaru.conf
+sudo install -m 0755 packaging/kea/andaru-lease-event -D /usr/share/kea/scripts/andaru-lease-event
+sudo install -m 0644 packaging/apparmor/usr.sbin.kea-dhcp6 /etc/apparmor.d/local/
+sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.kea-dhcp6
+sudo systemctl daemon-reload && sudo systemctl restart systemd-networkd
+
+printf '%s\n' '{"name":"lan6","segment":"'"$LAN"'","ranges":[{"first":"fd00:beef:1::1000","last":"fd00:beef:1::1fff"}],"prefixDelegation":{"prefix":"fd00:beef:100::/48","delegatedLength":56}}' \
+  | sudo andaru ctl config create dhcp6
+```
+
+- **`dhcp6`**, one entry per segment with a static IPv6 `/64`: `ranges`, `leaseTime` (default 7200; the preferred lifetime is five-eighths of it), `dnsServers` (default: the segment's stable address when the DNS service serves it), `staticLeases` by `duid` with an `address`, a `prefix` and a `hostname`, and `prefixDelegation` (`prefix`, `delegatedLength` 48–64, optional `excludedPrefix` inside the first delegated prefix). The search list is the local domain and the DNS service's search domains.
+- **Router advertisements:** `managed`, `assisted` and `stateless` apply on a segment with an entry. With other modes `DHCP6_UNANNOUNCED` warns that clients following the flags will not ask.
+- **Delegated prefixes are routed via the router that asked for them.** Kea's hook appends the router's link-local address and interface to `/run/kea/andaru-pd-events`; `andaru realize leases` moves that file out of Kea's directory, believes a line only for a served interface, a link-local router and a prefix of that segment's pool, and installs `ip -6 route … proto 188` for each active lease. It removes every protocol 188 route nobody holds. The next hops are kept in `/var/lib/andaru/pd-next-hops.json`, so the routes return at boot. `ManageForeignRoutes=no` stops networkd deleting them on a restart or an apply.
+- **The pool is unreachable** where nobody leases it (`[Route] Type=unreachable` on the segment), so it never leaks out of the WAN. A delegation pool needs the packet filter, so a management segment.
+- **Names:** DHCPv6 address leases publish AAAA and PTR records. Names are kept per family: a static DHCPv4 name does not block a device's IPv6 name.
+- **Not offered:** DHCPv6 relays, DHCPv6 on delegated segments (next slice), NTP and custom options.
+
 ### Inbound NAT
 
 Port forwards and 1:1 NAT, with pfSense's semantics, IPv4 only. Both need the packet filter, so a management segment. Design: [inbound NAT](../superpowers/specs/2026-11-12-inbound-nat-design.md).

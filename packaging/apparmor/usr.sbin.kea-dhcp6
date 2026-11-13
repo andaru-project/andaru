@@ -1,0 +1,10 @@
+# Installed as /etc/apparmor.d/local/usr.sbin.kea-dhcp6: Debian's profile includes it.
+# Kea reads Andaru's configuration from /run and runs the lease-event script, which marks that leases changed
+# and appends the routers delegated prefixes went to.
+/run/andaru-kea/ r,
+/run/andaru-kea/** r,
+/usr/share/kea/scripts/andaru-lease-event rix,
+/{usr/,}bin/{dash,sh} mrix,
+/{usr/,}bin/touch mrix,
+owner /run/kea/andaru-leases-changed w,
+owner /run/kea/andaru-pd-events a,
