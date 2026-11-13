@@ -985,7 +985,7 @@
       "unevaluatedProperties": false
     },
     "objectWrite": {
-      "oneOf": [
+      "anyOf": [
         {
           "$ref": "#/$defs/linkWrite"
         },
