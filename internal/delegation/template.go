@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/netip"
 	"strconv"
+	"time"
 )
 
 // Template is /run/andaru-kea/kea-dhcp6.template.json: the DHCPv6 subnets of delegated segments, written with
@@ -49,17 +50,21 @@ type TemplatePool struct {
 
 // FillTemplate turns the template into Kea subnet6 entries under each uplink's prefix. A subnet whose uplink
 // has no prefix is left out silently; a subnet or pool the prefix has no room for is left out and named in skipped.
-func FillTemplate(raw []byte, prefixes map[string]netip.Prefix) (subnets []map[string]any, skipped []string, err error) {
+// No lease outlives the delegation it is numbered from.
+func FillTemplate(raw []byte, prefixes map[string]Held, now time.Time) (subnets []map[string]any, skipped []string, err error) {
 	var tpl Template
 	if err := json.Unmarshal(raw, &tpl); err != nil {
 		return nil, nil, fmt.Errorf("read the DHCPv6 template: %w", err)
 	}
 	subnets = []map[string]any{}
 	for _, s := range tpl.Subnets {
-		base, ok := prefixes[s.Uplink]
+		held, ok := prefixes[s.Uplink]
 		if !ok {
 			continue
 		}
+		base := held.Prefix
+		valid := bound(s.Valid, held.Valid.Sub(now))
+		preferred := min(bound(s.Preferred, held.Preferred.Sub(now)), valid)
 		id, _ := strconv.ParseUint(s.SubnetID, 16, 16)
 		lan, ok := Place(base, id, 64)
 		if !ok {
@@ -87,7 +92,7 @@ func FillTemplate(raw []byte, prefixes map[string]netip.Prefix) (subnets []map[s
 		context["andaru"] = marked
 		subnet := map[string]any{
 			"id": s.ID, "subnet": lan.String(), "interface": s.Interface, "pools": pools,
-			"valid-lifetime": s.Valid, "preferred-lifetime": s.Preferred, "option-data": s.Options, "user-context": context,
+			"valid-lifetime": valid, "preferred-lifetime": preferred, "option-data": s.Options, "user-context": context,
 		}
 		var pool netip.Prefix
 		if p := s.Pool; p != nil {
@@ -121,4 +126,17 @@ func FillTemplate(raw []byte, prefixes map[string]netip.Prefix) (subnets []map[s
 		subnets = append(subnets, subnet)
 	}
 	return subnets, skipped, nil
+}
+
+// bound is the lease lifetime limited to what remains of the delegation. The remainder is rounded down to ten
+// minutes, so Kea's configuration changes at most that often while the delegation's lifetime runs down.
+func bound(lease int, remaining time.Duration) int {
+	left := int(max(remaining, 0) / time.Second)
+	if left >= lease {
+		return lease
+	}
+	if left >= 600 {
+		return left - left%600
+	}
+	return left
 }

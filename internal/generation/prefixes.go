@@ -169,7 +169,7 @@ func (r Realizer) readKernel(ctx context.Context, links []delegatedLink, wans ma
 // currentPrefixes decides each uplink's current prefix, updates the saved state, and returns the prefixes to
 // serve: the preferred one networkd holds, else the saved one while it is valid. Without kernel only the saved
 // state counts, as at boot before networkd runs.
-func (r Realizer) currentPrefixes(ctx context.Context, links []delegatedLink, hints map[string]int, wans map[string]bool, kernel bool) (map[string]netip.Prefix, delegation.State, error) {
+func (r Realizer) currentPrefixes(ctx context.Context, links []delegatedLink, hints map[string]int, wans map[string]bool, kernel bool) (map[string]delegation.Held, delegation.State, error) {
 	state, err := delegation.ReadState(r.Root + delegatedState)
 	if err != nil {
 		slog.Warn("read the saved delegated prefixes", "error", err)
@@ -185,7 +185,7 @@ func (r Realizer) currentPrefixes(ctx context.Context, links []delegatedLink, hi
 	for _, l := range links {
 		uplinks[l.Uplink] = true
 	}
-	serve := map[string]netip.Prefix{}
+	serve := map[string]delegation.Held{}
 	for up := range uplinks {
 		w := state.WANs[up]
 		w.Requested = hints[up]
@@ -225,7 +225,7 @@ func (r Realizer) currentPrefixes(ctx context.Context, links []delegatedLink, hi
 			return !h.Valid.After(now) || w.Current != nil && h.Prefix == w.Current.Prefix
 		})
 		if w.Current != nil && w.Current.Valid.After(now) {
-			serve[up] = w.Current.Prefix
+			serve[up] = *w.Current
 		}
 		state.WANs[up] = w
 	}
@@ -234,7 +234,7 @@ func (r Realizer) currentPrefixes(ctx context.Context, links []delegatedLink, hi
 
 // fillKea6 returns Kea's DHCPv6 file with the template's subnets filled under prefixes, replacing any filled
 // before; false when there is no template.
-func (r Realizer) fillKea6(prefixes map[string]netip.Prefix) ([]byte, bool, error) {
+func (r Realizer) fillKea6(prefixes map[string]delegation.Held) ([]byte, bool, error) {
 	raw, err := os.ReadFile(r.Root + kea6Template)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, false, nil
@@ -246,7 +246,7 @@ func (r Realizer) fillKea6(prefixes map[string]netip.Prefix) ([]byte, bool, erro
 	if err := json.Unmarshal(raw, &tpl); err != nil {
 		return nil, false, fmt.Errorf("read the DHCPv6 template: %w", err)
 	}
-	subnets, skipped, err := delegation.FillTemplate(raw, prefixes)
+	subnets, skipped, err := delegation.FillTemplate(raw, prefixes, r.Now())
 	if err != nil {
 		return nil, false, err
 	}
@@ -403,9 +403,10 @@ const kea6Check = "/run/andaru-kea/kea-dhcp6.check.conf"
 // so a template Kea refuses fails the apply even before any prefix is known.
 func (r Realizer) checkTemplate(ctx context.Context) error {
 	links, hints, _ := r.readDelegatedLinks()
-	doc := map[string]netip.Prefix{}
+	doc := map[string]delegation.Held{}
 	for _, l := range links {
-		doc[l.Uplink] = netip.PrefixFrom(netip.MustParseAddr("2001:db8::"), cmpOr(hints[l.Uplink], 48))
+		far := r.Now().Add(24 * time.Hour)
+		doc[l.Uplink] = delegation.Held{Prefix: netip.PrefixFrom(netip.MustParseAddr("2001:db8::"), cmpOr(hints[l.Uplink], 48)), Preferred: far, Valid: far}
 	}
 	data, ok, err := r.fillKea6(doc)
 	if err != nil || !ok {
