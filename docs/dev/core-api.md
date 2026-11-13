@@ -331,7 +331,29 @@ printf '%s\n' '{"name":"lan6","segment":"'"$LAN"'","ranges":[{"first":"fd00:beef
 - **Delegated prefixes are routed via the router that asked for them.** Kea's hook appends the router's link-local address and interface to `/run/kea/andaru-pd-events`; `andaru realize leases` moves that file out of Kea's directory, believes a line only for a served interface, a link-local router and a prefix of that segment's pool, and installs `ip -6 route … proto 77` for each active lease. It removes every protocol 77 route nobody holds. The next hops are kept in `/var/lib/andaru/pd-next-hops.json`, so the routes return at boot. `ManageForeignRoutes=no` stops networkd deleting them on a restart or an apply.
 - **The pool is unreachable** where nobody leases it (`[Route] Type=unreachable` on the segment), so it never leaks out of the WAN. A delegation pool needs the packet filter, so a management segment.
 - **Names:** DHCPv6 address leases publish AAAA and PTR records. Names are kept per family: a static DHCPv4 name does not block a device's IPv6 name.
-- **Not offered:** DHCPv6 relays, DHCPv6 on delegated segments (next slice), NTP and custom options.
+- **Not offered:** DHCPv6 relays, NTP and custom options.
+
+### DHCPv6 on delegated prefixes
+
+Kea's DHCPv6 server, and prefix delegation onwards, on segments numbered from the prefix the WAN's DHCPv6 client receives (`delegated` segments). Andaru follows the prefix when the provider changes it, and tells clients to stop using the old one. Design: [DHCPv6 on delegated prefixes](../superpowers/specs/2026-11-13-dhcpv6-delegated-design.md).
+
+```sh
+# Once, beside the DHCPv6 files (packaging/):
+sudo install -m 0644 packaging/systemd/andaru-prefixes.path packaging/systemd/andaru-prefixes.timer packaging/systemd/andaru-prefixes.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now andaru-prefixes.path andaru-prefixes.timer
+
+# A /48 requested on the WAN; the LAN is subnet 1 of it, and routers behind it get /64s from the 16 at subnet 0x80.
+printf '%s\n' '{"name":"lan6","segment":"'"$LAN"'","ranges":[{"first":"::1000","last":"::1fff"}],"staticLeases":[{"duid":"00:01:00:01:aa:bb:cc:dd:ee:ff","prefixId":"1","hostname":"router"}],"prefixDelegation":{"subnetId":"8","length":60,"delegatedLength":64}}' \
+  | sudo andaru ctl config create dhcp6
+sudo andaru ctl prefixes
+```
+
+- **Suffixes and positions:** on a delegated segment, `ranges` and static `address`es are suffixes (the first 64 bits zero), put behind the segment's current `/64`. A `prefixDelegation` is a position in the WAN's prefix: `subnetId` at `length`, handing out prefixes of `delegatedLength`. A static lease's `prefixId` is a position in that pool, so a router keeps its place whatever prefix the provider delegates. Literal prefixes and an excluded prefix are refused there.
+- **What fits:** subnet IDs and pools are checked against the WAN's `requestPrefixLength` when saved (`0` to `ff` for a `/56` request), and against the prefix actually received at apply. When the provider delegates less than requested, what does not fit is reported (`DELEGATED_PREFIX_TOO_SHORT`) and not served; the rest is. To fit whichever answer the provider gives, keep subnet IDs and pools inside the first `/56`, for example a `/60` pool of `/64`s at `subnetId` `8`.
+- **Following the prefix:** `andaru realize prefixes` runs when networkd's link state changes (`andaru-prefixes.path`), every minute (`andaru-prefixes.timer`), at apply and at boot. It reads the prefix from networkd's `unreachable … proto dhcp` route and the LAN's address, fills the delegated subnets into Kea's file, and hands it to Kea with `config-set` without restarting it. Clients move to the new prefix when they renew; Kea returns their old lease with zero lifetimes. When no prefix is seen (at boot, during an outage), the last one is served until its valid lifetime ends, and the routers' next hops are kept.
+- **Deprecating the old prefix:** networkd stops listing a replaced prefix but never advertises it at lifetime zero, so clients keep it preferred. For ten minutes after a change, Andaru advertises each segment's old `/64` with preferred lifetime 0 (and the segment's own router lifetime and flags), so clients stop choosing addresses from it. RFC 4862 keeps it valid on clients for up to two hours.
+- **The prefix view:** `andaru ctl prefixes` (`GET /api/v1/status/prefixes`) shows each WAN's requested length, its current prefix and lifetimes, the subnet IDs it leaves room for, each delegated segment's `/64`, each pool's range, and what does not fit.
+- **Routes and names:** a delegated pool is unreachable where nobody leases it (`proto 77`, kept by the lease sync), leased prefixes are routed via the router that asked, and static names publish AAAA and PTR at the current address.
 
 ### Inbound NAT
 

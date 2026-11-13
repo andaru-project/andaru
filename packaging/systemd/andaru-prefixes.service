@@ -1,0 +1,7 @@
+[Unit]
+Description=Andaru delegated IPv6 prefixes
+After=systemd-networkd.service kea-dhcp6-server.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/andaru realize prefixes
