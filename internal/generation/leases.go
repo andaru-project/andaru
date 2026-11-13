@@ -42,21 +42,28 @@ type keaConfig struct {
 }
 
 type keaLease struct {
-	Address  string `json:"ip-address"`
-	Hostname string `json:"hostname"`
-	State    int    `json:"state"`
-	Subnet   int    `json:"subnet-id"`
-	Valid    int    `json:"valid-lft"`
-	Cltt     int64  `json:"cltt"`
+	Address   string `json:"ip-address"`
+	PrefixLen int    `json:"prefix-len"`
+	Type      string `json:"type"` // DHCPv6 only: IA_NA or IA_PD
+	Hostname  string `json:"hostname"`
+	State     int    `json:"state"`
+	Subnet    int    `json:"subnet-id"`
+	Valid     int    `json:"valid-lft"`
+	Cltt      int64  `json:"cltt"`
 }
 
-// keaLeases asks Kea for every lease over its control socket.
+// keaLeases asks Kea's DHCPv4 server for every lease over its control socket.
 func (r Realizer) keaLeases(ctx context.Context) ([]keaLease, error) {
+	return r.askLeases(ctx, keaSocket, "lease4-get-all")
+}
+
+// askLeases asks one of Kea's servers for every lease.
+func (r Realizer) askLeases(ctx context.Context, socket, command string) ([]keaLease, error) {
 	// A wedged Kea must not hold every later sync: the oneshot unit has no start timeout.
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	var d net.Dialer
-	c, err := d.DialContext(ctx, "unix", r.Root+keaSocket)
+	c, err := d.DialContext(ctx, "unix", r.Root+socket)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +71,7 @@ func (r Realizer) keaLeases(ctx context.Context) ([]keaLease, error) {
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = c.SetDeadline(deadline)
 	}
-	if _, err := io.WriteString(c, `{"command":"lease4-get-all"}`); err != nil {
+	if _, err := io.WriteString(c, `{"command":"`+command+`"}`); err != nil {
 		return nil, err
 	}
 	var reply struct {
@@ -136,6 +143,11 @@ func (r Realizer) syncLeases(ctx context.Context) error {
 		}
 		records = leaseRecords(cfg, leases)
 	}
+	v6, err := r.syncKea6(ctx)
+	if err != nil {
+		return err
+	}
+	records = append(records, v6...)
 	body := "server:\n"
 	for _, line := range records {
 		body += "\t" + line + "\n"
