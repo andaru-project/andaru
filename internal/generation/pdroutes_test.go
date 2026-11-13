@@ -54,7 +54,7 @@ func (b *bench) kea6Seq(onAsk func(n int), sets ...[]lease6) {
 	b.t.Helper()
 	writeFile(b.t, filepath.Join(b.net.root, kea6File), kea6Served)
 	dir := filepath.Join(b.net.root, "run/kea")
-	if err := os.MkdirAll(dir, 0o750); err != nil || os.Chown(dir, keaUser, keaUser) != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil || os.Chown(dir, keaUser, -1) != nil {
 		b.t.Fatal("Kea's directory")
 	}
 	l, err := net.Listen("unix", filepath.Join(dir, "kea6-ctrl-socket"))
@@ -85,7 +85,7 @@ func (b *bench) events(lines ...string) string {
 	b.t.Helper()
 	path := filepath.Join(b.net.root, pdEvents)
 	writeFile(b.t, path, strings.Join(lines, "\n")+"\n")
-	if err := os.Chown(path, keaUser, keaUser); err != nil {
+	if err := os.Chown(path, keaUser, -1); err != nil {
 		b.t.Fatal(err)
 	}
 	return path
@@ -147,7 +147,7 @@ func TestPDEventFileHostile(t *testing.T) {
 			target := filepath.Join(b.net.root, "secret")
 			// The target even looks like Kea's, so only refusing to follow the link stops it.
 			writeFile(b.t, target, "add fd00:beef:1:100::/56 fe80::1 ens19\n")
-			_ = os.Chown(target, keaUser, keaUser)
+			_ = os.Chown(target, keaUser, -1)
 			_ = os.Symlink(target, path)
 		},
 		"other owner": func(b *bench, path string) {
@@ -159,7 +159,7 @@ func TestPDEventFileHostile(t *testing.T) {
 		},
 		"oversized": func(b *bench, path string) {
 			writeFile(b.t, path, "add fd00:beef:1:100::/56 fe80::1 ens19\n"+strings.Repeat("#", 2<<20))
-			_ = os.Chown(path, keaUser, keaUser)
+			_ = os.Chown(path, keaUser, -1)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -228,7 +228,7 @@ func TestPDEventFIFO(t *testing.T) {
 	b := newBench(t)
 	b.kea6(pd("fd00:beef:1:100::/56"))
 	path := filepath.Join(b.net.root, pdEvents)
-	if err := syscall.Mkfifo(path, 0o600); err != nil || os.Chown(path, keaUser, keaUser) != nil {
+	if err := syscall.Mkfifo(path, 0o600); err != nil || os.Chown(path, keaUser, -1) != nil {
 		t.Fatal("mkfifo")
 	}
 	done := make(chan error, 1)
@@ -306,7 +306,7 @@ func TestDHCPv4NamesSurviveADeadDHCPv6(t *testing.T) {
 func TestPDEventsSurviveADeadDHCPv6(t *testing.T) {
 	b := newBench(t)
 	writeFile(t, filepath.Join(b.net.root, kea6File), kea6Served)
-	if err := os.MkdirAll(filepath.Join(b.net.root, "run/kea"), 0o750); err != nil || os.Chown(filepath.Join(b.net.root, "run/kea"), keaUser, keaUser) != nil {
+	if err := os.MkdirAll(filepath.Join(b.net.root, "run/kea"), 0o750); err != nil || os.Chown(filepath.Join(b.net.root, "run/kea"), keaUser, -1) != nil {
 		t.Fatal("Kea's directory")
 	}
 	b.events("add fd00:beef:1:100::/56 fe80::1 ens19")
