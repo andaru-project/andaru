@@ -6,14 +6,19 @@ import (
 	"hash/fnv"
 	"net/netip"
 	"slices"
+	"strconv"
 	"strings"
+
+	"github.com/andaru-project/andaru/internal/delegation"
 )
 
 const (
-	keaPath      = "/run/andaru-kea/kea-dhcp4.conf"
-	kea6Path     = "/run/andaru-kea/kea-dhcp6.conf"
-	unboundPath  = "/run/andaru-unbound/andaru.conf"
-	resolvedPath = "/run/systemd/resolved.conf.d/50-andaru.conf"
+	keaPath  = "/run/andaru-kea/kea-dhcp4.conf"
+	kea6Path = "/run/andaru-kea/kea-dhcp6.conf"
+	// kea6TemplatePath holds delegated segments' subnets, which root fills with the WAN's prefix.
+	kea6TemplatePath = "/run/andaru-kea/kea-dhcp6.template.json"
+	unboundPath      = "/run/andaru-unbound/andaru.conf"
+	resolvedPath     = "/run/systemd/resolved.conf.d/50-andaru.conf"
 )
 
 type dhcpEntry struct {
@@ -150,6 +155,7 @@ func (r *renderer) services() {
 	}
 
 	names = append(names, r.dhcp6(dnsServes, register)...)
+	r.delegatedFit()
 
 	if d.DNS == nil {
 		return
@@ -184,7 +190,7 @@ func (r *renderer) services() {
 	}
 	// Hosts behind a downstream router are numbered from the segment's delegation pool.
 	for _, e := range d.DHCP6 {
-		if _, _, _, ok := r.servedV6(e.Segment); ok && slices.Contains(d.DNS.Segments, e.Segment) && e.PrefixDelegation != nil {
+		if _, _, _, ok := r.servedV6(e.Segment); ok && slices.Contains(d.DNS.Segments, e.Segment) && e.PrefixDelegation != nil && e.PrefixDelegation.Prefix != "" {
 			acl = append(acl, "\taccess-control: "+e.PrefixDelegation.Prefix+" allow")
 		}
 	}
@@ -237,6 +243,55 @@ func subnetID(segment string, used map[uint32]bool) uint32 {
 	return id
 }
 
+// delegated6 is a usable delegated segment's interface, its uplink's interface and its subnet ID.
+func (r *renderer) delegated6(id string) (name, uplink, subnetID string, ok bool) {
+	for _, s := range r.d.Segments {
+		if s.ID != id || !r.usable[s.Link] || s.Addressing.IPv6.Mode != "delegated" {
+			continue
+		}
+		for _, up := range r.d.Segments {
+			if up.ID == s.Addressing.IPv6.From && r.usable[up.Link] {
+				return r.name[s.Link], r.name[up.Link], s.Addressing.IPv6.SubnetID, true
+			}
+		}
+	}
+	return "", "", "", false
+}
+
+// delegatedFit reports the delegated segments and pools the prefix each WAN last received has no room for.
+// They are applied, and served once a prefix with room arrives; nothing is judged before a prefix is seen.
+func (r *renderer) delegatedFit() {
+	current := func(uplink string) (netip.Prefix, bool) {
+		w, ok := r.in.Facts.Delegated.WANs[uplink]
+		if !ok || w.Current == nil {
+			return netip.Prefix{}, false
+		}
+		return w.Current.Prefix, true
+	}
+	const msg = "The prefix the WAN currently receives, %s, has no room for this %s; it is not served until a prefix with room is delegated."
+	for i, s := range r.d.Segments {
+		if s.Addressing.IPv6.Mode != "delegated" {
+			continue
+		}
+		_, uplink, subnetHex, ok := r.delegated6(s.ID)
+		base, seen := current(uplink)
+		n, _ := strconv.ParseUint(subnetHex, 16, 16)
+		if _, fits := delegation.Place(base, n, 64); ok && seen && !fits {
+			r.find("warning", "DELEGATED_PREFIX_TOO_SHORT", fmt.Sprintf("/segments/%d/addressing/ipv6/subnetId", i), fmt.Sprintf(msg, base, "subnet ID"))
+		}
+	}
+	for i, e := range r.d.DHCP6 {
+		_, uplink, _, ok := r.delegated6(e.Segment)
+		base, seen := current(uplink)
+		if pd := e.PrefixDelegation; ok && seen && pd != nil {
+			n, _ := strconv.ParseUint(pd.SubnetID, 16, 16)
+			if _, fits := delegation.Place(base, n, pd.Length); !fits {
+				r.find("warning", "DELEGATED_PREFIX_TOO_SHORT", fmt.Sprintf("/dhcp6/%d/prefixDelegation", i), fmt.Sprintf(msg, base, "delegation pool"))
+			}
+		}
+	}
+}
+
 // served6 is a usable segment's interface and the /64 DHCPv6 serves: its first static one that is not link-local.
 func (r *renderer) served6(id string) (string, netip.Prefix, bool) {
 	for _, s := range r.d.Segments {
@@ -262,12 +317,17 @@ func (r *renderer) dhcp6(dnsServes func(string) bool, register bool) (names []st
 		r.find("error", "TOOL_MISSING", "/dhcp6", "The DHCPv6 server is not installed; install the kea-dhcp6-server package.")
 	}
 	var interfaces []string
-	var subnets []map[string]any
+	subnets := []map[string]any{}
+	var delegated []delegation.TemplateSubnet
 	ids := map[uint32]bool{}
 	for i, e := range d.DHCP6 {
 		name, own, ok := r.served6(e.Segment)
-		if !ok {
+		name6, uplink, subnetHex, isDelegated := r.delegated6(e.Segment)
+		if !ok && !isDelegated {
 			continue
+		}
+		if isDelegated {
+			name = name6
 		}
 		if len(e.Ranges) > 0 {
 			if mode := r.raMode(e.Segment); mode != "managed" && mode != "assisted" {
@@ -293,6 +353,24 @@ func (r *renderer) dhcp6(dnsServes func(string) bool, register bool) (names []st
 		pools := []map[string]any{}
 		for _, rg := range e.Ranges {
 			pools = append(pools, map[string]any{"pool": rg.First + " - " + rg.Last})
+		}
+		if isDelegated {
+			sub := delegation.TemplateSubnet{
+				ID: subnetID(e.Segment, ids), Interface: name, Uplink: uplink, SubnetID: subnetHex, Ranges: []delegation.TemplateRange{},
+				Reservations: []delegation.TemplateReservation{}, Valid: e.LeaseTime, Preferred: e.LeaseTime * 5 / 8, Options: options,
+				UserContext: map[string]any{"andaru": map[string]any{"domain": domain, "register": register && dnsServes(e.Segment)}},
+			}
+			for _, rg := range e.Ranges {
+				sub.Ranges = append(sub.Ranges, delegation.TemplateRange{First: rg.First, Last: rg.Last})
+			}
+			for _, l := range e.StaticLeases {
+				sub.Reservations = append(sub.Reservations, delegation.TemplateReservation{DUID: l.DUID, Address: l.Address, PrefixID: l.PrefixID, Hostname: l.Hostname})
+			}
+			if pd := e.PrefixDelegation; pd != nil {
+				sub.Pool = &delegation.TemplatePool{SubnetID: pd.SubnetID, Length: pd.Length, DelegatedLength: pd.DelegatedLength}
+			}
+			delegated = append(delegated, sub)
+			continue
 		}
 		var pdPools []map[string]any
 		if pd := e.PrefixDelegation; pd != nil {
@@ -332,8 +410,12 @@ func (r *renderer) dhcp6(dnsServes func(string) bool, register bool) (names []st
 		}
 		subnets = append(subnets, subnet)
 	}
-	if len(subnets) == 0 {
+	if len(subnets) == 0 && len(delegated) == 0 {
 		return names
+	}
+	if len(delegated) > 0 {
+		raw, _ := json.MarshalIndent(delegation.Template{Subnets: delegated}, "", "  ")
+		r.file(kea6TemplatePath, "0644", string(raw)+"\n", []string{"/dhcp6"})
 	}
 	kea := map[string]any{"Dhcp6": map[string]any{
 		// Kea never listens on an interface that was down when it started, unless it retries.

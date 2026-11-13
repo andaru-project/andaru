@@ -1,7 +1,9 @@
 package delegation
 
 import (
+	"encoding/json"
 	"net/netip"
+	"strings"
 	"testing"
 )
 
@@ -36,5 +38,44 @@ func TestPlace(t *testing.T) {
 func TestJoin(t *testing.T) {
 	if got := Join(netip.MustParsePrefix("2001:db8:0:1::/64"), netip.MustParseAddr("::1000")); got != netip.MustParseAddr("2001:db8:0:1::1000") {
 		t.Fatalf("Join = %s", got)
+	}
+}
+
+const template = `{"subnets":[{"id":7,"interface":"ens19","uplink":"ens18","subnetId":"1",
+	"ranges":[{"first":"::1000","last":"::1fff"}],
+	"reservations":[{"duid":"00:01:00:01:aa:bb:cc:dd:ee:ff","address":"::10","prefixId":"1","hostname":"router"}],
+	"pool":{"subnetId":"8","length":60,"delegatedLength":64},
+	"valid-lifetime":7200,"preferred-lifetime":4500,"option-data":[],"user-context":{"andaru":{"domain":"home.arpa","register":true}}}]}`
+
+func TestFillTemplate(t *testing.T) {
+	subnets, skipped, err := FillTemplate([]byte(template), map[string]netip.Prefix{"ens18": netip.MustParsePrefix("2001:db8:aa00::/48")})
+	if err != nil || len(skipped) != 0 || len(subnets) != 1 {
+		t.Fatalf("%v %v %v", subnets, skipped, err)
+	}
+	got, _ := json.Marshal(subnets[0])
+	for _, want := range []string{`"id":7`, `"subnet":"2001:db8:aa00:1::/64"`, `"interface":"ens19"`, `"pool":"2001:db8:aa00:1::1000 - 2001:db8:aa00:1::1fff"`,
+		`"delegated-len":64,"prefix":"2001:db8:aa00:80::","prefix-len":60`, `"ip-addresses":["2001:db8:aa00:1::10"]`, `"prefixes":["2001:db8:aa00:81::/64"]`,
+		`"hostname":"router"`, `"valid-lifetime":7200`, `"option-data":[]`, `"user-context"`} {
+		if !strings.Contains(string(got), want) {
+			t.Fatalf("missing %s in %s", want, got)
+		}
+	}
+	if strings.Contains(string(got), "uplink") || strings.Contains(string(got), "subnetId") {
+		t.Fatalf("template fields left in Kea's subnet: %s", got)
+	}
+	// A /56 has no room for subnet 100: the subnet is left out and named.
+	tpl := strings.Replace(template, `"subnetId":"1",`, `"subnetId":"100",`, 1)
+	subnets, skipped, err = FillTemplate([]byte(tpl), map[string]netip.Prefix{"ens18": netip.MustParsePrefix("2001:db8:aa00::/56")})
+	if err != nil || len(subnets) != 0 || len(skipped) != 1 || !strings.Contains(skipped[0], "ens19") {
+		t.Fatalf("%v %v %v", subnets, skipped, err)
+	}
+	// No prefix for the uplink: nothing to serve, nothing reported.
+	if subnets, skipped, err = FillTemplate([]byte(template), nil); err != nil || len(subnets) != 0 || len(skipped) != 0 {
+		t.Fatalf("%v %v %v", subnets, skipped, err)
+	}
+	// A pool that does not fit leaves the subnet served without it.
+	subnets, skipped, _ = FillTemplate([]byte(strings.Replace(template, `"subnetId":"8"`, `"subnetId":"10"`, 1)), map[string]netip.Prefix{"ens18": netip.MustParsePrefix("2001:db8:aa00::/56")})
+	if got, _ := json.Marshal(subnets); len(subnets) != 1 || strings.Contains(string(got), "pd-pools") || strings.Contains(string(got), "prefixes") || len(skipped) != 1 {
+		t.Fatalf("%s %v", got, skipped)
 	}
 }

@@ -229,7 +229,7 @@ func (r *renderer) addressing(id string, ppp bool) (sections []section, sources 
 	sections = []section{{"Network", network}, {"DHCPv4", dhcp4}, {"DHCPv6", dhcp6}, {"IPv6AcceptRA", accept}, {"DHCPPrefixDelegation", delegation}, {"IPv6SendRA", send}}
 	// A delegation pool's unleased parts are refused here, not sent out of the WAN by the default route.
 	for _, e := range r.d.DHCP6 {
-		if e.Segment == s.ID && e.PrefixDelegation != nil {
+		if e.Segment == s.ID && e.PrefixDelegation != nil && e.PrefixDelegation.Prefix != "" {
 			prefixes = append(prefixes, section{"Route", []string{"Destination=" + e.PrefixDelegation.Prefix, "Type=unreachable"}})
 			sources = append(sources, "/dhcp6")
 		}

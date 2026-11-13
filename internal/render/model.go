@@ -138,12 +138,12 @@ type dhcp6Entry struct {
 	LeaseTime    int
 	DNSServers   []string
 	StaticLeases []struct {
-		DUID, Address, Prefix, Hostname string
+		DUID, Address, Prefix, PrefixID, Hostname string
 	}
 	PrefixDelegation *struct {
-		Prefix          string
-		DelegatedLength int
-		ExcludedPrefix  string
+		Prefix, SubnetID        string
+		Length, DelegatedLength int
+		ExcludedPrefix          string
 	}
 }
 

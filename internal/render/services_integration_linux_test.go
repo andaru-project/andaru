@@ -3,11 +3,15 @@
 package render
 
 import (
+	"encoding/json"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/andaru-project/andaru/internal/delegation"
 )
 
 // Each service golden is accepted by the daemon's own checker, as Debian 13 ships it.
@@ -72,12 +76,26 @@ func TestDHCPv6GoldensPassKea(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, in := range map[string]Input{
-		"dhcp6":        fixture(t, "dhcp6"),
-		"dhcp6-no-dns": change(t, fixture(t, "dhcp6"), func(d map[string]any) { delete(d, "dns") }),
+		"dhcp6":           fixture(t, "dhcp6"),
+		"dhcp6-no-dns":    change(t, fixture(t, "dhcp6"), func(d map[string]any) { delete(d, "dns") }),
+		"dhcp6-delegated": fixture(t, "dhcp6-delegated"),
 	} {
 		path := "/run/andaru-kea/test-" + name + ".conf"
 		t.Cleanup(func() { os.Remove(path) })
-		content := strings.ReplaceAll(strings.ReplaceAll(fileContent(t, render(t, in), kea6Path), `"ens19"`, `"lo"`), allFacts.KeaHooks, hooks[0])
+		result := render(t, in)
+		kea := fileContent(t, result, kea6Path)
+		if tpl, ok := fileOf(result, kea6TemplatePath); ok {
+			// Filled as root fills it, with a documentation prefix standing in for the WAN's.
+			subnets, _, err := delegation.FillTemplate([]byte(tpl), map[string]netip.Prefix{"ens18": netip.MustParsePrefix("2001:db8::/48")})
+			var conf map[string]map[string]any
+			if err != nil || json.Unmarshal([]byte(kea), &conf) != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			conf["Dhcp6"]["subnet6"] = subnets
+			raw, _ := json.Marshal(conf)
+			kea = string(raw)
+		}
+		content := strings.ReplaceAll(strings.ReplaceAll(kea, `"ens19"`, `"lo"`), allFacts.KeaHooks, hooks[0])
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -85,4 +103,13 @@ func TestDHCPv6GoldensPassKea(t *testing.T) {
 			t.Fatalf("%s: kea-dhcp6 refused it: %s", name, out)
 		}
 	}
+}
+
+func fileOf(result Result, path string) (string, bool) {
+	for _, f := range result.Files {
+		if f.Path == path {
+			return f.Content, true
+		}
+	}
+	return "", false
 }
