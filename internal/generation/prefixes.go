@@ -50,7 +50,7 @@ func (r Realizer) readDelegatedLinks() ([]delegatedLink, map[string]int) {
 			continue
 		}
 		l := delegatedLink{Interface: name, RouterLifetime: 1800, Preference: "medium"}
-		section, delegated := "", false
+		section, delegated, sends := "", false, false
 		for line := range strings.SplitSeq(string(data), "\n") {
 			line = strings.TrimSpace(line)
 			if strings.HasPrefix(line, "[") {
@@ -80,11 +80,10 @@ func (r Realizer) readDelegatedLinks() ([]delegatedLink, map[string]int) {
 			case "[IPv6SendRA]RouterPreference":
 				l.Preference = value
 			case "[Network]IPv6SendRA":
-				if value != "yes" {
-					l.Announce = false
-				}
+				sends = value == "yes"
 			}
 		}
+		l.Announce = l.Announce && sends
 		if delegated {
 			links = append(links, l)
 		}
@@ -282,12 +281,21 @@ func (r Realizer) SyncPrefixes(ctx context.Context) error {
 // it; the apply passes reconfigure false, since it restarts Kea on the file itself.
 func (r Realizer) syncPrefixes(ctx context.Context, reconfigure bool) error {
 	links, hints := r.readDelegatedLinks()
+	before, _ := delegation.ReadState(r.Root + delegatedState)
 	prefixes, state, err := r.currentPrefixes(ctx, links, hints, true)
 	if err != nil {
 		return err
 	}
 	if err := r.saveState(state); err != nil {
 		return err
+	}
+	if reconfigure {
+		if changed := r.changed(links, before, state); changed {
+			time.Sleep(r.DeprecateAfter)
+		}
+		if err := r.deprecate(links, before, state); err != nil {
+			slog.Warn("record the replaced prefixes", "error", err)
+		}
 	}
 	data, ok, err := r.fillKea6(prefixes)
 	if err != nil || !ok {
@@ -322,6 +330,16 @@ func (r Realizer) bootPrefixes() error {
 		return err
 	}
 	return writeAtomic(r.Root+kea6File, data, 0o644)
+}
+
+// changed reports whether a delegated segment's uplink has a new current prefix this run.
+func (r Realizer) changed(links []delegatedLink, before, after delegation.State) bool {
+	for _, l := range links {
+		if old, new := before.WANs[l.Uplink].Current, after.WANs[l.Uplink].Current; old != nil && (new == nil || new.Prefix != old.Prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func toFloat(v any) float64 { f, _ := v.(float64); return f }

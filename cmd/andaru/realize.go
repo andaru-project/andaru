@@ -48,7 +48,7 @@ func newRealizer(stateDir string) (realizeVerbs, error) {
 			return out, err
 		},
 		Chown: os.Chown, Now: time.Now,
-		VerifyWait: 30 * time.Second, Poll: time.Second, LockWait: 70 * time.Second, LeaseSettle: time.Second,
+		VerifyWait: 30 * time.Second, Poll: time.Second, LockWait: 70 * time.Second, LeaseSettle: time.Second, DeprecateAfter: 5 * time.Second,
 	}, nil
 }
 
