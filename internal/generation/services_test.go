@@ -267,3 +267,22 @@ func TestGenerationWithoutDHCPv6StopsIt(t *testing.T) {
 		t.Fatalf("DHCPv6 server left running: %q", b.net.argv)
 	}
 }
+
+// Dropping DHCPv6 alone starts the sync, which removes its routes: networkd no longer does.
+func TestDroppingDHCPv6StartsTheSync(t *testing.T) {
+	b := newBench(t)
+	first := b.gen(false, map[string]string{kea6File: `{"Dhcp6":{}}`})
+	if err := b.r.Activate(t.Context(), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Confirm(t.Context(), first); err != nil {
+		t.Fatal(err)
+	}
+	b.net.argv = nil
+	if err := b.r.Activate(t.Context(), b.gen(false, map[string]string{})); err != nil {
+		t.Fatal(err)
+	}
+	if b.index("systemctl start --no-block andaru-leases.service") < 0 {
+		t.Fatalf("no sync after dropping DHCPv6: %q", b.net.argv)
+	}
+}

@@ -119,7 +119,8 @@ func (r Realizer) services(ctx context.Context, from, to []placed) error {
 			return fmt.Errorf("reload the host resolver: %w", err)
 		}
 	}
-	if kea || kea6 {
+	// Also when DHCPv6 goes: the sync removes its routes, which networkd leaves alone.
+	if kea || kea6 || hadKea6 {
 		// Started, not signalled: root never writes into Kea's own directory, where _kea could plant a link.
 		if _, err := r.Run(ctx, "/usr/bin/systemctl", "start", "--no-block", "andaru-leases.service"); err != nil {
 			slog.Warn("start the lease sync", "error", err)

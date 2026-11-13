@@ -281,7 +281,7 @@ func (r *renderer) dhcp6(dnsServes func(string) bool, register bool) (names []st
 				servers = []string{stable.Addr().String()}
 			}
 		}
-		var options []map[string]any
+		options := []map[string]any{} // Kea refuses null
 		if len(servers) > 0 {
 			options = append(options, map[string]any{"name": "dns-servers", "data": strings.Join(servers, ", ")})
 		}

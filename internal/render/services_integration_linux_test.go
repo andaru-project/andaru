@@ -58,3 +58,31 @@ func TestServiceGoldensPassTheirTools(t *testing.T) {
 		}
 	}
 }
+
+// Kea's own checker accepts the DHCPv6 configuration, with and without the DNS service's options.
+func TestDHCPv6GoldensPassKea(t *testing.T) {
+	if _, err := exec.LookPath("kea-dhcp6"); err != nil {
+		t.Skip("kea-dhcp6 not installed")
+	}
+	hooks, _ := filepath.Glob("/usr/lib/*/kea/hooks")
+	if len(hooks) == 0 {
+		t.Skip("no Kea hook directory")
+	}
+	if err := os.MkdirAll("/run/andaru-kea", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, in := range map[string]Input{
+		"dhcp6":        fixture(t, "dhcp6"),
+		"dhcp6-no-dns": change(t, fixture(t, "dhcp6"), func(d map[string]any) { delete(d, "dns") }),
+	} {
+		path := "/run/andaru-kea/test-" + name + ".conf"
+		t.Cleanup(func() { os.Remove(path) })
+		content := strings.ReplaceAll(strings.ReplaceAll(fileContent(t, render(t, in), kea6Path), `"ens19"`, `"lo"`), allFacts.KeaHooks, hooks[0])
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := exec.Command("kea-dhcp6", "-t", path).CombinedOutput(); err != nil {
+			t.Fatalf("%s: kea-dhcp6 refused it: %s", name, out)
+		}
+	}
+}

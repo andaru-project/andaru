@@ -62,6 +62,13 @@ func TestDHCPv6Validation(t *testing.T) {
 		"prefix wrong length":   {map[string]any{"staticLeases": []any{lease(map[string]any{"prefix": "fd00:beef:1:100::/60"})}}, p + "/staticLeases/0/prefix"},
 		"address in range":      {map[string]any{"staticLeases": []any{lease(map[string]any{"address": "fd00:1::1001"})}}, p + "/staticLeases/0/address"},
 		"duplicate hostname":    {map[string]any{"staticLeases": []any{lease(map[string]any{"hostname": "a"}), lease(map[string]any{"duid": "00:01:00:01:aa:bb:cc:dd:ee:00", "address": "fd00:1::11", "hostname": "a"})}}, p + "/staticLeases/1/hostname"},
+		"overlapping ranges":    {map[string]any{"ranges": []any{map[string]any{"first": "fd00:1::1000", "last": "fd00:1::1fff"}, map[string]any{"first": "fd00:1::1800", "last": "fd00:1::2fff"}}}, p + "/ranges/1"},
+		"lease on own address":  {map[string]any{"staticLeases": []any{lease(map[string]any{"address": "fd00:1::1"})}}, p + "/staticLeases/0/address"},
+		"duplicate address":     {map[string]any{"staticLeases": []any{lease(nil), lease(map[string]any{"duid": "00:01:00:01:aa:bb:cc:dd:ee:00"})}}, p + "/staticLeases/1/address"},
+		"duplicate prefix":      {map[string]any{"staticLeases": []any{lease(map[string]any{"prefix": "fd00:beef:1:100::/56"}), lease(map[string]any{"duid": "00:01:00:01:aa:bb:cc:dd:ee:00", "address": "fd00:1::11", "prefix": "fd00:beef:1:100::/56"})}}, p + "/staticLeases/1/prefix"},
+		"link-local DNS server": {map[string]any{"dnsServers": []any{"fe80::1"}}, p + "/dnsServers/0"},
+		"delegated not longer":  {map[string]any{"staticLeases": nil, "prefixDelegation": map[string]any{"prefix": "fd00:beef:1::/56", "delegatedLength": 56}}, p + "/prefixDelegation/delegatedLength"},
+		"excluded not longer":   {map[string]any{"prefixDelegation": map[string]any{"prefix": "fd00:beef:1::/48", "delegatedLength": 56, "excludedPrefix": "fd00:beef:1::/56"}}, p + "/prefixDelegation/excludedPrefix"},
 		"delegated 47":          {map[string]any{"prefixDelegation": map[string]any{"prefix": "fd00:beef:1::/48", "delegatedLength": 47}}, p + "/prefixDelegation/delegatedLength"},
 		"delegated 65":          {map[string]any{"prefixDelegation": map[string]any{"prefix": "fd00:beef:1::/48", "delegatedLength": 65}}, p + "/prefixDelegation/delegatedLength"},
 		"pool overlaps segment": {map[string]any{"staticLeases": nil, "prefixDelegation": map[string]any{"prefix": "fd00::/16", "delegatedLength": 56}}, p + "/prefixDelegation/prefix"},
@@ -75,6 +82,14 @@ func TestDHCPv6Validation(t *testing.T) {
 		d := dhcp6Fixture(t, nil)
 		item(segmentsOf(d), 1)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "slaac"}
 		refusedAt(t, d, p+"/segment")
+	})
+	t.Run("pools overlap", func(t *testing.T) {
+		d := dhcp6Fixture(t, map[string]any{"staticLeases": nil})
+		item(segmentsOf(d), 0)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "static", "addresses": []any{"fd00:2::1/64"}}
+		second := map[string]any{"id": "dh6_00000002-0000-4000-8000-000000000002", "name": "wan6", "segment": item(segmentsOf(d), 0)["id"],
+			"prefixDelegation": map[string]any{"prefix": "fd00:beef:1:8000::/49", "delegatedLength": 56}}
+		d["dhcp6"] = append(d["dhcp6"].([]any), second)
+		refusedAt(t, d, "/dhcp6/1/prefixDelegation/prefix")
 	})
 	t.Run("two entries for one segment", func(t *testing.T) {
 		d := dhcp6Fixture(t, map[string]any{"prefixDelegation": nil, "staticLeases": nil})

@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // kea6Config serves ens19 with fd00:1::/64 and delegates /56s from fd00:beef:1::/48.
@@ -38,6 +40,11 @@ func pd(prefix string) lease6 {
 
 // kea6 answers lease6-get-all on the bench's DHCPv6 socket, with Kea's runtime directory owned by keaUser.
 func (b *bench) kea6(leases ...lease6) {
+	b.kea6Seq(nil, leases)
+}
+
+// kea6Seq answers the n-th question with sets[n] (the last set after that), running onAsk(n) before answering.
+func (b *bench) kea6Seq(onAsk func(n int), sets ...[]lease6) {
 	b.t.Helper()
 	writeFile(b.t, filepath.Join(b.net.root, kea6File), kea6Served)
 	dir := filepath.Join(b.net.root, "run/kea")
@@ -50,12 +57,16 @@ func (b *bench) kea6(leases ...lease6) {
 	}
 	b.t.Cleanup(func() { l.Close() })
 	go func() {
-		for {
+		for n := 0; ; n++ {
 			c, err := l.Accept()
 			if err != nil {
 				return
 			}
 			_, _ = bufio.NewReader(c).ReadString('}')
+			if onAsk != nil {
+				onAsk(n)
+			}
+			leases := sets[min(n, len(sets)-1)]
 			reply, _ := json.Marshal(map[string]any{"result": 0, "arguments": map[string]any{"leases": leases}})
 			c.Write(reply)
 			c.Close()
@@ -200,5 +211,84 @@ func TestDHCPv6Names(t *testing.T) {
 	}
 	if strings.Contains(names, "fd00:1::1001") {
 		t.Fatalf("a dynamic lease took a static DHCPv6 name:\n%s", names)
+	}
+}
+
+// A FIFO planted where the hook writes must not hang root while it holds the generation lock.
+func TestPDEventFIFO(t *testing.T) {
+	b := newBench(t)
+	b.kea6(pd("fd00:beef:1:100::/56"))
+	path := filepath.Join(b.net.root, pdEvents)
+	if err := syscall.Mkfifo(path, 0o600); err != nil || os.Chown(path, keaUser, keaUser) != nil {
+		t.Fatal("mkfifo")
+	}
+	done := make(chan error, 1)
+	go func() { done <- b.r.SyncLeases(t.Context()) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the sync hung on a FIFO")
+	}
+}
+
+// A saved next hop is believed only while the generation still serves its interface and pool.
+func TestPDTableHopNotServed(t *testing.T) {
+	b := newBench(t)
+	b.kea6(pd("fd00:beef:1:100::/56"))
+	writeFile(t, filepath.Join(b.net.root, pdTable), `{"fd00:beef:1:100::/56":{"via":"fe80::1","dev":"ens18"}}`)
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(b.net.argv, func(c string) bool { return strings.HasPrefix(c, "ip -6 route replace") }) {
+		t.Fatalf("a hop on an unserved interface was installed: %q", b.net.argv)
+	}
+}
+
+// A lease committed while the sync reads Kea's list keeps its next hop: events are taken before the list.
+func TestPDEventBeforeLeaseList(t *testing.T) {
+	b := newBench(t)
+	b.kea6Seq(func(n int) {
+		if n == 0 {
+			// Kea answers without the lease, then commits it and runs the hook.
+			b.events("add fd00:beef:1:100::/56 fe80::1 ens19")
+			writeFile(t, filepath.Join(b.net.root, leaseMarker), "")
+		}
+	}, nil, []lease6{pd("fd00:beef:1:100::/56")})
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if b.index("ip -6 route replace fd00:beef:1:100::/56 via fe80::1 dev ens19 proto 77") < 0 {
+		t.Fatalf("next hop lost: %q", b.net.argv)
+	}
+}
+
+// A released prefix is forgotten and its route removed.
+func TestPDReleaseRemovesRoute(t *testing.T) {
+	b := newBench(t)
+	b.kea6(pd("fd00:beef:1:100::/56"))
+	b.net.routes = map[string]string{"fd00:beef:1:100::/56": "fe80::1 dev ens19"}
+	writeFile(t, filepath.Join(b.net.root, pdTable), `{"fd00:beef:1:100::/56":{"via":"fe80::1","dev":"ens19"}}`)
+	b.events("del fd00:beef:1:100::/56 fe80::1 ens19")
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if b.index("ip -6 route del fd00:beef:1:100::/56 proto 77") < 0 || len(b.table()) != 0 {
+		t.Fatalf("release kept the route: %q %+v", b.net.argv, b.table())
+	}
+}
+
+// A DHCPv6 server that does not answer costs its own names and routes, not DHCPv4's names.
+func TestDHCPv4NamesSurviveADeadDHCPv6(t *testing.T) {
+	b := newBench(t)
+	b.kea(lease{"192.168.40.130", "laptop", 0, 1, 7200, 100})
+	writeFile(t, filepath.Join(b.net.root, kea6File), kea6Served)
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.leaseNames(), "laptop.home.arpa.") {
+		t.Fatalf("DHCPv4 names lost:\n%s", b.leaseNames())
 	}
 }

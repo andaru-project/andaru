@@ -66,6 +66,8 @@ type kea6Config struct {
 func (r Realizer) syncKea6(ctx context.Context) ([]string, error) {
 	var cfg kea6Config
 	var leases []keaLease
+	// Taken before the lease list: the hook runs after Kea commits, so any lease an event names is in the list.
+	events := r.takeEvents()
 	raw, err := os.ReadFile(r.Root + kea6File)
 	switch {
 	case os.IsNotExist(err):
@@ -76,10 +78,12 @@ func (r Realizer) syncKea6(ctx context.Context) ([]string, error) {
 			return nil, fmt.Errorf("read the DHCPv6 server's configuration: %w", err)
 		}
 		if leases, err = r.askLeases(ctx, kea6Socket, "lease6-get-all"); err != nil {
-			return nil, fmt.Errorf("ask the DHCPv6 server for its leases: %w", err)
+			// Its own names and routes wait for it; the DHCPv4 names do not.
+			slog.Warn("ask the DHCPv6 server for its leases", "error", err)
+			return nil, nil
 		}
 	}
-	if err := r.syncRoutes(ctx, cfg, leases); err != nil {
+	if err := r.syncRoutes(ctx, cfg, leases, events); err != nil {
 		return nil, err
 	}
 	return lease6Records(cfg, leases), nil
@@ -121,7 +125,7 @@ func lease6Records(cfg kea6Config, leases []keaLease) []string {
 
 // syncRoutes installs a route via the requesting router for each active delegated prefix whose next hop it
 // believes, and removes every route of its own protocol nobody holds.
-func (r Realizer) syncRoutes(ctx context.Context, cfg kea6Config, leases []keaLease) error {
+func (r Realizer) syncRoutes(ctx context.Context, cfg kea6Config, leases []keaLease, events []string) error {
 	table := map[string]nextHop{}
 	if data, err := os.ReadFile(r.Root + pdTable); err == nil {
 		_ = json.Unmarshal(data, &table) // a damaged table only costs routes until the routers renew
@@ -134,20 +138,18 @@ func (r Realizer) syncRoutes(ctx context.Context, cfg kea6Config, leases []keaLe
 				pools[s.Interface] = append(pools[s.Interface], netip.PrefixFrom(a, p.PrefixLen))
 			}
 		}
-		for _, res := range s.Reservations {
-			for _, raw := range res.Prefixes {
-				if p, err := netip.ParsePrefix(raw); err == nil {
-					pools[s.Interface] = append(pools[s.Interface], p)
-				}
-			}
-		}
 	}
-	for _, line := range r.takeEvents() {
+	// A record names a served interface and a prefix of that segment's pool; a saved hop is judged again,
+	// since the generation may have changed since it was believed.
+	served := func(prefix netip.Prefix, hop nextHop) bool {
+		return slices.ContainsFunc(pools[hop.Dev], func(p netip.Prefix) bool { return p.Contains(prefix.Addr()) && p.Bits() <= prefix.Bits() })
+	}
+	for _, line := range events {
 		op, prefix, hop, ok := parseEvent(line)
 		switch {
 		case !ok:
 			slog.Warn("delegated prefix event ignored", "line", line)
-		case !slices.ContainsFunc(pools[hop.Dev], func(p netip.Prefix) bool { return p.Contains(prefix.Addr()) && p.Bits() <= prefix.Bits() }):
+		case !served(prefix, hop):
 			slog.Warn("delegated prefix event outside the served pools", "prefix", prefix, "dev", hop.Dev)
 		case op == "del":
 			delete(table, prefix.String())
@@ -164,8 +166,9 @@ func (r Realizer) syncRoutes(ctx context.Context, cfg kea6Config, leases []keaLe
 		if err != nil {
 			continue
 		}
-		key := netip.PrefixFrom(a, l.PrefixLen).String()
-		if hop, ok := table[key]; ok {
+		prefix := netip.PrefixFrom(a, l.PrefixLen)
+		key := prefix.String()
+		if hop, ok := table[key]; ok && served(prefix, hop) {
 			wanted[key] = hop
 		}
 	}
@@ -206,7 +209,13 @@ func (r Realizer) takeEvents() []string {
 		}
 		return nil
 	}
-	defer os.Remove(taken)
+	// Root's own directory now holds it, so what Lstat sees is what Open gets: a FIFO would block, a directory
+	// would stop every later rename.
+	defer os.RemoveAll(taken)
+	if info, err := os.Lstat(taken); err != nil || !info.Mode().IsRegular() {
+		slog.Warn("delegated prefix events refused: not a regular file")
+		return nil
+	}
 	dir, err := os.Stat(r.Root + "/run/kea")
 	if err != nil {
 		return nil
@@ -218,9 +227,12 @@ func (r Realizer) takeEvents() []string {
 	}
 	defer f.Close()
 	info, err := f.Stat()
+	if err != nil {
+		return nil
+	}
 	owner, ok := info.Sys().(*syscall.Stat_t)
 	kea, _ := dir.Sys().(*syscall.Stat_t)
-	if err != nil || !info.Mode().IsRegular() || !ok || kea == nil || owner.Uid != kea.Uid || info.Size() > pdEventsMax {
+	if !info.Mode().IsRegular() || !ok || kea == nil || owner.Uid != kea.Uid || info.Size() > pdEventsMax {
 		slog.Warn("delegated prefix events refused: not a regular file of Kea's, or too large")
 		return nil
 	}

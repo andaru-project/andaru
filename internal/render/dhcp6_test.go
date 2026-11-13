@@ -52,3 +52,11 @@ func TestDHCP6ToolMissing(t *testing.T) {
 		t.Fatalf("findings %+v", r.Findings)
 	}
 }
+
+// Kea refuses a null option list: without DNS options it is empty.
+func TestDHCPv6WithoutDNS(t *testing.T) {
+	kea := fileContent(t, render(t, change(t, fixture(t, "dhcp6"), func(d map[string]any) { delete(d, "dns") })), kea6Path)
+	if strings.Contains(kea, `"option-data": null`) || !strings.Contains(kea, `"option-data": []`) {
+		t.Fatalf("option-data:\n%s", kea)
+	}
+}
