@@ -195,6 +195,8 @@ func validateServices(d *declaration) []FieldError {
 		// A zone could carry any text into the rendered file, and an upstream needs none.
 		if err != nil || a.Zone() != "" {
 			bad(up+"/address", "Expected an IP address, optionally with a port.")
+		} else if port == 53 && resolvedListens(a.Unmap()) {
+			bad(up+"/address", "systemd-resolved's stub listens on this address and, with dns declared, forwards to the DNS service; it would loop.")
 		} else if port == 53 && listensOn(d, a.Unmap()) {
 			bad(up+"/address", "The DNS service itself listens on this address; it would ask itself.")
 		}
@@ -426,10 +428,16 @@ func validateDHCP6(d *declaration, bad func(string, string)) {
 	}
 }
 
-// listensOn says whether the DNS service listens on a, port 53: loopback, a served segment's address, or a
-// virtual address it names.
+// resolvedListens says whether a is one of systemd-resolved's loopback listeners (stub 127.0.0.53, proxy
+// 127.0.0.54). With dns declared resolved forwards to Unbound, so an upstream there would loop.
+func resolvedListens(a netip.Addr) bool {
+	return a == netip.AddrFrom4([4]byte{127, 0, 0, 53}) || a == netip.AddrFrom4([4]byte{127, 0, 0, 54})
+}
+
+// listensOn says whether the DNS service listens on a, port 53: 127.0.0.1 or ::1 (the only loopback addresses
+// Unbound binds), a served segment's address, or a virtual address it names.
 func listensOn(d *declaration, a netip.Addr) bool {
-	if a.IsLoopback() || a.IsUnspecified() {
+	if a == netip.AddrFrom4([4]byte{127, 0, 0, 1}) || a == netip.IPv6Loopback() || a.IsUnspecified() {
 		return true
 	}
 	for _, id := range d.DNS.Segments {

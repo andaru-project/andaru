@@ -1083,3 +1083,19 @@ func TestStoreWithoutVIPTableOpens(t *testing.T) {
 		t.Fatalf("history %+v %v", h, e)
 	}
 }
+
+// A saved version's detail lists its virtual-address changes.
+func TestVersionListsVirtualAddressChanges(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t, ownedDir(t))
+	saved, e := s.Save(ctx, "unix:uid:0", Changes{Operations: []Operation{
+		{Op: "create", Collection: "virtualAddresses", LocalID: "v", Value: json.RawMessage(`{"name":"dns4","address":"172.16.53.53"}`)},
+	}})
+	if e != nil {
+		t.Fatal(e)
+	}
+	v, e := s.Version(ctx, saved.SavedVersion)
+	if e != nil || len(v.Changes) != 1 || v.Changes[0].Collection != "virtualAddresses" || !v.Changes[0].Created {
+		t.Fatalf("changes %+v %v", v.Changes, e)
+	}
+}

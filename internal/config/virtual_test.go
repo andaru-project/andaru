@@ -42,6 +42,7 @@ func TestVirtualAddressValidation(t *testing.T) {
 		"segment address": "192.0.2.7",
 		"in a subnet":     "192.0.2.99",
 		"in a v6 subnet":  "fd00:1::99",
+		"zone":            "fd00::1%eth0",
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := vipFixture(t)
@@ -244,4 +245,47 @@ func TestIPv6ForwardToDisabledLink(t *testing.T) {
 	if raw, _ := json.Marshal(e); e == nil || !strings.Contains(string(raw), "is disabled") {
 		t.Fatalf("%s", raw)
 	}
+}
+
+// Renaming a virtual address a forward targets keeps its address, so the forward stays valid.
+func TestVirtualAddressRenameWhileTargeted(t *testing.T) {
+	s := seededState(t)
+	p := mustRun(t, &s, `{"operations":[{"op":"create","collection":"virtualAddresses","localId":"v","value":{"name":"dns4","address":"172.16.53.53"}}]}`)
+	id := p.Created["v"]
+	mustRun(t, &s, `{"operations":[{"op":"create","collection":"nat.portForwards","value":{"name":"dns","enabled":true,"ingressZones":["`+s.Config.Zones[0].ID+`"],"protocol":"udp","from":[],"to":{"self":true},"ports":"53","target":{"address":"172.16.53.53"}}}]}`)
+	mustRun(t, &s, `{"operations":[{"op":"replace","collection":"virtualAddresses","id":"`+id+`","expectedVersion":"`+string(versionOf(&s, objectKey{"virtualAddresses", id}).Version)+`","value":{"name":"renamed","description":"edited","address":"172.16.53.53"}}]}`)
+	if s.Config.VirtualAddresses[0].Name != "renamed" {
+		t.Fatalf("%+v", s.Config.VirtualAddresses)
+	}
+}
+
+// A batch can list a virtual address it creates in the DNS service by label.
+func TestDNSVirtualAddressByLabel(t *testing.T) {
+	s := seededState(t)
+	p := mustRun(t, &s, `{"operations":[{"op":"create","collection":"virtualAddresses","localId":"v","value":{"name":"dns4","address":"172.16.53.53"}},
+		{"op":"replace","collection":"dns","expectedVersion":"0","value":{"mode":"recursive","segments":[],"virtualAddresses":["@v"]}}]}`)
+	if got := s.Config.DNS.VirtualAddresses; len(got) != 1 || got[0] != p.Created["v"] {
+		t.Fatalf("dns lists %v, created %v", got, p.Created)
+	}
+}
+
+// An IPv6 forward's source group must hold at least one IPv6 address; an IPv4-only group never matches.
+func TestIPv6ForwardSourceGroupFamily(t *testing.T) {
+	const (
+		v6host = "adr_00000003-0000-4000-8000-000000000003"
+		v4grp  = "adr_00000004-0000-4000-8000-000000000004"
+		mixed  = "adr_00000005-0000-4000-8000-000000000005"
+	)
+	build := func(group string) map[string]any {
+		d := vipFixture(t)
+		objs := d["objects"].(map[string]any)
+		objs["addresses"] = append(objs["addresses"].([]any),
+			map[string]any{"id": v6host, "name": "peer6", "kind": "host", "address": "2001:db8::7"},
+			map[string]any{"id": v4grp, "name": "g4", "kind": "group", "members": []any{natPeer}},
+			map[string]any{"id": mixed, "name": "gmix", "kind": "group", "members": []any{natPeer, v6host}})
+		setNAT(d, "portForwards", forward(d, map[string]any{"family": "ipv6", "target": map[string]any{"self": true}, "targetPort": nil, "ports": "53", "from": []any{group}}))
+		return d
+	}
+	refusedAt(t, build(v4grp), "/nat/portForwards/0/from/0")
+	accepted(t, build(mixed))
 }

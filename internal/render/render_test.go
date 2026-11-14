@@ -668,3 +668,22 @@ func TestStaticIPv6DNSAnswersEverySubnet(t *testing.T) {
 	})
 	lines(t, fileContent(t, render(t, in), "/run/andaru-unbound/andaru.conf"), "\taccess-control: fd00:a5d:2::/64 allow", "\taccess-control: fd00:a5d:3::/64 allow")
 }
+
+// Unbound refuses to query 127/8 and ::1 unless told otherwise: a loopback upstream needs the setting, any other none.
+func TestLoopbackUpstreamAllowsLocalhostQueries(t *testing.T) {
+	const line = "do-not-query-localhost: no"
+	for upstream, want := range map[string]bool{"192.0.2.53": false, "127.0.2.1:53": true, "::1:5353": false, "[::1]:5353": true, "::ffff:127.0.2.1": true, "2001:db8::53": false} {
+		in := fixture(t, "services-static-leases")
+		var d map[string]any
+		_ = json.Unmarshal(in.Declaration, &d)
+		d["dns"].(map[string]any)["upstreams"] = []any{map[string]any{"address": upstream, "protocol": "do53"}}
+		in.Declaration, _ = json.Marshal(d)
+		result, err := Network(in)
+		if err != nil {
+			continue // an address validation refuses is not rendered
+		}
+		if got := strings.Contains(fileEnding(t, result, unboundPath).Content, line); got != want {
+			t.Errorf("upstream %s: %q present = %v, want %v", upstream, line, got, want)
+		}
+	}
+}

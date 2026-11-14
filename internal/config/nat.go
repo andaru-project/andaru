@@ -30,7 +30,7 @@ func validateNAT(d *declaration) []FieldError {
 	for _, a := range d.Objects.Addresses {
 		addresses[a.ID] = a
 	}
-	// hasV4 says whether an address object can match IPv4: everything here is IPv4. Groups hold no groups (the
+	// has says whether an address object can match the family six selects. Groups hold no groups (the
 	// policy validator refuses them, but this runs regardless), so one level is followed and never more.
 	var has func(id string, six, nested bool) bool
 	has = func(id string, six, nested bool) bool {
@@ -53,13 +53,12 @@ func validateNAT(d *declaration) []FieldError {
 		}
 		return e == nil && (six && v.Is6() && !v.Is4In6() || !six && v.Is4())
 	}
-	hasV4 := func(id string, nested bool) bool { return has(id, false, nested) }
 	refFamily := func(path, id string, six bool) {
 		if _, ok := addresses[id]; !ok {
 			bad(path, "Expected an existing address.")
 		} else if six && !has(id, true, false) {
 			bad(path, "Expected an address with IPv6 addresses for an IPv6 port forward.")
-		} else if !six && !hasV4(id, false) {
+		} else if !six && !has(id, false, false) {
 			bad(path, "Expected an address with IPv4 addresses; inbound NAT is IPv4 only.")
 		}
 	}
@@ -130,7 +129,7 @@ func validateNAT(d *declaration) []FieldError {
 				bad(p+"/target/address", "Expected an IPv4 address; inbound NAT is IPv4 only.")
 			case a.IsLoopback():
 				// Linux drops a connection translated to 127.0.0.0/8 from another interface unless route_localnet is set.
-				bad(p+"/target/address", "Loopback addresses cannot be targets. Use an address on the loopback interface instead.")
+				bad(p+"/target/address", "Loopback addresses cannot be targets. Use a virtual address instead; proxy ARP and CARP are not supported yet.")
 			case !validUnicast(a):
 				bad(p+"/target/address", "Expected a unicast address.")
 			}

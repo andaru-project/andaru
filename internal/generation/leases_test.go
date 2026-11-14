@@ -2,6 +2,7 @@ package generation
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"net"
 	"os"
@@ -292,5 +293,42 @@ func TestConfigSetToStoppedKea(t *testing.T) {
 	l.Close()
 	if err := b.r.keaConfigSet(t.Context(), []byte(`{}`)); err != nil {
 		t.Fatalf("a stopped Kea counted as a failure: %v", err)
+	}
+}
+
+// A Kea that accepts and never answers must fail the command at the context's deadline, not hang a sync.
+func TestSilentKeaTimesOut(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "run/kea"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	l, err := net.Listen("unix", filepath.Join(root, keaSocket))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close()
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := Realizer{Root: root}.keaCommand(ctx, keaSocket, `{"command":"status-get"}`, nil)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a silent Kea answered")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("keaCommand hung on a silent Kea")
 	}
 }

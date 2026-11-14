@@ -9,15 +9,22 @@ import (
 // vipDevice is the dummy interface that holds the virtual addresses; no link may take its name.
 const vipDevice = "andaru-vip"
 
+// staticPrefixes are a segment's declared static addresses, IPv4 and IPv6, that parse.
+func staticPrefixes(s segment) []netip.Prefix {
+	var out []netip.Prefix
+	for _, raw := range append(slices.Clone(s.Addressing.IPv4.Addresses), s.Addressing.IPv6.Addresses...) {
+		if p, e := netip.ParsePrefix(raw); e == nil {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // validateVirtual checks the virtual addresses: single unicast addresses the firewall holds on no segment.
 func validateVirtual(d *declaration, bad func(string, string)) {
 	var subnets []netip.Prefix
 	for _, s := range d.Segments {
-		for _, raw := range append(slices.Clone(s.Addressing.IPv4.Addresses), s.Addressing.IPv6.Addresses...) {
-			if p, e := netip.ParsePrefix(raw); e == nil {
-				subnets = append(subnets, p)
-			}
-		}
+		subnets = append(subnets, staticPrefixes(s)...)
 	}
 	seen := map[string]bool{}
 	held := map[netip.Addr]bool{}
@@ -60,10 +67,8 @@ func validateVirtual(d *declaration, bad func(string, string)) {
 // firewallHolds says whether a is one of the firewall's declared static addresses or virtual addresses.
 func firewallHolds(d *declaration, a netip.Addr) bool {
 	for _, s := range d.Segments {
-		for _, raw := range append(slices.Clone(s.Addressing.IPv4.Addresses), s.Addressing.IPv6.Addresses...) {
-			if p, e := netip.ParsePrefix(raw); e == nil && p.Addr() == a {
-				return true
-			}
+		if slices.ContainsFunc(staticPrefixes(s), func(p netip.Prefix) bool { return p.Addr() == a }) {
+			return true
 		}
 	}
 	return slices.ContainsFunc(d.VirtualAddresses, func(v virtualAddress) bool { return sameAddress(v.Address, a.String()) })
@@ -101,13 +106,12 @@ func vipStillTargeted(old, d *declaration, input Changes) *Fault {
 // disabledHolder names the disabled link whose segment declares a, or "".
 func disabledHolder(d *declaration, a netip.Addr) string {
 	for _, s := range d.Segments {
-		for _, raw := range append(slices.Clone(s.Addressing.IPv4.Addresses), s.Addressing.IPv6.Addresses...) {
-			if p, e := netip.ParsePrefix(raw); e == nil && p.Addr() == a {
-				for _, l := range d.Links {
-					if l.ID == s.Link && !l.Enabled {
-						return l.Name
-					}
-				}
+		if !slices.ContainsFunc(staticPrefixes(s), func(p netip.Prefix) bool { return p.Addr() == a }) {
+			continue
+		}
+		for _, l := range d.Links {
+			if l.ID == s.Link && !l.Enabled {
+				return l.Name
 			}
 		}
 	}
