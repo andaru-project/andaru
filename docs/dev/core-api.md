@@ -355,6 +355,26 @@ sudo andaru ctl prefixes
 - **The prefix view:** `andaru ctl prefixes` (`GET /api/v1/status/prefixes`) shows each WAN's requested length, its current prefix and lifetimes, the subnet IDs it leaves room for, each delegated segment's `/64`, each pool's range, and what does not fit.
 - **Routes and names:** a delegated pool is unreachable where nobody leases it (`proto 77`, kept by the lease sync), leased prefixes are routed via the router that asked, and static names publish AAAA and PTR at the current address. After a change, the old pool's routes stay while Kea still holds their leases and the old prefix is valid, until each router renews.
 
+### Virtual addresses
+
+Addresses the firewall holds on no LAN, for its own services: pfSense's IP aliases on `lo0`, such as a DNS listener every LAN is given. Design: [Virtual addresses](../superpowers/specs/2026-11-14-virtual-addresses-design.md). Proxy ARP, Other and CARP come after the MVP ([#43](https://github.com/andaru-project/andaru/issues/43)).
+
+```sh
+printf '%s\n' '{"name":"dns4","address":"172.16.53.53"}' | sudo andaru ctl config create virtualAddresses
+printf '%s\n' '{"name":"dns6","address":"fd00:53:53:53:53:53:53:53"}' | sudo andaru ctl config create virtualAddresses
+# The DNS service listens on them; DHCP, DHCPv6 and router advertisements hand them out through dnsServers.
+printf '%s\n' '{"mode":"recursive","segments":["'"$LAN"'"],"virtualAddresses":["'"$VIP4"'","'"$VIP6"'"]}' | sudo andaru ctl config replace --version "$V" dns
+# DNS sent to the firewall itself on the WAN goes to the IPv6 one.
+printf '%s\n' '{"name":"dns6","family":"ipv6","enabled":true,"ingressZones":["'"$WAN"'"],"protocol":"tcp-udp","from":[],"to":{"self":true},"filterRule":"auto","ports":"53","target":{"address":"fd00:53:53:53:53:53:53:53"}}' \
+  | sudo andaru ctl config create nat/port-forwards
+```
+
+- **`virtualAddresses`:** single IPv4 or IPv6 unicast addresses, not loopback, link-local or on any segment's subnet (an address on a LAN's subnet belongs on that segment). They live on the dummy device `andaru-vip`, which the generation creates and removes with them; no link may take that name.
+- **DNS:** `dns.virtualAddresses` names those the DNS service listens on, answering every source that reaches them. Who reaches them is the packet filter's decision, so this needs a management segment. To give clients the address, name it in `dnsServers` of `dhcp`, `dhcp6` or the router advertisements.
+- **Port forwards to them:** an IPv4 forward whose target is a virtual address is a forward to the firewall itself, with its rule in the input chain. Reflection never takes a virtual address, so a LAN client reaches the service on it. `self` keeps meaning the arriving interface's addresses, never a virtual address.
+- **IPv6 port forwards** (`"family":"ipv6"`) reach only the firewall itself: `self`, a segment's static IPv6 address, or an IPv6 virtual address. Forwards to inside hosts (NAT66) and reflection are refused.
+- **In use:** a virtual address a port forward targets cannot be deleted or re-addressed until the forward is changed or deleted.
+
 ### Inbound NAT
 
 Port forwards and 1:1 NAT, with pfSense's semantics, IPv4 only. Both need the packet filter, so a management segment. Design: [inbound NAT](../superpowers/specs/2026-11-12-inbound-nat-design.md).
