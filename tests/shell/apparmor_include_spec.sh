@@ -11,6 +11,7 @@ Describe 'andaru AppArmor includes'
     : >"$root/etc/apparmor.d/usr.sbin.kea-dhcp6"
     : >"$root/etc/apparmor.d/usr.sbin.unbound"
     printf '/srv/x r,\n' >"$root/etc/apparmor.d/local/usr.sbin.kea-dhcp6"
+    printf 'include if exists <local/mine>\n' >"$root/etc/apparmor.d/local/usr.sbin.unbound"
   }
   cleanup() { rm -rf "$root"; }
   BeforeEach 'setup'
@@ -25,6 +26,7 @@ include if exists <andaru/kea-dhcp6>"
   End
 
   It 'creates a missing local file'
+    rm "$root/etc/apparmor.d/local/usr.sbin.unbound"
     When run env DPKG_ROOT="$root" sh "$script"
     The contents of file "$root/etc/apparmor.d/local/usr.sbin.unbound" should equal "include if exists <andaru/unbound>"
   End
@@ -39,5 +41,15 @@ include if exists <andaru/kea-dhcp6>"
     When run env DPKG_ROOT="$root" sh "$postrm" purge
     The status should equal 0
     The contents of file "$root/etc/apparmor.d/local/usr.sbin.kea-dhcp6" should equal "/srv/x r,"
+    The contents of file "$root/etc/apparmor.d/local/usr.sbin.unbound" should equal "include if exists <local/mine>"
+  End
+
+  Parameters:value remove upgrade abort-install
+  It "keeps the includes on postrm $1"
+    DPKG_ROOT="$root" sh "$script"
+    When run env DPKG_ROOT="$root" sh "$postrm" "$1"
+    The status should equal 0
+    The contents of file "$root/etc/apparmor.d/local/usr.sbin.unbound" should equal "include if exists <local/mine>
+include if exists <andaru/unbound>"
   End
 End

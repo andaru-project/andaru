@@ -47,7 +47,8 @@ Purging the package removes its AppArmor lines and leaves `/var/lib/andaru`: uni
 ```sh
 sudo rm -f /etc/systemd/system/andaru-*.service /etc/systemd/system/andaru-*.path /etc/systemd/system/andaru-*.timer \
   /etc/systemd/system/kea-dhcp4-server.service.d/andaru.conf /etc/systemd/system/kea-dhcp6-server.service.d/andaru.conf \
-  /etc/systemd/networkd.conf.d/andaru.conf /etc/iproute2/rt_protos.d/andaru.conf /usr/lib/tmpfiles.d/andaru.conf
+  /etc/systemd/networkd.conf.d/andaru.conf /etc/iproute2/rt_protos.d/andaru.conf /usr/lib/tmpfiles.d/andaru.conf \
+  /etc/unbound/unbound.conf.d/andaru.conf
 # Delete the lines copied from packaging/apparmor from each of these, keeping your own:
 sudoedit /etc/apparmor.d/local/usr.sbin.kea-dhcp4 /etc/apparmor.d/local/usr.sbin.kea-dhcp6 /etc/apparmor.d/local/usr.sbin.unbound
 ```

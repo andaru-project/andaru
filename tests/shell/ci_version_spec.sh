@@ -20,8 +20,16 @@ Describe 'scripts/ci/version.sh'
     The output should equal "all 2026.11.14 false"
   End
 
-  It 'refuses any other tag'
-    When run sh "$script" v0.4
+  Parameters
+    v0.4
+    v1.2.3-rc
+    v01.2.3
+    v1.2.3-rc01
+    keyring-2026.1.14
+  End
+
+  It "refuses $1"
+    When run sh "$script" "$1"
     The status should equal 1
     The stderr should include 'not a release tag'
   End

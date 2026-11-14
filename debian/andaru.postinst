@@ -5,7 +5,9 @@ case "$1" in
 configure)
 	# A restart of Debian's nftables.service flushes the whole ruleset, Andaru's filter included. Masking does not
 	# stop a running unit and changes no rule now.
-	systemctl mask nftables.service >/dev/null 2>&1 || true
+	if ! systemctl mask nftables.service >/dev/null 2>&1; then
+		echo "andaru: could not mask nftables.service; a restart of it would flush Andaru's filter." >&2
+	fi
 	if systemctl is-active --quiet nftables.service 2>/dev/null; then
 		echo "andaru: nftables.service is masked; its ruleset stays loaded until the next boot." >&2
 	fi

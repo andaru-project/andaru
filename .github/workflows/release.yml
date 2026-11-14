@@ -28,8 +28,10 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -eu
+          # On its own line, so that a tag version.sh refuses fails the workflow.
+          mapped=$(sh scripts/ci/version.sh "$TAG")
           read -r packages version prerelease <<EOF
-          $(sh scripts/ci/version.sh "$TAG")
+          $mapped
           EOF
           # The keyring is built once per version, and that version lives in debian/rules.
           if [ "$packages" = all ]; then
@@ -102,16 +104,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
           PRERELEASE: ${{ needs.version.outputs.prerelease }}
+          PACKAGES: ${{ needs.version.outputs.packages }}
         run: |
           set -eu
           cd dist
+          # GitHub renames uploaded assets with a ~ in their name; the names in SHA256SUMS must be the assets'.
+          for deb in ./*~*.deb; do
+            [ ! -e "$deb" ] || mv "$deb" "$(printf '%s' "$deb" | tr '~' '.')"
+          done
           sha256sum ./*.deb | sed 's| \./| |' >SHA256SUMS
-          flag=
-          [ "$PRERELEASE" = true ] && flag=--prerelease
+          flags=--latest
+          [ "$PRERELEASE" = true ] && flags=--prerelease
+          [ "$PACKAGES" = all ] && flags=--latest=false
+          # A draft until every asset is uploaded, so andaru-project/apt never sees half a release.
           # shellcheck disable=SC2086
-          gh release create "$TAG" -R "$GITHUB_REPOSITORY" --verify-tag $flag --title "$TAG" \
+          gh release create "$TAG" -R "$GITHUB_REPOSITORY" --draft --verify-tag $flags --title "$TAG" \
             --notes "Published to https://apt.andaru.io/ by andaru-project/apt's next daily run. SHA-256 of each package:
 
           \`\`\`
           $(cat SHA256SUMS)
           \`\`\`" ./*.deb SHA256SUMS
+          # Publishing a draft sets "latest" anew, so the flags go again.
+          # shellcheck disable=SC2086
+          gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --draft=false $flags
