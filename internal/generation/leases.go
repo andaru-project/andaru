@@ -76,8 +76,8 @@ func (r Realizer) askLeases(ctx context.Context, socket, command string) ([]keaL
 	return args.Leases, nil
 }
 
-// keaCommand sends one command over a Kea control socket and decodes the reply's arguments into args.
-func (r Realizer) keaCommand(ctx context.Context, socket, command string, args any) (int, string, error) {
+// keaCommand sends one JSON request body over a Kea control socket and decodes the reply's arguments into args.
+func (r Realizer) keaCommand(ctx context.Context, socket, body string, args any) (int, string, error) {
 	var d net.Dialer
 	c, err := d.DialContext(ctx, "unix", r.Root+socket)
 	if err != nil {
@@ -87,7 +87,7 @@ func (r Realizer) keaCommand(ctx context.Context, socket, command string, args a
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = c.SetDeadline(deadline)
 	}
-	if _, err := io.WriteString(c, command); err != nil {
+	if _, err := io.WriteString(c, body); err != nil {
 		return 0, "", err
 	}
 	var reply struct {

@@ -18,7 +18,7 @@ func (r *renderer) ownStatic() []netip.Addr {
 			}
 		}
 	}
-	// Declared, not learned: the device may still hold an address a change just removed.
+	// Also declared, since the device may not exist yet or may still hold an address a change just removed.
 	for _, v := range r.d.VirtualAddresses {
 		if a, e := netip.ParseAddr(v.Address); e == nil && a.Is4() {
 			out = append(out, a)
@@ -109,7 +109,7 @@ func (f *filter) portForwards() (prerouting, forward, input []string) {
 			}
 		default:
 			action = "dnat " + ip + " to " + pf.Target.Address
-			if six && (pf.TargetPort != nil && last == first || last != first && tfirst != first) {
+			if six && pf.TargetPort != nil && last == first {
 				// IPv6 addresses take brackets before a port.
 				action = "dnat ip6 to [" + pf.Target.Address + "]"
 			}
@@ -153,7 +153,7 @@ func (f *filter) portForwards() (prerouting, forward, input []string) {
 				}
 			}
 		}
-		if pf.Reflection && !pf.NoRedirect && !six {
+		if pf.Reflection && !pf.NoRedirect {
 			// Pure NAT reflection: internal clients asking the outside address reach the target too. With self, any
 			// firewall address but the internal segments' own, so asking the firewall's LAN address is not redirected.
 			f.reflection = true
@@ -354,7 +354,7 @@ func (f *filter) checkExternal(external netip.Prefix, path string) {
 			}
 		}
 		if subnet.IsValid() && !held {
-			r.find("warning", "PROXY_ARP_REQUIRED", path, "This address is on the "+subnet.String()+" uplink subnet but not assigned to the firewall, so nothing answers ARP for it. Add it to the segment's addresses; proxy ARP comes with virtual IPs (#37).")
+			r.find("warning", "PROXY_ARP_REQUIRED", path, "This address is on the "+subnet.String()+" uplink subnet but not assigned to the firewall, so nothing answers ARP for it. Add it to the segment's addresses; proxy ARP is tracked in #43.")
 		}
 	}
 }

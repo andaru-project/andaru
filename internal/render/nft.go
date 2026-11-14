@@ -131,13 +131,9 @@ func (r *renderer) filterChains() {
 		}
 		f.set("internal", "ifname", "", quoted(names))
 		// A virtual address belongs to its service: reflection never takes it.
-		for _, v := range f.r.d.VirtualAddresses {
-			if a, e := netip.ParseAddr(v.Address); e == nil && a.Is4() {
-				own = append(own, v.Address)
-			}
-		}
-		f.set("internal_4", "ipv4_addr", "", own)
-		if v := f.virtual4(); len(v) > 0 {
+		v := f.virtual4()
+		f.set("internal_4", "ipv4_addr", "", append(own, v...))
+		if len(v) > 0 {
 			f.set("virtual_4", "ipv4_addr", "", v)
 		}
 	}
