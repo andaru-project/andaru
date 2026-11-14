@@ -1,6 +1,5 @@
 #!/bin/sh
-# Checks the andaru package on a Debian 13 host booted with systemd: CI's container, or a lab VM. The sequence is
-# before, install the package, after, upgrade it, upgraded:
+# Checks the andaru package on a Debian 13 host booted with systemd: CI's container, or a lab VM.
 #   install-check.sh before   records the interfaces, routes and unit invocations, before installing
 #   install-check.sh after    checks the installed package, and that installing changed no interface or route
 #   install-check.sh upgraded checks an upgrade restarted the engine and ran no oneshot
