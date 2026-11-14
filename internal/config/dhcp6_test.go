@@ -85,11 +85,17 @@ func TestDHCPv6Validation(t *testing.T) {
 		"pool ::/1":      {map[string]any{"staticLeases": nil, "prefixDelegation": map[string]any{"prefix": "::/1", "delegatedLength": 56}}, p + "/prefixDelegation/prefix"},
 		"pool multicast": {map[string]any{"staticLeases": nil, "prefixDelegation": map[string]any{"prefix": "ff00::/8", "delegatedLength": 56}}, p + "/prefixDelegation/prefix"},
 		"pool NAT64":     {map[string]any{"staticLeases": nil, "prefixDelegation": map[string]any{"prefix": "64:ff9b::/32", "delegatedLength": 56}}, p + "/prefixDelegation/prefix"},
+		// Global pools stop at /32, unique local ones at /16: a wider one covers others' networks.
+		"pool global /12": {map[string]any{"staticLeases": nil, "prefixDelegation": map[string]any{"prefix": "2000::/12", "delegatedLength": 56}}, p + "/prefixDelegation/prefix"},
+		"pool global /16": {map[string]any{"staticLeases": nil, "prefixDelegation": map[string]any{"prefix": "2001::/16", "delegatedLength": 56}}, p + "/prefixDelegation/prefix"},
+		"pool global /31": {map[string]any{"staticLeases": nil, "prefixDelegation": map[string]any{"prefix": "2001:db8::/31", "delegatedLength": 56}}, p + "/prefixDelegation/prefix"},
+		"pool local /8":   {map[string]any{"staticLeases": nil, "prefixDelegation": map[string]any{"prefix": "fd00::/8", "delegatedLength": 56}}, p + "/prefixDelegation/prefix"},
+		"pool local /15":  {map[string]any{"staticLeases": nil, "prefixDelegation": map[string]any{"prefix": "fc00::/15", "delegatedLength": 56}}, p + "/prefixDelegation/prefix"},
 	} {
 		t.Run(name, func(t *testing.T) { refusedAt(t, dhcp6Fixture(t, tc.fields), tc.path) })
 	}
-	for _, pool := range []string{"2001:db8::/48", "fd00::/48"} {
-		accepted(t, dhcp6Fixture(t, map[string]any{"staticLeases": nil, "prefixDelegation": map[string]any{"prefix": pool, "delegatedLength": 56}}))
+	for pool, length := range map[string]int{"2001:db8::/48": 56, "fd00::/48": 56, "2001:db8::/32": 56, "fc00::/16": 56, "2001:db8:1:100::/56": 64} {
+		accepted(t, dhcp6Fixture(t, map[string]any{"staticLeases": nil, "prefixDelegation": map[string]any{"prefix": pool, "delegatedLength": length}}))
 	}
 	t.Run("DUIDs sort after lowercasing", func(t *testing.T) {
 		got := accepted(t, dhcp6Fixture(t, map[string]any{"prefixDelegation": nil, "staticLeases": []any{

@@ -350,9 +350,9 @@ func validateDHCP6(d *declaration, bad func(string, string)) {
 			switch {
 			case err != nil || !v.Addr().Is6() || v.Addr().Is4In6() || v != v.Masked() || v.Addr().IsLinkLocalUnicast():
 				bad(pp+"/prefix", "Expected an IPv6 prefix with its host bits zero.")
-			case v.Bits() < 16 || !netip.MustParsePrefix("fc00::/7").Contains(v.Addr()) && !netip.MustParsePrefix("2000::/3").Contains(v.Addr()):
+			case !(netip.MustParsePrefix("fc00::/7").Contains(v.Addr()) && v.Bits() >= 16 || netip.MustParsePrefix("2000::/3").Contains(v.Addr()) && v.Bits() >= 32):
 				// The pool's unreachable route covers it all, so a wide or foreign pool blackholes real destinations.
-				bad(pp+"/prefix", "Expected a unique local or global unicast prefix of /16 or longer.")
+				bad(pp+"/prefix", "Expected a unique local prefix of /16 or longer, or a global unicast prefix of /32 or longer.")
 			case slices.ContainsFunc(own, func(o netip.Prefix) bool { return o.Overlaps(v) }):
 				bad(pp+"/prefix", "The pool overlaps a segment's addresses.")
 			case slices.ContainsFunc(pools, v.Overlaps):
