@@ -1,0 +1,21 @@
+#!/bin/sh
+# Installed as /usr/share/andaru/andaru-apparmor; the andaru package's postinst runs it, under dpkg's DPKG_ROOT.
+# Debian's profiles include /etc/apparmor.d/local/usr.sbin.<daemon>, a file the administrator owns, so Andaru adds
+# one line naming its own rules there instead of replacing the file. debian/andaru.postrm removes it on purge.
+set -eu
+
+root=${DPKG_ROOT:-}
+for daemon in kea-dhcp4 kea-dhcp6 unbound; do
+	profile=$root/etc/apparmor.d/usr.sbin.$daemon
+	local_file=$root/etc/apparmor.d/local/usr.sbin.$daemon
+	line="include if exists <andaru/$daemon>"
+	[ -f "$profile" ] || continue
+	if [ ! -f "$local_file" ] || ! grep -qxF "$line" "$local_file"; then
+		mkdir -p "$(dirname "$local_file")"
+		printf '%s\n' "$line" >>"$local_file"
+	fi
+	# Without a kernel AppArmor (a container) or the parser, the rules load at the next boot.
+	if [ -z "$root" ] && command -v apparmor_parser >/dev/null && [ -d /sys/kernel/security/apparmor ]; then
+		apparmor_parser -r -T -W "$profile" || echo "andaru: could not reload the AppArmor profile $profile" >&2
+	fi
+done

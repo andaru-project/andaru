@@ -1,0 +1,2 @@
+debian/build/andaru-archive-keyring.gpg usr/share/keyrings/
+debian/keyring/andaru.sources etc/apt/sources.list.d/

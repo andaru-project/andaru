@@ -1,0 +1,35 @@
+#!/usr/bin/make -f
+# The binary is built with the Go toolchain go.mod names (Debian 13's is older), statically, as Andaru ships.
+
+# The keyring has its own version: a key rotation ships without an Andaru release.
+KEYRING_VERSION = 2026.11.14
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	mkdir -p debian/build
+	CGO_ENABLED=0 go build -trimpath -buildvcs=false -o debian/build/andaru ./cmd/andaru
+	gpg --dearmor <debian/keyring/andaru-archive-key.asc >debian/build/andaru-archive-keyring.gpg
+
+# The Go suites run in CI, not in the package build.
+override_dh_auto_test:
+
+# Release assets are the packages alone.
+override_dh_strip:
+	dh_strip --no-automatic-dbgsym
+
+# dwz cannot rewrite Go's compressed debug sections.
+override_dh_dwz:
+
+override_dh_auto_clean:
+	rm -rf debian/build
+
+# Starting the engine, the path units and the timer is safe on any host; network-boot runs only at boot.
+override_dh_installsystemd:
+	dh_installsystemd -pandaru andaru-engine.service andaru-leases.path andaru-prefixes.path andaru-prefixes.timer
+	dh_installsystemd -pandaru --no-start andaru-network-boot.service
+
+override_dh_gencontrol:
+	dh_gencontrol -pandaru-archive-keyring -- -v$(KEYRING_VERSION)
+	dh_gencontrol --remaining-packages

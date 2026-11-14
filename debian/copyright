@@ -1,0 +1,10 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: andaru
+Source: https://github.com/andaru-project/andaru
+
+Files: *
+Copyright: 2026 Andaru contributors
+License: AGPL-3.0-or-later
+ On Debian systems, the GNU General Public License version 3 is in
+ /usr/share/common-licenses/GPL-3; the AGPL text is in the LICENSE file
+ of the source.

@@ -1,0 +1,11 @@
+debian/build/andaru usr/bin/
+packaging/systemd/andaru-*.service packaging/systemd/andaru-*.path packaging/systemd/andaru-*.timer usr/lib/systemd/system/
+packaging/systemd/kea-dhcp4-server.service.d/andaru.conf usr/lib/systemd/system/kea-dhcp4-server.service.d/
+packaging/systemd/kea-dhcp6-server.service.d/andaru.conf usr/lib/systemd/system/kea-dhcp6-server.service.d/
+packaging/systemd/networkd.conf.d/andaru.conf usr/lib/systemd/networkd.conf.d/
+packaging/iproute2/andaru.conf usr/share/iproute2/rt_protos.d/
+packaging/tmpfiles.d/andaru.conf usr/lib/tmpfiles.d/
+packaging/kea/andaru-lease-event usr/share/kea/scripts/
+packaging/unbound/andaru.conf etc/unbound/unbound.conf.d/
+packaging/apparmor/andaru/kea-dhcp4 packaging/apparmor/andaru/kea-dhcp6 packaging/apparmor/andaru/unbound etc/apparmor.d/andaru/
+packaging/apparmor/andaru-apparmor usr/share/andaru/

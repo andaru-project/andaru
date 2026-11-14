@@ -1,0 +1,5 @@
+andaru (0.4.0~dev-1) trixie; urgency=medium
+
+  * Development build; the release workflow writes each release's entry.
+
+ -- Andaru project <apt@andaru.io>  Sat, 14 Nov 2026 12:00:00 +0000

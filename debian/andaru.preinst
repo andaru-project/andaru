@@ -1,0 +1,9 @@
+#!/bin/sh
+set -e
+# Unbound refuses an include over a missing directory, and an Unbound installed with Andaru may start before
+# Andaru's postinst runs tmpfiles; the directories must exist from unpacking on.
+if [ "$1" = install ] || [ "$1" = upgrade ]; then
+	mkdir -p /run/andaru-kea /run/andaru-unbound /run/andaru-leases
+fi
+
+#DEBHELPER#
