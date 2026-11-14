@@ -190,7 +190,8 @@ func delegatedPools(cfg kea6Config) map[string]bool {
 }
 
 // replacedPools are the delegated pools under each WAN's previous prefix while it is valid, by interface: Kea
-// keeps their leases until the routers renew, so their routes stay until then.
+// keeps their leases until the routers renew, so their routes stay until then. Validity is judged here too: the
+// saved list is pruned only when the prefix sync runs.
 func (r Realizer) replacedPools() map[string][]netip.Prefix {
 	var tpl delegation.Template
 	raw, err := os.ReadFile(r.Root + kea6Template)
@@ -205,7 +206,7 @@ func (r Realizer) replacedPools() map[string][]netip.Prefix {
 		}
 		n, _ := strconv.ParseUint(s.Pool.SubnetID, 16, 16)
 		for _, old := range state.WANs[s.Uplink].Replaced {
-			if p, ok := delegation.Place(old.Prefix, n, s.Pool.Length); ok {
+			if p, ok := delegation.Place(old.Prefix, n, s.Pool.Length); ok && old.Valid.After(r.Now()) {
 				out[s.Interface] = append(out[s.Interface], p)
 			}
 		}

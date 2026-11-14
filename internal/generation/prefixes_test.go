@@ -601,6 +601,15 @@ func TestOldPoolRoutedWhileValid(t *testing.T) {
 			t.Fatalf("missing %q: %q", want, b.net.argv)
 		}
 	}
+	// Past the old prefix's valid lifetime, the lease sync drops its pool even before the prefix sync runs again.
+	b.now = b.now.Add(3 * time.Hour)
+	b.net.argv = nil
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if b.index("ip -6 route replace unreachable 2001:db8:aa00:80::/60 proto 77") >= 0 || b.index("ip -6 route replace 2001:db8:aa00:82::/64 via fe80::1 dev ens19 proto 77") >= 0 {
+		t.Fatalf("an expired pool still routed: %q", b.net.argv)
+	}
 }
 
 // Back to the earlier prefix within the window: its /64 is current again and is not advertised deprecated.
