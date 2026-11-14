@@ -3,7 +3,8 @@
 # them with lintian and leaves them in OUT.
 #   build-packages.sh OUT any|all [VERSION]
 # any builds andaru for the host's architecture, all builds andaru-archive-keyring. VERSION, when given, is the
-# Debian version of a release, written into debian/changelog of the copy that is built.
+# Debian version of a release: the copy that is built gets a changelog of that release alone, in place of the
+# development entry.
 set -eu
 
 out=$1
@@ -22,12 +23,8 @@ src=$(mktemp -d)
 trap 'rm -rf -- "$src"' EXIT
 git ls-files -z | xargs -0 tar -cf - | tar -xf - -C "$src"
 if [ -n "$version" ]; then
-	{
-		printf 'andaru (%s) trixie; urgency=medium\n\n  * Release %s.\n\n -- Andaru project <apt@andaru.io>  %s\n\n' \
-			"$version" "$version" "$(date -R)"
-		cat "$src/debian/changelog"
-	} >"$src/debian/changelog.new"
-	mv "$src/debian/changelog.new" "$src/debian/changelog"
+	printf 'andaru (%s) trixie; urgency=medium\n\n  * Release %s.\n\n -- Andaru project <apt@andaru.io>  %s\n' \
+		"$version" "$version" "$(date -R)" >"$src/debian/changelog"
 fi
 mkdir -p "$out" "$(go env GOMODCACHE)" "$(go env GOCACHE)"
 
