@@ -22,6 +22,7 @@ import (
 )
 
 const recoveryMarker = "ANDARU_UPGRADE_RECOVERY_V1\n"
+const recoveryMetadataLimit = 16 * 1024 * 1024
 
 var setPattern = regexp.MustCompile(`^set-[0-9]+$`)
 
@@ -74,17 +75,25 @@ func privateDir(path string) error {
 	return nil
 }
 
-func newRecoveryStage(root string) (string, error) {
+func ensureRecoveryRoot(root string, syncParent func(string) error) error {
 	if !filepath.IsAbs(root) || filepath.Clean(root) != root {
-		return "", errors.New("unsafe recovery root")
+		return errors.New("unsafe recovery root")
 	}
 	if err := securefs.CheckAncestors(filepath.Dir(root)); err != nil {
-		return "", err
+		return err
 	}
 	if err := os.Mkdir(root, 0700); err != nil && !os.IsExist(err) {
-		return "", err
+		return err
 	}
 	if err := privateDir(root); err != nil {
+		return err
+	}
+	// Also cover an existing root left by a prior creation whose parent sync failed.
+	return syncParent(filepath.Dir(root))
+}
+
+func newRecoveryStage(root string) (string, error) {
+	if err := ensureRecoveryRoot(root, syncDirectory); err != nil {
 		return "", err
 	}
 	stage, err := os.MkdirTemp(root, ".prepare-")
@@ -297,13 +306,20 @@ func syncDirectory(path string) error {
 }
 
 func atomicJSON(path string, value any) error {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	if len(raw)+1 > recoveryMetadataLimit {
+		return errors.New("recovery metadata is oversized")
+	}
 	f, err := os.CreateTemp(filepath.Dir(path), ".record-")
 	if err != nil {
 		return err
 	}
 	name := f.Name()
 	defer os.Remove(name)
-	err = json.NewEncoder(f).Encode(value)
+	_, err = f.Write(append(raw, '\n'))
 	err = errors.Join(err, f.Sync(), f.Close())
 	if err != nil {
 		return err
@@ -320,10 +336,10 @@ func privateJSON(path string, value any) error {
 		return err
 	}
 	defer f.Close()
-	if st.Size() > outputLimit {
+	if st.Size() > recoveryMetadataLimit {
 		return errors.New("recovery metadata is oversized")
 	}
-	dec := json.NewDecoder(io.LimitReader(f, outputLimit+1))
+	dec := json.NewDecoder(io.LimitReader(f, recoveryMetadataLimit+1))
 	dec.DisallowUnknownFields()
 	if err = dec.Decode(value); err != nil {
 		return err
@@ -473,8 +489,12 @@ func publishRecovery(ctx context.Context, root, stage string, manifest recoveryM
 		return result, err
 	}
 	result = Preparation{Directory: target, Version: manifest.Package.Version, PreparedAt: manifest.PreparedAt, PackageRetained: manifest.PackageRetained}
+	result.Warnings = []string{
+		"Recovery copies contain secrets; keep this root-only local directory private.",
+		"Changes accepted after preparedAt are not included; prepare immediately before updating.",
+	}
 	if !manifest.PackageRetained {
-		result.Warnings = []string{"State saved; previous package not retained; package recovery requires a separately verified package."}
+		result.Warnings = append(result.Warnings, "State saved; previous package not retained; package recovery requires a separately verified package.")
 	}
 	if old != "" {
 		if err = ownedSet(root, old); err != nil {

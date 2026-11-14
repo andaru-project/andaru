@@ -17,13 +17,14 @@ import (
 )
 
 type prepareBench struct {
-	env     environment
-	active  map[string]bool
-	enabled map[string]string
-	calls   []string
-	stop    func(string) error
-	show    func(string)
-	audit   string
+	env                  environment
+	active               map[string]bool
+	enabled              map[string]string
+	calls                []string
+	stop                 func(string) error
+	show                 func(string)
+	audit                string
+	jobs, transientUnits string
 }
 
 func preparationBench(t *testing.T) *prepareBench {
@@ -63,6 +64,10 @@ func (b *prepareBench) run(_ context.Context, name string, args ...string) ([]by
 		}
 		unit := args[len(args)-1]
 		switch args[0] {
+		case "list-jobs":
+			return []byte(b.jobs), nil
+		case "list-units":
+			return []byte(b.transientUnits), nil
 		case "show":
 			if b.show != nil {
 				b.show(unit)
@@ -414,5 +419,50 @@ func TestPrepareRestoresUnitsDespiteOwnStartBudget(t *testing.T) {
 	}
 	if budget["andaru-prefixes.timer"] {
 		t.Fatal("reset a unit this preparation never paused")
+	}
+}
+
+func TestPrepareRefusesIndependentActivation(t *testing.T) {
+	for _, kind := range []string{"queued", "running"} {
+		t.Run(kind, func(t *testing.T) {
+			b := preparationBench(t)
+			b.stop = func(unit string) error {
+				if unit == "andaru-engine.service" {
+					if kind == "queued" {
+						b.jobs = "42 andaru-realize-activate-2.service start waiting\n"
+					} else {
+						b.transientUnits = "andaru-realize-activate-2.service loaded activating start Andaru activation\n"
+					}
+				}
+				return nil
+			}
+			if _, err := prepare(context.Background(), b.env); err == nil {
+				t.Fatal("published recovery with independent activation still scheduled")
+			}
+			if _, err := os.Stat(filepath.Join(b.env.recoveryDir, "state-only.json")); !os.IsNotExist(err) {
+				t.Fatal("published unsafe recovery")
+			}
+			if !b.active["andaru-engine.service"] {
+				t.Fatal("did not restore engine after refusal")
+			}
+		})
+	}
+}
+
+func TestPrepareRefusesOrphanApplyState(t *testing.T) {
+	for _, state := range []string{"activating", "awaiting_confirmation", "rolling_back"} {
+		t.Run(state, func(t *testing.T) {
+			b := preparationBench(t)
+			dir := filepath.Join(b.env.stateDir, "generations", "2")
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(`{"state":"`+state+`","previous":null}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := prepare(context.Background(), b.env); err == nil {
+				t.Fatal("accepted orphan apply state")
+			}
+		})
 	}
 }

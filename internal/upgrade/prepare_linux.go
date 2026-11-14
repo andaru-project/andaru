@@ -58,16 +58,7 @@ func prepare(ctx context.Context, env environment) (result Preparation, retErr e
 	if err != nil || relative == "." || relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
 		return result, errors.New("recovery directory cannot be inside application state")
 	}
-	if !filepath.IsAbs(env.recoveryDir) || filepath.Clean(env.recoveryDir) != env.recoveryDir {
-		return result, errors.New("unsafe recovery directory")
-	}
-	if err = securefs.CheckAncestors(filepath.Dir(env.recoveryDir)); err != nil {
-		return result, err
-	}
-	if err = os.Mkdir(env.recoveryDir, 0700); err != nil && !os.IsExist(err) {
-		return result, err
-	}
-	if err = privateDir(env.recoveryDir); err != nil {
+	if err = ensureRecoveryRoot(env.recoveryDir, syncDirectory); err != nil {
 		return result, err
 	}
 	operationCtx, operationCancel := context.WithTimeout(ctx, time.Second)
@@ -111,7 +102,11 @@ func prepare(ctx context.Context, env environment) (result Preparation, retErr e
 	if err = textOutput(inventory); err != nil {
 		return result, err
 	}
-	if err = checkSpace(ctx, env.stateDir, env.recoveryDir); err != nil {
+	required, err := stateSpaceRequired(ctx, env.stateDir)
+	if err != nil {
+		return result, err
+	}
+	if err = requireSpace(env.recoveryDir, required, 0); err != nil {
 		return result, err
 	}
 	stage, err := newRecoveryStage(env.recoveryDir)
@@ -156,9 +151,9 @@ func prepare(ctx context.Context, env environment) (result Preparation, retErr e
 		}
 		retErr = errors.Join(retErr, resumeErr, removeStage(env.recoveryDir, stage))
 	}()
-	previous, err := retainedLocalPackage(ctx, env.recoveryDir, info, stage)
+	previous, err := retainedLocalPackage(ctx, env.recoveryDir, info, stage, required)
 	if err == nil && !previous.Available {
-		previous, err = retainPackage(ctx, env.commands(stage), info, stage)
+		previous, err = retainPackage(ctx, env.commands(stage), info, stage, required)
 	}
 	if err != nil {
 		return result, err
@@ -221,6 +216,9 @@ func prepare(ctx context.Context, env environment) (result Preparation, retErr e
 		}
 		locks = append(locks, lock)
 	} else if !os.IsNotExist(err) {
+		return result, err
+	}
+	if err = idleRealizationJobs(pauseCtx, run); err != nil {
 		return result, err
 	}
 	if err = idleApplications(env.stateDir); err != nil {
@@ -370,6 +368,25 @@ func drainRealizers(ctx context.Context, run commandRunner) error {
 	}
 }
 
+func idleRealizationJobs(ctx context.Context, run commandRunner) error {
+	for _, args := range [][]string{
+		{"list-jobs", "--no-legend", "--no-pager", "--plain", "andaru-realize-*.service"},
+		{"list-units", "--state=active,activating,deactivating,reloading", "--no-legend", "--no-pager", "--plain", "andaru-realize-*.service"},
+	} {
+		raw, err := run(ctx, "systemctl", args...)
+		if err != nil {
+			return fmt.Errorf("inspect independent realization work: %w", err)
+		}
+		if err = textOutput(raw); err != nil {
+			return err
+		}
+		if len(strings.TrimSpace(string(raw))) != 0 {
+			return errors.New("independent realization work is queued or running; retry after it completes")
+		}
+	}
+	return nil
+}
+
 func idleApplications(stateDir string) error {
 	dir := filepath.Join(stateDir, "generations")
 	pointer := filepath.Join(dir, "pointers.json")
@@ -425,7 +442,7 @@ func idleApplications(stateDir string) error {
 	return nil
 }
 
-func checkSpace(ctx context.Context, source, destination string) error {
+func stateSpaceRequired(ctx context.Context, source string) (int64, error) {
 	var bytes int64
 	err := filepath.WalkDir(source, func(path string, d os.DirEntry, e error) error {
 		if e != nil {
@@ -449,19 +466,34 @@ func checkSpace(ctx context.Context, source, destination string) error {
 		return nil
 	})
 	if err != nil {
-		return err
+		return 0, err
 	}
 	reserve := max(int64(64*1024*1024), bytes/10)
 	if bytes > math.MaxInt64-reserve {
-		return errors.New("state space estimate overflow")
+		return 0, errors.New("state space estimate overflow")
 	}
-	var stat syscall.Statfs_t
-	if err = syscall.Statfs(destination, &stat); err != nil {
+	return bytes + reserve, nil
+}
+
+func checkSpace(ctx context.Context, source, destination string) error {
+	required, err := stateSpaceRequired(ctx, source)
+	if err != nil {
 		return err
 	}
-	required := uint64(bytes + reserve)
-	if stat.Bsize <= 0 || stat.Bavail < required/uint64(stat.Bsize)+1 {
-		return errors.New("insufficient free space for recovery state and filesystem reserve")
+	return requireSpace(destination, required, 0)
+}
+
+func requireSpace(destination string, required, artifact int64) error {
+	if required < 0 || artifact < 0 || artifact > math.MaxInt64-required {
+		return errors.New("free space requirement overflow")
+	}
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(destination, &stat); err != nil {
+		return err
+	}
+	total := uint64(required + artifact)
+	if stat.Bsize <= 0 || stat.Bavail < total/uint64(stat.Bsize)+1 {
+		return errors.New("insufficient free space for recovery artifacts, state and filesystem reserve")
 	}
 	return nil
 }

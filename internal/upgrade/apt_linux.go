@@ -148,13 +148,13 @@ type commandError struct {
 
 func (e *commandError) Error() string { return fmt.Sprintf("%s exited with status %d", e.name, e.code) }
 
-type boundedOutput struct{ bytes.Buffer }
+type boundedOutput struct{ buffer bytes.Buffer }
 
 func (b *boundedOutput) Write(p []byte) (int, error) {
-	if len(p) > outputLimit-b.Len() {
+	if len(p) > outputLimit-b.buffer.Len() {
 		return 0, errors.New("command output exceeds 1 MiB")
 	}
-	return b.Buffer.Write(p)
+	return b.buffer.Write(p)
 }
 
 func runnerAt(dir string) commandRunner {
@@ -186,6 +186,6 @@ func runnerAt(dir string) commandRunner {
 			}
 			return nil, fmt.Errorf("run %s: %w", name, err)
 		}
-		return out.Bytes(), nil
+		return out.buffer.Bytes(), nil
 	}
 }

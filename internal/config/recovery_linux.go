@@ -114,5 +114,13 @@ func VerifyRecoveryState(ctx context.Context, stateDir string) error {
 			}
 		}
 	}
+	conn, err := dbs[0].Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err = loadObjectVersions(ctx, conn, &declaration, version, nil, true); err != nil {
+		return fmt.Errorf("invalid recovery object history: %w", err)
+	}
 	return nil
 }

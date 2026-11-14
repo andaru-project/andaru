@@ -25,7 +25,7 @@ type packageMetadata struct {
 
 // retainPackage accepts only the exact installed package authenticated by the configured APT indexes.
 // run must execute downloads in stage; keeping the working directory on exec.Cmd avoids a process-wide chdir.
-func retainPackage(ctx context.Context, run commandRunner, info packageInfo, stage string) (artifact, error) {
+func retainPackage(ctx context.Context, run commandRunner, info packageInfo, stage string, required int64) (artifact, error) {
 	if !versionPattern.MatchString(info.Version) || !architecturePattern.MatchString(info.Architecture) {
 		return artifact{}, errors.New("invalid installed package identity")
 	}
@@ -50,6 +50,9 @@ func retainPackage(ctx context.Context, run commandRunner, info packageInfo, sta
 		return artifact{}, err
 	}
 	if len(files) == 0 {
+		if err = requireSpace(stage, required, metadata.size); err != nil {
+			return artifact{}, err
+		}
 		if _, err = run(ctx, "apt-get", "download", selected); err != nil {
 			return artifact{}, fmt.Errorf("download previous package: %w", err)
 		}
@@ -185,7 +188,7 @@ func debFiles(stage string) ([]string, error) {
 
 // A root-owned receipt from our own completed recovery set preserves APT's previously verified identity
 // when that exact version has since disappeared from the signed archive indexes.
-func retainedLocalPackage(ctx context.Context, root string, info packageInfo, stage string) (artifact, error) {
+func retainedLocalPackage(ctx context.Context, root string, info packageInfo, stage string, required int64) (artifact, error) {
 	id, err := oldPointer(root, "current.json")
 	if err != nil || id == "" {
 		return artifact{}, err
@@ -204,6 +207,9 @@ func retainedLocalPackage(ctx context.Context, root string, info packageInfo, st
 	}
 	if digest.SHA256 != manifest.PackageSHA256 {
 		return artifact{}, errors.New("retained local package checksum mismatch")
+	}
+	if err = requireSpace(stage, required, digest.Size); err != nil {
+		return artifact{}, err
 	}
 	src, _, err := regularFile(source)
 	if err != nil {

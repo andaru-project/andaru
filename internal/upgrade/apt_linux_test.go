@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -108,5 +109,33 @@ func TestCheckFlatRepository(t *testing.T) {
 	}
 	if got.Repository != "file:/var/tmp/andaru-package-test-repo" || got.Suite != "./" {
 		t.Fatalf("lost flat repository identity: %+v", got)
+	}
+}
+
+func TestRunnerOutputHelper(t *testing.T) {
+	stream := os.Getenv("ANDARU_RUNNER_OUTPUT")
+	if stream == "" {
+		t.Skip("subprocess fixture")
+	}
+	f := os.Stdout
+	if stream == "stderr" {
+		f = os.Stderr
+	}
+	_, _ = f.Write([]byte(strings.Repeat("x", 1048577)))
+	os.Exit(0)
+}
+
+func TestRunnerOutputBounded(t *testing.T) {
+	for _, stream := range []string{"stdout", "stderr"} {
+		t.Run(stream, func(t *testing.T) {
+			t.Setenv("ANDARU_RUNNER_OUTPUT", stream)
+			exe, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = runnerAt("")(context.Background(), exe, "-test.run=^TestRunnerOutputHelper$"); err == nil {
+				t.Fatal("accepted oversized command output")
+			}
+		})
 	}
 }

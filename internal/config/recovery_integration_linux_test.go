@@ -161,3 +161,37 @@ func TestRecoveryDoesNotMigrate(t *testing.T) {
 		t.Fatal(fmt.Sprintf("created missing table: %d %v", count, err))
 	}
 }
+
+func TestRecoveryStateObjectHistory(t *testing.T) {
+	for _, mutation := range []string{
+		"DELETE FROM object_changes",
+		"UPDATE object_changes SET created=0,deleted=1",
+		"UPDATE object_changes SET version_id=0",
+	} {
+		t.Run(mutation, func(t *testing.T) {
+			ctx := context.Background()
+			root := ownedDir(t)
+			s, err := Open(ctx, root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = s.Save(ctx, "unix:uid:0", createZone("recovery-zone")); err != nil {
+				t.Fatal(err)
+			}
+			if err = s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			db, err := openDatabase(ctx, filepath.Join(root, "configuration", "config.db"), "rw", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = db.Exec(mutation); err != nil {
+				t.Fatal(err)
+			}
+			db.Close()
+			if err = VerifyRecoveryState(ctx, root); err == nil {
+				t.Fatal("accepted recovery that cannot load active object metadata")
+			}
+		})
+	}
+}

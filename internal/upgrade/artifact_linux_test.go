@@ -65,7 +65,7 @@ func artifactRunner(t *testing.T, stage string, raw, metadata []byte, downloadEr
 func TestRetainInstalledPackageNotCandidate(t *testing.T) {
 	raw := testDeb(t, "0.4.0~rc2-1", "amd64")
 	stage := t.TempDir()
-	got, err := retainPackage(context.Background(), artifactRunner(t, stage, raw, artifactMetadata(raw, "0.4.0~rc2-1", "amd64"), nil), packageInfo{"0.4.0~rc2-1", "amd64"}, stage)
+	got, err := retainPackage(context.Background(), artifactRunner(t, stage, raw, artifactMetadata(raw, "0.4.0~rc2-1", "amd64"), nil), packageInfo{"0.4.0~rc2-1", "amd64"}, stage, 64*1024*1024)
 	if err != nil || !got.Available {
 		t.Fatalf("artifact: %+v %v", got, err)
 	}
@@ -82,7 +82,7 @@ func TestRetainInstalledPackageNotCandidate(t *testing.T) {
 func TestOldRCUnavailable(t *testing.T) {
 	for _, metadata := range []string{"", "Package: andaru\nVersion: 0.4.0~rc2-1\nArchitecture: amd64\n\n"} {
 		run := func(context.Context, string, ...string) ([]byte, error) { return []byte(metadata), nil }
-		got, err := retainPackage(context.Background(), run, packageInfo{"0.4.0~rc2-1", "amd64"}, t.TempDir())
+		got, err := retainPackage(context.Background(), run, packageInfo{"0.4.0~rc2-1", "amd64"}, t.TempDir(), 64*1024*1024)
 		if err != nil || got.Available {
 			t.Fatalf("invented prior package: %+v %v", got, err)
 		}
@@ -109,7 +109,7 @@ func TestWrongCachedPackageRefused(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(stage, "cached.deb"), raw, 0600); err != nil {
 				t.Fatal(err)
 			}
-			_, err := retainPackage(context.Background(), artifactRunner(t, stage, raw, meta, errors.New("must verify existing file")), packageInfo{"0.4.0~rc2-1", "amd64"}, stage)
+			_, err := retainPackage(context.Background(), artifactRunner(t, stage, raw, meta, errors.New("must verify existing file")), packageInfo{"0.4.0~rc2-1", "amd64"}, stage, 64*1024*1024)
 			if err == nil {
 				t.Fatal("accepted a wrong cached recovery package")
 			}
@@ -120,7 +120,7 @@ func TestWrongCachedPackageRefused(t *testing.T) {
 func TestPackageDownloadFails(t *testing.T) {
 	raw := testDeb(t, "0.4.0~rc2-1", "amd64")
 	stage := t.TempDir()
-	_, err := retainPackage(context.Background(), artifactRunner(t, stage, raw, artifactMetadata(raw, "0.4.0~rc2-1", "amd64"), errors.New("network unavailable")), packageInfo{"0.4.0~rc2-1", "amd64"}, stage)
+	_, err := retainPackage(context.Background(), artifactRunner(t, stage, raw, artifactMetadata(raw, "0.4.0~rc2-1", "amd64"), errors.New("network unavailable")), packageInfo{"0.4.0~rc2-1", "amd64"}, stage, 64*1024*1024)
 	if err == nil {
 		t.Fatal("download failure became success")
 	}
@@ -128,8 +128,26 @@ func TestPackageDownloadFails(t *testing.T) {
 
 func TestPackageVersionIsAnArgument(t *testing.T) {
 	called := false
-	_, err := retainPackage(context.Background(), func(context.Context, string, ...string) ([]byte, error) { called = true; return nil, nil }, packageInfo{"0.4.0-1;touch /tmp/pwn", "amd64"}, t.TempDir())
+	_, err := retainPackage(context.Background(), func(context.Context, string, ...string) ([]byte, error) { called = true; return nil, nil }, packageInfo{"0.4.0-1;touch /tmp/pwn", "amd64"}, t.TempDir(), 64*1024*1024)
 	if err == nil || called {
 		t.Fatal("invalid package version reached a command")
+	}
+}
+
+func TestRecoveryDownloadRejectsCapacityBeforeFetch(t *testing.T) {
+	downloaded := false
+	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "apt-cache" {
+			return []byte("Package: andaru\nVersion: 0.4.0~rc2-1\nArchitecture: amd64\nSize: 9000000000000000000\nSHA256: " + strings.Repeat("0", 64) + "\n"), nil
+		}
+		if name == "apt-get" {
+			downloaded = true
+			return nil, errors.New("download reached")
+		}
+		return nil, errors.New("unexpected command")
+	}
+	_, err := retainPackage(context.Background(), run, packageInfo{"0.4.0~rc2-1", "amd64"}, t.TempDir(), 64*1024*1024)
+	if err == nil || downloaded || !strings.Contains(err.Error(), "free space") {
+		t.Fatalf("artifact bypassed pre-download capacity check: downloaded=%v error=%v", downloaded, err)
 	}
 }

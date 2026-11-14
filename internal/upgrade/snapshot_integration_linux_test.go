@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -334,5 +335,84 @@ func TestSnapshotFromCrashedStore(t *testing.T) {
 	}
 	if err = config.VerifyRecoveryState(context.Background(), filepath.Join(result.Directory, "state")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestLargeRecoveryManifestRemainsReadable(t *testing.T) {
+	root := recoveryRoot(t)
+	stage, manifest := stagedSnapshot(t, root, snapshotSource(t), true)
+	manifest.Dependencies = []string{strings.Repeat("package-inventory ", 65536)}
+	result, err := publishRecovery(context.Background(), root, stage, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := oldPointer(root, "current.json")
+	if err != nil || id != filepath.Base(result.Directory) {
+		t.Fatalf("published unreadable recovery metadata: %s %v", id, err)
+	}
+}
+
+func TestOversizedRecoveryManifestKeepsPrevious(t *testing.T) {
+	root := recoveryRoot(t)
+	source := snapshotSource(t)
+	old := publishedSnapshot(t, root, source)
+	before, err := os.ReadFile(filepath.Join(root, "current.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage, manifest := stagedSnapshot(t, root, source, true)
+	manifest.Dependencies = []string{strings.Repeat("x", 16*1024*1024+1)}
+	if _, err = publishRecovery(context.Background(), root, stage, manifest); err == nil {
+		t.Fatal("published recovery metadata beyond the supported read policy")
+	}
+	after, err := os.ReadFile(filepath.Join(root, "current.json"))
+	if err != nil || string(before) != string(after) {
+		t.Fatal("oversized metadata changed current recovery")
+	}
+	if _, err = os.Stat(old.Directory); err != nil {
+		t.Fatal("oversized metadata evicted previous recovery")
+	}
+}
+
+func TestCompletePreparationDisplaysRecoveryLimits(t *testing.T) {
+	root := recoveryRoot(t)
+	stage, manifest := stagedSnapshot(t, root, snapshotSource(t), true)
+	result, err := publishRecovery(context.Background(), root, stage, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	warnings := strings.Join(result.Warnings, " ")
+	if !strings.Contains(warnings, "secret") || !strings.Contains(warnings, "after") || !strings.Contains(warnings, "before updating") {
+		t.Fatalf("complete preparation omitted its safety limits: %+v", result)
+	}
+}
+
+func TestRecoveryRootParentSyncFailure(t *testing.T) {
+	parent := recoveryRoot(t)
+	root := filepath.Join(parent, "new-recovery-root")
+	err := ensureRecoveryRoot(root, func(path string) error {
+		if path == parent {
+			return syscall.EIO
+		}
+		return nil
+	})
+	if !errors.Is(err, syscall.EIO) {
+		t.Fatalf("reported durable root despite parent sync failure: %v", err)
+	}
+}
+
+func TestLocalArtifactRejectsCopyCapacity(t *testing.T) {
+	root := recoveryRoot(t)
+	publishedSnapshot(t, root, snapshotSource(t))
+	stage, err := newRecoveryStage(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = retainedLocalPackage(context.Background(), root, packageInfo{"0.4.0~rc2-1", "amd64"}, stage, int64(9223372036854775807))
+	if err == nil {
+		t.Fatal("copied recovery artifact without reserving state-copy space")
+	}
+	if _, err = os.Stat(filepath.Join(stage, "package.deb")); !os.IsNotExist(err) {
+		t.Fatal("artifact was written before capacity refusal")
 	}
 }
