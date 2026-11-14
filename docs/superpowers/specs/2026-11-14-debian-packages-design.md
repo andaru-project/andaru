@@ -90,7 +90,7 @@ The binary is built with the Go toolchain from `go.mod` (`actions/setup-go`), no
 
 ## The repository
 
-`https://apt.andaru.io/`, the `main` branch of `andaru-project/apt`:
+`https://apt.andaru.io/`, deployed to GitHub Pages by `andaru-project/apt`'s workflow:
 
 ```
 andaru-archive-key.asc                      the public key, armoured
@@ -104,7 +104,7 @@ pool/main/a/andaru/…, pool/main/a/andaru-archive-keyring/…
 - `Release`: `Origin: Andaru`, `Label: Andaru`, `Suite: trixie`, `Codename: trixie`, `Components: main`, `Architectures: amd64 arm64`, `Date`, and `Valid-Until` 14 days later. `Acquire-By-Hash` is not used.
 - **Retention:** the newest five versions of `andaru` stay in `pool/` (slice 2's rollback needs the previous one); older ones remain on their GitHub releases. A release is about 25 MB for both architectures, and GitHub Pages sites are limited to 1 GB.
 - **Test releases** are GitHub prereleases with versions like `0.4.0~rc1` (which sort before `0.4.0`), published to a separate suite, `trixie-test`, with its own `dists/trixie-test/` and the same pool and key. Hosts see them only by adding that suite; the lab does. Prereleases never enter `trixie`.
-- **Publishing** is a workflow in `andaru-project/apt`, the only place the signing key exists. It runs on `workflow_dispatch` (a tag) and daily on a schedule. It downloads the `.deb`s and `SHA256SUMS` of every Andaru release from `andaru-project/andaru`'s public GitHub releases that the pool lacks, checks them against the release's `SHA256SUMS`, regenerates the indexes with `apt-ftparchive`, signs `InRelease` and `Release.gpg` with the subkey, and commits. The daily run re-signs even without a new release, so `Valid-Until` never lapses on a maintained repository. Andaru's repository holds no credential for the APT repository.
+- **Publishing** is a workflow in `andaru-project/apt`, the only place the signing key exists. It runs on `workflow_dispatch` (a tag) and daily on a schedule. It downloads the `.deb`s and `SHA256SUMS` of the releases the repository serves (every keyring release and the five newest Andaru versions) from `andaru-project/andaru`'s public GitHub releases, checks every package against its release's `SHA256SUMS` (one mismatch and nothing is published), builds the indexes with `apt-ftparchive`, signs `InRelease` and `Release.gpg` with the subkey, and deploys the site as a GitHub Pages artifact. The site is rebuilt whole each time and never committed, so the repository's history does not grow with every package. The daily run re-signs even without a new release, so `Valid-Until` never lapses on a maintained repository. Andaru's repository holds no credential for the APT repository.
 - **Versions:** the tag `v<version>` gives the Debian version `<version>-1`; the first release is `v0.4.0`, matching the API document's `0.4.0-dev`. `debian/changelog` gets its entry from the tag in the release workflow.
 - **Releasing** is a workflow in `andaru-project/andaru`, on a pushed tag `v<version>`: it builds both architectures' `andaru` and the keyring package, runs `lintian`, and creates the GitHub release with the `.deb`s and `SHA256SUMS`. It holds no credential to start the publishing workflow; the next daily run publishes the release, or the owner starts it at once with `gh workflow run publish -R andaru-project/apt -f tag=v<version>`.
 
@@ -114,11 +114,12 @@ Hosts set up by copying `packaging/` files (developer machines; the lab VMs are 
 
 ## The bootstrap
 
-Documented in the guide and the README, with the checksum shown in two independently published places (the guide on `github.com` and the release notes):
+Documented in the guide. The checksum comes from the keyring's GitHub release, a channel independent of `apt.andaru.io`:
 
 ```sh
 curl -fsSLO https://apt.andaru.io/andaru-archive-keyring_2026.11.14_all.deb
-echo '<sha256>  andaru-archive-keyring_2026.11.14_all.deb' | sha256sum -c
+curl -fsSLO https://github.com/andaru-project/andaru/releases/download/keyring-2026.11.14/SHA256SUMS
+sha256sum -c SHA256SUMS
 sudo apt install ./andaru-archive-keyring_2026.11.14_all.deb
 sudo apt update && sudo apt install andaru
 ```

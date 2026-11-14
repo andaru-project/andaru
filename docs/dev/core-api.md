@@ -15,6 +15,52 @@ go test ./...
 
 CI targets native Linux amd64 and arm64 on Ubuntu 24.04; the persistent Debian lab remains a separate amd64 qualification environment. Native CI does not establish ARM appliance boot or Debian arm64 qualification. Go selects the required patched toolchain through its normal verified toolchain mechanism if the installed compiler is older. Build in a task-owned worktree; do not write binaries into tracked source directories.
 
+## Installing
+
+Andaru installs from its signed APT repository, `https://apt.andaru.io/`, on Debian 13 (amd64 or arm64). Design: [Debian packages and the signed APT repository](../superpowers/specs/2026-11-14-debian-packages-design.md).
+
+1. Download the keyring package from the repository, and its checksum from [its GitHub release](https://github.com/andaru-project/andaru/releases/tag/keyring-2026.11.14), which is published separately, then check one against the other:
+   ```sh
+   curl -fsSLO https://apt.andaru.io/andaru-archive-keyring_2026.11.14_all.deb
+   curl -fsSLO https://github.com/andaru-project/andaru/releases/download/keyring-2026.11.14/SHA256SUMS
+   sha256sum -c SHA256SUMS
+   ```
+2. Install it, then Andaru:
+   ```sh
+   sudo apt install ./andaru-archive-keyring_2026.11.14_all.deb
+   sudo apt update && sudo apt install andaru
+   ```
+
+The keyring package adds `/etc/apt/sources.list.d/andaru.sources`, which trusts the archive key for this repository only (`Signed-By:`). The key's primary fingerprint is `7CD6 1777 8541 6B30 6999  DEF2 B5E7 EDE2 133D 18DF`; the repository is signed by its subkey `67BF 6A43 DD97 A19C 2AED  E729 4FA6 59D5 E100 49DD`, which expires on 2031-11-13. The key is also at <https://apt.andaru.io/andaru-archive-key.asc>.
+
+The `andaru` package depends on systemd, nftables and iproute2, and recommends Kea, Unbound, OpenSSH and AppArmor. Installing it:
+
+- **masks `nftables.service`**: a restart of Debian's unit, as a package upgrade may do, flushes the whole ruleset, Andaru's filter included. A ruleset it loaded stays until the next boot;
+- adds one line, `include if exists <andaru/DAEMON>`, to `/etc/apparmor.d/local/usr.sbin.kea-dhcp4`, `…kea-dhcp6` and `…unbound`, and reloads those profiles; a Kea or Unbound installed later gets the line then. Andaru's rules are in `/etc/apparmor.d/andaru/`;
+- enables `andaru-network-boot.service` and enables and starts the engine and the lease and prefix path and timer units;
+- **never restarts systemd-networkd or touches an interface**: `ManageForeignRoutes=no` takes effect at the next networkd restart, which the first boot after the takeover provides.
+
+Purging the package removes its AppArmor lines and leaves `/var/lib/andaru`: uninstalling is not supported. Upgrades restart the engine, which serves only its local socket.
+
+**A host set up by hand** from `packaging/` before the packages existed has copies that would override or duplicate the package's files. Remove them before `apt install andaru`:
+
+```sh
+sudo rm -f /etc/systemd/system/andaru-*.service /etc/systemd/system/andaru-*.path /etc/systemd/system/andaru-*.timer \
+  /etc/systemd/system/kea-dhcp4-server.service.d/andaru.conf /etc/systemd/system/kea-dhcp6-server.service.d/andaru.conf \
+  /etc/systemd/networkd.conf.d/andaru.conf /etc/iproute2/rt_protos.d/andaru.conf /usr/lib/tmpfiles.d/andaru.conf
+# Delete the lines copied from packaging/apparmor from each of these, keeping your own:
+sudoedit /etc/apparmor.d/local/usr.sbin.kea-dhcp4 /etc/apparmor.d/local/usr.sbin.kea-dhcp6 /etc/apparmor.d/local/usr.sbin.unbound
+```
+
+**From source:** build the packages for this machine's architecture in a Debian 13 container (Docker and Go 1.27 needed) and install them:
+
+```sh
+sh scripts/ci/build-packages.sh dist any
+sudo apt install ./dist/andaru_*.deb
+```
+
+**Releasing** (maintainers): push a tag. `v1.2.3` is a release, `v1.2.3-rcN` a prerelease (Debian version `1.2.3~rcN-1`), and `keyring-yyyy.mm.dd` builds the keyring package of that version, once (it must equal `KEYRING_VERSION` in `debian/rules`). The release workflow builds and checks the packages and creates the GitHub release; [andaru-project/apt](https://github.com/andaru-project/apt) publishes it on its next daily run, or at once with `gh workflow run publish -R andaru-project/apt`. `trixie` carries releases; `trixie-test` (`Suites: trixie-test` in a copy of `andaru.sources`) carries prereleases too. The newest five Andaru versions stay in the repository; older ones remain on their GitHub releases.
+
 ## Run and inspect
 
 For a trusted developer build, start the engine as root:
@@ -281,19 +327,10 @@ sudo andaru ctl preview network                          # shows "nft:inet/andar
 
 Andaru runs Debian's Kea as the LAN's DHCPv4 server and Unbound as its DNS service; the firewall itself resolves through the same service. Both are configured only from the confirmed generation, applied, confirmed, rolled back and booted with the network and the filter. Design: [DHCP and DNS for the LAN](../superpowers/specs/2026-11-12-dhcp-dns-design.md).
 
+The `andaru` package installs Kea's and Unbound's settings, the lease hook and AppArmor rules; Kea and Unbound are its recommends.
+
 ```sh
-sudo apt install kea-dhcp4-server unbound
-# Once, beside andaru-engine.service (packaging/):
-sudo install -m 0644 packaging/systemd/kea-dhcp4-server.service.d/andaru.conf -D /etc/systemd/system/kea-dhcp4-server.service.d/andaru.conf
-sudo install -m 0644 packaging/unbound/andaru.conf /etc/unbound/unbound.conf.d/andaru.conf
-sudo install -m 0644 packaging/tmpfiles.d/andaru.conf /usr/lib/tmpfiles.d/andaru.conf
-sudo install -m 0755 packaging/kea/andaru-lease-event -D /usr/share/kea/scripts/andaru-lease-event
-sudo install -m 0644 packaging/systemd/andaru-leases.path packaging/systemd/andaru-leases.service /etc/systemd/system/
-# Debian's AppArmor profiles confine both daemons; these local rules let them read Andaru's files.
-sudo install -m 0644 packaging/apparmor/usr.sbin.kea-dhcp4 packaging/apparmor/usr.sbin.unbound /etc/apparmor.d/local/
-sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.kea-dhcp4 /etc/apparmor.d/usr.sbin.unbound
-sudo systemd-tmpfiles --create andaru.conf && sudo systemctl daemon-reload && sudo systemctl enable --now andaru-leases.path
-sudo systemctl restart kea-dhcp4-server unbound   # Kea stops until a generation declares DHCP
+sudo apt install kea-dhcp4-server unbound   # if they were left out
 
 printf '%s\n' '{"name":"lan","segment":"'"$LAN"'","ranges":[{"first":"192.168.40.128","last":"192.168.40.254"}]}' | sudo andaru ctl config create dhcp
 printf '%s\n' '{"mode":"recursive","segments":["'"$LAN"'"]}' | sudo andaru ctl config replace --version 0 dns
@@ -312,16 +349,7 @@ printf '%s\n' '{"mode":"recursive","segments":["'"$LAN"'"]}' | sudo andaru ctl c
 Kea's DHCPv6 server on LAN segments with a static IPv6 `/64`, including prefixes delegated to routers behind them. Design: [DHCPv6 for the LAN](../superpowers/specs/2026-11-13-dhcpv6-design.md).
 
 ```sh
-sudo apt install kea-dhcp6-server
-# Once, beside the DHCP and DNS files (packaging/):
-sudo install -m 0644 packaging/systemd/kea-dhcp6-server.service.d/andaru.conf -D /etc/systemd/system/kea-dhcp6-server.service.d/andaru.conf
-sudo install -m 0644 packaging/systemd/networkd.conf.d/andaru.conf -D /etc/systemd/networkd.conf.d/andaru.conf
-sudo install -m 0644 packaging/iproute2/andaru.conf -D /etc/iproute2/rt_protos.d/andaru.conf
-sudo install -m 0755 packaging/kea/andaru-lease-event -D /usr/share/kea/scripts/andaru-lease-event
-sudo install -m 0644 packaging/apparmor/usr.sbin.kea-dhcp6 /etc/apparmor.d/local/
-sudo apparmor_parser -r /etc/apparmor.d/usr.sbin.kea-dhcp6
-sudo systemctl daemon-reload && sudo systemctl restart systemd-networkd
-
+sudo apt install kea-dhcp6-server   # if it was left out
 printf '%s\n' '{"name":"lan6","segment":"'"$LAN"'","ranges":[{"first":"fd00:beef:1::1000","last":"fd00:beef:1::1fff"}],"prefixDelegation":{"prefix":"fd00:beef:100::/48","delegatedLength":56}}' \
   | sudo andaru ctl config create dhcp6
 ```
@@ -338,10 +366,6 @@ printf '%s\n' '{"name":"lan6","segment":"'"$LAN"'","ranges":[{"first":"fd00:beef
 Kea's DHCPv6 server, and prefix delegation onwards, on segments numbered from the prefix the WAN's DHCPv6 client receives (`delegated` segments). Andaru follows the prefix when the provider changes it, and tells clients to stop using the old one. Design: [DHCPv6 on delegated prefixes](../superpowers/specs/2026-11-13-dhcpv6-delegated-design.md).
 
 ```sh
-# Once, beside the DHCPv6 files (packaging/):
-sudo install -m 0644 packaging/systemd/andaru-prefixes.path packaging/systemd/andaru-prefixes.timer packaging/systemd/andaru-prefixes.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now andaru-prefixes.path andaru-prefixes.timer
-
 # A /48 requested on the WAN; the LAN is subnet 1 of it, and routers behind it get /64s from the 16 at subnet 0x80.
 printf '%s\n' '{"name":"lan6","segment":"'"$LAN"'","ranges":[{"first":"::1000","last":"::1fff"}],"staticLeases":[{"duid":"00:01:00:01:aa:bb:cc:dd:ee:ff","prefixId":"1","hostname":"router"}],"prefixDelegation":{"subnetId":"8","length":60,"delegatedLength":64}}' \
   | sudo andaru ctl config create dhcp6
@@ -438,7 +462,7 @@ One segment may say which DNS servers the firewall host itself asks, as netplan'
 
 `--takeover` replaces netplan's generated files under `/run/systemd/network`. **Until you confirm, nothing outside `/run` changes, so a reboot returns the host to netplan.** Confirming then enables `systemd-networkd` (netplan's generator was doing that), disables `systemd-networkd-wait-online` (no Andaru interface is required for "online", so it would hold every boot for its two-minute timeout), writes `/etc/cloud/cloud.cfg.d/99-andaru-network.cfg` (`network: {config: disabled}`) and moves `/etc/netplan/*.yaml` to `/var/lib/andaru/generations/baseline/netplan/`. The packages stay installed.
 
-Boot needs `andaru-network-boot.service` ([unit](../../packaging/systemd/andaru-network-boot.service)) installed and enabled **before** the takeover: it copies the confirmed generation into `/run` before networkd starts. If that generation is damaged it uses the last-known-good one, and `live` then differs from `confirmed`.
+Boot needs `andaru-network-boot.service` ([unit](../../packaging/systemd/andaru-network-boot.service)) enabled, as the package leaves it, **before** the takeover: it copies the confirmed generation into `/run` before networkd starts. If that generation is damaged it uses the last-known-good one, and `live` then differs from `confirmed`.
 
 What changes for the host after a takeover:
 
@@ -490,9 +514,7 @@ These behaviours are proven on the Debian lab VM, not in CI: see [the lab qualif
 
 ## Supervision
 
-The source unit is [`packaging/systemd/andaru-engine.service`](../../packaging/systemd/andaru-engine.service). It expects the trusted binary at `/usr/bin/andaru`; Debian package construction is a later increment, not an installer hidden in the API.
-
-For a controlled development installation, first ensure there is no unrelated existing `andaru` command, engine unit or `/run/andaru` directory. Install the trusted binary and unit using normal administrator tooling, run `systemctl daemon-reload`, and start the service. Do not overwrite foreign paths or construct systemd enablement symlinks manually.
+The source unit is [`packaging/systemd/andaru-engine.service`](../../packaging/systemd/andaru-engine.service), installed by the `andaru` package with the binary at `/usr/bin/andaru` ([Installing](#installing)).
 
 ```sh
 sudo systemctl start andaru-engine.service
