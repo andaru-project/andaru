@@ -93,10 +93,18 @@ func readRealizerFacts(etcDir, runDir, pppd, pluginGlob, device, root string) (R
 	facts.UnboundTool = exists(root + "/usr/sbin/unbound")
 	facts.Delegated, _ = delegation.ReadState(root + "/var/lib/andaru/delegated-prefixes.json")
 	facts.FilterUnits = []string{}
+	bases := []string{"/etc/systemd/system/", "/run/systemd/system/"}
+units:
 	for _, unit := range competingFilters {
+		for _, base := range bases {
+			// Masked, a unit never starts, whatever links still enable it; a confirmed takeover masks nftables.service.
+			if target, _ := os.Readlink(root + base + unit); target == "/dev/null" {
+				continue units
+			}
+		}
 		// Persistent (/etc) and runtime (/run) enablement, through either a wants or a requires link.
 	links:
-		for _, base := range []string{"/etc/systemd/system/", "/run/systemd/system/"} {
+		for _, base := range bases {
 			for _, target := range []string{"sysinit.target.wants", "multi-user.target.wants", "sysinit.target.requires", "multi-user.target.requires"} {
 				if _, err := os.Lstat(root + base + target + "/" + unit); err == nil {
 					facts.FilterUnits = append(facts.FilterUnits, unit)

@@ -26,6 +26,9 @@ Describe 'scripts/ci/version.sh'
     v01.2.3
     v1.2.3-rc01
     keyring-2026.1.14
+    v1x2x3
+    v1x2x3-rc1
+    keyring-2026x11x14
   End
 
   It "refuses $1"

@@ -10,6 +10,45 @@ permissions:
   contents: read
 
 jobs:
+  shell:
+    name: shell scripts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install shellspec and shellcheck
+        env:
+          SHELLSPEC_VERSION: 0.28.1
+          SHELLSPEC_SHA256: 350d3de04ba61505c54eda31a3c2ee912700f1758b1a80a284bc08fd8b6c5992
+          SHELLCHECK_VERSION: 0.11.0
+          SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+        run: |
+          set -eu
+          curl -fsSLo "$RUNNER_TEMP/shellspec.tar.gz" \
+            "https://github.com/shellspec/shellspec/releases/download/$SHELLSPEC_VERSION/shellspec-dist.tar.gz"
+          echo "$SHELLSPEC_SHA256  $RUNNER_TEMP/shellspec.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/shellspec.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/shellspec" >>"$GITHUB_PATH"
+          curl -fsSLo "$RUNNER_TEMP/shellcheck.tar.xz" \
+            "https://github.com/koalaman/shellcheck/releases/download/v$SHELLCHECK_VERSION/shellcheck-v$SHELLCHECK_VERSION.linux.x86_64.tar.xz"
+          echo "$SHELLCHECK_SHA256  $RUNNER_TEMP/shellcheck.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/shellcheck.tar.xz" -C "$RUNNER_TEMP"
+          # Ahead of the runner's own shellcheck.
+          echo "$RUNNER_TEMP/shellcheck-v$SHELLCHECK_VERSION" >>"$GITHUB_PATH"
+
+      # The release gate and the maintainer scripts are shell; their specs guard nothing unless they run.
+      - name: shellcheck and shellspec
+        run: |
+          set -eu
+          shellcheck --version
+          shellcheck scripts/ci/*.sh packaging/apparmor/andaru-apparmor packaging/kea/andaru-lease-event \
+            debian/andaru.*inst debian/andaru.*rm
+          shellspec
+
   native-linux:
     name: linux ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}

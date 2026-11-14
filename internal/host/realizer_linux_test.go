@@ -328,6 +328,33 @@ func TestFilterFacts(t *testing.T) {
 	if f := read(); !f.NftTool || !slices.Equal(f.FilterUnits, []string{"nftables.service", "ufw.service"}) {
 		t.Fatalf("facts %+v", f)
 	}
+	// A link to the unit file itself is no mask.
+	if err := os.Symlink("/usr/lib/systemd/system/ufw.service", root+"/etc/systemd/system/ufw.service"); err != nil {
+		t.Fatal(err)
+	}
+	if f := read(); !slices.Equal(f.FilterUnits, []string{"nftables.service", "ufw.service"}) {
+		t.Fatalf("linked: facts %+v", f)
+	}
+	// Masked for this boot only, it does not start either.
+	if err := os.MkdirAll(root+"/run/systemd/system", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/dev/null", root+"/run/systemd/system/nftables.service"); err != nil {
+		t.Fatal(err)
+	}
+	if f := read(); !slices.Equal(f.FilterUnits, []string{"ufw.service"}) {
+		t.Fatalf("runtime mask: facts %+v", f)
+	}
+	if err := os.Remove(root + "/run/systemd/system/nftables.service"); err != nil {
+		t.Fatal(err)
+	}
+	// A confirmed takeover masks nftables.service and leaves its wants link; masked, it never starts.
+	if err := os.Symlink("/dev/null", root+"/etc/systemd/system/nftables.service"); err != nil {
+		t.Fatal(err)
+	}
+	if f := read(); !slices.Equal(f.FilterUnits, []string{"ufw.service"}) {
+		t.Fatalf("masked: facts %+v", f)
+	}
 }
 
 // A unit enabled for this boot only, or pulled in by a requires link, still replaces Andaru's ruleset.

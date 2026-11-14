@@ -43,6 +43,8 @@ type fakeNetworkd struct {
 	stopped            bool // networkd is not running: networkctl fails
 	// ifupdown, for hosts the Debian installer set up: ifupFails makes ifup@ and networking.service raise nothing.
 	ifupFails bool
+	// nftablesEnabled is what systemctl is-enabled says of the host's own nftables.service.
+	nftablesEnabled bool
 	// table is the comment of the loaded inet andaru table, "" when none is loaded; tableComment overrides what nft reports.
 	table, tableComment string
 	script              string                  // what nft -f last loaded
@@ -152,6 +154,26 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 			out.WriteString(p + " via " + f.routes[p] + " metric 1024 pref medium\n")
 		}
 		return []byte(out.String()), nil
+	case command == "systemctl is-enabled nftables.service":
+		if target, _ := os.Readlink(filepath.Join(f.root, nftablesUnit)); target == "/dev/null" {
+			return []byte("masked\n"), errors.New("exit status 1")
+		}
+		if f.nftablesEnabled {
+			return []byte("enabled\n"), nil
+		}
+		return []byte("disabled\n"), errors.New("exit status 1")
+	// A mask is a link to /dev/null in /etc, as systemctl makes it.
+	case strings.HasPrefix(command, "systemctl mask ") && strings.HasSuffix(command, " nftables.service"):
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(f.root, nftablesUnit)), 0o755); err != nil {
+			return nil, err
+		}
+		if err := os.Symlink("/dev/null", filepath.Join(f.root, nftablesUnit)); err != nil && !errors.Is(err, fs.ErrExist) {
+			return nil, err
+		}
+	case strings.HasPrefix(command, "systemctl unmask ") && strings.HasSuffix(command, " nftables.service"):
+		if err := os.Remove(filepath.Join(f.root, nftablesUnit)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
+		}
 	case command == "systemctl is-active --quiet systemd-networkd.service":
 		if f.stopped {
 			return nil, errors.New("inactive")

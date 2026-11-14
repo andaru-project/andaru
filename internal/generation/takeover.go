@@ -20,6 +20,9 @@ import (
 
 const cloudInitDisable = "/etc/cloud/cloud.cfg.d/99-andaru-network.cfg"
 
+// nftablesUnit is where systemctl masks Debian's nftables.service: a link to /dev/null.
+const nftablesUnit = "/etc/systemd/system/nftables.service"
+
 var netplanPath = regexp.MustCompile(`^/run/systemd/network/10-netplan-[^/]+$`)
 
 type baselineFile struct {
@@ -35,6 +38,8 @@ type baselineManifest struct {
 	Kind     string            `json:"kind"`
 	Files    []baselineFile    `json:"files"`
 	Ifupdown *IfupdownBaseline `json:"ifupdown,omitempty"`
+	// NftablesMasked records that the administrator had masked nftables.service before the takeover.
+	NftablesMasked bool `json:"nftablesMasked,omitempty"`
 }
 
 // IfupdownBaseline is what an ifupdown takeover captured: enough to hand the host back to ifupdown,
@@ -95,7 +100,7 @@ func (r Realizer) captureBaseline(p Pointers) error {
 	if err := os.MkdirAll(filepath.Join(r.baselineDir(), "files"), 0o700); err != nil {
 		return err
 	}
-	m := baselineManifest{Kind: "netplan", Files: []baselineFile{}}
+	m := baselineManifest{Kind: "netplan", Files: []baselineFile{}, NftablesMasked: r.nftablesMasked()}
 	for _, path := range paths {
 		info, err := os.Lstat(path)
 		if err != nil {
@@ -173,7 +178,8 @@ func (r Realizer) Confirm(ctx context.Context, id int) error {
 }
 
 // makePermanent stops what configured the network before Andaru from doing it again: netplan and cloud-init,
-// or ifupdown. Every step runs even after a failure and may be repeated; boot repeats all of them.
+// or ifupdown, and Debian's nftables.service. Every step runs even after a failure and may be repeated; boot
+// repeats all of them.
 func (r Realizer) makePermanent(ctx context.Context, reload bool, kind string) error {
 	var failures []error
 	step := func(name string, do func() error) {
@@ -198,6 +204,21 @@ func (r Realizer) makePermanent(ctx context.Context, reload bool, kind string) e
 		}
 		return errors.Join(failures...)
 	}
+	// Debian's nftables.service starts with "flush ruleset", so at a boot it would wipe Andaru's filter. It is masked
+	// here and not when the package is installed: until the takeover is confirmed, a reboot keeps the host's firewall.
+	step("permanent:nftables", func() error {
+		if r.nftablesMasked() {
+			return nil
+		}
+		// Confirm reloads last, once netplan's YAML is gone. Boot reloads now: a mask without one would not stop this
+		// boot from starting nftables.service and flushing Andaru's filter. Andaru's own files are not the generator's.
+		args := []string{"mask", "--no-reload", "nftables.service"}
+		if !reload {
+			args = []string{"mask", "nftables.service"}
+		}
+		_, err := r.Run(ctx, "/usr/bin/systemctl", args...)
+		return err
+	})
 	if kind == "ifupdown" {
 		step("permanent:enable", enable)
 		// Neither the boot service nor udev's hotplug may raise a taken interface again; /etc/network/interfaces stays as it was.
@@ -366,10 +387,26 @@ func (r Realizer) Boot(ctx context.Context) error {
 	if !captured || baseErr != nil {
 		return errors.Join(append(failures, baseErr, errors.New("no generation is usable; the host has no managed interface"))...)
 	}
+	// The mask is the takeover's: back on its own configuration, the host gets its own firewall back. Unmasking reloads
+	// systemd, whose netplan generator, the YAML gone, deletes netplan's files: so before they are placed.
+	unmasked := false
+	if r.ownsNftablesMask(p.Takeover) {
+		if _, err := r.Run(ctx, "/usr/bin/systemctl", "unmask", "nftables.service"); err != nil {
+			failures = append(failures, err)
+		} else {
+			unmasked = true
+		}
+	}
 	if err := r.place(nil, base); err != nil {
 		return err
 	}
 	p.Live = nil
+	// Andaru's table was dropped above.
+	if unmasked {
+		if err := r.startHostFirewall(ctx, false); err != nil {
+			failures = append(failures, err)
+		}
+	}
 	slog.Error("booting the pre-Andaru baseline; no generation is usable", "error", errors.Join(failures...))
 	return r.writePointers("boot:pointers", p)
 }
@@ -382,14 +419,54 @@ func (r Realizer) bootIfupdown(ctx context.Context, p Pointers, b IfupdownBaseli
 			failures = append(failures, err)
 		}
 	}
-	run("unmask", "networking.service", "ifup@.service")
+	owned := r.ownsNftablesMask(p.Takeover)
+	if owned {
+		run("unmask", "networking.service", "ifup@.service", "nftables.service")
+	} else {
+		run("unmask", "networking.service", "ifup@.service")
+	}
 	run("start", "--no-block", "networking.service")
 	for _, i := range b.Interfaces {
 		if i.Hotplug {
 			run("start", "--no-block", "ifup@"+i.Name+".service")
 		}
 	}
+	// Boot dropped Andaru's table before this; the host's own firewall must run this boot too.
+	if owned {
+		if err := r.startHostFirewall(ctx, false); err != nil {
+			failures = append(failures, err)
+		}
+	}
 	p.Live = nil
 	slog.Error("booting on ifupdown; no generation is usable", "error", errors.Join(failures...))
 	return r.writePointers("boot:pointers", p)
+}
+
+// startHostFirewall starts the host's own nftables.service, already unmasked, when the host enables it, so a hand-back
+// never leaves the host without a firewall until the next boot. Boot only queues it: waiting there would deadlock.
+func (r Realizer) startHostFirewall(ctx context.Context, wait bool) error {
+	out, _ := r.Run(ctx, "/usr/bin/systemctl", "is-enabled", "nftables.service")
+	if state := strings.TrimSpace(string(out)); state != "enabled" && state != "enabled-runtime" {
+		return nil
+	}
+	args := []string{"start", "--no-block", "nftables.service"}
+	if wait {
+		args = []string{"start", "nftables.service"}
+	}
+	_, err := r.Run(ctx, "/usr/bin/systemctl", args...)
+	return err
+}
+
+// nftablesMasked reports a persistent mask of nftables.service.
+func (r Realizer) nftablesMasked() bool {
+	target, _ := os.Readlink(r.Root + nftablesUnit)
+	return target == "/dev/null"
+}
+
+// ownsNftablesMask reports that the mask of nftables.service is the confirmed takeover's to remove: an administrator
+// who had masked it before the takeover keeps it at every hand-back.
+func (r Realizer) ownsNftablesMask(confirmed bool) bool {
+	var m baselineManifest
+	_, err := readJSON(filepath.Join(r.baselineDir(), "manifest.json"), &m)
+	return confirmed && err == nil && !m.NftablesMasked
 }

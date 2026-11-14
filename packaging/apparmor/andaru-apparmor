@@ -18,8 +18,8 @@ for daemon in kea-dhcp4 kea-dhcp6 unbound; do
 		fi
 		printf '%s\n' "$line" >>"$local_file"
 	fi
-	# Without a kernel AppArmor (a container) or the parser, the rules load at the next boot.
-	if [ -z "$root" ] && command -v apparmor_parser >/dev/null && [ -d /sys/kernel/security/apparmor ]; then
+	# Without a kernel AppArmor (a container, or an offline root without /sys) or the parser, the rules load at the next boot.
+	if command -v apparmor_parser >/dev/null && [ -d "$root/sys/kernel/security/apparmor" ]; then
 		if apparmor_parser -r -T -W "$profile"; then
 			# The daemon's own postinst may have started it before these rules were loaded (Andaru only recommends
 			# it, so it is configured first): its reads of Andaru's files were denied and it gave up. Start it again.

@@ -21,6 +21,15 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+          # All of main's history, for the ancestry check.
+          fetch-depth: 0
+
+      - name: Refuse a tag outside main
+        run: |
+          # Every host installs a release as root, so only a commit already on main may become one. HEAD is the
+          # tag's commit, also for an annotated tag.
+          git merge-base --is-ancestor HEAD origin/main ||
+            { echo "::error::$GITHUB_REF_NAME is not on main"; exit 1; }
 
       - name: Map the tag
         id: map

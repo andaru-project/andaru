@@ -64,6 +64,16 @@ func gatherGate(ctx context.Context, read hostReader, dir string, pointers gener
 	if gate.Result, err = render.Network(render.Input{Declaration: value, Secrets: secrets, Links: gate.Links, Facts: gate.Facts, DHCPIdentity: identity}); err != nil {
 		return gate, errors.Join(errRender, err)
 	}
+	if takeover {
+		// Confirming the takeover masks nftables.service, so it is no reason to refuse; firewalld and ufw are.
+		for i, f := range gate.Result.Findings {
+			if f.Code == "FOREIGN_FILTER" && f.Path == "nftables.service" {
+				gate.Result.Findings[i] = render.Finding{Severity: "warning", Code: f.Code, Path: f.Path,
+					Message: "nftables.service is enabled. Confirming the takeover masks it, so its ruleset is no longer loaded at boot."}
+			}
+		}
+		gate.Result.Realizable = !slices.ContainsFunc(gate.Result.Findings, func(f render.Finding) bool { return f.Severity == "error" })
+	}
 	if pointers.Live != nil {
 		live, err := generation.Read(dir, *pointers.Live)
 		if err == nil {

@@ -6,6 +6,8 @@ RequiresMountsFor=/var/lib/andaru
 After=systemd-remount-fs.service
 ConditionPathExists=/var/lib/andaru/generations/pointers.json
 Before=systemd-networkd.service systemd-resolved.service networking.service network-pre.target cloud-init-local.service shutdown.target
+# A mask boot restores must win over nftables.service starting and flushing Andaru's table.
+Before=nftables.service
 Conflicts=shutdown.target
 
 [Service]

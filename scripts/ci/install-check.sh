@@ -1,6 +1,6 @@
 #!/bin/sh
 # Checks the andaru package on a Debian 13 host booted with systemd: CI's container, or a lab VM.
-#   install-check.sh before   records the interfaces and routes, before installing
+#   install-check.sh before   records the interfaces, routes and unit invocations, before installing
 #   install-check.sh after    checks the installed package, and that installing changed no interface or route
 #   install-check.sh upgraded checks an upgrade restarted the engine and ran no oneshot
 # Run before, install, after, upgrade, upgraded within one boot: a reboot gives every unit a new InvocationID, so after
@@ -28,6 +28,8 @@ before)
 	mkdir -p "$state"
 	# network-boot runs at every boot; what counts is that installing or upgrading does not run it again.
 	invocation andaru-network-boot.service >"$state/network-boot"
+	# Installing or upgrading must never restart systemd-networkd: a restart can drop the administrator's link.
+	invocation systemd-networkd.service >"$state/networkd"
 	network >"$state/network" || fail "could not read the interfaces and routes"
 	;;
 after)
@@ -44,7 +46,8 @@ after)
 		/etc/apparmor.d/andaru/kea-dhcp6 /etc/apparmor.d/andaru/unbound; do
 		[ -e "$f" ] || fail "$f is missing"
 	done
-	[ "$(systemctl is-enabled nftables.service)" = masked ] || fail "nftables.service is not masked"
+	# A confirmed takeover masks it; until then a reboot must still load the host's own firewall.
+	[ "$(systemctl is-enabled nftables.service)" != masked ] || fail "installing masked nftables.service"
 	for unit in andaru-engine.service andaru-network-boot.service andaru-leases.path andaru-prefixes.path \
 		andaru-prefixes.timer; do
 		systemctl is-enabled --quiet "$unit" || fail "$unit is not enabled"
@@ -54,6 +57,7 @@ after)
 	done
 	[ "$(invocation andaru-network-boot.service)" = "$(cat "$state/network-boot")" ] ||
 		fail "installing ran andaru-network-boot.service"
+	[ "$(invocation systemd-networkd.service)" = "$(cat "$state/networkd")" ] || fail "installing restarted systemd-networkd"
 	andaru ctl links >/dev/null || fail "the engine does not answer"
 	for daemon in kea-dhcp4 kea-dhcp6 unbound; do
 		grep -qxF "include if exists <andaru/$daemon>" "/etc/apparmor.d/local/usr.sbin.$daemon" ||
@@ -70,6 +74,7 @@ upgraded)
 	systemctl is-active --quiet andaru-engine.service || fail "the engine is not running after the upgrade"
 	[ "$(invocation andaru-network-boot.service)" = "$(cat "$state/network-boot")" ] ||
 		fail "upgrading ran andaru-network-boot.service"
+	[ "$(invocation systemd-networkd.service)" = "$(cat "$state/networkd")" ] || fail "upgrading restarted systemd-networkd"
 	unchanged || fail "upgrading changed an interface or a route"
 	;;
 *)
