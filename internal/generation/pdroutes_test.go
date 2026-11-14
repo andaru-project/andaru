@@ -346,6 +346,24 @@ func TestDHCPv4NamesSurviveAFailedDHCPv6Sync(t *testing.T) {
 	}
 }
 
+// A route whose install failed is retried by the once-a-minute prefix run, not at the router's next event.
+func TestPDRouteRetriedByPrefixRun(t *testing.T) {
+	b := newBench(t)
+	b.kea6(pd("fd00:beef:1:100::/56"))
+	b.events("add fd00:beef:1:100::/56 fe80::1 ens19")
+	b.net.fail = "ip -6 route replace fd00:beef:1:100::/56"
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	b.net.fail, b.net.argv = "", nil
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if b.index("ip -6 route replace fd00:beef:1:100::/56 via fe80::1 dev ens19 proto 77") < 0 {
+		t.Fatalf("failed install not retried: %q", b.net.argv)
+	}
+}
+
 // A line the hook appends through a descriptor it opened before the sync moved the file still arrives.
 func TestPDEventAppendedLate(t *testing.T) {
 	b := newBench(t)

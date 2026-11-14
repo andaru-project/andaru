@@ -276,17 +276,22 @@ func (r Realizer) fillKea6(prefixes map[string]delegation.Held) ([]byte, bool, e
 }
 
 // SyncPrefixes follows the prefixes the WANs receive: Kea's DHCPv6 subnets on delegated segments, and the state
-// the engine shows. It runs on networkd's link changes, on a timer, and after the apply.
+// the engine shows. It runs on networkd's link changes, on a timer, and after the apply. It also reconciles the
+// delegated-prefix routes, so a route whose install failed is retried within a minute, not at the router's renewal.
 func (r Realizer) SyncPrefixes(ctx context.Context) error {
-	if links, _, _ := r.readDelegatedLinks(); len(links) == 0 {
-		return nil // nothing delegated: the timer's run touches nothing
+	links, _, _ := r.readDelegatedLinks()
+	if _, err := os.Stat(r.Root + kea6File); len(links) == 0 && os.IsNotExist(err) {
+		return nil // nothing delegated and no DHCPv6 server: the timer's run touches nothing
 	}
 	unlock, err := r.lock()
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	return r.syncPrefixes(ctx, true)
+	err = r.syncPrefixes(ctx, true)
+	// Only the routes matter here: the lease sync publishes the names.
+	_, routes := r.syncKea6(ctx, keaConfig{})
+	return errors.Join(err, routes)
 }
 
 // syncPrefixes holds the lock. A running Kea is handed the new configuration first, and the file written only

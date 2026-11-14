@@ -2,7 +2,7 @@
 Description=Andaru delegated IPv6 prefixes, repeated
 
 [Timer]
-# Repeats the deprecation of a replaced prefix and catches a missed link change.
+# Repeats the deprecation of a replaced prefix, catches a missed link change and retries delegated-prefix routes.
 OnBootSec=10s
 OnUnitActiveSec=60s
 

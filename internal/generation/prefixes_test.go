@@ -73,9 +73,12 @@ func (b *bench) delegatedLAN(prefix string, result int) *keaSetter {
 			}
 			var req map[string]json.RawMessage
 			_ = json.NewDecoder(bufio.NewReader(c)).Decode(&req)
-			k.mu.Lock()
-			k.sent = append(k.sent, string(req["arguments"]))
-			k.mu.Unlock()
+			// The prefix run also asks for leases to reconcile routes; only config-set is counted.
+			if string(req["command"]) == `"config-set"` {
+				k.mu.Lock()
+				k.sent = append(k.sent, string(req["arguments"]))
+				k.mu.Unlock()
+			}
 			answer := result
 			if b.keaRefuse != nil && b.keaRefuse.Load() {
 				answer = 1
