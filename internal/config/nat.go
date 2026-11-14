@@ -212,12 +212,14 @@ func validateNAT(d *declaration) []FieldError {
 		}
 	}
 	// A virtual address is the firewall's own, held for its services: 1:1 NAT takes it over in neither direction.
+	var virtual []netip.Addr
 	for _, v := range d.VirtualAddresses {
 		if a, e := netip.ParseAddr(v.Address); e == nil && a.Is4() {
-			own, primary = append(own, a), append(primary, a)
+			own, virtual = append(own, a), append(virtual, a)
 		}
 	}
 	holdsOwn := func(p netip.Prefix) bool { return slices.ContainsFunc(own, p.Contains) }
+	holdsVirtual := func(p netip.Prefix) bool { return slices.ContainsFunc(virtual, p.Contains) }
 	holdsPrimary := func(p netip.Prefix) bool { return slices.ContainsFunc(primary, p.Contains) }
 	externals := make([]netip.Prefix, len(d.NAT.OneToOne))
 	seen = map[string]bool{}
@@ -253,6 +255,8 @@ func validateNAT(d *declaration) []FieldError {
 		switch {
 		case !extOK:
 			bad(p+"/external", "Expected an IPv4 address or a prefix with its host bits zero.")
+		case holdsVirtual(external):
+			bad(p+"/external", "This range holds a virtual address, which belongs to a service on the firewall.")
 		case holdsPrimary(external):
 			bad(p+"/external", "This range holds a segment's first address, which the firewall's own traffic uses and 1:1 NAT would take over.")
 		case ok && external.Bits() != internal.Bits():

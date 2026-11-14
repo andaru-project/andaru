@@ -49,9 +49,9 @@ const template = `{"subnets":[{"id":7,"interface":"ens19","uplink":"ens18","subn
 	"valid-lifetime":7200,"preferred-lifetime":4500,"option-data":[],"user-context":{"andaru":{"domain":"home.arpa","register":true}}}]}`
 
 func TestFillTemplate(t *testing.T) {
-	subnets, skipped, err := fill(parse(t, template), long("2001:db8:aa00::/48"), now)
-	if err != nil || len(skipped) != 0 || len(subnets) != 1 {
-		t.Fatalf("%v %v %v", subnets, skipped, err)
+	subnets, skipped := FillTemplate(parse(t, template), long("2001:db8:aa00::/48"), now)
+	if len(skipped) != 0 || len(subnets) != 1 {
+		t.Fatalf("%v %v", subnets, skipped)
 	}
 	got, _ := json.Marshal(subnets[0])
 	for _, want := range []string{`"id":7`, `"subnet":"2001:db8:aa00:1::/64"`, `"interface":"ens19"`, `"pool":"2001:db8:aa00:1::1000 - 2001:db8:aa00:1::1fff"`,
@@ -66,16 +66,16 @@ func TestFillTemplate(t *testing.T) {
 	}
 	// A /56 has no room for subnet 100: the subnet is left out and named.
 	tpl := strings.Replace(template, `"subnetId":"1",`, `"subnetId":"100",`, 1)
-	subnets, skipped, err = fill(parse(t, tpl), long("2001:db8:aa00::/56"), now)
-	if err != nil || len(subnets) != 0 || len(skipped) != 1 || !strings.Contains(skipped[0], "ens19") {
-		t.Fatalf("%v %v %v", subnets, skipped, err)
+	subnets, skipped = FillTemplate(parse(t, tpl), long("2001:db8:aa00::/56"), now)
+	if len(subnets) != 0 || len(skipped) != 1 || !strings.Contains(skipped[0], "ens19") {
+		t.Fatalf("%v %v", subnets, skipped)
 	}
 	// No prefix for the uplink: nothing to serve, nothing reported.
-	if subnets, skipped, err = fill(parse(t, template), nil, now); err != nil || len(subnets) != 0 || len(skipped) != 0 {
-		t.Fatalf("%v %v %v", subnets, skipped, err)
+	if subnets, skipped = FillTemplate(parse(t, template), nil, now); len(subnets) != 0 || len(skipped) != 0 {
+		t.Fatalf("%v %v", subnets, skipped)
 	}
 	// A pool that does not fit leaves the subnet served without it.
-	subnets, skipped, _ = fill(parse(t, strings.Replace(template, `"subnetId":"8"`, `"subnetId":"10"`, 1)), long("2001:db8:aa00::/56"), now)
+	subnets, skipped = FillTemplate(parse(t, strings.Replace(template, `"subnetId":"8"`, `"subnetId":"10"`, 1)), long("2001:db8:aa00::/56"), now)
 	if got, _ := json.Marshal(subnets); len(subnets) != 1 || strings.Contains(string(got), "pd-pools") || strings.Contains(string(got), "prefixes") || len(skipped) != 1 {
 		t.Fatalf("%s %v", got, skipped)
 	}
@@ -100,9 +100,9 @@ func TestFillTemplateBoundsLifetimes(t *testing.T) {
 		{0, 300 * time.Second, `"preferred-lifetime":0,`},
 	} {
 		held := map[string]Held{"ens18": {Prefix: netip.MustParsePrefix("2001:db8:aa00::/48"), Preferred: now.Add(tc.preferred), Valid: now.Add(tc.valid)}}
-		subnets, _, err := fill(parse(t, template), held, now)
+		subnets, _ := FillTemplate(parse(t, template), held, now)
 		got, _ := json.Marshal(subnets)
-		if err != nil || !strings.Contains(string(got), tc.want) {
+		if !strings.Contains(string(got), tc.want) {
 			t.Fatalf("%v/%v: missing %s in %s", tc.preferred, tc.valid, tc.want, got)
 		}
 		wantValid := map[time.Duration]string{480 * time.Hour: `"valid-lifetime":7200`, 4000 * time.Second: `"valid-lifetime":3600`, 300 * time.Second: `"valid-lifetime":300`}[tc.valid]
@@ -119,10 +119,4 @@ func parse(t *testing.T, raw string) Template {
 		t.Fatal(err)
 	}
 	return tpl
-}
-
-// fill is FillTemplate with the error slot the table tests compare against nil.
-func fill(tpl Template, prefixes map[string]Held, now time.Time) ([]map[string]any, []string, error) {
-	subnets, skipped := FillTemplate(tpl, prefixes, now)
-	return subnets, skipped, nil
 }
