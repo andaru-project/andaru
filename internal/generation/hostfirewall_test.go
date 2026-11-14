@@ -1,12 +1,50 @@
 package generation
 
 import (
+	"context"
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
+
+// The host's nftables.service is started for what systemctl is-enabled calls enabled, for this boot only included.
+func TestStartHostFirewallStates(t *testing.T) {
+	for state, start := range map[string]bool{"enabled": true, "enabled-runtime": true, "disabled": false, "masked": false, "static": false} {
+		var ran []string
+		r := Realizer{Run: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			ran = append(ran, filepath.Base(name)+" "+strings.Join(args, " "))
+			if args[0] == "is-enabled" {
+				return []byte(state + "\n"), nil
+			}
+			return nil, nil
+		}}
+		if err := r.startHostFirewall(t.Context(), true); err != nil {
+			t.Fatal(err)
+		}
+		if slices.Contains(ran, "systemctl start nftables.service") != start {
+			t.Errorf("%s: %q", state, ran)
+		}
+	}
+}
+
+// Only a link to /dev/null is a mask; a link to the unit file, as an administrator's copy may be, is not.
+func TestNftablesMaskedIsALinkToDevNull(t *testing.T) {
+	for target, masked := range map[string]bool{"/dev/null": true, "/usr/lib/systemd/system/nftables.service": false} {
+		r := Realizer{Root: t.TempDir()}
+		if err := os.MkdirAll(filepath.Dir(r.Root+nftablesUnit), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, r.Root+nftablesUnit); err != nil {
+			t.Fatal(err)
+		}
+		if r.nftablesMasked() != masked {
+			t.Errorf("link to %s: masked %v", target, !masked)
+		}
+	}
+}
 
 // handBacks are the ways a confirmed takeover gives the host back its own network configuration.
 var handBacks = map[string]struct {

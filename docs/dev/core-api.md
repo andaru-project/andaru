@@ -486,6 +486,7 @@ sudo systemctl disable --now andaru-engine.service andaru-network-boot.service
 sudo mv /var/lib/andaru/generations/baseline/netplan/*.yaml /etc/netplan/
 sudo rm /etc/cloud/cloud.cfg.d/99-andaru-network.cfg
 sudo systemctl enable systemd-networkd-wait-online.service
+# Skip this if you masked nftables.service yourself before the takeover.
 sudo systemctl unmask nftables.service
 sudo rm -r /var/lib/andaru/generations
 sudo reboot
@@ -508,7 +509,9 @@ To undo a confirmed ifupdown takeover by hand, from the console:
 
 ```sh
 sudo systemctl disable --now andaru-engine.service andaru-network-boot.service
-sudo systemctl unmask networking.service ifup@.service nftables.service
+sudo systemctl unmask networking.service ifup@.service
+# Skip this if you masked nftables.service yourself before the takeover.
+sudo systemctl unmask nftables.service
 sudo systemctl disable systemd-networkd.service
 sudo systemctl enable systemd-networkd-wait-online.service
 sudo rm -r /var/lib/andaru/generations
