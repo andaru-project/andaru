@@ -2,7 +2,7 @@
 # Checks the andaru package on a Debian 13 host booted with systemd: CI's container, or a lab VM.
 #   install-check.sh before   records the interfaces and routes, before installing
 #   install-check.sh after    checks the installed package, and that installing changed no interface or route
-#   install-check.sh upgraded checks an upgrade restarted the engine and ran no oneshot
+#   install-check.sh upgraded checks an upgrade restarted the engine and ran no oneshot (after before and after)
 set -eu
 
 state=/var/tmp/andaru-install-check
@@ -24,6 +24,8 @@ invocation() { systemctl show -P InvocationID "$1"; }
 case ${1-} in
 before)
 	mkdir -p "$state"
+	# network-boot runs at every boot; what counts is that installing or upgrading does not run it again.
+	invocation andaru-network-boot.service >"$state/network-boot"
 	network >"$state/network" || fail "could not read the interfaces and routes"
 	;;
 after)
@@ -48,7 +50,8 @@ after)
 	for unit in andaru-engine.service andaru-leases.path andaru-prefixes.path andaru-prefixes.timer; do
 		systemctl is-active --quiet "$unit" || fail "$unit is not active"
 	done
-	[ -z "$(invocation andaru-network-boot.service)" ] || fail "installing ran andaru-network-boot.service"
+	[ "$(invocation andaru-network-boot.service)" = "$(cat "$state/network-boot")" ] ||
+		fail "installing ran andaru-network-boot.service"
 	andaru ctl links >/dev/null || fail "the engine does not answer"
 	for daemon in kea-dhcp4 kea-dhcp6 unbound; do
 		grep -qxF "include if exists <andaru/$daemon>" "/etc/apparmor.d/local/usr.sbin.$daemon" ||
@@ -63,7 +66,8 @@ after)
 upgraded)
 	[ "$(invocation andaru-engine.service)" != "$(cat "$state/engine")" ] || fail "the upgrade did not restart the engine"
 	systemctl is-active --quiet andaru-engine.service || fail "the engine is not running after the upgrade"
-	[ -z "$(invocation andaru-network-boot.service)" ] || fail "upgrading ran andaru-network-boot.service"
+	[ "$(invocation andaru-network-boot.service)" = "$(cat "$state/network-boot")" ] ||
+		fail "upgrading ran andaru-network-boot.service"
 	unchanged || fail "upgrading changed an interface or a route"
 	;;
 *)
