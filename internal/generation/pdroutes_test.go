@@ -152,11 +152,9 @@ func TestPDEventFileHostile(t *testing.T) {
 			_ = os.Symlink(target, path)
 		},
 		"other owner": func(b *bench, path string) {
-			if os.Getuid() != 0 {
-				b.t.Skip("giving a file to another owner needs root")
-			}
 			writeFile(b.t, path, "add fd00:beef:1:100::/56 fe80::1 ens19\n")
-			_ = os.Chown(path, 0, 0)
+			// The file stays the test's own; Kea is another user, as no unprivileged test could make it.
+			b.r.keaUID = func() uint32 { return uint32(os.Getuid()) + 1 }
 		},
 		"oversized": func(b *bench, path string) {
 			writeFile(b.t, path, "add fd00:beef:1:100::/56 fe80::1 ens19\n"+strings.Repeat("#", 2<<20))
@@ -177,7 +175,7 @@ func TestPDEventFileHostile(t *testing.T) {
 	}
 }
 
-// Only protocol 188 routes nobody leases are removed.
+// Only protocol 77 routes nobody leases are removed.
 func TestPDRouteRemoval(t *testing.T) {
 	b := newBench(t)
 	b.kea6()

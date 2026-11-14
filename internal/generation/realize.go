@@ -53,6 +53,8 @@ type Realizer struct {
 	failAt func(step string) error
 	// afterLeaseRead lets tests act while a lease sync is running.
 	afterLeaseRead func()
+	// keaUID lets unprivileged tests name a Kea user other than their own; nil: the owner of /run/kea.
+	keaUID func() uint32
 }
 
 // placed is one file as it must exist under /run.

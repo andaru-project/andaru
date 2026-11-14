@@ -12,7 +12,6 @@ import (
 	"maps"
 	"net/netip"
 	"os"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -35,9 +34,6 @@ const (
 	// pdEventsMax bounds what a hostile or runaway hook can make root read.
 	pdEventsMax = 1 << 20
 )
-
-// validInterface is a kernel interface name: what the hook may name, and nothing that could be read as more.
-var validInterface = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,15}$`)
 
 type nextHop struct {
 	Via string `json:"via"`
@@ -350,7 +346,7 @@ func (r Realizer) takeEvents() ([]string, func()) {
 }
 
 // readEvents reads a batch in root's own directory, believing nothing of a file that is not a regular one
-// owned by Kea, the owner of its directory, or that is too large; a refused batch is deleted.
+// owned by Kea, the owner of its directory, or that is too large; done() moves a refused batch aside with the rest.
 func (r Realizer) readEvents(path string) []string {
 	// Root's own directory holds it, so what Lstat sees is what Open gets: a FIFO would block, a directory
 	// would stop every later rename.
@@ -370,7 +366,6 @@ func (r Realizer) readEvents(path string) []string {
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		slog.Warn("delegated prefix events refused", "error", err)
-		os.Remove(path)
 		return nil
 	}
 	defer f.Close()
@@ -380,9 +375,11 @@ func (r Realizer) readEvents(path string) []string {
 	}
 	owner, ok := info.Sys().(*syscall.Stat_t)
 	kea, _ := dir.Sys().(*syscall.Stat_t)
+	if kea != nil && r.keaUID != nil {
+		kea = &syscall.Stat_t{Uid: r.keaUID()}
+	}
 	if !info.Mode().IsRegular() || !ok || kea == nil || owner.Uid != kea.Uid || info.Size() > pdEventsMax {
 		slog.Warn("delegated prefix events refused: not a regular file of Kea's, or too large")
-		os.Remove(path)
 		return nil
 	}
 	data, err := io.ReadAll(io.LimitReader(f, pdEventsMax))
@@ -395,7 +392,7 @@ func (r Realizer) readEvents(path string) []string {
 // parseEvent reads "add|del <prefix> <link-local next hop> <interface>".
 func parseEvent(line string) (string, netip.Prefix, nextHop, bool) {
 	f := strings.Fields(line)
-	if len(f) != 4 || f[0] != "add" && f[0] != "del" || !validInterface.MatchString(f[3]) {
+	if len(f) != 4 || f[0] != "add" && f[0] != "del" {
 		return "", netip.Prefix{}, nextHop{}, false
 	}
 	p, err := netip.ParsePrefix(f[1])
