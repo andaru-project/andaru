@@ -119,6 +119,7 @@ func validateDelegatedDHCP6(d *declaration, wan segment, e dhcp6Entry, p string,
 			default:
 				wanPools[wan.ID] = append(wanPools[wan.ID], pool)
 				idBits = pd.DelegatedLength - pd.Length
+				pd.SubnetID = strconv.FormatUint(n, 16)
 			}
 		}
 	}
@@ -165,6 +166,7 @@ func validateDelegatedDHCP6(d *declaration, wan segment, e dhcp6Entry, p string,
 				bad(lp+"/prefixId", "This position already has a static lease.")
 			default:
 				ids[n] = true
+				e.StaticLeases[j].PrefixID = strconv.FormatUint(n, 16)
 			}
 		}
 		if l.Hostname != "" && !dnsLabel.MatchString(l.Hostname) {

@@ -81,12 +81,11 @@ func ReadPrefixView(root string) (PrefixView, error) {
 		}
 		bits := max(0, min(64-length, 16))
 		w.SubnetIDs = IDRange{"0", strconv.FormatUint(uint64(1)<<bits-1, 16)}
-		place := func(iface, id string, at int, what string) PlaceView {
-			v := PlaceView{Interface: iface, SubnetID: id}
+		place := func(iface string, n uint64, at int, what string) PlaceView {
+			v := PlaceView{Interface: iface, SubnetID: strconv.FormatUint(n, 16)}
 			if !base.IsValid() {
 				return v
 			}
-			n, _ := strconv.ParseUint(id, 16, 16)
 			if p, ok := delegation.Place(base, n, at); ok {
 				s := p.String()
 				v.Prefix = &s
@@ -97,12 +96,13 @@ func ReadPrefixView(root string) (PrefixView, error) {
 		}
 		for _, l := range links {
 			if l.Uplink == up {
-				w.Segments = append(w.Segments, place(l.Interface, strconv.FormatUint(l.SubnetID, 16), 64, "subnet"))
+				w.Segments = append(w.Segments, place(l.Interface, l.SubnetID, 64, "subnet"))
 			}
 		}
 		for _, s := range tpl.Subnets {
 			if s.Uplink == up && s.Pool != nil {
-				w.Pools = append(w.Pools, place(s.Interface, s.Pool.SubnetID, s.Pool.Length, "delegation pool"))
+				n, _ := strconv.ParseUint(s.Pool.SubnetID, 16, 16)
+				w.Pools = append(w.Pools, place(s.Interface, n, s.Pool.Length, "delegation pool"))
 			}
 		}
 		view.WANs = append(view.WANs, w)

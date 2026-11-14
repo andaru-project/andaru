@@ -30,7 +30,8 @@ func TestPrefixesStatus(t *testing.T) {
 	writeUnder(t, root, "/run/systemd/network/50-andaru-ens18.network", "[DHCPv6]\nPrefixDelegationHint=::/48\n")
 	writeUnder(t, root, "/run/systemd/network/50-andaru-ens19.network", "[Network]\nIPv6SendRA=yes\n[DHCPPrefixDelegation]\nUplinkInterface=ens18\nSubnetId=0x1\n")
 	writeUnder(t, root, "/run/systemd/network/50-andaru-ens20.network", "[Network]\nIPv6SendRA=yes\n[DHCPPrefixDelegation]\nUplinkInterface=ens18\nSubnetId=0x100\n")
-	writeUnder(t, root, "/run/andaru-kea/kea-dhcp6.template.json", `{"subnets":[{"id":7,"interface":"ens19","uplink":"ens18","subnetId":"1","pool":{"subnetId":"8","length":60,"delegatedLength":64}}]}`)
+	// "0A": a generation rendered before positions were stored canonically; the view still matches its schema.
+	writeUnder(t, root, "/run/andaru-kea/kea-dhcp6.template.json", `{"subnets":[{"id":7,"interface":"ens19","uplink":"ens18","subnetId":"1","pool":{"subnetId":"0A","length":60,"delegatedLength":64}}]}`)
 	h := newHandler(nil, http.NotFoundHandler())
 	get := func() map[string]any {
 		t.Helper()
@@ -61,7 +62,7 @@ func TestPrefixesStatus(t *testing.T) {
 	if s := segments[1].(map[string]any); s["interface"] != "ens20" || s["prefix"] != nil {
 		t.Fatalf("%v", segments)
 	}
-	if p := w["pools"].([]any)[0].(map[string]any); p["interface"] != "ens19" || p["prefix"] != "2001:db8:aa00:80::/60" {
+	if p := w["pools"].([]any)[0].(map[string]any); p["interface"] != "ens19" || p["subnetId"] != "a" || p["prefix"] != "2001:db8:aa00:a0::/60" {
 		t.Fatalf("%v", w["pools"])
 	}
 	if nf := w["notFitting"].([]any); len(nf) != 1 {
