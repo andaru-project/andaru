@@ -354,6 +354,9 @@ func TestFixedPrefixRouted(t *testing.T) {
 func TestStaticNameOnDelegated(t *testing.T) {
 	b := newBench(t)
 	b.filled()
+	// One device, its static name in both families: the DHCPv4 one does not hold back the DHCPv6 one.
+	b.kea()
+	writeFile(t, filepath.Join(b.net.root, keaFile), strings.Replace(leaseKea, `"nas"`, `"router"`, 1))
 	if err := b.r.SyncLeases(t.Context()); err != nil {
 		t.Fatal(err)
 	}

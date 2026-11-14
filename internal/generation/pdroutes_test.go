@@ -201,7 +201,8 @@ func TestPDRoutesAfterReboot(t *testing.T) {
 	}
 }
 
-// Names are kept per family: a static DHCPv4 name does not block a DHCPv6 client's AAAA record.
+// A dynamic DHCPv6 name is not published when the name is static in either family: a client cannot take over a
+// DHCPv4-only device's name for AAAA.
 func TestDHCPv6Names(t *testing.T) {
 	b := newBench(t)
 	b.kea(lease{"192.168.40.130", "laptop", 0, 1, 7200, 100})
@@ -214,13 +215,13 @@ func TestDHCPv6Names(t *testing.T) {
 		t.Fatal(err)
 	}
 	names := b.leaseNames()
-	for _, want := range []string{`"router.home.arpa. 1333 IN AAAA fd00:1::1003"`, `"laptop.home.arpa. 2400 IN A 192.168.40.130"`, `"nas.home.arpa. 1333 IN AAAA fd00:1::1002"`, `"fd00:1::1002 1333 nas.home.arpa."`} {
+	for _, want := range []string{`"router.home.arpa. 1333 IN AAAA fd00:1::1003"`, `"laptop.home.arpa. 2400 IN A 192.168.40.130"`} {
 		if !strings.Contains(names, want) {
 			t.Fatalf("missing %s in:\n%s", want, names)
 		}
 	}
-	if strings.Contains(names, "fd00:1::1001") {
-		t.Fatalf("a dynamic lease took a static DHCPv6 name:\n%s", names)
+	if strings.Contains(names, "fd00:1::1001") || strings.Contains(names, "fd00:1::1002") {
+		t.Fatalf("a dynamic lease took a static name:\n%s", names)
 	}
 }
 
@@ -315,12 +316,30 @@ func TestDHCPv6NamesDuringADeadDHCPv4(t *testing.T) {
 	writeFile(t, filepath.Join(b.net.root, keaFile), leaseKea)
 	old := "server:\n\tlocal-data: \"laptop.home.arpa. 2400 IN A 192.168.40.130\"\n\tlocal-data-ptr: \"192.168.40.130 2400 laptop.home.arpa.\"\n"
 	writeFile(t, filepath.Join(b.net.root, leasesDir, "leases.conf"), old)
-	b.kea6(lease6{Address: "fd00:1::1002", Type: "IA_NA", Hostname: "nas", Subnet: 1, Valid: 4000, Cltt: 100})
+	b.kea6(lease6{Address: "fd00:1::1002", Type: "IA_NA", Hostname: "phone", Subnet: 1, Valid: 4000, Cltt: 100})
 	if err := b.r.SyncLeases(t.Context()); err == nil {
 		t.Fatal("a dead DHCPv4 server went unreported")
 	}
 	names := b.leaseNames()
-	for _, want := range []string{`"nas.home.arpa. 1333 IN AAAA fd00:1::1002"`, `"laptop.home.arpa. 2400 IN A 192.168.40.130"`, `"192.168.40.130 2400 laptop.home.arpa."`} {
+	for _, want := range []string{`"phone.home.arpa. 1333 IN AAAA fd00:1::1002"`, `"laptop.home.arpa. 2400 IN A 192.168.40.130"`, `"192.168.40.130 2400 laptop.home.arpa."`} {
+		if !strings.Contains(names, want) {
+			t.Fatalf("missing %s in:\n%s", want, names)
+		}
+	}
+}
+
+// A DHCPv6 sync that fails keeps its own names as published and still lets DHCPv4's be updated.
+func TestDHCPv4NamesSurviveAFailedDHCPv6Sync(t *testing.T) {
+	b := newBench(t)
+	b.kea(lease{"192.168.40.130", "laptop", 0, 1, 7200, 100})
+	writeFile(t, filepath.Join(b.net.root, kea6File), "{")
+	old := "server:\n\tlocal-data: \"nas.home.arpa. 1333 IN AAAA fd00:1::1002\"\n"
+	writeFile(t, filepath.Join(b.net.root, leasesDir, "leases.conf"), old)
+	if err := b.r.SyncLeases(t.Context()); err == nil {
+		t.Fatal("the failed DHCPv6 sync went unreported")
+	}
+	names := b.leaseNames()
+	for _, want := range []string{`"laptop.home.arpa. 2400 IN A 192.168.40.130"`, `"nas.home.arpa. 1333 IN AAAA fd00:1::1002"`} {
 		if !strings.Contains(names, want) {
 			t.Fatalf("missing %s in:\n%s", want, names)
 		}

@@ -67,8 +67,8 @@ type kea6Config struct {
 }
 
 // syncKea6 returns the DHCPv6 lease names and reconciles the delegated-prefix routes; without a DHCPv6 server
-// it removes every route it installed.
-func (r Realizer) syncKea6(ctx context.Context) ([]string, error) {
+// it removes every route it installed. v4 is the DHCPv4 server's configuration, whose static names it keeps.
+func (r Realizer) syncKea6(ctx context.Context, v4 keaConfig) ([]string, error) {
 	var cfg kea6Config
 	var leases []keaLease
 	// Taken before the lease list: the hook runs after Kea commits, so any lease an event names is in the list.
@@ -107,13 +107,18 @@ func (r Realizer) syncKea6(ctx context.Context) ([]string, error) {
 	if err := r.syncRoutes(ctx, leases, table, served, pools, r.waitingInterfaces(cfg)); err != nil {
 		return nil, err
 	}
-	return lease6Records(cfg, leases), nil
+	return lease6Records(cfg, leases, v4), nil
 }
 
-// lease6Records turns assigned address leases with valid names into AAAA and PTR records. DHCPv6's own static
-// names win over its leases; DHCPv4's do not, since one device carries its name in both families.
-func lease6Records(cfg kea6Config, leases []keaLease) []string {
+// lease6Records turns assigned address leases with valid names into AAAA and PTR records. A name static in either
+// family wins over the leases: a DHCPv6 client cannot claim a DHCPv4-only device's name for AAAA.
+func lease6Records(cfg kea6Config, leases []keaLease, v4 keaConfig) []string {
 	domains, taken := map[int]string{}, map[string]bool{}
+	for _, s := range v4.Dhcp4.Subnet4 {
+		for _, res := range s.Reservations {
+			taken[strings.ToLower(res.Hostname)] = true
+		}
+	}
 	for _, s := range cfg.Dhcp6.Subnet6 {
 		for _, res := range s.Reservations {
 			// Only a static address publishes the name; a static prefix alone leaves it to the dynamic lease.

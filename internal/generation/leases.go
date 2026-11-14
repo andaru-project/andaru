@@ -155,35 +155,38 @@ func (r Realizer) syncLeases(ctx context.Context) error {
 		return err
 	}
 	defer unlock()
-	// DHCPv6 first: its routes are reconciled even when the DHCPv4 server does not answer.
-	v6, err := r.syncKea6(ctx)
-	if err != nil {
-		return err
-	}
-	records := []string{}
+	// DHCPv4 first: its static names keep DHCPv6 clients from claiming them. A failure in either family keeps
+	// that family's names as published, still updates the other's, and is reported.
+	var cfg keaConfig
+	var leases []keaLease
 	var failed error
+	records := []string{}
 	raw, err := os.ReadFile(r.Root + keaFile)
+	if err == nil {
+		if err = json.Unmarshal(raw, &cfg); err != nil {
+			err = fmt.Errorf("read the DHCP server's configuration: %w", err)
+		}
+	}
+	if err == nil {
+		if leases, err = r.keaLeases(ctx); err != nil {
+			err = fmt.Errorf("ask the DHCP server for its leases: %w", err)
+		}
+	}
 	switch {
 	case os.IsNotExist(err):
 		// No DHCP server: nothing to publish.
 	case err != nil:
-		return err
+		failed, records = err, r.publishedNames(false)
 	default:
-		var cfg keaConfig
-		if err := json.Unmarshal(raw, &cfg); err != nil {
-			return fmt.Errorf("read the DHCP server's configuration: %w", err)
-		}
-		leases, err := r.keaLeases(ctx)
-		if err != nil {
-			// Its names stay as published; DHCPv6's are still updated, and the failure is reported.
-			failed = fmt.Errorf("ask the DHCP server for its leases: %w", err)
-			records = r.publishedNames(false)
-			break
-		}
 		if r.afterLeaseRead != nil {
 			r.afterLeaseRead()
 		}
 		records = leaseRecords(cfg, leases)
+	}
+	// Its routes are reconciled whatever the DHCPv4 server does.
+	v6, err := r.syncKea6(ctx, cfg)
+	if err != nil {
+		v6, failed = r.publishedNames(true), errors.Join(failed, err)
 	}
 	records = append(records, v6...)
 	body := "server:\n"
