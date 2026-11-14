@@ -317,7 +317,11 @@ func (r Realizer) syncPrefixes(ctx context.Context, reconfigure bool) error {
 	if reconfigure {
 		r.sendDeprecations(links, list, now)
 	}
-	return errors.Join(keaErr, recordErr, r.saveState(before, state))
+	if recordErr != nil {
+		// Unsaved, the change is seen again next run and recorded then; saved, it would be deprecated only once.
+		return errors.Join(keaErr, recordErr)
+	}
+	return errors.Join(keaErr, r.saveState(before, state))
 }
 
 // serveKea6 fills Kea's file with prefixes. A running Kea is handed the new configuration first, and the file

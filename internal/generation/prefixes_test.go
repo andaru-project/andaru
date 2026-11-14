@@ -703,6 +703,39 @@ func TestPrefixesStateUnwritable(t *testing.T) {
 	}
 }
 
+// A replaced list that cannot be written keeps the change unsaved, so a later run sees it again and the old prefix
+// is still deprecated once the list can be written.
+func TestPrefixesReplacedListUnwritable(t *testing.T) {
+	b := newBench(t)
+	s := &sent{}
+	b.r.SendRA = s.record
+	b.delegatedLAN("2001:db8:aa00::/48", -1)
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	b.prefix("2001:db8:bb00::/48", 3600, 7200)
+	list := filepath.Join(b.net.root, replacedPrefixes)
+	os.Remove(list)
+	if err := os.MkdirAll(filepath.Join(list, "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.SyncPrefixes(t.Context()); err == nil {
+		t.Fatal("an unwritable replaced list went unreported")
+	}
+	if err := os.RemoveAll(list); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		b.now = b.now.Add(time.Minute)
+		if err := b.r.SyncPrefixes(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := s.list(); len(got) != 4 || !strings.HasPrefix(got[3], "ens19 2001:db8:aa00:1::/64") {
+		t.Fatalf("deprecation not continued: %v", got)
+	}
+}
+
 // The current prefix's lifetimes follow what networkd reports, also when it stops being preferred.
 func TestCurrentPrefixLifetimesRefreshed(t *testing.T) {
 	b := newBench(t)
