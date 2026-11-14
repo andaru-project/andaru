@@ -469,3 +469,20 @@ func TestDHCPv6Gates(t *testing.T) {
 		t.Fatalf("delegation without the filter: %v", got)
 	}
 }
+
+func TestVirtualDNSGate(t *testing.T) {
+	gate := func(declaration string) []render.Finding {
+		in := taken()
+		in.Declaration = []byte(declaration)
+		return applyFindings(in)
+	}
+	plain := `"links":[{"kind":"ethernet","enabled":true}],"segments":[{"id":"seg_a","addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"none"}}}]`
+	dns := `"dns":{"mode":"recursive","segments":[],"virtualAddresses":["vip_a"]}`
+	got := gate(`{` + plain + `,` + dns + `}`)
+	if len(got) != 1 || got[0].Path != "/dns/virtualAddresses" || got[0].Message != "The DNS service on virtual addresses needs the packet filter, which needs a management segment. Set management.segment." {
+		t.Fatalf("without the filter: %+v", got)
+	}
+	if got := gate(`{"management":{"segment":"seg_a"},` + plain + `,` + dns + `}`); len(got) != 0 {
+		t.Fatalf("with the filter: %+v", got)
+	}
+}

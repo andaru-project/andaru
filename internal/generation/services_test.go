@@ -286,3 +286,32 @@ func TestDroppingDHCPv6StartsTheSync(t *testing.T) {
 		t.Fatalf("no sync after dropping DHCPv6: %q", b.net.argv)
 	}
 }
+
+const (
+	vipNetdev  = "[NetDev]\nName=andaru-vip\nKind=dummy\n"
+	vipNetwork = "[Match]\nName=andaru-vip\n\n[Link]\nRequiredForOnline=no\n\n[Network]\nLinkLocalAddressing=no\nLLDP=no\nAddress=172.16.53.53/32\nAddress=fd00:53:53:53:53:53:53:53/128\n"
+)
+
+// The dummy device comes up with the generation, and goes with the last virtual address: networkd alone would
+// leave it holding its IPv6 address.
+func TestVirtualAddressDevice(t *testing.T) {
+	b := newBench(t)
+	b.live(map[string]string{"50-andaru-eth0.network": uplinkDHCP})
+	id := b.gen(false, map[string]string{"50-andaru-eth0.network": uplinkDHCP, "50-andaru-andaru-vip.netdev": vipNetdev, "50-andaru-andaru-vip.network": vipNetwork})
+	if err := b.r.Activate(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if !b.net.devices["andaru-vip"] {
+		t.Fatal("the dummy device was not created")
+	}
+	if err := b.r.Confirm(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	b.net.argv = nil
+	if err := b.r.Activate(t.Context(), b.gen(false, map[string]string{"50-andaru-eth0.network": uplinkDHCP})); err != nil {
+		t.Fatal(err)
+	}
+	if b.index("networkctl delete andaru-vip") < b.index("networkctl reload") || b.index("networkctl delete andaru-vip") < 0 {
+		t.Fatalf("the dummy device was not deleted: %q", b.net.argv)
+	}
+}
