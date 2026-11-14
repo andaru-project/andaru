@@ -726,6 +726,7 @@ func TestPrefixViewDamagedTemplate(t *testing.T) {
 // A pool whose own segment does not fit the prefix is not served: the view shows it without a prefix and names it.
 func TestPrefixViewPoolOfSegmentNotFitting(t *testing.T) {
 	b := newBench(t)
+	b.now = time.Now() // the view reads the real clock
 	b.delegatedLAN("2001:db8:aa00::/56", -1)
 	writeFile(t, filepath.Join(b.net.root, netDir, "50-andaru-ens19.network"), strings.Replace(lanNetwork, "SubnetId=0x1", "SubnetId=0x100", 1))
 	writeFile(t, filepath.Join(b.net.root, kea6Template), strings.Replace(templateBody, `"subnetId":"1",`, `"subnetId":"100",`, 1))
@@ -738,6 +739,20 @@ func TestPrefixViewPoolOfSegmentNotFitting(t *testing.T) {
 	}
 	w := view.WANs[0]
 	if len(w.Pools) != 1 || w.Pools[0].Prefix != nil || !slices.Contains(w.NotFitting, "the delegation pool of ens19") {
+		t.Fatalf("%+v", w)
+	}
+}
+
+// A saved prefix past its valid lifetime is not served, so the view shows none instead of an expired current.
+func TestPrefixViewExpiredCurrent(t *testing.T) {
+	b := newBench(t)
+	b.delegatedLAN("", -1)
+	writeFile(t, filepath.Join(b.net.root, delegatedState), `{"wans":{"ens18":{"requested":48,"current":{"prefix":"2001:db8:aa00::/48","preferred":"2001-01-01T00:00:00Z","valid":"2001-01-01T00:00:00Z"}}}}`)
+	view, err := ReadPrefixView(b.net.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := view.WANs[0]; w.Current != nil || w.Segments[0].Prefix != nil {
 		t.Fatalf("%+v", w)
 	}
 }

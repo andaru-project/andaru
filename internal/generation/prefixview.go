@@ -75,7 +75,8 @@ func ReadPrefixView(root string) (PrefixView, error) {
 		w := WANView{Interface: up, Requested: hints[up], Segments: []PlaceView{}, Pools: []PlaceView{}, NotFitting: []string{}}
 		length := cmp.Or(hints[up], 64)
 		var base netip.Prefix
-		if c := state.WANs[up].Current; c != nil {
+		// Past its valid lifetime the prefix is no longer served, as the prefix sync decides.
+		if c := state.WANs[up].Current; c != nil && c.Valid.After(time.Now()) {
 			w.Current = &HeldView{c.Prefix.String(), c.Preferred, c.Valid}
 			base, length = c.Prefix, c.Prefix.Bits()
 		}
