@@ -73,9 +73,12 @@ func (b *bench) delegatedLAN(prefix string, result int) *keaSetter {
 			}
 			var req map[string]json.RawMessage
 			_ = json.NewDecoder(bufio.NewReader(c)).Decode(&req)
-			k.mu.Lock()
-			k.sent = append(k.sent, string(req["arguments"]))
-			k.mu.Unlock()
+			// The prefix run also asks for leases to reconcile routes; only config-set is counted.
+			if string(req["command"]) == `"config-set"` {
+				k.mu.Lock()
+				k.sent = append(k.sent, string(req["arguments"]))
+				k.mu.Unlock()
+			}
 			answer := result
 			if b.keaRefuse != nil && b.keaRefuse.Load() {
 				answer = 1
@@ -354,6 +357,9 @@ func TestFixedPrefixRouted(t *testing.T) {
 func TestStaticNameOnDelegated(t *testing.T) {
 	b := newBench(t)
 	b.filled()
+	// One device, its static name in both families: the DHCPv4 one does not hold back the DHCPv6 one.
+	b.kea()
+	writeFile(t, filepath.Join(b.net.root, keaFile), strings.Replace(leaseKea, `"nas"`, `"router"`, 1))
 	if err := b.r.SyncLeases(t.Context()); err != nil {
 		t.Fatal(err)
 	}

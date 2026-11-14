@@ -27,6 +27,15 @@ Describe 'andaru-lease-event'
     The contents of file "$run_dir/andaru-pd-events" should equal "del fd00:aa::/56 fe80::1 lan0"
   End
 
+  It 'appends to a batch Andaru has not taken yet'
+    echo 'add fd00:bb::/56 fe80::2 lan0' > "$run_dir/andaru-pd-events"
+    When run env ANDARU_KEA_RUN="$run_dir" QUERY6_REMOTE_ADDR=fe80::1 QUERY6_IFACE_NAME=lan0 \
+      LEASES6_SIZE=1 LEASES6_AT0_TYPE=IA_PD LEASES6_AT0_ADDRESS=fd00:aa:: LEASES6_AT0_PREFIX_LEN=56 \
+      sh "$script" leases6_committed
+    The line 1 of contents of file "$run_dir/andaru-pd-events" should equal "add fd00:bb::/56 fe80::2 lan0"
+    The line 2 of contents of file "$run_dir/andaru-pd-events" should equal "add fd00:aa::/56 fe80::1 lan0"
+  End
+
   It 'only marks the change for DHCPv4'
     When run env ANDARU_KEA_RUN="$run_dir" sh "$script" leases4_committed
     The path "$run_dir/andaru-pd-events" should not be exist

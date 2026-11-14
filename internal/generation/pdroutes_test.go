@@ -152,11 +152,9 @@ func TestPDEventFileHostile(t *testing.T) {
 			_ = os.Symlink(target, path)
 		},
 		"other owner": func(b *bench, path string) {
-			if os.Getuid() != 0 {
-				b.t.Skip("giving a file to another owner needs root")
-			}
 			writeFile(b.t, path, "add fd00:beef:1:100::/56 fe80::1 ens19\n")
-			_ = os.Chown(path, 0, 0)
+			// The file stays the test's own; Kea is another user, as no unprivileged test could make it.
+			b.r.keaUID = func() uint32 { return uint32(os.Getuid()) + 1 }
 		},
 		"oversized": func(b *bench, path string) {
 			writeFile(b.t, path, "add fd00:beef:1:100::/56 fe80::1 ens19\n"+strings.Repeat("#", 2<<20))
@@ -177,7 +175,7 @@ func TestPDEventFileHostile(t *testing.T) {
 	}
 }
 
-// Only protocol 188 routes nobody leases are removed.
+// Only protocol 77 routes nobody leases are removed.
 func TestPDRouteRemoval(t *testing.T) {
 	b := newBench(t)
 	b.kea6()
@@ -203,7 +201,8 @@ func TestPDRoutesAfterReboot(t *testing.T) {
 	}
 }
 
-// Names are kept per family: a static DHCPv4 name does not block a DHCPv6 client's AAAA record.
+// A dynamic DHCPv6 name is not published when the name is static in either family: a client cannot take over a
+// DHCPv4-only device's name for AAAA.
 func TestDHCPv6Names(t *testing.T) {
 	b := newBench(t)
 	b.kea(lease{"192.168.40.130", "laptop", 0, 1, 7200, 100})
@@ -216,13 +215,13 @@ func TestDHCPv6Names(t *testing.T) {
 		t.Fatal(err)
 	}
 	names := b.leaseNames()
-	for _, want := range []string{`"router.home.arpa. 1333 IN AAAA fd00:1::1003"`, `"laptop.home.arpa. 2400 IN A 192.168.40.130"`, `"nas.home.arpa. 1333 IN AAAA fd00:1::1002"`, `"fd00:1::1002 1333 nas.home.arpa."`} {
+	for _, want := range []string{`"router.home.arpa. 1333 IN AAAA fd00:1::1003"`, `"laptop.home.arpa. 2400 IN A 192.168.40.130"`} {
 		if !strings.Contains(names, want) {
 			t.Fatalf("missing %s in:\n%s", want, names)
 		}
 	}
-	if strings.Contains(names, "fd00:1::1001") {
-		t.Fatalf("a dynamic lease took a static DHCPv6 name:\n%s", names)
+	if strings.Contains(names, "fd00:1::1001") || strings.Contains(names, "fd00:1::1002") {
+		t.Fatalf("a dynamic lease took a static name:\n%s", names)
 	}
 }
 
@@ -317,15 +316,142 @@ func TestDHCPv6NamesDuringADeadDHCPv4(t *testing.T) {
 	writeFile(t, filepath.Join(b.net.root, keaFile), leaseKea)
 	old := "server:\n\tlocal-data: \"laptop.home.arpa. 2400 IN A 192.168.40.130\"\n\tlocal-data-ptr: \"192.168.40.130 2400 laptop.home.arpa.\"\n"
 	writeFile(t, filepath.Join(b.net.root, leasesDir, "leases.conf"), old)
-	b.kea6(lease6{Address: "fd00:1::1002", Type: "IA_NA", Hostname: "nas", Subnet: 1, Valid: 4000, Cltt: 100})
+	b.kea6(lease6{Address: "fd00:1::1002", Type: "IA_NA", Hostname: "phone", Subnet: 1, Valid: 4000, Cltt: 100})
 	if err := b.r.SyncLeases(t.Context()); err == nil {
 		t.Fatal("a dead DHCPv4 server went unreported")
 	}
 	names := b.leaseNames()
-	for _, want := range []string{`"nas.home.arpa. 1333 IN AAAA fd00:1::1002"`, `"laptop.home.arpa. 2400 IN A 192.168.40.130"`, `"192.168.40.130 2400 laptop.home.arpa."`} {
+	for _, want := range []string{`"phone.home.arpa. 1333 IN AAAA fd00:1::1002"`, `"laptop.home.arpa. 2400 IN A 192.168.40.130"`, `"192.168.40.130 2400 laptop.home.arpa."`} {
 		if !strings.Contains(names, want) {
 			t.Fatalf("missing %s in:\n%s", want, names)
 		}
+	}
+}
+
+// A DHCPv6 sync that fails keeps its own names as published and still lets DHCPv4's be updated.
+func TestDHCPv4NamesSurviveAFailedDHCPv6Sync(t *testing.T) {
+	b := newBench(t)
+	b.kea(lease{"192.168.40.130", "laptop", 0, 1, 7200, 100})
+	writeFile(t, filepath.Join(b.net.root, kea6File), "{")
+	old := "server:\n\tlocal-data: \"nas.home.arpa. 1333 IN AAAA fd00:1::1002\"\n"
+	writeFile(t, filepath.Join(b.net.root, leasesDir, "leases.conf"), old)
+	if err := b.r.SyncLeases(t.Context()); err == nil {
+		t.Fatal("the failed DHCPv6 sync went unreported")
+	}
+	names := b.leaseNames()
+	for _, want := range []string{`"laptop.home.arpa. 2400 IN A 192.168.40.130"`, `"nas.home.arpa. 1333 IN AAAA fd00:1::1002"`} {
+		if !strings.Contains(names, want) {
+			t.Fatalf("missing %s in:\n%s", want, names)
+		}
+	}
+}
+
+// A route whose install failed is retried by the once-a-minute prefix run, not at the router's next event.
+func TestPDRouteRetriedByPrefixRun(t *testing.T) {
+	b := newBench(t)
+	b.kea6(pd("fd00:beef:1:100::/56"))
+	b.events("add fd00:beef:1:100::/56 fe80::1 ens19")
+	b.net.fail = "ip -6 route replace fd00:beef:1:100::/56"
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	b.net.fail, b.net.argv = "", nil
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if b.index("ip -6 route replace fd00:beef:1:100::/56 via fe80::1 dev ens19 proto 77") < 0 {
+		t.Fatalf("failed install not retried: %q", b.net.argv)
+	}
+}
+
+// A dynamic DHCPv4 lease cannot claim a name that is static in DHCPv6 only.
+func TestDHCPv4NamesBlockedByStaticDHCPv6(t *testing.T) {
+	b := newBench(t)
+	b.kea(lease{"192.168.40.131", "printer", 0, 1, 7200, 100}, lease{"192.168.40.130", "laptop", 0, 1, 7200, 100})
+	b.kea6()
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if names := b.leaseNames(); strings.Contains(names, "192.168.40.131") || !strings.Contains(names, "laptop.home.arpa.") {
+		t.Fatalf("a dynamic DHCPv4 lease took a static DHCPv6 name:\n%s", names)
+	}
+}
+
+// Both families failing reports both failures.
+func TestBothFamiliesFailing(t *testing.T) {
+	b := newBench(t)
+	writeFile(t, filepath.Join(b.net.root, keaFile), "{")
+	writeFile(t, filepath.Join(b.net.root, kea6File), "{")
+	err := b.r.SyncLeases(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "DHCP server's configuration") || !strings.Contains(err.Error(), "DHCPv6 server's configuration") {
+		t.Fatalf("error %v", err)
+	}
+}
+
+// Runs that change nothing replace no route and rewrite no next-hop table: each replace is a netlink event that
+// can wake the prefix path unit again. A missing route is still put back.
+func TestPDRoutesUnchangedRunsTouchNothing(t *testing.T) {
+	b := newBench(t)
+	b.filled(lease6{Address: "2001:db8:aa00:82::", PrefixLen: 64, Type: "IA_PD", Subnet: 7, Valid: 4000, Cltt: 100})
+	writeFile(t, filepath.Join(b.net.root, pdTable), `{"2001:db8:aa00:82::/64":{"via":"fe80::1","dev":"ens19"}}`)
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.Stat(filepath.Join(b.net.root, pdTable))
+	b.net.argv = nil
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if b.index("ip -6 route replace") >= 0 {
+		t.Fatalf("replaced unchanged routes: %q", b.net.argv)
+	}
+	if after, _ := os.Stat(filepath.Join(b.net.root, pdTable)); !os.SameFile(before, after) {
+		t.Fatal("unchanged next-hop table rewritten")
+	}
+	delete(b.net.routes, "2001:db8:aa00:80::/60")
+	delete(b.net.routes, "2001:db8:aa00:82::/64")
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"ip -6 route replace unreachable 2001:db8:aa00:80::/60 proto 77", "ip -6 route replace 2001:db8:aa00:82::/64 via fe80::1 dev ens19 proto 77"} {
+		if b.index(want) < 0 {
+			t.Fatalf("missing route not put back (%s): %q", want, b.net.argv)
+		}
+	}
+}
+
+// An installed route whose router or interface no longer matches the believed next hop is replaced.
+func TestPDRouteNextHopChanged(t *testing.T) {
+	for name, installed := range map[string]string{"via": "fe80::1 dev ens19", "dev": "fe80::2 dev ens18"} {
+		t.Run(name, func(t *testing.T) {
+			b := newBench(t)
+			b.filled(lease6{Address: "2001:db8:aa00:82::", PrefixLen: 64, Type: "IA_PD", Subnet: 7, Valid: 4000, Cltt: 100})
+			writeFile(t, filepath.Join(b.net.root, pdTable), `{"2001:db8:aa00:82::/64":{"via":"fe80::2","dev":"ens19"}}`)
+			b.net.routes = map[string]string{"2001:db8:aa00:80::/60": "unreachable", "2001:db8:aa00:82::/64": installed}
+			if err := b.r.SyncLeases(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if b.index("ip -6 route replace 2001:db8:aa00:82::/64 via fe80::2 dev ens19 proto 77") < 0 {
+				t.Fatalf("stale next hop kept: %q", b.net.argv)
+			}
+		})
+	}
+}
+
+// When the lease of a pool handing out itself ends, its router's route becomes the pool's unreachable route
+// again, and is not then deleted as a route nobody holds.
+func TestPoolLeaseEndedBecomesUnreachable(t *testing.T) {
+	b := newBench(t)
+	b.filled()
+	b.net.routes = map[string]string{"2001:db8:aa00:80::/60": "fe80::1 dev ens19"}
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if b.net.routes["2001:db8:aa00:80::/60"] != "unreachable" || b.index("ip -6 route del 2001:db8:aa00:80::/60") >= 0 {
+		t.Fatalf("pool route %q after %q", b.net.routes["2001:db8:aa00:80::/60"], b.net.argv)
 	}
 }
 

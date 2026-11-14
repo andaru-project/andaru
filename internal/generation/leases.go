@@ -155,35 +155,40 @@ func (r Realizer) syncLeases(ctx context.Context) error {
 		return err
 	}
 	defer unlock()
-	// DHCPv6 first: its routes are reconciled even when the DHCPv4 server does not answer.
-	v6, err := r.syncKea6(ctx)
-	if err != nil {
-		return err
-	}
-	records := []string{}
+	// A name static in either family is taken by no dynamic lease of the other, so DHCPv4's configuration is read
+	// before DHCPv6 syncs and its records are made after. A failure in either family keeps that family's names as
+	// published, still updates the other's, and is reported.
+	var cfg keaConfig
+	var leases []keaLease
 	var failed error
 	raw, err := os.ReadFile(r.Root + keaFile)
+	if err == nil {
+		// A file that decodes only in part still names the static leases it holds; an empty one would name none.
+		if err = json.Unmarshal(raw, &cfg); err != nil {
+			err = fmt.Errorf("read the DHCP server's configuration: %w", err)
+		}
+	}
+	if err == nil {
+		if leases, err = r.keaLeases(ctx); err != nil {
+			err = fmt.Errorf("ask the DHCP server for its leases: %w", err)
+		}
+	}
+	// Its routes are reconciled whatever the DHCPv4 server does.
+	v6, static6, err6 := r.syncKea6(ctx, staticNames4(cfg))
+	if err6 != nil {
+		v6, failed = r.publishedNames(true), err6
+	}
+	records := []string{}
 	switch {
 	case os.IsNotExist(err):
 		// No DHCP server: nothing to publish.
 	case err != nil:
-		return err
+		failed, records = errors.Join(err, failed), r.publishedNames(false)
 	default:
-		var cfg keaConfig
-		if err := json.Unmarshal(raw, &cfg); err != nil {
-			return fmt.Errorf("read the DHCP server's configuration: %w", err)
-		}
-		leases, err := r.keaLeases(ctx)
-		if err != nil {
-			// Its names stay as published; DHCPv6's are still updated, and the failure is reported.
-			failed = fmt.Errorf("ask the DHCP server for its leases: %w", err)
-			records = r.publishedNames(false)
-			break
-		}
 		if r.afterLeaseRead != nil {
 			r.afterLeaseRead()
 		}
-		records = leaseRecords(cfg, leases)
+		records = leaseRecords(cfg, leases, static6)
 	}
 	records = append(records, v6...)
 	body := "server:\n"
@@ -210,15 +215,24 @@ func (r Realizer) syncLeases(ctx context.Context) error {
 	return failed
 }
 
-// leaseRecords turns assigned leases with valid names into A and PTR records, sorted.
-// Reserved names win over leases; between two leases with one name, the most recently renewed wins.
-func leaseRecords(cfg keaConfig, leases []keaLease) []string {
-	// Reserved names are taken on every segment: they share one domain.
-	domains, taken := map[int]string{}, map[string]bool{}
+// staticNames4 are the DHCPv4 reserved names.
+func staticNames4(cfg keaConfig) map[string]bool {
+	names := map[string]bool{}
 	for _, s := range cfg.Dhcp4.Subnet4 {
 		for _, res := range s.Reservations {
-			taken[strings.ToLower(res.Hostname)] = true
+			names[strings.ToLower(res.Hostname)] = true
 		}
+	}
+	return names
+}
+
+// leaseRecords turns assigned leases with valid names into A and PTR records, sorted.
+// Reserved names of either family win over leases; between two leases with one name, the most recently renewed wins.
+func leaseRecords(cfg keaConfig, leases []keaLease, static6 map[string]bool) []string {
+	// Reserved names are taken on every segment: they share one domain.
+	domains, taken := map[int]string{}, staticNames4(cfg)
+	maps.Copy(taken, static6)
+	for _, s := range cfg.Dhcp4.Subnet4 {
 		if s.UserContext.Andaru.Register && s.UserContext.Andaru.Domain != "" {
 			domains[s.ID] = s.UserContext.Andaru.Domain
 		}
