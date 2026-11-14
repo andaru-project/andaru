@@ -3,11 +3,8 @@ package generation
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -152,33 +149,18 @@ func (r Realizer) serviceDirs() error {
 func (r Realizer) keaStatus(ctx context.Context, socket string) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	var d net.Dialer
-	c, err := d.DialContext(ctx, "unix", r.Root+socket)
+	var args struct {
+		Sockets struct{ Status string } `json:"sockets"`
+	}
+	result, text, err := r.keaCommand(ctx, socket, `{"command":"status-get"}`, &args)
 	if err != nil {
 		return err
 	}
-	defer c.Close()
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = c.SetDeadline(deadline)
-	}
-	if _, err := io.WriteString(c, `{"command":"status-get"}`); err != nil {
-		return err
-	}
-	var reply struct {
-		Result    int    `json:"result"`
-		Text      string `json:"text"`
-		Arguments struct {
-			Sockets struct{ Status string } `json:"sockets"`
-		} `json:"arguments"`
-	}
-	if err := json.NewDecoder(c).Decode(&reply); err != nil {
-		return err
-	}
-	if reply.Result != 0 {
-		return fmt.Errorf("%d: %s", reply.Result, reply.Text)
+	if result != 0 {
+		return fmt.Errorf("%d: %s", result, text)
 	}
 	// Kea answers while it still retries, or has failed, to bind its DHCP sockets.
-	if s := reply.Arguments.Sockets.Status; s != "ready" {
+	if s := args.Sockets.Status; s != "ready" {
 		return fmt.Errorf("its DHCP sockets are %s", cmp.Or(s, "unknown"))
 	}
 	return nil

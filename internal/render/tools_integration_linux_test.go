@@ -132,6 +132,7 @@ func TestSystemdAcceptsRenderedUnit(t *testing.T) {
 }
 
 const privateNetworkd = `set -e
+mkdir -p /run/systemd/network /run/systemd/netif
 mount -t tmpfs tmpfs /run/systemd/network
 mount -t tmpfs -o mode=0755 tmpfs /run/systemd/netif
 chown systemd-network:systemd-network /run/systemd/netif
@@ -181,6 +182,10 @@ func TestNetworkdAcceptsRenderedFiles(t *testing.T) {
 		}
 		log := load(t, files)
 		for file := range files {
+			// .link files are udev's: networkd never reads them, and nothing checks them offline.
+			if strings.HasSuffix(file, ".link") {
+				continue
+			}
 			if !strings.Contains(log, "/run/systemd/network/"+file+": Successfully loaded.") {
 				t.Fatalf("%s: networkd did not load %s:\n%s", name, file, log)
 			}

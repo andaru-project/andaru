@@ -191,6 +191,9 @@ func validateServices(d *declaration) []FieldError {
 		// A zone could carry any text into the rendered file, and an upstream needs none.
 		if err != nil || a.Zone() != "" {
 			bad(up+"/address", "Expected an IP address, optionally with a port.")
+		} else if firewallHolds(d, a.Unmap()) {
+			// The DNS service listens on the firewall's addresses: it would forward to itself.
+			bad(up+"/address", "This is one of the firewall's own addresses; the DNS service would ask itself.")
 		}
 		if u.Protocol == "dot" && !searchDomain.MatchString(u.TLSName) {
 			bad(up+"/tlsName", "DNS over TLS needs the name the upstream's certificate carries.")

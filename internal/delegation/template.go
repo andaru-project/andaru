@@ -1,7 +1,6 @@
 package delegation
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/netip"
 	"strconv"
@@ -51,11 +50,7 @@ type TemplatePool struct {
 // FillTemplate turns the template into Kea subnet6 entries under each uplink's prefix. A subnet whose uplink
 // has no prefix is left out silently; a subnet or pool the prefix has no room for is left out and named in skipped.
 // No lease outlives the delegation it is numbered from.
-func FillTemplate(raw []byte, prefixes map[string]Held, now time.Time) (subnets []map[string]any, skipped []string, err error) {
-	var tpl Template
-	if err := json.Unmarshal(raw, &tpl); err != nil {
-		return nil, nil, fmt.Errorf("read the DHCPv6 template: %w", err)
-	}
+func FillTemplate(tpl Template, prefixes map[string]Held, now time.Time) (subnets []map[string]any, skipped []string) {
 	subnets = []map[string]any{}
 	for _, s := range tpl.Subnets {
 		held, ok := prefixes[s.Uplink]
@@ -125,7 +120,7 @@ func FillTemplate(raw []byte, prefixes map[string]Held, now time.Time) (subnets 
 		subnet["reservations"] = reservations
 		subnets = append(subnets, subnet)
 	}
-	return subnets, skipped, nil
+	return subnets, skipped
 }
 
 // bound is the lease lifetime limited to what remains of the delegation. The remainder is rounded down to ten

@@ -120,7 +120,8 @@ func validateNAT(d *declaration) []FieldError {
 			case disabledHolder(d, a) != "":
 				bad(p+"/target/address", fmt.Sprintf("This address is on link %q, which is disabled.", disabledHolder(d, a)))
 			case !firewallHolds(d, a):
-				bad(p+"/target/address", "IPv6 port forwards to inside hosts are not offered (#43).")
+				// The firewall's addresses from DHCPv6 or a delegated prefix are not known here; self reaches them.
+				bad(p+"/target/address", "Expected a static IPv6 address of the firewall or an IPv6 virtual address; for its addresses from DHCPv6 or a delegated prefix, use target self. IPv6 port forwards to inside hosts are not offered (#43).")
 			}
 		case f.Target != nil && !f.Target.Self:
 			a, e := netip.ParseAddr(f.Target.Address)
@@ -208,6 +209,12 @@ func validateNAT(d *declaration) []FieldError {
 					primary = append(primary, p.Addr())
 				}
 			}
+		}
+	}
+	// A virtual address is the firewall's own, held for its services: 1:1 NAT takes it over in neither direction.
+	for _, v := range d.VirtualAddresses {
+		if a, e := netip.ParseAddr(v.Address); e == nil && a.Is4() {
+			own, primary = append(own, a), append(primary, a)
 		}
 	}
 	holdsOwn := func(p netip.Prefix) bool { return slices.ContainsFunc(own, p.Contains) }

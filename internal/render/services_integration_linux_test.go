@@ -87,7 +87,9 @@ func TestDHCPv6GoldensPassKea(t *testing.T) {
 		kea := fileContent(t, result, kea6Path)
 		if tpl, ok := fileOf(result, kea6TemplatePath); ok {
 			// Filled as root fills it, with a documentation prefix standing in for the WAN's.
-			subnets, _, err := delegation.FillTemplate([]byte(tpl), map[string]delegation.Held{"ens18": {Prefix: netip.MustParsePrefix("2001:db8::/48"), Preferred: time.Now().Add(time.Hour * 24), Valid: time.Now().Add(time.Hour * 24)}}, time.Now())
+			var parsed delegation.Template
+			err := json.Unmarshal([]byte(tpl), &parsed)
+			subnets, _ := delegation.FillTemplate(parsed, map[string]delegation.Held{"ens18": {Prefix: netip.MustParsePrefix("2001:db8::/48"), Preferred: time.Now().Add(time.Hour * 24), Valid: time.Now().Add(time.Hour * 24)}}, time.Now())
 			var conf map[string]map[string]any
 			if err != nil || json.Unmarshal([]byte(kea), &conf) != nil {
 				t.Fatalf("%s: %v", name, err)
