@@ -85,7 +85,7 @@ The overlap check (same source, destination, zone, protocol, overlapping ports) 
 
 ### The addresses
 
-Virtual addresses live on a dummy interface, `andaru-vip`, which the generation renders when the declaration has any: `50-andaru-andaru-vip.netdev` (`Kind=dummy`) and `50-andaru-andaru-vip.network` with one `Address=` per entry (`/32` or `/128`), `LinkLocalAddressing=no`, IPv6 addresses with `DuplicateAddressDetection=none`, and `RequiredForOnline=no`. Without entries both files are absent, and the apply deletes the device with `networkctl delete`, as it deletes any device whose `.netdev` is gone: networkd alone would leave it, with its IPv6 address (probed). A dummy, not `lo`: networkd then owns it entirely, on netplan, ifupdown and networkd hosts alike, and `lo` stays the system's.
+Virtual addresses live on a dummy interface, `andaru-vip`, which the generation renders when the declaration has any: `50-andaru-andaru-vip.netdev` (`Kind=dummy`) and `50-andaru-andaru-vip.network` with one `Address=` per entry (`/32` or `/128`), `LinkLocalAddressing=no` and `RequiredForOnline=no` (the kernel skips duplicate address detection on a dummy, probed). Without entries both files are absent, and the apply deletes the device with `networkctl delete`, as it deletes any device whose `.netdev` is gone: networkd alone would leave it, with its IPv6 address (probed). A dummy, not `lo`: networkd then owns it entirely, on netplan, ifupdown and networkd hosts alike, and `lo` stays the system's.
 
 The link name `andaru-vip` is reserved: a link may not take it (a link's resolved name never matches it on a real host; validation refuses it as a declared name).
 

@@ -184,3 +184,48 @@ func TestVirtualAddressInUse(t *testing.T) {
 		t.Fatal("not deleted")
 	}
 }
+
+// An explicit ipv4 and an omitted family are the same family: two such forwards on one port conflict.
+func TestForwardFamilyDefaultOverlaps(t *testing.T) {
+	d := vipFixture(t)
+	a := forward(d, map[string]any{"family": "ipv4"})
+	b := forward(d, map[string]any{"id": pfwB, "name": "web2"})
+	setNAT(d, "portForwards", a, b)
+	refusedAt(t, d, "/nat/portForwards/1/ports")
+}
+
+// A virtual address is one address however it is written.
+func TestVirtualAddressSpelling(t *testing.T) {
+	d := vipFixture(t)
+	item(d["virtualAddresses"].([]any), 1)["address"] = "FD00:0053:53:53:53:53:53:53"
+	setNAT(d, "portForwards", forward(d, map[string]any{"family": "ipv6", "target": map[string]any{"address": "fd00:53:53:53:53:53:53:53"}, "targetPort": nil, "ports": "53"}))
+	if got := accepted(t, d); got.VirtualAddresses[1].Address != "fd00:53:53:53:53:53:53:53" {
+		t.Fatalf("stored %q", got.VirtualAddresses[1].Address)
+	}
+}
+
+// An IPv6 forward's destination object must hold IPv6 addresses.
+func TestIPv6ForwardDestinationFamily(t *testing.T) {
+	d := vipFixture(t)
+	setNAT(d, "portForwards", forward(d, map[string]any{"family": "ipv6", "to": map[string]any{"address": natPeer}, "target": map[string]any{"self": true}, "targetPort": nil}))
+	refusedAt(t, d, "/nat/portForwards/0/to/address")
+}
+
+// The in-use refusal names the forward for an IPv6 virtual address too, and a DNS reference also holds it.
+func TestVirtualAddressInUseIPv6AndDNS(t *testing.T) {
+	s := seededState(t)
+	lan := s.Config.Segments[1].ID
+	mustRun(t, &s, `{"operations":[{"op":"replace","collection":"segments","id":"`+lan+`","expectedVersion":"7","value":{"name":"lan","link":"`+s.Config.Segments[1].Link+`","zone":"`+s.Config.Segments[1].Zone+`","addressing":{"ipv4":{"mode":"static","addresses":["192.0.2.7/24"]},"ipv6":{"mode":"static","addresses":["fd00:1::1/64"]}}}}]}`)
+	p := mustRun(t, &s, `{"operations":[{"op":"create","collection":"virtualAddresses","localId":"v","value":{"name":"dns6","address":"fd00:53:53:53:53:53:53:53"}},
+		{"op":"create","collection":"nat.portForwards","localId":"f","value":{"name":"dns6","family":"ipv6","enabled":true,"ingressZones":["`+s.Config.Zones[0].ID+`"],"protocol":"udp","from":[],"to":{"self":true},"ports":"53","target":{"address":"fd00:53:53:53:53:53:53:53"}}}]}`)
+	id := p.Created["v"]
+	_, e := run(t, &s, `{"operations":[{"op":"delete","collection":"virtualAddresses","id":"`+id+`","expectedVersion":"`+string(versionOf(&s, objectKey{"virtualAddresses", id}).Version)+`"}]}`)
+	if raw, _ := json.Marshal(e); e == nil || !strings.Contains(string(raw), `Port forward \"dns6\" targets this address`) {
+		t.Fatalf("%s", raw)
+	}
+	mustRun(t, &s, `{"operations":[{"op":"delete","collection":"nat.portForwards","id":"`+p.Created["f"]+`","expectedVersion":"`+string(versionOf(&s, objectKey{"nat.portForwards", p.Created["f"]}).Version)+`"}]}`)
+	mustRun(t, &s, `{"operations":[{"op":"replace","collection":"dns","expectedVersion":"0","value":{"mode":"recursive","segments":[],"virtualAddresses":["`+id+`"]}}]}`)
+	if _, e := run(t, &s, `{"operations":[{"op":"delete","collection":"virtualAddresses","id":"`+id+`","expectedVersion":"`+string(versionOf(&s, objectKey{"virtualAddresses", id}).Version)+`"}]}`); e == nil {
+		t.Fatal("deleted a virtual address the DNS service listens on")
+	}
+}

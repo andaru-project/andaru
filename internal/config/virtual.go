@@ -11,9 +11,6 @@ const vipDevice = "andaru-vip"
 
 // validateVirtual checks the virtual addresses: single unicast addresses the firewall holds on no segment.
 func validateVirtual(d *declaration, bad func(string, string)) {
-	if len(d.VirtualAddresses) > 64 {
-		bad("/virtualAddresses", "Expected at most 64 virtual addresses.")
-	}
 	var subnets []netip.Prefix
 	for _, s := range d.Segments {
 		for _, raw := range append(slices.Clone(s.Addressing.IPv4.Addresses), s.Addressing.IPv6.Addresses...) {
@@ -69,17 +66,24 @@ func firewallHolds(d *declaration, a netip.Addr) bool {
 			}
 		}
 	}
-	return slices.ContainsFunc(d.VirtualAddresses, func(v virtualAddress) bool { return v.Address == a.String() })
+	return slices.ContainsFunc(d.VirtualAddresses, func(v virtualAddress) bool { return sameAddress(v.Address, a.String()) })
+}
+
+// sameAddress compares two addresses however they are written.
+func sameAddress(a, b string) bool {
+	x, e1 := netip.ParseAddr(a)
+	y, e2 := netip.ParseAddr(b)
+	return e1 == nil && e2 == nil && x == y
 }
 
 // vipStillTargeted refuses an operation that deletes a virtual address, or changes its address, while a port
 // forward targets the address: the forward would silently become one to an inside host nobody holds.
 func vipStillTargeted(old, d *declaration, input Changes) *Fault {
 	for _, v := range old.VirtualAddresses {
-		if slices.ContainsFunc(d.VirtualAddresses, func(n virtualAddress) bool { return n.Address == v.Address }) {
+		if slices.ContainsFunc(d.VirtualAddresses, func(n virtualAddress) bool { return sameAddress(n.Address, v.Address) }) {
 			continue
 		}
-		i := slices.IndexFunc(d.NAT.PortForwards, func(f portForward) bool { return f.Target != nil && f.Target.Address == v.Address })
+		i := slices.IndexFunc(d.NAT.PortForwards, func(f portForward) bool { return f.Target != nil && sameAddress(f.Target.Address, v.Address) })
 		if i < 0 {
 			continue
 		}

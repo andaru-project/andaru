@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cmp"
 	"fmt"
 	"maps"
 	"net/netip"
@@ -166,7 +167,7 @@ func validateNAT(d *declaration) []FieldError {
 		}
 		for _, zone := range slices.Compact(slices.Sorted(slices.Values(f.IngressZones))) {
 			for _, protocol := range protocols {
-				key := fmt.Sprintf("%s|%t|%s|%t|%s|%s|%s", f.Family, f.FromNegated, from, f.To.Self, f.To.Address, zone, protocol)
+				key := fmt.Sprintf("%s|%t|%s|%t|%s|%s|%s", cmp.Or(f.Family, "ipv4"), f.FromNegated, from, f.To.Self, f.To.Address, zone, protocol)
 				buckets[key] = append(buckets[key], entry{i, spans[i].first, spans[i].last})
 			}
 		}

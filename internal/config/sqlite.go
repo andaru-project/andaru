@@ -39,11 +39,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS service_creation_identity ON service_changes(o
 const natDDL = `CREATE TABLE IF NOT EXISTS nat_changes(collection TEXT NOT NULL CHECK(collection IN ('nat.portForwards','nat.oneToOne')),object_id TEXT NOT NULL,version_id INTEGER NOT NULL REFERENCES versions(id),created INTEGER NOT NULL CHECK(created IN (0,1)),deleted INTEGER NOT NULL CHECK(deleted IN (0,1)),CHECK(NOT(created AND deleted)),PRIMARY KEY(collection,object_id,version_id));
 CREATE UNIQUE INDEX IF NOT EXISTS nat_creation_identity ON nat_changes(object_id) WHERE created=1;`
 
-// dhcp6DDL holds the versions of the DHCPv6 entries, added beside the others as policy_changes was.
 // vipDDL holds the versions of the virtual addresses, added beside the others as dhcp6_changes was.
 const vipDDL = `CREATE TABLE IF NOT EXISTS vip_changes(collection TEXT NOT NULL CHECK(collection IN ('virtualAddresses')),object_id TEXT NOT NULL,version_id INTEGER NOT NULL REFERENCES versions(id),created INTEGER NOT NULL CHECK(created IN (0,1)),deleted INTEGER NOT NULL CHECK(deleted IN (0,1)),CHECK(NOT(created AND deleted)),PRIMARY KEY(collection,object_id,version_id));
 CREATE UNIQUE INDEX IF NOT EXISTS vip_creation_identity ON vip_changes(object_id) WHERE created=1;`
 
+// dhcp6DDL holds the versions of the DHCPv6 entries, added beside the others as policy_changes was.
 const dhcp6DDL = `CREATE TABLE IF NOT EXISTS dhcp6_changes(collection TEXT NOT NULL CHECK(collection IN ('dhcp6')),object_id TEXT NOT NULL,version_id INTEGER NOT NULL REFERENCES versions(id),created INTEGER NOT NULL CHECK(created IN (0,1)),deleted INTEGER NOT NULL CHECK(deleted IN (0,1)),CHECK(NOT(created AND deleted)),PRIMARY KEY(collection,object_id,version_id));
 CREATE UNIQUE INDEX IF NOT EXISTS dhcp6_creation_identity ON dhcp6_changes(object_id) WHERE created=1;`
 

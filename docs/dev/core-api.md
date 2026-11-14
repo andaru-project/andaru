@@ -377,7 +377,7 @@ printf '%s\n' '{"name":"dns6","family":"ipv6","enabled":true,"ingressZones":["'"
 
 ### Inbound NAT
 
-Port forwards and 1:1 NAT, with pfSense's semantics, IPv4 only. Both need the packet filter, so a management segment. Design: [inbound NAT](../superpowers/specs/2026-11-12-inbound-nat-design.md).
+Port forwards and 1:1 NAT, with pfSense's semantics, IPv4 only; IPv6 port forwards to the firewall itself are in "Virtual addresses" above. Both need the packet filter, so a management segment. Design: [inbound NAT](../superpowers/specs/2026-11-12-inbound-nat-design.md).
 
 ```sh
 # WAN port 8080 to the web server's port 80, from anywhere; its filter rule comes with it.

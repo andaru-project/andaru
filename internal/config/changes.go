@@ -557,6 +557,10 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 			d.Segments[i].Addressing.IPv6.RA = &advertisement{Mode: ra.mode()}
 		}
 	}
+	// Before validation, which would refuse an IPv6 forward left without its target in less helpful words.
+	if f := vipStillTargeted(&current.Config, &d, input); f != nil {
+		return empty, f
+	}
 	raw, e := json.Marshal(d)
 	if e != nil {
 		return empty, e
@@ -570,9 +574,6 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 		return empty, boundaryFault(e)
 	}
 	d = validated
-	if f := vipStillTargeted(&current.Config, &d, input); f != nil {
-		return empty, f
-	}
 	for i, l := range d.Links {
 		if l.Password != nil {
 			if _, ok := current.Secrets.Scopes["core"][l.Password.Secret]; !ok {

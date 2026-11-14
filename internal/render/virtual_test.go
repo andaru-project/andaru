@@ -38,3 +38,30 @@ func TestVirtualAddressesRendering(t *testing.T) {
 		t.Fatalf("findings %+v", result.Findings)
 	}
 }
+
+// The other IPv6 forward forms: a port to a virtual address, a shifted range, a negated source, a destination object.
+func TestIPv6ForwardForms(t *testing.T) {
+	in := change(t, fixture(t, "virtual"), func(d map[string]any) {
+		z := d["nat"].(map[string]any)["portForwards"].([]any)[0].(map[string]any)["ingressZones"]
+		d["objects"].(map[string]any)["addresses"] = append(d["objects"].(map[string]any)["addresses"].([]any),
+			map[string]any{"id": "adr_00000009-0000-4000-8000-000000000009", "name": "v6peer", "kind": "network", "prefix": "2001:db8:9::/48"})
+		six := func(id, ports string, fields map[string]any) map[string]any {
+			f := map[string]any{"id": id, "name": id[:12], "family": "ipv6", "enabled": true, "ingressZones": z, "protocol": "tcp", "from": []any{}, "to": map[string]any{"self": true}, "filterRule": "auto", "ports": ports, "target": map[string]any{"address": "fd00:53:53:53:53:53:53:53"}}
+			for k, v := range fields {
+				f[k] = v
+			}
+			return f
+		}
+		d["nat"].(map[string]any)["portForwards"] = append(d["nat"].(map[string]any)["portForwards"].([]any),
+			six("pfw_00000005-0000-4000-8000-000000000005", "8053", map[string]any{"targetPort": 53}),
+			six("pfw_00000006-0000-4000-8000-000000000006", "9000-9001", map[string]any{"targetPort": 7000}),
+			six("pfw_00000007-0000-4000-8000-000000000007", "9100", map[string]any{"from": []any{"adr_00000009-0000-4000-8000-000000000009"}, "fromNegated": true}),
+			six("pfw_00000008-0000-4000-8000-000000000008", "9200", map[string]any{"to": map[string]any{"address": "adr_00000009-0000-4000-8000-000000000009"}}))
+	})
+	nft := fileContent(t, render(t, in), nftPath)
+	contains(t, nft,
+		`dnat ip6 to [fd00:53:53:53:53:53:53:53]:53`,
+		`dnat ip6 addr . port to tcp dport map { 9000 : fd00:53:53:53:53:53:53:53 . 7000, 9001 : fd00:53:53:53:53:53:53:53 . 7001 }`,
+		`ip6 saddr != @adr_00000009_0000_4000_8000_000000000009_6`,
+		`ip6 daddr @adr_00000009_0000_4000_8000_000000000009_6 tcp dport 9200`)
+}
