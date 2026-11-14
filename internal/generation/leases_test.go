@@ -265,6 +265,8 @@ func TestKeaEmptyAnswer(t *testing.T) {
 			if err != nil {
 				return
 			}
+			// The request first, as Kea does: a reply written before it would race the client's write.
+			_, _ = bufio.NewReader(c).ReadString('}')
 			c.Write([]byte(`{"result":3,"text":"0 IPv4 lease(s) found.","arguments":{"leases":[]}}`))
 			c.Close()
 		}
