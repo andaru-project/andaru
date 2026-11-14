@@ -769,6 +769,20 @@ The lab found and this branch fixes: the old pool's routes went a second after t
 
 Not run on the lab: a prefix shorter than requested, graceful renumbering, the saved prefix expiring, and a `config-set` Kea refuses; unit tests cover them.
 
+### Virtual addresses Debian lab qualification
+
+On 2026-11-14 the CGO-disabled amd64 build of `a972464` (SHA-256 `afb98aeb2dfe7c3fc26d02c0f0aa16e1c7e2fd68fccc98da85f5091b92b05477`) was installed on VM 114, set up as in the DHCP and DNS and IPv6 LAN qualifications, with VM 117 on the LAN and a WAN client in a namespace on the lab network. The declaration had virtual addresses `172.16.53.53` and `fd00:53:53:53:53:53:53:53`, the DNS service listening on both and on the LAN, `dhcp` and `dhcp6` handing them out as DNS servers, and port forwards from the WAN zone sending port 53 of the firewall itself to them: IPv4 (UDP and TCP) to `172.16.53.53`, IPv6 (`family: ipv6`) to `fd00:53:53:53:53:53:53:53`.
+
+- `andaru-vip` held both addresses, `routable (configured)`, and Unbound listened on both.
+- VM 117 received `172.16.53.53` by DHCP and `fd00:53:53:53:53:53:53:53` by DHCPv6; its own lease name answered through both and through the firewall's LAN addresses.
+- From the WAN, `dig @10.0.1.19` and `dig @fd00:feed::19` were answered over UDP and TCP through the forwards; queries sent to either virtual address directly were not.
+- Deleting or re-addressing the IPv4 virtual address while the forward targeted it was refused; removing one virtual address took it off the device, and removing all deleted `andaru-vip`.
+- After a reboot all of the above held again.
+
+The lab found, fixed in this branch on `98771b1`: the refusal named the forward only after a DNS reference to the same address was gone, and for an IPv6 virtual address it gave a generic message.
+
+Not run on the lab: public names (the lab's upstream refuses queries from VM 114), forwards from the LAN zone, and the refusals the unit tests cover.
+
 ### Inbound NAT Debian lab qualification
 
 On 2026-11-12 the CGO-disabled amd64 build of code commit `6443d4e` (`vcs.modified=false`, SHA-256 `4cdc5f88a44c7bc95a566d6e40b24d9e61d010d006adb8a051d9f5a68514024d`) was installed on VM 114 at snapshot `base-netplan-static-20261111` (Debian 13, systemd 257.13, nftables 1.1.3), with `eth0` WAN at `10.0.1.19/16` and `eth1` LAN at `192.168.40.1/24` on VLAN 4093; DNS servers were removed from `eth1`'s netplan before the takeover. VM 117 (`base-ifupdown-static-20261112`) sat on the LAN at `192.168.40.2/24` via `192.168.40.1`, with `python3 -m http.server` on ports 80, 8000 and 8001. The WAN client was a host on the lab network, `10.0.0.30`, instead of the PD router, whose SSH key was not at hand. `10.0.1.29` was free: no answer to ping, the neighbour entry `INCOMPLETE` from the client and from VM 114, and no ARP entry or DHCP lease on the lab gateway.
