@@ -81,6 +81,16 @@ func TestDHCPv6OnDelegated(t *testing.T) {
 	})
 }
 
+// Pool and prefix positions are stored as segment subnet IDs are: lowercase hexadecimal without leading zeros.
+func TestDelegatedPositionsCanonical(t *testing.T) {
+	got := accepted(t, delegatedFixture(t, map[string]any{
+		"staticLeases":     []any{map[string]any{"duid": "00:01:00:01:aa:bb:cc:dd:ee:ff", "prefixId": "0F"}},
+		"prefixDelegation": map[string]any{"subnetId": "08A", "length": 60, "delegatedLength": 64}}))
+	if e := got.DHCP6[0]; e.PrefixDelegation.SubnetID != "8a" || e.StaticLeases[0].PrefixID != "f" {
+		t.Fatalf("stored %q and %q", e.PrefixDelegation.SubnetID, e.StaticLeases[0].PrefixID)
+	}
+}
+
 func TestDelegatedSubnetIDWidth(t *testing.T) {
 	d := fixtureMap(t)
 	v6(d, 1)["subnetId"] = "100"

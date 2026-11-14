@@ -303,12 +303,18 @@ func (r *renderer) delegatedFit() {
 		}
 	}
 	for i, e := range r.d.DHCP6 {
-		_, uplink, _, ok := r.delegated6(e.Segment)
+		_, uplink, subnetHex, ok := r.delegated6(e.Segment)
 		base, seen := current(uplink)
 		if pd := e.PrefixDelegation; ok && seen && pd != nil {
+			lan, _ := strconv.ParseUint(subnetHex, 16, 16)
 			n, _ := strconv.ParseUint(pd.SubnetID, 16, 16)
-			if _, fits := delegation.Place(base, n, pd.Length); !fits {
-				r.find("warning", "DELEGATED_PREFIX_TOO_SHORT", fmt.Sprintf("/dhcp6/%d/prefixDelegation", i), fmt.Sprintf(msg, base, "delegation pool"))
+			_, lanFits := delegation.Place(base, lan, 64)
+			path := fmt.Sprintf("/dhcp6/%d/prefixDelegation", i)
+			if _, fits := delegation.Place(base, n, pd.Length); !lanFits {
+				// A pool is served only with its segment's subnet.
+				r.find("warning", "DELEGATED_PREFIX_TOO_SHORT", path, fmt.Sprintf("The prefix the WAN currently receives, %s, has no room for its segment's subnet ID, so this delegation pool is not served either until a prefix with room is delegated.", base))
+			} else if !fits {
+				r.find("warning", "DELEGATED_PREFIX_TOO_SHORT", path, fmt.Sprintf(msg, base, "delegation pool"))
 			}
 		}
 	}

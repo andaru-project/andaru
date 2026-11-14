@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -152,6 +153,24 @@ func TestPrefixesUnchangedSendsNothing(t *testing.T) {
 	}
 	if k.count() != 1 {
 		t.Fatalf("config-set sent %d times", k.count())
+	}
+}
+
+// A healthy WAN renewing every 15 minutes (valid 3600 s, preferred 1800 s) reconfigures Kea once in an hour: the
+// lease lifetimes do not follow the delegation's remaining time.
+func TestPrefixesRenewingSendsNothing(t *testing.T) {
+	b := newBench(t)
+	k := b.delegatedLAN("2001:db8:aa00::/48", 0)
+	for minute := range 60 {
+		since := minute % 15 * 60
+		b.prefix("2001:db8:aa00::/48", 1800-since, 3600-since)
+		if err := b.r.SyncPrefixes(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		b.now = b.now.Add(time.Minute)
+	}
+	if k.count() != 1 || !strings.Contains(k.last(), `"preferred-lifetime": 4500`) || !strings.Contains(k.last(), `"valid-lifetime": 7200`) {
+		t.Fatalf("config-set sent %d times: %s", k.count(), k.last())
 	}
 }
 
@@ -353,7 +372,8 @@ func TestFixedPrefixRouted(t *testing.T) {
 	}
 }
 
-// A static name on a delegated segment is published at its current address, and moves with the prefix.
+// A static name on a delegated segment is published at its current address, and moves with the prefix. Its TTL is
+// a lease's, a third of the valid lifetime (7200 s here), so resolvers do not keep the old address for an hour.
 func TestStaticNameOnDelegated(t *testing.T) {
 	b := newBench(t)
 	b.filled()
@@ -363,7 +383,7 @@ func TestStaticNameOnDelegated(t *testing.T) {
 	if err := b.r.SyncLeases(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"router.home.arpa. 3600 IN AAAA 2001:db8:aa00:1::10"`, `"2001:db8:aa00:1::10 3600 router.home.arpa."`} {
+	for _, want := range []string{`"router.home.arpa. 2400 IN AAAA 2001:db8:aa00:1::10"`, `"2001:db8:aa00:1::10 2400 router.home.arpa."`} {
 		if !strings.Contains(b.leaseNames(), want) {
 			t.Fatalf("missing %s in:\n%s", want, b.leaseNames())
 		}
@@ -377,6 +397,18 @@ func TestStaticNameOnDelegated(t *testing.T) {
 	}
 	if !strings.Contains(b.leaseNames(), "AAAA 2001:db8:bb00:1::10") || strings.Contains(b.leaseNames(), "2001:db8:aa00") {
 		t.Fatalf("name did not move:\n%s", b.leaseNames())
+	}
+}
+
+// A long lease does not make a static name outlive the prefix it moves with: its TTL stays at most an hour.
+func TestStaticNameTTLCapped(t *testing.T) {
+	var cfg kea6Config
+	if err := json.Unmarshal([]byte(`{"Dhcp6":{"subnet6":[{"id":7,"valid-lifetime":604800,"reservations":[{"hostname":"router","ip-addresses":["2001:db8:aa00:1::10"]}],
+		"user-context":{"andaru":{"domain":"home.arpa","delegated":true,"names":true}}}]}}`), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(lease6Records(cfg, nil, nil), "\n"); !strings.Contains(got, `"router.home.arpa. 3600 IN AAAA 2001:db8:aa00:1::10"`) {
+		t.Fatalf("records:\n%s", got)
 	}
 }
 
@@ -426,7 +458,8 @@ func TestPrefixesForeignRouteIgnored(t *testing.T) {
 	}
 }
 
-// A refused configuration is offered again on the next run, and the change it carries is still deprecated.
+// A refused configuration is offered again on the next run; the change it carries is deprecated and saved even
+// while Kea refuses.
 func TestPrefixesRefusedThenRetried(t *testing.T) {
 	b := newBench(t)
 	s := &sent{}
@@ -441,15 +474,18 @@ func TestPrefixesRefusedThenRetried(t *testing.T) {
 	if err := b.r.SyncPrefixes(t.Context()); err == nil {
 		t.Fatal("refusal went unreported")
 	}
-	if len(s.list()) != 0 {
-		t.Fatalf("deprecated before Kea took the new prefix: %v", s.list())
+	if got := s.list(); len(got) != 1 || !strings.HasPrefix(got[0], "ens19 2001:db8:aa00:1::/64") {
+		t.Fatalf("not deprecated while Kea refuses: %v", got)
+	}
+	if c := b.prefixState().WANs["ens18"].Current; c == nil || c.Prefix != mustPrefix("2001:db8:bb00::/48") {
+		t.Fatalf("state not saved while Kea refuses: %+v", c)
 	}
 	b.keaRefuse.Store(false)
 	if err := b.r.SyncPrefixes(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(b.keaFile(), "2001:db8:bb00:1::/64") || k.count() != 3 || len(s.list()) != 1 {
-		t.Fatalf("not retried: %d config-sets, sent %v\n%s", k.count(), s.list(), b.keaFile())
+	if !strings.Contains(b.keaFile(), "2001:db8:bb00:1::/64") || k.count() != 3 {
+		t.Fatalf("not retried: %d config-sets\n%s", k.count(), b.keaFile())
 	}
 }
 
@@ -577,6 +613,15 @@ func TestOldPoolRoutedWhileValid(t *testing.T) {
 			t.Fatalf("missing %q: %q", want, b.net.argv)
 		}
 	}
+	// Past the old prefix's valid lifetime, the lease sync drops its pool even before the prefix sync runs again.
+	b.now = b.now.Add(3 * time.Hour)
+	b.net.argv = nil
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if b.index("ip -6 route replace unreachable 2001:db8:aa00:80::/60 proto 77") >= 0 || b.index("ip -6 route replace 2001:db8:aa00:82::/64 via fe80::1 dev ens19 proto 77") >= 0 {
+		t.Fatalf("an expired pool still routed: %q", b.net.argv)
+	}
 }
 
 // Back to the earlier prefix within the window: its /64 is current again and is not advertised deprecated.
@@ -604,24 +649,90 @@ func TestPrefixBackIsNotDeprecated(t *testing.T) {
 	}
 }
 
-// A fresh change waits for networkd's own advertisement even when the clock moves during the run.
+// A fresh change is deprecated DeprecateAfter after it is seen, so networkd's own advertisement goes first, even
+// when the clock moves during the run; Kea is handed the new prefix without waiting for it.
 func TestDeprecationWaitsWithMovingClock(t *testing.T) {
 	b := newBench(t)
-	b.r.SendRA = (&sent{}).record
-	b.delegatedLAN("2001:db8:aa00::/48", -1)
+	k := b.delegatedLAN("2001:db8:aa00::/48", 0)
 	if err := b.r.SyncPrefixes(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	b.prefix("2001:db8:bb00::/48", 3600, 7200)
 	start := b.now
 	b.r.Now = func() time.Time { start = start.Add(time.Millisecond); return start }
-	b.r.DeprecateAfter = 50 * time.Millisecond
+	b.r.DeprecateAfter = time.Second
+	var gap time.Duration
+	keaFirst := false
 	began := time.Now()
+	b.r.SendRA = func(string, []byte) error {
+		gap, keaFirst = time.Since(began), k.count() == 2
+		return nil
+	}
 	if err := b.r.SyncPrefixes(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if time.Since(began) < 50*time.Millisecond {
-		t.Fatal("sent without waiting for networkd's advertisement")
+	if gap < time.Second {
+		t.Fatalf("deprecated %v after the change, before networkd's advertisement", gap)
+	}
+	if !keaFirst {
+		t.Fatal("Kea waited for the deprecation")
+	}
+}
+
+// A state that cannot be written does not keep the new prefix from Kea.
+func TestPrefixesStateUnwritable(t *testing.T) {
+	b := newBench(t)
+	b.r.SendRA = (&sent{}).record
+	k := b.delegatedLAN("2001:db8:aa00::/48", 0)
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	b.prefix("2001:db8:bb00::/48", 3600, 7200)
+	// A directory where the files are: neither can be replaced.
+	for _, path := range []string{replacedPrefixes, delegatedState} {
+		os.Remove(filepath.Join(b.net.root, path))
+		if err := os.MkdirAll(filepath.Join(b.net.root, path, "x"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.r.SyncPrefixes(t.Context()); err == nil {
+		t.Fatal("an unwritable state went unreported")
+	}
+	if k.count() != 2 || !strings.Contains(b.keaFile(), "2001:db8:bb00:1::/64") {
+		t.Fatalf("Kea not reconfigured: %d config-sets\n%s", k.count(), b.keaFile())
+	}
+}
+
+// A replaced list that cannot be written keeps the change unsaved, so a later run sees it again and the old prefix
+// is still deprecated once the list can be written.
+func TestPrefixesReplacedListUnwritable(t *testing.T) {
+	b := newBench(t)
+	s := &sent{}
+	b.r.SendRA = s.record
+	b.delegatedLAN("2001:db8:aa00::/48", -1)
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	b.prefix("2001:db8:bb00::/48", 3600, 7200)
+	list := filepath.Join(b.net.root, replacedPrefixes)
+	os.Remove(list)
+	if err := os.MkdirAll(filepath.Join(list, "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.SyncPrefixes(t.Context()); err == nil {
+		t.Fatal("an unwritable replaced list went unreported")
+	}
+	if err := os.RemoveAll(list); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		b.now = b.now.Add(time.Minute)
+		if err := b.r.SyncPrefixes(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := s.list(); len(got) != 4 || !strings.HasPrefix(got[3], "ens19 2001:db8:aa00:1::/64") {
+		t.Fatalf("deprecation not continued: %v", got)
 	}
 }
 
@@ -696,5 +807,49 @@ func TestPrefixViewDamagedTemplate(t *testing.T) {
 	writeFile(t, filepath.Join(b.net.root, kea6Template), "{")
 	if _, err := ReadPrefixView(b.net.root); err == nil {
 		t.Fatal("a damaged template went unreported")
+	}
+}
+
+// A pool whose own segment does not fit the prefix is not served: the view shows it without a prefix and names it.
+func TestPrefixViewPoolOfSegmentNotFitting(t *testing.T) {
+	b := newBench(t)
+	b.now = time.Now() // the view reads the real clock
+	b.delegatedLAN("2001:db8:aa00::/56", -1)
+	writeFile(t, filepath.Join(b.net.root, netDir, "50-andaru-ens19.network"), strings.Replace(lanNetwork, "SubnetId=0x1", "SubnetId=0x100", 1))
+	writeFile(t, filepath.Join(b.net.root, kea6Template), strings.Replace(templateBody, `"subnetId":"1",`, `"subnetId":"100",`, 1))
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	view, err := ReadPrefixView(b.net.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := view.WANs[0]
+	if len(w.Pools) != 1 || w.Pools[0].Prefix != nil || !slices.Contains(w.NotFitting, "the delegation pool of ens19") {
+		t.Fatalf("%+v", w)
+	}
+}
+
+// A saved prefix past its valid lifetime is not served, so the view shows none instead of an expired current.
+func TestPrefixViewExpiredCurrent(t *testing.T) {
+	b := newBench(t)
+	b.delegatedLAN("", -1)
+	writeFile(t, filepath.Join(b.net.root, delegatedState), `{"wans":{"ens18":{"requested":48,"current":{"prefix":"2001:db8:aa00::/48","preferred":"2001-01-01T00:00:00Z","valid":"2001-01-01T00:00:00Z"}}}}`)
+	view, err := ReadPrefixView(b.net.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := view.WANs[0]; w.Current != nil || w.Segments[0].Prefix != nil {
+		t.Fatalf("%+v", w)
+	}
+}
+
+// Kea's file without a Dhcp6 object is reported as such, not as a <nil> error.
+func TestPrefixesBaseWithoutDhcp6(t *testing.T) {
+	b := newBench(t)
+	b.delegatedLAN("2001:db8:aa00::/48", -1)
+	writeFile(t, filepath.Join(b.net.root, kea6File), `{}`)
+	if err := b.r.SyncPrefixes(t.Context()); err == nil || !strings.Contains(err.Error(), "no Dhcp6") {
+		t.Fatalf("got %v", err)
 	}
 }

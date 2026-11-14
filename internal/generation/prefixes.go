@@ -2,6 +2,7 @@ package generation
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -243,7 +244,7 @@ func (r Realizer) fillKea6(prefixes map[string]delegation.Held) ([]byte, bool, e
 	if err := json.Unmarshal(raw, &tpl); err != nil {
 		return nil, false, fmt.Errorf("read the DHCPv6 template: %w", err)
 	}
-	subnets, skipped := delegation.FillTemplate(tpl, prefixes, r.Now())
+	subnets, skipped := delegation.FillTemplate(tpl, prefixes)
 	for _, s := range skipped {
 		slog.Warn("the delegated prefix has no room; not served", "what", s)
 	}
@@ -252,8 +253,11 @@ func (r Realizer) fillKea6(prefixes map[string]delegation.Held) ([]byte, bool, e
 		return nil, false, err
 	}
 	var conf map[string]map[string]any
-	if err := json.Unmarshal(base, &conf); err != nil || conf["Dhcp6"] == nil {
-		return nil, false, fmt.Errorf("read the DHCPv6 server's configuration: %v", err)
+	if err := json.Unmarshal(base, &conf); err != nil {
+		return nil, false, fmt.Errorf("read the DHCPv6 server's configuration: %w", err)
+	}
+	if conf["Dhcp6"] == nil {
+		return nil, false, errors.New("the DHCPv6 server's configuration has no Dhcp6 object")
 	}
 	ours := map[float64]bool{}
 	for _, s := range tpl.Subnets {
@@ -294,9 +298,9 @@ func (r Realizer) SyncPrefixes(ctx context.Context) error {
 	return errors.Join(err, routes)
 }
 
-// syncPrefixes holds the lock. A running Kea is handed the new configuration first, and the file written only
-// once Kea took it; the apply passes reconfigure false, since it restarts Kea on the file itself. The state is
-// saved last, so a run that fails sees the same change again.
+// syncPrefixes holds the lock. Kea's step and the deprecation with the saved state do not depend on each other:
+// a refusing or wedged Kea never holds back the deprecation, and a state that cannot be written never keeps the
+// new prefix from Kea; their errors are joined. Kea goes first, so it does not wait for the deprecation's pause.
 func (r Realizer) syncPrefixes(ctx context.Context, reconfigure bool) error {
 	links, hints, wans := r.readDelegatedLinks()
 	if len(links) == 0 {
@@ -307,35 +311,45 @@ func (r Realizer) syncPrefixes(ctx context.Context, reconfigure bool) error {
 	if err != nil {
 		return err
 	}
+	now := r.Now() // one reading: sendDeprecations tells this run's fresh entries by it
+	list, recordErr := r.recordReplaced(links, before, state, now)
+	keaErr := r.serveKea6(ctx, prefixes, reconfigure)
+	if reconfigure {
+		r.sendDeprecations(links, list, now)
+	}
+	if recordErr != nil {
+		// Unsaved, the change is seen again next run and recorded then; saved, it would be deprecated only once.
+		return errors.Join(keaErr, recordErr)
+	}
+	return errors.Join(keaErr, r.saveState(before, state))
+}
+
+// serveKea6 fills Kea's file with prefixes. A running Kea is handed the new configuration first, and the file
+// written only once Kea took it, so a refused one is offered again on the next run; the apply passes reconfigure
+// false, since it restarts Kea on the file itself.
+func (r Realizer) serveKea6(ctx context.Context, prefixes map[string]delegation.Held, reconfigure bool) error {
 	data, ok, err := r.fillKea6(prefixes)
 	if err != nil {
 		return err
 	}
-	if old, err := os.ReadFile(r.Root + kea6File); ok && (err != nil || !bytes.Equal(old, data)) {
-		if reconfigure {
-			if err := r.keaConfigSet(ctx, data); err != nil {
-				return err
-			}
-		}
-		if err := writeAtomic(r.Root+kea6File, data, 0o644); err != nil {
+	if old, err := os.ReadFile(r.Root + kea6File); !ok || err == nil && bytes.Equal(old, data) {
+		return nil
+	}
+	if reconfigure {
+		if err := r.keaConfigSet(ctx, data); err != nil {
 			return err
 		}
-		if reconfigure {
-			// Names and pool routes follow the new prefix; Kea's reconfiguration fires no lease event.
-			if _, err := r.Run(ctx, "/usr/bin/systemctl", "start", "--no-block", "andaru-leases.service"); err != nil {
-				slog.Warn("start the lease sync", "error", err)
-			}
-		}
 	}
-	now := r.Now() // one reading: sendDeprecations tells this run's fresh entries by it
-	list, err := r.recordReplaced(links, before, state, now)
-	if err != nil {
+	if err := writeAtomic(r.Root+kea6File, data, 0o644); err != nil {
 		return err
 	}
 	if reconfigure {
-		r.sendDeprecations(links, list, now)
+		// Names and pool routes follow the new prefix; Kea's reconfiguration fires no lease event.
+		if _, err := r.Run(ctx, "/usr/bin/systemctl", "start", "--no-block", "andaru-leases.service"); err != nil {
+			slog.Warn("start the lease sync", "error", err)
+		}
 	}
-	return r.saveState(before, state)
+	return nil
 }
 
 // bootPrefixes fills Kea's file from the saved prefixes before networkd and Kea start, so Kea's first lease
@@ -389,8 +403,7 @@ func (r Realizer) checkTemplate(ctx context.Context) error {
 	links, hints, _ := r.readDelegatedLinks()
 	doc := map[string]delegation.Held{}
 	for _, l := range links {
-		far := r.Now().Add(24 * time.Hour)
-		doc[l.Uplink] = delegation.Held{Prefix: netip.PrefixFrom(netip.MustParseAddr("2001:db8::"), cmpOr(hints[l.Uplink], 48)), Preferred: far, Valid: far}
+		doc[l.Uplink] = delegation.Held{Prefix: netip.PrefixFrom(netip.MustParseAddr("2001:db8::"), cmp.Or(hints[l.Uplink], 48))}
 	}
 	data, ok, err := r.fillKea6(doc)
 	if err != nil || !ok {
@@ -401,11 +414,4 @@ func (r Realizer) checkTemplate(ctx context.Context) error {
 	}
 	defer os.Remove(r.Root + kea6Check)
 	return r.keaCheck(ctx, "/usr/sbin/kea-dhcp6", kea6Check, "DHCPv6 server")
-}
-
-func cmpOr(n, fallback int) int {
-	if n == 0 || n > 64 {
-		return fallback
-	}
-	return n
 }

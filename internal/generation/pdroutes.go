@@ -46,6 +46,7 @@ type kea6Config struct {
 		Subnet6 []struct {
 			ID        int    `json:"id"`
 			Interface string `json:"interface"`
+			Valid     int    `json:"valid-lifetime"`
 			PDPools   []struct {
 				Prefix    string `json:"prefix"`
 				PrefixLen int    `json:"prefix-len"`
@@ -143,9 +144,10 @@ func lease6Records(cfg kea6Config, leases []keaLease, static4 map[string]bool) [
 			// The generation knew only their suffixes, so these static names are published here, at the current prefix.
 			for _, res := range s.Reservations {
 				if label := strings.ToLower(res.Hostname); len(res.IPAddresses) > 0 && leaseLabel.MatchString(label) {
-					name := label + "." + a.Domain + "."
-					static = append(static, fmt.Sprintf("local-data: %q", fmt.Sprintf("%s 3600 IN AAAA %s", name, res.IPAddresses[0])),
-						fmt.Sprintf("local-data-ptr: %q", fmt.Sprintf("%s 3600 %s", res.IPAddresses[0], name)))
+					// A lease's TTL, at most an hour: the address moves with the prefix.
+					name, ttl := label+"."+a.Domain+".", min(s.Valid/3, 3600)
+					static = append(static, fmt.Sprintf("local-data: %q", fmt.Sprintf("%s %d IN AAAA %s", name, ttl, res.IPAddresses[0])),
+						fmt.Sprintf("local-data-ptr: %q", fmt.Sprintf("%s %d %s", res.IPAddresses[0], ttl, name)))
 				}
 			}
 		}
@@ -188,7 +190,8 @@ func delegatedPools(cfg kea6Config) map[string]bool {
 }
 
 // replacedPools are the delegated pools under each WAN's previous prefix while it is valid, by interface: Kea
-// keeps their leases until the routers renew, so their routes stay until then.
+// keeps their leases until the routers renew, so their routes stay until then. Validity is judged here too: the
+// saved list is pruned only when the prefix sync runs.
 func (r Realizer) replacedPools() map[string][]netip.Prefix {
 	var tpl delegation.Template
 	raw, err := os.ReadFile(r.Root + kea6Template)
