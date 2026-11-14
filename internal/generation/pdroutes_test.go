@@ -364,6 +364,65 @@ func TestPDRouteRetriedByPrefixRun(t *testing.T) {
 	}
 }
 
+// A dynamic DHCPv4 lease cannot claim a name that is static in DHCPv6 only.
+func TestDHCPv4NamesBlockedByStaticDHCPv6(t *testing.T) {
+	b := newBench(t)
+	b.kea(lease{"192.168.40.131", "printer", 0, 1, 7200, 100}, lease{"192.168.40.130", "laptop", 0, 1, 7200, 100})
+	b.kea6()
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if names := b.leaseNames(); strings.Contains(names, "192.168.40.131") || !strings.Contains(names, "laptop.home.arpa.") {
+		t.Fatalf("a dynamic DHCPv4 lease took a static DHCPv6 name:\n%s", names)
+	}
+}
+
+// Both families failing reports both failures.
+func TestBothFamiliesFailing(t *testing.T) {
+	b := newBench(t)
+	writeFile(t, filepath.Join(b.net.root, keaFile), "{")
+	writeFile(t, filepath.Join(b.net.root, kea6File), "{")
+	err := b.r.SyncLeases(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "DHCP server's configuration") || !strings.Contains(err.Error(), "DHCPv6 server's configuration") {
+		t.Fatalf("error %v", err)
+	}
+}
+
+// Runs that change nothing replace no route and rewrite no next-hop table: each replace is a netlink event that
+// can wake the prefix path unit again. A missing route is still put back.
+func TestPDRoutesUnchangedRunsTouchNothing(t *testing.T) {
+	b := newBench(t)
+	b.filled(lease6{Address: "2001:db8:aa00:82::", PrefixLen: 64, Type: "IA_PD", Subnet: 7, Valid: 4000, Cltt: 100})
+	writeFile(t, filepath.Join(b.net.root, pdTable), `{"2001:db8:aa00:82::/64":{"via":"fe80::1","dev":"ens19"}}`)
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.Stat(filepath.Join(b.net.root, pdTable))
+	b.net.argv = nil
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if b.index("ip -6 route replace") >= 0 {
+		t.Fatalf("replaced unchanged routes: %q", b.net.argv)
+	}
+	if after, _ := os.Stat(filepath.Join(b.net.root, pdTable)); !os.SameFile(before, after) {
+		t.Fatal("unchanged next-hop table rewritten")
+	}
+	delete(b.net.routes, "2001:db8:aa00:80::/60")
+	delete(b.net.routes, "2001:db8:aa00:82::/64")
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"ip -6 route replace unreachable 2001:db8:aa00:80::/60 proto 77", "ip -6 route replace 2001:db8:aa00:82::/64 via fe80::1 dev ens19 proto 77"} {
+		if b.index(want) < 0 {
+			t.Fatalf("missing route not put back (%s): %q", want, b.net.argv)
+		}
+	}
+}
+
 // A line the hook appends through a descriptor it opened before the sync moved the file still arrives.
 func TestPDEventAppendedLate(t *testing.T) {
 	b := newBench(t)

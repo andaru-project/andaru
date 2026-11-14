@@ -3,6 +3,7 @@ package generation
 import (
 	"github.com/andaru-project/andaru/internal/delegation"
 
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -66,9 +67,10 @@ type kea6Config struct {
 	}
 }
 
-// syncKea6 returns the DHCPv6 lease names and reconciles the delegated-prefix routes; without a DHCPv6 server
-// it removes every route it installed. v4 is the DHCPv4 server's configuration, whose static names it keeps.
-func (r Realizer) syncKea6(ctx context.Context, v4 keaConfig) ([]string, error) {
+// syncKea6 returns the DHCPv6 lease names and its static names, and reconciles the delegated-prefix routes;
+// without a DHCPv6 server it removes every route it installed. static4 are the DHCPv4 static names, which no
+// DHCPv6 lease takes.
+func (r Realizer) syncKea6(ctx context.Context, static4 map[string]bool) ([]string, map[string]bool, error) {
 	var cfg kea6Config
 	var leases []keaLease
 	// Taken before the lease list: the hook runs after Kea commits, so any lease an event names is in the list.
@@ -78,24 +80,25 @@ func (r Realizer) syncKea6(ctx context.Context, v4 keaConfig) ([]string, error) 
 	switch {
 	case os.IsNotExist(err):
 	case err != nil:
-		return nil, err
+		return nil, nil, err
 	default:
 		if err := json.Unmarshal(raw, &cfg); err != nil {
-			return nil, fmt.Errorf("read the DHCPv6 server's configuration: %w", err)
+			return nil, nil, fmt.Errorf("read the DHCPv6 server's configuration: %w", err)
 		}
 	}
+	static6 := staticNames6(cfg)
 	// The events are gone from Kea's directory: what they taught is saved before anything else can fail.
 	old := r.replacedPools()
 	table, served := r.nextHops(cfg, events, old)
 	if err := r.saveNextHops(table); err != nil {
-		return nil, err
+		return nil, static6, err
 	}
 	done()
 	if running {
 		if leases, err = r.askLeases(ctx, kea6Socket, "lease6-get-all"); err != nil {
 			// Its own names and routes wait for it; the DHCPv4 names do not.
 			slog.Warn("ask the DHCPv6 server for its leases", "error", err)
-			return r.publishedNames(true), nil
+			return r.publishedNames(true), static6, nil
 		}
 	}
 	pools := delegatedPools(cfg)
@@ -105,27 +108,31 @@ func (r Realizer) syncKea6(ctx context.Context, v4 keaConfig) ([]string, error) 
 		}
 	}
 	if err := r.syncRoutes(ctx, leases, table, served, pools, r.waitingInterfaces(cfg)); err != nil {
-		return nil, err
+		return nil, static6, err
 	}
-	return lease6Records(cfg, leases, v4), nil
+	return lease6Records(cfg, leases, static4), static6, nil
+}
+
+// staticNames6 are the names DHCPv6 static leases publish: only a static address does, a static prefix alone
+// leaves the name to the dynamic lease.
+func staticNames6(cfg kea6Config) map[string]bool {
+	names := map[string]bool{}
+	for _, s := range cfg.Dhcp6.Subnet6 {
+		for _, res := range s.Reservations {
+			if len(res.IPAddresses) > 0 {
+				names[strings.ToLower(res.Hostname)] = true
+			}
+		}
+	}
+	return names
 }
 
 // lease6Records turns assigned address leases with valid names into AAAA and PTR records. A name static in either
 // family wins over the leases: a DHCPv6 client cannot claim a DHCPv4-only device's name for AAAA.
-func lease6Records(cfg kea6Config, leases []keaLease, v4 keaConfig) []string {
-	domains, taken := map[int]string{}, map[string]bool{}
-	for _, s := range v4.Dhcp4.Subnet4 {
-		for _, res := range s.Reservations {
-			taken[strings.ToLower(res.Hostname)] = true
-		}
-	}
+func lease6Records(cfg kea6Config, leases []keaLease, static4 map[string]bool) []string {
+	domains, taken := map[int]string{}, staticNames6(cfg)
+	maps.Copy(taken, static4)
 	for _, s := range cfg.Dhcp6.Subnet6 {
-		for _, res := range s.Reservations {
-			// Only a static address publishes the name; a static prefix alone leaves it to the dynamic lease.
-			if len(res.IPAddresses) > 0 {
-				taken[strings.ToLower(res.Hostname)] = true
-			}
-		}
 		if s.UserContext.Andaru.Register && s.UserContext.Andaru.Domain != "" {
 			domains[s.ID] = s.UserContext.Andaru.Domain
 		}
@@ -238,9 +245,27 @@ func (r Realizer) syncRoutes(ctx context.Context, leases []keaLease, table map[s
 			wanted[key] = hop
 		}
 	}
+	// Listed first, so only a missing or changed route is replaced: every replace is a netlink event, and the
+	// prefix run repeats this each minute and on link changes.
+	out, err := r.Run(ctx, "/usr/sbin/ip", "-6", "route", "show", "proto", pdProto)
+	if err != nil {
+		return fmt.Errorf("list the delegated prefix routes: %w", err)
+	}
+	installed := map[string]nextHop{}
+	unreachable := map[string]bool{}
+	for line := range strings.SplitSeq(string(out), "\n") {
+		switch fields := strings.Fields(line); {
+		case len(fields) > 1 && fields[0] == "unreachable":
+			unreachable[fields[1]] = true
+		case len(fields) > 4 && fields[1] == "via" && fields[3] == "dev":
+			installed[fields[0]] = nextHop{Via: fields[2], Dev: fields[4]}
+		case len(fields) > 0:
+			installed[fields[0]] = nextHop{}
+		}
+	}
 	for _, pool := range slices.Sorted(maps.Keys(pools)) {
 		// A pool handing out itself is its router's route while leased, which an unreachable one would replace.
-		if wanted[pool] != (nextHop{}) {
+		if wanted[pool] != (nextHop{}) || unreachable[pool] {
 			continue
 		}
 		if _, err := r.Run(ctx, "/usr/sbin/ip", "-6", "route", "replace", "unreachable", pool, "proto", pdProto); err != nil {
@@ -249,26 +274,25 @@ func (r Realizer) syncRoutes(ctx context.Context, leases []keaLease, table map[s
 	}
 	for _, key := range slices.Sorted(maps.Keys(wanted)) {
 		hop := wanted[key]
+		if hop == installed[key] {
+			continue
+		}
 		if _, err := r.Run(ctx, "/usr/sbin/ip", "-6", "route", "replace", key, "via", hop.Via, "dev", hop.Dev, "proto", pdProto); err != nil {
 			slog.Warn("install a delegated prefix route", "prefix", key, "error", err)
 		}
 	}
-	out, err := r.Run(ctx, "/usr/sbin/ip", "-6", "route", "show", "proto", pdProto)
-	if err != nil {
-		return fmt.Errorf("list the delegated prefix routes: %w", err)
-	}
-	for line := range strings.SplitSeq(string(out), "\n") {
-		fields := strings.Fields(line)
-		switch {
-		case len(fields) > 1 && fields[0] == "unreachable":
-			if !pools[fields[1]] {
-				if _, err := r.Run(ctx, "/usr/sbin/ip", "-6", "route", "del", "unreachable", fields[1], "proto", pdProto); err != nil {
-					slog.Warn("remove a delegation pool's route", "pool", fields[1], "error", err)
-				}
+	for _, pool := range slices.Sorted(maps.Keys(unreachable)) {
+		if !pools[pool] {
+			if _, err := r.Run(ctx, "/usr/sbin/ip", "-6", "route", "del", "unreachable", pool, "proto", pdProto); err != nil {
+				slog.Warn("remove a delegation pool's route", "pool", pool, "error", err)
 			}
-		case len(fields) > 0 && wanted[fields[0]] == (nextHop{}):
-			if _, err := r.Run(ctx, "/usr/sbin/ip", "-6", "route", "del", fields[0], "proto", pdProto); err != nil {
-				slog.Warn("remove a delegated prefix route", "prefix", fields[0], "error", err)
+		}
+	}
+	for _, key := range slices.Sorted(maps.Keys(installed)) {
+		// A pool's own key was just made unreachable again when its router's lease ended.
+		if wanted[key] == (nextHop{}) && !pools[key] {
+			if _, err := r.Run(ctx, "/usr/sbin/ip", "-6", "route", "del", key, "proto", pdProto); err != nil {
+				slog.Warn("remove a delegated prefix route", "prefix", key, "error", err)
 			}
 		}
 	}
@@ -283,6 +307,9 @@ func (r Realizer) syncRoutes(ctx context.Context, leases []keaLease, table map[s
 
 func (r Realizer) saveNextHops(table map[string]nextHop) error {
 	data, _ := json.Marshal(table)
+	if old, err := os.ReadFile(r.Root + pdTable); err == nil && bytes.Equal(old, data) {
+		return nil
+	}
 	if err := os.MkdirAll(r.Root+"/var/lib/andaru", 0o755); err != nil {
 		return err
 	}

@@ -290,7 +290,7 @@ func (r Realizer) SyncPrefixes(ctx context.Context) error {
 	defer unlock()
 	err = r.syncPrefixes(ctx, true)
 	// Only the routes matter here: the lease sync publishes the names.
-	_, routes := r.syncKea6(ctx, keaConfig{})
+	_, _, routes := r.syncKea6(ctx, nil)
 	return errors.Join(err, routes)
 }
 
