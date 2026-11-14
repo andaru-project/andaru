@@ -96,7 +96,7 @@ The current and last prefixes, with their lifetimes, are kept in `/var/lib/andar
 
 ### Units (packaging)
 
-- `andaru-prefixes.path`: `PathChanged=` on `/run/systemd/netif/links/` (the probe saw networkd replace each link's file by rename on a prefix change), starting `andaru-prefixes.service` (`Type=oneshot`, `ExecStart=/usr/bin/andaru realize prefixes`). The service runs only on a host with a delegated segment: the generation renders `/run/andaru-delegated/<interface>` for each one, and the service has `ConditionPathExistsGlob=/run/andaru-delegated/*`.
+- `andaru-prefixes.path`: `PathChanged=` on `/run/systemd/netif/links/` (the probe saw networkd replace each link's file by rename on a prefix change), starting `andaru-prefixes.service` (`Type=oneshot`, `ExecStart=/usr/bin/andaru realize prefixes`).
 - `andaru-prefixes.timer`: every 60 seconds, the same service. It resends deprecations during their ten minutes and catches a missed path event.
 - Kea's DHCPv6 drop-in is unchanged; its `ExecStartPre` condition still names the rendered file.
 

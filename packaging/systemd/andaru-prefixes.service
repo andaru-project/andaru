@@ -3,8 +3,6 @@ Description=Andaru delegated IPv6 prefixes
 After=systemd-networkd.service kea-dhcp6-server.service
 # networkd rewrites its link files several times a second while links come up; each run is idempotent.
 StartLimitIntervalSec=0
-# The live generation leaves a file here for each segment that takes a delegated prefix; elsewhere nothing runs.
-ConditionPathExistsGlob=/run/andaru-delegated/*
 
 [Service]
 Type=oneshot

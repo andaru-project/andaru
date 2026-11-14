@@ -1,6 +1,3 @@
-### /run/andaru-delegated/ens19 0644 secret=false sources=/segments/1
-# This segment takes its IPv6 prefix by delegation.
-
 ### /run/andaru-unbound/andaru.conf 0644 secret=false sources=/dhcp,/dns
 server:
 	interface: 127.0.0.1
