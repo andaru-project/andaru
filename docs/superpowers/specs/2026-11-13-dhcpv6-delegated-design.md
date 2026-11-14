@@ -59,7 +59,7 @@ systemd-networkd 257 and Kea 2.6.3 (Debian 13), 2026-11-13, in containers: an up
 
 **Validation (the saved declaration alone):**
 - A delegated segment's `subnetId` fits in `64 − requestPrefixLength` bits (pfSense's rule; slice 1 only checked 16 bits).
-- Suffixes lie in `::/64`, ranges hold none of the segment's own suffixes, and do not overlap each other.
+- Suffixes lie in `::/64`, and ranges do not overlap each other.
 - `length` is longer than the WAN segment's `requestPrefixLength` (default 64 in slice 1: a pool needs a hint of 63 or shorter), and at most 64. `subnetId` fits in `length − requestPrefixLength` bits.
 - `prefixId` fits in `delegatedLength − length` bits and appears once per entry.
 - The pool overlaps no delegated segment's `/64` on the same WAN (each takes `subnetId` at 64), and no other pool.
