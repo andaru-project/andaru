@@ -430,6 +430,12 @@ func (r Realizer) Activate(ctx context.Context, id int) error {
 		}); err != nil {
 			return fmt.Errorf("activate %d: %s; %w", id, reason, err)
 		}
+		if p.Takeover {
+			// After the files and Andaru's table: the host's own firewall, unmasked by the hand-back, runs again now.
+			if err := r.startHostFirewall(restore, true); err != nil {
+				slog.Error("start the host's nftables.service", "error", err)
+			}
+		}
 		return r.failed(id, p, reason)
 	}
 	restore, stop := context.WithTimeout(context.WithoutCancel(ctx), restoreLimit)
@@ -612,6 +618,12 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) error {
 	}
 	if err != nil {
 		return fmt.Errorf("roll back %d: %w", id, err)
+	}
+	if live == nil && p.Takeover {
+		// After the files and Andaru's table: the host's own firewall, unmasked by the hand-back, runs again now.
+		if err := r.startHostFirewall(ctx, true); err != nil {
+			slog.Error("start the host's nftables.service", "error", err)
+		}
 	}
 	if what != "" {
 		reason += " (restored " + what + ")"

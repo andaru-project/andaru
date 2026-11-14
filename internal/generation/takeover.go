@@ -381,9 +381,12 @@ func (r Realizer) Boot(ctx context.Context) error {
 		return err
 	}
 	p.Live = nil
-	// The mask is the takeover's: back on its own configuration, the host loads its own firewall at the next boot.
+	// The mask is the takeover's: back on its own configuration, the host gets its own firewall back. Andaru's table
+	// was dropped above.
 	if p.Takeover {
 		if _, err := r.Run(ctx, "/usr/bin/systemctl", "unmask", "nftables.service"); err != nil {
+			failures = append(failures, err)
+		} else if err := r.startHostFirewall(ctx, false); err != nil {
 			failures = append(failures, err)
 		}
 	}
@@ -406,7 +409,25 @@ func (r Realizer) bootIfupdown(ctx context.Context, p Pointers, b IfupdownBaseli
 			run("start", "--no-block", "ifup@"+i.Name+".service")
 		}
 	}
+	// Boot dropped Andaru's table before this; the host's own firewall must run this boot too.
+	if err := r.startHostFirewall(ctx, false); err != nil {
+		failures = append(failures, err)
+	}
 	p.Live = nil
 	slog.Error("booting on ifupdown; no generation is usable", "error", errors.Join(failures...))
 	return r.writePointers("boot:pointers", p)
+}
+
+// startHostFirewall starts the host's own nftables.service, already unmasked, when the host enables it, so a hand-back
+// never leaves the host without a firewall until the next boot. Boot only queues it: waiting there would deadlock.
+func (r Realizer) startHostFirewall(ctx context.Context, wait bool) error {
+	if out, _ := r.Run(ctx, "/usr/bin/systemctl", "is-enabled", "nftables.service"); strings.TrimSpace(string(out)) != "enabled" {
+		return nil
+	}
+	args := []string{"start", "--no-block", "nftables.service"}
+	if wait {
+		args = []string{"start", "nftables.service"}
+	}
+	_, err := r.Run(ctx, "/usr/bin/systemctl", args...)
+	return err
 }
