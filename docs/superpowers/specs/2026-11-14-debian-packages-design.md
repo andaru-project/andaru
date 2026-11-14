@@ -9,7 +9,7 @@ Decisions already recorded on #13 that this slice implements:
 - **A signed APT repository over HTTPS**, trusted only for itself through deb822 `Signed-By:`, never through global APT trust; signature checks are never bypassed.
 - **Bootstrap:** a small `.deb` verified against a separately published checksum, then ordinary apt installation. No curl-pipe-shell.
 - **Key hierarchy:** an offline primary key; the repository is signed by a subkey that expires after 5 years; new keys reach installed systems through the `andaru-archive-keyring` package; `Valid-Until` in `Release` against replayed repositories.
-- **`nftables.service` is masked:** a restart of Debian's unit flushes the whole ruleset, so a package upgrade restarting it would wipe Andaru's filter.
+- **`nftables.service` is masked when a takeover is confirmed:** a start of Debian's unit flushes the whole ruleset, Andaru's filter included. Installing the package masks nothing, so a reboot before the takeover is confirmed still loads the host's own firewall.
 - **Uninstalling is not supported;** upgrades are.
 
 Owner decisions, 2026-11-14:
@@ -34,7 +34,7 @@ Debian 13 container (systemd 257.13), 2026-11-14:
 | `andaru` (amd64, arm64) and `andaru-archive-keyring` (all) packages | Upgrade approval, rollback of software and configuration (slice 2) |
 | The signed repository on `apt.andaru.io`, published from Andaru's GitHub releases | Backup and restore, factory reset, security-update approval (later slices) |
 | The bootstrap: the keyring `.deb`, its published checksum | A project-built disk image |
-| Masking `nftables.service`; enabling Andaru's units; AppArmor rules installed and loaded | Removing ifupdown or cloud-init (the takeover's business, as today) |
+| Enabling Andaru's units; AppArmor rules installed and loaded | Removing ifupdown or cloud-init and masking `nftables.service` (the takeover's business, at confirmation) |
 | CI building and checking the packages on every pull request | Other distributions (#13 notes immutable distributions as a later consideration) |
 
 ## The packages
@@ -67,13 +67,15 @@ The binary is built with the Go toolchain from `go.mod` (`actions/setup-go`), no
 ### Maintainer scripts
 
 `postinst configure`:
-1. **Mask `nftables.service`** (`deb-systemd-helper` is not used for a unit of another package: plain `systemctl mask nftables.service`). Masking never stops a running unit, and a host Andaru has not taken over keeps whatever ruleset it had; the takeover already loads Andaru's table. If `nftables.service` is active at install, it stays active until the next boot, which the takeover precedes; the postinst prints that.
+1. **`nftables.service` is left alone.** The takeover's confirmation masks it, as it masks ifupdown, and boot repeats that; until then a reboot loads the host's own `/etc/nftables.conf`. Masking at install, as first designed, left a host that was never taken over without a firewall after its next reboot. A takeover with `nftables.service` enabled gets a `FOREIGN_FILTER` warning instead of a refusal; a masked unit is never reported.
 2. **AppArmor:** for each of `usr.sbin.kea-dhcp4`, `usr.sbin.kea-dhcp6`, `usr.sbin.unbound` whose profile exists, add the line `include if exists <andaru/<daemon>>` (AppArmor 4, as Debian 13 ships) to `/etc/apparmor.d/local/usr.sbin.<daemon>` if it is missing (creating the file if needed, as the daemon's own postinst would), then `apparmor_parser -r` that profile. One marked line in the administrator's file, never a replaced file. When a daemon is installed after Andaru, a `dpkg` file trigger on `/etc/apparmor.d/usr.sbin.kea-dhcp4` (and the others) reruns the same step.
-3. `systemd-tmpfiles --create andaru.conf`.
+3. `systemd-tmpfiles --create andaru.conf`, through `dh_installtmpfiles`.
 4. Units, through `dh_installsystemd`: enable `andaru-engine.service`, `andaru-network-boot.service`, `andaru-leases.path`, `andaru-prefixes.path`, `andaru-prefixes.timer`; start the engine and the path and timer units; never start the oneshots (`andaru-network-boot`, `andaru-leases.service`, `andaru-prefixes.service`) at install or upgrade; the prefix timer runs its service about 10 seconds later, a no-op before the takeover. On upgrade the engine is restarted (it serves only the local socket; restarting it touches no network).
 5. **Never** `networkctl reload`, restart networkd, or touch an interface: installing a package must not disturb the link the operator is on. `ManageForeignRoutes=no` therefore takes effect at the next networkd restart, which the first boot after the takeover provides.
 
-`prerm` and `postrm`: units are stopped on removal by `dh_installsystemd`'s defaults, except `andaru-network-boot` (nothing to stop). `postrm purge` removes nothing under `/var/lib/andaru`: that state is the host's network configuration, and uninstalling is not a supported path. It leaves `nftables.service` masked; the purge removes the `include` lines it added (they would be harmless, being `if exists`, but they are not the administrator's).
+**Kea:** the package's drop-ins start Kea from `/run/andaru-kea/` only, so a Kea already serving DHCP from `/etc/kea` stops at its next restart. When `/usr/sbin/kea-dhcp4` or `kea-dhcp6` and its `/etc/kea/kea-dhcp*.conf` exist and the host is not taken over (no `/var/lib/andaru/generations/pointers.json`), the postinst says so; the guide warns before installing.
+
+`prerm remove` refuses while `/var/lib/andaru/generations/pointers.json` exists, unless `ANDARU_FORCE_REMOVE=1` is set: on a taken-over host `andaru-network-boot` alone puts the network configuration in place at boot. `upgrade`, `deconfigure` and `failed-upgrade` are never refused. Units are stopped on removal by `dh_installsystemd`'s defaults, except `andaru-network-boot` (nothing to stop). `postrm purge` removes nothing under `/var/lib/andaru`: that state is the host's network configuration, and uninstalling is not a supported path. It leaves `nftables.service` as the takeover left it; the purge removes the `include` lines it added (they would be harmless, being `if exists`, but they are not the administrator's).
 
 ### `andaru-archive-keyring` (Architecture: all)
 
@@ -102,11 +104,11 @@ pool/main/a/andaru/…, pool/main/a/andaru-archive-keyring/…
 ```
 
 - `Release`: `Origin: Andaru`, `Label: Andaru`, `Suite: trixie`, `Codename: trixie`, `Components: main`, `Architectures: amd64 arm64`, `Date`, and `Valid-Until` 14 days later. `Acquire-By-Hash` is not used.
-- **Retention:** the newest five versions of `andaru` stay in `pool/` (slice 2's rollback needs the previous one); older ones remain on their GitHub releases. A release is about 25 MB for both architectures, and GitHub Pages sites are limited to 1 GB.
+- **Retention:** the newest five versions of `andaru` stay in `pool/` (slice 2's rollback needs the previous one); older ones remain on their GitHub releases. A release is about 10 MB for both architectures (`0.4.0~rc2` is 5.1 MB per architecture), and GitHub Pages sites are limited to 1 GB.
 - **Test releases** are GitHub prereleases with versions like `0.4.0~rc1` (which sort before `0.4.0`), published to a separate suite, `trixie-test`, with its own `dists/trixie-test/` and the same pool and key. Hosts see them only by adding that suite; the lab does. Prereleases never enter `trixie`.
 - **Publishing** is a workflow in `andaru-project/apt`, the only place the signing key exists. It runs on `workflow_dispatch` and daily on a schedule. The signing key is an environment secret of a `signing` environment that only `main` may use, and each run re-enables the workflow, since GitHub disables schedules after 60 days without activity. It downloads the `.deb`s and `SHA256SUMS` of the releases the repository serves (every keyring release and the five newest Andaru versions) from `andaru-project/andaru`'s public GitHub releases, checks every package against its release's `SHA256SUMS` (one mismatch and nothing is published), builds the indexes with `apt-ftparchive`, signs `InRelease` and `Release.gpg` with the subkey, and deploys the site as a GitHub Pages artifact. The site is rebuilt whole each time and never committed, so the repository's history does not grow with every package. The daily run re-signs even without a new release, so `Valid-Until` never lapses on a maintained repository. Andaru's repository holds no credential for the APT repository.
 - **Versions:** the tag `v<version>` gives the Debian version `<version>-1`; the first release is `v0.4.0`, matching the API document's `0.4.0-dev`. `debian/changelog` gets its entry from the tag in the release workflow.
-- **Releasing** is a workflow in `andaru-project/andaru`, on a pushed tag `v<version>`: it builds both architectures' `andaru` and the keyring package, runs `lintian`, and creates the GitHub release with the `.deb`s and `SHA256SUMS`. It holds no credential to start the publishing workflow; the next daily run publishes the release, or the owner starts it at once with `gh workflow run publish -R andaru-project/apt`. GitHub renames uploaded assets with a `~` in their name, so the release names its packages with `.` there (`andaru_0.4.0.rc1-1_amd64.deb`); the Debian version inside is unchanged. A release is a draft until all its assets are uploaded.
+- **Releasing** is a workflow in `andaru-project/andaru`, on a pushed tag: `v<version>` builds both architectures' `andaru`, `keyring-<version>` builds the keyring package alone. A tag whose commit is not on `main` is refused. It runs `lintian` and creates the GitHub release with the `.deb`s and `SHA256SUMS`. It holds no credential to start the publishing workflow; the next daily run publishes the release, or the owner starts it at once with `gh workflow run publish -R andaru-project/apt`. GitHub renames uploaded assets with a `~` in their name, so the release names its packages with `.` there (`andaru_0.4.0.rc1-1_amd64.deb`); the Debian version inside is unchanged. A release is a draft until all its assets are uploaded.
 
 ## Hosts installed by hand
 
@@ -128,13 +130,13 @@ The guide also prints the primary key's fingerprint, for those who verify `andar
 
 ## CI
 
-- Every pull request builds both architectures' packages and runs `lintian` (no errors; warnings listed), then installs `andaru` with its recommends in a Debian 13 container booted with systemd and checks: the files above, `nftables.service` masked, Andaru's units enabled, the engine answering `andaru ctl links`, the AppArmor `include` line present (the container's apparmor parse is skipped where the kernel has none).
+- Every pull request builds both architectures' packages and runs `lintian` (no errors; warnings listed), then installs `andaru` with its recommends in a Debian 13 container booted with systemd and checks: the files above, `nftables.service` not masked, `systemd-networkd` not restarted, Andaru's units enabled, the engine answering `andaru ctl links`, the AppArmor `include` line present (the container's apparmor parse is skipped where the kernel has none). It also runs `shellspec` and `shellcheck` on the packaging scripts.
 - The existing tests and gates are unchanged.
 
 ## Acceptance
 
 - **Automated:** the CI checks above; a test of the AppArmor include step against a scratch root (adds once, keeps the administrator's own lines, creates a missing file); the publishing workflow run once by hand on a test tag, its repository verified with `apt update` against the keyring in a Debian 13 container, and `Valid-Until` and the signer's subkey checked.
-- **Lab:** on a fresh Debian 13 genericcloud VM and a minimal (ifupdown) VM: the bootstrap and `apt install andaru` from `apt.andaru.io`, without touching the operator's link; `andaru ctl takeover --accept-detected`, apply, confirm; reboot; then an upgrade to a second test release with `apt upgrade`, the engine restarted and the network untouched; `nftables.service` masked throughout.
+- **Lab:** on a fresh Debian 13 genericcloud VM and a minimal (ifupdown) VM: the bootstrap and `apt install andaru` from `apt.andaru.io`, without touching the operator's link; `andaru ctl takeover --accept-detected`, apply, confirm; reboot; then an upgrade to a second test release with `apt upgrade`, the engine restarted and the network untouched; `nftables.service` masked once the takeover is confirmed.
 - **The guide:** "Installing" leads with the bootstrap; the hand-copy lists move to a "From source" section for developers.
 
 ## Approaches

@@ -173,7 +173,8 @@ func (r Realizer) Confirm(ctx context.Context, id int) error {
 }
 
 // makePermanent stops what configured the network before Andaru from doing it again: netplan and cloud-init,
-// or ifupdown. Every step runs even after a failure and may be repeated; boot repeats all of them.
+// or ifupdown, and Debian's nftables.service. Every step runs even after a failure and may be repeated; boot
+// repeats all of them.
 func (r Realizer) makePermanent(ctx context.Context, reload bool, kind string) error {
 	var failures []error
 	step := func(name string, do func() error) {
@@ -198,6 +199,16 @@ func (r Realizer) makePermanent(ctx context.Context, reload bool, kind string) e
 		}
 		return errors.Join(failures...)
 	}
+	// Debian's nftables.service starts with "flush ruleset", so at a boot it would wipe Andaru's filter. It is masked
+	// here and not when the package is installed: until the takeover is confirmed, a reboot keeps the host's firewall.
+	step("permanent:nftables", func() error {
+		args := []string{"mask", "nftables.service"}
+		if !reload {
+			args = []string{"mask", "--no-reload", "nftables.service"}
+		}
+		_, err := r.Run(ctx, "/usr/bin/systemctl", args...)
+		return err
+	})
 	if kind == "ifupdown" {
 		step("permanent:enable", enable)
 		// Neither the boot service nor udev's hotplug may raise a taken interface again; /etc/network/interfaces stays as it was.

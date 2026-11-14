@@ -423,8 +423,8 @@ func TestFilterGates(t *testing.T) {
 		edit func(b *takeoverBench)
 		code string
 	}{
-		"nftables.service enabled": {func(b *takeoverBench) { b.facts.FilterUnits = []string{"nftables.service"} }, "FOREIGN_FILTER"},
-		"nft missing":              {func(b *takeoverBench) { b.facts.NftTool = false }, "TOOL_MISSING"},
+		"ufw.service enabled": {func(b *takeoverBench) { b.facts.FilterUnits = []string{"ufw.service"} }, "FOREIGN_FILTER"},
+		"nft missing":         {func(b *takeoverBench) { b.facts.NftTool = false }, "TOOL_MISSING"},
 		"no management": {func(b *takeoverBench) {
 			b.draftValue = strings.Replace(b.draftValue, `,
 "management":{"segment":"seg_00000001-0000-4000-8000-000000000001"}`, "", 1)
@@ -439,6 +439,22 @@ func TestFilterGates(t *testing.T) {
 				t.Fatalf("apply findings %+v", got.ApplyFindings)
 			}
 		})
+	}
+}
+
+// Confirming a takeover masks nftables.service, so an enabled one does not refuse the takeover; the review says so.
+func TestTakeoverMasksNftables(t *testing.T) {
+	b := newTakeoverBench(t, "static")
+	b.draftValue, b.facts.NftTool = filterDraft, true
+	b.facts.FilterUnits = []string{"nftables.service"}
+	got := b.postDraft(t)
+	if len(got.ApplyFindings) != 0 {
+		t.Fatalf("apply findings %+v", got.ApplyFindings)
+	}
+	if !slices.ContainsFunc(got.Findings, func(f struct{ Severity, Code, Message string }) bool {
+		return f.Severity == "warning" && f.Code == "FOREIGN_FILTER" && strings.Contains(f.Message, "masks it")
+	}) {
+		t.Fatalf("findings %+v", got.Findings)
 	}
 }
 

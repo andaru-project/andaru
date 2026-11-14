@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+
+# On a taken-over host andaru-network-boot.service alone puts the confirmed network configuration in place at boot.
+if [ "$1" = remove ] && [ -e "${DPKG_ROOT:-}/var/lib/andaru/generations/pointers.json" ] && [ "${ANDARU_FORCE_REMOVE:-}" != 1 ]; then
+	echo "andaru: Andaru configures this host's network; removed, the next boot would have no network." >&2
+	echo "andaru: undo the takeover first (see Takeover in Andaru's guide), or remove with ANDARU_FORCE_REMOVE=1." >&2
+	exit 1
+fi
+
+#DEBHELPER#

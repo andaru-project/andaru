@@ -328,6 +328,13 @@ func TestFilterFacts(t *testing.T) {
 	if f := read(); !f.NftTool || !slices.Equal(f.FilterUnits, []string{"nftables.service", "ufw.service"}) {
 		t.Fatalf("facts %+v", f)
 	}
+	// A confirmed takeover masks nftables.service and leaves its wants link; masked, it never starts.
+	if err := os.Symlink("/dev/null", root+"/etc/systemd/system/nftables.service"); err != nil {
+		t.Fatal(err)
+	}
+	if f := read(); !slices.Equal(f.FilterUnits, []string{"ufw.service"}) {
+		t.Fatalf("masked: facts %+v", f)
+	}
 }
 
 // A unit enabled for this boot only, or pulled in by a requires link, still replaces Andaru's ruleset.

@@ -36,20 +36,24 @@ The keyring package adds `/etc/apt/sources.list.d/andaru.sources`, which trusts 
 
 The `andaru` package depends on systemd, nftables and iproute2, and recommends Kea, Unbound, OpenSSH and AppArmor. Installing it:
 
-- **masks `nftables.service`**: a restart of Debian's unit, as a package upgrade may do, flushes the whole ruleset, Andaru's filter included. A ruleset it loaded stays until the next boot;
+- **leaves `nftables.service` alone**: a reboot before a takeover is confirmed still loads the host's own `/etc/nftables.conf`. Confirming a takeover masks it ([Takeover](#takeover)), because a start of Debian's unit flushes the whole ruleset, Andaru's filter included;
 - adds one line, `include if exists <andaru/DAEMON>`, to `/etc/apparmor.d/local/usr.sbin.kea-dhcp4`, `…kea-dhcp6` and `…unbound`, and reloads those profiles; a Kea or Unbound installed later gets the line then. Andaru's rules are in `/etc/apparmor.d/andaru/`;
 - enables `andaru-network-boot.service` and enables and starts the engine and the lease and prefix path and timer units;
 - **never restarts systemd-networkd or touches an interface**: `ManageForeignRoutes=no` takes effect at the next networkd restart, which the first boot after the takeover provides.
 
-Purging the package removes its AppArmor lines and leaves `/var/lib/andaru`: uninstalling is not supported. Upgrades restart the engine, which serves only its local socket.
+**Kea serves only Andaru's configuration once the package is installed.** Its drop-ins for `kea-dhcp4-server` and `kea-dhcp6-server` start Kea from `/run/andaru-kea/`, which only a confirmed Andaru generation writes, and never from `/etc/kea`. A Kea already serving DHCP from `/etc/kea` keeps running until its next restart (a Kea upgrade, a reboot), then is skipped and stops answering. The package says so when it finds such a Kea on a host Andaru has not taken over.
+
+Purging the package removes its AppArmor lines and leaves `/var/lib/andaru`: uninstalling is not supported. On a taken-over host (`/var/lib/andaru/generations/pointers.json` exists) `apt remove andaru` is refused, because the next boot would have no network: `andaru-network-boot.service` is what puts the confirmed configuration in place. Undo the takeover first ([Takeover](#takeover)), or override with `sudo ANDARU_FORCE_REMOVE=1 apt remove andaru`. Upgrades restart the engine, which serves only its local socket.
 
 **A host set up by hand** from `packaging/` before the packages existed has copies that would override or duplicate the package's files. Remove them before `apt install andaru`:
 
 ```sh
 sudo rm -f /etc/systemd/system/andaru-*.service /etc/systemd/system/andaru-*.path /etc/systemd/system/andaru-*.timer \
+  /etc/systemd/system/*.wants/andaru-* \
   /etc/systemd/system/kea-dhcp4-server.service.d/andaru.conf /etc/systemd/system/kea-dhcp6-server.service.d/andaru.conf \
   /etc/systemd/networkd.conf.d/andaru.conf /etc/iproute2/rt_protos.d/andaru.conf /usr/lib/tmpfiles.d/andaru.conf \
   /etc/unbound/unbound.conf.d/andaru.conf
+sudo systemctl daemon-reload
 # Delete the lines copied from packaging/apparmor from each of these, keeping your own:
 sudoedit /etc/apparmor.d/local/usr.sbin.kea-dhcp4 /etc/apparmor.d/local/usr.sbin.kea-dhcp6 /etc/apparmor.d/local/usr.sbin.unbound
 ```
@@ -282,7 +286,7 @@ What happens, in order:
 | `DNS_REQUIRED` | No interface of the ifupdown host takes DNS servers from DHCP or router advertisements, and no segment declares `dns`. The message lists the servers in use now. |
 | `MANAGEMENT_REQUIRED` | Rules or outbound NAT are declared without `management.segment`, or the management segment's interface is unavailable. |
 | `DHCP_WITHOUT_DNS` | (warning) A DHCP server hands out no DNS server: the DNS service does not serve its segment and `dnsServers` is empty. |
-| `FOREIGN_FILTER` | `nftables.service`, `firewalld` or `ufw` is enabled and would replace or override Andaru's filter. |
+| `FOREIGN_FILTER` | `nftables.service`, `firewalld` or `ufw` is enabled and would replace or override Andaru's filter. On a takeover, `nftables.service` is only a warning: confirming masks it. |
 | `APPLY_UNSUPPORTED` | PPPoE links wait for the firewall; router advertisement modes `managed`, `assisted` and `stateless` need a `dhcp6` entry for the segment; advertisements and delegated prefixes need the packet filter, so a management segment, since IPv6 forwarding stays off without it. |
 | `NETDEV_CHANGE_UNSUPPORTED` | An existing VLAN, bridge or bond would change. Remove it in one apply and add it again in the next. |
 | `BOOT_UNIT_DISABLED` | `andaru-network-boot.service` is not enabled, so a confirmed configuration would not return after a reboot. |
@@ -322,7 +326,7 @@ sudo andaru ctl preview network                          # shows "nft:inet/andar
 - **Fixed rules, before every rule:** established and related accepted, invalid dropped, loopback and ICMPv6 neighbour discovery accepted, DHCPv6 replies accepted, and on each segment with a `dhcp6` entry DHCPv6 requests from link-local clients (UDP 546 to 547); everything unmatched is dropped. The firewall's own outgoing traffic is not filtered.
 - **Outbound NAT** `automatic` masquerades IPv4 forwarded out of every segment with a default route (a static gateway, DHCP or PPPoE). IPv6 is routed, not translated.
 - **Applying:** the filter is loaded before the networkd files, and when going back to a generation without one, or to the pre-Andaru baseline, the table is deleted only after the files, with IPv4 and IPv6 forwarding switched off just before it. Boot loads the confirmed filter before networkd starts, with each adapter's name looked up again by its MAC, so a card the kernel names differently after a reboot keeps its rules; a filter that does not load makes boot fall back to the last-known-good generation, files and filter together.
-- **Refused:** `nft` missing (`TOOL_MISSING`; install `nftables`), or `nftables.service`, `firewalld` or `ufw` enabled (`FOREIGN_FILTER`): Debian's `/etc/nftables.conf` begins with `flush ruleset`. Other tables, such as Podman's, are never touched.
+- **Refused:** `nft` missing (`TOOL_MISSING`; install `nftables`), or `nftables.service`, `firewalld` or `ufw` enabled (`FOREIGN_FILTER`): Debian's `/etc/nftables.conf` begins with `flush ruleset`. A takeover is not refused for `nftables.service`, only warned: confirming it masks the unit. A masked unit never counts. Other tables, such as Podman's, are never touched.
 - **The assistant** proposes starter rules for the LAN (to any; ping and DNS to the firewall), outbound NAT, and the management adapter your SSH session arrives on, and shows the rule table in its review.
 
 ### DHCP and DNS
@@ -464,7 +468,7 @@ One segment may say which DNS servers the firewall host itself asks, as netplan'
 
 ### Takeover
 
-`--takeover` replaces netplan's generated files under `/run/systemd/network`. **Until you confirm, nothing outside `/run` changes, so a reboot returns the host to netplan.** Confirming then enables `systemd-networkd` (netplan's generator was doing that), disables `systemd-networkd-wait-online` (no Andaru interface is required for "online", so it would hold every boot for its two-minute timeout), writes `/etc/cloud/cloud.cfg.d/99-andaru-network.cfg` (`network: {config: disabled}`) and moves `/etc/netplan/*.yaml` to `/var/lib/andaru/generations/baseline/netplan/`. The packages stay installed.
+`--takeover` replaces netplan's generated files under `/run/systemd/network`. **Until you confirm, nothing outside `/run` changes, so a reboot returns the host to netplan and its own firewall.** Confirming then enables `systemd-networkd` (netplan's generator was doing that), disables `systemd-networkd-wait-online` (no Andaru interface is required for "online", so it would hold every boot for its two-minute timeout), masks `nftables.service` (Debian's unit flushes the whole ruleset, Andaru's filter included, when it starts), writes `/etc/cloud/cloud.cfg.d/99-andaru-network.cfg` (`network: {config: disabled}`) and moves `/etc/netplan/*.yaml` to `/var/lib/andaru/generations/baseline/netplan/`. The packages stay installed.
 
 Boot needs `andaru-network-boot.service` ([unit](../../packaging/systemd/andaru-network-boot.service)) enabled, as the package leaves it, **before** the takeover: it copies the confirmed generation into `/run` before networkd starts. If that generation is damaged it uses the last-known-good one, and `live` then differs from `confirmed`.
 
@@ -482,6 +486,7 @@ sudo systemctl disable --now andaru-engine.service andaru-network-boot.service
 sudo mv /var/lib/andaru/generations/baseline/netplan/*.yaml /etc/netplan/
 sudo rm /etc/cloud/cloud.cfg.d/99-andaru-network.cfg
 sudo systemctl enable systemd-networkd-wait-online.service
+sudo systemctl unmask nftables.service
 sudo rm -r /var/lib/andaru/generations
 sudo reboot
 ```
@@ -496,14 +501,14 @@ A host the Debian installer set up configures its network with ifupdown and dhcp
 - **Every interface with an `iface` stanza must be declared** (`WOULD_UNCONFIGURE` otherwise): confirming masks ifupdown for all of them.
 - **DNS:** with DHCP or `inet6 auto` the host keeps the offered servers. On an all-static host declare `dns` on a segment (`DNS_REQUIRED` lists the servers in use now).
 - **Activation** stops dhcpcd without dropping its addresses, starts networkd and applies the files. **A rollback, or a failed activation, hands the interfaces back to ifupdown** through `ifup@<nic>.service` or `networking.service`, and is recorded only once each interface that had an IPv4 address before has one again (not necessarily the same one; DHCP normally hands back the same lease); until then the timer retries it.
-- **Confirming** enables `systemd-networkd`, disables `systemd-networkd-wait-online` and masks `networking.service` and `ifup@.service`. `/etc/network/interfaces` is left as it was and ifupdown stays installed. If no generation is usable at boot, boot removes the masks and starts ifupdown again.
+- **Confirming** enables `systemd-networkd`, disables `systemd-networkd-wait-online` and masks `networking.service`, `ifup@.service` and `nftables.service`. `/etc/network/interfaces` is left as it was and ifupdown stays installed. If no generation is usable at boot, boot removes the masks of ifupdown's units and starts ifupdown again.
 - **Limits:** SLAAC addresses dhcpcd made change at the takeover (dhcpcd derives private ones, networkd EUI-64 ones), so an IPv6 session on one is cut; the kernel's own SLAAC address on an interface without an `inet6` stanza is kept; scripts in `if-up.d` and `if-down.d` stop running after confirmation; a rollback can cut IPv4 for several seconds while ifupdown asks for the lease again. The review shows these as `TAKEOVER_LIMIT` warnings.
 
 To undo a confirmed ifupdown takeover by hand, from the console:
 
 ```sh
 sudo systemctl disable --now andaru-engine.service andaru-network-boot.service
-sudo systemctl unmask networking.service ifup@.service
+sudo systemctl unmask networking.service ifup@.service nftables.service
 sudo systemctl disable systemd-networkd.service
 sudo systemctl enable systemd-networkd-wait-online.service
 sudo rm -r /var/lib/andaru/generations

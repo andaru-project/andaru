@@ -1,20 +1,22 @@
 #!/bin/sh
 set -e
 
+root=${DPKG_ROOT:-}
 case "$1" in
 configure)
-	# A restart of Debian's nftables.service flushes the whole ruleset, Andaru's filter included. Masking does not
-	# stop a running unit and changes no rule now.
-	if ! systemctl mask nftables.service >/dev/null 2>&1; then
-		echo "andaru: could not mask nftables.service; a restart of it would flush Andaru's filter." >&2
+	# nftables.service is masked when a takeover is confirmed, not here: until then a reboot keeps the host's firewall.
+	"$root/usr/share/andaru/andaru-apparmor"
+	# Andaru's drop-ins start Kea from /run/andaru-kea only, which a confirmed generation writes.
+	if [ ! -e "$root/var/lib/andaru/generations/pointers.json" ]; then
+		for v in 4 6; do
+			if [ -x "$root/usr/sbin/kea-dhcp$v" ] && [ -f "$root/etc/kea/kea-dhcp$v.conf" ]; then
+				echo "andaru: kea-dhcp$v-server now serves only Andaru's configuration, not /etc/kea/kea-dhcp$v.conf; it stops serving DHCP at its next restart." >&2
+			fi
+		done
 	fi
-	if systemctl is-active --quiet nftables.service 2>/dev/null; then
-		echo "andaru: nftables.service is masked; its ruleset stays loaded until the next boot." >&2
-	fi
-	/usr/share/andaru/andaru-apparmor
 	;;
 triggered)
-	/usr/share/andaru/andaru-apparmor
+	"$root/usr/share/andaru/andaru-apparmor"
 	;;
 esac
 
