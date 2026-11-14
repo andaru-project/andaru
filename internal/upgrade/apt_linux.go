@@ -123,7 +123,8 @@ func installedPackage(ctx context.Context, run commandRunner) (packageInfo, erro
 		return packageInfo{}, err
 	}
 	fields := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\t")
-	if len(fields) != 3 || fields[0] != "install ok installed" || !versionPattern.MatchString(fields[1]) || !architecturePattern.MatchString(fields[2]) {
+	status := strings.Fields(fields[0])
+	if len(fields) != 3 || len(status) != 3 || status[1] != "ok" || status[2] != "installed" || !versionPattern.MatchString(fields[1]) || !architecturePattern.MatchString(fields[2]) {
 		return packageInfo{}, errors.New("Andaru must be an installed, configured Debian package; inspect dpkg --audit")
 	}
 	return packageInfo{Version: fields[1], Architecture: fields[2]}, nil

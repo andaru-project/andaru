@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -62,6 +63,45 @@ func TestInstalledVersionMissing(t *testing.T) {
 		if err == nil {
 			t.Fatalf("accepted absent/unconfigured package: %q", body)
 		}
+	}
+}
+
+func TestInstalledPackageSelections(t *testing.T) {
+	for _, tc := range []struct {
+		status string
+		valid  bool
+	}{
+		{"install ok installed", true},
+		{"hold ok installed", true},
+		{"deinstall ok installed", true},
+		{"purge ok installed", true},
+		{"hold reinstreq installed", false},
+		{"hold ok unpacked", false},
+		{"hold ok half-configured", false},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			dir := t.TempDir()
+			status := "Package: andaru\nStatus: " + tc.status + "\nArchitecture: amd64\nVersion: 0.4.0~rc2-1\nMaintainer: Andaru project <apt@andaru.io>\nDescription: isolated package-status fixture\n\n"
+			if err := os.WriteFile(filepath.Join(dir, "status"), []byte(status), 0600); err != nil {
+				t.Fatal(err)
+			}
+			run := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+				return runnerAt("")(ctx, name, append([]string{"--admindir=" + dir}, args...)...)
+			}
+			got, err := installedPackage(context.Background(), run)
+			if !tc.valid {
+				if err == nil {
+					t.Fatal("accepted unhealthy installed package")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Version != "0.4.0~rc2-1" || got.Architecture != "amd64" {
+				t.Fatalf("wrong installed identity: %+v", got)
+			}
+		})
 	}
 }
 
