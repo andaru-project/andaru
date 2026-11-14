@@ -81,6 +81,10 @@ func normalizeDeclaration(d *declaration) {
 	if len(d.DHCP6) == 0 {
 		d.DHCP6 = nil
 	}
+	if len(d.VirtualAddresses) == 0 {
+		d.VirtualAddresses = nil
+	}
+	slices.SortFunc(d.VirtualAddresses, func(a, b virtualAddress) int { return strings.Compare(a.ID, b.ID) })
 	slices.SortFunc(d.DHCP6, func(a, b dhcp6Entry) int { return strings.Compare(a.ID, b.ID) })
 	for i := range d.DHCP6 {
 		e := &d.DHCP6[i]

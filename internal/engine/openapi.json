@@ -667,7 +667,7 @@
               "zones",
               "addresses",
               "services",
-              "dhcp", "dhcp6"
+              "dhcp", "dhcp6", "virtualAddresses"
             ]
           }
         }
@@ -1077,7 +1077,7 @@
               "zones",
               "addresses",
               "services",
-              "dhcp", "dhcp6"
+              "dhcp", "dhcp6", "virtualAddresses"
             ]
           }
         },
@@ -5522,7 +5522,7 @@
                       "policy.forward",
                       "management",
                       "nat.outbound",
-                      "dhcp", "dhcp6",
+                      "dhcp", "dhcp6", "virtualAddresses",
                       "dns"
                     ]
                   },
@@ -5615,7 +5615,7 @@
               "policy.forward",
               "management",
               "nat.outbound",
-              "dhcp", "dhcp6",
+              "dhcp", "dhcp6", "virtualAddresses",
               "dns"
             ]
           },
