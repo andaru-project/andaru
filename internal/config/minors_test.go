@@ -13,6 +13,7 @@ func TestDNSUpstreamIsTheFirewall(t *testing.T) {
 		"with a port":          "192.0.2.7:53",
 		"a virtual address":    "172.16.53.53",
 		"a v6 virtual address": "fd00:53:53:53:53:53:53:53",
+		"a served v6 address":  "fd00:1::1",
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := vipFixture(t)
@@ -25,6 +26,7 @@ func TestDNSUpstreamIsTheFirewall(t *testing.T) {
 		"loopback":    "127.0.0.1",
 		"loopback v6": "::1",
 		"mapped":      "::ffff:192.0.2.7",
+		"unspecified": "0.0.0.0",
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := vipFixture(t)
@@ -37,6 +39,8 @@ func TestDNSUpstreamIsTheFirewall(t *testing.T) {
 		"another port":             "192.0.2.7:5353",
 		"an unserved segment":      "192.0.2.7",
 		"an unlistened virtual v6": "fd00:53:53:53:53:53:53:53",
+		"another loopback":         "127.0.2.1:53",
+		"another loopback bare":    "127.0.0.2",
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := vipFixture(t)

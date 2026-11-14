@@ -42,6 +42,7 @@ func TestVirtualAddressValidation(t *testing.T) {
 		"segment address": "192.0.2.7",
 		"in a subnet":     "192.0.2.99",
 		"in a v6 subnet":  "fd00:1::99",
+		"zone":            "fd00::1%eth0",
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := vipFixture(t)
@@ -243,5 +244,27 @@ func TestIPv6ForwardToDisabledLink(t *testing.T) {
 	_, e := decodeMap(t, d)
 	if raw, _ := json.Marshal(e); e == nil || !strings.Contains(string(raw), "is disabled") {
 		t.Fatalf("%s", raw)
+	}
+}
+
+// Renaming a virtual address a forward targets keeps its address, so the forward stays valid.
+func TestVirtualAddressRenameWhileTargeted(t *testing.T) {
+	s := seededState(t)
+	p := mustRun(t, &s, `{"operations":[{"op":"create","collection":"virtualAddresses","localId":"v","value":{"name":"dns4","address":"172.16.53.53"}}]}`)
+	id := p.Created["v"]
+	mustRun(t, &s, `{"operations":[{"op":"create","collection":"nat.portForwards","value":{"name":"dns","enabled":true,"ingressZones":["`+s.Config.Zones[0].ID+`"],"protocol":"udp","from":[],"to":{"self":true},"ports":"53","target":{"address":"172.16.53.53"}}}]}`)
+	mustRun(t, &s, `{"operations":[{"op":"replace","collection":"virtualAddresses","id":"`+id+`","expectedVersion":"`+string(versionOf(&s, objectKey{"virtualAddresses", id}).Version)+`","value":{"name":"renamed","description":"edited","address":"172.16.53.53"}}]}`)
+	if s.Config.VirtualAddresses[0].Name != "renamed" {
+		t.Fatalf("%+v", s.Config.VirtualAddresses)
+	}
+}
+
+// A batch can list a virtual address it creates in the DNS service by label.
+func TestDNSVirtualAddressByLabel(t *testing.T) {
+	s := seededState(t)
+	p := mustRun(t, &s, `{"operations":[{"op":"create","collection":"virtualAddresses","localId":"v","value":{"name":"dns4","address":"172.16.53.53"}},
+		{"op":"replace","collection":"dns","expectedVersion":"0","value":{"mode":"recursive","segments":[],"virtualAddresses":["@v"]}}]}`)
+	if got := s.Config.DNS.VirtualAddresses; len(got) != 1 || got[0] != p.Created["v"] {
+		t.Fatalf("dns lists %v, created %v", got, p.Created)
 	}
 }
