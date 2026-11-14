@@ -423,6 +423,38 @@ func TestPDRoutesUnchangedRunsTouchNothing(t *testing.T) {
 	}
 }
 
+// An installed route whose router or interface no longer matches the believed next hop is replaced.
+func TestPDRouteNextHopChanged(t *testing.T) {
+	for name, installed := range map[string]string{"via": "fe80::1 dev ens19", "dev": "fe80::2 dev ens18"} {
+		t.Run(name, func(t *testing.T) {
+			b := newBench(t)
+			b.filled(lease6{Address: "2001:db8:aa00:82::", PrefixLen: 64, Type: "IA_PD", Subnet: 7, Valid: 4000, Cltt: 100})
+			writeFile(t, filepath.Join(b.net.root, pdTable), `{"2001:db8:aa00:82::/64":{"via":"fe80::2","dev":"ens19"}}`)
+			b.net.routes = map[string]string{"2001:db8:aa00:80::/60": "unreachable", "2001:db8:aa00:82::/64": installed}
+			if err := b.r.SyncLeases(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if b.index("ip -6 route replace 2001:db8:aa00:82::/64 via fe80::2 dev ens19 proto 77") < 0 {
+				t.Fatalf("stale next hop kept: %q", b.net.argv)
+			}
+		})
+	}
+}
+
+// When the lease of a pool handing out itself ends, its router's route becomes the pool's unreachable route
+// again, and is not then deleted as a route nobody holds.
+func TestPoolLeaseEndedBecomesUnreachable(t *testing.T) {
+	b := newBench(t)
+	b.filled()
+	b.net.routes = map[string]string{"2001:db8:aa00:80::/60": "fe80::1 dev ens19"}
+	if err := b.r.SyncLeases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if b.net.routes["2001:db8:aa00:80::/60"] != "unreachable" || b.index("ip -6 route del 2001:db8:aa00:80::/60") >= 0 {
+		t.Fatalf("pool route %q after %q", b.net.routes["2001:db8:aa00:80::/60"], b.net.argv)
+	}
+}
+
 // A line the hook appends through a descriptor it opened before the sync moved the file still arrives.
 func TestPDEventAppendedLate(t *testing.T) {
 	b := newBench(t)
