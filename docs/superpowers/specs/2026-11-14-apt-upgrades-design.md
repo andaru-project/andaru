@@ -1,6 +1,6 @@
 # Conventional Debian upgrades and explicit recovery
 
-Status: proposed; awaiting design approval. Slice 2 of issue #13.
+Status: approved by the owner on 2026-11-14. Slice 2 of issue #13.
 
 ## Intent and owner decisions
 
