@@ -184,6 +184,9 @@ func validateServices(d *declaration) []FieldError {
 		up := fmt.Sprintf("/dns/upstreams/%d", j)
 		a, err := netip.ParseAddr(u.Address)
 		port := uint16(53)
+		if u.Protocol == "dot" {
+			port = 853 // Unbound's default for a TLS upstream
+		}
 		if err != nil {
 			var ap netip.AddrPort
 			ap, err = netip.ParseAddrPort(u.Address)

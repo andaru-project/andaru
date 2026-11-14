@@ -83,3 +83,13 @@ func TestOneToOneVirtualMessage(t *testing.T) {
 		t.Fatalf("%s", raw)
 	}
 }
+
+// A DNS-over-TLS upstream without a port is asked on 853, where the DNS service does not listen.
+func TestDoTUpstreamOnAListenedAddress(t *testing.T) {
+	d := vipFixture(t)
+	d["dns"] = map[string]any{"mode": "forward", "segments": []any{}, "virtualAddresses": []any{vipA},
+		"upstreams": []any{map[string]any{"address": "172.16.53.53", "protocol": "dot", "tlsName": "dns.example"}}}
+	accepted(t, d)
+	d["dns"].(map[string]any)["upstreams"] = []any{map[string]any{"address": "172.16.53.53:53", "protocol": "dot", "tlsName": "dns.example"}}
+	refusedAt(t, d, "/dns/upstreams/0/address")
+}
