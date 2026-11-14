@@ -67,15 +67,15 @@ func (r Realizer) recordReplaced(links []delegatedLink, before, after delegation
 		}
 	}
 	for _, l := range links {
-		old, new := before.WANs[l.Uplink].Current, after.WANs[l.Uplink].Current
-		if old == nil || new != nil && new.Prefix == old.Prefix || !old.Valid.After(now) {
+		old := before.WANs[l.Uplink].Current
+		if old == nil {
 			continue
 		}
 		if p, ok := delegation.Place(old.Prefix, l.SubnetID, 64); ok {
 			list = append(list, replaced{l.Interface, p, now, old.Valid})
 		}
 	}
-	// A prefix that came back is current again: never advertise it deprecated.
+	// A prefix that came back, or never left, is current: never advertise it deprecated.
 	list = slices.DeleteFunc(list, func(d replaced) bool {
 		return now.Sub(d.Seen) > deprecationWindow || !d.Valid.After(now) || current[d.Interface] == d.Prefix
 	})

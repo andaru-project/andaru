@@ -205,7 +205,7 @@ func (r Realizer) replacedPools() map[string][]netip.Prefix {
 		}
 		n, _ := strconv.ParseUint(s.Pool.SubnetID, 16, 16)
 		for _, old := range state.WANs[s.Uplink].Replaced {
-			if p, ok := delegation.Place(old.Prefix, n, s.Pool.Length); ok && old.Valid.After(r.Now()) {
+			if p, ok := delegation.Place(old.Prefix, n, s.Pool.Length); ok {
 				out[s.Interface] = append(out[s.Interface], p)
 			}
 		}

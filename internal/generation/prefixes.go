@@ -2,6 +2,7 @@ package generation
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -252,8 +253,11 @@ func (r Realizer) fillKea6(prefixes map[string]delegation.Held) ([]byte, bool, e
 		return nil, false, err
 	}
 	var conf map[string]map[string]any
-	if err := json.Unmarshal(base, &conf); err != nil || conf["Dhcp6"] == nil {
-		return nil, false, fmt.Errorf("read the DHCPv6 server's configuration: %v", err)
+	if err := json.Unmarshal(base, &conf); err != nil {
+		return nil, false, fmt.Errorf("read the DHCPv6 server's configuration: %w", err)
+	}
+	if conf["Dhcp6"] == nil {
+		return nil, false, errors.New("the DHCPv6 server's configuration has no Dhcp6 object")
 	}
 	ours := map[float64]bool{}
 	for _, s := range tpl.Subnets {
@@ -393,8 +397,7 @@ func (r Realizer) checkTemplate(ctx context.Context) error {
 	links, hints, _ := r.readDelegatedLinks()
 	doc := map[string]delegation.Held{}
 	for _, l := range links {
-		far := r.Now().Add(24 * time.Hour)
-		doc[l.Uplink] = delegation.Held{Prefix: netip.PrefixFrom(netip.MustParseAddr("2001:db8::"), cmpOr(hints[l.Uplink], 48)), Preferred: far, Valid: far}
+		doc[l.Uplink] = delegation.Held{Prefix: netip.PrefixFrom(netip.MustParseAddr("2001:db8::"), cmp.Or(hints[l.Uplink], 48))}
 	}
 	data, ok, err := r.fillKea6(doc)
 	if err != nil || !ok {
@@ -405,11 +408,4 @@ func (r Realizer) checkTemplate(ctx context.Context) error {
 	}
 	defer os.Remove(r.Root + kea6Check)
 	return r.keaCheck(ctx, "/usr/sbin/kea-dhcp6", kea6Check, "DHCPv6 server")
-}
-
-func cmpOr(n, fallback int) int {
-	if n == 0 || n > 64 {
-		return fallback
-	}
-	return n
 }

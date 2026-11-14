@@ -756,3 +756,13 @@ func TestPrefixViewExpiredCurrent(t *testing.T) {
 		t.Fatalf("%+v", w)
 	}
 }
+
+// Kea's file without a Dhcp6 object is reported as such, not as a <nil> error.
+func TestPrefixesBaseWithoutDhcp6(t *testing.T) {
+	b := newBench(t)
+	b.delegatedLAN("2001:db8:aa00::/48", -1)
+	writeFile(t, filepath.Join(b.net.root, kea6File), `{}`)
+	if err := b.r.SyncPrefixes(t.Context()); err == nil || !strings.Contains(err.Error(), "no Dhcp6") {
+		t.Fatalf("got %v", err)
+	}
+}
