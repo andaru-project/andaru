@@ -63,10 +63,10 @@ func TestFillTemplate(t *testing.T) {
 	if strings.Contains(string(got), "uplink") || strings.Contains(string(got), "subnetId") {
 		t.Fatalf("template fields left in Kea's subnet: %s", got)
 	}
-	// A /56 has no room for subnet 100: the subnet is left out and named.
+	// A /56 has no room for subnet 100: the subnet is left out and named, and its pool (8/60 fits) with it.
 	tpl := strings.Replace(template, `"subnetId":"1",`, `"subnetId":"100",`, 1)
 	subnets, skipped = FillTemplate(parse(t, tpl), held("2001:db8:aa00::/56"))
-	if len(subnets) != 0 || len(skipped) != 1 || !strings.Contains(skipped[0], "ens19") {
+	if len(subnets) != 0 || len(skipped) != 2 || !strings.Contains(skipped[0], "subnet of ens19") || !strings.Contains(skipped[1], "delegation pool of ens19") {
 		t.Fatalf("%v %v", subnets, skipped)
 	}
 	// No prefix for the uplink: nothing to serve, nothing reported.

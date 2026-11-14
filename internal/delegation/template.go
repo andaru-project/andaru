@@ -60,6 +60,9 @@ func FillTemplate(tpl Template, prefixes map[string]Held) (subnets []map[string]
 		lan, ok := Place(base, id, 64)
 		if !ok {
 			skipped = append(skipped, fmt.Sprintf("the subnet of %s (subnet ID %s does not fit %s)", s.Interface, s.SubnetID, base))
+			if s.Pool != nil {
+				skipped = append(skipped, fmt.Sprintf("the delegation pool of %s (its subnet is not served)", s.Interface))
+			}
 			continue
 		}
 		join := func(raw string) string {

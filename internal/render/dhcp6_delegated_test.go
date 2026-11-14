@@ -53,6 +53,13 @@ func TestDelegatedPrefixTooShort(t *testing.T) {
 	if !strings.Contains(r.Findings[slicesIndex(r, "DELEGATED_PREFIX_TOO_SHORT")].Message, "2001:db8:aa00::/56") {
 		t.Fatalf("the message does not name the prefix: %+v", r.Findings)
 	}
+	// A pool that fits is still not served when its own segment does not: it is named too.
+	pool8 := change(t, in, func(d map[string]any) {
+		d["dhcp6"].([]any)[0].(map[string]any)["prefixDelegation"] = map[string]any{"subnetId": "8", "length": 60, "delegatedLength": 64}
+	})
+	if r := render(t, pool8); !findingAt(r, "DELEGATED_PREFIX_TOO_SHORT", "/dhcp6/0/prefixDelegation") {
+		t.Fatalf("the pool of a segment that does not fit went unnamed: %+v", r.Findings)
+	}
 	in.Facts.Delegated = delegation.State{}
 	if r := render(t, in); findingAt(r, "DELEGATED_PREFIX_TOO_SHORT", "/segments/1/addressing/ipv6/subnetId") {
 		t.Fatal("judged without a prefix")

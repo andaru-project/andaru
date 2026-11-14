@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -718,5 +719,24 @@ func TestPrefixViewDamagedTemplate(t *testing.T) {
 	writeFile(t, filepath.Join(b.net.root, kea6Template), "{")
 	if _, err := ReadPrefixView(b.net.root); err == nil {
 		t.Fatal("a damaged template went unreported")
+	}
+}
+
+// A pool whose own segment does not fit the prefix is not served: the view shows it without a prefix and names it.
+func TestPrefixViewPoolOfSegmentNotFitting(t *testing.T) {
+	b := newBench(t)
+	b.delegatedLAN("2001:db8:aa00::/56", -1)
+	writeFile(t, filepath.Join(b.net.root, netDir, "50-andaru-ens19.network"), strings.Replace(lanNetwork, "SubnetId=0x1", "SubnetId=0x100", 1))
+	writeFile(t, filepath.Join(b.net.root, kea6Template), strings.Replace(templateBody, `"subnetId":"1",`, `"subnetId":"100",`, 1))
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	view, err := ReadPrefixView(b.net.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := view.WANs[0]
+	if len(w.Pools) != 1 || w.Pools[0].Prefix != nil || !slices.Contains(w.NotFitting, "the delegation pool of ens19") {
+		t.Fatalf("%+v", w)
 	}
 }
