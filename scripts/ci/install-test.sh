@@ -21,8 +21,15 @@ for order in together later; do
 	docker run -d --name "$name" --privileged --cgroupns=private -v "$dir:/pkg:ro" -v "$here:/ci:ro" "$image" >/dev/null
 	trap 'docker rm -f "$name" >/dev/null' EXIT
 
+	waited=0
 	until run systemctl is-system-running --wait >/dev/null 2>&1 || [ "$(run systemctl is-system-running 2>/dev/null)" = degraded ]; do
+		if [ "$(docker inspect -f '{{.State.Running}}' "$name")" != true ] || [ "$waited" -ge 120 ]; then
+			docker logs "$name" >&2
+			echo "install-test: the container did not boot" >&2
+			exit 1
+		fi
 		sleep 1
+		waited=$((waited + 1))
 	done
 	run sh /ci/install-check.sh before
 	if [ "$order" = together ]; then

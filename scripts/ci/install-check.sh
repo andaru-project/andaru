@@ -10,7 +10,11 @@ fail() {
 	echo "install-check: $*" >&2
 	exit 1
 }
-network() { ip -j addr show && ip -j route show table all; }
+# Lifetimes count down while the package installs; any other change to an address or a route counts.
+network() {
+	{ ip -j addr show && ip -j route show table all; } |
+		sed -E 's/"(valid_life_time|preferred_life_time|expires)":[0-9]+,?//g'
+}
 invocation() { systemctl show -P InvocationID "$1"; }
 
 case ${1-} in

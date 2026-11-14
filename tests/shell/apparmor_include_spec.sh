@@ -25,6 +25,13 @@ Describe 'andaru AppArmor includes'
 include if exists <andaru/kea-dhcp6>"
   End
 
+  It 'starts the include on its own line after an unterminated last line'
+    printf '# local customizations' >"$root/etc/apparmor.d/local/usr.sbin.kea-dhcp6"
+    When run env DPKG_ROOT="$root" sh "$script"
+    The contents of file "$root/etc/apparmor.d/local/usr.sbin.kea-dhcp6" should equal "# local customizations
+include if exists <andaru/kea-dhcp6>"
+  End
+
   It 'creates a missing local file'
     rm "$root/etc/apparmor.d/local/usr.sbin.unbound"
     When run env DPKG_ROOT="$root" sh "$script"

@@ -36,6 +36,8 @@ docker run --rm -v "$src:/b/src" -v "$(realpath "$out"):/b/out" -v "$(go env GOR
 	-e GOMODCACHE=/gomod -e GOCACHE=/gocache -e GOTOOLCHAIN=local -e HOME=/tmp \
 	-e PATH=/goroot/bin:/usr/sbin:/usr/bin:/sbin:/bin -e ARCH="$arch" -e HOST_UID="$(id -u)" \
 	debian:trixie sh -euc '
+		# Built as root: hand the source copy and the caches back to the runner, whether the build passes or not.
+		trap "chown -R \"\$HOST_UID\" /b/src /b/out /gomod /gocache" EXIT
 		apt-get -qq update
 		DEBIAN_FRONTEND=noninteractive apt-get -qq install -y --no-install-recommends debhelper dpkg-dev gpg lintian >/dev/null
 		cd /b/src
@@ -43,5 +45,4 @@ docker run --rm -v "$src:/b/src" -v "$(realpath "$out"):/b/out" -v "$(go env GOR
 		dpkg-buildpackage -us -uc -d "$ARCH"
 		cd /b
 		lintian --allow-root --fail-on error --info --display-info ./*.changes
-		cp ./*.deb /b/out/
-		chown -R "$HOST_UID" /b/src /b/out /gomod /gocache'
+		cp ./*.deb /b/out/'

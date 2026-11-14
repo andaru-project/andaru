@@ -12,6 +12,10 @@ for daemon in kea-dhcp4 kea-dhcp6 unbound; do
 	[ -f "$profile" ] || continue
 	if [ ! -f "$local_file" ] || ! grep -qxF "$line" "$local_file"; then
 		mkdir -p "$(dirname "$local_file")"
+		# A last line without a newline would swallow the include (into a comment, say).
+		if [ -s "$local_file" ] && [ "$(tail -c 1 "$local_file" | od -An -c | tr -d ' ')" != '\n' ]; then
+			echo >>"$local_file"
+		fi
 		printf '%s\n' "$line" >>"$local_file"
 	fi
 	# Without a kernel AppArmor (a container) or the parser, the rules load at the next boot.
