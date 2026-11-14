@@ -298,10 +298,9 @@ func (r Realizer) SyncPrefixes(ctx context.Context) error {
 	return errors.Join(err, routes)
 }
 
-// syncPrefixes holds the lock. The replaced prefixes are deprecated and the state saved before Kea is touched, so
-// a refusing or wedged Kea never holds back the deprecation; Kea's error comes last. A running Kea is handed the
-// new configuration first, and the file written only once Kea took it, so a refused one is offered again on the
-// next run; the apply passes reconfigure false, since it restarts Kea on the file itself.
+// syncPrefixes holds the lock. Kea's step and the deprecation with the saved state do not depend on each other:
+// a refusing or wedged Kea never holds back the deprecation, and a state that cannot be written never keeps the
+// new prefix from Kea; their errors are joined. Kea goes first, so it does not wait for the deprecation's pause.
 func (r Realizer) syncPrefixes(ctx context.Context, reconfigure bool) error {
 	links, hints, wans := r.readDelegatedLinks()
 	if len(links) == 0 {
@@ -313,34 +312,37 @@ func (r Realizer) syncPrefixes(ctx context.Context, reconfigure bool) error {
 		return err
 	}
 	now := r.Now() // one reading: sendDeprecations tells this run's fresh entries by it
-	list, err := r.recordReplaced(links, before, state, now)
-	if err != nil {
-		return err
-	}
+	list, recordErr := r.recordReplaced(links, before, state, now)
+	keaErr := r.serveKea6(ctx, prefixes, reconfigure)
 	if reconfigure {
 		r.sendDeprecations(links, list, now)
 	}
-	if err := r.saveState(before, state); err != nil {
-		return err
-	}
+	return errors.Join(keaErr, recordErr, r.saveState(before, state))
+}
+
+// serveKea6 fills Kea's file with prefixes. A running Kea is handed the new configuration first, and the file
+// written only once Kea took it, so a refused one is offered again on the next run; the apply passes reconfigure
+// false, since it restarts Kea on the file itself.
+func (r Realizer) serveKea6(ctx context.Context, prefixes map[string]delegation.Held, reconfigure bool) error {
 	data, ok, err := r.fillKea6(prefixes)
 	if err != nil {
 		return err
 	}
-	if old, err := os.ReadFile(r.Root + kea6File); ok && (err != nil || !bytes.Equal(old, data)) {
-		if reconfigure {
-			if err := r.keaConfigSet(ctx, data); err != nil {
-				return err
-			}
-		}
-		if err := writeAtomic(r.Root+kea6File, data, 0o644); err != nil {
+	if old, err := os.ReadFile(r.Root + kea6File); !ok || err == nil && bytes.Equal(old, data) {
+		return nil
+	}
+	if reconfigure {
+		if err := r.keaConfigSet(ctx, data); err != nil {
 			return err
 		}
-		if reconfigure {
-			// Names and pool routes follow the new prefix; Kea's reconfiguration fires no lease event.
-			if _, err := r.Run(ctx, "/usr/bin/systemctl", "start", "--no-block", "andaru-leases.service"); err != nil {
-				slog.Warn("start the lease sync", "error", err)
-			}
+	}
+	if err := writeAtomic(r.Root+kea6File, data, 0o644); err != nil {
+		return err
+	}
+	if reconfigure {
+		// Names and pool routes follow the new prefix; Kea's reconfiguration fires no lease event.
+		if _, err := r.Run(ctx, "/usr/bin/systemctl", "start", "--no-block", "andaru-leases.service"); err != nil {
+			slog.Warn("start the lease sync", "error", err)
 		}
 	}
 	return nil

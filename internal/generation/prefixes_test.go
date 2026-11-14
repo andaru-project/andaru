@@ -628,24 +628,57 @@ func TestPrefixBackIsNotDeprecated(t *testing.T) {
 	}
 }
 
-// A fresh change waits for networkd's own advertisement even when the clock moves during the run.
+// A fresh change is deprecated DeprecateAfter after it is seen, so networkd's own advertisement goes first, even
+// when the clock moves during the run; Kea is handed the new prefix without waiting for it.
 func TestDeprecationWaitsWithMovingClock(t *testing.T) {
 	b := newBench(t)
-	b.r.SendRA = (&sent{}).record
-	b.delegatedLAN("2001:db8:aa00::/48", -1)
+	k := b.delegatedLAN("2001:db8:aa00::/48", 0)
 	if err := b.r.SyncPrefixes(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	b.prefix("2001:db8:bb00::/48", 3600, 7200)
 	start := b.now
 	b.r.Now = func() time.Time { start = start.Add(time.Millisecond); return start }
-	b.r.DeprecateAfter = 50 * time.Millisecond
+	b.r.DeprecateAfter = time.Second
+	var gap time.Duration
+	keaFirst := false
 	began := time.Now()
+	b.r.SendRA = func(string, []byte) error {
+		gap, keaFirst = time.Since(began), k.count() == 2
+		return nil
+	}
 	if err := b.r.SyncPrefixes(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if time.Since(began) < 50*time.Millisecond {
-		t.Fatal("sent without waiting for networkd's advertisement")
+	if gap < time.Second {
+		t.Fatalf("deprecated %v after the change, before networkd's advertisement", gap)
+	}
+	if !keaFirst {
+		t.Fatal("Kea waited for the deprecation")
+	}
+}
+
+// A state that cannot be written does not keep the new prefix from Kea.
+func TestPrefixesStateUnwritable(t *testing.T) {
+	b := newBench(t)
+	b.r.SendRA = (&sent{}).record
+	k := b.delegatedLAN("2001:db8:aa00::/48", 0)
+	if err := b.r.SyncPrefixes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	b.prefix("2001:db8:bb00::/48", 3600, 7200)
+	// A directory where the files are: neither can be replaced.
+	for _, path := range []string{replacedPrefixes, delegatedState} {
+		os.Remove(filepath.Join(b.net.root, path))
+		if err := os.MkdirAll(filepath.Join(b.net.root, path, "x"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.r.SyncPrefixes(t.Context()); err == nil {
+		t.Fatal("an unwritable state went unreported")
+	}
+	if k.count() != 2 || !strings.Contains(b.keaFile(), "2001:db8:bb00:1::/64") {
+		t.Fatalf("Kea not reconfigured: %d config-sets\n%s", k.count(), b.keaFile())
 	}
 }
 
