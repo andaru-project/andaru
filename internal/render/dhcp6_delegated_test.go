@@ -31,6 +31,24 @@ func TestDHCPv6DelegatedRendering(t *testing.T) {
 	}
 }
 
+// andaru-prefixes.service runs only where a segment takes a delegated prefix: each one leaves a marker file.
+func TestDelegatedMarker(t *testing.T) {
+	markers := func(name string) (paths []string) {
+		for _, f := range render(t, fixture(t, name)).Files {
+			if strings.HasPrefix(f.Path, "/run/andaru-delegated/") {
+				paths = append(paths, f.Path)
+			}
+		}
+		return paths
+	}
+	if got := markers("dhcp6-delegated"); len(got) != 1 || got[0] != "/run/andaru-delegated/ens19" {
+		t.Fatalf("delegated segment markers %v", got)
+	}
+	if got := markers("dhcp6"); len(got) != 0 {
+		t.Fatalf("markers without a delegated segment: %v", got)
+	}
+}
+
 // What does not fit the prefix actually delegated is reported; what fits is not, whatever its length.
 func TestDelegatedPrefixTooShort(t *testing.T) {
 	held := func(p string) delegation.State {

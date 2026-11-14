@@ -1,3 +1,6 @@
+### /run/andaru-delegated/ens19 0644 secret=false sources=/segments/1
+# This segment takes its IPv6 prefix by delegation.
+
 ### /run/andaru-kea/kea-dhcp6.conf 0644 secret=false sources=/dhcp6
 {
   "Dhcp6": {

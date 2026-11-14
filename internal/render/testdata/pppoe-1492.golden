@@ -1,3 +1,6 @@
+### /run/andaru-delegated/br000000050000 0644 secret=false sources=/segments/1
+# This segment takes its IPv6 prefix by delegation.
+
 ### /run/andaru/ppp/pp000000030000.options 0600 secret=true sources=/links/2,/segments/0
 plugin pppoe.so
 nic-vl000000020000

@@ -1,3 +1,6 @@
+### /run/andaru-delegated/ens19 0644 secret=false sources=/segments/1
+# This segment takes its IPv6 prefix by delegation.
+
 ### /run/systemd/network/50-andaru-ens18.link 0644 secret=false sources=/links/0
 [Match]
 PermanentMACAddress=52:54:00:aa:bb:01

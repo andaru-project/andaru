@@ -322,6 +322,11 @@ func (r *renderer) networkd(i int) {
 		network = append(network, "IPv4Forwarding=yes", "IPv6Forwarding=yes")
 	}
 	sections[0].lines = append(network, sections[0].lines...)
+	if si, ok := r.segment[l.ID]; ok && r.usable[l.ID] && r.d.Segments[si].Addressing.IPv6.Mode == "delegated" {
+		// andaru-prefixes.service runs only while one of these exists. Not in /run/andaru: the engine's
+		// RuntimeDirectory, removed when it stops.
+		r.file("/run/andaru-delegated/"+name, "0644", "# This segment takes its IPv6 prefix by delegation.\n", slices.Clone(sources))
+	}
 	r.file(networkDir+name+".network", "0644", ini(append([]section{{"Match", []string{match}}, {"Link", settings}}, sections...)...), append(sources, self))
 }
 
