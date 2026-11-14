@@ -137,6 +137,9 @@ func (r *renderer) filterChains() {
 			}
 		}
 		f.set("internal_4", "ipv4_addr", "", own)
+		if v := f.virtual4(); len(v) > 0 {
+			f.set("virtual_4", "ipv4_addr", "", v)
+		}
 	}
 	// A forward's own rule comes before the policy, so no later rule can shadow it.
 	input = append(input, boundInput...)

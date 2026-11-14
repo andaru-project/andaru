@@ -97,3 +97,19 @@ func vipStillTargeted(old, d *declaration, input Changes) *Fault {
 	}
 	return nil
 }
+
+// disabledHolder names the disabled link whose segment declares a, or "".
+func disabledHolder(d *declaration, a netip.Addr) string {
+	for _, s := range d.Segments {
+		for _, raw := range append(slices.Clone(s.Addressing.IPv4.Addresses), s.Addressing.IPv6.Addresses...) {
+			if p, e := netip.ParsePrefix(raw); e == nil && p.Addr() == a {
+				for _, l := range d.Links {
+					if l.ID == s.Link && !l.Enabled {
+						return l.Name
+					}
+				}
+			}
+		}
+	}
+	return ""
+}

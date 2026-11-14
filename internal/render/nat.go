@@ -159,6 +159,9 @@ func (f *filter) portForwards() (prerouting, forward, input []string) {
 			f.reflection = true
 			if pf.To.Self {
 				to = "fib daddr type local ip daddr != @internal_4"
+			} else if len(f.virtual4()) > 0 {
+				// A virtual address in the destination belongs to its service, as with self.
+				to += " ip daddr != @virtual_4"
 			}
 			bare := strings.Replace(action, fmt.Sprintf("log prefix %q ", "andaru "+pf.ID+" "), "", 1)
 			for _, from := range froms {
@@ -354,4 +357,15 @@ func (f *filter) checkExternal(external netip.Prefix, path string) {
 			r.find("warning", "PROXY_ARP_REQUIRED", path, "This address is on the "+subnet.String()+" uplink subnet but not assigned to the firewall, so nothing answers ARP for it. Add it to the segment's addresses; proxy ARP comes with virtual IPs (#37).")
 		}
 	}
+}
+
+// virtual4 are the IPv4 virtual addresses, which reflection never takes.
+func (f *filter) virtual4() []string {
+	var out []string
+	for _, v := range f.r.d.VirtualAddresses {
+		if a, e := netip.ParseAddr(v.Address); e == nil && a.Is4() {
+			out = append(out, a.String())
+		}
+	}
+	return out
 }

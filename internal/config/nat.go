@@ -117,6 +117,8 @@ func validateNAT(d *declaration) []FieldError {
 			switch {
 			case e != nil || !a.Is6() || a.Is4In6():
 				bad(p+"/target/address", "Expected an IPv6 address the firewall holds.")
+			case disabledHolder(d, a) != "":
+				bad(p+"/target/address", fmt.Sprintf("This address is on link %q, which is disabled.", disabledHolder(d, a)))
 			case !firewallHolds(d, a):
 				bad(p+"/target/address", "IPv6 port forwards to inside hosts are not offered (#43).")
 			}

@@ -65,3 +65,18 @@ func TestIPv6ForwardForms(t *testing.T) {
 		`ip6 saddr != @adr_00000009_0000_4000_8000_000000000009_6`,
 		`ip6 daddr @adr_00000009_0000_4000_8000_000000000009_6 tcp dport 9200`)
 }
+
+// Reflection on an address-object destination never takes a virtual address in it either.
+func TestReflectionObjectSkipsVirtualAddresses(t *testing.T) {
+	in := change(t, fixture(t, "virtual"), func(d map[string]any) {
+		d["objects"].(map[string]any)["addresses"] = append(d["objects"].(map[string]any)["addresses"].([]any),
+			map[string]any{"id": "adr_0000000a-0000-4000-8000-00000000000a", "name": "public", "kind": "network", "prefix": "172.16.53.0/24"})
+		f := d["nat"].(map[string]any)["portForwards"].([]any)[3].(map[string]any)
+		f["to"] = map[string]any{"address": "adr_0000000a-0000-4000-8000-00000000000a"}
+	})
+	nft := fileContent(t, render(t, in), nftPath)
+	contains(t, nft, `iifname @internal ip daddr @adr_0000000a_0000_4000_8000_00000000000a_4 ip daddr != @virtual_4 tcp dport 8080`)
+	if i := strings.Index(nft, "set virtual_4 {"); i < 0 || !strings.Contains(nft[i:i+200], "172.16.53.53") {
+		t.Fatalf("no virtual_4 set:\n%s", nft)
+	}
+}

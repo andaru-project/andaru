@@ -229,3 +229,19 @@ func TestVirtualAddressInUseIPv6AndDNS(t *testing.T) {
 		t.Fatal("deleted a virtual address the DNS service listens on")
 	}
 }
+
+// An address on a disabled link is not held by the firewall, so an IPv6 forward cannot target it.
+func TestIPv6ForwardToDisabledLink(t *testing.T) {
+	d := vipFixture(t)
+	lan := item(segmentsOf(d), 1)["link"].(string)
+	for _, l := range linksOf(d) {
+		if l.(map[string]any)["id"] == lan {
+			l.(map[string]any)["enabled"] = false
+		}
+	}
+	setNAT(d, "portForwards", forward(d, map[string]any{"family": "ipv6", "target": map[string]any{"address": "fd00:1::1"}, "targetPort": nil, "ports": "53"}))
+	_, e := decodeMap(t, d)
+	if raw, _ := json.Marshal(e); e == nil || !strings.Contains(string(raw), "is disabled") {
+		t.Fatalf("%s", raw)
+	}
+}

@@ -122,13 +122,14 @@ DNS=127.0.0.1 ::1
 table inet andaru {}
 delete table inet andaru
 table inet andaru {
-	comment "sha256:c4f80c312d6efbf3bedfbe073033e2563e74ce09c9c63e2608ec2388ce50ee76"
+	comment "sha256:4ea55c5e3e26bdf2808d0e399fb95b332681c9a4add671b9037c0d12668a777e"
 	set adr_00000007_0000_4000_8000_000000000007_4 { type ipv4_addr; flags interval; auto-merge; elements = { 198.51.100.7 }; }
 	set zon_00000001_0000_4000_8000_000000000001 { type ifname; elements = { "ens18" }; }
 	set zon_00000002_0000_4000_8000_000000000002 { type ifname; elements = { "ens19" }; }
 	set uplinks { type ifname; elements = { "ens18" }; }
 	set internal { type ifname; elements = { "ens19" }; }
 	set internal_4 { type ipv4_addr; elements = { 192.0.2.1, 172.16.53.53 }; }
+	set virtual_4 { type ipv4_addr; elements = { 172.16.53.53 }; }
 	chain input {
 		type filter hook input priority filter; policy drop;
 		ct state established,related accept
