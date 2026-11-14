@@ -426,10 +426,10 @@ func validateDHCP6(d *declaration, bad func(string, string)) {
 	}
 }
 
-// listensOn says whether the DNS service listens on a, port 53: loopback, a served segment's address, or a
-// virtual address it names.
+// listensOn says whether the DNS service listens on a, port 53: 127.0.0.1 or ::1 (the only loopback addresses
+// Unbound binds), a served segment's address, or a virtual address it names.
 func listensOn(d *declaration, a netip.Addr) bool {
-	if a.IsLoopback() || a.IsUnspecified() {
+	if a == netip.AddrFrom4([4]byte{127, 0, 0, 1}) || a == netip.IPv6Loopback() || a.IsUnspecified() {
 		return true
 	}
 	for _, id := range d.DNS.Segments {
