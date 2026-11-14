@@ -44,4 +44,4 @@ docker run --rm -v "$src:/b/src" -v "$(realpath "$out"):/b/out" -v "$(go env GOR
 		cd /b
 		lintian --allow-root --fail-on error --info --display-info ./*.changes
 		cp ./*.deb /b/out/
-		chown -R "$HOST_UID" /b/out /gomod /gocache'
+		chown -R "$HOST_UID" /b/src /b/out /gomod /gocache'
