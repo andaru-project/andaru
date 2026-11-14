@@ -22,7 +22,8 @@ for order in together later; do
 	trap 'docker rm -f "$name" >/dev/null' EXIT
 
 	waited=0
-	until run systemctl is-system-running --wait >/dev/null 2>&1 || [ "$(run systemctl is-system-running 2>/dev/null)" = degraded ]; do
+	# Polled without --wait, which can block past the deadline while startup is in progress.
+	until case $(run systemctl is-system-running 2>/dev/null) in running | degraded) true ;; *) false ;; esac do
 		if [ "$(docker inspect -f '{{.State.Running}}' "$name")" != true ] || [ "$waited" -ge 120 ]; then
 			docker logs "$name" >&2
 			echo "install-test: the container did not boot" >&2

@@ -12,15 +12,19 @@ fail() {
 }
 # Lifetimes count down while the package installs; any other change to an address or a route counts.
 network() {
-	{ ip -j addr show && ip -j route show table all; } |
-		sed -E 's/"(valid_life_time|preferred_life_time|expires)":[0-9]+,?//g'
+	addresses=$(ip -j addr show) && routes=$(ip -j route show table all) || return 1
+	printf '%s\n%s\n' "$addresses" "$routes" | sed -E 's/"(valid_life_time|preferred_life_time|expires)":[0-9]+,?//g'
+}
+unchanged() {
+	network >"$state/now" || fail "could not read the interfaces and routes"
+	cmp -s "$state/now" "$state/network"
 }
 invocation() { systemctl show -P InvocationID "$1"; }
 
 case ${1-} in
 before)
 	mkdir -p "$state"
-	network >"$state/network"
+	network >"$state/network" || fail "could not read the interfaces and routes"
 	;;
 after)
 	for f in /usr/bin/andaru \
@@ -53,14 +57,14 @@ after)
 	# Unbound reads Andaru's include, whose directories must exist however the two were installed.
 	systemctl is-active --quiet unbound.service || fail "unbound.service is not active"
 	ip route show proto andaru >/dev/null || fail "ip does not know the andaru route protocol"
-	network | cmp -s - "$state/network" || fail "installing changed an interface or a route"
+	unchanged || fail "installing changed an interface or a route"
 	invocation andaru-engine.service >"$state/engine"
 	;;
 upgraded)
 	[ "$(invocation andaru-engine.service)" != "$(cat "$state/engine")" ] || fail "the upgrade did not restart the engine"
 	systemctl is-active --quiet andaru-engine.service || fail "the engine is not running after the upgrade"
 	[ -z "$(invocation andaru-network-boot.service)" ] || fail "upgrading ran andaru-network-boot.service"
-	network | cmp -s - "$state/network" || fail "upgrading changed an interface or a route"
+	unchanged || fail "upgrading changed an interface or a route"
 	;;
 *)
 	echo "usage: install-check.sh before|after|upgraded" >&2
