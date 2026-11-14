@@ -594,6 +594,12 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) error {
 			}
 			return r.services(ctx, from, nil)
 		}
+		if live == nil && p.Takeover {
+			// The mask is the takeover's: back on its own configuration, the host loads its own firewall at the next boot.
+			if _, err := r.Run(ctx, "/usr/bin/systemctl", "unmask", "nftables.service"); err != nil {
+				return fmt.Errorf("unmasking nftables.service: %w", err)
+			}
+		}
 		if err := r.settle(ctx, from, target); err != nil {
 			return fmt.Errorf("files restored, reload failed: %w", err)
 		}

@@ -67,7 +67,7 @@ func (r Realizer) handOver(ctx context.Context, b IfupdownBaseline) error {
 // earlier one failed, and an interface already back is left alone, so the timer can repeat it safely.
 // Only ifupdown's own units raise interfaces: a dhcpcd started from a realize unit dies with that unit.
 // removed are the files just taken out of /run: the devices they made are deleted while networkd still runs.
-// After a confirmed takeover ifupdown is masked, so it is unmasked first, as boot does.
+// After a confirmed takeover ifupdown and nftables.service are masked, so they are unmasked first, as boot does.
 func (r Realizer) handBack(ctx context.Context, b IfupdownBaseline, removed []placed, confirmed bool) error {
 	var failures []error
 	run := func(name string, args ...string) {
@@ -76,7 +76,7 @@ func (r Realizer) handBack(ctx context.Context, b IfupdownBaseline, removed []pl
 		}
 	}
 	if confirmed {
-		run("/usr/bin/systemctl", "unmask", "networking.service", "ifup@.service")
+		run("/usr/bin/systemctl", "unmask", "networking.service", "ifup@.service", "nftables.service")
 	}
 	// networkd keeps a device whose .netdev is gone, so delete the takeover's devices while it still runs.
 	// No reload: with the files gone it could drop the addresses that stopping networkd keeps.

@@ -17,7 +17,9 @@ Describe 'andaru maintainer scripts'
   cleanup() { rm -rf "$root" "$bin"; }
   BeforeEach 'setup'
   AfterEach 'cleanup'
-  taken_over() { : >"$root/var/lib/andaru/generations/pointers.json"; }
+  # pointers.json as internal/generation writes it: compact JSON.
+  pointers() { printf '%s\n' "$1" >"$root/var/lib/andaru/generations/pointers.json"; }
+  taken_over() { pointers '{"confirmed":3,"lastKnownGood":2,"pending":null,"live":3,"takeover":true}'; }
   kea() {
     : >"$root/usr/sbin/kea-dhcp$1"
     chmod +x "$root/usr/sbin/kea-dhcp$1"
@@ -68,6 +70,25 @@ Describe 'andaru maintainer scripts'
     It 'removes from a host never taken over'
       When run env DPKG_ROOT="$root" sh "$prerm" remove
       The status should equal 0
+    End
+
+    It 'removes when no generation was ever confirmed'
+      pointers '{"confirmed":null,"lastKnownGood":null,"pending":1,"live":1,"takeover":false}'
+      When run env DPKG_ROOT="$root" sh "$prerm" remove
+      The status should equal 0
+    End
+
+    It 'removes after a takeover was rolled back before confirmation'
+      pointers '{"confirmed":null,"lastKnownGood":null,"pending":null,"live":null,"takeover":false}'
+      When run env DPKG_ROOT="$root" sh "$prerm" remove
+      The status should equal 0
+    End
+
+    It 'refuses when pointers.json cannot be read as unconfirmed'
+      pointers 'garbage'
+      When run env DPKG_ROOT="$root" sh "$prerm" remove
+      The status should equal 1
+      The stderr should include 'ANDARU_FORCE_REMOVE=1'
     End
 
     Parameters:value upgrade deconfigure failed-upgrade

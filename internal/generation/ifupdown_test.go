@@ -189,8 +189,8 @@ func TestBootFallsBackToIfupdown(t *testing.T) {
 	if err := b.r.Boot(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	// Boot runs before networking.service; waiting for it would deadlock.
-	for _, want := range []string{"systemctl unmask networking.service ifup@.service", "systemctl start --no-block networking.service", "systemctl start --no-block ifup@eth0.service"} {
+	// Boot runs before networking.service; waiting for it would deadlock. The nftables mask was the takeover's.
+	for _, want := range []string{"systemctl unmask networking.service ifup@.service nftables.service", "systemctl start --no-block networking.service", "systemctl start --no-block ifup@eth0.service"} {
 		if b.net.ran(want) != 1 {
 			t.Fatalf("%q not run: %q", want, b.net.argv)
 		}
@@ -338,7 +338,7 @@ func TestRollbackToIfupdownBaselineUnmasks(t *testing.T) {
 	if err := b.r.Rollback(t.Context(), second, "operator"); err != nil {
 		t.Fatal(err)
 	}
-	unmask := slices.Index(b.net.argv, "systemctl unmask networking.service ifup@.service")
+	unmask := slices.Index(b.net.argv, "systemctl unmask networking.service ifup@.service nftables.service")
 	restart := slices.IndexFunc(b.net.argv, func(a string) bool { return strings.HasPrefix(a, "systemctl restart") })
 	if unmask < 0 || restart < 0 || unmask > restart {
 		t.Fatalf("commands = %q", b.net.argv)

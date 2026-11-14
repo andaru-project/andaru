@@ -270,6 +270,31 @@ func TestBootOnBaselineDropsHalfLoadedFilter(t *testing.T) {
 		t.Fatalf("table %q, live %v on the baseline", b.net.table, b.pointers().Live)
 	}
 	b.wantDisk(netplan)
+	// The takeover's mask goes with it, so the host's own firewall loads at the next boot.
+	if b.net.ran("systemctl unmask nftables.service") != 1 {
+		t.Fatalf("nftables.service left masked: %q", b.net.argv)
+	}
+}
+
+// A confirmed netplan takeover rolled back at runtime to the baseline gives the host its own firewall back too.
+func TestRollbackToNetplanBaselineUnmasksNftables(t *testing.T) {
+	b := cloud(t)
+	first := b.takeover()
+	if err := b.r.Confirm(t.Context(), first); err != nil {
+		t.Fatal(err)
+	}
+	second := b.gen(false, two)
+	if err := b.r.Activate(t.Context(), second); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(b.dir, itoa(first), "files", "50-andaru-eth0.network"), "evil")
+	b.net.argv = nil
+	if err := b.r.Rollback(t.Context(), second, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	if b.pointers().Live != nil || b.net.ran("systemctl unmask nftables.service") != 1 {
+		t.Fatalf("live %v, commands %q", b.pointers().Live, b.net.argv)
+	}
 }
 
 // A previous generation whose filter does not load gives way to last-known-good, files and filter both.

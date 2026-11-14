@@ -1,8 +1,11 @@
 #!/bin/sh
 set -e
 
-# On a taken-over host andaru-network-boot.service alone puts the confirmed network configuration in place at boot.
-if [ "$1" = remove ] && [ -e "${DPKG_ROOT:-}/var/lib/andaru/generations/pointers.json" ] && [ "${ANDARU_FORCE_REMOVE:-}" != 1 ]; then
+# Once a generation is confirmed, andaru-network-boot.service alone puts the network configuration in place at boot.
+# pointers.json is Andaru's compact JSON; anything but "confirmed":null counts as confirmed, so garbage refuses too.
+pointers=${DPKG_ROOT:-}/var/lib/andaru/generations/pointers.json
+if [ "$1" = remove ] && [ -e "$pointers" ] && [ "${ANDARU_FORCE_REMOVE:-}" != 1 ] &&
+	! grep -Eq '"confirmed"[[:space:]]*:[[:space:]]*null' "$pointers"; then
 	echo "andaru: Andaru configures this host's network; removed, the next boot would have no network." >&2
 	echo "andaru: undo the takeover first (see Takeover in Andaru's guide), or remove with ANDARU_FORCE_REMOVE=1." >&2
 	exit 1

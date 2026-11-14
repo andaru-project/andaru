@@ -381,6 +381,12 @@ func (r Realizer) Boot(ctx context.Context) error {
 		return err
 	}
 	p.Live = nil
+	// The mask is the takeover's: back on its own configuration, the host loads its own firewall at the next boot.
+	if p.Takeover {
+		if _, err := r.Run(ctx, "/usr/bin/systemctl", "unmask", "nftables.service"); err != nil {
+			failures = append(failures, err)
+		}
+	}
 	slog.Error("booting the pre-Andaru baseline; no generation is usable", "error", errors.Join(failures...))
 	return r.writePointers("boot:pointers", p)
 }
@@ -393,7 +399,7 @@ func (r Realizer) bootIfupdown(ctx context.Context, p Pointers, b IfupdownBaseli
 			failures = append(failures, err)
 		}
 	}
-	run("unmask", "networking.service", "ifup@.service")
+	run("unmask", "networking.service", "ifup@.service", "nftables.service")
 	run("start", "--no-block", "networking.service")
 	for _, i := range b.Interfaces {
 		if i.Hotplug {
