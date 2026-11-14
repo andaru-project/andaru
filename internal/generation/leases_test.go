@@ -246,3 +246,51 @@ func TestStoppedUnboundIsNotReloaded(t *testing.T) {
 		t.Fatalf("leases file %q, argv %q", got, b.net.argv)
 	}
 }
+
+// Kea answers 3 when it has no lease yet: no names, and no error.
+func TestKeaEmptyAnswer(t *testing.T) {
+	b := newBench(t)
+	dir := filepath.Join(b.net.root, "run/kea")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	l, err := net.Listen("unix", filepath.Join(dir, "kea4-ctrl-socket"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			// The request first, as Kea does: a reply written before it would race the client's write.
+			_, _ = bufio.NewReader(c).ReadString('}')
+			c.Write([]byte(`{"result":3,"text":"0 IPv4 lease(s) found.","arguments":{"leases":[]}}`))
+			c.Close()
+		}
+	}()
+	leases, err := b.r.keaLeases(t.Context())
+	if err != nil || len(leases) != 0 {
+		t.Fatalf("%v %v", leases, err)
+	}
+}
+
+// A socket left by a Kea that is gone refuses the connection: Kea counts as not running.
+func TestConfigSetToStoppedKea(t *testing.T) {
+	b := newBench(t)
+	path := filepath.Join(b.net.root, "run/kea/kea6-ctrl-socket")
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.(*net.UnixListener).SetUnlinkOnClose(false)
+	l.Close()
+	if err := b.r.keaConfigSet(t.Context(), []byte(`{}`)); err != nil {
+		t.Fatalf("a stopped Kea counted as a failure: %v", err)
+	}
+}

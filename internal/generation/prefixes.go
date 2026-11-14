@@ -1,15 +1,12 @@
 package generation
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -246,10 +243,7 @@ func (r Realizer) fillKea6(prefixes map[string]delegation.Held) ([]byte, bool, e
 	if err := json.Unmarshal(raw, &tpl); err != nil {
 		return nil, false, fmt.Errorf("read the DHCPv6 template: %w", err)
 	}
-	subnets, skipped, err := delegation.FillTemplate(raw, prefixes, r.Now())
-	if err != nil {
-		return nil, false, err
-	}
+	subnets, skipped := delegation.FillTemplate(tpl, prefixes, r.Now())
 	for _, s := range skipped {
 		slog.Warn("the delegated prefix has no room; not served", "what", s)
 	}
@@ -368,30 +362,15 @@ func (r Realizer) saveState(before, s delegation.State) error {
 func (r Realizer) keaConfigSet(ctx context.Context, conf []byte) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	var d net.Dialer
-	c, err := d.DialContext(ctx, "unix", r.Root+kea6Socket)
+	result, text, err := r.keaCommand(ctx, kea6Socket, `{"command":"config-set","arguments":`+string(conf)+`}`, nil)
 	if errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED) {
 		return nil // not running: it reads the file when it starts
 	}
 	if err != nil {
 		return fmt.Errorf("reconfigure the DHCPv6 server: %w", err)
 	}
-	defer c.Close()
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = c.SetDeadline(deadline)
-	}
-	if _, err := io.WriteString(c, `{"command":"config-set","arguments":`+string(conf)+`}`); err != nil {
-		return err
-	}
-	var reply struct {
-		Result int    `json:"result"`
-		Text   string `json:"text"`
-	}
-	if err := json.NewDecoder(bufio.NewReader(c)).Decode(&reply); err != nil {
-		return fmt.Errorf("reconfigure the DHCPv6 server: %w", err)
-	}
-	if reply.Result != 0 {
-		return fmt.Errorf("the DHCPv6 server refused the new prefix's configuration (%d): %s", reply.Result, reply.Text)
+	if result != 0 {
+		return fmt.Errorf("the DHCPv6 server refused the new prefix's configuration (%d): %s", result, text)
 	}
 	return nil
 }

@@ -62,33 +62,48 @@ func (r Realizer) askLeases(ctx context.Context, socket, command string) ([]keaL
 	// A wedged Kea must not hold every later sync: the oneshot unit has no start timeout.
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+	var args struct {
+		Leases []keaLease `json:"leases"`
+	}
+	result, text, err := r.keaCommand(ctx, socket, `{"command":"`+command+`"}`, &args)
+	if err != nil {
+		return nil, err
+	}
+	// 3 is Kea's "empty": no lease yet.
+	if result != 0 && result != 3 {
+		return nil, fmt.Errorf("the DHCP server answered %d: %s", result, text)
+	}
+	return args.Leases, nil
+}
+
+// keaCommand sends one command over a Kea control socket and decodes the reply's arguments into args.
+func (r Realizer) keaCommand(ctx context.Context, socket, command string, args any) (int, string, error) {
 	var d net.Dialer
 	c, err := d.DialContext(ctx, "unix", r.Root+socket)
 	if err != nil {
-		return nil, err
+		return 0, "", err
 	}
 	defer c.Close()
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = c.SetDeadline(deadline)
 	}
-	if _, err := io.WriteString(c, `{"command":"`+command+`"}`); err != nil {
-		return nil, err
+	if _, err := io.WriteString(c, command); err != nil {
+		return 0, "", err
 	}
 	var reply struct {
-		Result    int    `json:"result"`
-		Text      string `json:"text"`
-		Arguments struct {
-			Leases []keaLease `json:"leases"`
-		} `json:"arguments"`
+		Result    int             `json:"result"`
+		Text      string          `json:"text"`
+		Arguments json.RawMessage `json:"arguments"`
 	}
 	if err := json.NewDecoder(c).Decode(&reply); err != nil {
-		return nil, err
+		return 0, "", err
 	}
-	// 3 is Kea's "empty": no lease yet.
-	if reply.Result != 0 && reply.Result != 3 {
-		return nil, fmt.Errorf("the DHCP server answered %d: %s", reply.Result, reply.Text)
+	if args != nil && len(reply.Arguments) > 0 {
+		if err := json.Unmarshal(reply.Arguments, args); err != nil {
+			return 0, "", err
+		}
 	}
-	return reply.Arguments.Leases, nil
+	return reply.Result, reply.Text, nil
 }
 
 func (r Realizer) markerStamp() string {

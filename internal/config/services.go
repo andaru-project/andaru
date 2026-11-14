@@ -183,14 +183,20 @@ func validateServices(d *declaration) []FieldError {
 	for j, u := range s.Upstreams {
 		up := fmt.Sprintf("/dns/upstreams/%d", j)
 		a, err := netip.ParseAddr(u.Address)
+		port := uint16(53)
+		if u.Protocol == "dot" {
+			port = 853 // Unbound's default for a TLS upstream
+		}
 		if err != nil {
 			var ap netip.AddrPort
 			ap, err = netip.ParseAddrPort(u.Address)
-			a = ap.Addr()
+			a, port = ap.Addr(), ap.Port()
 		}
 		// A zone could carry any text into the rendered file, and an upstream needs none.
 		if err != nil || a.Zone() != "" {
 			bad(up+"/address", "Expected an IP address, optionally with a port.")
+		} else if port == 53 && listensOn(d, a.Unmap()) {
+			bad(up+"/address", "The DNS service itself listens on this address; it would ask itself.")
 		}
 		if u.Protocol == "dot" && !searchDomain.MatchString(u.TLSName) {
 			bad(up+"/tlsName", "DNS over TLS needs the name the upstream's certificate carries.")
@@ -418,4 +424,22 @@ func validateDHCP6(d *declaration, bad func(string, string)) {
 			}
 		}
 	}
+}
+
+// listensOn says whether the DNS service listens on a, port 53: loopback, a served segment's address, or a
+// virtual address it names.
+func listensOn(d *declaration, a netip.Addr) bool {
+	if a.IsLoopback() || a.IsUnspecified() {
+		return true
+	}
+	for _, id := range d.DNS.Segments {
+		for _, served := range []func(*declaration, string) (netip.Prefix, bool){servedPrefix, servedV6} {
+			if p, ok := served(d, id); ok && p.Addr() == a {
+				return true
+			}
+		}
+	}
+	return slices.ContainsFunc(d.DNS.VirtualAddresses, func(id string) bool {
+		return slices.ContainsFunc(d.VirtualAddresses, func(v virtualAddress) bool { return v.ID == id && sameAddress(v.Address, a.String()) })
+	})
 }

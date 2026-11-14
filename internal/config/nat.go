@@ -120,7 +120,8 @@ func validateNAT(d *declaration) []FieldError {
 			case disabledHolder(d, a) != "":
 				bad(p+"/target/address", fmt.Sprintf("This address is on link %q, which is disabled.", disabledHolder(d, a)))
 			case !firewallHolds(d, a):
-				bad(p+"/target/address", "IPv6 port forwards to inside hosts are not offered (#43).")
+				// The firewall's addresses from DHCPv6 or a delegated prefix are not known here; self reaches them.
+				bad(p+"/target/address", "Expected a static IPv6 address of the firewall or an IPv6 virtual address; for its addresses from DHCPv6 or a delegated prefix, use target self. IPv6 port forwards to inside hosts are not offered (#43).")
 			}
 		case f.Target != nil && !f.Target.Self:
 			a, e := netip.ParseAddr(f.Target.Address)
@@ -210,7 +211,15 @@ func validateNAT(d *declaration) []FieldError {
 			}
 		}
 	}
+	// A virtual address is the firewall's own, held for its services: 1:1 NAT takes it over in neither direction.
+	var virtual []netip.Addr
+	for _, v := range d.VirtualAddresses {
+		if a, e := netip.ParseAddr(v.Address); e == nil && a.Is4() {
+			own, virtual = append(own, a), append(virtual, a)
+		}
+	}
 	holdsOwn := func(p netip.Prefix) bool { return slices.ContainsFunc(own, p.Contains) }
+	holdsVirtual := func(p netip.Prefix) bool { return slices.ContainsFunc(virtual, p.Contains) }
 	holdsPrimary := func(p netip.Prefix) bool { return slices.ContainsFunc(primary, p.Contains) }
 	externals := make([]netip.Prefix, len(d.NAT.OneToOne))
 	seen = map[string]bool{}
@@ -246,6 +255,8 @@ func validateNAT(d *declaration) []FieldError {
 		switch {
 		case !extOK:
 			bad(p+"/external", "Expected an IPv4 address or a prefix with its host bits zero.")
+		case holdsVirtual(external):
+			bad(p+"/external", "This range holds a virtual address, which belongs to a service on the firewall.")
 		case holdsPrimary(external):
 			bad(p+"/external", "This range holds a segment's first address, which the firewall's own traffic uses and 1:1 NAT would take over.")
 		case ok && external.Bits() != internal.Bits():
