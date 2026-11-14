@@ -407,7 +407,7 @@ func TestStaticNameTTLCapped(t *testing.T) {
 		"user-context":{"andaru":{"domain":"home.arpa","delegated":true,"names":true}}}]}}`), &cfg); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(lease6Records(cfg, nil), "\n"); !strings.Contains(got, `"router.home.arpa. 3600 IN AAAA 2001:db8:aa00:1::10"`) {
+	if got := strings.Join(lease6Records(cfg, nil, nil), "\n"); !strings.Contains(got, `"router.home.arpa. 3600 IN AAAA 2001:db8:aa00:1::10"`) {
 		t.Fatalf("records:\n%s", got)
 	}
 }
