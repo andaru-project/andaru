@@ -16,6 +16,10 @@ APT supports selecting an exact package version, including an older version, but
 
 ### Debian services: prevention and supervision, not transparent old-version recovery
 
+Debian kernels illustrate useful retention without automatic recovery: versioned kernel images and modules can coexist, and bootloader hooks populate the menu. An older retained kernel can be selected, but that alone does not detect an unhealthy boot or switch back automatically. [Debian Kernel Handbook](https://kernel-team.pages.debian.net/kernel-handbook/ch-update-hooks.html), [Debian Administrator's Handbook](https://www.debian.org/doc/manuals/debian-handbook/sect.kernel-installation.en.html).
+
+Do not run a second APT/dpkg transaction inside a package's postinst: the outer transaction holds the frontend/database locks. A separate package-based recovery action must wait for that transaction to finish. This follows from the locking implemented by [APT](https://sources.debian.org/src/apt/3.0.3/apt-pkg/deb/debsystem.cc/) and [dpkg](https://sources.debian.org/src/dpkg/1.22.22/lib/dpkg/dbmodify.c/); it is not a tested Andaru recovery path.
+
 The Debian 13 host inspected for this research has OpenSSH `1:10.0p1-7+deb13u4`. Its `ssh.service` uses `ExecStartPre=/usr/sbin/sshd -t`, validates configuration before reload, uses `KillMode=process`, and requests restart on failure. Its generated postinst restarts the service through `deb-systemd-invoke`. These are concrete safeguards around starting/reloading and preserving session processes; they do not select a previous OpenSSH package and restore application state after a runtime failure. The inspection is local source evidence, not a performed SSH upgrade. [Debian OpenSSH sources](https://sources.debian.org/src/openssh/), [sshd(8)](https://manpages.debian.org/trixie/openssh-server/sshd.8.en.html).
 
 ### Firewall appliances: stronger rollback comes from a stronger storage boundary
