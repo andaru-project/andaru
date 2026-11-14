@@ -2,7 +2,9 @@
 # Checks the andaru package on a Debian 13 host booted with systemd: CI's container, or a lab VM.
 #   install-check.sh before   records the interfaces and routes, before installing
 #   install-check.sh after    checks the installed package, and that installing changed no interface or route
-#   install-check.sh upgraded checks an upgrade restarted the engine and ran no oneshot (after before and after)
+#   install-check.sh upgraded checks an upgrade restarted the engine and ran no oneshot
+# Run before, install, after, upgrade, upgraded within one boot: a reboot gives every unit a new InvocationID, so after
+# one, run before and after again before upgrading.
 set -eu
 
 state=/var/tmp/andaru-install-check
