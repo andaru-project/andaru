@@ -18,6 +18,12 @@ func (r *renderer) ownStatic() []netip.Addr {
 			}
 		}
 	}
+	// Declared, not learned: the device may still hold an address a change just removed.
+	for _, v := range r.d.VirtualAddresses {
+		if a, e := netip.ParseAddr(v.Address); e == nil && a.Is4() {
+			out = append(out, a)
+		}
+	}
 	for _, s := range r.d.Segments {
 		if s.Addressing.IPv4.Mode != "static" {
 			continue
@@ -52,26 +58,32 @@ func (f *filter) portForwards() (prerouting, forward, input []string) {
 			continue
 		}
 		first, last := spanOf(pf.Ports)
+		// An IPv6 forward reaches only the firewall itself; everything else matches IPv4.
+		six := pf.Family == "ipv6"
+		ip, fam, nfproto := "ip", "_4", "meta nfproto ipv4"
+		if six {
+			ip, fam, nfproto = "ip6", "_6", "meta nfproto ipv6"
+		}
 		// Alternatives on one side need one line each; excluded sources all go on every line.
 		froms := []string{""}
 		if len(pf.From) > 0 {
 			if pf.FromNegated {
 				var parts []string
 				for _, id := range pf.From {
-					parts = append(parts, "ip saddr != @"+setName(id)+"_4")
+					parts = append(parts, ip+" saddr != @"+setName(id)+fam)
 				}
 				froms = []string{strings.Join(parts, " ")}
 			} else {
 				froms = froms[:0]
 				for _, id := range pf.From {
-					froms = append(froms, "ip saddr @"+setName(id)+"_4")
+					froms = append(froms, ip+" saddr @"+setName(id)+fam)
 				}
 			}
 		}
 		// fib matches either family: the guard keeps an IPv4 forward to self off the firewall's IPv6 addresses.
-		to := "meta nfproto ipv4 fib daddr . iif type local"
+		to := nfproto + " fib daddr . iif type local"
 		if !pf.To.Self {
-			to = "ip daddr @" + setName(pf.To.Address) + "_4"
+			to = ip + " daddr @" + setName(pf.To.Address) + fam
 		}
 		// ct status dnat says a connection was translated, not by whom: each forward marks what it translates in the
 		// low 16 bits of the connection mark, and its rule admits that mark only. The high bits are left to others.
@@ -82,7 +94,7 @@ func (f *filter) portForwards() (prerouting, forward, input []string) {
 			tfirst = *pf.TargetPort
 		}
 		tlast := tfirst + last - first
-		local := pf.Target != nil && (pf.Target.Self || slices.ContainsFunc(own, func(a netip.Addr) bool { return a.String() == pf.Target.Address }))
+		local := pf.Target != nil && (six || pf.Target.Self || slices.ContainsFunc(own, func(a netip.Addr) bool { return a.String() == pf.Target.Address }))
 		key := map[bool]string{false: pf.Protocol, true: "th"}[pf.Protocol == "tcp-udp"]
 		switch {
 		case pf.NoRedirect:
@@ -96,11 +108,15 @@ func (f *filter) portForwards() (prerouting, forward, input []string) {
 				}
 			}
 		default:
-			action = "dnat ip to " + pf.Target.Address
+			action = "dnat " + ip + " to " + pf.Target.Address
+			if six && (pf.TargetPort != nil && last == first || last != first && tfirst != first) {
+				// IPv6 addresses take brackets before a port.
+				action = "dnat ip6 to [" + pf.Target.Address + "]"
+			}
 			switch {
 			case last != first && tfirst != first:
 				// nft has no port shift: a range would be a pool, so each port maps to its own.
-				action = "dnat ip addr . port to " + key + " dport map { " + portMap(first, last, tfirst, pf.Target.Address+" . ") + " }"
+				action = "dnat " + ip + " addr . port to " + key + " dport map { " + portMap(first, last, tfirst, pf.Target.Address+" . ") + " }"
 			case pf.TargetPort != nil && last == first:
 				action += ":" + strconv.Itoa(tfirst)
 			}
@@ -125,7 +141,7 @@ func (f *filter) portForwards() (prerouting, forward, input []string) {
 				}
 				// Bound to this forward: only connections it translated (its mark), from its sources, to its target.
 				// The translated address names the family; a local target has none, so the rule says it.
-				daddr := "meta nfproto ipv4"
+				daddr := nfproto
 				if !local {
 					daddr = "ip daddr " + pf.Target.Address
 				}
@@ -137,12 +153,15 @@ func (f *filter) portForwards() (prerouting, forward, input []string) {
 				}
 			}
 		}
-		if pf.Reflection && !pf.NoRedirect {
+		if pf.Reflection && !pf.NoRedirect && !six {
 			// Pure NAT reflection: internal clients asking the outside address reach the target too. With self, any
 			// firewall address but the internal segments' own, so asking the firewall's LAN address is not redirected.
 			f.reflection = true
 			if pf.To.Self {
 				to = "fib daddr type local ip daddr != @internal_4"
+			} else if len(f.virtual4()) > 0 {
+				// A virtual address in the destination belongs to its service, as with self.
+				to += " ip daddr != @virtual_4"
 			}
 			bare := strings.Replace(action, fmt.Sprintf("log prefix %q ", "andaru "+pf.ID+" "), "", 1)
 			for _, from := range froms {
@@ -338,4 +357,15 @@ func (f *filter) checkExternal(external netip.Prefix, path string) {
 			r.find("warning", "PROXY_ARP_REQUIRED", path, "This address is on the "+subnet.String()+" uplink subnet but not assigned to the firewall, so nothing answers ARP for it. Add it to the segment's addresses; proxy ARP comes with virtual IPs (#37).")
 		}
 	}
+}
+
+// virtual4 are the IPv4 virtual addresses, which reflection never takes.
+func (f *filter) virtual4() []string {
+	var out []string
+	for _, v := range f.r.d.VirtualAddresses {
+		if a, e := netip.ParseAddr(v.Address); e == nil && a.Is4() {
+			out = append(out, a.String())
+		}
+	}
+	return out
 }

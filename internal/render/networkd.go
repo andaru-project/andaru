@@ -332,3 +332,26 @@ func deref(p *int, fallback int) int {
 	}
 	return *p
 }
+
+// virtualAddresses renders the dummy device holding the virtual addresses: networkd owns it entirely, on any
+// host kind. Without virtual addresses there are no files, and the apply deletes the device.
+func (r *renderer) virtualAddresses() {
+	if len(r.d.VirtualAddresses) == 0 {
+		return
+	}
+	var addresses []string
+	for _, v := range r.d.VirtualAddresses {
+		a, err := netip.ParseAddr(v.Address)
+		if err != nil {
+			continue
+		}
+		addresses = append(addresses, "Address="+netip.PrefixFrom(a, a.BitLen()).String())
+	}
+	sources := []string{"/virtualAddresses"}
+	r.file(networkDir+vipDevice+".netdev", "0644", ini(section{"NetDev", []string{"Name=" + vipDevice, "Kind=dummy"}}), sources)
+	network := append([]string{"LinkLocalAddressing=no", "LLDP=no"}, addresses...)
+	r.file(networkDir+vipDevice+".network", "0644", ini(section{"Match", []string{"Name=" + vipDevice}}, section{"Link", []string{"RequiredForOnline=no"}}, section{"Network", network}), sources)
+}
+
+// vipDevice is the dummy interface that holds the virtual addresses.
+const vipDevice = "andaru-vip"

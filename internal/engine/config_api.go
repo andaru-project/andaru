@@ -49,7 +49,7 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 				route, id = "object", parts[3]
 				allowed = []string{"GET", "HEAD", "PUT", "DELETE"}
 			}
-		case len(parts) >= 2 && parts[0] == "config" && slices.Contains([]string{"links", "segments", "zones", "addresses", "services", "dhcp", "dhcp6"}, parts[1]):
+		case len(parts) >= 2 && parts[0] == "config" && slices.Contains([]string{"links", "segments", "zones", "addresses", "services", "dhcp", "dhcp6", "virtualAddresses"}, parts[1]):
 			collection = parts[1]
 			if len(parts) == 2 {
 				route = "collection"

@@ -257,7 +257,11 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 				ip, bits, _ := strings.Cut(a, "/")
 				var n int
 				_ = json.Unmarshal([]byte(bits), &n)
-				addresses = append(addresses, map[string]any{"family": "inet", "local": ip, "prefixlen": n, "scope": "global"})
+				family := "inet"
+				if strings.Contains(ip, ":") {
+					family = "inet6"
+				}
+				addresses = append(addresses, map[string]any{"family": family, "local": ip, "prefixlen": n, "scope": "global"})
 			}
 			link["addr_info"] = addresses
 			links = append(links, link)

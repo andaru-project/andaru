@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cmp"
 	"fmt"
 	"maps"
 	"net/netip"
@@ -31,31 +32,38 @@ func validateNAT(d *declaration) []FieldError {
 	}
 	// hasV4 says whether an address object can match IPv4: everything here is IPv4. Groups hold no groups (the
 	// policy validator refuses them, but this runs regardless), so one level is followed and never more.
-	var hasV4 func(id string, nested bool) bool
-	hasV4 = func(id string, nested bool) bool {
+	var has func(id string, six, nested bool) bool
+	has = func(id string, six, nested bool) bool {
 		a, ok := addresses[id]
+		var v netip.Addr
+		var e error
 		switch {
 		case !ok:
 			return false
 		case a.Kind == "group":
-			return !nested && slices.ContainsFunc(a.Members, func(m string) bool { return hasV4(m, true) })
+			return !nested && slices.ContainsFunc(a.Members, func(m string) bool { return has(m, six, true) })
 		case a.Kind == "network":
-			p, e := netip.ParsePrefix(a.Prefix)
-			return e == nil && p.Addr().Is4()
+			var p netip.Prefix
+			p, e = netip.ParsePrefix(a.Prefix)
+			v = p.Addr()
 		case a.Kind == "range":
-			v, e := netip.ParseAddr(a.First)
-			return e == nil && v.Is4()
+			v, e = netip.ParseAddr(a.First)
+		default:
+			v, e = netip.ParseAddr(a.Address)
 		}
-		v, e := netip.ParseAddr(a.Address)
-		return e == nil && v.Is4()
+		return e == nil && (six && v.Is6() && !v.Is4In6() || !six && v.Is4())
 	}
-	ref := func(path, id string) {
+	hasV4 := func(id string, nested bool) bool { return has(id, false, nested) }
+	refFamily := func(path, id string, six bool) {
 		if _, ok := addresses[id]; !ok {
 			bad(path, "Expected an existing address.")
-		} else if !hasV4(id, false) {
+		} else if six && !has(id, true, false) {
+			bad(path, "Expected an address with IPv6 addresses for an IPv6 port forward.")
+		} else if !six && !hasV4(id, false) {
 			bad(path, "Expected an address with IPv4 addresses; inbound NAT is IPv4 only.")
 		}
 	}
+	ref := func(path, id string) { refFamily(path, id, false) }
 	unique := func(prefix string, i int, v identity, seen map[string]bool) {
 		if seen[v.ID] {
 			bad(fmt.Sprintf("%s/%d/id", prefix, i), "Duplicate object identity.")
@@ -84,11 +92,15 @@ func validateNAT(d *declaration) []FieldError {
 				bad(fmt.Sprintf("%s/ingressZones/%d", p, j), "Expected an existing zone.")
 			}
 		}
+		six := f.Family == "ipv6"
 		for j, a := range f.From {
-			ref(fmt.Sprintf("%s/from/%d", p, j), a)
+			refFamily(fmt.Sprintf("%s/from/%d", p, j), a, six)
 		}
 		if f.To.Address != "" {
-			ref(p+"/to/address", f.To.Address)
+			refFamily(p+"/to/address", f.To.Address, six)
+		}
+		if six && f.Reflection {
+			bad(p+"/reflection", "An IPv6 port forward reaches the firewall itself from every zone it names, so it has no reflection.")
 		}
 		first, last, ok := portSpan(f.Ports)
 		if !ok {
@@ -100,6 +112,16 @@ func validateNAT(d *declaration) []FieldError {
 			bad(p+"/target", "An exclusion translates nothing, so it has no target.")
 		case !f.NoRedirect && f.Target == nil:
 			bad(p+"/target", "Expected a target.")
+		case f.Target != nil && !f.Target.Self && six:
+			a, e := netip.ParseAddr(f.Target.Address)
+			switch {
+			case e != nil || !a.Is6() || a.Is4In6():
+				bad(p+"/target/address", "Expected an IPv6 address the firewall holds.")
+			case disabledHolder(d, a) != "":
+				bad(p+"/target/address", fmt.Sprintf("This address is on link %q, which is disabled.", disabledHolder(d, a)))
+			case !firewallHolds(d, a):
+				bad(p+"/target/address", "IPv6 port forwards to inside hosts are not offered (#43).")
+			}
 		case f.Target != nil && !f.Target.Self:
 			a, e := netip.ParseAddr(f.Target.Address)
 			switch {
@@ -147,7 +169,7 @@ func validateNAT(d *declaration) []FieldError {
 		}
 		for _, zone := range slices.Compact(slices.Sorted(slices.Values(f.IngressZones))) {
 			for _, protocol := range protocols {
-				key := fmt.Sprintf("%t|%s|%t|%s|%s|%s", f.FromNegated, from, f.To.Self, f.To.Address, zone, protocol)
+				key := fmt.Sprintf("%s|%t|%s|%t|%s|%s|%s", cmp.Or(f.Family, "ipv4"), f.FromNegated, from, f.To.Self, f.To.Address, zone, protocol)
 				buckets[key] = append(buckets[key], entry{i, spans[i].first, spans[i].last})
 			}
 		}

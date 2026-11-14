@@ -1055,3 +1055,31 @@ func TestStoreWithoutDHCPv6TableOpens(t *testing.T) {
 		t.Fatalf("dhcp6 %+v %v", list, e)
 	}
 }
+
+// A store from before virtual addresses has no vip_changes table: it opens, saves one and lists its history.
+func TestStoreWithoutVIPTableOpens(t *testing.T) {
+	path := ownedDir(t)
+	ctx := context.Background()
+	s := openTestStore(t, path)
+	if _, e := s.Save(ctx, "unix:uid:0", networkInput(t)); e != nil {
+		t.Fatal(e)
+	}
+	s.Close()
+	db, e := openDatabase(ctx, filepath.Join(path, "configuration", "config.db"), "rw", false)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = db.ExecContext(ctx, "DROP TABLE vip_changes"); e != nil {
+		t.Fatal(e)
+	}
+	db.Close()
+	s = openTestStore(t, path)
+	if _, e = s.Save(ctx, "unix:uid:0", Changes{Operations: []Operation{
+		{Op: "create", Collection: "virtualAddresses", LocalID: "v", Value: json.RawMessage(`{"name":"dns4","address":"172.16.53.53"}`)},
+	}}); e != nil {
+		t.Fatal(e)
+	}
+	if h, e := s.History(ctx, nil, 5); e != nil || len(h.Items) == 0 {
+		t.Fatalf("history %+v %v", h, e)
+	}
+}

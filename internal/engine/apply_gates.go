@@ -195,6 +195,14 @@ func applyFindings(in gateInput) []render.Finding {
 		}
 	}
 
+	var dns struct {
+		VirtualAddresses []string `json:"virtualAddresses"`
+	}
+	_ = json.Unmarshal(declared.DNS, &dns)
+	if declared.Management.Segment == "" && len(dns.VirtualAddresses) > 0 {
+		// A virtual address is on no segment: only the filter decides who may ask the DNS service there.
+		refuse("APPLY_UNSUPPORTED", "/dns/virtualAddresses", "The DNS service on virtual addresses needs the packet filter, which needs a management segment. Set management.segment.")
+	}
 	for i, e := range declared.DHCP6 {
 		if declared.Management.Segment == "" && len(e.PrefixDelegation) > 0 && string(e.PrefixDelegation) != "null" {
 			refuse("APPLY_UNSUPPORTED", fmt.Sprintf("/dhcp6/%d/prefixDelegation", i), "Delegated prefixes are routed, which needs the packet filter and so a management segment. Set management.segment.")

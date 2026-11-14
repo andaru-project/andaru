@@ -471,3 +471,20 @@ func TestCtlPrefixes(t *testing.T) {
 		t.Fatal("a reply without wans became success")
 	}
 }
+
+func TestConfigVirtualAddresses(t *testing.T) {
+	id := "vip_00000001-0000-4000-8000-000000000001"
+	for args, want := range map[string]ctlRequest{
+		"config list virtualAddresses":      {method: "GET", path: "/api/v1/config/virtualAddresses", kind: "collection"},
+		"config create virtualAddresses":    {method: "POST", path: "/api/v1/config/virtualAddresses", kind: "object"},
+		"config get virtualAddresses " + id: {method: "GET", path: "/api/v1/config/virtualAddresses/" + id, kind: "object"},
+	} {
+		req, err := ctlOperation(strings.Fields(args), io.Discard)
+		if err != nil || req.method != want.method || req.path != want.path || req.kind != want.kind {
+			t.Fatalf("%s: %+v %v", args, req, err)
+		}
+	}
+	if !validChanged(config.ChangedView{Collection: "virtualAddresses", ID: id, Deleted: true}) {
+		t.Fatal("a virtual address result was refused")
+	}
+}

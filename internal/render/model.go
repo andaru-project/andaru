@@ -130,6 +130,11 @@ type declaration struct {
 	DHCP  []dhcpEntry  `json:"dhcp"`
 	DHCP6 []dhcp6Entry `json:"dhcp6"`
 	DNS   *dnsService  `json:"dns"`
+	// VirtualAddresses are held on the dummy device andaru-vip.
+	VirtualAddresses []struct {
+		ID      string `json:"id"`
+		Address string `json:"address"`
+	} `json:"virtualAddresses"`
 }
 
 type dhcp6Entry struct {
@@ -159,6 +164,7 @@ type portForward struct {
 	To                               natPoint
 	Target                           *natPoint
 	TargetPort                       *int
+	Family                           string
 }
 type oneToOne struct {
 	ID, Zone, External, Internal string

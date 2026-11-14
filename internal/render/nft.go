@@ -130,7 +130,16 @@ func (r *renderer) filterChains() {
 			postrouting = append(postrouting, fmt.Sprintf("oifname %q ct status dnat ip saddr %s masquerade comment %q", owners[i], p.Masked(), "reflection"))
 		}
 		f.set("internal", "ifname", "", quoted(names))
+		// A virtual address belongs to its service: reflection never takes it.
+		for _, v := range f.r.d.VirtualAddresses {
+			if a, e := netip.ParseAddr(v.Address); e == nil && a.Is4() {
+				own = append(own, v.Address)
+			}
+		}
 		f.set("internal_4", "ipv4_addr", "", own)
+		if v := f.virtual4(); len(v) > 0 {
+			f.set("virtual_4", "ipv4_addr", "", v)
+		}
 	}
 	// A forward's own rule comes before the policy, so no later rule can shadow it.
 	input = append(input, boundInput...)

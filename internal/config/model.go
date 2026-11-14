@@ -202,6 +202,8 @@ type portForward struct {
 	FilterRule   string     `json:"filterRule,omitempty"`
 	Reflection   bool       `json:"reflection,omitempty"`
 	Log          bool       `json:"log,omitempty"`
+	// Family is ipv4 when empty; an ipv6 forward reaches only the firewall itself.
+	Family string `json:"family,omitempty"`
 }
 
 // oneToOne is pfSense's 1:1 NAT: one address or prefix mapped both ways.
@@ -276,6 +278,8 @@ type dnsService struct {
 	LocalDomain    string     `json:"localDomain,omitempty"`
 	SearchDomains  []string   `json:"searchDomains,omitempty"`
 	RegisterLeases *bool      `json:"registerLeases,omitempty"`
+	// VirtualAddresses the DNS service also listens on.
+	VirtualAddresses []string `json:"virtualAddresses,omitempty"`
 }
 type upstream struct {
 	Address  string `json:"address"`
@@ -296,6 +300,14 @@ type declaration struct {
 	DHCP          []dhcpEntry  `json:"dhcp,omitzero"`
 	DHCP6         []dhcp6Entry `json:"dhcp6,omitzero"`
 	DNS           *dnsService  `json:"dns,omitempty"`
+	// VirtualAddresses are held by the firewall on no LAN, for its own services.
+	VirtualAddresses []virtualAddress `json:"virtualAddresses,omitzero"`
+}
+
+// virtualAddress is an address the firewall holds on its dummy interface, answered on every segment the filter lets reach it.
+type virtualAddress struct {
+	identity
+	Address string `json:"address"`
 }
 
 func emptyDeclaration() declaration {

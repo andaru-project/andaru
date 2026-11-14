@@ -355,9 +355,29 @@ sudo andaru ctl prefixes
 - **The prefix view:** `andaru ctl prefixes` (`GET /api/v1/status/prefixes`) shows each WAN's requested length, its current prefix and lifetimes, the subnet IDs it leaves room for, each delegated segment's `/64`, each pool's range, and what does not fit.
 - **Routes and names:** a delegated pool is unreachable where nobody leases it (`proto 77`, kept by the lease sync), leased prefixes are routed via the router that asked, and static names publish AAAA and PTR at the current address. After a change, the old pool's routes stay while Kea still holds their leases and the old prefix is valid, until each router renews.
 
+### Virtual addresses
+
+Addresses the firewall holds on no LAN, for its own services: pfSense's IP aliases on `lo0`, such as a DNS listener every LAN is given. Design: [Virtual addresses](../superpowers/specs/2026-11-14-virtual-addresses-design.md). Proxy ARP, Other and CARP come after the MVP ([#43](https://github.com/andaru-project/andaru/issues/43)).
+
+```sh
+printf '%s\n' '{"name":"dns4","address":"172.16.53.53"}' | sudo andaru ctl config create virtualAddresses
+printf '%s\n' '{"name":"dns6","address":"fd00:53:53:53:53:53:53:53"}' | sudo andaru ctl config create virtualAddresses
+# The DNS service listens on them; DHCP, DHCPv6 and router advertisements hand them out through dnsServers.
+printf '%s\n' '{"mode":"recursive","segments":["'"$LAN"'"],"virtualAddresses":["'"$VIP4"'","'"$VIP6"'"]}' | sudo andaru ctl config replace --version "$V" dns
+# DNS sent to the firewall itself on the WAN goes to the IPv6 one.
+printf '%s\n' '{"name":"dns6","family":"ipv6","enabled":true,"ingressZones":["'"$WAN"'"],"protocol":"tcp-udp","from":[],"to":{"self":true},"filterRule":"auto","ports":"53","target":{"address":"fd00:53:53:53:53:53:53:53"}}' \
+  | sudo andaru ctl config create nat/port-forwards
+```
+
+- **`virtualAddresses`:** single IPv4 or IPv6 unicast addresses, not loopback, link-local or on any segment's subnet (an address on a LAN's subnet belongs on that segment). They live on the dummy device `andaru-vip`, which the generation creates and removes with them; no link may take that name.
+- **DNS:** `dns.virtualAddresses` names those the DNS service listens on, answering every source that reaches them. Who reaches them is the packet filter's decision, so this needs a management segment. To give clients the address, name it in `dnsServers` of `dhcp`, `dhcp6` or the router advertisements.
+- **Port forwards to them:** an IPv4 forward whose target is a virtual address is a forward to the firewall itself, with its rule in the input chain. Reflection never takes a virtual address, so a LAN client reaches the service on it. `self` keeps meaning the arriving interface's addresses, never a virtual address.
+- **IPv6 port forwards** (`"family":"ipv6"`) reach only the firewall itself: `self`, a segment's static IPv6 address, or an IPv6 virtual address. Forwards to inside hosts (NAT66) and reflection are refused.
+- **In use:** a virtual address a port forward targets cannot be deleted or re-addressed until the forward is changed or deleted.
+
 ### Inbound NAT
 
-Port forwards and 1:1 NAT, with pfSense's semantics, IPv4 only. Both need the packet filter, so a management segment. Design: [inbound NAT](../superpowers/specs/2026-11-12-inbound-nat-design.md).
+Port forwards and 1:1 NAT, with pfSense's semantics, IPv4 only; IPv6 port forwards to the firewall itself are in "Virtual addresses" above. Both need the packet filter, so a management segment. Design: [inbound NAT](../superpowers/specs/2026-11-12-inbound-nat-design.md).
 
 ```sh
 # WAN port 8080 to the web server's port 80, from anywhere; its filter rule comes with it.
@@ -748,6 +768,20 @@ On 2026-11-13 the CGO-disabled amd64 builds of `a8d9c7b` and, after the review a
 The lab found and this branch fixes: the old pool's routes went a second after the change, while Kea still held its leases, so the old prefixes followed the default route; and networkd's burst of link-file rewrites at boot hit the service's start limit, which stopped the path unit.
 
 Not run on the lab: a prefix shorter than requested, graceful renumbering, the saved prefix expiring, and a `config-set` Kea refuses; unit tests cover them.
+
+### Virtual addresses Debian lab qualification
+
+On 2026-11-14 the CGO-disabled amd64 build of `a972464` (SHA-256 `afb98aeb2dfe7c3fc26d02c0f0aa16e1c7e2fd68fccc98da85f5091b92b05477`) was installed on VM 114, set up as in the DHCP and DNS and IPv6 LAN qualifications, with VM 117 on the LAN and a WAN client in a namespace on the lab network. The declaration had virtual addresses `172.16.53.53` and `fd00:53:53:53:53:53:53:53`, the DNS service listening on both and on the LAN, `dhcp` and `dhcp6` handing them out as DNS servers, and port forwards from the WAN zone sending port 53 of the firewall itself to them: IPv4 (UDP and TCP) to `172.16.53.53`, IPv6 (`family: ipv6`) to `fd00:53:53:53:53:53:53:53`.
+
+- `andaru-vip` held both addresses, `routable (configured)`, and Unbound listened on both.
+- VM 117 received `172.16.53.53` by DHCP and `fd00:53:53:53:53:53:53:53` by DHCPv6; its own lease name answered through both and through the firewall's LAN addresses.
+- From the WAN, `dig @10.0.1.19` and `dig @fd00:feed::19` were answered over UDP and TCP through the forwards; queries sent to either virtual address directly were not.
+- Deleting or re-addressing the IPv4 virtual address while the forward targeted it was refused; removing one virtual address took it off the device, and removing all deleted `andaru-vip`.
+- After a reboot all of the above held again.
+
+The lab found, fixed in this branch on `98771b1`: the refusal named the forward only after a DNS reference to the same address was gone, and for an IPv6 virtual address it gave a generic message.
+
+Not run on the lab: public names (the lab's upstream refuses queries from VM 114), forwards from the LAN zone, and the refusals the unit tests cover.
 
 ### Inbound NAT Debian lab qualification
 

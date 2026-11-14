@@ -275,3 +275,55 @@ func TestForwardRuleAdmitsOnlyItsOwnTranslations(t *testing.T) {
 		t.Error("forward B, which has no rule, was admitted by forward A's rule")
 	}
 }
+
+// Virtual addresses in a real kernel: forwards from the WAN reach a service on the dummy device in both
+// families, and the virtual address itself is not open to the WAN.
+func TestVirtualAddressesInNamespace(t *testing.T) {
+	l := newLab(t)
+	in := change(t, fixture(t, "virtual"), func(d map[string]any) {
+		for _, f := range d["nat"].(map[string]any)["portForwards"].([]any) {
+			if f.(map[string]any)["protocol"] == "udp" {
+				f.(map[string]any)["protocol"] = "tcp"
+			}
+		}
+	})
+	l.must(l.fw, "ip", "link", "add", "andaru-vip", "type", "dummy")
+	l.must(l.fw, "ip", "addr", "add", "172.16.53.53/32", "dev", "andaru-vip")
+	l.must(l.fw, "ip", "addr", "add", "fd00:53:53:53:53:53:53:53/128", "dev", "andaru-vip")
+	l.must(l.fw, "ip", "link", "set", "andaru-vip", "up")
+	l.must(l.fw, "ip", "-6", "addr", "add", "fd00:1::1/64", "dev", "ens18", "nodad")
+	l.must(l.wan, "ip", "-6", "addr", "add", "fd00:1::2/64", "dev", "w0", "nodad")
+	l.must(l.wan, "ip", "-6", "route", "add", "default", "via", "fd00:1::1")
+	l.load(in)
+	cmd := exec.Command("ip", "netns", "exec", l.fw, "python3", "-c", `
+import socket, threading
+def serve(port):
+    s = socket.socket(socket.AF_INET6); s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("::", port)); s.listen()
+    while True: s.accept()[0].close()
+for p in (53, 22): threading.Thread(target=serve, args=(p,), daemon=True).start()
+threading.Event().wait()
+`)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	time.Sleep(300 * time.Millisecond)
+	for _, c := range []struct {
+		addr string
+		port int
+		want bool
+		what string
+	}{
+		{"10.1.0.1", 53, true, "the IPv4 forward to the virtual address"},
+		{"fd00:1::1", 53, true, "the IPv6 forward to the virtual address"},
+		{"fd00:1::1", 2222, true, "the IPv6 forward to the firewall's own port 22"},
+		{"172.16.53.53", 53, false, "the virtual address itself, from the WAN"},
+		{"fd00:53:53:53:53:53:53:53", 53, false, "the IPv6 virtual address itself, from the WAN"},
+	} {
+		l.must(l.wan, "ip", "route", "replace", "172.16.53.53/32", "via", "10.1.0.1")
+		if got := l.connects(l.wan, c.addr, c.port); got != c.want {
+			t.Errorf("%s: connected %v, want %v", c.what, got, c.want)
+		}
+	}
+}

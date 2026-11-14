@@ -63,6 +63,9 @@ func validateTopology(d *declaration) []FieldError {
 		l := &d.Links[i]
 		p := fmt.Sprintf("/links/%d", i)
 		check(l.identity, p)
+		if l.Name == vipDevice {
+			bad(p+"/name", "This name is the virtual addresses' device.")
+		}
 		links[l.ID] = l
 		indexes[l.ID] = i
 		if l.Kind == "ethernet" {

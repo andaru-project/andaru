@@ -1024,6 +1024,9 @@
         },
         {
           "$ref": "#/$defs/dhcp6Write"
+        },
+        {
+          "$ref": "#/$defs/virtualAddressWrite"
         }
       ]
     },
@@ -1218,6 +1221,13 @@
           "items": {
             "$ref": "#/$defs/dhcp6Stored"
           }
+        },
+        "virtualAddresses": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/virtualAddressStored"
+          }
         }
       },
       "required": [
@@ -1354,6 +1364,13 @@
           "maxItems": 64,
           "items": {
             "$ref": "#/$defs/dhcp6Stored"
+          }
+        },
+        "virtualAddresses": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/virtualAddressStored"
           }
         }
       },
@@ -2218,6 +2235,86 @@
                   "id"
                 ],
                 "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "create"
+                  },
+                  "collection": {
+                    "enum": [
+                      "virtualAddresses"
+                    ]
+                  },
+                  "localId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9_]{0,31}$"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/virtualAddressWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "replace"
+                  },
+                  "collection": {
+                    "enum": [
+                      "virtualAddresses"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/virtualAddressWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "delete"
+                  },
+                  "collection": {
+                    "enum": [
+                      "virtualAddresses"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id"
+                ],
+                "additionalProperties": false
               }
             ]
           },
@@ -2273,6 +2370,9 @@
         },
         {
           "$ref": "#/$defs/dhcp6Stored"
+        },
+        {
+          "$ref": "#/$defs/virtualAddressStored"
         }
       ]
     },
@@ -2821,6 +2921,13 @@
         },
         "registerLeases": {
           "type": "boolean"
+        },
+        "virtualAddresses": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/virtualAddressRef"
+          }
         }
       },
       "required": [
@@ -2959,8 +3066,8 @@
                   "properties": {
                     "address": {
                       "type": "string",
-                      "minLength": 7,
-                      "maxLength": 18
+                      "minLength": 2,
+                      "maxLength": 64
                     }
                   },
                   "required": [
@@ -2986,6 +3093,12 @@
             },
             "log": {
               "type": "boolean"
+            },
+            "family": {
+              "enum": [
+                "ipv4",
+                "ipv6"
+              ]
             }
           },
           "required": [
@@ -3235,6 +3348,59 @@
       "allOf": [
         {
           "$ref": "#/$defs/dhcp6Fields"
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "virtualAddressID": {
+      "type": "string",
+      "pattern": "^vip_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "virtualAddressRef": {
+      "type": "string",
+      "pattern": "^(vip_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|@[A-Za-z][A-Za-z0-9_]{0,31})$"
+    },
+    "virtualAddressFields": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/virtualAddressID"
+            },
+            "address": {
+              "type": "string",
+              "maxLength": 64
+            }
+          },
+          "required": [
+            "address"
+          ]
+        }
+      ]
+    },
+    "virtualAddressStored": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/virtualAddressFields"
+        },
+        {
+          "type": "object",
+          "properties": {},
+          "required": [
+            "id"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "virtualAddressWrite": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/virtualAddressFields"
         }
       ],
       "unevaluatedProperties": false

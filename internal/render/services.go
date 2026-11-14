@@ -41,6 +41,8 @@ type dnsService struct {
 	LocalDomain    string   `json:"localDomain"`
 	SearchDomains  []string `json:"searchDomains"`
 	RegisterLeases *bool    `json:"registerLeases"`
+	// VirtualAddresses the DNS service also listens on, by ID.
+	VirtualAddresses []string `json:"virtualAddresses"`
 }
 
 // served is a segment's interface name and static IPv4 address, when it has both.
@@ -185,6 +187,15 @@ func (r *renderer) services() {
 						}
 					}
 				}
+			}
+		}
+	}
+	// A virtual address is on no segment: every source the filter lets reach it may ask.
+	for _, id := range d.DNS.VirtualAddresses {
+		for _, v := range d.VirtualAddresses {
+			if v.ID == id {
+				lines = append(lines, "\tinterface: "+v.Address)
+				acl = append(acl, "\tinterface-action: "+v.Address+" allow")
 			}
 		}
 	}
