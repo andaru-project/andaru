@@ -23,10 +23,13 @@ func TestDNSUpstreamIsTheFirewall(t *testing.T) {
 	}
 	// Unbound always listens on loopback; only addresses it listens on, port 53, would loop.
 	for name, upstream := range map[string]string{
-		"loopback":    "127.0.0.1",
-		"loopback v6": "::1",
-		"mapped":      "::ffff:192.0.2.7",
-		"unspecified": "0.0.0.0",
+		"loopback":        "127.0.0.1",
+		"loopback v6":     "::1",
+		"mapped":          "::ffff:192.0.2.7",
+		"unspecified":     "0.0.0.0",
+		"mapped loopback": "::ffff:127.0.0.1",
+		"resolved stub":   "127.0.0.53",
+		"resolved proxy":  "127.0.0.54:53",
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := vipFixture(t)

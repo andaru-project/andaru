@@ -129,7 +129,7 @@ func validateNAT(d *declaration) []FieldError {
 				bad(p+"/target/address", "Expected an IPv4 address; inbound NAT is IPv4 only.")
 			case a.IsLoopback():
 				// Linux drops a connection translated to 127.0.0.0/8 from another interface unless route_localnet is set.
-				bad(p+"/target/address", "Loopback addresses cannot be targets. Use a virtual address instead (#43 tracks the rest).")
+				bad(p+"/target/address", "Loopback addresses cannot be targets. Use a virtual address instead; proxy ARP and CARP are not supported yet.")
 			case !validUnicast(a):
 				bad(p+"/target/address", "Expected a unicast address.")
 			}
