@@ -94,7 +94,7 @@ func check(ctx context.Context, run commandRunner, now func() time.Time) (Availa
 				continue
 			}
 		}
-		if inCandidate && len(fields) == 5 && fields[4] == "Packages" {
+		if inCandidate && (len(fields) == 4 || len(fields) == 5) && fields[len(fields)-1] == "Packages" {
 			if _, err := strconv.Atoi(fields[0]); err != nil {
 				return Availability{}, errors.New("invalid source priority in APT policy")
 			}
@@ -104,7 +104,10 @@ func check(ctx context.Context, run commandRunner, now func() time.Time) (Availa
 			}
 			u.User = nil
 			result.Repository = u.String()
-			result.Suite = strings.SplitN(fields[2], "/", 2)[0]
+			result.Suite = fields[2]
+			if len(fields) == 5 {
+				result.Suite = strings.SplitN(fields[2], "/", 2)[0]
+			}
 			break
 		}
 	}

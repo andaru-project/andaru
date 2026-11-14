@@ -99,3 +99,14 @@ func metadataRunner(policy string) func(context.Context, string, ...string) ([]b
 		}
 	}
 }
+
+func TestCheckFlatRepository(t *testing.T) {
+	body := "andaru:\n Installed: 0.4.0~rc2-1\n Candidate: 0.4.0-1\n Version table:\n  0.4.0-1 500\n   500 file:/var/tmp/andaru-package-test-repo ./ Packages\n"
+	got, err := check(context.Background(), metadataRunner(body), time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Repository != "file:/var/tmp/andaru-package-test-repo" || got.Suite != "./" {
+		t.Fatalf("lost flat repository identity: %+v", got)
+	}
+}

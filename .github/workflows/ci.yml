@@ -112,11 +112,13 @@ jobs:
           CGO_ENABLED=0 go test -c -tags=integration -o "$build/engine.test" ./internal/engine
           CGO_ENABLED=0 go test -c -tags=integration -o "$build/ctl.test" ./cmd/andaru
           CGO_ENABLED=0 go test -c -tags=integration -o "$build/render.test" ./internal/render
+          CGO_ENABLED=0 go test -c -tags=integration -o "$build/upgrade.test" ./internal/upgrade
           sudo install -o root -g root -m 0755 -t "$art" \
-            "$build/andaru" "$build/config.test" "$build/engine.test" "$build/ctl.test" "$build/render.test"
+            "$build/andaru" "$build/config.test" "$build/engine.test" "$build/ctl.test" "$build/render.test" "$build/upgrade.test"
           sudo env -u TMPDIR "$art/config.test" -test.v -test.timeout=120s
           sudo env -u TMPDIR ANDARU_TEST_BINARY="$art/andaru" "$art/engine.test" -test.v -test.timeout=120s
           sudo env -u TMPDIR "$art/ctl.test" -test.v -test.timeout=120s
+          sudo env -u TMPDIR "$art/upgrade.test" -test.v -test.timeout=120s
           # The pppd and networkd tool proofs in this binary are lab proofs; CI runs the filter ones.
           sudo env -u TMPDIR "$art/render.test" -test.v -test.timeout=120s -test.run "FilterInNamespace|NftScriptIsValid|ServiceGoldensPassTheirTools|DHCPv6GoldensPassKea"
 
