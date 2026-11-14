@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/netip"
 	"strconv"
-	"time"
 )
 
 // Template is /run/andaru-kea/kea-dhcp6.template.json: the DHCPv6 subnets of delegated segments, written with
@@ -49,8 +48,7 @@ type TemplatePool struct {
 
 // FillTemplate turns the template into Kea subnet6 entries under each uplink's prefix. A subnet whose uplink
 // has no prefix is left out silently; a subnet or pool the prefix has no room for is left out and named in skipped.
-// No lease outlives the delegation it is numbered from.
-func FillTemplate(tpl Template, prefixes map[string]Held, now time.Time) (subnets []map[string]any, skipped []string) {
+func FillTemplate(tpl Template, prefixes map[string]Held) (subnets []map[string]any, skipped []string) {
 	subnets = []map[string]any{}
 	for _, s := range tpl.Subnets {
 		held, ok := prefixes[s.Uplink]
@@ -58,8 +56,6 @@ func FillTemplate(tpl Template, prefixes map[string]Held, now time.Time) (subnet
 			continue
 		}
 		base := held.Prefix
-		valid := bound(s.Valid, held.Valid.Sub(now))
-		preferred := min(bound(s.Preferred, held.Preferred.Sub(now)), valid)
 		id, _ := strconv.ParseUint(s.SubnetID, 16, 16)
 		lan, ok := Place(base, id, 64)
 		if !ok {
@@ -87,7 +83,7 @@ func FillTemplate(tpl Template, prefixes map[string]Held, now time.Time) (subnet
 		context["andaru"] = marked
 		subnet := map[string]any{
 			"id": s.ID, "subnet": lan.String(), "interface": s.Interface, "pools": pools,
-			"valid-lifetime": valid, "preferred-lifetime": preferred, "option-data": s.Options, "user-context": context,
+			"valid-lifetime": s.Valid, "preferred-lifetime": s.Preferred, "option-data": s.Options, "user-context": context,
 		}
 		var pool netip.Prefix
 		if p := s.Pool; p != nil {
@@ -121,17 +117,4 @@ func FillTemplate(tpl Template, prefixes map[string]Held, now time.Time) (subnet
 		subnets = append(subnets, subnet)
 	}
 	return subnets, skipped
-}
-
-// bound is the lease lifetime limited to what remains of the delegation. The remainder is rounded down to ten
-// minutes, so Kea's configuration changes at most that often while the delegation's lifetime runs down.
-func bound(lease int, remaining time.Duration) int {
-	left := int(max(remaining, 0) / time.Second)
-	if left >= lease {
-		return lease
-	}
-	if left >= 600 {
-		return left - left%600
-	}
-	return left
 }

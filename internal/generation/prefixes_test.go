@@ -155,6 +155,24 @@ func TestPrefixesUnchangedSendsNothing(t *testing.T) {
 	}
 }
 
+// A healthy WAN renewing every 15 minutes (valid 3600 s, preferred 1800 s) reconfigures Kea once in an hour: the
+// lease lifetimes do not follow the delegation's remaining time.
+func TestPrefixesRenewingSendsNothing(t *testing.T) {
+	b := newBench(t)
+	k := b.delegatedLAN("2001:db8:aa00::/48", 0)
+	for minute := range 60 {
+		since := minute % 15 * 60
+		b.prefix("2001:db8:aa00::/48", 1800-since, 3600-since)
+		if err := b.r.SyncPrefixes(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		b.now = b.now.Add(time.Minute)
+	}
+	if k.count() != 1 {
+		t.Fatalf("config-set sent %d times", k.count())
+	}
+}
+
 func TestPrefixesChange(t *testing.T) {
 	b := newBench(t)
 	k := b.delegatedLAN("2001:db8:aa00::/48", 0)

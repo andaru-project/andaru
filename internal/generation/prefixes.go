@@ -243,7 +243,7 @@ func (r Realizer) fillKea6(prefixes map[string]delegation.Held) ([]byte, bool, e
 	if err := json.Unmarshal(raw, &tpl); err != nil {
 		return nil, false, fmt.Errorf("read the DHCPv6 template: %w", err)
 	}
-	subnets, skipped := delegation.FillTemplate(tpl, prefixes, r.Now())
+	subnets, skipped := delegation.FillTemplate(tpl, prefixes)
 	for _, s := range skipped {
 		slog.Warn("the delegated prefix has no room; not served", "what", s)
 	}
