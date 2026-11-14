@@ -372,7 +372,8 @@ func TestFixedPrefixRouted(t *testing.T) {
 	}
 }
 
-// A static name on a delegated segment is published at its current address, and moves with the prefix.
+// A static name on a delegated segment is published at its current address, and moves with the prefix. Its TTL is
+// a lease's, a third of the valid lifetime (7200 s here), so resolvers do not keep the old address for an hour.
 func TestStaticNameOnDelegated(t *testing.T) {
 	b := newBench(t)
 	b.filled()
@@ -382,7 +383,7 @@ func TestStaticNameOnDelegated(t *testing.T) {
 	if err := b.r.SyncLeases(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"router.home.arpa. 3600 IN AAAA 2001:db8:aa00:1::10"`, `"2001:db8:aa00:1::10 3600 router.home.arpa."`} {
+	for _, want := range []string{`"router.home.arpa. 2400 IN AAAA 2001:db8:aa00:1::10"`, `"2001:db8:aa00:1::10 2400 router.home.arpa."`} {
 		if !strings.Contains(b.leaseNames(), want) {
 			t.Fatalf("missing %s in:\n%s", want, b.leaseNames())
 		}
