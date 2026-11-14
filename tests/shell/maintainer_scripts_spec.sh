@@ -1,5 +1,5 @@
 #shellcheck shell=sh
-# The andaru package's postinst and prerm, run against a DPKG_ROOT with systemctl stubbed on PATH.
+# The andaru package's postinst and prerm, run against a DPKG_ROOT with systemctl and dpkg-query stubbed on PATH.
 
 Describe 'andaru maintainer scripts'
   postinst="${SHELLSPEC_PROJECT_ROOT:-$PWD}/debian/andaru.postinst"
@@ -8,10 +8,13 @@ Describe 'andaru maintainer scripts'
     root=$(mktemp -d)
     bin=$(mktemp -d)
     log=$root/calls
-    mkdir -p "$root/usr/share/andaru" "$root/usr/sbin" "$root/etc/kea" "$root/var/lib/andaru/generations"
+    mkdir -p "$root/usr/share/andaru" "$root/etc/kea" "$root/var/lib/andaru/generations"
     printf '#!/bin/sh\necho andaru-apparmor >>"%s"\n' "$log" >"$root/usr/share/andaru/andaru-apparmor"
     printf '#!/bin/sh\necho "systemctl $*" >>"%s"\n' "$log" >"$bin/systemctl"
-    chmod +x "$root/usr/share/andaru/andaru-apparmor" "$bin/systemctl"
+    # dpkg-query -W -f='${Conffiles}\n' PACKAGE: what $root/conffiles-PACKAGE holds; not installed without it.
+    # shellcheck disable=SC2016
+    printf '%s\n' '#!/bin/sh' 'for p; do :; done' "f=$root/conffiles-\$p" '[ -f "$f" ] || exit 1' 'cat "$f"' >"$bin/dpkg-query"
+    chmod +x "$root/usr/share/andaru/andaru-apparmor" "$bin/systemctl" "$bin/dpkg-query"
     : >"$log"
   }
   cleanup() { rm -rf "$root" "$bin"; }
@@ -20,10 +23,12 @@ Describe 'andaru maintainer scripts'
   # pointers.json as internal/generation writes it: compact JSON.
   pointers() { printf '%s\n' "$1" >"$root/var/lib/andaru/generations/pointers.json"; }
   taken_over() { pointers '{"confirmed":3,"lastKnownGood":2,"pending":null,"live":3,"takeover":true}'; }
+  # kea V installs kea-dhcpV-server with Debian's conffile; kea V changed makes the administrator's own.
   kea() {
-    : >"$root/usr/sbin/kea-dhcp$1"
-    chmod +x "$root/usr/sbin/kea-dhcp$1"
-    : >"$root/etc/kea/kea-dhcp$1.conf"
+    conf=$root/etc/kea/kea-dhcp$1.conf
+    printf '{ "Dhcp%s": {} }\n' "$1" >"$conf"
+    printf ' /etc/kea/kea-dhcp%s.conf %s\n' "$1" "$(md5sum <"$conf" | cut -d' ' -f1)" >"$root/conffiles-kea-dhcp$1-server"
+    [ "${2-}" != changed ] || printf '# the LAN\n' >>"$conf"
   }
 
   Describe 'postinst configure'
@@ -33,8 +38,9 @@ Describe 'andaru maintainer scripts'
       The contents of file "$log" should equal 'andaru-apparmor'
     End
 
-    It 'warns that an installed Kea stops serving /etc/kea at its next restart'
-      kea 4
+    It 'warns that a Kea serving a changed /etc/kea stops serving it at its next restart'
+      kea 4 changed
+      kea 6
       When run env DPKG_ROOT="$root" PATH="$bin:$PATH" sh "$postinst" configure
       The status should equal 0
       The stderr should include 'kea-dhcp4-server'
@@ -43,9 +49,24 @@ Describe 'andaru maintainer scripts'
     End
 
     It 'says nothing about Kea on a host Andaru has taken over'
+      kea 4 changed
+      kea 6 changed
+      taken_over
+      When run env DPKG_ROOT="$root" PATH="$bin:$PATH" sh "$postinst" configure
+      The status should equal 0
+      The stderr should equal ''
+    End
+
+    It "says nothing about Kea's unchanged default configuration"
       kea 4
       kea 6
-      taken_over
+      When run env DPKG_ROOT="$root" PATH="$bin:$PATH" sh "$postinst" configure
+      The status should equal 0
+      The stderr should equal ''
+    End
+
+    It 'says nothing when Kea is not installed, whatever /etc/kea holds'
+      printf '{}\n' >"$root/etc/kea/kea-dhcp4.conf"
       When run env DPKG_ROOT="$root" PATH="$bin:$PATH" sh "$postinst" configure
       The status should equal 0
       The stderr should equal ''

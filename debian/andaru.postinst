@@ -6,11 +6,16 @@ case "$1" in
 configure)
 	# nftables.service is masked when a takeover is confirmed, not here: until then a reboot keeps the host's firewall.
 	"$root/usr/share/andaru/andaru-apparmor"
-	# Andaru's drop-ins start Kea from /run/andaru-kea only, which a confirmed generation writes.
+	# Andaru's drop-ins start Kea from /run/andaru-kea only, which a confirmed generation writes. Kea ships
+	# /etc/kea/kea-dhcpV.conf as a conffile, so only one the administrator changed means a Kea serving a LAN.
 	if [ ! -e "$root/var/lib/andaru/generations/pointers.json" ]; then
 		for v in 4 6; do
-			if [ -x "$root/usr/sbin/kea-dhcp$v" ] && [ -f "$root/etc/kea/kea-dhcp$v.conf" ]; then
-				echo "andaru: kea-dhcp$v-server now serves only Andaru's configuration, not /etc/kea/kea-dhcp$v.conf; it stops serving DHCP at its next restart." >&2
+			conf=/etc/kea/kea-dhcp$v.conf
+			[ -f "$root$conf" ] || continue
+			shipped=$(dpkg-query -W -f='${Conffiles}\n' "kea-dhcp$v-server" 2>/dev/null | awk -v f="$conf" '$1 == f { print $2 }')
+			[ -n "$shipped" ] || continue
+			if [ "$(md5sum <"$root$conf" | cut -d' ' -f1)" != "$shipped" ]; then
+				echo "andaru: kea-dhcp$v-server now serves only Andaru's configuration, not $conf; it stops serving DHCP at its next restart." >&2
 			fi
 		done
 	fi
