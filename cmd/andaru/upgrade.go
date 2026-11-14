@@ -11,15 +11,21 @@ import (
 )
 
 func upgradeCommand(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	if len(args) != 1 || args[0] != "check" {
-		fmt.Fprintln(stderr, "usage: andaru upgrade check")
+	if len(args) != 1 || args[0] != "check" && args[0] != "prepare" {
+		fmt.Fprintln(stderr, "usage: andaru upgrade check|prepare")
 		return 2
 	}
 	if os.Geteuid() != 0 {
 		fmt.Fprintln(stderr, "upgrade commands require root")
 		return 1
 	}
-	result, err := upgrade.Check(ctx)
+	var result any
+	var err error
+	if args[0] == "check" {
+		result, err = upgrade.Check(ctx)
+	} else {
+		result, err = upgrade.Prepare(ctx)
+	}
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1

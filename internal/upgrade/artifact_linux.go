@@ -182,3 +182,43 @@ func debFiles(stage string) ([]string, error) {
 	}
 	return result, nil
 }
+
+// A root-owned receipt from our own completed recovery set preserves APT's previously verified identity
+// when that exact version has since disappeared from the signed archive indexes.
+func retainedLocalPackage(ctx context.Context, root string, info packageInfo, stage string) (artifact, error) {
+	id, err := oldPointer(root, "current.json")
+	if err != nil || id == "" {
+		return artifact{}, err
+	}
+	var manifest recoveryManifest
+	if err = privateJSON(filepath.Join(root, id, "manifest.json"), &manifest); err != nil {
+		return artifact{}, err
+	}
+	if !manifest.PackageRetained || manifest.Package != info {
+		return artifact{}, nil
+	}
+	source := filepath.Join(root, id, "package.deb")
+	digest, err := hashFile(ctx, source)
+	if err != nil {
+		return artifact{}, err
+	}
+	if digest.SHA256 != manifest.PackageSHA256 {
+		return artifact{}, errors.New("retained local package checksum mismatch")
+	}
+	src, _, err := regularFile(source)
+	if err != nil {
+		return artifact{}, err
+	}
+	target := filepath.Join(stage, "package.deb")
+	dst, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		src.Close()
+		return artifact{}, err
+	}
+	_, copyErr := io.Copy(dst, contextReader{ctx, src})
+	err = errors.Join(copyErr, src.Close(), dst.Sync(), dst.Close())
+	if err != nil {
+		return artifact{}, err
+	}
+	return artifact{Path: target, SHA256: digest.SHA256, Available: true}, nil
+}
