@@ -215,6 +215,17 @@ func (r *renderer) services() {
 		if tls {
 			lines = append(lines, "\ttls-cert-bundle: /etc/ssl/certs/ca-certificates.crt")
 		}
+		// Unbound's default do-not-query-localhost refuses all of 127/8 and ::1, so a loopback upstream needs it off.
+		for _, u := range d.DNS.Upstreams {
+			a, err := netip.ParseAddr(u.Address)
+			if ap, e := netip.ParseAddrPort(u.Address); err != nil && e == nil {
+				a = ap.Addr()
+			}
+			if a.Unmap().IsLoopback() {
+				lines = append(lines, "\tdo-not-query-localhost: no")
+				break
+			}
+		}
 		lines = append(lines, "forward-zone:", `	name: "."`)
 		for _, u := range d.DNS.Upstreams {
 			addr := u.Address
