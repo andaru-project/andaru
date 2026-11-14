@@ -144,8 +144,8 @@ func lease6Records(cfg kea6Config, leases []keaLease, static4 map[string]bool) [
 			// The generation knew only their suffixes, so these static names are published here, at the current prefix.
 			for _, res := range s.Reservations {
 				if label := strings.ToLower(res.Hostname); len(res.IPAddresses) > 0 && leaseLabel.MatchString(label) {
-					// A lease's TTL, not an hour: the address moves with the prefix.
-					name, ttl := label+"."+a.Domain+".", s.Valid/3
+					// A lease's TTL, at most an hour: the address moves with the prefix.
+					name, ttl := label+"."+a.Domain+".", min(s.Valid/3, 3600)
 					static = append(static, fmt.Sprintf("local-data: %q", fmt.Sprintf("%s %d IN AAAA %s", name, ttl, res.IPAddresses[0])),
 						fmt.Sprintf("local-data-ptr: %q", fmt.Sprintf("%s %d %s", res.IPAddresses[0], ttl, name)))
 				}

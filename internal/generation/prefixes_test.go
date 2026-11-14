@@ -169,8 +169,8 @@ func TestPrefixesRenewingSendsNothing(t *testing.T) {
 		}
 		b.now = b.now.Add(time.Minute)
 	}
-	if k.count() != 1 {
-		t.Fatalf("config-set sent %d times", k.count())
+	if k.count() != 1 || !strings.Contains(k.last(), `"preferred-lifetime": 4500`) || !strings.Contains(k.last(), `"valid-lifetime": 7200`) {
+		t.Fatalf("config-set sent %d times: %s", k.count(), k.last())
 	}
 }
 
@@ -397,6 +397,18 @@ func TestStaticNameOnDelegated(t *testing.T) {
 	}
 	if !strings.Contains(b.leaseNames(), "AAAA 2001:db8:bb00:1::10") || strings.Contains(b.leaseNames(), "2001:db8:aa00") {
 		t.Fatalf("name did not move:\n%s", b.leaseNames())
+	}
+}
+
+// A long lease does not make a static name outlive the prefix it moves with: its TTL stays at most an hour.
+func TestStaticNameTTLCapped(t *testing.T) {
+	var cfg kea6Config
+	if err := json.Unmarshal([]byte(`{"Dhcp6":{"subnet6":[{"id":7,"valid-lifetime":604800,"reservations":[{"hostname":"router","ip-addresses":["2001:db8:aa00:1::10"]}],
+		"user-context":{"andaru":{"domain":"home.arpa","delegated":true,"names":true}}}]}}`), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(lease6Records(cfg, nil), "\n"); !strings.Contains(got, `"router.home.arpa. 3600 IN AAAA 2001:db8:aa00:1::10"`) {
+		t.Fatalf("records:\n%s", got)
 	}
 }
 
