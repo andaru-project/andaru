@@ -30,6 +30,7 @@ func TestDNSUpstreamIsTheFirewall(t *testing.T) {
 		"mapped loopback": "::ffff:127.0.0.1",
 		"resolved stub":   "127.0.0.53",
 		"resolved proxy":  "127.0.0.54:53",
+		"mapped resolved": "::ffff:127.0.0.53",
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := vipFixture(t)
@@ -44,6 +45,7 @@ func TestDNSUpstreamIsTheFirewall(t *testing.T) {
 		"an unlistened virtual v6": "fd00:53:53:53:53:53:53:53",
 		"another loopback":         "127.0.2.1:53",
 		"another loopback bare":    "127.0.0.2",
+		"resolved, another port":   "127.0.0.53:5353",
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := vipFixture(t)
