@@ -71,6 +71,40 @@ Describe 'andaru maintainer scripts'
       The status should equal 0
       The stderr should equal ''
     End
+
+    It 'warns about kea-dhcp6-server alone'
+      kea 4
+      kea 6 changed
+      When run env DPKG_ROOT="$root" PATH="$bin:$PATH" sh "$postinst" configure
+      The status should equal 0
+      The stderr should include 'kea-dhcp6-server'
+      The stderr should not include 'kea-dhcp4-server'
+    End
+
+    # Kea unpacked in the same run as Andaru but not yet configured: dpkg lists the conffile, the file is not there.
+    It 'says nothing when the listed conffile is not there yet'
+      kea 4
+      rm "$root/etc/kea/kea-dhcp4.conf"
+      When run env DPKG_ROOT="$root" PATH="$bin:$PATH" sh "$postinst" configure
+      The status should equal 0
+      The stderr should equal ''
+    End
+
+    It 'says nothing when dpkg records no MD5 for the conffile'
+      kea 4 changed
+      printf ' /etc/kea/kea-dhcp4.conf newconffile\n' >"$root/conffiles-kea-dhcp4-server"
+      When run env DPKG_ROOT="$root" PATH="$bin:$PATH" sh "$postinst" configure
+      The status should equal 0
+      The stderr should equal ''
+    End
+  End
+
+  Describe 'postinst triggered'
+    It 'adds the AppArmor includes of a Kea or Unbound installed after Andaru'
+      When run env DPKG_ROOT="$root" PATH="$bin:$PATH" sh "$postinst" triggered
+      The status should equal 0
+      The contents of file "$log" should equal 'andaru-apparmor'
+    End
   End
 
   Describe 'prerm'
@@ -85,6 +119,22 @@ Describe 'andaru maintainer scripts'
     It 'removes on a taken-over host when forced'
       taken_over
       When run env DPKG_ROOT="$root" ANDARU_FORCE_REMOVE=1 sh "$prerm" remove
+      The status should equal 0
+    End
+
+    It 'is forced by ANDARU_FORCE_REMOVE=1 alone'
+      taken_over
+      When run env DPKG_ROOT="$root" ANDARU_FORCE_REMOVE=0 sh "$prerm" remove
+      The status should equal 1
+      The stderr should include 'ANDARU_FORCE_REMOVE=1'
+    End
+
+    It 'reads a pretty-printed pointers.json'
+      pointers '{
+  "confirmed": null,
+  "live": null
+}'
+      When run env DPKG_ROOT="$root" sh "$prerm" remove
       The status should equal 0
     End
 

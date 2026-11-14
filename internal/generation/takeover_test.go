@@ -188,7 +188,8 @@ func TestConfirmMovesPointersAndMakesPermanent(t *testing.T) {
 		t.Fatalf("argv = %q", b.net.argv)
 	}
 	// Debian's nftables.service would flush Andaru's filter; until confirmation the host keeps its own firewall.
-	if b.net.ran("systemctl mask nftables.service") != 1 {
+	// No reload: netplan's YAML is still there, and the last step reloads.
+	if b.net.ran("systemctl mask --no-reload nftables.service") != 1 || !b.nftablesMasked() {
 		t.Fatalf("confirm did not mask nftables.service: %q", b.net.argv)
 	}
 	if g := b.read(id); g.State.State != Confirmed || g.Reason != "" {
@@ -327,7 +328,7 @@ func TestBootCompletesInterruptedConfirm(t *testing.T) {
 			b.wantPermanent()
 			b.wantPointers(1, 0, 0, 1)
 			if (step == "permanent:enable" && b.net.ran("systemctl enable --no-reload systemd-networkd.service") != 1) ||
-				b.net.ran("systemctl mask --no-reload nftables.service") != 1 {
+				!b.nftablesMasked() || (b.net.ran("systemctl mask nftables.service") == 1) != (step == "permanent:nftables") {
 				t.Fatalf("argv = %q", b.net.argv)
 			}
 		})

@@ -148,7 +148,7 @@ func TestConfirmIfupdownMasks(t *testing.T) {
 	b := debian(t)
 	b.confirmIfupdown()
 	if b.net.ran("systemctl enable systemd-networkd.service") != 1 || b.net.ran("systemctl mask networking.service ifup@.service") != 1 ||
-		b.net.ran("systemctl mask nftables.service") != 1 {
+		b.net.ran("systemctl mask --no-reload nftables.service") != 1 {
 		t.Fatalf("commands = %q", b.net.argv)
 	}
 	if !b.exists("etc/network/interfaces") || b.exists(cloudConfig) {

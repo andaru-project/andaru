@@ -430,7 +430,7 @@ func (r Realizer) Activate(ctx context.Context, id int) error {
 		}); err != nil {
 			return fmt.Errorf("activate %d: %s; %w", id, reason, err)
 		}
-		if p.Takeover {
+		if r.ownsNftablesMask(p.Takeover) {
 			// After the files and Andaru's table: the host's own firewall, unmasked by the hand-back, runs again now.
 			if err := r.startHostFirewall(restore, true); err != nil {
 				slog.Error("start the host's nftables.service", "error", err)
@@ -589,27 +589,31 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) error {
 	// Files first: once they are back, any later reload or boot is correct. But only a reload makes networkd stop
 	// running the unconfirmed files, so until one succeeds the generation stays pending and the timer retries.
 	// fallback already loaded the restored generation's filter; going back to none, the table goes after the files.
+	toIfupdown := live == nil && kind == "ifupdown" && ifupdown != nil
+	ownsMask := live == nil && r.ownsNftablesMask(p.Takeover)
 	restore := func() error {
-		if err := r.place(from, target); err != nil {
-			return err
+		// Back on netplan's files the host gets its own firewall back. Unmasking reloads systemd, whose netplan
+		// generator, the YAML gone, deletes netplan's files: so before they are placed. A failure stops nothing else.
+		var unmasked error
+		if ownsMask && !toIfupdown {
+			if _, err := r.Run(ctx, "/usr/bin/systemctl", "unmask", "nftables.service"); err != nil {
+				unmasked = fmt.Errorf("unmasking nftables.service: %w", err)
+			}
 		}
-		if live == nil && kind == "ifupdown" && ifupdown != nil {
+		if err := r.place(from, target); err != nil {
+			return errors.Join(err, unmasked)
+		}
+		if toIfupdown {
 			// Back to ifupdown: the generation stays pending, and the timer retries, until its addresses are back.
 			if err := r.handBack(ctx, *ifupdown, from, p.Takeover); err != nil {
 				return fmt.Errorf("handing back to ifupdown: %w", err)
 			}
 			return r.services(ctx, from, nil)
 		}
-		if live == nil && p.Takeover {
-			// The mask is the takeover's: back on its own configuration, the host loads its own firewall at the next boot.
-			if _, err := r.Run(ctx, "/usr/bin/systemctl", "unmask", "nftables.service"); err != nil {
-				return fmt.Errorf("unmasking nftables.service: %w", err)
-			}
-		}
 		if err := r.settle(ctx, from, target); err != nil {
-			return fmt.Errorf("files restored, reload failed: %w", err)
+			return errors.Join(fmt.Errorf("files restored, reload failed: %w", err), unmasked)
 		}
-		return nil
+		return unmasked
 	}
 	if loaded {
 		err = restore()
@@ -619,7 +623,7 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) error {
 	if err != nil {
 		return fmt.Errorf("roll back %d: %w", id, err)
 	}
-	if live == nil && p.Takeover {
+	if ownsMask {
 		// After the files and Andaru's table: the host's own firewall, unmasked by the hand-back, runs again now.
 		if err := r.startHostFirewall(ctx, true); err != nil {
 			slog.Error("start the host's nftables.service", "error", err)

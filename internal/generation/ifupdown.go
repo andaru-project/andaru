@@ -47,7 +47,8 @@ func (r Realizer) captureIfupdown(ctx context.Context, p Pointers) (IfupdownBase
 	if err := os.MkdirAll(r.baselineDir(), 0o700); err != nil {
 		return IfupdownBaseline{}, err
 	}
-	return base, writeJSON(filepath.Join(r.baselineDir(), "manifest.json"), baselineManifest{Kind: "ifupdown", Files: []baselineFile{}, Ifupdown: &base})
+	return base, writeJSON(filepath.Join(r.baselineDir(), "manifest.json"),
+		baselineManifest{Kind: "ifupdown", Files: []baselineFile{}, Ifupdown: &base, NftablesMasked: r.nftablesMasked()})
 }
 
 // handOver stops dhcpcd without dropping its addresses and starts networkd, which then takes the interfaces.
@@ -67,7 +68,8 @@ func (r Realizer) handOver(ctx context.Context, b IfupdownBaseline) error {
 // earlier one failed, and an interface already back is left alone, so the timer can repeat it safely.
 // Only ifupdown's own units raise interfaces: a dhcpcd started from a realize unit dies with that unit.
 // removed are the files just taken out of /run: the devices they made are deleted while networkd still runs.
-// After a confirmed takeover ifupdown and nftables.service are masked, so they are unmasked first, as boot does.
+// After a confirmed takeover ifupdown and nftables.service are masked, so they are unmasked first, as boot does;
+// a mask of nftables.service the administrator made before the takeover stays.
 func (r Realizer) handBack(ctx context.Context, b IfupdownBaseline, removed []placed, confirmed bool) error {
 	var failures []error
 	run := func(name string, args ...string) {
@@ -75,8 +77,10 @@ func (r Realizer) handBack(ctx context.Context, b IfupdownBaseline, removed []pl
 			failures = append(failures, err)
 		}
 	}
-	if confirmed {
+	if r.ownsNftablesMask(confirmed) {
 		run("/usr/bin/systemctl", "unmask", "networking.service", "ifup@.service", "nftables.service")
+	} else if confirmed {
+		run("/usr/bin/systemctl", "unmask", "networking.service", "ifup@.service")
 	}
 	// networkd keeps a device whose .netdev is gone, so delete the takeover's devices while it still runs.
 	// No reload: with the files gone it could drop the addresses that stopping networkd keeps.

@@ -12,7 +12,9 @@ configure)
 		for v in 4 6; do
 			conf=/etc/kea/kea-dhcp$v.conf
 			[ -f "$root$conf" ] || continue
-			shipped=$(dpkg-query -W -f='${Conffiles}\n' "kea-dhcp$v-server" 2>/dev/null | awk -v f="$conf" '$1 == f { print $2 }')
+			# An MD5 only: dpkg records "newconffile" for a conffile not installed yet.
+			shipped=$(dpkg-query -W -f='${Conffiles}\n' "kea-dhcp$v-server" 2>/dev/null |
+				awk -v f="$conf" '$1 == f && $2 ~ /^[0-9a-f]{32}$/ { print $2 }')
 			[ -n "$shipped" ] || continue
 			if [ "$(md5sum <"$root$conf" | cut -d' ' -f1)" != "$shipped" ]; then
 				echo "andaru: kea-dhcp$v-server now serves only Andaru's configuration, not $conf; it stops serving DHCP at its next restart." >&2

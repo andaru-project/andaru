@@ -26,8 +26,9 @@ jobs:
 
       - name: Refuse a tag outside main
         run: |
-          # Every host installs a release as root, so only a commit already on main may become one.
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main ||
+          # Every host installs a release as root, so only a commit already on main may become one. HEAD is the
+          # tag's commit, also for an annotated tag.
+          git merge-base --is-ancestor HEAD origin/main ||
             { echo "::error::$GITHUB_REF_NAME is not on main"; exit 1; }
 
       - name: Map the tag
