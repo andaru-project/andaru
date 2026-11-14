@@ -57,8 +57,14 @@ func TestDelegatedPrefixTooShort(t *testing.T) {
 	pool8 := change(t, in, func(d map[string]any) {
 		d["dhcp6"].([]any)[0].(map[string]any)["prefixDelegation"] = map[string]any{"subnetId": "8", "length": 60, "delegatedLength": 64}
 	})
-	if r := render(t, pool8); !findingAt(r, "DELEGATED_PREFIX_TOO_SHORT", "/dhcp6/0/prefixDelegation") {
+	r = render(t, pool8)
+	if !findingAt(r, "DELEGATED_PREFIX_TOO_SHORT", "/dhcp6/0/prefixDelegation") {
 		t.Fatalf("the pool of a segment that does not fit went unnamed: %+v", r.Findings)
+	}
+	for _, f := range r.Findings {
+		if f.Path == "/dhcp6/0/prefixDelegation" && !strings.Contains(f.Message, "its segment's subnet ID") {
+			t.Fatalf("the message blames the pool: %s", f.Message)
+		}
 	}
 	in.Facts.Delegated = delegation.State{}
 	if r := render(t, in); findingAt(r, "DELEGATED_PREFIX_TOO_SHORT", "/segments/1/addressing/ipv6/subnetId") {
