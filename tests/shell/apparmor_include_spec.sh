@@ -51,6 +51,16 @@ include if exists <andaru/kea-dhcp6>"
     The contents of file "$root/etc/apparmor.d/local/usr.sbin.unbound" should equal "include if exists <local/mine>"
   End
 
+  It 'keeps a symlinked local file a symlink on purge'
+    mv "$root/etc/apparmor.d/local/usr.sbin.unbound" "$root/unbound-mine"
+    ln -s "$root/unbound-mine" "$root/etc/apparmor.d/local/usr.sbin.unbound"
+    DPKG_ROOT="$root" sh "$script"
+    When run env DPKG_ROOT="$root" sh "$postrm" purge
+    The status should equal 0
+    The path "$root/etc/apparmor.d/local/usr.sbin.unbound" should be symlink
+    The contents of file "$root/unbound-mine" should equal "include if exists <local/mine>"
+  End
+
   Parameters:value remove upgrade abort-install
   It "keeps the includes on postrm $1"
     DPKG_ROOT="$root" sh "$script"

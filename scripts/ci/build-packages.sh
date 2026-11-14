@@ -21,7 +21,8 @@ esac
 
 src=$(mktemp -d)
 trap 'rm -rf -- "$src"' EXIT
-git ls-files -z | xargs -0 tar -cf - | tar -xf - -C "$src"
+# One archive however long the list: xargs would split it into several, and tar -x reads only the first.
+git ls-files -z | tar --null -T - -cf - | tar -xf - -C "$src"
 if [ -n "$version" ]; then
 	printf 'andaru (%s) trixie; urgency=medium\n\n  * Release %s.\n\n -- Andaru project <apt@andaru.io>  %s\n' \
 		"$version" "$version" "$(date -R)" >"$src/debian/changelog"

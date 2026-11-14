@@ -7,7 +7,8 @@ if [ "$1" = purge ]; then
 	for daemon in kea-dhcp4 kea-dhcp6 unbound; do
 		local_file=${DPKG_ROOT:-}/etc/apparmor.d/local/usr.sbin.$daemon
 		if [ -f "$local_file" ]; then
-			sed -i "/^include if exists <andaru\/$daemon>\$/d" "$local_file"
+			# --follow-symlinks: an administrator's symlinked local file stays a symlink.
+			sed --follow-symlinks -i "/^include if exists <andaru\/$daemon>\$/d" "$local_file"
 		fi
 	done
 fi
