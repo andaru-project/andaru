@@ -25,6 +25,7 @@ Andaru installs from its signed APT repository, `https://apt.andaru.io/`, on Deb
    curl -fsSLO https://github.com/andaru-project/andaru/releases/download/keyring-2026.11.14/SHA256SUMS
    sha256sum -c SHA256SUMS
    ```
+   The keyring package's SHA-256 is `0b60c555a6a0ae23abae7292e83f0719fc5e92e0b5ba04d774d0f25254920fd4`.
 2. Install it, then Andaru:
    ```sh
    sudo apt install ./andaru-archive-keyring_2026.11.14_all.deb
@@ -793,6 +794,18 @@ On 2026-11-13 the CGO-disabled amd64 builds of `a8d9c7b` and, after the review a
 The lab found and this branch fixes: the old pool's routes went a second after the change, while Kea still held its leases, so the old prefixes followed the default route; and networkd's burst of link-file rewrites at boot hit the service's start limit, which stopped the path unit.
 
 Not run on the lab: a prefix shorter than requested, graceful renumbering, the saved prefix expiring, and a `config-set` Kea refuses; unit tests cover them.
+
+### Debian packages lab qualification
+
+On 2026-11-14, `v0.4.0-rc1` (`andaru 0.4.0~rc1-1`, amd64) was installed from `https://apt.andaru.io/` (`trixie-test`) on VM 114 (netplan, cloud image) and VM 117 (ifupdown, Debian installer), each reset to its pre-Andaru snapshot, following [Installing](#installing): the keyring package checked against its release's `SHA256SUMS`, then `apt install andaru` with its recommends.
+
+- `scripts/ci/install-check.sh` passed on both after the fix below: Andaru's files in place, `nftables.service` masked, the units enabled and the engine answering, the AppArmor include lines present in the local files, and no interface or route changed by installing. Separately, `aa-status` listed the Kea and Unbound profiles as loaded and `apparmor_parser -p` showed Andaru's rules in the preprocessed `usr.sbin.kea-dhcp4` profile. For Unbound only, the kernel's use of Andaru's rules was shown by Unbound, which the fix restarted after the reload, reading `/run/andaru-unbound/` without the denial it had logged before.
+- `andaru ctl takeover --accept-detected`, then confirmation from a new session, then a reboot: both came back `running` with generation 1 confirmed and live, Unbound active and `nftables.service` masked; SSH stayed reachable throughout.
+- `v0.4.0-rc2` was published. After the reboot and before the upgrade, `install-check.sh before` ran again and the engine's InvocationID was recorded; then `apt upgrade` installed `0.4.0~rc2-1` on both: the engine restarted, Unbound stayed active and no interface or route changed. `andaru-network-boot` had run at the reboot, so the first `upgraded` check reported it; with the check fixed in this change to compare against the `before` record, a reinstall within one boot (`before`, `after`, reinstall, `upgraded`) passed on both.
+
+The lab found, fixed in [#49](https://github.com/andaru-project/andaru/pull/49): apt configures Unbound before Andaru, so Unbound started before Andaru's AppArmor rules were loaded, was denied `/run/andaru-unbound/` and failed. Andaru now starts a failed, enabled daemon again once its rules are loaded. The containers in CI have no kernel AppArmor and cannot show this. Also found, not packaging: [#50](https://github.com/andaru-project/andaru/issues/50), IPv6 on an ifupdown interface without an `inet6` stanza is gone after the first reboot.
+
+Not run on the lab: arm64, a hand-installed host's cleanup, and purging.
 
 ### Virtual addresses Debian lab qualification
 
