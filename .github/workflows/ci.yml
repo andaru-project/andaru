@@ -10,6 +10,36 @@ permissions:
   contents: read
 
 jobs:
+  shell:
+    name: shell scripts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install shellspec
+        env:
+          SHELLSPEC_VERSION: 0.28.1
+          SHELLSPEC_SHA256: 350d3de04ba61505c54eda31a3c2ee912700f1758b1a80a284bc08fd8b6c5992
+        run: |
+          set -eu
+          curl -fsSLo "$RUNNER_TEMP/shellspec.tar.gz" \
+            "https://github.com/shellspec/shellspec/releases/download/$SHELLSPEC_VERSION/shellspec-dist.tar.gz"
+          echo "$SHELLSPEC_SHA256  $RUNNER_TEMP/shellspec.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/shellspec.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/shellspec" >>"$GITHUB_PATH"
+
+      # The release gate and the maintainer scripts are shell; their specs guard nothing unless they run.
+      - name: shellcheck and shellspec
+        run: |
+          set -eu
+          shellcheck scripts/ci/*.sh packaging/apparmor/andaru-apparmor packaging/kea/andaru-lease-event \
+            debian/andaru.*inst debian/andaru.*rm
+          shellspec
+
   native-linux:
     name: linux ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}

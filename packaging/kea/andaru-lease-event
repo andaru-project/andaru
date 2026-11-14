@@ -8,6 +8,7 @@ run=${ANDARU_KEA_RUN:-/run/kea}
 if [ "$1" = leases6_committed ]; then
 	pd() { # pd add|del LEASES6|DELETED_LEASES6 index
 		eval "type=\${$2_AT$3_TYPE:-} address=\${$2_AT$3_ADDRESS:-} length=\${$2_AT$3_PREFIX_LEN:-}"
+		# shellcheck disable=SC2154 # type, address and length are assigned by the eval.
 		[ "$type" = IA_PD ] && printf '%s %s/%s %s %s\n' "$1" "$address" "$length" "${QUERY6_REMOTE_ADDR:-}" "${QUERY6_IFACE_NAME:-}" >> "$run/andaru-pd-events"
 		return 0
 	}
