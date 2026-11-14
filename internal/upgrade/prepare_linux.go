@@ -138,6 +138,11 @@ func prepare(ctx context.Context, env environment) (result Preparation, retErr e
 				resumeErr = errors.Join(resumeErr, fmt.Errorf("%s is now disabled or masked; left stopped", current.Name))
 				continue
 			}
+			// These units were healthy before our own stop/start cycles consumed their start budget.
+			if _, err = run(cleanupCtx, "systemctl", "reset-failed", paused[i].Name); err != nil {
+				resumeErr = errors.Join(resumeErr, fmt.Errorf("reset paused unit %s: %w", paused[i].Name, err))
+				continue
+			}
 			if _, err = run(cleanupCtx, "systemctl", "start", paused[i].Name); err != nil {
 				resumeErr = errors.Join(resumeErr, fmt.Errorf("restore %s: %w", paused[i].Name, err))
 			}

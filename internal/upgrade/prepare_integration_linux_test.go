@@ -88,6 +88,8 @@ func (b *prepareBench) run(_ context.Context, name string, args ...string) ([]by
 		case "start":
 			b.active[unit] = true
 			return nil, nil
+		case "reset-failed":
+			return nil, nil
 		}
 	}
 	return nil, fmt.Errorf("unexpected command: %s %q", name, args)
@@ -383,5 +385,34 @@ func TestPrepareRefusesTamperedLocalPackage(t *testing.T) {
 	}
 	if _, err := prepare(context.Background(), b.env); err == nil {
 		t.Fatal("ignored a corrupt retained recovery package")
+	}
+}
+
+func TestPrepareRestoresUnitsDespiteOwnStartBudget(t *testing.T) {
+	b := preparationBench(t)
+	b.active["andaru-prefixes.timer"] = false
+	b.enabled["andaru-prefixes.timer"] = "disabled"
+	budget := map[string]bool{}
+	b.env.commands = func(string) commandRunner {
+		return func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			if name == "systemctl" && len(args) == 2 {
+				if args[0] == "reset-failed" {
+					budget[args[1]] = true
+				}
+				if args[0] == "start" && !budget[args[1]] {
+					return nil, errors.New("start-limit-hit")
+				}
+			}
+			return b.run(ctx, name, args...)
+		}
+	}
+	if _, err := prepare(context.Background(), b.env); err != nil {
+		t.Fatalf("own pauses exhausted the systemd start budget: %v", err)
+	}
+	if !b.active["andaru-engine.service"] || !b.active["andaru-prefixes.path"] || !b.active["andaru-leases.path"] {
+		t.Fatal("left control plane stopped")
+	}
+	if budget["andaru-prefixes.timer"] {
+		t.Fatal("reset a unit this preparation never paused")
 	}
 }
