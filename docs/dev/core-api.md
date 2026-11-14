@@ -67,6 +67,92 @@ sudo apt install ./dist/andaru_*.deb
 
 **Releasing** (maintainers): push a tag. `v1.2.3` is a release, `v1.2.3-rcN` a prerelease (Debian version `1.2.3~rcN-1`), and `keyring-yyyy.mm.dd` builds the keyring package of that version, once (it must equal `KEYRING_VERSION` in `debian/rules`). The release workflow builds and checks the packages and creates the GitHub release; [andaru-project/apt](https://github.com/andaru-project/apt) publishes it on its next daily run, or at once with `gh workflow run publish -R andaru-project/apt`. `trixie` carries releases; `trixie-test` (`Suites: trixie-test` in a copy of `andaru.sources`) carries prereleases too. The newest five Andaru versions stay in the repository; older ones remain on their GitHub releases.
 
+## Upgrading on Debian
+
+Design: [Conventional Debian upgrades and explicit recovery](../superpowers/specs/2026-11-14-apt-upgrades-design.md). Andaru neither downloads update packages nor installs them automatically. There is no background updater, automatic reboot, deployment selector or automatic rollback.
+
+```sh
+sudo andaru upgrade check
+sudo andaru upgrade prepare       # optional local recovery preparation
+sudo apt-get install andaru       # ordinary APT, including its normal confirmation
+```
+
+`check` explicitly refreshes APT's package indexes and prints the installed/candidate Debian versions, architecture, candidate repository/suite, refresh time and release-information link as JSON. It does not download a candidate `.deb`, restart the engine or install anything. A failed refresh is an error, not a successful stale result. The commands are root-local; no HTTP update endpoint is exposed.
+
+`prepare` retains a consistent cold copy of `/var/lib/andaru`, its paired SQLite configuration/secrets databases (including committed WAL data), generation files and pointers, and prefix/next-hop state. When available, it also retains the exact installed Andaru `.deb`, verified against trusted APT metadata. A previously verified, unchanged artifact in an earlier recovery set can be reused even after that version disappears from the archive indexes.
+
+Preparation refuses a concurrent package operation or a pending network apply. It briefly pauses the engine and Andaru's lease/prefix activators, drains current lease/prefix realization jobs and takes both writer locks. Under those locks it also refuses queued or running independent realization services, including an activation that has not yet written its state. Independent rollback timers are left untouched. Networkd, resolved, Kea, Unbound, SSH, forwarding and firewall rules remain running and unchanged. The pause/drain/lock phase has a 30-second deadline; downloads and copying can take longer. Only units paused by this invocation are resumed; an administrator-disabled or masked unit is not started.
+
+The JSON result identifies the recovery directory, source **package** version and preparation time. Every result warns that copies contain secrets and exclude later accepted changes. `packageRetained: false` means state was saved but the previous software artifact was unavailable; the additional warning says package recovery requires a separately verified package. Such a result never evicts an existing software-and-state recovery set. One previous complete set and, when needed, one state-only set are kept. Their files and ownership metadata are checked before replacing or pruning them. Preparation rejects metadata exceeding 16 MiB before publishing it, preserving the previous set.
+
+**These local copies contain secrets.** `/var/lib/andaru-upgrades/` and its set directories are root-only 0700, with 0600 files. They are not portable backups, downloadable API data or debug exports. The later ZIP/age backup format is separate.
+
+A snapshot does not freeze changes until installation. Configuration accepted after its timestamp is outside it and may be lost if it is restored. Prepare immediately before updating. Normal `apt upgrade`, exact-version installs and `dpkg -i` remain supported without preparation; they do not automatically create a snapshot.
+
+If preparation is killed or interrupted by power loss, the durable `/var/lib/andaru-upgrades/preparing.json` records the intended paused units and boot/package context. A later preparation refuses to overwrite it or silently resume an obsolete context. Inspect that record and the units before retrying; do not remove package locks or cancel a connectivity rollback timer.
+
+**APT failure does not mean rollback.** New files may already be unpacked and the package may be half-configured. Inspect `sudo dpkg --audit`, `systemctl status andaru-engine.service` and `sudo journalctl -u andaru-engine.service -b`. A successfully configured package can also have an unhealthy engine; verify the control socket, saved configuration/generation status, enabled services and management reachability after updating. Reinstalling an old `.deb` does not undo a database migration, and a retained Andaru package does not supply all older Debian dependencies.
+
+### Manual package and state repair
+
+Use a local or out-of-band console when possible. Restoring an old snapshot discards later accepted configuration changes and may restore older management settings. Keep the failed state for diagnosis. This procedure is **not** an automatic rollback and does not reverse arbitrary dependency or operating-system changes.
+
+1. **Choose the matching software/state set.** Inspect its root-only `manifest.json`, compare `sha256sum package.deb` with `packageSHA256`, and check `dpkg-deb --field package.deb Package Version Architecture`. Do not substitute another version. Check the recorded dependency inventory against the installed dependencies before downgrading. If the snapshot has no package, obtain and separately verify the exact previous package first; do not bypass APT signatures.
+2. **Record the intended service state.** Record current enablement, active units, existing `/etc` overrides and masks for the seven units below. Compare with the preparation metadata: a unit currently down because of the failed upgrade is not necessarily intended to remain down. Decide which of the engine/path/timer units should resume. Keep administrator-disabled units and pre-existing masks unchanged.
+3. **Exclude writers.** Stop the engine and the lease/prefix path/timer activators. Drain existing lease/prefix jobs by checking `ActiveState`; `activating` is still running for a oneshot, even though `is-active --quiet` returns false. Take both existing writer locks and recheck that no connectivity apply is pending. Also inspect `systemctl list-jobs 'andaru-realize-*.service'` and `systemctl list-units --state=active,activating,deactivating,reloading 'andaru-realize-*.service'`; wait for outstanding work to finish before proceeding. Do not cancel its independent rollback timer.
+4. **Inhibit package-script startup before reinstalling.** Use temporary persistent masks at `/etc/systemd/system/<unit>`, not runtime-only masks: a pre-existing `/etc` unit overrides a mask in `/run`. Preserve any existing non-mask unit file or alias in the private repair directory first. Record only masks introduced by this repair, leave an administrator's existing mask untouched, reload systemd, and verify that every affected unit is actually masked.
+5. **Reinstall, then restore state while startup is inhibited.** Once dependencies are known to be satisfied, ordinary `dpkg --install` can install the verified local `.deb` without downloads. If it reports a dependency or configuration error, stop and diagnose; do not force dependencies or start the engine against unknown state. Preserve the failed `/var/lib/andaru` directory and restore the complete matching `state/` copy, never one database alone. Sync it before releasing the locks.
+6. **Restore service integration explicitly.** Remove only repair-created masks, put the preserved `/etc` unit files/aliases back, and restore recorded enabled/disabled states. Debian's helpers may have changed enablement while the original unit file was masked; merely starting the engine is insufficient, especially for `andaru-network-boot.service`. Release the writer locks, reload systemd, and start only the intended engine/path/timer units. Clear their start-limit counters with `reset-failed` before these explicit starts if needed. Do not start the network-boot oneshot during runtime repair.
+7. **Check readiness and reachability.** `Type=exec` is not API readiness: wait under a bounded deadline for a successful CLI read, then inspect saved configuration, generation status, enabled services and the live filter/management path. Check that `andaru-network-boot.service` has its intended enablement before rebooting. Later runtime network applies are not undone merely by copying old databases; if the runtime differs from the chosen snapshot, use the console and normal reviewed configuration-apply workflow.
+
+The complete integration set is:
+
+```text
+andaru-engine.service
+andaru-network-boot.service
+andaru-leases.path
+andaru-leases.service
+andaru-prefixes.path
+andaru-prefixes.service
+andaru-prefixes.timer
+```
+
+Key commands used in the lab, from a root shell after selecting a verified `$RECOVERY` and a private `$WORK` outside `/var/lib/andaru`:
+
+```sh
+systemctl stop andaru-leases.path andaru-prefixes.path andaru-prefixes.timer andaru-engine.service
+# Wait until both oneshots report inactive or failed, with a deadline.
+systemctl show -P ActiveState andaru-leases.service andaru-prefixes.service
+exec 8<>/var/lib/andaru/engine.lock
+flock -w 30 8
+exec 9<>/var/lib/andaru/generations/lock
+flock -w 30 9
+```
+
+Before the package command below, establish and verify the persistent masks described above. If an `/etc/systemd/system/<unit>` file exists, move it into `$WORK/unit-files/` before `systemctl mask --no-reload <unit>`; otherwise the mask command refuses it. Never overwrite it with `--force`. Record the masks you created, then run `systemctl daemon-reload` and check `systemctl is-enabled <unit>` reports a mask. No `policy-rc.d` replacement is needed.
+
+```sh
+dpkg --install "$RECOVERY/package.deb"
+# Stop here if dpkg failed. Verify the inhibited units have not started.
+mv /var/lib/andaru "$WORK/failed-state"
+cp -a "$RECOVERY/state" /var/lib/andaru
+sync -f /var/lib/andaru
+# Restore only repair-created masks, preserved unit files and the recorded enablement.
+flock -u 9
+exec 9>&-
+flock -u 8
+exec 8>&-
+systemctl daemon-reload
+```
+
+If any step fails, keep startup inhibited until the software/state pairing is understood. Do not let an old engine or lease/prefix worker open incompatible new state. Keep the failed copy and repair records root-only. These commands use system tools for manual repair; there is no general-purpose extraction or privileged recovery API.
+
+For an interrupted `prepare`, first inspect `preparing.json`, the unit states and `current.json`/`state-only.json`. A matching `set-<number>` may already have been published even if resuming the units failed. Restore only known units recorded active, preserving current administrator masks and disabled states; wait for API readiness. Remove the interruption record only after the situation is resolved. An incomplete `.prepare-<number>` can be removed only after verifying it is an immediate child of the recovery root with the expected ownership marker; never delete the completed set it may have become.
+
+### First upgrade from rc2
+
+Rc2 has no `upgrade check` or `prepare` command. Before its first upgrade, explicitly download/verify its exact `.deb`, record the active/enabled Andaru units, refuse a pending apply, stop the engine and activators, drain the jobs and hold both writer locks while cold-copying `/var/lib/andaru` to a root-only directory outside that tree. Sync the copy, release the locks and restore only the units paused. In the lab, a **second** copy was opened by the old engine on a private socket to check the saved configuration, leaving the retained original untouched. Then ordinary APT installed the new package. Preparation used existing system tools; installation did not assume the new command already existed or download and execute an online preparation script.
+
 ## Run and inspect
 
 For a trusted developer build, start the engine as root:
@@ -814,6 +900,35 @@ On 2026-11-14, `v0.4.0-rc1` (`andaru 0.4.0~rc1-1`, amd64) was installed from `ht
 The lab found, fixed in [#49](https://github.com/andaru-project/andaru/pull/49): apt configures Unbound before Andaru, so Unbound started before Andaru's AppArmor rules were loaded, was denied `/run/andaru-unbound/` and failed. Andaru now starts a failed, enabled daemon again once its rules are loaded. The containers in CI have no kernel AppArmor and cannot show this. Also found, not packaging: [#50](https://github.com/andaru-project/andaru/issues/50), IPv6 on an ifupdown interface without an `inet6` stanza is gone after the first reboot.
 
 Not run on the lab: arm64, a hand-installed host's cleanup, and purging.
+
+### Conventional APT upgrade and recovery lab qualification
+
+On 2026-11-14, VM 114 (netplan) and VM 117 (ifupdown) started from the retained rc2 state, with generation 1 confirmed/live and saved configuration version 10. Safety snapshots `apt-upgrades-rc2-20261114` preserve both guests. Existing `/etc/systemd/system` unit overrides were deliberately retained, not silently removed to make the package test pass.
+
+The exact package artifacts were:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Published `0.4.0~rc2-1`, amd64 | `4563e497c12afae14db348cfac0dd793cdface154159d0f28decbde5398801dc` |
+| Initial private candidate `0.4.0~rc3-1`, amd64 | `f1add1a99d131bdf615e6f70323118cbe5a274e6dfe0a038205ec20d024e6bb7` |
+| Fixed private candidate `0.4.0~rc3-2`, amd64 | `33db32439dac3dfbd0c7ac4b8684f6062571c074fd4dad123190ae825bce6fad` |
+
+The candidates are qualification builds, not published project releases. A disposable, separately scoped signed `file:` APT archive provided them and an intentional `postinst` failure package (`0.4.0~rc4-1`).
+
+- **Rc2 bootstrap:** explicitly retained the verified rc2 `.deb`, paused the engine/activators, held both writer locks and cold-copied the paired state. The old engine read a second copy on a private socket and returned the same saved configuration. The original copy stayed unchanged. Ordinary APT then installed the candidate.
+- **Check and preparation:** check reported the newer candidate without installing it or restarting the engine. Preparation retained the exact installed package and verified state. Preparation while a save-only configuration writer ran succeeded; later writes were outside the snapshot. The final saved configuration was version 30, while the confirmed/live generation stayed 1.
+- **Safety gates:** a pending apply was refused without stopping its rollback timer or engine; the test explicitly rolled that apply back afterward. A 100 GiB sparse test file caused the space-reserve check to refuse before pausing the engine. An unindexed locally installed variant produced a state-only result and did not replace the complete recovery set.
+- **Masks and interrupted preparation:** an administrator-style runtime mask of `andaru-prefixes.timer` survived preparation and manual repair. `SIGKILL` during the lock wait left an actionable preparation record and the previous completed set. The next command refused to overwrite it; an explicit operator resume restored only recorded active units. The incomplete stage was inspected before removal.
+- **Package failure:** the intentional `postinst` failure left new files installed and dpkg half-configured, with no automatic downgrade. **State failure:** `user_version=999` made the configured candidate refuse engine startup, without automatic state restoration.
+- **Manual repair on the fixed revision:** the retained matching package was installed with all seven Andaru units inhibited; the old engine's invocation did not change before the state copy was restored. Both database/state copies and the confirmed generation returned, and a save-only change deliberately accepted after preparation disappeared as warned. Administrator masks, original unit overrides, active intent and enablement were preserved.
+- **Narrow offline proof:** the repair subprocess ran `dpkg --install` in an empty network namespace, with only loopback down, using a local `.deb` and already-satisfied runtime dependencies. The appliance's live services were not disconnected. This proves that package/state repair case only, not a complete offline dependency or OS rollback.
+- **Runtime and reboot:** networkd's invocation stayed unchanged during preparation/upgrades/repair, and each guest's pre-existing table contents were preserved. Table enumeration order changed after the explicit apply/rollback, so comparison retained rule order inside each table rather than comparing table enumeration order. VM 117 had no `inet andaru` table in its baseline generation; its existing probe table stayed unchanged. After removing the lab APT source/key and restoring the test timer's initial state, both guests rebooted with the engine/paths/timer active, network-boot enabled and generation 1 confirmed/live. Preparation then reused the verified local artifact without the test archive. TCP port 22 was reachable on both management addresses.
+
+The lab found and corrected three runbook assumptions: runtime masks do not override `/etc` units; APT's `--no-download` local-file repair path failed in this setup, so the already-satisfied-dependency proof uses ordinary `dpkg`; and Debian's helpers can change enablement while an override is masked, so enablement must be restored explicitly, not inferred from a running engine.
+
+It also found a product bug: repeated preparations consumed systemd's start budget and left the previously healthy control-plane units stopped. The fixed candidate clears only those paused units' counters before restarting them; ordinary restart limits remain configured. Eight rapid preparations succeeded on each VM, and the space/unindexed-package/interruption and both repair cases passed on that fixed revision.
+
+Not qualified here: arm64 hardware, authenticated SSH login, web UI/authentication checks, dependency-changing downgrade, total disk loss, hard power loss during preparation, or recovery after a later connectivity-changing apply. `SIGKILL` is not a substitute for a power-loss durability test. SQLite and Python were lab observation/fault-injection tools, not added package dependencies.
 
 ### Virtual addresses Debian lab qualification
 

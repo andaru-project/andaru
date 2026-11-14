@@ -100,7 +100,16 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 			}
 		}
 	}
-	active := objects(&d)
+	state.Versions, e = loadObjectVersions(ctx, conn, &d, number, requested, false)
+	if e != nil {
+		return state, info, e
+	}
+	return state, info, nil
+}
+
+// A cold recovery check may encounter additive tables that normal startup creates.
+func loadObjectVersions(ctx context.Context, conn *sql.Conn, d *declaration, number int64, requested []objectKey, allowAbsentTables bool) (map[objectKey]objectVersion, error) {
+	active := objects(d)
 	wanted := map[objectKey]bool{}
 	for k := range active {
 		wanted[k] = true
@@ -114,7 +123,7 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 			wanted[k] = true
 		}
 	}
-	state.Versions = make(map[objectKey]objectVersion, len(wanted))
+	versions := make(map[objectKey]objectVersion, len(wanted))
 	for _, col := range collections {
 		ids := []string{}
 		for key := range wanted {
@@ -125,39 +134,48 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 		if len(ids) == 0 {
 			continue
 		}
-		raw, _ := json.Marshal(ids)
 		table := changeTable(col)
-		rows, e := conn.QueryContext(ctx, `SELECT c.object_id,c.version_id,c.deleted FROM `+table+` c WHERE c.collection=? AND c.object_id IN (SELECT value FROM json_each(?)) AND c.version_id=(SELECT max(n.version_id) FROM `+table+` n WHERE n.collection=c.collection AND n.object_id=c.object_id AND n.version_id<=?)`, col, string(raw), number)
-		if e != nil {
-			return state, info, diagnostic("load-object-metadata-query", e)
+		if allowAbsentTables && table != "object_changes" {
+			var count int
+			if err := conn.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&count); err != nil {
+				return nil, err
+			}
+			if count == 0 {
+				continue
+			}
+		}
+		raw, _ := json.Marshal(ids)
+		rows, err := conn.QueryContext(ctx, `SELECT c.object_id,c.version_id,c.deleted FROM `+table+` c WHERE c.collection=? AND c.object_id IN (SELECT value FROM json_each(?)) AND c.version_id=(SELECT max(n.version_id) FROM `+table+` n WHERE n.collection=c.collection AND n.object_id=c.object_id AND n.version_id<=?)`, col, string(raw), number)
+		if err != nil {
+			return nil, diagnostic("load-object-metadata-query", err)
 		}
 		for rows.Next() {
 			var oid string
 			var version int64
 			var deleted bool
-			if e = rows.Scan(&oid, &version, &deleted); e != nil {
+			if err = rows.Scan(&oid, &version, &deleted); err != nil {
 				rows.Close()
-				return state, info, diagnostic("load-object-metadata-scan", e)
+				return nil, diagnostic("load-object-metadata-scan", err)
 			}
 			if version <= 0 || version > number {
 				rows.Close()
-				return state, info, diagnostic("load-object-metadata-range", nil)
+				return nil, diagnostic("load-object-metadata-range", nil)
 			}
-			state.Versions[objectKey{col, oid}] = objectVersion{Version: Version(strconv.FormatInt(version, 10)), Deleted: deleted}
+			versions[objectKey{col, oid}] = objectVersion{Version: Version(strconv.FormatInt(version, 10)), Deleted: deleted}
 		}
-		e = rows.Err()
+		err = rows.Err()
 		rows.Close()
-		if e != nil {
-			return state, info, diagnostic("load-object-metadata-rows", e)
+		if err != nil {
+			return nil, diagnostic("load-object-metadata-rows", err)
 		}
 	}
 	for key := range active {
-		meta, ok := state.Versions[key]
+		meta, ok := versions[key]
 		if !ok || meta.Deleted {
-			return state, info, diagnostic("load-object-metadata-missing", nil)
+			return nil, diagnostic("load-object-metadata-missing", nil)
 		}
 	}
-	return state, info, nil
+	return versions, nil
 }
 func (s *Store) read(ctx context.Context, id Version, requested []objectKey, fn func(savedState, VersionInfo) error) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
