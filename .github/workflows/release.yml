@@ -1,0 +1,129 @@
+name: Release
+
+# A pushed tag builds Andaru's packages onto a GitHub release. andaru-project/apt publishes them: it alone holds
+# the archive's signing key. Tags: v1.2.3, v1.2.3-rcN (a prerelease, for the trixie-test suite), keyring-yyyy.mm.dd.
+on:
+  push:
+    tags: ['v*', 'keyring-*']
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      packages: ${{ steps.map.outputs.packages }}
+      version: ${{ steps.map.outputs.version }}
+      prerelease: ${{ steps.map.outputs.prerelease }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Map the tag
+        id: map
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          # On its own line, so that a tag version.sh refuses fails the workflow.
+          mapped=$(sh scripts/ci/version.sh "$TAG")
+          read -r packages version prerelease <<EOF
+          $mapped
+          EOF
+          # The keyring is built once per version, and that version lives in debian/rules.
+          if [ "$packages" = all ]; then
+            grep -qx "KEYRING_VERSION = $version" debian/rules
+          fi
+          {
+            echo "packages=$packages"
+            echo "version=$version"
+            echo "prerelease=$prerelease"
+          } >>"$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: true
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    steps:
+      - name: Check out
+        if: needs.version.outputs.packages == 'any' || matrix.runner == 'ubuntu-24.04'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        if: needs.version.outputs.packages == 'any' || matrix.runner == 'ubuntu-24.04'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build and check
+        if: needs.version.outputs.packages == 'any' || matrix.runner == 'ubuntu-24.04'
+        env:
+          PACKAGES: ${{ needs.version.outputs.packages }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -eu
+          if [ "$PACKAGES" = any ]; then
+            sh scripts/ci/build-packages.sh dist any "$VERSION"
+            sh scripts/ci/install-test.sh dist
+          else
+            sh scripts/ci/build-packages.sh dist all
+          fi
+
+      - name: Keep the packages
+        if: needs.version.outputs.packages == 'any' || matrix.runner == 'ubuntu-24.04'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: packages-${{ matrix.runner }}
+          path: dist/*.deb
+          if-no-files-found: error
+
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Collect the packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+          PACKAGES: ${{ needs.version.outputs.packages }}
+        run: |
+          set -eu
+          cd dist
+          # GitHub renames uploaded assets with a ~ in their name; the names in SHA256SUMS must be the assets'.
+          for deb in ./*~*.deb; do
+            [ ! -e "$deb" ] || mv "$deb" "$(printf '%s' "$deb" | tr '~' '.')"
+          done
+          sha256sum ./*.deb | sed 's| \./| |' >SHA256SUMS
+          flags=--latest
+          [ "$PRERELEASE" = true ] && flags=--prerelease
+          [ "$PACKAGES" = all ] && flags=--latest=false
+          # A draft until every asset is uploaded, so andaru-project/apt never sees half a release.
+          # shellcheck disable=SC2086
+          gh release create "$TAG" -R "$GITHUB_REPOSITORY" --draft --verify-tag $flags --title "$TAG" \
+            --notes "Published to https://apt.andaru.io/ by andaru-project/apt's next daily run. SHA-256 of each package:
+
+          \`\`\`
+          $(cat SHA256SUMS)
+          \`\`\`" ./*.deb SHA256SUMS
+          # Publishing a draft sets "latest" anew, so the flags go again.
+          # shellcheck disable=SC2086
+          gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --draft=false $flags

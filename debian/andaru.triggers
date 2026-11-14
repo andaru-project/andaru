@@ -1,0 +1,4 @@
+# A Kea or Unbound installed after Andaru brings its profile; Andaru's include goes into its local file then.
+interest-noawait /etc/apparmor.d/usr.sbin.kea-dhcp4
+interest-noawait /etc/apparmor.d/usr.sbin.kea-dhcp6
+interest-noawait /etc/apparmor.d/usr.sbin.unbound

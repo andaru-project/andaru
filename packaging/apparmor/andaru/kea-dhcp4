@@ -1,4 +1,4 @@
-# Installed as /etc/apparmor.d/local/usr.sbin.kea-dhcp4: Debian's profile includes it.
+# Installed as /etc/apparmor.d/andaru/kea-dhcp4; /etc/apparmor.d/local/usr.sbin.kea-dhcp4 includes it (packaging/apparmor/andaru-apparmor).
 # Kea reads Andaru's configuration from /run and runs the lease-event script, which marks that leases changed.
 /run/andaru-kea/ r,
 /run/andaru-kea/** r,

@@ -1,4 +1,4 @@
-# Installed as /etc/apparmor.d/local/usr.sbin.kea-dhcp6: Debian's profile includes it.
+# Installed as /etc/apparmor.d/andaru/kea-dhcp6; /etc/apparmor.d/local/usr.sbin.kea-dhcp6 includes it (packaging/apparmor/andaru-apparmor).
 # Kea reads Andaru's configuration from /run and runs the lease-event script, which marks that leases changed
 # and appends the routers delegated prefixes went to.
 /run/andaru-kea/ r,

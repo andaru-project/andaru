@@ -1,0 +1,15 @@
+#!/bin/sh
+set -e
+
+# /var/lib/andaru is the host's network configuration and stays; uninstalling is not supported.
+# The include lines andaru-apparmor added go with the rules they name; the administrator's own lines stay.
+if [ "$1" = purge ]; then
+	for daemon in kea-dhcp4 kea-dhcp6 unbound; do
+		local_file=${DPKG_ROOT:-}/etc/apparmor.d/local/usr.sbin.$daemon
+		if [ -f "$local_file" ]; then
+			sed -i "/^include if exists <andaru\/$daemon>\$/d" "$local_file"
+		fi
+	done
+fi
+
+#DEBHELPER#

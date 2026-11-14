@@ -1,0 +1,29 @@
+Source: andaru
+Section: net
+Priority: optional
+Maintainer: Andaru project <apt@andaru.io>
+Build-Depends: debhelper-compat (= 13), gpg
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/andaru-project/andaru
+Vcs-Browser: https://github.com/andaru-project/andaru
+Vcs-Git: https://github.com/andaru-project/andaru.git
+
+Package: andaru
+Architecture: any
+Depends: iproute2, nftables, systemd (>= 257), ${misc:Depends}
+Recommends: apparmor, kea-dhcp4-server, kea-dhcp6-server, openssh-server, unbound
+Description: firewall and router for Debian
+ Andaru turns a Debian host into a firewall and router: interfaces, VLANs,
+ bridges, addresses and routes through systemd-networkd, filtering and NAT
+ through nftables, DHCP through Kea and DNS through Unbound, all from one
+ validated configuration that is applied with a confirmation and rolled back
+ when the administrator loses access.
+
+Package: andaru-archive-keyring
+Architecture: all
+Depends: ${misc:Depends}
+Multi-Arch: foreign
+Description: OpenPGP key and APT source of the Andaru archive
+ The key that signs https://apt.andaru.io/ and the APT source that trusts it
+ for that repository only. Installing it lets APT install and upgrade Andaru.

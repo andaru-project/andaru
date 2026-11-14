@@ -1,0 +1,5 @@
+Types: deb
+URIs: https://apt.andaru.io/
+Suites: trixie
+Components: main
+Signed-By: /usr/share/keyrings/andaru-archive-keyring.gpg

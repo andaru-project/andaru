@@ -1,0 +1,3 @@
+# Installing the APT source is this package's purpose: it is the bootstrap of a third-party repository, installed
+# by hand, and the source trusts the key for that repository only (Signed-By).
+andaru-archive-keyring: package-installs-apt-sources [etc/apt/sources.list.d/andaru.sources]
