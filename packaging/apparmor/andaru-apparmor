@@ -20,6 +20,17 @@ for daemon in kea-dhcp4 kea-dhcp6 unbound; do
 	fi
 	# Without a kernel AppArmor (a container) or the parser, the rules load at the next boot.
 	if [ -z "$root" ] && command -v apparmor_parser >/dev/null && [ -d /sys/kernel/security/apparmor ]; then
-		apparmor_parser -r -T -W "$profile" || echo "andaru: could not reload the AppArmor profile $profile" >&2
+		if apparmor_parser -r -T -W "$profile"; then
+			# The daemon's own postinst may have started it before these rules were loaded (Andaru only recommends
+			# it, so it is configured first): its reads of Andaru's files were denied and it gave up. Start it again.
+			unit=unbound.service
+			[ "$daemon" = unbound ] || unit=$daemon-server.service
+			if systemctl is-failed --quiet "$unit" 2>/dev/null; then
+				systemctl reset-failed "$unit" || true
+				systemctl start "$unit" || echo "andaru: $unit did not start; see journalctl -u $unit" >&2
+			fi
+		else
+			echo "andaru: could not reload the AppArmor profile $profile" >&2
+		fi
 	fi
 done
