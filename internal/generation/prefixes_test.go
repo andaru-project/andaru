@@ -426,7 +426,8 @@ func TestPrefixesForeignRouteIgnored(t *testing.T) {
 	}
 }
 
-// A refused configuration is offered again on the next run, and the change it carries is still deprecated.
+// A refused configuration is offered again on the next run; the change it carries is deprecated and saved even
+// while Kea refuses.
 func TestPrefixesRefusedThenRetried(t *testing.T) {
 	b := newBench(t)
 	s := &sent{}
@@ -441,15 +442,18 @@ func TestPrefixesRefusedThenRetried(t *testing.T) {
 	if err := b.r.SyncPrefixes(t.Context()); err == nil {
 		t.Fatal("refusal went unreported")
 	}
-	if len(s.list()) != 0 {
-		t.Fatalf("deprecated before Kea took the new prefix: %v", s.list())
+	if got := s.list(); len(got) != 1 || !strings.HasPrefix(got[0], "ens19 2001:db8:aa00:1::/64") {
+		t.Fatalf("not deprecated while Kea refuses: %v", got)
+	}
+	if c := b.prefixState().WANs["ens18"].Current; c == nil || c.Prefix != mustPrefix("2001:db8:bb00::/48") {
+		t.Fatalf("state not saved while Kea refuses: %+v", c)
 	}
 	b.keaRefuse.Store(false)
 	if err := b.r.SyncPrefixes(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(b.keaFile(), "2001:db8:bb00:1::/64") || k.count() != 3 || len(s.list()) != 1 {
-		t.Fatalf("not retried: %d config-sets, sent %v\n%s", k.count(), s.list(), b.keaFile())
+	if !strings.Contains(b.keaFile(), "2001:db8:bb00:1::/64") || k.count() != 3 {
+		t.Fatalf("not retried: %d config-sets\n%s", k.count(), b.keaFile())
 	}
 }
 

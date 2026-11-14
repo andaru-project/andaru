@@ -294,9 +294,10 @@ func (r Realizer) SyncPrefixes(ctx context.Context) error {
 	return errors.Join(err, routes)
 }
 
-// syncPrefixes holds the lock. A running Kea is handed the new configuration first, and the file written only
-// once Kea took it; the apply passes reconfigure false, since it restarts Kea on the file itself. The state is
-// saved last, so a run that fails sees the same change again.
+// syncPrefixes holds the lock. The replaced prefixes are deprecated and the state saved before Kea is touched, so
+// a refusing or wedged Kea never holds back the deprecation; Kea's error comes last. A running Kea is handed the
+// new configuration first, and the file written only once Kea took it, so a refused one is offered again on the
+// next run; the apply passes reconfigure false, since it restarts Kea on the file itself.
 func (r Realizer) syncPrefixes(ctx context.Context, reconfigure bool) error {
 	links, hints, wans := r.readDelegatedLinks()
 	if len(links) == 0 {
@@ -305,6 +306,17 @@ func (r Realizer) syncPrefixes(ctx context.Context, reconfigure bool) error {
 	before, _ := delegation.ReadState(r.Root + delegatedState)
 	prefixes, state, err := r.currentPrefixes(ctx, links, hints, wans, true)
 	if err != nil {
+		return err
+	}
+	now := r.Now() // one reading: sendDeprecations tells this run's fresh entries by it
+	list, err := r.recordReplaced(links, before, state, now)
+	if err != nil {
+		return err
+	}
+	if reconfigure {
+		r.sendDeprecations(links, list, now)
+	}
+	if err := r.saveState(before, state); err != nil {
 		return err
 	}
 	data, ok, err := r.fillKea6(prefixes)
@@ -327,15 +339,7 @@ func (r Realizer) syncPrefixes(ctx context.Context, reconfigure bool) error {
 			}
 		}
 	}
-	now := r.Now() // one reading: sendDeprecations tells this run's fresh entries by it
-	list, err := r.recordReplaced(links, before, state, now)
-	if err != nil {
-		return err
-	}
-	if reconfigure {
-		r.sendDeprecations(links, list, now)
-	}
-	return r.saveState(before, state)
+	return nil
 }
 
 // bootPrefixes fills Kea's file from the saved prefixes before networkd and Kea start, so Kea's first lease
