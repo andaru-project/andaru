@@ -472,6 +472,9 @@ func (s *Store) Draft(ctx context.Context, input Changes) (RealizationInput, err
 		return RealizationInput{}, e
 	}
 	defer p.Close()
+	if e = checkResolvedReferences(&p.prepared.State.Config); e != nil {
+		return RealizationInput{}, e
+	}
 	view, e := publicSnapshot(p.prepared.State)
 	if e != nil {
 		return RealizationInput{}, e

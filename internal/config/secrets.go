@@ -92,3 +92,16 @@ func validateSecrets(doc secretDocument, head Version) error {
 	}
 	return nil
 }
+
+func checkResolvedReferences(d *declaration) error {
+	var details []FieldError
+	for i, l := range d.Links {
+		if l.Password != nil && l.Password.Unresolved {
+			details = append(details, FieldError{Path: "/links/" + strconv.Itoa(i) + "/password", Message: "Secret " + l.Password.Secret + " is unresolved; explicitly bind or set it before applying."})
+		}
+	}
+	if len(details) != 0 {
+		return &Fault{Code: "VALIDATION_FAILED", Details: details}
+	}
+	return nil
+}

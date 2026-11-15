@@ -21,7 +21,8 @@ type link struct {
 	Mode         string   `json:"mode"`
 	Username     string   `json:"username"`
 	Password     *struct {
-		Secret string `json:"secret"`
+		Secret     string `json:"secret"`
+		Unresolved bool   `json:"unresolved"`
 	} `json:"password"`
 }
 type advertisement struct {

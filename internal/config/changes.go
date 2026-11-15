@@ -465,10 +465,14 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 						changedSecrets[name] = true
 					}
 				}
-				value["password"] = map[string]any{"secret": name}
+				reference := map[string]any{"secret": name}
+				if pw["unresolved"] == true {
+					reference["unresolved"] = true
+				}
+				value["password"] = reference
 			} else if value["kind"] == "pppoe" && op.Op == "replace" {
 				if old, ok := before[key].(*link); ok && old.Password != nil {
-					value["password"] = map[string]any{"secret": old.Password.Secret}
+					value["password"] = old.Password
 				}
 			}
 		}
@@ -561,6 +565,12 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 	if f := vipStillTargeted(&current.Config, &d, input); f != nil {
 		return empty, f
 	}
+	for _, l := range d.Links {
+		if l.Password != nil && l.Password.Unresolved {
+			d.SchemaVersion = 2
+			break
+		}
+	}
 	raw, e := json.Marshal(d)
 	if e != nil {
 		return empty, e
@@ -575,7 +585,7 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 	}
 	d = validated
 	for i, l := range d.Links {
-		if l.Password != nil {
+		if l.Password != nil && !l.Password.Unresolved {
 			if _, ok := current.Secrets.Scopes["core"][l.Password.Secret]; !ok {
 				path := fmt.Sprintf("/links/%d/password", i)
 				return empty, rebaseValidation(validationError{{path, "Named secret does not exist."}}, &d, origins, input)

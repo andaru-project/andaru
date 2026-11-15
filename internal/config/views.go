@@ -54,10 +54,11 @@ type VersionView struct {
 	Changes []objectChange  `json:"changes"`
 }
 type secretView struct {
-	Secret    string  `json:"secret"`
-	IsSet     bool    `json:"isSet"`
-	UpdatedAt string  `json:"updatedAt"`
-	Version   Version `json:"version"`
+	Secret     string  `json:"secret"`
+	IsSet      bool    `json:"isSet"`
+	UpdatedAt  string  `json:"updatedAt,omitempty"`
+	Version    Version `json:"version"`
+	Unresolved bool    `json:"unresolved,omitempty"`
 }
 type linkView struct {
 	link
@@ -69,10 +70,13 @@ func viewObject(v any, version Version, secrets secretDocument) (ObjectView, err
 		view := linkView{link: *l}
 		if l.Password != nil {
 			meta, ok := secrets.Scopes["core"][l.Password.Secret]
-			if !ok {
+			if !ok && !l.Password.Unresolved {
 				return ObjectView{}, fault("STORE_UNAVAILABLE", "", "Secret reference is unavailable.")
 			}
-			view.Password = &secretView{Secret: l.Password.Secret, IsSet: true, UpdatedAt: meta.UpdatedAt, Version: meta.Version}
+			if !ok {
+				meta.Version = "0"
+			}
+			view.Password = &secretView{Secret: l.Password.Secret, IsSet: !l.Password.Unresolved, UpdatedAt: meta.UpdatedAt, Version: meta.Version, Unresolved: l.Password.Unresolved}
 		}
 		v = view
 	}
@@ -95,7 +99,7 @@ func publicSnapshot(s savedState) (SnapshotView, error) {
 			return SnapshotView{}, e
 		}
 		links = append(links, v.Value)
-		if l.Password != nil {
+		if l.Password != nil && !l.Password.Unresolved {
 			used[l.Password.Secret] = true
 		}
 	}
