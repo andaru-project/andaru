@@ -24,7 +24,7 @@ type previewResponse struct {
 // identity, when not nil, returns the DHCP identities a preview renders with, as an apply would.
 type identitySource func(context.Context, []host.LinkStatus) (map[string]host.DHCPIdentity, error)
 
-func newSavedHandler(store *config.Store, readLinks func(context.Context) ([]host.LinkStatus, error), readFacts func() (host.RealizerFacts, error), identity identitySource, applies http.Handler) http.Handler {
+func newSavedHandler(store *config.Store, readLinks func(context.Context) ([]host.LinkStatus, error), readFacts func() (host.RealizerFacts, error), identity identitySource, applies, backups http.Handler) http.Handler {
 	configuration, preview := newConfigurationHandler(store), newPreviewHandler(store, readLinks, readFacts, identity)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isLivePath(r.URL.Path) {
@@ -33,6 +33,10 @@ func newSavedHandler(store *config.Store, readLinks func(context.Context) ([]hos
 		}
 		if r.URL.Path == previewPath {
 			preview.ServeHTTP(w, r)
+			return
+		}
+		if isBackupPath(r.URL.Path) && backups != nil {
+			backups.ServeHTTP(w, r)
 			return
 		}
 		configuration.ServeHTTP(w, r)

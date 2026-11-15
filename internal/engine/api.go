@@ -57,7 +57,7 @@ func newHandler(readLinks func(context.Context) ([]host.LinkStatus, error), conf
 			writeError(w, r, http.StatusForbidden, "FORBIDDEN", "Root Unix peer credentials are required.")
 			return
 		}
-		saved := r.URL.Path == "/api/v1/schema" || r.URL.Path == "/api/v1/config" || strings.HasPrefix(r.URL.Path, "/api/v1/config/") || r.URL.Path == "/api/v1/versions" || strings.HasPrefix(r.URL.Path, "/api/v1/versions/") || r.URL.Path == previewPath
+		saved := r.URL.Path == "/api/v1/schema" || r.URL.Path == "/api/v1/config" || strings.HasPrefix(r.URL.Path, "/api/v1/config/") || r.URL.Path == "/api/v1/versions" || strings.HasPrefix(r.URL.Path, "/api/v1/versions/") || r.URL.Path == previewPath || isBackupPath(r.URL.Path)
 		if saved || isLivePath(r.URL.Path) {
 			configuration.ServeHTTP(w, r)
 			return

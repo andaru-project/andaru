@@ -5,5 +5,10 @@ andaru (0.4.0~dev-1) trixie; urgency=medium
   * Document manual package/state repair without automatic rollback.
   * Bound recovery metadata/output, reserve package space and reject unsafe state.
   * Allow update checks and recovery preparation while the installed package is held.
+  * Add root-local portable ZIP/age backup inspection and saved-store restore.
+  * Preserve live networking during compare-and-swap restores and require explicit
+    repair of imported unresolved secret references.
+  * Add an installed-package backup smoke scenario for both dependency orders.
+  * Build with patched Go HTTP request-size handling.
 
  -- Andaru project <apt@andaru.io>  Sat, 14 Nov 2026 12:00:00 +0000

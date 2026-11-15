@@ -11,7 +11,7 @@ here=$(dirname "$(realpath "$0")")
 
 # Docker's Debian images forbid packages to start services (policy-rc.d); a host does not.
 printf '%s\n' 'FROM debian:trixie' \
-	'RUN apt-get -qq update && DEBIAN_FRONTEND=noninteractive apt-get -qq install -y systemd systemd-sysv iproute2 apt-utils gpg >/dev/null' \
+	'RUN apt-get -qq update && DEBIAN_FRONTEND=noninteractive apt-get -qq install -y systemd systemd-sysv iproute2 apt-utils gpg age python3 >/dev/null' \
 	'RUN rm -f /usr/sbin/policy-rc.d' \
 	'CMD ["/sbin/init"]' | docker build -q -t "$image" - >/dev/null
 run() { docker exec "$name" "$@"; }
@@ -40,6 +40,8 @@ for order in together later; do
 	fi
 	run sh /ci/install-check.sh after
 
+	# Run before upgrade-check repacks the same binary under a newer dpkg version: the archive label is this binary's original package identity.
+	run sh /ci/backup-check.sh
 	run sh /ci/upgrade-check.sh
 	docker rm -f "$name" >/dev/null
 done

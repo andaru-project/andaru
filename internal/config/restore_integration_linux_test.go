@@ -108,6 +108,106 @@ func TestRestoreIndependentStores(t *testing.T) {
 	}
 }
 
+func TestRestorePreservesCompatibleSchema(t *testing.T) {
+	ctx := context.Background()
+	schemaVersion := func(raw json.RawMessage) int {
+		t.Helper()
+		var document struct {
+			SchemaVersion int `json:"schemaVersion"`
+		}
+		if err := json.Unmarshal(raw, &document); err != nil {
+			t.Fatal(err)
+		}
+		return document.SchemaVersion
+	}
+	schemaTwo := func(raw json.RawMessage) json.RawMessage {
+		t.Helper()
+		var document declaration
+		if err := json.Unmarshal(raw, &document); err != nil {
+			t.Fatal(err)
+		}
+		document.SchemaVersion = 2
+		body, err := canonical(document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return body
+	}
+	restore := func(destination *Store, input RestoreDocuments, wantSchema int, wantVersion Version) RestoreResult {
+		t.Helper()
+		before, err := destination.Export(ctx, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := destination.Restore(ctx, "unix:uid:0", before.SavedVersion, input)
+		if err != nil || result.SavedVersion != wantVersion {
+			t.Fatal("restore saved the wrong version", err)
+		}
+		after, err := destination.Export(ctx, true)
+		if err != nil || after.SavedVersion != result.SavedVersion || schemaVersion(after.Configuration) != wantSchema {
+			t.Fatal("restore saved the wrong declaration schema or version", err)
+		}
+		return result
+	}
+
+	plainSource := openTestStore(t, ownedDir(t))
+	if _, err := plainSource.Save(ctx, "unix:uid:0", createZone("portable")); err != nil {
+		t.Fatal(err)
+	}
+	plain, err := plainSource.Export(ctx, true)
+	if err != nil || schemaVersion(plain.Configuration) != 1 {
+		t.Fatal("wrong compatible schema fixture", err)
+	}
+	plainDestination := openTestStore(t, ownedDir(t))
+	restore(plainDestination, RestoreDocuments{Configuration: plain.Configuration, ConfigurationSecrets: plain.ConfigurationSecrets}, 1, "1")
+	restore(plainDestination, RestoreDocuments{Configuration: plain.Configuration}, 1, "2")
+
+	credentialSource := openTestStore(t, ownedDir(t))
+	if _, err = credentialSource.Save(ctx, "unix:uid:0", networkInput(t)); err != nil {
+		t.Fatal(err)
+	}
+	withCredentials, err := credentialSource.Export(ctx, true)
+	if err != nil || schemaVersion(withCredentials.Configuration) != 1 {
+		t.Fatal("wrong credential schema fixture", err)
+	}
+	pairedDestination := openTestStore(t, ownedDir(t))
+	restore(pairedDestination, RestoreDocuments{Configuration: withCredentials.Configuration, ConfigurationSecrets: withCredentials.ConfigurationSecrets}, 1, "1")
+	realized, err := pairedDestination.RealizationInput(ctx, nil)
+	if err != nil || realized.Secrets["WAN_PASSWORD"] != "TEST_ONLY_FIRST" {
+		t.Fatal("paired restore lost included credentials", err)
+	}
+
+	unresolvedDestination := openTestStore(t, ownedDir(t))
+	unresolved := restore(unresolvedDestination, RestoreDocuments{Configuration: withCredentials.Configuration}, 2, "1")
+	if !slices.Equal(unresolved.UnresolvedSecrets, []string{"WAN_PASSWORD"}) {
+		t.Fatal("configuration-only restore did not report its unresolved credential")
+	}
+	unresolvedExport, err := unresolvedDestination.Export(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var unresolvedDocument declaration
+	if err = json.Unmarshal(unresolvedExport.Configuration, &unresolvedDocument); err != nil {
+		t.Fatal(err)
+	}
+	foundUnresolved := false
+	for _, link := range unresolvedDocument.Links {
+		if link.Password != nil && link.Password.Secret == "WAN_PASSWORD" && link.Password.Unresolved {
+			foundUnresolved = true
+		}
+	}
+	if !foundUnresolved {
+		t.Fatal("configuration-only restore did not persist its unresolved credential marker")
+	}
+
+	schemaTwoDestination := openTestStore(t, ownedDir(t))
+	restore(schemaTwoDestination, RestoreDocuments{Configuration: schemaTwo(plain.Configuration), ConfigurationSecrets: plain.ConfigurationSecrets}, 2, "1")
+	restore(schemaTwoDestination, RestoreDocuments{Configuration: plain.Configuration}, 2, "2")
+
+	importedSchemaTwoDestination := openTestStore(t, ownedDir(t))
+	restore(importedSchemaTwoDestination, RestoreDocuments{Configuration: schemaTwo(plain.Configuration)}, 2, "1")
+}
+
 func TestSecretsOnlyMissingBoundKeyRefused(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t, ownedDir(t))
@@ -144,7 +244,16 @@ func TestSecretsOnlyPreservesDeclarationSchema(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = s.Restore(ctx, "unix:uid:0", one.SavedVersion, RestoreDocuments{Configuration: one.Configuration}); err != nil {
+			var document declaration
+			if err = json.Unmarshal(one.Configuration, &document); err != nil {
+				t.Fatal(err)
+			}
+			document.SchemaVersion = 2
+			configuration, err := canonical(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = s.Restore(ctx, "unix:uid:0", one.SavedVersion, RestoreDocuments{Configuration: configuration}); err != nil {
 				t.Fatal(err)
 			}
 		}

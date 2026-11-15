@@ -132,7 +132,6 @@ func prepareRestoration(current *savedState, decoded decodedBackup, next Version
 	candidate := current.Config
 	if decoded.configuration != nil {
 		candidate = *decoded.configuration
-		candidate.SchemaVersion = 2
 	}
 	secrets := current.Secrets
 	if decoded.secrets != nil {
@@ -168,6 +167,9 @@ func prepareRestoration(current *savedState, decoded decodedBackup, next Version
 		} else if !exists {
 			blocked[reference.Secret] = true
 		}
+	}
+	if decoded.configuration != nil && (current.Config.SchemaVersion == 2 || len(unresolved) != 0) {
+		candidate.SchemaVersion = 2
 	}
 	for name := range unresolved {
 		preview.UnresolvedSecrets = append(preview.UnresolvedSecrets, name)

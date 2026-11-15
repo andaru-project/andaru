@@ -4,7 +4,7 @@
   "info": {
     "title": "Andaru local engine API",
     "version": "0.4.0-dev",
-    "description": "Experimental root-local engine API over Unix sockets only. Verified UID 0 SO_PEERCRED authorizes every route. Network status is observed; configuration writes create durable saved versions and never activate networking. An apply activates the saved head's network area as a live generation behind a rollback timer and needs explicit confirmation. No application accounts, HTTP identity headers, cookie/token authentication or backup service is implemented. Contracts remain provisional until Andaru 1.0.",
+    "description": "Experimental root-local engine API over Unix sockets only. Verified UID 0 SO_PEERCRED authorizes every route. Network status is observed; configuration and restore writes create durable saved versions and never activate networking. Backup archives are returned only to the authorized local client. Contracts remain provisional until Andaru 1.0.",
     "license": {
       "name": "GNU AGPLv3",
       "url": "https://github.com/andaru-project/andaru/blob/main/LICENSE"
@@ -159,6 +159,108 @@
           "403": {
             "description": "Peer denied; no body"
           }
+        }
+      }
+    },
+    "/api/v1/backups": {
+      "post": {
+        "operationId": "createPortableBackup",
+        "summary": "Capture a coherent logical backup without applying networking",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackupCreateOptions"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A plain ZIP, or a binary age stream when secrets were explicitly included",
+            "headers": {
+              "Andaru-Saved-Version": {"required": true, "schema": {"type": "string"}},
+              "Andaru-Captured-At": {"required": true, "schema": {"type": "string", "format": "date-time"}},
+              "Cache-Control": {"required": true, "schema": {"type": "string", "const": "no-store"}},
+              "X-Content-Type-Options": {"required": true, "schema": {"type": "string", "const": "nosniff"}}
+            },
+            "content": {
+              "application/zip": {"schema": {"type": "string", "contentEncoding": "binary"}},
+              "application/octet-stream": {"schema": {"type": "string", "contentEncoding": "binary"}}
+            }
+          },
+          "400": {"description": "Malformed or inconsistent options", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "409": {"description": "Another expensive backup operation is running", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+          "413": {"description": "Options or archive limit exceeded", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+          "415": {"description": "Unsupported request media type", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+          "422": {"description": "Unsupported backup encoding or schema", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+          "503": {"description": "Saved store or generation observation unavailable", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}
+        }
+      }
+    },
+    "/api/v1/restores/preview": {
+      "post": {
+        "operationId": "previewPortableRestore",
+        "summary": "Inspect an archive or preview selected store replacements",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {"$ref": "#/components/schemas/RestoreMultipart"},
+              "encoding": {
+                "archive": {"contentType": "application/octet-stream"},
+                "options": {"contentType": "application/json"}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Inspection when stores is absent, otherwise a replacement preview",
+            "content": {"application/json": {"schema": {"oneOf": [
+              {"$ref": "#/components/schemas/BackupInspection"},
+              {"$ref": "#/components/schemas/RestorePreview"}
+            ]}}}
+          },
+          "400": {"description": "Malformed multipart, archive, or options", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "409": {"description": "Another expensive backup operation is running", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+          "413": {"description": "Body, archive, or options limit exceeded", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+          "415": {"description": "Unsupported request media type", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+          "422": {"description": "Unsupported schema, scope, encryption, passphrase, or restoration", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+          "503": {"description": "Saved store or host inventory unavailable", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}
+        }
+      }
+    },
+    "/api/v1/restores": {
+      "post": {
+        "operationId": "commitPortableRestore",
+        "summary": "Atomically replace selected saved stores without applying networking",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {"$ref": "#/components/schemas/RestoreMultipart"},
+              "encoding": {
+                "archive": {"contentType": "application/octet-stream"},
+                "options": {"contentType": "application/json"}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "One new saved version", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RestoreSaved"}}}},
+          "400": {"description": "Malformed multipart, archive, or options", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "409": {"description": "Another expensive backup operation is running", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+          "412": {"description": "Saved head differs from expectedSavedVersion", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+          "413": {"description": "Body, archive, or options limit exceeded", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+          "415": {"description": "Unsupported request media type", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+          "422": {"description": "Unsupported schema, scope, encryption, passphrase, or restoration", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+          "428": {"description": "expectedSavedVersion is required", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+          "503": {"description": "Saved store unavailable", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}
         }
       }
     },
@@ -5162,6 +5264,91 @@
   },
   "components": {
     "schemas": {
+      "BackupCreateOptions": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["includeSecrets"],
+        "properties": {
+          "includeSecrets": {"type": "boolean"},
+          "passphrase": {"type": "string", "minLength": 1, "maxLength": 1024, "writeOnly": true}
+        }
+      },
+      "RestoreOptions": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "passphrase": {"type": "string", "minLength": 1, "maxLength": 1024, "writeOnly": true},
+          "stores": {
+            "type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true,
+            "items": {"enum": ["configuration", "configurationSecrets"]}
+          },
+          "expectedSavedVersion": {"type": "string", "pattern": "^(0|[1-9][0-9]{0,18})$"}
+        }
+      },
+      "RestoreMultipart": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["archive", "options"],
+        "properties": {
+          "archive": {"type": "string", "contentEncoding": "binary", "maxLength": 16777216},
+          "options": {"$ref": "#/components/schemas/RestoreOptions", "description": "JSON part, at most 65536 bytes"}
+        },
+        "description": "Exactly these two parts. Total HTTP body limit is 16859136 bytes; parts are held only in bounded memory."
+      },
+      "BackupManifest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["formatVersion", "backupId", "createdAt", "andaruVersion", "savedVersion", "scopes", "payloads", "network", "savedButUnappliedAreas"],
+        "properties": {
+          "formatVersion": {"type": "integer", "const": 1},
+          "backupId": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+          "createdAt": {"type": "string", "format": "date-time"},
+          "andaruVersion": {"type": "string"},
+          "savedVersion": {"type": "string"},
+          "scopes": {"type": "array", "items": {"enum": ["configuration", "configurationSecrets"]}, "uniqueItems": true},
+          "payloads": {"type": "object", "additionalProperties": {"type": "object", "required": ["schemaVersion", "size", "sha256"], "properties": {
+            "schemaVersion": {"type": "integer"}, "size": {"type": "integer"}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          }}},
+          "network": {"type": "object", "additionalProperties": false, "required": ["live", "pending", "liveSavedVersion"], "properties": {
+            "live": {"type": ["integer", "null"]}, "pending": {"type": ["integer", "null"]}, "liveSavedVersion": {"type": "string"}
+          }},
+          "savedButUnappliedAreas": {"type": "array", "items": {"type": "string"}}
+        }
+      },
+      "BackupInspection": {
+        "type": "object", "additionalProperties": false, "required": ["state", "manifest"],
+        "properties": {"state": {"type": "string", "const": "inspection"}, "manifest": {"$ref": "#/components/schemas/BackupManifest"}}
+      },
+      "RestoreCounts": {
+        "type": "object", "additionalProperties": false, "required": ["created", "updated", "deleted"],
+        "properties": {"created": {"type": "integer"}, "updated": {"type": "integer"}, "deleted": {"type": "integer"}}
+      },
+      "HardwareFinding": {
+        "type": "object", "additionalProperties": false, "required": ["code", "path", "message"],
+        "properties": {"code": {"type": "string"}, "path": {"type": "string"}, "message": {"type": "string"}}
+      },
+      "RestorePreview": {
+        "type": "object", "additionalProperties": false,
+        "required": ["state", "manifest", "expectedSavedVersion", "configurationChanges", "secretChanges", "unresolvedSecrets", "blockingSecrets", "hardwareFindings"],
+        "properties": {
+          "state": {"type": "string", "const": "restore-preview"},
+          "manifest": {"$ref": "#/components/schemas/BackupManifest"},
+          "expectedSavedVersion": {"type": "string"},
+          "configurationChanges": {"$ref": "#/components/schemas/RestoreCounts"},
+          "secretChanges": {"$ref": "#/components/schemas/RestoreCounts"},
+          "unresolvedSecrets": {"type": "array", "items": {"type": "string"}},
+          "blockingSecrets": {"type": "array", "items": {"type": "string"}},
+          "hardwareFindings": {"type": "array", "items": {"$ref": "#/components/schemas/HardwareFinding"}}
+        }
+      },
+      "RestoreSaved": {
+        "type": "object", "additionalProperties": false, "required": ["state", "savedVersion", "unresolvedSecrets"],
+        "properties": {
+          "state": {"type": "string", "const": "saved"},
+          "savedVersion": {"type": "string"},
+          "unresolvedSecrets": {"type": "array", "items": {"type": "string"}}
+        }
+      },
       "PrefixesResponse": {
         "type": "object",
         "additionalProperties": false,

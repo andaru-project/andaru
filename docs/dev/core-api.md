@@ -209,6 +209,9 @@ The actual OpenAPI 3.1 document is embedded from [`internal/engine/openapi.json`
 | `GET/PUT/DELETE /api/v1/config/management`, `/api/v1/config/nat/outbound` | Single objects, `If-Match: "management.N"` / `"nat.outbound.N"`, `0` while unset |
 | `GET/POST /api/v1/config/dhcp`, `GET/PUT/DELETE /api/v1/config/dhcp/{id}` | DHCP servers, one per served segment |
 | `GET/PUT/DELETE /api/v1/config/dns` | The DNS service, `If-Match: "dns.N"`, `0` while unset |
+| `POST /api/v1/backups` | Portable ZIP without secrets, or passphrase-encrypted age archive when secrets are explicitly selected |
+| `POST /api/v1/restores/preview` | Validate an uploaded archive and report selected-store changes without saving |
+| `POST /api/v1/restores` | Replace selected saved stores using the preview's saved-head precondition; never apply networking |
 
 GET resources support HEAD without a body. Unsupported methods return `405 METHOD_NOT_ALLOWED` with the resource's `Allow` methods; unknown resources return `404 NOT_FOUND`. Missing/unverified/non-root peers get `403 FORBIDDEN` before routing/body processing. Inventory failures return `503 INVENTORY_UNAVAILABLE`, never an empty/partial success. Errors share `{"error":{"code":"...","message":"...","details":[]}}`; field details use safe request-relative JSON Pointers and conflicts may add redacted `error.current`. JSON responses are `no-store`; diagnostics never quote secret values.
 
@@ -288,8 +291,69 @@ clients allow 10 seconds, reads 5, responses 8 MiB.
 All history is retained in this slice; configurable 100-version pruning awaits
 live-generation protections. Failed publication can retain a root-only orphan
 secret document. `secure_delete` is enabled but does not erase retained history
-or promise forensic removal from WALs, snapshots, SSDs or backups. No secret
-export, encrypted backup, independent-store restore or migration service exists.
+or promise forensic removal from WALs, snapshots, SSDs or backups.
+
+## Portable backups and saved-state restore
+
+Portable backups use the running engine's validated logical configuration stores,
+not copies of SQLite files:
+
+```sh
+sudo andaru ctl backup create --output andaru.zip
+sudo andaru ctl backup create --output andaru-secrets.age --include-secrets
+sudo andaru ctl backup inspect --input andaru.zip
+sudo andaru ctl backup restore --input andaru.zip --stores configuration
+sudo andaru ctl backup restore --input andaru-secrets.age --stores configuration,configurationSecrets
+```
+
+Creation never overwrites an existing output path. The default ZIP contains the
+configuration declaration but no secret values. `--include-secrets` requires a
+passphrase entered twice on the controlling terminal and produces a
+passphrase-encrypted age file; the passphrase has no flag or environment-variable
+form. Inspecting an encrypted file prompts once. The archive input limit is
+16 MiB; decrypted ZIP data is limited to 12 MiB, its manifest to 64 KiB and
+each document to 4 MiB. Passphrases are at most 1024 bytes. Archives contain
+format/source metadata, payload sizes and SHA-256 digests, the saved version and
+the observed live/pending generation relationship. The `andaruVersion` source
+label is the running binary's embedded package build identity, not a later value
+read from dpkg metadata. Archives do not contain database history, WAL files,
+package binaries or a general filesystem backup.
+
+Restore accepts only an uploaded archive and an explicit selection of
+`configuration` and/or `configurationSecrets`. It validates every included
+document before selecting stores, prints a preview, then requires `RESTORE`
+typed exactly on the controlling terminal. The commit is compare-and-swap
+against the saved head returned by that preview; a concurrent save refuses it
+rather than retrying or overwriting the newer state. Restore records a new
+saved version but never writes generation files, reloads a service, changes
+firewall rules or applies networking.
+
+Configuration-only restore deliberately marks imported secret references
+unresolved, even when a destination secret has the same name. Explicitly bind
+the reference with an ordinary version-checked configuration replacement, or
+restore matching configuration and secrets together, before an apply can use
+it. Secrets-only restore keeps the destination declaration. Compatible schema-1
+documents remain schema 1 unless unresolved references require schema 2, the
+import is already schema 2, or the destination declaration is already schema 2.
+Supported older archive documents are validated and converted only when their
+configuration store is selected.
+
+These endpoints are an explicit root-console exception to the future
+application-user authorization model: only a kernel-verified UID 0 peer on the
+root-local Unix socket can use them. No web/IP backup endpoint, scheduled
+backup, passphrase recovery, automatic restore, automatic apply or network
+change is provided.
+
+An older engine cannot open a schema-2 saved head. Installing an older package
+does not revert state; downgrade with the matching package and cold state from
+the separate [upgrade recovery procedure](#manual-package-and-state-repair).
+Those root-only cold recovery sets are not portable archives, and portable
+archives are not package rollback sets.
+
+The disposable Debian package scenario covers both dependency installation
+orders, plain/encrypted interoperability and saved-only restore. Two-baseline
+VM qualification evidence for netplan and ifupdown hosts is pending and is not
+claimed here.
 
 ## Network preview
 

@@ -41,7 +41,7 @@ type applyReply struct {
 
 var objectIDPattern = regexp.MustCompile(`^(lnk|seg|zon|adr|svc|rul|dhp|pfw|oto|dh6|vip)_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 var applyIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
-var errUsage = errors.New("usage: andaru ctl [--socket PATH] links|prefixes|openapi|config <show|list|get|create|replace|delete|changes|order>|versions <list|get>|preview network [--saved-version N]|apply network --saved-version N [--takeover] [--confirm-timeout S]|applies <list|get ID|confirm ID|rollback ID>|takeover [--accept-detected] [--confirm-timeout S]")
+var errUsage = errors.New("usage: andaru ctl [--socket PATH] links|prefixes|openapi|config <show|list|get|create|replace|delete|changes|order>|versions <list|get>|preview network [--saved-version N]|apply network --saved-version N [--takeover] [--confirm-timeout S]|applies <list|get ID|confirm ID|rollback ID>|takeover [--accept-detected] [--confirm-timeout S]|backup <create|inspect|restore>")
 
 func collectionName(s string) bool {
 	return slices.Contains([]string{"links", "segments", "zones", "addresses", "services", "dhcp", "dhcp6", "virtualAddresses", "policy/input", "policy/forward", "nat/port-forwards", "nat/one-to-one"}, s)
@@ -326,7 +326,24 @@ func readInput(ctx context.Context, r io.Reader) ([]byte, error) {
 		return nil, ctx.Err()
 	}
 }
+func unixHTTPClient(socket string, timeout time.Duration) (*http.Client, *http.Transport) {
+	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", socket)
+	}}
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   timeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	return client, transport
+}
+
 func runCtl(ctx context.Context, socket string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "backup" {
+		return runBackup(ctx, socket, args[1:], stdin, stdout, stderr)
+	}
 	if len(args) > 0 && args[0] == "takeover" {
 		return runTakeover(ctx, socket, args[1:], stdin, stdout, stderr)
 	}
@@ -346,19 +363,15 @@ func runCtl(ctx context.Context, socket string, args []string, stdin io.Reader, 
 			return 1
 		}
 	}
-	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "unix", socket)
-	}}
+	client, transport := unixHTTPClient(socket, 5*time.Second)
 	defer transport.CloseIdleConnections()
-	timeout := 5 * time.Second
 	if spec.method != "GET" {
-		timeout = 10 * time.Second
+		client.Timeout = 10 * time.Second
 	}
 	if spec.apply != "" {
 		// An apply waits for networkd to settle and may first wait behind the rollback of another.
-		timeout = 160 * time.Second
+		client.Timeout = 160 * time.Second
 	}
-	client := &http.Client{Transport: transport, Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	request, e := http.NewRequestWithContext(ctx, spec.method, "http://unix"+spec.path, bytes.NewReader(payload))
 	if e != nil {
 		fmt.Fprintln(stderr, "could not construct local engine request")

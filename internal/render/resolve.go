@@ -1,9 +1,12 @@
 package render
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/andaru-project/andaru/internal/host"
 )
 
 type renderer struct {
@@ -27,6 +30,29 @@ func linkPath(i int, field string) string {
 		return fmt.Sprintf("/links/%d", i)
 	}
 	return fmt.Sprintf("/links/%d/%s", i, field)
+}
+
+// BindingFindings applies the renderer's existing link-identity policy without rendering files.
+func BindingFindings(declaration json.RawMessage, links []host.LinkStatus) ([]Finding, error) {
+	r := renderer{
+		in:     Input{Links: links},
+		name:   map[string]string{},
+		result: Result{Resolved: []Resolution{}, Findings: []Finding{}},
+	}
+	if err := json.Unmarshal(declaration, &r.d); err != nil {
+		return nil, fmt.Errorf("decode saved declaration: %w", err)
+	}
+	r.assignNames()
+	slices.SortFunc(r.result.Findings, func(a, b Finding) int {
+		if byPath := strings.Compare(a.Path, b.Path); byPath != 0 {
+			return byPath
+		}
+		if byCode := strings.Compare(a.Code, b.Code); byCode != 0 {
+			return byCode
+		}
+		return strings.Compare(a.Message, b.Message)
+	})
+	return r.result.Findings, nil
 }
 
 var kernelKind = map[string]string{"vlan": "vlan", "bridge": "bridge", "bond": "bond", "pppoe": "ppp"}
