@@ -8,19 +8,27 @@ fail() {
 	exit 1
 }
 
-work=/var/tmp/andaru-backup-check
-rm -rf -- "$work"
-mkdir -m 0700 "$work"
-trap 'rm -rf -- "$work"' EXIT
+work=$(mktemp -d /var/tmp/andaru-backup-check.XXXXXX)
+chmod 0700 "$work"
+success=0
+cleanup() {
+	if [ "$success" -eq 1 ]; then
+		rm -rf -- "$work"
+	else
+		echo "backup-check: failure artifacts preserved in $work" >&2
+	fi
+}
+trap cleanup EXIT
 passphrase=TEST_ONLY_BACKUP_PASSPHRASE
 secret=TEST_ONLY_SECRET_VALUE
 package_version=$(dpkg-query -W -f='${Version}' andaru)
 
 # Run a command on a real controlling terminal and answer only the expected prompts.
 cat >"$work/pty-run.py" <<'PY'
-import errno, json, os, pty, select, signal, sys, time
+import errno, json, os, pty, select, signal, sys, termios, time
 
 output, answers, command = sys.argv[1], json.loads(sys.argv[2]), sys.argv[3:]
+age_wait_noecho = os.environ.get("ANDARU_AGE_WAIT_NOECHO") == "1"
 pid, fd = pty.fork()
 if pid == 0:
     os.execvp(command[0], command)
@@ -45,10 +53,13 @@ with open(output, "wb") as log:
             log.write(data)
             log.flush()
             seen += data
-            while next_answer < len(answers) and answers[next_answer][0].encode() in seen:
-                os.write(fd, answers[next_answer][1].encode() + b"\n")
-                next_answer += 1
-                seen = b""
+        while next_answer < len(answers) and answers[next_answer][0].encode() in seen:
+            # age v1.2.1 prints before ReadPassword; only this independent tool waits, while product replies stay immediate to catch echo-order regressions.
+            if age_wait_noecho and termios.tcgetattr(fd)[3] & termios.ECHO:
+                break
+            os.write(fd, answers[next_answer][1].encode() + b"\n")
+            next_answer += 1
+            seen = b""
 _, status = os.waitpid(pid, 0)
 if next_answer != len(answers):
     raise SystemExit("expected PTY prompt was not seen")
@@ -60,6 +71,12 @@ pty_run() {
 	answers=$2
 	shift 2
 	python3 "$work/pty-run.py" "$output" "$answers" "$@"
+}
+pty_run_age() {
+	output=$1
+	answers=$2
+	shift 2
+	ANDARU_AGE_WAIT_NOECHO=1 python3 "$work/pty-run.py" "$output" "$answers" "$@"
 }
 
 snapshot_host() {
@@ -100,7 +117,7 @@ pty_run "$work/secret-inspect.log" \
 	andaru ctl backup inspect --input "$work/secret.age"
 
 # The archive consumer is deliberately independent of Andaru: age decrypts, then Python's ZIP reader validates members.
-pty_run "$work/age.log" \
+pty_run_age "$work/age.log" \
 	'[["Enter passphrase", "TEST_ONLY_BACKUP_PASSPHRASE"]]' \
 	age --decrypt -o "$work/secret.zip" "$work/secret.age"
 PACKAGE_VERSION=$package_version WORK=$work SECRET=$secret PASSPHRASE=$passphrase python3 <<'PY'
@@ -271,8 +288,9 @@ cmp "$work/invocations-before" "$work/invocations-after" >/dev/null || fail "sav
 cmp "$work/rules-before.json" "$work/rules-after.json" >/dev/null || fail "saved-only backup operations changed firewall rules"
 for log in "$work"/*.log; do
 	if grep -Fq "$passphrase" "$log" || grep -Fq "$secret" "$log"; then
-		fail "terminal output exposed a TEST_ONLY fixture secret"
+		fail "terminal output exposed a TEST_ONLY fixture secret in $(basename -- "$log")"
 	fi
 done
 
 echo "backup-check: plain/encrypted package backup, independent interoperability and saved-only restore passed"
+success=1

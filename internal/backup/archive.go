@@ -377,7 +377,19 @@ func localHeaderAgrees(raw []byte, directory int, file *zip.File, offset uint32)
 		return false
 	}
 	const relevantFlags = 1 | 2 | 4 | 8 | 0x40 | 0x800 | 0x2000
-	return (binary.LittleEndian.Uint16(raw[at+6:])^file.Flags)&relevantFlags == 0
+	if (binary.LittleEndian.Uint16(raw[at+6:])^file.Flags)&relevantFlags != 0 {
+		return false
+	}
+	if file.Flags&8 != 0 {
+		return true
+	}
+	const maxUint32 = uint64(^uint32(0))
+	if file.CompressedSize64 >= maxUint32 || file.UncompressedSize64 >= maxUint32 {
+		return false
+	}
+	return binary.LittleEndian.Uint32(raw[at+14:]) == file.CRC32 &&
+		uint64(binary.LittleEndian.Uint32(raw[at+18:])) == file.CompressedSize64 &&
+		uint64(binary.LittleEndian.Uint32(raw[at+22:])) == file.UncompressedSize64
 }
 
 func memberBytes(ctx context.Context, file *zip.File, limit int) ([]byte, error) {

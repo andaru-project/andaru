@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"hash/crc32"
 	"testing"
 
 	"filippo.io/age"
@@ -126,6 +127,73 @@ func TestLocalZIPHeaderMustAgreeWithDirectory(t *testing.T) {
 			mutate(raw, central, local)
 			if _, err := Decode(context.Background(), raw, ""); err == nil {
 				t.Fatal("conflicting or malformed local ZIP header accepted")
+			}
+		})
+	}
+}
+
+func fixtureZIPWithoutDescriptors(t *testing.T, entries []archiveEntry) []byte {
+	t.Helper()
+	var buffer bytes.Buffer
+	writer := zip.NewWriter(&buffer)
+	for _, entry := range entries {
+		size := uint64(len(entry.body))
+		header := &zip.FileHeader{
+			Name:               entry.name,
+			Method:             zip.Store,
+			CRC32:              crc32.ChecksumIEEE(entry.body),
+			CompressedSize64:   size,
+			UncompressedSize64: size,
+		}
+		header.SetMode(0600)
+		file, err := writer.CreateRaw(header)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = file.Write(entry.body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buffer.Bytes()
+}
+
+func TestLocalZIPHeaderIntegrityMustAgreeWithoutDescriptor(t *testing.T) {
+	base := func() []byte {
+		return fixtureZIPWithoutDescriptors(t, []archiveEntry{
+			{name: "manifest.json", body: fixtureManifest(t, []byte(configJSON))},
+			{name: "config.json", body: []byte(configJSON)},
+		})
+	}
+	raw := base()
+	central := bytes.LastIndex(raw, []byte("PK\x01\x02"))
+	if central < 0 || central+46 > len(raw) {
+		t.Fatal("invalid independent fixture")
+	}
+	local := int(binary.LittleEndian.Uint32(raw[central+42:]))
+	if local < 0 || local+30 > central || binary.LittleEndian.Uint16(raw[central+8:])&8 != 0 || binary.LittleEndian.Uint16(raw[local+6:])&8 != 0 {
+		t.Fatal("fixture unexpectedly uses a data descriptor")
+	}
+	decoded, err := Decode(context.Background(), raw, "")
+	if err != nil || string(decoded.Documents.Configuration) != configJSON {
+		t.Fatal("valid archive without data descriptors rejected", err)
+	}
+
+	tests := map[string]int{
+		"CRC32":             14,
+		"compressed size":   18,
+		"uncompressed size": 22,
+	}
+	for name, field := range tests {
+		t.Run(name, func(t *testing.T) {
+			raw := base()
+			central := bytes.LastIndex(raw, []byte("PK\x01\x02"))
+			local := int(binary.LittleEndian.Uint32(raw[central+42:]))
+			binary.LittleEndian.PutUint32(raw[local+field:], binary.LittleEndian.Uint32(raw[local+field:])+1)
+			if _, err := Decode(context.Background(), raw, ""); err == nil {
+				t.Fatal("conflicting local ZIP integrity field accepted")
 			}
 		})
 	}

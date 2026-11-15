@@ -4,7 +4,7 @@ Andaru's root-local Go engine reports observed host interfaces and persists vali
 
 ## Build
 
-Use Go 1.27.3 on Linux with its default JSON v2 support. Dependencies are pinned in `go.mod`/`go.sum`: a pure-Go SQLite driver, a JSON Schema 2020-12 validator and Linux syscall helpers. Production binaries built with `CGO_ENABLED=0` need neither Go, a C library nor a JavaScript runtime on the appliance.
+Use Go 1.27.4 on Linux with its default JSON v2 support. Dependencies are pinned in `go.mod`/`go.sum`: a pure-Go SQLite driver, a JSON Schema 2020-12 validator and Linux syscall helpers. Production binaries built with `CGO_ENABLED=0` need neither Go, a C library nor a JavaScript runtime on the appliance.
 
 ```sh
 BUILD_DIR=$(mktemp -d)
