@@ -767,6 +767,7 @@
               "links",
               "segments",
               "zones",
+              "roles",
               "addresses",
               "services",
               "dhcp", "dhcp6", "virtualAddresses"
@@ -1177,6 +1178,7 @@
               "links",
               "segments",
               "zones",
+              "roles",
               "addresses",
               "services",
               "dhcp", "dhcp6", "virtualAddresses"
@@ -5716,6 +5718,7 @@
                       "links",
                       "segments",
                       "zones",
+                      "roles",
                       "addresses",
                       "services",
                       "policy.input",
@@ -5809,6 +5812,7 @@
               "links",
               "segments",
               "zones",
+              "roles",
               "addresses",
               "services",
               "policy.input",

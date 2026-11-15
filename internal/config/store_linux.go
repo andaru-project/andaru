@@ -119,8 +119,8 @@ func Open(ctx context.Context, stateDir string) (*Store, error) {
 		cfg.Close()
 		return nil, diagnostic("open-secret", e)
 	}
-	// A store made before the packet filter, the services or inbound NAT lacks their tables; adding them is the whole migration.
-	if _, e = cfg.ExecContext(ctx, policyDDL+serviceDDL+natDDL+dhcp6DDL+vipDDL); e != nil {
+	// Additive history tables let older stores accept newer configuration collections.
+	if _, e = cfg.ExecContext(ctx, policyDDL+serviceDDL+natDDL+dhcp6DDL+vipDDL+roleDDL); e != nil {
 		cfg.Close()
 		sec.Close()
 		return nil, diagnostic("open-config-policy-table", e)

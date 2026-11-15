@@ -12,7 +12,16 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/andaru-project/andaru/internal/authz"
 )
+
+func validateRoles(d *declaration) []FieldError {
+	if err := authz.ValidateRoles(d.Roles); err != nil {
+		return []FieldError{{Path: "/roles", Message: "Invalid custom role declaration."}}
+	}
+	return nil
+}
 
 type locatedPrefix struct {
 	prefix netip.Prefix

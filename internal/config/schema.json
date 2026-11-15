@@ -967,6 +967,117 @@
       ],
       "unevaluatedProperties": false
     },
+    "roleID": {
+      "type": "string",
+      "pattern": "^rol_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "capability": {
+      "enum": [
+        "audit.read",
+        "backups.create",
+        "backups.exportSecrets",
+        "backups.restore",
+        "configuration.apply",
+        "configuration.confirm",
+        "configuration.read",
+        "configuration.write",
+        "status.read",
+        "tokens.manageAll",
+        "tokens.manageSelf",
+        "users.manage",
+        "users.read"
+      ]
+    },
+    "roleFields": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/capability"
+          },
+          "maxItems": 64,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "name",
+        "capabilities"
+      ]
+    },
+    "roleStored": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/roleFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/roleID"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "roleWrite": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/roleFields"
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "roleView": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/capability"
+          },
+          "maxItems": 64,
+          "uniqueItems": true
+        },
+        "builtIn": {
+          "enum": [
+            "administrator",
+            "read-only"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "capabilities"
+      ],
+      "additionalProperties": false
+    },
     "objectStored": {
       "oneOf": [
         {
@@ -977,6 +1088,9 @@
         },
         {
           "$ref": "#/$defs/zoneStored"
+        },
+        {
+          "$ref": "#/$defs/roleStored"
         }
       ]
     },
@@ -1039,6 +1153,9 @@
         },
         {
           "$ref": "#/$defs/virtualAddressWrite"
+        },
+        {
+          "$ref": "#/$defs/roleWrite"
         }
       ]
     },
@@ -1110,7 +1227,7 @@
       "type": "object",
       "properties": {
         "schemaVersion": {
-          "enum": [1, 2]
+          "enum": [1, 2, 3]
         },
         "links": {
           "type": "array",
@@ -1132,6 +1249,14 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/zoneStored"
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/roleStored"
           },
           "minItems": 0,
           "maxItems": 10000
@@ -1248,15 +1373,24 @@
         "segments",
         "zones"
       ],
-      "if": {"properties": {"schemaVersion": {"const": 1}}},
-      "then": {"properties": {"links": {"items": {"properties": {"password": {"properties": {"unresolved": {"const": false}}}}}}}},
+      "allOf": [
+        {
+          "if": {"properties": {"schemaVersion": {"const": 1}}},
+          "then": {"properties": {"links": {"items": {"properties": {"password": {"properties": {"unresolved": {"const": false}}}}}}}}
+        },
+        {
+          "if": {"properties": {"schemaVersion": {"enum": [1, 2]}}},
+          "then": {"not": {"required": ["roles"]}},
+          "else": {"required": ["roles"]}
+        }
+      ],
       "additionalProperties": false
     },
     "declarationView": {
       "type": "object",
       "properties": {
         "schemaVersion": {
-          "enum": [1, 2]
+          "enum": [1, 2, 3]
         },
         "links": {
           "type": "array",
@@ -1281,6 +1415,14 @@
           },
           "minItems": 0,
           "maxItems": 10000
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/roleView"
+          },
+          "minItems": 2,
+          "maxItems": 10002
         },
         "objects": {
           "type": "object",
@@ -1392,7 +1534,8 @@
         "schemaVersion",
         "links",
         "segments",
-        "zones"
+        "zones",
+        "roles"
       ],
       "if": {"properties": {"schemaVersion": {"const": 1}}},
       "then": {"properties": {"links": {"items": {"properties": {"password": {"properties": {"unresolved": {"const": false}}}}}}}},
@@ -2331,6 +2474,80 @@
                   "id"
                 ],
                 "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "create"
+                  },
+                  "collection": {
+                    "const": "roles"
+                  },
+                  "localId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9_]{0,31}$"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/roleWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "replace"
+                  },
+                  "collection": {
+                    "const": "roles"
+                  },
+                  "id": {
+                    "$ref": "#/$defs/roleID"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/roleWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "delete"
+                  },
+                  "collection": {
+                    "const": "roles"
+                  },
+                  "id": {
+                    "$ref": "#/$defs/roleID"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id"
+                ],
+                "additionalProperties": false
               }
             ]
           },
@@ -2389,6 +2606,9 @@
         },
         {
           "$ref": "#/$defs/virtualAddressStored"
+        },
+        {
+          "$ref": "#/$defs/roleView"
         }
       ]
     },
