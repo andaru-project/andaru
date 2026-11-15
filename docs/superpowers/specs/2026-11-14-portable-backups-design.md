@@ -1,6 +1,6 @@
 # Portable backup and restore: root-local foundation
 
-Status: proposed design. The owner selected the root-local foundation approach on 2026-11-14; implementation awaits approval of this document.
+Status: approved by the owner on 2026-11-15. The root-local foundation approach was selected on 2026-11-14. An implementation plan must be reviewed before product code changes.
 
 ## Intent and approved scope
 
