@@ -108,6 +108,14 @@ func TestRoleLifecycleHistory(t *testing.T) {
 	if roles, err = store.List(ctx, "roles"); err != nil || len(roles.Items) != 2 {
 		t.Fatalf("deleted role remains in list: %+v %v", roles, err)
 	}
+	if historical, ok := roleAt(created.SavedVersion); !ok || historical.Name != "Operator" || len(historical.Capabilities) != 2 ||
+		historical.Capabilities[0] != authz.ConfigurationWrite || historical.Capabilities[1] != authz.StatusRead {
+		t.Fatalf("later mutations changed create history: %+v %v", historical, ok)
+	}
+	if historical, ok := roleAt(replaced.SavedVersion); !ok || historical.Name != "Auditor" || historical.Description != "Read configuration" ||
+		len(historical.Capabilities) != 1 || historical.Capabilities[0] != authz.ConfigurationRead {
+		t.Fatalf("deletion changed replacement history: %+v %v", historical, ok)
+	}
 	if historical, ok := roleAt(deleted.SavedVersion); ok {
 		t.Fatalf("delete history snapshot retained current role: %+v", historical)
 	}
