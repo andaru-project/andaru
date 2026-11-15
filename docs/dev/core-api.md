@@ -350,10 +350,43 @@ the separate [upgrade recovery procedure](#manual-package-and-state-repair).
 Those root-only cold recovery sets are not portable archives, and portable
 archives are not package rollback sets.
 
-The disposable Debian package scenario covers both dependency installation
-orders, plain/encrypted interoperability and saved-only restore. Two-baseline
-VM qualification evidence for netplan and ifupdown hosts is pending and is not
-claimed here.
+### Qualification evidence (2026-11-15)
+
+The candidate `0.4.0~rc3-4`
+(`sha256:6196998d10af804c9823a12fac5d490d2f9542d10f3e2f37cb78af349a213ec5`)
+passed the final scenario on Debian 13 netplan VM 114 and ifupdown VM 117.
+Detailed per-VM logs were captured during qualification. Both fixtures exercised
+plain and encrypted creation, independent age decryption,
+configuration-only unresolved references, explicit rebinding and secrets-only
+declaration preservation. Fixture saves advanced the saved head from 30 to 40;
+schema 2 survived an engine restart.
+
+Five default archives captured while five saves ran each matched the fixture
+zones in their recorded historical source version. Concurrent secret-bearing requests
+returned exactly one `200` and one `409`; the second request did not bypass single-operation admission.
+Holding the real generation lock produced `503` after 3.002 seconds, then `200`
+after release. Work-factor-18 encryption increased engine `VmHWM` by 261800 KiB
+on netplan and 263432 KiB on ifupdown; available RAM afterwards was 3280580 KiB
+and 3297288 KiB respectively on these 4 GiB guests. These measurements describe
+the qualified fixtures, not a universal memory limit.
+
+A normal explicit network apply and rollback was qualified separately. Backup
+and saved-only restore changed no live generation pointer, stateless firewall
+rules or network-service invocation ID; restarting the engine also left
+systemd-networkd's invocation unchanged. An initial VM 114 terminal-log failure
+had no retained per-command log, so it is not attributed retroactively. age
+1.2.1 prints its prompt before disabling terminal echo; the independent fixture
+now waits for age's echo-off state only. Andaru prompt replies remain immediate
+and all secrecy assertions remain enabled; the final scenario passed on both
+VMs.
+
+Stopped disk-only snapshots named
+`portable-backups-before-20261115` were taken before testing. Afterwards both
+VMs were restored to those snapshots, booted with a healthy rc3-2 engine and
+verified at saved version 30/schema 1 with `/root/andaru-portable-lab` absent.
+Both were then shut down; Proxmox reported them stopped, matching their initial
+state. This qualification does not establish physical power-loss behavior,
+arm64 hardware, NFS/SMB durability or a full cryptographic audit.
 
 ## Network preview
 
