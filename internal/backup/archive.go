@@ -300,8 +300,12 @@ func preflightZIP(raw []byte) (zipLayout, error) {
 		return layout, invalid
 	}
 	for end := len(raw) - 22; end >= max(0, len(raw)-22-65535); end-- {
-		if binary.LittleEndian.Uint32(raw[end:]) != 0x06054b50 || end+22+int(binary.LittleEndian.Uint16(raw[end+20:])) != len(raw) {
+		if binary.LittleEndian.Uint32(raw[end:]) != 0x06054b50 {
 			continue
+		}
+		// Match archive/zip's last-signature selection; never skip trailing or truncated data.
+		if end+22+int(binary.LittleEndian.Uint16(raw[end+20:])) != len(raw) {
+			return layout, invalid
 		}
 		if binary.LittleEndian.Uint16(raw[end+4:]) != 0 || binary.LittleEndian.Uint16(raw[end+6:]) != 0 {
 			return layout, invalid

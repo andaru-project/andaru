@@ -5673,7 +5673,20 @@
                   "APPLY_REFUSED",
                   "APPLY_IN_PROGRESS",
                   "APPLY_NOT_AWAITING",
-                  "REALIZE_UNAVAILABLE"
+                  "REALIZE_UNAVAILABLE",
+                  "UNSUPPORTED_CONTENT",
+                  "BACKUP_BUSY",
+                  "INVALID_ARCHIVE",
+                  "ARCHIVE_LIMIT",
+                  "INVALID_RESTORE",
+                  "UNSUPPORTED_SCOPE",
+                  "PASSPHRASE_INVALID",
+                  "DECRYPTION_FAILED",
+                  "UNSUPPORTED_ENCRYPTION",
+                  "UNSUPPORTED_ARCHIVE",
+                  "SECRET_ENCRYPTION_REQUIRED",
+                  "ENCRYPTION_FAILED",
+                  "UNSUPPORTED_SCHEMA"
                 ]
               },
               "message": {

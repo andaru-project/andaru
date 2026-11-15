@@ -39,7 +39,11 @@ func readBackupPassphrase(ctx context.Context, prompt string) (value string, ret
 	if err != nil {
 		return "", err
 	}
-	defer tty.Close()
+	defer func() {
+		if err := tty.Close(); err != nil {
+			value, returnErr = "", errors.Join(returnErr, err)
+		}
+	}()
 	fd := tty.Fd()
 	if !term.IsTerminal(fd) {
 		return "", errors.New("not a terminal")
@@ -56,15 +60,22 @@ func readBackupPassphrase(ctx context.Context, prompt string) (value string, ret
 	if err = unix.IoctlSetTermios(int(fd), unix.TCSETS, settings); err != nil {
 		return "", err
 	}
+	flushInput := true
 	defer func() {
-		if err := term.Restore(fd, initial); returnErr == nil && err != nil {
-			value, returnErr = "", err
+		var flushErr error
+		if flushInput {
+			flushErr = unix.IoctlSetInt(int(fd), unix.TCFLSH, unix.TCIFLUSH)
+		}
+		restoreErr := term.Restore(fd, initial)
+		if flushErr != nil || restoreErr != nil {
+			value, returnErr = "", errors.Join(returnErr, flushErr, restoreErr)
 		}
 	}()
 	if _, err = io.WriteString(tty, prompt); err != nil {
 		return "", err
 	}
 	raw, readErr := readBoundedTerminalLine(ctx, int(fd))
+	flushInput = readErr != nil
 	_, newlineErr := io.WriteString(tty, "\n")
 	if readErr != nil {
 		clear(raw)

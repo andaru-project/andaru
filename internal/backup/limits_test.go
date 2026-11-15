@@ -13,6 +13,47 @@ import (
 	"filippo.io/age"
 )
 
+func TestZIPPreflightRejectsEmbeddedEndRecordWithTrailingData(t *testing.T) {
+	for name, trailingSize := range map[string]int{"last kilobyte": 1, "extended search": 1024} {
+		t.Run(name, func(t *testing.T) {
+			raw := fixtureZIP(t, []archiveEntry{
+				{name: "manifest.json", body: fixtureManifest(t, []byte(configJSON))},
+				{name: "config.json", body: []byte(configJSON)},
+			})
+			end := len(raw) - 22
+			central := bytes.LastIndex(raw[:end], []byte("PK\x01\x02"))
+			if central < 0 || central+46 > end {
+				t.Fatal("invalid independent fixture")
+			}
+
+			// The outer comment hides a larger directory and a later EOCD that does not reach EOF.
+			directory := bytes.Repeat(raw[central:end], MaxMembers+1)
+			nestedEnd := make([]byte, 22)
+			binary.LittleEndian.PutUint32(nestedEnd, 0x06054b50)
+			binary.LittleEndian.PutUint16(nestedEnd[8:], MaxMembers+1)
+			binary.LittleEndian.PutUint16(nestedEnd[10:], MaxMembers+1)
+			binary.LittleEndian.PutUint32(nestedEnd[12:], uint32(len(directory)))
+			binary.LittleEndian.PutUint32(nestedEnd[16:], uint32(len(raw)))
+			comment := append(directory, nestedEnd...)
+			comment = append(comment, make([]byte, trailingSize)...)
+			binary.LittleEndian.PutUint16(raw[end+20:], uint16(len(comment)))
+			raw = append(raw, comment...)
+
+			reader, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
+			if err != nil {
+				t.Fatal("stdlib rejected the selection-differential fixture", err)
+			}
+			if len(reader.File) != MaxMembers+1 {
+				t.Fatalf("stdlib selected %d members, want %d", len(reader.File), MaxMembers+1)
+			}
+			var invalid *Error
+			if _, err := preflightZIP(raw); !errors.As(err, &invalid) || invalid.Code != "INVALID_ARCHIVE" {
+				t.Fatalf("ambiguous EOCD reached ZIP reader allocation: %v", err)
+			}
+		})
+	}
+}
+
 func TestUnknownUnixMemberTypeRejected(t *testing.T) {
 	raw := fixtureZIP(t, []archiveEntry{{name: "manifest.json", body: fixtureManifest(t, []byte(configJSON))}, {name: "config.json", body: []byte(configJSON)}})
 	directory := bytes.LastIndex(raw, []byte("PK\x01\x02"))
