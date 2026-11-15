@@ -20,12 +20,12 @@ var SchemaBundle []byte
 var secretSchema []byte
 
 type schemaSet struct {
-	declaration, changes, secret *jsonschema.Schema
-	objects                      map[string]*jsonschema.Schema
+	declaration, changes, secret, backupSecret *jsonschema.Schema
+	objects                                    map[string]*jsonschema.Schema
 }
 
 var schemas = sync.OnceValues(func() (*schemaSet, error) {
-	c, e := newSchemaCompiler(map[string][]byte{schemaURI: SchemaBundle, "https://andaru.invalid/private/config-secrets-v1": secretSchema})
+	c, e := newSchemaCompiler(map[string][]byte{schemaURI: SchemaBundle, "https://andaru.invalid/private/config-secrets-v1": secretSchema, "https://andaru.invalid/private/backup-config-secrets-v1": backupSecretSchema})
 	if e != nil {
 		return nil, e
 	}
@@ -37,6 +37,9 @@ var schemas = sync.OnceValues(func() (*schemaSet, error) {
 		return nil, e
 	}
 	if s.secret, e = c.Compile("https://andaru.invalid/private/config-secrets-v1"); e != nil {
+		return nil, e
+	}
+	if s.backupSecret, e = c.Compile("https://andaru.invalid/private/backup-config-secrets-v1"); e != nil {
 		return nil, e
 	}
 	s.objects = make(map[string]*jsonschema.Schema, 3)

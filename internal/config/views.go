@@ -130,6 +130,9 @@ func publicSnapshot(s savedState) (SnapshotView, error) {
 }
 func resultView(p preparedChange) (SaveResult, error) {
 	result := SaveResult{State: "saved", SavedVersion: p.State.Version, Items: []ChangedView{}, Created: p.Created}
+	if len(p.Results) == 0 {
+		return result, nil
+	}
 	index := objects(&p.State.Config)
 	for _, key := range p.Results {
 		meta := p.State.Versions[key]

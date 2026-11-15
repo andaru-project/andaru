@@ -301,12 +301,11 @@ type pendingSave struct {
 	head Version
 }
 
-func (s *Store) prepareSave(ctx context.Context, actor string, input Changes) (*pendingSave, error) {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
+func (s *Store) startSave(ctx context.Context, actor string, requested []objectKey) (*pendingSave, savedState, Version, error) {
+	var empty savedState
 	release, e := s.acquire(ctx)
 	if e != nil {
-		return nil, e
+		return nil, empty, "", e
 	}
 	p := &pendingSave{s: s, release: release, actor: actor, deadline: time.Now().Add(2 * time.Second)}
 	success := false
@@ -316,36 +315,53 @@ func (s *Store) prepareSave(ctx context.Context, actor string, input Changes) (*
 		}
 	}()
 	if !strings.HasPrefix(actor, "unix:uid:") || len(actor) > 64 {
-		return nil, fault("INVALID_REQUEST", "", "Invalid verified actor.")
+		return nil, empty, "", fault("INVALID_REQUEST", "", "Invalid verified actor.")
 	}
 	p.conn, e = s.configDB.Conn(ctx)
 	if e != nil {
-		return nil, unavailable()
+		return nil, empty, "", unavailable()
 	}
 	if e = verifyPragmas(ctx, p.conn, false); e != nil {
-		return nil, unavailable()
+		return nil, empty, "", unavailable()
 	}
 	if _, e = p.conn.ExecContext(ctx, "BEGIN IMMEDIATE"); e != nil {
 		p.conn.Raw(func(any) error { return driver.ErrBadConn })
-		return nil, unavailable()
+		return nil, empty, "", unavailable()
 	}
 	p.active = true
+	current, _, e := s.loadState(ctx, p.conn, "", requested)
+	if e != nil {
+		return nil, empty, "", e
+	}
+	p.head = current.Version
+	n, e := strconvVersion(current.Version)
+	if e != nil || n == int64(^uint64(0)>>1) {
+		return nil, empty, "", unavailable()
+	}
+	success = true
+	return p, current, Version(fmt.Sprint(n + 1)), nil
+}
+
+func (s *Store) prepareSave(ctx context.Context, actor string, input Changes) (*pendingSave, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
 	requested := make([]objectKey, 0, len(input.Operations))
 	for _, op := range input.Operations {
 		if op.Op != "create" {
 			requested = append(requested, objectKey{op.Collection, op.ID})
 		}
 	}
-	current, _, e := s.loadState(ctx, p.conn, "", requested)
+	p, current, next, e := s.startSave(ctx, actor, requested)
 	if e != nil {
 		return nil, e
 	}
-	p.head = current.Version
-	n, e := strconvVersion(current.Version)
-	if e != nil || n == int64(^uint64(0)>>1) {
-		return nil, unavailable()
-	}
-	p.prepared, e = prepareChanges(&current, input, Version(fmt.Sprint(n+1)), time.Now().UTC())
+	success := false
+	defer func() {
+		if !success {
+			p.Close()
+		}
+	}()
+	p.prepared, e = prepareChanges(&current, input, next, time.Now().UTC())
 	if e != nil {
 		return nil, e
 	}
