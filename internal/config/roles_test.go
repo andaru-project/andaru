@@ -73,7 +73,7 @@ func TestRoleViewsAndChanges(t *testing.T) {
 		t.Fatalf("legacy view did not synthesize immutable built-ins: %+v", snapshot)
 	}
 
-	change, err := ObjectChange("create", "roles", "", nil, []byte(`{"name":"Operator","description":"Saved role","capabilities":["status.read","configuration.write"]}`))
+	change, err := DecodeChanges([]byte(`{"operations":[{"op":"create","collection":"roles","localId":"role","value":{"name":"Operator","description":"Saved role","capabilities":["status.read","configuration.write"]}}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestRoleViewsAndChanges(t *testing.T) {
 	if prepared.State.Config.SchemaVersion != 3 || len(prepared.State.Config.Roles) != 1 || prepared.State.Versions[objectKey{"roles", prepared.State.Config.Roles[0].ID}].Version != "1" {
 		t.Fatalf("role edit was not an ordinary schema-3 configuration change: %+v", prepared)
 	}
-	if prepared.State.Config.Roles[0].BuiltIn != "" || len(prepared.Changed) != 1 || prepared.Changed[0].Collection != "roles" {
+	if prepared.State.Config.Roles[0].BuiltIn != "" || prepared.Created["role"] != prepared.State.Config.Roles[0].ID || len(prepared.Changed) != 1 || prepared.Changed[0].Collection != "roles" {
 		t.Fatalf("built-in or history metadata was serialized incorrectly: %+v", prepared)
 	}
 
