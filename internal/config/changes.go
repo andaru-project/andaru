@@ -581,6 +581,8 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 	}
 	if len(d.Roles) > 0 || d.SchemaVersion == 3 {
 		d.SchemaVersion = 3
+	} else {
+		d.Roles = nil
 	}
 	raw, e := json.Marshal(d)
 	if e != nil {
@@ -702,14 +704,8 @@ func localLabel(s string) bool {
 	return true
 }
 func rewrite[T any](old []T, col string, writes map[objectKey][]byte, deleted map[objectKey]bool, created []objectKey, id func(T) string) ([]T, error) {
-	var out []T
-	if old != nil {
-		out = make([]T, 0, len(old)+len(created))
-	}
+	out := make([]T, 0, len(old)+len(created))
 	appendRaw := func(raw []byte) error {
-		if out == nil {
-			out = make([]T, 0, len(old)+len(created))
-		}
 		var v T
 		if e := json.Unmarshal(raw, &v); e != nil {
 			return fault("VALIDATION_FAILED", "", "Invalid typed object.")

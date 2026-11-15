@@ -73,7 +73,7 @@ func TestRoleViewsAndChanges(t *testing.T) {
 		t.Fatalf("legacy view did not synthesize immutable built-ins: %+v", snapshot)
 	}
 
-	ordinary, err := DecodeChanges([]byte(`{"operations":[{"op":"create","collection":"zones","localId":"zone","value":{"name":"Extra"}}]}`))
+	ordinary, err := DecodeChanges([]byte(`{"operations":[{"op":"create","collection":"zones","localId":"zone","value":{"name":"Extra"}},{"op":"create","collection":"services","localId":"service","value":{"name":"DNS","protocol":"udp","ports":["53"]}},{"op":"create","collection":"policy.forward","localId":"rule","value":{"name":"Allow DNS","enabled":true,"action":"accept","from":[],"to":[],"services":[],"log":false}}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestRoleViewsAndChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ordinaryPrepared.State.Config.SchemaVersion != 1 || ordinaryPrepared.Created["zone"] == "" {
+	if ordinaryPrepared.State.Config.SchemaVersion != 1 || ordinaryPrepared.Created["zone"] == "" || ordinaryPrepared.Created["service"] == "" || ordinaryPrepared.Created["rule"] == "" {
 		t.Fatalf("ordinary operation changed schema compatibility: %+v", ordinaryPrepared)
 	}
 	state = ordinaryPrepared.State
