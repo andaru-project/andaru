@@ -74,7 +74,8 @@ func (r Realizer) at(step string) error {
 	return nil
 }
 
-// lock serialises every verb. The engine never takes it, so a dead engine cannot hold it.
+// lock serialises every verb. The engine takes it only for bounded backup observation,
+// so it cannot retain the lock for its process lifetime.
 func (r Realizer) lock() (func(), error) {
 	f, err := os.OpenFile(filepath.Join(r.dir(), "lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {

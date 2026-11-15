@@ -39,6 +39,10 @@ func (r *renderer) visitPPPoE(i int, named bool) {
 	if !l.Enabled {
 		return
 	}
+	if l.Password != nil && l.Password.Unresolved {
+		r.find("error", "SECRET_UNRESOLVED", linkPath(i, "password"), "The secret reference is unresolved; explicitly bind or set it before applying.")
+		return
+	}
 	parent := r.visit(l.Parent)
 	si, ok := r.segment[l.ID]
 	if !ok {

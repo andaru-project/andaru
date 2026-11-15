@@ -184,3 +184,38 @@ func TestHostWidePPPFindingsAreRaisedOnce(t *testing.T) {
 		t.Fatalf("two PPPoE links repeated a host-wide finding: %v\n%s", count, golden(result))
 	}
 }
+
+func TestUnresolvedPPPoEDoesNotUseAvailableSecret(t *testing.T) {
+	in := fixture(t, "owner")
+	var declaration map[string]any
+	if err := json.Unmarshal(in.Declaration, &declaration); err != nil {
+		t.Fatal(err)
+	}
+	declaration["schemaVersion"] = 2
+	for _, raw := range declaration["links"].([]any) {
+		l := raw.(map[string]any)
+		if l["kind"] == "pppoe" {
+			l["password"].(map[string]any)["unresolved"] = true
+		}
+	}
+	in.Declaration, _ = json.Marshal(declaration)
+	in.Secrets = map[string]string{"WAN_PASSWORD": "TEST_ONLY_REFUSE"}
+	result := render(t, in)
+	if result.Realizable {
+		t.Fatal("unresolved reference was realized using a local value")
+	}
+	found := false
+	for _, finding := range result.Findings {
+		if finding.Code == "SECRET_UNRESOLVED" && finding.Severity == "error" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("no actionable unresolved-secret finding")
+	}
+	for _, file := range result.Files {
+		if strings.HasSuffix(file.Path, ".options") || strings.Contains(file.Real(), "TEST_ONLY_REFUSE") {
+			t.Fatal("unresolved PPPoE credentials were rendered")
+		}
+	}
+}

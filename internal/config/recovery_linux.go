@@ -67,7 +67,7 @@ func VerifyRecoveryState(ctx context.Context, stateDir string) error {
 	if err != nil {
 		return fmt.Errorf("read recovery saved state: %w", err)
 	}
-	if version < 0 || schema != 1 || len(configBody) > documentLimit || len(configHash) != sha256.Size || len(secretHash) != sha256.Size {
+	if version < 0 || (schema != 1 && schema != 2) || len(configBody) > documentLimit || len(configHash) != sha256.Size || len(secretHash) != sha256.Size {
 		return errors.New("invalid recovery saved-state metadata")
 	}
 	sum := sha256.Sum256(configBody)
@@ -77,6 +77,9 @@ func VerifyRecoveryState(ctx context.Context, stateDir string) error {
 	declaration, err := decodeDeclaration(configBody)
 	if err != nil {
 		return errors.New("invalid recovery configuration document")
+	}
+	if declaration.SchemaVersion != schema {
+		return errors.New("recovery configuration schema mismatch")
 	}
 	normalized, err := canonical(declaration)
 	if err != nil || !bytes.Equal(normalized, configBody) {
@@ -108,7 +111,7 @@ func VerifyRecoveryState(ctx context.Context, stateDir string) error {
 		return errors.New("recovery secret document is not canonical")
 	}
 	for _, link := range declaration.Links {
-		if link.Password != nil {
+		if link.Password != nil && !link.Password.Unresolved {
 			if _, ok := secrets.Scopes["core"][link.Password.Secret]; !ok {
 				return errors.New("recovery configuration references a missing secret")
 			}

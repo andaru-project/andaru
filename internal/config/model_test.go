@@ -223,7 +223,7 @@ func TestCanonicalNetworkRoundTrip(t *testing.T) {
 	if e != nil || !bytes.Equal(a, b) {
 		t.Fatal("same network encoded differently")
 	}
-	if _, e := decodeDeclaration([]byte(`{"schemaVersion":2,"links":[],"segments":[],"zones":[]}`)); e == nil {
+	if _, e := decodeDeclaration([]byte(`{"schemaVersion":3,"links":[],"segments":[],"zones":[]}`)); e == nil {
 		t.Fatal("accepted future schema")
 	}
 }

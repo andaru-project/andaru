@@ -77,7 +77,7 @@ func (b *takeoverBench) handler() http.Handler {
 		return config.RealizationInput{SavedVersion: "9", Value: json.RawMessage(b.draftValue)}, nil
 	}
 	live := newLiveHandler(http.NotFoundHandler(), newTakeoverHandler(head, draft, read, b.state))
-	return newHandler(read.Links, newSavedHandler(nil, read.Links, read.Facts, nil, live))
+	return newHandler(read.Links, newSavedHandler(nil, read.Links, read.Facts, nil, live, nil))
 }
 
 // draftValue is what the store makes of the static proposal.

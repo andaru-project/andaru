@@ -44,7 +44,8 @@ type identity struct {
 	Description string `json:"description,omitempty"`
 }
 type secretReference struct {
-	Secret string `json:"secret"`
+	Secret     string `json:"secret"`
+	Unresolved bool   `json:"unresolved,omitempty"`
 }
 type link struct {
 	identity

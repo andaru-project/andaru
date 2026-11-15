@@ -37,7 +37,7 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 		}
 		return state, info, diagnostic("load-config-scan", e)
 	}
-	if number < 0 || schemaVersion != 1 || len(ch) != 32 || len(sh) != 32 || len(cb) > documentLimit {
+	if number < 0 || (schemaVersion != 1 && schemaVersion != 2) || len(ch) != 32 || len(sh) != 32 || len(cb) > documentLimit {
 		return state, info, diagnostic("load-config-metadata", nil)
 	}
 	hash := sha256.Sum256(cb)
@@ -47,6 +47,9 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 	d, e := decodeDeclaration(cb)
 	if e != nil {
 		return state, info, diagnostic("load-config-schema", e)
+	}
+	if d.SchemaVersion != schemaVersion {
+		return state, info, diagnostic("load-config-schema-mismatch", nil)
 	}
 	canonicalBody, e := canonical(d)
 	if e != nil || !bytes.Equal(canonicalBody, cb) {
@@ -94,7 +97,7 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 	}
 	state.secretBody = sb
 	for _, l := range d.Links {
-		if l.Password != nil {
+		if l.Password != nil && !l.Password.Unresolved {
 			if _, ok := state.Secrets.Scopes["core"][l.Password.Secret]; !ok {
 				return state, info, diagnostic("load-secret-missing-ref", nil)
 			}
@@ -370,6 +373,9 @@ func (s *Store) RealizationInput(ctx context.Context, version *Version) (result 
 		id = *version
 	}
 	err = s.read(ctx, id, nil, func(state savedState, _ VersionInfo) error {
+		if e := checkResolvedReferences(&state.Config); e != nil {
+			return e
+		}
 		view, e := publicSnapshot(state)
 		if e != nil {
 			return e

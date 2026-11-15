@@ -4,7 +4,7 @@ Andaru's root-local Go engine reports observed host interfaces and persists vali
 
 ## Build
 
-Use Go 1.27.3 on Linux with its default JSON v2 support. Dependencies are pinned in `go.mod`/`go.sum`: a pure-Go SQLite driver, a JSON Schema 2020-12 validator and Linux syscall helpers. Production binaries built with `CGO_ENABLED=0` need neither Go, a C library nor a JavaScript runtime on the appliance.
+Use Go 1.27.4 on Linux with its default JSON v2 support. Dependencies are pinned in `go.mod`/`go.sum`: a pure-Go SQLite driver, a JSON Schema 2020-12 validator and Linux syscall helpers. Production binaries built with `CGO_ENABLED=0` need neither Go, a C library nor a JavaScript runtime on the appliance.
 
 ```sh
 BUILD_DIR=$(mktemp -d)
@@ -209,6 +209,9 @@ The actual OpenAPI 3.1 document is embedded from [`internal/engine/openapi.json`
 | `GET/PUT/DELETE /api/v1/config/management`, `/api/v1/config/nat/outbound` | Single objects, `If-Match: "management.N"` / `"nat.outbound.N"`, `0` while unset |
 | `GET/POST /api/v1/config/dhcp`, `GET/PUT/DELETE /api/v1/config/dhcp/{id}` | DHCP servers, one per served segment |
 | `GET/PUT/DELETE /api/v1/config/dns` | The DNS service, `If-Match: "dns.N"`, `0` while unset |
+| `POST /api/v1/backups` | Portable ZIP without secrets, or passphrase-encrypted age archive when secrets are explicitly selected |
+| `POST /api/v1/restores/preview` | Validate an uploaded archive and report selected-store changes without saving |
+| `POST /api/v1/restores` | Replace selected saved stores using the preview's saved-head precondition; never apply networking |
 
 GET resources support HEAD without a body. Unsupported methods return `405 METHOD_NOT_ALLOWED` with the resource's `Allow` methods; unknown resources return `404 NOT_FOUND`. Missing/unverified/non-root peers get `403 FORBIDDEN` before routing/body processing. Inventory failures return `503 INVENTORY_UNAVAILABLE`, never an empty/partial success. Errors share `{"error":{"code":"...","message":"...","details":[]}}`; field details use safe request-relative JSON Pointers and conflicts may add redacted `error.current`. JSON responses are `no-store`; diagnostics never quote secret values.
 
@@ -288,8 +291,102 @@ clients allow 10 seconds, reads 5, responses 8 MiB.
 All history is retained in this slice; configurable 100-version pruning awaits
 live-generation protections. Failed publication can retain a root-only orphan
 secret document. `secure_delete` is enabled but does not erase retained history
-or promise forensic removal from WALs, snapshots, SSDs or backups. No secret
-export, encrypted backup, independent-store restore or migration service exists.
+or promise forensic removal from WALs, snapshots, SSDs or backups.
+
+## Portable backups and saved-state restore
+
+Portable backups use the running engine's validated logical configuration stores,
+not copies of SQLite files:
+
+```sh
+sudo andaru ctl backup create --output andaru.zip
+sudo andaru ctl backup create --output andaru-secrets.age --include-secrets
+sudo andaru ctl backup inspect --input andaru.zip
+sudo andaru ctl backup restore --input andaru.zip --stores configuration
+sudo andaru ctl backup restore --input andaru-secrets.age --stores configuration,configurationSecrets
+```
+
+Creation never overwrites an existing output path. The default ZIP contains the
+configuration declaration but no secret values. `--include-secrets` requires a
+passphrase entered twice on the controlling terminal and produces a
+passphrase-encrypted age file; the passphrase has no flag or environment-variable
+form. Inspecting an encrypted file prompts once. The archive input limit is
+16 MiB; decrypted ZIP data is limited to 12 MiB, its manifest to 64 KiB and
+each document to 4 MiB. Passphrases are at most 1024 bytes. Archives contain
+format/source metadata, payload sizes and SHA-256 digests, the saved version and
+the observed live/pending generation relationship. The `andaruVersion` source
+label is the running binary's embedded package build identity, not a later value
+read from dpkg metadata. Archives do not contain database history, WAL files,
+package binaries or a general filesystem backup.
+
+Restore accepts only an uploaded archive and an explicit selection of
+`configuration` and/or `configurationSecrets`. It validates every included
+document before selecting stores, prints a preview, then requires `RESTORE`
+typed exactly on the controlling terminal. The commit is compare-and-swap
+against the saved head returned by that preview; a concurrent save refuses it
+rather than retrying or overwriting the newer state. Restore records a new
+saved version but never writes generation files, reloads a service, changes
+firewall rules or applies networking.
+
+Configuration-only restore deliberately marks imported secret references
+unresolved, even when a destination secret has the same name. Explicitly bind
+the reference with an ordinary version-checked configuration replacement, or
+restore matching configuration and secrets together, before an apply can use
+it. Secrets-only restore keeps the destination declaration. Compatible schema-1
+documents remain schema 1 unless unresolved references require schema 2, the
+import is already schema 2, or the destination declaration is already schema 2.
+Supported older archive documents are validated and converted only when their
+configuration store is selected.
+
+These endpoints are an explicit root-console exception to the future
+application-user authorization model: only a kernel-verified UID 0 peer on the
+root-local Unix socket can use them. No web/IP backup endpoint, scheduled
+backup, passphrase recovery, automatic restore, automatic apply or network
+change is provided.
+
+An older engine cannot open a schema-2 saved head. Installing an older package
+does not revert state; downgrade with the matching package and cold state from
+the separate [upgrade recovery procedure](#manual-package-and-state-repair).
+Those root-only cold recovery sets are not portable archives, and portable
+archives are not package rollback sets.
+
+### Qualification evidence (2026-11-15)
+
+The candidate `0.4.0~rc3-4`
+(`sha256:6196998d10af804c9823a12fac5d490d2f9542d10f3e2f37cb78af349a213ec5`)
+passed the final scenario on Debian 13 netplan VM 114 and ifupdown VM 117.
+Detailed per-VM logs were captured during qualification. Both fixtures exercised
+plain and encrypted creation, independent age decryption,
+configuration-only unresolved references, explicit rebinding and secrets-only
+declaration preservation. Fixture saves advanced the saved head from 30 to 40;
+schema 2 survived an engine restart.
+
+Five default archives captured while five saves ran each matched the fixture
+zones in their recorded historical source version. Concurrent secret-bearing requests
+returned exactly one `200` and one `409`; the second request did not bypass single-operation admission.
+Holding the real generation lock produced `503` after 3.002 seconds, then `200`
+after release. Work-factor-18 encryption increased engine `VmHWM` by 261800 KiB
+on netplan and 263432 KiB on ifupdown; available RAM afterwards was 3280580 KiB
+and 3297288 KiB respectively on these 4 GiB guests. These measurements describe
+the qualified fixtures, not a universal memory limit.
+
+A normal explicit network apply and rollback was qualified separately. Backup
+and saved-only restore changed no live generation pointer, stateless firewall
+rules or network-service invocation ID; restarting the engine also left
+systemd-networkd's invocation unchanged. An initial VM 114 terminal-log failure
+had no retained per-command log, so it is not attributed retroactively. age
+1.2.1 prints its prompt before disabling terminal echo; the independent fixture
+now waits for age's echo-off state only. Andaru prompt replies remain immediate
+and all secrecy assertions remain enabled; the final scenario passed on both
+VMs.
+
+Stopped disk-only snapshots named
+`portable-backups-before-20261115` were taken before testing. Afterwards both
+VMs were restored to those snapshots, booted with a healthy rc3-2 engine and
+verified at saved version 30/schema 1 with `/root/andaru-portable-lab` absent.
+Both were then shut down; Proxmox reported them stopped, matching their initial
+state. This qualification does not establish physical power-loss behavior,
+arm64 hardware, NFS/SMB durability or a full cryptographic audit.
 
 ## Network preview
 
