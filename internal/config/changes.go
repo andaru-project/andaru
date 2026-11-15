@@ -702,8 +702,14 @@ func localLabel(s string) bool {
 	return true
 }
 func rewrite[T any](old []T, col string, writes map[objectKey][]byte, deleted map[objectKey]bool, created []objectKey, id func(T) string) ([]T, error) {
-	out := make([]T, 0, len(old)+len(created))
+	var out []T
+	if old != nil {
+		out = make([]T, 0, len(old)+len(created))
+	}
 	appendRaw := func(raw []byte) error {
+		if out == nil {
+			out = make([]T, 0, len(old)+len(created))
+		}
 		var v T
 		if e := json.Unmarshal(raw, &v); e != nil {
 			return fault("VALIDATION_FAILED", "", "Invalid typed object.")

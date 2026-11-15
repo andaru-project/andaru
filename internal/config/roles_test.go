@@ -73,6 +73,19 @@ func TestRoleViewsAndChanges(t *testing.T) {
 		t.Fatalf("legacy view did not synthesize immutable built-ins: %+v", snapshot)
 	}
 
+	ordinary, err := DecodeChanges([]byte(`{"operations":[{"op":"create","collection":"zones","localId":"zone","value":{"name":"Extra"}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ordinaryPrepared, err := prepareChanges(&state, ordinary, "1", fixedTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ordinaryPrepared.State.Config.SchemaVersion != 1 || ordinaryPrepared.Created["zone"] == "" {
+		t.Fatalf("ordinary operation changed schema compatibility: %+v", ordinaryPrepared)
+	}
+	state = ordinaryPrepared.State
+
 	change, err := DecodeChanges([]byte(`{"operations":[{"op":"create","collection":"roles","localId":"role","value":{"name":"Operator","description":"Saved role","capabilities":["status.read","configuration.write"]}}]}`))
 	if err != nil {
 		t.Fatal(err)
