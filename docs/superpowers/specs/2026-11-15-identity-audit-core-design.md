@@ -1,6 +1,6 @@
 # Identity, authorization and security-audit core
 
-Status: proposed design. This is prerequisite 1 of the approved [LAN-recoverable factory-reset design](https://github.com/andaru-project/andaru/pull/59). It does not implement the web UI, setup workflow, factory reset or general operational logging.
+Status: approved 2026-11-15. This is prerequisite 1 of the approved [LAN-recoverable factory-reset design](https://github.com/andaru-project/andaru/pull/59). It does not implement the web UI, setup workflow, factory reset or general operational logging.
 
 ## Intent
 
