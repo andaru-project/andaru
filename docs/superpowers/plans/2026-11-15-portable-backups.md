@@ -150,7 +150,7 @@ if bytes.Contains(view.Value, []byte("TEST_ONLY_OLD_VALUE")) { t.Fatal("secret e
 
 - [ ] **Step 2: Run RED.** `go test ./internal/config ./internal/render ./cmd/andaru -run 'Unresolved|MissingBoundSecret'`; build the root config binary with `go test -tags=integration -c -o /var/tmp/andaru-backup-config.test ./internal/config`, then run it from `/` with `-test.run 'Unresolved|MissingBoundSecret'`. Expected: missing field/support or assertion failure before implementation; every new test must be observed red for its intended behavior.
 
-- [ ] **Step 3: Implement schema/binding compatibility.** Add the flag to the model/schema/public view. Schema 1 rejects a true unresolved marker; schema 2 allows it. Preserve old stored documents exactly when reading; never convert a schema-1 document in memory before checking its original hash/canonical bytes. A normal edit introducing unresolved state promotes its resulting declaration to schema 2; existing v2 documents never downgrade implicitly. Restore in Task 2 always publishes schema 2. Existing `publishVersion` already records the declaration schema version; do not add a second version field or rewrite history.
+- [ ] **Step 3: Implement schema/binding compatibility.** Add the flag to the model/schema/public view. Schema 1 rejects a true unresolved marker; schema 2 allows it. Preserve old stored documents exactly when reading; never convert a schema-1 document in memory before checking its original hash/canonical bytes. A normal edit introducing unresolved state promotes its resulting declaration to schema 2; existing v2 documents never downgrade implicitly. Task 2 promotes imported configuration to schema 2 only when configuration is selected; secrets-only restoration preserves the destination declaration's canonical bytes and existing schema version, whether 1 or 2. Existing `publishVersion` already records the declaration schema version; do not add a second version field or rewrite history.
 
 Permit explicitly unresolved references only in v2. Keep all secret document/hash/version/ownership validation. Update load, view, recovery verification, ordinary edits, `Draft` and `RealizationInput` consistently. An unresolved view reports `isSet:false`, `unresolved:true`; it can expose existing named-key version metadata so an explicit edit can satisfy normal secret preconditions, but never its value. A later edit supplying/binding that key clears the flag only for the explicitly edited reference; changing the secret alone does not rebind other unresolved references. Preserve the flag when ordinary replacement omits password changes.
 
@@ -185,13 +185,33 @@ Use source and destination with the same secret key and distinct literal values.
 
 `TestSecretsOnlyMissingBoundKeyRefused` previews a secret document that omits a required bound key, asserts that key in `BlockingSecrets`, then asserts commit failure leaves both exported documents and saved version unchanged. Compatible secrets-only replacement preserves the canonical declaration bytes and leaves already unresolved references unresolved. Paired restore restores selected values with destination-local versions and no source counters.
 
+`TestSecretsOnlyPreservesDeclarationSchema` starts a schema-1 destination with `createZone("retained")` and restores a valid portable secret document without selecting configuration. Assert the original document is schema 1, the restore advances the saved version, and the exact configuration bytes remain unchanged:
+
+```go
+before, err := destination.Export(ctx, true)
+if err != nil { t.Fatal(err) }
+var declaration struct { SchemaVersion int `json:"schemaVersion"` }
+if err := json.Unmarshal(before.Configuration, &declaration); err != nil || declaration.SchemaVersion != 1 {
+    t.Fatal("fixture must begin with schema 1", err)
+}
+result, err := destination.Restore(ctx, "unix:uid:0", before.SavedVersion,
+    RestoreDocuments{ConfigurationSecrets: json.RawMessage(`{"schemaVersion":1,"secrets":{"core":{"RESTORED":{"kind":"password","value":"TEST_ONLY_RESTORED"}}}}`)})
+if err != nil || result.SavedVersion == before.SavedVersion { t.Fatal("secrets restore did not publish", err) }
+after, err := destination.Export(ctx, true)
+if err != nil || !bytes.Equal(after.Configuration, before.Configuration) {
+    t.Fatal("secrets-only restore changed declaration or schema", err)
+}
+```
+
+Close/reopen and repeat the byte/schema check, exercising agreement between the version-row metadata and the canonical document. Include an already-schema-2 destination case to prove secrets-only restoration preserves 2 rather than downgrading it.
+
 `TestRestoreRetainsIdentityAndHistory` restores a previously deleted object ID and an ordered list reduced to empty; assert one new saved version, stable IDs/list order, readable old history, no duplicate creation row and successful subsequent ordinary edits. Also cover a byte-identical restore creating exactly one new saved version and a replay with its old precondition failing.
 
 - [ ] **Step 2: Run RED.** `go test -tags=integration ./internal/config -run 'BackupExport|RestoreIndependent|SecretsOnly|RestoreRetains|RestoreReplay' -count=1` as root from a safe checkout or compiled binary from `/`. Expected: undefined interfaces or the specified state assertions fail before production changes.
 
 - [ ] **Step 3: Implement export/preview/publication.** `Export` captures one coherent saved pair using the existing serialized read; serialize the canonical declaration and separately selected portable secrets, not `SnapshotView` or referenced-only `RealizationInput`. Return owned immutable bytes. Validate strict JSON, supported schemas, topology, object count, secret names/kinds/value bounds and exact portable secret shape in `ValidateBackupDocuments` without consulting live secret values.
 
-Add a pure restoration preparer in `restore_linux.go` that computes the candidate, counts, unresolved/blocking keys and `preparedChange`; use it for preview and commit. Nil fields mean unselected; nil/nil is not a mutation. Configuration-only sets every imported reference unresolved and preserves the complete destination secret document. Paired restore binds only material supplied by the selected secret document, preserving any explicit unresolved flags. Secrets-only follows the approved refusal rule and never clears unresolved flags.
+Add a pure restoration preparer in `restore_linux.go` that computes the candidate, counts, unresolved/blocking keys and `preparedChange`; use it for preview and commit. Nil fields mean unselected; nil/nil is not a mutation. When configuration is selected, publish its validated imported declaration as schema 2. Configuration-only sets every imported reference unresolved and preserves the complete destination secret document. Paired restore binds only material supplied by the selected secret document, preserving any explicit unresolved flags. Secrets-only follows the approved refusal rule, never clears unresolved flags and never changes the destination declaration's canonical bytes or existing schema version.
 
 Preview reads the current head, but only commit allocates versions. Commit requires a valid nonempty expected saved version and checks it inside `BEGIN IMMEDIATE` under `s.acquire`, before preparing the mutation. Reuse/factor the existing transaction initialization and `pendingSave.publish` ordering; do not implement a second database publication protocol. Rebase selected secrets to local versions/timestamps, mark linked-object versions consistently, and insert correct list/singleton/tombstone history. Request metadata for imported IDs including previously deleted ones: `Created` is true only for a never-before-created ID. Never regenerate IDs or silently merge.
 
@@ -326,7 +346,7 @@ For the independent old-package proof, create a task-owned detached linked workt
 
 - [ ] **Step 2: Wire package proof and docs.** The disposable package test can install independent age/PTY fixture tools inside its test container, not the developer host. Use only literal public fixture secrets. Check default ZIP is secret-free, encrypted interoperability, config-only unresolved behavior, deliberate repair and normal separate preview/apply where safely qualified. Update CLI help/OpenAPI/user guide/changelog with exact commands, scope limits, root authorization exception, stored-vs-live semantics and no auto-apply/auto-network-change promise.
 
-Compatibility notes must state: v1 documents/archives are supported through explicit validated conversion; a v2 saved head cannot be used by an older engine; installing old software alone does not revert its state; use the matching cold state/package recovery set when downgrading. No database backups masquerade as portable archives.
+Compatibility notes must state: supported older documents/archives undergo validated conversion when their configuration is selected; secrets-only restoration preserves the destination declaration and its existing schema 1 or 2. A v2 saved head cannot be used by an older engine; installing old software alone does not revert its state; use the matching cold state/package recovery set when downgrading. No database backups masquerade as portable archives.
 
 - [ ] **Step 3: Run the single final broad gate.** `go vet -tags=integration ./...`; `go test -race ./...`; `GOARCH=arm64 go build -o /dev/null ./cmd/andaru`; shellcheck/actionlint/shellspec for affected existing gates; native root config/engine/generation/CLI/upgrade integration binaries from `/` with TMPDIR unset; existing privileged render/Kea/networkd checks in their qualified container; Debian any/all builds/lintian; installed-package proof in both orders. Preserve output logs, diagnose failures once and fix causes, never weaken tests/limits. Expected: all pass and no host package installation/network change.
 
