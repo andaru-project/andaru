@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	LayoutVersion       = 2
+	LayoutVersion       = 1
 	MaxAccounts         = 10_000
 	MaxRoleAssignments  = 10_002
 	MaxLoginLimitRows   = 10_000

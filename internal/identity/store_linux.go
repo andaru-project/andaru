@@ -6,10 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"github.com/andaru-project/andaru/internal/authz"
-	"github.com/andaru-project/andaru/internal/securefs"
-	"github.com/google/uuid"
-	"golang.org/x/sys/unix"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,6 +15,11 @@ import (
 	"syscall"
 	"time"
 	"unicode/utf8"
+
+	"github.com/andaru-project/andaru/internal/authz"
+	"github.com/andaru-project/andaru/internal/securefs"
+	"github.com/google/uuid"
+	"golang.org/x/sys/unix"
 )
 
 type store struct {
@@ -26,110 +28,63 @@ type store struct {
 }
 
 func Open(ctx context.Context, stateDir string) (*store, error) {
-	if os.Geteuid() != 0 || !filepath.IsAbs(stateDir) || filepath.Clean(stateDir) != stateDir {
-		return nil, errors.New("identity store requires root and canonical absolute state directory")
+	if os.Geteuid()!=0 || !filepath.IsAbs(stateDir) || filepath.Clean(stateDir)!=stateDir { return nil,errors.New("identity store requires root and canonical absolute state directory") }
+	if err:=securefs.CheckAncestors(filepath.Dir(stateDir));err!=nil{return nil,err}
+	if err:=os.Mkdir(stateDir,0700);err!=nil&&!os.IsExist(err){return nil,err}
+	if err:=privateDirectory(stateDir);err!=nil{return nil,err}
+	path:=filepath.Join(stateDir,"identity.db")
+	_,err:=os.Lstat(path)
+	if err!=nil&&!os.IsNotExist(err){return nil,err}
+	fresh:=os.IsNotExist(err)
+	if fresh {
+		fd,e:=unix.Open(path,unix.O_CREAT|unix.O_EXCL|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW,0600)
+		if e!=nil{return nil,e}
+		unix.Close(fd)
 	}
-	if err := securefs.CheckAncestors(filepath.Dir(stateDir)); err != nil {
-		return nil, err
-	}
-	if err := os.Mkdir(stateDir, 0700); err != nil && !os.IsExist(err) {
-		return nil, err
-	}
-	if err := privateDirectory(stateDir); err != nil {
-		return nil, err
-	}
-	path := filepath.Join(stateDir, "identity.db")
-	fd, err := unix.Open(path, unix.O_CREAT|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0600)
-	if err != nil {
-		return nil, err
-	}
-	f := os.NewFile(uintptr(fd), path)
-	info, err := f.Stat()
-	f.Close()
-	if err != nil || !privateFile(info) {
-		return nil, errors.New("unsafe identity database")
-	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(2000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)&_pragma=secure_delete(1)")
-	if err != nil {
-		return nil, err
-	}
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-	fail := func(e error) (*store, error) { db.Close(); return nil, e }
-	if err = db.PingContext(ctx); err != nil {
-		return fail(err)
-	}
-	var app, version int
-	if err = db.QueryRowContext(ctx, "PRAGMA application_id").Scan(&app); err != nil {
-		return fail(err)
-	}
-	if err = db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
-		return fail(err)
-	}
-	if app != 0 && app != applicationID {
-		return fail(errors.New("wrong identity application id"))
-	}
-	if version > LayoutVersion {
-		return fail(fmt.Errorf("identity layout %d is newer than supported %d", version, LayoutVersion))
-	}
-	if version == 0 {
+	if err=checkPrivateDBFiles(path);err!=nil{return nil,err}
+	ctx,cancel:=context.WithTimeout(ctx,5*time.Second);defer cancel()
+	q:=url.Values{"mode":{"rw"},"_pragma":{"busy_timeout(2000)","foreign_keys(1)","journal_mode(WAL)","synchronous(FULL)","secure_delete(1)"}}
+	uri:=(&url.URL{Scheme:"file",Path:path,RawQuery:q.Encode()}).String()
+	db,err:=sql.Open("sqlite",uri);if err!=nil{return nil,err}
+	db.SetMaxOpenConns(1);db.SetMaxIdleConns(1)
+	fail:=func(e error)(*store,error){db.Close();return nil,e}
+	if err=db.PingContext(ctx);err!=nil{return fail(err)}
+	if err=checkPrivateDBFiles(path);err!=nil{return fail(err)}
+	var app,version int
+	if err=db.QueryRowContext(ctx,"PRAGMA application_id").Scan(&app);err!=nil{return fail(err)}
+	if err = db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil { return fail(err) }
+	if fresh {
+		if app != 0 || version != 0 { return fail(errors.New("fresh identity database has invalid identifiers")) }
 		tx, e := db.BeginTx(ctx, nil)
-		if e != nil {
-			return fail(e)
-		}
-		if _, e = tx.ExecContext(ctx, schema); e == nil {
-			_, e = tx.ExecContext(ctx, fmt.Sprintf("PRAGMA application_id=%d", applicationID))
-		}
-		if e == nil {
-			_, e = tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", LayoutVersion))
-		}
-		if e != nil {
-			tx.Rollback()
-			return fail(e)
-		}
-		if e = tx.Commit(); e != nil {
-			return fail(e)
-		}
-	} else if version == 1 {
-		if app != applicationID {
-			return fail(errors.New("identity database application id missing during migration"))
-		}
-		tx, e := db.BeginTx(ctx, nil)
-		if e != nil {
-			return fail(e)
-		}
-		if _, e = tx.ExecContext(ctx, migrationV1ToV2); e == nil {
-			_, e = tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", LayoutVersion))
-		}
-		if e != nil {
-			tx.Rollback()
-			return fail(e)
-		}
-		if e = tx.Commit(); e != nil {
-			return fail(e)
-		}
-	}
-	var journal string
-	var syncMode, foreign, secure int
-	if err = db.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journal); err != nil {
-		return fail(err)
-	}
-	if err = db.QueryRowContext(ctx, "PRAGMA synchronous").Scan(&syncMode); err != nil {
-		return fail(err)
-	}
-	if err = db.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&foreign); err != nil {
-		return fail(err)
-	}
-	if err = db.QueryRowContext(ctx, "PRAGMA secure_delete").Scan(&secure); err != nil {
-		return fail(err)
-	}
-	key, err := loadLimiterKey(ctx, db, version < LayoutVersion)
-	if err != nil {
-		return fail(err)
-	}
-	return &store{db: db, limiterKey: key}, nil
+		if e != nil { return fail(e) }
+		_, e = tx.ExecContext(ctx, schema)
+		if e == nil { _, e = tx.ExecContext(ctx, fmt.Sprintf("PRAGMA application_id=%d", applicationID)) }
+		if e == nil { _, e = tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", LayoutVersion)) }
+		if e != nil { tx.Rollback(); return fail(e) }
+		if e = tx.Commit(); e != nil { return fail(e) }
+	} else if app != applicationID || version != LayoutVersion { return fail(errors.New("identity database application or layout mismatch")) }
+	if err=verifySchema(ctx,db);err!=nil{return fail(err)}
+	if err=verifyPragmas(ctx,db);err!=nil{return fail(err)}
+	key,err:=loadLimiterKey(ctx,db,false);if err!=nil{return fail(err)}
+	if err=checkPrivateDBFiles(path);err!=nil{return fail(err)}
+	return &store{db:db,limiterKey:key},nil
+}
+
+func checkPrivateDBFiles(path string) error {
+	for _,suffix:=range []string{"","-wal","-shm"} {p:=path+suffix;st,err:=os.Lstat(p);if os.IsNotExist(err)&&suffix!=""{continue};if err!=nil{return err};if !privateFile(st){return fmt.Errorf("unsafe identity database file %s",filepath.Base(p))}}
+	return nil
+}
+func verifyPragmas(ctx context.Context,db *sql.DB) error {
+	var journal string;var syncMode,foreign,secure int
+	if err:=db.QueryRowContext(ctx,"PRAGMA journal_mode").Scan(&journal);err!=nil{return err}
+	if err:=db.QueryRowContext(ctx,"PRAGMA synchronous").Scan(&syncMode);err!=nil{return err}
+	if err:=db.QueryRowContext(ctx,"PRAGMA foreign_keys").Scan(&foreign);err!=nil{return err}
+	if err:=db.QueryRowContext(ctx,"PRAGMA secure_delete").Scan(&secure);err!=nil{return err}
+	if journal!="wal"||syncMode!=2||foreign!=1||secure!=1{return errors.New("identity SQLite pragmas mismatch")};return nil
+}
+func verifySchema(ctx context.Context,db *sql.DB) error {
+	for _,name:=range []string{"accounts","tombstones","account_roles","password_credentials","api_tokens","sessions","login_limits","source_limits","limiter_key","limiter_overload","metadata","revisions","operations"} {var n int;if err:=db.QueryRowContext(ctx,"SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?",name).Scan(&n);err!=nil{return err};if n!=1{return fmt.Errorf("identity schema missing table %s",name)}}
+	var count int;if err:=db.QueryRowContext(ctx,"SELECT count(*) FROM limiter_key WHERE id=1 AND length(secret)=32").Scan(&count);err!=nil{return err};if count!=1{return errors.New("identity limiter key missing or invalid")};return nil
 }
 
 func (s *store) Close() error { return s.db.Close() }

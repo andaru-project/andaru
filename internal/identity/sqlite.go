@@ -109,53 +109,10 @@ CREATE TABLE operations (
  revision INTEGER NOT NULL REFERENCES revisions(revision),
  created_at INTEGER NOT NULL
 ) STRICT;
-INSERT INTO metadata(key,value) VALUES('revision',0);
 INSERT INTO revisions(revision,created_at) VALUES(0,unixepoch());
-`
-
-const migrationV1ToV2 = `
-ALTER TABLE api_tokens ADD COLUMN password_epoch INTEGER NOT NULL DEFAULT 0 CHECK(password_epoch>=0);
-ALTER TABLE api_tokens ADD COLUMN revision INTEGER NOT NULL DEFAULT 0 CHECK(revision>=0);
-UPDATE api_tokens SET password_epoch=COALESCE((SELECT value FROM metadata WHERE key='password_epoch:'||api_tokens.account_id),0);
-UPDATE api_tokens SET revision=COALESCE((SELECT value FROM metadata WHERE key='revision'),0);
-CREATE INDEX api_tokens_account_created ON api_tokens(account_id,created_at);
-ALTER TABLE login_limits ADD COLUMN backoff_level INTEGER NOT NULL DEFAULT 0 CHECK(backoff_level BETWEEN 0 AND 10);
-ALTER TABLE login_limits ADD COLUMN backoff_until INTEGER NOT NULL DEFAULT 0;
-CREATE TABLE source_limits (
- bucket_hash BLOB PRIMARY KEY CHECK(length(bucket_hash)=32),
- bucket_kind TEXT NOT NULL CHECK(bucket_kind IN ('exact','ipv6_64')),
- failures INTEGER NOT NULL CHECK(failures BETWEEN 0 AND 5),
- window_started_at INTEGER NOT NULL,
- backoff_level INTEGER NOT NULL CHECK(backoff_level BETWEEN 0 AND 10),
- backoff_until INTEGER NOT NULL,
- last_seen_at INTEGER NOT NULL,
- expires_at INTEGER NOT NULL
-) STRICT;
-CREATE TABLE limiter_key (
- id INTEGER PRIMARY KEY CHECK(id=1),
- secret BLOB NOT NULL CHECK(length(secret)=32)
-) STRICT;
-CREATE TABLE limiter_overload (
- id INTEGER PRIMARY KEY CHECK(id=1),
- login_saturated INTEGER NOT NULL CHECK(login_saturated IN (0,1)),
- source_saturated INTEGER NOT NULL CHECK(source_saturated IN (0,1))
-) STRICT;
-INSERT INTO limiter_overload(id,login_saturated,source_saturated) VALUES(1,0,0);
 INSERT INTO metadata(key,value) SELECT 'account_epoch:'||id,0 FROM accounts;
-DROP INDEX sessions_account;
-DROP TABLE sessions;
-CREATE TABLE sessions (
- session_selector BLOB PRIMARY KEY CHECK(length(session_selector)=32),
- session_hash BLOB NOT NULL UNIQUE CHECK(length(session_hash)=32),
- csrf_selector BLOB NOT NULL UNIQUE CHECK(length(csrf_selector)=32),
- csrf_hash BLOB NOT NULL CHECK(length(csrf_hash)=32),
- account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
- auth_epoch INTEGER NOT NULL CHECK(auth_epoch>=0),
- account_epoch INTEGER NOT NULL CHECK(account_epoch>=0),
- password_epoch INTEGER NOT NULL CHECK(password_epoch>=0),
- created_at INTEGER NOT NULL,
- last_seen_at INTEGER NOT NULL,
- expires_at INTEGER NOT NULL
-) STRICT;
-CREATE INDEX sessions_account ON sessions(account_id,created_at);
+CREATE TABLE limiter_key (id INTEGER PRIMARY KEY CHECK(id=1), secret BLOB NOT NULL CHECK(length(secret)=32)) STRICT;
+CREATE TABLE limiter_overload (id INTEGER PRIMARY KEY CHECK(id=1), login_saturated INTEGER NOT NULL CHECK(login_saturated IN (0,1)), source_saturated INTEGER NOT NULL CHECK(source_saturated IN (0,1))) STRICT;
+INSERT INTO limiter_overload(id,login_saturated,source_saturated) VALUES(1,0,0);
+INSERT INTO limiter_key(id,secret) VALUES(1,randomblob(32));
 `
