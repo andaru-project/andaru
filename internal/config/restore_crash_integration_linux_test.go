@@ -27,7 +27,7 @@ func TestRestoreCrashHelper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, _, err := s.prepareRestore(ctx, "unix:uid:0", "1", decoded)
+	p, _, err := s.prepareRestore(ctx, systemRootActor, "1", decoded)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestRestoreCrashPublicationPair(t *testing.T) {
 			ctx := context.Background()
 			root := ownedDir(t)
 			s := openTestStore(t, root)
-			if _, err := s.Save(ctx, "unix:uid:0", createZone("original")); err != nil {
+			if _, err := s.Save(ctx, systemRootActor, createZone("original")); err != nil {
 				t.Fatal(err)
 			}
 			before, err := s.Export(ctx, true)

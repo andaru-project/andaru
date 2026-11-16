@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -247,8 +246,12 @@ func (h *backupHandler) restore(w http.ResponseWriter, r *http.Request, preview 
 		})
 		return
 	}
-	peer, _ := r.Context().Value(peerKey{}).(peerIdentity)
-	result, err := h.store.Restore(r.Context(), fmt.Sprintf("unix:uid:%d", peer.uid), config.Version(options.ExpectedSavedVersion), input)
+	actor, ok := actorFromRequest(r)
+	if !ok {
+		writeError(w, r, http.StatusForbidden, "FORBIDDEN", "A verified actor is required.")
+		return
+	}
+	result, err := h.store.Restore(r.Context(), actor.Actor, config.Version(options.ExpectedSavedVersion), input)
 	if err != nil {
 		writeConfigurationError(w, r, err)
 		return

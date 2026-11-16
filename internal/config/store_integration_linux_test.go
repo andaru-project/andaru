@@ -91,14 +91,14 @@ func TestStorePreparationCancellation(t *testing.T) {
 	s := openTestStore(t, ownedDir(t))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := s.Save(ctx, "unix:uid:0", createZone("cancelled")); err == nil {
+	if _, err := s.Save(ctx, systemRootActor, createZone("cancelled")); err == nil {
 		t.Fatal("cancelled preparation published")
 	}
 	head, err := s.Snapshot(context.Background())
 	if err != nil || head.SavedVersion != "0" || s.fenced.Load() {
 		t.Fatalf("cancelled preparation changed state or fenced: %v %+v", err, head)
 	}
-	if result, err := s.Save(context.Background(), "unix:uid:0", createZone("healthy")); err != nil || result.SavedVersion != "1" {
+	if result, err := s.Save(context.Background(), systemRootActor, createZone("healthy")); err != nil || result.SavedVersion != "1" {
 		t.Fatalf("cancelled preparation poisoned next save: %v %+v", err, result)
 	}
 }
@@ -107,7 +107,7 @@ func TestStorePublicationOutlivesRequest(t *testing.T) {
 	s := openTestStore(t, ownedDir(t))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	p, err := s.prepareSave(ctx, "unix:uid:0", networkInput(t))
+	p, err := s.prepareSave(ctx, systemRootActor, networkInput(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestInitializationInterruptedMarker(t *testing.T) {
 
 func TestCollectionReadsOneSavedVersion(t *testing.T) {
 	s := openTestStore(t, ownedDir(t))
-	initial, err := s.Save(context.Background(), "unix:uid:0", Changes{Operations: []Operation{
+	initial, err := s.Save(context.Background(), systemRootActor, Changes{Operations: []Operation{
 		{Op: "create", Collection: "zones", LocalID: "a", Value: json.RawMessage(`{"name":"a-0"}`)},
 		{Op: "create", Collection: "zones", LocalID: "b", Value: json.RawMessage(`{"name":"b-0"}`)},
 	}})
@@ -173,7 +173,7 @@ func TestCollectionReadsOneSavedVersion(t *testing.T) {
 		<-start
 		version := initial.SavedVersion
 		for i := 1; i <= 20; i++ {
-			result, err := s.Save(context.Background(), "unix:uid:0", Changes{Operations: []Operation{
+			result, err := s.Save(context.Background(), systemRootActor, Changes{Operations: []Operation{
 				{Op: "replace", Collection: "zones", ID: initial.Created["a"], ExpectedVersion: &version, Value: json.RawMessage(fmt.Sprintf(`{"name":"a-%d"}`, i))},
 				{Op: "replace", Collection: "zones", ID: initial.Created["b"], ExpectedVersion: &version, Value: json.RawMessage(fmt.Sprintf(`{"name":"b-%d"}`, i))},
 			}})
@@ -432,7 +432,7 @@ func TestStoreInitializationAndPaths(t *testing.T) {
 
 func TestStorePublicationAndConcurrency(t *testing.T) {
 	s := openTestStore(t, ownedDir(t))
-	r, e := s.Save(context.Background(), "unix:uid:0", networkInput(t))
+	r, e := s.Save(context.Background(), systemRootActor, networkInput(t))
 	if e != nil || r.SavedVersion != "1" {
 		t.Fatalf("initial network save: %v", e)
 	}
@@ -442,7 +442,7 @@ func TestStorePublicationAndConcurrency(t *testing.T) {
 		t.Fatalf("saved object: %v %s", e, got.Value)
 	}
 	h, e := s.History(context.Background(), nil, 1)
-	if e != nil || len(h.Items) != 1 || h.Items[0].Actor != "unix:uid:0" || h.NextBefore == nil {
+	if e != nil || len(h.Items) != 1 || h.Items[0].Actor != "system.root" || h.NextBefore == nil {
 		t.Fatalf("history: %v %+v", e, h)
 	}
 	snapshot, e := s.Version(context.Background(), "1")
@@ -450,7 +450,7 @@ func TestStorePublicationAndConcurrency(t *testing.T) {
 		t.Fatal("history exposed password")
 	}
 	t.Run("reversed publication", func(t *testing.T) {
-		p, e := s.prepareSave(context.Background(), "unix:uid:0", createZone("reverse"))
+		p, e := s.prepareSave(context.Background(), systemRootActor, createZone("reverse"))
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -469,7 +469,7 @@ func TestStorePublicationAndConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	shared, err := s.Save(context.Background(), "unix:uid:0", share)
+	shared, err := s.Save(context.Background(), systemRootActor, share)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -484,7 +484,7 @@ func TestStorePublicationAndConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	updated, err := s.Save(context.Background(), "unix:uid:0", change)
+	updated, err := s.Save(context.Background(), systemRootActor, change)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -520,7 +520,7 @@ func TestStorePublicationAndConcurrency(t *testing.T) {
 			version := Version("1")
 			c, err := ObjectChange("replace", "zones", target, &version, []byte(fmt.Sprintf(`{"name":"independent-%d"}`, i)))
 			if err == nil {
-				_, err = s.Save(context.Background(), "unix:uid:0", c)
+				_, err = s.Save(context.Background(), systemRootActor, c)
 			}
 			errs <- err
 		}(i, target)
@@ -532,7 +532,7 @@ func TestStorePublicationAndConcurrency(t *testing.T) {
 			t.Fatalf("independent edit lost: %v", err)
 		}
 	}
-	r, e = s.Save(context.Background(), "unix:uid:0", createZone("race"))
+	r, e = s.Save(context.Background(), systemRootActor, createZone("race"))
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -553,7 +553,7 @@ func TestStorePublicationAndConcurrency(t *testing.T) {
 			<-start
 			c, e := ObjectChange("replace", "zones", zoneID, &v, []byte(`{"name":"`+name+`"}`))
 			if e == nil {
-				_, e = s.Save(context.Background(), "unix:uid:0", c)
+				_, e = s.Save(context.Background(), systemRootActor, c)
 			}
 			results <- e
 		}(name)
@@ -652,7 +652,7 @@ func protocolChild(path, phase string) error {
 	if e != nil {
 		return e
 	}
-	p, e := s.prepareSave(ctx, "unix:uid:0", c)
+	p, e := s.prepareSave(ctx, systemRootActor, c)
 	if e != nil {
 		return e
 	}
@@ -753,7 +753,7 @@ func enospPhase(phase string) error {
 	if e != nil {
 		return e
 	}
-	p, e := s.prepareSave(context.Background(), "unix:uid:0", c)
+	p, e := s.prepareSave(context.Background(), systemRootActor, c)
 	if e != nil {
 		return e
 	}
@@ -806,7 +806,7 @@ func enospPhase(phase string) error {
 	if _, e = s.Snapshot(context.Background()); e == nil {
 		return fmt.Errorf("fenced reads succeeded")
 	}
-	if _, e = s.Save(context.Background(), "unix:uid:0", createZone("blocked")); e == nil {
+	if _, e = s.Save(context.Background(), systemRootActor, createZone("blocked")); e == nil {
 		return fmt.Errorf("fenced writes succeeded")
 	}
 	os.Remove(filler)
@@ -829,7 +829,7 @@ func enospPhase(phase string) error {
 func TestStoreRealizationInput(t *testing.T) {
 	s := openTestStore(t, ownedDir(t))
 	ctx := context.Background()
-	r, err := s.Save(ctx, "unix:uid:0", networkInput(t))
+	r, err := s.Save(ctx, systemRootActor, networkInput(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -848,7 +848,7 @@ func TestStoreRealizationInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Save(ctx, "unix:uid:0", change); err != nil {
+	if _, err = s.Save(ctx, systemRootActor, change); err != nil {
 		t.Fatal(err)
 	}
 	head, err := s.RealizationInput(ctx, nil)
@@ -877,7 +877,7 @@ func TestFilterObjectsPersist(t *testing.T) {
 	path := ownedDir(t)
 	ctx := context.Background()
 	s := openTestStore(t, path)
-	if _, e := s.Save(ctx, "unix:uid:0", networkInput(t)); e != nil {
+	if _, e = s.Save(ctx, systemRootActor, networkInput(t)); e != nil {
 		t.Fatal(e)
 	}
 	s.Close()
@@ -892,7 +892,7 @@ func TestFilterObjectsPersist(t *testing.T) {
 
 	s = openTestStore(t, path)
 	zero := Version("0")
-	if _, e = s.Save(ctx, "unix:uid:0", Changes{Operations: []Operation{
+	if _, e = s.Save(ctx, systemRootActor, Changes{Operations: []Operation{
 		{Op: "create", Collection: "policy.forward", LocalID: "a", Value: json.RawMessage(`{"name":"a","enabled":true,"action":"accept","from":[],"to":[],"services":[],"log":false}`)},
 		{Op: "create", Collection: "policy.forward", LocalID: "b", Value: json.RawMessage(`{"name":"b","enabled":true,"action":"drop","from":[],"to":[],"services":[],"log":false}`)},
 		{Op: "replace", Collection: "nat.outbound", ExpectedVersion: &zero, Value: json.RawMessage(`{"mode":"automatic"}`)},
@@ -926,7 +926,7 @@ func TestServiceChangesTableAdded(t *testing.T) {
 	path := ownedDir(t)
 	ctx := context.Background()
 	s := openTestStore(t, path)
-	if _, e := s.Save(ctx, "unix:uid:0", networkInput(t)); e != nil {
+	if _, e = s.Save(ctx, systemRootActor, networkInput(t)); e != nil {
 		t.Fatal(e)
 	}
 	s.Close()
@@ -948,7 +948,7 @@ func TestServiceChangesTableAdded(t *testing.T) {
 	// Segment IDs are random, so their order is too: pick the static one.
 	lan := d.Segments[slices.IndexFunc(d.Segments, func(s segment) bool { return s.Addressing.IPv4.Mode == "static" })].ID
 	zero := Version("0")
-	if _, e = s.Save(ctx, "unix:uid:0", Changes{Operations: []Operation{
+	if _, e = s.Save(ctx, systemRootActor, Changes{Operations: []Operation{
 		{Op: "replace", Collection: "dns", ExpectedVersion: &zero, Value: json.RawMessage(`{"mode":"recursive","segments":["` + lan + `"]}`)},
 	}}); e != nil {
 		raw, _ := json.Marshal(e)
@@ -964,7 +964,7 @@ func TestNATListsPersist(t *testing.T) {
 	path := ownedDir(t)
 	ctx := context.Background()
 	s := openTestStore(t, path)
-	if _, e := s.Save(ctx, "unix:uid:0", networkInput(t)); e != nil {
+	if _, e = s.Save(ctx, systemRootActor, networkInput(t)); e != nil {
 		t.Fatal(e)
 	}
 	s.Close()
@@ -984,7 +984,7 @@ func TestNATListsPersist(t *testing.T) {
 	}
 	var z zone
 	_ = json.Unmarshal(zones.Items[0].Value, &z)
-	if _, e = s.Save(ctx, "unix:uid:0", Changes{Operations: []Operation{
+	if _, e = s.Save(ctx, systemRootActor, Changes{Operations: []Operation{
 		{Op: "create", Collection: "nat.portForwards", LocalID: "a", Value: json.RawMessage(forwardValue("a", "8080", z.ID))},
 	}}); e != nil {
 		t.Fatalf("save after the table was added: %v", e)
@@ -1010,7 +1010,7 @@ func TestStoreWithoutDHCPv6TableOpens(t *testing.T) {
 	path := ownedDir(t)
 	ctx := context.Background()
 	s := openTestStore(t, path)
-	if _, e := s.Save(ctx, "unix:uid:0", networkInput(t)); e != nil {
+	if _, e = s.Save(ctx, systemRootActor, networkInput(t)); e != nil {
 		t.Fatal(e)
 	}
 	s.Close()
@@ -1044,7 +1044,7 @@ func TestStoreWithoutDHCPv6TableOpens(t *testing.T) {
 			v = item.Version
 		}
 	}
-	if _, e = s.Save(ctx, "unix:uid:0", Changes{Operations: []Operation{
+	if _, e = s.Save(ctx, systemRootActor, Changes{Operations: []Operation{
 		{Op: "replace", Collection: "segments", ID: seg.ID, ExpectedVersion: &v, Value: value},
 		{Op: "create", Collection: "dhcp6", LocalID: "d", Value: json.RawMessage(`{"name":"lan6","segment":"` + seg.ID + `"}`)},
 	}}); e != nil {
@@ -1061,7 +1061,7 @@ func TestStoreWithoutVIPTableOpens(t *testing.T) {
 	path := ownedDir(t)
 	ctx := context.Background()
 	s := openTestStore(t, path)
-	if _, e := s.Save(ctx, "unix:uid:0", networkInput(t)); e != nil {
+	if _, e = s.Save(ctx, systemRootActor, networkInput(t)); e != nil {
 		t.Fatal(e)
 	}
 	s.Close()
@@ -1074,7 +1074,7 @@ func TestStoreWithoutVIPTableOpens(t *testing.T) {
 	}
 	db.Close()
 	s = openTestStore(t, path)
-	if _, e = s.Save(ctx, "unix:uid:0", Changes{Operations: []Operation{
+	if _, e = s.Save(ctx, systemRootActor, Changes{Operations: []Operation{
 		{Op: "create", Collection: "virtualAddresses", LocalID: "v", Value: json.RawMessage(`{"name":"dns4","address":"172.16.53.53"}`)},
 	}}); e != nil {
 		t.Fatal(e)
@@ -1088,7 +1088,7 @@ func TestStoreWithoutVIPTableOpens(t *testing.T) {
 func TestVersionListsVirtualAddressChanges(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t, ownedDir(t))
-	saved, e := s.Save(ctx, "unix:uid:0", Changes{Operations: []Operation{
+	saved, e := s.Save(ctx, systemRootActor, Changes{Operations: []Operation{
 		{Op: "create", Collection: "virtualAddresses", LocalID: "v", Value: json.RawMessage(`{"name":"dns4","address":"172.16.53.53"}`)},
 	}})
 	if e != nil {

@@ -22,6 +22,8 @@ import (
 
 const markerText = "ANDARU_CONFIGURATION_V1\n"
 
+var systemRootActor = authz.Actor{Kind: authz.ActorSystem, ID: "root"}
+
 type Store struct {
 	root               string
 	configDB, secretDB *sql.DB
@@ -302,22 +304,23 @@ type pendingSave struct {
 	head Version
 }
 
-func (s *Store) startSave(ctx context.Context, actor string, requested []objectKey) (*pendingSave, savedState, Version, error) {
+func (s *Store) startSave(ctx context.Context, actor authz.Actor, requested []objectKey) (*pendingSave, savedState, Version, error) {
 	var empty savedState
+	actorLabel, e := actor.CanonicalLabel()
+	if e != nil {
+		return nil, empty, "", fault("INVALID_REQUEST", "", "Invalid verified actor.")
+	}
 	release, e := s.acquire(ctx)
 	if e != nil {
 		return nil, empty, "", e
 	}
-	p := &pendingSave{s: s, release: release, actor: actor, deadline: time.Now().Add(2 * time.Second)}
+	p := &pendingSave{s: s, release: release, actor: actorLabel, deadline: time.Now().Add(2 * time.Second)}
 	success := false
 	defer func() {
 		if !success {
 			p.Close()
 		}
 	}()
-	if !strings.HasPrefix(actor, "unix:uid:") || len(actor) > 64 {
-		return nil, empty, "", fault("INVALID_REQUEST", "", "Invalid verified actor.")
-	}
 	p.conn, e = s.configDB.Conn(ctx)
 	if e != nil {
 		return nil, empty, "", unavailable()
@@ -343,7 +346,7 @@ func (s *Store) startSave(ctx context.Context, actor string, requested []objectK
 	return p, current, Version(fmt.Sprint(n + 1)), nil
 }
 
-func (s *Store) prepareSave(ctx context.Context, actor string, input Changes) (*pendingSave, error) {
+func (s *Store) prepareSave(ctx context.Context, actor authz.Actor, input Changes) (*pendingSave, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	requested := make([]objectKey, 0, len(input.Operations))
@@ -448,7 +451,7 @@ func (p *pendingSave) Close() error {
 	}
 	return result
 }
-func (s *Store) Save(ctx context.Context, actor string, input Changes) (result SaveResult, err error) {
+func (s *Store) Save(ctx context.Context, actor authz.Actor, input Changes) (result SaveResult, err error) {
 	p, e := s.prepareSave(ctx, actor, input)
 	if e != nil {
 		return result, e
@@ -484,7 +487,7 @@ func (s *Store) Draft(ctx context.Context, input Changes) (RealizationInput, err
 			return RealizationInput{}, fault("VALIDATION_FAILED", input.path(i, "/password", true), "A draft cannot carry a password.")
 		}
 	}
-	p, e := s.prepareSave(ctx, "unix:uid:0", input)
+	p, e := s.prepareSave(ctx, systemRootActor, input)
 	if e != nil {
 		return RealizationInput{}, e
 	}

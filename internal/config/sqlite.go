@@ -206,7 +206,7 @@ func initializePair(ctx context.Context, stage string) (result error) {
 	if _, e = tx.ExecContext(ctx, "INSERT INTO documents VALUES(?,?)", ch[:], cb); e != nil {
 		return e
 	}
-	if _, e = tx.ExecContext(ctx, "INSERT INTO versions VALUES(0,NULL,1,?,?,?,?,0)", ch[:], sh[:], time.Now().UTC().Format(time.RFC3339Nano), "unix:uid:0"); e != nil {
+	if _, e = tx.ExecContext(ctx, "INSERT INTO versions VALUES(0,NULL,1,?,?,?,?,0)", ch[:], sh[:], time.Now().UTC().Format(time.RFC3339Nano), "system.root"); e != nil {
 		return e
 	}
 	if _, e = tx.ExecContext(ctx, "INSERT INTO pointers VALUES('saved',0)"); e != nil {

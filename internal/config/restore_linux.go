@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"slices"
 	"time"
+
+	"github.com/andaru-project/andaru/internal/authz"
 )
 
 type RestoreDocuments struct {
@@ -65,7 +67,7 @@ func (s *Store) PreviewRestore(ctx context.Context, input RestoreDocuments) (res
 	return result, nil
 }
 
-func (s *Store) prepareRestore(ctx context.Context, actor string, expected Version, decoded decodedBackup) (*pendingSave, RestorePreview, error) {
+func (s *Store) prepareRestore(ctx context.Context, actor authz.Actor, expected Version, decoded decodedBackup) (*pendingSave, RestorePreview, error) {
 	var empty RestorePreview
 	if expected == "" {
 		return nil, empty, fault("PRECONDITION_REQUIRED", "/expectedSavedVersion", "Expected saved version is required.")
@@ -102,7 +104,7 @@ func (s *Store) prepareRestore(ctx context.Context, actor string, expected Versi
 	return p, preview, nil
 }
 
-func (s *Store) Restore(ctx context.Context, actor string, expected Version, input RestoreDocuments) (result RestoreResult, err error) {
+func (s *Store) Restore(ctx context.Context, actor authz.Actor, expected Version, input RestoreDocuments) (result RestoreResult, err error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	decoded, err := decodeBackupDocuments(input)

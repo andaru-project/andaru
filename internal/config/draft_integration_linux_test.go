@@ -29,7 +29,7 @@ func storeFiles(t *testing.T, dir string) map[string][]byte {
 func TestDraftPublishesNothing(t *testing.T) {
 	dir := ownedDir(t)
 	s := openTestStore(t, dir)
-	if _, err := s.Save(context.Background(), "unix:uid:0", createZone("existing")); err != nil {
+	if _, err := s.Save(context.Background(), systemRootActor, createZone("existing")); err != nil {
 		t.Fatal(err)
 	}
 	before := storeFiles(t, dir)

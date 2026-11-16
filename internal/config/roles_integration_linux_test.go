@@ -17,7 +17,7 @@ func TestRoleLifecycleHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, err := store.Save(ctx, "unix:uid:0", change)
+	created, err := store.Save(ctx, systemRootActor, change)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestRoleLifecycleHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	replaced, err := store.Save(ctx, "unix:uid:0", replace)
+	replaced, err := store.Save(ctx, systemRootActor, replace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestRoleLifecycleHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.Save(ctx, "unix:uid:0", stale); err == nil {
+	if _, err = store.Save(ctx, systemRootActor, stale); err == nil {
 		t.Fatal("stale role replacement succeeded")
 	} else {
 		fault := requireFault(t, err, "PRECONDITION_FAILED")
@@ -96,7 +96,7 @@ func TestRoleLifecycleHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deleted, err := store.Save(ctx, "unix:uid:0", remove)
+	deleted, err := store.Save(ctx, systemRootActor, remove)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestRoleLifecycleHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.Save(ctx, "unix:uid:0", revive); err == nil {
+	if _, err = store.Save(ctx, systemRootActor, revive); err == nil {
 		t.Fatal("replacement with pre-delete version revived deleted role")
 	} else {
 		fault := requireFault(t, err, "PRECONDITION_FAILED")
