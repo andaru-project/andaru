@@ -553,11 +553,11 @@ func TestCanceledTransactionRollbackDoesNotLatchStorageFailure(t *testing.T) {
 		time.Now().UnixMilli(), "system", "root", "local", ActionAccountUpdated, "target", ResultSuccess, "", CategoryProtected, 1); err == nil {
 		t.Fatal("write unexpectedly succeeded after cancellation")
 	}
-	if err = tx.Commit(); !errors.Is(err, sql.ErrTxDone) {
-		t.Fatalf("Commit error = %v, want sql.ErrTxDone after automatic rollback", err)
+	if err = tx.Commit(); !errors.Is(err, sql.ErrTxDone) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Commit error = %v, want cancellation artifact after automatic rollback", err)
 	}
-	if err = s.storageError(ctx, err); !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled transaction error = %v, want context.Canceled", err)
+	if classified := s.storageError(ctx, err); !errors.Is(classified, context.Canceled) {
+		t.Fatalf("canceled transaction error = %v, want context.Canceled", classified)
 	}
 	if s.storageFailure.Load() {
 		t.Fatal("automatic rollback latched storage failure")

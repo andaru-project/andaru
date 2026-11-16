@@ -150,7 +150,7 @@ Exact request structs receive explicit JSON tags in engine files. Store types ar
 - [ ] **Step 3: Run RED.** `go test -tags=integration ./internal/audit -count=1`. Expected: package/interfaces absent.
 - [ ] **Step 4: Implement the separate root-only `audit.db`.** Use typed columns/metadata, FULL synchronous/WAL, category-aware pruning after append, and a retention watermark. Store no request body or arbitrary error text.
 - [ ] **Step 5: Verify GREEN.** Run the RED suite and `go test -race ./internal/audit`; prove a full general pool still permits protected revocation and blocks new non-safety general operations.
-- [x] Task 3 follow-up: treat `sql.ErrTxDone` as request cancellation only when the transaction context is canceled or expired. Real storage failures still latch; a real SQLite transaction auto-rollback test proves healthy Begin/Append afterward. Tests not run per assignment.
+- [x] Task 3 follow-up: classify cancellation artifacts from automatic transaction rollback without latching storage health; the real SQLite test accepts the driver's `sql.ErrTxDone` or context cancellation/deadline result and proves healthy Begin/Append afterward. Tests not run per assignment.
 - [ ] **Step 6: Commit.** `git add internal/audit && git commit -m 'feat: add bounded security audit store'`.
 
 ### Task 4: Root API, CLI, and audited authorization coordinator
