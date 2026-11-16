@@ -23,3 +23,8 @@ graphify-out/*
 
 # Superpowers subagent-ledger artifacts are local execution scratch.
 /.superpowers/
+
+# The browser client is rebuilt from its committed npm lockfile.
+/web/node_modules/
+/web/dist/
+/web/.vitest/

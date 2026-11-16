@@ -1,7 +1,7 @@
 #!/bin/sh
-# Installed as /usr/share/andaru/andaru-apparmor; the andaru package's postinst runs it, under dpkg's DPKG_ROOT.
-# Debian's profiles include /etc/apparmor.d/local/usr.sbin.<daemon>, a file the administrator owns, so Andaru adds
-# one line naming its own rules there instead of replacing the file. debian/andaru.postrm removes it on purge.
+# Installed as /usr/share/andaru/andaru-apparmor; the andaru package's postinst runs it under DPKG_ROOT.
+# Debian-owned daemon profiles receive one include in their administrator-owned local file. Andaru's own web
+# executable has a complete package-owned profile. debian/andaru.postrm removes the local includes on purge.
 set -eu
 
 root=${DPKG_ROOT:-}
@@ -35,3 +35,10 @@ for daemon in kea-dhcp4 kea-dhcp6 unbound; do
 		fi
 	fi
 done
+
+web_profile=$root/etc/apparmor.d/usr.bin.andaru-web
+if [ -f "$web_profile" ] && command -v apparmor_parser >/dev/null && [ -d "$root/sys/kernel/security/apparmor" ]; then
+	if ! apparmor_parser -r -T -W "$web_profile"; then
+		echo "andaru: could not reload the AppArmor profile $web_profile" >&2
+	fi
+fi

@@ -10,7 +10,10 @@ ANDARU_VERSION = $(shell dpkg-parsechangelog -SVersion)
 
 override_dh_auto_build:
 	mkdir -p debian/build
+	npm --prefix web ci --ignore-scripts --no-audit --no-fund
+	npm --prefix web run build
 	CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags '-X github.com/andaru-project/andaru/internal/engine.buildVersion=$(ANDARU_VERSION)' -o debian/build/andaru ./cmd/andaru
+	CGO_ENABLED=0 go build -trimpath -buildvcs=false -o debian/build/andaru-web ./cmd/andaru-web
 	gpg --dearmor <debian/keyring/andaru-archive-key.asc >debian/build/andaru-archive-keyring.gpg
 
 # The Go suites run in CI, not in the package build.
@@ -24,11 +27,12 @@ override_dh_strip:
 override_dh_dwz:
 
 override_dh_auto_clean:
-	rm -rf debian/build
+	rm -rf debian/build web/dist web/node_modules
 
 # Starting the engine, the path units and the timer is safe on any host; network-boot runs only at boot.
 override_dh_installsystemd:
 	dh_installsystemd -pandaru andaru-engine.service andaru-leases.path andaru-prefixes.path andaru-prefixes.timer
+	dh_installsystemd -pandaru --no-enable --no-start andaru-web.service
 	dh_installsystemd -pandaru --no-start andaru-network-boot.service
 
 override_dh_gencontrol:
