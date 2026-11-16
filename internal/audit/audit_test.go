@@ -752,7 +752,7 @@ func TestAppendSafetyWritesReceiptBeforePendingStartupGate(t *testing.T) {
 	}
 }
 
-func TestAppendSafetyWritesReceiptWhileReconciliationLookupIsBlocked(t *testing.T) {
+func TestAppendSafetyReturnsWhileReconciliationLookupIsBlocked(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("audit database tests require root")
 	}
@@ -805,17 +805,18 @@ func TestAppendSafetyWritesReceiptWhileReconciliationLookupIsBlocked(t *testing.
 	}
 	select {
 	case err = <-safetyDone:
+		if !errors.Is(err, ErrReconciliationRequired) {
+			close(releaseLookup)
+			t.Fatalf("safety append while reconciliation was blocked = %v, want reconciliation error", err)
+		}
+	case <-time.After(2 * time.Second):
 		close(releaseLookup)
-		t.Fatalf("safety append passed the reconciliation gate early: %v", err)
-	default:
+		t.Fatal("safety append waited for reconciliation lookup")
 	}
 
 	close(releaseLookup)
 	if err = <-reconcileDone; err != nil {
 		t.Fatalf("reconciliation failed: %v", err)
-	}
-	if err = <-safetyDone; err != nil {
-		t.Fatalf("safety append after reconciliation failed: %v", err)
 	}
 }
 
