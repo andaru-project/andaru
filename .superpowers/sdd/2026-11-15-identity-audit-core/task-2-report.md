@@ -28,7 +28,7 @@ Task 2A1, Task 2A2, and Task 2B are implemented.
 - DB, WAL, and SHM members are checked as regular root-owned 0600 single-link files before and after open.
 - Existing stores require the exact application ID and layout v1; required schema tables and limiter-key row are verified, as are WAL, FULL sync, foreign-key, and secure-delete pragmas.
 - Limiter key is created by `randomblob(32)` inside the initial schema transaction. The synthetic v1→v2 migration and old-layout fixtures were removed; there was no released v1 schema.
-- Added real SQLite tests for invalid established layouts/schema/key, unsafe sidecars, wrong app, restart, and retry after failed initialization. Tests not run per assignment.
+- Follow-up: removed duplicate limiter table declarations; limiter table and key are initialized once within the atomic schema transaction.
 ## Round 1 account/password fixes
 
 - Admission now uses a nonblocking permit send under the queue mutex, eliminating the len-check/send race; `TestAdmissionConcurrentWakeupsDoNotDeadlock` races queued and new callers across repeated drains.

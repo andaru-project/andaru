@@ -87,16 +87,6 @@ CREATE TABLE source_limits (
  last_seen_at INTEGER NOT NULL,
  expires_at INTEGER NOT NULL
 ) STRICT;
-CREATE TABLE limiter_key (
- id INTEGER PRIMARY KEY CHECK(id=1),
- secret BLOB NOT NULL CHECK(length(secret)=32)
-) STRICT;
-CREATE TABLE limiter_overload (
- id INTEGER PRIMARY KEY CHECK(id=1),
- login_saturated INTEGER NOT NULL CHECK(login_saturated IN (0,1)),
- source_saturated INTEGER NOT NULL CHECK(source_saturated IN (0,1))
-) STRICT;
-INSERT INTO limiter_overload(id,login_saturated,source_saturated) VALUES(1,0,0);
 CREATE TABLE metadata (key TEXT PRIMARY KEY, value INTEGER NOT NULL) STRICT;
 CREATE TABLE revisions (
  revision INTEGER PRIMARY KEY CHECK(revision>=0),
