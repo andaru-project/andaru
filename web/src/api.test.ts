@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ApiClient, ApiError } from './api';
+import { ApiClient } from './api';
 import { fetchQueue, jsonResponse } from './test/fetch';
 
 const session = {
