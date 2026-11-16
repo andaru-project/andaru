@@ -257,6 +257,7 @@ func TestCreationOutcomeRequiresValidPublicTargetOnlyOnSuccess(t *testing.T) {
 		})
 	}
 }
+
 func TestCreationFinishRejectsCredentialTargetForEveryResult(t *testing.T) {
 	s, _ := openTestStore(t)
 	ctx := context.Background()
@@ -268,16 +269,24 @@ func TestCreationFinishRejectsCredentialTargetForEveryResult(t *testing.T) {
 		t.Run(string(result), func(t *testing.T) {
 			intent := testIntent(fmt.Sprintf("credential-target-%d", i), ActionAccountCreated, CategoryProtected)
 			intent.Target = ""
+			before, err := s.ListEvents(ctx, 0, 100)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if _, err := s.Begin(ctx, intent); err != nil {
 				t.Fatalf("Begin creation: %v", err)
 			}
-			err := s.Finish(ctx, Outcome{OperationID: intent.OperationID, Result: result, Target: credential})
+			err = s.Finish(ctx, Outcome{OperationID: intent.OperationID, Result: result, Target: credential})
 			if !errors.Is(err, ErrInvalid) {
 				t.Fatalf("Finish error = %v, want ErrInvalid", err)
 			}
 			events, err := s.ListEvents(ctx, 0, 100)
-			if err != nil || len(events) != 2*(i+1) || events[len(events)-1].Action != ActionAccountCreated || events[len(events)-1].Result != ResultPending {
-				t.Fatalf("events after rejected Finish = %+v, %v", events, err)
+			if err != nil || len(events) != len(before)+1 {
+				t.Fatalf("event count after rejected Finish = %d, prior %d, error %v", len(events), len(before), err)
+			}
+			pending := events[len(events)-1]
+			if pending.OperationID != intent.OperationID || pending.Action != ActionAccountCreated || pending.Result != ResultPending || pending.Target != "" {
+				t.Fatalf("event after rejected Finish = %+v", pending)
 			}
 		})
 	}
@@ -299,9 +308,16 @@ func TestCreationFinishAllowsEmptyTargetResultsAndPreservesReplayIntegrity(t *te
 			if err := s.Finish(ctx, Outcome{OperationID: intent.OperationID, Result: result}); err != nil {
 				t.Fatalf("Finish empty target: %v", err)
 			}
-			replay, err := s.Begin(ctx, intent)
-			if err != nil || !replay.Replay || replay.Outcome == nil || replay.Outcome.Result != result || replay.Outcome.Target != "" {
-				t.Fatalf("empty-target replay = %+v, %v", replay, err)
+			if result == ResultNotCommitted {
+				retry, err := s.Begin(ctx, intent)
+				if err != nil || !retry.Started || retry.Replay {
+					t.Fatalf("not-committed retry = %+v, %v", retry, err)
+				}
+			} else {
+				replay, err := s.Begin(ctx, intent)
+				if err != nil || !replay.Replay || replay.Outcome == nil || replay.Outcome.Result != result || replay.Outcome.Target != "" {
+					t.Fatalf("empty-target replay = %+v, %v", replay, err)
+				}
 			}
 			report, err := s.Verify(ctx)
 			if err != nil || !report.Valid {
@@ -310,7 +326,6 @@ func TestCreationFinishAllowsEmptyTargetResultsAndPreservesReplayIntegrity(t *te
 		})
 	}
 }
-
 
 func TestFailedCreationOutcomeHasNoTargetThroughRetryAndReplay(t *testing.T) {
 	ctx := context.Background()
