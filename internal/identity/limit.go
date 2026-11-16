@@ -261,27 +261,46 @@ func decodeFailureTimes(encoded []byte, failures int, windowStarted int64) (fail
 	return times, nil
 }
 
-func nextFailure(times failureTimes, failures, level int, now int64) (failureTimes, int, int, int64, int64) {
-	var recent failureTimes
+func nextFailure(times failureTimes, failures, level int, backoffUntil, now int64) (failureTimes, int, int, int64, int64, bool) {
+	// Captured failure times can arrive after newer rows when transactions are delayed.
+	newest := now
+	if failures > 0 && times[failures-1] > newest {
+		newest = times[failures-1]
+	}
+	cutoff := newest - loginWindowSeconds
+	var ordered [failureWindowSlots + 1]int64
 	count := 0
-	cutoff := now - loginWindowSeconds
 	for i := 0; i < failures; i++ {
 		if times[i] > cutoff {
-			recent[count] = times[i]
+			ordered[count] = times[i]
 			count++
 		}
 	}
-	if count == 0 {
-		level = 0
+	if now <= cutoff {
+		return times, failures, level, times[0], backoffUntil, false
 	}
-	if count == failureWindowSlots {
-		copy(recent[:failureWindowSlots-1], recent[1:])
-		count--
+	if backoffUntil <= newest {
+		backoffUntil = 0
+		if count == 0 {
+			level = 0
+		}
 	}
-	recent[count] = now
+	insertAt := count
+	for i := 0; i < count; i++ {
+		if ordered[i] > now {
+			insertAt = i
+			break
+		}
+	}
+	copy(ordered[insertAt+1:count+1], ordered[insertAt:count])
+	ordered[insertAt] = now
 	count++
-	windowStarted := recent[0]
-	backoffUntil := int64(0)
+	if count > failureWindowSlots {
+		copy(ordered[:], ordered[count-failureWindowSlots:count])
+		count = failureWindowSlots
+	}
+	var recent failureTimes
+	copy(recent[:], ordered[:count])
 	if count == failureWindowSlots {
 		if level < maximumBackoffLevel {
 			level++
@@ -290,9 +309,12 @@ func nextFailure(times failureTimes, failures, level int, now int64) (failureTim
 		if delay > maximumBackoff {
 			delay = maximumBackoff
 		}
-		backoffUntil = now + delay
+		candidate := newest + delay
+		if candidate > backoffUntil {
+			backoffUntil = candidate
+		}
 	}
-	return recent, count, level, windowStarted, backoffUntil
+	return recent, count, level, recent[0], backoffUntil, true
 }
 
 func (s *store) recordLoginFailure(ctx context.Context, loginHash [32]byte, sources [2]sourceBucket, sourceCount int, now int64) error {
@@ -333,9 +355,10 @@ func recordLoginBucketFailure(ctx context.Context, tx *sql.Tx, hash [32]byte, no
 			_, err = tx.ExecContext(ctx, "UPDATE limiter_overload SET login_saturated=1 WHERE id=1")
 			return err
 		}
-		times, failures, level, windowStarted, backoffUntil = nextFailure(failureTimes{}, 0, 0, now)
+		times, failures, level, windowStarted, backoffUntil, _ = nextFailure(failureTimes{}, 0, 0, 0, now)
 		encoded = encodeFailureTimes(times)
-		_, err = tx.ExecContext(ctx, "INSERT INTO login_limits(bucket_hash,failures,failure_times,window_started_at,expires_at,backoff_level,backoff_until) VALUES(?,?,?,?,?,?,?)", hash[:], failures, encoded, windowStarted, now+loginWindowSeconds, level, backoffUntil)
+		expiresAt := times[failures-1] + loginWindowSeconds
+		_, err = tx.ExecContext(ctx, "INSERT INTO login_limits(bucket_hash,failures,failure_times,window_started_at,expires_at,backoff_level,backoff_until) VALUES(?,?,?,?,?,?,?)", hash[:], failures, encoded, windowStarted, expiresAt, level, backoffUntil)
 		return err
 	}
 	if err != nil {
@@ -345,18 +368,23 @@ func recordLoginBucketFailure(ctx context.Context, tx *sql.Tx, hash [32]byte, no
 	if err != nil {
 		return err
 	}
-	times, failures, level, windowStarted, backoffUntil = nextFailure(times, failures, level, now)
+	var accepted bool
+	times, failures, level, windowStarted, backoffUntil, accepted = nextFailure(times, failures, level, backoffUntil, now)
+	if !accepted {
+		return nil
+	}
 	encoded = encodeFailureTimes(times)
-	_, err = tx.ExecContext(ctx, "UPDATE login_limits SET failures=?,failure_times=?,window_started_at=?,expires_at=?,backoff_level=?,backoff_until=? WHERE bucket_hash=?", failures, encoded, windowStarted, now+loginWindowSeconds, level, backoffUntil, hash[:])
+	expiresAt := times[failures-1] + loginWindowSeconds
+	_, err = tx.ExecContext(ctx, "UPDATE login_limits SET failures=?,failure_times=?,window_started_at=?,expires_at=?,backoff_level=?,backoff_until=? WHERE bucket_hash=?", failures, encoded, windowStarted, expiresAt, level, backoffUntil, hash[:])
 	return err
 }
 
 func recordSourceBucketFailure(ctx context.Context, tx *sql.Tx, bucket sourceBucket, now int64) error {
 	var failures, level int
-	var windowStarted, backoffUntil int64
+	var windowStarted, backoffUntil, lastSeenAt int64
 	var encoded []byte
 	var times failureTimes
-	err := tx.QueryRowContext(ctx, "SELECT failures,failure_times,window_started_at,backoff_level,backoff_until FROM source_limits WHERE bucket_hash=?", bucket.hash[:]).Scan(&failures, &encoded, &windowStarted, &level, &backoffUntil)
+	err := tx.QueryRowContext(ctx, "SELECT failures,failure_times,window_started_at,backoff_level,backoff_until,last_seen_at FROM source_limits WHERE bucket_hash=?", bucket.hash[:]).Scan(&failures, &encoded, &windowStarted, &level, &backoffUntil, &lastSeenAt)
 	if err == sql.ErrNoRows {
 		var count int
 		if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM source_limits").Scan(&count); err != nil {
@@ -366,9 +394,11 @@ func recordSourceBucketFailure(ctx context.Context, tx *sql.Tx, bucket sourceBuc
 			_, err = tx.ExecContext(ctx, "UPDATE limiter_overload SET source_saturated=1 WHERE id=1")
 			return err
 		}
-		times, failures, level, windowStarted, backoffUntil = nextFailure(failureTimes{}, 0, 0, now)
+		times, failures, level, windowStarted, backoffUntil, _ = nextFailure(failureTimes{}, 0, 0, 0, now)
 		encoded = encodeFailureTimes(times)
-		_, err = tx.ExecContext(ctx, "INSERT INTO source_limits(bucket_hash,bucket_kind,failures,failure_times,window_started_at,backoff_level,backoff_until,last_seen_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?)", bucket.hash[:], bucket.kind, failures, encoded, windowStarted, level, backoffUntil, now, now+sourceExpirySeconds)
+		lastSeenAt = times[failures-1]
+		expiresAt := lastSeenAt + sourceExpirySeconds
+		_, err = tx.ExecContext(ctx, "INSERT INTO source_limits(bucket_hash,bucket_kind,failures,failure_times,window_started_at,backoff_level,backoff_until,last_seen_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?)", bucket.hash[:], bucket.kind, failures, encoded, windowStarted, level, backoffUntil, lastSeenAt, expiresAt)
 		return err
 	}
 	if err != nil {
@@ -378,9 +408,18 @@ func recordSourceBucketFailure(ctx context.Context, tx *sql.Tx, bucket sourceBuc
 	if err != nil {
 		return err
 	}
-	times, failures, level, windowStarted, backoffUntil = nextFailure(times, failures, level, now)
+	var accepted bool
+	times, failures, level, windowStarted, backoffUntil, accepted = nextFailure(times, failures, level, backoffUntil, now)
+	if !accepted {
+		return nil
+	}
 	encoded = encodeFailureTimes(times)
-	_, err = tx.ExecContext(ctx, "UPDATE source_limits SET failures=?,failure_times=?,window_started_at=?,backoff_level=?,backoff_until=?,last_seen_at=?,expires_at=? WHERE bucket_hash=?", failures, encoded, windowStarted, level, backoffUntil, now, now+sourceExpirySeconds, bucket.hash[:])
+	latestFailureAt := times[failures-1]
+	if lastSeenAt < latestFailureAt {
+		lastSeenAt = latestFailureAt
+	}
+	expiresAt := lastSeenAt + sourceExpirySeconds
+	_, err = tx.ExecContext(ctx, "UPDATE source_limits SET failures=?,failure_times=?,window_started_at=?,backoff_level=?,backoff_until=?,last_seen_at=?,expires_at=? WHERE bucket_hash=?", failures, encoded, windowStarted, level, backoffUntil, lastSeenAt, expiresAt, bucket.hash[:])
 	return err
 }
 

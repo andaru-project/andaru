@@ -121,3 +121,9 @@ No checks run in this fix round. No language-server references check was availab
 - Before closing or publishing a fresh staging DB, initialization now runs `PRAGMA wal_checkpoint(TRUNCATE)`, checks the busy/log/checkpointed result for non-busy full completion, and rejects any non-empty retained WAL. A checkpoint or I/O error follows the staging cleanup path and leaves `identity.db` unpublished.
 - Added `TestOpenCheckpointFailureIsRetryable` with an injected checkpoint failure; it asserts no final database was published and a subsequent ordinary `Open` succeeds without manual deletion.
 - No tests/build/lint/format/graph checks were run per assignment.
+## Round 3 out-of-order limiter timestamps
+
+- Limiter updates now sort incoming timestamps, prune against the newest known timestamp's 15-minute cutoff, and retain the newest five. Inputs already outside that trailing window are ignored, preserving newer failure history and backoff.
+- Login expiry and source `last_seen_at`/expiry now remain monotonic for out-of-order updates; source history policy is unchanged.
+- `TestRollingFailureWindowOutOfOrderTimestamps` covers 100, 102, delayed 101, fifth-failure backoff, stale input at the exact cutoff, expiry-boundary admission, and subsequent login/source decode and accounting.
+- No tests/build/lint/format/graph checks were run per assignment; parent verification is deferred.

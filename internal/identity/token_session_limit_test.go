@@ -636,6 +636,102 @@ func TestRollingFailureWindowBoundaryTimestamps(t *testing.T) {
 	}
 }
 
+func TestRollingFailureWindowOutOfOrderTimestamps(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTestStore(t)
+	loginHash := s.loginBucketHash("out-of-order")
+	sources, sourceCount, err := s.sourceBuckets("198.51.100.44")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := int64(1_000_000)
+	type snapshot struct {
+		times                failureTimes
+		failures, level      int
+		windowStart, backoff int64
+	}
+	readWindow := func(query string, hash []byte) snapshot {
+		var result snapshot
+		var encoded []byte
+		if err := s.db.QueryRowContext(ctx, query, hash).Scan(&result.failures, &encoded, &result.windowStart, &result.level, &result.backoff); err != nil {
+			t.Fatal(err)
+		}
+		times, err := decodeFailureTimes(encoded, result.failures, result.windowStart)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result.times = times
+		return result
+	}
+	record := func(now int64) {
+		if err := s.recordLoginFailure(ctx, loginHash, sources, sourceCount, now); err != nil {
+			t.Fatalf("record failure at %d: %v", now, err)
+		}
+	}
+	loginQuery := "SELECT failures,failure_times,window_started_at,backoff_level,backoff_until FROM login_limits WHERE bucket_hash=?"
+	sourceQuery := "SELECT failures,failure_times,window_started_at,backoff_level,backoff_until FROM source_limits WHERE bucket_hash=?"
+
+	for _, now := range []int64{base + 100, base + 102, base + 101} {
+		record(now)
+	}
+	wantThree := failureTimes{base + 100, base + 101, base + 102}
+	login := readWindow(loginQuery, loginHash[:])
+	source := readWindow(sourceQuery, sources[0].hash[:])
+	if login.times != wantThree || login.failures != 3 || login.windowStart != base+100 || login.backoff != 0 {
+		t.Fatalf("out-of-order login window: %+v", login)
+	}
+	if source.times != wantThree || source.failures != 3 || source.windowStart != base+100 || source.backoff != 0 {
+		t.Fatalf("out-of-order source window: %+v", source)
+	}
+	var lastSeen, sourceExpiry int64
+	if err := s.db.QueryRowContext(ctx, "SELECT last_seen_at,expires_at FROM source_limits WHERE bucket_hash=?", sources[0].hash[:]).Scan(&lastSeen, &sourceExpiry); err != nil {
+		t.Fatal(err)
+	}
+	if lastSeen != base+102 || sourceExpiry != base+102+sourceExpirySeconds {
+		t.Fatalf("out-of-order source activity regressed: last_seen=%d expires=%d", lastSeen, sourceExpiry)
+	}
+
+	for _, now := range []int64{base + 103, base + 104} {
+		record(now)
+	}
+	wantFive := failureTimes{base + 100, base + 101, base + 102, base + 103, base + 104}
+	login = readWindow(loginQuery, loginHash[:])
+	source = readWindow(sourceQuery, sources[0].hash[:])
+	if login.times != wantFive || login.failures != 5 || login.level != 1 || login.backoff != base+112 {
+		t.Fatalf("fifth recent login failure did not establish backoff: %+v", login)
+	}
+	if source.times != wantFive || source.failures != 5 || source.level != 1 || source.backoff != base+112 {
+		t.Fatalf("fifth recent source failure did not establish backoff: %+v", source)
+	}
+
+	record(base + 104 - loginWindowSeconds)
+	loginAfterStale := readWindow(loginQuery, loginHash[:])
+	sourceAfterStale := readWindow(sourceQuery, sources[0].hash[:])
+	if loginAfterStale != login || sourceAfterStale != source {
+		t.Fatalf("expired delayed failure changed newer limiter state: login=%+v source=%+v", loginAfterStale, sourceAfterStale)
+	}
+	if err := s.db.QueryRowContext(ctx, "SELECT last_seen_at,expires_at FROM source_limits WHERE bucket_hash=?", sources[0].hash[:]).Scan(&lastSeen, &sourceExpiry); err != nil {
+		t.Fatal(err)
+	}
+	if lastSeen != base+104 || sourceExpiry != base+104+sourceExpirySeconds {
+		t.Fatalf("stale source failure regressed activity: last_seen=%d expires=%d", lastSeen, sourceExpiry)
+	}
+
+	if err := s.beginLogin(ctx, loginHash, sources, sourceCount, base+112); err != nil {
+		t.Fatalf("expired backoff boundary stayed locked: %v", err)
+	}
+	record(base + 113)
+	wantAfter := failureTimes{base + 101, base + 102, base + 103, base + 104, base + 113}
+	login = readWindow(loginQuery, loginHash[:])
+	source = readWindow(sourceQuery, sources[0].hash[:])
+	if login.times != wantAfter || login.failures != 5 || login.level != 2 || login.backoff != base+129 {
+		t.Fatalf("subsequent login accounting failed: %+v", login)
+	}
+	if source.times != wantAfter || source.failures != 5 || source.level != 2 || source.backoff != base+129 {
+		t.Fatalf("subsequent source accounting failed: %+v", source)
+	}
+}
+
 func TestLoginBackoffThresholdCapAndRollingExpiry(t *testing.T) {
 	ctx := context.Background()
 	s, _ := openTestStore(t)
