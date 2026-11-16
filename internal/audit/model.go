@@ -395,7 +395,6 @@ func validateMetadata(metadata map[string]string) error {
 	return nil
 }
 
-
 func validSource(source string) bool {
 	if len(source) > 128 {
 		return false
