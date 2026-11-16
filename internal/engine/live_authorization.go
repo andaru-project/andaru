@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/config"
@@ -14,6 +15,9 @@ import (
 var errLiveAuthorizationUnavailable = errors.New("live authorization is unavailable")
 
 func initializeAuthorizationState(ctx context.Context, stateDir string) error {
+	if os.Geteuid() != 0 {
+		return nil
+	}
 	return generation.Observe(ctx, generation.Dir(stateDir), func(observed generation.Observation) error {
 		digest := ""
 		if observed.Live != nil {

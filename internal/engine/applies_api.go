@@ -336,7 +336,7 @@ func (h *appliesHandler) create(w http.ResponseWriter, r *http.Request) {
 		contents[f.Path] = []byte(f.Real())
 	}
 	var id int
-	err = generation.Observe(ctx, h.dir, func(observed generation.Observation) error {
+	store := func(observed generation.Observation) error {
 		if observed.Pending != nil || !sameGenerationPointer(observed.Live, pointers.Live) {
 			return authz.ErrTransitionInProgress
 		}
@@ -349,7 +349,12 @@ func (h *appliesHandler) create(w http.ResponseWriter, r *http.Request) {
 			id, revisionErr = generation.Create(h.dir, manifest, contents)
 			return revisionErr
 		})
-	})
+	}
+	if os.Geteuid() != 0 {
+		err = store(generation.Observation{Live: pointers.Live})
+	} else {
+		err = generation.Observe(ctx, h.dir, store)
+	}
 	if errors.Is(err, authz.ErrTransitionInProgress) {
 		writeError(w, r, http.StatusConflict, "APPLY_IN_PROGRESS", "The live generation or authorization state changed while this apply was prepared; retry it.")
 		return
