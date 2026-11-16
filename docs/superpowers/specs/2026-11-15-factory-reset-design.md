@@ -221,19 +221,19 @@ Refuse incomplete dpkg state, pending network apply, active backup/restore/reset
 
 1. persist and sync `operation.json` in phase `planned`;
 2. acquire the stable coordinator fence outside `/var/lib/andaru`; every normal mutation/startup path refuses while another reset epoch owns it;
-3. acquire and hold exclusive POSIX locks on `/var/lib/dpkg/lock-frontend` and `/var/lib/dpkg/lock` for the vulnerable state-swap/recovery-activation transaction, never deleting lock files; a concurrently starting package operation either wins first and makes reset abort, or waits/fails on these locks;
-4. start the package-provided reset supervisor and arm its independent rollback timer;
+3. start one independent package-provided lock-holder process/unit for this reset epoch; it acquires and holds exclusive POSIX locks on `/var/lib/dpkg/lock-frontend` and `/var/lib/dpkg/lock`, never deletes the lock files, and reports readiness only after owning both, so a package operation that wins first makes reset abort and one starting later waits or fails;
+4. start the separate package-provided reset supervisor and arm its independent rollback timer;
 5. durably advance to `supervised`; only then pause engine, web, lease/prefix activators, setup jobs and all registered extension units;
 6. drain active realizers and take engine/generation/user/audit/extension locks in one documented order with a bounded deadline; and
 7. recheck every semantic preview precondition.
 
-Locks inside `/var/lib/andaru` protect the old tree only; the external fence is what prevents a new mutator from opening replacement lock inodes after rename. The new recovery engine/web may start while the fence is active, but it recognizes the reset epoch and exposes only reset status/confirm/rollback, setup and required read-only status. Normal save/apply/backup/restore/extension mutation is unavailable.
+Locks inside `/var/lib/andaru` protect the old tree only; the external fence is what prevents a new mutator from opening replacement lock inodes after rename. The lock-holder is independent of the reset helper and supervisor, remains alive across their crashes/restarts, and is the sole owner of the dpkg POSIX locks; those locks do not survive the lock-holder's own death. The new recovery engine/web may start while the fence is active, but it recognizes the reset epoch and exposes only reset status/confirm/rollback, setup and required read-only status. Normal save/apply/backup/restore/extension mutation is unavailable.
 
-Abort before the first rename restores only units this operation paused, cancels supervision/timer, releases package/fence locks and records the failed receipt. Do not stop networkd, resolved, SSH, Kea or Unbound merely to swap Andaru’s state. Their reset-specific handling comes from the staged recovery generation/registered ownership plan.
+Abort before the first rename restores only units this operation paused, cancels supervision/timer, directs the matching lock-holder to release the package locks, releases the fence and records the failed receipt. Do not stop networkd, resolved, SSH, Kea or Unbound merely to swap Andaru’s state. Their reset-specific handling comes from the staged recovery generation/registered ownership plan.
 
 ### Durable phases and supervision
 
-One stable package-provided systemd helper owns the reset transaction. It has an `OnFailure`/restart path and a boot reconciliation unit independent of engine/web. Deadlines are absolute wall-clock values in the synced journal; reboot does not create a fresh confirmation window.
+One stable package-provided systemd helper owns the reset transaction, while the independent package-provided lock-holder owns the dpkg locks for the matching reset epoch. The helper has an `OnFailure`/restart path and a boot reconciliation unit independent of engine/web. Before every vulnerable phase transition or resume, the helper/supervisor verifies both the matching reset epoch and a live lock-holder that still owns both locks. Missing, dead or mismatched ownership aborts before any rename; after a rename it enters fail-closed reconciliation and completes rollback rather than continuing ordinary recovery. Boot reconciliation starts or verifies the matching lock-holder before resuming reset or permitting package-related units to start. Deadlines are absolute wall-clock values in the synced journal; reboot does not create a fresh confirmation window.
 
 Phases are monotonic:
 
@@ -250,10 +250,10 @@ Every state tree carries a root-owned immutable epoch/role marker included in th
 - intent + source absent + matching destination means rename happened; sync the parent and complete the phase;
 - any both-present, both-absent, wrong-epoch, link/type/ownership or unexpected-tree combination stops normal startup and requires the stable helper/console to diagnose—never guess or restart writers.
 
-Before `old-rename-intent`, interruption restores paused units and aborts. From `old-rename-intent` through `new-rename-intent`, the rules above complete or roll back the exact observed rename. From `new-live` through `recovery-live`, interruption/deadline rolls back to the complete checkpoint and previous live generation/listeners. At `committed`, rollback is permanently forbidden; reconciliation resumes setup/recovery mode and cleanup only. `cleaning` is idempotent per owned resource; `complete` means all required post-commit cleanup has succeeded.
+Before `old-rename-intent`, interruption restores paused units and aborts. From `old-rename-intent` through `new-rename-intent`, the rules above complete or roll back the exact observed rename, but only after the matching epoch and live lock-holder are verified. From `new-live` through `recovery-live`, interruption/deadline rolls back to the complete checkpoint and previous live generation/listeners. Loss of the lock-holder in any post-rename phase forces fail-closed reconciliation and rollback; it never permits ordinary recovery continuation. At `committed`, rollback is permanently forbidden; reconciliation resumes setup/recovery mode and cleanup only. `cleaning` is idempotent per owned resource; `complete` means all required post-commit cleanup has succeeded.
 
 The rollback timer is armed in `supervised`, before the first pause/rename. Its action and confirmation serialize on the stable fence and re-read the durable phase. Thus a timer already firing cannot race a successful confirmation into deleting/restoring different trees.
-Package locks remain held through `recovery-live` and are released only by rollback or the durable `committed` transition. The stable reset fence remains through setup/cleanup, enforcing recovery-mode API restrictions without blocking Debian package locks indefinitely.
+The independent lock-holder remains alive and holds both package locks through `recovery-live`; only durable rollback completion or the synced `committed` transition authorizes it to release them and exit. The stable reset fence remains through setup/cleanup, enforcing recovery-mode API restrictions without blocking Debian package locks indefinitely.
 
 ### Cutover and trial
 
@@ -396,9 +396,10 @@ Before shipping reset:
 - process-crash and boot reconciliation before/after each rename intent write, rename syscall, parent-directory sync and phase-completion write, plus every network activation/audit/commit/delete boundary;
 - root CLI PTY tests for hidden reset password and exact confirmation;
 - web tests for permission, reauthentication, CSRF, backup offer, session revocation and new-session confirmation;
-- package/upgrade coexistence and no maintainer-script reset;
+- package/upgrade coexistence and no maintainer-script reset, including proof that killing only the reset helper during `recovery-live` leaves the independent lock-holder alive and concurrent apt/dpkg refused or blocked until the restarted helper completes rollback or reaches durable `committed`;
+- lock-holder-loss fault injection before and after rename, proving pre-rename abort and post-rename fail-closed reconciliation/rollback without ordinary recovery continuation;
 - both Debian 13 netplan and ifupdown VMs, behind stopped disk snapshots, with continuous LAN probes and console/QGA observation;
-- successful previous-management recovery, approved-LAN fallback, secret-backed topology, missing management hardware, reset helper/engine/web kills and reboots before/after cutover/confirmation;
+- successful previous-management recovery, approved-LAN fallback, secret-backed topology, missing management hardware, reset helper/lock-holder/engine/web kills and reboots before/after cutover/confirmation;
 - evidence that WAN never listens in normal or fallback recovery; and
 - snapshot rollback/cleanup to the intended base state after tests.
 
@@ -435,7 +436,7 @@ The builder check found that baseline retention was ambiguous; the design now de
 - retain active recovery material through setup confirmation;
 - publish an irreversible `committed` phase before deletion and serialize confirmation/rollback;
 - start supervision and rollback timing before the first pause/rename;
-- use a stable external fence plus held dpkg locks;
+- use a stable external fence plus an independent epoch-bound dpkg lock-holder;
 - select the actual `Pointers.Live` generation and require LAN eligibility;
 - bind semantic inputs rather than volatile audit/session/statistics state;
 - checkpoint extensions reversibly before commit and defer destructive cleanup;
