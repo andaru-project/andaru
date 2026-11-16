@@ -5,8 +5,8 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/binary"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"io"
 	"net"
@@ -17,8 +17,8 @@ const (
 	sourceExpirySeconds = int64(24 * 60 * 60)
 	maximumBackoff      = int64(15 * 60)
 	maximumBackoffLevel = 10
-	failureWindowSlots = 5
-	failureWindowBytes = failureWindowSlots * 8
+	failureWindowSlots  = 5
+	failureWindowBytes  = failureWindowSlots * 8
 )
 
 type sourceBucket struct {
@@ -383,7 +383,6 @@ func recordSourceBucketFailure(ctx context.Context, tx *sql.Tx, bucket sourceBuc
 	_, err = tx.ExecContext(ctx, "UPDATE source_limits SET failures=?,failure_times=?,window_started_at=?,backoff_level=?,backoff_until=?,last_seen_at=?,expires_at=? WHERE bucket_hash=?", failures, encoded, windowStarted, level, backoffUntil, now, now+sourceExpirySeconds, bucket.hash[:])
 	return err
 }
-
 
 func (s *store) recordLoginSuccess(ctx context.Context, loginHash [32]byte, now int64) error {
 	tx, err := s.db.BeginTx(ctx, nil)

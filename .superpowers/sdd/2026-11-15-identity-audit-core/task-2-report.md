@@ -94,3 +94,8 @@ No checks run in this fix round. No language-server references check was availab
 - `gofmt -d internal/identity/account_password_test.go` produced no output.
 - Expected parent command: `go test -tags=integration ./internal/identity -count=1`; qualification logs `max-active=2`, measured heap delta, mean hash latency, and wall time.
 - No tests or builds were run in this follow-up.
+## Round 2 compile and formatting follow-up
+
+- Renamed the encoded timestamp fixture to avoid shadowing `failureTimes`, and removed the duplicate `level` declaration. Boundary assertions remain unchanged.
+- Applied the `limit.go` formatting corrections reported by the parent: import order, constant alignment, and excess blank-line removal.
+- No checks were run. Parent verification remains deferred.

@@ -645,9 +645,9 @@ func TestLoginBackoffThresholdCapAndRollingExpiry(t *testing.T) {
 	now := time.Now().Unix()
 	windowStart := now - 600
 	loginHash := s.loginBucketHash("threshold")
-	failureTimes := encodeFailureTimes(failureTimes{windowStart, windowStart + 150, windowStart + 300, windowStart + 450})
+	initialEncodedTimes := encodeFailureTimes(failureTimes{windowStart, windowStart + 150, windowStart + 300, windowStart + 450})
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO login_limits(bucket_hash,failures,failure_times,window_started_at,expires_at,backoff_level,backoff_until)
-		VALUES(?,4,?,?,?,0,0)`, loginHash[:], failureTimes, windowStart, now+900); err != nil {
+		VALUES(?,4,?,?,?,0,0)`, loginHash[:], initialEncodedTimes, windowStart, now+900); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.AuthenticatePassword(ctx, "threshold", "incorrect-password-2026", "203.0.113.11", 1); !errors.Is(err, ErrAuthentication) {
@@ -685,7 +685,7 @@ func TestLoginBackoffThresholdCapAndRollingExpiry(t *testing.T) {
 	if _, err := s.AuthenticatePassword(ctx, "threshold", "incorrect-password-2026", "203.0.113.14", 1); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("expired rolling window remained locked: %v", err)
 	}
-	var failures, level int
+	var failures int
 	if err := s.db.QueryRowContext(ctx, "SELECT failures,backoff_level FROM login_limits WHERE bucket_hash=?", loginHash[:]).Scan(&failures, &level); err != nil || failures != 1 || level != 0 {
 		t.Fatalf("expired rolling window did not reset: failures=%d level=%d err=%v", failures, level, err)
 	}
