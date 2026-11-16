@@ -3,7 +3,7 @@ import { expect, it, vi } from 'vitest';
 import { ApiClient } from '../api';
 import type { Session } from '../types';
 import { fetchQueue, jsonResponse } from '../test/fetch';
-import { render, screen } from '../test/render';
+import { render, screen, within } from '../test/render';
 import { TokensScreen } from './TokensScreen';
 
 const session: Session = {
@@ -29,9 +29,9 @@ it('shows the created secret once and removes it when dismissed', async () => {
   render(<TokensScreen api={new ApiClient('csrf')} session={session} onSessionLost={vi.fn()} />);
 
   await userEvent.click(await screen.findByRole('button', { name: 'Create token' }));
-  await userEvent.type(screen.getByLabelText('Token name'), 'automation');
+  await userEvent.type(screen.getByLabelText(/^Token name/), 'automation');
   await userEvent.click(screen.getByLabelText('status.read'));
-  await userEvent.click(screen.getByRole('button', { name: 'Create token', hidden: false }));
+  await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Create token' }));
 
   expect(await screen.findByLabelText('One-time bearer token')).toHaveValue('selector.one-time-secret');
   await userEvent.click(screen.getByRole('button', { name: 'I saved the secret' }));

@@ -9,6 +9,11 @@ class ResizeObserverStub {
   disconnect() {}
 }
 vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+Object.defineProperty(document, 'fonts', {
+  configurable: true,
+  value: { addEventListener() {}, removeEventListener() {}, ready: Promise.resolve() },
+});
+
 
 
 Object.defineProperty(window, 'matchMedia', {

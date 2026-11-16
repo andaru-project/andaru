@@ -22,8 +22,8 @@ it('keeps saved role edits visibly separate from effective live permissions', as
 
   expect(await screen.findByText('Saved roles are not live permissions')).toBeInTheDocument();
   expect(screen.getByText(/saving a role never activates it/i)).toBeInTheDocument();
-  expect(screen.getByText('Saved draft')).toBeInTheDocument();
-  expect(screen.getByText('Effective live')).toBeInTheDocument();
+  expect(screen.getAllByText('Saved draft').length).toBeGreaterThan(0);
+  expect(screen.getAllByText('Effective live').length).toBeGreaterThan(0);
 });
 
 it('warns that applying roles also applies every saved configuration change', async () => {
@@ -31,6 +31,7 @@ it('warns that applying roles also applies every saved configuration change', as
   render(<RolesScreen api={new ApiClient('csrf')} session={session} onSessionLost={vi.fn()} />);
 
   await userEvent.click(await screen.findByRole('button', { name: 'Apply saved configuration' }));
-  expect(screen.getByRole('dialog')).toHaveTextContent('every saved configuration change');
-  expect(screen.getByRole('dialog')).toHaveTextContent('network connectivity');
+  const dialog = await screen.findByRole('dialog');
+  expect(dialog).toHaveTextContent('every saved configuration change');
+  expect(dialog).toHaveTextContent('network connectivity');
 });

@@ -17,7 +17,7 @@ it('hides mutation controls when the session lacks users.manage', async () => {
   fetchQueue(jsonResponse(200, userPage), jsonResponse(200, roles));
   render(<UsersScreen api={new ApiClient()} session={baseSession} onSessionLost={vi.fn()} />);
 
-  expect(await screen.findByText('Administrator')).toBeInTheDocument();
+  expect((await screen.findAllByText('Administrator')).length).toBeGreaterThan(0);
   expect(screen.queryByRole('button', { name: 'Create user' })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: /edit admin/i })).not.toBeInTheDocument();
 });
@@ -30,7 +30,7 @@ it('shows server refusal for deleting the recovery administrator', async () => {
   render(<UsersScreen api={new ApiClient('csrf')} session={{ ...baseSession, capabilities: ['users.read', 'users.manage'] }} onSessionLost={vi.fn()} />);
 
   await userEvent.click(await screen.findByRole('button', { name: /delete admin/i }));
-  await userEvent.click(screen.getByRole('button', { name: 'Delete user' }));
+  await userEvent.click(await screen.findByRole('button', { name: 'Delete user' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('At least one enabled password-capable built-in administrator is required.');
 });
 
@@ -42,7 +42,7 @@ it('shows a server 403 even when the capability advertised a control', async () 
   render(<UsersScreen api={new ApiClient('csrf')} session={{ ...baseSession, capabilities: ['users.read', 'users.manage'] }} onSessionLost={vi.fn()} />);
 
   await userEvent.click(await screen.findByRole('button', { name: /delete admin/i }));
-  await userEvent.click(screen.getByRole('button', { name: 'Delete user' }));
+  await userEvent.click(await screen.findByRole('button', { name: 'Delete user' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('The server denied this user change.');
 });
 

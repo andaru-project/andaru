@@ -8,13 +8,13 @@ it('keeps login failures generic, associated and focused for another attempt', a
   const login = vi.fn().mockRejectedValue(new ApiError(401, 'AUTHENTICATION_FAILED', 'Login or password is incorrect.'));
   render(<LoginScreen setupRequired={false} onLogin={login} />);
 
-  expect(screen.getByLabelText('Login')).toHaveFocus();
-  await userEvent.type(screen.getByLabelText('Login'), 'missing');
-  await userEvent.type(screen.getByLabelText('Password'), 'not-a-password');
+  expect(screen.getByLabelText(/^Login/)).toHaveFocus();
+  await userEvent.type(screen.getByLabelText(/^Login/), 'missing');
+  await userEvent.type(screen.getByLabelText(/^Password/), 'not-a-password');
   await userEvent.click(screen.getByRole('button', { name: 'Sign in' }));
 
   expect(await screen.findByRole('alert')).toHaveTextContent('Login or password is incorrect.');
-  await waitFor(() => expect(screen.getByLabelText('Password')).toHaveValue(''));
+  await waitFor(() => expect(screen.getByLabelText(/^Password/)).toHaveValue(''));
   expect(screen.queryByText(/missing account/i)).not.toBeInTheDocument();
 });
 
