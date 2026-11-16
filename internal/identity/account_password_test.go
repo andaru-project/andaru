@@ -102,7 +102,7 @@ func TestAccountValidationTombstoneCASAndInvariant(t *testing.T) {
 	if rev, err = s.SetPassword(ctx,human.ID,rev,[]byte("unique-account-secret-2026")); err != nil { t.Fatal(err) }
 	serviceKind := Service
 	if _, _, err = s.UpdateAccount(ctx,human.ID,rev,UpdateAccountInput{Kind:&serviceKind}); !errors.Is(err,ErrInvalid) { t.Fatalf("human with password changed to service: %v",err) }
-	if _, err = s.DeleteAccount(ctx, admin.ID, rev); !errors.Is(err, ErrInvariant) { t.Fatalf("deleting last administrator: %v", err) }
+	if err = s.DeleteAccount(ctx, admin.ID, rev); !errors.Is(err, ErrInvariant) { t.Fatalf("deleting last administrator: %v", err) }
 	if _, _, err = s.CreateAccount(ctx, CreateAccountInput{Login:"another1", DisplayName:"Operator", Kind:Human, Enabled:true}, rev-1); !errors.Is(err, ErrConflict) { t.Fatalf("stale revision: %v", err) }
 	if err = s.DeleteAccount(ctx, human.ID, rev); err != nil { t.Fatal(err) }
 	reused, nextRev, err := s.CreateAccount(ctx, CreateAccountInput{Login:"operator1", DisplayName:"Reused", Kind:Human, Enabled:true}, rev+1)

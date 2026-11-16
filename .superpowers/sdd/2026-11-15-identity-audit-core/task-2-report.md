@@ -26,4 +26,4 @@ Not run per assignment:
 
 ## Concerns
 
-- Follow-up restored the test file's missing `testing` import reported by the parent compile gate. Checks remain deferred; no passing result is claimed.
+- Follow-ups corrected the missing test import and aligned the deletion assertion with `DeleteAccount`'s error-only signature. Checks remain deferred; no passing result is claimed.

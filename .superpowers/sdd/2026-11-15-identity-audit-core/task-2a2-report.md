@@ -44,4 +44,4 @@ Not run per assignment:
 
 ## Concerns
 
-- Follow-up restored the `testing` import reported missing by the parent compile gate; checks remain deferred, with no passing result claimed.
+- Follow-up aligned the deletion invariant assertion with `DeleteAccount`'s error-only signature; checks remain deferred.
