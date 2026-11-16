@@ -95,11 +95,11 @@ func (s *Store) AppendSafety(ctx context.Context, event Event) error {
 	if err != nil {
 		return err
 	}
+	receiptErr := WriteEmergencyReceipt(s.stateDir, prepared)
 	if err = s.beginMutation(); err != nil {
-		return err
+		return errors.Join(receiptErr, err)
 	}
 	defer s.endMutation()
-	receiptErr := WriteEmergencyReceipt(s.stateDir, prepared)
 	if receiptErr != nil {
 		s.storageFailure.Store(true)
 		s.markStorageFailure(ctx)

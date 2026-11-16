@@ -616,6 +616,105 @@ func TestAuthoritativeAbsenceAllowsSameRequestRetry(t *testing.T) {
 	_ = s.Close()
 }
 
+func TestAppendSafetyWritesReceiptBeforePendingStartupGate(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("audit database tests require root")
+	}
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "state")
+	s, err := Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := testIntent("request-safety-pending", ActionAccountUpdated, CategoryProtected)
+	if _, err = s.Begin(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	err = s.AppendSafety(ctx, testEvent(ActionRecoveryCompleted, CategoryProtected, ResultRecovered))
+	if !errors.Is(err, ErrReconciliationRequired) {
+		t.Fatalf("safety append before startup reconciliation = %v", err)
+	}
+	if _, err = os.Stat(filepath.Join(dir, emergencyReceiptName)); err != nil {
+		t.Fatalf("receipt was suppressed by pending startup intent: %v", err)
+	}
+}
+
+func TestAppendSafetyWritesReceiptWhileReconciliationLookupIsBlocked(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("audit database tests require root")
+	}
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "state")
+	s, err := Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := testIntent("request-safety-reconcile", ActionAccountUpdated, CategoryProtected)
+	if _, err = s.Begin(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	lookupStarted := make(chan struct{})
+	releaseLookup := make(chan struct{})
+	reconcileDone := make(chan error, 1)
+	go func() {
+		reconcileDone <- s.Reconcile(ctx, blockingOperationSource{started: lookupStarted, release: releaseLookup})
+	}()
+	<-lookupStarted
+
+	safetyDone := make(chan error, 1)
+	go func() {
+		safetyDone <- s.AppendSafety(ctx, testEvent(ActionRecoveryCompleted, CategoryProtected, ResultRecovered))
+	}()
+	receiptPath := filepath.Join(dir, emergencyReceiptName)
+	deadline := time.After(2 * time.Second)
+	for {
+		if _, err = os.Stat(receiptPath); err == nil {
+			break
+		} else if !os.IsNotExist(err) {
+			close(releaseLookup)
+			t.Fatalf("checking emergency receipt: %v", err)
+		}
+		select {
+		case <-deadline:
+			close(releaseLookup)
+			t.Fatal("reconciliation lookup suppressed the receipt attempt")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	select {
+	case err = <-safetyDone:
+		close(releaseLookup)
+		t.Fatalf("safety append passed the reconciliation gate early: %v", err)
+	default:
+	}
+
+	close(releaseLookup)
+	if err = <-reconcileDone; err != nil {
+		t.Fatalf("reconciliation failed: %v", err)
+	}
+	if err = <-safetyDone; err != nil {
+		t.Fatalf("safety append after reconciliation failed: %v", err)
+	}
+}
+
 func TestReconcileCannotMarkPausedLiveMutationNotCommitted(t *testing.T) {
 	s, _ := openTestStore(t)
 	ctx := context.Background()
@@ -748,6 +847,18 @@ func seedEvents(t *testing.T, s *Store, category Category, count uint64) {
 }
 
 type emptyOperationSource struct{}
+
+type blockingOperationSource struct {
+	started chan struct{}
+	release <-chan struct{}
+}
+
+func (s blockingOperationSource) LookupOperation(context.Context, string) (OperationRecord, bool, error) {
+	close(s.started)
+	<-s.release
+	return OperationRecord{}, false, nil
+}
+
 
 func (emptyOperationSource) LookupOperation(context.Context, string) (OperationRecord, bool, error) {
 	return OperationRecord{}, false, nil
