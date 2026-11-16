@@ -331,6 +331,107 @@ func BenchmarkArgon2ProductionAdmission(b *testing.B) {
 	b.ReportMetric(float64(peakActive.Load()*argonMemory), "KiB-peak-estimate")
 	b.ReportMetric(float64(peakActive.Load()), "max-active")
 }
+func TestArgon2ProductionPolicyQualification(t *testing.T) {
+	if len(passwordAdmission.permits) != 0 {
+		t.Fatal("password admission gate is not idle")
+	}
+	runtime.GC()
+	var baseline runtime.MemStats
+	runtime.ReadMemStats(&baseline)
+
+	ready := make(chan int, 2)
+	startHash := make(chan struct{})
+	results := make(chan struct {
+		elapsed time.Duration
+		err     error
+	}, 2)
+	var active atomic.Int32
+	var peakActive atomic.Int32
+	password := []byte("qualification-fixed-policy-passphrase-2026")
+	for range 2 {
+		go func() {
+			release, err := passwordAdmission.acquire(context.Background())
+			if err != nil {
+				results <- struct {
+					elapsed time.Duration
+					err     error
+				}{err: err}
+				return
+			}
+			current := active.Add(1)
+			for old := peakActive.Load(); current > old && !peakActive.CompareAndSwap(old, current); old = peakActive.Load() {
+			}
+			ready <- current
+			<-startHash
+			started := time.Now()
+			_, err = derivePasswordHash(password)
+			elapsed := time.Since(started)
+			active.Add(-1)
+			release()
+			results <- struct {
+				elapsed time.Duration
+				err     error
+			}{elapsed: elapsed, err: err}
+		}()
+	}
+	for range 2 {
+		select {
+		case current := <-ready:
+			if current != 2 {
+				close(startHash)
+				t.Fatalf("hash workers did not overlap through admission: active=%d", current)
+			}
+		case <-time.After(15 * time.Second):
+			close(startHash)
+			t.Fatal("timed out waiting for two admitted Argon workers")
+		}
+	}
+	if len(passwordAdmission.permits) != 2 || peakActive.Load() != 2 {
+		close(startHash)
+		t.Fatalf("admitted=%d peak-active=%d; want exactly 2", len(passwordAdmission.permits), peakActive.Load())
+	}
+
+	var peakHeap uint64
+	sampleHeap := func() {
+		var stats runtime.MemStats
+		runtime.ReadMemStats(&stats)
+		if stats.HeapAlloc > peakHeap {
+			peakHeap = stats.HeapAlloc
+		}
+	}
+	ticker := time.NewTicker(100 * time.Microsecond)
+	defer ticker.Stop()
+	timeout := time.NewTimer(15 * time.Second)
+	defer timeout.Stop()
+	started := time.Now()
+	close(startHash)
+	var totalLatency time.Duration
+	for completed := 0; completed < 2; {
+		sampleHeap()
+		select {
+		case result := <-results:
+			if result.err != nil {
+				t.Fatal(result.err)
+			}
+			totalLatency += result.elapsed
+			completed++
+		case <-ticker.C:
+		case <-timeout.C:
+			t.Fatal("timed out qualifying production Argon2 hashes")
+		}
+	}
+	sampleHeap()
+	peakDelta := peakHeap - baseline.HeapAlloc
+	if peakActive.Load() != 2 {
+		t.Fatalf("observed max active=%d, want 2", peakActive.Load())
+	}
+	if peakDelta < uint64(argonMemory)*1024 {
+		t.Fatalf("measured heap delta=%d bytes, below one Argon2 workspace", peakDelta)
+	}
+	t.Logf("Argon2 v%d m=%dKiB t=%d p=%d: max-active=%d peak-heap-delta=%dMiB mean-hash-latency=%s wall=%s",
+		argonVersion, argonMemory, argonTime, argonThreads, peakActive.Load(), peakDelta/(1024*1024), totalLatency/2, time.Since(started))
+}
+
 
 func TestStoreExposesReusableAdministratorInvariant(t *testing.T) {
 	s, _ := openTestStore(t)
