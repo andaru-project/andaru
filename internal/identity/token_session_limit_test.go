@@ -204,7 +204,7 @@ func TestTokenScopeExpiryRevocationAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	revision, err := s.Revision(ctx)
+	revision, err = s.Revision(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

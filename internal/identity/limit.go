@@ -9,7 +9,6 @@ import (
 	"errors"
 	"io"
 	"net"
-	"time"
 )
 
 const (
