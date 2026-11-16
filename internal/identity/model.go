@@ -126,6 +126,13 @@ type LoginResult struct {
 	ExpiresAt     time.Time
 }
 
+type Session struct {
+	Selector   string
+	CreatedAt  time.Time
+	LastSeenAt time.Time
+	ExpiresAt  time.Time
+}
+
 type Principal struct {
 	Account            Account
 	Actor              authz.Actor
@@ -133,6 +140,7 @@ type Principal struct {
 	Token              *Token
 	SessionSelector    string
 	AuthorizationEpoch uint64
+	SessionExpiresAt    time.Time
 }
 
 // OperationIntent binds a state-changing transaction to a verified actor and audit intent.
@@ -184,10 +192,15 @@ type Store interface {
 	ListTokensPage(context.Context, string, string, int) (TokenPage, error)
 	RevokeToken(context.Context, string) error
 	AuthenticatePassword(context.Context, string, string, string, uint64) (LoginResult, error)
+	AuthenticatePasswordWithIntent(context.Context, string, string, string, uint64, func(Account) error) (LoginResult, error)
 	AuthenticateSession(context.Context, string, string, uint64) (Principal, error)
 	RotateCSRF(context.Context, string, string, uint64) (string, error)
 	AuthenticateToken(context.Context, string, string, authz.Snapshot) (Principal, error)
 	// ValidateCSRF checks a synchronizer token after AuthenticateSession validates its epochs.
 	ValidateCSRF(context.Context, string, string, string, string) error
 	Logout(context.Context, string, string) error
+	LogoutWithIntent(context.Context, string, string, func(string) error) error
+	ListSessions(context.Context, string, uint64) ([]Session, error)
+	RevokeSession(context.Context, string, string) error
+	RevokeSessionWithIntent(context.Context, string, string, func() error) error
 }

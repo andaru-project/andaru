@@ -90,6 +90,10 @@ func accountByLogin(ctx context.Context, q accountQueryer, login string) (Accoun
 }
 
 func (s *store) AuthenticatePassword(ctx context.Context, login, password, source string, authorizationEpoch uint64) (LoginResult, error) {
+	return s.AuthenticatePasswordWithIntent(ctx, login, password, source, authorizationEpoch, nil)
+}
+
+func (s *store) AuthenticatePasswordWithIntent(ctx context.Context, login, password, source string, authorizationEpoch uint64, beforeSession func(Account) error) (LoginResult, error) {
 	if err := ctx.Err(); err != nil {
 		return LoginResult{}, err
 	}
@@ -157,6 +161,11 @@ func (s *store) AuthenticatePassword(ctx context.Context, login, password, sourc
 	}
 	if err = s.recordLoginSuccess(ctx, loginHash, time.Now().Unix()); err != nil {
 		return LoginResult{}, ErrRateLimited
+	}
+	if beforeSession != nil {
+		if err = beforeSession(account); err != nil {
+			return LoginResult{}, err
+		}
 	}
 	return s.createSession(ctx, account.ID, accountEpoch, passwordEpoch, authorizationEpoch)
 }
@@ -297,7 +306,10 @@ func (s *store) AuthenticateSession(ctx context.Context, selector, secret string
 	if err = tx.Commit(); err != nil {
 		return Principal{}, err
 	}
-	return Principal{Account: account, Actor: authz.Actor{Kind: authz.ActorAccount, ID: accountID}, SessionSelector: selector, AuthorizationEpoch: authorizationEpoch}, nil
+	return Principal{
+		Account: account, Actor: authz.Actor{Kind: authz.ActorAccount, ID: accountID}, SessionSelector: selector,
+		AuthorizationEpoch: authorizationEpoch, SessionExpiresAt: time.Unix(expires, 0).UTC(),
+	}, nil
 }
 
 func (s *store) ValidateCSRF(ctx context.Context, sessionSelector, sessionSecret, csrfSelector, csrfSecret string) error {
@@ -380,6 +392,10 @@ func (s *store) RotateCSRF(ctx context.Context, sessionSelector, sessionSecret s
 }
 
 func (s *store) Logout(ctx context.Context, selector, secret string) error {
+	return s.LogoutWithIntent(ctx, selector, secret, nil)
+}
+
+func (s *store) LogoutWithIntent(ctx context.Context, selector, secret string, beforeDelete func(string) error) error {
 	selectorBytes, err := decodeSessionPart(selector)
 	if err != nil {
 		return nil
@@ -404,9 +420,117 @@ func (s *store) Logout(ctx context.Context, selector, secret string) error {
 		return err
 	}
 	if len(storedHash) == sha256.Size && subtle.ConstantTimeCompare(providedHash[:], storedHash) == 1 {
+		if beforeDelete != nil {
+			if err = beforeDelete(selector); err != nil {
+				return err
+			}
+		}
 		if _, err = tx.ExecContext(ctx, "DELETE FROM sessions WHERE session_selector=?", selectorBytes); err != nil {
 			return err
 		}
+	}
+	return tx.Commit()
+}
+
+func (s *store) ListSessions(ctx context.Context, accountID string, authorizationEpoch uint64) ([]Session, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	account, err := accountByID(ctx, tx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	if !account.Enabled || account.Kind != Human {
+		return nil, ErrAuthentication
+	}
+	accountEpoch, err := readEpoch(ctx, tx, "account_epoch:"+accountID)
+	if err != nil {
+		return nil, err
+	}
+	passwordEpoch, err := readEpoch(ctx, tx, "password_epoch:"+accountID)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().Unix()
+	if _, err = tx.ExecContext(ctx, `DELETE FROM sessions WHERE account_id=? AND
+		(expires_at<=? OR last_seen_at<=? OR account_epoch<>? OR password_epoch<>? OR auth_epoch<>?)`,
+		accountID, now, now-sessionIdleSeconds, accountEpoch, passwordEpoch, authorizationEpoch); err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT session_selector,created_at,last_seen_at,expires_at
+		FROM sessions WHERE account_id=? ORDER BY created_at DESC,session_selector DESC`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	sessions := []Session{}
+	for rows.Next() {
+		var selector []byte
+		var createdAt, lastSeenAt, expiresAt int64
+		if err = rows.Scan(&selector, &createdAt, &lastSeenAt, &expiresAt); err != nil {
+			return nil, err
+		}
+		if len(selector) != sessionSelectorBytes {
+			return nil, errors.New("invalid stored session selector")
+		}
+		sessions = append(sessions, Session{
+			Selector:   base64.RawURLEncoding.EncodeToString(selector),
+			CreatedAt:  time.Unix(0, createdAt).UTC(),
+			LastSeenAt: time.Unix(lastSeenAt, 0).UTC(),
+			ExpiresAt:  time.Unix(expiresAt, 0).UTC(),
+		})
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	if err = rows.Close(); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return sessions, nil
+}
+
+func (s *store) RevokeSession(ctx context.Context, accountID, selector string) error {
+	return s.RevokeSessionWithIntent(ctx, accountID, selector, nil)
+}
+
+func (s *store) RevokeSessionWithIntent(ctx context.Context, accountID, selector string, beforeDelete func() error) error {
+	selectorBytes, err := decodeSessionPart(selector)
+	if err != nil {
+		return ErrNotFound
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var storedAccountID string
+	err = tx.QueryRowContext(ctx, "SELECT account_id FROM sessions WHERE session_selector=?", selectorBytes).Scan(&storedAccountID)
+	if err == sql.ErrNoRows || storedAccountID != accountID {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if beforeDelete != nil {
+		if err = beforeDelete(); err != nil {
+			return err
+		}
+	}
+	result, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE account_id=? AND session_selector=?", accountID, selectorBytes)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return ErrNotFound
 	}
 	return tx.Commit()
 }

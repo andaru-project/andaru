@@ -20,8 +20,36 @@ import (
 	"github.com/andaru-project/andaru/internal/securefs"
 )
 
+type WebSocketOptions struct {
+	SocketPath string
+	UID        uint32
+	GID        uint32
+	Origins    []string
+}
+
 // Serve runs the root-local engine API without opening an IP listener.
-func Serve(ctx context.Context, socketPath, stateDir string) (result error) {
+func Serve(ctx context.Context, socketPath, stateDir string) error {
+	return serveEngine(ctx, socketPath, stateDir, nil)
+}
+
+// ServeWithWeb adds the separately gated socket used by the unprivileged HTTPS process.
+func ServeWithWeb(ctx context.Context, socketPath, stateDir string, web WebSocketOptions) error {
+	if web.UID == 0 || web.GID == 0 {
+		return errors.New("web socket requires non-root static UID and GID")
+	}
+	if !filepath.IsAbs(web.SocketPath) || filepath.Clean(web.SocketPath) != web.SocketPath || len(web.SocketPath) >= 108 {
+		return errors.New("web engine socket requires a canonical absolute path shorter than 108 bytes")
+	}
+	if _, _, err := managementOrigins(web.Origins); err != nil {
+		return err
+	}
+	if web.SocketPath == socketPath || filepath.Dir(web.SocketPath) == filepath.Dir(socketPath) {
+		return errors.New("root and web engine sockets must use separate parent directories")
+	}
+	return serveEngine(ctx, socketPath, stateDir, &web)
+}
+
+func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocketOptions) (result error) {
 	if os.Geteuid() != 0 {
 		return errors.New("the engine requires root")
 	}
@@ -82,10 +110,31 @@ func Serve(ctx context.Context, socketPath, stateDir string) (result error) {
 	if err = audits.Reconcile(ctx, coordinator); err != nil && !errors.Is(err, audit.ErrReconciliationComplete) {
 		return fmt.Errorf("reconcile identity audit operations: %w", err)
 	}
-	err = serveUnix(lifetime, socketPath, newHandlerWithAPIs(host.ReadLinks, newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, previewIdentities(read, generation.Dir(stateDir)), live, backups), identityAPI, auditAPI))
+	rootAPI := newHandlerWithAPIs(host.ReadLinks, newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, previewIdentities(read, generation.Dir(stateDir)), live, backups), identityAPI, auditAPI)
+	if web == nil {
+		err = serveUnix(lifetime, socketPath, rootAPI)
+	} else {
+		var webAPI http.Handler
+		webAPI, err = newWebAPI(identities, store, coordinator, rootAPI, stateDir, web.Origins)
+		if err != nil {
+			return err
+		}
+		served := make(chan error, 2)
+		go func() { served <- serveUnix(lifetime, socketPath, rootAPI) }()
+		go func() { served <- serveWebUnix(lifetime, *web, webAPI) }()
+		first := <-served
+		if lifetime.Err() == nil {
+			if first == nil {
+				first = errors.New("engine listener stopped unexpectedly")
+			}
+			cancel(first)
+		}
+		second := <-served
+		err = errors.Join(first, second)
+	}
 	cause := context.Cause(lifetime)
 	if cause != nil && !errors.Is(cause, context.Canceled) && !errors.Is(cause, context.DeadlineExceeded) {
-		return cause
+		return errors.Join(cause, err)
 	}
 	return err
 }
@@ -137,25 +186,138 @@ func serveUnix(ctx context.Context, socketPath string, handler http.Handler) (re
 		return fmt.Errorf("protect engine socket: %w", err)
 	}
 
+	return serveHTTP(ctx, listener, handler, func(ctx context.Context, connection net.Conn) context.Context {
+		unix, ok := connection.(*net.UnixConn)
+		if !ok {
+			return ctx
+		}
+		uid, err := peerUID(unix)
+		if err != nil {
+			slog.Error("read engine peer credentials", "error", err)
+			return ctx
+		}
+		return context.WithValue(ctx, peerKey{}, peerIdentity{uid: uid, verified: true})
+	})
+}
+
+func serveWebUnix(ctx context.Context, web WebSocketOptions, handler http.Handler) (result error) {
+	socketPath := web.SocketPath
+	if os.Geteuid() != 0 {
+		return errors.New("the engine requires root")
+	}
+	if !filepath.IsAbs(socketPath) || filepath.Clean(socketPath) != socketPath || len(socketPath) >= 108 {
+		return errors.New("web engine socket requires a canonical absolute path shorter than 108 bytes")
+	}
+	if ctx.Err() != nil {
+		return nil
+	}
+	parent := filepath.Dir(socketPath)
+	if err := securefs.CheckAncestors(filepath.Dir(parent)); err != nil {
+		return err
+	}
+	created := false
+	if err := os.Mkdir(parent, 0710); err == nil {
+		created = true
+		if err = os.Chown(parent, 0, int(web.GID)); err != nil {
+			_ = os.Remove(parent)
+			return fmt.Errorf("set web engine runtime directory group: %w", err)
+		}
+		if err = os.Chmod(parent, 0710); err != nil {
+			_ = os.Remove(parent)
+			return fmt.Errorf("protect web engine runtime directory: %w", err)
+		}
+	} else if !os.IsExist(err) {
+		return fmt.Errorf("create web engine runtime directory: %w", err)
+	}
+	info, err := os.Lstat(parent)
+	if err != nil {
+		return fmt.Errorf("inspect web engine runtime directory: %w", err)
+	}
+	stat, statOK := info.Sys().(*syscall.Stat_t)
+	if !info.IsDir() || info.Mode().Perm() != 0710 || !securefs.RootOwned(info) || !statOK || stat.Gid != web.GID {
+		if created {
+			_ = os.Remove(parent)
+		}
+		return errors.New("web engine socket parent must be a root-owned 0710 directory with the configured group, not a symlink")
+	}
+	if _, err = os.Lstat(socketPath); err == nil {
+		return errors.New("web engine socket path already exists; investigate it rather than replacing it")
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("inspect web engine socket path: %w", err)
+	}
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
+	if err != nil {
+		return fmt.Errorf("listen on web engine socket: %w", err)
+	}
+	listener.SetUnlinkOnClose(false)
+	bound, err := os.Lstat(socketPath)
+	if err != nil || bound.Mode()&os.ModeSocket == 0 || !securefs.RootOwned(bound) {
+		_ = listener.Close()
+		return errors.New("cannot establish ownership of the bound web engine socket")
+	}
+	defer func() {
+		_ = listener.Close()
+		result = errors.Join(result, removeOwnedSocket(socketPath, bound))
+	}()
+	if err = os.Chown(socketPath, 0, int(web.GID)); err != nil {
+		return fmt.Errorf("set web engine socket group: %w", err)
+	}
+	if err = os.Chmod(socketPath, 0660); err != nil {
+		return fmt.Errorf("protect web engine socket: %w", err)
+	}
+	owned, err := os.Lstat(socketPath)
+	if err != nil {
+		return fmt.Errorf("inspect bound web engine socket: %w", err)
+	}
+	socketStat, statOK := owned.Sys().(*syscall.Stat_t)
+	if owned.Mode()&os.ModeSocket == 0 || owned.Mode().Perm() != 0660 || !securefs.RootOwned(owned) || !os.SameFile(bound, owned) || !statOK || socketStat.Gid != web.GID {
+		return errors.New("cannot establish ownership and mode of the bound web engine socket")
+	}
+	verified := &webPeerListener{UnixListener: listener, uid: web.UID}
+	return serveHTTP(ctx, verified, handler, func(ctx context.Context, connection net.Conn) context.Context {
+		peer, ok := connection.(*verifiedWebConn)
+		if !ok {
+			return ctx
+		}
+		return context.WithValue(ctx, peerKey{}, peerIdentity{uid: peer.uid, verified: true, web: true})
+	})
+}
+
+type webPeerListener struct {
+	*net.UnixListener
+	uid uint32
+}
+
+func (l *webPeerListener) Accept() (net.Conn, error) {
+	for {
+		connection, err := l.AcceptUnix()
+		if err != nil {
+			return nil, err
+		}
+		uid, credentialErr := peerUID(connection)
+		if credentialErr != nil || uid != l.uid {
+			_ = connection.Close()
+			continue
+		}
+		return &verifiedWebConn{UnixConn: connection, uid: uid}, nil
+	}
+}
+
+type verifiedWebConn struct {
+	*net.UnixConn
+	uid uint32
+}
+
+func serveHTTP(ctx context.Context, listener net.Listener, handler http.Handler, connContext func(context.Context, net.Conn) context.Context) error {
 	daemonContext, cancel := context.WithCancel(ctx)
 	defer cancel()
 	server := &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       30 * time.Second,
+		MaxHeaderBytes:    32 << 10,
 		BaseContext:       func(net.Listener) context.Context { return daemonContext },
-		ConnContext: func(ctx context.Context, connection net.Conn) context.Context {
-			unix, ok := connection.(*net.UnixConn)
-			if !ok {
-				return ctx
-			}
-			uid, err := peerUID(unix)
-			if err != nil {
-				slog.Error("read engine peer credentials", "error", err)
-				return ctx
-			}
-			return context.WithValue(ctx, peerKey{}, peerIdentity{uid: uid, verified: true})
-		},
+		ConnContext:       connContext,
 	}
 	served := make(chan error, 1)
 	go func() { served <- server.Serve(listener) }()

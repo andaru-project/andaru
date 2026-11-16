@@ -4,7 +4,7 @@
   "info": {
     "title": "Andaru local engine API",
     "version": "0.4.0-dev",
-    "description": "Experimental root-local engine API over Unix sockets only. Verified UID 0 SO_PEERCRED authorizes every route. Network status is observed; configuration and restore writes create durable saved versions and never activate networking. Backup archives are returned only to the authorized local client. Contracts remain provisional until Andaru 1.0.",
+    "description": "Experimental engine API over separate kernel-peer-gated Unix sockets. UID 0 retains the root-local API; the dedicated web UID receives only authenticated browser/token routes plus login and setup-required status. Network status is observed; configuration and restore writes create durable saved versions and never activate networking. Contracts remain provisional until Andaru 1.0.",
     "license": {
       "name": "GNU AGPLv3",
       "url": "https://github.com/andaru-project/andaru/blob/main/LICENSE"
@@ -19,7 +19,87 @@
   "x-andaru-peer-uids": [
     0
   ],
+  "x-andaru-web-peer-uid": "Exact non-root UID configured at engine startup; accepted only on the separate web socket before HTTP parsing.",
   "paths": {
+    "/api/v1/startup-status": {
+      "get": {
+        "operationId": "getStartupStatus",
+        "summary": "Read only whether root-console identity bootstrap is still required",
+        "x-andaru-web-auth-route": true,
+        "responses": {
+          "200": {"description": "Setup-required status only", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/StartupStatus"}}}},
+          "421": {"description": "Host is not a configured management host"},
+          "503": {"description": "Identity status is unavailable"}
+        }
+      },
+      "head": {
+        "operationId": "headStartupStatus",
+        "summary": "Check setup-required status without a response body",
+        "x-andaru-web-auth-route": true,
+        "responses": {"200": {"description": "Status is available"}}
+      }
+    },
+    "/api/v1/session": {
+      "post": {
+        "operationId": "loginSession",
+        "summary": "Authenticate a human and create a browser session",
+        "x-andaru-web-auth-route": true,
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WebLoginRequest"}}}
+        },
+        "responses": {
+          "200": {"description": "Session created; also sets __Host-andaru_session", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WebSession"}}}},
+          "401": {"description": "Generic invalid or unusable credentials"},
+          "429": {"description": "Generic login backoff or password-hash admission limit"},
+          "503": {"description": "Authorization, identity, or audit is unavailable"}
+        }
+      },
+      "get": {
+        "operationId": "getCurrentSession",
+        "summary": "Read the current human session and rotate its CSRF token",
+        "x-andaru-web-auth-route": true,
+        "responses": {
+          "200": {"description": "Current session with a newly rotated CSRF token", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WebSession"}}}},
+          "401": {"description": "Session cookie is absent or invalid"}
+        }
+      },
+      "delete": {
+        "operationId": "logoutSession",
+        "summary": "Revoke the current browser session",
+        "x-andaru-web-auth-route": true,
+        "responses": {
+          "204": {"description": "Session revoked and cookie cleared"},
+          "403": {"description": "Origin or CSRF validation failed"},
+          "503": {"description": "Identity or audit is unavailable"}
+        }
+      }
+    },
+    "/api/v1/sessions": {
+      "get": {
+        "operationId": "listOwnSessions",
+        "summary": "List the authenticated human's active sessions",
+        "x-andaru-web-auth-route": true,
+        "responses": {
+          "200": {"description": "At most five active sessions", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WebSessionPage"}}}},
+          "401": {"description": "Session cookie is absent or invalid"}
+        }
+      }
+    },
+    "/api/v1/sessions/{id}": {
+      "delete": {
+        "operationId": "revokeOwnSession",
+        "summary": "Revoke one session owned by the authenticated human",
+        "x-andaru-web-auth-route": true,
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string", "minLength": 43, "maxLength": 43}}],
+        "responses": {
+          "204": {"description": "Session revoked"},
+          "403": {"description": "Origin or CSRF validation failed"},
+          "404": {"description": "Owned session not found"},
+          "503": {"description": "Identity or audit is unavailable"}
+        }
+      }
+    },
     "/api/v1/status/prefixes": {
       "get": {
         "operationId": "readDelegatedPrefixes",
@@ -5415,6 +5495,61 @@
   },
   "components": {
     "schemas": {
+      "StartupStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["setupRequired"],
+        "properties": {"setupRequired": {"type": "boolean"}}
+      },
+      "WebLoginRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["login", "password"],
+        "properties": {
+          "login": {"type": "string", "minLength": 1, "maxLength": 64},
+          "password": {"type": "string", "minLength": 1, "maxLength": 512}
+        }
+      },
+      "WebAccount": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "login", "displayName"],
+        "properties": {
+          "id": {"type": "string", "format": "uuid"},
+          "login": {"type": "string"},
+          "displayName": {"type": "string"}
+        }
+      },
+      "WebSession": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["account", "capabilities", "csrfToken", "expiresAt", "idleTimeoutSeconds"],
+        "properties": {
+          "account": {"$ref": "#/components/schemas/WebAccount"},
+          "capabilities": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "csrfToken": {"type": "string", "minLength": 87, "maxLength": 87},
+          "expiresAt": {"type": "string", "format": "date-time"},
+          "idleTimeoutSeconds": {"type": "integer", "const": 1800}
+        }
+      },
+      "WebSessionItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "createdAt", "lastSeenAt", "expiresAt", "current"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
+          "createdAt": {"type": "string", "format": "date-time"},
+          "lastSeenAt": {"type": "string", "format": "date-time"},
+          "expiresAt": {"type": "string", "format": "date-time"},
+          "current": {"type": "boolean"}
+        }
+      },
+      "WebSessionPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {"items": {"type": "array", "maxItems": 5, "items": {"$ref": "#/components/schemas/WebSessionItem"}}}
+      },
       "BackupCreateOptions": {
         "type": "object",
         "additionalProperties": false,

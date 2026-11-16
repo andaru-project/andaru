@@ -125,7 +125,7 @@ func validateRouteCapabilities(document []byte, routes []routeCapability) error 
 	}
 	contractRoutes := make(map[string]struct{})
 	for path, operations := range contract.Paths {
-		for method := range operations {
+		for method, operation := range operations {
 			method = strings.ToUpper(method)
 			if method == "PARAMETERS" || strings.HasPrefix(method, "X-") {
 				continue
@@ -134,6 +134,15 @@ func validateRouteCapabilities(document []byte, routes []routeCapability) error 
 			case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
 			default:
 				return fmt.Errorf("OpenAPI route %s %s is not a supported HTTP method", path, strings.ToLower(method))
+			}
+			var annotation struct {
+				WebAuthRoute bool `json:"x-andaru-web-auth-route"`
+			}
+			if err := json.Unmarshal(operation, &annotation); err != nil {
+				return fmt.Errorf("decode OpenAPI route %s %s: %w", path, strings.ToLower(method), err)
+			}
+			if annotation.WebAuthRoute {
+				continue
 			}
 			key := method + " " + path
 			contractRoutes[key] = struct{}{}

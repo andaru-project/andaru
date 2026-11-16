@@ -222,7 +222,7 @@ type actionRule struct {
 var actionRules = map[Action]actionRule{
 	ActionLoginSuccess:           {category: CategoryGeneral},
 	ActionLoginFailure:           {category: CategoryGeneral, coalesces: true},
-	ActionLoginBackoff:           {category: CategoryGeneral},
+	ActionLoginBackoff:           {category: CategoryGeneral, coalesces: true},
 	ActionSessionLogout:          {category: CategoryGeneral},
 	ActionSessionRevoked:         {category: CategoryGeneral},
 	ActionPermissionDenied:       {category: CategoryGeneral},

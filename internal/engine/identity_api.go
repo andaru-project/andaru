@@ -516,6 +516,10 @@ func (h *identityAPI) changePassword(w http.ResponseWriter, r *http.Request, id 
 			return
 		}
 	} else {
+		if actor.Actor.Kind != authz.ActorAccount {
+			writeError(w, r, http.StatusForbidden, "FORBIDDEN", "Password reauthentication requires a human browser session.")
+			return
+		}
 		if request.CurrentPassword == "" {
 			writeError(w, r, http.StatusUnauthorized, "AUTHENTICATION_FAILED", "Password authentication failed.")
 			return

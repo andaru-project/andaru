@@ -23,6 +23,7 @@ type peerKey struct{}
 type peerIdentity struct {
 	uid      uint32
 	verified bool
+	web      bool
 }
 
 type linksResponse struct {
