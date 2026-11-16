@@ -32,14 +32,14 @@ const (
 const applicationID = 0x414e4441
 
 var (
-	ErrInvalid            = errors.New("invalid audit record")
-	ErrStorage            = errors.New("audit storage unavailable")
-	ErrGeneralSaturated   = errors.New("general audit capacity exhausted")
-	ErrProtectedSaturated = errors.New("protected audit capacity exhausted")
-	ErrOperationInFlight  = errors.New("operation is still in flight")
-	ErrOperationConflict  = errors.New("operation ID conflicts with recorded request")
-	ErrOperationMismatch  = errors.New("authoritative operation does not match audit intent")
-	ErrOperationSource    = errors.New("authoritative operation source unavailable")
+	ErrInvalid                = errors.New("invalid audit record")
+	ErrStorage                = errors.New("audit storage unavailable")
+	ErrGeneralSaturated       = errors.New("general audit capacity exhausted")
+	ErrProtectedSaturated     = errors.New("protected audit capacity exhausted")
+	ErrOperationInFlight      = errors.New("operation is still in flight")
+	ErrOperationConflict      = errors.New("operation ID conflicts with recorded request")
+	ErrOperationMismatch      = errors.New("authoritative operation does not match audit intent")
+	ErrOperationSource        = errors.New("authoritative operation source unavailable")
 	ErrIntegrity              = errors.New("audit integrity check failed")
 	ErrReceiptFull            = errors.New("emergency audit receipt is full")
 	ErrReconciliationRequired = errors.New("audit reconciliation is required before mutation")
@@ -395,23 +395,6 @@ func validateMetadata(metadata map[string]string) error {
 	return nil
 }
 
-func validActor(actor authz.Actor) bool {
-	if actor.ID == "" {
-		return false
-	}
-	switch actor.Kind {
-	case authz.ActorSystem, authz.ActorAccount:
-		return safeText(actor.ID, 128)
-	case authz.ActorToken:
-		if len(actor.ID) != base64.RawURLEncoding.EncodedLen(16) {
-			return false
-		}
-		selector, err := base64.RawURLEncoding.DecodeString(actor.ID)
-		return err == nil && len(selector) == 16 && base64.RawURLEncoding.EncodeToString(selector) == actor.ID
-	default:
-		return false
-	}
-}
 
 func validSource(source string) bool {
 	if len(source) > 128 {

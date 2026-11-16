@@ -319,8 +319,6 @@ func TestCoalescedAppendPrunesExpiredEvents(t *testing.T) {
 	}
 }
 
-
-
 func TestCategoryBudgetsReserveProtectedRevocation(t *testing.T) {
 	s, _ := openTestStore(t)
 	ctx := context.Background()

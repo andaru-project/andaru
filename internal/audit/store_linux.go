@@ -87,6 +87,7 @@ func (s *Store) Append(ctx context.Context, event Event) (Event, error) {
 	defer s.endMutation()
 	return s.append(ctx, event, false)
 }
+
 // AppendSafety records the typed event in audit.db and an independent bounded receipt.
 // Callers must continue safety recovery even when this method reports an error.
 func (s *Store) AppendSafety(ctx context.Context, event Event) error {
