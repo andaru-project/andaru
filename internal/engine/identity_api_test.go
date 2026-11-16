@@ -34,7 +34,7 @@ func identityTestServices(t *testing.T) (identity.Store, *audit.Store, *security
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = audits.Close() })
-	coordinator := newSecurityCoordinator(identities, audits)
+	coordinator := newSecurityCoordinator(identities, audits, stateDir)
 	identityAPI := newIdentityAPI(identities, nil, coordinator)
 	auditAPI := newAuditAPI(coordinator)
 	handler := newHandlerWithAPIs(func(context.Context) ([]host.LinkStatus, error) { return []host.LinkStatus{}, nil }, http.NotFoundHandler(), identityAPI, auditAPI)
@@ -217,7 +217,7 @@ func TestAuditReconcilesIdentityGeneratedCreationTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	coordinator := newSecurityCoordinator(identities, audits)
+	coordinator := newSecurityCoordinator(identities, audits, stateDir)
 	body := []byte(`{"login":"worker","kind":"service"}`)
 	hash, err := identities.HashRequest(ctx, body)
 	if err != nil {
@@ -249,7 +249,7 @@ func TestAuditReconcilesIdentityGeneratedCreationTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer audits.Close()
-	coordinator = newSecurityCoordinator(identities, audits)
+	coordinator = newSecurityCoordinator(identities, audits, stateDir)
 	if err = audits.Reconcile(ctx, coordinator); err != nil {
 		t.Fatal(err)
 	}

@@ -17,6 +17,8 @@ import (
 	"slices"
 	"strconv"
 	"time"
+
+	"github.com/andaru-project/andaru/internal/authz"
 )
 
 const (
@@ -39,6 +41,8 @@ type Manifest struct {
 	Baseline              string      `json:"baseline,omitempty"`
 	ID                    int         `json:"id"`
 	SavedVersion          string      `json:"savedVersion"`
+	AuthorizationDigest   string      `json:"authorizationDigest"`
+	IdentityRevision      int64       `json:"identityRevision"`
 	CreatedAt             time.Time   `json:"createdAt"`
 	Takeover              bool        `json:"takeover"`
 	ConfirmTimeoutSeconds int         `json:"confirmTimeoutSeconds"`
@@ -86,6 +90,21 @@ func is(p *int, id int) bool { return p != nil && *p == id }
 func sum(data []byte) string {
 	s := sha256.Sum256(data)
 	return hex.EncodeToString(s[:])
+}
+
+func normalizeAuthorization(m *Manifest) error {
+	if m.AuthorizationDigest == "" {
+		var err error
+		m.AuthorizationDigest, err = authz.Digest(nil)
+		if err != nil {
+			return err
+		}
+	}
+	raw, err := hex.DecodeString(m.AuthorizationDigest)
+	if err != nil || len(raw) != sha256.Size || hex.EncodeToString(raw) != m.AuthorizationDigest || m.IdentityRevision < 0 {
+		return errors.New("invalid generation authorization metadata")
+	}
+	return nil
 }
 
 // writeAtomic leaves either the old file or the whole new one, also across a power loss.
@@ -172,6 +191,9 @@ func ids(dir string) ([]int, error) {
 
 // Create allocates the next number and stores the files and manifest. It writes no state and no pointer.
 func Create(dir string, m Manifest, contents map[string][]byte) (int, error) {
+	if err := normalizeAuthorization(&m); err != nil {
+		return 0, err
+	}
 	for i, f := range m.Files {
 		data, ok := contents[f.Path]
 		if !ok || !allowed(f.Path) || f.Mode != "0644" {
@@ -227,6 +249,9 @@ func readPointers(dir string) (Pointers, error) {
 	return p, err
 }
 
+// ReadPointers returns the generation commit point without loading generation history.
+func ReadPointers(dir string) (Pointers, error) { return readPointers(dir) }
+
 func read(dir string, id int, p Pointers) (Generation, error) {
 	var g Generation
 	own := filepath.Join(dir, strconv.Itoa(id))
@@ -236,6 +261,9 @@ func read(dir string, id int, p Pointers) (Generation, error) {
 	}
 	if !found || g.ID != id {
 		return g, fmt.Errorf("generation %d: %w", id, fs.ErrNotExist)
+	}
+	if err := normalizeAuthorization(&g.Manifest); err != nil {
+		return g, fmt.Errorf("generation %d: %w", id, err)
 	}
 	found, err = readJSON(filepath.Join(own, "state.json"), &g.State)
 	if err != nil {

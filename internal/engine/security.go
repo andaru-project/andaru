@@ -22,11 +22,16 @@ type routeCapability struct {
 }
 
 type requestActor struct {
-	Actor        authz.Actor
-	Source       string
-	AccountID    string
-	Capabilities []authz.Capability
-	Root         bool
+	Actor              authz.Actor
+	Source             string
+	AccountID          string
+	AccountKind        identity.AccountKind
+	RoleIDs            []string
+	SessionSelector    string
+	AuthorizationEpoch uint64
+	TokenScope         []authz.Capability
+	Capabilities       []authz.Capability
+	Root               bool
 }
 
 type authenticatedActorKey struct{}
@@ -205,7 +210,14 @@ func actorFromRequest(r *http.Request) (requestActor, bool) {
 
 // withVerifiedPrincipal is called only after identity store authentication succeeds.
 func withVerifiedPrincipal(ctx context.Context, principal identity.Principal, source string) context.Context {
-	trusted := requestActor{Actor: principal.Actor, Source: source, AccountID: principal.Account.ID, Capabilities: slices.Clone(principal.Capabilities)}
+	trusted := requestActor{
+		Actor: principal.Actor, Source: source, AccountID: principal.Account.ID, AccountKind: principal.Account.Kind,
+		RoleIDs: slices.Clone(principal.Account.RoleIDs), SessionSelector: principal.SessionSelector,
+		AuthorizationEpoch: principal.AuthorizationEpoch, Capabilities: slices.Clone(principal.Capabilities),
+	}
+	if principal.Token != nil {
+		trusted.TokenScope = slices.Clone(principal.Token.Scope)
+	}
 	if validRequestActor(trusted) {
 		return context.WithValue(ctx, authenticatedActorKey{}, trusted)
 	}
@@ -230,6 +242,11 @@ func validRequestActor(actor requestActor) bool {
 	}
 	known := authz.Catalog()
 	for _, capability := range actor.Capabilities {
+		if !slices.Contains(known, capability) {
+			return false
+		}
+	}
+	for _, capability := range actor.TokenScope {
 		if !slices.Contains(known, capability) {
 			return false
 		}
@@ -320,6 +337,7 @@ func authorizeRequest(w http.ResponseWriter, r *http.Request) (requestActor, boo
 type securityCoordinator struct {
 	identities identity.Store
 	audits     *audit.Store
+	stateDir   string
 }
 
 type operationExecution struct {
@@ -331,8 +349,23 @@ type operationExecution struct {
 	MutationErr  error
 }
 
-func newSecurityCoordinator(identities identity.Store, audits *audit.Store) *securityCoordinator {
-	return &securityCoordinator{identities: identities, audits: audits}
+func newSecurityCoordinator(identities identity.Store, audits *audit.Store, stateDir string) *securityCoordinator {
+	return &securityCoordinator{identities: identities, audits: audits, stateDir: stateDir}
+}
+
+// withAuthorizationLock serializes account transactions with generation authorization transitions.
+func (c *securityCoordinator) withAuthorizationLock(ctx context.Context, fn func() error) error {
+	lock, err := authz.Acquire(ctx, c.stateDir)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if _, pending, err := lock.Pending(); err != nil {
+		return err
+	} else if pending {
+		return authz.ErrTransitionInProgress
+	}
+	return fn()
 }
 
 func (c *securityCoordinator) LookupOperation(ctx context.Context, operationID string) (audit.OperationRecord, bool, error) {
@@ -404,7 +437,16 @@ func (c *securityCoordinator) execute(
 		Target:      target,
 		Category:    string(category),
 	})
-	createdTarget, value, mutationErr := mutate(operationCtx)
+	var createdTarget string
+	var value any
+	var mutationErr error
+	lockErr := c.withAuthorizationLock(operationCtx, func() error {
+		createdTarget, value, mutationErr = mutate(operationCtx)
+		return mutationErr
+	})
+	if lockErr != nil && mutationErr == nil {
+		return operationExecution{}, lockErr
+	}
 	if mutationErr != nil {
 		outcome := audit.Outcome{OperationID: operationID, Result: audit.ResultNotCommitted}
 		finishErr := c.audits.Finish(ctx, outcome)

@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/host"
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -175,6 +176,35 @@ func TestConfigurationHTTPContract(t *testing.T) {
 	}
 	assertAPIError(t, configCall(h, "GET", path, "", ""), 404, "NOT_FOUND")
 	assertAPIError(t, configCall(h, "DELETE", path, "", newtag), 412, "PRECONDITION_FAILED")
+}
+
+func TestConfigurationRolesCRUDAndCAS(t *testing.T) {
+	h, _ := configurationFixture(t)
+	created := configCall(h, http.MethodPost, "/api/v1/config/roles", `{"name":"Operator","capabilities":["configuration.read"]}`, "")
+	if created.Code != http.StatusCreated || created.Header().Get("Andaru-Saved-Version") != "1" {
+		t.Fatalf("create role: status=%d body=%s", created.Code, created.Body)
+	}
+	view := apiObject(t, created)
+	id := valueID(t, view)
+	var role authz.Role
+	if err := json.Unmarshal(view.Value, &role); err != nil || role.ID != id || role.BuiltIn != "" {
+		t.Fatalf("created role = %+v error=%v", role, err)
+	}
+	path := "/api/v1/config/roles/" + id
+	read := configCall(h, http.MethodGet, path, "", "")
+	tag := `"` + id + `.1"`
+	if read.Code != http.StatusOK || read.Header().Get("ETag") != tag {
+		t.Fatalf("read role: status=%d headers=%v body=%s", read.Code, read.Header(), read.Body)
+	}
+	updated := configCall(h, http.MethodPut, path, `{"name":"Operator","description":"saved only","capabilities":["configuration.read","configuration.write"]}`, tag)
+	if updated.Code != http.StatusOK || updated.Header().Get("Andaru-Saved-Version") != "2" {
+		t.Fatalf("update role: status=%d body=%s", updated.Code, updated.Body)
+	}
+	assertAPIError(t, configCall(h, http.MethodPut, path, `{"name":"Stale","capabilities":["configuration.read"]}`, tag), http.StatusPreconditionFailed, "PRECONDITION_FAILED")
+	deleted := configCall(h, http.MethodDelete, path, "", `"`+id+`.2"`)
+	if deleted.Code != http.StatusOK || deleted.Header().Get("Andaru-Saved-Version") != "3" {
+		t.Fatalf("delete role: status=%d body=%s", deleted.Code, deleted.Body)
+	}
 }
 
 func TestConfigurationHTTPPreconditionEdges(t *testing.T) {

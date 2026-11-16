@@ -37,6 +37,9 @@ func Serve(ctx context.Context, socketPath, stateDir string) (result error) {
 			result = err
 		}
 	}()
+	if err = initializeAuthorizationState(ctx, stateDir); err != nil {
+		return fmt.Errorf("initialize live authorization state: %w", err)
+	}
 	identities, err := identity.Open(ctx, stateDir)
 	if err != nil {
 		return err
@@ -55,7 +58,7 @@ func Serve(ctx context.Context, socketPath, stateDir string) (result error) {
 			result = err
 		}
 	}()
-	coordinator := newSecurityCoordinator(identities, audits)
+	coordinator := newSecurityCoordinator(identities, audits, stateDir)
 	if err = audits.Reconcile(ctx, coordinator); err != nil {
 		return fmt.Errorf("reconcile identity audit operations: %w", err)
 	}
@@ -71,7 +74,7 @@ func Serve(ctx context.Context, socketPath, stateDir string) (result error) {
 	}()
 	defer func() { cancel(context.Canceled); <-stopped }()
 	read := hostReader{Links: host.ReadLinks, Facts: host.ReadRealizerFacts, Managed: host.ReadManaged, Baseline: host.ReadBaseline, Route: host.ReadDefaultRoutes, Resolved: host.ReadResolved}
-	applies := newAppliesHandler(store.RealizationInput, read, newSystemdRunner(stateDir), stateDir)
+	applies := newAppliesHandler(store.RealizationInput, read, newSystemdRunner(stateDir), stateDir, identities, coordinator)
 	live := newLiveHandler(applies, newTakeoverHandler(store.RealizationInput, store.Draft, read, stateDir))
 	identityAPI := newIdentityAPI(identities, store, coordinator)
 	auditAPI := newAuditAPI(coordinator)

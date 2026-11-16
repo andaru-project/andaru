@@ -193,7 +193,8 @@ func (h *identityAPI) roles(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	roles, err := h.listRoles(r.Context())
+	actor, verified := actorFromRequest(r)
+	roles, err := h.listRoles(r.Context(), verified && actor.Root)
 	if err != nil {
 		writeIdentityError(w, r, err)
 		return
@@ -394,12 +395,12 @@ func (h *identityAPI) createUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Invalid user creation request.")
 		return
 	}
-	if err := h.validateRoleAssignments(r.Context(), request.RoleIDs); err != nil {
-		writeIdentityError(w, r, err)
-		return
-	}
 	actor, ok := mutationActor(w, r)
 	if !ok {
+		return
+	}
+	if err := h.validateRoleAssignments(r.Context(), request.RoleIDs, actor.Root); err != nil {
+		writeIdentityError(w, r, err)
 		return
 	}
 	operationID, ok := idempotencyKey(w, r)
@@ -428,15 +429,15 @@ func (h *identityAPI) updateUser(w http.ResponseWriter, r *http.Request, id stri
 		writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Invalid user update request.")
 		return
 	}
-	if request.RoleIDs != nil {
-		if err := h.validateRoleAssignments(r.Context(), *request.RoleIDs); err != nil {
-			writeIdentityError(w, r, err)
-			return
-		}
-	}
 	actor, ok := mutationActor(w, r)
 	if !ok {
 		return
+	}
+	if request.RoleIDs != nil {
+		if err := h.validateRoleAssignments(r.Context(), *request.RoleIDs, actor.Root); err != nil {
+			writeIdentityError(w, r, err)
+			return
+		}
 	}
 	operationID, ok := idempotencyKey(w, r)
 	if !ok {
@@ -613,32 +614,6 @@ func (h *identityAPI) createToken(w http.ResponseWriter, r *http.Request) {
 		writeIdentityError(w, r, err)
 		return
 	}
-	account, err := h.identities.GetAccount(r.Context(), request.AccountID)
-	if err != nil {
-		writeIdentityError(w, r, err)
-		return
-	}
-	roles, err := h.listRoles(r.Context())
-	if err != nil {
-		writeIdentityError(w, r, err)
-		return
-	}
-	customRoles := make([]authz.Role, 0, len(roles))
-	for _, role := range roles {
-		if role.BuiltIn == "" {
-			customRoles = append(customRoles, role)
-		}
-	}
-	currentRevision, err := h.identities.Revision(r.Context())
-	if err != nil {
-		writeIdentityError(w, r, err)
-		return
-	}
-	if currentRevision != revision {
-		writeIdentityError(w, r, identity.ErrConflict)
-		return
-	}
-	issuerCapabilities := capabilitiesFor(actor)
 	operationID, ok := idempotencyKey(w, r)
 	if !ok {
 		return
@@ -649,7 +624,31 @@ func (h *identityAPI) createToken(w http.ResponseWriter, r *http.Request) {
 		RevokeOnPasswordChange: request.RevokeOnPasswordChange,
 	}
 	execution, ok := h.executeMutation(w, r, actor, operationID, raw, audit.ActionTokenCreated, audit.CategoryGeneral, "", func(ctx context.Context) (string, any, error) {
-		issued, err := h.identities.IssueTokenAtRevision(ctx, revision, actor.Actor, issuerCapabilities, authz.Resolve(customRoles, account.RoleIDs), issue)
+		snapshot, _, err := liveRoleSnapshot(ctx, h.coordinator.stateDir, h.configuration)
+		if err != nil && actor.Root {
+			snapshot, err = authz.NewSnapshot(nil)
+		}
+		if err != nil {
+			return "", nil, err
+		}
+		target, err := h.identities.GetAccount(ctx, request.AccountID)
+		if err != nil {
+			return "", nil, err
+		}
+		issuerCapabilities := authz.Catalog()
+		if !actor.Root {
+			issuer, issuerErr := h.identities.GetAccount(ctx, actor.AccountID)
+			if issuerErr != nil {
+				return "", nil, issuerErr
+			}
+			issuerCapabilities = authz.Resolve(snapshot.Roles, issuer.RoleIDs)
+			if actor.Actor.Kind == authz.ActorToken {
+				issuerCapabilities = restrictCapabilities(actor.TokenScope, issuerCapabilities)
+			}
+		}
+		issued, err := h.identities.IssueTokenAtRevision(
+			ctx, revision, actor.Actor, issuerCapabilities, authz.Resolve(snapshot.Roles, target.RoleIDs), issue,
+		)
 		return issued.Selector, issued, err
 	})
 	if !ok {
@@ -881,30 +880,27 @@ func methodNotAllowed(w http.ResponseWriter, r *http.Request, allow string) {
 	writeError(w, r, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed.")
 }
 
-func (h *identityAPI) listRoles(ctx context.Context) ([]authz.Role, error) {
-	roles := authz.BuiltIns()
+func (h *identityAPI) listRoles(ctx context.Context, allowBeforeLive bool) ([]authz.Role, error) {
 	if h.configuration == nil {
-		return roles, nil
+		if allowBeforeLive {
+			return authz.BuiltIns(), nil
+		}
+		return nil, errLiveAuthorizationUnavailable
 	}
-	custom, err := h.configuration.List(ctx, "roles")
+	snapshot, _, err := LiveAuthorization(ctx, h.coordinator.stateDir, h.configuration)
 	if err != nil {
+		if allowBeforeLive {
+			return authz.BuiltIns(), nil
+		}
 		return nil, err
 	}
-	for _, item := range custom.Items {
-		var role authz.Role
-		if err = json.Unmarshal(item.Value, &role); err != nil {
-			return nil, err
-		}
-		if role.BuiltIn == "" {
-			roles = append(roles, role)
-		}
-	}
+	roles := append(authz.BuiltIns(), snapshot.Roles...)
 	slices.SortFunc(roles, func(a, b authz.Role) int { return strings.Compare(a.ID, b.ID) })
 	return roles, nil
 }
 
-func (h *identityAPI) validateRoleAssignments(ctx context.Context, ids []string) error {
-	roles, err := h.listRoles(ctx)
+func (h *identityAPI) validateRoleAssignments(ctx context.Context, ids []string, allowBeforeLive bool) error {
+	roles, err := h.listRoles(ctx, allowBeforeLive)
 	if err != nil {
 		return err
 	}
@@ -943,6 +939,16 @@ func viewUser(account identity.Account, revision int64) userView {
 	}
 	return userView{ID: account.ID, Login: account.Login, DisplayName: account.DisplayName, Kind: string(account.Kind), Enabled: account.Enabled,
 		RoleIDs: slices.Clone(roles), Revision: revision, CreatedAt: account.CreatedAt, UpdatedAt: account.UpdatedAt}
+}
+
+func restrictCapabilities(scope, current []authz.Capability) []authz.Capability {
+	result := make([]authz.Capability, 0, min(len(scope), len(current)))
+	for _, capability := range scope {
+		if slices.Contains(current, capability) {
+			result = append(result, capability)
+		}
+	}
+	return result
 }
 
 func viewToken(token identity.Token) tokenView {

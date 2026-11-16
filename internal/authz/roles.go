@@ -27,6 +27,7 @@ type Role struct {
 
 type Snapshot struct {
 	Digest       string
+	Roles        []Role
 	Capabilities map[string][]Capability
 }
 
@@ -109,6 +110,21 @@ func Digest(custom []Role) (string, error) {
 	}
 	digest := sha256.Sum256(raw)
 	return hex.EncodeToString(digest[:]), nil
+}
+
+func NewSnapshot(custom []Role) (Snapshot, error) {
+	digest, err := Digest(custom)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	roles := cloneRoles(custom)
+	slices.SortFunc(roles, func(a, b Role) int { return strings.Compare(a.ID, b.ID) })
+	capabilities := make(map[string][]Capability, len(roles))
+	for i := range roles {
+		slices.Sort(roles[i].Capabilities)
+		capabilities[roles[i].ID] = slices.Clone(roles[i].Capabilities)
+	}
+	return Snapshot{Digest: digest, Roles: roles, Capabilities: capabilities}, nil
 }
 
 func cloneRoles(roles []Role) []Role {

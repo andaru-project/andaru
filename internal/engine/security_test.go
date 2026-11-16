@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -36,5 +37,22 @@ func TestActorComesOnlyFromVerifiedContext(t *testing.T) {
 	got, ok := actorFromRequest(request)
 	if !ok || got.Actor != (authz.Actor{Kind: authz.ActorSystem, ID: "root"}) || got.Source != "unix:uid:0" {
 		t.Fatalf("root peer actor = %+v, verified=%t", got, ok)
+	}
+}
+
+func TestSavedAndLiveRoleRoutesUseDifferentCapabilities(t *testing.T) {
+	for _, test := range []struct {
+		method, path string
+		want         authz.Capability
+	}{
+		{http.MethodGet, "/api/v1/config/roles", authz.ConfigurationRead},
+		{http.MethodPost, "/api/v1/config/roles", authz.ConfigurationWrite},
+		{http.MethodPut, "/api/v1/config/roles/rol_00000000-0000-4000-8000-000000000001", authz.ConfigurationWrite},
+		{http.MethodGet, "/api/v1/roles", authz.UsersRead},
+	} {
+		route, ok := routeForRequest(test.method, test.path)
+		if !ok || route.Capability != test.want {
+			t.Fatalf("%s %s capability = %q, found=%t, want %q", test.method, test.path, route.Capability, ok, test.want)
+		}
 	}
 }

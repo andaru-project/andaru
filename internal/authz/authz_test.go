@@ -91,3 +91,29 @@ func TestRoleResolve(t *testing.T) {
 		t.Fatalf("administrator did not resolve dynamically: %v", got)
 	}
 }
+
+func TestActorCanonicalLabel(t *testing.T) {
+	accountID := "00000000-0000-4000-8000-000000000001"
+	tokenID := "AAAAAAAAAAAAAAAAAAAAAA"
+	for _, test := range []struct {
+		actor Actor
+		want  string
+	}{
+		{Actor{Kind: ActorSystem, ID: "root"}, "system.root"},
+		{Actor{Kind: ActorAccount, ID: accountID}, "account:" + accountID},
+		{Actor{Kind: ActorToken, ID: tokenID}, "token:" + tokenID},
+	} {
+		got, err := test.actor.CanonicalLabel()
+		if err != nil || got != test.want {
+			t.Fatalf("actor %+v label = %q, error=%v", test.actor, got, err)
+		}
+	}
+	for _, actor := range []Actor{
+		{}, {Kind: ActorSystem, ID: "0"}, {Kind: ActorAccount, ID: "00000000-0000-1000-8000-000000000001"},
+		{Kind: ActorAccount, ID: "00000000-0000-4000-7000-000000000001"}, {Kind: ActorToken, ID: "short"},
+	} {
+		if label, err := actor.CanonicalLabel(); err == nil {
+			t.Fatalf("invalid actor %+v serialized as %q", actor, label)
+		}
+	}
+}

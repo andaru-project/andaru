@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/securefs"
 	"golang.org/x/sys/unix"
 )
@@ -495,7 +496,11 @@ func (s *Store) Draft(ctx context.Context, input Changes) (RealizationInput, err
 	if e != nil {
 		return RealizationInput{}, e
 	}
-	result := RealizationInput{SavedVersion: p.head, Value: view.Value, Secrets: map[string]string{}}
+	authorization, e := authz.NewSnapshot(p.prepared.State.Config.Roles)
+	if e != nil {
+		return RealizationInput{}, e
+	}
+	result := RealizationInput{SavedVersion: p.head, Value: view.Value, Secrets: map[string]string{}, Authorization: authorization}
 	for _, l := range p.prepared.State.Config.Links {
 		if l.Password != nil {
 			result.Secrets[l.Password.Secret] = p.prepared.State.Secrets.Scopes["core"][l.Password.Secret].Value

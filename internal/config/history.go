@@ -381,9 +381,10 @@ func (s *Store) Version(ctx context.Context, id Version) (result VersionView, er
 // RealizationInput carries secret values for rendering. It has no JSON form
 // and must never be serialised or logged.
 type RealizationInput struct {
-	SavedVersion Version
-	Value        json.RawMessage
-	Secrets      map[string]string
+	SavedVersion  Version
+	Value         json.RawMessage
+	Secrets       map[string]string
+	Authorization authz.Snapshot
 }
 
 // RealizationInput returns one saved version with the secrets its links
@@ -401,7 +402,11 @@ func (s *Store) RealizationInput(ctx context.Context, version *Version) (result 
 		if e != nil {
 			return e
 		}
-		result = RealizationInput{SavedVersion: state.Version, Value: view.Value, Secrets: map[string]string{}}
+		authorization, e := authz.NewSnapshot(state.Config.Roles)
+		if e != nil {
+			return e
+		}
+		result = RealizationInput{SavedVersion: state.Version, Value: view.Value, Secrets: map[string]string{}, Authorization: authorization}
 		for _, l := range state.Config.Links {
 			if l.Password != nil {
 				result.Secrets[l.Password.Secret] = state.Secrets.Scopes["core"][l.Password.Secret].Value
