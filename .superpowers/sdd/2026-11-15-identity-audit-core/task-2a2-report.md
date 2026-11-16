@@ -44,4 +44,4 @@ Not run per assignment:
 
 ## Concerns
 
-- Checks remain deferred as required; no passing result is claimed.
+- Follow-up restored the `testing` import reported missing by the parent compile gate; checks remain deferred, with no passing result claimed.
