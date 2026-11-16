@@ -52,3 +52,8 @@ No checks run in this fix round. No language-server references check was availab
 - The 15-minute failure window keeps its first-failure timestamp across attempts and resets only after expiry; the regression includes failures spaced ten minutes apart.
 - Security tests now isolate target-scope intersection, revoke a live session on password change, and seed recent/stale `lastUsedAt` timestamps to verify hourly throttling.
 - Parent-reported issues were fixed; checks remain deferred to the parent.
+
+## Formatting follow-up
+
+- Applied only `gofmt`-equivalent layout changes to `internal/identity/account_password_test.go` and `internal/identity/model.go`; `gofmt -d` then produced no output.
+- No semantic changes or test/build checks were performed.

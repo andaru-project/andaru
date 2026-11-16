@@ -55,7 +55,7 @@ type Account struct {
 	UpdatedAt   int64
 }
 type AccountPage struct {
-	Items []Account
+	Items      []Account
 	NextCursor string
 }
 

@@ -48,3 +48,4 @@ Not run per assignment:
 ## Concerns
 
 - Follow-up aligned the deletion invariant assertion with `DeleteAccount`'s error-only signature; checks remain deferred.
+- Formatting-only follow-up aligned `account_password_test.go` and `model.go` with `gofmt`; `gofmt -d` produced no output. No behavior changed.

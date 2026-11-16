@@ -64,15 +64,27 @@ func TestBootstrapCreateUpdateAndRestart(t *testing.T) {
 	if err != nil || got.DisplayName != "Operator Two" {
 		t.Fatalf("restart account=%+v err=%v", got, err)
 	}
-	page, err := s.ListAccounts(ctx,"",1)
-	if err != nil || len(page.Items) != 1 || page.NextCursor == "" { t.Fatalf("first account page=%+v err=%v",page,err) }
-	lastPage, err := s.ListAccounts(ctx,page.NextCursor,1)
-	if err != nil || len(lastPage.Items) != 1 || lastPage.NextCursor != "" { t.Fatalf("last account page=%+v err=%v",lastPage,err) }
-	if len(lastPage.Items[0].RoleIDs) != 1 || lastPage.Items[0].RoleIDs[0] != "administrator" { t.Fatalf("paged admin roles=%v",lastPage.Items[0].RoleIDs) }
-	emptyPage, err := s.ListAccounts(ctx,lastPage.NextCursor,1)
-	if err != nil || len(emptyPage.Items) != 0 { t.Fatalf("exhausted page=%+v err=%v",emptyPage,err) }
-	if _, err = s.ListAccounts(ctx,"",0); !errors.Is(err,ErrInvalid) { t.Fatalf("zero page size: %v",err) }
-	if _, err = s.ListAccounts(ctx,"",MaxAccountPageSize+1); !errors.Is(err,ErrInvalid) { t.Fatalf("oversized page: %v",err) }
+	page, err := s.ListAccounts(ctx, "", 1)
+	if err != nil || len(page.Items) != 1 || page.NextCursor == "" {
+		t.Fatalf("first account page=%+v err=%v", page, err)
+	}
+	lastPage, err := s.ListAccounts(ctx, page.NextCursor, 1)
+	if err != nil || len(lastPage.Items) != 1 || lastPage.NextCursor != "" {
+		t.Fatalf("last account page=%+v err=%v", lastPage, err)
+	}
+	if len(lastPage.Items[0].RoleIDs) != 1 || lastPage.Items[0].RoleIDs[0] != "administrator" {
+		t.Fatalf("paged admin roles=%v", lastPage.Items[0].RoleIDs)
+	}
+	emptyPage, err := s.ListAccounts(ctx, lastPage.NextCursor, 1)
+	if err != nil || len(emptyPage.Items) != 0 {
+		t.Fatalf("exhausted page=%+v err=%v", emptyPage, err)
+	}
+	if _, err = s.ListAccounts(ctx, "", 0); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("zero page size: %v", err)
+	}
+	if _, err = s.ListAccounts(ctx, "", MaxAccountPageSize+1); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("oversized page: %v", err)
+	}
 }
 func TestOptionalDisplayAndCustomRolesSurviveRestart(t *testing.T) {
 	ctx := context.Background()
@@ -234,14 +246,18 @@ func TestAdmissionConcurrentWakeupsDoNotDeadlock(t *testing.T) {
 		for i := range held {
 			var err error
 			held[i], err = g.acquire(context.Background())
-			if err != nil { t.Fatal(err) }
+			if err != nil {
+				t.Fatal(err)
+			}
 		}
 		done := make(chan error, 32)
 		start := make(chan struct{})
 		for i := 0; i < 16; i++ {
 			go func() {
 				release, err := g.acquire(context.Background())
-				if err == nil { release() }
+				if err == nil {
+					release()
+				}
 				done <- err
 			}()
 		}
@@ -250,17 +266,23 @@ func TestAdmissionConcurrentWakeupsDoNotDeadlock(t *testing.T) {
 			go func() {
 				<-start
 				release, err := g.acquire(context.Background())
-				if err == nil { release() }
+				if err == nil {
+					release()
+				}
 				done <- err
 			}()
 		}
 		close(start)
-		for _, release := range held { release() }
+		for _, release := range held {
+			release()
+		}
 		deadline := time.After(time.Second)
 		for i := 0; i < 32; i++ {
 			select {
 			case err := <-done:
-				if err != nil { t.Fatalf("round %d admission: %v", round, err) }
+				if err != nil {
+					t.Fatalf("round %d admission: %v", round, err)
+				}
 			case <-deadline:
 				t.Fatalf("round %d: queued/new callers deadlocked", round)
 			}
@@ -281,16 +303,25 @@ func BenchmarkArgon2ProductionAdmission(b *testing.B) {
 		go func() {
 			defer wg.Done()
 			for {
-				if next.Add(1) > int64(b.N) { return }
+				if next.Add(1) > int64(b.N) {
+					return
+				}
 				started := time.Now()
 				release, err := passwordAdmission.acquire(context.Background())
-				if err != nil { b.Error(err); return }
+				if err != nil {
+					b.Error(err)
+					return
+				}
 				active := int64(len(passwordAdmission.permits))
-				for old := peakActive.Load(); active > old && !peakActive.CompareAndSwap(old, active); old = peakActive.Load() {}
+				for old := peakActive.Load(); active > old && !peakActive.CompareAndSwap(old, active); old = peakActive.Load() {
+				}
 				_, err = derivePasswordHash(password)
 				release()
 				elapsed.Add(time.Since(started).Nanoseconds())
-				if err != nil { b.Error(err); return }
+				if err != nil {
+					b.Error(err)
+					return
+				}
 			}
 		}()
 	}
