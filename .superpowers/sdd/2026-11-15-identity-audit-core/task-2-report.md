@@ -90,10 +90,9 @@ No checks run in this fix round. No language-server references check was availab
 
 ## Round 2 Argon qualification follow-up
 
-- Fixed the qualification test's active-counter channel type; no production change.
-- `gofmt -d internal/identity/account_password_test.go` produced no output.
-- Expected parent command: `go test -tags=integration ./internal/identity -count=1`; qualification logs `max-active=2`, measured heap delta, mean hash latency, and wall time.
-- No tests or builds were run in this follow-up.
+- `TestArgon2ProductionPolicyQualification` waits until two real gate permits are held, blocks both workers before Argon work, asserts max-active=2, then samples `runtime.MemStats.HeapAlloc` only while both production-policy hashes are active.
+- The test asserts the observed heap delta reaches at least one Argon workspace and logs measured peak delta, mean hash latency, and wall time. Fixed v19, 65,536 KiB, t=3, p=1 parameters are unchanged.
+- Expected parent command: `go test -tags=integration ./internal/identity -count=1`; no tests or builds were run in this follow-up.
 ## Round 2 compile and formatting follow-up
 
 - Renamed the encoded timestamp fixture to avoid shadowing `failureTimes`, and removed the duplicate `level` declaration. Boundary assertions remain unchanged.

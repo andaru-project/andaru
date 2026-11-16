@@ -34,7 +34,7 @@ Implemented account/password/admission behavior in the identity store.
 - `TestSuccessfulVerificationRehashesLowCostCredentialByCAS`
 - `TestAdmissionConcurrentWakeupsDoNotDeadlock`
 - `BenchmarkArgon2ProductionAdmission` (reports operation latency, observed active hashes, and estimated peak Argon workspace KiB; fixed production parameters)
-- `TestArgon2ProductionPolicyQualification` forces exactly two fixed-policy Argon operations to overlap through the global gate, asserts max-active=2, samples heap delta from a GC baseline, and logs measured heap delta, mean hash latency, and wall time.
+- `TestArgon2ProductionPolicyQualification` blocks two workers after real gate acquisition, asserts max-active=2, samples process heap only while both fixed-policy hashes run, asserts at least one workspace of measured delta, and logs peak delta plus mean latency/wall time.
 - `TestAdmissionRejectsExcessQueueAndHonorsCancellation`
 
 ## Deferred commands

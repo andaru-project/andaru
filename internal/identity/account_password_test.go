@@ -339,7 +339,7 @@ func TestArgon2ProductionPolicyQualification(t *testing.T) {
 	var baseline runtime.MemStats
 	runtime.ReadMemStats(&baseline)
 
-	ready := make(chan int, 2)
+	ready := make(chan struct{}, 2)
 	startHash := make(chan struct{})
 	results := make(chan struct {
 		elapsed time.Duration
@@ -361,7 +361,7 @@ func TestArgon2ProductionPolicyQualification(t *testing.T) {
 			current := active.Add(1)
 			for old := peakActive.Load(); current > old && !peakActive.CompareAndSwap(old, current); old = peakActive.Load() {
 			}
-			ready <- int(current)
+			ready <- struct{}{}
 			<-startHash
 			started := time.Now()
 			_, err = derivePasswordHash(password)
@@ -376,11 +376,7 @@ func TestArgon2ProductionPolicyQualification(t *testing.T) {
 	}
 	for range 2 {
 		select {
-		case current := <-ready:
-			if current != 2 {
-				close(startHash)
-				t.Fatalf("hash workers did not overlap through admission: active=%d", current)
-			}
+		case <-ready:
 		case <-time.After(15 * time.Second):
 			close(startHash)
 			t.Fatal("timed out waiting for two admitted Argon workers")
@@ -392,11 +388,15 @@ func TestArgon2ProductionPolicyQualification(t *testing.T) {
 	}
 
 	var peakHeap uint64
+	var sampledAtTwo bool
 	sampleHeap := func() {
 		var stats runtime.MemStats
 		runtime.ReadMemStats(&stats)
-		if stats.HeapAlloc > peakHeap {
-			peakHeap = stats.HeapAlloc
+		if active.Load() == 2 {
+			sampledAtTwo = true
+			if stats.HeapAlloc > peakHeap {
+				peakHeap = stats.HeapAlloc
+			}
 		}
 	}
 	ticker := time.NewTicker(100 * time.Microsecond)
@@ -421,6 +421,9 @@ func TestArgon2ProductionPolicyQualification(t *testing.T) {
 		}
 	}
 	sampleHeap()
+	if !sampledAtTwo {
+		t.Fatal("did not sample process heap while both Argon hashes were active")
+	}
 	peakDelta := peakHeap - baseline.HeapAlloc
 	if peakActive.Load() != 2 {
 		t.Fatalf("observed max active=%d, want 2", peakActive.Load())
