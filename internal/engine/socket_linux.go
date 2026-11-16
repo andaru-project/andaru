@@ -59,9 +59,6 @@ func Serve(ctx context.Context, socketPath, stateDir string) (result error) {
 		}
 	}()
 	coordinator := newSecurityCoordinator(identities, audits, stateDir)
-	if err = audits.Reconcile(ctx, coordinator); err != nil {
-		return fmt.Errorf("reconcile identity audit operations: %w", err)
-	}
 	lifetime, cancel := context.WithCancelCause(ctx)
 	stopped := make(chan struct{})
 	go func() {
@@ -78,7 +75,14 @@ func Serve(ctx context.Context, socketPath, stateDir string) (result error) {
 	live := newLiveHandler(applies, newTakeoverHandler(store.RealizationInput, store.Draft, read, stateDir))
 	identityAPI := newIdentityAPI(identities, store, coordinator)
 	auditAPI := newAuditAPI(coordinator)
-	err = serveUnix(lifetime, socketPath, newHandlerWithAPIs(host.ReadLinks, newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, previewIdentities(read, generation.Dir(stateDir)), live, newBackupHandler(store, stateDir, host.ReadLinks)), identityAPI, auditAPI))
+	backups := newBackupHandler(store, identities, coordinator, stateDir, host.ReadLinks)
+	if err = backups.restores.Reconcile(ctx); err != nil {
+		return fmt.Errorf("reconcile portable restores: %w", err)
+	}
+	if err = audits.Reconcile(ctx, coordinator); err != nil {
+		return fmt.Errorf("reconcile identity audit operations: %w", err)
+	}
+	err = serveUnix(lifetime, socketPath, newHandlerWithAPIs(host.ReadLinks, newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, previewIdentities(read, generation.Dir(stateDir)), live, backups), identityAPI, auditAPI))
 	cause := context.Cause(lifetime)
 	if cause != nil && !errors.Is(cause, context.Canceled) && !errors.Is(cause, context.DeadlineExceeded) {
 		return cause

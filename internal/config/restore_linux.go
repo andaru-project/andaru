@@ -29,6 +29,41 @@ type RestoreResult struct {
 	UnresolvedSecrets []string
 }
 
+// PreparedRestore keeps the existing configuration prepare/publication transaction open
+// while the engine journals a coordinated config+identity restore.
+type PreparedRestore struct {
+	p       *pendingSave
+	preview RestorePreview
+	target  RestoreDocuments
+	closed  bool
+}
+
+func (p *PreparedRestore) Preview() RestorePreview { return p.preview }
+func (p *PreparedRestore) TargetVersion() Version { return p.p.prepared.State.Version }
+
+func (p *PreparedRestore) TargetDocuments() RestoreDocuments {
+	return RestoreDocuments{Configuration: slices.Clone(p.target.Configuration), ConfigurationSecrets: slices.Clone(p.target.ConfigurationSecrets)}
+}
+
+func (p *PreparedRestore) Publish(ctx context.Context) (RestoreResult, error) {
+	if p == nil || p.closed {
+		return RestoreResult{}, unavailable()
+	}
+	saved, err := p.p.publish(ctx)
+	if err != nil {
+		return RestoreResult{}, err
+	}
+	return RestoreResult{SavedVersion: saved.SavedVersion, UnresolvedSecrets: slices.Clone(p.preview.UnresolvedSecrets)}, nil
+}
+
+func (p *PreparedRestore) Close() error {
+	if p == nil || p.closed {
+		return nil
+	}
+	p.closed = true
+	return p.p.Close()
+}
+
 func restoreRequests(decoded decodedBackup) []objectKey {
 	if decoded.configuration == nil {
 		return nil
@@ -104,28 +139,44 @@ func (s *Store) prepareRestore(ctx context.Context, actor authz.Actor, expected 
 	return p, preview, nil
 }
 
+func (s *Store) PrepareRestore(ctx context.Context, actor authz.Actor, expected Version, input RestoreDocuments) (*PreparedRestore, error) {
+	decoded, err := decodeBackupDocuments(input)
+	if err != nil {
+		return nil, err
+	}
+	pending, preview, err := s.prepareRestore(ctx, actor, expected, decoded)
+	if err != nil {
+		return nil, err
+	}
+	return &PreparedRestore{
+		p:       pending,
+		preview: preview,
+		target:  RestoreDocuments{Configuration: slices.Clone(pending.prepared.ConfigBody), ConfigurationSecrets: slices.Clone(pending.prepared.SecretBody)},
+	}, nil
+}
+
 func (s *Store) Restore(ctx context.Context, actor authz.Actor, expected Version, input RestoreDocuments) (result RestoreResult, err error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	decoded, err := decodeBackupDocuments(input)
-	if err != nil {
-		return result, err
-	}
-	p, preview, err := s.prepareRestore(ctx, actor, expected, decoded)
+	prepared, err := s.PrepareRestore(ctx, actor, expected, input)
 	if err != nil {
 		return result, err
 	}
 	defer func() {
-		if e := p.Close(); e != nil {
+		if e := prepared.Close(); e != nil {
 			result = RestoreResult{}
 			err = e
 		}
 	}()
-	saved, err := p.publish(ctx)
+	return prepared.Publish(ctx)
+}
+
+func (s *Store) RestoreMatches(ctx context.Context, version Version, target RestoreDocuments) (bool, error) {
+	exported, err := s.Export(ctx, true)
 	if err != nil {
-		return result, err
+		return false, err
 	}
-	return RestoreResult{SavedVersion: saved.SavedVersion, UnresolvedSecrets: preview.UnresolvedSecrets}, nil
+	return exported.SavedVersion == version && bytes.Equal(exported.Configuration, target.Configuration) && bytes.Equal(exported.ConfigurationSecrets, target.ConfigurationSecrets), nil
 }
 
 func prepareRestoration(current *savedState, decoded decodedBackup, next Version, now time.Time) (preparedChange, RestorePreview, error) {

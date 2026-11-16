@@ -27,7 +27,7 @@ func TestRestoreCrashHelper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, _, err := s.prepareRestore(ctx, systemRootActor, "1", decoded)
+	p, _, err := s.prepareRestore(ctx, rootRestoreActor, "1", decoded)
 	if err != nil {
 		t.Fatal(err)
 	}

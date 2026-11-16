@@ -8,10 +8,14 @@ import (
 	"encoding/json"
 	"slices"
 	"testing"
+
+	"github.com/andaru-project/andaru/internal/authz"
 )
 
 const portableEmptySecrets = `{"schemaVersion":1,"secrets":{"core":{}}}`
 const portableRestoredSecret = `{"schemaVersion":1,"secrets":{"core":{"RESTORED":{"kind":"password","value":"TEST_ONLY_RESTORED"}}}}`
+
+var rootRestoreActor = authz.Actor{Kind: authz.ActorSystem, ID: "root"}
 
 func TestRestoreIndependentStores(t *testing.T) {
 	ctx := context.Background()
@@ -56,7 +60,7 @@ func TestRestoreIndependentStores(t *testing.T) {
 	if err != nil || !slices.Contains(preview.UnresolvedSecrets, "WAN_PASSWORD") || preview.ExpectedSavedVersion != "2" {
 		t.Fatal("missing unresolved preview", err)
 	}
-	result, err := destination.Restore(ctx, systemRootActor, before.SavedVersion, input)
+	result, err := destination.Restore(ctx, rootRestoreActor, before.SavedVersion, input)
 	if err != nil || result.SavedVersion != "3" {
 		t.Fatal("configuration restore did not publish one local version", err)
 	}
@@ -99,7 +103,7 @@ func TestRestoreIndependentStores(t *testing.T) {
 		t.Fatal(err)
 	}
 	paired := RestoreDocuments{Configuration: source.Configuration, ConfigurationSecrets: source.ConfigurationSecrets}
-	if _, err = destination.Restore(ctx, systemRootActor, current.SavedVersion, paired); err != nil {
+	if _, err = destination.Restore(ctx, rootRestoreActor, current.SavedVersion, paired); err != nil {
 		t.Fatal(err)
 	}
 	realized, err = destination.RealizationInput(ctx, nil)
@@ -139,7 +143,7 @@ func TestRestorePreservesCompatibleSchema(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		result, err := destination.Restore(ctx, systemRootActor, before.SavedVersion, input)
+		result, err := destination.Restore(ctx, rootRestoreActor, before.SavedVersion, input)
 		if err != nil || result.SavedVersion != wantVersion {
 			t.Fatal("restore saved the wrong version", err)
 		}
@@ -163,7 +167,7 @@ func TestRestorePreservesCompatibleSchema(t *testing.T) {
 	restore(plainDestination, RestoreDocuments{Configuration: plain.Configuration}, 1, "2")
 
 	credentialSource := openTestStore(t, ownedDir(t))
-	if _, err := credentialSource.Save(ctx, systemRootActor, networkInput(t)); err != nil {
+	if _, err = credentialSource.Save(ctx, systemRootActor, networkInput(t)); err != nil {
 		t.Fatal(err)
 	}
 	withCredentials, err := credentialSource.Export(ctx, true)
@@ -223,7 +227,7 @@ func TestSecretsOnlyMissingBoundKeyRefused(t *testing.T) {
 	if err != nil || !slices.Contains(preview.BlockingSecrets, "WAN_PASSWORD") {
 		t.Fatal("missing bound-key warning", err)
 	}
-	_, err = s.Restore(ctx, systemRootActor, before.SavedVersion, input)
+	_, err = s.Restore(ctx, rootRestoreActor, before.SavedVersion, input)
 	requireFault(t, err, "VALIDATION_FAILED")
 	after, err := s.Export(ctx, true)
 	if err != nil || after.SavedVersion != before.SavedVersion || !bytes.Equal(after.Configuration, before.Configuration) || !bytes.Equal(after.ConfigurationSecrets, before.ConfigurationSecrets) {
@@ -253,7 +257,7 @@ func TestSecretsOnlyPreservesDeclarationSchema(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = s.Restore(ctx, systemRootActor, one.SavedVersion, RestoreDocuments{Configuration: configuration}); err != nil {
+			if _, err = s.Restore(ctx, rootRestoreActor, one.SavedVersion, RestoreDocuments{Configuration: configuration}); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -265,7 +269,7 @@ func TestSecretsOnlyPreservesDeclarationSchema(t *testing.T) {
 		if err = json.Unmarshal(before.Configuration, &declaration); err != nil || declaration.SchemaVersion != schemaVersion {
 			t.Fatal("wrong schema fixture", err)
 		}
-		result, err := s.Restore(ctx, systemRootActor, before.SavedVersion, RestoreDocuments{ConfigurationSecrets: json.RawMessage(portableRestoredSecret)})
+		result, err := s.Restore(ctx, rootRestoreActor, before.SavedVersion, RestoreDocuments{ConfigurationSecrets: json.RawMessage(portableRestoredSecret)})
 		if err != nil || result.SavedVersion == before.SavedVersion {
 			t.Fatal("secrets restore did not advance local version", err)
 		}
@@ -310,7 +314,7 @@ func TestRestoreRetainsIdentityAndHistory(t *testing.T) {
 	if _, err = s.Save(ctx, systemRootActor, remove); err != nil {
 		t.Fatal(err)
 	}
-	result, err := s.Restore(ctx, systemRootActor, "3", RestoreDocuments{Configuration: archived.Configuration, ConfigurationSecrets: archived.ConfigurationSecrets})
+	result, err := s.Restore(ctx, rootRestoreActor, "3", RestoreDocuments{Configuration: archived.Configuration, ConfigurationSecrets: archived.ConfigurationSecrets})
 	if err != nil || result.SavedVersion != "4" {
 		t.Fatal("restore did not revive historical identity", err)
 	}
@@ -345,21 +349,21 @@ func TestRestoreReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	input := RestoreDocuments{Configuration: exported.Configuration, ConfigurationSecrets: exported.ConfigurationSecrets}
-	if _, err = s.Restore(ctx, systemRootActor, "1", input); err != nil {
+	if _, err = s.Restore(ctx, rootRestoreActor, "1", input); err != nil {
 		t.Fatal(err)
 	}
-	_, err = s.Restore(ctx, systemRootActor, "1", input)
+	_, err = s.Restore(ctx, rootRestoreActor, "1", input)
 	requireFault(t, err, "PRECONDITION_FAILED")
 	after, err := s.Export(ctx, true)
 	if err != nil || after.SavedVersion != "2" {
 		t.Fatal("replay published twice", err)
 	}
 	same := RestoreDocuments{Configuration: after.Configuration, ConfigurationSecrets: after.ConfigurationSecrets}
-	result, err := s.Restore(ctx, systemRootActor, "2", same)
+	result, err := s.Restore(ctx, rootRestoreActor, "2", same)
 	if err != nil || result.SavedVersion != "3" {
 		t.Fatal("explicit identical restore did not record a history event", err)
 	}
-	_, err = s.Restore(ctx, systemRootActor, "", same)
+	_, err = s.Restore(ctx, rootRestoreActor, "", same)
 	requireFault(t, err, "PRECONDITION_REQUIRED")
 }
 
@@ -381,7 +385,7 @@ func TestRestoreConcurrentSavePrecondition(t *testing.T) {
 	go func() { <-start; _, err := s.Save(ctx, systemRootActor, batch); results <- err }()
 	go func() {
 		<-start
-		_, err := s.Restore(ctx, systemRootActor, "1", RestoreDocuments{Configuration: exported.Configuration, ConfigurationSecrets: exported.ConfigurationSecrets})
+		_, err := s.Restore(ctx, rootRestoreActor, "1", RestoreDocuments{Configuration: exported.Configuration, ConfigurationSecrets: exported.ConfigurationSecrets})
 		results <- err
 	}()
 	close(start)
@@ -432,7 +436,7 @@ func TestRestoreRejectsHistoricalCollectionCollision(t *testing.T) {
 	if _, err = s.Save(ctx, systemRootActor, remove); err != nil {
 		t.Fatal(err)
 	}
-	_, err = s.Restore(ctx, systemRootActor, "2", RestoreDocuments{Configuration: input})
+	_, err = s.Restore(ctx, rootRestoreActor, "2", RestoreDocuments{Configuration: input})
 	requireFault(t, err, "VALIDATION_FAILED")
 	head, err := s.Snapshot(ctx)
 	if err != nil || head.SavedVersion != "2" {

@@ -17,6 +17,8 @@ import (
 
 const configJSON = `{"schemaVersion":1,"links":[],"segments":[],"zones":[]}`
 const secretsJSON = `{"schemaVersion":1,"secrets":{"core":{"WAN_PASSWORD":{"kind":"password","value":"TEST_ONLY_SECRET_VALUE"}}}}`
+const usersJSON = `{"schemaVersion":1,"identityRevision":7,"accounts":[],"tombstones":[]}`
+const credentialsJSON = `{"schemaVersion":1,"identityRevision":7,"passwords":[],"tokens":[]}`
 
 func sourceFixture() Source {
 	live := 3
@@ -214,7 +216,7 @@ func TestHostileArchiveRejected(t *testing.T) {
 		return entries
 	}
 	mutations["future-schema"] = func(entries []archiveEntry) []archiveEntry {
-		entries[1].body = []byte(`{"schemaVersion":3,"links":[],"segments":[],"zones":[]}`)
+		entries[1].body = []byte(`{"schemaVersion":4,"links":[],"segments":[],"zones":[]}`)
 		entries[0].body = fixtureManifest(t, entries[1].body)
 		return entries
 	}
@@ -230,7 +232,7 @@ func TestHostileArchiveRejected(t *testing.T) {
 			}
 		})
 	}
-	for _, raw := range [][]byte{bytes.Repeat([]byte("x"), 16*1024*1024+1), append(fixtureZIP(t, basic()), bytes.Repeat([]byte("x"), 12*1024*1024)...)} {
+	for _, raw := range [][]byte{bytes.Repeat([]byte("x"), MaxArchiveSize+1), append(fixtureZIP(t, basic()), bytes.Repeat([]byte("x"), MaxZIPSize)...)} {
 		if _, err := Decode(context.Background(), raw, ""); err == nil {
 			t.Fatal("accepted oversized input or ZIP")
 		}
@@ -268,5 +270,54 @@ func TestArchiveCRCChecksActualPayload(t *testing.T) {
 	decoded, err := Decode(context.Background(), raw, "")
 	if err == nil || decoded.Documents.Configuration != nil {
 		t.Fatal("payload matching manifest bypassed the ZIP CRC")
+	}
+}
+
+func TestIdentityDocumentsRequireV2AndCredentialEncryption(t *testing.T) {
+	source := sourceFixture()
+	plain, err := Encode(context.Background(), source, Documents{
+		Configuration: []byte(`{"schemaVersion":3,"links":[],"roles":[],"segments":[],"zones":[]}`),
+		Users:         []byte(usersJSON),
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := Decode(context.Background(), plain, "")
+	if err != nil || decoded.Manifest.FormatVersion != 2 || !bytes.Equal(decoded.Documents.Users, []byte(usersJSON)) {
+		t.Fatalf("plain identity archive: %+v %v", decoded.Manifest, err)
+	}
+	if slices.Contains(decoded.Manifest.Scopes, "userCredentials") {
+		t.Fatal("default archive declared credentials")
+	}
+
+	if _, err = Encode(context.Background(), source, Documents{
+		Configuration:  []byte(configJSON),
+		Users:          []byte(usersJSON),
+		UserCredentials: []byte(credentialsJSON),
+	}, ""); err == nil {
+		t.Fatal("plaintext credentials were accepted")
+	}
+	encrypted, err := Encode(context.Background(), source, Documents{
+		Configuration:   []byte(configJSON),
+		Users:           []byte(usersJSON),
+		UserCredentials: []byte(credentialsJSON),
+	}, "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err = Decode(context.Background(), encrypted, "correct horse battery staple")
+	if err != nil || !bytes.Equal(decoded.Documents.UserCredentials, []byte(credentialsJSON)) {
+		t.Fatalf("encrypted credential archive: %+v %v", decoded.Manifest, err)
+	}
+}
+
+func TestV1ArchiveRemainsReadableWithoutIdentityMembers(t *testing.T) {
+	raw := fixtureZIP(t, []archiveEntry{
+		{name: "manifest.json", body: fixtureManifest(t, []byte(configJSON))},
+		{name: "config.json", body: []byte(configJSON)},
+	})
+	decoded, err := Decode(context.Background(), raw, "")
+	if err != nil || decoded.Manifest.FormatVersion != 1 || decoded.Documents.Users != nil || decoded.Documents.UserCredentials != nil {
+		t.Fatalf("v1 archive: %+v %v", decoded, err)
 	}
 }

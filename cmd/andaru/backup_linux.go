@@ -153,15 +153,31 @@ func readBoundedTerminalLine(ctx context.Context, fd int) ([]byte, error) {
 }
 
 func readNewBackupPassphrase(ctx context.Context) (string, error) {
-	first, err := readBackupPassphrase(ctx, "New backup passphrase: ")
+	return readRepeatedBackupSecret(ctx, "New backup passphrase: ", "Repeat backup passphrase: ")
+}
+
+func readNewRecoveryPassword(ctx context.Context) (string, error) {
+	return readRepeatedBackupSecret(ctx, "New recovery administrator password: ", "Repeat recovery administrator password: ")
+}
+
+func readRepeatedBackupSecret(ctx context.Context, firstPrompt, secondPrompt string) (string, error) {
+	first, err := readBackupPassphrase(ctx, firstPrompt)
 	if err != nil {
 		return "", err
 	}
-	second, err := readBackupPassphrase(ctx, "Repeat backup passphrase: ")
+	second, err := readBackupPassphrase(ctx, secondPrompt)
 	if err != nil || first != second {
-		return "", errors.New("passphrases do not match")
+		return "", errors.New("secrets do not match")
 	}
 	return first, nil
+}
+
+func newBackupOperationID() (string, error) {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(value[:]), nil
 }
 
 func readBackupFile(path string) ([]byte, error) {
