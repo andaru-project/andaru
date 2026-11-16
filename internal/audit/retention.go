@@ -273,7 +273,7 @@ func (s *Store) Verify(ctx context.Context) (IntegrityReport, error) {
 }
 func validStoredEvent(event Event) bool {
 	fieldsValid := validateFields(event.Actor, event.Source, event.Action, event.Target, event.Category) == nil
-	if event.Result == ResultPending {
+	if event.Result == ResultPending || isCreationAction(event.Action) && event.Target == "" && event.Result != ResultSuccess {
 		fieldsValid = validateIntentFields(event.Actor, event.Source, event.Action, event.Target, event.Category) == nil
 	}
 	if event.ID == 0 || event.Count == 0 || event.At.UnixMilli() < 0 || event.At.After(time.Now().Add(5*time.Minute)) ||
@@ -281,15 +281,20 @@ func validStoredEvent(event Event) bool {
 		!validResult(event.Result) || !validOperationIDOptional(event.OperationID) || validateMetadata(event.Metadata) != nil {
 		return false
 	}
-	if isCreationAction(event.Action) && (event.Result == ResultSuccess && !validTarget(event.Action, event.Target) ||
-		event.Result != ResultSuccess && event.Result != ResultPending && event.Target != "") {
-		return false
+	if isCreationAction(event.Action) {
+		switch event.Result {
+		case ResultSuccess:
+			if !validTarget(event.Action, event.Target) {
+				return false
+			}
+		case ResultFailure, ResultNotCommitted:
+			if event.Target != "" {
+				return false
+			}
+		}
 	}
 	return true
 }
-
-
-
 
 func (s *Store) setIntegrityFailure(ctx context.Context) {
 	_, _ = s.db.ExecContext(ctx, "UPDATE health SET integrity_failure=1 WHERE id=1")

@@ -377,20 +377,21 @@ func validateOutcome(outcome Outcome, action Action) error {
 		return ErrInvalid
 	}
 	if isCreationAction(action) {
-		if outcome.Result == ResultSuccess {
+		switch outcome.Result {
+		case ResultSuccess:
 			if !validTarget(action, outcome.Target) {
 				return ErrInvalid
 			}
-		} else if outcome.Target != "" {
-			return ErrInvalid
+		case ResultFailure, ResultNotCommitted:
+			if outcome.Target != "" {
+				return ErrInvalid
+			}
 		}
 	} else if outcome.Target != "" {
 		return ErrInvalid
 	}
 	return nil
 }
-
-
 
 func validateMetadata(metadata map[string]string) error {
 	if len(metadata) > maxMetadataEntries {
