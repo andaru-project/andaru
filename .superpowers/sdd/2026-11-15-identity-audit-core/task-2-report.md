@@ -12,9 +12,9 @@ Task 2A1 and Task 2A2 are implemented. Task 2B (tokens, sessions, and login limi
 
 ## Task 2A2 — accounts, passwords, admission
 
-- Files: `internal/identity/store_linux.go`, `model.go`, `password.go`, `account_password_test.go`, embedded password blocklist/provenance, `go.mod`.
-- Interfaces: bootstrap/create/update/get/list/delete/disable account methods; password set/verify; reusable administrator invariant validator. Mutations use the 2A1 global revision CAS, tombstone deleted IDs, increment password epochs, and revoke dependent sessions/tokens transactionally.
-- Tests: account restart/limit/login/tombstone/CAS/service/invariant; password policy/hash/bounds/rehash/revocation; admission saturation/timeout/cancellation (written, not run).
+- Files: `internal/identity/store_linux.go`, `model.go`, `sqlite.go`, `password.go`, `account_password_test.go`, embedded password blocklist/provenance, `go.mod`.
+- Interfaces: bootstrap/create/update/get/list/delete/disable account methods with sorted Task 1 built-in/custom role IDs; password set/verify; reusable administrator invariant validator. Mutations use the 2A1 global revision CAS, tombstone deleted IDs, increment password epochs, and revoke dependent sessions/tokens transactionally; role assignment changes invalidate sessions.
+- Tests: account restart/limit/login/tombstone/CAS/service/invariant; empty display name and custom-role create/update/restart; password policy/hash/bounds/rehash/revocation; admission saturation/timeout/cancellation (written, not run).
 
 ## Deferred verification
 
@@ -26,5 +26,4 @@ Not run per assignment:
 
 ## Concerns
 
-- The 2A1 role table permits only its fixed role strings; custom role assignment persistence is not introduced in 2A2. The approved design also calls display names optional, while the existing 2A1 schema requires a non-empty display name. Resolve these through an explicit forward schema decision without silently changing the 2A1 open contract.
-- Test/build/format verification remains deferred; no passing result is claimed.
+- Checks remain deferred per assignment; no passing result is claimed.

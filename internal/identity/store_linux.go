@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -93,9 +95,9 @@ func (s *store) BootstrapAdmin(ctx context.Context, login, displayName string, p
 	if err = tx.QueryRowContext(ctx, "SELECT value FROM metadata WHERE key='revision'").Scan(&revision); err != nil { return Account{}, 0, err }
 	if count != 0 || revision != 0 { return Account{}, 0, ErrConflict }
 	now := time.Now().Unix()
-	account := Account{ID: uuid.NewString(), Login:login, DisplayName:displayName, Kind:Human, Enabled:true, CreatedAt:now, UpdatedAt:now}
+	account := Account{ID: uuid.NewString(), Login:login, DisplayName:displayName, Kind:Human, Enabled:true, RoleIDs:[]string{authz.AdministratorRoleID}, CreatedAt:now, UpdatedAt:now}
 	if err = insertAccount(ctx, tx, account); err != nil { return Account{}, 0, accountWriteError(err) }
-	if _, err = tx.ExecContext(ctx, "INSERT INTO account_roles(account_id,role) VALUES(?,?)", account.ID, authz.AdministratorRoleID); err != nil { return Account{}, 0, err }
+	if err = insertAccountRoles(ctx, tx, account.ID, account.RoleIDs); err != nil { return Account{}, 0, err }
 	if err = insertCredential(ctx, tx, account.ID, encoded, now); err != nil { return Account{}, 0, err }
 	if _, err = tx.ExecContext(ctx, "INSERT INTO metadata(key,value) VALUES(?,0)", "password_epoch:"+account.ID); err != nil { return Account{}, 0, err }
 	revision, err = finishMutation(ctx, tx)
@@ -107,6 +109,8 @@ func (s *store) CreateAccount(ctx context.Context, input CreateAccountInput, exp
 	var err error
 	input.Login, err = canonicalLogin(input.Login)
 	if err != nil { return Account{}, 0, err }
+	input.RoleIDs, err = canonicalRoleIDs(input.RoleIDs)
+	if err != nil { return Account{}, 0, err }
 	if err = validateAccountFields(input.Login, input.DisplayName, input.Kind); err != nil { return Account{}, 0, err }
 	tx, err := s.beginMutation(ctx, expectedRevision)
 	if err != nil { return Account{}, 0, err }
@@ -115,8 +119,9 @@ func (s *store) CreateAccount(ctx context.Context, input CreateAccountInput, exp
 	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM accounts").Scan(&count); err != nil { return Account{}, 0, err }
 	if count >= MaxAccounts { return Account{}, 0, ErrAccountLimit }
 	now := time.Now().Unix()
-	account := Account{ID:uuid.NewString(), Login:input.Login, DisplayName:input.DisplayName, Kind:input.Kind, Enabled:input.Enabled, CreatedAt:now, UpdatedAt:now}
+	account := Account{ID:uuid.NewString(), Login:input.Login, DisplayName:input.DisplayName, Kind:input.Kind, Enabled:input.Enabled, RoleIDs:input.RoleIDs, CreatedAt:now, UpdatedAt:now}
 	if err = insertAccount(ctx, tx, account); err != nil { return Account{}, 0, accountWriteError(err) }
+	if err = insertAccountRoles(ctx, tx, account.ID, account.RoleIDs); err != nil { return Account{}, 0, err }
 	if _, err = tx.ExecContext(ctx, "INSERT INTO metadata(key,value) VALUES(?,0)", "password_epoch:"+account.ID); err != nil { return Account{}, 0, err }
 	revision, err := finishMutation(ctx, tx)
 	if err != nil { return Account{}, 0, err }
@@ -136,6 +141,17 @@ func (s *store) UpdateAccount(ctx context.Context, id string, expectedRevision i
 	if input.DisplayName != nil { account.DisplayName = *input.DisplayName }
 	if input.Kind != nil { account.Kind = *input.Kind }
 	if input.Enabled != nil { account.Enabled = *input.Enabled }
+	rolesChanged := false
+	if input.RoleIDs != nil {
+		roleIDs, err := canonicalRoleIDs(*input.RoleIDs)
+		if err != nil { return Account{}, 0, err }
+		rolesChanged = !slices.Equal(account.RoleIDs, roleIDs)
+		if rolesChanged {
+			if _, err = tx.ExecContext(ctx, "DELETE FROM account_roles WHERE account_id=?", id); err != nil { return Account{}, 0, err }
+			if err = insertAccountRoles(ctx, tx, id, roleIDs); err != nil { return Account{}, 0, err }
+		}
+		account.RoleIDs = roleIDs
+	}
 	if err = validateAccountFields(account.Login, account.DisplayName, account.Kind); err != nil { return Account{}, 0, err }
 	if account.Kind == Service {
 		var hasPassword int
@@ -144,6 +160,9 @@ func (s *store) UpdateAccount(ctx context.Context, id string, expectedRevision i
 	}
 	account.UpdatedAt = time.Now().Unix()
 	if _, err = tx.ExecContext(ctx, "UPDATE accounts SET login=?,display_name=?,kind=?,enabled=?,updated_at=? WHERE id=?", account.Login, account.DisplayName, account.Kind, account.Enabled, account.UpdatedAt, id); err != nil { return Account{}, 0, accountWriteError(err) }
+	if rolesChanged && account.Enabled {
+		if _, err = tx.ExecContext(ctx, "DELETE FROM sessions WHERE account_id=?", id); err != nil { return Account{}, 0, err }
+	}
 	if !account.Enabled {
 		if err = revokeAccountAuth(ctx, tx, id, account.UpdatedAt, false); err != nil { return Account{}, 0, err }
 	}
@@ -180,16 +199,25 @@ func (s *store) GetAccount(ctx context.Context, id string) (Account, error) {
 func (s *store) ListAccounts(ctx context.Context) ([]Account, error) {
 	rows, err := s.db.QueryContext(ctx, "SELECT id,login,display_name,kind,enabled,created_at,updated_at FROM accounts ORDER BY login")
 	if err != nil { return nil, err }
-	defer rows.Close()
 	accounts := make([]Account, 0)
 	for rows.Next() {
 		var a Account
 		var enabled int
-		if err = rows.Scan(&a.ID,&a.Login,&a.DisplayName,&a.Kind,&enabled,&a.CreatedAt,&a.UpdatedAt); err != nil { return nil, err }
+		if err = rows.Scan(&a.ID,&a.Login,&a.DisplayName,&a.Kind,&enabled,&a.CreatedAt,&a.UpdatedAt); err != nil {
+			rows.Close()
+			return nil, err
+		}
 		a.Enabled = enabled == 1
 		accounts = append(accounts, a)
 	}
-	return accounts, rows.Err()
+	err = rows.Err()
+	if closeErr := rows.Close(); err == nil { err = closeErr }
+	if err != nil { return nil, err }
+	for i := range accounts {
+		accounts[i].RoleIDs, err = accountRoleIDs(ctx, s.db, accounts[i].ID)
+		if err != nil { return nil, err }
+	}
+	return accounts, nil
 }
 
 func (s *store) DeleteAccount(ctx context.Context, id string, expectedRevision int64) error {
@@ -248,6 +276,7 @@ func (s *store) rehashCredential(ctx context.Context, id string, oldSalt, oldHas
 }
 
 var dummyPasswordHash = []byte("$argon2id$v=19$m=65536,t=3,p=1$MDEyMzQ1Njc4OWFiY2RlZg$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+var customRoleIDPattern = regexp.MustCompile(`^rol_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 func canonicalLogin(login string) (string, error) {
 	if len(login) < 3 || len(login) > 64 { return "", ErrInvalid }
@@ -267,7 +296,7 @@ func canonicalLogin(login string) (string, error) {
 }
 
 func validateAccountFields(login, display string, kind AccountKind) error {
-	if len(login) < 3 || len(login) > 64 || !utf8.ValidString(display) || utf8.RuneCountInString(display) < 1 || utf8.RuneCountInString(display) > 128 || strings.IndexByte(display, 0) >= 0 || (kind != Human && kind != Service) { return ErrInvalid }
+	if len(login) < 3 || len(login) > 64 || !utf8.ValidString(display) || utf8.RuneCountInString(display) > 128 || strings.IndexByte(display, 0) >= 0 || (kind != Human && kind != Service) { return ErrInvalid }
 	if !(login[0] >= 'a' && login[0] <= 'z' || login[0] >= '0' && login[0] <= '9') { return ErrInvalid }
 	for i := 1; i < len(login); i++ {
 		c := login[i]
@@ -286,14 +315,33 @@ func insertAccount(ctx context.Context, tx *sql.Tx, a Account) error {
 	return err
 }
 
-func accountByID(ctx context.Context, q interface{ QueryRowContext(context.Context,string,...any) *sql.Row }, id string) (Account,error) {
+type accountQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func accountByID(ctx context.Context, q accountQueryer, id string) (Account,error) {
 	var a Account
 	var enabled int
 	err := q.QueryRowContext(ctx,"SELECT id,login,display_name,kind,enabled,created_at,updated_at FROM accounts WHERE id=?",id).Scan(&a.ID,&a.Login,&a.DisplayName,&a.Kind,&enabled,&a.CreatedAt,&a.UpdatedAt)
 	if err == sql.ErrNoRows { return Account{},ErrNotFound }
 	if err != nil { return Account{},err }
 	a.Enabled = enabled == 1
-	return a,nil
+	a.RoleIDs, err = accountRoleIDs(ctx,q,id)
+	return a,err
+}
+
+func accountRoleIDs(ctx context.Context, q accountQueryer, id string) ([]string,error) {
+	rows,err:=q.QueryContext(ctx,"SELECT role_id FROM account_roles WHERE account_id=? ORDER BY role_id",id)
+	if err!=nil{return nil,err}
+	defer rows.Close()
+	ids:=make([]string,0)
+	for rows.Next(){
+		var roleID string
+		if err=rows.Scan(&roleID);err!=nil{return nil,err}
+		ids=append(ids,roleID)
+	}
+	return ids,rows.Err()
 }
 
 func (s *store) beginMutation(ctx context.Context, expected int64) (*sql.Tx,error) {
@@ -306,9 +354,28 @@ func (s *store) beginMutation(ctx context.Context, expected int64) (*sql.Tx,erro
 
 func validateAdministratorInvariant(ctx context.Context, q interface{ QueryRowContext(context.Context,string,...any) *sql.Row }) error {
 	var valid int
-	err := q.QueryRowContext(ctx, `SELECT count(*) FROM accounts a JOIN account_roles r ON r.account_id=a.id AND r.role=?
+	err := q.QueryRowContext(ctx, `SELECT count(*) FROM accounts a JOIN account_roles r ON r.account_id=a.id AND r.role_id=?
 		JOIN password_credentials c ON c.account_id=a.id WHERE a.kind='human' AND a.enabled=1`, authz.AdministratorRoleID).Scan(&valid)
+	if err != nil { return err }
 	if valid < 1 { return ErrInvariant }
+	return nil
+}
+
+func canonicalRoleIDs(roleIDs []string) ([]string,error) {
+	if len(roleIDs) > MaxRoleAssignments { return nil,ErrInvalid }
+	ids:=slices.Clone(roleIDs)
+	slices.Sort(ids)
+	for i,id:=range ids {
+		if id!=authz.AdministratorRoleID && id!=authz.ReadOnlyRoleID && !customRoleIDPattern.MatchString(id) { return nil,ErrInvalid }
+		if i>0 && ids[i-1]==id { return nil,ErrInvalid }
+	}
+	return ids,nil
+}
+
+func insertAccountRoles(ctx context.Context, tx *sql.Tx, accountID string, roleIDs []string) error {
+	for _,roleID:=range roleIDs {
+		if _,err:=tx.ExecContext(ctx,"INSERT INTO account_roles(account_id,role_id) VALUES(?,?)",accountID,roleID);err!=nil{return err}
+	}
 	return nil
 }
 

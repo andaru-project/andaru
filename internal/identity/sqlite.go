@@ -7,8 +7,8 @@ const applicationID = 0x414e4449
 const schema = `
 CREATE TABLE accounts (
  id TEXT PRIMARY KEY,
- login TEXT NOT NULL UNIQUE CHECK(length(login) BETWEEN 3 AND 64 AND login NOT GLOB '*[^a-z0-9._-]*'),
- display_name TEXT NOT NULL CHECK(length(display_name) BETWEEN 1 AND 128),
+ login TEXT NOT NULL UNIQUE CHECK(length(login) BETWEEN 3 AND 64 AND login NOT GLOB '*[^a-z0-9._-]*' AND substr(login,1,1) GLOB '[a-z0-9]'),
+ display_name TEXT NOT NULL CHECK(length(display_name) BETWEEN 0 AND 128),
  kind TEXT NOT NULL CHECK(kind IN ('human','service')),
  enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
  created_at INTEGER NOT NULL,
@@ -17,8 +17,17 @@ CREATE TABLE accounts (
 CREATE TABLE tombstones (account_id TEXT PRIMARY KEY, deleted_at INTEGER NOT NULL) STRICT;
 CREATE TABLE account_roles (
  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
- role TEXT NOT NULL CHECK(role IN ('administrator','operator','viewer')),
- PRIMARY KEY(account_id,role)
+ role_id TEXT NOT NULL CHECK(
+  role_id IN ('administrator','read-only') OR
+  (length(role_id)=40 AND substr(role_id,1,4)='rol_' AND
+   substr(role_id,5,8) NOT GLOB '*[^0-9a-f]*' AND substr(role_id,13,1)='-' AND
+   substr(role_id,14,4) NOT GLOB '*[^0-9a-f]*' AND substr(role_id,18,1)='-' AND
+   substr(role_id,19,1)='4' AND substr(role_id,20,3) NOT GLOB '*[^0-9a-f]*' AND
+   substr(role_id,23,1)='-' AND substr(role_id,24,1) IN ('8','9','a','b') AND
+   substr(role_id,25,3) NOT GLOB '*[^0-9a-f]*' AND substr(role_id,28,1)='-' AND
+   substr(role_id,29,12) NOT GLOB '*[^0-9a-f]*')
+ ),
+ PRIMARY KEY(account_id,role_id)
 ) STRICT;
 CREATE TABLE password_credentials (
  account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,

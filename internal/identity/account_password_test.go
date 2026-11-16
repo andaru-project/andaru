@@ -53,6 +53,37 @@ func TestBootstrapCreateUpdateAndRestart(t *testing.T) {
 	accounts, err := s.ListAccounts(ctx)
 	if err != nil || len(accounts) != 2 { t.Fatalf("list accounts=%d err=%v",len(accounts),err) }
 }
+func TestOptionalDisplayAndCustomRolesSurviveRestart(t *testing.T) {
+	ctx := context.Background()
+	s, stateDir := openTestStore(t)
+	admin, revision, err := s.BootstrapAdmin(ctx,"rootadmin","",[]byte("unique-admin-password-41"))
+	if err != nil { t.Fatal(err) }
+	roleA := "rol_12345678-1234-4234-8234-123456789abc"
+	roleB := "rol_22345678-1234-4234-8234-123456789abc"
+	if _, _, err = s.CreateAccount(ctx,CreateAccountInput{Login:"invalidrole",DisplayName:"",Kind:Human,RoleIDs:[]string{"not-a-role"}},revision); !errors.Is(err,ErrInvalid) { t.Fatalf("invalid role id: %v",err) }
+	user, revision, err := s.CreateAccount(ctx,CreateAccountInput{Login:"roleuser",DisplayName:"",Kind:Human,Enabled:true,RoleIDs:[]string{roleA}},revision)
+	if err != nil || user.DisplayName != "" || len(user.RoleIDs) != 1 || user.RoleIDs[0] != roleA { t.Fatalf("create account=%+v err=%v",user,err) }
+	sessionHash := make([]byte,32)
+	sessionHash[0] = 1
+	if _, err = s.db.ExecContext(ctx,"INSERT INTO sessions(session_hash,csrf_hash,account_id,auth_epoch,created_at,last_seen_at,expires_at) VALUES(?,?,?,?,?,?,?)",sessionHash,make([]byte,32),user.ID,0,1,1,9999999999); err != nil { t.Fatal(err) }
+	roleIDs := []string{roleB}
+	user, revision, err = s.UpdateAccount(ctx,user.ID,revision,UpdateAccountInput{RoleIDs:&roleIDs})
+	if err != nil || len(user.RoleIDs) != 1 || user.RoleIDs[0] != roleB { t.Fatalf("updated roles=%v err=%v",user.RoleIDs,err) }
+	var sessions int
+	if err = s.db.QueryRowContext(ctx,"SELECT count(*) FROM sessions WHERE account_id=?",user.ID).Scan(&sessions); err != nil { t.Fatal(err) }
+	if sessions != 0 { t.Fatalf("role assignment retained %d sessions",sessions) }
+	removeAdminRole := []string{roleA}
+	if _, _, err = s.UpdateAccount(ctx,admin.ID,revision,UpdateAccountInput{RoleIDs:&removeAdminRole}); !errors.Is(err,ErrInvariant) { t.Fatalf("custom role replaced recovery administrator: %v",err) }
+	if err = s.ValidateAdministratorInvariant(ctx); err != nil { t.Fatal(err) }
+	if err = s.Close(); err != nil { t.Fatal(err) }
+	s, err = Open(ctx,stateDir)
+	if err != nil { t.Fatal(err) }
+	defer s.Close()
+	got, err := s.GetAccount(ctx,user.ID)
+	if err != nil || got.DisplayName != "" || len(got.RoleIDs) != 1 || got.RoleIDs[0] != roleB { t.Fatalf("restarted account=%+v err=%v",got,err) }
+	gotAdmin, err := s.GetAccount(ctx,admin.ID)
+	if err != nil || len(gotAdmin.RoleIDs) != 1 || gotAdmin.RoleIDs[0] != "administrator" { t.Fatalf("admin roles=%v err=%v",gotAdmin.RoleIDs,err) }
+}
 
 func TestAccountValidationTombstoneCASAndInvariant(t *testing.T) {
 	ctx := context.Background()

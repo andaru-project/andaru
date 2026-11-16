@@ -8,6 +8,7 @@ import (
 const (
 	LayoutVersion = 1
 	MaxAccounts = 10_000
+	MaxRoleAssignments = 10_002
 )
 
 
@@ -36,6 +37,7 @@ type Account struct {
 	DisplayName string
 	Kind AccountKind
 	Enabled bool
+	RoleIDs []string
 	CreatedAt int64
 	UpdatedAt int64
 }
@@ -45,6 +47,7 @@ type CreateAccountInput struct {
 	DisplayName string
 	Kind AccountKind
 	Enabled bool
+	RoleIDs []string
 }
 
 type UpdateAccountInput struct {
@@ -52,6 +55,7 @@ type UpdateAccountInput struct {
 	DisplayName *string
 	Kind *AccountKind
 	Enabled *bool
+	RoleIDs *[]string
 }
 
 type CredentialInput struct { Password []byte }
