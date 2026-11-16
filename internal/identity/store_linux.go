@@ -28,6 +28,10 @@ type store struct {
 }
 
 func Open(ctx context.Context, stateDir string) (*store, error) {
+	return openStore(ctx, stateDir, nil)
+}
+
+func openStore(ctx context.Context, stateDir string, beforeInitCommit func() error) (*store, error) {
 	if os.Geteuid() != 0 || !filepath.IsAbs(stateDir) || filepath.Clean(stateDir) != stateDir {
 		return nil, errors.New("identity store requires root and canonical absolute state directory")
 	}
@@ -40,18 +44,31 @@ func Open(ctx context.Context, stateDir string) (*store, error) {
 	if err := privateDirectory(stateDir); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(stateDir, "identity.db")
-	_, err := os.Lstat(path)
+	finalPath := filepath.Join(stateDir, "identity.db")
+	_, err := os.Lstat(finalPath)
 	if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
 	fresh := os.IsNotExist(err)
+	path := finalPath
+	published := false
 	if fresh {
-		fd, e := unix.Open(path, unix.O_CREAT|unix.O_EXCL|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0600)
+		tmp, e := os.CreateTemp(stateDir, ".identity.db-init-*")
 		if e != nil {
 			return nil, e
 		}
-		unix.Close(fd)
+		path = tmp.Name()
+		if e = tmp.Close(); e != nil {
+			os.Remove(path)
+			return nil, e
+		}
+		defer func() {
+			if !published {
+				os.Remove(path)
+				os.Remove(path + "-wal")
+				os.Remove(path + "-shm")
+			}
+		}()
 	}
 	if err = checkPrivateDBFiles(path); err != nil {
 		return nil, err
@@ -95,6 +112,9 @@ func Open(ctx context.Context, stateDir string) (*store, error) {
 		if e == nil {
 			_, e = tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", LayoutVersion))
 		}
+		if e == nil && beforeInitCommit != nil {
+			e = beforeInitCommit()
+		}
 		if e != nil {
 			tx.Rollback()
 			return fail(e)
@@ -118,6 +138,40 @@ func Open(ctx context.Context, stateDir string) (*store, error) {
 	if err = checkPrivateDBFiles(path); err != nil {
 		return fail(err)
 	}
+	if fresh {
+		if err = db.Close(); err != nil {
+			return nil, err
+		}
+		if err = unix.Renameat2(unix.AT_FDCWD, path, unix.AT_FDCWD, finalPath, unix.RENAME_NOREPLACE); err != nil {
+			return nil, err
+		}
+		published = true
+		dir, syncErr := os.Open(stateDir)
+		if syncErr == nil {
+			syncErr = dir.Sync()
+			if closeErr := dir.Close(); syncErr == nil {
+				syncErr = closeErr
+			}
+		}
+		if syncErr != nil {
+			return nil, syncErr
+		}
+		uri = (&url.URL{Scheme: "file", Path: finalPath, RawQuery: q.Encode()}).String()
+		db, err = sql.Open("sqlite", uri)
+		if err != nil {
+			return nil, err
+		}
+		db.SetMaxOpenConns(1)
+		db.SetMaxIdleConns(1)
+		if err = db.PingContext(ctx); err != nil {
+			db.Close()
+			return nil, err
+		}
+		if err = checkPrivateDBFiles(finalPath); err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
 	return &store{db: db, limiterKey: key}, nil
 }
 
@@ -137,6 +191,7 @@ func checkPrivateDBFiles(path string) error {
 	}
 	return nil
 }
+
 func verifyPragmas(ctx context.Context, db *sql.DB) error {
 	var journal string
 	var syncMode, foreign, secure int
@@ -157,27 +212,68 @@ func verifyPragmas(ctx context.Context, db *sql.DB) error {
 	}
 	return nil
 }
+
 func verifySchema(ctx context.Context, db *sql.DB) error {
-	for _, name := range []string{"accounts", "tombstones", "account_roles", "password_credentials", "api_tokens", "sessions", "login_limits", "source_limits", "limiter_key", "limiter_overload", "metadata", "revisions", "operations"} {
-		var n int
-		if err := db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?", name).Scan(&n); err != nil {
-			return err
+	expected := make(map[string]string)
+	for _, statement := range strings.Split(schema, ";") {
+		fields := strings.Fields(statement)
+		if len(fields) < 3 || !strings.EqualFold(fields[0], "CREATE") {
+			continue
 		}
-		if n != 1 {
-			return fmt.Errorf("identity schema missing table %s", name)
+		kind := strings.ToLower(fields[1])
+		if kind != "table" && kind != "index" {
+			continue
 		}
+		name := strings.Trim(fields[2], "`\"[]")
+		expected[kind+":"+name] = strings.Join(fields, " ")
 	}
-	var count int
-	if err := db.QueryRowContext(ctx, "SELECT value FROM metadata WHERE key='revision'").Scan(new(int64)); err != nil {
+	rows, err := db.QueryContext(ctx, "SELECT type,name,sql FROM sqlite_master WHERE type IN ('table','index') AND name NOT LIKE 'sqlite_%'")
+	if err != nil {
 		return err
 	}
-	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM revisions WHERE revision=0").Scan(&count); err != nil {
+	for rows.Next() {
+		var kind, name, statement string
+		if err = rows.Scan(&kind, &name, &statement); err != nil {
+			rows.Close()
+			return err
+		}
+		key := kind + ":" + name
+		want, ok := expected[key]
+		if !ok || strings.Join(strings.Fields(statement), " ") != want {
+			rows.Close()
+			return fmt.Errorf("identity schema object %s mismatches current layout", name)
+		}
+		delete(expected, key)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err = rows.Close(); err != nil {
+		return err
+	}
+	if len(expected) != 0 {
+		for key := range expected {
+			return fmt.Errorf("identity schema missing object %s", key)
+		}
+	}
+	var count int64
+	if err = db.QueryRowContext(ctx, "SELECT value FROM metadata WHERE key='revision'").Scan(new(int64)); err != nil {
+		return err
+	}
+	if err = db.QueryRowContext(ctx, "SELECT count(*) FROM revisions WHERE revision=0").Scan(&count); err != nil {
 		return err
 	}
 	if count != 1 {
 		return errors.New("identity initial revision missing")
 	}
-	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM limiter_overload WHERE id=1").Scan(&count); err != nil {
+	if err = db.QueryRowContext(ctx, "SELECT count(*) FROM limiter_key WHERE id=1").Scan(&count); err != nil {
+		return err
+	}
+	if count != 1 {
+		return errors.New("identity limiter key missing")
+	}
+	if err = db.QueryRowContext(ctx, "SELECT count(*) FROM limiter_overload WHERE id=1").Scan(&count); err != nil {
 		return err
 	}
 	if count != 1 {
@@ -185,6 +281,7 @@ func verifySchema(ctx context.Context, db *sql.DB) error {
 	}
 	return nil
 }
+
 
 func (s *store) Close() error { return s.db.Close() }
 func (s *store) Revision(ctx context.Context) (int64, error) {

@@ -2,7 +2,7 @@ package identity
 
 import (
 	"context"
-	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -58,7 +58,16 @@ func TestOpenRejectsInvalidEstablishedDatabase(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("requires root")
 	}
-	for _, tc := range []struct{ name, statement string }{{"zero-app", "PRAGMA application_id=0"}, {"negative-version", "PRAGMA user_version=-1"}, {"wrong-layout", "PRAGMA user_version=8"}, {"missing-table", "DROP TABLE operations"}, {"missing-key", "DELETE FROM limiter_key"}} {
+	for _, tc := range []struct{ name, statement string }{
+		{"zero-app", "PRAGMA application_id=0"},
+		{"negative-version", "PRAGMA user_version=-1"},
+		{"wrong-layout", "PRAGMA user_version=8"},
+		{"missing-table", "DROP TABLE operations"},
+		{"missing-key", "DELETE FROM limiter_key"},
+		{"malformed-columns", "DROP TABLE login_limits; CREATE TABLE login_limits (bucket_hash TEXT PRIMARY KEY) STRICT"},
+		{"missing-constraint", "DROP TABLE login_limits; CREATE TABLE login_limits (bucket_hash BLOB PRIMARY KEY, failures INTEGER NOT NULL, window_started_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, backoff_level INTEGER NOT NULL, backoff_until INTEGER NOT NULL) STRICT"},
+		{"missing-index", "DROP INDEX api_tokens_account_active"},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "state")
 			s, err := Open(context.Background(), dir)
@@ -99,31 +108,17 @@ func TestOpenRejectsUnsafeDatabaseMembers(t *testing.T) {
 	}
 }
 
-func TestOpenInitializationRollbackIsRetryable(t *testing.T) {
+func TestOpenInitializationFailureIsRetryable(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("requires root")
 	}
 	dir := filepath.Join(t.TempDir(), "state")
-	if err := os.Mkdir(dir, 0700); err != nil {
-		t.Fatal(err)
+	injected := errors.New("injected initialization failure")
+	if _, err := openStore(context.Background(), dir, func() error { return injected }); !errors.Is(err, injected) {
+		t.Fatalf("openStore error=%v, want injected initialization failure", err)
 	}
-	path := filepath.Join(dir, "identity.db")
-	db, err := sql.Open("sqlite", "file:"+path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = db.Exec("CREATE TABLE accounts(id TEXT)"); err != nil {
-		t.Fatal(err)
-	}
-	db.Close()
-	if err = os.Chmod(path, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = Open(context.Background(), dir); err == nil {
-		t.Fatal("accepted preexisting uninitialized database")
-	}
-	if err = os.Remove(path); err != nil {
-		t.Fatal(err)
+	if _, err := os.Lstat(filepath.Join(dir, "identity.db")); !os.IsNotExist(err) {
+		t.Fatalf("failed initialization published identity.db: %v", err)
 	}
 	s, err := Open(context.Background(), dir)
 	if err != nil {

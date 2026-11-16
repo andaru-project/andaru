@@ -64,3 +64,17 @@ No checks run in this fix round. No language-server references check was availab
 - Diagnosis: the schema transaction seeded `metadata('revision',0)`, `limiter_key(1,randomblob(32))`, and `limiter_overload(1,0,0)`, but it never seeded `revisions(revision=0)`. `verifySchema` correctly queried that table and rejected every fresh database with `identity initial revision missing`; the metadata key/value and revision-history row are separate records with separate identifiers.
 - Fix: seed `revisions(0,unixepoch())` in the same schema DDL transaction. This preserves atomic creation of schema, revision metadata/history, limiter key, and overload state. Existing-layout verification still fails closed if any required row is deleted; no legacy-layout migration was added.
 - Test coverage: existing `TestOpenRestartAndSchema` opens a fresh DB and therefore catches this mismatch; no test changes were needed. Checks were not run per assignment.
+
+## Parent verification after round 1
+
+- `go test -tags=integration ./internal/identity -count=1`: PASS.
+- `go test -race ./internal/identity`: PASS.
+- `gofmt -l internal/identity/*.go`: clean.
+- `go test ./internal/identity -run '^$' -bench '^BenchmarkArgon2ProductionAdmission$' -benchtime=1x -benchmem`: PASS; amd64/i5-9500T measured 223.2 ms/op, 64 MiB peak estimate for one observed active hash, 67,118,752 B/op.
+
+## Persistence re-review fixes
+
+- Established-layout verification now compares the normalized `sqlite_master` DDL for every required table and explicit index to the fixed initializer layout. This covers column names/types/nullability/defaults/primary keys, STRICT, constraints, foreign keys, and indexes; missing, extra, or altered table/index definitions fail closed. Seed checks explicitly require revision metadata/history, limiter key, and overload state.
+- Fresh databases are initialized in a private unique staging file in the state directory. Initialization is verified there, the DB is closed, and `renameat2(RENAME_NOREPLACE)` atomically publishes it as `identity.db`; the state directory is synced after publication. Failed initialization cleans staging files and never leaves a zero-version final DB. Existing database files are never treated as retryable staging state.
+- `TestOpenRejectsInvalidEstablishedDatabase` now includes malformed columns, missing CHECK constraints, and a missing required index. `TestOpenInitializationFailureIsRetryable` injects an error before initialization commit, confirms no final DB was published, then retries through `Open` without deleting files.
+- No tests/build/lint/format/graph checks were run per assignment.
