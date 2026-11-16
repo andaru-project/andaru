@@ -167,8 +167,8 @@ func (r Realizer) Confirm(ctx context.Context, id int) (result error) {
 		}
 		defer func() { result = errors.Join(result, authorization.ClearPending(id, authz.TransitionConfirm)) }()
 	}
-	state, err := authorization.Read()
-	if err != nil || state.LiveDigest != g.AuthorizationDigest {
+	authState, err := authorization.Read()
+	if err != nil || authState.LiveDigest != g.AuthorizationDigest {
 		return errors.Join(authz.ErrStateUnavailable, err)
 	}
 	// Pointers first: once they name this generation a late timer and the next boot both keep it.

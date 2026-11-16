@@ -29,7 +29,7 @@ func TestLiveAuthorizationUsesPointersLiveNotSavedHead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := store.Save(ctx, "unix:uid:0", firstChange)
+	first, err := store.Save(ctx, authz.Actor{Kind: authz.ActorSystem, ID: "root"}, firstChange)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestLiveAuthorizationUsesPointersLiveNotSavedHead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.Save(ctx, "unix:uid:0", secondChange); err != nil {
+	if _, err = store.Save(ctx, authz.Actor{Kind: authz.ActorSystem, ID: "root"}, secondChange); err != nil {
 		t.Fatal(err)
 	}
 	snapshot, epoch, err := LiveAuthorization(ctx, stateDir, store)

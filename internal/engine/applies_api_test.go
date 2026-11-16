@@ -171,6 +171,9 @@ func (b *applyBench) Realize(ctx context.Context, verb string, id int, extra ...
 func newApplyBench(t *testing.T) *applyBench {
 	t.Helper()
 	b := &applyBench{t: t, state: t.TempDir(), root: t.TempDir(), declaration: uplinkDeclaration, head: "7"}
+	if err := os.Chmod(b.state, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := initializeAuthorizationState(t.Context(), b.state); err != nil {
 		t.Fatal(err)
 	}

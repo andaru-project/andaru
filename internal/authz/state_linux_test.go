@@ -9,8 +9,17 @@ import (
 	"time"
 )
 
-func TestAuthorizationStateAdvancesEveryDifferentDigest(t *testing.T) {
+func privateStateDir(t *testing.T) string {
+	t.Helper()
 	stateDir := t.TempDir()
+	if err := os.Chmod(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return stateDir
+}
+
+func TestAuthorizationStateAdvancesEveryDifferentDigest(t *testing.T) {
+	stateDir := privateStateDir(t)
 	a, err := Digest(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -41,7 +50,7 @@ func TestAuthorizationStateAdvancesEveryDifferentDigest(t *testing.T) {
 }
 
 func TestAuthorizationLockAndPendingTransitionAreCrossProcessState(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := privateStateDir(t)
 	digest, err := Digest(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -73,7 +82,7 @@ func TestAuthorizationLockAndPendingTransitionAreCrossProcessState(t *testing.T)
 }
 
 func TestMissingAuthorizationStateDoesNotResetEpoch(t *testing.T) {
-	stateDir := t.TempDir()
+	stateDir := privateStateDir(t)
 	digest, err := Digest(nil)
 	if err != nil {
 		t.Fatal(err)

@@ -342,6 +342,9 @@ const (
 func newBench(t *testing.T) *bench {
 	t.Helper()
 	state, root := t.TempDir(), t.TempDir()
+	if err := os.Chmod(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	b := &bench{t: t, dir: Dir(state), now: time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)}
 	b.net = &fakeNetworkd{root: root, devices: map[string]bool{"eth0": true}, state: "configured"}
 	if err := os.MkdirAll(filepath.Join(root, netDir), 0o755); err != nil {

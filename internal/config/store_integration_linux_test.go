@@ -877,7 +877,7 @@ func TestFilterObjectsPersist(t *testing.T) {
 	path := ownedDir(t)
 	ctx := context.Background()
 	s := openTestStore(t, path)
-	if _, e = s.Save(ctx, systemRootActor, networkInput(t)); e != nil {
+	if _, e := s.Save(ctx, systemRootActor, networkInput(t)); e != nil {
 		t.Fatal(e)
 	}
 	s.Close()
@@ -926,7 +926,7 @@ func TestServiceChangesTableAdded(t *testing.T) {
 	path := ownedDir(t)
 	ctx := context.Background()
 	s := openTestStore(t, path)
-	if _, e = s.Save(ctx, systemRootActor, networkInput(t)); e != nil {
+	if _, e := s.Save(ctx, systemRootActor, networkInput(t)); e != nil {
 		t.Fatal(e)
 	}
 	s.Close()
@@ -964,7 +964,7 @@ func TestNATListsPersist(t *testing.T) {
 	path := ownedDir(t)
 	ctx := context.Background()
 	s := openTestStore(t, path)
-	if _, e = s.Save(ctx, systemRootActor, networkInput(t)); e != nil {
+	if _, e := s.Save(ctx, systemRootActor, networkInput(t)); e != nil {
 		t.Fatal(e)
 	}
 	s.Close()
@@ -1010,7 +1010,7 @@ func TestStoreWithoutDHCPv6TableOpens(t *testing.T) {
 	path := ownedDir(t)
 	ctx := context.Background()
 	s := openTestStore(t, path)
-	if _, e = s.Save(ctx, systemRootActor, networkInput(t)); e != nil {
+	if _, e := s.Save(ctx, systemRootActor, networkInput(t)); e != nil {
 		t.Fatal(e)
 	}
 	s.Close()
@@ -1061,7 +1061,7 @@ func TestStoreWithoutVIPTableOpens(t *testing.T) {
 	path := ownedDir(t)
 	ctx := context.Background()
 	s := openTestStore(t, path)
-	if _, e = s.Save(ctx, systemRootActor, networkInput(t)); e != nil {
+	if _, e := s.Save(ctx, systemRootActor, networkInput(t)); e != nil {
 		t.Fatal(e)
 	}
 	s.Close()
