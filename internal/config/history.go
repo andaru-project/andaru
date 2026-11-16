@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strconv"
 	"time"
+
+	"github.com/andaru-project/andaru/internal/authz"
 )
 
 func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, requested []objectKey) (savedState, VersionInfo, error) {
@@ -37,7 +39,7 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 		}
 		return state, info, diagnostic("load-config-scan", e)
 	}
-	if number < 0 || (schemaVersion != 1 && schemaVersion != 2) || len(ch) != 32 || len(sh) != 32 || len(cb) > documentLimit {
+	if number < 0 || (schemaVersion != 1 && schemaVersion != 2 && schemaVersion != 3) || len(ch) != 32 || len(sh) != 32 || len(cb) > documentLimit {
 		return state, info, diagnostic("load-config-metadata", nil)
 	}
 	hash := sha256.Sum256(cb)
@@ -212,6 +214,15 @@ func (s *Store) List(ctx context.Context, collection string) (result CollectionV
 	}
 	err = s.read(ctx, "", nil, func(state savedState, _ VersionInfo) error {
 		result = CollectionView{State: "saved", SavedVersion: state.Version, Items: []ObjectView{}}
+		if collection == "roles" {
+			for _, role := range authz.BuiltIns() {
+				view, e := viewObject(&role, "0", state.Secrets)
+				if e != nil {
+					return e
+				}
+				result.Items = append(result.Items, view)
+			}
+		}
 		index := objects(&state.Config)
 		keys := []objectKey{}
 		for k := range index {
@@ -245,6 +256,16 @@ func (s *Store) Get(ctx context.Context, collection, id string) (result ObjectVi
 		return result, "", fault("NOT_FOUND", "", "Unknown collection.")
 	}
 	err = s.read(ctx, "", []objectKey{key}, func(state savedState, _ VersionInfo) error {
+		if collection == "roles" {
+			for _, role := range authz.BuiltIns() {
+				if role.ID == id {
+					var e error
+					result, e = viewObject(&role, "0", state.Secrets)
+					version = state.Version
+					return e
+				}
+			}
+		}
 		v, ok := objects(&state.Config)[key]
 		if !ok {
 			return fault("NOT_FOUND", "", "Object does not exist.")
@@ -339,7 +360,7 @@ func (s *Store) Version(ctx context.Context, id Version) (result VersionView, er
 	}
 	result = VersionView{State: "saved", VersionInfo: info, Value: snapshot.Value, Changes: []objectChange{}}
 	number, _ := strconvVersion(id)
-	rows, e := conn.QueryContext(ctx, "SELECT collection,object_id,created,deleted FROM object_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM policy_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM service_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM nat_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM dhcp6_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM vip_changes WHERE version_id=? ORDER BY 1,2", number, number, number, number, number, number)
+	rows, e := conn.QueryContext(ctx, "SELECT collection,object_id,created,deleted FROM object_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM policy_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM service_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM nat_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM dhcp6_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM vip_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM role_changes WHERE version_id=? ORDER BY 1,2", number, number, number, number, number, number, number)
 	if e != nil {
 		return result, diagnostic("version-changes-query", e)
 	}
@@ -360,9 +381,10 @@ func (s *Store) Version(ctx context.Context, id Version) (result VersionView, er
 // RealizationInput carries secret values for rendering. It has no JSON form
 // and must never be serialised or logged.
 type RealizationInput struct {
-	SavedVersion Version
-	Value        json.RawMessage
-	Secrets      map[string]string
+	SavedVersion  Version
+	Value         json.RawMessage
+	Secrets       map[string]string
+	Authorization authz.Snapshot
 }
 
 // RealizationInput returns one saved version with the secrets its links
@@ -380,7 +402,11 @@ func (s *Store) RealizationInput(ctx context.Context, version *Version) (result 
 		if e != nil {
 			return e
 		}
-		result = RealizationInput{SavedVersion: state.Version, Value: view.Value, Secrets: map[string]string{}}
+		authorization, e := authz.NewSnapshot(state.Config.Roles)
+		if e != nil {
+			return e
+		}
+		result = RealizationInput{SavedVersion: state.Version, Value: view.Value, Secrets: map[string]string{}, Authorization: authorization}
 		for _, l := range state.Config.Links {
 			if l.Password != nil {
 				result.Secrets[l.Password.Secret] = state.Secrets.Scopes["core"][l.Password.Secret].Value

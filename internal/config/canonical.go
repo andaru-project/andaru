@@ -6,6 +6,8 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
+
+	"github.com/andaru-project/andaru/internal/authz"
 )
 
 func canonical(v any) ([]byte, error) {
@@ -26,6 +28,10 @@ func normalizeDeclaration(d *declaration) {
 	slices.SortFunc(d.Links, func(a, b link) int { return strings.Compare(a.ID, b.ID) })
 	slices.SortFunc(d.Segments, func(a, b segment) int { return strings.Compare(a.ID, b.ID) })
 	slices.SortFunc(d.Zones, func(a, b zone) int { return strings.Compare(a.ID, b.ID) })
+	slices.SortFunc(d.Roles, func(a, b authz.Role) int { return strings.Compare(a.ID, b.ID) })
+	for i := range d.Roles {
+		slices.Sort(d.Roles[i].Capabilities)
+	}
 	for i := range d.Links {
 		if d.Links[i].Members != nil {
 			slices.Sort(*d.Links[i].Members)

@@ -5,13 +5,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/andaru-project/andaru/internal/engine"
 	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
-
-	"github.com/andaru-project/andaru/internal/engine"
 )
 
 const defaultSocket = "/run/andaru/engine.sock"
@@ -25,7 +26,7 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	usage := "usage: andaru engine [--socket PATH] [--state-dir PATH] | andaru ctl [--socket PATH] links|prefixes|openapi|config|versions|preview|apply|applies|takeover|backup | andaru realize [--state-dir PATH] activate|rollback|confirm|boot|leases|prefixes | andaru upgrade check|prepare"
+	usage := "usage: andaru engine [--socket PATH] [--state-dir PATH] [--web-socket PATH --web-uid UID --web-gid GID --web-origin HTTPS_ORIGIN ...] | andaru ctl [--socket PATH] links|prefixes|openapi|config|versions|preview|apply|applies|takeover|backup|users|tokens|audit | andaru realize [--state-dir PATH] activate|rollback|confirm|boot|leases|prefixes | andaru upgrade check|prepare"
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, usage)
 		return 2
@@ -48,8 +49,15 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	flags.SetOutput(stderr)
 	socket := flags.String("socket", defaultSocket, "absolute local engine socket path")
 	stateDir := "/var/lib/andaru"
+	webSocket := ""
+	var webUID, webGID uint64
+	var webOrigins repeatedFlags
 	if args[0] == "engine" {
 		flags.StringVar(&stateDir, "state-dir", stateDir, "absolute private state directory")
+		flags.StringVar(&webSocket, "web-socket", "", "absolute dedicated web engine socket path")
+		flags.Uint64Var(&webUID, "web-uid", 0, "exact non-root static web process UID")
+		flags.Uint64Var(&webGID, "web-gid", 0, "exact non-root static web socket group GID")
+		flags.Var(&webOrigins, "web-origin", "exact HTTPS management origin; repeat for each origin")
 	}
 	if err := flags.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -70,11 +78,69 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			fmt.Fprintln(stderr, "state-dir must be a canonical absolute path")
 			return 2
 		}
-		if err := engine.Serve(ctx, *socket, stateDir); err != nil {
+		webConfigured := webSocket != "" || webUID != 0 || webGID != 0 || len(webOrigins) != 0
+		if webSocket != "" && (webUID == 0 || webGID == 0) {
+			peerUID, peerGID, peerErr := readWebPeer("/etc/andaru/engine-web-peer")
+			if peerErr == nil {
+				if webUID == 0 {
+					webUID = peerUID
+				}
+				if webGID == 0 {
+					webGID = peerGID
+				}
+			}
+		}
+		var err error
+		if !webConfigured {
+			err = engine.Serve(ctx, *socket, stateDir)
+		} else if webSocket == "" || webUID == 0 || webGID == 0 || webUID > 1<<32-1 || webGID > 1<<32-1 || len(webOrigins) == 0 ||
+			!filepath.IsAbs(webSocket) || filepath.Clean(webSocket) != webSocket || len(webSocket) >= 108 {
+			fmt.Fprintln(stderr, "web-socket, non-root 32-bit web-uid/web-gid, and at least one web-origin must be supplied together")
+			return 2
+		} else {
+			err = engine.ServeWithWeb(ctx, *socket, stateDir, engine.WebSocketOptions{
+				SocketPath: webSocket, UID: uint32(webUID), GID: uint32(webGID), Origins: []string(webOrigins),
+			})
+		}
+		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
 		return 0
 	}
 	return runCtl(ctx, *socket, flags.Args(), stdin, stdout, stderr)
+}
+
+type repeatedFlags []string
+
+func readWebPeer(path string) (uint64, uint64, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, 0, err
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) != 2 {
+		return 0, 0, errors.New("web peer file must contain uid and gid")
+	}
+	uid, err := strconv.ParseUint(fields[0], 10, 32)
+	if err != nil || uid == 0 {
+		return 0, 0, errors.New("web peer uid must be a non-root 32-bit id")
+	}
+	gid, err := strconv.ParseUint(fields[1], 10, 32)
+	if err != nil || gid == 0 {
+		return 0, 0, errors.New("web peer gid must be a non-root 32-bit id")
+	}
+	return uid, gid, nil
+}
+
+func (f *repeatedFlags) String() string {
+	return strings.Join(*f, ",")
+}
+
+func (f *repeatedFlags) Set(value string) error {
+	if value == "" {
+		return errors.New("value cannot be empty")
+	}
+	*f = append(*f, value)
+	return nil
 }

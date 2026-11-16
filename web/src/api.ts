@@ -1,0 +1,226 @@
+import type {
+  Applies,
+  Apply,
+  AuditEvent,
+  ErrorDetail,
+  Page,
+  Role,
+  SavedObject,
+  SavedRolePage,
+  Session,
+  Token,
+  TokenIssueResponse,
+  User,
+} from './types';
+
+interface ErrorEnvelope {
+  error?: { code?: string; message?: string; details?: ErrorDetail[] };
+}
+
+export class ApiError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly code: string,
+    message: string,
+    public readonly details: ErrorDetail[] = [],
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+export function apiErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    const details = error.details.map((detail) => detail.message).filter(Boolean).join(' ');
+    return details ? `${error.message} ${details}` : error.message;
+  }
+  return 'The request could not be completed.';
+}
+
+function operationID() {
+  return crypto.randomUUID();
+}
+
+export class ApiClient {
+  constructor(private csrfToken = '') {}
+
+  setCSRFToken(token: string) {
+    this.csrfToken = token;
+  }
+
+  clearSession() {
+    this.csrfToken = '';
+  }
+
+  private async request<T>(path: string, init: RequestInit = {}, csrf = false): Promise<T> {
+    const headers = new Headers(init.headers);
+    headers.set('Accept', 'application/json');
+    if (init.body) headers.set('Content-Type', 'application/json');
+    if (csrf && this.csrfToken) headers.set('X-Andaru-CSRF', this.csrfToken);
+
+    let response: Response;
+    try {
+      response = await fetch(path, { ...init, headers, credentials: 'same-origin', cache: 'no-store' });
+    } catch {
+      throw new ApiError(0, 'DISCONNECTED', 'Cannot reach the Andaru service. Check the connection and try again.');
+    }
+
+    if (response.status === 204) return undefined as T;
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      body = undefined;
+    }
+    if (!response.ok) {
+      const envelope = body as ErrorEnvelope | undefined;
+      const code = envelope?.error?.code ?? `HTTP_${response.status}`;
+      const message = envelope?.error?.message ?? 'The server refused the request.';
+      if (response.status === 401) this.clearSession();
+      throw new ApiError(response.status, code, message, envelope?.error?.details ?? []);
+    }
+    return body as T;
+  }
+
+  async login(login: string, password: string) {
+    const session = await this.request<Session>('/api/v1/session', {
+      method: 'POST', body: JSON.stringify({ login, password }),
+    });
+    this.setCSRFToken(session.csrfToken);
+    return session;
+  }
+
+  async currentSession() {
+    const session = await this.request<Session>('/api/v1/session');
+    this.setCSRFToken(session.csrfToken);
+    return session;
+  }
+
+  async logout() {
+    try {
+      await this.request<void>('/api/v1/session', { method: 'DELETE' }, true);
+    } finally {
+      this.clearSession();
+    }
+  }
+
+  startupStatus() {
+    return this.request<{ setupRequired: boolean }>('/api/v1/startup-status');
+  }
+
+  listUsers(cursor = '') {
+    const query = new URLSearchParams({ limit: '100' });
+    if (cursor) query.set('cursor', cursor);
+    return this.request<Page<User>>(`/api/v1/users?${query}`);
+  }
+
+  getUser(id: string) {
+    return this.request<User>(`/api/v1/users/${encodeURIComponent(id)}`);
+  }
+
+  createUser(input: { login: string; displayName: string; kind: User['kind']; enabled: boolean; roleIds: string[]; expectedRevision: number }) {
+    return this.request('/api/v1/users', {
+      method: 'POST', headers: { 'Idempotency-Key': operationID() }, body: JSON.stringify(input),
+    }, true);
+  }
+
+  updateUser(id: string, input: Partial<Pick<User, 'login' | 'displayName' | 'kind' | 'enabled' | 'roleIds'>> & { expectedRevision: number }) {
+    return this.request(`/api/v1/users/${encodeURIComponent(id)}`, {
+      method: 'PATCH', headers: { 'Idempotency-Key': operationID() }, body: JSON.stringify(input),
+    }, true);
+  }
+
+  deleteUser(id: string, revision: number) {
+    return this.request(`/api/v1/users/${encodeURIComponent(id)}`, {
+      method: 'DELETE', headers: { 'Idempotency-Key': operationID(), 'If-Match': String(revision) },
+    }, true);
+  }
+
+  changePassword(id: string, input: { currentPassword: string; newPassword: string; expectedRevision: number }) {
+    return this.request(`/api/v1/users/${encodeURIComponent(id)}/password`, {
+      method: 'PUT', headers: { 'Idempotency-Key': operationID() }, body: JSON.stringify(input),
+    }, true);
+  }
+
+  liveRoles(cursor = '') {
+    const query = new URLSearchParams({ limit: '100' });
+    if (cursor) query.set('cursor', cursor);
+    return this.request<Page<Role>>(`/api/v1/roles?${query}`);
+  }
+
+  async allLiveRoles() {
+    const roles: Role[] = [];
+    let cursor = '';
+    do {
+      const page = await this.liveRoles(cursor);
+      roles.push(...page.items);
+      cursor = page.nextCursor ?? '';
+    } while (cursor);
+    return roles;
+  }
+
+  savedRoles() {
+    return this.request<SavedRolePage>('/api/v1/config/roles');
+  }
+
+  capabilities(cursor = '') {
+    const query = new URLSearchParams({ limit: '100' });
+    if (cursor) query.set('cursor', cursor);
+    return this.request<Page<string>>(`/api/v1/capabilities?${query}`);
+  }
+
+  createRole(role: Omit<Role, 'id' | 'builtIn'>) {
+    return this.request<SavedObject<Role>>('/api/v1/config/roles', { method: 'POST', body: JSON.stringify(role) }, true);
+  }
+
+  updateRole(role: Role, version: string) {
+    const value = { name: role.name, description: role.description ?? '', capabilities: role.capabilities };
+    return this.request<SavedObject<Role>>(`/api/v1/config/roles/${encodeURIComponent(role.id)}`, {
+      method: 'PUT', headers: { 'If-Match': `"${role.id}.${version}"` }, body: JSON.stringify(value),
+    }, true);
+  }
+
+  deleteRole(id: string, version: string) {
+    return this.request(`/api/v1/config/roles/${encodeURIComponent(id)}`, {
+      method: 'DELETE', headers: { 'If-Match': `"${id}.${version}"` },
+    }, true);
+  }
+
+  listApplies() {
+    return this.request<Applies>('/api/v1/applies');
+  }
+
+  apply(savedVersion: string) {
+    return this.request<Apply>('/api/v1/applies', {
+      method: 'POST', body: JSON.stringify({ savedVersion, takeover: false, confirmTimeoutSeconds: 120 }),
+    }, true);
+  }
+
+  finishApply(id: string, action: 'confirmation' | 'rollback') {
+    return this.request<Apply>(`/api/v1/applies/${encodeURIComponent(id)}/${action}`, { method: 'POST' }, true);
+  }
+
+  listTokens(accountId: string, cursor = '') {
+    const query = new URLSearchParams({ accountId, limit: '100' });
+    if (cursor) query.set('cursor', cursor);
+    return this.request<Page<Token>>(`/api/v1/tokens?${query}`);
+  }
+
+  createToken(input: { accountId: string; name: string; scope: string[]; expiresAt?: string; noExpiry: boolean; revokeOnPasswordChange?: boolean }) {
+    return this.request<TokenIssueResponse>('/api/v1/tokens', {
+      method: 'POST', headers: { 'Idempotency-Key': operationID() }, body: JSON.stringify(input),
+    }, true);
+  }
+
+  revokeToken(selector: string) {
+    return this.request(`/api/v1/tokens/${encodeURIComponent(selector)}`, {
+      method: 'DELETE', headers: { 'Idempotency-Key': operationID() },
+    }, true);
+  }
+
+  listAudit(cursor = '') {
+    const query = new URLSearchParams({ limit: '100' });
+    if (cursor) query.set('cursor', cursor);
+    return this.request<Page<AuditEvent>>(`/api/v1/audit/events?${query}`);
+  }
+}

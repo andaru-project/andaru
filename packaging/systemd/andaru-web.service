@@ -1,0 +1,48 @@
+[Unit]
+Description=Andaru HTTPS administration service
+Requires=andaru-engine.service
+After=andaru-engine.service network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/andaru/web.conf
+ConditionPathExists=/etc/andaru/engine-web.conf
+
+[Service]
+Type=exec
+User=andaru-web
+Group=andaru-web
+EnvironmentFile=/etc/andaru/web.conf
+ExecStart=/usr/bin/andaru-web --listen ${ANDARU_WEB_LISTEN} --tls-cert ${ANDARU_WEB_TLS_CERT} --tls-key ${ANDARU_WEB_TLS_KEY} --origin ${ANDARU_WEB_ORIGIN} --backend-socket /run/andaru-web/engine.sock --assets-dir /usr/share/andaru/web
+UMask=0077
+Restart=on-failure
+RestartSec=1s
+TimeoutStopSec=5s
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=andaru-web
+
+[Install]
+WantedBy=multi-user.target

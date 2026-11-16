@@ -41,7 +41,7 @@ type applyReply struct {
 
 var objectIDPattern = regexp.MustCompile(`^(lnk|seg|zon|adr|svc|rul|dhp|pfw|oto|dh6|vip)_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 var applyIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
-var errUsage = errors.New("usage: andaru ctl [--socket PATH] links|prefixes|openapi|config <show|list|get|create|replace|delete|changes|order>|versions <list|get>|preview network [--saved-version N]|apply network --saved-version N [--takeover] [--confirm-timeout S]|applies <list|get ID|confirm ID|rollback ID>|takeover [--accept-detected] [--confirm-timeout S]|backup <create|inspect|restore>")
+var errUsage = errors.New("usage: andaru ctl [--socket PATH] links|prefixes|openapi|config <show|list|get|create|replace|delete|changes|order>|versions <list|get>|preview network [--saved-version N]|apply network --saved-version N [--takeover] [--confirm-timeout S]|applies <list|get ID|confirm ID|rollback ID>|takeover [--accept-detected] [--confirm-timeout S]|backup <create|inspect|restore>|users <bootstrap-admin|list|get|create|update|disable|delete|password-reset>|tokens <create|list|revoke>|audit list")
 
 func collectionName(s string) bool {
 	return slices.Contains([]string{"links", "segments", "zones", "addresses", "services", "dhcp", "dhcp6", "virtualAddresses", "policy/input", "policy/forward", "nat/port-forwards", "nat/one-to-one"}, s)
@@ -347,6 +347,9 @@ func runCtl(ctx context.Context, socket string, args []string, stdin io.Reader, 
 	if len(args) > 0 && args[0] == "takeover" {
 		return runTakeover(ctx, socket, args[1:], stdin, stdout, stderr)
 	}
+	if len(args) > 0 && slices.Contains([]string{"users", "tokens", "audit"}, args[0]) {
+		return runIdentity(ctx, socket, args, stdout, stderr)
+	}
 	spec, e := ctlOperation(args, stderr)
 	if e != nil {
 		if errors.Is(e, flag.ErrHelp) {
@@ -456,7 +459,7 @@ func validDeclarationView(raw json.RawMessage) bool {
 		SchemaVersion          int
 		Links, Segments, Zones []json.RawMessage
 	}
-	return json.Unmarshal(raw, &d) == nil && (d.SchemaVersion == 1 || d.SchemaVersion == 2) && d.Links != nil && d.Segments != nil && d.Zones != nil
+	return json.Unmarshal(raw, &d) == nil && (d.SchemaVersion == 1 || d.SchemaVersion == 2 || d.SchemaVersion == 3) && d.Links != nil && d.Segments != nil && d.Zones != nil
 }
 func validEnvelope(kind string, body []byte) bool {
 	if !jsontext.Value(body).IsValid() {

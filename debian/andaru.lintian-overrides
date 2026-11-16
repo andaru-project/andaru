@@ -1,2 +1,3 @@
 # Andaru is built with CGO_ENABLED=0 on purpose: one binary, no libc dependency, as the lab and releases run it.
 andaru: statically-linked-binary [usr/bin/andaru]
+andaru: statically-linked-binary [usr/bin/andaru-web]

@@ -4,7 +4,7 @@
   "info": {
     "title": "Andaru local engine API",
     "version": "0.4.0-dev",
-    "description": "Experimental root-local engine API over Unix sockets only. Verified UID 0 SO_PEERCRED authorizes every route. Network status is observed; configuration and restore writes create durable saved versions and never activate networking. Backup archives are returned only to the authorized local client. Contracts remain provisional until Andaru 1.0.",
+    "description": "Experimental engine API over separate kernel-peer-gated Unix sockets. UID 0 retains the root-local API; the dedicated web UID receives only authenticated browser/token routes plus login and setup-required status. Network status is observed; configuration and restore writes create durable saved versions and never activate networking. Contracts remain provisional until Andaru 1.0.",
     "license": {
       "name": "GNU AGPLv3",
       "url": "https://github.com/andaru-project/andaru/blob/main/LICENSE"
@@ -19,7 +19,87 @@
   "x-andaru-peer-uids": [
     0
   ],
+  "x-andaru-web-peer-uid": "Exact non-root UID configured at engine startup; accepted only on the separate web socket before HTTP parsing.",
   "paths": {
+    "/api/v1/startup-status": {
+      "get": {
+        "operationId": "getStartupStatus",
+        "summary": "Read only whether root-console identity bootstrap is still required",
+        "x-andaru-web-auth-route": true,
+        "responses": {
+          "200": {"description": "Setup-required status only", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/StartupStatus"}}}},
+          "421": {"description": "Host is not a configured management host"},
+          "503": {"description": "Identity status is unavailable"}
+        }
+      },
+      "head": {
+        "operationId": "headStartupStatus",
+        "summary": "Check setup-required status without a response body",
+        "x-andaru-web-auth-route": true,
+        "responses": {"200": {"description": "Status is available"}}
+      }
+    },
+    "/api/v1/session": {
+      "post": {
+        "operationId": "loginSession",
+        "summary": "Authenticate a human and create a browser session",
+        "x-andaru-web-auth-route": true,
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WebLoginRequest"}}}
+        },
+        "responses": {
+          "200": {"description": "Session created; also sets __Host-andaru_session", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WebSession"}}}},
+          "401": {"description": "Generic invalid or unusable credentials"},
+          "429": {"description": "Generic login backoff or password-hash admission limit"},
+          "503": {"description": "Authorization, identity, or audit is unavailable"}
+        }
+      },
+      "get": {
+        "operationId": "getCurrentSession",
+        "summary": "Read the current human session and rotate its CSRF token",
+        "x-andaru-web-auth-route": true,
+        "responses": {
+          "200": {"description": "Current session with a newly rotated CSRF token", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WebSession"}}}},
+          "401": {"description": "Session cookie is absent or invalid"}
+        }
+      },
+      "delete": {
+        "operationId": "logoutSession",
+        "summary": "Revoke the current browser session",
+        "x-andaru-web-auth-route": true,
+        "responses": {
+          "204": {"description": "Session revoked and cookie cleared"},
+          "403": {"description": "Origin or CSRF validation failed"},
+          "503": {"description": "Identity or audit is unavailable"}
+        }
+      }
+    },
+    "/api/v1/sessions": {
+      "get": {
+        "operationId": "listOwnSessions",
+        "summary": "List the authenticated human's active sessions",
+        "x-andaru-web-auth-route": true,
+        "responses": {
+          "200": {"description": "At most five active sessions", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WebSessionPage"}}}},
+          "401": {"description": "Session cookie is absent or invalid"}
+        }
+      }
+    },
+    "/api/v1/sessions/{id}": {
+      "delete": {
+        "operationId": "revokeOwnSession",
+        "summary": "Revoke one session owned by the authenticated human",
+        "x-andaru-web-auth-route": true,
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string", "minLength": 43, "maxLength": 43}}],
+        "responses": {
+          "204": {"description": "Session revoked"},
+          "403": {"description": "Origin or CSRF validation failed"},
+          "404": {"description": "Owned session not found"},
+          "503": {"description": "Identity or audit is unavailable"}
+        }
+      }
+    },
     "/api/v1/status/prefixes": {
       "get": {
         "operationId": "readDelegatedPrefixes",
@@ -178,9 +258,10 @@
         },
         "responses": {
           "200": {
-            "description": "A plain ZIP, or a binary age stream when secrets were explicitly included",
+            "description": "A plain ZIP with users by default, or a binary whole-archive age stream when configuration secrets or user credentials were explicitly included",
             "headers": {
               "Andaru-Saved-Version": {"required": true, "schema": {"type": "string"}},
+              "Andaru-Identity-Revision": {"required": true, "schema": {"type": "string"}},
               "Andaru-Captured-At": {"required": true, "schema": {"type": "string", "format": "date-time"}},
               "Cache-Control": {"required": true, "schema": {"type": "string", "const": "no-store"}},
               "X-Content-Type-Options": {"required": true, "schema": {"type": "string", "const": "nosniff"}}
@@ -237,7 +318,7 @@
     "/api/v1/restores": {
       "post": {
         "operationId": "commitPortableRestore",
-        "summary": "Atomically replace selected saved stores without applying networking",
+        "summary": "Crash-safely replace selected configuration and identity stores without applying networking",
         "requestBody": {
           "required": true,
           "content": {
@@ -251,16 +332,16 @@
           }
         },
         "responses": {
-          "200": {"description": "One new saved version", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RestoreSaved"}}}},
+          "200": {"description": "Recorded complete selected-store outcome, including idempotent replay", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RestoreSaved"}}}},
           "400": {"description": "Malformed multipart, archive, or options", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
           "403": {"$ref": "#/components/responses/Forbidden"},
           "409": {"description": "Another expensive backup operation is running", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
-          "412": {"description": "Saved head differs from expectedSavedVersion", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+          "412": {"description": "Saved head or identity revision differs from its preview precondition", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
           "413": {"description": "Body, archive, or options limit exceeded", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
           "415": {"description": "Unsupported request media type", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
           "422": {"description": "Unsupported schema, scope, encryption, passphrase, or restoration", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
-          "428": {"description": "expectedSavedVersion is required", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
-          "503": {"description": "Saved store unavailable", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}
+          "428": {"description": "Operation ID or a selected-store revision is required", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+          "503": {"description": "Selected store unavailable or a recorded restore requires reconciliation", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}
         }
       }
     },
@@ -767,6 +848,7 @@
               "links",
               "segments",
               "zones",
+              "roles",
               "addresses",
               "services",
               "dhcp", "dhcp6", "virtualAddresses"
@@ -1177,6 +1259,7 @@
               "links",
               "segments",
               "zones",
+              "roles",
               "addresses",
               "services",
               "dhcp", "dhcp6", "virtualAddresses"
@@ -5116,6 +5199,154 @@
         }
       ]
     },
+    "/api/v1/capabilities": {
+      "get": {
+        "operationId": "listCapabilities",
+        "x-required-capability": "users.read",
+        "parameters": [
+          {"name": "cursor", "in": "query", "schema": {"type": "string"}},
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100}}
+        ],
+        "responses": {"200": {"description": "A bounded capability page", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CapabilityPage"}}}}}
+      },
+      "head": {"operationId": "headCapabilities", "x-required-capability": "users.read", "responses": {"200": {"description": "Capability page headers"}}}
+    },
+    "/api/v1/roles": {
+      "get": {
+        "operationId": "listIdentityRoles",
+        "x-required-capability": "users.read",
+        "parameters": [
+          {"name": "cursor", "in": "query", "schema": {"type": "string"}},
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100}}
+        ],
+        "responses": {"200": {"description": "Immutable built-ins and saved custom roles", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RolePage"}}}}}
+      },
+      "head": {"operationId": "headIdentityRoles", "x-required-capability": "users.read", "responses": {"200": {"description": "Role page headers"}}}
+    },
+    "/api/v1/users": {
+      "get": {
+        "operationId": "listUsers",
+        "x-required-capability": "users.read",
+        "parameters": [
+          {"name": "cursor", "in": "query", "schema": {"type": "string"}},
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100}}
+        ],
+        "responses": {"200": {"description": "A bounded user page with the identity revision used for CAS", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UserPage"}}}}}
+      },
+      "head": {"operationId": "headUsers", "x-required-capability": "users.read", "responses": {"200": {"description": "User page headers"}}},
+      "post": {
+        "operationId": "createUser",
+        "x-required-capability": "users.manage",
+        "parameters": [{"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 128}}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateUserRequest"}}}},
+        "responses": {"201": {"description": "Committed account metadata", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OperationResult"}}}}}
+      }
+    },
+    "/api/v1/users/bootstrap-admin": {
+      "post": {
+        "operationId": "bootstrapAdministrator",
+        "description": "Creates the first administrator atomically. Available only to the verified root console while no account exists.",
+        "x-required-capability": "users.manage",
+        "parameters": [{"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 128}}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/BootstrapAdminRequest"}}}},
+        "responses": {
+          "201": {"description": "Committed administrator metadata", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OperationResult"}}}},
+          "200": {"description": "Recorded result replay", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OperationResult"}}}}
+        }
+      }
+    },
+    "/api/v1/users/{id}": {
+      "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}],
+      "get": {
+        "operationId": "getUser",
+        "x-required-capability": "users.read",
+        "responses": {"200": {"description": "Credential-free user record", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/User"}}}}}
+      },
+      "head": {"operationId": "headUser", "x-required-capability": "users.read", "responses": {"200": {"description": "User headers"}}},
+      "patch": {
+        "operationId": "updateUser",
+        "x-required-capability": "users.manage",
+        "parameters": [{"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 128}}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UpdateUserRequest"}}}},
+        "responses": {"200": {"description": "Committed account metadata", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OperationResult"}}}}}
+      },
+      "delete": {
+        "operationId": "deleteUser",
+        "x-required-capability": "users.manage",
+        "parameters": [
+          {"name": "If-Match", "in": "header", "required": true, "schema": {"type": "string"}},
+          {"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 128}}
+        ],
+        "responses": {"200": {"description": "Committed deletion metadata", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OperationResult"}}}}}
+      }
+    },
+    "/api/v1/users/{id}/password": {
+      "put": {
+        "operationId": "changeUserPassword",
+        "x-required-capability": "users.manage",
+        "parameters": [
+          {"name": "id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}},
+          {"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 128}}
+        ],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PasswordChangeRequest"}}}},
+        "responses": {"200": {"description": "Committed password-change metadata", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OperationResult"}}}}}
+      }
+    },
+    "/api/v1/tokens": {
+      "get": {
+        "operationId": "listTokens",
+        "x-required-capability": "tokens.manageSelf",
+        "parameters": [
+          {"name": "accountId", "in": "query", "required": true, "schema": {"type": "string", "format": "uuid"}},
+          {"name": "cursor", "in": "query", "schema": {"type": "string"}},
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 50}}
+        ],
+        "responses": {"200": {"description": "Credential-free, bounded token metadata", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TokenPage"}}}}}
+      },
+      "head": {"operationId": "headTokens", "x-required-capability": "tokens.manageSelf", "responses": {"200": {"description": "Token page headers"}}},
+      "post": {
+        "operationId": "createToken",
+        "x-required-capability": "tokens.manageSelf",
+        "parameters": [{"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 128}}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TokenIssueRequest"}}}},
+        "responses": {"201": {"description": "The only response containing the one-time token secret", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TokenIssueResponse"}}}}, "200": {"description": "Replay metadata; secret unavailable", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TokenIssueResponse"}}}}}
+      }
+    },
+    "/api/v1/tokens/{selector}": {
+      "delete": {
+        "operationId": "revokeToken",
+        "x-required-capability": "tokens.manageSelf",
+        "parameters": [
+          {"name": "selector", "in": "path", "required": true, "schema": {"type": "string", "minLength": 22, "maxLength": 22}},
+          {"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 128}}
+        ],
+        "responses": {"200": {"description": "Committed revocation metadata", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OperationResult"}}}}}
+      }
+    },
+    "/api/v1/audit/events": {
+      "get": {
+        "operationId": "listAuditEvents",
+        "x-required-capability": "audit.read",
+        "parameters": [
+          {"name": "cursor", "in": "query", "schema": {"type": "string"}},
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100}}
+        ],
+        "responses": {"200": {"description": "Audited, bounded security event page", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AuditPage"}}}}}
+      },
+      "head": {"operationId": "headAuditEvents", "x-required-capability": "audit.read", "responses": {"200": {"description": "Audit page headers"}}}
+    },
+    "/api/v1/audit/export": {
+      "get": {
+        "operationId": "exportAuditPage",
+        "x-required-capability": "audit.read",
+        "parameters": [
+          {"name": "cursor", "in": "query", "schema": {"type": "string"}},
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100}}
+        ],
+        "responses": {"200": {"description": "Audited, paginated JSON export", "headers": {"Content-Disposition": {"schema": {"type": "string"}}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AuditPage"}}}}}
+      },
+      "head": {"operationId": "headAuditExport", "x-required-capability": "audit.read", "responses": {"200": {"description": "Audit export headers"}}}
+    },
     "/api/v1/config/nat/{list}/order": {
       "put": {
         "operationId": "orderNATEntries",
@@ -5264,13 +5495,70 @@
   },
   "components": {
     "schemas": {
+      "StartupStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["setupRequired"],
+        "properties": {"setupRequired": {"type": "boolean"}}
+      },
+      "WebLoginRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["login", "password"],
+        "properties": {
+          "login": {"type": "string", "minLength": 1, "maxLength": 64},
+          "password": {"type": "string", "minLength": 1, "maxLength": 512}
+        }
+      },
+      "WebAccount": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "login", "displayName"],
+        "properties": {
+          "id": {"type": "string", "format": "uuid"},
+          "login": {"type": "string"},
+          "displayName": {"type": "string"}
+        }
+      },
+      "WebSession": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["account", "capabilities", "csrfToken", "expiresAt", "idleTimeoutSeconds"],
+        "properties": {
+          "account": {"$ref": "#/components/schemas/WebAccount"},
+          "capabilities": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "csrfToken": {"type": "string", "minLength": 87, "maxLength": 87},
+          "expiresAt": {"type": "string", "format": "date-time"},
+          "idleTimeoutSeconds": {"type": "integer", "const": 1800}
+        }
+      },
+      "WebSessionItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "createdAt", "lastSeenAt", "expiresAt", "current"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
+          "createdAt": {"type": "string", "format": "date-time"},
+          "lastSeenAt": {"type": "string", "format": "date-time"},
+          "expiresAt": {"type": "string", "format": "date-time"},
+          "current": {"type": "boolean"}
+        }
+      },
+      "WebSessionPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {"items": {"type": "array", "maxItems": 5, "items": {"$ref": "#/components/schemas/WebSessionItem"}}}
+      },
       "BackupCreateOptions": {
         "type": "object",
         "additionalProperties": false,
         "required": ["includeSecrets"],
         "properties": {
           "includeSecrets": {"type": "boolean"},
-          "passphrase": {"type": "string", "minLength": 1, "maxLength": 1024, "writeOnly": true}
+          "includeCredentials": {"type": "boolean", "default": false},
+          "passphrase": {"type": "string", "minLength": 1, "maxLength": 1024, "writeOnly": true},
+          "password": {"type": "string", "minLength": 1, "maxLength": 512, "writeOnly": true, "description": "Required at this exact request for a non-root human session exporting secrets or credentials"}
         }
       },
       "RestoreOptions": {
@@ -5279,10 +5567,22 @@
         "properties": {
           "passphrase": {"type": "string", "minLength": 1, "maxLength": 1024, "writeOnly": true},
           "stores": {
-            "type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true,
-            "items": {"enum": ["configuration", "configurationSecrets"]}
+            "type": "array", "minItems": 1, "maxItems": 4, "uniqueItems": true,
+            "items": {"enum": ["configuration", "configurationSecrets", "users", "userCredentials"]}
           },
-          "expectedSavedVersion": {"type": "string", "pattern": "^(0|[1-9][0-9]{0,18})$"}
+          "operationId": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+          "expectedSavedVersion": {"type": "string", "pattern": "^(0|[1-9][0-9]{0,18})$"},
+          "expectedIdentityRevision": {"type": "integer", "minimum": 0},
+          "rootAdministrator": {"$ref": "#/components/schemas/RootRestoreAdministrator"}
+        }
+      },
+      "RootRestoreAdministrator": {
+        "type": "object", "additionalProperties": false, "required": ["password"],
+        "properties": {
+          "accountId": {"type": "string", "format": "uuid"},
+          "login": {"type": "string", "minLength": 3, "maxLength": 64},
+          "displayName": {"type": "string", "maxLength": 128},
+          "password": {"type": "string", "minLength": 1, "maxLength": 512, "writeOnly": true}
         }
       },
       "RestoreMultipart": {
@@ -5290,22 +5590,22 @@
         "additionalProperties": false,
         "required": ["archive", "options"],
         "properties": {
-          "archive": {"type": "string", "contentEncoding": "binary", "maxLength": 16777216},
+          "archive": {"type": "string", "contentEncoding": "binary", "maxLength": 18874368},
           "options": {"$ref": "#/components/schemas/RestoreOptions", "description": "JSON part, at most 65536 bytes"}
         },
-        "description": "Exactly these two parts. Total HTTP body limit is 16859136 bytes; parts are held only in bounded memory."
+        "description": "Exactly these two parts. Total HTTP body limit is 18956288 bytes; parts are held only in bounded memory."
       },
       "BackupManifest": {
         "type": "object",
         "additionalProperties": false,
         "required": ["formatVersion", "backupId", "createdAt", "andaruVersion", "savedVersion", "scopes", "payloads", "network", "savedButUnappliedAreas"],
         "properties": {
-          "formatVersion": {"type": "integer", "const": 1},
+          "formatVersion": {"type": "integer", "enum": [1, 2]},
           "backupId": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
           "createdAt": {"type": "string", "format": "date-time"},
           "andaruVersion": {"type": "string"},
           "savedVersion": {"type": "string"},
-          "scopes": {"type": "array", "items": {"enum": ["configuration", "configurationSecrets"]}, "uniqueItems": true},
+          "scopes": {"type": "array", "items": {"enum": ["configuration", "configurationSecrets", "users", "userCredentials"]}, "uniqueItems": true},
           "payloads": {"type": "object", "additionalProperties": {"type": "object", "required": ["schemaVersion", "size", "sha256"], "properties": {
             "schemaVersion": {"type": "integer"}, "size": {"type": "integer"}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
           }}},
@@ -5327,26 +5627,38 @@
         "type": "object", "additionalProperties": false, "required": ["code", "path", "message"],
         "properties": {"code": {"type": "string"}, "path": {"type": "string"}, "message": {"type": "string"}}
       },
+      "RecoveryAdministrator": {
+        "type": "object", "additionalProperties": false, "required": ["id", "login"],
+        "properties": {"id": {"type": "string", "format": "uuid"}, "login": {"type": "string"}}
+      },
       "RestorePreview": {
         "type": "object", "additionalProperties": false,
-        "required": ["state", "manifest", "expectedSavedVersion", "configurationChanges", "secretChanges", "unresolvedSecrets", "blockingSecrets", "hardwareFindings"],
+        "required": ["state", "manifest", "expectedIdentityRevision", "configurationChanges", "secretChanges", "userChanges", "credentialChanges", "unresolvedSecrets", "blockingSecrets", "missingRoleIds", "requiresRootAdministrator", "recoveryAdministrators", "hardwareFindings"],
         "properties": {
           "state": {"type": "string", "const": "restore-preview"},
           "manifest": {"$ref": "#/components/schemas/BackupManifest"},
           "expectedSavedVersion": {"type": "string"},
+          "expectedIdentityRevision": {"type": "integer", "minimum": 0},
           "configurationChanges": {"$ref": "#/components/schemas/RestoreCounts"},
           "secretChanges": {"$ref": "#/components/schemas/RestoreCounts"},
+          "userChanges": {"$ref": "#/components/schemas/RestoreCounts"},
+          "credentialChanges": {"$ref": "#/components/schemas/RestoreCounts"},
           "unresolvedSecrets": {"type": "array", "items": {"type": "string"}},
           "blockingSecrets": {"type": "array", "items": {"type": "string"}},
+          "missingRoleIds": {"type": "array", "items": {"type": "string"}},
+          "requiresRootAdministrator": {"type": "boolean"},
+          "recoveryAdministrators": {"type": "array", "items": {"$ref": "#/components/schemas/RecoveryAdministrator"}},
           "hardwareFindings": {"type": "array", "items": {"$ref": "#/components/schemas/HardwareFinding"}}
         }
       },
       "RestoreSaved": {
-        "type": "object", "additionalProperties": false, "required": ["state", "savedVersion", "unresolvedSecrets"],
+        "type": "object", "additionalProperties": false, "required": ["state", "unresolvedSecrets", "replayed"],
         "properties": {
           "state": {"type": "string", "const": "saved"},
           "savedVersion": {"type": "string"},
-          "unresolvedSecrets": {"type": "array", "items": {"type": "string"}}
+          "identityRevision": {"type": "integer", "minimum": 1},
+          "unresolvedSecrets": {"type": "array", "items": {"type": "string"}},
+          "replayed": {"type": "boolean"}
         }
       },
       "PrefixesResponse": {
@@ -5716,6 +6028,7 @@
                       "links",
                       "segments",
                       "zones",
+                      "roles",
                       "addresses",
                       "services",
                       "policy.input",
@@ -5809,6 +6122,7 @@
               "links",
               "segments",
               "zones",
+              "roles",
               "addresses",
               "services",
               "policy.input",
@@ -6471,6 +6785,191 @@
               "$ref": "#/components/schemas/ApplyFinding"
             }
           }
+        }
+      },
+      "CapabilityPage": {
+        "type": "object",
+        "required": ["items"],
+        "properties": {
+          "items": {"type": "array", "items": {"type": "string", "enum": ["audit.read", "backups.create", "backups.exportSecrets", "backups.restore", "configuration.apply", "configuration.confirm", "configuration.read", "configuration.write", "status.read", "tokens.manageAll", "tokens.manageSelf", "users.manage", "users.read"]}},
+          "nextCursor": {"type": "string"}
+        }
+      },
+      "Role": {
+        "type": "object",
+        "required": ["id", "name", "capabilities"],
+        "properties": {
+          "id": {"type": "string", "maxLength": 64},
+          "name": {"type": "string"},
+          "description": {"type": "string"},
+          "capabilities": {"type": "array", "items": {"type": "string"}},
+          "builtIn": {"type": "string", "enum": ["administrator", "read-only"]}
+        }
+      },
+      "RolePage": {
+        "type": "object",
+        "required": ["items"],
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/components/schemas/Role"}},
+          "nextCursor": {"type": "string"}
+        }
+      },
+      "User": {
+        "type": "object",
+        "required": ["id", "login", "displayName", "kind", "enabled", "roleIds", "revision", "createdAt", "updatedAt"],
+        "properties": {
+          "id": {"type": "string", "format": "uuid"},
+          "login": {"type": "string"},
+          "displayName": {"type": "string"},
+          "kind": {"type": "string", "enum": ["human", "service"]},
+          "enabled": {"type": "boolean"},
+          "roleIds": {"type": "array", "items": {"type": "string"}},
+          "revision": {"type": "integer", "minimum": 0},
+          "createdAt": {"type": "integer", "minimum": 0},
+          "updatedAt": {"type": "integer", "minimum": 0}
+        }
+      },
+      "UserPage": {
+        "type": "object",
+        "required": ["items"],
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/components/schemas/User"}},
+          "nextCursor": {"type": "string"}
+        }
+      },
+      "Token": {
+        "type": "object",
+        "required": ["selector", "accountId", "name", "scope", "createdAt", "noExpiry", "revokeOnPasswordChange", "revision"],
+        "properties": {
+          "selector": {"type": "string", "minLength": 22, "maxLength": 22},
+          "accountId": {"type": "string", "format": "uuid"},
+          "name": {"type": "string"},
+          "scope": {"type": "array", "items": {"type": "string"}},
+          "createdAt": {"type": "string", "format": "date-time"},
+          "expiresAt": {"type": "string", "format": "date-time"},
+          "noExpiry": {"type": "boolean"},
+          "revokedAt": {"type": "string", "format": "date-time"},
+          "lastUsedAt": {"type": "string", "format": "date-time"},
+          "revokeOnPasswordChange": {"type": "boolean"},
+          "revision": {"type": "integer", "minimum": 0}
+        }
+      },
+      "TokenPage": {
+        "type": "object",
+        "required": ["items"],
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/components/schemas/Token"}},
+          "nextCursor": {"type": "string"}
+        }
+      },
+      "AuditEvent": {
+        "type": "object",
+        "required": ["id", "at", "actor", "source", "action", "target", "result", "category", "count", "metadata"],
+        "properties": {
+          "id": {"type": "integer", "minimum": 0},
+          "at": {"type": "string", "format": "date-time"},
+          "actor": {"type": "object", "required": ["kind", "id"], "properties": {"kind": {"type": "string", "enum": ["system", "account", "token"]}, "id": {"type": "string"}}},
+          "source": {"type": "string"},
+          "action": {"type": "string"},
+          "target": {"type": "string"},
+          "result": {"type": "string"},
+          "operationId": {"type": "string"},
+          "category": {"type": "string", "enum": ["general", "protected"]},
+          "count": {"type": "integer", "minimum": 0},
+          "metadata": {"type": "object", "additionalProperties": false, "properties": {"reasonCode": {"type": "string"}, "changed": {"type": "string"}, "scopeCount": {"type": "string"}, "secretUnavailable": {"type": "string"}, "category": {"type": "string"}, "expiredGeneral": {"type": "string"}, "expiredProtected": {"type": "string"}, "countPrunedGeneral": {"type": "string"}, "watermark": {"type": "string"}}}
+        }
+      },
+      "AuditPage": {
+        "type": "object",
+        "required": ["items"],
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/components/schemas/AuditEvent"}},
+          "nextCursor": {"type": "string"}
+        }
+      },
+      "OperationResult": {
+        "type": "object",
+        "required": ["operationId", "result", "target", "metadata"],
+        "properties": {
+          "operationId": {"type": "string", "maxLength": 128},
+          "result": {"type": "string", "enum": ["success"]},
+          "target": {"type": "string"},
+          "metadata": {"type": "object", "additionalProperties": false, "properties": {"reasonCode": {"type": "string"}, "changed": {"type": "string"}, "scopeCount": {"type": "string"}, "secretUnavailable": {"type": "string"}}},
+          "auditPending": {"type": "boolean"}
+        }
+      },
+      "TokenIssueResponse": {
+        "allOf": [
+          {"$ref": "#/components/schemas/OperationResult"},
+          {
+            "type": "object",
+            "required": ["selector", "secretUnavailable"],
+            "properties": {
+              "selector": {"type": "string", "minLength": 22, "maxLength": 22},
+              "secret": {"type": "string", "minLength": 43, "maxLength": 43},
+              "secretUnavailable": {"type": "boolean"},
+              "token": {"$ref": "#/components/schemas/Token"}
+            }
+          }
+        ]
+      },
+      "BootstrapAdminRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["login", "password"],
+        "properties": {
+          "login": {"type": "string", "minLength": 3, "maxLength": 64},
+          "displayName": {"type": "string", "maxLength": 128},
+          "password": {"type": "string", "writeOnly": true, "minLength": 15, "maxLength": 512}
+        }
+      },
+      "CreateUserRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["login", "kind", "enabled", "expectedRevision"],
+        "properties": {
+          "login": {"type": "string", "minLength": 3, "maxLength": 64},
+          "displayName": {"type": "string", "maxLength": 128},
+          "kind": {"type": "string", "enum": ["human", "service"]},
+          "enabled": {"type": "boolean"},
+          "roleIds": {"type": "array", "maxItems": 10002, "items": {"type": "string"}},
+          "expectedRevision": {"type": "integer", "minimum": 0}
+        }
+      },
+      "UpdateUserRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["expectedRevision"],
+        "properties": {
+          "login": {"type": "string", "minLength": 3, "maxLength": 64},
+          "displayName": {"type": "string", "maxLength": 128},
+          "kind": {"type": "string", "enum": ["human", "service"]},
+          "enabled": {"type": "boolean"},
+          "roleIds": {"type": "array", "maxItems": 10002, "items": {"type": "string"}},
+          "expectedRevision": {"type": "integer", "minimum": 0}
+        }
+      },
+      "PasswordChangeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["newPassword", "expectedRevision"],
+        "properties": {
+          "currentPassword": {"type": "string", "writeOnly": true, "maxLength": 512},
+          "newPassword": {"type": "string", "writeOnly": true, "minLength": 15, "maxLength": 512},
+          "expectedRevision": {"type": "integer", "minimum": 0}
+        }
+      },
+      "TokenIssueRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["accountId", "name", "scope"],
+        "properties": {
+          "accountId": {"type": "string", "format": "uuid"},
+          "name": {"type": "string", "minLength": 1, "maxLength": 128},
+          "scope": {"type": "array", "items": {"type": "string"}},
+          "expiresAt": {"type": "string", "format": "date-time"},
+          "noExpiry": {"type": "boolean"},
+          "revokeOnPasswordChange": {"type": "boolean"}
         }
       },
       "DraftResponse": {

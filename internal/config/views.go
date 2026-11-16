@@ -3,6 +3,8 @@ package config
 import (
 	"encoding/json"
 	"slices"
+
+	"github.com/andaru-project/andaru/internal/authz"
 )
 
 type ObjectView struct {
@@ -113,6 +115,10 @@ func publicSnapshot(s savedState) (SnapshotView, error) {
 		return SnapshotView{}, e
 	}
 	if d["links"], e = json.Marshal(links); e != nil {
+		return SnapshotView{}, e
+	}
+	roles := append(authz.BuiltIns(), s.Config.Roles...)
+	if d["roles"], e = json.Marshal(roles); e != nil {
 		return SnapshotView{}, e
 	}
 	raw, e := json.Marshal(d)

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/config"
 )
 
@@ -300,7 +301,7 @@ func TestSnapshotWALWriter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.Save(context.Background(), "unix:uid:0", config.Changes{Operations: []config.Operation{{Op: "create", Collection: "zones", Value: json.RawMessage(`{"name":"wal-zone"}`)}}})
+	_, err = store.Save(context.Background(), authz.Actor{Kind: authz.ActorSystem, ID: "root"}, config.Changes{Operations: []config.Operation{{Op: "create", Collection: "zones", Value: json.RawMessage(`{"name":"wal-zone"}`)}}})
 	if err != nil {
 		t.Fatal(err)
 	}

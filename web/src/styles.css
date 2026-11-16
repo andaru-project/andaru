@@ -1,0 +1,27 @@
+:root {
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  margin: 0;
+  min-width: 20rem;
+  min-height: 100vh;
+  background: light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-8));
+}
+
+.app-header {
+  border-bottom: 1px solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4));
+  background: light-dark(var(--mantine-color-white), var(--mantine-color-dark-7));
+  padding-block: var(--mantine-spacing-md);
+}
+
+@media (max-width: 36em) {
+  .app-header .mantine-Group-root {
+    align-items: flex-start;
+  }
+
+  table {
+    min-width: 48rem;
+  }
+}

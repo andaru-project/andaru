@@ -3,7 +3,6 @@ package engine
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"slices"
@@ -49,7 +48,7 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 				route, id = "object", parts[3]
 				allowed = []string{"GET", "HEAD", "PUT", "DELETE"}
 			}
-		case len(parts) >= 2 && parts[0] == "config" && slices.Contains([]string{"links", "segments", "zones", "addresses", "services", "dhcp", "dhcp6", "virtualAddresses"}, parts[1]):
+		case len(parts) >= 2 && parts[0] == "config" && slices.Contains([]string{"links", "segments", "zones", "roles", "addresses", "services", "dhcp", "dhcp6", "virtualAddresses"}, parts[1]):
 			collection = parts[1]
 			if len(parts) == 2 {
 				route = "collection"
@@ -185,8 +184,12 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 			writeConfigurationError(w, r, e)
 			return
 		}
-		peer, _ := r.Context().Value(peerKey{}).(peerIdentity)
-		result, e := store.Save(r.Context(), fmt.Sprintf("unix:uid:%d", peer.uid), changes)
+		actor, ok := actorFromRequest(r)
+		if !ok {
+			writeError(w, r, http.StatusForbidden, "FORBIDDEN", "A verified actor is required.")
+			return
+		}
+		result, e := store.Save(r.Context(), actor.Actor, changes)
 		if e != nil {
 			writeConfigurationError(w, r, e)
 			return

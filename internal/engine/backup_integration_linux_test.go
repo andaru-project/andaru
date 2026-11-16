@@ -19,10 +19,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/andaru-project/andaru/internal/audit"
+	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/backup"
 	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/generation"
 	"github.com/andaru-project/andaru/internal/host"
+	"github.com/andaru-project/andaru/internal/identity"
 )
 
 func init() {
@@ -66,6 +69,7 @@ func startBackupEngine(t *testing.T) (*http.Client, string, context.CancelFunc) 
 	done := make(chan error, 1)
 	go func() { done <- Serve(ctx, socket, stateDir) }()
 	client := unixTestClient(socket)
+	client.Timeout = 30 * time.Second
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		request, _ := http.NewRequest(http.MethodGet, "http://unix/api/v1/openapi.json", nil)
@@ -158,7 +162,7 @@ func TestBackupAPIRoundTrip(t *testing.T) {
 	client, stateDir, _ := startBackupEngine(t)
 	created := postBackup(t, client, `{"includeSecrets":false}`)
 	archive := responseBytes(t, created)
-	if created.StatusCode != http.StatusOK || created.Header.Get("Content-Type") != "application/zip" || created.Header.Get("Andaru-Saved-Version") != "0" || created.Header.Get("Andaru-Captured-At") == "" {
+	if created.StatusCode != http.StatusOK || created.Header.Get("Content-Type") != "application/zip" || created.Header.Get("Andaru-Saved-Version") != "0" || created.Header.Get("Andaru-Identity-Revision") != "0" || created.Header.Get("Andaru-Captured-At") == "" {
 		t.Fatalf("create contract: %d %v %s", created.StatusCode, created.Header, archive)
 	}
 	if _, err := os.Stat(filepath.Join(stateDir, "generations", "pointers.json")); !os.IsNotExist(err) {
@@ -189,17 +193,22 @@ func TestBackupAPIRoundTrip(t *testing.T) {
 	if preview.StatusCode != http.StatusOK || plan.State != "restore-preview" || plan.Expected != "0" || plan.Hardware == nil {
 		t.Fatalf("preview: %d %s", preview.StatusCode, previewBody)
 	}
-	committed := postRestore(t, client, restorePath, archive, `{"stores":["configuration"],"expectedSavedVersion":"0"}`)
+	committed := postRestore(t, client, restorePath, archive, `{"operationId":"restore-roundtrip-1","stores":["configuration"],"expectedSavedVersion":"0"}`)
 	commitBody := responseBytes(t, committed)
 	if committed.StatusCode != http.StatusOK || !bytes.Contains(commitBody, []byte(`"state":"saved"`)) || !bytes.Contains(commitBody, []byte(`"savedVersion":"1"`)) {
 		t.Fatalf("commit: %d %s", committed.StatusCode, commitBody)
 	}
-	stale := postRestore(t, client, restorePath, archive, `{"stores":["configuration"],"expectedSavedVersion":"0"}`)
+	replayed := postRestore(t, client, restorePath, archive, `{"operationId":"restore-roundtrip-1","stores":["configuration"],"expectedSavedVersion":"0"}`)
+	replayedBody := responseBytes(t, replayed)
+	if replayed.StatusCode != http.StatusOK || !bytes.Contains(replayedBody, []byte(`"replayed":true`)) {
+		t.Fatalf("replay: %d %s", replayed.StatusCode, replayedBody)
+	}
+	stale := postRestore(t, client, restorePath, archive, `{"operationId":"restore-roundtrip-2","stores":["configuration"],"expectedSavedVersion":"0"}`)
 	staleBody := responseBytes(t, stale)
 	if stale.StatusCode != http.StatusPreconditionFailed || !bytes.Contains(staleBody, []byte("PRECONDITION_FAILED")) {
 		t.Fatalf("stale replay: %d %s", stale.StatusCode, staleBody)
 	}
-	missing := postRestore(t, client, restorePath, archive, `{"stores":["configuration"]}`)
+	missing := postRestore(t, client, restorePath, archive, `{"stores":["configuration"],"expectedSavedVersion":"1"}`)
 	missingBody := responseBytes(t, missing)
 	if missing.StatusCode != http.StatusPreconditionRequired || !bytes.Contains(missingBody, []byte("PRECONDITION_REQUIRED")) {
 		t.Fatalf("missing precondition: %d %s", missing.StatusCode, missingBody)
@@ -210,7 +219,7 @@ func TestRestoreAPINoMutationOnInvalidArchive(t *testing.T) {
 	client, _, _ := startBackupEngine(t)
 	created := postBackup(t, client, `{"includeSecrets":false}`)
 	archive := responseBytes(t, created)
-	invalid := postRestore(t, client, restorePath, archive[:len(archive)/2], `{"stores":["configuration"],"expectedSavedVersion":"0"}`)
+	invalid := postRestore(t, client, restorePath, archive[:len(archive)/2], `{"operationId":"invalid-archive-restore","stores":["configuration"],"expectedSavedVersion":"0"}`)
 	invalidBody := responseBytes(t, invalid)
 	if invalid.StatusCode != http.StatusBadRequest || !bytes.Contains(invalidBody, []byte("INVALID_ARCHIVE")) {
 		t.Fatalf("truncated archive: %d %s", invalid.StatusCode, invalidBody)
@@ -264,6 +273,17 @@ func TestBackupCaptureConcurrentSaveAndActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
+	identities, err := identity.Open(context.Background(), stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer identities.Close()
+	audits, err := audit.Open(context.Background(), stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer audits.Close()
+	security := newSecurityCoordinator(identities, audits, stateDir)
 	generationDir := generation.Dir(stateDir)
 	if err := os.Mkdir(generationDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -276,7 +296,7 @@ func TestBackupCaptureConcurrentSaveAndActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	backups := newBackupHandler(store, stateDir, func(context.Context) ([]host.LinkStatus, error) { return []host.LinkStatus{}, nil })
+	backups := newBackupHandler(store, identities, security, stateDir, func(context.Context) ([]host.LinkStatus, error) { return []host.LinkStatus{}, nil })
 	handler := newHandler(func(context.Context) ([]host.LinkStatus, error) { return []host.LinkStatus{}, nil },
 		newSavedHandler(store, func(context.Context) ([]host.LinkStatus, error) { return []host.LinkStatus{}, nil },
 			func() (host.RealizerFacts, error) { return host.RealizerFacts{}, nil }, nil, http.NotFoundHandler(), backups))
@@ -372,5 +392,62 @@ func TestBackupAPIDeniesNonRootBeforeReadingBodies(t *testing.T) {
 	output, err := command.CombinedOutput()
 	if err != nil || strings.TrimSpace(string(output)) != "403 FORBIDDEN" {
 		t.Fatalf("non-root backup request was not denied: %q %v", output, err)
+	}
+}
+
+func TestCredentialBackupRequiresHumanReauthenticationAndEncryption(t *testing.T) {
+	requireRoot(t)
+	ctx := context.Background()
+	stateDir := filepath.Join(privateTestDir(t), "state")
+	configuration, err := config.Open(ctx, stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer configuration.Close()
+	identities, err := identity.Open(ctx, stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer identities.Close()
+	account, _, err := identities.BootstrapAdmin(ctx, "backupadmin", "Backup administrator", []byte("backup-admin-password-2026"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	audits, err := audit.Open(ctx, stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer audits.Close()
+	security := newSecurityCoordinator(identities, audits, stateDir)
+	handler := newBackupHandler(configuration, identities, security, stateDir, func(context.Context) ([]host.LinkStatus, error) { return []host.LinkStatus{}, nil })
+	principal := identity.Principal{Account: account, Actor: authz.Actor{Kind: authz.ActorAccount, ID: account.ID}, Capabilities: []authz.Capability{authz.BackupsCreate, authz.BackupsExportSecrets}}
+	for _, tc := range []struct {
+		name, password string
+		status         int
+	}{
+		{"wrong password", "wrong-password-value", http.StatusForbidden},
+		{"correct password", "backup-admin-password-2026", http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, backupPath, strings.NewReader(fmt.Sprintf(`{"includeSecrets":false,"includeCredentials":true,"passphrase":"credential-archive-passphrase","password":%q}`, tc.password)))
+			request.Header.Set("Content-Type", "application/json")
+			request = request.WithContext(withVerifiedPrincipal(request.Context(), principal, "192.0.2.10"))
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != tc.status {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body)
+			}
+			if tc.status != http.StatusOK {
+				return
+			}
+			raw := response.Body.Bytes()
+			if !bytes.HasPrefix(raw, []byte("age-encryption.org/")) {
+				t.Fatal("credential archive was not whole-archive encrypted")
+			}
+			decoded, err := backup.Decode(ctx, raw, "credential-archive-passphrase")
+			if err != nil || decoded.Documents.Users == nil || decoded.Documents.UserCredentials == nil || decoded.Documents.ConfigurationSecrets != nil {
+				t.Fatalf("credential selection=%+v err=%v", decoded.Manifest.Scopes, err)
+			}
+		})
 	}
 }

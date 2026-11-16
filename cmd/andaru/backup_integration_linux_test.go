@@ -24,16 +24,27 @@ import (
 
 const backupTestPassphrase = "literal-test-passphrase"
 
-func backupFixtureArchive(t *testing.T, passphrase string) []byte {
+func backupFixtureArchive(t *testing.T, passphrase string, includeCredentials ...bool) []byte {
 	t.Helper()
+	includeSecrets := passphrase != ""
+	if len(includeCredentials) > 1 {
+		includeSecrets = includeCredentials[1]
+	}
 	live := 2
 	raw, err := backup.Encode(context.Background(), backup.Source{
 		AndaruVersion: "0.4.0-test", SavedVersion: "7", CapturedAt: time.Date(2026, 11, 15, 12, 0, 0, 123, time.UTC),
 		Network: backup.NetworkObservation{Live: &live, LiveSavedVersion: "6"},
 	}, backup.Documents{
 		Configuration: json.RawMessage(`{"schemaVersion":1,"links":[],"segments":[],"zones":[]}`),
+		Users: json.RawMessage(`{"schemaVersion":1,"identityRevision":3,"accounts":[],"tombstones":[]}`),
+		UserCredentials: func() json.RawMessage {
+			if len(includeCredentials) == 0 || !includeCredentials[0] {
+				return nil
+			}
+			return json.RawMessage(`{"schemaVersion":1,"identityRevision":3,"passwords":[],"tokens":[]}`)
+		}(),
 		ConfigurationSecrets: func() json.RawMessage {
-			if passphrase == "" {
+			if !includeSecrets {
 				return nil
 			}
 			return json.RawMessage(`{"schemaVersion":1,"secrets":{"core":{"TEST_KEY":{"kind":"password","value":"PLAINTEXT_SENTINEL"}}}}`)
@@ -65,22 +76,24 @@ func (f *strictBackupFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		var options struct {
-			IncludeSecrets bool   `json:"includeSecrets"`
-			Passphrase     string `json:"passphrase,omitempty"`
+			IncludeSecrets     bool   `json:"includeSecrets"`
+			IncludeCredentials bool   `json:"includeCredentials"`
+			Passphrase         string `json:"passphrase,omitempty"`
 		}
 		rawOptions, readErr := io.ReadAll(io.LimitReader(r.Body, (64<<10)+1))
-		if readErr != nil || len(rawOptions) > 64<<10 || decodeStrict(rawOptions, &options) != nil || (options.IncludeSecrets != (options.Passphrase != "")) {
+		if readErr != nil || len(rawOptions) > 64<<10 || decodeStrict(rawOptions, &options) != nil || (options.IncludeSecrets || options.IncludeCredentials) != (options.Passphrase != "") {
 			f.t.Error("invalid create options")
 			http.Error(w, "bad request", 400)
 			return
 		}
-		raw := backupFixtureArchive(f.t, options.Passphrase)
+		raw := backupFixtureArchive(f.t, options.Passphrase, options.IncludeCredentials, options.IncludeSecrets)
 		contentType := "application/zip"
-		if options.IncludeSecrets {
+		if options.IncludeSecrets || options.IncludeCredentials {
 			contentType = "application/octet-stream"
 		}
 		w.Header().Set("Content-Type", contentType)
 		w.Header().Set("Andaru-Saved-Version", "7")
+		w.Header().Set("Andaru-Identity-Revision", "3")
 		w.Header().Set("Andaru-Captured-At", "2026-11-15T12:00:00.000000123Z")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(raw)
@@ -104,10 +117,13 @@ func (f *strictBackupFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 				_ = json.NewEncoder(w).Encode(map[string]any{"state": "inspection", "manifest": decoded.Manifest})
 			} else {
 				_ = json.NewEncoder(w).Encode(map[string]any{
-					"state": "restore-preview", "manifest": decoded.Manifest, "expectedSavedVersion": "4",
+					"state": "restore-preview", "manifest": decoded.Manifest, "expectedSavedVersion": "4", "expectedIdentityRevision": 0,
 					"configurationChanges": map[string]int{"created": 1, "updated": 0, "deleted": 0},
-					"secretChanges":        map[string]int{"created": 0, "updated": 1, "deleted": 0},
-					"unresolvedSecrets":    []string{}, "blockingSecrets": []string{}, "hardwareFindings": []any{},
+					"secretChanges": map[string]int{"created": 0, "updated": 1, "deleted": 0},
+					"userChanges": map[string]int{"created": 0, "updated": 0, "deleted": 0},
+					"credentialChanges": map[string]int{"created": 0, "updated": 0, "deleted": 0},
+					"unresolvedSecrets": []string{}, "blockingSecrets": []string{}, "missingRoleIds": []string{},
+					"requiresRootAdministrator": false, "recoveryAdministrators": []any{}, "hardwareFindings": []any{},
 				})
 			}
 			if f.previewProcessed != nil {
@@ -118,7 +134,7 @@ func (f *strictBackupFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		f.mu.Lock()
 		same := bytes.Equal(f.preview, archiveRaw)
 		f.mu.Unlock()
-		if !same || options.ExpectedSavedVersion != "4" || len(options.Stores) == 0 {
+		if !same || options.OperationID == "" || options.ExpectedSavedVersion != "4" || len(options.Stores) == 0 {
 			f.t.Error("commit did not pin preview bytes/options/version")
 			http.Error(w, "bad request", 400)
 			return
@@ -131,7 +147,7 @@ func (f *strictBackupFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 			}
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"state": "saved", "savedVersion": "5", "unresolvedSecrets": []string{}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"state": "saved", "savedVersion": "5", "unresolvedSecrets": []string{}, "replayed": false})
 	default:
 		http.NotFound(w, r)
 	}
@@ -454,7 +470,7 @@ func TestBackupCLIReportsUnknownCommitOutcome(t *testing.T) {
 	if got := <-code; got == 0 || fixture.commits.Load() != 1 {
 		t.Fatal("lost commit reply was not treated as an unknown outcome")
 	}
-	if !strings.Contains(stderr.String(), "outcome may be unknown") || !strings.Contains(stderr.String(), "inspect the current saved head") || strings.Contains(stdout.String(), `"state":"saved"`) {
+	if !strings.Contains(stderr.String(), "outcome may be unknown") || !strings.Contains(stderr.String(), "inspect the current saved and identity revisions") || strings.Contains(stdout.String(), `"state":"saved"`) {
 		t.Fatalf("unknown outcome was not actionable: stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }

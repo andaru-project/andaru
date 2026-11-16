@@ -15,9 +15,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/generation"
 	"github.com/andaru-project/andaru/internal/host"
+	"github.com/andaru-project/andaru/internal/identity"
 )
 
 const uplinkDeclaration = `{"schemaVersion":1,"links":[{"id":"lnk_00000001-0000-4000-8000-000000000001","name":"wan0","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"52:54:00:aa:bb:01"}],
@@ -31,17 +33,41 @@ type applyBench struct {
 	state, root string
 	declaration string
 	head        config.Version
+	identities  *applyIdentityState
+	coordinator *securityCoordinator
+	mu          sync.Mutex
+	calls       []string
+	reads       int
+	armErr      error
+	skip        bool          // Realize fails before the verb runs
+	block       chan struct{} // Realize waits here when set
+	beforeVerb  func()
+	afterArm    func()
+	unbound     bool // networkd never binds the new files
+	hostDown    bool
+	stuck       bool // activation fails and cannot restore: the generation stays pending
+}
 
-	mu         sync.Mutex
-	calls      []string
-	reads      int
-	armErr     error
-	skip       bool          // Realize fails before the verb runs
-	block      chan struct{} // Realize waits here when set
-	beforeVerb func()
-	unbound    bool // networkd never binds the new files
-	hostDown   bool
-	stuck      bool // activation fails and cannot restore: the generation stays pending
+type applyIdentityState struct {
+	mu       sync.Mutex
+	revision int64
+	accounts map[string]identity.Account
+}
+
+func (s *applyIdentityState) Revision(context.Context) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.revision, nil
+}
+
+func (s *applyIdentityState) GetAccount(_ context.Context, id string) (identity.Account, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	account, ok := s.accounts[id]
+	if !ok {
+		return identity.Account{}, identity.ErrNotFound
+	}
+	return account, nil
 }
 
 func (b *applyBench) note(format string, args ...any) {
@@ -101,6 +127,9 @@ func (b *applyBench) realizer() generation.Realizer {
 
 func (b *applyBench) Arm(_ context.Context, id, seconds int) error {
 	b.note("arm %d %d", id, seconds)
+	if b.afterArm != nil {
+		b.afterArm()
+	}
 	return b.armErr
 }
 
@@ -142,6 +171,12 @@ func (b *applyBench) Realize(ctx context.Context, verb string, id int, extra ...
 func newApplyBench(t *testing.T) *applyBench {
 	t.Helper()
 	b := &applyBench{t: t, state: t.TempDir(), root: t.TempDir(), declaration: uplinkDeclaration, head: "7"}
+	if err := os.Chmod(b.state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := initializeAuthorizationState(t.Context(), b.state); err != nil {
+		t.Fatal(err)
+	}
 	for path, body := range map[string]string{
 		"run/systemd/network/10-netplan-eth0.network": "[Match]\nName=eth0\n\n[Network]\nDHCP=ipv4\n",
 		"etc/netplan/50-cloud-init.yaml":              "network: {}\n",
@@ -181,9 +216,15 @@ func newApplyBench(t *testing.T) *applyBench {
 		if version != nil {
 			t.Errorf("apply read version %q instead of the head", *version)
 		}
-		return config.RealizationInput{SavedVersion: b.head, Value: json.RawMessage(b.declaration)}, nil
+		snapshot, err := authz.NewSnapshot(nil)
+		if err != nil {
+			return config.RealizationInput{}, err
+		}
+		return config.RealizationInput{SavedVersion: b.head, Value: json.RawMessage(b.declaration), Authorization: snapshot}, nil
 	}
-	applies := newAppliesHandler(input, read, b, b.state)
+	b.identities = &applyIdentityState{revision: 1, accounts: map[string]identity.Account{}}
+	b.coordinator = &securityCoordinator{stateDir: b.state}
+	applies := newAppliesHandler(input, read, b, b.state, b.identities, b.coordinator)
 	b.h = newHandler(read.Links, newSavedHandler(nil, read.Links, read.Facts, nil, applies, nil))
 	return b
 }
@@ -275,6 +316,30 @@ func TestApplyHappyPath(t *testing.T) {
 		t.Fatal("HEAD returned a body")
 	}
 	assertAPIError(t, b.call(http.MethodPost, "/api/v1/applies", takeoverBody), http.StatusConflict, "APPLY_IN_PROGRESS")
+}
+
+func TestApplyStagesInitialIdentityRevision(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("authorization pending requires root")
+	}
+	b := newApplyBench(t)
+	b.identities.revision = 0
+	got := b.decode(b.call(http.MethodPost, "/api/v1/applies", takeoverBody), http.StatusOK)
+	if got.ID != "1" || got.State != generation.Awaiting {
+		t.Fatalf("apply = %+v", got)
+	}
+	lock, err := authz.Acquire(t.Context(), b.state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if pending, found, err := lock.Pending(); err != nil || found {
+		t.Fatalf("activation left authorization pending %+v err=%v", pending, err)
+	}
+	g, err := generation.Read(generation.Dir(b.state), 1)
+	if err != nil || g.IdentityRevision != 0 {
+		t.Fatalf("generation revision=%d err=%v", g.IdentityRevision, err)
+	}
 }
 
 func TestApplyRequestValidation(t *testing.T) {
@@ -541,5 +606,47 @@ func TestApplyKeepsTimerWhileActivationIsUnresolved(t *testing.T) {
 	}
 	if !slices.Equal(b.calls, []string{"arm 1 180", "activate 1"}) {
 		t.Fatalf("calls = %q; the timer is the only thing left that can restore the host", b.calls)
+	}
+}
+
+func (b *applyBench) callPrincipal(method, path string, principal identity.Principal) *httptest.ResponseRecorder {
+	b.t.Helper()
+	request := httptest.NewRequest(method, path, nil)
+	request = request.WithContext(withVerifiedPrincipal(request.Context(), principal, "192.0.2.2"))
+	response := httptest.NewRecorder()
+	b.h.ServeHTTP(response, request)
+	return response
+}
+
+func (b *applyBench) authorizationState() authz.State {
+	b.t.Helper()
+	if os.Geteuid() != 0 {
+		b.t.Skip("authorization state requires root")
+	}
+	lock, err := authz.Acquire(b.t.Context(), b.state)
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	defer lock.Close()
+	state, err := lock.Read()
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	return state
+}
+
+
+func TestUnchangedAuthorizationAllowsTokenConfirmation(t *testing.T) {
+	b := newApplyBench(t)
+	first := b.apply(takeoverBody)
+	b.decode(b.call(http.MethodPost, appliesPath+"/"+first.ID+"/confirmation", ""), http.StatusOK)
+	second := b.apply(`{"savedVersion":"7"}`)
+	token := identity.Principal{
+		Account: identity.Account{ID: "00000000-0000-4000-8000-000000000001", Kind: identity.Service, Enabled: true},
+		Actor:   authz.Actor{Kind: authz.ActorToken, ID: strings.Repeat("A", 22)}, Capabilities: []authz.Capability{authz.ConfigurationConfirm},
+	}
+	response := b.callPrincipal(http.MethodPost, appliesPath+"/"+second.ID+"/confirmation", token)
+	if response.Code != http.StatusOK {
+		t.Fatalf("unchanged authorization token confirmation status=%d body=%s", response.Code, response.Body)
 	}
 }

@@ -18,7 +18,7 @@ func TestUnresolvedReferencePersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	saved, err := s.Save(ctx, "unix:uid:0", networkInput(t))
+	saved, err := s.Save(ctx, systemRootActor, networkInput(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestUnresolvedReferencePersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Save(ctx, "unix:uid:0", change); err != nil {
+	if _, err = s.Save(ctx, systemRootActor, change); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.Close(); err != nil {
@@ -66,7 +66,7 @@ func TestUnresolvedReferencePersists(t *testing.T) {
 	if !strings.Contains(string(details), "WAN_PASSWORD") || !strings.Contains(string(details), "/password") {
 		t.Fatal("unresolved reference error is not actionable")
 	}
-	if _, err = s.Save(ctx, "unix:uid:0", createZone("while-unresolved")); err != nil {
+	if _, err = s.Save(ctx, systemRootActor, createZone("while-unresolved")); err != nil {
 		t.Fatal("unrelated edit could not preserve unresolved state", err)
 	}
 	_, err = s.Draft(ctx, createZone("unrealizable"))
@@ -80,7 +80,7 @@ func TestMissingBoundSecretIsStillCorruption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Save(ctx, "unix:uid:0", networkInput(t)); err != nil {
+	if _, err = s.Save(ctx, systemRootActor, networkInput(t)); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.Close(); err != nil {
