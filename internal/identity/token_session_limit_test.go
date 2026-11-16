@@ -278,11 +278,11 @@ func TestSessionEpochsTimeoutEvictionCSRFAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	revision, err = s.SetPassword(ctx, user.ID, revision, []byte("operator-password-unique-2026"))
+	revision, err = s.SetPassword(ctx, user.ID, revision, []byte("violet-lemur-session-key-2026"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := s.AuthenticatePassword(ctx, "operator1", "operator-password-unique-2026", "192.0.2.10", 7)
+	first, err := s.AuthenticatePassword(ctx, "operator1", "violet-lemur-session-key-2026", "192.0.2.10", 7)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,7 +352,7 @@ func TestSessionEpochsTimeoutEvictionCSRFAndRestart(t *testing.T) {
 	if _, err = s.AuthenticateSession(ctx, sessionSelector, sessionSecret, 7); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("logged-out session authenticated: %v", err)
 	}
-	epochLogin, err := s.AuthenticatePassword(ctx, "operator1", "operator-password-unique-2026", "192.0.2.11", 7)
+	epochLogin, err := s.AuthenticatePassword(ctx, "operator1", "violet-lemur-session-key-2026", "192.0.2.11", 7)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,7 +364,7 @@ func TestSessionEpochsTimeoutEvictionCSRFAndRestart(t *testing.T) {
 		t.Fatalf("session survived authorization epoch change: %v", err)
 	}
 	for i := range 6 {
-		result, loginErr := s.AuthenticatePassword(ctx, "operator1", "operator-password-unique-2026", fmt.Sprintf("198.51.100.%d", i+1), 7)
+		result, loginErr := s.AuthenticatePassword(ctx, "operator1", "violet-lemur-session-key-2026", fmt.Sprintf("198.51.100.%d", i+1), 7)
 		if loginErr != nil {
 			t.Fatalf("login %d: %v", i+1, loginErr)
 		}
@@ -380,7 +380,7 @@ func TestSessionEpochsTimeoutEvictionCSRFAndRestart(t *testing.T) {
 	if err = s.db.QueryRowContext(ctx, "SELECT count(*) FROM sessions WHERE account_id=?", user.ID).Scan(&active); err != nil || active != 5 {
 		t.Fatalf("active sessions=%d err=%v", active, err)
 	}
-	idle, err := s.AuthenticatePassword(ctx, "operator1", "operator-password-unique-2026", "203.0.113.1", 7)
+	idle, err := s.AuthenticatePassword(ctx, "operator1", "violet-lemur-session-key-2026", "203.0.113.1", 7)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,7 +392,7 @@ func TestSessionEpochsTimeoutEvictionCSRFAndRestart(t *testing.T) {
 	if _, err = s.AuthenticateSession(ctx, idleSelector, idleSecret, 7); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("idle session authenticated: %v", err)
 	}
-	absolute, err := s.AuthenticatePassword(ctx, "operator1", "operator-password-unique-2026", "203.0.113.2", 7)
+	absolute, err := s.AuthenticatePassword(ctx, "operator1", "violet-lemur-session-key-2026", "203.0.113.2", 7)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,13 +408,13 @@ func TestSessionEpochsTimeoutEvictionCSRFAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.SetPassword(ctx, user.ID, revision, []byte("operator-password-changed-2026")); err != nil {
+	if _, err = s.SetPassword(ctx, user.ID, revision, []byte("violet-lemur-changed-key-2026")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = s.AuthenticateSession(ctx, sessionSelector, sessionSecret, 7); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("password epoch change retained a session: %v", err)
 	}
-	newLogin, err := s.AuthenticatePassword(ctx, "operator1", "operator-password-changed-2026", "203.0.113.3", 7)
+	newLogin, err := s.AuthenticatePassword(ctx, "operator1", "violet-lemur-changed-key-2026", "203.0.113.3", 7)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,7 +430,7 @@ func TestSessionEpochsTimeoutEvictionCSRFAndRestart(t *testing.T) {
 	if _, err = s.AuthenticateSession(ctx, newSelector, newSecret, 7); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("role assignment change retained a session: %v", err)
 	}
-	newLogin, err = s.AuthenticatePassword(ctx, "operator1", "operator-password-changed-2026", "203.0.113.4", 7)
+	newLogin, err = s.AuthenticatePassword(ctx, "operator1", "violet-lemur-changed-key-2026", "203.0.113.4", 7)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -634,6 +634,9 @@ func TestLimiterRowsExpireSaturateAndSurviveRestart(t *testing.T) {
 		t.Fatalf("expired login row did not release overload: %v", err)
 	}
 	if _, err = s.db.ExecContext(ctx, "DELETE FROM login_limits"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.db.ExecContext(ctx, "DELETE FROM source_limits"); err != nil {
 		t.Fatal(err)
 	}
 	tx, err = s.db.BeginTx(ctx, nil)
