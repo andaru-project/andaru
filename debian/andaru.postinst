@@ -30,7 +30,7 @@ esac
 # Nothing here restarts systemd-networkd or touches an interface: installing must not drop the administrator's link.
 
 #DEBHELPER#
-if [ "$1" = configure ]; then
+if [ "$1" = configure ] && id -u andaru-web >/dev/null 2>&1; then
 	# systemd-sysusers ran in the helper above. The engine accepts the web socket only from this exact uid.
 	mkdir -p "$root/etc/andaru"
 	uid=$(id -u andaru-web)

@@ -12,15 +12,24 @@ interface TokenDialogProps {
   onIssued(response: TokenIssueResponse): void;
 }
 
+function expiryLimits(now = Date.now()) {
+	const day = 86400000;
+	return {
+		min: new Date(now).toISOString().slice(0, 10),
+		max: new Date(now + 365 * day).toISOString().slice(0, 10),
+	};
+}
+
 function defaultExpiry() {
-  const date = new Date();
-  date.setUTCDate(date.getUTCDate() + 90);
-  return date.toISOString().slice(0, 10);
+	const date = new Date();
+	date.setUTCDate(date.getUTCDate() + 90);
+	return date.toISOString().slice(0, 10);
 }
 
 export function TokenDialog({ account, capabilities, onClose, onSessionLost, onSave, onIssued }: TokenDialogProps) {
   const [name, setName] = useState('');
   const [scope, setScope] = useState<string[]>([]);
+  const [limits] = useState(expiryLimits);
   const [expiry, setExpiry] = useState(defaultExpiry);
   const [noExpiry, setNoExpiry] = useState(false);
   const [revokeOnPasswordChange, setRevokeOnPasswordChange] = useState(true);
@@ -67,7 +76,7 @@ export function TokenDialog({ account, capabilities, onClose, onSessionLost, onS
           <Checkbox.Group label="Capability scope" value={scope} onChange={setScope}>
             <ScrollArea.Autosize mah={220} mt="xs"><Stack gap="xs">{capabilities.map((capability) => <Checkbox key={capability} label={capability} value={capability} />)}</Stack></ScrollArea.Autosize>
           </Checkbox.Group>
-          <TextInput disabled={noExpiry} label="Expiration date" max={new Date(Date.now() + 365 * 86400000).toISOString().slice(0, 10)} min={new Date().toISOString().slice(0, 10)} required={!noExpiry} type="date" value={expiry} onChange={(event) => setExpiry(event.currentTarget.value)} />
+					<TextInput disabled={noExpiry} label="Expiration date" max={limits.max} min={limits.min} required={!noExpiry} type="date" value={expiry} onChange={(event) => setExpiry(event.currentTarget.value)} />
           <Checkbox checked={noExpiry} label="Token never expires" onChange={(event) => setNoExpiry(event.currentTarget.checked)} />
           {noExpiry && <Alert color="yellow" role="alert">A token without an expiration remains valid until it is revoked. Choose this only for automation that cannot rotate credentials.</Alert>}
           {account.kind === 'human' && <Checkbox checked={revokeOnPasswordChange} label="Revoke when this user’s password changes" onChange={(event) => setRevokeOnPasswordChange(event.currentTarget.checked)} />}

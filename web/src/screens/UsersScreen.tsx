@@ -42,6 +42,7 @@ export function UsersScreen({ api, session, onSessionLost }: UsersScreenProps) {
     }
   }, [api, handleError]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch on mount, not derived state
   useEffect(() => { void load(); }, [load]);
 
   async function loadMore() {

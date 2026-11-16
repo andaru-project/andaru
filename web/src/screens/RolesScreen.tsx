@@ -54,6 +54,7 @@ export function RolesScreen({ api, session, onSessionLost }: RolesScreenProps) {
     }
   }, [api, canReadLive, canReadSaved, handleError, session.capabilities]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch on mount, not derived state
   useEffect(() => { void load(); }, [load]);
 
   async function saveRole(input: Omit<Role, 'id' | 'builtIn'>) {

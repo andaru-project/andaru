@@ -45,6 +45,8 @@ export function App() {
     }
   }, [api]);
 
+  // The fetch result is external state. The rule treats the request's setState as derived state.
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch on mount, not derived state
   useEffect(() => { void connect(); }, [connect]);
 
   const sessionLost = useCallback(() => {
