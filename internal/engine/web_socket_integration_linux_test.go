@@ -17,7 +17,7 @@ import (
 func TestWebSocketChecksExactPeerBeforeHTTPParsing(t *testing.T) {
 	requireRoot(t)
 	t.Run("configured peer and modes", func(t *testing.T) {
-		path := filepath.Join(privateTestDir(t), "andaru-web", "engine.sock")
+		path := filepath.Join(shortPrivateDir(t), "andaru-web", "engine.sock")
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan error, 1)
 		go func() {
@@ -53,7 +53,7 @@ func TestWebSocketChecksExactPeerBeforeHTTPParsing(t *testing.T) {
 	})
 
 	t.Run("wrong peer is closed before handler", func(t *testing.T) {
-		path := filepath.Join(privateTestDir(t), "andaru-web", "engine.sock")
+		path := filepath.Join(shortPrivateDir(t), "andaru-web", "engine.sock")
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		var parsed atomic.Bool
@@ -85,6 +85,18 @@ func TestWebSocketChecksExactPeerBeforeHTTPParsing(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+}
+func shortPrivateDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/var/tmp", "aw-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	if err = os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
 
 func waitForUnixSocket(t *testing.T, path string) {
