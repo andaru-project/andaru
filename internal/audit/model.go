@@ -390,19 +390,7 @@ func validateOutcome(outcome Outcome, action Action) error {
 	return nil
 }
 
-func validStoredEvent(event Event) bool {
-	if event.ID == 0 || event.Count == 0 || event.Result == ResultPending ||
-		event.Action == ActionLoginFailure && event.OperationID != "" ||
-		!validResult(event.Result) || !validOperationIDOptional(event.OperationID) || validateMetadata(event.Metadata) != nil {
-		return false
-	}
-	if isCreationAction(event.Action) && (event.Result == ResultSuccess && !validTarget(event.Action, event.Target) ||
-		event.Result != ResultSuccess && event.Target != "") {
-		return false
-	}
-	rule, ok := actionRules[event.Action]
-	return ok && rule.safety == (event.Category == CategoryProtected) && validateFields(event.Actor, event.Source, event.Action, event.Target, event.Category) == nil
-}
+
 
 func validateMetadata(metadata map[string]string) error {
 	if len(metadata) > maxMetadataEntries {

@@ -271,7 +271,6 @@ func (s *Store) Verify(ctx context.Context) (IntegrityReport, error) {
 	}
 	return report, nil
 }
-
 func validStoredEvent(event Event) bool {
 	fieldsValid := validateFields(event.Actor, event.Source, event.Action, event.Target, event.Category) == nil
 	if event.Result == ResultPending {
@@ -282,8 +281,15 @@ func validStoredEvent(event Event) bool {
 		!validResult(event.Result) || !validOperationIDOptional(event.OperationID) || validateMetadata(event.Metadata) != nil {
 		return false
 	}
+	if isCreationAction(event.Action) && (event.Result == ResultSuccess && !validTarget(event.Action, event.Target) ||
+		event.Result != ResultSuccess && event.Result != ResultPending && event.Target != "") {
+		return false
+	}
 	return true
 }
+
+
+
 
 func (s *Store) setIntegrityFailure(ctx context.Context) {
 	_, _ = s.db.ExecContext(ctx, "UPDATE health SET integrity_failure=1 WHERE id=1")
