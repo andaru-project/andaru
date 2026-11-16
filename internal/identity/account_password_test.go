@@ -75,8 +75,8 @@ func TestBootstrapCreateUpdateAndRestart(t *testing.T) {
 	if len(lastPage.Items[0].RoleIDs) != 1 || lastPage.Items[0].RoleIDs[0] != "administrator" {
 		t.Fatalf("paged admin roles=%v", lastPage.Items[0].RoleIDs)
 	}
-	emptyPage, err := s.ListAccounts(ctx, lastPage.NextCursor, 1)
-	if err != nil || len(emptyPage.Items) != 0 {
+	emptyPage, err := s.ListAccounts(ctx, lastPage.Items[0].Login, 1)
+	if err != nil || len(emptyPage.Items) != 0 || emptyPage.NextCursor != "" {
 		t.Fatalf("exhausted page=%+v err=%v", emptyPage, err)
 	}
 	if _, err = s.ListAccounts(ctx, "", 0); !errors.Is(err, ErrInvalid) {

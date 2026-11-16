@@ -23,7 +23,7 @@ Implemented account/password/admission behavior in the identity store.
 
 ## Tests added
 
-- `TestBootstrapCreateUpdateAndRestart`
+- `TestBootstrapCreateUpdateAndRestart`: verifies final-page exhaustion using the last item login cursor; an empty cursor starts from the first page.
 - `TestAccountValidationTombstoneCASAndInvariant`
 - `TestLoginCanonicalization`
 - `TestOptionalDisplayAndCustomRolesSurviveRestart`

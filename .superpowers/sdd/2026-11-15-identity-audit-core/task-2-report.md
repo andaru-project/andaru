@@ -34,6 +34,7 @@ Task 2A1, Task 2A2, and Task 2B are implemented.
 - Admission now uses a nonblocking permit send under the queue mutex, eliminating the len-check/send race; `TestAdmissionConcurrentWakeupsDoNotDeadlock` races queued and new callers across repeated drains.
 - `ListAccounts` uses bounded keyset SQL pagination (`afterLogin`, maximum 100), then loads role rows in one batch for that page only.
 - `BenchmarkArgon2ProductionAdmission` keeps the exact production Argon2 policy and reports latency, observed concurrent hashes, and estimated peak Argon workspace memory.
+- `TestBootstrapCreateUpdateAndRestart` now advances from the last returned login to prove the terminal page is empty; an empty cursor remains the first-page cursor.
 - No tests, build, lint, formatting, or benchmark commands were run.
 
 
