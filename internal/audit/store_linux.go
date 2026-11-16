@@ -425,6 +425,9 @@ func (s *Store) ListEvents(ctx context.Context, after uint64, limit int) ([]Even
 		if err != nil {
 			return nil, s.storageError(ctx, err)
 		}
+		if !validStoredEvent(events[i]) {
+			return nil, s.integrityError(ctx)
+		}
 	}
 	return events, nil
 }
@@ -799,9 +802,31 @@ func readOutcome(ctx context.Context, tx *sql.Tx, operationID string, result Res
 		return Outcome{}, err
 	}
 	outcome := Outcome{OperationID: operationID, Result: result, Target: target, Metadata: metadata}
-	if validateOutcome(outcome, action) != nil {
+	if validateOutcome(outcome, action) != nil || isCreationAction(action) && !validStoredOutcomeEvent(ctx, tx, operationID, outcome, action) {
 		return Outcome{}, ErrIntegrity
 	}
+	return outcome, nil
+}
+
+func validStoredOutcomeEvent(ctx context.Context, tx *sql.Tx, operationID string, outcome Outcome, action Action) bool {
+	var event Event
+	var id, at, count int64
+	var actorKind, category string
+	if tx.QueryRowContext(ctx, `SELECT e.id,e.at,e.actor_kind,e.actor_id,e.source,e.action,e.target,e.result,e.operation_id,e.category,e.coalesced_count
+		FROM operations o JOIN events e ON e.id=o.outcome_event_id WHERE o.operation_id=?`, operationID).
+		Scan(&id, &at, &actorKind, &event.Actor.ID, &event.Source, &event.Action, &event.Target, &event.Result, &event.OperationID, &category, &count) != nil ||
+		id <= 0 || count <= 0 {
+		return false
+	}
+	event.ID = uint64(id)
+	event.At = time.UnixMilli(at).UTC()
+	event.Actor.Kind = authz.ActorKind(actorKind)
+	event.Category = Category(category)
+	event.Count = uint64(count)
+	event.Metadata, _ = readEventMetadata(ctx, tx, uint64(id))
+	return validStoredEvent(event) && event.OperationID == operationID && event.Action == action &&
+		event.Result == outcome.Result && event.Target == outcome.Target && equalMetadata(event.Metadata, outcome.Metadata)
+}
 	return outcome, nil
 }
 
@@ -949,6 +974,11 @@ func (s *Store) storageError(ctx context.Context, err error) error {
 
 func (s *Store) abortIntegrity(ctx context.Context, tx *sql.Tx) error {
 	_ = tx.Rollback()
+	s.setIntegrityFailure(ctx)
+	return ErrIntegrity
+}
+
+func (s *Store) integrityError(ctx context.Context) error {
 	s.setIntegrityFailure(ctx)
 	return ErrIntegrity
 }

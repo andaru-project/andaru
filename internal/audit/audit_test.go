@@ -198,6 +198,8 @@ func TestCreationOutcomeRequiresValidPublicTargetOnlyOnSuccess(t *testing.T) {
 		{"failed creation target", ActionAccountCreated, ResultFailure, "00000000-0000-4000-8000-000000000001", true},
 		{"not committed creation target", ActionAccountCreated, ResultNotCommitted, "00000000-0000-4000-8000-000000000001", true},
 		{"failed creation without target", ActionAccountCreated, ResultFailure, "", false},
+		{"not committed creation without target", ActionAccountCreated, ResultNotCommitted, "", false},
+		{"pending creation with target", ActionAccountCreated, ResultPending, "00000000-0000-4000-8000-000000000001", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			intent := testIntent(fmt.Sprintf("creation-check-%d", i), tc.action, actionRules[tc.action].category)
@@ -217,6 +219,84 @@ func TestCreationOutcomeRequiresValidPublicTargetOnlyOnSuccess(t *testing.T) {
 				t.Fatalf("valid outcome rejected: %v", err)
 			}
 		})
+	}
+}
+
+func TestFailedCreationOutcomeHasNoTargetThroughRetryAndReplay(t *testing.T) {
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "state")
+	s, err := Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := testIntent("failed-create-replay", ActionAccountCreated, CategoryProtected)
+	intent.Target = ""
+	if _, err = s.Begin(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Finish(ctx, Outcome{OperationID: intent.OperationID, Result: ResultFailure}); err != nil {
+		t.Fatal(err)
+	}
+	replay, err := s.Begin(ctx, intent)
+	if err != nil || !replay.Replay || replay.Outcome == nil || replay.Outcome.Target != "" || replay.Outcome.Result != ResultFailure {
+		t.Fatalf("failed creation replay = %+v, %v", replay, err)
+	}
+	events, err := s.ListEvents(ctx, 0, 100)
+	if err != nil || len(events) != 2 || events[1].Target != "" || events[1].Result != ResultFailure {
+		t.Fatalf("failed creation events = %+v, %v", events, err)
+	}
+	report, err := s.Verify(ctx)
+	if err != nil || !report.Valid {
+		t.Fatalf("failed creation integrity = %+v, %v", report, err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAuthoritativeAbsenceAllowsEmptyTargetCreationRetry(t *testing.T) {
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "state")
+	s, err := Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := testIntent("absent-create-retry", ActionAccountCreated, CategoryProtected)
+	intent.Target = ""
+	if _, err = s.Begin(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Reconcile(ctx, emptyOperationSource{}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := s.ListEvents(ctx, 0, 100)
+	if err != nil || len(events) != 2 || events[1].Result != ResultNotCommitted || events[1].Target != "" {
+		t.Fatalf("authoritative absence events = %+v, %v", events, err)
+	}
+	retry, err := s.Begin(ctx, intent)
+	if err != nil || !retry.Started || retry.Replay {
+		t.Fatalf("creation retry after authoritative absence = %+v, %v", retry, err)
+	}
+	if err = s.Finish(ctx, Outcome{OperationID: intent.OperationID, Result: ResultFailure}); err != nil {
+		t.Fatal(err)
+	}
+	replay, err := s.Begin(ctx, intent)
+	if err != nil || !replay.Replay || replay.Outcome == nil || replay.Outcome.Target != "" || replay.Outcome.Result != ResultFailure {
+		t.Fatalf("creation retry replay = %+v, %v", replay, err)
+	}
+	report, err := s.Verify(ctx)
+	if err != nil || !report.Valid {
+		t.Fatalf("creation retry integrity = %+v, %v", report, err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 
