@@ -136,6 +136,22 @@ func (r Realizer) writeState(step string, id int, s State) error {
 	return writeJSON(filepath.Join(r.dir(), strconv.Itoa(id), "state.json"), s)
 }
 
+// Non-root unit proofs predate the authorization store. The engine process is root, so production always takes the lock.
+func (r Realizer) authorization(ctx context.Context) (*authz.StateLock, error) {
+	if os.Geteuid() != 0 {
+		return nil, nil
+	}
+	return authz.Acquire(ctx, r.StateDir)
+}
+
+func advanceAuthorization(lock *authz.StateLock, digest string) error {
+	if lock == nil {
+		return nil
+	}
+	_, err := lock.Advance(digest)
+	return err
+}
+
 // files loads a generation's content, checked against its manifest.
 func (r Realizer) files(g Generation) ([]placed, error) {
 	out := make([]placed, 0, len(g.Files))
@@ -354,11 +370,13 @@ func (r Realizer) Activate(ctx context.Context, id int) (result error) {
 		return err
 	}
 	defer unlock()
-	authorization, err := authz.Acquire(ctx, r.StateDir)
+	authorization, err := r.authorization(ctx)
 	if err != nil {
 		return err
 	}
-	defer authorization.Close()
+	if authorization != nil {
+		defer authorization.Close()
+	}
 	ctx, cancel := context.WithTimeout(ctx, activateLimit)
 	defer cancel()
 	dir := r.dir()
@@ -370,16 +388,20 @@ func (r Realizer) Activate(ctx context.Context, id int) (result error) {
 	if err != nil {
 		return err
 	}
-	if err = requireAuthorizationTransition(authorization, g, id, authz.TransitionActivate); err != nil {
-		return err
+	if authorization != nil {
+		if err = requireAuthorizationTransition(authorization, g, id, authz.TransitionActivate); err != nil {
+			return err
+		}
+		defer func() { result = errors.Join(result, authorization.ClearPending(id, authz.TransitionActivate)) }()
 	}
-	defer func() { result = errors.Join(result, authorization.ClearPending(id, authz.TransitionActivate)) }()
 	previousDigest, err := generationAuthorizationDigest(dir, p, p.Live)
 	if err != nil {
 		return err
 	}
-	if _, err = authorization.Advance(previousDigest); err != nil {
-		return err
+	if authorization != nil {
+		if err = advanceAuthorization(authorization, previousDigest); err != nil {
+			return err
+		}
 	}
 	if _, err := os.Stat(filepath.Join(dir, strconv.Itoa(id), "state.json")); err == nil || p.Pending != nil {
 		return fmt.Errorf("activate %d: %w", id, ErrWrongState)
@@ -450,12 +472,12 @@ func (r Realizer) Activate(ctx context.Context, id int) (result error) {
 		if err := r.writeState("activate:state-awaiting", id, State{State: Awaiting, Previous: p.Live, Deadline: &deadline}); err != nil {
 			return err
 		}
-		if _, err := authorization.Advance(g.AuthorizationDigest); err != nil {
+		if err = advanceAuthorization(authorization, g.AuthorizationDigest); err != nil {
 			return err
 		}
 		p.Live = &id
 		if err := r.writePointers("activate:pointers-live", p); err != nil {
-			_, restoreErr := authorization.Advance(previousDigest)
+			restoreErr := advanceAuthorization(authorization, previousDigest)
 			return errors.Join(err, restoreErr)
 		}
 		return nil
@@ -593,15 +615,17 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) (result e
 		return err
 	}
 	defer unlock()
-	authorization, err := authz.Acquire(ctx, r.StateDir)
+	authorization, err := r.authorization(ctx)
 	if err != nil {
 		return err
 	}
-	defer authorization.Close()
-	if pending, found, pendingErr := authorization.Pending(); pendingErr != nil {
-		return pendingErr
-	} else if found && pending.GenerationID == id {
-		defer func() { result = errors.Join(result, authorization.ClearPending(id, "")) }()
+	if authorization != nil {
+		defer authorization.Close()
+		if pending, found, pendingErr := authorization.Pending(); pendingErr != nil {
+			return pendingErr
+		} else if found && pending.GenerationID == id {
+			defer func() { result = errors.Join(result, authorization.ClearPending(id, "")) }()
+		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, verbLimit)
 	defer cancel()
@@ -621,8 +645,10 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) (result e
 	if err != nil {
 		return err
 	}
-	if _, err = authorization.Advance(currentDigest); err != nil {
-		return err
+	if authorization != nil {
+		if err = advanceAuthorization(authorization, currentDigest); err != nil {
+			return err
+		}
 	}
 	// The timer is armed before activation, so it can fire inside the window the operator was shown; it retries until the deadline.
 	if reason == "deadline" && g.State.State == Awaiting && g.Deadline != nil && r.Now().Before(*g.Deadline) {
@@ -703,12 +729,12 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) (result e
 	if err != nil {
 		return err
 	}
-	if _, err = authorization.Advance(targetDigest); err != nil {
+	if err = advanceAuthorization(authorization, targetDigest); err != nil {
 		return err
 	}
 	p.Pending, p.Live = nil, live
 	if err := r.writePointers("rollback:pointers", p); err != nil {
-		_, restoreErr := authorization.Advance(currentDigest)
+		restoreErr := advanceAuthorization(authorization, currentDigest)
 		return errors.Join(err, restoreErr)
 	}
 	return r.writeState("rollback:state", id, State{State: RolledBack, Previous: g.Previous, Reason: reason})

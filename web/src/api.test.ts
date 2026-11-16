@@ -32,14 +32,14 @@ describe('ApiClient', () => {
     const api = new ApiClient();
 
     await expect(api.currentSession()).rejects.toEqual(
-      expect.objectContaining<ApiError>({ status: 401, code: 'SESSION_EXPIRED', message: 'Sign in again.' }),
+      expect.objectContaining({ status: 401, code: 'SESSION_EXPIRED', message: 'Sign in again.' }),
     );
   });
 
   it('classifies a disconnected backend without fabricating a server response', async () => {
     fetchQueue(new TypeError('network failed'));
     await expect(new ApiClient().currentSession()).rejects.toEqual(
-      expect.objectContaining<ApiError>({ status: 0, code: 'DISCONNECTED' }),
+      expect.objectContaining({ status: 0, code: 'DISCONNECTED' }),
     );
   });
 });

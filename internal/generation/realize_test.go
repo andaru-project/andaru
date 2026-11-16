@@ -740,6 +740,9 @@ func TestKillPoints(t *testing.T) {
 
 func authorizationState(t *testing.T, stateDir string) authz.State {
 	t.Helper()
+	if os.Geteuid() != 0 {
+		t.Skip("authorization state requires root")
+	}
 	lock, err := authz.Acquire(t.Context(), stateDir)
 	if err != nil {
 		t.Fatal(err)
@@ -754,6 +757,9 @@ func authorizationState(t *testing.T, stateDir string) authz.State {
 
 func initializeAuthorization(t *testing.T, stateDir, digest string) authz.State {
 	t.Helper()
+	if os.Geteuid() != 0 {
+		t.Skip("authorization state requires root")
+	}
 	lock, err := authz.Acquire(t.Context(), stateDir)
 	if err != nil {
 		t.Fatal(err)

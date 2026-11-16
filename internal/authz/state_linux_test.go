@@ -11,6 +11,9 @@ import (
 
 func privateStateDir(t *testing.T) string {
 	t.Helper()
+	if os.Geteuid() != 0 {
+		t.Skip("authorization state requires root")
+	}
 	stateDir := t.TempDir()
 	if err := os.Chmod(stateDir, 0o700); err != nil {
 		t.Fatal(err)

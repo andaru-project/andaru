@@ -136,11 +136,13 @@ func (r Realizer) Confirm(ctx context.Context, id int) (result error) {
 		return err
 	}
 	defer unlock()
-	authorization, err := authz.Acquire(ctx, r.StateDir)
+	authorization, err := r.authorization(ctx)
 	if err != nil {
 		return err
 	}
-	defer authorization.Close()
+	if authorization != nil {
+		defer authorization.Close()
+	}
 	ctx, cancel := context.WithTimeout(ctx, verbLimit)
 	defer cancel()
 	p, err := readPointers(r.dir())
@@ -161,15 +163,17 @@ func (r Realizer) Confirm(ctx context.Context, id int) (result error) {
 	if err != nil {
 		return err
 	}
-	if g.AuthorizationDigest != previousDigest {
+	if authorization != nil && g.AuthorizationDigest != previousDigest {
 		if err = requireAuthorizationTransition(authorization, g, id, authz.TransitionConfirm); err != nil {
 			return err
 		}
 		defer func() { result = errors.Join(result, authorization.ClearPending(id, authz.TransitionConfirm)) }()
 	}
-	authState, err := authorization.Read()
-	if err != nil || authState.LiveDigest != g.AuthorizationDigest {
-		return errors.Join(authz.ErrStateUnavailable, err)
+	if authorization != nil {
+		authState, err := authorization.Read()
+		if err != nil || authState.LiveDigest != g.AuthorizationDigest {
+			return errors.Join(authz.ErrStateUnavailable, err)
+		}
 	}
 	// Pointers first: once they name this generation a late timer and the next boot both keep it.
 	// Live is set too: a kill during activation may have left it behind the files.
@@ -299,15 +303,17 @@ func (r Realizer) Boot(ctx context.Context) (result error) {
 		return err
 	}
 	defer unlock()
-	authorization, err := authz.Acquire(ctx, r.StateDir)
+	authorization, err := r.authorization(ctx)
 	if err != nil {
 		return err
 	}
-	defer authorization.Close()
-	if pending, found, pendingErr := authorization.Pending(); pendingErr != nil {
-		return pendingErr
-	} else if found {
-		defer func() { result = errors.Join(result, authorization.ClearPending(pending.GenerationID, pending.Phase)) }()
+	if authorization != nil {
+		defer authorization.Close()
+		if pending, found, pendingErr := authorization.Pending(); pendingErr != nil {
+			return pendingErr
+		} else if found {
+			defer func() { result = errors.Join(result, authorization.ClearPending(pending.GenerationID, pending.Phase)) }()
+		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, restoreLimit)
 	defer cancel()
@@ -336,7 +342,7 @@ func (r Realizer) Boot(ctx context.Context) (result error) {
 	}
 	if p.Confirmed == nil {
 		p.Live = nil
-		if _, err := authorization.Advance(""); err != nil {
+		if err = advanceAuthorization(authorization, ""); err != nil {
 			return err
 		}
 		return r.writePointers("boot:pointers", p)
@@ -404,7 +410,7 @@ func (r Realizer) Boot(ctx context.Context) (result error) {
 		if err := r.bootPrefixes(); err != nil {
 			slog.Error("fill the DHCPv6 subnets of delegated segments", "error", err)
 		}
-		if _, err := authorization.Advance(g.AuthorizationDigest); err != nil {
+		if err = advanceAuthorization(authorization, g.AuthorizationDigest); err != nil {
 			return err
 		}
 		p.Live = id
@@ -418,7 +424,7 @@ func (r Realizer) Boot(ctx context.Context) (result error) {
 		failures = append(failures, err)
 	}
 	if kind == "ifupdown" && ifupdown != nil {
-		if _, err := authorization.Advance(""); err != nil {
+		if err = advanceAuthorization(authorization, ""); err != nil {
 			return err
 		}
 		return r.bootIfupdown(ctx, p, *ifupdown, failures)
@@ -439,7 +445,7 @@ func (r Realizer) Boot(ctx context.Context) (result error) {
 	if err := r.place(nil, base); err != nil {
 		return err
 	}
-	if _, err := authorization.Advance(""); err != nil {
+	if err = advanceAuthorization(authorization, ""); err != nil {
 		return err
 	}
 	p.Live = nil

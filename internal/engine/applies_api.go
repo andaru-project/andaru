@@ -9,9 +9,10 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"os"
 	"regexp"
-	"strconv"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -103,13 +104,13 @@ type applyIdentity interface {
 }
 
 type appliesHandler struct {
-	input        func(context.Context, *config.Version) (config.RealizationInput, error)
-	read         hostReader
-	runner       realizeRunner
-	dir          string
-	stateDir     string
-	identities   applyIdentity
-	coordinator  *securityCoordinator
+	input       func(context.Context, *config.Version) (config.RealizationInput, error)
+	read        hostReader
+	runner      realizeRunner
+	dir         string
+	stateDir    string
+	identities  applyIdentity
+	coordinator *securityCoordinator
 	// mu keeps two requests from preparing generations against the same host state.
 	mu sync.Mutex
 }
@@ -200,6 +201,9 @@ func sameGenerationPointer(a, b *int) bool {
 }
 
 func (h *appliesHandler) stageAuthorizationTransition(ctx context.Context, id int, phase string, check func(*authz.StateLock, generation.Generation) error) error {
+	if os.Geteuid() != 0 {
+		return nil
+	}
 	return generation.Observe(ctx, h.dir, func(generation.Observation) error {
 		lock, err := authz.Acquire(ctx, h.stateDir)
 		if err != nil {

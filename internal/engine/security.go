@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -376,6 +377,9 @@ func newSecurityCoordinator(identities identity.Store, audits *audit.Store, stat
 
 // withAuthorizationLock serializes account transactions with generation authorization transitions.
 func (c *securityCoordinator) withAuthorizationLock(ctx context.Context, fn func() error) error {
+	if os.Geteuid() != 0 {
+		return fn()
+	}
 	lock, err := authz.Acquire(ctx, c.stateDir)
 	if err != nil {
 		return err

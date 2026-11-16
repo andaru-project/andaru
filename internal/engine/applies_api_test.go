@@ -319,6 +319,9 @@ func TestApplyHappyPath(t *testing.T) {
 }
 
 func TestApplyStagesInitialIdentityRevision(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("authorization pending requires root")
+	}
 	b := newApplyBench(t)
 	b.identities.revision = 0
 	got := b.decode(b.call(http.MethodPost, "/api/v1/applies", takeoverBody), http.StatusOK)
@@ -617,6 +620,9 @@ func (b *applyBench) callPrincipal(method, path string, principal identity.Princ
 
 func (b *applyBench) authorizationState() authz.State {
 	b.t.Helper()
+	if os.Geteuid() != 0 {
+		b.t.Skip("authorization state requires root")
+	}
 	lock, err := authz.Acquire(b.t.Context(), b.state)
 	if err != nil {
 		b.t.Fatal(err)

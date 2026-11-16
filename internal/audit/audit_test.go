@@ -328,6 +328,9 @@ func TestCreationFinishAllowsEmptyTargetResultsAndPreservesReplayIntegrity(t *te
 }
 
 func TestFailedCreationOutcomeHasNoTargetThroughRetryAndReplay(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("audit database tests require root")
+	}
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "state")
 	s, err := Open(ctx, dir)
@@ -360,6 +363,9 @@ func TestFailedCreationOutcomeHasNoTargetThroughRetryAndReplay(t *testing.T) {
 }
 
 func TestAuthoritativeAbsenceAllowsEmptyTargetCreationRetry(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("audit database tests require root")
+	}
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "state")
 	s, err := Open(ctx, dir)
