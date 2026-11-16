@@ -146,6 +146,42 @@ func TestAuditActorAndTargetIdentifiersAreTyped(t *testing.T) {
 	}
 }
 
+func TestValidateEventActorIDsByKind(t *testing.T) {
+	accountID := "00000000-0000-4000-8000-000000000001"
+	tokenSelector := base64.RawURLEncoding.EncodeToString(make([]byte, 16))
+	secret := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+	for _, tc := range []struct {
+		name       string
+		actor      authz.Actor
+		wantValid  bool
+	}{
+		{"known system actor", authz.Actor{Kind: authz.ActorSystem, ID: "root"}, true},
+		{"account UUID actor", authz.Actor{Kind: authz.ActorAccount, ID: accountID}, true},
+		{"token selector actor", authz.Actor{Kind: authz.ActorToken, ID: tokenSelector}, true},
+		{"system secret", authz.Actor{Kind: authz.ActorSystem, ID: secret}, false},
+		{"account secret", authz.Actor{Kind: authz.ActorAccount, ID: secret}, false},
+		{"token secret", authz.Actor{Kind: authz.ActorToken, ID: secret}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			event := Event{
+				Actor:    tc.actor,
+				Source:   "unix",
+				Action:   ActionTokenCreated,
+				Target:   tokenSelector,
+				Result:   ResultSuccess,
+				Category: CategoryGeneral,
+			}
+			_, err := validateEvent(event, time.Now(), false)
+			if tc.wantValid && err != nil {
+				t.Fatalf("valid actor rejected: %v", err)
+			}
+			if !tc.wantValid && !errors.Is(err, ErrInvalid) {
+				t.Fatalf("invalid actor error = %v, want ErrInvalid", err)
+			}
+		})
+	}
+}
+
 func TestCreationTargetsComeFromSuccessfulOutcomes(t *testing.T) {
 	s, _ := openTestStore(t)
 	ctx := context.Background()

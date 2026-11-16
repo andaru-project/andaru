@@ -346,12 +346,26 @@ var (
 	roleIDPattern    = regexp.MustCompile(`^rol_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 )
 
+func validateEventFields(event Event) bool {
+	rule, ok := actionRules[event.Action]
+	if !ok || event.Category != rule.category || !validActor(event.Actor) || !validSource(event.Source) {
+		return false
+	}
+	if event.Action == ActionLoginFailure && event.Actor.Kind != authz.ActorSystem {
+		return false
+	}
+	if isCreationAction(event.Action) && event.Result != ResultSuccess {
+		return event.Target == ""
+	}
+	return validTarget(event.Action, event.Target)
+}
+
 func validateEvent(event Event, now time.Time, safety bool) (Event, error) {
 	rule := actionRules[event.Action]
 	if event.ID != 0 || event.Count != 0 || event.Result == ResultPending ||
-		!validResult(event.Result) || !validOperationIDOptional(event.OperationID) || validateMetadata(event.Metadata) != nil ||
-		(isCreationAction(event.Action) && (event.Result == ResultSuccess && !validTarget(event.Action, event.Target) ||
-			event.Result != ResultSuccess && event.Target != "")) {
+		event.Action == ActionLoginFailure && event.OperationID != "" ||
+		!validateEventFields(event) ||
+		!validResult(event.Result) || !validOperationIDOptional(event.OperationID) || validateMetadata(event.Metadata) != nil {
 		return Event{}, ErrInvalid
 	}
 	if rule.safety != safety {
