@@ -83,6 +83,12 @@ type tokenView struct {
 	Revision               uint64             `json:"revision"`
 }
 
+type bootstrapAdminRequest struct {
+	Login       string `json:"login"`
+	DisplayName string `json:"displayName"`
+	Password    string `json:"password"`
+}
+
 type createUserRequest struct {
 	Login            string               `json:"login"`
 	DisplayName      string               `json:"displayName"`
@@ -211,6 +217,14 @@ func (h *identityAPI) roles(w http.ResponseWriter, r *http.Request) {
 
 func (h *identityAPI) users(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/v1/users")
+	if rest == "/bootstrap-admin" {
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, r, "POST")
+			return
+		}
+		h.bootstrapAdmin(w, r)
+		return
+	}
 	if rest == "" {
 		switch r.Method {
 		case http.MethodGet, http.MethodHead:
@@ -249,6 +263,42 @@ func (h *identityAPI) users(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
+}
+
+func (h *identityAPI) bootstrapAdmin(w http.ResponseWriter, r *http.Request) {
+	if !noQuery(w, r) {
+		return
+	}
+	actor, ok := mutationActor(w, r)
+	if !ok {
+		return
+	}
+	if !actor.Root {
+		writeError(w, r, http.StatusForbidden, "FORBIDDEN", "Administrator bootstrap is available only to the verified root console.")
+		return
+	}
+	raw, request, ok := decodeIdentityBody[bootstrapAdminRequest](w, r, 4096, "login", "displayName", "password")
+	if !ok {
+		return
+	}
+	defer clear(raw)
+	if request.Login == "" || request.Password == "" || len(request.Password) > 512 {
+		writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Invalid administrator bootstrap request.")
+		return
+	}
+	operationID, ok := idempotencyKey(w, r)
+	if !ok {
+		return
+	}
+	execution, ok := h.executeMutation(w, r, actor, operationID, raw, audit.ActionAccountCreated, audit.CategoryProtected, "", func(ctx context.Context) (string, any, error) {
+		password := []byte(request.Password)
+		account, _, err := h.identities.BootstrapAdmin(ctx, request.Login, request.DisplayName, password)
+		clear(password)
+		return account.ID, nil, err
+	})
+	if ok {
+		writeOperationResult(w, r, execution, http.StatusCreated, "")
+	}
 }
 
 func (h *identityAPI) listUsers(w http.ResponseWriter, r *http.Request) {

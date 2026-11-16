@@ -130,7 +130,7 @@ func TestConfigurationHTTPContract(t *testing.T) {
 		"/api/v1/config/dns": {"get", "head", "put", "delete"}, "/api/v1/backups": {"post"},
 		"/api/v1/restores/preview": {"post"}, "/api/v1/restores": {"post"},
 		"/api/v1/capabilities": {"get", "head"}, "/api/v1/roles": {"get", "head"},
-		"/api/v1/users": {"get", "head", "post"}, "/api/v1/users/{id}": {"get", "head", "patch", "delete"},
+		"/api/v1/users": {"get", "head", "post"}, "/api/v1/users/bootstrap-admin": {"post"}, "/api/v1/users/{id}": {"get", "head", "patch", "delete"},
 		"/api/v1/users/{id}/password": {"put"}, "/api/v1/tokens": {"get", "head", "post"},
 		"/api/v1/tokens/{selector}": {"delete"}, "/api/v1/audit/events": {"get", "head"},
 		"/api/v1/audit/export": {"get", "head"},

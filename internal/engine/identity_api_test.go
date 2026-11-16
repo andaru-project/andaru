@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -135,6 +136,65 @@ func TestIdentityAPICreationTargetsAndTokenReplay(t *testing.T) {
 	}
 	if !found["account"] || !found["token"] || queries != 2 {
 		t.Fatalf("actual generated creation targets or audited reads missing: creations=%+v queryCount=%d", found, queries)
+	}
+}
+
+func TestBootstrapAdminAPIIsRootOnlyAtomicAndAudited(t *testing.T) {
+	identities, audits, _, handler := identityTestServices(t)
+	body := `{"login":"rootadmin","displayName":"Root","password":"unique-admin-password-41"}`
+
+	nonRoot := httptest.NewRequest(http.MethodPost, "/api/v1/users/bootstrap-admin", strings.NewReader(body))
+	nonRoot.Header.Set("Content-Type", "application/json")
+	nonRoot.Header.Set("Idempotency-Key", "bootstrap-non-root")
+	nonRoot = nonRoot.WithContext(withVerifiedPrincipal(nonRoot.Context(), identity.Principal{
+		Account: identity.Account{ID: "12345678-1234-4234-8234-123456789abc"},
+		Actor: authz.Actor{Kind: authz.ActorAccount, ID: "12345678-1234-4234-8234-123456789abc"},
+		Capabilities: []authz.Capability{authz.UsersManage},
+	}, "127.0.0.1"))
+	denied := httptest.NewRecorder()
+	handler.ServeHTTP(denied, nonRoot)
+	if denied.Code != http.StatusForbidden {
+		t.Fatalf("non-root bootstrap status=%d body=%s", denied.Code, denied.Body)
+	}
+
+	unknown := identityRequest(handler, http.MethodPost, "/api/v1/users/bootstrap-admin", strings.TrimSuffix(body, "}")+`,"roleIds":["administrator"]}`, "bootstrap-unknown")
+	if unknown.Code != http.StatusBadRequest {
+		t.Fatalf("unknown bootstrap field status=%d body=%s", unknown.Code, unknown.Body)
+	}
+	created := identityRequest(handler, http.MethodPost, "/api/v1/users/bootstrap-admin", body, "bootstrap-admin-1")
+	if created.Code != http.StatusCreated {
+		t.Fatalf("bootstrap status=%d body=%s", created.Code, created.Body)
+	}
+	var result operationResponse
+	if err := json.Unmarshal(created.Body.Bytes(), &result); err != nil || result.Target == "" || strings.Contains(created.Body.String(), "password") {
+		t.Fatalf("bootstrap response=%s err=%v", created.Body, err)
+	}
+	account, err := identities.GetAccount(context.Background(), result.Target)
+	if err != nil || account.Login != "rootadmin" || !account.Enabled || !slices.Equal(account.RoleIDs, []string{authz.AdministratorRoleID}) {
+		t.Fatalf("bootstrap account=%+v err=%v", account, err)
+	}
+	valid, err := identities.VerifyPassword(context.Background(), account.ID, []byte("unique-admin-password-41"))
+	if err != nil || !valid {
+		t.Fatalf("bootstrap credential valid=%t err=%v", valid, err)
+	}
+	record, found, err := identities.LookupOperation(context.Background(), "bootstrap-admin-1")
+	if err != nil || !found || record.OutcomeTarget != account.ID {
+		t.Fatalf("bootstrap operation=%+v found=%t err=%v", record, found, err)
+	}
+	events, err := audits.ListEvents(context.Background(), 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audited := false
+	for _, event := range events {
+		audited = audited || event.Action == audit.ActionAccountCreated && event.Target == account.ID && event.Actor == (authz.Actor{Kind: authz.ActorSystem, ID: "root"})
+	}
+	if !audited {
+		t.Fatal("bootstrap creation audit outcome missing")
+	}
+	second := identityRequest(handler, http.MethodPost, "/api/v1/users/bootstrap-admin", `{"login":"otheradmin","password":"another-unique-password-42"}`, "bootstrap-admin-2")
+	if second.Code != http.StatusPreconditionFailed {
+		t.Fatalf("second bootstrap status=%d body=%s", second.Code, second.Body)
 	}
 }
 

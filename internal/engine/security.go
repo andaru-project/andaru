@@ -84,6 +84,7 @@ func buildEngineRoutes() []routeCapability {
 	add(authz.UsersRead, "/api/v1/roles", read...)
 	add(authz.UsersRead, "/api/v1/users", read...)
 	add(authz.UsersManage, "/api/v1/users", http.MethodPost)
+	add(authz.UsersManage, "/api/v1/users/bootstrap-admin", http.MethodPost)
 	add(authz.UsersRead, "/api/v1/users/{id}", read...)
 	add(authz.UsersManage, "/api/v1/users/{id}", http.MethodPatch, http.MethodDelete)
 	add(authz.UsersManage, "/api/v1/users/{id}/password", http.MethodPut)

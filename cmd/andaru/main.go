@@ -25,7 +25,7 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	usage := "usage: andaru engine [--socket PATH] [--state-dir PATH] | andaru ctl [--socket PATH] links|prefixes|openapi|config|versions|preview|apply|applies|takeover|backup | andaru realize [--state-dir PATH] activate|rollback|confirm|boot|leases|prefixes | andaru upgrade check|prepare"
+	usage := "usage: andaru engine [--socket PATH] [--state-dir PATH] | andaru ctl [--socket PATH] links|prefixes|openapi|config|versions|preview|apply|applies|takeover|backup|users|tokens|audit | andaru realize [--state-dir PATH] activate|rollback|confirm|boot|leases|prefixes | andaru upgrade check|prepare"
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, usage)
 		return 2

@@ -386,6 +386,7 @@ func (s *store) BootstrapAdmin(ctx context.Context, login, displayName string, p
 	if _, err = tx.ExecContext(ctx, "INSERT INTO metadata(key,value) VALUES(?,0)", "account_epoch:"+account.ID); err != nil {
 		return Account{}, 0, err
 	}
+	setOperationTarget(ctx, account.ID)
 	revision, err = finishMutation(ctx, tx)
 	if err != nil {
 		return Account{}, 0, err

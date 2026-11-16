@@ -5161,6 +5161,19 @@
         "responses": {"201": {"description": "Committed account metadata", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OperationResult"}}}}}
       }
     },
+    "/api/v1/users/bootstrap-admin": {
+      "post": {
+        "operationId": "bootstrapAdministrator",
+        "description": "Creates the first administrator atomically. Available only to the verified root console while no account exists.",
+        "x-required-capability": "users.manage",
+        "parameters": [{"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 128}}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/BootstrapAdminRequest"}}}},
+        "responses": {
+          "201": {"description": "Committed administrator metadata", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OperationResult"}}}},
+          "200": {"description": "Recorded result replay", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OperationResult"}}}}
+        }
+      }
+    },
     "/api/v1/users/{id}": {
       "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}],
       "get": {
@@ -6737,6 +6750,16 @@
             }
           }
         ]
+      },
+      "BootstrapAdminRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["login", "password"],
+        "properties": {
+          "login": {"type": "string", "minLength": 3, "maxLength": 64},
+          "displayName": {"type": "string", "maxLength": 128},
+          "password": {"type": "string", "writeOnly": true, "minLength": 15, "maxLength": 512}
+        }
       },
       "CreateUserRequest": {
         "type": "object",

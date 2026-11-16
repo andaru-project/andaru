@@ -39,6 +39,28 @@ func TestMutationOperationRecordSharesIdentityCommit(t *testing.T) {
 	}
 }
 
+func TestBootstrapAdminOperationRecordsGeneratedTarget(t *testing.T) {
+	store, _ := openTestStore(t)
+	ctx := context.Background()
+	hash, err := store.HashRequest(ctx, []byte(`{"login":"operator"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := OperationIntent{
+		OperationID: "bootstrap-admin-1", RequestHash: hash,
+		Actor: authz.Actor{Kind: authz.ActorSystem, ID: "root"}, Source: "unix:uid:0",
+		Action: "account.created", Category: "protected",
+	}
+	account, _, err := store.BootstrapAdmin(WithOperation(ctx, intent), "operator", "Operator", []byte("unique-admin-password-41"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, found, err := store.LookupOperation(ctx, intent.OperationID)
+	if err != nil || !found || record.Target != "" || record.OutcomeTarget != account.ID {
+		t.Fatalf("bootstrap operation = %+v, found=%t err=%v", record, found, err)
+	}
+}
+
 func TestOperationRequestHashIsStableAndKeyed(t *testing.T) {
 	store, _ := openTestStore(t)
 	ctx := context.Background()
