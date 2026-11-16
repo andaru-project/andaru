@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -254,14 +255,80 @@ func validateIntent(intent Intent) error {
 
 func validateFields(actor authz.Actor, source string, action Action, target string, category Category) error {
 	rule, ok := actionRules[action]
-	if !ok || category != rule.category || !validActor(actor) || !validSource(source) || !safeText(target, 128) {
+	if !ok || category != rule.category || !validActor(actor) || !validSource(source) || !validTarget(action, target) {
 		return ErrInvalid
 	}
-	if action == ActionLoginFailure && (actor.Kind != authz.ActorSystem || target != "") {
+	if action == ActionLoginFailure && actor.Kind != authz.ActorSystem {
 		return ErrInvalid
 	}
 	return nil
 }
+
+func validTarget(action Action, target string) bool {
+	if target == "" {
+		switch action {
+		case ActionLoginFailure, ActionLoginBackoff, ActionPermissionDenied, ActionSecretExported,
+			ActionSetupCompleted, ActionRecoveryCompleted, ActionAuditQueried, ActionAuditHealth, ActionAuditRetentionPruned:
+			return true
+		default:
+			return false
+		}
+	}
+	switch action {
+	case ActionLoginSuccess, ActionAccountCreated, ActionAccountUpdated, ActionAccountDisabled, ActionAccountDeleted, ActionPasswordChanged:
+		return accountIDPattern.MatchString(target)
+	case ActionRoleChanged:
+		return target == authz.AdministratorRoleID || target == authz.ReadOnlyRoleID || roleIDPattern.MatchString(target)
+	case ActionSessionLogout, ActionSessionRevoked:
+		return validSelector(target, 32)
+	case ActionTokenCreated, ActionTokenRevoked:
+		return validSelector(target, 16)
+	case ActionConfigurationSaved, ActionConfigurationApplied, ActionConfigurationConfirmed, ActionConfigurationRollback:
+		return len(target) <= 9 && canonicalPositiveUint(target)
+	case ActionBackupRestored:
+		return len(target) == 32 && strings.ToLower(target) == target && isHex(target)
+	default:
+		return false
+	}
+}
+
+func validActor(actor authz.Actor) bool {
+	switch actor.Kind {
+	case authz.ActorSystem:
+		return actor.ID == "root"
+	case authz.ActorAccount:
+		return accountIDPattern.MatchString(actor.ID)
+	case authz.ActorToken:
+		return validSelector(actor.ID, 16)
+	default:
+		return false
+	}
+}
+
+func validSelector(value string, size int) bool {
+	if len(value) != base64.RawURLEncoding.EncodedLen(size) {
+		return false
+	}
+	selector, err := base64.RawURLEncoding.DecodeString(value)
+	return err == nil && len(selector) == size && base64.RawURLEncoding.EncodeToString(selector) == value
+}
+
+func isHex(value string) bool {
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func canonicalPositiveUint(value string) bool {
+	if value == "" || value[0] == '0' {
+		return false
+	}
+	return canonicalUint(value)
+}
+
+var (
+	accountIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	roleIDPattern    = regexp.MustCompile(`^rol_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+)
 
 func validateEvent(event Event, now time.Time, safety bool) (Event, error) {
 	rule := actionRules[event.Action]

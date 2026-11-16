@@ -28,12 +28,31 @@ func openTestStore(t *testing.T) (*Store, string) {
 	return s, dir
 }
 
+func testTarget(action Action) string {
+	switch action {
+	case ActionLoginSuccess, ActionAccountCreated, ActionAccountUpdated, ActionAccountDisabled, ActionAccountDeleted, ActionPasswordChanged:
+		return "00000000-0000-4000-8000-000000000001"
+	case ActionRoleChanged:
+		return "rol_00000000-0000-4000-8000-000000000001"
+	case ActionSessionLogout, ActionSessionRevoked:
+		return base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+	case ActionTokenCreated, ActionTokenRevoked:
+		return base64.RawURLEncoding.EncodeToString(make([]byte, 16))
+	case ActionConfigurationSaved, ActionConfigurationApplied, ActionConfigurationConfirmed, ActionConfigurationRollback:
+		return "1"
+	case ActionBackupRestored:
+		return strings.Repeat("a", 32)
+	default:
+		return ""
+	}
+}
+
 func testEvent(action Action, category Category, result Result) Event {
 	return Event{
 		Actor:    authz.Actor{Kind: authz.ActorSystem, ID: "root"},
 		Source:   "unix",
 		Action:   action,
-		Target:   "usr_00000000-0000-4000-8000-000000000001",
+		Target:   testTarget(action),
 		Result:   result,
 		Category: category,
 	}
@@ -45,9 +64,77 @@ func testIntent(id string, action Action, category Category) Intent {
 		Actor:       authz.Actor{Kind: authz.ActorSystem, ID: "root"},
 		Source:      "unix",
 		Action:      action,
-		Target:      "usr_00000000-0000-4000-8000-000000000001",
+		Target:      testTarget(action),
 		RequestHash: strings.Repeat("a", 64),
 		Category:    category,
+	}
+}
+
+func TestAuditActorAndTargetIdentifiersAreTyped(t *testing.T) {
+	const accountID = "00000000-0000-4000-8000-000000000001"
+	tokenSelector := base64.RawURLEncoding.EncodeToString(make([]byte, 16))
+	sessionSelector := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+	validCases := []struct {
+		name   string
+		actor  authz.Actor
+		action Action
+		target string
+	}{
+		{"root account target", authz.Actor{Kind: authz.ActorSystem, ID: "root"}, ActionAccountUpdated, accountID},
+		{"account actor", authz.Actor{Kind: authz.ActorAccount, ID: accountID}, ActionAccountUpdated, accountID},
+		{"token actor", authz.Actor{Kind: authz.ActorToken, ID: tokenSelector}, ActionTokenRevoked, tokenSelector},
+		{"role target", authz.Actor{Kind: authz.ActorSystem, ID: "root"}, ActionRoleChanged, "rol_00000000-0000-4000-8000-000000000001"},
+		{"built-in role target", authz.Actor{Kind: authz.ActorSystem, ID: "root"}, ActionRoleChanged, "administrator"},
+		{"session selector target", authz.Actor{Kind: authz.ActorAccount, ID: accountID}, ActionSessionRevoked, sessionSelector},
+		{"apply target", authz.Actor{Kind: authz.ActorSystem, ID: "root"}, ActionConfigurationApplied, "123456789"},
+		{"backup target", authz.Actor{Kind: authz.ActorSystem, ID: "root"}, ActionBackupRestored, strings.Repeat("a", 32)},
+		{"empty target", authz.Actor{Kind: authz.ActorSystem, ID: "root"}, ActionLoginFailure, ""},
+	}
+	for _, tc := range validCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateFields(tc.actor, "unix", tc.action, tc.target, actionRules[tc.action].category); err != nil {
+				t.Fatalf("valid public identifier rejected: %v", err)
+			}
+		})
+	}
+
+	secret := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+	for _, actor := range []authz.Actor{
+		{Kind: authz.ActorSystem, ID: secret},
+		{Kind: authz.ActorAccount, ID: secret},
+		{Kind: authz.ActorToken, ID: secret},
+	} {
+		t.Run("reject secret actor "+string(actor.Kind), func(t *testing.T) {
+			if err := validateFields(actor, "unix", ActionAccountUpdated, accountID, CategoryProtected); err == nil {
+				t.Fatal("credential-shaped actor ID accepted")
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name   string
+		action Action
+		target string
+	}{
+		{"unknown system actor", ActionAccountUpdated, accountID},
+		{"account mismatch", ActionAccountUpdated, "administrator"},
+		{"role mismatch", ActionRoleChanged, accountID},
+		{"token selector mismatch", ActionTokenRevoked, sessionSelector},
+		{"session selector mismatch", ActionSessionRevoked, tokenSelector},
+		{"apply mismatch", ActionConfigurationApplied, accountID},
+		{"backup mismatch", ActionBackupRestored, "1"},
+		{"missing required target", ActionAccountUpdated, ""},
+		{"unexpected target", ActionLoginFailure, accountID},
+		{"secret target", ActionAccountUpdated, secret},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			actor := authz.Actor{Kind: authz.ActorSystem, ID: "root"}
+			if tc.name == "unknown system actor" {
+				actor.ID = "unknown"
+			}
+			if err := validateFields(actor, "unix", tc.action, tc.target, actionRules[tc.action].category); err == nil {
+				t.Fatal("invalid actor/target contract accepted")
+			}
+		})
 	}
 }
 
