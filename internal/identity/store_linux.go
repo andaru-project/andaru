@@ -168,11 +168,20 @@ func verifySchema(ctx context.Context, db *sql.DB) error {
 		}
 	}
 	var count int
-	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM limiter_key WHERE id=1 AND length(secret)=32").Scan(&count); err != nil {
+	if err := db.QueryRowContext(ctx, "SELECT value FROM metadata WHERE key='revision'").Scan(new(int64)); err != nil {
+		return err
+	}
+	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM revisions WHERE revision=0").Scan(&count); err != nil {
 		return err
 	}
 	if count != 1 {
-		return errors.New("identity limiter key missing or invalid")
+		return errors.New("identity initial revision missing")
+	}
+	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM limiter_overload WHERE id=1").Scan(&count); err != nil {
+		return err
+	}
+	if count != 1 {
+		return errors.New("identity limiter overload state missing")
 	}
 	return nil
 }
