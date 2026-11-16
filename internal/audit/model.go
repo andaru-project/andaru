@@ -251,17 +251,18 @@ func validateIntent(intent Intent) error {
 	if !validOperationID(intent.OperationID) || !validRequestHash(intent.RequestHash) {
 		return ErrInvalid
 	}
-	if isCreationAction(intent.Action) && intent.Target == "" {
-		rule, ok := actionRules[intent.Action]
-		if !ok || intent.Category != rule.category || !validActor(intent.Actor) || !validSource(intent.Source) {
-			return ErrInvalid
-		}
-		if intent.Action == ActionLoginFailure && intent.Actor.Kind != authz.ActorSystem {
+	return validateIntentFields(intent.Actor, intent.Source, intent.Action, intent.Target, intent.Category)
+}
+
+func validateIntentFields(actor authz.Actor, source string, action Action, target string, category Category) error {
+	if isCreationAction(action) && target == "" {
+		rule, ok := actionRules[action]
+		if !ok || category != rule.category || !validActor(actor) || !validSource(source) {
 			return ErrInvalid
 		}
 		return nil
 	}
-	return validateFields(intent.Actor, intent.Source, intent.Action, intent.Target, intent.Category)
+	return validateFields(actor, source, action, target, category)
 }
 
 func isCreationAction(action Action) bool {

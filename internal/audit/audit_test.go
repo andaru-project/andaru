@@ -144,6 +144,7 @@ func TestAuditActorAndTargetIdentifiersAreTyped(t *testing.T) {
 		})
 	}
 }
+
 func TestCreationTargetsComeFromSuccessfulOutcomes(t *testing.T) {
 	s, _ := openTestStore(t)
 	ctx := context.Background()
@@ -172,6 +173,10 @@ func TestCreationTargetsComeFromSuccessfulOutcomes(t *testing.T) {
 		if err != nil || !replay.Replay || replay.Outcome == nil || replay.Outcome.Target != tc.target {
 			t.Fatalf("creation replay target for %s = %+v, %v", tc.action, replay, err)
 		}
+	}
+	report, err := s.Verify(ctx)
+	if err != nil || !report.Valid || report.EventCount != 4 {
+		t.Fatalf("integrity after creation outcomes = %+v, %v", report, err)
 	}
 }
 
@@ -936,7 +941,6 @@ func (s blockingOperationSource) LookupOperation(context.Context, string) (Opera
 	<-s.release
 	return OperationRecord{}, false, nil
 }
-
 
 func (emptyOperationSource) LookupOperation(context.Context, string) (OperationRecord, bool, error) {
 	return OperationRecord{}, false, nil

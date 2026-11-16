@@ -273,9 +273,12 @@ func (s *Store) Verify(ctx context.Context) (IntegrityReport, error) {
 }
 
 func validStoredEvent(event Event) bool {
+	fieldsValid := validateFields(event.Actor, event.Source, event.Action, event.Target, event.Category) == nil
+	if event.Result == ResultPending {
+		fieldsValid = validateIntentFields(event.Actor, event.Source, event.Action, event.Target, event.Category) == nil
+	}
 	if event.ID == 0 || event.Count == 0 || event.At.UnixMilli() < 0 || event.At.After(time.Now().Add(5*time.Minute)) ||
-		(event.Result == ResultPending && event.OperationID == "") ||
-		validateFields(event.Actor, event.Source, event.Action, event.Target, event.Category) != nil ||
+		(event.Result == ResultPending && event.OperationID == "") || !fieldsValid ||
 		!validResult(event.Result) || !validOperationIDOptional(event.OperationID) || validateMetadata(event.Metadata) != nil {
 		return false
 	}

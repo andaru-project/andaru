@@ -769,8 +769,10 @@ func readOutcome(ctx context.Context, tx *sql.Tx, operationID string, result Res
 		return Outcome{}, ErrIntegrity
 	}
 	var target string
-	if err := tx.QueryRowContext(ctx, `SELECT e.target FROM operations o JOIN events e ON e.id=o.outcome_event_id WHERE o.operation_id=?`, operationID).Scan(&target); err != nil {
-		return Outcome{}, err
+	if isCreationAction(action) {
+		if err := tx.QueryRowContext(ctx, `SELECT e.target FROM operations o JOIN events e ON e.id=o.outcome_event_id WHERE o.operation_id=?`, operationID).Scan(&target); err != nil {
+			return Outcome{}, err
+		}
 	}
 	rows, err := tx.QueryContext(ctx, "SELECT key,value FROM operation_metadata WHERE operation_id=? ORDER BY key", operationID)
 	if err != nil {
