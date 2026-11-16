@@ -201,7 +201,7 @@ func (s *Store) Begin(ctx context.Context, intent Intent) (RecordedOperation, er
 			_ = tx.Rollback()
 			return RecordedOperation{OperationID: intent.OperationID, Pending: true}, ErrOperationInFlight
 		case "completed":
-			outcome, e := readOutcome(ctx, tx, intent.OperationID, oldOutcome)
+			outcome, e := readOutcome(ctx, tx, intent.OperationID, oldOutcome, intent.Action)
 			if e != nil {
 				if errors.Is(e, ErrIntegrity) {
 					return RecordedOperation{}, s.abortIntegrity(ctx, tx)
@@ -313,14 +313,14 @@ func (s *Store) finish(ctx context.Context, outcome Outcome) error {
 	}
 	if state != "pending" {
 		if (state == "completed" || state == "not_committed") && existing == outcome.Result {
-			stored, readErr := readOutcome(ctx, tx, outcome.OperationID, existing)
+			stored, readErr := readOutcome(ctx, tx, outcome.OperationID, existing, Action(action))
 			if errors.Is(readErr, ErrIntegrity) {
 				return s.abortIntegrity(ctx, tx)
 			}
 			if readErr != nil {
 				return s.abortStorage(ctx, tx, readErr)
 			}
-			if equalMetadata(stored.Metadata, outcome.Metadata) {
+			if stored.Target == outcome.Target && equalMetadata(stored.Metadata, outcome.Metadata) {
 				if err = tx.Commit(); err != nil {
 					return s.storageError(ctx, err)
 				}
@@ -342,6 +342,9 @@ func (s *Store) finish(ctx context.Context, outcome Outcome) error {
 		OperationID: outcome.OperationID,
 		Category:    opCategory,
 		Metadata:    cloneMetadata(outcome.Metadata),
+	}
+	if isCreationAction(opAction) {
+		event.Target = outcome.Target
 	}
 	eventID, err := insertEvent(ctx, tx, event)
 	if err != nil {
@@ -761,9 +764,13 @@ func readEventMetadata(ctx context.Context, queryer interface {
 	return metadata, nil
 }
 
-func readOutcome(ctx context.Context, tx *sql.Tx, operationID string, result Result) (Outcome, error) {
+func readOutcome(ctx context.Context, tx *sql.Tx, operationID string, result Result, action Action) (Outcome, error) {
 	if result == "" || !validResult(result) || result == ResultPending {
 		return Outcome{}, ErrIntegrity
+	}
+	var target string
+	if err := tx.QueryRowContext(ctx, `SELECT e.target FROM operations o JOIN events e ON e.id=o.outcome_event_id WHERE o.operation_id=?`, operationID).Scan(&target); err != nil {
+		return Outcome{}, err
 	}
 	rows, err := tx.QueryContext(ctx, "SELECT key,value FROM operation_metadata WHERE operation_id=? ORDER BY key", operationID)
 	if err != nil {
@@ -781,10 +788,11 @@ func readOutcome(ctx context.Context, tx *sql.Tx, operationID string, result Res
 	if err = rows.Err(); err != nil {
 		return Outcome{}, err
 	}
-	if validateMetadata(metadata) != nil {
+	outcome := Outcome{OperationID: operationID, Result: result, Target: target, Metadata: metadata}
+	if validateOutcome(outcome, action) != nil {
 		return Outcome{}, ErrIntegrity
 	}
-	return Outcome{OperationID: operationID, Result: result, Metadata: metadata}, nil
+	return outcome, nil
 }
 
 func replaceOperationMetadata(ctx context.Context, tx *sql.Tx, operationID string, metadata map[string]string) error {

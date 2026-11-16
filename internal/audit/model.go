@@ -148,6 +148,7 @@ type Intent struct {
 type Outcome struct {
 	OperationID string
 	Result      Result
+	Target      string
 	Metadata    map[string]string
 }
 
@@ -250,7 +251,21 @@ func validateIntent(intent Intent) error {
 	if !validOperationID(intent.OperationID) || !validRequestHash(intent.RequestHash) {
 		return ErrInvalid
 	}
+	if isCreationAction(intent.Action) && intent.Target == "" {
+		rule, ok := actionRules[intent.Action]
+		if !ok || intent.Category != rule.category || !validActor(intent.Actor) || !validSource(intent.Source) {
+			return ErrInvalid
+		}
+		if intent.Action == ActionLoginFailure && intent.Actor.Kind != authz.ActorSystem {
+			return ErrInvalid
+		}
+		return nil
+	}
 	return validateFields(intent.Actor, intent.Source, intent.Action, intent.Target, intent.Category)
+}
+
+func isCreationAction(action Action) bool {
+	return action == ActionAccountCreated || action == ActionTokenCreated
 }
 
 func validateFields(actor authz.Actor, source string, action Action, target string, category Category) error {
@@ -358,6 +373,17 @@ func validateOutcome(outcome Outcome, action Action) error {
 		return ErrInvalid
 	}
 	if _, ok := actionRules[action]; !ok {
+		return ErrInvalid
+	}
+	if isCreationAction(action) {
+		if outcome.Result == ResultSuccess {
+			if !validTarget(action, outcome.Target) {
+				return ErrInvalid
+			}
+		} else if outcome.Target != "" {
+			return ErrInvalid
+		}
+	} else if outcome.Target != "" {
 		return ErrInvalid
 	}
 	return nil

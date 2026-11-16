@@ -144,6 +144,84 @@ func TestAuditActorAndTargetIdentifiersAreTyped(t *testing.T) {
 		})
 	}
 }
+func TestCreationTargetsComeFromSuccessfulOutcomes(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx := context.Background()
+	for _, tc := range []struct {
+		action   Action
+		category Category
+		target   string
+	}{
+		{ActionAccountCreated, CategoryProtected, "00000000-0000-4000-8000-000000000001"},
+		{ActionTokenCreated, CategoryGeneral, base64.RawURLEncoding.EncodeToString(make([]byte, 16))},
+	} {
+		intent := testIntent("create-"+string(tc.action), tc.action, tc.category)
+		intent.Target = ""
+		if _, err := s.Begin(ctx, intent); err != nil {
+			t.Fatalf("Begin %s without generated target: %v", tc.action, err)
+		}
+		outcome := Outcome{OperationID: intent.OperationID, Result: ResultSuccess, Target: tc.target}
+		if err := s.Finish(ctx, outcome); err != nil {
+			t.Fatalf("Finish %s with generated target: %v", tc.action, err)
+		}
+		events, err := s.ListEvents(ctx, 0, 100)
+		if err != nil || len(events) == 0 || events[len(events)-1].Target != tc.target {
+			t.Fatalf("creation event target for %s = %+v, %v", tc.action, events, err)
+		}
+		replay, err := s.Begin(ctx, intent)
+		if err != nil || !replay.Replay || replay.Outcome == nil || replay.Outcome.Target != tc.target {
+			t.Fatalf("creation replay target for %s = %+v, %v", tc.action, replay, err)
+		}
+	}
+}
+
+func TestCreationOutcomeRequiresValidPublicTargetOnlyOnSuccess(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx := context.Background()
+	for i, tc := range []struct {
+		name    string
+		action  Action
+		result  Result
+		target  string
+		invalid bool
+	}{
+		{"missing success target", ActionAccountCreated, ResultSuccess, "", true},
+		{"invalid account target", ActionAccountCreated, ResultSuccess, "not-an-account-id", true},
+		{"credential-shaped account target", ActionAccountCreated, ResultSuccess, base64.RawURLEncoding.EncodeToString(make([]byte, 32)), true},
+		{"credential-shaped token target", ActionTokenCreated, ResultSuccess, base64.RawURLEncoding.EncodeToString(make([]byte, 32)), true},
+		{"failed creation target", ActionAccountCreated, ResultFailure, "00000000-0000-4000-8000-000000000001", true},
+		{"not committed creation target", ActionAccountCreated, ResultNotCommitted, "00000000-0000-4000-8000-000000000001", true},
+		{"failed creation without target", ActionAccountCreated, ResultFailure, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			intent := testIntent(fmt.Sprintf("creation-check-%d", i), tc.action, actionRules[tc.action].category)
+			intent.Target = ""
+			if _, err := s.Begin(ctx, intent); err != nil {
+				t.Fatalf("Begin creation: %v", err)
+			}
+			err := s.Finish(ctx, Outcome{
+				OperationID: intent.OperationID,
+				Result:      tc.result,
+				Target:      tc.target,
+			})
+			if tc.invalid && !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Finish error = %v, want ErrInvalid", err)
+			}
+			if !tc.invalid && err != nil {
+				t.Fatalf("valid outcome rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestNonCreationIntentStillRequiresTarget(t *testing.T) {
+	s, _ := openTestStore(t)
+	intent := testIntent("empty-update-target", ActionAccountUpdated, CategoryProtected)
+	intent.Target = ""
+	if _, err := s.Begin(context.Background(), intent); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("empty non-creation target error = %v, want ErrInvalid", err)
+	}
+}
 
 func TestRootOnlyLayoutAndExclusiveOpen(t *testing.T) {
 	s, dir := openTestStore(t)
