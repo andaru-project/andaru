@@ -19,17 +19,17 @@ const (
 )
 
 var (
-	ErrClosed          = errors.New("identity store is closed")
-	ErrNotFound        = errors.New("identity account not found")
-	ErrConflict        = errors.New("identity revision conflict")
-	ErrInvalid         = errors.New("invalid identity account")
-	ErrInvariant       = errors.New("identity administrator invariant violated")
-	ErrAccountLimit    = errors.New("identity account limit reached")
-	ErrDuplicate       = errors.New("identity account already exists")
-	ErrAuthentication  = errors.New("identity authentication failed")
-	ErrRateLimited     = errors.New("identity login temporarily limited")
-	ErrUnauthorized    = errors.New("identity operation not authorized")
-	ErrTokenLimit      = errors.New("identity token limit reached")
+	ErrClosed         = errors.New("identity store is closed")
+	ErrNotFound       = errors.New("identity account not found")
+	ErrConflict       = errors.New("identity revision conflict")
+	ErrInvalid        = errors.New("invalid identity account")
+	ErrInvariant      = errors.New("identity administrator invariant violated")
+	ErrAccountLimit   = errors.New("identity account limit reached")
+	ErrDuplicate      = errors.New("identity account already exists")
+	ErrAuthentication = errors.New("identity authentication failed")
+	ErrRateLimited    = errors.New("identity login temporarily limited")
+	ErrUnauthorized   = errors.New("identity operation not authorized")
+	ErrTokenLimit     = errors.New("identity token limit reached")
 )
 
 type AccountKind string
