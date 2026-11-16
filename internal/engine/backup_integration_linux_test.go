@@ -69,6 +69,7 @@ func startBackupEngine(t *testing.T) (*http.Client, string, context.CancelFunc) 
 	done := make(chan error, 1)
 	go func() { done <- Serve(ctx, socket, stateDir) }()
 	client := unixTestClient(socket)
+	client.Timeout = 30 * time.Second
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		request, _ := http.NewRequest(http.MethodGet, "http://unix/api/v1/openapi.json", nil)
