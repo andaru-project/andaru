@@ -151,9 +151,9 @@ func TestValidateEventActorIDsByKind(t *testing.T) {
 	tokenSelector := base64.RawURLEncoding.EncodeToString(make([]byte, 16))
 	secret := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
 	for _, tc := range []struct {
-		name       string
-		actor      authz.Actor
-		wantValid  bool
+		name      string
+		actor     authz.Actor
+		wantValid bool
 	}{
 		{"known system actor", authz.Actor{Kind: authz.ActorSystem, ID: "root"}, true},
 		{"account UUID actor", authz.Actor{Kind: authz.ActorAccount, ID: accountID}, true},
