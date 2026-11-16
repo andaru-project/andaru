@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	LayoutVersion        = 1
+	LayoutVersion        = 2
 	generalBudget        = 80_000
 	protectedBudget      = 20_000
 	maxEvents            = generalBudget + protectedBudget
@@ -39,8 +39,10 @@ var (
 	ErrOperationConflict  = errors.New("operation ID conflicts with recorded request")
 	ErrOperationMismatch  = errors.New("authoritative operation does not match audit intent")
 	ErrOperationSource    = errors.New("authoritative operation source unavailable")
-	ErrIntegrity          = errors.New("audit integrity check failed")
-	ErrReceiptFull        = errors.New("emergency audit receipt is full")
+	ErrIntegrity              = errors.New("audit integrity check failed")
+	ErrReceiptFull            = errors.New("emergency audit receipt is full")
+	ErrReconciliationRequired = errors.New("audit reconciliation is required before mutation")
+	ErrReconciliationComplete = errors.New("audit reconciliation is only allowed before mutation")
 )
 
 type Category string

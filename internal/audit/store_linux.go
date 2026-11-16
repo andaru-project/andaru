@@ -21,12 +21,15 @@ import (
 var emergencyReceiptMu sync.Mutex
 
 type Store struct {
-	db             *sql.DB
-	lock           *os.File
-	stateDir       string
-	storageFailure atomic.Bool
-	closeOnce      sync.Once
-	closeErr       error
+	db                     *sql.DB
+	lock                   *os.File
+	stateDir               string
+	storageFailure         atomic.Bool
+	closeOnce              sync.Once
+	closeErr               error
+	startupMu              sync.RWMutex
+	startupOpen            atomic.Bool
+	reconciliationRequired bool
 }
 
 func Open(ctx context.Context, stateDir string) (*Store, error) {
@@ -51,7 +54,16 @@ func Open(ctx context.Context, stateDir string) (*Store, error) {
 		_ = lock.Close()
 		return nil, err
 	}
-	return &Store{db: db, lock: lock, stateDir: stateDir}, nil
+	var pending int64
+	if err = db.QueryRowContext(ctx, "SELECT count(*) FROM operations WHERE state='pending'").Scan(&pending); err != nil {
+		_ = db.Close()
+		_ = unix.Flock(int(lock.Fd()), unix.LOCK_UN)
+		_ = lock.Close()
+		return nil, err
+	}
+	s := &Store{db: db, lock: lock, stateDir: stateDir, reconciliationRequired: pending > 0}
+	s.startupOpen.Store(true)
+	return s, nil
 }
 
 func (s *Store) Close() error {
@@ -68,11 +80,13 @@ func (s *Store) Close() error {
 	})
 	return s.closeErr
 }
-
 func (s *Store) Append(ctx context.Context, event Event) (Event, error) {
+	if err := s.beginMutation(); err != nil {
+		return Event{}, err
+	}
+	defer s.endMutation()
 	return s.append(ctx, event, false)
 }
-
 // AppendSafety records the typed event in audit.db and an independent bounded receipt.
 // Callers must continue safety recovery even when this method reports an error.
 func (s *Store) AppendSafety(ctx context.Context, event Event) error {
@@ -80,6 +94,10 @@ func (s *Store) AppendSafety(ctx context.Context, event Event) error {
 	if err != nil {
 		return err
 	}
+	if err = s.beginMutation(); err != nil {
+		return err
+	}
+	defer s.endMutation()
 	receiptErr := WriteEmergencyReceipt(s.stateDir, prepared)
 	if receiptErr != nil {
 		s.storageFailure.Store(true)
@@ -150,6 +168,10 @@ func (s *Store) Begin(ctx context.Context, intent Intent) (RecordedOperation, er
 	if err := validateIntent(intent); err != nil {
 		return RecordedOperation{}, err
 	}
+	if err := s.beginMutation(); err != nil {
+		return RecordedOperation{}, err
+	}
+	defer s.endMutation()
 	now := time.Now().UTC()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -255,6 +277,14 @@ func (s *Store) Begin(ctx context.Context, intent Intent) (RecordedOperation, er
 }
 
 func (s *Store) Finish(ctx context.Context, outcome Outcome) error {
+	if err := s.beginMutation(); err != nil {
+		return err
+	}
+	defer s.endMutation()
+	return s.finish(ctx, outcome)
+}
+
+func (s *Store) finish(ctx context.Context, outcome Outcome) error {
 	if !validOperationID(outcome.OperationID) || !validResult(outcome.Result) || outcome.Result == ResultPending || validateMetadata(outcome.Metadata) != nil {
 		return ErrInvalid
 	}
@@ -452,7 +482,13 @@ func openDatabase(ctx context.Context, stateDir string) (*sql.DB, error) {
 		if txErr = tx.Commit(); txErr != nil {
 			return fail(txErr)
 		}
-	} else if appID != applicationID || version != LayoutVersion {
+	} else if appID != applicationID {
+		return fail(errors.New("audit database application or layout mismatch"))
+	} else if version == 1 {
+		if err = migrateV1(ctx, db); err != nil {
+			return fail(err)
+		}
+	} else if version != LayoutVersion {
 		return fail(errors.New("audit database application or layout mismatch"))
 	}
 	if err = verifySchema(ctx, db); err != nil {
@@ -642,6 +678,13 @@ func insertEvent(ctx context.Context, tx *sql.Tx, event Event) (uint64, error) {
 		return 0, errors.New("audit event ID was not allocated")
 	}
 	if err = insertMetadata(ctx, tx, id, event.Metadata); err != nil {
+		return 0, err
+	}
+	column := "total_inserted_general"
+	if event.Category == CategoryProtected {
+		column = "total_inserted_protected"
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE retention SET "+column+"="+column+"+1 WHERE id=1"); err != nil {
 		return 0, err
 	}
 	return uint64(id), nil
@@ -838,6 +881,20 @@ func writeEmergencyReceipt(stateDir string, event Event) error {
 		return wrapStorage(err)
 	}
 	return nil
+}
+
+func (s *Store) beginMutation() error {
+	s.startupMu.RLock()
+	if s.reconciliationRequired {
+		s.startupMu.RUnlock()
+		return ErrReconciliationRequired
+	}
+	s.startupOpen.Store(false)
+	return nil
+}
+
+func (s *Store) endMutation() {
+	s.startupMu.RUnlock()
 }
 
 func (s *Store) requireHealthy(ctx context.Context) error {

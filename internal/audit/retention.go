@@ -123,16 +123,24 @@ func (s *Store) Health(ctx context.Context) (Health, error) {
 
 func (s *Store) Verify(ctx context.Context) (IntegrityReport, error) {
 	report := IntegrityReport{Valid: true, SQLiteOK: true}
-	rows, err := s.db.QueryContext(ctx, "PRAGMA integrity_check")
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return report, s.storageError(ctx, err)
+	}
+	fail := func(err error) (IntegrityReport, error) {
+		_ = tx.Rollback()
+		return report, s.storageError(ctx, err)
+	}
+	rows, err := tx.QueryContext(ctx, "PRAGMA integrity_check")
+	if err != nil {
+		return fail(err)
 	}
 	checks := 0
 	for rows.Next() {
 		var result string
 		if err = rows.Scan(&result); err != nil {
 			rows.Close()
-			return report, s.storageError(ctx, err)
+			return fail(err)
 		}
 		checks++
 		if result != "ok" {
@@ -141,32 +149,42 @@ func (s *Store) Verify(ctx context.Context) (IntegrityReport, error) {
 	}
 	if err = rows.Err(); err != nil {
 		rows.Close()
-		return report, s.storageError(ctx, err)
+		return fail(err)
 	}
 	if err = rows.Close(); err != nil {
-		return report, s.storageError(ctx, err)
+		return fail(err)
 	}
 	if checks == 0 {
 		report.SQLiteOK = false
 	}
-	status, err := s.Retention(ctx)
-	if err != nil {
-		return report, err
+
+	var watermark, prunedGeneral, prunedProtected, insertedGeneral, insertedProtected int64
+	if err = tx.QueryRowContext(ctx, `SELECT watermark_id,total_pruned_general,total_pruned_protected,
+		total_inserted_general,total_inserted_protected FROM retention WHERE id=1`).
+		Scan(&watermark, &prunedGeneral, &prunedProtected, &insertedGeneral, &insertedProtected); err != nil {
+		return fail(err)
 	}
-	report.PrunedThrough = status.Watermark
-	rows, err = s.db.QueryContext(ctx, `SELECT e.id,e.at,e.actor_kind,e.actor_id,e.source,e.action,e.target,e.result,e.operation_id,e.category,e.coalesced_count,m.key,m.value
+	if watermark < 0 || prunedGeneral < 0 || prunedProtected < 0 || insertedGeneral < 0 || insertedProtected < 0 {
+		report.InvalidEvents++
+	}
+	if watermark < 0 {
+		watermark = 0
+	}
+	report.PrunedThrough = uint64(watermark)
+
+	rows, err = tx.QueryContext(ctx, `SELECT e.id,e.at,e.actor_kind,e.actor_id,e.source,e.action,e.target,e.result,e.operation_id,e.category,e.coalesced_count,m.key,m.value
 		FROM events e LEFT JOIN event_metadata m ON m.event_id=e.id ORDER BY e.id,m.key`)
 	if err != nil {
-		return report, s.storageError(ctx, err)
+		return fail(err)
 	}
 	var current Event
 	metadata := map[string]string{}
-	expected := status.Watermark + 1
+	expected := uint64(watermark) + 1
 	flush := func() {
 		if current.ID == 0 {
 			return
 		}
-		if current.ID > status.Watermark {
+		if current.ID > uint64(watermark) {
 			if current.ID != expected {
 				report.Gaps = append(report.Gaps, IDGap{After: expected - 1, Before: current.ID})
 			}
@@ -185,7 +203,7 @@ func (s *Store) Verify(ctx context.Context) (IntegrityReport, error) {
 		var key, value sql.NullString
 		if err = rows.Scan(&id, &at, &actorKind, &event.Actor.ID, &event.Source, &action, &event.Target, &result, &event.OperationID, &category, &count, &key, &value); err != nil {
 			rows.Close()
-			return report, s.storageError(ctx, err)
+			return fail(err)
 		}
 		if id <= 0 || count <= 0 {
 			report.InvalidEvents++
@@ -209,31 +227,45 @@ func (s *Store) Verify(ctx context.Context) (IntegrityReport, error) {
 	}
 	if err = rows.Err(); err != nil {
 		rows.Close()
-		return report, s.storageError(ctx, err)
+		return fail(err)
 	}
 	if err = rows.Close(); err != nil {
-		return report, s.storageError(ctx, err)
+		return fail(err)
 	}
 	flush()
+
 	var sequence int64
-	if err = s.db.QueryRowContext(ctx, "SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='events'),0)").Scan(&sequence); err != nil {
-		return report, s.storageError(ctx, err)
+	if err = tx.QueryRowContext(ctx, "SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='events'),0)").Scan(&sequence); err != nil {
+		return fail(err)
 	}
 	if sequence < 0 {
 		report.InvalidEvents++
-	} else if uint64(sequence) > status.Watermark && uint64(sequence) >= expected {
+	} else if uint64(sequence) > uint64(watermark) && uint64(sequence) >= expected {
 		report.Gaps = append(report.Gaps, IDGap{After: expected - 1, Before: uint64(sequence) + 1})
 	}
 	var pending int64
-	if err = s.db.QueryRowContext(ctx, "SELECT count(*) FROM operations WHERE state='pending'").Scan(&pending); err != nil {
-		return report, s.storageError(ctx, err)
+	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM operations WHERE state='pending'").Scan(&pending); err != nil {
+		return fail(err)
 	}
 	if pending < 0 {
 		report.InvalidEvents++
 	} else {
 		report.PendingOperations = uint64(pending)
 	}
+	var actualGeneral, actualProtected int64
+	if err = tx.QueryRowContext(ctx, `SELECT
+		(SELECT count(*) FROM events WHERE category='general'),
+		(SELECT count(*) FROM events WHERE category='protected')`).Scan(&actualGeneral, &actualProtected); err != nil {
+		return fail(err)
+	}
+	if insertedGeneral < prunedGeneral || insertedGeneral-prunedGeneral != actualGeneral ||
+		insertedProtected < prunedProtected || insertedProtected-prunedProtected != actualProtected {
+		report.InvalidEvents++
+	}
 	report.Valid = report.SQLiteOK && len(report.Gaps) == 0 && report.InvalidEvents == 0
+	if err = tx.Commit(); err != nil {
+		return report, s.storageError(ctx, err)
+	}
 	if !report.Valid {
 		s.setIntegrityFailure(ctx)
 	}

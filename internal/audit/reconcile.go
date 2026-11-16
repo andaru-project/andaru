@@ -17,7 +17,22 @@ func (s *Store) Reconcile(ctx context.Context, source OperationSource) error {
 	if source == nil {
 		return ErrInvalid
 	}
+	s.startupMu.Lock()
+	defer s.startupMu.Unlock()
+	if !s.startupOpen.Load() {
+		return ErrReconciliationComplete
+	}
+	if err := s.reconcile(ctx, source); err != nil {
+		return err
+	}
+	s.reconciliationRequired = false
+	s.startupOpen.Store(false)
+	return nil
+}
+
+func (s *Store) reconcile(ctx context.Context, source OperationSource) error {
 	cursor := ""
+
 	for {
 		rows, err := s.db.QueryContext(ctx, `SELECT operation_id,request_hash,actor_kind,actor_id,source,action,target,category
 			FROM operations WHERE state='pending' AND operation_id>? ORDER BY operation_id LIMIT ?`, cursor, reconcileBatch)
@@ -60,7 +75,7 @@ func (s *Store) Reconcile(ctx context.Context, source OperationSource) error {
 				return ErrOperationSource
 			}
 			if !found {
-				if err = s.Finish(ctx, Outcome{
+				if err = s.finish(ctx, Outcome{
 					OperationID: intent.OperationID,
 					Result:      ResultNotCommitted,
 					Metadata:    map[string]string{MetadataReasonCode: ReasonNotCommitted},
@@ -73,7 +88,7 @@ func (s *Store) Reconcile(ctx context.Context, source OperationSource) error {
 				s.setIntegrityFailure(ctx)
 				return ErrOperationMismatch
 			}
-			if err = s.Finish(ctx, record.Outcome); err != nil {
+			if err = s.finish(ctx, record.Outcome); err != nil {
 				if errors.Is(err, ErrInvalid) {
 					s.setIntegrityFailure(ctx)
 					return ErrOperationMismatch

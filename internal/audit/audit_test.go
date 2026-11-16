@@ -218,22 +218,28 @@ func TestProtectedBudgetRefusesFreshProtectedEvents(t *testing.T) {
 func TestExpiredEventsPruneWithWatermark(t *testing.T) {
 	s, _ := openTestStore(t)
 	ctx := context.Background()
-	old := time.Now().UTC().Add(-366 * 24 * time.Hour).UnixMilli()
-	_, err := s.db.ExecContext(ctx, `INSERT INTO events(id,at,actor_kind,actor_id,source,action,target,result,operation_id,category,coalesced_count)
-		VALUES(41,?,'system','root','unix','login.success','','success','','general',1)`, old)
+	expired, err := s.Append(ctx, testEvent(ActionLoginSuccess, CategoryGeneral, ResultSuccess))
 	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().UTC().Add(-366 * 24 * time.Hour).UnixMilli()
+	if _, err = s.db.ExecContext(ctx, "UPDATE events SET at=? WHERE id=?", old, expired.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = s.Append(ctx, testEvent(ActionLoginSuccess, CategoryGeneral, ResultSuccess)); err != nil {
 		t.Fatal(err)
 	}
 	status, err := s.Retention(ctx)
-	if err != nil || status.Watermark != 41 || status.LastPruned.ExpiredGeneral != 1 {
+	if err != nil || status.Watermark != expired.ID || status.LastPruned.ExpiredGeneral != 1 {
 		t.Fatalf("retention = %+v, %v", status, err)
 	}
 	got, err := s.ListEvents(ctx, 0, 100)
 	if err != nil || len(got) != 1 || got[0].ID <= status.Watermark {
 		t.Fatalf("retained events = %+v, %v", got, err)
+	}
+	report, err := s.Verify(ctx)
+	if err != nil || !report.Valid {
+		t.Fatalf("integrity report after authorized pruning = %+v, %v", report, err)
 	}
 }
 
@@ -255,6 +261,65 @@ func TestVerifyReportsUnexplainedEventGaps(t *testing.T) {
 	health, err := s.Health(ctx)
 	if err != nil || !health.IntegrityFailure {
 		t.Fatalf("health = %+v, %v", health, err)
+	}
+}
+
+func TestVerifyConcurrentAppendUsesOneSnapshot(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx := context.Background()
+	const appends = 40
+	start := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		<-start
+		for range appends {
+			if _, err := s.Append(ctx, testEvent(ActionLoginSuccess, CategoryGeneral, ResultSuccess)); err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+	close(start)
+	for range appends {
+		report, err := s.Verify(ctx)
+		if err != nil || !report.Valid {
+			t.Fatalf("integrity report during concurrent append = %+v, %v", report, err)
+		}
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVerifyDetectsRetainedProtectedDeletionAfterMixedAgePruning(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx := context.Background()
+	protected, err := s.Append(ctx, testEvent(ActionTokenRevoked, CategoryProtected, ResultSuccess))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired, err := s.Append(ctx, testEvent(ActionLoginSuccess, CategoryGeneral, ResultSuccess))
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().UTC().Add(-366 * 24 * time.Hour).UnixMilli()
+	if _, err = s.db.ExecContext(ctx, "UPDATE events SET at=? WHERE id=?", old, expired.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Append(ctx, testEvent(ActionLoginSuccess, CategoryGeneral, ResultSuccess)); err != nil {
+		t.Fatal(err)
+	}
+	status, err := s.Retention(ctx)
+	if err != nil || status.Watermark != expired.ID || status.Watermark < protected.ID {
+		t.Fatalf("retention = %+v, %v", status, err)
+	}
+	if _, err = s.db.ExecContext(ctx, "DELETE FROM events WHERE id=?", protected.ID); err != nil {
+		t.Fatal(err)
+	}
+	report, err := s.Verify(ctx)
+	if err != nil || report.Valid || report.InvalidEvents == 0 {
+		t.Fatalf("retained protected deletion was not reported: %+v, %v", report, err)
 	}
 }
 
@@ -289,6 +354,10 @@ func TestRestartReconciliationReplaysAuthoritativeCommit(t *testing.T) {
 		Category:    intent.Category,
 		Outcome:     outcome,
 	}}
+
+	if _, err = s.Append(ctx, testEvent(ActionLoginSuccess, CategoryGeneral, ResultSuccess)); !errors.Is(err, ErrReconciliationRequired) {
+		t.Fatalf("mutation before startup reconciliation = %v", err)
+	}
 	if err = s.Reconcile(ctx, source); err != nil {
 		t.Fatal(err)
 	}
@@ -326,6 +395,35 @@ func TestAuthoritativeAbsenceAllowsSameRequestRetry(t *testing.T) {
 		t.Fatalf("retry after authoritative absence = %+v, %v", retry, err)
 	}
 	_ = s.Close()
+}
+
+func TestReconcileCannotMarkPausedLiveMutationNotCommitted(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx := context.Background()
+	intent := testIntent("request-paused", ActionAccountUpdated, CategoryProtected)
+	if _, err := s.Begin(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	paused := make(chan struct{})
+	resume := make(chan struct{})
+	finished := make(chan error, 1)
+	go func() {
+		close(paused)
+		<-resume
+		finished <- s.Finish(ctx, Outcome{OperationID: intent.OperationID, Result: ResultSuccess})
+	}()
+	<-paused
+	if err := s.Reconcile(ctx, emptyOperationSource{}); !errors.Is(err, ErrReconciliationComplete) {
+		t.Fatalf("reconciliation during a live operation = %v", err)
+	}
+	var state string
+	if err := s.db.QueryRowContext(ctx, "SELECT state FROM operations WHERE operation_id=?", intent.OperationID).Scan(&state); err != nil || state != "pending" {
+		t.Fatalf("paused operation state = %q, %v", state, err)
+	}
+	close(resume)
+	if err := <-finished; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestEmergencyReceiptCanBeWrittenWithoutDatabase(t *testing.T) {
@@ -410,11 +508,22 @@ func seedEvents(t *testing.T, s *Store, category Category, count uint64) {
 	if category == CategoryProtected {
 		action = string(ActionTokenRevoked)
 	}
-	_, err := s.db.Exec(`WITH d(n) AS (VALUES(0),(1),(2),(3),(4),(5),(6),(7),(8),(9)),
+	res, err := s.db.Exec(`WITH d(n) AS (VALUES(0),(1),(2),(3),(4),(5),(6),(7),(8),(9)),
 		seq(i) AS (SELECT a.n*10000+b.n*1000+c.n*100+d.n*10+e.n+1 FROM d a CROSS JOIN d b CROSS JOIN d c CROSS JOIN d d CROSS JOIN d e)
 		INSERT INTO events(at,actor_kind,actor_id,source,action,target,result,operation_id,category,coalesced_count)
 		SELECT ?, 'system','root','unix',?,'',?,'',?,1 FROM seq WHERE i<=?`, time.Now().UnixMilli(), action, result, category, count)
 	if err != nil {
+		t.Fatal(err)
+	}
+	inserted, err := res.RowsAffected()
+	if err != nil {
+		t.Fatal(err)
+	}
+	column := "total_inserted_general"
+	if category == CategoryProtected {
+		column = "total_inserted_protected"
+	}
+	if _, err = s.db.Exec("UPDATE retention SET "+column+"="+column+"+?", inserted); err != nil {
 		t.Fatal(err)
 	}
 }
