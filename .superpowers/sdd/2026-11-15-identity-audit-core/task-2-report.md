@@ -87,3 +87,10 @@ No checks run in this fix round. No language-server references check was availab
 - `TestRollingFailureWindowBoundaryTimestamps` exercises offsets 0, 898, 899, 900, 901, and 902, verifies threshold timing, then confirms reset after expiry. Existing saturation fixtures now seed valid timestamp windows.
 - Deferred: parent reruns `go test -tags=integration ./internal/identity -count=1`, `go test -race ./internal/identity`, benchmark, and formatting/lint/build checks. None were run in this fix.
 - Concerns: no schema migration is included; Task 2B HTTP/cookie serialization and later-task work remain out of scope.
+
+## Round 2 Argon qualification follow-up
+
+- Fixed the qualification test's active-counter channel type; no production change.
+- `gofmt -d internal/identity/account_password_test.go` produced no output.
+- Expected parent command: `go test -tags=integration ./internal/identity -count=1`; qualification logs `max-active=2`, measured heap delta, mean hash latency, and wall time.
+- No tests or builds were run in this follow-up.

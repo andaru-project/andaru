@@ -361,7 +361,7 @@ func TestArgon2ProductionPolicyQualification(t *testing.T) {
 			current := active.Add(1)
 			for old := peakActive.Load(); current > old && !peakActive.CompareAndSwap(old, current); old = peakActive.Load() {
 			}
-			ready <- current
+			ready <- int(current)
 			<-startHash
 			started := time.Now()
 			_, err = derivePasswordHash(password)
@@ -431,7 +431,6 @@ func TestArgon2ProductionPolicyQualification(t *testing.T) {
 	t.Logf("Argon2 v%d m=%dKiB t=%d p=%d: max-active=%d peak-heap-delta=%dMiB mean-hash-latency=%s wall=%s",
 		argonVersion, argonMemory, argonTime, argonThreads, peakActive.Load(), peakDelta/(1024*1024), totalLatency/2, time.Since(started))
 }
-
 
 func TestStoreExposesReusableAdministratorInvariant(t *testing.T) {
 	s, _ := openTestStore(t)
