@@ -459,7 +459,7 @@ func validDeclarationView(raw json.RawMessage) bool {
 		SchemaVersion          int
 		Links, Segments, Zones []json.RawMessage
 	}
-	return json.Unmarshal(raw, &d) == nil && (d.SchemaVersion == 1 || d.SchemaVersion == 2) && d.Links != nil && d.Segments != nil && d.Zones != nil
+	return json.Unmarshal(raw, &d) == nil && (d.SchemaVersion == 1 || d.SchemaVersion == 2 || d.SchemaVersion == 3) && d.Links != nil && d.Segments != nil && d.Zones != nil
 }
 func validEnvelope(kind string, body []byte) bool {
 	if !jsontext.Value(body).IsValid() {

@@ -470,7 +470,7 @@ func TestBackupCLIReportsUnknownCommitOutcome(t *testing.T) {
 	if got := <-code; got == 0 || fixture.commits.Load() != 1 {
 		t.Fatal("lost commit reply was not treated as an unknown outcome")
 	}
-	if !strings.Contains(stderr.String(), "outcome may be unknown") || !strings.Contains(stderr.String(), "inspect the current saved head") || strings.Contains(stdout.String(), `"state":"saved"`) {
+	if !strings.Contains(stderr.String(), "outcome may be unknown") || !strings.Contains(stderr.String(), "inspect the current saved and identity revisions") || strings.Contains(stdout.String(), `"state":"saved"`) {
 		t.Fatalf("unknown outcome was not actionable: stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }

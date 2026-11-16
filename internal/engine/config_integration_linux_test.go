@@ -101,7 +101,7 @@ func TestConfigurationHTTPContract(t *testing.T) {
 	assertAPIError(t, configCall(h, "POST", "/api/v1/config/zones", `{"name":"renamed"}`, ""), 422, "VALIDATION_FAILED")
 	history := configCall(h, "GET", "/api/v1/versions?limit=2", "", "")
 	var hv config.HistoryView
-	if e := json.Unmarshal(history.Body.Bytes(), &hv); e != nil || len(hv.Items) != 2 || hv.Items[0].ID != "2" || hv.Items[0].Actor != "unix:uid:0" {
+	if e := json.Unmarshal(history.Body.Bytes(), &hv); e != nil || len(hv.Items) != 2 || hv.Items[0].ID != "2" || hv.Items[0].Actor != "system.root" {
 		t.Fatalf("history: %s %v", history.Body, e)
 	}
 	head := configCall(h, "HEAD", path, "", "")
@@ -135,6 +135,8 @@ func TestConfigurationHTTPContract(t *testing.T) {
 		"/api/v1/users/{id}/password": {"put"}, "/api/v1/tokens": {"get", "head", "post"},
 		"/api/v1/tokens/{selector}": {"delete"}, "/api/v1/audit/events": {"get", "head"},
 		"/api/v1/audit/export": {"get", "head"},
+		"/api/v1/session": {"get", "post", "delete"}, "/api/v1/sessions": {"get"},
+		"/api/v1/sessions/{id}": {"delete"}, "/api/v1/startup-status": {"get", "head"},
 	}
 	if len(document.Paths) != len(expected) {
 		t.Fatalf("unimplemented or missing contract paths: %d", len(document.Paths))
@@ -356,12 +358,20 @@ func TestConfigurationHTTPConcurrencyAndSecrets(t *testing.T) {
 
 func TestEngineStoreFailureExit(t *testing.T) {
 	requireRoot(t)
+	bin := os.Getenv("ANDARU_TEST_BINARY")
+	if !filepath.IsAbs(bin) {
+		bin = filepath.Join(t.TempDir(), "andaru")
+		build := exec.Command("go", "build", "-o", bin, "github.com/andaru-project/andaru/cmd/andaru")
+		if out, err := build.CombinedOutput(); err != nil {
+			t.Fatalf("build engine binary: %v\n%s", err, out)
+		}
+	}
 	exe, e := os.Executable()
 	if e != nil {
 		t.Fatal(e)
 	}
 	cmd := exec.Command("unshare", "--mount", "--propagation", "private", exe, "--engine-enosp")
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(), "ANDARU_TEST_BINARY="+bin)
 	if out, e := cmd.CombinedOutput(); e != nil {
 		t.Fatalf("actual engine fencing proof: %v\n%s", e, out)
 	}
