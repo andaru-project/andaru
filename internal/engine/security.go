@@ -347,7 +347,7 @@ func (c *securityCoordinator) LookupOperation(ctx context.Context, operationID s
 		Action:      audit.Action(record.Action),
 		Target:      record.Target,
 		Category:    audit.Category(record.Category),
-		Outcome:     audit.Outcome{
+		Outcome: audit.Outcome{
 			OperationID: record.OperationID,
 			Result:      audit.Result(record.Result),
 			Target:      record.OutcomeTarget,
@@ -419,4 +419,3 @@ func (c *securityCoordinator) execute(
 	finishErr := c.audits.Finish(ctx, outcome)
 	return operationExecution{Outcome: outcome, Value: value, Committed: true, AuditPending: finishErr != nil}, nil
 }
-

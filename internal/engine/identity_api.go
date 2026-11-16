@@ -38,10 +38,10 @@ type operationResponse struct {
 
 type tokenIssueResponse struct {
 	operationResponse
-	Selector          string    `json:"selector"`
-	Secret            string    `json:"secret,omitempty"`
-	SecretUnavailable bool      `json:"secretUnavailable"`
-	Token             *tokenView `json:"token,omitempty"`
+	Selector string `json:"selector"`
+	Secret string `json:"secret,omitempty"`
+	SecretUnavailable bool `json:"secretUnavailable"`
+	Token *tokenView `json:"token,omitempty"`
 }
 
 type identityPage[T any] struct {
@@ -62,34 +62,34 @@ type userView struct {
 }
 
 type roleView struct {
-	ID           string               `json:"id"`
-	Name         string               `json:"name"`
-	Description  string               `json:"description,omitempty"`
-	Capabilities []authz.Capability   `json:"capabilities"`
-	BuiltIn      string               `json:"builtIn,omitempty"`
+	ID string `json:"id"`
+	Name string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Capabilities []authz.Capability `json:"capabilities"`
+	BuiltIn string `json:"builtIn,omitempty"`
 }
 
 type tokenView struct {
-	Selector               string              `json:"selector"`
-	AccountID              string              `json:"accountId"`
-	Name                   string              `json:"name"`
-	Scope                  []authz.Capability  `json:"scope"`
-	CreatedAt              time.Time           `json:"createdAt"`
-	ExpiresAt              *time.Time          `json:"expiresAt,omitempty"`
-	NoExpiry               bool                `json:"noExpiry"`
-	RevokedAt              *time.Time          `json:"revokedAt,omitempty"`
-	LastUsedAt             *time.Time          `json:"lastUsedAt,omitempty"`
-	RevokeOnPasswordChange bool                `json:"revokeOnPasswordChange"`
-	Revision               uint64              `json:"revision"`
+	Selector string `json:"selector"`
+	AccountID string `json:"accountId"`
+	Name string `json:"name"`
+	Scope []authz.Capability `json:"scope"`
+	CreatedAt time.Time `json:"createdAt"`
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
+	NoExpiry bool `json:"noExpiry"`
+	RevokedAt *time.Time `json:"revokedAt,omitempty"`
+	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
+	RevokeOnPasswordChange bool `json:"revokeOnPasswordChange"`
+	Revision uint64 `json:"revision"`
 }
 
 type createUserRequest struct {
-	Login            string                `json:"login"`
-	DisplayName      string                `json:"displayName"`
-	Kind             identity.AccountKind  `json:"kind"`
-	Enabled          *bool                 `json:"enabled"`
-	RoleIDs          []string              `json:"roleIds"`
-	ExpectedRevision *int64                `json:"expectedRevision"`
+	Login string `json:"login"`
+	DisplayName string `json:"displayName"`
+	Kind identity.AccountKind `json:"kind"`
+	Enabled *bool `json:"enabled"`
+	RoleIDs []string `json:"roleIds"`
+	ExpectedRevision *int64 `json:"expectedRevision"`
 }
 
 type updateUserRequest struct {
@@ -950,5 +950,3 @@ func writeIdentityError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusServiceUnavailable, "STORE_UNAVAILABLE", "The identity store is unavailable; inspect the engine journal.")
 	}
 }
-
-
