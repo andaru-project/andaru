@@ -396,10 +396,12 @@ func validateOutcome(outcome Outcome, action Action) error {
 			if !validTarget(action, outcome.Target) {
 				return ErrInvalid
 			}
-		case ResultFailure, ResultNotCommitted:
+		case ResultFailure, ResultDenied, ResultCommitted, ResultNotCommitted, ResultUnavailable, ResultRecovered, ResultRolledBack:
 			if outcome.Target != "" {
 				return ErrInvalid
 			}
+		default:
+			return ErrInvalid
 		}
 	} else if outcome.Target != "" {
 		return ErrInvalid
