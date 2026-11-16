@@ -571,6 +571,71 @@ func TestPasswordLoginBucketsIPv6AndCancellation(t *testing.T) {
 	}
 }
 
+func TestRollingFailureWindowBoundaryTimestamps(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTestStore(t)
+	loginHash := s.loginBucketHash("boundary")
+	var sources [2]sourceBucket
+	base := int64(1_000_000)
+	tests := []struct {
+		offset int64
+		count  int
+		start  int64
+		locked bool
+	}{
+		{0, 1, 0, false},
+		{898, 2, 0, false},
+		{899, 3, 0, false},
+		{900, 3, 898, false},
+		{901, 4, 898, false},
+		{902, 5, 898, true},
+	}
+	for _, test := range tests {
+		now := base + test.offset
+		if err := s.beginLogin(ctx, loginHash, sources, 0, now); err != nil {
+			t.Fatalf("begin at %d: %v", test.offset, err)
+		}
+		if err := s.recordLoginFailure(ctx, loginHash, sources, 0, now); err != nil {
+			t.Fatalf("failure at %d: %v", test.offset, err)
+		}
+		var failures, level int
+		var windowStarted, backoffUntil int64
+		var encoded []byte
+		if err := s.db.QueryRowContext(ctx, "SELECT failures,failure_times,window_started_at,backoff_level,backoff_until FROM login_limits WHERE bucket_hash=?", loginHash[:]).Scan(&failures, &encoded, &windowStarted, &level, &backoffUntil); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := decodeFailureTimes(encoded, failures, windowStarted); err != nil {
+			t.Fatalf("failure timestamps at %d: %v", test.offset, err)
+		}
+		expectedStart := base + test.start
+		if failures != test.count || windowStarted != expectedStart || (backoffUntil > now) != test.locked {
+			t.Fatalf("failure at %d: count=%d start=%d backoff=%d", test.offset, failures, windowStarted, backoffUntil)
+		}
+		if test.locked && (level != 1 || backoffUntil != now+8) {
+			t.Fatalf("fifth trailing failure backoff: level=%d until=%d", level, backoffUntil)
+		}
+	}
+	expiredAt := base + 1803
+	if err := s.beginLogin(ctx, loginHash, sources, 0, expiredAt); err != nil {
+		t.Fatalf("expired window begin: %v", err)
+	}
+	if err := s.recordLoginFailure(ctx, loginHash, sources, 0, expiredAt); err != nil {
+		t.Fatalf("expired window failure: %v", err)
+	}
+	var failures, level int
+	var windowStarted, backoffUntil int64
+	var encoded []byte
+	if err := s.db.QueryRowContext(ctx, "SELECT failures,failure_times,window_started_at,backoff_level,backoff_until FROM login_limits WHERE bucket_hash=?", loginHash[:]).Scan(&failures, &encoded, &windowStarted, &level, &backoffUntil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeFailureTimes(encoded, failures, windowStarted); err != nil {
+		t.Fatal(err)
+	}
+	if failures != 1 || level != 0 || backoffUntil != 0 || windowStarted != expiredAt {
+		t.Fatalf("expired rolling window did not reset: count=%d level=%d start=%d backoff=%d", failures, level, windowStarted, backoffUntil)
+	}
+}
+
 func TestLoginBackoffThresholdCapAndRollingExpiry(t *testing.T) {
 	ctx := context.Background()
 	s, _ := openTestStore(t)
@@ -580,8 +645,9 @@ func TestLoginBackoffThresholdCapAndRollingExpiry(t *testing.T) {
 	now := time.Now().Unix()
 	windowStart := now - 600
 	loginHash := s.loginBucketHash("threshold")
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO login_limits(bucket_hash,failures,window_started_at,expires_at,backoff_level,backoff_until)
-		VALUES(?,4,?,?,0,0)`, loginHash[:], windowStart, now+900); err != nil {
+	failureTimes := encodeFailureTimes(failureTimes{windowStart, windowStart + 150, windowStart + 300, windowStart + 450})
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO login_limits(bucket_hash,failures,failure_times,window_started_at,expires_at,backoff_level,backoff_until)
+		VALUES(?,4,?,?,?,0,0)`, loginHash[:], failureTimes, windowStart, now+900); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.AuthenticatePassword(ctx, "threshold", "incorrect-password-2026", "203.0.113.11", 1); !errors.Is(err, ErrAuthentication) {
@@ -598,7 +664,7 @@ func TestLoginBackoffThresholdCapAndRollingExpiry(t *testing.T) {
 		t.Fatalf("login-key backoff did not follow five failures: %v", err)
 	}
 	if _, err := s.db.ExecContext(ctx, `UPDATE login_limits SET failures=5,window_started_at=?,expires_at=?,backoff_level=9,backoff_until=?
-		WHERE bucket_hash=?`, now, now+900, now-1, loginHash[:]); err != nil {
+		WHERE bucket_hash=?`, windowStart, now+900, now-1, loginHash[:]); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.AuthenticatePassword(ctx, "threshold", "incorrect-password-2026", "203.0.113.13", 1); !errors.Is(err, ErrAuthentication) {
@@ -612,15 +678,16 @@ func TestLoginBackoffThresholdCapAndRollingExpiry(t *testing.T) {
 	if level != 10 || backoffUntil-time.Now().Unix() > 900 || backoffUntil-time.Now().Unix() <= 0 {
 		t.Fatalf("exponential delay did not cap at 15 minutes: level=%d until=%d", level, backoffUntil)
 	}
-	if _, err := s.db.ExecContext(ctx, "UPDATE login_limits SET window_started_at=unixepoch()-901,expires_at=unixepoch()+900,backoff_until=unixepoch()-1 WHERE bucket_hash=?", loginHash[:]); err != nil {
+	expiredTimes := encodeFailureTimes(failureTimes{now - 2000, now - 1900, now - 1800, now - 1700, now - 1600})
+	if _, err := s.db.ExecContext(ctx, "UPDATE login_limits SET failure_times=?,window_started_at=?,expires_at=unixepoch()+900,backoff_until=unixepoch()-1 WHERE bucket_hash=?", expiredTimes, expiredTimes[0], loginHash[:]); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.AuthenticatePassword(ctx, "threshold", "incorrect-password-2026", "203.0.113.14", 1); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("expired rolling window remained locked: %v", err)
 	}
-	var failures int
-	if err := s.db.QueryRowContext(ctx, "SELECT failures FROM login_limits WHERE bucket_hash=?", loginHash[:]).Scan(&failures); err != nil || failures != 1 {
-		t.Fatalf("expired rolling window did not reset: failures=%d err=%v", failures, err)
+	var failures, level int
+	if err := s.db.QueryRowContext(ctx, "SELECT failures,backoff_level FROM login_limits WHERE bucket_hash=?", loginHash[:]).Scan(&failures, &level); err != nil || failures != 1 || level != 0 {
+		t.Fatalf("expired rolling window did not reset: failures=%d level=%d err=%v", failures, level, err)
 	}
 }
 
@@ -635,14 +702,16 @@ func TestLimiterRowsExpireSaturateAndSurviveRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	loginInsert, err := tx.PrepareContext(ctx, "INSERT INTO login_limits(bucket_hash,failures,window_started_at,expires_at,backoff_level,backoff_until) VALUES(?,1,unixepoch(),unixepoch()+3600,0,0)")
+	loginFixtureNow := time.Now().Unix()
+	loginFixtureTimes := encodeFailureTimes(failureTimes{loginFixtureNow})
+	loginInsert, err := tx.PrepareContext(ctx, "INSERT INTO login_limits(bucket_hash,failures,failure_times,window_started_at,expires_at,backoff_level,backoff_until) VALUES(?,1,?,?,?,0,0)")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := range MaxLoginLimitRows {
 		bucket := make([]byte, 32)
 		binary.BigEndian.PutUint64(bucket[24:], uint64(i+1))
-		if _, err = loginInsert.ExecContext(ctx, bucket); err != nil {
+		if _, err = loginInsert.ExecContext(ctx, bucket, loginFixtureTimes, loginFixtureNow, loginFixtureNow+3600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -682,14 +751,16 @@ func TestLimiterRowsExpireSaturateAndSurviveRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sourceInsert, err := tx.PrepareContext(ctx, "INSERT INTO source_limits(bucket_hash,bucket_kind,failures,window_started_at,backoff_level,backoff_until,last_seen_at,expires_at) VALUES(?, 'exact', 1, unixepoch(), 0, 0, unixepoch(), unixepoch()+86400)")
+	sourceFixtureNow := time.Now().Unix()
+	sourceFixtureTimes := encodeFailureTimes(failureTimes{sourceFixtureNow})
+	sourceInsert, err := tx.PrepareContext(ctx, "INSERT INTO source_limits(bucket_hash,bucket_kind,failures,failure_times,window_started_at,backoff_level,backoff_until,last_seen_at,expires_at) VALUES(?, 'exact', 1, ?, ?, 0, 0, ?, ?)")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := range MaxSourceLimitRows {
 		bucket := make([]byte, 32)
 		binary.BigEndian.PutUint64(bucket[24:], uint64(i+1))
-		if _, err = sourceInsert.ExecContext(ctx, bucket); err != nil {
+		if _, err = sourceInsert.ExecContext(ctx, bucket, sourceFixtureTimes, sourceFixtureNow, sourceFixtureNow, sourceFixtureNow+86400); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -80,3 +80,10 @@ No checks run in this fix round. No language-server references check was availab
 - Fresh databases are initialized in a private unique staging file in the state directory. Initialization is verified there, the DB is closed, and `renameat2(RENAME_NOREPLACE)` atomically publishes it as `identity.db`; the state directory is synced after publication. Failed initialization cleans staging files and never leaves a zero-version final DB. Existing database files are never treated as retryable staging state.
 - `TestOpenRejectsInvalidEstablishedDatabase` now includes malformed columns, missing CHECK constraints, and a missing required index. `TestOpenInitializationFailureIsRetryable` injects an error before initialization commit, confirms no final DB was published, then retries through `Open` without deleting files.
 - No tests/build/lint/format/graph checks were run per assignment.
+## Round 2 rolling failure window
+
+- Login and source limiter rows now store a fixed 40-byte, five-timestamp failure window. Initial schema and strict layout verification share the same DDL; no migration was added for the unreleased layout.
+- Failure processing prunes timestamps at or before `now-900`, keeps the newest five, and applies existing exponential backoff when five failures remain in the trailing 15 minutes. Empty windows reset backoff state.
+- `TestRollingFailureWindowBoundaryTimestamps` exercises offsets 0, 898, 899, 900, 901, and 902, verifies threshold timing, then confirms reset after expiry. Existing saturation fixtures now seed valid timestamp windows.
+- Deferred: parent reruns `go test -tags=integration ./internal/identity -count=1`, `go test -race ./internal/identity`, benchmark, and formatting/lint/build checks. None were run in this fix.
+- Concerns: no schema migration is included; Task 2B HTTP/cookie serialization and later-task work remain out of scope.

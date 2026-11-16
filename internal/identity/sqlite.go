@@ -72,6 +72,7 @@ CREATE INDEX sessions_account ON sessions(account_id,created_at);
 CREATE TABLE login_limits (
  bucket_hash BLOB PRIMARY KEY CHECK(length(bucket_hash)=32),
  failures INTEGER NOT NULL CHECK(failures BETWEEN 0 AND 5),
+ failure_times BLOB NOT NULL CHECK(length(failure_times)=40),
  window_started_at INTEGER NOT NULL,
  expires_at INTEGER NOT NULL,
  backoff_level INTEGER NOT NULL CHECK(backoff_level BETWEEN 0 AND 10),
@@ -81,6 +82,7 @@ CREATE TABLE source_limits (
  bucket_hash BLOB PRIMARY KEY CHECK(length(bucket_hash)=32),
  bucket_kind TEXT NOT NULL CHECK(bucket_kind IN ('exact','ipv6_64')),
  failures INTEGER NOT NULL CHECK(failures BETWEEN 0 AND 5),
+ failure_times BLOB NOT NULL CHECK(length(failure_times)=40),
  window_started_at INTEGER NOT NULL,
  backoff_level INTEGER NOT NULL CHECK(backoff_level BETWEEN 0 AND 10),
  backoff_until INTEGER NOT NULL,
