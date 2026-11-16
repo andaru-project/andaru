@@ -14,7 +14,7 @@ Task 2A1, Task 2A2, and Task 2B are implemented.
 
 - Files: `internal/identity/store_linux.go`, `model.go`, `sqlite.go`, `password.go`, `account_password_test.go`, embedded password blocklist/provenance, `go.mod`.
 - Interfaces: bootstrap/create/update/get/list/delete/disable account methods with sorted Task 1 built-in/custom role IDs; password set/verify; reusable administrator invariant validator. Mutations use the 2A1 global revision CAS, tombstone deleted IDs, increment password epochs, and revoke dependent sessions/tokens transactionally; role assignment changes invalidate sessions.
-- Tests: account restart/limit/login/tombstone/CAS/service/invariant; empty display name and custom-role create/update/restart; password policy/hash/bounds/rehash/revocation; admission saturation/timeout/cancellation.
+- Tests: account restart/limit/login/tombstone/CAS/service/invariant; empty display name and custom-role create/update/restart; bounded paged listing; password policy/hash/bounds/rehash/revocation; admission saturation/timeout/cancellation and concurrent wakeup contention.
 
 ## Task 2B — tokens, sessions, and bounded login protection
 
@@ -29,10 +29,17 @@ Task 2A1, Task 2A2, and Task 2B are implemented.
 - Existing stores require the exact application ID and layout v1; required schema tables and limiter-key row are verified, as are WAL, FULL sync, foreign-key, and secure-delete pragmas.
 - Limiter key is created by `randomblob(32)` inside the initial schema transaction. The synthetic v1→v2 migration and old-layout fixtures were removed; there was no released v1 schema.
 - Added real SQLite tests for invalid established layouts/schema/key, unsafe sidecars, wrong app, restart, and retry after failed initialization. Tests not run per assignment.
+## Round 1 account/password fixes
+
+- Admission now uses a nonblocking permit send under the queue mutex, eliminating the len-check/send race; `TestAdmissionConcurrentWakeupsDoNotDeadlock` races queued and new callers across repeated drains.
+- `ListAccounts` uses bounded keyset SQL pagination (`afterLogin`, maximum 100), then loads role rows in one batch for that page only.
+- `BenchmarkArgon2ProductionAdmission` keeps the exact production Argon2 policy and reports latency, observed concurrent hashes, and estimated peak Argon workspace memory.
+- No tests, build, lint, formatting, or benchmark commands were run.
+
 
 ## Deferred verification
 
-Not run per assignment: `go test -tags=integration ./internal/identity -count=1`, `go test -race ./internal/identity`, formatting, lint, and build checks.
+Not run per assignment: `go test -tags=integration ./internal/identity -count=1`, `go test -race ./internal/identity`, `go test -run '^$' -bench '^BenchmarkArgon2ProductionAdmission$' -benchmem ./internal/identity`, formatting, lint, and build checks.
 
 ## Concerns
 

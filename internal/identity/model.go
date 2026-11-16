@@ -12,6 +12,7 @@ const (
 	LayoutVersion       = 1
 	MaxAccounts         = 10_000
 	MaxRoleAssignments  = 10_002
+	MaxAccountPageSize  = 100
 	MaxLoginLimitRows   = 10_000
 	MaxSourceLimitRows  = 50_000
 	MaxTokensPerAccount = 50
@@ -52,6 +53,10 @@ type Account struct {
 	RoleIDs     []string
 	CreatedAt   int64
 	UpdatedAt   int64
+}
+type AccountPage struct {
+	Items []Account
+	NextCursor string
 }
 
 type CreateAccountInput struct {
@@ -134,7 +139,7 @@ type Store interface {
 	UpdateAccount(context.Context, string, int64, UpdateAccountInput) (Account, int64, error)
 	SetPassword(context.Context, string, int64, []byte) (int64, error)
 	GetAccount(context.Context, string) (Account, error)
-	ListAccounts(context.Context) ([]Account, error)
+	ListAccounts(context.Context, string, int) (AccountPage, error)
 	DeleteAccount(context.Context, string, int64) error
 	DisableAccount(context.Context, string, int64) error
 	ValidateAdministratorInvariant(context.Context) error

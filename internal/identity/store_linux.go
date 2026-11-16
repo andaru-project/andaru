@@ -337,36 +337,85 @@ func (s *store) GetAccount(ctx context.Context, id string) (Account, error) {
 	return accountByID(ctx, s.db, id)
 }
 
-func (s *store) ListAccounts(ctx context.Context) ([]Account, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT id,login,display_name,kind,enabled,created_at,updated_at FROM accounts ORDER BY login")
-	if err != nil {
-		return nil, err
+func (s *store) ListAccounts(ctx context.Context, afterLogin string, limit int) (AccountPage, error) {
+	if limit < 1 || limit > MaxAccountPageSize {
+		return AccountPage{}, ErrInvalid
 	}
-	accounts := make([]Account, 0)
-	for rows.Next() {
-		var a Account
-		var enabled int
-		if err = rows.Scan(&a.ID, &a.Login, &a.DisplayName, &a.Kind, &enabled, &a.CreatedAt, &a.UpdatedAt); err != nil {
-			rows.Close()
-			return nil, err
+	cursor := ""
+	if afterLogin != "" {
+		var err error
+		cursor, err = canonicalLogin(afterLogin)
+		if err != nil {
+			return AccountPage{}, err
 		}
-		a.Enabled = enabled == 1
-		accounts = append(accounts, a)
+	}
+	rows, err := s.db.QueryContext(ctx, "SELECT id,login,display_name,kind,enabled,created_at,updated_at FROM accounts WHERE login>? ORDER BY login LIMIT ?", cursor, limit+1)
+	if err != nil {
+		return AccountPage{}, err
+	}
+	accounts := make([]Account, 0, limit+1)
+	for rows.Next() {
+		var account Account
+		var enabled int
+		if err = rows.Scan(&account.ID, &account.Login, &account.DisplayName, &account.Kind, &enabled, &account.CreatedAt, &account.UpdatedAt); err != nil {
+			rows.Close()
+			return AccountPage{}, err
+		}
+		account.Enabled = enabled == 1
+		accounts = append(accounts, account)
 	}
 	err = rows.Err()
 	if closeErr := rows.Close(); err == nil {
 		err = closeErr
 	}
 	if err != nil {
-		return nil, err
+		return AccountPage{}, err
 	}
+	hasNext := len(accounts) > limit
+	if hasNext {
+		accounts = accounts[:limit]
+	}
+	page := AccountPage{Items: accounts}
+	if len(accounts) == 0 {
+		return page, nil
+	}
+	if hasNext {
+		page.NextCursor = accounts[len(accounts)-1].Login
+	}
+	indices := make(map[string]int, len(accounts))
+	var query strings.Builder
+	query.WriteString("SELECT account_id,role_id FROM account_roles WHERE account_id IN (")
+	args := make([]any, len(accounts))
 	for i := range accounts {
-		accounts[i].RoleIDs, err = accountRoleIDs(ctx, s.db, accounts[i].ID)
-		if err != nil {
-			return nil, err
+		if i != 0 {
+			query.WriteByte(',')
 		}
+		query.WriteByte('?')
+		args[i] = accounts[i].ID
+		accounts[i].RoleIDs = make([]string, 0)
+		indices[accounts[i].ID] = i
 	}
-	return accounts, nil
+	query.WriteString(") ORDER BY account_id,role_id")
+	roleRows, err := s.db.QueryContext(ctx, query.String(), args...)
+	if err != nil {
+		return AccountPage{}, err
+	}
+	for roleRows.Next() {
+		var accountID, roleID string
+		if err = roleRows.Scan(&accountID, &roleID); err != nil {
+			roleRows.Close()
+			return AccountPage{}, err
+		}
+		accounts[indices[accountID]].RoleIDs = append(accounts[indices[accountID]].RoleIDs, roleID)
+	}
+	err = roleRows.Err()
+	if closeErr := roleRows.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return AccountPage{}, err
+	}
+	return page, nil
 }
 
 func (s *store) DeleteAccount(ctx context.Context, id string, expectedRevision int64) error {

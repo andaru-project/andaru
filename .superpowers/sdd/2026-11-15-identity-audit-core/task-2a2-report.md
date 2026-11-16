@@ -16,8 +16,8 @@ Implemented account/password/admission behavior in the identity store.
 
 ## Interfaces
 
-- `Store` now exposes `BootstrapAdmin`, `CreateAccount`, `UpdateAccount`, `SetPassword`, `GetAccount`, `ListAccounts`, `DeleteAccount`, `DisableAccount`, `ValidateAdministratorInvariant`, and `VerifyPassword`.
-- Account mutations use the 2A1 global revision as their CAS token and return the resulting revision where applicable. Role IDs accept the Task 1 built-ins or canonical custom `rol_<UUIDv4>` IDs, are bounded/sorted, and persist across create/update/restart.
+- `Store` now exposes `ListAccounts(ctx, afterLogin, limit) (AccountPage, error)` with a login-keyset cursor and a 100-account maximum page; role rows are batch-loaded only for the selected page.
+- Account mutations use the 2A1 global revision as their CAS token and return the resulting revision where applicable. Role IDs accept Task 1 built-ins or canonical custom `rol_<UUIDv4>` IDs, are bounded/sorted, and persist across create/update/restart.
 - The recovery invariant uses Task 1's immutable `authz.AdministratorRoleID`, independently of custom role assignments.
 - Password hashing uses the fixed 65,536 KiB / time 3 / parallelism 1 policy, 16-byte random salt, 32-byte output. Stored costs are bounded before Argon2 allocation. Real, dummy, and rehash work share a 2-active/16-queued/5-second gate.
 
@@ -32,6 +32,8 @@ Implemented account/password/admission behavior in the identity store.
 - `TestPasswordMutationEpochAndTransactionalRevocationHooks`
 - `TestPasswordPolicyAndHashing`
 - `TestSuccessfulVerificationRehashesLowCostCredentialByCAS`
+- `TestAdmissionConcurrentWakeupsDoNotDeadlock`
+- `BenchmarkArgon2ProductionAdmission` (reports operation latency, observed active hashes, and estimated peak Argon workspace KiB; fixed production parameters)
 - `TestAdmissionRejectsExcessQueueAndHonorsCancellation`
 
 ## Deferred commands
@@ -41,6 +43,7 @@ Not run per assignment:
 - `go test -tags=integration ./internal/identity -count=1`
 - `go test -race ./internal/identity`
 - `gofmt`/lint/build checks
+- `go test -run '^$' -bench '^BenchmarkArgon2ProductionAdmission$' -benchmem ./internal/identity`
 
 ## Concerns
 

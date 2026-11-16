@@ -55,10 +55,11 @@ func (g *hashAdmission) acquire(ctx context.Context) (func(), error) {
 		return nil, err
 	}
 	g.mu.Lock()
-	if len(g.permits) < cap(g.permits) {
-		g.permits <- struct{}{}
+	select {
+	case g.permits <- struct{}{}:
 		g.mu.Unlock()
 		return func() { <-g.permits }, nil
+	default:
 	}
 	if g.queued >= g.queueLimit {
 		g.mu.Unlock()
@@ -148,8 +149,12 @@ func hashPassword(ctx context.Context, password []byte) ([]byte, error) {
 		return nil, err
 	}
 	defer release()
+	return derivePasswordHash(password)
+}
+
+func derivePasswordHash(password []byte) ([]byte, error) {
 	salt := make([]byte, saltLength)
-	if _, err = io.ReadFull(rand.Reader, salt); err != nil {
+	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
 		return nil, err
 	}
 	hash := argon2.IDKey(password, salt, argonTime, argonMemory, argonThreads, hashLength)

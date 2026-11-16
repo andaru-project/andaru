@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"golang.org/x/crypto/argon2"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/argon2"
 )
 
 func openTestStore(t *testing.T) (*store, string) {
@@ -61,10 +64,15 @@ func TestBootstrapCreateUpdateAndRestart(t *testing.T) {
 	if err != nil || got.DisplayName != "Operator Two" {
 		t.Fatalf("restart account=%+v err=%v", got, err)
 	}
-	accounts, err := s.ListAccounts(ctx)
-	if err != nil || len(accounts) != 2 {
-		t.Fatalf("list accounts=%d err=%v", len(accounts), err)
-	}
+	page, err := s.ListAccounts(ctx,"",1)
+	if err != nil || len(page.Items) != 1 || page.NextCursor == "" { t.Fatalf("first account page=%+v err=%v",page,err) }
+	lastPage, err := s.ListAccounts(ctx,page.NextCursor,1)
+	if err != nil || len(lastPage.Items) != 1 || lastPage.NextCursor != "" { t.Fatalf("last account page=%+v err=%v",lastPage,err) }
+	if len(lastPage.Items[0].RoleIDs) != 1 || lastPage.Items[0].RoleIDs[0] != "administrator" { t.Fatalf("paged admin roles=%v",lastPage.Items[0].RoleIDs) }
+	emptyPage, err := s.ListAccounts(ctx,lastPage.NextCursor,1)
+	if err != nil || len(emptyPage.Items) != 0 { t.Fatalf("exhausted page=%+v err=%v",emptyPage,err) }
+	if _, err = s.ListAccounts(ctx,"",0); !errors.Is(err,ErrInvalid) { t.Fatalf("zero page size: %v",err) }
+	if _, err = s.ListAccounts(ctx,"",MaxAccountPageSize+1); !errors.Is(err,ErrInvalid) { t.Fatalf("oversized page: %v",err) }
 }
 func TestOptionalDisplayAndCustomRolesSurviveRestart(t *testing.T) {
 	ctx := context.Background()
@@ -217,6 +225,80 @@ func TestAccountLimitAtDatabaseBoundary(t *testing.T) {
 	if _, _, err = s.CreateAccount(ctx, CreateAccountInput{Login: "lastone", DisplayName: "Last", Kind: Service, Enabled: true}, revision); !errors.Is(err, ErrAccountLimit) {
 		t.Fatalf("limit result: %v", err)
 	}
+}
+
+func TestAdmissionConcurrentWakeupsDoNotDeadlock(t *testing.T) {
+	g := newHashAdmission(2, 32)
+	for round := 0; round < 40; round++ {
+		held := make([]func(), 2)
+		for i := range held {
+			var err error
+			held[i], err = g.acquire(context.Background())
+			if err != nil { t.Fatal(err) }
+		}
+		done := make(chan error, 32)
+		start := make(chan struct{})
+		for i := 0; i < 16; i++ {
+			go func() {
+				release, err := g.acquire(context.Background())
+				if err == nil { release() }
+				done <- err
+			}()
+		}
+		waitForQueued(t, g, 16)
+		for i := 0; i < 16; i++ {
+			go func() {
+				<-start
+				release, err := g.acquire(context.Background())
+				if err == nil { release() }
+				done <- err
+			}()
+		}
+		close(start)
+		for _, release := range held { release() }
+		deadline := time.After(time.Second)
+		for i := 0; i < 32; i++ {
+			select {
+			case err := <-done:
+				if err != nil { t.Fatalf("round %d admission: %v", round, err) }
+			case <-deadline:
+				t.Fatalf("round %d: queued/new callers deadlocked", round)
+			}
+		}
+	}
+}
+
+func BenchmarkArgon2ProductionAdmission(b *testing.B) {
+	password := []byte("fixed-policy-qualification-passphrase-2026")
+	var peakActive atomic.Int64
+	var elapsed atomic.Int64
+	var next atomic.Int64
+	const workers = 8
+	b.ResetTimer()
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for range workers {
+		go func() {
+			defer wg.Done()
+			for {
+				if next.Add(1) > int64(b.N) { return }
+				started := time.Now()
+				release, err := passwordAdmission.acquire(context.Background())
+				if err != nil { b.Error(err); return }
+				active := int64(len(passwordAdmission.permits))
+				for old := peakActive.Load(); active > old && !peakActive.CompareAndSwap(old, active); old = peakActive.Load() {}
+				_, err = derivePasswordHash(password)
+				release()
+				elapsed.Add(time.Since(started).Nanoseconds())
+				if err != nil { b.Error(err); return }
+			}
+		}()
+	}
+	wg.Wait()
+	b.StopTimer()
+	b.ReportMetric(float64(elapsed.Load())/float64(b.N), "latency-ns/op")
+	b.ReportMetric(float64(peakActive.Load()*argonMemory), "KiB-peak-estimate")
+	b.ReportMetric(float64(peakActive.Load()), "max-active")
 }
 
 func TestStoreExposesReusableAdministratorInvariant(t *testing.T) {
