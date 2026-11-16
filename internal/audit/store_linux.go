@@ -827,8 +827,6 @@ func validStoredOutcomeEvent(ctx context.Context, tx *sql.Tx, operationID string
 	return validStoredEvent(event) && event.OperationID == operationID && event.Action == action &&
 		event.Result == outcome.Result && event.Target == outcome.Target && equalMetadata(event.Metadata, outcome.Metadata)
 }
-	return outcome, nil
-}
 
 func replaceOperationMetadata(ctx context.Context, tx *sql.Tx, operationID string, metadata map[string]string) error {
 	if _, err := tx.ExecContext(ctx, "DELETE FROM operation_metadata WHERE operation_id=?", operationID); err != nil {
