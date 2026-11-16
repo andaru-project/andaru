@@ -4,12 +4,14 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -69,12 +71,15 @@ func TestWebSocketChecksExactPeerBeforeHTTPParsing(t *testing.T) {
 			t.Fatal(err)
 		}
 		_ = connection.SetDeadline(time.Now().Add(time.Second))
-		if _, err = io.WriteString(connection, "GET /forged HTTP/1.1\r\nHost: unix\r\nX-User: root\r\n\r\n"); err != nil {
-			t.Fatal(err)
+		_, writeErr := io.WriteString(connection, "GET /forged HTTP/1.1\r\nHost: unix\r\nX-User: root\r\n\r\n")
+		if writeErr != nil && !errors.Is(writeErr, syscall.EPIPE) {
+			t.Fatal(writeErr)
 		}
-		buffer := make([]byte, 1)
-		if count, readErr := connection.Read(buffer); count != 0 || readErr == nil {
-			t.Fatalf("wrong peer reached HTTP: bytes=%d err=%v", count, readErr)
+		if writeErr == nil {
+			buffer := make([]byte, 1)
+			if count, readErr := connection.Read(buffer); count != 0 || readErr == nil {
+				t.Fatalf("wrong peer reached HTTP: bytes=%d err=%v", count, readErr)
+			}
 		}
 		_ = connection.Close()
 		if parsed.Load() {
