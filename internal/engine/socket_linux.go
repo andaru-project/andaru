@@ -79,7 +79,7 @@ func Serve(ctx context.Context, socketPath, stateDir string) (result error) {
 	if err = backups.restores.Reconcile(ctx); err != nil {
 		return fmt.Errorf("reconcile portable restores: %w", err)
 	}
-	if err = audits.Reconcile(ctx, coordinator); err != nil {
+	if err = audits.Reconcile(ctx, coordinator); err != nil && !errors.Is(err, audit.ErrReconciliationComplete) {
 		return fmt.Errorf("reconcile identity audit operations: %w", err)
 	}
 	err = serveUnix(lifetime, socketPath, newHandlerWithAPIs(host.ReadLinks, newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, previewIdentities(read, generation.Dir(stateDir)), live, backups), identityAPI, auditAPI))

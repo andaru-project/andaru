@@ -5,8 +5,8 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/json"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -52,12 +52,12 @@ type rootAdministratorOptions struct {
 }
 
 type restoreOptions struct {
-	Passphrase              string                    `json:"passphrase,omitempty"`
-	Stores                  []string                  `json:"stores,omitempty"`
-	OperationID             string                    `json:"operationId,omitempty"`
-	ExpectedSavedVersion    string                    `json:"expectedSavedVersion,omitempty"`
-	ExpectedIdentityRevision *int64                   `json:"expectedIdentityRevision,omitempty"`
-	RootAdministrator       *rootAdministratorOptions `json:"rootAdministrator,omitempty"`
+	Passphrase               string                    `json:"passphrase,omitempty"`
+	Stores                   []string                  `json:"stores,omitempty"`
+	OperationID              string                    `json:"operationId,omitempty"`
+	ExpectedSavedVersion     string                    `json:"expectedSavedVersion,omitempty"`
+	ExpectedIdentityRevision *int64                    `json:"expectedIdentityRevision,omitempty"`
+	RootAdministrator        *rootAdministratorOptions `json:"rootAdministrator,omitempty"`
 }
 
 type restoreCounts struct {
@@ -73,20 +73,20 @@ type hardwareFinding struct {
 }
 
 type restorePreviewResponse struct {
-	State                       string                           `json:"state"`
-	Manifest                    backup.Manifest                  `json:"manifest"`
-	ExpectedSavedVersion        config.Version                   `json:"expectedSavedVersion,omitempty"`
-	ExpectedIdentityRevision    int64                            `json:"expectedIdentityRevision"`
-	ConfigurationChanges        restoreCounts                    `json:"configurationChanges"`
-	SecretChanges               restoreCounts                    `json:"secretChanges"`
-	UserChanges                 restoreCounts                    `json:"userChanges"`
-	CredentialChanges           restoreCounts                    `json:"credentialChanges"`
-	UnresolvedSecrets           []string                         `json:"unresolvedSecrets"`
-	BlockingSecrets             []string                         `json:"blockingSecrets"`
-	MissingRoleIDs              []string                         `json:"missingRoleIds"`
-	RequiresRootAdministrator   bool                             `json:"requiresRootAdministrator"`
-	RecoveryAdministrators      []identity.RecoveryAdministrator `json:"recoveryAdministrators"`
-	HardwareFindings            []hardwareFinding                `json:"hardwareFindings"`
+	State                     string                           `json:"state"`
+	Manifest                  backup.Manifest                  `json:"manifest"`
+	ExpectedSavedVersion      config.Version                   `json:"expectedSavedVersion,omitempty"`
+	ExpectedIdentityRevision  int64                            `json:"expectedIdentityRevision"`
+	ConfigurationChanges      restoreCounts                    `json:"configurationChanges"`
+	SecretChanges             restoreCounts                    `json:"secretChanges"`
+	UserChanges               restoreCounts                    `json:"userChanges"`
+	CredentialChanges         restoreCounts                    `json:"credentialChanges"`
+	UnresolvedSecrets         []string                         `json:"unresolvedSecrets"`
+	BlockingSecrets           []string                         `json:"blockingSecrets"`
+	MissingRoleIDs            []string                         `json:"missingRoleIds"`
+	RequiresRootAdministrator bool                             `json:"requiresRootAdministrator"`
+	RecoveryAdministrators    []identity.RecoveryAdministrator `json:"recoveryAdministrators"`
+	HardwareFindings          []hardwareFinding                `json:"hardwareFindings"`
 }
 
 type inspectionResponse struct {
@@ -103,13 +103,13 @@ type restoreSavedResponse struct {
 }
 
 type backupHandler struct {
-	store        *config.Store
-	identities   coordinatedIdentityStore
-	security     *securityCoordinator
-	restores     *restoreCoordinator
-	stateDir     string
-	readLinks    func(context.Context) ([]host.LinkStatus, error)
-	expensive    sync.Mutex
+	store      *config.Store
+	identities coordinatedIdentityStore
+	security   *securityCoordinator
+	restores   *restoreCoordinator
+	stateDir   string
+	readLinks  func(context.Context) ([]host.LinkStatus, error)
+	expensive  sync.Mutex
 }
 
 func newBackupHandler(store *config.Store, identities coordinatedIdentityStore, security *securityCoordinator, stateDir string, readLinks func(context.Context) ([]host.LinkStatus, error)) *backupHandler {
@@ -162,6 +162,11 @@ func (h *backupHandler) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "A valid passphrase is required only when secrets or credentials are included.")
 		return
 	}
+	if !h.expensive.TryLock() {
+		writeError(w, r, http.StatusConflict, "BACKUP_BUSY", "Another backup or restore operation is running.")
+		return
+	}
+	defer h.expensive.Unlock()
 	actor, ok := actorFromRequest(r)
 	if !ok {
 		writeError(w, r, http.StatusForbidden, "FORBIDDEN", "A verified root or human session is required.")
@@ -185,11 +190,6 @@ func (h *backupHandler) create(w http.ResponseWriter, r *http.Request) {
 		}
 		exportIntent = audit.Intent{OperationID: hex.EncodeToString(operationID[:]), Actor: actor.Actor, Source: actor.Source, Action: audit.ActionSecretExported, RequestHash: requestHash, Category: audit.CategoryProtected}
 	}
-	if !h.expensive.TryLock() {
-		writeError(w, r, http.StatusConflict, "BACKUP_BUSY", "Another backup or restore operation is running.")
-		return
-	}
-	defer h.expensive.Unlock()
 
 	var documents config.BackupDocuments
 	var identityDocuments identity.BackupDocuments

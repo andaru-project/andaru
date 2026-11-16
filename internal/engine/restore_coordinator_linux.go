@@ -18,8 +18,8 @@ import (
 	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/generation"
-	"github.com/andaru-project/andaru/internal/jsonprofile"
 	"github.com/andaru-project/andaru/internal/identity"
+	"github.com/andaru-project/andaru/internal/jsonprofile"
 	"github.com/andaru-project/andaru/internal/securefs"
 )
 
@@ -37,16 +37,16 @@ type coordinatedIdentityStore interface {
 }
 
 type coordinatedRestoreRequest struct {
-	OperationID             string
-	Fingerprint             []byte
-	Actor                   authz.Actor
-	Source                  string
-	Target                  string
-	ExpectedSavedVersion    config.Version
+	OperationID              string
+	Fingerprint              []byte
+	Actor                    authz.Actor
+	Source                   string
+	Target                   string
+	ExpectedSavedVersion     config.Version
 	ExpectedIdentityRevision int64
-	Configuration           config.RestoreDocuments
-	Identity                identity.RestoreDocuments
-	RootAdministrator       *identity.RootAdministrator
+	Configuration            config.RestoreDocuments
+	Identity                 identity.RestoreDocuments
+	RootAdministrator        *identity.RootAdministrator
 }
 
 type coordinatedRestoreResult struct {
@@ -57,20 +57,20 @@ type coordinatedRestoreResult struct {
 }
 
 type restoreJournal struct {
-	SchemaVersion             int                      `json:"schemaVersion"`
-	OperationID               string                   `json:"operationId"`
-	RequestHash               string                   `json:"requestHash"`
-	State                     string                   `json:"state"`
-	Actor                     authz.Actor               `json:"actor"`
-	Source                    string                   `json:"source"`
-	Target                    string                   `json:"target"`
-	ExpectedSavedVersion      config.Version           `json:"expectedSavedVersion,omitempty"`
-	TargetSavedVersion        config.Version           `json:"targetSavedVersion,omitempty"`
-	Configuration             config.RestoreDocuments  `json:"configuration,omitempty"`
-	ExpectedIdentityRevision  int64                    `json:"expectedIdentityRevision,omitempty"`
-	TargetIdentityRevision    int64                    `json:"targetIdentityRevision,omitempty"`
-	Identity                  identity.RestoreDocuments `json:"identity,omitempty"`
-	Result                    coordinatedRestoreResult `json:"result"`
+	SchemaVersion            int                       `json:"schemaVersion"`
+	OperationID              string                    `json:"operationId"`
+	RequestHash              string                    `json:"requestHash"`
+	State                    string                    `json:"state"`
+	Actor                    authz.Actor               `json:"actor"`
+	Source                   string                    `json:"source"`
+	Target                   string                    `json:"target"`
+	ExpectedSavedVersion     config.Version            `json:"expectedSavedVersion,omitempty"`
+	TargetSavedVersion       config.Version            `json:"targetSavedVersion,omitempty"`
+	Configuration            config.RestoreDocuments   `json:"configuration,omitempty"`
+	ExpectedIdentityRevision int64                     `json:"expectedIdentityRevision,omitempty"`
+	TargetIdentityRevision   int64                     `json:"targetIdentityRevision,omitempty"`
+	Identity                 identity.RestoreDocuments `json:"identity,omitempty"`
+	Result                   coordinatedRestoreResult  `json:"result"`
 }
 
 type restoreCoordinator struct {
@@ -217,18 +217,39 @@ func (c *restoreCoordinator) Reconcile(ctx context.Context) error {
 	}
 	for i := range journals {
 		journal := &journals[i]
-		if journal.State != "committed" {
-			if err = generation.Observe(ctx, generation.Dir(c.stateDir), func(generation.Observation) error {
-				return c.security.withAuthorizationLock(ctx, func() error { return c.reconcileLocked(ctx, journal) })
-			}); err != nil {
-				return fmt.Errorf("reconcile restore operation %s: %w", journal.OperationID, err)
-			}
+		if journal.State == "committed" {
+			continue
 		}
-		if err = c.security.audits.Finish(ctx, audit.Outcome{OperationID: journal.OperationID, Result: audit.ResultSuccess}); err != nil {
-			return fmt.Errorf("reconcile restore audit %s: %w", journal.OperationID, err)
+		if err = generation.Observe(ctx, generation.Dir(c.stateDir), func(generation.Observation) error {
+			return c.security.withAuthorizationLock(ctx, func() error { return c.reconcileLocked(ctx, journal) })
+		}); err != nil {
+			return fmt.Errorf("reconcile restore operation %s: %w", journal.OperationID, err)
 		}
 	}
+	if err = c.security.audits.Reconcile(ctx, restoreAuditSource{coordinator: c, next: c.security}); err != nil && !errors.Is(err, audit.ErrReconciliationComplete) {
+		return fmt.Errorf("reconcile restore audit: %w", err)
+	}
 	return nil
+}
+
+type restoreAuditSource struct {
+	coordinator *restoreCoordinator
+	next        audit.OperationSource
+}
+
+func (s restoreAuditSource) LookupOperation(ctx context.Context, operationID string) (audit.OperationRecord, bool, error) {
+	journal, found, err := s.coordinator.readJournal(operationID)
+	if err != nil || !found || journal.State != "committed" {
+		if err != nil {
+			return audit.OperationRecord{}, false, err
+		}
+		return s.next.LookupOperation(ctx, operationID)
+	}
+	return audit.OperationRecord{
+		OperationID: journal.OperationID, RequestHash: journal.RequestHash, Actor: journal.Actor, Source: journal.Source,
+		Action: audit.ActionBackupRestored, Target: journal.Target, Category: audit.CategoryProtected,
+		Outcome: audit.Outcome{OperationID: journal.OperationID, Result: audit.ResultSuccess},
+	}, true, nil
 }
 
 func (c *restoreCoordinator) reconcileLocked(ctx context.Context, journal *restoreJournal) error {
@@ -294,7 +315,6 @@ func (c *restoreCoordinator) reconcileLocked(ctx context.Context, journal *resto
 	return c.writeJournal(*journal)
 }
 
-
 func (c *restoreCoordinator) atCrashPoint(point string) error {
 	if c.crash == nil {
 		return nil
@@ -302,8 +322,12 @@ func (c *restoreCoordinator) atCrashPoint(point string) error {
 	return c.crash(point)
 }
 
-func (c *restoreCoordinator) journalDir() string { return filepath.Join(c.stateDir, "restore-operations") }
-func (c *restoreCoordinator) journalPath(operationID string) string { return filepath.Join(c.journalDir(), operationID+".json") }
+func (c *restoreCoordinator) journalDir() string {
+	return filepath.Join(c.stateDir, "restore-operations")
+}
+func (c *restoreCoordinator) journalPath(operationID string) string {
+	return filepath.Join(c.journalDir(), operationID+".json")
+}
 
 func (c *restoreCoordinator) ensureJournalDir() error {
 	dir := c.journalDir()
@@ -432,7 +456,7 @@ func (c *restoreCoordinator) readJournals() ([]restoreJournal, error) {
 }
 
 func decodeRestoreJournal(raw []byte) (restoreJournal, error) {
-	if !jsonprofile.Valid(raw, false) {
+	if !jsonprofile.Valid(raw, true) {
 		return restoreJournal{}, errRestoreStateConflict
 	}
 	var journal restoreJournal
