@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"net/http"
@@ -184,10 +185,12 @@ func (h *webAPI) login(w http.ResponseWriter, r *http.Request, source string) {
 	if !ok {
 		return
 	}
-	snapshot, epoch, err := LiveAuthorization(r.Context(), h.stateDir, h.configuration)
+	var snapshot authz.Snapshot
 	var result identity.LoginResult
-	if err == nil {
-		result, err = h.identities.AuthenticatePasswordWithIntent(r.Context(), request.Login, request.Password, source, epoch, func(account identity.Account) error {
+	err := h.withLiveAuthorization(r.Context(), func(live authz.Snapshot, epoch uint64) error {
+		snapshot = live
+		var authErr error
+		result, authErr = h.identities.AuthenticatePasswordWithIntent(r.Context(), request.Login, request.Password, source, epoch, func(account identity.Account) error {
 			_, auditErr := h.coordinator.audits.Append(r.Context(), audit.Event{
 				Actor: authz.Actor{Kind: authz.ActorAccount, ID: account.ID}, Source: source, Action: audit.ActionLoginSuccess,
 				Target: account.ID, Result: audit.ResultSuccess, Category: audit.CategoryGeneral,
@@ -197,7 +200,8 @@ func (h *webAPI) login(w http.ResponseWriter, r *http.Request, source string) {
 			}
 			return nil
 		})
-	}
+		return authErr
+	})
 	request.Password = ""
 	if err != nil {
 		h.loginError(w, r, source, err)
@@ -394,10 +398,12 @@ func (h *webAPI) protected(w http.ResponseWriter, r *http.Request, source string
 			writeAuthenticationFailure(w, r)
 			return
 		}
-		snapshot, _, err = LiveAuthorization(r.Context(), h.stateDir, h.configuration)
-		if err == nil {
-			principal, err = h.identities.AuthenticateToken(r.Context(), selector, secret, snapshot)
-		}
+		err = h.withLiveAuthorization(r.Context(), func(live authz.Snapshot, _ uint64) error {
+			snapshot = live
+			var authErr error
+			principal, authErr = h.identities.AuthenticateToken(r.Context(), selector, secret, snapshot)
+			return authErr
+		})
 		if err != nil {
 			if errors.Is(err, identity.ErrAuthentication) {
 				writeAuthenticationFailure(w, r)
@@ -447,16 +453,38 @@ func (h *webAPI) readCookiePrincipal(r *http.Request) (identity.Principal, strin
 	if !ok {
 		return identity.Principal{}, "", "", authz.Snapshot{}, 0, identity.ErrAuthentication
 	}
-	snapshot, epoch, err := LiveAuthorization(r.Context(), h.stateDir, h.configuration)
-	if err != nil {
-		return identity.Principal{}, "", "", authz.Snapshot{}, 0, err
-	}
-	principal, err := h.identities.AuthenticateSession(r.Context(), selector, secret, epoch)
+	var principal identity.Principal
+	var snapshot authz.Snapshot
+	var epoch uint64
+	err := h.withLiveAuthorization(r.Context(), func(live authz.Snapshot, liveEpoch uint64) error {
+		snapshot, epoch = live, liveEpoch
+		var authErr error
+		principal, authErr = h.identities.AuthenticateSession(r.Context(), selector, secret, epoch)
+		return authErr
+	})
 	if err != nil {
 		return identity.Principal{}, "", "", authz.Snapshot{}, 0, err
 	}
 	principal.Capabilities = resolveSnapshot(snapshot, principal.Account.RoleIDs)
 	return principal, selector, secret, snapshot, epoch, nil
+}
+
+func (h *webAPI) withLiveAuthorization(ctx context.Context, fn func(authz.Snapshot, uint64) error) error {
+	lock, err := authz.Acquire(ctx, h.stateDir)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if _, pending, err := lock.Pending(); err != nil {
+		return err
+	} else if pending {
+		return authz.ErrTransitionInProgress
+	}
+	snapshot, epoch, err := liveAuthorizationLocked(ctx, h.stateDir, h.configuration, lock)
+	if err != nil {
+		return err
+	}
+	return fn(snapshot, epoch)
 }
 
 func (h *webAPI) validateCSRF(w http.ResponseWriter, r *http.Request, sessionSelector, sessionSecret string) bool {
