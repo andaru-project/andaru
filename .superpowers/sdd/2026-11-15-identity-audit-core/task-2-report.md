@@ -57,3 +57,9 @@ No checks run in this fix round. No language-server references check was availab
 
 - Applied only `gofmt`-equivalent layout changes to `internal/identity/account_password_test.go` and `internal/identity/model.go`; `gofmt -d` then produced no output.
 - No semantic changes or test/build checks were performed.
+
+## Fresh initializer correction
+
+- Diagnosis: the schema transaction seeded `metadata('revision',0)`, `limiter_key(1,randomblob(32))`, and `limiter_overload(1,0,0)`, but it never seeded `revisions(revision=0)`. `verifySchema` correctly queried that table and rejected every fresh database with `identity initial revision missing`; the metadata key/value and revision-history row are separate records with separate identifiers.
+- Fix: seed `revisions(0,unixepoch())` in the same schema DDL transaction. This preserves atomic creation of schema, revision metadata/history, limiter key, and overload state. Existing-layout verification still fails closed if any required row is deleted; no legacy-layout migration was added.
+- Test coverage: existing `TestOpenRestartAndSchema` opens a fresh DB and therefore catches this mismatch; no test changes were needed. Checks were not run per assignment.

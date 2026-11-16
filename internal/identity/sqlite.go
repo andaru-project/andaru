@@ -100,6 +100,7 @@ CREATE TABLE operations (
  created_at INTEGER NOT NULL
 ) STRICT;
 INSERT INTO metadata(key,value) VALUES('revision',0);
+INSERT INTO revisions(revision,created_at) VALUES(0,unixepoch());
 INSERT INTO metadata(key,value) SELECT 'account_epoch:'||id,0 FROM accounts;
 CREATE TABLE limiter_key (id INTEGER PRIMARY KEY CHECK(id=1), secret BLOB NOT NULL CHECK(length(secret)=32)) STRICT;
 CREATE TABLE limiter_overload (id INTEGER PRIMARY KEY CHECK(id=1), login_saturated INTEGER NOT NULL CHECK(login_saturated IN (0,1)), source_saturated INTEGER NOT NULL CHECK(source_saturated IN (0,1))) STRICT;
