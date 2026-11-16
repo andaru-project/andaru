@@ -1,7 +1,7 @@
 debian/build/andaru usr/bin/
 debian/build/andaru-web usr/bin/
 packaging/systemd/andaru-*.service packaging/systemd/andaru-*.path packaging/systemd/andaru-*.timer usr/lib/systemd/system/
-web/dist/ usr/share/andaru/web/
+web/dist/* usr/share/andaru/web/
 packaging/systemd/kea-dhcp4-server.service.d/andaru.conf usr/lib/systemd/system/kea-dhcp4-server.service.d/
 packaging/systemd/kea-dhcp6-server.service.d/andaru.conf usr/lib/systemd/system/kea-dhcp6-server.service.d/
 packaging/systemd/networkd.conf.d/andaru.conf usr/lib/systemd/networkd.conf.d/

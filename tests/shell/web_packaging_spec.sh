@@ -46,7 +46,7 @@ Describe 'andaru web packaging'
       grep -q "npm --prefix web run build" "$1" &&
       grep -q -- "-o debian/build/andaru-web ./cmd/andaru-web" "$1" &&
       grep -qx "debian/build/andaru-web usr/bin/" "$2" &&
-      grep -qx "web/dist/ usr/share/andaru/web/" "$2"' sh "$root/debian/rules" "$root/debian/andaru.install"
+      grep -Fqx "web/dist/* usr/share/andaru/web/" "$2"' sh "$root/debian/rules" "$root/debian/andaru.install"
     The status should equal 0
   End
 
