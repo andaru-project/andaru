@@ -213,10 +213,10 @@ func (s *store) createSession(ctx context.Context, accountID string, accountEpoc
 		return LoginResult{}, err
 	}
 	return LoginResult{
-		Account: account,
+		Account:       account,
 		SessionCookie: credentialPair(credentials.sessionSelector[:], credentials.sessionSecret[:]),
-		CSRFSecret: credentialPair(credentials.csrfSelector[:], credentials.csrfSecret[:]),
-		ExpiresAt: expires,
+		CSRFSecret:    credentialPair(credentials.csrfSelector[:], credentials.csrfSecret[:]),
+		ExpiresAt:     expires,
 	}, nil
 }
 

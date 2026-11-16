@@ -33,17 +33,17 @@ var (
 	ErrHashTimeout    = errors.New("password hashing admission timed out")
 
 	//go:embed testdata/password-blocklist-v1.txt testdata/password-blocklist-v1-provenance.txt
-	blocklistFile embed.FS
-	blockedPasswords = loadBlocklist()
+	blocklistFile     embed.FS
+	blockedPasswords  = loadBlocklist()
 	passwordAdmission = newHashAdmission(2, 16)
 )
 
 type hashAdmission struct {
-	mu sync.Mutex
-	permits chan struct{}
-	queued int
+	mu         sync.Mutex
+	permits    chan struct{}
+	queued     int
 	queueLimit int
-	wait time.Duration
+	wait       time.Duration
 }
 
 func newHashAdmission(active, queued int) *hashAdmission {
@@ -122,60 +122,97 @@ func validatePassword(password []byte, login, displayName string) error {
 
 func loadBlocklist() map[string]struct{} {
 	data, err := blocklistFile.ReadFile("testdata/password-blocklist-v1.txt")
-	if err != nil { panic(err) }
+	if err != nil {
+		panic(err)
+	}
 	entries := make(map[string]struct{})
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
-		if line != "" && !strings.HasPrefix(line, "#") { entries[strings.ToLower(line)] = struct{}{} }
+		if line != "" && !strings.HasPrefix(line, "#") {
+			entries[strings.ToLower(line)] = struct{}{}
+		}
 	}
 	return entries
 }
 
 func hashPasswordWithPolicy(ctx context.Context, password []byte, login, displayName string) ([]byte, error) {
-	if err := validatePassword(password, login, displayName); err != nil { return nil, err }
+	if err := validatePassword(password, login, displayName); err != nil {
+		return nil, err
+	}
 	return hashPassword(ctx, password)
 }
 
 func hashPassword(ctx context.Context, password []byte) ([]byte, error) {
 	release, err := passwordAdmission.acquire(ctx)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer release()
 	salt := make([]byte, saltLength)
-	if _, err = io.ReadFull(rand.Reader, salt); err != nil { return nil, err }
+	if _, err = io.ReadFull(rand.Reader, salt); err != nil {
+		return nil, err
+	}
 	hash := argon2.IDKey(password, salt, argonTime, argonMemory, argonThreads, hashLength)
 	return []byte(fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s", argonVersion, argonMemory, argonTime, argonThreads, base64.RawStdEncoding.EncodeToString(salt), base64.RawStdEncoding.EncodeToString(hash))), nil
 }
 
-type parsedHash struct { salt, hash []byte; memory uint32; time uint32; threads uint8 }
+type parsedHash struct {
+	salt, hash []byte
+	memory     uint32
+	time       uint32
+	threads    uint8
+}
 
 func parsePasswordHash(encoded []byte) (parsedHash, error) {
 	if len(encoded) > 256 {
 		return parsedHash{}, errors.New("password hash exceeds safe bound")
 	}
 	parts := strings.Split(string(encoded), "$")
-	if len(parts) != 6 || parts[0] != "" || parts[1] != "argon2id" { return parsedHash{}, errors.New("invalid password hash") }
+	if len(parts) != 6 || parts[0] != "" || parts[1] != "argon2id" {
+		return parsedHash{}, errors.New("invalid password hash")
+	}
 	var p parsedHash
-	if !strings.HasPrefix(parts[2], "v=") { return p, errors.New("invalid password hash version") }
+	if !strings.HasPrefix(parts[2], "v=") {
+		return p, errors.New("invalid password hash version")
+	}
 	version, err := strconv.Atoi(strings.TrimPrefix(parts[2], "v="))
-	if err != nil || version != argonVersion { return p, errors.New("unsupported password hash version") }
+	if err != nil || version != argonVersion {
+		return p, errors.New("unsupported password hash version")
+	}
 	costs := strings.Split(parts[3], ",")
-	if len(costs) != 3 { return p, errors.New("invalid password hash costs") }
+	if len(costs) != 3 {
+		return p, errors.New("invalid password hash costs")
+	}
 	values := make(map[string]uint64, 3)
 	for _, cost := range costs {
 		kv := strings.SplitN(cost, "=", 2)
-		if len(kv) != 2 { return p, errors.New("invalid password hash cost") }
+		if len(kv) != 2 {
+			return p, errors.New("invalid password hash cost")
+		}
 		v, err := strconv.ParseUint(kv[1], 10, 32)
-		if err != nil { return p, errors.New("invalid password hash cost") }
-		if _, exists := values[kv[0]]; exists { return p, errors.New("duplicate password hash cost") }
+		if err != nil {
+			return p, errors.New("invalid password hash cost")
+		}
+		if _, exists := values[kv[0]]; exists {
+			return p, errors.New("duplicate password hash cost")
+		}
 		values[kv[0]] = v
 	}
-	m, mok := values["m"]; tc, tok := values["t"]; th, hok := values["p"]
-	if !mok || !tok || !hok || m < 8192 || m > 262144 || tc < 1 || tc > 10 || th < 1 || th > 8 { return p, errors.New("password hash cost outside safe bounds") }
+	m, mok := values["m"]
+	tc, tok := values["t"]
+	th, hok := values["p"]
+	if !mok || !tok || !hok || m < 8192 || m > 262144 || tc < 1 || tc > 10 || th < 1 || th > 8 {
+		return p, errors.New("password hash cost outside safe bounds")
+	}
 	p.memory, p.time, p.threads = uint32(m), uint32(tc), uint8(th)
 	p.salt, err = base64.RawStdEncoding.DecodeString(parts[4])
-	if err != nil || len(p.salt) != saltLength { return parsedHash{}, errors.New("invalid password hash salt") }
+	if err != nil || len(p.salt) != saltLength {
+		return parsedHash{}, errors.New("invalid password hash salt")
+	}
 	p.hash, err = base64.RawStdEncoding.DecodeString(parts[5])
-	if err != nil || len(p.hash) != hashLength { return parsedHash{}, errors.New("invalid password hash digest") }
+	if err != nil || len(p.hash) != hashLength {
+		return parsedHash{}, errors.New("invalid password hash digest")
+	}
 	return p, nil
 }
 
@@ -184,9 +221,13 @@ func verifyPasswordHash(ctx context.Context, encoded, candidate []byte) (bool, e
 		return false, ErrPasswordPolicy
 	}
 	parsed, err := parsePasswordHash(encoded)
-	if err != nil { return false, err }
+	if err != nil {
+		return false, err
+	}
 	release, err := passwordAdmission.acquire(ctx)
-	if err != nil { return false, err }
+	if err != nil {
+		return false, err
+	}
 	defer release()
 	actual := argon2.IDKey(candidate, parsed.salt, parsed.time, parsed.memory, parsed.threads, uint32(len(parsed.hash)))
 	return subtle.ConstantTimeCompare(actual, parsed.hash) == 1, nil

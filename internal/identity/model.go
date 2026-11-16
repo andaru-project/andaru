@@ -33,90 +33,98 @@ var (
 )
 
 type AccountKind string
+
 const (
-	Human AccountKind = "human"
+	Human   AccountKind = "human"
 	Service AccountKind = "service"
 )
 
 type Role string
+
 const Administrator Role = "administrator"
 
 type Account struct {
-	ID string
-	Login string
+	ID          string
+	Login       string
 	DisplayName string
-	Kind AccountKind
-	Enabled bool
-	RoleIDs []string
-	CreatedAt int64
-	UpdatedAt int64
+	Kind        AccountKind
+	Enabled     bool
+	RoleIDs     []string
+	CreatedAt   int64
+	UpdatedAt   int64
 }
 
 type CreateAccountInput struct {
-	Login string
+	Login       string
 	DisplayName string
-	Kind AccountKind
-	Enabled bool
-	RoleIDs []string
+	Kind        AccountKind
+	Enabled     bool
+	RoleIDs     []string
 }
 
 type UpdateAccountInput struct {
-	Login *string
+	Login       *string
 	DisplayName *string
-	Kind *AccountKind
-	Enabled *bool
-	RoleIDs *[]string
+	Kind        *AccountKind
+	Enabled     *bool
+	RoleIDs     *[]string
 }
 
-type CredentialInput struct { Password []byte }
-type TokenInput struct { Name string; Scopes []string }
-type SessionInput struct { AccountID string }
+type CredentialInput struct{ Password []byte }
+
+type TokenInput struct {
+	Name   string
+	Scopes []string
+}
+
+type SessionInput struct{ AccountID string }
 
 type TokenIssue struct {
-	AccountID string
-	Name string
-	Scope []authz.Capability
-	ExpiresAt *time.Time
-	NoExpiry bool
+	AccountID              string
+	Name                   string
+	Scope                  []authz.Capability
+	ExpiresAt              *time.Time
+	NoExpiry               bool
 	RevokeOnPasswordChange *bool
 }
 
 type Token struct {
-	Selector string
-	AccountID string
-	Name string
-	Scope []authz.Capability
-	CreatedAt time.Time
-	ExpiresAt *time.Time
-	NoExpiry bool
-	RevokedAt *time.Time
-	LastUsedAt *time.Time
+	Selector               string
+	AccountID              string
+	Name                   string
+	Scope                  []authz.Capability
+	CreatedAt              time.Time
+	ExpiresAt              *time.Time
+	NoExpiry               bool
+	RevokedAt              *time.Time
+	LastUsedAt             *time.Time
 	RevokeOnPasswordChange bool
-	PasswordEpoch uint64
-	Revision uint64
+	PasswordEpoch          uint64
+	Revision               uint64
 }
 
 type IssuedToken struct {
 	Selector string
-	Secret string
+	Secret   string
 	Metadata Token
 }
 
 type LoginResult struct {
-	Account Account
+	Account       Account
 	SessionCookie string
-	CSRFSecret string
-	ExpiresAt time.Time
+	CSRFSecret    string
+	ExpiresAt     time.Time
 }
 
 type Principal struct {
-	Account Account
-	Actor authz.Actor
-	Capabilities []authz.Capability
-	Token *Token
-	SessionSelector string
+	Account            Account
+	Actor              authz.Actor
+	Capabilities       []authz.Capability
+	Token              *Token
+	SessionSelector    string
 	AuthorizationEpoch uint64
 }
+
 // Store owns the private identity database.
 type Store interface {
 	Close() error

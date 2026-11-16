@@ -23,6 +23,7 @@ const (
 	maxTokenNameRunes  = 128
 	maxTokenScopeBytes = 1024
 )
+
 var (
 	tokenCapabilities = authz.Catalog()
 	tokenBuiltInRoles = authz.BuiltIns()
@@ -235,18 +236,18 @@ func (s *store) IssueToken(ctx context.Context, actor authz.Actor, issuerCaps, t
 	secretText := base64.RawURLEncoding.EncodeToString(secret[:])
 	return IssuedToken{
 		Selector: selectorText,
-		Secret: secretText,
+		Secret:   secretText,
 		Metadata: Token{
-			Selector: selectorText,
-			AccountID: input.AccountID,
-			Name: input.Name,
-			Scope: slices.Clone(scope),
-			CreatedAt: time.Unix(nowUnix, 0).UTC(),
-			ExpiresAt: expiresAt,
-			NoExpiry: expiresAt == nil,
+			Selector:               selectorText,
+			AccountID:              input.AccountID,
+			Name:                   input.Name,
+			Scope:                  slices.Clone(scope),
+			CreatedAt:              time.Unix(nowUnix, 0).UTC(),
+			ExpiresAt:              expiresAt,
+			NoExpiry:               expiresAt == nil,
 			RevokeOnPasswordChange: revokeOnPasswordChange,
-			PasswordEpoch: passwordEpoch,
-			Revision: nextRevision,
+			PasswordEpoch:          passwordEpoch,
+			Revision:               nextRevision,
 		},
 	}, nil
 }
@@ -277,15 +278,15 @@ func tokenFromColumns(selector []byte, accountID, name, encodedScope string, cre
 		return Token{}, err
 	}
 	token := Token{
-		Selector: base64.RawURLEncoding.EncodeToString(selector),
-		AccountID: accountID,
-		Name: name,
-		Scope: scope,
-		CreatedAt: time.Unix(created, 0).UTC(),
-		NoExpiry: !expiry.Valid,
+		Selector:               base64.RawURLEncoding.EncodeToString(selector),
+		AccountID:              accountID,
+		Name:                   name,
+		Scope:                  scope,
+		CreatedAt:              time.Unix(created, 0).UTC(),
+		NoExpiry:               !expiry.Valid,
 		RevokeOnPasswordChange: revoke == 1,
-		PasswordEpoch: uint64(passwordEpoch),
-		Revision: uint64(revision),
+		PasswordEpoch:          uint64(passwordEpoch),
+		Revision:               uint64(revision),
 	}
 	if expiry.Valid {
 		value := time.Unix(expiry.Int64, 0).UTC()
