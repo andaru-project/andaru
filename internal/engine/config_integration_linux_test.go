@@ -115,12 +115,26 @@ func TestConfigurationHTTPContract(t *testing.T) {
 	if e := json.Unmarshal(contract.Body.Bytes(), &document); e != nil {
 		t.Fatal(e)
 	}
-	expected := map[string][]string{"/api/v1/status/links": {"get", "head"}, "/api/v1/status/prefixes": {"get", "head"}, "/api/v1/openapi.json": {"get", "head"}, "/api/v1/schema": {"get", "head"}, "/api/v1/config": {"get", "head"}, "/api/v1/config/{collection}": {"get", "head", "post"}, "/api/v1/config/{collection}/{id}": {"get", "head", "put", "delete"}, "/api/v1/config/changes": {"post"}, "/api/v1/versions": {"get", "head"}, "/api/v1/versions/{id}": {"get", "head"}, "/api/v1/preview/network": {"get", "head"},
-		"/api/v1/applies": {"get", "head", "post"}, "/api/v1/applies/{id}": {"get", "head"}, "/api/v1/applies/{id}/confirmation": {"post"}, "/api/v1/applies/{id}/rollback": {"post"},
+	expected := map[string][]string{
+		"/api/v1/status/links": {"get", "head"}, "/api/v1/status/prefixes": {"get", "head"}, "/api/v1/openapi.json": {"get", "head"},
+		"/api/v1/schema": {"get", "head"}, "/api/v1/config": {"get", "head"}, "/api/v1/config/{collection}": {"get", "head", "post"},
+		"/api/v1/config/{collection}/{id}": {"get", "head", "put", "delete"}, "/api/v1/config/changes": {"post"},
+		"/api/v1/versions": {"get", "head"}, "/api/v1/versions/{id}": {"get", "head"}, "/api/v1/preview/network": {"get", "head"},
+		"/api/v1/applies": {"get", "head", "post"}, "/api/v1/applies/{id}": {"get", "head"},
+		"/api/v1/applies/{id}/confirmation": {"post"}, "/api/v1/applies/{id}/rollback": {"post"},
 		"/api/v1/takeover/proposal": {"get", "head"}, "/api/v1/preview/network/draft": {"post"},
 		"/api/v1/config/policy/{chain}": {"get", "head", "post"}, "/api/v1/config/policy/{chain}/{id}": {"get", "head", "put", "delete"},
-		"/api/v1/config/policy/{chain}/order": {"put"}, "/api/v1/config/nat/{list}": {"get", "head", "post"}, "/api/v1/config/nat/{list}/{id}": {"get", "head", "put", "delete"}, "/api/v1/config/nat/{list}/order": {"put"}, "/api/v1/config/management": {"get", "head", "put", "delete"}, "/api/v1/config/nat/outbound": {"get", "head", "put", "delete"}, "/api/v1/config/dns": {"get", "head", "put", "delete"},
-		"/api/v1/backups": {"post"}, "/api/v1/restores/preview": {"post"}, "/api/v1/restores": {"post"}}
+		"/api/v1/config/policy/{chain}/order": {"put"}, "/api/v1/config/nat/{list}": {"get", "head", "post"},
+		"/api/v1/config/nat/{list}/{id}": {"get", "head", "put", "delete"}, "/api/v1/config/nat/{list}/order": {"put"},
+		"/api/v1/config/management": {"get", "head", "put", "delete"}, "/api/v1/config/nat/outbound": {"get", "head", "put", "delete"},
+		"/api/v1/config/dns": {"get", "head", "put", "delete"}, "/api/v1/backups": {"post"},
+		"/api/v1/restores/preview": {"post"}, "/api/v1/restores": {"post"},
+		"/api/v1/capabilities": {"get", "head"}, "/api/v1/roles": {"get", "head"},
+		"/api/v1/users": {"get", "head", "post"}, "/api/v1/users/{id}": {"get", "head", "patch", "delete"},
+		"/api/v1/users/{id}/password": {"put"}, "/api/v1/tokens": {"get", "head", "post"},
+		"/api/v1/tokens/{selector}": {"delete"}, "/api/v1/audit/events": {"get", "head"},
+		"/api/v1/audit/export": {"get", "head"},
+	}
 	if len(document.Paths) != len(expected) {
 		t.Fatalf("unimplemented or missing contract paths: %d", len(document.Paths))
 	}

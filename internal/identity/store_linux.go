@@ -122,8 +122,14 @@ func openStore(ctx context.Context, stateDir string, beforeInitCommit, beforeChe
 		if e = tx.Commit(); e != nil {
 			return fail(e)
 		}
-	} else if app != applicationID || version != LayoutVersion {
-		return fail(errors.New("identity database application or layout mismatch"))
+	} else if app != applicationID {
+		return fail(errors.New("identity database application mismatch"))
+	} else if version == 1 {
+		if err = migrateIdentityV1(ctx, db); err != nil {
+			return fail(err)
+		}
+	} else if version != LayoutVersion {
+		return fail(errors.New("identity database layout mismatch"))
 	}
 	if err = verifySchema(ctx, db); err != nil {
 		return fail(err)
@@ -426,6 +432,8 @@ func (s *store) CreateAccount(ctx context.Context, input CreateAccountInput, exp
 	if _, err = tx.ExecContext(ctx, "INSERT INTO metadata(key,value) VALUES(?,0)", "account_epoch:"+account.ID); err != nil {
 		return Account{}, 0, err
 	}
+	setOperationTarget(ctx, account.ID)
+
 	revision, err := finishMutation(ctx, tx)
 	if err != nil {
 		return Account{}, 0, err
@@ -913,6 +921,9 @@ func finishMutation(ctx context.Context, tx *sql.Tx) (int64, error) {
 		return 0, err
 	}
 	if _, err := tx.ExecContext(ctx, "INSERT INTO revisions(revision,created_at) VALUES(?,unixepoch())", revision); err != nil {
+		return 0, err
+	}
+	if err := persistOperation(ctx, tx, revision); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {

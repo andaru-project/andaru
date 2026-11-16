@@ -78,6 +78,18 @@ func decodeTokenScope(encoded string) ([]authz.Capability, error) {
 }
 
 func (s *store) IssueToken(ctx context.Context, actor authz.Actor, issuerCaps, targetCaps []authz.Capability, input TokenIssue) (IssuedToken, error) {
+	revision, err := s.Revision(ctx)
+	if err != nil {
+		return IssuedToken{}, err
+	}
+	return s.issueToken(ctx, revision, actor, issuerCaps, targetCaps, input)
+}
+
+func (s *store) IssueTokenAtRevision(ctx context.Context, revision int64, actor authz.Actor, issuerCaps, targetCaps []authz.Capability, input TokenIssue) (IssuedToken, error) {
+	return s.issueToken(ctx, revision, actor, issuerCaps, targetCaps, input)
+}
+
+func (s *store) issueToken(ctx context.Context, revision int64, actor authz.Actor, issuerCaps, targetCaps []authz.Capability, input TokenIssue) (IssuedToken, error) {
 	if err := ctx.Err(); err != nil {
 		return IssuedToken{}, err
 	}
@@ -156,10 +168,6 @@ func (s *store) IssueToken(ctx context.Context, actor authz.Actor, issuerCaps, t
 	defer clear(secret[:])
 	secretHash := sha256.Sum256(secret[:])
 
-	revision, err := s.Revision(ctx)
-	if err != nil {
-		return IssuedToken{}, err
-	}
 	tx, err := s.beginMutation(ctx, revision)
 	if err != nil {
 		return IssuedToken{}, err
@@ -225,6 +233,8 @@ func (s *store) IssueToken(ctx context.Context, actor authz.Actor, issuerCaps, t
 		VALUES(?,?,?,?,?,?,?,?,?,?)`, selector[:], input.AccountID, secretHash[:], input.Name, encodeTokenScope(scope), nowUnix, expiry, revokeOnPasswordChange, passwordEpoch, nextRevision); err != nil {
 		return IssuedToken{}, err
 	}
+	selectorText := base64.RawURLEncoding.EncodeToString(selector[:])
+	setOperationTarget(ctx, selectorText)
 	committedRevision, err := finishMutation(ctx, tx)
 	if err != nil {
 		return IssuedToken{}, err
@@ -232,7 +242,6 @@ func (s *store) IssueToken(ctx context.Context, actor authz.Actor, issuerCaps, t
 	if uint64(committedRevision) != nextRevision {
 		return IssuedToken{}, ErrConflict
 	}
-	selectorText := base64.RawURLEncoding.EncodeToString(selector[:])
 	secretText := base64.RawURLEncoding.EncodeToString(secret[:])
 	return IssuedToken{
 		Selector: selectorText,
@@ -366,6 +375,72 @@ func (s *store) ListTokens(ctx context.Context, accountID string) ([]Token, erro
 	}
 	return result, nil
 }
+func (s *store) GetToken(ctx context.Context, selector string) (Token, error) {
+	selectorBytes, err := decodeTokenSelector(selector)
+	if err != nil {
+		return Token{}, ErrNotFound
+	}
+	token, secretHash, _, err := readToken(ctx, s.db, selectorBytes)
+	clear(secretHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Token{}, ErrNotFound
+	}
+	return token, err
+}
+
+func (s *store) ListTokensPage(ctx context.Context, accountID, afterSelector string, limit int) (TokenPage, error) {
+	if limit < 1 || limit > MaxTokenPageSize {
+		return TokenPage{}, ErrInvalid
+	}
+	if _, err := s.GetAccount(ctx, accountID); err != nil {
+		return TokenPage{}, err
+	}
+	cursor := []byte{}
+	if afterSelector != "" {
+		var err error
+		cursor, err = decodeTokenSelector(afterSelector)
+		if err != nil {
+			return TokenPage{}, ErrInvalid
+		}
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT selector,account_id,name,scopes,created_at,expires_at,revoked_at,last_used_at,revoke_on_password_change,password_epoch,revision
+		FROM api_tokens WHERE account_id=? AND selector>? ORDER BY selector LIMIT ?`, accountID, cursor, limit+1)
+	if err != nil {
+		return TokenPage{}, err
+	}
+	items := make([]Token, 0, limit+1)
+	for rows.Next() {
+		var selector []byte
+		var tokenAccountID, name, scope string
+		var created int64
+		var expiry, revoked, used sql.NullInt64
+		var revoke int
+		var passwordEpoch, revision int64
+		if err = rows.Scan(&selector, &tokenAccountID, &name, &scope, &created, &expiry, &revoked, &used, &revoke, &passwordEpoch, &revision); err != nil {
+			rows.Close()
+			return TokenPage{}, err
+		}
+		token, scanErr := tokenFromColumns(selector, tokenAccountID, name, scope, created, expiry, revoked, used, revoke, passwordEpoch, revision)
+		if scanErr != nil {
+			rows.Close()
+			return TokenPage{}, scanErr
+		}
+		items = append(items, token)
+	}
+	err = rows.Err()
+	if closeErr := rows.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return TokenPage{}, err
+	}
+	page := TokenPage{Items: items}
+	if len(items) > limit {
+		page.Items = items[:limit]
+		page.NextCursor = page.Items[len(page.Items)-1].Selector
+	}
+	return page, nil
+}
 
 func (s *store) RevokeToken(ctx context.Context, selector string) error {
 	selectorBytes, err := decodeTokenSelector(selector)
@@ -390,6 +465,9 @@ func (s *store) RevokeToken(ctx context.Context, selector string) error {
 		return err
 	}
 	if revoked.Valid {
+		if err = persistOperation(ctx, tx, revision); err != nil {
+			return err
+		}
 		return tx.Commit()
 	}
 	if _, err = tx.ExecContext(ctx, "UPDATE api_tokens SET revoked_at=? WHERE selector=? AND revoked_at IS NULL", time.Now().Unix(), selectorBytes); err != nil {

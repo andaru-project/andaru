@@ -3,6 +3,23 @@ package identity
 import _ "modernc.org/sqlite"
 
 const applicationID = 0x414e4449
+const operationTableDDL = `CREATE TABLE operations (
+ operation_id TEXT PRIMARY KEY CHECK(length(operation_id) BETWEEN 1 AND 128),
+ idempotency_key TEXT NOT NULL UNIQUE,
+ request_hash BLOB NOT NULL CHECK(length(request_hash)=32),
+ revision INTEGER NOT NULL REFERENCES revisions(revision),
+ created_at INTEGER NOT NULL,
+ actor_kind TEXT NOT NULL CHECK(actor_kind IN ('system','account','token')),
+ actor_id TEXT NOT NULL,
+ source TEXT NOT NULL CHECK(length(source) BETWEEN 1 AND 128),
+ action TEXT NOT NULL CHECK(length(action) BETWEEN 1 AND 64),
+ target TEXT NOT NULL CHECK(length(target)<=128),
+ outcome_target TEXT NOT NULL CHECK(length(outcome_target)<=128),
+ category TEXT NOT NULL CHECK(category IN ('general','protected')),
+ result TEXT NOT NULL CHECK(result='success'),
+ metadata TEXT NOT NULL CHECK(length(metadata)<=512)
+) STRICT`
+
 
 const schema = `
 CREATE TABLE accounts (
@@ -94,13 +111,7 @@ CREATE TABLE revisions (
  revision INTEGER PRIMARY KEY CHECK(revision>=0),
  created_at INTEGER NOT NULL
 ) STRICT;
-CREATE TABLE operations (
- operation_id TEXT PRIMARY KEY,
- idempotency_key TEXT NOT NULL UNIQUE,
- request_hash BLOB NOT NULL CHECK(length(request_hash)=32),
- revision INTEGER NOT NULL REFERENCES revisions(revision),
- created_at INTEGER NOT NULL
-) STRICT;
+` + operationTableDDL + `;
 INSERT INTO metadata(key,value) VALUES('revision',0);
 INSERT INTO revisions(revision,created_at) VALUES(0,unixepoch());
 INSERT INTO metadata(key,value) SELECT 'account_epoch:'||id,0 FROM accounts;

@@ -9,10 +9,10 @@ import (
 )
 
 const (
-	LayoutVersion       = 1
+	LayoutVersion       = 2
 	MaxAccounts         = 10_000
 	MaxRoleAssignments  = 10_002
-	MaxAccountPageSize  = 100
+	MaxTokenPageSize    = 50
 	MaxLoginLimitRows   = 10_000
 	MaxSourceLimitRows  = 50_000
 	MaxTokensPerAccount = 50
@@ -56,6 +56,10 @@ type Account struct {
 }
 type AccountPage struct {
 	Items      []Account
+	NextCursor string
+}
+type TokenPage struct {
+	Items      []Token
 	NextCursor string
 }
 
@@ -130,10 +134,38 @@ type Principal struct {
 	AuthorizationEpoch uint64
 }
 
+// OperationIntent binds a state-changing transaction to a verified actor and audit intent.
+type OperationIntent struct {
+	OperationID string
+	RequestHash string
+	Actor       authz.Actor
+	Source      string
+	Action      string
+	Target      string
+	Category    string
+}
+
+// OperationRecord is the durable, credential-free result of an identity transaction.
+type OperationRecord struct {
+	OperationID string
+	RequestHash string
+	Actor       authz.Actor
+	Source      string
+	Action      string
+	Target        string
+	OutcomeTarget string
+	Category      string
+	Revision      int64
+	Result        string
+	Metadata      map[string]string
+}
+
 // Store owns the private identity database.
 type Store interface {
 	Close() error
 	Revision(context.Context) (int64, error)
+	HashRequest(context.Context, []byte) (string, error)
+	LookupOperation(context.Context, string) (OperationRecord, bool, error)
 	BootstrapAdmin(context.Context, string, string, []byte) (Account, int64, error)
 	CreateAccount(context.Context, CreateAccountInput, int64) (Account, int64, error)
 	UpdateAccount(context.Context, string, int64, UpdateAccountInput) (Account, int64, error)
@@ -145,7 +177,10 @@ type Store interface {
 	ValidateAdministratorInvariant(context.Context) error
 	VerifyPassword(context.Context, string, []byte) (bool, error)
 	IssueToken(context.Context, authz.Actor, []authz.Capability, []authz.Capability, TokenIssue) (IssuedToken, error)
+	IssueTokenAtRevision(context.Context, int64, authz.Actor, []authz.Capability, []authz.Capability, TokenIssue) (IssuedToken, error)
 	ListTokens(context.Context, string) ([]Token, error)
+	GetToken(context.Context, string) (Token, error)
+	ListTokensPage(context.Context, string, string, int) (TokenPage, error)
 	RevokeToken(context.Context, string) error
 	AuthenticatePassword(context.Context, string, string, string, uint64) (LoginResult, error)
 	AuthenticateSession(context.Context, string, string, uint64) (Principal, error)

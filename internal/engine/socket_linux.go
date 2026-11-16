@@ -12,16 +12,21 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/andaru-project/andaru/internal/audit"
 	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/generation"
 	"github.com/andaru-project/andaru/internal/host"
 	"github.com/andaru-project/andaru/internal/securefs"
+	"github.com/andaru-project/andaru/internal/identity"
 )
 
 // Serve runs the root-local engine API without opening an IP listener.
 func Serve(ctx context.Context, socketPath, stateDir string) (result error) {
 	if os.Geteuid() != 0 {
 		return errors.New("the engine requires root")
+	}
+	if err := validateRouteCapabilities(openAPIDocument, engineRoutes); err != nil {
+		return fmt.Errorf("validate engine routes: %w", err)
 	}
 	store, err := config.Open(ctx, stateDir)
 	if err != nil {
@@ -32,6 +37,28 @@ func Serve(ctx context.Context, socketPath, stateDir string) (result error) {
 			result = err
 		}
 	}()
+	identities, err := identity.Open(ctx, stateDir)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := identities.Close(); err != nil && result == nil {
+			result = err
+		}
+	}()
+	audits, err := audit.Open(ctx, stateDir)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := audits.Close(); err != nil && result == nil {
+			result = err
+		}
+	}()
+	coordinator := newSecurityCoordinator(identities, audits)
+	if err = audits.Reconcile(ctx, coordinator); err != nil {
+		return fmt.Errorf("reconcile identity audit operations: %w", err)
+	}
 	lifetime, cancel := context.WithCancelCause(ctx)
 	stopped := make(chan struct{})
 	go func() {
@@ -46,7 +73,9 @@ func Serve(ctx context.Context, socketPath, stateDir string) (result error) {
 	read := hostReader{Links: host.ReadLinks, Facts: host.ReadRealizerFacts, Managed: host.ReadManaged, Baseline: host.ReadBaseline, Route: host.ReadDefaultRoutes, Resolved: host.ReadResolved}
 	applies := newAppliesHandler(store.RealizationInput, read, newSystemdRunner(stateDir), stateDir)
 	live := newLiveHandler(applies, newTakeoverHandler(store.RealizationInput, store.Draft, read, stateDir))
-	err = serveUnix(lifetime, socketPath, newHandler(host.ReadLinks, newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, previewIdentities(read, generation.Dir(stateDir)), live, newBackupHandler(store, stateDir, host.ReadLinks))))
+	identityAPI := newIdentityAPI(identities, store, coordinator)
+	auditAPI := newAuditAPI(coordinator)
+	err = serveUnix(lifetime, socketPath, newHandlerWithAPIs(host.ReadLinks, newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, previewIdentities(read, generation.Dir(stateDir)), live, newBackupHandler(store, stateDir, host.ReadLinks)), identityAPI, auditAPI))
 	cause := context.Cause(lifetime)
 	if cause != nil && !errors.Is(cause, context.Canceled) && !errors.Is(cause, context.DeadlineExceeded) {
 		return cause

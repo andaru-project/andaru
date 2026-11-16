@@ -5118,6 +5118,141 @@
         }
       ]
     },
+    "/api/v1/capabilities": {
+      "get": {
+        "operationId": "listCapabilities",
+        "x-required-capability": "users.read",
+        "parameters": [
+          {"name": "cursor", "in": "query", "schema": {"type": "string"}},
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100}}
+        ],
+        "responses": {"200": {"description": "A bounded capability page", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CapabilityPage"}}}}}
+      },
+      "head": {"operationId": "headCapabilities", "x-required-capability": "users.read", "responses": {"200": {"description": "Capability page headers"}}}
+    },
+    "/api/v1/roles": {
+      "get": {
+        "operationId": "listIdentityRoles",
+        "x-required-capability": "users.read",
+        "parameters": [
+          {"name": "cursor", "in": "query", "schema": {"type": "string"}},
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100}}
+        ],
+        "responses": {"200": {"description": "Immutable built-ins and saved custom roles", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RolePage"}}}}}
+      },
+      "head": {"operationId": "headIdentityRoles", "x-required-capability": "users.read", "responses": {"200": {"description": "Role page headers"}}}
+    },
+    "/api/v1/users": {
+      "get": {
+        "operationId": "listUsers",
+        "x-required-capability": "users.read",
+        "parameters": [
+          {"name": "cursor", "in": "query", "schema": {"type": "string"}},
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100}}
+        ],
+        "responses": {"200": {"description": "A bounded user page with the identity revision used for CAS", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UserPage"}}}}}
+      },
+      "head": {"operationId": "headUsers", "x-required-capability": "users.read", "responses": {"200": {"description": "User page headers"}}},
+      "post": {
+        "operationId": "createUser",
+        "x-required-capability": "users.manage",
+        "parameters": [{"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 128}}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateUserRequest"}}}},
+        "responses": {"201": {"description": "Committed account metadata", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OperationResult"}}}}}
+      }
+    },
+    "/api/v1/users/{id}": {
+      "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}],
+      "get": {
+        "operationId": "getUser",
+        "x-required-capability": "users.read",
+        "responses": {"200": {"description": "Credential-free user record", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/User"}}}}}
+      },
+      "head": {"operationId": "headUser", "x-required-capability": "users.read", "responses": {"200": {"description": "User headers"}}},
+      "patch": {
+        "operationId": "updateUser",
+        "x-required-capability": "users.manage",
+        "parameters": [{"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 128}}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UpdateUserRequest"}}}},
+        "responses": {"200": {"description": "Committed account metadata", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OperationResult"}}}}}
+      },
+      "delete": {
+        "operationId": "deleteUser",
+        "x-required-capability": "users.manage",
+        "parameters": [
+          {"name": "If-Match", "in": "header", "required": true, "schema": {"type": "string"}},
+          {"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 128}}
+        ],
+        "responses": {"200": {"description": "Committed deletion metadata", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OperationResult"}}}}}
+      }
+    },
+    "/api/v1/users/{id}/password": {
+      "put": {
+        "operationId": "changeUserPassword",
+        "x-required-capability": "users.manage",
+        "parameters": [
+          {"name": "id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}},
+          {"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 128}}
+        ],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PasswordChangeRequest"}}}},
+        "responses": {"200": {"description": "Committed password-change metadata", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OperationResult"}}}}}
+      }
+    },
+    "/api/v1/tokens": {
+      "get": {
+        "operationId": "listTokens",
+        "x-required-capability": "tokens.manageSelf",
+        "parameters": [
+          {"name": "accountId", "in": "query", "required": true, "schema": {"type": "string", "format": "uuid"}},
+          {"name": "cursor", "in": "query", "schema": {"type": "string"}},
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 50}}
+        ],
+        "responses": {"200": {"description": "Credential-free, bounded token metadata", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TokenPage"}}}}}
+      },
+      "head": {"operationId": "headTokens", "x-required-capability": "tokens.manageSelf", "responses": {"200": {"description": "Token page headers"}}},
+      "post": {
+        "operationId": "createToken",
+        "x-required-capability": "tokens.manageSelf",
+        "parameters": [{"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 128}}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TokenIssueRequest"}}}},
+        "responses": {"201": {"description": "The only response containing the one-time token secret", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TokenIssueResponse"}}}}, "200": {"description": "Replay metadata; secret unavailable", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TokenIssueResponse"}}}}}
+      }
+    },
+    "/api/v1/tokens/{selector}": {
+      "delete": {
+        "operationId": "revokeToken",
+        "x-required-capability": "tokens.manageSelf",
+        "parameters": [
+          {"name": "selector", "in": "path", "required": true, "schema": {"type": "string", "minLength": 22, "maxLength": 22}},
+          {"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 128}}
+        ],
+        "responses": {"200": {"description": "Committed revocation metadata", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OperationResult"}}}}}
+      }
+    },
+    "/api/v1/audit/events": {
+      "get": {
+        "operationId": "listAuditEvents",
+        "x-required-capability": "audit.read",
+        "parameters": [
+          {"name": "cursor", "in": "query", "schema": {"type": "string"}},
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100}}
+        ],
+        "responses": {"200": {"description": "Audited, bounded security event page", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AuditPage"}}}}}
+      },
+      "head": {"operationId": "headAuditEvents", "x-required-capability": "audit.read", "responses": {"200": {"description": "Audit page headers"}}}
+    },
+    "/api/v1/audit/export": {
+      "get": {
+        "operationId": "exportAuditPage",
+        "x-required-capability": "audit.read",
+        "parameters": [
+          {"name": "cursor", "in": "query", "schema": {"type": "string"}},
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100}}
+        ],
+        "responses": {"200": {"description": "Audited, paginated JSON export", "headers": {"Content-Disposition": {"schema": {"type": "string"}}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AuditPage"}}}}}
+      },
+      "head": {"operationId": "headAuditExport", "x-required-capability": "audit.read", "responses": {"200": {"description": "Audit export headers"}}}
+    },
     "/api/v1/config/nat/{list}/order": {
       "put": {
         "operationId": "orderNATEntries",
@@ -6475,6 +6610,181 @@
               "$ref": "#/components/schemas/ApplyFinding"
             }
           }
+        }
+      },
+      "CapabilityPage": {
+        "type": "object",
+        "required": ["items"],
+        "properties": {
+          "items": {"type": "array", "items": {"type": "string", "enum": ["audit.read", "backups.create", "backups.exportSecrets", "backups.restore", "configuration.apply", "configuration.confirm", "configuration.read", "configuration.write", "status.read", "tokens.manageAll", "tokens.manageSelf", "users.manage", "users.read"]}},
+          "nextCursor": {"type": "string"}
+        }
+      },
+      "Role": {
+        "type": "object",
+        "required": ["id", "name", "capabilities"],
+        "properties": {
+          "id": {"type": "string", "maxLength": 64},
+          "name": {"type": "string"},
+          "description": {"type": "string"},
+          "capabilities": {"type": "array", "items": {"type": "string"}},
+          "builtIn": {"type": "string", "enum": ["administrator", "read-only"]}
+        }
+      },
+      "RolePage": {
+        "type": "object",
+        "required": ["items"],
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/components/schemas/Role"}},
+          "nextCursor": {"type": "string"}
+        }
+      },
+      "User": {
+        "type": "object",
+        "required": ["id", "login", "displayName", "kind", "enabled", "roleIds", "revision", "createdAt", "updatedAt"],
+        "properties": {
+          "id": {"type": "string", "format": "uuid"},
+          "login": {"type": "string"},
+          "displayName": {"type": "string"},
+          "kind": {"type": "string", "enum": ["human", "service"]},
+          "enabled": {"type": "boolean"},
+          "roleIds": {"type": "array", "items": {"type": "string"}},
+          "revision": {"type": "integer", "minimum": 0},
+          "createdAt": {"type": "integer", "minimum": 0},
+          "updatedAt": {"type": "integer", "minimum": 0}
+        }
+      },
+      "UserPage": {
+        "type": "object",
+        "required": ["items"],
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/components/schemas/User"}},
+          "nextCursor": {"type": "string"}
+        }
+      },
+      "Token": {
+        "type": "object",
+        "required": ["selector", "accountId", "name", "scope", "createdAt", "noExpiry", "revokeOnPasswordChange", "revision"],
+        "properties": {
+          "selector": {"type": "string", "minLength": 22, "maxLength": 22},
+          "accountId": {"type": "string", "format": "uuid"},
+          "name": {"type": "string"},
+          "scope": {"type": "array", "items": {"type": "string"}},
+          "createdAt": {"type": "string", "format": "date-time"},
+          "expiresAt": {"type": "string", "format": "date-time"},
+          "noExpiry": {"type": "boolean"},
+          "revokedAt": {"type": "string", "format": "date-time"},
+          "lastUsedAt": {"type": "string", "format": "date-time"},
+          "revokeOnPasswordChange": {"type": "boolean"},
+          "revision": {"type": "integer", "minimum": 0}
+        }
+      },
+      "TokenPage": {
+        "type": "object",
+        "required": ["items"],
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/components/schemas/Token"}},
+          "nextCursor": {"type": "string"}
+        }
+      },
+      "AuditEvent": {
+        "type": "object",
+        "required": ["id", "at", "actor", "source", "action", "target", "result", "category", "count", "metadata"],
+        "properties": {
+          "id": {"type": "integer", "minimum": 0},
+          "at": {"type": "string", "format": "date-time"},
+          "actor": {"type": "object", "required": ["kind", "id"], "properties": {"kind": {"type": "string", "enum": ["system", "account", "token"]}, "id": {"type": "string"}}},
+          "source": {"type": "string"},
+          "action": {"type": "string"},
+          "target": {"type": "string"},
+          "result": {"type": "string"},
+          "operationId": {"type": "string"},
+          "category": {"type": "string", "enum": ["general", "protected"]},
+          "count": {"type": "integer", "minimum": 0},
+          "metadata": {"type": "object", "additionalProperties": false, "properties": {"reasonCode": {"type": "string"}, "changed": {"type": "string"}, "scopeCount": {"type": "string"}, "secretUnavailable": {"type": "string"}, "category": {"type": "string"}, "expiredGeneral": {"type": "string"}, "expiredProtected": {"type": "string"}, "countPrunedGeneral": {"type": "string"}, "watermark": {"type": "string"}}}
+        }
+      },
+      "AuditPage": {
+        "type": "object",
+        "required": ["items"],
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/components/schemas/AuditEvent"}},
+          "nextCursor": {"type": "string"}
+        }
+      },
+      "OperationResult": {
+        "type": "object",
+        "required": ["operationId", "result", "target", "metadata"],
+        "properties": {
+          "operationId": {"type": "string", "maxLength": 128},
+          "result": {"type": "string", "enum": ["success"]},
+          "target": {"type": "string"},
+          "metadata": {"type": "object", "additionalProperties": false, "properties": {"reasonCode": {"type": "string"}, "changed": {"type": "string"}, "scopeCount": {"type": "string"}, "secretUnavailable": {"type": "string"}}},
+          "auditPending": {"type": "boolean"}
+        }
+      },
+      "TokenIssueResponse": {
+        "allOf": [
+          {"$ref": "#/components/schemas/OperationResult"},
+          {
+            "type": "object",
+            "required": ["selector", "secretUnavailable"],
+            "properties": {
+              "selector": {"type": "string", "minLength": 22, "maxLength": 22},
+              "secret": {"type": "string", "minLength": 43, "maxLength": 43},
+              "secretUnavailable": {"type": "boolean"},
+              "token": {"$ref": "#/components/schemas/Token"}
+            }
+          }
+        ]
+      },
+      "CreateUserRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["login", "kind", "enabled", "expectedRevision"],
+        "properties": {
+          "login": {"type": "string", "minLength": 3, "maxLength": 64},
+          "displayName": {"type": "string", "maxLength": 128},
+          "kind": {"type": "string", "enum": ["human", "service"]},
+          "enabled": {"type": "boolean"},
+          "roleIds": {"type": "array", "maxItems": 10002, "items": {"type": "string"}},
+          "expectedRevision": {"type": "integer", "minimum": 0}
+        }
+      },
+      "UpdateUserRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["expectedRevision"],
+        "properties": {
+          "login": {"type": "string", "minLength": 3, "maxLength": 64},
+          "displayName": {"type": "string", "maxLength": 128},
+          "kind": {"type": "string", "enum": ["human", "service"]},
+          "enabled": {"type": "boolean"},
+          "roleIds": {"type": "array", "maxItems": 10002, "items": {"type": "string"}},
+          "expectedRevision": {"type": "integer", "minimum": 0}
+        }
+      },
+      "PasswordChangeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["newPassword", "expectedRevision"],
+        "properties": {
+          "currentPassword": {"type": "string", "writeOnly": true, "maxLength": 512},
+          "newPassword": {"type": "string", "writeOnly": true, "minLength": 15, "maxLength": 512},
+          "expectedRevision": {"type": "integer", "minimum": 0}
+        }
+      },
+      "TokenIssueRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["accountId", "name", "scope"],
+        "properties": {
+          "accountId": {"type": "string", "format": "uuid"},
+          "name": {"type": "string", "minLength": 1, "maxLength": 128},
+          "scope": {"type": "array", "items": {"type": "string"}},
+          "expiresAt": {"type": "string", "format": "date-time"},
+          "noExpiry": {"type": "boolean"},
+          "revokeOnPasswordChange": {"type": "boolean"}
         }
       },
       "DraftResponse": {

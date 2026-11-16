@@ -48,13 +48,23 @@ type errorResponse struct {
 var prefixesRoot = ""
 
 func newHandler(readLinks func(context.Context) ([]host.LinkStatus, error), configuration http.Handler) http.Handler {
+	return newHandlerWithAPIs(readLinks, configuration, nil, nil)
+}
+
+func newHandlerWithAPIs(readLinks func(context.Context) ([]host.LinkStatus, error), configuration, identityAPI, auditAPI http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		peer, _ := r.Context().Value(peerKey{}).(peerIdentity)
-		if !peer.verified || peer.uid != 0 {
-			writeError(w, r, http.StatusForbidden, "FORBIDDEN", "Root Unix peer credentials are required.")
+		if _, ok := authorizeRequest(w, r); !ok {
+			return
+		}
+		if (r.URL.Path == "/api/v1/capabilities" || r.URL.Path == "/api/v1/roles" || strings.HasPrefix(r.URL.Path, "/api/v1/users") || strings.HasPrefix(r.URL.Path, "/api/v1/tokens")) && identityAPI != nil {
+			identityAPI.ServeHTTP(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/v1/audit/") && auditAPI != nil {
+			auditAPI.ServeHTTP(w, r)
 			return
 		}
 		saved := r.URL.Path == "/api/v1/schema" || r.URL.Path == "/api/v1/config" || strings.HasPrefix(r.URL.Path, "/api/v1/config/") || r.URL.Path == "/api/v1/versions" || strings.HasPrefix(r.URL.Path, "/api/v1/versions/") || r.URL.Path == previewPath || isBackupPath(r.URL.Path)

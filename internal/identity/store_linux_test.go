@@ -43,7 +43,7 @@ func TestOpenRestartAndSchema(t *testing.T) {
 	if err = s.db.QueryRow("PRAGMA application_id").Scan(&app); err != nil || app != applicationID {
 		t.Fatalf("app=%x err=%v", app, err)
 	}
-	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 1 {
+	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != LayoutVersion {
 		t.Fatalf("version=%d err=%v", version, err)
 	}
 	for _, table := range []string{"accounts", "tombstones", "account_roles", "password_credentials", "api_tokens", "sessions", "login_limits", "source_limits", "limiter_key", "limiter_overload", "metadata", "revisions", "operations"} {
