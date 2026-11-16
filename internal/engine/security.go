@@ -336,11 +336,23 @@ func authorizeRequest(w http.ResponseWriter, r *http.Request) (requestActor, boo
 		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
 		return requestActor{}, false
 	}
-	if !hasCapability(actor, route.Capability) {
+	if !hasCapability(actor, route.Capability) && !ownPasswordChange(actor, r.Method, r.URL.Path) {
 		writeError(w, r, http.StatusForbidden, "FORBIDDEN", "The verified actor lacks the required capability.")
 		return requestActor{}, false
 	}
 	return actor, true
+}
+
+func ownPasswordChange(actor requestActor, method, path string) bool {
+	if actor.Root || actor.AccountID == "" || actor.Actor.Kind != authz.ActorAccount || method != http.MethodPut {
+		return false
+	}
+	id, ok := strings.CutPrefix(path, "/api/v1/users/")
+	if !ok {
+		return false
+	}
+	id, ok = strings.CutSuffix(id, "/password")
+	return ok && id == actor.AccountID && !strings.Contains(id, "/")
 }
 
 type securityCoordinator struct {

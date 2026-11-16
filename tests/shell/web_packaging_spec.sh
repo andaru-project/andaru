@@ -8,6 +8,14 @@ Describe 'andaru web packaging'
     The status should equal 0
   End
 
+  It 'records the allocated web uid where the engine reads it'
+    When call sh -c '
+      grep -q "engine-web-peer" "$1" &&
+      grep -q "id -u andaru-web" "$1" &&
+      grep -q "readWebPeer(\"/etc/andaru/engine-web-peer\")" "$2"' sh "$root/debian/andaru.postinst" "$root/cmd/andaru/main.go"
+    The status should equal 0
+  End
+
   It 'declares the root-owned web socket parent and group traversal mode'
     When call grep -Eq '^d[[:space:]]+/run/andaru-web[[:space:]]+0710[[:space:]]+root[[:space:]]+andaru-web[[:space:]]+-$' "$root/packaging/tmpfiles.d/andaru.conf"
     The status should equal 0

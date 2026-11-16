@@ -51,11 +51,11 @@ type webAccountView struct {
 }
 
 type webSessionResponse struct {
-	Account            webAccountView       `json:"account"`
-	Capabilities       []authz.Capability   `json:"capabilities"`
-	CSRFToken          string               `json:"csrfToken"`
-	ExpiresAt           time.Time            `json:"expiresAt"`
-	IdleTimeoutSeconds  int                  `json:"idleTimeoutSeconds"`
+	Account            webAccountView     `json:"account"`
+	Capabilities       []authz.Capability `json:"capabilities"`
+	CSRFToken          string             `json:"csrfToken"`
+	ExpiresAt          time.Time          `json:"expiresAt"`
+	IdleTimeoutSeconds int                `json:"idleTimeoutSeconds"`
 }
 
 type webSessionView struct {
@@ -185,28 +185,38 @@ func (h *webAPI) login(w http.ResponseWriter, r *http.Request, source string) {
 	if !ok {
 		return
 	}
-	var snapshot authz.Snapshot
-	var result identity.LoginResult
-	err := h.withLiveAuthorization(r.Context(), func(live authz.Snapshot, epoch uint64) error {
-		snapshot = live
-		var authErr error
-		result, authErr = h.identities.AuthenticatePasswordWithIntent(r.Context(), request.Login, request.Password, source, epoch, func(account identity.Account) error {
-			_, auditErr := h.coordinator.audits.Append(r.Context(), audit.Event{
-				Actor: authz.Actor{Kind: authz.ActorAccount, ID: account.ID}, Source: source, Action: audit.ActionLoginSuccess,
-				Target: account.ID, Result: audit.ResultSuccess, Category: audit.CategoryGeneral,
-			})
-			if auditErr != nil {
-				return errors.Join(errWebAuditUnavailable, auditErr)
-			}
-			return nil
+	snapshot, epoch, err := h.readLiveAuthorization(r.Context())
+	if err != nil {
+		h.loginError(w, r, source, err)
+		return
+	}
+	result, err := h.identities.AuthenticatePasswordWithIntent(r.Context(), request.Login, request.Password, source, epoch, func(account identity.Account) error {
+		_, auditErr := h.coordinator.audits.Append(r.Context(), audit.Event{
+			Actor: authz.Actor{Kind: authz.ActorAccount, ID: account.ID}, Source: source, Action: audit.ActionLoginSuccess,
+			Target: account.ID, Result: audit.ResultSuccess, Category: audit.CategoryGeneral,
 		})
-		return authErr
+		if auditErr != nil {
+			return errors.Join(errWebAuditUnavailable, auditErr)
+		}
+		return nil
 	})
 	request.Password = ""
 	if err != nil {
 		h.loginError(w, r, source, err)
 		return
 	}
+	confirmed, confirmedEpoch, err := h.readLiveAuthorization(r.Context())
+	if err != nil || confirmedEpoch != epoch {
+		if selector, secret, ok := splitCredential(result.SessionCookie); ok {
+			_ = h.identities.Logout(r.Context(), selector, secret)
+		}
+		if err == nil {
+			err = authz.ErrTransitionInProgress
+		}
+		h.loginError(w, r, source, err)
+		return
+	}
+	snapshot = confirmed
 	capabilities := resolveSnapshot(snapshot, result.Account.RoleIDs)
 	setSessionCookie(w, result.SessionCookie, result.ExpiresAt)
 	writeJSON(w, r, http.StatusOK, sessionResponse(result.Account, capabilities, result.CSRFSecret, result.ExpiresAt))
@@ -414,7 +424,7 @@ func (h *webAPI) protected(w http.ResponseWriter, r *http.Request, source string
 		}
 	}
 	actor := requestActor{Actor: principal.Actor, Source: source, AccountID: principal.Account.ID, Capabilities: slices.Clone(principal.Capabilities)}
-	if !hasCapability(actor, route.Capability) {
+	if !hasCapability(actor, route.Capability) && !ownPasswordChange(actor, r.Method, r.URL.Path) {
 		if _, err = h.coordinator.audits.Append(r.Context(), audit.Event{
 			Actor: actor.Actor, Source: source, Action: audit.ActionPermissionDenied, Result: audit.ResultDenied,
 			Category: audit.CategoryGeneral, Metadata: map[string]string{audit.MetadataReasonCode: audit.ReasonPermissionDenied},
@@ -485,6 +495,20 @@ func (h *webAPI) withLiveAuthorization(ctx context.Context, fn func(authz.Snapsh
 		return err
 	}
 	return fn(snapshot, epoch)
+}
+
+func (h *webAPI) readLiveAuthorization(ctx context.Context) (authz.Snapshot, uint64, error) {
+	lock, err := authz.Acquire(ctx, h.stateDir)
+	if err != nil {
+		return authz.Snapshot{}, 0, err
+	}
+	defer lock.Close()
+	if _, pending, err := lock.Pending(); err != nil {
+		return authz.Snapshot{}, 0, err
+	} else if pending {
+		return authz.Snapshot{}, 0, authz.ErrTransitionInProgress
+	}
+	return liveAuthorizationLocked(ctx, h.stateDir, h.configuration, lock)
 }
 
 func (h *webAPI) validateCSRF(w http.ResponseWriter, r *http.Request, sessionSelector, sessionSecret string) bool {
@@ -579,11 +603,10 @@ func sessionResponse(account identity.Account, capabilities []authz.Capability, 
 		capabilities = []authz.Capability{}
 	}
 	return webSessionResponse{
-		Account: webAccountView{ID: account.ID, Login: account.Login, DisplayName: account.DisplayName},
+		Account:      webAccountView{ID: account.ID, Login: account.Login, DisplayName: account.DisplayName},
 		Capabilities: capabilities, CSRFToken: csrf, ExpiresAt: expires.UTC(), IdleTimeoutSeconds: webSessionIdleSeconds,
 	}
 }
-
 
 func setSessionCookie(w http.ResponseWriter, value string, expires time.Time) {
 	http.SetCookie(w, &http.Cookie{

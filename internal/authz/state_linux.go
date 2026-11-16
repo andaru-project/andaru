@@ -124,7 +124,7 @@ func validState(state State) bool {
 }
 
 func validPending(p PendingTransition) bool {
-	return p.GenerationID > 0 && p.IdentityRevision > 0 && digestPattern.MatchString(p.AuthorizationDigest) &&
+	return p.GenerationID > 0 && p.IdentityRevision >= 0 && digestPattern.MatchString(p.AuthorizationDigest) &&
 		(p.Phase == TransitionActivate || p.Phase == TransitionConfirm)
 }
 

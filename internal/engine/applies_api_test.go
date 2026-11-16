@@ -43,9 +43,9 @@ type applyBench struct {
 	block       chan struct{} // Realize waits here when set
 	beforeVerb  func()
 	afterArm    func()
-	unbound    bool // networkd never binds the new files
-	hostDown   bool
-	stuck      bool // activation fails and cannot restore: the generation stays pending
+	unbound     bool // networkd never binds the new files
+	hostDown    bool
+	stuck       bool // activation fails and cannot restore: the generation stays pending
 }
 
 type applyIdentityState struct {
@@ -316,6 +316,27 @@ func TestApplyHappyPath(t *testing.T) {
 		t.Fatal("HEAD returned a body")
 	}
 	assertAPIError(t, b.call(http.MethodPost, "/api/v1/applies", takeoverBody), http.StatusConflict, "APPLY_IN_PROGRESS")
+}
+
+func TestApplyStagesInitialIdentityRevision(t *testing.T) {
+	b := newApplyBench(t)
+	b.identities.revision = 0
+	got := b.decode(b.call(http.MethodPost, "/api/v1/applies", takeoverBody), http.StatusOK)
+	if got.ID != "1" || got.State != generation.Awaiting {
+		t.Fatalf("apply = %+v", got)
+	}
+	lock, err := authz.Acquire(t.Context(), b.state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if pending, found, err := lock.Pending(); err != nil || found {
+		t.Fatalf("activation left authorization pending %+v err=%v", pending, err)
+	}
+	g, err := generation.Read(generation.Dir(b.state), 1)
+	if err != nil || g.IdentityRevision != 0 {
+		t.Fatalf("generation revision=%d err=%v", g.IdentityRevision, err)
+	}
 }
 
 func TestApplyRequestValidation(t *testing.T) {
@@ -673,7 +694,7 @@ func TestUnchangedAuthorizationAllowsTokenConfirmation(t *testing.T) {
 	second := b.apply(`{"savedVersion":"7"}`)
 	token := identity.Principal{
 		Account: identity.Account{ID: "00000000-0000-4000-8000-000000000001", Kind: identity.Service, Enabled: true},
-		Actor: authz.Actor{Kind: authz.ActorToken, ID: strings.Repeat("A", 22)}, Capabilities: []authz.Capability{authz.ConfigurationConfirm},
+		Actor:   authz.Actor{Kind: authz.ActorToken, ID: strings.Repeat("A", 22)}, Capabilities: []authz.Capability{authz.ConfigurationConfirm},
 	}
 	response := b.callPrincipal(http.MethodPost, appliesPath+"/"+second.ID+"/confirmation", token)
 	if response.Code != http.StatusOK {

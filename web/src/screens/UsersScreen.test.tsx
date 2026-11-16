@@ -46,12 +46,16 @@ it('shows a server 403 even when the capability advertised a control', async () 
   expect(await screen.findByRole('alert')).toHaveTextContent('The server denied this user change.');
 });
 
-it('states the password policy and keeps built-in administrator resets console-only', async () => {
-  fetchQueue(jsonResponse(200, userPage), jsonResponse(200, roles));
+it('lets an administrator change their own password and keeps another built-in reset console-only', async () => {
+  const other = { id: '11111111-1111-4111-8111-111111111111', login: 'other', displayName: 'Other', kind: 'human', enabled: true, roleIds: ['administrator'], revision: 2, createdAt: 1, updatedAt: 1 };
+  fetchQueue(jsonResponse(200, { items: [...userPage.items, other] }), jsonResponse(200, roles));
   render(<UsersScreen api={new ApiClient()} session={{ ...baseSession, capabilities: ['users.read', 'users.manage'] }} onSessionLost={vi.fn()} />);
 
   await userEvent.click(await screen.findByRole('button', { name: /reset password for admin/i }));
+  expect(screen.getByLabelText(/New password/)).toBeEnabled();
+  await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  await userEvent.click(screen.getByRole('button', { name: /reset password for other/i }));
   expect(screen.getByRole('dialog')).toHaveTextContent('Built-in administrator passwords can only be reset from the root console.');
   expect(screen.getByRole('dialog')).toHaveTextContent('15–128 Unicode characters');
-  expect(screen.queryByLabelText('New password')).toBeDisabled();
+  expect(screen.getByLabelText(/New password/)).toBeDisabled();
 });

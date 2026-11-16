@@ -161,7 +161,7 @@ func (r Realizer) Confirm(ctx context.Context, id int) (result error) {
 	if err != nil {
 		return err
 	}
-	if g.IdentityRevision > 0 && g.AuthorizationDigest != previousDigest {
+	if g.AuthorizationDigest != previousDigest {
 		if err = requireAuthorizationTransition(authorization, g, id, authz.TransitionConfirm); err != nil {
 			return err
 		}

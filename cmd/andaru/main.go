@@ -5,13 +5,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/andaru-project/andaru/internal/engine"
 	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
-	"github.com/andaru-project/andaru/internal/engine"
 )
 
 const defaultSocket = "/run/andaru/engine.sock"
@@ -78,6 +79,17 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			return 2
 		}
 		webConfigured := webSocket != "" || webUID != 0 || webGID != 0 || len(webOrigins) != 0
+		if webSocket != "" && (webUID == 0 || webGID == 0) {
+			peerUID, peerGID, peerErr := readWebPeer("/etc/andaru/engine-web-peer")
+			if peerErr == nil {
+				if webUID == 0 {
+					webUID = peerUID
+				}
+				if webGID == 0 {
+					webGID = peerGID
+				}
+			}
+		}
 		var err error
 		if !webConfigured {
 			err = engine.Serve(ctx, *socket, stateDir)
@@ -100,6 +112,26 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 }
 
 type repeatedFlags []string
+
+func readWebPeer(path string) (uint64, uint64, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, 0, err
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) != 2 {
+		return 0, 0, errors.New("web peer file must contain uid and gid")
+	}
+	uid, err := strconv.ParseUint(fields[0], 10, 32)
+	if err != nil || uid == 0 {
+		return 0, 0, errors.New("web peer uid must be a non-root 32-bit id")
+	}
+	gid, err := strconv.ParseUint(fields[1], 10, 32)
+	if err != nil || gid == 0 {
+		return 0, 0, errors.New("web peer gid must be a non-root 32-bit id")
+	}
+	return uid, gid, nil
+}
 
 func (f *repeatedFlags) String() string {
 	return strings.Join(*f, ",")

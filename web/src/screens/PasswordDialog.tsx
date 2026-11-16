@@ -5,13 +5,14 @@ import type { User } from '../types';
 
 interface PasswordDialogProps {
   user: User;
+  selfAccountId: string;
   onClose(): void;
   onSessionLost(): void;
   onSave(currentPassword: string, newPassword: string): Promise<void>;
 }
 
-export function PasswordDialog({ user, onClose, onSessionLost, onSave }: PasswordDialogProps) {
-  const consoleOnly = user.roleIds.includes('administrator');
+export function PasswordDialog({ user, selfAccountId, onClose, onSessionLost, onSave }: PasswordDialogProps) {
+  const consoleOnly = user.roleIds.includes('administrator') && user.id !== selfAccountId;
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');

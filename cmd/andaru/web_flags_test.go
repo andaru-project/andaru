@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
 	"strings"
 	"testing"
 )
@@ -29,5 +30,23 @@ func TestRepeatedFlagsRejectEmptyValues(t *testing.T) {
 	}
 	if err := values.Set("https://router.example"); err != nil || values.String() != "https://router.example" {
 		t.Fatalf("valid repeated flag=%q err=%v", values.String(), err)
+	}
+}
+
+func TestReadWebPeerRejectsRootAndMalformedFiles(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/peer"
+	if err := os.WriteFile(path, []byte("0 10\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := readWebPeer(path); err == nil {
+		t.Fatal("root uid accepted")
+	}
+	if err := os.WriteFile(path, []byte("10 20\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	uid, gid, err := readWebPeer(path)
+	if err != nil || uid != 10 || gid != 20 {
+		t.Fatalf("peer=%d %d err=%v", uid, gid, err)
 	}
 }

@@ -106,12 +106,13 @@ func generationAuthorizationDigest(dir string, p Pointers, id *int) (string, err
 }
 
 func requireAuthorizationTransition(lock *authz.StateLock, g Generation, id int, phase string) error {
-	if g.IdentityRevision == 0 {
-		return nil
-	}
 	pending, found, err := lock.Pending()
 	if err != nil {
 		return err
+	}
+	// Revision 0 with no pending file is a pre-identity generation. A recorded pending file, including the initial store revision, must match.
+	if g.IdentityRevision == 0 && !found {
+		return nil
 	}
 	if !found || pending != (authz.PendingTransition{
 		GenerationID: id, Phase: phase, IdentityRevision: g.IdentityRevision, AuthorizationDigest: g.AuthorizationDigest,
@@ -372,9 +373,7 @@ func (r Realizer) Activate(ctx context.Context, id int) (result error) {
 	if err = requireAuthorizationTransition(authorization, g, id, authz.TransitionActivate); err != nil {
 		return err
 	}
-	if g.IdentityRevision > 0 {
-		defer func() { result = errors.Join(result, authorization.ClearPending(id, authz.TransitionActivate)) }()
-	}
+	defer func() { result = errors.Join(result, authorization.ClearPending(id, authz.TransitionActivate)) }()
 	previousDigest, err := generationAuthorizationDigest(dir, p, p.Live)
 	if err != nil {
 		return err

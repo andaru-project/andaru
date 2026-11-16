@@ -83,14 +83,14 @@ export function UsersScreen({ api, session, onSessionLost }: UsersScreenProps) {
       {loading ? <Loader aria-label="Loading users" /> : users.length === 0 ? <Alert role="status">No users are visible.</Alert> : (
         <ScrollArea>
           <Table striped highlightOnHover>
-            <Table.Thead><Table.Tr><Table.Th>Account</Table.Th><Table.Th>Kind</Table.Th><Table.Th>Status</Table.Th><Table.Th>Roles</Table.Th>{canManage && <Table.Th>Actions</Table.Th>}</Table.Tr></Table.Thead>
+            <Table.Thead><Table.Tr><Table.Th>Account</Table.Th><Table.Th>Kind</Table.Th><Table.Th>Status</Table.Th><Table.Th>Roles</Table.Th>{(canManage || users.some((user) => user.id === session.account.id)) && <Table.Th>Actions</Table.Th>}</Table.Tr></Table.Thead>
             <Table.Tbody>{users.map((user) => (
               <Table.Tr key={user.id}>
                 <Table.Td><Text fw={600}>{user.displayName || user.login}</Text><Text c="dimmed" size="sm">{user.login}</Text></Table.Td>
                 <Table.Td>{user.kind === 'service' ? 'Service' : 'Human'}</Table.Td>
                 <Table.Td><Badge color={user.enabled ? 'green' : 'gray'}>{user.enabled ? 'Enabled' : 'Disabled'}</Badge></Table.Td>
                 <Table.Td>{user.roleIds.map((id) => roles.find((role) => role.id === id)?.name ?? `${id} (missing)`).join(', ') || 'None'}</Table.Td>
-                {canManage && <Table.Td><Group gap="xs" wrap="nowrap"><Button aria-label={`Edit ${user.login}`} size="xs" variant="default" onClick={() => setEditing(user)}>Edit</Button>{user.kind === 'human' && <Button aria-label={`Reset password for ${user.login}`} size="xs" variant="default" onClick={() => setPasswordUser(user)}>Password</Button>}<Button aria-label={`Delete ${user.login}`} color="red" size="xs" variant="subtle" onClick={() => setDeleting(user)}>Delete</Button></Group></Table.Td>}
+                {(canManage || user.id === session.account.id) && <Table.Td><Group gap="xs" wrap="nowrap">{canManage && <Button aria-label={`Edit ${user.login}`} size="xs" variant="default" onClick={() => setEditing(user)}>Edit</Button>}{user.kind === 'human' && <Button aria-label={`Reset password for ${user.login}`} size="xs" variant="default" onClick={() => setPasswordUser(user)}>Password</Button>}{canManage && <Button aria-label={`Delete ${user.login}`} color="red" size="xs" variant="subtle" onClick={() => setDeleting(user)}>Delete</Button>}</Group></Table.Td>}
               </Table.Tr>
             ))}</Table.Tbody>
           </Table>
@@ -98,7 +98,7 @@ export function UsersScreen({ api, session, onSessionLost }: UsersScreenProps) {
       )}
       {nextCursor && <Button variant="default" onClick={() => void loadMore()}>Load more users</Button>}
       {editing && <UserDialog key={editing === 'new' ? 'new' : editing.id} user={editing === 'new' ? undefined : editing} revision={revision} roles={roles} onClose={() => setEditing(null)} onSessionLost={onSessionLost} onSave={saveUser} />}
-      {passwordUser && <PasswordDialog user={passwordUser} onClose={() => setPasswordUser(null)} onSessionLost={onSessionLost} onSave={async (currentPassword, newPassword) => { await api.changePassword(passwordUser.id, { currentPassword, newPassword, expectedRevision: passwordUser.revision }); await load(); }} />}
+      {passwordUser && <PasswordDialog user={passwordUser} selfAccountId={session.account.id} onClose={() => setPasswordUser(null)} onSessionLost={onSessionLost} onSave={async (currentPassword, newPassword) => { await api.changePassword(passwordUser.id, { currentPassword, newPassword, expectedRevision: passwordUser.revision }); await load(); }} />}
       <Modal opened={Boolean(deleting)} onClose={() => setDeleting(null)} title="Delete user" centered>
         <Stack><Text>Delete <strong>{deleting?.login}</strong>? The account’s sessions and tokens will stop working. The server will refuse removal of the final recovery administrator.</Text><Group justify="flex-end"><Button variant="default" onClick={() => setDeleting(null)}>Cancel</Button><Button color="red" onClick={() => void deleteUser()}>Delete user</Button></Group></Stack>
       </Modal>

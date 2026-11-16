@@ -506,8 +506,13 @@ func (h *identityAPI) changePassword(w http.ResponseWriter, r *http.Request, id 
 		writeIdentityError(w, r, err)
 		return
 	}
-	if slices.Contains(target.RoleIDs, authz.AdministratorRoleID) && !actor.Root {
+	self := actor.Actor.Kind == authz.ActorAccount && actor.AccountID == id
+	if slices.Contains(target.RoleIDs, authz.AdministratorRoleID) && !actor.Root && !self {
 		writeError(w, r, http.StatusForbidden, "FORBIDDEN", "Built-in administrator passwords can only be reset from the root console.")
+		return
+	}
+	if !actor.Root && !self && !hasCapability(actor, authz.UsersManage) {
+		writeError(w, r, http.StatusForbidden, "FORBIDDEN", "Changing another account password requires users.manage.")
 		return
 	}
 	if actor.Root {
