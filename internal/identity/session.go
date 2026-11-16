@@ -51,6 +51,9 @@ func credentialPair(selector, secret []byte) string {
 }
 
 func decodeSessionPart(value string) ([]byte, error) {
+	if len(value) != base64.RawURLEncoding.EncodedLen(sessionSelectorBytes) {
+		return nil, ErrAuthentication
+	}
 	decoded, err := base64.RawURLEncoding.DecodeString(value)
 	if err != nil || len(decoded) != sessionSelectorBytes {
 		clear(decoded)
@@ -252,13 +255,16 @@ func (s *store) AuthenticateSession(ctx context.Context, selector, secret string
 		return Principal{}, err
 	}
 	now := time.Now().Unix()
-	if len(storedHash) != sha256.Size || subtle.ConstantTimeCompare(providedHash[:], storedHash) != 1 || storedAuthEpoch < 0 || storedAccountEpoch < 0 || storedPasswordEpoch < 0 || expires <= now || lastSeen <= now-sessionIdleSeconds {
+	if len(storedHash) != sha256.Size || storedAuthEpoch < 0 || storedAccountEpoch < 0 || storedPasswordEpoch < 0 || expires <= now || lastSeen <= now-sessionIdleSeconds {
 		if _, err = tx.ExecContext(ctx, "DELETE FROM sessions WHERE session_selector=?", selectorBytes); err != nil {
 			return Principal{}, err
 		}
 		if err = tx.Commit(); err != nil {
 			return Principal{}, err
 		}
+		return Principal{}, ErrAuthentication
+	}
+	if subtle.ConstantTimeCompare(providedHash[:], storedHash) != 1 {
 		return Principal{}, ErrAuthentication
 	}
 	account, err := accountByID(ctx, tx, accountID)

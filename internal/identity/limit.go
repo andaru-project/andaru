@@ -230,6 +230,7 @@ func (s *store) beginLogin(ctx context.Context, loginHash [32]byte, sources [2]s
 func nextFailure(failures, level int, windowStarted, now int64) (int, int, int64, int64) {
 	if now-windowStarted >= loginWindowSeconds {
 		failures, level = 0, 0
+		windowStarted = now
 	}
 	if failures < 5 {
 		failures++
@@ -245,7 +246,7 @@ func nextFailure(failures, level int, windowStarted, now int64) (int, int, int64
 		}
 		backoffUntil = now + delay
 	}
-	return failures, level, now, backoffUntil
+	return failures, level, windowStarted, backoffUntil
 }
 
 func (s *store) recordLoginFailure(ctx context.Context, loginHash [32]byte, sources [2]sourceBucket, sourceCount int, now int64) error {

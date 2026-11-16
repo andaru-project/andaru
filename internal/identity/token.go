@@ -253,6 +253,9 @@ func (s *store) IssueToken(ctx context.Context, actor authz.Actor, issuerCaps, t
 }
 
 func decodeTokenSelector(selector string) ([]byte, error) {
+	if len(selector) != base64.RawURLEncoding.EncodedLen(tokenSelectorBytes) {
+		return nil, ErrAuthentication
+	}
 	decoded, err := base64.RawURLEncoding.DecodeString(selector)
 	if err != nil || len(decoded) != tokenSelectorBytes {
 		return nil, ErrAuthentication
@@ -261,6 +264,9 @@ func decodeTokenSelector(selector string) ([]byte, error) {
 }
 
 func decodeTokenSecret(secret string) ([]byte, error) {
+	if len(secret) != base64.RawURLEncoding.EncodedLen(tokenSecretBytes) {
+		return nil, ErrAuthentication
+	}
 	decoded, err := base64.RawURLEncoding.DecodeString(secret)
 	if err != nil || len(decoded) != tokenSecretBytes {
 		clear(decoded)

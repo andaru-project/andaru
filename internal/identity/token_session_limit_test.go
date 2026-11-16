@@ -144,7 +144,7 @@ func TestTokenScopeExpiryRevocationAndRestart(t *testing.T) {
 	if _, err = s.AuthenticateToken(ctx, deleteToken.Selector, deleteToken.Secret, scopedRoles); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("deleted account token authenticated: %v", err)
 	}
-	if _, err = s.IssueToken(ctx, authz.Actor{Kind: authz.ActorAccount, ID: admin.ID}, []authz.Capability{authz.ConfigurationWrite}, read, TokenIssue{
+	if _, err = s.IssueToken(ctx, authz.Actor{Kind: authz.ActorAccount, ID: admin.ID}, []authz.Capability{authz.ConfigurationWrite, authz.TokensManageSelf}, read, TokenIssue{
 		AccountID: admin.ID, Name: "escalation", Scope: []authz.Capability{authz.ConfigurationWrite},
 	}); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("scope beyond target was accepted: %v", err)
@@ -164,6 +164,12 @@ func TestTokenScopeExpiryRevocationAndRestart(t *testing.T) {
 	if _, err = s.AuthenticateToken(ctx, issued.Selector, "wrong-secret", roles); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("wrong token secret error=%v", err)
 	}
+	if _, err = s.AuthenticateToken(ctx, strings.Repeat("A", 1<<20), issued.Secret, roles); !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("oversized token selector accepted: %v", err)
+	}
+	if _, err = s.AuthenticateToken(ctx, issued.Selector, strings.Repeat("A", 1<<20), roles); !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("oversized token secret accepted: %v", err)
+	}
 	if err = s.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -175,11 +181,19 @@ func TestTokenScopeExpiryRevocationAndRestart(t *testing.T) {
 	if _, err = s.AuthenticateToken(ctx, issued.Selector, issued.Secret, roles); err != nil {
 		t.Fatalf("token did not survive restart: %v", err)
 	}
-	var oldLastUsed int64
-	if err = s.db.QueryRowContext(ctx, "SELECT last_used_at FROM api_tokens WHERE selector=?", selectorBytes).Scan(&oldLastUsed); err != nil {
+	recentUsed := time.Now().Unix() - 60
+	if _, err = s.db.ExecContext(ctx, "UPDATE api_tokens SET last_used_at=? WHERE selector=?", recentUsed, selectorBytes); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.db.ExecContext(ctx, "UPDATE api_tokens SET last_used_at=unixepoch()-3601 WHERE selector=?", selectorBytes); err != nil {
+	if _, err = s.AuthenticateToken(ctx, issued.Selector, issued.Secret, roles); err != nil {
+		t.Fatal(err)
+	}
+	var recentObserved int64
+	if err = s.db.QueryRowContext(ctx, "SELECT last_used_at FROM api_tokens WHERE selector=?", selectorBytes).Scan(&recentObserved); err != nil || recentObserved != recentUsed {
+		t.Fatalf("recent last-used timestamp was rewritten: got=%d want=%d err=%v", recentObserved, recentUsed, err)
+	}
+	staleUsed := time.Now().Unix() - 3601
+	if _, err = s.db.ExecContext(ctx, "UPDATE api_tokens SET last_used_at=? WHERE selector=?", staleUsed, selectorBytes); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = s.AuthenticateToken(ctx, issued.Selector, issued.Secret, roles); err != nil {
@@ -189,15 +203,15 @@ func TestTokenScopeExpiryRevocationAndRestart(t *testing.T) {
 	if err = s.db.QueryRowContext(ctx, "SELECT last_used_at FROM api_tokens WHERE selector=?", selectorBytes).Scan(&updated); err != nil {
 		t.Fatal(err)
 	}
-	if updated <= oldLastUsed-3601 {
-		t.Fatalf("hourly last-used write did not advance: old=%d updated=%d", oldLastUsed, updated)
+	if updated <= staleUsed {
+		t.Fatalf("stale last-used timestamp did not advance: old=%d updated=%d", staleUsed, updated)
 	}
 	if _, err = s.AuthenticateToken(ctx, issued.Selector, issued.Secret, roles); err != nil {
 		t.Fatal(err)
 	}
 	var throttled int64
 	if err = s.db.QueryRowContext(ctx, "SELECT last_used_at FROM api_tokens WHERE selector=?", selectorBytes).Scan(&throttled); err != nil || throttled != updated {
-		t.Fatalf("last-used write was not throttled: %d -> %d err=%v", updated, throttled, err)
+		t.Fatalf("hourly last-used write was not throttled: %d -> %d err=%v", updated, throttled, err)
 	}
 	noRevoke := false
 	retained, err := issueTestToken(s, admin.ID, read, &noRevoke)
@@ -312,8 +326,20 @@ func TestSessionEpochsTimeoutEvictionCSRFAndRestart(t *testing.T) {
 	if string(sessionHash) != string(wantSessionHash[:]) || string(csrfHash) != string(wantCSRFHash[:]) {
 		t.Fatal("session or CSRF secret was not stored only as its SHA-256 hash")
 	}
+	wrongSessionSecretBytes := append([]byte(nil), secretBytes...)
+	wrongSessionSecretBytes[0] ^= 0xff
+	wrongSessionSecret := base64.RawURLEncoding.EncodeToString(wrongSessionSecretBytes)
+	if _, err = s.AuthenticateSession(ctx, sessionSelector, wrongSessionSecret, 7); !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("wrong session secret authenticated: %v", err)
+	}
+	if _, err = s.AuthenticateSession(ctx, strings.Repeat("A", 1<<20), sessionSecret, 7); !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("oversized session selector accepted: %v", err)
+	}
+	if _, err = s.AuthenticateSession(ctx, sessionSelector, strings.Repeat("A", 1<<20), 7); !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("oversized session secret accepted: %v", err)
+	}
 	if _, err = s.AuthenticateSession(ctx, sessionSelector, sessionSecret, 7); err != nil {
-		t.Fatal(err)
+		t.Fatalf("wrong secret revoked the legitimate session: %v", err)
 	}
 	if err = s.ValidateCSRF(ctx, sessionSelector, sessionSecret, csrfSelector, csrfSecret); err != nil {
 		t.Fatalf("valid CSRF credential rejected: %v", err)
@@ -404,6 +430,11 @@ func TestSessionEpochsTimeoutEvictionCSRFAndRestart(t *testing.T) {
 	if _, err = s.AuthenticateSession(ctx, absoluteSelector, absoluteSecret, 7); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("absolute-expired session authenticated: %v", err)
 	}
+	passwordChangeLogin, err := s.AuthenticatePassword(ctx, "operator1", "violet-lemur-session-key-2026", "203.0.113.5", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	passwordChangeSelector, passwordChangeSecret := splitCredential(t, passwordChangeLogin.SessionCookie)
 	revision, err = s.Revision(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -411,8 +442,8 @@ func TestSessionEpochsTimeoutEvictionCSRFAndRestart(t *testing.T) {
 	if _, err = s.SetPassword(ctx, user.ID, revision, []byte("violet-lemur-changed-key-2026")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.AuthenticateSession(ctx, sessionSelector, sessionSecret, 7); !errors.Is(err, ErrAuthentication) {
-		t.Fatalf("password epoch change retained a session: %v", err)
+	if _, err = s.AuthenticateSession(ctx, passwordChangeSelector, passwordChangeSecret, 7); !errors.Is(err, ErrAuthentication) {
+		t.Fatalf("password change retained a live session: %v", err)
 	}
 	newLogin, err := s.AuthenticatePassword(ctx, "operator1", "violet-lemur-changed-key-2026", "203.0.113.3", 7)
 	if err != nil {
@@ -547,13 +578,21 @@ func TestLoginBackoffThresholdCapAndRollingExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().Unix()
+	windowStart := now - 600
 	loginHash := s.loginBucketHash("threshold")
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO login_limits(bucket_hash,failures,window_started_at,expires_at,backoff_level,backoff_until)
-		VALUES(?,4,?,?,0,0)`, loginHash[:], now, now+900); err != nil {
+		VALUES(?,4,?,?,0,0)`, loginHash[:], windowStart, now+900); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.AuthenticatePassword(ctx, "threshold", "incorrect-password-2026", "203.0.113.11", 1); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("fifth failed login result=%v", err)
+	}
+	var observedWindow int64
+	if err := s.db.QueryRowContext(ctx, "SELECT window_started_at FROM login_limits WHERE bucket_hash=?", loginHash[:]).Scan(&observedWindow); err != nil {
+		t.Fatal(err)
+	}
+	if observedWindow != windowStart {
+		t.Fatalf("failure moved rolling window start: got=%d want=%d", observedWindow, windowStart)
 	}
 	if _, err := s.AuthenticatePassword(ctx, "threshold", "incorrect-password-2026", "203.0.113.12", 1); !errors.Is(err, ErrRateLimited) {
 		t.Fatalf("login-key backoff did not follow five failures: %v", err)

@@ -44,3 +44,11 @@ Not run per assignment: `go test -tags=integration ./internal/identity -count=1`
 ## Concerns
 
 No checks run in this fix round. No language-server references check was available. Future backup code must exclude limiter key/state and sessions; HTTP/cookie attributes and audit integration remain outside scope.
+
+## Round 1 token/session/limiter fixes
+
+- Wrong session secrets now fail without deleting the valid session; cleanup remains for independently expired or corrupt rows. The regression verifies the original secret still authenticates.
+- Token and session selector/secret inputs are checked against exact unpadded base64url lengths before decoding.
+- The 15-minute failure window keeps its first-failure timestamp across attempts and resets only after expiry; the regression includes failures spaced ten minutes apart.
+- Security tests now isolate target-scope intersection, revoke a live session on password change, and seed recent/stale `lastUsedAt` timestamps to verify hourly throttling.
+- Parent-reported issues were fixed; checks remain deferred to the parent.
