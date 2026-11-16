@@ -127,6 +127,9 @@ func (s *Store) append(ctx context.Context, event Event, safety bool) (Event, er
 			return Event{}, s.abortStorage(ctx, tx, e)
 		}
 		if found {
+			if e = pruneAfterAppend(ctx, tx, now); e != nil {
+				return Event{}, s.abortStorage(ctx, tx, e)
+			}
 			if e = tx.Commit(); e != nil {
 				return Event{}, s.storageError(ctx, e)
 			}
@@ -717,9 +720,6 @@ func coalesceFailure(ctx context.Context, tx *sql.Tx, event Event, now time.Time
 	if err != nil {
 		return Event{}, false, err
 	}
-	if !equalMetadata(metadata, event.Metadata) {
-		return Event{}, false, nil
-	}
 	if count < 1 || count == int64(^uint64(0)>>1) {
 		return Event{}, false, errors.New("invalid coalesced event count")
 	}
@@ -729,6 +729,7 @@ func coalesceFailure(ctx context.Context, tx *sql.Tx, event Event, now time.Time
 	event.ID = uint64(id)
 	event.At = now
 	event.Count = uint64(count + 1)
+	event.Metadata = metadata
 	return event, true, nil
 }
 
@@ -917,6 +918,12 @@ func (s *Store) abortStorage(ctx context.Context, tx *sql.Tx, err error) error {
 }
 
 func (s *Store) storageError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
 	s.storageFailure.Store(true)
 	s.markStorageFailure(ctx)
 	return wrapStorage(err)

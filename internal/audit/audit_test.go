@@ -176,6 +176,63 @@ func TestLoginFailuresCoalesceByVerifiedSource(t *testing.T) {
 		t.Fatalf("coalesced events = %+v", got)
 	}
 }
+func TestCanceledBeginDoesNotLatchStorageFailure(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := s.Begin(ctx, testIntent("cancelled-1", ActionAccountUpdated, CategoryProtected)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled Begin error = %v", err)
+	}
+	if _, err := s.Begin(context.Background(), testIntent("healthy-1", ActionAccountUpdated, CategoryProtected)); err != nil {
+		t.Fatalf("healthy Begin after cancellation = %v", err)
+	}
+}
+
+func TestLoginFailuresCoalesceAcrossAllowedReasons(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx := context.Background()
+	event := testEvent(ActionLoginFailure, CategoryGeneral, ResultFailure)
+	event.Target = ""
+	event.Source = "192.0.2.10"
+	for _, reason := range []string{ReasonInvalidCredentials, ReasonAccountDisabled, ReasonRateLimited} {
+		event.Metadata = map[string]string{MetadataReasonCode: reason}
+		if _, err := s.Append(ctx, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := s.ListEvents(ctx, 0, 100)
+	if err != nil || len(got) != 1 || got[0].Count != 3 || got[0].Metadata[MetadataReasonCode] != ReasonInvalidCredentials {
+		t.Fatalf("alternating reasons were not coalesced with bounded first-reason metadata: %+v, %v", got, err)
+	}
+}
+
+func TestCoalescedAppendPrunesExpiredEvents(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx := context.Background()
+	event := testEvent(ActionLoginFailure, CategoryGeneral, ResultFailure)
+	event.Target = ""
+	event.Source = "192.0.2.10"
+	event.Metadata = map[string]string{MetadataReasonCode: ReasonInvalidCredentials}
+	if _, err := s.Append(ctx, event); err != nil {
+		t.Fatal(err)
+	}
+	cutoff := time.Now().Add(-retentionPeriod - time.Second).UnixMilli()
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO events(at,actor_kind,actor_id,source,action,target,result,operation_id,category,coalesced_count)
+		VALUES(?,?,?,?,?,?,?,?,?,1)`, cutoff, authz.ActorSystem, "root", "unix", ActionLoginSuccess, "", ResultSuccess, "", CategoryGeneral); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(ctx, event); err != nil {
+		t.Fatal(err)
+	}
+	var expired int
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM events WHERE at=?", cutoff).Scan(&expired); err != nil || expired != 0 {
+		t.Fatalf("expired event count = %d, err=%v", expired, err)
+	}
+}
+
+
 
 func TestCategoryBudgetsReserveProtectedRevocation(t *testing.T) {
 	s, _ := openTestStore(t)
