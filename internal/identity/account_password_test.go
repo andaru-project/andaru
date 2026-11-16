@@ -66,7 +66,11 @@ func TestOptionalDisplayAndCustomRolesSurviveRestart(t *testing.T) {
 	if err != nil || user.DisplayName != "" || len(user.RoleIDs) != 1 || user.RoleIDs[0] != roleA { t.Fatalf("create account=%+v err=%v",user,err) }
 	sessionHash := make([]byte,32)
 	sessionHash[0] = 1
-	if _, err = s.db.ExecContext(ctx,"INSERT INTO sessions(session_hash,csrf_hash,account_id,auth_epoch,created_at,last_seen_at,expires_at) VALUES(?,?,?,?,?,?,?)",sessionHash,make([]byte,32),user.ID,0,1,1,9999999999); err != nil { t.Fatal(err) }
+	sessionSelector := make([]byte,32)
+	sessionSelector[0] = 2
+	csrfSelector := make([]byte,32)
+	csrfSelector[0] = 3
+	if _, err = s.db.ExecContext(ctx,"INSERT INTO sessions(session_selector,session_hash,csrf_selector,csrf_hash,account_id,auth_epoch,account_epoch,password_epoch,created_at,last_seen_at,expires_at) VALUES(?,?,?,?,?,?,0,0,?,?,?)",sessionSelector,sessionHash,csrfSelector,make([]byte,32),user.ID,0,1,1,9999999999); err != nil { t.Fatal(err) }
 	roleIDs := []string{roleB}
 	user, revision, err = s.UpdateAccount(ctx,user.ID,revision,UpdateAccountInput{RoleIDs:&roleIDs})
 	if err != nil || len(user.RoleIDs) != 1 || user.RoleIDs[0] != roleB { t.Fatalf("updated roles=%v err=%v",user.RoleIDs,err) }
@@ -145,12 +149,16 @@ func TestPasswordMutationEpochAndTransactionalRevocationHooks(t *testing.T) {
 	if err != nil { t.Fatal(err) }
 	user, rev, err := s.CreateAccount(ctx, CreateAccountInput{Login:"operator1",DisplayName:"Operator",Kind:Human,Enabled:true},rev)
 	if err != nil { t.Fatal(err) }
-	if _, err = s.db.ExecContext(ctx, "INSERT INTO sessions(session_hash,csrf_hash,account_id,auth_epoch,created_at,last_seen_at,expires_at) VALUES(?,?,?,?,?,?,?)",make([]byte,32),make([]byte,32),user.ID,0,1,1,9999999999); err != nil { t.Fatal(err) }
+	sessionSelector := make([]byte,32)
+	sessionSelector[0] = 3
+	csrfSelector := make([]byte,32)
+	csrfSelector[0] = 4
+	if _, err = s.db.ExecContext(ctx, "INSERT INTO sessions(session_selector,session_hash,csrf_selector,csrf_hash,account_id,auth_epoch,account_epoch,password_epoch,created_at,last_seen_at,expires_at) VALUES(?,?,?,?,?,?,0,0,?,?,?)",sessionSelector,make([]byte,32),csrfSelector,make([]byte,32),user.ID,0,1,1,9999999999); err != nil { t.Fatal(err) }
 	for _, revoke := range []bool{true,false} {
 		selector := make([]byte,16)
 		selector[0] = byte(len(selector))+byte(boolToInt(revoke))
 		revokeInt := boolToInt(revoke)
-		if _, err = s.db.ExecContext(ctx, "INSERT INTO api_tokens(selector,account_id,secret_hash,name,scopes,created_at,revoke_on_password_change) VALUES(?,?,?,?,?,?,?)",selector,user.ID,make([]byte,32),"test","[]",1,revokeInt); err != nil { t.Fatal(err) }
+		if _, err = s.db.ExecContext(ctx, "INSERT INTO api_tokens(selector,account_id,secret_hash,name,scopes,created_at,revoke_on_password_change,password_epoch,revision) VALUES(?,?,?,?,?,?,?,0,0)",selector,user.ID,make([]byte,32),"test","[]",1,revokeInt); err != nil { t.Fatal(err) }
 	}
 	rev, err = s.SetPassword(ctx,user.ID,rev,[]byte("changed-passphrase-2026"))
 	if err != nil { t.Fatal(err) }

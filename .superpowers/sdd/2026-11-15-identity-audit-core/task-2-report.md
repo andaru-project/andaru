@@ -2,7 +2,7 @@
 
 ## Status
 
-Task 2A1 and Task 2A2 are implemented. Task 2B (tokens, sessions, and login limiting) remains outside these slices.
+Task 2A1, Task 2A2, and Task 2B are implemented.
 
 ## Task 2A1 — database foundation
 
@@ -27,3 +27,14 @@ Not run per assignment:
 ## Concerns
 
 - Follow-ups corrected the missing test import and aligned the deletion assertion with `DeleteAccount`'s error-only signature. Checks remain deferred; no passing result is claimed.
+
+## Task 2B — tokens, sessions, and bounded login protection
+
+- Files: `internal/identity/token.go`, `session.go`, `limit.go`, `token_session_limit_test.go`; integration updates to `model.go`, `sqlite.go`, `store_linux.go`, `account_password_test.go`, and `store_linux_test.go`.
+- Interfaces: `TokenIssue`, `Token`, `IssuedToken`, `LoginResult`, and `Principal`; `Store` now exposes token issue/list/revoke/authentication, password/session/token authentication, CSRF validation/rotation, and logout. Existing account lookup and `VerifyPassword`/Argon admission behavior are reused.
+- Tokens: 128-bit selector plus independent 256-bit secret, SHA-256 secret hash, one-time secret return, issuer/target scope intersection, request-time role intersection, 50 active and 100/year limits, 90-day default/one-year maximum/explicit no-expiry, password-change revocation defaults and override, hourly last-used throttling, and disable/delete invalidation.
+- Sessions: separate random 256-bit ID/CSRF selectors and secrets with stored hashes, 30-minute idle and 12-hour absolute expiry, transactional five-session oldest eviction, account/password/authorization epoch validation, CSRF rotation, durable restart behavior, and idempotent logout.
+- Login protection: persistent local HMAC login keys before account lookup, identical dummy-Argon failure paths, rolling 15-minute failures with exponential backoff capped at 15 minutes, exact source and IPv6 `/64` buckets, 10,000/50,000 row caps, 24-hour source expiry, and durable bounded overload state.
+- Tests written against real SQLite: `TestTokenScopeExpiryRevocationAndRestart`, `TestTokenActiveAndAnnualLimits`, `TestSessionEpochsTimeoutEvictionCSRFAndRestart`, `TestPasswordLoginBucketsIPv6AndCancellation`, `TestLoginBackoffThresholdCapAndRollingExpiry`, `TestLimiterRowsExpireSaturateAndSurviveRestart`, `TestOpenMigratesV1AndDropsUnusableSessions`, and `TestOpenRefusesMissingLimiterKey`; `TestOpenRestartAndSchema` also checks limiter-key persistence.
+- Deferred commands (not run): `go test -tags=integration ./internal/identity -count=1`, `go test -race ./internal/identity`, `gofmt`, lint, and build checks.
+- Concerns: v1→v2 migration clears legacy session rows because their old schema cannot verify the new selector/secret form. Future backup code must exclude `limiter_key`, source/login limiter state, and sessions. HTTP/cookie attributes, audit integration, and later-task consumers remain out of scope. No language server was available for `Store` reference lookup.

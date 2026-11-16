@@ -20,7 +20,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-type store struct { db *sql.DB }
+type store struct { db *sql.DB; limiterKey [32]byte }
 
 func Open(ctx context.Context, stateDir string) (*store, error) {
 	if os.Geteuid() != 0 || !filepath.IsAbs(stateDir) || filepath.Clean(stateDir) != stateDir {
@@ -50,19 +50,28 @@ func Open(ctx context.Context, stateDir string) (*store, error) {
 	if app != 0 && app != applicationID { return fail(errors.New("wrong identity application id")) }
 	if version > LayoutVersion { return fail(fmt.Errorf("identity layout %d is newer than supported %d", version, LayoutVersion)) }
 	if version == 0 {
-		tx, e := db.BeginTx(ctx,nil); if e != nil { return fail(e) }
-		if _,e=tx.ExecContext(ctx,schema); e == nil { _,e=tx.ExecContext(ctx,fmt.Sprintf("PRAGMA application_id=%d",applicationID)) }
-		if e == nil { _,e=tx.ExecContext(ctx,fmt.Sprintf("PRAGMA user_version=%d",LayoutVersion)) }
+		tx, e := db.BeginTx(ctx, nil)
+		if e != nil { return fail(e) }
+		if _, e = tx.ExecContext(ctx, schema); e == nil { _, e = tx.ExecContext(ctx, fmt.Sprintf("PRAGMA application_id=%d", applicationID)) }
+		if e == nil { _, e = tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", LayoutVersion)) }
 		if e != nil { tx.Rollback(); return fail(e) }
-		if e=tx.Commit(); e != nil { return fail(e) }
+		if e = tx.Commit(); e != nil { return fail(e) }
+	} else if version == 1 {
+		if app != applicationID { return fail(errors.New("identity database application id missing during migration")) }
+		tx, e := db.BeginTx(ctx, nil)
+		if e != nil { return fail(e) }
+		if _, e = tx.ExecContext(ctx, migrationV1ToV2); e == nil { _, e = tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", LayoutVersion)) }
+		if e != nil { tx.Rollback(); return fail(e) }
+		if e = tx.Commit(); e != nil { return fail(e) }
 	}
 	var journal string; var syncMode, foreign, secure int
 	if err=db.QueryRowContext(ctx,"PRAGMA journal_mode").Scan(&journal); err!=nil { return fail(err) }
 	if err=db.QueryRowContext(ctx,"PRAGMA synchronous").Scan(&syncMode); err!=nil { return fail(err) }
 	if err=db.QueryRowContext(ctx,"PRAGMA foreign_keys").Scan(&foreign); err!=nil { return fail(err) }
 	if err=db.QueryRowContext(ctx,"PRAGMA secure_delete").Scan(&secure); err!=nil { return fail(err) }
-	if journal!="wal" || syncMode!=2 || foreign!=1 || secure!=1 { return fail(errors.New("identity SQLite pragmas mismatch")) }
-	return &store{db:db},nil
+	key, err := loadLimiterKey(ctx, db, version < LayoutVersion)
+	if err != nil { return fail(err) }
+	return &store{db:db, limiterKey:key},nil
 }
 
 func (s *store) Close() error { return s.db.Close() }
@@ -100,6 +109,7 @@ func (s *store) BootstrapAdmin(ctx context.Context, login, displayName string, p
 	if err = insertAccountRoles(ctx, tx, account.ID, account.RoleIDs); err != nil { return Account{}, 0, err }
 	if err = insertCredential(ctx, tx, account.ID, encoded, now); err != nil { return Account{}, 0, err }
 	if _, err = tx.ExecContext(ctx, "INSERT INTO metadata(key,value) VALUES(?,0)", "password_epoch:"+account.ID); err != nil { return Account{}, 0, err }
+	if _, err = tx.ExecContext(ctx, "INSERT INTO metadata(key,value) VALUES(?,0)", "account_epoch:"+account.ID); err != nil { return Account{}, 0, err }
 	revision, err = finishMutation(ctx, tx)
 	if err != nil { return Account{}, 0, err }
 	return account, revision, nil
@@ -123,6 +133,7 @@ func (s *store) CreateAccount(ctx context.Context, input CreateAccountInput, exp
 	if err = insertAccount(ctx, tx, account); err != nil { return Account{}, 0, accountWriteError(err) }
 	if err = insertAccountRoles(ctx, tx, account.ID, account.RoleIDs); err != nil { return Account{}, 0, err }
 	if _, err = tx.ExecContext(ctx, "INSERT INTO metadata(key,value) VALUES(?,0)", "password_epoch:"+account.ID); err != nil { return Account{}, 0, err }
+	if _, err = tx.ExecContext(ctx, "INSERT INTO metadata(key,value) VALUES(?,0)", "account_epoch:"+account.ID); err != nil { return Account{}, 0, err }
 	revision, err := finishMutation(ctx, tx)
 	if err != nil { return Account{}, 0, err }
 	return account, revision, nil
@@ -160,6 +171,7 @@ func (s *store) UpdateAccount(ctx context.Context, id string, expectedRevision i
 	}
 	account.UpdatedAt = time.Now().Unix()
 	if _, err = tx.ExecContext(ctx, "UPDATE accounts SET login=?,display_name=?,kind=?,enabled=?,updated_at=? WHERE id=?", account.Login, account.DisplayName, account.Kind, account.Enabled, account.UpdatedAt, id); err != nil { return Account{}, 0, accountWriteError(err) }
+	if _, err = tx.ExecContext(ctx, "UPDATE metadata SET value=value+1 WHERE key=?", "account_epoch:"+id); err != nil { return Account{}, 0, err }
 	if rolesChanged && account.Enabled {
 		if _, err = tx.ExecContext(ctx, "DELETE FROM sessions WHERE account_id=?", id); err != nil { return Account{}, 0, err }
 	}
@@ -188,6 +200,7 @@ func (s *store) SetPassword(ctx context.Context, id string, expectedRevision int
 	if err = insertCredential(ctx, tx, id, encoded, now); err != nil { return 0, err }
 	if _, err = tx.ExecContext(ctx, "UPDATE accounts SET updated_at=? WHERE id=?", now, id); err != nil { return 0, err }
 	if _, err = tx.ExecContext(ctx, "UPDATE metadata SET value=value+1 WHERE key=?", "password_epoch:"+id); err != nil { return 0, err }
+	if _, err = tx.ExecContext(ctx, "UPDATE metadata SET value=value+1 WHERE key=?", "account_epoch:"+id); err != nil { return 0, err }
 	if err = revokeAccountAuth(ctx, tx, id, now, true); err != nil { return 0, err }
 	return finishMutation(ctx, tx)
 }
@@ -239,15 +252,27 @@ func (s *store) DisableAccount(ctx context.Context, id string, expectedRevision 
 }
 
 func (s *store) VerifyPassword(ctx context.Context, id string, candidate []byte) (bool, error) {
-	var login, display string
+	return s.verifyPasswordForAccount(ctx, id, nil, candidate)
+}
+
+func (s *store) verifyPasswordForAccount(ctx context.Context, id string, known *Account, candidate []byte) (bool, error) {
 	var enabled int
-	err := s.db.QueryRowContext(ctx, "SELECT login,display_name,enabled FROM accounts WHERE id=?", id).Scan(&login,&display,&enabled)
-	if err == sql.ErrNoRows { return verifyPasswordHash(ctx, dummyPasswordHash, candidate) }
-	if err != nil { return false, err }
-	if enabled != 1 { return verifyPasswordHash(ctx, dummyPasswordHash, candidate) }
+	var kind AccountKind
+	if known != nil {
+		kind = known.Kind
+		if known.Enabled { enabled = 1 }
+	} else {
+		if id == "" {
+			return verifyPasswordHash(ctx, dummyPasswordHash, candidate)
+		}
+		err := s.db.QueryRowContext(ctx, "SELECT enabled,kind FROM accounts WHERE id=?", id).Scan(&enabled,&kind)
+		if err == sql.ErrNoRows { return verifyPasswordHash(ctx, dummyPasswordHash, candidate) }
+		if err != nil { return false, err }
+	}
+	if enabled != 1 || kind != Human { return verifyPasswordHash(ctx, dummyPasswordHash, candidate) }
 	var salt, digest []byte
 	var memory, timeCost, parallel, version int
-	err = s.db.QueryRowContext(ctx, `SELECT salt,hash,memory_kib,time_cost,parallelism,algorithm_version FROM password_credentials WHERE account_id=?`, id).
+	err := s.db.QueryRowContext(ctx, `SELECT salt,hash,memory_kib,time_cost,parallelism,algorithm_version FROM password_credentials WHERE account_id=?`, id).
 		Scan(&salt,&digest,&memory,&timeCost,&parallel,&version)
 	if err == sql.ErrNoRows { return verifyPasswordHash(ctx, dummyPasswordHash, candidate) }
 	if err != nil { return false, err }
