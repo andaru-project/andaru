@@ -99,3 +99,8 @@ No checks run in this fix round. No language-server references check was availab
 - Renamed the encoded timestamp fixture to avoid shadowing `failureTimes`, and removed the duplicate `level` declaration. Boundary assertions remain unchanged.
 - Applied the `limit.go` formatting corrections reported by the parent: import order, constant alignment, and excess blank-line removal.
 - No checks were run. Parent verification remains deferred.
+
+## Round 2 persistence formatting follow-up
+
+- Removed one excess blank line in `store_linux.go` reported by the parent. `gofmt -d` showed only this formatting difference; no semantic changes.
+- No other checks were run.

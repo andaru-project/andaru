@@ -282,7 +282,6 @@ func verifySchema(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-
 func (s *store) Close() error { return s.db.Close() }
 func (s *store) Revision(ctx context.Context) (int64, error) {
 	var revision int64
