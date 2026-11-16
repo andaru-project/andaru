@@ -103,3 +103,8 @@ No checks run in this fix round. No language-server references check was availab
 
 - Removed one excess blank line in `store_linux.go` reported by the parent. `gofmt -d` showed only this formatting difference; no semantic changes.
 - No other checks were run.
+## Round 2 expired-window fixture correction
+
+- Cause: the regression fixture used byte zero of the encoded timestamp blob as `window_started_at`. Strict row decoding rejected the mismatched window, and password authentication mapped that storage error to `ErrRateLimited`; no stale login or source backoff remained.
+- The fixture now stores the encoded ring separately and binds its first `int64` timestamp as the window start. The rolling-boundary assertions and source abuse history behavior are unchanged.
+- No checks were run; parent integration verification remains deferred.

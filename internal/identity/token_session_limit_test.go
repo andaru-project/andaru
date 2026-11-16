@@ -678,8 +678,9 @@ func TestLoginBackoffThresholdCapAndRollingExpiry(t *testing.T) {
 	if level != 10 || backoffUntil-time.Now().Unix() > 900 || backoffUntil-time.Now().Unix() <= 0 {
 		t.Fatalf("exponential delay did not cap at 15 minutes: level=%d until=%d", level, backoffUntil)
 	}
-	expiredTimes := encodeFailureTimes(failureTimes{now - 2000, now - 1900, now - 1800, now - 1700, now - 1600})
-	if _, err := s.db.ExecContext(ctx, "UPDATE login_limits SET failure_times=?,window_started_at=?,expires_at=unixepoch()+900,backoff_until=unixepoch()-1 WHERE bucket_hash=?", expiredTimes, expiredTimes[0], loginHash[:]); err != nil {
+	expiredWindow := failureTimes{now - 2000, now - 1900, now - 1800, now - 1700, now - 1600}
+	encodedExpiredWindow := encodeFailureTimes(expiredWindow)
+	if _, err := s.db.ExecContext(ctx, "UPDATE login_limits SET failure_times=?,window_started_at=?,expires_at=unixepoch()+900,backoff_until=unixepoch()-1 WHERE bucket_hash=?", encodedExpiredWindow, expiredWindow[0], loginHash[:]); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.AuthenticatePassword(ctx, "threshold", "incorrect-password-2026", "203.0.113.14", 1); !errors.Is(err, ErrAuthentication) {
