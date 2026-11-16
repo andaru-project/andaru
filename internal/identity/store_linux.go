@@ -28,10 +28,10 @@ type store struct {
 }
 
 func Open(ctx context.Context, stateDir string) (*store, error) {
-	return openStore(ctx, stateDir, nil)
+	return openStore(ctx, stateDir, nil, nil)
 }
 
-func openStore(ctx context.Context, stateDir string, beforeInitCommit func() error) (*store, error) {
+func openStore(ctx context.Context, stateDir string, beforeInitCommit, beforeCheckpoint func() error) (*store, error) {
 	if os.Geteuid() != 0 || !filepath.IsAbs(stateDir) || filepath.Clean(stateDir) != stateDir {
 		return nil, errors.New("identity store requires root and canonical absolute state directory")
 	}
@@ -139,6 +139,14 @@ func openStore(ctx context.Context, stateDir string, beforeInitCommit func() err
 		return fail(err)
 	}
 	if fresh {
+		if beforeCheckpoint != nil {
+			if err = beforeCheckpoint(); err != nil {
+				return fail(err)
+			}
+		}
+		if err = checkpointStagingWAL(ctx, db, path); err != nil {
+			return fail(err)
+		}
 		if err = db.Close(); err != nil {
 			return nil, err
 		}
@@ -188,6 +196,27 @@ func checkPrivateDBFiles(path string) error {
 		if !privateFile(st) {
 			return fmt.Errorf("unsafe identity database file %s", filepath.Base(p))
 		}
+	}
+	return nil
+}
+
+func checkpointStagingWAL(ctx context.Context, db *sql.DB, path string) error {
+	var busy, logFrames, checkpointed int
+	if err := db.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logFrames, &checkpointed); err != nil {
+		return err
+	}
+	if busy != 0 || logFrames < 0 || checkpointed != logFrames {
+		return fmt.Errorf("identity staging WAL checkpoint incomplete: busy=%d log=%d checkpointed=%d", busy, logFrames, checkpointed)
+	}
+	st, err := os.Lstat(path + "-wal")
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !privateFile(st) || st.Size() != 0 {
+		return errors.New("identity staging WAL still contains database state")
 	}
 	return nil
 }

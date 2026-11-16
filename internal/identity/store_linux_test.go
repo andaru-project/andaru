@@ -114,7 +114,7 @@ func TestOpenInitializationFailureIsRetryable(t *testing.T) {
 	}
 	dir := filepath.Join(t.TempDir(), "state")
 	injected := errors.New("injected initialization failure")
-	if _, err := openStore(context.Background(), dir, func() error { return injected }); !errors.Is(err, injected) {
+	if _, err := openStore(context.Background(), dir, func() error { return injected }, nil); !errors.Is(err, injected) {
 		t.Fatalf("openStore error=%v, want injected initialization failure", err)
 	}
 	if _, err := os.Lstat(filepath.Join(dir, "identity.db")); !os.IsNotExist(err) {
@@ -131,6 +131,29 @@ func TestOpenInitializationFailureIsRetryable(t *testing.T) {
 	}
 	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != LayoutVersion {
 		t.Fatalf("layout=%d err=%v", version, err)
+	}
+}
+
+func TestOpenCheckpointFailureIsRetryable(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root")
+	}
+	dir := filepath.Join(t.TempDir(), "state")
+	injected := errors.New("injected WAL checkpoint failure")
+	if _, err := openStore(context.Background(), dir, nil, func() error { return injected }); !errors.Is(err, injected) {
+		t.Fatalf("openStore error=%v, want injected checkpoint failure", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "identity.db")); !os.IsNotExist(err) {
+		t.Fatalf("checkpoint failure published identity.db: %v", err)
+	}
+	s, err := Open(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var revision int64
+	if err = s.db.QueryRow("SELECT value FROM metadata WHERE key='revision'").Scan(&revision); err != nil || revision != 0 {
+		t.Fatalf("revision=%d err=%v", revision, err)
 	}
 }
 

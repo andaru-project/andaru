@@ -108,3 +108,16 @@ No checks run in this fix round. No language-server references check was availab
 - Cause: the regression fixture used byte zero of the encoded timestamp blob as `window_started_at`. Strict row decoding rejected the mismatched window, and password authentication mapped that storage error to `ErrRateLimited`; no stale login or source backoff remained.
 - The fixture now stores the encoded ring separately and binds its first `int64` timestamp as the window start. The rolling-boundary assertions and source abuse history behavior are unchanged.
 - No checks were run; parent integration verification remains deferred.
+
+## Parent verification after round 2
+
+- `go test -tags=integration ./internal/identity -count=1`: PASS.
+- `go test -race ./internal/identity`: PASS.
+- `gofmt -l internal/identity/*.go`: clean.
+- Focused production-policy qualification: max-active 2, measured peak heap delta 128 MiB, mean hash latency 1.455 s, wall time 1.494 s on amd64/i5-9500T.
+
+## Round 3 staging WAL checkpoint
+
+- Before closing or publishing a fresh staging DB, initialization now runs `PRAGMA wal_checkpoint(TRUNCATE)`, checks the busy/log/checkpointed result for non-busy full completion, and rejects any non-empty retained WAL. A checkpoint or I/O error follows the staging cleanup path and leaves `identity.db` unpublished.
+- Added `TestOpenCheckpointFailureIsRetryable` with an injected checkpoint failure; it asserts no final database was published and a subsequent ordinary `Open` succeeds without manual deletion.
+- No tests/build/lint/format/graph checks were run per assignment.
