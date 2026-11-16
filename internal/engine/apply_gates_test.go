@@ -12,6 +12,18 @@ import (
 	"github.com/andaru-project/andaru/internal/render"
 )
 
+type openAPIStringEnum []string
+
+func (e *openAPIStringEnum) UnmarshalJSON(raw []byte) error {
+	var values []string
+	if json.Unmarshal(raw, &values) != nil {
+		*e = nil
+		return nil
+	}
+	*e = values
+	return nil
+}
+
 const (
 	uplinkFile  = "/run/systemd/network/50-andaru-eth0.network"
 	netplanFile = "/run/systemd/network/10-netplan-eth0.network"
@@ -60,7 +72,7 @@ func TestApplyFindings(t *testing.T) {
 		Components struct {
 			Schemas map[string]struct {
 				Properties map[string]struct {
-					Enum []string `json:"enum"`
+					Enum openAPIStringEnum `json:"enum"`
 				} `json:"properties"`
 			} `json:"schemas"`
 		} `json:"components"`
@@ -310,7 +322,7 @@ func TestIfupdownGates(t *testing.T) {
 		Components struct {
 			Schemas map[string]struct {
 				Properties map[string]struct {
-					Enum []string `json:"enum"`
+					Enum openAPIStringEnum `json:"enum"`
 				} `json:"properties"`
 			} `json:"schemas"`
 		} `json:"components"`
