@@ -12,6 +12,7 @@ const (
 	LayoutVersion       = 2
 	MaxAccounts         = 10_000
 	MaxRoleAssignments  = 10_002
+	MaxAccountPageSize  = 100
 	MaxTokenPageSize    = 50
 	MaxLoginLimitRows   = 10_000
 	MaxSourceLimitRows  = 50_000
@@ -147,11 +148,11 @@ type OperationIntent struct {
 
 // OperationRecord is the durable, credential-free result of an identity transaction.
 type OperationRecord struct {
-	OperationID string
-	RequestHash string
-	Actor       authz.Actor
-	Source      string
-	Action      string
+	OperationID   string
+	RequestHash   string
+	Actor         authz.Actor
+	Source        string
+	Action        string
 	Target        string
 	OutcomeTarget string
 	Category      string

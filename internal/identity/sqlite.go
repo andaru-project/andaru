@@ -3,6 +3,7 @@ package identity
 import _ "modernc.org/sqlite"
 
 const applicationID = 0x414e4449
+
 const operationTableDDL = `CREATE TABLE operations (
  operation_id TEXT PRIMARY KEY CHECK(length(operation_id) BETWEEN 1 AND 128),
  idempotency_key TEXT NOT NULL UNIQUE,
@@ -19,7 +20,6 @@ const operationTableDDL = `CREATE TABLE operations (
  result TEXT NOT NULL CHECK(result='success'),
  metadata TEXT NOT NULL CHECK(length(metadata)<=512)
 ) STRICT`
-
 
 const schema = `
 CREATE TABLE accounts (

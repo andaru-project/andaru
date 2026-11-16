@@ -16,8 +16,8 @@ import (
 	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/generation"
 	"github.com/andaru-project/andaru/internal/host"
-	"github.com/andaru-project/andaru/internal/securefs"
 	"github.com/andaru-project/andaru/internal/identity"
+	"github.com/andaru-project/andaru/internal/securefs"
 )
 
 // Serve runs the root-local engine API without opening an IP listener.

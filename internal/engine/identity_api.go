@@ -23,17 +23,17 @@ const identityBodyLimit = 16 << 10
 var idempotencyKeyPattern = regexp.MustCompile(`^[A-Za-z0-9._:@%/-]{1,128}$`)
 
 type identityAPI struct {
-	identities identity.Store
+	identities    identity.Store
 	configuration *config.Store
-	coordinator *securityCoordinator
+	coordinator   *securityCoordinator
 }
 
 type operationResponse struct {
-	OperationID string            `json:"operationId"`
-	Result      string            `json:"result"`
-	Target      string            `json:"target"`
-	Metadata    map[string]string `json:"metadata"`
-	AuditPending bool             `json:"auditPending,omitempty"`
+	OperationID  string            `json:"operationId"`
+	Result       string            `json:"result"`
+	Target       string            `json:"target"`
+	Metadata     map[string]string `json:"metadata"`
+	AuditPending bool              `json:"auditPending,omitempty"`
 }
 
 type tokenIssueResponse struct {
@@ -713,10 +713,10 @@ func operationResult(execution operationExecution, fallbackTarget string) operat
 		metadata = map[string]string{}
 	}
 	return operationResponse{
-		OperationID: execution.Outcome.OperationID,
-		Result: string(execution.Outcome.Result),
-		Target: target,
-		Metadata: cloneStringMap(metadata),
+		OperationID:  execution.Outcome.OperationID,
+		Result:       string(execution.Outcome.Result),
+		Target:       target,
+		Metadata:     cloneStringMap(metadata),
 		AuditPending: execution.AuditPending,
 	}
 }

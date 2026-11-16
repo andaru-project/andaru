@@ -24,8 +24,8 @@ type operationState struct {
 }
 
 var (
-	operationIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:@%/-]{1,128}$`)
-	operationHashPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	operationIDPattern        = regexp.MustCompile(`^[A-Za-z0-9._:@%/-]{1,128}$`)
+	operationHashPattern      = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	operationAccountIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 )
 
