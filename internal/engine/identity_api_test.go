@@ -177,6 +177,10 @@ func TestAuditReconcilesIdentityGeneratedCreationTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	record, found, err := identities.LookupOperation(ctx, intent.OperationID)
+	if err != nil || !found || record.Target != "" || record.OutcomeTarget != account.ID {
+		t.Fatalf("authoritative creation record = %+v, found=%t err=%v", record, found, err)
+	}
 	if err = audits.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -193,15 +197,31 @@ func TestAuditReconcilesIdentityGeneratedCreationTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	intentFound, outcomeFound := false, false
 	for _, event := range events {
-		if event.Action == audit.ActionAccountCreated && event.OperationID == intent.OperationID {
-			if event.Target != account.ID || event.Target == "" {
+		if event.Action != audit.ActionAccountCreated || event.OperationID != intent.OperationID {
+			continue
+		}
+		switch event.Result {
+		case audit.ResultPending:
+			if event.Target != "" {
+				t.Fatalf("creation intent target = %q, want empty", event.Target)
+			}
+			intentFound = true
+		case audit.ResultSuccess:
+			if event.Target != account.ID {
 				t.Fatalf("reconciled creation target = %q, want generated account ID %q", event.Target, account.ID)
 			}
-			return
+			outcomeFound = true
 		}
 	}
-	t.Fatal("reconciliation did not append the committed identity creation outcome")
+	if !intentFound || !outcomeFound {
+		t.Fatalf("reconciliation did not preserve empty intent and generated outcome target: intent=%t outcome=%t", intentFound, outcomeFound)
+	}
+	replay, err := audits.Begin(ctx, intent)
+	if err != nil || !replay.Replay || replay.Outcome == nil || replay.Outcome.Target != account.ID {
+		t.Fatalf("reconciled replay = %+v, error=%v", replay, err)
+	}
 }
 
 func identityRequest(handler http.Handler, method, path, body, operationID string) *httptest.ResponseRecorder {
