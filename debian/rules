@@ -29,6 +29,10 @@ override_dh_dwz:
 override_dh_auto_clean:
 	rm -rf debian/build web/dist web/node_modules
 
+
+override_dh_install:
+	dh_install
+	install -D -m 644 debian/andaru.sysusers debian/andaru/usr/lib/sysusers.d/andaru.conf
 # Starting the engine, the path units and the timer is safe on any host; network-boot runs only at boot.
 override_dh_installsystemd:
 	dh_installsystemd -pandaru andaru-engine.service andaru-leases.path andaru-prefixes.path andaru-prefixes.timer
