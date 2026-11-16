@@ -39,7 +39,7 @@ type PreparedRestore struct {
 }
 
 func (p *PreparedRestore) Preview() RestorePreview { return p.preview }
-func (p *PreparedRestore) TargetVersion() Version { return p.p.prepared.State.Version }
+func (p *PreparedRestore) TargetVersion() Version  { return p.p.prepared.State.Version }
 
 func (p *PreparedRestore) TargetDocuments() RestoreDocuments {
 	return RestoreDocuments{Configuration: slices.Clone(p.target.Configuration), ConfigurationSecrets: slices.Clone(p.target.ConfigurationSecrets)}
@@ -172,11 +172,18 @@ func (s *Store) Restore(ctx context.Context, actor authz.Actor, expected Version
 }
 
 func (s *Store) RestoreMatches(ctx context.Context, version Version, target RestoreDocuments) (bool, error) {
-	exported, err := s.Export(ctx, true)
+	var savedVersion Version
+	var configBody, secretBody []byte
+	err := s.read(ctx, "", nil, func(state savedState, _ VersionInfo) error {
+		savedVersion = state.Version
+		configBody = state.configBody
+		secretBody = state.secretBody
+		return nil
+	})
 	if err != nil {
 		return false, err
 	}
-	return exported.SavedVersion == version && bytes.Equal(exported.Configuration, target.Configuration) && bytes.Equal(exported.ConfigurationSecrets, target.ConfigurationSecrets), nil
+	return savedVersion == version && bytes.Equal(bytes.TrimRight(configBody, "\n"), bytes.TrimRight(target.Configuration, "\n")) && bytes.Equal(bytes.TrimRight(secretBody, "\n"), bytes.TrimRight(target.ConfigurationSecrets, "\n")), nil
 }
 
 func prepareRestoration(current *savedState, decoded decodedBackup, next Version, now time.Time) (preparedChange, RestorePreview, error) {

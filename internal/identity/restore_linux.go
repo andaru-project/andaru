@@ -19,15 +19,15 @@ import (
 )
 
 type PreparedRestore struct {
-	tx          *sql.Tx
-	preview     RestorePreview
-	result      RestoreResult
-	target      BackupDocuments
-	closed      bool
-	committed   bool
+	tx        *sql.Tx
+	preview   RestorePreview
+	result    RestoreResult
+	target    BackupDocuments
+	closed    bool
+	committed bool
 }
 
-func (p *PreparedRestore) Preview() RestorePreview { return p.preview }
+func (p *PreparedRestore) Preview() RestorePreview          { return p.preview }
 func (p *PreparedRestore) TargetDocuments() BackupDocuments { return p.target }
 
 func (p *PreparedRestore) Publish(ctx context.Context) (RestoreResult, error) {
@@ -345,11 +345,17 @@ func identityRestorePreview(revision int64, beforeUsers usersBackupDocument, bef
 
 func accountCounts(before, after []backupAccount) RestoreCounts {
 	old := make(map[string]backupAccount, len(before))
-	for _, account := range before { old[account.ID] = account }
+	for _, account := range before {
+		old[account.ID] = account
+	}
 	var result RestoreCounts
 	for _, account := range after {
 		previous, exists := old[account.ID]
-		if !exists { result.Created++ } else if !accountEqual(previous, account) { result.Updated++ }
+		if !exists {
+			result.Created++
+		} else if !accountEqual(previous, account) {
+			result.Updated++
+		}
 		delete(old, account.ID)
 	}
 	result.Deleted = len(old)
@@ -362,12 +368,22 @@ func accountEqual(a, b backupAccount) bool {
 
 func credentialCounts(before, after credentialsBackupDocument) RestoreCounts {
 	old := make(map[string]string, len(before.Passwords)+len(before.Tokens))
-	for _, password := range before.Passwords { raw, _ := json.Marshal(password); old["p:"+password.AccountID] = string(raw) }
-	for _, token := range before.Tokens { raw, _ := json.Marshal(token); old["t:"+base64.RawURLEncoding.EncodeToString(token.Selector)] = string(raw) }
+	for _, password := range before.Passwords {
+		raw, _ := json.Marshal(password)
+		old["p:"+password.AccountID] = string(raw)
+	}
+	for _, token := range before.Tokens {
+		raw, _ := json.Marshal(token)
+		old["t:"+base64.RawURLEncoding.EncodeToString(token.Selector)] = string(raw)
+	}
 	var result RestoreCounts
 	for _, item := range appendCredentialItems(after) {
 		previous, exists := old[item.key]
-		if !exists { result.Created++ } else if previous != item.value { result.Updated++ }
+		if !exists {
+			result.Created++
+		} else if previous != item.value {
+			result.Updated++
+		}
 		delete(old, item.key)
 	}
 	result.Deleted = len(old)
@@ -375,18 +391,29 @@ func credentialCounts(before, after credentialsBackupDocument) RestoreCounts {
 }
 
 type credentialItem struct{ key, value string }
+
 func appendCredentialItems(document credentialsBackupDocument) []credentialItem {
 	items := make([]credentialItem, 0, len(document.Passwords)+len(document.Tokens))
-	for _, password := range document.Passwords { raw, _ := json.Marshal(password); items = append(items, credentialItem{"p:"+password.AccountID, string(raw)}) }
-	for _, token := range document.Tokens { raw, _ := json.Marshal(token); items = append(items, credentialItem{"t:"+base64.RawURLEncoding.EncodeToString(token.Selector), string(raw)}) }
+	for _, password := range document.Passwords {
+		raw, _ := json.Marshal(password)
+		items = append(items, credentialItem{"p:" + password.AccountID, string(raw)})
+	}
+	for _, token := range document.Tokens {
+		raw, _ := json.Marshal(token)
+		items = append(items, credentialItem{"t:" + base64.RawURLEncoding.EncodeToString(token.Selector), string(raw)})
+	}
 	return items
 }
 
 func hasRecoveryAdministrator(users usersBackupDocument, credentials credentialsBackupDocument) bool {
 	passwords := make(map[string]bool, len(credentials.Passwords))
-	for _, password := range credentials.Passwords { passwords[password.AccountID] = true }
+	for _, password := range credentials.Passwords {
+		passwords[password.AccountID] = true
+	}
 	for _, account := range users.Accounts {
-		if account.Enabled && account.Kind == Human && passwords[account.ID] && slices.Contains(account.RoleIDs, authz.AdministratorRoleID) { return true }
+		if account.Enabled && account.Kind == Human && passwords[account.ID] && slices.Contains(account.RoleIDs, authz.AdministratorRoleID) {
+			return true
+		}
 	}
 	return false
 }
@@ -397,28 +424,58 @@ func addRootAdministrator(ctx context.Context, users *usersBackupDocument, crede
 	}
 	index := -1
 	if root.AccountID != "" {
-		for i := range users.Accounts { if users.Accounts[i].ID == root.AccountID { index = i; break } }
-		if index < 0 { return ErrNotFound }
+		for i := range users.Accounts {
+			if users.Accounts[i].ID == root.AccountID {
+				index = i
+				break
+			}
+		}
+		if index < 0 {
+			return ErrNotFound
+		}
 		account := users.Accounts[index]
-		if !account.Enabled || account.Kind != Human || !slices.Contains(account.RoleIDs, authz.AdministratorRoleID) { return ErrInvalid }
+		if !account.Enabled || account.Kind != Human || !slices.Contains(account.RoleIDs, authz.AdministratorRoleID) {
+			return ErrInvalid
+		}
 	} else {
-		if len(users.Accounts) >= MaxAccounts { return ErrAccountLimit }
+		if len(users.Accounts) >= MaxAccounts {
+			return ErrAccountLimit
+		}
 		login, err := canonicalLogin(root.Login)
-		if err != nil || validateAccountFields(login, root.DisplayName, Human) != nil { return ErrInvalid }
-		for _, account := range users.Accounts { if account.Login == login { return ErrDuplicate } }
+		if err != nil || validateAccountFields(login, root.DisplayName, Human) != nil {
+			return ErrInvalid
+		}
+		for _, account := range users.Accounts {
+			if account.Login == login {
+				return ErrDuplicate
+			}
+		}
 		now := time.Now().Unix()
 		users.Accounts = append(users.Accounts, backupAccount{ID: uuid.NewString(), Login: login, DisplayName: root.DisplayName, Kind: Human, Enabled: true, RoleIDs: []string{authz.AdministratorRoleID}, CreatedAt: now, UpdatedAt: now})
 		slices.SortFunc(users.Accounts, func(a, b backupAccount) int { return strings.Compare(a.ID, b.ID) })
-		for i := range users.Accounts { if users.Accounts[i].Login == login { index = i; break } }
+		for i := range users.Accounts {
+			if users.Accounts[i].Login == login {
+				index = i
+				break
+			}
+		}
 	}
 	account := users.Accounts[index]
 	encoded, err := hashPasswordWithPolicy(ctx, root.Password, account.Login, account.DisplayName)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	parsed, err := parsePasswordHash(encoded)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	password := backupPassword{AccountID: account.ID, Salt: parsed.salt, Hash: parsed.hash, AlgorithmVersion: argonVersion, MemoryKiB: int(parsed.memory), TimeCost: int(parsed.time), Parallelism: int(parsed.threads), UpdatedAt: time.Now().Unix()}
 	kept := credentials.Passwords[:0]
-	for _, existing := range credentials.Passwords { if existing.AccountID != account.ID { kept = append(kept, existing) } }
+	for _, existing := range credentials.Passwords {
+		if existing.AccountID != account.ID {
+			kept = append(kept, existing)
+		}
+	}
 	credentials.Passwords = append(kept, password)
 	slices.SortFunc(credentials.Passwords, func(a, b backupPassword) int { return strings.Compare(a.AccountID, b.AccountID) })
 	return nil
@@ -426,39 +483,75 @@ func addRootAdministrator(ctx context.Context, users *usersBackupDocument, crede
 
 func applyRestore(ctx context.Context, tx *sql.Tx, users usersBackupDocument, credentials credentialsBackupDocument, replaceUsers bool, revision int64) error {
 	accountEpochs, passwordEpochs, err := readEpochs(ctx, tx)
-	if err != nil { return err }
-	if _, err = tx.ExecContext(ctx, "DELETE FROM sessions"); err != nil { return err }
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM sessions"); err != nil {
+		return err
+	}
 	if replaceUsers {
-		if _, err = tx.ExecContext(ctx, "DELETE FROM accounts"); err != nil { return err }
-		if _, err = tx.ExecContext(ctx, "DELETE FROM metadata WHERE key LIKE 'account_epoch:%' OR key LIKE 'password_epoch:%'"); err != nil { return err }
+		if _, err = tx.ExecContext(ctx, "DELETE FROM accounts"); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "DELETE FROM metadata WHERE key LIKE 'account_epoch:%' OR key LIKE 'password_epoch:%'"); err != nil {
+			return err
+		}
 		for _, tombstone := range users.Tombstones {
-			if _, err = tx.ExecContext(ctx, "INSERT INTO tombstones(account_id,deleted_at) VALUES(?,?) ON CONFLICT(account_id) DO UPDATE SET deleted_at=min(deleted_at,excluded.deleted_at)", tombstone.AccountID, tombstone.DeletedAt); err != nil { return err }
+			if _, err = tx.ExecContext(ctx, "INSERT INTO tombstones(account_id,deleted_at) VALUES(?,?) ON CONFLICT(account_id) DO UPDATE SET deleted_at=min(deleted_at,excluded.deleted_at)", tombstone.AccountID, tombstone.DeletedAt); err != nil {
+				return err
+			}
 		}
 		for _, value := range users.Accounts {
 			account := Account{ID: value.ID, Login: value.Login, DisplayName: value.DisplayName, Kind: value.Kind, Enabled: value.Enabled, RoleIDs: value.RoleIDs, CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt}
-			if err = insertAccount(ctx, tx, account); err != nil { return accountWriteError(err) }
-			if err = insertAccountRoles(ctx, tx, account.ID, account.RoleIDs); err != nil { return err }
-			if _, err = tx.ExecContext(ctx, "INSERT INTO metadata(key,value) VALUES(?,?)", "account_epoch:"+account.ID, accountEpochs[account.ID]+1); err != nil { return err }
-			if _, err = tx.ExecContext(ctx, "INSERT INTO metadata(key,value) VALUES(?,?)", "password_epoch:"+account.ID, passwordEpochs[account.ID]+1); err != nil { return err }
+			if err = insertAccount(ctx, tx, account); err != nil {
+				return accountWriteError(err)
+			}
+			if err = insertAccountRoles(ctx, tx, account.ID, account.RoleIDs); err != nil {
+				return err
+			}
+			if _, err = tx.ExecContext(ctx, "INSERT INTO metadata(key,value) VALUES(?,?)", "account_epoch:"+account.ID, accountEpochs[account.ID]+1); err != nil {
+				return err
+			}
+			if _, err = tx.ExecContext(ctx, "INSERT INTO metadata(key,value) VALUES(?,?)", "password_epoch:"+account.ID, passwordEpochs[account.ID]+1); err != nil {
+				return err
+			}
 		}
 	} else {
 		for _, value := range users.Accounts {
-			if _, err = tx.ExecContext(ctx, "UPDATE metadata SET value=value+1 WHERE key IN (?,?)", "account_epoch:"+value.ID, "password_epoch:"+value.ID); err != nil { return err }
+			if _, err = tx.ExecContext(ctx, "UPDATE metadata SET value=value+1 WHERE key IN (?,?)", "account_epoch:"+value.ID, "password_epoch:"+value.ID); err != nil {
+				return err
+			}
 		}
 	}
-	if _, err = tx.ExecContext(ctx, "DELETE FROM password_credentials"); err != nil { return err }
-	if _, err = tx.ExecContext(ctx, "DELETE FROM api_tokens"); err != nil { return err }
+	if _, err = tx.ExecContext(ctx, "DELETE FROM password_credentials"); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM api_tokens"); err != nil {
+		return err
+	}
 	for _, password := range credentials.Passwords {
-		if _, err = tx.ExecContext(ctx, `INSERT INTO password_credentials(account_id,salt,hash,algorithm_version,memory_kib,time_cost,parallelism,updated_at) VALUES(?,?,?,?,?,?,?,?)`, password.AccountID, password.Salt, password.Hash, password.AlgorithmVersion, password.MemoryKiB, password.TimeCost, password.Parallelism, password.UpdatedAt); err != nil { return err }
+		if _, err = tx.ExecContext(ctx, `INSERT INTO password_credentials(account_id,salt,hash,algorithm_version,memory_kib,time_cost,parallelism,updated_at) VALUES(?,?,?,?,?,?,?,?)`, password.AccountID, password.Salt, password.Hash, password.AlgorithmVersion, password.MemoryKiB, password.TimeCost, password.Parallelism, password.UpdatedAt); err != nil {
+			return err
+		}
 	}
 	for _, token := range credentials.Tokens {
 		var expiry, revoked, used any
-		if token.ExpiresAt != nil { expiry = *token.ExpiresAt }
-		if token.RevokedAt != nil { revoked = *token.RevokedAt }
-		if token.LastUsedAt != nil { used = *token.LastUsedAt }
+		if token.ExpiresAt != nil {
+			expiry = *token.ExpiresAt
+		}
+		if token.RevokedAt != nil {
+			revoked = *token.RevokedAt
+		}
+		if token.LastUsedAt != nil {
+			used = *token.LastUsedAt
+		}
 		var passwordEpoch int64
-		if err = tx.QueryRowContext(ctx, "SELECT value FROM metadata WHERE key=?", "password_epoch:"+token.AccountID).Scan(&passwordEpoch); err != nil { return err }
-		if _, err = tx.ExecContext(ctx, `INSERT INTO api_tokens(selector,account_id,secret_hash,name,scopes,created_at,expires_at,revoked_at,last_used_at,revoke_on_password_change,password_epoch,revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, token.Selector, token.AccountID, token.SecretHash, token.Name, encodeTokenScope(token.Scopes), token.CreatedAt, expiry, revoked, used, boolInteger(token.RevokeOnPasswordChange), passwordEpoch, revision); err != nil { return err }
+		if err = tx.QueryRowContext(ctx, "SELECT value FROM metadata WHERE key=?", "password_epoch:"+token.AccountID).Scan(&passwordEpoch); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO api_tokens(selector,account_id,secret_hash,name,scopes,created_at,expires_at,revoked_at,last_used_at,revoke_on_password_change,password_epoch,revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, token.Selector, token.AccountID, token.SecretHash, token.Name, encodeTokenScope(token.Scopes), token.CreatedAt, expiry, revoked, used, boolInteger(token.RevokeOnPasswordChange), passwordEpoch, revision); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -473,21 +566,31 @@ func boolInteger(value bool) int {
 func readEpochs(ctx context.Context, tx *sql.Tx) (map[string]int64, map[string]int64, error) {
 	accounts, passwords := make(map[string]int64), make(map[string]int64)
 	rows, err := tx.QueryContext(ctx, "SELECT key,value FROM metadata WHERE key LIKE 'account_epoch:%' OR key LIKE 'password_epoch:%'")
-	if err != nil { return nil, nil, err }
+	if err != nil {
+		return nil, nil, err
+	}
 	defer rows.Close()
 	for rows.Next() {
 		var key string
 		var value int64
-		if err = rows.Scan(&key, &value); err != nil { return nil, nil, err }
-		if id, ok := strings.CutPrefix(key, "account_epoch:"); ok { accounts[id] = value } else if id, ok := strings.CutPrefix(key, "password_epoch:"); ok { passwords[id] = value }
+		if err = rows.Scan(&key, &value); err != nil {
+			return nil, nil, err
+		}
+		if id, ok := strings.CutPrefix(key, "account_epoch:"); ok {
+			accounts[id] = value
+		} else if id, ok := strings.CutPrefix(key, "password_epoch:"); ok {
+			passwords[id] = value
+		}
 	}
 	return accounts, passwords, rows.Err()
 }
 
 func (s *store) RestoreMatches(ctx context.Context, target BackupDocuments) (bool, error) {
 	current, err := s.ExportBackup(ctx, true)
-	if err != nil { return false, err }
-	return current.IdentityRevision == target.IdentityRevision && bytes.Equal(current.Users, target.Users) && bytes.Equal(current.UserCredentials, target.UserCredentials), nil
+	if err != nil {
+		return false, err
+	}
+	return current.IdentityRevision == target.IdentityRevision && bytes.Equal(bytes.TrimRight(current.Users, "\n"), bytes.TrimRight(target.Users, "\n")) && bytes.Equal(bytes.TrimRight(current.UserCredentials, "\n"), bytes.TrimRight(target.UserCredentials, "\n")), nil
 }
 
 var _ BackupStore = (*store)(nil)
