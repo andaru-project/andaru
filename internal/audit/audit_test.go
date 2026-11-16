@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -423,13 +424,33 @@ func TestStorageErrorLatchesWhenContextAlsoCancels(t *testing.T) {
 	}
 }
 
-func TestDeadlineArtifactDoesNotLatchStorageFailure(t *testing.T) {
+func TestCanceledTransactionRollbackDoesNotLatchStorageFailure(t *testing.T) {
 	s, _ := openTestStore(t)
-	if err := s.storageError(context.Background(), context.DeadlineExceeded); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("deadline artifact error = %v", err)
+	ctx, cancel := context.WithCancel(context.Background())
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+
+	if _, err = tx.ExecContext(ctx, "INSERT INTO events(at,actor_kind,actor_id,source,action,target,result,operation_id,category,count) VALUES(?,?,?,?,?,?,?,?,?,?)",
+		time.Now().UnixMilli(), "system", "root", "local", ActionAccountUpdated, "target", ResultSuccess, "", CategoryProtected, 1); err == nil {
+		t.Fatal("write unexpectedly succeeded after cancellation")
+	}
+	if err = tx.Commit(); !errors.Is(err, sql.ErrTxDone) {
+		t.Fatalf("Commit error = %v, want sql.ErrTxDone after automatic rollback", err)
+	}
+	if err = s.storageError(ctx, err); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled transaction error = %v, want context.Canceled", err)
 	}
 	if s.storageFailure.Load() {
-		t.Fatal("deadline artifact latched storage failure")
+		t.Fatal("automatic rollback latched storage failure")
+	}
+	if _, err = s.Begin(context.Background(), testIntent("healthy-after-rollback", ActionAccountUpdated, CategoryProtected)); err != nil {
+		t.Fatalf("healthy Begin after rollback = %v", err)
+	}
+	if _, err = s.Append(context.Background(), testEvent(ActionAccountUpdated, CategoryProtected, ResultSuccess)); err != nil {
+		t.Fatalf("healthy Append after rollback = %v", err)
 	}
 }
 

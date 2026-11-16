@@ -928,6 +928,9 @@ func (s *Store) abortStorage(ctx context.Context, tx *sql.Tx, err error) error {
 }
 
 func (s *Store) storageError(ctx context.Context, err error) error {
+	if errors.Is(err, sql.ErrTxDone) && (errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded)) {
+		return ctx.Err()
+	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
