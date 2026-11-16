@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	LayoutVersion        = 2
+	LayoutVersion        = 1
 	generalBudget        = 80_000
 	protectedBudget      = 20_000
 	maxEvents            = generalBudget + protectedBudget

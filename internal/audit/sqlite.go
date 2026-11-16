@@ -143,26 +143,6 @@ func verifySchema(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-func migrateV1(ctx context.Context, db *sql.DB) error {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	for _, statement := range []string{
-		"ALTER TABLE retention ADD COLUMN total_inserted_general INTEGER NOT NULL DEFAULT 0 CHECK(total_inserted_general>=0)",
-		"ALTER TABLE retention ADD COLUMN total_inserted_protected INTEGER NOT NULL DEFAULT 0 CHECK(total_inserted_protected>=0)",
-		`UPDATE retention SET total_inserted_general=(SELECT count(*) FROM events WHERE category='general')+total_pruned_general,
-			total_inserted_protected=(SELECT count(*) FROM events WHERE category='protected')+total_pruned_protected WHERE id=1`,
-		fmt.Sprintf("PRAGMA user_version=%d", LayoutVersion),
-	} {
-		if _, err = tx.ExecContext(ctx, statement); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
-}
-
 func verifyPragmas(ctx context.Context, db *sql.DB) error {
 	var journal string
 	var synchronous, foreignKeys int

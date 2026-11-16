@@ -28,6 +28,13 @@ func openTestStore(t *testing.T) (*Store, string) {
 	return s, dir
 }
 
+func ageEvent(t *testing.T, s *Store, id uint64, at time.Time) {
+	t.Helper()
+	if _, err := s.db.Exec("UPDATE events SET at=? WHERE id=?", at.UnixMilli(), id); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func testTarget(action Action) string {
 	switch action {
 	case ActionLoginSuccess, ActionAccountCreated, ActionAccountUpdated, ActionAccountDisabled, ActionAccountDeleted, ActionPasswordChanged:
@@ -175,6 +182,36 @@ func TestRootOnlyLayoutAndExclusiveOpen(t *testing.T) {
 	}
 }
 
+func TestUnsupportedAuditSchemaVersionsFailClosed(t *testing.T) {
+	for _, version := range []int{0, LayoutVersion + 1} {
+		t.Run(fmt.Sprintf("version-%d", version), func(t *testing.T) {
+			s, dir := openTestStore(t)
+			if _, err := s.db.Exec(fmt.Sprintf("PRAGMA user_version=%d", version)); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Open(context.Background(), dir); err == nil {
+				t.Fatalf("opened unsupported schema version %d", version)
+			}
+		})
+	}
+}
+
+func TestAuditSchemaLayoutMismatchFailsClosed(t *testing.T) {
+	s, dir := openTestStore(t)
+	if _, err := s.db.Exec("DROP INDEX events_coalesce"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(context.Background(), dir); err == nil {
+		t.Fatal("opened database with an incomplete layout")
+	}
+}
+
 func TestMetadataAllowlistRejectsSecretsAndArbitraryValues(t *testing.T) {
 	s, _ := openTestStore(t)
 	ctx := context.Background()
@@ -276,6 +313,43 @@ func TestCanceledBeginDoesNotLatchStorageFailure(t *testing.T) {
 	}
 }
 
+func TestListEventsRejectsInvalidCursorWithoutLatchingStorageFailure(t *testing.T) {
+	s, _ := openTestStore(t)
+	if _, err := s.ListEvents(context.Background(), ^uint64(0), 10); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("invalid cursor error = %v", err)
+	}
+	if _, err := s.ListEvents(context.Background(), 0, 10); err != nil {
+		t.Fatalf("healthy ListEvents after invalid cursor = %v", err)
+	}
+	if s.storageFailure.Load() {
+		t.Fatal("invalid cursor latched storage failure")
+	}
+}
+
+func TestStorageErrorLatchesWhenContextAlsoCancels(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := s.storageError(ctx, errors.New("disk I/O error"))
+	if !errors.Is(err, ErrStorage) || errors.Is(err, context.Canceled) {
+		t.Fatalf("storage error with canceled context = %v", err)
+	}
+	if !s.storageFailure.Load() {
+		t.Fatal("storage failure was not latched")
+	}
+}
+
+func TestDeadlineArtifactDoesNotLatchStorageFailure(t *testing.T) {
+	s, _ := openTestStore(t)
+	if err := s.storageError(context.Background(), context.DeadlineExceeded); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("deadline artifact error = %v", err)
+	}
+	if s.storageFailure.Load() {
+		t.Fatal("deadline artifact latched storage failure")
+	}
+}
+
 func TestLoginFailuresCoalesceAcrossAllowedReasons(t *testing.T) {
 	s, _ := openTestStore(t)
 	ctx := context.Background()
@@ -302,20 +376,29 @@ func TestCoalescedAppendPrunesExpiredEvents(t *testing.T) {
 	event.Target = ""
 	event.Source = "192.0.2.10"
 	event.Metadata = map[string]string{MetadataReasonCode: ReasonInvalidCredentials}
+	first, err := s.Append(ctx, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired, err := s.Append(ctx, testEvent(ActionLoginSuccess, CategoryGeneral, ResultSuccess))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ageEvent(t, s, expired.ID, time.Now().Add(-retentionPeriod-time.Second))
 	if _, err := s.Append(ctx, event); err != nil {
 		t.Fatal(err)
 	}
-	cutoff := time.Now().Add(-retentionPeriod - time.Second).UnixMilli()
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO events(at,actor_kind,actor_id,source,action,target,result,operation_id,category,coalesced_count)
-		VALUES(?,?,?,?,?,?,?,?,?,1)`, cutoff, authz.ActorSystem, "root", "unix", ActionLoginSuccess, "", ResultSuccess, "", CategoryGeneral); err != nil {
-		t.Fatal(err)
+	var remaining int
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM events WHERE id=?", expired.ID).Scan(&remaining); err != nil || remaining != 0 {
+		t.Fatalf("expired event count = %d, err=%v", remaining, err)
 	}
-	if _, err := s.Append(ctx, event); err != nil {
-		t.Fatal(err)
+	got, err := s.ListEvents(ctx, 0, 10)
+	if err != nil || len(got) != 1 || got[0].ID != first.ID || got[0].Count != 2 {
+		t.Fatalf("events after coalesced prune = %+v, %v", got, err)
 	}
-	var expired int
-	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM events WHERE at=?", cutoff).Scan(&expired); err != nil || expired != 0 {
-		t.Fatalf("expired event count = %d, err=%v", expired, err)
+	report, err := s.Verify(ctx)
+	if err != nil || !report.Valid {
+		t.Fatalf("integrity report after coalesced prune = %+v, %v", report, err)
 	}
 }
 
@@ -364,10 +447,7 @@ func TestExpiredEventsPruneWithWatermark(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	old := time.Now().UTC().Add(-366 * 24 * time.Hour).UnixMilli()
-	if _, err = s.db.ExecContext(ctx, "UPDATE events SET at=? WHERE id=?", old, expired.ID); err != nil {
-		t.Fatal(err)
-	}
+	ageEvent(t, s, expired.ID, time.Now().UTC().Add(-366*24*time.Hour))
 	if _, err = s.Append(ctx, testEvent(ActionLoginSuccess, CategoryGeneral, ResultSuccess)); err != nil {
 		t.Fatal(err)
 	}
@@ -445,10 +525,7 @@ func TestVerifyDetectsRetainedProtectedDeletionAfterMixedAgePruning(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	old := time.Now().UTC().Add(-366 * 24 * time.Hour).UnixMilli()
-	if _, err = s.db.ExecContext(ctx, "UPDATE events SET at=? WHERE id=?", old, expired.ID); err != nil {
-		t.Fatal(err)
-	}
+	ageEvent(t, s, expired.ID, time.Now().UTC().Add(-366*24*time.Hour))
 	if _, err = s.Append(ctx, testEvent(ActionLoginSuccess, CategoryGeneral, ResultSuccess)); err != nil {
 		t.Fatal(err)
 	}

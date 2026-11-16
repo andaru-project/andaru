@@ -370,6 +370,9 @@ func (s *Store) finish(ctx context.Context, outcome Outcome) error {
 }
 
 func (s *Store) ListEvents(ctx context.Context, after uint64, limit int) ([]Event, error) {
+	if after > uint64(1<<63-1) {
+		return nil, ErrInvalid
+	}
 	if limit == 0 {
 		limit = 50
 	}
@@ -488,10 +491,6 @@ func openDatabase(ctx context.Context, stateDir string) (*sql.DB, error) {
 		}
 	} else if appID != applicationID {
 		return fail(errors.New("audit database application or layout mismatch"))
-	} else if version == 1 {
-		if err = migrateV1(ctx, db); err != nil {
-			return fail(err)
-		}
 	} else if version != LayoutVersion {
 		return fail(errors.New("audit database application or layout mismatch"))
 	}
@@ -919,9 +918,6 @@ func (s *Store) abortStorage(ctx context.Context, tx *sql.Tx, err error) error {
 }
 
 func (s *Store) storageError(ctx context.Context, err error) error {
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return ctxErr
-	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
