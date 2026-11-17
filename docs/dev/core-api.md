@@ -230,7 +230,13 @@ dump that way. The API returns `503`, not a potentially incomplete snapshot.
 The engine owns `/var/lib/andaru` (`0700`), with `configuration/config.db`,
 `configuration/secrets.db`, their SQLite sidecars and `engine.lock` protected as
 root-only files (`0600`). Active state must use a **local filesystem** supporting
-WAL/shared memory and no-replace rename, not an NFS/SMB backup mount. An engine-only
+WAL/shared memory and no-replace rename, not an NFS/SMB backup mount. An operator may
+mount a local filesystem at `/var/lib/andaru` before first setup, or stop Andaru and
+move an existing tree onto that mount. There is no migration command. A missing mount
+must not be replaced by an empty directory. `/var/lib/andaru-kept/` on the root disk
+holds the write-once first LAN, the last successful LAN, and the explicitly stored
+post-reset network. Package removal does not delete that directory or
+`/var/lib/andaru-upgrades/`. An engine-only
 `--state-dir /absolute/private/path` selects isolated development state. A second
 engine cannot own the same state directory, even with another socket.
 
