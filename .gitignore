@@ -15,12 +15,6 @@ SHA512SUMS
 /run/
 /logs/
 
-# Graphify: the root graph is committed so a fresh clone can query it without a
-# rebuild; everything else in graphify-out/ is regenerated locally.
-*.graphify-bak
-graphify-out/*
-!graphify-out/graph.json
-
 # Superpowers subagent-ledger artifacts are local execution scratch.
 /.superpowers/
 
