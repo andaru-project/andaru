@@ -21,6 +21,18 @@ func TestKeptRefusesNesting(t *testing.T) {
 	}
 }
 
+func TestOpenRejectsSymlinkRoot(t *testing.T) {
+	state := t.TempDir()
+	dir := t.TempDir()
+	link := filepath.Join(t.TempDir(), "kept")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenIn(link, state); err == nil {
+		t.Fatal("symlink root opened")
+	}
+}
+
 func TestKeptModes(t *testing.T) {
 	state := t.TempDir()
 	root := filepath.Join(t.TempDir(), "kept")

@@ -188,8 +188,8 @@ func (r Realizer) Confirm(ctx context.Context, id int) (result error) {
 	if err := r.writeState("confirm:state", id, state); err != nil {
 		return err
 	}
+	r.copyKeptFirst(ctx, id)
 	if !g.Takeover {
-		r.copyKeptFirst(ctx, id)
 		return nil
 	}
 	kind, _, err := ReadBaselineKind(r.dir())
@@ -200,7 +200,6 @@ func (r Realizer) Confirm(ctx context.Context, id int) (result error) {
 		state.Reason = "takeover not yet permanent: " + err.Error() + "; completes at the next boot"
 		return errors.Join(err, r.writeState("confirm:state-reason", id, state))
 	}
-	r.copyKeptFirst(ctx, id)
 	return nil
 }
 
