@@ -63,6 +63,9 @@ func managementLAN(d declaration, secrets map[string]string) ([]byte, error) {
 	}{"lan-closure", 1, *d.Management, ancestry, []segment{*seg}, zones, bound})
 }
 
+// Directory is the state directory this store opened.
+func (s *Store) Directory() string { return s.root }
+
 // ManagementLAN returns the management closure for one saved version. An empty
 // version is the saved head.
 func (s *Store) ManagementLAN(ctx context.Context, version string) ([]byte, error) {
