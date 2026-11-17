@@ -24,7 +24,7 @@ for what it is, why it is serial-only, and how to run it.
 dev/vm-lab/lab-setup
 ```
 
-AI-assisted work uses Graphify and CodeGraph indexes; run
+AI-assisted work uses a CodeGraph index; run
 `sh scripts/setup-hooks.sh` once per clone. See
 [docs/dev/agent-tooling.md](docs/dev/agent-tooling.md).
 
