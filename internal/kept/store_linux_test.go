@@ -23,8 +23,8 @@ func TestKeptRefusesNesting(t *testing.T) {
 
 func TestKeptModes(t *testing.T) {
 	state := t.TempDir()
-	t.Cleanup(func() { _ = os.RemoveAll(Root) })
-	s, err := Open(state)
+	root := filepath.Join(t.TempDir(), "kept")
+	s, err := OpenIn(root, state)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,8 +32,8 @@ func TestKeptModes(t *testing.T) {
 	if err = s.Put(ctx, "last-lan", []byte("one"), false); err != nil {
 		t.Fatal(err)
 	}
-	file := filepath.Join(Root, "last-lan", "last-lan.json")
-	assertPrivate(t, Root, 0o700)
+	file := filepath.Join(root, "last-lan", "last-lan.json")
+	assertPrivate(t, root, 0o700)
 	assertPrivate(t, filepath.Dir(file), 0o700)
 	assertPrivate(t, file, 0o600)
 	if err = s.Put(ctx, "last-lan", []byte("two"), true); err != nil {
@@ -43,7 +43,7 @@ func TestKeptModes(t *testing.T) {
 	if err != nil || string(got) != "two" {
 		t.Fatalf("read %q %v", got, err)
 	}
-	tmp := filepath.Join(Root, "first", "first.json.tmp")
+	tmp := filepath.Join(root, "first", "first.json.tmp")
 	if err = os.MkdirAll(filepath.Dir(tmp), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -81,8 +81,8 @@ func assertPrivate(t *testing.T, path string, mode os.FileMode) {
 		t.Fatalf("%s mode %o, want %o", path, info.Mode().Perm(), mode)
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || stat.Uid != 0 {
-		t.Fatalf("%s is not root-owned", path)
+	if !ok || stat.Uid != uint32(os.Geteuid()) && stat.Uid != 0 {
+		t.Fatalf("%s is not owned by the writer", path)
 	}
 	if info.Mode().IsRegular() && stat.Nlink != 1 {
 		t.Fatalf("%s link count %d", path, stat.Nlink)

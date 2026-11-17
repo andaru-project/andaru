@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/andaru-project/andaru/internal/kept"
 )
 
 func TestBootLeavesAUsableTree(t *testing.T) {
@@ -21,13 +19,6 @@ func TestBootLeavesAUsableTree(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(state, "generations", "pointers.json"), []byte(`{"confirmed":null,"live":null}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(kept.Root) })
-	if err := os.MkdirAll(filepath.Join(kept.Root, "last-lan"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(kept.Root, "last-lan", "last-lan.json"), []byte("not-a-closure"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	r := Realizer{StateDir: state, Root: t.TempDir(), Now: timeNow}
 	if err := r.Boot(t.Context()); err != nil && strings.Contains(err.Error(), "unsafe kept copy") {
 		t.Fatal(err)
@@ -37,29 +28,29 @@ func TestBootLeavesAUsableTree(t *testing.T) {
 func TestDisasterBootOrder(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "missing")
 	root := t.TempDir()
-	t.Cleanup(func() { _ = os.RemoveAll(kept.Root) })
-	writeCopy(t, "last-lan", "last")
-	writeCopy(t, "first", "first")
-	writeCopy(t, "recovery", "recovery")
-	r := Realizer{StateDir: state, Root: root, Now: timeNow}
+	keptRoot := filepath.Join(t.TempDir(), "kept")
+	writeCopy(t, keptRoot, "last-lan", "last")
+	writeCopy(t, keptRoot, "first", "first")
+	writeCopy(t, keptRoot, "recovery", "recovery")
+	r := Realizer{StateDir: state, Root: root, KeptRoot: keptRoot, Now: timeNow}
 	if err := r.Boot(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if got := marker(t, root); got != "last-lan" {
 		t.Fatalf("selected %s", got)
 	}
-	_ = os.RemoveAll(filepath.Join(kept.Root, "last-lan"))
+	_ = os.RemoveAll(filepath.Join(keptRoot, "last-lan"))
 	if err := r.Boot(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if got := marker(t, root); got != "first" {
 		t.Fatalf("selected %s", got)
 	}
-	_ = os.RemoveAll(filepath.Join(kept.Root, "first"))
+	_ = os.RemoveAll(filepath.Join(keptRoot, "first"))
 	if err := r.Boot(t.Context()); err == nil || !strings.Contains(err.Error(), "CONSOLE_REQUIRED") {
 		t.Fatalf("both missing: %v", err)
 	}
-	writeCopy(t, "recovery", "recovery")
+	writeCopy(t, keptRoot, "recovery", "recovery")
 	if err := r.Boot(t.Context()); err == nil || !strings.Contains(err.Error(), "CONSOLE_REQUIRED") {
 		t.Fatal("recovery was selected")
 	}
@@ -76,9 +67,9 @@ func TestDisasterBootDoesNotCreateState(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	t.Cleanup(func() { _ = os.RemoveAll(kept.Root) })
-	writeCopy(t, "last-lan", "last")
-	r := Realizer{StateDir: state, Root: root, Now: timeNow}
+	keptRoot := filepath.Join(t.TempDir(), "kept")
+	writeCopy(t, keptRoot, "last-lan", "last")
+	r := Realizer{StateDir: state, Root: root, KeptRoot: keptRoot, Now: timeNow}
 	if err := r.Boot(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -96,9 +87,9 @@ func TestDisasterBootDoesNotCreateState(t *testing.T) {
 	}
 }
 
-func writeCopy(t *testing.T, name, token string) {
+func writeCopy(t *testing.T, root, name, token string) {
 	t.Helper()
-	dir := filepath.Join(kept.Root, name)
+	dir := filepath.Join(root, name)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}

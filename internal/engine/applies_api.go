@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -362,6 +363,12 @@ func (h *appliesHandler) create(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.unavailable(w, r, "store generation", err)
 		return
+	}
+	if closure, cerr := config.LANClosure(input.Value, input.Secrets); cerr == nil {
+		path := filepath.Join(h.dir, strconv.Itoa(id), "lan-closure.json")
+		if werr := os.WriteFile(path, closure, 0o600); werr != nil {
+			slog.ErrorContext(ctx, "write the LAN closure", "error", werr)
+		}
 	}
 	// Armed before anything changes: from here the host returns to what it ran, with or without this engine.
 	if err := h.runner.Arm(ctx, id, timerMargin+timeout); err != nil {

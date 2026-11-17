@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/config"
+	"github.com/andaru-project/andaru/internal/generation"
 	"github.com/andaru-project/andaru/internal/kept"
 )
 
@@ -21,6 +25,22 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 		collection, id := "", ""
 		var allowed []string
 		switch {
+		case len(parts) == 2 && parts[0] == "kept" && parts[1] == "recovery":
+			if r.Method != http.MethodPost {
+				writeError(w, r, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "POST is required.")
+				return
+			}
+			if _, err := os.Lstat(store.Directory()); err != nil {
+				writeError(w, r, http.StatusServiceUnavailable, "STORE_UNAVAILABLE", "The state directory is missing.")
+				return
+			}
+			if err := writeRecovery(r.Context(), store); err != nil {
+				slog.Error("store the recovery network", "error", err)
+				writeError(w, r, http.StatusServiceUnavailable, "STORE_UNAVAILABLE", "The recovery network was not stored.")
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
 		case len(parts) == 1 && parts[0] == "schema":
 			route = "schema"
 			allowed = []string{"GET", "HEAD"}
@@ -196,10 +216,9 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 			writeConfigurationError(w, r, e)
 			return
 		}
-		recordCtx := kept.WithExtractor(r.Context(), func(ctx context.Context, _, version string) ([]byte, error) {
-			return store.ManagementLAN(ctx, version)
-		})
-		_ = kept.RecordLastLAN(recordCtx, store.Directory(), string(result.SavedVersion), actor.Actor)
+		if err := recordLiveLAN(r.Context(), store, actor.Actor); err != nil {
+			slog.Error("record the last LAN", "error", err)
+		}
 		w.Header().Set("Andaru-Saved-Version", string(result.SavedVersion))
 		if route == "changes" {
 			send(200, result, nil)
@@ -311,4 +330,43 @@ func writeConfigurationError(w http.ResponseWriter, r *http.Request, e error) {
 		details = []config.FieldError{}
 	}
 	writeJSON(w, r, status, errorResponse{Error: errorBody{Code: f.Code, Message: http.StatusText(status), Details: details, Current: f.Current}})
+}
+
+func recordLiveLAN(ctx context.Context, store *config.Store, actor authz.Actor) error {
+	dir := generation.Dir(store.Directory())
+	p, err := generation.ReadPointers(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if p.Live == nil {
+		return nil
+	}
+	g, err := generation.Read(dir, *p.Live)
+	if err != nil {
+		return err
+	}
+	body, err := store.ManagementLAN(ctx, g.SavedVersion)
+	return kept.RecordLiveLAN(ctx, kept.Root, store.Directory(), actor, body, err)
+}
+
+func writeRecovery(ctx context.Context, store *config.Store) error {
+	input, err := store.RealizationInput(ctx, nil)
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(struct {
+		Declaration json.RawMessage   `json:"declaration"`
+		Secrets     map[string]string `json:"secrets"`
+	}{input.Value, input.Secrets})
+	if err != nil {
+		return err
+	}
+	keptStore, err := kept.Open(store.Directory())
+	if err != nil {
+		return err
+	}
+	return keptStore.Put(ctx, "recovery", body, true)
 }

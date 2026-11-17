@@ -15,19 +15,29 @@ const Root = "/var/lib/andaru-kept"
 
 type Name string
 
-type Store struct{}
+type Store struct{ root string }
 
-func Open(stateDir string) (*Store, error) {
-	if os.Geteuid() != 0 || !filepath.IsAbs(stateDir) || filepath.Clean(stateDir) != stateDir {
+func Open(stateDir string) (*Store, error) { return openAt(Root, stateDir, true) }
+
+// OpenIn is the test seam. Production code uses Open.
+func OpenIn(root, stateDir string) (*Store, error) { return openAt(root, stateDir, false) }
+
+func openAt(root, stateDir string, production bool) (*Store, error) {
+	if !filepath.IsAbs(stateDir) || filepath.Clean(stateDir) != stateDir || !filepath.IsAbs(root) || filepath.Clean(root) != root {
+		return nil, errors.New("kept store requires canonical absolute paths")
+	}
+	if production && os.Geteuid() != 0 {
 		return nil, errors.New("kept store requires root and a canonical absolute state directory")
 	}
-	if nested(stateDir, Root) || nested(Root, stateDir) {
+	if nested(stateDir, root) || nested(root, stateDir) {
 		return nil, errors.New("kept root must not contain or sit inside the state directory")
 	}
-	if err := securefs.CheckAncestors(filepath.Dir(Root)); err != nil {
-		return nil, err
+	if production {
+		if err := securefs.CheckAncestors(filepath.Dir(root)); err != nil {
+			return nil, err
+		}
 	}
-	return &Store{}, nil
+	return &Store{root: root}, nil
 }
 
 func (s *Store) Put(ctx context.Context, name Name, body []byte, replace bool) error {
@@ -37,12 +47,12 @@ func (s *Store) Put(ctx context.Context, name Name, body []byte, replace bool) e
 	if !validName(name) {
 		return errors.New("unknown kept copy")
 	}
-	dir := filepath.Join(Root, string(name))
+	dir := filepath.Join(s.root, string(name))
 	final := filepath.Join(dir, string(name)+".json")
 	if _, err := os.Lstat(final); err == nil && !replace {
 		return errors.New("kept copy already exists")
 	}
-	if err := os.MkdirAll(Root, 0o700); err != nil {
+	if err := os.MkdirAll(s.root, 0o700); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -71,13 +81,14 @@ func (s *Store) Read(name Name) ([]byte, error) {
 	if !validName(name) {
 		return nil, errors.New("unknown kept copy")
 	}
-	path := filepath.Join(Root, string(name), string(name)+".json")
+	path := filepath.Join(s.root, string(name), string(name)+".json")
 	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !info.Mode().IsRegular() || !ok || stat.Uid != 0 || stat.Nlink != 1 || info.Mode().Perm() != 0o600 {
+	owner := stat.Uid == 0 || s.root != Root && stat.Uid == uint32(os.Geteuid())
+	if !info.Mode().IsRegular() || !ok || !owner || stat.Nlink != 1 || info.Mode().Perm() != 0o600 {
 		return nil, errors.New("unsafe kept copy")
 	}
 	return os.ReadFile(path)

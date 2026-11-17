@@ -2,7 +2,7 @@ package kept
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,100 +10,65 @@ import (
 	"github.com/andaru-project/andaru/internal/authz"
 )
 
-func TestRecordLastLAN(t *testing.T) {
+func TestRecordLiveLAN(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "kept")
 	state := t.TempDir()
-	t.Cleanup(func() { _ = os.RemoveAll(Root) })
-	writeLive(t, state, 1, "7")
-	extractLAN = func(context.Context, string, string) ([]byte, error) { return []byte("lan-7"), nil }
-	t.Cleanup(func() { extractLAN = extractFromStore })
 	ctx := context.Background()
-	if err := os.WriteFile(filepath.Join(Root, "first", "first.json"), []byte("keep"), 0o600); err == nil {
-		t.Fatal("first should not exist yet")
-	}
-	_ = os.RemoveAll(Root)
-	if err := RecordLastLAN(ctx, state, "7", authz.Actor{Kind: authz.ActorAccount, ID: "00000000-0000-4000-8000-000000000001"}); err != nil {
+	actor := authz.Actor{Kind: authz.ActorAccount, ID: "00000000-0000-4000-8000-000000000001"}
+	if err := RecordLiveLAN(ctx, root, state, actor, []byte("lan-live"), nil); err != nil {
 		t.Fatal(err)
 	}
-	got, err := Open(state)
+	s, err := OpenIn(root, state)
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := got.Read("last-lan")
-	if err != nil || string(body) != "lan-7" {
-		t.Fatalf("last-lan %q %v", body, err)
+	body, err := s.Read("last-lan")
+	if err != nil || string(body) != "lan-live" {
+		t.Fatalf("%q %v", body, err)
 	}
-	if err = os.MkdirAll(filepath.Join(Root, "first"), 0o700); err != nil {
+	if err = CopyFirst(ctx, root, state, []byte("keep")); err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(filepath.Join(Root, "first", "first.json"), []byte("keep"), 0o600); err != nil {
+	if err = RecordLiveLAN(ctx, root, state, actor, []byte("lan-live"), nil); err != nil {
 		t.Fatal(err)
 	}
-	if err = RecordLastLAN(ctx, state, "7", authz.Actor{Kind: authz.ActorAccount, ID: "00000000-0000-4000-8000-000000000001"}); err != nil {
-		t.Fatal(err)
+	first, err := os.ReadFile(filepath.Join(root, "first", "first.json"))
+	if err != nil || string(first) != "keep" {
+		t.Fatalf("first %q %v", first, err)
 	}
-	kept, err := os.ReadFile(filepath.Join(Root, "first", "first.json"))
-	if err != nil || string(kept) != "keep" {
-		t.Fatalf("first changed: %q %v", kept, err)
-	}
-	_ = os.RemoveAll(Root)
-	for _, actor := range []authz.Actor{{Kind: authz.ActorToken, ID: "tok"}, {Kind: authz.ActorSystem, ID: "lease"}} {
-		if err = RecordLastLAN(ctx, state, "7", actor); err != nil {
+	_ = os.RemoveAll(filepath.Join(root, "last-lan"))
+	for _, other := range []authz.Actor{{Kind: authz.ActorToken, ID: "tok"}, {Kind: authz.ActorSystem, ID: "lease"}} {
+		if err = RecordLiveLAN(ctx, root, state, other, []byte("no"), nil); err != nil {
 			t.Fatal(err)
 		}
-		if _, err = os.Lstat(filepath.Join(Root, "last-lan", "last-lan.json")); !os.IsNotExist(err) {
-			t.Fatalf("actor %s wrote last-lan", actor.Kind)
-		}
 	}
-	if err = RecordLastLAN(ctx, state, "8", authz.Actor{Kind: authz.ActorAccount, ID: "00000000-0000-4000-8000-000000000001"}); err != nil {
+	if _, err = os.Lstat(filepath.Join(root, "last-lan", "last-lan.json")); !os.IsNotExist(err) {
+		t.Fatal("non-admin wrote last-lan")
+	}
+	if err = RecordLiveLAN(ctx, root, state, actor, nil, errors.New("UPLINK_MANAGEMENT")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = os.Lstat(filepath.Join(Root, "last-lan", "last-lan.json")); !os.IsNotExist(err) {
-		t.Fatal("stale version wrote last-lan")
+	if _, err = os.Lstat(filepath.Join(root, "last-lan", "last-lan.json")); !os.IsNotExist(err) {
+		t.Fatal("uplink wrote last-lan")
 	}
 }
 
-func TestRecordFirstOnce(t *testing.T) {
+func TestCopyFirstOnce(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "kept")
 	state := t.TempDir()
-	t.Cleanup(func() { _ = os.RemoveAll(Root) })
-	extractLAN = func(context.Context, string, string) ([]byte, error) { return []byte("first-lan"), nil }
-	t.Cleanup(func() { extractLAN = extractFromStore })
 	ctx := context.Background()
-	if err := RecordFirst(ctx, state, "7"); err != nil {
+	if err := CopyFirst(ctx, root, state, []byte("first-lan")); err != nil {
 		t.Fatal(err)
 	}
-	if err := RecordFirst(ctx, state, "9"); err != nil {
+	if err := CopyFirst(ctx, root, state, []byte("later")); err != nil {
 		t.Fatal(err)
 	}
-	s, err := Open(state)
+	s, err := OpenIn(root, state)
 	if err != nil {
 		t.Fatal(err)
 	}
 	body, err := s.Read("first")
 	if err != nil || string(body) != "first-lan" {
-		t.Fatalf("first %q %v", body, err)
-	}
-	_ = os.RemoveAll(Root)
-	extractLAN = func(context.Context, string, string) ([]byte, error) { return nil, errUplink }
-	if err = RecordFirst(ctx, state, "7"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = os.Lstat(filepath.Join(Root, "first")); !os.IsNotExist(err) {
-		t.Fatal("uplink created first")
-	}
-}
-
-func writeLive(t *testing.T, state string, id int, version string) {
-	t.Helper()
-	dir := filepath.Join(state, "generations", "1")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	raw, _ := json.Marshal(map[string]any{"live": id})
-	if err := os.WriteFile(filepath.Join(state, "generations", "pointers.json"), raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	manifest, _ := json.Marshal(map[string]any{"id": id, "savedVersion": version})
-	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), manifest, 0o600); err != nil {
-		t.Fatal(err)
+		t.Fatalf("%q %v", body, err)
 	}
 }

@@ -345,7 +345,7 @@ func runCtl(ctx context.Context, socket string, args []string, stdin io.Reader, 
 		return runBackup(ctx, socket, args[1:], stdin, stdout, stderr)
 	}
 	if len(args) > 0 && args[0] == "kept" {
-		return storeRecovery(ctx, "/var/lib/andaru", args[1:], stdout, stderr, nil)
+		return storeRecovery(ctx, socket, "/var/lib/andaru", args[1:], stdout, stderr, nil)
 	}
 	if len(args) > 0 && args[0] == "takeover" {
 		return runTakeover(ctx, socket, args[1:], stdin, stdout, stderr)
