@@ -65,10 +65,10 @@ func (s *Store) Put(ctx context.Context, name Name, body []byte, replace bool) e
 	} else if err == nil && !replace {
 		return errors.New("kept copy already exists")
 	}
-	if err := ensureRealDir(s.root); err != nil {
+	if err := s.privateDir(s.root, true); err != nil {
 		return err
 	}
-	if err := ensureRealDir(dir); err != nil {
+	if err := s.privateDir(dir, true); err != nil {
 		return err
 	}
 	tmp := final + ".tmp"
@@ -105,12 +105,8 @@ func (s *Store) Read(name Name) ([]byte, error) {
 		return nil, errors.New("unknown kept copy")
 	}
 	dir := filepath.Join(s.root, string(name))
-	dirInfo, err := os.Lstat(dir)
-	if err != nil {
+	if err := s.privateDir(dir, false); err != nil {
 		return nil, err
-	}
-	if dirInfo.Mode()&os.ModeSymlink != 0 || !dirInfo.IsDir() {
-		return nil, errors.New("kept copy directory must be a real directory")
 	}
 	path := filepath.Join(dir, string(name)+".json")
 	info, err := os.Lstat(path)
@@ -125,9 +121,12 @@ func (s *Store) Read(name Name) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-func ensureRealDir(path string) error {
+func (s *Store) privateDir(path string, create bool) error {
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
+		if !create {
+			return err
+		}
 		return os.Mkdir(path, 0o700)
 	}
 	if err != nil {
@@ -135,6 +134,11 @@ func ensureRealDir(path string) error {
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return errors.New("kept copy directory must be a real directory")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	owner := ok && (stat.Uid == 0 || s.root != Root && stat.Uid == uint32(os.Geteuid()))
+	if !owner || info.Mode().Perm()&0022 != 0 {
+		return errors.New("kept copy directory is not private")
 	}
 	return nil
 }

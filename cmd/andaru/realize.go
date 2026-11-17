@@ -159,7 +159,13 @@ func renderDisaster(root string) func([]byte) error {
 				}
 				return err
 			}
-			prior, existed, mode := priorFile(path)
+			prior, existed, mode, err := priorFile(path)
+			if err != nil {
+				if rbErr := rollback(); rbErr != nil {
+					return errors.Join(err, generation.ErrRenderCleanup, rbErr)
+				}
+				return err
+			}
 			fileMode := os.FileMode(0o644)
 			if file.Mode == "0600" {
 				fileMode = 0o600
@@ -176,13 +182,18 @@ func renderDisaster(root string) func([]byte) error {
 	}
 }
 
+var writeRenderedBody = func(f *os.File, body []byte) error {
+	_, err := f.Write(body)
+	return err
+}
+
 func commitRendered(path string, body []byte, mode os.FileMode) error {
 	tmp := path + ".andaru-tmp"
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 	if err != nil {
 		return cleanupTemp(tmp, err)
 	}
-	if _, err = f.Write(body); err != nil {
+	if err = writeRenderedBody(f, body); err != nil {
 		_ = f.Close()
 		return cleanupTemp(tmp, err)
 	}
@@ -213,14 +224,17 @@ type restored struct {
 	mode    os.FileMode
 }
 
-func priorFile(path string) ([]byte, bool, os.FileMode) {
+func priorFile(path string) ([]byte, bool, os.FileMode, error) {
 	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil, false, 0, nil
+	}
 	if err != nil {
-		return nil, false, 0
+		return nil, false, 0, err
 	}
 	body, err := os.ReadFile(path)
 	if err != nil {
-		return nil, true, info.Mode().Perm()
+		return nil, true, info.Mode().Perm(), err
 	}
-	return body, true, info.Mode().Perm()
+	return body, true, info.Mode().Perm(), nil
 }

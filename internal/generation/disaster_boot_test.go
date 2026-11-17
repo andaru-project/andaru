@@ -63,11 +63,16 @@ func TestDisasterBootStopsWhenRenderCleanupFails(t *testing.T) {
 	keptRoot := filepath.Join(t.TempDir(), "kept")
 	writeCopy(t, keptRoot, "last-lan", "last")
 	writeCopy(t, keptRoot, "first", "first")
+	calls := 0
 	r := Realizer{StateDir: state, Root: root, KeptRoot: keptRoot, Now: timeNow, RenderDisaster: func([]byte) error {
+		calls++
 		return ErrRenderCleanup
 	}}
 	if err := r.Boot(t.Context()); !errors.Is(err, ErrRenderCleanup) {
 		t.Fatalf("%v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("render attempts %d", calls)
 	}
 	if _, err := os.Lstat(filepath.Join(root, "run", "andaru", "disaster-source")); !os.IsNotExist(err) {
 		t.Fatal("boot continued after cleanup failure")

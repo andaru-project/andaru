@@ -5,8 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/andaru-project/andaru/internal/generation"
 )
 
 func TestCommitRenderedLeavesDestinationOnWriteFailure(t *testing.T) {
@@ -15,24 +13,22 @@ func TestCommitRenderedLeavesDestinationOnWriteFailure(t *testing.T) {
 	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tmp := path + ".andaru-tmp"
-	err := commitRendered(path, []byte("new-partial"), 0o644)
-	if err == nil {
-		// The happy path replaces the file. Force the failure path by occupying the temp name as a directory.
-		_ = os.WriteFile(path, []byte("old"), 0o644)
+	old := writeRenderedBody
+	t.Cleanup(func() { writeRenderedBody = old })
+	writeRenderedBody = func(f *os.File, body []byte) error {
+		if _, err := f.Write(body[:1]); err != nil {
+			t.Fatal(err)
+		}
+		return errors.New("short write")
 	}
-	if err = os.Mkdir(tmp, 0o700); err != nil {
-		t.Fatal(err)
+	if err := commitRendered(path, []byte("new-partial"), 0o644); err == nil {
+		t.Fatal("short write succeeded")
 	}
-	if err = os.WriteFile(filepath.Join(tmp, "stuck"), []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != "old" {
+		t.Fatalf("destination %q %v", got, err)
 	}
-	err = commitRendered(path, []byte("new"), 0o644)
-	if !errors.Is(err, generation.ErrRenderCleanup) {
-		t.Fatalf("%v", err)
-	}
-	got, readErr := os.ReadFile(path)
-	if readErr != nil || string(got) != "old" {
-		t.Fatalf("destination %q %v", got, readErr)
+	if _, err = os.Lstat(path + ".andaru-tmp"); !os.IsNotExist(err) {
+		t.Fatal("partial temp remains")
 	}
 }

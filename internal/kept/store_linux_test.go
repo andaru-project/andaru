@@ -55,6 +55,28 @@ func TestPutRefusesSymlinkedCopyDir(t *testing.T) {
 	}
 }
 
+func TestPutRefusesWritableCopyDir(t *testing.T) {
+	state := t.TempDir()
+	root := filepath.Join(t.TempDir(), "kept")
+	dir := filepath.Join(root, "last-lan")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	s, err := OpenIn(root, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Put(context.Background(), "last-lan", []byte("x"), true); err == nil {
+		t.Fatal("writable copy directory accepted")
+	}
+	if _, err = os.Lstat(filepath.Join(dir, "last-lan.json")); !os.IsNotExist(err) {
+		t.Fatal("writable directory received a copy")
+	}
+}
+
 func TestKeptModes(t *testing.T) {
 	state := t.TempDir()
 	root := filepath.Join(t.TempDir(), "kept")
