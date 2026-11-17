@@ -352,6 +352,9 @@ func recordLiveLAN(ctx context.Context, store *config.Store, actor authz.Actor) 
 	return kept.RecordLiveLAN(ctx, kept.Root, store.Directory(), actor, body, err)
 }
 
+// recoveryKeptRoot is the test seam. Production leaves it empty.
+var recoveryKeptRoot string
+
 func writeRecovery(ctx context.Context, store *config.Store) error {
 	input, err := store.RealizationInput(ctx, nil)
 	if err != nil {
@@ -364,7 +367,12 @@ func writeRecovery(ctx context.Context, store *config.Store) error {
 	if err != nil {
 		return err
 	}
-	keptStore, err := kept.Open(store.Directory())
+	var keptStore *kept.Store
+	if recoveryKeptRoot != "" {
+		keptStore, err = kept.OpenIn(recoveryKeptRoot, store.Directory())
+	} else {
+		keptStore, err = kept.Open(store.Directory())
+	}
 	if err != nil {
 		return err
 	}
