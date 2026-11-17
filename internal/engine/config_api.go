@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/andaru-project/andaru/internal/config"
+	"github.com/andaru-project/andaru/internal/kept"
 )
 
 func newConfigurationHandler(store *config.Store) http.Handler {
@@ -194,6 +196,10 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 			writeConfigurationError(w, r, e)
 			return
 		}
+		recordCtx := kept.WithExtractor(r.Context(), func(ctx context.Context, _, version string) ([]byte, error) {
+			return store.ManagementLAN(ctx, version)
+		})
+		_ = kept.RecordLastLAN(recordCtx, store.Directory(), string(result.SavedVersion), actor.Actor)
 		w.Header().Set("Andaru-Saved-Version", string(result.SavedVersion))
 		if route == "changes" {
 			send(200, result, nil)

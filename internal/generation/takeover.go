@@ -17,6 +17,7 @@ import (
 
 	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/host"
+	"github.com/andaru-project/andaru/internal/kept"
 )
 
 const cloudInitDisable = "/etc/cloud/cloud.cfg.d/99-andaru-network.cfg"
@@ -188,6 +189,7 @@ func (r Realizer) Confirm(ctx context.Context, id int) (result error) {
 		return err
 	}
 	if !g.Takeover {
+		_ = kept.RecordFirst(ctx, r.StateDir, g.SavedVersion)
 		return nil
 	}
 	kind, _, err := ReadBaselineKind(r.dir())
@@ -198,6 +200,7 @@ func (r Realizer) Confirm(ctx context.Context, id int) (result error) {
 		state.Reason = "takeover not yet permanent: " + err.Error() + "; completes at the next boot"
 		return errors.Join(err, r.writeState("confirm:state-reason", id, state))
 	}
+	_ = kept.RecordFirst(ctx, r.StateDir, g.SavedVersion)
 	return nil
 }
 
