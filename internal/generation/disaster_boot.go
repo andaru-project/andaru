@@ -8,7 +8,13 @@ import (
 )
 
 func (r Realizer) disasterBoot() error {
-	store, err := kept.Open(r.StateDir)
+	var store *kept.Store
+	var err error
+	if r.KeptRoot != "" {
+		store, err = kept.OpenIn(r.KeptRoot, r.StateDir)
+	} else {
+		store, err = kept.Open(r.StateDir)
+	}
 	if err != nil {
 		return err
 	}

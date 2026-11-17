@@ -1,10 +1,11 @@
 [Unit]
 Description=Andaru confirmed network generation
 DefaultDependencies=no
-RequiresMountsFor=/var/lib/andaru
+# WantsMountsFor, not RequiresMountsFor: a missing data partition must still boot from the kept copies.
+# No ConditionPathExists: a missing state directory is the disaster path, not a reason to skip the unit.
+WantsMountsFor=/var/lib/andaru
 # Its lock and pointers are written under /var/lib/andaru, so the root file system must be writable.
 After=systemd-remount-fs.service
-ConditionPathExists=/var/lib/andaru/generations/pointers.json
 Before=systemd-networkd.service systemd-resolved.service networking.service network-pre.target cloud-init-local.service shutdown.target
 # A mask boot restores must win over nftables.service starting and flushing Andaru's table.
 Before=nftables.service

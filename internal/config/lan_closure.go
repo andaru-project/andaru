@@ -33,9 +33,32 @@ func managementLAN(d declaration, secrets map[string]string) ([]byte, error) {
 	}
 	var ancestry []link
 	seen := map[string]bool{}
-	for id := seg.Link; id != "" && !seen[id]; id = links[id].Parent {
+	queue := []string{seg.Link}
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		if id == "" || seen[id] {
+			continue
+		}
 		seen[id] = true
-		ancestry = append(ancestry, links[id])
+		item := links[id]
+		ancestry = append(ancestry, item)
+		if item.Parent != "" {
+			queue = append(queue, item.Parent)
+		}
+		if item.Members != nil {
+			queue = append(queue, (*item.Members)...)
+		}
+	}
+	wanted := map[string]bool{}
+	for _, id := range d.Management.AllowedSources {
+		wanted[id] = true
+	}
+	var addresses []address
+	for _, item := range d.Objects.Addresses {
+		if wanted[item.ID] {
+			addresses = append(addresses, item)
+		}
 	}
 	var zones []zone
 	for _, z := range d.Zones {
@@ -59,8 +82,19 @@ func managementLAN(d declaration, secrets map[string]string) ([]byte, error) {
 		Links         []link            `json:"links"`
 		Segments      []segment         `json:"segments"`
 		Zones         []zone            `json:"zones"`
+		Addresses     []address         `json:"addresses"`
 		Secrets       map[string]string `json:"secrets"`
-	}{"lan-closure", 1, *d.Management, ancestry, []segment{*seg}, zones, bound})
+	}{"lan-closure", 1, *d.Management, ancestry, []segment{*seg}, zones, addresses, bound})
+}
+
+// LANClosure is the management closure for one saved declaration. The engine
+// writes it beside a generation; disaster boot reads that file, not the store.
+func LANClosure(value []byte, secrets map[string]string) ([]byte, error) {
+	var d declaration
+	if err := json.Unmarshal(value, &d); err != nil {
+		return nil, err
+	}
+	return managementLAN(d, secrets)
 }
 
 // Directory is the state directory this store opened.

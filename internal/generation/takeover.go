@@ -189,7 +189,7 @@ func (r Realizer) Confirm(ctx context.Context, id int) (result error) {
 		return err
 	}
 	if !g.Takeover {
-		_ = kept.RecordFirst(ctx, r.StateDir, g.SavedVersion)
+		r.copyKeptFirst(ctx, id)
 		return nil
 	}
 	kind, _, err := ReadBaselineKind(r.dir())
@@ -200,8 +200,27 @@ func (r Realizer) Confirm(ctx context.Context, id int) (result error) {
 		state.Reason = "takeover not yet permanent: " + err.Error() + "; completes at the next boot"
 		return errors.Join(err, r.writeState("confirm:state-reason", id, state))
 	}
-	_ = kept.RecordFirst(ctx, r.StateDir, g.SavedVersion)
+	r.copyKeptFirst(ctx, id)
 	return nil
+}
+
+// copyKeptFirst copies the closure written beside this generation. A missing
+// file is an uplink or a generation from before this copy existed.
+func (r Realizer) copyKeptFirst(ctx context.Context, id int) {
+	raw, err := os.ReadFile(filepath.Join(r.dir(), strconv.Itoa(id), "lan-closure.json"))
+	if err != nil {
+		if !os.IsNotExist(err) {
+			slog.Error("read the LAN closure", "error", err)
+		}
+		return
+	}
+	root := kept.Root
+	if r.KeptRoot != "" {
+		root = r.KeptRoot
+	}
+	if err = kept.CopyFirst(ctx, root, r.StateDir, raw); err != nil {
+		slog.Error("copy the first LAN", "error", err)
+	}
 }
 
 // makePermanent stops what configured the network before Andaru from doing it again: netplan and cloud-init,

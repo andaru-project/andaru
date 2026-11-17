@@ -52,6 +52,8 @@ type Realizer struct {
 	SendRA func(ifname string, body []byte) error
 	// RenderDisaster renders a kept LAN closure. Nil records the selected copy without rendering.
 	RenderDisaster func(body []byte) error
+	// KeptRoot is the test seam. Production leaves it empty and uses kept.Root.
+	KeptRoot string
 	// failAt lets tests stop a verb before a named write, as a kill would.
 	failAt func(step string) error
 	// afterLeaseRead lets tests act while a lease sync is running.
