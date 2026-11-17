@@ -214,6 +214,7 @@ func (r *renderer) internalSegments() (names []string, prefixes []netip.Prefix, 
 }
 
 // uplink is a segment outbound NAT leaves through: a static IPv4 gateway, DHCPv4 or a PPPoE link.
+// The same three conditions refuse a management LAN in config.managementLAN. Do not export this method.
 func (r *renderer) uplink(s segment) bool {
 	return s.Addressing.IPv4.Gateway != "" || s.Addressing.IPv4.Mode == "dhcp" || r.d.Links[r.index[s.Link]].Kind == "pppoe"
 }
