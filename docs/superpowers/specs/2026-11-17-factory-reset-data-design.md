@@ -6,9 +6,9 @@ This document does not implement factory reset. It records where Andaru data liv
 
 ## Intent
 
-All Andaru data, including add-on settings, lives in one directory. An operator may put that directory on its own partition. Wiping it must not destroy the copy Andaru needs in order to boot. After the wipe, Andaru applies the post-reset settings the operator stored. If those settings were never stored, or that boot does not come up, Andaru brings back only the last LAN setup on which an administrator could reach the box and change a setting.
+All Andaru data, including add-on settings, lives in one directory. An operator may put that directory on its own partition. Wiping it must not destroy the copy Andaru needs in order to boot. Reset clears Andaru state. The exception is network configuration, and only within the limits below: the post-reset network settings the operator stored, or, if those are missing or do not come up, the last LAN setup on which an administrator could reach the box and change a setting.
 
-The operator also wants the very first successful setup kept, as a record. It is not a third automatic boot.
+The operator also wants the very first successful setup kept, as a record. It is not a third automatic boot. Old accounts are not part of the boot.
 
 ## Owner decisions
 
@@ -19,6 +19,8 @@ From the 2026-11-17 conversation:
 - Andaru also stores the first setup and the last successful configuration. Success means an administrator could reach the box and change a setting while that configuration was live.
 - If the operator has stored the settings they want after a reset, Andaru applies those. If they have not, or that apply is not successful, Andaru reverts the LAN side to the last successful LAN setup.
 - Plugin upgrades are add-on data. They are wiped with the rest of that directory. Bundled plugin programs are not stored there.
+- Reset clears everything except that network configuration. Old Andaru accounts are not restored.
+- The administrator password is the one the operator enters during the reset. If they enter none, the password goes back to `admin` / `admin`.
 
 Earlier rulings that this conversation did not reopen remain binding. They are listed under "Still binding" below.
 
@@ -29,17 +31,19 @@ These are the author's calls. The owner accepted the playback that contained the
 - `/var/lib/andaru` is the wipeable tree and the mount point when the operator uses a separate partition. Andaru does not create or format that partition. Reset deletes the tree's contents. It does not run `mkfs`.
 - The filesystem at that path must be local. SQLite cannot live on NFS.
 - The three kept copies live on the root disk, at `/var/lib/andaru-kept/`, never inside the wipeable tree. A formatted or missing data partition must still boot.
-- `recovery/` is the post-reset settings the operator stored. Storing it is an explicit action. A normal save does not update it.
-- `first/` is written once, at the first success signal, and never overwritten. Reset does not apply it.
+- `recovery/` is the post-reset network settings the operator stored, plus the secrets required to realize that network. It does not hold accounts or credential verifiers. Storing it is an explicit action. A normal save does not update it.
+- `first/` is written once, at the first success signal, and never overwritten. It records that setup's network configuration. It does not store credential verifiers. Reset does not apply it and does not read it for the password.
 - `last-lan/` is only the LAN and management path from the last successful live configuration. It is not a copy of the whole configuration.
 - Reset applies `recovery/` when it exists. If it is missing, or that apply does not come up, Andaru applies `last-lan/` immediately. It does not wait for a person to declare the reset a failure.
-- On the LAN fallback, WAN, add-ons and Andaru identity stay down. The way back in is SSH from the management LAN, using the Debian SSH account that reset does not change.
+- On the LAN fallback, WAN and add-ons stay down. Old identity stays down. The new administrator account is still created. The way back in is that account, and SSH from the management LAN using the Debian SSH account that reset does not change.
 - The success signal updates `last-lan/` only. It does not overwrite `first/` or `recovery/`.
 - `/var/lib/andaru-upgrades` stays on the root disk. Factory reset does not delete it, and restoring one of those copies is not how reset works. That tree remains the package-upgrade repair copy from the approved upgrade design.
 - A bundled plugin's program files ship in the Andaru `.deb` under `/usr`. Reset does not uninstall them. Their settings live under `/var/lib/andaru` and are wiped, so the plugin comes back unconfigured.
 - An installable plugin, including a downloaded newer version or a copy kept for a plugin rollback, lives under `/var/lib/andaru`. Reset deletes the plugin and that upgrade copy together.
 - This design does not build add-ons, a partition migrator, or a reset command.
 - An uplink is never written into `last-lan/` and never listens after reset. The product already treats a static IPv4 gateway, DHCPv4, or PPPoE as an uplink. That existing inference is an exclusion, not a new trusted-LAN flag. If the live management segment is an uplink, the success signal does not update `last-lan/` from it. A reset with no non-uplink `last-lan/` requires the console.
+- The sole post-reset Andaru account is named `admin`. Reset deletes every previous account. It does not copy verifiers from `recovery/` or `first/`.
+- If the operator enters a password during reset, that is the `admin` password. If they enter none, the password is `admin`. There is no further forced password-change step. The entered password is not a flag, an environment variable, or a log field.
 
 ## What this supersedes
 
@@ -50,7 +54,8 @@ In the 2026-11-15 factory-reset design, the following no longer hold:
 - Waiting for an authenticated confirmation before choosing the LAN fallback no longer holds. The LAN fallback runs as soon as `recovery/` is missing or its apply does not come up.
 - Deleting `/var/lib/andaru-upgrades` after reset commitment no longer holds.
 - The ordered recovery-LAN allowlist is not the automatic fallback. `last-lan/` is the recorded last successful LAN setup, not a list the operator maintains separately.
-- When `recovery/` exists, it is the post-reset settings, not a temporary profile that exists only until `andaru setup` finishes. Setup-until-complete remains the path only when `recovery/` was never stored and `last-lan/` cannot be realized, or when the applied recovery configuration itself still requires setup. That last case is a property of what the operator stored, not a second workflow this document invents.
+- When `recovery/` exists, it is the post-reset network, not a temporary profile that exists only until `andaru setup` finishes, and not a restore of accounts. Setup remains the path only when `recovery/` was never stored and `last-lan/` cannot be realized. Reset itself creates the `admin` account. That is not a second setup workflow.
+- Factory reset does not return previous Andaru accounts. The 2026-11-15 rule "no built-in `admin`/`admin`" does not hold for this reset. The account is the one named below.
 
 ## Still binding
 
@@ -58,7 +63,7 @@ From issue #13, issue #14, and the 2026-11-15 design, where they do not conflict
 
 - Reset affects Andaru only. Debian, the installed core package, the keyring, unrelated packages and unrelated host configuration remain.
 - Reset is available from an administrator-only GUI and from root-local `andaru ctl factory-reset`, once those clients exist. GUI initiation still requires the administrator permission, fresh password reauthentication, a typed confirmation, a backup offer and an audit event before destructive work. Console initiation is UID 0 only, requires typed confirmation, and has no `--yes`, password flag or network bypass.
-- There is no built-in default credential.
+- The no-default-credential rule does not apply to factory reset. Other lockout recovery still has no default password.
 - WAN and unclassified interfaces never listen for recovery. Do not infer a LAN from an interface name, a zone name, DHCP, the absence of a default route, or "not currently WAN."
 - Default-deny protects every recovery state. Andaru does not install OpenSSH or change Debian SSH accounts or keys.
 - A management path may share an interface with a LAN and may depend on VLAN, bridge, bond or PPPoE. A physical parent alone is not a management path.
@@ -139,9 +144,9 @@ If `/var/lib/andaru` is a mount point and the mount is absent at boot, Andaru do
 
 ## What each kept copy contains
 
-`recovery/` is a complete saved-configuration copy, including the secrets required to realize it. The operator replaces it only by an explicit "store this as the post-reset configuration" action. Reset applies it as the new live tree. It may include WAN, identity and add-on settings, because it is whatever the operator stored. If applying it does not come up, those contents are not a reason to skip the LAN fallback.
+`recovery/` is the network settings the operator stored for after a reset, including the secrets required to realize that network. It is not a copy of accounts, credential verifiers, or add-on state. The operator replaces it only by an explicit "store this as the post-reset network" action. If those settings include a WAN, the recovery boot may bring that WAN up, because that is the network they stored. If the apply does not come up, Andaru does not keep that attempt. It uses `last-lan/` instead.
 
-`first/` is a complete saved-configuration copy taken at the first success signal. It is a record. No reset, boot or fallback path applies it. Replacing it requires an explicit operator action that this design does not provide.
+`first/` is a record of the network configuration at the first success signal. It stores no password verifiers. No reset, boot or fallback path applies it, and the reset password does not come from it. Replacing it requires an explicit operator action that this design does not provide.
 
 `last-lan/` is the management-path closure from the 2026-11-15 design, taken from the last successful live configuration, and only when that management segment is not an uplink:
 
@@ -155,9 +160,10 @@ It does not include an Andaru login. On this fallback the administrator uses the
 ## Boot after a wipe
 
 1. Stop Andaru writers. Delete the contents of `/var/lib/andaru`. Do not delete `/var/lib/andaru-kept/` or `/var/lib/andaru-upgrades/`.
-2. If `recovery/` exists, make it the new live tree and apply it.
-3. If `recovery/` is absent, or that apply does not come up, discard that attempt as the running configuration and apply `last-lan/`.
+2. If `recovery/` exists, apply that network configuration as the new live network.
+3. If `recovery/` is absent, or that apply does not come up, discard that attempt as the running network and apply `last-lan/`.
 4. If `last-lan/` is also absent or cannot be realized, stop and require the local console. Do not invent an address. Do not listen on WAN. Do not apply `first/`.
+5. On every path, including console-required, create one Andaru account named `admin`. Its password is the one entered during reset, or `admin` if none was entered. Do not restore any previous account.
 
 "Does not come up" means the apply does not produce a reachable management path. It does not mean the operator later failed to log in and change a setting. The success signal is only for recording `last-lan/` and `first/`. It is not the trigger that starts the fallback.
 
@@ -188,4 +194,4 @@ Until add-ons exist, the only requirement is that the wipeable tree is the only 
 - The exact pause and lock order, reusing the writer exclusion the 2026-11-15 design already requires, without adopting that design's rollback-to-old-state outcome.
 - Operator documentation for mounting a local filesystem at `/var/lib/andaru` before first setup, or stopping Andaru and moving an existing tree onto that mount. No migration command.
 
-The builder must not add a network endpoint, a default address, a use of `first/` as a boot, or a reset deletion of `/var/lib/andaru-upgrades`.
+The builder must not add a network endpoint, a default address, a use of `first/` as a boot, a reset deletion of `/var/lib/andaru-upgrades`, or a restore of previous password verifiers.
