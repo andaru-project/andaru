@@ -301,7 +301,7 @@ func (r Realizer) makePermanent(ctx context.Context, reload bool, kind string) e
 
 // Boot puts the confirmed generation into /run before networkd starts. It renders nothing.
 func (r Realizer) Boot(ctx context.Context) (result error) {
-	if !kept.LiveTreeUsable(r.StateDir) {
+	if _, statErr := os.Lstat(r.StateDir); os.IsNotExist(statErr) {
 		return r.disasterBoot()
 	}
 	unlock, err := r.lock()
