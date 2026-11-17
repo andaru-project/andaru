@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/andaru-project/andaru/internal/generation"
+	"github.com/andaru-project/andaru/internal/render"
 )
 
 const realizeUsage = "usage: andaru realize [--state-dir PATH] activate N | rollback N REASON | confirm N | boot | leases | prefixes"
@@ -35,7 +37,7 @@ func newRealizer(stateDir string) (realizeVerbs, error) {
 		return nil, errors.New("realize requires root")
 	}
 	return generation.Realizer{
-		StateDir: stateDir,
+		StateDir: stateDir, RenderDisaster: renderDisaster(""),
 		Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
 			// One stuck tool must not hold the generations lock.
 			ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -98,4 +100,45 @@ func realizeCommand(ctx context.Context, args []string, stderr io.Writer, build 
 		return 0
 	}
 	return 1
+}
+
+func renderDisaster(root string) func([]byte) error {
+	return func(body []byte) error {
+		var doc struct {
+			Links    json.RawMessage `json:"links"`
+			Segments json.RawMessage `json:"segments"`
+			Zones    json.RawMessage `json:"zones"`
+		}
+		if err := json.Unmarshal(body, &doc); err != nil {
+			return err
+		}
+		empty := func(raw json.RawMessage) json.RawMessage {
+			if len(raw) == 0 {
+				return json.RawMessage("[]")
+			}
+			return raw
+		}
+		decl, err := json.Marshal(map[string]any{"schemaVersion": 1, "links": empty(doc.Links), "segments": empty(doc.Segments), "zones": empty(doc.Zones)})
+		if err != nil {
+			return err
+		}
+		result, err := render.Network(render.Input{Declaration: decl})
+		if err != nil {
+			return err
+		}
+		for _, file := range result.Files {
+			path := root + file.Path
+			if err = os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				return err
+			}
+			mode := os.FileMode(0o644)
+			if file.Mode == "0600" {
+				mode = 0o600
+			}
+			if err = os.WriteFile(path, []byte(file.Content), mode); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 }
