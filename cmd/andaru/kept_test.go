@@ -18,7 +18,7 @@ func TestStoreRecoveryReplaces(t *testing.T) {
 		return []byte(`{"links":[{"password":{"secret":"WAN_PASSWORD"}}]}`), map[string]string{"WAN_PASSWORD": "TEST_ONLY_SECRET"}, nil
 	}
 	var out, errOut bytes.Buffer
-	if code := storeRecovery(context.Background(), "", state, nil, &out, &errOut, load); code != 0 {
+	if code := storeRecovery(context.Background(), "", state, []string{"store-recovery"}, &out, &errOut, load); code != 0 {
 		t.Fatalf("code %d %s", code, errOut.String())
 	}
 	body := readRecovery(t, root)
@@ -28,7 +28,7 @@ func TestStoreRecoveryReplaces(t *testing.T) {
 	load = func() ([]byte, map[string]string, error) {
 		return []byte(`{"links":[]}`), map[string]string{"WAN_PASSWORD": "TEST_ONLY_SECOND"}, nil
 	}
-	if code := storeRecovery(context.Background(), "", state, nil, &out, &errOut, load); code != 0 {
+	if code := storeRecovery(context.Background(), "", state, []string{"store-recovery"}, &out, &errOut, load); code != 0 {
 		t.Fatal(code)
 	}
 	if body = readRecovery(t, root); !strings.Contains(body, "TEST_ONLY_SECOND") || strings.Contains(body, "TEST_ONLY_SECRET") {

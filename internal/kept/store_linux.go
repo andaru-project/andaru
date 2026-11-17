@@ -32,8 +32,19 @@ func openAt(root, stateDir string, production bool) (*Store, error) {
 	if nested(stateDir, root) || nested(root, stateDir) {
 		return nil, errors.New("kept root must not contain or sit inside the state directory")
 	}
-	if production {
-		if err := securefs.CheckAncestors(filepath.Dir(root)); err != nil {
+	if info, err := os.Lstat(root); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return nil, errors.New("kept root must be a real directory")
+		}
+		if production {
+			if err = securefs.CheckAncestors(root); err != nil {
+				return nil, err
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	} else if production {
+		if err = securefs.CheckAncestors(filepath.Dir(root)); err != nil {
 			return nil, err
 		}
 	}

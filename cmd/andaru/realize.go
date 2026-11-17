@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/andaru-project/andaru/internal/generation"
+	"github.com/andaru-project/andaru/internal/host"
 	"github.com/andaru-project/andaru/internal/render"
 )
 
@@ -122,23 +123,64 @@ func renderDisaster(root string) func([]byte) error {
 		if err != nil {
 			return err
 		}
-		result, err := render.Network(render.Input{Declaration: decl})
+		links, err := host.ReadLinks(context.Background())
 		if err != nil {
 			return err
+		}
+		result, err := render.Network(render.Input{Declaration: decl, Links: links})
+		if err != nil {
+			return err
+		}
+		if !result.Realizable {
+			return errors.New("kept LAN is not realizable")
+		}
+		var written []restored
+		rollback := func() {
+			for i := len(written) - 1; i >= 0; i-- {
+				item := written[i]
+				if !item.existed {
+					_ = os.Remove(item.path)
+					continue
+				}
+				_ = os.WriteFile(item.path, item.body, item.mode)
+			}
 		}
 		for _, file := range result.Files {
 			path := root + file.Path
 			if err = os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				rollback()
 				return err
 			}
-			mode := os.FileMode(0o644)
+			prior, existed, mode := priorFile(path)
+			fileMode := os.FileMode(0o644)
 			if file.Mode == "0600" {
-				mode = 0o600
+				fileMode = 0o600
 			}
-			if err = os.WriteFile(path, []byte(file.Content), mode); err != nil {
+			if err = os.WriteFile(path, []byte(file.Content), fileMode); err != nil {
+				rollback()
 				return err
 			}
+			written = append(written, restored{path, existed, prior, mode})
 		}
 		return nil
 	}
+}
+
+type restored struct {
+	path    string
+	existed bool
+	body    []byte
+	mode    os.FileMode
+}
+
+func priorFile(path string) ([]byte, bool, os.FileMode) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, false, 0
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return nil, true, info.Mode().Perm()
+	}
+	return body, true, info.Mode().Perm()
 }

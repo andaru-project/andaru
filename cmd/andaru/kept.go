@@ -16,10 +16,7 @@ import (
 var keptTestRoot string
 
 func storeRecovery(ctx context.Context, socket, stateDir string, args []string, stdout, stderr io.Writer, load func() ([]byte, map[string]string, error)) int {
-	if len(args) == 1 && args[0] == "store-recovery" {
-		args = nil
-	}
-	if len(args) > 0 {
+	if len(args) != 1 || args[0] != "store-recovery" {
 		fmt.Fprintln(stderr, "usage: andaru ctl kept store-recovery")
 		return 2
 	}
