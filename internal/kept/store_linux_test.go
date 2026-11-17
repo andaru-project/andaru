@@ -33,6 +33,28 @@ func TestOpenRejectsSymlinkRoot(t *testing.T) {
 	}
 }
 
+func TestPutRefusesSymlinkedCopyDir(t *testing.T) {
+	state := t.TempDir()
+	root := filepath.Join(t.TempDir(), "kept")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "last-lan")); err != nil {
+		t.Fatal(err)
+	}
+	s, err := OpenIn(root, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Put(context.Background(), "last-lan", []byte("x"), true); err == nil {
+		t.Fatal("symlink copy directory accepted")
+	}
+	if _, err = os.Lstat(filepath.Join(outside, "last-lan.json")); !os.IsNotExist(err) {
+		t.Fatal("write followed the symlink")
+	}
+}
+
 func TestKeptModes(t *testing.T) {
 	state := t.TempDir()
 	root := filepath.Join(t.TempDir(), "kept")

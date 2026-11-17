@@ -1,6 +1,7 @@
 package generation
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,6 +54,23 @@ func TestDisasterBootOrder(t *testing.T) {
 	writeCopy(t, keptRoot, "recovery", "recovery")
 	if err := r.Boot(t.Context()); err == nil || !strings.Contains(err.Error(), "CONSOLE_REQUIRED") {
 		t.Fatal("recovery was selected")
+	}
+}
+
+func TestDisasterBootStopsWhenRenderCleanupFails(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "missing")
+	root := t.TempDir()
+	keptRoot := filepath.Join(t.TempDir(), "kept")
+	writeCopy(t, keptRoot, "last-lan", "last")
+	writeCopy(t, keptRoot, "first", "first")
+	r := Realizer{StateDir: state, Root: root, KeptRoot: keptRoot, Now: timeNow, RenderDisaster: func([]byte) error {
+		return ErrRenderCleanup
+	}}
+	if err := r.Boot(t.Context()); !errors.Is(err, ErrRenderCleanup) {
+		t.Fatalf("%v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "run", "andaru", "disaster-source")); !os.IsNotExist(err) {
+		t.Fatal("boot continued after cleanup failure")
 	}
 }
 

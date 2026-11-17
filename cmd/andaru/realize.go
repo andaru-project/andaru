@@ -135,20 +135,28 @@ func renderDisaster(root string) func([]byte) error {
 			return errors.New("kept LAN is not realizable")
 		}
 		var written []restored
-		rollback := func() {
+		rollback := func() error {
+			var errs []error
 			for i := len(written) - 1; i >= 0; i-- {
 				item := written[i]
 				if !item.existed {
-					_ = os.Remove(item.path)
+					if rmErr := os.Remove(item.path); rmErr != nil && !os.IsNotExist(rmErr) {
+						errs = append(errs, rmErr)
+					}
 					continue
 				}
-				_ = os.WriteFile(item.path, item.body, item.mode)
+				if rbErr := commitRendered(item.path, item.body, item.mode); rbErr != nil {
+					errs = append(errs, rbErr)
+				}
 			}
+			return errors.Join(errs...)
 		}
 		for _, file := range result.Files {
 			path := root + file.Path
 			if err = os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-				rollback()
+				if rbErr := rollback(); rbErr != nil {
+					return errors.Join(err, generation.ErrRenderCleanup, rbErr)
+				}
 				return err
 			}
 			prior, existed, mode := priorFile(path)
@@ -156,14 +164,46 @@ func renderDisaster(root string) func([]byte) error {
 			if file.Mode == "0600" {
 				fileMode = 0o600
 			}
-			if err = os.WriteFile(path, []byte(file.Content), fileMode); err != nil {
-				rollback()
+			if err = commitRendered(path, []byte(file.Content), fileMode); err != nil {
+				if rbErr := rollback(); rbErr != nil {
+					return errors.Join(err, generation.ErrRenderCleanup, rbErr)
+				}
 				return err
 			}
 			written = append(written, restored{path, existed, prior, mode})
 		}
 		return nil
 	}
+}
+
+func commitRendered(path string, body []byte, mode os.FileMode) error {
+	tmp := path + ".andaru-tmp"
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+	if err != nil {
+		return cleanupTemp(tmp, err)
+	}
+	if _, err = f.Write(body); err != nil {
+		_ = f.Close()
+		return cleanupTemp(tmp, err)
+	}
+	if err = f.Sync(); err != nil {
+		_ = f.Close()
+		return cleanupTemp(tmp, err)
+	}
+	if err = f.Close(); err != nil {
+		return cleanupTemp(tmp, err)
+	}
+	if err = os.Rename(tmp, path); err != nil {
+		return cleanupTemp(tmp, err)
+	}
+	return nil
+}
+
+func cleanupTemp(tmp string, err error) error {
+	if rmErr := os.Remove(tmp); rmErr != nil && !os.IsNotExist(rmErr) {
+		return errors.Join(err, generation.ErrRenderCleanup)
+	}
+	return err
 }
 
 type restored struct {

@@ -7,6 +7,10 @@ import (
 	"github.com/andaru-project/andaru/internal/kept"
 )
 
+// ErrRenderCleanup means a failed render left files that could not be removed.
+// Boot must not try the next copy over that residue.
+var ErrRenderCleanup = errors.New("disaster render cleanup failed")
+
 func (r Realizer) disasterBoot() error {
 	var store *kept.Store
 	var err error
@@ -27,6 +31,9 @@ func (r Realizer) disasterBoot() error {
 		}
 		if r.RenderDisaster != nil {
 			if err = r.RenderDisaster(body); err != nil {
+				if errors.Is(err, ErrRenderCleanup) {
+					return err
+				}
 				last = err
 				continue
 			}
