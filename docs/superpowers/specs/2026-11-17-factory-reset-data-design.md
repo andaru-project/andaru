@@ -39,6 +39,7 @@ These are the author's calls. The owner accepted the playback that contained the
 - A bundled plugin's program files ship in the Andaru `.deb` under `/usr`. Reset does not uninstall them. Their settings live under `/var/lib/andaru` and are wiped, so the plugin comes back unconfigured.
 - An installable plugin, including a downloaded newer version or a copy kept for a plugin rollback, lives under `/var/lib/andaru`. Reset deletes the plugin and that upgrade copy together.
 - This design does not build add-ons, a partition migrator, or a reset command.
+- An uplink is never written into `last-lan/` and never listens after reset. The product already treats a static IPv4 gateway, DHCPv4, or PPPoE as an uplink. That existing inference is an exclusion, not a new trusted-LAN flag. If the live management segment is an uplink, the success signal does not update `last-lan/` from it. A reset with no non-uplink `last-lan/` requires the console.
 
 ## What this supersedes
 
@@ -142,12 +143,12 @@ If `/var/lib/andaru` is a mount point and the mount is absent at boot, Andaru do
 
 `first/` is a complete saved-configuration copy taken at the first success signal. It is a record. No reset, boot or fallback path applies it. Replacing it requires an explicit operator action that this design does not provide.
 
-`last-lan/` is the management-path closure from the 2026-11-15 design, taken from the last successful live configuration:
+`last-lan/` is the management-path closure from the 2026-11-15 design, taken from the last successful live configuration, and only when that management segment is not an uplink:
 
 - the elected management segment, its allowed sources, and the link ancestry required to realize it;
 - the addressing on that closure;
 - enough firewall state to default-deny and to allow SSH from that management segment;
-- no WAN, no add-on state, no Andaru users or credentials, no user policy, no NAT, and no DHCP or DNS service state beyond what that LAN closure itself needs in order to be reachable.
+- no WAN, no uplink, no add-on state, no Andaru users or credentials, no user policy, no NAT, and no DHCP or DNS service state beyond what that LAN closure itself needs in order to be reachable.
 
 It does not include an Andaru login. On this fallback the administrator uses the Debian SSH account.
 
@@ -166,7 +167,7 @@ A crash before either boot is up is the builder's problem to make safe. Any shor
 
 Success is an authenticated administrator session changing a setting while that configuration is the live one. Apply confirmation alone is not success. A package upgrade is not success.
 
-The first time that signal fires, Andaru writes `first/` if it does not already exist. Every time the signal fires, Andaru replaces `last-lan/` with the management-path closure of the configuration that was live for that change. A change made on the LAN fallback does not update `last-lan/` until Andaru identity is up, because the signal requires an Andaru administrator session.
+The first time that signal fires, Andaru writes `first/` if it does not already exist. Every time the signal fires, Andaru replaces `last-lan/` with the management-path closure of the configuration that was live for that change, unless that management segment is an uplink. An uplink session does not create or refresh `last-lan/`. A change made on the LAN fallback does not update `last-lan/` until Andaru identity is up, because the signal requires an Andaru administrator session.
 
 Recording reads the live configuration. It does not take the package-upgrade repair copy, and it does not run during a reset apply that has not come up.
 
