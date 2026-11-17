@@ -1,0 +1,120 @@
+package generation
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/andaru-project/andaru/internal/kept"
+)
+
+func TestBootLeavesAUsableTree(t *testing.T) {
+	state := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(state, "configuration"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(state, "generations"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "generations", "pointers.json"), []byte(`{"confirmed":null,"live":null}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(kept.Root) })
+	if err := os.MkdirAll(filepath.Join(kept.Root, "last-lan"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(kept.Root, "last-lan", "last-lan.json"), []byte("not-a-closure"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := Realizer{StateDir: state, Root: t.TempDir(), Now: timeNow}
+	if err := r.Boot(t.Context()); err != nil && strings.Contains(err.Error(), "unsafe kept copy") {
+		t.Fatal(err)
+	}
+}
+
+func TestDisasterBootOrder(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "missing")
+	root := t.TempDir()
+	t.Cleanup(func() { _ = os.RemoveAll(kept.Root) })
+	writeCopy(t, "last-lan", "last")
+	writeCopy(t, "first", "first")
+	writeCopy(t, "recovery", "recovery")
+	r := Realizer{StateDir: state, Root: root, Now: timeNow}
+	if err := r.Boot(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := marker(t, root); got != "last-lan" {
+		t.Fatalf("selected %s", got)
+	}
+	_ = os.RemoveAll(filepath.Join(kept.Root, "last-lan"))
+	if err := r.Boot(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := marker(t, root); got != "first" {
+		t.Fatalf("selected %s", got)
+	}
+	_ = os.RemoveAll(filepath.Join(kept.Root, "first"))
+	if err := r.Boot(t.Context()); err == nil || !strings.Contains(err.Error(), "CONSOLE_REQUIRED") {
+		t.Fatalf("both missing: %v", err)
+	}
+	writeCopy(t, "recovery", "recovery")
+	if err := r.Boot(t.Context()); err == nil || !strings.Contains(err.Error(), "CONSOLE_REQUIRED") {
+		t.Fatal("recovery was selected")
+	}
+}
+
+func TestDisasterBootDoesNotCreateState(t *testing.T) {
+	parent := t.TempDir()
+	state := filepath.Join(parent, "missing")
+	upgrades := filepath.Join(parent, "upgrades", "keep")
+	if err := os.MkdirAll(upgrades, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(upgrades, "note"), []byte("stay"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	t.Cleanup(func() { _ = os.RemoveAll(kept.Root) })
+	writeCopy(t, "last-lan", "last")
+	r := Realizer{StateDir: state, Root: root, Now: timeNow}
+	if err := r.Boot(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(state); !os.IsNotExist(err) {
+		t.Fatal("disaster boot created the state directory")
+	}
+	if raw, err := os.ReadFile(filepath.Join(upgrades, "note")); err != nil || string(raw) != "stay" {
+		t.Fatalf("upgrades changed: %q %v", raw, err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "run", "andaru", "disaster-source")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(state, "run")); !os.IsNotExist(err) {
+		t.Fatal("rendered into the state directory")
+	}
+}
+
+func writeCopy(t *testing.T, name, token string) {
+	t.Helper()
+	dir := filepath.Join(kept.Root, name)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"kind":"lan-closure","schemaVersion":1,"token":"` + token + `","management":{"segment":"seg"},"links":[],"segments":[],"zones":[],"secrets":{}}`)
+	if err := os.WriteFile(filepath.Join(dir, name+".json"), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func marker(t *testing.T, root string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(root, "run", "andaru", "disaster-source"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func timeNow() time.Time { return time.Unix(1_700_000_000, 0) }
