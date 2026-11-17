@@ -60,17 +60,29 @@ func (s *Store) Put(ctx context.Context, name Name, body []byte, replace bool) e
 	}
 	dir := filepath.Join(s.root, string(name))
 	final := filepath.Join(dir, string(name)+".json")
-	if _, err := os.Lstat(final); err == nil && !replace {
+	if info, err := os.Lstat(final); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("kept copy must be a real file")
+	} else if err == nil && !replace {
 		return errors.New("kept copy already exists")
 	}
-	if err := os.MkdirAll(s.root, 0o700); err != nil {
+	if err := ensureRealDir(s.root); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := ensureRealDir(dir); err != nil {
 		return err
 	}
 	tmp := final + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if info, err := os.Lstat(tmp); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return errors.New("kept copy temp must be a real file")
+		}
+		if err = os.Remove(tmp); err != nil {
+			return err
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
@@ -92,7 +104,15 @@ func (s *Store) Read(name Name) ([]byte, error) {
 	if !validName(name) {
 		return nil, errors.New("unknown kept copy")
 	}
-	path := filepath.Join(s.root, string(name), string(name)+".json")
+	dir := filepath.Join(s.root, string(name))
+	dirInfo, err := os.Lstat(dir)
+	if err != nil {
+		return nil, err
+	}
+	if dirInfo.Mode()&os.ModeSymlink != 0 || !dirInfo.IsDir() {
+		return nil, errors.New("kept copy directory must be a real directory")
+	}
+	path := filepath.Join(dir, string(name)+".json")
 	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
@@ -103,6 +123,20 @@ func (s *Store) Read(name Name) ([]byte, error) {
 		return nil, errors.New("unsafe kept copy")
 	}
 	return os.ReadFile(path)
+}
+
+func ensureRealDir(path string) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return os.Mkdir(path, 0o700)
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return errors.New("kept copy directory must be a real directory")
+	}
+	return nil
 }
 
 func LiveTreeUsable(stateDir string) bool {
