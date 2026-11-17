@@ -1,0 +1,90 @@
+package kept
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"syscall"
+	"testing"
+)
+
+func TestKeptRefusesNesting(t *testing.T) {
+	_, beforeErr := os.Lstat(Root)
+	for _, stateDir := range []string{Root, filepath.Join(Root, "child"), "/var/lib", "/"} {
+		if _, err := Open(stateDir); err == nil {
+			t.Fatalf("Open(%s) succeeded", stateDir)
+		}
+	}
+	_, afterErr := os.Lstat(Root)
+	if os.IsNotExist(beforeErr) && !os.IsNotExist(afterErr) {
+		t.Fatal("nesting check created the kept root")
+	}
+}
+
+func TestKeptModes(t *testing.T) {
+	state := t.TempDir()
+	t.Cleanup(func() { _ = os.RemoveAll(Root) })
+	s, err := Open(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err = s.Put(ctx, "last-lan", []byte("one"), false); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(Root, "last-lan", "last-lan.json")
+	assertPrivate(t, Root, 0o700)
+	assertPrivate(t, filepath.Dir(file), 0o700)
+	assertPrivate(t, file, 0o600)
+	if err = s.Put(ctx, "last-lan", []byte("two"), true); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Read("last-lan")
+	if err != nil || string(got) != "two" {
+		t.Fatalf("read %q %v", got, err)
+	}
+	tmp := filepath.Join(Root, "first", "first.json.tmp")
+	if err = os.MkdirAll(filepath.Dir(tmp), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(tmp, []byte("partial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Put(ctx, "first", []byte("first"), false); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Put(ctx, "first", []byte("again"), false); err == nil {
+		t.Fatal("second first write succeeded")
+	}
+}
+
+func TestMissingStateIsUnusable(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "missing")
+	if LiveTreeUsable(state) {
+		t.Fatal("missing state was usable")
+	}
+	if _, err := os.Lstat(state); !os.IsNotExist(err) {
+		t.Fatalf("LiveTreeUsable created %s: %v", state, err)
+	}
+}
+
+func assertPrivate(t *testing.T, path string, mode os.FileMode) {
+	t.Helper()
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("%s is a symlink", path)
+	}
+	if info.Mode().Perm() != mode {
+		t.Fatalf("%s mode %o, want %o", path, info.Mode().Perm(), mode)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Uid != 0 {
+		t.Fatalf("%s is not root-owned", path)
+	}
+	if info.Mode().IsRegular() && stat.Nlink != 1 {
+		t.Fatalf("%s link count %d", path, stat.Nlink)
+	}
+}
