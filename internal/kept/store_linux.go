@@ -60,10 +60,14 @@ func (s *Store) Put(ctx context.Context, name Name, body []byte, replace bool) e
 	}
 	dir := filepath.Join(s.root, string(name))
 	final := filepath.Join(dir, string(name)+".json")
-	if info, err := os.Lstat(final); err == nil && info.Mode()&os.ModeSymlink != 0 {
+	info, statErr := os.Lstat(final)
+	switch {
+	case statErr == nil && info.Mode()&os.ModeSymlink != 0:
 		return errors.New("kept copy must be a real file")
-	} else if err == nil && !replace {
+	case statErr == nil && !replace:
 		return errors.New("kept copy already exists")
+	case statErr != nil && !errors.Is(statErr, os.ErrNotExist):
+		return statErr
 	}
 	if err := s.privateDir(s.root, true); err != nil {
 		return err

@@ -322,6 +322,11 @@ func (r Realizer) Boot(ctx context.Context) (result error) {
 	if _, statErr := os.Lstat(r.StateDir); os.IsNotExist(statErr) {
 		return r.disasterBoot()
 	}
+	if _, statErr := os.Lstat(filepath.Join(r.dir(), "pointers.json")); os.IsNotExist(statErr) {
+		return r.disasterBoot()
+	} else if statErr != nil {
+		return statErr
+	}
 	unlock, err := r.lock()
 	if err != nil {
 		return err
