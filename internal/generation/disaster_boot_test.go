@@ -79,6 +79,26 @@ func TestDisasterBootStopsWhenRenderCleanupFails(t *testing.T) {
 	}
 }
 
+func TestBootUsesKeptLANWhenCommitPointIsMissing(t *testing.T) {
+	state := t.TempDir()
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	keptRoot := filepath.Join(t.TempDir(), "kept")
+	writeCopy(t, keptRoot, "last-lan", "last")
+	r := Realizer{StateDir: state, Root: root, KeptRoot: keptRoot, Now: timeNow}
+	if err := r.Boot(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := marker(t, root); got != "last-lan" {
+		t.Fatalf("selected %s", got)
+	}
+	if _, err := os.Lstat(filepath.Join(state, "generations", "pointers.json")); !os.IsNotExist(err) {
+		t.Fatal("missing commit point was created")
+	}
+}
+
 func TestDisasterBootDoesNotCreateState(t *testing.T) {
 	parent := t.TempDir()
 	state := filepath.Join(parent, "missing")
