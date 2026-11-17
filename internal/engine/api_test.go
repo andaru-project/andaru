@@ -11,12 +11,32 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/host"
 )
 
 func rootRequest(method, path string) *http.Request {
 	r := httptest.NewRequest(method, path, nil)
 	return r.WithContext(context.WithValue(r.Context(), peerKey{}, peerIdentity{uid: 0, verified: true}))
+}
+
+func TestKeptRecoveryReachesSavedHandler(t *testing.T) {
+	var got string
+	h := newHandler(func(context.Context) ([]host.LinkStatus, error) { return nil, nil }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Method + " " + r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	ok := httptest.NewRecorder()
+	h.ServeHTTP(ok, rootRequest(http.MethodPost, "/api/v1/kept/recovery"))
+	if ok.Code != http.StatusNoContent || got != "POST /api/v1/kept/recovery" {
+		t.Fatalf("root recovery: %d %q", ok.Code, got)
+	}
+	denied := httptest.NewRecorder()
+	actor := requestActor{Actor: authz.Actor{Kind: authz.ActorAccount, ID: "00000000-0000-4000-8000-000000000001"}, AccountID: "00000000-0000-4000-8000-000000000001", Source: "unix"}
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/kept/recovery", nil)
+	r = r.WithContext(context.WithValue(r.Context(), authenticatedActorKey{}, actor))
+	h.ServeHTTP(denied, r)
+	assertAPIError(t, denied, http.StatusNotFound, "NOT_FOUND")
 }
 
 func TestAPILinksContractAndFailures(t *testing.T) {
