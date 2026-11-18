@@ -1,6 +1,6 @@
 # First setup: `andaru setup`
 
-Status: proposed on 2026-11-18. It awaits the owner's approval of the author calls below. Not implemented behaviour. Contracts remain provisional until Andaru 1.0.
+Status: approved by the owner on 2026-11-18, author calls and risks included. Not implemented behaviour. Contracts remain provisional until Andaru 1.0.
 
 ## Intent
 
@@ -13,6 +13,7 @@ From the 2026-11-18 conversation:
 - **Console first, engine workflow.** The workflow lives in the engine and is resumable. `andaru setup` is its first and only client in this slice. A GUI setup becomes a second client later, once there is a way to reach it before setup.
 - **TLS.** Setup generates a self-signed certificate and prints its SHA-256 fingerprint. It accepts an operator-supplied certificate and key instead when given their paths.
 - **Listener.** The web UI listens only on the management segment's addresses, on port 8443. Port 443 stays free for a later reverse-proxy add-on.
+- **Package removal follows Debian.** Removing the package deletes nothing setup wrote. Purging it deletes `/etc/andaru`, with the certificate, the key and both configuration files, as it deletes Andaru's state trees.
 - **Recovery is the next slice.** Console re-election of the management segment and a recovery state for a missing management path are designed next. That design resolves the conflict between the 2026-11-12 "listen on every interface" ruling and the later rule that WAN and unclassified interfaces never listen.
 
 ## Still binding
