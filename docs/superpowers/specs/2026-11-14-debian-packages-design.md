@@ -1,5 +1,7 @@
 # Debian packages and the signed APT repository
 
+Superseded on 2026-11-18 by [Andaru as an appliance image](2026-11-18-appliance-image-design.md): Andaru no longer ships as a Debian package.
+
 ## Status and intent
 
 Slice 1 of [issue #13](https://github.com/andaru-project/andaru/issues/13) (install, upgrade, backup and reset). Today an operator installs Andaru by copying a binary and some twenty files from `packaging/` by hand, as the guide's sections list. This slice turns that into `apt install andaru` from a signed repository, so a clean Debian 13 host reaches the point where `andaru ctl takeover` can run with one verified bootstrap step and two apt commands. Later slices of #13 build on it: upgrades with automatic rollback, backup and restore, factory reset, Debian security updates.

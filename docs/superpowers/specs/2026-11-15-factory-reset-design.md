@@ -1,5 +1,7 @@
 # Authenticated LAN-recoverable factory reset
 
+Partly superseded on 2026-11-18 by [Andaru as an appliance image](2026-11-18-appliance-image-design.md): the Debian, dpkg, takeover and OpenSSH rules no longer apply. The wipe, the kept copies and the boot after a wipe stay.
+
 Status: approved by the owner on 2026-11-15. Implementation is blocked on the prerequisite identity/audit, setup and authenticated LAN-recovery projects described below.
 
 > **Amended.** [`2026-11-17-factory-reset-data-design.md`](2026-11-17-factory-reset-data-design.md) amends this design, and where the two disagree the 2026-11-17 document wins. Its "What this supersedes" section lists the rules that no longer hold here, among them the rollback to the pre-reset tree, the recovery-LAN allowlist and the deletion of `/var/lib/andaru-upgrades`. The root-local reset shipped under that design in #66. This document stays as the record of the rules the 2026-11-17 design keeps binding.

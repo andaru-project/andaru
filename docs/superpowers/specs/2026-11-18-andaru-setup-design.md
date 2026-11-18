@@ -1,5 +1,7 @@
 # First setup: `andaru setup`
 
+Partly superseded on 2026-11-18 by [Andaru as an appliance image](2026-11-18-appliance-image-design.md): the takeover step, the package-removal decision and the OpenSSH rule no longer apply.
+
 Status: approved by the owner on 2026-11-18, author calls and risks included. Not implemented behaviour. Contracts remain provisional until Andaru 1.0.
 
 ## Intent
