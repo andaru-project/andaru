@@ -10,7 +10,7 @@ Describe 'package removal and purge'
     mkdir -p "$root/etc/andaru/tls" "$root/var/lib/andaru/generations" "$root/var/lib/andaru-kept/first" \
       "$root/var/lib/andaru-upgrades/recovery" "$root/var/lib/andaru-reset"
     printf 'x\n' >"$root/etc/andaru/web.conf"
-    printf 'x\n' >"$root/var/lib/andaru/generations/pointers.json"
+    printf '{"confirmed":null,"takeover":false}' >"$root/var/lib/andaru/generations/pointers.json"
     printf 'lan\n' >"$root/var/lib/andaru-kept/first/first.json"
     # A link inside the tree must go without its target.
     ln -s "$outside/portable-backup.zip" "$root/var/lib/andaru/backup-link"
@@ -40,6 +40,26 @@ Describe 'package removal and purge'
     The path "$root/var/lib/andaru-reset" should not be exist
     The path "$outside/portable-backup.zip" should be file
     The stderr should equal ''
+  End
+
+  It 'leaves a tree whole when something is mounted inside it'
+    # ANDARU_MOUNTINFO stands in for /proc/self/mountinfo: a bind mount of /srv/backups at andaru/archive.
+    mkdir -p "$root/var/lib/andaru/archive"
+    printf 'keep\n' >"$root/var/lib/andaru/archive/backup.zip"
+    real=$(readlink -f "$root")
+    printf '36 25 8:1 /srv/backups %s/var/lib/andaru/archive rw - ext4 /dev/sda1 rw\n' "$real" >"$outside/mountinfo"
+    When run env DPKG_ROOT="$root" ANDARU_MOUNTINFO="$outside/mountinfo" sh "$postrm" purge
+    The status should equal 0
+    The stderr should include 'mounted inside it'
+    The path "$root/var/lib/andaru/archive/backup.zip" should be file
+    The path "$root/var/lib/andaru-kept" should not be exist
+  End
+
+  It 'warns when it purges a host with a confirmed generation'
+    printf '{"confirmed":3,"takeover":false}' >"$root/var/lib/andaru/generations/pointers.json"
+    When run env DPKG_ROOT="$root" sh "$postrm" purge
+    The status should equal 0
+    The stderr should include 'still configured'
   End
 
   It 'warns when it purges a host Andaru still configured'

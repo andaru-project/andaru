@@ -8,12 +8,21 @@ set -e
 if [ "$1" = purge ]; then
 	pointers=${DPKG_ROOT:-}/var/lib/andaru/generations/pointers.json
 	if [ -e "${DPKG_ROOT:-}/var/lib/andaru-reset/operation.json" ] ||
-		{ [ -f "$pointers" ] && grep -Eq '"takeover"[[:space:]]*:[[:space:]]*true' "$pointers"; }; then
+		{ [ -f "$pointers" ] && { grep -Eq '"takeover"[[:space:]]*:[[:space:]]*true' "$pointers" ||
+			! grep -Eq '"confirmed"[[:space:]]*:[[:space:]]*null' "$pointers"; }; }; then
 		echo "andaru: purging a host Andaru still configured: its network state, kept recovery copies and any unfinished factory reset are deleted." >&2
 	fi
 	for tree in /etc/andaru /var/lib/andaru /var/lib/andaru-kept /var/lib/andaru-upgrades /var/lib/andaru-reset; do
 		tree=${DPKG_ROOT:-}$tree
 		[ -d "$tree" ] || continue
+		# A bind mount of the same file system looks like the tree itself to find -xdev, and deleting through it would
+		# empty its source. A tree with anything mounted below it is left whole. mountinfo escapes spaces as \040.
+		real=$(readlink -f "$tree")
+		if awk -v t="$real/" '{ m = $5; gsub(/\\040/, " ", m) } index(m, t) == 1 { found = 1 } END { exit !found }' \
+			"${ANDARU_MOUNTINFO:-/proc/self/mountinfo}"; then
+			echo "andaru: left $tree: something is mounted inside it; unmount that and delete the tree by hand" >&2
+			continue
+		fi
 		# Contents first. -H follows only a tree that is itself a link, to empty where it points; no link inside is
 		# followed. -xdev leaves anything mounted inside alone, and a tree that is a mount point keeps its empty directory.
 		find -H "$tree" -xdev -mindepth 1 -delete 2>/dev/null ||
