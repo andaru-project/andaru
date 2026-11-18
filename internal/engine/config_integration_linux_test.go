@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/host"
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -100,7 +101,7 @@ func TestConfigurationHTTPContract(t *testing.T) {
 	assertAPIError(t, configCall(h, "POST", "/api/v1/config/zones", `{"name":"renamed"}`, ""), 422, "VALIDATION_FAILED")
 	history := configCall(h, "GET", "/api/v1/versions?limit=2", "", "")
 	var hv config.HistoryView
-	if e := json.Unmarshal(history.Body.Bytes(), &hv); e != nil || len(hv.Items) != 2 || hv.Items[0].ID != "2" || hv.Items[0].Actor != "unix:uid:0" {
+	if e := json.Unmarshal(history.Body.Bytes(), &hv); e != nil || len(hv.Items) != 2 || hv.Items[0].ID != "2" || hv.Items[0].Actor != "system.root" {
 		t.Fatalf("history: %s %v", history.Body, e)
 	}
 	head := configCall(h, "HEAD", path, "", "")
@@ -115,12 +116,28 @@ func TestConfigurationHTTPContract(t *testing.T) {
 	if e := json.Unmarshal(contract.Body.Bytes(), &document); e != nil {
 		t.Fatal(e)
 	}
-	expected := map[string][]string{"/api/v1/status/links": {"get", "head"}, "/api/v1/status/prefixes": {"get", "head"}, "/api/v1/openapi.json": {"get", "head"}, "/api/v1/schema": {"get", "head"}, "/api/v1/config": {"get", "head"}, "/api/v1/config/{collection}": {"get", "head", "post"}, "/api/v1/config/{collection}/{id}": {"get", "head", "put", "delete"}, "/api/v1/config/changes": {"post"}, "/api/v1/versions": {"get", "head"}, "/api/v1/versions/{id}": {"get", "head"}, "/api/v1/preview/network": {"get", "head"},
-		"/api/v1/applies": {"get", "head", "post"}, "/api/v1/applies/{id}": {"get", "head"}, "/api/v1/applies/{id}/confirmation": {"post"}, "/api/v1/applies/{id}/rollback": {"post"},
+	expected := map[string][]string{
+		"/api/v1/status/links": {"get", "head"}, "/api/v1/status/prefixes": {"get", "head"}, "/api/v1/openapi.json": {"get", "head"},
+		"/api/v1/schema": {"get", "head"}, "/api/v1/config": {"get", "head"}, "/api/v1/config/{collection}": {"get", "head", "post"},
+		"/api/v1/config/{collection}/{id}": {"get", "head", "put", "delete"}, "/api/v1/config/changes": {"post"},
+		"/api/v1/versions": {"get", "head"}, "/api/v1/versions/{id}": {"get", "head"}, "/api/v1/preview/network": {"get", "head"},
+		"/api/v1/applies": {"get", "head", "post"}, "/api/v1/applies/{id}": {"get", "head"},
+		"/api/v1/applies/{id}/confirmation": {"post"}, "/api/v1/applies/{id}/rollback": {"post"},
 		"/api/v1/takeover/proposal": {"get", "head"}, "/api/v1/preview/network/draft": {"post"},
 		"/api/v1/config/policy/{chain}": {"get", "head", "post"}, "/api/v1/config/policy/{chain}/{id}": {"get", "head", "put", "delete"},
-		"/api/v1/config/policy/{chain}/order": {"put"}, "/api/v1/config/nat/{list}": {"get", "head", "post"}, "/api/v1/config/nat/{list}/{id}": {"get", "head", "put", "delete"}, "/api/v1/config/nat/{list}/order": {"put"}, "/api/v1/config/management": {"get", "head", "put", "delete"}, "/api/v1/config/nat/outbound": {"get", "head", "put", "delete"}, "/api/v1/config/dns": {"get", "head", "put", "delete"},
-		"/api/v1/backups": {"post"}, "/api/v1/restores/preview": {"post"}, "/api/v1/restores": {"post"}}
+		"/api/v1/config/policy/{chain}/order": {"put"}, "/api/v1/config/nat/{list}": {"get", "head", "post"},
+		"/api/v1/config/nat/{list}/{id}": {"get", "head", "put", "delete"}, "/api/v1/config/nat/{list}/order": {"put"},
+		"/api/v1/config/management": {"get", "head", "put", "delete"}, "/api/v1/config/nat/outbound": {"get", "head", "put", "delete"},
+		"/api/v1/config/dns": {"get", "head", "put", "delete"}, "/api/v1/backups": {"post"},
+		"/api/v1/restores/preview": {"post"}, "/api/v1/restores": {"post"},
+		"/api/v1/capabilities": {"get", "head"}, "/api/v1/roles": {"get", "head"},
+		"/api/v1/users": {"get", "head", "post"}, "/api/v1/users/bootstrap-admin": {"post"}, "/api/v1/users/{id}": {"get", "head", "patch", "delete"},
+		"/api/v1/users/{id}/password": {"put"}, "/api/v1/tokens": {"get", "head", "post"},
+		"/api/v1/tokens/{selector}": {"delete"}, "/api/v1/audit/events": {"get", "head"},
+		"/api/v1/audit/export": {"get", "head"},
+		"/api/v1/session": {"get", "post", "delete"}, "/api/v1/sessions": {"get"},
+		"/api/v1/sessions/{id}": {"delete"}, "/api/v1/startup-status": {"get", "head"},
+	}
 	if len(document.Paths) != len(expected) {
 		t.Fatalf("unimplemented or missing contract paths: %d", len(document.Paths))
 	}
@@ -161,6 +178,35 @@ func TestConfigurationHTTPContract(t *testing.T) {
 	}
 	assertAPIError(t, configCall(h, "GET", path, "", ""), 404, "NOT_FOUND")
 	assertAPIError(t, configCall(h, "DELETE", path, "", newtag), 412, "PRECONDITION_FAILED")
+}
+
+func TestConfigurationRolesCRUDAndCAS(t *testing.T) {
+	h, _ := configurationFixture(t)
+	created := configCall(h, http.MethodPost, "/api/v1/config/roles", `{"name":"Operator","capabilities":["configuration.read"]}`, "")
+	if created.Code != http.StatusCreated || created.Header().Get("Andaru-Saved-Version") != "1" {
+		t.Fatalf("create role: status=%d body=%s", created.Code, created.Body)
+	}
+	view := apiObject(t, created)
+	id := valueID(t, view)
+	var role authz.Role
+	if err := json.Unmarshal(view.Value, &role); err != nil || role.ID != id || role.BuiltIn != "" {
+		t.Fatalf("created role = %+v error=%v", role, err)
+	}
+	path := "/api/v1/config/roles/" + id
+	read := configCall(h, http.MethodGet, path, "", "")
+	tag := `"` + id + `.1"`
+	if read.Code != http.StatusOK || read.Header().Get("ETag") != tag {
+		t.Fatalf("read role: status=%d headers=%v body=%s", read.Code, read.Header(), read.Body)
+	}
+	updated := configCall(h, http.MethodPut, path, `{"name":"Operator","description":"saved only","capabilities":["configuration.read","configuration.write"]}`, tag)
+	if updated.Code != http.StatusOK || updated.Header().Get("Andaru-Saved-Version") != "2" {
+		t.Fatalf("update role: status=%d body=%s", updated.Code, updated.Body)
+	}
+	assertAPIError(t, configCall(h, http.MethodPut, path, `{"name":"Stale","capabilities":["configuration.read"]}`, tag), http.StatusPreconditionFailed, "PRECONDITION_FAILED")
+	deleted := configCall(h, http.MethodDelete, path, "", `"`+id+`.2"`)
+	if deleted.Code != http.StatusOK || deleted.Header().Get("Andaru-Saved-Version") != "3" {
+		t.Fatalf("delete role: status=%d body=%s", deleted.Code, deleted.Body)
+	}
 }
 
 func TestConfigurationHTTPPreconditionEdges(t *testing.T) {
@@ -312,12 +358,20 @@ func TestConfigurationHTTPConcurrencyAndSecrets(t *testing.T) {
 
 func TestEngineStoreFailureExit(t *testing.T) {
 	requireRoot(t)
+	bin := os.Getenv("ANDARU_TEST_BINARY")
+	if !filepath.IsAbs(bin) {
+		bin = filepath.Join(t.TempDir(), "andaru")
+		build := exec.Command("go", "build", "-o", bin, "github.com/andaru-project/andaru/cmd/andaru")
+		if out, err := build.CombinedOutput(); err != nil {
+			t.Fatalf("build engine binary: %v\n%s", err, out)
+		}
+	}
 	exe, e := os.Executable()
 	if e != nil {
 		t.Fatal(e)
 	}
 	cmd := exec.Command("unshare", "--mount", "--propagation", "private", exe, "--engine-enosp")
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(), "ANDARU_TEST_BINARY="+bin)
 	if out, e := cmd.CombinedOutput(); e != nil {
 		t.Fatalf("actual engine fencing proof: %v\n%s", e, out)
 	}

@@ -95,7 +95,7 @@ func TestDecryptedZIPSizeBound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = writer.Write(bytes.Repeat([]byte("x"), 12*1024*1024+1)); err != nil {
+	if _, err = writer.Write(bytes.Repeat([]byte("x"), MaxZIPSize+1)); err != nil {
 		t.Fatal(err)
 	}
 	if err = writer.Close(); err != nil {

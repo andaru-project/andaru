@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/andaru-project/andaru/internal/authz"
 )
 
 type Operation struct {
@@ -148,7 +150,7 @@ func initialState() savedState {
 var (
 	orderedCollections = []string{"policy.input", "policy.forward", "nat.portForwards", "nat.oneToOne"}
 	singletons         = []string{"management", "nat.outbound", "dns"}
-	collections        = append([]string{"links", "segments", "zones", "addresses", "services", "dhcp", "dhcp6", "virtualAddresses"}, append(slices.Clone(orderedCollections), singletons...)...)
+	collections        = append([]string{"links", "segments", "zones", "roles", "addresses", "services", "dhcp", "dhcp6", "virtualAddresses"}, append(slices.Clone(orderedCollections), singletons...)...)
 )
 
 func validCollection(s string) bool { return slices.Contains(collections, s) }
@@ -170,7 +172,7 @@ func newID(collection string) (string, error) {
 	}
 	b[6] = (b[6] & 15) | 64
 	b[8] = (b[8] & 63) | 128
-	prefix := map[string]string{"links": "lnk", "segments": "seg", "zones": "zon", "addresses": "adr", "services": "svc", "policy.input": "rul", "policy.forward": "rul", "dhcp": "dhp", "dhcp6": "dh6", "virtualAddresses": "vip", "nat.portForwards": "pfw", "nat.oneToOne": "oto"}[collection]
+	prefix := map[string]string{"links": "lnk", "segments": "seg", "zones": "zon", "roles": "rol", "addresses": "adr", "services": "svc", "policy.input": "rul", "policy.forward": "rul", "dhcp": "dhp", "dhcp6": "dh6", "virtualAddresses": "vip", "nat.portForwards": "pfw", "nat.oneToOne": "oto"}[collection]
 	return fmt.Sprintf("%s_%x-%x-%x-%x-%x", prefix, b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
 func rank(code string) int {
@@ -198,6 +200,9 @@ func objects(d *declaration) map[objectKey]any {
 	}
 	for i := range d.Zones {
 		m[objectKey{"zones", d.Zones[i].ID}] = &d.Zones[i]
+	}
+	for i := range d.Roles {
+		m[objectKey{"roles", d.Roles[i].ID}] = &d.Roles[i]
 	}
 	for i := range d.Objects.Addresses {
 		m[objectKey{"addresses", d.Objects.Addresses[i].ID}] = &d.Objects.Addresses[i]
@@ -495,6 +500,9 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 	if d.Zones, e = rewrite(d.Zones, "zones", writes, deleted, createKeys, func(x zone) string { return x.ID }); e != nil {
 		return empty, e
 	}
+	if d.Roles, e = rewrite(d.Roles, "roles", writes, deleted, createKeys, func(x authz.Role) string { return x.ID }); e != nil {
+		return empty, e
+	}
 	if d.Objects.Addresses, e = rewrite(d.Objects.Addresses, "addresses", writes, deleted, createKeys, func(x address) string { return x.ID }); e != nil {
 		return empty, e
 	}
@@ -570,6 +578,11 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 			d.SchemaVersion = 2
 			break
 		}
+	}
+	if len(d.Roles) > 0 || d.SchemaVersion == 3 {
+		d.SchemaVersion = 3
+	} else {
+		d.Roles = nil
 	}
 	raw, e := json.Marshal(d)
 	if e != nil {
@@ -830,6 +843,8 @@ func owner(d *declaration, path string) (objectKey, string) {
 		id = d.Segments[n].ID
 	case col == "zones" && n < len(d.Zones):
 		id = d.Zones[n].ID
+	case col == "roles" && n < len(d.Roles):
+		id = d.Roles[n].ID
 	case col == "addresses" && n < len(d.Objects.Addresses):
 		id = d.Objects.Addresses[n].ID
 	case col == "services" && n < len(d.Objects.Services):

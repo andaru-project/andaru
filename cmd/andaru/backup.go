@@ -19,18 +19,28 @@ import (
 	"github.com/andaru-project/andaru/internal/config"
 )
 
-const backupUsage = "usage: andaru ctl [--socket PATH] backup create --output FILE [--include-secrets] | backup inspect --input FILE | backup restore --input FILE --stores configuration[,configurationSecrets]"
+const backupUsage = "usage: andaru ctl [--socket PATH] backup create --output FILE [--include-secrets] [--include-credentials] | backup inspect --input FILE | backup restore --input FILE --stores configuration[,configurationSecrets,users,userCredentials] [--operation-id ID]"
 
 type backupCommand struct {
-	verb, input, output string
-	stores              []string
-	includeSecrets      bool
+	verb, input, output, operationID string
+	stores                           []string
+	includeSecrets, includeCredentials bool
+}
+
+type rootAdministratorOptions struct {
+	AccountID   string `json:"accountId,omitempty"`
+	Login       string `json:"login,omitempty"`
+	DisplayName string `json:"displayName,omitempty"`
+	Password    string `json:"password"`
 }
 
 type restoreOptions struct {
-	Passphrase           string   `json:"passphrase,omitempty"`
-	Stores               []string `json:"stores,omitempty"`
-	ExpectedSavedVersion string   `json:"expectedSavedVersion,omitempty"`
+	Passphrase               string                    `json:"passphrase,omitempty"`
+	Stores                   []string                  `json:"stores,omitempty"`
+	OperationID              string                    `json:"operationId,omitempty"`
+	ExpectedSavedVersion     string                    `json:"expectedSavedVersion,omitempty"`
+	ExpectedIdentityRevision *int64                    `json:"expectedIdentityRevision,omitempty"`
+	RootAdministrator        *rootAdministratorOptions `json:"rootAdministrator,omitempty"`
 }
 
 type changeCounts struct {
@@ -43,21 +53,34 @@ type hardwareFinding struct {
 	Code, Path, Message string
 }
 
+type recoveryAdministrator struct {
+	ID    string `json:"id"`
+	Login string `json:"login"`
+}
+
 type restorePreview struct {
-	State                string            `json:"state"`
-	Manifest             backup.Manifest   `json:"manifest"`
-	ExpectedSavedVersion string            `json:"expectedSavedVersion"`
-	ConfigurationChanges changeCounts      `json:"configurationChanges"`
-	SecretChanges        changeCounts      `json:"secretChanges"`
-	UnresolvedSecrets    []string          `json:"unresolvedSecrets"`
-	BlockingSecrets      []string          `json:"blockingSecrets"`
-	HardwareFindings     []hardwareFinding `json:"hardwareFindings"`
+	State                     string                  `json:"state"`
+	Manifest                  backup.Manifest         `json:"manifest"`
+	ExpectedSavedVersion      string                  `json:"expectedSavedVersion,omitempty"`
+	ExpectedIdentityRevision  int64                   `json:"expectedIdentityRevision"`
+	ConfigurationChanges      changeCounts            `json:"configurationChanges"`
+	SecretChanges             changeCounts            `json:"secretChanges"`
+	UserChanges               changeCounts            `json:"userChanges"`
+	CredentialChanges         changeCounts            `json:"credentialChanges"`
+	UnresolvedSecrets         []string                `json:"unresolvedSecrets"`
+	BlockingSecrets           []string                `json:"blockingSecrets"`
+	MissingRoleIDs            []string                `json:"missingRoleIds"`
+	RequiresRootAdministrator bool                    `json:"requiresRootAdministrator"`
+	RecoveryAdministrators    []recoveryAdministrator `json:"recoveryAdministrators"`
+	HardwareFindings          []hardwareFinding       `json:"hardwareFindings"`
 }
 
 type restoreReply struct {
 	State             string   `json:"state"`
-	SavedVersion      string   `json:"savedVersion"`
+	SavedVersion      string   `json:"savedVersion,omitempty"`
+	IdentityRevision  int64    `json:"identityRevision,omitempty"`
 	UnresolvedSecrets []string `json:"unresolvedSecrets"`
+	Replayed          bool     `json:"replayed"`
 }
 
 type backupErrorEnvelope struct {
@@ -81,12 +104,16 @@ func parseBackupCommand(args []string) (backupCommand, error) {
 		}
 		seen[name] = true
 		switch name {
-		case "--include-secrets":
+		case "--include-secrets", "--include-credentials":
 			if cmd.verb != "create" {
 				return backupCommand{}, errors.New("unknown option")
 			}
-			cmd.includeSecrets = true
-		case "--input", "--output", "--stores":
+			if name == "--include-secrets" {
+				cmd.includeSecrets = true
+			} else {
+				cmd.includeCredentials = true
+			}
+		case "--input", "--output", "--stores", "--operation-id":
 			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "--") {
 				return backupCommand{}, errors.New("missing option value")
 			}
@@ -97,16 +124,21 @@ func parseBackupCommand(args []string) (backupCommand, error) {
 				cmd.input = value
 			case "--output":
 				cmd.output = value
+			case "--operation-id":
+				if cmd.verb != "restore" || !validOperationID(value) {
+					return backupCommand{}, errors.New("invalid operation ID")
+				}
+				cmd.operationID = value
 			case "--stores":
 				if value == "" {
 					return backupCommand{}, errors.New("empty stores")
 				}
 				cmd.stores = strings.Split(value, ",")
-				if len(cmd.stores) > 2 {
+				if len(cmd.stores) > 4 {
 					return backupCommand{}, errors.New("invalid stores")
 				}
 				for j, store := range cmd.stores {
-					if !slices.Contains([]string{"configuration", "configurationSecrets"}, store) || slices.Contains(cmd.stores[:j], store) {
+					if !slices.Contains([]string{"configuration", "configurationSecrets", "users", "userCredentials"}, store) || slices.Contains(cmd.stores[:j], store) {
 						return backupCommand{}, errors.New("invalid stores")
 					}
 				}
@@ -118,15 +150,15 @@ func parseBackupCommand(args []string) (backupCommand, error) {
 	}
 	switch cmd.verb {
 	case "create":
-		if cmd.output == "" || cmd.input != "" || len(cmd.stores) != 0 {
+		if cmd.output == "" || cmd.input != "" || len(cmd.stores) != 0 || cmd.operationID != "" {
 			return backupCommand{}, errors.New("invalid create arguments")
 		}
 	case "inspect":
-		if cmd.input == "" || cmd.output != "" || cmd.includeSecrets || len(cmd.stores) != 0 {
+		if cmd.input == "" || cmd.output != "" || cmd.includeSecrets || cmd.includeCredentials || len(cmd.stores) != 0 || cmd.operationID != "" {
 			return backupCommand{}, errors.New("invalid inspect arguments")
 		}
 	case "restore":
-		if cmd.input == "" || cmd.output != "" || cmd.includeSecrets || len(cmd.stores) == 0 {
+		if cmd.input == "" || cmd.output != "" || cmd.includeSecrets || cmd.includeCredentials || len(cmd.stores) == 0 {
 			return backupCommand{}, errors.New("invalid restore arguments")
 		}
 	default:
@@ -164,6 +196,14 @@ func runBackup(ctx context.Context, socket string, args []string, _ io.Reader, s
 	options := restoreOptions{Passphrase: passphrase}
 	if cmd.verb == "restore" {
 		options.Stores = cmd.stores
+		options.OperationID = cmd.operationID
+		if options.OperationID == "" {
+			options.OperationID, err = newBackupOperationID()
+			if err != nil {
+				fmt.Fprintln(stderr, "could not create a restore operation ID")
+				return 1
+			}
+		}
 	}
 	preview, previewRaw, err := requestRestorePreview(ctx, socket, raw, options)
 	if err != nil {
@@ -180,8 +220,9 @@ func runBackup(ctx context.Context, socket string, args []string, _ io.Reader, s
 	previewOutput, err := json.Marshal(struct {
 		restorePreview
 		SelectedStores    []string `json:"selectedStores"`
+		OperationID       string   `json:"operationId"`
 		NetworkingApplied bool     `json:"networkingApplied"`
-	}{restorePreview: preview, SelectedStores: slices.Clone(cmd.stores), NetworkingApplied: false})
+	}{restorePreview: preview, SelectedStores: slices.Clone(cmd.stores), OperationID: options.OperationID, NetworkingApplied: false})
 	if err != nil || writeBackupJSON(stdout, previewOutput) != nil {
 		fmt.Fprintln(stderr, "could not write backup response")
 		return 1
@@ -191,7 +232,31 @@ func runBackup(ctx context.Context, socket string, args []string, _ io.Reader, s
 		fmt.Fprintln(stderr, "restore cancelled; type RESTORE exactly on a controlling terminal")
 		return 1
 	}
-	options.ExpectedSavedVersion = preview.ExpectedSavedVersion
+	if slices.Contains(cmd.stores, "configuration") || slices.Contains(cmd.stores, "configurationSecrets") {
+		options.ExpectedSavedVersion = preview.ExpectedSavedVersion
+	}
+	if slices.Contains(cmd.stores, "users") || slices.Contains(cmd.stores, "userCredentials") {
+		revision := preview.ExpectedIdentityRevision
+		options.ExpectedIdentityRevision = &revision
+	}
+	if preview.RequiresRootAdministrator {
+		recovery := &rootAdministratorOptions{}
+		if len(preview.RecoveryAdministrators) != 0 {
+			recovery.AccountID = preview.RecoveryAdministrators[0].ID
+		} else {
+			recovery.Login, err = readBackupPassphrase(ctx, "Recovery administrator login: ")
+			if err != nil {
+				fmt.Fprintln(stderr, "recovery administrator creation requires a valid login")
+				return 1
+			}
+		}
+		recovery.Password, err = readNewRecoveryPassword(ctx)
+		if err != nil {
+			fmt.Fprintln(stderr, "recovery administrator requires two matching valid passwords")
+			return 1
+		}
+		options.RootAdministrator = recovery
+	}
 	replyRaw, err := requestRestoreCommit(ctx, socket, raw, options)
 	if err != nil {
 		writeBackupError(stderr, err)
@@ -207,17 +272,19 @@ func runBackup(ctx context.Context, socket string, args []string, _ io.Reader, s
 func backupCreate(ctx context.Context, socket string, cmd backupCommand, stdout, stderr io.Writer) int {
 	passphrase := ""
 	var err error
-	if cmd.includeSecrets {
+	sensitive := cmd.includeSecrets || cmd.includeCredentials
+	if sensitive {
 		passphrase, err = readNewBackupPassphrase(ctx)
 		if err != nil {
-			fmt.Fprintln(stderr, "secret backups require a controlling terminal and two matching valid passphrases")
+			fmt.Fprintln(stderr, "secret or credential backups require a controlling terminal and two matching valid passphrases")
 			return 1
 		}
 	}
 	payload, _ := json.Marshal(struct {
-		IncludeSecrets bool   `json:"includeSecrets"`
-		Passphrase     string `json:"passphrase,omitempty"`
-	}{cmd.includeSecrets, passphrase})
+		IncludeSecrets     bool   `json:"includeSecrets"`
+		IncludeCredentials bool   `json:"includeCredentials"`
+		Passphrase         string `json:"passphrase,omitempty"`
+	}{cmd.includeSecrets, cmd.includeCredentials, passphrase})
 	client, transport := unixHTTPClient(socket, 160*time.Second)
 	defer transport.CloseIdleConnections()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://unix/api/v1/backups", bytes.NewReader(payload))
@@ -237,7 +304,7 @@ func backupCreate(ctx context.Context, socket string, cmd backupCommand, stdout,
 		return 1
 	}
 	wantType := "application/zip"
-	if cmd.includeSecrets {
+	if sensitive {
 		wantType = "application/octet-stream"
 	}
 	if response.Header.Get("Content-Type") != wantType || response.Header.Get("Cache-Control") != "no-store" {
@@ -245,9 +312,10 @@ func backupCreate(ctx context.Context, socket string, cmd backupCommand, stdout,
 		return 1
 	}
 	savedVersion := response.Header.Get("Andaru-Saved-Version")
+	identityRevision := response.Header.Get("Andaru-Identity-Revision")
 	capturedAt := response.Header.Get("Andaru-Captured-At")
 	captured, timeErr := time.Parse(time.RFC3339Nano, capturedAt)
-	if !validVersion(config.Version(savedVersion)) || timeErr != nil || captured.Format(time.RFC3339Nano) != capturedAt {
+	if !validVersion(config.Version(savedVersion)) || !validVersion(config.Version(identityRevision)) || timeErr != nil || captured.Format(time.RFC3339Nano) != capturedAt {
 		fmt.Fprintln(stderr, "engine returned invalid backup source metadata")
 		return 1
 	}
@@ -257,7 +325,8 @@ func backupCreate(ctx context.Context, socket string, cmd backupCommand, stdout,
 		return 1
 	}
 	archive, err := backup.Decode(ctx, raw, passphrase)
-	if err != nil || archive.Manifest.SavedVersion != savedVersion || !archive.Manifest.CreatedAt.Equal(captured) || slices.Contains(archive.Manifest.Scopes, "configurationSecrets") != cmd.includeSecrets {
+	if err != nil || archive.Manifest.FormatVersion != 2 || archive.Manifest.SavedVersion != savedVersion || !archive.Manifest.CreatedAt.Equal(captured) || archive.Documents.Users == nil ||
+		slices.Contains(archive.Manifest.Scopes, "configurationSecrets") != cmd.includeSecrets || slices.Contains(archive.Manifest.Scopes, "userCredentials") != cmd.includeCredentials {
 		fmt.Fprintln(stderr, "engine returned an invalid backup archive")
 		return 1
 	}
@@ -267,11 +336,12 @@ func backupCreate(ctx context.Context, socket string, cmd backupCommand, stdout,
 		return 1
 	}
 	status, _ := json.Marshal(struct {
-		State        string `json:"state"`
-		Path         string `json:"path"`
-		SavedVersion string `json:"savedVersion"`
-		CapturedAt   string `json:"capturedAt"`
-	}{"created", path, savedVersion, capturedAt})
+		State            string `json:"state"`
+		Path             string `json:"path"`
+		SavedVersion     string `json:"savedVersion"`
+		IdentityRevision string `json:"identityRevision"`
+		CapturedAt       string `json:"capturedAt"`
+	}{"created", path, savedVersion, identityRevision, capturedAt})
 	if _, err = stdout.Write(append(status, '\n')); err != nil {
 		fmt.Fprintln(stderr, "could not write backup status")
 		return 1
@@ -338,8 +408,14 @@ func requestRestorePreview(ctx context.Context, socket string, raw []byte, optio
 			return restorePreview{}, nil, &backupResponseError{message: "engine returned an invalid inspection response"}
 		}
 		preview.State, preview.Manifest = inspection.State, inspection.Manifest
-	} else if decodeStrict(data, &preview) != nil || preview.State != "restore-preview" || !validManifest(preview.Manifest) || !validVersion(config.Version(preview.ExpectedSavedVersion)) || preview.UnresolvedSecrets == nil || preview.BlockingSecrets == nil || preview.HardwareFindings == nil || !validRestorePreview(preview) {
-		return restorePreview{}, nil, &backupResponseError{message: "engine returned an invalid restore preview response"}
+	} else {
+		configSelected := slices.Contains(options.Stores, "configuration") || slices.Contains(options.Stores, "configurationSecrets")
+		identitySelected := slices.Contains(options.Stores, "users") || slices.Contains(options.Stores, "userCredentials")
+		if decodeStrict(data, &preview) != nil || preview.State != "restore-preview" || !validManifest(preview.Manifest) ||
+			configSelected && !validVersion(config.Version(preview.ExpectedSavedVersion)) || !configSelected && preview.ExpectedSavedVersion != "" ||
+			identitySelected && preview.ExpectedIdentityRevision < 0 || preview.UnresolvedSecrets == nil || preview.BlockingSecrets == nil || preview.MissingRoleIDs == nil || preview.RecoveryAdministrators == nil || preview.HardwareFindings == nil || !validRestorePreview(preview) {
+			return restorePreview{}, nil, &backupResponseError{message: "engine returned an invalid restore preview response"}
+		}
 	}
 	return preview, data, nil
 }
@@ -362,14 +438,17 @@ func requestRestoreCommit(ctx context.Context, socket string, raw []byte, option
 		return nil, err
 	}
 	var reply restoreReply
-	if decodeStrict(data, &reply) != nil || reply.State != "saved" || !validVersion(config.Version(reply.SavedVersion)) || reply.UnresolvedSecrets == nil {
+	configSelected := slices.Contains(options.Stores, "configuration") || slices.Contains(options.Stores, "configurationSecrets")
+	identitySelected := slices.Contains(options.Stores, "users") || slices.Contains(options.Stores, "userCredentials")
+	if decodeStrict(data, &reply) != nil || reply.State != "saved" || configSelected && !validVersion(config.Version(reply.SavedVersion)) || !configSelected && reply.SavedVersion != "" ||
+		identitySelected && reply.IdentityRevision < 1 || !identitySelected && reply.IdentityRevision != 0 || reply.UnresolvedSecrets == nil {
 		return nil, unknownRestoreOutcome()
 	}
 	return data, nil
 }
 
 func unknownRestoreOutcome() error {
-	return &backupResponseError{message: "restore response unavailable; outcome may be unknown; inspect the current saved head before retrying"}
+	return &backupResponseError{message: "restore response unavailable; outcome may be unknown; inspect the current saved and identity revisions, then retry with the printed operation ID"}
 }
 
 type backupHTTPBody struct {
@@ -459,8 +538,20 @@ func decodeStrict(data []byte, value any) error {
 	return nil
 }
 
+func validOperationID(value string) bool {
+	if len(value) < 1 || len(value) > 128 {
+		return false
+	}
+	for i, char := range value {
+		if !(char >= 'A' && char <= 'Z' || char >= 'a' && char <= 'z' || char >= '0' && char <= '9' || i > 0 && (char == '.' || char == '_' || char == ':' || char == '-')) {
+			return false
+		}
+	}
+	return true
+}
+
 func validManifest(m backup.Manifest) bool {
-	if m.FormatVersion != 1 || len(m.BackupID) != 32 || m.AndaruVersion == "" || len(m.AndaruVersion) > 128 || !validVersion(config.Version(m.SavedVersion)) || m.CreatedAt.IsZero() || m.CreatedAt.Location() != time.UTC || len(m.Scopes) == 0 || m.Payloads == nil || m.SavedButUnappliedAreas == nil {
+	if (m.FormatVersion != 1 && m.FormatVersion != 2) || len(m.BackupID) != 32 || m.AndaruVersion == "" || len(m.AndaruVersion) > 128 || !validVersion(config.Version(m.SavedVersion)) || m.CreatedAt.IsZero() || m.CreatedAt.Location() != time.UTC || len(m.Scopes) < m.FormatVersion || m.Payloads == nil || m.SavedButUnappliedAreas == nil {
 		return false
 	}
 	if _, err := hex.DecodeString(m.BackupID); err != nil {
@@ -471,16 +562,36 @@ func validManifest(m backup.Manifest) bool {
 			return false
 		}
 	}
-	if len(m.Scopes) > 2 || m.Scopes[0] != "configuration" || (len(m.Scopes) == 2 && m.Scopes[1] != "configurationSecrets") || len(m.Payloads) != len(m.Scopes) {
+	maxScopes := 2
+	if m.FormatVersion == 2 {
+		maxScopes = 4
+	}
+	if len(m.Scopes) > maxScopes || m.Scopes[0] != "configuration" || m.FormatVersion == 2 && m.Scopes[1] != "users" || len(m.Payloads) != len(m.Scopes) {
 		return false
 	}
+	order := map[string]int{"configuration": 0, "users": 1, "configurationSecrets": 2, "userCredentials": 3}
+	last := -1
 	for _, scope := range m.Scopes {
-		name := "config.json"
-		if scope == "configurationSecrets" {
-			name = "configuration-secrets.json"
+		position, ok := order[scope]
+		if !ok || position <= last || m.FormatVersion == 1 && position != 0 && position != 2 {
+			return false
 		}
-		payload, ok := m.Payloads[name]
-		if !ok || payload.SchemaVersion < 1 || payload.SchemaVersion > 2 || payload.Size <= 0 || payload.Size > backup.MaxDocumentSize || len(payload.SHA256) != 64 {
+		last = position
+		name, maximum := "config.json", 2
+		switch scope {
+		case "configuration":
+			if m.FormatVersion == 2 {
+				maximum = 3
+			}
+		case "users":
+			name, maximum = "users.json", 1
+		case "configurationSecrets":
+			name, maximum = "configuration-secrets.json", 1
+		case "userCredentials":
+			name, maximum = "user-credentials.json", 1
+		}
+		payload, exists := m.Payloads[name]
+		if !exists || payload.SchemaVersion < 1 || payload.SchemaVersion > maximum || payload.Size <= 0 || payload.Size > backup.MaxDocumentSize || len(payload.SHA256) != 64 {
 			return false
 		}
 		if _, err := hex.DecodeString(payload.SHA256); err != nil {
@@ -501,17 +612,24 @@ func validManifest(m backup.Manifest) bool {
 }
 
 func validRestorePreview(preview restorePreview) bool {
-	for _, counts := range []changeCounts{preview.ConfigurationChanges, preview.SecretChanges} {
+	for _, counts := range []changeCounts{preview.ConfigurationChanges, preview.SecretChanges, preview.UserChanges, preview.CredentialChanges} {
 		if counts.Created < 0 || counts.Updated < 0 || counts.Deleted < 0 {
 			return false
 		}
 	}
-	for _, values := range [][]string{preview.UnresolvedSecrets, preview.BlockingSecrets} {
+	for _, values := range [][]string{preview.UnresolvedSecrets, preview.BlockingSecrets, preview.MissingRoleIDs} {
 		for i, value := range values {
 			if value == "" || slices.Contains(values[:i], value) {
 				return false
 			}
 		}
+	}
+	seenRecovery := map[string]bool{}
+	for _, candidate := range preview.RecoveryAdministrators {
+		if candidate.ID == "" || candidate.Login == "" || seenRecovery[candidate.ID] {
+			return false
+		}
+		seenRecovery[candidate.ID] = true
 	}
 	for _, finding := range preview.HardwareFindings {
 		if finding.Code == "" || finding.Path == "" || finding.Message == "" {

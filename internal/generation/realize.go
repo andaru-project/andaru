@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/host"
 )
 
@@ -49,6 +50,10 @@ type Realizer struct {
 	DeprecateAfter time.Duration
 	// SendRA sends a router advertisement on an interface; nil sends it for real.
 	SendRA func(ifname string, body []byte) error
+	// RenderDisaster renders a kept LAN closure. Nil records the selected copy without rendering.
+	RenderDisaster func(body []byte) error
+	// KeptRoot is the test seam. Production leaves it empty and uses kept.Root.
+	KeptRoot string
 	// failAt lets tests stop a verb before a named write, as a kill would.
 	failAt func(step string) error
 	// afterLeaseRead lets tests act while a lease sync is running.
@@ -93,6 +98,34 @@ func (r Realizer) lock() (func(), error) {
 	}
 }
 
+func generationAuthorizationDigest(dir string, p Pointers, id *int) (string, error) {
+	if id == nil {
+		return "", nil
+	}
+	g, err := read(dir, *id, p)
+	if err != nil {
+		return "", err
+	}
+	return g.AuthorizationDigest, nil
+}
+
+func requireAuthorizationTransition(lock *authz.StateLock, g Generation, id int, phase string) error {
+	pending, found, err := lock.Pending()
+	if err != nil {
+		return err
+	}
+	// Revision 0 with no pending file is a pre-identity generation. A recorded pending file, including the initial store revision, must match.
+	if g.IdentityRevision == 0 && !found {
+		return nil
+	}
+	if !found || pending != (authz.PendingTransition{
+		GenerationID: id, Phase: phase, IdentityRevision: g.IdentityRevision, AuthorizationDigest: g.AuthorizationDigest,
+	}) {
+		return authz.ErrTransitionInProgress
+	}
+	return nil
+}
+
 func (r Realizer) writePointers(step string, p Pointers) error {
 	if err := r.at(step); err != nil {
 		return err
@@ -105,6 +138,22 @@ func (r Realizer) writeState(step string, id int, s State) error {
 		return err
 	}
 	return writeJSON(filepath.Join(r.dir(), strconv.Itoa(id), "state.json"), s)
+}
+
+// Non-root unit proofs predate the authorization store. The engine process is root, so production always takes the lock.
+func (r Realizer) authorization(ctx context.Context) (*authz.StateLock, error) {
+	if os.Geteuid() != 0 {
+		return nil, nil
+	}
+	return authz.Acquire(ctx, r.StateDir)
+}
+
+func advanceAuthorization(lock *authz.StateLock, digest string) error {
+	if lock == nil {
+		return nil
+	}
+	_, err := lock.Advance(digest)
+	return err
 }
 
 // files loads a generation's content, checked against its manifest.
@@ -319,12 +368,19 @@ func (o observation) unmet(set []placed, names []string, route bool) string {
 
 // Activate makes a stored generation live and leaves it awaiting confirmation,
 // or restores what was live and records why.
-func (r Realizer) Activate(ctx context.Context, id int) error {
+func (r Realizer) Activate(ctx context.Context, id int) (result error) {
 	unlock, err := r.lock()
 	if err != nil {
 		return err
 	}
 	defer unlock()
+	authorization, err := r.authorization(ctx)
+	if err != nil {
+		return err
+	}
+	if authorization != nil {
+		defer authorization.Close()
+	}
 	ctx, cancel := context.WithTimeout(ctx, activateLimit)
 	defer cancel()
 	dir := r.dir()
@@ -335,6 +391,21 @@ func (r Realizer) Activate(ctx context.Context, id int) error {
 	g, err := read(dir, id, p)
 	if err != nil {
 		return err
+	}
+	if authorization != nil {
+		if err = requireAuthorizationTransition(authorization, g, id, authz.TransitionActivate); err != nil {
+			return err
+		}
+		defer func() { result = errors.Join(result, authorization.ClearPending(id, authz.TransitionActivate)) }()
+	}
+	previousDigest, err := generationAuthorizationDigest(dir, p, p.Live)
+	if err != nil {
+		return err
+	}
+	if authorization != nil {
+		if err = advanceAuthorization(authorization, previousDigest); err != nil {
+			return err
+		}
 	}
 	if _, err := os.Stat(filepath.Join(dir, strconv.Itoa(id), "state.json")); err == nil || p.Pending != nil {
 		return fmt.Errorf("activate %d: %w", id, ErrWrongState)
@@ -405,9 +476,13 @@ func (r Realizer) Activate(ctx context.Context, id int) error {
 		if err := r.writeState("activate:state-awaiting", id, State{State: Awaiting, Previous: p.Live, Deadline: &deadline}); err != nil {
 			return err
 		}
+		if err = advanceAuthorization(authorization, g.AuthorizationDigest); err != nil {
+			return err
+		}
 		p.Live = &id
 		if err := r.writePointers("activate:pointers-live", p); err != nil {
-			return err
+			restoreErr := advanceAuthorization(authorization, previousDigest)
+			return errors.Join(err, restoreErr)
 		}
 		return nil
 	}
@@ -538,12 +613,24 @@ func (r Realizer) swapAndVerify(ctx context.Context, previous, next []placed, na
 
 // Rollback restores what ran before a pending generation. It acts only while
 // the pointers name that generation, so a timer firing late does nothing.
-func (r Realizer) Rollback(ctx context.Context, id int, reason string) error {
+func (r Realizer) Rollback(ctx context.Context, id int, reason string) (result error) {
 	unlock, err := r.lock()
 	if err != nil {
 		return err
 	}
 	defer unlock()
+	authorization, err := r.authorization(ctx)
+	if err != nil {
+		return err
+	}
+	if authorization != nil {
+		defer authorization.Close()
+		if pending, found, pendingErr := authorization.Pending(); pendingErr != nil {
+			return pendingErr
+		} else if found && pending.GenerationID == id {
+			defer func() { result = errors.Join(result, authorization.ClearPending(id, "")) }()
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, verbLimit)
 	defer cancel()
 	dir := r.dir()
@@ -557,6 +644,15 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) error {
 	g, err := read(dir, id, p)
 	if err != nil {
 		return err
+	}
+	currentDigest, err := generationAuthorizationDigest(dir, p, p.Live)
+	if err != nil {
+		return err
+	}
+	if authorization != nil {
+		if err = advanceAuthorization(authorization, currentDigest); err != nil {
+			return err
+		}
 	}
 	// The timer is armed before activation, so it can fire inside the window the operator was shown; it retries until the deadline.
 	if reason == "deadline" && g.State.State == Awaiting && g.Deadline != nil && r.Now().Before(*g.Deadline) {
@@ -590,8 +686,9 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) error {
 	// Files first: once they are back, any later reload or boot is correct. But only a reload makes networkd stop
 	// running the unconfirmed files, so until one succeeds the generation stays pending and the timer retries.
 	// fallback already loaded the restored generation's filter; going back to none, the table goes after the files.
-	toIfupdown := live == nil && kind == "ifupdown" && ifupdown != nil
-	ownsMask := live == nil && r.ownsNftablesMask(p.Takeover)
+	// A reset host is never handed back: its ownership record holds no pre-Andaru configuration to return to.
+	toIfupdown := live == nil && kind == "ifupdown" && ifupdown != nil && !r.resetTree()
+	ownsMask := live == nil && r.ownsNftablesMask(p.Takeover) && !r.resetTree()
 	restore := func() error {
 		// Back on netplan's files the host gets its own firewall back. Unmasking reloads systemd, whose netplan
 		// generator, the YAML gone, deletes netplan's files: so before they are placed. A failure stops nothing else.
@@ -633,9 +730,17 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) error {
 	if what != "" {
 		reason += " (restored " + what + ")"
 	}
+	targetDigest, err := generationAuthorizationDigest(dir, p, live)
+	if err != nil {
+		return err
+	}
+	if err = advanceAuthorization(authorization, targetDigest); err != nil {
+		return err
+	}
 	p.Pending, p.Live = nil, live
 	if err := r.writePointers("rollback:pointers", p); err != nil {
-		return err
+		restoreErr := advanceAuthorization(authorization, currentDigest)
+		return errors.Join(err, restoreErr)
 	}
 	return r.writeState("rollback:state", id, State{State: RolledBack, Previous: g.Previous, Reason: reason})
 }

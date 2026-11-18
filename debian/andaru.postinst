@@ -30,3 +30,14 @@ esac
 # Nothing here restarts systemd-networkd or touches an interface: installing must not drop the administrator's link.
 
 #DEBHELPER#
+if [ "$1" = configure ] && [ -z "${DPKG_ROOT:-}" ] && command -v systemd-sysusers >/dev/null 2>&1; then
+	systemd-sysusers andaru.conf
+fi
+if [ "$1" = configure ] && id -u andaru-web >/dev/null 2>&1; then
+	# The engine accepts the web socket only from this exact uid.
+	mkdir -p "$root/etc/andaru"
+	uid=$(id -u andaru-web)
+	gid=$(id -g andaru-web)
+	printf '%s %s\n' "$uid" "$gid" >"$root/etc/andaru/engine-web-peer"
+	chmod 644 "$root/etc/andaru/engine-web-peer"
+fi

@@ -33,25 +33,39 @@ before)
 	network >"$state/network" || fail "could not read the interfaces and routes"
 	;;
 after)
-	for f in /usr/bin/andaru \
-		/usr/lib/systemd/system/andaru-engine.service /usr/lib/systemd/system/andaru-network-boot.service \
+	for f in /usr/bin/andaru /usr/bin/andaru-web /usr/share/andaru/web/index.html \
+		/usr/lib/systemd/system/andaru-engine.service /usr/lib/systemd/system/andaru-web.service \
+		/usr/lib/systemd/system/andaru-network-boot.service \
 		/usr/lib/systemd/system/andaru-leases.path /usr/lib/systemd/system/andaru-leases.service \
 		/usr/lib/systemd/system/andaru-prefixes.path /usr/lib/systemd/system/andaru-prefixes.service \
 		/usr/lib/systemd/system/andaru-prefixes.timer \
 		/usr/lib/systemd/system/kea-dhcp4-server.service.d/andaru.conf \
 		/usr/lib/systemd/system/kea-dhcp6-server.service.d/andaru.conf \
 		/usr/lib/systemd/networkd.conf.d/andaru.conf /usr/share/iproute2/rt_protos.d/andaru.conf \
-		/usr/lib/tmpfiles.d/andaru.conf /usr/share/kea/scripts/andaru-lease-event \
+		/usr/lib/tmpfiles.d/andaru.conf /usr/lib/sysusers.d/andaru.conf /usr/share/kea/scripts/andaru-lease-event \
 		/etc/unbound/unbound.conf.d/andaru.conf /etc/apparmor.d/andaru/kea-dhcp4 \
-		/etc/apparmor.d/andaru/kea-dhcp6 /etc/apparmor.d/andaru/unbound; do
+		/etc/apparmor.d/andaru/kea-dhcp6 /etc/apparmor.d/andaru/unbound \
+		/etc/apparmor.d/usr.bin.andaru-web; do
 		[ -e "$f" ] || fail "$f is missing"
 	done
+	getent passwd andaru-web | awk -F: '$1 == "andaru-web" && $6 == "/nonexistent" && $7 == "/usr/sbin/nologin" { found=1 } END { exit !found }' ||
+		fail "andaru-web is not a static non-login account"
+	getent group andaru-web >/dev/null || fail "andaru-web group is missing"
+	systemd-tmpfiles --create andaru.conf
+	[ "$(stat -c '%a:%U:%G' /run/andaru-web)" = 710:root:andaru-web ] ||
+		fail "/run/andaru-web does not have root:andaru-web 0710 ownership"
 	# A confirmed takeover masks it; until then a reboot must still load the host's own firewall.
 	[ "$(systemctl is-enabled nftables.service)" != masked ] || fail "installing masked nftables.service"
 	for unit in andaru-engine.service andaru-network-boot.service andaru-leases.path andaru-prefixes.path \
 		andaru-prefixes.timer; do
 		systemctl is-enabled --quiet "$unit" || fail "$unit is not enabled"
 	done
+	if systemctl is-enabled --quiet andaru-web.service; then
+		fail "installing enabled andaru-web.service without TLS configuration"
+	fi
+	if systemctl is-active --quiet andaru-web.service; then
+		fail "installing started andaru-web.service without TLS configuration"
+	fi
 	for unit in andaru-engine.service andaru-leases.path andaru-prefixes.path andaru-prefixes.timer; do
 		systemctl is-active --quiet "$unit" || fail "$unit is not active"
 	done

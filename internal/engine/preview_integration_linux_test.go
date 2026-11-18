@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/host"
 )
@@ -167,7 +168,7 @@ func TestPreviewUsesTheRequestedVersionsOwnSecret(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		if _, e = s.Save(ctx, "unix:uid:0", change); e != nil {
+		if _, e = s.Save(ctx, authz.Actor{Kind: authz.ActorSystem, ID: "root"}, change); e != nil {
 			t.Fatal(e)
 		}
 	}

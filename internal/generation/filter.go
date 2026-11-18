@@ -176,6 +176,13 @@ func (r Realizer) deleteTable(ctx context.Context) error {
 // toward moves the host to target's files, tightening first and loosening last: a target with a filter
 // has it loaded before its files; without one (or the baseline, nil) the files go first and the table last.
 func (r Realizer) toward(ctx context.Context, target *Generation, place func() error) error {
+	if target == nil && r.resetTree() {
+		// A reset host has no baseline of its own to go back to: it goes back to deny-all, tightened first.
+		if err := r.DenyAll(ctx); err != nil {
+			return err
+		}
+		return place()
+	}
 	if target != nil {
 		path, comment, ok, err := r.filter(*target)
 		if err != nil {

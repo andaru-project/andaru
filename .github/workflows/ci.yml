@@ -49,6 +49,36 @@ jobs:
             debian/andaru.*inst debian/andaru.*rm
           shellspec
 
+  frontend:
+    name: browser client
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 20.19.2
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install the exact locked dependency graph without package scripts
+        working-directory: web
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Lint, type-check, test and build local assets
+        working-directory: web
+        run: |
+          npm run lint
+          npm run typecheck
+          npm run test
+          npm run build
+          sh ../scripts/ci/npm-audit.sh
+
   native-linux:
     name: linux ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
@@ -111,14 +141,19 @@ jobs:
           CGO_ENABLED=0 go test -c -tags=integration -o "$build/config.test" ./internal/config
           CGO_ENABLED=0 go test -c -tags=integration -o "$build/engine.test" ./internal/engine
           CGO_ENABLED=0 go test -c -tags=integration -o "$build/generation.test" ./internal/generation
+          CGO_ENABLED=0 go test -c -tags=integration -o "$build/identity.test" ./internal/identity
+          CGO_ENABLED=0 go test -c -tags=integration -o "$build/audit.test" ./internal/audit
           CGO_ENABLED=0 go test -c -tags=integration -o "$build/ctl.test" ./cmd/andaru
           CGO_ENABLED=0 go test -c -tags=integration -o "$build/render.test" ./internal/render
           CGO_ENABLED=0 go test -c -tags=integration -o "$build/upgrade.test" ./internal/upgrade
           sudo install -o root -g root -m 0755 -t "$art" \
-            "$build/andaru" "$build/config.test" "$build/engine.test" "$build/generation.test" "$build/ctl.test" "$build/render.test" "$build/upgrade.test"
+            "$build/andaru" "$build/config.test" "$build/engine.test" "$build/generation.test" "$build/identity.test" \
+            "$build/audit.test" "$build/ctl.test" "$build/render.test" "$build/upgrade.test"
           sudo env -u TMPDIR "$art/config.test" -test.v -test.timeout=120s
           sudo env -u TMPDIR ANDARU_TEST_BINARY="$art/andaru" "$art/engine.test" -test.v -test.timeout=120s
           sudo env -u TMPDIR "$art/generation.test" -test.v -test.timeout=120s
+          sudo env -u TMPDIR "$art/identity.test" -test.v -test.timeout=120s
+          sudo env -u TMPDIR "$art/audit.test" -test.v -test.timeout=120s
           sudo env -u TMPDIR "$art/ctl.test" -test.v -test.timeout=120s
           sudo env -u TMPDIR "$art/upgrade.test" -test.v -test.timeout=120s
           # The pppd and networkd tool proofs in this binary are lab proofs; CI runs the filter ones.

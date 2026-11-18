@@ -13,7 +13,7 @@ import (
 func TestBackupExportScopes(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t, ownedDir(t))
-	initial, err := s.Save(ctx, "unix:uid:0", networkInput(t))
+	initial, err := s.Save(ctx, systemRootActor, networkInput(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,7 +22,7 @@ func TestBackupExportScopes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	made, err := s.Save(ctx, "unix:uid:0", create)
+	made, err := s.Save(ctx, systemRootActor, create)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestBackupExportScopes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Save(ctx, "unix:uid:0", remove); err != nil {
+	if _, err = s.Save(ctx, systemRootActor, remove); err != nil {
 		t.Fatal(err)
 	}
 	ordinary, err := s.Export(ctx, false)

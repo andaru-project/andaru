@@ -1,6 +1,8 @@
 andaru (0.4.0~dev-1) trixie; urgency=medium
 
   * Development build; the release workflow writes each release's entry.
+  * Keep the first LAN and the last successful LAN on the root disk, outside the wipeable state tree.
+  * Add a root-local factory reset that comes back on the stored recovery network or the last LAN.
   * Add explicit metadata-only update checks and optional local recovery preparation.
   * Document manual package/state repair without automatic rollback.
   * Bound recovery metadata/output, reserve package space and reject unsafe state.
@@ -11,5 +13,6 @@ andaru (0.4.0~dev-1) trixie; urgency=medium
   * Add an installed-package backup smoke scenario for both dependency orders.
   * Build with patched Go HTTP request-size handling.
   * Discard unfinished terminal passphrases on cancellation and reject ambiguous ZIP end records.
+  * Ship the locked local identity UI and an opt-in hardened HTTPS web service.
 
  -- Andaru project <apt@andaru.io>  Sat, 14 Nov 2026 12:00:00 +0000

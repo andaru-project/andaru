@@ -135,8 +135,8 @@ pointers = json.loads(pointers_raw) if pointers_raw else {"live": None, "pending
 
 manifests = []
 for archive, expected_names, expected_scopes in [
-    ("plain.zip", {"manifest.json", "config.json"}, ["configuration"]),
-    ("secret.zip", {"manifest.json", "config.json", "configuration-secrets.json"}, ["configuration", "configurationSecrets"]),
+    ("plain.zip", {"manifest.json", "config.json", "users.json"}, ["configuration", "users"]),
+    ("secret.zip", {"manifest.json", "config.json", "users.json", "configuration-secrets.json"}, ["configuration", "users", "configurationSecrets"]),
 ]:
     with zipfile.ZipFile(root / archive) as zf:
         if set(zf.namelist()) != expected_names:

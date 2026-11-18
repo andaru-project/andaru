@@ -14,8 +14,9 @@ func TestBackupCommandParsingIsExact(t *testing.T) {
 	}{
 		{[]string{"create", "--output", "/safe/backup.zip"}, "create", nil},
 		{[]string{"create", "--include-secrets", "--output", "/safe/backup.zip.age"}, "create", nil},
+		{[]string{"create", "--include-credentials", "--output", "/safe/credentials.age"}, "create", nil},
 		{[]string{"inspect", "--input", "/safe/backup.zip"}, "inspect", nil},
-		{[]string{"restore", "--input", "/safe/backup.zip", "--stores", "configuration,configurationSecrets"}, "restore", []string{"configuration", "configurationSecrets"}},
+		{[]string{"restore", "--input", "/safe/backup.zip", "--stores", "configuration,configurationSecrets,users,userCredentials", "--operation-id", "restore-1"}, "restore", []string{"configuration", "configurationSecrets", "users", "userCredentials"}},
 	}
 	for _, tc := range valid {
 		command, err := parseBackupCommand(tc.args)
@@ -32,6 +33,7 @@ func TestBackupCommandParsingIsExact(t *testing.T) {
 		{"restore", "--input", "a"},
 		{"restore", "--input", "a", "--stores", "configuration,configuration"},
 		{"restore", "--input", "a", "--stores", "configurationSecrets,unknown"},
+		{"restore", "--input", "a", "--stores", "users", "--operation-id", "../escape"},
 		{"restore", "--input", "a", "--stores", ""},
 	}
 	for _, args := range invalid {

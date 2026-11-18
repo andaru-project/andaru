@@ -15,7 +15,9 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/host"
+	"github.com/andaru-project/andaru/internal/kept"
 )
 
 const cloudInitDisable = "/etc/cloud/cloud.cfg.d/99-andaru-network.cfg"
@@ -40,6 +42,8 @@ type baselineManifest struct {
 	Ifupdown *IfupdownBaseline `json:"ifupdown,omitempty"`
 	// NftablesMasked records that the administrator had masked nftables.service before the takeover.
 	NftablesMasked bool `json:"nftablesMasked,omitempty"`
+	// Reset marks a baseline a factory reset wrote: it holds no files, and boot never hands the host back to it.
+	Reset bool `json:"reset,omitempty"`
 }
 
 // IfupdownBaseline is what an ifupdown takeover captured: enough to hand the host back to ifupdown,
@@ -129,12 +133,19 @@ func (r Realizer) captureBaseline(p Pointers) error {
 
 // Confirm makes a pending generation the one boot uses. On a takeover it then
 // removes netplan and cloud-init as competing writers.
-func (r Realizer) Confirm(ctx context.Context, id int) error {
+func (r Realizer) Confirm(ctx context.Context, id int) (result error) {
 	unlock, err := r.lock()
 	if err != nil {
 		return err
 	}
 	defer unlock()
+	authorization, err := r.authorization(ctx)
+	if err != nil {
+		return err
+	}
+	if authorization != nil {
+		defer authorization.Close()
+	}
 	ctx, cancel := context.WithTimeout(ctx, verbLimit)
 	defer cancel()
 	p, err := readPointers(r.dir())
@@ -151,6 +162,22 @@ func (r Realizer) Confirm(ctx context.Context, id int) error {
 	if g.State.State != Awaiting || g.Deadline == nil || r.Now().After(*g.Deadline) {
 		return fmt.Errorf("confirm %d: %w", id, ErrWrongState)
 	}
+	previousDigest, err := generationAuthorizationDigest(r.dir(), p, g.Previous)
+	if err != nil {
+		return err
+	}
+	if authorization != nil && g.AuthorizationDigest != previousDigest {
+		if err = requireAuthorizationTransition(authorization, g, id, authz.TransitionConfirm); err != nil {
+			return err
+		}
+		defer func() { result = errors.Join(result, authorization.ClearPending(id, authz.TransitionConfirm)) }()
+	}
+	if authorization != nil {
+		authState, err := authorization.Read()
+		if err != nil || authState.LiveDigest != g.AuthorizationDigest {
+			return errors.Join(authz.ErrStateUnavailable, err)
+		}
+	}
 	// Pointers first: once they name this generation a late timer and the next boot both keep it.
 	// Live is set too: a kill during activation may have left it behind the files.
 	// Last-known-good is what ran before this generation, which after a boot fallback is not the confirmed pointer.
@@ -163,6 +190,7 @@ func (r Realizer) Confirm(ctx context.Context, id int) error {
 	if err := r.writeState("confirm:state", id, state); err != nil {
 		return err
 	}
+	r.copyKeptFirst(ctx, id)
 	if !g.Takeover {
 		return nil
 	}
@@ -175,6 +203,25 @@ func (r Realizer) Confirm(ctx context.Context, id int) error {
 		return errors.Join(err, r.writeState("confirm:state-reason", id, state))
 	}
 	return nil
+}
+
+// copyKeptFirst copies the closure written beside this generation. A missing
+// file is an uplink or a generation from before this copy existed.
+func (r Realizer) copyKeptFirst(ctx context.Context, id int) {
+	raw, err := os.ReadFile(filepath.Join(r.dir(), strconv.Itoa(id), "lan-closure.json"))
+	if err != nil {
+		if !os.IsNotExist(err) {
+			slog.Error("read the LAN closure", "error", err)
+		}
+		return
+	}
+	root := kept.Root
+	if r.KeptRoot != "" {
+		root = r.KeptRoot
+	}
+	if err = kept.CopyFirst(ctx, root, r.StateDir, raw); err != nil {
+		slog.Error("copy the first LAN", "error", err)
+	}
 }
 
 // makePermanent stops what configured the network before Andaru from doing it again: netplan and cloud-init,
@@ -273,12 +320,32 @@ func (r Realizer) makePermanent(ctx context.Context, reload bool, kind string) e
 }
 
 // Boot puts the confirmed generation into /run before networkd starts. It renders nothing.
-func (r Realizer) Boot(ctx context.Context) error {
+func (r Realizer) Boot(ctx context.Context) (result error) {
+	if _, statErr := os.Lstat(r.StateDir); os.IsNotExist(statErr) {
+		return r.disasterBoot()
+	}
+	if _, statErr := os.Lstat(filepath.Join(r.dir(), "pointers.json")); os.IsNotExist(statErr) {
+		return r.disasterBoot()
+	} else if statErr != nil {
+		return statErr
+	}
 	unlock, err := r.lock()
 	if err != nil {
 		return err
 	}
 	defer unlock()
+	authorization, err := r.authorization(ctx)
+	if err != nil {
+		return err
+	}
+	if authorization != nil {
+		defer authorization.Close()
+		if pending, found, pendingErr := authorization.Pending(); pendingErr != nil {
+			return pendingErr
+		} else if found {
+			defer func() { result = errors.Join(result, authorization.ClearPending(pending.GenerationID, pending.Phase)) }()
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, restoreLimit)
 	defer cancel()
 	dir := r.dir()
@@ -306,6 +373,13 @@ func (r Realizer) Boot(ctx context.Context) error {
 	}
 	if p.Confirmed == nil {
 		p.Live = nil
+		if r.resetTree() {
+			// Fenced first, so no failure below can leave the host without a filter.
+			return r.consoleRequired(ctx, p, authorization)
+		}
+		if err = advanceAuthorization(authorization, ""); err != nil {
+			return err
+		}
 		return r.writePointers("boot:pointers", p)
 	}
 	base, captured, baseErr := r.baseline()
@@ -371,17 +445,28 @@ func (r Realizer) Boot(ctx context.Context) error {
 		if err := r.bootPrefixes(); err != nil {
 			slog.Error("fill the DHCPv6 subnets of delegated segments", "error", err)
 		}
+		if err = advanceAuthorization(authorization, g.AuthorizationDigest); err != nil {
+			return err
+		}
 		p.Live = id
 		if len(failures) > 0 {
 			slog.Error("boot fell back to an older generation", "generation", *id, "error", errors.Join(failures...))
 		}
 		return r.writePointers("boot:pointers", p)
 	}
+	if r.resetTree() {
+		// No generation runs: deny-all replaces whatever a candidate half-loaded, in one load.
+		p.Live = nil
+		return r.consoleRequired(ctx, p, authorization, failures...)
+	}
 	// A candidate's filter can fail after nft accepted it (readback, sysctl); no generation runs, so neither does a filter.
 	if err := r.dropFilter(ctx); err != nil {
 		failures = append(failures, err)
 	}
 	if kind == "ifupdown" && ifupdown != nil {
+		if err = advanceAuthorization(authorization, ""); err != nil {
+			return err
+		}
 		return r.bootIfupdown(ctx, p, *ifupdown, failures)
 	}
 	if !captured || baseErr != nil {
@@ -400,6 +485,9 @@ func (r Realizer) Boot(ctx context.Context) error {
 	if err := r.place(nil, base); err != nil {
 		return err
 	}
+	if err = advanceAuthorization(authorization, ""); err != nil {
+		return err
+	}
 	p.Live = nil
 	// Andaru's table was dropped above.
 	if unmasked {
@@ -409,6 +497,13 @@ func (r Realizer) Boot(ctx context.Context) error {
 	}
 	slog.Error("booting the pre-Andaru baseline; no generation is usable", "error", errors.Join(failures...))
 	return r.writePointers("boot:pointers", p)
+}
+
+// consoleRequired is boot on a reset tree with no usable generation: deny-all, and only the console gets in.
+// The filter comes first; the authorization update and the pointers follow even when it fails.
+func (r Realizer) consoleRequired(ctx context.Context, p Pointers, authorization *authz.StateLock, failures ...error) error {
+	failures = append(failures, r.DenyAll(ctx), advanceAuthorization(authorization, ""), r.writePointers("boot:pointers", p))
+	return errors.Join(append([]error{errors.New("CONSOLE_REQUIRED: no generation is usable on this reset host")}, failures...)...)
 }
 
 // bootIfupdown starts the host on its unchanged ifupdown configuration when no generation is usable.

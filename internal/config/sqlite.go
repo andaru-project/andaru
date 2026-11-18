@@ -23,7 +23,7 @@ CREATE TABLE versions(id INTEGER PRIMARY KEY,parent_id INTEGER REFERENCES versio
 CREATE TABLE pointers(name TEXT PRIMARY KEY CHECK(name='saved'),version_id INTEGER NOT NULL REFERENCES versions(id));
 CREATE TABLE object_changes(collection TEXT NOT NULL CHECK(collection IN ('links','segments','zones')),object_id TEXT NOT NULL,version_id INTEGER NOT NULL REFERENCES versions(id),created INTEGER NOT NULL CHECK(created IN (0,1)),deleted INTEGER NOT NULL CHECK(deleted IN (0,1)),CHECK(NOT(created AND deleted)),PRIMARY KEY(collection,object_id,version_id));
 CREATE UNIQUE INDEX creation_identity ON object_changes(object_id) WHERE created=1;
-` + policyDDL + serviceDDL + natDDL + dhcp6DDL + vipDDL
+` + policyDDL + serviceDDL + natDDL + dhcp6DDL + vipDDL + roleDDL
 
 // policyDDL holds the versions of the filter's objects, lists and singletons. It is added beside
 // object_changes rather than widening that table's CHECK, so an existing store gains it with one
@@ -47,6 +47,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS vip_creation_identity ON vip_changes(object_id
 const dhcp6DDL = `CREATE TABLE IF NOT EXISTS dhcp6_changes(collection TEXT NOT NULL CHECK(collection IN ('dhcp6')),object_id TEXT NOT NULL,version_id INTEGER NOT NULL REFERENCES versions(id),created INTEGER NOT NULL CHECK(created IN (0,1)),deleted INTEGER NOT NULL CHECK(deleted IN (0,1)),CHECK(NOT(created AND deleted)),PRIMARY KEY(collection,object_id,version_id));
 CREATE UNIQUE INDEX IF NOT EXISTS dhcp6_creation_identity ON dhcp6_changes(object_id) WHERE created=1;`
 
+// roleDDL keeps schema-3 role history compatible with stores created by older engines.
+const roleDDL = `CREATE TABLE IF NOT EXISTS role_changes(collection TEXT NOT NULL CHECK(collection='roles'),object_id TEXT NOT NULL,version_id INTEGER NOT NULL REFERENCES versions(id),created INTEGER NOT NULL CHECK(created IN (0,1)),deleted INTEGER NOT NULL CHECK(deleted IN (0,1)),CHECK(NOT(created AND deleted)),PRIMARY KEY(collection,object_id,version_id));
+CREATE UNIQUE INDEX IF NOT EXISTS role_creation_identity ON role_changes(object_id) WHERE created=1;`
+
 // changeTable is where a collection's object versions are recorded.
 func changeTable(collection string) string {
 	if collection == "links" || collection == "segments" || collection == "zones" {
@@ -60,6 +64,9 @@ func changeTable(collection string) string {
 	}
 	if collection == "dhcp6" {
 		return "dhcp6_changes"
+	}
+	if collection == "roles" {
+		return "role_changes"
 	}
 	if collection == "nat.portForwards" || collection == "nat.oneToOne" {
 		return "nat_changes"
@@ -199,7 +206,7 @@ func initializePair(ctx context.Context, stage string) (result error) {
 	if _, e = tx.ExecContext(ctx, "INSERT INTO documents VALUES(?,?)", ch[:], cb); e != nil {
 		return e
 	}
-	if _, e = tx.ExecContext(ctx, "INSERT INTO versions VALUES(0,NULL,1,?,?,?,?,0)", ch[:], sh[:], time.Now().UTC().Format(time.RFC3339Nano), "unix:uid:0"); e != nil {
+	if _, e = tx.ExecContext(ctx, "INSERT INTO versions VALUES(0,NULL,1,?,?,?,?,0)", ch[:], sh[:], time.Now().UTC().Format(time.RFC3339Nano), "system.root"); e != nil {
 		return e
 	}
 	if _, e = tx.ExecContext(ctx, "INSERT INTO pointers VALUES('saved',0)"); e != nil {

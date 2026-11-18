@@ -553,3 +553,28 @@ func TestConfirmAfterFallbackKeepsTheUsableGeneration(t *testing.T) {
 	// Last-known-good must be what actually ran before, not the corrupt generation the confirmed pointer still named.
 	b.wantPointers(third, 1, 0, third)
 }
+
+func TestBootFallbackAdvancesAuthorizationWithoutIdentityDatabase(t *testing.T) {
+	b := newBench(t)
+	b.live(one)
+	live := b.read(1).AuthorizationDigest
+	initial := initializeAuthorization(t, b.r.StateDir, live)
+	changed := "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	second := create(t, b.dir, Manifest{SavedVersion: "8", AuthorizationDigest: changed, ConfirmTimeoutSeconds: 120}, two)
+	if err := b.r.Activate(t.Context(), second); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Confirm(t.Context(), second); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(b.dir, itoa(second), "files", "50-andaru-eth0.network"), "corrupt")
+	b.reboot()
+	if err := b.r.Boot(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	state := authorizationState(t, b.r.StateDir)
+	if state.LiveDigest != live || state.AuthorizationEpoch != initial.AuthorizationEpoch+2 {
+		t.Fatalf("boot fallback authorization state = %+v", state)
+	}
+	b.wantPointers(second, 1, 0, 1)
+}

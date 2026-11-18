@@ -9,15 +9,20 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/generation"
 	"github.com/andaru-project/andaru/internal/host"
+	"github.com/andaru-project/andaru/internal/identity"
 )
 
 const (
@@ -29,6 +34,8 @@ const (
 )
 
 var applyID = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
+
+var errNewAdminSessionRequired = errors.New("a new human administrator session is required")
 
 // hostReader is what an apply observes of the host before changing it.
 type hostReader struct {
@@ -92,18 +99,29 @@ func viewApply(g generation.Generation) applyView {
 	return v
 }
 
+type applyIdentity interface {
+	Revision(context.Context) (int64, error)
+	GetAccount(context.Context, string) (identity.Account, error)
+}
+
 type appliesHandler struct {
-	input  func(context.Context, *config.Version) (config.RealizationInput, error)
-	read   hostReader
-	runner realizeRunner
-	dir    string
+	input       func(context.Context, *config.Version) (config.RealizationInput, error)
+	read        hostReader
+	runner      realizeRunner
+	dir         string
+	stateDir    string
+	identities  applyIdentity
+	coordinator *securityCoordinator
 	// mu keeps two requests from preparing generations against the same host state.
 	mu sync.Mutex
 }
 
 // newAppliesHandler serves applies: the engine renders, gates and stores; realize, run by PID 1, changes the host.
-func newAppliesHandler(input func(context.Context, *config.Version) (config.RealizationInput, error), read hostReader, runner realizeRunner, stateDir string) http.Handler {
-	return &appliesHandler{input: input, read: read, runner: runner, dir: generation.Dir(stateDir)}
+func newAppliesHandler(input func(context.Context, *config.Version) (config.RealizationInput, error), read hostReader, runner realizeRunner, stateDir string, identities applyIdentity, coordinator *securityCoordinator) http.Handler {
+	return &appliesHandler{
+		input: input, read: read, runner: runner, dir: generation.Dir(stateDir), stateDir: stateDir,
+		identities: identities, coordinator: coordinator,
+	}
 }
 
 func (h *appliesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -179,6 +197,50 @@ func (h *appliesHandler) show(w http.ResponseWriter, r *http.Request, id int) {
 	writeJSON(w, r, http.StatusOK, viewApply(g))
 }
 
+func sameGenerationPointer(a, b *int) bool {
+	return a == nil && b == nil || a != nil && b != nil && *a == *b
+}
+
+func (h *appliesHandler) stageAuthorizationTransition(ctx context.Context, id int, phase string, check func(*authz.StateLock, generation.Generation) error) error {
+	if os.Geteuid() != 0 {
+		return nil
+	}
+	return generation.Observe(ctx, h.dir, func(generation.Observation) error {
+		lock, err := authz.Acquire(ctx, h.stateDir)
+		if err != nil {
+			return err
+		}
+		defer lock.Close()
+		if _, found, err := lock.Pending(); err != nil {
+			return err
+		} else if found {
+			return authz.ErrTransitionInProgress
+		}
+		candidate, err := generation.Read(h.dir, id)
+		if err != nil {
+			return err
+		}
+		if phase == authz.TransitionActivate {
+			revision, err := h.identities.Revision(ctx)
+			if err != nil {
+				return err
+			}
+			if revision != candidate.IdentityRevision {
+				return identity.ErrConflict
+			}
+		}
+		if check != nil {
+			if err = check(lock, candidate); err != nil {
+				return err
+			}
+		}
+		return lock.SetPending(authz.PendingTransition{
+			GenerationID: id, Phase: phase, IdentityRevision: candidate.IdentityRevision,
+			AuthorizationDigest: candidate.AuthorizationDigest,
+		})
+	})
+}
+
 func (h *appliesHandler) create(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		SavedVersion          *string `json:"savedVersion"`
@@ -250,7 +312,18 @@ func (h *appliesHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	manifest := generation.Manifest{SavedVersion: string(input.SavedVersion), CreatedAt: time.Now().UTC(), Takeover: request.Takeover, ConfirmTimeoutSeconds: timeout}
+	authorization, err := authz.NewSnapshot(input.Authorization.Roles)
+	if err == nil && authorization.Digest != input.Authorization.Digest {
+		err = errors.New("candidate authorization digest does not match its roles")
+	}
+	if err != nil {
+		h.unavailable(w, r, "resolve candidate authorization", err)
+		return
+	}
+	manifest := generation.Manifest{
+		SavedVersion: string(input.SavedVersion), AuthorizationDigest: authorization.Digest,
+		CreatedAt: time.Now().UTC(), Takeover: request.Takeover, ConfirmTimeoutSeconds: timeout,
+	}
 	if request.Takeover {
 		if gate.fromIfupdown() {
 			manifest.Baseline = "ifupdown"
@@ -263,14 +336,52 @@ func (h *appliesHandler) create(w http.ResponseWriter, r *http.Request) {
 		manifest.Files = append(manifest.Files, generation.FileEntry{Path: f.Path, Mode: f.Mode})
 		contents[f.Path] = []byte(f.Real())
 	}
-	id, err := generation.Create(h.dir, manifest, contents)
+	var id int
+	store := func(observed generation.Observation) error {
+		if observed.Pending != nil || !sameGenerationPointer(observed.Live, pointers.Live) {
+			return authz.ErrTransitionInProgress
+		}
+		return h.coordinator.withAuthorizationLock(ctx, func() error {
+			revision, revisionErr := h.identities.Revision(ctx)
+			if revisionErr != nil {
+				return revisionErr
+			}
+			manifest.IdentityRevision = revision
+			id, revisionErr = generation.Create(h.dir, manifest, contents)
+			return revisionErr
+		})
+	}
+	if os.Geteuid() != 0 {
+		err = store(generation.Observation{Live: pointers.Live})
+	} else {
+		err = generation.Observe(ctx, h.dir, store)
+	}
+	if errors.Is(err, authz.ErrTransitionInProgress) {
+		writeError(w, r, http.StatusConflict, "APPLY_IN_PROGRESS", "The live generation or authorization state changed while this apply was prepared; retry it.")
+		return
+	}
 	if err != nil {
 		h.unavailable(w, r, "store generation", err)
 		return
 	}
+	if closure, cerr := config.LANClosure(input.Value, input.Secrets); cerr == nil {
+		path := filepath.Join(h.dir, strconv.Itoa(id), "lan-closure.json")
+		if werr := os.WriteFile(path, closure, 0o600); werr != nil {
+			slog.ErrorContext(ctx, "write the LAN closure", "error", werr)
+		}
+	}
 	// Armed before anything changes: from here the host returns to what it ran, with or without this engine.
 	if err := h.runner.Arm(ctx, id, timerMargin+timeout); err != nil {
 		h.unavailable(w, r, "arm rollback timer", err)
+		return
+	}
+	if err = h.stageAuthorizationTransition(ctx, id, authz.TransitionActivate, nil); err != nil {
+		h.runner.Disarm(ctx, id)
+		if errors.Is(err, identity.ErrConflict) {
+			writeError(w, r, http.StatusPreconditionFailed, "IDENTITY_REVISION_CHANGED", "Identity changed after this apply candidate was created; retry the apply.")
+			return
+		}
+		h.unavailable(w, r, "authorize generation activation", err)
 		return
 	}
 	runErr := h.runner.Realize(ctx, "activate", id)
@@ -292,6 +403,11 @@ func (h *appliesHandler) create(w http.ResponseWriter, r *http.Request) {
 
 // finish confirms or rolls back a pending apply. realize decides; the engine reports what it finds afterwards.
 func (h *appliesHandler) finish(w http.ResponseWriter, r *http.Request, id int, action string) {
+	actor, verified := actorFromRequest(r)
+	if !verified {
+		writeError(w, r, http.StatusForbidden, "FORBIDDEN", "A verified actor is required.")
+		return
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	// Started after the wait for the mutex, so a queued request keeps its full time.
@@ -302,6 +418,10 @@ func (h *appliesHandler) finish(w http.ResponseWriter, r *http.Request, id int, 
 		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
 		return
 	}
+	if err != nil {
+		h.unavailable(w, r, "read generation", err)
+		return
+	}
 	verb, want, extra := "confirm", generation.Confirmed, []string(nil)
 	if action == "rollback" {
 		verb, want, extra = "rollback", generation.RolledBack, []string{"requested"}
@@ -309,6 +429,47 @@ func (h *appliesHandler) finish(w http.ResponseWriter, r *http.Request, id int, 
 	if err == nil && before.State.State != generation.Awaiting && before.State.State != generation.Activating {
 		writeError(w, r, http.StatusConflict, "APPLY_NOT_AWAITING", "Apply "+strconv.Itoa(id)+" is "+before.State.State+" and can no longer be changed.")
 		return
+	}
+	if err == nil && action == "confirmation" {
+		previousDigest := ""
+		if before.Previous != nil {
+			previous, previousErr := generation.Read(h.dir, *before.Previous)
+			if previousErr != nil {
+				h.unavailable(w, r, "read previous authorization", previousErr)
+				return
+			}
+			previousDigest = previous.AuthorizationDigest
+		}
+		if before.AuthorizationDigest != previousDigest {
+			err = h.stageAuthorizationTransition(ctx, id, authz.TransitionConfirm, func(lock *authz.StateLock, candidate generation.Generation) error {
+				state, stateErr := lock.Read()
+				if stateErr != nil || state.LiveDigest != candidate.AuthorizationDigest {
+					return errors.Join(errLiveAuthorizationUnavailable, stateErr)
+				}
+				if actor.Root {
+					return nil
+				}
+				if actor.Actor.Kind != authz.ActorAccount || actor.AccountKind != identity.Human || actor.SessionSelector == "" || actor.AuthorizationEpoch != state.AuthorizationEpoch {
+					return errNewAdminSessionRequired
+				}
+				account, accountErr := h.identities.GetAccount(ctx, actor.AccountID)
+				if accountErr != nil {
+					return accountErr
+				}
+				if !account.Enabled || account.Kind != identity.Human || !slices.Contains(account.RoleIDs, authz.AdministratorRoleID) {
+					return errNewAdminSessionRequired
+				}
+				return nil
+			})
+			if errors.Is(err, errNewAdminSessionRequired) {
+				writeError(w, r, http.StatusForbidden, "NEW_ADMIN_SESSION_REQUIRED", "Authorization changes require confirmation by root or a newly authenticated human administrator.")
+				return
+			}
+			if err != nil {
+				h.unavailable(w, r, "authorize generation confirmation", err)
+				return
+			}
+		}
 	}
 	runErr := h.runner.Realize(ctx, verb, id, extra...)
 	g, err := generation.Read(h.dir, id)

@@ -3,6 +3,8 @@ package config
 import (
 	"errors"
 	"strconv"
+
+	"github.com/andaru-project/andaru/internal/authz"
 )
 
 const requestLimit = 1 << 20
@@ -294,6 +296,7 @@ type declaration struct {
 	Links         []link       `json:"links"`
 	Segments      []segment    `json:"segments"`
 	Zones         []zone       `json:"zones"`
+	Roles         []authz.Role `json:"roles,omitzero"`
 	Objects       objectSet    `json:"objects,omitzero"`
 	Policy        policy       `json:"policy,omitzero"`
 	NAT           natSettings  `json:"nat,omitzero"`

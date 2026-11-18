@@ -19,6 +19,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/andaru-project/andaru/internal/authz"
 )
 
 // fakeNetworkd models what the real tools report: a reload binds each
@@ -340,6 +342,9 @@ const (
 func newBench(t *testing.T) *bench {
 	t.Helper()
 	state, root := t.TempDir(), t.TempDir()
+	if err := os.Chmod(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	b := &bench{t: t, dir: Dir(state), now: time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)}
 	b.net = &fakeNetworkd{root: root, devices: map[string]bool{"eth0": true}, state: "configured"}
 	if err := os.MkdirAll(filepath.Join(root, netDir), 0o755); err != nil {
@@ -730,6 +735,96 @@ func TestKillPoints(t *testing.T) {
 				t.Fatalf("state = %+v", g.State)
 			}
 		})
+	}
+}
+
+func authorizationState(t *testing.T, stateDir string) authz.State {
+	t.Helper()
+	if os.Geteuid() != 0 {
+		t.Skip("authorization state requires root")
+	}
+	lock, err := authz.Acquire(t.Context(), stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	state, err := lock.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+func initializeAuthorization(t *testing.T, stateDir, digest string) authz.State {
+	t.Helper()
+	if os.Geteuid() != 0 {
+		t.Skip("authorization state requires root")
+	}
+	lock, err := authz.Acquire(t.Context(), stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	state, err := lock.Advance(digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+func TestAuthorizationEpochAdvancesAcrossActivationRollback(t *testing.T) {
+	b := newBench(t)
+	b.live(one)
+	live := b.read(1).AuthorizationDigest
+	initial := initializeAuthorization(t, b.r.StateDir, live)
+	changed := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	id := create(t, b.dir, Manifest{SavedVersion: "8", AuthorizationDigest: changed, ConfirmTimeoutSeconds: 120}, two)
+	if err := b.r.Activate(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if state := authorizationState(t, b.r.StateDir); state.LiveDigest != changed || state.AuthorizationEpoch != initial.AuthorizationEpoch+1 {
+		t.Fatalf("activated authorization state = %+v", state)
+	}
+	if err := b.r.Rollback(t.Context(), id, "requested"); err != nil {
+		t.Fatal(err)
+	}
+	if state := authorizationState(t, b.r.StateDir); state.LiveDigest != live || state.AuthorizationEpoch != initial.AuthorizationEpoch+2 {
+		t.Fatalf("rolled-back authorization state = %+v", state)
+	}
+}
+
+func TestUnchangedAuthorizationDigestDoesNotAdvanceEpoch(t *testing.T) {
+	b := newBench(t)
+	b.live(one)
+	live := b.read(1).AuthorizationDigest
+	initial := initializeAuthorization(t, b.r.StateDir, live)
+	id := create(t, b.dir, Manifest{SavedVersion: "8", AuthorizationDigest: live, ConfirmTimeoutSeconds: 120}, two)
+	if err := b.r.Activate(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if state := authorizationState(t, b.r.StateDir); state != initial {
+		t.Fatalf("unchanged digest churned authorization state: got %+v want %+v", state, initial)
+	}
+}
+
+func TestFailedAuthorizationPublicationRestoresPriorDigest(t *testing.T) {
+	b := newBench(t)
+	b.live(one)
+	live := b.read(1).AuthorizationDigest
+	initial := initializeAuthorization(t, b.r.StateDir, live)
+	changed := "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	id := create(t, b.dir, Manifest{SavedVersion: "8", AuthorizationDigest: changed, ConfirmTimeoutSeconds: 120}, two)
+	b.r.failAt = func(step string) error {
+		if step == "activate:pointers-live" {
+			return errors.New("killed after authorization publication")
+		}
+		return nil
+	}
+	if err := b.r.Activate(t.Context(), id); err == nil {
+		t.Fatal("activation survived live-pointer failure")
+	}
+	if state := authorizationState(t, b.r.StateDir); state.LiveDigest != live || state.AuthorizationEpoch != initial.AuthorizationEpoch+2 {
+		t.Fatalf("failed activation state = %+v", state)
 	}
 }
 

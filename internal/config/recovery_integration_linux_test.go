@@ -21,7 +21,7 @@ func TestRecoveryWALHelper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Save(context.Background(), "unix:uid:0", createZone("wal-zone")); err != nil {
+	if _, err = s.Save(context.Background(), systemRootActor, createZone("wal-zone")); err != nil {
 		t.Fatal(err)
 	}
 	// Leave committed WAL records without checkpointing: a crash before an upgrade must remain recoverable.
@@ -175,7 +175,7 @@ func TestRecoveryStateObjectHistory(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = s.Save(ctx, "unix:uid:0", createZone("recovery-zone")); err != nil {
+			if _, err = s.Save(ctx, systemRootActor, createZone("recovery-zone")); err != nil {
 				t.Fatal(err)
 			}
 			if err = s.Close(); err != nil {

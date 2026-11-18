@@ -19,12 +19,12 @@ import (
 )
 
 const (
-	MaxArchiveSize    = 16 << 20
-	MaxZIPSize        = 12 << 20
+	MaxArchiveSize    = 18 << 20
+	MaxZIPSize        = 17 << 20
 	MaxManifestSize   = 64 << 10
 	MaxDocumentSize   = 4 << 20
-	MaxExpandedSize   = 12 << 20
-	MaxMembers        = 3
+	MaxExpandedSize   = 17 << 20
+	MaxMembers        = 5
 	MaxExpansionRatio = 100
 )
 
@@ -33,7 +33,7 @@ type Error struct{ Code string }
 func (e *Error) Error() string { return e.Code }
 
 type Documents struct {
-	Configuration, ConfigurationSecrets json.RawMessage
+	Configuration, ConfigurationSecrets, Users, UserCredentials json.RawMessage
 }
 
 type NetworkObservation struct {
@@ -101,7 +101,7 @@ func unapplied(source Source) []string {
 	return []string{}
 }
 
-func documentSchema(raw []byte, secret bool) (int, error) {
+func documentSchema(raw []byte, maximum int) (int, error) {
 	if len(raw) > MaxDocumentSize {
 		return 0, &Error{Code: "ARCHIVE_LIMIT"}
 	}
@@ -114,7 +114,7 @@ func documentSchema(raw []byte, secret bool) (int, error) {
 	if json.Unmarshal(raw, &version) != nil {
 		return 0, &Error{Code: "INVALID_ARCHIVE"}
 	}
-	if version.SchemaVersion != 1 && (secret || version.SchemaVersion != 2) {
+	if version.SchemaVersion < 1 || version.SchemaVersion > maximum {
 		return 0, &Error{Code: "UNSUPPORTED_SCHEMA"}
 	}
 	return version.SchemaVersion, nil
@@ -124,38 +124,54 @@ func Encode(ctx context.Context, source Source, docs Documents, passphrase strin
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if !validSource(source) || docs.Configuration == nil {
+	if !validSource(source) || docs.Configuration == nil || docs.UserCredentials != nil && docs.Users == nil {
 		return nil, &Error{Code: "INVALID_ARCHIVE"}
 	}
-	if docs.ConfigurationSecrets != nil {
+	secret := docs.ConfigurationSecrets != nil || docs.UserCredentials != nil
+	if secret {
 		if err := ValidatePassphrase(passphrase); err != nil {
 			return nil, err
 		}
 	} else if passphrase != "" {
 		return nil, &Error{Code: "PASSPHRASE_INVALID"}
 	}
-	manifest := Manifest{FormatVersion: 1, CreatedAt: source.CapturedAt.UTC(), AndaruVersion: source.AndaruVersion, SavedVersion: source.SavedVersion, Scopes: []string{}, Payloads: map[string]Payload{}, Network: source.Network, SavedButUnappliedAreas: unapplied(source)}
+	format := 1
+	if docs.Users != nil {
+		format = 2
+	}
+	manifest := Manifest{FormatVersion: format, CreatedAt: source.CapturedAt.UTC(), AndaruVersion: source.AndaruVersion, SavedVersion: source.SavedVersion, Scopes: []string{}, Payloads: map[string]Payload{}, Network: source.Network, SavedButUnappliedAreas: unapplied(source)}
 	var identity [16]byte
 	if _, err := rand.Read(identity[:]); err != nil {
 		return nil, &Error{Code: "ENCRYPTION_FAILED"}
 	}
 	manifest.BackupID = hex.EncodeToString(identity[:])
-	names := []string{"config.json"}
-	if docs.ConfigurationSecrets != nil {
-		names = append(names, "configuration-secrets.json")
+	type document struct {
+		name, scope string
+		data        json.RawMessage
+		maximum     int
 	}
-	for _, name := range names {
-		data, scope, secret := docs.Configuration, "configuration", false
-		if name == "configuration-secrets.json" {
-			data, scope, secret = docs.ConfigurationSecrets, "configurationSecrets", true
-		}
-		schema, err := documentSchema(data, secret)
+	maximumConfigSchema := 2
+	if format == 2 {
+		maximumConfigSchema = 3
+	}
+	documents := []document{{"config.json", "configuration", docs.Configuration, maximumConfigSchema}}
+	if docs.Users != nil {
+		documents = append(documents, document{"users.json", "users", docs.Users, 1})
+	}
+	if docs.ConfigurationSecrets != nil {
+		documents = append(documents, document{"configuration-secrets.json", "configurationSecrets", docs.ConfigurationSecrets, 1})
+	}
+	if docs.UserCredentials != nil {
+		documents = append(documents, document{"user-credentials.json", "userCredentials", docs.UserCredentials, 1})
+	}
+	for _, document := range documents {
+		schema, err := documentSchema(document.data, document.maximum)
 		if err != nil {
 			return nil, err
 		}
-		digest := sha256.Sum256(data)
-		manifest.Payloads[name] = Payload{SchemaVersion: schema, Size: int64(len(data)), SHA256: hex.EncodeToString(digest[:])}
-		manifest.Scopes = append(manifest.Scopes, scope)
+		digest := sha256.Sum256(document.data)
+		manifest.Payloads[document.name] = Payload{SchemaVersion: schema, Size: int64(len(document.data)), SHA256: hex.EncodeToString(digest[:])}
+		manifest.Scopes = append(manifest.Scopes, document.scope)
 	}
 	rawManifest, err := json.Marshal(manifest)
 	if err != nil {
@@ -165,15 +181,12 @@ func Encode(ctx context.Context, source Source, docs Documents, passphrase strin
 		return nil, &Error{Code: "ARCHIVE_LIMIT"}
 	}
 	var buffer bytes.Buffer
-	buffer.Grow(len(rawManifest) + len(docs.Configuration) + len(docs.ConfigurationSecrets) + 1024)
+	buffer.Grow(len(rawManifest) + len(docs.Configuration) + len(docs.ConfigurationSecrets) + len(docs.Users) + len(docs.UserCredentials) + 1024)
 	writer := zip.NewWriter(&buffer)
-	for _, name := range append([]string{"manifest.json"}, names...) {
-		data := rawManifest
-		if name == "config.json" {
-			data = docs.Configuration
-		}
-		if name == "configuration-secrets.json" {
-			data = docs.ConfigurationSecrets
+	for i := -1; i < len(documents); i++ {
+		name, data := "manifest.json", rawManifest
+		if i >= 0 {
+			name, data = documents[i].name, documents[i].data
 		}
 		header := &zip.FileHeader{Name: name, Method: zip.Store}
 		header.SetMode(0600)
@@ -194,7 +207,7 @@ func Encode(ctx context.Context, source Source, docs Documents, passphrase strin
 	if err = ctx.Err(); err != nil {
 		return nil, err
 	}
-	if docs.ConfigurationSecrets == nil {
+	if !secret {
 		return buffer.Bytes(), nil
 	}
 	return encrypt(ctx, buffer.Bytes(), passphrase)
@@ -232,7 +245,7 @@ func decodeManifest(raw []byte) (Manifest, error) {
 	if decoder.Decode(&manifest) != nil {
 		return Manifest{}, invalid
 	}
-	if manifest.FormatVersion != 1 {
+	if manifest.FormatVersion != 1 && manifest.FormatVersion != 2 {
 		return Manifest{}, &Error{Code: "UNSUPPORTED_SCHEMA"}
 	}
 	id, err := hex.DecodeString(manifest.BackupID)
@@ -241,28 +254,40 @@ func decodeManifest(raw []byte) (Manifest, error) {
 	if err != nil || len(id) != 16 || !validSource(source) || offset != 0 || manifest.Scopes == nil || manifest.SavedButUnappliedAreas == nil || !slices.Equal(manifest.SavedButUnappliedAreas, unapplied(source)) {
 		return Manifest{}, invalid
 	}
-	if len(manifest.Scopes) < 1 || len(manifest.Scopes) > 2 || len(manifest.Payloads) != len(manifest.Scopes) {
+	maxScopes := 2
+	if manifest.FormatVersion == 2 {
+		maxScopes = 4
+	}
+	if len(manifest.Scopes) < manifest.FormatVersion || len(manifest.Scopes) > maxScopes || len(manifest.Payloads) != len(manifest.Scopes) ||
+		manifest.Scopes[0] != "configuration" || manifest.FormatVersion == 2 && manifest.Scopes[1] != "users" {
 		return Manifest{}, invalid
 	}
 	var rawPayloads map[string]json.RawMessage
 	if json.Unmarshal(fields["payloads"], &rawPayloads) != nil {
 		return Manifest{}, invalid
 	}
+	order := map[string]int{"configuration": 0, "users": 1, "configurationSecrets": 2, "userCredentials": 3}
 	seen := map[string]bool{}
+	last := -1
 	for _, scope := range manifest.Scopes {
-		name := ""
-		switch scope {
-		case "configuration":
-			name = "config.json"
-		case "configurationSecrets":
-			name = "configuration-secrets.json"
-		default:
+		position, known := order[scope]
+		if !known || position <= last || seen[scope] || manifest.FormatVersion == 1 && position != 0 && position != 2 {
 			return Manifest{}, &Error{Code: "UNSUPPORTED_SCHEMA"}
 		}
-		if seen[scope] {
-			return Manifest{}, invalid
+		last, seen[scope] = position, true
+		name, maximum := "config.json", 2
+		switch scope {
+		case "configuration":
+			if manifest.FormatVersion == 2 {
+				maximum = 3
+			}
+		case "users":
+			name, maximum = "users.json", 1
+		case "configurationSecrets":
+			name, maximum = "configuration-secrets.json", 1
+		case "userCredentials":
+			name, maximum = "user-credentials.json", 1
 		}
-		seen[scope] = true
 		payload, exists := manifest.Payloads[name]
 		if !exists {
 			return Manifest{}, invalid
@@ -277,7 +302,7 @@ func decodeManifest(raw []byte) (Manifest, error) {
 		if payload.Size > MaxDocumentSize {
 			return Manifest{}, &Error{Code: "ARCHIVE_LIMIT"}
 		}
-		if payload.SchemaVersion != 1 && (scope == "configurationSecrets" || payload.SchemaVersion != 2) {
+		if payload.SchemaVersion < 1 || payload.SchemaVersion > maximum {
 			return Manifest{}, &Error{Code: "UNSUPPORTED_SCHEMA"}
 		}
 	}
@@ -321,7 +346,7 @@ func preflightZIP(raw []byte) (zipLayout, error) {
 			return layout, &Error{Code: "ARCHIVE_LIMIT"}
 		}
 		size, offset := binary.LittleEndian.Uint32(raw[end+12:]), binary.LittleEndian.Uint32(raw[end+16:])
-		// shortcut: ZIP64 directories are unsupported within the 16 MiB/three-member format; extend only for a qualified producer.
+		// shortcut: ZIP64 directories are unsupported within the bounded portable format; extend only for a qualified producer.
 		if size == ^uint32(0) || offset == ^uint32(0) {
 			return layout, &Error{Code: "UNSUPPORTED_ARCHIVE"}
 		}
@@ -450,7 +475,7 @@ func Decode(ctx context.Context, raw []byte, passphrase string) (Archive, error)
 		if !localHeaderAgrees(zipBytes, layout.directory, file, layout.localOffsets[i]) {
 			return Archive{}, &Error{Code: "INVALID_ARCHIVE"}
 		}
-		if file.Name != "manifest.json" && file.Name != "config.json" && file.Name != "configuration-secrets.json" {
+		if !slices.Contains([]string{"manifest.json", "config.json", "configuration-secrets.json", "users.json", "user-credentials.json"}, file.Name) {
 			return Archive{}, &Error{Code: "INVALID_ARCHIVE"}
 		}
 		if files[file.Name] != nil || !file.Mode().IsRegular() || file.Flags&1 != 0 {
@@ -500,8 +525,11 @@ func Decode(ctx context.Context, raw []byte, passphrase string) (Archive, error)
 	if _, secret := manifest.Payloads["configuration-secrets.json"]; secret && !encrypted {
 		return Archive{}, &Error{Code: "SECRET_ENCRYPTION_REQUIRED"}
 	}
+	if _, secret := manifest.Payloads["user-credentials.json"]; secret && !encrypted {
+		return Archive{}, &Error{Code: "SECRET_ENCRYPTION_REQUIRED"}
+	}
 	var docs Documents
-	for _, name := range []string{"config.json", "configuration-secrets.json"} {
+	for _, name := range []string{"config.json", "users.json", "configuration-secrets.json", "user-credentials.json"} {
 		payload, declared := manifest.Payloads[name]
 		file := files[name]
 		if !declared {
@@ -522,17 +550,29 @@ func Decode(ctx context.Context, raw []byte, passphrase string) (Archive, error)
 		if !bytes.Equal(digest[:], expected) {
 			return Archive{}, &Error{Code: "INVALID_ARCHIVE"}
 		}
-		version, err := documentSchema(data, name == "configuration-secrets.json")
+		maximum := 1
+		if name == "config.json" {
+			maximum = 2
+			if manifest.FormatVersion == 2 {
+				maximum = 3
+			}
+		}
+		version, err := documentSchema(data, maximum)
 		if err != nil {
 			return Archive{}, err
 		}
 		if version != payload.SchemaVersion {
 			return Archive{}, &Error{Code: "INVALID_ARCHIVE"}
 		}
-		if name == "config.json" {
+		switch name {
+		case "config.json":
 			docs.Configuration = data
-		} else {
+		case "users.json":
+			docs.Users = data
+		case "configuration-secrets.json":
 			docs.ConfigurationSecrets = data
+		case "user-credentials.json":
+			docs.UserCredentials = data
 		}
 	}
 	return Archive{Manifest: manifest, Documents: docs}, nil

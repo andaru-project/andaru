@@ -66,7 +66,7 @@ func numbered(t *testing.T, dir string) []string {
 
 func TestCreateNumbersAndReadsBack(t *testing.T) {
 	dir := Dir(t.TempDir())
-	first := create(t, dir, Manifest{SavedVersion: "7", ConfirmTimeoutSeconds: 120}, map[string]string{"50-andaru-a.network": "[Match]\n"})
+	first := create(t, dir, Manifest{SavedVersion: "7", IdentityRevision: 9, ConfirmTimeoutSeconds: 120}, map[string]string{"50-andaru-a.network": "[Match]\n"})
 	second := create(t, dir, Manifest{SavedVersion: "8"}, nil)
 	if first != 1 || second != 2 {
 		t.Fatalf("ids = %d, %d", first, second)
@@ -76,7 +76,7 @@ func TestCreateNumbersAndReadsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256([]byte("[Match]\n"))
-	if g.ID != 1 || g.SavedVersion != "7" || len(g.Files) != 1 || g.Files[0].SHA256 != hex.EncodeToString(sum[:]) {
+	if g.ID != 1 || g.SavedVersion != "7" || g.IdentityRevision != 9 || len(g.AuthorizationDigest) != 64 || len(g.Files) != 1 || g.Files[0].SHA256 != hex.EncodeToString(sum[:]) {
 		t.Fatalf("manifest = %+v", g.Manifest)
 	}
 	if g.State.State != Failed || g.Reason != "never started" {
