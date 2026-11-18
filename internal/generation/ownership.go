@@ -88,16 +88,14 @@ func (r Realizer) resetTree() bool {
 
 const denyAllComment = "andaru deny-all"
 
-// denyAll replaces table inet andaru with one that drops all input except loopback and all forwarding.
+// DenyAll replaces table inet andaru with one that drops all input except loopback and all forwarding.
 // It is the filter of every reset state without a confirmed generation: nothing is reachable but the console.
-func (r Realizer) denyAll(ctx context.Context) error {
+func (r Realizer) DenyAll(ctx context.Context) error {
 	script := "table inet andaru\ndelete table inet andaru\ntable inet andaru {\n\tcomment \"" + denyAllComment + "\"\n" +
 		"\tchain input {\n\t\ttype filter hook input priority filter; policy drop;\n\t\tiif \"lo\" accept\n\t}\n" +
 		"\tchain forward {\n\t\ttype filter hook forward priority filter; policy drop;\n\t}\n}\n"
-	if err := os.MkdirAll(r.dir(), 0o700); err != nil {
-		return err
-	}
-	f, err := os.CreateTemp(r.dir(), "deny-all-*.nft")
+	// Under /run, never the state tree: during a reset that tree may be missing, and must not be created.
+	f, err := os.CreateTemp(filepath.Join(r.Root, "/run"), "andaru-deny-all-*.nft")
 	if err != nil {
 		return err
 	}
@@ -145,5 +143,5 @@ func (r Realizer) Teardown(ctx context.Context) error {
 	if err := r.settle(ctx, set, nil); err != nil {
 		return err
 	}
-	return r.denyAll(ctx)
+	return r.DenyAll(ctx)
 }

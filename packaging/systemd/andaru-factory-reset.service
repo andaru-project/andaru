@@ -1,0 +1,17 @@
+[Unit]
+Description=Andaru factory reset
+# Runs only while a reset is journaled: started by andaru ctl factory-reset run, and at boot to finish one a power loss cut.
+ConditionPathExists=/var/lib/andaru-reset/operation.json
+# The reset applies through networkd and the engine, so it runs after them; boot has only loaded deny-all by then.
+After=systemd-networkd.service andaru-network-boot.service
+# WantsMountsFor: a missing data partition must not start an empty one; the reset's marker check stops it instead.
+WantsMountsFor=/var/lib/andaru
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/andaru realize factory-reset
+# Two applies, each waiting for networkd and the engine, plus the stop of Andaru's units.
+TimeoutStartSec=30min
+
+[Install]
+WantedBy=multi-user.target

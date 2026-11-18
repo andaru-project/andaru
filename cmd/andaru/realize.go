@@ -19,7 +19,7 @@ import (
 	"github.com/andaru-project/andaru/internal/render"
 )
 
-const realizeUsage = "usage: andaru realize [--state-dir PATH] activate N | rollback N REASON | confirm N | boot | leases | prefixes"
+const realizeUsage = "usage: andaru realize [--state-dir PATH] activate N | rollback N REASON | confirm N | boot | leases | prefixes | factory-reset"
 
 var generationID = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
 
@@ -30,6 +30,7 @@ type realizeVerbs interface {
 	Boot(ctx context.Context) error
 	SyncLeases(ctx context.Context) error
 	SyncPrefixes(ctx context.Context) error
+	DenyAll(ctx context.Context) error
 }
 
 // newRealizer builds the privileged actor for the real host.
@@ -65,9 +66,18 @@ func realizeCommand(ctx context.Context, args []string, stderr io.Writer, build 
 		return usage()
 	}
 	verb, rest := flags.Arg(0), flags.Args()[1:]
-	want := map[string]int{"activate": 1, "rollback": 2, "confirm": 1, "boot": 0, "leases": 0, "prefixes": 0}
+	want := map[string]int{"activate": 1, "rollback": 2, "confirm": 1, "boot": 0, "leases": 0, "prefixes": 0, "factory-reset": 0}
 	if n, known := want[verb]; !known || len(rest) != n || (n > 0 && !generationID.MatchString(rest[0])) {
 		return usage()
+	}
+	if verb == "factory-reset" {
+		return factoryResetVerb(ctx, stderr)
+	}
+	// While a reset stops, tears down or wipes the tree, nothing else touches it; boot only shuts the host.
+	blocked := resetBlocks()
+	if blocked && verb != "boot" {
+		fmt.Fprintln(stderr, "a factory reset is in progress; "+verb+" waits for it")
+		return 0
 	}
 	id := 0
 	if len(rest) > 0 {
@@ -86,7 +96,11 @@ func realizeCommand(ctx context.Context, args []string, stderr io.Writer, build 
 	case "confirm":
 		err = verbs.Confirm(ctx, id)
 	case "boot":
-		err = verbs.Boot(ctx)
+		if blocked {
+			err = verbs.DenyAll(ctx)
+		} else {
+			err = verbs.Boot(ctx)
+		}
 	case "leases":
 		err = verbs.SyncLeases(ctx)
 	case "prefixes":

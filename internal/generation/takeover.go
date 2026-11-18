@@ -502,7 +502,7 @@ func (r Realizer) Boot(ctx context.Context) (result error) {
 
 // consoleRequired is boot on a reset tree with no usable generation: deny-all, and only the console gets in.
 func (r Realizer) consoleRequired(ctx context.Context, p Pointers, failures []error) error {
-	failures = append(failures, r.denyAll(ctx), r.writePointers("boot:pointers", p))
+	failures = append(failures, r.DenyAll(ctx), r.writePointers("boot:pointers", p))
 	return errors.Join(append([]error{errors.New("CONSOLE_REQUIRED: no generation is usable on this reset host")}, failures...)...)
 }
 

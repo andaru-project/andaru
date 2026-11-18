@@ -26,7 +26,7 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	usage := "usage: andaru engine [--socket PATH] [--state-dir PATH] [--web-socket PATH --web-uid UID --web-gid GID --web-origin HTTPS_ORIGIN ...] | andaru ctl [--socket PATH] links|prefixes|openapi|config|versions|preview|apply|applies|takeover|backup|kept|users|tokens|audit | andaru realize [--state-dir PATH] activate|rollback|confirm|boot|leases|prefixes | andaru upgrade check|prepare"
+	usage := "usage: andaru engine [--socket PATH] [--state-dir PATH] [--web-socket PATH --web-uid UID --web-gid GID --web-origin HTTPS_ORIGIN ...] | andaru ctl [--socket PATH] links|prefixes|openapi|config|versions|preview|apply|applies|takeover|backup|kept|users|tokens|audit|factory-reset | andaru realize [--state-dir PATH] activate|rollback|confirm|boot|leases|prefixes|factory-reset | andaru upgrade check|prepare"
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, usage)
 		return 2
@@ -89,6 +89,11 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 					webGID = peerGID
 				}
 			}
+		}
+		if resetBlocks() {
+			// Exit 0, so systemd neither restarts it nor spends its start limit; the reset starts it on the fresh state.
+			fmt.Fprintln(stderr, "a factory reset is in progress; the engine starts when it has the fresh state")
+			return 0
 		}
 		var err error
 		if !webConfigured {

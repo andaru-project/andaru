@@ -34,7 +34,19 @@ func backupTerminalAvailable() bool {
 	return term.IsTerminal(tty.Fd())
 }
 
-func readBackupPassphrase(ctx context.Context, prompt string) (value string, returnErr error) {
+func readBackupPassphrase(ctx context.Context, prompt string) (string, error) {
+	value, err := readTerminalLine(ctx, prompt, true)
+	if err != nil {
+		return "", err
+	}
+	if err := backup.ValidatePassphrase(value); err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
+// readTerminalLine reads one bounded line from the controlling terminal, hidden when asked; it may be empty.
+func readTerminalLine(ctx context.Context, prompt string, hidden bool) (value string, returnErr error) {
 	tty, err := openBackupTTY()
 	if err != nil {
 		return "", err
@@ -56,7 +68,9 @@ func readBackupPassphrase(ctx context.Context, prompt string) (value string, ret
 	if err != nil {
 		return "", err
 	}
-	settings.Lflag &^= unix.ECHO | unix.ECHONL
+	if hidden {
+		settings.Lflag &^= unix.ECHO | unix.ECHONL
+	}
 	if err = unix.IoctlSetTermios(int(fd), unix.TCSETS, settings); err != nil {
 		return "", err
 	}
@@ -76,7 +90,11 @@ func readBackupPassphrase(ctx context.Context, prompt string) (value string, ret
 	}
 	raw, readErr := readBoundedTerminalLine(ctx, int(fd))
 	flushInput = readErr != nil
-	_, newlineErr := io.WriteString(tty, "\n")
+	var newlineErr error
+	if hidden {
+		// Echo is off, so the operator's Enter did not move the cursor.
+		_, newlineErr = io.WriteString(tty, "\n")
+	}
 	if readErr != nil {
 		clear(raw)
 		return "", readErr
@@ -85,9 +103,6 @@ func readBackupPassphrase(ctx context.Context, prompt string) (value string, ret
 	clear(raw)
 	if newlineErr != nil {
 		return "", newlineErr
-	}
-	if err := backup.ValidatePassphrase(value); err != nil {
-		return "", err
 	}
 	return value, nil
 }
