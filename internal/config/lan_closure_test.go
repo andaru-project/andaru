@@ -169,3 +169,20 @@ func TestKeptLANRefusesNoAddress(t *testing.T) {
 		t.Fatalf("addressless management LAN: %v", err)
 	}
 }
+
+// The engine stores recovery/ from the public view, which carries the built-in roles a stored declaration may not.
+func TestKeptRecoveryDropsBuiltInRoles(t *testing.T) {
+	d := policyFixture(t)
+	d["roles"] = []any{
+		map[string]any{"id": "administrator", "name": "Administrator", "capabilities": []any{"configuration.read"}, "builtIn": "administrator"},
+		map[string]any{"id": "read-only", "name": "Read-only", "capabilities": []any{"configuration.read"}, "builtIn": "read-only"},
+	}
+	body, _ := json.Marshal(map[string]any{"declaration": d, "secrets": map[string]string{"WAN_PASSWORD": "TEST_ONLY_SECRET"}})
+	docs, err := KeptDeclaration(body)
+	if err != nil {
+		t.Fatalf("a recovery copy with the built-in roles: %v", err)
+	}
+	if strings.Contains(string(docs.Configuration), "builtIn") {
+		t.Fatalf("built-in roles kept: %s", docs.Configuration)
+	}
+}

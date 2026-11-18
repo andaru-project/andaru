@@ -185,6 +185,28 @@ func KeptDeclaration(body []byte) (RestoreDocuments, error) {
 		if len(declarationBody) == 0 {
 			return RestoreDocuments{}, errors.New("kept copy holds no declaration")
 		}
+		// The engine stores recovery/ from the public view, which adds the built-in roles; a stored declaration
+		// holds only custom ones.
+		var d map[string]json.RawMessage
+		var err error
+		if err = json.Unmarshal(declarationBody, &d); err != nil {
+			return RestoreDocuments{}, err
+		}
+		if raw, ok := d["roles"]; ok {
+			var roles []map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &roles); err != nil {
+				return RestoreDocuments{}, err
+			}
+			roles = slices.DeleteFunc(roles, func(r map[string]json.RawMessage) bool { _, builtIn := r["builtIn"]; return builtIn })
+			if len(roles) == 0 {
+				delete(d, "roles")
+			} else if d["roles"], err = json.Marshal(roles); err != nil {
+				return RestoreDocuments{}, err
+			}
+			if declarationBody, err = json.Marshal(d); err != nil {
+				return RestoreDocuments{}, err
+			}
+		}
 	default:
 		return RestoreDocuments{}, errors.New("unknown kept copy kind " + doc.Kind)
 	}
