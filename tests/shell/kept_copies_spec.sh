@@ -69,6 +69,22 @@ Describe 'package removal and purge'
     The path "$tree/a\\b/inner/backup.zip" should be file
   End
 
+  It 'keeps a trailing newline in a linked tree'"'"'s target when matching mounts'
+    tree=$(mktemp -d)
+    nl=$(printf 'a\n.')
+    nl=${nl%.}
+    mkdir -p "$tree/$nl/inner"
+    printf 'keep\n' >"$tree/$nl/inner/backup.zip"
+    rm -rf "$root/var/lib/andaru-upgrades"
+    ln -s "$tree/$nl" "$root/var/lib/andaru-upgrades"
+    real=$(readlink -f "$tree")
+    printf '36 25 8:1 /srv %s/a\\012/inner rw - ext4 /dev/sda1 rw\n' "$real" >"$outside/mountinfo"
+    When run env DPKG_ROOT="$root" ANDARU_MOUNTINFO="$outside/mountinfo" sh "$postrm" purge
+    The status should equal 0
+    The stderr should include 'mounted inside it'
+    The path "$tree/$nl/inner/backup.zip" should be file
+  End
+
   It 'leaves every tree whole when the mounts cannot be read'
     When run env DPKG_ROOT="$root" ANDARU_MOUNTINFO="$outside/no-such-file" sh "$postrm" purge
     The status should equal 0

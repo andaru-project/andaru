@@ -18,7 +18,9 @@ if [ "$1" = purge ]; then
 		# A bind mount of the same file system looks like the tree itself to find -xdev, and deleting through it would
 		# empty its source. A tree with anything mounted below it, or whose mounts cannot be read, is left whole.
 		# mountinfo escapes space, tab, newline and backslash; the backslash is decoded last.
-		real=$(readlink -f "$tree")
+		# The dot keeps a trailing newline in the resolved name, which command substitution would strip.
+		real=$(readlink -f -n "$tree" && printf .)
+		real=${real%.}
 		status=0
 		# The tree goes through the environment: awk -v would read a backslash in it as an escape.
 		ANDARU_TREE="$real/" awk '{ m = $5; gsub(/\\040/, " ", m); gsub(/\\011/, "\t", m); gsub(/\\012/, "\n", m); gsub(/\\134/, "\\", m) }
