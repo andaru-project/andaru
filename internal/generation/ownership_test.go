@@ -262,3 +262,22 @@ func TestLiveWithoutTakeoverStaysFenced(t *testing.T) {
 		t.Fatalf("filter = %q", b.net.table)
 	}
 }
+
+// A second reset of a host whose first reset left nothing live still writes a fenced tree.
+func TestResetTreeReadAgainStaysFenced(t *testing.T) {
+	b := newBench(t)
+	b.live(one)
+	for range 2 {
+		o, err := b.r.ReadOwnership()
+		if err != nil || !o.Live {
+			t.Fatalf("ownership = %+v, %v", o, err)
+		}
+		fresh(t, b)
+		if err = b.r.WriteOwnership(o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.r.Boot(t.Context()); err == nil || !strings.Contains(err.Error(), "CONSOLE_REQUIRED") || b.net.table != denyAllComment {
+		t.Fatalf("boot = %v, filter %q", err, b.net.table)
+	}
+}

@@ -146,15 +146,15 @@ func factoryResetVerb(ctx context.Context, stderr io.Writer) int {
 // resetBlocks reports a reset that is stopping, tearing down or wiping the tree: nothing else may run then.
 // denyAll says whether boot must shut the host then: always, unless the journal says Andaru never ran its network.
 func resetBlocks() (blocked, denyAll bool) {
-	active, _, err := reset.Active(resetDir)
-	if !active {
+	op, err := reset.Journal(resetDir)
+	if errors.Is(err, os.ErrNotExist) {
 		return false, false
 	}
-	op, err := reset.Journal(resetDir)
 	if err != nil {
 		return true, true
 	}
-	return op.Fenced(), op.Fenced() && (op.Ownership.Takeover || op.Ownership.Live)
+	// Ownership not yet read is unknown, so the host is shut too.
+	return op.Fenced(), op.Fenced() && (!op.OwnershipKnown || op.Ownership.Takeover || op.Ownership.Live)
 }
 
 func resetEnv(socket string) reset.Env {

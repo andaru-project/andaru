@@ -756,3 +756,19 @@ func TestPendingWhileStoppingKeepsJournalUntilUnitsRun(t *testing.T) {
 		t.Fatal("the retry did not end the given-up reset, or touched the tree")
 	}
 }
+
+// Ownership that cannot be read gives the reset up before teardown, so it never fences the host for good.
+func TestUnreadableOwnershipReleases(t *testing.T) {
+	b := newBox(t)
+	b.plan("")
+	os.Remove(filepath.Join(generation.Dir(b.env.StateDir), "baseline", "manifest.json"))
+	if _, err := Resume(context.Background(), b.env); err == nil {
+		t.Fatal("went on without ownership")
+	}
+	if active, _, _ := Active(b.env.Dir); active {
+		t.Fatal("the journal stayed, fencing the host")
+	}
+	if !kept.LiveTreeUsable(b.env.StateDir) || !b.ran("systemctl start andaru-engine.service") {
+		t.Fatalf("tree touched or engine left stopped: %q", b.commands)
+	}
+}

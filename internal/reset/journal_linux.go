@@ -43,9 +43,11 @@ type Operation struct {
 	ID        string               `json:"id"`
 	Phase     Phase                `json:"phase"`
 	Ownership generation.Ownership `json:"ownership"`
-	Verifier  []byte               `json:"verifier"`
-	Backup    bool                 `json:"backup"`
-	Reboot    bool                 `json:"reboot"`
+	// OwnershipKnown records that Ownership was read from the old tree; until then it says nothing.
+	OwnershipKnown bool   `json:"ownershipKnown,omitempty"`
+	Verifier       []byte `json:"verifier"`
+	Backup         bool   `json:"backup"`
+	Reboot         bool   `json:"reboot"`
 	// Units are Andaru's units that were active before the reset; only they start again. Stopping records that
 	// they were sampled and a stop may have begun: from then on the sample is reused and the reset cannot be aborted.
 	Units    []string `json:"units"`

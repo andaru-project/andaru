@@ -196,8 +196,14 @@ func Resume(ctx context.Context, e Env) (Operation, error) {
 				return op, e.release(ctx, op, err)
 			}
 			if op.Ownership, err = e.Realizer.ReadOwnership(); err != nil {
-				return op, err
+				// Teardown has not begun, so the reset is given up the way a failed check gives it up.
+				op.Released = true
+				if werr := writeJournal(e.Dir, op); werr != nil {
+					return op, errors.Join(err, werr)
+				}
+				return op, e.release(ctx, op, err)
 			}
+			op.OwnershipKnown = true
 			err = advance(Stopped)
 		case Stopped:
 			if err = upgrade.StopWriters(ctx, e.Run); err == nil {

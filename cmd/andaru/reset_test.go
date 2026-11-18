@@ -64,6 +64,7 @@ func (b *resetBench) plan(t *testing.T, phase reset.Phase, takeover bool) {
 	json.Unmarshal(data, &op)
 	op["phase"] = phase
 	op["ownership"] = map[string]any{"takeover": takeover}
+	op["ownershipKnown"] = phase != reset.Planned
 	data, _ = json.Marshal(op)
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
@@ -215,5 +216,23 @@ func TestStoppingResetFences(t *testing.T) {
 	var stderr bytes.Buffer
 	if code := run(context.Background(), []string{"engine", "--socket", filepath.Join(t.TempDir(), "e.sock"), "--state-dir", resetStateDir}, nil, &bytes.Buffer{}, &stderr); code != 0 || !strings.Contains(stderr.String(), "factory reset is in progress") {
 		t.Fatalf("engine behind a stopping reset: code %d: %s", code, stderr.String())
+	}
+}
+
+// A reset that began stopping but has not read ownership yet cannot say Andaru never ran the network: boot shuts it.
+func TestUnknownOwnershipDeniesAll(t *testing.T) {
+	b := newResetBench(t)
+	b.plan(t, reset.Planned, false)
+	path := filepath.Join(resetDir, "operation.json")
+	data, _ := os.ReadFile(path)
+	var op map[string]any
+	json.Unmarshal(data, &op)
+	op["stopping"] = true
+	data, _ = json.Marshal(op)
+	os.WriteFile(path, data, 0o600)
+	verbs := &fakeVerbs{}
+	realizeCommand(context.Background(), []string{"boot"}, &bytes.Buffer{}, func(string) (realizeVerbs, error) { return verbs, nil })
+	if !slices.Equal(verbs.calls, []string{"deny-all"}) {
+		t.Fatalf("boot with unknown ownership: %v", verbs.calls)
 	}
 }

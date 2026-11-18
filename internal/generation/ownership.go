@@ -31,13 +31,15 @@ func (r Realizer) ReadOwnership() (Ownership, error) {
 	if err != nil {
 		return Ownership{}, err
 	}
+	// A tree an earlier reset wrote ran Andaru's network even with nothing live now: it stays fenced.
+	ran := p.Live != nil || captured && m.Reset
 	if !p.Takeover {
-		return Ownership{Live: p.Live != nil}, nil
+		return Ownership{Live: ran}, nil
 	}
 	if !captured || m.Kind == "" {
 		return Ownership{}, errors.New("the takeover's baseline is missing; ownership cannot be carried over")
 	}
-	o := Ownership{Takeover: true, Live: p.Live != nil, Kind: m.Kind, NftablesMasked: m.NftablesMasked}
+	o := Ownership{Takeover: true, Live: ran, Kind: m.Kind, NftablesMasked: m.NftablesMasked}
 	if m.Kind == "ifupdown" {
 		if m.Ifupdown == nil {
 			return Ownership{}, errors.New("the ifupdown baseline lists no interfaces")
