@@ -48,8 +48,10 @@ type Operation struct {
 	Reboot    bool                 `json:"reboot"`
 	// Units are Andaru's units that were active before the reset; only they start again. Stopping records that
 	// they were sampled and a stop may have begun: from then on the sample is reused and the reset cannot be aborted.
-	Units    []string  `json:"units"`
-	Stopping bool      `json:"stopping,omitempty"`
+	Units    []string `json:"units"`
+	Stopping bool     `json:"stopping,omitempty"`
+	// Released records a reset given up after its stop: the fence is down, and a retry only restarts the units.
+	Released bool      `json:"released,omitempty"`
 	Started  time.Time `json:"started"`
 }
 
@@ -67,9 +69,12 @@ func Active(dir string) (bool, Phase, error) {
 	return true, op.Phase, nil
 }
 
-// Fenced reports a phase in which Andaru is stopped and its old tree torn down or wiped: nothing but the reset
-// may run then. A planned reset has stopped nothing, so applies, their timers and the engine still run.
-func Fenced(p Phase) bool { return order[p] >= order[Stopped] && order[p] < order[Fresh] }
+// Fenced reports a reset that is stopping Andaru or tearing down or wiping its old tree: nothing but the reset may
+// run then. A planned reset fences only once it journals that it begins stopping; before that, applies, their
+// timers and the engine still run.
+func (op Operation) Fenced() bool {
+	return op.Phase == Planned && op.Stopping && !op.Released || order[op.Phase] >= order[Stopped] && order[op.Phase] < order[Fresh]
+}
 
 // Journal reads the reset journal.
 func Journal(dir string) (Operation, error) { return readJournal(dir) }

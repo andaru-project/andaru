@@ -195,3 +195,25 @@ func TestPlannedResetFencesNothing(t *testing.T) {
 		t.Fatalf("calls %v", verbs.calls)
 	}
 }
+
+// Once the reset journals that it begins stopping Andaru, nothing may start the engine or an apply behind it.
+func TestStoppingResetFences(t *testing.T) {
+	b := newResetBench(t)
+	b.plan(t, reset.Planned, true)
+	path := filepath.Join(resetDir, "operation.json")
+	data, _ := os.ReadFile(path)
+	var op map[string]any
+	json.Unmarshal(data, &op)
+	op["stopping"] = true
+	data, _ = json.Marshal(op)
+	os.WriteFile(path, data, 0o600)
+	verbs := &fakeVerbs{}
+	realizeCommand(context.Background(), []string{"activate", "3"}, &bytes.Buffer{}, func(string) (realizeVerbs, error) { return verbs, nil })
+	if len(verbs.calls) != 0 {
+		t.Fatalf("an apply ran behind a stopping reset: %v", verbs.calls)
+	}
+	var stderr bytes.Buffer
+	if code := run(context.Background(), []string{"engine", "--socket", filepath.Join(t.TempDir(), "e.sock"), "--state-dir", resetStateDir}, nil, &bytes.Buffer{}, &stderr); code != 0 || !strings.Contains(stderr.String(), "factory reset is in progress") {
+		t.Fatalf("engine behind a stopping reset: code %d: %s", code, stderr.String())
+	}
+}

@@ -744,4 +744,15 @@ func TestPendingWhileStoppingKeepsJournalUntilUnitsRun(t *testing.T) {
 	if active, _, _ := Active(b.env.Dir); !active {
 		t.Fatal("the journal went while the web service stayed stopped")
 	}
+	op, _ := Journal(b.env.Dir)
+	if op.Fenced() {
+		t.Fatal("a given-up reset still fences the engine")
+	}
+	// The retry only restarts the units; it never goes on with the reset.
+	if _, err := Resume(context.Background(), b.env); err == nil {
+		t.Fatal("the retry went on with the reset")
+	}
+	if active, _, _ := Active(b.env.Dir); active || !kept.LiveTreeUsable(b.env.StateDir) {
+		t.Fatal("the retry did not end the given-up reset, or touched the tree")
+	}
 }

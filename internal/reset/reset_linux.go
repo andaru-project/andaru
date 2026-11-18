@@ -166,6 +166,9 @@ func Resume(ctx context.Context, e Env) (Operation, error) {
 	for {
 		switch op.Phase {
 		case Planned:
+			if op.Released {
+				return op, e.release(ctx, op, errors.New("the factory reset was given up; its units are being restarted"))
+			}
 			if !op.Stopping {
 				if err := check(ctx, e); err != nil {
 					return op, errors.Join(err, drop(e))
@@ -186,11 +189,11 @@ func Resume(ctx context.Context, e Env) (Operation, error) {
 			}
 			// An apply that went pending while the units stopped must be confirmed or rolled back by its owner.
 			if err := check(ctx, e); err != nil {
-				// The reset is dropped only once every writer runs again; otherwise its journal says what to restart.
-				if startErr := e.startUnits(ctx, op); startErr != nil {
-					return op, errors.Join(err, startErr)
+				op.Released = true
+				if werr := writeJournal(e.Dir, op); werr != nil {
+					return op, errors.Join(err, werr)
 				}
-				return op, errors.Join(err, drop(e))
+				return op, e.release(ctx, op, err)
 			}
 			if op.Ownership, err = e.Realizer.ReadOwnership(); err != nil {
 				return op, err
@@ -412,6 +415,15 @@ func (e Env) finish(ctx context.Context, op Operation) error {
 		failures = append(failures, errors.New("CONSOLE_REQUIRED: neither the recovery copy nor the last LAN came up; log in at the console as admin"))
 	}
 	return errors.Join(failures...)
+}
+
+// release ends a reset given up after its stop: with the fence down, the units start again, and only once they
+// all run is the journal dropped; until then a retry starts them again.
+func (e Env) release(ctx context.Context, op Operation, cause error) error {
+	if err := e.startUnits(ctx, op); err != nil {
+		return errors.Join(cause, err)
+	}
+	return errors.Join(cause, drop(e))
 }
 
 // startUnits starts the engine, which the console's root CLI needs, and the other units that ran before the reset.
