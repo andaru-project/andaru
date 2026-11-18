@@ -1,23 +1,42 @@
 #shellcheck shell=sh
-# Purge and remove must leave the root-disk copies alone.
+# Debian's convention: remove deletes nothing; purge deletes everything Andaru created.
 
-Describe 'kept copies survive package removal'
+Describe 'package removal and purge'
   postrm="${SHELLSPEC_PROJECT_ROOT:-$PWD}/debian/andaru.postrm"
   setup() {
     root=$(mktemp -d)
-    mkdir -p "$root/var/lib/andaru-kept" "$root/var/lib/andaru-upgrades/recovery"
-    printf 'lan\n' >"$root/var/lib/andaru-kept/first.json"
+    outside=$(mktemp -d)
+    printf 'keep\n' >"$outside/portable-backup.zip"
+    mkdir -p "$root/etc/andaru/tls" "$root/var/lib/andaru/generations" "$root/var/lib/andaru-kept/first" \
+      "$root/var/lib/andaru-upgrades/recovery" "$root/var/lib/andaru-reset"
+    printf 'x\n' >"$root/etc/andaru/web.conf"
+    printf 'x\n' >"$root/var/lib/andaru/generations/pointers.json"
+    printf 'lan\n' >"$root/var/lib/andaru-kept/first/first.json"
+    # A link inside the tree must go without its target.
+    ln -s "$outside/portable-backup.zip" "$root/var/lib/andaru/backup-link"
   }
-  cleanup() { rm -rf "$root"; }
+  cleanup() { rm -rf "$root" "$outside"; }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  Parameters:value purge remove
-  It "keeps the copies on postrm $1"
-    When run env DPKG_ROOT="$root" sh "$postrm" "$1"
+  It 'keeps everything on remove'
+    When run env DPKG_ROOT="$root" sh "$postrm" remove
     The status should equal 0
-    The path "$root/var/lib/andaru-kept/first.json" should be file
+    The path "$root/etc/andaru/web.conf" should be file
+    The path "$root/var/lib/andaru/generations/pointers.json" should be file
+    The path "$root/var/lib/andaru-kept/first/first.json" should be file
     The path "$root/var/lib/andaru-upgrades/recovery" should be directory
+  End
+
+  It 'deletes Andaru'"'"'s configuration and state on purge, and nothing a link points to'
+    When run env DPKG_ROOT="$root" sh "$postrm" purge
+    The status should equal 0
+    The path "$root/etc/andaru" should not be exist
+    The path "$root/var/lib/andaru" should not be exist
+    The path "$root/var/lib/andaru-kept" should not be exist
+    The path "$root/var/lib/andaru-upgrades" should not be exist
+    The path "$root/var/lib/andaru-reset" should not be exist
+    The path "$outside/portable-backup.zip" should be file
   End
 End
 

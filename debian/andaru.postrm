@@ -1,10 +1,19 @@
 #!/bin/sh
 set -e
 
-# /var/lib/andaru is the host's network configuration and stays; uninstalling is not supported.
-# Neither purge nor remove deletes /var/lib/andaru-kept or /var/lib/andaru-upgrades.
+# Debian's convention: remove deletes nothing; purge deletes everything Andaru created. prerm already refuses a
+# remove while Andaru runs the network or a factory reset is unfinished, so a purge reaches only a host whose
+# takeover was undone or whose removal was forced. Portable backups live elsewhere and stay.
 # The include lines andaru-apparmor added go with the rules they name; the administrator's own lines stay.
 if [ "$1" = purge ]; then
+	for tree in /etc/andaru /var/lib/andaru /var/lib/andaru-kept /var/lib/andaru-upgrades /var/lib/andaru-reset; do
+		tree=${DPKG_ROOT:-}$tree
+		if [ -d "$tree" ] && [ ! -L "$tree" ]; then
+			# Contents first, never following a link: a tree that is a mount point keeps its empty directory.
+			find "$tree" -xdev -mindepth 1 -delete
+			rmdir "$tree" 2>/dev/null || :
+		fi
+	done
 	for daemon in kea-dhcp4 kea-dhcp6 unbound; do
 		local_file=${DPKG_ROOT:-}/etc/apparmor.d/local/usr.sbin.$daemon
 		if [ -f "$local_file" ]; then

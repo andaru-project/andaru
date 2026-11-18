@@ -99,7 +99,7 @@ From issue #13, issue #14, and the 2026-11-15 design, where they do not conflict
 
 - Live configuration and secrets are SQLite databases under `/var/lib/andaru`. The wipeable path must stay a local filesystem.
 - Generations, pointers, prefix and next-hop state, and the identity stores that exist today also live under `/var/lib/andaru`. A wipe removes them with the rest of that tree.
-- Package maintainer scripts must not delete `/var/lib/andaru-kept/` or `/var/lib/andaru-upgrades/`. Purge already leaves `/var/lib/andaru` because uninstall is unsupported. That rule is unchanged.
+- No maintainer script deletes `/var/lib/andaru-kept/` or `/var/lib/andaru-upgrades/` except on purge. *Amended 2026-11-18 by the owner:* removal deletes nothing, and purge follows Debian's convention, deleting `/etc/andaru`, `/var/lib/andaru`, `/var/lib/andaru-kept`, `/var/lib/andaru-upgrades` and `/var/lib/andaru-reset`. prerm already refuses a removal while Andaru runs the network or a reset is unfinished, so a purge reaches only a host whose takeover was undone or whose removal was forced.
 - Kept copies contain secrets. They are root-owned, directories mode 0700, files mode 0600, and are not exposed by the API, a debug export, or a portable backup unless the operator explicitly exports them.
 - The upgrade design's boundary still holds: preparing or keeping a package-upgrade copy must not restart networkd, resolved, Kea, Unbound or SSH, and must not disable connectivity rollback timers.
 
