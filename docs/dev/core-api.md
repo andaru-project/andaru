@@ -394,6 +394,53 @@ Both were then shut down; Proxmox reported them stopped, matching their initial
 state. This qualification does not establish physical power-loss behavior,
 arm64 hardware, NFS/SMB durability or a full cryptographic audit.
 
+## Factory reset
+
+`andaru ctl factory-reset run` deletes every Andaru account, setting, saved version,
+generation and audit record under `/var/lib/andaru`, and brings the box back on a
+network the operator chose beforehand. It is root-only and interactive, with no
+flags. A WebUI control for the same reset comes with the WebUI.
+
+```sh
+# Optional, beforehand: keep the current saved head as the post-reset network.
+sudo andaru ctl kept store-recovery
+sudo andaru ctl factory-reset run
+sudo andaru ctl factory-reset status
+# Only before andaru-factory-reset.service has stopped anything:
+sudo andaru ctl factory-reset abort
+```
+
+`run` asks for the new `admin` password (empty means `admin`; anything else must
+meet the password policy), offers a portable backup with secrets, asks whether to
+reboot when done (default no), and requires the phrase `FACTORY RESET`. It then
+writes the journal in `/var/lib/andaru-reset/` and starts
+`andaru-factory-reset.service`, so the reset continues when the SSH session drops.
+
+The unit holds dpkg's locks, stops Andaru, removes the live generation's network
+files, services and filter (the filter becomes deny-all), and deletes the contents
+of `/var/lib/andaru`, keeping the directory and its marker `.andaru-reset`. It
+refuses to start when a mount sits inside the tree, and stops when the tree it
+finds lacks the marker, as after a boot without the data partition. It writes a
+fresh tree: the record that Andaru owns host networking (the takeover, the nftables
+mask, ifupdown's interfaces and their dhcpcd DUIDs), empty configuration, the
+`admin` account, and a `recovery.completed` audit event with reason
+`factory_reset_backup_written` or `factory_reset_backup_skipped`. The engine then
+applies and confirms, in order:
+
+1. `/var/lib/andaru-kept/recovery/`, when stored;
+2. `/var/lib/andaru-kept/last-lan/`, when the recovery copy is missing or does not
+   come up. Its delegated IPv6 becomes none: the uplink it came from is not kept.
+
+With neither, the box stays console-required behind deny-all: log in at the console
+and use the root CLI. Old accounts never come back, `first/` is never read, and
+`/var/lib/andaru-upgrades`, `/var/lib/andaru-kept` and `/etc/andaru` are not touched.
+A host Andaru never took over keeps its own network; only the state is reset.
+
+A power loss resumes the reset at boot. Before the fresh tree exists, boot loads only
+deny-all, and the engine and every realize job wait. A copy whose apply a crash cut
+counts as not up: the reset moves on to the next one. Package removal stays refused
+on a reset host whose takeover remains, even with no confirmed generation.
+
 ## Network preview
 
 `andaru ctl preview network [--saved-version N]` shows exactly which files Andaru would give systemd-networkd and pppd for a saved version on this host, and what would stop them working. **It changes nothing**: no file is written under `/run`, nothing is reloaded or started, and no state is stored. Applying is a separate, explicit step: see [Applying and taking over](#applying-and-taking-over).

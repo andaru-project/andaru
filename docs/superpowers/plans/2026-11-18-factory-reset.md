@@ -332,6 +332,18 @@ git add docs/dev debian/changelog
 git commit -m "docs: document factory reset and record its lab qualification"
 ```
 
+## Deviations during the build
+
+Recorded on 2026-11-18 while implementing this plan. The approved calls are unchanged.
+
+- **No `CreateApply` extraction.** The engine's apply path needs its host reader, identity store, security coordinator and transient-unit runner. Reset instead restores the kept copy into the fresh store in-process (`config.Store.Restore`), starts the engine on the fresh tree, and applies and confirms through the root socket, as `andaru ctl apply` does. The engine still runs the gate, the authorization transition, `lan-closure.json`, the rollback timer and the activate unit.
+- **No `Realizer.Restore`.** The fence blocks boot only before `fresh`. From `fresh` on, boot runs its normal path, which realizes a confirmed generation or, on a reset tree without one, loads deny-all and reports console-required. A resume then needs only the pointers: a confirmed, live generation means `up`.
+- **No `done` phase and no unit `ConditionPathExists=!`.** Removing the journal and then the marker is the end of a reset. A fenced engine exits 0, so systemd neither restarts it nor spends its start limit, and realize jobs exit 0 likewise.
+- **No new audit action.** The audit database's SQL schema pins its actions and metadata keys, so a new one needs a migration. Reset writes `recovery.completed` through `AppendSafety`, with reason `factory_reset_backup_written` or `factory_reset_backup_skipped`.
+- **Closure fixes.** The management closure now carries an address group's members. `KeptDeclaration` turns a delegated IPv6 into none, because the uplink it came from is not in the copy. A `last-lan/` recorded before the fix with a group source fails validation, and disaster boot moves on to `first/`. Widening the allowed sources to make it valid was rejected.
+- **Prompts.** The passphrase reader refuses an empty line, so the reader under it now returns any bounded line, hidden or echoed. The backup offer writes a portable backup with secrets.
+- **Lab qualification (Task 7, step 2) is not done yet.** It needs the Debian 13 VMs.
+
 ## Out of scope
 
 - The WebUI reset, its reauthentication, and its API route. They come with the WebUI work and reuse `reset.Plan` and `andaru-factory-reset.service`.
