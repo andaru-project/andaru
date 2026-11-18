@@ -14,6 +14,7 @@ Describe 'package removal and purge'
     printf 'lan\n' >"$root/var/lib/andaru-kept/first/first.json"
     # A link inside the tree must go without its target.
     ln -s "$outside/portable-backup.zip" "$root/var/lib/andaru/backup-link"
+    ln -s "$outside" "$root/var/lib/andaru/dir-link"
   }
   cleanup() { rm -rf "$root" "$outside"; }
   BeforeEach 'setup'
@@ -26,6 +27,7 @@ Describe 'package removal and purge'
     The path "$root/var/lib/andaru/generations/pointers.json" should be file
     The path "$root/var/lib/andaru-kept/first/first.json" should be file
     The path "$root/var/lib/andaru-upgrades/recovery" should be directory
+    The path "$root/var/lib/andaru-reset" should be directory
   End
 
   It 'deletes Andaru'"'"'s configuration and state on purge, and nothing a link points to'
@@ -37,8 +39,30 @@ Describe 'package removal and purge'
     The path "$root/var/lib/andaru-upgrades" should not be exist
     The path "$root/var/lib/andaru-reset" should not be exist
     The path "$outside/portable-backup.zip" should be file
+    The stderr should equal ''
+  End
+
+  It 'warns when it purges a host Andaru still configured'
+    printf '{"confirmed":null,"takeover":true}' >"$root/var/lib/andaru/generations/pointers.json"
+    When run env DPKG_ROOT="$root" sh "$postrm" purge
+    The status should equal 0
+    The stderr should include 'still configured'
+    The path "$root/var/lib/andaru-kept" should not be exist
+  End
+
+  It 'empties a tree that is a link to elsewhere, and removes the link'
+    target=$(mktemp -d)
+    printf 'secret\n' >"$target/secrets.db"
+    rm -rf "$root/var/lib/andaru-upgrades"
+    ln -s "$target" "$root/var/lib/andaru-upgrades"
+    When run env DPKG_ROOT="$root" sh "$postrm" purge
+    The status should equal 0
+    The path "$root/var/lib/andaru-upgrades" should not be exist
+    The path "$target/secrets.db" should not be exist
   End
 End
+# A mount inside a tree (left in place, with a warning, and the purge going on) needs root and a mount namespace;
+# it was checked by hand on a tmpfs.
 
 # ProtectSystem=strict leaves only the unit's state directories writable: the engine records last-lan/ and stores
 # recovery/ there, so the kept tree must be one of them.
