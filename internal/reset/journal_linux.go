@@ -46,7 +46,9 @@ type Operation struct {
 	Verifier  []byte               `json:"verifier"`
 	Backup    bool                 `json:"backup"`
 	Reboot    bool                 `json:"reboot"`
-	Started   time.Time            `json:"started"`
+	// Units are Andaru's units that were active before the reset; only they start again.
+	Units   []string  `json:"units"`
+	Started time.Time `json:"started"`
 }
 
 func journalPath(dir string) string { return filepath.Join(dir, "operation.json") }

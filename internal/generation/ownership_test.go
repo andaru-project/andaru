@@ -187,3 +187,58 @@ func TestResetTreeNeverHandsBack(t *testing.T) {
 		}
 	}
 }
+
+// resetBench is a reset ifupdown host: the ownership record only, deny-all loaded, eth1 present.
+func resetBench(t *testing.T) *bench {
+	t.Helper()
+	b := newBench(t)
+	owned(t, b, ifupdownOwnership())
+	o, err := b.r.ReadOwnership()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh(t, b)
+	if err = b.r.WriteOwnership(o); err != nil {
+		t.Fatal(err)
+	}
+	if err = b.r.DenyAll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	b.net.devices["eth1"] = true
+	return b
+}
+
+const lanFilter = "table inet andaru {\n\tcomment \"generation lan\"\n}\n"
+
+func TestFailedApplyOnResetHostKeepsDenyAll(t *testing.T) {
+	b := resetBench(t)
+	// Its link is missing: verification fails and the files go back to none.
+	id := b.gen(false, map[string]string{"50-andaru-eth9.network": "[Match]\nName=eth9\n\n[Network]\nAddress=192.0.2.1/24\n", filterEntry: lanFilter})
+	if err := b.r.Activate(t.Context(), id); err == nil {
+		t.Fatal("activated a generation whose link is missing")
+	}
+	if b.net.table != denyAllComment {
+		t.Fatalf("filter after the failed apply = %q", b.net.table)
+	}
+}
+
+func TestRollbackOnResetHostNeverHandsBack(t *testing.T) {
+	b := resetBench(t)
+	id := b.gen(false, map[string]string{"50-andaru-eth1.network": "[Match]\nName=eth1\n\n[Network]\nAddress=192.0.2.1/24\n", filterEntry: lanFilter})
+	if err := b.r.Activate(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	b.net.argv = nil
+	if err := b.timerFires(id); err != nil {
+		t.Fatal(err)
+	}
+	if b.net.ran("systemctl unmask") != 0 || b.net.ran("systemctl restart networking") != 0 || b.net.ran("systemctl restart ifup@") != 0 || b.net.ran("systemctl start nftables") != 0 {
+		t.Fatalf("handed back: %q", b.net.argv)
+	}
+	if b.net.table != denyAllComment {
+		t.Fatalf("filter after the rollback = %q", b.net.table)
+	}
+	if b.exists("run/systemd/network/50-andaru-eth1.network") {
+		t.Fatal("the rolled-back files stayed")
+	}
+}

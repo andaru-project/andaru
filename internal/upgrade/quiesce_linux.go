@@ -10,6 +10,17 @@ import (
 // CheckIdle is the part of recovery preparation's checks a factory reset shares: dpkg is consistent, no apply is
 // pending, and no realize job is queued or running.
 func CheckIdle(ctx context.Context, run func(context.Context, string, ...string) ([]byte, error), stateDir string) error {
+	if err := DpkgConsistent(ctx, run); err != nil {
+		return err
+	}
+	if err := idleApplications(stateDir); err != nil {
+		return err
+	}
+	return idleRealizationJobs(ctx, run)
+}
+
+// DpkgConsistent refuses a dpkg database with half-installed or half-configured packages.
+func DpkgConsistent(ctx context.Context, run func(context.Context, string, ...string) ([]byte, error)) error {
 	audit, err := run(ctx, "dpkg", "--audit")
 	if err != nil {
 		return fmt.Errorf("inspect dpkg state: %w", err)
@@ -20,10 +31,7 @@ func CheckIdle(ctx context.Context, run func(context.Context, string, ...string)
 	if len(strings.TrimSpace(string(audit))) > 0 {
 		return errors.New("dpkg has incomplete packages; repair them first")
 	}
-	if err = idleApplications(stateDir); err != nil {
-		return err
-	}
-	return idleRealizationJobs(ctx, run)
+	return nil
 }
 
 // StopWriters stops the web service and the units recovery preparation pauses, then waits for running realizers.

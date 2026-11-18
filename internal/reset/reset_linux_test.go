@@ -29,6 +29,10 @@ type box struct {
 	// applied are the saved versions the fake engine was asked to apply; up says whether each comes up.
 	applied []string
 	up      func(n int) bool
+	// pending makes apply n reach awaiting confirmation and stay there, as when the confirm is lost.
+	pending func(n int) bool
+	// inactive are units systemctl reports inactive before the reset.
+	inactive []string
 	// onStop runs at the first systemctl stop, to look at the tree then.
 	onStop func()
 }
@@ -47,6 +51,9 @@ func newBox(t *testing.T) *box {
 		Run:      b.run, LockWait: time.Second,
 		Apply: b.apply,
 	}
+	if err := os.MkdirAll(filepath.Join(base, "root", "run"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	b.oldState()
 	return b
 }
@@ -63,6 +70,9 @@ func (b *box) run(_ context.Context, name string, args ...string) ([]byte, error
 	if stop != nil && strings.HasPrefix(command, "systemctl stop") {
 		stop()
 	}
+	if strings.HasPrefix(command, "systemctl is-active --quiet ") && slices.Contains(b.inactive, args[len(args)-1]) {
+		return nil, errors.New("inactive")
+	}
 	if strings.HasPrefix(command, "systemctl show") {
 		return []byte("ActiveState=inactive\nUnitFileState=static\n"), nil
 	}
@@ -72,7 +82,8 @@ func (b *box) run(_ context.Context, name string, args ...string) ([]byte, error
 // apply is the engine: it makes the saved version a confirmed, live generation when it comes up.
 func (b *box) apply(_ context.Context, saved string) (bool, error) {
 	b.applied = append(b.applied, saved)
-	if !b.up(len(b.applied)) {
+	pending := b.pending != nil && b.pending(len(b.applied))
+	if !b.up(len(b.applied)) && !pending {
 		return false, nil
 	}
 	dir := generation.Dir(b.env.StateDir)
@@ -88,9 +99,14 @@ func (b *box) apply(_ context.Context, saved string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	p.Confirmed, p.Live = &id, &id
+	if pending {
+		p.Pending, p.Live = &id, &id
+		write(b.t, filepath.Join(dir, itoa(id), "state.json"), `{"state":"awaiting","previous":null}`)
+	} else {
+		p.Confirmed, p.Live = &id, &id
+	}
 	data, _ = json.Marshal(p)
-	return true, os.WriteFile(filepath.Join(dir, "pointers.json"), data, 0o600)
+	return !pending, os.WriteFile(filepath.Join(dir, "pointers.json"), data, 0o600)
 }
 
 // network is the fixture declaration with its LAN as the management segment.
@@ -273,7 +289,7 @@ func (b *box) wantDone(wan bool) {
 	if wan != (segments == 2) {
 		t.Fatalf("saved head has %d segments (nat %v), want WAN %v", segments, hasWAN, wan)
 	}
-	if !b.ran("systemctl start andaru-web.service") || b.ran("systemctl reboot") {
+	if b.ran("systemctl reboot") || !b.ran("systemctl start andaru-engine.service") {
 		t.Fatalf("units = %q", b.commands)
 	}
 }
@@ -339,6 +355,9 @@ func TestConsoleRequired(t *testing.T) {
 	}
 	if p, _, _ := generation.List(generation.Dir(b.env.StateDir)); p.Confirmed != nil {
 		t.Fatalf("a generation was confirmed: %+v", p)
+	}
+	if !b.ran("nft -f") {
+		t.Fatalf("deny-all not loaded: %q", b.commands)
 	}
 	if _, err := os.Stat(journalPath(b.env.Dir)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("journal left: %v", err)
@@ -562,5 +581,52 @@ func TestWipeKeepsMountPoint(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(b.upgrades, "recovery", "state.json")); err != nil {
 		t.Fatalf("the symlink's target went: %v", err)
+	}
+}
+
+func itoa(n int) string { data, _ := json.Marshal(n); return string(data) }
+
+// A recovery apply whose confirm never happens is rolled back, so the last LAN can be applied after it.
+func TestUnconfirmedRecoveryRollsBack(t *testing.T) {
+	b := newBox(t)
+	b.storeRecovery()
+	b.pending = func(n int) bool { return n == 1 }
+	b.plan("")
+	op, err := Resume(context.Background(), b.env)
+	if err != nil || op.Phase != Up || len(b.applied) != 2 {
+		t.Fatalf("phase %s, applied %v: %v", op.Phase, b.applied, err)
+	}
+	p, _, _ := generation.List(generation.Dir(b.env.StateDir))
+	if p.Pending != nil {
+		t.Fatalf("the unconfirmed recovery is still pending: %+v", p)
+	}
+	b.wantDone(false)
+}
+
+func TestAbortRefusedWhileRunning(t *testing.T) {
+	b := newBox(t)
+	b.plan("")
+	fence, err := lockFile(filepath.Join(b.env.Dir, "lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fence.Close()
+	if err := Abort(b.env); err == nil {
+		t.Fatal("aborted a running reset")
+	}
+	if active, _, _ := Active(b.env.Dir); !active {
+		t.Fatal("the journal went")
+	}
+}
+
+func TestOnlyActiveUnitsStart(t *testing.T) {
+	b := newBox(t)
+	b.inactive = []string{"andaru-web.service"}
+	b.plan("")
+	if _, err := Resume(context.Background(), b.env); err != nil {
+		t.Fatal(err)
+	}
+	if b.ran("systemctl start andaru-web.service") || !b.ran("systemctl start andaru-engine.service") {
+		t.Fatalf("units = %q", b.commands)
 	}
 }

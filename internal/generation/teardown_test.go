@@ -2,6 +2,7 @@ package generation
 
 import (
 	"maps"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -64,5 +65,24 @@ func TestTeardownWithoutLiveTouchesNothing(t *testing.T) {
 	}
 	if len(b.net.argv) != 0 || !maps.Equal(before, b.net.netFiles()) {
 		t.Fatalf("a host Andaru never ran was touched: %q", b.net.argv)
+	}
+}
+
+func TestTeardownBaselineAfterTakeover(t *testing.T) {
+	b := cloud(t)
+	if err := b.r.captureBaseline(Pointers{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(filepath.Join(b.dir, "pointers.json"), Pointers{Takeover: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Teardown(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.net.netFiles()) != 0 {
+		t.Fatalf("baseline files left: %v", b.net.netFiles())
+	}
+	if b.net.table != denyAllComment {
+		t.Fatalf("filter = %q", b.net.table)
 	}
 }

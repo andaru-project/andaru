@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -13,7 +14,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/generation"
 	"github.com/andaru-project/andaru/internal/host"
 	"github.com/andaru-project/andaru/internal/render"
@@ -119,11 +119,26 @@ func realizeCommand(ctx context.Context, args []string, stderr io.Writer, build 
 
 func renderDisaster(root string) func([]byte) error {
 	return func(body []byte) error {
-		docs, err := config.KeptDeclaration(body)
+		// Only the network: a write-once first/ from before the closure carried group members must still render,
+		// so the disaster floor does not validate the allowed sources a reset apply needs.
+		var doc struct {
+			Links    json.RawMessage `json:"links"`
+			Segments json.RawMessage `json:"segments"`
+			Zones    json.RawMessage `json:"zones"`
+		}
+		if err := json.Unmarshal(body, &doc); err != nil {
+			return err
+		}
+		empty := func(raw json.RawMessage) json.RawMessage {
+			if len(raw) == 0 {
+				return json.RawMessage("[]")
+			}
+			return raw
+		}
+		decl, err := json.Marshal(map[string]any{"schemaVersion": 1, "links": empty(doc.Links), "segments": empty(doc.Segments), "zones": empty(doc.Zones)})
 		if err != nil {
 			return err
 		}
-		decl := docs.Configuration
 		links, err := host.ReadLinks(context.Background())
 		if err != nil {
 			return err

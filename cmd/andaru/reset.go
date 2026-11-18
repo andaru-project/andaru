@@ -51,6 +51,7 @@ func runFactoryReset(ctx context.Context, socket string, args []string, stdout, 
 			fmt.Fprintln(stdout, "no factory reset in progress")
 		default:
 			fmt.Fprintln(stdout, "factory reset: "+phase)
+			fmt.Fprintln(stdout, "if it stopped, see journalctl -u andaru-factory-reset.service; resume with: systemctl start andaru-factory-reset.service")
 		}
 		return 0
 	case "abort":
@@ -180,10 +181,13 @@ func productionResetEnv(socket string) reset.Env {
 // engineApply has the engine apply a saved version and confirms it once it came up, as an operator would.
 func engineApply(ctx context.Context, socket, saved string) (bool, error) {
 	ready := false
-	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline) && !ready; {
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline) && !ready && ctx.Err() == nil; {
 		ready = runCtl(ctx, socket, []string{"versions", "list"}, nil, io.Discard, io.Discard) == 0
 		if !ready {
-			time.Sleep(500 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+			case <-time.After(500 * time.Millisecond):
+			}
 		}
 	}
 	if !ready {

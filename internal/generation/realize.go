@@ -686,8 +686,9 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) (result e
 	// Files first: once they are back, any later reload or boot is correct. But only a reload makes networkd stop
 	// running the unconfirmed files, so until one succeeds the generation stays pending and the timer retries.
 	// fallback already loaded the restored generation's filter; going back to none, the table goes after the files.
-	toIfupdown := live == nil && kind == "ifupdown" && ifupdown != nil
-	ownsMask := live == nil && r.ownsNftablesMask(p.Takeover)
+	// A reset host is never handed back: its ownership record holds no pre-Andaru configuration to return to.
+	toIfupdown := live == nil && kind == "ifupdown" && ifupdown != nil && !r.resetTree()
+	ownsMask := live == nil && r.ownsNftablesMask(p.Takeover) && !r.resetTree()
 	restore := func() error {
 		// Back on netplan's files the host gets its own firewall back. Unmasking reloads systemd, whose netplan
 		// generator, the YAML gone, deletes netplan's files: so before they are placed. A failure stops nothing else.

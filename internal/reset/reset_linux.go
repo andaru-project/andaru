@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"time"
 
@@ -51,6 +52,14 @@ func Plan(ctx context.Context, e Env, verifier []byte, backup, reboot bool) (Ope
 	if len(verifier) == 0 {
 		return Operation{}, errors.New("the reset needs the new administrator's verifier")
 	}
+	if err := privateDir(e.Dir); err != nil {
+		return Operation{}, err
+	}
+	fence, err := lockFile(filepath.Join(e.Dir, "lock"))
+	if err != nil {
+		return Operation{}, fmt.Errorf("a factory reset is running: %w", err)
+	}
+	defer fence.Close()
 	if _, err := readJournal(e.Dir); err == nil {
 		return Operation{}, errors.New("a factory reset is already in progress; see andaru ctl factory-reset status")
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -64,9 +73,6 @@ func Plan(ctx context.Context, e Env, verifier []byte, backup, reboot bool) (Ope
 		return Operation{}, err
 	}
 	op := Operation{ID: hex.EncodeToString(id), Phase: Planned, Verifier: verifier, Backup: backup, Reboot: reboot, Started: time.Now().UTC()}
-	if err := privateDir(e.Dir); err != nil {
-		return Operation{}, err
-	}
 	// The marker goes first: a crash before the journal leaves only a stale marker, which the next plan replaces.
 	if err := writeMarker(e.StateDir, op.ID); err != nil {
 		return Operation{}, err
@@ -86,6 +92,11 @@ func check(ctx context.Context, e Env) error {
 
 // Abort drops a reset that has not stopped anything yet.
 func Abort(e Env) error {
+	fence, err := lockFile(filepath.Join(e.Dir, "lock"))
+	if err != nil {
+		return fmt.Errorf("the factory reset is running; it can no longer be aborted: %w", err)
+	}
+	defer fence.Close()
 	op, err := readJournal(e.Dir)
 	if err != nil {
 		return err
@@ -133,6 +144,10 @@ func Resume(ctx context.Context, e Env) (Operation, error) {
 			f.Close()
 		}
 	}()
+	// A package operation may have run while the locks were free, before a boot or after a crash.
+	if err = upgrade.DpkgConsistent(ctx, e.Run); err != nil {
+		return op, err
+	}
 	// entered is the phase this run moved into; a phase found in the journal was interrupted.
 	var entered Phase
 	advance := func(p Phase) error {
@@ -147,6 +162,12 @@ func Resume(ctx context.Context, e Env) (Operation, error) {
 		case Planned:
 			if err := check(ctx, e); err != nil {
 				return op, errors.Join(err, drop(e))
+			}
+			op.Units = nil
+			for _, unit := range upgrade.WriterUnits() {
+				if _, err := e.Run(ctx, "systemctl", "is-active", "--quiet", unit); err == nil {
+					op.Units = append(op.Units, unit)
+				}
 			}
 			if err := upgrade.StopWriters(ctx, e.Run); err != nil {
 				return op, err
@@ -201,7 +222,9 @@ func Resume(ctx context.Context, e Env) (Operation, error) {
 			case entered == op.Phase && e.applyCopy(ctx, name):
 				err = advance(Up)
 			default:
-				// A copy that did not come up, or whose attempt a crash interrupted, is not tried again.
+				// A copy that did not come up, or whose attempt a crash interrupted, is not tried again. An apply it
+				// left pending would refuse the next one, so it is rolled back first.
+				e.rollbackPending(ctx)
 				err = advance(next)
 			}
 		case Up, ConsoleRequired:
@@ -321,6 +344,16 @@ func (e Env) confirmedLive() bool {
 	return err == nil && p.Confirmed != nil && p.Live != nil && *p.Confirmed == *p.Live
 }
 
+func (e Env) rollbackPending(ctx context.Context) {
+	p, _, err := generation.List(generation.Dir(e.StateDir))
+	if err == nil && p.Pending != nil {
+		err = e.Realizer.Rollback(ctx, *p.Pending, "factory reset: the copy did not come up")
+	}
+	if err != nil {
+		slog.Error("factory reset: roll back the unconfirmed apply", "error", err)
+	}
+}
+
 func (e Env) startEngine(ctx context.Context) error {
 	if _, err := e.Run(ctx, "systemctl", "reset-failed", "andaru-engine.service"); err != nil {
 		slog.Warn("reset the engine unit", "error", err)
@@ -332,7 +365,20 @@ func (e Env) startEngine(ctx context.Context) error {
 // finish starts Andaru's units on the fresh state, drops the journal and the marker, and reboots when asked.
 func (e Env) finish(ctx context.Context, op Operation) error {
 	var failures []error
+	if op.Phase == ConsoleRequired {
+		// Nothing came up: nothing but the console may reach the host.
+		if err := e.Realizer.DenyAll(ctx); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	// The engine always runs, so the console has the root CLI; the rest only when it ran before.
+	units := []string{"andaru-engine.service"}
 	for _, unit := range upgrade.WriterUnits() {
+		if unit != "andaru-engine.service" && slices.Contains(op.Units, unit) {
+			units = append(units, unit)
+		}
+	}
+	for _, unit := range units {
 		if _, err := e.Run(ctx, "systemctl", "reset-failed", unit); err != nil {
 			slog.Warn("reset unit", "unit", unit, "error", err)
 		}

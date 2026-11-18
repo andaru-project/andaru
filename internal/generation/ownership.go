@@ -115,7 +115,7 @@ func (r Realizer) DenyAll(ctx context.Context) error {
 
 // Teardown removes the live generation from the host before a factory reset wipes the state tree: its files under
 // /run, the devices it made, the services it ran, and its filter, which becomes deny-all. A host with no live
-// generation runs nothing of Andaru's, so nothing there is touched. It may run again after a crash.
+// generation and no takeover runs nothing of Andaru's, so nothing there is touched. It may run again after a crash.
 func (r Realizer) Teardown(ctx context.Context) error {
 	unlock, err := r.lock()
 	if err != nil {
@@ -126,16 +126,23 @@ func (r Realizer) Teardown(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if p.Live == nil {
+	var set []placed
+	switch {
+	case p.Live != nil:
+		g, err := read(r.dir(), *p.Live, p)
+		if err != nil {
+			return err
+		}
+		if set, err = r.files(g); err != nil {
+			return err
+		}
+	case p.Takeover:
+		// A taken-over host that booted onto its captured baseline runs those files; they go too.
+		if set, _, err = r.baseline(); err != nil {
+			return err
+		}
+	default:
 		return nil
-	}
-	g, err := read(r.dir(), *p.Live, p)
-	if err != nil {
-		return err
-	}
-	set, err := r.files(g)
-	if err != nil {
-		return err
 	}
 	if err := r.place(set, nil); err != nil {
 		return err

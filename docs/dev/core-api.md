@@ -434,7 +434,9 @@ applies and confirms, in order:
 With neither, the box stays console-required behind deny-all: log in at the console
 and use the root CLI. Old accounts never come back, `first/` is never read, and
 `/var/lib/andaru-upgrades`, `/var/lib/andaru-kept` and `/etc/andaru` are not touched.
-A host Andaru never took over keeps its own network; only the state is reset.
+A host Andaru never took over keeps its own network; only the state is reset, and
+no kept copy is applied. The engine always starts again; the web service and the
+lease and prefix units only when they ran before.
 
 A power loss resumes the reset at boot. Before the fresh tree exists, boot loads only
 deny-all, and the engine and every realize job wait. A copy whose apply a crash cut
