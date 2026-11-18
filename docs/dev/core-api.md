@@ -447,6 +447,38 @@ an address of its own is refused. Package removal is refused while a reset is
 unfinished, and afterwards while the takeover remains, even with no confirmed
 generation.
 
+### Qualification evidence (2026-11-18)
+
+Run on the Proxmox lab VMs `andaru-lab` (114, netplan cloud image, WAN `10.0.1.19/16`
+static with a gateway) and `andaru-ifupdown-lab` (117, ifupdown with dhcpcd, WAN by
+DHCP, taken over with `andaru ctl takeover --accept-detected`). Each VM had a second NIC
+as the management LAN, `192.168.77.1/24` with no gateway, with `last-lan/` recorded by a
+root save while that LAN was live. `recovery/` held the same network with the LAN at
+`.2` and the WAN. The probe client was another host on the same bridge, given
+`192.168.77.10/24`. The VMs were driven through the QEMU guest agent, so a network change
+never cut the control channel. Every case started from the same stopped snapshot, ran
+the real interactive `andaru ctl factory-reset run` on a pty, and created an extra
+administrator `oldadmin` first. Both VMs were rolled back afterwards.
+
+| Case | Result |
+| --- | --- |
+| `recovery/` stored (both VMs) | Up on `recovery/`: LAN `.2` SSH open, `.1` closed, WAN SSH closed behind the filter; only `admin` left, `oldadmin` gone; takeover kept |
+| `recovery/` naming a missing card | The engine refused it (`HARDWARE_MISSING`, `MANAGEMENT_REQUIRED`); up on `last-lan/`, LAN `.1` open, WAN without an address |
+| Neither copy | `CONSOLE_REQUIRED`; `andaru deny-all` loaded, every port closed, the engine running for the root CLI, `first/` not used; a reboot loaded deny-all again |
+| Power cut at `stopped`, at `torn-down`, and during the wipe (only the marker left, `wiped` not yet journaled) | Resumed at boot and up on `recovery/` |
+| Power cut at `applying-recovery` | Resumed at boot and up on `last-lan/`: an interrupted copy is not retried |
+| Reboot answered yes | One reboot, then up on `recovery/` |
+| ifupdown WAN by DHCP | Same lease `10.0.1.8` after the reset, the same `DUIDRawData` and `IAID` as dhcpcd's; `networking`, `ifup@` and `nftables` still masked |
+| `last-lan/` only, after a DHCP WAN | The WAN lost its IPv4 address and dhcpcd is gone; LAN `.1` open |
+| SSH session from the LAN the reset cuts | The session timed out; the unit finished the reset and came up on `recovery/` |
+
+The lab found two bugs, fixed before these results: the engine's sandbox made
+`/var/lib/andaru-kept` read-only, so `last-lan/` was never recorded and
+`kept store-recovery` failed; and a stored `recovery/` carried the built-in roles of
+the public view, which a restore refused. Not exercised: the teardown of a Kea or Unbound
+service that Andaru runs (no lab configuration declared one; covered by unit tests), and
+a recovery copy that passes the engine's gate but fails networkd's verification.
+
 ## Network preview
 
 `andaru ctl preview network [--saved-version N]` shows exactly which files Andaru would give systemd-networkd and pppd for a saved version on this host, and what would stop them working. **It changes nothing**: no file is written under `/run`, nothing is reloaded or started, and no state is stored. Applying is a separate, explicit step: see [Applying and taking over](#applying-and-taking-over).

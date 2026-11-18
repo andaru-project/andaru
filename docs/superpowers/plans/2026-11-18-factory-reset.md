@@ -345,7 +345,7 @@ Recorded on 2026-11-18 while implementing this plan. The approved calls are unch
 - **Units.** The engine always starts at the end, for the console's root CLI. The other units start only when they ran before the reset. `Plan` and `Abort` take the fence lock, so an abort cannot race the running unit.
 - **A host never taken over.** Andaru runs none of its network, so the reset resets its state only and applies no kept copy, `recovery/` included.
 - **Prompts.** The passphrase reader refuses an empty line, so the reader under it now returns any bounded line, hidden or echoed. The backup offer writes a portable backup with secrets.
-- **Lab qualification (Task 7, step 2) is not done yet.** It needs the Debian 13 VMs.
+- **Lab qualification ran on the Proxmox lab VMs**, not the macOS QEMU lab, with a second NIC as the management LAN; the evidence is in `docs/dev/core-api.md`. It found the engine unable to write `/var/lib/andaru-kept` (now a state directory of its unit) and recovery copies carrying the built-in roles (now dropped when read).
 
 ## Out of scope
 
