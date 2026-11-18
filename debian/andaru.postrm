@@ -16,11 +16,16 @@ if [ "$1" = purge ]; then
 		tree=${DPKG_ROOT:-}$tree
 		[ -d "$tree" ] || continue
 		# A bind mount of the same file system looks like the tree itself to find -xdev, and deleting through it would
-		# empty its source. A tree with anything mounted below it is left whole. mountinfo escapes spaces as \040.
+		# empty its source. A tree with anything mounted below it, or whose mounts cannot be read, is left whole.
+		# mountinfo escapes space, tab, newline and backslash; the backslash is decoded last.
 		real=$(readlink -f "$tree")
-		if awk -v t="$real/" '{ m = $5; gsub(/\\040/, " ", m) } index(m, t) == 1 { found = 1 } END { exit !found }' \
-			"${ANDARU_MOUNTINFO:-/proc/self/mountinfo}"; then
-			echo "andaru: left $tree: something is mounted inside it; unmount that and delete the tree by hand" >&2
+		status=0
+		# The tree goes through the environment: awk -v would read a backslash in it as an escape.
+		ANDARU_TREE="$real/" awk '{ m = $5; gsub(/\\040/, " ", m); gsub(/\\011/, "\t", m); gsub(/\\012/, "\n", m); gsub(/\\134/, "\\", m) }
+			index(m, ENVIRON["ANDARU_TREE"]) == 1 { found = 1 } END { exit found ? 0 : 1 }' "${ANDARU_MOUNTINFO:-/proc/self/mountinfo}" 2>/dev/null ||
+			status=$?
+		if [ "$status" -ne 1 ]; then
+			echo "andaru: left $tree: something is mounted inside it, or the mounts cannot be read; delete the tree by hand" >&2
 			continue
 		fi
 		# Contents first. -H follows only a tree that is itself a link, to empty where it points; no link inside is

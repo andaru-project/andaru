@@ -55,6 +55,28 @@ Describe 'package removal and purge'
     The path "$root/var/lib/andaru-kept" should not be exist
   End
 
+  It 'decodes a backslash in a mount path before matching it'
+    tree=$(mktemp -d)
+    mkdir -p "$tree/a\\b/inner"
+    printf 'keep\n' >"$tree/a\\b/inner/backup.zip"
+    rm -rf "$root/var/lib/andaru-upgrades"
+    ln -s "$tree/a\\b" "$root/var/lib/andaru-upgrades"
+    real=$(readlink -f "$tree")
+    printf '36 25 8:1 /srv %s/a\\134b/inner rw - ext4 /dev/sda1 rw\n' "$real" >"$outside/mountinfo"
+    When run env DPKG_ROOT="$root" ANDARU_MOUNTINFO="$outside/mountinfo" sh "$postrm" purge
+    The status should equal 0
+    The stderr should include 'mounted inside it'
+    The path "$tree/a\\b/inner/backup.zip" should be file
+  End
+
+  It 'leaves every tree whole when the mounts cannot be read'
+    When run env DPKG_ROOT="$root" ANDARU_MOUNTINFO="$outside/no-such-file" sh "$postrm" purge
+    The status should equal 0
+    The stderr should include 'cannot be read'
+    The path "$root/var/lib/andaru-kept/first/first.json" should be file
+    The path "$root/etc/andaru/web.conf" should be file
+  End
+
   It 'warns when it purges a host with a confirmed generation'
     printf '{"confirmed":3,"takeover":false}' >"$root/var/lib/andaru/generations/pointers.json"
     When run env DPKG_ROOT="$root" sh "$postrm" purge
