@@ -155,3 +155,17 @@ func TestKeptLANRefusesGroupWithoutMembers(t *testing.T) {
 		t.Fatalf("older copy: %v", err)
 	}
 }
+
+func TestKeptLANRefusesNoAddress(t *testing.T) {
+	var doc map[string]any
+	if err := json.Unmarshal(keptLAN(t), &doc); err != nil {
+		t.Fatal(err)
+	}
+	// Its only address was the delegated IPv6, which a copy cannot keep.
+	seg := doc["segments"].([]any)[0].(map[string]any)
+	seg["addressing"].(map[string]any)["ipv4"] = map[string]any{"mode": "none"}
+	body, _ := json.Marshal(doc)
+	if _, err := KeptDeclaration(body); err == nil || !strings.Contains(err.Error(), "NO_ADDRESS") {
+		t.Fatalf("addressless management LAN: %v", err)
+	}
+}

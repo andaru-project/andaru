@@ -12,7 +12,9 @@ import (
 // the takeover, the baseline kind, whose nftables mask it is, and ifupdown's interfaces with their dhcpcd DUIDs.
 // It holds none of the pre-Andaru files, so no hand-back to them is possible afterwards.
 type Ownership struct {
-	Takeover       bool              `json:"takeover"`
+	Takeover bool `json:"takeover"`
+	// Live records that a generation ran, so the reset brings a network up even on a host never taken over.
+	Live           bool              `json:"live,omitempty"`
 	Kind           string            `json:"kind,omitempty"`
 	NftablesMasked bool              `json:"nftablesMasked,omitempty"`
 	Ifupdown       *IfupdownBaseline `json:"ifupdown,omitempty"`
@@ -30,12 +32,12 @@ func (r Realizer) ReadOwnership() (Ownership, error) {
 		return Ownership{}, err
 	}
 	if !p.Takeover {
-		return Ownership{}, nil
+		return Ownership{Live: p.Live != nil}, nil
 	}
 	if !captured || m.Kind == "" {
 		return Ownership{}, errors.New("the takeover's baseline is missing; ownership cannot be carried over")
 	}
-	o := Ownership{Takeover: true, Kind: m.Kind, NftablesMasked: m.NftablesMasked}
+	o := Ownership{Takeover: true, Live: p.Live != nil, Kind: m.Kind, NftablesMasked: m.NftablesMasked}
 	if m.Kind == "ifupdown" {
 		if m.Ifupdown == nil {
 			return Ownership{}, errors.New("the ifupdown baseline lists no interfaces")
@@ -80,10 +82,11 @@ func (r Realizer) WriteOwnership(o Ownership) error {
 }
 
 // resetTree reports a tree a factory reset wrote: no generation may hand the host back to its pre-Andaru setup.
+// A manifest that exists but cannot be read counts as one: only its absence proves an ordinary tree.
 func (r Realizer) resetTree() bool {
 	var m baselineManifest
 	_, err := readJSON(filepath.Join(r.baselineDir(), "manifest.json"), &m)
-	return err == nil && m.Reset
+	return err != nil || m.Reset
 }
 
 const denyAllComment = "andaru deny-all"
@@ -126,29 +129,21 @@ func (r Realizer) Teardown(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	var set []placed
-	switch {
-	case p.Live != nil:
-		g, err := read(r.dir(), *p.Live, p)
-		if err != nil {
-			return err
-		}
-		if set, err = r.files(g); err != nil {
-			return err
-		}
-	case p.Takeover:
-		// A taken-over host that booted onto its captured baseline runs those files; they go too.
-		if set, _, err = r.baseline(); err != nil {
-			return err
-		}
-	default:
+	if p.Live == nil && !p.Takeover {
 		return nil
+	}
+	// Paths only, so a live generation whose stored files are damaged still comes off; with no live generation,
+	// a taken-over host runs its captured baseline, and those files go too.
+	set, err := r.live(p)
+	if err != nil {
+		return err
+	}
+	// Fenced first: if the teardown stops half-way, the host is behind deny-all for the retry.
+	if err := r.DenyAll(ctx); err != nil {
+		return err
 	}
 	if err := r.place(set, nil); err != nil {
 		return err
 	}
-	if err := r.settle(ctx, set, nil); err != nil {
-		return err
-	}
-	return r.DenyAll(ctx)
+	return r.settle(ctx, set, nil)
 }

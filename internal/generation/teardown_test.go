@@ -2,6 +2,7 @@ package generation
 
 import (
 	"maps"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -84,5 +85,45 @@ func TestTeardownBaselineAfterTakeover(t *testing.T) {
 	}
 	if b.net.table != denyAllComment {
 		t.Fatalf("filter = %q", b.net.table)
+	}
+}
+
+func TestTeardownFencesFirst(t *testing.T) {
+	b := newBench(t)
+	b.live(one)
+	b.net.fail = "networkctl reload"
+	if err := b.r.Teardown(t.Context()); err == nil {
+		t.Fatal("teardown hid the failed reload")
+	}
+	if b.net.table != denyAllComment {
+		t.Fatalf("a half-done teardown left filter %q", b.net.table)
+	}
+}
+
+func TestTeardownDamagedLive(t *testing.T) {
+	b := newBench(t)
+	b.live(one)
+	// The stored copies are gone; the paths in the manifest still say what is in /run.
+	stored, _ := filepath.Glob(filepath.Join(b.dir, "1", "*"))
+	for _, path := range stored {
+		if base := filepath.Base(path); base != "manifest.json" && base != "state.json" {
+			os.RemoveAll(path)
+		}
+	}
+	if err := b.r.Teardown(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.net.netFiles()) != 0 {
+		t.Fatalf("left %v", b.net.netFiles())
+	}
+}
+
+func TestUnreadableManifestCountsAsReset(t *testing.T) {
+	b := newBench(t)
+	if err := os.MkdirAll(filepath.Join(b.dir, "baseline", "manifest.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if !b.r.resetTree() {
+		t.Fatal("an unreadable manifest was taken for an ordinary tree")
 	}
 }

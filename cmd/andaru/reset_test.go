@@ -52,7 +52,7 @@ func newResetBench(t *testing.T) *resetBench {
 	return b
 }
 
-func (b *resetBench) plan(t *testing.T, phase reset.Phase) {
+func (b *resetBench) plan(t *testing.T, phase reset.Phase, takeover bool) {
 	t.Helper()
 	verifier, _ := identity.HashResetPassword(context.Background(), nil)
 	if _, err := reset.Plan(context.Background(), b.env, verifier, false, false); err != nil {
@@ -63,6 +63,7 @@ func (b *resetBench) plan(t *testing.T, phase reset.Phase) {
 	var op map[string]any
 	json.Unmarshal(data, &op)
 	op["phase"] = phase
+	op["ownership"] = map[string]any{"takeover": takeover}
 	data, _ = json.Marshal(op)
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
@@ -80,7 +81,7 @@ func TestResetUsage(t *testing.T) {
 
 func TestFenceDuringReset(t *testing.T) {
 	b := newResetBench(t)
-	b.plan(t, reset.TornDown)
+	b.plan(t, reset.TornDown, true)
 	for _, verb := range []string{"leases", "prefixes", "activate 3", "confirm 3", "rollback 3 timer"} {
 		verbs := &fakeVerbs{}
 		var stderr bytes.Buffer
@@ -101,7 +102,7 @@ func TestFenceDuringReset(t *testing.T) {
 
 func TestFenceOpensOnFreshState(t *testing.T) {
 	b := newResetBench(t)
-	b.plan(t, reset.ApplyingRecovery)
+	b.plan(t, reset.ApplyingRecovery, true)
 	verbs := &fakeVerbs{}
 	realizeCommand(context.Background(), []string{"boot"}, &bytes.Buffer{}, func(string) (realizeVerbs, error) { return verbs, nil })
 	realizeCommand(context.Background(), []string{"leases"}, &bytes.Buffer{}, func(string) (realizeVerbs, error) { return verbs, nil })
@@ -171,5 +172,26 @@ func TestResetCancelled(t *testing.T) {
 				t.Fatalf("the cancelled reset left work: %q", b.commands)
 			}
 		})
+	}
+}
+
+func TestFenceKeepsAHostAndaruNeverRan(t *testing.T) {
+	b := newResetBench(t)
+	b.plan(t, reset.Wiped, false)
+	verbs := &fakeVerbs{}
+	realizeCommand(context.Background(), []string{"boot"}, &bytes.Buffer{}, func(string) (realizeVerbs, error) { return verbs, nil })
+	if len(verbs.calls) != 0 {
+		t.Fatalf("boot touched a host Andaru never ran: %v", verbs.calls)
+	}
+}
+
+// A planned reset has stopped nothing: an apply's timer and the engine still run.
+func TestPlannedResetFencesNothing(t *testing.T) {
+	b := newResetBench(t)
+	b.plan(t, reset.Planned, true)
+	verbs := &fakeVerbs{}
+	realizeCommand(context.Background(), []string{"rollback", "3", "timer"}, &bytes.Buffer{}, func(string) (realizeVerbs, error) { return verbs, nil })
+	if !slices.Equal(verbs.calls, []string{"rollback 3 timer"}) {
+		t.Fatalf("calls %v", verbs.calls)
 	}
 }

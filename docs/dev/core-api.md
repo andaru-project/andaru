@@ -406,7 +406,7 @@ flags. A WebUI control for the same reset comes with the WebUI.
 sudo andaru ctl kept store-recovery
 sudo andaru ctl factory-reset run
 sudo andaru ctl factory-reset status
-# Only before andaru-factory-reset.service has stopped anything:
+# Only before andaru-factory-reset.service has begun stopping Andaru:
 sudo andaru ctl factory-reset abort
 ```
 
@@ -438,10 +438,14 @@ A host Andaru never took over keeps its own network; only the state is reset, an
 no kept copy is applied. The engine always starts again; the web service and the
 lease and prefix units only when they ran before.
 
-A power loss resumes the reset at boot. Before the fresh tree exists, boot loads only
-deny-all, and the engine and every realize job wait. A copy whose apply a crash cut
-counts as not up: the reset moves on to the next one. Package removal stays refused
-on a reset host whose takeover remains, even with no confirmed generation.
+A power loss resumes the reset at boot. From the first stop until the fresh tree
+exists, boot loads only deny-all (nothing at all on a host whose network Andaru never
+ran), and the engine and every realize job wait; a planned reset fences nothing yet.
+A copy whose apply a crash cut, or whose apply stayed unconfirmed, counts as not up:
+the reset rolls it back and moves on to the next one. A management copy left without
+an address of its own is refused. Package removal is refused while a reset is
+unfinished, and afterwards while the takeover remains, even with no confirmed
+generation.
 
 ## Network preview
 

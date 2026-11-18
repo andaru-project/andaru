@@ -373,11 +373,12 @@ func (r Realizer) Boot(ctx context.Context) (result error) {
 	}
 	if p.Confirmed == nil {
 		p.Live = nil
+		if r.resetTree() {
+			// Fenced first, so no failure below can leave the host without a filter.
+			return r.consoleRequired(ctx, p, authorization)
+		}
 		if err = advanceAuthorization(authorization, ""); err != nil {
 			return err
-		}
-		if r.resetTree() {
-			return r.consoleRequired(ctx, p, nil)
 		}
 		return r.writePointers("boot:pointers", p)
 	}
@@ -453,16 +454,14 @@ func (r Realizer) Boot(ctx context.Context) (result error) {
 		}
 		return r.writePointers("boot:pointers", p)
 	}
+	if r.resetTree() {
+		// No generation runs: deny-all replaces whatever a candidate half-loaded, in one load.
+		p.Live = nil
+		return r.consoleRequired(ctx, p, authorization, failures...)
+	}
 	// A candidate's filter can fail after nft accepted it (readback, sysctl); no generation runs, so neither does a filter.
 	if err := r.dropFilter(ctx); err != nil {
 		failures = append(failures, err)
-	}
-	if r.resetTree() {
-		if err = advanceAuthorization(authorization, ""); err != nil {
-			return err
-		}
-		p.Live = nil
-		return r.consoleRequired(ctx, p, failures)
 	}
 	if kind == "ifupdown" && ifupdown != nil {
 		if err = advanceAuthorization(authorization, ""); err != nil {
@@ -501,8 +500,9 @@ func (r Realizer) Boot(ctx context.Context) (result error) {
 }
 
 // consoleRequired is boot on a reset tree with no usable generation: deny-all, and only the console gets in.
-func (r Realizer) consoleRequired(ctx context.Context, p Pointers, failures []error) error {
-	failures = append(failures, r.DenyAll(ctx), r.writePointers("boot:pointers", p))
+// The filter comes first; the authorization update and the pointers follow even when it fails.
+func (r Realizer) consoleRequired(ctx context.Context, p Pointers, authorization *authz.StateLock, failures ...error) error {
+	failures = append(failures, r.DenyAll(ctx), advanceAuthorization(authorization, ""), r.writePointers("boot:pointers", p))
 	return errors.Join(append([]error{errors.New("CONSOLE_REQUIRED: no generation is usable on this reset host")}, failures...)...)
 }
 

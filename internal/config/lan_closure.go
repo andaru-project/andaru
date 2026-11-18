@@ -171,6 +171,12 @@ func KeptDeclaration(body []byte) (RestoreDocuments, error) {
 		if _, err := managementLAN(d, nil); err != nil {
 			return RestoreDocuments{}, err
 		}
+		for _, seg := range d.Segments {
+			// Without an address of its own, nobody could reach the management segment it restores.
+			if a := seg.Addressing; len(a.IPv4.Addresses) == 0 && len(a.IPv6.Addresses) == 0 {
+				return RestoreDocuments{}, errors.New("NO_ADDRESS: the kept management segment has no address of its own")
+			}
+		}
 		var err error
 		if declarationBody, err = json.Marshal(d); err != nil {
 			return RestoreDocuments{}, err

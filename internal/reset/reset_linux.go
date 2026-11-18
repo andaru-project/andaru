@@ -101,8 +101,8 @@ func Abort(e Env) error {
 	if err != nil {
 		return err
 	}
-	if op.Phase != Planned {
-		return fmt.Errorf("the reset is at %s; only a planned reset can be aborted", op.Phase)
+	if op.Phase != Planned || op.Stopping {
+		return fmt.Errorf("the reset is at %s and has begun stopping Andaru; it can no longer be aborted; resume it with: systemctl start andaru-factory-reset.service", op.Phase)
 	}
 	return drop(e)
 }
@@ -148,6 +148,12 @@ func Resume(ctx context.Context, e Env) (Operation, error) {
 	if err = upgrade.DpkgConsistent(ctx, e.Run); err != nil {
 		return op, err
 	}
+	// A teardown that began left the host behind deny-all; after a boot or a crash it must be there before anything goes on.
+	if (op.Phase == TornDown || op.Phase == Wiped) && (op.Ownership.Takeover || op.Ownership.Live) {
+		if err := e.Realizer.DenyAll(ctx); err != nil {
+			return op, fmt.Errorf("load the deny-all filter: %w", err)
+		}
+	}
 	// entered is the phase this run moved into; a phase found in the journal was interrupted.
 	var entered Phase
 	advance := func(p Phase) error {
@@ -160,17 +166,27 @@ func Resume(ctx context.Context, e Env) (Operation, error) {
 	for {
 		switch op.Phase {
 		case Planned:
-			if err := check(ctx, e); err != nil {
-				return op, errors.Join(err, drop(e))
-			}
-			op.Units = nil
-			for _, unit := range upgrade.WriterUnits() {
-				if _, err := e.Run(ctx, "systemctl", "is-active", "--quiet", unit); err == nil {
-					op.Units = append(op.Units, unit)
+			if !op.Stopping {
+				if err := check(ctx, e); err != nil {
+					return op, errors.Join(err, drop(e))
+				}
+				// Sampled and journaled before the first stop, so a retry restarts what ran before, not what is left.
+				for _, unit := range upgrade.WriterUnits() {
+					if _, err := e.Run(ctx, "systemctl", "is-active", "--quiet", unit); err == nil {
+						op.Units = append(op.Units, unit)
+					}
+				}
+				op.Stopping = true
+				if err := writeJournal(e.Dir, op); err != nil {
+					return op, err
 				}
 			}
 			if err := upgrade.StopWriters(ctx, e.Run); err != nil {
 				return op, err
+			}
+			// An apply that went pending while the units stopped must be confirmed or rolled back by its owner.
+			if err := check(ctx, e); err != nil {
+				return op, errors.Join(err, e.startUnits(ctx, op), drop(e))
 			}
 			if op.Ownership, err = e.Realizer.ReadOwnership(); err != nil {
 				return op, err
@@ -200,8 +216,8 @@ func Resume(ctx context.Context, e Env) (Operation, error) {
 			}
 		case Fresh:
 			switch {
-			case !op.Ownership.Takeover:
-				// Andaru never took this host's networking over, so there is none of its own to bring up.
+			case !op.Ownership.Takeover && !op.Ownership.Live:
+				// Andaru never ran this host's networking, so there is none of its own to bring up.
 				err = advance(Up)
 			case e.readable("recovery"):
 				err = advance(ApplyingRecovery)
@@ -223,9 +239,10 @@ func Resume(ctx context.Context, e Env) (Operation, error) {
 				err = advance(Up)
 			default:
 				// A copy that did not come up, or whose attempt a crash interrupted, is not tried again. An apply it
-				// left pending would refuse the next one, so it is rolled back first.
-				e.rollbackPending(ctx)
-				err = advance(next)
+				// left pending would refuse the next one, so it is rolled back first; until then the phase stays.
+				if err = e.rollbackPending(ctx); err == nil {
+					err = advance(next)
+				}
 			}
 		case Up, ConsoleRequired:
 			return op, e.finish(ctx, op)
@@ -334,8 +351,8 @@ func (e Env) applyCopy(ctx context.Context, name kept.Name) bool {
 	}()
 	if err != nil {
 		slog.Error("factory reset: kept copy not applied", "copy", name, "error", err)
-		return false
 	}
+	// The engine may have confirmed although its answer was lost: the pointers decide.
 	return e.confirmedLive()
 }
 
@@ -344,14 +361,15 @@ func (e Env) confirmedLive() bool {
 	return err == nil && p.Confirmed != nil && p.Live != nil && *p.Confirmed == *p.Live
 }
 
-func (e Env) rollbackPending(ctx context.Context) {
+func (e Env) rollbackPending(ctx context.Context) error {
 	p, _, err := generation.List(generation.Dir(e.StateDir))
 	if err == nil && p.Pending != nil {
 		err = e.Realizer.Rollback(ctx, *p.Pending, "factory reset: the copy did not come up")
 	}
 	if err != nil {
-		slog.Error("factory reset: roll back the unconfirmed apply", "error", err)
+		return fmt.Errorf("roll back the unconfirmed apply: %w", err)
 	}
+	return nil
 }
 
 func (e Env) startEngine(ctx context.Context) error {
@@ -364,28 +382,17 @@ func (e Env) startEngine(ctx context.Context) error {
 
 // finish starts Andaru's units on the fresh state, drops the journal and the marker, and reboots when asked.
 func (e Env) finish(ctx context.Context, op Operation) error {
-	var failures []error
-	if op.Phase == ConsoleRequired {
+	// The journal stays until the filter and every unit are right, so the unit can retry the end alone.
+	if op.Phase == ConsoleRequired && !e.confirmedLive() {
 		// Nothing came up: nothing but the console may reach the host.
 		if err := e.Realizer.DenyAll(ctx); err != nil {
-			failures = append(failures, err)
+			return fmt.Errorf("load the deny-all filter: %w", err)
 		}
 	}
-	// The engine always runs, so the console has the root CLI; the rest only when it ran before.
-	units := []string{"andaru-engine.service"}
-	for _, unit := range upgrade.WriterUnits() {
-		if unit != "andaru-engine.service" && slices.Contains(op.Units, unit) {
-			units = append(units, unit)
-		}
+	if err := e.startUnits(ctx, op); err != nil {
+		return err
 	}
-	for _, unit := range units {
-		if _, err := e.Run(ctx, "systemctl", "reset-failed", unit); err != nil {
-			slog.Warn("reset unit", "unit", unit, "error", err)
-		}
-		if _, err := e.Run(ctx, "systemctl", "start", unit); err != nil {
-			failures = append(failures, fmt.Errorf("start %s: %w", unit, err))
-		}
-	}
+	var failures []error
 	if err := e.at("finish:drop"); err != nil {
 		return err
 	}
@@ -399,6 +406,26 @@ func (e Env) finish(ctx context.Context, op Operation) error {
 	}
 	if op.Phase == ConsoleRequired {
 		failures = append(failures, errors.New("CONSOLE_REQUIRED: neither the recovery copy nor the last LAN came up; log in at the console as admin"))
+	}
+	return errors.Join(failures...)
+}
+
+// startUnits starts the engine, which the console's root CLI needs, and the other units that ran before the reset.
+func (e Env) startUnits(ctx context.Context, op Operation) error {
+	units := []string{"andaru-engine.service"}
+	for _, unit := range upgrade.WriterUnits() {
+		if unit != "andaru-engine.service" && slices.Contains(op.Units, unit) {
+			units = append(units, unit)
+		}
+	}
+	var failures []error
+	for _, unit := range units {
+		if _, err := e.Run(ctx, "systemctl", "reset-failed", unit); err != nil {
+			slog.Warn("reset unit", "unit", unit, "error", err)
+		}
+		if _, err := e.Run(ctx, "systemctl", "start", unit); err != nil {
+			failures = append(failures, fmt.Errorf("start %s: %w", unit, err))
+		}
 	}
 	return errors.Join(failures...)
 }

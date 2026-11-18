@@ -35,6 +35,10 @@ type box struct {
 	inactive []string
 	// onStop runs at the first systemctl stop, to look at the tree then.
 	onStop func()
+	// fail makes commands with this prefix fail, once each time it is set.
+	fail string
+	// applyErr makes apply n report an error after it did its work, as when the confirm's answer is lost.
+	applyErr func(n int) bool
 }
 
 func newBox(t *testing.T) *box {
@@ -66,7 +70,14 @@ func (b *box) run(_ context.Context, name string, args ...string) ([]byte, error
 	if strings.HasPrefix(command, "systemctl stop") {
 		b.onStop = nil
 	}
+	fail := b.fail != "" && strings.HasPrefix(command, b.fail)
+	if fail {
+		b.fail = ""
+	}
 	b.mu.Unlock()
+	if fail {
+		return nil, errors.New("injected failure: " + command)
+	}
 	if stop != nil && strings.HasPrefix(command, "systemctl stop") {
 		stop()
 	}
@@ -106,7 +117,13 @@ func (b *box) apply(_ context.Context, saved string) (bool, error) {
 		p.Confirmed, p.Live = &id, &id
 	}
 	data, _ = json.Marshal(p)
-	return !pending, os.WriteFile(filepath.Join(dir, "pointers.json"), data, 0o600)
+	if err := os.WriteFile(filepath.Join(dir, "pointers.json"), data, 0o600); err != nil {
+		return false, err
+	}
+	if b.applyErr != nil && b.applyErr(len(b.applied)) {
+		return false, errors.New("the confirm's answer was lost")
+	}
+	return !pending, nil
 }
 
 // network is the fixture declaration with its LAN as the management segment.
@@ -628,5 +645,88 @@ func TestOnlyActiveUnitsStart(t *testing.T) {
 	}
 	if b.ran("systemctl start andaru-web.service") || !b.ran("systemctl start andaru-engine.service") {
 		t.Fatalf("units = %q", b.commands)
+	}
+}
+
+func TestAbortRefusedOnceStopping(t *testing.T) {
+	b := newBox(t)
+	b.plan("")
+	b.fail = "systemctl stop andaru-leases.path"
+	if _, err := Resume(context.Background(), b.env); err == nil {
+		t.Fatal("no failure")
+	}
+	if err := Abort(b.env); err == nil {
+		t.Fatal("aborted a reset that had stopped the web service")
+	}
+}
+
+// The units that ran are sampled once: a retry after a stop failed restarts them, not what was left running.
+func TestUnitSampleSurvivesRetry(t *testing.T) {
+	b := newBox(t)
+	b.plan("")
+	b.fail = "systemctl stop andaru-leases.path"
+	if _, err := Resume(context.Background(), b.env); err == nil {
+		t.Fatal("no failure")
+	}
+	b.inactive = []string{"andaru-web.service"} // stopped by the attempt that failed
+	if _, err := Resume(context.Background(), b.env); err != nil {
+		t.Fatal(err)
+	}
+	if !b.ran("systemctl start andaru-web.service") {
+		t.Fatalf("web stayed down: %q", b.commands)
+	}
+}
+
+func TestApplyPendingWhileStoppingDropsReset(t *testing.T) {
+	b := newBox(t)
+	b.plan("")
+	b.onStop = func() {
+		write(b.t, filepath.Join(generation.Dir(b.env.StateDir), "pointers.json"), `{"confirmed":null,"lastKnownGood":null,"pending":1,"live":null,"takeover":true}`)
+	}
+	if _, err := Resume(context.Background(), b.env); err == nil {
+		t.Fatal("wiped over an apply that went pending")
+	}
+	if active, _, _ := Active(b.env.Dir); active {
+		t.Fatal("the journal stayed")
+	}
+	if !kept.LiveTreeUsable(b.env.StateDir) || !b.ran("systemctl start andaru-web.service") {
+		t.Fatalf("tree touched or units left stopped: %q", b.commands)
+	}
+}
+
+func TestLostConfirmAnswerStillUp(t *testing.T) {
+	b := newBox(t)
+	b.storeRecovery()
+	b.applyErr = func(n int) bool { return n == 1 }
+	b.plan("")
+	op, err := Resume(context.Background(), b.env)
+	if err != nil || op.Phase != Up || len(b.applied) != 1 {
+		t.Fatalf("phase %s, applied %v: %v", op.Phase, b.applied, err)
+	}
+	b.wantDone(true)
+}
+
+func TestResumeNeedsDenyAll(t *testing.T) {
+	b := newBox(t)
+	b.plan("")
+	b.env.failAt = func(s string) error {
+		if s == "fresh:audit" {
+			return errors.New("crash")
+		}
+		return nil
+	}
+	if _, err := Resume(context.Background(), b.env); err == nil {
+		t.Fatal("no crash")
+	}
+	b.env.failAt = nil
+	b.fail = "nft -f"
+	if _, err := Resume(context.Background(), b.env); err == nil {
+		t.Fatal("resumed without deny-all")
+	}
+	if _, phase, _ := Active(b.env.Dir); phase != Wiped {
+		t.Fatalf("phase %s", phase)
+	}
+	if _, err := Resume(context.Background(), b.env); err != nil {
+		t.Fatal(err)
 	}
 }

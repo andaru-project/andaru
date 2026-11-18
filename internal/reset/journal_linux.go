@@ -46,9 +46,11 @@ type Operation struct {
 	Verifier  []byte               `json:"verifier"`
 	Backup    bool                 `json:"backup"`
 	Reboot    bool                 `json:"reboot"`
-	// Units are Andaru's units that were active before the reset; only they start again.
-	Units   []string  `json:"units"`
-	Started time.Time `json:"started"`
+	// Units are Andaru's units that were active before the reset; only they start again. Stopping records that
+	// they were sampled and a stop may have begun: from then on the sample is reused and the reset cannot be aborted.
+	Units    []string  `json:"units"`
+	Stopping bool      `json:"stopping,omitempty"`
+	Started  time.Time `json:"started"`
 }
 
 func journalPath(dir string) string { return filepath.Join(dir, "operation.json") }
@@ -65,9 +67,12 @@ func Active(dir string) (bool, Phase, error) {
 	return true, op.Phase, nil
 }
 
-// BeforeFresh reports a phase in which the old tree is still being stopped, torn down or wiped:
-// nothing but the reset may run then.
-func BeforeFresh(p Phase) bool { return order[p] < order[Fresh] }
+// Fenced reports a phase in which Andaru is stopped and its old tree torn down or wiped: nothing but the reset
+// may run then. A planned reset has stopped nothing, so applies, their timers and the engine still run.
+func Fenced(p Phase) bool { return order[p] >= order[Stopped] && order[p] < order[Fresh] }
+
+// Journal reads the reset journal.
+func Journal(dir string) (Operation, error) { return readJournal(dir) }
 
 func readJournal(dir string) (Operation, error) {
 	var op Operation
@@ -127,6 +132,10 @@ func removeMarker(stateDir string) error {
 // privateDir makes dir a root-owned 0700 directory, or checks that it is one.
 func privateDir(dir string) error {
 	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	// The directory's own entry must survive a power loss too, or boot finds no journal to resume.
+	if err := syncDir(filepath.Dir(dir)); err != nil {
 		return err
 	}
 	info, err := os.Lstat(dir)

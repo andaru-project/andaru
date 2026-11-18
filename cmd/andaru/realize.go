@@ -74,7 +74,7 @@ func realizeCommand(ctx context.Context, args []string, stderr io.Writer, build 
 		return factoryResetVerb(ctx, stderr)
 	}
 	// While a reset stops, tears down or wipes the tree, nothing else touches it; boot only shuts the host.
-	blocked := resetBlocks()
+	blocked, denyAll := resetBlocks()
 	if blocked && verb != "boot" {
 		fmt.Fprintln(stderr, "a factory reset is in progress; "+verb+" waits for it")
 		return 0
@@ -97,7 +97,10 @@ func realizeCommand(ctx context.Context, args []string, stderr io.Writer, build 
 		err = verbs.Confirm(ctx, id)
 	case "boot":
 		if blocked {
-			err = verbs.DenyAll(ctx)
+			// A host whose network Andaru never ran keeps it; any other is shut until the reset resumes.
+			if denyAll {
+				err = verbs.DenyAll(ctx)
+			}
 		} else {
 			err = verbs.Boot(ctx)
 		}

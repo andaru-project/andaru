@@ -90,7 +90,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 				}
 			}
 		}
-		if resetBlocks() {
+		if blocked, _ := resetBlocks(); blocked {
 			// Exit 0, so systemd neither restarts it nor spends its start limit; the reset starts it on the fresh state.
 			fmt.Fprintln(stderr, "a factory reset is in progress; the engine starts when it has the fresh state")
 			return 0
