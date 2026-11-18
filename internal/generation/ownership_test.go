@@ -242,3 +242,23 @@ func TestRollbackOnResetHostNeverHandsBack(t *testing.T) {
 		t.Fatal("the rolled-back files stayed")
 	}
 }
+
+// A generation ran without the takeover flag: the fresh tree is still a reset tree, fenced at every boot.
+func TestLiveWithoutTakeoverStaysFenced(t *testing.T) {
+	b := newBench(t)
+	b.live(one)
+	o, err := b.r.ReadOwnership()
+	if err != nil || o.Takeover || !o.Live {
+		t.Fatalf("ownership = %+v, %v", o, err)
+	}
+	fresh(t, b)
+	if err = b.r.WriteOwnership(o); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Boot(t.Context()); err == nil || !strings.Contains(err.Error(), "CONSOLE_REQUIRED") {
+		t.Fatalf("boot = %v", err)
+	}
+	if b.net.table != denyAllComment {
+		t.Fatalf("filter = %q", b.net.table)
+	}
+}

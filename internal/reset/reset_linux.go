@@ -186,7 +186,11 @@ func Resume(ctx context.Context, e Env) (Operation, error) {
 			}
 			// An apply that went pending while the units stopped must be confirmed or rolled back by its owner.
 			if err := check(ctx, e); err != nil {
-				return op, errors.Join(err, e.startUnits(ctx, op), drop(e))
+				// The reset is dropped only once every writer runs again; otherwise its journal says what to restart.
+				if startErr := e.startUnits(ctx, op); startErr != nil {
+					return op, errors.Join(err, startErr)
+				}
+				return op, errors.Join(err, drop(e))
 			}
 			if op.Ownership, err = e.Realizer.ReadOwnership(); err != nil {
 				return op, err

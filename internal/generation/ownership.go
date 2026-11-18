@@ -69,7 +69,8 @@ func (r Realizer) WriteOwnership(o Ownership) error {
 			return fmt.Errorf("ownership goes only into an empty generations directory; %s exists", e.Name())
 		}
 	}
-	if o.Kind != "" {
+	// A host whose generation ran without the takeover flag still gets the marker, so its boots stay fenced.
+	if o.Kind != "" || o.Live {
 		if err := os.Mkdir(r.baselineDir(), 0o700); err != nil {
 			return err
 		}

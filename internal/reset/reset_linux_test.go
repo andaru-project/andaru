@@ -730,3 +730,18 @@ func TestResumeNeedsDenyAll(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPendingWhileStoppingKeepsJournalUntilUnitsRun(t *testing.T) {
+	b := newBox(t)
+	b.plan("")
+	b.onStop = func() {
+		write(b.t, filepath.Join(generation.Dir(b.env.StateDir), "pointers.json"), `{"confirmed":null,"lastKnownGood":null,"pending":1,"live":null,"takeover":true}`)
+		b.fail = "systemctl start andaru-web.service"
+	}
+	if _, err := Resume(context.Background(), b.env); err == nil {
+		t.Fatal("no failure")
+	}
+	if active, _, _ := Active(b.env.Dir); !active {
+		t.Fatal("the journal went while the web service stayed stopped")
+	}
+}
