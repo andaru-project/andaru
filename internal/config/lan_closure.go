@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 )
 
 // managementLAN copies the management segment, its zone, and its link ancestry.
@@ -50,9 +51,21 @@ func managementLAN(d declaration, secrets map[string]string) ([]byte, error) {
 			queue = append(queue, (*item.Members)...)
 		}
 	}
+	// A group's members come along, so the copy validates on its own.
+	byID := map[string]address{}
+	for _, item := range d.Objects.Addresses {
+		byID[item.ID] = item
+	}
 	wanted := map[string]bool{}
-	for _, id := range d.Management.AllowedSources {
+	pending := slices.Clone(d.Management.AllowedSources)
+	for len(pending) > 0 {
+		id := pending[0]
+		pending = pending[1:]
+		if wanted[id] {
+			continue
+		}
 		wanted[id] = true
+		pending = append(pending, byID[id].Members...)
 	}
 	var addresses []address
 	for _, item := range d.Objects.Addresses {
@@ -120,4 +133,98 @@ func (s *Store) ManagementLAN(ctx context.Context, version string) ([]byte, erro
 		return e
 	})
 	return raw, err
+}
+
+// KeptDeclaration turns a kept copy into the documents a fresh store restores as its first saved version.
+// It accepts recovery.json, a whole declaration with its secrets, or a lan-closure, which becomes a declaration
+// holding only the management segment, its link ancestry, its zone and its allowed sources.
+func KeptDeclaration(body []byte) (RestoreDocuments, error) {
+	var doc struct {
+		Kind        string            `json:"kind"`
+		Declaration json.RawMessage   `json:"declaration"`
+		Secrets     map[string]string `json:"secrets"`
+		Management  *management       `json:"management"`
+		Links       []link            `json:"links"`
+		Segments    []segment         `json:"segments"`
+		Zones       []zone            `json:"zones"`
+		Addresses   []address         `json:"addresses"`
+	}
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return RestoreDocuments{}, err
+	}
+	declarationBody := doc.Declaration
+	switch doc.Kind {
+	case "lan-closure":
+		for i := range doc.Segments {
+			// A delegated prefix comes from an uplink, which a LAN copy never holds.
+			if doc.Segments[i].Addressing.IPv6.Mode == "delegated" {
+				doc.Segments[i].Addressing.IPv6 = ipv6{Mode: "none"}
+			}
+		}
+		d := declaration{
+			SchemaVersion: 1, Management: doc.Management,
+			Links: nonNil(doc.Links), Segments: nonNil(doc.Segments), Zones: nonNil(doc.Zones),
+			Objects: objectSet{Addresses: nonNil(doc.Addresses), Services: []service{}},
+			Policy:  policy{Input: []rule{}, Forward: []rule{}},
+		}
+		// The recorder refused an uplink; a copy edited afterwards is refused here the same way.
+		if _, err := managementLAN(d, nil); err != nil {
+			return RestoreDocuments{}, err
+		}
+		for _, seg := range d.Segments {
+			// Without an address of its own, nobody could reach the management segment it restores.
+			if a := seg.Addressing; len(a.IPv4.Addresses) == 0 && len(a.IPv6.Addresses) == 0 {
+				return RestoreDocuments{}, errors.New("NO_ADDRESS: the kept management segment has no address of its own")
+			}
+		}
+		var err error
+		if declarationBody, err = json.Marshal(d); err != nil {
+			return RestoreDocuments{}, err
+		}
+	case "":
+		if len(declarationBody) == 0 {
+			return RestoreDocuments{}, errors.New("kept copy holds no declaration")
+		}
+		// The engine stores recovery/ from the public view, which adds the built-in roles; a stored declaration
+		// holds only custom ones.
+		var d map[string]json.RawMessage
+		var err error
+		if err = json.Unmarshal(declarationBody, &d); err != nil {
+			return RestoreDocuments{}, err
+		}
+		if raw, ok := d["roles"]; ok {
+			var roles []map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &roles); err != nil {
+				return RestoreDocuments{}, err
+			}
+			roles = slices.DeleteFunc(roles, func(r map[string]json.RawMessage) bool { _, builtIn := r["builtIn"]; return builtIn })
+			if len(roles) == 0 {
+				delete(d, "roles")
+			} else if d["roles"], err = json.Marshal(roles); err != nil {
+				return RestoreDocuments{}, err
+			}
+			if declarationBody, err = json.Marshal(d); err != nil {
+				return RestoreDocuments{}, err
+			}
+		}
+	default:
+		return RestoreDocuments{}, errors.New("unknown kept copy kind " + doc.Kind)
+	}
+	core := make(map[string]backupSecretEntry, len(doc.Secrets))
+	for name, value := range doc.Secrets {
+		core[name] = backupSecretEntry{Kind: "password", Value: value}
+	}
+	secrets, err := canonical(backupSecretDocument{SchemaVersion: 1, Scopes: map[string]map[string]backupSecretEntry{"core": core}})
+	if err != nil {
+		return RestoreDocuments{}, err
+	}
+	docs := RestoreDocuments{Configuration: declarationBody, ConfigurationSecrets: secrets}
+	return docs, ValidateBackupDocuments(docs)
+}
+
+func nonNil[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
 }

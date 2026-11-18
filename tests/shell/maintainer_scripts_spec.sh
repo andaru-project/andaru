@@ -143,6 +143,21 @@ Describe 'andaru maintainer scripts'
       The status should equal 0
     End
 
+    It 'refuses remove while a factory reset is unfinished, even with the tree wiped'
+      mkdir -p "$root/var/lib/andaru-reset"
+      echo '{}' >"$root/var/lib/andaru-reset/operation.json"
+      When run env DPKG_ROOT="$root" sh "$prerm" remove
+      The status should equal 1
+      The stderr should include 'factory reset is unfinished'
+    End
+
+    It 'refuses remove after a factory reset left no confirmed generation'
+      pointers '{"confirmed":null,"lastKnownGood":null,"pending":null,"live":null,"takeover":true}'
+      When run env DPKG_ROOT="$root" sh "$prerm" remove
+      The status should equal 1
+      The stderr should include 'no network'
+    End
+
     It 'removes when no generation was ever confirmed'
       pointers '{"confirmed":null,"lastKnownGood":null,"pending":1,"live":1,"takeover":false}'
       When run env DPKG_ROOT="$root" sh "$prerm" remove

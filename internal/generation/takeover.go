@@ -42,6 +42,8 @@ type baselineManifest struct {
 	Ifupdown *IfupdownBaseline `json:"ifupdown,omitempty"`
 	// NftablesMasked records that the administrator had masked nftables.service before the takeover.
 	NftablesMasked bool `json:"nftablesMasked,omitempty"`
+	// Reset marks a baseline a factory reset wrote: it holds no files, and boot never hands the host back to it.
+	Reset bool `json:"reset,omitempty"`
 }
 
 // IfupdownBaseline is what an ifupdown takeover captured: enough to hand the host back to ifupdown,
@@ -371,6 +373,10 @@ func (r Realizer) Boot(ctx context.Context) (result error) {
 	}
 	if p.Confirmed == nil {
 		p.Live = nil
+		if r.resetTree() {
+			// Fenced first, so no failure below can leave the host without a filter.
+			return r.consoleRequired(ctx, p, authorization)
+		}
 		if err = advanceAuthorization(authorization, ""); err != nil {
 			return err
 		}
@@ -448,6 +454,11 @@ func (r Realizer) Boot(ctx context.Context) (result error) {
 		}
 		return r.writePointers("boot:pointers", p)
 	}
+	if r.resetTree() {
+		// No generation runs: deny-all replaces whatever a candidate half-loaded, in one load.
+		p.Live = nil
+		return r.consoleRequired(ctx, p, authorization, failures...)
+	}
 	// A candidate's filter can fail after nft accepted it (readback, sysctl); no generation runs, so neither does a filter.
 	if err := r.dropFilter(ctx); err != nil {
 		failures = append(failures, err)
@@ -486,6 +497,13 @@ func (r Realizer) Boot(ctx context.Context) (result error) {
 	}
 	slog.Error("booting the pre-Andaru baseline; no generation is usable", "error", errors.Join(failures...))
 	return r.writePointers("boot:pointers", p)
+}
+
+// consoleRequired is boot on a reset tree with no usable generation: deny-all, and only the console gets in.
+// The filter comes first; the authorization update and the pointers follow even when it fails.
+func (r Realizer) consoleRequired(ctx context.Context, p Pointers, authorization *authz.StateLock, failures ...error) error {
+	failures = append(failures, r.DenyAll(ctx), advanceAuthorization(authorization, ""), r.writePointers("boot:pointers", p))
+	return errors.Join(append([]error{errors.New("CONSOLE_REQUIRED: no generation is usable on this reset host")}, failures...)...)
 }
 
 // bootIfupdown starts the host on its unchanged ifupdown configuration when no generation is usable.

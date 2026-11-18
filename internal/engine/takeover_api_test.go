@@ -581,3 +581,22 @@ func TestProposalServesDNSOnASmallLAN(t *testing.T) {
 		t.Fatalf("dhcp offer on a /30: %+v", dhcp)
 	}
 }
+
+func TestIdentitiesAfterOwnership(t *testing.T) {
+	state := t.TempDir()
+	duid := func(b byte) *host.DHCPIdentity { return &host.DHCPIdentity{DUID: []byte{0, 4, b}} }
+	o := generation.Ownership{Takeover: true, Kind: "ifupdown", Ifupdown: &generation.IfupdownBaseline{Interfaces: []host.IfupdownInterface{
+		{Detected: host.Detected{Name: "eth0", PermanentMAC: "02:00:00:00:00:01"}, DHCP: true, Identity: duid(1)},
+		{Detected: host.Detected{Name: "eth1", PermanentMAC: "02:00:00:00:00:02"}, DHCP: true, Identity: duid(2)},
+	}}}
+	if err := (generation.Realizer{StateDir: state}).WriteOwnership(o); err != nil {
+		t.Fatal(err)
+	}
+	got, err := identities(generation.Dir(state), true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || string(got["02:00:00:00:00:01"].DUID) != string([]byte{0, 4, 1}) || string(got["02:00:00:00:00:02"].DUID) != string([]byte{0, 4, 2}) {
+		t.Fatalf("identities = %+v", got)
+	}
+}

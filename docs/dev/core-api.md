@@ -394,6 +394,91 @@ Both were then shut down; Proxmox reported them stopped, matching their initial
 state. This qualification does not establish physical power-loss behavior,
 arm64 hardware, NFS/SMB durability or a full cryptographic audit.
 
+## Factory reset
+
+`andaru ctl factory-reset run` deletes every Andaru account, setting, saved version,
+generation and audit record under `/var/lib/andaru`, and brings the box back on a
+network the operator chose beforehand. It is root-only and interactive, with no
+flags. A WebUI control for the same reset comes with the WebUI.
+
+```sh
+# Optional, beforehand: keep the current saved head as the post-reset network.
+sudo andaru ctl kept store-recovery
+sudo andaru ctl factory-reset run
+sudo andaru ctl factory-reset status
+# Only before andaru-factory-reset.service has begun stopping Andaru:
+sudo andaru ctl factory-reset abort
+```
+
+`run` asks for the new `admin` password (empty means `admin`; anything else must
+meet the password policy), offers a portable backup with secrets, asks whether to
+reboot when done (default no), and requires the phrase `FACTORY RESET`. It then
+writes the journal in `/var/lib/andaru-reset/` and starts
+`andaru-factory-reset.service`, so the reset continues when the SSH session drops.
+
+The unit holds dpkg's locks, stops Andaru, removes the live generation's network
+files, services and filter (the filter becomes deny-all), and deletes the contents
+of `/var/lib/andaru`, keeping the directory and its marker `.andaru-reset`. It
+refuses to start when a mount sits inside the tree, and stops when the tree it
+finds lacks the marker, as after a boot without the data partition. It writes a
+fresh tree: the record that Andaru owns host networking (the takeover, the nftables
+mask, ifupdown's interfaces and their dhcpcd DUIDs), empty configuration, the
+`admin` account, and a `recovery.completed` audit event with reason
+`factory_reset_backup_written` or `factory_reset_backup_skipped`. The engine then
+applies and confirms, in order:
+
+1. `/var/lib/andaru-kept/recovery/`, when stored;
+2. `/var/lib/andaru-kept/last-lan/`, when the recovery copy is missing or does not
+   come up. Its delegated IPv6 becomes none: the uplink it came from is not kept.
+
+With neither, the box stays console-required behind deny-all: log in at the console
+and use the root CLI. Old accounts never come back, `first/` is never read, and
+`/var/lib/andaru-upgrades`, `/var/lib/andaru-kept` and `/etc/andaru` are not touched.
+A host Andaru never took over keeps its own network; only the state is reset, and
+no kept copy is applied. The engine always starts again; the web service and the
+lease and prefix units only when they ran before.
+
+A power loss resumes the reset at boot. From the first stop until the fresh tree
+exists, boot loads only deny-all (nothing at all on a host whose network Andaru never
+ran), and the engine and every realize job wait; a planned reset fences nothing yet.
+A copy whose apply a crash cut, or whose apply stayed unconfirmed, counts as not up:
+the reset rolls it back and moves on to the next one. A management copy left without
+an address of its own is refused. Package removal is refused while a reset is
+unfinished, and afterwards while the takeover remains, even with no confirmed
+generation.
+
+### Qualification evidence (2026-11-18)
+
+Run on the Proxmox lab VMs `andaru-lab` (114, netplan cloud image, WAN `10.0.1.19/16`
+static with a gateway) and `andaru-ifupdown-lab` (117, ifupdown with dhcpcd, WAN by
+DHCP, taken over with `andaru ctl takeover --accept-detected`). Each VM had a second NIC
+as the management LAN, `192.168.77.1/24` with no gateway, with `last-lan/` recorded by a
+root save while that LAN was live. `recovery/` held the same network with the LAN at
+`.2` and the WAN. The probe client was another host on the same bridge, given
+`192.168.77.10/24`. The VMs were driven through the QEMU guest agent, so a network change
+never cut the control channel. Every case started from the same stopped snapshot, ran
+the real interactive `andaru ctl factory-reset run` on a pty, and created an extra
+administrator `oldadmin` first. Both VMs were rolled back afterwards.
+
+| Case | Result |
+| --- | --- |
+| `recovery/` stored (both VMs) | Up on `recovery/`: LAN `.2` SSH open, `.1` closed, WAN SSH closed behind the filter; only `admin` left, `oldadmin` gone; takeover kept |
+| `recovery/` naming a missing card | The engine refused it (`HARDWARE_MISSING`, `MANAGEMENT_REQUIRED`); up on `last-lan/`, LAN `.1` open, WAN without an address |
+| Neither copy | `CONSOLE_REQUIRED`; `andaru deny-all` loaded, every port closed, the engine running for the root CLI, `first/` not used; a reboot loaded deny-all again |
+| Power cut at `stopped`, at `torn-down`, and during the wipe (only the marker left, `wiped` not yet journaled) | Resumed at boot and up on `recovery/` |
+| Power cut at `applying-recovery` | Resumed at boot and up on `last-lan/`: an interrupted copy is not retried |
+| Reboot answered yes | One reboot, then up on `recovery/` |
+| ifupdown WAN by DHCP | Same lease `10.0.1.8` after the reset, the same `DUIDRawData` and `IAID` as dhcpcd's; `networking`, `ifup@` and `nftables` still masked |
+| `last-lan/` only, after a DHCP WAN | The WAN lost its IPv4 address and dhcpcd is gone; LAN `.1` open |
+| SSH session from the LAN the reset cuts | The session timed out; the unit finished the reset and came up on `recovery/` |
+
+The lab found two bugs, fixed before these results: the engine's sandbox made
+`/var/lib/andaru-kept` read-only, so `last-lan/` was never recorded and
+`kept store-recovery` failed; and a stored `recovery/` carried the built-in roles of
+the public view, which a restore refused. Not exercised: the teardown of a Kea or Unbound
+service that Andaru runs (no lab configuration declared one; covered by unit tests), and
+a recovery copy that passes the engine's gate but fails networkd's verification.
+
 ## Network preview
 
 `andaru ctl preview network [--saved-version N]` shows exactly which files Andaru would give systemd-networkd and pppd for a saved version on this host, and what would stop them working. **It changes nothing**: no file is written under `/run`, nothing is reloaded or started, and no state is stored. Applying is a separate, explicit step: see [Applying and taking over](#applying-and-taking-over).
