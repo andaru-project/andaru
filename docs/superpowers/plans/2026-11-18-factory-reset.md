@@ -4,7 +4,7 @@
 
 **Goal:** `andaru ctl factory-reset` wipes the contents of `/var/lib/andaru`, keeps Andaru's ownership of host networking, brings the box up on `recovery/` or else on `last-lan/`, and leaves one Andaru account named `admin`.
 
-**Architecture:** A new `internal/reset` package runs the whole reset in the CLI process, as root, with the engine stopped. It does not go through the engine socket, because the engine's state is what it deletes. A journal at `/var/lib/andaru-reset/` makes every step resumable after a crash or reboot. Before the wipe, reset copies a normalized network-ownership record and the new `admin` verifier into that journal. After the wipe, it opens fresh stores in-process, writes the ownership record into the new `generations/`, saves the kept copy as saved version 1, and applies and confirms it with the existing generation verbs. A failed `recovery/` apply goes straight to `last-lan/`. It never rolls back to the empty pre-apply set.
+**Architecture:** A new `internal/reset` package runs the whole reset as root, with the engine stopped, inside a transient systemd unit, `andaru-factory-reset`. It does not go through the engine socket, because the engine's state is what it deletes. The CLI only reads the prompts, writes the `planned` journal and starts that unit with `systemd-run`, so an SSH session dropped by the network change does not kill the reset. The WebUI will later start the same unit after writing the same journal. A journal at `/var/lib/andaru-reset/` makes every step resumable after a crash or reboot. Before the wipe, reset copies a normalized network-ownership record and the new `admin` verifier into that journal. After the wipe, it opens fresh stores in-process, writes the ownership record into the new `generations/`, saves the kept copy as saved version 1, and applies and confirms it with the existing generation verbs. A failed `recovery/` apply goes straight to `last-lan/`. It never rolls back to the empty pre-apply set.
 
 **Tech Stack:** Go, existing configuration, identity, audit and generation packages, existing hidden-terminal readers. No new dependency.
 
@@ -14,7 +14,7 @@
 
 These are builder decisions the specs leave open, or places where the code forces a choice. Each needs owner approval before Task 1 starts.
 
-1. **Console only.** This plan ships `andaru ctl factory-reset` and nothing on the network. The GUI path stays blocked on setup and the management-recovery substrate, as the 2026-11-17 spec's "Still binding" section says. No API route is added.
+1. **Console now, WebUI later.** The owner confirmed on 2026-11-18 that reset gets a GUI in the Andaru WebUI, built when that WebUI work arrives. This plan ships only `andaru ctl factory-reset` and adds no API route. The split between a prompt client and the `andaru-factory-reset` unit is the seam the WebUI will use: it writes the same `planned` journal after its own reauthentication, typed confirmation and backup offer, then starts the same unit.
 2. **No independent dpkg lock-holder.** The 2026-11-15 lock-holder protected a rollback to the old tree against package changes. The 2026-11-17 spec removes that rollback. Reset therefore takes both dpkg locks (`/var/lib/dpkg/lock-frontend`, then `/var/lib/dpkg/lock`) with `F_SETLK` in its own process for the stop, wipe and bring-up. A crash releases them. Resume reacquires them before it continues. No step needs the old tree, so a package operation that ran in the gap cannot make resume unsafe. Resume still refuses on `dpkg --audit` output.
 3. **The journal is the fence.** While `/var/lib/andaru-reset/operation.json` exists and its phase is not `done`, `andaru engine` refuses to start, and `andaru realize boot` resumes the reset instead of booting. No other mutator needs a new check: the engine is stopped and every realize verb takes `generations/lock`, which reset holds.
 4. **Default password bypass.** Identity refuses `admin` as a password: it is shorter than 15 runes and contains the login (`internal/identity/password.go:110-117`). The spec requires `admin` / `admin` when the operator enters nothing. Reset gets a dedicated `identity.BootstrapResetAdmin`. It skips the policy only for that exact default. An entered password must still pass the normal policy. Nothing else can create a policy-violating password.
@@ -258,11 +258,11 @@ git commit -m "feat: bring a reset box up on the recovery or last LAN copy"
 - Modify: `cmd/andaru/main.go`, `cmd/andaru/ctl.go`, `internal/generation/takeover.go`, `internal/engine/socket_linux.go`
 
 **Interfaces:**
-- Produces: `andaru ctl factory-reset run|resume|status`. `status` prints the phase and the operation ID and nothing secret.
+- Produces: `andaru ctl factory-reset run|resume|status`. `status` prints the phase and the operation ID and nothing secret. `run` writes the `planned` journal and starts `systemd-run --unit=andaru-factory-reset --property=Type=exec andaru realize factory-reset`, then follows `status` until a final phase. The hidden verb `andaru realize factory-reset` calls `reset.Resume`.
 
 - [ ] **Step 1: Write the failing tests**
 
-`TestResetRefusesFlags`: any argument after `run` fails with usage. `TestResetPrompts`: a PTY test enters an empty password, skips the backup, types `FACTORY RESET`, and sees `reset.Run` called with the default verifier. A wrong phrase exits 1 without stopping anything. `TestResetPasswordMismatch`: two different non-empty entries exit 1. `TestEngineRefusesDuringReset`: `serveEngine` fails with a reset-in-progress error while an active journal exists. `TestBootResumes`: `Realizer.Boot` calls the resume hook instead of booting while an active journal exists.
+`TestResetRefusesFlags`: any argument after `run` fails with usage. `TestResetPrompts`: a PTY test enters an empty password, skips the backup, types `FACTORY RESET`, and sees `reset.Run` called with the default verifier. A wrong phrase exits 1 without stopping anything. `TestResetPasswordMismatch`: two different non-empty entries exit 1. `TestEngineRefusesDuringReset`: `serveEngine` fails with a reset-in-progress error while an active journal exists. `TestBootResumes`: `Realizer.Boot` calls the resume hook instead of booting while an active journal exists. `TestRunStartsUnit`: after the prompts, the fake runner sees exactly one `systemd-run` with unit `andaru-factory-reset`, and the CLI process itself stops no unit and deletes nothing.
 
 - [ ] **Step 2: Run the tests and see them fail**
 
@@ -317,7 +317,7 @@ git commit -m "docs: document factory reset and record its lab qualification"
 
 ## Out of scope
 
-- The GUI reset, its reauthentication, and a network API route.
+- The WebUI reset, its reauthentication, and its API route. They come with the WebUI work and reuse the `planned` journal and the `andaru-factory-reset` unit.
 - `andaru setup`. The console-required outcome uses the existing root CLI.
 - Add-ons, the owned-state registry and `addons/`. None exist yet, so none block reset.
 - Reading or deleting `/var/lib/andaru-upgrades` or `first/`.
