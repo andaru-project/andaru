@@ -119,6 +119,10 @@ const (
 	ReasonGeneralSaturated   = "general_saturated"
 	ReasonProtectedSaturated = "protected_saturated"
 	ReasonNotCommitted       = "not_committed"
+	// The factory-reset reasons mark the recovery.completed event a reset writes first into its fresh audit store,
+	// and say whether a portable backup was written before it.
+	ReasonFactoryResetBackupWritten = "factory_reset_backup_written"
+	ReasonFactoryResetBackupSkipped = "factory_reset_backup_skipped"
 )
 
 type Event struct {
@@ -494,7 +498,8 @@ func validResult(result Result) bool {
 
 func validReason(value string) bool {
 	switch value {
-	case ReasonInvalidCredentials, ReasonAccountDisabled, ReasonRateLimited, ReasonPermissionDenied, ReasonStorageFailure, ReasonIntegrityFailure, ReasonGeneralSaturated, ReasonProtectedSaturated, ReasonNotCommitted:
+	case ReasonInvalidCredentials, ReasonAccountDisabled, ReasonRateLimited, ReasonPermissionDenied, ReasonStorageFailure, ReasonIntegrityFailure, ReasonGeneralSaturated, ReasonProtectedSaturated, ReasonNotCommitted,
+		ReasonFactoryResetBackupWritten, ReasonFactoryResetBackupSkipped:
 		return true
 	default:
 		return false
