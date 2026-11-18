@@ -86,7 +86,7 @@ The image was rebuilt as v2 (a marker file, firewalld masked) and pushed to the 
 - maintainer scripts, prerm guards and purge semantics (#67);
 - dpkg locking in factory reset.
 
-Factory reset reduces to wiping `/var/lib/andaru` on a known image. The kept-copy and ownership machinery could shrink, though that was not tested.
+Factory reset loses the dpkg locking and the network-ownership record, since the image always owns the network. It still wipes `/var/lib/andaru`, creates `admin`, and brings the box up on `recovery/`, else on `last-lan/`, from the kept copies in `/var/lib/andaru-kept`. That path was not tested on the image.
 
 ## Not tested
 
