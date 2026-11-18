@@ -1,6 +1,6 @@
 # First setup: `andaru setup`
 
-Partly superseded on 2026-11-18 by [Andaru as an appliance image](2026-11-18-appliance-image-design.md): the takeover step, the package-removal decision and the OpenSSH rule no longer apply.
+Partly superseded on 2026-11-18 by [Andaru as an appliance image](2026-11-18-appliance-image-design.md): the takeover step, the separate interactive takeover assistant, the package-removal decision, the OpenSSH rule, the postinst install hint (author call 10) and the `apt install` qualification no longer apply. On the image, setup is offered on the console at first boot; the setup slice designs it.
 
 Status: approved by the owner on 2026-11-18, author calls and risks included. Not implemented behaviour. Contracts remain provisional until Andaru 1.0.
 
