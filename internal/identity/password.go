@@ -143,6 +143,15 @@ func hashPasswordWithPolicy(ctx context.Context, password []byte, login, display
 	return hashPassword(ctx, password)
 }
 
+// HashResetPassword hashes the factory-reset administrator password. Only an empty entry bypasses the policy:
+// it means the documented default, admin.
+func HashResetPassword(ctx context.Context, password []byte) ([]byte, error) {
+	if len(password) == 0 {
+		return hashPassword(ctx, []byte(ResetAdminLogin))
+	}
+	return hashPasswordWithPolicy(ctx, password, ResetAdminLogin, "")
+}
+
 func hashPassword(ctx context.Context, password []byte) ([]byte, error) {
 	release, err := passwordAdmission.acquire(ctx)
 	if err != nil {

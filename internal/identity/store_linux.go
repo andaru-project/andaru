@@ -353,6 +353,21 @@ func (s *store) BootstrapAdmin(ctx context.Context, login, displayName string, p
 	if err != nil {
 		return Account{}, 0, err
 	}
+	return s.bootstrap(ctx, login, displayName, encoded)
+}
+
+// ResetAdminLogin is the sole account a factory reset creates.
+const ResetAdminLogin = "admin"
+
+// BootstrapResetAdmin creates the factory-reset administrator from a verifier made by HashResetPassword.
+func (s *store) BootstrapResetAdmin(ctx context.Context, verifier []byte) (Account, int64, error) {
+	if len(verifier) == 0 {
+		return Account{}, 0, ErrInvalid
+	}
+	return s.bootstrap(ctx, ResetAdminLogin, "", verifier)
+}
+
+func (s *store) bootstrap(ctx context.Context, login, displayName string, encoded []byte) (Account, int64, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Account{}, 0, err
