@@ -62,7 +62,7 @@ The inventory behind these tasks, with file:line references, is in the PR descri
 ### Task 5: delete the engine takeover API
 - [ ] Move the kept parts of `takeover_api.go` into `applies_api.go`: the error values, `gatherGate` without its takeover and ifupdown parts, `newLiveHandler` and `isLivePath`.
 - [ ] Delete the proposal handler, the draft route (call 2), the identity readers and `previewIdentities`.
-- [ ] Remove `identitySource` from the preview handler, `render.Input.DHCPIdentity` and its networkd output.
+- [ ] Remove `identitySource` from the preview handler, `render.Input.DHCPIdentity` and its networkd output. Its only sources were an ifupdown capture and a running dhcpcd, neither of which exists on the image, so no image box's DHCP lease identity changes. Declared DUIDs (`networkd.go`) stay.
 - [ ] Remove the routes' permissions in `security.go`, and their `openapi.json` entries and error codes.
 
 ### Task 6: drop `takeover` from applies, gates, CLI and web (call 5)
@@ -111,7 +111,7 @@ The inventory behind these tasks, with file:line references, is in the PR descri
   - boot restores the confirmed generation;
   - an apply and confirm work;
   - a factory reset ends up on `last-lan/`.
-- [ ] Run the same on a reset tree, which carries the baseline manifest with `reset: true`.
+- [ ] On a reset tree, which carries the baseline manifest with `reset: true`, check after the upgrade that boot restores the reset's confirmed generation (`last-lan/`) when it has one. With no usable generation, boot stays console-required behind deny-all and the catch-all, and never hands the host back.
 
 ## Out of scope
 
