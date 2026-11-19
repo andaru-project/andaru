@@ -35,23 +35,24 @@ From the 2026-11-19 conversation:
 ## Author calls
 
 1. **The ISO is Fedora CoreOS's live ISO, plus an OCI archive of the release's image.** The release workflow customises the live ISO of the same Fedora CoreOS build as the image's pinned base, so the NIC names the installer shows are the ones the installed box uses. It embeds a small installer with `coreos-installer iso customize --live-ignition`, and adds `andaru.oci`, an OCI archive of the release's image, to the ISO. A from-scratch build such as `bootc install to-disk` produced an unbootable disk for a Fedora CoreOS–based image in the [uCore spike](../../research/ucore-spike.md), so the install stays on Fedora CoreOS's own route.
-2. **The installed box's first boot rebases from the local archive, offline.** The installer writes Fedora CoreOS to the disk with `coreos-installer install`, then copies `andaru.oci` into the installed root's `/var/lib/andaru-install/`. The stock first boot rebases to it with `rpm-ostree rebase ostree-unverified-image:oci-archive:/var/lib/andaru-install/andaru.oci`, deletes the archive, and reboots.
-   - The archive carries no registry signature. Its trust comes from the signed ISO (call 4), and the installer refuses an archive whose digest is not the one the ISO's signed manifest names.
-   - Once Andaru boots, it points the deployment at the registry with `bootc switch --mutate-in-place ghcr.io/andaru-project/andaru:<version>`, with no download. Later updates are signature-checked as usual. Slice 5 decides how the box moves on from that version.
-3. **The stock first boot has no network and no SSH.** Its Ignition config masks NetworkManager and disables `sshd.service` and `sshd.socket`, and masks `zincati`. Disable, not mask, for sshd, so Andaru can enable it later. Fedora's presets would otherwise enable sshd and DHCP on every port during that boot, and the enable link would survive the rebase.
-4. **The ISO is signed.** The release workflow publishes `SHA256SUMS` for both ISOs and one `cosign sign-blob` bundle over it, made with the release key. That requires the release workflow to create the GitHub release, with `contents: write` for that job.
+2. **The installed box's first boot rebases from the local archive, offline.**
+   - The installer writes Fedora CoreOS to the disk with `coreos-installer install`. It grows the root partition and filesystem to the disk (Fedora CoreOS would do so only on first boot), mounts the installed root, and writes into its stateroot's `/var/lib/andaru-install/`: the archive `andaru.oci` and the seed `seed.json` (0600 root). Neither goes through Ignition, so no answer is written to `/boot`.
+   - The stock first boot rebases to it with `rpm-ostree rebase ostree-unverified-image:oci-archive:/var/lib/andaru-install/andaru.oci`, deletes the archive, and reboots.
+   - Once Andaru boots, it points the deployment at the registry with `bootc switch --mutate-in-place --enforce-container-sigpolicy ghcr.io/andaru-project/andaru:<version>`, with no download. Later updates are signature-checked as usual. Slice 5 decides how the box moves on from that version.
+3. **The installed image is verified once the box is online.** The archive carries no registry signature, and anything inside the ISO is only as trustworthy as the ISO: the operator verifies the ISO against the signed `SHA256SUMS` (call 5), as with any operating system. On the box, the first time Andaru can reach the registry, it checks that the release's signature covers the digest it booted, with the image's own policy. Until then the console and the web UI say the image is unverified; a mismatch is shown as a failure and audited.
+4. **The stock first boot has no network and no SSH.** Its Ignition config masks NetworkManager and `zincati`, disables `sshd.service` and `sshd.socket`, and holds the rebase unit, nothing else. Disable, not mask, for sshd, so Andaru can enable it later. Fedora's presets would otherwise enable sshd and DHCP on every port during that boot, and the enable link would survive the rebase. The image already ships the signature policy and keys, so Ignition writes none: copies written there would count as local changes and stop later images from updating them.
+5. **The ISO is signed.** The release workflow publishes `SHA256SUMS` for both ISOs and one `cosign sign-blob` bundle over it, made with the release key. That requires the release workflow to create the GitHub release, with `contents: write` for that job.
    - A GitHub release asset is limited to 2 GiB. If an ISO exceeds that, it is published as an OCI artifact under `ghcr.io/andaru-project/andaru-iso:<version>`, and the release links to it.
-5. **The installer is a small shell program and writes `andaru setup`'s answer document.** It checks only the form of each answer. Andaru on the installed box turns the answers into a declaration with the same code `andaru setup` uses, so a refused answer reopens setup, prefilled. NICs are recorded by permanent MAC address, which the renderer already matches on.
-6. **The administrator's password is asked on the installed box, not by the installer.** A password typed into the live environment would cross into the installed system as plain text. The seed instead creates the administrator account with the installer's SSH key and no password. The account cannot log in to the web until the console's setup step sets a password.
-7. **The seed is applied once, with the usual rollback timer.**
-   - **When:** only when no generation, no kept copy and no reset journal exist. That is never after a reset, which keeps the 2026-11-17 order (`recovery/`, then `last-lan/`).
-   - **How:**
-     - The seed's generation is armed like any apply.
-     - The console's setup step confirms it when it completes, or an SSH login with the seed's key confirms it with `andaru ctl applies confirm`.
-     - If it is not confirmed, the box rolls back to the factory network and filter, as the appliance design's call 6 already defines.
+6. **The installer is a small shell program and writes `andaru setup`'s answer document.** It checks only the form of each answer. Andaru on the installed box turns the answers into a declaration with the same code `andaru setup` uses, so a refused answer reopens setup, prefilled. NICs are recorded by permanent MAC address, which the renderer already matches on.
+7. **The administrator's password is asked on the installed box, not by the installer.** A password typed into the live environment would cross into the installed system as plain text. The seed instead creates the administrator account with the installer's SSH key and no password. The account cannot log in to the web until the console's setup step sets a password.
+8. **The seed is applied automatically once, with the usual rollback timer and the usual confirmation.**
+   - **When:** at the first Andaru boot, only when no generation, no kept copy and no reset journal exist. That is never after a reset, which keeps the 2026-11-17 order (`recovery/`, then `last-lan/`).
+   - **Confirmation:** as for every apply, from a new session over the management path. The console's setup step shows the management address and the exact `andaru ctl applies confirm <id>` to run over SSH with the seed's key, or, once the web service exists, the URL to confirm from. The console does not confirm by itself, because that would prove nothing about the management path. One exception: a box with no SSH key and no web service yet has no remote way to confirm, so there the console offers to confirm after a typed acknowledgement that the management path is unproven, and the audit record says so.
+   - **Timer:** the longest rollback timer Andaru allows, since the operator may be walking from the console to a laptop.
+   - **Rollback:** if it is not confirmed, the box returns to the factory network and filter, as the appliance design's call 6 defines, and the seed stays. It is not applied again automatically. The console's setup step offers it again, prefilled, to correct and re-apply.
    - **After confirmation:** the confirm writes `first/` as today, and the seed file is deleted in the same step, with an audit record. A seed that fails Andaru's checks applies nothing, and setup on the console shows the refusal.
-8. **DHCP management is allowed, with a warning.** Andaru treats DHCP management as an uplink (`UPLINK_MANAGEMENT`), so no `first/` or `last-lan/` is ever recorded, and a full reset then ends at the console. The installer's review screen says so, as setup does before it puts management on an uplink.
-9. **SSH: Andaru renders the authorized keys, and sshd reads only Andaru's file.**
+9. **DHCP management is allowed, with a warning.** Andaru treats DHCP management as an uplink (`UPLINK_MANAGEMENT`), so no `first/` or `last-lan/` is ever recorded, and a full reset then ends at the console. The installer's review screen says so, as setup does before it puts management on an uplink.
+10. **SSH: Andaru renders the authorized keys, and sshd reads only Andaru's file.**
    - **The file:** the engine writes `/var/lib/andaru/ssh/authorized_keys`, root-only, from the keys of accounts holding the administrator role, whenever accounts change. The file lives in the wipeable tree.
    - **The image's sshd drop-in** sorts first, so its values win. It sets:
      - `AuthorizedKeysFile /var/lib/andaru/ssh/authorized_keys`;
@@ -61,38 +62,38 @@ From the 2026-11-19 conversation:
    - **Who logged in:** the login is root. Andaru records which account's key was used from the key fingerprint sshd logs.
    - **No per-login program:** no program runs per login, and the engine's root-only socket is not involved. An SELinux file context labels the file so sshd can read it.
    - **When sshd runs:** Andaru enables sshd when the first key exists and disables it when none is left.
-10. **Console.** `andaru console` is a menu on tty1 and the serial console. Until setup is complete it opens on the setup step, and everything is open. Once setup is complete, the root shell and both resets ask for an administrator's password, while safe mode and status stay open. Its entries are:
+11. **Console.** `andaru console` is a menu on tty1 and the serial console. It is open until an administrator account with a password exists, and opens on the setup step while setup is incomplete. Once an administrator has a password, the root shell and both resets ask for an administrator's password, while safe mode and status stay open. A full reset recreates `admin` with the password typed at reset, so the gate stays meaningful after it. A forgotten password is recovered with the kernel argument `andaru.recovery=1`, typed at the boot menu by someone with physical or hypervisor console access: that boot's console offers the full factory reset without the password, as the 2026-11-17 design's console reset did. Its entries are:
     - setup;
     - status;
     - reboot into safe mode;
     - soft reset;
     - factory reset;
     - a root shell.
-11. **Safe mode is a one-boot flag.**
+12. **Safe mode is a one-boot flag.**
     - **Setting it:**
       - The console entry writes `/var/lib/andaru/safe-mode-next`, and `andaru-network-boot` moves it to `/run/andaru/safe-mode`, so only the next boot is affected.
       - The kernel argument `andaru.safe=1` sets the same flag for a box that never reaches the console.
-    - **Effect:** every add-on unit Andaru renders carries `ConditionPathExists=!/run/andaru/safe-mode`. The network and filter come up as usual. The console and the web UI say that the box is in safe mode.
-12. **Soft reset is a journaled operation that reuses the full reset's machinery:** its journal, fence, unit and resume. Its steps:
+    - **Effect:** every add-on unit Andaru renders carries `After=andaru-network-boot.service` and `ConditionPathExists=!/run/andaru/safe-mode`, so the flag exists before any add-on could start. The network and filter come up as usual. The console and the web UI say that the box is in safe mode.
+13. **Soft reset is its own journaled operation.** It runs in the engine, which stays up, and it keeps its journal at `/var/lib/andaru-reset/soft.json`, which the full reset's code and older images do not read, so a rollback to an older image can never take it for a full wipe. It does not use the full reset's fence: the box keeps its network while it runs. Its steps:
     1. **Identity first:** every other account, every API token and every session are revoked. Identity is not connectivity, so this step has no rollback and closes a compromised credential before anything else runs.
-    2. **Network:** the soft-reset declaration is applied with the usual rollback timer and confirmed from a new session.
-    3. **Cleanup:** add-ons' state and secrets no kept link references are removed.
+    2. **Network:** the soft-reset declaration is applied with the usual rollback timer and confirmed from a new session. If it rolls back, the network stays as it was.
+    3. **Cleanup:** add-ons' state and secrets no kept link references are removed, whichever way step 2 ended.
     4. **Done:** the journal records each step, so a power loss resumes where it stopped.
-13. **The soft-reset declaration** is built from the saved one by reusing the management closure (`managementLAN`):
+14. **The soft-reset declaration** is built from the saved one. It reuses the management closure's ancestry walk, not `managementLAN` itself, which refuses an uplink management segment that the installer allows:
     - **Links kept:** every physical link and PPPoE link, with its own addressing, plus every VLAN, bridge or bond that management or a kept link sits on, with everything under it.
     - **Segments and zones:** each kept link's segment, and those segments' zones, with no rules.
     - **Management:** management, with its allowed sources and the address objects they name, and its DHCP and DNS service settings.
     - **Secrets:** exactly the secrets kept links reference, such as a PPPoE password.
     - **Everything else goes:** other VLANs, bridges and bonds, other zones, rules, NAT, and other objects.
-14. **The full reset is unchanged.** It still creates the `admin` account with the password asked at reset. SSH keys now live in the wipeable tree, so it wipes them, and SSH comes back when an administrator adds a key from the console or the web UI. Until then, the console and the web UI on the management LAN are the way in.
+15. **The full reset is unchanged.** It still creates the `admin` account with the password asked at reset. SSH keys now live in the wipeable tree, so it wipes them, and SSH comes back when an administrator adds a key from the console or the web UI. Until then, the console and the web UI on the management LAN are the way in.
 
 ## Installer
 
-1. **Start:** the ISO boots into the installer on tty1 and the serial console. It checks `andaru.oci` against the ISO's signed manifest before anything else.
-2. **Disk:** the installer lists the disks with size, model and serial, and asks which to erase. A typed confirmation follows. `coreos.inst.install_dev=/dev/…` on the kernel command line skips both.
+1. **Start:** the ISO boots into the installer on tty1 and the serial console.
+2. **Disk:** the installer lists the disks with size, model and serial, and asks which to erase. A typed confirmation follows. `andaru.disk=/dev/…` on the kernel command line skips both. Not `coreos.inst.install_dev`, which would start Fedora CoreOS's own automatic install.
 3. **Management:**
    - the operator picks the NIC from a list showing name, MAC address, driver and link state;
-   - then static (default `192.168.1.1/24`) or DHCP, with the warning from call 8;
+   - then static (default `192.168.1.1/24`) or DHCP, with the warning from call 9;
    - with a static address, the installer asks whether to serve DHCP and DNS on that LAN, and offers a default pool.
 4. **WAN** (optional): which NIC, then one of:
    - DHCP;
@@ -101,18 +102,19 @@ From the 2026-11-19 conversation:
    - or none yet.
 5. **SSH key** (optional): one public key, pasted or read from the boot medium.
 6. **Review:** the installer shows the answers and the warnings, and asks for confirmation. Then it:
-   - writes Fedora CoreOS with an Ignition config holding the seed (`/var/lib/andaru-install/seed.json`, 0600 root), the stock-boot masks of call 3, the signature policy and keys byte-identical to the image's, and the rebase unit;
-   - copies the archive.
+   - writes Fedora CoreOS with the Ignition config of call 4;
+   - grows the root and writes the archive and the seed into it (call 2).
 7. **First boots:**
    - The stock boot rebases offline and reboots.
    - Andaru boots:
      - it repoints the deployment at the registry (call 2);
-     - it applies the seed (call 7);
-     - it opens the console on setup for the administrator's password.
+     - it applies the seed (call 8);
+     - it opens the console on setup for the administrator's password and the confirmation;
+     - once online, it verifies the booted image (call 3).
 
 ## Slices
 
-1. **Lab spike, first:** rebase from an `oci-archive` on stock Fedora CoreOS, then `bootc switch --mutate-in-place` to the registry. Check that the next `bootc upgrade` is signature-checked. Record the ISO size against the 2 GiB asset limit.
+1. **Lab spike, first:** grow the installed root and write into its stateroot before first boot; rebase from an `oci-archive` on stock Fedora CoreOS; `bootc switch --mutate-in-place --enforce-container-sigpolicy` to the registry; check that the next `bootc upgrade` is signature-checked and that the booted digest can be verified against the release signature. Record the ISO size against the 2 GiB asset limit, and how `coreos-installer iso customize` or a rebuilt ISO can carry a file of that size.
 2. **Installer and ISO:** the installer, the archive, the seed, the ISO build, `SHA256SUMS` and its signature, and the GitHub release in the release workflow.
 3. **First boot:**
    - applying and confirming the seed;
@@ -126,7 +128,7 @@ From the 2026-11-19 conversation:
 ## What this changes
 
 - **[Appliance image design](2026-11-18-appliance-image-design.md):**
-  - Its call 11 (first install route) is replaced by calls 1 to 3 here. Its slice 2 becomes slices 1 and 2 here, and its slice 4 (setup) loses the console setup step, the first administrator and SSH to slice 3 here.
+  - Its call 10 (first install route) is replaced by calls 1 to 4 here. Its slice 2 becomes slices 1 and 2 here, and its slice 4 (setup) loses the console setup step, the first administrator and SSH to slice 3 here.
   - The rebase target is the release's own version, not `:stable`.
   - The scheduled rebuild moves to slice 5.
 - **[First setup design](2026-11-18-andaru-setup-design.md):** its workflow runs on the console and starts from the seed, not a takeover. Its management election and first administrator are the installer's and the console's.
