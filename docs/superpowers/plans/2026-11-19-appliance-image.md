@@ -59,8 +59,9 @@ Left to the lab:
 8. **Ownership of the catch-all is exact.** The realizer's foreign-file check and the store's `allowed()` accept the exact path `/run/systemd/network/51-andaru-unclassified.network`, not a `51-andaru-` prefix. Verification (`unmet`) skips it.
 9. **The first declaration cannot silently down a factory link.** The `WOULD_UNCONFIGURE` gate treats a link currently configured by `99-andaru-factory.network` like one configured by Andaru, so a declaration that omits it is refused unless the gate is acknowledged.
 10. **Signing key.**
-    - The owner creates the cosign key pair. The private key and its password become secrets of a GitHub environment, `image-release`, restricted to `v*` tags. The plan never handles the private key.
-    - The public key is committed as `image/cosign.pub`.
+    - Done by the owner on 2026-11-19: the environment `image-release` in `andaru-project/andaru` admits only `v*` tags and holds `COSIGN_PRIVATE_KEY` and `COSIGN_PASSWORD`. The plan never handles the private key.
+    - The ECDSA P-256 public key is committed as `image/cosign.pub`. Its file's SHA-256 is `91be11def530307f6afc91290006b25ea5ddfb4c3ce0e98f4bf9e8bb1899b3b7`.
+    - Nightlies and the scheduled rebuild in slice 2 need a second deployment policy for `main`.
     - `policy.json` uses `"signedIdentity": {"type": "matchRepository"}`, so a pull by tag accepts a signature made by digest.
 11. **The lab image matches the release image except for the key and the namespace.**
     - Build arguments set the public key and the signed namespace. The lab image's own `policy.json` and `registries.d` therefore name the lab registry.
