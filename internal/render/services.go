@@ -214,7 +214,7 @@ func (r *renderer) services() {
 	if d.DNS.Mode == "forward" {
 		tls := d.DNS.Upstreams[0].Protocol == "dot"
 		if tls {
-			lines = append(lines, "\ttls-cert-bundle: /etc/ssl/certs/ca-certificates.crt")
+			lines = append(lines, "\ttls-cert-bundle: /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem")
 		}
 		// Unbound's default do-not-query-localhost refuses all of 127/8 and ::1, so a loopback upstream needs it off.
 		for _, u := range d.DNS.Upstreams {

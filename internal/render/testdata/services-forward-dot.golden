@@ -76,7 +76,7 @@ server:
 	access-control: ::1/128 allow
 	access-control: 192.168.40.0/24 allow
 	local-zone: "lan.example." static
-	tls-cert-bundle: /etc/ssl/certs/ca-certificates.crt
+	tls-cert-bundle: /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
 forward-zone:
 	name: "."
 	forward-addr: 9.9.9.9#dns.quad9.net

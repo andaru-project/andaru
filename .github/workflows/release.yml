@@ -57,6 +57,8 @@ jobs:
 
       - name: Pin the base
         id: base
+        # bash -e -o pipefail: a failed lookup must not hash empty output into a digest.
+        shell: bash
         env:
           # A digest pin for the base, set as a repository variable when a Fedora CoreOS release must be avoided.
           FCOS_BASE: ${{ vars.FCOS_BASE }}

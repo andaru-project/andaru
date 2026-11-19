@@ -19,7 +19,7 @@ CI targets native Linux amd64 and arm64 on Ubuntu 24.04; the persistent Debian l
 
 Andaru ships as its own operating system image, `ghcr.io/andaru-project/andaru`, built on Fedora CoreOS for x86_64 and aarch64. Design: [Andaru as an appliance image](../superpowers/specs/2026-11-18-appliance-image-design.md). The Debian package and the APT repository are no longer built.
 
-There is no installer yet: install media are slice 2 of that design. Until then, the lab route is the install route: install stock Fedora CoreOS with `coreos-installer` and an Ignition config that writes the image's signature policy and rebases to `ostree-image-signed:docker://ghcr.io/andaru-project/andaru:stable`.
+There is no installer yet: install media are slice 2 of that design. Until then, the lab route is the install route: install stock Fedora CoreOS with `coreos-installer` and an Ignition config that writes byte-identical copies of the image's `/etc/containers/policy.json`, `/etc/containers/registries.d/andaru.yaml` and `/etc/pki/containers/andaru.pub`, then rebases to `ostree-image-signed:docker://ghcr.io/andaru-project/andaru:stable`.
 
 **Signatures.** Every release image is signed with Andaru's cosign key. The image refuses an update that the key did not sign:
 
