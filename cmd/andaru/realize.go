@@ -151,11 +151,11 @@ func renderDisaster(root string) func([]byte) error {
 		if err != nil {
 			return err
 		}
-		links, err := host.ReadLinks(context.Background())
+		links, facts, err := disasterHost(context.Background())
 		if err != nil {
 			return err
 		}
-		result, err := render.Network(render.Input{Declaration: decl, Links: links})
+		result, err := render.Network(render.Input{Declaration: decl, Links: links, Facts: facts})
 		if err != nil {
 			return err
 		}
@@ -224,6 +224,16 @@ func renderDisaster(root string) func([]byte) error {
 		}
 		return nil
 	}
+}
+
+// disasterHost reads what the kept LAN renders against: the host's links and its tools, nft among them; tests replace it.
+var disasterHost = func(ctx context.Context) ([]host.LinkStatus, host.RealizerFacts, error) {
+	links, err := host.ReadLinks(ctx)
+	if err != nil {
+		return nil, host.RealizerFacts{}, err
+	}
+	facts, err := host.ReadRealizerFacts()
+	return links, facts, err
 }
 
 // loadDisasterFilter replaces table inet andaru with the kept LAN's filter; tests replace it.
