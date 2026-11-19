@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -176,7 +177,7 @@ func readStrict(path string, value any) error {
 	if err = dec.Decode(value); err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
-	if dec.More() {
+	if dec.Decode(&struct{}{}) != io.EOF {
 		return fmt.Errorf("%s: trailing data", path)
 	}
 	return nil

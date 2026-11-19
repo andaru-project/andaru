@@ -168,7 +168,8 @@ const metadataLimit = 1 << 20
 // readRoot reads a root-owned, single-link regular file whose mode passes allowed, through the descriptor it
 // checked, and at most metadataLimit bytes of it.
 func readRoot(path string, allowed func(os.FileMode) bool) ([]byte, error) {
-	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	// O_NONBLOCK: a FIFO planted at path must not hang the open; the check below refuses it.
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, &os.PathError{Op: "open", Path: path, Err: err}
 	}

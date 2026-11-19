@@ -24,7 +24,7 @@ type box struct {
 	t        *testing.T
 	env      Env
 	keptRoot string
-	upgrades string
+	outside  string
 	mu       sync.Mutex
 	commands []string
 	// applied are the saved versions the fake engine was asked to apply; up says whether each comes up.
@@ -34,9 +34,10 @@ type box struct {
 	pending func(n int) bool
 	// inactive are units systemctl reports inactive before the reset.
 	inactive []string
-	// active are units systemctl show reports active; realizing is what list-units reports for realize units.
+	// active are units systemctl show reports active; realizing and queued are what list-units and list-jobs report for realize units.
 	active    map[string]bool
 	realizing string
+	queued    string
 	// show runs at each systemctl show, with its unit.
 	show func(unit string)
 	// onStop runs at the first systemctl stop, to look at the tree then.
@@ -53,7 +54,7 @@ func newBox(t *testing.T) *box {
 		t.Skip("the reset requires root")
 	}
 	base := t.TempDir()
-	b := &box{t: t, keptRoot: filepath.Join(base, "andaru-kept"), upgrades: filepath.Join(base, "andaru-upgrades"), up: func(int) bool { return true }}
+	b := &box{t: t, keptRoot: filepath.Join(base, "andaru-kept"), outside: filepath.Join(base, "outside"), up: func(int) bool { return true }}
 	state := filepath.Join(base, "andaru")
 	b.env = Env{
 		StateDir: state, Dir: filepath.Join(base, "andaru-reset"), KeptRoot: b.keptRoot,
@@ -107,6 +108,11 @@ func (b *box) run(_ context.Context, name string, args ...string) ([]byte, error
 		b.mu.Lock()
 		defer b.mu.Unlock()
 		return []byte(b.realizing), nil
+	}
+	if strings.HasPrefix(command, "systemctl list-jobs") {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return []byte(b.queued), nil
 	}
 	return nil, nil
 }
@@ -187,10 +193,10 @@ func (b *box) oldState() {
 	write(t, filepath.Join(dir, "1", "state.json"), `{"state":"confirmed","previous":null}`)
 	write(t, filepath.Join(dir, "pointers.json"), `{"confirmed":1,"lastKnownGood":null,"pending":null,"live":1}`)
 	write(t, filepath.Join(b.env.StateDir, "addons", "plugin", "settings.json"), `{}`)
-	if err := os.Symlink(b.upgrades, filepath.Join(b.env.StateDir, "link-out")); err != nil {
+	if err := os.Symlink(b.outside, filepath.Join(b.env.StateDir, "link-out")); err != nil {
 		t.Fatal(err)
 	}
-	write(t, filepath.Join(b.upgrades, "recovery", "state.json"), `{"untouched":true}`)
+	write(t, filepath.Join(b.outside, "recovery", "state.json"), `{"untouched":true}`)
 	d, secrets := network(t)
 	value, _ := json.Marshal(d)
 	closure, err := config.LANClosure(value, secrets)
@@ -308,7 +314,7 @@ func (b *box) wantDone(wan bool) {
 			t.Fatalf("%s survived the wipe", gone)
 		}
 	}
-	if data, err := os.ReadFile(filepath.Join(b.upgrades, "recovery", "state.json")); err != nil || string(data) != `{"untouched":true}` {
+	if data, err := os.ReadFile(filepath.Join(b.outside, "recovery", "state.json")); err != nil || string(data) != `{"untouched":true}` {
 		t.Fatalf("the upgrade copy changed: %q %v", data, err)
 	}
 	store, _ := kept.OpenIn(b.keptRoot, b.env.StateDir)
@@ -441,6 +447,9 @@ func TestPlanRefuses(t *testing.T) {
 		},
 		"running realize unit": func(b *box) {
 			b.realizing = "andaru-realize-activate-2.service loaded activating start Andaru activation\n"
+		},
+		"queued realize job": func(b *box) {
+			b.queued = "42 andaru-realize-activate-2.service start waiting\n"
 		},
 		"existing journal": func(b *box) { b.plan("") },
 	}
@@ -642,7 +651,7 @@ func TestWipeKeepsMountPoint(t *testing.T) {
 	if err := checkMarker(b.env.StateDir, op.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(b.upgrades, "recovery", "state.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(b.outside, "recovery", "state.json")); err != nil {
 		t.Fatalf("the symlink's target went: %v", err)
 	}
 }

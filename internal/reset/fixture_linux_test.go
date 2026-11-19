@@ -3,6 +3,7 @@ package reset
 import (
 	"bytes"
 	"os"
+	"syscall"
 	"testing"
 )
 
@@ -50,5 +51,17 @@ func TestReadStrictModesAndLimit(t *testing.T) {
 	}
 	if err := readStrict(write("big", 0o600, bytes.Repeat([]byte(" "), metadataLimit+1)), &v); err == nil {
 		t.Error("an oversized file was read")
+	}
+	for _, trailing := range []string{`{"State":"x"}}`, `{"State":"x"}]`, `{"State":"x"}{}`} {
+		if err := readStrict(write("t", 0o600, []byte(trailing)), &v); err == nil {
+			t.Errorf("trailing data accepted: %s", trailing)
+		}
+	}
+	fifo := dir + "/fifo"
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := readStrict(fifo, &v); err == nil {
+		t.Error("a FIFO was read")
 	}
 }

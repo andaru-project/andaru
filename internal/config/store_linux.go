@@ -20,8 +20,6 @@ import (
 
 const markerText = "ANDARU_CONFIGURATION_V1\n"
 
-var systemRootActor = authz.Actor{Kind: authz.ActorSystem, ID: "root"}
-
 type Store struct {
 	root               string
 	configDB, secretDB *sql.DB

@@ -13,7 +13,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o "$BUILD_DIR/andaru-arm64" ./cm
 go test ./...
 ```
 
-CI targets native Linux amd64 and arm64 on Ubuntu 24.04; the persistent Debian lab remains a separate amd64 qualification environment. Native CI does not establish ARM appliance boot or Debian arm64 qualification. Go selects the required patched toolchain through its normal verified toolchain mechanism if the installed compiler is older. Build in a task-owned worktree; do not write binaries into tracked source directories.
+CI targets native Linux amd64 and arm64 on Ubuntu 24.04; the appliance image is qualified separately on lab boxes. Native CI does not establish ARM appliance boot. Go selects the required patched toolchain through its normal verified toolchain mechanism if the installed compiler is older. Build in a task-owned worktree; do not write binaries into tracked source directories.
 
 ## Installing
 
@@ -621,7 +621,7 @@ disposable temporary directories.
 The runner labels and passwordless `sudo` are documented in
 [GitHub's hosted-runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
 
-The ordinary suite runs without elevated privileges. Explicit kernel-credential/lifecycle tests use an integration build tag and require root; they fail clearly rather than silently skipping the proof. Build the test executable on the developer host and transfer it to the Debian VM, without installing a Go compiler there:
+The ordinary suite runs without elevated privileges. Explicit kernel-credential/lifecycle tests use an integration build tag and require root; they fail clearly rather than silently skipping the proof. Build the test executable on the developer host and transfer it to the lab box, without installing a Go compiler there:
 
 ```sh
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -c -tags=integration -o "$BUILD_DIR/config.test" ./internal/config
@@ -640,6 +640,8 @@ to the production service. Set `ANDARU_TEST_BINARY` to the absolute tested
 `andaru` executable when running `engine.test`: its fencing proof invokes the
 actual program, reads `503`, requires exit `1`, then verifies complete reopen.
 No product test-helper flag or fault-injection callback is installed.
+
+The Debian lab qualifications below are records of what was proven on Debian. Andaru no longer runs on Debian, and their takeover steps no longer exist.
 
 ### Earlier read-only Debian lab qualification
 

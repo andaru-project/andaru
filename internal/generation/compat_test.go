@@ -76,3 +76,14 @@ func TestV050ResetTreeStillLoads(t *testing.T) {
 		})
 	}
 }
+
+// A Debian-era takeover's baseline manifest records what was taken over; on the image it is ignored, and the tree is
+// not a reset tree.
+func TestDebianTakeoverBaselineIsIgnored(t *testing.T) {
+	b := newBench(t)
+	b.oldFile("pointers.json", "pointers.json")
+	writeFile(t, filepath.Join(b.dir, "baseline", "manifest.json"), `{"kind":"netplan","files":[{"path":"/etc/netplan/50-cloud-init.yaml","mode":"0600","uid":0,"gid":0,"sha256":"`+strings.Repeat("0", 64)+`"}]}`+"\n")
+	if o, err := b.r.ReadOwnership(); err != nil || !o.Live || b.r.resetTree() {
+		t.Fatalf("ownership = %+v, %v, reset tree %v", o, err, b.r.resetTree())
+	}
+}
