@@ -77,13 +77,16 @@ func TestV050ResetTreeStillLoads(t *testing.T) {
 	}
 }
 
-// A Debian-era takeover's baseline manifest records what was taken over; on the image it is ignored, and the tree is
-// not a reset tree.
-func TestDebianTakeoverBaselineIsIgnored(t *testing.T) {
+// A Debian-era takeover generation also names the baseline it took over; the key is read and ignored.
+func TestDebianTakeoverGenerationStillLoads(t *testing.T) {
 	b := newBench(t)
-	b.oldFile("pointers.json", "pointers.json")
-	writeFile(t, filepath.Join(b.dir, "baseline", "manifest.json"), `{"kind":"netplan","files":[{"path":"/etc/netplan/50-cloud-init.yaml","mode":"0600","uid":0,"gid":0,"sha256":"`+strings.Repeat("0", 64)+`"}]}`+"\n")
-	if o, err := b.r.ReadOwnership(); err != nil || !o.Live || b.r.resetTree() {
-		t.Fatalf("ownership = %+v, %v, reset tree %v", o, err, b.r.resetTree())
+	data, err := v050.ReadFile("testdata/v0.5.0-a.1/manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(b.dir, "1", "manifest.json"), strings.Replace(string(data), `"takeover":false`, `"takeover":true,"baseline":"netplan"`, 1))
+	b.oldFile("state.json", "1/state.json")
+	if g, err := Read(b.dir, 1); err != nil || g.SavedVersion != "7" {
+		t.Fatalf("generation = %+v, %v", g, err)
 	}
 }
