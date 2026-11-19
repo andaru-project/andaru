@@ -37,7 +37,9 @@ Left to the lab:
 - The guest agent's start condition.
 - The exit status of `unbound-anchor.service` when it updates the key.
 
-## Calls for the owner
+## Approved calls
+
+The owner approved these on 2026-11-19, with the changes to calls 12 and 13 recorded below.
 
 1. **The Debian package stops building in this slice.** Fedora's unit names and paths break it, and the spec drops it. The `packages` CI job and the release workflow's Debian, APT and keyring jobs are removed here. Slice 3 deletes `debian/`, the APT scripts, the takeover code and the rest.
 2. **Factory reset runs on the image already in this slice.** `upgrade.DpkgConsistent` treats a missing `/usr/bin/dpkg` as nothing to check. `CheckIdle` still runs its pending-apply and realize-job checks. Reset's dpkg locks are skipped when `/var/lib/dpkg` does not exist. Slice 3 still moves these helpers out of `upgrade` and adds the bootc fence.
