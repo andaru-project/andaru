@@ -1,7 +1,7 @@
 #!/bin/sh
 # Checks a built Andaru image as a container, without booting it: its version, its packages, its unit states,
 # its SELinux labels and its signature policy. Booting it is the lab's job. Run it from the repository root;
-# SIGNED_NAMESPACE and COSIGN_PUB name a lab build's overrides.
+# SIGNED_NAMESPACE and COSIGN_PUB name a lab build's overrides. Needs jq.
 #   image-smoke.sh IMAGE VERSION   (ENGINE=docker to use docker instead of podman)
 set -eu
 
@@ -25,13 +25,9 @@ sed "s|@NAMESPACE@|$namespace|" image/signing/policy.json >"$rendered"
 check_file /etc/containers/policy.json "$rendered"
 check_file /etc/pki/containers/andaru.pub "${COSIGN_PUB:-image/cosign.pub}"
 check_file /etc/pki/containers/andaru-nightly.pub image/cosign-nightly.pub
-jq -e --arg ns "$namespace" '
-	def signed($key): . == [{"type": "sigstoreSigned", "keyPath": $key, "signedIdentity": {"type": "matchRepository"}}];
-	.default == [{"type": "reject"}]
-	and (.transports.docker[$ns] | signed("/etc/pki/containers/andaru.pub"))
-	and (.transports.docker[$ns + "/andaru-nightly"] | signed("/etc/pki/containers/andaru-nightly.pub"))
-	and ([.transports[][] | .[] | select(.type == "sigstoreSigned")] | length == 2)
-' "$rendered" >/dev/null || fail "the signature policy does not require the release key for $namespace and the nightly key for $namespace/andaru-nightly only"
+command -v jq >/dev/null || fail "needs jq on this host"
+jq -e --arg ns "$namespace" -f scripts/ci/policy-check.jq "$rendered" >/dev/null ||
+	fail "the signature policy does not require the release key for $namespace and the nightly key for $namespace/andaru-nightly only"
 
 label=$("$engine" image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$image")
 [ "$label" = "$version" ] || fail "version label is '$label', not '$version'"
