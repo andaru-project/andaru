@@ -40,7 +40,7 @@ Left to the lab:
 ## Calls for the owner
 
 1. **The Debian package stops building in this slice.** Fedora's unit names and paths break it, and the spec drops it. The `packages` CI job and the release workflow's Debian, APT and keyring jobs are removed here. Slice 3 deletes `debian/`, the APT scripts, the takeover code and the rest.
-2. **Factory reset runs on the image already in this slice.** `upgrade.CheckIdle` and `upgrade.DpkgConsistent` treat a missing `/usr/bin/dpkg` as nothing to check. Reset's dpkg locks are skipped when `/var/lib/dpkg` does not exist. Slice 3 still moves these helpers out of `upgrade` and adds the bootc fence.
+2. **Factory reset runs on the image already in this slice.** `upgrade.DpkgConsistent` treats a missing `/usr/bin/dpkg` as nothing to check. `CheckIdle` still runs its pending-apply and realize-job checks. Reset's dpkg locks are skipped when `/var/lib/dpkg` does not exist. Slice 3 still moves these helpers out of `upgrade` and adds the bootc fence.
 3. **The root integration suites run in a privileged `registry.fedoraproject.org/fedora:44` container** on the same runners, with Fedora's `nftables`, `kea`, `kea-hooks`, `unbound`, `iproute`, `iputils` and `python3`. The AppArmor step goes. `upgrade.test` stays on the Ubuntu runner, unchanged, until slice 3 deletes it. In CI, `ANDARU_TEST_REQUIRE_TOOLS=1` turns every missing-tool skip into a failure.
 4. **No VM boots in CI.** CI builds, lints and smoke-tests the image as a container, on both architectures. Booting, applying, DHCP, DNS, PPPoE, factory reset and the signature refusals are tested on a Proxmox VM in the lab, as for factory reset.
 5. **Unbound's trust anchor.** Before `unbound-checkconf`, the realizer runs `systemctl start unbound-anchor.service`. It then fails the apply when `/var/lib/unbound/root.key` is still missing, whatever the unit's exit status.
@@ -107,7 +107,7 @@ Left to the lab:
 
 **Files:** `internal/upgrade/quiesce_linux.go`, `internal/reset/reset_linux.go`, `cmd/andaru/reset.go`, tests.
 
-- [ ] `CheckIdle` and `DpkgConsistent` return nil when `/usr/bin/dpkg` does not exist. A test with an injected stat proves this, and another proves that an existing dpkg is still run.
+- [ ] `DpkgConsistent` returns nil when `/usr/bin/dpkg` does not exist. A test with an injected stat proves this, and another proves that an existing dpkg is still run. A `CheckIdle` test without dpkg proves it still refuses a pending apply and a running realize job.
 - [ ] Reset takes the dpkg locks only when `/var/lib/dpkg` exists. Existing tests still pass.
 
 ## Task 3: Catch-all and filters
