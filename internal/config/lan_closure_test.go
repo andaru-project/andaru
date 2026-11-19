@@ -186,3 +186,40 @@ func TestKeptRecoveryDropsBuiltInRoles(t *testing.T) {
 		t.Fatalf("built-in roles kept: %s", docs.Configuration)
 	}
 }
+
+// A kept copy carries no DHCPv6 server, so an advertisement that points clients at one becomes SLAAC, which a reset
+// apply accepts; the saved declaration keeps its own mode.
+func TestKeptSegmentDropsDHCPv6Advertisements(t *testing.T) {
+	yes, no := true, false
+	for _, ra := range []*advertisement{
+		{Mode: "managed"}, {Mode: "assisted"}, {Mode: "stateless"},
+		{Enabled: &yes, Managed: &yes, OtherInfo: &no},
+	} {
+		d := declaration{
+			Management: &management{Segment: "seg"},
+			Links:      []link{{identity: identity{ID: "link"}, Kind: "ethernet", Enabled: true}},
+			Segments: []segment{{
+				identity: identity{ID: "seg"}, Link: "link",
+				Addressing: addressing{IPv4: ipv4{Mode: "static", Addresses: []string{"192.0.2.1/24"}}, IPv6: ipv6{Mode: "static", Addresses: []string{"2001:db8::1/64"}, RA: ra}},
+			}},
+		}
+		raw, err := managementLAN(d, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var kept struct{ Segments []segment }
+		if err := json.Unmarshal(raw, &kept); err != nil {
+			t.Fatal(err)
+		}
+		if got := kept.Segments[0].Addressing.IPv6.RA.mode(); got != "unmanaged" {
+			t.Errorf("%+v: kept mode %q", *ra, got)
+		}
+		if d.Segments[0].Addressing.IPv6.RA != ra || ra.mode() == "unmanaged" {
+			t.Errorf("%+v: the saved declaration changed", *ra)
+		}
+	}
+	unmanaged := &advertisement{Mode: "router"}
+	if got := keptSegment(segment{Addressing: addressing{IPv6: ipv6{RA: unmanaged}}}).Addressing.IPv6.RA; got != unmanaged {
+		t.Error("a mode that needs no DHCPv6 server changed")
+	}
+}

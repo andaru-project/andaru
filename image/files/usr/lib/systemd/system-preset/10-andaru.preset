@@ -7,6 +7,10 @@ enable andaru-factory-reset.service
 enable andaru-leases.path
 enable andaru-prefixes.path
 enable andaru-prefixes.timer
+# Started at boot, they run only once a confirmed generation wrote their configuration (Andaru's drop-ins).
+enable kea-dhcp4.service
+enable kea-dhcp6.service
+enable unbound.service
 disable andaru-web.service
 disable sshd.service
 disable zincati.service

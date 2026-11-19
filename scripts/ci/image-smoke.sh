@@ -26,13 +26,13 @@ state() {
 	[ "$got" = "$2" ] || fail "$1 is $got, not $2"
 }
 for u in systemd-networkd.service andaru-engine.service andaru-network-boot.service andaru-factory-reset.service \
-	andaru-leases.path andaru-prefixes.path andaru-prefixes.timer; do
+	andaru-leases.path andaru-prefixes.path andaru-prefixes.timer kea-dhcp4.service kea-dhcp6.service unbound.service; do
 	state "$u" enabled
 done
 for u in sshd.service zincati.service andaru-web.service; do
 	state "$u" disabled
 done
-for u in NetworkManager.service NetworkManager-wait-online.service; do
+for u in NetworkManager.service NetworkManager-wait-online.service systemd-networkd-wait-online.service; do
 	state "$u" masked
 done
 # First boot applies presets to every unit; the states above must survive that.
@@ -40,10 +40,13 @@ systemctl preset-all --preset-mode=enable-only >/dev/null 2>&1 || fail "presets 
 for u in sshd.service zincati.service andaru-web.service; do
 	state "$u" disabled
 done
+state systemd-networkd-wait-online.service masked
 for f in /run/andaru-unbound/andaru.conf /run/andaru-leases/leases.conf; do
 	matchpathcon "$f" | grep -q ":named_conf_t:" || fail "$f would not be readable by Unbound: $(matchpathcon "$f")"
 done
 grep -q "\"ghcr.io/andaru-project\"" /etc/containers/policy.json || fail "policy.json does not require a signature for ghcr.io/andaru-project"
+# bootc refuses to enforce a policy whose default accepts anything, so bootc upgrade would refuse every image.
+grep -A3 "\"default\"" /etc/containers/policy.json | grep -q "\"reject\"" || fail "policy.json default is not reject"
 test -s /etc/pki/containers/andaru.pub || fail "no signing key"
 echo "image-smoke: $VERSION ok"
 '

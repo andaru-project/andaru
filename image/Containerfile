@@ -39,6 +39,7 @@ COPY --from=web /src/web/dist/ /usr/share/andaru/web/
 COPY packaging/systemd/andaru-*.service packaging/systemd/andaru-*.path packaging/systemd/andaru-*.timer /usr/lib/systemd/system/
 COPY packaging/systemd/kea-dhcp4.service.d/ /usr/lib/systemd/system/kea-dhcp4.service.d/
 COPY packaging/systemd/kea-dhcp6.service.d/ /usr/lib/systemd/system/kea-dhcp6.service.d/
+COPY packaging/systemd/unbound.service.d/ /usr/lib/systemd/system/unbound.service.d/
 COPY packaging/systemd/networkd.conf.d/ /usr/lib/systemd/networkd.conf.d/
 COPY packaging/iproute2/andaru.conf /usr/share/iproute2/rt_protos.d/andaru.conf
 COPY packaging/tmpfiles.d/andaru.conf /usr/lib/tmpfiles.d/andaru.conf
@@ -54,9 +55,12 @@ RUN sed -i "s|@NAMESPACE@|${SIGNED_NAMESPACE}|" /etc/containers/policy.json /etc
     chmod 0755 /usr/bin/andaru /usr/bin/andaru-web /usr/share/kea/scripts/andaru-lease-event && \
     semodule -i /usr/share/andaru/selinux/andaru.cil && \
     systemctl enable systemd-networkd.service andaru-engine.service andaru-network-boot.service \
-        andaru-factory-reset.service andaru-leases.path andaru-prefixes.path andaru-prefixes.timer && \
+        andaru-factory-reset.service andaru-leases.path andaru-prefixes.path andaru-prefixes.timer \
+        kea-dhcp4.service kea-dhcp6.service unbound.service && \
     systemctl disable sshd.service zincati.service andaru-web.service && \
-    systemctl mask NetworkManager.service NetworkManager-wait-online.service && \
+    # Masked, not disabled: enabling systemd-networkd, as presets do on first boot, enables wait-online with it. Every
+    # link Andaru writes is RequiredForOnline=no, so it would only wait out its timeout on every boot.
+    systemctl mask NetworkManager.service NetworkManager-wait-online.service systemd-networkd-wait-online.service && \
     # moby-engine's group stays in /etc/group after its removal, which bootc's sysusers lint rejects.
     groupdel docker && \
     rm -rf /run/dnf /run/kea /run/unbound /run/openvpn-client /run/openvpn-server /run/pppd /tmp/* /var/cache/* /var/lib/dnf \
