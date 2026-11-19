@@ -26,7 +26,8 @@ From the 2026-11-19 conversation:
 - **Safe mode:** a boot that enables no add-ons at all, to recover from an add-on that broke the box.
 - **Soft reset:**
   - It wipes everything except each interface's own network settings.
-  - VLANs, bridges and bonds go, except those a kept link or management sits on, which stay with everything under them.
+  - VLANs stay, with their own settings: on fibre the WAN is often a VLAN. (This revises the first ruling that VLANs go.)
+  - Bridges and bonds go, except those a kept link or management sits on, which stay with everything under them.
   - It keeps only the administrator performing the reset, with their password and SSH keys.
   - It keeps DHCP and DNS on the management LAN, and the audit log.
 - **Full factory reset:** the existing one ([2026-11-17 design](2026-11-17-factory-reset-data-design.md)). It wipes everything, the audit log included, and brings management back on a best-effort basis.
@@ -80,11 +81,11 @@ From the 2026-11-19 conversation:
     3. **Cleanup,** only after step 2 is confirmed: add-ons' state and secrets no kept link references are removed. If step 2 rolls back, the soft reset ends there: identity stays revoked, and the network, its secrets and the add-ons stay as they were, so the live configuration still finds everything it names.
     4. **Done:** the journal records each step, so a power loss resumes where it stopped.
 14. **The soft-reset declaration** is built from the saved one. It reuses the management closure's ancestry walk, not `managementLAN` itself, which refuses an uplink management segment that the installer allows:
-    - **Links kept:** every physical link and PPPoE link, with its own addressing, plus every VLAN, bridge or bond that management or a kept link sits on, with everything under it.
+    - **Links kept:** every physical link, VLAN and PPPoE link, with its own addressing, plus every bridge or bond that management or a kept link sits on, with everything under it.
     - **Segments and zones:** each kept link's segment, and those segments' zones, with no rules.
     - **Management:** management, with its allowed sources and the address objects they name, and its DHCP, DHCPv6 and DNS service settings. The DNS service keeps only the management segment and no virtual addresses, since the objects those name go.
     - **Secrets:** exactly the secrets kept links reference, such as a PPPoE password.
-    - **Everything else goes:** other VLANs, bridges and bonds, other zones, rules, NAT, and other objects.
+    - **Everything else goes:** other bridges and bonds, other zones, rules, NAT, and other objects.
 15. **The full reset is unchanged.** It still creates the `admin` account with the password asked at reset. SSH keys now live in the wipeable tree, so it wipes them and disables sshd, and SSH comes back when an administrator adds a key from the console or the web UI. Until then, the console and the web UI on the management LAN are the way in.
 
 ## Installer
@@ -134,10 +135,6 @@ From the 2026-11-19 conversation:
 - **[First setup design](2026-11-18-andaru-setup-design.md):** its workflow runs on the console and starts from the seed, not a takeover. Its management election and first administrator are the installer's and the console's.
 - **Factory reset designs:** a soft reset now exists beside the full reset. The full reset also wipes SSH keys and add-ons. With SSH keys wiped, its "SSH from the management LAN" way back in becomes the console and the web UI until a key is added.
 - **`docs/dev/core-api.md`:** installing is from the ISO, and the lab route stays for development.
-
-## Open question
-
-- **A WAN on a VLAN or bond** (common on fibre: DHCP or static on VLAN 7, for example) is neither a physical link nor a PPPoE link, and nothing sits on it. Read literally, a soft reset drops it and the box loses the internet. The author's proposal: a link that carries the uplink segment (the one with the default route) counts as kept, with everything under it.
 
 ## Non-goals
 
