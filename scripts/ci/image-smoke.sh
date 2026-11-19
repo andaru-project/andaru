@@ -49,6 +49,9 @@ grep -q "\"ghcr.io/andaru-project\"" /etc/containers/policy.json || fail "policy
 grep -A3 "\"default\"" /etc/containers/policy.json | grep -q "\"reject\"" || fail "policy.json default is not reject"
 test -s /etc/pki/containers/andaru.pub || fail "no signing key"
 test -s /etc/pki/containers/andaru-nightly.pub || fail "no nightly signing key"
-grep -q "\"ghcr.io/andaru-project/andaru-nightly\"" /etc/containers/policy.json || fail "policy.json does not scope the nightly key to andaru-nightly"
+# The nightly scope must require a signature by the nightly key: not the release key, and not insecureAcceptAnything.
+grep -A4 "\"ghcr.io/andaru-project/andaru-nightly\"" /etc/containers/policy.json | tr -d " \n" |
+	grep -q "\"type\":\"sigstoreSigned\",\"keyPath\":\"/etc/pki/containers/andaru-nightly.pub\"" ||
+	fail "policy.json does not require the nightly key for andaru-nightly"
 echo "image-smoke: $VERSION ok"
 '

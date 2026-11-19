@@ -25,7 +25,7 @@ There is no installer yet: install media are slice 2 of that design. Until then,
 
 - the public key is [`image/cosign.pub`](../../image/cosign.pub), installed as `/etc/pki/containers/andaru.pub`;
 - the key file's SHA-256 is `91be11def530307f6afc91290006b25ea5ddfb4c3ce0e98f4bf9e8bb1899b3b7`;
-- `/etc/containers/policy.json` requires that signature for `ghcr.io/andaru-project` only.
+- `/etc/containers/policy.json` requires that signature for `ghcr.io/andaru-project`, except `ghcr.io/andaru-project/andaru-nightly`, which requires the nightly key instead (see Nightlies below). Other registries keep Fedora CoreOS's behaviour.
 
 To check an image by hand: `cosign verify --key image/cosign.pub ghcr.io/andaru-project/andaru:<version>`.
 
