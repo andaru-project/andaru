@@ -31,7 +31,7 @@ To check an image by hand: `cosign verify --key image/cosign.pub ghcr.io/andaru-
 
 **From source:** `podman build -f image/Containerfile --build-arg VERSION=0.0.0-dev -t andaru:dev .` builds the image for this machine's architecture, and `sh scripts/ci/image-smoke.sh andaru:dev 0.0.0-dev` checks it.
 
-**Releasing** (maintainers): push a tag on `main`. `v1.2.3` is a release, `v1.2.3-rcN` a prerelease. The release workflow builds both architectures, pushes them unsigned as `1.2.3-amd64` and `1.2.3-arm64`, signs the multi-architecture index in the `image-release` environment, and only then tags it `1.2.3`, and `stable` for a release.
+**Releasing** (maintainers): push a tag on `main`. `v1.2.3` is a release, `v1.2.3-rc.N` a prerelease (`rc.N`, so that `rc.10` sorts after `rc.9`). Tags must be signed: `git tag -s v1.2.3`. The release workflow builds both architectures, pushes them unsigned as `1.2.3-amd64` and `1.2.3-arm64`, signs the multi-architecture index in the `image-release` environment, and only then tags it `1.2.3`, and `stable` for a release.
 
 ## Upgrading on Debian
 

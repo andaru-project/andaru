@@ -1,7 +1,7 @@
 name: Release
 
 # A pushed tag builds Andaru's image for both architectures, signs it with the image-release environment's cosign key,
-# and only then gives it its version tag (and stable, for a release). Tags: v1.2.3, v1.2.3-rcN (a prerelease).
+# and only then gives it its version tag (and stable, for a release). Tags: v1.2.3, v1.2.3-rc.N (a prerelease).
 on:
   push:
     tags: ['v*']
