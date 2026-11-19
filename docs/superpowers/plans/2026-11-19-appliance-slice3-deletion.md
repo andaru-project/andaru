@@ -12,7 +12,9 @@ What Andaru still does on the image stays, and behaves the same: applying and co
 
 **Spec:** slice 3 of [Andaru as an appliance image](../specs/2026-11-18-appliance-image-design.md), and the boxes it already runs on: images from slice 1 (`v0.5.0-a.1`) and nightlies.
 
-## Calls for the owner
+## Approved calls
+
+The owner approved these on 2026-11-19, after review changed call 3.
 
 1. **The Debian VM lab goes.** `dev/vm-lab/`, `docs/dev/vm-lab.md` and the `.gitignore` lab block build two Debian 13 golden images (netplan and ifupdown). Qualification now happens on the image, on Proxmox.
 2. **The draft route goes.** `POST /api/v1/preview/network/draft` judges an unsaved batch, and only `andaru ctl takeover` uses it. Setup (slice 4) can add what it needs when it needs it.
