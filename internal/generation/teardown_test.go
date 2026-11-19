@@ -14,7 +14,7 @@ func TestTeardownClearsLive(t *testing.T) {
 	files := served(`{"Dhcp4":{}}`)
 	maps.Copy(files, two)
 	files[filterEntry] = "table inet andaru {\n\tcomment \"generation 1\"\n}\n"
-	id := b.gen(false, files)
+	id := b.gen(files)
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestTeardownClearsLive(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The next apply verifies against what is left: no old uplink to keep.
-	next := b.gen(false, map[string]string{"50-andaru-eth1.network": "[Match]\nName=eth1\n\n[Network]\nAddress=192.0.2.1/24\n"})
+	next := b.gen(map[string]string{"50-andaru-eth1.network": "[Match]\nName=eth1\n\n[Network]\nAddress=192.0.2.1/24\n"})
 	b.net.devices["eth1"] = true
 	if err := b.r.Activate(t.Context(), next); err != nil {
 		t.Fatalf("the next apply kept the old uplink in its check: %v", err)
@@ -63,32 +63,14 @@ func TestTeardownClearsLive(t *testing.T) {
 }
 
 func TestTeardownWithoutLiveTouchesNothing(t *testing.T) {
-	b := cloud(t)
+	b := newBench(t)
+	writeFile(t, filepath.Join(b.net.root, netDir, "10-other.network"), "[Match]\nName=eth9\n")
 	before := b.net.netFiles()
 	if err := b.r.Teardown(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if len(b.net.argv) != 0 || !maps.Equal(before, b.net.netFiles()) {
 		t.Fatalf("a host Andaru never ran was touched: %q", b.net.argv)
-	}
-}
-
-func TestTeardownBaselineAfterTakeover(t *testing.T) {
-	b := cloud(t)
-	if err := b.r.captureBaseline(Pointers{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeJSON(filepath.Join(b.dir, "pointers.json"), Pointers{Takeover: true}); err != nil {
-		t.Fatal(err)
-	}
-	if err := b.r.Teardown(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if files := b.net.netFiles(); len(files) != 1 || files[filepath.Base(catchAllPath)] == "" {
-		t.Fatalf("baseline files left: %v", files)
-	}
-	if b.net.table != denyAllComment {
-		t.Fatalf("filter = %q", b.net.table)
 	}
 }
 

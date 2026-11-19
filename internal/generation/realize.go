@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"maps"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -41,8 +40,6 @@ type Realizer struct {
 	// VerifyWait is how long networkd gets to apply a generation; Poll is the interval between looks.
 	VerifyWait, Poll time.Duration
 	LockWait         time.Duration
-	// HandBackWait is how long ifupdown gets to bring interfaces back; 30 seconds when zero.
-	HandBackWait time.Duration
 	// LeaseSettle is how long the lease sync waits for more lease events before it reads.
 	LeaseSettle time.Duration
 	// DeprecateAfter is how long the prefix sync waits before advertising a prefix it just saw replaced, so
@@ -130,6 +127,7 @@ func (r Realizer) writePointers(step string, p Pointers) error {
 	if err := r.at(step); err != nil {
 		return err
 	}
+	p.Takeover = nil // read from older trees, never written
 	return writeJSON(filepath.Join(r.dir(), "pointers.json"), p)
 }
 
@@ -172,11 +170,10 @@ func (r Realizer) files(g Generation) ([]placed, error) {
 	return out, nil
 }
 
-// live is what the pointers say is in /run now: a generation's files or the baseline's.
+// live is what the pointers say is in /run now: a generation's files, or the catch-all once set up.
 func (r Realizer) live(p Pointers) ([]placed, error) {
 	if p.Live == nil {
-		set, _, err := r.bare()
-		return set, err
+		return r.bare(), nil
 	}
 	g, err := read(r.dir(), *p.Live, p)
 	if err != nil {
@@ -251,13 +248,11 @@ type observation struct {
 	route   string // interface of the IPv4 default route, if any
 	// dns is what systemd-resolved reports per interface; nil when it was not asked.
 	dns map[string][]netip.Addr
-	// servers reports that resolved has any server for the host, global or per interface.
-	servers bool
 }
 
 func (r Realizer) observe(ctx context.Context, withDNS bool) (observation, error) {
 	o := observation{managed: []host.Managed{}}
-	// networkctl fails outright while networkd is stopped, as before an ifupdown takeover starts it.
+	// networkctl fails outright while networkd is stopped.
 	if _, err := r.Run(ctx, "/usr/bin/systemctl", "is-active", "--quiet", "systemd-networkd.service"); err == nil {
 		data, err := r.Run(ctx, "/usr/bin/networkctl", "list", "--json=short")
 		if err == nil {
@@ -289,8 +284,6 @@ func (r Realizer) observe(ctx context.Context, withDNS bool) (observation, error
 	if withDNS {
 		if data, err = r.Run(ctx, "/usr/bin/resolvectl", "dns"); err == nil {
 			o.dns, err = host.ParseResolvedDNS(data)
-			global, links, _ := host.ParseResolvectl(data)
-			o.servers = len(global) > 0 || slices.ContainsFunc(slices.Collect(maps.Values(links)), func(l []string) bool { return len(l) > 0 })
 		}
 		if err != nil {
 			return o, fmt.Errorf("ask systemd-resolved for its servers: %w", err)
@@ -415,25 +408,6 @@ func (r Realizer) Activate(ctx context.Context, id int) (result error) {
 	if err != nil {
 		return err
 	}
-	// fromIfupdown is the takeover of a host ifupdown configured: networkd is started and handed back by hand.
-	fromIfupdown := g.Takeover && g.Baseline == "ifupdown"
-	var ifupdown IfupdownBaseline
-	switch {
-	case fromIfupdown:
-		if ifupdown, err = r.captureIfupdown(ctx, p); err != nil {
-			return err
-		}
-		// Confirmation masks ifupdown for every interface, so each must be in this generation; one added since the apply was judged is not.
-		for _, i := range ifupdown.Interfaces {
-			if !slices.ContainsFunc(g.Files, func(f FileEntry) bool { return f.Path == "/run/systemd/network/50-andaru-"+i.Name+".network" }) {
-				return fmt.Errorf("activate %d: ifupdown now configures %s, which this generation does not; apply again", id, i.Name)
-			}
-		}
-	case g.Takeover:
-		if err := r.captureBaseline(p); err != nil {
-			return err
-		}
-	}
 	previous, err := r.live(p)
 	if err != nil {
 		return err
@@ -443,10 +417,6 @@ func (r Realizer) Activate(ctx context.Context, id int) (result error) {
 		return err
 	}
 	names, route := before.connected()
-	if fromIfupdown {
-		// networkd binds nothing yet; the interfaces ifupdown gave an address are what must stay connected.
-		names, route = ifupdown.Connected, slices.Contains(ifupdown.Connected, before.route)
-	}
 
 	// State first: a kill before the pointer moves leaves a generation that was never pending.
 	if err := r.writeState("activate:state-activating", id, State{State: Activating, Previous: p.Live}); err != nil {
@@ -460,12 +430,7 @@ func (r Realizer) Activate(ctx context.Context, id int) (result error) {
 	// The filter goes in before anything forwards or listens on the new files; the reason is why it did not.
 	var reason string
 	if err := r.toward(ctx, &g, func() error {
-		if fromIfupdown {
-			if err := r.handOver(ctx, ifupdown); err != nil {
-				return err
-			}
-		}
-		if why := r.swapAndVerify(ctx, previous, next, names, route, fromIfupdown); why != "" {
+		if why := r.swapAndVerify(ctx, previous, next, names, route); why != "" {
 			return errors.New(why)
 		}
 		return nil
@@ -488,33 +453,6 @@ func (r Realizer) Activate(ctx context.Context, id int) (result error) {
 		return nil
 	}
 
-	if fromIfupdown {
-		// The timer still owns this generation if the hand-back does not finish: its rollback repeats it.
-		restore, stop := context.WithTimeout(context.WithoutCancel(ctx), verbLimit)
-		defer stop()
-		if err := r.toward(restore, nil, func() error {
-			if err := r.place(next, nil); err != nil {
-				return fmt.Errorf("removing its files failed: %w", err)
-			}
-			if err := r.handBack(restore, ifupdown, next, p.Takeover); err != nil {
-				return fmt.Errorf("handing back to ifupdown failed: %w", err)
-			}
-			// What the generation started goes too: ifupdown knows nothing of Kea or Unbound.
-			if err := r.services(restore, next, nil); err != nil {
-				return fmt.Errorf("stopping its services failed: %w", err)
-			}
-			return nil
-		}); err != nil {
-			return fmt.Errorf("activate %d: %s; %w", id, reason, err)
-		}
-		if r.ownsNftablesMask(p.Takeover) {
-			// After the files and Andaru's table: the host's own firewall, unmasked by the hand-back, runs again now.
-			if err := r.startHostFirewall(restore, true); err != nil {
-				slog.Error("start the host's nftables.service", "error", err)
-			}
-		}
-		return r.failed(id, p, reason)
-	}
 	restore, stop := context.WithTimeout(context.WithoutCancel(ctx), restoreLimit)
 	defer stop()
 	var earlier *Generation
@@ -556,7 +494,7 @@ func (r Realizer) failed(id int, p Pointers, reason string) error {
 // restorable returns the content of what was live before an activation.
 func (r Realizer) restorable(previous []placed, p Pointers) ([]placed, error) {
 	if p.Live == nil {
-		return previous, nil // the baseline set already carries its content
+		return previous, nil // the bare set already carries its content
 	}
 	g, err := read(r.dir(), *p.Live, p)
 	if err != nil {
@@ -583,8 +521,7 @@ func DeclaredDNS(data []byte) []netip.Addr {
 	return servers
 }
 
-// needServers also requires systemd-resolved to report some DNS server, as a host taken from ifupdown has no other resolver.
-func (r Realizer) swapAndVerify(ctx context.Context, previous, next []placed, names []string, route, needServers bool) string {
+func (r Realizer) swapAndVerify(ctx context.Context, previous, next []placed, names []string, route bool) string {
 	if err := r.place(previous, next); err != nil {
 		return err.Error()
 	}
@@ -592,16 +529,14 @@ func (r Realizer) swapAndVerify(ctx context.Context, previous, next []placed, na
 		return err.Error()
 	}
 	// networkd hands DNS servers to systemd-resolved only; where resolved does not manage resolv.conf there is nothing to check.
-	withDNS := needServers || host.ResolvedInCharge(r.Root) && slices.ContainsFunc(next, func(f placed) bool { return len(DeclaredDNS(f.data)) > 0 })
+	withDNS := host.ResolvedInCharge(r.Root) && slices.ContainsFunc(next, func(f placed) bool { return len(DeclaredDNS(f.data)) > 0 })
 	verify, cancel := context.WithTimeout(ctx, r.VerifyWait)
 	defer cancel()
 	reason := "networkd was not observed"
 	for {
 		if o, err := r.observe(verify, withDNS); err != nil {
 			reason = err.Error()
-		} else if reason = o.unmet(next, names, route); reason == "" && needServers && !o.servers {
-			reason = "systemd-resolved reports no DNS server for the host"
-		} else if reason == "" {
+		} else if reason = o.unmet(next, names, route); reason == "" {
 			return ""
 		}
 		select {
@@ -680,39 +615,17 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) (result e
 		}
 		return fmt.Errorf("roll back %d: nothing to restore: %w", id, err)
 	}
-	kind, ifupdown, err := ReadBaselineKind(r.dir())
-	if err != nil {
-		return err
-	}
 	// Files first: once they are back, any later reload or boot is correct. But only a reload makes networkd stop
 	// running the unconfirmed files, so until one succeeds the generation stays pending and the timer retries.
-	// fallback already loaded the restored generation's filter; going back to none, the table goes after the files.
-	// A reset host is never handed back: its ownership record holds no pre-Andaru configuration to return to.
-	toIfupdown := live == nil && kind == "ifupdown" && ifupdown != nil && !r.resetTree()
-	ownsMask := live == nil && r.ownsNftablesMask(p.Takeover) && !r.resetTree()
+	// fallback already loaded the restored generation's filter; going back to none, the bare filter goes first.
 	restore := func() error {
-		// Back on netplan's files the host gets its own firewall back. Unmasking reloads systemd, whose netplan
-		// generator, the YAML gone, deletes netplan's files: so before they are placed. A failure stops nothing else.
-		var unmasked error
-		if ownsMask && !toIfupdown {
-			if _, err := r.Run(ctx, "/usr/bin/systemctl", "unmask", "nftables.service"); err != nil {
-				unmasked = fmt.Errorf("unmasking nftables.service: %w", err)
-			}
-		}
 		if err := r.place(from, target); err != nil {
-			return errors.Join(err, unmasked)
-		}
-		if toIfupdown {
-			// Back to ifupdown: the generation stays pending, and the timer retries, until its addresses are back.
-			if err := r.handBack(ctx, *ifupdown, from, p.Takeover); err != nil {
-				return fmt.Errorf("handing back to ifupdown: %w", err)
-			}
-			return r.services(ctx, from, nil)
+			return err
 		}
 		if err := r.settle(ctx, from, target); err != nil {
-			return errors.Join(fmt.Errorf("files restored, reload failed: %w", err), unmasked)
+			return fmt.Errorf("files restored, reload failed: %w", err)
 		}
-		return unmasked
+		return nil
 	}
 	if loaded {
 		err = restore()
@@ -732,12 +645,6 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) (result e
 	if err != nil {
 		return fmt.Errorf("roll back %d: %w", id, err)
 	}
-	if ownsMask {
-		// After the files and Andaru's table: the host's own firewall, unmasked by the hand-back, runs again now.
-		if err := r.startHostFirewall(ctx, true); err != nil {
-			slog.Error("start the host's nftables.service", "error", err)
-		}
-	}
 	if what != "" {
 		reason += " (restored " + what + ")"
 	}
@@ -756,7 +663,7 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) (result e
 	return r.writeState("rollback:state", id, State{State: RolledBack, Previous: g.Previous, Reason: reason})
 }
 
-// fallback picks what to restore: the previous generation, else last-known-good, else the captured baseline.
+// fallback picks what to restore: the previous generation, else last-known-good, else the bare set.
 // A generation is chosen only once its filter has loaded (loaded true), so one whose filter fails gives way to the next.
 // what is empty when the choice is the one the generation recorded.
 func (r Realizer) fallback(ctx context.Context, p Pointers, previous *int) (set []placed, live *int, what string, loaded bool, err error) {
@@ -787,17 +694,15 @@ func (r Realizer) fallback(ctx context.Context, p Pointers, previous *int) (set 
 		}
 		failures = append(failures, err)
 	}
-	set, captured, err := r.bare()
-	if err != nil {
-		return nil, nil, "", false, errors.Join(append(failures, err)...)
-	}
+	set = r.bare()
 	if previous == nil {
-		return set, nil, "", false, nil // also "no files" when Andaru's first apply had no baseline to replace
+		return set, nil, "", false, nil // the rollback of the first apply goes back to no generation
 	}
-	if !captured {
+	if !r.resetTree() {
 		// Removing every file would take the host off the network; what runs now at least works.
 		return nil, nil, "", false, errors.Join(failures...)
 	}
+	// A reset tree has no generation to fall back to but its fenced bare set.
 	return set, nil, "baseline", false, nil
 }
 

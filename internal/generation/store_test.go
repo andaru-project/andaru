@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -154,7 +155,7 @@ func TestTornFilesAreErrors(t *testing.T) {
 
 func TestListIgnoresStrangers(t *testing.T) {
 	dir := Dir(t.TempDir())
-	if p, items, err := List(dir); err != nil || len(items) != 0 || p != (Pointers{}) {
+	if p, items, err := List(dir); err != nil || len(items) != 0 || !reflect.DeepEqual(p, Pointers{}) {
 		t.Fatalf("absent directory: %v %v %v", p, items, err)
 	}
 	create(t, dir, Manifest{}, nil)

@@ -320,6 +320,7 @@ func TestBackupCaptureConcurrentSaveAndActivation(t *testing.T) {
 		lock.Close()
 		t.Fatal(err)
 	}
+	// Pointers as v0.5.0-a.1 writes them, with the obsolete takeover key: they must still load.
 	pointers := []byte(`{"confirmed":1,"lastKnownGood":1,"pending":null,"live":1,"takeover":false}`)
 	if id != 1 {
 		lock.Close()

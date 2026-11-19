@@ -43,10 +43,6 @@ type fakeNetworkd struct {
 
 	noAddress, noRoute bool
 	stopped            bool // networkd is not running: networkctl fails
-	// ifupdown, for hosts the Debian installer set up: ifupFails makes ifup@ and networking.service raise nothing.
-	ifupFails bool
-	// nftablesEnabled is what systemctl is-enabled says of the host's own nftables.service.
-	nftablesEnabled bool
 	// table is the comment of the loaded inet andaru table, "" when none is loaded; tableComment overrides what nft reports.
 	table, tableComment string
 	script              string                  // what nft -f last loaded
@@ -156,26 +152,6 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 			out.WriteString(p + " via " + f.routes[p] + " metric 1024 pref medium\n")
 		}
 		return []byte(out.String()), nil
-	case command == "systemctl is-enabled nftables.service":
-		if target, _ := os.Readlink(filepath.Join(f.root, nftablesUnit)); target == "/dev/null" {
-			return []byte("masked\n"), errors.New("exit status 1")
-		}
-		if f.nftablesEnabled {
-			return []byte("enabled\n"), nil
-		}
-		return []byte("disabled\n"), errors.New("exit status 1")
-	// A mask is a link to /dev/null in /etc, as systemctl makes it.
-	case strings.HasPrefix(command, "systemctl mask ") && strings.HasSuffix(command, " nftables.service"):
-		if err := os.MkdirAll(filepath.Dir(filepath.Join(f.root, nftablesUnit)), 0o755); err != nil {
-			return nil, err
-		}
-		if err := os.Symlink("/dev/null", filepath.Join(f.root, nftablesUnit)); err != nil && !errors.Is(err, fs.ErrExist) {
-			return nil, err
-		}
-	case strings.HasPrefix(command, "systemctl unmask ") && strings.HasSuffix(command, " nftables.service"):
-		if err := os.Remove(filepath.Join(f.root, nftablesUnit)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return nil, err
-		}
 	case command == "systemctl is-active --quiet systemd-networkd.service":
 		if f.stopped {
 			return nil, errors.New("inactive")
@@ -228,20 +204,6 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 					}
 				}()
 			}
-		}
-	case command == "systemctl start systemd-networkd.service":
-		f.stopped = false
-	case command == "systemctl stop systemd-networkd.service systemd-networkd.socket":
-		// KeepConfiguration=dynamic-on-stop: the addresses stay.
-		f.stopped, f.bound = true, map[string]string{}
-	case strings.HasPrefix(command, "dhcpcd -p -x "):
-		_ = os.Remove(filepath.Join(f.root, "run/dhcpcd", args[2]+".pid"))
-	case command == "systemctl restart ifup@eth0.service" || command == "systemctl restart networking.service":
-		// The restart runs ifdown first, which flushes the address; only a working ifup brings it back.
-		f.address["eth0"] = nil
-		if !f.ifupFails {
-			f.dhcpcd("eth0")
-			f.address["eth0"] = []string{"10.0.1.19/20"}
 		}
 	case strings.HasPrefix(command, "networkctl") && f.stopped:
 		return nil, errors.New("systemd-networkd is not running")
@@ -377,15 +339,15 @@ func newBench(t *testing.T) *bench {
 
 func itoa(n int) string { data, _ := json.Marshal(n); return string(data) }
 
-func (b *bench) gen(takeover bool, files map[string]string) int {
+func (b *bench) gen(files map[string]string) int {
 	b.t.Helper()
-	return create(b.t, b.dir, Manifest{SavedVersion: "7", Takeover: takeover, ConfirmTimeoutSeconds: 120}, files)
+	return create(b.t, b.dir, Manifest{SavedVersion: "7", ConfirmTimeoutSeconds: 120}, files)
 }
 
 // live makes generation 1 the confirmed, running configuration.
 func (b *bench) live(files map[string]string) {
 	b.t.Helper()
-	id := b.gen(false, files)
+	id := b.gen(files)
 	for name, body := range files {
 		writeFile(b.t, filepath.Join(b.net.root, netDir, name), body)
 	}
@@ -438,7 +400,7 @@ func TestActivateSwapsAndAwaits(t *testing.T) {
 	b := newBench(t)
 	b.live(one)
 	writeFile(t, filepath.Join(b.net.root, netDir, "10-other.network"), "[Match]\nName=eth9\n")
-	id := b.gen(false, two)
+	id := b.gen(two)
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -463,7 +425,7 @@ func TestActivateWaitsForReload(t *testing.T) {
 	b := newBench(t)
 	b.live(one)
 	b.net.delay = 3
-	id := b.gen(false, map[string]string{"50-andaru-eth0.network": uplinkStatic})
+	id := b.gen(map[string]string{"50-andaru-eth0.network": uplinkStatic})
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -476,7 +438,7 @@ func TestActivateWaitsForReload(t *testing.T) {
 	b.live(one)
 	b.net.delay = -1
 	b.r.VerifyWait = 100 * time.Millisecond
-	id = b.gen(false, map[string]string{"50-andaru-eth0.network": uplinkStatic})
+	id = b.gen(map[string]string{"50-andaru-eth0.network": uplinkStatic})
 	if err := b.r.Activate(t.Context(), id); err == nil {
 		t.Fatal("activation succeeded although networkd never applied the file")
 	}
@@ -503,7 +465,7 @@ func TestActivateFailsVerificationAndRestores(t *testing.T) {
 				// A second file for eth0 sorts after the first and never binds.
 				files = map[string]string{"50-andaru-eth0.network": uplinkDHCP, "50-andaru-zz.network": uplinkDHCP}
 			}
-			id := b.gen(false, files)
+			id := b.gen(files)
 			// The world breaks only once the new files are in place.
 			if breakIt != nil {
 				b.r.failAt = func(step string) error {
@@ -540,7 +502,7 @@ func TestActivateFailsVerificationAndRestores(t *testing.T) {
 func TestActivateRefusals(t *testing.T) {
 	b := newBench(t)
 	b.live(one)
-	first, second := b.gen(false, two), b.gen(false, one)
+	first, second := b.gen(two), b.gen(one)
 	if err := b.r.Activate(t.Context(), first); err != nil {
 		t.Fatal(err)
 	}
@@ -560,7 +522,7 @@ func TestActivateRefusals(t *testing.T) {
 	}
 	b.wantDisk(one)
 
-	corrupt := b.gen(false, two)
+	corrupt := b.gen(two)
 	writeFile(t, filepath.Join(b.dir, itoa(corrupt), "files", "50-andaru-vl0.network"), "evil")
 	if err := b.r.Activate(t.Context(), corrupt); err == nil || errors.Is(err, ErrWrongState) {
 		t.Fatalf("corrupt generation: %v", err)
@@ -572,7 +534,7 @@ func TestActivateRefusals(t *testing.T) {
 func TestRollbackRestoresPreviousAndDeletesDevices(t *testing.T) {
 	b := newBench(t)
 	b.live(one)
-	id := b.gen(false, two)
+	id := b.gen(two)
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -592,7 +554,7 @@ func TestRollbackRestoresPreviousAndDeletesDevices(t *testing.T) {
 func TestRollbackStaysPendingUntilNetworkdReloads(t *testing.T) {
 	b := newBench(t)
 	b.live(one)
-	id := b.gen(false, two)
+	id := b.gen(two)
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -619,14 +581,14 @@ func TestRollbackStaysPendingUntilNetworkdReloads(t *testing.T) {
 func TestRollbackIsNoOpUnlessPending(t *testing.T) {
 	b := newBench(t)
 	b.live(one)
-	rolled := b.gen(false, two)
+	rolled := b.gen(two)
 	if err := b.r.Activate(t.Context(), rolled); err != nil {
 		t.Fatal(err)
 	}
 	if err := b.r.Rollback(t.Context(), rolled, "requested"); err != nil {
 		t.Fatal(err)
 	}
-	never := b.gen(false, two)
+	never := b.gen(two)
 	before := len(b.net.argv)
 	for _, id := range []int{1, rolled, never, 99} {
 		if err := b.timerFires(id); !errors.Is(err, ErrWrongState) {
@@ -643,8 +605,8 @@ func TestRollbackIsNoOpUnlessPending(t *testing.T) {
 func TestRollbackFallsBack(t *testing.T) {
 	b := newBench(t)
 	b.live(one)
-	lkg := b.gen(false, map[string]string{"50-andaru-eth0.network": uplinkStatic})
-	id := b.gen(false, two)
+	lkg := b.gen(map[string]string{"50-andaru-eth0.network": uplinkStatic})
+	id := b.gen(two)
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -669,7 +631,7 @@ func TestRollbackFallsBack(t *testing.T) {
 func TestRollbackWithNothingUsableLeavesFiles(t *testing.T) {
 	b := newBench(t)
 	b.live(one)
-	id := b.gen(false, two)
+	id := b.gen(two)
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -688,7 +650,7 @@ func TestFirstApplyWithoutBaselineRollsBackToNothing(t *testing.T) {
 	b := newBench(t)
 	writeFile(t, filepath.Join(b.net.root, netDir, "10-other.network"), "[Match]\nName=eth9\n")
 	b.net.apply()
-	id := b.gen(false, one)
+	id := b.gen(one)
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -710,7 +672,7 @@ func TestKillPoints(t *testing.T) {
 		t.Run(step, func(t *testing.T) {
 			b := newBench(t)
 			b.live(one)
-			id := b.gen(false, two)
+			id := b.gen(two)
 			killed := errors.New("killed")
 			b.r.failAt = func(at string) error {
 				if at == step {
@@ -832,7 +794,7 @@ func TestFailedAuthorizationPublicationRestoresPriorDigest(t *testing.T) {
 func TestLockSerialises(t *testing.T) {
 	b := newBench(t)
 	b.live(one)
-	id := b.gen(false, two)
+	id := b.gen(two)
 	held, err := os.OpenFile(filepath.Join(b.dir, "lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		t.Fatal(err)
@@ -855,7 +817,7 @@ func TestPlaceWritesBeforeItRemoves(t *testing.T) {
 	b := newBench(t)
 	b.live(one)
 	renamed := map[string]string{"50-andaru-ens18.network": uplinkDHCP}
-	id := b.gen(false, renamed)
+	id := b.gen(renamed)
 	killed := errors.New("killed")
 	b.r.failAt = func(step string) error {
 		if step == "place:remove" {
@@ -875,7 +837,7 @@ func TestPlaceWritesBeforeItRemoves(t *testing.T) {
 func TestConfirmRepairsLivePointer(t *testing.T) {
 	b := newBench(t)
 	b.live(one)
-	id := b.gen(false, two)
+	id := b.gen(two)
 	b.r.failAt = func(step string) error {
 		if step == "activate:pointers-live" {
 			return errors.New("killed")
@@ -902,7 +864,7 @@ const uplinkDNS = uplinkStatic + "DNS=192.0.2.53\nDNS=2001:db8::53\n"
 func TestActivateVerifiesDNS(t *testing.T) {
 	b := newBench(t)
 	b.live(one)
-	id := b.gen(false, map[string]string{"50-andaru-eth0.network": uplinkDNS})
+	id := b.gen(map[string]string{"50-andaru-eth0.network": uplinkDNS})
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -924,7 +886,7 @@ func TestActivateFailsOnWrongDNS(t *testing.T) {
 			b.live(one)
 			b.r.VerifyWait = 60 * time.Millisecond
 			breakIt(b.net)
-			id := b.gen(false, map[string]string{"50-andaru-eth0.network": uplinkDNS})
+			id := b.gen(map[string]string{"50-andaru-eth0.network": uplinkDNS})
 			if err := b.r.Activate(t.Context(), id); err == nil {
 				t.Fatal("activation succeeded although resolved does not have the declared servers")
 			}
@@ -944,7 +906,7 @@ func TestDNSCheckSkipped(t *testing.T) {
 	}
 	writeFile(t, resolv, "nameserver 192.0.2.53\n")
 	b.net.fail = "resolvectl"
-	if err := b.r.Activate(t.Context(), b.gen(false, map[string]string{"50-andaru-eth0.network": uplinkDNS})); err != nil {
+	if err := b.r.Activate(t.Context(), b.gen(map[string]string{"50-andaru-eth0.network": uplinkDNS})); err != nil {
 		t.Fatal(err)
 	}
 	if b.net.ran("resolvectl") != 0 {
@@ -954,7 +916,7 @@ func TestDNSCheckSkipped(t *testing.T) {
 	b = newBench(t)
 	b.live(one)
 	b.net.fail = "resolvectl"
-	if err := b.r.Activate(t.Context(), b.gen(false, two)); err != nil {
+	if err := b.r.Activate(t.Context(), b.gen(two)); err != nil {
 		t.Fatal(err)
 	}
 	if b.net.ran("resolvectl") != 0 {
@@ -968,7 +930,7 @@ func TestDNSCheckIgnoresFilesThatDeclareNone(t *testing.T) {
 	b.live(one)
 	// eth1 keeps DHCP-offered servers; only the file that declares DNS is held to its list.
 	b.net.editDNS = nil
-	id := b.gen(false, map[string]string{"50-andaru-eth0.network": uplinkDNS, "50-andaru-eth1.network": "[Match]\nName=eth1\n\n[Network]\nDHCP=ipv4\n"})
+	id := b.gen(map[string]string{"50-andaru-eth0.network": uplinkDNS, "50-andaru-eth1.network": "[Match]\nName=eth1\n\n[Network]\nDHCP=ipv4\n"})
 	b.net.offered = map[string][]string{"eth1": {"10.0.0.53"}}
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
@@ -982,14 +944,6 @@ func TestObserveWithoutNetworkd(t *testing.T) {
 	if err != nil || len(o.managed) != 0 {
 		t.Fatalf("observation %+v, %v", o, err)
 	}
-}
-
-// dhcpcd is ifup starting dhcpcd for nic: its pid file names a live process.
-func (f *fakeNetworkd) dhcpcd(nic string) {
-	_ = os.MkdirAll(filepath.Join(f.root, "run/dhcpcd"), 0o755)
-	_ = os.MkdirAll(filepath.Join(f.root, "proc/602"), 0o755)
-	_ = os.WriteFile(filepath.Join(f.root, "run/dhcpcd", nic+".pid"), []byte("602\n"), 0o644)
-	_ = os.WriteFile(filepath.Join(f.root, "proc/602/comm"), []byte("dhcpcd\n"), 0o644)
 }
 
 // An advertised DNS server is the clients' resolver, not the host's: only [Network] DNS= lines bind the host.

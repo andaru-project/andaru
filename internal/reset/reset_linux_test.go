@@ -164,7 +164,7 @@ func network(t *testing.T) (map[string]any, map[string]string) {
 	return d, map[string]string{"WAN_PASSWORD": "TEST_ONLY_SECRET"}
 }
 
-// oldState is a taken-over host: configuration, an old administrator, a live takeover, unrelated files.
+// oldState is a box that ran Andaru's network: configuration, an old administrator, a live generation, unrelated files.
 func (b *box) oldState() {
 	t, ctx := b.t, context.Background()
 	cs, err := config.Open(ctx, b.env.StateDir)
@@ -181,11 +181,11 @@ func (b *box) oldState() {
 	}
 	ids.Close()
 	dir := generation.Dir(b.env.StateDir)
-	if err := os.MkdirAll(filepath.Join(dir, "baseline"), 0o700); err != nil {
+	if _, err := generation.Create(dir, generation.Manifest{SavedVersion: "1", ConfirmTimeoutSeconds: 120}, nil); err != nil {
 		t.Fatal(err)
 	}
-	write(t, filepath.Join(dir, "pointers.json"), `{"confirmed":null,"lastKnownGood":null,"pending":null,"live":null,"takeover":true}`)
-	write(t, filepath.Join(dir, "baseline", "manifest.json"), `{"kind":"netplan","files":[],"nftablesMasked":false}`)
+	write(t, filepath.Join(dir, "1", "state.json"), `{"state":"confirmed","previous":null}`)
+	write(t, filepath.Join(dir, "pointers.json"), `{"confirmed":1,"lastKnownGood":null,"pending":null,"live":1}`)
 	write(t, filepath.Join(b.env.StateDir, "addons", "plugin", "settings.json"), `{}`)
 	if err := os.Symlink(b.upgrades, filepath.Join(b.env.StateDir, "link-out")); err != nil {
 		t.Fatal(err)
@@ -315,12 +315,9 @@ func (b *box) wantDone(wan bool) {
 	if data, err := store.Read("first"); err != nil || string(data) != `{"kind":"lan-closure","first":true}` {
 		t.Fatalf("first/ changed: %q %v", data, err)
 	}
-	p, _, err := generation.List(generation.Dir(b.env.StateDir))
-	if err != nil || !p.Takeover {
-		t.Fatalf("pointers = %+v, %v", p, err)
-	}
-	if kind, _, err := generation.ReadBaselineKind(generation.Dir(b.env.StateDir)); err != nil || kind != "netplan" {
-		t.Fatalf("ownership = %q, %v", kind, err)
+	// The fresh tree is a reset tree: boot keeps it fenced.
+	if data, err := os.ReadFile(filepath.Join(generation.Dir(b.env.StateDir), "baseline", "manifest.json")); err != nil || string(data) != "{\"reset\":true}\n" {
+		t.Fatalf("baseline manifest = %q, %v", data, err)
 	}
 	head := b.head()
 	_, hasWAN := head["nat"]
@@ -403,7 +400,8 @@ func TestConsoleRequired(t *testing.T) {
 	}
 }
 
-func TestNoTakeoverAppliesNothing(t *testing.T) {
+// A box that never ran Andaru's network, here with pointers as v0.5.0-a.1 writes them, has no network to bring up.
+func TestNeverAppliedAppliesNothing(t *testing.T) {
 	b := newBox(t)
 	write(t, filepath.Join(generation.Dir(b.env.StateDir), "pointers.json"), `{"confirmed":null,"lastKnownGood":null,"pending":null,"live":null,"takeover":false}`)
 	b.storeRecovery()
@@ -809,7 +807,7 @@ func TestPendingWhileStoppingKeepsJournalUntilUnitsRun(t *testing.T) {
 func TestUnreadableOwnershipReleases(t *testing.T) {
 	b := newBox(t)
 	b.plan("")
-	os.Remove(filepath.Join(generation.Dir(b.env.StateDir), "baseline", "manifest.json"))
+	write(t, filepath.Join(generation.Dir(b.env.StateDir), "baseline", "manifest.json"), "{")
 	if _, err := Resume(context.Background(), b.env); err == nil {
 		t.Fatal("went on without ownership")
 	}

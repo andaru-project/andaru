@@ -179,7 +179,7 @@ func ReadManaged(ctx context.Context) ([]Managed, error) {
 }
 
 func readManaged(ctx context.Context, run func(context.Context, string, ...string) ([]byte, error)) ([]Managed, error) {
-	// networkctl fails outright while networkd is stopped, which is normal on a host ifupdown still configures.
+	// networkctl fails outright while networkd is stopped.
 	if _, err := run(ctx, "/usr/bin/systemctl", "is-active", "--quiet", "systemd-networkd.service"); err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {

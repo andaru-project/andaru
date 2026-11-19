@@ -1,0 +1,1 @@
+{"id":1,"savedVersion":"7","authorizationDigest":"edebecf13f893f746a5130539a996cd2858fe16c67fe9414fc6d81843ed76e34","identityRevision":1,"createdAt":"2026-11-18T21:04:05.123456789Z","takeover":false,"confirmTimeoutSeconds":120,"files":[{"path":"/run/systemd/network/50-andaru-eth0.network","mode":"0644","sha256":"b3c676a0bc5692d1b98dd518f8678bf8b8d20ba64d1247a53fb7c579b7ac7cb7"}]}

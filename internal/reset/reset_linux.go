@@ -132,7 +132,7 @@ func Resume(ctx context.Context, e Env) (Operation, error) {
 		return op, err
 	}
 	// A teardown that began left the host behind deny-all; after a boot or a crash it must be there before anything goes on.
-	if (op.Phase == TornDown || op.Phase == Wiped) && (op.Ownership.Takeover || op.Ownership.Live) {
+	if (op.Phase == TornDown || op.Phase == Wiped) && op.Ownership.Live {
 		if err := e.Realizer.DenyAll(ctx); err != nil {
 			return op, fmt.Errorf("load the deny-all filter: %w", err)
 		}
@@ -212,7 +212,7 @@ func Resume(ctx context.Context, e Env) (Operation, error) {
 			}
 		case Fresh:
 			switch {
-			case !op.Ownership.Takeover && !op.Ownership.Live:
+			case !op.Ownership.Live:
 				// Andaru never ran this host's networking, so there is none of its own to bring up.
 				err = advance(Up)
 			case e.readable("recovery"):

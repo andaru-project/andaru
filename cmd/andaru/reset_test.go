@@ -52,7 +52,7 @@ func newResetBench(t *testing.T) *resetBench {
 	return b
 }
 
-func (b *resetBench) plan(t *testing.T, phase reset.Phase, takeover bool) {
+func (b *resetBench) plan(t *testing.T, phase reset.Phase, live bool) {
 	t.Helper()
 	verifier, _ := identity.HashResetPassword(context.Background(), nil)
 	if _, err := reset.Plan(context.Background(), b.env, verifier, false, false); err != nil {
@@ -63,7 +63,7 @@ func (b *resetBench) plan(t *testing.T, phase reset.Phase, takeover bool) {
 	var op map[string]any
 	json.Unmarshal(data, &op)
 	op["phase"] = phase
-	op["ownership"] = map[string]any{"takeover": takeover}
+	op["ownership"] = map[string]any{"live": live}
 	op["ownershipKnown"] = phase != reset.Planned
 	data, _ = json.Marshal(op)
 	if err := os.WriteFile(path, data, 0o600); err != nil {

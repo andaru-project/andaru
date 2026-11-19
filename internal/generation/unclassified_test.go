@@ -113,7 +113,7 @@ func TestFactoryFilter(t *testing.T) {
 // The catch-all binds no link when every link is declared; verification must not wait for it.
 func TestActivateWithoutUnclassifiedLink(t *testing.T) {
 	b := newBench(t)
-	id := b.gen(false, withCatchAll(one))
+	id := b.gen(withCatchAll(one))
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func TestRollbackOfFirstApply(t *testing.T) {
 		if setUp {
 			b.setUp()
 		}
-		id := b.gen(false, filtered(withCatchAll(one), "aa"))
+		id := b.gen(filtered(withCatchAll(one), "aa"))
 		if err := b.r.Activate(t.Context(), id); err != nil {
 			t.Fatal(err)
 		}
@@ -239,7 +239,7 @@ func TestRollbackToUnfilteredGenerationKeepsNoTable(t *testing.T) {
 	b := newBench(t)
 	b.setUp()
 	b.live(one)
-	id := b.gen(false, filtered(two, "bb"))
+	id := b.gen(filtered(two, "bb"))
 	b.net.devices["vl0"] = true
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)

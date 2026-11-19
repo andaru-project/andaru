@@ -44,6 +44,7 @@ func TestLiveAuthorizationUsesPointersLiveNotSavedHead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Pointers as v0.5.0-a.1 writes them, with the obsolete takeover key: they must still load.
 	if err = os.WriteFile(filepath.Join(generation.Dir(stateDir), "pointers.json"), fmt.Appendf(nil, `{"confirmed":%d,"lastKnownGood":null,"pending":null,"live":%d,"takeover":false}`, id, id), 0o600); err != nil {
 		t.Fatal(err)
 	}

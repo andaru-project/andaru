@@ -280,7 +280,7 @@ func TestActivateFillsDelegatedSubnets(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(b.net.root, netDir, "50-andaru-ens18.network"), wanNetwork)
 	writeFile(t, filepath.Join(b.net.root, netDir, "50-andaru-ens19.network"), lanNetwork)
-	id := b.gen(false, map[string]string{kea6File: kea6Base, kea6Template: templateBody})
+	id := b.gen(map[string]string{kea6File: kea6Base, kea6Template: templateBody})
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -561,14 +561,14 @@ func TestActivateChecksTemplate(t *testing.T) {
 			checked = string(data)
 		}
 	}
-	if err := b.r.Activate(t.Context(), b.gen(false, map[string]string{kea6File: kea6Base, kea6Template: templateBody})); err != nil {
+	if err := b.r.Activate(t.Context(), b.gen(map[string]string{kea6File: kea6Base, kea6Template: templateBody})); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(checked, `"subnet": "2001:db8:0:1::/64"`) {
 		t.Fatalf("template not checked: %q", checked)
 	}
 	b.net.fail, b.net.failWith = "kea-dhcp6 -t "+kea6Check, "Dhcp6 bad pool"
-	if err := b.r.Activate(t.Context(), b.gen(false, map[string]string{kea6File: kea6Base, kea6Template: templateBody})); err == nil {
+	if err := b.r.Activate(t.Context(), b.gen(map[string]string{kea6File: kea6Base, kea6Template: templateBody})); err == nil {
 		t.Fatal("a template Kea refuses was applied")
 	}
 }
