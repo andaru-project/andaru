@@ -23,7 +23,7 @@ func TestDHCPv6Rendering(t *testing.T) {
 		`"duid": "00:01:00:01:aa:bb:cc:dd:ee:ff"`, `"ip-addresses": [`, `"fd00:1::10"`, `"prefixes": [`, `"fd00:beef:1:100::/56"`, `"hostname": "nas"`,
 		`"name": "dns-servers"`, `"data": "fd00:1::1"`, `"name": "domain-search"`, `"data": "home.arpa"`,
 		`"valid-lifetime": 7200`, `"preferred-lifetime": 4500`, `"service-sockets-max-retries": 30`,
-		`"socket-name": "/run/kea/kea6-ctrl-socket"`, `libdhcp_lease_cmds.so`, `/usr/share/kea/scripts/andaru-lease-event`)
+		`"socket-name": "/var/run/kea/kea6-ctrl-socket"`, `libdhcp_lease_cmds.so`, `/usr/share/kea/scripts/andaru-lease-event`)
 	contains(t, fileContent(t, result, "/run/andaru-unbound/andaru.conf"),
 		`local-data: "nas.home.arpa. 3600 IN AAAA fd00:1::10"`, `local-data-ptr: "fd00:1::10 3600 nas.home.arpa."`,
 		"\taccess-control: fd00:beef:1::/48 allow")

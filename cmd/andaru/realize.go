@@ -30,7 +30,7 @@ type realizeVerbs interface {
 	Boot(ctx context.Context) error
 	SyncLeases(ctx context.Context) error
 	SyncPrefixes(ctx context.Context) error
-	DenyAll(ctx context.Context) error
+	Fence(ctx context.Context, denyAll bool) error
 }
 
 // newRealizer builds the privileged actor for the real host.
@@ -97,10 +97,8 @@ func realizeCommand(ctx context.Context, args []string, stderr io.Writer, build 
 		err = verbs.Confirm(ctx, id)
 	case "boot":
 		if blocked {
-			// A host whose network Andaru never ran keeps it; any other is shut until the reset resumes.
-			if denyAll {
-				err = verbs.DenyAll(ctx)
-			}
+			// Shut until the reset resumes: deny-all, or the factory filter where Andaru never ran the network.
+			err = verbs.Fence(ctx, denyAll)
 		} else {
 			err = verbs.Boot(ctx)
 		}

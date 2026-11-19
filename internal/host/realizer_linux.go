@@ -73,8 +73,9 @@ func readRealizerFacts(etcDir, runDir, pppd, pluginGlob, device, root string) (R
 				facts.ForeignFiles = append(facts.ForeignFiles, dropIns...)
 				continue
 			}
-			// networkd reads /etc before /run, so anything there overrides Andaru; in /run only Andaru's prefix is its own.
-			if !entry.IsDir() && (dir == etcDir || !strings.HasPrefix(name, "50-andaru-")) {
+			// networkd reads /etc before /run, so anything there overrides Andaru; in /run only Andaru's prefix and its
+			// exact catch-all are its own.
+			if !entry.IsDir() && (dir == etcDir || !strings.HasPrefix(name, "50-andaru-") && name != "51-andaru-unclassified.network") {
 				facts.ForeignFiles = append(facts.ForeignFiles, filepath.Join(dir, name))
 			}
 		}

@@ -144,7 +144,8 @@ func (r *renderer) services() {
 		kea := map[string]any{"Dhcp4": map[string]any{
 			// Kea starts before networkd has the addresses; it binds as they appear.
 			"interfaces-config": map[string]any{"interfaces": interfaces, "service-sockets-max-retries": 30, "service-sockets-retry-wait-time": 2000},
-			"control-socket":    map[string]any{"socket-type": "unix", "socket-name": "/run/kea/kea4-ctrl-socket"},
+			// Kea 3 accepts only its own socket directory, compared as written: Fedora builds it as /var/run/kea.
+			"control-socket":    map[string]any{"socket-type": "unix", "socket-name": "/var/run/kea/kea4-ctrl-socket"},
 			"lease-database":    map[string]any{"type": "memfile", "persist": true, "lfc-interval": 3600},
 			"hooks-libraries": []map[string]any{
 				{"library": r.in.Facts.KeaHooks + "/libdhcp_lease_cmds.so"},
@@ -449,7 +450,7 @@ func (r *renderer) dhcp6(dnsServes func(string) bool, register bool) (names []st
 	kea := map[string]any{"Dhcp6": map[string]any{
 		// Kea never listens on an interface that was down when it started, unless it retries.
 		"interfaces-config": map[string]any{"interfaces": interfaces, "service-sockets-max-retries": 30, "service-sockets-retry-wait-time": 2000},
-		"control-socket":    map[string]any{"socket-type": "unix", "socket-name": "/run/kea/kea6-ctrl-socket"},
+		"control-socket":    map[string]any{"socket-type": "unix", "socket-name": "/var/run/kea/kea6-ctrl-socket"},
 		"lease-database":    map[string]any{"type": "memfile", "persist": true, "lfc-interval": 3600},
 		"hooks-libraries": []map[string]any{
 			{"library": r.in.Facts.KeaHooks + "/libdhcp_lease_cmds.so"},

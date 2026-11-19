@@ -112,6 +112,19 @@ EmitDNS=no
 EmitDomains=yes
 Domains=
 
+### /run/systemd/network/51-andaru-unclassified.network 0644 secret=false sources=
+[Match]
+Name=en*
+
+[Link]
+ActivationPolicy=down
+RequiredForOnline=no
+
+[Network]
+LinkLocalAddressing=no
+DHCP=no
+IPv6AcceptRA=no
+
 ### /run/systemd/resolved.conf.d/50-andaru.conf 0644 secret=false sources=/dns
 [Resolve]
 DNS=127.0.0.1 ::1

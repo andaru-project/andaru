@@ -107,7 +107,7 @@ func TestFilterFindings(t *testing.T) {
 	}
 	// Forwarding is switched on together with the filter, on every segment's file.
 	for _, f := range render(t, fixture(t, "filter-two-zones")).Files {
-		if strings.HasSuffix(f.Path, ".network") && !strings.Contains(f.Content, "IPv4Forwarding=yes\nIPv6Forwarding=yes\n") {
+		if strings.HasSuffix(f.Path, ".network") && f.Path != UnclassifiedPath && !strings.Contains(f.Content, "IPv4Forwarding=yes\nIPv6Forwarding=yes\n") {
 			t.Fatalf("%s does not forward:\n%s", f.Path, f.Content)
 		}
 	}

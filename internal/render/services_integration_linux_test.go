@@ -50,18 +50,19 @@ func TestServiceGoldensPassTheirTools(t *testing.T) {
 				if err := os.WriteFile(fragment, []byte(f.Content), 0o644); err != nil {
 					t.Fatal(err)
 				}
-				// As Fedora's unbound.conf includes Andaru's file, where it is installed; otherwise a minimal main file.
+				// As the image's unbound.conf includes Andaru's file, where it is installed; otherwise a minimal main
+				// file. One fixture at a time: two would bind the same addresses.
 				if _, err := os.Stat("/etc/unbound/conf.d"); err == nil {
 					main = "/etc/unbound/unbound.conf"
-					installed := "/etc/unbound/conf.d/andaru-test-" + name + ".conf"
-					t.Cleanup(func() { os.Remove(installed) })
-					if err := os.WriteFile(installed, []byte(f.Content), 0o644); err != nil {
+					if err := os.WriteFile("/etc/unbound/conf.d/andaru-test.conf", []byte(f.Content), 0o644); err != nil {
 						t.Fatal(err)
 					}
 				} else if err := os.WriteFile(main, []byte("server:\n\tchroot: \"\"\ninclude: \""+fragment+"\"\n"), 0o644); err != nil {
 					t.Fatal(err)
 				}
-				if out, err := exec.Command("unbound-checkconf", main).CombinedOutput(); err != nil || !strings.Contains(string(out), "no errors") {
+				out, err := exec.Command("unbound-checkconf", main).CombinedOutput()
+				os.Remove("/etc/unbound/conf.d/andaru-test.conf")
+				if err != nil || !strings.Contains(string(out), "no errors") {
 					t.Fatalf("%s: unbound-checkconf refused it: %s", name, out)
 				}
 			}

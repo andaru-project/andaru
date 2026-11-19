@@ -57,7 +57,7 @@ func TestActivateLoadsFilterFirst(t *testing.T) {
 
 func TestActivateFilterFailureMovesNothing(t *testing.T) {
 	b := newBench(t)
-	b.net.fail = "nft -f"
+	b.net.fail = "nft -f " + b.dir
 	id := b.gen(false, filtered(one, "aa"))
 	if err := b.r.Activate(t.Context(), id); err == nil {
 		t.Fatal("activated without its filter")
@@ -77,8 +77,8 @@ func TestVerifyChecksTableComment(t *testing.T) {
 }
 
 func TestRollbackToBaselineDeletesTableLast(t *testing.T) {
-	b := newBench(t)
-	id := b.gen(false, filtered(one, "aa"))
+	b := cloud(t)
+	id := b.gen(true, filtered(one, "aa"))
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -201,15 +201,15 @@ func TestFilterWithoutIPv6(t *testing.T) {
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.r.Rollback(t.Context(), id, "operator"); err != nil || b.net.table != "" {
-		t.Fatalf("rollback %v, table %q left", err, b.net.table)
+	if err := b.r.Rollback(t.Context(), id, "operator"); err != nil || b.net.table != "andaru factory" {
+		t.Fatalf("rollback %v, table %q", err, b.net.table)
 	}
 }
 
 // A failed listing is not an absent table: the filter may still be loaded, so the rollback must not report success.
 func TestRollbackKeepsPendingWhenTableListFails(t *testing.T) {
-	b := newBench(t)
-	id := b.gen(false, filtered(one, "aa"))
+	b := cloud(t)
+	id := b.gen(true, filtered(one, "aa"))
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}

@@ -17,55 +17,21 @@ CI targets native Linux amd64 and arm64 on Ubuntu 24.04; the persistent Debian l
 
 ## Installing
 
-Andaru installs from its signed APT repository, `https://apt.andaru.io/`, on Debian 13 (amd64 or arm64). Design: [Debian packages and the signed APT repository](../superpowers/specs/2026-11-14-debian-packages-design.md).
+Andaru ships as its own operating system image, `ghcr.io/andaru-project/andaru`, built on Fedora CoreOS for x86_64 and aarch64. Design: [Andaru as an appliance image](../superpowers/specs/2026-11-18-appliance-image-design.md). The Debian package and the APT repository are no longer built.
 
-1. Download the keyring package from the repository, and its checksum from [its GitHub release](https://github.com/andaru-project/andaru/releases/tag/keyring-2026.11.14), which is published separately, then check one against the other:
-   ```sh
-   curl -fsSLO https://apt.andaru.io/andaru-archive-keyring_2026.11.14_all.deb
-   curl -fsSLO https://github.com/andaru-project/andaru/releases/download/keyring-2026.11.14/SHA256SUMS
-   sha256sum -c SHA256SUMS
-   ```
-   The keyring package's SHA-256 is `0b60c555a6a0ae23abae7292e83f0719fc5e92e0b5ba04d774d0f25254920fd4`.
-2. Install it, then Andaru:
-   ```sh
-   sudo apt install ./andaru-archive-keyring_2026.11.14_all.deb
-   sudo apt update && sudo apt install andaru
-   ```
+There is no installer yet: install media are slice 2 of that design. Until then, the lab route is the install route: install stock Fedora CoreOS with `coreos-installer` and an Ignition config that writes the image's signature policy and rebases to `ostree-image-signed:docker://ghcr.io/andaru-project/andaru:stable`.
 
-The keyring package adds `/etc/apt/sources.list.d/andaru.sources`, which trusts the archive key for this repository only (`Signed-By:`). The key's primary fingerprint is `7CD6 1777 8541 6B30 6999  DEF2 B5E7 EDE2 133D 18DF`; the repository is signed by its subkey `67BF 6A43 DD97 A19C 2AED  E729 4FA6 59D5 E100 49DD`, which expires on 2031-11-13. The key is also at <https://apt.andaru.io/andaru-archive-key.asc>.
+**Signatures.** Every release image is signed with Andaru's cosign key. The image refuses an update that the key did not sign:
 
-The `andaru` package depends on systemd, nftables and iproute2, and recommends Kea, Unbound, OpenSSH and AppArmor. Installing it:
+- the public key is [`image/cosign.pub`](../../image/cosign.pub), installed as `/etc/pki/containers/andaru.pub`;
+- the key file's SHA-256 is `91be11def530307f6afc91290006b25ea5ddfb4c3ce0e98f4bf9e8bb1899b3b7`;
+- `/etc/containers/policy.json` requires that signature for `ghcr.io/andaru-project` only.
 
-- **leaves `nftables.service` alone**: a reboot before a takeover is confirmed still loads the host's own `/etc/nftables.conf`. Confirming a takeover masks it ([Takeover](#takeover)), because a start of Debian's unit flushes the whole ruleset, Andaru's filter included;
-- adds one line, `include if exists <andaru/DAEMON>`, to `/etc/apparmor.d/local/usr.sbin.kea-dhcp4`, `…kea-dhcp6` and `…unbound`, and reloads those profiles; a Kea or Unbound installed later gets the line then. Andaru's rules are in `/etc/apparmor.d/andaru/`;
-- enables `andaru-network-boot.service` and enables and starts the engine and the lease and prefix path and timer units;
-- **never restarts systemd-networkd or touches an interface**: `ManageForeignRoutes=no` takes effect at the next networkd restart, which the first boot after the takeover provides.
+To check an image by hand: `cosign verify --key image/cosign.pub ghcr.io/andaru-project/andaru:<version>`.
 
-**Kea serves only Andaru's configuration once the package is installed.** Its drop-ins for `kea-dhcp4-server` and `kea-dhcp6-server` start Kea from `/run/andaru-kea/`, which only a confirmed Andaru generation writes, and never from `/etc/kea`. A Kea already serving DHCP from `/etc/kea` keeps running until its next restart (a Kea upgrade, a reboot), then is skipped and stops answering. The package says so when `/etc/kea/kea-dhcp4.conf` or `kea-dhcp6.conf` differs from what Kea's package shipped, on a host Andaru has not taken over.
+**From source:** `podman build -f image/Containerfile --build-arg VERSION=0.0.0-dev -t andaru:dev .` builds the image for this machine's architecture, and `sh scripts/ci/image-smoke.sh andaru:dev 0.0.0-dev` checks it.
 
-Purging the package removes its AppArmor lines and leaves `/var/lib/andaru`: uninstalling is not supported. Once a generation is confirmed (`"confirmed"` is not `null` in `/var/lib/andaru/generations/pointers.json`) `apt remove andaru` is refused, because the next boot would have no network: `andaru-network-boot.service` is what puts the confirmed configuration in place. Undo the takeover first ([Takeover](#takeover)), or override with `sudo ANDARU_FORCE_REMOVE=1 apt remove andaru`; a forced removal leaves `nftables.service` masked and the host without the unit that restores its network at boot, so undo the takeover by hand before the next reboot. Upgrades restart the engine, which serves only its local socket.
-
-**A host set up by hand** from `packaging/` before the packages existed has copies that would override or duplicate the package's files. Remove them before `apt install andaru`:
-
-```sh
-sudo rm -f /etc/systemd/system/andaru-*.service /etc/systemd/system/andaru-*.path /etc/systemd/system/andaru-*.timer \
-  /etc/systemd/system/*.wants/andaru-* \
-  /etc/systemd/system/kea-dhcp4-server.service.d/andaru.conf /etc/systemd/system/kea-dhcp6-server.service.d/andaru.conf \
-  /etc/systemd/networkd.conf.d/andaru.conf /etc/iproute2/rt_protos.d/andaru.conf /usr/lib/tmpfiles.d/andaru.conf \
-  /etc/unbound/unbound.conf.d/andaru.conf
-sudo systemctl daemon-reload
-# Delete the lines copied from packaging/apparmor from each of these, keeping your own:
-sudoedit /etc/apparmor.d/local/usr.sbin.kea-dhcp4 /etc/apparmor.d/local/usr.sbin.kea-dhcp6 /etc/apparmor.d/local/usr.sbin.unbound
-```
-
-**From source:** build the packages for this machine's architecture in a Debian 13 container (Docker and Go 1.27 needed) and install them:
-
-```sh
-sh scripts/ci/build-packages.sh dist any
-sudo apt install ./dist/andaru_*.deb
-```
-
-**Releasing** (maintainers): push a tag. `v1.2.3` is a release, `v1.2.3-rcN` a prerelease (Debian version `1.2.3~rcN-1`), and `keyring-yyyy.mm.dd` builds the keyring package of that version, once (it must equal `KEYRING_VERSION` in `debian/rules`). The release workflow builds and checks the packages and creates the GitHub release; [andaru-project/apt](https://github.com/andaru-project/apt) publishes it on its next daily run, or at once with `gh workflow run publish -R andaru-project/apt`. `trixie` carries releases; `trixie-test` (`Suites: trixie-test` in a copy of `andaru.sources`) carries prereleases too. The newest five Andaru versions stay in the repository; older ones remain on their GitHub releases.
+**Releasing** (maintainers): push a tag on `main`. `v1.2.3` is a release, `v1.2.3-rcN` a prerelease. The release workflow builds both architectures, pushes them unsigned as `1.2.3-amd64` and `1.2.3-arm64`, signs the multi-architecture index in the `image-release` environment, and only then tags it `1.2.3`, and `stable` for a release.
 
 ## Upgrading on Debian
 

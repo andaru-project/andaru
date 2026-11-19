@@ -97,6 +97,19 @@ func TestApplyFindings(t *testing.T) {
 			in.Links[0].Addresses = []host.AddressStatus{{Family: "ipv6", Address: "2001:db8::1", PrefixLength: 64, Scope: "global"}}
 			return in
 		}, []want{{"WOULD_UNCONFIGURE", "eth0"}}},
+		// The image's first apply: the catch-all would down a link the factory file configures and the declaration omits.
+		"factory link left out": {func() gateInput {
+			in := taken()
+			in.Live, in.LiveFiles, in.Result.Files = nil, nil, nil
+			in.Managed[0].NetworkFile = factoryFile
+			return in
+		}, []want{{"WOULD_UNCONFIGURE", "eth0"}}},
+		"factory link declared": {func() gateInput {
+			in := taken()
+			in.Live, in.LiveFiles = nil, nil
+			in.Managed[0].NetworkFile = factoryFile
+			return in
+		}, nil},
 		"link-local only is not connectivity": {func() gateInput {
 			in := lab()
 			in.Result.Files = nil

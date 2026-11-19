@@ -39,6 +39,19 @@ LLDP=no
 LinkLocalAddressing=no
 IPv6AcceptRA=no
 
+### /run/systemd/network/51-andaru-unclassified.network 0644 secret=false sources=
+[Match]
+Name=en*
+
+[Link]
+ActivationPolicy=down
+RequiredForOnline=no
+
+[Network]
+LinkLocalAddressing=no
+DHCP=no
+IPv6AcceptRA=no
+
 ### resolved lnk_00000001-0000-4000-8000-000000000001 -> ens18
 ### resolved lnk_00000002-0000-4000-8000-000000000002 -> ens19
 ### warning DEPENDENCY_UNAVAILABLE "/links/3/parent" Not rendered: the parent link is unavailable.

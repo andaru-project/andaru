@@ -1,23 +1,17 @@
 #shellcheck shell=sh
-# The release workflow turns a pushed tag into what it builds: the package set, the Debian version and whether the
-# GitHub release is a prerelease, which the APT repository publishes only to its trixie-test suite.
+# The release workflow turns a pushed tag into the image's version and whether the GitHub release is a prerelease.
 
 Describe 'scripts/ci/version.sh'
   script="${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/ci/version.sh"
 
   It 'maps a release tag'
     When run sh "$script" v0.4.0
-    The output should equal "any 0.4.0-1 false"
+    The output should equal "0.4.0 false"
   End
 
-  It 'maps a release candidate below its release'
+  It 'maps a release candidate as a prerelease'
     When run sh "$script" v0.4.0-rc2
-    The output should equal "any 0.4.0~rc2-1 true"
-  End
-
-  It 'maps a keyring tag'
-    When run sh "$script" keyring-2026.11.14
-    The output should equal "all 2026.11.14 false"
+    The output should equal "0.4.0-rc2 true"
   End
 
   Parameters
@@ -25,10 +19,10 @@ Describe 'scripts/ci/version.sh'
     v1.2.3-rc
     v01.2.3
     v1.2.3-rc01
-    keyring-2026.1.14
+    keyring-2026.11.14
     v1x2x3
     v1x2x3-rc1
-    keyring-2026x11x14
+    v1.2.3~rc1
   End
 
   It "refuses $1"

@@ -238,7 +238,7 @@ func TestDraftPreview(t *testing.T) {
 	if len(b.drafted) != 1 || len(b.drafted[0].Operations) != 1 {
 		t.Fatalf("drafted = %+v", b.drafted)
 	}
-	if len(reply.Files) != 2 || !strings.Contains(reply.Files[1].Content, "DNS=172.16.53.53") || reply.ApplyFindings == nil {
+	if len(reply.Files) != 3 || !strings.Contains(reply.Files[1].Content, "DNS=172.16.53.53") || reply.ApplyFindings == nil {
 		t.Fatalf("reply = %s", w.Body)
 	}
 	for _, f := range reply.ApplyFindings {
@@ -308,7 +308,7 @@ func (b *takeoverBench) postDraft(t *testing.T) draftReply {
 
 func TestDraftShowsTakeoverLimits(t *testing.T) {
 	got := newDebianBench(t, "ifupdown-dhcp").postDraft(t)
-	if len(got.ApplyFindings) != 0 || len(got.Files) != 2 || !strings.Contains(got.Files[1].Content, "DUIDRawData=00:01:32:87:03:54:bc:24:11:38:71:37") {
+	if len(got.ApplyFindings) != 0 || len(got.Files) != 3 || !strings.Contains(got.Files[1].Content, "DUIDRawData=00:01:32:87:03:54:bc:24:11:38:71:37") {
 		t.Fatalf("draft = %+v", got)
 	}
 	var limits []string
@@ -344,7 +344,7 @@ func TestIdentityComesFromTheConfirmedCapture(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A failed takeover leaves its capture behind while ifupdown still runs the host: what dhcpcd presents now wins.
-	if got := b.postDraft(t); len(got.Files) != 2 || !strings.Contains(got.Files[1].Content, "DUIDRawData=00:01:32:87:03:54:bc:24:11:38:71:37\n") {
+	if got := b.postDraft(t); len(got.Files) != 3 || !strings.Contains(got.Files[1].Content, "DUIDRawData=00:01:32:87:03:54:bc:24:11:38:71:37\n") {
 		t.Fatalf("stale capture rendered: %+v", got.Files)
 	}
 	// The saved-version preview judges the capture the same way.
@@ -363,7 +363,7 @@ func TestIdentityComesFromTheConfirmedCapture(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := b.postDraft(t)
-	if len(got.Files) != 2 || !strings.Contains(got.Files[1].Content, "DUIDRawData=aa:bb:cc\n") {
+	if len(got.Files) != 3 || !strings.Contains(got.Files[1].Content, "DUIDRawData=aa:bb:cc\n") {
 		t.Fatalf("files = %+v", got.Files)
 	}
 }

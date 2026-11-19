@@ -1,11 +1,15 @@
 package generation
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/andaru-project/andaru/internal/kept"
 )
 
 // Ownership is what a factory reset carries across the wipe so the fresh tree still owns host networking:
@@ -92,16 +96,35 @@ func (r Realizer) resetTree() bool {
 	return err != nil || m.Reset
 }
 
+// handsBack reports a tree whose baseline is the host's own pre-Andaru configuration, with its own firewall.
+func (r Realizer) handsBack() bool {
+	var m baselineManifest
+	captured, err := readJSON(filepath.Join(r.baselineDir(), "manifest.json"), &m)
+	return err == nil && captured && !m.Reset
+}
+
 const denyAllComment = "andaru deny-all"
 
 // DenyAll replaces table inet andaru with one that drops all input except loopback and all forwarding.
 // It is the filter of every reset state without a confirmed generation: nothing is reachable but the console.
 func (r Realizer) DenyAll(ctx context.Context) error {
-	script := "table inet andaru\ndelete table inet andaru\ntable inet andaru {\n\tcomment \"" + denyAllComment + "\"\n" +
-		"\tchain input {\n\t\ttype filter hook input priority filter; policy drop;\n\t\tiif \"lo\" accept\n\t}\n" +
+	return r.loadStatic(ctx, denyAllComment, "", "deny-all")
+}
+
+// factoryFilter is DenyAll that still lets a box never set up take DHCPv4, DHCPv6 and SLAAC on its factory network.
+func (r Realizer) factoryFilter(ctx context.Context) error {
+	return r.loadStatic(ctx, "andaru factory", "\t\tct state established,related accept\n"+
+		"\t\tudp sport 67 udp dport 68 accept\n\t\tudp sport 547 udp dport 546 accept\n"+
+		"\t\ticmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert } accept\n", "factory")
+}
+
+// loadStatic replaces table inet andaru with a drop-all one whose input chain also runs accept, and switches forwarding off.
+func (r Realizer) loadStatic(ctx context.Context, comment, accept, what string) error {
+	script := "table inet andaru\ndelete table inet andaru\ntable inet andaru {\n\tcomment \"" + comment + "\"\n" +
+		"\tchain input {\n\t\ttype filter hook input priority filter; policy drop;\n\t\tiif \"lo\" accept\n" + accept + "\t}\n" +
 		"\tchain forward {\n\t\ttype filter hook forward priority filter; policy drop;\n\t}\n}\n"
 	// Under /run, never the state tree: during a reset that tree may be missing, and must not be created.
-	f, err := os.CreateTemp(filepath.Join(r.Root, "/run"), "andaru-deny-all-*.nft")
+	f, err := os.CreateTemp(filepath.Join(r.Root, "/run"), "andaru-"+what+"-*.nft")
 	if err != nil {
 		return err
 	}
@@ -114,9 +137,54 @@ func (r Realizer) DenyAll(ctx context.Context) error {
 		return err
 	}
 	if _, err := r.Run(ctx, "/usr/sbin/nft", "-f", f.Name()); err != nil {
-		return fmt.Errorf("load the deny-all filter: %w", err)
+		return fmt.Errorf("load the %s filter: %w", what, err)
 	}
 	return nil
+}
+
+// catchAllPath is render.UnclassifiedPath; render's tests import this package, so it cannot import render.
+const catchAllPath = "/run/systemd/network/51-andaru-unclassified.network"
+
+// catchAll is render.Unclassified, which a test keeps equal: it keeps every en* link no generation names down.
+var catchAll = placed{path: catchAllPath, mode: 0o644, uid: -1,
+	data: []byte("[Match]\nName=en*\n\n[Link]\nActivationPolicy=down\nRequiredForOnline=no\n\n[Network]\nLinkLocalAddressing=no\nDHCP=no\nIPv6AcceptRA=no\n")}
+
+// setUp reports a box that was set up: a kept copy exists. Only their absence proves a box never set up;
+// any other error counts as set up, so the factory network's DHCP never reaches WAN by mistake.
+func (r Realizer) setUp() bool {
+	root := cmp.Or(r.KeptRoot, filepath.Join(r.Root, kept.Root))
+	for _, name := range []kept.Name{"recovery", "last-lan", "first"} {
+		if _, err := os.Lstat(filepath.Join(root, string(name))); !errors.Is(err, fs.ErrNotExist) {
+			return true
+		}
+	}
+	return false
+}
+
+// bareFilter loads the filter of a host on which no generation runs: deny-all once set up, else the factory filter.
+func (r Realizer) bareFilter(ctx context.Context) error {
+	if r.setUp() {
+		return r.DenyAll(ctx)
+	}
+	return r.factoryFilter(ctx)
+}
+
+// fence leaves a host on which no generation runs with its bare filter and, once set up, the catch-all:
+// DHCPv4 uses packet sockets that bypass the filter, so only the catch-all keeps WAN from taking a lease.
+func (r Realizer) fence(ctx context.Context) error {
+	if err := r.bareFilter(ctx); err != nil || !r.setUp() {
+		return err
+	}
+	return r.place(nil, []placed{catchAll})
+}
+
+// Fence is boot while a factory reset blocks it. denyAll, unless the journal says Andaru never ran the network,
+// keeps deny-all even on a box never set up.
+func (r Realizer) Fence(ctx context.Context, denyAll bool) error {
+	if denyAll && !r.setUp() {
+		return r.DenyAll(ctx)
+	}
+	return r.fence(ctx)
 }
 
 // Teardown removes the live generation from the host before a factory reset wipes the state tree: its files under
@@ -145,8 +213,10 @@ func (r Realizer) Teardown(ctx context.Context) error {
 	if err := r.DenyAll(ctx); err != nil {
 		return err
 	}
-	if err := r.place(set, nil); err != nil {
+	// The catch-all stays: the reset ends behind deny-all, where WAN must not take a lease either.
+	keep := []placed{catchAll}
+	if err := r.place(set, keep); err != nil {
 		return err
 	}
-	return r.settle(ctx, set, nil)
+	return r.settle(ctx, set, keep)
 }

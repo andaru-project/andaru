@@ -1,0 +1,64 @@
+# Andaru's appliance image: stock Fedora CoreOS with Andaru, its services, and Fedora's firewall packages.
+# Build from the repository root: podman build -f image/Containerfile --build-arg VERSION=1.2.3 .
+ARG BASE_IMAGE=quay.io/fedora/fedora-coreos:stable
+
+FROM docker.io/library/node:20.19.2@sha256:ba077fe891ce516b24bdbbd66d27d1e8e8c5a6e6b31ec7e7e559b45c3fca0643 AS web
+WORKDIR /src/web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --ignore-scripts --no-audit --no-fund
+COPY web/ ./
+RUN npm run build
+
+FROM docker.io/library/golang:1.27.4@sha256:205c7636d74e0ffbe3d007162df7d74f859f5a8c8322dfb9f907977686c126cf AS go
+ARG VERSION=0.0.0-dev
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/ cmd/
+COPY internal/ internal/
+RUN CGO_ENABLED=0 go build -trimpath -buildvcs=false \
+        -ldflags "-X github.com/andaru-project/andaru/internal/engine.buildVersion=${VERSION}" -o /out/andaru ./cmd/andaru && \
+    CGO_ENABLED=0 go build -trimpath -buildvcs=false -o /out/andaru-web ./cmd/andaru-web
+
+FROM ${BASE_IMAGE}
+ARG VERSION=0.0.0-dev
+# The registry namespace whose images must carry a signature by COSIGN_PUB. The lab overrides both.
+ARG SIGNED_NAMESPACE=ghcr.io/andaru-project
+ARG COSIGN_PUB=image/cosign.pub
+LABEL org.opencontainers.image.title="Andaru" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.source="https://github.com/andaru-project/andaru"
+
+# Add Andaru's services and Fedora's firewall packages; drop Docker, whose own firewall rules Andaru cannot own.
+RUN dnf -y install systemd-networkd kea kea-hooks unbound ppp openvpn qemu-guest-agent && \
+    dnf -y remove moby-engine containerd && \
+    dnf clean all
+
+COPY --from=go /out/andaru /out/andaru-web /usr/bin/
+COPY --from=web /src/web/dist/ /usr/share/andaru/web/
+COPY packaging/systemd/andaru-*.service packaging/systemd/andaru-*.path packaging/systemd/andaru-*.timer /usr/lib/systemd/system/
+COPY packaging/systemd/kea-dhcp4.service.d/ /usr/lib/systemd/system/kea-dhcp4.service.d/
+COPY packaging/systemd/kea-dhcp6.service.d/ /usr/lib/systemd/system/kea-dhcp6.service.d/
+COPY packaging/systemd/networkd.conf.d/ /usr/lib/systemd/networkd.conf.d/
+COPY packaging/iproute2/andaru.conf /usr/share/iproute2/rt_protos.d/andaru.conf
+COPY packaging/tmpfiles.d/andaru.conf /usr/lib/tmpfiles.d/andaru.conf
+COPY packaging/sysusers.d/andaru.conf /usr/lib/sysusers.d/andaru.conf
+COPY packaging/kea/andaru-lease-event /usr/share/kea/scripts/andaru-lease-event
+COPY packaging/unbound/unbound.conf /etc/unbound/unbound.conf
+COPY packaging/unbound/andaru.conf /etc/unbound/conf.d/andaru.conf
+COPY image/files/ /
+COPY ${COSIGN_PUB} /etc/pki/containers/andaru.pub
+COPY image/signing/policy.json /etc/containers/policy.json
+COPY image/signing/andaru.yaml /etc/containers/registries.d/andaru.yaml
+
+RUN sed -i "s|@NAMESPACE@|${SIGNED_NAMESPACE}|" /etc/containers/policy.json /etc/containers/registries.d/andaru.yaml && \
+    chmod 0755 /usr/bin/andaru /usr/bin/andaru-web /usr/share/kea/scripts/andaru-lease-event && \
+    semodule -i /usr/share/andaru/selinux/andaru.cil && \
+    systemctl enable systemd-networkd.service andaru-engine.service andaru-network-boot.service \
+        andaru-factory-reset.service andaru-leases.path andaru-prefixes.path andaru-prefixes.timer && \
+    systemctl disable sshd.service zincati.service andaru-web.service && \
+    systemctl mask NetworkManager.service NetworkManager-wait-online.service && \
+    groupdel docker && \
+    rm -rf /run/dnf /run/kea /run/unbound /run/openvpn-client /run/openvpn-server /run/pppd /tmp/* /var/cache/* /var/lib/dnf \
+        /var/lib/kea/* /var/lib/openvpn /var/lib/unbound /var/log/* && \
+    bootc container lint --fatal-warnings

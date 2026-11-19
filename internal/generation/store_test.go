@@ -94,12 +94,22 @@ func TestCreateRefusesForeignPath(t *testing.T) {
 		"/run/systemd/network/50-andaru-x/../../etc/y.network",
 		"/run/systemd/system/andaru-pppoe-x.service",
 		"/run/systemd/network/50-andaru-a.conf",
+		// Only the catch-all's exact path is Andaru's, not its prefix.
+		"/run/systemd/network/51-andaru-other.network",
 	} {
 		dir := Dir(t.TempDir())
 		_, err := Create(dir, Manifest{Files: []FileEntry{{Path: path, Mode: "0644"}}}, map[string][]byte{path: []byte("x")})
 		if err == nil || len(numbered(t, dir)) != 0 {
 			t.Fatalf("%s: err=%v, left %v", path, err, numbered(t, dir))
 		}
+	}
+}
+
+func TestCreateStoresCatchAll(t *testing.T) {
+	dir := Dir(t.TempDir())
+	id := create(t, dir, Manifest{}, map[string]string{"50-andaru-eth0.network": uplinkDHCP, "51-andaru-unclassified.network": string(catchAll.data)})
+	if g, err := Read(dir, id); err != nil || len(g.Files) != 2 {
+		t.Fatalf("%+v %v", g, err)
 	}
 }
 

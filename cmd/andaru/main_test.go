@@ -242,7 +242,10 @@ func (f *fakeVerbs) SyncPrefixes(context.Context) error {
 	return f.err
 }
 
-func (f *fakeVerbs) DenyAll(context.Context) error { f.calls = append(f.calls, "deny-all"); return f.err }
+func (f *fakeVerbs) Fence(_ context.Context, denyAll bool) error {
+	f.calls = append(f.calls, fmt.Sprint("fence ", denyAll))
+	return f.err
+}
 
 func TestRealizeExitCodes(t *testing.T) {
 	for _, row := range []struct {

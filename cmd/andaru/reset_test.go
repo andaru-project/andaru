@@ -92,7 +92,7 @@ func TestFenceDuringReset(t *testing.T) {
 	}
 	verbs := &fakeVerbs{}
 	realizeCommand(context.Background(), []string{"boot"}, &bytes.Buffer{}, func(string) (realizeVerbs, error) { return verbs, nil })
-	if !slices.Equal(verbs.calls, []string{"deny-all"}) {
+	if !slices.Equal(verbs.calls, []string{"fence true"}) {
 		t.Fatalf("boot during the wipe: %v", verbs.calls)
 	}
 	var stderr bytes.Buffer
@@ -176,13 +176,14 @@ func TestResetCancelled(t *testing.T) {
 	}
 }
 
-func TestFenceKeepsAHostAndaruNeverRan(t *testing.T) {
+// A host whose network Andaru never ran still gets a filter: on the image its factory network runs behind it.
+func TestFenceFiltersAHostAndaruNeverRan(t *testing.T) {
 	b := newResetBench(t)
 	b.plan(t, reset.Wiped, false)
 	verbs := &fakeVerbs{}
 	realizeCommand(context.Background(), []string{"boot"}, &bytes.Buffer{}, func(string) (realizeVerbs, error) { return verbs, nil })
-	if len(verbs.calls) != 0 {
-		t.Fatalf("boot touched a host Andaru never ran: %v", verbs.calls)
+	if !slices.Equal(verbs.calls, []string{"fence false"}) {
+		t.Fatalf("boot during the wipe of a host Andaru never ran: %v", verbs.calls)
 	}
 }
 
@@ -232,7 +233,7 @@ func TestUnknownOwnershipDeniesAll(t *testing.T) {
 	os.WriteFile(path, data, 0o600)
 	verbs := &fakeVerbs{}
 	realizeCommand(context.Background(), []string{"boot"}, &bytes.Buffer{}, func(string) (realizeVerbs, error) { return verbs, nil })
-	if !slices.Equal(verbs.calls, []string{"deny-all"}) {
+	if !slices.Equal(verbs.calls, []string{"fence true"}) {
 		t.Fatalf("boot with unknown ownership: %v", verbs.calls)
 	}
 }

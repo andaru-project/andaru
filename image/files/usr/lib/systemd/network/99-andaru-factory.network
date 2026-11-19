@@ -1,0 +1,12 @@
+# The factory network: before setup, every Ethernet port asks for an address, so the box can reach its image
+# registry and the operator. Andaru's own files sort first; once the box is set up, its catch-all
+# (51-andaru-unclassified.network) matches every port this file would, so this file never applies again.
+[Match]
+Name=en*
+
+[Link]
+RequiredForOnline=no
+
+[Network]
+DHCP=yes
+IPv6AcceptRA=yes

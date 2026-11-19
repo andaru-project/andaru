@@ -32,7 +32,7 @@ override_dh_auto_clean:
 
 override_dh_install:
 	dh_install
-	install -D -m 644 debian/andaru.sysusers debian/andaru/usr/lib/sysusers.d/andaru.conf
+	install -D -m 644 packaging/sysusers.d/andaru.conf debian/andaru/usr/lib/sysusers.d/andaru.conf
 # Starting the engine, the path units and the timer is safe on any host; network-boot runs only at boot,
 # and factory-reset only while a reset is journaled.
 override_dh_installsystemd:
