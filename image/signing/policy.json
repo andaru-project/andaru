@@ -11,6 +11,15 @@
                     "type": "insecureAcceptAnything"
                 }
             ],
+            "@NAMESPACE@/andaru-nightly": [
+                {
+                    "type": "sigstoreSigned",
+                    "keyPath": "/etc/pki/containers/andaru-nightly.pub",
+                    "signedIdentity": {
+                        "type": "matchRepository"
+                    }
+                }
+            ],
             "@NAMESPACE@": [
                 {
                     "type": "sigstoreSigned",

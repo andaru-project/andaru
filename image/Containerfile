@@ -25,6 +25,8 @@ ARG VERSION=0.0.0-dev
 # The registry namespace whose images must carry a signature by COSIGN_PUB. The lab overrides both.
 ARG SIGNED_NAMESPACE=ghcr.io/andaru-project
 ARG COSIGN_PUB=image/cosign.pub
+# Nightlies are signed with their own key, which the policy trusts only for the andaru-nightly repository.
+ARG COSIGN_NIGHTLY_PUB=image/cosign-nightly.pub
 LABEL org.opencontainers.image.title="Andaru" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.source="https://github.com/andaru-project/andaru"
@@ -48,6 +50,7 @@ COPY packaging/kea/andaru-lease-event /usr/share/kea/scripts/andaru-lease-event
 COPY packaging/unbound/andaru.conf /etc/unbound/conf.d/andaru.conf
 COPY image/files/ /
 COPY ${COSIGN_PUB} /etc/pki/containers/andaru.pub
+COPY ${COSIGN_NIGHTLY_PUB} /etc/pki/containers/andaru-nightly.pub
 COPY image/signing/policy.json /etc/containers/policy.json
 COPY image/signing/andaru.yaml /etc/containers/registries.d/andaru.yaml
 

@@ -48,5 +48,7 @@ grep -q "\"ghcr.io/andaru-project\"" /etc/containers/policy.json || fail "policy
 # bootc refuses to enforce a policy whose default accepts anything, so bootc upgrade would refuse every image.
 grep -A3 "\"default\"" /etc/containers/policy.json | grep -q "\"reject\"" || fail "policy.json default is not reject"
 test -s /etc/pki/containers/andaru.pub || fail "no signing key"
+test -s /etc/pki/containers/andaru-nightly.pub || fail "no nightly signing key"
+grep -q "\"ghcr.io/andaru-project/andaru-nightly\"" /etc/containers/policy.json || fail "policy.json does not scope the nightly key to andaru-nightly"
 echo "image-smoke: $VERSION ok"
 '

@@ -19,7 +19,7 @@ CI targets native Linux amd64 and arm64 on Ubuntu 24.04; the persistent Debian l
 
 Andaru ships as its own operating system image, `ghcr.io/andaru-project/andaru`, built on Fedora CoreOS for x86_64 and aarch64. Design: [Andaru as an appliance image](../superpowers/specs/2026-11-18-appliance-image-design.md). The Debian package and the APT repository are no longer built.
 
-There is no installer yet: install media are slice 2 of that design. Until then, the lab route is the install route: install stock Fedora CoreOS with `coreos-installer` and an Ignition config that writes byte-identical copies of the image's `/etc/containers/policy.json`, `/etc/containers/registries.d/andaru.yaml` and `/etc/pki/containers/andaru.pub`, then rebases to `ostree-image-signed:docker://ghcr.io/andaru-project/andaru:stable`.
+There is no installer yet: install media are slice 2 of that design. Until then, the lab route is the install route: install stock Fedora CoreOS with `coreos-installer` and an Ignition config that writes byte-identical copies of the image's `/etc/containers/policy.json`, `/etc/containers/registries.d/andaru.yaml`, `/etc/pki/containers/andaru.pub` and `/etc/pki/containers/andaru-nightly.pub`, then rebases to `ostree-image-signed:docker://ghcr.io/andaru-project/andaru:stable`.
 
 **Signatures.** Every release image is signed with Andaru's cosign key. The image refuses an update that the key did not sign:
 
@@ -32,6 +32,8 @@ To check an image by hand: `cosign verify --key image/cosign.pub ghcr.io/andaru-
 **From source:** `podman build -f image/Containerfile --build-arg VERSION=0.0.0-dev -t andaru:dev .` builds the image for this machine's architecture, and `sh scripts/ci/image-smoke.sh andaru:dev 0.0.0-dev` checks it.
 
 **Releasing** (maintainers): push a tag on `main`. `v1.2.3` is a release, `v1.2.3-rcN` a prerelease. The release workflow builds both architectures, pushes them unsigned as `1.2.3-amd64` and `1.2.3-arm64`, signs the multi-architecture index in the `image-release` environment, and only then tags it `1.2.3`, and `stable` for a release.
+
+**Nightlies.** [andaru-project/andaru-nightly](https://github.com/andaru-project/andaru-nightly) builds `main` every night it moved, and publishes it as `ghcr.io/andaru-project/andaru-nightly`. Each nightly gets a version tag, `<next version>-nightly.<YYYYMMDD>.<N>.g<commit>`, and the floating tag `nightly`. They are signed with a separate nightly key, [`image/cosign-nightly.pub`](../../image/cosign-nightly.pub) (SHA-256 of the file `81b5e2f56d50905656c43ff646728388aca76e35ddcc1cfc26ffb097053f1f9d`). The image's policy trusts that key only for the `andaru-nightly` repository, so it can never sign a release. A box follows nightlies with `bootc switch --enforce-container-sigpolicy ghcr.io/andaru-project/andaru-nightly:nightly`.
 
 ## Upgrading on Debian
 
