@@ -635,7 +635,6 @@ func (b *applyBench) authorizationState() authz.State {
 	return state
 }
 
-
 func TestUnchangedAuthorizationAllowsTokenConfirmation(t *testing.T) {
 	b := newApplyBench(t)
 	first := b.apply(takeoverBody)
