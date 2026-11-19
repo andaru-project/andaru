@@ -77,6 +77,19 @@ OtherInformation=yes
 EmitDNS=no
 EmitDomains=no
 
+### /run/systemd/network/51-andaru-unclassified.network 0644 secret=false sources=
+[Match]
+Name=en*
+
+[Link]
+ActivationPolicy=down
+RequiredForOnline=no
+
+[Network]
+LinkLocalAddressing=no
+DHCP=no
+IPv6AcceptRA=no
+
 ### nft:inet/andaru 0644 secret=false sources=/management,/nat,/policy
 # interface ens18 52:54:00:aa:bb:01
 # interface ens19 52:54:00:aa:bb:02

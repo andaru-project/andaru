@@ -4,7 +4,7 @@ Describe 'andaru web packaging'
   root="${SHELLSPEC_PROJECT_ROOT:-$PWD}"
 
   It 'creates a static non-login service account without a fixed numeric id'
-    When call grep -Eq '^u[[:space:]]+andaru-web[[:space:]]+-[[:space:]]+"Andaru web service"[[:space:]]+/nonexistent[[:space:]]+/usr/sbin/nologin$' "$root/debian/andaru.sysusers"
+    When call grep -Eq '^u[[:space:]]+andaru-web[[:space:]]+-[[:space:]]+"Andaru web service"[[:space:]]+/nonexistent[[:space:]]+/usr/sbin/nologin$' "$root/packaging/sysusers.d/andaru.conf"
     The status should equal 0
   End
 

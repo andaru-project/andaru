@@ -203,7 +203,7 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 			return nil, errors.New("nft [delete table inet andaru]: exit status 1: Error: No such file or directory")
 		}
 		f.table = ""
-	case command == "systemctl restart kea-dhcp4-server.service" || command == "systemctl restart kea-dhcp6-server.service":
+	case command == "systemctl restart kea-dhcp4.service" || command == "systemctl restart kea-dhcp6.service":
 		_ = os.MkdirAll(filepath.Join(f.root, "run/kea"), 0o750)
 		socket := map[bool]string{false: "kea4-ctrl-socket", true: "kea6-ctrl-socket"}[strings.Contains(command, "dhcp6")]
 		if f.keaBy == nil {
@@ -354,6 +354,7 @@ func newBench(t *testing.T) *bench {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(root, ipv6Forwarding), "0\n")
+	writeFile(t, filepath.Join(root, unboundAnchor), ". DNSKEY 257 3 8 test\n")
 	writeFile(t, filepath.Join(root, ipv4Forwarding), "1\n") // as the filtered generation's networkd files left it
 	// As on a Debian cloud image: resolv.conf is systemd-resolved's stub.
 	writeFile(t, filepath.Join(root, "run/systemd/resolve/stub-resolv.conf"), "nameserver 127.0.0.53\n")

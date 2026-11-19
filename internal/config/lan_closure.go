@@ -97,7 +97,7 @@ func managementLAN(d declaration, secrets map[string]string) ([]byte, error) {
 		Zones         []zone            `json:"zones"`
 		Addresses     []address         `json:"addresses"`
 		Secrets       map[string]string `json:"secrets"`
-	}{"lan-closure", 1, *d.Management, ancestry, []segment{*seg}, zones, addresses, bound})
+	}{"lan-closure", 1, *d.Management, ancestry, []segment{keptSegment(*seg)}, zones, addresses, bound})
 }
 
 // LANClosure is the management closure for one saved declaration. The engine
@@ -227,4 +227,16 @@ func nonNil[T any](s []T) []T {
 		return []T{}
 	}
 	return s
+}
+
+// keptSegment is the management segment as a kept copy carries it. The copy keeps no DHCPv6 server, so an
+// advertisement that sends clients to one becomes plain SLAAC: a reset apply refuses the original.
+func keptSegment(seg segment) segment {
+	// An incomplete legacy form is left for validation to refuse: mode() reads all three of its fields.
+	if ra := seg.Addressing.IPv6.RA; ra != nil && (ra.Mode != "" || ra.Enabled != nil && ra.Managed != nil && ra.OtherInfo != nil) && slices.Contains([]string{"managed", "assisted", "stateless"}, ra.mode()) {
+		kept := *ra
+		kept.Mode, kept.Enabled, kept.Managed, kept.OtherInfo = "unmanaged", nil, nil, nil
+		seg.Addressing.IPv6.RA = &kept
+	}
+	return seg
 }

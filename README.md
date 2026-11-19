@@ -3,7 +3,7 @@
 </p>
 
 # andaru
-Andaru — a Free Software firewall platform for Debian
+Andaru — a Free Software firewall platform, shipped as its own Fedora CoreOS–based image
 
 ## Development
 

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/andaru-project/andaru/internal/host"
+	"github.com/andaru-project/andaru/internal/kept"
 )
 
 func ifupdownOwnership() baselineManifest {
@@ -39,6 +40,14 @@ func owned(t *testing.T, b *bench, m baselineManifest) {
 }
 
 // fresh is the same host after a wipe: an empty generations directory.
+// setUp gives the box a kept copy, as a box set up before has: no generation running then means deny-all.
+func (b *bench) setUp() {
+	b.t.Helper()
+	if err := os.MkdirAll(filepath.Join(b.net.root, kept.Root, "first"), 0o700); err != nil {
+		b.t.Fatal(err)
+	}
+}
+
 func fresh(t *testing.T, b *bench) *bench {
 	t.Helper()
 	if err := os.RemoveAll(b.dir); err != nil {
@@ -150,6 +159,7 @@ func TestOwnershipRefusesNonEmpty(t *testing.T) {
 func TestResetTreeNeverHandsBack(t *testing.T) {
 	for _, withGeneration := range []bool{false, true} {
 		b := newBench(t)
+		b.setUp()
 		owned(t, b, ifupdownOwnership())
 		o, err := b.r.ReadOwnership()
 		if err != nil {
@@ -179,8 +189,8 @@ func TestResetTreeNeverHandsBack(t *testing.T) {
 		if b.net.ran("systemctl unmask") != 0 || b.net.ran("systemctl start --no-block networking") != 0 || b.net.ran("systemctl start --no-block ifup@") != 0 {
 			t.Fatalf("withGeneration=%v: handed back: %q", withGeneration, b.net.argv)
 		}
-		if b.net.table != denyAllComment || !strings.Contains(b.net.script, "policy drop") {
-			t.Fatalf("withGeneration=%v: filter %q: %s", withGeneration, b.net.table, b.net.script)
+		if b.net.table != denyAllComment || !strings.Contains(b.net.script, "policy drop") || !b.exists(catchAllPath[1:]) {
+			t.Fatalf("withGeneration=%v: filter %q, catch-all %v: %s", withGeneration, b.net.table, b.exists(catchAllPath[1:]), b.net.script)
 		}
 		if slices.Contains(b.net.argv, "systemctl start --no-block nftables.service") {
 			t.Fatalf("withGeneration=%v: started the host firewall", withGeneration)
@@ -192,6 +202,7 @@ func TestResetTreeNeverHandsBack(t *testing.T) {
 func resetBench(t *testing.T) *bench {
 	t.Helper()
 	b := newBench(t)
+	b.setUp()
 	owned(t, b, ifupdownOwnership())
 	o, err := b.r.ReadOwnership()
 	if err != nil {
@@ -246,6 +257,7 @@ func TestRollbackOnResetHostNeverHandsBack(t *testing.T) {
 // A generation ran without the takeover flag: the fresh tree is still a reset tree, fenced at every boot.
 func TestLiveWithoutTakeoverStaysFenced(t *testing.T) {
 	b := newBench(t)
+	b.setUp()
 	b.live(one)
 	o, err := b.r.ReadOwnership()
 	if err != nil || o.Takeover || !o.Live {
@@ -266,6 +278,7 @@ func TestLiveWithoutTakeoverStaysFenced(t *testing.T) {
 // A second reset of a host whose first reset left nothing live still writes a fenced tree.
 func TestResetTreeReadAgainStaysFenced(t *testing.T) {
 	b := newBench(t)
+	b.setUp()
 	b.live(one)
 	for range 2 {
 		o, err := b.r.ReadOwnership()

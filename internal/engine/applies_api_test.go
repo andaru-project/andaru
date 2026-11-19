@@ -292,7 +292,7 @@ func TestApplyHappyPath(t *testing.T) {
 	if got.Deadline == nil || got.Deadline.Before(before.Add(119*time.Second)) || got.Deadline.After(time.Now().Add(121*time.Second)) {
 		t.Fatalf("deadline = %v", got.Deadline)
 	}
-	if len(got.Files) != 2 || got.Files[1].Path != uplinkFile || got.Files[1].Mode != "0644" || got.Files[1].Content != nil || strings.Contains(w.Body.String(), "sha256") {
+	if len(got.Files) != 3 || got.Files[1].Path != uplinkFile || got.Files[1].Mode != "0644" || got.Files[1].Content != nil || strings.Contains(w.Body.String(), "sha256") {
 		t.Fatalf("files = %s", w.Body)
 	}
 	if !slices.Equal(b.calls, []string{"arm 1 180", "activate 1"}) {
@@ -634,7 +634,6 @@ func (b *applyBench) authorizationState() authz.State {
 	}
 	return state
 }
-
 
 func TestUnchangedAuthorizationAllowsTokenConfirmation(t *testing.T) {
 	b := newApplyBench(t)

@@ -21,7 +21,7 @@ var testdata embed.FS
 
 var update = flag.Bool("update", false, "rewrite golden files")
 
-var allFacts = host.RealizerFacts{PPPDaemon: true, PPPoEPlugin: true, PPPDevice: true, ResolvedInCharge: true, NftTool: true, KeaTool: true, Kea6Tool: true, UnboundTool: true, KeaHooks: "/usr/lib/x86_64-linux-gnu/kea/hooks"}
+var allFacts = host.RealizerFacts{PPPDaemon: true, PPPoEPlugin: true, PPPDevice: true, ResolvedInCharge: true, NftTool: true, KeaTool: true, Kea6Tool: true, UnboundTool: true, KeaHooks: "/usr/lib64/kea/hooks"}
 
 type observed struct{ Name, Kind, MAC string }
 
@@ -260,7 +260,8 @@ func TestUserTextNeverRendered(t *testing.T) {
 func TestEmptyDeclaration(t *testing.T) {
 	result := render(t, Input{Declaration: []byte(`{"schemaVersion":1,"links":[],"segments":[],"zones":[]}`)})
 	body, _ := json.Marshal(result)
-	if string(body) != `{"realizable":true,"resolved":[],"files":[],"findings":[]}` {
+	// Only the catch-all: every generation keeps unclassified links down.
+	if string(body) != `{"realizable":true,"resolved":[],"files":[{"path":"/run/systemd/network/51-andaru-unclassified.network","mode":"0644","secret":false,"content":"[Match]\nName=en*\n\n[Link]\nActivationPolicy=down\nRequiredForOnline=no\n\n[Network]\nLinkLocalAddressing=no\nDHCP=no\nIPv6AcceptRA=no\n","sources":[]}],"findings":[]}` {
 		t.Fatalf("empty declaration: %s", body)
 	}
 	if _, err := Network(Input{Declaration: []byte(`{`)}); err == nil {

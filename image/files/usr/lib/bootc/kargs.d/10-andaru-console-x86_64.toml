@@ -1,0 +1,3 @@
+# The serial console, for a headless appliance and for the lab's serial reader.
+kargs = ["console=tty0", "console=ttyS0,115200n8"]
+match-architectures = ["x86_64"]

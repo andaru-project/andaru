@@ -48,7 +48,7 @@ var competingFilters = []string{"nftables.service", "firewalld.service", "ufw.se
 
 // ReadRealizerFacts inspects the host without changing it.
 func ReadRealizerFacts() (RealizerFacts, error) {
-	return readRealizerFacts("/etc/systemd/network", "/run/systemd/network", "/usr/sbin/pppd", "/usr/lib/pppd/*/pppoe.so", "/dev/ppp", "")
+	return readRealizerFacts("/etc/systemd/network", "/run/systemd/network", "/usr/sbin/pppd", "/usr/lib64/pppd/*/pppoe.so", "/dev/ppp", "")
 }
 
 func readRealizerFacts(etcDir, runDir, pppd, pluginGlob, device, root string) (RealizerFacts, error) {
@@ -73,8 +73,9 @@ func readRealizerFacts(etcDir, runDir, pppd, pluginGlob, device, root string) (R
 				facts.ForeignFiles = append(facts.ForeignFiles, dropIns...)
 				continue
 			}
-			// networkd reads /etc before /run, so anything there overrides Andaru; in /run only Andaru's prefix is its own.
-			if !entry.IsDir() && (dir == etcDir || !strings.HasPrefix(name, "50-andaru-")) {
+			// networkd reads /etc before /run, so anything there overrides Andaru; in /run only Andaru's prefix and its
+			// exact catch-all are its own.
+			if !entry.IsDir() && (dir == etcDir || !strings.HasPrefix(name, "50-andaru-") && name != "51-andaru-unclassified.network") {
 				facts.ForeignFiles = append(facts.ForeignFiles, filepath.Join(dir, name))
 			}
 		}
@@ -87,7 +88,7 @@ func readRealizerFacts(etcDir, runDir, pppd, pluginGlob, device, root string) (R
 	facts.NftTool = exists(root + "/usr/sbin/nft")
 	facts.KeaTool = exists(root + "/usr/sbin/kea-dhcp4")
 	facts.Kea6Tool = exists(root + "/usr/sbin/kea-dhcp6")
-	if hooks, _ := filepath.Glob(root + "/usr/lib/*/kea/hooks/libdhcp_run_script.so"); len(hooks) > 0 {
+	if hooks, _ := filepath.Glob(root + "/usr/lib64/kea/hooks/libdhcp_run_script.so"); len(hooks) > 0 {
 		facts.KeaHooks = strings.TrimPrefix(filepath.Dir(hooks[0]), root)
 	}
 	facts.UnboundTool = exists(root + "/usr/sbin/unbound")

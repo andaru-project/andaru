@@ -13,12 +13,13 @@ import (
 
 // The service files a generation may carry, and what the lease sync keeps beside them at runtime.
 const (
-	keaFile      = "/run/andaru-kea/kea-dhcp4.conf"
-	kea6File     = "/run/andaru-kea/kea-dhcp6.conf"
-	unboundFile  = "/run/andaru-unbound/andaru.conf"
-	resolvedFile = "/run/systemd/resolved.conf.d/50-andaru.conf"
-	leasesDir    = "/run/andaru-leases"
-	leaseMarker  = "/run/kea/andaru-leases-changed"
+	keaFile       = "/run/andaru-kea/kea-dhcp4.conf"
+	kea6File      = "/run/andaru-kea/kea-dhcp6.conf"
+	unboundFile   = "/run/andaru-unbound/andaru.conf"
+	unboundAnchor = "/var/lib/unbound/root.key"
+	resolvedFile  = "/run/systemd/resolved.conf.d/50-andaru.conf"
+	leasesDir     = "/run/andaru-leases"
+	leaseMarker   = "/run/kea/andaru-leases-changed"
 )
 
 func find(set []placed, path string) (placed, bool) {
@@ -86,8 +87,8 @@ func (r Realizer) services(ctx context.Context, from, to []placed) error {
 		}
 	}
 	for _, s := range []keaServer{
-		{keaFile, "/usr/sbin/kea-dhcp4", "kea-dhcp4-server.service", keaSocket, "DHCP server", kea, hadKea},
-		{kea6File, "/usr/sbin/kea-dhcp6", "kea-dhcp6-server.service", kea6Socket, "DHCPv6 server", kea6, hadKea6},
+		{keaFile, "/usr/sbin/kea-dhcp4", "kea-dhcp4.service", keaSocket, "DHCP server", kea, hadKea},
+		{kea6File, "/usr/sbin/kea-dhcp6", "kea-dhcp6.service", kea6Socket, "DHCPv6 server", kea6, hadKea6},
 	} {
 		if err := r.keaServe(ctx, s); err != nil {
 			return err
@@ -101,8 +102,12 @@ func (r Realizer) services(ctx context.Context, from, to []placed) error {
 	}
 	if unbound || hadUnbound {
 		if unbound {
-			// Debian's config names root.key, which only the unit's ExecStartPre creates; run it, ignoring failure as the unit does.
-			_, _ = r.Run(ctx, "/usr/libexec/unbound-helper", "root_trust_anchor_update")
+			// Fedora's config names root.key, which only unbound-anchor.service creates. Its exit status does not say
+			// whether the file exists (an update is not a failure), so the file decides.
+			_, _ = r.Run(ctx, "/usr/bin/systemctl", "start", "unbound-anchor.service")
+			if _, err := os.Stat(r.Root + unboundAnchor); err != nil {
+				return fmt.Errorf("the DNS service has no root trust anchor: %w", err)
+			}
 			if _, err := r.Run(ctx, "/usr/sbin/unbound-checkconf"); err != nil {
 				return fmt.Errorf("the DNS service refuses its configuration: %w", err)
 			}
@@ -127,7 +132,7 @@ func (r Realizer) services(ctx context.Context, from, to []placed) error {
 	}
 	// Also when DHCPv6 goes: the sync removes its routes, which networkd leaves alone.
 	if kea || kea6 || hadKea6 {
-		// Started, not signalled: root never writes into Kea's own directory, where _kea could plant a link.
+		// Started, not signalled: root never writes into Kea's own directory, where kea could plant a link.
 		if _, err := r.Run(ctx, "/usr/bin/systemctl", "start", "--no-block", "andaru-leases.service"); err != nil {
 			slog.Warn("start the lease sync", "error", err)
 		}

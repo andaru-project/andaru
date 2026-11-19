@@ -1,0 +1,4 @@
+# Andaru's images carry cosign signatures as sigstore attachments in the registry.
+docker:
+  @NAMESPACE@:
+    use-sigstore-attachments: true

@@ -21,6 +21,7 @@ func TestBootLeavesAUsableTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := Realizer{StateDir: state, Root: t.TempDir(), Now: timeNow}
+	r.Run = (&fakeNetworkd{root: r.Root}).run
 	if err := r.Boot(t.Context()); err != nil && strings.Contains(err.Error(), "unsafe kept copy") {
 		t.Fatal(err)
 	}
@@ -33,7 +34,7 @@ func TestDisasterBootOrder(t *testing.T) {
 	writeCopy(t, keptRoot, "last-lan", "last")
 	writeCopy(t, keptRoot, "first", "first")
 	writeCopy(t, keptRoot, "recovery", "recovery")
-	r := Realizer{StateDir: state, Root: root, KeptRoot: keptRoot, Now: timeNow}
+	r := Realizer{StateDir: state, Root: root, KeptRoot: keptRoot, Now: timeNow, Run: (&fakeNetworkd{root: root}).run}
 	if err := r.Boot(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +65,7 @@ func TestDisasterBootStopsWhenRenderCleanupFails(t *testing.T) {
 	writeCopy(t, keptRoot, "last-lan", "last")
 	writeCopy(t, keptRoot, "first", "first")
 	calls := 0
-	r := Realizer{StateDir: state, Root: root, KeptRoot: keptRoot, Now: timeNow, RenderDisaster: func([]byte) error {
+	r := Realizer{StateDir: state, Root: root, KeptRoot: keptRoot, Now: timeNow, Run: (&fakeNetworkd{root: root}).run, RenderDisaster: func([]byte) error {
 		calls++
 		return ErrRenderCleanup
 	}}
@@ -87,7 +88,7 @@ func TestBootUsesKeptLANWhenCommitPointIsMissing(t *testing.T) {
 	root := t.TempDir()
 	keptRoot := filepath.Join(t.TempDir(), "kept")
 	writeCopy(t, keptRoot, "last-lan", "last")
-	r := Realizer{StateDir: state, Root: root, KeptRoot: keptRoot, Now: timeNow}
+	r := Realizer{StateDir: state, Root: root, KeptRoot: keptRoot, Now: timeNow, Run: (&fakeNetworkd{root: root}).run}
 	if err := r.Boot(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +113,7 @@ func TestDisasterBootDoesNotCreateState(t *testing.T) {
 	root := t.TempDir()
 	keptRoot := filepath.Join(t.TempDir(), "kept")
 	writeCopy(t, keptRoot, "last-lan", "last")
-	r := Realizer{StateDir: state, Root: root, KeptRoot: keptRoot, Now: timeNow}
+	r := Realizer{StateDir: state, Root: root, KeptRoot: keptRoot, Now: timeNow, Run: (&fakeNetworkd{root: root}).run}
 	if err := r.Boot(t.Context()); err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,5 @@
+# The image build needs the sources, not local build output or history.
+.git
+web/node_modules
+web/dist
+docs

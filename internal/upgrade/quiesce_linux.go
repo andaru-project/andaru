@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"strings"
 )
 
@@ -19,8 +21,15 @@ func CheckIdle(ctx context.Context, run func(context.Context, string, ...string)
 	return idleRealizationJobs(ctx, run)
 }
 
-// DpkgConsistent refuses a dpkg database with half-installed or half-configured packages.
+// dpkgBinary is where dpkg lives on a Debian host; the appliance image has none.
+var dpkgBinary = "/usr/bin/dpkg"
+
+// DpkgConsistent refuses a dpkg database with half-installed or half-configured packages. Without dpkg there is
+// no package database to be inconsistent.
 func DpkgConsistent(ctx context.Context, run func(context.Context, string, ...string) ([]byte, error)) error {
+	if _, err := os.Stat(dpkgBinary); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
 	audit, err := run(ctx, "dpkg", "--audit")
 	if err != nil {
 		return fmt.Errorf("inspect dpkg state: %w", err)

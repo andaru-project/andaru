@@ -90,6 +90,16 @@ func (r Realizer) baseline() (set []placed, captured bool, err error) {
 	return set, true, nil
 }
 
+// bare is what runs with no generation: the captured baseline and, once the box is set up, the catch-all.
+func (r Realizer) bare() (set []placed, captured bool, err error) {
+	set, captured, err = r.baseline()
+	// A host handed back to its own pre-Andaru configuration is not Andaru's: its ports are its own again.
+	if err == nil && r.setUp() && !(captured && r.handsBack()) {
+		set = append(set, catchAll)
+	}
+	return set, captured, err
+}
+
 // captureBaseline copies netplan's files out of /run. Until a generation has been
 // confirmed each attempt captures afresh, so a netplan change between attempts is kept.
 func (r Realizer) captureBaseline(p Pointers) error {
@@ -322,10 +332,10 @@ func (r Realizer) makePermanent(ctx context.Context, reload bool, kind string) e
 // Boot puts the confirmed generation into /run before networkd starts. It renders nothing.
 func (r Realizer) Boot(ctx context.Context) (result error) {
 	if _, statErr := os.Lstat(r.StateDir); os.IsNotExist(statErr) {
-		return r.disasterBoot()
+		return r.disasterBoot(ctx)
 	}
 	if _, statErr := os.Lstat(filepath.Join(r.dir(), "pointers.json")); os.IsNotExist(statErr) {
-		return r.disasterBoot()
+		return r.disasterBoot(ctx)
 	} else if statErr != nil {
 		return statErr
 	}
@@ -377,10 +387,12 @@ func (r Realizer) Boot(ctx context.Context) (result error) {
 			// Fenced first, so no failure below can leave the host without a filter.
 			return r.consoleRequired(ctx, p, authorization)
 		}
+		// Fenced first, as on a reset tree; a failure still records the pointers.
+		fenced := r.fence(ctx)
 		if err = advanceAuthorization(authorization, ""); err != nil {
-			return err
+			return errors.Join(fenced, err)
 		}
-		return r.writePointers("boot:pointers", p)
+		return errors.Join(fenced, r.writePointers("boot:pointers", p))
 	}
 	base, captured, baseErr := r.baseline()
 	kind, ifupdown, kindErr := ReadBaselineKind(dir)
@@ -470,7 +482,14 @@ func (r Realizer) Boot(ctx context.Context) (result error) {
 		return r.bootIfupdown(ctx, p, *ifupdown, failures)
 	}
 	if !captured || baseErr != nil {
-		return errors.Join(append(failures, baseErr, errors.New("no generation is usable; the host has no managed interface"))...)
+		// No pre-Andaru configuration to fall back to: the host still gets its bare filter, and the catch-all once set
+		// up. No generation runs, so the pointers and the authorization say so.
+		p.Live = nil
+		failures = append(failures, baseErr, r.fence(ctx), errors.New("no generation is usable; the host has no managed interface"))
+		if err = advanceAuthorization(authorization, ""); err != nil {
+			return errors.Join(append(failures, err)...)
+		}
+		return errors.Join(append(failures, r.writePointers("boot:pointers", p))...)
 	}
 	// The mask is the takeover's: back on its own configuration, the host gets its own firewall back. Unmasking reloads
 	// systemd, whose netplan generator, the YAML gone, deletes netplan's files: so before they are placed.
@@ -499,10 +518,10 @@ func (r Realizer) Boot(ctx context.Context) (result error) {
 	return r.writePointers("boot:pointers", p)
 }
 
-// consoleRequired is boot on a reset tree with no usable generation: deny-all, and only the console gets in.
-// The filter comes first; the authorization update and the pointers follow even when it fails.
+// consoleRequired is boot on a reset tree with no usable generation: its bare filter and, once set up, the catch-all,
+// so only the console gets in. The fence comes first; the authorization update and the pointers follow even when it fails.
 func (r Realizer) consoleRequired(ctx context.Context, p Pointers, authorization *authz.StateLock, failures ...error) error {
-	failures = append(failures, r.DenyAll(ctx), advanceAuthorization(authorization, ""), r.writePointers("boot:pointers", p))
+	failures = append(failures, r.fence(ctx), advanceAuthorization(authorization, ""), r.writePointers("boot:pointers", p))
 	return errors.Join(append([]error{errors.New("CONSOLE_REQUIRED: no generation is usable on this reset host")}, failures...)...)
 }
 

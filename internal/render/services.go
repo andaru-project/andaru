@@ -80,7 +80,7 @@ func (r *renderer) servedV6(id string) (string, netip.Prefix, string, bool) {
 func (r *renderer) services() {
 	d := r.d
 	if len(d.DHCP) > 0 && (!r.in.Facts.KeaTool || r.in.Facts.KeaHooks == "") {
-		r.find("error", "TOOL_MISSING", "/dhcp", "The DHCP server is not installed; install the kea-dhcp4-server package.")
+		r.find("error", "TOOL_MISSING", "/dhcp", "The DHCP server is not installed; install the kea and kea-hooks packages.")
 	}
 	if d.DNS != nil && !r.in.Facts.UnboundTool {
 		r.find("error", "TOOL_MISSING", "/dns", "The DNS service is not installed; install the unbound package.")
@@ -144,8 +144,9 @@ func (r *renderer) services() {
 		kea := map[string]any{"Dhcp4": map[string]any{
 			// Kea starts before networkd has the addresses; it binds as they appear.
 			"interfaces-config": map[string]any{"interfaces": interfaces, "service-sockets-max-retries": 30, "service-sockets-retry-wait-time": 2000},
-			"control-socket":    map[string]any{"socket-type": "unix", "socket-name": "/run/kea/kea4-ctrl-socket"},
-			"lease-database":    map[string]any{"type": "memfile", "persist": true, "lfc-interval": 3600},
+			// Kea 3 accepts only its own socket directory, compared as written: Fedora builds it as /var/run/kea.
+			"control-socket": map[string]any{"socket-type": "unix", "socket-name": "/var/run/kea/kea4-ctrl-socket"},
+			"lease-database": map[string]any{"type": "memfile", "persist": true, "lfc-interval": 3600},
 			"hooks-libraries": []map[string]any{
 				{"library": r.in.Facts.KeaHooks + "/libdhcp_lease_cmds.so"},
 				{"library": r.in.Facts.KeaHooks + "/libdhcp_run_script.so", "parameters": map[string]any{"name": "/usr/share/kea/scripts/andaru-lease-event", "sync": false}},
@@ -213,7 +214,7 @@ func (r *renderer) services() {
 	if d.DNS.Mode == "forward" {
 		tls := d.DNS.Upstreams[0].Protocol == "dot"
 		if tls {
-			lines = append(lines, "\ttls-cert-bundle: /etc/ssl/certs/ca-certificates.crt")
+			lines = append(lines, "\ttls-cert-bundle: /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem")
 		}
 		// Unbound's default do-not-query-localhost refuses all of 127/8 and ::1, so a loopback upstream needs it off.
 		for _, u := range d.DNS.Upstreams {
@@ -342,7 +343,7 @@ func (r *renderer) dhcp6(dnsServes func(string) bool, register bool) (names []st
 		return nil
 	}
 	if !r.in.Facts.Kea6Tool || r.in.Facts.KeaHooks == "" {
-		r.find("error", "TOOL_MISSING", "/dhcp6", "The DHCPv6 server is not installed; install the kea-dhcp6-server package.")
+		r.find("error", "TOOL_MISSING", "/dhcp6", "The DHCPv6 server is not installed; install the kea and kea-hooks packages.")
 	}
 	var interfaces []string
 	subnets := []map[string]any{}
@@ -449,7 +450,7 @@ func (r *renderer) dhcp6(dnsServes func(string) bool, register bool) (names []st
 	kea := map[string]any{"Dhcp6": map[string]any{
 		// Kea never listens on an interface that was down when it started, unless it retries.
 		"interfaces-config": map[string]any{"interfaces": interfaces, "service-sockets-max-retries": 30, "service-sockets-retry-wait-time": 2000},
-		"control-socket":    map[string]any{"socket-type": "unix", "socket-name": "/run/kea/kea6-ctrl-socket"},
+		"control-socket":    map[string]any{"socket-type": "unix", "socket-name": "/var/run/kea/kea6-ctrl-socket"},
 		"lease-database":    map[string]any{"type": "memfile", "persist": true, "lfc-interval": 3600},
 		"hooks-libraries": []map[string]any{
 			{"library": r.in.Facts.KeaHooks + "/libdhcp_lease_cmds.so"},

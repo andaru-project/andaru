@@ -20,7 +20,7 @@ const kea6Served = `{"Dhcp6":{"subnet6":[{"id":1,"subnet":"fd00:1::/64","interfa
 		{"duid":"00:01:00:01:aa:bb:cc:dd:ee:01","prefixes":["fd00:beef:1:300::/56"],"hostname":"router"}],
 	"user-context":{"andaru":{"domain":"home.arpa","register":true}}}]}}`
 
-// keaUser stands for _kea: the owner of Kea's runtime directory and of what its hook writes there. Unprivileged
+// keaUser stands for kea: the owner of Kea's runtime directory and of what its hook writes there. Unprivileged
 // tests can only give their own files away to themselves.
 var keaUser = func() int {
 	if os.Getuid() == 0 {
@@ -141,7 +141,7 @@ func TestPDEventRefusals(t *testing.T) {
 	}
 }
 
-// _kea owns the directory the hook writes in: a link, another owner's file or a huge file is never read.
+// kea owns the directory the hook writes in: a link, another owner's file or a huge file is never read.
 func TestPDEventFileHostile(t *testing.T) {
 	for name, plant := range map[string]func(b *bench, path string){
 		"symlink": func(b *bench, path string) {

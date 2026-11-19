@@ -1,21 +1,29 @@
 name: Release
 
-# A pushed tag builds Andaru's packages onto a GitHub release. andaru-project/apt publishes them: it alone holds
-# the archive's signing key. Tags: v1.2.3, v1.2.3-rcN (a prerelease, for the trixie-test suite), keyring-yyyy.mm.dd.
+# A pushed tag builds Andaru's image for both architectures, signs it with the image-release environment's cosign key,
+# and only then gives it its version tag (and stable, for a release). Tags: v1.2.3, v1.2.3-rcN (a prerelease).
 on:
   push:
-    tags: ['v*', 'keyring-*']
+    tags: ['v*']
 
 permissions:
   contents: read
+
+# Two tags pushed close together must not race for stable.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/andaru-project/andaru
 
 jobs:
   version:
     runs-on: ubuntu-24.04
     outputs:
-      packages: ${{ steps.map.outputs.packages }}
       version: ${{ steps.map.outputs.version }}
       prerelease: ${{ steps.map.outputs.prerelease }}
+      base: ${{ steps.base.outputs.base }}
     steps:
       - name: Check out
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -26,8 +34,8 @@ jobs:
 
       - name: Refuse a tag outside main
         run: |
-          # Every host installs a release as root, so only a commit already on main may become one. HEAD is the
-          # tag's commit, also for an annotated tag.
+          # Every box runs a release as its operating system, so only a commit already on main may become one.
+          # HEAD is the tag's commit, also for an annotated tag.
           git merge-base --is-ancestor HEAD origin/main ||
             { echo "::error::$GITHUB_REF_NAME is not on main"; exit 1; }
 
@@ -39,100 +47,136 @@ jobs:
           set -eu
           # On its own line, so that a tag version.sh refuses fails the workflow.
           mapped=$(sh scripts/ci/version.sh "$TAG")
-          read -r packages version prerelease <<EOF
+          read -r version prerelease <<EOF
           $mapped
           EOF
-          # The keyring is built once per version, and that version lives in debian/rules.
-          if [ "$packages" = all ]; then
-            grep -qx "KEYRING_VERSION = $version" debian/rules
-          fi
           {
-            echo "packages=$packages"
             echo "version=$version"
             echo "prerelease=$prerelease"
           } >>"$GITHUB_OUTPUT"
 
-  build:
+      - name: Pin the base
+        id: base
+        # bash -e -o pipefail: a failed lookup must not hash empty output into a digest.
+        shell: bash
+        env:
+          # A digest pin for the base, set as a repository variable when a Fedora CoreOS release must be avoided.
+          FCOS_BASE: ${{ vars.FCOS_BASE }}
+        run: |
+          set -eu
+          # One digest for both architectures: stable may move between the two builds.
+          if [ -z "$FCOS_BASE" ]; then
+            FCOS_BASE="quay.io/fedora/fedora-coreos@$(skopeo inspect --raw docker://quay.io/fedora/fedora-coreos:stable | sha256sum | cut -d' ' -f1 | sed 's/^/sha256:/')"
+          fi
+          echo "base=$FCOS_BASE" >>"$GITHUB_OUTPUT"
+
+  image:
     needs: version
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: true
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
     steps:
       - name: Check out
-        if: needs.version.outputs.packages == 'any' || matrix.runner == 'ubuntu-24.04'
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
 
-      - name: Set up Go
-        if: needs.version.outputs.packages == 'any' || matrix.runner == 'ubuntu-24.04'
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version-file: go.mod
-          cache: false
-
       - name: Build and check
-        if: needs.version.outputs.packages == 'any' || matrix.runner == 'ubuntu-24.04'
         env:
-          PACKAGES: ${{ needs.version.outputs.packages }}
           VERSION: ${{ needs.version.outputs.version }}
+          BASE: ${{ needs.version.outputs.base }}
         run: |
           set -eu
-          if [ "$PACKAGES" = any ]; then
-            sh scripts/ci/build-packages.sh dist any "$VERSION"
-            sh scripts/ci/install-test.sh dist
-          else
-            sh scripts/ci/build-packages.sh dist all
-          fi
+          podman build -f image/Containerfile --build-arg VERSION="$VERSION" --build-arg BASE_IMAGE="$BASE" -t andaru:build .
+          sh scripts/ci/image-smoke.sh andaru:build "$VERSION"
 
-      - name: Keep the packages
-        if: needs.version.outputs.packages == 'any' || matrix.runner == 'ubuntu-24.04'
+      - name: Push the unsigned architecture image
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+          TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          printf '%s\n' "$TOKEN" | podman login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          # Boxes never follow these tags: nothing signs them, so the signature policy refuses them.
+          podman push --digestfile "digest-$ARCH" andaru:build "docker://$IMAGE:$VERSION-$ARCH"
+
+      # The digest, not the tag, goes into the index: a tag could be moved between this push and the signature.
+      - name: Keep the digest
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: packages-${{ matrix.runner }}
-          path: dist/*.deb
+          name: digest-${{ matrix.arch }}
+          path: digest-${{ matrix.arch }}
           if-no-files-found: error
 
-  release:
-    needs: [version, build]
+  sign:
+    needs: [version, image]
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # The cosign key is a secret of this environment, which admits only v* tags.
+    environment: image-release
     permissions:
-      contents: write
+      contents: read
+      packages: write
     steps:
-      - name: Collect the packages
+      - name: Check out
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Collect the digests
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          path: dist
+          pattern: digest-*
           merge-multiple: true
 
-      - name: Create the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-          PRERELEASE: ${{ needs.version.outputs.prerelease }}
-          PACKAGES: ${{ needs.version.outputs.packages }}
+      - name: Install cosign
         run: |
           set -eu
-          cd dist
-          # GitHub renames uploaded assets with a ~ in their name; the names in SHA256SUMS must be the assets'.
-          for deb in ./*~*.deb; do
-            [ ! -e "$deb" ] || mv "$deb" "$(printf '%s' "$deb" | tr '~' '.')"
-          done
-          sha256sum ./*.deb | sed 's| \./| |' >SHA256SUMS
-          flags=--latest
-          [ "$PRERELEASE" = true ] && flags=--prerelease
-          [ "$PACKAGES" = all ] && flags=--latest=false
-          # A draft until every asset is uploaded, so andaru-project/apt never sees half a release.
-          # shellcheck disable=SC2086
-          gh release create "$TAG" -R "$GITHUB_REPOSITORY" --draft --verify-tag $flags --title "$TAG" \
-            --notes "Published to https://apt.andaru.io/ by andaru-project/apt's next daily run. SHA-256 of each package:
+          # cosign 2.6 stores the signature as a .sig attachment, the form containers/image verifies.
+          curl -fsSLo cosign https://github.com/sigstore/cosign/releases/download/v2.6.5/cosign-linux-amd64
+          echo "c3b4f5410e608af03a5eb0aaac84a4313d8da131248e08ff1759ac70c79d1644  cosign" | sha256sum -c -
+          sudo install -m 0755 cosign /usr/local/bin/cosign
 
-          \`\`\`
-          $(cat SHA256SUMS)
-          \`\`\`" ./*.deb SHA256SUMS
-          # Publishing a draft sets "latest" anew, so the flags go again.
-          # shellcheck disable=SC2086
-          gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --draft=false $flags
+      - name: Assemble, sign, then tag
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+          TOKEN: ${{ github.token }}
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          set -eu
+          printf '%s\n' "$TOKEN" | podman login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          printf '%s\n' "$TOKEN" | cosign login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          podman manifest create andaru:index
+          for arch in amd64 arm64; do
+            podman manifest add andaru:index "docker://$IMAGE@$(cat "digest-$arch")"
+          done
+          # The index goes up under a staging tag nothing follows; its digest is what gets signed.
+          podman manifest push --all --digestfile digest andaru:index "docker://$IMAGE:staging-$VERSION"
+          digest=$(cat digest)
+          # Recursive: a box pulls its own architecture's manifest, which needs a signature of its own.
+          cosign sign --yes --recursive --key env://COSIGN_PRIVATE_KEY "$IMAGE@$digest"
+          # The key in the image must verify what boxes will pull.
+          cosign verify --key image/cosign.pub "$IMAGE@$digest" >/dev/null
+          for arch in amd64 arm64; do
+            cosign verify --key image/cosign.pub "$IMAGE@$(cat "digest-$arch")" >/dev/null
+          done
+          # Only a signed digest gets the names boxes follow.
+          tags=$VERSION
+          [ "$PRERELEASE" = true ] || tags="$tags stable"
+          for tag in $tags; do
+            skopeo copy --all --preserve-digests "docker://$IMAGE@$digest" "docker://$IMAGE:$tag"
+          done
+          echo "$IMAGE@$digest: $tags" >>"$GITHUB_STEP_SUMMARY"

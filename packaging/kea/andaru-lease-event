@@ -1,6 +1,6 @@
 #!/bin/sh
 # Installed as /usr/share/kea/scripts/andaru-lease-event, mode 0755.
-# Kea runs this on lease events as _kea. It marks that leases changed, and andaru-leases.path does the rest.
+# Kea runs this on lease events as kea. It marks that leases changed, and andaru-leases.path does the rest.
 # For DHCPv6 prefix delegation it also appends which router each prefix went to, since Kea's leases do not
 # record it: "add|del <prefix>/<length> <router's link-local address> <interface>". Andaru believes a line
 # only after checking it against the confirmed configuration and Kea's own leases.

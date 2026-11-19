@@ -175,7 +175,7 @@ func (r Realizer) files(g Generation) ([]placed, error) {
 // live is what the pointers say is in /run now: a generation's files or the baseline's.
 func (r Realizer) live(p Pointers) ([]placed, error) {
 	if p.Live == nil {
-		set, _, err := r.baseline()
+		set, _, err := r.bare()
 		return set, err
 	}
 	g, err := read(r.dir(), *p.Live, p)
@@ -325,7 +325,8 @@ func (o observation) connected() (names []string, route bool) {
 // unmet says why the host does not yet run the generation; "" means it does.
 func (o observation) unmet(set []placed, names []string, route bool) string {
 	for _, f := range set {
-		if !strings.HasSuffix(f.path, ".network") {
+		// The catch-all binds only links no generation names, and there may be none.
+		if !strings.HasSuffix(f.path, ".network") || f.path == catchAllPath {
 			continue
 		}
 		i := slices.IndexFunc(o.managed, func(m host.Managed) bool { return m.NetworkFile == f.path })
@@ -716,7 +717,17 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) (result e
 	if loaded {
 		err = restore()
 	} else {
-		err = r.toward(ctx, nil, restore)
+		// A restored generation without a filter runs without the table; only no generation at all gets the bare filter.
+		var restored *Generation
+		if live != nil {
+			// Unreadable now, it cannot be told apart from no generation: refuse rather than fence its files.
+			g, readErr := read(dir, *live, p)
+			if readErr != nil {
+				return fmt.Errorf("roll back %d: read generation %d: %w", id, *live, readErr)
+			}
+			restored = &g
+		}
+		err = r.toward(ctx, restored, restore)
 	}
 	if err != nil {
 		return fmt.Errorf("roll back %d: %w", id, err)
@@ -776,7 +787,7 @@ func (r Realizer) fallback(ctx context.Context, p Pointers, previous *int) (set 
 		}
 		failures = append(failures, err)
 	}
-	set, captured, err := r.baseline()
+	set, captured, err := r.bare()
 	if err != nil {
 		return nil, nil, "", false, errors.Join(append(failures, err)...)
 	}

@@ -16,6 +16,9 @@ import (
 
 const networkDir = "/run/systemd/network/"
 
+// factoryFile is the image's DHCP on every en* link before setup; a link it configures can carry the session too.
+const factoryFile = "/usr/lib/systemd/network/99-andaru-factory.network"
+
 var netplanGenerated = regexp.MustCompile(`^/run/systemd/network/10-netplan-[^/]+$`)
 
 // gateInput is everything that decides whether a rendered generation may go live.
@@ -219,7 +222,7 @@ func applyFindings(in gateInput) []render.Finding {
 	for _, m := range in.Managed {
 		i := slices.IndexFunc(in.Links, func(l host.LinkStatus) bool { return l.Name == m.Name })
 		// Virtual devices come and go with generations; only a physical interface can carry the operator's session away.
-		if i < 0 || in.Links[i].Kind != "" || !strings.HasPrefix(m.NetworkFile, networkDir) {
+		if i < 0 || in.Links[i].Kind != "" || !strings.HasPrefix(m.NetworkFile, networkDir) && m.NetworkFile != factoryFile {
 			continue
 		}
 		connected := slices.ContainsFunc(in.Links[i].Addresses, func(a host.AddressStatus) bool { return a.Scope == "global" })

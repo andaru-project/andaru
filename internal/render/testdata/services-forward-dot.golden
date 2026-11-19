@@ -2,15 +2,15 @@
 {
   "Dhcp4": {
     "control-socket": {
-      "socket-name": "/run/kea/kea4-ctrl-socket",
+      "socket-name": "/var/run/kea/kea4-ctrl-socket",
       "socket-type": "unix"
     },
     "hooks-libraries": [
       {
-        "library": "/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so"
+        "library": "/usr/lib64/kea/hooks/libdhcp_lease_cmds.so"
       },
       {
-        "library": "/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_run_script.so",
+        "library": "/usr/lib64/kea/hooks/libdhcp_run_script.so",
         "parameters": {
           "name": "/usr/share/kea/scripts/andaru-lease-event",
           "sync": false
@@ -76,7 +76,7 @@ server:
 	access-control: ::1/128 allow
 	access-control: 192.168.40.0/24 allow
 	local-zone: "lan.example." static
-	tls-cert-bundle: /etc/ssl/certs/ca-certificates.crt
+	tls-cert-bundle: /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
 forward-zone:
 	name: "."
 	forward-addr: 9.9.9.9#dns.quad9.net
@@ -141,6 +141,19 @@ MTUBytes=1500
 LLDP=no
 Address=192.168.40.1/24
 LinkLocalAddressing=no
+IPv6AcceptRA=no
+
+### /run/systemd/network/51-andaru-unclassified.network 0644 secret=false sources=
+[Match]
+Name=en*
+
+[Link]
+ActivationPolicy=down
+RequiredForOnline=no
+
+[Network]
+LinkLocalAddressing=no
+DHCP=no
 IPv6AcceptRA=no
 
 ### /run/systemd/resolved.conf.d/50-andaru.conf 0644 secret=false sources=/dns

@@ -4,6 +4,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -20,7 +21,7 @@ func TestActivateStartsServicesAfterNetworkd(t *testing.T) {
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
-	order := []string{"networkctl reload", "kea-dhcp4 -t " + keaFile, "systemctl restart kea-dhcp4-server.service", "unbound-helper root_trust_anchor_update", "unbound-checkconf", "systemctl restart unbound.service", "systemctl try-reload-or-restart systemd-resolved.service"}
+	order := []string{"networkctl reload", "kea-dhcp4 -t " + keaFile, "systemctl restart kea-dhcp4.service", "systemctl start unbound-anchor.service", "unbound-checkconf", "systemctl restart unbound.service", "systemctl try-reload-or-restart systemd-resolved.service"}
 	last := -1
 	for _, c := range order {
 		i := b.index(c)
@@ -35,12 +36,27 @@ func TestActivateStartsServicesAfterNetworkd(t *testing.T) {
 	}
 }
 
-// The unit's own anchor update fails quietly (ExecStartPre=-); unbound-checkconf judges the result.
-func TestAnchorUpdateFailureLeavesTheCheckToUnbound(t *testing.T) {
+// unbound-anchor.service may fail, or exit non-zero after an update; an existing root.key is what Unbound needs.
+func TestAnchorUnitFailureWithAnAnchorLeavesTheCheckToUnbound(t *testing.T) {
 	b := newBench(t)
-	b.net.fail = "unbound-helper"
+	b.net.fail = "systemctl start unbound-anchor.service"
 	if err := b.r.Activate(t.Context(), b.gen(false, served(`{"Dhcp4":{}}`))); err != nil || b.index("unbound-checkconf") < 0 {
-		t.Fatalf("%v; the check did not run after the helper failed: %q", err, b.net.argv)
+		t.Fatalf("%v; the check did not run after the anchor unit failed: %q", err, b.net.argv)
+	}
+}
+
+// Without root.key, unbound-checkconf and Unbound refuse to start, so the apply fails before the check and restores.
+func TestMissingAnchorFailsTheApply(t *testing.T) {
+	b := newBench(t)
+	if err := os.Remove(filepath.Join(b.r.Root, unboundAnchor)); err != nil {
+		t.Fatal(err)
+	}
+	id := b.gen(false, served(`{"Dhcp4":{}}`))
+	if err := b.r.Activate(t.Context(), id); err == nil || !strings.Contains(err.Error(), "root trust anchor") {
+		t.Fatalf("activated without a root trust anchor: %v", err)
+	}
+	if b.index("unbound-checkconf") >= 0 || b.read(id).State.State != Failed {
+		t.Fatalf("Unbound was checked or the generation stayed: %q %+v", b.net.argv, b.read(id).State)
 	}
 }
 
@@ -51,7 +67,7 @@ func TestInvalidServiceConfigRestoresThePrevious(t *testing.T) {
 	if err := b.r.Activate(t.Context(), id); err == nil {
 		t.Fatal("activated a configuration Kea refuses")
 	}
-	if b.exists(keaFile[1:]) || b.index("systemctl restart kea-dhcp4-server.service") >= 0 || b.read(id).State.State != Failed {
+	if b.exists(keaFile[1:]) || b.index("systemctl restart kea-dhcp4.service") >= 0 || b.read(id).State.State != Failed {
 		t.Fatalf("Kea started or its file stayed: %q %+v", b.net.argv, b.read(id).State)
 	}
 }
@@ -76,7 +92,7 @@ func TestKeaCheckWaitsForLateInterfaces(t *testing.T) {
 	if checks != 3 {
 		t.Fatalf("checked %d times", checks)
 	}
-	if b.index("systemctl restart kea-dhcp4-server.service") < 0 {
+	if b.index("systemctl restart kea-dhcp4.service") < 0 {
 		t.Fatalf("Kea not started: %q", b.net.argv)
 	}
 }
@@ -89,7 +105,7 @@ func TestKeaNotRunningFailsActivation(t *testing.T) {
 	if err := b.r.Activate(t.Context(), id); err == nil || b.read(id).State.State != Failed {
 		t.Fatalf("activation survived a DHCP server that does not run: %v", err)
 	}
-	if b.index("systemctl stop kea-dhcp4-server.service") < 0 {
+	if b.index("systemctl stop kea-dhcp4.service") < 0 {
 		t.Fatalf("Kea left running after the restore: %q", b.net.argv)
 	}
 }
@@ -109,7 +125,7 @@ func TestRollbackToBaselineStopsServices(t *testing.T) {
 			t.Fatalf("%s left on the baseline", path)
 		}
 	}
-	for _, c := range []string{"systemctl stop kea-dhcp4-server.service", "systemctl restart unbound.service", "systemctl try-reload-or-restart systemd-resolved.service"} {
+	for _, c := range []string{"systemctl stop kea-dhcp4.service", "systemctl restart unbound.service", "systemctl try-reload-or-restart systemd-resolved.service"} {
 		if b.index(c) < 0 {
 			t.Fatalf("%q not run: %q", c, b.net.argv)
 		}
@@ -212,7 +228,7 @@ func TestActivateStartsDHCPv6(t *testing.T) {
 		t.Fatal(err)
 	}
 	last := -1
-	for _, c := range []string{"networkctl reload", "kea-dhcp6 -t " + kea6File, "systemctl restart kea-dhcp6-server.service", "systemctl start --no-block andaru-leases.service"} {
+	for _, c := range []string{"networkctl reload", "kea-dhcp6 -t " + kea6File, "systemctl restart kea-dhcp6.service", "systemctl start --no-block andaru-leases.service"} {
 		i := b.index(c)
 		if i <= last {
 			t.Fatalf("%q out of order in %q", c, b.net.argv)
@@ -263,7 +279,7 @@ func TestGenerationWithoutDHCPv6StopsIt(t *testing.T) {
 	if err := b.r.Activate(t.Context(), b.gen(false, served(""))); err != nil {
 		t.Fatal(err)
 	}
-	if b.index("systemctl stop kea-dhcp6-server.service") < 0 {
+	if b.index("systemctl stop kea-dhcp6.service") < 0 {
 		t.Fatalf("DHCPv6 server left running: %q", b.net.argv)
 	}
 }

@@ -112,14 +112,8 @@ jobs:
           test "$(uname -m)" = "${{ matrix.machine }}"
           test "$(go env GOARCH)" = "${{ matrix.arch }}"
 
-      - name: Install nftables, Kea and Unbound for the packet filter and service tests (unit tests check the lease file with Unbound)
-        run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends nftables kea-dhcp4-server kea-dhcp6-server unbound
-          # The packaged AppArmor rules let kea-dhcp4 read /run/andaru-kea, where the tool test stages its files.
-          if [ -d /etc/apparmor.d/local ] && command -v apparmor_parser >/dev/null; then
-            sudo install -m 0644 -D -t /etc/apparmor.d/andaru packaging/apparmor/andaru/kea-dhcp4 packaging/apparmor/andaru/kea-dhcp6 packaging/apparmor/andaru/unbound
-            sudo sh packaging/apparmor/andaru-apparmor
-          fi
+      - name: Install Unbound for the unprivileged lease-file test
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends unbound
       - name: Vet and unprivileged tests
         shell: bash
         run: |
@@ -149,20 +143,16 @@ jobs:
           sudo install -o root -g root -m 0755 -t "$art" \
             "$build/andaru" "$build/config.test" "$build/engine.test" "$build/generation.test" "$build/identity.test" \
             "$build/audit.test" "$build/ctl.test" "$build/render.test" "$build/upgrade.test"
-          sudo env -u TMPDIR "$art/config.test" -test.v -test.timeout=120s
-          sudo env -u TMPDIR ANDARU_TEST_BINARY="$art/andaru" "$art/engine.test" -test.v -test.timeout=120s
-          sudo env -u TMPDIR "$art/generation.test" -test.v -test.timeout=120s
-          sudo env -u TMPDIR "$art/identity.test" -test.v -test.timeout=120s
-          sudo env -u TMPDIR "$art/audit.test" -test.v -test.timeout=120s
-          sudo env -u TMPDIR "$art/ctl.test" -test.v -test.timeout=120s
+          # dpkg-based upgrade preparation runs on the Ubuntu runner until slice 3 deletes it.
           sudo env -u TMPDIR "$art/upgrade.test" -test.v -test.timeout=120s
-          # The pppd and networkd tool proofs in this binary are lab proofs; CI runs the filter ones.
-          sudo env -u TMPDIR "$art/render.test" -test.v -test.timeout=120s -test.run "FilterInNamespace|NftScriptIsValid|ServiceGoldensPassTheirTools|DHCPv6GoldensPassKea"
+          # The rest run where the image's packages are: Fedora's nftables, Kea and Unbound. A missing tool fails.
+          sudo podman run --rm --privileged --network host -v "$art:$art" -v "$PWD/scripts/ci:/ci:ro" \
+            registry.fedoraproject.org/fedora:44 sh /ci/root-tests.sh "$art"
 
-  packages:
-    name: packages ${{ matrix.arch }}
+  image:
+    name: image ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -177,16 +167,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Build the packages in Debian 13 and check them with lintian
+      # Proves the Containerfile still builds, lints and passes the smoke checks. Never pushed or signed.
+      - name: Build and check the image
+        env:
+          VERSION: 0.0.0-pr${{ github.event.pull_request.number || '0' }}
         run: |
-          sh scripts/ci/build-packages.sh dist any
-          sh scripts/ci/build-packages.sh dist all
-
-      - name: Install, check and upgrade in a Debian 13 container booted with systemd
-        run: sh scripts/ci/install-test.sh dist
+          set -eu
+          podman build -f image/Containerfile --build-arg VERSION="$VERSION" -t andaru:ci .
+          sh scripts/ci/image-smoke.sh andaru:ci "$VERSION"

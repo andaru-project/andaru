@@ -23,5 +23,18 @@ Domains=b.example a.example
 LinkLocalAddressing=no
 IPv6AcceptRA=no
 
+### /run/systemd/network/51-andaru-unclassified.network 0644 secret=false sources=
+[Match]
+Name=en*
+
+[Link]
+ActivationPolicy=down
+RequiredForOnline=no
+
+[Network]
+LinkLocalAddressing=no
+DHCP=no
+IPv6AcceptRA=no
+
 ### resolved lnk_00000001-0000-4000-8000-000000000001 -> ens18
 ### realizable=true

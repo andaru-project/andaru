@@ -35,13 +35,17 @@ func TestTeardownClearsLive(t *testing.T) {
 			t.Fatalf("%s left in /run", path)
 		}
 	}
-	for _, c := range []string{"networkctl reload", "networkctl delete vl0", "systemctl stop kea-dhcp4-server.service", "systemctl restart unbound.service"} {
+	for _, c := range []string{"networkctl reload", "networkctl delete vl0", "systemctl stop kea-dhcp4.service", "systemctl restart unbound.service"} {
 		if b.index(c) < 0 {
 			t.Fatalf("%q not run: %q", c, b.net.argv)
 		}
 	}
 	if b.net.table != denyAllComment || !strings.Contains(b.net.script, "policy drop") || !strings.Contains(b.net.script, `iif "lo" accept`) {
 		t.Fatalf("filter %q: %s", b.net.table, b.net.script)
+	}
+	// Even a generation from before the catch-all leaves it: the reset ends behind deny-all with WAN down.
+	if !b.exists(catchAllPath[1:]) {
+		t.Fatal("the teardown left no catch-all")
 	}
 	if b.net.bound["eth0"] != "" {
 		t.Fatalf("eth0 still managed after the teardown: %q", b.net.bound)
@@ -80,8 +84,8 @@ func TestTeardownBaselineAfterTakeover(t *testing.T) {
 	if err := b.r.Teardown(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if len(b.net.netFiles()) != 0 {
-		t.Fatalf("baseline files left: %v", b.net.netFiles())
+	if files := b.net.netFiles(); len(files) != 1 || files[filepath.Base(catchAllPath)] == "" {
+		t.Fatalf("baseline files left: %v", files)
 	}
 	if b.net.table != denyAllComment {
 		t.Fatalf("filter = %q", b.net.table)
@@ -113,8 +117,8 @@ func TestTeardownDamagedLive(t *testing.T) {
 	if err := b.r.Teardown(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if len(b.net.netFiles()) != 0 {
-		t.Fatalf("left %v", b.net.netFiles())
+	if files := b.net.netFiles(); len(files) != 1 || files[filepath.Base(catchAllPath)] == "" {
+		t.Fatalf("left %v", files)
 	}
 }
 

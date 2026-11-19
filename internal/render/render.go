@@ -55,6 +55,7 @@ func Network(in Input) (Result, error) {
 	r.virtualAddresses()
 	r.filterChains()
 	r.services()
+	r.file(UnclassifiedPath, "0644", Unclassified, []string{})
 	for _, path := range in.Facts.ForeignFiles {
 		r.find("error", "FOREIGN_CONFIGURATION", "", "A network configuration file not written by Andaru would override or conflict with it: "+path)
 	}

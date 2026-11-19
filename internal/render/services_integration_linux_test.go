@@ -14,11 +14,11 @@ import (
 	"github.com/andaru-project/andaru/internal/delegation"
 )
 
-// Each service golden is accepted by the daemon's own checker, as Debian 13 ships it.
+// Each service golden is accepted by the daemon's own checker, as Fedora ships it.
 func TestServiceGoldensPassTheirTools(t *testing.T) {
 	for _, tool := range []string{"kea-dhcp4", "unbound-checkconf"} {
 		if _, err := exec.LookPath(tool); err != nil {
-			t.Skipf("%s not installed", tool)
+			skipMissingTool(t, tool+" not installed")
 		}
 	}
 	// Debian's and Ubuntu's AppArmor profiles let kea-dhcp4 read only its own directories and, with
@@ -33,13 +33,12 @@ func TestServiceGoldensPassTheirTools(t *testing.T) {
 			case keaPath:
 				path := "/run/andaru-kea/test-" + name + ".conf"
 				t.Cleanup(func() { os.Remove(path) })
-				// kea-dhcp4 -t refuses interfaces this host lacks and hooks it cannot load: the fixtures name
-				// amd64's hook directory and cards that are not here.
-				hooks, _ := filepath.Glob("/usr/lib/*/kea/hooks")
-				if len(hooks) == 0 {
-					t.Skip("no Kea hook directory")
+				// kea-dhcp4 -t refuses interfaces this host lacks: the fixtures name cards
+				// that are not here, so the check uses lo.
+				if _, err := os.Stat(allFacts.KeaHooks); err != nil {
+					skipMissingTool(t, "no Kea hook directory")
 				}
-				content := strings.ReplaceAll(strings.ReplaceAll(f.Content, `"ens19"`, `"lo"`), allFacts.KeaHooks, hooks[0])
+				content := strings.ReplaceAll(f.Content, `"ens19"`, `"lo"`)
 				if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 					t.Fatal(err)
 				}
@@ -51,11 +50,19 @@ func TestServiceGoldensPassTheirTools(t *testing.T) {
 				if err := os.WriteFile(fragment, []byte(f.Content), 0o644); err != nil {
 					t.Fatal(err)
 				}
-				// As Debian's unbound.conf includes Andaru's file.
-				if err := os.WriteFile(main, []byte("server:\n\tchroot: \"\"\ninclude: \""+fragment+"\"\n"), 0o644); err != nil {
+				// As Fedora's unbound.conf includes Andaru's file, where it is installed; otherwise a minimal main
+				// file. One fixture at a time: two would bind the same addresses.
+				if _, err := os.Stat("/etc/unbound/conf.d"); err == nil {
+					main = "/etc/unbound/unbound.conf"
+					if err := os.WriteFile("/etc/unbound/conf.d/andaru-test.conf", []byte(f.Content), 0o644); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := os.WriteFile(main, []byte("server:\n\tchroot: \"\"\ninclude: \""+fragment+"\"\n"), 0o644); err != nil {
 					t.Fatal(err)
 				}
-				if out, err := exec.Command("unbound-checkconf", main).CombinedOutput(); err != nil || !strings.Contains(string(out), "no errors") {
+				out, err := exec.Command("unbound-checkconf", main).CombinedOutput()
+				os.Remove("/etc/unbound/conf.d/andaru-test.conf")
+				if err != nil || !strings.Contains(string(out), "no errors") {
 					t.Fatalf("%s: unbound-checkconf refused it: %s", name, out)
 				}
 			}
@@ -66,11 +73,10 @@ func TestServiceGoldensPassTheirTools(t *testing.T) {
 // Kea's own checker accepts the DHCPv6 configuration, with and without the DNS service's options.
 func TestDHCPv6GoldensPassKea(t *testing.T) {
 	if _, err := exec.LookPath("kea-dhcp6"); err != nil {
-		t.Skip("kea-dhcp6 not installed")
+		skipMissingTool(t, "kea-dhcp6 not installed")
 	}
-	hooks, _ := filepath.Glob("/usr/lib/*/kea/hooks")
-	if len(hooks) == 0 {
-		t.Skip("no Kea hook directory")
+	if _, err := os.Stat(allFacts.KeaHooks); err != nil {
+		skipMissingTool(t, "no Kea hook directory")
 	}
 	if err := os.MkdirAll("/run/andaru-kea", 0o755); err != nil {
 		t.Fatal(err)
@@ -97,7 +103,7 @@ func TestDHCPv6GoldensPassKea(t *testing.T) {
 			raw, _ := json.Marshal(conf)
 			kea = string(raw)
 		}
-		content := strings.ReplaceAll(strings.ReplaceAll(kea, `"ens19"`, `"lo"`), allFacts.KeaHooks, hooks[0])
+		content := strings.ReplaceAll(kea, `"ens19"`, `"lo"`)
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}

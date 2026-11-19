@@ -13,6 +13,14 @@ import (
 
 const networkDir = "/run/systemd/network/50-andaru-"
 
+// UnclassifiedPath keeps every en* link no declaration names down: it sorts after each 50-andaru- file and before
+// the image's 99-andaru-factory.network, whose DHCP must never reach WAN once the box is set up.
+const UnclassifiedPath = "/run/systemd/network/51-andaru-unclassified.network"
+
+// Unclassified is UnclassifiedPath's content: no address of any kind, and the link stays down.
+var Unclassified = ini(section{"Match", []string{"Name=en*"}}, section{"Link", []string{"ActivationPolicy=down", "RequiredForOnline=no"}},
+	section{"Network", []string{"LinkLocalAddressing=no", "DHCP=no", "IPv6AcceptRA=no"}})
+
 type section struct {
 	name  string
 	lines []string

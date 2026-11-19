@@ -1,6 +1,7 @@
 package generation
 
 import (
+	"context"
 	"errors"
 	"os"
 
@@ -11,7 +12,21 @@ import (
 // Boot must not try the next copy over that residue.
 var ErrRenderCleanup = errors.New("disaster render cleanup failed")
 
-func (r Realizer) disasterBoot() error {
+func (r Realizer) disasterBoot(ctx context.Context) (result error) {
+	if !r.setUp() {
+		// A box never set up has nothing kept to bring back: the factory network runs behind the factory filter.
+		return r.factoryFilter(ctx)
+	}
+	// Nothing came up: deny-all, and only the console gets in.
+	defer func() {
+		if result != nil {
+			result = errors.Join(result, r.DenyAll(ctx))
+		}
+	}()
+	// The kept LAN names no WAN: the catch-all keeps it from the factory network's DHCP, which no filter stops.
+	if err := r.place(nil, []placed{catchAll}); err != nil {
+		return err
+	}
 	var store *kept.Store
 	var err error
 	if r.KeptRoot != "" {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,7 +31,7 @@ type realizeVerbs interface {
 	Boot(ctx context.Context) error
 	SyncLeases(ctx context.Context) error
 	SyncPrefixes(ctx context.Context) error
-	DenyAll(ctx context.Context) error
+	Fence(ctx context.Context, denyAll bool) error
 }
 
 // newRealizer builds the privileged actor for the real host.
@@ -97,10 +98,8 @@ func realizeCommand(ctx context.Context, args []string, stderr io.Writer, build 
 		err = verbs.Confirm(ctx, id)
 	case "boot":
 		if blocked {
-			// A host whose network Andaru never ran keeps it; any other is shut until the reset resumes.
-			if denyAll {
-				err = verbs.DenyAll(ctx)
-			}
+			// Shut until the reset resumes: deny-all, or the factory filter where Andaru never ran the network.
+			err = verbs.Fence(ctx, denyAll)
 		} else {
 			err = verbs.Boot(ctx)
 		}
@@ -128,6 +127,11 @@ func renderDisaster(root string) func([]byte) error {
 			Links    json.RawMessage `json:"links"`
 			Segments json.RawMessage `json:"segments"`
 			Zones    json.RawMessage `json:"zones"`
+			// Management, and the objects its sources name, give the kept LAN its filter: without them none renders.
+			Management json.RawMessage `json:"management"`
+			Objects    json.RawMessage `json:"objects"`
+			// A lan-closure carries the address objects its allowed sources name at the top level, not under objects.
+			Addresses json.RawMessage `json:"addresses"`
 		}
 		if err := json.Unmarshal(body, &doc); err != nil {
 			return err
@@ -138,15 +142,24 @@ func renderDisaster(root string) func([]byte) error {
 			}
 			return raw
 		}
-		decl, err := json.Marshal(map[string]any{"schemaVersion": 1, "links": empty(doc.Links), "segments": empty(doc.Segments), "zones": empty(doc.Zones)})
+		floor := map[string]any{"schemaVersion": 1, "links": empty(doc.Links), "segments": empty(doc.Segments), "zones": empty(doc.Zones)}
+		if len(doc.Management) > 0 {
+			floor["management"] = doc.Management
+		}
+		if len(doc.Objects) > 0 {
+			floor["objects"] = doc.Objects
+		} else if len(doc.Addresses) > 0 {
+			floor["objects"] = map[string]json.RawMessage{"addresses": doc.Addresses}
+		}
+		decl, err := json.Marshal(floor)
 		if err != nil {
 			return err
 		}
-		links, err := host.ReadLinks(context.Background())
+		links, facts, err := disasterHost(context.Background())
 		if err != nil {
 			return err
 		}
-		result, err := render.Network(render.Input{Declaration: decl, Links: links})
+		result, err := render.Network(render.Input{Declaration: decl, Links: links, Facts: facts})
 		if err != nil {
 			return err
 		}
@@ -170,7 +183,23 @@ func renderDisaster(root string) func([]byte) error {
 			}
 			return errors.Join(errs...)
 		}
+		// The kept LAN comes up behind its own filter, loaded before its files: never its addresses without it.
+		var script []byte
 		for _, file := range result.Files {
+			if file.Path == generation.FilterEntry {
+				script = []byte(file.Content)
+			}
+		}
+		if script == nil {
+			return errors.New("kept LAN has no packet filter")
+		}
+		if err = loadDisasterFilter(script); err != nil {
+			return fmt.Errorf("load the kept LAN's packet filter: %w", err)
+		}
+		for _, file := range result.Files {
+			if file.Path == generation.FilterEntry {
+				continue
+			}
 			path := root + file.Path
 			if err = os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				if rbErr := rollback(); rbErr != nil {
@@ -199,6 +228,26 @@ func renderDisaster(root string) func([]byte) error {
 		}
 		return nil
 	}
+}
+
+// disasterHost reads what the kept LAN renders against: the host's links and its tools, nft among them; tests replace it.
+var disasterHost = func(ctx context.Context) ([]host.LinkStatus, host.RealizerFacts, error) {
+	links, err := host.ReadLinks(ctx)
+	if err != nil {
+		return nil, host.RealizerFacts{}, err
+	}
+	facts, err := host.ReadRealizerFacts()
+	return links, facts, err
+}
+
+// loadDisasterFilter replaces table inet andaru with the kept LAN's filter; tests replace it.
+var loadDisasterFilter = func(script []byte) error {
+	cmd := exec.Command("/usr/sbin/nft", "-f", "-")
+	cmd.Stdin = bytes.NewReader(script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%w: %s", err, out)
+	}
+	return nil
 }
 
 var writeRenderedBody = func(f *os.File, body []byte) error {

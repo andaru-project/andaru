@@ -6,6 +6,8 @@ DefaultDependencies=no
 WantsMountsFor=/var/lib/andaru
 # Its lock and pointers are written under /var/lib/andaru, so the root file system must be writable.
 After=systemd-remount-fs.service
+# Its /run directories must exist with tmpfiles' SELinux labels before it writes into them.
+After=systemd-tmpfiles-setup.service
 Before=systemd-networkd.service systemd-resolved.service networking.service network-pre.target cloud-init-local.service shutdown.target
 # A mask boot restores must win over nftables.service starting and flushing Andaru's table.
 Before=nftables.service

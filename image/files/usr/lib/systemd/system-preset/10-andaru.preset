@@ -1,0 +1,18 @@
+# On first boot systemd applies presets and would enable sshd and zincati again, as Fedora's 90-default.preset and
+# CoreOS's own presets say. These lines sort first, so they win. Setup decides when SSH is enabled; Andaru drives updates.
+enable systemd-networkd.service
+enable andaru-engine.service
+enable andaru-network-boot.service
+enable andaru-factory-reset.service
+enable andaru-leases.path
+enable andaru-prefixes.path
+enable andaru-prefixes.timer
+# Started at boot, they run only once a confirmed generation wrote their configuration (Andaru's drop-ins).
+enable kea-dhcp4.service
+enable kea-dhcp6.service
+enable unbound.service
+disable andaru-web.service
+disable sshd.service
+disable zincati.service
+disable NetworkManager.service
+disable NetworkManager-wait-online.service
