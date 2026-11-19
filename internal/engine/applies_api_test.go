@@ -193,7 +193,7 @@ func newApplyBench(t *testing.T) *applyBench {
 		},
 		Facts:    func() (host.RealizerFacts, error) { return b.facts, nil },
 		Managed:  func(context.Context) ([]host.Managed, error) { return b.managed(), nil },
-		BootUnit: func() (bool, error) { return !b.noBootUnit, nil },
+		BootUnit: func() bool { return !b.noBootUnit },
 	}
 	input := func(_ context.Context, version *config.Version) (config.RealizationInput, error) {
 		b.mu.Lock()

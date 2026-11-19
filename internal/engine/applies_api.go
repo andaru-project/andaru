@@ -50,7 +50,7 @@ type hostReader struct {
 	Facts   func() (host.RealizerFacts, error)
 	Managed func(context.Context) ([]host.Managed, error)
 	// BootUnit reports andaru-network-boot.service enabled.
-	BootUnit func() (bool, error)
+	BootUnit func() bool
 }
 
 func isAppliesPath(path string) bool {
@@ -67,12 +67,10 @@ func gatherGate(ctx context.Context, read hostReader, dir string, pointers gener
 	if err == nil {
 		gate.Managed, err = read.Managed(ctx)
 	}
-	if err == nil {
-		gate.BootUnit, err = read.BootUnit()
-	}
 	if err != nil {
 		return gate, errors.Join(errInventory, err)
 	}
+	gate.BootUnit = read.BootUnit()
 	if gate.Result, err = render.Network(render.Input{Declaration: value, Secrets: secrets, Links: gate.Links, Facts: gate.Facts}); err != nil {
 		return gate, errors.Join(errRender, err)
 	}

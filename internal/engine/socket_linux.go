@@ -97,11 +97,7 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 		}
 	}()
 	defer func() { cancel(context.Canceled); <-stopped }()
-	bootUnit := func() (bool, error) {
-		b, err := host.ReadBaseline()
-		return b.BootUnit, err
-	}
-	read := hostReader{Links: host.ReadLinks, Facts: host.ReadRealizerFacts, Managed: host.ReadManaged, BootUnit: bootUnit}
+	read := hostReader{Links: host.ReadLinks, Facts: host.ReadRealizerFacts, Managed: host.ReadManaged, BootUnit: host.ReadBootUnit}
 	applies := newAppliesHandler(store.RealizationInput, read, newSystemdRunner(stateDir), stateDir, identities, coordinator)
 	identityAPI := newIdentityAPI(identities, store, coordinator)
 	auditAPI := newAuditAPI(coordinator)
