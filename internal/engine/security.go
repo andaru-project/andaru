@@ -68,8 +68,6 @@ func buildEngineRoutes() []routeCapability {
 	add(authz.ConfigurationRead, "/api/v1/applies/{id}", read...)
 	add(authz.ConfigurationConfirm, "/api/v1/applies/{id}/confirmation", http.MethodPost)
 	add(authz.ConfigurationApply, "/api/v1/applies/{id}/rollback", http.MethodPost)
-	add(authz.ConfigurationRead, "/api/v1/takeover/proposal", read...)
-	add(authz.ConfigurationWrite, "/api/v1/preview/network/draft", http.MethodPost)
 	add(authz.ConfigurationRead, "/api/v1/config/policy/{chain}", read...)
 	add(authz.ConfigurationWrite, "/api/v1/config/policy/{chain}", http.MethodPost)
 	add(authz.ConfigurationRead, "/api/v1/config/policy/{chain}/{id}", read...)

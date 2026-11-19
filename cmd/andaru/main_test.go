@@ -300,9 +300,9 @@ func TestCtlApplyUsageErrors(t *testing.T) {
 }
 
 func TestCtlApplyAndApplies(t *testing.T) {
-	const awaiting = `{"id":"3","savedVersion":"7","takeover":true,"state":"awaiting_confirmation","previous":null,"deadline":"2026-11-11T12:02:00Z","reason":"","createdAt":"2026-11-11T12:00:00Z","confirmTimeoutSeconds":60,"files":[]}`
-	const failed = `{"id":"3","savedVersion":"7","takeover":true,"state":"failed","previous":null,"reason":"eth0 lost its IPv4 address","createdAt":"2026-11-11T12:00:00Z","confirmTimeoutSeconds":60,"files":[]}`
-	const pending = `{"id":"3","savedVersion":"7","takeover":true,"state":"confirmed","previous":null,"reason":"takeover not yet permanent: disk; completes at the next boot","createdAt":"2026-11-11T12:00:00Z","confirmTimeoutSeconds":60,"files":[]}`
+	const awaiting = `{"id":"3","savedVersion":"7","state":"awaiting_confirmation","previous":null,"deadline":"2026-11-11T12:02:00Z","reason":"","createdAt":"2026-11-11T12:00:00Z","confirmTimeoutSeconds":60,"files":[]}`
+	const failed = `{"id":"3","savedVersion":"7","state":"failed","previous":null,"reason":"eth0 lost its IPv4 address","createdAt":"2026-11-11T12:00:00Z","confirmTimeoutSeconds":60,"files":[]}`
+	const pending = `{"id":"3","savedVersion":"7","state":"confirmed","previous":null,"reason":"takeover not yet permanent: disk; completes at the next boot","createdAt":"2026-11-11T12:00:00Z","confirmTimeoutSeconds":60,"files":[]}`
 	const list = `{"pointers":{"confirmed":null,"lastKnownGood":null,"pending":"3","live":"3"},"items":[]}`
 	for _, row := range []struct {
 		name         string
@@ -314,13 +314,13 @@ func TestCtlApplyAndApplies(t *testing.T) {
 		stdout       bool
 		stderrHas    string
 	}{
-		{"apply", []string{"apply", "network", "--saved-version", "7", "--takeover", "--confirm-timeout", "60"}, awaiting,
-			"POST", "/api/v1/applies", `{"savedVersion":"7","takeover":true,"confirmTimeoutSeconds":60}`, 0, true,
+		{"apply", []string{"apply", "network", "--saved-version", "7", "--confirm-timeout", "60"}, awaiting,
+			"POST", "/api/v1/applies", `{"savedVersion":"7","confirmTimeoutSeconds":60}`, 0, true,
 			"Live until 2026-11-11T12:02:00Z. From a NEW session, run: andaru ctl applies confirm 3\n"},
 		{"apply defaults", []string{"apply", "network", "--saved-version", "7"}, awaiting,
-			"POST", "/api/v1/applies", `{"savedVersion":"7","takeover":false,"confirmTimeoutSeconds":120}`, 0, true, "applies confirm 3"},
+			"POST", "/api/v1/applies", `{"savedVersion":"7","confirmTimeoutSeconds":120}`, 0, true, "applies confirm 3"},
 		{"apply failed", []string{"apply", "network", "--saved-version", "7"}, failed,
-			"POST", "/api/v1/applies", `{"savedVersion":"7","takeover":false,"confirmTimeoutSeconds":120}`, 1, true, "apply failed: eth0 lost its IPv4 address\n"},
+			"POST", "/api/v1/applies", `{"savedVersion":"7","confirmTimeoutSeconds":120}`, 1, true, "apply failed: eth0 lost its IPv4 address\n"},
 		{"confirm", []string{"applies", "confirm", "3"}, strings.Replace(awaiting, "awaiting_confirmation", "confirmed", 1), "POST", "/api/v1/applies/3/confirmation", "", 0, true, ""},
 		{"confirm not yet permanent", []string{"applies", "confirm", "3"}, pending, "POST", "/api/v1/applies/3/confirmation", "", 0, true, "completes at the next boot"},
 		{"rollback", []string{"applies", "rollback", "3"}, strings.Replace(awaiting, "awaiting_confirmation", "rolled_back", 1), "POST", "/api/v1/applies/3/rollback", "", 0, true, ""},

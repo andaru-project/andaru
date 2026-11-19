@@ -26,7 +26,7 @@ const uplinkDeclaration = `{"schemaVersion":1,"links":[{"id":"lnk_00000001-0000-
 "segments":[{"id":"seg_00000001-0000-4000-8000-000000000001","name":"wan","link":"lnk_00000001-0000-4000-8000-000000000001","zone":"zon_00000001-0000-4000-8000-000000000001","addressing":{"ipv4":{"mode":"dhcp"},"ipv6":{"mode":"none"}}}],
 "zones":[{"id":"zon_00000001-0000-4000-8000-000000000001","name":"wan"}]}`
 
-// applyBench is a netplan cloud host as the handler and realize see it, without touching this machine.
+// applyBench is a plain host with one NIC as the handler and realize see it, without touching this machine.
 type applyBench struct {
 	t           *testing.T
 	h           http.Handler
@@ -46,6 +46,8 @@ type applyBench struct {
 	unbound     bool // networkd never binds the new files
 	hostDown    bool
 	stuck       bool // activation fails and cannot restore: the generation stays pending
+	facts       host.RealizerFacts
+	noBootUnit  bool
 }
 
 type applyIdentityState struct {
@@ -88,10 +90,8 @@ func (b *applyBench) managed() []host.Managed {
 	if b.unbound {
 		return []host.Managed{}
 	}
-	for _, pattern := range []string{"10-netplan-eth0.network", "50-andaru-eth0.network"} {
-		if found := b.netFiles(pattern); len(found) == 1 {
-			return []host.Managed{{Name: "eth0", NetworkFile: found[0], State: "configured"}}
-		}
+	if found := b.netFiles("50-andaru-eth0.network"); len(found) == 1 {
+		return []host.Managed{{Name: "eth0", NetworkFile: found[0], State: "configured"}}
 	}
 	return []host.Managed{}
 }
@@ -177,18 +177,6 @@ func newApplyBench(t *testing.T) *applyBench {
 	if err := initializeAuthorizationState(t.Context(), b.state); err != nil {
 		t.Fatal(err)
 	}
-	for path, body := range map[string]string{
-		"run/systemd/network/10-netplan-eth0.network": "[Match]\nName=eth0\n\n[Network]\nDHCP=ipv4\n",
-		"etc/netplan/50-cloud-init.yaml":              "network: {}\n",
-	} {
-		full := filepath.Join(b.root, path)
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(full, []byte(body), 0o640); err != nil {
-			t.Fatal(err)
-		}
-	}
 	down := func() error {
 		b.mu.Lock()
 		defer b.mu.Unlock()
@@ -203,11 +191,9 @@ func newApplyBench(t *testing.T) *applyBench {
 			return []host.LinkStatus{{IfIndex: 2, Name: "eth0", LinkType: "ether", PermanentAddress: "52:54:00:aa:bb:01", LinkAddress: "52:54:00:aa:bb:01",
 				Addresses: []host.AddressStatus{{Family: "ipv4", Address: "10.0.1.19", PrefixLength: 20, Scope: "global"}}}}, down()
 		},
-		Facts: func() (host.RealizerFacts, error) {
-			return host.RealizerFacts{ForeignFiles: b.netFiles("10-netplan-*")}, nil
-		},
+		Facts:    func() (host.RealizerFacts, error) { return b.facts, nil },
 		Managed:  func(context.Context) ([]host.Managed, error) { return b.managed(), nil },
-		Baseline: func() (host.Baseline, error) { return host.Baseline{Netplan: true, BootUnit: true}, nil },
+		BootUnit: func() (bool, error) { return !b.noBootUnit, nil },
 	}
 	input := func(_ context.Context, version *config.Version) (config.RealizationInput, error) {
 		b.mu.Lock()
@@ -225,14 +211,13 @@ func newApplyBench(t *testing.T) *applyBench {
 	b.identities = &applyIdentityState{revision: 1, accounts: map[string]identity.Account{}}
 	b.coordinator = &securityCoordinator{stateDir: b.state}
 	applies := newAppliesHandler(input, read, b, b.state, b.identities, b.coordinator)
-	b.h = newHandler(read.Links, newSavedHandler(nil, read.Links, read.Facts, nil, applies, nil))
+	b.h = newHandler(read.Links, newSavedHandler(nil, read.Links, read.Facts, applies, nil))
 	return b
 }
 
 type applyReply struct {
 	ID                    string     `json:"id"`
 	SavedVersion          string     `json:"savedVersion"`
-	Takeover              bool       `json:"takeover"`
 	State                 string     `json:"state"`
 	Previous              *string    `json:"previous"`
 	Deadline              *time.Time `json:"deadline"`
@@ -279,14 +264,14 @@ func (b *applyBench) numbered() []string {
 	return out
 }
 
-const takeoverBody = `{"savedVersion":"7","takeover":true}`
+const applyBody = `{"savedVersion":"7"}`
 
 func TestApplyHappyPath(t *testing.T) {
 	b := newApplyBench(t)
 	before := time.Now()
-	w := b.call(http.MethodPost, "/api/v1/applies", takeoverBody)
+	w := b.call(http.MethodPost, "/api/v1/applies", applyBody)
 	got := b.decode(w, http.StatusOK)
-	if got.ID != "1" || got.SavedVersion != "7" || !got.Takeover || got.State != generation.Awaiting || got.Previous != nil || got.ConfirmTimeoutSeconds != 120 {
+	if got.ID != "1" || got.SavedVersion != "7" || got.State != generation.Awaiting || got.Previous != nil || got.ConfirmTimeoutSeconds != 120 {
 		t.Fatalf("apply = %+v", got)
 	}
 	if got.Deadline == nil || got.Deadline.Before(before.Add(119*time.Second)) || got.Deadline.After(time.Now().Add(121*time.Second)) {
@@ -315,7 +300,7 @@ func TestApplyHappyPath(t *testing.T) {
 	if b.call(http.MethodHead, "/api/v1/applies", "").Body.Len() != 0 {
 		t.Fatal("HEAD returned a body")
 	}
-	assertAPIError(t, b.call(http.MethodPost, "/api/v1/applies", takeoverBody), http.StatusConflict, "APPLY_IN_PROGRESS")
+	assertAPIError(t, b.call(http.MethodPost, "/api/v1/applies", applyBody), http.StatusConflict, "APPLY_IN_PROGRESS")
 }
 
 func TestApplyStagesInitialIdentityRevision(t *testing.T) {
@@ -324,7 +309,7 @@ func TestApplyStagesInitialIdentityRevision(t *testing.T) {
 	}
 	b := newApplyBench(t)
 	b.identities.revision = 0
-	got := b.decode(b.call(http.MethodPost, "/api/v1/applies", takeoverBody), http.StatusOK)
+	got := b.decode(b.call(http.MethodPost, "/api/v1/applies", applyBody), http.StatusOK)
 	if got.ID != "1" || got.State != generation.Awaiting {
 		t.Fatalf("apply = %+v", got)
 	}
@@ -348,29 +333,30 @@ func TestApplyRequestValidation(t *testing.T) {
 		``, `{`, `[]`, `{"takeover":true}`, `{"savedVersion":7}`, `{"savedVersion":"07"}`, `{"savedVersion":""}`,
 		`{"savedVersion":"7","confirmTimeoutSeconds":29}`, `{"savedVersion":"7","confirmTimeoutSeconds":601}`,
 		`{"savedVersion":"7","confirmTimeoutSeconds":"60"}`, `{"savedVersion":"7","force":true}`,
-		`{"savedVersion":"7"} {}`, `{"savedVersion":"7","pad":"` + strings.Repeat("x", 4096) + `"}`,
+		`{"savedVersion":"7"} {}`, `{"savedVersion":"7","pad":"` + strings.Repeat("x", 4096) + `"}`, `{"savedVersion":"7","takeover":false}`,
 	} {
 		assertAPIError(t, b.call(http.MethodPost, "/api/v1/applies", body), http.StatusBadRequest, "INVALID_REQUEST")
 	}
-	assertAPIError(t, b.call(http.MethodPost, "/api/v1/applies", `{"savedVersion":"6","takeover":true}`), http.StatusPreconditionFailed, "PRECONDITION_FAILED")
+	assertAPIError(t, b.call(http.MethodPost, "/api/v1/applies", `{"savedVersion":"6"}`), http.StatusPreconditionFailed, "PRECONDITION_FAILED")
 	if len(b.calls) != 0 || len(b.numbered()) != 0 {
 		t.Fatalf("a rejected request reached the host: %q %q", b.calls, b.numbered())
 	}
-	if got := b.apply(`{"savedVersion":"7","takeover":true,"confirmTimeoutSeconds":30}`); got.ConfirmTimeoutSeconds != 30 || b.calls[0] != "arm 1 90" {
+	if got := b.apply(`{"savedVersion":"7","confirmTimeoutSeconds":30}`); got.ConfirmTimeoutSeconds != 30 || b.calls[0] != "arm 1 90" {
 		t.Fatalf("apply = %+v, calls = %q", got, b.calls)
 	}
 }
 
 func TestApplyRefusedStoresNothing(t *testing.T) {
 	b := newApplyBench(t)
-	w := b.call(http.MethodPost, "/api/v1/applies", `{"savedVersion":"7"}`)
+	b.noBootUnit = true
+	w := b.call(http.MethodPost, "/api/v1/applies", applyBody)
 	assertAPIError(t, w, http.StatusUnprocessableEntity, "APPLY_REFUSED")
 	var body struct {
 		Error struct {
 			Findings []struct{ Severity, Code, Path, Message string } `json:"findings"`
 		} `json:"error"`
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || len(body.Error.Findings) != 2 || body.Error.Findings[1].Code != "TAKEOVER_MISMATCH" {
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || len(body.Error.Findings) != 1 || body.Error.Findings[0].Code != "BOOT_UNIT_DISABLED" {
 		t.Fatalf("findings = %s", w.Body)
 	}
 	if len(b.calls) != 0 || len(b.numbered()) != 0 {
@@ -381,7 +367,7 @@ func TestApplyRefusedStoresNothing(t *testing.T) {
 func TestApplyWhenRealizeCannotRun(t *testing.T) {
 	b := newApplyBench(t)
 	b.armErr = errors.New("systemd-run failed")
-	assertAPIError(t, b.call(http.MethodPost, "/api/v1/applies", takeoverBody), http.StatusServiceUnavailable, "REALIZE_UNAVAILABLE")
+	assertAPIError(t, b.call(http.MethodPost, "/api/v1/applies", applyBody), http.StatusServiceUnavailable, "REALIZE_UNAVAILABLE")
 	if !slices.Equal(b.calls, []string{"arm 1 180"}) {
 		t.Fatalf("calls = %q; nothing may change without a timer", b.calls)
 	}
@@ -390,14 +376,14 @@ func TestApplyWhenRealizeCannotRun(t *testing.T) {
 	}
 
 	b.armErr, b.skip, b.calls = nil, true, nil
-	assertAPIError(t, b.call(http.MethodPost, "/api/v1/applies", takeoverBody), http.StatusServiceUnavailable, "REALIZE_UNAVAILABLE")
+	assertAPIError(t, b.call(http.MethodPost, "/api/v1/applies", applyBody), http.StatusServiceUnavailable, "REALIZE_UNAVAILABLE")
 	// Whether the unit ran is unknown here, so the timer stays: it does nothing if there is nothing to undo.
 	if !slices.Equal(b.calls, []string{"arm 2 180", "activate 2"}) {
 		t.Fatalf("calls = %q", b.calls)
 	}
 
 	b.hostDown, b.calls = true, nil
-	assertAPIError(t, b.call(http.MethodPost, "/api/v1/applies", takeoverBody), http.StatusServiceUnavailable, "INVENTORY_UNAVAILABLE")
+	assertAPIError(t, b.call(http.MethodPost, "/api/v1/applies", applyBody), http.StatusServiceUnavailable, "INVENTORY_UNAVAILABLE")
 	if len(b.calls) != 0 {
 		t.Fatalf("calls = %q", b.calls)
 	}
@@ -407,7 +393,7 @@ func TestApplyFailedActivationDisarms(t *testing.T) {
 	b := newApplyBench(t)
 	// The gates read the host before the change; only afterwards does networkd fail to bind.
 	b.beforeVerb = func() { b.unbound = true }
-	got := b.apply(takeoverBody)
+	got := b.apply(applyBody)
 	if got.State != generation.Failed || got.Reason == "" || got.Deadline != nil {
 		t.Fatalf("apply = %+v", got)
 	}
@@ -415,8 +401,8 @@ func TestApplyFailedActivationDisarms(t *testing.T) {
 		t.Fatalf("calls = %q", b.calls)
 	}
 	b.unbound = false
-	if files := b.netFiles("*"); !slices.Equal(files, []string{networkDir + "10-netplan-eth0.network"}) {
-		t.Fatalf("netplan was not restored: %v", files)
+	if files := b.netFiles("*"); len(files) != 0 {
+		t.Fatalf("the generation's files were left: %v", files)
 	}
 }
 
@@ -427,7 +413,7 @@ func TestApplySurvivesClientDisconnect(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		r := httptest.NewRequest(http.MethodPost, "/api/v1/applies", strings.NewReader(takeoverBody)).WithContext(ctx)
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/applies", strings.NewReader(applyBody)).WithContext(ctx)
 		b.h.ServeHTTP(httptest.NewRecorder(), r)
 	}()
 	for {
@@ -449,16 +435,13 @@ func TestApplySurvivesClientDisconnect(t *testing.T) {
 
 func TestConfirmAndLateTimer(t *testing.T) {
 	b := newApplyBench(t)
-	b.apply(takeoverBody)
+	b.apply(applyBody)
 	got := b.decode(b.call(http.MethodPost, "/api/v1/applies/1/confirmation", ""), 200)
 	if got.State != generation.Confirmed || got.Reason != "" {
 		t.Fatalf("apply = %+v", got)
 	}
 	if !slices.Equal(b.calls[2:], []string{"confirm 1", "disarm 1"}) {
 		t.Fatalf("calls = %q", b.calls)
-	}
-	if yaml, _ := filepath.Glob(filepath.Join(b.root, "etc/netplan/*.yaml")); len(yaml) != 0 {
-		t.Fatalf("netplan YAML left after a confirmed takeover: %v", yaml)
 	}
 	// The timer could not be stopped and fires anyway.
 	if err := b.Realize(t.Context(), "rollback", 1, "deadline"); err != nil {
@@ -471,7 +454,7 @@ func TestConfirmAndLateTimer(t *testing.T) {
 	assertAPIError(t, b.call(http.MethodPost, "/api/v1/applies/1/rollback", ""), http.StatusConflict, "APPLY_NOT_AWAITING")
 
 	// The next apply runs on top of the confirmed generation and names it as previous.
-	second := b.apply(`{"savedVersion":"7"}`)
+	second := b.apply(applyBody)
 	if second.ID != "2" || second.State != generation.Awaiting || second.Previous == nil || *second.Previous != "1" {
 		t.Fatalf("second apply = %+v", second)
 	}
@@ -479,7 +462,7 @@ func TestConfirmAndLateTimer(t *testing.T) {
 
 func TestEarlyRollback(t *testing.T) {
 	b := newApplyBench(t)
-	b.apply(takeoverBody)
+	b.apply(applyBody)
 	got := b.decode(b.call(http.MethodPost, "/api/v1/applies/1/rollback", ""), 200)
 	if got.State != generation.RolledBack || got.Reason != "requested" {
 		t.Fatalf("apply = %+v", got)
@@ -487,7 +470,7 @@ func TestEarlyRollback(t *testing.T) {
 	if !slices.Equal(b.calls[2:], []string{"rollback 1 requested", "disarm 1"}) {
 		t.Fatalf("calls = %q", b.calls)
 	}
-	if files := b.netFiles("*"); !slices.Equal(files, []string{networkDir + "10-netplan-eth0.network"}) {
+	if files := b.netFiles("*"); len(files) != 0 {
 		t.Fatalf("files = %v", files)
 	}
 	assertAPIError(t, b.call(http.MethodPost, "/api/v1/applies/1/confirmation", ""), http.StatusConflict, "APPLY_NOT_AWAITING")
@@ -495,7 +478,7 @@ func TestEarlyRollback(t *testing.T) {
 
 func TestAppliesRouting(t *testing.T) {
 	b := newApplyBench(t)
-	b.apply(takeoverBody)
+	b.apply(applyBody)
 	for _, path := range []string{"/0", "/-1", "/+1", "/01", "/abc", "/99999999999999999999", "/1/unknown", "/2", "/1/confirmation/x", "/"} {
 		assertAPIError(t, b.call(http.MethodGet, "/api/v1/applies"+path, ""), http.StatusNotFound, "NOT_FOUND")
 	}
@@ -521,7 +504,7 @@ func TestAppliesRequireRoot(t *testing.T) {
 		{http.MethodPost, "/api/v1/applies/1/confirmation"}, {http.MethodPost, "/api/v1/applies/1/rollback"},
 	} {
 		w := httptest.NewRecorder()
-		r := httptest.NewRequest(route.method, route.path, strings.NewReader(takeoverBody))
+		r := httptest.NewRequest(route.method, route.path, strings.NewReader(applyBody))
 		b.h.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), peerKey{}, peerIdentity{uid: 1000, verified: true})))
 		assertAPIError(t, w, http.StatusForbidden, "FORBIDDEN")
 	}
@@ -600,7 +583,7 @@ func TestApplyKeepsTimerWhileActivationIsUnresolved(t *testing.T) {
 	b := newApplyBench(t)
 	// Activation failed and could not put the old files back: the generation stays pending and only the timer can undo it.
 	b.stuck = true
-	got := b.apply(takeoverBody)
+	got := b.apply(applyBody)
 	if got.State != generation.Activating {
 		t.Fatalf("apply = %+v", got)
 	}
@@ -637,9 +620,9 @@ func (b *applyBench) authorizationState() authz.State {
 
 func TestUnchangedAuthorizationAllowsTokenConfirmation(t *testing.T) {
 	b := newApplyBench(t)
-	first := b.apply(takeoverBody)
+	first := b.apply(applyBody)
 	b.decode(b.call(http.MethodPost, appliesPath+"/"+first.ID+"/confirmation", ""), http.StatusOK)
-	second := b.apply(`{"savedVersion":"7"}`)
+	second := b.apply(applyBody)
 	token := identity.Principal{
 		Account: identity.Account{ID: "00000000-0000-4000-8000-000000000001", Kind: identity.Service, Enabled: true},
 		Actor:   authz.Actor{Kind: authz.ActorToken, ID: strings.Repeat("A", 22)}, Capabilities: []authz.Capability{authz.ConfigurationConfirm},
@@ -647,5 +630,47 @@ func TestUnchangedAuthorizationAllowsTokenConfirmation(t *testing.T) {
 	response := b.callPrincipal(http.MethodPost, appliesPath+"/"+second.ID+"/confirmation", token)
 	if response.Code != http.StatusOK {
 		t.Fatalf("unchanged authorization token confirmation status=%d body=%s", response.Code, response.Body)
+	}
+}
+
+// filterDeclaration is the uplink with a starter rule, outbound NAT and management on its segment.
+var filterDeclaration = strings.TrimSuffix(uplinkDeclaration, "}") + `,
+"objects":{"addresses":[],"services":[{"id":"svc_00000001-0000-4000-8000-000000000001","name":"ping","protocol":"icmp","types":["echo-request"]}]},
+"policy":{"input":[{"id":"rul_00000001-0000-4000-8000-000000000001","name":"ping","enabled":true,"action":"accept","from":["zon_00000001-0000-4000-8000-000000000001"],"to":[],"services":["svc_00000001-0000-4000-8000-000000000001"],"log":false}],"forward":[]},
+"nat":{"outbound":{"mode":"automatic"}},
+"management":{"segment":"seg_00000001-0000-4000-8000-000000000001"}}`
+
+func TestFilterGates(t *testing.T) {
+	for name, tc := range map[string]struct {
+		edit func(b *applyBench)
+		code string
+	}{
+		"ufw.service enabled": {func(b *applyBench) { b.facts.FilterUnits = []string{"ufw.service"} }, "FOREIGN_FILTER"},
+		// Nothing masks nftables.service: enabled, it would flush Andaru's filter.
+		"nftables.service enabled": {func(b *applyBench) { b.facts.FilterUnits = []string{"nftables.service"} }, "FOREIGN_FILTER"},
+		"nft missing":              {func(b *applyBench) { b.facts.NftTool = false }, "TOOL_MISSING"},
+		"no management": {func(b *applyBench) {
+			b.declaration = strings.Replace(b.declaration, `,
+"management":{"segment":"seg_00000001-0000-4000-8000-000000000001"}`, "", 1)
+		}, "MANAGEMENT_REQUIRED"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := newApplyBench(t)
+			b.declaration, b.facts.NftTool = filterDeclaration, true
+			tc.edit(b)
+			w := b.call(http.MethodPost, "/api/v1/applies", applyBody)
+			var body struct {
+				Error struct {
+					Findings []struct{ Code string } `json:"findings"`
+				} `json:"error"`
+			}
+			if w.Code != http.StatusUnprocessableEntity || json.Unmarshal(w.Body.Bytes(), &body) != nil ||
+				!slices.ContainsFunc(body.Error.Findings, func(f struct{ Code string }) bool { return f.Code == tc.code }) {
+				t.Fatalf("status %d: %s", w.Code, w.Body)
+			}
+			if len(b.calls) != 0 || len(b.numbered()) != 0 {
+				t.Fatalf("a refused apply left %q %q", b.calls, b.numbered())
+			}
+		})
 	}
 }

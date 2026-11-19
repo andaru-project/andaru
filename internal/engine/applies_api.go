@@ -23,6 +23,7 @@ import (
 	"github.com/andaru-project/andaru/internal/generation"
 	"github.com/andaru-project/andaru/internal/host"
 	"github.com/andaru-project/andaru/internal/identity"
+	"github.com/andaru-project/andaru/internal/render"
 )
 
 const (
@@ -37,18 +38,55 @@ var applyID = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
 
 var errNewAdminSessionRequired = errors.New("a new human administrator session is required")
 
+var (
+	errInventory = errors.New("host inventory unavailable")
+	errRender    = errors.New("declaration could not be rendered")
+	errLive      = errors.New("live generation unreadable")
+)
+
 // hostReader is what an apply observes of the host before changing it.
 type hostReader struct {
-	Links    func(context.Context) ([]host.LinkStatus, error)
-	Facts    func() (host.RealizerFacts, error)
-	Managed  func(context.Context) ([]host.Managed, error)
-	Baseline func() (host.Baseline, error)
-	// Route names the interfaces carrying an IPv4 default route.
-	Route func(context.Context) ([]string, error)
-	// Resolved returns the DNS servers and search domains systemd-resolved has for the host now.
-	Resolved func(context.Context) ([]string, []string, error)
-	// Root prefixes host files the engine reads directly; "" on a real host.
-	Root string
+	Links   func(context.Context) ([]host.LinkStatus, error)
+	Facts   func() (host.RealizerFacts, error)
+	Managed func(context.Context) ([]host.Managed, error)
+	// BootUnit reports andaru-network-boot.service enabled.
+	BootUnit func() (bool, error)
+}
+
+func isAppliesPath(path string) bool {
+	return path == appliesPath || strings.HasPrefix(path, appliesPath+"/")
+}
+
+// gatherGate collects everything the apply gates judge: the host, the rendered files and what is live now.
+func gatherGate(ctx context.Context, read hostReader, dir string, pointers generation.Pointers, value json.RawMessage, secrets map[string]string) (gateInput, error) {
+	gate := gateInput{Declaration: value}
+	var err error
+	if gate.Links, err = read.Links(ctx); err == nil {
+		gate.Facts, err = read.Facts()
+	}
+	if err == nil {
+		gate.Managed, err = read.Managed(ctx)
+	}
+	if err == nil {
+		gate.BootUnit, err = read.BootUnit()
+	}
+	if err != nil {
+		return gate, errors.Join(errInventory, err)
+	}
+	if gate.Result, err = render.Network(render.Input{Declaration: value, Secrets: secrets, Links: gate.Links, Facts: gate.Facts}); err != nil {
+		return gate, errors.Join(errRender, err)
+	}
+	if pointers.Live != nil {
+		live, err := generation.Read(dir, *pointers.Live)
+		if err == nil {
+			gate.Live = &live
+			gate.LiveFiles, err = generation.Contents(dir, live)
+		}
+		if err != nil {
+			return gate, errors.Join(errLive, err)
+		}
+	}
+	return gate, nil
 }
 
 type applyFile struct {
@@ -60,7 +98,6 @@ type applyFile struct {
 type applyView struct {
 	ID                    string      `json:"id"`
 	SavedVersion          string      `json:"savedVersion"`
-	Takeover              bool        `json:"takeover"`
 	State                 string      `json:"state"`
 	Previous              *string     `json:"previous"`
 	Deadline              *time.Time  `json:"deadline,omitempty"`
@@ -90,7 +127,7 @@ func idString(id *int) *string {
 
 func viewApply(g generation.Generation) applyView {
 	v := applyView{
-		ID: strconv.Itoa(g.ID), SavedVersion: g.SavedVersion, Takeover: g.Takeover, State: g.State.State, Previous: idString(g.Previous),
+		ID: strconv.Itoa(g.ID), SavedVersion: g.SavedVersion, State: g.State.State, Previous: idString(g.Previous),
 		Deadline: g.Deadline, Reason: g.Reason, CreatedAt: g.CreatedAt, ConfirmTimeoutSeconds: g.ConfirmTimeoutSeconds, Files: []applyFile{},
 	}
 	for _, f := range g.Files {
@@ -244,7 +281,6 @@ func (h *appliesHandler) stageAuthorizationTransition(ctx context.Context, id in
 func (h *appliesHandler) create(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		SavedVersion          *string `json:"savedVersion"`
-		Takeover              bool    `json:"takeover"`
 		ConfirmTimeoutSeconds *int    `json:"confirmTimeoutSeconds"`
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 4097))
@@ -264,7 +300,7 @@ func (h *appliesHandler) create(w http.ResponseWriter, r *http.Request) {
 		version, err = config.ParseVersion(*request.SavedVersion)
 	}
 	if err != nil || request.SavedVersion == nil || decoder.More() || timeout < 30 || timeout > 600 {
-		writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "An apply needs savedVersion and may set takeover and confirmTimeoutSeconds (30 to 600).")
+		writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "An apply needs savedVersion and may set confirmTimeoutSeconds (30 to 600).")
 		return
 	}
 	// The change must not die with the connection that asked for it: that connection is what the change may cut.
@@ -291,7 +327,7 @@ func (h *appliesHandler) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusConflict, "APPLY_IN_PROGRESS", "Apply "+strconv.Itoa(*pointers.Pending)+" is awaiting confirmation; confirm it or roll it back first.")
 		return
 	}
-	gate, err := gatherGate(ctx, h.read, h.dir, pointers, input.Value, input.Secrets, request.Takeover)
+	gate, err := gatherGate(ctx, h.read, h.dir, pointers, input.Value, input.Secrets)
 	switch {
 	case errors.Is(err, errInventory):
 		slog.ErrorContext(ctx, "host inventory unavailable for apply", "error", err)
@@ -322,14 +358,7 @@ func (h *appliesHandler) create(w http.ResponseWriter, r *http.Request) {
 	}
 	manifest := generation.Manifest{
 		SavedVersion: string(input.SavedVersion), AuthorizationDigest: authorization.Digest,
-		CreatedAt: time.Now().UTC(), Takeover: request.Takeover, ConfirmTimeoutSeconds: timeout,
-	}
-	if request.Takeover {
-		if gate.fromIfupdown() {
-			manifest.Baseline = "ifupdown"
-		} else {
-			manifest.Baseline = "netplan"
-		}
+		CreatedAt: time.Now().UTC(), ConfirmTimeoutSeconds: timeout,
 	}
 	contents := map[string][]byte{}
 	for _, f := range gate.Result.Files {

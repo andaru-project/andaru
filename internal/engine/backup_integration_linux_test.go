@@ -299,7 +299,7 @@ func TestBackupCaptureConcurrentSaveAndActivation(t *testing.T) {
 	backups := newBackupHandler(store, identities, security, stateDir, func(context.Context) ([]host.LinkStatus, error) { return []host.LinkStatus{}, nil })
 	handler := newHandler(func(context.Context) ([]host.LinkStatus, error) { return []host.LinkStatus{}, nil },
 		newSavedHandler(store, func(context.Context) ([]host.LinkStatus, error) { return []host.LinkStatus{}, nil },
-			func() (host.RealizerFacts, error) { return host.RealizerFacts{}, nil }, nil, http.NotFoundHandler(), backups))
+			func() (host.RealizerFacts, error) { return host.RealizerFacts{}, nil }, http.NotFoundHandler(), backups))
 	result := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		response := httptest.NewRecorder()

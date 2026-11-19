@@ -84,7 +84,6 @@ export interface SavedRolePage {
 export interface Apply {
   id: string;
   savedVersion: string;
-  takeover: boolean;
   state: string;
   previous: string | null;
   deadline?: string;

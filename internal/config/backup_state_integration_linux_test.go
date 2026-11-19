@@ -69,8 +69,6 @@ func TestUnresolvedReferencePersists(t *testing.T) {
 	if _, err = s.Save(ctx, systemRootActor, createZone("while-unresolved")); err != nil {
 		t.Fatal("unrelated edit could not preserve unresolved state", err)
 	}
-	_, err = s.Draft(ctx, createZone("unrealizable"))
-	requireFault(t, err, "VALIDATION_FAILED")
 }
 
 func TestMissingBoundSecretIsStillCorruption(t *testing.T) {
