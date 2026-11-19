@@ -35,6 +35,11 @@ done
 for u in NetworkManager.service NetworkManager-wait-online.service; do
 	state "$u" masked
 done
+# First boot applies presets to every unit; the states above must survive that.
+systemctl preset-all --preset-mode=enable-only >/dev/null 2>&1 || fail "presets do not apply"
+for u in sshd.service zincati.service andaru-web.service; do
+	state "$u" disabled
+done
 for f in /run/andaru-unbound/andaru.conf /run/andaru-leases/leases.conf; do
 	matchpathcon "$f" | grep -q ":named_conf_t:" || fail "$f would not be readable by Unbound: $(matchpathcon "$f")"
 done

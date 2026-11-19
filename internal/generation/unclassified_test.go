@@ -169,12 +169,14 @@ func TestBootWithoutConfirmed(t *testing.T) {
 			if err := b.r.Boot(t.Context()); (err != nil) != reset {
 				t.Fatalf("reset=%v setUp=%v: boot = %v", reset, setUp, err)
 			}
-			b.wantBare(setUp)
+			// A tree a factory reset wrote is set up, kept copies or not.
+			b.wantBare(setUp || reset)
 		}
 	}
 }
 
-// Every candidate fails on a tree with no baseline to go back to, as on the image.
+// Every candidate fails on a tree with no baseline to go back to, as on the image. A confirmed generation means the
+// box was set up even without kept copies (uplink management keeps none), so it is fenced either way.
 func TestBootWithEveryCandidateFailing(t *testing.T) {
 	for _, setUp := range []bool{false, true} {
 		b := newBench(t)
@@ -187,7 +189,7 @@ func TestBootWithEveryCandidateFailing(t *testing.T) {
 		if err := b.r.Boot(t.Context()); err == nil || !strings.Contains(err.Error(), "no generation is usable") {
 			t.Fatalf("setUp=%v: boot = %v", setUp, err)
 		}
-		b.wantBare(setUp)
+		b.wantBare(true)
 	}
 }
 
@@ -266,5 +268,32 @@ func TestFence(t *testing.T) {
 		if b.net.table != row.filter || b.exists(catchAllPath[1:]) != row.setUp {
 			t.Fatalf("%+v: filter %q, catch-all %v", row, b.net.table, b.exists(catchAllPath[1:]))
 		}
+	}
+}
+
+// Kept copies are best-effort and never kept for uplink management: a confirmed generation, a last known good one,
+// a reset tree or an unreadable commit point also mean set up.
+func TestSetUpWithoutKeptCopies(t *testing.T) {
+	one := 1
+	for name, prepare := range map[string]func(b *bench) error{
+		"confirmed": func(b *bench) error {
+			return writeJSON(filepath.Join(b.dir, "pointers.json"), Pointers{Confirmed: &one})
+		},
+		"lastKnownGood": func(b *bench) error {
+			return writeJSON(filepath.Join(b.dir, "pointers.json"), Pointers{LastKnownGood: &one})
+		},
+		"reset tree": func(b *bench) error { return b.r.WriteOwnership(Ownership{Live: true}) },
+		"unreadable": func(b *bench) error { return os.WriteFile(filepath.Join(b.dir, "pointers.json"), []byte("{"), 0o600) },
+	} {
+		b := newBench(t)
+		if err := prepare(b); err != nil {
+			t.Fatal(err)
+		}
+		if !b.r.setUp() {
+			t.Errorf("%s: not set up", name)
+		}
+	}
+	if b := newBench(t); b.r.setUp() {
+		t.Error("a fresh box counts as set up")
 	}
 }

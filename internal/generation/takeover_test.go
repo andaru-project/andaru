@@ -453,7 +453,8 @@ func TestBootFallsBack(t *testing.T) {
 	if err := b.r.Boot(t.Context()); err == nil {
 		t.Fatal("boot reported success with nothing usable")
 	}
-	if got := b.net.netFiles(); len(got) != 0 {
+	// Only the catch-all, which a box set up always keeps.
+	if got := b.net.netFiles(); len(got) != 1 || got["51-andaru-unclassified.network"] == "" {
 		t.Fatalf("boot wrote unverified files: %v", slices.Collect(maps.Keys(got)))
 	}
 }

@@ -93,7 +93,8 @@ func (r Realizer) baseline() (set []placed, captured bool, err error) {
 // bare is what runs with no generation: the captured baseline and, once the box is set up, the catch-all.
 func (r Realizer) bare() (set []placed, captured bool, err error) {
 	set, captured, err = r.baseline()
-	if err == nil && r.setUp() {
+	// A host handed back to its own pre-Andaru configuration is not Andaru's: its ports are its own again.
+	if err == nil && r.setUp() && !(captured && r.handsBack()) {
 		set = append(set, catchAll)
 	}
 	return set, captured, err
@@ -481,8 +482,14 @@ func (r Realizer) Boot(ctx context.Context) (result error) {
 		return r.bootIfupdown(ctx, p, *ifupdown, failures)
 	}
 	if !captured || baseErr != nil {
-		// No pre-Andaru configuration to fall back to: the host still gets its bare filter, and the catch-all once set up.
-		return errors.Join(append(failures, baseErr, r.fence(ctx), errors.New("no generation is usable; the host has no managed interface"))...)
+		// No pre-Andaru configuration to fall back to: the host still gets its bare filter, and the catch-all once set
+		// up. No generation runs, so the pointers and the authorization say so.
+		p.Live = nil
+		failures = append(failures, baseErr, r.fence(ctx), errors.New("no generation is usable; the host has no managed interface"))
+		if err = advanceAuthorization(authorization, ""); err != nil {
+			return errors.Join(append(failures, err)...)
+		}
+		return errors.Join(append(failures, r.writePointers("boot:pointers", p))...)
 	}
 	// The mask is the takeover's: back on its own configuration, the host gets its own firewall back. Unmasking reloads
 	// systemd, whose netplan generator, the YAML gone, deletes netplan's files: so before they are placed.

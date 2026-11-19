@@ -720,9 +720,12 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) (result e
 		// A restored generation without a filter runs without the table; only no generation at all gets the bare filter.
 		var restored *Generation
 		if live != nil {
-			if g, err := read(dir, *live, p); err == nil {
-				restored = &g
+			// Unreadable now, it cannot be told apart from no generation: refuse rather than fence its files.
+			g, readErr := read(dir, *live, p)
+			if readErr != nil {
+				return fmt.Errorf("roll back %d: read generation %d: %w", id, *live, readErr)
 			}
+			restored = &g
 		}
 		err = r.toward(ctx, restored, restore)
 	}

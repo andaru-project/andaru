@@ -18,6 +18,7 @@ jobs:
     outputs:
       version: ${{ steps.map.outputs.version }}
       prerelease: ${{ steps.map.outputs.prerelease }}
+      base: ${{ steps.base.outputs.base }}
     steps:
       - name: Check out
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -49,6 +50,19 @@ jobs:
             echo "prerelease=$prerelease"
           } >>"$GITHUB_OUTPUT"
 
+      - name: Pin the base
+        id: base
+        env:
+          # A digest pin for the base, set as a repository variable when a Fedora CoreOS release must be avoided.
+          FCOS_BASE: ${{ vars.FCOS_BASE }}
+        run: |
+          set -eu
+          # One digest for both architectures: stable may move between the two builds.
+          if [ -z "$FCOS_BASE" ]; then
+            FCOS_BASE="quay.io/fedora/fedora-coreos@$(skopeo inspect --raw docker://quay.io/fedora/fedora-coreos:stable | sha256sum | cut -d' ' -f1 | sed 's/^/sha256:/')"
+          fi
+          echo "base=$FCOS_BASE" >>"$GITHUB_OUTPUT"
+
   image:
     needs: version
     runs-on: ${{ matrix.runner }}
@@ -73,12 +87,10 @@ jobs:
       - name: Build and check
         env:
           VERSION: ${{ needs.version.outputs.version }}
-          # A digest pin for the base, set as a repository variable when a Fedora CoreOS release must be avoided.
-          FCOS_BASE: ${{ vars.FCOS_BASE }}
+          BASE: ${{ needs.version.outputs.base }}
         run: |
           set -eu
-          podman build -f image/Containerfile --build-arg VERSION="$VERSION" \
-            ${FCOS_BASE:+--build-arg BASE_IMAGE="$FCOS_BASE"} -t andaru:build .
+          podman build -f image/Containerfile --build-arg VERSION="$VERSION" --build-arg BASE_IMAGE="$BASE" -t andaru:build .
           sh scripts/ci/image-smoke.sh andaru:build "$VERSION"
 
       - name: Push the unsigned architecture image

@@ -149,8 +149,9 @@ const catchAllPath = "/run/systemd/network/51-andaru-unclassified.network"
 var catchAll = placed{path: catchAllPath, mode: 0o644, uid: -1,
 	data: []byte("[Match]\nName=en*\n\n[Link]\nActivationPolicy=down\nRequiredForOnline=no\n\n[Network]\nLinkLocalAddressing=no\nDHCP=no\nIPv6AcceptRA=no\n")}
 
-// setUp reports a box that was set up: a kept copy exists. Only their absence proves a box never set up;
-// any other error counts as set up, so the factory network's DHCP never reaches WAN by mistake.
+// setUp reports a box that was set up: a kept copy exists, a generation was confirmed, or a factory reset wrote the
+// tree. Kept copies alone are not enough: they are best-effort and never kept for uplink management. Only absence
+// proves a box never set up; any other error counts as set up, so the factory network's DHCP never reaches WAN.
 func (r Realizer) setUp() bool {
 	root := cmp.Or(r.KeptRoot, filepath.Join(r.Root, kept.Root))
 	for _, name := range []kept.Name{"recovery", "last-lan", "first"} {
@@ -158,7 +159,11 @@ func (r Realizer) setUp() bool {
 			return true
 		}
 	}
-	return false
+	p, err := readPointers(r.dir())
+	if err != nil || p.Confirmed != nil || p.LastKnownGood != nil || p.Takeover {
+		return true
+	}
+	return r.resetTree()
 }
 
 // bareFilter loads the filter of a host on which no generation runs: deny-all once set up, else the factory filter.

@@ -18,7 +18,10 @@ import (
 )
 
 // filterEntry is a generation's packet filter: an nft script loaded from the generation directory, never placed in /run.
-const filterEntry = "nft:inet/andaru"
+const filterEntry = FilterEntry
+
+// FilterEntry is the path a generation, or a render, gives its packet filter: a table, not a file.
+const FilterEntry = "nft:inet/andaru"
 
 // ipv6Forwarding is the kernel's global IPv6 switch, under the realizer's root: networkd's per-interface
 // IPv6Forwarding= does not route IPv6 by itself. It is on exactly while Andaru's filter is loaded.

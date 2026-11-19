@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -168,7 +169,23 @@ func renderDisaster(root string) func([]byte) error {
 			}
 			return errors.Join(errs...)
 		}
+		// The kept LAN comes up behind its own filter, loaded before its files: never its addresses without it.
+		var script []byte
 		for _, file := range result.Files {
+			if file.Path == generation.FilterEntry {
+				script = []byte(file.Content)
+			}
+		}
+		if script == nil {
+			return errors.New("kept LAN has no packet filter")
+		}
+		if err = loadDisasterFilter(script); err != nil {
+			return fmt.Errorf("load the kept LAN's packet filter: %w", err)
+		}
+		for _, file := range result.Files {
+			if file.Path == generation.FilterEntry {
+				continue
+			}
 			path := root + file.Path
 			if err = os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				if rbErr := rollback(); rbErr != nil {
@@ -197,6 +214,16 @@ func renderDisaster(root string) func([]byte) error {
 		}
 		return nil
 	}
+}
+
+// loadDisasterFilter replaces table inet andaru with the kept LAN's filter; tests replace it.
+var loadDisasterFilter = func(script []byte) error {
+	cmd := exec.Command("/usr/sbin/nft", "-f", "-")
+	cmd.Stdin = bytes.NewReader(script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%w: %s", err, out)
+	}
+	return nil
 }
 
 var writeRenderedBody = func(f *os.File, body []byte) error {
