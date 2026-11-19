@@ -9,9 +9,15 @@ Describe 'scripts/ci/version.sh'
     The output should equal "0.4.0 false"
   End
 
-  It 'maps a release candidate as a prerelease'
-    When run sh "$script" v0.4.0-rc2
-    The output should equal "0.4.0-rc2 true"
+  Parameters:dynamic
+    for stage in a b rc; do
+      %data "$stage"
+    done
+  End
+
+  It "maps a $1 prerelease"
+    When run sh "$script" "v0.4.0-$1.2"
+    The output should equal "0.4.0-$1.2 true"
   End
 
   Parameters
@@ -19,6 +25,11 @@ Describe 'scripts/ci/version.sh'
     v1.2.3-rc
     v01.2.3
     v1.2.3-rc01
+    v1.2.3-rc.01
+    v1.2.3-rc2
+    v1.2.3-a1
+    v1.2.3-c.1
+    v1.2.3-alpha.1
     keyring-2026.11.14
     v1x2x3
     v1x2x3-rc1
