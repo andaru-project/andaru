@@ -5,8 +5,10 @@
 Describe 'scripts/ci/policy-check.jq'
   root="${SHELLSPEC_PROJECT_ROOT:-$PWD}"
   ns=ghcr.io/andaru-project
+  # 1 is the check's verdict "not Andaru's policy"; a broken mutation or a missing jq gives another status.
   check() {
-    sed "s|@NAMESPACE@|$ns|" "$root/image/signing/policy.json" | jq "$1" | jq -e --arg ns "$ns" -f "$root/scripts/ci/policy-check.jq" >/dev/null
+    policy=$(sed "s|@NAMESPACE@|$ns|" "$root/image/signing/policy.json" | jq "$1") || return 99
+    printf '%s\n' "$policy" | jq -e --arg ns "$ns" -f "$root/scripts/ci/policy-check.jq" >/dev/null
   }
 
   It 'passes the repository policy'
@@ -23,10 +25,11 @@ Describe 'scripts/ci/policy-check.jq'
     '.transports.docker["ghcr.io/andaru-project"] += [{"type": "sigstoreSigned", "keyPath": "/etc/pki/containers/andaru-nightly.pub", "signedIdentity": {"type": "matchRepository"}}]'
     'del(.transports.docker["ghcr.io/andaru-project/andaru-nightly"])'
     '.transports.docker["ghcr.io/andaru-project"][0].signedIdentity = {"type": "matchRepoDigestOrExact"}'
+    '.transports.docker["docker.io"] = [{"type": "sigstoreSigned", "keyPath": "/etc/pki/containers/andaru-nightly.pub", "signedIdentity": {"type": "matchRepository"}}]'
   End
 
   It "fails a weakened policy: $1"
     When call check "$1"
-    The status should not equal 0
+    The status should equal 1
   End
 End

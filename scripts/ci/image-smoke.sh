@@ -1,7 +1,7 @@
 #!/bin/sh
 # Checks a built Andaru image as a container, without booting it: its version, its packages, its unit states,
 # its SELinux labels and its signature policy. Booting it is the lab's job. Run it from the repository root;
-# SIGNED_NAMESPACE and COSIGN_PUB name a lab build's overrides. Needs jq.
+# SIGNED_NAMESPACE and COSIGN_PUB name a lab build's overrides.
 #   image-smoke.sh IMAGE VERSION   (ENGINE=docker to use docker instead of podman)
 set -eu
 
@@ -13,21 +13,17 @@ fail() {
 	echo "image-smoke: $*" >&2
 	exit 1
 }
-# The signature policy and both keys, byte for byte as the repository has them, and the policy's meaning: which key
-# a scope trusts is the whole of the image's update security, and bootc refuses to enforce a default other than reject.
+# The signature policy and both keys, byte for byte as the repository has them: which key a scope trusts is the whole
+# of the image's update security. tests/shell/policy_check_spec.sh holds the repository's policy to its meaning.
 check_file() {
 	"$engine" run --rm "$image" cat "$1" | cmp -s - "$2" || fail "$1 differs from $2"
 }
 rendered=$(mktemp)
 trap 'rm -f "$rendered"' EXIT
-namespace=${SIGNED_NAMESPACE:-ghcr.io/andaru-project}
-sed "s|@NAMESPACE@|$namespace|" image/signing/policy.json >"$rendered"
+sed "s|@NAMESPACE@|${SIGNED_NAMESPACE:-ghcr.io/andaru-project}|" image/signing/policy.json >"$rendered"
 check_file /etc/containers/policy.json "$rendered"
 check_file /etc/pki/containers/andaru.pub "${COSIGN_PUB:-image/cosign.pub}"
 check_file /etc/pki/containers/andaru-nightly.pub image/cosign-nightly.pub
-command -v jq >/dev/null || fail "needs jq on this host"
-jq -e --arg ns "$namespace" -f scripts/ci/policy-check.jq "$rendered" >/dev/null ||
-	fail "the signature policy does not require the release key for $namespace and the nightly key for $namespace/andaru-nightly only"
 
 label=$("$engine" image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$image")
 [ "$label" = "$version" ] || fail "version label is '$label', not '$version'"
