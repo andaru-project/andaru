@@ -40,13 +40,12 @@ jobs:
           # Ahead of the runner's own shellcheck.
           echo "$RUNNER_TEMP/shellcheck-v$SHELLCHECK_VERSION" >>"$GITHUB_PATH"
 
-      # The release gate and the maintainer scripts are shell; their specs guard nothing unless they run.
+      # The release gate and the lease hook are shell; their specs guard nothing unless they run.
       - name: shellcheck and shellspec
         run: |
           set -eu
           shellcheck --version
-          shellcheck scripts/ci/*.sh packaging/apparmor/andaru-apparmor packaging/kea/andaru-lease-event \
-            debian/andaru.*inst debian/andaru.*rm
+          shellcheck scripts/ci/*.sh packaging/kea/andaru-lease-event
           shellspec
 
   frontend:

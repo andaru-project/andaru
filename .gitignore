@@ -1,20 +1,3 @@
-# The QEMU lab keeps all VM data outside the working tree (see
-# docs/dev/vm-lab.md), under $ANDARU_LAB_DIR, default ~/vm/andaru. These
-# patterns are a backstop in case anything is ever run from inside the checkout.
-*.qcow2
-*.fd
-*.iso
-*.meta
-*.sock
-*.pid
-SHA512SUMS
-/images/
-/golden/
-/overlays/
-/seeds/
-/run/
-/logs/
-
 # Superpowers subagent-ledger artifacts are local execution scratch.
 /.superpowers/
 

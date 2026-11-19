@@ -8,8 +8,8 @@ WantsMountsFor=/var/lib/andaru
 After=systemd-remount-fs.service
 # Its /run directories must exist with tmpfiles' SELinux labels before it writes into them.
 After=systemd-tmpfiles-setup.service
-Before=systemd-networkd.service systemd-resolved.service networking.service network-pre.target cloud-init-local.service shutdown.target
-# A mask boot restores must win over nftables.service starting and flushing Andaru's table.
+Before=systemd-networkd.service systemd-resolved.service network-pre.target shutdown.target
+# Fedora ships nftables.service: if an administrator enables it, it must not flush Andaru's table at boot.
 Before=nftables.service
 Conflicts=shutdown.target
 
