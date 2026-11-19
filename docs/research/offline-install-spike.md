@@ -32,9 +32,9 @@ The VM had a 24 GB disk, 4 GiB of RAM, two NICs with their links down, and a ser
 ```sh
 coreos-installer install /dev/sda --console tty0 --console ttyS0,115200n8 --ignition-file dest.ign
 sgdisk --disk-guid=R --move-second-header /dev/sda   # required: see below
-growpart /dev/sda 4 && partx -u /dev/sda
+growpart /dev/sda 4
 mount /dev/disk/by-partlabel/root /mnt/root && xfs_growfs /mnt/root
-# the stateroot's /var is /mnt/root/ostree/deploy/fedora-coreos/var
+VAR=/mnt/root/ostree/deploy/fedora-coreos/var   # the stateroot's /var
 install -d -m 0700 "$VAR/andaru-install"   # then copy the archive to a temporary name, sync, rename; install the seed 0600
 ```
 
@@ -52,6 +52,7 @@ ExecStart=/usr/bin/unshare -m -- /bin/sh -c 'mount -o remount,rw /sysroot && exe
 ExecStart=/usr/bin/systemctl reboot
 ```
 
+- The remount is the fix. `--sysroot /` was passed explicitly in the run and is likely the default on a booted system; it was not tested without it.
 - The deploy took 25 s offline.
 - It stages the deployment, which `ostree-finalize-staged` writes during the reboot.
 - `/boot` did not need to be writable.
@@ -79,7 +80,7 @@ ExecStart=/usr/bin/systemctl reboot
 
 - **Network:** with its links up, the box took a DHCP lease from the factory network.
 - **Update check:** `bootc upgrade --check` reports no changes, with no policy error.
-- **Enforcement:** pulling the origin with the real policy succeeds. The same pull with a policy that trusts the nightly key instead fails with "cryptographic signature verification failed".
+- **Enforcement:** `ostree container image pull` of the origin with the real policy succeeds. The same pull with a policy that trusts the nightly key instead fails with "cryptographic signature verification failed". `bootc upgrade` itself was not made to refuse a badly signed image.
 - **cosign:** `cosign verify --key image/cosign.pub` passes for the booted digest.
 
 ## Not tested
