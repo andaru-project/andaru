@@ -7,10 +7,10 @@
     },
     "hooks-libraries": [
       {
-        "library": "/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so"
+        "library": "/usr/lib64/kea/hooks/libdhcp_lease_cmds.so"
       },
       {
-        "library": "/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_run_script.so",
+        "library": "/usr/lib64/kea/hooks/libdhcp_run_script.so",
         "parameters": {
           "name": "/usr/share/kea/scripts/andaru-lease-event",
           "sync": false

@@ -48,7 +48,7 @@ var competingFilters = []string{"nftables.service", "firewalld.service", "ufw.se
 
 // ReadRealizerFacts inspects the host without changing it.
 func ReadRealizerFacts() (RealizerFacts, error) {
-	return readRealizerFacts("/etc/systemd/network", "/run/systemd/network", "/usr/sbin/pppd", "/usr/lib/pppd/*/pppoe.so", "/dev/ppp", "")
+	return readRealizerFacts("/etc/systemd/network", "/run/systemd/network", "/usr/sbin/pppd", "/usr/lib64/pppd/*/pppoe.so", "/dev/ppp", "")
 }
 
 func readRealizerFacts(etcDir, runDir, pppd, pluginGlob, device, root string) (RealizerFacts, error) {
@@ -87,7 +87,7 @@ func readRealizerFacts(etcDir, runDir, pppd, pluginGlob, device, root string) (R
 	facts.NftTool = exists(root + "/usr/sbin/nft")
 	facts.KeaTool = exists(root + "/usr/sbin/kea-dhcp4")
 	facts.Kea6Tool = exists(root + "/usr/sbin/kea-dhcp6")
-	if hooks, _ := filepath.Glob(root + "/usr/lib/*/kea/hooks/libdhcp_run_script.so"); len(hooks) > 0 {
+	if hooks, _ := filepath.Glob(root + "/usr/lib64/kea/hooks/libdhcp_run_script.so"); len(hooks) > 0 {
 		facts.KeaHooks = strings.TrimPrefix(filepath.Dir(hooks[0]), root)
 	}
 	facts.UnboundTool = exists(root + "/usr/sbin/unbound")

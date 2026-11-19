@@ -80,7 +80,7 @@ func (r *renderer) servedV6(id string) (string, netip.Prefix, string, bool) {
 func (r *renderer) services() {
 	d := r.d
 	if len(d.DHCP) > 0 && (!r.in.Facts.KeaTool || r.in.Facts.KeaHooks == "") {
-		r.find("error", "TOOL_MISSING", "/dhcp", "The DHCP server is not installed; install the kea-dhcp4-server package.")
+		r.find("error", "TOOL_MISSING", "/dhcp", "The DHCP server is not installed; install the kea and kea-hooks packages.")
 	}
 	if d.DNS != nil && !r.in.Facts.UnboundTool {
 		r.find("error", "TOOL_MISSING", "/dns", "The DNS service is not installed; install the unbound package.")
@@ -342,7 +342,7 @@ func (r *renderer) dhcp6(dnsServes func(string) bool, register bool) (names []st
 		return nil
 	}
 	if !r.in.Facts.Kea6Tool || r.in.Facts.KeaHooks == "" {
-		r.find("error", "TOOL_MISSING", "/dhcp6", "The DHCPv6 server is not installed; install the kea-dhcp6-server package.")
+		r.find("error", "TOOL_MISSING", "/dhcp6", "The DHCPv6 server is not installed; install the kea and kea-hooks packages.")
 	}
 	var interfaces []string
 	subnets := []map[string]any{}

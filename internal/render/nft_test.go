@@ -19,13 +19,23 @@ func nftFile(t *testing.T, r Result) (File, bool) {
 	return File{}, false
 }
 
+// skipMissingTool skips a test whose tool is absent, except where CI installed every tool on purpose and set
+// ANDARU_TEST_REQUIRE_TOOLS=1: there a skip would hide a broken check.
+func skipMissingTool(t *testing.T, why string) {
+	t.Helper()
+	if os.Getenv("ANDARU_TEST_REQUIRE_TOOLS") == "1" {
+		t.Fatal(why)
+	}
+	t.Skip(why)
+}
+
 // Every rendered filter must be a script nft accepts; checking needs root and nft, which CI's root suites have.
 func TestNftScriptIsValid(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("nft -c needs root")
 	}
 	if _, err := exec.LookPath("nft"); err != nil {
-		t.Skip("nft not installed")
+		skipMissingTool(t, "nft not installed")
 	}
 	names, _ := fs.Glob(testdata, "testdata/filter-*.links.json")
 	if len(names) == 0 {

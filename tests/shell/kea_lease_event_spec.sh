@@ -1,5 +1,5 @@
 #shellcheck shell=sh
-# Kea runs packaging/kea/andaru-lease-event as _kea on lease events. It marks that leases changed and, for
+# Kea runs packaging/kea/andaru-lease-event as kea on lease events. It marks that leases changed and, for
 # DHCPv6 prefix delegation, appends which router each prefix went to: Kea's leases do not record it.
 
 Describe 'andaru-lease-event'

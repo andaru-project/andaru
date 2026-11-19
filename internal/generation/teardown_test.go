@@ -35,7 +35,7 @@ func TestTeardownClearsLive(t *testing.T) {
 			t.Fatalf("%s left in /run", path)
 		}
 	}
-	for _, c := range []string{"networkctl reload", "networkctl delete vl0", "systemctl stop kea-dhcp4-server.service", "systemctl restart unbound.service"} {
+	for _, c := range []string{"networkctl reload", "networkctl delete vl0", "systemctl stop kea-dhcp4.service", "systemctl restart unbound.service"} {
 		if b.index(c) < 0 {
 			t.Fatalf("%q not run: %q", c, b.net.argv)
 		}

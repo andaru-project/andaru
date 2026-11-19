@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	// pdEvents is where Kea's hook, as _kea, appends the router each delegated prefix went to.
+	// pdEvents is where Kea's hook, as kea, appends the router each delegated prefix went to.
 	pdEvents = "/run/kea/andaru-pd-events"
 	// pdTaken is where root moves it before reading: never opened in Kea's own directory.
 	pdTaken = leasesDir + "/pd-events"

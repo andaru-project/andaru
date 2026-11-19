@@ -355,7 +355,7 @@ func TestActivateIfupdownFailureStopsServices(t *testing.T) {
 	if err := b.r.Activate(t.Context(), id); err == nil {
 		t.Fatal("activation succeeded with Unbound refusing")
 	}
-	if b.index("systemctl stop kea-dhcp4-server.service") < 0 || b.read(id).State.State != Failed {
+	if b.index("systemctl stop kea-dhcp4.service") < 0 || b.read(id).State.State != Failed {
 		t.Fatalf("Kea left serving: %q", b.net.argv)
 	}
 }
@@ -373,7 +373,7 @@ func TestRollbackToIfupdownStopsServices(t *testing.T) {
 	if err := b.r.Rollback(t.Context(), id, "operator"); err != nil {
 		t.Fatal(err)
 	}
-	if b.index("systemctl stop kea-dhcp4-server.service") < 0 || b.read(id).State.State != RolledBack {
+	if b.index("systemctl stop kea-dhcp4.service") < 0 || b.read(id).State.State != RolledBack {
 		t.Fatalf("Kea left serving: %q", b.net.argv)
 	}
 }
