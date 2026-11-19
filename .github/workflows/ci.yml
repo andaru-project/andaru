@@ -139,13 +139,11 @@ jobs:
           CGO_ENABLED=0 go test -c -tags=integration -o "$build/audit.test" ./internal/audit
           CGO_ENABLED=0 go test -c -tags=integration -o "$build/ctl.test" ./cmd/andaru
           CGO_ENABLED=0 go test -c -tags=integration -o "$build/render.test" ./internal/render
-          CGO_ENABLED=0 go test -c -tags=integration -o "$build/upgrade.test" ./internal/upgrade
+          CGO_ENABLED=0 go test -c -tags=integration -o "$build/reset.test" ./internal/reset
           sudo install -o root -g root -m 0755 -t "$art" \
             "$build/andaru" "$build/config.test" "$build/engine.test" "$build/generation.test" "$build/identity.test" \
-            "$build/audit.test" "$build/ctl.test" "$build/render.test" "$build/upgrade.test"
-          # dpkg-based upgrade preparation runs on the Ubuntu runner until slice 3 deletes it.
-          sudo env -u TMPDIR "$art/upgrade.test" -test.v -test.timeout=120s
-          # The rest run where the image's packages are: Fedora's nftables, Kea and Unbound. A missing tool fails.
+            "$build/audit.test" "$build/ctl.test" "$build/render.test" "$build/reset.test"
+          # They run where the image's packages are: Fedora's nftables, Kea and Unbound. A missing tool fails.
           sudo podman run --rm --privileged --network host -v "$art:$art" -v "$PWD/scripts/ci:/ci:ro" \
             registry.fedoraproject.org/fedora:44 sh /ci/root-tests.sh "$art"
 

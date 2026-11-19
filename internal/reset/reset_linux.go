@@ -19,7 +19,6 @@ import (
 	"github.com/andaru-project/andaru/internal/generation"
 	"github.com/andaru-project/andaru/internal/identity"
 	"github.com/andaru-project/andaru/internal/kept"
-	"github.com/andaru-project/andaru/internal/upgrade"
 )
 
 // Env is everything a reset touches. Production builds it in cmd/andaru.
@@ -29,9 +28,6 @@ type Env struct {
 	KeptRoot string // "" uses kept.Root
 	Realizer generation.Realizer
 	Run      func(ctx context.Context, name string, args ...string) ([]byte, error)
-	// PackageLocks are dpkg's frontend and database locks, held from the first stop to the end.
-	PackageLocks []string
-	LockWait     time.Duration
 	// Apply applies a saved version through the engine and confirms it; true when it came up and was confirmed.
 	Apply func(ctx context.Context, savedVersion string) (bool, error)
 	// failAt lets tests stop the reset before a named step, as a crash would.
@@ -87,7 +83,7 @@ func check(ctx context.Context, e Env) error {
 	if !kept.LiveTreeUsable(e.StateDir) {
 		return fmt.Errorf("%s holds no Andaru state; is its mount missing?", e.StateDir)
 	}
-	return upgrade.CheckIdle(ctx, e.Run, e.StateDir)
+	return checkIdle(ctx, e.Run, e.StateDir)
 }
 
 // Abort drops a reset that has not stopped anything yet.
@@ -135,19 +131,6 @@ func Resume(ctx context.Context, e Env) (Operation, error) {
 	if err = checkMarker(e.StateDir, op.ID); err != nil {
 		return op, err
 	}
-	held, err := holdPackageLocks(ctx, e.PackageLocks, e.LockWait)
-	if err != nil {
-		return op, err
-	}
-	defer func() {
-		for _, f := range held {
-			f.Close()
-		}
-	}()
-	// A package operation may have run while the locks were free, before a boot or after a crash.
-	if err = upgrade.DpkgConsistent(ctx, e.Run); err != nil {
-		return op, err
-	}
 	// A teardown that began left the host behind deny-all; after a boot or a crash it must be there before anything goes on.
 	if (op.Phase == TornDown || op.Phase == Wiped) && (op.Ownership.Takeover || op.Ownership.Live) {
 		if err := e.Realizer.DenyAll(ctx); err != nil {
@@ -174,7 +157,7 @@ func Resume(ctx context.Context, e Env) (Operation, error) {
 					return op, errors.Join(err, drop(e))
 				}
 				// Sampled and journaled before the first stop, so a retry restarts what ran before, not what is left.
-				for _, unit := range upgrade.WriterUnits() {
+				for _, unit := range writerUnits() {
 					if _, err := e.Run(ctx, "systemctl", "is-active", "--quiet", unit); err == nil {
 						op.Units = append(op.Units, unit)
 					}
@@ -184,7 +167,7 @@ func Resume(ctx context.Context, e Env) (Operation, error) {
 					return op, err
 				}
 			}
-			if err := upgrade.StopWriters(ctx, e.Run); err != nil {
+			if err := stopWriters(ctx, e.Run); err != nil {
 				return op, err
 			}
 			// An apply that went pending while the units stopped must be confirmed or rolled back by its owner.
@@ -206,14 +189,14 @@ func Resume(ctx context.Context, e Env) (Operation, error) {
 			op.OwnershipKnown = true
 			err = advance(Stopped)
 		case Stopped:
-			if err = upgrade.StopWriters(ctx, e.Run); err == nil {
+			if err = stopWriters(ctx, e.Run); err == nil {
 				err = e.Realizer.Teardown(ctx)
 			}
 			if err == nil {
 				err = advance(TornDown)
 			}
 		case TornDown:
-			if err = upgrade.StopWriters(ctx, e.Run); err == nil {
+			if err = stopWriters(ctx, e.Run); err == nil {
 				err = wipe(e.StateDir, MarkerName, func() error { return e.at("wipe:entry") })
 			}
 			if err == nil {
@@ -435,7 +418,7 @@ func (e Env) release(ctx context.Context, op Operation, cause error) error {
 // startUnits starts the engine, which the console's root CLI needs, and the other units that ran before the reset.
 func (e Env) startUnits(ctx context.Context, op Operation) error {
 	units := []string{"andaru-engine.service"}
-	for _, unit := range upgrade.WriterUnits() {
+	for _, unit := range writerUnits() {
 		if unit != "andaru-engine.service" && slices.Contains(op.Units, unit) {
 			units = append(units, unit)
 		}
@@ -462,46 +445,4 @@ func lockFile(path string) (*os.File, error) {
 		return nil, err
 	}
 	return f, nil
-}
-
-// holdPackageLocks takes dpkg's locks the way dpkg does, with fcntl, so no package operation runs while they are held.
-// A lock file that does not exist means no dpkg on this root, as in tests.
-func holdPackageLocks(ctx context.Context, paths []string, wait time.Duration) ([]*os.File, error) {
-	ctx, cancel := context.WithTimeout(ctx, wait)
-	defer cancel()
-	var held []*os.File
-	release := func() {
-		for _, f := range held {
-			f.Close()
-		}
-	}
-	for _, path := range paths {
-		f, err := os.OpenFile(path, os.O_RDWR|syscall.O_NOFOLLOW, 0)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			release()
-			return nil, err
-		}
-		held = append(held, f)
-		for {
-			lock := syscall.Flock_t{Type: syscall.F_WRLCK}
-			err = syscall.FcntlFlock(f.Fd(), syscall.F_SETLK, &lock)
-			if err == nil {
-				break
-			}
-			if !errors.Is(err, syscall.EAGAIN) && !errors.Is(err, syscall.EACCES) {
-				release()
-				return nil, err
-			}
-			select {
-			case <-ctx.Done():
-				release()
-				return nil, errors.New("an APT or dpkg operation holds its lock; wait for it to finish")
-			case <-time.After(100 * time.Millisecond):
-			}
-		}
-	}
-	return held, nil
 }

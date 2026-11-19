@@ -28,7 +28,7 @@ func (b *resetBench) ran(prefix string) bool {
 	return slices.ContainsFunc(b.commands, func(c string) bool { return strings.HasPrefix(c, prefix) })
 }
 
-// newResetBench points the reset at a temporary tree with fake systemd and dpkg.
+// newResetBench points the reset at a temporary tree with a fake systemd.
 func newResetBench(t *testing.T) *resetBench {
 	t.Helper()
 	if os.Geteuid() != 0 {
@@ -41,7 +41,7 @@ func newResetBench(t *testing.T) *resetBench {
 	if err := os.MkdirAll(filepath.Join(resetStateDir, "configuration"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	b.env = reset.Env{StateDir: resetStateDir, Dir: resetDir, LockWait: time.Second, Run: func(_ context.Context, name string, args ...string) ([]byte, error) {
+	b.env = reset.Env{StateDir: resetStateDir, Dir: resetDir, Run: func(_ context.Context, name string, args ...string) ([]byte, error) {
 		b.mu.Lock()
 		defer b.mu.Unlock()
 		b.commands = append(b.commands, filepath.Base(name)+" "+strings.Join(args, " "))

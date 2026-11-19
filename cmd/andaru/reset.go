@@ -181,7 +181,6 @@ func productionResetEnv(socket string) reset.Env {
 	r, _ := realizer.(generation.Realizer)
 	return reset.Env{
 		StateDir: resetStateDir, Dir: resetDir, Realizer: r, Run: run,
-		PackageLocks: []string{"/var/lib/dpkg/lock-frontend", "/var/lib/dpkg/lock"}, LockWait: 2 * time.Minute,
 		Apply: func(ctx context.Context, saved string) (bool, error) { return engineApply(ctx, socket, saved) },
 	}
 }

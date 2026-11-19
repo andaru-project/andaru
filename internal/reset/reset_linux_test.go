@@ -2,6 +2,7 @@ package reset
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"os"
@@ -18,7 +19,7 @@ import (
 	"github.com/andaru-project/andaru/internal/kept"
 )
 
-// box is a host with Andaru's old state, its kept copies, and a fake systemd, dpkg and engine.
+// box is a host with Andaru's old state, its kept copies, and a fake systemd and engine.
 type box struct {
 	t        *testing.T
 	env      Env
@@ -33,6 +34,11 @@ type box struct {
 	pending func(n int) bool
 	// inactive are units systemctl reports inactive before the reset.
 	inactive []string
+	// active are units systemctl show reports active; realizing is what list-units reports for realize units.
+	active    map[string]bool
+	realizing string
+	// show runs at each systemctl show, with its unit.
+	show func(unit string)
 	// onStop runs at the first systemctl stop, to look at the tree then.
 	onStop func()
 	// fail makes commands with this prefix fail, once each time it is set.
@@ -52,8 +58,8 @@ func newBox(t *testing.T) *box {
 	b.env = Env{
 		StateDir: state, Dir: filepath.Join(base, "andaru-reset"), KeptRoot: b.keptRoot,
 		Realizer: generation.Realizer{StateDir: state, Root: filepath.Join(base, "root"), Run: b.run, Now: time.Now, LockWait: time.Second},
-		Run:      b.run, LockWait: time.Second,
-		Apply: b.apply,
+		Run:      b.run,
+		Apply:    b.apply,
 	}
 	if err := os.MkdirAll(filepath.Join(base, "root", "run"), 0o755); err != nil {
 		t.Fatal(err)
@@ -85,7 +91,22 @@ func (b *box) run(_ context.Context, name string, args ...string) ([]byte, error
 		return nil, errors.New("inactive")
 	}
 	if strings.HasPrefix(command, "systemctl show") {
-		return []byte("ActiveState=inactive\nUnitFileState=static\n"), nil
+		unit := args[len(args)-1]
+		b.mu.Lock()
+		show, state := b.show, "inactive"
+		if b.active[unit] {
+			state = "active"
+		}
+		b.mu.Unlock()
+		if show != nil {
+			show(unit)
+		}
+		return []byte("ActiveState=" + state + "\nUnitFileState=static\n"), nil
+	}
+	if strings.HasPrefix(command, "systemctl list-units") {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return []byte(b.realizing), nil
 	}
 	return nil, nil
 }
@@ -126,15 +147,16 @@ func (b *box) apply(_ context.Context, saved string) (bool, error) {
 	return !pending, nil
 }
 
+// networkFixture is a copy of config's fixture, embedded so the test binary runs without the source tree, as in CI.
+//
+//go:embed testdata/network.json
+var networkFixture []byte
+
 // network is the fixture declaration with its LAN as the management segment.
 func network(t *testing.T) (map[string]any, map[string]string) {
 	t.Helper()
-	data, err := os.ReadFile("../config/testdata/network.json")
-	if err != nil {
-		t.Fatal(err)
-	}
 	var d map[string]any
-	if err = json.Unmarshal(data, &d); err != nil {
+	if err := json.Unmarshal(networkFixture, &d); err != nil {
 		t.Fatal(err)
 	}
 	lan := d["segments"].([]any)[1].(map[string]any)["id"]
@@ -419,15 +441,15 @@ func TestPlanRefuses(t *testing.T) {
 		"pending apply": func(b *box) {
 			write(b.t, filepath.Join(generation.Dir(b.env.StateDir), "pointers.json"), `{"confirmed":null,"lastKnownGood":null,"pending":1,"live":null,"takeover":true}`)
 		},
-		"dpkg": func(b *box) {
-			b.env.Run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
-				if name == "dpkg" {
-					return []byte("The following packages are only half configured\n"), nil
-				}
-				return b.run(ctx, name, args...)
-			}
+		"running realize unit": func(b *box) {
+			b.realizing = "andaru-realize-activate-2.service loaded activating start Andaru activation\n"
 		},
 		"existing journal": func(b *box) { b.plan("") },
+	}
+	for _, state := range []string{"activating", "awaiting_confirmation", "rolling_back"} {
+		cases[state] = func(b *box) {
+			write(b.t, filepath.Join(generation.Dir(b.env.StateDir), "2", "state.json"), `{"state":"`+state+`","previous":null}`)
+		}
 	}
 	for name, breakIt := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -443,6 +465,32 @@ func TestPlanRefuses(t *testing.T) {
 				t.Fatalf("the refusal changed something: %q", b.commands)
 			}
 		})
+	}
+}
+
+// A realizer that runs when the units stop finishes its work: the reset waits for it and never stops it.
+func TestStopDrainsRealizer(t *testing.T) {
+	b := newBox(t)
+	b.active = map[string]bool{"andaru-prefixes.service": true}
+	probes := 0
+	b.show = func(unit string) {
+		if unit == "andaru-prefixes.service" {
+			if probes++; probes >= 3 {
+				b.mu.Lock()
+				b.active[unit] = false
+				b.mu.Unlock()
+			}
+		}
+	}
+	b.plan("")
+	if _, err := Resume(context.Background(), b.env); err != nil {
+		t.Fatal(err)
+	}
+	if probes < 3 {
+		t.Fatal("the reset went on before the realizer finished")
+	}
+	if b.ran("systemctl stop andaru-prefixes.service") {
+		t.Fatalf("stopped the realizer: %q", b.commands)
 	}
 }
 
