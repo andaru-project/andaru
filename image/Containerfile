@@ -44,7 +44,6 @@ COPY packaging/iproute2/andaru.conf /usr/share/iproute2/rt_protos.d/andaru.conf
 COPY packaging/tmpfiles.d/andaru.conf /usr/lib/tmpfiles.d/andaru.conf
 COPY packaging/sysusers.d/andaru.conf /usr/lib/sysusers.d/andaru.conf
 COPY packaging/kea/andaru-lease-event /usr/share/kea/scripts/andaru-lease-event
-COPY packaging/unbound/unbound.conf /etc/unbound/unbound.conf
 COPY packaging/unbound/andaru.conf /etc/unbound/conf.d/andaru.conf
 COPY image/files/ /
 COPY ${COSIGN_PUB} /etc/pki/containers/andaru.pub
@@ -58,6 +57,7 @@ RUN sed -i "s|@NAMESPACE@|${SIGNED_NAMESPACE}|" /etc/containers/policy.json /etc
         andaru-factory-reset.service andaru-leases.path andaru-prefixes.path andaru-prefixes.timer && \
     systemctl disable sshd.service zincati.service andaru-web.service && \
     systemctl mask NetworkManager.service NetworkManager-wait-online.service && \
+    # moby-engine's group stays in /etc/group after its removal, which bootc's sysusers lint rejects.
     groupdel docker && \
     rm -rf /run/dnf /run/kea /run/unbound /run/openvpn-client /run/openvpn-server /run/pppd /tmp/* /var/cache/* /var/lib/dnf \
         /var/lib/kea/* /var/lib/openvpn /var/lib/unbound /var/log/* && \

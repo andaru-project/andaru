@@ -187,7 +187,11 @@ func (r Realizer) fence(ctx context.Context) error {
 // keeps deny-all even on a box never set up.
 func (r Realizer) Fence(ctx context.Context, denyAll bool) error {
 	if denyAll && !r.setUp() {
-		return r.DenyAll(ctx)
+		// The journal says Andaru ran the network, so the box was set up: the catch-all keeps WAN from a lease.
+		if err := r.DenyAll(ctx); err != nil {
+			return err
+		}
+		return r.place(nil, []placed{catchAll})
 	}
 	return r.fence(ctx)
 }

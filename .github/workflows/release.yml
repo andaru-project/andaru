@@ -9,6 +9,11 @@ on:
 permissions:
   contents: read
 
+# Two tags pushed close together must not race for stable.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 env:
   IMAGE: ghcr.io/andaru-project/andaru
 
@@ -102,7 +107,15 @@ jobs:
           set -eu
           printf '%s\n' "$TOKEN" | podman login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           # Boxes never follow these tags: nothing signs them, so the signature policy refuses them.
-          podman push andaru:build "docker://$IMAGE:$VERSION-$ARCH"
+          podman push --digestfile "digest-$ARCH" andaru:build "docker://$IMAGE:$VERSION-$ARCH"
+
+      # The digest, not the tag, goes into the index: a tag could be moved between this push and the signature.
+      - name: Keep the digest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digest-${{ matrix.arch }}
+          path: digest-${{ matrix.arch }}
+          if-no-files-found: error
 
   sign:
     needs: [version, image]
@@ -118,6 +131,12 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+
+      - name: Collect the digests
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: digest-*
+          merge-multiple: true
 
       - name: Install cosign
         run: |
@@ -140,7 +159,7 @@ jobs:
           printf '%s\n' "$TOKEN" | cosign login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           podman manifest create andaru:index
           for arch in amd64 arm64; do
-            podman manifest add andaru:index "docker://$IMAGE:$VERSION-$arch"
+            podman manifest add andaru:index "docker://$IMAGE@$(cat "digest-$arch")"
           done
           # The index goes up under a staging tag nothing follows; its digest is what gets signed.
           podman manifest push --all --digestfile digest andaru:index "docker://$IMAGE:staging-$VERSION"

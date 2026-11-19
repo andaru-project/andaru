@@ -146,22 +146,8 @@ jobs:
           # dpkg-based upgrade preparation runs on the Ubuntu runner until slice 3 deletes it.
           sudo env -u TMPDIR "$art/upgrade.test" -test.v -test.timeout=120s
           # The rest run where the image's packages are: Fedora's nftables, Kea and Unbound. A missing tool fails.
-          sudo podman run --rm --privileged --network host -v "$art:$art" -v "$PWD:/src:ro" -e ART="$art" -e SRC=/src \
-            registry.fedoraproject.org/fedora:44 sh -euc '
-            dnf -yq install nftables kea kea-hooks unbound iproute iputils procps-ng python3 >/dev/null
-            # As the image does: Andaru's main Unbound file in place of Fedora's.
-            install -m 0644 "$SRC/packaging/unbound/unbound.conf" /etc/unbound/unbound.conf
-            unbound-anchor -a /var/lib/unbound/root.key || test -s /var/lib/unbound/root.key
-            export ANDARU_TEST_REQUIRE_TOOLS=1
-            "$ART/config.test" -test.v -test.timeout=120s
-            ANDARU_TEST_BINARY="$ART/andaru" "$ART/engine.test" -test.v -test.timeout=120s
-            "$ART/generation.test" -test.v -test.timeout=120s
-            "$ART/identity.test" -test.v -test.timeout=120s
-            "$ART/audit.test" -test.v -test.timeout=120s
-            "$ART/ctl.test" -test.v -test.timeout=120s
-            # The pppd and networkd tool proofs in this binary are lab proofs; CI runs the filter ones.
-            "$ART/render.test" -test.v -test.timeout=120s -test.run "FilterInNamespace|NftScriptIsValid|ServiceGoldensPassTheirTools|DHCPv6GoldensPassKea"
-          '
+          sudo podman run --rm --privileged --network host -v "$art:$art" -v "$PWD/scripts/ci:/ci:ro" \
+            registry.fedoraproject.org/fedora:44 sh /ci/root-tests.sh "$art"
 
   image:
     name: image ${{ matrix.arch }}

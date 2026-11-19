@@ -265,7 +265,7 @@ func TestFence(t *testing.T) {
 		if err := b.r.Fence(t.Context(), row.denyAll); err != nil {
 			t.Fatal(err)
 		}
-		if b.net.table != row.filter || b.exists(catchAllPath[1:]) != row.setUp {
+		if b.net.table != row.filter || b.exists(catchAllPath[1:]) != (row.setUp || row.denyAll) {
 			t.Fatalf("%+v: filter %q, catch-all %v", row, b.net.table, b.exists(catchAllPath[1:]))
 		}
 	}

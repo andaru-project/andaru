@@ -50,7 +50,7 @@ func TestServiceGoldensPassTheirTools(t *testing.T) {
 				if err := os.WriteFile(fragment, []byte(f.Content), 0o644); err != nil {
 					t.Fatal(err)
 				}
-				// As the image's unbound.conf includes Andaru's file, where it is installed; otherwise a minimal main
+				// As Fedora's unbound.conf includes Andaru's file, where it is installed; otherwise a minimal main
 				// file. One fixture at a time: two would bind the same addresses.
 				if _, err := os.Stat("/etc/unbound/conf.d"); err == nil {
 					main = "/etc/unbound/unbound.conf"
