@@ -253,15 +253,15 @@ func TestReadManagedWithoutNetworkd(t *testing.T) {
 }
 
 func TestParseResolvectl(t *testing.T) {
-	global, links, err := ParseResolvectl([]byte("Global: 192.0.2.1 2001:db8::1\nLink 2 (ens18): 192.0.2.53\n  192.0.2.54\nLink 3 (lo):\n"))
+	global, links, err := parseResolvectl([]byte("Global: 192.0.2.1 2001:db8::1\nLink 2 (ens18): 192.0.2.53\n  192.0.2.54\nLink 3 (lo):\n"))
 	if err != nil || !slices.Equal(global, []string{"192.0.2.1", "2001:db8::1"}) || !slices.Equal(links["ens18"], []string{"192.0.2.53", "192.0.2.54"}) || links["lo"] == nil || len(links["lo"]) != 0 {
 		t.Fatalf("dns: %v %v %v", global, links, err)
 	}
-	global, links, err = ParseResolvectl([]byte("Global: lab.example\nLink 2 (ens18): corp.example ~.\n"))
+	global, links, err = parseResolvectl([]byte("Global: lab.example\nLink 2 (ens18): corp.example ~.\n"))
 	if err != nil || !slices.Equal(global, []string{"lab.example"}) || !slices.Equal(links["ens18"], []string{"corp.example", "~."}) {
 		t.Fatalf("domain: %v %v %v", global, links, err)
 	}
-	if _, _, err := ParseResolvectl([]byte("garbage\n")); err == nil {
+	if _, _, err := parseResolvectl([]byte("garbage\n")); err == nil {
 		t.Fatal("garbage accepted")
 	}
 }

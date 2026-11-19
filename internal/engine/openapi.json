@@ -6322,7 +6322,7 @@
                 "type": "null"
               }
             ],
-            "description": "What was live before this apply; null is the pre-Andaru baseline."
+            "description": "What was live before this apply; null is no generation."
           },
           "deadline": {
             "type": "string",
@@ -6426,7 +6426,7 @@
                     "type": "null"
                   }
                 ],
-                "description": "What runs now; null is the pre-Andaru baseline. Differs from confirmed after a boot fallback."
+                "description": "What runs now; null is no generation (the bare filter, and the catch-all once set up). Differs from confirmed after a boot fallback."
               }
             }
           },

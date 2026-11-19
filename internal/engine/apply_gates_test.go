@@ -5,7 +5,6 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/andaru-project/andaru/internal/generation"
 	"github.com/andaru-project/andaru/internal/host"
 	"github.com/andaru-project/andaru/internal/render"
 )
@@ -54,7 +53,6 @@ func plain() gateInput {
 func taken() gateInput {
 	in := plain()
 	in.Managed[0].NetworkFile = uplinkFile
-	in.Live = &generation.Generation{}
 	in.LiveFiles = map[string][]byte{uplinkFile: []byte("[Match]\n")}
 	return in
 }
@@ -93,13 +91,13 @@ func TestApplyFindings(t *testing.T) {
 		// The image's first apply: the catch-all would down a link the factory file configures and the declaration omits.
 		"factory link left out": {func() gateInput {
 			in := taken()
-			in.Live, in.LiveFiles, in.Result.Files = nil, nil, nil
+			in.LiveFiles, in.Result.Files = nil, nil
 			in.Managed[0].NetworkFile = factoryFile
 			return in
 		}, []want{{"WOULD_UNCONFIGURE", "eth0"}}},
 		"factory link declared": {func() gateInput {
 			in := taken()
-			in.Live, in.LiveFiles = nil, nil
+			in.LiveFiles = nil
 			in.Managed[0].NetworkFile = factoryFile
 			return in
 		}, nil},
@@ -128,8 +126,7 @@ func TestApplyFindings(t *testing.T) {
 		}, []want{{"HARDWARE_MISSING", "/links/0/permanentMac"}}},
 		"foreign configuration": {func() gateInput {
 			in := plain()
-			in.Facts.ForeignFiles = []string{"/etc/systemd/network/x.network"}
-			in.Result.Findings = foreign(in.Facts.ForeignFiles...)
+			in.Result.Findings = foreign("/etc/systemd/network/x.network")
 			return in
 		}, []want{{"FOREIGN_CONFIGURATION", ""}}},
 		"boot unit not enabled": {func() gateInput {

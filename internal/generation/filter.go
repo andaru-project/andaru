@@ -186,17 +186,15 @@ func (r Realizer) toward(ctx context.Context, target *Generation, place func() e
 		}
 		return place()
 	}
-	if target != nil {
-		path, comment, ok, err := r.filter(*target)
-		if err != nil {
+	path, comment, ok, err := r.filter(*target)
+	if err != nil {
+		return err
+	}
+	if ok {
+		if err := r.loadFilter(ctx, path, comment); err != nil {
 			return err
 		}
-		if ok {
-			if err := r.loadFilter(ctx, path, comment); err != nil {
-				return err
-			}
-			return place()
-		}
+		return place()
 	}
 	// nft must answer before any file moves, or the files could end up under a filter that cannot be removed.
 	loaded, err := r.tableLoaded(ctx)

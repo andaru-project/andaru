@@ -13,6 +13,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/andaru-project/andaru/internal/generation"
 )
 
 const outputLimit = 1024 * 1024
@@ -56,7 +58,7 @@ func drainRealizers(ctx context.Context, run commandRunner) error {
 	for {
 		allIdle := true
 		for _, name := range realizationUnits {
-			raw, err := run(ctx, "systemctl", "show", "--property=ActiveState", "--property=UnitFileState", name)
+			raw, err := run(ctx, "systemctl", "show", "--property=ActiveState", name)
 			if err != nil {
 				return err
 			}
@@ -155,16 +157,17 @@ func idleApplications(stateDir string) error {
 		if err != nil {
 			return err
 		}
-		if state.State == "activating" || state.State == "awaiting_confirmation" || state.State == "rolling_back" {
+		if state.State == generation.Activating || state.State == generation.Awaiting || state.State == "rolling_back" {
 			return errors.New("a connectivity apply is active; retry after it completes")
 		}
 	}
 	return nil
 }
 
-// readStrict decodes one private JSON value and refuses unknown fields and trailing data.
+// readStrict decodes one root-owned JSON value and refuses unknown fields and trailing data. Like the check it
+// replaces, it refuses a file group or others can write, not one they can read: a restore may leave 0640 or 0400.
 func readStrict(path string, value any) error {
-	data, err := readPrivate(path)
+	data, err := readRoot(path, func(perm os.FileMode) bool { return perm&0o022 == 0 })
 	if err != nil {
 		return err
 	}

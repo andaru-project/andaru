@@ -60,9 +60,10 @@ func isAppliesPath(path string) bool {
 // gatherGate collects everything the apply gates judge: the host, the rendered files and what is live now.
 func gatherGate(ctx context.Context, read hostReader, dir string, pointers generation.Pointers, value json.RawMessage, secrets map[string]string) (gateInput, error) {
 	gate := gateInput{Declaration: value}
+	var facts host.RealizerFacts
 	var err error
 	if gate.Links, err = read.Links(ctx); err == nil {
-		gate.Facts, err = read.Facts()
+		facts, err = read.Facts()
 	}
 	if err == nil {
 		gate.Managed, err = read.Managed(ctx)
@@ -71,13 +72,12 @@ func gatherGate(ctx context.Context, read hostReader, dir string, pointers gener
 		return gate, errors.Join(errInventory, err)
 	}
 	gate.BootUnit = read.BootUnit()
-	if gate.Result, err = render.Network(render.Input{Declaration: value, Secrets: secrets, Links: gate.Links, Facts: gate.Facts}); err != nil {
+	if gate.Result, err = render.Network(render.Input{Declaration: value, Secrets: secrets, Links: gate.Links, Facts: facts}); err != nil {
 		return gate, errors.Join(errRender, err)
 	}
 	if pointers.Live != nil {
 		live, err := generation.Read(dir, *pointers.Live)
 		if err == nil {
-			gate.Live = &live
 			gate.LiveFiles, err = generation.Contents(dir, live)
 		}
 		if err != nil {
@@ -110,7 +110,7 @@ type appliesView struct {
 		Confirmed     *string `json:"confirmed"`
 		LastKnownGood *string `json:"lastKnownGood"`
 		Pending       *string `json:"pending"`
-		// Live is what runs now; null is the pre-Andaru baseline. It differs from confirmed after a boot fallback.
+		// Live is what runs now; null is no generation: the bare filter, and the catch-all once set up. It differs from confirmed after a boot fallback.
 		Live *string `json:"live"`
 	} `json:"pointers"`
 	Items []applyView `json:"items"`

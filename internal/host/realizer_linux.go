@@ -97,7 +97,7 @@ func readRealizerFacts(etcDir, runDir, pppd, pluginGlob, device, root string) (R
 units:
 	for _, unit := range competingFilters {
 		for _, base := range bases {
-			// Masked, a unit never starts, whatever links still enable it; a confirmed takeover masks nftables.service.
+			// Masked, a unit never starts, whatever links still enable it.
 			if target, _ := os.Readlink(root + base + unit); target == "/dev/null" {
 				continue units
 			}
@@ -205,9 +205,9 @@ func readBootUnit(root string) bool {
 
 var resolvedLink = regexp.MustCompile(`^Link \d+ \((.+)\):(.*)$`)
 
-// ParseResolvectl reads the output of `resolvectl dns` or `resolvectl domain`: the global entries and each
-// interface's, in order. resolvectl wraps a long list onto indented lines.
-func ParseResolvectl(data []byte) (global []string, links map[string][]string, err error) {
+// parseResolvectl reads the output of `resolvectl dns`: each interface's entries, in order. resolvectl wraps a
+// long list onto indented lines.
+func parseResolvectl(data []byte) (global []string, links map[string][]string, err error) {
 	global, links = []string{}, map[string][]string{}
 	current, started := "", false
 	for line := range strings.SplitSeq(string(data), "\n") {
@@ -243,7 +243,7 @@ func ParseResolvectl(data []byte) (global []string, links map[string][]string, e
 // writes (a port, a TLS name) becomes the zero Addr: it equals no declared server, and it cannot spoil
 // the reading of another link.
 func ParseResolvedDNS(data []byte) (map[string][]netip.Addr, error) {
-	_, links, err := ParseResolvectl(data)
+	_, links, err := parseResolvectl(data)
 	if err != nil {
 		return nil, err
 	}

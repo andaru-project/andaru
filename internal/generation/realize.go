@@ -694,16 +694,15 @@ func (r Realizer) fallback(ctx context.Context, p Pointers, previous *int) (set 
 		}
 		failures = append(failures, err)
 	}
-	set = r.bare()
 	if previous == nil {
-		return set, nil, "", false, nil // the rollback of the first apply goes back to no generation
+		return r.bare(), nil, "", false, nil // the rollback of the first apply goes back to no generation
 	}
 	if !r.resetTree() {
 		// Removing every file would take the host off the network; what runs now at least works.
 		return nil, nil, "", false, errors.Join(failures...)
 	}
 	// A reset tree has no generation to fall back to but its fenced bare set.
-	return set, nil, "baseline", false, nil
+	return r.bare(), nil, "baseline", false, nil
 }
 
 // errFilterLoad marks a generation whose filter nft did not take, which a later try may: rollback stays pending.

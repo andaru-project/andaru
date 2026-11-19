@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -158,6 +159,15 @@ func privateDir(dir string) error {
 
 // readPrivate reads a root-owned 0600 regular file with one link, never following a symlink.
 func readPrivate(path string) ([]byte, error) {
+	return readRoot(path, func(perm os.FileMode) bool { return perm == 0o600 })
+}
+
+// metadataLimit bounds what reset reads from one state file; none it reads comes near it.
+const metadataLimit = 1 << 20
+
+// readRoot reads a root-owned, single-link regular file whose mode passes allowed, through the descriptor it
+// checked, and at most metadataLimit bytes of it.
+func readRoot(path string, allowed func(os.FileMode) bool) ([]byte, error) {
 	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, &os.PathError{Op: "open", Path: path, Err: err}
@@ -169,10 +179,14 @@ func readPrivate(path string) ([]byte, error) {
 		return nil, err
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !info.Mode().IsRegular() || !ok || stat.Uid != 0 || stat.Nlink != 1 || info.Mode().Perm() != 0o600 {
+	if !info.Mode().IsRegular() || !ok || stat.Uid != 0 || stat.Nlink != 1 || !allowed(info.Mode().Perm()) {
 		return nil, fmt.Errorf("%s is not a private regular file", path)
 	}
-	return os.ReadFile(path)
+	data, err := io.ReadAll(io.LimitReader(f, metadataLimit+1))
+	if err == nil && len(data) > metadataLimit {
+		err = fmt.Errorf("%s is larger than %d bytes", path, metadataLimit)
+	}
+	return data, err
 }
 
 func writeSynced(path string, data []byte) error {

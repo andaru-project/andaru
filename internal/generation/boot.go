@@ -222,10 +222,6 @@ func (r Realizer) Boot(ctx context.Context) (result error) {
 		p.Live = nil
 		return r.consoleRequired(ctx, p, authorization, failures...)
 	}
-	// A candidate's filter can fail after nft accepted it (readback, sysctl); no generation runs, so neither does a filter.
-	if err := r.dropFilter(ctx); err != nil {
-		failures = append(failures, err)
-	}
 	// No generation is usable: the host still gets its bare filter, and the catch-all once set up. No generation
 	// runs, so the pointers and the authorization say so.
 	p.Live = nil

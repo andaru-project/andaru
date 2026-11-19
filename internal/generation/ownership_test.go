@@ -67,6 +67,21 @@ func TestOwnershipOfATreeNeverApplied(t *testing.T) {
 	}
 }
 
+// Boot fences a box whose confirmed generation no longer loads and clears Live; Andaru still ran its network, so a
+// reset must bring one up and keep the fresh tree fenced.
+func TestOwnershipOfAFencedConfirmedBox(t *testing.T) {
+	one := 1
+	for name, p := range map[string]Pointers{"confirmed": {Confirmed: &one}, "lastKnownGood": {LastKnownGood: &one}} {
+		b := newBench(t)
+		if err := writeJSON(filepath.Join(b.dir, "pointers.json"), p); err != nil {
+			t.Fatal(err)
+		}
+		if o, err := b.r.ReadOwnership(); err != nil || !o.Live {
+			t.Errorf("%s: ownership = %+v, %v", name, o, err)
+		}
+	}
+}
+
 func TestOwnershipRefusesNonEmpty(t *testing.T) {
 	b := newBench(t)
 	b.live(one)

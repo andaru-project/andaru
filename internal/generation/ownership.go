@@ -39,12 +39,12 @@ func (r Realizer) ReadOwnership() (Ownership, error) {
 		return Ownership{}, err
 	}
 	var m baselineManifest
-	captured, err := readJSON(filepath.Join(r.baselineDir(), "manifest.json"), &m)
-	if err != nil {
+	if _, err = readJSON(filepath.Join(r.baselineDir(), "manifest.json"), &m); err != nil {
 		return Ownership{}, err
 	}
-	// A tree an earlier reset wrote ran Andaru's network even with nothing live now: it stays fenced.
-	return Ownership{Live: p.Live != nil || captured && m.Reset}, nil
+	// Andaru ran the network if a generation runs or was ever confirmed (boot can fence a box whose confirmed
+	// generation no longer loads), or if an earlier reset wrote the tree: the reset then brings a network up.
+	return Ownership{Live: p.Live != nil || p.Confirmed != nil || p.LastKnownGood != nil || m.Reset}, nil
 }
 
 // WriteOwnership writes the record into an empty generations directory: empty pointers and, when a generation ran,

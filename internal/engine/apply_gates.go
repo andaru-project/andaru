@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/andaru-project/andaru/internal/generation"
 	"github.com/andaru-project/andaru/internal/host"
 	"github.com/andaru-project/andaru/internal/render"
 )
@@ -23,11 +22,9 @@ type gateInput struct {
 	Result      render.Result
 	Links       []host.LinkStatus
 	Managed     []host.Managed
-	Facts       host.RealizerFacts
 	// BootUnit reports andaru-network-boot.service enabled.
 	BootUnit bool
-	// Live is the generation in /run now, nil when nothing of Andaru's is; LiveFiles is its content by path.
-	Live      *generation.Generation
+	// LiveFiles is the content of the generation in /run now, by path; empty when none runs.
 	LiveFiles map[string][]byte
 }
 
