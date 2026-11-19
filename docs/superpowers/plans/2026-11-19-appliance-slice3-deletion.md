@@ -22,9 +22,9 @@ What Andaru still does on the image stays, and behaves the same: applying and co
    - each generation's `manifest.json`: `takeover` and `baseline`.
    - `generations/baseline/manifest.json`, which every reset tree has: `kind`, `files`, `reset`, and possibly `ifupdown` and `nftablesMasked`.
 
-   Every one of these keys stays in its struct. The obsolete ones are typed `json.RawMessage`, so no host type outlives the deleted readers; they are ignored, and never written again. The reset journal's `ownership` is decoded leniently, so dropping its takeover fields is safe.
+   The reset tree is identified by that file's `"reset": true` (`resetTree()`), not by `.andaru-reset`, which a finished reset removes. Every one of these keys stays in its struct. The obsolete ones are typed `json.RawMessage`, so no host type outlives the deleted readers; they are ignored, and never written again. The reset journal's `ownership` is decoded leniently, so dropping its takeover fields is safe.
    - The reset marker keeps its path and meaning: older images on a bootc rollback read it there.
-   - Existing fixtures in the old format (`live_authorization_integration_test.go:47`, `backup_integration_linux_test.go:323`) become the compatibility tests.
+   - Existing fixtures in the old format (`internal/engine/live_authorization_integration_test.go:47`, `internal/engine/backup_integration_linux_test.go:323`) become compatibility tests.
 5. **The applies API drops `takeover` in one commit.** The engine's request and response, the CLI's `--takeover` flag, the web client and `openapi.json` change together. They ship in one image, and the API is provisional until 1.0. A browser tab left open across the image update gets a 400 on apply until it reloads; that is accepted.
 6. **No update fence in reset yet.** Reset's dpkg locks go. Nothing on the image updates by itself: zincati is off, and `image-smoke.sh` now also checks that `bootc-fetch-apply-updates.timer` and `rpm-ostreed-automatic.timer` are not enabled. So there is nothing to fence against until slice 5, which adds the fence with the update path itself. The appliance design's slice 3 text, which promised the fence here, is amended to say so.
 
@@ -42,16 +42,20 @@ What Andaru still does on the image stays, and behaves the same: applying and co
 One commit: `upgrade.Prepare` uses the same helpers until it is deleted.
 - [ ] Move into `internal/reset`, with their test:
   - `CheckIdle` (without dpkg), `StopWriters` and `WriterUnits`;
-  - their helpers: `commandRunner`, `preparationUnits`, `realizationUnits`, `drainRealizers`, `idleRealizationJobs`, `idleApplications`, `privateJSON`, `regularFile`, `textOutput`, `outputLimit` and `recoveryMetadataLimit`.
+  - their helpers: `commandRunner`, `preparationUnits`, `realizationUnits`, `drainRealizers`, `idleRealizationJobs`, `idleApplications`, `textOutput` and `outputLimit`. `privateJSON` and `regularFile` are not moved: reset's existing `readPrivate` does the same job.
 - [ ] Delete:
   - `DpkgConsistent`, `dpkgBinary`, `Env.PackageLocks`, `LockWait` and `holdPackageLocks`;
-  - the dpkg lock list in `cmd/andaru/reset.go`;
+  - the dpkg lock list in `cmd/andaru/reset.go`, and `LockWait` in `cmd/andaru/reset_test.go`;
   - the `"dpkg"` case of `TestPlanRefuses`.
-- [ ] `TestPlanRefuses` gains cases for an `activating` and an `awaiting_confirmation` `state.json`, which the deleted `upgrade` tests covered.
+- [ ] Reset's tests take over what the deleted `upgrade` tests covered for these helpers:
+  - `TestPlanRefuses` gains `activating`, `awaiting_confirmation` and `rolling_back` `state.json` cases, and a running `andaru-realize-*` unit;
+  - a stop test shows an active `andaru-prefixes.service` is drained, not killed.
+
+  The reset `box` fake learns to answer `list-units` and `ActiveState` for these.
 - [ ] Delete `internal/upgrade`, `cmd/andaru/upgrade.go` and its tests, and the `upgrade` dispatch and usage in `cmd/andaru/main.go`.
 - [ ] Remove `upgrade.test` from `ci.yml`. Add `reset.test` to the root suites (`ci.yml`'s build list and `scripts/ci/root-tests.sh`): reset's tests need root, and nothing in CI runs them today.
 - [ ] Delete core-api's "Upgrading on Debian".
-- [ ] `image-smoke.sh` checks the two update timers (call 6). Amend the appliance design's slice 3 and slice 5 text for the fence.
+- [ ] `image-smoke.sh` checks the two update timers (call 6), including after its `preset-all` step. Amend the appliance design's slice 3 and slice 5 text for the fence.
 
 ### Task 2: delete Debian packaging, AppArmor and the Debian lab
 - [ ] Delete `debian/`, `packaging/apparmor/`, `dev/vm-lab/`, `docs/dev/vm-lab.md` and the `.gitignore` lab block.
@@ -59,28 +63,32 @@ One commit: `upgrade.Prepare` uses the same helpers until it is deleted.
 - [ ] Delete the Debian-only shell specs: `apparmor_include_spec.sh`, `apparmor_restart_spec.sh`, `maintainer_scripts_spec.sh`.
 - [ ] Trim `kept_copies_spec.sh` (the postrm part) and `web_packaging_spec.sh` (postinst, `debian/rules`, `andaru.install`, AppArmor).
 - [ ] Fix `ci.yml`'s shellcheck list.
-- [ ] Drop the Debian-only `Before=` targets from `andaru-network-boot.service`: `networking.service`, `cloud-init-local.service`, `nftables.service`.
+- [ ] Drop the Debian-only `Before=` targets from `andaru-network-boot.service`: `networking.service` and `cloud-init-local.service`. Keep `Before=nftables.service`: Fedora ships that unit, and the ordering keeps it from flushing Andaru's table at boot if an admin enables it.
 
 ### Task 3: delete the CLI takeover assistant
 - [ ] Delete `cmd/andaru/takeover.go`, `takeover_answers.go`, `takeover_forms.go`, their tests, and the `ctl takeover` dispatch and usage.
 - [ ] `go mod tidy`, which drops `huh` and `bubbletea`.
 
-### Task 4: delete the engine takeover API
-- [ ] Move the kept parts of `takeover_api.go` into `applies_api.go`: the error values, `gatherGate` without its takeover and ifupdown parts, `newLiveHandler` and `isLivePath`.
-- [ ] Delete the proposal handler, the draft route (call 2) with `config.Store.Draft` and its test, `config.DHCPOffer` and its test (call 3), the identity readers and `previewIdentities`.
-- [ ] Remove `identitySource` from the preview handler, `render.Input.DHCPIdentity` and its networkd output. Its only sources were an ifupdown capture and a running dhcpcd, neither of which exists on the image, so no image box's DHCP lease identity changes. Declared DUIDs (`networkd.go`) stay.
-- [ ] Remove the routes' permissions in `security.go`, their `openapi.json` entries, and the error code `TAKEOVER_LIMIT`.
-
-### Task 5: drop `takeover` from applies, gates, CLI and web (call 5)
-- [ ] Engine:
+### Task 4: delete the engine takeover API and `takeover` from applies, gates, CLI and web (call 5)
+One commit: the API's handlers, the gates and the request field depend on each other, and the strict request decoder needs engine, CLI and web to change together.
+- [ ] **Handlers:**
+  - Move `gatherGate` (without its takeover and ifupdown parts) and the error values into `applies_api.go`.
+  - Delete `newLiveHandler` and `isLivePath`: without the takeover handler, `newLiveHandler` only passes requests through, so its callers take the applies handler directly.
+  - Delete the proposal handler, the draft route (call 2) with `config.Store.Draft`, `config.DHCPOffer` (call 3), the identity readers and `previewIdentities`.
+  - Adapt `internal/config/backup_state_integration_linux_test.go`, which also calls `Draft`.
+  - Remove `identitySource` from the preview handler, `render.Input.DHCPIdentity` and its networkd output. Its only sources were an ifupdown capture and a running dhcpcd, neither of which exists on the image, so no image box's DHCP lease identity changes. Declared DUIDs (`networkd.go`) stay.
+- [ ] **Gates:**
   - `gateInput` loses its takeover and ifupdown fields, `fromIfupdown`, `ifupdownHost`, the baseline block, the FOREIGN_CONFIGURATION exemption, TAKEOVER_MISMATCH and `ifupdownFindings`.
   - It keeps BOOT_UNIT_DISABLED, APPLY_UNSUPPORTED, the managed-link WOULD_UNCONFIGURE with the factory file, NETDEV_CHANGE, and the refusal of every render error finding.
-  - `openapi.json` loses the codes with no producer left: `TAKEOVER_MISMATCH`, `TAKEOVER_UNSUPPORTED_BASELINE`, `DNS_REQUIRED` and `RESOLVED_NOT_IN_CHARGE`.
-- [ ] `hostReader` loses Route, Resolved and Root, and `Baseline` becomes `BootUnit`, read through `host.ReadBaseline().BootUnit` until Task 7 replaces the reader.
-- [ ] The applies request and view lose `takeover`, and so do the CLI flag, `web/src/api.ts`, `web/src/types.ts`, the web test and `openapi.json`.
-- [ ] Rebase the applies and gates test benches from a netplan host onto a plain one.
+  - `TestFilterGates` (FOREIGN_FILTER, TOOL_MISSING, MANAGEMENT_REQUIRED) moves from the draft tests to the applies bench.
+- [ ] **Host reader:** `hostReader` loses Route, Resolved and Root, and `Baseline` becomes `BootUnit`, read through `host.ReadBaseline().BootUnit` until Task 6 replaces the reader.
+- [ ] **API surface:**
+  - The applies request and view lose `takeover`, and so do the CLI flag, `web/src/api.ts`, `web/src/types.ts`, the web test and `openapi.json`.
+  - `security.go` and `openapi.json` lose the proposal and draft routes. `internal/engine/config_integration_linux_test.go`'s expected contract paths change with them.
+  - `openapi.json` loses the codes with no producer left: `TAKEOVER_LIMIT`, `TAKEOVER_MISMATCH`, `TAKEOVER_UNSUPPORTED_BASELINE`, `DNS_REQUIRED`, `RESOLVED_NOT_IN_CHARGE` and `DHCP_IDENTITY_UNKNOWN`.
+- [ ] **Benches:** rebase the applies and gates test benches from a netplan host onto a plain one.
 
-### Task 6: delete the generation takeover code
+### Task 5: delete the generation takeover code
 - [ ] Move `Confirm` (without the takeover tail), `copyKeptFirst`, `Boot` and `consoleRequired` out of `takeover.go`, with their core tests and helpers.
 - [ ] `Boot` keeps:
   - disaster boot;
@@ -92,7 +100,10 @@ One commit: `upgrade.Prepare` uses the same helpers until it is deleted.
   It loses the baseline, the netplan cleanup, the ifupdown boot and the host-firewall hand-back.
 - [ ] `Activate` and `Rollback` lose ifupdown, hand-over and hand-back, `swapAndVerify` loses `needServers`, and `Realizer.HandBackWait` goes. Comments that mention ifupdown in `readManaged` and `observe` are reworded; their logic stays, since networkd can still be stopped. Then:
   - `live` becomes "the catch-all when set up", with no baseline;
-  - `fallback` keeps today's two outcomes when both candidates fail. On a reset tree (the reset marker is present) it restores the catch-all set and records it as the baseline, as it does now. On any other tree it errors and keeps what runs. Each case gets a test;
+  - `fallback` keeps today's three outcomes, each with a test:
+    - with no previous generation (the rollback of a box's first apply), it returns the catch-all set with the bare filter, as today;
+    - when every candidate fails on a reset tree (`reset: true`), it restores the catch-all set and records it as the baseline;
+    - when every candidate fails on any other tree, it errors and keeps what runs;
   - `toward` drops `handsBack`;
   - `setUp` and `Teardown` drop `Takeover`.
 - [ ] `Ownership` shrinks to `Live`. Reset and `cmd/andaru/reset.go` test `Live` only.
@@ -100,12 +111,12 @@ One commit: `upgrade.Prepare` uses the same helpers until it is deleted.
 - [ ] Delete `takeover.go`, `ifupdown.go`, `hostfirewall_test.go` and the netplan-only tests.
 - [ ] Rebench the remaining filter, services, teardown, ownership and reset tests onto plain or reset trees.
 
-### Task 7: delete the host readers
+### Task 6: delete the host readers
 - [ ] Delete `netplan_linux.go`, `ifupdown_linux.go`, their tests and `internal/host/fixture`.
 - [ ] Delete `ReadDefaultRoutes` and `ReadResolved`.
 - [ ] `Baseline` and `ReadBaseline` become a `BootUnit` reader, tested on its own.
 
-### Task 8: docs
+### Task 7: docs
 - [ ] core-api:
   - delete the takeover, assistant and ifupdown sections, the proposal row, and the Debian qualification notes for deleted features;
   - rewrite "Applying" without `--takeover`, the factory-reset section without dpkg locks and takeover ownership, and the DHCP/DNS sections without `apt install` and AppArmor.
@@ -113,7 +124,7 @@ One commit: `upgrade.Prepare` uses the same helpers until it is deleted.
 - [ ] The comment about `packaging/apparmor` in `internal/render/services_integration_linux_test.go` goes.
 - [ ] Mark the superseded specs "deleted in slice 3".
 
-### Task 9: qualification
+### Task 8: qualification
 - [ ] CI is green, including the Fedora-container root suites and the image build and smoke on both architectures.
 - [ ] On a lab box with a confirmed generation, built from `main` before this slice, upgrade to an image of this branch. Check that:
   - the old `pointers.json` and manifests still load;
