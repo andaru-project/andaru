@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,13 +11,15 @@ import (
 	"github.com/andaru-project/andaru/internal/host"
 )
 
+// disasterKept is render's filter-two-zones fixture: a kept LAN with a management segment.
+//
+//go:embed testdata/disaster-kept.json
+var disasterKept []byte
+
 // A kept LAN with a management segment comes up behind its own filter, loaded before its files, and the filter is
 // never written out as a file.
 func TestRenderDisasterLoadsTheKeptFilter(t *testing.T) {
-	body, err := os.ReadFile("../../internal/render/testdata/filter-two-zones.json")
-	if err != nil {
-		t.Fatal(err)
-	}
+	body := disasterKept
 	oldHost, oldLoad := disasterHost, loadDisasterFilter
 	t.Cleanup(func() { disasterHost, loadDisasterFilter = oldHost, oldLoad })
 	disasterHost = func(context.Context) ([]host.LinkStatus, host.RealizerFacts, error) {
@@ -51,10 +54,7 @@ func TestRenderDisasterLoadsTheKeptFilter(t *testing.T) {
 
 // Without its filter the kept LAN does not come up.
 func TestRenderDisasterRefusesWithoutAFilter(t *testing.T) {
-	body, err := os.ReadFile("../../internal/render/testdata/filter-two-zones.json")
-	if err != nil {
-		t.Fatal(err)
-	}
+	body := disasterKept
 	oldHost := disasterHost
 	t.Cleanup(func() { disasterHost = oldHost })
 	disasterHost = func(context.Context) ([]host.LinkStatus, host.RealizerFacts, error) {
