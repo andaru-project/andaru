@@ -166,9 +166,13 @@ jobs:
           # The index goes up under a staging tag nothing follows; its digest is what gets signed.
           podman manifest push --all --digestfile digest andaru:index "docker://$IMAGE:staging-$VERSION"
           digest=$(cat digest)
-          cosign sign --yes --key env://COSIGN_PRIVATE_KEY "$IMAGE@$digest"
+          # Recursive: a box pulls its own architecture's manifest, which needs a signature of its own.
+          cosign sign --yes --recursive --key env://COSIGN_PRIVATE_KEY "$IMAGE@$digest"
           # The key in the image must verify what boxes will pull.
           cosign verify --key image/cosign.pub "$IMAGE@$digest" >/dev/null
+          for arch in amd64 arm64; do
+            cosign verify --key image/cosign.pub "$IMAGE@$(cat "digest-$arch")" >/dev/null
+          done
           # Only a signed digest gets the names boxes follow.
           tags=$VERSION
           [ "$PRERELEASE" = true ] || tags="$tags stable"

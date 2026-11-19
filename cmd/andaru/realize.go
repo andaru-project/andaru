@@ -130,6 +130,8 @@ func renderDisaster(root string) func([]byte) error {
 			// Management, and the objects its sources name, give the kept LAN its filter: without them none renders.
 			Management json.RawMessage `json:"management"`
 			Objects    json.RawMessage `json:"objects"`
+			// A lan-closure carries the address objects its allowed sources name at the top level, not under objects.
+			Addresses json.RawMessage `json:"addresses"`
 		}
 		if err := json.Unmarshal(body, &doc); err != nil {
 			return err
@@ -146,6 +148,8 @@ func renderDisaster(root string) func([]byte) error {
 		}
 		if len(doc.Objects) > 0 {
 			floor["objects"] = doc.Objects
+		} else if len(doc.Addresses) > 0 {
+			floor["objects"] = map[string]json.RawMessage{"addresses": doc.Addresses}
 		}
 		decl, err := json.Marshal(floor)
 		if err != nil {

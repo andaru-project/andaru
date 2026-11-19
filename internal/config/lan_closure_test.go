@@ -223,3 +223,11 @@ func TestKeptSegmentDropsDHCPv6Advertisements(t *testing.T) {
 		t.Error("a mode that needs no DHCPv6 server changed")
 	}
 }
+
+// An incomplete legacy advertisement is left alone for validation to refuse, not dereferenced.
+func TestKeptSegmentLeavesIncompleteLegacyAdvertisements(t *testing.T) {
+	incomplete := &advertisement{}
+	if got := keptSegment(segment{Addressing: addressing{IPv6: ipv6{RA: incomplete}}}).Addressing.IPv6.RA; got != incomplete {
+		t.Error("an incomplete advertisement changed")
+	}
+}
