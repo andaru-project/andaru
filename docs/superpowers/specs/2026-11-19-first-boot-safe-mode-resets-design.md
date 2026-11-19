@@ -34,11 +34,11 @@ From the 2026-11-19 conversation:
 
 ## Author calls
 
-1. **The ISO is Fedora CoreOS's live ISO, plus an OCI archive of the release's image.** The release workflow customises the live ISO of the same Fedora CoreOS build as the image's pinned base, so the NIC names the installer shows are the ones the installed box uses. It embeds a small installer with `coreos-installer iso customize --live-ignition`, and adds `andaru.oci`, an OCI archive of the release's image, to the ISO. A from-scratch build such as `bootc install to-disk` produced an unbootable disk for a Fedora CoreOS–based image in the [uCore spike](../../research/ucore-spike.md), so the install stays on Fedora CoreOS's own route.
+1. **The ISO is Fedora CoreOS's live ISO, plus an OCI archive of the release's image.** The release workflow customises the live ISO of the same Fedora CoreOS build as the image's pinned base, so the NIC names the installer shows are the ones the installed box uses. It adds `andaru.oci` to the ISO by rebuilding it with `xorriso -indev <fcos.iso> -outdev <out.iso> -map andaru.oci /andaru.oci -boot_image any replay`, keeping the volume label, because `coreos-installer iso customize` cannot carry a file that size. It then embeds a small installer with `coreos-installer iso customize --live-ignition`, which still finds its embed areas in the rebuilt ISO. The live system sees the archive at `/run/media/iso/andaru.oci`. The archive is the architecture's image exactly as published, made with `skopeo copy --preserve-digests` from the per-architecture manifest digest, which the release records, so the booted digest is the signed one (call 3). A from-scratch build such as `bootc install to-disk` produced an unbootable disk for a Fedora CoreOS–based image in the [uCore spike](../../research/ucore-spike.md), so the install stays on Fedora CoreOS's own route.
 2. **The installed box's first boot rebases from the local archive, offline.**
    - The installer writes Fedora CoreOS to the disk with `coreos-installer install`. It grows the root partition and filesystem to the disk (Fedora CoreOS would do so only on first boot), mounts the installed root, and writes into its stateroot's `/var`: the archive as `/var/lib/andaru-install/andaru.oci`, and the seed as `/var/lib/andaru/install-seed.json` (0600 root), inside the wipeable tree so that a full reset removes an unconfirmed seed with everything else. Neither goes through Ignition, so no answer is written to `/boot`.
-   - The stock first boot rebases to it with `rpm-ostree rebase ostree-unverified-image:oci-archive:/var/lib/andaru-install/andaru.oci`, deletes the archive, and reboots.
-   - Once Andaru boots, it points the deployment at the registry with `bootc switch --mutate-in-place --enforce-container-sigpolicy ghcr.io/andaru-project/andaru:<version>`, with no download. Later updates are signature-checked as usual. Slice 5 decides how the box moves on from that version.
+   - The stock first boot deploys it with `ostree container image deploy --imgref ostree-unverified-image:oci-archive:/var/lib/andaru-install/andaru.oci --target-imgref ostree-image-signed:docker://ghcr.io/andaru-project/andaru:<version>`, which records the signed registry reference as the deployment's origin from the start, and reboots. Andaru's first successful boot deletes the archive, so a failed first boot can still retry offline. The disk must be at least 20 GB: the archive is about 1 GB and unpacking it needs as much again.
+   - The deployment's origin is the registry, so later updates are signature-checked as usual, with no second step. If slice 1's spike finds `--target-imgref` unusable, the fallback is `rpm-ostree rebase` from the archive followed by `bootc switch --mutate-in-place --enforce-container-sigpolicy` to the registry reference. Later updates are signature-checked as usual. Slice 5 decides how the box moves on from that version.
 3. **The installed image is verified once the box is online.** The archive carries no registry signature, and anything inside the ISO is only as trustworthy as the ISO: the operator verifies the ISO against the signed `SHA256SUMS` (call 5), as with any operating system. On the box, the first time Andaru can reach the registry, it checks that the release's signature covers the digest it booted, with the image's own policy. Until then the console and the web UI say the image is unverified; a mismatch is shown as a failure and audited.
 4. **The stock first boot has no network and no SSH.** Its Ignition config masks NetworkManager and `zincati`, disables `sshd.service` and `sshd.socket`, and holds the rebase unit, nothing else. Disable, not mask, for sshd, so Andaru can enable it later. Fedora's presets would otherwise enable sshd and DHCP on every port during that boot, and the enable link would survive the rebase. The image already ships the signature policy and keys, so Ignition writes none: copies written there would count as local changes and stop later images from updating them.
 5. **The ISO is signed.** The release workflow publishes `SHA256SUMS` for both ISOs and one `cosign sign-blob` bundle over it, made with the release key. That requires the release workflow to create the GitHub release, with `contents: write` for that job.
@@ -54,13 +54,13 @@ From the 2026-11-19 conversation:
 9. **DHCP management is allowed, with a warning.** Andaru treats DHCP management as an uplink (`UPLINK_MANAGEMENT`), so no `first/` or `last-lan/` is ever recorded, and a full reset then ends at the console. The installer's review screen says so, as setup does before it puts management on an uplink.
 10. **SSH: Andaru renders the authorized keys, and sshd reads only Andaru's file.**
    - **The file:** the engine writes `/var/lib/andaru/ssh/authorized_keys`, root-only, from the keys of accounts holding the administrator role, whenever accounts change. The file lives in the wipeable tree.
-   - **The image's sshd drop-in** sorts first, so its values win. It sets:
+   - **The image** removes Fedora CoreOS's `/etc/ssh/sshd_config.d/40-ssh-key-dir.conf` (its `AuthorizedKeysCommand`), and its own drop-in sorts first, so its values win. It sets:
      - `AuthorizedKeysFile /var/lib/andaru/ssh/authorized_keys`;
-     - `AuthorizedKeysCommand none`, which overrides Fedora CoreOS's `ssh-key-dir`;
      - `PasswordAuthentication no`;
-     - `ExposeAuthInfo yes`.
-   - **Who logged in:** the login is root. Andaru records which account's key was used from the key fingerprint sshd logs.
-   - **No per-login program:** no program runs per login, and the engine's root-only socket is not involved. An SELinux file context labels the file so sshd can read it.
+     - `AllowUsers root` and `PermitRootLogin prohibit-password`, so an administrator's key cannot log in as `core`.
+   - **Who logged in:** the login is root. Andaru records which account's key was used from the fingerprint in sshd's "Accepted publickey" log line. A key is accepted for one account only, so the fingerprint names one account.
+   - **No per-login program:** no program runs per login, and the engine's root-only socket is not involved.
+   - **SELinux:** a file context labels `/var/lib/andaru/ssh(/.*)?` as `ssh_home_t`. The engine restores the label each time it creates the directory, including after a full reset's wipe, because a file context applies only on relabel. The files the installer writes from the live environment are relabelled the same way on the first Andaru boot.
    - **When sshd runs:** Andaru enables sshd when the first key exists and disables it when none is left.
 11. **Console.** `andaru console` is a menu on tty1 and the serial console. It is open until an administrator account with a password exists, and opens on the setup step while setup is incomplete. Once an administrator has a password, the root shell and both resets ask for an administrator's password, while safe mode and status stay open. A full reset recreates `admin` with the password typed at reset, so the gate stays meaningful after it. A forgotten password is recovered with the kernel argument `andaru.recovery=1`, typed at the boot menu by someone with physical or hypervisor console access: that boot's console offers the full factory reset without the password, as the 2026-11-17 design's console reset did. Its entries are:
     - setup;
@@ -77,15 +77,15 @@ From the 2026-11-19 conversation:
 13. **Soft reset is its own journaled operation.** It runs in the engine, which stays up, and it keeps its journal at `/var/lib/andaru-reset/soft.json`, which the full reset's code and older images do not read, so a rollback to an older image can never take it for a full wipe. It does not use the full reset's fence: the box keeps its network while it runs. Its steps:
     1. **Identity first:** every other account, every API token and every session are revoked. Identity is not connectivity, so this step has no rollback and closes a compromised credential before anything else runs.
     2. **Network:** the soft-reset declaration is applied with the usual rollback timer and confirmed from a new session. If it rolls back, the network stays as it was.
-    3. **Cleanup:** add-ons' state and secrets no kept link references are removed, whichever way step 2 ended.
+    3. **Cleanup,** only after step 2 is confirmed: add-ons' state and secrets no kept link references are removed. If step 2 rolls back, the soft reset ends there: identity stays revoked, and the network, its secrets and the add-ons stay as they were, so the live configuration still finds everything it names.
     4. **Done:** the journal records each step, so a power loss resumes where it stopped.
 14. **The soft-reset declaration** is built from the saved one. It reuses the management closure's ancestry walk, not `managementLAN` itself, which refuses an uplink management segment that the installer allows:
     - **Links kept:** every physical link and PPPoE link, with its own addressing, plus every VLAN, bridge or bond that management or a kept link sits on, with everything under it.
     - **Segments and zones:** each kept link's segment, and those segments' zones, with no rules.
-    - **Management:** management, with its allowed sources and the address objects they name, and its DHCP and DNS service settings.
+    - **Management:** management, with its allowed sources and the address objects they name, and its DHCP, DHCPv6 and DNS service settings. The DNS service keeps only the management segment and no virtual addresses, since the objects those name go.
     - **Secrets:** exactly the secrets kept links reference, such as a PPPoE password.
     - **Everything else goes:** other VLANs, bridges and bonds, other zones, rules, NAT, and other objects.
-15. **The full reset is unchanged.** It still creates the `admin` account with the password asked at reset. SSH keys now live in the wipeable tree, so it wipes them, and SSH comes back when an administrator adds a key from the console or the web UI. Until then, the console and the web UI on the management LAN are the way in.
+15. **The full reset is unchanged.** It still creates the `admin` account with the password asked at reset. SSH keys now live in the wipeable tree, so it wipes them and disables sshd, and SSH comes back when an administrator adds a key from the console or the web UI. Until then, the console and the web UI on the management LAN are the way in.
 
 ## Installer
 
@@ -114,7 +114,7 @@ From the 2026-11-19 conversation:
 
 ## Slices
 
-1. **Lab spike, first:** grow the installed root and write into its stateroot before first boot; rebase from an `oci-archive` on stock Fedora CoreOS; `bootc switch --mutate-in-place --enforce-container-sigpolicy` to the registry; check that the next `bootc upgrade` is signature-checked and that the booted digest can be verified against the release signature. Record the ISO size against the 2 GiB asset limit, and how `coreos-installer iso customize` or a rebuilt ISO can carry a file of that size.
+1. **Lab spike, first:** rebuild the ISO with the archive and check that `iso customize` still works on it; write into the installed stateroot before first boot; deploy from the `oci-archive` with `--target-imgref` (or the fallback in call 2); check that the next `bootc upgrade` is signature-checked and that the booted digest can be verified against the release signature. Record the ISO size against the 2 GiB asset limit, and how `coreos-installer iso customize` or a rebuilt ISO can carry a file of that size.
 2. **Installer and ISO:** the installer, the archive, the seed, the ISO build, `SHA256SUMS` and its signature, and the GitHub release in the release workflow.
 3. **First boot:**
    - applying and confirming the seed;
@@ -135,6 +135,10 @@ From the 2026-11-19 conversation:
 - **Factory reset designs:** a soft reset now exists beside the full reset. The full reset also wipes SSH keys and add-ons. With SSH keys wiped, its "SSH from the management LAN" way back in becomes the console and the web UI until a key is added.
 - **`docs/dev/core-api.md`:** installing is from the ISO, and the lab route stays for development.
 
+## Open question
+
+- **A WAN on a VLAN or bond** (common on fibre: DHCP or static on VLAN 7, for example) is neither a physical link nor a PPPoE link, and nothing sits on it. Read literally, a soft reset drops it and the box loses the internet. The author's proposal: a link that carries the uplink segment (the one with the default route) counts as kept, with everything under it.
+
 ## Non-goals
 
 - A network installer: the ISO is the only install route.
@@ -144,7 +148,8 @@ From the 2026-11-19 conversation:
 
 ## Risks
 
-- **ISO size.** The live ISO plus the image archive may exceed GitHub's 2 GiB asset limit. Call 4's fallback to GHCR covers it, but downloading from GHCR needs an OCI client, not a browser.
+- **ISO size.** The live ISO plus the image archive may exceed GitHub's 2 GiB asset limit. Call 5's fallback to GHCR covers it, but downloading from GHCR needs an OCI client, not a browser.
+- **ISO size, measured:** for 0.5.0-a.1, x86_64 is about 0.91 GiB of live ISO plus 0.97 GiB of image, about 1.89 GiB, under the 2 GiB asset limit by about 110 MiB; aarch64 is about 1.73 GiB.
 - **The offline rebase is unproven.** Slice 1's spike decides whether an `oci-archive` rebase followed by `--mutate-in-place` gives a deployment that later updates verify like a registry one. If it does not, the design falls back to building install media with `bootc-image-builder`.
-- **A wrong management NIC** is caught only by the rollback timer. A headless box with no console then returns to the factory network, which runs DHCP on every port, and the operator must find it there.
+- **A wrong management NIC** is caught only by the rollback timer. The box then returns to the factory network and factory filter, which admits no new inbound connection, so only the console recovers it.
 - **The console before setup is an open root shell,** as on most appliances. That is accepted: there is nothing to protect yet.
