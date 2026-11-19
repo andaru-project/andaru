@@ -302,7 +302,7 @@ func TestCtlApplyUsageErrors(t *testing.T) {
 func TestCtlApplyAndApplies(t *testing.T) {
 	const awaiting = `{"id":"3","savedVersion":"7","state":"awaiting_confirmation","previous":null,"deadline":"2026-11-11T12:02:00Z","reason":"","createdAt":"2026-11-11T12:00:00Z","confirmTimeoutSeconds":60,"files":[]}`
 	const failed = `{"id":"3","savedVersion":"7","state":"failed","previous":null,"reason":"eth0 lost its IPv4 address","createdAt":"2026-11-11T12:00:00Z","confirmTimeoutSeconds":60,"files":[]}`
-	const pending = `{"id":"3","savedVersion":"7","state":"confirmed","previous":null,"reason":"takeover not yet permanent: disk; completes at the next boot","createdAt":"2026-11-11T12:00:00Z","confirmTimeoutSeconds":60,"files":[]}`
+	const pending = `{"id":"3","savedVersion":"7","state":"confirmed","previous":null,"reason":"confirmed; completes at the next boot","createdAt":"2026-11-11T12:00:00Z","confirmTimeoutSeconds":60,"files":[]}`
 	const list = `{"pointers":{"confirmed":null,"lastKnownGood":null,"pending":"3","live":"3"},"items":[]}`
 	for _, row := range []struct {
 		name         string
