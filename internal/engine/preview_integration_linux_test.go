@@ -84,8 +84,9 @@ func TestPreviewHTTPContract(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	defer slog.SetDefault(previous)
 
+	// An empty store still renders the catch-all that keeps unclassified ports down.
 	empty := configCall(h, "GET", "/api/v1/preview/network", "", "")
-	if empty.Code != 200 || !strings.Contains(empty.Body.String(), `"resolved":[],"files":[]`) || empty.Header().Get("Andaru-Saved-Version") != "0" {
+	if empty.Code != 200 || !strings.Contains(empty.Body.String(), `"resolved":[],"files":[{"path":"/run/systemd/network/51-andaru-unclassified.network"`) || empty.Header().Get("Andaru-Saved-Version") != "0" {
 		t.Fatalf("empty store: %d %s", empty.Code, empty.Body)
 	}
 	if w := configCall(h, "POST", "/api/v1/config/changes", ownerTopology(strings.Repeat("L", 300)+previewSentinel), ""); w.Code != 200 {
@@ -96,7 +97,7 @@ func TestPreviewHTTPContract(t *testing.T) {
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &body) != nil {
 		t.Fatalf("preview: %d %s", w.Code, w.Body)
 	}
-	if body.State != "preview" || body.SavedVersion != "1" || w.Header().Get("Andaru-Saved-Version") != "1" || body.Realizable == nil || *body.Realizable || len(body.Resolved) != 2 || len(body.Files) != 9 {
+	if body.State != "preview" || body.SavedVersion != "1" || w.Header().Get("Andaru-Saved-Version") != "1" || body.Realizable == nil || *body.Realizable || len(body.Resolved) != 2 || len(body.Files) != 10 {
 		t.Fatalf("envelope: %+v", body)
 	}
 	var options, foreign, tooLong bool

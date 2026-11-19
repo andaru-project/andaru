@@ -156,7 +156,8 @@ func TestNetworkdAcceptsRenderedFiles(t *testing.T) {
 	}
 	complaints := func(log string) (bad []string) {
 		for _, line := range strings.Split(log, "\n") {
-			if !strings.Contains(line, "50-andaru-") {
+			// The catch-all, 51-andaru-, included.
+			if !strings.Contains(line, "-andaru-") {
 				continue
 			}
 			for _, word := range []string{"Unknown", "Failed", "Invalid", "ignoring", "Ignoring"} {
