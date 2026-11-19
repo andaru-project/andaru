@@ -1,5 +1,5 @@
 #!/bin/sh
-# Checks a built Andaru image as a container, without booting it: its version, its packages, its unit states and
+# Checks a built Andaru image as a container, without booting it: its version, its packages, its unit states,
 # its SELinux labels and its signature policy. Booting it is the lab's job. Run it from the repository root;
 # SIGNED_NAMESPACE and COSIGN_PUB name a lab build's overrides.
 #   image-smoke.sh IMAGE VERSION   (ENGINE=docker to use docker instead of podman)
@@ -9,20 +9,32 @@ image=${1:?image}
 version=${2:?version}
 engine=${ENGINE:-podman}
 
-# The signature policy and both keys, byte for byte as the repository has them: which key a scope trusts is the
-# whole of the image's update security. The default must stay reject, or bootc refuses to enforce the policy at all.
+fail() {
+	echo "image-smoke: $*" >&2
+	exit 1
+}
+# The signature policy and both keys, byte for byte as the repository has them, and the policy's meaning: which key
+# a scope trusts is the whole of the image's update security, and bootc refuses to enforce a default other than reject.
 check_file() {
-	"$engine" run --rm "$image" cat "$1" | cmp -s - "$2" || { echo "image-smoke: $1 differs from $2" >&2; exit 1; }
+	"$engine" run --rm "$image" cat "$1" | cmp -s - "$2" || fail "$1 differs from $2"
 }
 rendered=$(mktemp)
 trap 'rm -f "$rendered"' EXIT
-sed "s|@NAMESPACE@|${SIGNED_NAMESPACE:-ghcr.io/andaru-project}|" image/signing/policy.json >"$rendered"
+namespace=${SIGNED_NAMESPACE:-ghcr.io/andaru-project}
+sed "s|@NAMESPACE@|$namespace|" image/signing/policy.json >"$rendered"
 check_file /etc/containers/policy.json "$rendered"
 check_file /etc/pki/containers/andaru.pub "${COSIGN_PUB:-image/cosign.pub}"
 check_file /etc/pki/containers/andaru-nightly.pub image/cosign-nightly.pub
+jq -e --arg ns "$namespace" '
+	def signed($key): . == [{"type": "sigstoreSigned", "keyPath": $key, "signedIdentity": {"type": "matchRepository"}}];
+	.default == [{"type": "reject"}]
+	and (.transports.docker[$ns] | signed("/etc/pki/containers/andaru.pub"))
+	and (.transports.docker[$ns + "/andaru-nightly"] | signed("/etc/pki/containers/andaru-nightly.pub"))
+	and ([.transports[][] | .[] | select(.type == "sigstoreSigned")] | length == 2)
+' "$rendered" >/dev/null || fail "the signature policy does not require the release key for $namespace and the nightly key for $namespace/andaru-nightly only"
 
 label=$("$engine" image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$image")
-[ "$label" = "$version" ] || { echo "image-smoke: version label is '$label', not '$version'" >&2; exit 1; }
+[ "$label" = "$version" ] || fail "version label is '$label', not '$version'"
 
 # shellcheck disable=SC2016 # this script runs inside the image, with VERSION from its environment
 "$engine" run --rm -e VERSION="$version" "$image" sh -eu -c '
