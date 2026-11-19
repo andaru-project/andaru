@@ -26,8 +26,7 @@ From the 2026-11-19 conversation:
 - **Safe mode:** a boot that enables no add-ons at all, to recover from an add-on that broke the box.
 - **Soft reset:**
   - It wipes everything except each interface's own network settings.
-  - VLANs stay, with their own settings: on fibre the WAN is often a VLAN. (This revises the first ruling that VLANs go.)
-  - Bridges and bonds go, except those a kept link or management sits on, which stay with everything under them.
+  - Every link stays with its own settings: physical links, VLANs, bonds, bridges and PPPoE links. On fibre the WAN is often a VLAN, and an uplink may be a bond. (This revises the first ruling that VLANs go.)
   - It keeps only the administrator performing the reset, with their password and SSH keys.
   - It keeps DHCP and DNS on the management LAN, and the audit log.
 - **Full factory reset:** the existing one ([2026-11-17 design](2026-11-17-factory-reset-data-design.md)). It wipes everything, the audit log included, and brings management back on a best-effort basis.
@@ -81,12 +80,12 @@ From the 2026-11-19 conversation:
     3. **Cleanup,** only after step 2 is confirmed: add-ons' state and secrets no kept link references are removed. If step 2 rolls back, the soft reset ends there: identity stays revoked, and the network, its secrets and the add-ons stay as they were, so the live configuration still finds everything it names.
     4. **Done:** the journal records each step, so a power loss resumes where it stopped. The journal records step 2's apply ID as soon as the apply exists, and whether step 2 succeeded is decided from that apply's own state, not the journal step: that generation confirmed means it succeeded. An apply still pending at boot has rolled back, and a journal with no apply ID means step 2 never started; either way the soft reset ends there. Step 3 is retried on each of the next three boots; if it still fails, the soft reset ends failed, which the console and the audit log show, and it no longer counts as active. The console then offers to retry step 3.
     - **Exclusion:** an image update refuses to start while a soft reset is active, and the engine's idle check counts it. A soft reset is never a reason for a full reset to refuse. Before the full reset plans, it rolls back a pending step 2 as a rollback timer would and stops step 3. The pending apply is therefore gone before the full reset's preview binds its inputs, as the 2026-11-15 design requires. Its wipe then removes the soft-reset journal with everything else. Add-ons are stopped before step 3.
-14. **The soft-reset declaration** is built from the saved one. It reuses the management closure's ancestry walk, not `managementLAN` itself, which refuses an uplink management segment that the installer allows:
-    - **Links kept:** every physical link, VLAN and PPPoE link, with its own addressing, plus every bridge or bond that management or a kept link sits on, with everything under it.
-    - **Segments and zones:** each kept link's segment, and those segments' zones, with no rules. A kept segment whose delegated-prefix source (`ipv6.from`) goes gets `ipv6` mode `none`, as `KeptDeclaration` already does, and loses that segment's DHCPv6 entry and router advertisements, which need IPv6.
+14. **The soft-reset declaration** is built from the saved one by removing, never by rebuilding, so it works whatever management is (an uplink included):
+    - **Links kept:** every link, with its own addressing, so nothing a kept link sits on can go missing.
+    - **Segments and zones:** every segment, and the zones they belong to, with no rules.
     - **Management:** management, with its allowed sources and the address objects they name, and its DHCP, DHCPv6 and DNS service settings. The DNS service keeps only the management segment and no virtual addresses, since the objects those name go.
     - **Secrets:** exactly the secrets kept links reference, such as a PPPoE password.
-    - **Everything else goes:** other bridges and bonds, other zones, rules, NAT, and other objects.
+    - **Everything else goes:** rules, NAT, other objects, DHCP and DNS on segments other than management's, and zones no segment belongs to.
 15. **The full reset is unchanged, except as stated here:** it removes the install staging directory, and a soft reset never stops it. It still creates the `admin` account with the password asked at reset. SSH keys now live in the wipeable tree, so it wipes them and disables sshd, and SSH comes back when an administrator adds a key from the console or the web UI. Until then, the console and the web UI on the management LAN are the way in.
 
 ## Installer
@@ -150,5 +149,4 @@ From the 2026-11-19 conversation:
 - **The offline deploy is unproven.** Slice 1's spike decides whether `ostree container image deploy --target-imgref` from the archive gives a deployment that later updates verify like a registry one. If it does not, the design falls back to building install media with `bootc-image-builder`.
 - **A wrong management NIC** is caught only by the rollback timer. The box then returns to the factory network and factory filter, which admits no new inbound connection, so only the console recovers it.
 - **The console before setup is an open root shell,** as on most appliances. That is accepted: there is nothing to protect yet.
-- **A WAN on a bond or bridge with nothing on it** is dropped by a soft reset: only VLANs, physical and PPPoE links are kept on their own. A box whose uplink is such a bond loses its internet until it is reconfigured.
 - **The console password gate is not a boundary against the boot menu:** anyone who can edit kernel arguments there can reach a root shell anyway (`rd.break`, `init=`). The gate keeps casual console access, such as IPMI or a hypervisor console, from a root shell, and `andaru.recovery=1` weakens nothing beyond that.
