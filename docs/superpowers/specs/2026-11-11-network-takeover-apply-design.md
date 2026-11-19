@@ -1,5 +1,7 @@
 # Network takeover and confirmed apply
 
+Partly superseded on 2026-11-18 by [Andaru as an appliance image](2026-11-18-appliance-image-design.md): Andaru owns the network from the first boot, so the takeover rules, the pre-Andaru baseline and competing-writer suppression no longer apply. The rollback timer, confirmation from a new session and the confirmed-generation boot rules stay binding for every apply.
+
 ## Status and intent
 
 Scope approved in conversation: take a cloud-image Debian host over from netplan and cloud-init without dropping the operator's session, and build the apply machinery every later area reuses: live generations, a rollback timer that outlives the engine, explicit confirmation, and boot from the confirmed generation only. Not implemented behaviour. Contracts remain provisional until Andaru 1.0.

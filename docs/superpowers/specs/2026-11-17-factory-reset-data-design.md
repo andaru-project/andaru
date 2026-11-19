@@ -1,6 +1,8 @@
 # Wipeable state and factory-reset boot
 
-Status: approved by the owner on 2026-11-17, as the playback in that conversation. This amends the approved [LAN-recoverable factory-reset design](https://github.com/andaru-project/andaru/pull/59) (`docs/superpowers/specs/2026-11-15-factory-reset-design.md`, not on `main`). Where the two documents disagree, this one wins. A later merge of that file must not restore a superseded rule.
+Partly superseded on 2026-11-18 by [Andaru as an appliance image](2026-11-18-appliance-image-design.md): the Debian, dpkg, takeover and OpenSSH rules no longer apply. The wipe, the kept copies and the boot after a wipe stay.
+
+Status: approved by the owner on 2026-11-17, as the playback in that conversation. This amends the approved [LAN-recoverable factory-reset design](https://github.com/andaru-project/andaru/pull/59) ([2026-11-15-factory-reset-design.md](2026-11-15-factory-reset-design.md)). Where the two documents disagree, this one wins.
 
 This document does not implement factory reset. It records where Andaru data lives, what a wipe deletes, and which kept copy boots afterwards. Shipping a reset command still waits for the prerequisites named in the 2026-11-15 design, except where this document changes the recovery contract those prerequisites must satisfy.
 

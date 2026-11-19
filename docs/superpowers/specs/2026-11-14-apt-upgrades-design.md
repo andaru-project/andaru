@@ -1,5 +1,7 @@
 # Conventional Debian upgrades and explicit recovery
 
+Superseded on 2026-11-18 by [Andaru as an appliance image](2026-11-18-appliance-image-design.md): Andaru no longer ships as a Debian package.
+
 Status: approved by the owner on 2026-11-14. Slice 2 of issue #13.
 
 ## Intent and owner decisions

@@ -1,5 +1,7 @@
 # Interactive takeover assistant
 
+Superseded on 2026-11-18 by [Andaru as an appliance image](2026-11-18-appliance-image-design.md): Andaru owns the network from the first boot, so there is no takeover.
+
 ## Status and intent
 
 Requested in conversation: a takeover should not be fully automatic. Like a firewall's console setup (pfSense's "assign interfaces"), Andaru detects what the host does today, shows it to the operator pre-filled, lets them change it, shows exactly what will happen, and only then saves and applies. It is a front end, not a gate: quitting it changes nothing, nothing waits for it, and `andaru ctl apply network --takeover` keeps working. Not implemented behaviour. Contracts remain provisional until Andaru 1.0.
