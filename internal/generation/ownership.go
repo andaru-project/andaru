@@ -3,6 +3,7 @@ package generation
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -12,56 +13,42 @@ import (
 	"github.com/andaru-project/andaru/internal/kept"
 )
 
-// Ownership is what a factory reset carries across the wipe so the fresh tree still owns host networking:
-// the takeover, the baseline kind, whose nftables mask it is, and ifupdown's interfaces with their dhcpcd DUIDs.
-// It holds none of the pre-Andaru files, so no hand-back to them is possible afterwards.
-type Ownership struct {
-	Takeover bool `json:"takeover"`
-	// Live records that a generation ran, so the reset brings a network up even on a host never taken over.
-	Live           bool              `json:"live,omitempty"`
-	Kind           string            `json:"kind,omitempty"`
-	NftablesMasked bool              `json:"nftablesMasked,omitempty"`
-	Ifupdown       *IfupdownBaseline `json:"ifupdown,omitempty"`
+// baselineManifest is generations/baseline/manifest.json. A factory reset writes it, marked reset, so the fresh tree
+// stays fenced. Older trees also carry the keys of a takeover's baseline: they are read and ignored, and never written.
+type baselineManifest struct {
+	Kind           json.RawMessage `json:"kind,omitempty"`
+	Files          json.RawMessage `json:"files,omitempty"`
+	Ifupdown       json.RawMessage `json:"ifupdown,omitempty"`
+	NftablesMasked json.RawMessage `json:"nftablesMasked,omitempty"`
+	// Reset marks a baseline a factory reset wrote: it holds no files, and boot is console-required without a generation.
+	Reset bool `json:"reset,omitempty"`
 }
 
-// ReadOwnership reads the record from the live tree. A host Andaru never took over has an empty record.
+func (r Realizer) baselineDir() string { return filepath.Join(r.dir(), "baseline") }
+
+// Ownership is what a factory reset carries across the wipe so the fresh tree still owns host networking.
+type Ownership struct {
+	// Live records that a generation ran, so the reset brings a network up and the fresh tree stays fenced.
+	Live bool `json:"live,omitempty"`
+}
+
+// ReadOwnership reads the record from the live tree.
 func (r Realizer) ReadOwnership() (Ownership, error) {
 	p, err := readPointers(r.dir())
 	if err != nil {
 		return Ownership{}, err
 	}
 	var m baselineManifest
-	captured, err := readJSON(filepath.Join(r.baselineDir(), "manifest.json"), &m)
-	if err != nil {
+	if _, err = readJSON(filepath.Join(r.baselineDir(), "manifest.json"), &m); err != nil {
 		return Ownership{}, err
 	}
-	// A tree an earlier reset wrote ran Andaru's network even with nothing live now: it stays fenced.
-	ran := p.Live != nil || captured && m.Reset
-	if !p.Takeover {
-		return Ownership{Live: ran}, nil
-	}
-	if !captured || m.Kind == "" {
-		return Ownership{}, errors.New("the takeover's baseline is missing; ownership cannot be carried over")
-	}
-	o := Ownership{Takeover: true, Live: ran, Kind: m.Kind, NftablesMasked: m.NftablesMasked}
-	if m.Kind == "ifupdown" {
-		if m.Ifupdown == nil {
-			return Ownership{}, errors.New("the ifupdown baseline lists no interfaces")
-		}
-		for _, i := range m.Ifupdown.Interfaces {
-			if i.DHCP && (i.Identity == nil || len(i.Identity.DUID) == 0) {
-				return Ownership{}, fmt.Errorf("the ifupdown baseline has no DUID for %s", i.Name)
-			}
-		}
-		b := *m.Ifupdown
-		b.Connected = []string{}
-		o.Ifupdown = &b
-	}
-	return o, nil
+	// Andaru ran the network if a generation runs or was ever confirmed (boot can fence a box whose confirmed
+	// generation no longer loads), or if an earlier reset wrote the tree: the reset then brings a network up.
+	return Ownership{Live: p.Live != nil || p.Confirmed != nil || p.LastKnownGood != nil || m.Reset}, nil
 }
 
-// WriteOwnership writes the record into an empty generations directory: pointers with only the takeover, and a
-// baseline manifest with no files, marked as a reset tree.
+// WriteOwnership writes the record into an empty generations directory: empty pointers and, when a generation ran,
+// a baseline manifest with no files, marked as a reset tree.
 func (r Realizer) WriteOwnership(o Ownership) error {
 	if err := os.MkdirAll(r.dir(), 0o700); err != nil {
 		return err
@@ -75,32 +62,23 @@ func (r Realizer) WriteOwnership(o Ownership) error {
 			return fmt.Errorf("ownership goes only into an empty generations directory; %s exists", e.Name())
 		}
 	}
-	// A host whose generation ran without the takeover flag still gets the marker, so its boots stay fenced.
-	if o.Kind != "" || o.Live {
+	if o.Live {
 		if err := os.Mkdir(r.baselineDir(), 0o700); err != nil {
 			return err
 		}
-		m := baselineManifest{Kind: o.Kind, Files: []baselineFile{}, Ifupdown: o.Ifupdown, NftablesMasked: o.NftablesMasked, Reset: true}
-		if err := writeJSON(filepath.Join(r.baselineDir(), "manifest.json"), m); err != nil {
+		if err := writeJSON(filepath.Join(r.baselineDir(), "manifest.json"), baselineManifest{Reset: true}); err != nil {
 			return err
 		}
 	}
-	return r.writePointers("ownership:pointers", Pointers{Takeover: o.Takeover})
+	return r.writePointers("ownership:pointers", Pointers{})
 }
 
-// resetTree reports a tree a factory reset wrote: no generation may hand the host back to its pre-Andaru setup.
-// A manifest that exists but cannot be read counts as one: only its absence proves an ordinary tree.
+// resetTree reports a tree a factory reset wrote. A manifest that exists but cannot be read counts as one: only its
+// absence proves an ordinary tree.
 func (r Realizer) resetTree() bool {
 	var m baselineManifest
 	_, err := readJSON(filepath.Join(r.baselineDir(), "manifest.json"), &m)
 	return err != nil || m.Reset
-}
-
-// handsBack reports a tree whose baseline is the host's own pre-Andaru configuration, with its own firewall.
-func (r Realizer) handsBack() bool {
-	var m baselineManifest
-	captured, err := readJSON(filepath.Join(r.baselineDir(), "manifest.json"), &m)
-	return err == nil && captured && !m.Reset
 }
 
 const denyAllComment = "andaru deny-all"
@@ -160,7 +138,7 @@ func (r Realizer) setUp() bool {
 		}
 	}
 	p, err := readPointers(r.dir())
-	if err != nil || p.Confirmed != nil || p.LastKnownGood != nil || p.Takeover {
+	if err != nil || p.Confirmed != nil || p.LastKnownGood != nil {
 		return true
 	}
 	return r.resetTree()
@@ -172,6 +150,14 @@ func (r Realizer) bareFilter(ctx context.Context) error {
 		return r.DenyAll(ctx)
 	}
 	return r.factoryFilter(ctx)
+}
+
+// bare is what runs with no generation: the catch-all, once the box is set up.
+func (r Realizer) bare() []placed {
+	if r.setUp() {
+		return []placed{catchAll}
+	}
+	return nil
 }
 
 // fence leaves a host on which no generation runs with its bare filter and, once set up, the catch-all:
@@ -198,7 +184,7 @@ func (r Realizer) Fence(ctx context.Context, denyAll bool) error {
 
 // Teardown removes the live generation from the host before a factory reset wipes the state tree: its files under
 // /run, the devices it made, the services it ran, and its filter, which becomes deny-all. A host with no live
-// generation and no takeover runs nothing of Andaru's, so nothing there is touched. It may run again after a crash.
+// generation runs nothing of Andaru's, so nothing there is touched. It may run again after a crash.
 func (r Realizer) Teardown(ctx context.Context) error {
 	unlock, err := r.lock()
 	if err != nil {
@@ -209,11 +195,10 @@ func (r Realizer) Teardown(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if p.Live == nil && !p.Takeover {
+	if p.Live == nil {
 		return nil
 	}
-	// Paths only, so a live generation whose stored files are damaged still comes off; with no live generation,
-	// a taken-over host runs its captured baseline, and those files go too.
+	// Paths only, so a live generation whose stored files are damaged still comes off.
 	set, err := r.live(p)
 	if err != nil {
 		return err

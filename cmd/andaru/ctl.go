@@ -41,7 +41,7 @@ type applyReply struct {
 
 var objectIDPattern = regexp.MustCompile(`^(lnk|seg|zon|adr|svc|rul|dhp|pfw|oto|dh6|vip)_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 var applyIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
-var errUsage = errors.New("usage: andaru ctl [--socket PATH] links|prefixes|openapi|config <show|list|get|create|replace|delete|changes|order>|versions <list|get>|preview network [--saved-version N]|apply network --saved-version N [--takeover] [--confirm-timeout S]|applies <list|get ID|confirm ID|rollback ID>|takeover [--accept-detected] [--confirm-timeout S]|backup <create|inspect|restore>|users <bootstrap-admin|list|get|create|update|disable|delete|password-reset>|tokens <create|list|revoke>|audit list|factory-reset <run|abort|status>")
+var errUsage = errors.New("usage: andaru ctl [--socket PATH] links|prefixes|openapi|config <show|list|get|create|replace|delete|changes|order>|versions <list|get>|preview network [--saved-version N]|apply network --saved-version N [--confirm-timeout S]|applies <list|get ID|confirm ID|rollback ID>|backup <create|inspect|restore>|users <bootstrap-admin|list|get|create|update|disable|delete|password-reset>|tokens <create|list|revoke>|audit list|factory-reset <run|abort|status>")
 
 func collectionName(s string) bool {
 	return slices.Contains([]string{"links", "segments", "zones", "addresses", "services", "dhcp", "dhcp6", "virtualAddresses", "policy/input", "policy/forward", "nat/port-forwards", "nat/one-to-one"}, s)
@@ -266,7 +266,6 @@ func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 			saved = &v
 			return e
 		})
-		takeover := fs.Bool("takeover", false, "replace netplan and cloud-init as this host's network configuration")
 		timeout := fs.Int("confirm-timeout", 120, "seconds until the change is rolled back unless confirmed (30-600)")
 		if e := fs.Parse(args[2:]); e != nil {
 			return req, e
@@ -277,9 +276,8 @@ func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 		req.method, req.path, req.kind, req.apply = "POST", "/api/v1/applies", "apply", "apply"
 		req.payload, _ = json.Marshal(struct {
 			SavedVersion          config.Version `json:"savedVersion"`
-			Takeover              bool           `json:"takeover"`
 			ConfirmTimeoutSeconds int            `json:"confirmTimeoutSeconds"`
-		}{*saved, *takeover, *timeout})
+		}{*saved, *timeout})
 		return req, nil
 	}
 	if args[0] == "applies" {
@@ -349,9 +347,6 @@ func runCtl(ctx context.Context, socket string, args []string, stdin io.Reader, 
 	}
 	if len(args) > 0 && args[0] == "kept" {
 		return storeRecovery(ctx, socket, "/var/lib/andaru", args[1:], stdout, stderr, nil)
-	}
-	if len(args) > 0 && args[0] == "takeover" {
-		return runTakeover(ctx, socket, args[1:], stdin, stdout, stderr)
 	}
 	if len(args) > 0 && slices.Contains([]string{"users", "tokens", "audit"}, args[0]) {
 		return runIdentity(ctx, socket, args, stdout, stderr)

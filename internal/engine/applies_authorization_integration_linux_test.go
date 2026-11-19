@@ -20,7 +20,7 @@ func TestApplyRefusesStaleIdentityRevisionBeforeActivation(t *testing.T) {
 		b.identities.revision++
 		b.identities.mu.Unlock()
 	}
-	response := b.call(http.MethodPost, appliesPath, takeoverBody)
+	response := b.call(http.MethodPost, appliesPath, applyBody)
 	assertAPIError(t, response, http.StatusPreconditionFailed, "IDENTITY_REVISION_CHANGED")
 	if slices.Contains(b.calls, "activate 1") {
 		t.Fatalf("stale candidate reached activation: %q", b.calls)
@@ -38,7 +38,7 @@ func TestApplyBlocksAccountEditAcrossActivationGap(t *testing.T) {
 			return nil
 		})
 	}
-	b.apply(takeoverBody)
+	b.apply(applyBody)
 	if !errors.Is(mutationErr, authz.ErrTransitionInProgress) {
 		t.Fatalf("concurrent identity mutation error = %v", mutationErr)
 	}
@@ -49,7 +49,7 @@ func TestApplyBlocksAccountEditAcrossActivationGap(t *testing.T) {
 
 func TestAuthorizationChangingConfirmationRequiresNewHumanAdministrator(t *testing.T) {
 	b := newApplyBench(t)
-	applied := b.apply(takeoverBody)
+	applied := b.apply(applyBody)
 	accountID := "00000000-0000-4000-8000-000000000001"
 	admin := identity.Account{ID: accountID, Kind: identity.Human, Enabled: true, RoleIDs: []string{authz.AdministratorRoleID}}
 	service := identity.Account{ID: accountID, Kind: identity.Service, Enabled: true, RoleIDs: []string{authz.AdministratorRoleID}}

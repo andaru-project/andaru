@@ -14,7 +14,7 @@ const session: Session = {
 const saved = { state: 'saved', savedVersion: '8', items: [{ version: '8', value: { id: 'rol_one', name: 'Operator', description: '', capabilities: ['status.read'] } }] };
 const live = { items: [{ id: 'rol_one', name: 'Operator', description: '', capabilities: ['status.read', 'configuration.read'] }] };
 const capabilities = { items: ['status.read', 'configuration.read'] };
-const applies = { pointers: { confirmed: '6', lastKnownGood: '5', pending: null, live: '6' }, items: [{ id: '6', savedVersion: '6', state: 'confirmed', takeover: false, previous: '5', reason: '', createdAt: '2026-11-16T10:00:00Z', confirmTimeoutSeconds: 120, files: [] }] };
+const applies = { pointers: { confirmed: '6', lastKnownGood: '5', pending: null, live: '6' }, items: [{ id: '6', savedVersion: '6', state: 'confirmed', previous: '5', reason: '', createdAt: '2026-11-16T10:00:00Z', confirmTimeoutSeconds: 120, files: [] }] };
 
 it('keeps saved role edits visibly separate from effective live permissions', async () => {
   fetchQueue(jsonResponse(200, saved), jsonResponse(200, live), jsonResponse(200, capabilities), jsonResponse(200, applies));

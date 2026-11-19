@@ -35,7 +35,7 @@ func configurationFixture(t *testing.T) (http.Handler, *config.Store) {
 		t.Fatal(e)
 	}
 	t.Cleanup(func() { s.Close() })
-	return newHandler(host.ReadLinks, newSavedHandler(s, host.ReadLinks, host.ReadRealizerFacts, nil, http.NotFoundHandler(), nil)), s
+	return newHandler(host.ReadLinks, newSavedHandler(s, host.ReadLinks, host.ReadRealizerFacts, http.NotFoundHandler(), nil)), s
 }
 func configCall(h http.Handler, method, path, body, tag string) *httptest.ResponseRecorder {
 	r := rootRequest(method, path)
@@ -123,7 +123,6 @@ func TestConfigurationHTTPContract(t *testing.T) {
 		"/api/v1/versions": {"get", "head"}, "/api/v1/versions/{id}": {"get", "head"}, "/api/v1/preview/network": {"get", "head"},
 		"/api/v1/applies": {"get", "head", "post"}, "/api/v1/applies/{id}": {"get", "head"},
 		"/api/v1/applies/{id}/confirmation": {"post"}, "/api/v1/applies/{id}/rollback": {"post"},
-		"/api/v1/takeover/proposal": {"get", "head"}, "/api/v1/preview/network/draft": {"post"},
 		"/api/v1/config/policy/{chain}": {"get", "head", "post"}, "/api/v1/config/policy/{chain}/{id}": {"get", "head", "put", "delete"},
 		"/api/v1/config/policy/{chain}/order": {"put"}, "/api/v1/config/nat/{list}": {"get", "head", "post"},
 		"/api/v1/config/nat/{list}/{id}": {"get", "head", "put", "delete"}, "/api/v1/config/nat/{list}/order": {"put"},
@@ -135,7 +134,7 @@ func TestConfigurationHTTPContract(t *testing.T) {
 		"/api/v1/users/{id}/password": {"put"}, "/api/v1/tokens": {"get", "head", "post"},
 		"/api/v1/tokens/{selector}": {"delete"}, "/api/v1/audit/events": {"get", "head"},
 		"/api/v1/audit/export": {"get", "head"},
-		"/api/v1/session": {"get", "post", "delete"}, "/api/v1/sessions": {"get"},
+		"/api/v1/session":      {"get", "post", "delete"}, "/api/v1/sessions": {"get"},
 		"/api/v1/sessions/{id}": {"delete"}, "/api/v1/startup-status": {"get", "head"},
 	}
 	if len(document.Paths) != len(expected) {

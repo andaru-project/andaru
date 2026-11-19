@@ -28,7 +28,7 @@ func (b *resetBench) ran(prefix string) bool {
 	return slices.ContainsFunc(b.commands, func(c string) bool { return strings.HasPrefix(c, prefix) })
 }
 
-// newResetBench points the reset at a temporary tree with fake systemd and dpkg.
+// newResetBench points the reset at a temporary tree with a fake systemd.
 func newResetBench(t *testing.T) *resetBench {
 	t.Helper()
 	if os.Geteuid() != 0 {
@@ -41,7 +41,7 @@ func newResetBench(t *testing.T) *resetBench {
 	if err := os.MkdirAll(filepath.Join(resetStateDir, "configuration"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	b.env = reset.Env{StateDir: resetStateDir, Dir: resetDir, LockWait: time.Second, Run: func(_ context.Context, name string, args ...string) ([]byte, error) {
+	b.env = reset.Env{StateDir: resetStateDir, Dir: resetDir, Run: func(_ context.Context, name string, args ...string) ([]byte, error) {
 		b.mu.Lock()
 		defer b.mu.Unlock()
 		b.commands = append(b.commands, filepath.Base(name)+" "+strings.Join(args, " "))
@@ -52,7 +52,7 @@ func newResetBench(t *testing.T) *resetBench {
 	return b
 }
 
-func (b *resetBench) plan(t *testing.T, phase reset.Phase, takeover bool) {
+func (b *resetBench) plan(t *testing.T, phase reset.Phase, live bool) {
 	t.Helper()
 	verifier, _ := identity.HashResetPassword(context.Background(), nil)
 	if _, err := reset.Plan(context.Background(), b.env, verifier, false, false); err != nil {
@@ -63,7 +63,7 @@ func (b *resetBench) plan(t *testing.T, phase reset.Phase, takeover bool) {
 	var op map[string]any
 	json.Unmarshal(data, &op)
 	op["phase"] = phase
-	op["ownership"] = map[string]any{"takeover": takeover}
+	op["ownership"] = map[string]any{"live": live}
 	op["ownershipKnown"] = phase != reset.Planned
 	data, _ = json.Marshal(op)
 	if err := os.WriteFile(path, data, 0o600); err != nil {

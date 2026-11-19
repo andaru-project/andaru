@@ -192,7 +192,7 @@ export class ApiClient {
 
   apply(savedVersion: string) {
     return this.request<Apply>('/api/v1/applies', {
-      method: 'POST', body: JSON.stringify({ savedVersion, takeover: false, confirmTimeoutSeconds: 120 }),
+      method: 'POST', body: JSON.stringify({ savedVersion, confirmTimeoutSeconds: 120 }),
     }, true);
   }
 

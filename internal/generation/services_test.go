@@ -17,7 +17,7 @@ func served(kea string) map[string]string {
 
 func TestActivateStartsServicesAfterNetworkd(t *testing.T) {
 	b := newBench(t)
-	id := b.gen(false, served(`{"Dhcp4":{}}`))
+	id := b.gen(served(`{"Dhcp4":{}}`))
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestActivateStartsServicesAfterNetworkd(t *testing.T) {
 func TestAnchorUnitFailureWithAnAnchorLeavesTheCheckToUnbound(t *testing.T) {
 	b := newBench(t)
 	b.net.fail = "systemctl start unbound-anchor.service"
-	if err := b.r.Activate(t.Context(), b.gen(false, served(`{"Dhcp4":{}}`))); err != nil || b.index("unbound-checkconf") < 0 {
+	if err := b.r.Activate(t.Context(), b.gen(served(`{"Dhcp4":{}}`))); err != nil || b.index("unbound-checkconf") < 0 {
 		t.Fatalf("%v; the check did not run after the anchor unit failed: %q", err, b.net.argv)
 	}
 }
@@ -51,7 +51,7 @@ func TestMissingAnchorFailsTheApply(t *testing.T) {
 	if err := os.Remove(filepath.Join(b.r.Root, unboundAnchor)); err != nil {
 		t.Fatal(err)
 	}
-	id := b.gen(false, served(`{"Dhcp4":{}}`))
+	id := b.gen(served(`{"Dhcp4":{}}`))
 	if err := b.r.Activate(t.Context(), id); err == nil || !strings.Contains(err.Error(), "root trust anchor") {
 		t.Fatalf("activated without a root trust anchor: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestMissingAnchorFailsTheApply(t *testing.T) {
 func TestInvalidServiceConfigRestoresThePrevious(t *testing.T) {
 	b := newBench(t)
 	b.net.fail = "kea-dhcp4 -t"
-	id := b.gen(false, served(`{"Dhcp4":{}}`))
+	id := b.gen(served(`{"Dhcp4":{}}`))
 	if err := b.r.Activate(t.Context(), id); err == nil {
 		t.Fatal("activated a configuration Kea refuses")
 	}
@@ -84,7 +84,7 @@ func TestKeaCheckWaitsForLateInterfaces(t *testing.T) {
 			}
 		}
 	}
-	id := b.gen(false, served(`{"Dhcp4":{}}`))
+	id := b.gen(served(`{"Dhcp4":{}}`))
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatalf("activation failed while the served interface was still being created: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestKeaNotRunningFailsActivation(t *testing.T) {
 	b := newBench(t)
 	// systemd reports a Type=simple unit active at fork; only Kea's own answer says it serves.
 	b.net.keaDead = true
-	id := b.gen(false, served(`{"Dhcp4":{}}`))
+	id := b.gen(served(`{"Dhcp4":{}}`))
 	if err := b.r.Activate(t.Context(), id); err == nil || b.read(id).State.State != Failed {
 		t.Fatalf("activation survived a DHCP server that does not run: %v", err)
 	}
@@ -110,9 +110,9 @@ func TestKeaNotRunningFailsActivation(t *testing.T) {
 	}
 }
 
-func TestRollbackToBaselineStopsServices(t *testing.T) {
+func TestRollbackOfFirstApplyStopsServices(t *testing.T) {
 	b := newBench(t)
-	id := b.gen(false, served(`{"Dhcp4":{}}`))
+	id := b.gen(served(`{"Dhcp4":{}}`))
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestRollbackToBaselineStopsServices(t *testing.T) {
 	}
 	for _, path := range []string{keaFile, unboundFile, resolvedFile} {
 		if b.exists(path[1:]) {
-			t.Fatalf("%s left on the baseline", path)
+			t.Fatalf("%s left with no generation", path)
 		}
 	}
 	for _, c := range []string{"systemctl stop kea-dhcp4.service", "systemctl restart unbound.service", "systemctl try-reload-or-restart systemd-resolved.service"} {
@@ -134,7 +134,7 @@ func TestRollbackToBaselineStopsServices(t *testing.T) {
 
 func TestGenerationWithoutServicesTouchesNoDaemon(t *testing.T) {
 	b := newBench(t)
-	id := b.gen(false, one)
+	id := b.gen(one)
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -148,8 +148,8 @@ func TestGenerationWithoutServicesTouchesNoDaemon(t *testing.T) {
 }
 
 func TestBootCreatesServiceDirectories(t *testing.T) {
-	b := cloud(t)
-	id := b.gen(true, served(`{"Dhcp4":{}}`))
+	b := newBench(t)
+	id := b.gen(served(`{"Dhcp4":{}}`))
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestBootCreatesServiceDirectories(t *testing.T) {
 func TestUnboundRefusalRestoresThePrevious(t *testing.T) {
 	b := newBench(t)
 	b.net.fail = "unbound-checkconf"
-	id := b.gen(false, served(`{"Dhcp4":{}}`))
+	id := b.gen(served(`{"Dhcp4":{}}`))
 	if err := b.r.Activate(t.Context(), id); err == nil || b.read(id).State.State != Failed || b.exists(unboundFile[1:]) {
 		t.Fatalf("activated a configuration Unbound refuses: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestUnboundRefusalRestoresThePrevious(t *testing.T) {
 func TestKeaSocketsNotReadyFailsActivation(t *testing.T) {
 	b := newBench(t)
 	b.net.keaSockets = "retrying"
-	id := b.gen(false, served(`{"Dhcp4":{}}`))
+	id := b.gen(served(`{"Dhcp4":{}}`))
 	if err := b.r.Activate(t.Context(), id); err == nil || b.read(id).State.State != Failed {
 		t.Fatalf("activation passed with sockets retrying: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestKeaSocketsNotReadyFailsActivation(t *testing.T) {
 // Without DHCP the old clients' names go before Unbound starts again.
 func TestRemovingDHCPClearsLeaseNames(t *testing.T) {
 	b := newBench(t)
-	first := b.gen(false, served(`{"Dhcp4":{}}`))
+	first := b.gen(served(`{"Dhcp4":{}}`))
 	if err := b.r.Activate(t.Context(), first); err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func TestRemovingDHCPClearsLeaseNames(t *testing.T) {
 	writeFile(t, filepath.Join(b.net.root, leasesDir, "leases.conf"), "server:\n\tlocal-data: \"old.home.arpa. 60 IN A 192.168.40.9\"\n")
 	noKea := served("")
 	delete(noKea, keaFile)
-	if err := b.r.Activate(t.Context(), b.gen(false, noKea)); err != nil {
+	if err := b.r.Activate(t.Context(), b.gen(noKea)); err != nil {
 		t.Fatal(err)
 	}
 	if data, _ := os.ReadFile(filepath.Join(b.net.root, leasesDir, "leases.conf")); string(data) != "server:\n" {
@@ -216,14 +216,14 @@ func TestBadKeaConfigFailsWithoutWaiting(t *testing.T) {
 			checks++
 		}
 	}
-	if err := b.r.Activate(t.Context(), b.gen(false, served(`{"Dhcp4":{}}`))); err == nil || checks != 1 {
+	if err := b.r.Activate(t.Context(), b.gen(served(`{"Dhcp4":{}}`))); err == nil || checks != 1 {
 		t.Fatalf("a refused configuration was retried %d times (%v)", checks, err)
 	}
 }
 
 func TestActivateStartsDHCPv6(t *testing.T) {
 	b := newBench(t)
-	id := b.gen(false, map[string]string{kea6File: `{"Dhcp6":{}}`})
+	id := b.gen(map[string]string{kea6File: `{"Dhcp6":{}}`})
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +248,7 @@ func TestDHCPv6CheckWaitsForLateInterfaces(t *testing.T) {
 			}
 		}
 	}
-	if err := b.r.Activate(t.Context(), b.gen(false, map[string]string{kea6File: `{"Dhcp6":{}}`})); err != nil || checks != 3 {
+	if err := b.r.Activate(t.Context(), b.gen(map[string]string{kea6File: `{"Dhcp6":{}}`})); err != nil || checks != 3 {
 		t.Fatalf("checked %d times: %v", checks, err)
 	}
 }
@@ -262,21 +262,21 @@ func TestBadDHCPv6ConfigFailsWithoutWaiting(t *testing.T) {
 			checks++
 		}
 	}
-	if err := b.r.Activate(t.Context(), b.gen(false, map[string]string{kea6File: `{"Dhcp6":{}}`})); err == nil || checks != 1 {
+	if err := b.r.Activate(t.Context(), b.gen(map[string]string{kea6File: `{"Dhcp6":{}}`})); err == nil || checks != 1 {
 		t.Fatalf("a refused configuration was retried %d times (%v)", checks, err)
 	}
 }
 
 func TestGenerationWithoutDHCPv6StopsIt(t *testing.T) {
 	b := newBench(t)
-	first := b.gen(false, map[string]string{kea6File: `{"Dhcp6":{}}`})
+	first := b.gen(map[string]string{kea6File: `{"Dhcp6":{}}`})
 	if err := b.r.Activate(t.Context(), first); err != nil {
 		t.Fatal(err)
 	}
 	if err := b.r.Confirm(t.Context(), first); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.r.Activate(t.Context(), b.gen(false, served(""))); err != nil {
+	if err := b.r.Activate(t.Context(), b.gen(served(""))); err != nil {
 		t.Fatal(err)
 	}
 	if b.index("systemctl stop kea-dhcp6.service") < 0 {
@@ -287,7 +287,7 @@ func TestGenerationWithoutDHCPv6StopsIt(t *testing.T) {
 // Dropping DHCPv6 alone starts the sync, which removes its routes: networkd no longer does.
 func TestDroppingDHCPv6StartsTheSync(t *testing.T) {
 	b := newBench(t)
-	first := b.gen(false, map[string]string{kea6File: `{"Dhcp6":{}}`})
+	first := b.gen(map[string]string{kea6File: `{"Dhcp6":{}}`})
 	if err := b.r.Activate(t.Context(), first); err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +295,7 @@ func TestDroppingDHCPv6StartsTheSync(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.net.argv = nil
-	if err := b.r.Activate(t.Context(), b.gen(false, map[string]string{})); err != nil {
+	if err := b.r.Activate(t.Context(), b.gen(map[string]string{})); err != nil {
 		t.Fatal(err)
 	}
 	if b.index("systemctl start --no-block andaru-leases.service") < 0 {
@@ -313,7 +313,7 @@ const (
 func TestVirtualAddressDevice(t *testing.T) {
 	b := newBench(t)
 	b.live(map[string]string{"50-andaru-eth0.network": uplinkDHCP})
-	id := b.gen(false, map[string]string{"50-andaru-eth0.network": uplinkDHCP, "50-andaru-andaru-vip.netdev": vipNetdev, "50-andaru-andaru-vip.network": vipNetwork})
+	id := b.gen(map[string]string{"50-andaru-eth0.network": uplinkDHCP, "50-andaru-andaru-vip.netdev": vipNetdev, "50-andaru-andaru-vip.network": vipNetwork})
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +324,7 @@ func TestVirtualAddressDevice(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.net.argv = nil
-	if err := b.r.Activate(t.Context(), b.gen(false, map[string]string{"50-andaru-eth0.network": uplinkDHCP})); err != nil {
+	if err := b.r.Activate(t.Context(), b.gen(map[string]string{"50-andaru-eth0.network": uplinkDHCP})); err != nil {
 		t.Fatal(err)
 	}
 	if b.index("networkctl delete andaru-vip") < b.index("networkctl reload") || b.index("networkctl delete andaru-vip") < 0 {

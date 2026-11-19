@@ -37,35 +37,35 @@ type FileEntry struct {
 
 // Manifest is written once by the engine and never changed.
 type Manifest struct {
-	// Baseline is what a takeover generation replaces: "netplan" or "ifupdown"; empty on other generations.
-	Baseline              string      `json:"baseline,omitempty"`
-	ID                    int         `json:"id"`
-	SavedVersion          string      `json:"savedVersion"`
-	AuthorizationDigest   string      `json:"authorizationDigest"`
-	IdentityRevision      int64       `json:"identityRevision"`
-	CreatedAt             time.Time   `json:"createdAt"`
-	Takeover              bool        `json:"takeover"`
-	ConfirmTimeoutSeconds int         `json:"confirmTimeoutSeconds"`
-	Files                 []FileEntry `json:"files"`
+	// Baseline and Takeover are what older generations say of a takeover: read and ignored, and never written.
+	Baseline              json.RawMessage `json:"baseline,omitempty"`
+	ID                    int             `json:"id"`
+	SavedVersion          string          `json:"savedVersion"`
+	AuthorizationDigest   string          `json:"authorizationDigest"`
+	IdentityRevision      int64           `json:"identityRevision"`
+	CreatedAt             time.Time       `json:"createdAt"`
+	Takeover              json.RawMessage `json:"takeover,omitempty"`
+	ConfirmTimeoutSeconds int             `json:"confirmTimeoutSeconds"`
+	Files                 []FileEntry     `json:"files"`
 }
 
 // State is the record realize keeps; the pointers decide.
 type State struct {
 	State string `json:"state"`
-	// Previous is what was live when this generation was activated; nil is the pre-Andaru baseline.
+	// Previous is what was live when this generation was activated; nil is no generation.
 	Previous *int       `json:"previous"`
 	Deadline *time.Time `json:"deadline,omitempty"`
 	Reason   string     `json:"reason,omitempty"`
 }
 
-// Pointers is the single commit point. A nil Live means the baseline is in /run.
+// Pointers is the single commit point. A nil Live means no generation is in /run.
 type Pointers struct {
 	Confirmed     *int `json:"confirmed"`
 	LastKnownGood *int `json:"lastKnownGood"`
 	Pending       *int `json:"pending"`
 	Live          *int `json:"live"`
-	// Takeover records that a takeover was confirmed, so boot keeps netplan and cloud-init out for good.
-	Takeover bool `json:"takeover"`
+	// Takeover is a key older trees carry, from when a confirmed takeover set it: read and ignored, and never written.
+	Takeover json.RawMessage `json:"takeover,omitempty"`
 }
 
 type Generation struct {

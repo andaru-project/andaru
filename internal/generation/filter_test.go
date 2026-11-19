@@ -36,7 +36,7 @@ func (b *bench) lastIndex(prefix string) int {
 
 func TestActivateLoadsFilterFirst(t *testing.T) {
 	b := newBench(t)
-	id := b.gen(false, filtered(one, "aa"))
+	id := b.gen(filtered(one, "aa"))
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestActivateLoadsFilterFirst(t *testing.T) {
 func TestActivateFilterFailureMovesNothing(t *testing.T) {
 	b := newBench(t)
 	b.net.fail = "nft -f " + b.dir
-	id := b.gen(false, filtered(one, "aa"))
+	id := b.gen(filtered(one, "aa"))
 	if err := b.r.Activate(t.Context(), id); err == nil {
 		t.Fatal("activated without its filter")
 	}
@@ -70,15 +70,15 @@ func TestActivateFilterFailureMovesNothing(t *testing.T) {
 func TestVerifyChecksTableComment(t *testing.T) {
 	b := newBench(t)
 	b.net.tableComment = "sha256:something-else"
-	id := b.gen(false, filtered(one, "aa"))
+	id := b.gen(filtered(one, "aa"))
 	if err := b.r.Activate(t.Context(), id); err == nil || !strings.Contains(b.read(id).State.Reason, "filter") {
 		t.Fatalf("a foreign table passed verification: %v %+v", err, b.read(id).State)
 	}
 }
 
-func TestRollbackToBaselineDeletesTableLast(t *testing.T) {
-	b := cloud(t)
-	id := b.gen(true, filtered(one, "aa"))
+func TestRollbackOfFirstApplyStopsForwarding(t *testing.T) {
+	b := newBench(t)
+	id := b.gen(filtered(one, "aa"))
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -86,13 +86,10 @@ func TestRollbackToBaselineDeletesTableLast(t *testing.T) {
 	if err := b.r.Rollback(t.Context(), id, "operator"); err != nil {
 		t.Fatal(err)
 	}
-	if reload, drop := b.index("networkctl reload"), b.index("nft delete table inet andaru"); reload < 0 || drop < reload {
-		t.Fatalf("the table went before the files: %q", b.net.argv)
-	}
 	// networkd leaves IPv4Forwarding= as it was when a file omits it, so nothing would stop routing unfiltered.
 	v4, _ := os.ReadFile(filepath.Join(b.net.root, ipv4Forwarding))
-	if b.net.table != "" || b.forwarding() != "0\n" || string(v4) != "0\n" {
-		t.Fatalf("table %q, forwarding v6 %q v4 %q on the baseline", b.net.table, b.forwarding(), v4)
+	if b.net.table != "andaru factory" || b.forwarding() != "0\n" || string(v4) != "0\n" {
+		t.Fatalf("table %q, forwarding v6 %q v4 %q with no generation", b.net.table, b.forwarding(), v4)
 	}
 }
 
@@ -103,14 +100,14 @@ func (b *bench) forwarding() string {
 
 func TestRollbackToGenerationLoadsItsFilterFirst(t *testing.T) {
 	b := newBench(t)
-	first := b.gen(false, filtered(one, "11"))
+	first := b.gen(filtered(one, "11"))
 	if err := b.r.Activate(t.Context(), first); err != nil {
 		t.Fatal(err)
 	}
 	if err := b.r.Confirm(t.Context(), first); err != nil {
 		t.Fatal(err)
 	}
-	second := b.gen(false, filtered(two, "22"))
+	second := b.gen(filtered(two, "22"))
 	if err := b.r.Activate(t.Context(), second); err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +125,7 @@ func TestRollbackToGenerationLoadsItsFilterFirst(t *testing.T) {
 
 func TestBootFallsBackWhenTheFilterDoesNotLoad(t *testing.T) {
 	b := newBench(t)
-	first := b.gen(false, filtered(one, "11"))
+	first := b.gen(filtered(one, "11"))
 	for _, id := range []int{first} {
 		if err := b.r.Activate(t.Context(), id); err != nil {
 			t.Fatal(err)
@@ -137,7 +134,7 @@ func TestBootFallsBackWhenTheFilterDoesNotLoad(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	second := b.gen(false, filtered(two, "22"))
+	second := b.gen(filtered(two, "22"))
 	if err := b.r.Activate(t.Context(), second); err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +159,7 @@ func TestFilterFollowsRenamedAdapters(t *testing.T) {
 	// Rendered while the card with this MAC was eth7 and another card (now absent) was eth9; the kernel now calls the first eth0.
 	s := "# interface eth7 02:00:00:00:00:01\n# interface eth9 02:00:00:00:00:99\n" +
 		strings.Replace(script("aa"), "\tcomment", "\tset uplinks { type ifname; elements = { \"eth7\", \"eth9\" }; }\n\tcomment", 1)
-	id := b.gen(false, map[string]string{"50-andaru-eth0.network": uplinkDHCP, filterEntry: s})
+	id := b.gen(map[string]string{"50-andaru-eth0.network": uplinkDHCP, filterEntry: s})
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +172,7 @@ func TestFilterFollowsRenamedAdapters(t *testing.T) {
 func TestBootLoadsFilterAfterRenaming(t *testing.T) {
 	b := newBench(t)
 	files := filtered(map[string]string{"50-andaru-eth0.network": uplinkDHCP, "50-andaru-eth0.link": "[Match]\nPermanentMACAddress=02:00:00:00:00:01\n\n[Link]\nName=eth0\n"}, "aa")
-	id := b.gen(false, files)
+	id := b.gen(files)
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +194,7 @@ func TestFilterWithoutIPv6(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(b.net.root, "proc")); err != nil {
 		t.Fatal(err)
 	}
-	id := b.gen(false, filtered(one, "aa"))
+	id := b.gen(filtered(one, "aa"))
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -208,8 +205,9 @@ func TestFilterWithoutIPv6(t *testing.T) {
 
 // A failed listing is not an absent table: the filter may still be loaded, so the rollback must not report success.
 func TestRollbackKeepsPendingWhenTableListFails(t *testing.T) {
-	b := cloud(t)
-	id := b.gen(true, filtered(one, "aa"))
+	b := newBench(t)
+	b.live(one)
+	id := b.gen(filtered(one, "aa"))
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +222,7 @@ func TestFilterFailsClosedForAbsentCard(t *testing.T) {
 	b := newBench(t)
 	s := "# interface eth0 02:00:00:00:00:99\n# interface eth7 02:00:00:00:00:01\n" +
 		strings.Replace(script("aa"), "\tcomment", "\tset uplinks { type ifname; elements = { \"eth0\", \"eth7\" }; }\n\tcomment", 1)
-	id := b.gen(false, map[string]string{"50-andaru-eth0.network": uplinkDHCP, filterEntry: s})
+	id := b.gen(map[string]string{"50-andaru-eth0.network": uplinkDHCP, filterEntry: s})
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +233,7 @@ func TestFilterFailsClosedForAbsentCard(t *testing.T) {
 
 func TestBootReportsWhyTheFilterFailed(t *testing.T) {
 	b := newBench(t)
-	id := b.gen(false, filtered(one, "aa"))
+	id := b.gen(filtered(one, "aa"))
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -250,10 +248,10 @@ func TestBootReportsWhyTheFilterFailed(t *testing.T) {
 	}
 }
 
-// nft took the filter but its readback failed: booting the baseline must not leave that table behind.
-func TestBootOnBaselineDropsHalfLoadedFilter(t *testing.T) {
-	b := cloud(t)
-	id := b.gen(true, filtered(one, "aa"))
+// nft took the filter but its readback failed: with no generation usable, deny-all replaces that table.
+func TestBootWithoutGenerationReplacesHalfLoadedFilter(t *testing.T) {
+	b := newBench(t)
+	id := b.gen(filtered(one, "aa"))
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -263,44 +261,19 @@ func TestBootOnBaselineDropsHalfLoadedFilter(t *testing.T) {
 	b.reboot()
 	b.net.table = ""
 	b.net.tableComment = "sha256:other"
-	if err := b.r.Boot(t.Context()); err != nil {
-		t.Fatal(err)
+	if err := b.r.Boot(t.Context()); err == nil {
+		t.Fatal("boot reported success with nothing usable")
 	}
-	if b.net.table != "" || b.pointers().Live != nil {
-		t.Fatalf("table %q, live %v on the baseline", b.net.table, b.pointers().Live)
+	if b.net.table != denyAllComment || b.pointers().Live != nil {
+		t.Fatalf("table %q, live %v with no generation", b.net.table, b.pointers().Live)
 	}
-	b.wantDisk(netplan)
-	// The takeover's mask goes with it, so the host's own firewall loads at the next boot.
-	if b.net.ran("systemctl unmask nftables.service") != 1 {
-		t.Fatalf("nftables.service left masked: %q", b.net.argv)
-	}
-}
-
-// A confirmed netplan takeover rolled back at runtime to the baseline gives the host its own firewall back too.
-func TestRollbackToNetplanBaselineUnmasksNftables(t *testing.T) {
-	b := cloud(t)
-	first := b.takeover()
-	if err := b.r.Confirm(t.Context(), first); err != nil {
-		t.Fatal(err)
-	}
-	second := b.gen(false, two)
-	if err := b.r.Activate(t.Context(), second); err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, filepath.Join(b.dir, itoa(first), "files", "50-andaru-eth0.network"), "evil")
-	b.net.argv = nil
-	if err := b.r.Rollback(t.Context(), second, "operator"); err != nil {
-		t.Fatal(err)
-	}
-	if b.pointers().Live != nil || b.net.ran("systemctl unmask nftables.service") != 1 {
-		t.Fatalf("live %v, commands %q", b.pointers().Live, b.net.argv)
-	}
+	b.wantDisk(withCatchAll(map[string]string{}))
 }
 
 // A previous generation whose filter does not load gives way to last-known-good, files and filter both.
 func TestRollbackSkipsGenerationWhoseFilterFails(t *testing.T) {
 	b := newBench(t)
-	first, second := b.gen(false, filtered(one, "11")), b.gen(false, filtered(two, "22"))
+	first, second := b.gen(filtered(one, "11")), b.gen(filtered(two, "22"))
 	for _, id := range []int{first, second} {
 		if err := b.r.Activate(t.Context(), id); err != nil {
 			t.Fatal(err)
@@ -309,7 +282,7 @@ func TestRollbackSkipsGenerationWhoseFilterFails(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	third := b.gen(false, filtered(map[string]string{"50-andaru-eth0.network": uplinkStatic}, "33"))
+	third := b.gen(filtered(map[string]string{"50-andaru-eth0.network": uplinkStatic}, "33"))
 	if err := b.r.Activate(t.Context(), third); err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +300,7 @@ func TestRollbackSkipsGenerationWhoseFilterFails(t *testing.T) {
 func TestNoNftMeansNoTable(t *testing.T) {
 	b := newBench(t)
 	b.net.noNft = true
-	if err := b.r.Activate(t.Context(), b.gen(false, one)); err != nil {
+	if err := b.r.Activate(t.Context(), b.gen(one)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -335,7 +308,7 @@ func TestNoNftMeansNoTable(t *testing.T) {
 // Removing the filter checks nft works before any file moves: files must never run under a filter that stays.
 func TestRemovingTheFilterChecksNftFirst(t *testing.T) {
 	b := newBench(t)
-	first := b.gen(false, filtered(one, "aa"))
+	first := b.gen(filtered(one, "aa"))
 	if err := b.r.Activate(t.Context(), first); err != nil {
 		t.Fatal(err)
 	}
@@ -343,22 +316,22 @@ func TestRemovingTheFilterChecksNftFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.net.argv, b.net.fail = nil, "nft -j list"
-	if err := b.r.Activate(t.Context(), b.gen(false, one)); err == nil || b.index("networkctl reload") >= 0 {
+	if err := b.r.Activate(t.Context(), b.gen(one)); err == nil || b.index("networkctl reload") >= 0 {
 		t.Fatalf("files moved while the filter could not be removed: %v %q", err, b.net.argv)
 	}
 }
 
 // A confirmed filter that half-loaded at boot must not stay over last-known-good's unfiltered files.
 func TestBootDropsHalfLoadedFilterForUnfilteredFallback(t *testing.T) {
-	b := cloud(t)
-	first := b.gen(true, one)
+	b := newBench(t)
+	first := b.gen(one)
 	if err := b.r.Activate(t.Context(), first); err != nil {
 		t.Fatal(err)
 	}
 	if err := b.r.Confirm(t.Context(), first); err != nil {
 		t.Fatal(err)
 	}
-	second := b.gen(false, filtered(one, "aa"))
+	second := b.gen(filtered(one, "aa"))
 	if err := b.r.Activate(t.Context(), second); err != nil {
 		t.Fatal(err)
 	}
@@ -377,9 +350,9 @@ func TestBootDropsHalfLoadedFilterForUnfilteredFallback(t *testing.T) {
 
 // A candidate dropped for its filter leaves none of its files behind, .link files included.
 func TestBootRemovesTheLinksOfAnUnusableCandidate(t *testing.T) {
-	b := cloud(t)
+	b := newBench(t)
 	link := "50-andaru-eth9.link"
-	id := b.gen(true, filtered(map[string]string{"50-andaru-eth0.network": uplinkDHCP, link: "[Match]\nPermanentMACAddress=02:00:00:00:00:09\n\n[Link]\nName=eth9\n"}, "aa"))
+	id := b.gen(filtered(map[string]string{"50-andaru-eth0.network": uplinkDHCP, link: "[Match]\nPermanentMACAddress=02:00:00:00:00:09\n\n[Link]\nName=eth9\n"}, "aa"))
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
@@ -388,8 +361,8 @@ func TestBootRemovesTheLinksOfAnUnusableCandidate(t *testing.T) {
 	}
 	b.reboot()
 	b.net.fail = "nft -f"
-	if err := b.r.Boot(t.Context()); err != nil {
-		t.Fatal(err)
+	if err := b.r.Boot(t.Context()); err == nil {
+		t.Fatal("boot reported success with nothing usable")
 	}
 	if b.exists(netDir + link) {
 		t.Fatal("the unusable candidate's .link file stayed")

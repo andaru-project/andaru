@@ -92,51 +92,29 @@ func TestParseManaged(t *testing.T) {
 	}
 }
 
-func TestReadBaseline(t *testing.T) {
+func TestReadBootUnit(t *testing.T) {
 	root := t.TempDir()
-	for path, body := range map[string]string{
-		"usr/sbin/netplan": "",
-		"etc/systemd/system/sysinit.target.wants/andaru-network-boot.service": "",
-		"lib/netplan/PLACEHOLDER":                     "",
-		"usr/lib/netplan/PLACEHOLDER":                 "",
-		"run/netplan/x.yaml":                          "network: {}\n",
-		"run/systemd/network/10-netplan-eth0.network": "[Network]\nDHCP=ipv4\n",
-		"run/systemd/network/10-netplan-eth1.network": "[Network]\nAddress=192.0.2.2/24\nDNS=1.1.1.1\n",
-		"run/systemd/network/10-netplan-eth2.network": "[Network]\nDomains=example.org\n",
-		"run/systemd/network/50-andaru-eth3.network":  "[Network]\nDNS=9.9.9.9\n",
-	} {
-		full := filepath.Join(root, path)
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
+	wanted := filepath.Join(root, "etc/systemd/system/sysinit.target.wants/andaru-network-boot.service")
+	if readBootUnit(root) {
+		t.Fatal("a unit that is not enabled counted as enabled")
 	}
-	got, err := readBaseline(root)
-	if err != nil {
+	if err := os.MkdirAll(filepath.Dir(wanted), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if !got.Netplan || got.Ifupdown || !got.BootUnit ||
-		!slices.Equal(got.StrayYAML, []string{"/run/netplan/x.yaml"}) ||
-		!slices.Equal(got.StaticDNS, []string{"/run/systemd/network/10-netplan-eth1.network", "/run/systemd/network/10-netplan-eth2.network"}) {
-		t.Fatalf("baseline = %+v", got)
-	}
-	if err := os.MkdirAll(filepath.Join(root, "sbin"), 0o755); err != nil {
+	if err := os.WriteFile(wanted, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "sbin/ifup"), nil, 0o755); err != nil {
-		t.Fatal(err)
+	if !readBootUnit(root) {
+		t.Fatal("an enabled unit not seen")
 	}
 	// A masked unit is a link to /dev/null: it resolves, and it never runs.
-	wanted := filepath.Join(root, "etc/systemd/system/sysinit.target.wants/andaru-network-boot.service")
 	if err := os.Remove(wanted); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink("/dev/null", wanted); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := readBaseline(root); got.BootUnit {
+	if readBootUnit(root) {
 		t.Fatal("a masked boot unit counted as enabled")
 	}
 	// Or the mask sits beside a wants link that still points at the vendor unit.
@@ -149,11 +127,8 @@ func TestReadBaseline(t *testing.T) {
 	if err := os.Symlink("/dev/null", filepath.Join(root, "etc/systemd/system/andaru-network-boot.service")); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := readBaseline(root); got.BootUnit {
+	if readBootUnit(root) {
 		t.Fatal("a unit masked in /etc/systemd/system counted as enabled")
-	}
-	if got, _ := readBaseline(root); !got.Ifupdown {
-		t.Fatal("ifupdown not seen")
 	}
 }
 
@@ -278,32 +253,16 @@ func TestReadManagedWithoutNetworkd(t *testing.T) {
 }
 
 func TestParseResolvectl(t *testing.T) {
-	global, links, err := ParseResolvectl([]byte("Global: 192.0.2.1 2001:db8::1\nLink 2 (ens18): 192.0.2.53\n  192.0.2.54\nLink 3 (lo):\n"))
+	global, links, err := parseResolvectl([]byte("Global: 192.0.2.1 2001:db8::1\nLink 2 (ens18): 192.0.2.53\n  192.0.2.54\nLink 3 (lo):\n"))
 	if err != nil || !slices.Equal(global, []string{"192.0.2.1", "2001:db8::1"}) || !slices.Equal(links["ens18"], []string{"192.0.2.53", "192.0.2.54"}) || links["lo"] == nil || len(links["lo"]) != 0 {
 		t.Fatalf("dns: %v %v %v", global, links, err)
 	}
-	global, links, err = ParseResolvectl([]byte("Global: lab.example\nLink 2 (ens18): corp.example ~.\n"))
+	global, links, err = parseResolvectl([]byte("Global: lab.example\nLink 2 (ens18): corp.example ~.\n"))
 	if err != nil || !slices.Equal(global, []string{"lab.example"}) || !slices.Equal(links["ens18"], []string{"corp.example", "~."}) {
 		t.Fatalf("domain: %v %v %v", global, links, err)
 	}
-	if _, _, err := ParseResolvectl([]byte("garbage\n")); err == nil {
+	if _, _, err := parseResolvectl([]byte("garbage\n")); err == nil {
 		t.Fatal("garbage accepted")
-	}
-}
-
-func TestReadBaselineSeesMaskedIfupdown(t *testing.T) {
-	root := t.TempDir()
-	if err := os.MkdirAll(root+"/etc/systemd/system", 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if b, err := readBaseline(root); err != nil || b.IfupdownMasked {
-		t.Fatalf("unmasked: %+v %v", b, err)
-	}
-	if err := os.Symlink("/dev/null", root+"/etc/systemd/system/networking.service"); err != nil {
-		t.Fatal(err)
-	}
-	if b, err := readBaseline(root); err != nil || !b.IfupdownMasked {
-		t.Fatalf("masked: %+v %v", b, err)
 	}
 }
 

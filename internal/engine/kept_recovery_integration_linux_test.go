@@ -45,7 +45,7 @@ func TestStoreRecoveryThroughRunningEngine(t *testing.T) {
 	t.Cleanup(func() { recoveryKeptRoot = "" })
 	handler := newHandler(func(context.Context) ([]host.LinkStatus, error) { return nil, nil },
 		newSavedHandler(store, func(context.Context) ([]host.LinkStatus, error) { return nil, nil },
-			func() (host.RealizerFacts, error) { return host.RealizerFacts{}, nil }, nil, http.NotFoundHandler(), nil))
+			func() (host.RealizerFacts, error) { return host.RealizerFacts{}, nil }, http.NotFoundHandler(), nil))
 	sock := filepath.Join(peer, "engine.sock")
 	startTestEngine(t, sock, handler)
 	bin := andaruTestBinary(t)

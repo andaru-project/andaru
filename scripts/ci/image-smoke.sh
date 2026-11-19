@@ -46,7 +46,8 @@ for u in systemd-networkd.service andaru-engine.service andaru-network-boot.serv
 	andaru-leases.path andaru-prefixes.path andaru-prefixes.timer kea-dhcp4.service kea-dhcp6.service unbound.service; do
 	state "$u" enabled
 done
-for u in sshd.service zincati.service andaru-web.service; do
+# Nothing updates the image by itself: a factory reset has no fence against an update until the update path exists.
+for u in sshd.service zincati.service andaru-web.service bootc-fetch-apply-updates.timer rpm-ostreed-automatic.timer; do
 	state "$u" disabled
 done
 for u in NetworkManager.service NetworkManager-wait-online.service systemd-networkd-wait-online.service; do
@@ -54,7 +55,7 @@ for u in NetworkManager.service NetworkManager-wait-online.service systemd-netwo
 done
 # First boot applies presets to every unit; the states above must survive that.
 systemctl preset-all --preset-mode=enable-only >/dev/null 2>&1 || fail "presets do not apply"
-for u in sshd.service zincati.service andaru-web.service; do
+for u in sshd.service zincati.service andaru-web.service bootc-fetch-apply-updates.timer rpm-ostreed-automatic.timer; do
 	state "$u" disabled
 done
 state systemd-networkd-wait-online.service masked

@@ -14,7 +14,6 @@ import (
 
 	"github.com/andaru-project/andaru/internal/audit"
 	"github.com/andaru-project/andaru/internal/config"
-	"github.com/andaru-project/andaru/internal/generation"
 	"github.com/andaru-project/andaru/internal/host"
 	"github.com/andaru-project/andaru/internal/identity"
 	"github.com/andaru-project/andaru/internal/securefs"
@@ -98,9 +97,8 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 		}
 	}()
 	defer func() { cancel(context.Canceled); <-stopped }()
-	read := hostReader{Links: host.ReadLinks, Facts: host.ReadRealizerFacts, Managed: host.ReadManaged, Baseline: host.ReadBaseline, Route: host.ReadDefaultRoutes, Resolved: host.ReadResolved}
+	read := hostReader{Links: host.ReadLinks, Facts: host.ReadRealizerFacts, Managed: host.ReadManaged, BootUnit: host.ReadBootUnit}
 	applies := newAppliesHandler(store.RealizationInput, read, newSystemdRunner(stateDir), stateDir, identities, coordinator)
-	live := newLiveHandler(applies, newTakeoverHandler(store.RealizationInput, store.Draft, read, stateDir))
 	identityAPI := newIdentityAPI(identities, store, coordinator)
 	auditAPI := newAuditAPI(coordinator)
 	backups := newBackupHandler(store, identities, coordinator, stateDir, host.ReadLinks)
@@ -110,7 +108,7 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	if err = audits.Reconcile(ctx, coordinator); err != nil && !errors.Is(err, audit.ErrReconciliationComplete) {
 		return fmt.Errorf("reconcile identity audit operations: %w", err)
 	}
-	rootAPI := newHandlerWithAPIs(host.ReadLinks, newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, previewIdentities(read, generation.Dir(stateDir)), live, backups), identityAPI, auditAPI)
+	rootAPI := newHandlerWithAPIs(host.ReadLinks, newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, applies, backups), identityAPI, auditAPI)
 	if web == nil {
 		err = serveUnix(lifetime, socketPath, rootAPI)
 	} else {

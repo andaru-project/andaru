@@ -71,9 +71,9 @@ Tags: `stable` and the release version (`1.2.3`, `1.2.3-rcN`). A version tag is 
 
 1. **Image and CI.** The Containerfile for both architectures, built on every pull request and pushed and signed on tags, with the signature policy, the service changes, Fedora's paths and names, the pre-setup filter and the factory network. Qualified on a Proxmox VM: boot, apply and confirm a declaration, Kea DHCP with lease events, Unbound, PPPoE, and bootc refusing an unsigned image.
 2. **Install media.** The customised live ISO with the signed rebase.
-3. **Deletion.** First, the idle check, writer stop and fence that factory reset takes from the `upgrade` package move into reset, and reset's dpkg locks are replaced by a fence against a concurrent image update. Then the Debian packaging, the APT release jobs, the takeover subsystem, the netplan and ifupdown readers, the rest of the `upgrade` package and the AppArmor profiles are deleted. The `andaru-project/apt` repository is archived.
+3. **Deletion.** First, the idle check and writer stop that factory reset takes from the `upgrade` package move into reset, and reset's dpkg locks go. Nothing on the image updates by itself (zincati and the bootc and rpm-ostree update timers are off, which `image-smoke.sh` checks), so the fence against a concurrent image update waits for slice 5. Then the Debian packaging, the APT release jobs, the takeover subsystem, the netplan and ifupdown readers, the rest of the `upgrade` package and the AppArmor profiles are deleted. The `andaru-project/apt` repository is archived.
 4. **Setup.** The appliance wizard: console access, SSH, management election, first administrator and the web service, against the merged setup design minus what this document supersedes.
-5. **Updates.** Engine-driven `bootc upgrade` and rollback, and state across an image rollback.
+5. **Updates.** Engine-driven `bootc upgrade` and rollback, state across an image rollback, and the factory reset's fence against a concurrent image update.
 6. **Add-ons.** The catalog, the Quadlet rendering and Tailscale as the first add-on. The first task is a lab check of Tailscale in a container under SELinux, with host networking and `/dev/net/tun`.
 7. **VPN.** Andaru-managed WireGuard, OpenVPN and IPsec, with the IPsec implementation chosen there.
 8. **SELinux.** Policy modules for Andaru and Kea.

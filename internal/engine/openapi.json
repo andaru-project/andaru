@@ -2177,10 +2177,10 @@
       ],
       "post": {
         "operationId": "confirmApply",
-        "summary": "Keep a live apply; on a takeover, remove netplan and cloud-init as network writers",
+        "summary": "Keep a live apply",
         "responses": {
           "200": {
-            "description": "The confirmed apply; a non-empty reason means the takeover completes at the next boot",
+            "description": "The confirmed apply",
             "content": {
               "application/json": {
                 "schema": {
@@ -2299,190 +2299,6 @@
             }
           },
           "409": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/takeover/proposal": {
-      "get": {
-        "operationId": "proposeTakeover",
-        "summary": "Describe what the host does now as a change batch the takeover assistant can offer",
-        "responses": {
-          "200": {
-            "description": "Read-only; nothing is saved or applied",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TakeoverProposal"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "405": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        }
-      },
-      "head": {
-        "operationId": "headProposeTakeover",
-        "responses": {
-          "200": {
-            "description": "No body"
-          },
-          "403": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "405": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/preview/network/draft": {
-      "post": {
-        "operationId": "previewDraft",
-        "summary": "Render and judge a change batch without saving it",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "/api/v1/schema#/$defs/changes"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "The batch as it would be rendered on this host; nothing is saved",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DraftResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "405": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "412": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Structured failure; no secret values",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "422": {
             "description": "Structured failure; no secret values",
             "content": {
               "application/json": {
@@ -6385,7 +6201,6 @@
               "DHCP6_UNANNOUNCED",
               "DELEGATED_PREFIX_TOO_SHORT",
               "DNS_NOT_APPLIED",
-              "TAKEOVER_LIMIT",
               "FOREIGN_FILTER",
               "MANAGEMENT_REQUIRED",
               "DHCP_WITHOUT_DNS"
@@ -6456,11 +6271,6 @@
             "$ref": "#/components/schemas/Version",
             "description": "Must be the saved head: the version the operator previewed."
           },
-          "takeover": {
-            "type": "boolean",
-            "default": false,
-            "description": "Replace netplan and cloud-init as the host's network configuration. Required exactly when netplan still configures the host."
-          },
           "confirmTimeoutSeconds": {
             "type": "integer",
             "minimum": 30,
@@ -6476,7 +6286,6 @@
         "required": [
           "id",
           "savedVersion",
-          "takeover",
           "state",
           "previous",
           "reason",
@@ -6491,9 +6300,6 @@
           },
           "savedVersion": {
             "$ref": "#/components/schemas/Version"
-          },
-          "takeover": {
-            "type": "boolean"
           },
           "state": {
             "type": "string",
@@ -6516,7 +6322,7 @@
                 "type": "null"
               }
             ],
-            "description": "What was live before this apply; null is the pre-Andaru baseline."
+            "description": "What was live before this apply; null is no generation."
           },
           "deadline": {
             "type": "string",
@@ -6620,7 +6426,7 @@
                     "type": "null"
                   }
                 ],
-                "description": "What runs now; null is the pre-Andaru baseline. Differs from confirmed after a boot fallback."
+                "description": "What runs now; null is no generation (the bare filter, and the catch-all once set up). Differs from confirmed after a boot fallback."
               }
             }
           },
@@ -6671,14 +6477,9 @@
               "DELEGATED_PREFIX_TOO_SHORT",
               "DNS_NOT_APPLIED",
               "BOOT_UNIT_DISABLED",
-              "TAKEOVER_UNSUPPORTED_BASELINE",
-              "TAKEOVER_MISMATCH",
               "APPLY_UNSUPPORTED",
               "WOULD_UNCONFIGURE",
               "NETDEV_CHANGE_UNSUPPORTED",
-              "RESOLVED_NOT_IN_CHARGE",
-              "DNS_REQUIRED",
-              "DHCP_IDENTITY_UNKNOWN",
               "FOREIGN_FILTER",
               "MANAGEMENT_REQUIRED",
               "DHCP_WITHOUT_DNS"
@@ -6690,100 +6491,6 @@
           },
           "message": {
             "type": "string"
-          }
-        }
-      },
-      "ChangeOperation": {
-        "type": "object",
-        "description": "One operation of a change batch, as POST /api/v1/config/changes accepts it.",
-        "additionalProperties": true
-      },
-      "TakeoverProposal": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "state",
-          "savedVersion",
-          "operations",
-          "starter",
-          "dhcp",
-          "adapters",
-          "findings"
-        ],
-        "properties": {
-          "state": {
-            "type": "string",
-            "enum": [
-              "ready",
-              "taken-over",
-              "saved-not-applied",
-              "unsupported"
-            ],
-            "description": "Only ready carries a proposal."
-          },
-          "savedVersion": {
-            "$ref": "#/components/schemas/Version"
-          },
-          "operations": {
-            "type": "array",
-            "description": "A create-only change batch describing what the host does now; send it to the draft preview and then to /api/v1/config/changes.",
-            "items": {
-              "$ref": "#/components/schemas/ChangeOperation"
-            }
-          },
-          "starter": {
-            "type": "array",
-            "description": "The LAN's starter services and rules and outbound NAT, whether or not the detection put them in operations; a client that changes an adapter's zone adds the ones operations left out.",
-            "items": {
-              "$ref": "#/components/schemas/ChangeOperation"
-            }
-          },
-          "dhcp": {
-            "type": "array",
-            "description": "A DHCP server offered per static LAN segment. Never part of operations, so taking over without questions serves no DHCP; a client that accepts an offer adds it to the batch.",
-            "items": {
-              "$ref": "#/components/schemas/ChangeOperation"
-            }
-          },
-          "adapters": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "name",
-                "permanentMac",
-                "summary",
-                "addressed",
-                "required"
-              ],
-              "properties": {
-                "name": {
-                  "type": "string"
-                },
-                "permanentMac": {
-                  "type": "string"
-                },
-                "summary": {
-                  "type": "string"
-                },
-                "addressed": {
-                  "type": "boolean",
-                  "description": "The adapter has a global address now; leaving it out would cut it off."
-                },
-                "required": {
-                  "type": "boolean",
-                  "description": "ifupdown configures the adapter, and the takeover masks ifupdown for every interface, so it cannot be left out."
-                }
-              }
-            }
-          },
-          "findings": {
-            "type": "array",
-            "description": "Why the host cannot be taken over as it stands.",
-            "items": {
-              "$ref": "#/components/schemas/ApplyFinding"
-            }
           }
         }
       },
@@ -6970,125 +6677,6 @@
           "expiresAt": {"type": "string", "format": "date-time"},
           "noExpiry": {"type": "boolean"},
           "revokeOnPasswordChange": {"type": "boolean"}
-        }
-      },
-      "DraftResponse": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "state",
-          "savedVersion",
-          "realizable",
-          "resolved",
-          "files",
-          "findings",
-          "applyFindings",
-          "rules"
-        ],
-        "properties": {
-          "state": {
-            "type": "string",
-            "const": "draft",
-            "description": "Rendered from a batch that was not saved."
-          },
-          "savedVersion": {
-            "type": "string",
-            "pattern": "^(0|[1-9][0-9]{0,18})$"
-          },
-          "realizable": {
-            "type": "boolean",
-            "description": "True when no finding is an error"
-          },
-          "resolved": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Resolution"
-            }
-          },
-          "files": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/RenderedFile"
-            }
-          },
-          "findings": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Finding"
-            }
-          },
-          "applyFindings": {
-            "type": "array",
-            "description": "What the apply gates would refuse, judged as a takeover unless one is already confirmed.",
-            "items": {
-              "$ref": "#/components/schemas/ApplyFinding"
-            }
-          },
-          "rules": {
-            "type": "array",
-            "description": "The policy in execution order, references by name, for the review.",
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "chain",
-                "position",
-                "name",
-                "enabled",
-                "action",
-                "from",
-                "to",
-                "services",
-                "log"
-              ],
-              "properties": {
-                "chain": {
-                  "enum": [
-                    "input",
-                    "forward"
-                  ]
-                },
-                "position": {
-                  "type": "integer",
-                  "minimum": 1
-                },
-                "name": {
-                  "type": "string"
-                },
-                "enabled": {
-                  "type": "boolean"
-                },
-                "action": {
-                  "enum": [
-                    "accept",
-                    "drop",
-                    "reject"
-                  ]
-                },
-                "from": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                },
-                "to": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                },
-                "services": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                },
-                "log": {
-                  "type": "boolean"
-                }
-              }
-            }
-          }
         }
       }
     },

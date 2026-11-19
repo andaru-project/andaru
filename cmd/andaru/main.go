@@ -26,7 +26,7 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	usage := "usage: andaru engine [--socket PATH] [--state-dir PATH] [--web-socket PATH --web-uid UID --web-gid GID --web-origin HTTPS_ORIGIN ...] | andaru ctl [--socket PATH] links|prefixes|openapi|config|versions|preview|apply|applies|takeover|backup|kept|users|tokens|audit|factory-reset | andaru realize [--state-dir PATH] activate|rollback|confirm|boot|leases|prefixes|factory-reset | andaru upgrade check|prepare"
+	usage := "usage: andaru engine [--socket PATH] [--state-dir PATH] [--web-socket PATH --web-uid UID --web-gid GID --web-origin HTTPS_ORIGIN ...] | andaru ctl [--socket PATH] links|prefixes|openapi|config|versions|preview|apply|applies|backup|kept|users|tokens|audit|factory-reset | andaru realize [--state-dir PATH] activate|rollback|confirm|boot|leases|prefixes|factory-reset"
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, usage)
 		return 2
@@ -37,9 +37,6 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 	if args[0] == "realize" {
 		return realizeCommand(ctx, args[1:], stderr, newRealizer)
-	}
-	if args[0] == "upgrade" {
-		return upgradeCommand(ctx, args[1:], stdout, stderr)
 	}
 	if args[0] != "engine" && args[0] != "ctl" {
 		fmt.Fprintln(stderr, usage)

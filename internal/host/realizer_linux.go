@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"maps"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -98,7 +97,7 @@ func readRealizerFacts(etcDir, runDir, pppd, pluginGlob, device, root string) (R
 units:
 	for _, unit := range competingFilters {
 		for _, base := range bases {
-			// Masked, a unit never starts, whatever links still enable it; a confirmed takeover masks nftables.service.
+			// Masked, a unit never starts, whatever links still enable it.
 			if target, _ := os.Readlink(root + base + unit); target == "/dev/null" {
 				continue units
 			}
@@ -179,7 +178,7 @@ func ReadManaged(ctx context.Context) ([]Managed, error) {
 }
 
 func readManaged(ctx context.Context, run func(context.Context, string, ...string) ([]byte, error)) ([]Managed, error) {
-	// networkctl fails outright while networkd is stopped, which is normal on a host ifupdown still configures.
+	// networkctl fails outright while networkd is stopped.
 	if _, err := run(ctx, "/usr/bin/systemctl", "is-active", "--quiet", "systemd-networkd.service"); err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
@@ -194,71 +193,21 @@ func readManaged(ctx context.Context, run func(context.Context, string, ...strin
 	return ParseManaged(data)
 }
 
-// Baseline describes who configured the network before Andaru, as far as a takeover must know.
-type Baseline struct {
-	Netplan  bool
-	Ifupdown bool
-	// IfupdownMasked reports that networking.service is masked, as a confirmed ifupdown takeover leaves it.
-	IfupdownMasked bool
-	// BootUnit reports that the unit which puts the confirmed generation into /run at boot is enabled.
-	BootUnit bool
-	// StrayYAML is netplan configuration outside /etc/netplan, which a takeover would not move away.
-	StrayYAML []string
-	// StaticDNS lists netplan-generated .network files that set DNS= or Domains=; a takeover must declare DNS for their interfaces.
-	StaticDNS []string
-}
+// ReadBootUnit reports that andaru-network-boot.service, which puts the confirmed generation into /run at boot, is enabled.
+func ReadBootUnit() bool { return readBootUnit("") }
 
-// ReadBaseline inspects the host without changing it.
-func ReadBaseline() (Baseline, error) { return readBaseline("") }
-
-func readBaseline(root string) (Baseline, error) {
-	exists := func(path string) bool { _, err := os.Stat(root + path); return err == nil }
+func readBootUnit(root string) bool {
 	// A masked unit is a link to /dev/null, which exists but is no unit file; the mask may also sit beside the wants link.
 	wanted, err := os.Stat(root + "/etc/systemd/system/sysinit.target.wants/andaru-network-boot.service")
 	override, maskErr := os.Stat(root + "/etc/systemd/system/andaru-network-boot.service")
-	b := Baseline{
-		Netplan: exists("/usr/sbin/netplan"), Ifupdown: exists("/sbin/ifup"),
-		BootUnit:  err == nil && wanted.Mode().IsRegular() && (maskErr != nil || override.Mode().IsRegular()),
-		StrayYAML: []string{}, StaticDNS: []string{},
-	}
-	if target, err := os.Readlink(root + "/etc/systemd/system/networking.service"); err == nil && target == "/dev/null" {
-		b.IfupdownMasked = true
-	}
-	for _, dir := range []string{"/run/netplan", "/lib/netplan", "/usr/lib/netplan"} {
-		found, err := filepath.Glob(root + dir + "/*.yaml")
-		if err != nil {
-			return Baseline{}, err
-		}
-		for _, path := range found {
-			b.StrayYAML = append(b.StrayYAML, strings.TrimPrefix(path, root))
-		}
-	}
-	generated, err := filepath.Glob(root + "/run/systemd/network/10-netplan-*.network")
-	if err != nil {
-		return Baseline{}, err
-	}
-	for _, path := range generated {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return Baseline{}, fmt.Errorf("read baseline network file: %w", err)
-		}
-		for line := range strings.SplitSeq(string(data), "\n") {
-			if strings.HasPrefix(line, "DNS=") || strings.HasPrefix(line, "Domains=") {
-				b.StaticDNS = append(b.StaticDNS, strings.TrimPrefix(path, root))
-				break
-			}
-		}
-	}
-	slices.Sort(b.StrayYAML)
-	slices.Sort(b.StaticDNS)
-	return b, nil
+	return err == nil && wanted.Mode().IsRegular() && (maskErr != nil || override.Mode().IsRegular())
 }
 
 var resolvedLink = regexp.MustCompile(`^Link \d+ \((.+)\):(.*)$`)
 
-// ParseResolvectl reads the output of `resolvectl dns` or `resolvectl domain`: the global entries and each
-// interface's, in order. resolvectl wraps a long list onto indented lines.
-func ParseResolvectl(data []byte) (global []string, links map[string][]string, err error) {
+// parseResolvectl reads the output of `resolvectl dns`: each interface's entries, in order. resolvectl wraps a
+// long list onto indented lines.
+func parseResolvectl(data []byte) (global []string, links map[string][]string, err error) {
 	global, links = []string{}, map[string][]string{}
 	current, started := "", false
 	for line := range strings.SplitSeq(string(data), "\n") {
@@ -294,7 +243,7 @@ func ParseResolvectl(data []byte) (global []string, links map[string][]string, e
 // writes (a port, a TLS name) becomes the zero Addr: it equals no declared server, and it cannot spoil
 // the reading of another link.
 func ParseResolvedDNS(data []byte) (map[string][]netip.Addr, error) {
-	_, links, err := ParseResolvectl(data)
+	_, links, err := parseResolvectl(data)
 	if err != nil {
 		return nil, err
 	}
@@ -307,58 +256,4 @@ func ParseResolvedDNS(data []byte) (map[string][]netip.Addr, error) {
 		}
 	}
 	return servers, nil
-}
-
-// ReadResolved returns every DNS server and search domain systemd-resolved has for the host:
-// the global ones first, then each interface's, by interface name, each once.
-func ReadResolved(ctx context.Context) (servers, domains []string, err error) {
-	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
-	defer cancel()
-	read := func(verb string) ([]string, error) {
-		data, err := readCommand(ctx, "/usr/bin/resolvectl", verb)
-		if err != nil {
-			return nil, err
-		}
-		global, links, err := ParseResolvectl(data)
-		if err != nil {
-			return nil, err
-		}
-		out := []string{}
-		for _, name := range slices.Sorted(maps.Keys(links)) {
-			global = append(global, links[name]...)
-		}
-		for _, v := range global {
-			if !slices.Contains(out, v) {
-				out = append(out, v)
-			}
-		}
-		return out, nil
-	}
-	if servers, err = read("dns"); err == nil {
-		domains, err = read("domain")
-	}
-	return servers, domains, err
-}
-
-// ReadDefaultRoutes names the interfaces carrying an IPv4 default route, each once, in the kernel's order.
-func ReadDefaultRoutes(ctx context.Context) ([]string, error) {
-	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
-	defer cancel()
-	data, err := readCommand(ctx, "/usr/bin/ip", "-j", "route", "show", "default")
-	if err != nil {
-		return nil, err
-	}
-	var routes []struct {
-		Dev string `json:"dev"`
-	}
-	if err := json.Unmarshal(data, &routes); err != nil {
-		return nil, fmt.Errorf("decode default routes: %w", err)
-	}
-	var devices []string
-	for _, r := range routes {
-		if !slices.Contains(devices, r.Dev) {
-			devices = append(devices, r.Dev)
-		}
-	}
-	return devices, nil
 }

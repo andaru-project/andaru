@@ -2,6 +2,7 @@ package reset
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"os"
@@ -18,12 +19,12 @@ import (
 	"github.com/andaru-project/andaru/internal/kept"
 )
 
-// box is a host with Andaru's old state, its kept copies, and a fake systemd, dpkg and engine.
+// box is a host with Andaru's old state, its kept copies, and a fake systemd and engine.
 type box struct {
 	t        *testing.T
 	env      Env
 	keptRoot string
-	upgrades string
+	outside  string
 	mu       sync.Mutex
 	commands []string
 	// applied are the saved versions the fake engine was asked to apply; up says whether each comes up.
@@ -33,6 +34,12 @@ type box struct {
 	pending func(n int) bool
 	// inactive are units systemctl reports inactive before the reset.
 	inactive []string
+	// active are units systemctl show reports active; realizing and queued are what list-units and list-jobs report for realize units.
+	active    map[string]bool
+	realizing string
+	queued    string
+	// show runs at each systemctl show, with its unit.
+	show func(unit string)
 	// onStop runs at the first systemctl stop, to look at the tree then.
 	onStop func()
 	// fail makes commands with this prefix fail, once each time it is set.
@@ -47,13 +54,13 @@ func newBox(t *testing.T) *box {
 		t.Skip("the reset requires root")
 	}
 	base := t.TempDir()
-	b := &box{t: t, keptRoot: filepath.Join(base, "andaru-kept"), upgrades: filepath.Join(base, "andaru-upgrades"), up: func(int) bool { return true }}
+	b := &box{t: t, keptRoot: filepath.Join(base, "andaru-kept"), outside: filepath.Join(base, "outside"), up: func(int) bool { return true }}
 	state := filepath.Join(base, "andaru")
 	b.env = Env{
 		StateDir: state, Dir: filepath.Join(base, "andaru-reset"), KeptRoot: b.keptRoot,
 		Realizer: generation.Realizer{StateDir: state, Root: filepath.Join(base, "root"), Run: b.run, Now: time.Now, LockWait: time.Second},
-		Run:      b.run, LockWait: time.Second,
-		Apply: b.apply,
+		Run:      b.run,
+		Apply:    b.apply,
 	}
 	if err := os.MkdirAll(filepath.Join(base, "root", "run"), 0o755); err != nil {
 		t.Fatal(err)
@@ -85,7 +92,27 @@ func (b *box) run(_ context.Context, name string, args ...string) ([]byte, error
 		return nil, errors.New("inactive")
 	}
 	if strings.HasPrefix(command, "systemctl show") {
-		return []byte("ActiveState=inactive\nUnitFileState=static\n"), nil
+		unit := args[len(args)-1]
+		b.mu.Lock()
+		show, state := b.show, "inactive"
+		if b.active[unit] {
+			state = "active"
+		}
+		b.mu.Unlock()
+		if show != nil {
+			show(unit)
+		}
+		return []byte("ActiveState=" + state + "\nUnitFileState=static\n"), nil
+	}
+	if strings.HasPrefix(command, "systemctl list-units") {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return []byte(b.realizing), nil
+	}
+	if strings.HasPrefix(command, "systemctl list-jobs") {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return []byte(b.queued), nil
 	}
 	return nil, nil
 }
@@ -126,15 +153,16 @@ func (b *box) apply(_ context.Context, saved string) (bool, error) {
 	return !pending, nil
 }
 
+// networkFixture is a copy of config's fixture, embedded so the test binary runs without the source tree, as in CI.
+//
+//go:embed testdata/network.json
+var networkFixture []byte
+
 // network is the fixture declaration with its LAN as the management segment.
 func network(t *testing.T) (map[string]any, map[string]string) {
 	t.Helper()
-	data, err := os.ReadFile("../config/testdata/network.json")
-	if err != nil {
-		t.Fatal(err)
-	}
 	var d map[string]any
-	if err = json.Unmarshal(data, &d); err != nil {
+	if err := json.Unmarshal(networkFixture, &d); err != nil {
 		t.Fatal(err)
 	}
 	lan := d["segments"].([]any)[1].(map[string]any)["id"]
@@ -142,7 +170,7 @@ func network(t *testing.T) (map[string]any, map[string]string) {
 	return d, map[string]string{"WAN_PASSWORD": "TEST_ONLY_SECRET"}
 }
 
-// oldState is a taken-over host: configuration, an old administrator, a live takeover, unrelated files.
+// oldState is a box that ran Andaru's network: configuration, an old administrator, a live generation, unrelated files.
 func (b *box) oldState() {
 	t, ctx := b.t, context.Background()
 	cs, err := config.Open(ctx, b.env.StateDir)
@@ -159,16 +187,16 @@ func (b *box) oldState() {
 	}
 	ids.Close()
 	dir := generation.Dir(b.env.StateDir)
-	if err := os.MkdirAll(filepath.Join(dir, "baseline"), 0o700); err != nil {
+	if _, err := generation.Create(dir, generation.Manifest{SavedVersion: "1", ConfirmTimeoutSeconds: 120}, nil); err != nil {
 		t.Fatal(err)
 	}
-	write(t, filepath.Join(dir, "pointers.json"), `{"confirmed":null,"lastKnownGood":null,"pending":null,"live":null,"takeover":true}`)
-	write(t, filepath.Join(dir, "baseline", "manifest.json"), `{"kind":"netplan","files":[],"nftablesMasked":false}`)
+	write(t, filepath.Join(dir, "1", "state.json"), `{"state":"confirmed","previous":null}`)
+	write(t, filepath.Join(dir, "pointers.json"), `{"confirmed":1,"lastKnownGood":null,"pending":null,"live":1}`)
 	write(t, filepath.Join(b.env.StateDir, "addons", "plugin", "settings.json"), `{}`)
-	if err := os.Symlink(b.upgrades, filepath.Join(b.env.StateDir, "link-out")); err != nil {
+	if err := os.Symlink(b.outside, filepath.Join(b.env.StateDir, "link-out")); err != nil {
 		t.Fatal(err)
 	}
-	write(t, filepath.Join(b.upgrades, "recovery", "state.json"), `{"untouched":true}`)
+	write(t, filepath.Join(b.outside, "recovery", "state.json"), `{"untouched":true}`)
 	d, secrets := network(t)
 	value, _ := json.Marshal(d)
 	closure, err := config.LANClosure(value, secrets)
@@ -286,19 +314,16 @@ func (b *box) wantDone(wan bool) {
 			t.Fatalf("%s survived the wipe", gone)
 		}
 	}
-	if data, err := os.ReadFile(filepath.Join(b.upgrades, "recovery", "state.json")); err != nil || string(data) != `{"untouched":true}` {
+	if data, err := os.ReadFile(filepath.Join(b.outside, "recovery", "state.json")); err != nil || string(data) != `{"untouched":true}` {
 		t.Fatalf("the upgrade copy changed: %q %v", data, err)
 	}
 	store, _ := kept.OpenIn(b.keptRoot, b.env.StateDir)
 	if data, err := store.Read("first"); err != nil || string(data) != `{"kind":"lan-closure","first":true}` {
 		t.Fatalf("first/ changed: %q %v", data, err)
 	}
-	p, _, err := generation.List(generation.Dir(b.env.StateDir))
-	if err != nil || !p.Takeover {
-		t.Fatalf("pointers = %+v, %v", p, err)
-	}
-	if kind, _, err := generation.ReadBaselineKind(generation.Dir(b.env.StateDir)); err != nil || kind != "netplan" {
-		t.Fatalf("ownership = %q, %v", kind, err)
+	// The fresh tree is a reset tree: boot keeps it fenced.
+	if data, err := os.ReadFile(filepath.Join(generation.Dir(b.env.StateDir), "baseline", "manifest.json")); err != nil || string(data) != "{\"reset\":true}\n" {
+		t.Fatalf("baseline manifest = %q, %v", data, err)
 	}
 	head := b.head()
 	_, hasWAN := head["nat"]
@@ -381,7 +406,8 @@ func TestConsoleRequired(t *testing.T) {
 	}
 }
 
-func TestNoTakeoverAppliesNothing(t *testing.T) {
+// A box that never ran Andaru's network, here with pointers as v0.5.0-a.1 writes them, has no network to bring up.
+func TestNeverAppliedAppliesNothing(t *testing.T) {
 	b := newBox(t)
 	write(t, filepath.Join(generation.Dir(b.env.StateDir), "pointers.json"), `{"confirmed":null,"lastKnownGood":null,"pending":null,"live":null,"takeover":false}`)
 	b.storeRecovery()
@@ -419,15 +445,18 @@ func TestPlanRefuses(t *testing.T) {
 		"pending apply": func(b *box) {
 			write(b.t, filepath.Join(generation.Dir(b.env.StateDir), "pointers.json"), `{"confirmed":null,"lastKnownGood":null,"pending":1,"live":null,"takeover":true}`)
 		},
-		"dpkg": func(b *box) {
-			b.env.Run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
-				if name == "dpkg" {
-					return []byte("The following packages are only half configured\n"), nil
-				}
-				return b.run(ctx, name, args...)
-			}
+		"running realize unit": func(b *box) {
+			b.realizing = "andaru-realize-activate-2.service loaded activating start Andaru activation\n"
+		},
+		"queued realize job": func(b *box) {
+			b.queued = "42 andaru-realize-activate-2.service start waiting\n"
 		},
 		"existing journal": func(b *box) { b.plan("") },
+	}
+	for _, state := range []string{"activating", "awaiting_confirmation", "rolling_back"} {
+		cases[state] = func(b *box) {
+			write(b.t, filepath.Join(generation.Dir(b.env.StateDir), "2", "state.json"), `{"state":"`+state+`","previous":null}`)
+		}
 	}
 	for name, breakIt := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -443,6 +472,32 @@ func TestPlanRefuses(t *testing.T) {
 				t.Fatalf("the refusal changed something: %q", b.commands)
 			}
 		})
+	}
+}
+
+// A realizer that runs when the units stop finishes its work: the reset waits for it and never stops it.
+func TestStopDrainsRealizer(t *testing.T) {
+	b := newBox(t)
+	b.active = map[string]bool{"andaru-prefixes.service": true}
+	probes := 0
+	b.show = func(unit string) {
+		if unit == "andaru-prefixes.service" {
+			if probes++; probes >= 3 {
+				b.mu.Lock()
+				b.active[unit] = false
+				b.mu.Unlock()
+			}
+		}
+	}
+	b.plan("")
+	if _, err := Resume(context.Background(), b.env); err != nil {
+		t.Fatal(err)
+	}
+	if probes < 3 {
+		t.Fatal("the reset went on before the realizer finished")
+	}
+	if b.ran("systemctl stop andaru-prefixes.service") {
+		t.Fatalf("stopped the realizer: %q", b.commands)
 	}
 }
 
@@ -596,7 +651,7 @@ func TestWipeKeepsMountPoint(t *testing.T) {
 	if err := checkMarker(b.env.StateDir, op.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(b.upgrades, "recovery", "state.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(b.outside, "recovery", "state.json")); err != nil {
 		t.Fatalf("the symlink's target went: %v", err)
 	}
 }
@@ -761,7 +816,7 @@ func TestPendingWhileStoppingKeepsJournalUntilUnitsRun(t *testing.T) {
 func TestUnreadableOwnershipReleases(t *testing.T) {
 	b := newBox(t)
 	b.plan("")
-	os.Remove(filepath.Join(generation.Dir(b.env.StateDir), "baseline", "manifest.json"))
+	write(t, filepath.Join(generation.Dir(b.env.StateDir), "baseline", "manifest.json"), "{")
 	if _, err := Resume(context.Background(), b.env); err == nil {
 		t.Fatal("went on without ownership")
 	}

@@ -14,5 +14,6 @@ ANDARU_TEST_BINARY="$art/andaru" "$art/engine.test" -test.v -test.timeout=120s
 "$art/identity.test" -test.v -test.timeout=120s
 "$art/audit.test" -test.v -test.timeout=120s
 "$art/ctl.test" -test.v -test.timeout=120s
+"$art/reset.test" -test.v -test.timeout=120s
 # The pppd and networkd tool proofs in this binary are lab proofs; CI runs the filter ones.
 "$art/render.test" -test.v -test.timeout=120s -test.run "FilterInNamespace|NftScriptIsValid|ServiceGoldensPassTheirTools|DHCPv6GoldensPassKea"

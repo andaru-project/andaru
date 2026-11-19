@@ -23,7 +23,11 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/andaru-project/andaru/internal/authz"
 )
+
+var systemRootActor = authz.Actor{Kind: authz.ActorSystem, ID: "root"}
 
 //go:embed testdata/changes.json
 var requestFixture []byte
