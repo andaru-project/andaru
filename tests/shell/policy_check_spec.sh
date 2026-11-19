@@ -1,6 +1,7 @@
 #shellcheck shell=sh
-# scripts/ci/policy-check.jq is what image-smoke.sh holds the image's signature policy to: it must pass the
-# repository's policy and fail every way of weakening which key signs which repository.
+# scripts/ci/policy-check.jq holds the repository's signature policy to its meaning, which image-smoke.sh then compares
+# the image's policy to byte for byte. It must pass the repository policy and fail every way of weakening which key
+# signs which repository.
 
 Describe 'scripts/ci/policy-check.jq'
   root="${SHELLSPEC_PROJECT_ROOT:-$PWD}"
