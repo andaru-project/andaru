@@ -1,6 +1,6 @@
 # Debian packages and the signed APT repository
 
-Superseded on 2026-11-18 by [Andaru as an appliance image](2026-11-18-appliance-image-design.md): Andaru no longer ships as a Debian package.
+Superseded on 2026-11-18 by [Andaru as an appliance image](2026-11-18-appliance-image-design.md): Andaru no longer ships as a Debian package. Its packaging was deleted in slice 3.
 
 ## Status and intent
 

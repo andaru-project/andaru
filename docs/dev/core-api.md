@@ -79,8 +79,6 @@ The actual OpenAPI 3.1 document is embedded from [`internal/engine/openapi.json`
 | `GET /api/v1/versions` | Bounded saved history, default 50/max 100; exclusive `before` cursor |
 | `GET /api/v1/versions/{id}` | Secret-free immutable saved snapshot |
 | `GET /api/v1/preview/network` | Files a saved version would hand to systemd-networkd and pppd on this host, redacted, with findings; `state:"preview"`; optional `?savedVersion=N` |
-| `GET /api/v1/takeover/proposal` | What a first takeover of this host would save, as a change batch, with the host's adapters, its `state` and findings; writes nothing |
-| `POST /api/v1/preview/network/draft` | The files and findings a change batch would produce if saved now, as the preview and an apply would judge them; saves nothing |
 | `GET/POST /api/v1/config/{addresses\|services}`, `…/{id}` | Address and service objects for the packet filter |
 | `GET/POST /api/v1/config/policy/{input\|forward}` | A rule list in execution order with its `version`; `POST ?before=<rule id>` places a new rule |
 | `GET/PUT/DELETE /api/v1/config/policy/{chain}/{id}` | One rule, version-checked like any object |
@@ -117,8 +115,7 @@ mount a local filesystem at `/var/lib/andaru` before first setup, or stop Andaru
 move an existing tree onto that mount. There is no migration command. A missing mount
 must not be replaced by an empty directory. `/var/lib/andaru-kept/` on the root disk
 holds the write-once first LAN, the last successful LAN, and the explicitly stored
-post-reset network. Package removal does not delete that directory or
-`/var/lib/andaru-upgrades/`. An engine-only
+post-reset network. An engine-only
 `--state-dir /absolute/private/path` selects isolated development state. A second
 engine cannot own the same state directory, even with another socket.
 
@@ -158,8 +155,8 @@ responses return versions but no ETag.
 
 A change batch may carry `"expectedSavedVersion": "N"`: the batch is then refused
 with `412` at `/expectedSavedVersion`, before any operation, unless N is still
-the saved head. The takeover assistant uses it so a save from another session
-between its proposal and its commit is never overwritten.
+the saved head, so a save from another session between a client's read and its
+commit is never overwritten.
 
 Requests are bounded to 1 MiB, depth 32 and 100 operations; each stored document
 to 4 MiB and the declaration to 10,000 objects. Nulls, duplicate keys, malformed
@@ -295,13 +292,12 @@ reboot when done (default no), and requires the phrase `FACTORY RESET`. It then
 writes the journal in `/var/lib/andaru-reset/` and starts
 `andaru-factory-reset.service`, so the reset continues when the SSH session drops.
 
-The unit holds dpkg's locks, stops Andaru, removes the live generation's network
+The unit stops Andaru, removes the live generation's network
 files, services and filter (the filter becomes deny-all), and deletes the contents
 of `/var/lib/andaru`, keeping the directory and its marker `.andaru-reset`. It
 refuses to start when a mount sits inside the tree, and stops when the tree it
 finds lacks the marker, as after a boot without the data partition. It writes a
-fresh tree: the record that Andaru owns host networking (the takeover, the nftables
-mask, ifupdown's interfaces and their dhcpcd DUIDs), empty configuration, the
+fresh tree: the record that Andaru ran the host's network, empty configuration, the
 `admin` account, and a `recovery.completed` audit event with reason
 `factory_reset_backup_written` or `factory_reset_backup_skipped`. The engine then
 applies and confirms, in order:
@@ -312,9 +308,9 @@ applies and confirms, in order:
 
 With neither, the box stays console-required behind deny-all: log in at the console
 and use the root CLI. Old accounts never come back, `first/` is never read, and
-`/var/lib/andaru-upgrades`, `/var/lib/andaru-kept` and `/etc/andaru` are not touched.
-A host Andaru never took over keeps its own network; only the state is reset, and
-no kept copy is applied. The engine always starts again; the web service and the
+`/var/lib/andaru-kept` and `/etc/andaru` are not touched.
+A box whose network Andaru never ran keeps its own network; only the state is reset,
+and no kept copy is applied. The engine always starts again; the web service and the
 lease and prefix units only when they ran before.
 
 A power loss resumes the reset at boot. From the first stop until the fresh tree
@@ -322,9 +318,7 @@ exists, boot loads only deny-all (nothing at all on a host whose network Andaru 
 ran), and the engine and every realize job wait; a planned reset fences nothing yet.
 A copy whose apply a crash cut, or whose apply stayed unconfirmed, counts as not up:
 the reset rolls it back and moves on to the next one. A management copy left without
-an address of its own is refused. Package removal is refused while a reset is
-unfinished, and afterwards while the takeover remains, even with no confirmed
-generation.
+an address of its own is refused.
 
 ### Qualification evidence (2026-11-18)
 
@@ -360,7 +354,7 @@ a recovery copy that passes the engine's gate but fails networkd's verification.
 
 ## Network preview
 
-`andaru ctl preview network [--saved-version N]` shows exactly which files Andaru would give systemd-networkd and pppd for a saved version on this host, and what would stop them working. **It changes nothing**: no file is written under `/run`, nothing is reloaded or started, and no state is stored. Applying is a separate, explicit step: see [Applying and taking over](#applying-and-taking-over).
+`andaru ctl preview network [--saved-version N]` shows exactly which files Andaru would give systemd-networkd and pppd for a saved version on this host, and what would stop them working. **It changes nothing**: no file is written under `/run`, nothing is reloaded or started, and no state is stored. Applying is a separate, explicit step: see [Applying](#applying).
 
 ```sh
 sudo andaru ctl preview network | jq -r '.files[] | "### \(.path) \(.mode)\n\(.content)"'
@@ -371,7 +365,7 @@ The response has `state: "preview"`, the `savedVersion` rendered, `realizable` (
 
 What is rendered:
 
-- **Ethernet, VLAN, bridge, bond:** `/run/systemd/network/50-andaru-<name>.netdev` and `.network`. Physical NICs are matched by `PermanentMACAddress=`, and a `.link` file keeps the name each has now across reboots: after a takeover nothing else names them (netplan's own `.link` files did until then), and the boot service has udev apply Andaru's before networkd starts. Virtual links get a derived name: `vl`, `br`, `bo` or `pp` plus the first 12 hex digits of the link ID. Your own `name` and `description` never appear in a rendered file.
+- **Ethernet, VLAN, bridge, bond:** `/run/systemd/network/50-andaru-<name>.netdev` and `.network`. Physical NICs are matched by `PermanentMACAddress=`, and a `.link` file keeps the name each has now across reboots: the boot service has udev apply Andaru's before networkd starts. Virtual links get a derived name: `vl`, `br`, `bo` or `pp` plus the first 12 hex digits of the link ID. Your own `name` and `description` never appear in a rendered file.
 - **PPPoE:** pppd runs the session and owns IPv4; networkd keeps IPv6 (router discovery, DHCPv6, prefix delegation) on the PPP interface. Three files: `/run/andaru/ppp/<pp-name>.options` (mode `0600`, secret), `/run/systemd/system/andaru-pppoe-<pp-name>.service`, and a `.network` with `KeepConfiguration=yes` so networkd leaves pppd's address and default route alone. The split follows [systemd#481](https://github.com/systemd/systemd/issues/481).
 - Provider-offered DNS, NTP, hostname and search domains are ignored on purpose; those are later areas.
 
@@ -380,7 +374,7 @@ What is rendered:
 | `HARDWARE_MISSING` | error | No physical interface has the declared permanent MAC. Fit the card or correct `permanentMac`. |
 | `HARDWARE_AMBIGUOUS` | error | Several physical interfaces report that MAC (cloned VMs). Give them distinct MACs. |
 | `NAME_COLLISION` | error | A derived interface name is already used by something else. Remove or rename the foreign interface. |
-| `FOREIGN_CONFIGURATION` | error | A networkd file Andaru did not write exists in `/etc/systemd/network` or `/run/systemd/network` (netplan on cloud images), or a `<file>.d/*.conf` drop-in exists there. It would override or conflict; the takeover step removes it. |
+| `FOREIGN_CONFIGURATION` | error | A networkd file Andaru did not write exists in `/etc/systemd/network` or `/run/systemd/network`, or a `<file>.d/*.conf` drop-in exists there. It would override or conflict: remove it. |
 | `TOOL_MISSING` | error | A PPPoE link needs `pppd` and its `pppoe.so` plugin: install `ppp`. |
 | `KERNEL_SUPPORT_MISSING` | error | `/dev/ppp` is absent. Try `modprobe ppp_generic`. If the module does not exist, the kernel has no PPP: Debian's cloud kernel (`linux-image-cloud-*`) omits it, so install `linux-image-amd64` or `linux-image-arm64` and boot it. |
 | `INTERFACE_NAME_UNSUPPORTED` | error | A PPPoE parent NIC has a kernel name outside `[A-Za-z0-9_.:-]`. |
@@ -409,13 +403,13 @@ Steps:
 
 To undo: stop the unit, delete the files you wrote, `systemctl daemon-reload`, `networkctl reload`, and `networkctl delete` the `vl…` device. Everything is under `/run`, so a reboot also clears it. Expect the `[DHCPv6]` keys to be the part that depends on your provider.
 
-## Applying and taking over
+## Applying
 
-An apply makes the saved head's network configuration live. Design and limits: [network takeover and confirmed apply](../superpowers/specs/2026-11-11-network-takeover-apply-design.md).
+An apply makes the saved head's network configuration live. Design and limits: [confirmed apply](../superpowers/specs/2026-11-11-network-takeover-apply-design.md).
 
 ```sh
 sudo andaru ctl preview network                      # note the savedVersion and the findings
-sudo andaru ctl apply network --saved-version 12     # add --takeover on a host netplan still configures
+sudo andaru ctl apply network --saved-version 12
 # from a NEW terminal or SSH session:
 sudo andaru ctl applies confirm 1
 ```
@@ -427,40 +421,19 @@ What happens, in order:
 3. **The files are swapped and networkd reloaded.** Andaru then checks that every file is in use, static addresses are present, and the interfaces that had an IPv4 address and default route still have them. If not, it restores the previous files at once and the apply reads `failed`.
 4. **You confirm from a new session** within the timeout (default 120 seconds, `--confirm-timeout 30`–`600`). A session that survived the change does not show that a new one can be opened; opening one is the test. Without confirmation the previous configuration returns, including after an engine crash or a reboot.
 
-`andaru ctl applies list` shows every apply and four pointers: `confirmed` (what boot uses), `lastKnownGood` (the one before it), `pending`, and `live` (what runs now; `null` is the pre-Andaru configuration). `andaru ctl applies rollback ID` undoes a pending apply without waiting.
+`andaru ctl applies list` shows every apply and four pointers: `confirmed` (what boot uses), `lastKnownGood` (the one before it), `pending`, and `live` (what runs now; `null` is no generation). `andaru ctl applies rollback ID` undoes a pending apply without waiting.
+
+Boot needs `andaru-network-boot.service` ([unit](../../packaging/systemd/andaru-network-boot.service)) enabled, as the image leaves it: it copies the confirmed generation into `/run` before networkd starts. If that generation is damaged it uses the last-known-good one, and `live` then differs from `confirmed`.
 
 | Finding | Meaning |
 | --- | --- |
 | `WOULD_UNCONFIGURE` | A physical interface with an address is not configured by the saved configuration. Declare it as an enabled Ethernet link with a segment. |
-| `TAKEOVER_MISMATCH` | netplan still configures the host and `--takeover` was not given, or it was given with nothing to take over. |
-| `TAKEOVER_UNSUPPORTED_BASELINE` | The host is not one Andaru can take over: both netplan and ifupdown configure it, netplan YAML lives outside `/etc/netplan`, a network file that neither netplan nor Andaru wrote exists, netplan created a bridge, bond or VLAN, netplan set DNS servers and the saved configuration declares none for that interface, or `/etc/network/interfaces` uses something beyond the Debian installer's shapes (see [ifupdown hosts](#taking-over-an-ifupdown-host)). |
-| `RESOLVED_NOT_IN_CHARGE` | An ifupdown host's `/etc/resolv.conf` is not managed by systemd-resolved, which becomes the host's resolver. Run `apt install systemd-resolved` first. |
-| `DHCP_IDENTITY_UNKNOWN` | An ifupdown host's DHCP client is not dhcpcd with its default identity settings, so networkd could not keep the lease. |
-| `DNS_REQUIRED` | No interface of the ifupdown host takes DNS servers from DHCP or router advertisements, and no segment declares `dns`. The message lists the servers in use now. |
 | `MANAGEMENT_REQUIRED` | Rules or outbound NAT are declared without `management.segment`, or the management segment's interface is unavailable. |
 | `DHCP_WITHOUT_DNS` | (warning) A DHCP server hands out no DNS server: the DNS service does not serve its segment and `dnsServers` is empty. |
-| `FOREIGN_FILTER` | `nftables.service`, `firewalld` or `ufw` is enabled and would replace or override Andaru's filter. On a takeover, `nftables.service` is only a warning: confirming masks it. |
+| `FOREIGN_FILTER` | `nftables.service`, `firewalld` or `ufw` is enabled and would replace or override Andaru's filter. |
 | `APPLY_UNSUPPORTED` | PPPoE links wait for the firewall; router advertisement modes `managed`, `assisted` and `stateless` need a `dhcp6` entry for the segment; advertisements and delegated prefixes need the packet filter, so a management segment, since IPv6 forwarding stays off without it. |
 | `NETDEV_CHANGE_UNSUPPORTED` | An existing VLAN, bridge or bond would change. Remove it in one apply and add it again in the next. |
 | `BOOT_UNIT_DISABLED` | `andaru-network-boot.service` is not enabled, so a confirmed configuration would not return after a reboot. |
-
-### Taking over with the assistant
-
-On a host with no saved network configuration yet, set up by netplan or by the Debian installer's ifupdown, the assistant asks the questions and does the rest. Design and limits: [interactive takeover](../superpowers/specs/2026-11-11-interactive-takeover-design.md).
-
-```sh
-sudo andaru ctl takeover                    # questions, pre-filled with what the host uses now
-sudo andaru ctl takeover --accept-detected  # no questions: take over exactly what was detected
-```
-
-1. **Detect.** The engine reads the files netplan generated, or `/etc/network/interfaces`, and proposes one Ethernet link and segment per adapter, with its zone (`wan` for the adapter carrying the default route, `lan` for the others), addressing and DNS servers. On an all-static ifupdown host it proposes the DNS servers systemd-resolved uses now.
-2. **Ask.** Which adapters to keep (an adapter with an address cannot be left out, and on an ifupdown host none can), then per adapter its zone, IPv4 (DHCP, static addresses and gateway, or none) and IPv6 (none, SLAAC, DHCPv6, or a static IPv6 kept as detected), the host's DNS servers, and the confirmation timeout. It runs in any terminal, including the serial console; a console that reports no size is treated as 80×24.
-3. **Review.** The assistant shows, per adapter, what runs now and what will run, then the exact files and every finding, from a draft that saves nothing. **Back** is preselected; **Apply** is offered only when nothing would refuse the apply.
-4. **Apply.** The answers are saved, guarded by the saved version the proposal was made from, and applied as `andaru ctl apply network --takeover` would, with the rollback timer. Confirm from a new session as usual. From the save on, a dropped session no longer stops the assistant.
-
-Quitting, pressing Ctrl+C or losing the session before **Apply** writes nothing. Without a terminal the assistant refuses and points to `--accept-detected`, which applies only when the detection is complete and nothing would refuse it.
-
-The assistant only takes over: on a host already taken over, or with a configuration already saved, it says what to run instead and changes nothing. It cannot express everything netplan or ifupdown can; when it meets a construct it cannot reproduce, such as a non-default route, a routing policy, a MAC change, DNS set on several interfaces in one file, or an ifupdown hook, it lists it as an error and does not offer **Apply**. If a save from another session lands between the proposal and **Apply**, nothing is applied and the assistant asks to be run again. If the apply fails after the save, it prints the saved version and the command to retry.
 
 ### Packet filter
 
@@ -478,19 +451,16 @@ sudo andaru ctl preview network                          # shows "nft:inet/andar
 - **Rules:** `policy.input` (to the firewall) and `policy.forward` (through it), tried in list order: `accept`, `drop` or `reject`, `from`/`to` zones or addresses (empty means any), `services`, `log` (to the kernel log). A rule matches IPv4 and IPv6 alike unless its addresses are of one family. Reordering is its own version-checked operation, so two sessions cannot reorder past each other.
 - **Fixed rules, before every rule:** established and related accepted, invalid dropped, loopback and ICMPv6 neighbour discovery accepted, DHCPv6 replies accepted, and on each segment with a `dhcp6` entry DHCPv6 requests from link-local clients (UDP 546 to 547); everything unmatched is dropped. The firewall's own outgoing traffic is not filtered.
 - **Outbound NAT** `automatic` masquerades IPv4 forwarded out of every segment with a default route (a static gateway, DHCP or PPPoE). IPv6 is routed, not translated.
-- **Applying:** the filter is loaded before the networkd files, and when going back to a generation without one, or to the pre-Andaru baseline, the table is deleted only after the files, with IPv4 and IPv6 forwarding switched off just before it. Boot loads the confirmed filter before networkd starts, with each adapter's name looked up again by its MAC, so a card the kernel names differently after a reboot keeps its rules; a filter that does not load makes boot fall back to the last-known-good generation, files and filter together.
-- **Refused:** `nft` missing (`TOOL_MISSING`; install `nftables`), or `nftables.service`, `firewalld` or `ufw` enabled (`FOREIGN_FILTER`): Debian's `/etc/nftables.conf` begins with `flush ruleset`. A takeover is not refused for `nftables.service`, only warned: confirming it masks the unit. A masked unit never counts. Andaru itself never touches other tables, such as Podman's or Docker's; but when Andaru hands a host back to its own configuration it starts the host's `nftables.service`, and Debian's default `flush ruleset` there drops every table, theirs included.
-- **The assistant** proposes starter rules for the LAN (to any; ping and DNS to the firewall), outbound NAT, and the management adapter your SSH session arrives on, and shows the rule table in its review.
+- **Applying:** the filter is loaded before the networkd files, and when going back to a generation without one the table is deleted only after the files, with IPv4 and IPv6 forwarding switched off just before it; going back to no generation loads the bare filter first. Boot loads the confirmed filter before networkd starts, with each adapter's name looked up again by its MAC, so a card the kernel names differently after a reboot keeps its rules; a filter that does not load makes boot fall back to the last-known-good generation, files and filter together.
+- **Refused:** `nft` missing (`TOOL_MISSING`), or `nftables.service`, `firewalld` or `ufw` enabled (`FOREIGN_FILTER`), which would replace or flush Andaru's table. A masked unit never counts. Andaru itself never touches other tables, such as Podman's or Docker's.
 
 ### DHCP and DNS
 
-Andaru runs Debian's Kea as the LAN's DHCPv4 server and Unbound as its DNS service; the firewall itself resolves through the same service. Both are configured only from the confirmed generation, applied, confirmed, rolled back and booted with the network and the filter. Design: [DHCP and DNS for the LAN](../superpowers/specs/2026-11-12-dhcp-dns-design.md).
+Andaru runs Kea as the LAN's DHCPv4 server and Unbound as its DNS service; the firewall itself resolves through the same service. Both are configured only from the confirmed generation, applied, confirmed, rolled back and booted with the network and the filter. Design: [DHCP and DNS for the LAN](../superpowers/specs/2026-11-12-dhcp-dns-design.md).
 
-The `andaru` package installs Kea's and Unbound's settings, the lease hook and AppArmor rules; Kea and Unbound are its recommends.
+The image ships Kea, Unbound, their settings and the lease hook.
 
 ```sh
-sudo apt install kea-dhcp4-server unbound   # if they were left out
-
 printf '%s\n' '{"name":"lan","segment":"'"$LAN"'","ranges":[{"first":"192.168.40.128","last":"192.168.40.254"}]}' | sudo andaru ctl config create dhcp
 printf '%s\n' '{"mode":"recursive","segments":["'"$LAN"'"]}' | sudo andaru ctl config replace --version 0 dns
 ```
@@ -499,9 +469,8 @@ printf '%s\n' '{"mode":"recursive","segments":["'"$LAN"'"]}' | sudo andaru ctl c
 - **`dns`**: `mode` `recursive` or `forward` with `upstreams` (`do53`, or `dot` with the certificate's `tlsName`; one protocol for all), `segments` it serves (may be empty: the firewall only), `localDomain` (default `home.arpa`), `searchDomains`, `registerLeases` (default true). While it is declared no segment may carry `addressing.dns`: the host's servers are the upstreams, and links stop taking DNS servers from DHCP.
 - **Upstream loop refusal:** while `dns` is declared, a port 53 upstream at an address the service itself listens on is refused, since it would ask itself: `127.0.0.1`, `::1`, the unspecified address (also written as IPv4-mapped IPv6), a served segment's address (IPv4 or IPv6) and a virtual address named in `dns.virtualAddresses`. `127.0.0.53` and `127.0.0.54`, systemd-resolved's stub and proxy listeners, are refused too: Andaru points resolved at Unbound, so an upstream there loops back. Other loopback addresses such as `127.0.2.1` are accepted, because nothing listens on them. A `dot` upstream defaults to port 853, which Unbound does not serve, so it is never refused for this reason; an explicit port 53 is checked like a `do53` one.
 - **Lease names:** a client's hostname is published as `<name>.<localDomain>`, A and PTR, for a third of its lease time. Kea's `run_script` hook only touches `/run/kea/andaru-leases-changed`; `andaru-leases.path` then runs `andaru realize leases`, which reads every lease over Kea's socket and rewrites `/run/andaru-leases/leases.conf`. Only a valid name label is published; static lease names win over lease names, and the most recently renewed lease wins a name.
-- **Applying:** after networkd reloads, Kea's and Unbound's own checkers judge the new files; a refusal, or a daemon that does not come up, restores the previous generation. A generation without `dhcp` stops Kea; without `dns`, Unbound falls back to Debian's default and the host's resolver is what it was. Leases stay in Kea's `/var/lib/kea`.
-- **Filter:** with the filter on, DHCP requests are accepted on served segments by a fixed rule; DNS is governed by rules (the takeover's starter rule allows it from the LAN).
-- **Takeover:** with Unbound installed and a static LAN segment, the proposal includes the DNS service: forwarding to the host's declared servers, or recursive when they came from DHCP. With Kea installed it offers DHCP on each static LAN segment (the upper half of the subnet); the assistant asks for each, yes by default, while `--accept-detected` never turns DHCP on.
+- **Applying:** after networkd reloads, Kea's and Unbound's own checkers judge the new files; a refusal, or a daemon that does not come up, restores the previous generation. A generation without `dhcp` stops Kea; without `dns`, Unbound falls back to its packaged default and the host's resolver is what it was. Leases stay in Kea's `/var/lib/kea`.
+- **Filter:** with the filter on, DHCP requests are accepted on served segments by a fixed rule; DNS is governed by rules.
 - Inspect leases with `sudo cat /run/andaru-leases/leases.conf` or Kea's socket until a status page exists.
 
 ### DHCPv6 and prefix delegation
@@ -509,7 +478,6 @@ printf '%s\n' '{"mode":"recursive","segments":["'"$LAN"'"]}' | sudo andaru ctl c
 Kea's DHCPv6 server on LAN segments with a static IPv6 `/64`, including prefixes delegated to routers behind them. Design: [DHCPv6 for the LAN](../superpowers/specs/2026-11-13-dhcpv6-design.md).
 
 ```sh
-sudo apt install kea-dhcp6-server   # if it was left out
 printf '%s\n' '{"name":"lan6","segment":"'"$LAN"'","ranges":[{"first":"fd00:beef:1::1000","last":"fd00:beef:1::1fff"}],"prefixDelegation":{"prefix":"fd00:beef:100::/48","delegatedLength":56}}' \
   | sudo andaru ctl config create dhcp6
 ```
@@ -602,7 +570,7 @@ A LAN segment numbers itself from a prefix the WAN's DHCPv6 client receives, or 
 
 ### Host DNS servers
 
-One segment may say which DNS servers the firewall host itself asks, as netplan's `nameservers:` does. Design and limits: [static DNS servers for the host](../superpowers/specs/2026-11-11-static-host-dns-design.md).
+One segment may say which DNS servers the firewall host itself asks. Design and limits: [static DNS servers for the host](../superpowers/specs/2026-11-11-static-host-dns-design.md).
 
 ```json
 "addressing": {
@@ -616,70 +584,15 @@ One segment may say which DNS servers the firewall host itself asks, as netplan'
 - On that segment the declared servers replace any offered by DHCP or router advertisements. Without `dns`, the host uses the offered ones.
 - An apply checks that systemd-resolved reports exactly these servers, in order, for the interface; otherwise it restores the previous files. It does not check that the servers answer, and it does not look at servers set globally in `resolved.conf` or on other interfaces, which resolved also asks.
 - This is the host's own resolver only. It gives LAN clients nothing.
-- It works where systemd-resolved manages `/etc/resolv.conf` (Debian cloud images). Elsewhere the preview warns with `DNS_NOT_APPLIED` and the host keeps using its `resolv.conf`.
-- To take over a netplan host that sets DNS servers, declare `dns` on the segment of the same interface. A netplan file that sets DNS for several interfaces at once cannot be taken over yet.
-
-### Takeover
-
-`--takeover` replaces netplan's generated files under `/run/systemd/network`. **Until you confirm, nothing outside `/run` changes, so a reboot returns the host to netplan and its own firewall.** Confirming then enables `systemd-networkd` (netplan's generator was doing that), disables `systemd-networkd-wait-online` (no Andaru interface is required for "online", so it would hold every boot for its two-minute timeout), masks `nftables.service` (Debian's unit flushes the whole ruleset, Andaru's filter included, when it starts), writes `/etc/cloud/cloud.cfg.d/99-andaru-network.cfg` (`network: {config: disabled}`) and moves `/etc/netplan/*.yaml` to `/var/lib/andaru/generations/baseline/netplan/`. The packages stay installed. Whenever Andaru hands the host back to netplan's files (a rollback or a boot with no usable generation), it unmasks `nftables.service` again and, when the host enables it, starts it once Andaru's own table is gone, so the host is never without its firewall. A mask you made before the takeover stays.
-
-Boot needs `andaru-network-boot.service` ([unit](../../packaging/systemd/andaru-network-boot.service)) enabled, as the package leaves it, **before** the takeover: it copies the confirmed generation into `/run` before networkd starts. If that generation is damaged it uses the last-known-good one, and `live` then differs from `confirmed`.
-
-What changes for the host after a takeover:
-
-- Interface names stay as they were (`eth0` on cloud images, where netplan pinned it): Andaru's `.link` files keep them across reboots.
-- The host uses the DNS servers you declare, or the DHCP-provided ones when you declare none. NTP servers and hostname from DHCP are ignored.
-- `network-online.target` no longer waits for an uplink.
-- An apply interrupts IPv6 on the touched interface for about two seconds; IPv4 was uninterrupted on the lab.
-
-To undo a confirmed takeover by hand, from the console:
-
-```sh
-sudo systemctl disable --now andaru-engine.service andaru-network-boot.service
-sudo mv /var/lib/andaru/generations/baseline/netplan/*.yaml /etc/netplan/
-sudo rm /etc/cloud/cloud.cfg.d/99-andaru-network.cfg
-sudo systemctl enable systemd-networkd-wait-online.service
-# Skip this if you masked nftables.service yourself before the takeover.
-sudo systemctl unmask nftables.service
-sudo rm -r /var/lib/andaru/generations
-sudo reboot
-```
-
-### Taking over an ifupdown host
-
-A host the Debian installer set up configures its network with ifupdown and dhcpcd, without netplan. `--takeover` (and the assistant) accept it when it has only the installer's shapes. Design and limits: [taking over a default Debian install](../superpowers/specs/2026-11-11-ifupdown-takeover-design.md).
-
-- **Accepted:** `/etc/network/interfaces` and the files it sources with `auto`, `allow-hotplug`, `source`, `source-directory`, `iface lo inet loopback`, and per physical interface `inet dhcp` (option `hostname`) or `inet static` and `inet6 auto` or `inet6 static` (options `address` with a prefix length, and `gateway`). Anything else, a NetworkManager or `dhcpcd.service` beside ifupdown, or a cloud-init file in `interfaces.d`, is `TAKEOVER_UNSUPPORTED_BASELINE`.
-- **Before you start:** note the servers in `/etc/resolv.conf`, then `sudo apt install systemd-resolved` and reboot. resolved becomes the host's resolver and must be in charge first (`RESOLVED_NOT_IN_CHARGE` otherwise). With DHCP it then has the offered servers. On an all-static host it has none, so the host stops resolving names until the takeover. To avoid that, put the noted servers in `/etc/systemd/resolved.conf` (`DNS=` and `Domains=` under `[Resolve]`) and run `sudo systemctl restart systemd-resolved`; the assistant then proposes them too. Otherwise enter them in the assistant or declare them as `dns`.
-- **Leases are kept:** networkd presents dhcpcd's DHCP identity (its DUID and an IAID from the MAC), so the DHCP server hands out the same IPv4 lease and DHCPv6 address. That needs dhcpcd running for each DHCP interface with its default identity settings (`DHCP_IDENTITY_UNKNOWN` otherwise). The review shows the identity lines.
-- **Every interface with an `iface` stanza must be declared** (`WOULD_UNCONFIGURE` otherwise): confirming masks ifupdown for all of them.
-- **DNS:** with DHCP or `inet6 auto` the host keeps the offered servers. On an all-static host declare `dns` on a segment (`DNS_REQUIRED` lists the servers in use now).
-- **Activation** stops dhcpcd without dropping its addresses, starts networkd and applies the files. **A rollback, or a failed activation, hands the interfaces back to ifupdown** through `ifup@<nic>.service` or `networking.service`, and is recorded only once each interface that had an IPv4 address before has one again (not necessarily the same one; DHCP normally hands back the same lease); until then the timer retries it.
-- **Confirming** enables `systemd-networkd`, disables `systemd-networkd-wait-online` and masks `networking.service`, `ifup@.service` and `nftables.service`. `/etc/network/interfaces` is left as it was and ifupdown stays installed. Whenever Andaru hands the host back to ifupdown (a rollback, a failed activation, or a boot with no usable generation), it removes all three masks (keeping a mask of `nftables.service` you made before the takeover) and starts `nftables.service` when the host enables it; at boot it starts ifupdown again.
-- **Limits:** SLAAC addresses dhcpcd made change at the takeover (dhcpcd derives private ones, networkd EUI-64 ones), so an IPv6 session on one is cut; the kernel's own SLAAC address on an interface without an `inet6` stanza is kept; scripts in `if-up.d` and `if-down.d` stop running after confirmation; a rollback can cut IPv4 for several seconds while ifupdown asks for the lease again. The review shows these as `TAKEOVER_LIMIT` warnings.
-
-To undo a confirmed ifupdown takeover by hand, from the console:
-
-```sh
-sudo systemctl disable --now andaru-engine.service andaru-network-boot.service
-sudo systemctl unmask networking.service ifup@.service
-# Skip this if you masked nftables.service yourself before the takeover.
-sudo systemctl unmask nftables.service
-sudo systemctl disable systemd-networkd.service
-sudo systemctl enable systemd-networkd-wait-online.service
-sudo rm -r /var/lib/andaru/generations
-sudo reboot
-```
+- It works where systemd-resolved manages `/etc/resolv.conf`. Elsewhere the preview warns with `DNS_NOT_APPLIED` and the host keeps using its `resolv.conf`.
 
 ### How it is built
 
 The engine keeps its sandbox and never writes outside its state directory. It stores each generation under `/var/lib/andaru/generations/<n>/` and asks systemd to run `andaru realize activate|rollback|confirm N` in a transient unit; the timer runs `andaru realize rollback N deadline` the same way. `pointers.json` in that directory is the single commit point, and `realize` re-reads it under a lock before acting, so a timer that fires after a confirmation does nothing. Because the engine can ask systemd to run commands, it is root-equivalent; the sandbox is hardening, not a boundary.
 
-These behaviours are proven on the Debian lab VM, not in CI: see [the lab qualification](#network-takeover-debian-lab-qualification).
-
 ## Supervision
 
-The source unit is [`packaging/systemd/andaru-engine.service`](../../packaging/systemd/andaru-engine.service), installed by the `andaru` package with the binary at `/usr/bin/andaru` ([Installing](#installing)).
+The source unit is [`packaging/systemd/andaru-engine.service`](../../packaging/systemd/andaru-engine.service), shipped in the image with the binary at `/usr/bin/andaru` ([Installing](#installing)).
 
 ```sh
 sudo systemctl start andaru-engine.service
@@ -821,36 +734,6 @@ After the adversarial review, code commit `1ec0a3aa91a29fe34cba5ee6569049544abb7
 
 The three tool proofs run on this lab, **not in CI**: the hosted runners are Ubuntu 24.04, whose pppd and systemd are not the Debian 13 versions these files target. CI runs the golden-file, findings, redaction, API and CLI tests on amd64 and arm64. Linux arm64 was cross-built, not run on Debian. No PPPoE discovery packet was sent and no session was established; a real line remains the owner's test. The engine is active and still not boot-enabled.
 
-### Network-takeover Debian lab qualification
-
-On 2026-11-11 the CGO-disabled amd64 build of code commit `30d9c88` (SHA-256 `563eb8b4ddca49ac2bdc1ee77d01d6087485cac7c7829b378941e8ee7f7961ae`) was installed on VM 114 with both units enabled, behind snapshot `pre-takeover-20261111-063101`. The VM's NIC was saved as a DHCPv4 + SLAAC Ethernet uplink. A 5-per-second ping ran from another host during each change; confirmations were sent over a new SSH connection.
-
-| Step | Result |
-| --- | --- |
-| Empty configuration with `--takeover` | Refused: `WOULD_UNCONFIGURE` for `eth0`. |
-| Takeover, not confirmed (30 s) | Live in about 1 second. The timer restored both netplan files with their owner, group and mode. 0 of 650 pings lost. |
-| Takeover, reboot before the deadline | Back on netplan; the apply reads `rolled_back`, reason `reboot`; `/etc/netplan` untouched. |
-| Takeover, confirmed | 0 of 100 pings lost. `/etc/netplan` empty, cloud-init network configuration disabled, networkd enabled, DNS resolving, no timer left. |
-| Reboot | Same address on `ens18`, bound to Andaru's file, no netplan file in `/run`. The boot unit finished before networkd started. Boot took 5.8 s. `systemd-analyze verify` printed nothing for the boot unit. |
-| `cloud-init clean`, reboot | `/etc/netplan` stayed empty; same result. (cloud-init regenerated the SSH host keys, as it does on a first boot.) |
-| Add VLAN 99 with `192.0.2.1/24`, early `applies rollback` | Rolled back while the timer was armed; the VLAN device was deleted. |
-| Same apply, engine killed, not confirmed | The timer rolled back with the engine stopped; device deleted. 0 of 600 pings lost across both. |
-| Same apply confirmed, reboot | VLAN present with its address; `lastKnownGood` is the takeover generation. |
-| Confirmed generation corrupted, reboot | Boot placed last-known-good and logged the fallback; `live` differs from `confirmed`. |
-| Changed VLAN id; PPPoE link declared; stale `--saved-version` | `NETDEV_CHANGE_UNSUPPORTED`; `APPLY_UNSUPPORTED`; `412 PRECONDITION_FAILED`. |
-
-**Found on the lab and fixed:** `systemd-networkd-wait-online` is enabled on the cloud image independently of netplan. With no interface required for "online" it ran to its 120-second timeout on every boot and delayed SSH by two minutes. A confirmed takeover now disables it.
-
-Also observed: `systemd-run --wait` returns the command's exit status, and the timer's unit and the on-demand rollback unit coexist.
-
-Not run on the lab: an apply without `--takeover` while netplan is still in place (unit-tested as `TAKEOVER_MISMATCH`), a host with `/var` on its own filesystem, and any baseline other than this cloud image. No PPPoE session and no forwarding were involved.
-
-After the adversarial review, code commit `da58646` (SHA-256 `ba401579ed371c5dccddf23dd8011c18c8a93b2dfb4f024f51eb7c495bea5a3b`) replaced that binary. On the VM an apply went live with its timer's service carrying `Restart=on-failure` and `RestartSec=10s`, and was confirmed from a new session; the reboot and rollback steps above were not repeated with this build.
-
-Afterwards the VM was shut down, rolled back to the pre-takeover snapshot and snapshotted again while stopped as `base-netplan-20261111` (disk only), so the next qualification starts from the netplan baseline. Lab rule: snapshot a stopped VM at its base state, and shut down, roll back and start to reset it when testing is done.
-
-After the bot reviews, code commit `7e4b94f` (SHA-256 `06a3ad873a3eef6bcabc2a08dc921daeef414b7acb9eef56f9a45195cd18d4d2`) was installed on the VM reset to `base-netplan-20261111`. A takeover with a 30-second timeout stayed live when its rollback was run by hand before the deadline (the command exited non-zero), and the timer rolled it back afterwards. A second takeover was confirmed from a new session, `pointers.json` recorded `"takeover":true`, and the VM rebooted in 6.3 s onto Andaru's file with DNS resolving. The VM was then reset to the base snapshot again.
-
 ### Static host DNS Debian lab qualification
 
 On 2026-11-11 the CGO-disabled amd64 build of code commit `40affb6` (SHA-256 `aaff74d3adcff79f81759501fa40ec72a3ae2686eb2f3decb9a94d4d918cb042`) was installed on VM 114. "Servers" below is the output of `resolvectl dns` for the interface; a 5-per-second ping ran during each takeover.
@@ -864,39 +747,6 @@ On 2026-11-11 the CGO-disabled amd64 build of code commit `40affb6` (SHA-256 `aa
 | Same takeover confirmed from a new session, then rebooted | Same address on `ens18`, servers as declared, a name resolved, `/etc/netplan` empty, boot in 6.0 s. |
 
 Not run on the lab: a host where systemd-resolved does not manage `/etc/resolv.conf` (unit-tested: the check is skipped and the preview warns). The VM was reset to `base-netplan-static-20261111` afterwards. On this ZFS-backed VM only the most recent snapshot can be rolled back to, so the older DHCP base `base-netplan-20261111` is now reachable only by cloning from it.
-
-### Takeover assistant Debian lab qualification
-
-On 2026-11-11 CGO-disabled amd64 builds of this branch were installed on VM 114 at snapshot `base-netplan-static-20261111` (static 10.0.1.19/16, gateway, two DNS servers, a search domain), reset to that snapshot between runs. A 5-per-second ping ran during each takeover.
-
-| Step | Result |
-| --- | --- |
-| `andaru ctl takeover` over `ssh -t` (80×24), every detected value accepted, **Apply** | 0 pings lost. Review showed the exact `.network` file; confirmed from a new SSH session. After a reboot: same address on `ens18`, the declared DNS servers, a name resolved, `/etc/netplan` empty. |
-| Same, **Quit** at review | Exit 1, "Nothing was changed"; no save, no apply. |
-| On the serial console (`ttyS0`, which reports a 0×0 size, `TERM=vt100`), **Apply**, not confirmed | 0 pings lost; the timer rolled back after 120 seconds; the next run reported `saved-not-applied` and changed nothing. |
-| A second session saved a zone while the assistant waited at review, then **Apply** | "saved meanwhile from another session"; exit 1, nothing applied, the other session's save kept. |
-| Proxmox cloud-init switched to DHCP (netplan `dhcp4`/`dhcp6`), `andaru ctl takeover --accept-detected` | 0 pings lost; IPv4 DHCP and DHCPv6 rendered with the offered DNS; confirmed and rebooted: same addresses on `ens18`, a name resolved. |
-| The final build of the branch (SHA-256 `be0c457e475fc6dc52b62f27b6e5cc77e4e1130d70cd08170cdcbb7653c91218`), `--accept-detected --confirm-timeout 30` on the static base, not confirmed | Applied; the timer rolled it back and `live` returned to `null`. |
-
-Two defects found on the lab were fixed with tests before this record: the review counted the preview's `FOREIGN_CONFIGURATION` findings for the netplan files a takeover replaces, so **Apply** was never offered, and on the serial console's 0×0 size the forms had no room to draw.
-
-### ifupdown takeover Debian lab qualification
-
-On 2026-11-11 CGO-disabled amd64 builds of this branch were installed on VM 117: Debian 13 converted to the installer's layout (ifupdown 0.8.44, dhcpcd 10.1, `allow-hotplug ens18`, `inet dhcp`, `inet6 auto`). A 5-per-second ping ran from another host during each takeover. The DHCPv6 address is `2a02:a466:79a7:beef::11e3/128`.
-
-| Step | Result |
-| --- | --- |
-| Snapshot `base-ifupdown-dhcp-20261111`, `andaru ctl takeover --accept-detected` | Refused with `RESOLVED_NOT_IN_CHARGE` only. |
-| `apt install systemd-resolved` on a host where it was never installed, then a reboot; snapshotted while stopped as `base-ifupdown-resolved-20261112` | resolv.conf became resolved's stub and resolved got the DHCP-provided server and domain only after the reboot. |
-| `andaru ctl takeover` over `ssh -t` (80×24), every detected value accepted, not confirmed | The review showed the identity lines and both `TAKEOVER_LIMIT` warnings. 0 of 600 pings lost; same IPv4 lease, the DHCPv6 address back within seconds, names resolved. The timer handed back to ifupdown: networkd stopped, dhcpcd running, same IPv4 and DHCPv6 addresses. |
-| The same, applied with a 30-second timeout and pinged across the rollback | 1 of 578 pings lost at the hand-back (0.2 s). The probe without `KeepConfiguration=dynamic-on-stop` had lost IPv4 for 7.4 s. |
-| Applied, then rebooted before confirming | Came up on ifupdown with the same addresses; the generation reads `rolled_back` (`reboot`). |
-| From the resolved base, `andaru ctl takeover` on the serial console (`ttyS0`), confirmed from an SSH session, rebooted | Same IPv4 and DHCPv6 addresses on networkd, `networking.service` and `ifup@ens18.service` masked, names resolved, boot in 6.1 s. A later apply adding a VLAN with a static address was confirmed and kept `ens18`'s address. |
-| `systemd-networkd` masked, `--accept-detected` | Activation failed; the host was handed back to ifupdown (dhcpcd running, same addresses, no Andaru file) after a 2.8 s IPv4 gap, and the generation reads `failed`. |
-| The installer's static stanza (`10.0.1.13/16`, gateway `10.0.0.1`, no `inet6`), resolved installed afterwards; snapshotted as `base-ifupdown-static-20261112` | resolved has no servers on such a host. `--accept-detected` is refused with `DNS_REQUIRED` ("uses these now: none"). |
-| `andaru ctl takeover` on that host, "these servers" entered in the assistant, confirmed | Same address and default route, the entered servers and search domain in use, names resolved, 0 of 200 pings lost. The first run dropped the SLAAC address the kernel had taken without an `inet6` stanza; the reader now detects it as SLAAC and the rerun kept it. |
-
-The VM was left at `base-ifupdown-static-20261112`, its newest snapshot. On this ZFS-backed VM only the newest snapshot can be rolled back to, so the DHCP and resolved bases are now reachable only by cloning.
 
 ### Packet filter Debian lab qualification
 
@@ -955,47 +805,6 @@ On 2026-11-13 the CGO-disabled amd64 builds of `a8d9c7b` and, after the review a
 The lab found and this branch fixes: the old pool's routes went a second after the change, while Kea still held its leases, so the old prefixes followed the default route; and networkd's burst of link-file rewrites at boot hit the service's start limit, which stopped the path unit.
 
 Not run on the lab: a prefix shorter than requested, graceful renumbering, the saved prefix expiring, and a `config-set` Kea refuses; unit tests cover them.
-
-### Debian packages lab qualification
-
-On 2026-11-14, `v0.4.0-rc1` (`andaru 0.4.0~rc1-1`, amd64) was installed from `https://apt.andaru.io/` (`trixie-test`) on VM 114 (netplan, cloud image) and VM 117 (ifupdown, Debian installer), each reset to its pre-Andaru snapshot, following [Installing](#installing): the keyring package checked against its release's `SHA256SUMS`, then `apt install andaru` with its recommends.
-
-- `scripts/ci/install-check.sh` passed on both after the fix below: Andaru's files in place, `nftables.service` masked, the units enabled and the engine answering, the AppArmor include lines present in the local files, and no interface or route changed by installing. Separately, `aa-status` listed the Kea and Unbound profiles as loaded and `apparmor_parser -p` showed Andaru's rules in the preprocessed `usr.sbin.kea-dhcp4` profile. For Unbound only, the kernel's use of Andaru's rules was shown by Unbound, which the fix restarted after the reload, reading `/run/andaru-unbound/` without the denial it had logged before.
-- `andaru ctl takeover --accept-detected`, then confirmation from a new session, then a reboot: both came back `running` with generation 1 confirmed and live, Unbound active and `nftables.service` masked; SSH stayed reachable throughout.
-- `v0.4.0-rc2` was published. After the reboot and before the upgrade, `install-check.sh before` ran again and the engine's InvocationID was recorded; then `apt upgrade` installed `0.4.0~rc2-1` on both: the engine restarted, Unbound stayed active and no interface or route changed. `andaru-network-boot` had run at the reboot, so the first `upgraded` check reported it; with the check fixed in this change to compare against the `before` record, a reinstall within one boot (`before`, `after`, reinstall, `upgraded`) passed on both.
-
-The lab found, fixed in [#49](https://github.com/andaru-project/andaru/pull/49): apt configures Unbound before Andaru, so Unbound started before Andaru's AppArmor rules were loaded, was denied `/run/andaru-unbound/` and failed. Andaru now starts a failed, enabled daemon again once its rules are loaded. The containers in CI have no kernel AppArmor and cannot show this. Also found, not packaging: [#50](https://github.com/andaru-project/andaru/issues/50), IPv6 on an ifupdown interface without an `inet6` stanza is gone after the first reboot.
-
-Not run on the lab: arm64, a hand-installed host's cleanup, and purging.
-
-### Conventional APT upgrade and recovery lab qualification
-
-On 2026-11-14, VM 114 (netplan) and VM 117 (ifupdown) started from the retained rc2 state, with generation 1 confirmed/live and saved configuration version 10. Safety snapshots `apt-upgrades-rc2-20261114` preserve both guests. Existing `/etc/systemd/system` unit overrides were deliberately retained, not silently removed to make the package test pass.
-
-The exact package artifacts were:
-
-| Artifact | SHA-256 |
-| --- | --- |
-| Published `0.4.0~rc2-1`, amd64 | `4563e497c12afae14db348cfac0dd793cdface154159d0f28decbde5398801dc` |
-| Initial private candidate `0.4.0~rc3-1`, amd64 | `f1add1a99d131bdf615e6f70323118cbe5a274e6dfe0a038205ec20d024e6bb7` |
-| Fixed private candidate `0.4.0~rc3-2`, amd64 | `33db32439dac3dfbd0c7ac4b8684f6062571c074fd4dad123190ae825bce6fad` |
-
-The candidates are qualification builds, not published project releases. A disposable, separately scoped signed `file:` APT archive provided them and an intentional `postinst` failure package (`0.4.0~rc4-1`).
-
-- **Rc2 bootstrap:** explicitly retained the verified rc2 `.deb`, paused the engine/activators, held both writer locks and cold-copied the paired state. The old engine read a second copy on a private socket and returned the same saved configuration. The original copy stayed unchanged. Ordinary APT then installed the candidate.
-- **Check and preparation:** check reported the newer candidate without installing it or restarting the engine. Preparation retained the exact installed package and verified state. Preparation while a save-only configuration writer ran succeeded; later writes were outside the snapshot. The final saved configuration was version 30, while the confirmed/live generation stayed 1.
-- **Safety gates:** a pending apply was refused without stopping its rollback timer or engine; the test explicitly rolled that apply back afterward. A 100 GiB sparse test file caused the space-reserve check to refuse before pausing the engine. An unindexed locally installed variant produced a state-only result and did not replace the complete recovery set.
-- **Masks and interrupted preparation:** an administrator-style runtime mask of `andaru-prefixes.timer` survived preparation and manual repair. `SIGKILL` during the lock wait left an actionable preparation record and the previous completed set. The next command refused to overwrite it; an explicit operator resume restored only recorded active units. The incomplete stage was inspected before removal.
-- **Package failure:** the intentional `postinst` failure left new files installed and dpkg half-configured, with no automatic downgrade. **State failure:** `user_version=999` made the configured candidate refuse engine startup, without automatic state restoration.
-- **Manual repair on the fixed revision:** the retained matching package was installed with all seven Andaru units inhibited; the old engine's invocation did not change before the state copy was restored. Both database/state copies and the confirmed generation returned, and a save-only change deliberately accepted after preparation disappeared as warned. Administrator masks, original unit overrides, active intent and enablement were preserved.
-- **Narrow offline proof:** the repair subprocess ran `dpkg --install` in an empty network namespace, with only loopback down, using a local `.deb` and already-satisfied runtime dependencies. The appliance's live services were not disconnected. This proves that package/state repair case only, not a complete offline dependency or OS rollback.
-- **Runtime and reboot:** networkd's invocation stayed unchanged during preparation/upgrades/repair, and each guest's pre-existing table contents were preserved. Table enumeration order changed after the explicit apply/rollback, so comparison retained rule order inside each table rather than comparing table enumeration order. VM 117 had no `inet andaru` table in its baseline generation; its existing probe table stayed unchanged. After removing the lab APT source/key and restoring the test timer's initial state, both guests rebooted with the engine/paths/timer active, network-boot enabled and generation 1 confirmed/live. Preparation then reused the verified local artifact without the test archive. TCP port 22 was reachable on both management addresses.
-
-The lab found and corrected three runbook assumptions: runtime masks do not override `/etc` units; APT's `--no-download` local-file repair path failed in this setup, so the already-satisfied-dependency proof uses ordinary `dpkg`; and Debian's helpers can change enablement while an override is masked, so enablement must be restored explicitly, not inferred from a running engine.
-
-It also found a product bug: repeated preparations consumed systemd's start budget and left the previously healthy control-plane units stopped. The fixed candidate clears only those paused units' counters before restarting them; ordinary restart limits remain configured. Eight rapid preparations succeeded on each VM, and the space/unindexed-package/interruption and both repair cases passed on that fixed revision.
-
-Not qualified here: arm64 hardware, authenticated SSH login, web UI/authentication checks, dependency-changing downgrade, total disk loss, hard power loss during preparation, or recovery after a later connectivity-changing apply. `SIGKILL` is not a substitute for a power-loss durability test. SQLite and Python were lab observation/fault-injection tools, not added package dependencies.
 
 ### Virtual addresses Debian lab qualification
 

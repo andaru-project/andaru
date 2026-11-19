@@ -1,6 +1,6 @@
 # Taking over a default Debian install (ifupdown)
 
-Superseded on 2026-11-18 by [Andaru as an appliance image](2026-11-18-appliance-image-design.md): Andaru owns the network from the first boot, so there is no takeover.
+Superseded on 2026-11-18 by [Andaru as an appliance image](2026-11-18-appliance-image-design.md): Andaru owns the network from the first boot, so there is no takeover. Its code was deleted in slice 3.
 
 ## Status and intent
 

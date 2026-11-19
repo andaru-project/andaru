@@ -21,8 +21,7 @@ func TestServiceGoldensPassTheirTools(t *testing.T) {
 			skipMissingTool(t, tool+" not installed")
 		}
 	}
-	// Debian's and Ubuntu's AppArmor profiles let kea-dhcp4 read only its own directories and, with
-	// packaging/apparmor installed, Andaru's: the configuration is staged where it lives on a host.
+	// The configuration is staged where it lives on a host.
 	if err := os.MkdirAll("/run/andaru-kea", 0o755); err != nil {
 		t.Fatal(err)
 	}
