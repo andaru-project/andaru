@@ -1,0 +1,72 @@
+# The install ISO's live Ignition config: the installer on the screen (tty1) and on the serial console, and nothing
+# else. The live system has no network and no SSH; it is discarded, so masking is safe. render.sh fills in @CONSOLE@,
+# the serial console (ttyS0 on x86_64, ttyAMA0 on aarch64), and renders dest.bu into dest.ign first.
+variant: fcos
+version: 1.6.0
+storage:
+  files:
+    - path: /usr/local/bin/andaru-install
+      mode: 0755
+      contents:
+        local: andaru-install
+    - path: /usr/local/share/andaru-install/dest.ign
+      mode: 0644
+      contents:
+        local: dest.ign
+    # Links the installer brings up to read their carrier get no address from a router advertisement.
+    - path: /etc/sysctl.d/90-andaru-install.conf
+      mode: 0644
+      contents:
+        inline: |
+          net.ipv6.conf.all.disable_ipv6 = 1
+          net.ipv6.conf.default.disable_ipv6 = 1
+systemd:
+  units:
+    # NetworkManager would take DHCP leases on every port, the WAN included.
+    - name: NetworkManager.service
+      mask: true
+    - name: NetworkManager-wait-online.service
+      mask: true
+    - name: sshd.service
+      mask: true
+    - name: sshd.socket
+      mask: true
+    - name: zincati.service
+      mask: true
+    # The installer owns both consoles. autovt@tty1 is kmscon's alias, which logind starts on a switch back to VT1.
+    - name: kmsconvt@tty1.service
+      mask: true
+    - name: autovt@tty1.service
+      mask: true
+    - name: getty@tty1.service
+      mask: true
+    - name: serial-getty@@CONSOLE@.service
+      mask: true
+    - name: andaru-install@.service
+      contents: |
+        [Unit]
+        Description=Andaru installer on %I
+        # Quick exits (end of input at the prompt, a serial hangup) must never stop it for good: its getty is masked.
+        StartLimitIntervalSec=0
+        After=systemd-user-sessions.service plymouth-quit-wait.service
+        Conflicts=getty@%i.service serial-getty@%i.service kmsconvt@%i.service autovt@%i.service
+
+        [Service]
+        ExecStart=/usr/local/bin/andaru-install
+        StandardInput=tty
+        StandardOutput=tty
+        StandardError=tty
+        TTYPath=/dev/%I
+        TTYReset=yes
+        TTYVHangup=yes
+        Restart=always
+        RestartSec=1
+        # The medium is not an Andaru install medium: say so once.
+        RestartPreventExitStatus=1
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: andaru-install@tty1.service
+      enabled: true
+    - name: andaru-install@@CONSOLE@.service
+      enabled: true

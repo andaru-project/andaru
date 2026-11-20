@@ -96,16 +96,17 @@ The owner approved these on 2026-11-20. Calls 1, 4, 7, 8, 9, 10 and 11 amend the
 - [ ] `image/iso/dest.bu`, with `@IMAGE@` and `@VERSION@` filled in by the build:
   - spec call 4's masks and disables;
   - the rebase unit exactly as the spike ran it: `ConditionPathExists=!/usr/bin/andaru` and `ConditionPathExists=/var/andaru-install/andaru.oci`; `unshare -m`; `/sysroot` remounted writable; `ostree container image deploy --sysroot / --imgref ostree-unverified-image:oci-archive:/var/andaru-install/andaru.oci --target-imgref ostree-image-signed:docker://@IMAGE@:@VERSION@`; then reboot;
-  - `OnFailure=` writing `/etc/issue.d/andaru-install.issue`, "Andaru's install did not finish: reinstall from the ISO", so a failed deploy says so on the console.
+  - `OnFailure=` writing `/run/issue.d/andaru-install.issue`, "The Andaru install did not finish: reinstall from the ISO.", then starting `getty@tty1` (kmscon, on the screen, shows no issue file) and reloading agetty, so a failed deploy says so on both consoles. In `/run`, the message lasts only for a boot whose rebase failed.
+  - It also masks `NetworkManager-wait-online`, as the image does.
 - [ ] `image/iso/live.bu`, with `@CONSOLE@`: the installer, its units and the masks (calls 5 and 6), the IPv6 sysctls (call 6), and the rendered `dest.ign` as a file (`butane --files-dir`, so `dest.bu` is rendered first).
-- [ ] CI renders both with `butane --strict`.
+- [ ] CI renders both with `butane --strict` (`render.sh`), then checks the rendered units and files (`check-ign.sh`).
 
 ### Task 5: the ISO build
 - [ ] `image/iso/build.sh REPO VERSION DIGEST ARCH AMD64_DIGEST OUT`, with `ARCH` `x86_64` or `aarch64`, and `coreos-installer` run from `REPO@AMD64_DIGEST` (call 2):
   - read `OSTREE_VERSION` and `RELEASE_TYPE` from `REPO@DIGEST` (call 1); fetch and verify the live ISO (call 2);
   - `skopeo copy --preserve-digests docker://REPO@DIGEST oci-archive:andaru.oci`, and check that its `index.json` names `DIGEST`;
   - `xorriso -indev <fcos.iso> -outdev <out.iso> -compliance iso_9660_level=1 -map andaru.oci /andaru.oci -boot_image any replay`;
-  - render `dest.bu` with `REPO:VERSION`, then `live.bu`; `coreos-installer iso customize --live-ignition` and `--live-karg-append`;
+  - render `dest.bu` with `REPO:VERSION`, then `live.bu`; `coreos-installer iso customize --live-ignition` and `--live-karg-append`, with `systemd.show_status=false` and `loglevel=3` beside the console, so status lines and kernel messages do not draw over the installer;
   - check `iso kargs show` and `iso ignition show`.
 
 ### Task 6: the installed box's side (call 10)

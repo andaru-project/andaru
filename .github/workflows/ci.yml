@@ -45,8 +45,17 @@ jobs:
         run: |
           set -eu
           shellcheck --version
-          shellcheck scripts/ci/*.sh packaging/kea/andaru-lease-event image/iso/andaru-install
+          shellcheck scripts/ci/*.sh packaging/kea/andaru-lease-event image/iso/andaru-install image/iso/render.sh image/iso/check-ign.sh
           shellspec
+
+      # Butane --strict refuses a config with any warning but reads no unit; check-ign.sh checks what they must do.
+      - name: Render and check the install ISO's Ignition configs
+        run: |
+          set -eu
+          for console in ttyS0 ttyAMA0; do
+            sh image/iso/render.sh ghcr.io/andaru-project/andaru 0.0.0-ci "$console" "$RUNNER_TEMP/live-$console.ign"
+            sh image/iso/check-ign.sh "$RUNNER_TEMP/live-$console.ign" ghcr.io/andaru-project/andaru 0.0.0-ci "$console"
+          done
 
   frontend:
     name: browser client
