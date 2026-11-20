@@ -15,7 +15,7 @@ trap 'rm -f "$config"' EXIT
 podman image inspect "$image" >"$config"
 # --prune /sysroot/ drops the base's ostree repository, which bootc does not need in an image. The ostree labels
 # describe the base's layers, which no longer exist.
-podman run --rm --mount=type=image,src="$image",dest=/chunkah -v "$config:/config.json:ro" "$chunkah" \
+podman run --rm --mount=type=image,src="$image",target=/chunkah -v "$config:/config.json:ro" "$chunkah" \
 	build --config /config.json --prune /sysroot/ --max-layers 128 \
 	--label ostree.commit- --label ostree.final-diffid- -t "$image" |
 	podman load
