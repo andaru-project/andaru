@@ -21,20 +21,20 @@ func moveSeed(stateDir string) error {
 		return err
 	}
 	target := filepath.Join(stateDir, "install-seed.json")
-	if _, err = os.Lstat(target); err == nil {
-		return os.Remove(stagedSeed)
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	// A fresh install has no state directory yet: create it as the engine unit's StateDirectoryMode would.
-	if err = os.Mkdir(stateDir, 0o700); err != nil && !os.IsExist(err) {
-		return err
-	}
-	// A temporary file left by a power cut mid-move would make commitRendered's exclusive create fail.
-	if err = os.Remove(target + ".andaru-tmp"); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	if err = commitRendered(target, body, 0o600); err != nil {
+	// A target already there wins; it is still synced below, as an earlier move may have failed after its rename.
+	if _, err = os.Lstat(target); os.IsNotExist(err) {
+		// A fresh install has no state directory yet: create it as the engine unit's StateDirectoryMode would.
+		if err = os.Mkdir(stateDir, 0o700); err != nil && !os.IsExist(err) {
+			return err
+		}
+		// A temporary file left by a power cut mid-move would make commitRendered's exclusive create fail.
+		if err = os.Remove(target + ".andaru-tmp"); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		if err = commitRendered(target, body, 0o600); err != nil {
+			return err
+		}
+	} else if err != nil {
 		return err
 	}
 	// The parent too, for a state directory the move created.
