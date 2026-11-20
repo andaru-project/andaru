@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "management": {
+    "mac": "52:54:00:aa:bb:01",
+    "addressing": {
+      "ipv4": {
+        "mode": "static",
+        "addresses": [
+          "192.168.1.1/24"
+        ]
+      },
+      "ipv6": {
+        "mode": "none"
+      }
+    },
+    "serve": {
+      "dhcp": {
+        "start": "192.168.1.100",
+        "end": "192.168.1.199"
+      },
+      "dns": true
+    }
+  },
+  "sshKeys": [
+    {
+      "type": "ssh-ed25519",
+      "blob": "AAAAC3NzaC1lZDI1NTE5AAAAIO+VXyljs/lkyfnto5CqJDJaSFTQana6UuzepSCNrhwa",
+      "comment": "admin@laptop"
+    }
+  ]
+}

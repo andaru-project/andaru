@@ -26,16 +26,16 @@ The owner approved these on 2026-11-20. Calls 1, 4, 7, 8, 9, 10 and 11 amend the
      "version": 1,
      "management": {"mac": "52:54:00:aa:bb:01",
                     "addressing": {"ipv4": {"mode": "static", "addresses": ["192.168.1.1/24"]},
-                                   "ipv6": {"mode": "delegated", "from": "wan", "subnetId": "0",
+                                   "ipv6": {"mode": "delegated", "from": "@wan", "subnetId": "0",
                                             "ra": {"mode": "unmanaged"}}},
                     "serve": {"dhcp": {"start": "192.168.1.100", "end": "192.168.1.199"}, "dns": true}},
      "wan": {"mac": "52:54:00:aa:bb:02",
              "addressing": {"ipv4": {"mode": "dhcp"}, "ipv6": {"mode": "dhcp6", "requestPrefixLength": 56}}},
-     "sshKeys": ["ssh-ed25519 AAAA… admin@laptop"]
+     "sshKeys": [{"type": "ssh-ed25519", "blob": "AAAA…", "comment": "admin@laptop"}]
    }
    ```
 
-   Each port's `addressing` is Andaru's own configuration object (`$defs/addressing` in `internal/config/schema.json`), so slice 3 checks it with the schema Andaru already has and copies it into the first configuration, pointing `delegated`'s `from` (the seed's `"wan"`) at the WAN segment:
+   Each port's `addressing` is Andaru's own configuration object (`$defs/addressing` in `internal/config/schema.json`), so slice 3 checks it with the schema Andaru already has and copies it into the first configuration, where `delegated`'s `from`, `"@wan"`, is the label of the WAN segment slice 3 creates in the same change:
    - **IPv4:** `none`, `dhcp` or `static` (addresses, and a gateway on the WAN). `ppp` waits for PPPoE (#77).
    - **IPv6:** `none`, `static` (addresses, and a gateway on the WAN), `slaac`, `dhcp6` (with `requestPrefixLength` for a delegated prefix, and the advanced `prefixOnly`, `withoutRA`, `sendRelease` and `duid` behind an "Advanced" entry), or, on management only, `delegated`: a subnet (`subnetId`) of the prefix the WAN's `dhcp6` requests, so the LAN follows that prefix when the ISP changes it. `delegated` needs a WAN with `dhcp6` and `requestPrefixLength`.
    - **Router advertisements** on management, with a `static` or `delegated` IPv6: Andaru's `ra.mode`, offered as a list, defaulting to `unmanaged` (SLAAC only), which needs no DHCPv6 server.

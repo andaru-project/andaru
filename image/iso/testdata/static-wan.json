@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "management": {
+    "mac": "52:54:00:aa:bb:01",
+    "addressing": {
+      "ipv4": {
+        "mode": "static",
+        "addresses": [
+          "192.168.1.1/24"
+        ]
+      },
+      "ipv6": {
+        "mode": "none"
+      }
+    },
+    "serve": {
+      "dhcp": {
+        "start": "192.168.1.100",
+        "end": "192.168.1.199"
+      },
+      "dns": true
+    }
+  },
+  "wan": {
+    "mac": "52:54:00:aa:bb:02",
+    "addressing": {
+      "ipv4": {
+        "mode": "static",
+        "addresses": [
+          "203.0.113.2/24"
+        ],
+        "gateway": "203.0.113.1"
+      },
+      "ipv6": {
+        "mode": "static",
+        "addresses": [
+          "2001:db8:1::2/64"
+        ],
+        "gateway": "2001:db8:1::1"
+      },
+      "dns": {
+        "servers": [
+          "203.0.113.53",
+          "2001:db8:1::53"
+        ]
+      }
+    }
+  },
+  "sshKeys": [
+    {
+      "type": "ssh-ed25519",
+      "blob": "AAAAC3NzaC1lZDI1NTE5AAAAIO+VXyljs/lkyfnto5CqJDJaSFTQana6UuzepSCNrhwa",
+      "comment": "admin@laptop"
+    }
+  ]
+}
