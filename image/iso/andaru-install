@@ -199,7 +199,7 @@ words() (
 	set -f
 	# shellcheck disable=SC2086 # split on whitespace
 	set -- $1
-	echo "$*"
+	printf '%s\n' "$*"
 )
 optional_duid() {
 	[ -z "$1" ] || duid "$1"
@@ -265,12 +265,14 @@ key_files() {
 lsblk_json() {
 	lsblk -J -l -b -o NAME,PATH,TYPE,SIZE,RO,PKNAME,LABEL,FSTYPE,MODEL
 }
-# boot_source prints the device holding the ISO's filesystem. An ISO loop-mounted from a file on a stick (Ventoy,
-# for one) is followed to the device holding that file.
+# boot_source prints the device holding the ISO's filesystem. An ISO loop-mounted from a file on another block device
+# is followed to that device; a file anywhere else (tmpfs, say) leaves the loop device itself.
 boot_source() {
 	src=$(findmnt -no SOURCE "$ISO") || return 1
 	while case $src in /dev/loop*) true ;; *) false ;; esac do
-		back=$(losetup -nO BACK-FILE "$src") && src=$(findmnt -no SOURCE -T "$back") || return 1
+		if ! back=$(losetup -nO BACK-FILE "$src" 2>/dev/null) || ! next=$(findmnt -no SOURCE -T "$back"); then break; fi
+		next=${next%%\[*} # a btrfs subvolume's suffix
+		case $next in /dev/*) src=$next ;; *) break ;; esac
 	done
 	echo "$src"
 }
@@ -291,6 +293,10 @@ disks() {
 boot_labels() {
 	printf '%s\n' "$1" | jq -r --arg target "$2" "$TOP_DISK"'
 		.blockdevices[] | select(.label == "boot" and (.name | top) != $target) | .path'
+}
+# spaced LINES: the lines joined by single spaces.
+spaced() {
+	printf '%s' "$1" | tr '\n' ' '
 }
 gb() {
 	awk -v b="$1" 'BEGIN { printf "%.1f GB", b / 1e9 }'
@@ -412,7 +418,7 @@ EOF
 $line
 EOF
 	stray=$(boot_labels "$BLOCK" "$DISK_NAME")
-	[ -z "$stray" ] || fatal "Another disk has a filesystem labelled \"boot\" ($(echo "$stray" | tr '\n' ' ')). The installed system would not boot with it attached: remove that disk or relabel the filesystem, then install again."
+	[ -z "$stray" ] || fatal "Another disk has a filesystem labelled \"boot\" ($(spaced "$stray")). The installed system would not boot with it attached: remove that disk or relabel the filesystem, then install again."
 }
 choose_ports() {
 	LIST=$(nics "$(ip_links)")
@@ -535,12 +541,12 @@ key_from_media() {
 	[ "$count" -ne 1 ] || text=$(cat "$dir/key.0")
 	rm -rf "$dir"
 	case $count in
-	0) say "No andaru-ssh.pub was found at the root of another disk or stick." ;;
+	0) say "No andaru-ssh.pub was found at the root of another disk or stick. It is looked for on FAT, exFAT, ext4, XFS and btrfs, not NTFS." ;;
 	1)
 		use_key "$text" && return 0
 		say "$from: andaru-ssh.pub must hold one public key in plain ASCII, such as ssh-ed25519 AAAA... me@laptop, and nothing else."
 		;;
-	*) say "More than one andaru-ssh.pub was found: $(echo "$from" | tr '\n' ' '). Leave one." ;;
+	*) say "More than one andaru-ssh.pub was found: $(spaced "$from"). Leave one." ;;
 	esac
 	return 1
 }
@@ -610,6 +616,9 @@ write_install() {
 	# The disk is named by the kernel; it must still be the one chosen, by size and model.
 	[ "$(resolve_disk "$DISK" "$(disks "$(lsblk_json)" "$BOOT")")" = "$DISK_LINE" ] ||
 		{ echo "andaru-install: $DISK is no longer the disk chosen ($DISK_LINE)" >&2; return 1; }
+	# A stick plugged in since the disk screen, for the key, may carry one too.
+	stray=$(boot_labels "$(lsblk_json)" "$DISK_NAME")
+	[ -z "$stray" ] || { echo "andaru-install: remove $(spaced "$stray"): a filesystem labelled boot would stop the first boot" >&2; return 1; }
 	serial=$(serial_console)
 	step coreos-installer install "$DISK" --console tty0 --console "$serial,115200n8" --ignition-file "$DEST_IGN" || return
 	# Fedora CoreOS's first boot does this while the disk GUID is still the image's; once the root partition is grown,
@@ -619,7 +628,7 @@ write_install() {
 	root=$(root_partition "$DISK_NAME")
 	[ -n "$root" ] && [ "$(echo "$root" | wc -l)" -eq 1 ] || { echo "andaru-install: no single root partition on $DISK" >&2; return 1; }
 	step grow "$DISK" "$(cat "$SYS/class/block/${root##*/}/partition")" || return
-	mnt=$(step mktemp -d | tail -n 1) && [ -d "$mnt" ] || return
+	mnt=$(mktemp -d) || { echo "andaru-install: failed: mktemp -d" >&2; return 1; }
 	step mount "$root" "$mnt" || return
 	if step xfs_growfs "$mnt" && step test -d "$mnt/$STATEROOT_VAR" && write_var "$mnt/$STATEROOT_VAR/andaru-install"; then
 		status=0
@@ -661,7 +670,7 @@ session() {
 	done
 	clear
 	if write_install; then
-		printf '\nAndaru is installed on %s. Remove the install medium, then press Enter to reboot.\n' "$DISK"
+		printf '\nAndaru is installed on %s. Remove the install medium and any key stick, then press Enter to reboot.\n' "$DISK"
 		read -r _
 		systemctl reboot
 		exit 0

@@ -95,7 +95,7 @@ Describe 'andaru-install'
       '2001:db8::1 2001:db8:0::1' failure
       '1.1.1.1 1.1.1.1' failure
       '1.1.1.1 1.0.0.1 8.8.8.8 8.8.4.4 9.9.9.9 149.112.112.112 208.67.222.222 208.67.220.220 4.2.2.2' failure
-      "''" failure
+      '' failure
     End
     It "checks '$1'"
       When call dns_servers "$1"
@@ -138,7 +138,7 @@ zz"
       ffff 48 success
       12345 48 failure
       g 56 failure
-      "''" 56 failure
+      '' 56 failure
     End
     It "checks $1 within a /$2"
       When call subnet_id "$1" "$2"
@@ -156,6 +156,10 @@ zz"
     It 'takes a key with no comment'
       When call use_key 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO+VXyljs/lkyfnto5CqJDJaSFTQana6UuzepSCNrhwa'
       The variable KEY_COMMENT should equal ''
+    End
+    It 'keeps a comment that looks like an echo option'
+      When call use_key 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO+VXyljs/lkyfnto5CqJDJaSFTQana6UuzepSCNrhwa -e'
+      The variable KEY_COMMENT should equal '-e'
     End
     It 'trims the spaces around and inside a comment'
       When call use_key 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO+VXyljs/lkyfnto5CqJDJaSFTQana6UuzepSCNrhwa   two   words '
@@ -304,6 +308,18 @@ vdb /dev/vdb 12884901888 '
       When call cmdline_disk
       The output should equal /dev/vdb
       rm -f "$CMDLINE"
+    End
+    It 'keeps the loop device when its file is not on a block device'
+      findmnt() { case $* in *-T*) echo tmpfs ;; *) echo /dev/loop0 ;; esac; }
+      losetup() { echo /run/andaru.iso; }
+      When call boot_source
+      The output should equal /dev/loop0
+    End
+    It 'drops a btrfs subvolume from the device holding the file'
+      findmnt() { case $* in *-T*) echo '/dev/sdb2[/@home]' ;; *) echo /dev/loop0 ;; esac; }
+      losetup() { echo /home/me/andaru.iso; }
+      When call boot_source
+      The output should equal /dev/sdb2
     End
     It 'follows a loop-mounted ISO to the stick holding its file'
       findmnt() { case $* in *-T*) echo /dev/sdb1 ;; *) echo /dev/loop0 ;; esac; }
@@ -523,7 +539,7 @@ enp2s0 52:54:00:aa:bb:02'
       answers sda
       When call questions
       The status should equal 2
-      The contents of file "$work/said" should start with 'Another disk has a filesystem labelled "boot" (/dev/sdd3 )'
+      The contents of file "$work/said" should start with 'Another disk has a filesystem labelled "boot" (/dev/sdd3)'
     End
     It 'skips the typed confirmation with andaru.disk='
       echo 'console=tty0 andaru.disk=/dev/sda' >"$CMDLINE"
@@ -558,7 +574,7 @@ enp2s0 52:54:00:aa:bb:02'
         answers file '<cancel>'
         When call choose_key
         The status should equal 1
-        The line 1 of contents of file "$work/said" should equal 'No andaru-ssh.pub was found at the root of another disk or stick.'
+        The line 1 of contents of file "$work/said" should start with 'No andaru-ssh.pub was found at the root of another disk or stick.'
       End
       It 'refuses more than one'
         KEYS='/dev/sde1
@@ -566,7 +582,7 @@ enp2s0 52:54:00:aa:bb:02'
         answers file '<cancel>'
         When call choose_key
         The status should equal 1
-        The line 1 of contents of file "$work/said" should equal 'More than one andaru-ssh.pub was found: /dev/sde1 /dev/sdf1 . Leave one.'
+        The line 1 of contents of file "$work/said" should equal 'More than one andaru-ssh.pub was found: /dev/sde1 /dev/sdf1. Leave one.'
       End
       It 'takes exactly one'
         KEYS=/dev/sde1
@@ -648,6 +664,13 @@ umount"
       The output should include 'andaru-install: umount'
       The error should include 'failed: test -d'
       The path "$work/root/$STATEROOT_VAR" should not be exist
+    End
+    It 'refuses a boot label on a stick plugged in since the disk screen'
+      lsblk_json() { jq '.blockdevices += [{name: "sda4", path: "/dev/sda4", type: "part", size: 1, ro: false, pkname: "sda", label: "root", fstype: "xfs", model: null}, {name: "sde2", path: "/dev/sde2", type: "part", size: 1, ro: false, pkname: "sde", label: "boot", fstype: "ext4", model: null}]' "$data/lsblk-stick.json"; }
+      When call write_install
+      The status should equal 1
+      The error should equal 'andaru-install: remove /dev/sde2: a filesystem labelled boot would stop the first boot'
+      The path "$work/log" should not be exist
     End
     It 'refuses a disk that is no longer the one chosen'
       DISK_LINE='sda /dev/sda 64000000000 Other'
