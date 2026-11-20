@@ -383,55 +383,55 @@ enp2s0 52:54:00:aa:bb:02'
 
     It 'matches static-management-serving.json'
       mgmt_static; serving; wan_dhcp; k
-      When call seed_json
-      The output should equal "$(cat "$seeds/static-management-serving.json")"
+      When call eval 'seed_json | cmp - "$seeds/static-management-serving.json"'
+      The status should be success
     End
     It 'matches dhcp-management.json'
       M_MAC=52:54:00:aa:bb:01 M4_MODE=dhcp M6_MODE=none; wan_dhcp; k
-      When call seed_json
-      The output should equal "$(cat "$seeds/dhcp-management.json")"
+      When call eval 'seed_json | cmp - "$seeds/dhcp-management.json"'
+      The status should be success
     End
     It 'matches ipv6-only-management.json'
       M_MAC=52:54:00:aa:bb:01 M4_MODE=none M6_MODE=static M6_ADDR=fd00:1::1/64 M6_RA=unmanaged
       W_MAC=52:54:00:aa:bb:02 W4_MODE=dhcp W6_MODE=dhcp6; k
-      When call seed_json
-      The output should equal "$(cat "$seeds/ipv6-only-management.json")"
+      When call eval 'seed_json | cmp - "$seeds/ipv6-only-management.json"'
+      The status should be success
     End
     It 'matches delegated-management.json'
       mgmt_static; SERVE_DNS=true M6_MODE=delegated M6_SUBNET=0 M6_RA=unmanaged
       W_MAC=52:54:00:aa:bb:02 W4_MODE=dhcp W6_MODE=dhcp6 W6_REQUEST=56; k
-      When call seed_json
-      The output should equal "$(cat "$seeds/delegated-management.json")"
+      When call eval 'seed_json | cmp - "$seeds/delegated-management.json"'
+      The status should be success
     End
     It 'matches static-wan.json'
       mgmt_static; serving; k
       W_MAC=52:54:00:aa:bb:02 W4_MODE=static W4_ADDR=203.0.113.2/24 W4_GW=203.0.113.1
       W6_MODE=static W6_ADDR=2001:db8:1::2/64 W6_GW=2001:db8:1::1 W_DNS='203.0.113.53 2001:db8:1::53'
-      When call seed_json
-      The output should equal "$(cat "$seeds/static-wan.json")"
+      When call eval 'seed_json | cmp - "$seeds/static-wan.json"'
+      The status should be success
     End
     It 'matches slaac-wan.json'
       mgmt_static; SERVE_DNS=true; k
       W_MAC=52:54:00:aa:bb:02 W4_MODE=none W6_MODE=slaac
-      When call seed_json
-      The output should equal "$(cat "$seeds/slaac-wan.json")"
+      When call eval 'seed_json | cmp - "$seeds/slaac-wan.json"'
+      The status should be success
     End
     It 'matches dhcp6-advanced-wan.json'
       mgmt_static; SERVE_DNS=false; k
       W_MAC=52:54:00:aa:bb:02 W4_MODE=dhcp W6_MODE=dhcp6 W6_REQUEST=60 W6_PREFIX_ONLY=true W6_WITHOUT_RA=true
       W6_SEND_RELEASE=false W6_DUID=00:04:aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99
-      When call seed_json
-      The output should equal "$(cat "$seeds/dhcp6-advanced-wan.json")"
+      When call eval 'seed_json | cmp - "$seeds/dhcp6-advanced-wan.json"'
+      The status should be success
     End
     It 'matches no-wan.json'
       mgmt_static; serving; k
-      When call seed_json
-      The output should equal "$(cat "$seeds/no-wan.json")"
+      When call eval 'seed_json | cmp - "$seeds/no-wan.json"'
+      The status should be success
     End
     It 'matches no-key.json'
       mgmt_static; serving; wan_dhcp
-      When call seed_json
-      The output should equal "$(cat "$seeds/no-key.json")"
+      When call eval 'seed_json | cmp - "$seeds/no-key.json"'
+      The status should be success
     End
     It "gives a management dhcp6 none of the WAN's DHCPv6 options"
       M_MAC=52:54:00:aa:bb:01 M4_MODE=none M6_MODE=dhcp6
@@ -477,20 +477,20 @@ enp2s0 52:54:00:aa:bb:02'
     It 'collects static-management-serving.json'
       answers sda enp1s0 enp2s0 dhcp none static 192.168.1.1/24 yes 192.168.1.100 192.168.1.199 yes none \
         paste "$ed25519" yes sda
-      When call eval 'questions && seed_json'
-      The output should equal "$(cat "$seeds/static-management-serving.json")"
+      When call eval 'questions && seed_json | cmp - "$seeds/static-management-serving.json"'
+      The status should be success
     End
     It 'collects delegated-management.json, asking again after a refused subnet ID'
       answers sda enp1s0 enp2s0 dhcp dhcp6 56 no static 192.168.1.1/24 no yes delegated 100 0 unmanaged \
         paste "$ed25519" yes sda
-      When call eval 'questions && seed_json'
-      The output should equal "$(cat "$seeds/delegated-management.json")"
+      When call eval 'questions && seed_json | cmp - "$seeds/delegated-management.json"'
+      The status should be success
       The contents of file "$work/said" should equal 'Enter 1 to 4 hex digits that fit the /56.'
     End
     It 'leaves the management port out of the WAN menu'
       answers sda enp1s0 none static 192.168.1.1/24 yes 192.168.1.100 192.168.1.199 yes none paste "$ed25519" yes sda
-      When call eval 'questions && seed_json'
-      The output should equal "$(cat "$seeds/no-wan.json")"
+      When call eval 'questions && seed_json | cmp - "$seeds/no-wan.json"'
+      The status should be success
       The line 3 of contents of file "$work/ui.log" should start with '--menu|The WAN port'
       The line 3 of contents of file "$work/ui.log" should include '|enp2s0|'
       The line 3 of contents of file "$work/ui.log" should not include 'enp1s0'
@@ -525,15 +525,27 @@ enp2s0 52:54:00:aa:bb:02'
       answers sda enp1s0 enp2s0 static 203.0.113.2/24 203.0.113.1 static 2001:db8:1::2/64 2001:db8:1::1 \
         ' 203.0.113.53   2001:db8:1::53 ' static 192.168.1.1/24 yes 192.168.1.100 192.168.1.199 yes none \
         paste "$ed25519" yes sda
-      When call eval 'questions && seed_json'
-      The output should equal "$(cat "$seeds/static-wan.json")"
+      When call eval 'questions && seed_json | cmp - "$seeds/static-wan.json"'
+      The status should be success
     End
-    It 'refuses two ports with the same MAC'
+    It 'refuses a management port whose MAC another port shares, even with no WAN'
       ip_links() { jq '.[2].address = "52:54:00:aa:bb:01"' "$data/ip-link.json"; }
-      answers sda enp1s0 enp2s0
+      answers sda enp1s0 none
       When call questions
       The status should equal 1
-      The contents of file "$work/said" should equal 'enp1s0 and enp2s0 have the same MAC address, so Andaru cannot tell them apart.'
+      The contents of file "$work/said" should equal "Another port has enp1s0's MAC address (52:54:00:aa:bb:01), so Andaru could not tell them apart."
+    End
+    It 'cancels, rather than answering No, on Escape at a yes/no question'
+      ui() { case " $* " in *" --yesno "*) return 255 ;; esac; sed -n 1p "$work/answers"; sed -i 1d "$work/answers"; }
+      answers sda enp1s0 none static 192.168.1.1/24
+      When call questions
+      The status should equal 1
+    End
+    It 'does not offer an answer starting with "-" back to whiptail'
+      answers sda enp1s0 none static --bad 192.168.1.1/24 no no none none yes sda
+      When call questions
+      The status should equal 0
+      The contents of file "$work/ui.log" should include '--inputbox|Management IPv4 address and prefix length|12|76||'
     End
     It 'starts over when the typed disk name is wrong'
       answers sda enp1s0 none static 192.168.1.1/24 no no none none yes sdb
@@ -578,6 +590,7 @@ enp2s0 52:54:00:aa:bb:02'
       answers sda enp1s0 none none static fd00:1::1/64 unmanaged none yes sda
       When call eval 'questions && seed_json | jq -c .management.addressing.ipv6.ra'
       The output should equal '{"mode":"unmanaged"}'
+      The contents of file "$work/ui.log" should include '|unmanaged|Devices take addresses by SLAAC|'
     End
 
     Describe 'the key from another medium'
@@ -596,6 +609,14 @@ enp2s0 52:54:00:aa:bb:02'
         When call choose_key
         The status should equal 1
         The line 1 of contents of file "$work/said" should equal 'More than one andaru-ssh.pub was found: /dev/sde1 /dev/sdf1. Leave one.'
+      End
+      It 'refuses a file with a second, blank line'
+        KEYS=/dev/sde1
+        key_files() { printf '%s\n\n' "$ed25519" >key.0; printf '%s' "$KEYS"; }
+        answers file '<cancel>'
+        When call choose_key
+        The status should equal 1
+        The line 1 of contents of file "$work/said" should start with '/dev/sde1: andaru-ssh.pub must hold one public key'
       End
       It 'takes exactly one'
         KEYS=/dev/sde1
@@ -683,6 +704,15 @@ umount"
       When call write_install
       The status should equal 1
       The error should equal 'andaru-install: remove the disk with /dev/sde2 on /dev/sde: a filesystem labelled boot would stop the first boot'
+      The path "$work/log" should not be exist
+    End
+    It 'refuses a disk replaced since it was chosen'
+      mkdir -p "$work/sys/block/sda"
+      echo 42 >"$work/sys/block/sda/diskseq"
+      DISK_SEQ=41
+      When call write_install
+      The status should equal 1
+      The error should equal 'andaru-install: /dev/sda was replaced since it was chosen'
       The path "$work/log" should not be exist
     End
     It 'refuses a disk that is no longer the one chosen'

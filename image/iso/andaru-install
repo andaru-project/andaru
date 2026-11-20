@@ -52,7 +52,8 @@ ask() {
 			return 0
 		fi
 		say "$4"
-		ask_default=$ask_answer
+		# whiptail would read an answer starting with "-" as an option.
+		case $ask_answer in -*) ask_default='' ;; *) ask_default=$ask_answer ;; esac
 	done
 }
 yes_no() {
@@ -61,9 +62,10 @@ yes_no() {
 no_yes() {
 	ui --defaultno --yesno "$1" 12 76 >/dev/null
 }
-# bool QUESTION...: "true" or "false" from a yes/no question.
+# bool QUESTION...: "true" for Yes, "false" for No; Escape fails, to cancel.
 bool() {
-	if "$@"; then echo true; else echo false; fi
+	"$@"
+	case $? in 0) echo true ;; 1) echo false ;; *) return 1 ;; esac
 }
 
 # --- Form checks: each answer on its own, as Andaru's validator (internal/config/validate.go) would ---------------
@@ -306,6 +308,10 @@ boot_labels() {
 spaced() {
 	printf '%s' "$1" | tr '\n' ' '
 }
+# disk_seq NAME: the kernel's sequence number for this disk, new for every disk attached.
+disk_seq() {
+	cat "$SYS/block/$1/diskseq" 2>/dev/null
+}
 gb() {
 	awk -v b="$1" 'BEGIN { printf "%.1f GB", b / 1e9 }'
 }
@@ -384,7 +390,7 @@ seed_json() {
 	+ {sshKeys: (if $kt == "" then [] else [{type: $kt, blob: $kb, comment: $kc}] end)}'
 }
 reset_answers() {
-	DISK='' DISK_NAME='' DISK_LINE='' DISK_FROM_CMDLINE='' M_NIC='' M_MAC='' M4_MODE='' M4_ADDR='' DHCP_START='' DHCP_END='' SERVE_DNS=''
+	DISK='' DISK_NAME='' DISK_LINE='' DISK_SEQ='' DISK_FROM_CMDLINE='' M_NIC='' M_MAC='' M4_MODE='' M4_ADDR='' DHCP_START='' DHCP_END='' SERVE_DNS=''
 	M6_MODE='' M6_ADDR='' M6_SUBNET='' M6_RA='' W_NIC='' W_MAC='' W4_MODE='' W4_ADDR='' W4_GW='' W6_MODE='' W6_ADDR='' W6_GW='' W6_REQUEST=''
 	W6_PREFIX_ONLY='' W6_WITHOUT_RA='' W6_SEND_RELEASE='' W6_DUID='' W_DNS='' KEY_TYPE='' KEY_BLOB='' KEY_COMMENT=''
 }
@@ -422,6 +428,7 @@ EOF
 		line=$(printf '%s\n' "$list" | awk -v n="$name" '$1 == n')
 	fi
 	DISK_LINE=$line
+	DISK_SEQ=$(disk_seq "${line%% *}")
 	read -r DISK_NAME DISK _ <<EOF
 $line
 EOF
@@ -439,14 +446,20 @@ $(nic_menu "$LIST" "")
 EOF
 	M_NIC=$(pick "The management port: the network you will manage Andaru from." "" "$@") || return 1
 	M_MAC=$(nic_mac "$LIST" "$M_NIC")
+	unique_mac "$M_NIC" "$M_MAC" || return 1
 	set --
 	while IFS='' read -r item; do [ -z "$item" ] || set -- "$@" "$item"; done <<EOF
 $(nic_menu "$LIST" "$M_NIC")
 EOF
 	W_NIC=$(pick "The WAN port: the Internet side." "" "$@" none "No WAN yet") || return 1
 	if [ "$W_NIC" = none ]; then W_NIC='' W_MAC=''; else W_MAC=$(nic_mac "$LIST" "$W_NIC"); fi
-	# Andaru tells its ports apart by MAC.
-	[ "$W_MAC" != "$M_MAC" ] || { say "$M_NIC and $W_NIC have the same MAC address, so Andaru cannot tell them apart."; return 1; }
+	[ -z "$W_NIC" ] || unique_mac "$W_NIC" "$W_MAC"
+}
+# unique_mac NAME MAC: Andaru tells its ports apart by MAC, so no other port may share it.
+unique_mac() {
+	[ "$(printf '%s\n' "$LIST" | awk -v m="$2" '$2 == m' | wc -l)" -eq 1 ] && return 0
+	say "Another port has $1's MAC address ($2), so Andaru could not tell them apart."
+	return 1
 }
 wan_addressing() {
 	[ -n "$W_NIC" ] || return 0
@@ -466,12 +479,13 @@ wan_addressing() {
 			;;
 		dhcp6)
 			W6_REQUEST=$(ask "Prefix length to ask the ISP to delegate, 1 to 64, so the management network can have IPv6 from it. Empty asks for none." 56 optional_request_length "Enter a number from 1 to 64, or nothing.") || return 1
-			if no_yes "Set advanced DHCPv6 options (prefix only, without RA, release, DUID)?"; then
+			advanced=$(bool no_yes "Set advanced DHCPv6 options (prefix only, without RA, release, DUID)?") || return 1
+			if [ "$advanced" = true ]; then
 				if [ -n "$W6_REQUEST" ]; then
-					W6_PREFIX_ONLY=$(bool no_yes "Ask for the prefix only, with no address for the WAN itself?")
+					W6_PREFIX_ONLY=$(bool no_yes "Ask for the prefix only, with no address for the WAN itself?") || return 1
 				fi
-				W6_WITHOUT_RA=$(bool no_yes "Start DHCPv6 without waiting for a router advertisement?")
-				W6_SEND_RELEASE=$(bool yes_no "Release the lease when the WAN goes down?")
+				W6_WITHOUT_RA=$(bool no_yes "Start DHCPv6 without waiting for a router advertisement?") || return 1
+				W6_SEND_RELEASE=$(bool yes_no "Release the lease when the WAN goes down?") || return 1
 				W6_DUID=$(ask "DUID, as colon-separated hex bytes. Empty lets the system choose." "" optional_duid "That is not a DUID of type 1 to 4 with the length its type needs.") || return 1
 			fi
 			;;
@@ -501,11 +515,12 @@ management_addressing() {
 		M4_ADDR='' DHCP_START='' DHCP_END='' SERVE_DNS=''
 		if [ "$M4_MODE" = static ]; then
 			M4_ADDR=$(ask "Management IPv4 address and prefix length" 192.168.1.1/24 ip4_local "That is not a usable IPv4 host address with its prefix length.") || return 1
-			if yes_no "Serve DHCP on the management network?"; then
+			serve=$(bool yes_no "Serve DHCP on the management network?") || return 1
+			if [ "$serve" = true ]; then
 				DHCP_START=$(ask "First address of the DHCP pool" "" ip4_unicast "That is not a usable IPv4 address.") || return 1
 				DHCP_END=$(ask "Last address of the DHCP pool" "" ip4_unicast "That is not a usable IPv4 address.") || return 1
 			fi
-			SERVE_DNS=$(bool yes_no "Answer DNS queries on the management network?")
+			SERVE_DNS=$(bool yes_no "Answer DNS queries on the management network?") || return 1
 		fi
 		set -- none "No IPv6" static "Static address" slaac "SLAAC" dhcp6 "DHCPv6"
 		[ "$W6_MODE" != dhcp6 ] || [ -z "$W6_REQUEST" ] || set -- "$@" delegated "A subnet of the prefix the WAN is delegated"
@@ -546,7 +561,8 @@ key_from_media() {
 	from=$(cd "$dir" && key_files "$(lsblk_json)" "$BOOT" "$DISK_NAME")
 	count=$(printf '%s' "$from" | grep -c .)
 	text=
-	[ "$count" -ne 1 ] || text=$(cat "$dir/key.0")
+	# One line, with or without its newline; command substitution would drop a blank second one.
+	[ "$count" -ne 1 ] || [ "$(grep -c '' "$dir/key.0")" -ne 1 ] || text=$(cat "$dir/key.0")
 	rm -rf "$dir"
 	case $count in
 	0) say "No andaru-ssh.pub was found at the root of another disk or stick. NTFS is not searched." ;;
@@ -625,6 +641,8 @@ write_install() {
 	# The disk is named by the kernel; it must still be the one chosen, by size and model.
 	[ "$(resolve_disk "$DISK" "$(disks "$block" "$BOOT")")" = "$DISK_LINE" ] ||
 		{ echo "andaru-install: $DISK is no longer the disk chosen ($DISK_LINE)" >&2; return 1; }
+	[ "$(disk_seq "$DISK_NAME")" = "$DISK_SEQ" ] ||
+		{ echo "andaru-install: $DISK was replaced since it was chosen" >&2; return 1; }
 	# A stick plugged in since the disk screen, for the key, may carry one too.
 	stray=$(boot_labels "$block" "$DISK_NAME")
 	[ -z "$stray" ] || { echo "andaru-install: remove the disk with $(spaced "$stray"): a filesystem labelled boot would stop the first boot" >&2; return 1; }
@@ -644,7 +662,10 @@ write_install() {
 	else
 		status=1
 	fi
-	step umount "$mnt" || status=1
+	step umount "$mnt" || {
+		echo "andaru-install: $root is still mounted at $mnt: run umount $mnt before installing again" >&2
+		return 1
+	}
 	rmdir "$mnt"
 	sync
 	return "$status"
@@ -680,8 +701,8 @@ session() {
 	clear
 	if write_install; then
 		printf '\nAndaru is installed on %s. Remove the install medium and any key stick, then press Enter to reboot.\n' "$DISK"
-		read -r _
-		systemctl reboot
+		# End of input is not Enter: the medium may still be in.
+		if read -r _; then systemctl reboot; fi
 		exit 0
 	fi
 	printf '\nThe install failed; the messages above say where. Press Enter to start over.\n'
