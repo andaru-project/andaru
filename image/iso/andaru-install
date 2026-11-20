@@ -308,9 +308,10 @@ boot_labels() {
 spaced() {
 	printf '%s' "$1" | tr '\n' ' '
 }
-# disk_seq NAME: the kernel's sequence number for this disk, new for every disk attached.
+# disk_seq NAME: the kernel's sequence number for this disk, new for every disk attached. It fails if unreadable, so
+# two failed reads never compare equal.
 disk_seq() {
-	cat "$SYS/block/$1/diskseq" 2>/dev/null
+	seq=$(cat "$SYS/block/$1/diskseq" 2>/dev/null) && [ -n "$seq" ] && echo "$seq"
 }
 gb() {
 	awk -v b="$1" 'BEGIN { printf "%.1f GB", b / 1e9 }'
@@ -428,7 +429,7 @@ EOF
 		line=$(printf '%s\n' "$list" | awk -v n="$name" '$1 == n')
 	fi
 	DISK_LINE=$line
-	DISK_SEQ=$(disk_seq "${line%% *}")
+	DISK_SEQ=$(disk_seq "${line%% *}") || { fatal "The kernel gives ${line%% *} no disk sequence number, so the installer cannot make sure it writes the disk chosen."; return; }
 	read -r DISK_NAME DISK _ <<EOF
 $line
 EOF
@@ -641,7 +642,7 @@ write_install() {
 	# The disk is named by the kernel; it must still be the one chosen, by size and model.
 	[ "$(resolve_disk "$DISK" "$(disks "$block" "$BOOT")")" = "$DISK_LINE" ] ||
 		{ echo "andaru-install: $DISK is no longer the disk chosen ($DISK_LINE)" >&2; return 1; }
-	[ "$(disk_seq "$DISK_NAME")" = "$DISK_SEQ" ] ||
+	seq=$(disk_seq "$DISK_NAME") && [ "$seq" = "$DISK_SEQ" ] ||
 		{ echo "andaru-install: $DISK was replaced since it was chosen" >&2; return 1; }
 	# A stick plugged in since the disk screen, for the key, may carry one too.
 	stray=$(boot_labels "$block" "$DISK_NAME")

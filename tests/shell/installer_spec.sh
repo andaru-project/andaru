@@ -446,7 +446,8 @@ enp2s0 52:54:00:aa:bb:02'
   Describe 'the questions'
     setup() {
       work=$(mktemp -d)
-      mkdir -p "$work/sys/class/net/enp1s0" "$work/sys/class/net/enp2s0"
+      mkdir -p "$work/sys/class/net/enp1s0" "$work/sys/class/net/enp2s0" "$work/sys/block/sda" "$work/sys/block/vdb"
+      echo 7 >"$work/sys/block/sda/diskseq"
       echo 1 >"$work/sys/class/net/enp1s0/carrier"
       SYS=$work/sys CMDLINE=$work/cmdline
       echo 'console=tty0' >"$CMDLINE"
@@ -553,6 +554,12 @@ enp2s0 52:54:00:aa:bb:02'
       The status should equal 1
       The contents of file "$work/said" should equal 'That was not sda; nothing was written.'
     End
+    It 'stops when the chosen disk has no sequence number'
+      answers vdb
+      When call questions
+      The status should equal 2
+      The contents of file "$work/said" should start with 'The kernel gives vdb no disk sequence number'
+    End
     It 'stops when andaru.disk= names the boot medium'
       echo 'console=tty0 andaru.disk=/dev/sdb' >"$CMDLINE"
       When call questions
@@ -632,7 +639,8 @@ enp2s0 52:54:00:aa:bb:02'
   Describe 'the write'
     setup() {
       work=$(mktemp -d)
-      mkdir -p "$work/iso" "$work/sys/class/block/sda4" "$work/root"
+      mkdir -p "$work/iso" "$work/sys/class/block/sda4" "$work/sys/block/sda" "$work/root"
+      echo 7 >"$work/sys/block/sda/diskseq"
       echo archive >"$work/iso/andaru.oci"
       echo 4 >"$work/sys/class/block/sda4/partition"
       ISO=$work/iso SYS=$work/sys
@@ -642,7 +650,7 @@ enp2s0 52:54:00:aa:bb:02'
       chmod +x "$work/bin/coreos-installer"
       PATH=$work/bin:$PATH
       reset_answers
-      DISK=/dev/sda DISK_NAME=sda DISK_LINE='sda /dev/sda 32000000000 QEMU_HARDDISK' BOOT=sdb
+      DISK=/dev/sda DISK_NAME=sda DISK_LINE='sda /dev/sda 32000000000 QEMU_HARDDISK' DISK_SEQ=7 BOOT=sdb
       M_MAC=52:54:00:aa:bb:01 M4_MODE=dhcp M6_MODE=none
     }
     cleanup() { rm -rf "$work"; }
@@ -707,13 +715,19 @@ umount"
       The path "$work/log" should not be exist
     End
     It 'refuses a disk replaced since it was chosen'
-      mkdir -p "$work/sys/block/sda"
       echo 42 >"$work/sys/block/sda/diskseq"
       DISK_SEQ=41
       When call write_install
       The status should equal 1
       The error should equal 'andaru-install: /dev/sda was replaced since it was chosen'
       The path "$work/log" should not be exist
+    End
+    It 'refuses a disk whose sequence number cannot be read'
+      rm "$work/sys/block/sda/diskseq"
+      DISK_SEQ=''
+      When call write_install
+      The status should equal 1
+      The error should equal 'andaru-install: /dev/sda was replaced since it was chosen'
     End
     It 'refuses a disk that is no longer the one chosen'
       DISK_LINE='sda /dev/sda 64000000000 Other'
