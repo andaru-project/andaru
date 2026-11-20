@@ -8,35 +8,45 @@
 
 ## Author calls
 
-These await the owner's review. Calls 1, 7, 8, 10 and 11 amend the spec.
+The owner approved these on 2026-11-20. Calls 1, 4, 7, 8, 9, 10 and 11 amend the spec.
 
 1. **The ISO finds the image's Fedora CoreOS build and stream in its os-release, not in a label.** The image keeps the base's `OSTREE_VERSION` (for example `45.20261030.3.1`) and `RELEASE_TYPE` (`stable`) in `/usr/lib/os-release`. The ISO build reads them with `podman create` and `podman cp`, which runs nothing, so it works for aarch64 on an amd64 runner. Andaru's own `org.opencontainers.image.version` label overwrites the base's, and a new label would need every workflow, the nightly repository's included, to pass the build as a build argument. This amends spec call 1. `fedora-release*` joins the image's version lock, so no package upgrade rewrites os-release without those fields.
 2. **The live ISO is Fedora CoreOS's own, verified with Fedora's key.** For build `B`, stream `S` and architecture `A`, the URL is `https://builds.coreos.fedoraproject.org/prod/streams/S/builds/B/A/fedora-coreos-B-live-iso.A.iso`, built from the build ID rather than read from the unsigned `meta.json`, so the file name binds the build. `coreos-installer download --image-url` fetches `<url>.sig` and checks it against the Fedora keys it ships, and fails without a signature. It runs from the release's amd64 image, which carries the base's `coreos-installer`, so its keys are as new as the release it installs; so do `iso customize` and `iso … show`, for both ISOs. A build no longer in the archive fails the job.
 3. **Tools.** `butane` runs from its `quay.io/coreos/butane` container pinned by digest. `xorriso` is installed with apt on the Ubuntu runner; the qualification proves `-boot_image any replay` with that version. Nothing executes code of the target architecture, so both ISOs build on an amd64 runner.
-4. **The installer is POSIX `sh` with plain prompts.** Plain `read` prompts work on any serial terminal and can be driven by shellspec; `whiptail` exists in the live system but needs neither. It asks for IPv4 only, as the spec's screens do, and for at most one SSH key. It checks only the form of each answer (spec call 6): an address with no leading zeros in any octet (Go's parser refuses them), a prefix length, a MAC address, a key (call 8).
+4. **The installer is POSIX `sh` with `whiptail` menus.** `whiptail` ships in the live system and draws its menus on the screen and on any serial terminal. Each screen is a function that returns the answer, with the `whiptail` call behind one wrapper that shellspec replaces, so the specs drive the logic without a terminal. It offers IPv4 and IPv6 on both ports (call 7), where the spec's screens ask for IPv4 only, and at most one SSH key. It checks only the form of each answer (spec call 6): an IPv4 address with no leading zeros in any octet (Go's parser refuses them), an IPv6 address, a prefix length, a MAC address, a key (call 8). A browser-based assistant is #89, not this slice.
 5. **It runs on tty1 and the serial console, one session at a time.**
    - Fedora CoreOS 45 runs `kmsconvt@tty1` on the screen, and its live autologin generator does nothing once a user Ignition config is embedded. The live config masks `kmsconvt@tty1`, `autovt@tty1` (kmscon's alias, which logind starts on a switch back to VT1), `getty@tty1` and the serial getty, and its installer units conflict with them.
    - The serial console is `ttyS0` on x86_64 and `ttyAMA0` on aarch64: `live.bu`'s `@CONSOLE@`, also set with `--live-karg-append console=@CONSOLE@,115200n8`.
    - Each console shows "Press Enter to install". The shared `flock` is taken only when someone presses Enter, so an unattended serial port never locks out the screen. The other console then shows which console is installing.
-6. **The live system has no network and no SSH.** The live config masks NetworkManager, `sshd.service`, `sshd.socket` and zincati; the live system is discarded, so masking is safe. NetworkManager would otherwise take DHCP leases on every port, the WAN included. It also sets `net.ipv6.conf.all.disable_ipv6=1` and `net.ipv6.conf.default.disable_ipv6=1`, so links the installer brings up to read their carrier get no address from a router advertisement.
+6. **The live system has no network and no SSH.** The live config masks NetworkManager, `sshd.service`, `sshd.socket` and zincati; the live system is discarded, so masking is safe. NetworkManager would otherwise take DHCP leases on every port, the WAN included. It also sets `net.ipv6.conf.all.disable_ipv6=1` and `net.ipv6.conf.default.disable_ipv6=1`, so links the installer brings up to read their carrier get no address from a router advertisement. This is the live system only: the installed box gets the IPv6 settings the seed holds (call 7). The installer does not try the settings it collects: the live system has no network, its stack (NetworkManager's or none) is not the one the installed box runs, and a setting that fails on the installed box is first boot's to report (slice 3).
 7. **The seed is a new format, version 1, documented in `docs/dev/install-seed.md` with fixtures in `image/iso/testdata/`.** `andaru setup` does not exist yet, so there is no answer document to reuse; this amends spec call 6. Slice 3 adds its strict Go reader, tested against the same fixtures, the semantic checks (a pool inside the subnet, a gateway on the WAN subnet), and the record of the first apply (spec call 8). Shape:
 
    ```json
    {
      "version": 1,
-     "management": {"mac": "52:54:00:aa:bb:01", "ipv4": {"address": "192.168.1.1/24"},
+     "management": {"mac": "52:54:00:aa:bb:01",
+                    "addressing": {"ipv4": {"mode": "static", "addresses": ["192.168.1.1/24"]},
+                                   "ipv6": {"mode": "delegated", "from": "wan", "subnetId": "0",
+                                            "ra": {"mode": "unmanaged"}}},
                     "serve": {"dhcp": {"start": "192.168.1.100", "end": "192.168.1.199"}, "dns": true}},
-     "wan": {"mac": "52:54:00:aa:bb:02", "ipv4": {"dhcp": true}},
+     "wan": {"mac": "52:54:00:aa:bb:02",
+             "addressing": {"ipv4": {"mode": "dhcp"}, "ipv6": {"mode": "dhcp6", "requestPrefixLength": 56}}},
      "sshKeys": ["ssh-ed25519 AAAA… admin@laptop"]
    }
    ```
 
-   Management's `ipv4` is `{"address"}` or `{"dhcp": true}`, and `serve` exists only with an address. `wan` is absent for "none yet"; its `ipv4` is `{"dhcp": true}` or `{"address", "gateway", "dns": [...]}`. A MAC is the permanent address, `permaddr` from `ip -j -d link` or else `address`, lowercased: the rule Andaru's renderer matches on (`internal/host/links_linux.go`). The WAN list leaves out the management NIC.
+   Each port's `addressing` is Andaru's own configuration object (`$defs/addressing` in `internal/config/schema.json`), so slice 3 checks it with the schema Andaru already has and copies it into the first configuration, pointing `delegated`'s `from` (the seed's `"wan"`) at the WAN segment:
+   - **IPv4:** `none`, `dhcp` or `static` (addresses, and a gateway on the WAN). `ppp` waits for PPPoE (#77).
+   - **IPv6:** `none`, `static` (addresses, and a gateway on the WAN), `slaac`, `dhcp6` (with `requestPrefixLength` for a delegated prefix, and the advanced `prefixOnly`, `withoutRA`, `sendRelease` and `duid` behind an "Advanced" entry), or, on management only, `delegated`: a subnet (`subnetId`) of the prefix the WAN's `dhcp6` requests, so the LAN follows that prefix when the ISP changes it. `delegated` needs a WAN with `dhcp6` and `requestPrefixLength`.
+   - **Router advertisements** on management, with a `static` or `delegated` IPv6: Andaru's `ra.mode`, offered as a list, defaulting to `unmanaged` (SLAAC only), which needs no DHCPv6 server.
+   - **DNS servers** (`addressing.dns`) with a static WAN.
+
+   Management needs at least one family that is not `none`, so the box is reachable, and a `dhcp` IPv4 there keeps the spec's warning (spec call 9). `serve` exists only with a static IPv4. `wan` is absent for "none yet". A MAC is the permanent address, `permaddr` from `ip -j -d link` or else `address`, lowercased: the rule Andaru's renderer matches on (`internal/host/links_linux.go`). The WAN list leaves out the management NIC.
 8. **SSH key.** The installer offers to paste a key, or to read `andaru-ssh.pub` from the root of another medium, because an ISO written to a USB stick is read-only: this amends the spec's "read from the boot medium".
    - **Finding the file:** every filesystem on a device other than the boot medium and the target disk, mounted `ro,nosuid,nodev,noexec`. The file must be a regular file, not a link, read with `head -c 16384`. More than one match is refused, naming them.
    - **The key:** exactly one line matching `^(ssh-ed25519|sk-ssh-ed25519@openssh.com|ecdsa-sha2-nistp(256|384|521)|sk-ecdsa-sha2-nistp256@openssh.com|ssh-rsa) [A-Za-z0-9+/]+=*( [[:print:]]{0,256})?$`, so no options, no private key and no control bytes. It must then pass `ssh-keygen -l`, and an RSA key must have at least 2048 bits. The seed holds it as type, blob and comment.
 9. **Disks.**
-   - **The list:** `TYPE=disk`, writable, at least 20 GB (spec call 2), never the boot medium: the parent disk (`lsblk -no PKNAME`) of `findmnt -no SOURCE /run/media/iso`.
+   - **The list:** `TYPE=disk`, writable, at least 8 GB (Fedora CoreOS's minimum), never the boot medium; a disk under 20 GB is listed with a warning that add-ons will need more. Both numbers are revisited once the qualification measures the install's peak (Task 9). This amends spec call 2's 20 GB floor. The boot medium is the parent disk (`lsblk -no PKNAME`) of `findmnt -no SOURCE /run/media/iso`.
    - **`andaru.disk=`:** resolved with `readlink -f`, so `/dev/disk/by-id/…` works, and held to the same rules; a value that fails them stops the installer with the reason.
    - **Refusal:** if a disk other than the target has a filesystem labelled `boot`, the installer refuses: Fedora CoreOS's `coreos-ignition-unique-boot.service` would send first boot to the emergency shell.
    - **The root partition:** found by its `root` label on the target disk only (`lsblk`), after `udevadm settle`, never through `/dev/disk/by-partlabel`.
@@ -63,14 +73,14 @@ These await the owner's review. Calls 1, 7, 8, 10 and 11 amend the spec.
 
 ### Task 2: the seed format
 - [ ] `docs/dev/install-seed.md`: version 1 (call 7) and each field's form check.
-- [ ] Fixtures in `image/iso/testdata/`: static management with DHCP and DNS served, DHCP management, a static WAN, no WAN, no key.
+- [ ] Fixtures in `image/iso/testdata/`: static management with DHCP and DNS served, DHCP management, IPv6-only management (`static`), dual-stack management with a delegated prefix from a `dhcp6` WAN, a static dual-stack WAN, an IPv6-only `slaac` WAN, no WAN, no key. Each fixture's `addressing` objects pass `internal/config/schema.json`'s `$defs/addressing`.
 
 ### Task 3: the installer
 - [ ] `image/iso/andaru-install`, POSIX `sh`, in functions the specs can call one by one:
   - the refusal to start without `/run/media/iso/andaru.oci`, and the Enter prompt and lock (call 5);
   - disks (call 9), with `andaru.disk=` read from `/proc/cmdline`, and the typed confirmation otherwise;
   - NICs: name, permanent MAC (call 7), driver (`device/driver`), and carrier after `ip link set up`;
-  - management, WAN and key prompts with their form checks (calls 4 and 8), and the DHCP-management warning (spec call 9);
+  - management, WAN and key screens with their form checks (calls 4, 7 and 8), and the DHCP-management warning (spec call 9);
   - the review screen, then the write:
     - `coreos-installer install` with the consoles and the destination config;
     - `sgdisk --disk-guid=R --move-second-header`, `udevadm settle`, `growpart`, mount, `xfs_growfs`;
