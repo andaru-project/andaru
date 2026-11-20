@@ -2,7 +2,7 @@
 # Rebuilds a built Andaru image's layers from its final filesystem, one layer per package. A box then
 # downloads only the layers whose packages changed, and nothing the build removed: without this, the base's layers
 # still carry every file a later step deletes (moby-engine and containerd among them). Labels and config are kept.
-#   rechunk.sh IMAGE
+#   rechunk.sh IMAGE   (a freshly built image: rechunking one already rechunked may leave its ID unchanged)
 set -eu
 
 image=${1:?image}
@@ -22,7 +22,7 @@ podman run --rm --network=none --mount=type=image,src="$image",target=/chunkah -
 	podman load
 # The pipeline's status is the load's: make sure the tag moved to the new image.
 [ "$(podman image inspect -f '{{.Id}}' "$image")" != "$before" ] || {
-	echo "rechunk.sh: $image was not replaced" >&2
+	echo "rechunk.sh: $image was not replaced (was it already rechunked?)" >&2
 	exit 1
 }
 podman run --rm "$image" bootc container lint --fatal-warnings
