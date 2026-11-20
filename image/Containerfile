@@ -34,9 +34,10 @@ LABEL org.opencontainers.image.title="Andaru" \
 # /run and /tmp are tmpfs here: since Fedora 45, the transaction runs systemd-tmpfiles --create, which fills them.
 # systemd and the boot stack stay at the base's versions: Fedora CoreOS removes or patches their files when composing
 # the base (fedora-coreos-config's manifests), and an upgrade would undo that, as systemd-gpt-auto-generator's return
-# did (#83). systemd-networkd then resolves to the base's systemd version; other packages may upgrade.
+# did (#83). systemd-networkd then resolves to the base's systemd version; other packages may upgrade. fedora-release
+# stays too: its os-release carries the Fedora CoreOS build and stream (OSTREE_VERSION, RELEASE_TYPE) the ISO build reads.
 RUN --mount=type=tmpfs,target=/run --mount=type=tmpfs,target=/tmp \
-    dnf -y versionlock add $(rpm -qa --qf '%{NAME}\n' | grep -E '^(systemd|grub2|shim|dracut|kernel)') && \
+    dnf -y versionlock add $(rpm -qa --qf '%{NAME}\n' | grep -E '^(systemd|grub2|shim|dracut|kernel|fedora-release)') && \
     dnf -y install systemd-networkd kea kea-hooks unbound ppp openvpn qemu-guest-agent && \
     dnf -y remove moby-engine containerd && \
     dnf clean all && \
@@ -78,4 +79,11 @@ RUN sed -i "s|@NAMESPACE@|${SIGNED_NAMESPACE}|" /etc/containers/policy.json /etc
     systemctl mask NetworkManager.service NetworkManager-wait-online.service systemd-networkd-wait-online.service && \
     # moby-engine's group stays in /etc/group after its removal, which bootc's sysusers lint rejects.
     groupdel docker && \
+    # Andaru by name, with the Fedora CoreOS build it is based on; ostree titles boot entries from PRETTY_NAME, so the
+    # stock rollback still reads as Fedora CoreOS. Sourced in a subshell: os-release's VERSION would replace ours.
+    # VERSION goes into a sed replacement and a quoted value: only characters safe in both.
+    printf %s "$VERSION" | grep -Eqx '[0-9A-Za-z.+~_-]+' && \
+    build=$(. /usr/lib/os-release && echo "${OSTREE_VERSION:-}") && test -n "$build" && \
+    sed -i -e 's|^NAME=.*|NAME="Andaru"|' -e 's|^VARIANT=.*|VARIANT="Andaru"|' \
+        -e "s|^PRETTY_NAME=.*|PRETTY_NAME=\"Andaru ${VERSION} (Fedora CoreOS ${build})\"|" /usr/lib/os-release && \
     bootc container lint --fatal-warnings
