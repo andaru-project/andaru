@@ -1,3 +1,6 @@
+//go:build !integration
+
+// The root suite runs this package's test binary outside the source tree, where the fixtures are not.
 package config
 
 import (
