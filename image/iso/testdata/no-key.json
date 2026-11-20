@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "management": {
+    "mac": "52:54:00:aa:bb:01",
+    "addressing": {
+      "ipv4": {
+        "mode": "static",
+        "addresses": [
+          "192.168.1.1/24"
+        ]
+      },
+      "ipv6": {
+        "mode": "none"
+      }
+    },
+    "serve": {
+      "dhcp": {
+        "start": "192.168.1.100",
+        "end": "192.168.1.199"
+      },
+      "dns": true
+    }
+  },
+  "wan": {
+    "mac": "52:54:00:aa:bb:02",
+    "addressing": {
+      "ipv4": {
+        "mode": "dhcp"
+      },
+      "ipv6": {
+        "mode": "none"
+      }
+    }
+  },
+  "sshKeys": []
+}

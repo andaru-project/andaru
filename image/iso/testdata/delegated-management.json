@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "management": {
+    "mac": "52:54:00:aa:bb:01",
+    "addressing": {
+      "ipv4": {
+        "mode": "static",
+        "addresses": [
+          "192.168.1.1/24"
+        ]
+      },
+      "ipv6": {
+        "mode": "delegated",
+        "from": "@wan",
+        "subnetId": "0",
+        "ra": {
+          "mode": "unmanaged"
+        }
+      }
+    },
+    "serve": {
+      "dns": true
+    }
+  },
+  "wan": {
+    "mac": "52:54:00:aa:bb:02",
+    "addressing": {
+      "ipv4": {
+        "mode": "dhcp"
+      },
+      "ipv6": {
+        "mode": "dhcp6",
+        "requestPrefixLength": 56
+      }
+    }
+  },
+  "sshKeys": [
+    {
+      "type": "ssh-ed25519",
+      "blob": "AAAAC3NzaC1lZDI1NTE5AAAAIO+VXyljs/lkyfnto5CqJDJaSFTQana6UuzepSCNrhwa",
+      "comment": "admin@laptop"
+    }
+  ]
+}
