@@ -81,6 +81,8 @@ RUN sed -i "s|@NAMESPACE@|${SIGNED_NAMESPACE}|" /etc/containers/policy.json /etc
     groupdel docker && \
     # Andaru by name, with the Fedora CoreOS build it is based on; ostree titles boot entries from PRETTY_NAME, so the
     # stock rollback still reads as Fedora CoreOS. Sourced in a subshell: os-release's VERSION would replace ours.
+    # VERSION goes into a sed replacement and a quoted value: only characters safe in both.
+    printf %s "$VERSION" | grep -Eqx '[0-9A-Za-z.+~_-]+' && \
     build=$(. /usr/lib/os-release && echo "${OSTREE_VERSION:-}") && test -n "$build" && \
     sed -i -e 's|^NAME=.*|NAME="Andaru"|' -e 's|^VARIANT=.*|VARIANT="Andaru"|' \
         -e "s|^PRETTY_NAME=.*|PRETTY_NAME=\"Andaru ${VERSION} (Fedora CoreOS ${build})\"|" /usr/lib/os-release && \

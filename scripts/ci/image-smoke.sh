@@ -1,7 +1,7 @@
 #!/bin/sh
 # Checks a built Andaru image as a container, without booting it: its version, its packages, its unit states,
-# its SELinux labels and its signature policy. Booting it is the lab's job. Run it from the repository root;
-# SIGNED_NAMESPACE and COSIGN_PUB name a lab build's overrides.
+# its SELinux labels, its os-release and its signature policy. Booting it is the lab's job. Run it from the repository
+# root; SIGNED_NAMESPACE and COSIGN_PUB name a lab build's overrides.
 #   image-smoke.sh IMAGE VERSION   (ENGINE=docker to use docker instead of podman)
 set -eu
 
