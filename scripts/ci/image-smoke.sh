@@ -47,6 +47,16 @@ done
 # File capabilities, which rechunk.sh writes anew with every layer: shadow-utils gives these two theirs.
 getcap /usr/bin/newuidmap | grep -q "cap_setuid=ep" || fail "/usr/bin/newuidmap lost its file capabilities"
 getcap /usr/bin/newgidmap | grep -q "cap_setgid=ep" || fail "/usr/bin/newgidmap lost its file capabilities"
+# os-release names Andaru and keeps what Fedora CoreOS tools and the ISO build read. OSTREE_VERSION is read by sourcing
+# the file in a subshell: the base quotes it, and its VERSION would replace ours.
+for l in NAME=\"Andaru\" VARIANT=\"Andaru\" ID=fedora VARIANT_ID=coreos; do
+	grep -qxF "$l" /usr/lib/os-release || fail "os-release lacks $l"
+done
+build=$(. /usr/lib/os-release && echo "${OSTREE_VERSION:-}")
+echo "$build" | grep -Eqx "[0-9]+\.[0-9]{8}\.[0-9]+\.[0-9]+" || fail "os-release OSTREE_VERSION is \"$build\""
+grep -qxF "PRETTY_NAME=\"Andaru $VERSION (Fedora CoreOS $build)\"" /usr/lib/os-release ||
+	fail "os-release $(grep ^PRETTY_NAME= /usr/lib/os-release)"
+[ -n "$(. /usr/lib/os-release && echo "${RELEASE_TYPE:-}")" ] || fail "os-release lacks RELEASE_TYPE"
 state() {
 	got=$(systemctl is-enabled "$1" 2>/dev/null || true)
 	[ "$got" = "$2" ] || fail "$1 is $got, not $2"
