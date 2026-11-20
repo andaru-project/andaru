@@ -1,5 +1,5 @@
 #!/bin/sh
-# Rebuilds a built Andaru image's layers from its final filesystem, one layer per group of packages. A box then
+# Rebuilds a built Andaru image's layers from its final filesystem, one layer per package. A box then
 # downloads only the layers whose packages changed, and nothing the build removed: without this, the base's layers
 # still carry every file a later step deletes (moby-engine and containerd among them). Labels and config are kept.
 #   rechunk.sh IMAGE
@@ -13,10 +13,16 @@ chunkah=quay.io/coreos/chunkah@sha256:71e593421c5de7dcc7c8c5c50e98d3bac572055a76
 config=$(mktemp)
 trap 'rm -f "$config"' EXIT
 podman image inspect "$image" >"$config"
-# --prune /sysroot/ drops the base's ostree repository, which bootc does not need in an image. The ostree labels
-# describe the base's layers, which no longer exist.
-podman run --rm --mount=type=image,src="$image",target=/chunkah -v "$config:/config.json:ro" "$chunkah" \
-	build --config /config.json --prune /sysroot/ --max-layers 128 \
+before=$(podman image inspect -f '{{.Id}}' "$image")
+# One layer per package, as the Fedora CoreOS base has (about 300 today, 320 with ours); 500 is the storage limit.
+# --prune and the ostree labels only matter for an ostree-native base: they describe layers that no longer exist.
+podman run --rm --network=none --mount=type=image,src="$image",target=/chunkah -v "$config:/config.json:ro,z" \
+	"$chunkah" build --config /config.json --prune /sysroot/ --max-layers 448 \
 	--label ostree.commit- --label ostree.final-diffid- -t "$image" |
 	podman load
+# The pipeline's status is the load's: make sure the tag moved to the new image.
+[ "$(podman image inspect -f '{{.Id}}' "$image")" != "$before" ] || {
+	echo "rechunk.sh: $image was not replaced" >&2
+	exit 1
+}
 podman run --rm "$image" bootc container lint --fatal-warnings
