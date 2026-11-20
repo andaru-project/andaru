@@ -17,6 +17,11 @@ MIN_DISK=8000000000    # Fedora CoreOS's minimum
 SMALL_DISK=20000000000 # below this, add-ons will need more room
 STATEROOT_VAR=ostree/deploy/fedora-coreos/var
 TITLE="Andaru installer"
+NL='
+'
+# A jq prelude: "NAME | top" gives the disk a device sits on.
+# shellcheck disable=SC2016 # jq's variables
+TOP_DISK='(.blockdevices | map({(.name): .}) | add) as $m | def top: if $m[.].pkname then $m[.].pkname | top else . end;'
 
 # --- The screen ---------------------------------------------------------------------------------------------------
 
@@ -56,6 +61,10 @@ yes_no() {
 no_yes() {
 	ui --defaultno --yesno "$1" 12 76 >/dev/null
 }
+# bool QUESTION...: "true" or "false" from a yes/no question.
+bool() {
+	if "$@"; then echo true; else echo false; fi
+}
 
 # --- Form checks: each answer on its own, as Andaru's validator (internal/config/validate.go) would ---------------
 
@@ -67,7 +76,7 @@ number() {
 # ip4_int ADDRESS prints a dotted IPv4 address as an integer. Octets with a leading zero are refused, as Go's parser
 # refuses them.
 ip4_int() (
-	case $1 in '' | *[!0-9.]* | .* | *. | *..*) exit 1 ;; esac
+	case $1 in *[!0-9.]* | *.) exit 1 ;; esac
 	IFS=.
 	# shellcheck disable=SC2086 # split on the dots; the case above admits only digits and dots
 	set -- $1
@@ -114,7 +123,6 @@ ip6_hex() {
 			}
 			d = index(s, "::")
 			if (d) {
-				if (index(substr(s, d + 2), "::")) exit 1
 				head = substr(s, 1, d - 1); rest = substr(s, d + 2)
 			} else {
 				head = s; rest = ""
@@ -131,7 +139,7 @@ ip6_hex() {
 }
 # ip6_unicast ADDRESS: not unspecified, loopback, multicast or IPv4-mapped.
 ip6_unicast() (
-	x=$(ip6_hex "$1") && [ -n "$x" ] || exit 1
+	x=$(ip6_hex "$1") || exit 1
 	case $x in
 	00000000000000000000000000000000 | 00000000000000000000000000000001 | ff* | 00000000000000000000ffff*) exit 1 ;;
 	esac
@@ -145,9 +153,6 @@ ip6_local() (
 	addr=${1%/*} len=${1##*/}
 	[ "$addr" != "$1" ] && number "$len" 1 128 && ip6_unicast "$addr"
 )
-ip_unicast() {
-	ip4_unicast "$1" || ip6_unicast "$1"
-}
 # dns_servers LIST: one to eight space-separated servers, IPv4 or IPv6, none link-local, none twice.
 dns_servers() (
 	set -f
@@ -169,69 +174,79 @@ dns_servers() (
 )
 # duid VALUE: colon-separated hex bytes, at most 130, of DUID type 1 to 4 with the length its type needs.
 duid() (
+	case $1 in *"$NL"*) exit 1 ;; esac
 	printf '%s\n' "$1" | grep -Eqx '[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){3,129}' || exit 1
 	rest=$(((${#1} + 1) / 3 - 2))
-	case ${1%"${1#?????}"} in
-	00:01) [ "$rest" -ge 7 ] ;;
-	00:02) [ "$rest" -ge 5 ] ;;
-	00:03) [ "$rest" -ge 3 ] ;;
-	00:04) [ "$rest" -eq 16 ] ;;
+	case $1 in
+	00:01:*) [ "$rest" -ge 7 ] ;;
+	00:02:*) [ "$rest" -ge 5 ] ;;
+	00:03:*) [ "$rest" -ge 3 ] ;;
+	00:04:*) [ "$rest" -eq 16 ] ;;
 	*) exit 1 ;;
 	esac
 )
 # subnet_id ID REQUEST: 1 to 4 hex digits, below 2^(64 - REQUEST).
 subnet_id() (
-	printf '%s\n' "$1" | grep -Eqx '[0-9A-Fa-f]{1,4}' || exit 1
+	case $1 in '' | *[!0-9A-Fa-f]* | ?????*) exit 1 ;; esac
 	bits=$((64 - $2))
 	[ "$bits" -ge 16 ] || [ $((0x$1)) -lt $((1 << bits)) ]
 )
-request_length() {
-	number "$1" 1 64
-}
 optional_request_length() {
-	[ -z "$1" ] || request_length "$1"
+	[ -z "$1" ] || number "$1" 1 64
 }
+# words LIST: the list with single spaces, as the seed writes it.
+words() (
+	set -f
+	# shellcheck disable=SC2086 # split on whitespace
+	set -- $1
+	echo "$*"
+)
 optional_duid() {
 	[ -z "$1" ] || duid "$1"
 }
 
 # --- SSH key ------------------------------------------------------------------------------------------------------
 
-# ssh_key TEXT checks one public key and prints "TYPE BLOB COMMENT". No options, no private key, no control bytes; it
-# must pass ssh-keygen -l, and an RSA key must have at least 2048 bits.
+# ssh_key TEXT checks one public key: no options, no private key, no control bytes. It must pass ssh-keygen -l, and an
+# RSA key must have at least 2048 bits.
 ssh_key() (
-	nl='
-'
-	case $1 in *"$nl"*) exit 1 ;; esac
+	case $1 in *"$NL"*) exit 1 ;; esac
 	printf '%s\n' "$1" | LC_ALL=C grep -Eqx '(ssh-ed25519|sk-ssh-ed25519@openssh\.com|ecdsa-sha2-nistp(256|384|521)|sk-ecdsa-sha2-nistp256@openssh\.com|ssh-rsa) [A-Za-z0-9+/]+=*( [[:print:]]{0,256})?' ||
 		exit 1
 	tmp=$(mktemp) || exit 1
 	trap 'rm -f "$tmp"' EXIT
 	printf '%s\n' "$1" >"$tmp"
 	bits=$(ssh-keygen -l -f "$tmp" 2>/dev/null) || exit 1
-	type=${1%% *} rest=${1#* }
-	blob=${rest%% *}
-	comment=
-	[ "$blob" = "$rest" ] || comment=${rest#* }
-	[ "$type" != ssh-rsa ] || [ "${bits%% *}" -ge 2048 ] || exit 1
-	printf '%s %s %s\n' "$type" "$blob" "$comment"
+	case $1 in ssh-rsa\ *) [ "${bits%% *}" -ge 2048 ] ;; esac
 )
-# read_key_file FILE: a regular file, not a link, read up to 16 KiB, with its one line's newline dropped.
+# read_key_file FILE: a regular file, not a link, read up to 16 KiB. A Windows editor's byte-order mark and CR line
+# endings are dropped.
 read_key_file() {
 	[ -f "$1" ] && [ ! -L "$1" ] || return 1
-	head -c 16384 "$1"
+	head -c 16384 "$1" | sed '1s/^\xEF\xBB\xBF//; s/\r$//'
 }
+# mount_ro DEVICE DIR FSTYPE mounts read-only, never replaying a journal: a plain ro mount of ext4, XFS or btrfs still
+# writes its log to the device. Other filesystems with a journal are not searched.
 mount_ro() {
-	mount -o ro,nosuid,nodev,noexec "$1" "$2" 2>/dev/null
+	case $3 in
+	ext2 | ext3 | ext4) opts=,noload ;;
+	xfs) opts=,norecovery ;;
+	btrfs) opts=,nologreplay ;;
+	vfat | exfat | iso9660 | udf) opts='' ;;
+	*) return 1 ;;
+	esac
+	mount -t "$3" -o "ro,nosuid,nodev,noexec$opts" "$1" "$2" 2>/dev/null
 }
 # key_files LSBLK BOOT TARGET copies each andaru-ssh.pub found at the root of a filesystem on a disk other than the
 # boot medium and the target into the current directory, as key.N, and prints the devices it came from.
 key_files() {
 	i=0
-	for dev in $(printf '%s\n' "$1" | jq -r --arg boot "$2" --arg target "$3" "$(top_disk_jq)"'
-		.blockdevices[] | select(.fstype != null and .fstype != "swap") | select((.name | top) as $t | $t != $boot and $t != $target) | .path'); do
+	printf '%s\n' "$1" | jq -r --arg boot "$2" --arg target "$3" "$TOP_DISK"'
+		.blockdevices[] | select(.fstype != null) | select((.name | top) as $t | $t != $boot and $t != $target)
+		| "\(.path) \(.fstype)"' >filesystems
+	while read -r dev fstype; do
 		dir=$(mktemp -d) || continue
-		if mount_ro "$dev" "$dir"; then
+		if mount_ro "$dev" "$dir" "$fstype"; then
 			if read_key_file "$dir/andaru-ssh.pub" >"key.$i"; then
 				echo "$dev"
 				i=$((i + 1))
@@ -241,7 +256,8 @@ key_files() {
 			umount "$dir"
 		fi
 		rmdir "$dir"
-	done
+	done <filesystems
+	rm -f filesystems
 }
 
 # --- Disks --------------------------------------------------------------------------------------------------------
@@ -249,17 +265,18 @@ key_files() {
 lsblk_json() {
 	lsblk -J -l -b -o NAME,PATH,TYPE,SIZE,RO,PKNAME,LABEL,FSTYPE,MODEL
 }
+# boot_source prints the device holding the ISO's filesystem. An ISO loop-mounted from a file on a stick (Ventoy,
+# for one) is followed to the device holding that file.
 boot_source() {
-	findmnt -no SOURCE "$ISO"
-}
-# A jq prelude: "NAME | top" gives the disk a device sits on.
-top_disk_jq() {
-	# shellcheck disable=SC2016 # jq's variables
-	echo '(.blockdevices | map({(.name): .}) | add) as $m | def top: if $m[.].pkname then $m[.].pkname | top else . end;'
+	src=$(findmnt -no SOURCE "$ISO") || return 1
+	while case $src in /dev/loop*) true ;; *) false ;; esac do
+		back=$(losetup -nO BACK-FILE "$src") && src=$(findmnt -no SOURCE -T "$back") || return 1
+	done
+	echo "$src"
 }
 # boot_disk LSBLK SOURCE prints the disk the boot medium's filesystem is on.
 boot_disk() {
-	printf '%s\n' "$1" | jq -r --arg src "$2" "$(top_disk_jq)"' .blockdevices[] | select(.path == $src) | .name | top'
+	printf '%s\n' "$1" | jq -r --arg src "$2" "$TOP_DISK"' .blockdevices[] | select(.path == $src) | .name | top'
 }
 # disks LSBLK BOOT prints "NAME PATH SIZE MODEL" for each disk the installer may write: writable, at least MIN_DISK,
 # not the boot medium.
@@ -272,19 +289,22 @@ disks() {
 # boot_labels LSBLK TARGET prints the devices off TARGET with a filesystem labelled "boot". Fedora CoreOS's
 # coreos-ignition-unique-boot.service sends first boot to the emergency shell if it finds one.
 boot_labels() {
-	printf '%s\n' "$1" | jq -r --arg target "$2" "$(top_disk_jq)"'
+	printf '%s\n' "$1" | jq -r --arg target "$2" "$TOP_DISK"'
 		.blockdevices[] | select(.label == "boot" and (.name | top) != $target) | .path'
 }
 gb() {
 	awk -v b="$1" 'BEGIN { printf "%.1f GB", b / 1e9 }'
 }
-# cmdline_disk prints andaru.disk= from the kernel command line, if set.
-cmdline_disk() {
+# cmdline_disk prints andaru.disk= from the kernel command line, if set; the last one wins, as for the kernel's own.
+cmdline_disk() (
+	set -f
+	value=''
 	# shellcheck disable=SC2013 # the kernel command line is one line of words
 	for arg in $(cat "$CMDLINE"); do
-		case $arg in andaru.disk=*) printf '%s\n' "${arg#andaru.disk=}" ;; esac
+		case $arg in andaru.disk=*) value=${arg#andaru.disk=} ;; esac
 	done
-}
+	printf '%s' "$value"
+)
 # resolve_disk VALUE LIST: VALUE, resolved with readlink -f, must be one of LIST's disks. Prints its line.
 resolve_disk() {
 	path=$(readlink -f "$1") || return 1
@@ -296,11 +316,14 @@ resolve_disk() {
 ip_links() {
 	ip -j -d link show
 }
-# nics LINKS prints "NAME MAC" for each physical Ethernet port. The MAC is the permanent one when the kernel knows it,
-# lowercased: the rule Andaru's renderer matches links by (internal/host/links_linux.go).
+# nics LINKS prints "NAME MAC" for each physical Ethernet port, Wi-Fi left out. The MAC is the permanent one when the
+# kernel knows it, lowercased: the rule Andaru's renderer matches links by (internal/host/links_linux.go).
 nics() {
 	printf '%s\n' "$1" | jq -r '.[] | select(.link_type == "ether" and .parentbus != null)
-		| "\(.ifname) \((.permaddr // .address) | ascii_downcase)"'
+		| "\(.ifname) \((.permaddr // .address) | ascii_downcase)"
+		| select(test("^[^ ]+ ([0-9a-f]{2}:){5}[0-9a-f]{2}$"))' | while read -r name mac; do
+		[ -e "$SYS/class/net/$name/wireless" ] || [ -e "$SYS/class/net/$name/phy80211" ] || echo "$name $mac"
+	done
 }
 driver() {
 	d=$(readlink "$SYS/class/net/$1/device/driver" 2>/dev/null) && echo "${d##*/}" || echo unknown
@@ -331,25 +354,23 @@ seed_json() {
 		--arg kt "$KEY_TYPE" --arg kb "$KEY_BLOB" --arg kc "$KEY_COMMENT" '
 	def opt($k; $v): if $v == "" then {} else {($k): $v} end;
 	def flag($k; $v): if $v == "" then {} else {($k): ($v == "true")} end;
-	def v4($mode; $addr; $gw): {mode: $mode} + if $mode == "static" then {addresses: [$addr]} + opt("gateway"; $gw) else {} end;
-	def v6($mode; $addr; $gw):
-		{mode: $mode}
-		+ if $mode == "static" then {addresses: [$addr]} + opt("gateway"; $gw)
-		elif $mode == "delegated" then {from: "@wan", subnetId: $sub}
-		elif $mode == "dhcp6" then
-			(if $rpl == "" then {} else {requestPrefixLength: ($rpl | tonumber)} end)
-			+ flag("prefixOnly"; $po) + flag("withoutRA"; $wr) + flag("sendRelease"; $sr) + opt("duid"; $duid)
-		else {} end;
+	def ip($mode; $addr; $gw): {mode: $mode} + if $mode == "static" then {addresses: [$addr]} + opt("gateway"; $gw) else {} end;
 	{version: 1,
-	 management: ({mac: $mmac, addressing: {ipv4: v4($m4; $m4a; ""), ipv6: (v6($m6; $m6a; "") + if $ra == "" then {} else {ra: {mode: $ra}} end)}}
+	 management: ({mac: $mmac, addressing: {ipv4: ip($m4; $m4a; ""), ipv6: (ip($m6; $m6a; "")
+			+ (if $m6 == "delegated" then {from: "@wan", subnetId: $sub} else {} end)
+			+ if $ra == "" then {} else {ra: {mode: $ra}} end)}}
 		+ if $m4 == "static" then {serve: ((if $ds == "" then {} else {dhcp: {"start": $ds, "end": $de}} end) + {dns: ($sdns == "true")})} else {} end)}
 	+ (if $wmac == "" then {} else
-		{wan: {mac: $wmac, addressing: ({ipv4: v4($w4; $w4a; $w4g), ipv6: v6($w6; $w6a; $w6g)}
+		{wan: {mac: $wmac, addressing: ({ipv4: ip($w4; $w4a; $w4g), ipv6: (ip($w6; $w6a; $w6g)
+			+ if $w6 == "dhcp6" then
+				(if $rpl == "" then {} else {requestPrefixLength: ($rpl | tonumber)} end)
+				+ flag("prefixOnly"; $po) + flag("withoutRA"; $wr) + flag("sendRelease"; $sr) + opt("duid"; $duid)
+			else {} end)}
 			+ if $wdns == "" then {} else {dns: {servers: ($wdns | split(" "))}} end)}} end)
 	+ {sshKeys: (if $kt == "" then [] else [{type: $kt, blob: $kb, comment: $kc}] end)}'
 }
 reset_answers() {
-	DISK='' DISK_NAME='' DISK_FROM_CMDLINE='' M_NIC='' M_MAC='' M4_MODE='' M4_ADDR='' DHCP_START='' DHCP_END='' SERVE_DNS=''
+	DISK='' DISK_NAME='' DISK_LINE='' DISK_FROM_CMDLINE='' M_NIC='' M_MAC='' M4_MODE='' M4_ADDR='' DHCP_START='' DHCP_END='' SERVE_DNS=''
 	M6_MODE='' M6_ADDR='' M6_SUBNET='' M6_RA='' W_NIC='' W_MAC='' W4_MODE='' W4_ADDR='' W4_GW='' W6_MODE='' W6_ADDR='' W6_GW='' W6_REQUEST=''
 	W6_PREFIX_ONLY='' W6_WITHOUT_RA='' W6_SEND_RELEASE='' W6_DUID='' W_DNS='' KEY_TYPE='' KEY_BLOB='' KEY_COMMENT=''
 }
@@ -362,7 +383,7 @@ fatal() {
 	return 2
 }
 choose_disk() {
-	BLOCK=$(lsblk_json) || return 2
+	BLOCK=$(lsblk_json) || { fatal "lsblk could not list the disks."; return; }
 	BOOT=$(boot_disk "$BLOCK" "$(boot_source)")
 	[ -n "$BOOT" ] || { fatal "The install medium's disk could not be found."; return; }
 	list=$(disks "$BLOCK" "$BOOT")
@@ -386,8 +407,10 @@ EOF
 		name=$(pick "The disk to install Andaru to. Everything on it will be erased." "" "$@") || return 1
 		line=$(printf '%s\n' "$list" | awk -v n="$name" '$1 == n')
 	fi
-	DISK_NAME=${line%% *}
-	DISK=$(echo "$line" | awk '{ print $2 }')
+	DISK_LINE=$line
+	read -r DISK_NAME DISK _ <<EOF
+$line
+EOF
 	stray=$(boot_labels "$BLOCK" "$DISK_NAME")
 	[ -z "$stray" ] || fatal "Another disk has a filesystem labelled \"boot\" ($(echo "$stray" | tr '\n' ' ')). The installed system would not boot with it attached: remove that disk or relabel the filesystem, then install again."
 }
@@ -397,7 +420,7 @@ choose_ports() {
 	for n in $(echo "$LIST" | awk '{ print $1 }'); do ip link set "$n" up 2>/dev/null; done
 	sleep 3 # for the carriers to show
 	set --
-	while IFS='' read -r item; do set -- "$@" "$item"; done <<EOF
+	while IFS='' read -r item; do [ -z "$item" ] || set -- "$@" "$item"; done <<EOF
 $(nic_menu "$LIST" "")
 EOF
 	M_NIC=$(pick "The management port: the network you will manage Andaru from." "" "$@") || return 1
@@ -408,6 +431,8 @@ $(nic_menu "$LIST" "$M_NIC")
 EOF
 	W_NIC=$(pick "The WAN port: the Internet side." "" "$@" none "No WAN yet") || return 1
 	if [ "$W_NIC" = none ]; then W_NIC='' W_MAC=''; else W_MAC=$(nic_mac "$LIST" "$W_NIC"); fi
+	# Andaru tells its ports apart by MAC.
+	[ "$W_MAC" != "$M_MAC" ] || { say "$M_NIC and $W_NIC have the same MAC address, so Andaru cannot tell them apart."; return 1; }
 }
 wan_addressing() {
 	[ -n "$W_NIC" ] || return 0
@@ -429,10 +454,10 @@ wan_addressing() {
 			W6_REQUEST=$(ask "Prefix length to ask the ISP to delegate, 1 to 64, so the management network can have IPv6 from it. Empty asks for none." 56 optional_request_length "Enter a number from 1 to 64, or nothing.") || return 1
 			if no_yes "Set advanced DHCPv6 options (prefix only, without RA, release, DUID)?"; then
 				if [ -n "$W6_REQUEST" ]; then
-					if no_yes "Ask for the prefix only, with no address for the WAN itself?"; then W6_PREFIX_ONLY=true; else W6_PREFIX_ONLY=false; fi
+					W6_PREFIX_ONLY=$(bool no_yes "Ask for the prefix only, with no address for the WAN itself?")
 				fi
-				if no_yes "Start DHCPv6 without waiting for a router advertisement?"; then W6_WITHOUT_RA=true; else W6_WITHOUT_RA=false; fi
-				if yes_no "Release the lease when the WAN goes down?"; then W6_SEND_RELEASE=true; else W6_SEND_RELEASE=false; fi
+				W6_WITHOUT_RA=$(bool no_yes "Start DHCPv6 without waiting for a router advertisement?")
+				W6_SEND_RELEASE=$(bool yes_no "Release the lease when the WAN goes down?")
 				W6_DUID=$(ask "DUID, as colon-separated hex bytes. Empty lets the system choose." "" optional_duid "That is not a DUID of type 1 to 4 with the length its type needs.") || return 1
 			fi
 			;;
@@ -444,6 +469,7 @@ wan_addressing() {
 		W_DNS=''
 		if [ "$W4_MODE" = static ] || [ "$W6_MODE" = static ]; then
 			W_DNS=$(ask "DNS servers, separated by spaces (up to 8)" "" dns_servers "Enter one to eight usable addresses, none link-local and none twice.") || return 1
+			W_DNS=$(words "$W_DNS")
 		fi
 		return 0
 	done
@@ -465,7 +491,7 @@ management_addressing() {
 				DHCP_START=$(ask "First address of the DHCP pool" "" ip4_unicast "That is not a usable IPv4 address.") || return 1
 				DHCP_END=$(ask "Last address of the DHCP pool" "" ip4_unicast "That is not a usable IPv4 address.") || return 1
 			fi
-			if yes_no "Answer DNS queries on the management network?"; then SERVE_DNS=true; else SERVE_DNS=false; fi
+			SERVE_DNS=$(bool yes_no "Answer DNS queries on the management network?")
 		fi
 		set -- none "No IPv6" static "Static address" slaac "SLAAC" dhcp6 "DHCPv6"
 		[ "$W6_MODE" != dhcp6 ] || [ -z "$W6_REQUEST" ] || set -- "$@" delegated "A subnet of the prefix the WAN is delegated"
@@ -495,13 +521,15 @@ delegated_subnet() {
 }
 # use_key TEXT sets the key's answers, or fails.
 use_key() {
-	parsed=$(ssh_key "$1") || return 1
-	KEY_TYPE=${parsed%% *} parsed=${parsed#* }
-	KEY_BLOB=${parsed%% *} KEY_COMMENT=${parsed#* }
+	ssh_key "$1" || return 1
+	KEY_TYPE=${1%% *} rest=${1#* }
+	KEY_BLOB=${rest%% *} KEY_COMMENT=''
+	[ "$KEY_BLOB" = "$rest" ] || KEY_COMMENT=$(words "${rest#* }")
 }
 key_from_media() {
 	dir=$(mktemp -d) || return 1
-	from=$(cd "$dir" && key_files "$BLOCK" "$BOOT" "$DISK_NAME")
+	# Listed afresh: the stick is often plugged in only now.
+	from=$(cd "$dir" && key_files "$(lsblk_json)" "$BOOT" "$DISK_NAME")
 	count=$(printf '%s' "$from" | grep -c .)
 	text=
 	[ "$count" -ne 1 ] || text=$(cat "$dir/key.0")
@@ -510,7 +538,7 @@ key_from_media() {
 	0) say "No andaru-ssh.pub was found at the root of another disk or stick." ;;
 	1)
 		use_key "$text" && return 0
-		say "$from: andaru-ssh.pub must hold one public key, such as ssh-ed25519 AAAA... me@laptop, and nothing else."
+		say "$from: andaru-ssh.pub must hold one public key in plain ASCII, such as ssh-ed25519 AAAA... me@laptop, and nothing else."
 		;;
 	*) say "More than one andaru-ssh.pub was found: $(echo "$from" | tr '\n' ' '). Leave one." ;;
 	esac
@@ -579,6 +607,9 @@ grow() {
 	[ $? -le 1 ] # 1: nothing to grow
 }
 write_install() {
+	# The disk is named by the kernel; it must still be the one chosen, by size and model.
+	[ "$(resolve_disk "$DISK" "$(disks "$(lsblk_json)" "$BOOT")")" = "$DISK_LINE" ] ||
+		{ echo "andaru-install: $DISK is no longer the disk chosen ($DISK_LINE)" >&2; return 1; }
 	serial=$(serial_console)
 	step coreos-installer install "$DISK" --console tty0 --console "$serial,115200n8" --ignition-file "$DEST_IGN" || return
 	# Fedora CoreOS's first boot does this while the disk GUID is still the image's; once the root partition is grown,
@@ -588,9 +619,13 @@ write_install() {
 	root=$(root_partition "$DISK_NAME")
 	[ -n "$root" ] && [ "$(echo "$root" | wc -l)" -eq 1 ] || { echo "andaru-install: no single root partition on $DISK" >&2; return 1; }
 	step grow "$DISK" "$(cat "$SYS/class/block/${root##*/}/partition")" || return
-	mnt=$(mktemp -d) || return
+	mnt=$(step mktemp -d | tail -n 1) && [ -d "$mnt" ] || return
 	step mount "$root" "$mnt" || return
-	if step xfs_growfs "$mnt" && write_var "$mnt/$STATEROOT_VAR/andaru-install"; then status=0; else status=1; fi
+	if step xfs_growfs "$mnt" && step test -d "$mnt/$STATEROOT_VAR" && write_var "$mnt/$STATEROOT_VAR/andaru-install"; then
+		status=0
+	else
+		status=1
+	fi
 	step umount "$mnt" || status=1
 	rmdir "$mnt"
 	sync
@@ -603,10 +638,14 @@ write_var() {
 		step cp "$ISO/andaru.oci" "$1/.andaru.oci.partial" &&
 		step sync "$1/.andaru.oci.partial" &&
 		step mv "$1/.andaru.oci.partial" "$1/andaru.oci" &&
-		(umask 077 && seed_json >"$1/.install-seed.json.partial") &&
+		step write_seed "$1/.install-seed.json.partial" &&
 		step sync "$1/.install-seed.json.partial" &&
 		step mv "$1/.install-seed.json.partial" "$1/install-seed.json"
 }
+write_seed() (
+	umask 077
+	seed_json >"$1"
+)
 
 # --- The session --------------------------------------------------------------------------------------------------
 
@@ -617,6 +656,8 @@ session() {
 		0) break ;;
 		2) return 1 ;;
 		esac
+		# Leaving frees the other console.
+		yes_no "Start over? No returns to \"Press Enter to install\"." || return 1
 	done
 	clear
 	if write_install; then
