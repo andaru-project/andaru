@@ -291,7 +291,7 @@ vdb /dev/vdb 12884901888 '
     End
     It 'refuses a disk other than the target with a filesystem labelled boot'
       When call boot_labels "$(cat "$data/lsblk-stray-boot.json")" sda
-      The output should equal /dev/sdd3
+      The output should equal '/dev/sdd3 on /dev/sdd'
     End
     It 'accepts a boot label on the target itself'
       When call boot_labels "$(cat "$data/lsblk-stray-boot.json")" sdd
@@ -309,20 +309,33 @@ vdb /dev/vdb 12884901888 '
       The output should equal /dev/vdb
       rm -f "$CMDLINE"
     End
-    It 'keeps the loop device when its file is not on a block device'
-      findmnt() { case $* in *-T*) echo tmpfs ;; *) echo /dev/loop0 ;; esac; }
+    It 'keeps the loop device when its file is in RAM'
+      findmnt() { case $* in *FSTYPE*) echo tmpfs ;; *-T*) echo tmpfs ;; *) echo /dev/loop0 ;; esac; }
       losetup() { echo /run/andaru.iso; }
       When call boot_source
       The output should equal /dev/loop0
     End
+    It 'follows a loop device backed by a disk, and from its partition'
+      findmnt() { echo /dev/loop0p1; }
+      losetup() { [ "$3" = /dev/loop0 ] && echo /dev/sdb; }
+      When call boot_source
+      The output should equal /dev/sdb
+    End
+    It 'fails when the file is on a filesystem it cannot follow'
+      findmnt() { case $* in *FSTYPE*) echo zfs ;; *-T*) echo tank/home ;; *) echo /dev/loop0 ;; esac; }
+      losetup() { echo /home/me/andaru.iso; }
+      When call boot_source
+      The status should be failure
+      The output should equal ''
+    End
     It 'drops a btrfs subvolume from the device holding the file'
-      findmnt() { case $* in *-T*) echo '/dev/sdb2[/@home]' ;; *) echo /dev/loop0 ;; esac; }
+      findmnt() { case $* in *FSTYPE*) echo btrfs ;; *-T*) echo '/dev/sdb2[/@home]' ;; *) echo /dev/loop0 ;; esac; }
       losetup() { echo /home/me/andaru.iso; }
       When call boot_source
       The output should equal /dev/sdb2
     End
     It 'follows a loop-mounted ISO to the stick holding its file'
-      findmnt() { case $* in *-T*) echo /dev/sdb1 ;; *) echo /dev/loop0 ;; esac; }
+      findmnt() { case $* in *FSTYPE*) echo vfat ;; *-T*) echo /dev/sdb1 ;; *) echo /dev/loop0 ;; esac; }
       losetup() { echo /run/ventoy/andaru.iso; }
       When call boot_source
       The output should equal /dev/sdb1
@@ -539,7 +552,7 @@ enp2s0 52:54:00:aa:bb:02'
       answers sda
       When call questions
       The status should equal 2
-      The contents of file "$work/said" should start with 'Another disk has a filesystem labelled "boot" (/dev/sdd3)'
+      The contents of file "$work/said" should start with 'Another disk has a filesystem labelled "boot" (/dev/sdd3 on /dev/sdd)'
     End
     It 'skips the typed confirmation with andaru.disk='
       echo 'console=tty0 andaru.disk=/dev/sda' >"$CMDLINE"
@@ -669,7 +682,7 @@ umount"
       lsblk_json() { jq '.blockdevices += [{name: "sda4", path: "/dev/sda4", type: "part", size: 1, ro: false, pkname: "sda", label: "root", fstype: "xfs", model: null}, {name: "sde2", path: "/dev/sde2", type: "part", size: 1, ro: false, pkname: "sde", label: "boot", fstype: "ext4", model: null}]' "$data/lsblk-stick.json"; }
       When call write_install
       The status should equal 1
-      The error should equal 'andaru-install: remove /dev/sde2: a filesystem labelled boot would stop the first boot'
+      The error should equal 'andaru-install: remove the disk with /dev/sde2 on /dev/sde: a filesystem labelled boot would stop the first boot'
       The path "$work/log" should not be exist
     End
     It 'refuses a disk that is no longer the one chosen'

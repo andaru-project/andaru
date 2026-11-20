@@ -265,14 +265,22 @@ key_files() {
 lsblk_json() {
 	lsblk -J -l -b -o NAME,PATH,TYPE,SIZE,RO,PKNAME,LABEL,FSTYPE,MODEL
 }
-# boot_source prints the device holding the ISO's filesystem. An ISO loop-mounted from a file on another block device
-# is followed to that device; a file anywhere else (tmpfs, say) leaves the loop device itself.
+# boot_source prints the device holding the ISO's filesystem. A loop device is followed to the block device behind it,
+# or to the one holding its file. It is kept only when its file is in RAM (tmpfs, ramfs). Anything it cannot follow
+# fails, so the medium's disk is never mistaken for a target.
 boot_source() {
 	src=$(findmnt -no SOURCE "$ISO") || return 1
 	while case $src in /dev/loop*) true ;; *) false ;; esac do
-		if ! back=$(losetup -nO BACK-FILE "$src" 2>/dev/null) || ! next=$(findmnt -no SOURCE -T "$back"); then break; fi
-		next=${next%%\[*} # a btrfs subvolume's suffix
-		case $next in /dev/*) src=$next ;; *) break ;; esac
+		back=$(losetup -nO BACK-FILE "${src%p[0-9]*}" 2>/dev/null) || return 1
+		case $back in
+		/dev/*) src=$back ;;
+		*)
+			case $(findmnt -no FSTYPE -T "$back" 2>/dev/null) in tmpfs | ramfs) break ;; esac
+			next=$(findmnt -no SOURCE -T "$back" 2>/dev/null) || return 1
+			src=${next%%\[*} # a btrfs subvolume's suffix
+			case $src in /dev/*) ;; *) return 1 ;; esac
+			;;
+		esac
 	done
 	echo "$src"
 }
@@ -288,11 +296,11 @@ disks() {
 		| select(.name | test("^(zram|loop)") | not)
 		| "\(.name) \(.path) \(.size) \(.model // "" | gsub("\\s+"; "_"))"'
 }
-# boot_labels LSBLK TARGET prints the devices off TARGET with a filesystem labelled "boot". Fedora CoreOS's
+# boot_labels LSBLK TARGET prints "PARTITION on DISK" for each filesystem labelled "boot" off TARGET. Fedora CoreOS's
 # coreos-ignition-unique-boot.service sends first boot to the emergency shell if it finds one.
 boot_labels() {
 	printf '%s\n' "$1" | jq -r --arg target "$2" "$TOP_DISK"'
-		.blockdevices[] | select(.label == "boot" and (.name | top) != $target) | .path'
+		.blockdevices[] | select(.label == "boot" and (.name | top) != $target) | "\(.path) on /dev/\(.name | top)"'
 }
 # spaced LINES: the lines joined by single spaces.
 spaced() {
@@ -541,7 +549,7 @@ key_from_media() {
 	[ "$count" -ne 1 ] || text=$(cat "$dir/key.0")
 	rm -rf "$dir"
 	case $count in
-	0) say "No andaru-ssh.pub was found at the root of another disk or stick. It is looked for on FAT, exFAT, ext4, XFS and btrfs, not NTFS." ;;
+	0) say "No andaru-ssh.pub was found at the root of another disk or stick. NTFS is not searched." ;;
 	1)
 		use_key "$text" && return 0
 		say "$from: andaru-ssh.pub must hold one public key in plain ASCII, such as ssh-ed25519 AAAA... me@laptop, and nothing else."
@@ -613,12 +621,13 @@ grow() {
 	[ $? -le 1 ] # 1: nothing to grow
 }
 write_install() {
+	block=$(lsblk_json) || { echo "andaru-install: failed: lsblk" >&2; return 1; }
 	# The disk is named by the kernel; it must still be the one chosen, by size and model.
-	[ "$(resolve_disk "$DISK" "$(disks "$(lsblk_json)" "$BOOT")")" = "$DISK_LINE" ] ||
+	[ "$(resolve_disk "$DISK" "$(disks "$block" "$BOOT")")" = "$DISK_LINE" ] ||
 		{ echo "andaru-install: $DISK is no longer the disk chosen ($DISK_LINE)" >&2; return 1; }
 	# A stick plugged in since the disk screen, for the key, may carry one too.
-	stray=$(boot_labels "$(lsblk_json)" "$DISK_NAME")
-	[ -z "$stray" ] || { echo "andaru-install: remove $(spaced "$stray"): a filesystem labelled boot would stop the first boot" >&2; return 1; }
+	stray=$(boot_labels "$block" "$DISK_NAME")
+	[ -z "$stray" ] || { echo "andaru-install: remove the disk with $(spaced "$stray"): a filesystem labelled boot would stop the first boot" >&2; return 1; }
 	serial=$(serial_console)
 	step coreos-installer install "$DISK" --console tty0 --console "$serial,115200n8" --ignition-file "$DEST_IGN" || return
 	# Fedora CoreOS's first boot does this while the disk GUID is still the image's; once the root partition is grown,
@@ -629,7 +638,7 @@ write_install() {
 	[ -n "$root" ] && [ "$(echo "$root" | wc -l)" -eq 1 ] || { echo "andaru-install: no single root partition on $DISK" >&2; return 1; }
 	step grow "$DISK" "$(cat "$SYS/class/block/${root##*/}/partition")" || return
 	mnt=$(mktemp -d) || { echo "andaru-install: failed: mktemp -d" >&2; return 1; }
-	step mount "$root" "$mnt" || return
+	step mount "$root" "$mnt" || { rmdir "$mnt"; return 1; }
 	if step xfs_growfs "$mnt" && step test -d "$mnt/$STATEROOT_VAR" && write_var "$mnt/$STATEROOT_VAR/andaru-install"; then
 		status=0
 	else
