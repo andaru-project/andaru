@@ -11,7 +11,7 @@ pool inside the management subnet or a gateway inside the WAN subnet, are the re
 that decide what the installer's own menus offer. The reader also checks each
 `addressing` object against Andaru's configuration schema and its validator. The fixtures in
 [`image/iso/testdata/`](../../image/iso/testdata/) are the installer's expected output, byte for byte, and
-`internal/config` tests their `addressing` objects against the schema.
+`internal/config` tests their `addressing` objects against the schema and the validator's per-answer checks.
 
 ## Version 1
 
@@ -34,8 +34,9 @@ that decide what the installer's own menus offer. The reader also checks each
 }
 ```
 
-The installer writes the seed with `jq`, two-space indented. The seed's own keys come in the order shown. In an
-`addressing` object, `mode` comes first, then the keys in the order the schema lists them, with `ra` last.
+The installer writes the seed with `jq`, two-space indented. The seed's own keys come in the order shown, and an
+`addressing` object's as `ipv4`, `ipv6`, `dns`. In each `ipv4` and `ipv6` object, `mode` comes first, then the keys in
+the order the schema lists them, with `ra` last.
 
 | Field | Form |
 | --- | --- |
@@ -71,9 +72,9 @@ IPv4-mapped (`::ffff:0:0/96`), and carries no zone. These are `validUnicast`'s r
 - **Router advertisements**: on management with a `static` or `delegated` IPv6, `ipv6.ra` is always written, as
   `{"mode": M}`; an absent `ra` would mean `disabled`. `M` is one of `unmanaged` (addresses by SLAAC, the menu's
   preselected entry), `router` (Andaru announces itself as a router, with no prefix) or `disabled`. `unmanaged` needs a
-  `static` address of length 64, the only length SLAAC announces; for another length the menu leaves it out and
-  preselects `router`. The seed sets up no DHCPv6 server, so it offers no mode that needs one.
-- **DNS servers**: on a WAN with a `static` family, `addressing.dns.servers` holds one to eight addresses, IPv4 or
+  `static` address of length 64 outside `fe80::/10`, the only prefix SLAAC announces; for any other address the menu
+  leaves it out and preselects `router`. The seed sets up no DHCPv6 server, so it offers no mode that needs one.
+- **DNS servers**: on a WAN with a `static` family, `addressing.dns` holds only `servers`: one to eight addresses, IPv4 or
   IPv6, none link-local (`169.254.0.0/16`, `fe80::/10`) and none twice.
 - **Management** has at least one family that is not `none`, so the box can be reached. A `dhcp` IPv4 or a `delegated`
   IPv6 there, with the other family `none`, carries the installer's warning: the box's address is not known in

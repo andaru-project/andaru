@@ -12,7 +12,7 @@ import (
 )
 
 // The installer's seed fixtures (docs/dev/install-seed.md): each port's addressing is Andaru's own configuration
-// object. Slice 3's reader adds the validator's checks.
+// object, and passes the validator's checks of each answer on its own. Slice 3's reader adds the checks across answers.
 func TestInstallSeedFixturesAddressing(t *testing.T) {
 	c, err := newSchemaCompiler(map[string][]byte{schemaURI: SchemaBundle})
 	if err != nil {
@@ -58,20 +58,21 @@ func TestInstallSeedFixturesAddressing(t *testing.T) {
 	}
 }
 
-// checkSeedAnswers holds each answer to the validator's rules for it alone, as docs/dev/install-seed.md promises.
+// checkSeedAnswers runs the validator's own checks of a single address, gateway, DUID or DNS list. The doc's other
+// rules (one address, the RA rules, the subnetId bound) are the installer's, held by its specs.
 func checkSeedAnswers(t *testing.T, where string, a map[string]any) {
 	t.Helper()
 	for _, family := range []string{"ipv4", "ipv6"} {
 		fam := a[family].(map[string]any)
 		for _, raw := range asStrings(fam["addresses"]) {
 			p, err := netip.ParsePrefix(raw)
-			if err != nil || p.Addr().Is4In6() || p.Addr().Zone() != "" || !validLocal(p) {
+			if err != nil || (family == "ipv4") != p.Addr().Is4() || p.Addr().Is4In6() || p.Addr().Zone() != "" || !validLocal(p) {
 				t.Errorf("%s: %s address %q is refused by the validator", where, family, raw)
 			}
 		}
 		if raw, ok := fam["gateway"].(string); ok {
 			g, err := netip.ParseAddr(raw)
-			if err != nil || g.Is4In6() || g.Zone() != "" || !validUnicast(g) {
+			if err != nil || (family == "ipv4") != g.Is4() || g.Is4In6() || g.Zone() != "" || !validUnicast(g) {
 				t.Errorf("%s: %s gateway %q is refused by the validator", where, family, raw)
 			}
 		}
@@ -80,7 +81,7 @@ func checkSeedAnswers(t *testing.T, where string, a map[string]any) {
 		}
 	}
 	if d, ok := a["dns"].(map[string]any); ok {
-		validateDNSList(where+" dns", &dns{Servers: asStrings(d["servers"])}, func(path, msg string) { t.Errorf("%s: %s", path, msg) })
+		validateDNSList(where+" dns", &dns{Servers: asStrings(d["servers"]), SearchDomains: asStrings(d["searchDomains"])}, func(path, msg string) { t.Errorf("%s: %s", path, msg) })
 	}
 }
 
