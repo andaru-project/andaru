@@ -4,6 +4,7 @@ enable systemd-networkd.service
 enable andaru-engine.service
 enable andaru-network-boot.service
 enable andaru-factory-reset.service
+enable andaru-install-cleanup.service
 enable andaru-leases.path
 enable andaru-prefixes.path
 enable andaru-prefixes.timer

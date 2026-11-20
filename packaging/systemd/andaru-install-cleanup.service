@@ -2,14 +2,18 @@
 Description=Remove the Andaru install files once the box runs from the registry
 # Only an ISO install stages /var/andaru-install; the first Andaru boot moved its seed (andaru realize boot).
 ConditionPathExists=/var/andaru-install
-# Once the boot has come up: until then, the offline archive is the only way back to this release.
-After=multi-user.target
+# Once Andaru has come up: until then, the offline archive is the only way back to this release. Not
+# After=multi-user.target: the target is ordered after the units it wants, so that would be a cycle.
+After=andaru-engine.service
 
 [Service]
 Type=oneshot
 # The deploy recorded the signed registry reference as the origin; anything else keeps the archive.
 ExecCondition=/bin/sh -c 'bootc status --json | jq -r .status.booted.image.image.transport | grep -qx registry'
-ExecStart=/usr/bin/rm -f /var/andaru-install/andaru.oci /etc/systemd/system/andaru-install-rebase.service \
+# The partial names are an installer cut off mid-write; the failure unit is the rebase unit's OnFailure.
+ExecStart=/usr/bin/rm -f /var/andaru-install/andaru.oci /var/andaru-install/.andaru.oci.partial \
+    /var/andaru-install/.install-seed.json.partial /etc/systemd/system/andaru-install-rebase.service \
+    /etc/systemd/system/andaru-install-failed.service \
     /etc/systemd/system/multi-user.target.wants/andaru-install-rebase.service
 # Fails, keeping the directory, while an unmoved seed remains in it.
 ExecStart=/usr/bin/rmdir /var/andaru-install

@@ -74,12 +74,6 @@ func realizeCommand(ctx context.Context, args []string, stderr io.Writer, build 
 	if verb == "factory-reset" {
 		return factoryResetVerb(ctx, stderr)
 	}
-	// The seed moves before the reset check, so it also moves on the fence path; a failed move never fails boot.
-	if verb == "boot" {
-		if err := moveSeed(*stateDir); err != nil {
-			fmt.Fprintln(stderr, "install seed not moved:", err)
-		}
-	}
 	// While a reset stops, tears down or wipes the tree, nothing else touches it; boot only shuts the host.
 	blocked, denyAll := resetBlocks()
 	if blocked && verb != "boot" {
@@ -103,6 +97,10 @@ func realizeCommand(ctx context.Context, args []string, stderr io.Writer, build 
 	case "confirm":
 		err = verbs.Confirm(ctx, id)
 	case "boot":
+		// Past the privilege check, and on the fence path too; a failed move never fails boot.
+		if err := moveSeed(*stateDir); err != nil {
+			fmt.Fprintln(stderr, "install seed not moved:", err)
+		}
 		if blocked {
 			// Shut until the reset resumes: deny-all, or the factory filter where Andaru never ran the network.
 			err = verbs.Fence(ctx, denyAll)

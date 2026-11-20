@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 )
@@ -9,7 +10,7 @@ import (
 var stagedSeed = "/var/andaru-install/install-seed.json"
 
 // moveSeed moves the installer's seed into the state directory: written there under a temporary name, synced and
-// renamed, the directory synced, and only then the staged copy removed. A staged copy next to an existing target is
+// renamed, the directories synced, and only then the staged copy removed. A staged copy next to an existing target is
 // stale and discarded. The temporary file is created in the state directory, so it takes that directory's label.
 func moveSeed(stateDir string) error {
 	body, err := os.ReadFile(stagedSeed)
@@ -26,22 +27,19 @@ func moveSeed(stateDir string) error {
 		return err
 	}
 	// A fresh install has no state directory yet: create it as the engine unit's StateDirectoryMode would.
-	created := true
-	if err = os.Mkdir(stateDir, 0o700); os.IsExist(err) {
-		created = false
-	} else if err != nil {
+	if err = os.Mkdir(stateDir, 0o700); err != nil && !os.IsExist(err) {
+		return err
+	}
+	// A temporary file left by a power cut mid-move would make commitRendered's exclusive create fail.
+	if err = os.Remove(target + ".andaru-tmp"); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	if err = commitRendered(target, body, 0o600); err != nil {
 		return err
 	}
-	if err = syncDir(stateDir); err != nil {
+	// The parent too, for a state directory the move created.
+	if err = errors.Join(syncDir(stateDir), syncDir(filepath.Dir(stateDir))); err != nil {
 		return err
-	}
-	if created {
-		if err = syncDir(filepath.Dir(stateDir)); err != nil {
-			return err
-		}
 	}
 	return os.Remove(stagedSeed)
 }
@@ -51,6 +49,5 @@ func syncDir(dir string) error {
 	if err != nil {
 		return err
 	}
-	defer d.Close()
-	return d.Sync()
+	return errors.Join(d.Sync(), d.Close())
 }

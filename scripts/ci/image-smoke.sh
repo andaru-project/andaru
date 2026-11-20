@@ -72,6 +72,7 @@ done
 for u in NetworkManager.service NetworkManager-wait-online.service systemd-networkd-wait-online.service; do
 	state "$u" masked
 done
+command -v bootc >/dev/null && command -v jq >/dev/null || fail "the install cleanup needs bootc and jq"
 # First boot applies presets to every unit; the states above must survive that.
 systemctl preset-all --preset-mode=enable-only >/dev/null 2>&1 || fail "presets do not apply"
 for u in sshd.service zincati.service andaru-web.service bootc-fetch-apply-updates.timer rpm-ostreed-automatic.timer; do
