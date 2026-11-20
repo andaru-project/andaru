@@ -107,7 +107,6 @@ These await the owner's review. Calls 1, 7, 8, 10 and 11 amend the spec.
 - [ ] A `publish` job in the `image-release` environment with `contents: write`, installing cosign as the `sign` job does:
   - `SHA256SUMS` over both ISOs, `cosign sign-blob --yes --bundle SHA256SUMS.cosign.bundle` with the release key, then `cosign verify-blob` with `image/cosign.pub`;
   - `gh release create --draft`, prerelease from `needs.version.outputs.prerelease`, then `gh release upload --clobber` of the ISOs, `SHA256SUMS` and the bundle, then `gh release edit --draft=false`. A rerun of a failed job finishes the same draft. The image tags exist before the ISOs, so boxes can update even while a failed ISO job waits for its rerun.
-  - The release notes say the aarch64 ISO is unqualified until Task 9's aarch64 run passes.
 
 ### Task 8: docs
 - [ ] core-api: installing from the ISO; verifying it (`cosign verify-blob --key cosign.pub --bundle SHA256SUMS.cosign.bundle SHA256SUMS`, then `sha256sum -c --ignore-missing SHA256SUMS`); the SSH key file; `andaru.disk=`. The lab route stays for development.
@@ -126,7 +125,7 @@ These await the owner's review. Calls 1, 7, 8, 10 and 11 amend the spec.
   - a deploy made to fail shows the issue message;
   - the peak use of `/var/tmp` during the deploy, and the ISO sizes;
   - `bootc upgrade` refusing an image signed with another key.
-- [ ] aarch64, if an aarch64 VM is available (for example QEMU with HVF on an Apple Silicon Mac): the install, and GRUB's menu on `ttyAMA0`. Until then, the release notes say it is unqualified (Task 7).
+- [ ] aarch64, if an aarch64 VM is available (for example QEMU with HVF on an Apple Silicon Mac): the install, and GRUB's menu on `ttyAMA0`.
 
 ## Out of scope
 
