@@ -44,6 +44,9 @@ for f in /usr/lib/systemd/system-generators/systemd-gpt-auto-generator \
 	/usr/lib/systemd/system/sysinit.target.wants/systemd-firstboot.service /etc/grub.d/08_fallback_counting; do
 	[ ! -e "$f" ] || fail "$f is back: systemd or grub2-tools was upgraded"
 done
+# File capabilities, which rechunk.sh writes anew with every layer: shadow-utils gives these two theirs.
+getcap /usr/bin/newuidmap | grep -q "cap_setuid=ep" || fail "/usr/bin/newuidmap lost its file capabilities"
+getcap /usr/bin/newgidmap | grep -q "cap_setgid=ep" || fail "/usr/bin/newgidmap lost its file capabilities"
 state() {
 	got=$(systemctl is-enabled "$1" 2>/dev/null || true)
 	[ "$got" = "$2" ] || fail "$1 is $got, not $2"

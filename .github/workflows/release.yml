@@ -98,6 +98,7 @@ jobs:
         run: |
           set -eu
           podman build -f image/Containerfile --build-arg VERSION="$VERSION" --build-arg BASE_IMAGE="$BASE" -t andaru:build .
+          sh scripts/ci/rechunk.sh andaru:build
           sh scripts/ci/image-smoke.sh andaru:build "$VERSION"
 
       - name: Push the unsigned architecture image

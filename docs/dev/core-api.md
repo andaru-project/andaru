@@ -29,7 +29,7 @@ There is no installer yet: install media are slice 2 of that design. Until then,
 
 To check an image by hand: `cosign verify --key image/cosign.pub ghcr.io/andaru-project/andaru:<version>`.
 
-**From source:** `podman build -f image/Containerfile --build-arg VERSION=0.0.0-dev -t andaru:dev .` builds the image for this machine's architecture, and `sh scripts/ci/image-smoke.sh andaru:dev 0.0.0-dev` checks it.
+**From source:** `podman build -f image/Containerfile --build-arg VERSION=0.0.0-dev -t andaru:dev .` builds the image for this machine's architecture, `sh scripts/ci/rechunk.sh andaru:dev` rebuilds its layers as releases are, and `sh scripts/ci/image-smoke.sh andaru:dev 0.0.0-dev` checks it.
 
 **Releasing** (maintainers): push a tag on `main`. `v1.2.3` is a release, `v1.2.3-a.N` (alpha), `v1.2.3-b.N` (beta) and `v1.2.3-rc.N` (release candidate) are prereleases; with the dot, `rc.10` sorts after `rc.9`. Tags must be signed: `git tag -s v1.2.3`. The release workflow builds both architectures, pushes them unsigned as `1.2.3-amd64` and `1.2.3-arm64`, signs the multi-architecture index in the `image-release` environment, and only then tags it `1.2.3`, and `stable` for a release.
 
