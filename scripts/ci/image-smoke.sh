@@ -38,6 +38,8 @@ done
 for p in moby-engine containerd; do
 	! rpm -q --quiet "$p" || fail "$p is installed"
 done
+# Fedora CoreOS removes it; an upgrade of a base package brings it back, and its efi.automount fails every boot (#83).
+[ ! -e /usr/lib/systemd/system-generators/systemd-gpt-auto-generator ] || fail "a base package was upgraded"
 state() {
 	got=$(systemctl is-enabled "$1" 2>/dev/null || true)
 	[ "$got" = "$2" ] || fail "$1 is $got, not $2"
