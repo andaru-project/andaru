@@ -61,7 +61,7 @@ state() {
 	got=$(systemctl is-enabled "$1" 2>/dev/null || true)
 	[ "$got" = "$2" ] || fail "$1 is $got, not $2"
 }
-for u in systemd-networkd.service andaru-engine.service andaru-network-boot.service andaru-factory-reset.service \
+for u in systemd-networkd.service andaru-engine.service andaru-network-boot.service andaru-factory-reset.service andaru-install-cleanup.service \
 	andaru-leases.path andaru-prefixes.path andaru-prefixes.timer kea-dhcp4.service kea-dhcp6.service unbound.service; do
 	state "$u" enabled
 done

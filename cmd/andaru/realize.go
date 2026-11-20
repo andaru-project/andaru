@@ -74,6 +74,12 @@ func realizeCommand(ctx context.Context, args []string, stderr io.Writer, build 
 	if verb == "factory-reset" {
 		return factoryResetVerb(ctx, stderr)
 	}
+	// The seed moves before the reset check, so it also moves on the fence path; a failed move never fails boot.
+	if verb == "boot" {
+		if err := moveSeed(*stateDir); err != nil {
+			fmt.Fprintln(stderr, "install seed not moved:", err)
+		}
+	}
 	// While a reset stops, tears down or wipes the tree, nothing else touches it; boot only shuts the host.
 	blocked, denyAll := resetBlocks()
 	if blocked && verb != "boot" {
