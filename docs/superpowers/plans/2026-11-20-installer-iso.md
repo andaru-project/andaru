@@ -4,24 +4,26 @@
 
 **Goal:** each release publishes an x86_64 and an aarch64 install ISO that installs exactly that release with no network. The ISO asks for the first settings and writes them to the installed box as a seed. The installed box rebases offline onto the release, keeps the seed for slice 3 to apply, and cleans up the install files once its origin is the registry. The release publishes `SHA256SUMS` for both ISOs, signed with the release key, in a GitHub release.
 
-**Spec:** slice 2 of [first boot, safe mode and resets](../specs/2026-11-19-first-boot-safe-mode-resets-design.md): calls 1 to 6 and 9, the Installer section, and the os-release risk. The route is the one the [offline install spike](../../research/offline-install-spike.md) proved on x86_64.
+**Spec:** slice 2 of [first boot, safe mode and resets](../specs/2026-11-19-first-boot-safe-mode-resets-design.md): spec calls 1 to 6 and 9, the Installer section, and the os-release risk. The route is the one the [offline install spike](../../research/offline-install-spike.md) proved on x86_64. "Call N" below is this plan's; the spec's are written "spec call N".
 
 ## Author calls
 
-These await the owner's review.
+These await the owner's review. Calls 1, 7, 8, 10 and 11 amend the spec.
 
-1. **The ISO finds the image's Fedora CoreOS build in its os-release, not in a label.** The base's `/usr/lib/os-release` carries `OSTREE_VERSION` (for example `45.20261030.3.1`), and the image keeps it. The ISO job reads it with `podman create` and `podman cp` on the architecture's digest, which runs nothing, so it works for aarch64 on an amd64 runner. A label would need every workflow, the nightly repository's included, to pass the build as a build argument, since a Containerfile cannot compute a label. This amends the spec's call 1.
-2. **The live ISO comes from Fedora CoreOS's build archive and is verified with Fedora's key.** For build `B` and architecture `A`, the ISO job reads `https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/B/A/meta.json`, takes `images["live-iso"].path`, and downloads it with `coreos-installer download --image-url`, which checks the detached signature against the Fedora keys built into coreos-installer. A build no longer in the archive fails the job.
-3. **Pinned tools.** `coreos-installer` and `butane` run from their `quay.io/coreos/*` containers pinned by digest; `xorriso` and `skopeo` come from the Ubuntu runner. Nothing executes code of the target architecture, so both ISOs build on an amd64 runner.
-4. **The installer is POSIX `sh` with plain prompts** (no dialog or whiptail: the live system has neither). It asks for IPv4 only, as the spec's screens do, and for at most one SSH key. It checks only the form of each answer (call 6).
-5. **It runs on tty1 and the serial console, one session at a time.** An installer unit per console replaces Fedora CoreOS's live autologin there (`console=ttyS0,115200n8` on x86_64, `ttyAMA0` on aarch64, set with `--live-karg-append`). The sessions share a `flock`: the second console shows which console is installing.
-6. **The live system has no network and no SSH.** The live Ignition config masks NetworkManager, `sshd.service`, `sshd.socket` and zincati, as call 4 does for the installed system's stock boot. The installer brings links up without addresses, only to read their carrier.
-7. **The seed's format is version 1, defined in this slice; its Go reader comes in slice 3.** The format is documented in `docs/dev/install-seed.md`, with valid and invalid fixtures in `image/iso/testdata/`. The installer's tests compare its output with the fixtures byte for byte, and slice 3's strict Go reader is tested against the same files. Slice 3 adds the record of the first apply (call 8). Shape:
+1. **The ISO finds the image's Fedora CoreOS build and stream in its os-release, not in a label.** The image keeps the base's `OSTREE_VERSION` (for example `45.20261030.3.1`) and `RELEASE_TYPE` (`stable`) in `/usr/lib/os-release`. The ISO build reads them with `podman create` and `podman cp`, which runs nothing, so it works for aarch64 on an amd64 runner. Andaru's own `org.opencontainers.image.version` label overwrites the base's, and a new label would need every workflow, the nightly repository's included, to pass the build as a build argument. This amends spec call 1. `fedora-release*` joins the image's version lock, so no package upgrade rewrites os-release without those fields.
+2. **The live ISO is Fedora CoreOS's own, verified with Fedora's key.** For build `B`, stream `S` and architecture `A`, the URL is `https://builds.coreos.fedoraproject.org/prod/streams/S/builds/B/A/fedora-coreos-B-live-iso.A.iso`, built from the build ID rather than read from the unsigned `meta.json`, so the file name binds the build. `coreos-installer download --image-url` fetches `<url>.sig` and checks it against the Fedora keys it ships, and fails without a signature. It runs from the image's base, so its keys are as new as the release it installs. A build no longer in the archive fails the job.
+3. **Tools.** `butane` runs from its `quay.io/coreos/butane` container pinned by digest. `xorriso` is installed with apt on the Ubuntu runner; the qualification proves `-boot_image any replay` with that version. Nothing executes code of the target architecture, so both ISOs build on an amd64 runner.
+4. **The installer is POSIX `sh` with plain prompts.** Plain `read` prompts work on any serial terminal and can be driven by shellspec; `whiptail` exists in the live system but needs neither. It asks for IPv4 only, as the spec's screens do, and for at most one SSH key. It checks only the form of each answer (spec call 6): an address with no leading zeros in any octet (Go's parser refuses them), a prefix length, a MAC address, a key (call 8).
+5. **It runs on tty1 and the serial console, one session at a time.**
+   - Fedora CoreOS 45 runs `kmsconvt@tty1` on the screen, and its live autologin generator does nothing once a user Ignition config is embedded. The live config masks `kmsconvt@tty1`, `getty@tty1` and the serial getty, and its installer units conflict with them.
+   - The serial console is `ttyS0` on x86_64 and `ttyAMA0` on aarch64: `live.bu`'s `@CONSOLE@`, also set with `--live-karg-append console=@CONSOLE@,115200n8`.
+   - Each console shows "Press Enter to install". The shared `flock` is taken only when someone presses Enter, so an unattended serial port never locks out the screen. The other console then shows which console is installing.
+6. **The live system has no network and no SSH.** The live config masks NetworkManager, `sshd.service`, `sshd.socket` and zincati; the live system is discarded, so masking is safe. NetworkManager would otherwise take DHCP leases on every port, the WAN included. It also sets `net.ipv6.conf.all.disable_ipv6=1` and `net.ipv6.conf.default.disable_ipv6=1`, so links the installer brings up to read their carrier get no address from a router advertisement.
+7. **The seed is a new format, version 1, documented in `docs/dev/install-seed.md` with fixtures in `image/iso/testdata/`.** `andaru setup` does not exist yet, so there is no answer document to reuse; this amends spec call 6. Slice 3 adds its strict Go reader, tested against the same fixtures, the semantic checks (a pool inside the subnet, a gateway on the WAN subnet), and the record of the first apply (spec call 8). Shape:
 
    ```json
    {
      "version": 1,
-     "release": "0.6.0",
      "management": {"mac": "52:54:00:aa:bb:01", "ipv4": {"address": "192.168.1.1/24"},
                     "serve": {"dhcp": {"start": "192.168.1.100", "end": "192.168.1.199"}, "dns": true}},
      "wan": {"mac": "52:54:00:aa:bb:02", "ipv4": {"dhcp": true}},
@@ -29,89 +31,106 @@ These await the owner's review.
    }
    ```
 
-   Management's `ipv4` is `{"address"}` or `{"dhcp": true}`, and `serve` exists only with an address. `wan` is absent for "none yet"; its `ipv4` is `{"dhcp": true}` or `{"address", "gateway", "dns": [...]}`. MACs are permanent MAC addresses, lowercase.
-8. **The SSH key file comes from a second removable medium, not the boot medium.** An ISO written to a USB stick is read-only, so a key file cannot be added to it. The installer offers to paste a key, or to read `andaru-ssh.pub` from the root of any other removable medium, mounted read-only. A key must pass `ssh-keygen -l`. This amends the spec's "read from the boot medium".
-9. **Disks.** The list leaves out the boot medium, read-only devices and disks under 20 GB (call 2's minimum). After `coreos-installer install`, the installer finds the root partition by its `root` label on the target disk only, never through `/dev/disk/by-partlabel`, which another disk with Fedora CoreOS could also claim.
-10. **The Andaru side of the handover is in this slice, so the seed survives the first boot:**
-    - `andaru realize boot` moves the seed to `/var/lib/andaru/install-seed.json` exactly as call 2 says. "Its real data location" means: no mount is declared for `/var/lib/andaru` (`findmnt --fstab`), or it is mounted.
-    - `andaru-install-cleanup.service` runs `andaru install cleanup` after `multi-user.target` when `/var/andaru-install` exists. If `bootc status --json` shows the booted origin's transport is `registry`, it removes the archive, the staging directory and the rebase unit with its enable link. It never removes the seed: the move above does, or it was never staged.
-    - A full reset removes `/var/andaru-install` under the same condition (call 15).
-11. **os-release.** The image rewrites `NAME="Andaru"`, `PRETTY_NAME="Andaru <version> (Fedora CoreOS <build>)"` and `VARIANT="Andaru"` in `/usr/lib/os-release`. It keeps `ID`, `VERSION_ID` and `VARIANT_ID=coreos`, which Fedora CoreOS's own units and scripts match on. The boot menu's titles come from `PRETTY_NAME`, so the Andaru deployment and the stock rollback read differently.
-12. **ISOs over 2 GiB fail the release.** The x86_64 ISO measured 1.89 GiB on Fedora CoreOS 44. The GHCR fallback in call 5 waits until an ISO comes close to the limit; the release workflow fails before publishing if one exceeds it.
-13. **No nightly ISO, and no VM in CI.** `image/iso/build.sh` builds an ISO from any image reference, so the lab builds one from a nightly. The rebase target then names `andaru-nightly`, which the image's policy checks with the nightly key.
-14. **Release order.** The ISO jobs run after the image is signed and tagged, from the per-architecture digests. If an ISO job fails, the image tags already exist and boxes can update; rerunning the failed jobs completes the release. The GitHub release is created only when both ISOs and the signed `SHA256SUMS` exist.
-15. **Verifying the booted image online (call 3) moves to slice 3,** with the console and web UI that report it.
+   Management's `ipv4` is `{"address"}` or `{"dhcp": true}`, and `serve` exists only with an address. `wan` is absent for "none yet"; its `ipv4` is `{"dhcp": true}` or `{"address", "gateway", "dns": [...]}`. A MAC is the permanent address, `permaddr` from `ip -j -d link` or else `address`, lowercased: the rule Andaru's renderer matches on (`internal/host/links_linux.go`). The WAN list leaves out the management NIC.
+8. **SSH key.** The installer offers to paste a key, or to read `andaru-ssh.pub` from the root of another medium, because an ISO written to a USB stick is read-only: this amends the spec's "read from the boot medium".
+   - **Finding the file:** every filesystem on a device other than the boot medium and the target disk, mounted `ro,nosuid,nodev,noexec`. The file must be a regular file, not a link, read with `head -c 16384`. More than one match is refused, naming them.
+   - **The key:** exactly one line matching `^(ssh-ed25519|sk-ssh-ed25519@openssh.com|ecdsa-sha2-nistp(256|384|521)|sk-ecdsa-sha2-nistp256@openssh.com|ssh-rsa) [A-Za-z0-9+/]+=*( [[:print:]]{0,256})?$`, so no options, no private key and no control bytes. It must then pass `ssh-keygen -l`, and an RSA key must have at least 2048 bits. The seed holds it as type, blob and comment.
+9. **Disks.**
+   - **The list:** `TYPE=disk`, writable, at least 20 GB (spec call 2), never the boot medium: the parent disk (`lsblk -no PKNAME`) of `findmnt -no SOURCE /run/media/iso`.
+   - **`andaru.disk=`:** resolved with `readlink -f`, so `/dev/disk/by-id/…` works, and held to the same rules; a value that fails them stops the installer with the reason.
+   - **Refusal:** if a disk other than the target has a filesystem labelled `boot`, the installer refuses: Fedora CoreOS's `coreos-ignition-unique-boot.service` would send first boot to the emergency shell.
+   - **The root partition:** found by its `root` label on the target disk only (`lsblk`), after `udevadm settle`, never through `/dev/disk/by-partlabel`.
+10. **The installed box's side is in this slice, so the seed survives the first boot.**
+    - **The move:** `andaru realize boot` moves the seed to `/var/lib/andaru/install-seed.json` as spec call 2 says, before its reset check, so it also runs on the reset fence path. The temporary file is created in `/var/lib/andaru`, so it takes that directory's label and needs no `restorecon`. The data-location condition of spec call 2 is dropped: only an ISO install stages a seed, and its config declares no data mount. A failed move is logged and never fails boot.
+    - **The cleanup:** `andaru-install-cleanup.service`, after `multi-user.target`, with `ConditionPathExists=/var/andaru-install`. Its `ExecCondition` checks with `bootc status --json` and `jq` that the booted origin's transport is `registry`. It removes the archive, the rebase unit and its enable link, then `rmdir`s the directory, which fails, keeping it, while an unmoved seed remains.
+    - **No reset change:** the full reset does not remove `/var/andaru-install` (spec call 15): a reset reboots, and the cleanup runs on that boot.
+11. **os-release.** The image rewrites `NAME="Andaru"`, `PRETTY_NAME="Andaru <version> (Fedora CoreOS <build>)"` and `VARIANT="Andaru"` in `/usr/lib/os-release`. It keeps `ID`, `VERSION_ID`, `VARIANT_ID=coreos`, `RELEASE_TYPE` and `OSTREE_VERSION`. No Fedora CoreOS unit or initramfs script matches on `NAME` or `VARIANT`, and ostree titles boot entries from `PRETTY_NAME`, so the Andaru deployment and the stock rollback read differently.
+12. **An ISO over 2 GiB fails the release.** The GHCR fallback of spec call 5 waits until an ISO nears the limit: Fedora CoreOS 45's live ISO plus a nightly's layers is about 1.86 GiB.
+13. **No nightly ISO, and no VM in CI.** The lab builds an ISO from a nightly with the same script.
 
 ## Global constraints
 
 - Every commit builds and passes `go vet`, `go test ./...`, shellcheck and shellspec. The root suites (`scripts/ci/root-tests.sh`) pass.
 - The image builds and passes `image-smoke.sh` on both architectures.
-- No answer is written to `/boot` or passes through Ignition (call 2). No password is asked by the installer (call 7).
+- No answer is written to `/boot` or passes through Ignition (spec call 2). The installer asks for no password (spec call 7).
 - New shell scripts join `ci.yml`'s shellcheck list.
 
 ## Tasks
 
 ### Task 1: the image says Andaru
-- [ ] Containerfile: the os-release edit (call 11), reading the build from `OSTREE_VERSION`.
-- [ ] `image-smoke.sh` checks `NAME`, `PRETTY_NAME` and `VARIANT`, and that `ID`, `VERSION_ID`, `VARIANT_ID` and `OSTREE_VERSION` are unchanged.
+- [ ] Containerfile: the os-release edit (call 11), reading the build from `OSTREE_VERSION`; `fedora-release*` joins the version lock (call 1).
+- [ ] `image-smoke.sh`: `NAME`, `PRETTY_NAME` and `VARIANT`; `ID=fedora` and `VARIANT_ID=coreos`; `OSTREE_VERSION` matches `^[0-9]+\.[0-9]{8}\.[0-9]+\.[0-9]+$` and is the build `PRETTY_NAME` names; `RELEASE_TYPE` is set.
 
 ### Task 2: the seed format
-- [ ] `docs/dev/install-seed.md`: version 1 (call 7), each field's form check, and that slice 3 applies it.
-- [ ] Fixtures in `image/iso/testdata/`: static management with DHCP and DNS served, DHCP management, static WAN, no WAN, no key; and invalid ones (pool outside the subnet, the address inside the pool, gateway outside the WAN subnet, the same MAC twice, a malformed key).
+- [ ] `docs/dev/install-seed.md`: version 1 (call 7) and each field's form check.
+- [ ] Fixtures in `image/iso/testdata/`: static management with DHCP and DNS served, DHCP management, a static WAN, no WAN, no key.
 
 ### Task 3: the installer
 - [ ] `image/iso/andaru-install`, POSIX `sh`, in functions the specs can call one by one:
-  - disks: list (call 9), `andaru.disk=` from `/proc/cmdline`, the typed confirmation;
-  - NICs: name, permanent MAC, driver, carrier;
-  - management, WAN and key prompts with their form checks, and the DHCP-management warning (call 9);
-  - review screen, then the write: `coreos-installer install` with the consoles, `sgdisk --disk-guid=R --move-second-header`, `growpart`, mount, `xfs_growfs`, the archive copied under a temporary name, synced and renamed, the seed at 0600 in `andaru-install/` at 0700;
-  - the refusal to start without `/run/media/iso/andaru.oci`.
+  - the refusal to start without `/run/media/iso/andaru.oci`, and the Enter prompt and lock (call 5);
+  - disks (call 9), with `andaru.disk=` read from `/proc/cmdline`, and the typed confirmation otherwise;
+  - NICs: name, permanent MAC (call 7), driver (`device/driver`), and carrier after `ip link set up`;
+  - management, WAN and key prompts with their form checks (calls 4 and 8), and the DHCP-management warning (spec call 9);
+  - the review screen, then the write:
+    - `coreos-installer install` with the consoles and the destination config;
+    - `sgdisk --disk-guid=R --move-second-header`, `udevadm settle`, `growpart`, mount, `xfs_growfs`;
+    - `andaru-install/` at 0700; the archive copied under a temporary name, synced and renamed; the seed at 0600;
+    - unmount, `sync`, and a prompt to remove the medium and reboot.
 - [ ] The seed is written with `jq -n --arg`, never by string concatenation.
-- [ ] `tests/shell/installer_spec.sh`: each function against fixtures (an `lsblk -J` capture, a fake `/sys/class/net` tree, `/proc/cmdline`), the seed output against Task 2's fixtures, and each invalid fixture's answers refused.
+- [ ] `tests/shell/installer_spec.sh`:
+  - each function against captures: `lsblk -J` (an isohybrid boot stick mounted as a partition, a small disk, a read-only disk, a stray `boot` label), `ip -j -d link` with and without `permaddr`, `/proc/cmdline`;
+  - each form check, with the refusals: leading zeros, a private key, a key with options, two keys, control bytes, RSA-1024, a FIFO or link named `andaru-ssh.pub`, two media carrying one;
+  - the seed output against Task 2's fixtures, byte for byte.
 
 ### Task 4: the Ignition configs
-- [ ] `image/iso/live.bu`: the installer, its units on tty1 and the serial console with the shared lock (call 5), the masks (call 6), and the destination config as a file.
-- [ ] `image/iso/dest.bu`, with `@IMAGE@` and `@VERSION@` filled in by the build: call 4's masks and disables, and the rebase unit from the spike (`unshare -m`, remount `/sysroot` writable, `ostree container image deploy --imgref ostree-unverified-image:oci-archive:/var/andaru-install/andaru.oci --target-imgref ostree-image-signed:docker://@IMAGE@:@VERSION@`, then reboot), with `ConditionPathExists=!/usr/bin/andaru`.
-- [ ] CI runs `butane --strict` on both.
+- [ ] `image/iso/dest.bu`, with `@IMAGE@` and `@VERSION@` filled in by the build:
+  - spec call 4's masks and disables;
+  - the rebase unit exactly as the spike ran it: `ConditionPathExists=!/usr/bin/andaru` and `ConditionPathExists=/var/andaru-install/andaru.oci`; `unshare -m`; `/sysroot` remounted writable; `ostree container image deploy --sysroot / --imgref ostree-unverified-image:oci-archive:/var/andaru-install/andaru.oci --target-imgref ostree-image-signed:docker://@IMAGE@:@VERSION@`; then reboot;
+  - `OnFailure=` writing `/etc/issue.d/andaru-install.issue`, "Andaru's install did not finish: reinstall from the ISO", so a failed deploy says so on the console.
+- [ ] `image/iso/live.bu`, with `@CONSOLE@`: the installer, its units and the masks (calls 5 and 6), the IPv6 sysctls (call 6), and the rendered `dest.ign` as a file (`butane --files-dir`, so `dest.bu` is rendered first).
+- [ ] CI renders both with `butane --strict`.
 
 ### Task 5: the ISO build
-- [ ] `image/iso/build.sh IMAGE@DIGEST VERSION ARCH OUT`:
-  - read the build from the image's os-release (call 1), fetch and verify the live ISO (call 2);
-  - `skopeo copy --preserve-digests` the digest to `andaru.oci`, and check that its `index.json` names that digest;
-  - `xorriso … -map andaru.oci /andaru.oci -boot_image any replay`, as in call 1;
-  - render both Butane configs, then `coreos-installer iso customize --live-ignition` with the console karg;
-  - check `iso kargs show` and `iso ignition show`, and fail above 2 GiB (call 12).
+- [ ] `image/iso/build.sh REPO VERSION DIGEST ARCH OUT`, with `ARCH` `x86_64` or `aarch64`:
+  - read `OSTREE_VERSION` and `RELEASE_TYPE` from `REPO@DIGEST` (call 1); fetch and verify the live ISO (call 2);
+  - `skopeo copy --preserve-digests docker://REPO@DIGEST oci-archive:andaru.oci`, and check that its `index.json` names `DIGEST`;
+  - `xorriso -indev <fcos.iso> -outdev <out.iso> -compliance iso_9660_level=1 -map andaru.oci /andaru.oci -boot_image any replay`;
+  - render `dest.bu` with `REPO:VERSION`, then `live.bu`; `coreos-installer iso customize --live-ignition` and `--live-karg-append`;
+  - check `iso kargs show` and `iso ignition show`.
 
 ### Task 6: the installed box's side (call 10)
-- [ ] `realize boot` moves the seed before `generation.Boot`: temporary file in the target directory, sync, rename, `restorecon`, then remove the staged copy; a staged copy next to an existing target is discarded. Tests: the move, a stale staged copy, a declared but unmounted `/var/lib/andaru`, and a power cut between rename and removal.
-- [ ] `andaru install cleanup` and `andaru-install-cleanup.service`, with tests for each origin transport and a missing directory.
-- [ ] The full reset removes `/var/andaru-install` when the origin is the registry, with a test.
-- [ ] `image-smoke.sh` checks the cleanup unit is enabled.
+- [ ] The seed move in `realize boot`, before the reset check, reusing `commitRendered` (`cmd/andaru/realize.go`) and syncing `/var/lib/andaru` before the staged copy is removed. Tests: the move; a staged copy next to an existing target, which is discarded; a failed move, which leaves boot's exit status alone.
+- [ ] `andaru-install-cleanup.service` in `packaging/systemd/`, enabled in the image and checked by `image-smoke.sh`.
 
 ### Task 7: the release
-- [ ] `release.yml`: an `iso` job per architecture after `sign`, from the recorded per-architecture digests, uploading the ISO as an artifact.
-- [ ] A `publish` job in the `image-release` environment with `contents: write`: `SHA256SUMS` over both ISOs, `cosign sign-blob --bundle SHA256SUMS.cosign.bundle` with the release key, `cosign verify-blob` with `image/cosign.pub`, then `gh release create` with the ISOs, `SHA256SUMS` and the bundle, marked prerelease for `a`, `b` and `rc` tags. ISO names: `andaru-<version>-x86_64.iso` and `andaru-<version>-aarch64.iso`.
+- [ ] An `iso` job per architecture after `sign`, from the `digest-amd64` and `digest-arm64` artifacts (amd64 is `x86_64`, arm64 is `aarch64`), uploading `andaru-<version>-<arch>.iso` as an artifact. It fails if the ISO is over 2 GiB (call 12).
+- [ ] A `publish` job in the `image-release` environment with `contents: write`, installing cosign as the `sign` job does:
+  - `SHA256SUMS` over both ISOs, `cosign sign-blob --yes --bundle SHA256SUMS.cosign.bundle` with the release key, then `cosign verify-blob` with `image/cosign.pub`;
+  - `gh release create --draft`, prerelease from `needs.version.outputs.prerelease`, then `gh release upload --clobber` of the ISOs, `SHA256SUMS` and the bundle, then `gh release edit --draft=false`. A rerun of a failed job finishes the same draft. The image tags exist before the ISOs, so boxes can update even while a failed ISO job waits for its rerun.
+  - The release notes say the aarch64 ISO is unqualified until Task 9's aarch64 run passes.
 
 ### Task 8: docs
-- [ ] core-api: installing from the ISO, verifying it (`cosign verify-blob --key cosign.pub --bundle SHA256SUMS.cosign.bundle SHA256SUMS`, then `sha256sum -c --ignore-missing SHA256SUMS`), the SSH key file, `andaru.disk=`; the lab route stays for development.
+- [ ] core-api: installing from the ISO; verifying it (`cosign verify-blob --key cosign.pub --bundle SHA256SUMS.cosign.bundle SHA256SUMS`, then `sha256sum -c --ignore-missing SHA256SUMS`); the SSH key file; `andaru.disk=`. The lab route stays for development.
 - [ ] README: the install route.
-- [ ] The spec: amend call 1 (call 1 here), the boot medium key file (call 8), call 5's fallback (call 12), and call 3's slice (call 15).
+- [ ] The spec: amend spec calls 1, 2, 5, 6 and 15 and the key file, as calls 1, 7, 8, 10 and 12 say.
 
 ### Task 9: qualification
 - [ ] CI green, including both image builds and smoke.
-- [ ] A release candidate tag in a fork, or the ISO built locally from a nightly (call 13), on Proxmox:
+- [ ] An ISO built from a nightly (call 13), on Proxmox:
   - x86_64 under UEFI with Secure Boot, and under legacy BIOS;
-  - the installer on the screen and on serial, the second console locked out;
-  - no network in the live system (`ip addr`, the journal);
+  - the installer on the screen and on serial, with the serial port unattended, then the second console locked out;
+  - no address in the live system on a segment with DHCP and router advertisements (`ip addr`, the journal);
+  - the refusals: `andaru.disk=` naming the boot medium, and a second disk with a `boot` label;
   - the boot menu on both consoles reads Andaru for the new deployment and Fedora CoreOS for the rollback;
-  - after the first Andaru boot: the seed at `/var/lib/andaru/install-seed.json` with its label, `/var/andaru-install` and the rebase unit gone, the origin the signed registry reference;
+  - after the first Andaru boot: the seed at `/var/lib/andaru/install-seed.json` labelled `var_lib_t`, `/var/andaru-install` and the rebase unit gone, the origin the signed registry reference, and the `bootc status --json` field the cleanup reads;
+  - a deploy made to fail shows the issue message;
   - the peak use of `/var/tmp` during the deploy, and the ISO sizes;
   - `bootc upgrade` refusing an image signed with another key.
-- [ ] aarch64, if an aarch64 VM is available (for example QEMU with HVF on an Apple Silicon Mac): the install, and GRUB's menu on `ttyAMA0`. Otherwise it stays open in the spec's risks.
+- [ ] aarch64, if an aarch64 VM is available (for example QEMU with HVF on an Apple Silicon Mac): the install, and GRUB's menu on `ttyAMA0`. Until then, the release notes say it is unqualified (Task 7).
 
 ## Out of scope
 
-- Applying and confirming the seed, the console, autologin and SSH: slice 3.
+- Applying and confirming the seed, its semantic checks and Go reader, the console, autologin and SSH: slice 3.
+- Verifying the booted image online (spec call 3): slice 3, with the console and the web UI that report it.
 - PPPoE at install: slice 4.
-- The GHCR fallback for ISOs over 2 GiB (call 12).
-- A nightly ISO (call 13).
+- The GHCR fallback for ISOs over 2 GiB (call 12), and a nightly ISO (call 13).
