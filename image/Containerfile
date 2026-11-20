@@ -32,9 +32,15 @@ LABEL org.opencontainers.image.title="Andaru" \
 
 # Add Andaru's services and Fedora's firewall packages; drop Docker, whose own firewall rules Andaru cannot own.
 # /run and /tmp are tmpfs here: since Fedora 45, the transaction runs systemd-tmpfiles --create, which fills them.
-RUN --mount=type=tmpfs,target=/run --mount=type=tmpfs,target=/tmp dnf -y install systemd-networkd kea kea-hooks unbound ppp openvpn qemu-guest-agent && \
+# systemd and the boot stack stay at the base's versions: Fedora CoreOS removes or patches their files when composing
+# the base (fedora-coreos-config's manifests), and an upgrade would undo that, as systemd-gpt-auto-generator's return
+# did (#83). systemd-networkd then resolves to the base's systemd version; other packages may upgrade.
+RUN --mount=type=tmpfs,target=/run --mount=type=tmpfs,target=/tmp \
+    dnf -y versionlock add $(rpm -qa --qf '%{NAME}\n' | grep -E '^(systemd|grub2|shim|dracut|kernel)') && \
+    dnf -y install systemd-networkd kea kea-hooks unbound ppp openvpn qemu-guest-agent && \
     dnf -y remove moby-engine containerd && \
-    dnf clean all
+    dnf clean all && \
+    rm /etc/dnf/versionlock.toml
 
 COPY --from=go /out/andaru /out/andaru-web /usr/bin/
 COPY --from=web /src/web/dist/ /usr/share/andaru/web/
