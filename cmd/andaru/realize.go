@@ -97,6 +97,10 @@ func realizeCommand(ctx context.Context, args []string, stderr io.Writer, build 
 	case "confirm":
 		err = verbs.Confirm(ctx, id)
 	case "boot":
+		// Past the privilege check, and on the fence path too; a failed move never fails boot.
+		if err := moveSeed(*stateDir); err != nil {
+			fmt.Fprintln(stderr, "install seed not moved:", err)
+		}
 		if blocked {
 			// Shut until the reset resumes: deny-all, or the factory filter where Andaru never ran the network.
 			err = verbs.Fence(ctx, denyAll)
