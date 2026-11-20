@@ -31,7 +31,8 @@ LABEL org.opencontainers.image.title="Andaru" \
       org.opencontainers.image.source="https://github.com/andaru-project/andaru"
 
 # Add Andaru's services and Fedora's firewall packages; drop Docker, whose own firewall rules Andaru cannot own.
-RUN dnf -y install systemd-networkd kea kea-hooks unbound ppp openvpn qemu-guest-agent && \
+# /run and /tmp are tmpfs here: since Fedora 45, the transaction runs systemd-tmpfiles --create, which fills them.
+RUN --mount=type=tmpfs,target=/run --mount=type=tmpfs,target=/tmp dnf -y install systemd-networkd kea kea-hooks unbound ppp openvpn qemu-guest-agent && \
     dnf -y remove moby-engine containerd && \
     dnf clean all
 
@@ -66,6 +67,8 @@ RUN sed -i "s|@NAMESPACE@|${SIGNED_NAMESPACE}|" /etc/containers/policy.json /etc
     systemctl mask NetworkManager.service NetworkManager-wait-online.service systemd-networkd-wait-online.service && \
     # moby-engine's group stays in /etc/group after its removal, which bootc's sysusers lint rejects.
     groupdel docker && \
-    rm -rf /run/dnf /run/kea /run/unbound /run/openvpn-client /run/openvpn-server /run/pppd /tmp/* /var/cache/* /var/lib/dnf \
+    rm -rf /var/cache/* /var/lib/dnf \
         /var/lib/kea/* /var/lib/openvpn /var/lib/unbound /var/log/* && \
+    # Left by that tmpfiles run, with no tmpfiles entry of their own.
+    rm -rf /var/lib/containers /var/lib/nfs /var/lib/tpm2-tss /var/lib/systemd/random-seed /var/lib/systemd/catalog/database && \
     bootc container lint --fatal-warnings
