@@ -1,0 +1,47 @@
+# The installed disk's Ignition config: Fedora CoreOS's own first boot, which only rebases onto Andaru from the archive
+# the installer left in /var/andaru-install, then reboots. It has no network and no SSH. render.sh fills in @IMAGE@
+# and @VERSION@: the registry reference the deployment will track and verify its updates against.
+variant: fcos
+version: 1.6.0
+systemd:
+  units:
+    # Fedora's presets would otherwise start DHCP on every port, and sshd, during this boot.
+    - name: NetworkManager.service
+      mask: true
+    - name: NetworkManager-wait-online.service
+      mask: true
+    - name: zincati.service
+      mask: true
+    # Disabled, not masked, so Andaru can enable them later; the enable links would survive the rebase.
+    - name: sshd.service
+      enabled: false
+    - name: sshd.socket
+      enabled: false
+    - name: andaru-install-rebase.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Rebase onto Andaru from the install medium's archive
+        # Once Andaru is booted, or once the cleanup has removed the archive, there is nothing to do.
+        ConditionPathExists=!/usr/bin/andaru
+        ConditionPathExists=/var/andaru-install/andaru.oci
+        After=local-fs.target
+        OnFailure=andaru-install-failed.service
+
+        [Service]
+        Type=oneshot
+        # /sysroot is read-only on Fedora CoreOS; the remount stays in this unit's mount namespace.
+        ExecStart=/usr/bin/unshare -m -- /bin/sh -c 'mount -o remount,rw /sysroot && exec ostree container image deploy --sysroot / --imgref ostree-unverified-image:oci-archive:/var/andaru-install/andaru.oci --target-imgref ostree-image-signed:docker://@IMAGE@:@VERSION@'
+        ExecStart=/usr/bin/systemctl reboot
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: andaru-install-failed.service
+      contents: |
+        [Unit]
+        Description=Say on the console that Andaru's install did not finish
+
+        [Service]
+        Type=oneshot
+        ExecStart=/bin/sh -c 'mkdir -p /etc/issue.d && echo "The Andaru install did not finish: reinstall from the ISO." >/etc/issue.d/andaru-install.issue'
+        ExecStart=-/usr/sbin/agetty --reload

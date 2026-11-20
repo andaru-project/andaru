@@ -12,7 +12,7 @@ ISO=${ANDARU_ISO:-/run/media/iso}
 SYS=${ANDARU_SYS:-/sys}
 CMDLINE=${ANDARU_CMDLINE:-/proc/cmdline}
 RUN=${ANDARU_RUN:-/run}
-DEST_IGN=${ANDARU_DEST_IGN:-/usr/share/andaru-install/dest.ign}
+DEST_IGN=${ANDARU_DEST_IGN:-/usr/local/share/andaru-install/dest.ign}
 MIN_DISK=8000000000    # Fedora CoreOS's minimum
 SMALL_DISK=20000000000 # below this, add-ons will need more room
 STATEROOT_VAR=ostree/deploy/fedora-coreos/var
@@ -711,6 +711,9 @@ session() {
 }
 main() {
 	console=$(tty) && console=${console#/dev/}
+	# whiptail draws for the console's terminal: the kernel's on a VT, a generic one on a serial line.
+	case ${TERM:-dumb} in dumb) case $console in tty[0-9]*) TERM=linux ;; *) TERM=vt220 ;; esac ;; esac
+	export TERM
 	if [ ! -f "$ISO/andaru.oci" ]; then
 		echo "andaru-install: $ISO/andaru.oci is missing: this is not an Andaru install medium." >&2
 		exit 1
