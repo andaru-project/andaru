@@ -2,7 +2,7 @@ package config
 
 import (
 	"bytes"
-	"fmt"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,8 +10,8 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-// The installer's seed fixtures (docs/dev/install-seed.md): each port's addressing is Andaru's own, so slice 3 can copy
-// it into the first configuration unchanged.
+// The installer's seed fixtures (docs/dev/install-seed.md): each port's addressing is Andaru's own configuration
+// object. Slice 3's reader adds the validator's checks.
 func TestInstallSeedFixturesAddressing(t *testing.T) {
 	c, err := newSchemaCompiler(map[string][]byte{schemaURI: SchemaBundle})
 	if err != nil {
@@ -35,15 +35,17 @@ func TestInstallSeedFixturesAddressing(t *testing.T) {
 			t.Fatalf("%s: %v", f, err)
 		}
 		seed := v.(map[string]any)
-		if fmt.Sprint(seed["version"]) != "1" {
-			t.Errorf("%s: version is %v, not 1", f, seed["version"])
+		if seed["version"] != json.Number("1") {
+			t.Errorf("%s: version is %#v, not the number 1", f, seed["version"])
 		}
 		for _, port := range []string{"management", "wan"} {
-			p, ok := seed[port].(map[string]any)
+			raw, present := seed[port]
+			if !present && port == "wan" {
+				continue
+			}
+			p, ok := raw.(map[string]any)
 			if !ok {
-				if port == "management" {
-					t.Errorf("%s: no management port", f)
-				}
+				t.Errorf("%s: %s is not an object", f, port)
 				continue
 			}
 			if err := addressing.Validate(p["addressing"]); err != nil {
