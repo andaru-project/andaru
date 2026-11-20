@@ -127,14 +127,14 @@ One commit: the API's handlers, the gates and the request field depend on each o
 - [ ] Mark the superseded specs "deleted in slice 3".
 
 ### Task 8: qualification
-- [ ] CI is green, including the Fedora-container root suites and the image build and smoke on both architectures.
-- [ ] On a lab box with a confirmed generation, built from `main` before this slice, upgrade to an image of this branch. Check that:
+- [x] CI is green, including the Fedora-container root suites and the image build and smoke on both architectures.
+- [x] On a lab box with a confirmed generation, built from `main` before this slice, upgrade to an image of this branch. Check that:
   - the old `pointers.json` and manifests still load;
   - boot restores the confirmed generation;
   - an apply and confirm work;
   - a factory reset ends up on `last-lan/`.
-- [ ] `bootc rollback` to the image from before this slice, then check that boot restores the generation and that a reset tree still reads, as call 4 promises.
-- [ ] On a reset tree, which carries the baseline manifest with `reset: true`, check after the upgrade that boot restores the reset's confirmed generation (`last-lan/`) when it has one. With no usable generation, boot stays console-required behind deny-all and the catch-all, and never hands the host back.
+- [x] `bootc rollback` to the image from before this slice, then check that boot restores the generation and that a reset tree still reads, as call 4 promises.
+- [x] On a reset tree, which carries the baseline manifest with `reset: true`, check after the upgrade that boot restores the reset's confirmed generation (`last-lan/`) when it has one. With no usable generation, boot stays console-required behind deny-all and the catch-all, and never hands the host back.
 
 ## Out of scope
 
