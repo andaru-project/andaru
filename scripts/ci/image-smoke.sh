@@ -38,8 +38,12 @@ done
 for p in moby-engine containerd; do
 	! rpm -q --quiet "$p" || fail "$p is installed"
 done
-# Fedora CoreOS removes it; an upgrade of a base package brings it back, and its efi.automount fails every boot (#83).
-[ ! -e /usr/lib/systemd/system-generators/systemd-gpt-auto-generator ] || fail "a base package was upgraded"
+# Files Fedora CoreOS removes from systemd and grub2-tools; an upgrade of either brings them back. The efi.automount
+# of systemd-gpt-auto-generator then fails on every boot (#83).
+for f in /usr/lib/systemd/system-generators/systemd-gpt-auto-generator \
+	/usr/lib/systemd/system/sysinit.target.wants/systemd-firstboot.service /etc/grub.d/08_fallback_counting; do
+	[ ! -e "$f" ] || fail "$f is back: systemd or grub2-tools was upgraded"
+done
 state() {
 	got=$(systemctl is-enabled "$1" 2>/dev/null || true)
 	[ "$got" = "$2" ] || fail "$1 is $got, not $2"
