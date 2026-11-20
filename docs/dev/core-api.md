@@ -50,6 +50,8 @@ sudo "$BUILD_DIR/andaru" ctl links
 sudo "$BUILD_DIR/andaru" ctl openapi
 ```
 
+Create the first administrator from the root console with `andaru ctl users bootstrap-admin --login <login> [--display-name <name>]`. It asks for the password twice, then for `BOOTSTRAP` to confirm.
+
 The default endpoint is `/run/andaru/engine.sock`. An explicitly selected endpoint is supported on both commands; flags precede the CLI operation:
 
 ```sh
@@ -351,6 +353,22 @@ The lab found two bugs, fixed before these results: the engine's sandbox made
 the public view, which a restore refused. Not exercised: the teardown of a Kea or Unbound
 service that Andaru runs (no lab configuration declared one; covered by unit tests), and
 a recovery copy that passes the engine's gate but fails networkd's verification.
+
+### Qualification across the Debian deletion (2026-11-20)
+
+Slice 3 of the appliance image deleted the takeover, the netplan and ifupdown readers and the upgrade package, but kept reading the state they left. It was qualified on a throwaway Proxmox VM (SeaBIOS, WAN `ens18` by DHCP, LAN `ens19` at `192.168.77.1/24`) with two signed nightlies: `v2026-11-19.1.2ff0c06`, built before the slice, and `v2026-11-20.1.89c8002`, built after it. The box was driven over its serial console.
+
+| Case | Result |
+| --- | --- |
+| Before the slice: an administrator, two saved versions applied and confirmed | Pointers `{"confirmed":2,"lastKnownGood":1,…,"takeover":false}`, with `last-lan/` recorded |
+| `bootc switch --enforce-container-sigpolicy` to the newer nightly, then reboot | The old pointers and manifests load; boot restores generation 2 byte for byte (the networkd files match the manifest, and the filter is unchanged); the pointers are rewritten without `takeover` |
+| A new apply and confirm | Generation 3 confirmed, and its manifest has no `takeover` key |
+| Factory reset | Up on `last-lan/`: the baseline manifest is `{"reset":true}`, the WAN is down under the catch-all, and the LAN keeps `.1` with SSH |
+| `bootc rollback` to the older image | It reads the reset tree the newer image wrote, restores its generation, and recognises a reset tree with no usable generation |
+| Reset tree with `last-lan/` usable, on reboot | Restored |
+| Reset tree whose only generation fails its manifest check, and a reset with no `last-lan/` to keep | `CONSOLE_REQUIRED`: `andaru deny-all` loaded, only the catch-all network file, both NICs down, `first/` never used |
+
+Not exercised: a reset with `recovery/` stored, and SSH from the LAN side (the lab had no isolated bridge). On Fedora CoreOS 45 under BIOS boot, `efi.automount` fails on every boot; tracked in #83.
 
 ## Network preview
 
