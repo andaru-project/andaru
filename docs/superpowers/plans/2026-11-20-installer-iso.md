@@ -97,7 +97,7 @@ The owner approved these on 2026-11-20. Calls 1, 4, 7, 8, 9, 10 and 11 amend the
   - spec call 4's masks and disables;
   - the rebase unit exactly as the spike ran it: `ConditionPathExists=!/usr/bin/andaru` and `ConditionPathExists=/var/andaru-install/andaru.oci`; `unshare -m`; `/sysroot` remounted writable; `ostree container image deploy --sysroot / --imgref ostree-unverified-image:oci-archive:/var/andaru-install/andaru.oci --target-imgref ostree-image-signed:docker://@IMAGE@:@VERSION@`; then reboot;
   - `OnFailure=` writing `/run/issue.d/andaru-install.issue`, "The Andaru install did not finish: reinstall from the ISO.", then starting `getty@tty1` (kmscon, on the screen, shows no issue file) and reloading agetty, so a failed deploy says so on both consoles. In `/run`, the message lasts only for a boot whose rebase failed.
-  - It also masks `NetworkManager-wait-online`, as the image does, and orders the rebase after `coreos-ignition-firstboot-complete.service`, so the reboot never comes before Ignition is marked done.
+  - It also masks `NetworkManager-wait-online`, as the image does.
 - [ ] `image/iso/live.bu`, with `@CONSOLE@`: the installer, its units and the masks (calls 5 and 6), the IPv6 sysctls (call 6), and the rendered `dest.ign` as a file (`butane --files-dir`, so `dest.bu` is rendered first).
 - [ ] CI renders both with `butane --strict` (`render.sh`), then checks the rendered units and files (`check-ign.sh`).
 

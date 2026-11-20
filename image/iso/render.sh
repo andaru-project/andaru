@@ -17,7 +17,7 @@ bad() {
 # They go into sed replacements and a systemd ExecStart line: only the registry's grammar, one line.
 case $image$version in *'
 '*) bad "image or version" "a newline" ;; esac
-printf '%s\n' "$image" | grep -Eqx '[a-z0-9]+([.-][a-z0-9]+)*(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)+' || bad image "$image"
+printf '%s\n' "$image" | grep -Eqx '[A-Za-z0-9]+([.-]+[A-Za-z0-9]+)*(:[0-9]+)?(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)+' || bad image "$image"
 printf '%s\n' "$version" | grep -Eqx '[A-Za-z0-9_][A-Za-z0-9._-]{0,127}' || bad version "$version"
 case $console in ttyS0 | ttyAMA0) ;; *) bad console "$console" ;; esac
 

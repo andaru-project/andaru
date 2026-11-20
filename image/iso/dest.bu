@@ -25,8 +25,6 @@ systemd:
         # Once Andaru is booted, or once the cleanup has removed the archive, there is nothing to do.
         ConditionPathExists=!/usr/bin/andaru
         ConditionPathExists=/var/andaru-install/andaru.oci
-        # The reboot must not come before Fedora CoreOS marks Ignition done, or the next boot would run it again.
-        After=coreos-ignition-firstboot-complete.service
         OnFailure=andaru-install-failed.service
 
         [Service]
