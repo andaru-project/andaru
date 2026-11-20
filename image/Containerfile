@@ -40,7 +40,12 @@ RUN --mount=type=tmpfs,target=/run --mount=type=tmpfs,target=/tmp \
     dnf -y install systemd-networkd kea kea-hooks unbound ppp openvpn qemu-guest-agent && \
     dnf -y remove moby-engine containerd && \
     dnf clean all && \
-    rm /etc/dnf/versionlock.toml
+    rm /etc/dnf/versionlock.toml && \
+    # Cleaned in this step, or this layer would still carry what a later step deletes.
+    rm -rf /var/cache/* /var/lib/dnf \
+        /var/lib/kea/* /var/lib/openvpn /var/lib/unbound /var/log/* && \
+    # Left by that tmpfiles run, with no tmpfiles entry of their own.
+    rm -rf /var/lib/containers /var/lib/nfs /var/lib/tpm2-tss /var/lib/systemd/random-seed /var/lib/systemd/catalog/database
 
 COPY --from=go /out/andaru /out/andaru-web /usr/bin/
 COPY --from=web /src/web/dist/ /usr/share/andaru/web/
@@ -73,8 +78,4 @@ RUN sed -i "s|@NAMESPACE@|${SIGNED_NAMESPACE}|" /etc/containers/policy.json /etc
     systemctl mask NetworkManager.service NetworkManager-wait-online.service systemd-networkd-wait-online.service && \
     # moby-engine's group stays in /etc/group after its removal, which bootc's sysusers lint rejects.
     groupdel docker && \
-    rm -rf /var/cache/* /var/lib/dnf \
-        /var/lib/kea/* /var/lib/openvpn /var/lib/unbound /var/log/* && \
-    # Left by that tmpfiles run, with no tmpfiles entry of their own.
-    rm -rf /var/lib/containers /var/lib/nfs /var/lib/tpm2-tss /var/lib/systemd/random-seed /var/lib/systemd/catalog/database && \
     bootc container lint --fatal-warnings
