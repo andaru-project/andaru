@@ -1,0 +1,1 @@
+BOOT_IMAGE=(hd0,gpt3)/boot/vmlinuz coreos.liveiso=fedora-coreos-45 ignition.firstboot ignition.platform.id=metal console=tty0 console=ttyS0,115200n8 andaru.disk=/dev/disk/by-id/ata-QEMU_HARDDISK_QM00001
