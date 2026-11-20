@@ -37,15 +37,21 @@ ctr=''
 trap 'rm -rf "$work"; [ -z "$ctr" ] || "$engine" rm "$ctr" >/dev/null 2>&1 || :' EXIT
 trap 'exit 1' INT TERM
 
-# First, as it checks REPO and VERSION: nothing is downloaded for a bad input.
+# First, as it checks REPO and VERSION: a malformed one stops the build before any image or ISO is fetched.
 sh "$dir/render.sh" "$repo" "$version" "$console" "$work/live.ign"
 [ -s "$work/live.ign" ] || fail "render.sh wrote no config"
 
-# The digest must be ARCH's image, and listed by the tag the installed box will track.
-[ "$(skopeo inspect --config "docker://$repo@$digest" | jq -r .architecture)" = "$goarch" ] ||
-	fail "$digest is not a $goarch image"
-skopeo inspect --raw "docker://$repo:$version" | jq -e --arg d "$digest" '[.manifests[]?.digest] | index($d)' >/dev/null ||
-	fail "$repo:$version does not list $digest"
+# Both digests must be their architecture's image and listed by the tag the installed box will track: coreos-installer
+# runs from the release's own amd64 image.
+listed=$(skopeo inspect --raw "docker://$repo:$version") || fail "cannot read $repo:$version"
+for pair in "$digest $goarch" "$amd64 amd64"; do
+	# shellcheck disable=SC2086 # a digest and an architecture, split on the space
+	set -- $pair
+	config=$(skopeo inspect --config "docker://$repo@$1") || fail "cannot read $repo@$1"
+	[ "$(printf '%s' "$config" | jq -r .architecture)" = "$2" ] || fail "$1 is not the $2 image"
+	printf '%s' "$listed" | jq -e --arg d "$1" '[.manifests[]?.digest] | index($d)' >/dev/null ||
+		fail "$repo:$version does not list $1"
+done
 
 # The base's build and stream, from the image's os-release, parsed rather than sourced: it is not ours to run.
 # Creating a container runs nothing, so this works for an aarch64 image on an amd64 host.
@@ -53,6 +59,8 @@ ctr=$("$engine" create "$repo@$digest" /bin/true)
 "$engine" cp "$ctr:/usr/lib/os-release" "$work/os-release"
 "$engine" rm "$ctr" >/dev/null
 ctr=''
+# Not needed again unless it is also the image coreos-installer runs from; skopeo fetches the archive itself.
+[ "$digest" = "$amd64" ] || "$engine" rmi "$repo@$digest" >/dev/null
 field() {
 	sed -n "s/^$1=//p" "$work/os-release" | sed "s/^\\([\"']\\)\\(.*\\)\\1\$/\\2/"
 }
@@ -90,6 +98,7 @@ kargs="console=$console,115200n8 systemd.show_status=false loglevel=3"
 set --
 for k in $kargs; do set -- "$@" --live-karg-append "$k"; done
 coreos_installer iso customize --live-ignition live.ign "$@" -o out.iso andaru.iso
+rm "$work/andaru.iso"
 
 # iso customize embeds the config as the one gzip, base64 source its own config merges, and adds nulls when it
 # writes it back out.

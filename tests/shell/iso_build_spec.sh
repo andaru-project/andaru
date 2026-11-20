@@ -36,8 +36,8 @@ EOF
 #!/bin/sh
 echo "skopeo $*" >>"$FAKE_LOG"
 case "$1 $2" in
-"inspect --config") echo "{\"architecture\":\"$FAKE_ARCH\"}" ;;
-"inspect --raw") echo "{\"manifests\":[{\"digest\":\"$FAKE_LISTED\"}]}" ;;
+"inspect --config") case $3 in *"$FAKE_AMD64"*) echo '{"architecture":"amd64"}' ;; *) echo "{\"architecture\":\"$FAKE_ARCH\"}" ;; esac ;;
+"inspect --raw") echo "{\"manifests\":[{\"digest\":\"$FAKE_LISTED\"},{\"digest\":\"$FAKE_AMD64\"}]}" ;;
 "copy --quiet")
   d=$(mktemp -d); echo "$FAKE_INDEX" >"$d/index.json"
   tar -cf "${5#oci-archive:}" -C "$d" index.json; rm -r "$d" ;;
@@ -53,7 +53,7 @@ esac
 EOF
     chmod +x "$work/bin/"*
     PATH=$work/bin:$PATH
-    export FAKE_LOG="$log" FAKE_ARCH=arm64 FAKE_LISTED="$arm64" FAKE_VOLUME=fedora-coreos-44.20261023.3.1
+    export FAKE_LOG="$log" FAKE_AMD64="$amd64" FAKE_ARCH=arm64 FAKE_LISTED="$arm64" FAKE_VOLUME=fedora-coreos-44.20261023.3.1
     export FAKE_OSRELEASE="NAME=\"Andaru\"\nRELEASE_TYPE=stable\nOSTREE_VERSION='44.20261023.3.1'\n"
     export FAKE_INDEX="{\"manifests\":[{\"digest\":\"$arm64\"}]}"
   }
@@ -100,7 +100,19 @@ x"
     ARCH=x86_64
     When call build
     The status should be failure
-    The error should equal "build.sh: $arm64 is not a amd64 image"
+    The error should equal "build.sh: $arm64 is not the amd64 image"
+  End
+  It 'refuses an amd64 digest that is not the amd64 image'
+    export FAKE_AMD64=sha256:1111111111111111111111111111111111111111111111111111111111111111
+    When call build
+    The status should be failure
+    The error should equal "build.sh: $amd64 is not the amd64 image"
+  End
+  It 'names a registry it cannot read'
+    printf '#!/bin/sh\nexit 1\n' >"$work/bin/skopeo"
+    When call build
+    The status should be failure
+    The error should equal 'build.sh: cannot read ghcr.io/andaru-project/andaru:1.2.3'
   End
   It 'refuses a digest the tag does not list'
     export FAKE_LISTED=sha256:0000000000000000000000000000000000000000000000000000000000000000
@@ -116,7 +128,7 @@ x"
     The path "$work/ran" should not be exist
   End
   It 'refuses a stream of more than one line'
-    export FAKE_OSRELEASE="RELEASE_TYPE=\"stable\n/../x\"\nOSTREE_VERSION=44.20261023.3.1\n"
+    export FAKE_OSRELEASE="RELEASE_TYPE=stable\nRELEASE_TYPE=x\nOSTREE_VERSION=44.20261023.3.1\n"
     When call build
     The status should be failure
     The error should start with "build.sh: the image's RELEASE_TYPE is"
