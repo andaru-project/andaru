@@ -171,4 +171,5 @@ jobs:
         run: |
           set -eu
           podman build -f image/Containerfile --build-arg VERSION="$VERSION" -t andaru:ci .
+          sh scripts/ci/rechunk.sh andaru:ci
           sh scripts/ci/image-smoke.sh andaru:ci "$VERSION"
