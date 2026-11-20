@@ -76,9 +76,9 @@ IPv4-mapped (`::ffff:0:0/96`), and carries no zone. These are `validUnicast`'s r
   leaves it out and preselects `router`. The seed sets up no DHCPv6 server, so it offers no mode that needs one.
 - **DNS servers**: on a WAN with a `static` family, `addressing.dns` holds only `servers`: one to eight addresses, IPv4 or
   IPv6, none link-local (`169.254.0.0/16`, `fe80::/10`) and none twice.
-- **Management** has at least one family that is not `none`, so the box can be reached. A `dhcp` IPv4 or a `delegated`
-  IPv6 there, with the other family `none`, carries the installer's warning: the box's address is not known in
-  advance, and a `delegated` one exists only once the ISP delegates a prefix.
+- **Management** has at least one family that is not `none`, so the box can be reached. With no `static` family there,
+  the installer warns that the box's address is not known in advance, and that a `delegated` one exists only once the
+  ISP delegates a prefix.
 - **The WAN** has at least one family that is not `none`.
 
 ## Fixtures

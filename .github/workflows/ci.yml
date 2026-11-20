@@ -45,7 +45,7 @@ jobs:
         run: |
           set -eu
           shellcheck --version
-          shellcheck scripts/ci/*.sh packaging/kea/andaru-lease-event
+          shellcheck scripts/ci/*.sh packaging/kea/andaru-lease-event image/iso/andaru-install
           shellspec
 
   frontend:

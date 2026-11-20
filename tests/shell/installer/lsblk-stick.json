@@ -1,0 +1,125 @@
+{
+  "blockdevices": [
+    {
+      "name": "sda",
+      "path": "/dev/sda",
+      "type": "disk",
+      "size": 32000000000,
+      "ro": false,
+      "pkname": null,
+      "label": null,
+      "fstype": null,
+      "model": "QEMU HARDDISK"
+    },
+    {
+      "name": "sdb",
+      "path": "/dev/sdb",
+      "type": "disk",
+      "size": 16008609792,
+      "ro": false,
+      "pkname": null,
+      "label": "fedora-coreos-45.20261030.3.1",
+      "fstype": "iso9660",
+      "model": "Ultra Fit"
+    },
+    {
+      "name": "sdb1",
+      "path": "/dev/sdb1",
+      "type": "part",
+      "size": 2004877312,
+      "ro": false,
+      "pkname": "sdb",
+      "label": "fedora-coreos-45.20261030.3.1",
+      "fstype": "iso9660",
+      "model": null
+    },
+    {
+      "name": "sdb2",
+      "path": "/dev/sdb2",
+      "type": "part",
+      "size": 10485760,
+      "ro": false,
+      "pkname": "sdb",
+      "label": "EFI-SYSTEM",
+      "fstype": "vfat",
+      "model": null
+    },
+    {
+      "name": "sdc",
+      "path": "/dev/sdc",
+      "type": "disk",
+      "size": 64000000000,
+      "ro": true,
+      "pkname": null,
+      "label": null,
+      "fstype": null,
+      "model": "Write Locked"
+    },
+    {
+      "name": "sde",
+      "path": "/dev/sde",
+      "type": "disk",
+      "size": 4000000000,
+      "ro": false,
+      "pkname": null,
+      "label": null,
+      "fstype": null,
+      "model": "Key Stick"
+    },
+    {
+      "name": "sde1",
+      "path": "/dev/sde1",
+      "type": "part",
+      "size": 3999000000,
+      "ro": false,
+      "pkname": "sde",
+      "label": "KEYS",
+      "fstype": "vfat",
+      "model": null
+    },
+    {
+      "name": "sr0",
+      "path": "/dev/sr0",
+      "type": "rom",
+      "size": 2004877312,
+      "ro": false,
+      "pkname": null,
+      "label": "fedora-coreos-45.20261030.3.1",
+      "fstype": "iso9660",
+      "model": "QEMU DVD-ROM"
+    },
+    {
+      "name": "vda",
+      "path": "/dev/vda",
+      "type": "disk",
+      "size": 6442450944,
+      "ro": false,
+      "pkname": null,
+      "label": null,
+      "fstype": null,
+      "model": null
+    },
+    {
+      "name": "vdb",
+      "path": "/dev/vdb",
+      "type": "disk",
+      "size": 12884901888,
+      "ro": false,
+      "pkname": null,
+      "label": null,
+      "fstype": null,
+      "model": null
+    },
+    {
+      "name": "zram0",
+      "path": "/dev/zram0",
+      "type": "disk",
+      "size": 16000000000,
+      "ro": false,
+      "pkname": null,
+      "label": null,
+      "fstype": null,
+      "model": null
+    }
+  ]
+}
