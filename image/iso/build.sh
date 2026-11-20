@@ -60,7 +60,7 @@ ctr=$("$engine" create "$repo@$digest" /bin/true)
 "$engine" rm "$ctr" >/dev/null
 ctr=''
 # Not needed again unless it is also the image coreos-installer runs from; skopeo fetches the archive itself.
-[ "$digest" = "$amd64" ] || "$engine" rmi "$repo@$digest" >/dev/null
+[ "$digest" = "$amd64" ] || "$engine" rmi "$repo@$digest" >/dev/null || :
 field() {
 	sed -n "s/^$1=//p" "$work/os-release" | sed "s/^\\([\"']\\)\\(.*\\)\\1\$/\\2/"
 }
