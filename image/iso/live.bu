@@ -46,6 +46,8 @@ systemd:
       contents: |
         [Unit]
         Description=Andaru installer on %I
+        # Quick exits (end of input at the prompt, a serial hangup) must never stop it for good: its getty is masked.
+        StartLimitIntervalSec=0
         After=systemd-user-sessions.service plymouth-quit-wait.service
         Conflicts=getty@%i.service serial-getty@%i.service kmsconvt@%i.service autovt@%i.service
 

@@ -25,7 +25,8 @@ systemd:
         # Once Andaru is booted, or once the cleanup has removed the archive, there is nothing to do.
         ConditionPathExists=!/usr/bin/andaru
         ConditionPathExists=/var/andaru-install/andaru.oci
-        After=local-fs.target
+        # The reboot must not come before Fedora CoreOS marks Ignition done, or the next boot would run it again.
+        After=coreos-ignition-firstboot-complete.service
         OnFailure=andaru-install-failed.service
 
         [Service]
@@ -41,7 +42,10 @@ systemd:
         [Unit]
         Description=Say on the console that Andaru's install did not finish
 
+        # In /run, so it lasts only for a boot whose rebase failed: the rebase runs again on every boot until it works.
         [Service]
         Type=oneshot
-        ExecStart=/bin/sh -c 'mkdir -p /etc/issue.d && echo "The Andaru install did not finish: reinstall from the ISO." >/etc/issue.d/andaru-install.issue'
+        ExecStart=/bin/sh -c 'mkdir -p /run/issue.d && echo "The Andaru install did not finish: reinstall from the ISO." >/run/issue.d/andaru-install.issue'
+        # kmscon, on the screen, shows no issue file; agetty does, and starting it stops kmscon on tty1.
+        ExecStart=-/usr/bin/systemctl --no-block start getty@tty1.service
         ExecStart=-/usr/sbin/agetty --reload
