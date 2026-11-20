@@ -6,43 +6,64 @@
 #   - the live Ignition config (render.sh), which runs the installer.
 # Nothing runs code of the target architecture, so both ISOs build on an amd64 host.
 #   build.sh REPO VERSION DIGEST ARCH AMD64_DIGEST OUT   (ENGINE=docker to use docker instead of podman)
-# DIGEST is ARCH's image manifest in REPO, ARCH x86_64 or aarch64. coreos-installer runs from REPO@AMD64_DIGEST, the
-# release's own amd64 image, so its Fedora keys are as new as the release. Needs skopeo, xorriso and jq.
+# DIGEST is ARCH's image manifest in REPO, ARCH x86_64 or aarch64; REPO:VERSION must list it, since the installed box
+# tracks that tag. coreos-installer runs from REPO@AMD64_DIGEST, the release's own amd64 image, so its Fedora keys are
+# as new as the release. Needs skopeo, xorriso and jq.
 set -eu
 
 repo=${1:?repo} version=${2:?version} digest=${3:?digest} arch=${4:?arch} amd64=${5:?amd64 digest} out=${6:?out}
 engine=${ENGINE:-podman}
-dir=$(cd "$(dirname "$0")" && pwd)
-max=2147483648 # GitHub's limit for a release asset
+dir=$(dirname "$0")
+max=2147483648 # GitHub refuses a release asset of 2 GiB or more
 
 fail() {
 	echo "build.sh: $*" >&2
 	exit 1
 }
+# one VALUE PATTERN: VALUE is one line matching the extended regular expression PATTERN in full.
+one() {
+	case $1 in *'
+'*) return 1 ;; esac
+	printf '%s\n' "$1" | grep -Eqx "$2"
+}
 for d in "$digest" "$amd64"; do
-	printf '%s\n' "$d" | grep -Eqx 'sha256:[0-9a-f]{64}' || fail "bad digest $d"
+	one "$d" 'sha256:[0-9a-f]{64}' || fail "bad digest $d"
 done
-case $arch in x86_64) console=ttyS0 ;; aarch64) console=ttyAMA0 ;; *) fail "bad arch $arch" ;; esac
+case $arch in x86_64) console=ttyS0 goarch=amd64 ;; aarch64) console=ttyAMA0 goarch=arm64 ;; *) fail "bad arch $arch" ;; esac
+[ ! -d "$out" ] && [ -d "$(dirname "$out")" ] || fail "$out must be a file in an existing directory"
 
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+ctr=''
+trap 'rm -rf "$work"; [ -z "$ctr" ] || "$engine" rm "$ctr" >/dev/null 2>&1 || :' EXIT
 trap 'exit 1' INT TERM
 
-# The base's build and stream, from the image's os-release. Creating a container runs nothing, so this works for an
-# aarch64 image on an amd64 host.
+# First, as it checks REPO and VERSION: nothing is downloaded for a bad input.
+sh "$dir/render.sh" "$repo" "$version" "$console" "$work/live.ign"
+[ -s "$work/live.ign" ] || fail "render.sh wrote no config"
+
+# The digest must be ARCH's image, and listed by the tag the installed box will track.
+[ "$(skopeo inspect --config "docker://$repo@$digest" | jq -r .architecture)" = "$goarch" ] ||
+	fail "$digest is not a $goarch image"
+skopeo inspect --raw "docker://$repo:$version" | jq -e --arg d "$digest" '[.manifests[]?.digest] | index($d)' >/dev/null ||
+	fail "$repo:$version does not list $digest"
+
+# The base's build and stream, from the image's os-release, parsed rather than sourced: it is not ours to run.
+# Creating a container runs nothing, so this works for an aarch64 image on an amd64 host.
 ctr=$("$engine" create "$repo@$digest" /bin/true)
 "$engine" cp "$ctr:/usr/lib/os-release" "$work/os-release"
 "$engine" rm "$ctr" >/dev/null
-# Sourced in a subshell: os-release's VERSION would replace ours.
-# shellcheck source=/dev/null
-build=$(. "$work/os-release" && echo "${OSTREE_VERSION:-}")
-# shellcheck source=/dev/null
-stream=$(. "$work/os-release" && echo "${RELEASE_TYPE:-}")
-printf '%s\n' "$build" | grep -Eqx '[0-9]+\.[0-9]{8}\.[0-9]+\.[0-9]+' || fail "the image's OSTREE_VERSION is '$build'"
-printf '%s\n' "$stream" | grep -Eqx '[a-z]+' || fail "the image's RELEASE_TYPE is '$stream'"
+ctr=''
+field() {
+	sed -n "s/^$1=//p" "$work/os-release" | sed "s/^\\([\"']\\)\\(.*\\)\\1\$/\\2/"
+}
+build=$(field OSTREE_VERSION)
+stream=$(field RELEASE_TYPE)
+one "$build" '[0-9]+\.[0-9]{8}\.[0-9]+\.[0-9]+' || fail "the image's OSTREE_VERSION is '$build'"
+one "$stream" '[a-z]+' || fail "the image's RELEASE_TYPE is '$stream'"
 
-# The URL is built from the build ID, not read from the unsigned meta.json, so the file name binds the build.
-# coreos-installer fetches <url>.sig and checks it against the Fedora keys it ships; it refuses an unsigned image.
+# The URL is built from the build ID, not read from the unsigned meta.json. coreos-installer fetches <url>.sig and
+# checks it against the Fedora keys it ships; it refuses an unsigned image. The signature binds the content, not the
+# name, so the volume ID must also name the build.
 iso=fedora-coreos-$build-live-iso.$arch.iso
 url=https://builds.coreos.fedoraproject.org/prod/streams/$stream/builds/$build/$arch/$iso
 coreos_installer() {
@@ -51,6 +72,8 @@ coreos_installer() {
 echo "build.sh: Fedora CoreOS $build ($stream), $arch"
 coreos_installer download --image-url "$url" --directory /w
 [ -f "$work/$iso" ] || fail "coreos-installer did not download $iso"
+volume=$(xorriso -indev "$work/$iso" -pvd_info 2>/dev/null | sed -n 's/^Volume Id *: //p')
+[ "$volume" = "fedora-coreos-$build" ] || fail "$iso's volume ID is '$volume', not fedora-coreos-$build"
 
 # The archive holds exactly the published manifest: the installed box deploys it and tracks REPO:VERSION.
 skopeo copy --quiet --preserve-digests "docker://$repo@$digest" "oci-archive:$work/andaru.oci"
@@ -59,23 +82,30 @@ tar -xOf "$work/andaru.oci" index.json | jq -e --arg d "$digest" '[.manifests[].
 
 xorriso -indev "$work/$iso" -outdev "$work/andaru.iso" -compliance iso_9660_level=1 \
 	-map "$work/andaru.oci" /andaru.oci -boot_image any replay
+# Freed now: iso customize writes a whole second ISO.
 rm "$work/$iso" "$work/andaru.oci"
 
-sh "$dir/render.sh" "$repo" "$version" "$console" "$work/live.ign"
 # The console is also /dev/console: systemd's status lines and kernel messages would draw over the installer there.
-coreos_installer iso customize --live-ignition live.ign --live-karg-append "console=$console,115200n8" \
-	--live-karg-append systemd.show_status=false --live-karg-append loglevel=3 -o out.iso andaru.iso
+kargs="console=$console,115200n8 systemd.show_status=false loglevel=3"
+set --
+for k in $kargs; do set -- "$@" --live-karg-append "$k"; done
+coreos_installer iso customize --live-ignition live.ign "$@" -o out.iso andaru.iso
 
-# iso customize embeds the config as the one gzip, base64 source its own config merges.
+# iso customize embeds the config as the one gzip, base64 source its own config merges, and adds nulls when it
+# writes it back out.
 src=$(coreos_installer iso ignition show out.iso |
-	jq -er '.ignition.config.merge | select(length == 1) | .[0] | select(.compression == "gzip") | .source') ||
-	fail "the ISO's live config is not one merged source"
-case $src in data:\;base64,*) ;; *) fail "the ISO's live config source is not a base64 data URL" ;; esac
-printf '%s' "${src#data:;base64,}" | base64 -d | gzip -dc | jq -S "del(.. | nulls)" >"$work/shown.ign"
-jq -S "del(.. | nulls)" "$work/live.ign" | cmp -s - "$work/shown.ign" || fail "the ISO does not carry the rendered live config"
-coreos_installer iso kargs show out.iso | grep -qw "console=$console,115200n8" || fail "the ISO's kernel arguments lack the console"
+	jq -er '.ignition.config.merge | select(length == 1) | .[0] | select(.compression == "gzip") | .source
+		| select(startswith("data:;base64,")) | ltrimstr("data:;base64,")') ||
+	fail "the ISO's live config is not one gzip, base64 merged source"
+printf '%s' "$src" | base64 -d | gzip -dc | jq -S 'del(.. | nulls)' >"$work/shown.ign"
+[ -s "$work/shown.ign" ] || fail "the ISO's live config is empty"
+jq -S 'del(.. | nulls)' "$work/live.ign" | cmp -s - "$work/shown.ign" || fail "the ISO does not carry the rendered live config"
+shown=$(coreos_installer iso kargs show out.iso)
+for k in $kargs; do
+	case " $shown " in *" $k "*) ;; *) fail "the ISO's kernel arguments lack $k" ;; esac
+done
 
 size=$(wc -c <"$work/out.iso")
-[ "$size" -le "$max" ] || fail "the ISO is $size bytes, over GitHub's $max"
+[ "$size" -lt "$max" ] || fail "the ISO is $size bytes; GitHub takes under $max"
 mv "$work/out.iso" "$out"
 echo "build.sh: $out ($size bytes)"
