@@ -2,7 +2,7 @@
 Description=Remove the Andaru install files once the box runs from the registry
 # Only an ISO install stages /var/andaru-install; the first Andaru boot moved its seed (andaru realize boot).
 ConditionPathExists=/var/andaru-install
-# Once Andaru has come up: until then, the offline archive is the only way back to this release. Not
+# Once Andaru has started: until then, the offline archive is the only way back to this release. Not
 # After=multi-user.target: the target is ordered after the units it wants, so that would be a cycle.
 After=andaru-engine.service
 
