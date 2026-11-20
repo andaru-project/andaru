@@ -9,6 +9,13 @@ on:
 permissions:
   contents: read
 
+# Two tags pushed close together must not race for stable, nor for GitHub's latest release: whole runs queue in push
+# order. A job-level group would order sign jobs by when their builds finish instead. GitHub keeps one pending run per
+# group, so a third tag pushed while a run holds it cancels the pending one, which must then be rerun.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 env:
   IMAGE: ghcr.io/andaru-project/andaru
 
@@ -121,11 +128,6 @@ jobs:
     timeout-minutes: 15
     # The cosign key is a secret of this environment, which admits only v* tags.
     environment: image-release
-    # Two tags pushed close together must not race for stable. Only this job moves it, so only this job waits: a group
-    # held through the ISO jobs would let a third tag cancel the pending run of the second.
-    concurrency:
-      group: release
-      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
@@ -240,8 +242,8 @@ jobs:
           if-no-files-found: error
           # An ISO is mostly compressed already.
           compression-level: 0
-          # Only publish needs it, reruns included; the release keeps the ISOs.
-          retention-days: 7
+          # Only publish needs it, reruns included (possible for 30 days); the release keeps the ISOs.
+          retention-days: 30
 
   publish:
     needs: [version, iso]
