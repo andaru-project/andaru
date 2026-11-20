@@ -7,7 +7,8 @@ No answer is written to `/boot` or passes through Ignition.
 
 The installer checks each answer on its own, as Andaru's validator (`internal/config/validate.go`) would, so a seed it
 writes does not fail on a value first boot would refuse. The checks that relate answers to each other, such as a DHCP
-pool inside the management subnet or a gateway inside the WAN subnet, are the reader's (slice 3), which also checks each
+pool inside the management subnet or a gateway inside the WAN subnet, are the reader's (slice 3), except the few below
+that decide what the installer's own menus offer. The reader also checks each
 `addressing` object against Andaru's configuration schema and its validator. The fixtures in
 [`image/iso/testdata/`](../../image/iso/testdata/) are the installer's expected output, byte for byte, and
 `internal/config` tests their `addressing` objects against the schema.
@@ -33,8 +34,8 @@ pool inside the management subnet or a gateway inside the WAN subnet, are the re
 }
 ```
 
-The installer writes the seed with `jq`, two-space indented. Key order is the fixtures': `mode` first, then the keys in
-the order the schema lists them, with `ra` last.
+The installer writes the seed with `jq`, two-space indented. The seed's own keys come in the order shown. In an
+`addressing` object, `mode` comes first, then the keys in the order the schema lists them, with `ra` last.
 
 | Field | Form |
 | --- | --- |
@@ -50,18 +51,19 @@ the order the schema lists them, with `ra` last.
 
 An **IPv4 address** has four decimal octets with no leading zero (Go's parser refuses them), and is not `0.0.0.0`,
 in `127.0.0.0/8`, in `224.0.0.0/4` or `255.255.255.255`. An **IPv6 address** is not `::`, `::1`, in `ff00::/8`, or
-IPv4-mapped (`::ffff:0:0/96`), and carries no zone. These are `validUnicast`'s rules.
+IPv4-mapped (`::ffff:0:0/96`), and carries no zone. These are `validUnicast`'s rules and its callers'.
 
 - **IPv4** `mode`: `none`, `dhcp` or `static`. `static` has one address in `addresses`, written `address/len` with
   `len` from 1 to 32; with `len` 30 or less, it is neither the subnet's network address nor its broadcast address
   (`validLocal`). On the WAN, `static` also needs a `gateway`. `ppp` waits for PPPoE (#77).
 - **IPv6** `mode`: `none`, `static`, `slaac`, `dhcp6`, or, on management only, `delegated`.
-  - `static` has one address in `addresses`, written `address/len` with `len` from 1 to 128, and not link-local
-    (`fe80::/10`). On the WAN it also needs a `gateway`, which may be link-local.
+  - `static` has one address in `addresses`, written `address/len` with `len` from 1 to 128. On the WAN it also needs
+    a `gateway`, which may be link-local (`fe80::/10`).
   - `dhcp6` may carry `requestPrefixLength` (1 to 64), to ask for a delegated prefix, and the advanced options:
     `prefixOnly`, only with `requestPrefixLength` (the WAN then takes no address of its own, only the prefix);
     `withoutRA` and `sendRelease` (booleans); and `duid`, colon-separated hex bytes whose first two give the DUID type,
-    1 to 4, followed by at least 7, 5 or 3 bytes for types 1 to 3 and exactly 16 for type 4 (`validDUID`).
+    1 to 4, followed by at least 7, 5 or 3 bytes for types 1 to 3 and exactly 16 for type 4 (`validDUID`), and at most
+    130 bytes in all (the schema).
   - `delegated` takes subnet `subnetId` (1 to 4 hex digits) of the prefix the WAN requests, so the management network
     follows that prefix when the ISP changes it. `from` is `"@wan"`, the label slice 3 gives the WAN segment it creates
     in the same change, which Andaru resolves to the segment's ID. It needs a WAN with `dhcp6` and a
@@ -69,10 +71,10 @@ IPv4-mapped (`::ffff:0:0/96`), and carries no zone. These are `validUnicast`'s r
 - **Router advertisements**: on management with a `static` or `delegated` IPv6, `ipv6.ra` is always written, as
   `{"mode": M}`; an absent `ra` would mean `disabled`. `M` is one of `unmanaged` (addresses by SLAAC, the menu's
   preselected entry), `router` (Andaru announces itself as a router, with no prefix) or `disabled`. `unmanaged` needs a
-  `static` address of length 64, the only length SLAAC announces. The seed sets up no DHCPv6 server, so it offers no
-  mode that needs one.
+  `static` address of length 64, the only length SLAAC announces; for another length the menu leaves it out and
+  preselects `router`. The seed sets up no DHCPv6 server, so it offers no mode that needs one.
 - **DNS servers**: on a WAN with a `static` family, `addressing.dns.servers` holds one to eight addresses, IPv4 or
-  IPv6, none link-local and none twice.
+  IPv6, none link-local (`169.254.0.0/16`, `fe80::/10`) and none twice.
 - **Management** has at least one family that is not `none`, so the box can be reached. A `dhcp` IPv4 or a `delegated`
   IPv6 there, with the other family `none`, carries the installer's warning: the box's address is not known in
   advance, and a `delegated` one exists only once the ISP delegates a prefix.

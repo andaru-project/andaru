@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"testing"
@@ -50,7 +51,44 @@ func TestInstallSeedFixturesAddressing(t *testing.T) {
 			}
 			if err := addressing.Validate(p["addressing"]); err != nil {
 				t.Errorf("%s: %s addressing: %v", f, port, err)
+				continue
 			}
+			checkSeedAnswers(t, f+": "+port, p["addressing"].(map[string]any))
 		}
 	}
+}
+
+// checkSeedAnswers holds each answer to the validator's rules for it alone, as docs/dev/install-seed.md promises.
+func checkSeedAnswers(t *testing.T, where string, a map[string]any) {
+	t.Helper()
+	for _, family := range []string{"ipv4", "ipv6"} {
+		fam := a[family].(map[string]any)
+		for _, raw := range asStrings(fam["addresses"]) {
+			p, err := netip.ParsePrefix(raw)
+			if err != nil || p.Addr().Is4In6() || p.Addr().Zone() != "" || !validLocal(p) {
+				t.Errorf("%s: %s address %q is refused by the validator", where, family, raw)
+			}
+		}
+		if raw, ok := fam["gateway"].(string); ok {
+			g, err := netip.ParseAddr(raw)
+			if err != nil || g.Is4In6() || g.Zone() != "" || !validUnicast(g) {
+				t.Errorf("%s: %s gateway %q is refused by the validator", where, family, raw)
+			}
+		}
+		if raw, ok := fam["duid"].(string); ok && !validDUID(raw) {
+			t.Errorf("%s: duid %q is refused by the validator", where, raw)
+		}
+	}
+	if d, ok := a["dns"].(map[string]any); ok {
+		validateDNSList(where+" dns", &dns{Servers: asStrings(d["servers"])}, func(path, msg string) { t.Errorf("%s: %s", path, msg) })
+	}
+}
+
+func asStrings(v any) []string {
+	var out []string
+	list, _ := v.([]any)
+	for _, s := range list {
+		out = append(out, s.(string))
+	}
+	return out
 }
