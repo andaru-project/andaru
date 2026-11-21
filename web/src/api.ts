@@ -15,6 +15,7 @@ import type {
   SavedRolePage,
   Session,
   Snapshot,
+  SystemInfo,
   Token,
   TokenIssueResponse,
   User,
@@ -242,6 +243,10 @@ export class ApiClient {
 
   links() {
     return this.request<{ items: LinkStatus[] }>('/api/v1/status/links');
+  }
+
+  system() {
+    return this.request<SystemInfo>('/api/v1/status/system');
   }
 
   prefixes() {

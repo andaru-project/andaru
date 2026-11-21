@@ -83,3 +83,21 @@ it.each(['/changes', '/changes/'])('leaves the apply controls to the Review and 
   expect(await screen.findByText('Apply 1, saved version 3: Confirmed.')).toBeInTheDocument();
   expect(screen.queryByText('Saved changes are not applied yet')).not.toBeInTheDocument();
 });
+
+it('names the box and its Andaru version in the header, for an account that may read status', async () => {
+  fetchRoutes({
+    '/api/v1/status/system': { version: '0.5.0-a.4', hostname: 'edge', time: '2026-11-21T12:00:00Z', bootedAt: null },
+    '/api/v1/applies': unapplied,
+    '/api/v1/versions?': { state: 'saved', items: [] },
+  });
+  const api = new ApiClient('csrf');
+  render(<MemoryRouter initialEntries={['/system/session']}><Shell api={api} session={session(['status.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} /></MemoryRouter>);
+  expect(await screen.findByText('edge · 0.5.0-a.4')).toBeInTheDocument();
+});
+
+it('asks nothing about the box for an account that may not read status', async () => {
+  const fetchMock = routes();
+  mount('/system/session');
+  await screen.findByText('Saved changes are not applied yet');
+  expect(fetchMock.mock.calls.map(([url]) => url)).not.toContain('/api/v1/status/system');
+});

@@ -7,13 +7,15 @@ import { Link } from 'react-router';
 import { reportError, type ApiClient } from '../api';
 import { clock, pendingNotice, useCountdown, type ChangeState } from '../changes';
 import { arrange, moved } from '../dashboardLayout';
-import { stateColor, type DashboardLayout, type Preferences, type Session } from '../types';
+import { stateColor, type DashboardLayout, type Preferences, type Session, type SystemInfo } from '../types';
 import { useResource, useVisiblePoll, type Resource } from '../useResource';
+import { SystemWidget } from './SystemWidget';
 
 interface DashboardScreenProps {
   api: ApiClient;
   session: Session;
   changes: Resource<ChangeState | undefined>;
+  system: Resource<{ info: SystemInfo; loadedAt: number } | undefined>;
   onSessionLost(): void;
 }
 
@@ -42,12 +44,13 @@ function Grip() {
 // A widget is dragged by its grip alone: anywhere else on it, a finger scrolls the page. The grip is a button, so
 // the keyboard moves a widget through the same control (Space or Enter picks up and drops, the arrows move,
 // Escape puts back). Translate, not Transform: widgets differ in height, and a scaled one is distorted.
-function Widget({ id, title, to, unlocked, onHide, children }: { id: string; title: string; to: string; unlocked: boolean; onHide(): void; children: ReactNode }) {
+function Widget({ id, title, to, unlocked, onHide, children }: { id: string; title: string; to?: string; unlocked: boolean; onHide(): void; children: ReactNode }) {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id, disabled: !unlocked });
   return (
     <Paper ref={setNodeRef} className="widget" data-dragging={isDragging || undefined} style={{ transform: CSS.Translate.toString(transform), transition }} component="section" withBorder p="md" aria-labelledby={`widget-${id}`}>
       <Group justify="space-between" align="flex-start" wrap="nowrap" mb="sm">
-        <Title order={3} size="h5" id={`widget-${id}`}><Anchor component={Link} to={to} inherit>{title}</Anchor></Title>
+        {/* A title leads to the page with the full view, where there is one. */}
+        <Title order={3} size="h5" id={`widget-${id}`}>{to ? <Anchor component={Link} to={to} inherit>{title}</Anchor> : title}</Title>
         {unlocked && (
           <Group gap="xs" wrap="nowrap">
             <Button size="compact-xs" variant="default" aria-label={`Hide ${title}`} onClick={onHide}>Hide</Button>
@@ -133,8 +136,9 @@ function PrefixesWidget({ api, onSessionLost }: WidgetProps) {
   );
 }
 
-export function DashboardScreen({ api, session, changes, onSessionLost }: DashboardScreenProps) {
-  const all = [
+export function DashboardScreen({ api, session, changes, system, onSessionLost }: DashboardScreenProps) {
+  const all: Array<{ id: string; title: string; to?: string; capability: string; body: ReactNode }> = [
+    { id: 'system', title: 'System', capability: 'status.read', body: <Loaded resource={system} what="the system description">{(loaded) => loaded && <SystemWidget info={loaded.info} loadedAt={loaded.loadedAt} />}</Loaded> },
     { id: 'changes', title: 'Changes', to: '/changes', capability: 'configuration.read', body: <Loaded resource={changes} what="changes">{(state) => state && <ChangesText state={state} />}</Loaded> },
     { id: 'interfaces', title: 'Interfaces', to: '/network/interfaces', capability: 'status.read', body: <InterfacesWidget api={api} onSessionLost={onSessionLost} /> },
     { id: 'prefixes', title: 'IPv6 prefixes', to: '/network/interfaces', capability: 'status.read', body: <PrefixesWidget api={api} onSessionLost={onSessionLost} /> },
