@@ -82,8 +82,9 @@ func (h *trafficHistory) view(since time.Time) trafficResponse {
 	response := trafficResponse{IntervalSeconds: int(trafficInterval / time.Second), Interfaces: make([]trafficInterface, 0, len(h.samples))}
 	newest := time.Time{}
 	for _, samples := range h.samples {
-		if at := samples[len(samples)-1].At; at.After(newest) {
-			newest = at
+		// record never leaves an interface without readings, but a panic in a handler is a poor way to learn otherwise.
+		if len(samples) > 0 && samples[len(samples)-1].At.After(newest) {
+			newest = samples[len(samples)-1].At
 		}
 	}
 	if since.After(newest) {
