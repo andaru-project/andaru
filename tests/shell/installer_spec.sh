@@ -833,11 +833,15 @@ umount"
       The contents of file "$SHELLSPEC_TMPBASE/review-args" should start with '--yesno'
       The contents of file "$SHELLSPEC_TMPBASE/review-args" should end with '22 76'
     End
-    It 'cuts a long key comment at 40 characters'
-      DISK=/dev/sda M_NIC=enp1s0 M_MAC=52:54:00:aa:bb:01 M4_MODE=none M6_MODE=none KEY_TYPE=ssh-ed25519
-      KEY_COMMENT=admin@laptop-with-a-rather-long-comment-xxxxxxxxxx
-      When call summary
-      The output should include 'SSH key: ssh-ed25519 admin@laptop-with-a-rather-long-comment-...'
+    It 'scrolls a summary longer than the box'
+      ui() { echo "$@" >"$SHELLSPEC_TMPBASE/review-args"; return 1; }
+      DISK=/dev/sda M_NIC=enp1s0 M_MAC=52:54:00:aa:bb:01 M4_MODE=none M6_MODE=static M6_ADDR=2001:db8:1111:2222:3333:4444:5555:6666/64
+      W_NIC=enp2s0 W_MAC=52:54:00:aa:bb:02 W4_MODE=none W6_MODE=static W6_ADDR=2001:db8:aaaa:bbbb:cccc:dddd:eeee:1/64 W6_GW=2001:db8:aaaa:bbbb::1
+      W_DNS='2001:db8:1111:2222:3333:4444:5555:6661 2001:db8:1111:2222:3333:4444:5555:6662 2001:db8:1111:2222:3333:4444:5555:6663 2001:db8:1111:2222:3333:4444:5555:6664 2001:db8:1111:2222:3333:4444:5555:6665 2001:db8:1111:2222:3333:4444:5555:6666 2001:db8:1111:2222:3333:4444:5555:6667 2001:db8:1111:2222:3333:4444:5555:6668'
+      KEY_TYPE=ssh-ed25519 KEY_COMMENT=admin@laptop-with-a-rather-long-comment-to-check-wrapping-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+      When call review
+      The status should equal 1
+      The contents of file "$SHELLSPEC_TMPBASE/review-args" should start with '--scrolltext --yesno'
     End
   End
 

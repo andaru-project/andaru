@@ -614,16 +614,19 @@ summary() {
 	else
 		echo "WAN: none yet"
 	fi
-	# The comment is cut at 40 characters, so the review box always holds the summary.
-	summary_comment=$(printf %.40s "$KEY_COMMENT")
-	[ "$summary_comment" = "$KEY_COMMENT" ] || summary_comment="$summary_comment..."
-	echo "SSH key: ${KEY_TYPE:-none}${summary_comment:+ $summary_comment}"
+	echo "SSH key: ${KEY_TYPE:-none}${KEY_COMMENT:+ $KEY_COMMENT}"
 }
 review() {
-	# Taller than yes_no, to hold the whole summary. Not --scrolltext: its text takes the focus, so Enter is not Yes.
-	ui --yesno "$(summary)
+	text="$(summary)
 
-Install?" 22 76 >/dev/null || return 1
+Install?"
+	# A 22-row box shows 16 lines of 72 columns, wrapped at spaces. Scroll only past that: --scrolltext gives the text the focus, so
+	# Enter no longer means Yes.
+	if [ "$(printf '%s\n' "$text" | fold -s -w 72 | wc -l)" -le 16 ]; then
+		ui --yesno "$text" 22 76 >/dev/null || return 1
+	else
+		ui --scrolltext --yesno "$text" 22 76 >/dev/null || return 1
+	fi
 	[ -z "$DISK_FROM_CMDLINE" ] || return 0
 	typed=$(ui --inputbox "Type $DISK_NAME to erase $DISK and install Andaru" 10 76 "") || return 1
 	[ "$typed" = "$DISK_NAME" ] || { say "That was not $DISK_NAME; nothing was written."; return 1; }
