@@ -298,3 +298,20 @@ it('says when a change was not saved', async () => {
   await userEvent.click(screen.getByRole('button', { name: 'Hide Changes' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('The layout was not saved');
 });
+
+it('shows the system description it is handed, or why it has none', async () => {
+  fetchRoutes({});
+  const info = { version: '0.5.0-a.4', hostname: 'edge', kernel: '6.17', architecture: 'x86_64', time: '2026-11-21T12:00:00Z', bootedAt: null, memoryBytes: 0, guest: '', iommu: false,
+    cpu: { model: 'Test CPU', cores: 2, threads: 2, microcode: '', level: '', features: { cryptography: [], security: [], virtualization: [] }, vulnerabilities: [] },
+    hardware: { vendor: '', product: '', serial: '', boardVendor: '', board: '', biosVendor: '', biosVersion: '', biosDate: '' } };
+  const base = { error: '', loading: false, reload: vi.fn(), refresh: vi.fn() };
+  const screenWith = (system: Parameters<typeof DashboardScreen>[0]['system']) => <MemoryRouter><DashboardScreen api={new ApiClient('csrf')} session={session(['status.read'])} changes={{ ...base, data: settled }} system={system} onSessionLost={vi.fn()} /></MemoryRouter>;
+  const view = render(screenWith({ ...base, data: { info, loadedAt: Date.now() } }));
+  const system = await screen.findByRole('region', { name: 'System' });
+  expect(within(system).getByRole('rowheader', { name: 'Andaru' }).nextElementSibling).toHaveTextContent('0.5.0-a.4');
+  // The System widget has no page of its own, so its title is not a link.
+  expect(screen.queryByRole('link', { name: 'System' })).not.toBeInTheDocument();
+
+  view.rerender(screenWith({ ...base, error: 'The system description is unavailable.' }));
+  expect(within(screen.getByRole('region', { name: 'System' })).getByRole('alert')).toHaveTextContent('The system description is unavailable.');
+});

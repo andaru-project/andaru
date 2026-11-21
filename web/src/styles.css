@@ -162,7 +162,6 @@ body {
   color: var(--mantine-color-dimmed);
   font-weight: 400;
   padding-right: var(--mantine-spacing-md);
-  text-align: left;
   vertical-align: top;
   white-space: nowrap;
 }
@@ -182,7 +181,18 @@ body {
   margin: 0;
 }
 
-/* The box's name and version beside the product's: the header is for one line, so they give way first. */
+/* The box's name and version beside the product's: the header is for one line, so they give way first. A flex
+   item is as wide as its text unless told otherwise, and a host name may be 64 characters. */
+.app-brand,
+.app-box {
+  min-width: 0;
+}
+
+/* The connection state and the account menu keep their room; the box's name is what gives way. */
+.app-session {
+  flex-shrink: 0;
+}
+
 .app-box {
   color: rgb(255 255 255 / 75%);
   overflow: hidden;

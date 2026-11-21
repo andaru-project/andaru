@@ -2,7 +2,7 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ApiClient } from './api';
 import { Shell } from './Shell';
-import { fetchRoutes } from './test/fetch';
+import { fetchRoutes, jsonResponse } from './test/fetch';
 import { apply, pointers, session } from './test/fixtures';
 import { act, render, screen } from './test/render';
 
@@ -93,6 +93,21 @@ it('names the box and its Andaru version in the header, for an account that may 
   const api = new ApiClient('csrf');
   render(<MemoryRouter initialEntries={['/system/session']}><Shell api={api} session={session(['status.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} /></MemoryRouter>);
   expect(await screen.findByText('edge · 0.5.0-a.4')).toBeInTheDocument();
+});
+
+it('reads the box again each minute, so an upgrade behind an open tab shows, and a box without a name shows its version alone', async () => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  let version = '0.5.0-a.4';
+  fetchRoutes({
+    '/api/v1/status/system': () => jsonResponse(200, { version, hostname: '', time: '2026-11-21T12:00:00Z', bootedAt: null }),
+    '/api/v1/applies': unapplied,
+    '/api/v1/versions?': { state: 'saved', items: [] },
+  });
+  render(<MemoryRouter initialEntries={['/system/session']}><Shell api={new ApiClient('csrf')} session={session(['status.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} /></MemoryRouter>);
+  expect(await screen.findByText('0.5.0-a.4')).toBeInTheDocument();
+  version = '0.5.0-a.5';
+  act(() => { vi.advanceTimersByTime(60_000); });
+  expect(await screen.findByText('0.5.0-a.5')).toBeInTheDocument();
 });
 
 it('asks nothing about the box for an account that may not read status', async () => {

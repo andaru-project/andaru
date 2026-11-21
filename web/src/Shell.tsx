@@ -27,6 +27,7 @@ interface ShellProps {
 }
 
 const pollMilliseconds = 15_000;
+const systemPollMilliseconds = 60_000;
 
 // Branches the user closed, kept per browser. Storage may be unavailable; the tree then starts open.
 const closedKey = 'andaru.nav.closed';
@@ -51,13 +52,15 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   const canReadChanges = capabilities.has('configuration.read');
   const loadChanges = useCallback(() => (canReadChanges ? loadChangeState(api) : Promise.resolve(undefined)), [api, canReadChanges]);
   const changes = useResource(loadChanges, onSessionLost);
+  const reloadChanges = changes.reload;
 
-  // What the box is changes with a reboot or an upgrade, not while a page is open: read once, for the header and
-  // the dashboard, with the browser's clock at that moment so the uptime can run on.
+  // What the box is, for the header and the dashboard, with the browser's clock when it arrived so its time and
+  // uptime can run on. It changes with a reboot or an upgrade, which do happen behind an open tab, so it is read
+  // again each minute: often enough for that, and for a first read that failed.
   const canReadStatus = capabilities.has('status.read');
   const loadSystem = useCallback(async () => (canReadStatus ? { info: await api.system(), loadedAt: Date.now() } : undefined), [api, canReadStatus]);
   const system = useResource(loadSystem, onSessionLost);
-  const reloadChanges = changes.reload;
+  useVisiblePoll(system.refresh, systemPollMilliseconds, canReadStatus);
 
   useVisiblePoll(changes.refresh, pollMilliseconds, canReadChanges);
 
@@ -124,13 +127,13 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
     <AppShell className="app-shell" data-nav-open={opened || undefined} header={{ height: 56 }} navbar={{ width: 240, breakpoint: 900, collapsed: { mobile: !opened } }} padding="md">
       <AppShell.Header className="app-header">
         <Group h="100%" px="md" justify="space-between" wrap="nowrap">
-          <Group gap="sm" wrap="nowrap">
+          <Group className="app-brand" gap="sm" wrap="nowrap">
             <Burger className="nav-burger" color="white" opened={opened} onClick={toggle} size="sm" aria-label={opened ? 'Close navigation' : 'Open navigation'} />
             <Image src={mark} alt="" w={28} h={28} />
             <Title className="app-title" order={1} size="h3">Andaru</Title>
-            {system.data && <Text className="app-box" size="sm">{system.data.info.hostname}{system.data.info.hostname && ' · '}{system.data.info.version}</Text>}
+            {system.data && <Text className="app-box" size="sm">{[system.data.info.hostname, system.data.info.version].filter(Boolean).join(' · ')}</Text>}
           </Group>
-          <Group gap="sm" wrap="nowrap">
+          <Group className="app-session" gap="sm" wrap="nowrap">
             <Badge color={connected ? 'green' : 'red'} role="status">{connected ? 'Connected' : 'Connection lost'}</Badge>
             <Menu position="bottom-end">
               <Menu.Target><Button className="account-button" variant="default" size="xs">{session.account.displayName || session.account.login}</Button></Menu.Target>
