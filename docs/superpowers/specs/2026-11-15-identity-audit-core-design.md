@@ -317,9 +317,15 @@ GET    /api/v1/session                    current actor/capabilities/timeouts
 DELETE /api/v1/session                    logout
 GET    /api/v1/sessions                   own sessions
 DELETE /api/v1/sessions/{id}              revoke own session
+GET    /api/v1/session/preferences        what the web UI keeps for this account
+PUT    /api/v1/session/preferences        replace it
 ```
 
 Login and logout use generic responses that do not disclose account existence. Session creation returns CSRF token in JSON and sets the cookie; it never returns session ID.
+
+Preferences are one JSON object of at most 16 KiB per account, such as a dashboard layout. The content is the client's: the engine checks that it is one JSON object with unique names and valid UTF-8, and acts on nothing in it. It is not configuration (no apply, no generation), not an identity mutation (no revision, no audit event, no Idempotency-Key: the write replaces the whole document), and it is in no backup. Any signed-in human reads and writes their own; no capability governs it. API tokens have no preferences.
+
+Each document is a file under `preferences/` in the state directory, named by the account's ID, not a row in the identity database. A new table would change that database's layout, and the previous image, booted again after a rollback, refuses a layout it does not know. Deleting an account removes its file. A users restore keeps the files: an account restored under its ID has its preferences again, and a file whose account the restore removed stays, unused, at 16 KiB at most.
 
 ### Users, roles and tokens
 

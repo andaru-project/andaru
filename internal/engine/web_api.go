@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -131,6 +132,10 @@ func (h *webAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/api/v1/session" {
 		h.session(w, r, source)
+		return
+	}
+	if r.URL.Path == "/api/v1/session/preferences" {
+		h.preferences(w, r, source)
 		return
 	}
 	if r.URL.Path == "/api/v1/sessions" || strings.HasPrefix(r.URL.Path, "/api/v1/sessions/") {
@@ -263,6 +268,68 @@ func (h *webAPI) currentSession(w http.ResponseWriter, r *http.Request, source s
 		return
 	}
 	writeJSON(w, r, http.StatusOK, sessionResponse(principal.Account, snapshot.Resolve(principal.Account.RoleIDs), csrf, principal.SessionExpiresAt))
+}
+
+// preferences serves what the web UI keeps for the signed-in account, such as its dashboard layout. The engine
+// stores the document and acts on nothing in it, so it is outside the saved configuration: no apply, no generation.
+// Any signed-in human may read and replace their own; no capability governs it.
+func (h *webAPI) preferences(w http.ResponseWriter, r *http.Request, source string) {
+	unavailable := func(err error) {
+		slog.ErrorContext(r.Context(), "preferences unavailable", "error", err)
+		writeError(w, r, http.StatusServiceUnavailable, "STORE_UNAVAILABLE", "Preferences are temporarily unavailable.")
+	}
+	var document []byte
+	switch r.Method {
+	case http.MethodGet:
+		if !noQuery(w, r) || !requireNoBody(w, r) {
+			return
+		}
+		principal, _, _, _, _, ok := h.cookiePrincipal(w, r, source)
+		if !ok {
+			return
+		}
+		var err error
+		if document, err = readPreferences(h.stateDir, principal.Account.ID); err != nil {
+			unavailable(err)
+			return
+		}
+	case http.MethodPut:
+		if !noQuery(w, r) || !h.requireOrigin(w, r) {
+			return
+		}
+		principal, selector, secret, _, _, ok := h.cookiePrincipal(w, r, source)
+		if !ok || !h.validateCSRF(w, r, selector, secret) {
+			return
+		}
+		if !jsonContentType(r.Header.Get("Content-Type")) {
+			writeError(w, r, http.StatusUnsupportedMediaType, "UNSUPPORTED_CONTENT", "Preferences must be application/json.")
+			return
+		}
+		var err error
+		document, err = readRequestBody(w, r, maxPreferencesBytes)
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, r, http.StatusRequestEntityTooLarge, "REQUEST_TOO_LARGE", "Preferences exceed 16 KiB.")
+			return
+		}
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "The request body could not be read.")
+			return
+		}
+		if err = writePreferences(h.stateDir, principal.Account.ID, document); errors.Is(err, errInvalidPreferences) {
+			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Preferences must be one JSON object.")
+			return
+		} else if err != nil {
+			unavailable(err)
+			return
+		}
+	default:
+		methodNotAllowed(w, r, "GET, PUT")
+		return
+	}
+	// The stored bytes, as they are: a read answers with the file, a write with what it has just stored.
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(document)
 }
 
 func (h *webAPI) logout(w http.ResponseWriter, r *http.Request, source string) {

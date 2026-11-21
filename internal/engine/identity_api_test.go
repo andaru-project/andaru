@@ -302,3 +302,46 @@ func identityRequest(handler http.Handler, method, path, body, operationID strin
 	handler.ServeHTTP(recorder, request)
 	return recorder
 }
+
+func TestDeletingAnAccountRemovesItsPreferencesButAReplayDoesNot(t *testing.T) {
+	identities, _, coordinator, handler := identityTestServices(t)
+	if _, _, err := identities.BootstrapAdmin(context.Background(), "rootadmin", "Root", []byte("unique-admin-password-41")); err != nil {
+		t.Fatal(err)
+	}
+	created := identityRequest(handler, http.MethodPost, "/api/v1/users", `{"login":"worker","displayName":"Worker","kind":"service","enabled":true,"roleIds":["read-only"],"expectedRevision":1}`, "account-create-1")
+	var account operationResponse
+	if err := json.Unmarshal(created.Body.Bytes(), &account); err != nil || created.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s err=%v", created.Code, created.Body, err)
+	}
+	stored := func() string {
+		t.Helper()
+		document, err := readPreferences(coordinator.stateDir, account.Target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(document)
+	}
+	remove := func() *httptest.ResponseRecorder {
+		request := rootRequest(http.MethodDelete, "/api/v1/users/"+account.Target)
+		request.Body = http.NoBody
+		request.Header.Set("Idempotency-Key", "account-delete-1")
+		request.Header.Set("If-Match", `"2"`)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+
+	if err := writePreferences(coordinator.stateDir, account.Target, []byte(`{"a":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	if response := remove(); response.Code != http.StatusOK || stored() != "{}" {
+		t.Fatalf("deleting the account left its preferences: status=%d body=%s stored=%s", response.Code, response.Body, stored())
+	}
+	// A restore may bring the account back under its ID; a replayed delete answers for the old one and removes nothing.
+	if err := writePreferences(coordinator.stateDir, account.Target, []byte(`{"a":2}`)); err != nil {
+		t.Fatal(err)
+	}
+	if response := remove(); response.Code != http.StatusOK || stored() != `{"a":2}` {
+		t.Fatalf("a replayed delete removed preferences: status=%d body=%s stored=%s", response.Code, response.Body, stored())
+	}
+}
