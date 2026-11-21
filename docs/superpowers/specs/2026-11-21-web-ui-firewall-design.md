@@ -8,32 +8,34 @@ The second web UI slice makes Andaru usable as a firewall from the browser: seei
 
 It builds on the shell ([shell design](2026-11-21-web-ui-shell-design.md)): every save shows the pending notice, and Review and apply makes it live. Nothing on these pages applies anything.
 
-The API serves `policy.input` and `policy.forward` with their order operation, `addresses` and `services` ([packet filter design](2026-11-12-packet-filter-design.md)). The owner decided on 2026-11-21 that the two lists become one (call 2), which is engine work that comes first: [#113](https://github.com/andaru-project/andaru/issues/113). Beyond that and call 9, this slice adds no engine behaviour.
+The API exists: `policy.input` and `policy.forward` with their order operation, `addresses` and `services` ([packet filter design](2026-11-12-packet-filter-design.md)). This slice adds no engine behaviour except where call 9 says so.
 
 ## Author calls
 
 1. **Navigation gains a Firewall branch** in the tree ([navigation design](2026-11-21-web-ui-dashboard-design.md)): Rules, Addresses and Services. It needs `configuration.read`; editing needs `configuration.write`, and without it the pages are read-only.
 
-2. **Rules is one page with one list** (owner, 2026-11-21). nftables keeps traffic to the box and traffic through it in two chains; that split means little to an administrator, so the page does not show it. As in pfSense, where a rule applies follows from its destination ([#113](https://github.com/andaru-project/andaru/issues/113)):
+2. **Rules is one page with two sections** (owner, 2026-11-21). Andaru's rules run between zones, or from a zone to the box itself, and those are two different things:
 
-   | Destination | Meaning |
-   | --- | --- |
-   | Any | everything, the box included |
-   | Any except this firewall | everything but the box; the default for a new rule |
-   | This firewall | the box only: the web UI, SSH, DNS, DHCP |
+   | Section | Its rules say | Stored as |
+   | --- | --- | --- |
+   | To this firewall | who may reach the box: the web UI, SSH, DNS, DHCP | `policy.input` |
+   | Between networks | what may pass from one zone to another | `policy.forward` |
 
-   - "Any except this firewall" is a choice of its own. Without it, the same effect takes a pass rule followed by block rules for the box.
-   - Source has the same three choices, and a zone or an address can be negated: "not this".
+   - **"Any" never includes the box.** In "Between networks", a destination of "any" means every other network. Reaching the box always takes a rule in "To this firewall". Traffic to everywhere, the box included, is two rules, which is simpler to read than one rule with combinations.
+   - Each section has its own order. A packet meets only one of them, so no order between the sections exists to get wrong.
+   - A new rule is made from its section's "Add rule" button. A rule cannot be dragged from one section to the other.
+   - No tabs: both sections are on the page, each with its own heading and count, and the page's own links jump to either.
+   - The nftables names (`input`, `forward`) appear as a caption for people who know them.
    - Above the table, a fixed, read-only block lists what Andaru always does before any rule: established and related traffic accepted, invalid dropped, loopback and neighbour discovery accepted, DHCP requests on served segments, SSH on the management segment. Below the table: "Everything else is dropped."
    - Without `management.segment` the filter is off (packet filter design). The page then says so and links to Interfaces instead of showing an empty table that looks like "allow nothing".
 
 3. **The table is the execution order.** Columns: position, enabled (a switch), action, from, to, services, name with its description beneath, and row actions.
    - **No sorting.** A filter box narrows the rows and keeps each row's real position number.
-   - **From and to** show zone and address names as chips, or one of the three whole-world choices in words. A negated chip reads "not" before its name, in words, never by colour or a strike-through alone. A zone chip and an address chip look different (a zone is where traffic enters or leaves; an address is who).
+   - **From and to** show zone and address names as chips; an empty list reads "any". "To this firewall" has no "to" column: its destination is the box. A zone chip and an address chip look different (a zone is where traffic enters or leaves; an address is who).
    - **Action** is a word with a mark, never colour alone: accept, drop, reject. A logging rule carries a "logs" tag.
    - A disabled rule stays in place, dimmed, with its switch off.
 
-4. **Reordering is by a grip, behind a padlock** (owner, 2026-11-21). It must work on a phone and never get in the way of scrolling.
+4. **Reordering, within a section, is by a grip, behind a padlock** (owner, 2026-11-21). It must work on a phone and never get in the way of scrolling.
    - **The padlock.** The list is locked when the page opens. A padlock button above the table, with its state in words ("Order locked", "Order unlocked"), unlocks it. Locked, no grip is shown and nothing can move by accident.
    - **The grip.** Unlocked, each row shows a grip in its corner: dots in two columns. A row is dragged by the grip alone, by touch or pointer. Anywhere else on the row, a finger scrolls.
    - **The keyboard uses the same grip.** It is a button: Space or Enter picks the row up, the arrow keys move it, Space or Enter drops it and Escape puts it back. A live region says where the row is. No separate move buttons exist.
@@ -43,7 +45,7 @@ The API serves `policy.input` and `policy.forward` with their order operation, `
    - Whether a small library does the dragging or the page's own pointer handling does is settled when it is built. The requirement is touch, pointer and keyboard alike.
 
 5. **Editing a rule is a side panel,** not a dialog over the table, so the order stays visible. Fields: name, description, enabled, action, from, to, services, log.
-   - From and to are pickers: the three whole-world choices first, then zones and addresses, grouped, searchable by name, each with a "not" switch.
+   - From and to are pickers over zones and addresses, grouped, searchable by name. "Any" is the empty selection, stated in words. In "To this firewall" the destination is fixed and shown as "This firewall".
    - Services is a picker over services; empty is "any service".
    - An address or service that does not exist yet can be created from the picker ("New address…"), which opens the object's own form and returns with it selected.
    - Save uses the object's version (`If-Match`); a 412 shows what changed underneath and keeps the user's edits in the form.
@@ -62,7 +64,7 @@ The API serves `policy.input` and `policy.forward` with their order operation, `
    - The owner's definition: the management interface always lets in the web UI, and SSH when SSH is enabled, so an administrator can always reach the box. When the management interface is also the LAN, the rule applies there.
    - It is the slice's one engine change: the fixed management rule accepts the web UI's listening port beside 22/tcp, from the same `allowedSources`.
    - The SSH half follows SSH itself. Today the rule accepts 22/tcp whether or not `sshd` runs, and no setting turns SSH on or off; once one exists, the rule drops its SSH half while SSH is off.
-   - The page shows it first in the fixed block, named "Anti-lockout", with the segment, the ports and the allowed sources, and a link to where the management segment is set.
+   - "To this firewall" shows it first in its fixed block, named "Anti-lockout", with the segment, the ports and the allowed sources, and a link to where the management segment is set.
    - It has no off switch: "always" is the point. Narrowing it is `allowedSources`' job.
    - The rollback timer stays the backstop for everything the rule does not cover, such as a change to the management segment's own addressing.
 
@@ -77,6 +79,7 @@ The API serves `policy.input` and `policy.forward` with their order operation, `
 ## Open for the owner
 
 - **Starter rule (call 10):** offer it, or leave an empty table with an explanation?
+- **Negation** ("not this zone", "not this address"), which pfSense has: the engine's rules have none today. Wanted, and if so when?
 - **NAT** (outbound mode, port forwards, 1:1) is the natural third slice. Should port forwards sit under Firewall or under their own NAT group?
 
 ## Out of scope
