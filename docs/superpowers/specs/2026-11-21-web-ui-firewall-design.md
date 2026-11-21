@@ -58,7 +58,7 @@ The API serves `policy.input` and `policy.forward` with their order operation, `
    - **Port alias:** a protocol (TCP, UDP, ICMP, ICMPv6) with its ports or ICMP types, or a group of other port aliases.
    - The editor is the same side panel as for rules.
    - Each row shows where it is used ("3 rules"), with the list on demand.
-   - The engine's names stay `addresses` and `services`; only the web UI's words change. Renaming the API is not worth a contract change.
+   - The API and the saved configuration take the same word (owner, 2026-11-21; [#117](https://github.com/andaru-project/andaru/issues/117)), so the CLI, the API and the web UI say one thing.
    - **One shared alias field** serves every place in the web UI that takes an address: it accepts a literal address or an alias's name, and completes names as one types. Ports get the same. Pages of later slices and of add-ons use that field, not their own.
    - **An address alias fed from a URL** ([#115](https://github.com/andaru-project/andaru/issues/115)), refreshed on a schedule, such as a provider's published ranges. Its row shows when it last refreshed, how many entries it holds and its last error. This is engine work and not in this slice.
 
