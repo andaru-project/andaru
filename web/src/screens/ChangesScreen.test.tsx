@@ -46,6 +46,8 @@ const versionLists = (fetchMock: ReturnType<typeof fetchRoutes>) => fetchMock.mo
 it('shows each changed object with its live and saved value', async () => {
   routes();
   show(unapplied);
+  // Before the review loads, too: the shell already knows a newer version is saved.
+  expect(screen.queryByRole('status', { name: 'Confirmed' })).not.toBeInTheDocument();
 
   const created = await screen.findByLabelText('DMZ created');
   expect(created).toHaveTextContent('"name": "DMZ"');

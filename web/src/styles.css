@@ -9,7 +9,7 @@
   --andaru-chrome: #152330;
   --andaru-accent: #ffb21c;
   --andaru-ground: light-dark(#f2f4f6, var(--mantine-color-dark-8));
-  /* Error text beside other text: Mantine's red is 3.8:1 on white. */
+  /* Error text beside other text: Mantine's red is 3.3:1 on white. */
   --andaru-error-text: light-dark(var(--mantine-color-red-9), var(--mantine-color-red-4));
 }
 
@@ -19,9 +19,9 @@
   --mantine-color-default-border: #c9d0d8;
 }
 
-/* Mantine's dark dimmed text is 4.0:1 on its dark surfaces. */
+/* Mantine's dark dimmed text is 4.0:1 on its dark surfaces; this is 5.4:1 and still reads as secondary. */
 :root[data-mantine-color-scheme="dark"] {
-  --mantine-color-dimmed: var(--mantine-color-dark-1);
+  --mantine-color-dimmed: #9a9a9a;
 }
 
 body {
@@ -37,14 +37,15 @@ body {
   color: #fff;
 }
 
-.account-button {
+.app-header .account-button {
   background: transparent;
   border-color: rgb(255 255 255 / 35%);
   color: #fff;
 }
 
-.account-button:hover {
+.app-header .account-button:hover {
   background: rgb(255 255 255 / 12%);
+  color: #fff;
 }
 
 .app-navbar {
@@ -145,4 +146,10 @@ body {
 
 .error-text {
   color: var(--andaru-error-text);
+}
+
+/* A link inside an alert takes the alert's text colour, underlined: the link colour is under 4:1 on dark tints. */
+.mantine-Alert-root a {
+  color: inherit;
+  text-decoration: underline;
 }
