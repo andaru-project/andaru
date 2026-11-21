@@ -53,7 +53,7 @@ This document amends the [shell design](2026-11-21-web-ui-shell-design.md): its 
 10. **The widgets,** in page order. "Served" means the engine serves the data today; the rest is new engine work (call 11).
     - **System:** hostname, Andaru version and image, whether the image's signature verified, uptime, the box's time, safe mode, and the last applied change.
       - **Update:** "Up to date" or "Version X is available", linking to the upgrade page. The check is the engine's, on a schedule, and the widget shows when it last ran. Until an upgrade page exists the line states the version only.
-      - **Hardware:** the CPU's model, cores and threads; installed memory; the board and BIOS vendor, version and date; whether the box is a virtual machine and of which kind.
+      - **Hardware:** the CPU's model, cores and threads; installed memory; the board, its serial number, and the BIOS vendor, version and date; whether the box is a virtual machine and of which kind.
       - **CPU features:** only those a firewall gains from, shown as present, in three lines (call 17). Not the whole flag list.
       - **x86-64 level:** v1 to v4, worked out from the flags, so the owner can later match a box to an optimised image.
       - **Microcode:** the revision the kernel loaded, not the one on disk.
@@ -70,7 +70,7 @@ This document amends the [shell design](2026-11-21-web-ui-shell-design.md): its 
     - **`system/info`,** what changes rarely: the System widget's identity, hardware, features, level, microcode, vulnerabilities and update state. Sources are the kernel's own files (`/proc/cpuinfo`, `/sys/class/dmi/id`, `/sys/devices/system/cpu/vulnerabilities`) and `bootc status`. The engine reads them; no helper runs.
     - **`system/usage`,** what changes every second: CPU times, memory, swap, file systems, connection tracking and temperatures, with the time of the reading.
     - **`system/traffic`,** the traffic history of call 12.
-    - The serial number and other identifiers of the board are left out: a screenshot of the dashboard should be safe to post.
+    - The board's serial number is served and shown with the hardware (owner, 2026-11-21).
     - The header takes the hostname and version from `system/info`.
 
 12. **The engine keeps one hour of traffic history** (owner, 2026-11-21), so the graph is drawn in full when the dashboard loads.
@@ -133,7 +133,6 @@ The built-in widgets of call 10 are ordinary components in a list of `{id, title
 
 ## Open for the owner
 
-- **Identifiers (call 11):** leave the board's serial number out, or show it to administrators?
 - **Slices (call 16):** is that order right?
 - **Hiding and reordering (call 14):** after those slices, or required from the start?
 - **Tree depth:** is Rules with a sub-page per chain right, or should the two chains sit directly under Firewall?

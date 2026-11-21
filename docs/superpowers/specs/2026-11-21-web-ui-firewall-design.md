@@ -25,7 +25,7 @@ The API exists: `policy.input` and `policy.forward` with their order operation, 
    - A disabled rule stays in place, dimmed, with its switch off.
 
 4. **Reordering is by buttons first** (owner, 2026-11-21: the controls must work on a phone and must never get in the way of scrolling). Each row has Move up and Move down, and a "Move to position…" action for long lists. They work the same by touch, pointer and keyboard.
-   - Drag and drop is an addition for pointers only, and not in this slice. When it arrives, a row is dragged by its handle alone, and the handle does not exist on a touch screen: a finger on a row always scrolls.
+   - Drag and drop is an addition, not in this slice, and works by touch as well as by pointer. A row is dragged by its handle alone: a small grip of dots in two columns, in the row's corner. Anywhere else on the row, a finger scrolls.
    - A move is a saved edit: it sends the whole order with the list's version (`PUT …/order`, `If-Match`). A 412 means someone else reordered: the page reloads the list and says so, and never guesses.
    - While the filter box hides rows, moving is disabled, with the reason shown: a move among hidden rows would be a guess.
 
