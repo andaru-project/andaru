@@ -30,8 +30,10 @@ type trafficInterface struct {
 }
 
 type trafficResponse struct {
-	IntervalSeconds int                `json:"intervalSeconds"`
-	Interfaces      []trafficInterface `json:"interfaces"`
+	IntervalSeconds int `json:"intervalSeconds"`
+	// Complete says the answer is the whole history, to replace what a client holds, not readings to add to it.
+	Complete   bool               `json:"complete"`
+	Interfaces []trafficInterface `json:"interfaces"`
 }
 
 // trafficHistory keeps the last hour of every network interface's counters, so the dashboard's graph is whole
@@ -60,19 +62,34 @@ func (h *trafficHistory) record(now time.Time, counters map[string]host.Counters
 		}
 	}
 	for name, reading := range counters {
-		samples := append(h.samples[name], trafficSample{At: now.UTC(), Counters: reading})
+		// To the millisecond, which is what a browser's clock keeps: a client can send a reading's time back as it is.
+		samples := append(h.samples[name], trafficSample{At: now.UTC().Truncate(time.Millisecond), Counters: reading})
 		// The age rule above keeps an hour at the usual pace; this bounds a history read faster than that.
 		h.samples[name] = samples[max(len(samples)-trafficSamples, 0):]
 	}
 }
 
-// view copies out the readings taken after since, interfaces by name; the zero time gives the whole hour. Every
-// interface the history holds is named, also with no reading that new, so a client that asks only for what it
-// lacks still learns which interfaces there are.
+// view copies out the readings taken after since, interfaces by name. Every interface the history holds is
+// named, also with no reading that new, so a client that asks only for what it lacks still learns which
+// interfaces there are. The zero time gives the whole hour, and so does a since the history does not reach: a
+// client ahead of every reading held is from before the clock was set back or the engine restarted, and
+// would otherwise be sent nothing until the clock caught up.
+// shortcut: the whole hour is about 120 KiB of JSON an interface; send columns, or one interface at a time,
+// when boxes with dozens of interfaces matter.
 func (h *trafficHistory) view(since time.Time) trafficResponse {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	response := trafficResponse{IntervalSeconds: int(trafficInterval / time.Second), Interfaces: make([]trafficInterface, 0, len(h.samples))}
+	newest := time.Time{}
+	for _, samples := range h.samples {
+		if at := samples[len(samples)-1].At; at.After(newest) {
+			newest = at
+		}
+	}
+	if since.After(newest) {
+		since = time.Time{}
+	}
+	response.Complete = since.IsZero()
 	for name, samples := range h.samples {
 		// Readings run oldest first, so what is new is a tail.
 		first, _ := slices.BinarySearchFunc(samples, since, func(sample trafficSample, since time.Time) int {

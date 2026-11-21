@@ -2,8 +2,10 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -59,8 +61,16 @@ func TestTrafficHistoryKeepsAnHourPerInterface(t *testing.T) {
 	if got := later.Interfaces; len(got) != 3 || len(got[0].Samples) != 3 || got[0].Samples[0].RxBytes != uint64(n+7) || len(got[1].Samples) != 3 || got[2].Name != "ens20" || got[2].Samples == nil || len(got[2].Samples) != 0 {
 		t.Fatalf("since the reading of tick %d: %+v", n+6, got)
 	}
-	if got := history.view(at(n + 9)).Interfaces[0].Samples; len(got) != 0 {
-		t.Fatalf("a client that holds everything was sent %d readings", len(got))
+	if later.Complete || !view.Complete {
+		t.Fatalf("complete: whole history %v, a tail %v", view.Complete, later.Complete)
+	}
+	if got := history.view(at(n + 9)); len(got.Interfaces[0].Samples) != 0 || got.Complete {
+		t.Fatalf("a client that holds everything was sent %d readings, complete %v", len(got.Interfaces[0].Samples), got.Complete)
+	}
+	// A client ahead of every reading held, as after the clock was set back, is sent the whole history to
+	// start again from; it would otherwise be sent nothing until the clock caught up.
+	if got := history.view(at(n + 500)); !got.Complete || len(got.Interfaces[0].Samples) != n {
+		t.Fatalf("a client from the future was sent %d readings, complete %v", len(got.Interfaces[0].Samples), got.Complete)
 	}
 	if got := history.view(at(0).Add(-time.Hour)).Interfaces[0].Samples; len(got) != n {
 		t.Fatalf("a client that holds nothing recent was sent %d readings", len(got))
@@ -139,14 +149,23 @@ func TestUsageAndTrafficStatus(t *testing.T) {
 	}
 
 	// since: what came after a reading; a time in the form the readings carry, and nothing else in the query.
-	if rec = get("/api/v1/status/traffic?since=2999-01-01T00:00:00Z"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"name":"ens18","samples":[]`) {
+	// A reading's own time, as served and as a browser would write it, gives nothing newer: an empty tail.
+	var served trafficResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &served); err != nil || !served.Complete {
+		t.Fatalf("%v %s", err, rec.Body)
+	}
+	at := served.Interfaces[0].Samples[0].At
+	if at.Nanosecond()%1_000_000 != 0 {
+		t.Fatalf("a reading's time is finer than a millisecond: %v", at)
+	}
+	if rec = get("/api/v1/status/traffic?since=" + url.QueryEscape(at.Format("2006-01-02T15:04:05.000Z07:00"))); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"complete":false`) || !strings.Contains(rec.Body.String(), `"name":"ens18","samples":[]`) {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
 	validResponse(t, "TrafficResponse", rec.Body.Bytes())
 	if rec = get("/api/v1/status/traffic?since=2000-01-01T00:00:00.123456789Z"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"rxBytes":1000`) {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
-	for _, query := range []string{"since=yesterday", "since=", "since=2026-11-21", "limit=5", "since=2000-01-01T00:00:00Z&x=1"} {
+	for _, query := range []string{"since=yesterday", "since=", "since", "since=2026-11-21", "limit=5", "since=2000-01-01T00:00:00Z&x=1", "since=2000-01-01T00:00:00Z&since=", "since=2000-01-01T00:00:00Z&since=2001-01-01T00:00:00Z", "since=%ZZ", "since=2000-01-01T00:00:00Z;x=1"} {
 		if rec = get("/api/v1/status/traffic?" + query); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "INVALID_REQUEST") {
 			t.Fatalf("?%s: %d %s", query, rec.Code, rec.Body)
 		}

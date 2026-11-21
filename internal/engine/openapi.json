@@ -270,7 +270,7 @@
             "name": "since",
             "in": "query",
             "required": false,
-            "description": "The at of the newest sample the client holds. Only samples after it are sent; every interface is still named, with an empty list when it has nothing newer.",
+            "description": "The at of the newest sample the client holds, as served. Only samples after it are sent; every interface is still named, with an empty list when it has nothing newer. A since later than every sample held is answered with the whole history and complete true",
             "schema": {
               "type": "string",
               "format": "date-time"
@@ -278,15 +278,23 @@
           }
         ],
         "responses": {
-          "400": {
-            "description": "since is not a time, or the query holds anything else"
-          },
+
           "200": {
             "description": "The traffic history",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TrafficResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "since is not one time in the form the samples carry, or the query holds anything else",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -5808,6 +5816,7 @@
         "additionalProperties": false,
         "required": [
           "intervalSeconds",
+          "complete",
           "interfaces"
         ],
         "properties": {
@@ -5815,6 +5824,10 @@
             "type": "integer",
             "minimum": 1,
             "description": "How often the engine reads the counters"
+          },
+          "complete": {
+            "type": "boolean",
+            "description": "True when the answer is the whole history, which replaces what the client holds; false when it is samples to add"
           },
           "interfaces": {
             "type": "array",
