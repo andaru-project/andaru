@@ -23,7 +23,7 @@ The API serves `policy.input` and `policy.forward` with their order operation, `
    - **A side of a rule is a zone and, within it, addresses** (owner, 2026-11-21; [#113](https://github.com/andaru-project/andaru/issues/113)). A zone is a set of interfaces: where traffic arrives or leaves. An address is who. Both must match, so "lan, host A" means host A arriving from lan. Today's engine reads it as "lan or host A"; the model changes.
    - A rule reads as a sentence, and the table shows it as one: "From lan, except the printers, to wan, HTTPS: accept."
    - Above the table, a fixed, read-only block lists what Andaru always does before any rule: established and related traffic accepted, invalid dropped, loopback and neighbour discovery accepted, DHCP requests on served segments, SSH on the management segment. Below the table: "Everything else is dropped."
-   - Without `management.segment` the filter is off (packet filter design). The page then says so and links to Interfaces instead of showing an empty table that looks like "allow nothing".
+   - Without `management.segment` the filter is off (packet filter design). The page reads the saved configuration, as all of it does, so it says what applying would do ("No management segment is set: applying this configuration leaves the packet filter off") and links to Interfaces instead of showing an empty table that looks like "allow nothing".
 
 3. **The table is the execution order.** Columns: position, enabled (a switch), action, from, to, ports, name with its description beneath, and row actions.
    - **No sorting.** A filter box narrows the rows and keeps each row's real position number.
@@ -37,7 +37,7 @@ The API serves `policy.input` and `policy.forward` with their order operation, `
    - **The keyboard uses the same grip.** It is a button: Space or Enter picks the row up, the arrow keys move it, Space or Enter drops it and Escape puts it back. A live region says where the row is. No separate move buttons exist.
    - Dragging near the top or bottom edge scrolls the list, so a long list needs no other control.
    - A drop is a saved edit: it sends the whole order with the list's version (`PUT …/order`, `If-Match`). A 412 means someone else reordered: the page reloads the list and says so, and never guesses.
-   - While the filter box hides rows, the padlock is disabled, with the reason shown: a move among hidden rows would be a guess.
+   - While the filter box hides rows, the order is locked and the padlock is disabled, with the reason shown: a move among hidden rows would be a guess. Typing in the filter box while the order is unlocked locks it, and puts back a row that was picked up.
    - Whether a small library does the dragging or the page's own pointer handling does is settled when it is built. The requirement is touch, pointer and keyboard alike.
 
 5. **Editing a rule is a side panel,** not a dialog over the table, so the order stays visible. Fields: name, description, enabled, action, from, to, ports, log.
@@ -70,7 +70,7 @@ The API serves `policy.input` and `policy.forward` with their order operation, `
    - It has no off switch: "always" is the point. Narrowing it is `allowedSources`' job.
    - The rollback timer stays the backstop for everything the rule does not cover, such as a change to the management segment's own addressing.
 
-10. **Starter rules.** The setup assistant already writes them: for each zone without an uplink, accept to any network, and ping and DNS to the box. The Rules page adds nothing to that. Only when the list is empty does it say why nothing passes ("No rules: all traffic between networks is dropped") and offer to add the same starter rules, saved like any rule and never automatic.
+10. **Starter rules.** The setup assistant already writes them: for each zone without an uplink, accept to any network, and ping and DNS to the box. The Rules page adds nothing to that. Only when the list is empty does it say why nothing passes ("No rules: traffic between networks is dropped, except what port forwards let in") and offer to add the same starter rules, saved like any rule and never automatic.
 
 11. **States each page covers:** loading, empty, read-only, validation errors, version conflict, saved-but-unapplied (the shell's notice), filter off, and connection lost.
 

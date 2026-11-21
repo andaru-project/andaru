@@ -15,7 +15,7 @@ This document amends the [shell design](2026-11-21-web-ui-shell-design.md): its 
 
 1. **The navigation is a tree of at most three levels:** a group, a page, and a page's sub-pages. Mantine's `NavLink` nests natively, with a chevron, `aria-expanded` and keyboard support.
    - **Dashboard** is the first entry and stands alone.
-   - A branch with sub-pages opens and closes on its label; the label itself is not a page.
+   - A branch with sub-pages opens and closes on its label; the label itself is not a page. `NavLink` renders an anchor by default, and an anchor without an address takes no keyboard focus, so a branch label is rendered as a button (`component="button"`).
    - The branch that holds the current page is open. Other branches keep the state the user left them in, per browser.
    - The rule from the shell design stays: an entry shows only when the session holds a capability for it, and only once its page exists.
 
@@ -46,7 +46,7 @@ This document amends the [shell design](2026-11-21-web-ui-shell-design.md): its 
 8. **The dashboard is the page at `/`.** It answers, in this order: is the box healthy, is anything waiting for me, what is connected.
 
 9. **It is a grid of widgets.** Each widget is a titled panel that loads its own data and fails alone: one widget's error never blanks the page.
-   - The grid is `repeat(auto-fill, minmax(20rem, 1fr))`: three or four columns on a wide screen, one on a phone.
+   - The grid is `repeat(auto-fill, minmax(min(20rem, 100%), 1fr))`: three or four columns on a wide screen, one on a phone. The `min()` lets the single column shrink below 20rem, so a 320 px screen does not scroll sideways.
    - A widget shows only when the session holds its capability.
    - A widget's title links to the page that holds the full view.
 
@@ -85,7 +85,7 @@ This document amends the [shell design](2026-11-21-web-ui-shell-design.md): its 
 
 14. **Widgets can be hidden and reordered from the first slice** (owner, 2026-11-21).
     - The dashboard uses the padlock and grip of the firewall rules ([firewall design](2026-11-21-web-ui-firewall-design.md), call 4). Locked, it is plain. Unlocked, each widget shows its corner grip and a Hide button, and a list of hidden widgets offers Show.
-    - The layout is an ordered list of widget names. A widget that appears later (a new version, an add-on) joins at the end, shown.
+    - The layout is two things: the order, a list of widget names, and the set of hidden names. A widget in neither (a new version, an add-on) joins at the end, shown. A name the page no longer knows is ignored and dropped at the next save.
     - **The layout is kept with the account** (owner, 2026-11-21): arranging a dashboard takes time, and losing it by changing browser is frustrating. The engine gains a small per-account preference document, read and written through the session (`session/preferences`), outside the saved configuration: it needs no apply and is in no generation. It is size-limited and holds nothing the engine acts on.
     - One layout per account, for every screen width: the grid already reflows the same order into fewer columns.
     - "Reset" returns to the default order.
