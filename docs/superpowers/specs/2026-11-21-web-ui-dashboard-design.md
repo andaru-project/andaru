@@ -84,7 +84,7 @@ This document amends the [shell design](2026-11-21-web-ui-shell-design.md): its 
 13. **Refresh is by polling,** only while the page is visible: `system/usage` every 2 seconds, `system/traffic` every 30, everything else every 10. Server-sent events remain a later slice.
 
 14. **Widgets can be hidden and reordered from the first slice** (owner, 2026-11-21).
-    - A "Customise" button puts the dashboard in an edit state: each widget gains Move earlier, Move later and Hide, and a list of hidden widgets offers Show. The same rules as for firewall rules apply: buttons first; dragging, when it arrives, by a corner grip alone.
+    - The dashboard uses the padlock and grip of the firewall rules ([firewall design](2026-11-21-web-ui-firewall-design.md), call 4). Locked, it is plain. Unlocked, each widget shows its corner grip and a Hide button, and a list of hidden widgets offers Show.
     - The layout is an ordered list of widget names. A widget that appears later (a new version, an add-on) joins at the end, shown.
     - The choice is kept in the browser, so a phone and a desktop each keep their own. No per-account preference store exists yet; when one does, the layout moves there, per account and per device class.
     - "Reset" returns to the default order.

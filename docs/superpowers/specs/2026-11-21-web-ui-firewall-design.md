@@ -24,10 +24,14 @@ The API exists: `policy.input` and `policy.forward` with their order operation, 
    - **Action** is a word with a mark, never colour alone: accept, drop, reject. A logging rule carries a "logs" tag.
    - A disabled rule stays in place, dimmed, with its switch off.
 
-4. **Reordering is by buttons first** (owner, 2026-11-21: the controls must work on a phone and must never get in the way of scrolling). Each row has Move up and Move down, and a "Move to position…" action for long lists. They work the same by touch, pointer and keyboard.
-   - Drag and drop is an addition, not in this slice, and works by touch as well as by pointer. A row is dragged by its handle alone: a small grip of dots in two columns, in the row's corner. Anywhere else on the row, a finger scrolls.
-   - A move is a saved edit: it sends the whole order with the list's version (`PUT …/order`, `If-Match`). A 412 means someone else reordered: the page reloads the list and says so, and never guesses.
-   - While the filter box hides rows, moving is disabled, with the reason shown: a move among hidden rows would be a guess.
+4. **Reordering is by a grip, behind a padlock** (owner, 2026-11-21). It must work on a phone and never get in the way of scrolling.
+   - **The padlock.** The list is locked when the page opens. A padlock button above the table, with its state in words ("Order locked", "Order unlocked"), unlocks it. Locked, no grip is shown and nothing can move by accident.
+   - **The grip.** Unlocked, each row shows a grip in its corner: dots in two columns. A row is dragged by the grip alone, by touch or pointer. Anywhere else on the row, a finger scrolls.
+   - **The keyboard uses the same grip.** It is a button: Space or Enter picks the row up, the arrow keys move it, Space or Enter drops it and Escape puts it back. A live region says where the row is. No separate move buttons exist.
+   - Dragging near the top or bottom edge scrolls the list, so a long list needs no other control.
+   - A drop is a saved edit: it sends the whole order with the list's version (`PUT …/order`, `If-Match`). A 412 means someone else reordered: the page reloads the list and says so, and never guesses.
+   - While the filter box hides rows, the padlock is disabled, with the reason shown: a move among hidden rows would be a guess.
+   - Whether a small library does the dragging or the page's own pointer handling does is settled when it is built. The requirement is touch, pointer and keyboard alike.
 
 5. **Editing a rule is a side panel,** not a dialog over the table, so the order stays visible. Fields: name, description, enabled, action, from, to, services, log.
    - From and to are pickers over zones and addresses, grouped, searchable by name. "Any" is the empty selection, stated in words.
@@ -55,9 +59,9 @@ The API exists: `policy.input` and `policy.forward` with their order operation, 
 
 11. **States each page covers:** loading, empty, read-only, validation errors, version conflict, saved-but-unapplied (the shell's notice), filter off, and connection lost.
 
-12. **Narrow screens.** Below 900 px each rule becomes a block: position, switch, action and name on the first line, then from, to and services, each labelled. The editor's side panel takes the whole screen. The move actions stay; they never needed a pointer.
+12. **Narrow screens.** Below 900 px each rule becomes a block: position, switch, action and name on the first line, then from, to and services, each labelled. The editor's side panel takes the whole screen. The padlock and the grips stay as they are.
 
-13. **Tests:** the table keeps execution order under filtering; moves send the full order with the version and handle a 412; the editor maps engine field errors to fields; read-only accounts get no controls; deleting a used object lists its users.
+13. **Tests:** the table keeps execution order under filtering; nothing moves while locked; the grip moves a row by keyboard; moves send the full order with the version and handle a 412; the editor maps engine field errors to fields; read-only accounts get no controls; deleting a used object lists its users.
 
 ## Open for the owner
 
