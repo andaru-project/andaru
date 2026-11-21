@@ -103,12 +103,13 @@ it('reads out the point under the pointer, a finger or the arrow keys: its time 
   expect(readout()).toMatch(/↓ 2\.0 Mbps/);
   fireEvent.pointerLeave(frame, { pointerType: 'mouse' });
   expect(readout()).toBe('−1 hnow');
-  // A finger that moves is scrolling the page and marks nothing; a tap marks, and the mark stays as the finger lifts.
-  fireEvent.pointerMove(frame, { clientX: 500, pointerType: 'touch' });
-  expect(readout()).toBe('−1 hnow');
-  fireEvent.click(frame, { clientX: 500 });
+  // A finger leaves as it lifts: its mark stays. A touch that becomes a scroll is cancelled: its mark goes.
+  fireEvent.pointerDown(frame, { clientX: 500, pointerType: 'touch' });
   fireEvent.pointerLeave(frame, { pointerType: 'touch' });
   expect(readout()).toMatch(/↓ 4\.0 Mbps/);
+  fireEvent.pointerDown(frame, { clientX: 499, pointerType: 'touch' });
+  fireEvent.pointerCancel(frame, { pointerType: 'touch' });
+  expect(readout()).toBe('−1 hnow');
 });
 
 it('shows every interface when there are one or two, whatever was chosen before', () => {

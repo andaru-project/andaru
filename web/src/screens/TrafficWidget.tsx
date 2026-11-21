@@ -1,5 +1,5 @@
 import { Button, ComboboxChevron, Group, Menu, Stack, Table, Text } from '@mantine/core';
-import { useCallback, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react';
+import { useCallback, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
 import type { ApiClient } from '../api';
 import { bitrate } from '../format';
 import { chosenLabel, figures, firstShown, hourMilliseconds, merge, newest, rates, roundUp, thin, type RatePoint } from '../traffic';
@@ -78,11 +78,11 @@ function Graph({ entry, zone, end, intervalSeconds, live }: { entry: Traffic['in
   const fresh = live && last !== undefined && end - Date.parse(last.at) <= intervalSeconds * 3000;
 
   // The point under the pointer, a finger or the arrow keys: its time and rates are read out beside the graph.
-  // A mouse marks as it moves and lets go on leaving. A finger marks with a tap, which is a click: a touch that
-  // turns into a scroll is no tap, so scrolling past a graph leaves no mark behind.
+  // A mouse or a pen lets go on leaving. A finger leaves as it lifts, so a tap or a slide along the graph keeps
+  // its mark; a touch the browser takes over to scroll the page is cancelled, and leaves no mark behind.
   const [marked, setMarked] = useState<number>();
   const mark = marked === undefined ? undefined : points[Math.min(marked, points.length - 1)];
-  const nearest = (event: PointerEvent<HTMLDivElement> | MouseEvent<HTMLDivElement>) => {
+  const nearest = (event: PointerEvent<HTMLDivElement>) => {
     const box = event.currentTarget.getBoundingClientRect();
     const at = end - hourMilliseconds + ((event.clientX - box.left) / box.width) * hourMilliseconds;
     let best = 0;
@@ -105,7 +105,7 @@ function Graph({ entry, zone, end, intervalSeconds, live }: { entry: Traffic['in
         <Group gap="xs"><Text ff="monospace" fw={600}>{entry.name}</Text><ZoneBadge name={zone} /></Group>
         <Text c="dimmed" size="xs">0 – {bitrate(top)}</Text>
       </Group>
-      <div className="traffic-frame" tabIndex={0} role="group" aria-label={`${entry.name} over the last hour: the arrow keys read out a point`} onPointerMove={(event) => { if (event.pointerType === 'mouse') nearest(event); }} onClick={nearest} onPointerLeave={(event) => { if (event.pointerType === 'mouse') setMarked(undefined); }} onKeyDown={step} onBlur={() => setMarked(undefined)}>
+      <div className="traffic-frame" tabIndex={0} role="group" aria-label={`${entry.name} over the last hour: the arrow keys read out a point`} onPointerMove={nearest} onPointerDown={nearest} onPointerCancel={() => setMarked(undefined)} onPointerLeave={(event) => { if (event.pointerType !== 'touch') setMarked(undefined); }} onKeyDown={step} onBlur={() => setMarked(undefined)}>
         <svg className="traffic-graph" viewBox={`0 0 ${width} ${height}`} aria-hidden="true" preserveAspectRatio="none">
           <line className="traffic-mid" x1="0" y1={height / 2} x2={width} y2={height / 2} />
           <path className="traffic-area traffic-sent" d={area(points, (point) => point.tx, x, y)} />

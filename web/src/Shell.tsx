@@ -132,7 +132,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
             <Image src={mark} alt="" w={28} h={28} />
             <Title className="app-title" order={1} size="h3">Andaru</Title>
             {/* The host name stays at every width: on a phone it is what says which firewall this is. */}
-            {system.data && <Text className="app-box" size="sm">{system.data.info.hostname}<span className={system.data.info.hostname ? 'app-version' : undefined}>{system.data.info.hostname && ' · '}{system.data.info.version}</span></Text>}
+            {system.data && <Text className="app-box" size="sm">{system.data.info.hostname}<span className="app-version">{system.data.info.hostname && ' · '}{system.data.info.version}</span></Text>}
           </Group>
           <Group className="app-session" gap="sm" wrap="nowrap">
             <Badge color={connected ? 'green' : 'red'} role="status">{connected ? 'Connected' : 'Connection lost'}</Badge>

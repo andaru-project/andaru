@@ -199,8 +199,8 @@ body {
   word-break: keep-all;
 }
 
-/* A state or a zone is one word: it is never cut short to fit its column. */
-.data-table .mantine-Badge-root {
+/* A state is a word or two: it is never cut short to fit its column. */
+.data-table td[data-label="State"] .mantine-Badge-root {
   min-width: max-content;
 }
 
