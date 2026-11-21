@@ -85,7 +85,7 @@ The owner approved these on 2026-11-20. Calls 1, 4, 7, 8, 9, 10 and 11 amend the
     - `coreos-installer install` with the consoles and the destination config;
     - `sgdisk --disk-guid=R --move-second-header`, `udevadm settle`, `growpart`, mount, `xfs_growfs`;
     - `andaru-install/` at 0700; the archive copied under a temporary name, synced and renamed; the seed at 0600;
-    - unmount, `sync`, and a prompt to remove the medium and reboot.
+    - unmount, `sync`, and a prompt to power off, then remove the medium and power on: the live system runs from the medium, so a shutdown after it is removed crashes (lab, 2026-11-21).
 - [ ] The seed is written with `jq -n --arg`, never by string concatenation.
 - [ ] `tests/shell/installer_spec.sh`:
   - each function against captures: `lsblk -J` (an isohybrid boot stick mounted as a partition, a small disk, a read-only disk, a stray `boot` label), `ip -j -d link` with and without `permaddr`, `/proc/cmdline`;

@@ -7,6 +7,8 @@ Describe 'andaru-install'
   data="$root/tests/shell/installer"
   seeds="$root/image/iso/testdata"
   Include "$root/image/iso/andaru-install"
+  # Never the real one, anywhere in these specs: they run as root on the test host.
+  systemctl() { echo "systemctl $*"; }
 
   ed25519='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO+VXyljs/lkyfnto5CqJDJaSFTQana6UuzepSCNrhwa admin@laptop'
 
@@ -840,16 +842,23 @@ umount"
     questions() { return 0; }
     write_install() { return 0; }
     clear() { :; }
-    # Never the real one: the specs run as root on the test host.
-    systemctl() { echo "systemctl $*"; }
     It 'powers off once Enter is pressed, so the medium comes out with the box off'
       Data
         #|
       End
       When run session
       The status should equal 0
-      The output should include 'Press Enter to power off; then remove the install medium'
+      The output should include 'Press Enter to power off. Then remove the install medium'
       The output should include 'systemctl poweroff'
+    End
+    It 'says to hold the power button, and stops, when the power-off fails'
+      systemctl() { echo "systemctl $*"; return 1; }
+      Data
+        #|
+      End
+      When run session
+      The status should equal 1
+      The output should include 'hold the power button'
     End
     It 'does not power off at the end of input'
       When run session </dev/null
