@@ -41,14 +41,17 @@ type applyReply struct {
 
 var objectIDPattern = regexp.MustCompile(`^(lnk|seg|zon|adr|svc|rul|dhp|pfw|oto|dh6|vip)_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 var applyIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
+
+// errUsage marks a usage error; its text is never printed, the caller prints the command's usage.
 var errUsage = errors.New("invalid arguments")
 
-func collectionName(s string) bool {
-	return slices.Contains([]string{"links", "segments", "zones", "addresses", "services", "dhcp", "dhcp6", "virtualAddresses", "policy/input", "policy/forward", "nat/port-forwards", "nat/one-to-one"}, s)
-}
+var collections = []string{"links", "segments", "zones", "addresses", "services", "dhcp", "dhcp6", "virtualAddresses", "policy/input", "policy/forward", "nat/port-forwards", "nat/one-to-one"}
 
-// singletonName names the configuration objects that exist at most once and have no ID.
-func singletonName(s string) bool { return s == "management" || s == "nat/outbound" || s == "dns" }
+// singletons are the configuration objects that exist at most once and have no ID.
+var singletons = []string{"management", "nat/outbound", "dns"}
+
+func collectionName(s string) bool { return slices.Contains(collections, s) }
+func singletonName(s string) bool  { return slices.Contains(singletons, s) }
 
 // validChanged checks one batch-result item as the store emits it: filter collections are dotted,
 // a singleton's or a list order's ID is its collection, and a list order carries only a version.
@@ -101,7 +104,7 @@ func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 			fs := flag.NewFlagSet(verb, flag.ContinueOnError)
 			fs.SetOutput(stderr)
 			fs.Usage = func() {} // the caller prints the command's usage
-			fs.StringVar(&version, "version", "", "explicit version returned by the object read")
+			fs.StringVar(&version, "version", "", "")
 			if e := fs.Parse(leaf); e != nil {
 				return req, e
 			}
@@ -202,7 +205,7 @@ func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 		fs.Usage = func() {} // the caller prints the command's usage
 		// A flag given as "" (an unset shell variable) must be refused, not read as "the head".
 		var saved *config.Version
-		fs.Func("saved-version", "saved version to render (default: the saved head)", func(s string) error {
+		fs.Func("saved-version", "", func(s string) error {
 			v, e := config.ParseVersion(s)
 			saved = &v
 			return e
@@ -236,8 +239,8 @@ func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 		fs := flag.NewFlagSet("versions list", flag.ContinueOnError)
 		fs.SetOutput(stderr)
 		fs.Usage = func() {} // the caller prints the command's usage
-		limit := fs.Int("limit", 50, "maximum saved versions (1-100)")
-		before := fs.String("before", "", "exclusive saved version cursor")
+		limit := fs.Int("limit", 50, "")
+		before := fs.String("before", "", "")
 		if e := fs.Parse(args[2:]); e != nil {
 			return req, e
 		}
@@ -265,12 +268,12 @@ func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 		fs.Usage = func() {} // the caller prints the command's usage
 		// Required and never defaulted: the operator applies the version they previewed.
 		var saved *config.Version
-		fs.Func("saved-version", "saved version to apply; must be the saved head", func(s string) error {
+		fs.Func("saved-version", "", func(s string) error {
 			v, e := config.ParseVersion(s)
 			saved = &v
 			return e
 		})
-		timeout := fs.Int("confirm-timeout", 120, "seconds until the change is rolled back unless confirmed (30-600)")
+		timeout := fs.Int("confirm-timeout", 120, "")
 		if e := fs.Parse(args[2:]); e != nil {
 			return req, e
 		}
@@ -346,37 +349,36 @@ func runCtl(ctx context.Context, socket string, args []string, stdin io.Reader, 
 	if len(args) == 0 {
 		return ctlUsageError(stderr, "")
 	}
-	if args[0] == "help" {
-		if len(args) == 1 {
+	name, help := args[0], helpRequested(args[1:])
+	if name == "help" {
+		if len(args) == 1 || isHelp(args[1]) {
 			ctlHelp(stdout)
-		} else {
-			ctlCommandHelp(stdout, args[1])
+			return 0
 		}
+		name, help = args[1], true
+	}
+	// A command without an entry in ctlCommands does not exist: the help lists every command.
+	command, known := findCtlCommand(name)
+	if !known {
+		return ctlUsageError(stderr, "")
+	}
+	if help {
+		fmt.Fprint(stdout, command.help())
 		return 0
 	}
-	if helpRequested(args[1:]) {
-		ctlCommandHelp(stdout, args[0])
-		return 0
-	}
-	if len(args) > 0 && args[0] == "backup" {
+	switch name {
+	case "backup":
 		return runBackup(ctx, socket, args[1:], stdin, stdout, stderr)
-	}
-	if len(args) > 0 && args[0] == "factory-reset" {
+	case "factory-reset":
 		return runFactoryReset(ctx, socket, args[1:], stdout, stderr)
-	}
-	if len(args) > 0 && args[0] == "kept" {
-		return storeRecovery(ctx, socket, "/var/lib/andaru", args[1:], stdout, stderr, nil)
-	}
-	if len(args) > 0 && slices.Contains([]string{"users", "tokens", "audit"}, args[0]) {
+	case "kept":
+		return storeRecovery(ctx, socket, defaultStateDir, args[1:], stdout, stderr, nil)
+	case "users", "tokens", "audit":
 		return runIdentity(ctx, socket, args, stdout, stderr)
 	}
 	spec, e := ctlOperation(args, stderr)
 	if e != nil {
-		if errors.Is(e, flag.ErrHelp) {
-			ctlCommandHelp(stdout, args[0])
-			return 0
-		}
-		return ctlUsageError(stderr, args[0])
+		return ctlUsageError(stderr, name)
 	}
 	payload := spec.payload
 	if spec.body {

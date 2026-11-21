@@ -126,6 +126,9 @@ type identityAuditPage struct {
 }
 
 func runIdentity(ctx context.Context, socket string, args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		return ctlUsageError(stderr, "")
+	}
 	spec, err := parseIdentityCommand(args)
 	if err != nil {
 		return ctlUsageError(stderr, args[0])

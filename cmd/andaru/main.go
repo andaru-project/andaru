@@ -16,6 +16,7 @@ import (
 )
 
 const defaultSocket = "/run/andaru/engine.sock"
+const defaultStateDir = "/var/lib/andaru"
 const responseLimit = 8 * 1024 * 1024
 
 func main() {
@@ -26,47 +27,43 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	usage := func(w io.Writer, text, command string) int {
-		fmt.Fprint(w, text+"Run '"+command+" --help' for details.\n")
-		return 2
-	}
 	if len(args) == 0 {
-		return usage(stderr, topUsage, "andaru")
+		return usageError(stderr, topUsage, "andaru")
 	}
-	if isHelp(args[0]) || args[0] == "help" {
+	if isHelp(args[0]) || args[0] == "help" && len(args) == 1 {
 		fmt.Fprint(stdout, topHelp)
 		return 0
 	}
+	if args[0] == "help" {
+		// andaru help GROUP is andaru GROUP --help.
+		args = []string{args[1], "--help"}
+	}
 	if args[0] == "realize" {
-		if realizeHelpRequested(args[1:]) {
-			fmt.Fprint(stdout, realizeHelp)
-			return 0
-		}
-		return realizeCommand(ctx, args[1:], stderr, newRealizer)
+		return realizeCommand(ctx, args[1:], stdout, stderr, newRealizer)
 	}
 	if args[0] != "engine" && args[0] != "ctl" {
-		return usage(stderr, topUsage, "andaru")
+		return usageError(stderr, topUsage, "andaru")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {}
-	socket := flags.String("socket", defaultSocket, "absolute local engine socket path")
-	stateDir := "/var/lib/andaru"
+	socket := flags.String("socket", defaultSocket, "")
+	stateDir := defaultStateDir
 	webSocket := ""
 	var webUID, webGID uint64
 	var webOrigins repeatedFlags
 	if args[0] == "engine" {
-		flags.StringVar(&stateDir, "state-dir", stateDir, "absolute private state directory")
-		flags.StringVar(&webSocket, "web-socket", "", "absolute dedicated web engine socket path")
-		flags.Uint64Var(&webUID, "web-uid", 0, "exact non-root static web process UID")
-		flags.Uint64Var(&webGID, "web-gid", 0, "exact non-root static web socket group GID")
-		flags.Var(&webOrigins, "web-origin", "exact HTTPS management origin; repeat for each origin")
+		flags.StringVar(&stateDir, "state-dir", stateDir, "")
+		flags.StringVar(&webSocket, "web-socket", "", "")
+		flags.Uint64Var(&webUID, "web-uid", 0, "")
+		flags.Uint64Var(&webGID, "web-gid", 0, "")
+		flags.Var(&webOrigins, "web-origin", "")
 	}
 	if err := flags.Parse(args[1:]); err != nil {
 		switch {
 		case !errors.Is(err, flag.ErrHelp):
 			if args[0] == "engine" {
-				return usage(stderr, engineUsage, "andaru engine")
+				return usageError(stderr, engineUsage, "andaru engine")
 			}
 			return ctlUsageError(stderr, "")
 		case args[0] == "engine":
@@ -82,7 +79,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 	if args[0] == "engine" {
 		if flags.NArg() != 0 {
-			return usage(stderr, engineUsage, "andaru engine")
+			return usageError(stderr, engineUsage, "andaru engine")
 		}
 		if !filepath.IsAbs(stateDir) || filepath.Clean(stateDir) != stateDir {
 			fmt.Fprintln(stderr, "state-dir must be a canonical absolute path")

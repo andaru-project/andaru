@@ -55,29 +55,26 @@ func newRealizer(stateDir string) (realizeVerbs, error) {
 	}, nil
 }
 
-// realizeHelpRequested reports a help flag before the verb, or in place of the verb's first argument,
-// which must otherwise be a generation ID: a rollback REASON stays free text.
-func realizeHelpRequested(args []string) bool {
-	flags := flag.NewFlagSet("realize", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-	flags.String("state-dir", "", "")
-	err := flags.Parse(args)
-	return errors.Is(err, flag.ErrHelp) || err == nil && flags.NArg() > 1 && isHelp(flags.Arg(1))
-}
-
 // realizeCommand runs one privileged verb. Usage is checked before privilege so a typo never looks like a permission problem.
-func realizeCommand(ctx context.Context, args []string, stderr io.Writer, build func(stateDir string) (realizeVerbs, error)) int {
+func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer, build func(stateDir string) (realizeVerbs, error)) int {
 	flags := flag.NewFlagSet("realize", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	stateDir := flags.String("state-dir", "/var/lib/andaru", "absolute private state directory")
-	usage := func() int { fmt.Fprint(stderr, realizeUsage+"Run 'andaru realize --help' for details.\n"); return 2 }
-	if err := flags.Parse(args); err != nil || flags.NArg() == 0 || !filepath.IsAbs(*stateDir) || filepath.Clean(*stateDir) != *stateDir {
-		return usage()
-	}
-	verb, rest := flags.Arg(0), flags.Args()[1:]
+	stateDir := flags.String("state-dir", defaultStateDir, "")
+	parseErr := flags.Parse(args)
+	verb := flags.Arg(0)
 	want := map[string]int{"activate": 1, "rollback": 2, "confirm": 1, "boot": 0, "leases": 0, "prefixes": 0, "factory-reset": 0}
-	if n, known := want[verb]; !known || len(rest) != n || (n > 0 && !generationID.MatchString(rest[0])) {
-		return usage()
+	n, known := want[verb]
+	// A help flag anywhere is a request for help, never a rollback REASON; an unknown verb stays a usage error.
+	if verb == "help" || helpRequested(args) && (known || verb == "") {
+		fmt.Fprint(stdout, realizeHelp)
+		return 0
+	}
+	if parseErr != nil || !known || !filepath.IsAbs(*stateDir) || filepath.Clean(*stateDir) != *stateDir {
+		return usageError(stderr, realizeUsage, "andaru realize")
+	}
+	rest := flags.Args()[1:]
+	if len(rest) != n || (n > 0 && !generationID.MatchString(rest[0])) {
+		return usageError(stderr, realizeUsage, "andaru realize")
 	}
 	if verb == "factory-reset" {
 		return factoryResetVerb(ctx, stderr)

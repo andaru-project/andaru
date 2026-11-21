@@ -59,12 +59,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("andaru-web", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	var origins originFlags
-	listen := flags.String("listen", "", "explicit non-wildcard IP address and port")
-	certificate := flags.String("tls-cert", "", "absolute TLS certificate path")
-	key := flags.String("tls-key", "", "absolute TLS private key path")
-	backend := flags.String("backend-socket", "", "absolute dedicated engine web socket path")
-	assets := flags.String("assets-dir", "", "absolute prebuilt static asset directory")
-	flags.Var(&origins, "origin", "exact HTTPS management origin; repeat for each origin")
+	listen := flags.String("listen", "", "")
+	certificate := flags.String("tls-cert", "", "")
+	key := flags.String("tls-key", "", "")
+	backend := flags.String("backend-socket", "", "")
+	assets := flags.String("assets-dir", "", "")
+	flags.Var(&origins, "origin", "")
 	flags.Usage = func() {}
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {

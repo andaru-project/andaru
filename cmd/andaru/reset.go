@@ -21,7 +21,7 @@ import (
 // Test seams. Production leaves them as they are.
 var (
 	resetDir      = reset.Dir
-	resetStateDir = "/var/lib/andaru"
+	resetStateDir = defaultStateDir
 	resetEnvSeam  func(socket string) reset.Env
 	resetEUID     = os.Geteuid
 )

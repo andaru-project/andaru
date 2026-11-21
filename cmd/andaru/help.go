@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
-	"strings"
+	"slices"
 	"text/tabwriter"
 )
 
@@ -40,13 +40,14 @@ and --web-gid unless /etc/andaru/engine-web-peer holds them.
 ` + engineUsage + `
 Options:
   --socket PATH        absolute local engine socket path
-                       (default /run/andaru/engine.sock)
+                       (default ` + defaultSocket + `)
   --state-dir PATH     absolute private state directory
-                       (default /var/lib/andaru)
+                       (default ` + defaultStateDir + `)
   --web-socket PATH    absolute dedicated web engine socket path
   --web-uid UID        exact non-root static web process UID
   --web-gid GID        exact non-root static web socket group GID
-  --web-origin ORIGIN  exact HTTPS management origin; repeat for each origin
+  --web-origin HTTPS_ORIGIN
+                       exact HTTPS management origin; repeat for each origin
 `
 
 const realizeUsage = `usage: andaru realize [--state-dir PATH] activate|confirm N
@@ -68,7 +69,7 @@ Verbs:
   factory-reset      Run or resume the factory reset ctl factory-reset planned
 
 Options:
-  --state-dir PATH  absolute private state directory (default /var/lib/andaru)
+  --state-dir PATH  absolute private state directory (default ` + defaultStateDir + `)
 `
 
 const ctlUsage = "usage: andaru ctl [--socket PATH] COMMAND [ARGUMENTS]\n"
@@ -91,8 +92,9 @@ var ctlCommands = []ctlCommand{
        andaru ctl config list|create COLLECTION
        andaru ctl config get COLLECTION ID
        andaru ctl config replace|delete --version V COLLECTION ID
-       andaru ctl config get|replace|delete SINGLETON
-       andaru ctl config order --version V LIST ID...
+       andaru ctl config get SINGLETON
+       andaru ctl config replace|delete --version V SINGLETON
+       andaru ctl config order LIST --version V ID...
        andaru ctl config changes
 `, `
 Commands:
@@ -221,8 +223,10 @@ Commands:
   password-reset   Set an account's password; asks for it twice
 
 Options:
-  --login LOGIN        login name, at most 64 bytes
-  --display-name NAME  display name, at most 512 bytes
+  --login LOGIN        login name, 3-64 characters: letters, digits, '.',
+                       '_' and '-', starting with a letter or digit; stored
+                       in lower case
+  --display-name NAME  display name, at most 128 characters
   --kind KIND          human or service
   --roles ID,...       role IDs, comma-separated
   --disabled           create the account disabled
@@ -247,7 +251,7 @@ Commands:
 
 Options:
   --account-id ID                 account the token belongs to
-  --name NAME                     token name, at most 512 bytes
+  --name NAME                     token name, 1-128 characters
   --scope CAP,...                 capabilities the token grants
   --expires-at RFC3339            expiry time
   --no-expiry                     never expire; revoke it explicitly
@@ -270,8 +274,8 @@ This command requires root.
 		"usage: andaru ctl factory-reset run|abort|status\n", `
 Commands:
   run     Delete every account, setting, saved version, generation and audit
-          record, and bring the box back on the network chosen beforehand;
-          interactive
+          record, and bring the box back on the stored recovery network,
+          else on the last LAN an administrator used; interactive
   status  Show whether a factory reset is in progress
   abort   Cancel a factory reset that has not begun stopping Andaru
 
@@ -289,53 +293,44 @@ func findCtlCommand(name string) (ctlCommand, bool) {
 }
 
 func ctlHelp(w io.Writer) {
-	fmt.Fprint(w, "Read and change Andaru's configuration through the running engine. Success\nis JSON on stdout; diagnostics go to stderr.\n\n"+ctlUsage+"\nCommands:\n")
+	fmt.Fprint(w, `Read and change Andaru's configuration through the running engine. Success
+is JSON on stdout, except for kept and factory-reset, which print text;
+diagnostics go to stderr.
+
+`+ctlUsage+`
+Commands:
+`)
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	for _, c := range ctlCommands {
 		fmt.Fprintf(tw, "  %s\t%s\n", c.name, c.summary)
 	}
 	tw.Flush()
-	fmt.Fprint(w, "\nOptions:\n  --socket PATH  absolute local engine socket path\n                 (default "+defaultSocket+")\n\nRun 'andaru ctl COMMAND --help' for the arguments of a command.\n")
+	fmt.Fprint(w, `
+Options:
+  --socket PATH  absolute local engine socket path
+                 (default `+defaultSocket+`)
+
+Run 'andaru ctl COMMAND --help' for the arguments of a command.
+`)
 }
 
-// ctlCommandHelp prints one command's help, or the command list for an unknown one.
-func ctlCommandHelp(w io.Writer, name string) {
-	c, ok := findCtlCommand(name)
-	if !ok {
-		ctlHelp(w)
-		return
-	}
-	fmt.Fprint(w, c.summary+".\n\n"+c.usage+c.details)
-}
+func (c ctlCommand) help() string { return c.summary + ".\n\n" + c.usage + c.details }
 
-// ctlUsageError prints the usage of the misused command and returns the usage exit code.
-func ctlUsageError(w io.Writer, name string) int {
-	if c, ok := findCtlCommand(name); ok {
-		fmt.Fprint(w, c.usage+"Run 'andaru ctl "+name+" --help' for details.\n")
-	} else {
-		fmt.Fprint(w, ctlUsage+"Run 'andaru ctl --help' for the list of commands.\n")
-	}
+// usageError prints a usage and the hint to its help, and returns the usage exit code.
+func usageError(w io.Writer, usage, command string) int {
+	fmt.Fprint(w, usage+"Run '"+command+" --help' for details.\n")
 	return 2
 }
 
-// boolFlags take no value, so a help flag after one is a request for help, not its value.
-var boolFlags = map[string]bool{"include-secrets": true, "include-credentials": true, "disabled": true, "no-expiry": true}
+// ctlUsageError prints the usage of the misused command, or of ctl for an unknown one.
+func ctlUsageError(w io.Writer, name string) int {
+	if c, ok := findCtlCommand(name); ok {
+		return usageError(w, c.usage, "andaru ctl "+name)
+	}
+	return usageError(w, ctlUsage, "andaru ctl")
+}
 
 func isHelp(arg string) bool { return arg == "-h" || arg == "-help" || arg == "--help" }
 
-// helpRequested reports a help flag among a command's arguments that is not the value of the flag before it.
-func helpRequested(args []string) bool {
-	for i, arg := range args {
-		if !isHelp(arg) {
-			continue
-		}
-		if i == 0 {
-			return true
-		}
-		prev := args[i-1]
-		if !strings.HasPrefix(prev, "-") || strings.Contains(prev, "=") || isHelp(prev) || boolFlags[strings.TrimLeft(prev, "-")] {
-			return true
-		}
-	}
-	return false
-}
+// helpRequested reports a help flag anywhere among the arguments, even where a flag's value belongs.
+func helpRequested(args []string) bool { return slices.ContainsFunc(args, isHelp) }

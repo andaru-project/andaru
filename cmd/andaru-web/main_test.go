@@ -10,6 +10,7 @@ import (
 func TestWebCommandIsDefaultOffAndRequiresCompleteConfiguration(t *testing.T) {
 	for _, args := range [][]string{
 		nil,
+		{"--bogus"},
 		{"--listen", "192.0.2.1:8443"},
 		{"--listen", "192.0.2.1:8443", "--tls-cert", "/cert", "--tls-key", "/key", "--origin", "https://router.example", "--backend-socket", "/socket"},
 	} {
