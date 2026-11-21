@@ -13,7 +13,8 @@ export const theme = createTheme({
   primaryShade: { light: 6, dark: 5 },
   // Text on a filled colour is black or white, whichever reads: white on Mantine's green or yellow is under 3:1.
   autoContrast: true,
-  luminanceThreshold: 0.25,
+  // 0.23 keeps blue and pink on black text in both schemes; the ink blue (0.09, 0.17) stays on white.
+  luminanceThreshold: 0.23,
   defaultRadius: 'sm',
 });
 
