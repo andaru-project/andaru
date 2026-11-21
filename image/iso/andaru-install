@@ -614,11 +614,14 @@ summary() {
 	else
 		echo "WAN: none yet"
 	fi
-	echo "SSH key: ${KEY_TYPE:-none}${KEY_COMMENT:+ $KEY_COMMENT}"
+	# The comment is cut at 40 characters, so the review box always holds the summary.
+	summary_comment=$(printf %.40s "$KEY_COMMENT")
+	[ "$summary_comment" = "$KEY_COMMENT" ] || summary_comment="$summary_comment..."
+	echo "SSH key: ${KEY_TYPE:-none}${summary_comment:+ $summary_comment}"
 }
 review() {
-	# Taller than yes_no, and scrolling: the summary has no fixed length (DNS servers, a long key comment).
-	ui --scrolltext --yesno "$(summary)
+	# Taller than yes_no, to hold the whole summary. Not --scrolltext: its text takes the focus, so Enter is not Yes.
+	ui --yesno "$(summary)
 
 Install?" 22 76 >/dev/null || return 1
 	[ -z "$DISK_FROM_CMDLINE" ] || return 0

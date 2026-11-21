@@ -825,12 +825,19 @@ umount"
       The output should include 'WAN: none yet'
       The output should include 'SSH key: ssh-ed25519 admin@laptop'
     End
-    It 'reviews in a scrolling box, so a long summary stays readable'
+    It 'reviews in a tall box that keeps Enter on Yes'
       ui() { echo "$@" >"$SHELLSPEC_TMPBASE/review-args"; return 1; }
       DISK=/dev/sda M_NIC=enp1s0 M_MAC=52:54:00:aa:bb:01 M4_MODE=none M6_MODE=none
       When call review
       The status should equal 1
-      The contents of file "$SHELLSPEC_TMPBASE/review-args" should start with '--scrolltext --yesno'
+      The contents of file "$SHELLSPEC_TMPBASE/review-args" should start with '--yesno'
+      The contents of file "$SHELLSPEC_TMPBASE/review-args" should end with '22 76'
+    End
+    It 'cuts a long key comment at 40 characters'
+      DISK=/dev/sda M_NIC=enp1s0 M_MAC=52:54:00:aa:bb:01 M4_MODE=none M6_MODE=none KEY_TYPE=ssh-ed25519
+      KEY_COMMENT=admin@laptop-with-a-rather-long-comment-xxxxxxxxxx
+      When call summary
+      The output should include 'SSH key: ssh-ed25519 admin@laptop-with-a-rather-long-comment-...'
     End
   End
 
