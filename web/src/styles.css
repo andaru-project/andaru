@@ -200,6 +200,53 @@ body {
   white-space: nowrap;
 }
 
+/* The traffic graph: as wide as its widget, a fixed height. Received is a solid line and sent a dashed one, so
+   the two are told apart without colour. */
+.traffic-graph {
+  background: var(--andaru-ground);
+  border-radius: var(--mantine-radius-default);
+  display: block;
+  height: 10rem;
+  width: 100%;
+}
+
+.traffic-graph polyline {
+  fill: none;
+  stroke-linejoin: round;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.traffic-received {
+  stroke: var(--mantine-primary-color-filled);
+}
+
+.traffic-sent {
+  stroke: var(--mantine-color-text);
+  stroke-dasharray: 6 4;
+}
+
+.traffic-axis {
+  stroke: var(--mantine-color-default-border);
+  vector-effect: non-scaling-stroke;
+}
+
+/* The places a delegated prefix went, under the uplink that holds it. */
+.plain-list.prefix-parts {
+  border-left: 2px solid var(--mantine-color-default-border);
+  gap: var(--mantine-spacing-xs);
+  margin-top: var(--mantine-spacing-xs);
+  padding-left: var(--mantine-spacing-sm);
+}
+
+.plain-list.prefix-parts:empty {
+  display: none;
+}
+
+.plain-list.tight {
+  gap: 0;
+}
+
 .plain-list {
   display: grid;
   gap: var(--mantine-spacing-sm);

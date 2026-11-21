@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { bytes, duration } from './format';
+import { bitrate, bytes, duration } from './format';
 
 it('writes a size in the largest unit that keeps it readable', () => {
   expect(bytes(0)).toBe('0 B');
@@ -26,4 +26,14 @@ it('writes a duration in its two largest units', () => {
   expect(duration(2 * 86400 + 5 * 60)).toBe('2 days');
   expect(duration(86400)).toBe('1 day');
   expect(duration(-5)).toBe('less than a minute');
+});
+
+it('writes a rate in thousands, as networks are sold', () => {
+  expect(bitrate(0)).toBe('0 bit/s');
+  expect(bitrate(999)).toBe('999 bit/s');
+  expect(bitrate(1200)).toBe('1.2 kbit/s');
+  expect(bitrate(850_000)).toBe('850 kbit/s');
+  expect(bitrate(999_960)).toBe('1.0 Mbit/s');
+  expect(bitrate(1_250_000_000)).toBe('1.3 Gbit/s');
+  expect(bitrate(40_000_000_000_000)).toBe('40000 Gbit/s');
 });

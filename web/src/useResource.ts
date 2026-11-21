@@ -39,6 +39,13 @@ export function useResource<T>(load: () => Promise<T>, onSessionLost: () => void
   return { ...state, reload, refresh };
 }
 
+// usePolledResource is a resource that is read again on a timer while the tab is visible.
+export function usePolledResource<T>(load: () => Promise<T>, onSessionLost: () => void, milliseconds: number) {
+  const resource = useResource(load, onSessionLost);
+  useVisiblePoll(resource.refresh, milliseconds);
+  return resource;
+}
+
 // useVisiblePoll calls reload on a timer and when the tab becomes visible, and never while it is hidden.
 export function useVisiblePoll(reload: () => void, milliseconds: number, enabled = true) {
   useEffect(() => {

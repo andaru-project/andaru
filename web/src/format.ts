@@ -20,4 +20,16 @@ export function duration(seconds: number) {
   return parts.slice(first, first + 2).filter(([count]) => count > 0).map(([count, unit]) => plural(count, unit)).join(' ');
 }
 
+// bitrate writes bits a second as networks are sold: in thousands, "850 kbit/s", "1.2 Mbit/s", "10 Gbit/s".
+export function bitrate(bitsPerSecond: number) {
+  const steps = ['bit/s', 'kbit/s', 'Mbit/s', 'Gbit/s'];
+  let value = bitsPerSecond, step = 0;
+  const shown = () => (step === 0 || value >= 9.95 ? Math.round(value) : Math.round(value * 10) / 10);
+  while (shown() >= 1000 && step < steps.length - 1) {
+    value /= 1000;
+    step++;
+  }
+  return `${step > 0 && shown() < 10 ? shown().toFixed(1) : shown()} ${steps[step]}`;
+}
+
 export const plural = (count: number, unit: string) => `${count} ${unit}${count === 1 ? '' : 's'}`;

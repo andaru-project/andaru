@@ -3,17 +3,10 @@ import { useCallback } from 'react';
 import { ApiClient, reportError } from '../api';
 import { stateColor, type Finding, type LinkStatus, type Preview, type SavedLink, type Segment, type Session, type Snapshot } from '../types';
 import { useResource } from '../useResource';
+import { kernelName } from '../zones';
+import { ZoneBadge } from './ZoneBadge';
 
 interface InterfacesScreenProps { api: ApiClient; session: Session; onSessionLost(): void }
-
-const namePrefix: Record<string, string> = { vlan: 'vl', bridge: 'br', bond: 'bo', pppoe: 'pp' };
-
-// kernelName mirrors internal/render: a virtual link's interface name derives from its ID, and an
-// Ethernet link is the interface the preview resolved from its permanent MAC.
-function kernelName(link: SavedLink, resolved: Map<string, string>) {
-  if (link.kind === 'ethernet') return resolved.get(link.id);
-  return namePrefix[link.kind] + link.id.slice(link.id.indexOf('_') + 1).replaceAll('-', '').slice(0, 12);
-}
 
 // These findings mean the renderer will not put the link on any device, whatever its name matches.
 const bindingCode = /^(HARDWARE_|NAME_COLLISION$|DEPENDENCY_UNAVAILABLE$)/;
@@ -88,7 +81,7 @@ export function InterfacesScreen({ api, session, onSessionLost }: InterfacesScre
             return (
               <Table.Tr key={key}>
                 <Table.Td data-label="Interface">
-                  {live ? <Text ff="monospace" fw={600}>{live.name}</Text> : <Text c="dimmed">No device</Text>}
+                  {live ? <Group gap="xs"><Text ff="monospace" fw={600}>{live.name}</Text><ZoneBadge name={segment && zoneName(segment.zone)} /></Group> : <Text c="dimmed">No device</Text>}
                   <Text c="dimmed" size="sm"><Text span ff="monospace" inherit>{live?.linkAddress || link?.permanentMac || 'no MAC'}</Text> · {live?.linkType ?? link?.kind} · MTU {live?.mtu ?? link?.mtu}</Text>
                 </Table.Td>
                 <Table.Td data-label="State">{live ? <Badge color={stateColor[live.operState] ?? 'gray'}>{live.operState.toLowerCase()}</Badge> : <Badge color={state === 'Disabled' ? 'gray' : 'red'}>{state}</Badge>}</Table.Td>

@@ -7,9 +7,14 @@ import { Link } from 'react-router';
 import { reportError, type ApiClient } from '../api';
 import { clock, pendingNotice, useCountdown, type ChangeState } from '../changes';
 import { arrange, moved } from '../dashboardLayout';
+import { zonesByInterface } from '../zones';
 import { stateColor, type DashboardLayout, type Preferences, type Session, type SystemInfo } from '../types';
-import { useResource, useVisiblePoll, type Resource } from '../useResource';
+import { usePolledResource, useResource, useVisiblePoll, type Resource } from '../useResource';
+import { Loaded } from './Loaded';
+import { ResourcesWidget } from './ResourcesWidget';
 import { SystemWidget } from './SystemWidget';
+import { TrafficWidget } from './TrafficWidget';
+import { ZoneBadge } from './ZoneBadge';
 
 interface DashboardScreenProps {
   api: ApiClient;
@@ -19,7 +24,9 @@ interface DashboardScreenProps {
   onSessionLost(): void;
 }
 
-interface WidgetProps { api: ApiClient; onSessionLost(): void }
+// zones says which zone each interface is in, by interface name; empty for an account that may not read the
+// saved configuration, or before it has been read.
+interface WidgetProps { api: ApiClient; zones: Map<string, string>; onSessionLost(): void }
 
 const pollMilliseconds = 10_000;
 
@@ -63,22 +70,6 @@ function Widget({ id, title, to, unlocked, onHide, children }: { id: string; tit
   );
 }
 
-// Loaded shows one widget's own loading and failure, so a widget that fails never blanks the others.
-function Loaded<T>({ resource, what, children }: { resource: Resource<T>; what: string; children(data: T): ReactNode }) {
-  return (
-    <Stack gap="xs">
-      {resource.error && <Text className="error-text" size="sm" role="alert">{resource.error}</Text>}
-      {resource.data !== undefined ? children(resource.data) : !resource.error && <Loader size="sm" aria-label={`Loading ${what}`} />}
-    </Stack>
-  );
-}
-
-function usePolled<T>(load: () => Promise<T>, onSessionLost: () => void) {
-  const resource = useResource(load, onSessionLost);
-  useVisiblePoll(resource.refresh, pollMilliseconds);
-  return resource;
-}
-
 // The shell polls the change state for its notice; the widget shows the same reading.
 function ChangesText({ state }: { state: ChangeState }) {
   const notice = pendingNotice(state);
@@ -91,8 +82,8 @@ function ChangesText({ state }: { state: ChangeState }) {
   return <Text>Applied, awaiting confirmation: rolls back at {notice.apply.deadline ? clock(notice.apply.deadline) : 'an unknown time'}{remaining && ` (${remaining} left)`}.</Text>;
 }
 
-function InterfacesWidget({ api, onSessionLost }: WidgetProps) {
-  const resource = usePolled(useCallback(() => api.links(), [api]), onSessionLost);
+function InterfacesWidget({ api, zones, onSessionLost }: WidgetProps) {
+  const resource = usePolledResource(useCallback(() => api.links(), [api]), onSessionLost, pollMilliseconds);
   return (
     <Loaded resource={resource} what="interfaces">
       {({ items }) => {
@@ -102,7 +93,7 @@ function InterfacesWidget({ api, onSessionLost }: WidgetProps) {
           <ul className="plain-list">
             {links.map((link) => (
               <li key={link.name}>
-                <Group gap="xs"><Text ff="monospace" fw={600}>{link.name}</Text><Badge color={stateColor[link.operState] ?? 'gray'}>{link.operState.toLowerCase()}</Badge></Group>
+                <Group gap="xs"><Text ff="monospace" fw={600}>{link.name}</Text><ZoneBadge name={zones.get(link.name)} /><Badge variant="light" color={stateColor[link.operState] ?? 'gray'}>{link.operState.toLowerCase()}</Badge></Group>
                 {link.addresses.filter((address) => address.scope !== 'link').map((address) => <Text key={address.address} ff="monospace" size="sm">{address.address}/{address.prefixLength}</Text>)}
               </li>
             ))}
@@ -113,8 +104,19 @@ function InterfacesWidget({ api, onSessionLost }: WidgetProps) {
   );
 }
 
-function PrefixesWidget({ api, onSessionLost }: WidgetProps) {
-  const resource = usePolled(useCallback(() => api.prefixes(), [api]), onSessionLost);
+// One line for an interface and its prefix, the same for the uplink that holds the delegation and for every
+// place a part of it went: who, in which zone, what.
+function PrefixLine({ name, zone, note, children }: { name: string; zone: string | undefined; note?: string; children: ReactNode }) {
+  return (
+    <div>
+      <Group gap="xs"><Text ff="monospace" fw={600}>{name}</Text><ZoneBadge name={zone} />{note && <Text size="sm" c="dimmed">{note}</Text>}</Group>
+      {children}
+    </div>
+  );
+}
+
+function PrefixesWidget({ api, zones, onSessionLost }: WidgetProps) {
+  const resource = usePolledResource(useCallback(() => api.prefixes(), [api]), onSessionLost, pollMilliseconds);
   return (
     <Loaded resource={resource} what="IPv6 prefixes">
       {({ wans }) => {
@@ -123,9 +125,14 @@ function PrefixesWidget({ api, onSessionLost }: WidgetProps) {
           <ul className="plain-list">
             {wans.map((wan) => (
               <li key={wan.interface}>
-                <Group gap="xs"><Text ff="monospace" fw={600}>{wan.interface}</Text>{wan.current ? <Text ff="monospace">{wan.current.prefix}</Text> : <Badge color="red">no prefix held</Badge>}</Group>
+                <PrefixLine name={wan.interface} zone={zones.get(wan.interface)} note="delegated by the provider">
+                  {wan.current ? <Text ff="monospace" size="sm">{wan.current.prefix}</Text> : <Text className="error-text" size="sm">no prefix held</Text>}
+                </PrefixLine>
                 {/* A segment's subnet ID and a pool's are separate number spaces, so the prefix is the key. */}
-                {[...wan.segments, ...wan.pools].filter((place) => place.prefix).map((place) => <Text key={place.prefix} ff="monospace" size="sm">{place.prefix} on {place.interface}</Text>)}
+                <ul className="plain-list prefix-parts">
+                  {wan.segments.filter((place) => place.prefix).map((place) => <li key={place.prefix}><PrefixLine name={place.interface} zone={zones.get(place.interface)}><Text ff="monospace" size="sm">{place.prefix}</Text></PrefixLine></li>)}
+                  {wan.pools.filter((place) => place.prefix).map((place) => <li key={place.prefix}><PrefixLine name={place.interface} zone={zones.get(place.interface)} note="pool for its clients' networks"><Text ff="monospace" size="sm">{place.prefix}</Text></PrefixLine></li>)}
+                </ul>
                 {wan.notFitting.length > 0 && <Text className="error-text" size="sm">No room for: {wan.notFitting.join(', ')}</Text>}
               </li>
             ))}
@@ -136,12 +143,25 @@ function PrefixesWidget({ api, onSessionLost }: WidgetProps) {
   );
 }
 
+const noZones = new Map<string, string>();
+
 export function DashboardScreen({ api, session, changes, system, onSessionLost }: DashboardScreenProps) {
+  // Which zone each interface is in comes from the saved configuration, for accounts that may read it. It is
+  // read once: it changes with a save, which is made on another page.
+  const canReadConfig = session.capabilities.includes('configuration.read');
+  const zoneMap = useResource(useCallback(async () => {
+    if (!canReadConfig) return noZones;
+    const snapshot = await api.config();
+    return zonesByInterface(snapshot, await api.previewNetwork(snapshot.savedVersion));
+  }, [api, canReadConfig]), onSessionLost);
+  const zones = zoneMap.data ?? noZones;
   const all: Array<{ id: string; title: string; to?: string; capability: string; body: ReactNode }> = [
     { id: 'system', title: 'System', capability: 'status.read', body: <Loaded resource={system} what="the system description">{(loaded) => loaded && <SystemWidget info={loaded.info} loadedAt={loaded.loadedAt} />}</Loaded> },
+    { id: 'resources', title: 'Resources', capability: 'status.read', body: <ResourcesWidget api={api} onSessionLost={onSessionLost} /> },
+    { id: 'traffic', title: 'Network activity', to: '/network/interfaces', capability: 'status.read', body: <TrafficWidget api={api} zones={zones} onSessionLost={onSessionLost} /> },
     { id: 'changes', title: 'Changes', to: '/changes', capability: 'configuration.read', body: <Loaded resource={changes} what="changes">{(state) => state && <ChangesText state={state} />}</Loaded> },
-    { id: 'interfaces', title: 'Interfaces', to: '/network/interfaces', capability: 'status.read', body: <InterfacesWidget api={api} onSessionLost={onSessionLost} /> },
-    { id: 'prefixes', title: 'IPv6 prefixes', to: '/network/interfaces', capability: 'status.read', body: <PrefixesWidget api={api} onSessionLost={onSessionLost} /> },
+    { id: 'interfaces', title: 'Interfaces', to: '/network/interfaces', capability: 'status.read', body: <InterfacesWidget api={api} zones={zones} onSessionLost={onSessionLost} /> },
+    { id: 'prefixes', title: 'IPv6 prefixes', to: '/network/interfaces', capability: 'status.read', body: <PrefixesWidget api={api} zones={zones} onSessionLost={onSessionLost} /> },
   ];
   const allowed = all.filter((widget) => session.capabilities.includes(widget.capability));
 
