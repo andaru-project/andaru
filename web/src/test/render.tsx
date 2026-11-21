@@ -4,6 +4,7 @@ import type { ReactElement } from 'react';
 
 export * from '@testing-library/react';
 
+// The provider is a wrapper, so rerender keeps it.
 export function render(ui: ReactElement) {
-  return testingRender(<MantineProvider>{ui}</MantineProvider>);
+  return testingRender(ui, { wrapper: MantineProvider });
 }

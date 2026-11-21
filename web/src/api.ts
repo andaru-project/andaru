@@ -3,18 +3,24 @@ import type {
   Apply,
   AuditEvent,
   ErrorDetail,
+  Finding,
+  History,
+  LinkStatus,
   Page,
+  Preview,
   Role,
   SavedObject,
   SavedRolePage,
   Session,
+  Snapshot,
   Token,
   TokenIssueResponse,
   User,
+  VersionDetail,
 } from './types';
 
 interface ErrorEnvelope {
-  error?: { code?: string; message?: string; details?: ErrorDetail[] };
+  error?: { code?: string; message?: string; details?: ErrorDetail[]; findings?: Finding[] };
 }
 
 export class ApiError extends Error {
@@ -23,6 +29,8 @@ export class ApiError extends Error {
     public readonly code: string,
     message: string,
     public readonly details: ErrorDetail[] = [],
+    // findings explain a refused apply (422 APPLY_REFUSED) in the preview's vocabulary.
+    public readonly findings: Finding[] = [],
   ) {
     super(message);
     this.name = 'ApiError';
@@ -37,12 +45,19 @@ export function apiErrorMessage(error: unknown): string {
   return 'The request could not be completed.';
 }
 
+// reportError signs the session out on a 401 and shows any other error's message.
+export function reportError(error: unknown, onSessionLost: () => void, setMessage: (message: string) => void) {
+  if (error instanceof ApiError && error.status === 401) onSessionLost();
+  else setMessage(apiErrorMessage(error));
+}
+
 function operationID() {
   return crypto.randomUUID();
 }
 
 export class ApiClient {
-  constructor(private csrfToken = '') {}
+  // onConnection hears whether each request got a response, for the shell's connection state.
+  constructor(private csrfToken = '', private readonly onConnection?: (connected: boolean) => void) {}
 
   setCSRFToken(token: string) {
     this.csrfToken = token;
@@ -62,9 +77,11 @@ export class ApiClient {
     try {
       response = await fetch(path, { ...init, headers, credentials: 'same-origin', cache: 'no-store' });
     } catch {
+      this.onConnection?.(false);
       throw new ApiError(0, 'DISCONNECTED', 'Cannot reach the Andaru service. Check the connection and try again.');
     }
 
+    this.onConnection?.(true);
     if (response.status === 204) return undefined as T;
     let body: unknown;
     try {
@@ -77,7 +94,7 @@ export class ApiClient {
       const code = envelope?.error?.code ?? `HTTP_${response.status}`;
       const message = envelope?.error?.message ?? 'The server refused the request.';
       if (response.status === 401) this.clearSession();
-      throw new ApiError(response.status, code, message, envelope?.error?.details ?? []);
+      throw new ApiError(response.status, code, message, envelope?.error?.details ?? [], envelope?.error?.findings ?? []);
     }
     return body as T;
   }
@@ -190,10 +207,33 @@ export class ApiClient {
     return this.request<Applies>('/api/v1/applies');
   }
 
-  apply(savedVersion: string) {
+  apply(savedVersion: string, confirmTimeoutSeconds: number) {
     return this.request<Apply>('/api/v1/applies', {
-      method: 'POST', body: JSON.stringify({ savedVersion, confirmTimeoutSeconds: 120 }),
+      method: 'POST', body: JSON.stringify({ savedVersion, confirmTimeoutSeconds }),
     }, true);
+  }
+
+  versions(limit: number, before = '') {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (before) query.set('before', before);
+    return this.request<History>(`/api/v1/versions?${query}`);
+  }
+
+  version(id: string) {
+    return this.request<VersionDetail>(`/api/v1/versions/${encodeURIComponent(id)}`);
+  }
+
+  previewNetwork(savedVersion = '') {
+    const query = savedVersion ? `?${new URLSearchParams({ savedVersion })}` : '';
+    return this.request<Preview>(`/api/v1/preview/network${query}`);
+  }
+
+  links() {
+    return this.request<{ items: LinkStatus[] }>('/api/v1/status/links');
+  }
+
+  config() {
+    return this.request<Snapshot>('/api/v1/config');
   }
 
   finishApply(id: string, action: 'confirmation' | 'rollback') {

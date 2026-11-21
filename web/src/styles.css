@@ -10,17 +10,36 @@ body {
   background: light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-8));
 }
 
-.app-header {
-  border-bottom: 1px solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4));
-  background: light-dark(var(--mantine-color-white), var(--mantine-color-dark-7));
-  padding-block: var(--mantine-spacing-md);
+/* The CSP (style-src 'self') blocks the <style> element AppShell writes its sizes into.
+   These rules carry the sizes Shell.tsx passes: header 56px, navbar 240px, collapsed below 900px
+   (Mantine's own query for that breakpoint is max-width 899.9px, 56.24375em). */
+.app-shell {
+  --app-shell-header-height: 3.5rem;
+  --app-shell-header-offset: 3.5rem;
+  --app-shell-navbar-width: 15rem;
+  --app-shell-navbar-offset: 15rem;
+  --app-shell-padding: var(--mantine-spacing-md);
+}
+
+@media (max-width: 56.24375em) {
+  .app-shell {
+    --app-shell-navbar-width: 100%;
+    --app-shell-navbar-offset: 0px;
+    --app-shell-navbar-transform: translateX(calc(var(--app-shell-navbar-width) * -1));
+  }
+
+  .app-shell[data-nav-open] {
+    --app-shell-navbar-transform: none;
+  }
+}
+
+@media (min-width: 56.25em) {
+  .nav-burger {
+    display: none;
+  }
 }
 
 @media (max-width: 36em) {
-  .app-header .mantine-Group-root {
-    align-items: flex-start;
-  }
-
   table {
     min-width: 48rem;
   }

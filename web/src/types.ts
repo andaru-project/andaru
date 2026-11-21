@@ -84,13 +84,13 @@ export interface SavedRolePage {
 export interface Apply {
   id: string;
   savedVersion: string;
-  state: string;
+  state: 'activating' | 'awaiting_confirmation' | 'confirmed' | 'rolled_back' | 'failed';
   previous: string | null;
   deadline?: string;
   reason: string;
   createdAt: string;
   confirmTimeoutSeconds: number;
-  files: Array<{ path: string; mode: number }>;
+  files: Array<{ path: string; mode: string }>;
 }
 
 export interface Applies {
@@ -101,4 +101,74 @@ export interface Applies {
 export interface ErrorDetail {
   path?: string;
   message: string;
+}
+
+export interface VersionInfo {
+  id: string;
+  parentId?: string;
+  createdAt: string;
+  actor: string;
+  changedObjectCount: number;
+}
+
+export interface History {
+  state: 'saved';
+  items: VersionInfo[];
+  nextBefore?: string;
+}
+
+export interface VersionDetail extends VersionInfo {
+  state: 'saved';
+  // The whole declaration view; the UI only displays it.
+  value: Record<string, unknown>;
+  changes: Array<{ collection: string; id: string; created?: boolean; deleted?: boolean }>;
+}
+
+export interface Finding {
+  severity: 'error' | 'warning';
+  code: string;
+  path: string;
+  message: string;
+}
+
+export interface Preview {
+  state: 'preview';
+  savedVersion: string;
+  realizable: boolean;
+  resolved: Array<{ link: string; interface: string }>;
+  findings: Finding[];
+}
+
+export interface LinkStatus {
+  ifIndex: number;
+  name: string;
+  linkType: string;
+  mtu: number;
+  operState: string;
+  flags: string[];
+  linkAddress?: string;
+  addresses: Array<{ family: 'ipv4' | 'ipv6'; address: string; prefixLength: number; scope: string }>;
+}
+
+export interface SavedLink {
+  id: string;
+  name: string;
+  kind: 'ethernet' | 'vlan' | 'bridge' | 'bond' | 'pppoe';
+  mtu: number;
+  enabled: boolean;
+  permanentMac?: string;
+}
+
+export interface Segment {
+  id: string;
+  name: string;
+  link: string;
+  zone: string;
+  addressing: { ipv4: { mode: string }; ipv6: { mode: string } };
+}
+
+export interface Snapshot {
+  state: 'saved';
+  savedVersion: string;
+  value: { links: SavedLink[]; segments: Segment[]; zones: Array<{ id: string; name: string }>; management?: { segment: string } };
 }
