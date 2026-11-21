@@ -200,6 +200,7 @@ body {
 
 /* Below 900px fingers do the pointing: every control is at least 44px tall. */
 @media (max-width: 56.24375em) {
+  .mantine-ActionIcon-root,
   .mantine-Button-root,
   .mantine-CloseButton-root,
   .mantine-NavLink-root,
@@ -207,6 +208,10 @@ body {
   .mantine-Input-input,
   .mantine-Menu-item {
     min-height: 2.75rem;
+  }
+
+  .mantine-ActionIcon-root {
+    min-width: 2.75rem;
   }
 }
 
