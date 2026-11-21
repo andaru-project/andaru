@@ -14,7 +14,7 @@ import { Address } from './Address';
 import { Loaded } from './Loaded';
 import { ResourcesWidget } from './ResourcesWidget';
 import { SystemWidget } from './SystemWidget';
-import { TrafficWidget } from './TrafficWidget';
+import { TrafficWidget, type TrafficChoice } from './TrafficWidget';
 import { ZoneBadge } from './ZoneBadge';
 
 interface DashboardScreenProps {
@@ -144,10 +144,11 @@ export function DashboardScreen({ api, session, system, onSessionLost }: Dashboa
   useVisiblePoll(zoneMap.refresh, pollMilliseconds, !zoneMap.data);
   const zones = zoneMap.data ?? noZones;
   const zonesKnown = zoneMap.data !== undefined;
+  const trafficChoice = useState<TrafficChoice>({});
   const all: Array<{ id: string; title: string; to?: string; more?: string; capability: string; body: ReactNode }> = [
     { id: 'system', title: 'System', to: '/system/details', more: 'Details', capability: 'status.read', body: <Loaded resource={system} what="the system description">{(loaded) => loaded && <SystemWidget info={loaded.info} loadedAt={loaded.loadedAt} />}</Loaded> },
     { id: 'resources', title: 'Resources', capability: 'status.read', body: <ResourcesWidget api={api} onSessionLost={onSessionLost} /> },
-    { id: 'traffic', title: 'Network activity', capability: 'status.read', body: <TrafficWidget api={api} zones={zones} zonesKnown={zonesKnown} onSessionLost={onSessionLost} /> },
+    { id: 'traffic', title: 'Network activity', capability: 'status.read', body: <TrafficWidget api={api} zones={zones} zonesKnown={zonesKnown} choice={trafficChoice} onSessionLost={onSessionLost} /> },
     { id: 'interfaces', title: 'Interfaces', to: '/network/interfaces', more: 'Manage', capability: 'status.read', body: <InterfacesWidget api={api} zones={zones} onSessionLost={onSessionLost} /> },
     { id: 'prefixes', title: 'IPv6 prefixes', capability: 'status.read', body: <PrefixesWidget api={api} zones={zones} onSessionLost={onSessionLost} /> },
   ];

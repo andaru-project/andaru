@@ -1,5 +1,5 @@
 import { Button, ComboboxChevron, Group, Menu, Stack, Table, Text, VisuallyHidden } from '@mantine/core';
-import { useCallback, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
+import { useCallback, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction, type KeyboardEvent, type PointerEvent } from 'react';
 import type { ApiClient } from '../api';
 import { bitrate } from '../format';
 import { chosenLabel, figures, firstShown, hourMilliseconds, merge, newest, rates, thin, type RatePoint } from '../traffic';
@@ -164,7 +164,10 @@ export function TrafficView({ traffic, zones, selected, live, onSelect }: { traf
   );
 }
 
-export function TrafficWidget({ api, zones, zonesKnown, onSessionLost }: { api: ApiClient; zones: Map<string, string>; zonesKnown: boolean; onSessionLost(): void }) {
+// Which interfaces show: the user's choice, and the first choice made for them.
+export interface TrafficChoice { selected?: string[]; first?: { names: string[]; zoned: boolean } }
+
+export function TrafficWidget({ api, zones, zonesKnown, choice, onSessionLost }: { api: ApiClient; zones: Map<string, string>; zonesKnown: boolean; choice?: [TrafficChoice, Dispatch<SetStateAction<TrafficChoice>>]; onSessionLost(): void }) {
   // The hour is read once; after that the box is asked only for what came after the newest reading held.
   const held = useRef<Traffic>(undefined);
   const resource = usePolledResource(useCallback(async () => {
@@ -176,9 +179,12 @@ export function TrafficWidget({ api, zones, zonesKnown, onSessionLost }: { api: 
   // more than two interfaces to choose among: the busiest interface may change at every poll, and a graph must
   // not change under the eye by itself. A first choice made before the zones were known is made once more when
   // they are, and then stands.
-  const [selected, setSelected] = useState<string[]>();
-  const [first, setFirst] = useState<{ names: string[]; zoned: boolean }>();
+  // The dashboard keeps the choice for its widget: a widget that changes column is mounted anew, and what the
+  // user ticked must not go with the old one.
+  const own = useState<TrafficChoice>({});
+  const [{ selected, first }, setChoice] = choice ?? own;
+  const setSelected = (names: string[]) => setChoice((held) => ({ ...held, selected: names }));
   const traffic = resource.data;
-  if (traffic && traffic.interfaces.length > 2 && (!first || (!first.zoned && zonesKnown))) setFirst({ names: firstShown(traffic, zones), zoned: zonesKnown });
+  if (traffic && traffic.interfaces.length > 2 && (!first || (!first.zoned && zonesKnown))) setChoice((held) => ({ ...held, first: { names: firstShown(traffic, zones), zoned: zonesKnown } }));
   return <Loaded resource={resource} what="traffic">{(loaded) => <TrafficView traffic={loaded} zones={zones} selected={selected ?? first?.names ?? firstShown(loaded, zones)} live={resource.error === ''} onSelect={setSelected} />}</Loaded>;
 }
