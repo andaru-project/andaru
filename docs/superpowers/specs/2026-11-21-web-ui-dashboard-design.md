@@ -66,17 +66,22 @@ This document amends the [shell design](2026-11-21-web-ui-shell-design.md): its 
     - **Services:** DHCP, DNS and the packet filter: running or not, and since when.
     - **Recent activity:** the last few audit events (`audit/events`, served), for accounts with `audit.read`.
 
-11. **The engine gains two read-only resources** under a new `system.read` capability, which both built-in roles hold.
+11. **The engine gains three read-only resources** under a new `system.read` capability, which both built-in roles hold.
     - **`system/info`,** what changes rarely: the System widget's identity, hardware, features, level, microcode, vulnerabilities and update state. Sources are the kernel's own files (`/proc/cpuinfo`, `/sys/class/dmi/id`, `/sys/devices/system/cpu/vulnerabilities`) and `bootc status`. The engine reads them; no helper runs.
-    - **`system/usage`,** what changes every second: CPU times, memory, swap, file systems, connection tracking, temperatures, and each interface's byte and packet counters, with the time of the reading.
+    - **`system/usage`,** what changes every second: CPU times, memory, swap, file systems, connection tracking and temperatures, with the time of the reading.
+    - **`system/traffic`,** the traffic history of call 12.
     - The serial number and other identifiers of the board are left out: a screenshot of the dashboard should be safe to post.
     - The header takes the hostname and version from `system/info`.
 
-12. **Rates are worked out in the browser** from two readings of `system/usage`. The graph covers the minutes the page has been open and starts empty. A history kept by the engine belongs with the statistics work ([#15](https://github.com/andaru-project/andaru/issues/15)); this slice adds no store.
+12. **The engine keeps one hour of traffic history** (owner, 2026-11-21), so the graph is drawn in full when the dashboard loads.
+    - Every 30 seconds the engine records each network adapter's counters: bytes, packets, errors and drops, each way. It keeps the last 120 readings per adapter, which is the hour.
+    - The history lives in the engine's memory. It starts again when the engine or the box restarts, and nothing is written to disk. Longer history belongs with the statistics work ([#15](https://github.com/andaru-project/andaru/issues/15)).
+    - `system/traffic` serves the readings with their times. The browser works out the rates from neighbouring readings, so a counter that restarts shows as a gap, never as a spike.
+    - An adapter that disappears keeps its readings until they age out; a new one starts empty.
     - The graph is an SVG the page draws itself: one widget does not justify a chart library, and the content security policy allows SVG elements.
     - The graph has a text equivalent: the current, average and peak rates, in words, beneath it.
 
-13. **Refresh is by polling,** only while the page is visible: `system/usage` every 2 seconds, everything else every 10. Server-sent events remain a later slice.
+13. **Refresh is by polling,** only while the page is visible: `system/usage` every 2 seconds, `system/traffic` every 30, everything else every 10. Server-sent events remain a later slice.
 
 14. **The first slice has a fixed layout.** Hiding and reordering widgets come second. They need somewhere to keep each account's choice, and no per-account preference store exists yet.
 
@@ -85,7 +90,7 @@ This document amends the [shell design](2026-11-21-web-ui-shell-design.md): its 
 16. **Slices.** The work is too large for one change:
     - first, the navigation tree and the narrow-screen layout, with a dashboard of the widgets already served;
     - second, `system/info` and the System widget;
-    - third, `system/usage` with Resources and Network activity;
+    - third, `system/usage` and `system/traffic`, with Resources and Network activity;
     - the update check arrives with the upgrade slice, since the check and the upgrade page share their mechanism.
 
 ## Add-on widgets: a direction, not a design
