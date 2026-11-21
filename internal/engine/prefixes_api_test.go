@@ -40,7 +40,7 @@ func TestPrefixesStatus(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%d %s", rec.Code, rec.Body)
 		}
-		validPrefixesResponse(t, rec.Body.Bytes())
+		validResponse(t, "PrefixesResponse", rec.Body.Bytes())
 		var body map[string]any
 		_ = json.Unmarshal(rec.Body.Bytes(), &body)
 		return body["wans"].([]any)[0].(map[string]any)
@@ -70,7 +70,8 @@ func TestPrefixesStatus(t *testing.T) {
 	}
 }
 
-func validPrefixesResponse(t *testing.T, body []byte) {
+// validResponse checks a response body against the schema the engine serves for it.
+func validResponse(t *testing.T, schema string, body []byte) {
 	t.Helper()
 	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(openAPIDocument))
 	if err != nil {
@@ -80,7 +81,7 @@ func validPrefixesResponse(t *testing.T, body []byte) {
 	if err := c.AddResource("openapi.json", doc); err != nil {
 		t.Fatal(err)
 	}
-	s, err := c.Compile("openapi.json#/components/schemas/PrefixesResponse")
+	s, err := c.Compile("openapi.json#/components/schemas/" + schema)
 	if err != nil {
 		t.Fatal(err)
 	}

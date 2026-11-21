@@ -174,6 +174,49 @@
         }
       }
     },
+    "/api/v1/status/system": {
+      "get": {
+        "operationId": "readSystem",
+        "summary": "Read what the box is: its name, hardware, CPU features and the Andaru version",
+        "description": "Read from the kernel's own files under /proc and /sys at the time of the request. What a machine does not report reads as an empty string or an empty list.",
+        "responses": {
+          "200": {
+            "description": "The system description",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/InventoryUnavailable"
+          }
+        }
+      },
+      "head": {
+        "operationId": "headSystem",
+        "summary": "Check the system description without returning a body",
+        "responses": {
+          "200": {
+            "description": "The description was read; no body"
+          },
+          "403": {
+            "description": "Peer denied; no body"
+          },
+          "503": {
+            "description": "The description is unavailable; no body"
+          }
+        }
+      }
+    },
     "/api/v1/status/links": {
       "get": {
         "operationId": "listObservedLinks",
@@ -5506,6 +5549,211 @@
           "identityRevision": {"type": "integer", "minimum": 1},
           "unresolvedSecrets": {"type": "array", "items": {"type": "string"}},
           "replayed": {"type": "boolean"}
+        }
+      },
+      "SystemResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "hostname",
+          "kernel",
+          "architecture",
+          "time",
+          "bootedAt",
+          "memoryBytes",
+          "cpu",
+          "hardware",
+          "guest",
+          "iommu"
+        ],
+        "properties": {
+          "version": {
+            "type": "string",
+            "description": "The Andaru version that serves this"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "kernel": {
+            "type": "string"
+          },
+          "architecture": {
+            "type": "string",
+            "description": "As the kernel names it, such as x86_64 or aarch64"
+          },
+          "time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The box's clock at the request"
+          },
+          "bootedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the kernel started, the kernel's own whole second; null when it does not say"
+          },
+          "memoryBytes": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The memory the kernel has to use, a little less than what is installed"
+          },
+          "guest": {
+            "type": "string",
+            "description": "The hypervisor when the box is a virtual machine; empty on hardware"
+          },
+          "iommu": {
+            "type": "boolean",
+            "description": "Whether the kernel has devices behind an active IOMMU"
+          },
+          "cpu": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "model",
+              "cores",
+              "threads",
+              "microcode",
+              "level",
+              "features",
+              "vulnerabilities"
+            ],
+            "properties": {
+              "model": {
+                "type": "string",
+                "description": "Empty where the kernel names none, as on most arm64 machines"
+              },
+              "cores": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Online cores; equal to threads where the kernel names no cores"
+              },
+              "threads": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Online threads"
+              },
+              "microcode": {
+                "type": "string",
+                "description": "The revision the kernel loaded, not the one on disk"
+              },
+              "level": {
+                "type": "string",
+                "enum": [
+                  "",
+                  "x86-64-v1",
+                  "x86-64-v2",
+                  "x86-64-v3",
+                  "x86-64-v4"
+                ],
+                "description": "The x86-64 microarchitecture level; empty on other architectures"
+              },
+              "features": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "cryptography",
+                  "security",
+                  "virtualization"
+                ],
+                "description": "The CPU features a firewall gains from, each by its usual name and only when every online processor has it",
+                "properties": {
+                  "cryptography": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "security": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "virtualization": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "vulnerabilities": {
+                "type": "array",
+                "description": "The kernel's own report, one entry per known CPU vulnerability",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "name",
+                    "status",
+                    "state"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "not_affected",
+                        "mitigated",
+                        "vulnerable",
+                        "unknown"
+                      ],
+                      "description": "A reading of the status: vulnerable when the kernel says so anywhere in the line, unknown for anything it words otherwise"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "hardware": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "vendor",
+              "product",
+              "serial",
+              "boardVendor",
+              "board",
+              "biosVendor",
+              "biosVersion",
+              "biosDate"
+            ],
+            "properties": {
+              "vendor": {
+                "type": "string"
+              },
+              "product": {
+                "type": "string"
+              },
+              "serial": {
+                "type": "string"
+              },
+              "boardVendor": {
+                "type": "string"
+              },
+              "board": {
+                "type": "string"
+              },
+              "biosVendor": {
+                "type": "string"
+              },
+              "biosVersion": {
+                "type": "string"
+              },
+              "biosDate": {
+                "type": "string"
+              }
+            },
+            "description": "From the firmware's DMI table. The serial is the product's, or the board's when the product has none. A field the vendor left as a placeholder is empty"
+          }
         }
       },
       "PrefixesResponse": {

@@ -66,22 +66,23 @@ This document amends the [shell design](2026-11-21-web-ui-shell-design.md): its 
     - **Services:** DHCP, DNS and the packet filter: running or not, and since when.
     - **Recent activity:** the last few audit events (`audit/events`, served), for accounts with `audit.read`.
 
-11. **The engine gains three read-only resources** under a new `system.read` capability, which both built-in roles hold.
-    - **`system/info`,** what changes rarely: the System widget's identity, hardware, features, level, microcode, vulnerabilities and update state. Sources are the kernel's own files (`/proc/cpuinfo`, `/sys/class/dmi/id`, `/sys/devices/system/cpu/vulnerabilities`) and `bootc status`. The engine reads them; no helper runs.
-    - **`system/usage`,** what changes every second: CPU times, memory, swap, file systems, connection tracking and temperatures, with the time of the reading.
-    - **`system/traffic`,** the traffic history of call 12.
+11. **The engine gains three read-only resources,** beside `status/links` and `status/prefixes` and under the same `status.read` capability, which both built-in roles hold. A new capability would change what the built-in roles are for no gain: who may see the interfaces may see the machine.
+    - **`status/system`,** what changes rarely: the System widget's identity, hardware, features, level, microcode, vulnerabilities and update state. Sources are the kernel's own files (`/proc/cpuinfo`, `/sys/class/dmi/id`, `/sys/devices/system/cpu/vulnerabilities`) and `bootc status`. The engine reads them; no helper runs.
+    - **`status/usage`,** what changes every second: CPU times, memory, swap, file systems, connection tracking and temperatures, with the time of the reading.
+    - **`status/traffic`,** the traffic history of call 12.
     - The board's serial number is served and shown with the hardware (owner, 2026-11-21).
-    - The header takes the hostname and version from `system/info`.
+    - The header takes the hostname and version from `status/system`.
+    - `status/system` first serves what the kernel's files say and the Andaru version. The image, its verification and the update state come with the upgrade slice, which owns `bootc`; safe mode comes when the engine has such a state to report. Two points of call 17 wait for a source: PAN is not among the features the arm64 kernel lists, and nothing read here says whether it started at EL2. Memory is what the kernel has to use, a little less than what is installed.
 
 12. **The engine keeps one hour of traffic history** (owner, 2026-11-21), so the graph is drawn in full when the dashboard loads.
     - Every 30 seconds the engine records each network adapter's counters: bytes, packets, errors and drops, each way. It keeps the last 120 readings per adapter, which is the hour.
     - The history lives in the engine's memory. It starts again when the engine or the box restarts, and nothing is written to disk. Longer history belongs with the statistics work ([#15](https://github.com/andaru-project/andaru/issues/15)).
-    - `system/traffic` serves the readings with their times. The browser works out the rates from neighbouring readings, so a counter that restarts shows as a gap, never as a spike.
+    - `status/traffic` serves the readings with their times. The browser works out the rates from neighbouring readings, so a counter that restarts shows as a gap, never as a spike.
     - An adapter that disappears keeps its readings until they age out; a new one starts empty.
     - The graph is an SVG the page draws itself: one widget does not justify a chart library, and the content security policy allows SVG elements.
     - The graph has a text equivalent: the current, average and peak rates, in words, beneath it.
 
-13. **Refresh is by polling,** only while the page is visible: `system/usage` every 2 seconds, `system/traffic` every 30, everything else every 10. Server-sent events remain a later slice.
+13. **Refresh is by polling,** only while the page is visible: `status/usage` every 2 seconds, `status/traffic` every 30, everything else every 10. Server-sent events remain a later slice.
 
 14. **Widgets can be hidden and reordered from the first slice** (owner, 2026-11-21).
     - The dashboard uses the padlock and grip of the firewall rules ([firewall design](2026-11-21-web-ui-firewall-design.md), call 4). Locked, it is plain. Unlocked, each widget shows its corner grip and a Hide button, and a list of hidden widgets offers Show.
@@ -94,8 +95,8 @@ This document amends the [shell design](2026-11-21-web-ui-shell-design.md): its 
 
 16. **Slices** (order agreed by the owner, 2026-11-21). The work is too large for one change:
     - first, the navigation tree and the narrow-screen layout, with a dashboard of the widgets already served, and the per-account preferences that keep its layout;
-    - second, `system/info` and the System widget;
-    - third, `system/usage` and `system/traffic`, with Resources and Network activity;
+    - second, `status/system` and the System widget;
+    - third, `status/usage` and `status/traffic`, with Resources and Network activity;
     - the update check arrives with the upgrade slice, since the check and the upgrade page share their mechanism.
 
 17. **CPU features, and why each is shown** (owner, 2026-11-21). The lines show names only. An information button beside them opens the reasons below, for whoever wants them; it works by tap and by keyboard. A feature the CPU lacks is not listed. The list follows the platform.

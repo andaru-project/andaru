@@ -49,6 +49,7 @@ func buildEngineRoutes() []routeCapability {
 	read := []string{http.MethodGet, http.MethodHead}
 	add(authz.StatusRead, "/api/v1/status/prefixes", read...)
 	add(authz.StatusRead, "/api/v1/status/links", read...)
+	add(authz.StatusRead, "/api/v1/status/system", read...)
 	add(authz.StatusRead, "/api/v1/openapi.json", read...)
 	add(authz.BackupsCreate, "/api/v1/backups", http.MethodPost)
 	add(authz.BackupsRestore, "/api/v1/restores/preview", http.MethodPost)
