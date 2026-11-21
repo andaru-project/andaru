@@ -84,10 +84,14 @@ func TestRoleValidationAndCanonicalDigest(t *testing.T) {
 
 func TestRoleResolve(t *testing.T) {
 	custom := []Role{{ID: "rol_00000000-0000-4000-8000-000000000007", Name: "Operator", Capabilities: []Capability{ConfigurationWrite, StatusRead}}}
-	if got := Resolve(custom, []string{custom[0].ID, ReadOnlyRoleID, "missing"}); !slices.Equal(got, []Capability{ConfigurationRead, ConfigurationWrite, StatusRead}) {
+	snapshot, err := NewSnapshot(custom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := snapshot.Resolve([]string{custom[0].ID, ReadOnlyRoleID, "missing"}); !slices.Equal(got, []Capability{ConfigurationRead, ConfigurationWrite, StatusRead}) {
 		t.Fatalf("unexpected resolved capabilities: %v", got)
 	}
-	if got := Resolve(custom, []string{AdministratorRoleID}); !slices.Equal(got, Catalog()) {
+	if got := snapshot.Resolve([]string{AdministratorRoleID}); !slices.Equal(got, Catalog()) {
 		t.Fatalf("administrator did not resolve dynamically: %v", got)
 	}
 }
@@ -115,5 +119,23 @@ func TestActorCanonicalLabel(t *testing.T) {
 		if label, err := actor.CanonicalLabel(); err == nil {
 			t.Fatalf("invalid actor %+v serialized as %q", actor, label)
 		}
+	}
+}
+
+func TestSnapshotResolvesBuiltInRoles(t *testing.T) {
+	snapshot, err := NewSnapshot(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Catalog()
+	slices.Sort(want)
+	if got := snapshot.Resolve([]string{AdministratorRoleID}); !slices.Equal(got, want) {
+		t.Fatalf("administrator resolves to %v, want the whole catalog %v", got, want)
+	}
+	if got := snapshot.Resolve([]string{ReadOnlyRoleID}); !slices.Equal(got, []Capability{ConfigurationRead, StatusRead}) {
+		t.Fatalf("read-only resolves to %v", got)
+	}
+	if len(snapshot.Roles) != 0 {
+		t.Fatalf("built-in roles leaked into the custom roles: %v", snapshot.Roles)
 	}
 }

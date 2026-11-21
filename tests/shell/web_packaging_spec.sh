@@ -26,6 +26,9 @@ Describe 'andaru web packaging'
       grep -qx "ProtectHome=yes" "$1" &&
       grep -qx "ProtectSystem=strict" "$1" &&
       grep -qx "CapabilityBoundingSet=" "$1" &&
+      [ "$(grep -c "^CapabilityBoundingSet" "$2")" = 1 ] && grep -qx "CapabilityBoundingSet=" "$2" &&
+      grep -qx "SupplementaryGroups=andaru-web" "$2" &&
+      grep -qx "ReadWritePaths=-/run/andaru-web" "$2" &&
       grep -qx "EnvironmentFile=-/etc/andaru/engine-web.conf" "$2" &&
       grep -qx "ExecStart=/usr/bin/andaru engine [$]ANDARU_ENGINE_WEB_ARGS" "$2"' sh "$unit" "$root/packaging/systemd/andaru-engine.service"
     The status should equal 0

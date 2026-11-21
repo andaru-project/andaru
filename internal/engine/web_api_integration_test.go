@@ -106,9 +106,9 @@ func TestWebOriginAndCapabilityResolutionAreExact(t *testing.T) {
 		}
 	}
 	role := "rol_00000000-0000-4000-8000-000000000001"
-	resolved := resolveSnapshot(authz.Snapshot{Capabilities: map[string][]authz.Capability{
+	resolved := authz.Snapshot{Capabilities: map[string][]authz.Capability{
 		authz.AdministratorRoleID: {authz.UsersManage, authz.StatusRead}, role: {authz.StatusRead, authz.ConfigurationRead},
-	}}, []string{role, authz.AdministratorRoleID})
+	}}.Resolve([]string{role, authz.AdministratorRoleID})
 	want := []authz.Capability{authz.ConfigurationRead, authz.StatusRead, authz.UsersManage}
 	if len(resolved) != len(want) {
 		t.Fatalf("resolved capabilities=%v", resolved)

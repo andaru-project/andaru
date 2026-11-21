@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -218,7 +219,7 @@ func serveWebUnix(ctx context.Context, web WebSocketOptions, handler http.Handle
 		created = true
 		if err = os.Chown(parent, 0, int(web.GID)); err != nil {
 			_ = os.Remove(parent)
-			return fmt.Errorf("set web engine runtime directory group: %w", err)
+			return fmt.Errorf("set web engine runtime directory group: %w", webGroupHint(err, web.GID))
 		}
 		if err = os.Chmod(parent, 0710); err != nil {
 			_ = os.Remove(parent)
@@ -258,7 +259,7 @@ func serveWebUnix(ctx context.Context, web WebSocketOptions, handler http.Handle
 		result = errors.Join(result, removeOwnedSocket(socketPath, bound))
 	}()
 	if err = os.Chown(socketPath, 0, int(web.GID)); err != nil {
-		return fmt.Errorf("set web engine socket group: %w", err)
+		return fmt.Errorf("set web engine socket group: %w", webGroupHint(err, web.GID))
 	}
 	if err = os.Chmod(socketPath, 0660); err != nil {
 		return fmt.Errorf("protect web engine socket: %w", err)
@@ -379,4 +380,12 @@ func peerUID(connection *net.UnixConn) (uint32, error) {
 		return 0, errors.New("missing Unix peer credentials")
 	}
 	return credentials.Uid, nil
+}
+
+// webGroupHint explains a refused chgrp: without CAP_CHOWN the engine may hand files only to a group it is in.
+func webGroupHint(err error, gid uint32) error {
+	if errors.Is(err, fs.ErrPermission) {
+		return fmt.Errorf("%w (the engine must be a member of group %d: SupplementaryGroups=andaru-web in its unit)", err, gid)
+	}
+	return err
 }

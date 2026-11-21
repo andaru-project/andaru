@@ -217,7 +217,7 @@ func (h *webAPI) login(w http.ResponseWriter, r *http.Request, source string) {
 		return
 	}
 	snapshot = confirmed
-	capabilities := resolveSnapshot(snapshot, result.Account.RoleIDs)
+	capabilities := snapshot.Resolve(result.Account.RoleIDs)
 	setSessionCookie(w, result.SessionCookie, result.ExpiresAt)
 	writeJSON(w, r, http.StatusOK, sessionResponse(result.Account, capabilities, result.CSRFSecret, result.ExpiresAt))
 }
@@ -262,7 +262,7 @@ func (h *webAPI) currentSession(w http.ResponseWriter, r *http.Request, source s
 		}
 		return
 	}
-	writeJSON(w, r, http.StatusOK, sessionResponse(principal.Account, resolveSnapshot(snapshot, principal.Account.RoleIDs), csrf, principal.SessionExpiresAt))
+	writeJSON(w, r, http.StatusOK, sessionResponse(principal.Account, snapshot.Resolve(principal.Account.RoleIDs), csrf, principal.SessionExpiresAt))
 }
 
 func (h *webAPI) logout(w http.ResponseWriter, r *http.Request, source string) {
@@ -398,7 +398,7 @@ func (h *webAPI) protected(w http.ResponseWriter, r *http.Request, source string
 		if !found {
 			return
 		}
-		principal.Capabilities = resolveSnapshot(snapshot, principal.Account.RoleIDs)
+		principal.Capabilities = snapshot.Resolve(principal.Account.RoleIDs)
 		if requestChangesState(r.Method) && (!h.requireOrigin(w, r) || !h.validateCSRF(w, r, sessionSelector, sessionSecret)) {
 			return
 		}
@@ -475,7 +475,7 @@ func (h *webAPI) readCookiePrincipal(r *http.Request) (identity.Principal, strin
 	if err != nil {
 		return identity.Principal{}, "", "", authz.Snapshot{}, 0, err
 	}
-	principal.Capabilities = resolveSnapshot(snapshot, principal.Account.RoleIDs)
+	principal.Capabilities = snapshot.Resolve(principal.Account.RoleIDs)
 	return principal, selector, secret, snapshot, epoch, nil
 }
 
@@ -581,21 +581,6 @@ func canonicalRawURL(value string, size int) bool {
 func splitCredential(value string) (string, string, bool) {
 	selector, secret, ok := strings.Cut(value, ".")
 	return selector, secret, ok && selector != "" && secret != "" && !strings.Contains(secret, ".")
-}
-
-func resolveSnapshot(snapshot authz.Snapshot, roleIDs []string) []authz.Capability {
-	set := make(map[authz.Capability]struct{})
-	for _, roleID := range roleIDs {
-		for _, capability := range snapshot.Capabilities[roleID] {
-			set[capability] = struct{}{}
-		}
-	}
-	capabilities := make([]authz.Capability, 0, len(set))
-	for capability := range set {
-		capabilities = append(capabilities, capability)
-	}
-	slices.Sort(capabilities)
-	return capabilities
 }
 
 func sessionResponse(account identity.Account, capabilities []authz.Capability, csrf string, expires time.Time) webSessionResponse {
