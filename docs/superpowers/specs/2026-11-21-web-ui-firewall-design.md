@@ -1,10 +1,10 @@
-# Web UI: firewall rules, addresses and services
+# Web UI: firewall rules and aliases
 
 Status: a draft for the owner, 2026-11-21. Every call below is the author's and awaits review. Not implemented behaviour. Contracts remain provisional until Andaru 1.0.
 
 ## Intent
 
-The second web UI slice makes Andaru usable as a firewall from the browser: seeing, creating, ordering, enabling, disabling and removing rules (journey step 7 of [#1](https://github.com/andaru-project/andaru/issues/1)), with the address and service objects rules refer to.
+The second web UI slice makes Andaru usable as a firewall from the browser: seeing, creating, ordering, enabling, disabling and removing rules (journey step 7 of [#1](https://github.com/andaru-project/andaru/issues/1)), with the aliases rules refer to.
 
 It builds on the shell ([shell design](2026-11-21-web-ui-shell-design.md)): every save shows the pending notice, and Review and apply makes it live. Nothing on these pages applies anything.
 
@@ -12,7 +12,7 @@ The API serves `policy.input` and `policy.forward` with their order operation, `
 
 ## Author calls
 
-1. **Navigation gains a Firewall branch** in the tree ([navigation design](2026-11-21-web-ui-dashboard-design.md)): Rules, Addresses and Services. It needs `configuration.read`; editing needs `configuration.write`, and without it the pages are read-only.
+1. **Navigation gains a Firewall branch** in the tree ([navigation design](2026-11-21-web-ui-dashboard-design.md)): Rules and Aliases. It needs `configuration.read`; editing needs `configuration.write`, and without it the pages are read-only.
 
 2. **The firewall itself is a zone** (owner, 2026-11-21), as in Shorewall, UniFi, VyOS and OpenWrt. A rule always runs from a zone to a zone, and one of the zones, "This firewall", is the box. Nothing on the page says "to" or "through" the firewall, or names an nftables chain.
    - **Rules is one page with one list,** in one order ([#113](https://github.com/andaru-project/andaru/issues/113)).
@@ -25,7 +25,7 @@ The API serves `policy.input` and `policy.forward` with their order operation, `
    - Above the table, a fixed, read-only block lists what Andaru always does before any rule: established and related traffic accepted, invalid dropped, loopback and neighbour discovery accepted, DHCP requests on served segments, SSH on the management segment. Below the table: "Everything else is dropped."
    - Without `management.segment` the filter is off (packet filter design). The page then says so and links to Interfaces instead of showing an empty table that looks like "allow nothing".
 
-3. **The table is the execution order.** Columns: position, enabled (a switch), action, from, to, services, name with its description beneath, and row actions.
+3. **The table is the execution order.** Columns: position, enabled (a switch), action, from, to, ports, name with its description beneath, and row actions.
    - **No sorting.** A filter box narrows the rows and keeps each row's real position number.
    - **From and to** show zone and address names as chips; an empty list reads "any". "This firewall" is a zone chip with its own mark, so rules that open the box stand out in the list. A zone chip and an address chip look different (a zone is where traffic enters or leaves; an address is who).
    - **Action** is a word with a mark, never colour alone: accept, drop, reject. A logging rule carries a "logs" tag.
@@ -40,25 +40,27 @@ The API serves `policy.input` and `policy.forward` with their order operation, `
    - While the filter box hides rows, the padlock is disabled, with the reason shown: a move among hidden rows would be a guess.
    - Whether a small library does the dragging or the page's own pointer handling does is settled when it is built. The requirement is touch, pointer and keyboard alike.
 
-5. **Editing a rule is a side panel,** not a dialog over the table, so the order stays visible. Fields: name, description, enabled, action, from, to, services, log.
+5. **Editing a rule is a side panel,** not a dialog over the table, so the order stays visible. Fields: name, description, enabled, action, from, to, ports, log.
    - From and to each have two pickers: zones ("any network" when empty; "This firewall" first among the destinations) and addresses ("every address" when empty), searchable by name.
    - Each address list has a "not" switch (owner, 2026-11-21; [#114](https://github.com/andaru-project/andaru/issues/114)): the rule then matches every address in the zone except those named. The owner's case is a DNS redirect for a whole zone that leaves out the servers which must reach the upstream resolver. Zones are not negated. The table shows "not" as a word before the addresses.
-   - Services is a picker over services; empty is "any service".
-   - An address or service that does not exist yet can be created from the picker ("New address…"), which opens the object's own form and returns with it selected.
+   - Ports is a picker over port aliases; empty is "any protocol and port".
+   - An alias that does not exist yet can be created from the picker ("New alias…"), which opens the alias's own form and returns with it selected.
    - Save uses the object's version (`If-Match`); a 412 shows what changed underneath and keeps the user's edits in the form.
    - The engine's validation is the authority: its field errors show beside their fields (`details[].path`).
 
 6. **The enabled switch saves at once,** as one version-checked edit, and shows the pending notice like any other save. It never applies.
 
-7. **Deleting a rule asks once,** naming the rule. Deleting an address or service that rules still use is refused by the engine; the page lists those rules, taken from the saved configuration, rather than only repeating the refusal.
+7. **Deleting a rule asks once,** naming the rule. Deleting an alias that rules still use is refused by the engine; the page lists those rules, taken from the saved configuration, rather than only repeating the refusal.
 
-8. **Addresses and Services are plain tables** with the same side-panel editor.
-   - **Address:** name, kind (host, network, range, group) and its value; a group picks members that are not groups.
-   - **Service:** name, protocol (TCP, UDP, ICMP, ICMPv6, group) and its ports or ICMP types; a group picks members.
+8. **Aliases** (owner, 2026-11-21). What the engine stores as `addresses` and `services` the web UI calls aliases, as pfSense does: a name for addresses, or a name for ports. "Service" suggests an address with a port, a thing that listens; "alias" is the word people already use and can say to each other.
+   - **One Aliases page, one table,** with a kind column and a filter by kind. No tabs.
+   - **Address alias:** a host, a network, a range, or a group of other address aliases.
+   - **Port alias:** a protocol (TCP, UDP, ICMP, ICMPv6) with its ports or ICMP types, or a group of other port aliases.
+   - The editor is the same side panel as for rules.
    - Each row shows where it is used ("3 rules"), with the list on demand.
-   - These are what pfSense calls aliases (owner, 2026-11-21; [#115](https://github.com/andaru-project/andaru/issues/115)). Two things follow, the second of them engine work that is not in this slice:
-     - **One shared address field** serves every place in the web UI that takes an address: it accepts a literal address or an address's name, and completes names as one types. Ports and services get the same. Pages of later slices and of add-ons use that field, not their own.
-     - **An address fed from a URL,** refreshed on a schedule, such as a provider's published ranges. Its row shows when it last refreshed, how many entries it holds and its last error.
+   - The engine's names stay `addresses` and `services`; only the web UI's words change. Renaming the API is not worth a contract change.
+   - **One shared alias field** serves every place in the web UI that takes an address: it accepts a literal address or an alias's name, and completes names as one types. Ports get the same. Pages of later slices and of add-ons use that field, not their own.
+   - **An address alias fed from a URL** ([#115](https://github.com/andaru-project/andaru/issues/115)), refreshed on a schedule, such as a provider's published ranges. Its row shows when it last refreshed, how many entries it holds and its last error. This is engine work and not in this slice.
 
 9. **An anti-lockout rule, as pfSense has** (owner, 2026-11-21). The packet filter already accepts SSH on the management segment by a fixed rule no edit removes. That rule grows to cover the web UI's port, so no saved rule can cut an administrator off from the browser either.
    - The owner's definition: the management interface always lets in the web UI, and SSH when SSH is enabled, so an administrator can always reach the box. When the management interface is also the LAN, the rule applies there.
@@ -72,7 +74,7 @@ The API serves `policy.input` and `policy.forward` with their order operation, `
 
 11. **States each page covers:** loading, empty, read-only, validation errors, version conflict, saved-but-unapplied (the shell's notice), filter off, and connection lost.
 
-12. **Narrow screens.** Below 900 px each rule becomes a block: position, switch, action and name on the first line, then from, to and services, each labelled. The editor's side panel takes the whole screen. The padlock and the grips stay as they are.
+12. **Narrow screens.** Below 900 px each rule becomes a block: position, switch, action and name on the first line, then from, to and ports, each labelled. The editor's side panel takes the whole screen. The padlock and the grips stay as they are.
 
 13. **Tests:** the table keeps execution order under filtering; nothing moves while locked; the grip moves a row by keyboard; moves send the full order with the version and handle a 412; the editor maps engine field errors to fields; read-only accounts get no controls; deleting a used object lists its users.
 

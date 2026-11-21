@@ -22,7 +22,7 @@ This document amends the [shell design](2026-11-21-web-ui-shell-design.md): its 
 2. **A page never splits into tabs.** What would be a tab is a sub-page in the tree, with its own address. The planned tree, as pages arrive:
    - Dashboard
    - Network: Interfaces
-   - Firewall: Rules, Addresses, Services
+   - Firewall: Rules, NAT (Port forwards, Outbound, One-to-one), Aliases
    - Changes: Review and apply
    - System: Users, Roles, Tokens, Audit
 
@@ -148,5 +148,5 @@ The built-in widgets of call 10 are ordinary components in a list of `{id, title
 ## Related documents
 
 - [Web UI shell and the apply flow](2026-11-21-web-ui-shell-design.md)
-- [Web UI: firewall rules, addresses and services](2026-11-21-web-ui-firewall-design.md)
+- [Web UI: firewall rules and aliases](2026-11-21-web-ui-firewall-design.md)
 - [Web UI foundation](../../research/web-ui-foundation.md)
