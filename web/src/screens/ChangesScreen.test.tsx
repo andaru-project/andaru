@@ -48,14 +48,13 @@ it('shows each changed object with its live and saved value', async () => {
   show(unapplied);
 
   const created = await screen.findByLabelText('DMZ created');
-  expect(created).toHaveTextContent('Not present');
   expect(created).toHaveTextContent('"name": "DMZ"');
+  // A changed object lists only the fields that differ, old beside new.
   const changed = screen.getByLabelText('Inside changed');
-  expect(changed).toHaveTextContent('"name": "LAN"');
-  expect(changed).toHaveTextContent('"name": "Inside"');
+  expect(within(changed).getByRole('row', { name: 'name LAN Inside' })).toBeInTheDocument();
+  expect(changed).not.toHaveTextContent('"id"');
   const deleted = screen.getByLabelText('Guest deleted');
   expect(deleted).toHaveTextContent('"name": "Guest"');
-  expect(deleted).toHaveTextContent('Deleted');
   expect(screen.getByText('Saved version 5 by admin', { exact: false })).toBeInTheDocument();
   expect(screen.queryByText('Saved version 3 by admin', { exact: false })).not.toBeInTheDocument();
   expect(screen.getByText('Apply 1, saved version 3: Confirmed.')).toBeInTheDocument();

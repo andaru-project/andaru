@@ -95,17 +95,17 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
 
   return (
     <AppShell className="app-shell" data-nav-open={opened || undefined} header={{ height: 56 }} navbar={{ width: 240, breakpoint: 900, collapsed: { mobile: !opened } }} padding="md">
-      <AppShell.Header>
+      <AppShell.Header className="app-header">
         <Group h="100%" px="md" justify="space-between" wrap="nowrap">
           <Group gap="sm" wrap="nowrap">
-            <Burger className="nav-burger" opened={opened} onClick={toggle} size="sm" aria-label={opened ? 'Close navigation' : 'Open navigation'} />
+            <Burger className="nav-burger" color="white" opened={opened} onClick={toggle} size="sm" aria-label={opened ? 'Close navigation' : 'Open navigation'} />
             <Image src={mark} alt="" w={28} h={28} />
             <Title order={1} size="h3">Andaru</Title>
           </Group>
           <Group gap="sm" wrap="nowrap">
-            <Badge color={connected ? 'green' : 'red'} variant="light" role="status">{connected ? 'Connected' : 'Connection lost'}</Badge>
+            <Badge color={connected ? 'green' : 'red'} variant="filled" role="status">{connected ? 'Connected' : 'Connection lost'}</Badge>
             <Menu position="bottom-end">
-              <Menu.Target><Button variant="default" size="xs">{session.account.displayName || session.account.login}</Button></Menu.Target>
+              <Menu.Target><Button className="account-button" variant="default" size="xs">{session.account.displayName || session.account.login}</Button></Menu.Target>
               <Menu.Dropdown>
                 <Menu.Item onClick={() => void navigate('/system/session')}>Session details</Menu.Item>
                 {capabilities.has('users.read') && <Menu.Item onClick={() => void changePassword()}>Change password</Menu.Item>}
@@ -115,12 +115,12 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
           </Group>
         </Group>
       </AppShell.Header>
-      <AppShell.Navbar p="xs" component="nav" aria-label="Main navigation">
+      <AppShell.Navbar className="app-navbar" p="xs" component="nav" aria-label="Main navigation">
         <Stack gap="md">
           {groups.map((group) => (
             <div key={group.label}>
               <Text size="xs" fw={700} c="dimmed" tt="uppercase" px="sm" mb={4}>{group.label}</Text>
-              {group.items.map((item) => <NavLink key={item.to} component={Link} to={item.to} label={item.label} active={pathname === item.to} aria-current={pathname === item.to ? 'page' : undefined} onClick={close} />)}
+              {group.items.map((item) => <NavLink className="nav-item" key={item.to} component={Link} to={item.to} label={item.label} active={pathname === item.to} aria-current={pathname === item.to ? 'page' : undefined} onClick={close} />)}
             </div>
           ))}
         </Stack>

@@ -1,5 +1,6 @@
-import { Alert, Button, Code, Container, Paper, PasswordInput, Stack, Text, TextInput, Title } from '@mantine/core';
+import { Alert, Button, Code, Group, Image, Paper, PasswordInput, Stack, Text, TextInput, Title } from '@mantine/core';
 import { useRef, useState, type FormEvent } from 'react';
+import mark from '../andaru-icon.svg';
 import { apiErrorMessage } from '../api';
 import type { Session } from '../types';
 
@@ -18,8 +19,8 @@ export function LoginScreen({ setupRequired, notice, onLogin }: LoginScreenProps
 
   if (setupRequired) {
     return (
-      <Container size="xs" py="xl">
-        <Paper withBorder p="xl">
+      <div className="login-page">
+        <Paper className="login-card" component="main" withBorder p="xl">
           <Stack>
             <Title order={1}>Setup required</Title>
             <Alert color="yellow" role="status" title="Local root console required">
@@ -30,7 +31,7 @@ export function LoginScreen({ setupRequired, notice, onLogin }: LoginScreenProps
             <Text c="dimmed" size="sm">Return here after the command completes.</Text>
           </Stack>
         </Paper>
-      </Container>
+      </div>
     );
   }
 
@@ -50,14 +51,17 @@ export function LoginScreen({ setupRequired, notice, onLogin }: LoginScreenProps
   }
 
   return (
-    <Container size="xs" py="xl">
-      <Paper component="main" withBorder p="xl">
+    <div className="login-page">
+      <Paper className="login-card" component="main" withBorder p="xl">
         <form onSubmit={submit}>
           <Stack>
-            <div>
-              <Title order={1}>Andaru administration</Title>
-              <Text c="dimmed">Sign in with an Andaru account.</Text>
-            </div>
+            <Group gap="sm" wrap="nowrap">
+              <Image src={mark} alt="" w={40} h={40} />
+              <div>
+                <Title order={1} size="h2">Andaru</Title>
+                <Text c="dimmed">Sign in with an Andaru account.</Text>
+              </div>
+            </Group>
             {notice && <Alert color="yellow" role="alert">{notice}</Alert>}
             {error && <Alert color="red" role="alert" title="Sign-in failed">{error}</Alert>}
             <TextInput
@@ -83,6 +87,6 @@ export function LoginScreen({ setupRequired, notice, onLogin }: LoginScreenProps
           </Stack>
         </form>
       </Paper>
-    </Container>
+    </div>
   );
 }

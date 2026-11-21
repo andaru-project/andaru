@@ -3,11 +3,77 @@
   text-rendering: optimizeLegibility;
 }
 
+/* Andaru's palette: ink on a cool ground, dark chrome, and the mark's amber as an accent only. Amber on white is
+   1.8:1, so it never carries text there. */
+:root {
+  --andaru-chrome: #152330;
+  --andaru-accent: #ffb21c;
+}
+
+:root[data-mantine-color-scheme="light"] {
+  --mantine-color-text: #17212c;
+  --mantine-color-dimmed: #526171;
+  --mantine-color-default-border: #c9d0d8;
+  --andaru-ground: #f2f4f6;
+}
+
+:root[data-mantine-color-scheme="dark"] {
+  --andaru-ground: var(--mantine-color-dark-8);
+}
+
 body {
   margin: 0;
   min-width: 20rem;
   min-height: 100vh;
-  background: light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-8));
+  background: var(--andaru-ground);
+}
+
+.app-header {
+  background: var(--andaru-chrome);
+  border-bottom-color: var(--andaru-chrome);
+  color: #fff;
+}
+
+.app-header .account-button {
+  background: transparent;
+  border-color: rgb(255 255 255 / 35%);
+  color: #fff;
+}
+
+.app-header .account-button:hover {
+  background: rgb(255 255 255 / 12%);
+}
+
+.app-navbar {
+  background: var(--andaru-ground);
+}
+
+.nav-item {
+  border-left: 4px solid transparent;
+  border-radius: var(--mantine-radius-default);
+}
+
+.nav-item[data-active] {
+  background: var(--mantine-color-body);
+  border-left-color: var(--andaru-accent);
+  color: var(--mantine-color-text);
+  font-weight: 650;
+}
+
+.nav-item[data-active]:hover {
+  background: var(--mantine-color-body);
+}
+
+.login-page {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: var(--mantine-spacing-md);
+}
+
+.login-card {
+  border-top: 4px solid var(--andaru-accent);
+  width: min(100%, 26rem);
 }
 
 /* The CSP (style-src 'self') blocks the <style> element AppShell writes its sizes into.
@@ -43,4 +109,31 @@ body {
   table {
     min-width: 48rem;
   }
+}
+
+.data-table {
+  background: var(--mantine-color-body);
+}
+
+.data-table th {
+  color: var(--mantine-color-dimmed);
+  font-size: var(--mantine-font-size-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Old and new values in a review: marked by a border and a tint, never by colour alone (the column says which). */
+.mantine-Code-root.diff-old {
+  background: light-dark(#fdecea, #4a2326);
+  border-left: 3px solid var(--mantine-color-red-6);
+}
+
+.mantine-Code-root.diff-new {
+  background: light-dark(#e9f6ec, #1f3d27);
+  border-left: 3px solid var(--mantine-color-green-7);
+}
+
+/* An alert's tint and title carry its state; the title stays ink so it reads on every tint. */
+.mantine-Alert-title {
+  color: var(--mantine-color-text);
 }

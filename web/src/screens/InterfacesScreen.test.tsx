@@ -54,14 +54,16 @@ it('joins live links with the saved links, segments and zones on them', async ()
   const lan = row('enp1s0');
   expect(lan).toHaveTextContent('LAN port');
   expect(lan).toHaveTextContent('Trusted');
-  expect(lan).toHaveTextContent('IPv4 static, IPv6 none');
+  expect(lan).toHaveTextContent('IPv4 static');
+  expect(lan).toHaveTextContent('IPv6 none');
   expect(lan).toHaveTextContent('192.168.1.1/24');
   expect(within(lan).getByText('Management')).toBeInTheDocument();
 
   const guest = row('vl222222222222');
   expect(guest).toHaveTextContent('Guest VLAN');
   expect(guest).toHaveTextContent('Guests');
-  expect(guest).toHaveTextContent('IPv4 dhcp, IPv6 slaac');
+  expect(guest).toHaveTextContent('IPv4 dhcp');
+  expect(guest).toHaveTextContent('IPv6 slaac');
   expect(within(guest).queryByText('Management')).not.toBeInTheDocument();
 });
 
@@ -69,7 +71,7 @@ it('lists a saved link with no live device as missing and an unused live device 
   routes();
   await showInterfaces();
 
-  expect(within(row('enp2s0')).getByText('Unused')).toBeInTheDocument();
+  expect(within(row('enp2s0')).getByText('Not in the configuration')).toBeInTheDocument();
   const missing = row('Old port');
   expect(within(missing).getByText('Missing')).toBeInTheDocument();
   expect(missing).toHaveTextContent('No interface with this permanent MAC is present.');
@@ -80,7 +82,7 @@ it('does not join a link the preview will not realize to the device with its nam
   routes({ findings: [missingFinding, { severity: 'error', code: 'NAME_COLLISION', path: '/links/1', message: 'The interface name vl222222222222 derived for this link is already taken.' }] });
   await showInterfaces();
 
-  expect(within(row('vl222222222222')).getByText('Unused')).toBeInTheDocument();
+  expect(within(row('vl222222222222')).getByText('Not in the configuration')).toBeInTheDocument();
   const guest = row('Guest VLAN');
   expect(within(guest).getByText('Not realized')).toBeInTheDocument();
   expect(guest).toHaveTextContent('already taken');
@@ -135,7 +137,7 @@ it('keeps the live links when the saved configuration cannot be read', async () 
   await showInterfaces();
 
   expect(screen.getByRole('alert', { name: 'The saved configuration could not be read' })).toHaveTextContent('The store is busy.');
-  expect(screen.queryByText('Saved link')).not.toBeInTheDocument();
+  expect(screen.queryByText('Saved configuration')).not.toBeInTheDocument();
 });
 
 it('shows only live links without configuration.read', async () => {
@@ -145,4 +147,14 @@ it('shows only live links without configuration.read', async () => {
   expect(screen.getByText('Your account cannot read the saved configuration, so only live links are shown.')).toBeInTheDocument();
   expect(screen.queryByText('Unused')).not.toBeInTheDocument();
   expect(fetchMock).toHaveBeenCalledTimes(1);
+});
+
+it('leaves the loopback out unless the configuration names it', async () => {
+  fetchRoutes({
+    '/api/v1/status/links': { items: [{ ...live(1, 'lo', '00:00:00:00:00:00'), linkType: 'loopback' }, live(2, 'enp1s0', '52:54:00:aa:bb:01')] },
+    '/api/v1/config': () => jsonResponse(503, { error: { code: 'UNAVAILABLE', message: 'The store is busy.' } }),
+  });
+  await showInterfaces();
+
+  expect(screen.queryByText('lo')).not.toBeInTheDocument();
 });

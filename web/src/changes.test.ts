@@ -1,5 +1,5 @@
-import { expect, it } from 'vitest';
-import { differences, objectAt } from './changes';
+import { describe, expect, it } from 'vitest';
+import { differences, fieldChanges, objectAt } from './changes';
 
 const rule = (id: string, name: string) => ({ id, name, enabled: true, action: 'accept' });
 
@@ -29,4 +29,16 @@ it('skips objects that end where they started and lists a repeated change once',
     { collection: 'zones', id: 'zon_gone' },
   ]);
   expect(result.map((item) => [item.label, item.kind])).toEqual([['Inside', 'changed']]);
+});
+
+describe('fieldChanges', () => {
+  it('lists only the fields that differ, with unset sides', () => {
+    expect(fieldChanges({ id: 'z', name: 'lan', tags: ['a'] }, { id: 'z', name: 'home', tags: ['a'], description: 'x' })).toEqual([
+      { field: 'name', before: 'lan', after: 'home' },
+      { field: 'description', before: undefined, after: 'x' },
+    ]);
+  });
+  it('treats a list order or a missing side as one value', () => {
+    expect(fieldChanges(['a', 'b'], ['b', 'a'])).toEqual([{ field: '', before: ['a', 'b'], after: ['b', 'a'] }]);
+  });
 });
