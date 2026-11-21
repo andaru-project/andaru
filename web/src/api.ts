@@ -56,6 +56,8 @@ function operationID() {
   return crypto.randomUUID();
 }
 
+const readTimeoutMilliseconds = 30_000;
+
 export class ApiClient {
   // onConnection hears whether each request got a response, for the shell's connection state.
   constructor(private csrfToken = '', private readonly onConnection?: (connected: boolean) => void) {}
@@ -76,7 +78,9 @@ export class ApiClient {
 
     let response: Response;
     try {
-      response = await fetch(path, { ...init, headers, credentials: 'same-origin', cache: 'no-store' });
+      // A read that never answers would hold its page's polling for good; a write may take as long as it takes.
+      const signal = init.method ? undefined : AbortSignal.timeout(readTimeoutMilliseconds);
+      response = await fetch(path, { ...init, headers, signal, credentials: 'same-origin', cache: 'no-store' });
     } catch {
       this.onConnection?.(false);
       throw new ApiError(0, 'DISCONNECTED', 'Cannot reach the Andaru service. Check the connection and try again.');

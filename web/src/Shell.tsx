@@ -1,4 +1,4 @@
-import { Alert, AppShell, Badge, Burger, Button, Group, Image, Menu, NavLink, Stack, Title } from '@mantine/core';
+import { AccordionChevron, Alert, AppShell, Badge, Burger, Button, Group, Image, Menu, NavLink, Stack, Title } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useMatch, useNavigate } from 'react-router';
@@ -138,13 +138,18 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
       </AppShell.Header>
       <AppShell.Navbar className="app-navbar" p="xs" component="nav" aria-label="Main navigation">
         {pageLink('/', 'Dashboard')}
-        {groups.map((group) => (
-          // A branch label is not a page. NavLink renders an anchor by default, and an anchor without an address
-          // takes no keyboard focus, so the label is a button. onChange, not onClick: Space reaches only that.
-          <NavLink className="nav-branch" key={group.label} component="button" type="button" label={group.label} opened={!closed.includes(group.label)} onChange={() => toggleBranch(group.label)}>
-            {group.items.map((item) => pageLink(item.to, item.label))}
-          </NavLink>
-        ))}
+        {groups.map((group) => {
+          const open = !closed.includes(group.label);
+          return (
+            <div key={group.label}>
+              {/* A branch label is not a page, so it is a button: an anchor without an address takes no keyboard
+                  focus. It holds no children of its own, or NavLink would toggle on the Space key and the browser
+                  again on the click that key makes. */}
+              <NavLink className="nav-branch" component="button" type="button" label={group.label} aria-expanded={open} rightSection={<AccordionChevron className="nav-chevron" data-open={open || undefined} />} onClick={() => toggleBranch(group.label)} />
+              {open && <div className="nav-children">{group.items.map((item) => pageLink(item.to, item.label))}</div>}
+            </div>
+          );
+        })}
       </AppShell.Navbar>
       <AppShell.Main>
         <Stack>

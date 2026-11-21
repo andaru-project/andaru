@@ -120,6 +120,14 @@ body {
 }
 
 /* A branch of the navigation tree: its label opens and closes it and is not a page. */
+.nav-children {
+  padding-left: var(--mantine-spacing-lg);
+}
+
+.nav-chevron:not([data-open]) {
+  transform: rotate(-90deg);
+}
+
 .nav-branch {
   color: var(--mantine-color-dimmed);
   font-weight: 700;
