@@ -48,7 +48,7 @@ function Figures({ arrow, name, line, values }: { arrow: string; name: string; l
 function Graph({ entry, zone, end, intervalSeconds, live }: { entry: Traffic['interfaces'][number]; zone: string | undefined; end: number; intervalSeconds: number; live: boolean }) {
   // every is each reading's rate, for the figures; points is what is drawn and marked, thinned to a line.
   const every = rates(entry.samples, intervalSeconds);
-  const points = thin(every, 180);
+  const points = thin(every, 180, intervalSeconds);
   const top = points.reduce((most, point) => Math.max(most, point.rx ?? 0, point.tx ?? 0), 1);
   const x = (at: number) => ((at - (end - hourMilliseconds)) / hourMilliseconds) * width;
   const y = (rate: number) => height - (rate / top) * (height - 4) - 2;
@@ -57,6 +57,7 @@ function Graph({ entry, zone, end, intervalSeconds, live }: { entry: Traffic['in
   const fresh = live && last !== undefined && end - Date.parse(last.at) <= intervalSeconds * 3000;
 
   // The point under the pointer, a finger or the arrow keys: its time and rates are read out beside the graph.
+  // A mouse lets go on leaving. A finger leaves as it lifts, so a tap keeps its mark until the next tap elsewhere.
   const [marked, setMarked] = useState<number>();
   const mark = marked === undefined ? undefined : points[Math.min(marked, points.length - 1)];
   const nearest = (event: PointerEvent<HTMLDivElement>) => {
@@ -82,7 +83,7 @@ function Graph({ entry, zone, end, intervalSeconds, live }: { entry: Traffic['in
         <Group gap="xs"><Text ff="monospace" fw={600}>{entry.name}</Text><ZoneBadge name={zone} /></Group>
         <Text c="dimmed" size="xs">0 – {bitrate(top)}</Text>
       </Group>
-      <div className="traffic-frame" tabIndex={0} role="group" aria-label={`${entry.name} over the last hour: the arrow keys read out a point`} onPointerMove={nearest} onPointerDown={nearest} onPointerLeave={() => setMarked(undefined)} onKeyDown={step} onBlur={() => setMarked(undefined)}>
+      <div className="traffic-frame" tabIndex={0} role="group" aria-label={`${entry.name} over the last hour: the arrow keys read out a point`} onPointerMove={nearest} onPointerDown={nearest} onPointerLeave={(event) => { if (event.pointerType === 'mouse') setMarked(undefined); }} onKeyDown={step} onBlur={() => setMarked(undefined)}>
         <svg className="traffic-graph" viewBox={`0 0 ${width} ${height}`} aria-hidden="true" preserveAspectRatio="none">
           <path className="traffic-sent" d={path(points, (point) => point.tx, x, y)} />
           <path className="traffic-received" d={path(points, (point) => point.rx, x, y)} />
@@ -143,12 +144,13 @@ export function TrafficWidget({ api, zones, zonesKnown, onSessionLost }: { api: 
     held.current = merge(held.current, answer);
     return held.current;
   }, [api]), onSessionLost, 5_000);
-  // What shows is the user's choice once made. Before that it is the first choice, which is fixed as soon as
-  // it can be made well, with the zones known and more than two interfaces to choose among: the busiest
-  // interface may change at every poll, and a graph must not change under the eye by itself.
+  // What shows is the user's choice once made. Before that it is the first choice, fixed as soon as there are
+  // more than two interfaces to choose among: the busiest interface may change at every poll, and a graph must
+  // not change under the eye by itself. A first choice made before the zones were known is made once more when
+  // they are, and then stands.
   const [selected, setSelected] = useState<string[]>();
-  const [first, setFirst] = useState<string[]>();
+  const [first, setFirst] = useState<{ names: string[]; zoned: boolean }>();
   const traffic = resource.data;
-  if (!first && zonesKnown && traffic && traffic.interfaces.length > 2) setFirst(firstShown(traffic, zones));
-  return <Loaded resource={resource} what="traffic">{(loaded) => <TrafficView traffic={loaded} zones={zones} selected={selected ?? first ?? firstShown(loaded, zones)} live={resource.error === ''} onSelect={setSelected} />}</Loaded>;
+  if (traffic && traffic.interfaces.length > 2 && (!first || (!first.zoned && zonesKnown))) setFirst({ names: firstShown(traffic, zones), zoned: zonesKnown });
+  return <Loaded resource={resource} what="traffic">{(loaded) => <TrafficView traffic={loaded} zones={zones} selected={selected ?? first?.names ?? firstShown(loaded, zones)} live={resource.error === ''} onSelect={setSelected} />}</Loaded>;
 }

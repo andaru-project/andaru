@@ -97,7 +97,10 @@ it('reads out the point under the pointer, a finger or the arrow keys: its time 
   // The hour is 500 wide here: 7 seconds left of the edge is nearer the reading before.
   fireEvent.pointerMove(frame, { clientX: 499 });
   expect(readout()).toMatch(/↓ 2\.0 Mbps/);
-  fireEvent.pointerLeave(frame);
+  // A finger leaves as it lifts: its mark stays. A mouse lets go on leaving.
+  fireEvent.pointerLeave(frame, { pointerType: 'touch' });
+  expect(readout()).toMatch(/↓ 2\.0 Mbps/);
+  fireEvent.pointerLeave(frame, { pointerType: 'mouse' });
   expect(readout()).toBe('−1 hnow');
 });
 
@@ -168,7 +171,7 @@ it('reads the hour once, then every 5 seconds only what came after the newest re
 it('makes its first choice once the zones are known, wan and lan, and keeps it until the user chooses', async () => {
   fetchRoutes({ '/api/v1/status/traffic': many });
   const view = render(<TrafficWidget api={new ApiClient('csrf')} zones={new Map()} zonesKnown={false} onSessionLost={vi.fn()} />);
-  // Before the zones are in, the busiest shows, but nothing is fixed yet.
+  // Before the zones are in, the busiest shows; that choice is made once more when they come.
   await waitFor(() => expect(graphs()).toEqual(['Traffic on ens18']));
   view.rerender(<TrafficWidget api={new ApiClient('csrf')} zones={zones} zonesKnown onSessionLost={vi.fn()} />);
   await waitFor(() => expect(graphs()).toEqual(['Traffic on ens18', 'Traffic on ens19']));

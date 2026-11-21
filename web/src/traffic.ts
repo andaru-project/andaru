@@ -17,22 +17,29 @@ export function rates(samples: TrafficSample[], intervalSeconds: number): RatePo
   });
 }
 
-// thin draws fewer points than were read: each run of neighbours becomes one point at their average, so an hour
-// of 5-second readings is a line and not a blur in a graph a few hundred pixels wide. The figures beside the
-// graph are worked out from every reading, so no peak is lost to the averaging. A run that is all gap stays a gap.
-export function thin(points: RatePoint[], most: number): RatePoint[] {
-  const run = Math.ceil(points.length / most);
-  if (run <= 1) return points;
+// thin draws fewer points than were read: the points of each stretch of time become one, at their average, so
+// an hour of 5-second readings is a line and not a blur in a graph a few hundred pixels wide. The figures beside
+// the graph are worked out from every reading, so no peak is lost to the averaging. A stretch that is all gap
+// stays a gap. Stretches are fixed on the clock, not counted from the newest point, so a new reading changes
+// only the newest stretch: the line does not shimmer along its whole length at every poll.
+export function thin(points: RatePoint[], most: number, intervalSeconds: number): RatePoint[] {
+  const stretch = Math.ceil(points.length / most) * intervalSeconds * 1000;
+  if (points.length <= most || !(stretch > 0)) return points;
   const mean = (values: Array<number | null>) => {
     const known = values.filter((value): value is number => value !== null);
     return known.length === 0 ? null : known.reduce((sum, value) => sum + value, 0) / known.length;
   };
   const thinned: RatePoint[] = [];
-  // Runs are counted from the newest point back, so the newest run is whole and the line ends at the present.
-  for (let end = points.length; end > 0; end -= run) {
-    const part = points.slice(Math.max(end - run, 0), end);
-    thinned.unshift({ at: part[part.length - 1].at, rx: mean(part.map((point) => point.rx)), tx: mean(part.map((point) => point.tx)) });
+  let part: RatePoint[] = [];
+  const close = () => {
+    if (part.length > 0) thinned.push({ at: part[part.length - 1].at, rx: mean(part.map((point) => point.rx)), tx: mean(part.map((point) => point.tx)) });
+    part = [];
+  };
+  for (const point of points) {
+    if (part.length > 0 && Math.floor(point.at / stretch) !== Math.floor(part[0].at / stretch)) close();
+    part.push(point);
   }
+  close();
   return thinned;
 }
 

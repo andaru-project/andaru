@@ -29,16 +29,20 @@ it('makes a gap, never a spike, where a counter started again or readings are fa
   expect(rates([sample(10, 0), sample(5, 100)], 5)[0]).toMatchObject(gap);
 });
 
-it('thins many points to a line by averaging neighbours, newest run whole, gaps kept', () => {
+it('thins many points to a line by averaging each stretch of time, gaps kept', () => {
+  // Seven readings a second apart, to at most three points: stretches of three seconds on the clock.
   const points: RatePoint[] = [1, 2, 3, 4, 5, 6, 7].map((value) => ({ at: value * 1000, rx: value * 10, tx: value }));
-  // Seven points to at most three: runs of three, counted from the newest back.
-  expect(thin(points, 3)).toEqual([{ at: 1000, rx: 10, tx: 1 }, { at: 4000, rx: 30, tx: 3 }, { at: 7000, rx: 60, tx: 6 }]);
+  expect(thin(points, 3, 1)).toEqual([{ at: 2000, rx: 15, tx: 1.5 }, { at: 5000, rx: 40, tx: 4 }, { at: 7000, rx: 65, tx: 6.5 }]);
+  // A new reading changes the newest stretch only: the line before it stays as it was.
+  const next = thin([...points, { at: 8000, rx: 80, tx: 8 }], 3, 1);
+  expect(next.slice(0, 2)).toEqual(thin(points, 3, 1).slice(0, 2));
+  expect(next[2]).toEqual({ at: 8000, rx: 70, tx: 7 });
   // Few enough already: as they are.
-  expect(thin(points, 7)).toBe(points);
-  expect(thin([], 3)).toEqual([]);
-  // A run with a gap in it averages what it has; a run that is all gap is a gap.
-  const gaps: RatePoint[] = [{ at: 1, rx: null, tx: null }, { at: 2, rx: null, tx: null }, { at: 3, rx: 10, tx: 1 }, { at: 4, rx: null, tx: null }];
-  expect(thin(gaps, 2)).toEqual([{ at: 2, rx: null, tx: null }, { at: 4, rx: 10, tx: 1 }]);
+  expect(thin(points, 7, 1)).toBe(points);
+  expect(thin([], 3, 1)).toEqual([]);
+  // A stretch with a gap in it averages what it has; one that is all gap is a gap.
+  const gaps: RatePoint[] = [{ at: 0, rx: null, tx: null }, { at: 1000, rx: null, tx: null }, { at: 2000, rx: 10, tx: 1 }, { at: 3000, rx: null, tx: null }];
+  expect(thin(gaps, 2, 1)).toEqual([{ at: 1000, rx: null, tx: null }, { at: 3000, rx: 10, tx: 1 }]);
 });
 
 it('gives the figures beside a graph: the rate now, the average and the peak', () => {
