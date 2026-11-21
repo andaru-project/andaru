@@ -1,10 +1,11 @@
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ApiClient } from '../api';
 import type { ChangeState } from '../changes';
 import { fetchRoutes, jsonResponse } from '../test/fetch';
 import { apply, pointers, session } from '../test/fixtures';
-import { act, render, screen, within } from '../test/render';
+import { act, render, screen, waitFor, within } from '../test/render';
 import type { Resource } from '../useResource';
 import { DashboardScreen } from './DashboardScreen';
 
@@ -109,4 +110,93 @@ it('polls a widget every 10 seconds, and waits for an answer that is still out',
   expect(reads()).toBe(1);
   act(() => { vi.advanceTimersByTime(1); });
   expect(reads()).toBe(2);
+});
+
+const everything = ['configuration.read', 'status.read'];
+const titles = () => screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent);
+const saves = (fetchMock: ReturnType<typeof fetchRoutes>) => fetchMock.mock.calls.filter(([, init]) => init?.method === 'PUT').map(([, init]) => JSON.parse(String(init?.body)) as unknown);
+
+// layoutRoutes answers the dashboard's reads and stores what it is sent, as the engine does.
+function layoutRoutes(preferences: object | Response, save: () => Response | undefined = () => undefined) {
+  return fetchRoutes({
+    '/api/v1/session/preferences': () => (preferences instanceof Response ? preferences : jsonResponse(200, preferences)),
+    'PUT /api/v1/session/preferences': (init) => save() ?? jsonResponse(200, JSON.parse(String(init?.body))),
+    '/api/v1/status/links': { items: [] },
+    '/api/v1/status/prefixes': { wans: [] },
+  });
+}
+
+async function unlock() {
+  const padlock = await screen.findByRole('button', { name: 'Layout locked' });
+  await waitFor(() => expect(padlock).toBeEnabled());
+  await userEvent.click(padlock);
+  expect(screen.getByRole('button', { name: 'Layout unlocked' })).toHaveAttribute('aria-pressed', 'true');
+}
+
+it('applies the stored layout: its order, its hidden widgets, and a widget new since it was saved', async () => {
+  // "gone" is a widget of another version. "interfaces" is not named, so it joins at the end.
+  layoutRoutes({ dashboard: { order: ['prefixes', 'gone', 'changes'], hidden: ['changes'] } });
+  mount(everything);
+  await waitFor(() => expect(titles()).toEqual(['IPv6 prefixes', 'Interfaces']));
+});
+
+it('stays locked until asked: nothing moves or hides by accident', async () => {
+  layoutRoutes({ dashboard: { hidden: ['changes'] } });
+  mount(everything);
+  await waitFor(() => expect(titles()).toEqual(['Interfaces', 'IPv6 prefixes']));
+  expect(screen.queryByRole('button', { name: /^(Move|Hide|Show) / })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Reset layout' })).not.toBeInTheDocument();
+
+  await unlock();
+  for (const name of ['Move Interfaces', 'Hide Interfaces', 'Move IPv6 prefixes', 'Hide IPv6 prefixes', 'Show Changes', 'Reset layout']) expect(screen.getByRole('button', { name })).toBeInTheDocument();
+  expect(within(screen.getByRole('region', { name: 'Hidden widgets' })).getByText('Changes')).toBeInTheDocument();
+});
+
+it('hides and shows a widget, saving the whole preferences and keeping what it does not know', async () => {
+  const fetchMock = layoutRoutes({ another: { version: 'keeps this' }, dashboard: {} });
+  mount(everything);
+  await unlock();
+
+  await userEvent.click(screen.getByRole('button', { name: 'Hide Interfaces' }));
+  expect(titles()).toEqual(['Changes', 'IPv6 prefixes', 'Hidden widgets']);
+  await userEvent.click(screen.getByRole('button', { name: 'Show Interfaces' }));
+  expect(titles()).toEqual(['Changes', 'Interfaces', 'IPv6 prefixes']);
+
+  const order = ['changes', 'interfaces', 'prefixes'];
+  expect(saves(fetchMock)).toEqual([
+    { another: { version: 'keeps this' }, dashboard: { order, hidden: ['interfaces'] } },
+    { another: { version: 'keeps this' }, dashboard: { order, hidden: [] } },
+  ]);
+});
+
+it('resets to the default layout', async () => {
+  const fetchMock = layoutRoutes({ dashboard: { order: ['prefixes', 'interfaces', 'changes'], hidden: ['changes'] } });
+  mount(everything);
+  await unlock();
+  await userEvent.click(screen.getByRole('button', { name: 'Reset layout' }));
+  expect(titles()).toEqual(['Changes', 'Interfaces', 'IPv6 prefixes']);
+  expect(saves(fetchMock)).toEqual([{ dashboard: {} }]);
+});
+
+it('says so when every widget is hidden', async () => {
+  layoutRoutes({ dashboard: { hidden: ['changes', 'interfaces', 'prefixes'] } });
+  mount(everything);
+  expect(await screen.findByText(/Every widget is hidden/)).toBeInTheDocument();
+});
+
+it('keeps the layout locked when the preferences cannot be read: a save would replace what it has not seen', async () => {
+  const fetchMock = layoutRoutes(jsonResponse(503, { error: { code: 'STORE_UNAVAILABLE', message: 'Preferences are temporarily unavailable.', details: [] } }));
+  mount(everything);
+  expect(await screen.findByText(/The layout cannot be changed now: Preferences are temporarily unavailable\./)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Layout locked' })).toBeDisabled();
+  expect(titles()).toEqual(['Changes', 'Interfaces', 'IPv6 prefixes']);
+  expect(saves(fetchMock)).toEqual([]);
+});
+
+it('says when a change was not saved', async () => {
+  layoutRoutes({}, () => jsonResponse(503, { error: { code: 'STORE_UNAVAILABLE', message: 'Preferences are temporarily unavailable.', details: [] } }));
+  mount(everything);
+  await unlock();
+  await userEvent.click(screen.getByRole('button', { name: 'Hide Changes' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('The layout was not saved');
 });

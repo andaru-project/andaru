@@ -146,6 +146,31 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* The grip takes the touch for itself, so a drag from it does not scroll; nothing else on a widget does. */
+.widget-grip {
+  background: none;
+  border: 0;
+  border-radius: var(--mantine-radius-default);
+  color: var(--mantine-color-dimmed);
+  cursor: grab;
+  display: grid;
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+  place-items: center;
+  touch-action: none;
+}
+
+.widget-grip:hover,
+.widget-grip:focus-visible {
+  color: var(--mantine-color-text);
+}
+
+.widget[data-dragging] {
+  box-shadow: var(--mantine-shadow-md);
+  position: relative;
+  z-index: 1;
+}
+
 .plain-list {
   display: grid;
   gap: var(--mantine-spacing-sm);
