@@ -112,7 +112,21 @@ func newHandlerWithAPIs(readLinks func(context.Context) ([]host.LinkStatus, erro
 			return
 		}
 		if r.URL.Path == "/api/v1/status/traffic" {
-			writeJSON(w, r, http.StatusOK, traffic.view())
+			// since is the time of the newest reading a client holds: it is sent what came after.
+			query := r.URL.Query()
+			var since time.Time
+			if raw := query.Get("since"); raw != "" {
+				var err error
+				if since, err = time.Parse(time.RFC3339Nano, raw); err != nil {
+					writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "since must be a time as the readings give it.")
+					return
+				}
+			}
+			if query.Del("since"); len(query) != 0 || strings.Contains(r.URL.RawQuery, "since=&") || r.URL.RawQuery == "since=" {
+				writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Only the since parameter is supported, with a value.")
+				return
+			}
+			writeJSON(w, r, http.StatusOK, traffic.view(since))
 			return
 		}
 		if r.URL.Path == "/api/v1/status/usage" {

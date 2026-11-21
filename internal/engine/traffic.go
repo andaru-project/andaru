@@ -11,9 +11,11 @@ import (
 )
 
 const (
-	trafficInterval = 30 * time.Second
+	// Often enough to show a dip of a few seconds. The history is in memory only, so the cost is small: a
+	// reading is under 100 bytes, an hour of one interface about 64 KiB, and a hundred interfaces a few megabytes.
+	trafficInterval = 5 * time.Second
 	// An hour of readings per interface.
-	trafficSamples = 120
+	trafficSamples = 720
 )
 
 // trafficSample is one interface's counters at one moment.
@@ -64,13 +66,22 @@ func (h *trafficHistory) record(now time.Time, counters map[string]host.Counters
 	}
 }
 
-// view copies the history out, interfaces by name.
-func (h *trafficHistory) view() trafficResponse {
+// view copies out the readings taken after since, interfaces by name; the zero time gives the whole hour. Every
+// interface the history holds is named, also with no reading that new, so a client that asks only for what it
+// lacks still learns which interfaces there are.
+func (h *trafficHistory) view(since time.Time) trafficResponse {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	response := trafficResponse{IntervalSeconds: int(trafficInterval / time.Second), Interfaces: make([]trafficInterface, 0, len(h.samples))}
 	for name, samples := range h.samples {
-		response.Interfaces = append(response.Interfaces, trafficInterface{Name: name, Samples: slices.Clone(samples)})
+		// Readings run oldest first, so what is new is a tail.
+		first, _ := slices.BinarySearchFunc(samples, since, func(sample trafficSample, since time.Time) int {
+			if sample.At.After(since) {
+				return 1
+			}
+			return -1
+		})
+		response.Interfaces = append(response.Interfaces, trafficInterface{Name: name, Samples: slices.Clone(samples[first:])})
 	}
 	slices.SortFunc(response.Interfaces, func(a, b trafficInterface) int { return strings.Compare(a.Name, b.Name) })
 	return response
