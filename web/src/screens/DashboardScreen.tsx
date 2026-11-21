@@ -146,7 +146,8 @@ const noZones = new Map<string, string>();
 export function DashboardScreen({ api, session, changes, system, onSessionLost }: DashboardScreenProps) {
   // Which zone each interface is in comes from the saved configuration, for accounts that may read it. It is
   // read when the dashboard opens, and again until it has been read: it changes with a save, which is made on
-  // another page. zonesSettled says the answer is in, or will not come, so a choice that depends on it can be made.
+  // another page. zonesKnown says the answer is in, so a choice that depends on it can be made; an account
+  // that may not read the configuration has its answer at once, and it is that there are none to know.
   const canReadConfig = session.capabilities.includes('configuration.read');
   const zoneMap = useResource(useCallback(async () => {
     if (!canReadConfig) return noZones;
@@ -155,11 +156,11 @@ export function DashboardScreen({ api, session, changes, system, onSessionLost }
   }, [api, canReadConfig]), onSessionLost);
   useVisiblePoll(zoneMap.refresh, pollMilliseconds, !zoneMap.data);
   const zones = zoneMap.data ?? noZones;
-  const zonesSettled = zoneMap.data !== undefined || zoneMap.error !== '';
+  const zonesKnown = zoneMap.data !== undefined;
   const all: Array<{ id: string; title: string; to?: string; capability: string; body: ReactNode }> = [
     { id: 'system', title: 'System', capability: 'status.read', body: <Loaded resource={system} what="the system description">{(loaded) => loaded && <SystemWidget info={loaded.info} loadedAt={loaded.loadedAt} />}</Loaded> },
     { id: 'resources', title: 'Resources', capability: 'status.read', body: <ResourcesWidget api={api} onSessionLost={onSessionLost} /> },
-    { id: 'traffic', title: 'Network activity', to: '/network/interfaces', capability: 'status.read', body: <TrafficWidget api={api} zones={zones} zonesSettled={zonesSettled} onSessionLost={onSessionLost} /> },
+    { id: 'traffic', title: 'Network activity', to: '/network/interfaces', capability: 'status.read', body: <TrafficWidget api={api} zones={zones} zonesKnown={zonesKnown} onSessionLost={onSessionLost} /> },
     { id: 'changes', title: 'Changes', to: '/changes', capability: 'configuration.read', body: <Loaded resource={changes} what="changes">{(state) => state && <ChangesText state={state} />}</Loaded> },
     { id: 'interfaces', title: 'Interfaces', to: '/network/interfaces', capability: 'status.read', body: <InterfacesWidget api={api} zones={zones} onSessionLost={onSessionLost} /> },
     { id: 'prefixes', title: 'IPv6 prefixes', to: '/network/interfaces', capability: 'status.read', body: <PrefixesWidget api={api} zones={zones} onSessionLost={onSessionLost} /> },

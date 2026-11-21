@@ -11,6 +11,8 @@ it('works out the processors\' busy share between two readings a poll or so apar
 });
 
 it('shows no share for a period that is not one', () => {
+  // Two answers a moment apart: a handful of ticks says nothing.
+  expect(cpuShare({ ...reading(0, 1000, 800), time: '2026-11-21T12:00:00.000Z' }, { ...reading(0, 1004, 800), time: '2026-11-21T12:00:00.005Z' }, 20)).toBeNull();
   // No ticks, no time, or time that went back.
   expect(cpuShare(reading(0, 1000, 800), reading(5, 1000, 800), 20)).toBeNull();
   expect(cpuShare(reading(5, 1000, 800), reading(5, 2000, 900), 20)).toBeNull();

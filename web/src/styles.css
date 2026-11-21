@@ -201,40 +201,42 @@ body {
   padding: 0;
 }
 
-/* The traffic graph: as wide as its widget, a fixed height. Download is a solid line and upload a dashed one,
-   so the two are told apart without colour. */
+/* The traffic graph: as wide as its widget and two fifths as high, so it keeps its proportions at any width.
+   Both lines take the interface's zone colour where it has one. */
+.traffic-frame {
+  position: relative;
+  touch-action: pan-y;
+}
+
 .traffic-graph {
+  aspect-ratio: 5 / 2;
   background: var(--andaru-ground);
   border-radius: var(--mantine-radius-default);
   display: block;
-  height: 7.5rem;
   width: 100%;
 }
 
 .traffic-graph path,
 .traffic-key path {
   fill: none;
-  stroke-linecap: round;
+  stroke: var(--traffic-line-light, var(--mantine-primary-color-filled));
   stroke-linejoin: round;
-  stroke-width: 2;
+  stroke-width: 1.5;
   vector-effect: non-scaling-stroke;
 }
 
-/* Both lines take the interface's zone colour where it has a zone. */
-.traffic-received path,
-path.traffic-received,
-.traffic-sent path,
-path.traffic-sent {
-  stroke: var(--traffic-line-light, var(--mantine-primary-color-filled));
-}
-
-:root[data-mantine-color-scheme="dark"] :is(.traffic-received path, path.traffic-received, .traffic-sent path, path.traffic-sent) {
+:root[data-mantine-color-scheme="dark"] :is(.traffic-graph, .traffic-key) path {
   stroke: var(--traffic-line-dark, var(--mantine-primary-color-4));
 }
 
-.traffic-sent path,
+/* Upload is dashed, and muted so the two also differ in strength. */
 path.traffic-sent {
-  stroke-dasharray: 6 4;
+  stroke-dasharray: 8 5;
+}
+
+path.traffic-sent,
+.traffic-dot.traffic-sent {
+  opacity: 0.6;
 }
 
 .traffic-key {
@@ -243,8 +245,27 @@ path.traffic-sent {
   width: 1.5rem;
 }
 
-.traffic-label {
-  color: var(--mantine-color-dimmed);
+/* The marked point: a line down the graph at its time, and a dot on each line there. */
+.traffic-guide {
+  border-left: 1px solid var(--mantine-color-dimmed);
+  bottom: 0;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+}
+
+.traffic-dot {
+  background: var(--traffic-line-light, var(--mantine-primary-color-filled));
+  border-radius: 50%;
+  height: 0.5rem;
+  margin: -0.25rem 0 0 -0.25rem;
+  pointer-events: none;
+  position: absolute;
+  width: 0.5rem;
+}
+
+:root[data-mantine-color-scheme="dark"] .traffic-dot {
+  background: var(--traffic-line-dark, var(--mantine-primary-color-4));
 }
 
 /* Figures: the direction on the left, its numbers in columns, right-aligned so they compare down a column. */

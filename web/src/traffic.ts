@@ -1,6 +1,6 @@
 import type { Traffic, TrafficSample } from './types';
 
-const hourMilliseconds = 3_600_000;
+export const hourMilliseconds = 3_600_000;
 
 // One point of the graph: the rates over the time up to at, in bits a second. A gap has no rates.
 export interface RatePoint { at: number; rx: number | null; tx: number | null }
@@ -17,13 +17,31 @@ export function rates(samples: TrafficSample[], intervalSeconds: number): RatePo
   });
 }
 
+// thin draws fewer points than were read: each run of neighbours becomes one point at their average, so an hour
+// of 5-second readings is a line and not a blur in a graph a few hundred pixels wide. The figures beside the
+// graph are worked out from every reading, so no peak is lost to the averaging. A run that is all gap stays a gap.
+export function thin(points: RatePoint[], most: number): RatePoint[] {
+  const run = Math.ceil(points.length / most);
+  if (run <= 1) return points;
+  const mean = (values: Array<number | null>) => {
+    const known = values.filter((value): value is number => value !== null);
+    return known.length === 0 ? null : known.reduce((sum, value) => sum + value, 0) / known.length;
+  };
+  const thinned: RatePoint[] = [];
+  // Runs are counted from the newest point back, so the newest run is whole and the line ends at the present.
+  for (let end = points.length; end > 0; end -= run) {
+    const part = points.slice(Math.max(end - run, 0), end);
+    thinned.unshift({ at: part[part.length - 1].at, rx: mean(part.map((point) => point.rx)), tx: mean(part.map((point) => point.tx)) });
+  }
+  return thinned;
+}
+
 // figures are the numbers beside the graph. current is the latest rate, and null when the interface has not
 // been read lately: an interface that has gone still has an hour's average and peak, but no rate now.
 export function figures(points: RatePoint[], pick: (point: RatePoint) => number | null, fresh: boolean) {
   const known = points.map(pick).filter((value): value is number => value !== null);
   if (known.length === 0) return { current: null, average: null, peak: null };
-  const last = points.at(-1);
-  return { current: fresh && last ? pick(last) : null, average: known.reduce((sum, value) => sum + value, 0) / known.length, peak: known.reduce((most, value) => Math.max(most, value), 0) };
+  return { current: fresh ? pick(points.at(-1)!) : null, average: known.reduce((sum, value) => sum + value, 0) / known.length, peak: Math.max(...known) };
 }
 
 // newest is the time of the latest reading of any interface, as the box wrote it, and its value; undefined
@@ -39,10 +57,16 @@ export function newest(traffic: Traffic) {
 }
 
 // merge adds an answer's readings to what is held, and keeps the hour. An answer marked complete is the whole
-// history and replaces it. An interface the box no longer names is gone from the history too.
+// history and replaces it. An interface the box no longer names is gone from the history too. A reading no
+// newer than the newest one held for its interface is not added: two answers to one question would otherwise
+// put the same readings in twice, and readings out of order draw as gaps for an hour.
 export function merge(held: Traffic | undefined, answer: Traffic): Traffic {
   if (!held || answer.complete) return answer;
-  const interfaces = answer.interfaces.map((entry) => ({ name: entry.name, samples: [...(held.interfaces.find((other) => other.name === entry.name)?.samples ?? []), ...entry.samples] }));
+  const interfaces = answer.interfaces.map((entry) => {
+    const before = held.interfaces.find((other) => other.name === entry.name)?.samples ?? [];
+    const lastAt = before.length > 0 ? Date.parse(before[before.length - 1].at) : -Infinity;
+    return { name: entry.name, samples: [...before, ...entry.samples.filter((sample) => Date.parse(sample.at) > lastAt)] };
+  });
   const merged = { ...answer, complete: true, interfaces };
   const end = newest(merged)?.time;
   if (end === undefined) return merged;

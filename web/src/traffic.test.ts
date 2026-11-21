@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { sample } from './test/traffic';
-import { busiest, chosenLabel, figures, firstShown, merge, newest, rates, type RatePoint } from './traffic';
+import { busiest, chosenLabel, figures, firstShown, merge, newest, rates, thin, type RatePoint } from './traffic';
 import type { Traffic } from './types';
 
 const history = (interfaces: Traffic['interfaces'], complete = true): Traffic => ({ intervalSeconds: 5, complete, interfaces });
@@ -27,6 +27,18 @@ it('makes a gap, never a spike, where a counter started again or readings are fa
   // Two readings at once, or the clock set back.
   expect(rates([sample(5, 0), sample(5, 100)], 5)[0]).toMatchObject(gap);
   expect(rates([sample(10, 0), sample(5, 100)], 5)[0]).toMatchObject(gap);
+});
+
+it('thins many points to a line by averaging neighbours, newest run whole, gaps kept', () => {
+  const points: RatePoint[] = [1, 2, 3, 4, 5, 6, 7].map((value) => ({ at: value * 1000, rx: value * 10, tx: value }));
+  // Seven points to at most three: runs of three, counted from the newest back.
+  expect(thin(points, 3)).toEqual([{ at: 1000, rx: 10, tx: 1 }, { at: 4000, rx: 30, tx: 3 }, { at: 7000, rx: 60, tx: 6 }]);
+  // Few enough already: as they are.
+  expect(thin(points, 7)).toBe(points);
+  expect(thin([], 3)).toEqual([]);
+  // A run with a gap in it averages what it has; a run that is all gap is a gap.
+  const gaps: RatePoint[] = [{ at: 1, rx: null, tx: null }, { at: 2, rx: null, tx: null }, { at: 3, rx: 10, tx: 1 }, { at: 4, rx: null, tx: null }];
+  expect(thin(gaps, 2)).toEqual([{ at: 2, rx: null, tx: null }, { at: 4, rx: 10, tx: 1 }]);
 });
 
 it('gives the figures beside a graph: the rate now, the average and the peak', () => {
@@ -56,6 +68,9 @@ it('adds an answer\'s readings to what is held, keeps the hour, and forgets an i
   const whole = history([{ name: 'ens18', samples: [sample(-60, 100)] }]);
   expect(merge(held, whole)).toBe(whole);
   expect(merge(undefined, whole)).toBe(whole);
+  // Two answers to one question: the readings go in once, in order, so no gap is made of them.
+  const twice = merge(merge(held, history([{ name: 'ens18', samples: [sample(10, 4), sample(15, 5)] }], false)), history([{ name: 'ens18', samples: [sample(10, 4), sample(15, 5), sample(20, 6)] }], false));
+  expect(twice.interfaces[0].samples.map((item) => item.rxBytes)).toEqual([2, 3, 4, 5, 6]);
 });
 
 it('names the interface that moved the most', () => {
