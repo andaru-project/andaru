@@ -95,12 +95,11 @@ This document amends the [shell design](2026-11-21-web-ui-shell-design.md): its 
 
 ## Add-on widgets: a direction, not a design
 
-Add-ons run as containers. The web UI's content security policy allows scripts from the box's own origin only, so an add-on cannot hand the browser code to run in the page, and should not: that code would hold the administrator's session.
+Decided by the owner, 2026-11-21: **add-ons declare their widgets, and Andaru draws them.** No frames.
 
-Two ways fit. The author recommends the first, with the second kept possible.
-
-- **Declared widgets.** The add-on's manifest declares a widget: a title, a data address the engine proxies to the add-on, and one of a small set of kinds (a list of names and values, a list of states, a table, a number with a trend). The web UI draws it. Every widget looks like Andaru, works on a phone, and no add-on code runs in the browser. An add-on cannot draw something the kinds do not cover.
-- **Framed widgets.** The add-on serves a page, shown in a sandboxed frame from a separate origin with no access to the session. The add-on can draw anything. It will not look or scale like the rest, and it needs the separate origin and a frame policy.
+- The add-on's manifest declares a widget: a title, a data address the engine proxies to the add-on, and one of a small set of kinds (a list of names and values, a list of states, a table, a number with a trend).
+- Every widget then looks like Andaru and works on a phone, and no add-on code runs in the browser. That matters beyond looks: the content security policy allows scripts from the box's own origin only, and code in the page would hold the administrator's session.
+- Add-ons may later get some way to draw for themselves. What that is stays undecided; it will not be a frame.
 
 The built-in widgets of call 10 are ordinary components in a list of `{id, title, capability, component}`. Nothing more is built for add-ons until the add-on slice, which decides the manifest.
 
@@ -110,7 +109,6 @@ The built-in widgets of call 10 are ordinary components in a list of `{id, title
 - **Identifiers (call 11):** leave the board's serial number out, or show it to administrators?
 - **Slices (call 16):** is that order right?
 - **Hiding and reordering (call 14):** after those slices, or required from the start?
-- **Add-on widgets:** declared, framed, or both?
 - **Tree depth:** is Rules with a sub-page per chain right, or should the two chains sit directly under Firewall?
 
 ## Out of scope
