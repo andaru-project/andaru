@@ -34,9 +34,9 @@ const pollMilliseconds = 10_000;
 function Padlock({ open }: { open: boolean }) {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
-      <rect x="3" y="7" width="10" height="7" rx="1.5" fill="currentColor" />
-      {/* Open, the shackle swings clear of the body: a gap of two pixels reads as closed at this size. */}
-      <path d={open ? 'M5.5 7V4.5a2.5 2.5 0 0 1 4.9-0.7' : 'M5.5 7V4.5a2.5 2.5 0 0 1 5 0V7'} transform={open ? 'rotate(28 5.5 7)' : undefined} />
+      {/* Open, the shackle hangs off the side of the body: a shackle lifted two pixels reads as closed at this size. */}
+      <rect x={open ? 1 : 3} y="7" width="10" height="7" rx="1.5" fill="currentColor" />
+      <path d={open ? 'M8.5 7V4a3 3 0 0 1 6 0v1.5' : 'M5.5 7V4.5a2.5 2.5 0 0 1 5 0V7'} />
     </svg>
   );
 }
