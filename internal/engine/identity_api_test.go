@@ -113,6 +113,10 @@ func TestIdentityAPICreationTargetsAndTokenReplay(t *testing.T) {
 		if response.Code != http.StatusOK || strings.Contains(response.Body.String(), tokenResult.Secret) {
 			t.Fatalf("audited query %s status=%d body=%s", path, response.Code, response.Body)
 		}
+		// Byte-exact names: a browser, unlike Go's decoder, does not read "Kind" as "kind".
+		if !strings.Contains(response.Body.String(), `"actor":{"kind":"system","id":"root"}`) {
+			t.Fatalf("audit actor is not in the contract's form: %s", response.Body)
+		}
 		if strings.Contains(path, "/export") && !strings.Contains(response.Header().Get("Content-Disposition"), "andaru-audit.json") {
 			t.Fatalf("audit export missing attachment header: %v", response.Header())
 		}

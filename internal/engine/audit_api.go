@@ -14,10 +14,17 @@ type auditAPI struct {
 	coordinator *securityCoordinator
 }
 
+// auditActorView names the actor's fields as the API contract does. authz.Actor carries no JSON tags, and Go's
+// decoders match names without regard to case, so only a browser notices "Kind" and "ID".
+type auditActorView struct {
+	Kind authz.ActorKind `json:"kind"`
+	ID   string          `json:"id"`
+}
+
 type auditEventView struct {
 	ID          uint64            `json:"id"`
 	At          string            `json:"at"`
-	Actor       authz.Actor       `json:"actor"`
+	Actor       auditActorView    `json:"actor"`
 	Source      string            `json:"source"`
 	Action      audit.Action      `json:"action"`
 	Target      string            `json:"target"`
@@ -94,7 +101,7 @@ func (h *auditAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for _, event := range events {
 		metadata := cloneStringMap(event.Metadata)
 		page.Items = append(page.Items, auditEventView{
-			ID: event.ID, At: event.At.UTC().Format(time.RFC3339Nano), Actor: event.Actor,
+			ID: event.ID, At: event.At.UTC().Format(time.RFC3339Nano), Actor: auditActorView{Kind: event.Actor.Kind, ID: event.Actor.ID},
 			Source: event.Source, Action: event.Action, Target: event.Target, Result: event.Result,
 			OperationID: event.OperationID, Category: event.Category, Count: event.Count, Metadata: metadata,
 		})
