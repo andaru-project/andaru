@@ -426,9 +426,14 @@ func claimWebSocket(path string) (_ *os.File, err error) {
 		return nil, errors.New("web engine socket path already exists and is not a root-owned socket; investigate it rather than replacing it")
 	}
 	// A listener that answers does not hold the lock (an engine from before the lock existed): leave it its socket.
-	if connection, dialErr := net.DialTimeout("unix", path, time.Second); dialErr == nil {
+	// Only a refused connection says nothing listens: a full backlog or another socket type must not read as dead.
+	connection, dialErr := net.DialTimeout("unix", path, time.Second)
+	if dialErr == nil {
 		_ = connection.Close()
 		return nil, errors.New("web engine socket path already exists and something listens on it without holding its lock")
+	}
+	if !errors.Is(dialErr, syscall.ECONNREFUSED) {
+		return nil, fmt.Errorf("web engine socket path already exists and cannot be shown dead: %w", dialErr)
 	}
 	slog.Warn("removing the web socket a previous engine left behind", "path", path)
 	if err = os.Remove(path); err != nil && !os.IsNotExist(err) {

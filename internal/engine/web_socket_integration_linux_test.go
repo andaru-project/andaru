@@ -264,6 +264,18 @@ func TestWebSocketReplacesOnlyADeadLeftover(t *testing.T) {
 		kept(t, path)
 	})
 
+	t.Run("a socket that cannot be shown dead is kept", func(t *testing.T) {
+		path := webSocketPath(t)
+		// A datagram socket answers a stream connect with EPROTOTYPE, not ECONNREFUSED.
+		other, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: path, Net: "unixgram"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer other.Close()
+		refused(t, path, "cannot be shown dead")
+		kept(t, path)
+	})
+
 	t.Run("a lock that is a symlink or not a private file is refused", func(t *testing.T) {
 		path := webSocketPath(t)
 		target := filepath.Join(filepath.Dir(path), "elsewhere")
