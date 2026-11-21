@@ -154,16 +154,20 @@ body {
   overflow-wrap: anywhere;
 }
 
-/* The dashboard: as many columns as fit, and each widget as tall as what is in it. Widgets run down a column
-   and then on to the next, so a short one is not stretched to its neighbour's height. */
+/* The dashboard: as many columns as fit, and each widget as tall as what is in it. The columns are real ones,
+   filled in turn, so a widget keeps its column when another changes height, and a short one is not stretched
+   to its neighbour's. */
 .widget-columns {
-  column-gap: var(--mantine-spacing-md);
-  columns: 20rem;
+  align-items: flex-start;
+  display: flex;
+  gap: var(--mantine-spacing-md);
 }
 
-.widget-columns > * {
-  break-inside: avoid;
-  margin-bottom: var(--mantine-spacing-md);
+.widget-column {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: var(--mantine-spacing-md);
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -186,6 +190,7 @@ body {
 
 .widget[data-dragging] {
   box-shadow: var(--mantine-shadow-md);
+  position: relative;
   z-index: 1;
 }
 
@@ -236,42 +241,18 @@ body {
   padding: 0;
 }
 
-/* The traffic graph: as wide as its widget. Both lines take the interface's zone colour where it has one. */
+/* The traffic graph: as wide as its widget and two fifths as high, so it keeps its proportions at any width.
+   Both lines take the interface's zone colour where it has one. */
 .traffic-frame {
-  flex: 1 0 auto;
-  max-height: 24rem;
   position: relative;
   touch-action: pan-y;
 }
 
-/* A graph is at least two fifths as high as it is wide. In a widget that its row makes taller, the graphs
-   share the room left over, so the panel is filled and not half empty; up to a height, past which a graph
-   would be a strip with its rates drawn out of all proportion. The widget is named through its grid so that
-   the rule outweighs the component's own, whatever order the stylesheets load in. */
-.traffic-frame::before {
-  content: "";
-  display: block;
-  padding-top: 40%;
-}
-
-.widget-columns > .widget,
-.traffic-one {
-  display: flex;
-  flex-direction: column;
-}
-
-.widget > .widget-body,
-.traffic-view,
-.traffic-one {
-  flex: 1 0 auto;
-}
-
 .traffic-graph {
+  aspect-ratio: 5 / 2;
   background: var(--andaru-ground);
   border-radius: var(--mantine-radius-default);
-  height: 100%;
-  inset: 0;
-  position: absolute;
+  display: block;
   width: 100%;
 }
 
@@ -492,16 +473,6 @@ path.traffic-sent {
 .mantine-Alert-root a {
   color: inherit;
   text-decoration: underline;
-}
-
-/* A group's name in the facts table: small capitals over its rows. */
-.facts .facts-head {
-  color: var(--mantine-color-text);
-  font-size: var(--mantine-font-size-xs);
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  padding-top: var(--mantine-spacing-xs);
-  text-transform: uppercase;
 }
 
 .quiet-badge {

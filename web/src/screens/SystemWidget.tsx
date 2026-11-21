@@ -40,7 +40,8 @@ function useBoxClock(info: SystemInfo, loadedAt: number) {
 // System details page.
 export function SystemWidget({ info, loadedAt }: { info: SystemInfo; loadedAt: number }) {
   const running = useBoxClock(info, loadedAt);
-  const machine = words(info.hardware.vendor, info.hardware.product);
+  // A guest that names no machine is still said to be one.
+  const machine = words(info.hardware.vendor, info.hardware.product) || (info.guest ? 'virtual machine' : '');
   return (
     <Facts>
       <Row label="Version">{info.version}</Row>

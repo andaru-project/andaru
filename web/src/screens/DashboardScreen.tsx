@@ -3,6 +3,7 @@ import { SortableContext, rectSortingStrategy, sortableKeyboardCoordinates, useS
 import { CSS } from '@dnd-kit/utilities';
 import { ActionIcon, Alert, Anchor, Badge, Button, Group, Loader, Paper, Stack, Text, Title } from '@mantine/core';
 import { useCallback, useRef, useState, type ReactNode } from 'react';
+import { useElementSize } from '@mantine/hooks';
 import { Link } from 'react-router';
 import { reportError, type ApiClient } from '../api';
 import { arrange, moved } from '../dashboardLayout';
@@ -58,7 +59,7 @@ function Widget({ id, title, to, more, unlocked, onHide, children }: { id: strin
         {/* Every title looks the same. Where a page has the full view, a link at the other edge names it. */}
         <Title order={3} size="h5" id={`widget-${id}`}>{title}</Title>
         <Group gap="xs" wrap="nowrap">
-          {to && <Anchor component={Link} to={to} size="sm" aria-label={`${title}: ${more}`}>{more} <span aria-hidden="true">→</span></Anchor>}
+          {to && more && <Anchor component={Link} to={to} size="sm" aria-label={`${title}: ${more}`}>{more} <span aria-hidden="true">→</span></Anchor>}
           {unlocked && <Button size="compact-xs" variant="default" aria-label={`Hide ${title}`} onClick={onHide}>Hide</Button>}
           {unlocked && <ActionIcon className="widget-grip" size="xl" variant="subtle" color="gray" ref={setActivatorNodeRef} {...attributes} {...listeners} aria-label={`Move ${title}`}><Grip /></ActionIcon>}
         </Group>
@@ -165,6 +166,11 @@ export function DashboardScreen({ api, session, system, onSessionLost }: Dashboa
   const placed = layout.order.flatMap((id) => allowed.filter((widget) => widget.id === id));
   const shown = placed.filter((widget) => !layout.hidden.includes(widget.id));
   const hidden = placed.filter((widget) => layout.hidden.includes(widget.id));
+  // As many columns as fit at 20rem each, one before the width is known. The widgets are dealt to them in turn,
+  // so they read across in their order and each column is as tall as its own widgets.
+  const { ref: gridRef, width: gridWidth } = useElementSize();
+  const columnCount = Math.max(1, Math.floor((gridWidth + 16) / (320 + 16)));
+  const columns = Array.from({ length: columnCount }, (_, column) => shown.filter((_, index) => index % columnCount === column));
   // A drag starts after a few pixels, so a tap on the grip is not one.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
 
@@ -225,8 +231,12 @@ export function DashboardScreen({ api, session, system, onSessionLost }: Dashboa
       {!preferences.data && !preferences.error ? <Loader aria-label="Loading the layout" /> : (
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={dropped} accessibility={{ announcements, screenReaderInstructions: instructions }}>
           <SortableContext items={shown.map((widget) => widget.id)} strategy={rectSortingStrategy}>
-            <div className="widget-columns">
-              {shown.map(({ id, title, to, more, body }) => <Widget key={id} id={id} title={title} to={to} more={more} unlocked={unlocked} onHide={() => toggle(id)}>{body}</Widget>)}
+            <div className="widget-columns" ref={gridRef}>
+              {columns.map((column, index) => (
+                <div className="widget-column" key={index}>
+                  {column.map(({ id, title, to, more, body }) => <Widget key={id} id={id} title={title} to={to} more={more} unlocked={unlocked} onHide={() => toggle(id)}>{body}</Widget>)}
+                </div>
+              ))}
             </div>
           </SortableContext>
         </DndContext>

@@ -102,7 +102,7 @@ function Graph({ entry, zone, end, intervalSeconds, live }: { entry: Traffic['in
   const place = (rate: number): CSSProperties => ({ left: `${(x(mark!.at) / width) * 100}%`, top: `${(y(rate) / height) * 100}%` });
 
   return (
-    <section className="traffic-one" aria-label={`Traffic on ${entry.name}`} style={zone ? lineColors(zone) : undefined}>
+    <section aria-label={`Traffic on ${entry.name}`} style={zone ? lineColors(zone) : undefined}>
       {/* The scale and the span are labels beside the graph, not in it, where the lines would run through them. */}
       <Group gap="xs" mb={4} justify="space-between">
         <Group gap="xs"><Text ff="monospace" fw={600}>{entry.name}</Text><ZoneBadge name={zone} /></Group>
@@ -146,7 +146,7 @@ export function TrafficView({ traffic, zones, selected, live, onSelect }: { traf
   const drawn = choosing ? traffic.interfaces.filter((entry) => selected.includes(entry.name)) : traffic.interfaces;
   const label = chosenLabel(drawn.map((entry) => entry.name));
   return (
-    <Stack className="traffic-view" gap="md">
+    <Stack gap="md">
       {choosing && (
         <Menu closeOnItemClick={false} position="bottom-start" withinPortal>
           <Menu.Target><Button variant="default" size="xs" justify="space-between" rightSection={<ComboboxChevron />} aria-label={`Interfaces shown: ${label}`}>{label}</Button></Menu.Target>
