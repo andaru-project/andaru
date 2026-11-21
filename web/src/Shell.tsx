@@ -168,6 +168,8 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
           {!connected && <Alert color="red" role="alert" title="Connection lost">The box does not answer. Pages show the last data it sent.</Alert>}
           {accountError && <Alert color="red" role="alert" title="Account request failed">{accountError}</Alert>}
           {/* Review and apply owns these controls on its own page. */}
+          {/* The Changes page says this itself. Elsewhere, a state that cannot be read must not look like nothing pending. */}
+          {!onChangesPage && changes.error && <Alert color="orange" role="alert" title="Whether changes are pending cannot be read">{changes.error}</Alert>}
           {!onChangesPage && <PendingNotice api={api} session={session} state={changes.data} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />}
           <Routes>
             <Route path="/" element={<DashboardScreen api={api} session={session} system={system} onSessionLost={onSessionLost} />} />

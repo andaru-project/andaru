@@ -53,7 +53,7 @@ it('leaves out what a machine does not report, and says a guest is one', () => {
   expect(value('Hardware crypto')).toBe('none');
   expect(value('Virtualisation')).toBe('none');
   expect(value('CPU vulnerabilities')).toBe('no report');
-  for (const label of ['Uptime', 'Serial', 'BIOS', 'Board']) expect(screen.queryByRole('rowheader', { name: label })).not.toBeInTheDocument();
+  for (const label of ['Uptime', 'Serial', 'BIOS', 'Board', 'Platform']) expect(screen.queryByRole('rowheader', { name: label })).not.toBeInTheDocument();
 });
 
 it('names the vulnerabilities that are not mitigated, and those the kernel is unsure of', () => {

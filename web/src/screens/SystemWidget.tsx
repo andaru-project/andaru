@@ -9,7 +9,7 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 }
 
 function Head({ children }: { children: ReactNode }) {
-  return <Table.Tr><Table.Th colSpan={2} scope="rowgroup" className="facts-head">{children}</Table.Th></Table.Tr>;
+  return <Table.Tr><Table.Th colSpan={2} className="facts-head">{children}</Table.Th></Table.Tr>;
 }
 
 const list = (names: string[]) => (names.length > 0 ? names.join(', ') : 'none');
@@ -44,14 +44,14 @@ export function SystemWidget({ info, loadedAt }: { info: SystemInfo; loadedAt: n
         {Number.isFinite(clock) && <Row label="Clock">{new Date(clock).toISOString().slice(0, 16).replace('T', ' ')} UTC</Row>}
         {Number.isFinite(uptime) && uptime >= 0 && <Row label="Uptime">{duration(uptime)}</Row>}
         <Head>Hardware</Head>
-        <Row label="Machine">{machine || '—'}{info.guest && ` · virtual machine${info.guest !== 'unknown' ? ` (${info.guest})` : ''}`}</Row>
+        <Row label="Machine">{[machine, info.guest && `virtual machine${info.guest !== 'unknown' ? ` (${info.guest})` : ''}`].filter(Boolean).join(' · ') || '—'}</Row>
         {board && board !== machine && <Row label="Board">{board}</Row>}
         {hardware.serial && <Row label="Serial">{hardware.serial}</Row>}
         {firmware && <Row label="BIOS">{firmware}</Row>}
         <Head>Processor</Head>
         <Row label="CPU">{cpu.model || info.architecture}, {plural(cpu.cores, 'core')}{cpu.threads !== cpu.cores && `, ${plural(cpu.threads, 'thread')}`}</Row>
         {/* The memory installed is in the Resources widget, beside what is used of it. */}
-        <Row label="Platform">{[cpu.level || info.architecture, cpu.microcode && `microcode ${cpu.microcode}`].filter(Boolean).join(' · ')}</Row>
+        {(cpu.level || cpu.microcode) && <Row label="Platform">{[cpu.level, cpu.microcode && `microcode ${cpu.microcode}`].filter(Boolean).join(' · ')}</Row>}
         <Row label="Hardware crypto">{list(cpu.features.cryptography)}</Row>
         <Row label="CPU security">{list(cpu.features.security)}</Row>
         <Row label="Virtualisation">{list([...cpu.features.virtualization, ...(info.iommu ? ['IOMMU active'] : [])])}</Row>

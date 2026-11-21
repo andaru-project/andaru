@@ -47,8 +47,7 @@ export function zonesByInterface(snapshot: Snapshot, preview: Preview) {
 
 // A zone keeps one colour everywhere. The two every box has take the colours firewalls have long given them,
 // green inside and red outside; any other zone takes one from its name, so it is the same on every page. Each
-// of these gets dark text from the theme at 5.6:1 or better, where grape, indigo and violet would get white
-// under 4.5:1; and each has a shade that shows as a line on the light ground, which yellow has not.
+// has a shade that shows as a line on the light ground, which yellow has not.
 const known = new Map([['lan', 'green'], ['wan', 'red']]);
 const palette = ['blue', 'orange', 'teal', 'pink', 'cyan', 'lime'];
 export function zoneColor(name: string) {

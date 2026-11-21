@@ -222,7 +222,7 @@ export function DashboardScreen({ api, session, system, onSessionLost }: Dashboa
         <Title order={2}>Dashboard</Title>
         <Group gap="xs">
           {unlocked && <Button size="xs" variant="default" onClick={() => save({})}>Reset layout</Button>}
-          {/* The name says the state, so it is not also a pressed button. */}
+          {/* The name says what a press does, so it is not also a pressed button. */}
           <Button ref={padlock} size="xs" variant="default" disabled={!preferences.data} leftSection={<Padlock open={unlocked} />} onClick={() => setUnlocked(!unlocked)}>{unlocked ? 'Done' : 'Edit layout'}</Button>
         </Group>
       </Group>
@@ -237,7 +237,7 @@ export function DashboardScreen({ api, session, system, onSessionLost }: Dashboa
           </SortableContext>
         </DndContext>
       )}
-      {shown.length === 0 && <Alert role="status">Every widget is hidden.{!unlocked && ' Unlock the layout to show them again.'}</Alert>}
+      {shown.length === 0 && <Alert role="status">Every widget is hidden.{!unlocked && ' Edit the layout to show them again.'}</Alert>}
       {unlocked && hidden.length > 0 && (
         <Paper component="section" withBorder p="md" aria-labelledby="hidden-widgets">
           <Title order={3} size="h5" mb="sm" id="hidden-widgets">Hidden widgets</Title>

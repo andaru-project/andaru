@@ -76,6 +76,12 @@ it('shows the pending notice everywhere but on Review and apply', async () => {
   expect(await screen.findByText('Saved changes are not applied yet')).toBeInTheDocument();
 });
 
+it('says so when the change state cannot be read: no news must not look like nothing pending', async () => {
+  fetchRoutes({ '/api/v1/applies': () => jsonResponse(503, { error: { code: 'STORE_UNAVAILABLE', message: 'The applies are unavailable.', details: [] } }), '/api/v1/versions?': { state: 'saved', items: [] } });
+  mount('/system/session');
+  expect(await screen.findByText('Whether changes are pending cannot be read')).toBeInTheDocument();
+});
+
 it.each(['/changes', '/changes/'])('leaves the apply controls to the Review and apply page at %s', async (path) => {
   routes();
   mount(path);

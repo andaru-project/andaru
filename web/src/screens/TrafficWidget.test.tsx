@@ -38,12 +38,12 @@ it('shows a graph for each interface, top to bottom, with its zone and its figur
   expect(within(graph('ens19')).getByText('zone lan')).toBeInTheDocument();
 
   // The arrows are for the eye; the names are what is read out.
-  expect(within(graph('ens18')).getByRole('rowheader', { name: 'Down' })).toHaveTextContent('↓ Down');
-  expect(within(graph('ens18')).getByRole('rowheader', { name: 'Up' })).toHaveTextContent('↑ Up');
+  expect(within(graph('ens18')).getByRole('rowheader', { name: 'Download' })).toHaveTextContent('↓ Down');
+  expect(within(graph('ens18')).getByRole('rowheader', { name: 'Upload' })).toHaveTextContent('↑ Up');
   expect(within(graph('ens18')).getAllByRole('columnheader').map((header) => header.textContent)).toEqual(['Current', 'Avg', 'Max']);
-  expect(row('ens18', 'Down')).toEqual(['4.0 Mbps', '2.3 Mbps', '4.0 Mbps']);
-  expect(row('ens18', 'Up')).toEqual(['1.0 Mbps', '1.0 Mbps', '1.0 Mbps']);
-  expect(row('ens19', 'Down')).toEqual(['1.0 kbps', '1.0 kbps', '1.0 kbps']);
+  expect(row('ens18', 'Download')).toEqual(['4.0 Mbps', '2.3 Mbps', '4.0 Mbps']);
+  expect(row('ens18', 'Upload')).toEqual(['1.0 Mbps', '1.0 Mbps', '1.0 Mbps']);
+  expect(row('ens19', 'Download')).toEqual(['1.0 kbps', '1.0 kbps', '1.0 kbps']);
   // The scale and the span are labels on the graph, not a sentence.
   expect(within(graph('ens18')).getByText('0 – 5.0 Mbps')).toBeInTheDocument();
   expect(within(graph('ens18')).getByText('−1 h')).toBeInTheDocument();
@@ -120,14 +120,14 @@ it('shows every interface when there are one or two, whatever was chosen before'
 
 it('shows no rate as current while the box does not answer', () => {
   render(<TrafficView traffic={pair} zones={zones} selected={['ens18']} live={false} onSelect={vi.fn()} />);
-  expect(row('ens18', 'Down')).toEqual(['—', '2.3 Mbps', '4.0 Mbps']);
+  expect(row('ens18', 'Download')).toEqual(['—', '2.3 Mbps', '4.0 Mbps']);
 });
 
 it('gives an interface that has gone its hour, but no rate now', () => {
   render(<TrafficView traffic={many} zones={zones} selected={['ppp0', 'veth0']} live onSelect={vi.fn()} />);
-  expect(row('ppp0', 'Down')).toEqual(['—', '2.0 Mbps', '2.0 Mbps']);
+  expect(row('ppp0', 'Download')).toEqual(['—', '2.0 Mbps', '2.0 Mbps']);
   // One reading makes no rate at all.
-  expect(row('veth0', 'Down')).toEqual(['—', '—', '—']);
+  expect(row('veth0', 'Download')).toEqual(['—', '—', '—']);
 });
 
 it('lets the user tick which interfaces show when there are more than two', async () => {
@@ -166,14 +166,14 @@ it('reads the hour once, then every 5 seconds only what came after the newest re
   const tail: Traffic = { intervalSeconds: 5, complete: false, interfaces: [{ name: 'ens18', samples: [sample(20, 12 * megabit, 4 * megabit)] }, { name: 'ens19', samples: [] }] };
   const fetchMock = fetchRoutes({ '/api/v1/status/traffic?since=': () => jsonResponse(200, tail), '/api/v1/status/traffic': () => jsonResponse(200, pair) });
   render(<TrafficWidget api={new ApiClient('csrf')} zones={zones} zonesKnown onSessionLost={vi.fn()} />);
-  await waitFor(() => expect(row('ens18', 'Down')[0]).toBe('4.0 Mbps'));
+  await waitFor(() => expect(row('ens18', 'Download')[0]).toBe('4.0 Mbps'));
   expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(['/api/v1/status/traffic']);
   act(() => { vi.advanceTimersByTime(5_000); });
   // 5 megabits more in 5 seconds; the average and the peak now count four rates.
-  await waitFor(() => expect(row('ens18', 'Down')).toEqual(['5.0 Mbps', '3.0 Mbps', '5.0 Mbps']));
+  await waitFor(() => expect(row('ens18', 'Download')).toEqual(['5.0 Mbps', '3.0 Mbps', '5.0 Mbps']));
   expect(fetchMock.mock.calls.map(([url]) => url)[1]).toBe(`/api/v1/status/traffic?since=${encodeURIComponent(sample(15, 0).at)}`);
   // ens19 had nothing new: it keeps what it had.
-  expect(row('ens19', 'Down')[1]).toBe('1.0 kbps');
+  expect(row('ens19', 'Download')[1]).toBe('1.0 kbps');
 });
 
 it('makes its first choice once the zones are known, wan and lan, and keeps it until the user chooses', async () => {

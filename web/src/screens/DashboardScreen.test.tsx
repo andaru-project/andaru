@@ -179,7 +179,7 @@ it('resets to the default layout', async () => {
 it('says so when every widget is hidden, and how to get them back while locked', async () => {
   layoutRoutes({ dashboard: { hidden: ['system', 'resources', 'traffic', 'interfaces', 'prefixes'] } });
   await mount(everything);
-  expect(screen.getByText(/Every widget is hidden/)).toHaveTextContent('Every widget is hidden. Unlock the layout to show them again.');
+  expect(screen.getByText(/Every widget is hidden/)).toHaveTextContent('Every widget is hidden. Edit the layout to show them again.');
   await unlock();
   expect(screen.getByText(/Every widget is hidden/)).toHaveTextContent(/^Every widget is hidden\.$/);
 });
