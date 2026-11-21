@@ -104,7 +104,7 @@ var (
 
 	// What vendors leave in a DMI field they never filled.
 	dmiPlaceholders = []string{"to be filled by o.e.m.", "default string", "none", "not specified", "not applicable", "n/a", "unknown", "0", "system serial number", "system product name", "system manufacturer", "system version"}
-	// What a virtual machine's DMI vendor or product says, where no CPU flag does: arm64 has no "hypervisor" flag.
+	// What a virtual machine's DMI vendor or product says. Used on arm64 alone.
 	guestMarks = []string{"qemu", "kvm", "vmware", "virtualbox", "virtual machine", "xen", "amazon ec2", "google compute engine", "parallels", "openstack", "bochs", "bhyve"}
 )
 
@@ -136,7 +136,9 @@ func ReadSystemInfo(root string, now time.Time) (SystemInfo, error) {
 	}
 	// The kernel names its architecture since 6.1; before that, this binary's own is the same one.
 	if info.Architecture == "" {
-		info.Architecture = map[string]string{"amd64": "x86_64", "arm64": "aarch64"}[runtime.GOARCH]
+		if info.Architecture = map[string]string{"amd64": "x86_64", "arm64": "aarch64"}[runtime.GOARCH]; info.Architecture == "" {
+			info.Architecture = runtime.GOARCH
+		}
 	}
 	if info.Hardware.Serial == "" {
 		info.Hardware.Serial = dmi("board_serial")
@@ -218,12 +220,13 @@ func ReadSystemInfo(root string, now time.Time) (SystemInfo, error) {
 		info.CPU.Vulnerabilities = append(info.CPU.Vulnerabilities, Vulnerability{Name: entry.Name(), Status: status, State: vulnerabilityState(status)})
 	}
 
-	// Xen and s390 say so under /sys/hypervisor; x86 guests carry the "hypervisor" flag; elsewhere only the
-	// firmware's strings tell.
+	// Xen and s390 say so under /sys/hypervisor, and x86 guests carry the "hypervisor" flag. arm64 has no such
+	// flag, so there, and only there, the firmware's strings tell: on x86 they would call a bare-metal cloud
+	// machine a guest.
 	firmware := strings.ToLower(info.Hardware.Vendor + " " + info.Hardware.Product)
 	if hypervisor := read("/sys/hypervisor/type"); hypervisor != "" {
 		info.Guest = hypervisor
-	} else if slices.Contains(flags, "hypervisor") || slices.ContainsFunc(guestMarks, func(mark string) bool { return strings.Contains(firmware, mark) }) {
+	} else if slices.Contains(flags, "hypervisor") || arm && slices.ContainsFunc(guestMarks, func(mark string) bool { return strings.Contains(firmware, mark) }) {
 		if info.Guest = info.Hardware.Vendor; info.Guest == "" {
 			info.Guest = "unknown"
 		}

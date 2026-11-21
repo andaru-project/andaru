@@ -207,6 +207,11 @@ func TestReadSystemInfoAsAGuestWithLittleToRead(t *testing.T) {
 	if xen.Guest != "xen" || unnamed.Guest != "unknown" {
 		t.Fatalf("guests read as %q and %q", xen.Guest, unnamed.Guest)
 	}
+	// A bare-metal cloud machine: the firmware names the cloud, the CPU has no hypervisor flag. It is hardware.
+	metal, _ := ReadSystemInfo(systemTree(t, map[string]string{"/proc/cpuinfo": "processor\t: 0\nflags\t\t: fpu lm vmx\n", "/sys/class/dmi/id/sys_vendor": "Amazon EC2\n", "/sys/class/dmi/id/product_name": "c5.metal\n"}), time.Now())
+	if metal.Guest != "" {
+		t.Fatalf("a bare-metal machine read as a guest of %q", metal.Guest)
+	}
 }
 
 func TestReadSystemInfoOnArm64(t *testing.T) {
