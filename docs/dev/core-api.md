@@ -72,6 +72,7 @@ The actual OpenAPI 3.1 document is embedded from [`internal/engine/openapi.json`
 | Resource | Result |
 | --- | --- |
 | `GET /api/v1/status/links` | Complete current snapshot as `{"items":[...]}` |
+| `GET /api/v1/status/system` | What the box is: the Andaru version, host name, kernel, boot time, memory, CPU (model, cores, loaded microcode, x86-64 level, the features a firewall gains from, the kernel's vulnerability report), hardware and BIOS from DMI, and whether it is a guest. Read from `/proc` and `/sys` at each request; what a machine does not report is an empty string or list |
 | `GET /api/v1/openapi.json` | The implemented OpenAPI contract |
 | `GET /api/v1/schema` | Public declaration/write/redacted-view JSON Schema; private secret-store layout is not served |
 | `GET /api/v1/config` | Latest saved snapshot, labelled `state:"saved"`, never active state |

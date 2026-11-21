@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/host"
@@ -48,6 +49,15 @@ type errorResponse struct {
 // prefixesRoot is where the prefix view reads the host's files; tests point it elsewhere.
 var prefixesRoot = ""
 
+// systemRoot is where the system description reads the kernel's files; tests point it elsewhere.
+var systemRoot = ""
+
+// systemResponse is the box's description beside the Andaru version that serves it.
+type systemResponse struct {
+	Version string `json:"version"`
+	host.SystemInfo
+}
+
 func newHandler(readLinks func(context.Context) ([]host.LinkStatus, error), configuration http.Handler) http.Handler {
 	return newHandlerWithAPIs(readLinks, configuration, nil, nil)
 }
@@ -73,7 +83,7 @@ func newHandlerWithAPIs(readLinks func(context.Context) ([]host.LinkStatus, erro
 			configuration.ServeHTTP(w, r)
 			return
 		}
-		if r.URL.Path != "/api/v1/status/links" && r.URL.Path != "/api/v1/status/prefixes" && r.URL.Path != "/api/v1/openapi.json" {
+		if r.URL.Path != "/api/v1/status/links" && r.URL.Path != "/api/v1/status/prefixes" && r.URL.Path != "/api/v1/status/system" && r.URL.Path != "/api/v1/openapi.json" {
 			writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
 			return
 		}
@@ -97,6 +107,16 @@ func newHandlerWithAPIs(readLinks func(context.Context) ([]host.LinkStatus, erro
 				return
 			}
 			writeJSON(w, r, http.StatusOK, view)
+			return
+		}
+		if r.URL.Path == "/api/v1/status/system" {
+			info, err := host.ReadSystemInfo(systemRoot, time.Now())
+			if err != nil {
+				slog.ErrorContext(r.Context(), "system description unavailable", "error", err)
+				writeError(w, r, http.StatusServiceUnavailable, "INVENTORY_UNAVAILABLE", "The system description is unavailable; inspect the engine journal.")
+				return
+			}
+			writeJSON(w, r, http.StatusOK, systemResponse{Version: buildVersion, SystemInfo: info})
 			return
 		}
 		links, err := readLinks(r.Context())
