@@ -75,7 +75,7 @@ The API serves `policy.input` and `policy.forward` with their order operation, `
 
 ## Open for the owner
 
-- **NAT** (outbound, port forwards, one-to-one) is the next slice, with its own pages. Proposed place: under Firewall, as "NAT" with a sub-page each, which is where pfSense, OPNsense and MikroTik keep it.
+- **NAT** (outbound, port forwards, one-to-one) is the next slice, with its own pages. Proposed place: under Firewall, as "NAT" with a sub-page each, which is where pfSense, OPNsense, OpenWrt and MikroTik keep it.
 
 ## Out of scope
 
