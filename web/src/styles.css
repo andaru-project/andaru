@@ -173,6 +173,11 @@ body {
   max-width: 44rem;
 }
 
+/* One label column down the page's cards. */
+.details .facts th {
+  width: 12rem;
+}
+
 /* The grip takes the touch for itself, so a drag from it does not scroll; nothing else on a widget does. */
 .widget-grip {
   cursor: grab;
