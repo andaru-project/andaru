@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ApiClient } from './api';
 import { fetchQueue, fetchRoutes, jsonResponse } from './test/fetch';
 
@@ -51,4 +51,14 @@ it('gives a read a time limit, so a box that never answers cannot hold a page, a
   await api.finishApply('1', 'rollback');
   expect(fetchMock.mock.calls[0][1]?.signal).toBeInstanceOf(AbortSignal);
   expect(fetchMock.mock.calls[1][1]?.signal).toBeUndefined();
+});
+
+it('reports a body that stops arriving at the time limit as a lost connection, not as an empty answer', async () => {
+  vi.spyOn(AbortSignal, 'timeout').mockReturnValue(AbortSignal.abort());
+  const connection = vi.fn();
+  // The headers came; reading the body fails.
+  fetchQueue(new Response('{"items":', { status: 200 }));
+  await expect(new ApiClient('csrf', connection).links()).rejects.toMatchObject({ status: 0, code: 'DISCONNECTED' });
+  expect(connection).toHaveBeenLastCalledWith(false);
+  vi.restoreAllMocks();
 });
