@@ -43,14 +43,6 @@ export function thin(points: RatePoint[], most: number, intervalSeconds: number)
   return thinned;
 }
 
-// roundUp is the next round number at or above a value, in steps of 1, 2 and 5: a scale that reads at a glance,
-// is never below the peak beside it, and does not change with every reading.
-export function roundUp(value: number) {
-  if (!(value > 0)) return 1;
-  const power = 10 ** Math.floor(Math.log10(value));
-  return [1, 2, 5, 10].map((step) => step * power).find((step) => step >= value)!;
-}
-
 // figures are the numbers beside the graph. current is the latest rate, and null when the interface has not
 // been read lately: an interface that has gone still has an hour's average and peak, but no rate now.
 export function figures(points: RatePoint[], pick: (point: RatePoint) => number | null, fresh: boolean) {
