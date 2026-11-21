@@ -154,6 +154,25 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* The dashboard: as many columns as fit, and each widget as tall as what is in it. Widgets run down a column
+   and then on to the next, so a short one is not stretched to its neighbour's height. */
+.widget-columns {
+  column-gap: var(--mantine-spacing-md);
+  columns: 20rem;
+}
+
+.widget-columns > * {
+  break-inside: avoid;
+  margin-bottom: var(--mantine-spacing-md);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The facts of the System details page read as lines, not across a wide screen. */
+.details {
+  max-width: 44rem;
+}
+
 /* The grip takes the touch for itself, so a drag from it does not scroll; nothing else on a widget does. */
 .widget-grip {
   cursor: grab;
@@ -230,7 +249,7 @@ body {
   padding-top: 40%;
 }
 
-.widget-grid > .widget,
+.widget-columns > .widget,
 .traffic-one {
   display: flex;
   flex-direction: column;

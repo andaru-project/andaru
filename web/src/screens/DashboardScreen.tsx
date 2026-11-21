@@ -12,7 +12,7 @@ import { usePolledResource, useResource, useVisiblePoll, type Resource } from '.
 import { Address } from './Address';
 import { Loaded } from './Loaded';
 import { ResourcesWidget } from './ResourcesWidget';
-import { ProcessorWidget, SystemWidget } from './SystemWidget';
+import { SystemWidget } from './SystemWidget';
 import { TrafficWidget } from './TrafficWidget';
 import { ZoneBadge } from './ZoneBadge';
 
@@ -29,12 +29,11 @@ interface WidgetProps { api: ApiClient; zones: Map<string, string>; onSessionLos
 
 const pollMilliseconds = 10_000;
 
-function Padlock({ open }: { open: boolean }) {
+// A pencil to start arranging, a tick to finish: the button's words say the same.
+function EditMark({ editing }: { editing: boolean }) {
   return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
-      {/* Open, the shackle hangs off the side of the body: a shackle lifted two pixels reads as closed at this size. */}
-      <rect x={open ? 1 : 3} y="7" width="10" height="7" rx="1.5" fill="currentColor" />
-      <path d={open ? 'M8.5 7V4a3 3 0 0 1 6 0v1.5' : 'M5.5 7V4.5a2.5 2.5 0 0 1 5 0V7'} />
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={editing ? 'M3 8.5l3.5 3.5L13 4.5' : 'M2.5 13.5l.7-3L10.5 3.2a1.4 1.4 0 0 1 2 0l.3.3a1.4 1.4 0 0 1 0 2L5.5 12.8z'} />
     </svg>
   );
 }
@@ -51,23 +50,18 @@ function Grip() {
 // A widget is dragged by its grip alone: anywhere else on it, a finger scrolls the page. The grip is a button, so
 // the keyboard moves a widget through the same control (Space or Enter picks up and drops, the arrows move,
 // Escape puts back). Translate, not Transform: widgets differ in height, and a scaled one is distorted.
-function Widget({ id, title, to, unlocked, onHide, children }: { id: string; title: string; to?: string; unlocked: boolean; onHide(): void; children: ReactNode }) {
+function Widget({ id, title, to, more, unlocked, onHide, children }: { id: string; title: string; to?: string; more?: string; unlocked: boolean; onHide(): void; children: ReactNode }) {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id, disabled: !unlocked });
   return (
     <Paper ref={setNodeRef} className="widget" data-dragging={isDragging || undefined} style={{ transform: CSS.Translate.toString(transform), transition }} component="section" withBorder p="md" aria-labelledby={`widget-${id}`}>
       <Group justify="space-between" align="flex-start" wrap="nowrap" mb="sm">
-        {/* Every title looks the same. Where a page has the full view, a link beside the title says so in a
-            word and an arrow, not by the title's colour. */}
-        <Group gap="xs" align="baseline">
-          <Title order={3} size="h5" id={`widget-${id}`}>{title}</Title>
-          {to && <Anchor component={Link} to={to} size="sm" aria-label={`Open ${title}`}>Open <span aria-hidden="true">→</span></Anchor>}
+        {/* Every title looks the same. Where a page has the full view, a link at the other edge names it. */}
+        <Title order={3} size="h5" id={`widget-${id}`}>{title}</Title>
+        <Group gap="xs" wrap="nowrap">
+          {to && <Anchor component={Link} to={to} size="sm" aria-label={`${title}: ${more}`}>{more} <span aria-hidden="true">→</span></Anchor>}
+          {unlocked && <Button size="compact-xs" variant="default" aria-label={`Hide ${title}`} onClick={onHide}>Hide</Button>}
+          {unlocked && <ActionIcon className="widget-grip" size="xl" variant="subtle" color="gray" ref={setActivatorNodeRef} {...attributes} {...listeners} aria-label={`Move ${title}`}><Grip /></ActionIcon>}
         </Group>
-        {unlocked && (
-          <Group gap="xs" wrap="nowrap">
-            <Button size="compact-xs" variant="default" aria-label={`Hide ${title}`} onClick={onHide}>Hide</Button>
-            <ActionIcon className="widget-grip" size="xl" variant="subtle" color="gray" ref={setActivatorNodeRef} {...attributes} {...listeners} aria-label={`Move ${title}`}><Grip /></ActionIcon>
-          </Group>
-        )}
       </Group>
       {children}
     </Paper>
@@ -149,13 +143,12 @@ export function DashboardScreen({ api, session, system, onSessionLost }: Dashboa
   useVisiblePoll(zoneMap.refresh, pollMilliseconds, !zoneMap.data);
   const zones = zoneMap.data ?? noZones;
   const zonesKnown = zoneMap.data !== undefined;
-  const all: Array<{ id: string; title: string; to?: string; capability: string; body: ReactNode }> = [
-    { id: 'system', title: 'System', capability: 'status.read', body: <Loaded resource={system} what="the system description">{(loaded) => loaded && <SystemWidget info={loaded.info} loadedAt={loaded.loadedAt} />}</Loaded> },
+  const all: Array<{ id: string; title: string; to?: string; more?: string; capability: string; body: ReactNode }> = [
+    { id: 'system', title: 'System', to: '/system/details', more: 'Details', capability: 'status.read', body: <Loaded resource={system} what="the system description">{(loaded) => loaded && <SystemWidget info={loaded.info} loadedAt={loaded.loadedAt} />}</Loaded> },
     { id: 'resources', title: 'Resources', capability: 'status.read', body: <ResourcesWidget api={api} onSessionLost={onSessionLost} /> },
     { id: 'traffic', title: 'Network activity', capability: 'status.read', body: <TrafficWidget api={api} zones={zones} zonesKnown={zonesKnown} onSessionLost={onSessionLost} /> },
-    { id: 'interfaces', title: 'Interfaces', to: '/network/interfaces', capability: 'status.read', body: <InterfacesWidget api={api} zones={zones} onSessionLost={onSessionLost} /> },
+    { id: 'interfaces', title: 'Interfaces', to: '/network/interfaces', more: 'Manage', capability: 'status.read', body: <InterfacesWidget api={api} zones={zones} onSessionLost={onSessionLost} /> },
     { id: 'prefixes', title: 'IPv6 prefixes', capability: 'status.read', body: <PrefixesWidget api={api} zones={zones} onSessionLost={onSessionLost} /> },
-    { id: 'processor', title: 'Processor', capability: 'status.read', body: <Loaded resource={system} what="the system description">{(loaded) => loaded && <ProcessorWidget info={loaded.info} />}</Loaded> },
   ];
   const allowed = all.filter((widget) => session.capabilities.includes(widget.capability));
 
@@ -167,7 +160,7 @@ export function DashboardScreen({ api, session, system, onSessionLost }: Dashboa
   const [edited, setEdited] = useState<DashboardLayout>();
   const [unlocked, setUnlocked] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const padlock = useRef<HTMLButtonElement>(null);
+  const editButton = useRef<HTMLButtonElement>(null);
   const layout = arrange(all.map((widget) => widget.id), edited ?? preferences.data?.dashboard);
   const placed = layout.order.flatMap((id) => allowed.filter((widget) => widget.id === id));
   const shown = placed.filter((widget) => !layout.hidden.includes(widget.id));
@@ -194,10 +187,10 @@ export function DashboardScreen({ api, session, system, onSessionLost }: Dashboa
       }
     });
   }
-  // The button that hid or showed a widget goes with it; focus goes to the padlock, not to the top of the page.
+  // The button that hid or showed a widget goes with it; focus goes to the edit button, not to the top of the page.
   function toggle(id: string) {
     save({ ...layout, hidden: layout.hidden.includes(id) ? layout.hidden.filter((item) => item !== id) : [...layout.hidden, id] });
-    padlock.current?.focus();
+    editButton.current?.focus();
   }
 
   // What a screen reader hears while a widget moves: its title and its place, not the library's identifiers.
@@ -224,7 +217,7 @@ export function DashboardScreen({ api, session, system, onSessionLost }: Dashboa
         <Group gap="xs">
           {unlocked && <Button size="xs" variant="default" onClick={() => save({})}>Reset layout</Button>}
           {/* The name says what a press does, so it is not also a pressed button. */}
-          <Button ref={padlock} size="xs" variant="default" disabled={!preferences.data} leftSection={<Padlock open={unlocked} />} onClick={() => setUnlocked(!unlocked)}>{unlocked ? 'Done' : 'Edit layout'}</Button>
+          <Button ref={editButton} size="xs" variant="default" disabled={!preferences.data} leftSection={<EditMark editing={unlocked} />} onClick={() => setUnlocked(!unlocked)}>{unlocked ? 'Done' : 'Edit layout'}</Button>
         </Group>
       </Group>
       {preferences.error && !preferences.data && <Text c="dimmed" size="sm">The layout cannot be changed now: {preferences.error}</Text>}
@@ -232,8 +225,8 @@ export function DashboardScreen({ api, session, system, onSessionLost }: Dashboa
       {!preferences.data && !preferences.error ? <Loader aria-label="Loading the layout" /> : (
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={dropped} accessibility={{ announcements, screenReaderInstructions: instructions }}>
           <SortableContext items={shown.map((widget) => widget.id)} strategy={rectSortingStrategy}>
-            <div className="widget-grid">
-              {shown.map(({ id, title, to, body }) => <Widget key={id} id={id} title={title} to={to} unlocked={unlocked} onHide={() => toggle(id)}>{body}</Widget>)}
+            <div className="widget-columns">
+              {shown.map(({ id, title, to, more, body }) => <Widget key={id} id={id} title={title} to={to} more={more} unlocked={unlocked} onHide={() => toggle(id)}>{body}</Widget>)}
             </div>
           </SortableContext>
         </DndContext>

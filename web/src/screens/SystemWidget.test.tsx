@@ -1,11 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, render, screen } from '../test/render';
 import type { SystemInfo } from '../types';
-import type { ComponentProps } from 'react';
-import { ProcessorWidget, SystemWidget } from './SystemWidget';
-
-// The two widgets show one description between them: the box, then its processor.
-const Both = (props: ComponentProps<typeof SystemWidget>) => <><SystemWidget {...props} /><ProcessorWidget info={props.info} /></>;
+import { SystemFacts as Both, SystemWidget } from './SystemWidget';
 
 const hardware: SystemInfo = {
   version: '0.5.0-a.4', hostname: 'edge', kernel: '6.17.8-300.fc43.x86_64', architecture: 'x86_64',
@@ -35,8 +31,7 @@ it('shows what the box is, a line for each fact it reports', () => {
   expect(value('CPU')).toBe('Intel(R) Core(TM) i5-1235U, 10 cores, 12 threads');
   expect(value('Level')).toBe('x86-64-v3');
   expect(value('Microcode')).toBe('0x437');
-  // The memory installed is in the Resources widget.
-  expect(screen.queryByRole('rowheader', { name: 'Memory' })).not.toBeInTheDocument();
+  expect(value('Memory')).toBe('16 GiB');
   expect(value('Hardware crypto')).toBe('AES-NI, SHA-NI, AVX2');
   expect(value('CPU security')).toBe('NX, SMEP');
   expect(value('Virtualisation')).toBe('VT-x, IOMMU active');
@@ -58,7 +53,7 @@ it('leaves out what a machine does not report, and says a guest is one', () => {
   expect(value('Hardware crypto')).toBe('none');
   expect(value('Virtualisation')).toBe('none');
   expect(value('CPU vulnerabilities')).toBe('no report');
-  for (const label of ['Uptime', 'Serial', 'BIOS', 'Board', 'Level', 'Microcode']) expect(screen.queryByRole('rowheader', { name: label })).not.toBeInTheDocument();
+  for (const label of ['Uptime', 'Serial', 'BIOS', 'Board', 'Memory', 'Level', 'Microcode']) expect(screen.queryByRole('rowheader', { name: label })).not.toBeInTheDocument();
 });
 
 it('names the vulnerabilities that are not mitigated, and those the kernel is unsure of', () => {
@@ -112,4 +107,10 @@ it('lists the three rows of CPU features and nothing to open', () => {
   render(<Both info={hardware} loadedAt={Date.now()} />);
   expect(screen.getAllByRole('rowheader').map((header) => header.textContent).slice(-4)).toEqual(['Hardware crypto', 'CPU security', 'Virtualisation', 'CPU vulnerabilities']);
   expect(screen.queryByRole('button')).not.toBeInTheDocument();
+});
+
+it('keeps the dashboard widget short: what changes, and a line each for the machine and its processor', () => {
+  render(<SystemWidget info={hardware} loadedAt={Date.now()} />);
+  expect(screen.getAllByRole('rowheader').map((header) => header.textContent)).toEqual(['Version', 'Clock', 'Uptime', 'Machine', 'CPU']);
+  expect(value('CPU')).toBe('Intel(R) Core(TM) i5-1235U, 10 cores');
 });

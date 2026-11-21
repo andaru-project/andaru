@@ -39,7 +39,7 @@ it('shows each widget its own data, and a widget that fails does not blank the o
 
   expect(await within(screen.getByRole('region', { name: 'IPv6 prefixes' })).findByRole('alert')).toHaveTextContent('The delegated prefixes are unavailable.');
   // A link beside a widget's title leads to the page with the full view.
-  expect(screen.getByRole('link', { name: 'Open Interfaces' })).toHaveAttribute('href', '/network/interfaces');
+  expect(screen.getByRole('link', { name: 'Interfaces: Manage' })).toHaveAttribute('href', '/network/interfaces');
 });
 
 it('says so when the account can see no widget', async () => {
@@ -125,9 +125,9 @@ function layoutRoutes(preferences: object | Response, save: () => Response | und
 }
 
 async function unlock() {
-  const padlock = await screen.findByRole('button', { name: 'Edit layout' });
-  await waitFor(() => expect(padlock).toBeEnabled());
-  await userEvent.click(padlock);
+  const editButton = await screen.findByRole('button', { name: 'Edit layout' });
+  await waitFor(() => expect(editButton).toBeEnabled());
+  await userEvent.click(editButton);
   expect(screen.getByRole('button', { name: 'Done' })).toBeInTheDocument();
 }
 
@@ -135,13 +135,13 @@ it('applies the stored layout: its order, its hidden widgets, and a widget new s
   // "gone" and "changes" are widgets of other versions. "interfaces" is not named, so it joins at the end.
   layoutRoutes({ dashboard: { order: ['prefixes', 'gone', 'changes'], hidden: ['changes'] } });
   await mount(everything);
-  await waitFor(() => expect(titles()).toEqual(['IPv6 prefixes', 'System', 'Resources', 'Network activity', 'Interfaces', 'Processor']));
+  await waitFor(() => expect(titles()).toEqual(['IPv6 prefixes', 'System', 'Resources', 'Network activity', 'Interfaces']));
 });
 
 it('stays locked until asked: nothing moves or hides by accident', async () => {
   layoutRoutes({ dashboard: { hidden: ['interfaces'] } });
   await mount(everything);
-  await waitFor(() => expect(titles()).toEqual(['System', 'Resources', 'Network activity', 'IPv6 prefixes', 'Processor']));
+  await waitFor(() => expect(titles()).toEqual(['System', 'Resources', 'Network activity', 'IPv6 prefixes']));
   expect(screen.queryByRole('button', { name: /^(Move|Hide|Show) / })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Reset layout' })).not.toBeInTheDocument();
 
@@ -156,11 +156,11 @@ it('hides and shows a widget, saving the whole preferences and keeping what it d
   await unlock();
 
   await userEvent.click(screen.getByRole('button', { name: 'Hide Interfaces' }));
-  expect(titles()).toEqual(['System', 'Resources', 'Network activity', 'IPv6 prefixes', 'Processor', 'Hidden widgets']);
+  expect(titles()).toEqual(['System', 'Resources', 'Network activity', 'IPv6 prefixes', 'Hidden widgets']);
   await userEvent.click(screen.getByRole('button', { name: 'Show Interfaces' }));
-  expect(titles()).toEqual(['System', 'Resources', 'Network activity', 'Interfaces', 'IPv6 prefixes', 'Processor']);
+  expect(titles()).toEqual(['System', 'Resources', 'Network activity', 'Interfaces', 'IPv6 prefixes']);
 
-  const order = ['system', 'resources', 'traffic', 'interfaces', 'prefixes', 'processor'];
+  const order = ['system', 'resources', 'traffic', 'interfaces', 'prefixes'];
   expect(saves(fetchMock)).toEqual([
     { another: { version: 'keeps this' }, dashboard: { order, hidden: ['interfaces'] } },
     { another: { version: 'keeps this' }, dashboard: { order, hidden: [] } },
@@ -172,12 +172,12 @@ it('resets to the default layout', async () => {
   await mount(everything);
   await unlock();
   await userEvent.click(screen.getByRole('button', { name: 'Reset layout' }));
-  expect(titles()).toEqual(['System', 'Resources', 'Network activity', 'Interfaces', 'IPv6 prefixes', 'Processor']);
+  expect(titles()).toEqual(['System', 'Resources', 'Network activity', 'Interfaces', 'IPv6 prefixes']);
   expect(saves(fetchMock)).toEqual([{ dashboard: {} }]);
 });
 
 it('says so when every widget is hidden, and how to get them back while locked', async () => {
-  layoutRoutes({ dashboard: { hidden: ['system', 'resources', 'traffic', 'interfaces', 'prefixes', 'processor'] } });
+  layoutRoutes({ dashboard: { hidden: ['system', 'resources', 'traffic', 'interfaces', 'prefixes'] } });
   await mount(everything);
   expect(screen.getByText(/Every widget is hidden/)).toHaveTextContent('Every widget is hidden. Edit the layout to show them again.');
   await unlock();
@@ -195,7 +195,7 @@ it('reads the layout before any widget shows, so a hidden widget never asks the 
   expect(screen.getByLabelText('Loading the layout')).toBeInTheDocument();
   expect(screen.queryByRole('region')).not.toBeInTheDocument();
   await act(async () => { answer(jsonResponse(200, { dashboard: { hidden: ['interfaces'] } })); await Promise.resolve(); });
-  await waitFor(() => expect(titles()).toEqual(['System', 'Resources', 'Network activity', 'IPv6 prefixes', 'Processor']));
+  await waitFor(() => expect(titles()).toEqual(['System', 'Resources', 'Network activity', 'IPv6 prefixes']));
   expect(fetchMock.mock.calls.map(([url]) => url)).not.toContain('/api/v1/status/links');
 });
 
@@ -213,9 +213,9 @@ it('moves a widget by its grip with the keyboard, and saves the new order', asyn
   await userEvent.keyboard('{Enter}');
   await userEvent.keyboard('{ArrowRight}');
   await userEvent.keyboard('{Enter}');
-  await waitFor(() => expect(titles()).toEqual(['System', 'Resources', 'Interfaces', 'Network activity', 'IPv6 prefixes', 'Processor']));
-  await waitFor(() => expect(saves(fetchMock)).toEqual([{ dashboard: { order: ['system', 'resources', 'interfaces', 'traffic', 'prefixes', 'processor'], hidden: [] } }]));
-  expect(screen.getByRole('status', { hidden: true })).toHaveTextContent('Dropped Network activity at position 4 of 6.');
+  await waitFor(() => expect(titles()).toEqual(['System', 'Resources', 'Interfaces', 'Network activity', 'IPv6 prefixes']));
+  await waitFor(() => expect(saves(fetchMock)).toEqual([{ dashboard: { order: ['system', 'resources', 'interfaces', 'traffic', 'prefixes'], hidden: [] } }]));
+  expect(screen.getByRole('status', { hidden: true })).toHaveTextContent('Dropped Network activity at position 4 of 5.');
   rect.mockRestore();
 });
 
@@ -235,10 +235,10 @@ it('sends saves one at a time, each on what the last one stored, and skips one t
   // The box answers with what it now holds, which another feature has written a key into.
   await act(async () => { held[0](jsonResponse(200, { other: 'kept', dashboard: { hidden: ['resources'] } })); await Promise.resolve(); });
   await waitFor(() => expect(saves(fetchMock)).toHaveLength(2));
-  expect(saves(fetchMock)[1]).toEqual({ other: 'kept', dashboard: { order: ['system', 'resources', 'traffic', 'interfaces', 'prefixes', 'processor'], hidden: ['resources', 'interfaces', 'prefixes'] } });
+  expect(saves(fetchMock)[1]).toEqual({ other: 'kept', dashboard: { order: ['system', 'resources', 'traffic', 'interfaces', 'prefixes'], hidden: ['resources', 'interfaces', 'prefixes'] } });
 });
 
-it('moves focus to the padlock when the button that was pressed goes away', async () => {
+it('moves focus to the edit button when the button that was pressed goes away', async () => {
   layoutRoutes({});
   await mount(everything);
   await unlock();
@@ -261,7 +261,7 @@ it('tries again when the layout could not be read, and unlocks once it can', asy
   up = true;
   act(() => { vi.advanceTimersByTime(10_000); });
   await waitFor(() => expect(screen.getByRole('button', { name: 'Edit layout' })).toBeEnabled());
-  expect(titles()).toEqual(['System', 'Resources', 'Network activity', 'IPv6 prefixes', 'Processor']);
+  expect(titles()).toEqual(['System', 'Resources', 'Network activity', 'IPv6 prefixes']);
   expect(screen.queryByText(/The layout cannot be changed now/)).not.toBeInTheDocument();
 });
 
@@ -270,7 +270,7 @@ it('keeps the layout locked when the preferences cannot be read: a save would re
   await mount(everything);
   expect(await screen.findByText(/The layout cannot be changed now: Preferences are temporarily unavailable\./)).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Edit layout' })).toBeDisabled();
-  expect(titles()).toEqual(['System', 'Resources', 'Network activity', 'Interfaces', 'IPv6 prefixes', 'Processor']);
+  expect(titles()).toEqual(['System', 'Resources', 'Network activity', 'Interfaces', 'IPv6 prefixes']);
   expect(saves(fetchMock)).toEqual([]);
 });
 
@@ -292,10 +292,9 @@ it('shows the system description it is handed, or why it has none', async () => 
   const view = render(screenWith({ ...base, data: { info, loadedAt: Date.now() } }));
   const system = await screen.findByRole('region', { name: 'System' });
   expect(within(system).getByRole('rowheader', { name: 'Version' }).nextElementSibling).toHaveTextContent('0.5.0-a.4');
-  // The processor is the same description's other half, in a widget of its own.
-  expect(within(screen.getByRole('region', { name: 'Processor' })).getByRole('rowheader', { name: 'CPU' }).nextElementSibling).toHaveTextContent('Test CPU, 2 cores');
-  // The System widget has no page of its own, so its title is not a link.
-  expect(screen.queryByRole('link', { name: 'Open System' })).not.toBeInTheDocument();
+  // What the box is made of is on a page of its own.
+  expect(screen.getByRole('link', { name: 'System: Details' })).toHaveAttribute('href', '/system/details');
+  expect(within(system).queryByRole('rowheader', { name: 'Kernel' })).not.toBeInTheDocument();
 
   view.rerender(screenWith({ ...base, error: 'The system description is unavailable.' }));
   expect(within(screen.getByRole('region', { name: 'System' })).getByRole('alert')).toHaveTextContent('The system description is unavailable.');
