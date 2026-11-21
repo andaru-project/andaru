@@ -7,6 +7,7 @@ Status: a draft for the owner, 2026-11-21. It records the owner's decisions of t
 - The navigation is a list on the left, because it uses a wide screen best. It may have submenus that open like a tree. Tabs are not wanted.
 - The design is responsive and scales to a phone.
 - The home page is a dashboard. Add-ons should be able to define their own widgets, as in pfSense and Unraid. How is not decided.
+- The dashboard shows pretty much everything pfSense's main page shows today. Named by the owner: a network activity graph; resource use (CPU, memory, disk); the version and whether an update is available, linking to the upgrade page; IP addresses; and system details: the CPU, the amount of memory, the CPU instructions that matter to a firewall as one line, the x86-64 level, the loaded microcode version, and the BIOS.
 
 This document amends the [shell design](2026-11-21-web-ui-shell-design.md): its call 3 (navigation) and call 19 (widths).
 
@@ -49,19 +50,43 @@ This document amends the [shell design](2026-11-21-web-ui-shell-design.md): its 
    - A widget shows only when the session holds its capability.
    - A widget's title links to the page that holds the full view.
 
-10. **First widgets, from what the engine already serves:**
-    - **Changes:** nothing pending, saved but not applied, or awaiting confirmation with its countdown. The same state as the shell's notice (`config/changes`, `applies`).
-    - **Interfaces:** each interface's name, state and addresses (`status/links`).
-    - **IPv6 prefixes:** each delegated prefix and where it went (`status/prefixes`).
-    - **Recent activity:** the last few audit events (`audit/events`), for accounts with `audit.read`.
+10. **The widgets,** in page order. "Served" means the engine serves the data today; the rest is new engine work (call 11).
+    - **System:** hostname, Andaru version and image, whether the image's signature verified, uptime, the box's time, safe mode, and the last applied change.
+      - **Update:** "Up to date" or "Version X is available", linking to the upgrade page. The check is the engine's, on a schedule, and the widget shows when it last ran. Until an upgrade page exists the line states the version only.
+      - **Hardware:** the CPU's model, cores and threads; installed memory; the board and BIOS vendor, version and date; whether the box is a virtual machine and of which kind.
+      - **CPU features, one line:** only those a firewall gains from, shown as present: AES-NI, SHA-NI, VAES, VPCLMULQDQ, AVX2, AVX-512, RDRAND; on arm64 AES, SHA2, SHA3 and PMULL. Not the whole flag list.
+      - **x86-64 level:** v1 to v4, worked out from the flags, so the owner can later match a box to an optimised image.
+      - **Microcode:** the revision the kernel loaded, not the one on disk.
+      - **CPU vulnerabilities:** one line, "all mitigated" or the names of those that are not, from the kernel's own report. pfSense shows two of these; the kernel lists all.
+    - **Resources:** CPU use and load average, memory, swap, each file system's use, the connection-tracking table (used of its limit), and temperatures where the hardware reports them. Each is a bar with its number; a bar is never the only carrier of the value.
+    - **Network activity:** a line graph of receive and transmit rate for one interface, chosen in the widget, WAN first.
+    - **Interfaces:** each interface's name, zone, state, speed and addresses, IPv4 and IPv6 (`status/links`, served).
+    - **Changes:** nothing pending, saved but not applied, or awaiting confirmation with its countdown (`config/changes`, `applies`, served).
+    - **IPv6 prefixes:** each delegated prefix and where it went (`status/prefixes`, served).
+    - **Services:** DHCP, DNS and the packet filter: running or not, and since when.
+    - **Recent activity:** the last few audit events (`audit/events`, served), for accounts with `audit.read`.
 
-11. **A System widget needs an engine change:** hostname, Andaru version, image and its verification, uptime, and safe mode. No endpoint serves these yet (the shell design left them out for that reason). This is the dashboard slice's one engine change, and the header gains the hostname and version from it.
+11. **The engine gains two read-only resources** under a new `system.read` capability, which both built-in roles hold.
+    - **`system/info`,** what changes rarely: the System widget's identity, hardware, features, level, microcode, vulnerabilities and update state. Sources are the kernel's own files (`/proc/cpuinfo`, `/sys/class/dmi/id`, `/sys/devices/system/cpu/vulnerabilities`) and `bootc status`. The engine reads them; no helper runs.
+    - **`system/usage`,** what changes every second: CPU times, memory, swap, file systems, connection tracking, temperatures, and each interface's byte and packet counters, with the time of the reading.
+    - The serial number and other identifiers of the board are left out: a screenshot of the dashboard should be safe to post.
+    - The header takes the hostname and version from `system/info`.
 
-12. **Widgets refresh by polling,** every 10 seconds, and only while the page is visible. Server-sent events remain a later slice.
+12. **Rates are worked out in the browser** from two readings of `system/usage`. The graph covers the minutes the page has been open and starts empty. A history kept by the engine belongs with the statistics work ([#15](https://github.com/andaru-project/andaru/issues/15)); this slice adds no store.
+    - The graph is an SVG the page draws itself: one widget does not justify a chart library, and the content security policy allows SVG elements.
+    - The graph has a text equivalent: the current, average and peak rates, in words, beneath it.
 
-13. **The first slice has a fixed layout.** Hiding and reordering widgets come second. They need somewhere to keep each account's choice, and no per-account preference store exists yet.
+13. **Refresh is by polling,** only while the page is visible: `system/usage` every 2 seconds, everything else every 10. Server-sent events remain a later slice.
 
-14. **Not in the first slice:** traffic graphs, gateway latency, DHCP leases, firewall log tail, service states. Each needs data the engine does not serve yet ([#15](https://github.com/andaru-project/andaru/issues/15)).
+14. **The first slice has a fixed layout.** Hiding and reordering widgets come second. They need somewhere to keep each account's choice, and no per-account preference store exists yet.
+
+15. **From pfSense's main page, not in this slice,** each for want of data the engine does not hold yet: gateway latency and loss, the DHCP lease list, a firewall log tail, per-rule counters, S.M.A.R.T. state, VPN tunnels and traffic totals over days. Each arrives with its own feature.
+
+16. **Slices.** The work is too large for one change:
+    - first, the navigation tree and the narrow-screen layout, with a dashboard of the widgets already served;
+    - second, `system/info` and the System widget;
+    - third, `system/usage` with Resources and Network activity;
+    - the update check arrives with the upgrade slice, since the check and the upgrade page share their mechanism.
 
 ## Add-on widgets: a direction, not a design
 
@@ -72,12 +97,14 @@ Two ways fit. The author recommends the first, with the second kept possible.
 - **Declared widgets.** The add-on's manifest declares a widget: a title, a data address the engine proxies to the add-on, and one of a small set of kinds (a list of names and values, a list of states, a table, a number with a trend). The web UI draws it. Every widget looks like Andaru, works on a phone, and no add-on code runs in the browser. An add-on cannot draw something the kinds do not cover.
 - **Framed widgets.** The add-on serves a page, shown in a sandboxed frame from a separate origin with no access to the session. The add-on can draw anything. It will not look or scale like the rest, and it needs the separate origin and a frame policy.
 
-The built-in widgets of calls 10 and 11 are ordinary components in a list of `{id, title, capability, component}`. Nothing more is built for add-ons until the add-on slice, which decides the manifest.
+The built-in widgets of call 10 are ordinary components in a list of `{id, title, capability, component}`. Nothing more is built for add-ons until the add-on slice, which decides the manifest.
 
 ## Open for the owner
 
-- **The first widgets (calls 10, 11):** is anything missing that must be there on day one?
-- **Hiding and reordering (call 13):** second slice, or required from the start?
+- **The feature line (call 10):** is the list right? QuickAssist is left out, since Andaru ships no driver setup for it.
+- **Identifiers (call 11):** leave the board's serial number out, or show it to administrators?
+- **Slices (call 16):** is that order right?
+- **Hiding and reordering (call 14):** after those slices, or required from the start?
 - **Add-on widgets:** declared, framed, or both?
 - **Tree depth:** is Rules with a sub-page per chain right, or should the two chains sit directly under Firewall?
 
