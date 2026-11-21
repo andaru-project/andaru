@@ -124,10 +124,10 @@ function Graph({ entry, zone, end, intervalSeconds, live }: { entry: Traffic['in
           : <><Text c="dimmed" size="xs">−1 h</Text><Text c="dimmed" size="xs">now</Text></>}
       </Group>
       <Table className="traffic-figures" withRowBorders={false} verticalSpacing={2} horizontalSpacing={4}>
-        <Table.Thead><Table.Tr><Table.Td /><Table.Th>Current</Table.Th><Table.Th>Avg.</Table.Th><Table.Th>Max</Table.Th></Table.Tr></Table.Thead>
+        <Table.Thead><Table.Tr><Table.Td /><Table.Th>Current</Table.Th><Table.Th>Avg</Table.Th><Table.Th>Max</Table.Th></Table.Tr></Table.Thead>
         <Table.Tbody>
-          <Figures arrow="↓" name="Download" line="traffic-received" values={figures(every, (point) => point.rx, fresh)} />
-          <Figures arrow="↑" name="Upload" line="traffic-sent" values={figures(every, (point) => point.tx, fresh)} />
+          <Figures arrow="↓" name="Down" line="traffic-received" values={figures(every, (point) => point.rx, fresh)} />
+          <Figures arrow="↑" name="Up" line="traffic-sent" values={figures(every, (point) => point.tx, fresh)} />
         </Table.Tbody>
       </Table>
     </section>

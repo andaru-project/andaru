@@ -135,7 +135,8 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
             {system.data && <Text className="app-box" size="sm">{system.data.info.hostname}<span className="app-version">{system.data.info.hostname && ' · '}{system.data.info.version}</span></Text>}
           </Group>
           <Group className="app-session" gap="sm" wrap="nowrap">
-            <Badge color={connected ? 'green' : 'red'} role="status">{connected ? 'Connected' : 'Connection lost'}</Badge>
+            {/* Connected is the usual state and says so quietly; a lost connection is the one that shouts. */}
+            <Badge color={connected ? 'green' : 'red'} variant={connected ? 'dot' : 'filled'} className={connected ? 'quiet-badge' : undefined} role="status">{connected ? 'Connected' : 'Connection lost'}</Badge>
             <Menu position="bottom-end">
               <Menu.Target><Button className="account-button" variant="default" size="xs">{session.account.displayName || session.account.login}</Button></Menu.Target>
               <Menu.Dropdown>
@@ -169,7 +170,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
           {/* Review and apply owns these controls on its own page. */}
           {!onChangesPage && <PendingNotice api={api} session={session} state={changes.data} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />}
           <Routes>
-            <Route path="/" element={<DashboardScreen api={api} session={session} changes={changes} system={system} onSessionLost={onSessionLost} />} />
+            <Route path="/" element={<DashboardScreen api={api} session={session} system={system} onSessionLost={onSessionLost} />} />
             {pages.filter(([path]) => visible.has(path)).map(([path, element]) => <Route key={path} path={path} element={element} />)}
             <Route path="/system/session" element={<SessionScreen session={session} />} />
             <Route path="*" element={<Navigate to="/" replace />} />
