@@ -128,6 +128,9 @@ func ReadUsage(root string, now time.Time) (Usage, error) {
 	// based system, counts once: as "/" or "/var" when it is mounted there, where the box's data grows, and
 	// else at its shortest mount point. A ZFS pool counts once the same way: its datasets share its room.
 	// FUSE mounts are left out, since a dead daemon would hold the reading for ever.
+	// shortcut: a ZFS pool is sized by the one dataset shown, whose total is its own data plus the pool's free
+	// room: a pool whose other datasets hold the data reads emptier than it is, and a dataset at its quota is not
+	// seen. Read the pool's own size and allocation when ZFS ships in the image.
 	// shortcut: statfs has no time limit, so a block device that stops answering holds this request; size the
 	// mounts from a background reader when such devices are supported.
 	seen := map[string]int{}
