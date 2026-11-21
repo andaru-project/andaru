@@ -76,7 +76,9 @@ RUN sed -i "s|@NAMESPACE@|${SIGNED_NAMESPACE}|" /etc/containers/policy.json /etc
     systemctl disable sshd.service zincati.service andaru-web.service && \
     # Masked, not disabled: enabling systemd-networkd, as presets do on first boot, enables wait-online with it. Every
     # link Andaru writes is RequiredForOnline=no, so it would only wait out its timeout on every boot.
-    systemctl mask NetworkManager.service NetworkManager-wait-online.service systemd-networkd-wait-online.service && \
+    # unbound-keygen fails on this base and only makes TLS keys for remote control, which uses a Unix socket here.
+    systemctl mask NetworkManager.service NetworkManager-wait-online.service systemd-networkd-wait-online.service \
+        unbound-keygen.service && \
     # moby-engine's group stays in /etc/group after its removal, which bootc's sysusers lint rejects.
     groupdel docker && \
     # Andaru by name, with the Fedora CoreOS build it is based on; ostree titles boot entries from PRETTY_NAME, so the
