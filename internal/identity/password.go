@@ -32,7 +32,7 @@ var (
 	ErrHashOverloaded = errors.New("password hashing admission queue is full")
 	ErrHashTimeout    = errors.New("password hashing admission timed out")
 
-	//go:embed testdata/password-blocklist-v1.txt testdata/password-blocklist-v1-provenance.txt
+	//go:embed testdata/password-blocklist-v2.txt testdata/password-blocklist-v2-provenance.txt
 	blocklistFile     embed.FS
 	blockedPasswords  = loadBlocklist()
 	passwordAdmission = newHashAdmission(2, 16)
@@ -108,7 +108,7 @@ func validatePassword(password []byte, login, displayName string) error {
 		}
 	}
 	count := utf8.RuneCount(password)
-	if count < 15 || count > 128 {
+	if count < 8 || count > 128 {
 		return ErrPasswordPolicy
 	}
 	folded := strings.ToLower(string(password))
@@ -122,7 +122,7 @@ func validatePassword(password []byte, login, displayName string) error {
 }
 
 func loadBlocklist() map[string]struct{} {
-	data, err := blocklistFile.ReadFile("testdata/password-blocklist-v1.txt")
+	data, err := blocklistFile.ReadFile("testdata/password-blocklist-v2.txt")
 	if err != nil {
 		panic(err)
 	}

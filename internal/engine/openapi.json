@@ -6627,7 +6627,7 @@
         "properties": {
           "login": {"type": "string", "minLength": 3, "maxLength": 64},
           "displayName": {"type": "string", "maxLength": 128},
-          "password": {"type": "string", "writeOnly": true, "minLength": 15, "maxLength": 512}
+          "password": {"type": "string", "writeOnly": true, "minLength": 8, "maxLength": 512}
         }
       },
       "CreateUserRequest": {
@@ -6662,7 +6662,7 @@
         "required": ["newPassword", "expectedRevision"],
         "properties": {
           "currentPassword": {"type": "string", "writeOnly": true, "maxLength": 512},
-          "newPassword": {"type": "string", "writeOnly": true, "minLength": 15, "maxLength": 512},
+          "newPassword": {"type": "string", "writeOnly": true, "minLength": 8, "maxLength": 512},
           "expectedRevision": {"type": "integer", "minimum": 0}
         }
       },

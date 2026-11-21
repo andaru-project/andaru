@@ -22,8 +22,8 @@ export function PasswordDialog({ user, selfAccountId, onClose, onSessionLost, on
   async function submit(event: FormEvent) {
     event.preventDefault();
     const length = Array.from(newPassword).length;
-    if (length < 15 || length > 128 || new TextEncoder().encode(newPassword).length > 512 || newPassword.includes('\0')) {
-      setError('New password must contain 15–128 Unicode characters, at most 512 UTF-8 bytes, and no NUL.');
+    if (length < 8 || length > 128 || new TextEncoder().encode(newPassword).length > 512 || newPassword.includes('\0')) {
+      setError('New password must contain 8–128 Unicode characters, at most 512 UTF-8 bytes, and no NUL.');
       return;
     }
     if (newPassword !== confirmation) {
@@ -53,7 +53,7 @@ export function PasswordDialog({ user, selfAccountId, onClose, onSessionLost, on
     <Modal opened onClose={onClose} title={`Reset password for ${user.login}`} centered>
       <form onSubmit={submit}>
         <Stack>
-          <Text size="sm">Passwords allow spaces and password-manager paste. They must contain 15–128 Unicode characters, use at most 512 UTF-8 bytes, and cannot be a blocked common password.</Text>
+          <Text size="sm">Passwords allow spaces and password-manager paste. They must contain 8–128 Unicode characters, use at most 512 UTF-8 bytes, and cannot be a blocked common password.</Text>
           {consoleOnly && <Alert color="yellow" role="status">Built-in administrator passwords can only be reset from the root console.</Alert>}
           {error && <Alert color="red" role="alert">{error}</Alert>}
           <PasswordInput autoComplete="current-password" disabled={consoleOnly} label="Your current password" maxLength={512} required={!consoleOnly} value={currentPassword} onChange={(event) => setCurrentPassword(event.currentTarget.value)} />

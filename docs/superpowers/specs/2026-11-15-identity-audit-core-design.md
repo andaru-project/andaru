@@ -220,7 +220,7 @@ Initial admission policy permits two concurrent Argon2 operations, queues at mos
 
 Password policy follows NIST/OWASP direction rather than composition rules:
 
-- 15–128 Unicode code points, valid UTF-8, maximum 512 bytes, no NUL; no trim/normalization or forced character classes;
+- 8–128 Unicode code points (owner decision 2026-11-21, was 15), valid UTF-8, maximum 512 bytes, no NUL; no trim/normalization or forced character classes;
 - allow spaces, paste and password managers;
 - reject login/display name and a bundled versioned blocklist of common/compromised passwords;
 - no security questions or network password reset; and
@@ -435,6 +435,6 @@ These are design-review results, not implementation verification.
 - The engine remains authentication/authorization authority; `andaru-web` is trusted with credential confidentiality but not actor/capability assertions.
 - Role permissions follow `Pointers.Live`; session revocation uses capability digests, while tokens dynamically intersect current roles.
 - Built-in administrator is dynamic-all; read-only is an explicit safe list; custom roles are explicit.
-- Password policy is 15–128 code points, offline blocklist, Argon2id 64 MiB/time 3/parallel 1 with measured admission limits.
+- Password policy is 8–128 code points, offline blocklist, Argon2id 64 MiB/time 3/parallel 1 with measured admission limits.
 - API token expiration and password-change revocation are optional; service accounts are token-only and role changes do not invalidate tokens.
 - Security audit retains 365 days/100,000 events with protected high-value evidence and fail-closed sensitive writes when full.

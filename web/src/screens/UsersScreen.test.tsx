@@ -56,6 +56,6 @@ it('lets an administrator change their own password and keeps another built-in r
   await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
   await userEvent.click(screen.getByRole('button', { name: /reset password for other/i }));
   expect(screen.getByRole('dialog')).toHaveTextContent('Built-in administrator passwords can only be reset from the root console.');
-  expect(screen.getByRole('dialog')).toHaveTextContent('15–128 Unicode characters');
+  expect(screen.getByRole('dialog')).toHaveTextContent('8–128 Unicode characters');
   expect(screen.getByLabelText(/New password/)).toBeDisabled();
 });
