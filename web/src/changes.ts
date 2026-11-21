@@ -120,3 +120,17 @@ export function useCountdown(deadline: string | undefined) {
   const seconds = Math.max(0, Math.floor((Date.parse(deadline) - now) / 1000));
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 }
+
+// fieldChanges lists the top-level fields that differ between two versions of one object, for display only.
+// A value that is not an object (a list order, a missing side) is one field with an empty name.
+export function fieldChanges(before: unknown, after: unknown): Array<{ field: string; before: unknown; after: unknown }> {
+  const record = (value: unknown) => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined);
+  const a = record(before);
+  const b = record(after);
+  if (!a || !b) return [{ field: '', before, after }];
+  const fields = [...new Set([...Object.keys(a), ...Object.keys(b)])]
+    .filter((field) => JSON.stringify(a[field]) !== JSON.stringify(b[field]))
+    .map((field) => ({ field, before: a[field], after: b[field] }));
+  // The caller found the two differ; if no field does (key order), show them whole rather than an empty table.
+  return fields.length ? fields : [{ field: '', before, after }];
+}

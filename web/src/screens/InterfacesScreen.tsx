@@ -19,6 +19,8 @@ function kernelName(link: SavedLink, resolved: Map<string, string>) {
 const bindingCode = /^(HARDWARE_|NAME_COLLISION$|DEPENDENCY_UNAVAILABLE$)/;
 const unboundLabel: Record<string, string> = { HARDWARE_MISSING: 'Missing', HARDWARE_AMBIGUOUS: 'Unresolved' };
 
+const stateColor: Record<string, string> = { UP: 'green', DOWN: 'red', LOWERLAYERDOWN: 'red' };
+
 interface Row { key: string; live?: LinkStatus; saved?: SavedLink; state?: string; finding?: string; conflict?: boolean }
 
 function join(links: LinkStatus[], snapshot: Snapshot, preview: Preview): Row[] {
@@ -68,7 +70,9 @@ export function InterfacesScreen({ api, session, onSessionLost }: InterfacesScre
   if (!resource.data) return resource.error ? <Alert color="red" role="alert" title="Interfaces request failed">{resource.error}</Alert> : <Loader aria-label="Loading interfaces" />;
 
   const { links, saved, savedError } = resource.data;
-  const rows: Row[] = saved ? join(links, saved.snapshot, saved.preview) : links.map((live) => ({ key: live.name, live }));
+  // The loopback is not a port anyone configures: it shows only if the configuration names it.
+  const all = saved ? join(links, saved.snapshot, saved.preview) : links.map((live): Row => ({ key: live.name, live }));
+  const rows = all.filter((row) => row.saved || row.live?.linkType !== 'loopback');
   const showSaved = Boolean(saved);
   const segmentOf = (link: SavedLink): Segment | undefined => saved?.snapshot.value.segments.find((segment) => segment.link === link.id);
   const zoneName = (id: string) => saved?.snapshot.value.zones.find((zone) => zone.id === id)?.name ?? id;
@@ -80,27 +84,30 @@ export function InterfacesScreen({ api, session, onSessionLost }: InterfacesScre
       {savedError && <Alert color="red" role="alert" title="The saved configuration could not be read">{savedError} Only live links are shown.</Alert>}
       {!canReadConfig && <Alert color="gray" role="status">Your account cannot read the saved configuration, so only live links are shown.</Alert>}
       {rows.length === 0 ? <Alert role="status">The box reports no network links.</Alert> : (
-        <ScrollArea><Table striped><Table.Thead><Table.Tr><Table.Th>Interface</Table.Th><Table.Th>MAC address</Table.Th><Table.Th>Kind</Table.Th><Table.Th>State</Table.Th><Table.Th>MTU</Table.Th><Table.Th>Addresses</Table.Th>{showSaved && <><Table.Th>Saved link</Table.Th><Table.Th>Segment</Table.Th><Table.Th>Zone</Table.Th><Table.Th>Addressing</Table.Th></>}</Table.Tr></Table.Thead><Table.Tbody>
+        <ScrollArea><Table verticalSpacing="sm" withTableBorder className="data-table"><Table.Thead><Table.Tr><Table.Th>Interface</Table.Th><Table.Th>State</Table.Th><Table.Th>Addresses</Table.Th>{showSaved && <><Table.Th>Saved configuration</Table.Th><Table.Th>Addressing</Table.Th></>}</Table.Tr></Table.Thead><Table.Tbody>
           {rows.map(({ key, live, saved: link, state, finding, conflict }) => {
             const segment = link && segmentOf(link);
             return (
               <Table.Tr key={key}>
-                <Table.Td><Text ff="monospace">{live?.name ?? '—'}</Text></Table.Td>
-                <Table.Td><Text ff="monospace" size="sm">{live?.linkAddress || link?.permanentMac || '—'}</Text></Table.Td>
-                <Table.Td>{live?.linkType ?? link?.kind}</Table.Td>
-                <Table.Td>{live ? live.operState : <Badge color={state === 'Disabled' ? 'gray' : 'red'}>{state}</Badge>}</Table.Td>
-                <Table.Td>{live?.mtu ?? link?.mtu}</Table.Td>
-                <Table.Td><Text ff="monospace" size="sm">{live?.addresses.map((address) => `${address.address}/${address.prefixLength}`).join(', ') || '—'}</Text></Table.Td>
+                <Table.Td>
+                  {live ? <Text ff="monospace" fw={600}>{live.name}</Text> : <Text c="dimmed">No device</Text>}
+                  <Text c="dimmed" size="sm"><Text span ff="monospace" inherit>{live?.linkAddress || link?.permanentMac || 'no MAC'}</Text> · {live?.linkType ?? link?.kind} · MTU {live?.mtu ?? link?.mtu}</Text>
+                </Table.Td>
+                <Table.Td>{live ? <Badge color={stateColor[live.operState] ?? 'gray'}>{live.operState.toLowerCase()}</Badge> : <Badge color={state === 'Disabled' ? 'gray' : 'red'}>{state}</Badge>}</Table.Td>
+                <Table.Td>{live?.addresses.length ? live.addresses.map((address) => <Text key={`${address.address}/${address.prefixLength}`} ff="monospace" size="sm">{address.address}/{address.prefixLength}</Text>) : <Text c="dimmed">—</Text>}</Table.Td>
                 {showSaved && (
                   <>
                     <Table.Td>
-                      {link ? <Text>{link.name} <Text span c="dimmed" size="sm">{link.kind}{link.enabled ? '' : ', disabled'}</Text></Text> : <Badge color="gray">Unused</Badge>}
+                      {link ? (
+                        <>
+                          <Group gap="xs"><Text fw={600}>{link.name}</Text>{segment && saved?.snapshot.value.management?.segment === segment.id && <Badge variant="light">Management</Badge>}{live && !link.enabled && <Badge color="gray" variant="light">Disabled</Badge>}</Group>
+                          <Text c="dimmed" size="sm">{link.kind} link{segment ? <> · segment {segment.name} · zone {zoneName(segment.zone)}</> : ' · no segment'}</Text>
+                        </>
+                      ) : <Text c="dimmed">Not in the configuration</Text>}
                       {conflict && <Badge color="red" variant="light">Conflict: several saved links</Badge>}
-                      {finding && <Text size="sm" c="red">{finding}</Text>}
+                      {finding && <Text size="sm" className="error-text">{finding}</Text>}
                     </Table.Td>
-                    <Table.Td>{segment ? <Group gap="xs"><Text>{segment.name}</Text>{saved?.snapshot.value.management?.segment === segment.id && <Badge variant="light">Management</Badge>}</Group> : '—'}</Table.Td>
-                    <Table.Td>{segment ? zoneName(segment.zone) : '—'}</Table.Td>
-                    <Table.Td>{segment ? `IPv4 ${segment.addressing.ipv4.mode}, IPv6 ${segment.addressing.ipv6.mode}` : '—'}</Table.Td>
+                    <Table.Td>{segment ? <><Text size="sm">IPv4 {segment.addressing.ipv4.mode}</Text><Text size="sm">IPv6 {segment.addressing.ipv6.mode}</Text></> : <Text c="dimmed">—</Text>}</Table.Td>
                   </>
                 )}
               </Table.Tr>

@@ -1,7 +1,7 @@
 import { Alert, Badge, Button, Code, Group, List, Loader, Paper, Radio, ScrollArea, Stack, Table, Text, Title } from '@mantine/core';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiClient, ApiError, reportError } from '../api';
-import { clock, describe, differences, liveApply, newer, stateLabels, useCountdown, type ChangeState } from '../changes';
+import { clock, describe, differences, fieldChanges, liveApply, newer, stateLabels, useCountdown, type ChangeState } from '../changes';
 import type { Finding, Session, VersionInfo } from '../types';
 import { useResource } from '../useResource';
 
@@ -13,6 +13,11 @@ interface ChangesScreenProps {
   connected: boolean;
   onChanged(): void;
   onSessionLost(): void;
+}
+
+// compact shows one field's value on a line, as JSON: an empty string and the text "5" stay tellable from nothing and 5.
+function compact(value: unknown) {
+  return JSON.stringify(value);
 }
 
 function pretty(value: unknown) {
@@ -151,7 +156,7 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
       )}
       {latest?.state === 'activating' && <Alert color="blue" role="status" title="Activating">Applying saved version {latest.savedVersion}…{latest.reason && ` ${latest.reason}`}</Alert>}
       {(latest?.state === 'failed' || latest?.state === 'rolled_back') && <Alert color="red" role="status" title={latest.state === 'failed' ? 'The last apply failed' : 'The last apply was rolled back'}>Apply {latest.id} of saved version {latest.savedVersion}.{latest.reason && ` ${latest.reason}`}</Alert>}
-      {latest?.state === 'confirmed' && latest.id === live?.id && <Alert color="green" role="status" title="Confirmed">Apply {latest.id} of saved version {latest.savedVersion} is confirmed.</Alert>}
+      {latest?.state === 'confirmed' && latest.id === live?.id && !newer(state.head, live.savedVersion) && <Alert color="green" role="status" title="Confirmed">Apply {latest.id} of saved version {latest.savedVersion} is confirmed.</Alert>}
 
       <Paper withBorder p="md">
         <Title order={3} size="h4">What is live</Title>
@@ -164,14 +169,21 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
             <Title order={3} size="h4">What would change</Title>
             {!detail ? <Loader aria-label="Loading the review" /> : !changes ? (!review.error && <Text role="status">Nothing to apply: every saved change is live.</Text>) : (
               <>
-                <Stack gap="xs">{changes.versions.map((version) => <div key={version.id}><Text fw={600}>Saved version {version.id} by {version.actor} at {new Date(version.createdAt).toLocaleString()}</Text><Text size="sm" c="dimmed">{version.changes.map((change) => `${change.collection} ${change.id}${change.created ? ' (created)' : change.deleted ? ' (deleted)' : ''}`).join(', ') || 'No changed objects'}</Text></div>)}</Stack>
+                <Stack gap="xs">{changes.versions.map((version) => <div key={version.id}><Text fw={600}>Saved version {version.id} by {version.actor} at {new Date(version.createdAt).toLocaleString()}</Text><Text size="sm" c="dimmed">{version.changes.length === 1 ? '1 changed object' : `${version.changes.length} changed objects`}</Text></div>)}</Stack>
                 {changed.length === 0 ? <Text role="status">The saved versions end where the live one started.</Text> : changed.map((item) => (
                   <div key={`${item.collection} ${item.id}`} aria-label={`${item.label} ${item.kind}`}>
                     <Group gap="xs"><Badge color={item.kind === 'created' ? 'green' : item.kind === 'deleted' ? 'red' : 'yellow'}>{item.kind}</Badge><Text fw={600}>{item.label}</Text><Text size="sm" c="dimmed">{item.collection}</Text></Group>
-                    <ScrollArea><Table withTableBorder><Table.Thead><Table.Tr><Table.Th>Live</Table.Th><Table.Th>Saved</Table.Th></Table.Tr></Table.Thead><Table.Tbody><Table.Tr>
-                      <Table.Td valign="top">{item.kind === 'created' ? <Text c="dimmed" size="sm">Not present</Text> : <Code block>{pretty(item.before)}</Code>}</Table.Td>
-                      <Table.Td valign="top">{item.kind === 'deleted' ? <Text c="dimmed" size="sm">Deleted</Text> : <Code block>{pretty(item.after)}</Code>}</Table.Td>
-                    </Table.Tr></Table.Tbody></Table></ScrollArea>
+                    {item.kind === 'changed' ? (
+                      <ScrollArea><Table withTableBorder className="data-table"><Table.Thead><Table.Tr><Table.Th>Field</Table.Th><Table.Th>Live</Table.Th><Table.Th>Saved</Table.Th></Table.Tr></Table.Thead><Table.Tbody>
+                        {fieldChanges(item.before, item.after).map((change) => (
+                          <Table.Tr key={change.field}>
+                            <Table.Td><Text ff="monospace" size="sm">{change.field || 'value'}</Text></Table.Td>
+                            <Table.Td>{change.before === undefined ? <Text c="dimmed" size="sm">Not set</Text> : <Code className="diff-old">{compact(change.before)}</Code>}</Table.Td>
+                            <Table.Td>{change.after === undefined ? <Text c="dimmed" size="sm">Not set</Text> : <Code className="diff-new">{compact(change.after)}</Code>}</Table.Td>
+                          </Table.Tr>
+                        ))}
+                      </Table.Tbody></Table></ScrollArea>
+                    ) : <Code block className={item.kind === 'created' ? 'diff-new' : 'diff-old'}>{pretty(item.kind === 'created' ? item.after : item.before)}</Code>}
                   </div>
                 ))}
               </>
@@ -192,7 +204,7 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
                 <Radio.Group label="Confirmation window" value={confirmWindow} onChange={setConfirmWindow}>
                   <Group mt="xs">{['60', '120', '300'].map((seconds) => <Radio key={seconds} value={seconds} label={`${seconds} seconds`} />)}</Group>
                 </Radio.Group>
-                <Button color="orange" disabled={!changes.preview.realizable || inFlight || Boolean(busy) || review.loading || Boolean(stale) || Boolean(review.error)} onClick={() => void apply(detail.reviewed)}>Apply saved version {detail.reviewed}</Button>
+                <Button disabled={!changes.preview.realizable || inFlight || Boolean(busy) || review.loading || Boolean(stale) || Boolean(review.error)} onClick={() => void apply(detail.reviewed)}>Apply saved version {detail.reviewed}</Button>
               </Group>
             )}
           </Stack>

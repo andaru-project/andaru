@@ -12,6 +12,7 @@
     "dev": "vite",
     "lint": "eslint . --max-warnings=0",
     "test": "vitest run",
+    "theme": "vitest run src/theme.test.ts -u",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
