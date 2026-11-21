@@ -86,13 +86,14 @@ This document amends the [shell design](2026-11-21-web-ui-shell-design.md): its 
 14. **Widgets can be hidden and reordered from the first slice** (owner, 2026-11-21).
     - The dashboard uses the padlock and grip of the firewall rules ([firewall design](2026-11-21-web-ui-firewall-design.md), call 4). Locked, it is plain. Unlocked, each widget shows its corner grip and a Hide button, and a list of hidden widgets offers Show.
     - The layout is an ordered list of widget names. A widget that appears later (a new version, an add-on) joins at the end, shown.
-    - The choice is kept in the browser, so a phone and a desktop each keep their own. No per-account preference store exists yet; when one does, the layout moves there, per account and per device class.
+    - **The layout is kept with the account** (owner, 2026-11-21): arranging a dashboard takes time, and losing it by changing browser is frustrating. The engine gains a small per-account preference document, read and written through the session (`session/preferences`), outside the saved configuration: it needs no apply and is in no generation. It is size-limited and holds nothing the engine acts on.
+    - One layout per account, for every screen width: the grid already reflows the same order into fewer columns.
     - "Reset" returns to the default order.
 
 15. **From pfSense's main page, not in this slice,** each for want of data the engine does not hold yet: gateway latency and loss, the DHCP lease list, a firewall log tail, per-rule counters, S.M.A.R.T. state, VPN tunnels and traffic totals over days. Each arrives with its own feature.
 
 16. **Slices** (order agreed by the owner, 2026-11-21). The work is too large for one change:
-    - first, the navigation tree and the narrow-screen layout, with a dashboard of the widgets already served;
+    - first, the navigation tree and the narrow-screen layout, with a dashboard of the widgets already served, and the per-account preferences that keep its layout;
     - second, `system/info` and the System widget;
     - third, `system/usage` and `system/traffic`, with Resources and Network activity;
     - the update check arrives with the upgrade slice, since the check and the upgrade page share their mechanism.
@@ -137,7 +138,6 @@ The built-in widgets of call 10 are ordinary components in a list of `{id, title
 
 ## Open for the owner
 
-- **Where the layout is kept (call 14):** the browser for now, or is a per-account store required from the start, so the layout follows the administrator to another browser?
 
 ## Out of scope
 

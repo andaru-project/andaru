@@ -20,6 +20,8 @@ The API serves `policy.input` and `policy.forward` with their order operation, `
    - **"Any" means every network, never the box.** Reaching the box always takes a rule that names "This firewall". Traffic to everywhere, the box included, is two rules.
    - "This firewall" stands alone as a destination, never in a list with other zones.
    - It is offered as a destination only. Rules for what the box itself sends do not exist yet.
+   - **A side of a rule is a zone and, within it, addresses** (owner, 2026-11-21; [#113](https://github.com/andaru-project/andaru/issues/113)). A zone is a set of interfaces: where traffic arrives or leaves. An address is who. Both must match, so "lan, host A" means host A arriving from lan. Today's engine reads it as "lan or host A"; the model changes.
+   - A rule reads as a sentence, and the table shows it as one: "From lan, except the printers, to wan, HTTPS: accept."
    - Above the table, a fixed, read-only block lists what Andaru always does before any rule: established and related traffic accepted, invalid dropped, loopback and neighbour discovery accepted, DHCP requests on served segments, SSH on the management segment. Below the table: "Everything else is dropped."
    - Without `management.segment` the filter is off (packet filter design). The page then says so and links to Interfaces instead of showing an empty table that looks like "allow nothing".
 
@@ -39,7 +41,7 @@ The API serves `policy.input` and `policy.forward` with their order operation, `
    - Whether a small library does the dragging or the page's own pointer handling does is settled when it is built. The requirement is touch, pointer and keyboard alike.
 
 5. **Editing a rule is a side panel,** not a dialog over the table, so the order stays visible. Fields: name, description, enabled, action, from, to, services, log.
-   - From and to are pickers over zones and addresses, grouped, searchable by name. "Any" is the empty selection, stated in words as "any network". "This firewall" is first among the destination zones.
+   - From and to each have two pickers: zones ("any network" when empty; "This firewall" first among the destinations) and addresses ("every address" when empty), searchable by name.
    - Each address list has a "not" switch (owner, 2026-11-21; [#114](https://github.com/andaru-project/andaru/issues/114)): the rule then matches every address in the zone except those named. The owner's case is a DNS redirect for a whole zone that leaves out the servers which must reach the upstream resolver. Zones are not negated. The table shows "not" as a word before the addresses.
    - Services is a picker over services; empty is "any service".
    - An address or service that does not exist yet can be created from the picker ("New address…"), which opens the object's own form and returns with it selected.
@@ -63,7 +65,7 @@ The API serves `policy.input` and `policy.forward` with their order operation, `
    - It has no off switch: "always" is the point. Narrowing it is `allowedSources`' job.
    - The rollback timer stays the backstop for everything the rule does not cover, such as a change to the management segment's own addressing.
 
-10. **Starter rules.** A new box has no rules, so nothing passes between networks. The Rules page, when empty, offers "Allow the LAN out": one rule from the management segment's zone to any network, saved like any rule. It is an offer, never automatic, and slice 3's seed apply may make it moot.
+10. **Starter rules.** The setup assistant already writes them: for each zone without an uplink, accept to any network, and ping and DNS to the box. The Rules page adds nothing to that. Only when the list is empty does it say why nothing passes ("No rules: all traffic between networks is dropped") and offer to add the same starter rules, saved like any rule and never automatic.
 
 11. **States each page covers:** loading, empty, read-only, validation errors, version conflict, saved-but-unapplied (the shell's notice), filter off, and connection lost.
 
@@ -73,8 +75,7 @@ The API serves `policy.input` and `policy.forward` with their order operation, `
 
 ## Open for the owner
 
-- **Starter rule (call 10):** offer it, or leave an empty table with an explanation?
-- **NAT** (outbound mode, port forwards, 1:1) is the natural third slice. Should port forwards sit under Firewall or under their own NAT group?
+- **NAT** (outbound, port forwards, one-to-one) is the next slice, with its own pages. Proposed place: under Firewall, as "NAT" with a sub-page each, which is where pfSense, OPNsense, OpenWrt and MikroTik keep it.
 
 ## Out of scope
 
