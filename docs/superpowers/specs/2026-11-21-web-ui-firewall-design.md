@@ -40,6 +40,7 @@ The API serves `policy.input` and `policy.forward` with their order operation, `
 
 5. **Editing a rule is a side panel,** not a dialog over the table, so the order stays visible. Fields: name, description, enabled, action, from, to, services, log.
    - From and to are pickers over zones and addresses, grouped, searchable by name. "Any" is the empty selection, stated in words as "any network". "This firewall" is first among the destination zones.
+   - Each address list has a "not" switch (owner, 2026-11-21; [#114](https://github.com/andaru-project/andaru/issues/114)): the rule then matches every address in the zone except those named. The owner's case is a DNS redirect for a whole zone that leaves out the servers which must reach the upstream resolver. Zones are not negated. The table shows "not" as a word before the addresses.
    - Services is a picker over services; empty is "any service".
    - An address or service that does not exist yet can be created from the picker ("New address…"), which opens the object's own form and returns with it selected.
    - Save uses the object's version (`If-Match`); a 412 shows what changed underneath and keeps the user's edits in the form.
@@ -73,7 +74,6 @@ The API serves `policy.input` and `policy.forward` with their order operation, `
 ## Open for the owner
 
 - **Starter rule (call 10):** offer it, or leave an empty table with an explanation?
-- **Negation** ("not this zone", "not this address"), which pfSense has: the engine's rules have none today. Wanted, and if so when?
 - **NAT** (outbound mode, port forwards, 1:1) is the natural third slice. Should port forwards sit under Firewall or under their own NAT group?
 
 ## Out of scope
