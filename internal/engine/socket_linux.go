@@ -109,8 +109,10 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	if err = audits.Reconcile(ctx, coordinator); err != nil && !errors.Is(err, audit.ErrReconciliationComplete) {
 		return fmt.Errorf("reconcile identity audit operations: %w", err)
 	}
-	// The traffic history fills for as long as the engine serves.
-	go sampleTraffic(lifetime, traffic)
+	// The traffic history fills for as long as the engine serves, and the sampler is gone before this returns.
+	sampled := make(chan struct{})
+	go func() { defer close(sampled); sampleTraffic(lifetime, traffic, systemRoot) }()
+	defer func() { cancel(context.Canceled); <-sampled }()
 	rootAPI := newHandlerWithAPIs(host.ReadLinks, newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, applies, backups), identityAPI, auditAPI)
 	if web == nil {
 		err = serveUnix(lifetime, socketPath, rootAPI)

@@ -43,22 +43,24 @@ type trafficHistory struct {
 var traffic = &trafficHistory{samples: map[string][]trafficSample{}}
 
 // record adds one reading of every interface and drops what is older than the hour. An interface that has
-// gone keeps its readings until they age out, so its last hour stays on the graph.
+// gone keeps its readings until they age out, so its last hour stays on the graph. A reading stamped later than
+// now is from before the clock was set back: it goes too, or samples would no longer run oldest first.
 func (h *trafficHistory) record(now time.Time, counters map[string]host.Counters) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	for name, reading := range counters {
-		samples := append(h.samples[name], trafficSample{At: now.UTC(), Counters: reading})
-		h.samples[name] = samples[max(len(samples)-trafficSamples, 0):]
-	}
 	oldest := now.Add(-trafficSamples * trafficInterval)
 	for name, samples := range h.samples {
-		samples = slices.DeleteFunc(samples, func(sample trafficSample) bool { return !sample.At.After(oldest) })
+		samples = slices.DeleteFunc(samples, func(sample trafficSample) bool { return !sample.At.After(oldest) || !sample.At.Before(now) })
 		if len(samples) == 0 {
 			delete(h.samples, name)
 		} else {
 			h.samples[name] = samples
 		}
+	}
+	for name, reading := range counters {
+		samples := append(h.samples[name], trafficSample{At: now.UTC(), Counters: reading})
+		// The age rule above keeps an hour at the usual pace; this bounds a history read faster than that.
+		h.samples[name] = samples[max(len(samples)-trafficSamples, 0):]
 	}
 }
 
@@ -74,12 +76,12 @@ func (h *trafficHistory) view() trafficResponse {
 	return response
 }
 
-// sampleTraffic reads the counters now and every interval until the context ends.
-func sampleTraffic(ctx context.Context, history *trafficHistory) {
+// sampleTraffic reads the counters under root now and every interval until the context ends.
+func sampleTraffic(ctx context.Context, history *trafficHistory, root string) {
 	ticker := time.NewTicker(trafficInterval)
 	defer ticker.Stop()
 	for {
-		history.record(time.Now(), host.ReadCounters(systemRoot))
+		history.record(time.Now(), host.ReadCounters(root))
 		select {
 		case <-ctx.Done():
 			return

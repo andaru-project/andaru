@@ -83,7 +83,9 @@ func newHandlerWithAPIs(readLinks func(context.Context) ([]host.LinkStatus, erro
 			configuration.ServeHTTP(w, r)
 			return
 		}
-		if r.URL.Path != "/api/v1/status/links" && r.URL.Path != "/api/v1/status/prefixes" && r.URL.Path != "/api/v1/status/system" && r.URL.Path != "/api/v1/status/usage" && r.URL.Path != "/api/v1/status/traffic" && r.URL.Path != "/api/v1/openapi.json" {
+		switch r.URL.Path {
+		case "/api/v1/status/links", "/api/v1/status/prefixes", "/api/v1/status/system", "/api/v1/status/usage", "/api/v1/status/traffic", "/api/v1/openapi.json":
+		default:
 			writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
 			return
 		}

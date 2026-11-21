@@ -281,9 +281,6 @@
           },
           "405": {
             "$ref": "#/components/responses/MethodNotAllowed"
-          },
-          "503": {
-            "$ref": "#/components/responses/InventoryUnavailable"
           }
         }
       },
@@ -296,9 +293,6 @@
           },
           "403": {
             "description": "Peer denied; no body"
-          },
-          "503": {
-            "description": "It is unavailable; no body"
           }
         }
       }
@@ -5684,7 +5678,7 @@
               "type": "number",
               "minimum": 0
             },
-            "description": "The load averages over 1, 5 and 15 minutes; null when the kernel gives none"
+            "description": "The load averages over 1, 5 and 15 minutes, all three; null when the kernel does not give them"
           },
           "memory": {
             "type": "object",
@@ -5717,7 +5711,7 @@
           },
           "fileSystems": {
             "type": "array",
-            "description": "File systems on a device or a ZFS pool, each device once: as / or /var when it is mounted there, else at its shortest mount point",
+            "description": "File systems on a device or a ZFS pool, each device and each pool once: as / or /var when it is mounted there, else at its shortest mount point. FUSE mounts are left out",
             "items": {
               "type": "object",
               "additionalProperties": false,

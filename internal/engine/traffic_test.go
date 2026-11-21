@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -58,6 +59,15 @@ func TestTrafficHistoryKeepsAnHourPerInterface(t *testing.T) {
 	if view = history.view(); len(view.Interfaces) != 2 {
 		t.Fatalf("an interface gone for an hour is still there: %+v", view.Interfaces)
 	}
+	// More readings than fit, all within the hour: the newest 120 stay.
+	crowded := &trafficHistory{samples: map[string][]trafficSample{}}
+	for tick := range 200 {
+		crowded.record(start.Add(time.Duration(tick)*10*time.Second), map[string]host.Counters{"ens18": bytes(uint64(tick))})
+	}
+	if samples := crowded.view().Interfaces[0].Samples; len(samples) != trafficSamples || samples[0].RxBytes != 80 {
+		t.Fatalf("a crowded hour holds %d samples from %+v", len(samples), samples[0])
+	}
+
 	// What is handed out is a copy.
 	view.Interfaces[0].Samples[0].RxBytes = 0
 	if history.view().Interfaces[0].Samples[0].RxBytes == 0 {
@@ -107,11 +117,59 @@ func TestUsageAndTrafficStatus(t *testing.T) {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
 	validResponse(t, "TrafficResponse", rec.Body.Bytes())
-	writeUnder(t, root, "/sys/class/net/ens18/statistics/rx_bytes", "1000\n")
-	traffic.record(time.Now(), host.ReadCounters(root))
+	traffic.record(time.Now(), map[string]host.Counters{"ens18": {RxBytes: 1000}})
 	rec = get("/api/v1/status/traffic")
 	validResponse(t, "TrafficResponse", rec.Body.Bytes())
 	if !strings.Contains(rec.Body.String(), `"name":"ens18"`) || !strings.Contains(rec.Body.String(), `"rxBytes":1000`) {
 		t.Fatalf("%s", rec.Body)
+	}
+}
+
+// A clock set back must not leave readings from the future in the history: samples run oldest first.
+func TestTrafficHistorySurvivesAClockSetBack(t *testing.T) {
+	history := &trafficHistory{samples: map[string][]trafficSample{}}
+	wrong := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	right := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	for tick := range 5 {
+		history.record(wrong.Add(time.Duration(tick)*trafficInterval), map[string]host.Counters{"ens18": {RxBytes: uint64(tick)}, "veth1": {RxBytes: 1}})
+	}
+	for tick := range 3 {
+		history.record(right.Add(time.Duration(tick)*trafficInterval), map[string]host.Counters{"ens18": {RxBytes: uint64(100 + tick)}})
+	}
+	view := history.view()
+	if len(view.Interfaces) != 1 || view.Interfaces[0].Name != "ens18" {
+		t.Fatalf("readings from the future stayed: %+v", view.Interfaces)
+	}
+	samples := view.Interfaces[0].Samples
+	if len(samples) != 3 || samples[0].RxBytes != 100 || !samples[0].At.Equal(right) || !samples[2].At.After(samples[1].At) {
+		t.Fatalf("%+v", samples)
+	}
+}
+
+// The sampler reads at once, so a dashboard opened right after the engine starts has a first point, and it
+// stops with its context.
+func TestSampleTrafficReadsAtOnceAndStops(t *testing.T) {
+	root := t.TempDir()
+	writeUnder(t, root, "/sys/class/net/ens18/statistics/rx_bytes", "1000\n")
+	for _, counter := range []string{"tx_bytes", "rx_packets", "tx_packets", "rx_errors", "tx_errors", "rx_dropped", "tx_dropped"} {
+		writeUnder(t, root, "/sys/class/net/ens18/statistics/"+counter, "0\n")
+	}
+	history := &trafficHistory{samples: map[string][]trafficSample{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); sampleTraffic(ctx, history, root) }()
+	for deadline := time.Now().Add(5 * time.Second); len(history.view().Interfaces) == 0; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the sampler read nothing")
+		}
+	}
+	if samples := history.view().Interfaces[0].Samples; len(samples) != 1 || samples[0].RxBytes != 1000 {
+		t.Fatalf("%+v", samples)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the sampler did not stop with its context")
 	}
 }
