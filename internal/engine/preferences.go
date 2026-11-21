@@ -7,7 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
+
+	"github.com/google/uuid"
 )
 
 // maxPreferencesBytes bounds one account's preference document.
@@ -20,8 +21,9 @@ var errInvalidPreferences = errors.New("preferences are not one JSON object with
 // table changes that database's layout, and the previous image, booted again after a rollback, refuses a layout
 // it does not know and would leave nobody able to sign in.
 func preferencesPath(stateDir, accountID string) (string, error) {
-	if accountID == "" || accountID != filepath.Base(accountID) || strings.HasPrefix(accountID, ".") {
-		return "", errors.New("account ID is not a file name")
+	// The ID becomes a file name, so it must be what every account ID is and nothing else.
+	if uuid.Validate(accountID) != nil || len(accountID) != 36 {
+		return "", errors.New("account ID is not a UUID")
 	}
 	return filepath.Join(stateDir, "preferences", accountID+".json"), nil
 }
@@ -39,7 +41,9 @@ func readPreferences(stateDir, accountID string) ([]byte, error) {
 	return document, err
 }
 
-// writePreferences replaces the account's document, leaving the old one or the whole new one.
+// writePreferences replaces the account's document, leaving the old one or the whole new one. The directory is
+// not synced: after a power loss a layout may be the one before, which is not worth a second sync per save. A
+// crash between the two steps leaves a temporary file of at most 16 KiB that nothing reads.
 func writePreferences(stateDir, accountID string, document []byte) (err error) {
 	if len(document) > maxPreferencesBytes || !jsonObject(document) {
 		return errInvalidPreferences

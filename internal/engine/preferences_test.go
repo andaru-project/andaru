@@ -65,8 +65,8 @@ func TestPreferencesAreOneBoundedJSONObjectPerAccount(t *testing.T) {
 		t.Fatalf("a refused save changed the document: %q", got)
 	}
 
-	// An account ID is a file name here, so it must be nothing else.
-	for _, accountID := range []string{"", ".", "..", "../identity", "a/b", ".hidden"} {
+	// An account ID is a file name here, so it must be a UUID and nothing else.
+	for _, accountID := range []string{"", ".", "..", "/", "../identity", "a/b", ".hidden", "admin", "{" + one + "}", "urn:uuid:" + one, strings.ReplaceAll(one, "-", "")} {
 		if err := writePreferences(stateDir, accountID, []byte("{}")); err == nil || errors.Is(err, errInvalidPreferences) {
 			t.Errorf("account ID %q was not refused as a name: %v", accountID, err)
 		}
@@ -79,6 +79,9 @@ func TestPreferencesAreOneBoundedJSONObjectPerAccount(t *testing.T) {
 	entries, err := os.ReadDir(filepath.Join(stateDir, "preferences"))
 	if err != nil || len(entries) != 2 {
 		t.Fatalf("preferences directory holds %v, %v", entries, err)
+	}
+	if info, err := os.Stat(filepath.Join(stateDir, "preferences")); err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("the preferences directory is not private: %v %v", info, err)
 	}
 	for _, entry := range entries {
 		if info, err := entry.Info(); err != nil || info.Mode().Perm() != 0o600 {

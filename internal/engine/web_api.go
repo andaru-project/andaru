@@ -274,7 +274,11 @@ func (h *webAPI) currentSession(w http.ResponseWriter, r *http.Request, source s
 // stores the document and acts on nothing in it, so it is outside the saved configuration: no apply, no generation.
 // Any signed-in human may read and replace their own; no capability governs it.
 func (h *webAPI) preferences(w http.ResponseWriter, r *http.Request, source string) {
-	var accountID string
+	unavailable := func(err error) {
+		slog.ErrorContext(r.Context(), "preferences unavailable", "error", err)
+		writeError(w, r, http.StatusServiceUnavailable, "STORE_UNAVAILABLE", "Preferences are temporarily unavailable.")
+	}
+	var document []byte
 	switch r.Method {
 	case http.MethodGet:
 		if !noQuery(w, r) || !requireNoBody(w, r) {
@@ -284,7 +288,11 @@ func (h *webAPI) preferences(w http.ResponseWriter, r *http.Request, source stri
 		if !ok {
 			return
 		}
-		accountID = principal.Account.ID
+		var err error
+		if document, err = readPreferences(h.stateDir, principal.Account.ID); err != nil {
+			unavailable(err)
+			return
+		}
 	case http.MethodPut:
 		if !noQuery(w, r) || !h.requireOrigin(w, r) {
 			return
@@ -297,7 +305,8 @@ func (h *webAPI) preferences(w http.ResponseWriter, r *http.Request, source stri
 			writeError(w, r, http.StatusUnsupportedMediaType, "UNSUPPORTED_CONTENT", "Preferences must be application/json.")
 			return
 		}
-		document, err := readRequestBody(w, r, maxPreferencesBytes)
+		var err error
+		document, err = readRequestBody(w, r, maxPreferencesBytes)
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
 			writeError(w, r, http.StatusRequestEntityTooLarge, "REQUEST_TOO_LARGE", "Preferences exceed 16 KiB.")
@@ -307,26 +316,18 @@ func (h *webAPI) preferences(w http.ResponseWriter, r *http.Request, source stri
 			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "The request body could not be read.")
 			return
 		}
-		accountID = principal.Account.ID
-		if err = writePreferences(h.stateDir, accountID, document); errors.Is(err, errInvalidPreferences) {
+		if err = writePreferences(h.stateDir, principal.Account.ID, document); errors.Is(err, errInvalidPreferences) {
 			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Preferences must be one JSON object.")
 			return
 		} else if err != nil {
-			slog.ErrorContext(r.Context(), "preferences not written", "error", err)
-			writeError(w, r, http.StatusServiceUnavailable, "STORE_UNAVAILABLE", "Preferences are temporarily unavailable.")
+			unavailable(err)
 			return
 		}
 	default:
 		methodNotAllowed(w, r, "GET, PUT")
 		return
 	}
-	// Both answer with the stored bytes, so a client shows what the box holds.
-	document, err := readPreferences(h.stateDir, accountID)
-	if err != nil {
-		slog.ErrorContext(r.Context(), "preferences not read", "error", err)
-		writeError(w, r, http.StatusServiceUnavailable, "STORE_UNAVAILABLE", "Preferences are temporarily unavailable.")
-		return
-	}
+	// The stored bytes, as they are: a read answers with the file, a write with what it has just stored.
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(document)
 }

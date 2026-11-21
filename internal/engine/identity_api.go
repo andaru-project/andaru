@@ -480,8 +480,11 @@ func (h *identityAPI) deleteUser(w http.ResponseWriter, r *http.Request, id stri
 	execution, ok := h.executeMutation(w, r, actor, operationID, nil, audit.ActionAccountDeleted, audit.CategoryProtected, id, func(ctx context.Context) (string, any, error) {
 		return id, nil, h.identities.DeleteAccount(ctx, id, revision)
 	})
-	if ok {
+	// A replay answers for a deletion done earlier; the account may exist again since, by a restore.
+	if ok && !execution.Replay {
 		removePreferences(h.coordinator.stateDir, id)
+	}
+	if ok {
 		writeOperationResult(w, r, execution, http.StatusOK, id)
 	}
 }

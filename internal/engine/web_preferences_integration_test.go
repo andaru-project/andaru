@@ -35,18 +35,30 @@ func TestWebPreferencesBelongToTheSignedInAccount(t *testing.T) {
 	if _, _, err = store.BootstrapAdmin(ctx, "rootadmin", "Administrator", []byte(password)); err != nil {
 		t.Fatal(err)
 	}
+	second, revision, err := store.CreateAccount(ctx, identity.CreateAccountInput{Login: "second", DisplayName: "Second", Kind: identity.Human, Enabled: true, RoleIDs: []string{"read-only"}}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.SetPassword(ctx, second.ID, revision, []byte(password)); err != nil {
+		t.Fatal(err)
+	}
 	// A session needs a live generation to take its authorization from.
 	liveGenerationFixture(t, ctx, stateDir, configuration)
 	const origin = "https://router.example"
 	handler := &webAPI{identities: store, configuration: configuration, stateDir: stateDir, origins: map[string]struct{}{origin: {}}, hosts: map[string]struct{}{"router.example": {}}}
-	var login identity.LoginResult
-	if err = handler.withLiveAuthorization(ctx, func(_ authz.Snapshot, epoch uint64) error {
-		var loginErr error
-		login, loginErr = store.AuthenticatePassword(ctx, "rootadmin", password, "192.0.2.20", epoch)
-		return loginErr
-	}); err != nil {
-		t.Fatal(err)
+	signIn := func(name string) identity.LoginResult {
+		t.Helper()
+		var login identity.LoginResult
+		if err := handler.withLiveAuthorization(ctx, func(_ authz.Snapshot, epoch uint64) error {
+			var loginErr error
+			login, loginErr = store.AuthenticatePassword(ctx, name, password, "192.0.2.20", epoch)
+			return loginErr
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return login
 	}
+	login := signIn("rootadmin")
 
 	// call sends one request as the browser behind andaru-web would; each option changes one thing about it.
 	type option func(*http.Request)
@@ -101,4 +113,16 @@ func TestWebPreferencesBelongToTheSignedInAccount(t *testing.T) {
 	expect(call(http.MethodGet, "", without("Cookie")), http.StatusUnauthorized, "")
 	expect(call(http.MethodPut, `{}`, without("Cookie")), http.StatusUnauthorized, "")
 	expect(call(http.MethodGet, ""), http.StatusOK, layout)
+
+	// Another account signs in: it sees its own document, not the first one's, and writes only its own.
+	first := login
+	login = signIn("second")
+	if response := call(http.MethodGet, ""); response.Code != http.StatusOK || response.Body.String() != "{}" {
+		t.Fatalf("a second account read %d %s", response.Code, response.Body)
+	}
+	expect(call(http.MethodPut, `{"mine":true}`), http.StatusOK, `{"mine":true}`)
+	login = first
+	if response := call(http.MethodGet, ""); response.Body.String() != layout {
+		t.Fatalf("the second account's save changed the first one's document: %s", response.Body)
+	}
 }
