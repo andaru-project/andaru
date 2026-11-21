@@ -41,7 +41,7 @@ type applyReply struct {
 
 var objectIDPattern = regexp.MustCompile(`^(lnk|seg|zon|adr|svc|rul|dhp|pfw|oto|dh6|vip)_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 var applyIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
-var errUsage = errors.New("usage: andaru ctl [--socket PATH] links|prefixes|openapi|config <show|list|get|create|replace|delete|changes|order>|versions <list|get>|preview network [--saved-version N]|apply network --saved-version N [--confirm-timeout S]|applies <list|get ID|confirm ID|rollback ID>|backup <create|inspect|restore>|users <bootstrap-admin|list|get|create|update|disable|delete|password-reset>|tokens <create|list|revoke>|audit list|factory-reset <run|abort|status>")
+var errUsage = errors.New("invalid arguments")
 
 func collectionName(s string) bool {
 	return slices.Contains([]string{"links", "segments", "zones", "addresses", "services", "dhcp", "dhcp6", "virtualAddresses", "policy/input", "policy/forward", "nat/port-forwards", "nat/one-to-one"}, s)
@@ -100,6 +100,7 @@ func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 		if verb == "replace" || verb == "delete" || verb == "order" {
 			fs := flag.NewFlagSet(verb, flag.ContinueOnError)
 			fs.SetOutput(stderr)
+			fs.Usage = func() {} // the caller prints the command's usage
 			fs.StringVar(&version, "version", "", "explicit version returned by the object read")
 			if e := fs.Parse(leaf); e != nil {
 				return req, e
@@ -198,6 +199,7 @@ func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 		}
 		fs := flag.NewFlagSet("preview network", flag.ContinueOnError)
 		fs.SetOutput(stderr)
+		fs.Usage = func() {} // the caller prints the command's usage
 		// A flag given as "" (an unset shell variable) must be refused, not read as "the head".
 		var saved *config.Version
 		fs.Func("saved-version", "saved version to render (default: the saved head)", func(s string) error {
@@ -233,6 +235,7 @@ func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 		}
 		fs := flag.NewFlagSet("versions list", flag.ContinueOnError)
 		fs.SetOutput(stderr)
+		fs.Usage = func() {} // the caller prints the command's usage
 		limit := fs.Int("limit", 50, "maximum saved versions (1-100)")
 		before := fs.String("before", "", "exclusive saved version cursor")
 		if e := fs.Parse(args[2:]); e != nil {
@@ -259,6 +262,7 @@ func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 		}
 		fs := flag.NewFlagSet("apply network", flag.ContinueOnError)
 		fs.SetOutput(stderr)
+		fs.Usage = func() {} // the caller prints the command's usage
 		// Required and never defaulted: the operator applies the version they previewed.
 		var saved *config.Version
 		fs.Func("saved-version", "saved version to apply; must be the saved head", func(s string) error {
@@ -339,6 +343,21 @@ func unixHTTPClient(socket string, timeout time.Duration) (*http.Client, *http.T
 }
 
 func runCtl(ctx context.Context, socket string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		return ctlUsageError(stderr, "")
+	}
+	if args[0] == "help" {
+		if len(args) == 1 {
+			ctlHelp(stdout)
+		} else {
+			ctlCommandHelp(stdout, args[1])
+		}
+		return 0
+	}
+	if helpRequested(args[1:]) {
+		ctlCommandHelp(stdout, args[0])
+		return 0
+	}
 	if len(args) > 0 && args[0] == "backup" {
 		return runBackup(ctx, socket, args[1:], stdin, stdout, stderr)
 	}
@@ -354,10 +373,10 @@ func runCtl(ctx context.Context, socket string, args []string, stdin io.Reader, 
 	spec, e := ctlOperation(args, stderr)
 	if e != nil {
 		if errors.Is(e, flag.ErrHelp) {
+			ctlCommandHelp(stdout, args[0])
 			return 0
 		}
-		fmt.Fprintln(stderr, errUsage)
-		return 2
+		return ctlUsageError(stderr, args[0])
 	}
 	payload := spec.payload
 	if spec.body {

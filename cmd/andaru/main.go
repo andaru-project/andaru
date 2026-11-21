@@ -26,24 +26,30 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	usage := "usage: andaru engine [--socket PATH] [--state-dir PATH] [--web-socket PATH --web-uid UID --web-gid GID --web-origin HTTPS_ORIGIN ...] | andaru ctl [--socket PATH] links|prefixes|openapi|config|versions|preview|apply|applies|backup|kept|users|tokens|audit|factory-reset | andaru realize [--state-dir PATH] activate|rollback|confirm|boot|leases|prefixes|factory-reset"
-	if len(args) == 0 {
-		fmt.Fprintln(stderr, usage)
+	usage := func(w io.Writer, text, command string) int {
+		fmt.Fprint(w, text+"Run '"+command+" --help' for details.\n")
 		return 2
 	}
-	if args[0] == "--help" || args[0] == "-h" {
-		fmt.Fprintln(stdout, usage)
+	if len(args) == 0 {
+		return usage(stderr, topUsage, "andaru")
+	}
+	if isHelp(args[0]) || args[0] == "help" {
+		fmt.Fprint(stdout, topHelp)
 		return 0
 	}
 	if args[0] == "realize" {
+		if realizeHelpRequested(args[1:]) {
+			fmt.Fprint(stdout, realizeHelp)
+			return 0
+		}
 		return realizeCommand(ctx, args[1:], stderr, newRealizer)
 	}
 	if args[0] != "engine" && args[0] != "ctl" {
-		fmt.Fprintln(stderr, usage)
-		return 2
+		return usage(stderr, topUsage, "andaru")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	flags.Usage = func() {}
 	socket := flags.String("socket", defaultSocket, "absolute local engine socket path")
 	stateDir := "/var/lib/andaru"
 	webSocket := ""
@@ -57,10 +63,18 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		flags.Var(&webOrigins, "web-origin", "exact HTTPS management origin; repeat for each origin")
 	}
 	if err := flags.Parse(args[1:]); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return 0
+		switch {
+		case !errors.Is(err, flag.ErrHelp):
+			if args[0] == "engine" {
+				return usage(stderr, engineUsage, "andaru engine")
+			}
+			return ctlUsageError(stderr, "")
+		case args[0] == "engine":
+			fmt.Fprint(stdout, engineHelp)
+		default:
+			ctlHelp(stdout)
 		}
-		return 2
+		return 0
 	}
 	if !filepath.IsAbs(*socket) || filepath.Clean(*socket) != *socket || len(*socket) >= 108 {
 		fmt.Fprintln(stderr, "socket must be a canonical absolute path shorter than 108 bytes")
@@ -68,8 +82,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 	if args[0] == "engine" {
 		if flags.NArg() != 0 {
-			fmt.Fprintln(stderr, usage)
-			return 2
+			return usage(stderr, engineUsage, "andaru engine")
 		}
 		if !filepath.IsAbs(stateDir) || filepath.Clean(stateDir) != stateDir {
 			fmt.Fprintln(stderr, "state-dir must be a canonical absolute path")

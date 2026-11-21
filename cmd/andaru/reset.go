@@ -18,8 +18,6 @@ import (
 	"github.com/andaru-project/andaru/internal/reset"
 )
 
-const factoryResetUsage = "usage: andaru ctl factory-reset run|abort|status"
-
 // Test seams. Production leaves them as they are.
 var (
 	resetDir      = reset.Dir
@@ -32,8 +30,7 @@ var (
 // which survives the SSH session the new network may cut.
 func runFactoryReset(ctx context.Context, socket string, args []string, stdout, stderr io.Writer) int {
 	if len(args) != 1 || !map[string]bool{"run": true, "abort": true, "status": true}[args[0]] {
-		fmt.Fprintln(stderr, factoryResetUsage)
-		return 2
+		return ctlUsageError(stderr, "factory-reset")
 	}
 	if resetEUID() != 0 {
 		fmt.Fprintln(stderr, "factory reset requires root")

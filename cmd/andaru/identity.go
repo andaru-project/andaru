@@ -22,8 +22,6 @@ import (
 	"github.com/google/uuid"
 )
 
-const identityUsage = "usage: andaru ctl [--socket PATH] users bootstrap-admin --login LOGIN [--display-name NAME] | users list [--cursor CURSOR] [--limit N] | users get ID | users create --login LOGIN --kind human|service --revision N [--display-name NAME] [--roles ID,...] [--disabled] | users update ID --revision N [--login LOGIN] [--display-name NAME] [--kind human|service] [--roles ID,...] [--enabled true|false] | users disable|delete ID --revision N | users password-reset ID --revision N | tokens create --account-id ID --name NAME --scope CAPABILITY,... [--expires-at RFC3339|--no-expiry] [--revoke-on-password-change true|false] | tokens list --account-id ID [--cursor CURSOR] [--limit N] | tokens revoke SELECTOR | audit list [--cursor CURSOR] [--limit N]"
-
 const identityResponseLimit = 1 << 20
 
 var identityEUID = os.Geteuid
@@ -130,8 +128,7 @@ type identityAuditPage struct {
 func runIdentity(ctx context.Context, socket string, args []string, stdout, stderr io.Writer) int {
 	spec, err := parseIdentityCommand(args)
 	if err != nil {
-		fmt.Fprintln(stderr, identityUsage)
-		return 2
+		return ctlUsageError(stderr, args[0])
 	}
 	if identityEUID() != 0 {
 		fmt.Fprintln(stderr, "identity administration requires root")
