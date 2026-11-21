@@ -264,14 +264,37 @@
       "get": {
         "operationId": "readTraffic",
         "summary": "Read the last hour of every network interface's counters",
-        "description": "The engine reads every interface but the loopback every intervalSeconds and keeps the last hour in memory. The history starts again when the engine does. Counters are cumulative: a client works out a rate from neighbouring samples and treats a counter that went down as a gap. An interface that has gone keeps its samples until they are an hour old.",
+        "description": "The engine reads every interface but the loopback every intervalSeconds, 5 today, and keeps the last hour in memory. The history starts again when the engine does. Counters are cumulative: a client works out a rate from neighbouring samples and treats a counter that went down as a gap. An interface that has gone keeps its samples until they are an hour old. A client reads the hour once, then asks with since for what it lacks.",
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "description": "The at of the newest sample the client holds, as served. Only samples after it are sent; every interface is still named, with an empty list when it has nothing newer. A since later than every sample held is answered with the whole history and complete true",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
         "responses": {
+
           "200": {
             "description": "The traffic history",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TrafficResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "since is not one time in the form the samples carry, or the query holds anything else",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -5793,6 +5816,7 @@
         "additionalProperties": false,
         "required": [
           "intervalSeconds",
+          "complete",
           "interfaces"
         ],
         "properties": {
@@ -5800,6 +5824,10 @@
             "type": "integer",
             "minimum": 1,
             "description": "How often the engine reads the counters"
+          },
+          "complete": {
+            "type": "boolean",
+            "description": "True when the answer is the whole history, which replaces what the client holds; false when it is samples to add"
           },
           "interfaces": {
             "type": "array",
@@ -5817,7 +5845,7 @@
                 },
                 "samples": {
                   "type": "array",
-                  "description": "Oldest first, at most an hour",
+                  "description": "Oldest first, at most an hour, or what came after since",
                   "items": {
                     "type": "object",
                     "additionalProperties": false,

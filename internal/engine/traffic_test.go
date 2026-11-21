@@ -2,8 +2,10 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -18,9 +20,10 @@ func TestTrafficHistoryKeepsAnHourPerInterface(t *testing.T) {
 	bytes := func(n uint64) host.Counters { return host.Counters{RxBytes: n} }
 
 	// ens19 appears late and ens20 goes away early.
-	for tick := range 130 {
+	const n = trafficSamples
+	for tick := range n + 10 {
 		counters := map[string]host.Counters{"ens18": bytes(uint64(tick))}
-		if tick >= 125 {
+		if tick >= n+5 {
 			counters["ens19"] = bytes(uint64(tick))
 		}
 		if tick < 20 {
@@ -28,9 +31,9 @@ func TestTrafficHistoryKeepsAnHourPerInterface(t *testing.T) {
 		}
 		history.record(at(tick), counters)
 	}
-	view := history.view()
-	if view.IntervalSeconds != 30 || len(view.Interfaces) != 3 {
-		t.Fatalf("%+v", view)
+	view := history.view(time.Time{})
+	if view.IntervalSeconds != 5 || n != 720 || len(view.Interfaces) != 3 {
+		t.Fatalf("%d readings every %d seconds; %+v", n, view.IntervalSeconds, view.Interfaces)
 	}
 	byName := map[string][]trafficSample{}
 	names := []string{}
@@ -41,36 +44,57 @@ func TestTrafficHistoryKeepsAnHourPerInterface(t *testing.T) {
 	if strings.Join(names, ",") != "ens18,ens19,ens20" {
 		t.Fatalf("interfaces are not by name: %v", names)
 	}
-	// The last 120 readings, oldest first: the hour.
-	if samples := byName["ens18"]; len(samples) != trafficSamples || samples[0].RxBytes != 10 || samples[119].RxBytes != 129 || !samples[0].At.Equal(at(10)) {
+	// The last hour of readings, oldest first.
+	if samples := byName["ens18"]; len(samples) != n || samples[0].RxBytes != 10 || samples[n-1].RxBytes != uint64(n+9) || !samples[0].At.Equal(at(10)) {
 		t.Fatalf("ens18 holds %d samples from %v", len(samples), samples[0])
 	}
-	if samples := byName["ens19"]; len(samples) != 5 || samples[0].RxBytes != 125 {
+	if samples := byName["ens19"]; len(samples) != 5 || samples[0].RxBytes != uint64(n+5) {
 		t.Fatalf("a new interface holds %d samples", len(samples))
 	}
-	// An interface that has gone keeps what is not yet an hour old: ticks 10 to 19 at tick 129.
+	// An interface that has gone keeps what is not yet an hour old: ticks 10 to 19 at the last tick.
 	if samples := byName["ens20"]; len(samples) != 10 || samples[0].RxBytes != 10 {
 		t.Fatalf("a gone interface holds %d samples from %+v", len(samples), samples[0])
 	}
+
+	// A client that holds the history up to a reading is sent what came after it, and every interface's name.
+	later := history.view(at(n + 6))
+	if got := later.Interfaces; len(got) != 3 || len(got[0].Samples) != 3 || got[0].Samples[0].RxBytes != uint64(n+7) || len(got[1].Samples) != 3 || got[2].Name != "ens20" || got[2].Samples == nil || len(got[2].Samples) != 0 {
+		t.Fatalf("since the reading of tick %d: %+v", n+6, got)
+	}
+	if later.Complete || !view.Complete {
+		t.Fatalf("complete: whole history %v, a tail %v", view.Complete, later.Complete)
+	}
+	if got := history.view(at(n + 9)); len(got.Interfaces[0].Samples) != 0 || got.Complete {
+		t.Fatalf("a client that holds everything was sent %d readings, complete %v", len(got.Interfaces[0].Samples), got.Complete)
+	}
+	// A client ahead of every reading held, as after the clock was set back, is sent the whole history to
+	// start again from; it would otherwise be sent nothing until the clock caught up.
+	if got := history.view(at(n + 500)); !got.Complete || len(got.Interfaces[0].Samples) != n {
+		t.Fatalf("a client from the future was sent %d readings, complete %v", len(got.Interfaces[0].Samples), got.Complete)
+	}
+	if got := history.view(at(0).Add(-time.Hour)).Interfaces[0].Samples; len(got) != n {
+		t.Fatalf("a client that holds nothing recent was sent %d readings", len(got))
+	}
+
 	// And then nothing: it leaves the history when its last reading ages out.
-	for tick := 130; tick < 141; tick++ {
+	for tick := n + 10; tick < n+21; tick++ {
 		history.record(at(tick), map[string]host.Counters{"ens18": bytes(uint64(tick))})
 	}
-	if view = history.view(); len(view.Interfaces) != 2 {
+	if view = history.view(time.Time{}); len(view.Interfaces) != 2 {
 		t.Fatalf("an interface gone for an hour is still there: %+v", view.Interfaces)
 	}
-	// More readings than fit, all within the hour: the newest 120 stay.
+	// More readings than fit, all within the hour: the newest stay.
 	crowded := &trafficHistory{samples: map[string][]trafficSample{}}
-	for tick := range 200 {
-		crowded.record(start.Add(time.Duration(tick)*10*time.Second), map[string]host.Counters{"ens18": bytes(uint64(tick))})
+	for tick := range n + 280 {
+		crowded.record(start.Add(time.Duration(tick)*time.Second), map[string]host.Counters{"ens18": bytes(uint64(tick))})
 	}
-	if samples := crowded.view().Interfaces[0].Samples; len(samples) != trafficSamples || samples[0].RxBytes != 80 {
+	if samples := crowded.view(time.Time{}).Interfaces[0].Samples; len(samples) != n || samples[0].RxBytes != 280 {
 		t.Fatalf("a crowded hour holds %d samples from %+v", len(samples), samples[0])
 	}
 
 	// What is handed out is a copy.
 	view.Interfaces[0].Samples[0].RxBytes = 0
-	if history.view().Interfaces[0].Samples[0].RxBytes == 0 {
+	if history.view(time.Time{}).Interfaces[0].Samples[0].RxBytes == 0 {
 		t.Fatal("a reader changed the history")
 	}
 }
@@ -123,6 +147,29 @@ func TestUsageAndTrafficStatus(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `"name":"ens18"`) || !strings.Contains(rec.Body.String(), `"rxBytes":1000`) {
 		t.Fatalf("%s", rec.Body)
 	}
+
+	// since: what came after a reading; a time in the form the readings carry, and nothing else in the query.
+	// A reading's own time, as served and as a browser would write it, gives nothing newer: an empty tail.
+	var served trafficResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &served); err != nil || !served.Complete {
+		t.Fatalf("%v %s", err, rec.Body)
+	}
+	at := served.Interfaces[0].Samples[0].At
+	if at.Nanosecond()%1_000_000 != 0 {
+		t.Fatalf("a reading's time is finer than a millisecond: %v", at)
+	}
+	if rec = get("/api/v1/status/traffic?since=" + url.QueryEscape(at.Format("2006-01-02T15:04:05.000Z07:00"))); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"complete":false`) || !strings.Contains(rec.Body.String(), `"name":"ens18","samples":[]`) {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	validResponse(t, "TrafficResponse", rec.Body.Bytes())
+	if rec = get("/api/v1/status/traffic?since=2000-01-01T00:00:00.123456789Z"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"rxBytes":1000`) {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	for _, query := range []string{"since=yesterday", "since=", "since", "since=2026-11-21", "limit=5", "since=2000-01-01T00:00:00Z&x=1", "since=2000-01-01T00:00:00Z&since=", "since=2000-01-01T00:00:00Z&since=2001-01-01T00:00:00Z", "since=%ZZ", "since=2000-01-01T00:00:00Z;x=1"} {
+		if rec = get("/api/v1/status/traffic?" + query); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "INVALID_REQUEST") {
+			t.Fatalf("?%s: %d %s", query, rec.Code, rec.Body)
+		}
+	}
 }
 
 // A clock set back must not leave readings from the future in the history: samples run oldest first.
@@ -136,7 +183,7 @@ func TestTrafficHistorySurvivesAClockSetBack(t *testing.T) {
 	for tick := range 3 {
 		history.record(right.Add(time.Duration(tick)*trafficInterval), map[string]host.Counters{"ens18": {RxBytes: uint64(100 + tick)}})
 	}
-	view := history.view()
+	view := history.view(time.Time{})
 	if len(view.Interfaces) != 1 || view.Interfaces[0].Name != "ens18" {
 		t.Fatalf("readings from the future stayed: %+v", view.Interfaces)
 	}
@@ -158,12 +205,12 @@ func TestSampleTrafficReadsAtOnceAndStops(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); sampleTraffic(ctx, history, root) }()
-	for deadline := time.Now().Add(5 * time.Second); len(history.view().Interfaces) == 0; time.Sleep(time.Millisecond) {
+	for deadline := time.Now().Add(5 * time.Second); len(history.view(time.Time{}).Interfaces) == 0; time.Sleep(time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("the sampler read nothing")
 		}
 	}
-	if samples := history.view().Interfaces[0].Samples; len(samples) != 1 || samples[0].RxBytes != 1000 {
+	if samples := history.view(time.Time{}).Interfaces[0].Samples; len(samples) != 1 || samples[0].RxBytes != 1000 {
 		t.Fatalf("%+v", samples)
 	}
 	cancel()

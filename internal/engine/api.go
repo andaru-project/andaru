@@ -6,8 +6,10 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -112,7 +114,23 @@ func newHandlerWithAPIs(readLinks func(context.Context) ([]host.LinkStatus, erro
 			return
 		}
 		if r.URL.Path == "/api/v1/status/traffic" {
-			writeJSON(w, r, http.StatusOK, traffic.view())
+			// since is the time of the newest reading a client holds: it is sent what came after. It is the one
+			// parameter, once, with a value. ParseQuery, not URL.Query, which drops what it cannot parse.
+			query, err := url.ParseQuery(r.URL.RawQuery)
+			var since time.Time
+			if values, given := query["since"]; err == nil && given {
+				if len(values) == 1 {
+					since, err = time.Parse(time.RFC3339Nano, values[0])
+				} else {
+					err = errors.New("since given more than once")
+				}
+				delete(query, "since")
+			}
+			if err != nil || len(query) != 0 {
+				writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Only since is supported, once, as a time in the form the readings carry.")
+				return
+			}
+			writeJSON(w, r, http.StatusOK, traffic.view(since))
 			return
 		}
 		if r.URL.Path == "/api/v1/status/usage" {

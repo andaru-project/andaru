@@ -75,14 +75,14 @@ This document amends the [shell design](2026-11-21-web-ui-shell-design.md): its 
     - `status/system` first serves what the kernel's files say and the Andaru version. The image, its verification and the update state come with the upgrade slice, which owns `bootc`; safe mode comes when the engine has such a state to report. Two points of call 17 wait for a source: PAN is not among the features the arm64 kernel lists, and nothing read here says whether it started at EL2. Memory is what the kernel has to use, a little less than what is installed. In the widget, the last applied change stays with the Changes widget beside it, which says more; and a guest is named on a line of its own, "Runs as", not on the virtualisation line, which lists what the CPU offers.
 
 12. **The engine keeps one hour of traffic history** (owner, 2026-11-21), so the graph is drawn in full when the dashboard loads.
-    - Every 30 seconds the engine records each network adapter's counters: bytes, packets, errors and drops, each way. It keeps the last 120 readings per adapter, which is the hour.
+    - Every 5 seconds the engine records each network adapter's counters: bytes, packets, errors and drops, each way (owner, 2026-11-21: since the history is in memory only, read often enough to show a dip of a few seconds). It keeps the last 720 readings per adapter, which is the hour: about 64 KiB an adapter.
     - The history lives in the engine's memory. It starts again when the engine or the box restarts, and nothing is written to disk. Longer history belongs with the statistics work ([#15](https://github.com/andaru-project/andaru/issues/15)).
     - `status/traffic` serves the readings with their times. The browser works out the rates from neighbouring readings, so a counter that restarts shows as a gap, never as a spike.
     - An adapter that disappears keeps its readings until they age out; a new one starts empty.
     - The graph is an SVG the page draws itself: one widget does not justify a chart library, and the content security policy allows SVG elements.
     - The graph has a text equivalent: the current, average and peak rates, in words, beneath it.
 
-13. **Refresh is by polling,** only while the page is visible: `status/usage` every 2 seconds, `status/traffic` every 30, everything else every 10. Server-sent events remain a later slice.
+13. **Refresh is by polling,** only while the page is visible: `status/usage` every 2 seconds, `status/traffic` every 5, asking only for the readings it lacks, everything else every 10. Server-sent events remain a later slice.
 
 14. **Widgets can be hidden and reordered from the first slice** (owner, 2026-11-21).
     - The dashboard uses the padlock and grip of the firewall rules ([firewall design](2026-11-21-web-ui-firewall-design.md), call 4). Locked, it is plain. Unlocked, each widget shows its corner grip and a Hide button, and a list of hidden widgets offers Show.
