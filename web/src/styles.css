@@ -387,7 +387,6 @@ path.traffic-sent {
   /* The table's header row stays for assistive technology, out of sight. So does the product's name, where the
      header has no room: the mark alone carries it. */
   .data-table thead,
-  .app-version,
   .app-title {
     clip-path: inset(50%);
     height: 1px;

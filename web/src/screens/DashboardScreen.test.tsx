@@ -135,7 +135,7 @@ it('applies the stored layout: its order, its hidden widgets, and a widget new s
   // "gone" and "changes" are widgets of other versions. "interfaces" is not named, so it joins at the end.
   layoutRoutes({ dashboard: { order: ['prefixes', 'gone', 'changes'], hidden: ['changes'] } });
   await mount(everything);
-  await waitFor(() => expect(titles()).toEqual(['IPv6 prefixes', 'System', 'Resources', 'Network activity', 'Interfaces']));
+  await waitFor(() => expect(titles()).toEqual(['IPv6 prefixes', 'System', 'Interfaces', 'Resources', 'Network activity']));
 });
 
 it('stays locked until asked: nothing moves or hides by accident', async () => {
@@ -158,9 +158,9 @@ it('hides and shows a widget, saving the whole preferences and keeping what it d
   await userEvent.click(screen.getByRole('button', { name: 'Hide Interfaces' }));
   expect(titles()).toEqual(['System', 'Resources', 'Network activity', 'IPv6 prefixes', 'Hidden widgets']);
   await userEvent.click(screen.getByRole('button', { name: 'Show Interfaces' }));
-  expect(titles()).toEqual(['System', 'Resources', 'Network activity', 'Interfaces', 'IPv6 prefixes']);
+  expect(titles()).toEqual(['System', 'Interfaces', 'Resources', 'Network activity', 'IPv6 prefixes']);
 
-  const order = ['system', 'resources', 'traffic', 'interfaces', 'prefixes'];
+  const order = ['system', 'interfaces', 'resources', 'traffic', 'prefixes'];
   expect(saves(fetchMock)).toEqual([
     { another: { version: 'keeps this' }, dashboard: { order, hidden: ['interfaces'] } },
     { another: { version: 'keeps this' }, dashboard: { order, hidden: [] } },
@@ -172,12 +172,12 @@ it('resets to the default layout', async () => {
   await mount(everything);
   await unlock();
   await userEvent.click(screen.getByRole('button', { name: 'Reset layout' }));
-  expect(titles()).toEqual(['System', 'Resources', 'Network activity', 'Interfaces', 'IPv6 prefixes']);
+  expect(titles()).toEqual(['System', 'Interfaces', 'Resources', 'Network activity', 'IPv6 prefixes']);
   expect(saves(fetchMock)).toEqual([{ dashboard: {} }]);
 });
 
 it('says so when every widget is hidden, and how to get them back while locked', async () => {
-  layoutRoutes({ dashboard: { hidden: ['system', 'resources', 'traffic', 'interfaces', 'prefixes'] } });
+  layoutRoutes({ dashboard: { hidden: ['system', 'interfaces', 'resources', 'traffic', 'prefixes'] } });
   await mount(everything);
   expect(screen.getByText(/Every widget is hidden/)).toHaveTextContent('Every widget is hidden. Edit the layout to show them again.');
   await unlock();
@@ -208,14 +208,14 @@ it('moves a widget by its grip with the keyboard, and saves the new order', asyn
   const fetchMock = layoutRoutes({});
   await mount(everything);
   await unlock();
-  const grip = screen.getByRole('button', { name: 'Move Network activity' });
+  const grip = screen.getByRole('button', { name: 'Move Resources' });
   grip.focus();
   await userEvent.keyboard('{Enter}');
   await userEvent.keyboard('{ArrowRight}');
   await userEvent.keyboard('{Enter}');
-  await waitFor(() => expect(titles()).toEqual(['System', 'Resources', 'Interfaces', 'Network activity', 'IPv6 prefixes']));
-  await waitFor(() => expect(saves(fetchMock)).toEqual([{ dashboard: { order: ['system', 'resources', 'interfaces', 'traffic', 'prefixes'], hidden: [] } }]));
-  expect(screen.getByRole('status', { hidden: true })).toHaveTextContent('Dropped Network activity at position 4 of 5.');
+  await waitFor(() => expect(titles()).toEqual(['System', 'Interfaces', 'Network activity', 'Resources', 'IPv6 prefixes']));
+  await waitFor(() => expect(saves(fetchMock)).toEqual([{ dashboard: { order: ['system', 'interfaces', 'traffic', 'resources', 'prefixes'], hidden: [] } }]));
+  expect(screen.getByRole('status', { hidden: true })).toHaveTextContent('Dropped Resources at position 4 of 5.');
   rect.mockRestore();
 });
 
@@ -235,7 +235,7 @@ it('sends saves one at a time, each on what the last one stored, and skips one t
   // The box answers with what it now holds, which another feature has written a key into.
   await act(async () => { held[0](jsonResponse(200, { other: 'kept', dashboard: { hidden: ['resources'] } })); await Promise.resolve(); });
   await waitFor(() => expect(saves(fetchMock)).toHaveLength(2));
-  expect(saves(fetchMock)[1]).toEqual({ other: 'kept', dashboard: { order: ['system', 'resources', 'traffic', 'interfaces', 'prefixes'], hidden: ['resources', 'interfaces', 'prefixes'] } });
+  expect(saves(fetchMock)[1]).toEqual({ other: 'kept', dashboard: { order: ['system', 'interfaces', 'resources', 'traffic', 'prefixes'], hidden: ['interfaces', 'resources', 'prefixes'] } });
 });
 
 it('moves focus to the edit button when the button that was pressed goes away', async () => {
@@ -270,7 +270,7 @@ it('keeps the layout locked when the preferences cannot be read: a save would re
   await mount(everything);
   expect(await screen.findByText(/The layout cannot be changed now: Preferences are temporarily unavailable\./)).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Edit layout' })).toBeDisabled();
-  expect(titles()).toEqual(['System', 'Resources', 'Network activity', 'Interfaces', 'IPv6 prefixes']);
+  expect(titles()).toEqual(['System', 'Interfaces', 'Resources', 'Network activity', 'IPv6 prefixes']);
   expect(saves(fetchMock)).toEqual([]);
 });
 

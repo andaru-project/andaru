@@ -147,9 +147,9 @@ export function DashboardScreen({ api, session, system, onSessionLost }: Dashboa
   const trafficChoice = useState<TrafficChoice>({});
   const all: Array<{ id: string; title: string; to?: string; more?: string; capability: string; body: ReactNode }> = [
     { id: 'system', title: 'System', to: '/system/details', more: 'Details', capability: 'status.read', body: <Loaded resource={system} what="the system description">{(loaded) => loaded && <SystemWidget info={loaded.info} loadedAt={loaded.loadedAt} />}</Loaded> },
+    { id: 'interfaces', title: 'Interfaces', to: '/network/interfaces', more: 'Manage', capability: 'status.read', body: <InterfacesWidget api={api} zones={zones} onSessionLost={onSessionLost} /> },
     { id: 'resources', title: 'Resources', capability: 'status.read', body: <ResourcesWidget api={api} onSessionLost={onSessionLost} /> },
     { id: 'traffic', title: 'Network activity', capability: 'status.read', body: <TrafficWidget api={api} zones={zones} zonesKnown={zonesKnown} choice={trafficChoice} onSessionLost={onSessionLost} /> },
-    { id: 'interfaces', title: 'Interfaces', to: '/network/interfaces', more: 'Manage', capability: 'status.read', body: <InterfacesWidget api={api} zones={zones} onSessionLost={onSessionLost} /> },
     { id: 'prefixes', title: 'IPv6 prefixes', capability: 'status.read', body: <PrefixesWidget api={api} zones={zones} onSessionLost={onSessionLost} /> },
   ];
   const allowed = all.filter((widget) => session.capabilities.includes(widget.capability));
