@@ -108,7 +108,7 @@ func validatePassword(password []byte, login, displayName string) error {
 		}
 	}
 	count := utf8.RuneCount(password)
-	if count < 15 || count > 128 {
+	if count < 8 || count > 128 {
 		return ErrPasswordPolicy
 	}
 	folded := strings.ToLower(string(password))

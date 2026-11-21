@@ -220,7 +220,7 @@ Initial admission policy permits two concurrent Argon2 operations, queues at mos
 
 Password policy follows NIST/OWASP direction rather than composition rules:
 
-- 15–128 Unicode code points, valid UTF-8, maximum 512 bytes, no NUL; no trim/normalization or forced character classes;
+- 8–128 Unicode code points (owner decision 2026-11-21, was 15), valid UTF-8, maximum 512 bytes, no NUL; no trim/normalization or forced character classes;
 - allow spaces, paste and password managers;
 - reject login/display name and a bundled versioned blocklist of common/compromised passwords;
 - no security questions or network password reset; and
