@@ -94,24 +94,26 @@ it('lists a delegated prefix and where it went, each line the same: the interfac
   await mount(['status.read', 'configuration.read']);
   const prefixes = screen.getByRole('region', { name: 'IPv6 prefixes' });
   expect(await within(prefixes).findByText('2001:db8:30::/56')).toBeInTheDocument();
-  await within(prefixes).findAllByLabelText('zone lan');
+  await within(prefixes).findAllByText('zone lan');
   // Three lines of one shape, read as text: interface, zone, what it is, prefix.
   const lines = [...prefixes.querySelectorAll('li')].filter((item) => !item.querySelector('li')).map((item) => item.textContent);
-  expect(lines).toEqual(['ens19lan2001:db8:30:1::/64', 'ens19lanpool2001:db8:30:10::/60']);
-  expect(prefixes.querySelector('li')).toHaveTextContent(/^ens18wandelegated2001:db8:30::\/56/);
+  expect(lines).toEqual(['ens19zone lanlan2001:db8:30:1::/64', 'ens19zone lanlanpool2001:db8:30:10::/60']);
+  expect(prefixes.querySelector('li')).toHaveTextContent(/^ens18zone wanwandelegated2001:db8:30::\/56/);
   expect(within(prefixes).getByText('No room for: guest')).toBeInTheDocument();
 
   // The same zones show wherever the interfaces do.
   const interfaces = screen.getByRole('region', { name: 'Interfaces' });
-  expect(within(interfaces).getByLabelText('zone wan')).toHaveTextContent('wan');
-  expect(within(interfaces).getByLabelText('zone lan')).toHaveTextContent('lan');
+  expect(within(interfaces).getByText('zone wan')).toBeInTheDocument();
+  expect(within(interfaces).getByText('zone lan')).toBeInTheDocument();
+  // An interface's state is a dot badge, a shape a zone's pill never has.
+  expect(within(interfaces).getAllByText('up').map((state) => state.closest('.mantine-Badge-root')?.getAttribute('data-variant'))).toEqual(['dot', 'dot']);
 });
 
 it('shows interfaces without zones to an account that may not read the configuration, and asks for none', async () => {
   const fetchMock = fetchRoutes({ '/api/v1/status/links': { items: [link('ens18', 'UP', [])] }, '/api/v1/status/prefixes': { wans: [] } });
   await mount(['status.read']);
   expect(await within(screen.getByRole('region', { name: 'Interfaces' })).findByText('ens18')).toBeInTheDocument();
-  expect(screen.queryByLabelText(/^zone /)).not.toBeInTheDocument();
+  expect(screen.queryByText(/^zone /)).not.toBeInTheDocument();
   expect(fetchMock.mock.calls.map(([url]) => url)).not.toContain('/api/v1/config');
 });
 

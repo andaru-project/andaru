@@ -33,8 +33,8 @@ it('shows a graph for each interface, top to bottom, with its zone and its figur
   // In the box's order, whatever order they were chosen in; with two interfaces there is nothing to choose.
   expect(graphs()).toEqual(['Traffic on ens18', 'Traffic on ens19']);
   expect(screen.queryByRole('button', { name: /Interfaces shown/ })).not.toBeInTheDocument();
-  expect(within(graph('ens18')).getByLabelText('zone wan')).toBeInTheDocument();
-  expect(within(graph('ens19')).getByLabelText('zone lan')).toBeInTheDocument();
+  expect(within(graph('ens18')).getByText('zone wan')).toBeInTheDocument();
+  expect(within(graph('ens19')).getByText('zone lan')).toBeInTheDocument();
 
   // The arrows are for the eye; the names are what is read out.
   expect(within(graph('ens18')).getByRole('rowheader', { name: 'Download' })).toHaveTextContent('↓ Download');

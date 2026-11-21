@@ -80,7 +80,7 @@ export function InterfacesScreen({ api, session, onSessionLost }: InterfacesScre
                   {live ? <Group gap="xs"><Text ff="monospace" fw={600}>{live.name}</Text><ZoneBadge name={zones?.get(live.name)} /></Group> : <Text c="dimmed">No device</Text>}
                   <Text c="dimmed" size="sm"><Text span ff="monospace" inherit>{live?.linkAddress || link?.permanentMac || 'no MAC'}</Text> · {live?.linkType ?? link?.kind} · MTU {live?.mtu ?? link?.mtu}</Text>
                 </Table.Td>
-                <Table.Td data-label="State">{live ? <Badge variant="dot" color={stateColor[live.operState] ?? 'gray'}>{live.operState.toLowerCase()}</Badge> : <Badge color={state === 'Disabled' ? 'gray' : 'red'}>{state}</Badge>}</Table.Td>
+                <Table.Td data-label="State">{live ? <Badge variant="dot" color={stateColor[live.operState] ?? 'gray'}>{live.operState.toLowerCase()}</Badge> : <Badge variant="dot" color={state === 'Disabled' ? 'gray' : 'red'}>{state}</Badge>}</Table.Td>
                 <Table.Td data-label="Addresses">{live?.addresses.length ? live.addresses.map((address) => <Text key={`${address.address}/${address.prefixLength}`} ff="monospace" size="sm">{address.address}/{address.prefixLength}</Text>) : <Text c="dimmed">—</Text>}</Table.Td>
                 {showSaved && (
                   <>
