@@ -54,7 +54,7 @@ This document amends the [shell design](2026-11-21-web-ui-shell-design.md): its 
     - **System:** hostname, Andaru version and image, whether the image's signature verified, uptime, the box's time, safe mode, and the last applied change.
       - **Update:** "Up to date" or "Version X is available", linking to the upgrade page. The check is the engine's, on a schedule, and the widget shows when it last ran. Until an upgrade page exists the line states the version only.
       - **Hardware:** the CPU's model, cores and threads; installed memory; the board and BIOS vendor, version and date; whether the box is a virtual machine and of which kind.
-      - **CPU features, one line:** only those a firewall gains from, shown as present: AES-NI, SHA-NI, VAES, VPCLMULQDQ, AVX2, AVX-512, RDRAND; on arm64 AES, SHA2, SHA3 and PMULL. Not the whole flag list.
+      - **CPU features:** only those a firewall gains from, shown as present, in three lines (call 17). Not the whole flag list.
       - **x86-64 level:** v1 to v4, worked out from the flags, so the owner can later match a box to an optimised image.
       - **Microcode:** the revision the kernel loaded, not the one on disk.
       - **CPU vulnerabilities:** one line, "all mitigated" or the names of those that are not, from the kernel's own report. pfSense shows two of these; the kernel lists all.
@@ -93,6 +93,34 @@ This document amends the [shell design](2026-11-21-web-ui-shell-design.md): its 
     - third, `system/usage` and `system/traffic`, with Resources and Network activity;
     - the update check arrives with the upgrade slice, since the check and the upgrade page share their mechanism.
 
+17. **CPU features, and why each is shown** (owner, 2026-11-21). The lines show names only. An information button beside them opens the reasons below, for whoever wants them; it works by tap and by keyboard. A feature the CPU lacks is not listed. The list follows the platform.
+    - **Cryptography,** which decides VPN and TLS throughput:
+
+      | x86-64 | Why a firewall cares |
+      | --- | --- |
+      | AES-NI, PCLMULQDQ | AES-GCM in hardware: IPsec, OpenVPN and TLS. Without them AES runs several times slower. |
+      | VAES, VPCLMULQDQ | AES-GCM on several blocks at once: the next step up for IPsec and TLS on recent CPUs. |
+      | SHA-NI | SHA-1 and SHA-256 in hardware: VPN packet authentication, TLS, and checking signed images. |
+      | AVX2, AVX-512 | ChaCha20-Poly1305 in wide vectors: WireGuard's throughput. |
+      | ADX, BMI2 | Curve25519 arithmetic: WireGuard and TLS handshakes. |
+      | RDRAND, RDSEED | Hardware entropy for the kernel's random numbers, which matters for keys made early in boot. |
+
+      | arm64 | Why a firewall cares |
+      | --- | --- |
+      | AES, PMULL | AES-GCM in hardware, as AES-NI and PCLMULQDQ. |
+      | SHA1, SHA2, SHA512, SHA3 | Hashes in hardware. |
+      | ASIMD (NEON), SVE | ChaCha20-Poly1305 in vectors: WireGuard's throughput. |
+      | RNG | Hardware entropy. |
+
+    - **Security,** its own line: protections the kernel uses against attacks on itself. x86-64: NX, SMEP, SMAP, UMIP, CET (shadow stack, IBT). arm64: PAN, PAuth, BTI, MTE.
+    - **Virtualisation,** its own line: VT-x or AMD-V, and whether an IOMMU is active; on arm64, whether the kernel started at EL2. When Andaru itself runs as a guest, the line says so and names the hypervisor.
+    - The exact reasons are checked against the kernel's implementations when the widget is built: the table above states the author's understanding, not a measurement.
+
+## Later, recorded so the navigation leaves room
+
+- **Diagnostics** ([#111](https://github.com/andaru-project/andaru/issues/111)) becomes its own branch in the tree. Its first page answers "what would happen to this traffic" with a flow diagram.
+- **pfBlockerNG** ([#112](https://github.com/andaru-project/andaru/issues/112)) gets no branch of its own. Its pages live where their subject lives, under Firewall and DNS, and carry its name and logo there.
+
 ## Add-on widgets: a direction, not a design
 
 Decided by the owner, 2026-11-21: **add-ons declare their widgets, and Andaru draws them.** No frames.
@@ -105,7 +133,6 @@ The built-in widgets of call 10 are ordinary components in a list of `{id, title
 
 ## Open for the owner
 
-- **The feature line (call 10):** is the list right? QuickAssist is left out, since Andaru ships no driver setup for it.
 - **Identifiers (call 11):** leave the board's serial number out, or show it to administrators?
 - **Slices (call 16):** is that order right?
 - **Hiding and reordering (call 14):** after those slices, or required from the start?
