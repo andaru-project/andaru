@@ -56,6 +56,9 @@ The API serves `policy.input` and `policy.forward` with their order operation, `
    - **Address:** name, kind (host, network, range, group) and its value; a group picks members that are not groups.
    - **Service:** name, protocol (TCP, UDP, ICMP, ICMPv6, group) and its ports or ICMP types; a group picks members.
    - Each row shows where it is used ("3 rules"), with the list on demand.
+   - These are what pfSense calls aliases (owner, 2026-11-21; [#115](https://github.com/andaru-project/andaru/issues/115)). Two things follow, the second of them engine work that is not in this slice:
+     - **One shared address field** serves every place in the web UI that takes an address: it accepts a literal address or an address's name, and completes names as one types. Ports and services get the same. Pages of later slices and of add-ons use that field, not their own.
+     - **An address fed from a URL,** refreshed on a schedule, such as a provider's published ranges. Its row shows when it last refreshed, how many entries it holds and its last error.
 
 9. **An anti-lockout rule, as pfSense has** (owner, 2026-11-21). The packet filter already accepts SSH on the management segment by a fixed rule no edit removes. That rule grows to cover the web UI's port, so no saved rule can cut an administrator off from the browser either.
    - The owner's definition: the management interface always lets in the web UI, and SSH when SSH is enabled, so an administrator can always reach the box. When the management interface is also the LAN, the rule applies there.
