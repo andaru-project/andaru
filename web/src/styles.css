@@ -212,18 +212,42 @@ body {
   padding: 0;
 }
 
-/* The traffic graph: as wide as its widget and two fifths as high, so it keeps its proportions at any width.
-   Both lines take the interface's zone colour where it has one. */
+/* The traffic graph: as wide as its widget. Both lines take the interface's zone colour where it has one. */
 .traffic-frame {
+  flex: 1 0 auto;
+  max-height: 24rem;
   position: relative;
   touch-action: pan-y;
 }
 
+/* A graph is at least two fifths as high as it is wide. In a widget that its row makes taller, the graphs
+   share the room left over, so the panel is filled and not half empty; up to a height, past which a graph
+   would be a strip with its rates drawn out of all proportion. The widget is named through its grid so that
+   the rule outweighs the component's own, whatever order the stylesheets load in. */
+.traffic-frame::before {
+  content: "";
+  display: block;
+  padding-top: 40%;
+}
+
+.widget-grid > .widget,
+.traffic-one {
+  display: flex;
+  flex-direction: column;
+}
+
+.widget > .widget-body,
+.traffic-view,
+.traffic-one {
+  flex: 1 0 auto;
+}
+
 .traffic-graph {
-  aspect-ratio: 5 / 2;
   background: var(--andaru-ground);
   border-radius: var(--mantine-radius-default);
-  display: block;
+  height: 100%;
+  inset: 0;
+  position: absolute;
   width: 100%;
 }
 

@@ -1,7 +1,11 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, render, screen } from '../test/render';
 import type { SystemInfo } from '../types';
-import { SystemWidget } from './SystemWidget';
+import type { ComponentProps } from 'react';
+import { ProcessorWidget, SystemWidget } from './SystemWidget';
+
+// The two widgets show one description between them: the box, then its processor.
+const Both = (props: ComponentProps<typeof SystemWidget>) => <><SystemWidget {...props} /><ProcessorWidget info={props.info} /></>;
 
 const hardware: SystemInfo = {
   version: '0.5.0-a.4', hostname: 'edge', kernel: '6.17.8-300.fc43.x86_64', architecture: 'x86_64',
@@ -19,7 +23,7 @@ const value = (label: string) => screen.getByRole('rowheader', { name: label }).
 afterEach(() => vi.useRealTimers());
 
 it('shows what the box is, a line for each fact it reports', () => {
-  render(<SystemWidget info={hardware} loadedAt={Date.now()} />);
+  render(<Both info={hardware} loadedAt={Date.now()} />);
   expect(value('Hostname')).toBe('edge');
   expect(value('Version')).toBe('0.5.0-a.4');
   expect(value('Kernel')).toBe('6.17.8-300.fc43.x86_64');
@@ -29,8 +33,9 @@ it('shows what the box is, a line for each fact it reports', () => {
   expect(value('Serial')).toBe('ABC123');
   expect(value('BIOS')).toBe('coreboot v1.2.1 03/14/2026');
   expect(value('CPU')).toBe('Intel(R) Core(TM) i5-1235U, 10 cores, 12 threads');
-  // The level and the microcode are one line; the memory installed is in the Resources widget.
-  expect(value('Platform')).toBe('x86-64-v3 · microcode 0x437');
+  expect(value('Level')).toBe('x86-64-v3');
+  expect(value('Microcode')).toBe('0x437');
+  // The memory installed is in the Resources widget.
   expect(screen.queryByRole('rowheader', { name: 'Memory' })).not.toBeInTheDocument();
   expect(value('Hardware crypto')).toBe('AES-NI, SHA-NI, AVX2');
   expect(value('CPU security')).toBe('NX, SMEP');
@@ -41,7 +46,7 @@ it('shows what the box is, a line for each fact it reports', () => {
 });
 
 it('leaves out what a machine does not report, and says a guest is one', () => {
-  render(<SystemWidget loadedAt={Date.now()} info={{
+  render(<Both loadedAt={Date.now()} info={{
     ...hardware, hostname: '', bootedAt: null, guest: 'QEMU', iommu: false, architecture: 'aarch64',
     memoryBytes: 0,
     cpu: { ...hardware.cpu, model: '', cores: 1, threads: 1, microcode: '', level: '', features: { cryptography: [], security: [], virtualization: [] }, vulnerabilities: [] },
@@ -53,7 +58,7 @@ it('leaves out what a machine does not report, and says a guest is one', () => {
   expect(value('Hardware crypto')).toBe('none');
   expect(value('Virtualisation')).toBe('none');
   expect(value('CPU vulnerabilities')).toBe('no report');
-  for (const label of ['Uptime', 'Serial', 'BIOS', 'Board', 'Platform']) expect(screen.queryByRole('rowheader', { name: label })).not.toBeInTheDocument();
+  for (const label of ['Uptime', 'Serial', 'BIOS', 'Board', 'Level', 'Microcode']) expect(screen.queryByRole('rowheader', { name: label })).not.toBeInTheDocument();
 });
 
 it('names the vulnerabilities that are not mitigated, and those the kernel is unsure of', () => {
@@ -62,7 +67,7 @@ it('names the vulnerabilities that are not mitigated, and those the kernel is un
     { name: 'srbds', status: 'Unknown: Dependent on hypervisor status', state: 'unknown' },
     { name: 'meltdown', status: 'Mitigation: PTI', state: 'mitigated' },
   ];
-  render(<SystemWidget info={{ ...hardware, cpu: { ...hardware.cpu, vulnerabilities } }} loadedAt={Date.now()} />);
+  render(<Both info={{ ...hardware, cpu: { ...hardware.cpu, vulnerabilities } }} loadedAt={Date.now()} />);
   expect(value('CPU vulnerabilities')).toBe('not mitigated: tsa; unknown: srbds');
 });
 
@@ -72,12 +77,12 @@ it('never calls a report good that it cannot read: unknown alone, or a state it 
     { name: 'future', status: 'Partly', state: 'partly_exposed' },
     { name: 'meltdown', status: 'Mitigation: PTI', state: 'mitigated' },
   ] as SystemInfo['cpu']['vulnerabilities'];
-  render(<SystemWidget info={{ ...hardware, cpu: { ...hardware.cpu, vulnerabilities } }} loadedAt={Date.now()} />);
+  render(<Both info={{ ...hardware, cpu: { ...hardware.cpu, vulnerabilities } }} loadedAt={Date.now()} />);
   expect(value('CPU vulnerabilities')).toBe('unknown: srbds, future');
 });
 
 it('names a guest whose hypervisor the box cannot name without inventing one', () => {
-  render(<SystemWidget info={{ ...hardware, guest: 'unknown' }} loadedAt={Date.now()} />);
+  render(<Both info={{ ...hardware, guest: 'unknown' }} loadedAt={Date.now()} />);
   expect(value('Machine')).toBe('Protectli VP2420 · virtual machine');
 });
 
@@ -85,7 +90,7 @@ it('lets the clock and the uptime run on by the browser\'s clock, whatever the b
   vi.useFakeTimers();
   vi.setSystemTime(new Date('2030-01-01T00:00:00Z'));
   // The box was up 40 minutes when it answered; its clock is years from the browser's.
-  render(<SystemWidget info={{ ...hardware, time: '2026-11-21T12:00:00Z', bootedAt: '2026-11-21T11:20:00Z' }} loadedAt={Date.now()} />);
+  render(<Both info={{ ...hardware, time: '2026-11-21T12:00:00Z', bootedAt: '2026-11-21T11:20:00Z' }} loadedAt={Date.now()} />);
   expect(value('Uptime')).toBe('40 minutes');
   act(() => { vi.advanceTimersByTime(25 * 60_000); });
   expect(value('Uptime')).toBe('1 hour 5 minutes');
@@ -94,17 +99,17 @@ it('lets the clock and the uptime run on by the browser\'s clock, whatever the b
 
 it('shows the uptime as of now when the description was read long before the widget opened', () => {
   // The shell read it two hours ago; the user has just come back to the dashboard.
-  render(<SystemWidget info={{ ...hardware, time: '2026-11-21T12:00:00Z', bootedAt: '2026-11-21T11:20:00Z' }} loadedAt={Date.now() - 2 * 3600_000} />);
+  render(<Both info={{ ...hardware, time: '2026-11-21T12:00:00Z', bootedAt: '2026-11-21T11:20:00Z' }} loadedAt={Date.now() - 2 * 3600_000} />);
   expect(value('Uptime')).toBe('2 hours 40 minutes');
 });
 
 it('shows no uptime it cannot work out', () => {
-  render(<SystemWidget info={{ ...hardware, time: 'not a time', bootedAt: '2026-11-21T11:20:00Z' }} loadedAt={Date.now()} />);
+  render(<Both info={{ ...hardware, time: 'not a time', bootedAt: '2026-11-21T11:20:00Z' }} loadedAt={Date.now()} />);
   for (const label of ['Uptime', 'Clock']) expect(screen.queryByRole('rowheader', { name: label })).not.toBeInTheDocument();
 });
 
 it('lists the three rows of CPU features and nothing to open', () => {
-  render(<SystemWidget info={hardware} loadedAt={Date.now()} />);
+  render(<Both info={hardware} loadedAt={Date.now()} />);
   expect(screen.getAllByRole('rowheader').map((header) => header.textContent).slice(-4)).toEqual(['Hardware crypto', 'CPU security', 'Virtualisation', 'CPU vulnerabilities']);
   expect(screen.queryByRole('button')).not.toBeInTheDocument();
 });
