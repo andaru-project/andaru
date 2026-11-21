@@ -606,7 +606,7 @@ One segment may say which DNS servers the firewall host itself asks. Design and 
 
 ### How it is built
 
-The engine keeps its sandbox and never writes outside its state directory. It stores each generation under `/var/lib/andaru/generations/<n>/` and asks systemd to run `andaru realize activate|rollback|confirm N` in a transient unit; the timer runs `andaru realize rollback N deadline` the same way. `pointers.json` in that directory is the single commit point, and `realize` re-reads it under a lock before acting, so a timer that fires after a confirmation does nothing. Because the engine can ask systemd to run commands, it is root-equivalent; the sandbox is hardening, not a boundary.
+The engine keeps its sandbox and never writes outside its state directory and its runtime directories (`/run/andaru`, `/run/andaru-web`). It stores each generation under `/var/lib/andaru/generations/<n>/` and asks systemd to run `andaru realize activate|rollback|confirm N` in a transient unit; the timer runs `andaru realize rollback N deadline` the same way. `pointers.json` in that directory is the single commit point, and `realize` re-reads it under a lock before acting, so a timer that fires after a confirmation does nothing. Because the engine can ask systemd to run commands, it is root-equivalent; the sandbox is hardening, not a boundary.
 
 ## Supervision
 
