@@ -142,7 +142,7 @@ The built-in widgets of call 10 are ordinary components in a list of `{id, title
 ## Out of scope
 
 - Any add-on mechanism.
-- Per-account preferences.
+- Per-account preferences beyond the dashboard layout.
 - Server-sent events.
 
 ## Related documents
