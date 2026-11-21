@@ -45,7 +45,7 @@ it('shows each widget its own data, and a widget that fails does not blank the o
   expect(await within(screen.getByRole('region', { name: 'IPv6 prefixes' })).findByRole('alert')).toHaveTextContent('The delegated prefixes are unavailable.');
   expect(within(screen.getByRole('region', { name: 'Changes' })).getByText(/Nothing is pending/)).toBeInTheDocument();
   // A widget's title leads to the page with the full view.
-  expect(screen.getByRole('link', { name: 'Changes' })).toHaveAttribute('href', '/changes');
+  expect(screen.getByRole('link', { name: 'Open Changes' })).toHaveAttribute('href', '/changes');
 });
 
 it('shows only the widgets the capabilities allow', async () => {
@@ -335,7 +335,7 @@ it('shows the system description it is handed, or why it has none', async () => 
   const system = await screen.findByRole('region', { name: 'System' });
   expect(within(system).getByRole('rowheader', { name: 'Andaru' }).nextElementSibling).toHaveTextContent('0.5.0-a.4');
   // The System widget has no page of its own, so its title is not a link.
-  expect(screen.queryByRole('link', { name: 'System' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('link', { name: 'Open System' })).not.toBeInTheDocument();
 
   view.rerender(screenWith({ ...base, error: 'The system description is unavailable.' }));
   expect(within(screen.getByRole('region', { name: 'System' })).getByRole('alert')).toHaveTextContent('The system description is unavailable.');

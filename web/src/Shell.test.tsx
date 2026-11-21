@@ -92,7 +92,7 @@ it('names the box and its Andaru version in the header, for an account that may 
   });
   const api = new ApiClient('csrf');
   render(<MemoryRouter initialEntries={['/system/session']}><Shell api={api} session={session(['status.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} /></MemoryRouter>);
-  expect(await screen.findByText('edge · 0.5.0-a.4')).toBeInTheDocument();
+  expect((await screen.findByText('edge')).textContent).toBe('edge · 0.5.0-a.4');
 });
 
 it('reads the box again each minute, so an upgrade behind an open tab shows, and a box without a name shows its version alone', async () => {

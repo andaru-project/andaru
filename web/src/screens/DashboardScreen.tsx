@@ -8,8 +8,9 @@ import { reportError, type ApiClient } from '../api';
 import { clock, pendingNotice, useCountdown, type ChangeState } from '../changes';
 import { arrange, moved } from '../dashboardLayout';
 import { zonesByInterface } from '../zones';
-import { stateColor, type DashboardLayout, type Preferences, type Session, type SystemInfo } from '../types';
+import { stateColor, stateLabel, type DashboardLayout, type Preferences, type Session, type SystemInfo } from '../types';
 import { usePolledResource, useResource, useVisiblePoll, type Resource } from '../useResource';
+import { Address } from './Address';
 import { Loaded } from './Loaded';
 import { ResourcesWidget } from './ResourcesWidget';
 import { SystemWidget } from './SystemWidget';
@@ -34,7 +35,8 @@ function Padlock({ open }: { open: boolean }) {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
       <rect x="3" y="7" width="10" height="7" rx="1.5" fill="currentColor" />
-      <path d={`M5.5 7V4.5a2.5 2.5 0 0 1 5 0${open ? '' : 'V7'}`} />
+      {/* Open, the shackle swings clear of the body: a gap of two pixels reads as closed at this size. */}
+      <path d={open ? 'M5.5 7V4.5a2.5 2.5 0 0 1 4.9-0.7' : 'M5.5 7V4.5a2.5 2.5 0 0 1 5 0V7'} transform={open ? 'rotate(28 5.5 7)' : undefined} />
     </svg>
   );
 }
@@ -56,8 +58,12 @@ function Widget({ id, title, to, unlocked, onHide, children }: { id: string; tit
   return (
     <Paper ref={setNodeRef} className="widget" data-dragging={isDragging || undefined} style={{ transform: CSS.Translate.toString(transform), transition }} component="section" withBorder p="md" aria-labelledby={`widget-${id}`}>
       <Group justify="space-between" align="flex-start" wrap="nowrap" mb="sm">
-        {/* A title leads to the page with the full view, where there is one. */}
-        <Title order={3} size="h5" id={`widget-${id}`}>{to ? <Anchor component={Link} to={to} inherit>{title}</Anchor> : title}</Title>
+        {/* Every title looks the same. Where a page has the full view, a link beside the title says so in a
+            word and an arrow, not by the title's colour. */}
+        <Group gap="xs" align="baseline">
+          <Title order={3} size="h5" id={`widget-${id}`}>{title}</Title>
+          {to && <Anchor component={Link} to={to} size="sm" aria-label={`Open ${title}`}>Open <span aria-hidden="true">→</span></Anchor>}
+        </Group>
         {unlocked && (
           <Group gap="xs" wrap="nowrap">
             <Button size="compact-xs" variant="default" aria-label={`Hide ${title}`} onClick={onHide}>Hide</Button>
@@ -93,8 +99,8 @@ function InterfacesWidget({ api, zones, onSessionLost }: WidgetProps) {
           <ul className="plain-list">
             {links.map((link) => (
               <li key={link.name}>
-                <Group gap="xs"><Text ff="monospace" fw={600}>{link.name}</Text><ZoneBadge name={zones.get(link.name)} /><Badge variant="dot" color={stateColor[link.operState] ?? 'gray'}>{link.operState.toLowerCase()}</Badge></Group>
-                {link.addresses.filter((address) => address.scope !== 'link').map((address) => <Text key={address.address} ff="monospace" size="sm">{address.address}/{address.prefixLength}</Text>)}
+                <Group gap="xs"><Text ff="monospace" fw={600}>{link.name}</Text><ZoneBadge name={zones.get(link.name)} /><Badge variant="dot" color={stateColor[link.operState] ?? 'gray'}>{stateLabel(link.operState)}</Badge></Group>
+                {link.addresses.filter((address) => address.scope !== 'link').map((address) => <Address key={address.address} value={`${address.address}/${address.prefixLength}`} size="xs" />)}
               </li>
             ))}
           </ul>
@@ -110,7 +116,7 @@ function PrefixLine({ name, zone, note, prefix }: { name: string; zone: string |
   return (
     <div>
       <Group gap="xs"><Text ff="monospace" fw={600}>{name}</Text><ZoneBadge name={zone} />{note && <Text size="sm" c="dimmed">{note}</Text>}</Group>
-      {prefix ? <Text ff="monospace" size="sm">{prefix}</Text> : <Text className="error-text" size="sm">no prefix held</Text>}
+      {prefix ? <Address value={prefix} size="xs" /> : <Text className="error-text" size="sm">no prefix held</Text>}
     </div>
   );
 }
@@ -160,10 +166,10 @@ export function DashboardScreen({ api, session, changes, system, onSessionLost }
   const all: Array<{ id: string; title: string; to?: string; capability: string; body: ReactNode }> = [
     { id: 'system', title: 'System', capability: 'status.read', body: <Loaded resource={system} what="the system description">{(loaded) => loaded && <SystemWidget info={loaded.info} loadedAt={loaded.loadedAt} />}</Loaded> },
     { id: 'resources', title: 'Resources', capability: 'status.read', body: <ResourcesWidget api={api} onSessionLost={onSessionLost} /> },
-    { id: 'traffic', title: 'Network activity', to: '/network/interfaces', capability: 'status.read', body: <TrafficWidget api={api} zones={zones} zonesKnown={zonesKnown} onSessionLost={onSessionLost} /> },
+    { id: 'traffic', title: 'Network activity', capability: 'status.read', body: <TrafficWidget api={api} zones={zones} zonesKnown={zonesKnown} onSessionLost={onSessionLost} /> },
     { id: 'changes', title: 'Changes', to: '/changes', capability: 'configuration.read', body: <Loaded resource={changes} what="changes">{(state) => state && <ChangesText state={state} />}</Loaded> },
     { id: 'interfaces', title: 'Interfaces', to: '/network/interfaces', capability: 'status.read', body: <InterfacesWidget api={api} zones={zones} onSessionLost={onSessionLost} /> },
-    { id: 'prefixes', title: 'IPv6 prefixes', to: '/network/interfaces', capability: 'status.read', body: <PrefixesWidget api={api} zones={zones} onSessionLost={onSessionLost} /> },
+    { id: 'prefixes', title: 'IPv6 prefixes', capability: 'status.read', body: <PrefixesWidget api={api} zones={zones} onSessionLost={onSessionLost} /> },
   ];
   const allowed = all.filter((widget) => session.capabilities.includes(widget.capability));
 

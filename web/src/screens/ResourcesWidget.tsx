@@ -19,7 +19,7 @@ function Measure({ label, share, figures }: { label: string; share: number | nul
         <Text size="sm" c="dimmed">{label}</Text>
         <Text size="sm" ta="right">{figures}</Text>
       </Group>
-      <Progress value={filled} color={filled >= 90 ? 'red' : filled >= 75 ? 'yellow' : undefined} aria-label={share === null ? `${label}: not known yet` : label} />
+      <Progress value={filled} color={filled >= 90 ? 'red' : filled >= 75 ? 'orange' : undefined} aria-label={share === null ? `${label}: not known yet` : label} />
     </div>
   );
 }
