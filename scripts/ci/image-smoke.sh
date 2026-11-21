@@ -69,7 +69,7 @@ done
 for u in sshd.service zincati.service andaru-web.service bootc-fetch-apply-updates.timer rpm-ostreed-automatic.timer; do
 	state "$u" disabled
 done
-for u in NetworkManager.service NetworkManager-wait-online.service systemd-networkd-wait-online.service; do
+for u in NetworkManager.service NetworkManager-wait-online.service systemd-networkd-wait-online.service unbound-keygen.service; do
 	state "$u" masked
 done
 command -v bootc >/dev/null && command -v jq >/dev/null || fail "the install cleanup needs bootc and jq"
@@ -78,7 +78,9 @@ systemctl preset-all --preset-mode=enable-only >/dev/null 2>&1 || fail "presets 
 for u in sshd.service zincati.service andaru-web.service bootc-fetch-apply-updates.timer rpm-ostreed-automatic.timer; do
 	state "$u" disabled
 done
-state systemd-networkd-wait-online.service masked
+for u in systemd-networkd-wait-online.service unbound-keygen.service; do
+	state "$u" masked
+done
 for f in /run/andaru-unbound/andaru.conf /run/andaru-leases/leases.conf; do
 	matchpathcon "$f" | grep -q ":named_conf_t:" || fail "$f would not be readable by Unbound: $(matchpathcon "$f")"
 done
