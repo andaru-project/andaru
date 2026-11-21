@@ -75,7 +75,16 @@ The API serves `policy.input` and `policy.forward` with their order operation, `
 
 ## Open for the owner
 
-- **NAT** (outbound, port forwards, one-to-one) is the next slice, with its own pages. Proposed place: under Firewall, as "NAT" with a sub-page each, which is where pfSense, OPNsense, OpenWrt and MikroTik keep it.
+
+## NAT, decided for the next slice
+
+Owner decisions, 2026-11-21. The NAT pages get their own design; these points bind it and touch the Rules page.
+
+- **Place:** under Firewall, as NAT with a sub-page each: Port forwards, Outbound, One-to-one.
+- **A port forward lets its own traffic in.** No associated firewall rule is shown or kept in step, as pfSense does: the forward already says who, which port and where to. The engine does this today (`filterRule: auto`, [inbound NAT design](2026-11-12-inbound-nat-design.md)): it accepts exactly the connections that forward translated.
+- The port forward form has no rule field. Under Advanced, one switch, "Let this traffic in", on by default (`filterRule: none` when off), for whoever writes the rule by hand.
+- **The Rules page says so.** Its fixed block carries one read-only line, "Port forwards let their own traffic in (3)", linking to them, so nobody wonders why traffic passes without a rule.
+- That accept comes before the list, so a rule in the list cannot stop a forward's traffic. The form says how to restrict a forward: narrow its source, or switch "Let this traffic in" off and write rules.
 
 ## Out of scope
 
