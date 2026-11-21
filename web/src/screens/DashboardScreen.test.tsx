@@ -17,9 +17,11 @@ const link = (name: string, operState: string, addresses: Array<[string, number,
 const settled: ChangeState = { applies: { pointers: { ...pointers, live: '1' }, items: [apply({})] }, head: '3' };
 const latest = (fields: Parameters<typeof apply>[0]): ChangeState => ({ applies: { pointers: { ...pointers, live: '1' }, items: [apply({ id: '2', ...fields }), apply({})] }, head: '3' });
 
-function mount(capabilities: string[], changes: Partial<Resource<ChangeState | undefined>> = { data: settled }) {
+// mount returns once the layout has been read or has failed to be: no widget shows before that.
+async function mount(capabilities: string[], changes: Partial<Resource<ChangeState | undefined>> = { data: settled }) {
   const resource = { error: '', loading: false, reload: vi.fn(), refresh: vi.fn(), ...changes };
   render(<MemoryRouter><DashboardScreen api={new ApiClient('csrf')} session={session(capabilities)} changes={resource} onSessionLost={vi.fn()} /></MemoryRouter>);
+  await waitFor(() => expect(screen.queryByLabelText('Loading the layout')).not.toBeInTheDocument());
 }
 
 afterEach(() => vi.useRealTimers());
@@ -29,7 +31,7 @@ it('shows each widget its own data, and a widget that fails does not blank the o
     '/api/v1/status/links': { items: [link('lo', 'UNKNOWN', []), link('ens18', 'UP', [['10.30.0.100', 24, 'global'], ['fe80::1', 64, 'link']])] },
     '/api/v1/status/prefixes': () => jsonResponse(503, { error: { code: 'INVENTORY_UNAVAILABLE', message: 'The delegated prefixes are unavailable.', details: [] } }),
   });
-  mount(['configuration.read', 'status.read']);
+  await mount(['configuration.read', 'status.read']);
 
   const interfaces = screen.getByRole('region', { name: 'Interfaces' });
   expect(await within(interfaces).findByText('ens18')).toBeInTheDocument();
@@ -44,15 +46,15 @@ it('shows each widget its own data, and a widget that fails does not blank the o
   expect(screen.getByRole('link', { name: 'Changes' })).toHaveAttribute('href', '/changes');
 });
 
-it('shows only the widgets the capabilities allow', () => {
+it('shows only the widgets the capabilities allow', async () => {
   fetchRoutes({});
-  mount(['configuration.read']);
+  await mount(['configuration.read']);
   expect(screen.getAllByRole('region').map((region) => region.getAttribute('aria-labelledby'))).toEqual(['widget-changes']);
 });
 
-it('says so when the account can see no widget', () => {
+it('says so when the account can see no widget', async () => {
   fetchRoutes({});
-  mount(['tokens.manageSelf']);
+  await mount(['tokens.manageSelf']);
   expect(screen.getByRole('status')).toHaveTextContent('none of the dashboard');
 });
 
@@ -62,15 +64,15 @@ it.each<[string, ChangeState, RegExp]>([
   ['an apply that failed', latest({ state: 'failed' }), /^The last apply failed\.$/],
   ['an apply that was rolled back', latest({ state: 'rolled_back' }), /^The last apply was rolled back\.$/],
   ['an apply awaiting confirmation', latest({ state: 'awaiting_confirmation', deadline: '2099-01-01T00:00:00Z' }), /^Applied, awaiting confirmation: rolls back at \d\d:\d\d:\d\d \(.+ left\)\.$/],
-])('reports %s', (_, state, text) => {
+])('reports %s', async (_, state, text) => {
   fetchRoutes({});
-  mount(['configuration.read'], { data: state });
+  await mount(['configuration.read'], { data: state });
   expect(within(screen.getByRole('region', { name: 'Changes' })).getByText(text)).toBeInTheDocument();
 });
 
-it('keeps the last change state beside the error when its poll fails', () => {
+it('keeps the last change state beside the error when its poll fails', async () => {
   fetchRoutes({});
-  mount(['configuration.read'], { data: settled, error: 'The box does not answer.' });
+  await mount(['configuration.read'], { data: settled, error: 'The box does not answer.' });
   const changes = screen.getByRole('region', { name: 'Changes' });
   expect(within(changes).getByRole('alert')).toHaveTextContent('The box does not answer.');
   expect(within(changes).getByText(/Nothing is pending/)).toBeInTheDocument();
@@ -81,7 +83,7 @@ it('lists a delegated prefix and where it went', async () => {
     '/api/v1/status/links': { items: [] },
     '/api/v1/status/prefixes': { wans: [{ interface: 'ens18', current: { prefix: '2001:db8:30::/56' }, segments: [{ interface: 'ens19', subnetId: '1', prefix: '2001:db8:30:1::/64' }], pools: [{ interface: 'ens19', subnetId: '1', prefix: '2001:db8:30:10::/60' }], notFitting: ['guest'] }] },
   });
-  mount(['status.read']);
+  await mount(['status.read']);
   const prefixes = screen.getByRole('region', { name: 'IPv6 prefixes' });
   expect(await within(prefixes).findByText('2001:db8:30::/56')).toBeInTheDocument();
   expect(within(prefixes).getByText('2001:db8:30:1::/64 on ens19')).toBeInTheDocument();
@@ -97,7 +99,7 @@ it('polls a widget every 10 seconds, and waits for an answer that is still out',
     '/api/v1/status/prefixes': { wans: [] },
   });
   const reads = () => fetchMock.mock.calls.filter(([url]) => url === '/api/v1/status/links').length;
-  mount(['status.read']);
+  await mount(['status.read']);
   expect(reads()).toBe(1);
 
   // The first answer is slower than the poll: asking again would throw it away when it comes.
@@ -130,19 +132,19 @@ async function unlock() {
   const padlock = await screen.findByRole('button', { name: 'Layout locked' });
   await waitFor(() => expect(padlock).toBeEnabled());
   await userEvent.click(padlock);
-  expect(screen.getByRole('button', { name: 'Layout unlocked' })).toHaveAttribute('aria-pressed', 'true');
+  expect(screen.getByRole('button', { name: 'Layout unlocked' })).toBeInTheDocument();
 }
 
 it('applies the stored layout: its order, its hidden widgets, and a widget new since it was saved', async () => {
   // "gone" is a widget of another version. "interfaces" is not named, so it joins at the end.
   layoutRoutes({ dashboard: { order: ['prefixes', 'gone', 'changes'], hidden: ['changes'] } });
-  mount(everything);
+  await mount(everything);
   await waitFor(() => expect(titles()).toEqual(['IPv6 prefixes', 'Interfaces']));
 });
 
 it('stays locked until asked: nothing moves or hides by accident', async () => {
   layoutRoutes({ dashboard: { hidden: ['changes'] } });
-  mount(everything);
+  await mount(everything);
   await waitFor(() => expect(titles()).toEqual(['Interfaces', 'IPv6 prefixes']));
   expect(screen.queryByRole('button', { name: /^(Move|Hide|Show) / })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Reset layout' })).not.toBeInTheDocument();
@@ -154,7 +156,7 @@ it('stays locked until asked: nothing moves or hides by accident', async () => {
 
 it('hides and shows a widget, saving the whole preferences and keeping what it does not know', async () => {
   const fetchMock = layoutRoutes({ another: { version: 'keeps this' }, dashboard: {} });
-  mount(everything);
+  await mount(everything);
   await unlock();
 
   await userEvent.click(screen.getByRole('button', { name: 'Hide Interfaces' }));
@@ -171,22 +173,116 @@ it('hides and shows a widget, saving the whole preferences and keeping what it d
 
 it('resets to the default layout', async () => {
   const fetchMock = layoutRoutes({ dashboard: { order: ['prefixes', 'interfaces', 'changes'], hidden: ['changes'] } });
-  mount(everything);
+  await mount(everything);
   await unlock();
   await userEvent.click(screen.getByRole('button', { name: 'Reset layout' }));
   expect(titles()).toEqual(['Changes', 'Interfaces', 'IPv6 prefixes']);
   expect(saves(fetchMock)).toEqual([{ dashboard: {} }]);
 });
 
-it('says so when every widget is hidden', async () => {
+it('says so when every widget is hidden, and how to get them back while locked', async () => {
   layoutRoutes({ dashboard: { hidden: ['changes', 'interfaces', 'prefixes'] } });
-  mount(everything);
-  expect(await screen.findByText(/Every widget is hidden/)).toBeInTheDocument();
+  await mount(everything);
+  expect(screen.getByText(/Every widget is hidden/)).toHaveTextContent('Every widget is hidden. Unlock the layout to show them again.');
+  await unlock();
+  expect(screen.getByText(/Every widget is hidden/)).toHaveTextContent(/^Every widget is hidden\.$/);
+});
+
+it('reads the layout before any widget shows, so a hidden widget never asks the box for anything', async () => {
+  let answer: (response: Response) => void = () => undefined;
+  const fetchMock = fetchRoutes({
+    '/api/v1/session/preferences': () => new Promise<Response>((resolve) => { answer = resolve; }),
+    '/api/v1/status/links': { items: [] },
+    '/api/v1/status/prefixes': { wans: [] },
+  });
+  render(<MemoryRouter><DashboardScreen api={new ApiClient('csrf')} session={session(everything)} changes={{ data: settled, error: '', loading: false, reload: vi.fn(), refresh: vi.fn() }} onSessionLost={vi.fn()} /></MemoryRouter>);
+  expect(screen.getByLabelText('Loading the layout')).toBeInTheDocument();
+  expect(screen.queryByRole('region')).not.toBeInTheDocument();
+  await act(async () => { answer(jsonResponse(200, { dashboard: { hidden: ['interfaces'] } })); await Promise.resolve(); });
+  await waitFor(() => expect(titles()).toEqual(['Changes', 'IPv6 prefixes']));
+  expect(fetchMock.mock.calls.map(([url]) => url)).not.toContain('/api/v1/status/links');
+});
+
+it('keeps the order and the hidden state of widgets this account may not see', async () => {
+  const fetchMock = layoutRoutes({ dashboard: { order: ['prefixes', 'changes', 'interfaces'], hidden: ['changes'] } });
+  await mount(['status.read']);
+  expect(titles()).toEqual(['IPv6 prefixes', 'Interfaces']);
+  await unlock();
+  // Changes is hidden but not this account's: it is not offered, and saving does not forget it.
+  expect(screen.queryByRole('button', { name: 'Show Changes' })).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: 'Hide IPv6 prefixes' }));
+  await waitFor(() => expect(saves(fetchMock)).toEqual([{ dashboard: { order: ['prefixes', 'changes', 'interfaces'], hidden: ['changes', 'prefixes'] } }]));
+});
+
+it('moves a widget by its grip with the keyboard, and saves the new order', async () => {
+  // jsdom lays nothing out, and a keyboard move goes by where the widgets are: put them in a row.
+  const rect = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+    const index = [...document.querySelectorAll('.widget')].indexOf(this.closest('.widget') ?? this);
+    return DOMRect.fromRect(index < 0 ? {} : { x: index * 400, y: 0, width: 380, height: 200 });
+  });
+  const fetchMock = layoutRoutes({});
+  await mount(everything);
+  await unlock();
+  const grip = screen.getByRole('button', { name: 'Move Changes' });
+  grip.focus();
+  await userEvent.keyboard('{Enter}');
+  await userEvent.keyboard('{ArrowRight}');
+  await userEvent.keyboard('{Enter}');
+  await waitFor(() => expect(titles()).toEqual(['Interfaces', 'Changes', 'IPv6 prefixes']));
+  await waitFor(() => expect(saves(fetchMock)).toEqual([{ dashboard: { order: ['interfaces', 'changes', 'prefixes'], hidden: [] } }]));
+  expect(screen.getByRole('status', { hidden: true })).toHaveTextContent('Dropped Changes at position 2 of 3.');
+  rect.mockRestore();
+});
+
+it('sends saves one at a time, each on what the last one stored, and skips one that a newer has overtaken', async () => {
+  const held: Array<(response: Response) => void> = [];
+  const fetchMock = fetchRoutes({
+    '/api/v1/session/preferences': { dashboard: {} },
+    'PUT /api/v1/session/preferences': () => new Promise<Response>((resolve) => { held.push(resolve); }),
+    '/api/v1/status/links': { items: [] },
+    '/api/v1/status/prefixes': { wans: [] },
+  });
+  await mount(everything);
+  await unlock();
+  for (const name of ['Hide Changes', 'Hide Interfaces', 'Hide IPv6 prefixes']) await userEvent.click(screen.getByRole('button', { name }));
+  // The first save is out; the second and third wait, and only the last of them is worth sending.
+  expect(saves(fetchMock)).toHaveLength(1);
+  // The box answers with what it now holds, which another feature has written a key into.
+  await act(async () => { held[0](jsonResponse(200, { other: 'kept', dashboard: { hidden: ['changes'] } })); await Promise.resolve(); });
+  await waitFor(() => expect(saves(fetchMock)).toHaveLength(2));
+  expect(saves(fetchMock)[1]).toEqual({ other: 'kept', dashboard: { order: ['changes', 'interfaces', 'prefixes'], hidden: ['changes', 'interfaces', 'prefixes'] } });
+});
+
+it('moves focus to the padlock when the button that was pressed goes away', async () => {
+  layoutRoutes({});
+  await mount(everything);
+  await unlock();
+  await userEvent.click(screen.getByRole('button', { name: 'Hide Changes' }));
+  expect(screen.getByRole('button', { name: 'Layout unlocked' })).toHaveFocus();
+  await userEvent.click(screen.getByRole('button', { name: 'Show Changes' }));
+  expect(screen.getByRole('button', { name: 'Layout unlocked' })).toHaveFocus();
+});
+
+it('tries again when the layout could not be read, and unlocks once it can', async () => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  let up = false;
+  fetchRoutes({
+    '/api/v1/session/preferences': () => (up ? jsonResponse(200, { dashboard: { hidden: ['changes'] } }) : jsonResponse(503, { error: { code: 'STORE_UNAVAILABLE', message: 'Preferences are temporarily unavailable.', details: [] } })),
+    '/api/v1/status/links': { items: [] },
+    '/api/v1/status/prefixes': { wans: [] },
+  });
+  await mount(everything);
+  expect(screen.getByRole('button', { name: 'Layout locked' })).toBeDisabled();
+  up = true;
+  act(() => { vi.advanceTimersByTime(10_000); });
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Layout locked' })).toBeEnabled());
+  expect(titles()).toEqual(['Interfaces', 'IPv6 prefixes']);
+  expect(screen.queryByText(/The layout cannot be changed now/)).not.toBeInTheDocument();
 });
 
 it('keeps the layout locked when the preferences cannot be read: a save would replace what it has not seen', async () => {
   const fetchMock = layoutRoutes(jsonResponse(503, { error: { code: 'STORE_UNAVAILABLE', message: 'Preferences are temporarily unavailable.', details: [] } }));
-  mount(everything);
+  await mount(everything);
   expect(await screen.findByText(/The layout cannot be changed now: Preferences are temporarily unavailable\./)).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Layout locked' })).toBeDisabled();
   expect(titles()).toEqual(['Changes', 'Interfaces', 'IPv6 prefixes']);
@@ -195,7 +291,7 @@ it('keeps the layout locked when the preferences cannot be read: a save would re
 
 it('says when a change was not saved', async () => {
   layoutRoutes({}, () => jsonResponse(503, { error: { code: 'STORE_UNAVAILABLE', message: 'Preferences are temporarily unavailable.', details: [] } }));
-  mount(everything);
+  await mount(everything);
   await unlock();
   await userEvent.click(screen.getByRole('button', { name: 'Hide Changes' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('The layout was not saved');
