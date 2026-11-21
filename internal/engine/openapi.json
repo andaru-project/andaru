@@ -217,6 +217,92 @@
         }
       }
     },
+    "/api/v1/status/usage": {
+      "get": {
+        "operationId": "readUsage",
+        "summary": "Read how hard the box is working now: processor, memory, file systems, connection tracking, temperatures",
+        "description": "Read from /proc and /sys at the time of the request. The processor counters are cumulative since boot: a client works out a share from two readings. What a machine lacks reads as zero, null or an empty list.",
+        "responses": {
+          "200": {
+            "description": "The present usage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/InventoryUnavailable"
+          }
+        }
+      },
+      "head": {
+        "operationId": "headUsage",
+        "summary": "Check the present usage without returning a body",
+        "responses": {
+          "200": {
+            "description": "It was read; no body"
+          },
+          "403": {
+            "description": "Peer denied; no body"
+          },
+          "503": {
+            "description": "It is unavailable; no body"
+          }
+        }
+      }
+    },
+    "/api/v1/status/traffic": {
+      "get": {
+        "operationId": "readTraffic",
+        "summary": "Read the last hour of every network interface's counters",
+        "description": "The engine reads every interface but the loopback every intervalSeconds and keeps the last hour in memory. The history starts again when the engine does. Counters are cumulative: a client works out a rate from neighbouring samples and treats a counter that went down as a gap. An interface that has gone keeps its samples until they are an hour old.",
+        "responses": {
+          "200": {
+            "description": "The traffic history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrafficResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/InventoryUnavailable"
+          }
+        }
+      },
+      "head": {
+        "operationId": "headTraffic",
+        "summary": "Check the traffic history without returning a body",
+        "responses": {
+          "200": {
+            "description": "It was read; no body"
+          },
+          "403": {
+            "description": "Peer denied; no body"
+          },
+          "503": {
+            "description": "It is unavailable; no body"
+          }
+        }
+      }
+    },
     "/api/v1/status/links": {
       "get": {
         "operationId": "listObservedLinks",
@@ -5549,6 +5635,252 @@
           "identityRevision": {"type": "integer", "minimum": 1},
           "unresolvedSecrets": {"type": "array", "items": {"type": "string"}},
           "replayed": {"type": "boolean"}
+        }
+      },
+      "UsageResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "time",
+          "cpu",
+          "load",
+          "memory",
+          "fileSystems",
+          "connections",
+          "temperatures"
+        ],
+        "properties": {
+          "time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The box's clock at the reading"
+          },
+          "cpu": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "total",
+              "idle"
+            ],
+            "properties": {
+              "total": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "idle": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Includes time waiting for I/O"
+              }
+            },
+            "description": "Tick counters summed over all processors since boot. Busy over a period is one minus the growth of idle over the growth of total"
+          },
+          "load": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "number",
+              "minimum": 0
+            },
+            "description": "The load averages over 1, 5 and 15 minutes; null when the kernel gives none"
+          },
+          "memory": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "totalBytes",
+              "availableBytes",
+              "swapTotalBytes",
+              "swapFreeBytes"
+            ],
+            "properties": {
+              "totalBytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "availableBytes": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "What programs can still get without swapping, by the kernel's estimate"
+              },
+              "swapTotalBytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "swapFreeBytes": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "fileSystems": {
+            "type": "array",
+            "description": "File systems on a device or a ZFS pool, each device once: as / or /var when it is mounted there, else at its shortest mount point",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "mountPoint",
+                "type",
+                "totalBytes",
+                "availableBytes"
+              ],
+              "properties": {
+                "mountPoint": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "totalBytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "availableBytes": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "What an unprivileged writer can still use"
+                }
+              }
+            }
+          },
+          "connections": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "count",
+                  "limit"
+                ],
+                "properties": {
+                  "count": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              }
+            ],
+            "description": "The connection-tracking table; null while the kernel tracks no connections"
+          },
+          "temperatures": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "sensor",
+                "celsius"
+              ],
+              "properties": {
+                "sensor": {
+                  "type": "string",
+                  "description": "The chip's name and, where it names its inputs, the input's label"
+                },
+                "celsius": {
+                  "type": "number"
+                }
+              }
+            }
+          }
+        }
+      },
+      "TrafficResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "intervalSeconds",
+          "interfaces"
+        ],
+        "properties": {
+          "intervalSeconds": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "How often the engine reads the counters"
+          },
+          "interfaces": {
+            "type": "array",
+            "description": "By name",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "samples"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "samples": {
+                  "type": "array",
+                  "description": "Oldest first, at most an hour",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "at",
+                      "rxBytes",
+                      "txBytes",
+                      "rxPackets",
+                      "txPackets",
+                      "rxErrors",
+                      "txErrors",
+                      "rxDropped",
+                      "txDropped"
+                    ],
+                    "properties": {
+                      "at": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "rxBytes": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "txBytes": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "rxPackets": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "txPackets": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "rxErrors": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "txErrors": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "rxDropped": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "txDropped": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       },
       "SystemResponse": {

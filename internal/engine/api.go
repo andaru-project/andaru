@@ -83,7 +83,7 @@ func newHandlerWithAPIs(readLinks func(context.Context) ([]host.LinkStatus, erro
 			configuration.ServeHTTP(w, r)
 			return
 		}
-		if r.URL.Path != "/api/v1/status/links" && r.URL.Path != "/api/v1/status/prefixes" && r.URL.Path != "/api/v1/status/system" && r.URL.Path != "/api/v1/openapi.json" {
+		if r.URL.Path != "/api/v1/status/links" && r.URL.Path != "/api/v1/status/prefixes" && r.URL.Path != "/api/v1/status/system" && r.URL.Path != "/api/v1/status/usage" && r.URL.Path != "/api/v1/status/traffic" && r.URL.Path != "/api/v1/openapi.json" {
 			writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
 			return
 		}
@@ -107,6 +107,20 @@ func newHandlerWithAPIs(readLinks func(context.Context) ([]host.LinkStatus, erro
 				return
 			}
 			writeJSON(w, r, http.StatusOK, view)
+			return
+		}
+		if r.URL.Path == "/api/v1/status/traffic" {
+			writeJSON(w, r, http.StatusOK, traffic.view())
+			return
+		}
+		if r.URL.Path == "/api/v1/status/usage" {
+			usage, err := host.ReadUsage(systemRoot, time.Now())
+			if err != nil {
+				slog.ErrorContext(r.Context(), "system usage unavailable", "error", err)
+				writeError(w, r, http.StatusServiceUnavailable, "INVENTORY_UNAVAILABLE", "The system's usage is unavailable; inspect the engine journal.")
+				return
+			}
+			writeJSON(w, r, http.StatusOK, usage)
 			return
 		}
 		if r.URL.Path == "/api/v1/status/system" {
