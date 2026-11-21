@@ -7,6 +7,8 @@ Describe 'andaru-install'
   data="$root/tests/shell/installer"
   seeds="$root/image/iso/testdata"
   Include "$root/image/iso/andaru-install"
+  # Never the real one, anywhere in these specs: they run as root on the test host.
+  systemctl() { echo "systemctl $*"; }
 
   ed25519='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO+VXyljs/lkyfnto5CqJDJaSFTQana6UuzepSCNrhwa admin@laptop'
 
@@ -771,6 +773,108 @@ umount"
       When run main
       The output should include 'The installer is running on ttyS0.'
       The output should not include session
+    End
+  End
+  Describe 'the pool default'
+    It 'offers .100 to .199 in a /24'
+      When call pool_default 192.168.1.1/24
+      The output should equal '192.168.1.100 192.168.1.199'
+    End
+    It "offers it in the address's /24 for a wider subnet"
+      When call pool_default 10.0.0.1/16
+      The output should equal '10.0.0.100 10.0.0.199'
+    End
+    It 'offers nothing for a subnet narrower than a /24'
+      When call pool_default 192.168.1.1/25
+      The output should equal ''
+    End
+    It 'offers nothing when the address is in that pool'
+      When call pool_default 192.168.1.150/24
+      The output should equal ''
+    End
+    Parameters
+      192.168.1.99/24 '192.168.1.100 192.168.1.199'
+      192.168.1.100/24 ''
+      192.168.1.199/24 ''
+      192.168.1.200/24 '192.168.1.100 192.168.1.199'
+      192.168.1.1/32 ''
+    End
+    It "handles the pool's edges: $1"
+      When call pool_default "$1"
+      The output should equal "$2"
+    End
+  End
+
+  Describe 'the summary'
+    BeforeEach reset_answers
+    It 'leaves no space for an absent address and names DNS in words'
+      DISK=/dev/sda M_NIC=enp1s0 M_MAC=52:54:00:aa:bb:01 M4_MODE=static M4_ADDR=192.168.1.1/24 M6_MODE=none SERVE_DNS=true
+      W_NIC=enp2s0 W_MAC=52:54:00:aa:bb:02 W4_MODE=dhcp W6_MODE=slaac
+      When call summary
+      The output should include 'IPv4 static 192.168.1.1/24, IPv6 none'
+      The output should include 'IPv4 dhcp, IPv6 slaac'
+      The output should include '  DNS answered on this network'
+      The output should include 'SSH key: none'
+      The output should not include 'SSH key: none '
+    End
+    It 'says when DNS is not answered, and names the key with its comment'
+      DISK=/dev/sda M_NIC=enp1s0 M_MAC=52:54:00:aa:bb:01 M4_MODE=static M4_ADDR=192.168.1.1/24 M6_MODE=none SERVE_DNS=false
+      KEY_TYPE=ssh-ed25519 KEY_COMMENT=admin@laptop
+      When call summary
+      The output should include '  DNS not answered'
+      The output should include 'WAN: none yet'
+      The output should include 'SSH key: ssh-ed25519 admin@laptop'
+    End
+    It 'reviews in a tall box that keeps Enter on Yes'
+      ui() { echo "$@" >"$SHELLSPEC_TMPBASE/review-args"; return 1; }
+      DISK=/dev/sda M_NIC=enp1s0 M_MAC=52:54:00:aa:bb:01 M4_MODE=none M6_MODE=none
+      When call review
+      The status should equal 1
+      The contents of file "$SHELLSPEC_TMPBASE/review-args" should start with '--yesno'
+      The contents of file "$SHELLSPEC_TMPBASE/review-args" should end with '22 76'
+    End
+    It 'scrolls a summary longer than the box'
+      ui() { echo "$@" >"$SHELLSPEC_TMPBASE/review-args"; return 1; }
+      DISK=/dev/sda M_NIC=enp1s0 M_MAC=52:54:00:aa:bb:01 M4_MODE=none M6_MODE=static M6_ADDR=2001:db8:1111:2222:3333:4444:5555:6666/64
+      W_NIC=enp2s0 W_MAC=52:54:00:aa:bb:02 W4_MODE=none W6_MODE=static W6_ADDR=2001:db8:aaaa:bbbb:cccc:dddd:eeee:1/64 W6_GW=2001:db8:aaaa:bbbb::1
+      W_DNS='2001:db8:1111:2222:3333:4444:5555:6661 2001:db8:1111:2222:3333:4444:5555:6662 2001:db8:1111:2222:3333:4444:5555:6663 2001:db8:1111:2222:3333:4444:5555:6664 2001:db8:1111:2222:3333:4444:5555:6665 2001:db8:1111:2222:3333:4444:5555:6666 2001:db8:1111:2222:3333:4444:5555:6667 2001:db8:1111:2222:3333:4444:5555:6668'
+      KEY_TYPE=ssh-ed25519 KEY_COMMENT=admin@laptop-with-a-rather-long-comment-to-check-wrapping-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+      When call review
+      The status should equal 1
+      The contents of file "$SHELLSPEC_TMPBASE/review-args" should start with '--scrolltext --yesno'
+    End
+  End
+
+  Describe 'the end of an install'
+    setup() { work=$(mktemp -d); DISK=/dev/sda; }
+    cleanup() { rm -rf "$work"; }
+    BeforeEach 'setup'
+    AfterEach 'cleanup'
+    questions() { return 0; }
+    write_install() { return 0; }
+    clear() { :; }
+    It 'powers off once Enter is pressed, so the medium comes out with the box off'
+      Data
+        #|
+      End
+      When run session
+      The status should equal 0
+      The output should include 'Press Enter to power off. Then remove the install medium'
+      The output should include 'systemctl poweroff'
+    End
+    It 'says to hold the power button, and stops, when the power-off fails'
+      systemctl() { echo "systemctl $*"; return 1; }
+      Data
+        #|
+      End
+      When run session
+      The status should equal 1
+      The output should include 'hold the power button'
+    End
+    It 'does not power off at the end of input'
+      When run session </dev/null
+      The status should equal 0
+      The output should not include systemctl
     End
   End
 End
