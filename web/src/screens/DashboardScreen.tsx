@@ -12,7 +12,7 @@ import { usePolledResource, useResource, useVisiblePoll, type Resource } from '.
 import { Address } from './Address';
 import { Loaded } from './Loaded';
 import { ResourcesWidget } from './ResourcesWidget';
-import { SystemWidget } from './SystemWidget';
+import { ProcessorWidget, SystemWidget } from './SystemWidget';
 import { TrafficWidget } from './TrafficWidget';
 import { ZoneBadge } from './ZoneBadge';
 
@@ -155,6 +155,7 @@ export function DashboardScreen({ api, session, system, onSessionLost }: Dashboa
     { id: 'traffic', title: 'Network activity', capability: 'status.read', body: <TrafficWidget api={api} zones={zones} zonesKnown={zonesKnown} onSessionLost={onSessionLost} /> },
     { id: 'interfaces', title: 'Interfaces', to: '/network/interfaces', capability: 'status.read', body: <InterfacesWidget api={api} zones={zones} onSessionLost={onSessionLost} /> },
     { id: 'prefixes', title: 'IPv6 prefixes', capability: 'status.read', body: <PrefixesWidget api={api} zones={zones} onSessionLost={onSessionLost} /> },
+    { id: 'processor', title: 'Processor', capability: 'status.read', body: <Loaded resource={system} what="the system description">{(loaded) => loaded && <ProcessorWidget info={loaded.info} />}</Loaded> },
   ];
   const allowed = all.filter((widget) => session.capabilities.includes(widget.capability));
 

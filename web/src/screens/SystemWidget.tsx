@@ -22,13 +22,9 @@ export function SystemWidget({ info, loadedAt }: { info: SystemInfo; loadedAt: n
   const [now, setNow] = useState(Date.now);
   useVisiblePoll(useCallback(() => setNow(Date.now()), []), 60_000);
   const passed = Math.max(now - loadedAt, 0);
-  const { cpu, hardware } = info;
+  const { hardware } = info;
   const clock = Date.parse(info.time) + passed;
   const uptime = info.bootedAt ? (clock - Date.parse(info.bootedAt)) / 1000 : NaN;
-  // Good news is only what the box calls so: a state this version does not know counts as unknown.
-  const named = (states: string[]) => cpu.vulnerabilities.filter((item) => states.includes(item.state)).map((item) => item.name).join(', ');
-  const vulnerable = named(['vulnerable']);
-  const unknown = cpu.vulnerabilities.filter((item) => !['vulnerable', 'mitigated', 'not_affected'].includes(item.state)).map((item) => item.name).join(', ');
   const machine = words(hardware.vendor, hardware.product);
   const board = words(hardware.boardVendor, hardware.board);
   const firmware = words(hardware.biosVendor, hardware.biosVersion, hardware.biosDate);
@@ -48,10 +44,24 @@ export function SystemWidget({ info, loadedAt }: { info: SystemInfo; loadedAt: n
         {board && board !== machine && <Row label="Board">{board}</Row>}
         {hardware.serial && <Row label="Serial">{hardware.serial}</Row>}
         {firmware && <Row label="BIOS">{firmware}</Row>}
-        <Head>Processor</Head>
+      </Table.Tbody>
+    </Table>
+  );
+}
+
+// The processor has a widget of its own: with it, the System widget was the longest thing on the page.
+export function ProcessorWidget({ info }: { info: SystemInfo }) {
+  const { cpu } = info;
+  // Good news is only what the box calls so: a state this version does not know counts as unknown.
+  const named = (states: string[]) => cpu.vulnerabilities.filter((item) => states.includes(item.state)).map((item) => item.name).join(', ');
+  const vulnerable = named(['vulnerable']);
+  const unknown = cpu.vulnerabilities.filter((item) => !['vulnerable', 'mitigated', 'not_affected'].includes(item.state)).map((item) => item.name).join(', ');
+  return (
+    <Table className="facts" withRowBorders={false} verticalSpacing={2} horizontalSpacing={0}>
+      <Table.Tbody>
         <Row label="CPU">{cpu.model || info.architecture}, {plural(cpu.cores, 'core')}{cpu.threads !== cpu.cores && `, ${plural(cpu.threads, 'thread')}`}</Row>
-        {/* The memory installed is in the Resources widget, beside what is used of it. */}
-        {(cpu.level || cpu.microcode) && <Row label="Platform">{[cpu.level, cpu.microcode && `microcode ${cpu.microcode}`].filter(Boolean).join(' · ')}</Row>}
+        {cpu.level && <Row label="Level">{cpu.level}</Row>}
+        {cpu.microcode && <Row label="Microcode">{cpu.microcode}</Row>}
         <Row label="Hardware crypto">{list(cpu.features.cryptography)}</Row>
         <Row label="CPU security">{list(cpu.features.security)}</Row>
         <Row label="Virtualisation">{list([...cpu.features.virtualization, ...(info.iommu ? ['IOMMU active'] : [])])}</Row>
