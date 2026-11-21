@@ -2,7 +2,7 @@ import { Alert, AppShell, Badge, Burger, Button, Group, Image, Menu, NavLink, St
 import { useDisclosure } from '@mantine/hooks';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router';
-import { ApiClient, ApiError, apiErrorMessage } from './api';
+import { ApiClient, reportError } from './api';
 import mark from './andaru-icon.svg';
 import { loadChangeState } from './changes';
 import { PendingNotice } from './PendingNotice';
@@ -42,16 +42,21 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
 
   useEffect(() => {
     if (!canReadChanges) return;
-    const timer = setInterval(() => { if (document.visibilityState === 'visible') void reloadChanges(); }, pollMilliseconds);
-    return () => clearInterval(timer);
+    const visible = () => { if (document.visibilityState === 'visible') void reloadChanges(); };
+    const timer = setInterval(visible, pollMilliseconds);
+    document.addEventListener('visibilitychange', visible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', visible);
+    };
   }, [canReadChanges, reloadChanges]);
 
   // When the API answers again, show what the server says rather than what was last seen.
   const wasConnected = useRef(connected);
   useEffect(() => {
-    if (connected && !wasConnected.current && canReadChanges) void reloadChanges();
+    if (connected && !wasConnected.current) void reloadChanges();
     wasConnected.current = connected;
-  }, [canReadChanges, connected, reloadChanges]);
+  }, [connected, reloadChanges]);
 
   const groups = [
     { label: 'Network', items: [{ to: '/network/interfaces', label: 'Interfaces', visible: capabilities.has('status.read') }] },
@@ -74,8 +79,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
     try {
       setPasswordUser(await api.getUser(session.account.id));
     } catch (error) {
-      if (error instanceof ApiError && error.status === 401) onSessionLost();
-      else setAccountError(apiErrorMessage(error));
+      reportError(error, onSessionLost, setAccountError);
     }
   }
 
@@ -124,7 +128,8 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
         <Stack>
           {!connected && <Alert color="red" role="alert" title="Connection lost">The box does not answer. Pages show the last data it sent.</Alert>}
           {accountError && <Alert color="red" role="alert" title="Account request failed">{accountError}</Alert>}
-          <PendingNotice api={api} capabilities={capabilities} state={changes.data} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />
+          {/* Review and apply owns these controls on its own page. */}
+          {pathname !== '/changes' && <PendingNotice api={api} session={session} state={changes.data} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />}
           <Routes>
             {pages.filter(([path]) => visible.has(path)).map(([path, element]) => <Route key={path} path={path} element={element} />)}
             <Route path="/system/session" element={<SessionScreen session={session} />} />

@@ -11,7 +11,8 @@ body {
 }
 
 /* The CSP (style-src 'self') blocks the <style> element AppShell writes its sizes into.
-   These rules carry the sizes Shell.tsx passes: header 56px, navbar 240px, collapsed below 900px. */
+   These rules carry the sizes Shell.tsx passes: header 56px, navbar 240px, collapsed below 900px
+   (Mantine's own query for that breakpoint is max-width 899.9px, 56.24375em). */
 .app-shell {
   --app-shell-header-height: 3.5rem;
   --app-shell-header-offset: 3.5rem;
@@ -20,7 +21,7 @@ body {
   --app-shell-padding: var(--mantine-spacing-md);
 }
 
-@media (max-width: 56.24em) {
+@media (max-width: 56.24375em) {
   .app-shell {
     --app-shell-navbar-width: 100%;
     --app-shell-navbar-offset: 0px;

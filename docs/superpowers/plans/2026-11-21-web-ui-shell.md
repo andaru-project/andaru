@@ -34,15 +34,16 @@
 
 ### Task 4: the pending notice
 - [ ] `src/changes.ts`: the shell's change state (`GET /api/v1/applies`, `GET /api/v1/versions?limit=1`), version comparison, the live generation (`pointers.live`), the notice to show, and the countdown hook.
-- [ ] `src/PendingNotice.tsx`: unapplied changes with a Review and apply link; awaiting confirmation with the server's deadline, a countdown, Confirm and Roll back; the last apply failed or rolled back while nothing newer is saved; nothing otherwise (call 4).
-- [ ] The shell reloads the change state on load, every 15 seconds while the tab is visible, after its own actions (apply, confirm, roll back, a role save or delete), and when the connection comes back.
+- [ ] `src/PendingNotice.tsx`: unapplied changes with a Review and apply link; an apply activating; awaiting confirmation with the server's deadline, a countdown, Confirm and Roll back (disabled while one runs); the last apply failed or rolled back while nothing newer is saved; nothing otherwise (call 4). Not shown on `/changes`, which owns those controls.
+- [ ] The shell reloads the change state on load, every 15 seconds while the tab is visible, when the tab becomes visible, after its own actions (apply, confirm, roll back, a role save or delete), and when the connection comes back.
 
 ### Task 5: Review and apply
 - [ ] `src/screens/ChangesScreen.tsx` at `/changes` (call 5): what is live, or the factory network; every saved version after the live one, newest first, with actor, time and changed objects.
 - [ ] Per changed object, the live and saved values side by side, computed from the declaration views of the live saved version and of the reviewed head (`objectAt` and `differences` in `src/changes.ts`); singletons and list orders by their collection-named IDs.
 - [ ] The network preview of the reviewed head: errors listed with their paths block Apply; warnings listed.
-- [ ] Apply sends the reviewed head as `savedVersion` and a 60, 120 (default) or 300 second window; a 409 or 412 says the saved state moved and reloads the review.
-- [ ] Awaiting confirmation: the deadline, Confirm and Roll back, and the server's answer reported as given. While the connection is lost, the spec's wording, never a local rollback claim.
+- [ ] The review loads its own live and head versions and keeps them until reloaded: when the shell sees a newer save or another live generation, it says so with a Reload button and Apply waits; a failed reload keeps Apply disabled, and a failed load never says there is nothing to apply.
+- [ ] Apply sends the reviewed head as `savedVersion` and a 60, 120 (default) or 300 second window. Only 412 `PRECONDITION_FAILED` says the saved state moved and reloads the review; any other refusal shows the server's message, and a 422 `APPLY_REFUSED` lists its findings (`ApiError.findings`).
+- [ ] Awaiting confirmation: the deadline, Confirm and Roll back, and the server's answer reported as given. While the connection is lost, the spec's wording, never a local rollback claim, and Confirm and Roll back stay offered: the server decides.
 - [ ] History of the last 20 applies; read-only without `configuration.apply`, no Confirm without `configuration.confirm`; loading, empty, error, applying, confirmed, rolled back and failed states (call 9).
 
 ### Task 6: the roles screen
@@ -50,7 +51,8 @@
 
 ### Task 7: Interfaces
 - [ ] `src/screens/InterfacesScreen.tsx` at `/network/interfaces` (call 7): one row per live link (name, MAC address, kind, state, MTU, addresses), beside the saved link, segment, zone and addressing mode on it, with the management segment marked.
-- [ ] A saved link meets its live device as `internal/render` does: an Ethernet link by the preview's `resolved` interface, a virtual link by its derived name. A saved link with no live device is listed as missing; a live device no saved link uses, as unused.
+- [ ] A saved link meets its live device as `internal/render` does: an Ethernet link by the preview's `resolved` interface, a virtual link by its derived name. A link with a `HARDWARE_*` or `NAME_COLLISION` finding at its `/links/<index>` path is not joined, and shows as missing, unresolved or not realized with the finding's message. Two saved links on one device both show, marked as a conflict. A live device no saved link uses is unused.
+- [ ] When the saved configuration or the preview cannot be read, the live links still show, with the error.
 - [ ] Without `configuration.read`, live links only.
 
 ### Task 8: tests (call 11)

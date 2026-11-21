@@ -3,6 +3,7 @@ import type {
   Apply,
   AuditEvent,
   ErrorDetail,
+  Finding,
   History,
   LinkStatus,
   Page,
@@ -19,7 +20,7 @@ import type {
 } from './types';
 
 interface ErrorEnvelope {
-  error?: { code?: string; message?: string; details?: ErrorDetail[] };
+  error?: { code?: string; message?: string; details?: ErrorDetail[]; findings?: Finding[] };
 }
 
 export class ApiError extends Error {
@@ -28,6 +29,8 @@ export class ApiError extends Error {
     public readonly code: string,
     message: string,
     public readonly details: ErrorDetail[] = [],
+    // findings explain a refused apply (422 APPLY_REFUSED) in the preview's vocabulary.
+    public readonly findings: Finding[] = [],
   ) {
     super(message);
     this.name = 'ApiError';
@@ -40,6 +43,12 @@ export function apiErrorMessage(error: unknown): string {
     return details ? `${error.message} ${details}` : error.message;
   }
   return 'The request could not be completed.';
+}
+
+// reportError signs the session out on a 401 and shows any other error's message.
+export function reportError(error: unknown, onSessionLost: () => void, setMessage: (message: string) => void) {
+  if (error instanceof ApiError && error.status === 401) onSessionLost();
+  else setMessage(apiErrorMessage(error));
 }
 
 function operationID() {
@@ -85,7 +94,7 @@ export class ApiClient {
       const code = envelope?.error?.code ?? `HTTP_${response.status}`;
       const message = envelope?.error?.message ?? 'The server refused the request.';
       if (response.status === 401) this.clearSession();
-      throw new ApiError(response.status, code, message, envelope?.error?.details ?? []);
+      throw new ApiError(response.status, code, message, envelope?.error?.details ?? [], envelope?.error?.findings ?? []);
     }
     return body as T;
   }

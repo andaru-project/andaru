@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useSyncExternalStore } from 'react';
 import type { ApiClient } from './api';
 import type { Applies, Apply } from './types';
 
@@ -24,7 +24,7 @@ export function liveApply(applies: Applies) {
 }
 
 export type Notice =
-  | { kind: 'awaiting'; apply: Apply }
+  | { kind: 'awaiting' | 'activating'; apply: Apply }
   | { kind: 'failed' | 'rolled_back'; apply: Apply }
   | { kind: 'unapplied' }
   | null;
@@ -32,9 +32,23 @@ export type Notice =
 export function pendingNotice({ applies, head }: ChangeState): Notice {
   const latest = applies.items[0];
   if (latest?.state === 'awaiting_confirmation') return { kind: 'awaiting', apply: latest };
+  if (latest?.state === 'activating') return { kind: 'activating', apply: latest };
   if (latest && (latest.state === 'failed' || latest.state === 'rolled_back') && !newer(head, latest.savedVersion)) return { kind: latest.state, apply: latest };
   if (newer(head, liveApply(applies)?.savedVersion ?? '0')) return { kind: 'unapplied' };
   return null;
+}
+
+export const stateLabels: Record<Apply['state'], string> = {
+  activating: 'Activating',
+  awaiting_confirmation: 'Awaiting confirmation',
+  confirmed: 'Confirmed',
+  rolled_back: 'Rolled back',
+  failed: 'Failed',
+};
+
+// describe is the server's answer about one apply, as the page reports it.
+export function describe(result: Apply) {
+  return `Apply ${result.id}: ${stateLabels[result.state]}.${result.reason ? ` ${result.reason}` : ''}`;
 }
 
 export function clock(iso: string) {
@@ -82,14 +96,15 @@ export function differences(live: Declaration, head: Declaration, changes: Array
   return result;
 }
 
-// useCountdown is display only: the server owns the deadline and the rollback.
+// useCountdown is display only: the server owns the deadline and the rollback. It reads the
+// clock as an external store, so the first render after a deadline appears is already right.
 export function useCountdown(deadline: string | undefined) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!deadline) return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
+  const subscribe = useCallback((tick: () => void) => {
+    if (!deadline) return () => {};
+    const timer = setInterval(tick, 1000);
     return () => clearInterval(timer);
   }, [deadline]);
+  const now = useSyncExternalStore(subscribe, () => (deadline ? Math.floor(Date.now() / 1000) * 1000 : 0));
   if (!deadline) return '';
   const seconds = Math.max(0, Math.round((Date.parse(deadline) - now) / 1000));
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
