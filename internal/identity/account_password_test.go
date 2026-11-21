@@ -517,6 +517,11 @@ func TestPasswordPolicyAndHashing(t *testing.T) {
 	if err := validatePassword([]byte("xq7tvbn"), "operator1", "Operator"); err == nil {
 		t.Fatal("accepted a 7-character password")
 	}
+	for _, common := range []string{"password", "12345678", "Qwertyui", "iloveyou", "trustno1", "admin123"} {
+		if err := validatePassword([]byte(common), "operator1", "Operator"); err == nil {
+			t.Fatalf("accepted the common password %q", common)
+		}
+	}
 	if err := validatePassword([]byte("xq7tvbnm"), "operator1", "Operator"); err != nil {
 		t.Fatalf("rejected an 8-character password: %v", err)
 	}

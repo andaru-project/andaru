@@ -435,6 +435,6 @@ These are design-review results, not implementation verification.
 - The engine remains authentication/authorization authority; `andaru-web` is trusted with credential confidentiality but not actor/capability assertions.
 - Role permissions follow `Pointers.Live`; session revocation uses capability digests, while tokens dynamically intersect current roles.
 - Built-in administrator is dynamic-all; read-only is an explicit safe list; custom roles are explicit.
-- Password policy is 15–128 code points, offline blocklist, Argon2id 64 MiB/time 3/parallel 1 with measured admission limits.
+- Password policy is 8–128 code points, offline blocklist, Argon2id 64 MiB/time 3/parallel 1 with measured admission limits.
 - API token expiration and password-change revocation are optional; service accounts are token-only and role changes do not invalidate tokens.
 - Security audit retains 365 days/100,000 events with protected high-value evidence and fail-closed sensitive writes when full.
