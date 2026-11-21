@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ApiClient } from './api';
-import { fetchQueue, jsonResponse } from './test/fetch';
+import { fetchQueue, fetchRoutes, jsonResponse } from './test/fetch';
 
 const session = {
   account: { id: '0657cce4-d4f9-4d1e-9cae-53a99855bb10', login: 'admin', displayName: 'Administrator' },
@@ -42,4 +42,23 @@ describe('ApiClient', () => {
       expect.objectContaining({ status: 0, code: 'DISCONNECTED' }),
     );
   });
+});
+
+it('gives a read a time limit, so a box that never answers cannot hold a page, and a write none', async () => {
+  const fetchMock = fetchRoutes({ '/api/v1/status/links': { items: [] }, 'POST /api/v1/applies/1/rollback': {} });
+  const api = new ApiClient('csrf');
+  await api.links();
+  await api.finishApply('1', 'rollback');
+  expect(fetchMock.mock.calls[0][1]?.signal).toBeInstanceOf(AbortSignal);
+  expect(fetchMock.mock.calls[1][1]?.signal).toBeUndefined();
+});
+
+it('reports a body that stops arriving at the time limit as a lost connection, not as an empty answer', async () => {
+  vi.spyOn(AbortSignal, 'timeout').mockReturnValue(AbortSignal.abort());
+  const connection = vi.fn();
+  // The headers came; reading the body fails.
+  fetchQueue(new Response('{"items":', { status: 200 }));
+  await expect(new ApiClient('csrf', connection).links()).rejects.toMatchObject({ status: 0, code: 'DISCONNECTED' });
+  expect(connection).toHaveBeenLastCalledWith(false);
+  vi.restoreAllMocks();
 });

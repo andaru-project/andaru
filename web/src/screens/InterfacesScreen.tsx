@@ -1,7 +1,7 @@
 import { Alert, Badge, Group, Loader, ScrollArea, Stack, Table, Text, Title } from '@mantine/core';
 import { useCallback } from 'react';
 import { ApiClient, reportError } from '../api';
-import type { Finding, LinkStatus, Preview, SavedLink, Segment, Session, Snapshot } from '../types';
+import { stateColor, type Finding, type LinkStatus, type Preview, type SavedLink, type Segment, type Session, type Snapshot } from '../types';
 import { useResource } from '../useResource';
 
 interface InterfacesScreenProps { api: ApiClient; session: Session; onSessionLost(): void }
@@ -18,8 +18,6 @@ function kernelName(link: SavedLink, resolved: Map<string, string>) {
 // These findings mean the renderer will not put the link on any device, whatever its name matches.
 const bindingCode = /^(HARDWARE_|NAME_COLLISION$|DEPENDENCY_UNAVAILABLE$)/;
 const unboundLabel: Record<string, string> = { HARDWARE_MISSING: 'Missing', HARDWARE_AMBIGUOUS: 'Unresolved' };
-
-const stateColor: Record<string, string> = { UP: 'green', DOWN: 'red', LOWERLAYERDOWN: 'red' };
 
 interface Row { key: string; live?: LinkStatus; saved?: SavedLink; state?: string; finding?: string; conflict?: boolean }
 
@@ -89,15 +87,15 @@ export function InterfacesScreen({ api, session, onSessionLost }: InterfacesScre
             const segment = link && segmentOf(link);
             return (
               <Table.Tr key={key}>
-                <Table.Td>
+                <Table.Td data-label="Interface">
                   {live ? <Text ff="monospace" fw={600}>{live.name}</Text> : <Text c="dimmed">No device</Text>}
                   <Text c="dimmed" size="sm"><Text span ff="monospace" inherit>{live?.linkAddress || link?.permanentMac || 'no MAC'}</Text> · {live?.linkType ?? link?.kind} · MTU {live?.mtu ?? link?.mtu}</Text>
                 </Table.Td>
-                <Table.Td>{live ? <Badge color={stateColor[live.operState] ?? 'gray'}>{live.operState.toLowerCase()}</Badge> : <Badge color={state === 'Disabled' ? 'gray' : 'red'}>{state}</Badge>}</Table.Td>
-                <Table.Td>{live?.addresses.length ? live.addresses.map((address) => <Text key={`${address.address}/${address.prefixLength}`} ff="monospace" size="sm">{address.address}/{address.prefixLength}</Text>) : <Text c="dimmed">—</Text>}</Table.Td>
+                <Table.Td data-label="State">{live ? <Badge color={stateColor[live.operState] ?? 'gray'}>{live.operState.toLowerCase()}</Badge> : <Badge color={state === 'Disabled' ? 'gray' : 'red'}>{state}</Badge>}</Table.Td>
+                <Table.Td data-label="Addresses">{live?.addresses.length ? live.addresses.map((address) => <Text key={`${address.address}/${address.prefixLength}`} ff="monospace" size="sm">{address.address}/{address.prefixLength}</Text>) : <Text c="dimmed">—</Text>}</Table.Td>
                 {showSaved && (
                   <>
-                    <Table.Td>
+                    <Table.Td data-label="Saved configuration">
                       {link ? (
                         <>
                           <Group gap="xs"><Text fw={600}>{link.name}</Text>{segment && saved?.snapshot.value.management?.segment === segment.id && <Badge variant="light">Management</Badge>}{live && !link.enabled && <Badge color="gray" variant="light">Disabled</Badge>}</Group>
@@ -107,7 +105,7 @@ export function InterfacesScreen({ api, session, onSessionLost }: InterfacesScre
                       {conflict && <Badge color="red" variant="light">Conflict: several saved links</Badge>}
                       {finding && <Text size="sm" className="error-text">{finding}</Text>}
                     </Table.Td>
-                    <Table.Td>{segment ? <><Text size="sm">IPv4 {segment.addressing.ipv4.mode}</Text><Text size="sm">IPv6 {segment.addressing.ipv6.mode}</Text></> : <Text c="dimmed">—</Text>}</Table.Td>
+                    <Table.Td data-label="Addressing">{segment ? <><Text size="sm">IPv4 {segment.addressing.ipv4.mode}</Text><Text size="sm">IPv6 {segment.addressing.ipv6.mode}</Text></> : <Text c="dimmed">—</Text>}</Table.Td>
                   </>
                 )}
               </Table.Tr>

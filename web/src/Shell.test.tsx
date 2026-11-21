@@ -35,16 +35,20 @@ afterEach(() => {
 
 const appliesReads = (fetchMock: ReturnType<typeof fetchRoutes>) => fetchMock.mock.calls.filter(([url]) => url === '/api/v1/applies').length;
 
-it('polls the change state every 15 seconds while the tab is visible, and when it becomes visible', () => {
+it('polls the change state every 15 seconds while the tab is visible, and when it becomes visible', async () => {
+  // A poll waits for the answer that is still out, so each answer is let in before the next tick.
+  const answered = () => act(async () => { await new Promise((resolve) => setTimeout(resolve)); });
   vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
   const fetchMock = routes();
   mount('/system/session');
   expect(appliesReads(fetchMock)).toBe(1);
+  await answered();
 
   act(() => { vi.advanceTimersByTime(14_999); });
   expect(appliesReads(fetchMock)).toBe(1);
   act(() => { vi.advanceTimersByTime(1); });
   expect(appliesReads(fetchMock)).toBe(2);
+  await answered();
 
   visibility = 'hidden';
   act(() => { vi.advanceTimersByTime(30_000); });

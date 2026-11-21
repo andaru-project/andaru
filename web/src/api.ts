@@ -7,6 +7,7 @@ import type {
   History,
   LinkStatus,
   Page,
+  PrefixView,
   Preview,
   Role,
   SavedObject,
@@ -55,6 +56,8 @@ function operationID() {
   return crypto.randomUUID();
 }
 
+const readTimeoutMilliseconds = 30_000;
+
 export class ApiClient {
   // onConnection hears whether each request got a response, for the shell's connection state.
   constructor(private csrfToken = '', private readonly onConnection?: (connected: boolean) => void) {}
@@ -73,12 +76,18 @@ export class ApiClient {
     if (init.body) headers.set('Content-Type', 'application/json');
     if (csrf && this.csrfToken) headers.set('X-Andaru-CSRF', this.csrfToken);
 
+    // A read that never answers would hold its page's polling for good; a write may take as long as it takes.
+    // No caller passes a signal or names GET, so a request without a method is a read.
+    const signal = init.method ? undefined : AbortSignal.timeout(readTimeoutMilliseconds);
+    const disconnected = () => {
+      this.onConnection?.(false);
+      return new ApiError(0, 'DISCONNECTED', 'Cannot reach the Andaru service. Check the connection and try again.');
+    };
     let response: Response;
     try {
-      response = await fetch(path, { ...init, headers, credentials: 'same-origin', cache: 'no-store' });
+      response = await fetch(path, { ...init, headers, signal, credentials: 'same-origin', cache: 'no-store' });
     } catch {
-      this.onConnection?.(false);
-      throw new ApiError(0, 'DISCONNECTED', 'Cannot reach the Andaru service. Check the connection and try again.');
+      throw disconnected();
     }
 
     this.onConnection?.(true);
@@ -87,6 +96,8 @@ export class ApiClient {
     try {
       body = await response.json();
     } catch {
+      // The limit can also pass while the body arrives; that is no answer, not an empty one.
+      if (signal?.aborted) throw disconnected();
       body = undefined;
     }
     if (!response.ok) {
@@ -230,6 +241,10 @@ export class ApiClient {
 
   links() {
     return this.request<{ items: LinkStatus[] }>('/api/v1/status/links');
+  }
+
+  prefixes() {
+    return this.request<PrefixView>('/api/v1/status/prefixes');
   }
 
   config() {
