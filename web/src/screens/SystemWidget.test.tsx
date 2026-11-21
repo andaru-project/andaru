@@ -133,3 +133,11 @@ it('tells an arm64 box about arm64 features', async () => {
   expect(await screen.findByText('AES, PMULL')).toBeInTheDocument();
   expect(screen.queryByText('AES-NI, PCLMULQDQ')).not.toBeInTheDocument();
 });
+
+it('tells a box of another architecture only what holds for any', async () => {
+  render(<SystemWidget info={{ ...hardware, architecture: 'riscv64' }} loadedAt={Date.now()} />);
+  await userEvent.click(screen.getByRole('button', { name: 'Why these CPU features matter' }));
+  expect(await screen.findByText('Virtualisation', { selector: 'dt' })).toBeInTheDocument();
+  expect(screen.queryByText('AES-NI, PCLMULQDQ')).not.toBeInTheDocument();
+  expect(screen.queryByText('AES, PMULL')).not.toBeInTheDocument();
+});

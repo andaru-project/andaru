@@ -46,7 +46,8 @@ export function SystemWidget({ info, loadedAt }: { info: SystemInfo; loadedAt: n
   const machine = words(hardware.vendor, hardware.product);
   const board = words(hardware.boardVendor, hardware.board);
   const firmware = words(hardware.biosVendor, hardware.biosVersion, hardware.biosDate);
-  const family = info.architecture === 'aarch64' ? 'arm' : 'x86';
+  // The engine sends the kernel's name. Another architecture gets the lines that hold for any.
+  const family = { x86_64: 'x86', aarch64: 'arm' }[info.architecture];
 
   return (
     <Table className="facts" withRowBorders={false} verticalSpacing={2} horizontalSpacing={0}>
