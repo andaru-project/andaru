@@ -83,11 +83,15 @@ This document amends the [shell design](2026-11-21-web-ui-shell-design.md): its 
 
 13. **Refresh is by polling,** only while the page is visible: `system/usage` every 2 seconds, `system/traffic` every 30, everything else every 10. Server-sent events remain a later slice.
 
-14. **The first slice has a fixed layout.** Hiding and reordering widgets come second. They need somewhere to keep each account's choice, and no per-account preference store exists yet.
+14. **Widgets can be hidden and reordered from the first slice** (owner, 2026-11-21).
+    - A "Customise" button puts the dashboard in an edit state: each widget gains Move earlier, Move later and Hide, and a list of hidden widgets offers Show. The same rules as for firewall rules apply: buttons first; dragging, when it arrives, by a corner grip alone.
+    - The layout is an ordered list of widget names. A widget that appears later (a new version, an add-on) joins at the end, shown.
+    - The choice is kept in the browser, so a phone and a desktop each keep their own. No per-account preference store exists yet; when one does, the layout moves there, per account and per device class.
+    - "Reset" returns to the default order.
 
 15. **From pfSense's main page, not in this slice,** each for want of data the engine does not hold yet: gateway latency and loss, the DHCP lease list, a firewall log tail, per-rule counters, S.M.A.R.T. state, VPN tunnels and traffic totals over days. Each arrives with its own feature.
 
-16. **Slices.** The work is too large for one change:
+16. **Slices** (order agreed by the owner, 2026-11-21). The work is too large for one change:
     - first, the navigation tree and the narrow-screen layout, with a dashboard of the widgets already served;
     - second, `system/info` and the System widget;
     - third, `system/usage` and `system/traffic`, with Resources and Network activity;
@@ -133,8 +137,7 @@ The built-in widgets of call 10 are ordinary components in a list of `{id, title
 
 ## Open for the owner
 
-- **Slices (call 16):** is that order right?
-- **Hiding and reordering (call 14):** after those slices, or required from the start?
+- **Where the layout is kept (call 14):** the browser for now, or is a per-account store required from the start, so the layout follows the administrator to another browser?
 - **Tree depth:** is Rules with a sub-page per chain right, or should the two chains sit directly under Firewall?
 
 ## Out of scope

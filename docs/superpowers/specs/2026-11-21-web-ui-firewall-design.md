@@ -45,8 +45,11 @@ The API exists: `policy.input` and `policy.forward` with their order operation, 
    - **Service:** name, protocol (TCP, UDP, ICMP, ICMPv6, group) and its ports or ICMP types; a group picks members.
    - Each row shows where it is used ("3 rules"), with the list on demand.
 
-9. **A lockout warning, from the engine.** A rule that would cut the management path must not be found out by losing the session. Review and apply already runs the network preview; this slice asks the engine for one new preview finding, `MANAGEMENT_UNREACHABLE` (warning), when the saved input rules would drop the web UI's or SSH's port from the management segment's allowed sources. The rollback timer remains the real protection; the warning only saves a wasted apply.
-   - This is the slice's one engine change. If the owner prefers no engine change here, the "To the firewall" page instead shows a static note.
+9. **An anti-lockout rule, as pfSense has** (owner, 2026-11-21). The packet filter already accepts SSH on the management segment by a fixed rule no edit removes. That rule grows to cover the web UI's port, so no saved rule can cut an administrator off from the browser either.
+   - It is the slice's one engine change: the fixed management rule accepts the web UI's listening port beside 22/tcp, from the same `allowedSources`.
+   - The "To the firewall" page shows it first in the fixed block, named "Anti-lockout", with the segment, the ports and the allowed sources, and a link to where the management segment is set.
+   - It has no off switch in this slice. Narrowing it is `allowedSources`' job.
+   - The rollback timer stays the backstop for everything the rule does not cover, such as a change to the management segment's own addressing.
 
 10. **Starter rules.** A new box has no rules, so nothing forwards. The Rules page, when empty, offers "Allow the LAN out": one forward rule from the management segment's zone to anywhere, saved like any rule. It is an offer, never automatic, and slice 3's seed apply may make it moot.
 
@@ -58,7 +61,7 @@ The API exists: `policy.input` and `policy.forward` with their order operation, 
 
 ## Open for the owner
 
-- **The lockout warning (call 9):** an engine finding, or a note only?
+- **Anti-lockout (call 9):** should an administrator be able to switch it off, as pfSense allows under its advanced settings?
 - **Starter rule (call 10):** offer it, or leave an empty table with an explanation?
 - **NAT** (outbound mode, port forwards, 1:1) is the natural third slice. Should port forwards sit under Firewall or under their own NAT group?
 
