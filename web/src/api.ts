@@ -3,14 +3,19 @@ import type {
   Apply,
   AuditEvent,
   ErrorDetail,
+  History,
+  LinkStatus,
   Page,
+  Preview,
   Role,
   SavedObject,
   SavedRolePage,
   Session,
+  Snapshot,
   Token,
   TokenIssueResponse,
   User,
+  VersionDetail,
 } from './types';
 
 interface ErrorEnvelope {
@@ -42,7 +47,8 @@ function operationID() {
 }
 
 export class ApiClient {
-  constructor(private csrfToken = '') {}
+  // onConnection hears whether each request got a response, for the shell's connection state.
+  constructor(private csrfToken = '', private readonly onConnection?: (connected: boolean) => void) {}
 
   setCSRFToken(token: string) {
     this.csrfToken = token;
@@ -62,9 +68,11 @@ export class ApiClient {
     try {
       response = await fetch(path, { ...init, headers, credentials: 'same-origin', cache: 'no-store' });
     } catch {
+      this.onConnection?.(false);
       throw new ApiError(0, 'DISCONNECTED', 'Cannot reach the Andaru service. Check the connection and try again.');
     }
 
+    this.onConnection?.(true);
     if (response.status === 204) return undefined as T;
     let body: unknown;
     try {
@@ -190,10 +198,33 @@ export class ApiClient {
     return this.request<Applies>('/api/v1/applies');
   }
 
-  apply(savedVersion: string) {
+  apply(savedVersion: string, confirmTimeoutSeconds: number) {
     return this.request<Apply>('/api/v1/applies', {
-      method: 'POST', body: JSON.stringify({ savedVersion, confirmTimeoutSeconds: 120 }),
+      method: 'POST', body: JSON.stringify({ savedVersion, confirmTimeoutSeconds }),
     }, true);
+  }
+
+  versions(limit: number, before = '') {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (before) query.set('before', before);
+    return this.request<History>(`/api/v1/versions?${query}`);
+  }
+
+  version(id: string) {
+    return this.request<VersionDetail>(`/api/v1/versions/${encodeURIComponent(id)}`);
+  }
+
+  previewNetwork(savedVersion = '') {
+    const query = savedVersion ? `?${new URLSearchParams({ savedVersion })}` : '';
+    return this.request<Preview>(`/api/v1/preview/network${query}`);
+  }
+
+  links() {
+    return this.request<{ items: LinkStatus[] }>('/api/v1/status/links');
+  }
+
+  config() {
+    return this.request<Snapshot>('/api/v1/config');
   }
 
   finishApply(id: string, action: 'confirmation' | 'rollback') {
