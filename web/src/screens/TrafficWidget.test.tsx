@@ -24,7 +24,8 @@ const graph = (name: string) => screen.getByRole('region', { name: `Traffic on $
 // The figures of one direction on one interface's graph: Current, Avg., Max.
 const row = (name: string, direction: string) => within(within(graph(name)).getByRole('rowheader', { name: direction }).closest('tr')!).getAllByRole('cell').map((cell) => cell.textContent);
 const graphs = () => screen.getAllByRole('region').map((region) => region.getAttribute('aria-label'));
-const drawn = (name: string, line: string) => graph(name).querySelector(`path.${line}`)!.getAttribute('d')!;
+const drawn = (name: string, line: string) => graph(name).querySelector(`path.${line}:not(.traffic-area)`)!.getAttribute('d')!;
+const filled = (name: string, line: string) => graph(name).querySelector(`path.traffic-area.${line}`)!.getAttribute('d')!;
 
 afterEach(() => vi.useRealTimers());
 
@@ -69,6 +70,9 @@ it('draws a gap as a gap: the line breaks where a counter started again', () => 
   render(<TrafficView traffic={restarted} zones={zones} selected={['ens18']} live onSelect={vi.fn()} />);
   // Two rates, a gap where the counter began again, two more.
   expect(drawn('ens18', 'traffic-received').match(/[ML]/g)!.join('')).toBe('MLML');
+  // The area under the line is filled run by run: each starts and ends on the axis, and none spans the gap.
+  expect(filled('ens18', 'traffic-received').match(/[MLZ]/g)!.join('')).toBe('MLLLZMLLLZ');
+  expect(filled('ens18', 'traffic-received')).toMatch(/^M[\d.]+ 200L/);
 });
 
 it('reads out the point under the pointer, a finger or the arrow keys: its time and both rates', async () => {

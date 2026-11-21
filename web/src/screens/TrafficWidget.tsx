@@ -22,6 +22,26 @@ function path(points: RatePoint[], pick: (point: RatePoint) => number | null, x:
   }).join('');
 }
 
+// The same line closed down to the axis, run by run, to fill the area under it.
+function area(points: RatePoint[], pick: (point: RatePoint) => number | null, x: (at: number) => number, y: (rate: number) => number) {
+  let closed = '';
+  let from: number | undefined;
+  points.forEach((point, index) => {
+    const rate = pick(point);
+    if (rate === null) return;
+    if (from === undefined) {
+      from = x(point.at);
+      closed += `M${from.toFixed(1)} ${height}`;
+    }
+    closed += `L${x(point.at).toFixed(1)} ${y(rate).toFixed(1)}`;
+    if (index === points.length - 1 || pick(points[index + 1]) === null) {
+      closed += `L${x(point.at).toFixed(1)} ${height}Z`;
+      from = undefined;
+    }
+  });
+  return closed;
+}
+
 const shown = (rate: number | null) => (rate === null ? '—' : bitrate(rate));
 const clock = (at: number) => new Date(at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 
@@ -85,6 +105,8 @@ function Graph({ entry, zone, end, intervalSeconds, live }: { entry: Traffic['in
       </Group>
       <div className="traffic-frame" tabIndex={0} role="group" aria-label={`${entry.name} over the last hour: the arrow keys read out a point`} onPointerMove={nearest} onPointerDown={nearest} onPointerLeave={(event) => { if (event.pointerType === 'mouse') setMarked(undefined); }} onKeyDown={step} onBlur={() => setMarked(undefined)}>
         <svg className="traffic-graph" viewBox={`0 0 ${width} ${height}`} aria-hidden="true" preserveAspectRatio="none">
+          <path className="traffic-area traffic-sent" d={area(points, (point) => point.tx, x, y)} />
+          <path className="traffic-area traffic-received" d={area(points, (point) => point.rx, x, y)} />
           <path className="traffic-sent" d={path(points, (point) => point.tx, x, y)} />
           <path className="traffic-received" d={path(points, (point) => point.rx, x, y)} />
         </svg>

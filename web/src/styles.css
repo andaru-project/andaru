@@ -229,14 +229,33 @@ body {
   stroke: var(--traffic-line-dark, var(--mantine-primary-color-4));
 }
 
-/* Upload is dashed, and muted so the two also differ in strength. */
+/* Each line has the area under it filled, far fainter than the line. Upload is dashed, and fainter than
+   download in line and in fill, so the two differ in shape and in strength. */
+path.traffic-received {
+  opacity: 0.9;
+}
+
 path.traffic-sent {
+  opacity: 0.6;
   stroke-dasharray: 8 5;
 }
 
-path.traffic-sent,
 .traffic-dot.traffic-sent {
   opacity: 0.6;
+}
+
+.traffic-graph path.traffic-area {
+  fill: var(--traffic-line-light, var(--mantine-primary-color-filled));
+  opacity: 0.16;
+  stroke: none;
+}
+
+.traffic-graph path.traffic-area.traffic-sent {
+  opacity: 0.08;
+}
+
+:root[data-mantine-color-scheme="dark"] .traffic-graph path.traffic-area {
+  fill: var(--traffic-line-dark, var(--mantine-primary-color-4));
 }
 
 .traffic-key {
