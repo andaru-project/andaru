@@ -14,6 +14,7 @@ import { PasswordDialog } from './screens/PasswordDialog';
 import { RolesScreen } from './screens/RolesScreen';
 import { SessionScreen } from './screens/SessionScreen';
 import { TokensScreen } from './screens/TokensScreen';
+import { SystemDetailsScreen } from './screens/SystemWidget';
 import { UsersScreen } from './screens/UsersScreen';
 import type { Session, User } from './types';
 import { useResource, useVisiblePoll } from './useResource';
@@ -77,6 +78,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
     {
       label: 'System',
       items: [
+        { to: '/system/details', label: 'Details', visible: capabilities.has('status.read') },
         { to: '/system/users', label: 'Users', visible: capabilities.has('users.read') },
         { to: '/system/roles', label: 'Roles', visible: capabilities.has('users.read') || canReadChanges },
         { to: '/system/tokens', label: 'Tokens', visible: capabilities.has('tokens.manageSelf') || capabilities.has('tokens.manageAll') },
@@ -117,6 +119,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   const pages: Array<[string, ReactNode]> = [
     ['/network/interfaces', <InterfacesScreen api={api} session={session} onSessionLost={onSessionLost} />],
     ['/changes', <ChangesScreen api={api} session={session} state={changes.data} stateError={changes.error} connected={connected} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />],
+    ['/system/details', <SystemDetailsScreen system={system} />],
     ['/system/users', <UsersScreen api={api} session={session} onSessionLost={onSessionLost} />],
     ['/system/roles', <RolesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/system/tokens', <TokensScreen api={api} session={session} onSessionLost={onSessionLost} />],

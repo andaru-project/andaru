@@ -1,5 +1,5 @@
 import { Button, ComboboxChevron, Group, Menu, Stack, Table, Text, VisuallyHidden } from '@mantine/core';
-import { useCallback, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
+import { useCallback, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction, type KeyboardEvent, type PointerEvent } from 'react';
 import type { ApiClient } from '../api';
 import { bitrate } from '../format';
 import { chosenLabel, figures, firstShown, hourMilliseconds, merge, newest, rates, thin, type RatePoint } from '../traffic';
@@ -102,7 +102,7 @@ function Graph({ entry, zone, end, intervalSeconds, live }: { entry: Traffic['in
   const place = (rate: number): CSSProperties => ({ left: `${(x(mark!.at) / width) * 100}%`, top: `${(y(rate) / height) * 100}%` });
 
   return (
-    <section className="traffic-one" aria-label={`Traffic on ${entry.name}`} style={zone ? lineColors(zone) : undefined}>
+    <section aria-label={`Traffic on ${entry.name}`} style={zone ? lineColors(zone) : undefined}>
       {/* The scale and the span are labels beside the graph, not in it, where the lines would run through them. */}
       <Group gap="xs" mb={4} justify="space-between">
         <Group gap="xs"><Text ff="monospace" fw={600}>{entry.name}</Text><ZoneBadge name={zone} /></Group>
@@ -146,7 +146,7 @@ export function TrafficView({ traffic, zones, selected, live, onSelect }: { traf
   const drawn = choosing ? traffic.interfaces.filter((entry) => selected.includes(entry.name)) : traffic.interfaces;
   const label = chosenLabel(drawn.map((entry) => entry.name));
   return (
-    <Stack className="traffic-view" gap="md">
+    <Stack gap="md">
       {choosing && (
         <Menu closeOnItemClick={false} position="bottom-start" withinPortal>
           <Menu.Target><Button variant="default" size="xs" justify="space-between" rightSection={<ComboboxChevron />} aria-label={`Interfaces shown: ${label}`}>{label}</Button></Menu.Target>
@@ -164,7 +164,10 @@ export function TrafficView({ traffic, zones, selected, live, onSelect }: { traf
   );
 }
 
-export function TrafficWidget({ api, zones, zonesKnown, onSessionLost }: { api: ApiClient; zones: Map<string, string>; zonesKnown: boolean; onSessionLost(): void }) {
+// Which interfaces show: the user's choice, and the first choice made for them.
+export interface TrafficChoice { selected?: string[]; first?: { names: string[]; zoned: boolean } }
+
+export function TrafficWidget({ api, zones, zonesKnown, choice, onSessionLost }: { api: ApiClient; zones: Map<string, string>; zonesKnown: boolean; choice?: [TrafficChoice, Dispatch<SetStateAction<TrafficChoice>>]; onSessionLost(): void }) {
   // The hour is read once; after that the box is asked only for what came after the newest reading held.
   const held = useRef<Traffic>(undefined);
   const resource = usePolledResource(useCallback(async () => {
@@ -176,9 +179,12 @@ export function TrafficWidget({ api, zones, zonesKnown, onSessionLost }: { api: 
   // more than two interfaces to choose among: the busiest interface may change at every poll, and a graph must
   // not change under the eye by itself. A first choice made before the zones were known is made once more when
   // they are, and then stands.
-  const [selected, setSelected] = useState<string[]>();
-  const [first, setFirst] = useState<{ names: string[]; zoned: boolean }>();
+  // The dashboard keeps the choice for its widget: a widget that changes column is mounted anew, and what the
+  // user ticked must not go with the old one.
+  const own = useState<TrafficChoice>({});
+  const [{ selected, first }, setChoice] = choice ?? own;
+  const setSelected = (names: string[]) => setChoice((held) => ({ ...held, selected: names }));
   const traffic = resource.data;
-  if (traffic && traffic.interfaces.length > 2 && (!first || (!first.zoned && zonesKnown))) setFirst({ names: firstShown(traffic, zones), zoned: zonesKnown });
+  if (traffic && traffic.interfaces.length > 2 && (!first || (!first.zoned && zonesKnown))) setChoice((held) => ({ ...held, first: { names: firstShown(traffic, zones), zoned: zonesKnown } }));
   return <Loaded resource={resource} what="traffic">{(loaded) => <TrafficView traffic={loaded} zones={zones} selected={selected ?? first?.names ?? firstShown(loaded, zones)} live={resource.error === ''} onSelect={setSelected} />}</Loaded>;
 }
