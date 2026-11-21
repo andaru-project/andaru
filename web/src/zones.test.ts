@@ -2,35 +2,39 @@ import { expect, it } from 'vitest';
 import type { Preview, Snapshot } from './types';
 import { zoneColor, zonesByInterface } from './zones';
 
+const link = (number: number, name: string, kind = 'ethernet', enabled = true) => ({ id: `lnk_${String(number).repeat(8)}-${String(number).repeat(4)}-4${String(number).repeat(3)}-8${String(number).repeat(3)}-${String(number).repeat(12)}`, name, kind, mtu: 1500, enabled });
+const segment = (id: string, linkId: string, zone: string) => ({ id, name: id, link: linkId, zone, addressing: { ipv4: { mode: 'dhcp' }, ipv6: { mode: 'none' } } });
+
 it('finds each interface\'s zone in the saved configuration, by the interface\'s name on the box', () => {
+  const links = [link(1, 'wan'), link(2, 'guests', 'vlan'), link(3, 'spare'), link(4, 'unplugged'), link(5, 'off', 'ethernet', false), link(6, 'broken'), link(7, 'twin-a'), link(8, 'twin-b')];
   const snapshot = {
     state: 'saved', savedVersion: '1',
     value: {
-      links: [
-        { id: 'lnk_11111111-1111-4111-8111-111111111111', name: 'wan', kind: 'ethernet', mtu: 1500, enabled: true },
-        { id: 'lnk_22222222-2222-4222-8222-222222222222', name: 'guests', kind: 'vlan', mtu: 1500, enabled: true },
-        { id: 'lnk_33333333-3333-4333-8333-333333333333', name: 'spare', kind: 'ethernet', mtu: 1500, enabled: true },
-        { id: 'lnk_44444444-4444-4444-8444-444444444444', name: 'unplugged', kind: 'ethernet', mtu: 1500, enabled: true },
-      ],
-      segments: [
-        { id: 's1', name: 'wan', link: 'lnk_11111111-1111-4111-8111-111111111111', zone: 'z1', addressing: { ipv4: { mode: 'dhcp' }, ipv6: { mode: 'slaac' } } },
-        { id: 's2', name: 'guests', link: 'lnk_22222222-2222-4222-8222-222222222222', zone: 'z2', addressing: { ipv4: { mode: 'static' }, ipv6: { mode: 'none' } } },
-        { id: 's4', name: 'unplugged', link: 'lnk_44444444-4444-4444-8444-444444444444', zone: 'z1', addressing: { ipv4: { mode: 'dhcp' }, ipv6: { mode: 'none' } } },
-      ],
+      links,
+      segments: [segment('s1', links[0].id, 'z1'), segment('s2', links[1].id, 'z2'), segment('s4', links[3].id, 'z1'), segment('s5', links[4].id, 'z1'), segment('s6', links[5].id, 'z1'), segment('s7', links[6].id, 'z1'), segment('s8', links[7].id, 'z2')],
       zones: [{ id: 'z1', name: 'wan' }, { id: 'z2', name: 'guest' }],
     },
   } as Snapshot;
-  const preview = { resolved: [{ link: 'lnk_11111111-1111-4111-8111-111111111111', interface: 'ens18' }, { link: 'lnk_33333333-3333-4333-8333-333333333333', interface: 'ens20' }] } as Preview;
-  // An Ethernet link is the interface its MAC resolved to; a VLAN's name comes from its ID. A link with no
-  // segment is in no zone, and one that resolved to no interface is not on the box.
+  const resolved = (index: number, name: string) => ({ link: links[index].id, interface: name });
+  const preview = {
+    resolved: [resolved(0, 'ens18'), resolved(2, 'ens20'), resolved(4, 'ens21'), resolved(5, 'ens22'), resolved(6, 'ens23'), resolved(7, 'ens23')],
+    findings: [{ severity: 'error', code: 'HARDWARE_AMBIGUOUS', path: '/links/5/permanentMac', message: 'Two devices match.' }, { severity: 'warning', code: 'SOMETHING_ELSE', path: '/links/0', message: 'Not about binding.' }],
+  } as Preview;
+  // An Ethernet link is the interface its MAC resolved to; a VLAN's name comes from its ID. Left out: a link
+  // with no segment, one that resolved to nothing, a disabled one, one the renderer will not bind, and an
+  // interface two links claim.
   expect([...zonesByInterface(snapshot, preview)]).toEqual([['ens18', 'wan'], ['vl222222222222', 'guest']]);
 });
 
 it('gives a zone one colour everywhere: green inside, red outside, and the same for a name each time', () => {
   expect(zoneColor('lan')).toBe('green');
   expect(zoneColor('WAN')).toBe('red');
-  expect(zoneColor('guest')).toBe(zoneColor('guest'));
-  // Other zones keep off the two colours that mean inside and outside.
-  for (const name of ['guest', 'dmz', 'iot', 'servers', 'mgmt', 'vpn', '']) expect(['green', 'red']).not.toContain(zoneColor(name));
-  expect(new Set(['guest', 'dmz', 'iot', 'servers'].map(zoneColor)).size).toBeGreaterThan(1);
+  expect(zoneColor('Guest')).toBe(zoneColor('guest'));
+  const others = ['guest', 'dmz', 'iot', 'servers', 'mgmt', 'vpn', 'voip', 'kids', 'work', 'lab', 'lan2', 'wan2', 'constructor', 'toString', ''];
+  for (const name of others) {
+    // Off the two colours that mean inside and outside, and only colours whose text the theme keeps readable.
+    expect(['blue', 'orange', 'teal', 'pink', 'cyan', 'lime', 'yellow']).toContain(zoneColor(name));
+  }
+  // Names spread over the palette: a handful of zones do not all look alike.
+  expect(new Set(others.map(zoneColor)).size).toBeGreaterThanOrEqual(5);
 });

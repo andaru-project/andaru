@@ -29,11 +29,11 @@ it('writes a duration in its two largest units', () => {
 });
 
 it('writes a rate in thousands, as networks are sold', () => {
-  expect(bitrate(0)).toBe('0 bit/s');
-  expect(bitrate(999)).toBe('999 bit/s');
-  expect(bitrate(1200)).toBe('1.2 kbit/s');
-  expect(bitrate(850_000)).toBe('850 kbit/s');
-  expect(bitrate(999_960)).toBe('1.0 Mbit/s');
-  expect(bitrate(1_250_000_000)).toBe('1.3 Gbit/s');
-  expect(bitrate(40_000_000_000_000)).toBe('40000 Gbit/s');
+  expect(bitrate(0)).toBe('0 bps');
+  expect(bitrate(999)).toBe('999 bps');
+  expect(bitrate(1200)).toBe('1.2 kbps');
+  expect(bitrate(850_000)).toBe('850 kbps');
+  expect(bitrate(999_960)).toBe('1.0 Mbps');
+  expect(bitrate(2_340_000_000)).toBe('2.3 Gbps');
+  expect(bitrate(40_000_000_000_000)).toBe('40000 Gbps');
 });

@@ -1,4 +1,6 @@
-import type { TrafficSample, Usage } from './types';
+import type { Traffic, TrafficSample } from './types';
+
+const hourMilliseconds = 3_600_000;
 
 // One point of the graph: the rates over the time up to at, in bits a second. A gap has no rates.
 export interface RatePoint { at: number; rx: number | null; tx: number | null }
@@ -15,22 +17,56 @@ export function rates(samples: TrafficSample[], intervalSeconds: number): RatePo
   });
 }
 
-// summary says in numbers what the graph shows: the latest rate, the average and the peak. Null when there is
-// no rate to speak of.
-export function summary(values: Array<number | null>) {
-  const known = values.filter((value): value is number => value !== null);
-  if (known.length === 0) return null;
-  return { now: values.at(-1) ?? null, average: known.reduce((sum, value) => sum + value, 0) / known.length, peak: Math.max(...known) };
+// figures are the numbers beside the graph. current is the latest rate, and null when the interface has not
+// been read lately: an interface that has gone still has an hour's average and peak, but no rate now.
+export function figures(points: RatePoint[], pick: (point: RatePoint) => number | null, fresh: boolean) {
+  const known = points.map(pick).filter((value): value is number => value !== null);
+  if (known.length === 0) return { current: null, average: null, peak: null };
+  const last = points.at(-1);
+  return { current: fresh && last ? pick(last) : null, average: known.reduce((sum, value) => sum + value, 0) / known.length, peak: known.reduce((most, value) => Math.max(most, value), 0) };
 }
 
-// busiest names the interface that moved the most bytes over its history: the uplink, on a firewall.
-export function busiest(interfaces: Array<{ name: string; samples: TrafficSample[] }>) {
-  const moved = ({ samples }: { samples: TrafficSample[] }) => (samples.length < 2 ? 0 : Math.max(samples.at(-1)!.rxBytes - samples[0].rxBytes, 0) + Math.max(samples.at(-1)!.txBytes - samples[0].txBytes, 0));
-  return interfaces.reduce<string | undefined>((best, entry) => (best === undefined || moved(entry) > moved(interfaces.find((other) => other.name === best)!) ? entry.name : best), undefined);
+// newest is the time of the latest reading of any interface, as the box wrote it, and its value; undefined
+// when there is none. Its text is what a client sends back as since.
+export function newest(traffic: Traffic) {
+  let best: { at: string; time: number } | undefined;
+  for (const { samples } of traffic.interfaces) {
+    const last = samples.at(-1);
+    const time = last ? Date.parse(last.at) : NaN;
+    if (last && Number.isFinite(time) && (!best || time > best.time)) best = { at: last.at, time };
+  }
+  return best;
 }
 
-// cpuShare is the busy share of the processors between two readings, from 0 to 1; null when no time passed.
-export function cpuShare(before: Usage['cpu'], after: Usage['cpu']) {
-  const total = after.total - before.total;
-  return total > 0 ? Math.min(Math.max(1 - (after.idle - before.idle) / total, 0), 1) : null;
+// merge adds an answer's readings to what is held, and keeps the hour. An answer marked complete is the whole
+// history and replaces it. An interface the box no longer names is gone from the history too.
+export function merge(held: Traffic | undefined, answer: Traffic): Traffic {
+  if (!held || answer.complete) return answer;
+  const interfaces = answer.interfaces.map((entry) => ({ name: entry.name, samples: [...(held.interfaces.find((other) => other.name === entry.name)?.samples ?? []), ...entry.samples] }));
+  const merged = { ...answer, complete: true, interfaces };
+  const end = newest(merged)?.time;
+  if (end === undefined) return merged;
+  return { ...merged, interfaces: interfaces.map((entry) => ({ name: entry.name, samples: entry.samples.filter((sample) => Date.parse(sample.at) > end - hourMilliseconds) })) };
 }
+
+// busiest names the interface that moved the most bytes over its history; the first wins a tie.
+export function busiest(interfaces: Traffic['interfaces']) {
+  const moved = ({ samples }: { samples: TrafficSample[] }) => {
+    const first = samples[0], last = samples.at(-1);
+    return first && last ? Math.max(last.rxBytes - first.rxBytes, 0) + Math.max(last.txBytes - first.txBytes, 0) : 0;
+  };
+  return interfaces.reduce<Traffic['interfaces'][number] | undefined>((best, entry) => (best && moved(best) >= moved(entry) ? best : entry), undefined)?.name;
+}
+
+// firstShown is what shows before the user chooses: every interface when there are one or two; else those in
+// the zones named "wan" and "lan"; else the busiest one.
+export function firstShown(traffic: Traffic, zones: Map<string, string>) {
+  const names = traffic.interfaces.map((entry) => entry.name);
+  if (names.length <= 2) return names;
+  const usual = names.filter((name) => ['wan', 'lan'].includes(zones.get(name)?.toLowerCase() ?? ''));
+  return usual.length > 0 ? usual : [busiest(traffic.interfaces)!];
+}
+
+// chosenLabel is the names when they fit the button, and their number when they do not.
+const longestLabel = 24;
+export const chosenLabel = (names: string[]) => (names.length === 0 ? 'None selected' : names.join(', ').length <= longestLabel ? names.join(', ') : `${names.length} selected`);

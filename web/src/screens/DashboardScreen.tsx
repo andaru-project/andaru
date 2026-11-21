@@ -93,7 +93,7 @@ function InterfacesWidget({ api, zones, onSessionLost }: WidgetProps) {
           <ul className="plain-list">
             {links.map((link) => (
               <li key={link.name}>
-                <Group gap="xs"><Text ff="monospace" fw={600}>{link.name}</Text><ZoneBadge name={zones.get(link.name)} /><Badge variant="light" color={stateColor[link.operState] ?? 'gray'}>{link.operState.toLowerCase()}</Badge></Group>
+                <Group gap="xs"><Text ff="monospace" fw={600}>{link.name}</Text><ZoneBadge name={zones.get(link.name)} /><Badge variant="dot" color={stateColor[link.operState] ?? 'gray'}>{link.operState.toLowerCase()}</Badge></Group>
                 {link.addresses.filter((address) => address.scope !== 'link').map((address) => <Text key={address.address} ff="monospace" size="sm">{address.address}/{address.prefixLength}</Text>)}
               </li>
             ))}
@@ -106,11 +106,11 @@ function InterfacesWidget({ api, zones, onSessionLost }: WidgetProps) {
 
 // One line for an interface and its prefix, the same for the uplink that holds the delegation and for every
 // place a part of it went: who, in which zone, what.
-function PrefixLine({ name, zone, note, children }: { name: string; zone: string | undefined; note?: string; children: ReactNode }) {
+function PrefixLine({ name, zone, note, prefix }: { name: string; zone: string | undefined; note?: string; prefix: string | null | undefined }) {
   return (
     <div>
       <Group gap="xs"><Text ff="monospace" fw={600}>{name}</Text><ZoneBadge name={zone} />{note && <Text size="sm" c="dimmed">{note}</Text>}</Group>
-      {children}
+      {prefix ? <Text ff="monospace" size="sm">{prefix}</Text> : <Text className="error-text" size="sm">no prefix held</Text>}
     </div>
   );
 }
@@ -125,13 +125,11 @@ function PrefixesWidget({ api, zones, onSessionLost }: WidgetProps) {
           <ul className="plain-list">
             {wans.map((wan) => (
               <li key={wan.interface}>
-                <PrefixLine name={wan.interface} zone={zones.get(wan.interface)} note="delegated by the provider">
-                  {wan.current ? <Text ff="monospace" size="sm">{wan.current.prefix}</Text> : <Text className="error-text" size="sm">no prefix held</Text>}
-                </PrefixLine>
+                <PrefixLine name={wan.interface} zone={zones.get(wan.interface)} note="delegated" prefix={wan.current?.prefix} />
                 {/* A segment's subnet ID and a pool's are separate number spaces, so the prefix is the key. */}
                 <ul className="plain-list prefix-parts">
-                  {wan.segments.filter((place) => place.prefix).map((place) => <li key={place.prefix}><PrefixLine name={place.interface} zone={zones.get(place.interface)}><Text ff="monospace" size="sm">{place.prefix}</Text></PrefixLine></li>)}
-                  {wan.pools.filter((place) => place.prefix).map((place) => <li key={place.prefix}><PrefixLine name={place.interface} zone={zones.get(place.interface)} note="pool for its clients' networks"><Text ff="monospace" size="sm">{place.prefix}</Text></PrefixLine></li>)}
+                  {wan.segments.filter((place) => place.prefix).map((place) => <li key={place.prefix}><PrefixLine name={place.interface} zone={zones.get(place.interface)} prefix={place.prefix} /></li>)}
+                  {wan.pools.filter((place) => place.prefix).map((place) => <li key={place.prefix}><PrefixLine name={place.interface} zone={zones.get(place.interface)} note="pool" prefix={place.prefix} /></li>)}
                 </ul>
                 {wan.notFitting.length > 0 && <Text className="error-text" size="sm">No room for: {wan.notFitting.join(', ')}</Text>}
               </li>
@@ -147,18 +145,21 @@ const noZones = new Map<string, string>();
 
 export function DashboardScreen({ api, session, changes, system, onSessionLost }: DashboardScreenProps) {
   // Which zone each interface is in comes from the saved configuration, for accounts that may read it. It is
-  // read once: it changes with a save, which is made on another page.
+  // read when the dashboard opens, and again until it has been read: it changes with a save, which is made on
+  // another page. zonesSettled says the answer is in, or will not come, so a choice that depends on it can be made.
   const canReadConfig = session.capabilities.includes('configuration.read');
   const zoneMap = useResource(useCallback(async () => {
     if (!canReadConfig) return noZones;
     const snapshot = await api.config();
     return zonesByInterface(snapshot, await api.previewNetwork(snapshot.savedVersion));
   }, [api, canReadConfig]), onSessionLost);
+  useVisiblePoll(zoneMap.refresh, pollMilliseconds, !zoneMap.data);
   const zones = zoneMap.data ?? noZones;
+  const zonesSettled = zoneMap.data !== undefined || zoneMap.error !== '';
   const all: Array<{ id: string; title: string; to?: string; capability: string; body: ReactNode }> = [
     { id: 'system', title: 'System', capability: 'status.read', body: <Loaded resource={system} what="the system description">{(loaded) => loaded && <SystemWidget info={loaded.info} loadedAt={loaded.loadedAt} />}</Loaded> },
     { id: 'resources', title: 'Resources', capability: 'status.read', body: <ResourcesWidget api={api} onSessionLost={onSessionLost} /> },
-    { id: 'traffic', title: 'Network activity', to: '/network/interfaces', capability: 'status.read', body: <TrafficWidget api={api} zones={zones} onSessionLost={onSessionLost} /> },
+    { id: 'traffic', title: 'Network activity', to: '/network/interfaces', capability: 'status.read', body: <TrafficWidget api={api} zones={zones} zonesSettled={zonesSettled} onSessionLost={onSessionLost} /> },
     { id: 'changes', title: 'Changes', to: '/changes', capability: 'configuration.read', body: <Loaded resource={changes} what="changes">{(state) => state && <ChangesText state={state} />}</Loaded> },
     { id: 'interfaces', title: 'Interfaces', to: '/network/interfaces', capability: 'status.read', body: <InterfacesWidget api={api} zones={zones} onSessionLost={onSessionLost} /> },
     { id: 'prefixes', title: 'IPv6 prefixes', to: '/network/interfaces', capability: 'status.read', body: <PrefixesWidget api={api} zones={zones} onSessionLost={onSessionLost} /> },

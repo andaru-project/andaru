@@ -1,60 +1,69 @@
-import { Progress, Stack, Text } from '@mantine/core';
+import { Group, Progress, Stack, Text } from '@mantine/core';
 import { useCallback, useRef } from 'react';
 import type { ApiClient } from '../api';
 import { bytes } from '../format';
-import { cpuShare } from '../traffic';
 import type { Usage } from '../types';
+import { cpuShare } from '../usage';
 import { usePolledResource } from '../useResource';
 import { Loaded } from './Loaded';
 
-const pollMilliseconds = 5_000;
+const pollSeconds = 5;
 
-// A measure is a bar with its number beside it in words: the bar is never the only carrier of the value.
-function Measure({ label, share, children }: { label: string; share: number | null; children: string }) {
-  const percent = share === null ? 0 : Math.round(share * 100);
+// A measure is a label, its figures, and a bar: the bar is never the only carrier of the value. A share that
+// is not known shows no bar value and says so.
+function Measure({ label, share, figures }: { label: string; share: number | null; figures: string }) {
+  const filled = share === null ? 0 : Math.round(share * 100);
   return (
     <div>
-      <Text size="sm"><Text span c="dimmed" inherit>{label}</Text> {children}</Text>
-      <Progress value={percent} color={percent >= 90 ? 'red' : percent >= 75 ? 'yellow' : undefined} aria-label={`${label}: ${share === null ? 'not known yet' : `${percent}% used`}`} />
+      <Group justify="space-between" gap="xs" wrap="nowrap">
+        <Text size="sm" c="dimmed">{label}</Text>
+        <Text size="sm" ta="right">{figures}</Text>
+      </Group>
+      <Progress value={filled} color={filled >= 90 ? 'red' : filled >= 75 ? 'yellow' : undefined} aria-label={share === null ? `${label}: not known yet` : label} />
     </div>
   );
 }
 
-const part = (used: number, total: number) => (total > 0 ? Math.min(used / total, 1) : null);
+// part is used over total as a share from 0 to 1, and null when there is no total to speak of.
+const part = (used: number, total: number) => (total > 0 ? Math.min(Math.max(used / total, 0), 1) : null);
 const percent = (share: number | null) => (share === null ? '—' : `${Math.round(share * 100)}%`);
+
+// Room: what is used of what there is, and the share.
+function Room({ label, availableBytes, totalBytes }: { label: string; availableBytes: number; totalBytes: number }) {
+  const share = part(totalBytes - availableBytes, totalBytes);
+  return <Measure label={label} share={share} figures={`${bytes(Math.max(totalBytes - availableBytes, 0))} / ${bytes(totalBytes)} · ${percent(share)}`} />;
+}
 
 export function ResourcesView({ usage, before }: { usage: Usage; before?: Usage }) {
   const { memory, connections } = usage;
-  // The processors' share needs two readings: the first poll shows none.
-  const cpu = before ? cpuShare(before.cpu, usage.cpu) : null;
-  const memoryShare = part(memory.totalBytes - memory.availableBytes, memory.totalBytes);
-  const swapShare = part(memory.swapTotalBytes - memory.swapFreeBytes, memory.swapTotalBytes);
+  // The processors' share needs two readings a poll or so apart: the first shows none.
+  const cpu = before ? cpuShare(before, usage, pollSeconds * 4) : null;
   return (
     <Stack gap="xs">
-      <Measure label="CPU" share={cpu}>{`${percent(cpu)}${usage.load ? `, load ${usage.load.map((value) => value.toFixed(2)).join(' ')}` : ''}`}</Measure>
-      {memory.totalBytes > 0 && <Measure label="Memory" share={memoryShare}>{`${percent(memoryShare)}: ${bytes(memory.availableBytes)} free of ${bytes(memory.totalBytes)}`}</Measure>}
-      {memory.swapTotalBytes > 0 && <Measure label="Swap" share={swapShare}>{`${percent(swapShare)}: ${bytes(memory.swapFreeBytes)} free of ${bytes(memory.swapTotalBytes)}`}</Measure>}
-      {usage.fileSystems.map((fileSystem) => {
-        const share = part(fileSystem.totalBytes - fileSystem.availableBytes, fileSystem.totalBytes);
-        return <Measure key={fileSystem.mountPoint} label={`Disk ${fileSystem.mountPoint}`} share={share}>{`${percent(share)}: ${bytes(fileSystem.availableBytes)} free of ${bytes(fileSystem.totalBytes)}`}</Measure>;
-      })}
-      {connections && <Measure label="Connections" share={part(connections.count, connections.limit)}>{`${connections.count.toLocaleString('en')} of ${connections.limit.toLocaleString('en')} tracked`}</Measure>}
-      {usage.temperatures.length > 0 && (
-        <ul className="plain-list tight">
-          {usage.temperatures.map((temperature, index) => <li key={`${temperature.sensor} ${index}`}><Text size="sm"><Text span c="dimmed" inherit>{temperature.sensor || 'Sensor'}</Text> {temperature.celsius.toFixed(1)} °C</Text></li>)}
-        </ul>
-      )}
+      <Measure label="CPU" share={cpu} figures={percent(cpu)} />
+      {usage.load && <Group justify="space-between" gap="xs"><Text size="sm" c="dimmed">Load 1 · 5 · 15 min</Text><Text size="sm">{usage.load.map((value) => value.toFixed(2)).join(' · ')}</Text></Group>}
+      {memory.totalBytes > 0 && <Room label="Memory" availableBytes={memory.availableBytes} totalBytes={memory.totalBytes} />}
+      {memory.swapTotalBytes > 0 && <Room label="Swap" availableBytes={memory.swapFreeBytes} totalBytes={memory.swapTotalBytes} />}
+      {usage.fileSystems.map((fileSystem, index) => <Room key={`${fileSystem.mountPoint} ${index}`} label={`Disk ${fileSystem.mountPoint}`} availableBytes={fileSystem.availableBytes} totalBytes={fileSystem.totalBytes} />)}
+      {connections && <Measure label="Connections" share={part(connections.count, connections.limit)} figures={`${connections.count.toLocaleString('en')} / ${connections.limit.toLocaleString('en')} · ${percent(part(connections.count, connections.limit))}`} />}
+      {usage.temperatures.map((temperature, index) => (
+        <Group key={`${temperature.sensor} ${index}`} justify="space-between" gap="xs" wrap="nowrap">
+          <Text size="sm" c="dimmed">{temperature.sensor || 'Sensor'}</Text>
+          <Text size="sm">{temperature.celsius.toFixed(1)} °C</Text>
+        </Group>
+      ))}
     </Stack>
   );
 }
 
 export function ResourcesWidget({ api, onSessionLost }: { api: ApiClient; onSessionLost(): void }) {
   // The reading before the one shown, for the processors' share.
-  const readings = useRef<{ before?: Usage; latest?: Usage }>({});
+  const last = useRef<Usage>(undefined);
   const resource = usePolledResource(useCallback(async () => {
     const usage = await api.usage();
-    readings.current = { before: readings.current.latest, latest: usage };
-    return readings.current;
-  }, [api]), onSessionLost, pollMilliseconds);
-  return <Loaded resource={resource} what="resource use">{({ latest, before }) => latest && <ResourcesView usage={latest} before={before} />}</Loaded>;
+    const before = last.current;
+    last.current = usage;
+    return { usage, before };
+  }, [api]), onSessionLost, pollSeconds * 1000);
+  return <Loaded resource={resource} what="resource use">{({ usage, before }) => <ResourcesView usage={usage} before={before} />}</Loaded>;
 }

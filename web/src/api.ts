@@ -251,8 +251,9 @@ export class ApiClient {
     return this.request<Usage>('/api/v1/status/usage');
   }
 
-  traffic() {
-    return this.request<Traffic>('/api/v1/status/traffic');
+  // since is the time of the newest reading held, as the box wrote it: only what came after is sent.
+  traffic(since?: string) {
+    return this.request<Traffic>(`/api/v1/status/traffic${since ? `?${new URLSearchParams({ since })}` : ''}`);
   }
 
   system() {

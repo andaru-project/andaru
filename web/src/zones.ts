@@ -1,4 +1,4 @@
-import type { Preview, SavedLink, Snapshot } from './types';
+import type { Finding, Preview, SavedLink, Snapshot } from './types';
 
 const namePrefix: Record<string, string> = { vlan: 'vl', bridge: 'br', bond: 'bo', pppoe: 'pp' };
 
@@ -9,26 +9,48 @@ export function kernelName(link: SavedLink, resolved: Map<string, string>) {
   return namePrefix[link.kind] + link.id.slice(link.id.indexOf('_') + 1).replaceAll('-', '').slice(0, 12);
 }
 
+// These findings mean the renderer will not put the link on any device, whatever its name matches.
+export const bindingCode = /^(HARDWARE_|NAME_COLLISION$|DEPENDENCY_UNAVAILABLE$)/;
+
+// bindingFindings is the first such finding of each saved link, by the link's place in the configuration.
+export function bindingFindings(preview: Preview) {
+  const findings = new Map<number, Finding>();
+  for (const finding of preview.findings) {
+    const index = /^\/links\/(\d+)(\/|$)/.exec(finding.path)?.[1];
+    if (index !== undefined && bindingCode.test(finding.code) && !findings.has(Number(index))) findings.set(Number(index), finding);
+  }
+  return findings;
+}
+
 // zonesByInterface says which zone the saved configuration puts each interface in, by the interface's name on
-// the box. It is the saved assignment: until it is applied, the live one may differ.
+// the box. It is the saved assignment: until it is applied, the live one may differ. An interface gets a zone
+// only when the configuration is clear about it: the link is enabled and will be bound, and no other link
+// claims the same interface.
 export function zonesByInterface(snapshot: Snapshot, preview: Preview) {
   const resolved = new Map(preview.resolved.map((item) => [item.link, item.interface]));
+  const findings = bindingFindings(preview);
   const zones = new Map<string, string>();
-  for (const link of snapshot.value.links) {
-    const name = kernelName(link, resolved);
+  const claimed = new Set<string>();
+  snapshot.value.links.forEach((link, index) => {
+    const name = link.enabled && !findings.has(index) ? kernelName(link, resolved) : undefined;
+    if (!name) return;
+    if (claimed.has(name)) return void zones.delete(name);
+    claimed.add(name);
     const segment = snapshot.value.segments.find((item) => item.link === link.id);
     const zone = segment && snapshot.value.zones.find((item) => item.id === segment.zone);
-    if (name && zone) zones.set(name, zone.name);
-  }
+    if (zone) zones.set(name, zone.name);
+  });
   return zones;
 }
 
 // A zone keeps one colour everywhere. The two every box has take the colours firewalls have long given them,
-// green inside and red outside; any other zone takes one from its name, so it is the same on every page.
-const palette = ['blue', 'grape', 'orange', 'teal', 'pink', 'indigo', 'cyan', 'violet'];
+// green inside and red outside; any other zone takes one from its name, so it is the same on every page. Each
+// of these gets dark text from the theme at 5.6:1 or better; grape, indigo and violet would get white under 4.5:1.
+const known = new Map([['lan', 'green'], ['wan', 'red']]);
+const palette = ['blue', 'orange', 'teal', 'pink', 'cyan', 'lime', 'yellow'];
 export function zoneColor(name: string) {
-  const known: Record<string, string> = { lan: 'green', wan: 'red' };
-  let sum = 0;
-  for (const character of name) sum = (sum * 31 + character.codePointAt(0)!) % 9973;
-  return known[name.toLowerCase()] ?? palette[sum % palette.length];
+  const lower = name.toLowerCase();
+  let hash = 5381;
+  for (const character of lower) hash = (hash * 33 + character.codePointAt(0)!) % 2147483647;
+  return known.get(lower) ?? palette[hash % palette.length];
 }

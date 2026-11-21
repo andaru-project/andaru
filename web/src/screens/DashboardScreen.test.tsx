@@ -97,8 +97,8 @@ it('lists a delegated prefix and where it went, each line the same: the interfac
   await within(prefixes).findAllByLabelText('zone lan');
   // Three lines of one shape, read as text: interface, zone, what it is, prefix.
   const lines = [...prefixes.querySelectorAll('li')].filter((item) => !item.querySelector('li')).map((item) => item.textContent);
-  expect(lines).toEqual(['ens19lan2001:db8:30:1::/64', "ens19lanpool for its clients' networks2001:db8:30:10::/60"]);
-  expect(prefixes.querySelector('li')).toHaveTextContent(/^ens18wandelegated by the provider2001:db8:30::\/56/);
+  expect(lines).toEqual(['ens19lan2001:db8:30:1::/64', 'ens19lanpool2001:db8:30:10::/60']);
+  expect(prefixes.querySelector('li')).toHaveTextContent(/^ens18wandelegated2001:db8:30::\/56/);
   expect(within(prefixes).getByText('No room for: guest')).toBeInTheDocument();
 
   // The same zones show wherever the interfaces do.
