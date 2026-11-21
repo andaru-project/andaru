@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"text/tabwriter"
 )
 
@@ -330,7 +331,11 @@ func ctlUsageError(w io.Writer, name string) int {
 	return usageError(w, ctlUsage, "andaru ctl")
 }
 
-func isHelp(arg string) bool { return arg == "-h" || arg == "-help" || arg == "--help" }
+// isHelp reports a help flag, with or without a value (--help=true).
+func isHelp(arg string) bool {
+	arg, _, _ = strings.Cut(arg, "=")
+	return arg == "-h" || arg == "-help" || arg == "--help"
+}
 
 // helpRequested reports a help flag anywhere among the arguments, even where a flag's value belongs.
 func helpRequested(args []string) bool { return slices.ContainsFunc(args, isHelp) }

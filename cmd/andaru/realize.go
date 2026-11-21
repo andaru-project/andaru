@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"time"
 
@@ -60,12 +61,14 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 	flags := flag.NewFlagSet("realize", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	stateDir := flags.String("state-dir", defaultStateDir, "")
-	parseErr := flags.Parse(args)
+	// Help flags are taken out first, so one standing where a flag's value belongs does not hide the verb.
+	help := helpRequested(args)
+	parseErr := flags.Parse(slices.DeleteFunc(slices.Clone(args), isHelp))
 	verb := flags.Arg(0)
 	want := map[string]int{"activate": 1, "rollback": 2, "confirm": 1, "boot": 0, "leases": 0, "prefixes": 0, "factory-reset": 0}
 	n, known := want[verb]
 	// A help flag anywhere is a request for help, never a rollback REASON; an unknown verb stays a usage error.
-	if verb == "help" || helpRequested(args) && (known || verb == "") {
+	if verb == "help" || help && (known || verb == "") {
 		fmt.Fprint(stdout, realizeHelp)
 		return 0
 	}

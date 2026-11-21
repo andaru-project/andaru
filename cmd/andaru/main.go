@@ -30,13 +30,13 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if len(args) == 0 {
 		return usageError(stderr, topUsage, "andaru")
 	}
-	if isHelp(args[0]) || args[0] == "help" && len(args) == 1 {
+	if isHelp(args[0]) || args[0] == "help" && (len(args) == 1 || isHelp(args[1]) || args[1] == "help") {
 		fmt.Fprint(stdout, topHelp)
 		return 0
 	}
 	if args[0] == "help" {
-		// andaru help GROUP is andaru GROUP --help.
-		args = []string{args[1], "--help"}
+		// andaru help GROUP ... is andaru GROUP ... --help.
+		args = append(args[1:len(args):len(args)], "--help")
 	}
 	if args[0] == "realize" {
 		return realizeCommand(ctx, args[1:], stdout, stderr, newRealizer)

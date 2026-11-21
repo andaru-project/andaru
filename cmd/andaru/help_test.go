@@ -27,6 +27,13 @@ func TestHelpExitsZeroOnStdout(t *testing.T) {
 		{[]string{"-h"}, "Run 'andaru <command> --help'", ""},
 		{[]string{"-help"}, "  realize  ", ""},
 		{[]string{"help"}, "  ctl  ", ""},
+		{[]string{"help", "--help"}, "  realize  ", ""},
+		{[]string{"help", "help"}, "  realize  ", ""},
+		{[]string{"help", "ctl", "config"}, "Singletons: management, nat/outbound, dns", "applies"},
+		{[]string{"ctl", "versions", "list", "--help=true"}, "andaru ctl versions", ""},
+		{[]string{"realize", "--help", "--state-dir", "/srv"}, "rollback N REASON", ""},
+		{[]string{"realize", "-h", "--state-dir", "/srv", "boot"}, "rollback N REASON", ""},
+		{[]string{"realize", "--help=true"}, "rollback N REASON", ""},
 		{[]string{"help", "ctl"}, "  factory-reset  Erase", "  realize  "},
 		{[]string{"help", "engine"}, "--web-uid UID", "  realize  "},
 		{[]string{"help", "realize"}, "rollback N REASON", "  ctl  "},
@@ -120,6 +127,10 @@ func TestEveryHelpTextFitsIn80Columns(t *testing.T) {
 
 // A help flag after a realize verb is help, never a verb run with the flag as its REASON; the word help is data.
 func TestRealizeHelpRunsNoVerb(t *testing.T) {
+	// Not the host's reset journal: the rows that run a verb pass the reset check.
+	old := resetDir
+	resetDir = t.TempDir()
+	t.Cleanup(func() { resetDir = old })
 	for args, want := range map[string]string{
 		"rollback 3 --help":                 "",
 		"rollback 3 -h":                     "",
