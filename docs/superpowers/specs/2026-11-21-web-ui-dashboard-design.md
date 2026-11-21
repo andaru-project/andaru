@@ -22,7 +22,7 @@ This document amends the [shell design](2026-11-21-web-ui-shell-design.md): its 
 2. **A page never splits into tabs.** What would be a tab is a sub-page in the tree, with its own address. The planned tree, as pages arrive:
    - Dashboard
    - Network: Interfaces
-   - Firewall: Rules (Through the firewall, To the firewall), Addresses, Services
+   - Firewall: Rules, Addresses, Services
    - Changes: Review and apply
    - System: Users, Roles, Tokens, Audit
 
@@ -138,7 +138,6 @@ The built-in widgets of call 10 are ordinary components in a list of `{id, title
 ## Open for the owner
 
 - **Where the layout is kept (call 14):** the browser for now, or is a per-account store required from the start, so the layout follows the administrator to another browser?
-- **Tree depth:** is Rules with a sub-page per chain right, or should the two chains sit directly under Firewall?
 
 ## Out of scope
 

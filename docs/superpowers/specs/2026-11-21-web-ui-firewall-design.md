@@ -8,19 +8,28 @@ The second web UI slice makes Andaru usable as a firewall from the browser: seei
 
 It builds on the shell ([shell design](2026-11-21-web-ui-shell-design.md)): every save shows the pending notice, and Review and apply makes it live. Nothing on these pages applies anything.
 
-The API exists: `policy.input` and `policy.forward` with their order operation, `addresses` and `services` ([packet filter design](2026-11-12-packet-filter-design.md)). This slice adds no engine behaviour except where call 9 says so.
+The API serves `policy.input` and `policy.forward` with their order operation, `addresses` and `services` ([packet filter design](2026-11-12-packet-filter-design.md)). The owner decided on 2026-11-21 that the two lists become one (call 2), which is engine work that comes first: [#113](https://github.com/andaru-project/andaru/issues/113). Beyond that and call 9, this slice adds no engine behaviour.
 
 ## Author calls
 
-1. **Navigation gains a Firewall branch** in the tree ([navigation design](2026-11-21-web-ui-dashboard-design.md)): Rules, with one entry per chain beneath it, then Addresses and Services. It needs `configuration.read`; editing needs `configuration.write`, and without it the pages are read-only.
+1. **Navigation gains a Firewall branch** in the tree ([navigation design](2026-11-21-web-ui-dashboard-design.md)): Rules, Addresses and Services. It needs `configuration.read`; editing needs `configuration.write`, and without it the pages are read-only.
 
-2. **Each chain is its own page, not a tab** (owner, 2026-11-21): "Through the firewall" (`policy.forward`) and "To the firewall" (`policy.input`), both under Rules in the tree. The names say what the chain means; the chain names appear as a caption for people who know nftables. Each page has its own address, so a chain can be bookmarked.
+2. **Rules is one page with one list** (owner, 2026-11-21). nftables keeps traffic to the box and traffic through it in two chains; that split means little to an administrator, so the page does not show it. As in pfSense, where a rule applies follows from its destination ([#113](https://github.com/andaru-project/andaru/issues/113)):
+
+   | Destination | Meaning |
+   | --- | --- |
+   | Any | everything, the box included |
+   | Any except this firewall | everything but the box; the default for a new rule |
+   | This firewall | the box only: the web UI, SSH, DNS, DHCP |
+
+   - "Any except this firewall" is a choice of its own. Without it, the same effect takes a pass rule followed by block rules for the box.
+   - Source has the same three choices, and a zone or an address can be negated: "not this".
    - Above the table, a fixed, read-only block lists what Andaru always does before any rule: established and related traffic accepted, invalid dropped, loopback and neighbour discovery accepted, DHCP requests on served segments, SSH on the management segment. Below the table: "Everything else is dropped."
    - Without `management.segment` the filter is off (packet filter design). The page then says so and links to Interfaces instead of showing an empty table that looks like "allow nothing".
 
 3. **The table is the execution order.** Columns: position, enabled (a switch), action, from, to, services, name with its description beneath, and row actions.
    - **No sorting.** A filter box narrows the rows and keeps each row's real position number.
-   - **From and to** show zone and address names as chips; an empty list reads "any". A zone chip and an address chip look different (a zone is where traffic enters or leaves; an address is who).
+   - **From and to** show zone and address names as chips, or one of the three whole-world choices in words. A negated chip reads "not" before its name, in words, never by colour or a strike-through alone. A zone chip and an address chip look different (a zone is where traffic enters or leaves; an address is who).
    - **Action** is a word with a mark, never colour alone: accept, drop, reject. A logging rule carries a "logs" tag.
    - A disabled rule stays in place, dimmed, with its switch off.
 
@@ -34,7 +43,7 @@ The API exists: `policy.input` and `policy.forward` with their order operation, 
    - Whether a small library does the dragging or the page's own pointer handling does is settled when it is built. The requirement is touch, pointer and keyboard alike.
 
 5. **Editing a rule is a side panel,** not a dialog over the table, so the order stays visible. Fields: name, description, enabled, action, from, to, services, log.
-   - From and to are pickers over zones and addresses, grouped, searchable by name. "Any" is the empty selection, stated in words.
+   - From and to are pickers: the three whole-world choices first, then zones and addresses, grouped, searchable by name, each with a "not" switch.
    - Services is a picker over services; empty is "any service".
    - An address or service that does not exist yet can be created from the picker ("New address…"), which opens the object's own form and returns with it selected.
    - Save uses the object's version (`If-Match`); a 412 shows what changed underneath and keeps the user's edits in the form.
@@ -53,7 +62,7 @@ The API exists: `policy.input` and `policy.forward` with their order operation, 
    - The owner's definition: the management interface always lets in the web UI, and SSH when SSH is enabled, so an administrator can always reach the box. When the management interface is also the LAN, the rule applies there.
    - It is the slice's one engine change: the fixed management rule accepts the web UI's listening port beside 22/tcp, from the same `allowedSources`.
    - The SSH half follows SSH itself. Today the rule accepts 22/tcp whether or not `sshd` runs, and no setting turns SSH on or off; once one exists, the rule drops its SSH half while SSH is off.
-   - The "To the firewall" page shows it first in the fixed block, named "Anti-lockout", with the segment, the ports and the allowed sources, and a link to where the management segment is set.
+   - The page shows it first in the fixed block, named "Anti-lockout", with the segment, the ports and the allowed sources, and a link to where the management segment is set.
    - It has no off switch: "always" is the point. Narrowing it is `allowedSources`' job.
    - The rollback timer stays the backstop for everything the rule does not cover, such as a change to the management segment's own addressing.
 
