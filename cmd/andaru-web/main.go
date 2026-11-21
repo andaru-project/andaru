@@ -14,7 +14,28 @@ import (
 	andaruweb "github.com/andaru-project/andaru/internal/web"
 )
 
-const usage = "usage: andaru-web --listen ADDR --tls-cert FILE --tls-key FILE --origin HTTPS_ORIGIN [--origin HTTPS_ORIGIN ...] --backend-socket PATH --assets-dir DIR"
+const usage = `usage: andaru-web --listen ADDR --tls-cert FILE --tls-key FILE
+                  --origin HTTPS_ORIGIN [--origin HTTPS_ORIGIN ...]
+                  --backend-socket PATH --assets-dir DIR
+`
+
+// help keeps each line within 80 columns; main_test.go checks it.
+const help = `Serve the Andaru web interface over HTTPS: the static assets, and /api/
+requests passed to the engine's dedicated web socket. Every option is
+required.
+
+` + usage + `
+Options:
+  --listen ADDR            explicit non-wildcard IP address and port
+  --tls-cert FILE          absolute TLS certificate path
+  --tls-key FILE           absolute TLS private key path
+  --origin HTTPS_ORIGIN    exact HTTPS management origin; repeat for each
+                           origin
+  --backend-socket PATH    absolute dedicated engine web socket path
+  --assets-dir DIR         absolute prebuilt static asset directory
+`
+
+const hint = "Run 'andaru-web --help' for details.\n"
 
 type originFlags []string
 
@@ -37,27 +58,24 @@ func main() {
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("andaru-web", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
-		fmt.Fprintln(stdout, usage)
-		return 0
-	}
 	var origins originFlags
-	listen := flags.String("listen", "", "explicit non-wildcard IP address and port")
-	certificate := flags.String("tls-cert", "", "absolute TLS certificate path")
-	key := flags.String("tls-key", "", "absolute TLS private key path")
-	backend := flags.String("backend-socket", "", "absolute dedicated engine web socket path")
-	assets := flags.String("assets-dir", "", "absolute prebuilt static asset directory")
-	flags.Var(&origins, "origin", "exact HTTPS management origin; repeat for each origin")
-	flags.Usage = func() { fmt.Fprintln(flags.Output(), usage) }
+	listen := flags.String("listen", "", "")
+	certificate := flags.String("tls-cert", "", "")
+	key := flags.String("tls-key", "", "")
+	backend := flags.String("backend-socket", "", "")
+	assets := flags.String("assets-dir", "", "")
+	flags.Var(&origins, "origin", "")
+	flags.Usage = func() {}
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			fmt.Fprintln(stdout, usage)
+			fmt.Fprint(stdout, help)
 			return 0
 		}
+		fmt.Fprint(stderr, usage+hint)
 		return 2
 	}
 	if flags.NArg() != 0 || *listen == "" || *certificate == "" || *key == "" || *backend == "" || *assets == "" || len(origins) == 0 {
-		fmt.Fprintln(stderr, usage)
+		fmt.Fprint(stderr, usage+hint)
 		return 2
 	}
 	if err := andaruweb.Serve(ctx, andaruweb.Config{

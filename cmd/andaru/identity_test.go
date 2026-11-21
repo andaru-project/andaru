@@ -75,7 +75,7 @@ func TestIdentityCLIRequiresExplicitCASAndHasNoPasswordOption(t *testing.T) {
 		{"users", "bootstrap-admin", "--login", "rootadmin", "--password", "forbidden"},
 	} {
 		var stdout, stderr bytes.Buffer
-		if code := runIdentity(context.Background(), "/does/not/exist", args, &stdout, &stderr); code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), identityUsage) {
+		if code := runIdentity(context.Background(), "/does/not/exist", args, &stdout, &stderr); code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "Run 'andaru ctl users --help'") {
 			t.Fatalf("args=%v code=%d stdout=%q stderr=%q", args, code, stdout.String(), stderr.String())
 		}
 	}

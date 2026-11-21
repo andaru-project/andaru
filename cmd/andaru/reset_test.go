@@ -86,12 +86,12 @@ func TestFenceDuringReset(t *testing.T) {
 	for _, verb := range []string{"leases", "prefixes", "activate 3", "confirm 3", "rollback 3 timer"} {
 		verbs := &fakeVerbs{}
 		var stderr bytes.Buffer
-		if code := realizeCommand(context.Background(), strings.Fields(verb), &stderr, func(string) (realizeVerbs, error) { return verbs, nil }); code != 0 || len(verbs.calls) != 0 {
+		if code := realizeCommand(context.Background(), strings.Fields(verb), nil, &stderr, func(string) (realizeVerbs, error) { return verbs, nil }); code != 0 || len(verbs.calls) != 0 {
 			t.Fatalf("%s ran during the wipe: code %d calls %v", verb, code, verbs.calls)
 		}
 	}
 	verbs := &fakeVerbs{}
-	realizeCommand(context.Background(), []string{"boot"}, &bytes.Buffer{}, func(string) (realizeVerbs, error) { return verbs, nil })
+	realizeCommand(context.Background(), []string{"boot"}, nil, &bytes.Buffer{}, func(string) (realizeVerbs, error) { return verbs, nil })
 	if !slices.Equal(verbs.calls, []string{"fence true"}) {
 		t.Fatalf("boot during the wipe: %v", verbs.calls)
 	}
@@ -105,8 +105,8 @@ func TestFenceOpensOnFreshState(t *testing.T) {
 	b := newResetBench(t)
 	b.plan(t, reset.ApplyingRecovery, true)
 	verbs := &fakeVerbs{}
-	realizeCommand(context.Background(), []string{"boot"}, &bytes.Buffer{}, func(string) (realizeVerbs, error) { return verbs, nil })
-	realizeCommand(context.Background(), []string{"leases"}, &bytes.Buffer{}, func(string) (realizeVerbs, error) { return verbs, nil })
+	realizeCommand(context.Background(), []string{"boot"}, nil, &bytes.Buffer{}, func(string) (realizeVerbs, error) { return verbs, nil })
+	realizeCommand(context.Background(), []string{"leases"}, nil, &bytes.Buffer{}, func(string) (realizeVerbs, error) { return verbs, nil })
 	if !slices.Equal(verbs.calls, []string{"boot", "leases"}) {
 		t.Fatalf("calls on the fresh state: %v", verbs.calls)
 	}
@@ -181,7 +181,7 @@ func TestFenceFiltersAHostAndaruNeverRan(t *testing.T) {
 	b := newResetBench(t)
 	b.plan(t, reset.Wiped, false)
 	verbs := &fakeVerbs{}
-	realizeCommand(context.Background(), []string{"boot"}, &bytes.Buffer{}, func(string) (realizeVerbs, error) { return verbs, nil })
+	realizeCommand(context.Background(), []string{"boot"}, nil, &bytes.Buffer{}, func(string) (realizeVerbs, error) { return verbs, nil })
 	if !slices.Equal(verbs.calls, []string{"fence false"}) {
 		t.Fatalf("boot during the wipe of a host Andaru never ran: %v", verbs.calls)
 	}
@@ -192,7 +192,7 @@ func TestPlannedResetFencesNothing(t *testing.T) {
 	b := newResetBench(t)
 	b.plan(t, reset.Planned, true)
 	verbs := &fakeVerbs{}
-	realizeCommand(context.Background(), []string{"rollback", "3", "timer"}, &bytes.Buffer{}, func(string) (realizeVerbs, error) { return verbs, nil })
+	realizeCommand(context.Background(), []string{"rollback", "3", "timer"}, nil, &bytes.Buffer{}, func(string) (realizeVerbs, error) { return verbs, nil })
 	if !slices.Equal(verbs.calls, []string{"rollback 3 timer"}) {
 		t.Fatalf("calls %v", verbs.calls)
 	}
@@ -210,7 +210,7 @@ func TestStoppingResetFences(t *testing.T) {
 	data, _ = json.Marshal(op)
 	os.WriteFile(path, data, 0o600)
 	verbs := &fakeVerbs{}
-	realizeCommand(context.Background(), []string{"activate", "3"}, &bytes.Buffer{}, func(string) (realizeVerbs, error) { return verbs, nil })
+	realizeCommand(context.Background(), []string{"activate", "3"}, nil, &bytes.Buffer{}, func(string) (realizeVerbs, error) { return verbs, nil })
 	if len(verbs.calls) != 0 {
 		t.Fatalf("an apply ran behind a stopping reset: %v", verbs.calls)
 	}
@@ -232,7 +232,7 @@ func TestUnknownOwnershipDeniesAll(t *testing.T) {
 	data, _ = json.Marshal(op)
 	os.WriteFile(path, data, 0o600)
 	verbs := &fakeVerbs{}
-	realizeCommand(context.Background(), []string{"boot"}, &bytes.Buffer{}, func(string) (realizeVerbs, error) { return verbs, nil })
+	realizeCommand(context.Background(), []string{"boot"}, nil, &bytes.Buffer{}, func(string) (realizeVerbs, error) { return verbs, nil })
 	if !slices.Equal(verbs.calls, []string{"fence true"}) {
 		t.Fatalf("boot with unknown ownership: %v", verbs.calls)
 	}

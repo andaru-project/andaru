@@ -16,6 +16,7 @@ import (
 )
 
 const defaultSocket = "/run/andaru/engine.sock"
+const defaultStateDir = "/var/lib/andaru"
 const responseLimit = 8 * 1024 * 1024
 
 func main() {
@@ -26,41 +27,51 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	usage := "usage: andaru engine [--socket PATH] [--state-dir PATH] [--web-socket PATH --web-uid UID --web-gid GID --web-origin HTTPS_ORIGIN ...] | andaru ctl [--socket PATH] links|prefixes|openapi|config|versions|preview|apply|applies|backup|kept|users|tokens|audit|factory-reset | andaru realize [--state-dir PATH] activate|rollback|confirm|boot|leases|prefixes|factory-reset"
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, usage)
-		return 2
+		return usageError(stderr, topUsage, "andaru")
 	}
-	if args[0] == "--help" || args[0] == "-h" {
-		fmt.Fprintln(stdout, usage)
+	if isHelp(args[0]) || args[0] == "help" && (len(args) == 1 || isHelp(args[1]) || args[1] == "help") {
+		fmt.Fprint(stdout, topHelp)
 		return 0
 	}
+	if args[0] == "help" {
+		// andaru help GROUP ... is andaru GROUP ... --help.
+		args = append(args[1:len(args):len(args)], "--help")
+	}
 	if args[0] == "realize" {
-		return realizeCommand(ctx, args[1:], stderr, newRealizer)
+		return realizeCommand(ctx, args[1:], stdout, stderr, newRealizer)
 	}
 	if args[0] != "engine" && args[0] != "ctl" {
-		fmt.Fprintln(stderr, usage)
-		return 2
+		return usageError(stderr, topUsage, "andaru")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	socket := flags.String("socket", defaultSocket, "absolute local engine socket path")
-	stateDir := "/var/lib/andaru"
+	flags.Usage = func() {}
+	socket := flags.String("socket", defaultSocket, "")
+	stateDir := defaultStateDir
 	webSocket := ""
 	var webUID, webGID uint64
 	var webOrigins repeatedFlags
 	if args[0] == "engine" {
-		flags.StringVar(&stateDir, "state-dir", stateDir, "absolute private state directory")
-		flags.StringVar(&webSocket, "web-socket", "", "absolute dedicated web engine socket path")
-		flags.Uint64Var(&webUID, "web-uid", 0, "exact non-root static web process UID")
-		flags.Uint64Var(&webGID, "web-gid", 0, "exact non-root static web socket group GID")
-		flags.Var(&webOrigins, "web-origin", "exact HTTPS management origin; repeat for each origin")
+		flags.StringVar(&stateDir, "state-dir", stateDir, "")
+		flags.StringVar(&webSocket, "web-socket", "", "")
+		flags.Uint64Var(&webUID, "web-uid", 0, "")
+		flags.Uint64Var(&webGID, "web-gid", 0, "")
+		flags.Var(&webOrigins, "web-origin", "")
 	}
 	if err := flags.Parse(args[1:]); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return 0
+		switch {
+		case !errors.Is(err, flag.ErrHelp):
+			if args[0] == "engine" {
+				return usageError(stderr, engineUsage, "andaru engine")
+			}
+			return ctlUsageError(stderr, "")
+		case args[0] == "engine":
+			fmt.Fprint(stdout, engineHelp)
+		default:
+			ctlHelp(stdout)
 		}
-		return 2
+		return 0
 	}
 	if !filepath.IsAbs(*socket) || filepath.Clean(*socket) != *socket || len(*socket) >= 108 {
 		fmt.Fprintln(stderr, "socket must be a canonical absolute path shorter than 108 bytes")
@@ -68,8 +79,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 	if args[0] == "engine" {
 		if flags.NArg() != 0 {
-			fmt.Fprintln(stderr, usage)
-			return 2
+			return usageError(stderr, engineUsage, "andaru engine")
 		}
 		if !filepath.IsAbs(stateDir) || filepath.Clean(stateDir) != stateDir {
 			fmt.Fprintln(stderr, "state-dir must be a canonical absolute path")

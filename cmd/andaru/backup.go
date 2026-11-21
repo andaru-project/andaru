@@ -19,8 +19,6 @@ import (
 	"github.com/andaru-project/andaru/internal/config"
 )
 
-const backupUsage = "usage: andaru ctl [--socket PATH] backup create --output FILE [--include-secrets] [--include-credentials] | backup inspect --input FILE | backup restore --input FILE --stores configuration[,configurationSecrets,users,userCredentials] [--operation-id ID]"
-
 type backupCommand struct {
 	verb, input, output, operationID string
 	stores                           []string
@@ -170,8 +168,7 @@ func parseBackupCommand(args []string) (backupCommand, error) {
 func runBackup(ctx context.Context, socket string, args []string, _ io.Reader, stdout, stderr io.Writer) int {
 	cmd, err := parseBackupCommand(args)
 	if err != nil {
-		fmt.Fprintln(stderr, backupUsage)
-		return 2
+		return ctlUsageError(stderr, "backup")
 	}
 	if cmd.verb == "create" {
 		return backupCreate(ctx, socket, cmd, stdout, stderr)
