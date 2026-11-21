@@ -105,15 +105,22 @@ func shortPrivateDir(t *testing.T) string {
 	return dir
 }
 
+// waitForUnixSocket waits for the socket in the mode serveWebUnix leaves it in: between bind and chmod it is
+// there with the umask's mode, and a test that looked then would see that one.
 func waitForUnixSocket(t *testing.T, path string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSocket != 0 {
+		info, err := os.Lstat(path)
+		if err == nil && info.Mode()&os.ModeSocket != 0 && info.Mode().Perm() == 0660 {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("Unix socket did not become ready")
+			mode := os.FileMode(0)
+			if info != nil {
+				mode = info.Mode()
+			}
+			t.Fatalf("Unix socket did not become ready: mode=%v err=%v", mode, err)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
