@@ -117,3 +117,21 @@ func TestActorCanonicalLabel(t *testing.T) {
 		}
 	}
 }
+
+func TestSnapshotResolvesBuiltInRoles(t *testing.T) {
+	snapshot, err := NewSnapshot(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Catalog()
+	slices.Sort(want)
+	if got := snapshot.Capabilities[AdministratorRoleID]; !slices.Equal(got, want) {
+		t.Fatalf("administrator resolves to %v, want the whole catalog %v", got, want)
+	}
+	if len(snapshot.Capabilities[ReadOnlyRoleID]) == 0 {
+		t.Fatal("read-only resolves to nothing")
+	}
+	if len(snapshot.Roles) != 0 {
+		t.Fatalf("built-in roles leaked into the custom roles: %v", snapshot.Roles)
+	}
+}

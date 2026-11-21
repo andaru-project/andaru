@@ -119,7 +119,12 @@ func NewSnapshot(custom []Role) (Snapshot, error) {
 	}
 	roles := cloneRoles(custom)
 	slices.SortFunc(roles, func(a, b Role) int { return strings.Compare(a.ID, b.ID) })
-	capabilities := make(map[string][]Capability, len(roles))
+	capabilities := make(map[string][]Capability, len(roles)+2)
+	// Accounts hold built-in roles too (the bootstrap administrator holds administrator): resolve them like Resolve does.
+	for _, role := range BuiltIns() {
+		slices.Sort(role.Capabilities)
+		capabilities[role.ID] = role.Capabilities
+	}
 	for i := range roles {
 		slices.Sort(roles[i].Capabilities)
 		capabilities[roles[i].ID] = slices.Clone(roles[i].Capabilities)
