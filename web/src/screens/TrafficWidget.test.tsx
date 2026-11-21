@@ -45,7 +45,7 @@ it('shows a graph for each interface, top to bottom, with its zone and its figur
   expect(row('ens18', 'Upload')).toEqual(['1.0 Mbps', '1.0 Mbps', '1.0 Mbps']);
   expect(row('ens19', 'Download')).toEqual(['1.0 kbps', '1.0 kbps', '1.0 kbps']);
   // The scale and the span are labels on the graph, not a sentence.
-  expect(within(graph('ens18')).getByText('0 – 4.0 Mbps')).toBeInTheDocument();
+  expect(within(graph('ens18')).getByText('0 – 4.2 Mbps')).toBeInTheDocument();
   expect(within(graph('ens18')).getByText('−1 h')).toBeInTheDocument();
   expect(within(graph('ens18')).getByText('now')).toBeInTheDocument();
 });
@@ -58,9 +58,9 @@ it('draws the rates where they belong: later to the right, faster higher, downlo
   // The newest reading is at the right edge, and each point is right of the one before.
   expect(download[2][0]).toBe(500);
   expect(download[0][0]).toBeLessThan(download[1][0]);
-  // Download rises to the top of the graph: the scale is the highest point drawn. Upload stays level, lower.
+  // Download rises almost to the top: the scale is the highest point drawn and a twentieth more. Upload stays level, lower.
   expect(download[0][1]).toBeGreaterThan(download[1][1]);
-  expect(download[2][1]).toBe(2);
+  expect(download[2][1]).toBeCloseTo(11.3, 1);
   expect(new Set(upload.map(([, y]) => y)).size).toBe(1);
   expect(upload[0][1]).toBeGreaterThan(download[2][1]);
 });

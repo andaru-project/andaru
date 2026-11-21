@@ -69,9 +69,10 @@ function Graph({ entry, zone, end, intervalSeconds, live }: { entry: Traffic['in
   // every is each reading's rate, for the figures; points is what is drawn and marked, thinned to a line.
   const every = rates(entry.samples, intervalSeconds);
   const points = thin(every, 180, intervalSeconds);
-  // The scale is the highest point drawn, so the lines fill the graph whatever the traffic. The Max in the
-  // figures is from every reading, and can be above it: a drawn point is the average of its stretch.
-  const top = points.reduce((most, point) => Math.max(most, point.rx ?? 0, point.tx ?? 0), 0) || 1;
+  // The scale is the highest point drawn and a twentieth more, so the lines fill the graph whatever the traffic
+  // and the peak is not cut off at its edge. The Max in the figures is from every reading, and can be above
+  // it: a drawn point is the average of its stretch.
+  const top = points.reduce((most, point) => Math.max(most, point.rx ?? 0, point.tx ?? 0), 0) * 1.05 || 1;
   const x = (at: number) => ((at - (end - hourMilliseconds)) / hourMilliseconds) * width;
   const y = (rate: number) => height - (rate / top) * (height - 4) - 2;
   // An interface read within the last few intervals has a rate now; one that has gone has not.
