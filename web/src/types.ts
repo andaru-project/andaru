@@ -150,6 +150,11 @@ export interface LinkStatus {
   addresses: Array<{ family: 'ipv4' | 'ipv6'; address: string; prefixLength: number; scope: string }>;
 }
 
+// What the web UI keeps for the account. The engine stores it and reads none of it; keys this version does not
+// know belong to another version and are kept as they are.
+export interface DashboardLayout { order?: string[]; hidden?: string[] }
+export interface Preferences { dashboard?: DashboardLayout; [key: string]: unknown }
+
 interface PrefixPlace { interface: string; subnetId: string; prefix: string | null }
 
 export interface PrefixView {

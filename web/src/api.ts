@@ -8,6 +8,7 @@ import type {
   LinkStatus,
   Page,
   PrefixView,
+  Preferences,
   Preview,
   Role,
   SavedObject,
@@ -245,6 +246,14 @@ export class ApiClient {
 
   prefixes() {
     return this.request<PrefixView>('/api/v1/status/prefixes');
+  }
+
+  preferences() {
+    return this.request<Preferences>('/api/v1/session/preferences');
+  }
+
+  savePreferences(preferences: Preferences) {
+    return this.request<Preferences>('/api/v1/session/preferences', { method: 'PUT', body: JSON.stringify(preferences) }, true);
   }
 
   config() {

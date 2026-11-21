@@ -146,6 +146,17 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* The grip takes the touch for itself, so a drag from it does not scroll; nothing else on a widget does. */
+.widget-grip {
+  cursor: grab;
+  touch-action: none;
+}
+
+.widget[data-dragging] {
+  box-shadow: var(--mantine-shadow-md);
+  z-index: 1;
+}
+
 .plain-list {
   display: grid;
   gap: var(--mantine-spacing-sm);
