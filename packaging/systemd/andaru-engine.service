@@ -18,8 +18,11 @@ Restart=on-failure
 RestartSec=1s
 TimeoutStopSec=5s
 NoNewPrivileges=yes
-# Only CAP_CHOWN: the engine hands its web socket and its directory to the andaru-web group (internal/engine/socket_linux.go).
-CapabilityBoundingSet=CAP_CHOWN
+CapabilityBoundingSet=
+# No capability is needed to hand the web socket to the andaru-web group: an owner may chgrp to a group it is in
+# (internal/engine/socket_linux.go). ProtectSystem=strict makes /run read-only on some systemd versions.
+SupplementaryGroups=andaru-web
+ReadWritePaths=-/run/andaru-web
 AmbientCapabilities=
 ProtectSystem=strict
 ProtectHome=yes

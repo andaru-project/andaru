@@ -26,7 +26,6 @@ const (
 
 var (
 	tokenCapabilities = authz.Catalog()
-	tokenBuiltInRoles = authz.BuiltIns()
 )
 
 func canonicalCapabilities(caps []authz.Capability) ([]authz.Capability, error) {
@@ -525,7 +524,7 @@ func (s *store) AuthenticateToken(ctx context.Context, selector, secret string, 
 			return Principal{}, ErrAuthentication
 		}
 	}
-	capabilities := intersectCapabilities(token.Scope, effectiveCapabilities(account.RoleIDs, roles))
+	capabilities := intersectCapabilities(token.Scope, roles.Resolve(account.RoleIDs))
 	now := time.Now().Unix()
 	if token.LastUsedAt == nil || token.LastUsedAt.Unix() <= now-3600 {
 		result, updateErr := tx.ExecContext(ctx, "UPDATE api_tokens SET last_used_at=? WHERE selector=? AND revoked_at IS NULL AND (last_used_at IS NULL OR last_used_at<=?)", now, selectorBytes, now-3600)
@@ -543,29 +542,6 @@ func (s *store) AuthenticateToken(ctx context.Context, selector, secret string, 
 		return Principal{}, err
 	}
 	return Principal{Account: account, Actor: authz.Actor{Kind: authz.ActorToken, ID: selector}, Capabilities: capabilities, Token: &token}, nil
-}
-
-func effectiveCapabilities(roleIDs []string, snapshot authz.Snapshot) []authz.Capability {
-	result := make([]authz.Capability, 0, len(tokenCapabilities))
-	for _, roleID := range roleIDs {
-		var capabilities []authz.Capability
-		for _, role := range tokenBuiltInRoles {
-			if role.ID == roleID {
-				capabilities = role.Capabilities
-				break
-			}
-		}
-		if capabilities == nil {
-			capabilities = snapshot.Capabilities[roleID]
-		}
-		for _, capability := range capabilities {
-			if !slices.Contains(result, capability) {
-				result = append(result, capability)
-			}
-		}
-	}
-	slices.Sort(result)
-	return result
 }
 
 func intersectCapabilities(scope, current []authz.Capability) []authz.Capability {

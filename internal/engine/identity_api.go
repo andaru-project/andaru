@@ -649,13 +649,13 @@ func (h *identityAPI) createToken(w http.ResponseWriter, r *http.Request) {
 			if issuerErr != nil {
 				return "", nil, issuerErr
 			}
-			issuerCapabilities = authz.Resolve(snapshot.Roles, issuer.RoleIDs)
+			issuerCapabilities = snapshot.Resolve(issuer.RoleIDs)
 			if actor.Actor.Kind == authz.ActorToken {
 				issuerCapabilities = restrictCapabilities(actor.TokenScope, issuerCapabilities)
 			}
 		}
 		issued, err := h.identities.IssueTokenAtRevision(
-			ctx, revision, actor.Actor, issuerCapabilities, authz.Resolve(snapshot.Roles, target.RoleIDs), issue,
+			ctx, revision, actor.Actor, issuerCapabilities, snapshot.Resolve(target.RoleIDs), issue,
 		)
 		return issued.Selector, issued, err
 	})

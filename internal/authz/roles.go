@@ -71,24 +71,16 @@ func ValidateRoles(custom []Role) error {
 	return nil
 }
 
-func Resolve(custom []Role, roleIDs []string) []Capability {
-	roles := make(map[string]Role, len(custom)+2)
-	for _, role := range BuiltIns() {
-		roles[role.ID] = role
-	}
-	for _, role := range custom {
-		if _, builtIn := roles[role.ID]; !builtIn {
-			roles[role.ID] = role
+// Resolve is the union of the capabilities of the given roles, sorted; unknown role IDs grant nothing.
+func (s Snapshot) Resolve(roleIDs []string) []Capability {
+	set := make(map[Capability]struct{})
+	for _, roleID := range roleIDs {
+		for _, capability := range s.Capabilities[roleID] {
+			set[capability] = struct{}{}
 		}
 	}
-	granted := map[Capability]bool{}
-	for _, id := range roleIDs {
-		for _, capability := range roles[id].Capabilities {
-			granted[capability] = true
-		}
-	}
-	result := make([]Capability, 0, len(granted))
-	for capability := range granted {
+	result := make([]Capability, 0, len(set))
+	for capability := range set {
 		result = append(result, capability)
 	}
 	slices.Sort(result)
@@ -120,7 +112,7 @@ func NewSnapshot(custom []Role) (Snapshot, error) {
 	roles := cloneRoles(custom)
 	slices.SortFunc(roles, func(a, b Role) int { return strings.Compare(a.ID, b.ID) })
 	capabilities := make(map[string][]Capability, len(roles)+2)
-	// Accounts hold built-in roles too (the bootstrap administrator holds administrator): resolve them like Resolve does.
+	// Accounts hold built-in roles too: the bootstrap administrator holds administrator.
 	for _, role := range BuiltIns() {
 		slices.Sort(role.Capabilities)
 		capabilities[role.ID] = role.Capabilities
