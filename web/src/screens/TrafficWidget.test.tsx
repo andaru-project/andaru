@@ -21,7 +21,7 @@ const many: Traffic = { ...pair, interfaces: [...pair.interfaces, { name: 'ens20
 const zones = new Map([['ens18', 'wan'], ['ens19', 'lan'], ['ens20', 'guest']]);
 
 const graph = (name: string) => screen.getByRole('region', { name: `Traffic on ${name}` });
-// The figures of one direction on one interface's graph: Current, Avg., Max.
+// The figures of one direction on one interface's graph: Current, Avg, Max.
 const row = (name: string, direction: string) => within(within(graph(name)).getByRole('rowheader', { name: direction }).closest('tr')!).getAllByRole('cell').map((cell) => cell.textContent);
 const graphs = () => screen.getAllByRole('region').map((region) => region.getAttribute('aria-label'));
 const drawn = (name: string, line: string) => graph(name).querySelector(`path.${line}:not(.traffic-area)`)!.getAttribute('d')!;
@@ -38,9 +38,9 @@ it('shows a graph for each interface, top to bottom, with its zone and its figur
   expect(within(graph('ens19')).getByText('zone lan')).toBeInTheDocument();
 
   // The arrows are for the eye; the names are what is read out.
-  expect(within(graph('ens18')).getByRole('rowheader', { name: 'Download' })).toHaveTextContent('↓ Download');
-  expect(within(graph('ens18')).getByRole('rowheader', { name: 'Upload' })).toHaveTextContent('↑ Upload');
-  expect(within(graph('ens18')).getAllByRole('columnheader').map((header) => header.textContent)).toEqual(['Current', 'Avg.', 'Max']);
+  expect(within(graph('ens18')).getByRole('rowheader', { name: 'Download' })).toHaveTextContent('↓ Down');
+  expect(within(graph('ens18')).getByRole('rowheader', { name: 'Upload' })).toHaveTextContent('↑ Up');
+  expect(within(graph('ens18')).getAllByRole('columnheader').map((header) => header.textContent)).toEqual(['Current', 'Avg', 'Max']);
   expect(row('ens18', 'Download')).toEqual(['4.0 Mbps', '2.3 Mbps', '4.0 Mbps']);
   expect(row('ens18', 'Upload')).toEqual(['1.0 Mbps', '1.0 Mbps', '1.0 Mbps']);
   expect(row('ens19', 'Download')).toEqual(['1.0 kbps', '1.0 kbps', '1.0 kbps']);

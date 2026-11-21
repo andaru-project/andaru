@@ -1,4 +1,4 @@
-import { Button, ComboboxChevron, Group, Menu, Stack, Table, Text } from '@mantine/core';
+import { Button, ComboboxChevron, Group, Menu, Stack, Table, Text, VisuallyHidden } from '@mantine/core';
 import { useCallback, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
 import type { ApiClient } from '../api';
 import { bitrate } from '../format';
@@ -51,10 +51,11 @@ const lineColors = (zone: string) => ({ '--traffic-line-light': `var(--mantine-c
 
 // A direction's row of figures: its line as drawn, its arrow and name, then the rate now, the hour's average
 // and its peak. The row is the legend too.
-function Figures({ arrow, name, line, values }: { arrow: string; name: string; line: string; values: ReturnType<typeof figures> }) {
+// The words are short for the eye. For the ear they are whole: "down" and "up" are also what a link is.
+function Figures({ arrow, name, heard, line, values }: { arrow: string; name: string; heard: string; line: string; values: ReturnType<typeof figures> }) {
   return (
     <Table.Tr>
-      <Table.Th scope="row"><svg className="traffic-key" viewBox="0 0 24 8" aria-hidden="true"><path className={line} d="M1 4H23" /></svg> <span aria-hidden="true">{arrow}</span> {name}</Table.Th>
+      <Table.Th scope="row"><svg className="traffic-key" viewBox="0 0 24 8" aria-hidden="true"><path className={line} d="M1 4H23" /></svg> <span aria-hidden="true">{arrow} {name}</span><VisuallyHidden>{heard}</VisuallyHidden></Table.Th>
       <Table.Td>{shown(values.current)}</Table.Td>
       <Table.Td>{shown(values.average)}</Table.Td>
       <Table.Td>{shown(values.peak)}</Table.Td>
@@ -126,10 +127,10 @@ function Graph({ entry, zone, end, intervalSeconds, live }: { entry: Traffic['in
           : <><Text c="dimmed" size="xs">−1 h</Text><Text c="dimmed" size="xs">now</Text></>}
       </Group>
       <Table className="traffic-figures" withRowBorders={false} verticalSpacing={2} horizontalSpacing={4}>
-        <Table.Thead><Table.Tr><Table.Td /><Table.Th>Current</Table.Th><Table.Th>Avg.</Table.Th><Table.Th>Max</Table.Th></Table.Tr></Table.Thead>
+        <Table.Thead><Table.Tr><Table.Td /><Table.Th>Current</Table.Th><Table.Th>Avg</Table.Th><Table.Th>Max</Table.Th></Table.Tr></Table.Thead>
         <Table.Tbody>
-          <Figures arrow="↓" name="Download" line="traffic-received" values={figures(every, (point) => point.rx, fresh)} />
-          <Figures arrow="↑" name="Upload" line="traffic-sent" values={figures(every, (point) => point.tx, fresh)} />
+          <Figures arrow="↓" name="Down" heard="Download" line="traffic-received" values={figures(every, (point) => point.rx, fresh)} />
+          <Figures arrow="↑" name="Up" heard="Upload" line="traffic-sent" values={figures(every, (point) => point.tx, fresh)} />
         </Table.Tbody>
       </Table>
     </section>

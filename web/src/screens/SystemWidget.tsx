@@ -1,11 +1,15 @@
 import { Table, Text } from '@mantine/core';
 import { useCallback, useState, type ReactNode } from 'react';
-import { bytes, duration, plural } from '../format';
+import { duration, plural } from '../format';
 import type { SystemInfo } from '../types';
 import { useVisiblePoll } from '../useResource';
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return <Table.Tr><Table.Th scope="row">{label}</Table.Th><Table.Td>{children}</Table.Td></Table.Tr>;
+}
+
+function Head({ children }: { children: ReactNode }) {
+  return <Table.Tr><Table.Th colSpan={2} className="facts-head">{children}</Table.Th></Table.Tr>;
 }
 
 const list = (names: string[]) => (names.length > 0 ? names.join(', ') : 'none');
@@ -32,23 +36,24 @@ export function SystemWidget({ info, loadedAt }: { info: SystemInfo; loadedAt: n
   return (
     <Table className="facts" withRowBorders={false} verticalSpacing={2} horizontalSpacing={0}>
       <Table.Tbody>
-        <Row label="Name">{info.hostname || '—'}</Row>
-        <Row label="Andaru">{info.version}</Row>
-        <Row label="Kernel">{info.kernel} ({info.architecture})</Row>
+        <Head>Software</Head>
+        <Row label="Hostname">{info.hostname || '—'}</Row>
+        <Row label="Version">{info.version}</Row>
+        <Row label="Kernel">{info.kernel}</Row>
         {/* The box's own clock, in UTC so it reads the same from anywhere: a firewall with a wrong clock misjudges certificates and logs. */}
         {Number.isFinite(clock) && <Row label="Clock">{new Date(clock).toISOString().slice(0, 16).replace('T', ' ')} UTC</Row>}
-        {Number.isFinite(uptime) && uptime >= 0 && <Row label="Up for">{duration(uptime)}</Row>}
-        <Row label="Machine">{machine || '—'}</Row>
-        {info.guest && <Row label="Runs as">a virtual machine{info.guest !== 'unknown' && ` (${info.guest})`}</Row>}
+        {Number.isFinite(uptime) && uptime >= 0 && <Row label="Uptime">{duration(uptime)}</Row>}
+        <Head>Hardware</Head>
+        <Row label="Machine">{[machine, info.guest && `virtual machine${info.guest !== 'unknown' ? ` (${info.guest})` : ''}`].filter(Boolean).join(' · ') || '—'}</Row>
         {board && board !== machine && <Row label="Board">{board}</Row>}
         {hardware.serial && <Row label="Serial">{hardware.serial}</Row>}
         {firmware && <Row label="BIOS">{firmware}</Row>}
+        <Head>Processor</Head>
         <Row label="CPU">{cpu.model || info.architecture}, {plural(cpu.cores, 'core')}{cpu.threads !== cpu.cores && `, ${plural(cpu.threads, 'thread')}`}</Row>
-        {cpu.level && <Row label="Level">{cpu.level}</Row>}
-        {cpu.microcode && <Row label="Microcode">{cpu.microcode}</Row>}
-        {info.memoryBytes > 0 && <Row label="Memory">{bytes(info.memoryBytes)}</Row>}
-        <Row label="Cryptography">{list(cpu.features.cryptography)}</Row>
-        <Row label="Security">{list(cpu.features.security)}</Row>
+        {/* The memory installed is in the Resources widget, beside what is used of it. */}
+        {(cpu.level || cpu.microcode) && <Row label="Platform">{[cpu.level, cpu.microcode && `microcode ${cpu.microcode}`].filter(Boolean).join(' · ')}</Row>}
+        <Row label="Hardware crypto">{list(cpu.features.cryptography)}</Row>
+        <Row label="CPU security">{list(cpu.features.security)}</Row>
         <Row label="Virtualisation">{list([...cpu.features.virtualization, ...(info.iommu ? ['IOMMU active'] : [])])}</Row>
         <Row label="CPU vulnerabilities">
           {cpu.vulnerabilities.length === 0 ? 'no report' : !vulnerable && !unknown ? 'all mitigated' : (

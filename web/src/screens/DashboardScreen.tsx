@@ -5,7 +5,6 @@ import { ActionIcon, Alert, Anchor, Badge, Button, Group, Loader, Paper, Stack, 
 import { useCallback, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { reportError, type ApiClient } from '../api';
-import { clock, pendingNotice, useCountdown, type ChangeState } from '../changes';
 import { arrange, moved } from '../dashboardLayout';
 import { zonesByInterface } from '../zones';
 import { stateColor, stateLabel, type DashboardLayout, type Preferences, type Session, type SystemInfo } from '../types';
@@ -20,7 +19,6 @@ import { ZoneBadge } from './ZoneBadge';
 interface DashboardScreenProps {
   api: ApiClient;
   session: Session;
-  changes: Resource<ChangeState | undefined>;
   system: Resource<{ info: SystemInfo; loadedAt: number } | undefined>;
   onSessionLost(): void;
 }
@@ -74,18 +72,6 @@ function Widget({ id, title, to, unlocked, onHide, children }: { id: string; tit
       {children}
     </Paper>
   );
-}
-
-// The shell polls the change state for its notice; the widget shows the same reading.
-function ChangesText({ state }: { state: ChangeState }) {
-  const notice = pendingNotice(state);
-  const remaining = useCountdown(notice?.kind === 'awaiting' ? notice.apply.deadline : undefined);
-  if (!notice) return <Text>Nothing is pending: the saved configuration is the one that runs.</Text>;
-  if (notice.kind === 'unapplied') return <Text>Saved changes are not applied yet.</Text>;
-  if (notice.kind === 'activating') return <Text>Applying saved version {notice.apply.savedVersion}…</Text>;
-  if (notice.kind === 'failed') return <Text>The last apply failed.</Text>;
-  if (notice.kind === 'rolled_back') return <Text>The last apply was rolled back.</Text>;
-  return <Text>Applied, awaiting confirmation: rolls back at {notice.apply.deadline ? clock(notice.apply.deadline) : 'an unknown time'}{remaining && ` (${remaining} left)`}.</Text>;
 }
 
 function InterfacesWidget({ api, zones, onSessionLost }: WidgetProps) {
@@ -149,7 +135,7 @@ function PrefixesWidget({ api, zones, onSessionLost }: WidgetProps) {
 
 const noZones = new Map<string, string>();
 
-export function DashboardScreen({ api, session, changes, system, onSessionLost }: DashboardScreenProps) {
+export function DashboardScreen({ api, session, system, onSessionLost }: DashboardScreenProps) {
   // Which zone each interface is in comes from the saved configuration, for accounts that may read it. It is
   // read when the dashboard opens, and again until it has been read: it changes with a save, which is made on
   // another page. zonesKnown says the answer is in, so a choice that depends on it can be made; an account
@@ -167,7 +153,6 @@ export function DashboardScreen({ api, session, changes, system, onSessionLost }
     { id: 'system', title: 'System', capability: 'status.read', body: <Loaded resource={system} what="the system description">{(loaded) => loaded && <SystemWidget info={loaded.info} loadedAt={loaded.loadedAt} />}</Loaded> },
     { id: 'resources', title: 'Resources', capability: 'status.read', body: <ResourcesWidget api={api} onSessionLost={onSessionLost} /> },
     { id: 'traffic', title: 'Network activity', capability: 'status.read', body: <TrafficWidget api={api} zones={zones} zonesKnown={zonesKnown} onSessionLost={onSessionLost} /> },
-    { id: 'changes', title: 'Changes', to: '/changes', capability: 'configuration.read', body: <Loaded resource={changes} what="changes">{(state) => state && <ChangesText state={state} />}</Loaded> },
     { id: 'interfaces', title: 'Interfaces', to: '/network/interfaces', capability: 'status.read', body: <InterfacesWidget api={api} zones={zones} onSessionLost={onSessionLost} /> },
     { id: 'prefixes', title: 'IPv6 prefixes', capability: 'status.read', body: <PrefixesWidget api={api} zones={zones} onSessionLost={onSessionLost} /> },
   ];
@@ -237,8 +222,8 @@ export function DashboardScreen({ api, session, changes, system, onSessionLost }
         <Title order={2}>Dashboard</Title>
         <Group gap="xs">
           {unlocked && <Button size="xs" variant="default" onClick={() => save({})}>Reset layout</Button>}
-          {/* The name says the state, so it is not also a pressed button. */}
-          <Button ref={padlock} size="xs" variant="default" disabled={!preferences.data} leftSection={<Padlock open={unlocked} />} onClick={() => setUnlocked(!unlocked)}>{unlocked ? 'Layout unlocked' : 'Layout locked'}</Button>
+          {/* The name says what a press does, so it is not also a pressed button. */}
+          <Button ref={padlock} size="xs" variant="default" disabled={!preferences.data} leftSection={<Padlock open={unlocked} />} onClick={() => setUnlocked(!unlocked)}>{unlocked ? 'Done' : 'Edit layout'}</Button>
         </Group>
       </Group>
       {preferences.error && !preferences.data && <Text c="dimmed" size="sm">The layout cannot be changed now: {preferences.error}</Text>}
@@ -252,7 +237,7 @@ export function DashboardScreen({ api, session, changes, system, onSessionLost }
           </SortableContext>
         </DndContext>
       )}
-      {shown.length === 0 && <Alert role="status">Every widget is hidden.{!unlocked && ' Unlock the layout to show them again.'}</Alert>}
+      {shown.length === 0 && <Alert role="status">Every widget is hidden.{!unlocked && ' Edit the layout to show them again.'}</Alert>}
       {unlocked && hidden.length > 0 && (
         <Paper component="section" withBorder p="md" aria-labelledby="hidden-widgets">
           <Title order={3} size="h5" mb="sm" id="hidden-widgets">Hidden widgets</Title>
