@@ -17,6 +17,7 @@ import type {
   TokenIssueResponse,
   User,
   VersionDetail,
+  PrefixView,
 } from './types';
 
 interface ErrorEnvelope {
@@ -230,6 +231,10 @@ export class ApiClient {
 
   links() {
     return this.request<{ items: LinkStatus[] }>('/api/v1/status/links');
+  }
+
+  prefixes() {
+    return this.request<PrefixView>('/api/v1/status/prefixes');
   }
 
   config() {

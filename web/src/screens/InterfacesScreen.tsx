@@ -89,15 +89,15 @@ export function InterfacesScreen({ api, session, onSessionLost }: InterfacesScre
             const segment = link && segmentOf(link);
             return (
               <Table.Tr key={key}>
-                <Table.Td>
+                <Table.Td data-label="Interface">
                   {live ? <Text ff="monospace" fw={600}>{live.name}</Text> : <Text c="dimmed">No device</Text>}
                   <Text c="dimmed" size="sm"><Text span ff="monospace" inherit>{live?.linkAddress || link?.permanentMac || 'no MAC'}</Text> · {live?.linkType ?? link?.kind} · MTU {live?.mtu ?? link?.mtu}</Text>
                 </Table.Td>
-                <Table.Td>{live ? <Badge color={stateColor[live.operState] ?? 'gray'}>{live.operState.toLowerCase()}</Badge> : <Badge color={state === 'Disabled' ? 'gray' : 'red'}>{state}</Badge>}</Table.Td>
-                <Table.Td>{live?.addresses.length ? live.addresses.map((address) => <Text key={`${address.address}/${address.prefixLength}`} ff="monospace" size="sm">{address.address}/{address.prefixLength}</Text>) : <Text c="dimmed">—</Text>}</Table.Td>
+                <Table.Td data-label="State">{live ? <Badge color={stateColor[live.operState] ?? 'gray'}>{live.operState.toLowerCase()}</Badge> : <Badge color={state === 'Disabled' ? 'gray' : 'red'}>{state}</Badge>}</Table.Td>
+                <Table.Td data-label="Addresses">{live?.addresses.length ? live.addresses.map((address) => <Text key={`${address.address}/${address.prefixLength}`} ff="monospace" size="sm">{address.address}/{address.prefixLength}</Text>) : <Text c="dimmed">—</Text>}</Table.Td>
                 {showSaved && (
                   <>
-                    <Table.Td>
+                    <Table.Td data-label="Saved configuration">
                       {link ? (
                         <>
                           <Group gap="xs"><Text fw={600}>{link.name}</Text>{segment && saved?.snapshot.value.management?.segment === segment.id && <Badge variant="light">Management</Badge>}{live && !link.enabled && <Badge color="gray" variant="light">Disabled</Badge>}</Group>
@@ -107,7 +107,7 @@ export function InterfacesScreen({ api, session, onSessionLost }: InterfacesScre
                       {conflict && <Badge color="red" variant="light">Conflict: several saved links</Badge>}
                       {finding && <Text size="sm" className="error-text">{finding}</Text>}
                     </Table.Td>
-                    <Table.Td>{segment ? <><Text size="sm">IPv4 {segment.addressing.ipv4.mode}</Text><Text size="sm">IPv6 {segment.addressing.ipv6.mode}</Text></> : <Text c="dimmed">—</Text>}</Table.Td>
+                    <Table.Td data-label="Addressing">{segment ? <><Text size="sm">IPv4 {segment.addressing.ipv4.mode}</Text><Text size="sm">IPv6 {segment.addressing.ipv6.mode}</Text></> : <Text c="dimmed">—</Text>}</Table.Td>
                   </>
                 )}
               </Table.Tr>

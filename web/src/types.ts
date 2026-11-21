@@ -150,6 +150,12 @@ export interface LinkStatus {
   addresses: Array<{ family: 'ipv4' | 'ipv6'; address: string; prefixLength: number; scope: string }>;
 }
 
+interface PrefixPlace { interface: string; subnetId: string; prefix: string | null }
+
+export interface PrefixView {
+  wans: Array<{ interface: string; current: { prefix: string } | null; segments: PrefixPlace[]; pools: PrefixPlace[]; notFitting: string[] }>;
+}
+
 export interface SavedLink {
   id: string;
   name: string;

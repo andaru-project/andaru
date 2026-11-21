@@ -106,9 +106,99 @@ body {
   }
 }
 
-@media (max-width: 36em) {
-  table {
-    min-width: 48rem;
+/* A branch of the navigation tree: its label opens and closes it and is not a page. */
+.nav-branch {
+  border-radius: var(--mantine-radius-default);
+  color: var(--mantine-color-dimmed);
+  font-weight: 700;
+}
+
+/* Widgets and other cards: as many columns as fit, one on a phone. min() lets that one column shrink below 20rem. */
+.widget-grid {
+  display: grid;
+  gap: var(--mantine-spacing-md);
+  grid-template-columns: repeat(auto-fill, minmax(min(20rem, 100%), 1fr));
+}
+
+/* A grid item is as wide as its longest word unless told otherwise, and an IPv6 address is one long word. */
+.widget-grid > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.plain-list {
+  display: grid;
+  gap: var(--mantine-spacing-sm);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Below 900px fingers do the pointing: every control is at least 44px tall. */
+@media (max-width: 56.24375em) {
+  .mantine-Button-root,
+  .mantine-NavLink-root,
+  .mantine-Burger-root,
+  .mantine-Input-input,
+  .mantine-Menu-item {
+    min-height: 2.75rem;
+  }
+}
+
+/* Below 600px a table row becomes a block, one labelled field per line. The header row stays for assistive
+   technology, out of sight. Dialogs take the whole screen. */
+@media (max-width: 37.4375em) {
+  .data-table thead {
+    clip-path: inset(50%);
+    height: 1px;
+    overflow: hidden;
+    position: absolute;
+    width: 1px;
+  }
+
+  .data-table,
+  .data-table tbody,
+  .data-table tr,
+  .data-table td {
+    display: block;
+  }
+
+  .data-table tr {
+    padding-block: var(--mantine-spacing-xs);
+  }
+
+  .data-table td {
+    border: 0;
+    padding-block: 0.25rem;
+  }
+
+  .data-table td[data-label]::before {
+    color: var(--mantine-color-dimmed);
+    content: attr(data-label);
+    display: block;
+    font-size: var(--mantine-font-size-xs);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  /* The mark alone names the product where the header has no room; the heading stays for assistive technology. */
+  .app-title {
+    clip-path: inset(50%);
+    height: 1px;
+    overflow: hidden;
+    position: absolute;
+    width: 1px;
+  }
+
+  .mantine-Modal-inner {
+    padding: 0;
+  }
+
+  .mantine-Modal-content {
+    border-radius: 0;
+    flex: 1;
+    max-height: none;
+    min-height: 100dvh;
   }
 }
 

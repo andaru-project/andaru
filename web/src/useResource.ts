@@ -30,3 +30,17 @@ export function useResource<T>(load: () => Promise<T>, onSessionLost: () => void
 
   return { ...state, reload };
 }
+
+// useVisiblePoll calls reload on a timer and when the tab becomes visible, and never while it is hidden.
+export function useVisiblePoll(reload: () => unknown, milliseconds: number, enabled = true) {
+  useEffect(() => {
+    if (!enabled) return;
+    const visible = () => { if (document.visibilityState === 'visible') void reload(); };
+    const timer = setInterval(visible, milliseconds);
+    document.addEventListener('visibilitychange', visible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', visible);
+    };
+  }, [enabled, milliseconds, reload]);
+}

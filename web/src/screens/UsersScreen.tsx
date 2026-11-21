@@ -83,15 +83,15 @@ export function UsersScreen({ api, session, onSessionLost }: UsersScreenProps) {
       {error && <Alert color="red" role="alert" title="User request failed">{error}</Alert>}
       {loading ? <Loader aria-label="Loading users" /> : users.length === 0 ? <Alert role="status">No users are visible.</Alert> : (
         <ScrollArea>
-          <Table striped highlightOnHover>
+          <Table className="data-table" striped highlightOnHover>
             <Table.Thead><Table.Tr><Table.Th>Account</Table.Th><Table.Th>Kind</Table.Th><Table.Th>Status</Table.Th><Table.Th>Roles</Table.Th>{(canManage || users.some((user) => user.id === session.account.id)) && <Table.Th>Actions</Table.Th>}</Table.Tr></Table.Thead>
             <Table.Tbody>{users.map((user) => (
               <Table.Tr key={user.id}>
-                <Table.Td><Text fw={600}>{user.displayName || user.login}</Text><Text c="dimmed" size="sm">{user.login}</Text></Table.Td>
-                <Table.Td>{user.kind === 'service' ? 'Service' : 'Human'}</Table.Td>
-                <Table.Td><Badge color={user.enabled ? 'green' : 'gray'}>{user.enabled ? 'Enabled' : 'Disabled'}</Badge></Table.Td>
-                <Table.Td>{user.roleIds.map((id) => roles.find((role) => role.id === id)?.name ?? `${id} (missing)`).join(', ') || 'None'}</Table.Td>
-                {(canManage || user.id === session.account.id) && <Table.Td><Group gap="xs" wrap="nowrap">{canManage && <Button aria-label={`Edit ${user.login}`} size="xs" variant="default" onClick={() => setEditing(user)}>Edit</Button>}{user.kind === 'human' && <Button aria-label={`Reset password for ${user.login}`} size="xs" variant="default" onClick={() => setPasswordUser(user)}>Password</Button>}{canManage && <Button aria-label={`Delete ${user.login}`} color="red" size="xs" variant="subtle" onClick={() => setDeleting(user)}>Delete</Button>}</Group></Table.Td>}
+                <Table.Td data-label="Account"><Text fw={600}>{user.displayName || user.login}</Text><Text c="dimmed" size="sm">{user.login}</Text></Table.Td>
+                <Table.Td data-label="Kind">{user.kind === 'service' ? 'Service' : 'Human'}</Table.Td>
+                <Table.Td data-label="Status"><Badge color={user.enabled ? 'green' : 'gray'}>{user.enabled ? 'Enabled' : 'Disabled'}</Badge></Table.Td>
+                <Table.Td data-label="Roles">{user.roleIds.map((id) => roles.find((role) => role.id === id)?.name ?? `${id} (missing)`).join(', ') || 'None'}</Table.Td>
+                {(canManage || user.id === session.account.id) && <Table.Td data-label="Actions"><Group gap="xs" wrap="nowrap">{canManage && <Button aria-label={`Edit ${user.login}`} size="xs" variant="default" onClick={() => setEditing(user)}>Edit</Button>}{user.kind === 'human' && <Button aria-label={`Reset password for ${user.login}`} size="xs" variant="default" onClick={() => setPasswordUser(user)}>Password</Button>}{canManage && <Button aria-label={`Delete ${user.login}`} color="red" size="xs" variant="subtle" onClick={() => setDeleting(user)}>Delete</Button>}</Group></Table.Td>}
               </Table.Tr>
             ))}</Table.Tbody>
           </Table>

@@ -177,9 +177,9 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
                       <ScrollArea><Table withTableBorder className="data-table"><Table.Thead><Table.Tr><Table.Th>Field</Table.Th><Table.Th>Live</Table.Th><Table.Th>Saved</Table.Th></Table.Tr></Table.Thead><Table.Tbody>
                         {fieldChanges(item.before, item.after).map((change) => (
                           <Table.Tr key={change.field}>
-                            <Table.Td><Text ff="monospace" size="sm">{change.field || 'value'}</Text></Table.Td>
-                            <Table.Td>{change.before === undefined ? <Text c="dimmed" size="sm">Not set</Text> : <Code className="diff-old">{compact(change.before)}</Code>}</Table.Td>
-                            <Table.Td>{change.after === undefined ? <Text c="dimmed" size="sm">Not set</Text> : <Code className="diff-new">{compact(change.after)}</Code>}</Table.Td>
+                            <Table.Td data-label="Field"><Text ff="monospace" size="sm">{change.field || 'value'}</Text></Table.Td>
+                            <Table.Td data-label="Live">{change.before === undefined ? <Text c="dimmed" size="sm">Not set</Text> : <Code className="diff-old">{compact(change.before)}</Code>}</Table.Td>
+                            <Table.Td data-label="Saved">{change.after === undefined ? <Text c="dimmed" size="sm">Not set</Text> : <Code className="diff-new">{compact(change.after)}</Code>}</Table.Td>
                           </Table.Tr>
                         ))}
                       </Table.Tbody></Table></ScrollArea>
@@ -214,8 +214,8 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
       <Paper withBorder p="md">
         <Title order={3} size="h4" mb="sm">History</Title>
         {state.applies.items.length === 0 ? <Text>No apply yet.</Text> : (
-          <ScrollArea><Table striped aria-label="Apply history"><Table.Thead><Table.Tr><Table.Th>Apply</Table.Th><Table.Th>State</Table.Th><Table.Th>Saved version</Table.Th><Table.Th>Time</Table.Th><Table.Th>Reason</Table.Th></Table.Tr></Table.Thead><Table.Tbody>
-            {state.applies.items.slice(0, 20).map((item) => <Table.Tr key={item.id}><Table.Td>{item.id}</Table.Td><Table.Td>{stateLabels[item.state]}</Table.Td><Table.Td>{item.savedVersion}</Table.Td><Table.Td>{new Date(item.createdAt).toLocaleString()}</Table.Td><Table.Td>{item.reason || '—'}</Table.Td></Table.Tr>)}
+          <ScrollArea><Table className="data-table" striped aria-label="Apply history"><Table.Thead><Table.Tr><Table.Th>Apply</Table.Th><Table.Th>State</Table.Th><Table.Th>Saved version</Table.Th><Table.Th>Time</Table.Th><Table.Th>Reason</Table.Th></Table.Tr></Table.Thead><Table.Tbody>
+            {state.applies.items.slice(0, 20).map((item) => <Table.Tr key={item.id}><Table.Td data-label="Apply">{item.id}</Table.Td><Table.Td data-label="State">{stateLabels[item.state]}</Table.Td><Table.Td data-label="Saved version">{item.savedVersion}</Table.Td><Table.Td data-label="Time">{new Date(item.createdAt).toLocaleString()}</Table.Td><Table.Td data-label="Reason">{item.reason || '—'}</Table.Td></Table.Tr>)}
           </Table.Tbody></Table></ScrollArea>
         )}
       </Paper>
