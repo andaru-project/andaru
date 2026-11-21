@@ -120,8 +120,8 @@ it('opens a closed branch when a link inside the session leads into it, and Spac
   await userEvent.keyboard(' ');
   expect(network).toHaveAttribute('aria-expanded', 'false');
 
-  // The Interfaces widget's title leads into the closed branch.
-  await userEvent.click(screen.getByRole('link', { name: 'Interfaces' }));
+  // The Interfaces widget's link leads into the closed branch.
+  await userEvent.click(screen.getByRole('link', { name: 'Open Interfaces' }));
   expect(await screen.findByRole('heading', { name: 'Interfaces', level: 2 })).toBeInTheDocument();
   expect(network).toHaveAttribute('aria-expanded', 'true');
 });

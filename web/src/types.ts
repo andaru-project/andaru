@@ -203,6 +203,9 @@ export interface PrefixView {
 // The badge colour of a link's operational state; any other state is grey.
 export const stateColor: Record<string, string> = { UP: 'green', DOWN: 'red', LOWERLAYERDOWN: 'red' };
 
+// stateLabel is a link's operational state in words: the kernel's own, but for the one it runs together.
+export const stateLabel = (operState: string) => operState === 'LOWERLAYERDOWN' ? 'lower layer down' : operState.toLowerCase();
+
 export interface SavedLink {
   id: string;
   name: string;

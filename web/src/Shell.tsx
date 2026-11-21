@@ -131,7 +131,8 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
             <Burger className="nav-burger" color="white" opened={opened} onClick={toggle} size="sm" aria-label={opened ? 'Close navigation' : 'Open navigation'} />
             <Image src={mark} alt="" w={28} h={28} />
             <Title className="app-title" order={1} size="h3">Andaru</Title>
-            {system.data && <Text className="app-box" size="sm">{[system.data.info.hostname, system.data.info.version].filter(Boolean).join(' · ')}</Text>}
+            {/* The host name stays at every width: on a phone it is what says which firewall this is. */}
+            {system.data && <Text className="app-box" size="sm">{system.data.info.hostname}<span className="app-version">{system.data.info.hostname && ' · '}{system.data.info.version}</span></Text>}
           </Group>
           <Group className="app-session" gap="sm" wrap="nowrap">
             <Badge color={connected ? 'green' : 'red'} role="status">{connected ? 'Connected' : 'Connection lost'}</Badge>

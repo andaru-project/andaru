@@ -193,6 +193,17 @@ body {
   white-space: nowrap;
 }
 
+/* An address breaks only where it has a break written into it: the widgets around it break anywhere. */
+.address {
+  overflow-wrap: normal;
+  word-break: keep-all;
+}
+
+/* A state is a word or two: it is never cut short to fit its column. */
+.data-table td[data-label="State"] .mantine-Badge-root {
+  min-width: max-content;
+}
+
 .plain-list {
   display: grid;
   gap: var(--mantine-spacing-sm);
@@ -256,6 +267,13 @@ path.traffic-sent {
 
 :root[data-mantine-color-scheme="dark"] .traffic-graph path.traffic-area {
   fill: var(--traffic-line-dark, var(--mantine-primary-color-4));
+}
+
+/* Half the scale, as a faint line across the graph. */
+.traffic-mid {
+  stroke: var(--mantine-color-default-border);
+  stroke-dasharray: 2 4;
+  vector-effect: non-scaling-stroke;
 }
 
 .traffic-key {
@@ -340,7 +358,7 @@ path.traffic-sent {
   /* The table's header row stays for assistive technology, out of sight. So does the product's name, where the
      header has no room: the mark alone carries it. */
   .data-table thead,
-  .app-box,
+  .app-version,
   .app-title {
     clip-path: inset(50%);
     height: 1px;

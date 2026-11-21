@@ -45,7 +45,7 @@ it('shows a graph for each interface, top to bottom, with its zone and its figur
   expect(row('ens18', 'Upload')).toEqual(['1.0 Mbps', '1.0 Mbps', '1.0 Mbps']);
   expect(row('ens19', 'Download')).toEqual(['1.0 kbps', '1.0 kbps', '1.0 kbps']);
   // The scale and the span are labels on the graph, not a sentence.
-  expect(within(graph('ens18')).getByText('0 – 4.0 Mbps')).toBeInTheDocument();
+  expect(within(graph('ens18')).getByText('0 – 5.0 Mbps')).toBeInTheDocument();
   expect(within(graph('ens18')).getByText('−1 h')).toBeInTheDocument();
   expect(within(graph('ens18')).getByText('now')).toBeInTheDocument();
 });
@@ -58,9 +58,9 @@ it('draws the rates where they belong: later to the right, faster higher, downlo
   // The newest reading is at the right edge, and each point is right of the one before.
   expect(download[2][0]).toBe(500);
   expect(download[0][0]).toBeLessThan(download[1][0]);
-  // Download rises to the top of the graph; upload stays level, lower than the peak.
+  // Download rises to its peak, 4 Mbps on a scale of 5: four fifths of the way up. Upload stays level, lower.
   expect(download[0][1]).toBeGreaterThan(download[1][1]);
-  expect(download[2][1]).toBe(2);
+  expect(download[2][1]).toBeCloseTo(41.2);
   expect(new Set(upload.map(([, y]) => y)).size).toBe(1);
   expect(upload[0][1]).toBeGreaterThan(download[2][1]);
 });
@@ -96,15 +96,19 @@ it('reads out the point under the pointer, a finger or the arrow keys: its time 
 
   // A pointer at the right edge is on the newest point; leaving lets go.
   frame.getBoundingClientRect = () => DOMRect.fromRect({ x: 0, y: 0, width: 500, height: 200 });
-  fireEvent.pointerMove(frame, { clientX: 500 });
+  fireEvent.pointerMove(frame, { clientX: 500, pointerType: 'mouse' });
   expect(readout()).toMatch(/↓ 4\.0 Mbps/);
   // The hour is 500 wide here: 7 seconds left of the edge is nearer the reading before.
-  fireEvent.pointerMove(frame, { clientX: 499 });
-  expect(readout()).toMatch(/↓ 2\.0 Mbps/);
-  // A finger leaves as it lifts: its mark stays. A mouse lets go on leaving.
-  fireEvent.pointerLeave(frame, { pointerType: 'touch' });
+  fireEvent.pointerMove(frame, { clientX: 499, pointerType: 'mouse' });
   expect(readout()).toMatch(/↓ 2\.0 Mbps/);
   fireEvent.pointerLeave(frame, { pointerType: 'mouse' });
+  expect(readout()).toBe('−1 hnow');
+  // A finger leaves as it lifts: its mark stays. A touch that becomes a scroll is cancelled: its mark goes.
+  fireEvent.pointerDown(frame, { clientX: 500, pointerType: 'touch' });
+  fireEvent.pointerLeave(frame, { pointerType: 'touch' });
+  expect(readout()).toMatch(/↓ 4\.0 Mbps/);
+  fireEvent.pointerDown(frame, { clientX: 499, pointerType: 'touch' });
+  fireEvent.pointerCancel(frame, { pointerType: 'touch' });
   expect(readout()).toBe('−1 hnow');
 });
 
