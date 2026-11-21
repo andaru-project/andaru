@@ -790,6 +790,17 @@ umount"
       When call pool_default 192.168.1.150/24
       The output should equal ''
     End
+    Parameters
+      192.168.1.99/24 '192.168.1.100 192.168.1.199'
+      192.168.1.100/24 ''
+      192.168.1.199/24 ''
+      192.168.1.200/24 '192.168.1.100 192.168.1.199'
+      192.168.1.1/32 ''
+    End
+    It "handles the pool's edges: $1"
+      When call pool_default "$1"
+      The output should equal "$2"
+    End
   End
 
   Describe 'the summary'
@@ -804,31 +815,46 @@ umount"
       The output should include 'SSH key: none'
       The output should not include 'SSH key: none '
     End
+    It 'says when DNS is not answered, and names the key with its comment'
+      DISK=/dev/sda M_NIC=enp1s0 M_MAC=52:54:00:aa:bb:01 M4_MODE=static M4_ADDR=192.168.1.1/24 M6_MODE=none SERVE_DNS=false
+      KEY_TYPE=ssh-ed25519 KEY_COMMENT=admin@laptop
+      When call summary
+      The output should include '  DNS not answered'
+      The output should include 'WAN: none yet'
+      The output should include 'SSH key: ssh-ed25519 admin@laptop'
+    End
+    It 'reviews in a scrolling box, so a long summary stays readable'
+      ui() { echo "$@" >"$SHELLSPEC_TMPBASE/review-args"; return 1; }
+      DISK=/dev/sda M_NIC=enp1s0 M_MAC=52:54:00:aa:bb:01 M4_MODE=none M6_MODE=none
+      When call review
+      The status should equal 1
+      The contents of file "$SHELLSPEC_TMPBASE/review-args" should start with '--scrolltext --yesno'
+    End
   End
 
-  Describe 'the reboot'
-    setup() { work=$(mktemp -d); SYSRQ=$work/sysrq; DISK=/dev/sda; }
+  Describe 'the end of an install'
+    setup() { work=$(mktemp -d); DISK=/dev/sda; }
     cleanup() { rm -rf "$work"; }
     BeforeEach 'setup'
     AfterEach 'cleanup'
     questions() { return 0; }
     write_install() { return 0; }
     clear() { :; }
-    sync() { echo synced; }
-    It 'reboots through the sysrq trigger once Enter is pressed, running nothing after it'
+    # Never the real one: the specs run as root on the test host.
+    systemctl() { echo "systemctl $*"; }
+    It 'powers off once Enter is pressed, so the medium comes out with the box off'
       Data
         #|
       End
       When run session
       The status should equal 0
-      The output should include synced
-      The contents of file "$work/sysrq" should equal b
+      The output should include 'Press Enter to power off; then remove the install medium'
+      The output should include 'systemctl poweroff'
     End
-    It 'does not reboot at the end of input'
+    It 'does not power off at the end of input'
       When run session </dev/null
       The status should equal 0
-      The output should include synced
-      The path "$work/sysrq" should not be exist
+      The output should not include systemctl
     End
   End
 End
