@@ -239,10 +239,8 @@ func serveWebUnix(ctx context.Context, web WebSocketOptions, handler http.Handle
 		}
 		return errors.New("web engine socket parent must be a root-owned 0710 directory with the configured group, not a symlink")
 	}
-	if _, err = os.Lstat(socketPath); err == nil {
-		return errors.New("web engine socket path already exists; investigate it rather than replacing it")
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("inspect web engine socket path: %w", err)
+	if err = removeStaleSocket(socketPath); err != nil {
+		return err
 	}
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
 	if err != nil {
@@ -388,4 +386,33 @@ func webGroupHint(err error, gid uint32) error {
 		return fmt.Errorf("%w (the engine must be a member of group %d: SupplementaryGroups=andaru-web in its unit)", err, gid)
 	}
 	return err
+}
+
+// removeStaleSocket clears a web socket a killed engine left behind: systemd restarts the engine, but the socket's
+// directory comes from tmpfiles.d, so nothing else removes it. Only a root-owned socket nothing listens on goes;
+// anything else at the path is left for an administrator.
+func removeStaleSocket(path string) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect web engine socket path: %w", err)
+	}
+	if info.Mode()&os.ModeSocket == 0 || !securefs.RootOwned(info) {
+		return errors.New("web engine socket path already exists and is not a root-owned socket; investigate it rather than replacing it")
+	}
+	connection, err := net.DialTimeout("unix", path, time.Second)
+	if err == nil {
+		_ = connection.Close()
+		return errors.New("web engine socket path already exists and something listens on it; is another engine running?")
+	}
+	if !errors.Is(err, syscall.ECONNREFUSED) {
+		return fmt.Errorf("probe existing web engine socket: %w", err)
+	}
+	slog.Warn("removing the web socket a previous engine left behind", "path", path)
+	if err = os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove stale web engine socket: %w", err)
+	}
+	return nil
 }

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -116,4 +117,81 @@ func waitForUnixSocket(t *testing.T, path string) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+func TestWebSocketReplacesOnlyADeadLeftover(t *testing.T) {
+	requireRoot(t)
+	serve := func(ctx context.Context, path string) <-chan error {
+		done := make(chan error, 1)
+		go func() {
+			done <- serveWebUnix(ctx, WebSocketOptions{SocketPath: path, UID: 0, GID: 0}, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			}))
+		}()
+		return done
+	}
+
+	t.Run("a killed engine's socket is replaced", func(t *testing.T) {
+		path := filepath.Join(shortPrivateDir(t), "andaru-web", "engine.sock")
+		if err := os.Mkdir(filepath.Dir(path), 0710); err != nil {
+			t.Fatal(err)
+		}
+		// A listener closed without unlinking leaves what a SIGKILL leaves: a socket file nothing answers.
+		dead, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		dead.SetUnlinkOnClose(false)
+		dead.Close()
+		ctx, cancel := context.WithCancel(context.Background())
+		done := serve(ctx, path)
+		// The path exists from the start, so wait for an answer, not for the file.
+		var response *http.Response
+		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+			if response, err = unixTestClient(path).Get("http://unix/test"); err == nil || time.Now().After(deadline) {
+				break
+			}
+		}
+		if err != nil || response.StatusCode != http.StatusNoContent {
+			t.Fatalf("engine did not serve over the replaced socket: response=%v err=%v", response, err)
+		}
+		response.Body.Close()
+		cancel()
+		if err = <-done; err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("a socket something listens on is refused", func(t *testing.T) {
+		path := filepath.Join(shortPrivateDir(t), "andaru-web", "engine.sock")
+		if err := os.Mkdir(filepath.Dir(path), 0710); err != nil {
+			t.Fatal(err)
+		}
+		other, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer other.Close()
+		err = <-serve(context.Background(), path)
+		if err == nil || !strings.Contains(err.Error(), "something listens on it") {
+			t.Fatalf("a live socket was not refused: %v", err)
+		}
+		if _, statErr := os.Lstat(path); statErr != nil {
+			t.Fatalf("the live socket was removed: %v", statErr)
+		}
+	})
+
+	t.Run("a file that is not a socket is refused", func(t *testing.T) {
+		path := filepath.Join(shortPrivateDir(t), "andaru-web", "engine.sock")
+		if err := os.Mkdir(filepath.Dir(path), 0710); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+		err := <-serve(context.Background(), path)
+		if err == nil || !strings.Contains(err.Error(), "not a root-owned socket") {
+			t.Fatalf("a plain file was not refused: %v", err)
+		}
+	})
 }
