@@ -134,7 +134,7 @@ func TestConfigurationHTTPContract(t *testing.T) {
 		"/api/v1/users/{id}/password": {"put"}, "/api/v1/tokens": {"get", "head", "post"},
 		"/api/v1/tokens/{selector}": {"delete"}, "/api/v1/audit/events": {"get", "head"},
 		"/api/v1/audit/export": {"get", "head"},
-		"/api/v1/session":      {"get", "post", "delete"}, "/api/v1/sessions": {"get"},
+		"/api/v1/session":      {"get", "post", "delete"}, "/api/v1/sessions": {"get"}, "/api/v1/session/preferences": {"get", "put"},
 		"/api/v1/sessions/{id}": {"delete"}, "/api/v1/startup-status": {"get", "head"},
 	}
 	if len(document.Paths) != len(expected) {

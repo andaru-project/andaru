@@ -25,40 +25,7 @@ func TestLiveAuthorizationUsesPointersLiveNotSavedHead(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	firstChange, err := config.ObjectChange("create", "roles", "", nil, []byte(`{"name":"Live operator","capabilities":["configuration.confirm"]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	first, err := store.Save(ctx, authz.Actor{Kind: authz.ActorSystem, ID: "root"}, firstChange)
-	if err != nil {
-		t.Fatal(err)
-	}
-	liveInput, err := store.RealizationInput(ctx, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	id, err := generation.Create(generation.Dir(stateDir), generation.Manifest{
-		SavedVersion: string(first.SavedVersion), AuthorizationDigest: liveInput.Authorization.Digest,
-		IdentityRevision: 1, ConfirmTimeoutSeconds: 120,
-	}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Pointers as v0.5.0-a.1 writes them, with the obsolete takeover key: they must still load.
-	if err = os.WriteFile(filepath.Join(generation.Dir(stateDir), "pointers.json"), fmt.Appendf(nil, `{"confirmed":%d,"lastKnownGood":null,"pending":null,"live":%d,"takeover":false}`, id, id), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	lock, err := authz.Acquire(ctx, stateDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	state, err := lock.Advance(liveInput.Authorization.Digest)
-	if closeErr := lock.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
+	liveInput, state := liveGenerationFixture(t, ctx, stateDir, store)
 
 	secondChange, err := config.ObjectChange("create", "roles", "", nil, []byte(`{"name":"Saved only","capabilities":["users.manage"]}`))
 	if err != nil {
@@ -84,4 +51,45 @@ func TestLiveAuthorizationUsesPointersLiveNotSavedHead(t *testing.T) {
 			t.Fatal("saved-head role leaked into live role API")
 		}
 	}
+}
+
+// liveGenerationFixture saves one role, makes it the live generation and advances the authorization epoch to it:
+// what a session needs to take its authorization from. It returns the live input and the authorization state.
+func liveGenerationFixture(t *testing.T, ctx context.Context, stateDir string, store *config.Store) (config.RealizationInput, authz.State) {
+	t.Helper()
+	change, err := config.ObjectChange("create", "roles", "", nil, []byte(`{"name":"Live operator","capabilities":["configuration.confirm"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := store.Save(ctx, authz.Actor{Kind: authz.ActorSystem, ID: "root"}, change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveInput, err := store.RealizationInput(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := generation.Create(generation.Dir(stateDir), generation.Manifest{
+		SavedVersion: string(saved.SavedVersion), AuthorizationDigest: liveInput.Authorization.Digest,
+		IdentityRevision: 1, ConfirmTimeoutSeconds: 120,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Pointers as v0.5.0-a.1 writes them, with the obsolete takeover key: they must still load.
+	if err = os.WriteFile(filepath.Join(generation.Dir(stateDir), "pointers.json"), fmt.Appendf(nil, `{"confirmed":%d,"lastKnownGood":null,"pending":null,"live":%d,"takeover":false}`, id, id), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := authz.Acquire(ctx, stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := lock.Advance(liveInput.Authorization.Digest)
+	if closeErr := lock.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return liveInput, state
 }

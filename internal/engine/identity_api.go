@@ -481,6 +481,7 @@ func (h *identityAPI) deleteUser(w http.ResponseWriter, r *http.Request, id stri
 		return id, nil, h.identities.DeleteAccount(ctx, id, revision)
 	})
 	if ok {
+		removePreferences(h.coordinator.stateDir, id)
 		writeOperationResult(w, r, execution, http.StatusOK, id)
 	}
 }
