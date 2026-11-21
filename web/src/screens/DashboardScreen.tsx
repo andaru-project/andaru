@@ -3,21 +3,19 @@ import { useCallback, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import type { ApiClient } from '../api';
 import { clock, pendingNotice, useCountdown, type ChangeState } from '../changes';
-import type { Session } from '../types';
+import { stateColor, type Session } from '../types';
 import { useResource, useVisiblePoll, type Resource } from '../useResource';
 
 interface DashboardScreenProps {
   api: ApiClient;
   session: Session;
-  changes: ChangeState | undefined;
-  changesError: string;
+  changes: Resource<ChangeState | undefined>;
   onSessionLost(): void;
 }
 
 interface WidgetProps { api: ApiClient; onSessionLost(): void }
 
 const pollMilliseconds = 10_000;
-const stateColor: Record<string, string> = { UP: 'green', DOWN: 'red', LOWERLAYERDOWN: 'red' };
 
 function Widget({ id, title, to, children }: { id: string; title: string; to: string; children: ReactNode }) {
   return (
@@ -40,14 +38,14 @@ function Loaded<T>({ resource, what, children }: { resource: Resource<T>; what: 
 
 function usePolled<T>(load: () => Promise<T>, onSessionLost: () => void) {
   const resource = useResource(load, onSessionLost);
-  useVisiblePoll(resource.reload, pollMilliseconds);
+  useVisiblePoll(resource.refresh, pollMilliseconds);
   return resource;
 }
 
-function ChangesWidget({ state, error }: { state: ChangeState | undefined; error: string }) {
-  const notice = state ? pendingNotice(state) : null;
+// The shell polls the change state for its notice; the widget shows the same reading.
+function ChangesText({ state }: { state: ChangeState }) {
+  const notice = pendingNotice(state);
   const remaining = useCountdown(notice?.kind === 'awaiting' ? notice.apply.deadline : undefined);
-  if (!state) return error ? <Text className="error-text" size="sm" role="alert">{error}</Text> : <Loader size="sm" aria-label="Loading changes" />;
   if (!notice) return <Text>Nothing is pending: the saved configuration is the one that runs.</Text>;
   if (notice.kind === 'unapplied') return <Text>Saved changes are not applied yet.</Text>;
   if (notice.kind === 'activating') return <Text>Applying saved version {notice.apply.savedVersion}…</Text>;
@@ -89,7 +87,8 @@ function PrefixesWidget({ api, onSessionLost }: WidgetProps) {
             {wans.map((wan) => (
               <li key={wan.interface}>
                 <Group gap="xs"><Text ff="monospace" fw={600}>{wan.interface}</Text>{wan.current ? <Text ff="monospace">{wan.current.prefix}</Text> : <Badge color="red">no prefix held</Badge>}</Group>
-                {[...wan.segments, ...wan.pools].filter((place) => place.prefix).map((place) => <Text key={`${place.interface} ${place.subnetId}`} ff="monospace" size="sm">{place.prefix} on {place.interface}</Text>)}
+                {/* A segment's subnet ID and a pool's are separate number spaces, so the prefix is the key. */}
+                {[...wan.segments, ...wan.pools].filter((place) => place.prefix).map((place) => <Text key={place.prefix} ff="monospace" size="sm">{place.prefix} on {place.interface}</Text>)}
                 {wan.notFitting.length > 0 && <Text className="error-text" size="sm">No room for: {wan.notFitting.join(', ')}</Text>}
               </li>
             ))}
@@ -100,33 +99,11 @@ function PrefixesWidget({ api, onSessionLost }: WidgetProps) {
   );
 }
 
-function ActivityWidget({ api, onSessionLost }: WidgetProps) {
-  const resource = usePolled(useCallback(() => api.listAudit(), [api]), onSessionLost);
-  return (
-    <Loaded resource={resource} what="recent activity">
-      {({ items }) => {
-        if (items.length === 0) return <Text c="dimmed">No audit events are visible.</Text>;
-        return (
-          <ul className="plain-list">
-            {items.slice(0, 5).map((event) => (
-              <li key={event.id}>
-                <Text fw={600} size="sm">{event.action} <Text span fw={400} inherit>({event.result})</Text></Text>
-                <Text c="dimmed" size="sm">{new Date(event.at).toLocaleString()} · {event.actor.kind}:{event.actor.id}</Text>
-              </li>
-            ))}
-          </ul>
-        );
-      }}
-    </Loaded>
-  );
-}
-
-export function DashboardScreen({ api, session, changes, changesError, onSessionLost }: DashboardScreenProps) {
+export function DashboardScreen({ api, session, changes, onSessionLost }: DashboardScreenProps) {
   const widgets = [
-    { id: 'changes', title: 'Changes', to: '/changes', capability: 'configuration.read', body: <ChangesWidget state={changes} error={changesError} /> },
+    { id: 'changes', title: 'Changes', to: '/changes', capability: 'configuration.read', body: <Loaded resource={changes} what="changes">{(state) => state && <ChangesText state={state} />}</Loaded> },
     { id: 'interfaces', title: 'Interfaces', to: '/network/interfaces', capability: 'status.read', body: <InterfacesWidget api={api} onSessionLost={onSessionLost} /> },
     { id: 'prefixes', title: 'IPv6 prefixes', to: '/network/interfaces', capability: 'status.read', body: <PrefixesWidget api={api} onSessionLost={onSessionLost} /> },
-    { id: 'activity', title: 'Recent activity', to: '/system/audit', capability: 'audit.read', body: <ActivityWidget api={api} onSessionLost={onSessionLost} /> },
   ].filter((widget) => session.capabilities.includes(widget.capability));
 
   return (

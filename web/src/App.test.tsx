@@ -19,6 +19,7 @@ it('shows a session-expiry state instead of leaving stale privileged controls', 
     jsonResponse(200, session(['audit.read'])),
     jsonResponse(401, { error: { code: 'SESSION_EXPIRED', message: 'Sign in again.', details: [] } }),
   );
+  window.history.pushState({}, '', '/system/audit');
   render(<App />);
 
   expect(await screen.findByRole('alert')).toHaveTextContent('Your session expired');
@@ -104,6 +105,25 @@ it('keeps a closed branch closed across visits, and opens the branch of the page
   render(<App />);
   expect(await screen.findByRole('button', { name: 'System' })).toHaveAttribute('aria-expanded', 'true');
   expect(await screen.findByRole('heading', { name: 'Security audit' })).toBeInTheDocument();
+});
+
+it('opens a closed branch when a link inside the session leads into it, and Space toggles a branch', async () => {
+  fetchRoutes({
+    '/api/v1/session': session(['status.read', 'audit.read']),
+    '/api/v1/status/links': { items: [] },
+    '/api/v1/status/prefixes': { wans: [] },
+    '/api/v1/audit/events': { items: [] },
+  });
+  render(<App />);
+  const network = await screen.findByRole('button', { name: 'Network' });
+  network.focus();
+  await userEvent.keyboard(' ');
+  expect(network).toHaveAttribute('aria-expanded', 'false');
+
+  // The Interfaces widget's title leads into the closed branch.
+  await userEvent.click(screen.getByRole('link', { name: 'Interfaces' }));
+  expect(await screen.findByRole('heading', { name: 'Interfaces', level: 2 })).toBeInTheDocument();
+  expect(network).toHaveAttribute('aria-expanded', 'true');
 });
 
 it('marks the connection lost when a request gets no response', async () => {

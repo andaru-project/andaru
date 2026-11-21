@@ -33,7 +33,7 @@ const closedKey = 'andaru.nav.closed';
 function storedClosed(): string[] {
   try {
     const value: unknown = JSON.parse(localStorage.getItem(closedKey) ?? '[]');
-    return Array.isArray(value) ? value.filter((item) => typeof item === 'string') : [];
+    return Array.isArray(value) ? value.filter((item) => typeof item === 'string') as string[] : [];
   } catch {
     return [];
   }
@@ -53,7 +53,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   const changes = useResource(loadChanges, onSessionLost);
   const reloadChanges = changes.reload;
 
-  useVisiblePoll(reloadChanges, pollMilliseconds, canReadChanges);
+  useVisiblePoll(changes.refresh, pollMilliseconds, canReadChanges);
 
   // When the API answers again, show what the server says rather than what was last seen.
   const wasConnected = useRef(connected);
@@ -77,12 +77,16 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   ].map((group) => ({ ...group, items: group.items.filter((item) => item.visible) })).filter((group) => group.items.length > 0);
   const visible = new Set(groups.flatMap((group) => group.items.map((item) => item.to)));
 
+  // Closed branches, as this visit has them. Opening the branch of the page one lands on is a change like a click,
+  // so both are stored the same way; labels this account does not have are dropped.
   const [closed, setClosed] = useState(storedClosed);
-  function toggleBranch(label: string) {
-    const next = closed.includes(label) ? closed.filter((item) => item !== label) : [...closed, label];
-    setClosed(next);
-    try { localStorage.setItem(closedKey, JSON.stringify(next)); } catch { /* the tree still works for this visit */ }
-  }
+  const labels = groups.map((group) => group.label).join('\n');
+  useEffect(() => {
+    try {
+      localStorage.setItem(closedKey, JSON.stringify(closed.filter((label) => labels.split('\n').includes(label))));
+    } catch { /* the tree still works for this visit */ }
+  }, [closed, labels]);
+  const toggleBranch = (label: string) => setClosed(closed.includes(label) ? closed.filter((item) => item !== label) : [...closed, label]);
   // The branch that holds the current page is open, however the page was reached.
   const currentBranch = groups.find((group) => group.items.some((item) => item.to === pathname))?.label;
   const [seenPath, setSeenPath] = useState('');
@@ -90,6 +94,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
     setSeenPath(pathname);
     if (currentBranch && closed.includes(currentBranch)) setClosed(closed.filter((item) => item !== currentBranch));
   }
+  const pageLink = (to: string, label: string) => <NavLink className="nav-item" key={to} component={Link} to={to} label={label} active={pathname === to} aria-current={pathname === to ? 'page' : undefined} onClick={close} />;
 
   async function changePassword() {
     setAccountError('');
@@ -132,12 +137,12 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
         </Group>
       </AppShell.Header>
       <AppShell.Navbar className="app-navbar" p="xs" component="nav" aria-label="Main navigation">
-        <NavLink className="nav-item" component={Link} to="/" label="Dashboard" active={pathname === '/'} aria-current={pathname === '/' ? 'page' : undefined} onClick={close} />
+        {pageLink('/', 'Dashboard')}
         {groups.map((group) => (
           // A branch label is not a page. NavLink renders an anchor by default, and an anchor without an address
-          // takes no keyboard focus, so the label is a button.
-          <NavLink className="nav-branch" key={group.label} component="button" type="button" label={group.label} opened={!closed.includes(group.label)} aria-expanded={!closed.includes(group.label)} onClick={() => toggleBranch(group.label)}>
-            {group.items.map((item) => <NavLink className="nav-item" key={item.to} component={Link} to={item.to} label={item.label} active={pathname === item.to} aria-current={pathname === item.to ? 'page' : undefined} onClick={close} />)}
+          // takes no keyboard focus, so the label is a button. onChange, not onClick: Space reaches only that.
+          <NavLink className="nav-branch" key={group.label} component="button" type="button" label={group.label} opened={!closed.includes(group.label)} onChange={() => toggleBranch(group.label)}>
+            {group.items.map((item) => pageLink(item.to, item.label))}
           </NavLink>
         ))}
       </AppShell.Navbar>
@@ -148,7 +153,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
           {/* Review and apply owns these controls on its own page. */}
           {!onChangesPage && <PendingNotice api={api} session={session} state={changes.data} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />}
           <Routes>
-            <Route path="/" element={<DashboardScreen api={api} session={session} changes={changes.data} changesError={changes.error} onSessionLost={onSessionLost} />} />
+            <Route path="/" element={<DashboardScreen api={api} session={session} changes={changes} onSessionLost={onSessionLost} />} />
             {pages.filter(([path]) => visible.has(path)).map(([path, element]) => <Route key={path} path={path} element={element} />)}
             <Route path="/system/session" element={<SessionScreen session={session} />} />
             <Route path="*" element={<Navigate to="/" replace />} />

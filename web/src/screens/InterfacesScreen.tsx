@@ -1,7 +1,7 @@
 import { Alert, Badge, Group, Loader, ScrollArea, Stack, Table, Text, Title } from '@mantine/core';
 import { useCallback } from 'react';
 import { ApiClient, reportError } from '../api';
-import type { Finding, LinkStatus, Preview, SavedLink, Segment, Session, Snapshot } from '../types';
+import { stateColor, type Finding, type LinkStatus, type Preview, type SavedLink, type Segment, type Session, type Snapshot } from '../types';
 import { useResource } from '../useResource';
 
 interface InterfacesScreenProps { api: ApiClient; session: Session; onSessionLost(): void }
@@ -18,8 +18,6 @@ function kernelName(link: SavedLink, resolved: Map<string, string>) {
 // These findings mean the renderer will not put the link on any device, whatever its name matches.
 const bindingCode = /^(HARDWARE_|NAME_COLLISION$|DEPENDENCY_UNAVAILABLE$)/;
 const unboundLabel: Record<string, string> = { HARDWARE_MISSING: 'Missing', HARDWARE_AMBIGUOUS: 'Unresolved' };
-
-const stateColor: Record<string, string> = { UP: 'green', DOWN: 'red', LOWERLAYERDOWN: 'red' };
 
 interface Row { key: string; live?: LinkStatus; saved?: SavedLink; state?: string; finding?: string; conflict?: boolean }
 

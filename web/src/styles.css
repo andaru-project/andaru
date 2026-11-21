@@ -48,13 +48,26 @@ body {
   color: #fff;
 }
 
+/* A long account name must not push the header off a phone, nor squeeze the connection state out of reading. */
+.app-header .account-button {
+  max-width: 45vw;
+}
+
+.app-header .mantine-Badge-root {
+  flex-shrink: 0;
+}
+
 .app-navbar {
   background: var(--andaru-ground);
 }
 
+.nav-item,
+.nav-branch {
+  border-radius: var(--mantine-radius-default);
+}
+
 .nav-item {
   border-left: 4px solid transparent;
-  border-radius: var(--mantine-radius-default);
 }
 
 .nav-item[data-active],
@@ -108,7 +121,6 @@ body {
 
 /* A branch of the navigation tree: its label opens and closes it and is not a page. */
 .nav-branch {
-  border-radius: var(--mantine-radius-default);
   color: var(--mantine-color-dimmed);
   font-weight: 700;
 }
@@ -137,6 +149,7 @@ body {
 /* Below 900px fingers do the pointing: every control is at least 44px tall. */
 @media (max-width: 56.24375em) {
   .mantine-Button-root,
+  .mantine-CloseButton-root,
   .mantine-NavLink-root,
   .mantine-Burger-root,
   .mantine-Input-input,
@@ -148,7 +161,10 @@ body {
 /* Below 600px a table row becomes a block, one labelled field per line. The header row stays for assistive
    technology, out of sight. Dialogs take the whole screen. */
 @media (max-width: 37.4375em) {
-  .data-table thead {
+  /* The table's header row stays for assistive technology, out of sight. So does the product's name, where the
+     header has no room: the mark alone carries it. */
+  .data-table thead,
+  .app-title {
     clip-path: inset(50%);
     height: 1px;
     overflow: hidden;
@@ -168,7 +184,6 @@ body {
   }
 
   .data-table td {
-    border: 0;
     padding-block: 0.25rem;
   }
 
@@ -181,24 +196,16 @@ body {
     text-transform: uppercase;
   }
 
-  /* The mark alone names the product where the header has no room; the heading stays for assistive technology. */
-  .app-title {
-    clip-path: inset(50%);
-    height: 1px;
-    overflow: hidden;
-    position: absolute;
-    width: 1px;
-  }
-
   .mantine-Modal-inner {
     padding: 0;
   }
 
+  /* A fixed height, as Mantine's own fullScreen has: the content then scrolls when it is taller than the screen. */
   .mantine-Modal-content {
     border-radius: 0;
     flex: 1;
-    max-height: none;
-    min-height: 100dvh;
+    height: 100dvh;
+    max-height: 100dvh;
   }
 }
 

@@ -7,6 +7,7 @@ import type {
   History,
   LinkStatus,
   Page,
+  PrefixView,
   Preview,
   Role,
   SavedObject,
@@ -17,7 +18,6 @@ import type {
   TokenIssueResponse,
   User,
   VersionDetail,
-  PrefixView,
 } from './types';
 
 interface ErrorEnvelope {
