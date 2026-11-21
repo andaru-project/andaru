@@ -12,6 +12,7 @@ ISO=${ANDARU_ISO:-/run/media/iso}
 SYS=${ANDARU_SYS:-/sys}
 CMDLINE=${ANDARU_CMDLINE:-/proc/cmdline}
 RUN=${ANDARU_RUN:-/run}
+SYSRQ=${ANDARU_SYSRQ:-/proc/sysrq-trigger}
 DEST_IGN=${ANDARU_DEST_IGN:-/usr/local/share/andaru-install/dest.ign}
 MIN_DISK=8000000000    # Fedora CoreOS's minimum
 SMALL_DISK=20000000000 # below this, add-ons will need more room
@@ -510,6 +511,14 @@ ra_mode() {
 		pick "Router advertisements on the management network (SLAAC needs a /64)" router router "Announce the route only" disabled "None"
 	fi
 }
+# pool_default ADDRESS/PREFIX prints a pool of .100 to .199 in the address's /24, when that /24 is inside the subnet and
+# the address is not in the pool; otherwise nothing.
+pool_default() {
+	a=${1%/*}
+	[ "${1#*/}" -le 24 ] || return 0
+	[ "${a##*.}" -lt 100 ] || [ "${a##*.}" -gt 199 ] || return 0
+	echo "${a%.*}.100 ${a%.*}.199"
+}
 management_addressing() {
 	while :; do
 		M4_MODE=$(pick "Management IPv4" static static "Static address" dhcp "Address from a DHCP server on that network" none "No IPv4") || return 1
@@ -518,8 +527,9 @@ management_addressing() {
 			M4_ADDR=$(ask "Management IPv4 address and prefix length" 192.168.1.1/24 ip4_local "That is not a usable IPv4 host address with its prefix length.") || return 1
 			serve=$(bool yes_no "Serve DHCP on the management network?") || return 1
 			if [ "$serve" = true ]; then
-				DHCP_START=$(ask "First address of the DHCP pool" "" ip4_unicast "That is not a usable IPv4 address.") || return 1
-				DHCP_END=$(ask "Last address of the DHCP pool" "" ip4_unicast "That is not a usable IPv4 address.") || return 1
+				pool=$(pool_default "$M4_ADDR")
+				DHCP_START=$(ask "First address of the DHCP pool" "${pool% *}" ip4_unicast "That is not a usable IPv4 address.") || return 1
+				DHCP_END=$(ask "Last address of the DHCP pool" "${pool#* }" ip4_unicast "That is not a usable IPv4 address.") || return 1
 			fi
 			SERVE_DNS=$(bool yes_no "Answer DNS queries on the management network?") || return 1
 		fi
@@ -592,21 +602,22 @@ choose_key() {
 }
 summary() {
 	echo "Disk: $DISK (everything on it will be erased)"
-	echo "Management: $M_NIC ($M_MAC), IPv4 $M4_MODE ${M4_ADDR}, IPv6 $M6_MODE ${M6_ADDR}${M6_SUBNET:+ subnet $M6_SUBNET}${M6_RA:+, RA $M6_RA}"
+	echo "Management: $M_NIC ($M_MAC), IPv4 $M4_MODE${M4_ADDR:+ $M4_ADDR}, IPv6 $M6_MODE${M6_ADDR:+ $M6_ADDR}${M6_SUBNET:+ subnet $M6_SUBNET}${M6_RA:+, RA $M6_RA}"
 	[ -z "$DHCP_START" ] || echo "  DHCP pool $DHCP_START to $DHCP_END"
-	[ "$M4_MODE" != static ] || echo "  DNS served: $SERVE_DNS"
+	[ "$M4_MODE" != static ] || { [ "$SERVE_DNS" = true ] && echo "  DNS answered on this network" || echo "  DNS not answered"; }
 	if [ -n "$W_NIC" ]; then
-		echo "WAN: $W_NIC ($W_MAC), IPv4 $W4_MODE ${W4_ADDR}${W4_GW:+ via $W4_GW}, IPv6 $W6_MODE ${W6_ADDR}${W6_GW:+ via $W6_GW}${W6_REQUEST:+, prefix /$W6_REQUEST}"
+		echo "WAN: $W_NIC ($W_MAC), IPv4 $W4_MODE${W4_ADDR:+ $W4_ADDR}${W4_GW:+ via $W4_GW}, IPv6 $W6_MODE${W6_ADDR:+ $W6_ADDR}${W6_GW:+ via $W6_GW}${W6_REQUEST:+, prefix /$W6_REQUEST}"
 		[ -z "$W_DNS" ] || echo "  DNS servers: $W_DNS"
 	else
 		echo "WAN: none yet"
 	fi
-	echo "SSH key: ${KEY_TYPE:-none} ${KEY_COMMENT}"
+	echo "SSH key: ${KEY_TYPE:-none}${KEY_COMMENT:+ $KEY_COMMENT}"
 }
 review() {
-	yes_no "$(summary)
+	# Taller than yes_no: the whole summary must show, a long key comment included.
+	ui --yesno "$(summary)
 
-Install?" || return 1
+Install?" 22 76 >/dev/null || return 1
 	[ -z "$DISK_FROM_CMDLINE" ] || return 0
 	typed=$(ui --inputbox "Type $DISK_NAME to erase $DISK and install Andaru" 10 76 "") || return 1
 	[ "$typed" = "$DISK_NAME" ] || { say "That was not $DISK_NAME; nothing was written."; return 1; }
@@ -701,9 +712,12 @@ session() {
 	done
 	clear
 	if write_install; then
+		# The live system runs from the medium, so once it is removed nothing may be executed: a normal reboot would
+		# crash the shutdown. Everything is written and unmounted; the reboot after Enter uses shell builtins only.
+		sync
 		printf '\nAndaru is installed on %s. Remove the install medium and any key stick, then press Enter to reboot.\n' "$DISK"
 		# End of input is not Enter: the medium may still be in.
-		if read -r _; then systemctl reboot; fi
+		if read -r _; then echo b >"$SYSRQ"; fi
 		exit 0
 	fi
 	printf '\nThe install failed; the messages above say where. Press Enter to start over.\n'

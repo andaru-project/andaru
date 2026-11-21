@@ -773,4 +773,62 @@ umount"
       The output should not include session
     End
   End
+  Describe 'the pool default'
+    It 'offers .100 to .199 in a /24'
+      When call pool_default 192.168.1.1/24
+      The output should equal '192.168.1.100 192.168.1.199'
+    End
+    It "offers it in the address's /24 for a wider subnet"
+      When call pool_default 10.0.0.1/16
+      The output should equal '10.0.0.100 10.0.0.199'
+    End
+    It 'offers nothing for a subnet narrower than a /24'
+      When call pool_default 192.168.1.1/25
+      The output should equal ''
+    End
+    It 'offers nothing when the address is in that pool'
+      When call pool_default 192.168.1.150/24
+      The output should equal ''
+    End
+  End
+
+  Describe 'the summary'
+    BeforeEach reset_answers
+    It 'leaves no space for an absent address and names DNS in words'
+      DISK=/dev/sda M_NIC=enp1s0 M_MAC=52:54:00:aa:bb:01 M4_MODE=static M4_ADDR=192.168.1.1/24 M6_MODE=none SERVE_DNS=true
+      W_NIC=enp2s0 W_MAC=52:54:00:aa:bb:02 W4_MODE=dhcp W6_MODE=slaac
+      When call summary
+      The output should include 'IPv4 static 192.168.1.1/24, IPv6 none'
+      The output should include 'IPv4 dhcp, IPv6 slaac'
+      The output should include '  DNS answered on this network'
+      The output should include 'SSH key: none'
+      The output should not include 'SSH key: none '
+    End
+  End
+
+  Describe 'the reboot'
+    setup() { work=$(mktemp -d); SYSRQ=$work/sysrq; DISK=/dev/sda; }
+    cleanup() { rm -rf "$work"; }
+    BeforeEach 'setup'
+    AfterEach 'cleanup'
+    questions() { return 0; }
+    write_install() { return 0; }
+    clear() { :; }
+    sync() { echo synced; }
+    It 'reboots through the sysrq trigger once Enter is pressed, running nothing after it'
+      Data
+        #|
+      End
+      When run session
+      The status should equal 0
+      The output should include synced
+      The contents of file "$work/sysrq" should equal b
+    End
+    It 'does not reboot at the end of input'
+      When run session </dev/null
+      The status should equal 0
+      The output should include synced
+      The path "$work/sysrq" should not be exist
+    End
+  End
 End
