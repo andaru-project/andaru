@@ -90,7 +90,7 @@ it.each(['/changes', '/changes/'])('leaves the apply controls to the Review and 
   expect(screen.queryByText('Saved changes are not applied yet')).not.toBeInTheDocument();
 });
 
-it('names the box and its Andaru version in the header, for an account that may read status', async () => {
+it('names the box in the header, for an account that may read status: its version is on the dashboard', async () => {
   fetchRoutes({
     '/api/v1/status/system': { version: '0.5.0-a.4', hostname: 'edge', time: '2026-11-21T12:00:00Z', bootedAt: null },
     '/api/v1/applies': unapplied,
@@ -98,7 +98,8 @@ it('names the box and its Andaru version in the header, for an account that may 
   });
   const api = new ApiClient('csrf');
   render(<MemoryRouter initialEntries={['/system/session']}><Shell api={api} session={session(['status.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} /></MemoryRouter>);
-  expect((await screen.findByText('edge')).textContent).toBe('edge · 0.5.0-a.4');
+  expect((await screen.findByText('edge')).textContent).toBe('edge');
+  expect(screen.queryByText(/0\.5\.0-a\.4/)).not.toBeInTheDocument();
 });
 
 it('has a page for what the box is made of, under System', async () => {
@@ -114,15 +115,17 @@ it('has a page for what the box is made of, under System', async () => {
   expect(await screen.findByRole('region', { name: 'Processor' })).toHaveTextContent('Test CPU, 2 cores');
 });
 
-it('reads the box again each minute, so an upgrade behind an open tab shows, and a box without a name shows its version alone', async () => {
+it('reads the box again each minute, so an upgrade behind an open tab shows', async () => {
   vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
   let version = '0.5.0-a.4';
   fetchRoutes({
-    '/api/v1/status/system': () => jsonResponse(200, { version, hostname: '', time: '2026-11-21T12:00:00Z', bootedAt: null }),
+    '/api/v1/status/system': () => jsonResponse(200, { version, hostname: '', kernel: '6.17', architecture: 'x86_64', time: '2026-11-21T12:00:00Z', bootedAt: null, memoryBytes: 0, guest: '', iommu: false,
+      cpu: { model: 'Test CPU', cores: 2, threads: 2, microcode: '', level: '', features: { cryptography: [], security: [], virtualization: [] }, vulnerabilities: [] },
+      hardware: { vendor: '', product: '', serial: '', boardVendor: '', board: '', biosVendor: '', biosVersion: '', biosDate: '' } }),
     '/api/v1/applies': unapplied,
     '/api/v1/versions?': { state: 'saved', items: [] },
   });
-  render(<MemoryRouter initialEntries={['/system/session']}><Shell api={new ApiClient('csrf')} session={session(['status.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} /></MemoryRouter>);
+  render(<MemoryRouter initialEntries={['/system/details']}><Shell api={new ApiClient('csrf')} session={session(['status.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} /></MemoryRouter>);
   expect(await screen.findByText('0.5.0-a.4')).toBeInTheDocument();
   version = '0.5.0-a.5';
   act(() => { vi.advanceTimersByTime(60_000); });
