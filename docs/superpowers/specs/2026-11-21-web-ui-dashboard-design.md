@@ -72,7 +72,7 @@ This document amends the [shell design](2026-11-21-web-ui-shell-design.md): its 
     - **`status/traffic`,** the traffic history of call 12.
     - The board's serial number is served and shown with the hardware (owner, 2026-11-21).
     - The header takes the hostname and version from `status/system`.
-    - `status/system` first serves what the kernel's files say and the Andaru version. The image, its verification and the update state come with the upgrade slice, which owns `bootc`; safe mode comes when the engine has such a state to report. Two points of call 17 wait for a source: PAN is not among the features the arm64 kernel lists, and nothing read here says whether it started at EL2. Memory is what the kernel has to use, a little less than what is installed.
+    - `status/system` first serves what the kernel's files say and the Andaru version. The image, its verification and the update state come with the upgrade slice, which owns `bootc`; safe mode comes when the engine has such a state to report. Two points of call 17 wait for a source: PAN is not among the features the arm64 kernel lists, and nothing read here says whether it started at EL2. Memory is what the kernel has to use, a little less than what is installed. In the widget, the last applied change stays with the Changes widget beside it, which says more; and a guest is named on a line of its own, "Runs as", not on the virtualisation line, which lists what the CPU offers.
 
 12. **The engine keeps one hour of traffic history** (owner, 2026-11-21), so the graph is drawn in full when the dashboard loads.
     - Every 30 seconds the engine records each network adapter's counters: bytes, packets, errors and drops, each way. It keeps the last 120 readings per adapter, which is the hour.

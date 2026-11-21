@@ -155,6 +155,29 @@ export interface LinkStatus {
 export interface DashboardLayout { order?: string[]; hidden?: string[] }
 export interface Preferences { dashboard?: DashboardLayout; [key: string]: unknown }
 
+// What the box is, as GET /api/v1/status/system serves it.
+export interface SystemInfo {
+  version: string;
+  hostname: string;
+  kernel: string;
+  architecture: string;
+  time: string;
+  bootedAt: string | null;
+  memoryBytes: number;
+  guest: string;
+  iommu: boolean;
+  cpu: {
+    model: string;
+    cores: number;
+    threads: number;
+    microcode: string;
+    level: string;
+    features: { cryptography: string[]; security: string[]; virtualization: string[] };
+    vulnerabilities: Array<{ name: string; status: string; state: 'not_affected' | 'mitigated' | 'vulnerable' | 'unknown' }>;
+  };
+  hardware: { vendor: string; product: string; serial: string; boardVendor: string; board: string; biosVendor: string; biosVersion: string; biosDate: string };
+}
+
 interface PrefixPlace { interface: string; subnetId: string; prefix: string | null }
 
 export interface PrefixView {

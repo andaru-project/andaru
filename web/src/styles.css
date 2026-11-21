@@ -157,6 +157,49 @@ body {
   z-index: 1;
 }
 
+/* Facts in two columns: what, and its value. The label keeps to its width and the value wraps. */
+.facts th {
+  color: var(--mantine-color-dimmed);
+  font-weight: 400;
+  padding-right: var(--mantine-spacing-md);
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.reasons {
+  display: grid;
+  font-size: var(--mantine-font-size-sm);
+  gap: var(--mantine-spacing-xs);
+  margin: 0;
+}
+
+.reasons dt {
+  font-weight: 600;
+}
+
+.reasons dd {
+  margin: 0;
+}
+
+/* The box's name and version beside the product's: the header is for one line, so they give way first. A flex
+   item is as wide as its text unless told otherwise, and a host name may be 64 characters. */
+.app-brand,
+.app-box {
+  min-width: 0;
+}
+
+/* The connection state and the account menu keep their room; the box's name is what gives way. */
+.app-session {
+  flex-shrink: 0;
+}
+
+.app-box {
+  color: rgb(255 255 255 / 75%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .plain-list {
   display: grid;
   gap: var(--mantine-spacing-sm);
@@ -167,6 +210,7 @@ body {
 
 /* Below 900px fingers do the pointing: every control is at least 44px tall. */
 @media (max-width: 56.24375em) {
+  .mantine-ActionIcon-root,
   .mantine-Button-root,
   .mantine-CloseButton-root,
   .mantine-NavLink-root,
@@ -174,6 +218,10 @@ body {
   .mantine-Input-input,
   .mantine-Menu-item {
     min-height: 2.75rem;
+  }
+
+  .mantine-ActionIcon-root {
+    min-width: 2.75rem;
   }
 }
 
@@ -183,6 +231,7 @@ body {
   /* The table's header row stays for assistive technology, out of sight. So does the product's name, where the
      header has no room: the mark alone carries it. */
   .data-table thead,
+  .app-box,
   .app-title {
     clip-path: inset(50%);
     height: 1px;
