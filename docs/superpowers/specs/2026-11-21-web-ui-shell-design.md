@@ -75,11 +75,12 @@ From the 2026-11-21 conversation:
 18. **Alerts** keep their title in ink on every tint. Text on a filled colour is black or white, whichever reads (Mantine's `autoContrast`): white on its green or yellow is under 3:1. Error text beside other text uses a darker red.
 19. **Dark scheme** follows the browser, as before; it keeps the dark chrome and uses Mantine's dark surfaces. Dimmed text is lightened there, since Mantine's is 4.0:1. Widths below 900 px are not designed yet: tables scroll sideways.
 
-Open for the owner:
+Decided by the owner, 2026-11-21:
 
-- Whether the ink blue or the amber should lead (amber buttons would need dark text).
-- A dashboard as the landing page, and what it shows first.
-- Whether the navigation should be dark like the header.
+- The palette stays: ink blue leads and amber is the accent.
+- The navigation stays a list on the left, which uses a wide screen best. It becomes a tree, and pages never split into tabs: see [navigation tree, narrow screens and the dashboard](2026-11-21-web-ui-dashboard-design.md).
+- The landing page becomes a dashboard, designed in the same document.
+- The design must scale down to a phone. That document replaces "not designed yet" in call 19.
 
 ## Out of scope
 

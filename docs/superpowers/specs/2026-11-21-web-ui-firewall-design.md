@@ -12,9 +12,9 @@ The API exists: `policy.input` and `policy.forward` with their order operation, 
 
 ## Author calls
 
-1. **Navigation gains a Firewall group:** Rules, Addresses, Services. It needs `configuration.read`; editing needs `configuration.write`, and without it the pages are read-only.
+1. **Navigation gains a Firewall branch** in the tree ([navigation design](2026-11-21-web-ui-dashboard-design.md)): Rules, with one entry per chain beneath it, then Addresses and Services. It needs `configuration.read`; editing needs `configuration.write`, and without it the pages are read-only.
 
-2. **Rules is one page with two tabs,** "Through the firewall" (`policy.forward`) and "To the firewall" (`policy.input`). The tab names say what the chain means; the chain names appear as a caption for people who know nftables.
+2. **Each chain is its own page, not a tab** (owner, 2026-11-21): "Through the firewall" (`policy.forward`) and "To the firewall" (`policy.input`), both under Rules in the tree. The names say what the chain means; the chain names appear as a caption for people who know nftables. Each page has its own address, so a chain can be bookmarked.
    - Above the table, a fixed, read-only block lists what Andaru always does before any rule: established and related traffic accepted, invalid dropped, loopback and neighbour discovery accepted, DHCP requests on served segments, SSH on the management segment. Below the table: "Everything else is dropped."
    - Without `management.segment` the filter is off (packet filter design). The page then says so and links to Interfaces instead of showing an empty table that looks like "allow nothing".
 
@@ -45,17 +45,18 @@ The API exists: `policy.input` and `policy.forward` with their order operation, 
    - Each row shows where it is used ("3 rules"), with the list on demand.
 
 9. **A lockout warning, from the engine.** A rule that would cut the management path must not be found out by losing the session. Review and apply already runs the network preview; this slice asks the engine for one new preview finding, `MANAGEMENT_UNREACHABLE` (warning), when the saved input rules would drop the web UI's or SSH's port from the management segment's allowed sources. The rollback timer remains the real protection; the warning only saves a wasted apply.
-   - This is the slice's one engine change. If the owner prefers no engine change here, the page instead shows a static note beside "To the firewall".
+   - This is the slice's one engine change. If the owner prefers no engine change here, the "To the firewall" page instead shows a static note.
 
 10. **Starter rules.** A new box has no rules, so nothing forwards. The Rules page, when empty, offers "Allow the LAN out": one forward rule from the management segment's zone to anywhere, saved like any rule. It is an offer, never automatic, and slice 3's seed apply may make it moot.
 
 11. **States each page covers:** loading, empty, read-only, validation errors, version conflict, saved-but-unapplied (the shell's notice), filter off, and connection lost.
 
-12. **Tests:** the table keeps execution order under filtering; moves send the full order with the version and handle a 412; the editor maps engine field errors to fields; read-only accounts get no controls; deleting a used object lists its users.
+12. **Narrow screens.** Below 900 px each rule becomes a block: position, switch, action and name on the first line, then from, to and services, each labelled. The editor's side panel takes the whole screen. The move actions stay; they never needed a pointer.
+
+13. **Tests:** the table keeps execution order under filtering; moves send the full order with the version and handle a 412; the editor maps engine field errors to fields; read-only accounts get no controls; deleting a used object lists its users.
 
 ## Open for the owner
 
-- **Tabs or one list?** Two tabs keep each chain's order clear. One list with a "direction" column matches pfSense's per-interface tabs less, but shows everything at once.
 - **Drag and drop:** leave it out for now (call 4), or add it with the keyboard controls?
 - **The lockout warning (call 9):** an engine finding, or a note only?
 - **Starter rule (call 10):** offer it, or leave an empty table with an explanation?
@@ -66,7 +67,6 @@ The API exists: `policy.input` and `policy.forward` with their order operation, 
 - NAT, DHCP, DNS and interface editing: later slices.
 - Counters, a log viewer and per-rule statistics ([#15](https://github.com/andaru-project/andaru/issues/15)).
 - Rule templates, schedules and FQDN addresses.
-- Widths below 900 px.
 
 ## Related documents
 
