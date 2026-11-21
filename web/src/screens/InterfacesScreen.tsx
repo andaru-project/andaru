@@ -1,33 +1,20 @@
 import { Alert, Badge, Group, Loader, ScrollArea, Stack, Table, Text, Title } from '@mantine/core';
 import { useCallback } from 'react';
 import { ApiClient, reportError } from '../api';
-import { stateColor, type Finding, type LinkStatus, type Preview, type SavedLink, type Segment, type Session, type Snapshot } from '../types';
+import { stateColor, type LinkStatus, type Preview, type SavedLink, type Segment, type Session, type Snapshot } from '../types';
 import { useResource } from '../useResource';
+import { bindingFindings, kernelName, zonesByInterface } from '../zones';
+import { ZoneBadge } from './ZoneBadge';
 
 interface InterfacesScreenProps { api: ApiClient; session: Session; onSessionLost(): void }
 
-const namePrefix: Record<string, string> = { vlan: 'vl', bridge: 'br', bond: 'bo', pppoe: 'pp' };
-
-// kernelName mirrors internal/render: a virtual link's interface name derives from its ID, and an
-// Ethernet link is the interface the preview resolved from its permanent MAC.
-function kernelName(link: SavedLink, resolved: Map<string, string>) {
-  if (link.kind === 'ethernet') return resolved.get(link.id);
-  return namePrefix[link.kind] + link.id.slice(link.id.indexOf('_') + 1).replaceAll('-', '').slice(0, 12);
-}
-
-// These findings mean the renderer will not put the link on any device, whatever its name matches.
-const bindingCode = /^(HARDWARE_|NAME_COLLISION$|DEPENDENCY_UNAVAILABLE$)/;
 const unboundLabel: Record<string, string> = { HARDWARE_MISSING: 'Missing', HARDWARE_AMBIGUOUS: 'Unresolved' };
 
 interface Row { key: string; live?: LinkStatus; saved?: SavedLink; state?: string; finding?: string; conflict?: boolean }
 
 function join(links: LinkStatus[], snapshot: Snapshot, preview: Preview): Row[] {
   const resolved = new Map(preview.resolved.map((item) => [item.link, item.interface]));
-  const findings = new Map<number, Finding>();
-  for (const finding of preview.findings) {
-    const index = /^\/links\/(\d+)(\/|$)/.exec(finding.path)?.[1];
-    if (index !== undefined && bindingCode.test(finding.code) && !findings.has(Number(index))) findings.set(Number(index), finding);
-  }
+  const findings = bindingFindings(preview);
   const onDevice = new Map<string, SavedLink[]>();
   const unbound: Row[] = [];
   snapshot.value.links.forEach((link, index) => {
@@ -74,6 +61,8 @@ export function InterfacesScreen({ api, session, onSessionLost }: InterfacesScre
   const showSaved = Boolean(saved);
   const segmentOf = (link: SavedLink): Segment | undefined => saved?.snapshot.value.segments.find((segment) => segment.link === link.id);
   const zoneName = (id: string) => saved?.snapshot.value.zones.find((zone) => zone.id === id)?.name ?? id;
+  // The pill by an interface's name is the dashboard's: one rule for which zone an interface is in.
+  const zones = saved ? zonesByInterface(saved.snapshot, saved.preview) : undefined;
 
   return (
     <Stack>
@@ -88,10 +77,10 @@ export function InterfacesScreen({ api, session, onSessionLost }: InterfacesScre
             return (
               <Table.Tr key={key}>
                 <Table.Td data-label="Interface">
-                  {live ? <Text ff="monospace" fw={600}>{live.name}</Text> : <Text c="dimmed">No device</Text>}
+                  {live ? <Group gap="xs"><Text ff="monospace" fw={600}>{live.name}</Text><ZoneBadge name={zones?.get(live.name)} /></Group> : <Text c="dimmed">No device</Text>}
                   <Text c="dimmed" size="sm"><Text span ff="monospace" inherit>{live?.linkAddress || link?.permanentMac || 'no MAC'}</Text> · {live?.linkType ?? link?.kind} · MTU {live?.mtu ?? link?.mtu}</Text>
                 </Table.Td>
-                <Table.Td data-label="State">{live ? <Badge color={stateColor[live.operState] ?? 'gray'}>{live.operState.toLowerCase()}</Badge> : <Badge color={state === 'Disabled' ? 'gray' : 'red'}>{state}</Badge>}</Table.Td>
+                <Table.Td data-label="State">{live ? <Badge variant="dot" color={stateColor[live.operState] ?? 'gray'}>{live.operState.toLowerCase()}</Badge> : <Badge variant="dot" color={state === 'Disabled' ? 'gray' : 'red'}>{state}</Badge>}</Table.Td>
                 <Table.Td data-label="Addresses">{live?.addresses.length ? live.addresses.map((address) => <Text key={`${address.address}/${address.prefixLength}`} ff="monospace" size="sm">{address.address}/{address.prefixLength}</Text>) : <Text c="dimmed">—</Text>}</Table.Td>
                 {showSaved && (
                   <>

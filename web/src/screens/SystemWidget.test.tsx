@@ -1,6 +1,5 @@
-import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor } from '../test/render';
+import { act, render, screen } from '../test/render';
 import type { SystemInfo } from '../types';
 import { SystemWidget } from './SystemWidget';
 
@@ -105,39 +104,8 @@ it('shows no uptime it cannot work out', () => {
   for (const label of ['Up for', 'Clock']) expect(screen.queryByRole('rowheader', { name: label })).not.toBeInTheDocument();
 });
 
-it('says why the CPU features matter when asked, by a click or the keyboard, and gives focus back', async () => {
+it('lists the three rows of CPU features and nothing to open', () => {
   render(<SystemWidget info={hardware} loadedAt={Date.now()} />);
-  const button = screen.getByRole('button', { name: 'Why these CPU features matter' });
-  expect(screen.queryByText(/AES-GCM in hardware: IPsec/)).not.toBeInTheDocument();
-  await userEvent.click(button);
-  expect(await screen.findByText(/AES-GCM in hardware: IPsec, OpenVPN and TLS/)).toBeInTheDocument();
-  expect(screen.getByText(/WireGuard and TLS handshakes/)).toBeInTheDocument();
-  // An x86 box is told about x86 features only.
-  expect(screen.queryByText('AES, PMULL')).not.toBeInTheDocument();
-  // Focus is inside, so Escape closes it and focus returns to the button.
-  await waitFor(() => expect(button).not.toHaveFocus());
-  await userEvent.keyboard('{Escape}');
-  await waitFor(() => expect(screen.queryByText(/AES-GCM in hardware: IPsec/)).not.toBeInTheDocument());
-  expect(button).toHaveFocus();
-
-  await userEvent.tab({ shift: true });
-  await userEvent.tab();
-  expect(button).toHaveFocus();
-  await userEvent.keyboard('{Enter}');
-  expect(await screen.findByText(/AES-GCM in hardware: IPsec/)).toBeInTheDocument();
-});
-
-it('tells an arm64 box about arm64 features', async () => {
-  render(<SystemWidget info={{ ...hardware, architecture: 'aarch64' }} loadedAt={Date.now()} />);
-  await userEvent.click(screen.getByRole('button', { name: 'Why these CPU features matter' }));
-  expect(await screen.findByText('AES, PMULL')).toBeInTheDocument();
-  expect(screen.queryByText('AES-NI, PCLMULQDQ')).not.toBeInTheDocument();
-});
-
-it('tells a box of another architecture only what holds for any', async () => {
-  render(<SystemWidget info={{ ...hardware, architecture: 'riscv64' }} loadedAt={Date.now()} />);
-  await userEvent.click(screen.getByRole('button', { name: 'Why these CPU features matter' }));
-  expect(await screen.findByText('Virtualisation', { selector: 'dt' })).toBeInTheDocument();
-  expect(screen.queryByText('AES-NI, PCLMULQDQ')).not.toBeInTheDocument();
-  expect(screen.queryByText('AES, PMULL')).not.toBeInTheDocument();
+  expect(screen.getAllByRole('rowheader').map((header) => header.textContent).slice(-4)).toEqual(['Cryptography', 'Security', 'Virtualisation', 'CPU vulnerabilities']);
+  expect(screen.queryByRole('button')).not.toBeInTheDocument();
 });

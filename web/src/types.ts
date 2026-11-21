@@ -155,6 +155,22 @@ export interface LinkStatus {
 export interface DashboardLayout { order?: string[]; hidden?: string[] }
 export interface Preferences { dashboard?: DashboardLayout; [key: string]: unknown }
 
+// How hard the box is working, as GET /api/v1/status/usage serves it. The processor counters are cumulative.
+export interface Usage {
+  time: string;
+  cpu: { total: number; idle: number };
+  load: number[] | null;
+  memory: { totalBytes: number; availableBytes: number; swapTotalBytes: number; swapFreeBytes: number };
+  fileSystems: Array<{ mountPoint: string; type: string; totalBytes: number; availableBytes: number }>;
+  connections: { count: number; limit: number } | null;
+  temperatures: Array<{ sensor: string; celsius: number }>;
+}
+
+// One reading of an interface's cumulative counters, and the hour of them GET /api/v1/status/traffic serves.
+export interface TrafficSample { at: string; rxBytes: number; txBytes: number; rxPackets: number; txPackets: number; rxErrors: number; txErrors: number; rxDropped: number; txDropped: number }
+// complete says the answer is the whole history, to replace what is held, and not readings to add to it.
+export interface Traffic { intervalSeconds: number; complete: boolean; interfaces: Array<{ name: string; samples: TrafficSample[] }> }
+
 // What the box is, as GET /api/v1/status/system serves it.
 export interface SystemInfo {
   version: string;

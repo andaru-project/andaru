@@ -99,7 +99,7 @@ This document amends the [shell design](2026-11-21-web-ui-shell-design.md): its 
     - third, `status/usage` and `status/traffic`, with Resources and Network activity;
     - the update check arrives with the upgrade slice, since the check and the upgrade page share their mechanism.
 
-17. **CPU features, and why each is shown** (owner, 2026-11-21). The lines show names only. An information button beside them opens the reasons below, for whoever wants them; it works by tap and by keyboard. A feature the CPU lacks is not listed. The list follows the platform.
+17. **CPU features, and why each is shown** (owner, 2026-11-21). The lines show names only, three rows and nothing to open (owner, 2026-11-21: an information button was tried and removed). The reasons below are for this document. A feature the CPU lacks is not listed. The list follows the platform.
     - **Cryptography,** which decides VPN and TLS throughput:
 
       | x86-64 | Why a firewall cares |

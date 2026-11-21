@@ -8,9 +8,11 @@
 :root {
   --andaru-chrome: #152330;
   --andaru-accent: #ffb21c;
-  --andaru-ground: light-dark(#f2f4f6, var(--mantine-color-dark-8));
+  --andaru-ground: #f2f4f6;
   /* Error text beside other text: Mantine's red is 3.3:1 on white. */
-  --andaru-error-text: light-dark(var(--mantine-color-red-9), var(--mantine-color-red-4));
+  --andaru-error-text: var(--mantine-color-red-9);
+  --andaru-diff-old: #fbdcd9;
+  --andaru-diff-new: #d5efdb;
 }
 
 :root[data-mantine-color-scheme="light"] {
@@ -21,6 +23,12 @@
 
 /* Mantine's dark dimmed text is 4.0:1 on its dark surfaces; this is 5.4:1 and still reads as secondary. */
 :root[data-mantine-color-scheme="dark"] {
+  /* Not light-dark(): the build rewrites it into a pair of variables that nothing ever sets, and the colour is
+     then no colour at all. The scheme's own selector cannot be rewritten away. */
+  --andaru-ground: var(--mantine-color-dark-8);
+  --andaru-error-text: var(--mantine-color-red-4);
+  --andaru-diff-old: #4a2326;
+  --andaru-diff-new: #1f3d27;
   --mantine-color-dimmed: #9a9a9a;
 }
 
@@ -166,21 +174,6 @@ body {
   white-space: nowrap;
 }
 
-.reasons {
-  display: grid;
-  font-size: var(--mantine-font-size-sm);
-  gap: var(--mantine-spacing-xs);
-  margin: 0;
-}
-
-.reasons dt {
-  font-weight: 600;
-}
-
-.reasons dd {
-  margin: 0;
-}
-
 /* The box's name and version beside the product's: the header is for one line, so they give way first. A flex
    item is as wide as its text unless told otherwise, and a host name may be 64 characters. */
 .app-brand,
@@ -206,6 +199,122 @@ body {
   list-style: none;
   margin: 0;
   padding: 0;
+}
+
+/* The traffic graph: as wide as its widget and two fifths as high, so it keeps its proportions at any width.
+   Both lines take the interface's zone colour where it has one. */
+.traffic-frame {
+  position: relative;
+  touch-action: pan-y;
+}
+
+.traffic-graph {
+  aspect-ratio: 5 / 2;
+  background: var(--andaru-ground);
+  border-radius: var(--mantine-radius-default);
+  display: block;
+  width: 100%;
+}
+
+.traffic-graph path,
+.traffic-key path {
+  fill: none;
+  stroke: var(--traffic-line-light, var(--mantine-primary-color-filled));
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+:root[data-mantine-color-scheme="dark"] :is(.traffic-graph, .traffic-key) path {
+  stroke: var(--traffic-line-dark, var(--mantine-primary-color-4));
+}
+
+/* Each line has the area under it filled, far fainter than the line. Upload is dashed, and fainter than
+   download in line and in fill, so the two differ in shape and in strength. */
+path.traffic-received {
+  opacity: 0.9;
+}
+
+path.traffic-sent {
+  opacity: 0.6;
+  stroke-dasharray: 8 5;
+}
+
+.traffic-dot.traffic-sent {
+  opacity: 0.6;
+}
+
+.traffic-graph path.traffic-area {
+  fill: var(--traffic-line-light, var(--mantine-primary-color-filled));
+  opacity: 0.16;
+  stroke: none;
+}
+
+.traffic-graph path.traffic-area.traffic-sent {
+  opacity: 0.08;
+}
+
+:root[data-mantine-color-scheme="dark"] .traffic-graph path.traffic-area {
+  fill: var(--traffic-line-dark, var(--mantine-primary-color-4));
+}
+
+.traffic-key {
+  height: 0.5rem;
+  vertical-align: middle;
+  width: 1.5rem;
+}
+
+/* The marked point: a line down the graph at its time, and a dot on each line there. */
+.traffic-guide {
+  border-left: 1px solid var(--mantine-color-dimmed);
+  bottom: 0;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+}
+
+.traffic-dot {
+  background: var(--traffic-line-light, var(--mantine-primary-color-filled));
+  border-radius: 50%;
+  height: 0.5rem;
+  margin: -0.25rem 0 0 -0.25rem;
+  pointer-events: none;
+  position: absolute;
+  width: 0.5rem;
+}
+
+:root[data-mantine-color-scheme="dark"] .traffic-dot {
+  background: var(--traffic-line-dark, var(--mantine-primary-color-4));
+}
+
+/* Figures: the direction on the left, its numbers in columns, right-aligned so they compare down a column. */
+.traffic-figures th,
+.traffic-figures td {
+  font-size: var(--mantine-font-size-xs);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.traffic-figures thead th {
+  color: var(--mantine-color-dimmed);
+  font-weight: 400;
+}
+
+.traffic-figures th[scope="row"] {
+  font-weight: 400;
+  text-align: left;
+}
+
+/* The places a delegated prefix went, under the uplink that holds it. */
+.prefix-parts {
+  border-left: 2px solid var(--mantine-color-default-border);
+  gap: var(--mantine-spacing-xs);
+  margin-top: var(--mantine-spacing-xs);
+  padding-left: var(--mantine-spacing-sm);
+}
+
+.prefix-parts:empty {
+  display: none;
 }
 
 /* Below 900px fingers do the pointing: every control is at least 44px tall. */
@@ -290,12 +399,12 @@ body {
 
 /* Old and new values in a review: marked by a border and a tint, never by colour alone (the column says which). */
 .diff-old {
-  background: light-dark(#fbdcd9, #4a2326);
+  background: var(--andaru-diff-old);
   border-left: 3px solid var(--mantine-color-red-6);
 }
 
 .diff-new {
-  background: light-dark(#d5efdb, #1f3d27);
+  background: var(--andaru-diff-new);
   border-left: 3px solid var(--mantine-color-green-7);
 }
 

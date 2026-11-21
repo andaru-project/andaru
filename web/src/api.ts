@@ -18,6 +18,8 @@ import type {
   SystemInfo,
   Token,
   TokenIssueResponse,
+  Traffic,
+  Usage,
   User,
   VersionDetail,
 } from './types';
@@ -243,6 +245,15 @@ export class ApiClient {
 
   links() {
     return this.request<{ items: LinkStatus[] }>('/api/v1/status/links');
+  }
+
+  usage() {
+    return this.request<Usage>('/api/v1/status/usage');
+  }
+
+  // since is the time of the newest reading held, as the box wrote it: only what came after is sent.
+  traffic(since?: string) {
+    return this.request<Traffic>(`/api/v1/status/traffic${since ? `?${new URLSearchParams({ since })}` : ''}`);
   }
 
   system() {
