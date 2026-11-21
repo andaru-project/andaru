@@ -1,13 +1,16 @@
 import { DEFAULT_THEME, createTheme, defaultCssVariablesResolver, mergeMantineTheme } from '@mantine/core';
 
-// Andaru's ink blue: links, focus and primary buttons. White on shade 7 is 7.9:1; the amber mark stays an accent
-// (styles.css), never text on a light surface.
-const andaru = ['#e8f3f9', '#cfe4f0', '#a3cbe0', '#72afcf', '#4a97bf', '#2f82ad', '#286899', '#17577d', '#114463', '#0c3149'] as const;
+// Andaru's ink blue: links, focus and primary buttons. Mantine fills with shade 6 in the light scheme and 8 in the
+// dark one; white is 7.8:1 on shade 6 and 10.3:1 on shade 8. The amber mark stays an accent (styles.css), never text
+// on a light surface.
+const andaru = ['#e8f3f9', '#cfe4f0', '#a3cbe0', '#72afcf', '#4a97bf', '#2a78a3', '#17577d', '#134a6b', '#114463', '#0c3149'] as const;
 
 export const theme = createTheme({
   colors: { andaru },
   primaryColor: 'andaru',
-  primaryShade: { light: 7, dark: 4 },
+  // Text on a filled colour is black or white, whichever reads: white on Mantine's green or yellow is under 3:1.
+  autoContrast: true,
+  luminanceThreshold: 0.25,
   defaultRadius: 'sm',
 });
 

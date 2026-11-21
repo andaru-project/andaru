@@ -13,7 +13,7 @@ const live = { pointers: { ...pointers, confirmed: '1', live: '1' }, items: [app
 const unapplied: ChangeState = { applies: live, head: '5' };
 
 const info = (id: string) => ({ id, createdAt: '2026-11-21T11:00:00Z', actor: 'admin', changedObjectCount: 1 });
-const declaration = (zones: Array<{ id: string; name: string }>) => ({ schemaVersion: 3, links: [], segments: [], zones, roles: [] });
+const declaration = (zones: Array<{ id: string; name: string; description?: string }>) => ({ schemaVersion: 3, links: [], segments: [], zones, roles: [] });
 const preview = (findings: Array<Record<string, string>> = []) => ({ state: 'preview', savedVersion: '5', realizable: !findings.some((finding) => finding.severity === 'error'), resolved: [], files: [], findings });
 const history = (...ids: string[]) => ({ state: 'saved', items: ids.map(info) });
 const failure = (status: number, code: string, message: string, extra = {}) => () => jsonResponse(status, { error: { code, message, details: [], ...extra } });
@@ -24,7 +24,7 @@ function routes(extra: Record<string, unknown> = {}) {
     '/api/v1/versions?': history('5', '4', '3', '2'),
     '/api/v1/versions/3': { ...info('3'), state: 'saved', value: declaration([{ id: 'zon_a', name: 'LAN' }, { id: 'zon_b', name: 'Guest' }]), changes: [] },
     '/api/v1/versions/4': { ...info('4'), state: 'saved', value: declaration([{ id: 'zon_a', name: 'LAN' }, { id: 'zon_c', name: 'DMZ' }]), changes: [{ collection: 'zones', id: 'zon_b', deleted: true }, { collection: 'zones', id: 'zon_c', created: true }] },
-    '/api/v1/versions/5': { ...info('5'), state: 'saved', value: declaration([{ id: 'zon_a', name: 'Inside' }, { id: 'zon_c', name: 'DMZ' }]), changes: [{ collection: 'zones', id: 'zon_a' }] },
+    '/api/v1/versions/5': { ...info('5'), state: 'saved', value: declaration([{ id: 'zon_a', name: 'Inside', description: 'Home' }, { id: 'zon_c', name: 'DMZ' }]), changes: [{ collection: 'zones', id: 'zon_a' }] },
     '/api/v1/versions/6': { ...info('6'), state: 'saved', value: declaration([{ id: 'zon_a', name: 'Inside' }, { id: 'zon_c', name: 'Servers' }]), changes: [{ collection: 'zones', id: 'zon_c' }] },
     '/api/v1/preview/network': preview(),
     ...extra,
@@ -51,13 +51,19 @@ it('shows each changed object with its live and saved value', async () => {
   expect(created).toHaveTextContent('"name": "DMZ"');
   // A changed object lists only the fields that differ, old beside new.
   const changed = screen.getByLabelText('Inside changed');
-  expect(within(changed).getByRole('row', { name: 'name LAN Inside' })).toBeInTheDocument();
+  expect(within(changed).getByRole('row', { name: 'name "LAN" "Inside"' })).toBeInTheDocument();
   expect(changed).not.toHaveTextContent('"id"');
+  expect(within(changed).getByRole('row', { name: 'description Not set "Home"' })).toBeInTheDocument();
   const deleted = screen.getByLabelText('Guest deleted');
   expect(deleted).toHaveTextContent('"name": "Guest"');
   expect(screen.getByText('Saved version 5 by admin', { exact: false })).toBeInTheDocument();
   expect(screen.queryByText('Saved version 3 by admin', { exact: false })).not.toBeInTheDocument();
   expect(screen.getByText('Apply 1, saved version 3: Confirmed.')).toBeInTheDocument();
+  // Version 4 changed two objects and version 5 one; the summary counts them and names no raw ID.
+  expect(screen.getByText('2 changed objects')).toBeInTheDocument();
+  expect(screen.getByText('1 changed object')).toBeInTheDocument();
+  // The confirmed banner would contradict the pending changes below it.
+  expect(screen.queryByRole('status', { name: 'Confirmed' })).not.toBeInTheDocument();
 });
 
 it('applies the reviewed version with the chosen confirmation window', async () => {

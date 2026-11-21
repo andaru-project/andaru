@@ -103,7 +103,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
             <Title order={1} size="h3">Andaru</Title>
           </Group>
           <Group gap="sm" wrap="nowrap">
-            <Badge color={connected ? 'green' : 'red'} variant="filled" role="status">{connected ? 'Connected' : 'Connection lost'}</Badge>
+            <Badge color={connected ? 'green' : 'red'} role="status">{connected ? 'Connected' : 'Connection lost'}</Badge>
             <Menu position="bottom-end">
               <Menu.Target><Button className="account-button" variant="default" size="xs">{session.account.displayName || session.account.login}</Button></Menu.Target>
               <Menu.Dropdown>

@@ -48,7 +48,7 @@ export function PendingNotice({ api, session, state, onChanged, onSessionLost }:
         {session.capabilities.includes('configuration.apply') && <Button size="xs" color="red" variant="default" disabled={busy} onClick={() => void finish(apply.id, 'rollback')}>Roll back</Button>}
         <Anchor component={Link} to="/changes">Review and apply</Anchor>
       </Group>
-      {error.apply === apply.id && <Text c="red" size="sm" role="alert" mt="xs">{error.message}</Text>}
+      {error.apply === apply.id && <Text className="error-text" size="sm" role="alert" mt="xs">{error.message}</Text>}
     </Alert>
   );
 }

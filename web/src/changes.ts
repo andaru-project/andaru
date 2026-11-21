@@ -128,7 +128,9 @@ export function fieldChanges(before: unknown, after: unknown): Array<{ field: st
   const a = record(before);
   const b = record(after);
   if (!a || !b) return [{ field: '', before, after }];
-  return [...new Set([...Object.keys(a), ...Object.keys(b)])]
+  const fields = [...new Set([...Object.keys(a), ...Object.keys(b)])]
     .filter((field) => JSON.stringify(a[field]) !== JSON.stringify(b[field]))
     .map((field) => ({ field, before: a[field], after: b[field] }));
+  // The caller found the two differ; if no field does (key order), show them whole rather than an empty table.
+  return fields.length ? fields : [{ field: '', before, after }];
 }

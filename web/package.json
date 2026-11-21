@@ -12,7 +12,7 @@
     "dev": "vite",
     "lint": "eslint . --max-warnings=0",
     "test": "vitest run",
-    "theme": "UPDATE_THEME_CSS=1 vitest run src/theme.test.ts",
+    "theme": "vitest run src/theme.test.ts -u",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

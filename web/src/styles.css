@@ -8,17 +8,20 @@
 :root {
   --andaru-chrome: #152330;
   --andaru-accent: #ffb21c;
+  --andaru-ground: light-dark(#f2f4f6, var(--mantine-color-dark-8));
+  /* Error text beside other text: Mantine's red is 3.8:1 on white. */
+  --andaru-error-text: light-dark(var(--mantine-color-red-9), var(--mantine-color-red-4));
 }
 
 :root[data-mantine-color-scheme="light"] {
   --mantine-color-text: #17212c;
   --mantine-color-dimmed: #526171;
   --mantine-color-default-border: #c9d0d8;
-  --andaru-ground: #f2f4f6;
 }
 
+/* Mantine's dark dimmed text is 4.0:1 on its dark surfaces. */
 :root[data-mantine-color-scheme="dark"] {
-  --andaru-ground: var(--mantine-color-dark-8);
+  --mantine-color-dimmed: var(--mantine-color-dark-1);
 }
 
 body {
@@ -34,13 +37,13 @@ body {
   color: #fff;
 }
 
-.app-header .account-button {
+.account-button {
   background: transparent;
   border-color: rgb(255 255 255 / 35%);
   color: #fff;
 }
 
-.app-header .account-button:hover {
+.account-button:hover {
   background: rgb(255 255 255 / 12%);
 }
 
@@ -53,15 +56,12 @@ body {
   border-radius: var(--mantine-radius-default);
 }
 
-.nav-item[data-active] {
+.nav-item[data-active],
+.nav-item[data-active]:hover {
   background: var(--mantine-color-body);
   border-left-color: var(--andaru-accent);
   color: var(--mantine-color-text);
   font-weight: 650;
-}
-
-.nav-item[data-active]:hover {
-  background: var(--mantine-color-body);
 }
 
 .login-page {
@@ -123,17 +123,26 @@ body {
 }
 
 /* Old and new values in a review: marked by a border and a tint, never by colour alone (the column says which). */
-.mantine-Code-root.diff-old {
-  background: light-dark(#fdecea, #4a2326);
+.diff-old {
+  background: light-dark(#fbdcd9, #4a2326);
   border-left: 3px solid var(--mantine-color-red-6);
 }
 
-.mantine-Code-root.diff-new {
-  background: light-dark(#e9f6ec, #1f3d27);
+.diff-new {
+  background: light-dark(#d5efdb, #1f3d27);
   border-left: 3px solid var(--mantine-color-green-7);
 }
 
 /* An alert's tint and title carry its state; the title stays ink so it reads on every tint. */
 .mantine-Alert-title {
   color: var(--mantine-color-text);
+}
+
+/* Mantine's focus ring is the primary colour, 2:1 on the dark header. */
+.app-header :focus-visible {
+  outline-color: #fff;
+}
+
+.error-text {
+  color: var(--andaru-error-text);
 }

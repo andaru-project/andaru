@@ -67,13 +67,13 @@ From the 2026-11-21 conversation:
 ## Visual design (author calls, 2026-11-21; the owner reviews them on the lab box)
 
 12. **Palette, from the earlier form prototype:** dark chrome `#152330` for the header, ink `#17212c` on a cool ground `#f2f4f6`, lines `#c9d0d8`, muted text `#526171`. The mark's amber `#ffb21c` is an accent only (the active navigation marker, the login card's top edge): on white it is 1.8:1, so it never carries text.
-13. **Primary colour is an ink blue,** `#17577d` in the light scheme (white on it is 7.9:1), for primary buttons, links and focus. Apply uses it too; orange with white text was 2.9:1.
+13. **Primary colour is an ink blue,** `#17577d` in the light scheme (white on it is 7.8:1), for primary buttons, links and focus. Apply uses it too; orange with white text was 2.9:1.
 14. **The theme is a static stylesheet.** andaru-web's `style-src 'self'` refuses the `<style>` element Mantine injects for a theme, so `web/src/theme.css` is generated from `theme.ts` (`npm run theme`) and a test keeps the two equal. `MantineProvider` runs with `withCssVariables={false}`. This fixes the theme half of #100; responsive style props (`SimpleGrid cols={{…}}`) are still refused and are avoided.
 15. **Fonts** are Mantine's default system stack; no font is shipped.
 16. **Interfaces** is five columns, not ten: the interface with its MAC, kind and MTU beneath; its state as a badge; its addresses one per line; the saved link with its segment and zone beneath; the addressing modes. The loopback is hidden unless the configuration names it.
 17. **Review and apply** shows a changed object as the fields that differ, old beside new; a created or deleted object as its whole value. Old and new are marked by a border and a tint as well as by their column. A version's summary gives a count, not raw IDs.
-18. **Alerts** keep their title in ink on every tint.
-19. **Dark scheme** follows the browser, as before; it keeps the dark chrome and uses Mantine's dark surfaces. It has not been checked in a browser.
+18. **Alerts** keep their title in ink on every tint. Text on a filled colour is black or white, whichever reads (Mantine's `autoContrast`): white on its green or yellow is under 3:1. Error text beside other text uses a darker red.
+19. **Dark scheme** follows the browser, as before; it keeps the dark chrome and uses Mantine's dark surfaces. Dimmed text is lightened there, since Mantine's is 4.0:1. Widths below 900 px are not designed yet: tables scroll sideways.
 
 Open for the owner:
 

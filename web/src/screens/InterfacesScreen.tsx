@@ -71,7 +71,8 @@ export function InterfacesScreen({ api, session, onSessionLost }: InterfacesScre
 
   const { links, saved, savedError } = resource.data;
   // The loopback is not a port anyone configures: it shows only if the configuration names it.
-  const rows = (saved ? join(links, saved.snapshot, saved.preview) : links.map((live): Row => ({ key: live.name, live }))).filter((row) => row.saved || row.live?.linkType !== 'loopback');
+  const all = saved ? join(links, saved.snapshot, saved.preview) : links.map((live): Row => ({ key: live.name, live }));
+  const rows = all.filter((row) => row.saved || row.live?.linkType !== 'loopback');
   const showSaved = Boolean(saved);
   const segmentOf = (link: SavedLink): Segment | undefined => saved?.snapshot.value.segments.find((segment) => segment.link === link.id);
   const zoneName = (id: string) => saved?.snapshot.value.zones.find((zone) => zone.id === id)?.name ?? id;
@@ -92,8 +93,8 @@ export function InterfacesScreen({ api, session, onSessionLost }: InterfacesScre
                   {live ? <Text ff="monospace" fw={600}>{live.name}</Text> : <Text c="dimmed">No device</Text>}
                   <Text c="dimmed" size="sm"><Text span ff="monospace" inherit>{live?.linkAddress || link?.permanentMac || 'no MAC'}</Text> · {live?.linkType ?? link?.kind} · MTU {live?.mtu ?? link?.mtu}</Text>
                 </Table.Td>
-                <Table.Td>{live ? <Badge color={stateColor[live.operState] ?? 'gray'} variant="light">{live.operState.toLowerCase()}</Badge> : <Badge color={state === 'Disabled' ? 'gray' : 'red'}>{state}</Badge>}</Table.Td>
-                <Table.Td>{live?.addresses.length ? live.addresses.map((address) => <Text key={address.address} ff="monospace" size="sm">{address.address}/{address.prefixLength}</Text>) : <Text c="dimmed">—</Text>}</Table.Td>
+                <Table.Td>{live ? <Badge color={stateColor[live.operState] ?? 'gray'}>{live.operState.toLowerCase()}</Badge> : <Badge color={state === 'Disabled' ? 'gray' : 'red'}>{state}</Badge>}</Table.Td>
+                <Table.Td>{live?.addresses.length ? live.addresses.map((address) => <Text key={`${address.address}/${address.prefixLength}`} ff="monospace" size="sm">{address.address}/{address.prefixLength}</Text>) : <Text c="dimmed">—</Text>}</Table.Td>
                 {showSaved && (
                   <>
                     <Table.Td>
@@ -104,7 +105,7 @@ export function InterfacesScreen({ api, session, onSessionLost }: InterfacesScre
                         </>
                       ) : <Text c="dimmed">Not in the configuration</Text>}
                       {conflict && <Badge color="red" variant="light">Conflict: several saved links</Badge>}
-                      {finding && <Text size="sm" c="red">{finding}</Text>}
+                      {finding && <Text size="sm" className="error-text">{finding}</Text>}
                     </Table.Td>
                     <Table.Td>{segment ? <><Text size="sm">IPv4 {segment.addressing.ipv4.mode}</Text><Text size="sm">IPv6 {segment.addressing.ipv6.mode}</Text></> : <Text c="dimmed">—</Text>}</Table.Td>
                   </>

@@ -38,6 +38,9 @@ describe('fieldChanges', () => {
       { field: 'description', before: undefined, after: 'x' },
     ]);
   });
+  it('shows two values whole when they differ only in key order', () => {
+    expect(fieldChanges({ a: 1, b: 2 }, { b: 2, a: 1 })).toEqual([{ field: '', before: { a: 1, b: 2 }, after: { b: 2, a: 1 } }]);
+  });
   it('treats a list order or a missing side as one value', () => {
     expect(fieldChanges(['a', 'b'], ['b', 'a'])).toEqual([{ field: '', before: ['a', 'b'], after: ['b', 'a'] }]);
   });

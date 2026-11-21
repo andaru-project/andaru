@@ -145,7 +145,7 @@ it('shows only live links without configuration.read', async () => {
   await showInterfaces(session(['status.read']));
 
   expect(screen.getByText('Your account cannot read the saved configuration, so only live links are shown.')).toBeInTheDocument();
-  expect(screen.queryByText('Unused')).not.toBeInTheDocument();
+  expect(screen.queryByText('Not in the configuration')).not.toBeInTheDocument();
   expect(fetchMock).toHaveBeenCalledTimes(1);
 });
 
@@ -157,4 +157,20 @@ it('leaves the loopback out unless the configuration names it', async () => {
   await showInterfaces();
 
   expect(screen.queryByText('lo')).not.toBeInTheDocument();
+});
+
+it('keeps a loopback the configuration names, and marks a disabled link that has its device', async () => {
+  const loop = 'lnk_66666666-6666-4666-8666-666666666666';
+  fetchRoutes({
+    '/api/v1/status/links': { items: [{ ...live(1, 'lo', '00:00:00:00:00:00'), linkType: 'loopback' }, live(2, 'enp1s0', '52:54:00:aa:bb:01')] },
+    '/api/v1/config': { state: 'saved', savedVersion: '7', unusedSecrets: [], value: {
+      links: [{ ...ethernet(lanPort, 'LAN port', '52:54:00:aa:bb:01'), enabled: false }, ethernet(loop, 'Loopback', '00:00:00:00:00:00')],
+      segments: [], zones: [],
+    } },
+    '/api/v1/preview/network?savedVersion=7': { state: 'preview', savedVersion: '7', realizable: true, resolved: [{ link: lanPort, interface: 'enp1s0' }, { link: loop, interface: 'lo' }], files: [], findings: [] },
+  });
+  await showInterfaces();
+
+  expect(row('lo')).toHaveTextContent('Loopback');
+  expect(within(row('enp1s0')).getByText('Disabled')).toBeInTheDocument();
 });
