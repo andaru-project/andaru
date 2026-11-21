@@ -50,9 +50,11 @@ The API exists: `policy.input` and `policy.forward` with their order operation, 
    - Each row shows where it is used ("3 rules"), with the list on demand.
 
 9. **An anti-lockout rule, as pfSense has** (owner, 2026-11-21). The packet filter already accepts SSH on the management segment by a fixed rule no edit removes. That rule grows to cover the web UI's port, so no saved rule can cut an administrator off from the browser either.
+   - The owner's definition: the management interface always lets in the web UI, and SSH when SSH is enabled, so an administrator can always reach the box. When the management interface is also the LAN, the rule applies there.
    - It is the slice's one engine change: the fixed management rule accepts the web UI's listening port beside 22/tcp, from the same `allowedSources`.
+   - The SSH half follows SSH itself. Today the rule accepts 22/tcp whether or not `sshd` runs, and no setting turns SSH on or off; once one exists, the rule drops its SSH half while SSH is off.
    - The "To the firewall" page shows it first in the fixed block, named "Anti-lockout", with the segment, the ports and the allowed sources, and a link to where the management segment is set.
-   - It has no off switch in this slice. Narrowing it is `allowedSources`' job.
+   - It has no off switch: "always" is the point. Narrowing it is `allowedSources`' job.
    - The rollback timer stays the backstop for everything the rule does not cover, such as a change to the management segment's own addressing.
 
 10. **Starter rules.** A new box has no rules, so nothing forwards. The Rules page, when empty, offers "Allow the LAN out": one forward rule from the management segment's zone to anywhere, saved like any rule. It is an offer, never automatic, and slice 3's seed apply may make it moot.
@@ -65,7 +67,6 @@ The API exists: `policy.input` and `policy.forward` with their order operation, 
 
 ## Open for the owner
 
-- **Anti-lockout (call 9):** should an administrator be able to switch it off, as pfSense allows under its advanced settings?
 - **Starter rule (call 10):** offer it, or leave an empty table with an explanation?
 - **NAT** (outbound mode, port forwards, 1:1) is the natural third slice. Should port forwards sit under Firewall or under their own NAT group?
 
