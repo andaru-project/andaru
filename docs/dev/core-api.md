@@ -72,6 +72,8 @@ The actual OpenAPI 3.1 document is embedded from [`internal/engine/openapi.json`
 | Resource | Result |
 | --- | --- |
 | `GET /api/v1/status/links` | Complete current snapshot as `{"items":[...]}` |
+| `GET /api/v1/status/usage` | How hard the box is working now: processor tick counters, load, memory and swap, the room on each device and ZFS pool (one row each, however often it is mounted; FUSE, network and memory file systems are not listed), the connection-tracking table, temperatures. Read at each request; the processor counters are cumulative |
+| `GET /api/v1/status/traffic` | The last hour of every network interface's cumulative counters, read every 30 seconds and kept in the engine's memory only |
 | `GET /api/v1/status/system` | What the box is, read from `/proc` and `/sys` at each request: the Andaru version, the kernel, the CPU and its features, the hardware as its firmware names it. What a machine does not report is an empty string or list, and a null boot time |
 | `GET /api/v1/openapi.json` | The implemented OpenAPI contract |
 | `GET /api/v1/schema` | Public declaration/write/redacted-view JSON Schema; private secret-store layout is not served |
