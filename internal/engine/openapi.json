@@ -5588,13 +5588,17 @@
             "description": "The box's clock at the request"
           },
           "bootedAt": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "date-time",
-            "description": "When the kernel started, to the second"
+            "description": "When the kernel started, the kernel's own whole second; null when it does not say"
           },
           "memoryBytes": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "The memory the kernel has to use, a little less than what is installed"
           },
           "guest": {
             "type": "string",
@@ -5623,11 +5627,13 @@
               },
               "cores": {
                 "type": "integer",
-                "minimum": 0
+                "minimum": 0,
+                "description": "Online cores; equal to threads where the kernel names no cores"
               },
               "threads": {
                 "type": "integer",
-                "minimum": 0
+                "minimum": 0,
+                "description": "Online threads"
               },
               "microcode": {
                 "type": "string",
@@ -5652,7 +5658,7 @@
                   "security",
                   "virtualization"
                 ],
-                "description": "The CPU features a firewall gains from, each by its usual name and only when present",
+                "description": "The CPU features a firewall gains from, each by its usual name and only when every online processor has it",
                 "properties": {
                   "cryptography": {
                     "type": "array",
@@ -5683,7 +5689,7 @@
                   "required": [
                     "name",
                     "status",
-                    "mitigated"
+                    "state"
                   ],
                   "properties": {
                     "name": {
@@ -5692,9 +5698,15 @@
                     "status": {
                       "type": "string"
                     },
-                    "mitigated": {
-                      "type": "boolean",
-                      "description": "False only where the kernel says Vulnerable"
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "not_affected",
+                        "mitigated",
+                        "vulnerable",
+                        "unknown"
+                      ],
+                      "description": "A reading of the status: vulnerable when the kernel says so anywhere in the line, unknown for anything it words otherwise"
                     }
                   }
                 }
@@ -5739,7 +5751,8 @@
               "biosDate": {
                 "type": "string"
               }
-            }
+            },
+            "description": "From the firmware's DMI table. The serial is the product's, or the board's when the product has none. A field the vendor left as a placeholder is empty"
           }
         }
       },

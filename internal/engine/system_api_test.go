@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/andaru-project/andaru/internal/authz"
 )
 
 // The system description: the kernel's files as the schema promises them, beside the Andaru version.
@@ -35,39 +37,42 @@ func TestSystemStatus(t *testing.T) {
 
 	writeUnder(t, root, "/proc/cpuinfo", "processor\t: 0\nmodel name\t: Test CPU\nmicrocode\t: 0x1\nflags\t\t: lm cmov cx8 fpu fxsr mmx syscall sse sse2 aes nx vmx hypervisor\n")
 	writeUnder(t, root, "/proc/sys/kernel/hostname", "edge\n")
-	writeUnder(t, root, "/proc/uptime", "60.00 1.00\n")
+	writeUnder(t, root, "/proc/stat", "btime 1795258800\n")
 	writeUnder(t, root, "/proc/meminfo", "MemTotal: 2048 kB\n")
 	writeUnder(t, root, "/sys/class/dmi/id/sys_vendor", "QEMU\n")
 	writeUnder(t, root, "/sys/class/dmi/id/product_serial", "SER-1\n")
 	writeUnder(t, root, "/sys/devices/system/cpu/vulnerabilities/tsa", "Vulnerable\n")
 	rec = get(http.MethodGet)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
 	validResponse(t, "SystemResponse", rec.Body.Bytes())
-	var body struct {
-		Version, Hostname, Guest string
-		MemoryBytes              uint64
-		CPU                      struct {
-			Model, Level    string
-			Features        struct{ Cryptography, Security, Virtualization []string }
-			Vulnerabilities []struct {
-				Name      string
-				Mitigated bool
-			}
-		}
-		Hardware struct{ Serial string }
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatal(err)
-	}
-	if body.Version != buildVersion || body.Hostname != "edge" || body.Guest != "QEMU" || body.MemoryBytes != 2048<<10 || body.CPU.Model != "Test CPU" || body.CPU.Level != "x86-64-v1" ||
-		strings.Join(body.CPU.Features.Cryptography, ",") != "AES-NI" || strings.Join(body.CPU.Features.Security, ",") != "NX" || strings.Join(body.CPU.Features.Virtualization, ",") != "VT-x" ||
-		len(body.CPU.Vulnerabilities) != 1 || body.CPU.Vulnerabilities[0].Name != "tsa" || body.CPU.Vulnerabilities[0].Mitigated || body.Hardware.Serial != "SER-1" {
-		t.Fatalf("%s", rec.Body)
+	// The reading itself is the host package's to test; here, that it arrives beside the version.
+	var body struct{ Version, Hostname string }
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body.Version != buildVersion || body.Hostname != "edge" {
+		t.Fatalf("%v %s", err, rec.Body)
 	}
 
 	if rec := get(http.MethodHead); rec.Code != http.StatusOK || rec.Body.Len() != 0 {
 		t.Fatalf("HEAD: %d %q", rec.Code, rec.Body)
 	}
-	if rec := get(http.MethodPost); rec.Code != http.StatusMethodNotAllowed && rec.Code != http.StatusForbidden {
+	if rec := get(http.MethodPost); rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("POST: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// What the box reports about itself is status: every status route asks for status.read and nothing else.
+func TestStatusRoutesNeedStatusRead(t *testing.T) {
+	seen := 0
+	for _, route := range buildEngineRoutes() {
+		if strings.HasPrefix(route.Path, "/api/v1/status/") {
+			seen++
+			if route.Capability != authz.StatusRead {
+				t.Errorf("%s %s needs %q", route.Method, route.Path, route.Capability)
+			}
+		}
+	}
+	if seen != 6 {
+		t.Fatalf("%d status routes, want links, prefixes and system, each for GET and HEAD", seen)
 	}
 }

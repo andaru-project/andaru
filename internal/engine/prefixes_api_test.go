@@ -40,7 +40,7 @@ func TestPrefixesStatus(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%d %s", rec.Code, rec.Body)
 		}
-		validPrefixesResponse(t, rec.Body.Bytes())
+		validResponse(t, "PrefixesResponse", rec.Body.Bytes())
 		var body map[string]any
 		_ = json.Unmarshal(rec.Body.Bytes(), &body)
 		return body["wans"].([]any)[0].(map[string]any)
@@ -68,11 +68,6 @@ func TestPrefixesStatus(t *testing.T) {
 	if nf := w["notFitting"].([]any); len(nf) != 1 {
 		t.Fatalf("%v", nf)
 	}
-}
-
-func validPrefixesResponse(t *testing.T, body []byte) {
-	t.Helper()
-	validResponse(t, "PrefixesResponse", body)
 }
 
 // validResponse checks a response body against the schema the engine serves for it.
