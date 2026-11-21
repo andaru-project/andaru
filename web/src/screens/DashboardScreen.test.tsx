@@ -102,7 +102,8 @@ it('polls a widget every 10 seconds, and waits for an answer that is still out',
   });
   const reads = () => fetchMock.mock.calls.filter(([url]) => url === '/api/v1/status/links').length;
   await mount(['status.read']);
-  expect(reads()).toBe(1);
+  // The widgets mount once the layout is read; their first request follows in an effect.
+  await waitFor(() => expect(reads()).toBe(1));
 
   // The first answer is slower than the poll: asking again would throw it away when it comes.
   act(() => { vi.advanceTimersByTime(30_000); });
