@@ -121,77 +121,103 @@ func waitForUnixSocket(t *testing.T, path string) {
 
 func TestWebSocketReplacesOnlyADeadLeftover(t *testing.T) {
 	requireRoot(t)
-	serve := func(ctx context.Context, path string) <-chan error {
-		done := make(chan error, 1)
-		go func() {
-			done <- serveWebUnix(ctx, WebSocketOptions{SocketPath: path, UID: 0, GID: 0}, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusNoContent)
-			}))
-		}()
-		return done
-	}
-
-	t.Run("a killed engine's socket is replaced", func(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	// webSocketPath returns a socket path in a parent of the mode serveWebUnix requires, whatever the umask.
+	webSocketPath := func(t *testing.T) string {
+		t.Helper()
 		path := filepath.Join(shortPrivateDir(t), "andaru-web", "engine.sock")
 		if err := os.Mkdir(filepath.Dir(path), 0710); err != nil {
 			t.Fatal(err)
 		}
-		// A listener closed without unlinking leaves what a SIGKILL leaves: a socket file nothing answers.
+		if err := os.Chmod(filepath.Dir(path), 0710); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	// deadSocket leaves what a SIGKILL leaves: a socket file nothing answers.
+	deadSocket := func(t *testing.T, path string) {
+		t.Helper()
 		dead, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
 		if err != nil {
 			t.Fatal(err)
 		}
 		dead.SetUnlinkOnClose(false)
 		dead.Close()
+	}
+	// refused runs an engine that must fail at once; a regression that serves instead fails here, not at the suite's timeout.
+	refused := func(t *testing.T, path, want string) {
+		t.Helper()
 		ctx, cancel := context.WithCancel(context.Background())
-		done := serve(ctx, path)
-		// The path exists from the start, so wait for an answer, not for the file.
-		var response *http.Response
-		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-			if response, err = unixTestClient(path).Get("http://unix/test"); err == nil || time.Now().After(deadline) {
-				break
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- serveWebUnix(ctx, WebSocketOptions{SocketPath: path, UID: 0, GID: 0}, handler) }()
+		select {
+		case err := <-done:
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("want a refusal with %q, got %v", want, err)
 			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("the engine served instead of refusing with %q", want)
 		}
-		if err != nil || response.StatusCode != http.StatusNoContent {
-			t.Fatalf("engine did not serve over the replaced socket: response=%v err=%v", response, err)
+		if _, err := os.Lstat(path); err != nil {
+			t.Fatalf("the refused path was removed: %v", err)
+		}
+	}
+	get := func(path string) error {
+		response, err := unixTestClient(path).Get("http://unix/test")
+		if err != nil {
+			return err
 		}
 		response.Body.Close()
+		if response.StatusCode != http.StatusNoContent {
+			return errors.New(response.Status)
+		}
+		return nil
+	}
+
+	t.Run("a killed engine's socket is replaced, and a second engine is refused", func(t *testing.T) {
+		path := webSocketPath(t)
+		deadSocket(t, path)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- serveWebUnix(ctx, WebSocketOptions{SocketPath: path, UID: 0, GID: 0}, handler) }()
+		// The path exists from the start, so wait for an answer, not for the file.
+		var err error
+		for deadline := time.Now().Add(5 * time.Second); ; {
+			if err = get(path); err == nil || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if err != nil {
+			t.Fatalf("the engine did not serve over the replaced socket: %v", err)
+		}
+		// While it serves, its live socket is not a leftover to anyone else.
+		refused(t, path, "another engine serves this web socket")
+		if err = get(path); err != nil {
+			t.Fatalf("the first engine stopped serving: %v", err)
+		}
 		cancel()
 		if err = <-done; err != nil {
 			t.Fatal(err)
 		}
 	})
 
-	t.Run("a socket something listens on is refused", func(t *testing.T) {
-		path := filepath.Join(shortPrivateDir(t), "andaru-web", "engine.sock")
-		if err := os.Mkdir(filepath.Dir(path), 0710); err != nil {
-			t.Fatal(err)
-		}
-		other, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer other.Close()
-		err = <-serve(context.Background(), path)
-		if err == nil || !strings.Contains(err.Error(), "something listens on it") {
-			t.Fatalf("a live socket was not refused: %v", err)
-		}
-		if _, statErr := os.Lstat(path); statErr != nil {
-			t.Fatalf("the live socket was removed: %v", statErr)
-		}
-	})
-
-	t.Run("a file that is not a socket is refused", func(t *testing.T) {
-		path := filepath.Join(shortPrivateDir(t), "andaru-web", "engine.sock")
-		if err := os.Mkdir(filepath.Dir(path), 0710); err != nil {
-			t.Fatal(err)
-		}
+	t.Run("a file that is not a socket is refused and kept", func(t *testing.T) {
+		path := webSocketPath(t)
 		if err := os.WriteFile(path, nil, 0600); err != nil {
 			t.Fatal(err)
 		}
-		err := <-serve(context.Background(), path)
-		if err == nil || !strings.Contains(err.Error(), "not a root-owned socket") {
-			t.Fatalf("a plain file was not refused: %v", err)
+		refused(t, path, "not a root-owned socket")
+	})
+
+	t.Run("a socket root does not own is refused and kept", func(t *testing.T) {
+		path := webSocketPath(t)
+		deadSocket(t, path)
+		if err := os.Lchown(path, 65534, 0); err != nil {
+			t.Fatal(err)
 		}
+		refused(t, path, "not a root-owned socket")
 	})
 }

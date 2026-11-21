@@ -239,9 +239,11 @@ func serveWebUnix(ctx context.Context, web WebSocketOptions, handler http.Handle
 		}
 		return errors.New("web engine socket parent must be a root-owned 0710 directory with the configured group, not a symlink")
 	}
-	if err = removeStaleSocket(socketPath); err != nil {
+	claim, err := claimWebSocket(socketPath)
+	if err != nil {
 		return err
 	}
+	defer claim.Close()
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
 	if err != nil {
 		return fmt.Errorf("listen on web engine socket: %w", err)
@@ -388,31 +390,41 @@ func webGroupHint(err error, gid uint32) error {
 	return err
 }
 
-// removeStaleSocket clears a web socket a killed engine left behind: systemd restarts the engine, but the socket's
-// directory comes from tmpfiles.d, so nothing else removes it. Only a root-owned socket nothing listens on goes;
-// anything else at the path is left for an administrator.
-func removeStaleSocket(path string) error {
-	info, err := os.Lstat(path)
-	if os.IsNotExist(err) {
-		return nil
-	}
+// claimWebSocket takes the web socket's path for this engine and clears what a killed engine left there: systemd
+// restarts the engine, but the socket's directory comes from tmpfiles.d, so nothing else removes the file.
+// The lock beside the socket is held for the engine's life, so a socket found under it has no owner. Probing the
+// socket instead would race another engine between its bind and its listen. The lock file stays; it is root's, 0600.
+func claimWebSocket(path string) (*os.File, error) {
+	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0600)
 	if err != nil {
-		return fmt.Errorf("inspect web engine socket path: %w", err)
+		return nil, fmt.Errorf("open web engine socket lock: %w", err)
 	}
-	if info.Mode()&os.ModeSocket == 0 || !securefs.RootOwned(info) {
-		return errors.New("web engine socket path already exists and is not a root-owned socket; investigate it rather than replacing it")
+	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = lock.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, errors.New("another engine serves this web socket")
+		}
+		return nil, fmt.Errorf("lock web engine socket: %w", err)
 	}
-	connection, err := net.DialTimeout("unix", path, time.Second)
-	if err == nil {
-		_ = connection.Close()
-		return errors.New("web engine socket path already exists and something listens on it; is another engine running?")
+	info, err := os.Lstat(path)
+	switch {
+	case os.IsNotExist(err):
+		return lock, nil
+	case err != nil:
+		err = fmt.Errorf("inspect web engine socket path: %w", err)
+	case !rootOwnedSocket(info):
+		err = errors.New("web engine socket path already exists and is not a root-owned socket; investigate it rather than replacing it")
+	default:
+		slog.Warn("removing the web socket a previous engine left behind", "path", path)
+		if err = os.Remove(path); err == nil || os.IsNotExist(err) {
+			return lock, nil
+		}
+		err = fmt.Errorf("remove stale web engine socket: %w", err)
 	}
-	if !errors.Is(err, syscall.ECONNREFUSED) {
-		return fmt.Errorf("probe existing web engine socket: %w", err)
-	}
-	slog.Warn("removing the web socket a previous engine left behind", "path", path)
-	if err = os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove stale web engine socket: %w", err)
-	}
-	return nil
+	_ = lock.Close()
+	return nil, err
+}
+
+func rootOwnedSocket(info os.FileInfo) bool {
+	return info.Mode()&os.ModeSocket != 0 && securefs.RootOwned(info)
 }
