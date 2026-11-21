@@ -72,9 +72,9 @@ it('shows the pending notice everywhere but on Review and apply', async () => {
   expect(await screen.findByText('Saved changes are not applied yet')).toBeInTheDocument();
 });
 
-it('leaves the apply controls to the Review and apply page there', async () => {
+it.each(['/changes', '/changes/'])('leaves the apply controls to the Review and apply page at %s', async (path) => {
   routes();
-  mount('/changes');
+  mount(path);
   expect(await screen.findByRole('heading', { name: 'Review and apply' })).toBeInTheDocument();
   expect(await screen.findByText('Apply 1, saved version 3: Confirmed.')).toBeInTheDocument();
   expect(screen.queryByText('Saved changes are not applied yet')).not.toBeInTheDocument();

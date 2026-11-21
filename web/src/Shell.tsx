@@ -1,7 +1,7 @@
 import { Alert, AppShell, Badge, Burger, Button, Group, Image, Menu, NavLink, Stack, Text, Title } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router';
+import { Link, Navigate, Route, Routes, useLocation, useMatch, useNavigate } from 'react-router';
 import { ApiClient, reportError } from './api';
 import mark from './andaru-icon.svg';
 import { loadChangeState } from './changes';
@@ -31,6 +31,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   const capabilities = useMemo(() => new Set(session.capabilities), [session.capabilities]);
   const [opened, { toggle, close }] = useDisclosure();
   const { pathname } = useLocation();
+  const onChangesPage = useMatch('/changes') !== null;
   const navigate = useNavigate();
   const [passwordUser, setPasswordUser] = useState<User | null>(null);
   const [accountError, setAccountError] = useState('');
@@ -129,7 +130,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
           {!connected && <Alert color="red" role="alert" title="Connection lost">The box does not answer. Pages show the last data it sent.</Alert>}
           {accountError && <Alert color="red" role="alert" title="Account request failed">{accountError}</Alert>}
           {/* Review and apply owns these controls on its own page. */}
-          {pathname !== '/changes' && <PendingNotice api={api} session={session} state={changes.data} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />}
+          {!onChangesPage && <PendingNotice api={api} session={session} state={changes.data} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />}
           <Routes>
             {pages.filter(([path]) => visible.has(path)).map(([path, element]) => <Route key={path} path={path} element={element} />)}
             <Route path="/system/session" element={<SessionScreen session={session} />} />

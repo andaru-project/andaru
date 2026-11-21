@@ -1,5 +1,5 @@
 import { Alert, Badge, Button, Code, Group, List, Loader, Paper, Radio, ScrollArea, Stack, Table, Text, Title } from '@mantine/core';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiClient, ApiError, reportError } from '../api';
 import { clock, describe, differences, liveApply, newer, stateLabels, useCountdown, type ChangeState } from '../changes';
 import type { Finding, Session, VersionInfo } from '../types';
@@ -39,6 +39,8 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
   const load = useCallback(async () => {
     const [applies, first] = await Promise.all([api.listApplies(), api.versions(100)]);
     const liveSaved = liveApply(applies)?.savedVersion ?? '0';
+    // The newest apply the review saw; a newer one in the shell's poll means live may have moved.
+    const lastApply = applies.items[0]?.id ?? '0';
     const reviewed = first.items[0]?.id ?? '0';
     const saved: VersionInfo[] = [];
     let page = first;
@@ -50,13 +52,27 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
       if (!page.nextBefore) break;
       page = await api.versions(100, page.nextBefore);
     }
-    if (saved.length === 0) return { liveSaved, reviewed, changes: null };
+    if (saved.length === 0) return { lastApply, reviewed, changes: null };
     // shortcut: one request per saved version since the live one; a server-side difference (spec call 10) replaces it.
     const [baseline, preview, ...versions] = await Promise.all([api.version(liveSaved), api.previewNetwork(reviewed), ...saved.map((info) => api.version(info.id))]);
-    return { liveSaved, reviewed, changes: { baseline, preview, versions } };
+    return { lastApply, reviewed, changes: { baseline, preview, versions } };
   }, [api]);
   const review = useResource(load, onSessionLost);
   const reloadReview = review.reload;
+
+  // A reload the user asks for, or a reconnect, starts over: old answers no longer describe the review.
+  const reload = useCallback(() => {
+    setMessage('');
+    setRefused([]);
+    onChanged();
+    void reloadReview();
+  }, [onChanged, reloadReview]);
+
+  const wasConnected = useRef(connected);
+  useEffect(() => {
+    if (connected && !wasConnected.current) reload();
+    wasConnected.current = connected;
+  }, [connected, reload]);
 
   async function apply(reviewed: string) {
     setBusy('apply');
@@ -84,6 +100,7 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
   async function finish(id: string, action: 'confirmation' | 'rollback') {
     setBusy(action);
     setMessage('');
+    setRefused([]);
     try {
       setMessage(describe(await api.finishApply(id, action)));
     } catch (error) {
@@ -91,6 +108,7 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
     } finally {
       setBusy('');
       onChanged();
+      void reloadReview();
     }
   }
 
@@ -98,7 +116,9 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
 
   const detail = review.data;
   const changes = detail?.changes;
-  const stale = !detail ? '' : newer(state.head, detail.reviewed) ? `Saved version ${state.head} arrived since this review.` : (live?.savedVersion ?? '0') !== detail.liveSaved ? 'The live configuration changed since this review.' : '';
+  // Stale only when the shell has seen something newer than the review; a review newer than the
+  // shell's last poll (another session applied meanwhile) is not stale.
+  const stale = !detail ? '' : newer(state.head, detail.reviewed) ? `Saved version ${state.head} arrived since this review.` : newer(latest?.id ?? '0', detail.lastApply) ? 'The live configuration changed since this review.' : '';
   const changed = changes ? differences(changes.baseline.value, changes.versions[0].value, changes.versions.flatMap((version) => version.changes)) : [];
   const errors = changes?.preview.findings.filter((finding) => finding.severity === 'error') ?? [];
   const warnings = changes?.preview.findings.filter((finding) => finding.severity === 'warning') ?? [];
@@ -109,8 +129,8 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
     <Stack>
       <div><Title order={2}>Review and apply</Title><Text c="dimmed">Saved changes take effect only when applied, and stay only when confirmed.</Text></div>
       {stateError && <Alert color="red" role="alert" title="Changes request failed">{stateError}</Alert>}
-      {review.error && <Alert color="red" role="alert" title="Review request failed">{review.error}</Alert>}
-      {stale && <Alert color="yellow" role="status" title={stale}><Button size="xs" variant="default" loading={review.loading} onClick={() => void reloadReview()}>Reload</Button></Alert>}
+      {review.error && <Alert color="red" role="alert" title="Review request failed"><Stack gap="xs"><Text size="sm">{review.error}</Text><Group><Button size="xs" variant="default" loading={review.loading} onClick={reload}>Reload</Button></Group></Stack></Alert>}
+      {stale && !review.error && <Alert color="yellow" role="status" title={stale}><Button size="xs" variant="default" loading={review.loading} onClick={reload}>Reload</Button></Alert>}
       {message && <Alert color="blue" role="status">{message}</Alert>}
       {refused.length > 0 && <Alert color="red" title="The engine refused the apply"><FindingsList findings={refused} /></Alert>}
       {!canApply && <Alert color="gray" role="status">Your account can review changes but not apply them.</Alert>}

@@ -72,6 +72,15 @@ it('counts down correctly from the first render after a deadline appears', () =>
   expect(screen.getByText('1:00 left')).toBeInTheDocument();
 });
 
+it('rounds the time left down and reads a cached clock', () => {
+  vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+  const consoleError = vi.spyOn(console, 'error');
+  vi.setSystemTime(new Date('2026-11-21T10:01:29.999Z'));
+  render(notice(awaiting('2026-11-21T10:01:30Z')));
+  expect(screen.getByText('0:00 left')).toBeInTheDocument();
+  expect(consoleError).not.toHaveBeenCalled();
+});
+
 it('disables Confirm and Roll back while a request runs', async () => {
   let answer: (response: Response) => void = () => {};
   fetchRoutes({ 'POST /api/v1/applies/2/rollback': () => new Promise<Response>((resolve) => { answer = resolve; }) });

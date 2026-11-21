@@ -1,4 +1,4 @@
-import { useCallback, useSyncExternalStore } from 'react';
+import { useCallback, useRef, useSyncExternalStore } from 'react';
 import type { ApiClient } from './api';
 import type { Applies, Apply } from './types';
 
@@ -96,16 +96,27 @@ export function differences(live: Declaration, head: Declaration, changes: Array
   return result;
 }
 
-// useCountdown is display only: the server owns the deadline and the rollback. It reads the
-// clock as an external store, so the first render after a deadline appears is already right.
+// useCountdown is display only: the server owns the deadline and the rollback. The clock is an
+// external store: its time is taken when a deadline appears and on each tick, so the first render
+// is already right and every snapshot read between ticks returns the same value. Seconds left
+// round down, so a countdown never shows time that is not left.
 export function useCountdown(deadline: string | undefined) {
+  const clock = useRef({ deadline: '', now: 0 });
   const subscribe = useCallback((tick: () => void) => {
     if (!deadline) return () => {};
-    const timer = setInterval(tick, 1000);
+    const timer = setInterval(() => {
+      clock.current = { deadline, now: Date.now() };
+      tick();
+    }, 1000);
     return () => clearInterval(timer);
   }, [deadline]);
-  const now = useSyncExternalStore(subscribe, () => (deadline ? Math.floor(Date.now() / 1000) * 1000 : 0));
+  const snapshot = () => {
+    if (!deadline) return 0;
+    if (clock.current.deadline !== deadline) clock.current = { deadline, now: Date.now() };
+    return clock.current.now;
+  };
+  const now = useSyncExternalStore(subscribe, snapshot);
   if (!deadline) return '';
-  const seconds = Math.max(0, Math.round((Date.parse(deadline) - now) / 1000));
+  const seconds = Math.max(0, Math.floor((Date.parse(deadline) - now) / 1000));
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 }

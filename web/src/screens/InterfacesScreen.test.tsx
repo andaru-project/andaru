@@ -95,6 +95,28 @@ it('shows an Ethernet link the preview could not resolve as unresolved', async (
   expect(old).toHaveTextContent('Several interfaces share this permanent MAC');
 });
 
+it('shows a disabled saved link as disabled, and a link waiting on its parent with the reason', async () => {
+  const child = 'lnk_55555555-5555-4555-8555-555555555555';
+  routes({
+    links: [
+      ethernet(lanPort, 'LAN port', '52:54:00:aa:bb:01'),
+      { ...ethernet(gone, 'Old port', '52:54:00:aa:bb:09'), enabled: false },
+      { id: child, name: 'Old VLAN', kind: 'vlan', mtu: 1500, enabled: true, parent: gone, vlanId: 30 },
+    ],
+    findings: [
+      { ...missingFinding, path: '/links/1/permanentMac' },
+      { severity: 'warning', code: 'DEPENDENCY_UNAVAILABLE', path: '/links/2/parent', message: 'Not rendered: the parent link is unavailable.' },
+    ],
+  });
+  await showInterfaces();
+
+  expect(within(row('Old port')).getByText('Disabled')).toBeInTheDocument();
+  expect(within(row('Old port')).queryByText('Missing')).not.toBeInTheDocument();
+  const vlan = row('Old VLAN');
+  expect(within(vlan).getByText('Not realized')).toBeInTheDocument();
+  expect(vlan).toHaveTextContent('Not rendered: the parent link is unavailable.');
+});
+
 it('shows both saved links that land on one device', async () => {
   const second = 'lnk_44444444-4444-4444-8444-444444444444';
   routes({ links: [ethernet(lanPort, 'LAN port', '52:54:00:aa:bb:01'), ethernet(second, 'Spare port', '52:54:00:aa:bb:01')], findings: [], resolved: [{ link: lanPort, interface: 'enp1s0' }, { link: second, interface: 'enp1s0' }] });

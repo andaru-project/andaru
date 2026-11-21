@@ -36,9 +36,9 @@ function show(state: ChangeState, options: { connected?: boolean; who?: Session 
   const api = new ApiClient('csrf');
   const onChanged = vi.fn();
   const onSessionLost = vi.fn();
-  const screenFor = (next: ChangeState) => <ChangesScreen api={api} session={options.who ?? admin} state={next} stateError="" connected={options.connected ?? true} onChanged={onChanged} onSessionLost={onSessionLost} />;
-  const result = render(screenFor(state));
-  return { onChanged, rerender: (next: ChangeState) => result.rerender(screenFor(next)) };
+  const screenFor = (next: ChangeState, connected: boolean) => <ChangesScreen api={api} session={options.who ?? admin} state={next} stateError="" connected={connected} onChanged={onChanged} onSessionLost={onSessionLost} />;
+  const result = render(screenFor(state, options.connected ?? true));
+  return { onChanged, rerender: (next: ChangeState, connected = true) => result.rerender(screenFor(next, connected)) };
 }
 
 const versionLists = (fetchMock: ReturnType<typeof fetchRoutes>) => fetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/v1/versions?'));
@@ -238,4 +238,65 @@ it('lists the last 20 applies', async () => {
   const table = screen.getByRole('table', { name: 'Apply history' });
   expect(within(table).getAllByRole('row')).toHaveLength(21);
   expect(await screen.findByText('Nothing to apply: every saved change is live.')).toBeInTheDocument();
+});
+
+const refusal = failure(422, 'APPLY_REFUSED', 'This configuration cannot be applied to this host as it stands.', {
+  findings: [{ severity: 'error', code: 'WOULD_UNCONFIGURE', path: 'enp1s0', message: 'Applying would unconfigure enp1s0.' }],
+});
+
+it('is not stale when the review saw a newer apply than the shell last polled', async () => {
+  // Another session applied version 4 after the shell's last poll, which still shows apply 1 of version 3.
+  const reapplied = { pointers: { ...pointers, confirmed: '2', live: '2' }, items: [apply({ id: '2', savedVersion: '4' }), apply({})] };
+  routes({ '/api/v1/applies': reapplied });
+  show(unapplied);
+
+  expect(await screen.findByRole('button', { name: 'Apply saved version 5' })).toBeEnabled();
+  expect(screen.queryByText(/since this review/)).not.toBeInTheDocument();
+  expect(screen.queryByLabelText('DMZ created')).not.toBeInTheDocument();
+});
+
+it('is stale when the shell saw a newer apply, and Reload refreshes the shell too', async () => {
+  routes();
+  const { onChanged } = show({ applies: { ...live, items: [apply({ id: '2', savedVersion: '3', state: 'rolled_back' }), apply({})] }, head: '5' });
+
+  expect(await screen.findByRole('status', { name: 'The live configuration changed since this review.' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Apply saved version 5' })).toBeDisabled();
+  await userEvent.click(screen.getByRole('button', { name: 'Reload' }));
+  expect(onChanged).toHaveBeenCalled();
+});
+
+it('offers a reload when the review cannot load', async () => {
+  let reachable = false;
+  routes({ '/api/v1/versions?': () => (reachable ? jsonResponse(200, history('5', '4', '3')) : jsonResponse(503, { error: { code: 'UNAVAILABLE', message: 'The store is busy.' } })) });
+  show(unapplied);
+
+  const failed = await screen.findByRole('alert', { name: 'Review request failed' });
+  reachable = true;
+  await userEvent.click(within(failed).getByRole('button', { name: 'Reload' }));
+  expect(await screen.findByRole('button', { name: 'Apply saved version 5' })).toBeEnabled();
+});
+
+it('reloads the review when the connection comes back, dropping old answers', async () => {
+  const fetchMock = routes({ 'POST /api/v1/applies': refusal });
+  const { rerender } = show(unapplied);
+
+  await userEvent.click(await screen.findByRole('button', { name: 'Apply saved version 5' }));
+  expect(await screen.findByText('Applying would unconfigure enp1s0.')).toBeInTheDocument();
+  rerender(unapplied, false);
+  rerender(unapplied, true);
+  expect(versionLists(fetchMock)).toHaveLength(2);
+  expect(screen.queryByText('Applying would unconfigure enp1s0.')).not.toBeInTheDocument();
+  expect(screen.queryByText('This configuration cannot be applied to this host as it stands.')).not.toBeInTheDocument();
+});
+
+it('drops the findings of a refused apply on confirm or roll back', async () => {
+  routes({ 'POST /api/v1/applies': refusal, 'POST /api/v1/applies/2/confirmation': apply({ id: '2', savedVersion: '5', state: 'confirmed' }) });
+  const { rerender } = show(unapplied);
+
+  await userEvent.click(await screen.findByRole('button', { name: 'Apply saved version 5' }));
+  expect(await screen.findByText('Applying would unconfigure enp1s0.')).toBeInTheDocument();
+  rerender(awaiting);
+  await userEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+  expect(await screen.findByText('Apply 2: Confirmed.')).toBeInTheDocument();
+  expect(screen.queryByText('Applying would unconfigure enp1s0.')).not.toBeInTheDocument();
 });

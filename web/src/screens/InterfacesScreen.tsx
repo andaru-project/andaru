@@ -15,9 +15,9 @@ function kernelName(link: SavedLink, resolved: Map<string, string>) {
   return namePrefix[link.kind] + link.id.slice(link.id.indexOf('_') + 1).replaceAll('-', '').slice(0, 12);
 }
 
-// A binding finding means the renderer will not put the link on any device, whatever its name matches.
-const bindingCode = /^(HARDWARE_|NAME_COLLISION$)/;
-const unboundLabel: Record<string, string> = { HARDWARE_MISSING: 'Missing', HARDWARE_AMBIGUOUS: 'Unresolved', NAME_COLLISION: 'Not realized' };
+// These findings mean the renderer will not put the link on any device, whatever its name matches.
+const bindingCode = /^(HARDWARE_|NAME_COLLISION$|DEPENDENCY_UNAVAILABLE$)/;
+const unboundLabel: Record<string, string> = { HARDWARE_MISSING: 'Missing', HARDWARE_AMBIGUOUS: 'Unresolved' };
 
 interface Row { key: string; live?: LinkStatus; saved?: SavedLink; state?: string; finding?: string; conflict?: boolean }
 
@@ -34,7 +34,7 @@ function join(links: LinkStatus[], snapshot: Snapshot, preview: Preview): Row[] 
     const finding = findings.get(index);
     const name = finding ? undefined : kernelName(link, resolved);
     if (name && links.some((live) => live.name === name)) onDevice.set(name, [...(onDevice.get(name) ?? []), link]);
-    else unbound.push({ key: link.id, saved: link, state: finding ? unboundLabel[finding.code] ?? 'Not realized' : link.kind === 'ethernet' ? 'Unresolved' : 'Missing', finding: finding?.message });
+    else unbound.push({ key: link.id, saved: link, state: !link.enabled ? 'Disabled' : finding ? unboundLabel[finding.code] ?? 'Not realized' : link.kind === 'ethernet' ? 'Unresolved' : 'Missing', finding: finding?.message });
   });
   return [
     ...links.flatMap((live) => {
@@ -88,7 +88,7 @@ export function InterfacesScreen({ api, session, onSessionLost }: InterfacesScre
                 <Table.Td><Text ff="monospace">{live?.name ?? '—'}</Text></Table.Td>
                 <Table.Td><Text ff="monospace" size="sm">{live?.linkAddress || link?.permanentMac || '—'}</Text></Table.Td>
                 <Table.Td>{live?.linkType ?? link?.kind}</Table.Td>
-                <Table.Td>{live ? live.operState : <Badge color="red">{state}</Badge>}</Table.Td>
+                <Table.Td>{live ? live.operState : <Badge color={state === 'Disabled' ? 'gray' : 'red'}>{state}</Badge>}</Table.Td>
                 <Table.Td>{live?.mtu ?? link?.mtu}</Table.Td>
                 <Table.Td><Text ff="monospace" size="sm">{live?.addresses.map((address) => `${address.address}/${address.prefixLength}`).join(', ') || '—'}</Text></Table.Td>
                 {showSaved && (
