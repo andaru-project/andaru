@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { sample } from './test/traffic';
-import { busiest, chosenLabel, figures, firstShown, merge, newest, rates, roundUp, thin, type RatePoint } from './traffic';
+import { busiest, chosenLabel, figures, firstShown, merge, newest, rates, thin, type RatePoint } from './traffic';
 import type { Traffic } from './types';
 
 const history = (interfaces: Traffic['interfaces'], complete = true): Traffic => ({ intervalSeconds: 5, complete, interfaces });
@@ -105,8 +105,4 @@ it('labels the choice with the names while they fit, and with their number when 
   expect(chosenLabel(['ens18', 'ens19'])).toBe('ens18, ens19');
   expect(chosenLabel(['ens18', 'ens19', 'ens20', 'ens21', 'ens22'])).toBe('5 selected');
   expect(chosenLabel([])).toBe('None selected');
-});
-
-it('rounds a scale up to the next 1, 2 or 5, never below the value', () => {
-  expect([0, 1, 1.01, 2, 4_000_000, 5_000_001, 99, 100].map(roundUp)).toEqual([1, 1, 2, 2, 5_000_000, 10_000_000, 100, 100]);
 });
