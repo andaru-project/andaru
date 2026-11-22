@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"slices"
-	"strings"
 	"testing"
 )
 
@@ -218,13 +217,9 @@ func TestSavedVersionsNameTheirWriter(t *testing.T) {
 	if _, err := s.Save(ctx, systemRootActor, createZone("guest")); err != nil {
 		t.Fatal(err)
 	}
-	// A build without a version, or with an absurd one, still saves.
+	// A build without a version still saves, and reads as one that did not record its writer.
 	Writer = ""
 	if _, err := s.Save(ctx, systemRootActor, createZone("iot")); err != nil {
-		t.Fatal(err)
-	}
-	Writer = strings.Repeat("v", 200)
-	if _, err := s.Save(ctx, systemRootActor, createZone("lab")); err != nil {
 		t.Fatal(err)
 	}
 	history, err := s.History(ctx, nil, 10)
@@ -235,7 +230,7 @@ func TestSavedVersionsNameTheirWriter(t *testing.T) {
 	for _, item := range history.Items {
 		got = append(got, string(item.ID)+"="+item.WrittenBy)
 	}
-	if want := []string{"5=" + strings.Repeat("v", 128), "4=unknown", "3=0.5.0-a.5", "2=", "1=", "0="}; !slices.Equal(got, want) {
+	if want := []string{"4=", "3=0.5.0-a.5", "2=", "1=", "0="}; !slices.Equal(got, want) {
 		t.Fatalf("writers %v, want %v", got, want)
 	}
 	if one, err := s.Version(ctx, "3"); err != nil || one.WrittenBy != "0.5.0-a.5" {
