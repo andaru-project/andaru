@@ -1,4 +1,4 @@
-import { Alert, Button, Drawer, Group, MultiSelect, NativeSelect, Stack, Textarea, TextInput } from '@mantine/core';
+import { Alert, Button, Drawer, Fieldset, Group, MultiSelect, NativeSelect, Stack, Textarea, TextInput } from '@mantine/core';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, fieldErrors, saveFailure } from '../api';
 import type { AddressAlias, AliasKinds, PortAlias, SavedObject } from '../types';
@@ -110,6 +110,9 @@ export function AliasEditor({ editing, rows, onClose, onSessionLost, onAbandoned
       <form onSubmit={submit} noValidate>
         <Stack>
           {failure && <Alert color="red" role="alert" title="The alias was not saved">{failure}</Alert>}
+          {/* What is sent is what the form held when Save was pressed: nothing is typed over it meanwhile. */}
+          <Fieldset variant="unstyled" disabled={busy}>
+            <Stack>
           <TextInput data-autofocus label="Name" maxLength={128} required value={name} error={errors.get('name')} onChange={(event) => setName(event.currentTarget.value)} />
           <Textarea autosize label="Description" maxLength={4096} minRows={1} maxRows={4} value={description} error={errors.get('description')} onChange={(event) => setDescription(event.currentTarget.value)} />
           {kind === 'addresses' ? (
@@ -134,6 +137,8 @@ export function AliasEditor({ editing, rows, onClose, onSessionLost, onAbandoned
             </>
           )}
           {what === 'group' && <MultiSelect label="Members" description="Aliases of the same kind that are not groups themselves." data={candidates} value={members} error={errors.get('members')} searchable clearable onChange={setMembers} />}
+            </Stack>
+          </Fieldset>
           <Group justify="flex-end">
             <Button variant="default" onClick={onClose}>Cancel</Button>
             <Button loading={busy} type="submit">Save alias</Button>
