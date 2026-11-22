@@ -6,8 +6,11 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -126,6 +129,17 @@ func Open(ctx context.Context, stateDir string) (*Store, error) {
 	}
 	s := &Store{root: stateDir, configDB: cfg, secretDB: sec, lock: lock, gate: make(chan struct{}, 1), failure: make(chan error, 1)}
 	s.gate <- struct{}{}
+	var headSchema int
+	if e = s.configDB.QueryRowContext(ctx, "SELECT v.schema_version FROM versions v JOIN pointers p ON p.version_id=v.id WHERE p.name='saved'").Scan(&headSchema); e != nil {
+		s.Close()
+		return nil, diagnostic("open-config-head", e)
+	}
+	if headSchema > schemaVersion {
+		if e = s.fallBack(ctx); e != nil {
+			s.Close()
+			return nil, e
+		}
+	}
 	conn, e := s.configDB.Conn(ctx)
 	if e != nil {
 		s.Close()
@@ -301,6 +315,11 @@ type pendingSave struct {
 }
 
 func (s *Store) startSave(ctx context.Context, actor authz.Actor, requested []objectKey) (*pendingSave, savedState, Version, error) {
+	return s.startSaveFrom(ctx, actor, "", requested)
+}
+
+// startSaveFrom prepares a save on top of the saved head, reading version from as the current state; "" is the head.
+func (s *Store) startSaveFrom(ctx context.Context, actor authz.Actor, from Version, requested []objectKey) (*pendingSave, savedState, Version, error) {
 	var empty savedState
 	actorLabel, e := actor.CanonicalLabel()
 	if e != nil {
@@ -329,17 +348,91 @@ func (s *Store) startSave(ctx context.Context, actor authz.Actor, requested []ob
 		return nil, empty, "", unavailable()
 	}
 	p.active = true
-	current, _, e := s.loadState(ctx, p.conn, "", requested)
+	current, _, e := s.loadState(ctx, p.conn, from, requested)
 	if e != nil {
 		return nil, empty, "", e
 	}
 	p.head = current.Version
-	n, e := strconvVersion(current.Version)
-	if e != nil || n == int64(^uint64(0)>>1) {
+	var n int64
+	if e = p.conn.QueryRowContext(ctx, "SELECT version_id FROM pointers WHERE name='saved'").Scan(&n); e != nil || n < 0 || n == int64(^uint64(0)>>1) {
 		return nil, empty, "", unavailable()
 	}
 	success = true
 	return p, current, Version(fmt.Sprint(n + 1)), nil
+}
+
+// system is the actor of the saves the store makes on its own when it opens.
+var system = authz.Actor{Kind: authz.ActorSystem, ID: "root"}
+
+// MigrateHead saves a head of an older schema as a new version of the current one, so this Andaru loads its
+// settings directly. The version it came from stays in the history, for a rollback to the Andaru that saved it
+// (settings design, rule 6). It returns the new version, or "" when the head is already of the current schema.
+func (s *Store) MigrateHead(ctx context.Context) (Version, error) {
+	p, current, next, err := s.startSave(ctx, system, nil)
+	if err != nil {
+		return "", err
+	}
+	defer p.Close()
+	if !current.legacy {
+		return "", nil
+	}
+	// A restore of nothing saves the head as it reads now: in the current form, with the rules and aliases it
+	// renamed recorded as changed.
+	if p.prepared, _, err = prepareRestoration(&current, decodedBackup{}, next, time.Now().UTC()); err != nil {
+		return "", err
+	}
+	saved, err := p.publish(ctx)
+	if err == nil {
+		err = p.Close()
+	}
+	return saved.SavedVersion, err
+}
+
+// fallBack opens a store whose head is of a schema newer than this Andaru knows, as after a rollback to an older
+// image: it saves a copy of the newest version this Andaru can read as the new head. The newer versions stay in the
+// history, and the changes saved in them are not carried back (settings design, "Downgrades").
+func (s *Store) fallBack(ctx context.Context) error {
+	var newest sql.NullInt64
+	if e := s.configDB.QueryRowContext(ctx, "SELECT max(id) FROM versions WHERE schema_version<=?", schemaVersion).Scan(&newest); e != nil {
+		return diagnostic("open-config-fallback", e)
+	}
+	if !newest.Valid {
+		return diagnostic("open-config-newer-schema", nil)
+	}
+	p, current, next, err := s.startSaveFrom(ctx, system, Version(strconv.FormatInt(newest.Int64, 10)), nil)
+	if err != nil {
+		return err
+	}
+	defer p.Close()
+	prepared, _, err := prepareRestoration(&current, decodedBackup{}, next, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	// The versions in between changed objects this copy holds as they were, so every object and list is recorded
+	// as changed here and none reads its version from a newer one.
+	changed := map[objectKey]bool{}
+	for _, c := range prepared.Changed {
+		changed[objectKey{c.Collection, c.ID}] = true
+	}
+	keys := slices.Collect(maps.Keys(objects(&prepared.State.Config)))
+	for _, col := range append(slices.Clone(orderedCollections), singletons...) {
+		keys = append(keys, listKey(col))
+	}
+	for _, key := range keys {
+		if !changed[key] {
+			changed[key] = true
+			prepared.Changed = append(prepared.Changed, objectChange{Collection: key.Collection, ID: key.ID})
+			prepared.State.Versions[key] = objectVersion{Version: next}
+		}
+	}
+	slices.SortFunc(prepared.Changed, func(a, b objectChange) int {
+		return compareKeys(objectKey{a.Collection, a.ID}, objectKey{b.Collection, b.ID})
+	})
+	p.prepared = prepared
+	if _, err = p.publish(ctx); err != nil {
+		return err
+	}
+	return p.Close()
 }
 
 func (s *Store) prepareSave(ctx context.Context, actor authz.Actor, input Changes) (*pendingSave, error) {

@@ -252,3 +252,108 @@ func TestVersionViewListsItsQuestions(t *testing.T) {
 		t.Fatalf("version view: %+v %v", v.Questions, err)
 	}
 }
+
+// On start, a head of an older schema is saved as a new version of the current one; the version it came from keeps
+// its bytes for a rollback, and a head already current is left alone.
+func TestMigrateHeadSavesTheCurrentSchema(t *testing.T) {
+	ctx := context.Background()
+	s, root := legacyStore(t)
+	saved, err := s.MigrateHead(ctx)
+	if err != nil || saved != "3" {
+		t.Fatalf("migrate: %q %v", saved, err)
+	}
+	var schema, parent int
+	if err = s.configDB.QueryRowContext(ctx, "SELECT v.schema_version,v.parent_id FROM versions v JOIN pointers p ON p.version_id=v.id").Scan(&schema, &parent); err != nil || schema != schemaVersion || parent != 2 {
+		t.Fatalf("head schema %d parent %d %v", schema, parent, err)
+	}
+	var old []byte
+	if err = s.configDB.QueryRowContext(ctx, "SELECT d.body FROM versions v JOIN documents d ON d.sha256=v.config_sha256 WHERE v.id=2").Scan(&old); err != nil || string(old) != string(legacyDocument(t)) {
+		t.Fatalf("version 2 changed: %v", err)
+	}
+	rules, err := s.List(ctx, "rules")
+	if err != nil || len(rules.Items) != 7 {
+		t.Fatalf("rules after the migration: %+v %v", rules, err)
+	}
+	if again, err := s.MigrateHead(ctx); err != nil || again != "" {
+		t.Fatalf("a current head was saved again: %q %v", again, err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = VerifyRecoveryState(ctx, root); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// newerHead makes the store's head a version of a schema newer than this Andaru knows, as a later Andaru leaves it:
+// version 2, version 1's document marked with the next schema, which created a zone.
+func newerHead(t *testing.T, s *Store) {
+	t.Helper()
+	ctx := context.Background()
+	for _, q := range []string{
+		"INSERT INTO versions SELECT 2,1,schema_version+1,config_sha256,secrets_sha256,created_at,actor,1 FROM versions WHERE id=1",
+		"INSERT INTO object_changes VALUES('zones','zon_0000000f-0000-4000-8000-00000000000f',2,1,0)",
+		"UPDATE pointers SET version_id=2 WHERE name='saved'",
+	} {
+		if _, err := s.configDB.ExecContext(ctx, q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+}
+
+// After a rollback to an older Andaru, the store opens on a copy of the newest version this Andaru can read, saved
+// as the new head; the newer version stays in the history, and saves carry on from the copy.
+func TestNewerHeadOpensOnTheNewestReadableVersion(t *testing.T) {
+	ctx := context.Background()
+	root := ownedDir(t)
+	s := openTestStore(t, root)
+	if _, err := s.Save(ctx, systemRootActor, createZone("guest")); err != nil {
+		t.Fatal(err)
+	}
+	want, err := s.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newerHead(t, s)
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s = openTestStore(t, root)
+	got, err := s.Snapshot(ctx)
+	if err != nil || got.SavedVersion != "3" || string(got.Value) != string(want.Value) {
+		t.Fatalf("snapshot after a rollback: %s %s %v\nwant %s", got.SavedVersion, got.Value, err, want.Value)
+	}
+	var parent, schema int
+	if err = s.configDB.QueryRowContext(ctx, "SELECT parent_id,schema_version FROM versions WHERE id=3").Scan(&parent, &schema); err != nil || parent != 2 || schema != schemaVersion {
+		t.Fatalf("copy parent %d schema %d %v", parent, schema, err)
+	}
+	zones, err := s.List(ctx, "zones")
+	if err != nil || len(zones.Items) == 0 {
+		t.Fatalf("zones: %+v %v", zones, err)
+	}
+	for _, z := range zones.Items {
+		if z.Version != "3" {
+			t.Fatalf("a zone reads its version from elsewhere than the copy: %+v", z)
+		}
+	}
+	if _, err = s.Save(ctx, systemRootActor, createZone("iot")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A store with no version this Andaru can read is refused, as before.
+func TestNewerOnlyStoreIsRefused(t *testing.T) {
+	ctx := context.Background()
+	root := ownedDir(t)
+	s := openTestStore(t, root)
+	if _, err := s.configDB.ExecContext(ctx, "UPDATE versions SET schema_version=schema_version+1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if s, err := Open(ctx, root); err == nil {
+		s.Close()
+		t.Fatal("a store of a newer schema alone opened")
+	}
+}

@@ -41,6 +41,10 @@ pfBlockerNG is a core part of Andaru, not an add-on, so its settings are Andaru'
 - The account database and the audit log name their layout in SQLite's `user_version`; the configuration and account backups carry a `schemaVersion` of their own.
 - No user decisions exist yet, and Andaru does not drive upgrades: an image is upgraded with `bootc` directly.
 
+## Implemented: an automatic migration is saved on start
+
+When the engine starts, a head of an older schema is saved as a new version of the current one (`MigrateHead`), with the system as its actor and this Andaru as its writer. The version it came from keeps its bytes in the history, so a rollback starts from it. Until decision records exist, every older head needs a migration alone.
+
 ## Implemented: every saved version names the Andaru that wrote it
 
 - A table beside the others, `version_writers`, holds the Andaru version that saved each version. An older engine never reads it and still opens the store.
@@ -66,7 +70,7 @@ Saved versions are immutable, and an upgrade saves its migrated settings as a ne
 - The changes saved under the newer Andaru are lost. A rollback normally comes within weeks of the upgrade, so that is a minor inconvenience; a backup taken under the older Andaru remains the other way back.
 - With no such version in the history (the store was created by the newer Andaru), the engine refuses the store as today, and only the backup remains.
 
-Not built: today an engine refuses a head of a newer schema.
+Implemented: `Open` does this (`fallBack` in `internal/config/store_linux.go`). Every object and list of the copy is recorded as changed in it, so none reads its version from the newer versions in between. Engines up to `0.5.0-a.4` predate it and refuse such a store.
 
 ## Released engines
 

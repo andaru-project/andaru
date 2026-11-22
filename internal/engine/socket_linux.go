@@ -65,6 +65,12 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 			result = err
 		}
 	}()
+	// A head of an older schema is saved in the current one once, so this Andaru loads its settings directly.
+	if saved, err := store.MigrateHead(ctx); err != nil {
+		return fmt.Errorf("save the settings in the current schema: %w", err)
+	} else if saved != "" {
+		slog.Info("settings saved in the current schema", "version", saved)
+	}
 	if err = initializeAuthorizationState(ctx, stateDir); err != nil {
 		return fmt.Errorf("initialize live authorization state: %w", err)
 	}
