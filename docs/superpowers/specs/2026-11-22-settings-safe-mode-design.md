@@ -30,7 +30,7 @@ On start, the engine works out the questions for the head, with the provisional 
 - **The network keeps its last applied generation.** The boot brings the network up from the generation directory, not from the settings, so nothing there changes. An apply that was waiting for confirmation was already rolled back by the reboot.
 - **Nothing is applied from the provisional reading.** Applies and saves of the configuration answer `409 SETTINGS_UPGRADE_PENDING`. Reads still work, so the user can see what the settings mean before answering.
 - **Sign-in, status, accounts and the audit log work as usual.** Custom roles come from the live version's provisional reading.
-- **Restoring a backup works.** A restore saves a new head. When that head also needs a decision, the hold carries on with the restored settings' questions.
+- **Restoring a backup works.** A restore saves a new head, and so does a reset that brings back a kept LAN copy. When that head also needs a decision, the hold carries on with its questions.
 - **Nothing is kept between starts.** The questions come from the head each time, and the answers are used all at once, so a reboot in the middle asks again. The upgrade stays a function of the saved settings and the running Andaru alone.
 
 ## Answering
