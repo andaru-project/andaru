@@ -109,6 +109,15 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	if err = audits.Reconcile(ctx, coordinator); err != nil && !errors.Is(err, audit.ErrReconciliationComplete) {
 		return fmt.Errorf("reconcile identity audit operations: %w", err)
 	}
+	// A head of an older schema is saved in the current one once, so this Andaru loads its settings directly. It runs
+	// after an interrupted restore is settled, which compares the head with its journal. A failure before the commit
+	// leaves the head read through its migration, as before, and the next start tries again; one in the commit fences
+	// the store and stops the engine, as any store failure does.
+	if saved, err := store.MigrateHead(ctx); err != nil {
+		slog.Error("settings not saved in the current schema", "error", err)
+	} else if saved != "" {
+		slog.Info("settings saved in the current schema", "version", saved)
+	}
 	// The traffic history fills for as long as the engine serves, and the sampler is gone before this returns.
 	sampled := make(chan struct{})
 	go func() { defer close(sampled); sampleTraffic(lifetime, traffic, systemRoot) }()

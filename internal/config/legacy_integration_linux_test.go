@@ -6,7 +6,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"slices"
+	"strconv"
 	"testing"
 )
 
@@ -250,5 +252,134 @@ func TestVersionViewListsItsQuestions(t *testing.T) {
 	v, err := s.Version(context.Background(), "2")
 	if err != nil || len(v.Questions) != 1 || v.Questions[0].ID != "rename" || v.Questions[0].Answered {
 		t.Fatalf("version view: %+v %v", v.Questions, err)
+	}
+}
+
+// On start, a head of an older schema is saved as a new version of the current one; the version it came from keeps
+// its bytes for a rollback, and a head already current is left alone.
+func TestMigrateHeadSavesTheCurrentSchema(t *testing.T) {
+	ctx := context.Background()
+	s, root := legacyStore(t)
+	saved, err := s.MigrateHead(ctx)
+	if err != nil || saved != "3" {
+		t.Fatalf("migrate: %q %v", saved, err)
+	}
+	var schema, parent int
+	if err = s.configDB.QueryRowContext(ctx, "SELECT v.schema_version,v.parent_id FROM versions v JOIN pointers p ON p.version_id=v.id").Scan(&schema, &parent); err != nil || schema != schemaVersion || parent != 2 {
+		t.Fatalf("head schema %d parent %d %v", schema, parent, err)
+	}
+	var old []byte
+	if err = s.configDB.QueryRowContext(ctx, "SELECT d.body FROM versions v JOIN documents d ON d.sha256=v.config_sha256 WHERE v.id=2").Scan(&old); err != nil || string(old) != string(legacyDocument(t)) {
+		t.Fatalf("version 2 changed: %v", err)
+	}
+	rules, err := s.List(ctx, "rules")
+	if err != nil || len(rules.Items) != 7 {
+		t.Fatalf("rules after the migration: %+v %v", rules, err)
+	}
+	if again, err := s.MigrateHead(ctx); err != nil || again != "" {
+		t.Fatalf("a current head was saved again: %q %v", again, err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = VerifyRecoveryState(ctx, root); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// newerHead makes the store's head a version of a schema newer than this Andaru knows, as a later Andaru leaves it:
+// the head's document marked with the next schema, which also created a zone. It returns that version.
+func newerHead(t *testing.T, s *Store) Version {
+	t.Helper()
+	ctx := context.Background()
+	var head int64
+	if err := s.configDB.QueryRowContext(ctx, "SELECT version_id FROM pointers WHERE name='saved'").Scan(&head); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		"INSERT INTO versions SELECT id+1,id,schema_version+1,config_sha256,secrets_sha256,created_at,actor,1 FROM versions WHERE id=?",
+		"INSERT INTO object_changes VALUES('zones','zon_0000000f-0000-4000-8000-00000000000f',?+1,1,0)",
+		"UPDATE pointers SET version_id=?+1 WHERE name='saved'",
+	} {
+		if _, err := s.configDB.ExecContext(ctx, q, head); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	return Version(strconv.FormatInt(head+1, 10))
+}
+
+// After a rollback to an older Andaru, the store opens on a copy of the newest version this Andaru can read, saved
+// as the new head; the newer version stays in the history, and saves carry on from the copy.
+func TestNewerHeadOpensOnTheNewestReadableVersion(t *testing.T) {
+	ctx := context.Background()
+	root := ownedDir(t)
+	s := openTestStore(t, root)
+	role := Changes{Operations: []Operation{{Op: "create", Collection: "roles", Value: json.RawMessage(`{"name":"Operator","capabilities":["status.read"]}`)}}}
+	for _, c := range []Changes{createZone("guest"), role} {
+		if _, err := s.Save(ctx, systemRootActor, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := s.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer := newerHead(t, s) // 3
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s = openTestStore(t, root)
+	got, err := s.Snapshot(ctx)
+	if err != nil || got.SavedVersion != "4" || string(got.Value) != string(want.Value) {
+		t.Fatalf("snapshot after a rollback: %s %s %v\nwant %s", got.SavedVersion, got.Value, err, want.Value)
+	}
+	var parent, schema int
+	if err = s.configDB.QueryRowContext(ctx, "SELECT parent_id,schema_version FROM versions WHERE id=4").Scan(&parent, &schema); err != nil || parent != 3 || schema != schemaVersion {
+		t.Fatalf("copy parent %d schema %d %v", parent, schema, err)
+	}
+	zones, err := s.List(ctx, "zones")
+	if err != nil || len(zones.Items) == 0 {
+		t.Fatalf("zones: %+v %v", zones, err)
+	}
+	for _, z := range zones.Items {
+		if z.Version != "4" {
+			t.Fatalf("a zone reads its version from elsewhere than the copy: %+v", z)
+		}
+	}
+	if rules, err := s.List(ctx, "rules"); err != nil || rules.Version != "4" {
+		t.Fatalf("the rule list reads its version from elsewhere than the copy: %+v %v", rules.Version, err)
+	}
+	// The zone the newer version created is deleted in the copy, and that version reads as one this Andaru cannot.
+	var deleted bool
+	if err = s.configDB.QueryRowContext(ctx, "SELECT deleted FROM object_changes WHERE object_id='zon_0000000f-0000-4000-8000-00000000000f' AND version_id=4").Scan(&deleted); err != nil || !deleted {
+		t.Fatalf("no deletion of the newer zone: %t %v", deleted, err)
+	}
+	var f *Fault
+	if _, err = s.Version(ctx, newer); !errors.As(err, &f) || f.Code != "NOT_FOUND" {
+		t.Fatalf("reading the newer version: %v", err)
+	}
+	// Its roles still read, for the live generation that names it; the caller checks them against its digest.
+	if roles, err := s.Roles(ctx, newer); err != nil || len(roles) != 1 || roles[0].Name != "Operator" {
+		t.Fatalf("roles of the newer version: %+v %v", roles, err)
+	}
+	if _, err = s.Save(ctx, systemRootActor, createZone("iot")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A store with no version this Andaru can read is refused, as before.
+func TestNewerOnlyStoreIsRefused(t *testing.T) {
+	ctx := context.Background()
+	root := ownedDir(t)
+	s := openTestStore(t, root)
+	if _, err := s.configDB.ExecContext(ctx, "UPDATE versions SET schema_version=schema_version+1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if s, err := Open(ctx, root); err == nil {
+		s.Close()
+		t.Fatal("a store of a newer schema alone opened")
 	}
 }

@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -73,19 +72,12 @@ func liveRoleSnapshot(ctx context.Context, stateDir string, configuration *confi
 	if err != nil {
 		return authz.Snapshot{}, generation.Generation{}, errors.Join(errLiveAuthorizationUnavailable, err)
 	}
-	version := config.Version(live.SavedVersion)
-	saved, err := configuration.Version(ctx, version)
+	roles, err := configuration.Roles(ctx, config.Version(live.SavedVersion))
 	if err != nil {
 		return authz.Snapshot{}, generation.Generation{}, errors.Join(errLiveAuthorizationUnavailable, err)
 	}
-	var declaration struct {
-		Roles []authz.Role `json:"roles"`
-	}
-	if err = json.Unmarshal(saved.Value, &declaration); err != nil {
-		return authz.Snapshot{}, generation.Generation{}, errors.Join(errLiveAuthorizationUnavailable, err)
-	}
-	custom := make([]authz.Role, 0, len(declaration.Roles))
-	for _, role := range declaration.Roles {
+	custom := make([]authz.Role, 0, len(roles))
+	for _, role := range roles {
 		if role.BuiltIn == "" {
 			custom = append(custom, role)
 		}

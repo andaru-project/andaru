@@ -18,6 +18,46 @@ import (
 	"github.com/andaru-project/andaru/internal/authz"
 )
 
+// Roles returns the roles of a saved version. A version of a schema newer than this Andaru knows, which the live
+// generation still names after a rollback, is read for its roles alone; the caller trusts them only when they match
+// the digest that generation recorded, so only roles that were applied are used.
+func (s *Store) Roles(ctx context.Context, version Version) ([]authz.Role, error) {
+	n, err := strconvVersion(version)
+	if err != nil {
+		return nil, fault("INVALID_REQUEST", "", "Invalid version.")
+	}
+	var body, hash []byte
+	var schema int
+	release, err := s.acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	err = s.configDB.QueryRowContext(ctx, "SELECT d.body,v.config_sha256,v.schema_version FROM versions v JOIN documents d ON d.sha256=v.config_sha256 WHERE v.id=?", n).Scan(&body, &hash, &schema)
+	release()
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fault("NOT_FOUND", "", "Saved version does not exist.")
+	}
+	if err != nil {
+		return nil, diagnostic("roles-scan", err)
+	}
+	var doc struct {
+		Roles []authz.Role `json:"roles"`
+	}
+	if schema <= schemaVersion {
+		saved, err := s.Version(ctx, version)
+		if err != nil {
+			return nil, err
+		}
+		body = saved.Value
+	} else if sum := sha256.Sum256(body); !bytes.Equal(sum[:], hash) || len(body) > documentLimit {
+		return nil, diagnostic("roles-hash", nil)
+	}
+	if err = json.Unmarshal(body, &doc); err != nil {
+		return nil, diagnostic("roles-decode", err)
+	}
+	return doc.Roles, nil
+}
+
 func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, requested []objectKey) (savedState, VersionInfo, error) {
 	var state savedState
 	var info VersionInfo
@@ -41,6 +81,9 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 			return state, info, fault("NOT_FOUND", "", "Saved version does not exist.")
 		}
 		return state, info, diagnostic("load-config-scan", e)
+	}
+	if id != "" && schema > schemaVersion {
+		return state, info, fault("NOT_FOUND", "", "This version was saved by a newer Andaru, whose settings this Andaru cannot read.")
 	}
 	if number < 0 || schema < 1 || schema > schemaVersion || len(ch) != 32 || len(sh) != 32 || len(cb) > documentLimit {
 		return state, info, diagnostic("load-config-metadata", nil)
