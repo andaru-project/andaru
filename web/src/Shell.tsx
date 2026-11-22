@@ -12,6 +12,7 @@ import { DashboardScreen } from './screens/DashboardScreen';
 import { InterfacesScreen } from './screens/InterfacesScreen';
 import { PasswordDialog } from './screens/PasswordDialog';
 import { RolesScreen } from './screens/RolesScreen';
+import { RulesScreen } from './screens/RulesScreen';
 import { SessionScreen } from './screens/SessionScreen';
 import { TokensScreen } from './screens/TokensScreen';
 import { SystemDetailsScreen } from './screens/SystemWidget';
@@ -74,6 +75,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
 
   const groups = [
     { label: 'Network', items: [{ to: '/network/interfaces', label: 'Interfaces', visible: capabilities.has('status.read') }] },
+    { label: 'Firewall', items: [{ to: '/firewall/rules', label: 'Rules', visible: canReadChanges }] },
     { label: 'Changes', items: [{ to: '/changes', label: 'Review and apply', visible: canReadChanges }] },
     {
       label: 'System',
@@ -118,6 +120,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
 
   const pages: Array<[string, ReactNode]> = [
     ['/network/interfaces', <InterfacesScreen api={api} session={session} onSessionLost={onSessionLost} />],
+    ['/firewall/rules', <RulesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/changes', <ChangesScreen api={api} session={session} state={changes.data} stateError={changes.error} connected={connected} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/system/details', <SystemDetailsScreen system={system} />],
     ['/system/users', <UsersScreen api={api} session={session} onSessionLost={onSessionLost} />],

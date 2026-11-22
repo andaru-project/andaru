@@ -226,5 +226,66 @@ export interface Segment {
 export interface Snapshot {
   state: 'saved';
   savedVersion: string;
-  value: { links: SavedLink[]; segments: Segment[]; zones: Array<{ id: string; name: string }>; management?: { segment: string } };
+  value: {
+    links: SavedLink[];
+    segments: Segment[];
+    zones: Array<{ id: string; name: string }>;
+    management?: { segment: string; allowedSources?: string[] };
+    aliases?: { addresses: AddressAlias[]; ports: PortAlias[] };
+    rules?: Rule[];
+    nat?: { portForwards?: Array<{ id: string; filterRule?: string }> };
+  };
+}
+
+// The firewall itself is a zone no configuration stores: a rule names it as its destination to reach the box.
+export const firewallZone = 'zon_firewall';
+
+export interface AddressAlias {
+  id: string;
+  name: string;
+  description?: string;
+  kind: 'host' | 'network' | 'range' | 'group';
+  address?: string;
+  prefix?: string;
+  first?: string;
+  last?: string;
+  members?: string[];
+}
+
+export interface PortAlias {
+  id: string;
+  name: string;
+  description?: string;
+  protocol: 'tcp' | 'udp' | 'icmp' | 'icmpv6' | 'group';
+  ports?: string[];
+  types?: string[];
+  members?: string[];
+}
+
+// A side of a rule: the zones traffic arrives in or leaves by, and the address aliases within them. Both must
+// match. No zones is any network, never the firewall; no addresses is every address; not is "none of these".
+export interface RuleSide {
+  zones: string[];
+  addresses: string[];
+  not?: boolean;
+}
+
+export interface Rule {
+  id: string;
+  name: string;
+  description?: string;
+  enabled: boolean;
+  action: 'accept' | 'drop' | 'reject';
+  from: RuleSide;
+  to: RuleSide;
+  ports: string[];
+  log: boolean;
+}
+
+// An ordered list as the engine serves it: its items in order, and the version that guards the order.
+export interface OrderedList<T> {
+  state: 'saved';
+  savedVersion: string;
+  version: string;
+  items: Array<SavedObject<T>>;
 }

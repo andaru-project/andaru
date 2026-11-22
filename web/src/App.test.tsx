@@ -72,8 +72,8 @@ it('shows every branch to an administrator and starts on the dashboard', async (
 
   const navigation = await screen.findByRole('navigation', { name: 'Main navigation' });
   // A branch label is a button, so the keyboard reaches it; it says whether it is open.
-  for (const label of ['Network', 'Changes', 'System']) expect(within(navigation).getByRole('button', { name: label })).toHaveAttribute('aria-expanded', 'true');
-  expect(within(navigation).getAllByRole('link').map((link) => link.textContent)).toEqual(['Dashboard', 'Interfaces', 'Review and apply', 'Details', 'Users', 'Roles', 'Tokens', 'Audit']);
+  for (const label of ['Network', 'Firewall', 'Changes', 'System']) expect(within(navigation).getByRole('button', { name: label })).toHaveAttribute('aria-expanded', 'true');
+  expect(within(navigation).getAllByRole('link').map((link) => link.textContent)).toEqual(['Dashboard', 'Interfaces', 'Rules', 'Review and apply', 'Details', 'Users', 'Roles', 'Tokens', 'Audit']);
   expect(await screen.findByRole('heading', { name: 'Dashboard' })).toBeInTheDocument();
   expect(window.location.pathname).toBe('/');
 

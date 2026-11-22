@@ -443,6 +443,32 @@ path.traffic-sent {
   text-transform: uppercase;
 }
 
+/* The rules: a disabled rule keeps its place, dimmed. A rule being moved lifts above the others. */
+.rule[data-disabled] td:not(:nth-child(2)):not(:last-child) {
+  opacity: 0.55;
+}
+
+.rule[data-dragging] {
+  background: var(--mantine-color-body);
+  box-shadow: var(--mantine-shadow-md);
+  position: relative;
+  z-index: 1;
+}
+
+/* An alias is who; a zone is where. The alias chip is plain so the two never read alike. */
+.alias {
+  text-transform: none;
+}
+
+.fixed-rules {
+  color: var(--mantine-color-dimmed);
+  display: grid;
+  font-size: var(--mantine-font-size-sm);
+  gap: 0.25rem;
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
 /* Old and new values in a review: marked by a border and a tint, never by colour alone (the column says which). */
 .diff-old {
   background: var(--andaru-diff-old);
