@@ -13,6 +13,7 @@ import { usePolledResource, useResource, useVisiblePoll, type Resource } from '.
 import { Address } from './Address';
 import { Loaded } from './Loaded';
 import { EditMark, Grip } from './Marks';
+import { RecentActivityWidget } from './RecentActivityWidget';
 import { ResourcesWidget } from './ResourcesWidget';
 import { SystemWidget } from './SystemWidget';
 import { TrafficWidget, type TrafficChoice } from './TrafficWidget';
@@ -134,6 +135,7 @@ export function DashboardScreen({ api, session, system, onSessionLost }: Dashboa
     { id: 'resources', title: 'Resources', capability: 'status.read', body: <ResourcesWidget api={api} onSessionLost={onSessionLost} /> },
     { id: 'traffic', title: 'Network activity', capability: 'status.read', body: <TrafficWidget api={api} zones={zones} zonesKnown={zonesKnown} choice={trafficChoice} onSessionLost={onSessionLost} /> },
     { id: 'prefixes', title: 'IPv6 prefixes', capability: 'status.read', body: <PrefixesWidget api={api} zones={zones} onSessionLost={onSessionLost} /> },
+    { id: 'activity', title: 'Recent activity', to: '/system/audit', more: 'All events', capability: 'audit.read', body: <RecentActivityWidget api={api} onSessionLost={onSessionLost} /> },
   ];
   const allowed = all.filter((widget) => session.capabilities.includes(widget.capability));
 

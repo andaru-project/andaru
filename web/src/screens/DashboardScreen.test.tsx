@@ -160,7 +160,7 @@ it('hides and shows a widget, saving the whole preferences and keeping what it d
   await userEvent.click(screen.getByRole('button', { name: 'Show Interfaces' }));
   expect(titles()).toEqual(['System', 'Interfaces', 'Resources', 'Network activity', 'IPv6 prefixes']);
 
-  const order = ['system', 'interfaces', 'resources', 'traffic', 'prefixes'];
+  const order = ['system', 'interfaces', 'resources', 'traffic', 'prefixes', 'activity'];
   expect(saves(fetchMock)).toEqual([
     { another: { version: 'keeps this' }, dashboard: { order, hidden: ['interfaces'] } },
     { another: { version: 'keeps this' }, dashboard: { order, hidden: [] } },
@@ -214,7 +214,7 @@ it('moves a widget by its grip with the keyboard, and saves the new order', asyn
   await userEvent.keyboard('{ArrowRight}');
   await userEvent.keyboard('{Enter}');
   await waitFor(() => expect(titles()).toEqual(['System', 'Interfaces', 'Network activity', 'Resources', 'IPv6 prefixes']));
-  await waitFor(() => expect(saves(fetchMock)).toEqual([{ dashboard: { order: ['system', 'interfaces', 'traffic', 'resources', 'prefixes'], hidden: [] } }]));
+  await waitFor(() => expect(saves(fetchMock)).toEqual([{ dashboard: { order: ['system', 'interfaces', 'traffic', 'resources', 'prefixes', 'activity'], hidden: [] } }]));
   expect(screen.getByRole('status', { hidden: true })).toHaveTextContent('Dropped Resources at position 4 of 5.');
   rect.mockRestore();
 });
@@ -235,7 +235,7 @@ it('sends saves one at a time, each on what the last one stored, and skips one t
   // The box answers with what it now holds, which another feature has written a key into.
   await act(async () => { held[0](jsonResponse(200, { other: 'kept', dashboard: { hidden: ['resources'] } })); await Promise.resolve(); });
   await waitFor(() => expect(saves(fetchMock)).toHaveLength(2));
-  expect(saves(fetchMock)[1]).toEqual({ other: 'kept', dashboard: { order: ['system', 'interfaces', 'resources', 'traffic', 'prefixes'], hidden: ['interfaces', 'resources', 'prefixes'] } });
+  expect(saves(fetchMock)[1]).toEqual({ other: 'kept', dashboard: { order: ['system', 'interfaces', 'resources', 'traffic', 'prefixes', 'activity'], hidden: ['interfaces', 'resources', 'prefixes'] } });
 });
 
 it('moves focus to the edit button when the button that was pressed goes away', async () => {
