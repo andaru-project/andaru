@@ -4,10 +4,12 @@ package engine
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/andaru-project/andaru/internal/audit"
@@ -79,8 +81,10 @@ func init() {
 
 func TestRestoreCoordinatorCrashRecoveryAndReplay(t *testing.T) {
 	requireRoot(t)
-	for _, crashPoint := range []string{"after-journal", "before-config-publication", "after-config-publication", "before-identity-publication", "after-identity-publication"} {
+	for _, crashPoint := range []string{"after-journal", "before-config-publication", "after-config-publication", "before-identity-publication", "after-identity-publication", "after-config-publication-then-rollback"} {
 		t.Run(crashPoint, func(t *testing.T) {
+			rollback := strings.HasSuffix(crashPoint, "-then-rollback")
+			crashPoint = strings.TrimSuffix(crashPoint, "-then-rollback")
 			root := privateTestDir(t)
 			stateDir, sourceDir := filepath.Join(root, "state"), filepath.Join(root, "source")
 			ctx := context.Background()
@@ -120,6 +124,17 @@ func TestRestoreCoordinatorCrashRecoveryAndReplay(t *testing.T) {
 				t.Fatalf("helper exit=%v output=%s", runErr, output)
 			}
 
+			if rollback {
+				// The restore committed under a newer Andaru, and the image was rolled back before it settled.
+				db, err := sql.Open("sqlite", "file:"+filepath.Join(stateDir, "configuration", "config.db")+"?mode=rw")
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = db.Exec("UPDATE versions SET schema_version=schema_version+1 WHERE id=(SELECT version_id FROM pointers WHERE name='saved')")
+				if err = errors.Join(err, db.Close()); err != nil {
+					t.Fatal(err)
+				}
+			}
 			configuration, err = config.Open(ctx, stateDir)
 			if err != nil {
 				t.Fatal(err)
@@ -143,6 +158,16 @@ func TestRestoreCoordinatorCrashRecoveryAndReplay(t *testing.T) {
 			journal, found, err := coordinator.readJournal("restore-crash-operation")
 			if err != nil || !found || journal.State != "committed" {
 				t.Fatalf("journal=%+v found=%v err=%v", journal, found, err)
+			}
+			if rollback {
+				// The downgrade set the restored version aside; the identities were still restored.
+				if newer, err := configuration.Newer(ctx, config.Version(journal.TargetSavedVersion)); err != nil || !newer {
+					t.Fatalf("restored version not set aside: %v %v", newer, err)
+				}
+				if matches, err := identities.RestoreMatches(ctx, identity.BackupDocuments{IdentityRevision: journal.TargetIdentityRevision, Users: journal.Identity.Users, UserCredentials: journal.Identity.UserCredentials}); err != nil || !matches {
+					t.Fatalf("identity target=%v err=%v", matches, err)
+				}
+				return
 			}
 			if matches, err := configuration.RestoreMatches(ctx, journal.TargetSavedVersion, journal.Configuration); err != nil || !matches {
 				t.Fatalf("config target=%v err=%v", matches, err)
