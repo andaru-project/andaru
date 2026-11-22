@@ -12,7 +12,7 @@ import (
 
 // legacyStore is a store whose two versions were written by an engine before schema 4: the document in that
 // form, and its object versions in the tables and under the names that engine used, without the tables added
-// since (as 0.5.0-a.4 left it), reopened by this engine. Version 1 created everything; version 2, the saved
+// since (its tables as 0.5.0-a.4 left them), reopened by this engine. Version 1 created everything; version 2, the saved
 // head, reordered the forward rules, leaving the document as it was.
 func legacyStore(t *testing.T) (*Store, string) {
 	t.Helper()
