@@ -62,3 +62,36 @@ it('reports a body that stops arriving at the time limit as a lost connection, n
   expect(connection).toHaveBeenLastCalledWith(false);
   vi.restoreAllMocks();
 });
+
+it('marks a read with no input since the previous request as a poll, and never a write', async () => {
+  const fetchMock = fetchRoutes({ '/api/v1/status/links': { items: [] }, 'POST /api/v1/applies/1/rollback': {} });
+  const api = new ApiClient('csrf');
+  const background = (call: number) => new Headers(fetchMock.mock.calls[call]?.[1]?.headers).get('X-Andaru-Background');
+  document.dispatchEvent(new KeyboardEvent('keydown'));
+  await api.links();
+  expect(background(0)).toBeNull();
+  await api.links();
+  expect(background(1)).toBe('1');
+  await api.finishApply('1', 'rollback');
+  expect(background(2)).toBeNull();
+  document.dispatchEvent(new KeyboardEvent('keydown'));
+  await api.finishApply('1', 'rollback');
+  await api.links();
+  expect(background(4)).toBe('1'); // the write carried that input
+  for (const event of [new MouseEvent('pointerdown'), new WheelEvent('wheel')]) {
+    document.dispatchEvent(event);
+    await api.links();
+    expect(background(fetchMock.mock.calls.length - 1)).toBeNull();
+    await api.links();
+    expect(background(fetchMock.mock.calls.length - 1)).toBe('1');
+  }
+});
+
+it('keeps input for the next read when a request fails to connect', async () => {
+  const fetchMock = fetchQueue(new TypeError('network failed'), jsonResponse(200, { items: [] }));
+  const api = new ApiClient();
+  document.dispatchEvent(new KeyboardEvent('keydown'));
+  await expect(api.links()).rejects.toEqual(expect.objectContaining({ code: 'DISCONNECTED' }));
+  await api.links();
+  expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get('X-Andaru-Background')).toBeNull();
+});

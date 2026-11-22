@@ -88,6 +88,14 @@ function operationID() {
 
 const readTimeoutMilliseconds = 30_000;
 
+// A read with no user input since the previous request is a poll: the engine does not count it as activity, so a
+// screen left open still signs out after the idle timeout. Loading the page counts as input.
+// The first request after input carries it to the engine; the others it starts can go as polls.
+let input = true;
+for (const type of ['pointerdown', 'keydown', 'wheel']) {
+  document.addEventListener(type, () => { input = true; }, { capture: true, passive: true });
+}
+
 export class ApiClient {
   // onConnection hears whether each request got a response, for the shell's connection state.
   constructor(private csrfToken = '', private readonly onConnection?: (connected: boolean) => void) {}
@@ -105,10 +113,14 @@ export class ApiClient {
     headers.set('Accept', 'application/json');
     if (init.body) headers.set('Content-Type', 'application/json');
     if (csrf && this.csrfToken) headers.set('X-Andaru-CSRF', this.csrfToken);
+    // No caller passes a signal or names GET, so a request without a method is a read.
+    const read = !init.method;
+    const carried = input;
+    if (read && !carried) headers.set('X-Andaru-Background', '1');
+    input = false;
 
     // A read that never answers would hold its page's polling for good; a write may take as long as it takes.
-    // No caller passes a signal or names GET, so a request without a method is a read.
-    const signal = init.method ? undefined : AbortSignal.timeout(readTimeoutMilliseconds);
+    const signal = read ? AbortSignal.timeout(readTimeoutMilliseconds) : undefined;
     const disconnected = () => {
       this.onConnection?.(false);
       return new ApiError(0, 'DISCONNECTED', 'Cannot reach the Andaru service. Check the connection and try again.');
@@ -117,6 +129,9 @@ export class ApiClient {
     try {
       response = await fetch(path, { ...init, headers, signal, credentials: 'same-origin', cache: 'no-store' });
     } catch {
+      // Most likely the engine never received it, so the input waits for the next request. A read that timed out
+      // may have reached it, and restoring there would let one hung read keep the session alive.
+      if (!signal?.aborted) input ||= carried;
       throw disconnected();
     }
 

@@ -193,7 +193,7 @@ type Store interface {
 	RevokeToken(context.Context, string) error
 	AuthenticatePassword(context.Context, string, string, string, uint64) (LoginResult, error)
 	AuthenticatePasswordWithIntent(context.Context, string, string, string, uint64, func(Account) error) (LoginResult, error)
-	AuthenticateSession(context.Context, string, string, uint64) (Principal, error)
+	AuthenticateSession(context.Context, string, string, uint64, bool) (Principal, error)
 	RotateCSRF(context.Context, string, string, uint64) (string, error)
 	AuthenticateToken(context.Context, string, string, authz.Snapshot) (Principal, error)
 	// ValidateCSRF checks a synchronizer token after AuthenticateSession validates its epochs.

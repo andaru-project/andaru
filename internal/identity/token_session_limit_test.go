@@ -329,16 +329,16 @@ func TestSessionEpochsTimeoutEvictionCSRFAndRestart(t *testing.T) {
 	wrongSessionSecretBytes := append([]byte(nil), secretBytes...)
 	wrongSessionSecretBytes[0] ^= 0xff
 	wrongSessionSecret := base64.RawURLEncoding.EncodeToString(wrongSessionSecretBytes)
-	if _, err = s.AuthenticateSession(ctx, sessionSelector, wrongSessionSecret, 7); !errors.Is(err, ErrAuthentication) {
+	if _, err = s.AuthenticateSession(ctx, sessionSelector, wrongSessionSecret, 7, true); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("wrong session secret authenticated: %v", err)
 	}
-	if _, err = s.AuthenticateSession(ctx, strings.Repeat("A", 1<<20), sessionSecret, 7); !errors.Is(err, ErrAuthentication) {
+	if _, err = s.AuthenticateSession(ctx, strings.Repeat("A", 1<<20), sessionSecret, 7, true); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("oversized session selector accepted: %v", err)
 	}
-	if _, err = s.AuthenticateSession(ctx, sessionSelector, strings.Repeat("A", 1<<20), 7); !errors.Is(err, ErrAuthentication) {
+	if _, err = s.AuthenticateSession(ctx, sessionSelector, strings.Repeat("A", 1<<20), 7, true); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("oversized session secret accepted: %v", err)
 	}
-	if _, err = s.AuthenticateSession(ctx, sessionSelector, sessionSecret, 7); err != nil {
+	if _, err = s.AuthenticateSession(ctx, sessionSelector, sessionSecret, 7, true); err != nil {
 		t.Fatalf("wrong secret revoked the legitimate session: %v", err)
 	}
 	if err = s.ValidateCSRF(ctx, sessionSelector, sessionSecret, csrfSelector, csrfSecret); err != nil {
@@ -366,7 +366,7 @@ func TestSessionEpochsTimeoutEvictionCSRFAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if _, err = s.AuthenticateSession(ctx, sessionSelector, sessionSecret, 7); err != nil {
+	if _, err = s.AuthenticateSession(ctx, sessionSelector, sessionSecret, 7, true); err != nil {
 		t.Fatalf("session did not survive restart: %v", err)
 	}
 	if err = s.Logout(ctx, sessionSelector, sessionSecret); err != nil {
@@ -375,7 +375,7 @@ func TestSessionEpochsTimeoutEvictionCSRFAndRestart(t *testing.T) {
 	if err = s.Logout(ctx, sessionSelector, sessionSecret); err != nil {
 		t.Fatalf("logout was not idempotent: %v", err)
 	}
-	if _, err = s.AuthenticateSession(ctx, sessionSelector, sessionSecret, 7); !errors.Is(err, ErrAuthentication) {
+	if _, err = s.AuthenticateSession(ctx, sessionSelector, sessionSecret, 7, true); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("logged-out session authenticated: %v", err)
 	}
 	epochLogin, err := s.AuthenticatePassword(ctx, "operator1", "violet-lemur-session-key-2026", "192.0.2.11", 7)
@@ -383,10 +383,10 @@ func TestSessionEpochsTimeoutEvictionCSRFAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	epochSelector, epochSecret := splitCredential(t, epochLogin.SessionCookie)
-	if _, err = s.AuthenticateSession(ctx, epochSelector, epochSecret, 8); !errors.Is(err, ErrAuthentication) {
+	if _, err = s.AuthenticateSession(ctx, epochSelector, epochSecret, 8, true); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("authorization epoch change did not invalidate session: %v", err)
 	}
-	if _, err = s.AuthenticateSession(ctx, epochSelector, epochSecret, 7); !errors.Is(err, ErrAuthentication) {
+	if _, err = s.AuthenticateSession(ctx, epochSelector, epochSecret, 7, true); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("session survived authorization epoch change: %v", err)
 	}
 	for i := range 6 {
@@ -399,7 +399,7 @@ func TestSessionEpochsTimeoutEvictionCSRFAndRestart(t *testing.T) {
 		}
 	}
 	oldSelector, oldSecret := splitCredential(t, first.SessionCookie)
-	if _, err = s.AuthenticateSession(ctx, oldSelector, oldSecret, 7); !errors.Is(err, ErrAuthentication) {
+	if _, err = s.AuthenticateSession(ctx, oldSelector, oldSecret, 7, true); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("oldest session survived sixth login: %v", err)
 	}
 	var active int
@@ -415,7 +415,7 @@ func TestSessionEpochsTimeoutEvictionCSRFAndRestart(t *testing.T) {
 	if _, err = s.db.ExecContext(ctx, "UPDATE sessions SET last_seen_at=unixepoch()-1801 WHERE session_selector=?", idleBytes); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.AuthenticateSession(ctx, idleSelector, idleSecret, 7); !errors.Is(err, ErrAuthentication) {
+	if _, err = s.AuthenticateSession(ctx, idleSelector, idleSecret, 7, true); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("idle session authenticated: %v", err)
 	}
 	absolute, err := s.AuthenticatePassword(ctx, "operator1", "violet-lemur-session-key-2026", "203.0.113.2", 7)
@@ -427,7 +427,7 @@ func TestSessionEpochsTimeoutEvictionCSRFAndRestart(t *testing.T) {
 	if _, err = s.db.ExecContext(ctx, "UPDATE sessions SET expires_at=unixepoch()-1 WHERE session_selector=?", absoluteBytes); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.AuthenticateSession(ctx, absoluteSelector, absoluteSecret, 7); !errors.Is(err, ErrAuthentication) {
+	if _, err = s.AuthenticateSession(ctx, absoluteSelector, absoluteSecret, 7, true); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("absolute-expired session authenticated: %v", err)
 	}
 	passwordChangeLogin, err := s.AuthenticatePassword(ctx, "operator1", "violet-lemur-session-key-2026", "203.0.113.5", 7)
@@ -442,7 +442,7 @@ func TestSessionEpochsTimeoutEvictionCSRFAndRestart(t *testing.T) {
 	if _, err = s.SetPassword(ctx, user.ID, revision, []byte("violet-lemur-changed-key-2026")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.AuthenticateSession(ctx, passwordChangeSelector, passwordChangeSecret, 7); !errors.Is(err, ErrAuthentication) {
+	if _, err = s.AuthenticateSession(ctx, passwordChangeSelector, passwordChangeSecret, 7, true); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("password change retained a live session: %v", err)
 	}
 	newLogin, err := s.AuthenticatePassword(ctx, "operator1", "violet-lemur-changed-key-2026", "203.0.113.3", 7)
@@ -458,7 +458,7 @@ func TestSessionEpochsTimeoutEvictionCSRFAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	newSelector, newSecret := splitCredential(t, newLogin.SessionCookie)
-	if _, err = s.AuthenticateSession(ctx, newSelector, newSecret, 7); !errors.Is(err, ErrAuthentication) {
+	if _, err = s.AuthenticateSession(ctx, newSelector, newSecret, 7, true); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("role assignment change retained a session: %v", err)
 	}
 	newLogin, err = s.AuthenticatePassword(ctx, "operator1", "violet-lemur-changed-key-2026", "203.0.113.4", 7)
@@ -473,7 +473,7 @@ func TestSessionEpochsTimeoutEvictionCSRFAndRestart(t *testing.T) {
 	if err = s.DisableAccount(ctx, user.ID, revision); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.AuthenticateSession(ctx, newSelector, newSecret, 7); !errors.Is(err, ErrAuthentication) {
+	if _, err = s.AuthenticateSession(ctx, newSelector, newSecret, 7, true); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("disabled account session authenticated: %v", err)
 	}
 }

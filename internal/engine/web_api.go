@@ -536,7 +536,7 @@ func (h *webAPI) readCookiePrincipal(r *http.Request) (identity.Principal, strin
 	err := h.withLiveAuthorization(r.Context(), func(live authz.Snapshot, liveEpoch uint64) error {
 		snapshot, epoch = live, liveEpoch
 		var authErr error
-		principal, authErr = h.identities.AuthenticateSession(r.Context(), selector, secret, epoch)
+		principal, authErr = h.identities.AuthenticateSession(r.Context(), selector, secret, epoch, userActivity(r))
 		return authErr
 	})
 	if err != nil {
@@ -544,6 +544,12 @@ func (h *webAPI) readCookiePrincipal(r *http.Request) (identity.Principal, strin
 	}
 	principal.Capabilities = snapshot.Resolve(principal.Account.RoleIDs)
 	return principal, selector, secret, snapshot, epoch, nil
+}
+
+// userActivity is false for a read the web UI marks as made without the user (a poll), so that a screen left
+// open still reaches the idle timeout. A write is always activity.
+func userActivity(r *http.Request) bool {
+	return (r.Method != http.MethodGet && r.Method != http.MethodHead) || r.Header.Get("X-Andaru-Background") != "1"
 }
 
 func (h *webAPI) withLiveAuthorization(ctx context.Context, fn func(authz.Snapshot, uint64) error) error {
