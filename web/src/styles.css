@@ -419,6 +419,37 @@ path.traffic-sent {
     text-transform: uppercase;
   }
 
+  /* A rule on a narrow screen: its place, switch and action on one line, its name under them, then each side
+     under its label. */
+  .rules tr {
+    align-items: center;
+    display: grid;
+    gap: 0.25rem var(--mantine-spacing-xs);
+    grid-template-columns: auto auto 1fr;
+  }
+
+  .rules td {
+    grid-column: 1 / -1;
+  }
+
+  .rules td[data-label="Position"],
+  .rules td[data-label="Enabled"],
+  .rules td[data-label="Action"] {
+    grid-column: auto;
+    grid-row: 1;
+  }
+
+  .rules td[data-label="Name"] {
+    grid-row: 2;
+  }
+
+  .rules td[data-label="Position"]::before,
+  .rules td[data-label="Enabled"]::before,
+  .rules td[data-label="Action"]::before,
+  .rules td[data-label="Name"]::before {
+    content: none;
+  }
+
   .mantine-Modal-inner {
     padding: 0;
   }
@@ -453,6 +484,11 @@ path.traffic-sent {
   box-shadow: var(--mantine-shadow-md);
   position: relative;
   z-index: 1;
+}
+
+/* A rule's words are never cut short to fit a column: the columns give way. */
+.rules .mantine-Badge-root {
+  min-width: max-content;
 }
 
 /* An alias is who; a zone is where. The alias chip is plain so the two never read alike. */

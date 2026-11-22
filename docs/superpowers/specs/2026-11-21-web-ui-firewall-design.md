@@ -10,6 +10,14 @@ It builds on the shell ([shell design](2026-11-21-web-ui-shell-design.md)): ever
 
 The API serves `rules` with its order operation, `aliases.addresses` and `aliases.ports` ([firewall rule model](2026-11-22-firewall-rule-model-design.md)). The owner decided on 2026-11-21 that the firewall itself is a zone (call 2). That made the engine's two lists one, which came first: [#113](https://github.com/andaru-project/andaru/issues/113). Beyond that and call 9, this slice adds no engine behaviour.
 
+## Built so far
+
+The Rules page (2026-11-22): the list in execution order with each rule as a sentence of names, the fixed block, the filter, the enabled switch, deleting, the editor as a side panel, and reordering by a grip with touch, pointer and keyboard. It differs from the calls below in these points, each the author's and open to review:
+
+- **The order is unlocked by an "Edit order" button with a pencil,** which becomes "Done", as the dashboard's layout is. The owner moved the dashboard from a padlock to the pencil, and the two pages should not differ.
+- **Rule names may repeat,** as the engine now allows.
+- **Not built yet:** the Aliases page and creating an alias from a picker (the pickers offer the aliases that exist), the offer of starter rules on an empty list, the list of rules that still use an alias on a refused delete, and what changed underneath after a version conflict in the editor (it says that the rule changed and keeps what was typed). The anti-lockout line names SSH only, which is what the engine accepts today.
+
 ## Author calls
 
 1. **Navigation gains a Firewall branch** in the tree ([navigation design](2026-11-21-web-ui-dashboard-design.md)): Rules and Aliases. It needs `configuration.read`; editing needs `configuration.write`, and without it the pages are read-only.

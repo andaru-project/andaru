@@ -23,11 +23,15 @@ function names(snapshot: Snapshot): Names {
 }
 
 // A mark beside each action's word: the word says it, the mark and the colour help the eye down the column.
+// Drawn, not typed: a font may lack the character. A tick, a cross, and a barred circle for "refused, and told so".
 const actions: Record<Rule['action'], { mark: string; color: string }> = {
-  accept: { mark: '✓', color: 'green' },
-  drop: { mark: '✕', color: 'red' },
-  reject: { mark: '⊘', color: 'orange' },
+  accept: { mark: 'M3 8.5l3.5 3.5L13 4.5', color: 'green' },
+  drop: { mark: 'M4 4l8 8M12 4l-8 8', color: 'red' },
+  reject: { mark: 'M8 2.5a5.5 5.5 0 1 0 0 11a5.5 5.5 0 1 0 0-11M4.2 4.2l7.6 7.6', color: 'orange' },
 };
+function ActionMark({ action }: { action: Rule['action'] }) {
+  return <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={actions[action].mark} /></svg>;
+}
 
 // One side of a rule as it reads: the zones it arrives in or leaves by, then who within them.
 function Side({ side, names: known }: { side: RuleSide; names: Names }) {
@@ -64,7 +68,7 @@ function Row({ item, position, names: known, canWrite, unlocked, busy, onToggle,
       </Table.Td>
       <Table.Td data-label="Action">
         <Group gap={6} wrap="nowrap">
-          <Badge color={actions[rule.action].color} variant="light" leftSection={<span aria-hidden="true">{actions[rule.action].mark}</span>}>{rule.action}</Badge>
+          <Badge color={actions[rule.action].color} variant="light" leftSection={<ActionMark action={rule.action} />}>{rule.action}</Badge>
           {rule.log && <Badge variant="outline" color="gray">logs</Badge>}
         </Group>
       </Table.Td>
