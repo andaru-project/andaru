@@ -217,7 +217,7 @@ func prepareRestoration(current *savedState, decoded decodedBackup, next Version
 			continue
 		}
 		_, exists := secrets.Scopes["core"][reference.Secret]
-		if decoded.configuration != nil && (decoded.secrets == nil || !exists) {
+		if decoded.configuration != nil && !decoded.ownSecrets && (decoded.secrets == nil || !exists) {
 			reference.Unresolved = true
 		}
 		if reference.Unresolved {

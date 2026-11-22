@@ -28,6 +28,9 @@ type backupSecretDocument struct {
 type decodedBackup struct {
 	configuration *declaration
 	secrets       *backupSecretDocument
+	// ownSecrets says the configuration is read against the store's own secrets, as an upgrade's is, so its
+	// references stay resolved.
+	ownSecrets bool
 }
 
 // Export captures logical documents from one saved pair, never public views or SQL rows.
@@ -63,9 +66,13 @@ func decodeBackupDocuments(input RestoreDocuments) (decodedBackup, error) {
 	}
 	if input.Configuration != nil {
 		// A backup taken before schema 4 restores as the configuration it is now.
-		d, _, _, err := decodeSaved(input.Configuration)
+		d, _, _, questions, err := decodeSavedWith(input.Configuration, nil)
 		if err != nil {
 			return decoded, boundaryFault(err)
+		}
+		// Restoring it would save its provisional choices as the user's; answering them on restore is not offered yet.
+		if len(questions) > 0 {
+			return decoded, fault("VALIDATION_FAILED", "/configuration", "This backup needs decisions to read in this Andaru, and restoring such a backup is not offered yet.")
 		}
 		decoded.configuration = &d
 	}

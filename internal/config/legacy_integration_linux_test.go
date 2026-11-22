@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"strconv"
 	"testing"
 )
@@ -381,5 +382,112 @@ func TestNewerOnlyStoreIsRefused(t *testing.T) {
 	if s, err := Open(ctx, root); err == nil {
 		s.Close()
 		t.Fatal("a store of a newer schema alone opened")
+	}
+}
+
+// faultCode is the code of a store fault, or "" for anything else.
+func faultCode(err error) string {
+	var f *Fault
+	if errors.As(err, &f) {
+		return f.Code
+	}
+	return ""
+}
+
+// The hold: a head that needs decisions refuses saves and is not migrated on start; answering saves a version of the
+// current schema with the answers, and the hold ends.
+func TestHeldHeadWaitsForItsAnswers(t *testing.T) {
+	ctx := context.Background()
+	withDecisions(t, zoneDecision("rename", 1, func(map[string]any) bool { return true }))
+	s, root := legacyStore(t)
+	pending, err := s.UpgradePreview(ctx, nil)
+	if err != nil || pending.SavedVersion != "2" || len(pending.Questions) != 1 {
+		t.Fatalf("pending: %+v %v", pending, err)
+	}
+	if _, err = s.Save(ctx, systemRootActor, createZone("guest")); faultCode(err) != "SETTINGS_UPGRADE_PENDING" {
+		t.Fatalf("a save during the hold: %v", err)
+	}
+	if saved, err := s.MigrateHead(ctx); err != nil || saved != "" {
+		t.Fatalf("a held head was migrated: %q %v", saved, err)
+	}
+	for name, tc := range map[string]struct {
+		expected Version
+		answers  map[string]string
+		code     string
+	}{
+		"no expected version": {"", map[string]string{"rename": "rename"}, "PRECONDITION_REQUIRED"},
+		"stale version":       {"1", map[string]string{"rename": "rename"}, "PRECONDITION_FAILED"},
+		"unanswered":          {"2", nil, "VALIDATION_FAILED"},
+		"no such choice":      {"2", map[string]string{"rename": "nope"}, "VALIDATION_FAILED"},
+	} {
+		if _, err = s.Upgrade(ctx, systemRootActor, tc.expected, tc.answers); faultCode(err) != tc.code {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	saved, err := s.Upgrade(ctx, systemRootActor, "2", map[string]string{"rename": "rename"})
+	if err != nil || saved.SavedVersion != "3" {
+		t.Fatalf("upgrade: %+v %v", saved, err)
+	}
+	zone, _, err := s.Get(ctx, "zones", legacyZone)
+	if err != nil || zone.Version != "3" || !strings.Contains(string(zone.Value), `"renamed"`) {
+		t.Fatalf("the answered zone: %s %s %v", zone.Version, zone.Value, err)
+	}
+	if pending, err = s.UpgradePreview(ctx, nil); err != nil || len(pending.Questions) != 0 {
+		t.Fatalf("still pending: %+v %v", pending, err)
+	}
+	if _, err = s.Save(ctx, systemRootActor, createZone("guest")); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = VerifyRecoveryState(ctx, root); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A choice that raises a further question needs that one answered too before the answers save.
+func TestUpgradeAsksTheQuestionsAChoiceRaises(t *testing.T) {
+	ctx := context.Background()
+	withDecisions(t,
+		zoneDecision("first", 1, func(map[string]any) bool { return true }),
+		zoneDecision("second", 2, func(z map[string]any) bool { return z["description"] == "marked" }))
+	s, _ := legacyStore(t)
+	view, err := s.UpgradePreview(ctx, map[string]string{"first": "mark"})
+	if err != nil || len(view.Questions) != 2 || view.Questions[1].Answered {
+		t.Fatalf("preview: %+v %v", view, err)
+	}
+	if _, err = s.Upgrade(ctx, systemRootActor, "2", map[string]string{"first": "mark"}); faultCode(err) != "VALIDATION_FAILED" {
+		t.Fatalf("a raised question went unanswered: %v", err)
+	}
+	if _, err = s.Upgrade(ctx, systemRootActor, "2", map[string]string{"first": "mark", "second": "keep"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// During the hold a backup of the current schema restores and ends it; a backup that itself needs decisions is not
+// restored, since that would save its provisional choices.
+func TestRestoreDuringTheHold(t *testing.T) {
+	ctx := context.Background()
+	withDecisions(t, zoneDecision("rename", 1, func(map[string]any) bool { return true }))
+	s, _ := legacyStore(t)
+	if _, err := s.Restore(ctx, rootRestoreActor, "2", RestoreDocuments{Configuration: legacyDocument(t)}); faultCode(err) != "VALIDATION_FAILED" {
+		t.Fatalf("a backup needing decisions: %v", err)
+	}
+	withDecisions(t)
+	d, _, _, err := decodeSaved(legacyDocument(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := canonical(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withDecisions(t, zoneDecision("rename", 1, func(map[string]any) bool { return true }))
+	if _, err = s.Restore(ctx, rootRestoreActor, "2", RestoreDocuments{Configuration: current}); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := s.UpgradePreview(ctx, nil); err != nil || len(pending.Questions) != 0 {
+		t.Fatalf("still pending after a restore: %+v %v", pending, err)
 	}
 }
