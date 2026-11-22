@@ -139,9 +139,14 @@ func TestNegatedTo(t *testing.T) {
 		f[3].(map[string]any)["toNegated"] = true
 	})))
 	inOrder(t, chainOf(t, script, "prerouting"),
-		`iifname @`+natWAN+` meta nfproto ipv4 fib daddr . iif type != { local, broadcast, multicast } tcp dport 8080 ct mark set ct mark & 0xffff0000 | 0x00000001 log prefix "andaru `+pfwWeb+` " dnat ip to 192.0.2.10:80 comment "`+pfwWeb+`"`,
+		`iifname @`+natWAN+` meta nfproto ipv4 fib daddr . iif type != local fib daddr type != { broadcast, multicast } tcp dport 8080 ct mark set ct mark & 0xffff0000 | 0x00000001 log prefix "andaru `+pfwWeb+` " dnat ip to 192.0.2.10:80 comment "`+pfwWeb+`"`,
 		`iifname @`+natWAN+` ip daddr != @`+natBlocked+` fib daddr type != { broadcast, multicast } tcp dport 2222 ct mark set ct mark & 0xffff0000 | 0x00000004 redirect to :22 comment "`+pfwSSH+`"`)
 	inOrder(t, chainOf(t, script, "postrouting"), `oifname "ens19" ct status dnat ip saddr 192.0.2.0/24 masquerade comment "reflection"`)
+	// A negated forward to the firewall itself has no reply to bring back.
+	local := table(t, render(t, natChange(t, func(f []any) { f[3].(map[string]any)["toNegated"] = true })))
+	if strings.Contains(local, `comment "reflection"`) {
+		t.Fatalf("hairpin for a local target:\n%s", local)
+	}
 }
 
 // A target that is one of the firewall's own addresses is local delivery: its rule goes in input.

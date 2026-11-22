@@ -86,12 +86,13 @@ func (f *filter) portForwards() (prerouting, forward, input []string) {
 			to = ip + " daddr @" + setName(pf.To.Address) + fam
 		}
 		// A negated destination is the complement among unicast destinations: broadcasts and multicasts, such as
-		// service discovery, are never forwarded to one host.
+		// service discovery, are never forwarded to one host. Without iif, a directed broadcast of any subnet counts.
 		if pf.ToNegated {
-			to = nfproto + " fib daddr . iif type != { local, broadcast, multicast }"
+			to = nfproto + " fib daddr . iif type != local"
 			if !pf.To.Self {
-				to = ip + " daddr != @" + setName(pf.To.Address) + fam + " fib daddr type != { broadcast, multicast }"
+				to = ip + " daddr != @" + setName(pf.To.Address) + fam
 			}
+			to += " fib daddr type != { broadcast, multicast }"
 		}
 		// ct status dnat says a connection was translated, not by whom: each forward marks what it translates in the
 		// low 16 bits of the connection mark, and its rule admits that mark only. The high bits are left to others.
