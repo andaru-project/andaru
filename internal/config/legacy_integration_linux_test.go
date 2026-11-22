@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strconv"
 	"testing"
 )
 
@@ -287,19 +288,24 @@ func TestMigrateHeadSavesTheCurrentSchema(t *testing.T) {
 }
 
 // newerHead makes the store's head a version of a schema newer than this Andaru knows, as a later Andaru leaves it:
-// version 2, version 1's document marked with the next schema, which created a zone.
-func newerHead(t *testing.T, s *Store) {
+// the head's document marked with the next schema, which also created a zone. It returns that version.
+func newerHead(t *testing.T, s *Store) Version {
 	t.Helper()
 	ctx := context.Background()
+	var head int64
+	if err := s.configDB.QueryRowContext(ctx, "SELECT version_id FROM pointers WHERE name='saved'").Scan(&head); err != nil {
+		t.Fatal(err)
+	}
 	for _, q := range []string{
-		"INSERT INTO versions SELECT 2,1,schema_version+1,config_sha256,secrets_sha256,created_at,actor,1 FROM versions WHERE id=1",
-		"INSERT INTO object_changes VALUES('zones','zon_0000000f-0000-4000-8000-00000000000f',2,1,0)",
-		"UPDATE pointers SET version_id=2 WHERE name='saved'",
+		"INSERT INTO versions SELECT id+1,id,schema_version+1,config_sha256,secrets_sha256,created_at,actor,1 FROM versions WHERE id=?",
+		"INSERT INTO object_changes VALUES('zones','zon_0000000f-0000-4000-8000-00000000000f',?+1,1,0)",
+		"UPDATE pointers SET version_id=?+1 WHERE name='saved'",
 	} {
-		if _, err := s.configDB.ExecContext(ctx, q); err != nil {
+		if _, err := s.configDB.ExecContext(ctx, q, head); err != nil {
 			t.Fatal(q, err)
 		}
 	}
+	return Version(strconv.FormatInt(head+1, 10))
 }
 
 // After a rollback to an older Andaru, the store opens on a copy of the newest version this Andaru can read, saved
@@ -308,24 +314,27 @@ func TestNewerHeadOpensOnTheNewestReadableVersion(t *testing.T) {
 	ctx := context.Background()
 	root := ownedDir(t)
 	s := openTestStore(t, root)
-	if _, err := s.Save(ctx, systemRootActor, createZone("guest")); err != nil {
-		t.Fatal(err)
+	role := Changes{Operations: []Operation{{Op: "create", Collection: "roles", Value: json.RawMessage(`{"name":"Operator","capabilities":["status.read"]}`)}}}
+	for _, c := range []Changes{createZone("guest"), role} {
+		if _, err := s.Save(ctx, systemRootActor, c); err != nil {
+			t.Fatal(err)
+		}
 	}
 	want, err := s.Snapshot(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	newerHead(t, s)
+	newer := newerHead(t, s) // 3
 	if err = s.Close(); err != nil {
 		t.Fatal(err)
 	}
 	s = openTestStore(t, root)
 	got, err := s.Snapshot(ctx)
-	if err != nil || got.SavedVersion != "3" || string(got.Value) != string(want.Value) {
+	if err != nil || got.SavedVersion != "4" || string(got.Value) != string(want.Value) {
 		t.Fatalf("snapshot after a rollback: %s %s %v\nwant %s", got.SavedVersion, got.Value, err, want.Value)
 	}
 	var parent, schema int
-	if err = s.configDB.QueryRowContext(ctx, "SELECT parent_id,schema_version FROM versions WHERE id=3").Scan(&parent, &schema); err != nil || parent != 2 || schema != schemaVersion {
+	if err = s.configDB.QueryRowContext(ctx, "SELECT parent_id,schema_version FROM versions WHERE id=4").Scan(&parent, &schema); err != nil || parent != 3 || schema != schemaVersion {
 		t.Fatalf("copy parent %d schema %d %v", parent, schema, err)
 	}
 	zones, err := s.List(ctx, "zones")
@@ -333,25 +342,25 @@ func TestNewerHeadOpensOnTheNewestReadableVersion(t *testing.T) {
 		t.Fatalf("zones: %+v %v", zones, err)
 	}
 	for _, z := range zones.Items {
-		if z.Version != "3" {
+		if z.Version != "4" {
 			t.Fatalf("a zone reads its version from elsewhere than the copy: %+v", z)
 		}
 	}
+	if rules, err := s.List(ctx, "rules"); err != nil || rules.Version != "4" {
+		t.Fatalf("the rule list reads its version from elsewhere than the copy: %+v %v", rules.Version, err)
+	}
 	// The zone the newer version created is deleted in the copy, and that version reads as one this Andaru cannot.
 	var deleted bool
-	if err = s.configDB.QueryRowContext(ctx, "SELECT deleted FROM object_changes WHERE object_id='zon_0000000f-0000-4000-8000-00000000000f' AND version_id=3").Scan(&deleted); err != nil || !deleted {
+	if err = s.configDB.QueryRowContext(ctx, "SELECT deleted FROM object_changes WHERE object_id='zon_0000000f-0000-4000-8000-00000000000f' AND version_id=4").Scan(&deleted); err != nil || !deleted {
 		t.Fatalf("no deletion of the newer zone: %t %v", deleted, err)
 	}
 	var f *Fault
-	if _, err = s.Version(ctx, "2"); !errors.As(err, &f) || f.Code != "NOT_FOUND" {
+	if _, err = s.Version(ctx, newer); !errors.As(err, &f) || f.Code != "NOT_FOUND" {
 		t.Fatalf("reading the newer version: %v", err)
 	}
 	// Its roles still read, for the live generation that names it; the caller checks them against its digest.
-	if roles, err := s.Roles(ctx, "2"); err != nil || len(roles) != 0 {
+	if roles, err := s.Roles(ctx, newer); err != nil || len(roles) != 1 || roles[0].Name != "Operator" {
 		t.Fatalf("roles of the newer version: %+v %v", roles, err)
-	}
-	if rules, err := s.List(ctx, "rules"); err != nil || rules.Version != "3" {
-		t.Fatalf("the rule list reads its version from elsewhere than the copy: %+v %v", rules.Version, err)
 	}
 	if _, err = s.Save(ctx, systemRootActor, createZone("iot")); err != nil {
 		t.Fatal(err)

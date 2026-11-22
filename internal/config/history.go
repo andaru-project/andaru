@@ -28,7 +28,12 @@ func (s *Store) Roles(ctx context.Context, version Version) ([]authz.Role, error
 	}
 	var body, hash []byte
 	var schema int
+	release, err := s.acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
 	err = s.configDB.QueryRowContext(ctx, "SELECT d.body,v.config_sha256,v.schema_version FROM versions v JOIN documents d ON d.sha256=v.config_sha256 WHERE v.id=?", n).Scan(&body, &hash, &schema)
+	release()
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fault("NOT_FOUND", "", "Saved version does not exist.")
 	}

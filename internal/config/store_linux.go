@@ -311,8 +311,6 @@ type pendingSave struct {
 	actor                       string
 	active, secretReady, closed bool
 	deadline                    time.Time
-	// head is the saved version the batch was prepared against.
-	head Version
 }
 
 func (s *Store) startSave(ctx context.Context, actor authz.Actor, requested []objectKey) (*pendingSave, savedState, Version, error) {
@@ -357,7 +355,6 @@ func (s *Store) startSaveFrom(ctx context.Context, actor authz.Actor, from Versi
 	if e = p.conn.QueryRowContext(ctx, "SELECT version_id FROM pointers WHERE name='saved'").Scan(&n); e != nil || n < 0 || n == int64(^uint64(0)>>1) {
 		return nil, empty, "", unavailable()
 	}
-	p.head = Version(strconv.FormatInt(n, 10))
 	success = true
 	return p, current, Version(fmt.Sprint(n + 1)), nil
 }
