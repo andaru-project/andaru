@@ -43,7 +43,7 @@ func TestVirtualAddressesRendering(t *testing.T) {
 func TestIPv6ForwardForms(t *testing.T) {
 	in := change(t, fixture(t, "virtual"), func(d map[string]any) {
 		z := d["nat"].(map[string]any)["portForwards"].([]any)[0].(map[string]any)["ingressZones"]
-		d["objects"].(map[string]any)["addresses"] = append(d["objects"].(map[string]any)["addresses"].([]any),
+		d["aliases"].(map[string]any)["addresses"] = append(d["aliases"].(map[string]any)["addresses"].([]any),
 			map[string]any{"id": "adr_00000009-0000-4000-8000-000000000009", "name": "v6peer", "kind": "network", "prefix": "2001:db8:9::/48"})
 		six := func(id, ports string, fields map[string]any) map[string]any {
 			f := map[string]any{"id": id, "name": id[:12], "family": "ipv6", "enabled": true, "ingressZones": z, "protocol": "tcp", "from": []any{}, "to": map[string]any{"self": true}, "filterRule": "auto", "ports": ports, "target": map[string]any{"address": "fd00:53:53:53:53:53:53:53"}}
@@ -69,7 +69,7 @@ func TestIPv6ForwardForms(t *testing.T) {
 // Reflection on an address-object destination never takes a virtual address in it either.
 func TestReflectionObjectSkipsVirtualAddresses(t *testing.T) {
 	in := change(t, fixture(t, "virtual"), func(d map[string]any) {
-		d["objects"].(map[string]any)["addresses"] = append(d["objects"].(map[string]any)["addresses"].([]any),
+		d["aliases"].(map[string]any)["addresses"] = append(d["aliases"].(map[string]any)["addresses"].([]any),
 			map[string]any{"id": "adr_0000000a-0000-4000-8000-00000000000a", "name": "public", "kind": "network", "prefix": "172.16.53.0/24"})
 		f := d["nat"].(map[string]any)["portForwards"].([]any)[3].(map[string]any)
 		f["to"] = map[string]any{"address": "adr_0000000a-0000-4000-8000-00000000000a"}

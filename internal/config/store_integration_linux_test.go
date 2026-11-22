@@ -897,15 +897,15 @@ func TestFilterObjectsPersist(t *testing.T) {
 	s = openTestStore(t, path)
 	zero := Version("0")
 	if _, e = s.Save(ctx, systemRootActor, Changes{Operations: []Operation{
-		{Op: "create", Collection: "policy.forward", LocalID: "a", Value: json.RawMessage(`{"name":"a","enabled":true,"action":"accept","from":[],"to":[],"services":[],"log":false}`)},
-		{Op: "create", Collection: "policy.forward", LocalID: "b", Value: json.RawMessage(`{"name":"b","enabled":true,"action":"drop","from":[],"to":[],"services":[],"log":false}`)},
+		{Op: "create", Collection: "rules", LocalID: "a", Value: json.RawMessage(`{"name":"a","enabled":true,"action":"accept","from":{"zones":[],"addresses":[]},"to":{"zones":[],"addresses":[]},"ports":[],"log":false}`)},
+		{Op: "create", Collection: "rules", LocalID: "b", Value: json.RawMessage(`{"name":"b","enabled":true,"action":"drop","from":{"zones":[],"addresses":[]},"to":{"zones":[],"addresses":[]},"ports":[],"log":false}`)},
 		{Op: "replace", Collection: "nat.outbound", ExpectedVersion: &zero, Value: json.RawMessage(`{"mode":"automatic"}`)},
 	}}); e != nil {
 		t.Fatalf("save after the table was added: %v", e)
 	}
 	s.Close()
 	s = openTestStore(t, path)
-	list, e := s.List(ctx, "policy.forward")
+	list, e := s.List(ctx, "rules")
 	if e != nil || len(list.Items) != 2 {
 		t.Fatalf("rules %+v %v", list, e)
 	}
@@ -920,7 +920,7 @@ func TestFilterObjectsPersist(t *testing.T) {
 		t.Fatal(e)
 	}
 	var d declaration
-	if e = json.Unmarshal(in.Value, &d); e != nil || len(d.Policy.Forward) != 2 || d.NAT.Outbound.Mode != "automatic" {
+	if e = json.Unmarshal(in.Value, &d); e != nil || len(d.Rules) != 2 || d.NAT.Outbound.Mode != "automatic" {
 		t.Fatalf("realization input lost the filter: %s %v", in.Value, e)
 	}
 }

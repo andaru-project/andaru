@@ -115,12 +115,11 @@ func TestFilterInNamespace(t *testing.T) {
 	// The starter policy, with one drop placed above the LAN's accept for port 8080.
 	in := change(t, fixture(t, "filter-two-zones"), func(d map[string]any) {
 		svc := map[string]any{"id": "svc_00000009-0000-4000-8000-000000000009", "name": "alt-web", "protocol": "tcp", "ports": []any{"8080"}}
-		objects := d["objects"].(map[string]any)
-		objects["services"] = append(objects["services"].([]any), svc)
-		policy := d["policy"].(map[string]any)
+		aliases := d["aliases"].(map[string]any)
+		aliases["ports"] = append(aliases["ports"].([]any), svc)
 		drop := map[string]any{"id": "rul_00000009-0000-4000-8000-000000000009", "name": "no alt-web", "enabled": true, "action": "drop",
-			"from": []any{"zon_00000002-0000-4000-8000-000000000002"}, "to": []any{}, "services": []any{svc["id"]}, "log": false}
-		policy["forward"] = append([]any{drop}, policy["forward"].([]any)...)
+			"from": map[string]any{"zones": []any{"zon_00000002-0000-4000-8000-000000000002"}, "addresses": []any{}}, "to": map[string]any{"zones": []any{}, "addresses": []any{}}, "ports": []any{svc["id"]}, "log": false}
+		d["rules"] = append([]any{drop}, d["rules"].([]any)...)
 	})
 	l.load(in)
 	l.load(in) // replacing the table again is one atomic transaction
@@ -174,7 +173,7 @@ func TestPortForwardsInNamespace(t *testing.T) {
 			}
 		}
 		// The exclusion now names the WAN neighbour, so its connections on 1000-1001 stay untranslated.
-		addresses := d["objects"].(map[string]any)["addresses"].([]any)
+		addresses := d["aliases"].(map[string]any)["addresses"].([]any)
 		addresses[len(addresses)-1].(map[string]any)["address"] = "10.1.0.2"
 	})
 	l.load(in)
@@ -217,9 +216,8 @@ func TestOneToOneInNamespace(t *testing.T) {
 		nat["oneToOne"] = nat["oneToOne"].([]any)[:2]
 		delete(nat, "portForwards")
 		// 1:1 has no associated rule: the policy admits the WAN to the host, as an operator would write it.
-		policy := d["policy"].(map[string]any)
-		policy["forward"] = append(policy["forward"].([]any), map[string]any{"id": "rul_00000009-0000-4000-8000-000000000009", "name": "to the server",
-			"enabled": true, "action": "accept", "from": []any{"zon_00000001-0000-4000-8000-000000000001"}, "to": []any{"zon_00000002-0000-4000-8000-000000000002"}, "services": []any{}, "log": false})
+		d["rules"] = append(d["rules"].([]any), map[string]any{"id": "rul_00000009-0000-4000-8000-000000000009", "name": "to the server",
+			"enabled": true, "action": "accept", "from": map[string]any{"zones": []any{"zon_00000001-0000-4000-8000-000000000001"}, "addresses": []any{}}, "to": map[string]any{"zones": []any{"zon_00000002-0000-4000-8000-000000000002"}, "addresses": []any{}}, "ports": []any{}, "log": false})
 	})
 	l.load(in)
 	wait := func(peers, want string) {
@@ -254,9 +252,9 @@ func TestOneToOneInNamespace(t *testing.T) {
 func TestForwardRuleAdmitsOnlyItsOwnTranslations(t *testing.T) {
 	l := newLab(t)
 	in := change(t, fixture(t, "nat-port-forwards"), func(d map[string]any) {
-		addresses := d["objects"].(map[string]any)["addresses"].([]any)
+		addresses := d["aliases"].(map[string]any)["addresses"].([]any)
 		addresses = append(addresses, map[string]any{"id": "adr_00000008-0000-4000-8000-000000000008", "name": "routed", "kind": "host", "address": "10.9.9.9"})
-		d["objects"].(map[string]any)["addresses"] = addresses
+		d["aliases"].(map[string]any)["addresses"] = addresses
 		nat := d["nat"].(map[string]any)
 		forwards := nat["portForwards"].([]any)
 		b := map[string]any{"id": "pfw_00000009-0000-4000-8000-000000000009", "name": "routed-ssh", "enabled": true,

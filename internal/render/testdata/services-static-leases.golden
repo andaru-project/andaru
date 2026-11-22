@@ -174,7 +174,7 @@ IPv6AcceptRA=no
 [Resolve]
 DNS=127.0.0.1 ::1
 
-### nft:inet/andaru 0644 secret=false sources=/management,/nat,/policy
+### nft:inet/andaru 0644 secret=false sources=/aliases,/management,/nat,/rules
 # interface ens18 52:54:00:aa:bb:01
 # interface ens19 52:54:00:aa:bb:02
 table inet andaru {}

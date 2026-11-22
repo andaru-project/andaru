@@ -8,7 +8,6 @@ import (
 
 func TestUnresolvedReferenceView(t *testing.T) {
 	state := seededState(t)
-	state.Config.SchemaVersion = 2
 	for i := range state.Config.Links {
 		if state.Config.Links[i].Password != nil {
 			state.Config.Links[i].Password.Unresolved = true
@@ -44,7 +43,8 @@ func TestUnresolvedDeclarationSchemas(t *testing.T) {
 		version           int
 		unresolved, valid bool
 	}{
-		{1, false, true}, {1, true, false}, {2, false, true}, {2, true, true}, {3, true, false},
+		// The forms before schema 4 said by their number whether a reference may be unresolved, and 3 needs roles.
+		{1, false, true}, {1, true, false}, {2, false, true}, {2, true, true}, {3, true, false}, {4, false, true}, {4, true, true},
 	} {
 		d := fixtureMap(t)
 		d["schemaVersion"] = tc.version
@@ -58,7 +58,7 @@ func TestUnresolvedDeclarationSchemas(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = decodeDeclaration(raw)
+		_, _, _, err = decodeSaved(raw)
 		if (err == nil) != tc.valid {
 			t.Fatalf("schema=%d unresolved=%t accepted=%t", tc.version, tc.unresolved, err == nil)
 		}
@@ -76,7 +76,6 @@ func TestMissingBoundSecretViewIsStillCorruption(t *testing.T) {
 func TestUnresolvedReferenceOrdinaryEdits(t *testing.T) {
 	for _, bind := range []bool{false, true} {
 		state := seededState(t)
-		state.Config.SchemaVersion = 2
 		for i := range state.Config.Links {
 			if state.Config.Links[i].Password != nil {
 				state.Config.Links[i].Password.Unresolved = true
@@ -121,7 +120,6 @@ func TestUnresolvedReferenceOrdinaryEdits(t *testing.T) {
 
 func TestUnresolvedMissingSecretIsReadable(t *testing.T) {
 	state := seededState(t)
-	state.Config.SchemaVersion = 2
 	for i := range state.Config.Links {
 		if state.Config.Links[i].Password != nil {
 			state.Config.Links[i].Password.Unresolved = true
@@ -150,7 +148,7 @@ func TestUnresolvedMissingSecretIsReadable(t *testing.T) {
 	}
 }
 
-func TestPublicViewSchemaKeepsUnresolvedInV2(t *testing.T) {
+func TestPublicViewSchemaKeepsUnresolved(t *testing.T) {
 	compiler, err := newSchemaCompiler(map[string][]byte{schemaURI: SchemaBundle})
 	if err != nil {
 		t.Fatal(err)
@@ -159,9 +157,8 @@ func TestPublicViewSchemaKeepsUnresolvedInV2(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, version := range []int{1, 2} {
+	{
 		state := seededState(t)
-		state.Config.SchemaVersion = version
 		for i := range state.Config.Links {
 			if state.Config.Links[i].Password != nil {
 				state.Config.Links[i].Password.Unresolved = true
@@ -176,8 +173,8 @@ func TestPublicViewSchemaKeepsUnresolvedInV2(t *testing.T) {
 			t.Fatal(err)
 		}
 		err = schema.Validate(instance)
-		if (err == nil) != (version == 2) {
-			t.Fatalf("unresolved public view schema=%d accepted=%t", version, err == nil)
+		if err != nil {
+			t.Fatalf("unresolved public view refused: %v", err)
 		}
 	}
 }

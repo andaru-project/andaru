@@ -112,10 +112,10 @@ func TestKeptLANDeclaration(t *testing.T) {
 	if err = json.Unmarshal(docs.Configuration, &d); err != nil {
 		t.Fatal(err)
 	}
-	if d.Management == nil || len(d.Segments) != 1 || d.Segments[0].Name != "lan" || len(d.Links) != 3 || len(d.Zones) != 1 || len(d.Objects.Addresses) != 2 {
+	if d.Management == nil || len(d.Segments) != 1 || d.Segments[0].Name != "lan" || len(d.Links) != 3 || len(d.Zones) != 1 || len(d.Aliases.Addresses) != 2 {
 		t.Fatalf("declaration = %s", docs.Configuration)
 	}
-	if d.DNS != nil || len(d.DHCP) != 0 || len(d.DHCP6) != 0 || len(d.NAT.PortForwards) != 0 || len(d.Policy.Input) != 0 || len(d.Policy.Forward) != 0 {
+	if d.DNS != nil || len(d.DHCP) != 0 || len(d.DHCP6) != 0 || len(d.NAT.PortForwards) != 0 || len(d.Rules) != 0 {
 		t.Fatalf("services or policy came along: %s", docs.Configuration)
 	}
 	if d.Segments[0].Addressing.IPv6.Mode != "none" {

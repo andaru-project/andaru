@@ -21,10 +21,10 @@ const (
 func natFixture(t *testing.T) map[string]any {
 	t.Helper()
 	d := fixtureMap(t)
-	d["objects"] = map[string]any{"addresses": []any{
+	d["aliases"] = map[string]any{"addresses": []any{
 		map[string]any{"id": natPeer, "name": "peer", "kind": "host", "address": "198.51.100.7"},
 		map[string]any{"id": natOther, "name": "other", "kind": "host", "address": "198.51.100.8"},
-	}, "services": []any{}}
+	}, "ports": []any{}}
 	return d
 }
 
@@ -196,7 +196,7 @@ func TestOneToOneValidation(t *testing.T) {
 func TestNATReferencesBlockDeletion(t *testing.T) {
 	d := natFixture(t)
 	setNAT(d, "portForwards", forward(d, map[string]any{"from": []any{natPeer}}))
-	d["objects"].(map[string]any)["addresses"] = d["objects"].(map[string]any)["addresses"].([]any)[1:]
+	d["aliases"].(map[string]any)["addresses"] = d["aliases"].(map[string]any)["addresses"].([]any)[1:]
 	refusedAt(t, d, "/nat/portForwards/0/from/0")
 	d = natFixture(t)
 	setNAT(d, "oneToOne", mapping(d, nil))
@@ -252,7 +252,7 @@ func TestShiftedRangeBudgetCountsReflection(t *testing.T) {
 // A group naming itself is refused by the policy validator; the NAT validator must still return, not recurse forever.
 func TestNATSurvivesASelfReferencingGroup(t *testing.T) {
 	d := natFixture(t)
-	addresses := d["objects"].(map[string]any)["addresses"].([]any)
+	addresses := d["aliases"].(map[string]any)["addresses"].([]any)
 	addresses[0] = map[string]any{"id": natPeer, "name": "peer", "kind": "group", "members": []any{natPeer}}
 	setNAT(d, "portForwards", forward(d, map[string]any{"from": []any{natPeer}}))
 	done := make(chan error, 1)

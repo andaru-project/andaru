@@ -75,14 +75,16 @@ func VerifyRecoveryState(ctx context.Context, stateDir string) error {
 		return errors.New("recovery configuration hash mismatch")
 	}
 	declaration, stored, origin, err := decodeSaved(configBody)
-	if errors.Is(err, errNotCanonical) {
-		return errors.New("recovery configuration is not canonical")
-	}
 	if err != nil {
 		return errors.New("invalid recovery configuration document")
 	}
 	if stored != schema {
 		return errors.New("recovery configuration schema mismatch")
+	}
+	// A version of an earlier form is read through its upgrade, and its bytes are those of that form.
+	normalized, err := canonical(declaration)
+	if err != nil || stored == schemaVersion && !bytes.Equal(normalized, configBody) {
+		return errors.New("recovery configuration is not canonical")
 	}
 	var secretBody []byte
 	if err = dbs[1].QueryRowContext(ctx, "SELECT body FROM documents WHERE sha256=?", secretHash).Scan(&secretBody); err != nil {
@@ -105,7 +107,7 @@ func VerifyRecoveryState(ctx context.Context, stateDir string) error {
 	if err = validateSecrets(secrets, Version(strconv.FormatInt(version, 10))); err != nil {
 		return errors.New("invalid recovery secret version")
 	}
-	normalized, err := canonical(secrets)
+	normalized, err = canonical(secrets)
 	if err != nil || !bytes.Equal(normalized, secretBody) {
 		return errors.New("recovery secret document is not canonical")
 	}

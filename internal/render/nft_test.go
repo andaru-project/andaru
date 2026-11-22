@@ -62,9 +62,9 @@ func TestNoFilterWithoutManagement(t *testing.T) {
 	plain := render(t, fixture(t, "ethernet-uplink"))
 	in := change(t, fixture(t, "filter-two-zones"), func(d map[string]any) {
 		delete(d, "management")
-		delete(d, "policy")
+		delete(d, "rules")
 		delete(d, "nat")
-		delete(d, "objects")
+		delete(d, "aliases")
 	})
 	got := render(t, in)
 	if golden(got) != golden(plain) {

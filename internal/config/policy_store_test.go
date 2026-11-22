@@ -33,12 +33,12 @@ func mustRun(t *testing.T, s *savedState, batch string) preparedChange {
 }
 
 func ruleOp(name, extra string) string {
-	return `{"op":"create","collection":"policy.forward","localId":"` + name + `","value":{"name":"` + name + `","enabled":true,"action":"accept","from":[],"to":[],"services":[],"log":false}` + extra + `}`
+	return `{"op":"create","collection":"rules","localId":"` + name + `","value":{"name":"` + name + `","enabled":true,"action":"accept","from":{"zones":[],"addresses":[]},"to":{"zones":[],"addresses":[]},"ports":[],"log":false}` + extra + `}`
 }
 
 func forwardNames(s savedState) string {
 	var names []string
-	for _, r := range s.Config.Policy.Forward {
+	for _, r := range s.Config.Rules {
 		names = append(names, r.Name)
 	}
 	return strings.Join(names, ",")
@@ -66,26 +66,26 @@ func TestOrderIsGuardedByListVersion(t *testing.T) {
 	s := seededState(t)
 	p := mustRun(t, &s, `{"operations":[`+ruleOp("a", "")+`,`+ruleOp("b", "")+`]}`)
 	a, b := p.Created["a"], p.Created["b"]
-	list := s.Versions[objectKey{"policy.forward", "policy.forward"}].Version
+	list := s.Versions[objectKey{"rules", "rules"}].Version
 	if list != s.Version {
 		t.Fatalf("list version %q after creating its rules at %q", list, s.Version)
 	}
 	// Another session appends a rule; a reorder built before it is stale.
 	mustRun(t, &s, `{"operations":[`+ruleOp("c", "")+`]}`)
-	c := s.Config.Policy.Forward[2].ID
-	_, e := run(t, &s, `{"operations":[{"op":"order","collection":"policy.forward","expectedVersion":"`+string(list)+`","value":["`+b+`","`+a+`"]}]}`)
-	if f := requireFault(t, e, "PRECONDITION_FAILED"); f.Current == nil || f.Current.Collection != "policy.forward" {
+	c := s.Config.Rules[2].ID
+	_, e := run(t, &s, `{"operations":[{"op":"order","collection":"rules","expectedVersion":"`+string(list)+`","value":["`+b+`","`+a+`"]}]}`)
+	if f := requireFault(t, e, "PRECONDITION_FAILED"); f.Current == nil || f.Current.Collection != "rules" {
 		t.Fatalf("fault %+v", f)
 	}
-	list = s.Versions[objectKey{"policy.forward", "policy.forward"}].Version
-	_, e = run(t, &s, `{"operations":[{"op":"order","collection":"policy.forward","expectedVersion":"`+string(list)+`","value":["`+b+`","`+a+`"]}]}`)
+	list = s.Versions[objectKey{"rules", "rules"}].Version
+	_, e = run(t, &s, `{"operations":[{"op":"order","collection":"rules","expectedVersion":"`+string(list)+`","value":["`+b+`","`+a+`"]}]}`)
 	requireFault(t, e, "VALIDATION_FAILED")
-	ruleVersion := s.Versions[objectKey{"policy.forward", a}].Version
-	mustRun(t, &s, `{"operations":[{"op":"order","collection":"policy.forward","expectedVersion":"`+string(list)+`","value":["`+c+`","`+b+`","`+a+`"]}]}`)
+	ruleVersion := s.Versions[objectKey{"rules", a}].Version
+	mustRun(t, &s, `{"operations":[{"op":"order","collection":"rules","expectedVersion":"`+string(list)+`","value":["`+c+`","`+b+`","`+a+`"]}]}`)
 	if got := forwardNames(s); got != "c,b,a" {
 		t.Fatalf("order = %s", got)
 	}
-	if s.Versions[objectKey{"policy.forward", a}].Version != ruleVersion || s.Versions[objectKey{"policy.forward", "policy.forward"}].Version != s.Version {
+	if s.Versions[objectKey{"rules", a}].Version != ruleVersion || s.Versions[objectKey{"rules", "rules"}].Version != s.Version {
 		t.Fatal("a reorder must move the list's version, not its rules'")
 	}
 }
@@ -120,18 +120,18 @@ func TestReferencedObjectsCannotBeDeleted(t *testing.T) {
 	s := seededState(t)
 	zone, seg := s.Config.Zones[0].ID, s.Config.Segments[0].ID
 	p := mustRun(t, &s, `{"operations":[
-		{"op":"create","collection":"addresses","localId":"nas","value":{"name":"nas","kind":"host","address":"192.0.2.10"}},
-		{"op":"create","collection":"services","localId":"dns","value":{"name":"dns","protocol":"udp","ports":["53"]}},
-		{"op":"create","collection":"services","localId":"web","value":{"name":"web","protocol":"group","members":["@dns"]}},
-		{"op":"create","collection":"policy.forward","value":{"name":"r","enabled":true,"action":"accept","from":["`+zone+`"],"to":["@nas"],"services":[],"log":false}},
+		{"op":"create","collection":"aliases.addresses","localId":"nas","value":{"name":"nas","kind":"host","address":"192.0.2.10"}},
+		{"op":"create","collection":"aliases.ports","localId":"dns","value":{"name":"dns","protocol":"udp","ports":["53"]}},
+		{"op":"create","collection":"aliases.ports","localId":"web","value":{"name":"web","protocol":"group","members":["@dns"]}},
+		{"op":"create","collection":"rules","value":{"name":"r","enabled":true,"action":"accept","from":{"zones":["`+zone+`"],"addresses":[]},"to":{"zones":[],"addresses":["@nas"]},"ports":[],"log":false}},
 		{"op":"replace","collection":"management","expectedVersion":"0","value":{"segment":"`+seg+`"}}]}`)
 	del := func(collection, id string) string {
 		return `{"operations":[{"op":"delete","collection":"` + collection + `","id":"` + id + `","expectedVersion":"` + string(s.Versions[objectKey{collection, id}].Version) + `"}]}`
 	}
 	for name, batch := range map[string]string{
-		"address in a rule":  del("addresses", p.Created["nas"]),
+		"address in a rule":  del("aliases.addresses", p.Created["nas"]),
 		"zone in a rule":     del("zones", zone),
-		"service in a group": del("services", p.Created["dns"]),
+		"service in a group": del("aliases.ports", p.Created["dns"]),
 		"management segment": del("segments", seg),
 	} {
 		if _, e := run(t, &s, batch); e == nil {
@@ -144,13 +144,13 @@ func TestFilterFaultsRebaseToTheWritingOperation(t *testing.T) {
 	s := seededState(t)
 	_, e := run(t, &s, `{"operations":[
 		{"op":"replace","collection":"nat.outbound","expectedVersion":"0","value":{"mode":"automatic"}},
-		{"op":"create","collection":"services","value":{"name":"bad","protocol":"tcp","ports":["0"]}}]}`)
+		{"op":"create","collection":"aliases.ports","value":{"name":"bad","protocol":"tcp","ports":["0"]}}]}`)
 	f := requireFault(t, e, "VALIDATION_FAILED")
 	if len(f.Details) != 1 || f.Details[0].Path != "/operations/1/value/ports/0" {
 		t.Fatalf("service fault not rebased to its operation: %+v", f.Details)
 	}
 	_, e = run(t, &s, `{"operations":[
-		{"op":"create","collection":"services","value":{"name":"ok","protocol":"tcp","ports":["80"]}},
+		{"op":"create","collection":"aliases.ports","value":{"name":"ok","protocol":"tcp","ports":["80"]}},
 		{"op":"replace","collection":"nat.outbound","expectedVersion":"0","value":{"mode":"bogus"}}]}`)
 	f = requireFault(t, e, "VALIDATION_FAILED")
 	if len(f.Details) != 1 || f.Details[0].Path != "/operations/1/value/mode" {

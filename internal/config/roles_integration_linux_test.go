@@ -41,7 +41,7 @@ func TestRoleLifecycleHistory(t *testing.T) {
 			SchemaVersion int          `json:"schemaVersion"`
 			Roles         []authz.Role `json:"roles"`
 		}
-		if err = json.Unmarshal(historical.Value, &view); err != nil || view.SchemaVersion != 3 {
+		if err = json.Unmarshal(historical.Value, &view); err != nil || view.SchemaVersion != schemaVersion {
 			t.Fatalf("invalid historical role view at %s: %+v %v", saved, view, err)
 		}
 		for _, role := range view.Roles {

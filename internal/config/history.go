@@ -50,21 +50,19 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 		return state, info, diagnostic("load-config-hash", nil)
 	}
 	d, stored, origin, e := decodeSaved(cb)
-	if errors.Is(e, errNotCanonical) {
-		return state, info, diagnostic("load-config-canonical", nil)
-	}
 	if e != nil {
 		return state, info, diagnostic("load-config-schema", e)
 	}
 	if stored != schemaVersion {
 		return state, info, diagnostic("load-config-schema-mismatch", nil)
 	}
-	if state.legacy, state.origin = stored < d.SchemaVersion, origin; state.legacy {
-		// What a batch that changes nothing is compared with: the document as it reads now.
-		if cb, e = canonical(d); e != nil {
-			return state, info, diagnostic("load-config-canonical", e)
-		}
+	// A version of an earlier form keeps the bytes it was saved with, and the document as it reads now is what
+	// a batch that changes nothing is compared with.
+	canonicalBody, e := canonical(d)
+	if state.legacy, state.origin = stored < d.SchemaVersion, origin; e != nil || !state.legacy && !bytes.Equal(canonicalBody, cb) {
+		return state, info, diagnostic("load-config-canonical", e)
 	}
+	cb = canonicalBody
 	state.Version = Version(strconv.FormatInt(number, 10))
 	info.ID = state.Version
 	if parent.Valid {

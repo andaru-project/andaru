@@ -112,7 +112,8 @@ func TestRestoreIndependentStores(t *testing.T) {
 	}
 }
 
-func TestRestorePreservesCompatibleSchema(t *testing.T) {
+// A restore saves the configuration in the current form, whatever form the backup holds.
+func TestRestoreSavesTheCurrentSchema(t *testing.T) {
 	ctx := context.Background()
 	schemaVersion := func(raw json.RawMessage) int {
 		t.Helper()
@@ -159,30 +160,30 @@ func TestRestorePreservesCompatibleSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	plain, err := plainSource.Export(ctx, true)
-	if err != nil || schemaVersion(plain.Configuration) != 1 {
+	if err != nil || schemaVersion(plain.Configuration) != 4 {
 		t.Fatal("wrong compatible schema fixture", err)
 	}
 	plainDestination := openTestStore(t, ownedDir(t))
-	restore(plainDestination, RestoreDocuments{Configuration: plain.Configuration, ConfigurationSecrets: plain.ConfigurationSecrets}, 1, "1")
-	restore(plainDestination, RestoreDocuments{Configuration: plain.Configuration}, 1, "2")
+	restore(plainDestination, RestoreDocuments{Configuration: plain.Configuration, ConfigurationSecrets: plain.ConfigurationSecrets}, 4, "1")
+	restore(plainDestination, RestoreDocuments{Configuration: plain.Configuration}, 4, "2")
 
 	credentialSource := openTestStore(t, ownedDir(t))
 	if _, err = credentialSource.Save(ctx, systemRootActor, networkInput(t)); err != nil {
 		t.Fatal(err)
 	}
 	withCredentials, err := credentialSource.Export(ctx, true)
-	if err != nil || schemaVersion(withCredentials.Configuration) != 1 {
+	if err != nil || schemaVersion(withCredentials.Configuration) != 4 {
 		t.Fatal("wrong credential schema fixture", err)
 	}
 	pairedDestination := openTestStore(t, ownedDir(t))
-	restore(pairedDestination, RestoreDocuments{Configuration: withCredentials.Configuration, ConfigurationSecrets: withCredentials.ConfigurationSecrets}, 1, "1")
+	restore(pairedDestination, RestoreDocuments{Configuration: withCredentials.Configuration, ConfigurationSecrets: withCredentials.ConfigurationSecrets}, 4, "1")
 	realized, err := pairedDestination.RealizationInput(ctx, nil)
 	if err != nil || realized.Secrets["WAN_PASSWORD"] != "TEST_ONLY_FIRST" {
 		t.Fatal("paired restore lost included credentials", err)
 	}
 
 	unresolvedDestination := openTestStore(t, ownedDir(t))
-	unresolved := restore(unresolvedDestination, RestoreDocuments{Configuration: withCredentials.Configuration}, 2, "1")
+	unresolved := restore(unresolvedDestination, RestoreDocuments{Configuration: withCredentials.Configuration}, 4, "1")
 	if !slices.Equal(unresolved.UnresolvedSecrets, []string{"WAN_PASSWORD"}) {
 		t.Fatal("configuration-only restore did not report its unresolved credential")
 	}
@@ -205,11 +206,11 @@ func TestRestorePreservesCompatibleSchema(t *testing.T) {
 	}
 
 	schemaTwoDestination := openTestStore(t, ownedDir(t))
-	restore(schemaTwoDestination, RestoreDocuments{Configuration: schemaTwo(plain.Configuration), ConfigurationSecrets: plain.ConfigurationSecrets}, 2, "1")
-	restore(schemaTwoDestination, RestoreDocuments{Configuration: plain.Configuration}, 2, "2")
+	restore(schemaTwoDestination, RestoreDocuments{Configuration: schemaTwo(plain.Configuration), ConfigurationSecrets: plain.ConfigurationSecrets}, 4, "1")
+	restore(schemaTwoDestination, RestoreDocuments{Configuration: plain.Configuration}, 4, "2")
 
 	importedSchemaTwoDestination := openTestStore(t, ownedDir(t))
-	restore(importedSchemaTwoDestination, RestoreDocuments{Configuration: schemaTwo(plain.Configuration)}, 2, "1")
+	restore(importedSchemaTwoDestination, RestoreDocuments{Configuration: schemaTwo(plain.Configuration)}, 4, "1")
 }
 
 func TestSecretsOnlyMissingBoundKeyRefused(t *testing.T) {
@@ -236,30 +237,12 @@ func TestSecretsOnlyMissingBoundKeyRefused(t *testing.T) {
 }
 
 func TestSecretsOnlyPreservesDeclarationSchema(t *testing.T) {
-	for _, schemaVersion := range []int{1, 2} {
+	for _, schemaVersion := range []int{4} {
 		ctx := context.Background()
 		root := ownedDir(t)
 		s := openTestStore(t, root)
 		if _, err := s.Save(ctx, systemRootActor, createZone("retained")); err != nil {
 			t.Fatal(err)
-		}
-		if schemaVersion == 2 {
-			one, err := s.Export(ctx, false)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var document declaration
-			if err = json.Unmarshal(one.Configuration, &document); err != nil {
-				t.Fatal(err)
-			}
-			document.SchemaVersion = 2
-			configuration, err := canonical(document)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err = s.Restore(ctx, rootRestoreActor, one.SavedVersion, RestoreDocuments{Configuration: configuration}); err != nil {
-				t.Fatal(err)
-			}
 		}
 		before, err := s.Export(ctx, true)
 		if err != nil {
@@ -322,7 +305,7 @@ func TestRestoreRetainsIdentityAndHistory(t *testing.T) {
 	if err != nil || revived.Version != "4" {
 		t.Fatal("restored identity unavailable", err)
 	}
-	list, err := s.List(ctx, "policy.forward")
+	list, err := s.List(ctx, "rules")
 	if err != nil || len(list.Items) != 0 || list.Version != "4" {
 		t.Fatal("empty restored order lost list version", err)
 	}
@@ -407,39 +390,3 @@ func TestRestoreConcurrentSavePrecondition(t *testing.T) {
 	}
 }
 
-func TestRestoreRejectsHistoricalCollectionCollision(t *testing.T) {
-	ctx := context.Background()
-	s := openTestStore(t, ownedDir(t))
-	create, err := DecodeChanges([]byte(`{"operations":[` + ruleOp("historical", "") + `]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	made, err := s.Save(ctx, systemRootActor, create)
-	if err != nil {
-		t.Fatal(err)
-	}
-	exported, err := s.Export(ctx, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var d declaration
-	if err = json.Unmarshal(exported.Configuration, &d); err != nil {
-		t.Fatal(err)
-	}
-	id := d.Policy.Forward[0].ID
-	d.Policy.Input, d.Policy.Forward = d.Policy.Forward, []rule{}
-	input, _ := json.Marshal(d)
-	remove, err := ObjectChange("delete", "policy.forward", id, &made.SavedVersion, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = s.Save(ctx, systemRootActor, remove); err != nil {
-		t.Fatal(err)
-	}
-	_, err = s.Restore(ctx, rootRestoreActor, "2", RestoreDocuments{Configuration: input})
-	requireFault(t, err, "VALIDATION_FAILED")
-	head, err := s.Snapshot(ctx)
-	if err != nil || head.SavedVersion != "2" {
-		t.Fatal("identity collision fenced or changed the store", err)
-	}
-}

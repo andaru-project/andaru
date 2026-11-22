@@ -9,22 +9,23 @@ import (
 	"github.com/andaru-project/andaru/internal/authz"
 )
 
-func TestSchema3RolesCanonicalAndCompatible(t *testing.T) {
-	for _, raw := range [][]byte{
-		[]byte("{\"links\":[],\"schemaVersion\":1,\"segments\":[],\"zones\":[]}\n"),
-		[]byte("{\"links\":[],\"schemaVersion\":2,\"segments\":[],\"zones\":[]}\n"),
+func TestRolesCanonicalAndCompatible(t *testing.T) {
+	for stored, raw := range map[int][]byte{
+		1: []byte("{\"links\":[],\"schemaVersion\":1,\"segments\":[],\"zones\":[]}\n"),
+		2: []byte("{\"links\":[],\"schemaVersion\":2,\"segments\":[],\"zones\":[]}\n"),
+		3: []byte("{\"links\":[],\"roles\":[],\"schemaVersion\":3,\"segments\":[],\"zones\":[]}\n"),
 	} {
-		d, err := decodeDeclaration(raw)
-		if err != nil {
-			t.Fatal(err)
+		d, was, _, err := decodeSaved(raw)
+		if err != nil || was != stored {
+			t.Fatalf("form %d: read as %d: %v", stored, was, err)
 		}
 		got, err := canonical(d)
-		if err != nil || !bytes.Equal(got, raw) {
-			t.Fatalf("legacy canonical bytes changed: %v\nwant %s\n got %s", err, raw, got)
+		if want := "{\"links\":[],\"schemaVersion\":4,\"segments\":[],\"zones\":[]}\n"; err != nil || string(got) != want {
+			t.Fatalf("form %d reads now as %s (%v), want %s", stored, got, err, want)
 		}
 	}
 
-	raw := []byte(`{"schemaVersion":3,"links":[],"segments":[],"zones":[],"roles":[{"id":"rol_00000000-0000-4000-8000-000000000001","name":"Operator","capabilities":["status.read","configuration.read"]}]}`)
+	raw := []byte(`{"schemaVersion":4,"links":[],"segments":[],"zones":[],"roles":[{"id":"rol_00000000-0000-4000-8000-000000000001","name":"Operator","capabilities":["status.read","configuration.read"]}]}`)
 	d, err := decodeDeclaration(raw)
 	if err != nil {
 		t.Fatal(err)
@@ -38,20 +39,20 @@ func TestSchema3RolesCanonicalAndCompatible(t *testing.T) {
 	}
 }
 
-func TestSchema3RoleRefusesBuiltInsAndUnknownCapabilities(t *testing.T) {
+func TestRoleRefusesBuiltInsAndUnknownCapabilities(t *testing.T) {
 	for name, role := range map[string]string{
 		"built-in id":   `{"id":"administrator","name":"Custom","capabilities":["status.read"]}`,
 		"built-in name": `{"id":"rol_00000000-0000-4000-8000-000000000002","name":"Administrator","capabilities":["status.read"]}`,
 		"unknown":       `{"id":"rol_00000000-0000-4000-8000-000000000003","name":"Custom","capabilities":["unknown.read"]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			raw := []byte(`{"schemaVersion":3,"links":[],"segments":[],"zones":[],"roles":[` + role + `]}`)
+			raw := []byte(`{"schemaVersion":4,"links":[],"segments":[],"zones":[],"roles":[` + role + `]}`)
 			if _, err := decodeDeclaration(raw); err == nil {
 				t.Fatal("accepted invalid role declaration")
 			}
 		})
 	}
-	if _, err := decodeDeclaration([]byte(`{"schemaVersion":1,"links":[],"segments":[],"zones":[],"roles":[]}`)); err == nil {
+	if _, _, _, err := decodeSaved([]byte(`{"schemaVersion":1,"links":[],"segments":[],"zones":[],"roles":[]}`)); err == nil {
 		t.Fatal("schema 1 accepted serialized roles")
 	}
 }
@@ -69,11 +70,11 @@ func TestRoleViewsAndChanges(t *testing.T) {
 	if err = json.Unmarshal(view.Value, &snapshot); err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.SchemaVersion != 1 || len(snapshot.Roles) != 2 || snapshot.Roles[0].BuiltIn != authz.AdministratorRoleID || snapshot.Roles[1].BuiltIn != authz.ReadOnlyRoleID {
-		t.Fatalf("legacy view did not synthesize immutable built-ins: %+v", snapshot)
+	if snapshot.SchemaVersion != schemaVersion || len(snapshot.Roles) != 2 || snapshot.Roles[0].BuiltIn != authz.AdministratorRoleID || snapshot.Roles[1].BuiltIn != authz.ReadOnlyRoleID {
+		t.Fatalf("view did not synthesize immutable built-ins: %+v", snapshot)
 	}
 
-	ordinary, err := DecodeChanges([]byte(`{"operations":[{"op":"create","collection":"zones","localId":"zone","value":{"name":"Extra"}},{"op":"create","collection":"services","localId":"service","value":{"name":"DNS","protocol":"udp","ports":["53"]}},{"op":"create","collection":"policy.forward","localId":"rule","value":{"name":"Allow DNS","enabled":true,"action":"accept","from":[],"to":[],"services":[],"log":false}}]}`))
+	ordinary, err := DecodeChanges([]byte(`{"operations":[{"op":"create","collection":"zones","localId":"zone","value":{"name":"Extra"}},{"op":"create","collection":"aliases.ports","localId":"service","value":{"name":"DNS","protocol":"udp","ports":["53"]}},{"op":"create","collection":"rules","localId":"rule","value":{"name":"Allow DNS","enabled":true,"action":"accept","from":{"zones":[],"addresses":[]},"to":{"zones":[],"addresses":[]},"ports":[],"log":false}}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,8 +82,8 @@ func TestRoleViewsAndChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ordinaryPrepared.State.Config.SchemaVersion != 1 || ordinaryPrepared.Created["zone"] == "" || ordinaryPrepared.Created["service"] == "" || ordinaryPrepared.Created["rule"] == "" {
-		t.Fatalf("ordinary operation changed schema compatibility: %+v", ordinaryPrepared)
+	if ordinaryPrepared.State.Config.SchemaVersion != schemaVersion || ordinaryPrepared.Created["zone"] == "" || ordinaryPrepared.Created["service"] == "" || ordinaryPrepared.Created["rule"] == "" {
+		t.Fatalf("ordinary operation: %+v", ordinaryPrepared)
 	}
 	state = ordinaryPrepared.State
 
@@ -94,8 +95,8 @@ func TestRoleViewsAndChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if prepared.State.Config.SchemaVersion != 3 || len(prepared.State.Config.Roles) != 1 || prepared.State.Versions[objectKey{"roles", prepared.State.Config.Roles[0].ID}].Version != "1" {
-		t.Fatalf("role edit was not an ordinary schema-3 configuration change: %+v", prepared)
+	if prepared.State.Config.SchemaVersion != schemaVersion || len(prepared.State.Config.Roles) != 1 || prepared.State.Versions[objectKey{"roles", prepared.State.Config.Roles[0].ID}].Version != "1" {
+		t.Fatalf("role edit was not an ordinary configuration change: %+v", prepared)
 	}
 	if prepared.State.Config.Roles[0].BuiltIn != "" || prepared.Created["role"] != prepared.State.Config.Roles[0].ID || len(prepared.Changed) != 1 || prepared.Changed[0].Collection != "roles" {
 		t.Fatalf("built-in or history metadata was serialized incorrectly: %+v", prepared)

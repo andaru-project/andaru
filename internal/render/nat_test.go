@@ -100,7 +100,7 @@ func TestNATNeedsManagement(t *testing.T) {
 	in := change(t, fixture(t, "nat-port-forwards"), func(d map[string]any) {
 		delete(d, "management")
 		d["nat"].(map[string]any)["outbound"] = map[string]any{"mode": "none"}
-		d["policy"] = map[string]any{"input": []any{}, "forward": []any{}}
+		d["rules"] = []any{}
 	})
 	result := render(t, in)
 	if result.Realizable || !strings.Contains(golden(result), "MANAGEMENT_REQUIRED") {

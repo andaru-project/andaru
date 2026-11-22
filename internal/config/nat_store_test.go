@@ -13,7 +13,7 @@ func forwardValue(name, port string, zone string) string {
 func TestNATListsBehaveLikePolicyLists(t *testing.T) {
 	s := seededState(t)
 	zone := s.Config.Zones[0].ID
-	policy := versionOf(&s, listKey("policy.forward")).Version
+	policy := versionOf(&s, listKey("rules")).Version
 	p := mustRun(t, &s, `{"operations":[{"op":"create","collection":"nat.portForwards","localId":"a","value":`+forwardValue("a", "8080", zone)+`}]}`)
 	a := p.Created["a"]
 	if !strings.HasPrefix(a, "pfw_") {
@@ -43,7 +43,7 @@ func TestNATListsBehaveLikePolicyLists(t *testing.T) {
 	if !strings.HasPrefix(o.Created["o"], "oto_") || len(s.Config.NAT.OneToOne) != 1 {
 		t.Fatalf("1:1 %+v", s.Config.NAT.OneToOne)
 	}
-	if versionOf(&s, listKey("policy.forward")).Version != policy {
+	if versionOf(&s, listKey("rules")).Version != policy {
 		t.Fatal("a NAT list change moved the forward policy's version")
 	}
 }

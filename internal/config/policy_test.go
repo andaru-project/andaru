@@ -16,30 +16,38 @@ const (
 	rulB     = "rul_00000002-0000-4000-8000-000000000002"
 )
 
-// policyFixture is the network fixture plus filter objects, rules, outbound NAT and management.
+// side is one side of a rule: its zones and, within them, its addresses.
+func side(zones []any, addresses ...any) map[string]any {
+	if zones == nil {
+		zones = []any{}
+	}
+	if addresses == nil {
+		addresses = []any{}
+	}
+	return map[string]any{"zones": zones, "addresses": addresses}
+}
+
+// policyFixture is the network fixture plus aliases, rules, outbound NAT and management.
 func policyFixture(t *testing.T) map[string]any {
 	t.Helper()
 	d := fixtureMap(t)
 	zone := item(d["zones"].([]any), 0)["id"].(string)
 	seg := item(segmentsOf(d), 0)["id"].(string)
-	d["objects"] = map[string]any{
+	d["aliases"] = map[string]any{
 		"addresses": []any{
 			// Saved out of ID order: the store sorts objects, never rules.
 			map[string]any{"id": adrGroup, "name": "servers", "kind": "group", "members": []any{adrHost}},
 			map[string]any{"id": adrHost, "name": "nas", "kind": "host", "address": "192.0.2.10"},
 			map[string]any{"id": adrNet6, "name": "v6net", "kind": "network", "prefix": "2001:db8::/64"},
 		},
-		"services": []any{
+		"ports": []any{
 			map[string]any{"id": svcDNS, "name": "dns", "protocol": "udp", "ports": []any{"53"}},
 			map[string]any{"id": svcGroup, "name": "web", "protocol": "group", "members": []any{svcDNS}},
 		},
 	}
-	d["policy"] = map[string]any{
-		"input": []any{},
-		"forward": []any{
-			map[string]any{"id": rulB, "name": "b", "enabled": true, "action": "accept", "from": []any{zone}, "to": []any{adrGroup}, "services": []any{svcGroup}, "log": false},
-			map[string]any{"id": rulA, "name": "a", "enabled": false, "action": "drop", "from": []any{}, "to": []any{}, "services": []any{}, "log": true},
-		},
+	d["rules"] = []any{
+		map[string]any{"id": rulB, "name": "b", "enabled": true, "action": "accept", "from": side([]any{zone}), "to": side(nil, adrGroup), "ports": []any{svcGroup}, "log": false},
+		map[string]any{"id": rulA, "name": "a", "enabled": false, "action": "drop", "from": side(nil), "to": side(nil), "ports": []any{}, "log": true},
 	}
 	d["nat"] = map[string]any{"outbound": map[string]any{"mode": "automatic"}}
 	d["management"] = map[string]any{"segment": seg, "allowedSources": []any{adrHost}}
@@ -51,10 +59,10 @@ func TestCanonicalKeepsPolicyOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Policy.Forward[0].ID != rulB || d.Policy.Forward[1].ID != rulA {
-		t.Fatalf("rule order changed: %s, %s", d.Policy.Forward[0].ID, d.Policy.Forward[1].ID)
+	if d.Rules[0].ID != rulB || d.Rules[1].ID != rulA {
+		t.Fatalf("rule order changed: %s, %s", d.Rules[0].ID, d.Rules[1].ID)
 	}
-	if d.Objects.Addresses[0].ID != adrHost || d.Objects.Addresses[2].ID != adrGroup {
+	if d.Aliases.Addresses[0].ID != adrHost || d.Aliases.Addresses[2].ID != adrGroup {
 		t.Fatal("addresses not sorted by id")
 	}
 	// An empty filter section reads back as absent, so an untouched declaration keeps its form.
@@ -63,7 +71,7 @@ func TestCanonicalKeepsPolicyOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := canonical(plain)
-	for _, key := range []string{`"objects"`, `"policy"`, `"nat"`, `"management"`} {
+	for _, key := range []string{`"aliases"`, `"rules"`, `"nat"`, `"management"`} {
 		if strings.Contains(string(raw), key) {
 			t.Fatalf("%s appeared in a declaration without a filter: %s", key, raw)
 		}
@@ -73,58 +81,67 @@ func TestCanonicalKeepsPolicyOrder(t *testing.T) {
 func TestPolicyValidation(t *testing.T) {
 	type edit func(d map[string]any)
 	addr := func(d map[string]any, i int) map[string]any {
-		return item(d["objects"].(map[string]any)["addresses"].([]any), i)
+		return item(d["aliases"].(map[string]any)["addresses"].([]any), i)
 	}
 	svc := func(d map[string]any, i int) map[string]any {
-		return item(d["objects"].(map[string]any)["services"].([]any), i)
+		return item(d["aliases"].(map[string]any)["ports"].([]any), i)
 	}
 	fwd := func(d map[string]any, i int) map[string]any {
-		return item(d["policy"].(map[string]any)["forward"].([]any), i)
+		return item(d["rules"].([]any), i)
 	}
+	zoneOf := func(d map[string]any) any { return item(d["zones"].([]any), 0)["id"] }
 	for name, tc := range map[string]struct {
 		edit edit
 		path string
 	}{
-		"host not an address":    {func(d map[string]any) { addr(d, 1)["address"] = "nas.example" }, "/objects/addresses/1/address"},
-		"network with host bits": {func(d map[string]any) { addr(d, 2)["prefix"] = "2001:db8::1/64" }, "/objects/addresses/2/prefix"},
+		"host not an address":    {func(d map[string]any) { addr(d, 1)["address"] = "nas.example" }, "/aliases/addresses/1/address"},
+		"network with host bits": {func(d map[string]any) { addr(d, 2)["prefix"] = "2001:db8::1/64" }, "/aliases/addresses/2/prefix"},
 		"range backwards": {func(d map[string]any) {
 			addr(d, 1)["kind"] = "range"
 			delete(addr(d, 1), "address")
 			addr(d, 1)["first"] = "192.0.2.9"
 			addr(d, 1)["last"] = "192.0.2.1"
-		}, "/objects/addresses/1/last"},
+		}, "/aliases/addresses/1/last"},
 		"range across families": {func(d map[string]any) {
 			addr(d, 1)["kind"] = "range"
 			delete(addr(d, 1), "address")
 			addr(d, 1)["first"] = "192.0.2.1"
 			addr(d, 1)["last"] = "2001:db8::1"
-		}, "/objects/addresses/1/last"},
-		"group of a group":          {func(d map[string]any) { addr(d, 0)["members"] = []any{adrGroup} }, "/objects/addresses/0/members/0"},
-		"empty group":               {func(d map[string]any) { addr(d, 0)["members"] = []any{} }, "/objects/addresses/0/members"},
-		"group of a missing member": {func(d map[string]any) { addr(d, 0)["members"] = []any{"adr_00000009-0000-4000-8000-000000000009"} }, "/objects/addresses/0/members/0"},
-		"port zero":                 {func(d map[string]any) { svc(d, 0)["ports"] = []any{"0"} }, "/objects/services/0/ports/0"},
-		"port range backwards":      {func(d map[string]any) { svc(d, 0)["ports"] = []any{"90-80"} }, "/objects/services/0/ports/0"},
-		"ports on icmp":             {func(d map[string]any) { svc(d, 0)["protocol"] = "icmp" }, "/objects/services/0/ports"},
+		}, "/aliases/addresses/1/last"},
+		"group of a group":          {func(d map[string]any) { addr(d, 0)["members"] = []any{adrGroup} }, "/aliases/addresses/0/members/0"},
+		"empty group":               {func(d map[string]any) { addr(d, 0)["members"] = []any{} }, "/aliases/addresses/0/members"},
+		"group of a missing member": {func(d map[string]any) { addr(d, 0)["members"] = []any{"adr_00000009-0000-4000-8000-000000000009"} }, "/aliases/addresses/0/members/0"},
+		"port zero":                 {func(d map[string]any) { svc(d, 0)["ports"] = []any{"0"} }, "/aliases/ports/0/ports/0"},
+		"port range backwards":      {func(d map[string]any) { svc(d, 0)["ports"] = []any{"90-80"} }, "/aliases/ports/0/ports/0"},
+		"ports on icmp":             {func(d map[string]any) { svc(d, 0)["protocol"] = "icmp" }, "/aliases/ports/0/ports"},
 		"unknown icmp type": {func(d map[string]any) {
 			svc(d, 0)["protocol"] = "icmp"
 			delete(svc(d, 0), "ports")
 			svc(d, 0)["types"] = []any{"router-advertisement"}
-		}, "/objects/services/0/types/0"},
-		"tcp without ports":      {func(d map[string]any) { delete(svc(d, 0), "ports") }, "/objects/services/0/ports"},
-		"rule from a service":    {func(d map[string]any) { fwd(d, 0)["from"] = []any{svcDNS} }, "/policy/forward/0/from/0"},
-		"rule service is a zone": {func(d map[string]any) { fwd(d, 0)["services"] = []any{item(d["zones"].([]any), 0)["id"]} }, "/policy/forward/0/services/0"},
-		"input rule with a to": {func(d map[string]any) {
-			d["policy"].(map[string]any)["input"] = []any{map[string]any{"id": "rul_00000003-0000-4000-8000-000000000003", "name": "c", "enabled": true, "action": "accept", "from": []any{}, "to": []any{adrHost}, "services": []any{}, "log": false}}
-		}, "/policy/input/0/to"},
-		"families never meet": {func(d map[string]any) { fwd(d, 0)["from"] = []any{adrHost}; fwd(d, 0)["to"] = []any{adrNet6} }, "/policy/forward/0/to"},
-		"service family never meets": {func(d map[string]any) {
+		}, "/aliases/ports/0/types/0"},
+		"tcp without ports":      {func(d map[string]any) { delete(svc(d, 0), "ports") }, "/aliases/ports/0/ports"},
+		"rule from a port alias": {func(d map[string]any) { fwd(d, 0)["from"] = side(nil, svcDNS) }, "/rules/0/from/addresses/0"},
+		"rule zone an address":   {func(d map[string]any) { fwd(d, 0)["from"] = side([]any{adrHost}) }, "/rules/0/from/zones/0"},
+		"rule from a missing zone": {func(d map[string]any) {
+			fwd(d, 0)["from"] = side([]any{"zon_00000009-0000-4000-8000-000000000009"})
+		}, "/rules/0/from/zones/0"},
+		"rule port a zone":  {func(d map[string]any) { fwd(d, 0)["ports"] = []any{zoneOf(d)} }, "/rules/0/ports/0"},
+		"from the firewall": {func(d map[string]any) { fwd(d, 0)["from"] = side([]any{firewallZone}) }, "/rules/0/from/zones/0"},
+		"the firewall beside a zone": {func(d map[string]any) {
+			fwd(d, 0)["to"] = side([]any{firewallZone, zoneOf(d)})
+		}, "/rules/0/to/zones"},
+		"not without addresses": {func(d map[string]any) {
+			fwd(d, 0)["from"] = map[string]any{"zones": []any{zoneOf(d)}, "addresses": []any{}, "not": true}
+		}, "/rules/0/from/not"},
+		"a side that is a list": {func(d map[string]any) { fwd(d, 0)["from"] = []any{zoneOf(d)} }, "/rules/0/from"},
+		"families never meet":   {func(d map[string]any) { fwd(d, 0)["from"] = side(nil, adrHost); fwd(d, 0)["to"] = side(nil, adrNet6) }, "/rules/0/to/addresses"},
+		"port alias family never meets": {func(d map[string]any) {
 			svc(d, 0)["protocol"] = "icmp"
 			delete(svc(d, 0), "ports")
 			svc(d, 0)["types"] = []any{"echo-request"}
-			fwd(d, 0)["from"], fwd(d, 0)["to"], fwd(d, 0)["services"] = []any{adrNet6}, []any{}, []any{svcDNS}
-		}, "/policy/forward/0/services"},
-		"duplicate rule name": {func(d map[string]any) { fwd(d, 1)["name"] = "b" }, "/policy/forward/1/name"},
-		"unknown action":      {func(d map[string]any) { fwd(d, 0)["action"] = "allow" }, "/policy/forward/0/action"},
+			fwd(d, 0)["from"], fwd(d, 0)["to"], fwd(d, 0)["ports"] = side(nil, adrNet6), side(nil), []any{svcDNS}
+		}, "/rules/0/ports"},
+		"unknown action": {func(d map[string]any) { fwd(d, 0)["action"] = "allow" }, "/rules/0/action"},
 		"management on nothing": {func(d map[string]any) {
 			d["management"].(map[string]any)["segment"] = "seg_00000009-0000-4000-8000-000000000009"
 		}, "/management/segment"},
@@ -140,17 +157,16 @@ func TestPolicyValidation(t *testing.T) {
 				}
 				return out
 			}
-			fwd(d, 0)["from"], fwd(d, 0)["to"], fwd(d, 0)["services"] = rep(adrHost, 17), rep(adrHost, 16), rep(svcDNS, 16)
-		}, "/policy/forward/0"},
+			fwd(d, 0)["from"], fwd(d, 0)["to"], fwd(d, 0)["ports"] = side(nil, rep(adrHost, 17)...), side(nil, rep(adrHost, 16)...), rep(svcDNS, 16)
+		}, "/rules/0"},
 		// 64 x 64 combinations, each rendered once per family: 8192 lines.
 		"rule expanding past the line cap by family": {func(d map[string]any) {
-			zone := item(d["zones"].([]any), 0)["id"]
 			from, to := make([]any, 64), make([]any, 64)
 			for i := range from {
-				from[i], to[i] = zone, zone
+				from[i], to[i] = zoneOf(d), zoneOf(d)
 			}
-			fwd(d, 0)["from"], fwd(d, 0)["to"], fwd(d, 0)["services"] = from, to, []any{}
-		}, "/policy/forward/0"},
+			fwd(d, 0)["from"], fwd(d, 0)["to"], fwd(d, 0)["ports"] = side(from), side(to), []any{}
+		}, "/rules/0"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := policyFixture(t)
@@ -174,24 +190,65 @@ func TestPolicyValidation(t *testing.T) {
 // A rule is judged against its group's members as they are now, not as they were when the rule was saved.
 func TestRuleRevalidatedWhenGroupChanges(t *testing.T) {
 	d := policyFixture(t)
-	fwd := item(d["policy"].(map[string]any)["forward"].([]any), 0)
-	fwd["from"], fwd["to"] = []any{adrNet6}, []any{adrGroup}
+	fwd := item(d["rules"].([]any), 0)
+	fwd["from"], fwd["to"] = side(nil, adrNet6), side(nil, adrGroup)
 	// servers holds an IPv4 host; v6net is IPv6: the rule can never match.
 	if _, err := decodeMap(t, d); err == nil {
 		t.Fatal("a rule whose families never meet was accepted")
 	}
-	item(d["objects"].(map[string]any)["addresses"].([]any), 0)["members"] = []any{adrNet6}
+	item(d["aliases"].(map[string]any)["addresses"].([]any), 0)["members"] = []any{adrNet6}
 	if _, err := decodeMap(t, d); err != nil {
 		t.Fatalf("after the group changed family: %v", err)
 	}
 }
 
-// A zone on one side matches either family, whatever addresses stand beside it.
-func TestZoneBesideAnAddressMatchesBothFamilies(t *testing.T) {
+// A zone says where traffic arrives, not which family it is: only the addresses of the two sides must meet.
+func TestZoneDoesNotGiveASideAFamily(t *testing.T) {
 	d := policyFixture(t)
-	r := item(d["policy"].(map[string]any)["forward"].([]any), 0)
-	r["from"], r["to"] = []any{item(d["zones"].([]any), 0)["id"], adrHost}, []any{adrNet6}
+	r := item(d["rules"].([]any), 0)
+	zone := item(d["zones"].([]any), 0)["id"]
+	r["from"], r["to"] = side([]any{zone}), side(nil, adrNet6)
 	if _, err := decodeMap(t, d); err != nil {
-		t.Fatalf("a zone alternative was ignored: %v", err)
+		t.Fatalf("a zone with every address refused beside an IPv6 destination: %v", err)
+	}
+	r["from"] = side([]any{zone}, adrHost)
+	if _, err := decodeMap(t, d); err == nil {
+		t.Fatal("an IPv4 host in a zone was accepted towards an IPv6 network")
+	}
+	// "Not these" leaves every other address of either family.
+	r["from"] = map[string]any{"zones": []any{zone}, "addresses": []any{adrHost}, "not": true}
+	if _, err := decodeMap(t, d); err != nil {
+		t.Fatalf("every address but an IPv4 host refused towards an IPv6 network: %v", err)
+	}
+}
+
+// Rules need not have names of their own: two lists became one, and a rule's place tells it apart.
+func TestRulesMayShareAName(t *testing.T) {
+	d := policyFixture(t)
+	item(d["rules"].([]any), 1)["name"] = "b"
+	if _, err := decodeMap(t, d); err != nil {
+		t.Fatal(err)
+	}
+	item(d["rules"].([]any), 1)["id"] = rulB
+	if _, err := decodeMap(t, d); err == nil {
+		t.Fatal("two rules with one ID were accepted")
+	}
+}
+
+// A rule to the firewall may name which of the firewall's addresses, and the sides are kept as sets.
+func TestRuleToTheFirewall(t *testing.T) {
+	d := policyFixture(t)
+	zone := item(d["zones"].([]any), 0)["id"]
+	r := item(d["rules"].([]any), 0)
+	r["from"], r["to"] = side([]any{zone}, adrGroup, adrHost), side([]any{firewallZone}, adrHost)
+	got, err := decodeMap(t, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Rules[0].toFirewall() || got.Rules[1].toFirewall() {
+		t.Fatalf("destinations: %+v", got.Rules)
+	}
+	if got.Rules[0].From.Addresses[0] != adrHost {
+		t.Fatalf("a side's addresses are not sorted: %v", got.Rules[0].From.Addresses)
 	}
 }

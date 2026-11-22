@@ -1,11 +1,9 @@
 package config
 
 import (
-	"bytes"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
 	"strings"
@@ -17,8 +15,6 @@ import (
 var legacySchema []byte
 
 const legacySchemaURI = "https://andaru.invalid/private/config-schema-v3"
-
-var errNotCanonical = errors.New("saved configuration is not in its canonical form")
 
 // legacyCollections is where the store recorded a collection's object versions before schema 4.
 var legacyCollections = map[string][]string{"aliases.addresses": {"addresses"}, "aliases.ports": {"services"}, "rules": {"policy.input", "policy.forward"}}
@@ -35,9 +31,9 @@ func currentCollection(name string) string {
 	return name
 }
 
-// decodeSaved decodes a saved document of any form into the declaration it is now. stored is the form it was
-// saved in. A document of an earlier form keeps its bytes in the store and is read through upgradeLegacy each
-// time; origin then names, for each rule the upgrade had to add, the rule it was split from.
+// decodeSaved decodes a saved or backed-up document of any form into the declaration it is now. stored is the
+// form it was written in. A document of an earlier form keeps its bytes in the store and is read through
+// upgradeLegacy each time; origin then names, for each rule the upgrade had to add, the rule it was split from.
 func decodeSaved(raw []byte) (d declaration, stored int, origin map[string]string, err error) {
 	var head struct {
 		SchemaVersion int `json:"schemaVersion"`
@@ -46,14 +42,8 @@ func decodeSaved(raw []byte) (d declaration, stored int, origin map[string]strin
 		return d, 0, nil, errInvalidJSON
 	}
 	if head.SchemaVersion >= schemaVersion {
-		if d, err = decodeDeclaration(raw); err != nil {
-			return d, 0, nil, err
-		}
-		body, e := canonical(d)
-		if e != nil || !bytes.Equal(body, raw) {
-			return declaration{}, 0, nil, errNotCanonical
-		}
-		return d, d.SchemaVersion, nil, nil
+		d, err = decodeDeclaration(raw)
+		return d, d.SchemaVersion, nil, err
 	}
 	instance, err := decodeStrictLimit(raw, documentLimit)
 	if err != nil {
