@@ -14,7 +14,7 @@ Status: the owner's rules, 2026-11-22 ([#121](https://github.com/andaru-project/
 6. **Otherwise, the engine resolves it on start.** When the latest saved settings need a migration or a decision for the running Andaru, the engine starts in safe mode and runs those flows. Once the choices are made, it processes the settings, saves them for this Andaru, and the upgrade continues, ideally with at most one extra reboot.
 7. **Downgrades are not guaranteed to keep the settings.** A downgrade means restoring settings from the version being returned to: a version that Andaru saved, or a backup taken under it.
 
-Releases use semantic versioning; nightlies will be named by their date, as in pfBlockerNG. The settings' schema version, not the Andaru version, decides which migrations and decisions apply.
+Releases use semantic versioning; nightlies will be named by their date, as in pfBlockerNG. The settings' schema version, not the Andaru version, decides which migrations and decisions apply, so every breaking change raises it, even one that keeps the document's shape.
 
 Each upgrade is a function of the saved settings and the running Andaru alone, with no further state to keep in step.
 
@@ -48,7 +48,7 @@ It tells the user which Andaru saved each version. What an engine can load is de
 3. **Safe mode (rule 6).** The engine serves sign-in and the decision pages and applies nothing new until the flows finish; the network keeps its last applied generation. On finishing, it saves the result as a new version and leaves safe mode. An automatic migration alone needs no safe mode, but its result is saved on start the same way, so the store stops holding the old form.
 4. **Downgrades (rule 7).** An engine that finds a head of a schema newer than it knows does not refuse the store: it starts from the newest saved version of a schema it can read, saves it as the new head, and says so. With none, it asks for a backup. This also covers a failed boot after step 6 saved under the new schema.
 5. **Breaking changes in releases (rule 4).** Each release's notes carry the list. Showing it before upgrading needs Andaru to drive upgrades, a feature of its own.
-6. **Before the reboot (rule 5).** With that feature, the running Andaru runs the new image's engine against the saved settings before rebooting, so the new release's migrations and decisions run in the old system and save under the new schema.
+6. **Before the reboot (rule 5).** With that feature, the running Andaru runs the new image's engine against the saved settings before rebooting, so the new release's migrations and decisions run in the old system and save under the new schema. It ships only in an engine that already has step 4, so that a reboot into the old image before the switch loads the previous settings.
 
 ## Released engines
 
