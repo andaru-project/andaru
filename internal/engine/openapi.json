@@ -3519,18 +3519,7 @@
               }
             }
           }
-        },
-        "parameters": [
-          {
-            "name": "before",
-            "in": "query",
-            "required": false,
-            "description": "Create the rule ahead of this rule of the same list; without it the rule is appended.",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
+        }
       },
       "parameters": [
         {

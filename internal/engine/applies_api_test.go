@@ -22,7 +22,7 @@ import (
 	"github.com/andaru-project/andaru/internal/identity"
 )
 
-const uplinkDeclaration = `{"schemaVersion":1,"links":[{"id":"lnk_00000001-0000-4000-8000-000000000001","name":"wan0","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"52:54:00:aa:bb:01"}],
+const uplinkDeclaration = `{"schemaVersion":4,"links":[{"id":"lnk_00000001-0000-4000-8000-000000000001","name":"wan0","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"52:54:00:aa:bb:01"}],
 "segments":[{"id":"seg_00000001-0000-4000-8000-000000000001","name":"wan","link":"lnk_00000001-0000-4000-8000-000000000001","zone":"zon_00000001-0000-4000-8000-000000000001","addressing":{"ipv4":{"mode":"dhcp"},"ipv6":{"mode":"none"}}}],
 "zones":[{"id":"zon_00000001-0000-4000-8000-000000000001","name":"wan"}]}`
 
