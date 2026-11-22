@@ -72,12 +72,28 @@ func restoreRequests(decoded decodedBackup) []objectKey {
 	return slices.Collect(maps.Keys(objects(decoded.configuration)))
 }
 
+// heldRestore refuses a restore that would save provisional choices as the user's (settings safe mode): a backup
+// whose configuration needs decisions, or, while the head needs them, a restore without a configuration, which saves
+// the head's own again.
+func heldRestore(current *savedState, decoded decodedBackup) error {
+	if decoded.needsDecisions {
+		return fault("VALIDATION_FAILED", "/configuration", "This backup needs decisions to read in this Andaru, and restoring such a backup is not offered yet.")
+	}
+	if decoded.configuration == nil && len(current.questions) > 0 {
+		return ErrUpgradePending
+	}
+	return nil
+}
+
 func (s *Store) PreviewRestore(ctx context.Context, input RestoreDocuments) (result RestorePreview, err error) {
 	decoded, err := decodeBackupDocuments(input)
 	if err != nil {
 		return result, err
 	}
 	err = s.read(ctx, "", restoreRequests(decoded), func(current savedState, _ VersionInfo) error {
+		if e := heldRestore(&current, decoded); e != nil {
+			return e
+		}
 		n, e := strconvVersion(current.Version)
 		if e != nil || n == int64(^uint64(0)>>1) {
 			return unavailable()
@@ -99,9 +115,6 @@ func (s *Store) prepareRestore(ctx context.Context, actor authz.Actor, expected 
 	if _, err := ParseVersion(string(expected)); err != nil {
 		return nil, empty, fault("INVALID_REQUEST", "/expectedSavedVersion", "Invalid saved version.")
 	}
-	if decoded.needsDecisions {
-		return nil, empty, fault("VALIDATION_FAILED", "/configuration", "This backup needs decisions to read in this Andaru, and restoring such a backup is not offered yet.")
-	}
 	p, current, next, err := s.startSave(ctx, actor, restoreRequests(decoded))
 	if err != nil {
 		return nil, empty, err
@@ -115,9 +128,8 @@ func (s *Store) prepareRestore(ctx context.Context, actor authz.Actor, expected 
 	if current.Version != expected {
 		return nil, empty, fault("PRECONDITION_FAILED", "/expectedSavedVersion", "The saved configuration changed since restore was previewed.")
 	}
-	// A restore without a configuration saves the head's again, which during the hold is its provisional reading.
-	if decoded.configuration == nil && len(current.questions) > 0 {
-		return nil, empty, ErrUpgradePending
+	if err = heldRestore(&current, decoded); err != nil {
+		return nil, empty, err
 	}
 	prepared, preview, err := prepareRestoration(&current, decoded, next, time.Now().UTC())
 	if err != nil {

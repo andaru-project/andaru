@@ -496,6 +496,13 @@ func TestRestoreDuringTheHold(t *testing.T) {
 	if _, err = s.Restore(ctx, rootRestoreActor, "2", RestoreDocuments{ConfigurationSecrets: secrets.ConfigurationSecrets}); faultCode(err) != "SETTINGS_UPGRADE_PENDING" {
 		t.Fatalf("a secrets-only restore during the hold: %v", err)
 	}
+	// Previews refuse what the restore refuses.
+	if _, err = s.PreviewRestore(ctx, RestoreDocuments{ConfigurationSecrets: secrets.ConfigurationSecrets}); faultCode(err) != "SETTINGS_UPGRADE_PENDING" {
+		t.Fatalf("previewing a secrets-only restore during the hold: %v", err)
+	}
+	if _, err = s.PreviewRestore(ctx, RestoreDocuments{Configuration: legacyDocument(t)}); faultCode(err) != "VALIDATION_FAILED" {
+		t.Fatalf("previewing a backup needing decisions: %v", err)
+	}
 	withDecisions(t)
 	d, _, _, err := decodeSaved(legacyDocument(t))
 	if err != nil {
