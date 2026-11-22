@@ -44,11 +44,21 @@ It tells the user which Andaru saved each version. What an engine can load is de
 ## To build
 
 1. **The loading test (rule 1).** One fixture per released schema version of each store (the configuration, the account database, the audit log and the backup formats), loaded by the current engine in a test. A change that raises a schema version adds a fixture of the previous one. The configuration has one for each of its released schemas, 1 to 3, and its database one as `0.5.0-a.4` left it. Archives of format 1 decode, and a restore takes a configuration of schema 1. The account database (layout 2) and the audit log (layout 1) have released no other layout, and each opens as it is.
-2. **The decision record (rule 3).** Next to the migrations, keyed by the schema version it leaves: the predicate over the settings, the question and its choices, and the change each choice makes. Built with the first breaking change that needs one.
-3. **Safe mode (rule 6).** The engine serves sign-in and the decision pages and applies nothing new until the flows finish; the network keeps its last applied generation. On finishing, it saves the result as a new version and leaves safe mode. An automatic migration alone needs no safe mode, but its result is saved on start the same way, so the store stops holding the old form.
-4. **Downgrades (rule 7).** An engine that finds a head of a schema newer than it knows does not refuse the store: it starts from the newest saved version of a schema it can read, saves it as the new head, and says so. With none, it asks for a backup. This also covers a failed boot after step 6 saved under the new schema.
+2. **The decision record (rule 3).** Next to the migrations, keyed by the schema version it leaves: the predicate over the settings, the question and its choices, the change each choice makes, and the provisional choice that reads the settings until someone answers. The mechanism is built with safe mode (step 3) and tested with a record that exists only in the tests; the first real record comes with the first breaking change that needs one.
+3. **Safe mode (rule 6).** Designed in [safe mode for settings that need a decision](2026-11-22-settings-safe-mode-design.md): the engine holds the settings, serves sign-in and the questions, and applies nothing new until they are answered. The network keeps its last applied generation. The answers are saved as a new version, and so is an automatic migration alone, on start (the owner, 2026-11-22).
+4. **Downgrades (rule 7)** follow from the architecture: see [downgrades](#downgrades).
 5. **Breaking changes in releases (rule 4).** Each release's notes carry the list. Showing it before upgrading needs Andaru to drive upgrades, a feature of its own.
-6. **Before the reboot (rule 5).** With that feature, the running Andaru runs the new image's engine against the saved settings before rebooting, so the new release's migrations and decisions run in the old system and save under the new schema. It ships only in an engine that already has step 4, so that a reboot into the old image before the switch loads the previous settings.
+6. **Before the reboot (rule 5).** With that feature, the running Andaru runs the new image's engine against the saved settings before rebooting, so the new release's migrations and decisions run in the old system and save under the new schema. A reboot into the old image before the switch is a downgrade, and starts from the version the old image saved.
+
+## Downgrades
+
+Saved versions are immutable, and an upgrade saves its migrated settings as a new version on top of the ones it read. The settings an older Andaru saved are therefore still in the history after an upgrade, and a downgrade starts from them (the owner, 2026-11-22):
+
+- An engine that finds a head of a schema newer than it knows takes the newest version in the history of a schema it can read, and saves a copy of it as the new head. The newer versions stay in the history.
+- The changes saved under the newer Andaru are lost. A rollback normally comes within weeks of the upgrade, so that is a minor inconvenience; a backup taken under the older Andaru remains the other way back.
+- With no such version in the history (the store was created by the newer Andaru), the engine refuses the store as today, and only the backup remains.
+
+Not built: today an engine refuses a head of a newer schema.
 
 ## Released engines
 
