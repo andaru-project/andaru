@@ -197,3 +197,32 @@ func TestRestoreOntoALegacyHead(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Every saved version says which Andaru wrote it, so an engine that finds versions a newer Andaru saved can tell
+// them from its own. A version saved before that was recorded says nothing.
+func TestSavedVersionsNameTheirWriter(t *testing.T) {
+	ctx := context.Background()
+	old := Writer
+	t.Cleanup(func() { Writer = old })
+	Writer = "0.5.0-a.4"
+	s, _ := legacyStore(t)
+	Writer = "0.5.0-a.5"
+	if _, err := s.Save(ctx, systemRootActor, createZone("guest")); err != nil {
+		t.Fatal(err)
+	}
+	history, err := s.History(ctx, nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, item := range history.Items {
+		got = append(got, string(item.ID)+"="+item.WrittenBy)
+	}
+	// Version 0 was written when the store was made; 1 and 2 are the fixture's, put in as an engine before did.
+	if want := []string{"3=0.5.0-a.5", "2=", "1=", "0=0.5.0-a.4"}; !slices.Equal(got, want) {
+		t.Fatalf("writers %v, want %v", got, want)
+	}
+	if one, err := s.Version(ctx, "3"); err != nil || one.WrittenBy != "0.5.0-a.5" {
+		t.Fatalf("version 3: %+v %v", one.VersionInfo, err)
+	}
+}

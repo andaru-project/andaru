@@ -23,7 +23,7 @@ CREATE TABLE versions(id INTEGER PRIMARY KEY,parent_id INTEGER REFERENCES versio
 CREATE TABLE pointers(name TEXT PRIMARY KEY CHECK(name='saved'),version_id INTEGER NOT NULL REFERENCES versions(id));
 CREATE TABLE object_changes(collection TEXT NOT NULL CHECK(collection IN ('links','segments','zones')),object_id TEXT NOT NULL,version_id INTEGER NOT NULL REFERENCES versions(id),created INTEGER NOT NULL CHECK(created IN (0,1)),deleted INTEGER NOT NULL CHECK(deleted IN (0,1)),CHECK(NOT(created AND deleted)),PRIMARY KEY(collection,object_id,version_id));
 CREATE UNIQUE INDEX creation_identity ON object_changes(object_id) WHERE created=1;
-` + policyDDL + serviceDDL + natDDL + dhcp6DDL + vipDDL + roleDDL + firewallDDL
+` + policyDDL + serviceDDL + natDDL + dhcp6DDL + vipDDL + roleDDL + firewallDDL + writerDDL
 
 // policyDDL holds the versions of the filter's objects, lists and singletons. It is added beside
 // object_changes rather than widening that table's CHECK, so an existing store gains it with one
@@ -55,6 +55,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS role_creation_identity ON role_changes(object_
 // policy_changes was. The versions of the forms before stay in policy_changes under the names they had.
 const firewallDDL = `CREATE TABLE IF NOT EXISTS firewall_changes(collection TEXT NOT NULL CHECK(collection IN ('aliases.addresses','aliases.ports','rules')),object_id TEXT NOT NULL,version_id INTEGER NOT NULL REFERENCES versions(id),created INTEGER NOT NULL CHECK(created IN (0,1)),deleted INTEGER NOT NULL CHECK(deleted IN (0,1)),CHECK(NOT(created AND deleted)),PRIMARY KEY(collection,object_id,version_id));
 CREATE UNIQUE INDEX IF NOT EXISTS firewall_creation_identity ON firewall_changes(object_id) WHERE created=1;`
+
+// writerDDL records which Andaru wrote each saved version, added beside the others as policy_changes was. A
+// version saved before the table existed has no row. It is what lets an engine that finds versions a newer
+// Andaru wrote tell them from its own, and offer the latest it wrote itself (#121).
+const writerDDL = `CREATE TABLE IF NOT EXISTS version_writers(version_id INTEGER PRIMARY KEY REFERENCES versions(id),andaru_version TEXT NOT NULL CHECK(length(andaru_version) BETWEEN 1 AND 128));`
+
+// Writer is the Andaru version this process writes saved versions as. The engine sets it from its build.
+var Writer = "development"
 
 // changeTables are all the tables object versions are recorded in.
 var changeTables = []string{"object_changes", "policy_changes", "service_changes", "nat_changes", "dhcp6_changes", "vip_changes", "role_changes", "firewall_changes"}
@@ -220,6 +228,9 @@ func initializePair(ctx context.Context, stage string) (result error) {
 	if _, e = tx.ExecContext(ctx, "INSERT INTO versions VALUES(0,NULL,?,?,?,?,?,0)", schemaVersion, ch[:], sh[:], time.Now().UTC().Format(time.RFC3339Nano), "system.root"); e != nil {
 		return e
 	}
+	if _, e = tx.ExecContext(ctx, "INSERT INTO version_writers VALUES(0,?)", Writer); e != nil {
+		return e
+	}
 	if _, e = tx.ExecContext(ctx, "INSERT INTO pointers VALUES('saved',0)"); e != nil {
 		return e
 	}
@@ -282,6 +293,9 @@ func publishVersion(ctx context.Context, c *sql.Conn, p preparedChange, actor st
 	ch := sha256.Sum256(p.ConfigBody)
 	sh := sha256.Sum256(p.SecretBody)
 	if _, e = c.ExecContext(ctx, "INSERT INTO versions(id,parent_id,schema_version,config_sha256,secrets_sha256,created_at,actor,changed_object_count) VALUES(?,?,?,?,?,?,?,?)", next, parent, p.State.Config.SchemaVersion, ch[:], sh[:], time.Now().UTC().Format(time.RFC3339Nano), actor, len(p.Changed)); e != nil {
+		return e
+	}
+	if _, e = c.ExecContext(ctx, "INSERT INTO version_writers VALUES(?,?)", next, Writer); e != nil {
 		return e
 	}
 	for _, change := range p.Changed {

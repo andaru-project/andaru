@@ -37,6 +37,9 @@ const (
 
 var buildVersion = "development"
 
+// Every version this engine saves says which Andaru wrote it.
+func init() { config.Writer = buildVersion }
+
 type backupCreateOptions struct {
 	IncludeSecrets     *bool  `json:"includeSecrets"`
 	IncludeCredentials *bool  `json:"includeCredentials,omitempty"`

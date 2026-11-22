@@ -109,6 +109,8 @@ export interface VersionInfo {
   createdAt: string;
   actor: string;
   changedObjectCount: number;
+  // The Andaru version that saved it; absent for a version saved before that was recorded.
+  writtenBy?: string;
 }
 
 export interface History {
