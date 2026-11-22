@@ -95,6 +95,9 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onSave }: R
       <form onSubmit={submit} noValidate>
         <Stack>
           {failure && <Alert color="red" role="alert" title="The rule was not saved">{failure}</Alert>}
+          {/* What is sent is what the form held when Save was pressed: nothing is typed over it meanwhile. */}
+          <Fieldset variant="unstyled" disabled={busy}>
+            <Stack>
           <TextInput data-autofocus label="Name" maxLength={128} required value={name} error={errors.get('name')} onChange={(event) => setName(event.currentTarget.value)} />
           <Textarea autosize label="Description" maxLength={4096} minRows={1} maxRows={4} value={description} error={errors.get('description')} onChange={(event) => setDescription(event.currentTarget.value)} />
           <Switch label="Enabled" checked={enabled} onChange={(event) => setEnabled(event.currentTarget.checked)} />
@@ -110,6 +113,8 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onSave }: R
           {toFirewall && <Text size="sm" c="dimmed">To this firewall: the rule decides what may reach the box itself, and lets nothing through it.</Text>}
           <MultiSelect label="Ports" description="Port aliases. Empty is any protocol and port." data={portAliases} value={ports} error={errors.get('ports')} searchable clearable onChange={setPorts} />
           <Switch label="Log what this rule matches" checked={log} onChange={(event) => setLog(event.currentTarget.checked)} />
+            </Stack>
+          </Fieldset>
           <Group justify="flex-end">
             <Button variant="default" onClick={onClose}>Cancel</Button>
             <Button loading={busy} type="submit">Save rule</Button>

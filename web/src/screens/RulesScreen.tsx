@@ -148,7 +148,9 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
       <Loaded resource={resource} what="rules">
         {({ list, snapshot }) => {
           const known = names(snapshot);
-          const order = moved ?? list.items.map((item) => item.value.id);
+          // While a move is being saved the list shows it at once; a rule saved meanwhile comes after.
+          const saved = list.items.map((item) => item.value.id);
+          const order = moved ? [...moved, ...saved.filter((id) => !moved.includes(id))] : saved;
           const byID = new Map(list.items.map((item) => [item.value.id, item]));
           const items = order.flatMap((id) => byID.get(id) ?? []);
           // Every word of the filter must be somewhere in what the row shows.
