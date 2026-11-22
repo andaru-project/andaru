@@ -347,3 +347,20 @@ it('shows the table again as saved after a save', async () => {
   await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
   expect(await screen.findByText('TCP 25')).toBeInTheDocument();
 });
+
+it('says on the page what became of a save whose panel was closed before it answered', async () => {
+  const user = userEvent.setup();
+  let answer: (response: Response) => void = () => {};
+  show({ 'POST /api/v1/config/aliases/ports': () => new Promise<Response>((resolve) => { answer = resolve; }) });
+  await user.click(await screen.findByRole('button', { name: 'Add port alias' }));
+  const panel = await screen.findByRole('dialog', { name: 'Add port alias' });
+  await user.type(within(panel).getByLabelText(/^Name/), 'mail');
+  await user.type(within(panel).getByLabelText('Ports'), '25');
+  await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
+  await user.click(within(panel).getByRole('button', { name: 'Cancel' }));
+  // Another panel is open when the first save is refused: it stays, and the page says what happened.
+  await user.click(await screen.findByRole('button', { name: 'Add address alias' }));
+  answer(jsonResponse(503, { error: { code: 'UNAVAILABLE', message: 'The store is busy.' } }));
+  expect(await screen.findByText('The store is busy.')).toBeInTheDocument();
+  expect(screen.getByRole('dialog', { name: 'Add address alias' })).toBeInTheDocument();
+});

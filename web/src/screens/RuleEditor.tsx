@@ -8,6 +8,8 @@ interface RuleEditorProps {
   snapshot: Snapshot;
   onClose(): void;
   onSessionLost(): void;
+  // A save failed after the panel was closed.
+  onAbandoned(message: string): void;
   onSave(rule: Omit<Rule, 'id'>): Promise<void>;
 }
 
@@ -17,7 +19,7 @@ const anySide: RuleSide = { zones: [], addresses: [] };
 const field = /^\/(name|description|action|ports|(?:from|to)\/(?:zones|addresses|not))(?:\/|$)/;
 
 // The editor is a panel beside the list, so the order stays in view while a rule is written.
-export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onSave }: RuleEditorProps) {
+export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onAbandoned, onSave }: RuleEditorProps) {
   const [name, setName] = useState(rule?.name ?? '');
   const [description, setDescription] = useState(rule?.description ?? '');
   const [enabled, setEnabled] = useState(rule?.enabled ?? true);
@@ -31,7 +33,7 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onSave }: R
   const [busy, setBusy] = useState(false);
   // A save may answer after this panel was closed and another opened: it then closes nothing.
   const open = useRef(true);
-  useEffect(() => () => { open.current = false; }, []);
+  useEffect(() => { open.current = true; return () => { open.current = false; }; }, []);
 
   const option = (item: { id: string; name: string }) => ({ value: item.id, label: item.name });
   const zones = snapshot.value.zones.map(option);
@@ -56,6 +58,8 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onSave }: R
       if (open.current) onClose();
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) return onSessionLost();
+      // The panel was closed while the save was out: the page says what became of it.
+      if (!open.current) return onAbandoned(saveFailure(error, new Map(), 'rule'));
       const fields = fieldErrors(error, field);
       setErrors(fields);
       setFailure(saveFailure(error, fields, 'rule'));

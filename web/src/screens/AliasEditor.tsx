@@ -10,6 +10,8 @@ interface AliasEditorProps {
   rows: Row[];
   onClose(): void;
   onSessionLost(): void;
+  // A save failed after the panel was closed.
+  onAbandoned(message: string): void;
   // The panel refused a save from the aliases it was given: they may be stale, and are read again.
   onRefused(): void;
   onSave<K extends keyof AliasKinds>(kind: K, alias: Omit<AliasKinds[K], 'id'>, saved?: SavedObject<AliasKinds[K]>): Promise<void>;
@@ -23,7 +25,7 @@ const icmpTypes = {
 
 const field = /^\/(name|description|kind|protocol|address|prefix|first|last|members|ports|types)(?:\/|$)/;
 
-export function AliasEditor({ editing, rows, onClose, onSessionLost, onRefused, onSave }: AliasEditorProps) {
+export function AliasEditor({ editing, rows, onClose, onSessionLost, onAbandoned, onRefused, onSave }: AliasEditorProps) {
   const kind = typeof editing === 'string' ? editing : editing.kind;
   const saved = typeof editing === 'string' ? undefined : editing;
   const savedAddress = saved?.kind === 'addresses' ? saved.item : undefined;
@@ -45,7 +47,7 @@ export function AliasEditor({ editing, rows, onClose, onSessionLost, onRefused, 
   const [busy, setBusy] = useState(false);
   // A save may answer after this panel was closed and another opened: it then closes nothing.
   const open = useRef(true);
-  useEffect(() => () => { open.current = false; }, []);
+  useEffect(() => { open.current = true; return () => { open.current = false; }; }, []);
 
   // A group holds aliases of its own kind that are not groups, and never itself.
   const candidates = rows.filter((row) => row.kind === kind && row.item.value.id !== saved?.item.value.id && (row.kind === 'addresses' ? row.item.value.kind : row.item.value.protocol) !== 'group')
@@ -93,6 +95,8 @@ export function AliasEditor({ editing, rows, onClose, onSessionLost, onRefused, 
       if (open.current) onClose();
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) return onSessionLost();
+      // The panel was closed while the save was out: the page says what became of it.
+      if (!open.current) return onAbandoned(saveFailure(error, new Map(), noun));
       const fields = fieldErrors(error, field);
       setErrors(fields);
       setFailure(saveFailure(error, fields, noun));
