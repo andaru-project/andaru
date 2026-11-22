@@ -33,8 +33,8 @@ export function UpgradeScreen({ api, session, onFinished, onSessionLost }: Upgra
       onFinished();
     } catch (requestError) {
       reportError(requestError, onSessionLost, setError);
-      // The saved settings changed meanwhile: read their questions again, against the new head.
-      if (requestError instanceof ApiError && requestError.status === 412) void view.reload();
+      // The saved settings changed meanwhile: their questions are read again, against the new head, from no answers.
+      if (requestError instanceof ApiError && requestError.status === 412) setChoices({});
     } finally {
       setBusy(false);
     }
@@ -57,7 +57,7 @@ export function UpgradeScreen({ api, session, onFinished, onSessionLost }: Upgra
               {current.questions.map((question) => (
                 <Paper key={question.id} withBorder p="md">
                   <Stack gap="xs">
-                    <Radio.Group label={question.question} description={`About: ${question.objects.join(', ')}`} value={choices[question.id] ?? ''} onChange={(choice) => setChoices((given) => ({ ...given, [question.id]: choice }))}>
+                    <Radio.Group label={question.question} description={question.objects.length > 0 ? `About: ${question.objects.join(', ')}` : undefined} value={choices[question.id] ?? ''} onChange={(choice) => setChoices((given) => ({ ...given, [question.id]: choice }))}>
                       <Stack gap="xs">
                         {question.choices.map((choice) => (
                           <Radio key={choice.id} value={choice.id} disabled={!canWrite || busy} label={
@@ -76,7 +76,7 @@ export function UpgradeScreen({ api, session, onFinished, onSessionLost }: Upgra
               {canWrite ? (
                 <Group>
                   {/* While the questions for the latest choice load, the answers on screen may not be the ones asked. */}
-                  <Button disabled={open.length > 0 || busy || view.loading} loading={busy} onClick={() => void finish(current)}>Save the answers</Button>
+                  <Button disabled={open.length > 0 || busy || view.loading || view.error !== ''} loading={busy} onClick={() => void finish(current)}>Save the answers</Button>
                   {open.length > 0 && <Text size="sm" c="dimmed">{openText}</Text>}
                 </Group>
               ) : <Text c="dimmed">Answering needs permission to change the configuration.</Text>}
