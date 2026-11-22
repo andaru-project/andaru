@@ -129,7 +129,9 @@ export class ApiClient {
     try {
       response = await fetch(path, { ...init, headers, signal, credentials: 'same-origin', cache: 'no-store' });
     } catch {
-      input ||= carried; // the engine never received it, so the input still has to reach it
+      // Most likely the engine never received it, so the input waits for the next request. A read that timed out
+      // may have reached it, and restoring there would let one hung read keep the session alive.
+      if (!signal?.aborted) input ||= carried;
       throw disconnected();
     }
 
