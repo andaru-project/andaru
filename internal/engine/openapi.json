@@ -2506,6 +2506,14 @@
                   "$ref": "#/components/schemas/CollectionResponse"
                 }
               }
+            },
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Strong quoted order.<list version>"
+              }
             }
           },
           "400": {
@@ -2565,7 +2573,15 @@
         "operationId": "headListSavedObjectsRules",
         "responses": {
           "200": {
-            "description": "Saved state; never applied networking"
+            "description": "Saved state; never applied networking",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Strong quoted order.<list version>"
+              }
+            }
           },
           "400": {
             "description": "Structured failure; no secret values",
@@ -3160,6 +3176,14 @@
                 "schema": {
                   "$ref": "#/components/schemas/OrderResponse"
                 }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Strong quoted order.<list version>"
               }
             }
           },
@@ -5152,6 +5176,14 @@
                   "$ref": "#/components/schemas/CollectionResponse"
                 }
               }
+            },
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Strong quoted order.<list version>"
+              }
             }
           },
           "400": {
@@ -5211,7 +5243,15 @@
         "operationId": "headListSavedObjectsNATEntries",
         "responses": {
           "200": {
-            "description": "Saved state; never applied networking"
+            "description": "Saved state; never applied networking",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Strong quoted order.<list version>"
+              }
+            }
           },
           "400": {
             "description": "Structured failure; no secret values",
@@ -5978,6 +6018,14 @@
                 "schema": {
                   "$ref": "#/components/schemas/OrderResponse"
                 }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Strong quoted order.<list version>"
               }
             }
           },
