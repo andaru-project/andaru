@@ -42,6 +42,9 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 		}
 		return state, info, diagnostic("load-config-scan", e)
 	}
+	if id != "" && schema > schemaVersion {
+		return state, info, fault("NOT_FOUND", "", "This version was saved by a newer Andaru, whose settings this Andaru cannot read.")
+	}
 	if number < 0 || schema < 1 || schema > schemaVersion || len(ch) != 32 || len(sh) != 32 || len(cb) > documentLimit {
 		return state, info, diagnostic("load-config-metadata", nil)
 	}

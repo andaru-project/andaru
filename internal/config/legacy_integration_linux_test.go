@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"slices"
 	"testing"
 )
@@ -335,6 +336,15 @@ func TestNewerHeadOpensOnTheNewestReadableVersion(t *testing.T) {
 		if z.Version != "3" {
 			t.Fatalf("a zone reads its version from elsewhere than the copy: %+v", z)
 		}
+	}
+	// The zone the newer version created is deleted in the copy, and that version reads as one this Andaru cannot.
+	var deleted bool
+	if err = s.configDB.QueryRowContext(ctx, "SELECT deleted FROM object_changes WHERE object_id='zon_0000000f-0000-4000-8000-00000000000f' AND version_id=3").Scan(&deleted); err != nil || !deleted {
+		t.Fatalf("no deletion of the newer zone: %t %v", deleted, err)
+	}
+	var f *Fault
+	if _, err = s.Version(ctx, "2"); !errors.As(err, &f) || f.Code != "NOT_FOUND" {
+		t.Fatalf("reading the newer version: %v", err)
 	}
 	if _, err = s.Save(ctx, systemRootActor, createZone("iot")); err != nil {
 		t.Fatal(err)

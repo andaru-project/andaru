@@ -352,29 +352,29 @@ func (s *Store) startSaveFrom(ctx context.Context, actor authz.Actor, from Versi
 	if e != nil {
 		return nil, empty, "", e
 	}
-	p.head = current.Version
 	var n int64
 	if e = p.conn.QueryRowContext(ctx, "SELECT version_id FROM pointers WHERE name='saved'").Scan(&n); e != nil || n < 0 || n == int64(^uint64(0)>>1) {
 		return nil, empty, "", unavailable()
 	}
+	p.head = Version(strconv.FormatInt(n, 10))
 	success = true
 	return p, current, Version(fmt.Sprint(n + 1)), nil
 }
 
-// system is the actor of the saves the store makes on its own when it opens.
-var system = authz.Actor{Kind: authz.ActorSystem, ID: "root"}
+// systemActor is the actor of the saves the store makes on its own when it opens.
+var systemActor = authz.Actor{Kind: authz.ActorSystem, ID: "root"}
 
 // MigrateHead saves a head of an older schema as a new version of the current one, so this Andaru loads its
 // settings directly. The version it came from stays in the history, for a rollback to the Andaru that saved it
 // (settings design, rule 6). It returns the new version, or "" when the head is already of the current schema.
 func (s *Store) MigrateHead(ctx context.Context) (Version, error) {
-	p, current, next, err := s.startSave(ctx, system, nil)
+	p, current, next, err := s.startSave(ctx, systemActor, nil)
 	if err != nil {
 		return "", err
 	}
 	defer p.Close()
 	if !current.legacy {
-		return "", nil
+		return "", p.Close()
 	}
 	// A restore of nothing saves the head as it reads now: in the current form, with the rules and aliases it
 	// renamed recorded as changed.
@@ -399,7 +399,7 @@ func (s *Store) fallBack(ctx context.Context) error {
 	if !newest.Valid {
 		return diagnostic("open-config-newer-schema", nil)
 	}
-	p, current, next, err := s.startSaveFrom(ctx, system, Version(strconv.FormatInt(newest.Int64, 10)), nil)
+	p, current, next, err := s.startSaveFrom(ctx, systemActor, Version(strconv.FormatInt(newest.Int64, 10)), nil)
 	if err != nil {
 		return err
 	}
@@ -423,6 +423,33 @@ func (s *Store) fallBack(ctx context.Context) error {
 			changed[key] = true
 			prepared.Changed = append(prepared.Changed, objectChange{Collection: key.Collection, ID: key.ID})
 			prepared.State.Versions[key] = objectVersion{Version: next}
+		}
+	}
+	// An object the newer versions created, and the copy does not hold, is deleted here.
+	for _, col := range collections {
+		rows, e := p.conn.QueryContext(ctx, "SELECT object_id,deleted FROM "+changeTable(col)+" WHERE collection=? ORDER BY version_id", col)
+		if e != nil {
+			return diagnostic("open-config-fallback-objects", e)
+		}
+		alive := map[string]bool{}
+		for rows.Next() {
+			var id string
+			var deleted bool
+			if e = rows.Scan(&id, &deleted); e != nil {
+				rows.Close()
+				return diagnostic("open-config-fallback-objects", e)
+			}
+			alive[id] = !deleted
+		}
+		rows.Close()
+		if e = rows.Err(); e != nil {
+			return diagnostic("open-config-fallback-objects", e)
+		}
+		for id, live := range alive {
+			if key := (objectKey{col, id}); live && !changed[key] {
+				prepared.Changed = append(prepared.Changed, objectChange{Collection: col, ID: id, Deleted: true})
+				prepared.State.Versions[key] = objectVersion{Version: next, Deleted: true}
+			}
 		}
 	}
 	slices.SortFunc(prepared.Changed, func(a, b objectChange) int {
