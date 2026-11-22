@@ -136,7 +136,8 @@ it('lets the user tick which interfaces show when there are more than two', asyn
   const button = screen.getByRole('button', { name: 'Interfaces shown: ens18, ens19' });
   expect(button).toHaveTextContent('ens18, ens19');
   await userEvent.click(button);
-  const items = await screen.findAllByRole('menuitemcheckbox');
+  // The menu opens through a transition, which a busy machine can take over a second to finish.
+  const items = await screen.findAllByRole('menuitemcheckbox', {}, { timeout: 5000 });
   expect(items.map((item) => [item.textContent, item.getAttribute('aria-checked')])).toEqual([['ens18 (wan)', 'true'], ['ens19 (lan)', 'true'], ['ens20 (guest)', 'false'], ['veth0', 'false'], ['ppp0', 'false']]);
   await userEvent.click(items[2]);
   expect(onSelect).toHaveBeenLastCalledWith(['ens18', 'ens19', 'ens20']);
