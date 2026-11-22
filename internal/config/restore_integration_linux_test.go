@@ -389,4 +389,3 @@ func TestRestoreConcurrentSavePrecondition(t *testing.T) {
 		t.Fatal("concurrent operations advanced or lost the head", err)
 	}
 }
-

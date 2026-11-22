@@ -359,14 +359,15 @@ func TestCtlApplyAndApplies(t *testing.T) {
 
 func TestConfigOrder(t *testing.T) {
 	a, b := "rul_00000001-0000-4000-8000-000000000001", "rul_00000002-0000-4000-8000-000000000002"
-	req, err := ctlOperation([]string{"config", "order", "forward", "--version", "7", b, a}, io.Discard)
-	if err != nil || req.method != "PUT" || req.path != "/api/v1/config/policy/forward/order" || req.tag != `"order.7"` || string(req.payload) != `["`+b+`","`+a+`"]` {
+	req, err := ctlOperation([]string{"config", "order", "rules", "--version", "7", b, a}, io.Discard)
+	if err != nil || req.method != "PUT" || req.path != "/api/v1/config/rules/order" || req.tag != `"order.7"` || string(req.payload) != `["`+b+`","`+a+`"]` {
 		t.Fatalf("request %+v %v", req, err)
 	}
 	for _, args := range [][]string{
 		{"config", "order", "sideways", "--version", "7", a},
-		{"config", "order", "forward", a},
-		{"config", "order", "forward", "--version", "7", "zon_00000001-0000-4000-8000-000000000001"},
+		{"config", "order", "forward", "--version", "7", a},
+		{"config", "order", "rules", a},
+		{"config", "order", "rules", "--version", "7", "zon_00000001-0000-4000-8000-000000000001"},
 	} {
 		if _, err := ctlOperation(args, io.Discard); err == nil {
 			t.Fatalf("%v accepted", args)
@@ -376,14 +377,14 @@ func TestConfigOrder(t *testing.T) {
 
 func TestConfigFilterCollections(t *testing.T) {
 	for args, want := range map[string]ctlRequest{
-		"config list policy/input":                                     {method: "GET", path: "/api/v1/config/policy/input", kind: "collection"},
-		"config create addresses":                                      {method: "POST", path: "/api/v1/config/addresses", kind: "object"},
-		"config get management":                                        {method: "GET", path: "/api/v1/config/management", kind: "singleton"},
-		"config replace --version 0 dns":                               {method: "PUT", path: "/api/v1/config/dns", kind: "singleton", tag: `"dns.0"`},
-		"config create dhcp":                                           {method: "POST", path: "/api/v1/config/dhcp", kind: "object"},
-		"config get dhcp dhp_00000001-0000-4000-8000-000000000001":     {method: "GET", path: "/api/v1/config/dhcp/dhp_00000001-0000-4000-8000-000000000001", kind: "object"},
-		"config replace --version 0 nat/outbound":                      {method: "PUT", path: "/api/v1/config/nat/outbound", kind: "singleton", tag: `"nat.outbound.0"`},
-		"config get services svc_00000001-0000-4000-8000-000000000001": {method: "GET", path: "/api/v1/config/services/svc_00000001-0000-4000-8000-000000000001", kind: "object"},
+		"config list rules":                                                 {method: "GET", path: "/api/v1/config/rules", kind: "collection"},
+		"config create aliases/addresses":                                   {method: "POST", path: "/api/v1/config/aliases/addresses", kind: "object"},
+		"config get management":                                             {method: "GET", path: "/api/v1/config/management", kind: "singleton"},
+		"config replace --version 0 dns":                                    {method: "PUT", path: "/api/v1/config/dns", kind: "singleton", tag: `"dns.0"`},
+		"config create dhcp":                                                {method: "POST", path: "/api/v1/config/dhcp", kind: "object"},
+		"config get dhcp dhp_00000001-0000-4000-8000-000000000001":          {method: "GET", path: "/api/v1/config/dhcp/dhp_00000001-0000-4000-8000-000000000001", kind: "object"},
+		"config replace --version 0 nat/outbound":                           {method: "PUT", path: "/api/v1/config/nat/outbound", kind: "singleton", tag: `"nat.outbound.0"`},
+		"config get aliases/ports svc_00000001-0000-4000-8000-000000000001": {method: "GET", path: "/api/v1/config/aliases/ports/svc_00000001-0000-4000-8000-000000000001", kind: "object"},
 	} {
 		req, err := ctlOperation(strings.Fields(args), io.Discard)
 		if err != nil || req.method != want.method || req.path != want.path || req.kind != want.kind || req.tag != want.tag {
@@ -395,17 +396,18 @@ func TestConfigFilterCollections(t *testing.T) {
 func TestSaveEnvelopeAcceptsFilterResults(t *testing.T) {
 	rule := `{"id":"rul_00000001-0000-4000-8000-000000000001","name":"r","action":"accept"}`
 	save := `{"state":"saved","savedVersion":"4","created":{},"items":[
-		{"collection":"policy.forward","id":"rul_00000001-0000-4000-8000-000000000001","value":` + rule + `,"version":"4"},
-		{"collection":"policy.forward","id":"policy.forward","version":"4"},
+		{"collection":"rules","id":"rul_00000001-0000-4000-8000-000000000001","value":` + rule + `,"version":"4"},
+		{"collection":"rules","id":"rules","version":"4"},
 		{"collection":"management","id":"management","value":{"segment":"seg_00000001-0000-4000-8000-000000000001"},"version":"4"},
 		{"collection":"nat.outbound","id":"nat.outbound","deleted":true}]}`
 	if !validEnvelope("save", []byte(save)) {
 		t.Fatal("save reply with filter items rejected")
 	}
 	for name, bad := range map[string]string{
-		"slash collection":   `{"collection":"policy/forward","id":"policy.forward","version":"4"}`,
+		"slash collection":   `{"collection":"aliases/ports","id":"svc_00000001-0000-4000-8000-000000000001","value":{},"version":"4"}`,
+		"the form before":    `{"collection":"policy.forward","id":"policy.forward","version":"4"}`,
 		"singleton bad id":   `{"collection":"management","id":"mgmt","value":{},"version":"4"}`,
-		"order with no vers": `{"collection":"policy.input","id":"policy.input"}`,
+		"order with no vers": `{"collection":"rules","id":"rules"}`,
 	} {
 		if validEnvelope("save", []byte(`{"state":"saved","savedVersion":"4","created":{},"items":[`+bad+`]}`)) {
 			t.Fatalf("%s accepted", name)

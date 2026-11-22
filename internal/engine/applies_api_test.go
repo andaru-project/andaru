@@ -635,8 +635,8 @@ func TestUnchangedAuthorizationAllowsTokenConfirmation(t *testing.T) {
 
 // filterDeclaration is the uplink with a starter rule, outbound NAT and management on its segment.
 var filterDeclaration = strings.TrimSuffix(uplinkDeclaration, "}") + `,
-"objects":{"addresses":[],"services":[{"id":"svc_00000001-0000-4000-8000-000000000001","name":"ping","protocol":"icmp","types":["echo-request"]}]},
-"policy":{"input":[{"id":"rul_00000001-0000-4000-8000-000000000001","name":"ping","enabled":true,"action":"accept","from":["zon_00000001-0000-4000-8000-000000000001"],"to":[],"services":["svc_00000001-0000-4000-8000-000000000001"],"log":false}],"forward":[]},
+"aliases":{"addresses":[],"ports":[{"id":"svc_00000001-0000-4000-8000-000000000001","name":"ping","protocol":"icmp","types":["echo-request"]}]},
+"rules":[{"id":"rul_00000001-0000-4000-8000-000000000001","name":"ping","enabled":true,"action":"accept","from":{"zones":["zon_00000001-0000-4000-8000-000000000001"],"addresses":[]},"to":{"zones":["zon_firewall"],"addresses":[]},"ports":["svc_00000001-0000-4000-8000-000000000001"],"log":false}],
 "nat":{"outbound":{"mode":"automatic"}},
 "management":{"segment":"seg_00000001-0000-4000-8000-000000000001"}}`
 

@@ -160,7 +160,7 @@ func TestDocumentedCtlFormsParse(t *testing.T) {
 		"config show", "config list zones", "config create zones", "config get zones zon_" + uuid,
 		"config replace --version 3 zones zon_" + uuid, "config delete --version 3 zones zon_" + uuid,
 		"config get dns", "config replace --version 0 dns", "config replace --version 3 nat/outbound", "config delete --version 3 management",
-		"config order input --version 3 rul_" + uuid, "config order forward --version 3 rul_" + uuid,
+		"config order rules --version 3 rul_" + uuid,
 		"config order nat/port-forwards --version 3 pfw_" + uuid, "config order nat/one-to-one --version 3 oto_" + uuid,
 		"config changes",
 		"versions list", "versions list --limit 5 --before 9", "versions get 3",

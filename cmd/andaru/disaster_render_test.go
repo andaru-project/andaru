@@ -79,14 +79,20 @@ func TestRenderDisasterKeepsAllowedSources(t *testing.T) {
 		t.Fatal(err)
 	}
 	decl["management"].(map[string]any)["allowedSources"] = []string{"adr_00000009-0000-4000-8000-000000000001", "adr_00000009-0000-4000-8000-000000000002"}
-	objects, _ := decl["objects"].(map[string]any)
-	if objects == nil {
-		objects = map[string]any{}
-		decl["objects"] = objects
-	}
-	objects["addresses"] = append(slicesOf(objects["addresses"]),
+	sources := []any{
 		map[string]any{"id": "adr_00000009-0000-4000-8000-000000000001", "name": "admin", "kind": "host", "address": "192.0.2.10"},
-		map[string]any{"id": "adr_00000009-0000-4000-8000-000000000002", "name": "admin6", "kind": "network", "prefix": "2001:db8::/64"})
+		map[string]any{"id": "adr_00000009-0000-4000-8000-000000000002", "name": "admin6", "kind": "network", "prefix": "2001:db8::/64"}}
+	// The fixture is a copy kept before schema 4, which a disaster boot must still bring up: its sources are
+	// under objects there.
+	decl["objects"].(map[string]any)["addresses"] = sources
+	legacy, err := json.Marshal(decl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A closure is made from the configuration as it is saved now.
+	delete(decl, "objects")
+	delete(decl, "policy")
+	decl["schemaVersion"], decl["aliases"] = 4, map[string]any{"addresses": sources, "ports": []any{}}
 	raw, err := json.Marshal(decl)
 	if err != nil {
 		t.Fatal(err)
@@ -104,13 +110,15 @@ func TestRenderDisasterKeepsAllowedSources(t *testing.T) {
 			},
 			host.RealizerFacts{NftTool: true}, nil
 	}
-	var script string
-	loadDisasterFilter = func(s []byte) error { script = string(s); return nil }
-	if err := renderDisaster(t.TempDir())(closure); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(script, "192.0.2.10") || !strings.Contains(script, "2001:db8::/64") {
-		t.Fatalf("the kept filter lost its allowed sources:\n%s", script)
+	for name, body := range map[string][]byte{"closure": closure, "copy kept before schema 4": legacy} {
+		var script string
+		loadDisasterFilter = func(s []byte) error { script = string(s); return nil }
+		if err := renderDisaster(t.TempDir())(body); err != nil {
+			t.Fatal(name, err)
+		}
+		if !strings.Contains(script, "192.0.2.10") || !strings.Contains(script, "2001:db8::/64") {
+			t.Fatalf("%s: the kept filter lost its allowed sources:\n%s", name, script)
+		}
 	}
 }
 

@@ -1026,8 +1026,6 @@
               "segments",
               "zones",
               "roles",
-              "addresses",
-              "services",
               "dhcp", "dhcp6", "virtualAddresses"
             ]
           }
@@ -1437,8 +1435,6 @@
               "segments",
               "zones",
               "roles",
-              "addresses",
-              "services",
               "dhcp", "dhcp6", "virtualAddresses"
             ]
           }
@@ -2498,7 +2494,7 @@
         }
       }
     },
-    "/api/v1/config/policy/{chain}": {
+    "/api/v1/config/rules": {
       "get": {
         "operationId": "listSavedObjectsRules",
         "responses": {
@@ -2748,22 +2744,9 @@
             }
           }
         ]
-      },
-      "parameters": [
-        {
-          "name": "chain",
-          "in": "path",
-          "required": true,
-          "schema": {
-            "enum": [
-              "input",
-              "forward"
-            ]
-          }
-        }
-      ]
+      }
     },
-    "/api/v1/config/policy/{chain}/{id}": {
+    "/api/v1/config/rules/{id}": {
       "get": {
         "operationId": "getSavedObjectRule",
         "responses": {
@@ -3157,17 +3140,6 @@
       },
       "parameters": [
         {
-          "name": "chain",
-          "in": "path",
-          "required": true,
-          "schema": {
-            "enum": [
-              "input",
-              "forward"
-            ]
-          }
-        },
-        {
           "name": "id",
           "in": "path",
           "required": true,
@@ -3177,7 +3149,7 @@
         }
       ]
     },
-    "/api/v1/config/policy/{chain}/order": {
+    "/api/v1/config/rules/order": {
       "put": {
         "operationId": "orderRules",
         "responses": {
@@ -3307,17 +3279,683 @@
           }
         ],
         "description": "Reorder the list. The body is every rule ID of the list, once, in the new order; If-Match is the list's ETag."
+      }
+    },
+    "/api/v1/config/aliases/{kind}": {
+      "get": {
+        "operationId": "listSavedObjectsAliases",
+        "responses": {
+          "200": {
+            "description": "Saved state; never applied networking",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "description": "Address aliases or port aliases, which rules, NAT entries and the management section name."
+      },
+      "head": {
+        "operationId": "headListSavedObjectsAliases",
+        "responses": {
+          "200": {
+            "description": "Saved state; never applied networking"
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createSavedObjectAlias",
+        "responses": {
+          "201": {
+            "description": "Saved state; never applied networking",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "/api/v1/schema#/$defs/objectWrite"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "description": "Create the rule ahead of this rule of the same list; without it the rule is appended.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       },
       "parameters": [
         {
-          "name": "chain",
+          "name": "kind",
           "in": "path",
           "required": true,
           "schema": {
             "enum": [
-              "input",
-              "forward"
+              "addresses",
+              "ports"
             ]
+          }
+        }
+      ]
+    },
+    "/api/v1/config/aliases/{kind}/{id}": {
+      "get": {
+        "operationId": "getSavedObjectAlias",
+        "responses": {
+          "200": {
+            "description": "Saved state; never applied networking",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Strong quoted <id>.<object version>"
+              },
+              "Andaru-Saved-Version": {
+                "schema": {
+                  "$ref": "#/components/schemas/Version"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "head": {
+        "operationId": "headGetSavedObjectAlias",
+        "responses": {
+          "200": {
+            "description": "Saved state; never applied networking",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Strong quoted <id>.<object version>"
+              },
+              "Andaru-Saved-Version": {
+                "schema": {
+                  "$ref": "#/components/schemas/Version"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "replaceSavedObjectAlias",
+        "responses": {
+          "200": {
+            "description": "Saved state; never applied networking",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "/api/v1/schema#/$defs/objectWrite"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact strong object ETag; no wildcard/weak/list form."
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "deleteSavedObjectAlias",
+        "responses": {
+          "200": {
+            "description": "Saved state; never applied networking",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Acknowledgement"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact strong object ETag; no wildcard/weak/list form."
+          }
+        ]
+      },
+      "parameters": [
+        {
+          "name": "kind",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "enum": [
+              "addresses",
+              "ports"
+            ]
+          }
+        },
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
           }
         }
       ]
@@ -6483,10 +7121,9 @@
                       "segments",
                       "zones",
                       "roles",
-                      "addresses",
-                      "services",
-                      "policy.input",
-                      "policy.forward",
+                      "aliases.addresses",
+                      "aliases.ports",
+                      "rules",
                       "management",
                       "nat.outbound",
                       "dhcp", "dhcp6", "virtualAddresses",
@@ -6577,10 +7214,9 @@
               "segments",
               "zones",
               "roles",
-              "addresses",
-              "services",
-              "policy.input",
-              "policy.forward",
+              "aliases.addresses",
+              "aliases.ports",
+              "rules",
               "management",
               "nat.outbound",
               "dhcp", "dhcp6", "virtualAddresses",
