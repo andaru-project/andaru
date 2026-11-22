@@ -57,14 +57,13 @@ export function apiErrorMessage(error: unknown): string {
 // ("/from/zones/0"); field picks the form's field out of one, and a detail about no field of the form goes
 // under "", to show above it. A field refused more than once for one reason says it once.
 export function fieldErrors(error: unknown, field: RegExp) {
-  const fields = new Map<string, string>();
-  if (!(error instanceof ApiError)) return fields;
+  const said = new Map<string, Set<string>>();
+  if (!(error instanceof ApiError)) return new Map<string, string>();
   for (const detail of error.details) {
     const name = field.exec(detail.path ?? '')?.[1] ?? '';
-    const said = fields.get(name);
-    if (!said?.includes(detail.message)) fields.set(name, [said, detail.message].filter(Boolean).join(' '));
+    said.set(name, (said.get(name) ?? new Set()).add(detail.message));
   }
-  return fields;
+  return new Map([...said].map(([name, messages]) => [name, [...messages].join(' ')]));
 }
 
 // saveFailure is what a side panel says above its form when a save was refused. Someone else's change

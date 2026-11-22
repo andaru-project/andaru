@@ -67,11 +67,13 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
       if (requestError instanceof ApiError && requestError.status === 412) setError('The alias was changed by someone else. The list now shows what is saved; nothing was deleted.');
       // Refused as in use: something began to name it after this page read the configuration.
       else if (requestError instanceof ApiError && requestError.status === 422) setError('Something began to name this alias, so it was not deleted. The list now shows what names it.');
+      else if (requestError instanceof ApiError && requestError.status === 404) setError('The alias was already deleted by someone else.');
       else reportError(requestError, onSessionLost, setError);
       if (requestError instanceof ApiError && requestError.status === 401) return;
     }
     await resource.reload();
-    setDeleting(undefined);
+    // The dialog may have been closed and another opened meanwhile: that one stays.
+    setDeleting((current) => (current === row ? undefined : current));
     setBusy(false);
   }
 
@@ -134,7 +136,7 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
                 </Table>
               )}
               {editing && (
-                <AliasEditor key={typeof editing === 'string' ? editing : editing.item.value.id} editing={editing} rows={rows} onClose={() => setEditing(undefined)} onSessionLost={onSessionLost}
+                <AliasEditor key={typeof editing === 'string' ? editing : editing.item.value.id} editing={editing} rows={rows} onClose={() => setEditing(undefined)} onSessionLost={onSessionLost} onRefused={() => void resource.reload()}
                   onSave={async (kind, alias, saved) => {
                     try {
                       await api.saveAlias(kind, alias, saved);
@@ -145,11 +147,11 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
                     }
                     onSaved();
                     // An alias just added is not hidden by the kind the table was narrowed to.
-                    if (!saved) setShow('all');
+                    if (!saved && show !== kind) setShow('all');
                     await resource.reload();
                   }} />
               )}
-              <Modal opened={Boolean(deleting)} onClose={() => setDeleting(undefined)} title="Delete alias" centered lockScroll={false} closeButtonProps={{ 'aria-label': 'Close', disabled: busy }} closeOnEscape={!busy} closeOnClickOutside={!busy}>
+              <Modal opened={Boolean(deleting)} onClose={() => setDeleting(undefined)} title="Delete alias" centered lockScroll={false} closeButtonProps={{ 'aria-label': 'Close' }}>
                 {deleting && (blockers.length > 0 ? (
                   <Stack>
                     <Text><strong>{deleting.item.value.name}</strong> cannot be deleted while these name it. Take it out of them first:</Text>
@@ -160,7 +162,7 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
                   <Stack>
                     <Text>Delete the alias <strong>{deleting.item.value.name}</strong>? Nothing names it.</Text>
                     <Group justify="flex-end">
-                      <Button variant="default" disabled={busy} onClick={() => setDeleting(undefined)}>Cancel</Button>
+                      <Button variant="default" onClick={() => setDeleting(undefined)}>Cancel</Button>
                       <Button color="red" loading={busy} onClick={() => void remove(deleting)}>Delete alias</Button>
                     </Group>
                   </Stack>

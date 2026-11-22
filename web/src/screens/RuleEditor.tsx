@@ -1,5 +1,5 @@
 import { Alert, Button, Drawer, Fieldset, Group, MultiSelect, SegmentedControl, Stack, Switch, Text, Textarea, TextInput } from '@mantine/core';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, fieldErrors, saveFailure } from '../api';
 import { firewallZone, type Rule, type RuleSide, type Snapshot } from '../types';
 
@@ -29,6 +29,9 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onSave }: R
   const [errors, setErrors] = useState(new Map<string, string>());
   const [failure, setFailure] = useState('');
   const [busy, setBusy] = useState(false);
+  // A save may answer after this panel was closed and another opened: it then closes nothing.
+  const open = useRef(true);
+  useEffect(() => () => { open.current = false; }, []);
 
   const option = (item: { id: string; name: string }) => ({ value: item.id, label: item.name });
   const zones = snapshot.value.zones.map(option);
@@ -50,7 +53,7 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onSave }: R
     const side = (value: RuleSide): RuleSide => ({ zones: value.zones, addresses: value.addresses, ...(value.not && value.addresses.length > 0 ? { not: true } : {}) });
     try {
       await onSave({ name: name.trim(), ...(description ? { description } : {}), enabled, action, from: side(from), to: side(to), ports, log });
-      onClose();
+      if (open.current) onClose();
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) return onSessionLost();
       const fields = fieldErrors(error, field);
@@ -77,7 +80,7 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onSave }: R
   );
 
   return (
-    <Drawer opened onClose={onClose} position="right" size="md" title={rule ? `Edit ${rule.name}` : 'Add rule'} lockScroll={false} closeButtonProps={{ 'aria-label': 'Close', disabled: busy }} closeOnEscape={!busy} closeOnClickOutside={!busy}>
+    <Drawer opened onClose={onClose} position="right" size="md" title={rule ? `Edit ${rule.name}` : 'Add rule'} lockScroll={false} closeButtonProps={{ 'aria-label': 'Close' }}>
       <form onSubmit={submit} noValidate>
         <Stack>
           {failure && <Alert color="red" role="alert" title="The rule was not saved">{failure}</Alert>}
@@ -97,7 +100,7 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onSave }: R
           <MultiSelect label="Ports" description="Port aliases. Empty is any protocol and port." data={portAliases} value={ports} error={errors.get('ports')} searchable clearable onChange={setPorts} />
           <Switch label="Log what this rule matches" checked={log} onChange={(event) => setLog(event.currentTarget.checked)} />
           <Group justify="flex-end">
-            <Button variant="default" disabled={busy} onClick={onClose}>Cancel</Button>
+            <Button variant="default" onClick={onClose}>Cancel</Button>
             <Button loading={busy} type="submit">Save rule</Button>
           </Group>
         </Stack>

@@ -275,6 +275,26 @@ it('does not ask the engine to make a group of an alias that is in one', async (
   expect(within(panel).queryByText(/cannot hold a group/)).not.toBeInTheDocument();
 });
 
+it('reads the aliases again when the panel refuses a save from what it holds, so a stale list does not block for good', async () => {
+  const user = userEvent.setup();
+  let renamed = false;
+  const { fetch } = show({
+    '/api/v1/config/aliases/ports': () => jsonResponse(200, list(renamed ? ports.map((port) => (port.id === 'svc_web' ? { ...port, name: 'www' } : port)) : ports)),
+    'POST /api/v1/config/aliases/ports': jsonResponse(201, { value: { id: 'svc_new', name: 'web', protocol: 'udp', ports: ['80'] }, version: '10' }),
+  });
+  await user.click(await screen.findByRole('button', { name: 'Add port alias' }));
+  const panel = await screen.findByRole('dialog', { name: 'Add port alias' });
+  await user.type(within(panel).getByLabelText(/^Name/), 'web');
+  await user.type(within(panel).getByLabelText('Ports'), '80');
+  // Someone else renamed the alias that held the name; this page has not heard.
+  renamed = true;
+  await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
+  expect(within(panel).getByText('Another port alias has this name.')).toBeInTheDocument();
+  expect(await screen.findByText('www')).toBeInTheDocument();
+  await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
+  await waitFor(() => expect(sent(fetch, 'POST')).toHaveLength(1));
+});
+
 it('says what happened when a save or a delete is refused, and reads the list again', async () => {
   const user = userEvent.setup();
   const onSessionLost = vi.fn();

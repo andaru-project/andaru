@@ -1,5 +1,5 @@
 import { Alert, Button, Drawer, Group, MultiSelect, NativeSelect, Stack, Textarea, TextInput } from '@mantine/core';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, fieldErrors, saveFailure } from '../api';
 import type { AddressAlias, AliasKinds, PortAlias, SavedObject } from '../types';
 import type { Row } from './AliasesScreen';
@@ -10,6 +10,8 @@ interface AliasEditorProps {
   rows: Row[];
   onClose(): void;
   onSessionLost(): void;
+  // The panel refused a save from the aliases it was given: they may be stale, and are read again.
+  onRefused(): void;
   onSave<K extends keyof AliasKinds>(kind: K, alias: Omit<AliasKinds[K], 'id'>, saved?: SavedObject<AliasKinds[K]>): Promise<void>;
 }
 
@@ -21,7 +23,7 @@ const icmpTypes = {
 
 const field = /^\/(name|description|kind|protocol|address|prefix|first|last|members|ports|types)(?:\/|$)/;
 
-export function AliasEditor({ editing, rows, onClose, onSessionLost, onSave }: AliasEditorProps) {
+export function AliasEditor({ editing, rows, onClose, onSessionLost, onRefused, onSave }: AliasEditorProps) {
   const kind = typeof editing === 'string' ? editing : editing.kind;
   const saved = typeof editing === 'string' ? undefined : editing;
   const savedAddress = saved?.kind === 'addresses' ? saved.item : undefined;
@@ -41,16 +43,18 @@ export function AliasEditor({ editing, rows, onClose, onSessionLost, onSave }: A
   const [errors, setErrors] = useState(new Map<string, string>());
   const [failure, setFailure] = useState('');
   const [busy, setBusy] = useState(false);
+  // A save may answer after this panel was closed and another opened: it then closes nothing.
+  const open = useRef(true);
+  useEffect(() => () => { open.current = false; }, []);
 
   // A group holds aliases of its own kind that are not groups, and never itself.
   const candidates = rows.filter((row) => row.kind === kind && row.item.value.id !== saved?.item.value.id && (row.kind === 'addresses' ? row.item.value.kind : row.item.value.protocol) !== 'group')
     .map((row) => ({ value: row.item.value.id, label: row.item.value.name }));
 
-  // Another kind shows other fields: what was said of the old ones goes with them.
+  // Another kind shows other fields: what was said of the old ones goes with them, and the rest stays.
   function change(next: string) {
     setWhat(next);
-    setErrors(new Map());
-    setFailure('');
+    setErrors(new Map([...errors].filter(([name]) => name === 'name' || name === 'description')));
   }
 
   async function submit(event: FormEvent) {
@@ -63,12 +67,14 @@ export function AliasEditor({ editing, rows, onClose, onSessionLost, onSave }: A
     // The engine refuses a name another alias of the kind has, and may blame the other one by its ID.
     if (rows.some((row) => row.kind === kind && row.item.value.id !== saved?.item.value.id && row.item.value.name === name.trim())) {
       setErrors(new Map([['name', `Another ${noun} has this name.`]]));
+      onRefused();
       return;
     }
     // A group holds no groups, so an alias that is in one cannot become one.
     const holder = saved && what === 'group' ? rows.find((row) => row.item.value.members?.includes(saved.item.value.id)) : undefined;
     if (holder) {
       setErrors(new Map([[kind === 'addresses' ? 'kind' : 'protocol', `This alias is in the group ${holder.item.value.name}, and a group cannot hold a group.`]]));
+      onRefused();
       return;
     }
     setBusy(true);
@@ -84,7 +90,7 @@ export function AliasEditor({ editing, rows, onClose, onSessionLost, onSave }: A
           ...(what === 'group' ? { members } : what === 'tcp' || what === 'udp' ? { ports: ports.replace(/\s*-\s*/g, '-').split(/[\s,]+/).filter(Boolean) } : types.length > 0 ? { types } : {}) };
         await onSave('ports', body, savedPort);
       }
-      onClose();
+      if (open.current) onClose();
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) return onSessionLost();
       const fields = fieldErrors(error, field);
@@ -96,7 +102,7 @@ export function AliasEditor({ editing, rows, onClose, onSessionLost, onSave }: A
   }
 
   return (
-    <Drawer opened onClose={onClose} position="right" size="md" title={title} lockScroll={false} closeButtonProps={{ 'aria-label': 'Close', disabled: busy }} closeOnEscape={!busy} closeOnClickOutside={!busy}>
+    <Drawer opened onClose={onClose} position="right" size="md" title={title} lockScroll={false} closeButtonProps={{ 'aria-label': 'Close' }}>
       <form onSubmit={submit} noValidate>
         <Stack>
           {failure && <Alert color="red" role="alert" title="The alias was not saved">{failure}</Alert>}
@@ -125,7 +131,7 @@ export function AliasEditor({ editing, rows, onClose, onSessionLost, onSave }: A
           )}
           {what === 'group' && <MultiSelect label="Members" description="Aliases of the same kind that are not groups themselves." data={candidates} value={members} error={errors.get('members')} searchable clearable onChange={setMembers} />}
           <Group justify="flex-end">
-            <Button variant="default" disabled={busy} onClick={onClose}>Cancel</Button>
+            <Button variant="default" onClick={onClose}>Cancel</Button>
             <Button loading={busy} type="submit">Save alias</Button>
           </Group>
         </Stack>
