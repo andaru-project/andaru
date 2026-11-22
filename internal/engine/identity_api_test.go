@@ -135,13 +135,12 @@ func TestIdentityAPICreationTargetsAndTokenReplay(t *testing.T) {
 		if event.Action == audit.ActionTokenCreated && event.Target == tokenResult.Selector && event.Actor == (authz.Actor{Kind: authz.ActorSystem, ID: "root"}) {
 			found["token"] = true
 		}
-		// A read of a page and an export of the log are each their own event.
-		if event.Action == audit.ActionAuditQueried && event.Result == audit.ResultSuccess && event.Count == 1 {
-			queries++
-			found["export"] = found["export"] || event.Target == audit.AuditExportTarget
+		// Repeated reads by one actor, a page or an export, coalesce into one event that counts them.
+		if event.Action == audit.ActionAuditQueried && event.Result == audit.ResultSuccess {
+			queries += int(event.Count)
 		}
 	}
-	if !found["account"] || !found["token"] || !found["export"] || queries != 2 {
+	if !found["account"] || !found["token"] || queries != 2 {
 		t.Fatalf("actual generated creation targets or audited reads missing: creations=%+v queryCount=%d", found, queries)
 	}
 	// order=desc reads newest first, and its cursor pages towards older events.

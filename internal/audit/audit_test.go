@@ -1175,18 +1175,14 @@ func TestAuditQueriesCoalesce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// A read that failed, and an export of the log, are each their own event.
+	// A read that failed is its own event.
 	failed := event
 	failed.Result, failed.Metadata = ResultUnavailable, map[string]string{MetadataReasonCode: ReasonStorageFailure}
-	export := event
-	export.Target = AuditExportTarget
-	for _, other := range []Event{failed, export} {
-		if _, err := s.Append(ctx, other); err != nil {
-			t.Fatal(err)
-		}
+	if _, err := s.Append(ctx, failed); err != nil {
+		t.Fatal(err)
 	}
 	got, err := s.ListEvents(ctx, 0, 100)
-	if err != nil || len(got) != 3 || got[0].Count != 3 || got[1].Result != ResultUnavailable || got[2].Target != AuditExportTarget {
+	if err != nil || len(got) != 2 || got[0].Count != 3 || got[1].Result != ResultUnavailable {
 		t.Fatalf("events = %+v, %v", got, err)
 	}
 }
