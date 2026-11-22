@@ -102,6 +102,18 @@ it('names the box in the header, for an account that may read status: its versio
   expect(screen.queryByText(/0\.5\.0-a\.4/)).not.toBeInTheDocument();
 });
 
+it('has the firewall rules as a page, for an account that may read the configuration', async () => {
+  fetchRoutes({
+    '/api/v1/config/rules': { state: 'saved', savedVersion: '0', version: '0', items: [] },
+    '/api/v1/config': { state: 'saved', savedVersion: '0', unusedSecrets: [], value: { links: [], segments: [], zones: [] } },
+    '/api/v1/applies': unapplied,
+    '/api/v1/versions?': { state: 'saved', items: [] },
+  });
+  render(<MemoryRouter initialEntries={['/firewall/rules']}><Shell api={new ApiClient('csrf')} session={session(['configuration.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} /></MemoryRouter>);
+  expect(await screen.findByRole('heading', { name: 'Rules' })).toBeInTheDocument();
+  expect(await screen.findByText('No rules')).toBeInTheDocument();
+});
+
 it('has a page for what the box is made of, under System', async () => {
   fetchRoutes({
     '/api/v1/status/system': { version: '0.5.0-a.4', hostname: 'edge', kernel: '6.17', architecture: 'x86_64', time: '2026-11-21T12:00:00Z', bootedAt: null, memoryBytes: 0, guest: '', iommu: false,

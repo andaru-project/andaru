@@ -6,11 +6,13 @@ import type {
   Finding,
   History,
   LinkStatus,
+  OrderedList,
   Page,
   PrefixView,
   Preferences,
   Preview,
   Role,
+  Rule,
   SavedObject,
   SavedRolePage,
   Session,
@@ -274,6 +276,27 @@ export class ApiClient {
 
   config() {
     return this.request<Snapshot>('/api/v1/config');
+  }
+
+  rules() {
+    return this.request<OrderedList<Rule>>('/api/v1/config/rules');
+  }
+
+  // A rule is saved whole. Without an ID it is created, at the end of the list.
+  saveRule(rule: Omit<Rule, 'id'>, saved?: SavedObject<Rule>) {
+    if (!saved) return this.request<SavedObject<Rule>>('/api/v1/config/rules', { method: 'POST', body: JSON.stringify(rule) }, true);
+    return this.request<SavedObject<Rule>>(`/api/v1/config/rules/${encodeURIComponent(saved.value.id)}`, {
+      method: 'PUT', headers: { 'If-Match': `"${saved.value.id}.${saved.version}"` }, body: JSON.stringify(rule),
+    }, true);
+  }
+
+  deleteRule(id: string, version: string) {
+    return this.request(`/api/v1/config/rules/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { 'If-Match': `"${id}.${version}"` } }, true);
+  }
+
+  // The whole order, every rule once, guarded by the list's version: a 412 means someone else reordered.
+  orderRules(ids: string[], version: string) {
+    return this.request('/api/v1/config/rules/order', { method: 'PUT', headers: { 'If-Match': `"order.${version}"` }, body: JSON.stringify(ids) }, true);
   }
 
   finishApply(id: string, action: 'confirmation' | 'rollback') {

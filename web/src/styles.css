@@ -228,8 +228,9 @@ body {
   word-break: keep-all;
 }
 
-/* A state is a word or two: it is never cut short to fit its column. */
-.data-table td[data-label="State"] .mantine-Badge-root {
+/* A state is a word or two, and so is what a rule names: they are never cut short to fit a column. */
+.data-table td[data-label="State"] .mantine-Badge-root,
+.rules .mantine-Badge-root {
   min-width: max-content;
 }
 
@@ -419,6 +420,37 @@ path.traffic-sent {
     text-transform: uppercase;
   }
 
+  /* A rule on a narrow screen: its place, switch and action on one line, its name under them, then each side
+     under its label. */
+  .rules tr {
+    align-items: center;
+    display: grid;
+    gap: 0.25rem var(--mantine-spacing-xs);
+    grid-template-columns: auto auto 1fr;
+  }
+
+  .rules td {
+    grid-column: 1 / -1;
+  }
+
+  .rules td[data-label="Position"],
+  .rules td[data-label="Enabled"],
+  .rules td[data-label="Action"] {
+    grid-column: auto;
+    grid-row: 1;
+  }
+
+  .rules td[data-label="Name"] {
+    grid-row: 2;
+  }
+
+  .rules td[data-label="Position"]::before,
+  .rules td[data-label="Enabled"]::before,
+  .rules td[data-label="Action"]::before,
+  .rules td[data-label="Name"]::before {
+    content: none;
+  }
+
   .mantine-Modal-inner {
     padding: 0;
   }
@@ -441,6 +473,32 @@ path.traffic-sent {
   font-size: var(--mantine-font-size-xs);
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+/* The rules: a disabled rule keeps its place, dimmed. A rule being moved lifts above the others. */
+.rule[data-disabled] td:not(:nth-child(2)):not(.rule-actions) {
+  opacity: 0.7;
+}
+
+.rule[data-dragging] {
+  background: var(--mantine-color-body);
+  box-shadow: var(--mantine-shadow-md);
+  position: relative;
+  z-index: 1;
+}
+
+/* An alias is who; a zone is where. The alias chip is plain so the two never read alike. */
+.alias {
+  text-transform: none;
+}
+
+.fixed-rules {
+  color: var(--mantine-color-dimmed);
+  display: grid;
+  font-size: var(--mantine-font-size-sm);
+  gap: 0.25rem;
+  margin: 0;
+  padding-left: 1.1rem;
 }
 
 /* Old and new values in a review: marked by a border and a tint, never by colour alone (the column says which). */
