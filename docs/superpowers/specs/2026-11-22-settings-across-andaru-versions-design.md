@@ -22,7 +22,7 @@ Each upgrade is a function of the saved settings and the running Andaru alone, w
 
 A release may change a setting's default, as pfBlockerNG does. A new default does not change the settings of existing users (the owner, 2026-11-22), and grandfathering is how they keep what they had.
 
-- **A changed default is a breaking change** when settings can leave the setting unset, since an unset setting reads as the default. It raises the schema version like any other.
+- **A changed default may be a breaking change.** Where settings can leave the setting unset, an unset setting reads as the default, so changing it could change what existing settings do. When it is breaking, it raises the schema version like any other breaking change.
 - **One grandfathering strategy writes the old default explicitly.** Say a setting defaulted to A and the better choice is now B. The migration writes A into every existing document that left the setting unset, and the new default B applies only to settings created after it, such as a new installation. Existing users keep A until they choose B.
 - **Writing the old default is one strategy, not the only one.** Each changed default, added option or removed option states its own plan: a migration, another kind of grandfathering, or a user decision.
 
