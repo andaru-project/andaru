@@ -56,8 +56,18 @@ func (h *auditAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !requireNoBody(w, r) {
 		return
 	}
-	cursor, limit, _, ok := parsePageQuery(w, r, 100)
+	cursor, limit, values, ok := parsePageQuery(w, r, 100, "order")
 	if !ok {
+		return
+	}
+	// order=desc reads newest first, and its cursor pages towards older events.
+	list := h.coordinator.audits.ListEvents
+	switch values.Get("order") {
+	case "", "asc":
+	case "desc":
+		list = h.coordinator.audits.ListEventsBefore
+	default:
+		writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Invalid audit order.")
 		return
 	}
 	var after uint64
@@ -74,7 +84,7 @@ func (h *auditAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusForbidden, "FORBIDDEN", "A verified actor is required.")
 		return
 	}
-	events, err := h.coordinator.audits.ListEvents(r.Context(), after, limit)
+	events, err := list(r.Context(), after, limit)
 	if err != nil {
 		h.recordQueryFailure(r, actor)
 		writeAuditError(w, r, err)
@@ -82,7 +92,7 @@ func (h *auditAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	hasNext := false
 	if len(events) == limit && len(events) > 0 {
-		next, nextErr := h.coordinator.audits.ListEvents(r.Context(), events[len(events)-1].ID, 1)
+		next, nextErr := list(r.Context(), events[len(events)-1].ID, 1)
 		if nextErr != nil {
 			h.recordQueryFailure(r, actor)
 			writeAuditError(w, r, nextErr)

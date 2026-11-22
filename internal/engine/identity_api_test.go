@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -134,12 +135,31 @@ func TestIdentityAPICreationTargetsAndTokenReplay(t *testing.T) {
 		if event.Action == audit.ActionTokenCreated && event.Target == tokenResult.Selector && event.Actor == (authz.Actor{Kind: authz.ActorSystem, ID: "root"}) {
 			found["token"] = true
 		}
+		// Repeated reads by one actor coalesce into one event that counts them.
 		if event.Action == audit.ActionAuditQueried && event.Result == audit.ResultSuccess {
-			queries++
+			queries += int(event.Count)
 		}
 	}
 	if !found["account"] || !found["token"] || queries != 2 {
 		t.Fatalf("actual generated creation targets or audited reads missing: creations=%+v queryCount=%d", found, queries)
+	}
+	// order=desc reads newest first, and its cursor pages towards older events.
+	var newest auditPage
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, rootRequest(http.MethodGet, "/api/v1/audit/events?order=desc&limit=1"))
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &newest) != nil || len(newest.Items) != 1 || newest.Items[0].ID != events[len(events)-1].ID || newest.NextCursor != strconv.FormatUint(newest.Items[0].ID, 10) {
+		t.Fatalf("newest page status=%d body=%s", response.Code, response.Body)
+	}
+	var older auditPage
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, rootRequest(http.MethodGet, "/api/v1/audit/events?order=desc&limit=1&cursor="+newest.NextCursor))
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &older) != nil || len(older.Items) != 1 || older.Items[0].ID >= newest.Items[0].ID {
+		t.Fatalf("older page status=%d body=%s", response.Code, response.Body)
+	}
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, rootRequest(http.MethodGet, "/api/v1/audit/events?order=sideways"))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("unknown order status=%d", response.Code)
 	}
 }
 
@@ -151,8 +171,8 @@ func TestBootstrapAdminAPIIsRootOnlyAtomicAndAudited(t *testing.T) {
 	nonRoot.Header.Set("Content-Type", "application/json")
 	nonRoot.Header.Set("Idempotency-Key", "bootstrap-non-root")
 	nonRoot = nonRoot.WithContext(withVerifiedPrincipal(nonRoot.Context(), identity.Principal{
-		Account: identity.Account{ID: "12345678-1234-4234-8234-123456789abc"},
-		Actor: authz.Actor{Kind: authz.ActorAccount, ID: "12345678-1234-4234-8234-123456789abc"},
+		Account:      identity.Account{ID: "12345678-1234-4234-8234-123456789abc"},
+		Actor:        authz.Actor{Kind: authz.ActorAccount, ID: "12345678-1234-4234-8234-123456789abc"},
 		Capabilities: []authz.Capability{authz.UsersManage},
 	}, "127.0.0.1"))
 	denied := httptest.NewRecorder()

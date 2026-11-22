@@ -362,8 +362,9 @@ export class ApiClient {
     }, true);
   }
 
-  listAudit(cursor = '') {
-    const query = new URLSearchParams({ limit: '100' });
+  // Newest first; the cursor pages towards older events.
+  listAudit(cursor = '', limit = 100) {
+    const query = new URLSearchParams({ order: 'desc', limit: String(limit) });
     if (cursor) query.set('cursor', cursor);
     return this.request<Page<AuditEvent>>(`/api/v1/audit/events?${query}`);
   }

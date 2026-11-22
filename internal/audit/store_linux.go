@@ -380,10 +380,26 @@ func (s *Store) finish(ctx context.Context, outcome Outcome) error {
 	return nil
 }
 
+// ListEvents returns up to limit events after the given ID, oldest first.
 func (s *Store) ListEvents(ctx context.Context, after uint64, limit int) ([]Event, error) {
 	if after > uint64(1<<63-1) {
 		return nil, ErrInvalid
 	}
+	return s.listEvents(ctx, "id>? ORDER BY id", after, limit)
+}
+
+// ListEventsBefore returns up to limit events before the given ID, newest first; 0 starts from the newest.
+func (s *Store) ListEventsBefore(ctx context.Context, before uint64, limit int) ([]Event, error) {
+	if before > uint64(1<<63-1) {
+		return nil, ErrInvalid
+	}
+	if before == 0 {
+		before = 1<<63 - 1
+	}
+	return s.listEvents(ctx, "id<? ORDER BY id DESC", before, limit)
+}
+
+func (s *Store) listEvents(ctx context.Context, where string, bound uint64, limit int) ([]Event, error) {
 	if limit == 0 {
 		limit = 50
 	}
@@ -391,7 +407,7 @@ func (s *Store) ListEvents(ctx context.Context, after uint64, limit int) ([]Even
 		return nil, ErrInvalid
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT id,at,actor_kind,actor_id,source,action,target,result,operation_id,category,coalesced_count
-		FROM events WHERE id>? ORDER BY id LIMIT ?`, after, limit)
+		FROM events WHERE `+where+` LIMIT ?`, bound, limit)
 	if err != nil {
 		return nil, s.storageError(ctx, err)
 	}

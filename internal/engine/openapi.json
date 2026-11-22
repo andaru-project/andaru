@@ -5989,7 +5989,8 @@
         "x-required-capability": "audit.read",
         "parameters": [
           {"name": "cursor", "in": "query", "schema": {"type": "string"}},
-          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100}}
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100}},
+          {"name": "order", "in": "query", "description": "asc (the default) reads oldest first; desc reads newest first, and its cursor pages towards older events.", "schema": {"enum": ["asc", "desc"]}}
         ],
         "responses": {"200": {"description": "Audited, bounded security event page", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AuditPage"}}}}}
       },
@@ -6001,7 +6002,8 @@
         "x-required-capability": "audit.read",
         "parameters": [
           {"name": "cursor", "in": "query", "schema": {"type": "string"}},
-          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100}}
+          {"name": "limit", "in": "query", "schema": {"type": "integer", "minimum": 1, "maximum": 100}},
+          {"name": "order", "in": "query", "description": "asc (the default) reads oldest first; desc reads newest first, and its cursor pages towards older events.", "schema": {"enum": ["asc", "desc"]}}
         ],
         "responses": {"200": {"description": "Audited, paginated JSON export", "headers": {"Content-Disposition": {"schema": {"type": "string"}}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AuditPage"}}}}}
       },

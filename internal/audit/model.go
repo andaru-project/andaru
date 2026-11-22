@@ -246,7 +246,7 @@ var actionRules = map[Action]actionRule{
 	ActionBackupRestored:         {category: CategoryProtected},
 	ActionSetupCompleted:         {category: CategoryProtected},
 	ActionRecoveryCompleted:      {category: CategoryProtected, safety: true},
-	ActionAuditQueried:           {category: CategoryGeneral},
+	ActionAuditQueried:           {category: CategoryGeneral, coalesces: true},
 	ActionAuditHealth:            {category: CategoryProtected},
 	ActionAuditRetentionPruned:   {category: CategoryProtected},
 }
