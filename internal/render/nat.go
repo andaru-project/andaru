@@ -81,11 +81,17 @@ func (f *filter) portForwards() (prerouting, forward, input []string) {
 			}
 		}
 		// fib matches either family: the guard keeps an IPv4 forward to self off the firewall's IPv6 addresses.
-		// A negated destination is the exact complement: not an address of the ingress interface, or not in the alias.
-		neg := map[bool]string{false: "", true: "!= "}[pf.ToNegated]
-		to := nfproto + " fib daddr . iif type " + neg + "local"
+		to := nfproto + " fib daddr . iif type local"
 		if !pf.To.Self {
-			to = ip + " daddr " + neg + "@" + setName(pf.To.Address) + fam
+			to = ip + " daddr @" + setName(pf.To.Address) + fam
+		}
+		// A negated destination is the complement among unicast destinations: broadcasts and multicasts, such as
+		// service discovery, are never forwarded to one host.
+		if pf.ToNegated {
+			to = nfproto + " fib daddr . iif type != { local, broadcast, multicast }"
+			if !pf.To.Self {
+				to = ip + " daddr != @" + setName(pf.To.Address) + fam + " fib daddr type != { broadcast, multicast }"
+			}
 		}
 		// ct status dnat says a connection was translated, not by whom: each forward marks what it translates in the
 		// low 16 bits of the connection mark, and its rule admits that mark only. The high bits are left to others.
@@ -97,6 +103,11 @@ func (f *filter) portForwards() (prerouting, forward, input []string) {
 		}
 		tlast := tfirst + last - first
 		local := pf.Target != nil && (six || pf.Target.Self || slices.ContainsFunc(own, func(a netip.Addr) bool { return a.String() == pf.Target.Address }))
+		if pf.ToNegated && !pf.NoRedirect && !local {
+			// A negated destination catches internal clients going out, and a target beside them would answer them
+			// directly: the hairpin masquerade brings the replies back through the firewall.
+			f.reflection = true
+		}
 		key := map[bool]string{false: pf.Protocol, true: "th"}[pf.Protocol == "tcp-udp"]
 		switch {
 		case pf.NoRedirect:
@@ -286,18 +297,15 @@ func (f *filter) oneToOne() (prerouting, postrouting []string) {
 		_, out := mapping(internal, external)
 		// Each destination object is an alternative, one line each; none means any peer. Negated, one line names them all.
 		sources, peers := []string{""}, []string{""}
-		if len(o.Destination) > 0 && o.DestinationNegated {
-			var s, p []string
-			for _, id := range o.Destination {
-				s = append(s, "ip saddr != @"+setName(id)+"_4")
-				p = append(p, "ip daddr != @"+setName(id)+"_4")
-			}
-			sources, peers = []string{strings.Join(s, " ")}, []string{strings.Join(p, " ")}
-		} else if len(o.Destination) > 0 {
+		if len(o.Destination) > 0 {
 			sources, peers = nil, nil
+			is := map[bool]string{false: "@", true: "!= @"}[o.DestinationNegated]
 			for _, id := range o.Destination {
-				sources = append(sources, "ip saddr @"+setName(id)+"_4")
-				peers = append(peers, "ip daddr @"+setName(id)+"_4")
+				sources = append(sources, "ip saddr "+is+setName(id)+"_4")
+				peers = append(peers, "ip daddr "+is+setName(id)+"_4")
+			}
+			if o.DestinationNegated {
+				sources, peers = []string{strings.Join(sources, " ")}, []string{strings.Join(peers, " ")}
 			}
 		}
 		for _, s := range sources {

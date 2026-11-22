@@ -232,15 +232,14 @@ type portForward struct {
 // oneToOne is pfSense's 1:1 NAT: one address or prefix mapped both ways.
 type oneToOne struct {
 	identity
-	Enabled     bool     `json:"enabled"`
-	Zone        string   `json:"zone"`
-	External    string   `json:"external,omitempty"`
-	Internal    string   `json:"internal"`
-	Destination []string `json:"destination"`
-	// DestinationNegated makes the destination "every peer but these".
-	DestinationNegated bool `json:"destinationNegated,omitempty"`
-	NoBinat            bool `json:"noBinat,omitempty"`
-	Reflection         bool `json:"reflection,omitempty"`
+	Enabled            bool     `json:"enabled"`
+	Zone               string   `json:"zone"`
+	External           string   `json:"external,omitempty"`
+	Internal           string   `json:"internal"`
+	Destination        []string `json:"destination"`
+	DestinationNegated bool     `json:"destinationNegated,omitempty"`
+	NoBinat            bool     `json:"noBinat,omitempty"`
+	Reflection         bool     `json:"reflection,omitempty"`
 }
 type management struct {
 	Segment        string   `json:"segment"`

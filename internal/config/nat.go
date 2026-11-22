@@ -100,8 +100,7 @@ func validateNAT(d *declaration) []FieldError {
 		}
 		if f.ToNegated && f.Reflection {
 			bad(p+"/reflection", "A negated destination names no outside address for internal clients to ask, so it has no reflection.")
-		}
-		if six && f.Reflection {
+		} else if six && f.Reflection {
 			bad(p+"/reflection", "An IPv6 port forward reaches the firewall itself from every zone it names, so it has no reflection.")
 		}
 		first, last, ok := portSpan(f.Ports)
@@ -235,7 +234,7 @@ func validateNAT(d *declaration) []FieldError {
 			ref(fmt.Sprintf("%s/destination/%d", p, j), a)
 		}
 		if o.DestinationNegated {
-			if len(o.Destination) == 0 {
+			if len(o.Destination) == 0 && !o.NoBinat {
 				bad(p+"/destinationNegated", "Name the destinations to leave out.")
 			}
 			// The left-out destinations share one nft rule, as a negated rule side does.

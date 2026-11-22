@@ -62,7 +62,7 @@ Both lists live under `nat` next to `outbound`. They are ordered: position is ev
 | `ingressZones` | Zone IDs whose interfaces the connection arrives on; at least one. |
 | `protocol` | `tcp`, `udp` or `tcp-udp`. |
 | `from` | Address IDs. Empty means any source. `fromNegated: true` matches every source except these. |
-| `to` | The destination as the client sees it. Either `{"self": true}`, the firewall's own address on the interface the connection arrives on, whatever it is now (it follows DHCP and PPPoE changes without a re-render; pfSense's "This firewall (self)"), or `{"address": <address ID>}` (an IPv4 host, network, range or group). Required. `toNegated: true` matches every destination except this one; such a forward has no reflection. |
+| `to` | The destination as the client sees it. Either `{"self": true}`, the firewall's own address on the interface the connection arrives on, whatever it is now (it follows DHCP and PPPoE changes without a re-render; pfSense's "This firewall (self)"), or `{"address": <address ID>}` (an IPv4 host, network, range or group). Required. `toNegated: true` matches every unicast destination except this one; such a forward has no reflection. |
 | `ports` | One port, or one `first-last` range, 1–65535. |
 | `noRedirect` | An exclusion: matching connections are left untranslated and later forwards are not consulted. An exclusion has no target, filter rule or reflection. |
 | `target` | Required unless `noRedirect`. Either `{"address": "<IPv4>"}`, an inside host or one of the firewall's own static addresses, or `{"self": true}`, the firewall's address on the interface the connection arrived on. Virtual IPs (#37) are firewall addresses too: when they exist, `address` may name one, with no change to this field. |
