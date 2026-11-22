@@ -54,6 +54,12 @@ func decodeSavedWith(raw []byte, answers map[string]string) (d declaration, stor
 	if err = json.Unmarshal(raw, &head); err != nil {
 		return d, 0, nil, nil, errInvalidJSON
 	}
+	// An answer must name a decision; one whose question an earlier answer no longer raises is left unused.
+	for id := range answers {
+		if !slices.ContainsFunc(decisions, func(r decision) bool { return r.id == id }) {
+			return d, 0, nil, nil, fault("VALIDATION_FAILED", "/choices/"+id, fmt.Sprintf("No decision is called %q.", id))
+		}
+	}
 	if head.SchemaVersion >= schemaVersion {
 		d, err = decodeDeclaration(raw)
 		return d, head.SchemaVersion, nil, nil, err
@@ -77,7 +83,8 @@ func decodeSavedWith(raw []byte, answers map[string]string) (d declaration, stor
 		}
 		questions = append(questions, met...)
 	}
-	// The migration from schema 4 adds its step after this one: its decisions, then its change.
+	// The migration from schema 4 adds its step after this one, its decisions then its change, and gates the legacy
+	// validation and upgradeLegacy above on a document of schema 1 to 3.
 	origin = upgradeLegacy(m)
 	upgraded, err := json.Marshal(m)
 	if err == nil && len(origin) > 0 {
@@ -85,11 +92,6 @@ func decodeSavedWith(raw []byte, answers map[string]string) (d declaration, stor
 	}
 	if err != nil {
 		return d, 0, nil, nil, err
-	}
-	for id := range answers {
-		if !slices.ContainsFunc(questions, func(q Question) bool { return q.ID == id }) {
-			return d, 0, nil, nil, fault("VALIDATION_FAILED", "/choices", fmt.Sprintf("This version has no question %q.", id))
-		}
 	}
 	d, err = decodeDeclaration(upgraded)
 	return d, head.SchemaVersion, origin, questions, err

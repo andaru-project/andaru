@@ -81,7 +81,7 @@ func TestDecisionReadsProvisionallyUntilAnswered(t *testing.T) {
 		t.Fatal("an answer that is no choice was accepted")
 	}
 	if _, _, _, _, err = decodeSavedWith(raw, map[string]string{"renme": "rename"}); err == nil {
-		t.Fatal("an answer to no question was accepted")
+		t.Fatal("an answer to no decision was accepted")
 	}
 	// A document of the current schema meets no decision of an older one.
 	current, err := canonical(d)
@@ -106,6 +106,10 @@ func TestLaterDecisionSeesEarlierChoice(t *testing.T) {
 	_, _, _, questions, err := decodeSavedWith(raw, map[string]string{"first": "mark"})
 	if err != nil || len(questions) != 2 || questions[1].ID != "second" || questions[1].Answered {
 		t.Fatalf("after marking: %+v %v", questions, err)
+	}
+	// An answer to a question the first choice no longer raises is left unused, not refused.
+	if _, _, _, questions, err = decodeSavedWith(raw, map[string]string{"first": "keep", "second": "rename"}); err != nil || len(questions) != 1 {
+		t.Fatalf("a stale answer: %+v %v", questions, err)
 	}
 	// A document saved under schema 3 never meets schema 2's decision.
 	if _, _, _, questions, err = decodeSavedWith(legacyAt(t, 3), nil); err != nil || len(questions) != 0 {
