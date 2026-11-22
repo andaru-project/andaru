@@ -115,6 +115,10 @@ func (s *Store) prepareRestore(ctx context.Context, actor authz.Actor, expected 
 	if current.Version != expected {
 		return nil, empty, fault("PRECONDITION_FAILED", "/expectedSavedVersion", "The saved configuration changed since restore was previewed.")
 	}
+	// A restore without a configuration saves the head's again, which during the hold is its provisional reading.
+	if decoded.configuration == nil && len(current.questions) > 0 {
+		return nil, empty, ErrUpgradePending
+	}
 	prepared, preview, err := prepareRestoration(&current, decoded, next, time.Now().UTC())
 	if err != nil {
 		return nil, empty, err

@@ -488,6 +488,14 @@ func TestRestoreDuringTheHold(t *testing.T) {
 	if _, err := s.Restore(ctx, rootRestoreActor, "2", RestoreDocuments{Configuration: legacyDocument(t)}); faultCode(err) != "VALIDATION_FAILED" {
 		t.Fatalf("a backup needing decisions: %v", err)
 	}
+	// A restore of the secrets alone would save the head's provisional reading with them.
+	secrets, err := s.Export(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Restore(ctx, rootRestoreActor, "2", RestoreDocuments{ConfigurationSecrets: secrets.ConfigurationSecrets}); faultCode(err) != "SETTINGS_UPGRADE_PENDING" {
+		t.Fatalf("a secrets-only restore during the hold: %v", err)
+	}
 	withDecisions(t)
 	d, _, _, err := decodeSaved(legacyDocument(t))
 	if err != nil {
