@@ -7349,7 +7349,7 @@
           },
           "writtenBy": {
             "type": "string",
-            "description": "The Andaru version that saved this version; absent for one saved before that was recorded."
+            "description": "The Andaru version that saved this version; absent when the Andaru that saved it did not record it."
           }
         }
       },

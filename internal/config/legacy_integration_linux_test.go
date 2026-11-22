@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -199,15 +200,31 @@ func TestRestoreOntoALegacyHead(t *testing.T) {
 }
 
 // Every saved version says which Andaru wrote it, so an engine that finds versions a newer Andaru saved can tell
-// them from its own. A version saved before that was recorded says nothing.
+// them from its own. A version whose Andaru did not record it says nothing.
 func TestSavedVersionsNameTheirWriter(t *testing.T) {
 	ctx := context.Background()
 	old := Writer
 	t.Cleanup(func() { Writer = old })
-	Writer = "0.5.0-a.4"
-	s, _ := legacyStore(t)
+	s, root := legacyStore(t)
+	// A store an engine before left: no table of writers at all. Opening it adds the table.
+	if _, err := s.configDB.ExecContext(ctx, "DROP TABLE version_writers"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s = openTestStore(t, root)
 	Writer = "0.5.0-a.5"
 	if _, err := s.Save(ctx, systemRootActor, createZone("guest")); err != nil {
+		t.Fatal(err)
+	}
+	// A build without a version, or with an absurd one, still saves.
+	Writer = ""
+	if _, err := s.Save(ctx, systemRootActor, createZone("iot")); err != nil {
+		t.Fatal(err)
+	}
+	Writer = strings.Repeat("v", 200)
+	if _, err := s.Save(ctx, systemRootActor, createZone("lab")); err != nil {
 		t.Fatal(err)
 	}
 	history, err := s.History(ctx, nil, 10)
@@ -218,11 +235,16 @@ func TestSavedVersionsNameTheirWriter(t *testing.T) {
 	for _, item := range history.Items {
 		got = append(got, string(item.ID)+"="+item.WrittenBy)
 	}
-	// Version 0 was written when the store was made; 1 and 2 are the fixture's, put in as an engine before did.
-	if want := []string{"3=0.5.0-a.5", "2=", "1=", "0=0.5.0-a.4"}; !slices.Equal(got, want) {
+	if want := []string{"5=" + strings.Repeat("v", 128), "4=unknown", "3=0.5.0-a.5", "2=", "1=", "0="}; !slices.Equal(got, want) {
 		t.Fatalf("writers %v, want %v", got, want)
 	}
 	if one, err := s.Version(ctx, "3"); err != nil || one.WrittenBy != "0.5.0-a.5" {
 		t.Fatalf("version 3: %+v %v", one.VersionInfo, err)
+	}
+	// A store made now names the writer of its first version too.
+	Writer = "0.5.0-a.5"
+	fresh, err := openTestStore(t, ownedDir(t)).History(ctx, nil, 10)
+	if err != nil || len(fresh.Items) != 1 || fresh.Items[0].WrittenBy != "0.5.0-a.5" {
+		t.Fatalf("a new store's history: %+v %v", fresh.Items, err)
 	}
 }

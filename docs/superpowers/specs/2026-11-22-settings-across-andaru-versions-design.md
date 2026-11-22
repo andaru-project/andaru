@@ -21,8 +21,8 @@ An image can go back: `bootc rollback` boots the previous deployment. The settin
 ## Step 1, implemented: every saved version names its writer
 
 - A table beside the others, `version_writers`, holds the Andaru version that saved each version. An older engine never reads it and still opens the store.
-- The history and each version's view serve it as `writtenBy`. A version saved before this has none.
-- The engine writes its build's version; a development build writes `development`.
+- The history and each version's view serve it as `writtenBy`. A version has none when the Andaru that saved it did not record it: every engine up to `0.5.0-a.4`, also when it comes back after a rollback and saves.
+- The engine writes its build's version. A release writes its release version; an image built without one writes `0.0.0-dev`, a pull request's image `0.0.0-prN`, and a bare `go build` writes `development`. A build with no version at all writes `unknown`, and never fails a save for it.
 
 This lands before the next release, so that every version saved from then on can be told apart. Nothing else changes yet: an engine still refuses a head of a form it does not know.
 
@@ -46,7 +46,7 @@ The newer Andaru boots again and finds that the head was saved by an older Andar
 
 ## Open for the owner
 
-1. **Comparing Andaru versions.** "Newer" needs an order between `0.5.0-a.4`, `0.5.0`, a nightly and `development`. Proposed: the release order of the version strings, with a nightly and a development build treated as newer than any release they cannot be compared with, so that they ask instead of assuming.
+1. **Comparing Andaru versions.** "Newer" needs an order between `0.5.0-a.4`, `0.5.0`, a nightly and `development`. Proposed: the release order of the version strings, with a nightly and every development form (`development`, `0.0.0-dev`, `0.0.0-prN`, `unknown`) treated as unlike any other version, so that they ask instead of assuming. A version with no recorded writer was saved by `0.5.0-a.4` or older.
 2. **What "this Andaru" means.** Proposed: the exact version string. A patch release then asks once after an upgrade done again; the alternative is to group by the settings' form, which asks less often and is less exact.
 3. **The other stores.** The account database, the audit log and the web preferences have no version history. Proposed: the account database gets the snapshot the issue first described (a copy at the old layout before a migration, which an older engine opens), since accounts must work for anyone to make the choice above; the audit log is append-only and is left alone; preferences are dropped when unreadable, and the user is told.
 4. **Engines already released,** up to `0.5.0-a.4`, refuse a newer form. The first upgrade past them cannot be rolled back after a save, whatever is built here. Proposed: the release notes of the next release say so.

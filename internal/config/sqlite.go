@@ -57,12 +57,21 @@ const firewallDDL = `CREATE TABLE IF NOT EXISTS firewall_changes(collection TEXT
 CREATE UNIQUE INDEX IF NOT EXISTS firewall_creation_identity ON firewall_changes(object_id) WHERE created=1;`
 
 // writerDDL records which Andaru wrote each saved version, added beside the others as policy_changes was. A
-// version saved before the table existed has no row. It is what lets an engine that finds versions a newer
-// Andaru wrote tell them from its own, and offer the latest it wrote itself (#121).
+// version has no row when the Andaru that saved it did not record one: every engine up to 0.5.0-a.4, also when
+// it comes back after a rollback. It is what lets an engine that finds versions a newer Andaru wrote tell them
+// from its own, and offer the latest it wrote itself (#121).
 const writerDDL = `CREATE TABLE IF NOT EXISTS version_writers(version_id INTEGER PRIMARY KEY REFERENCES versions(id),andaru_version TEXT NOT NULL CHECK(length(andaru_version) BETWEEN 1 AND 128));`
 
 // Writer is the Andaru version this process writes saved versions as. The engine sets it from its build.
 var Writer = "development"
+
+// writer is Writer as the store takes it. A build with no version, or an absurd one, must never stop a save.
+func writer() string {
+	if Writer == "" {
+		return "unknown"
+	}
+	return Writer[:min(len(Writer), 128)]
+}
 
 // changeTables are all the tables object versions are recorded in.
 var changeTables = []string{"object_changes", "policy_changes", "service_changes", "nat_changes", "dhcp6_changes", "vip_changes", "role_changes", "firewall_changes"}
@@ -228,7 +237,7 @@ func initializePair(ctx context.Context, stage string) (result error) {
 	if _, e = tx.ExecContext(ctx, "INSERT INTO versions VALUES(0,NULL,?,?,?,?,?,0)", schemaVersion, ch[:], sh[:], time.Now().UTC().Format(time.RFC3339Nano), "system.root"); e != nil {
 		return e
 	}
-	if _, e = tx.ExecContext(ctx, "INSERT INTO version_writers VALUES(0,?)", Writer); e != nil {
+	if _, e = tx.ExecContext(ctx, "INSERT INTO version_writers(version_id,andaru_version) VALUES(0,?)", writer()); e != nil {
 		return e
 	}
 	if _, e = tx.ExecContext(ctx, "INSERT INTO pointers VALUES('saved',0)"); e != nil {
@@ -295,7 +304,7 @@ func publishVersion(ctx context.Context, c *sql.Conn, p preparedChange, actor st
 	if _, e = c.ExecContext(ctx, "INSERT INTO versions(id,parent_id,schema_version,config_sha256,secrets_sha256,created_at,actor,changed_object_count) VALUES(?,?,?,?,?,?,?,?)", next, parent, p.State.Config.SchemaVersion, ch[:], sh[:], time.Now().UTC().Format(time.RFC3339Nano), actor, len(p.Changed)); e != nil {
 		return e
 	}
-	if _, e = c.ExecContext(ctx, "INSERT INTO version_writers VALUES(?,?)", next, Writer); e != nil {
+	if _, e = c.ExecContext(ctx, "INSERT INTO version_writers(version_id,andaru_version) VALUES(?,?)", next, writer()); e != nil {
 		return e
 	}
 	for _, change := range p.Changed {
