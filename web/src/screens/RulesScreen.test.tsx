@@ -58,7 +58,7 @@ it('says what Andaru always does before any rule, and counts the port forwards t
   show();
   const fixed = await screen.findByRole('region', { name: 'Before any rule' });
   expect(fixed).toHaveTextContent('SSH to this firewall from the management segment, LAN, is always accepted');
-  expect(fixed).toHaveTextContent('Port forwards let their own traffic in (1).');
+  expect(fixed).toHaveTextContent('Port forwards that let their own traffic in: 1.');
 });
 
 it('says the filter is off without a management segment, rather than showing rules that look live', async () => {
@@ -196,7 +196,7 @@ it('opens a saved rule in the panel with every field as saved, and saves it whol
   const full = rule('rul_a', 'LAN out', { description: 'Why it is here', enabled: false, action: 'drop', from: side([lan], ['adr_printers'], true), to: side([wan]), ports: ['svc_https'], log: false });
   const { fetch } = show({ '/api/v1/config/rules': list([full]), 'PUT /api/v1/config/rules/rul_a': { value: full, version: '10' } });
   await user.click(await screen.findByRole('button', { name: 'Edit rule 1, LAN out' }));
-  const panel = await screen.findByRole('dialog', { name: 'Edit LAN out' });
+  const panel = await screen.findByRole('dialog', { name: 'Edit rule: LAN out' });
   await user.click(within(panel).getByRole('switch', { name: 'Log what this rule matches' }));
   await user.click(within(panel).getByRole('button', { name: 'Save rule' }));
   await waitFor(() => expect(sent(fetch, 'PUT')).toHaveLength(1));
@@ -213,7 +213,7 @@ it('drops "not" from a side that names no address to leave out', async () => {
     'PUT /api/v1/config/rules/rul_a': { value: rule('rul_a', 'LAN out'), version: '10' },
   });
   await user.click(await screen.findByRole('button', { name: 'Edit rule 1, LAN out' }));
-  await user.click(within(await screen.findByRole('dialog', { name: 'Edit LAN out' })).getByRole('button', { name: 'Save rule' }));
+  await user.click(within(await screen.findByRole('dialog', { name: 'Edit rule: LAN out' })).getByRole('button', { name: 'Save rule' }));
   await waitFor(() => expect(sent(fetch, 'PUT')).toHaveLength(1));
   expect(JSON.parse(String(sent(fetch, 'PUT')[0][1]?.body)).from).toEqual({ zones: [lan], addresses: [] });
 });
@@ -279,12 +279,12 @@ it('reads the list again when the panel\'s save is refused, so the rule opens ne
     },
   });
   await user.click(await screen.findByRole('button', { name: 'Edit rule 1, DNS to the firewall' }));
-  let panel = await screen.findByRole('dialog', { name: 'Edit DNS to the firewall' });
+  let panel = await screen.findByRole('dialog', { name: 'Edit rule: DNS to the firewall' });
   await user.click(within(panel).getByRole('button', { name: 'Save rule' }));
   expect(await within(panel).findByText(/changed by someone else/)).toBeInTheDocument();
   await user.click(within(panel).getByRole('button', { name: 'Cancel' }));
   await user.click(await screen.findByRole('button', { name: 'Edit rule 1, DNS to the firewall' }));
-  panel = await screen.findByRole('dialog', { name: 'Edit DNS to the firewall' });
+  panel = await screen.findByRole('dialog', { name: 'Edit rule: DNS to the firewall' });
   await user.click(within(panel).getByRole('button', { name: 'Save rule' }));
   await waitFor(() => expect(sent(fetch, 'PUT')).toHaveLength(2));
   expect(new Headers(sent(fetch, 'PUT')[1][1]?.headers).get('If-Match')).toBe('"rul_b.6"');
@@ -326,4 +326,33 @@ it('shows the rules after three tries even when the two reads never agree', asyn
   const { fetch } = show({ '/api/v1/config': { ...config(), savedVersion: '8' } });
   await screen.findByText('LAN out, except the printers');
   expect(fetch.mock.calls.filter(([path]) => path === '/api/v1/config')).toHaveLength(3);
+});
+
+it('lets only the grips act while the order is unlocked, and says each rule\'s state in words', async () => {
+  const user = userEvent.setup();
+  show();
+  await screen.findByText('Old rule');
+  // A side that names nothing is any network; ports that name nothing are any.
+  const third = within(rows()[2]).getAllByRole('cell');
+  expect(third[3]).toHaveTextContent('any network');
+  expect(third[5]).toHaveTextContent(/^any$/);
+  await user.click(screen.getByRole('button', { name: 'Edit order' }));
+  expect(screen.queryByRole('switch')).not.toBeInTheDocument();
+  expect(within(rows()[0]).getAllByRole('cell')[1]).toHaveTextContent('on');
+  expect(within(rows()[2]).getAllByRole('cell')[1]).toHaveTextContent('off');
+  for (const name of ['Edit rule 1, LAN out, except the printers', 'Delete rule 1, LAN out, except the printers', 'Add rule']) expect(screen.getByRole('button', { name })).toBeDisabled();
+  expect(screen.getByText(/Drag a rule by its grip to move it/)).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Done' }));
+  expect(screen.getByRole('switch', { name: 'Enable rule 1, LAN out, except the printers' })).toBeEnabled();
+  expect(screen.getByRole('button', { name: 'Add rule' })).toBeEnabled();
+});
+
+it('names each side\'s except switch by its side, and says where a new rule goes', async () => {
+  const user = userEvent.setup();
+  show();
+  await user.click(await screen.findByRole('button', { name: 'Add rule' }));
+  const panel = await screen.findByRole('dialog', { name: 'Add rule' });
+  expect(within(panel).getByRole('switch', { name: /^From: except these addresses/ })).toBeDisabled();
+  expect(within(panel).getByRole('switch', { name: /^To: except these addresses/ })).toBeDisabled();
+  expect(within(panel).getByText(/A new rule is added at the bottom of the list/)).toBeInTheDocument();
 });

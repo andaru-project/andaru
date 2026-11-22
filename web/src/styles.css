@@ -380,6 +380,21 @@ path.traffic-sent {
   .mantine-ActionIcon-root {
     min-width: 2.75rem;
   }
+
+  /* A switch saves at a tap, and a list of uses opens at one: their whole row is the target. Padding, not a
+     flex box, so a summary keeps its disclosure mark and a segment its centred label. */
+  /* A switch's body is a flex row already, so its height can grow; a summary keeps its display. */
+  .mantine-Switch-body {
+    min-height: 2.75rem;
+  }
+
+  .data-table summary {
+    padding-block: 0.7rem;
+  }
+
+  .mantine-SegmentedControl-label {
+    padding-block: 0.7rem;
+  }
 }
 
 /* Below 600px a table row becomes a block, one labelled field per line. The header row stays for assistive
@@ -536,4 +551,23 @@ path.traffic-sent {
   background: transparent;
   border-color: transparent;
   color: var(--mantine-color-gray-4);
+}
+
+/* A side panel's Save and Cancel stay in view however long its form, and a focused field never hides under them. */
+.mantine-Drawer-content {
+  scroll-padding-bottom: 5rem;
+}
+
+.drawer-actions {
+  background: var(--mantine-color-body);
+  border-top: 1px solid var(--mantine-color-default-border);
+  bottom: 0;
+  margin-inline: calc(var(--mantine-spacing-md) * -1);
+  padding: var(--mantine-spacing-sm) var(--mantine-spacing-md);
+  position: sticky;
+  z-index: 1;
+}
+
+.grow {
+  flex: 1 1 14rem;
 }

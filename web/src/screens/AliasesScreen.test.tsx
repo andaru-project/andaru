@@ -46,14 +46,14 @@ it('lists address and port aliases in one table by name, with what each holds', 
   show();
   await screen.findByText('nas');
   expect(rows().map((row) => within(row).getAllByRole('cell')[0].textContent)).toEqual(['any ICMPv6', 'lab', 'nasThe file server', 'ping', 'pool', 'servers', 'usual', 'web']);
-  expect(cells('nas').slice(1, 3).map((cell) => cell.textContent)).toEqual(['address: host', '192.168.1.10']);
+  expect(cells('nas').slice(1, 3).map((cell) => cell.textContent)).toEqual(['Host', '192.168.1.10']);
   expect(cells('lab')[2]).toHaveTextContent('10.9.0.0/24');
   expect(cells('pool')[2]).toHaveTextContent('192.168.1.50 to 192.168.1.99');
-  expect(cells('servers').slice(1, 3).map((cell) => cell.textContent)).toEqual(['address: group', 'nas, lab']);
-  expect(cells('web').slice(1, 3).map((cell) => cell.textContent)).toEqual(['port', 'TCP 80, 443']);
+  expect(cells('servers').slice(1, 3).map((cell) => cell.textContent)).toEqual(['Address group', 'nas, lab']);
+  expect(cells('web').slice(1, 3).map((cell) => cell.textContent)).toEqual(['Port', 'TCP 80, 443']);
   expect(cells('ping')[2]).toHaveTextContent('ICMP echo-request');
   expect(cells('any ICMPv6')[2]).toHaveTextContent('ICMPv6 any type');
-  expect(cells('usual').slice(1, 3).map((cell) => cell.textContent)).toEqual(['port: group', 'web, ping']);
+  expect(cells('usual').slice(1, 3).map((cell) => cell.textContent)).toEqual(['Port group', 'web, ping']);
 });
 
 it('says where each alias is used: rules by their place, groups, the management sources and NAT', async () => {
@@ -151,7 +151,7 @@ it('opens a saved alias with its fields and saves it whole against its version',
   const user = userEvent.setup();
   const { fetch } = show({ 'PUT /api/v1/config/aliases/addresses/adr_pool': { value: addresses[2], version: '10' }, 'PUT /api/v1/config/aliases/ports/svc_usual': { value: ports[3], version: '10' } });
   await user.click(await screen.findByRole('button', { name: 'Edit address alias pool' }));
-  let panel = await screen.findByRole('dialog', { name: 'Edit address alias pool' });
+  let panel = await screen.findByRole('dialog', { name: 'Edit address alias: pool' });
   await user.clear(within(panel).getByLabelText('Last address'));
   await user.type(within(panel).getByLabelText('Last address'), '192.168.1.80');
   await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
@@ -159,9 +159,9 @@ it('opens a saved alias with its fields and saves it whole against its version',
   expect(new Headers(sent(fetch, 'PUT')[0][1]?.headers).get('If-Match')).toBe('"adr_pool.4"');
   expect(JSON.parse(String(sent(fetch, 'PUT')[0][1]?.body))).toEqual({ name: 'pool', kind: 'range', first: '192.168.1.50', last: '192.168.1.80' });
   // A group keeps its members when nothing about them is touched.
-  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Edit address alias pool' })).not.toBeInTheDocument());
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Edit address alias: pool' })).not.toBeInTheDocument());
   await user.click(await screen.findByRole('button', { name: 'Edit port alias usual' }));
-  panel = await screen.findByRole('dialog', { name: 'Edit port alias usual' });
+  panel = await screen.findByRole('dialog', { name: 'Edit port alias: usual' });
   await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
   await waitFor(() => expect(sent(fetch, 'PUT')).toHaveLength(2));
   expect(JSON.parse(String(sent(fetch, 'PUT')[1][1]?.body))).toEqual({ name: 'usual', protocol: 'group', members: ['svc_web', 'svc_ping'] });
@@ -199,12 +199,12 @@ it('says the alias changed underneath when its save is refused for that, and ope
     },
   });
   await user.click(await screen.findByRole('button', { name: 'Edit port alias web' }));
-  let panel = await screen.findByRole('dialog', { name: 'Edit port alias web' });
+  let panel = await screen.findByRole('dialog', { name: 'Edit port alias: web' });
   await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
   expect(await within(panel).findByText(/This port alias was changed by someone else/)).toBeInTheDocument();
   await user.click(within(panel).getByRole('button', { name: 'Cancel' }));
   await user.click(await screen.findByRole('button', { name: 'Edit port alias web' }));
-  panel = await screen.findByRole('dialog', { name: 'Edit port alias web' });
+  panel = await screen.findByRole('dialog', { name: 'Edit port alias: web' });
   await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
   await waitFor(() => expect(sent(fetch, 'PUT')).toHaveLength(2));
   expect(new Headers(sent(fetch, 'PUT')[1][1]?.headers).get('If-Match')).toBe('"svc_web.5"');
@@ -255,7 +255,7 @@ it('offers a group the aliases of its kind that are not groups, and never itself
   const user = userEvent.setup();
   show();
   await user.click(await screen.findByRole('button', { name: 'Edit address alias servers' }));
-  const panel = await screen.findByRole('dialog', { name: 'Edit address alias servers' });
+  const panel = await screen.findByRole('dialog', { name: 'Edit address alias: servers' });
   const members = within(panel).getByLabelText('Members');
   await user.click(members);
   expect(within(document.getElementById(members.getAttribute('aria-controls')!)!).getAllByRole('option', { hidden: true }).map((option) => option.textContent)).toEqual(['lab', 'nas', 'pool']);
@@ -265,7 +265,7 @@ it('does not ask the engine to make a group of an alias that is in one', async (
   const user = userEvent.setup();
   const { fetch } = show();
   await user.click(await screen.findByRole('button', { name: 'Edit address alias nas' }));
-  const panel = await screen.findByRole('dialog', { name: 'Edit address alias nas' });
+  const panel = await screen.findByRole('dialog', { name: 'Edit address alias: nas' });
   await user.selectOptions(within(panel).getByLabelText('Kind'), 'A group of address aliases');
   await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
   expect(within(panel).getByText('This alias is in the group servers, and a group cannot hold a group.')).toBeInTheDocument();
@@ -320,14 +320,14 @@ it('says what happened when a save or a delete is refused, and reads the list ag
   await waitFor(() => expect(reads()).toBe(3));
 
   await user.click(await screen.findByRole('button', { name: 'Edit address alias pool' }));
-  let panel = await screen.findByRole('dialog', { name: 'Edit address alias pool' });
+  let panel = await screen.findByRole('dialog', { name: 'Edit address alias: pool' });
   await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
   expect(await within(panel).findByText(/This address alias was deleted by someone else/)).toBeInTheDocument();
   await waitFor(() => expect(reads()).toBe(4));
   await user.click(within(panel).getByRole('button', { name: 'Cancel' }));
 
   await user.click(await screen.findByRole('button', { name: 'Edit port alias web' }));
-  panel = await screen.findByRole('dialog', { name: 'Edit port alias web' });
+  panel = await screen.findByRole('dialog', { name: 'Edit port alias: web' });
   await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
   await waitFor(() => expect(onSessionLost).toHaveBeenCalledTimes(1));
   expect(reads()).toBe(4);
@@ -363,4 +363,19 @@ it('says on the page what became of a save whose panel was closed before it answ
   answer(jsonResponse(503, { error: { code: 'UNAVAILABLE', message: 'The store is busy.' } }));
   expect(await screen.findByText('The store is busy.')).toBeInTheDocument();
   expect(screen.getByRole('dialog', { name: 'Add address alias' })).toBeInTheDocument();
+});
+
+it('filters by every word of what a row shows, beside the kind', async () => {
+  const user = userEvent.setup();
+  show();
+  await screen.findByText('nas');
+  const filter = screen.getByLabelText('Filter aliases');
+  for (const [text, names] of [['192.168', ['nasThe file server', 'pool']], ['tcp 443', ['web']], ['address group', ['servers']], ['file server', ['nasThe file server']]] as const) {
+    await user.clear(filter);
+    await user.type(filter, text);
+    expect(rows().map((row) => within(row).getAllByRole('cell')[0].textContent)).toEqual(names);
+  }
+  await user.clear(filter);
+  await user.type(filter, 'nothing like it');
+  expect(screen.getByText('No alias matches the filter.')).toBeInTheDocument();
 });

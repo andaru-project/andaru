@@ -1,8 +1,9 @@
-import { Alert, Badge, Button, Group, Modal, SegmentedControl, Stack, Table, Text, Title } from '@mantine/core';
+import { Alert, Badge, Button, Group, Modal, SegmentedControl, Stack, Table, Text, TextInput, Title } from '@mantine/core';
 import { useCallback, useState } from 'react';
 import { ApiError, reportError, type ApiClient } from '../api';
 import type { AddressAlias, AliasKinds, PortAlias, SavedObject, Session, Snapshot } from '../types';
 import { useResource } from '../useResource';
+import { Address } from './Address';
 import { AliasEditor } from './AliasEditor';
 import { Loaded } from './Loaded';
 
@@ -13,7 +14,21 @@ type Kind = keyof AliasKinds;
 export type Row = { kind: 'addresses'; item: SavedObject<AddressAlias> } | { kind: 'ports'; item: SavedObject<PortAlias> };
 
 const protocols: Record<PortAlias['protocol'], string> = { tcp: 'TCP', udp: 'UDP', icmp: 'ICMP', icmpv6: 'ICMPv6', group: 'group' };
+const kinds: Record<AddressAlias['kind'], string> = { host: 'Host', network: 'Network', range: 'Range', group: 'Address group' };
+const kindLabel = (row: Row) => (row.kind === 'addresses' ? kinds[row.item.value.kind] : row.item.value.protocol === 'group' ? 'Port group' : 'Port');
 
+// What an address alias holds, with addresses in their own type so they break only where they may.
+function Holds({ row, names }: { row: Row; names: Map<string, string> }) {
+  if (row.kind === 'addresses') {
+    const alias = row.item.value;
+    if (alias.kind === 'host' && alias.address) return <Address value={alias.address} />;
+    if (alias.kind === 'network' && alias.prefix) return <Address value={alias.prefix} />;
+    if (alias.kind === 'range' && alias.first && alias.last) return <Group gap={4} wrap="wrap"><Address value={alias.first} />{' '}<Text size="sm">to</Text>{' '}<Address value={alias.last} /></Group>;
+  }
+  return <Text size="sm">{holds(row, names)}</Text>;
+}
+
+// What an alias holds, as words for the filter to search.
 function holds(row: Row, names: Map<string, string>) {
   const members = (ids: string[] = []) => ids.map((id) => names.get(id) ?? 'unknown alias').join(', ');
   if (row.kind === 'addresses') {
@@ -52,6 +67,7 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
     }
   }, [api]), onSessionLost);
   const [show, setShow] = useState<'all' | Kind>('all');
+  const [filter, setFilter] = useState('');
   const [editing, setEditing] = useState<Row | Kind>();
   const [deleting, setDeleting] = useState<Row>();
   const [busy, setBusy] = useState(false);
@@ -96,15 +112,23 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
             ...ports.items.map((item): Row => ({ kind: 'ports', item })),
           ].sort((a, b) => a.item.value.name.localeCompare(b.item.value.name));
           const names = new Map(rows.map((row) => [row.item.value.id, row.item.value.name]));
-          const shown = rows.filter((row) => show === 'all' || row.kind === show);
+          // Every word of the filter must be somewhere in what the row shows.
+          const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
+          const matches = (row: Row) => { const text = [row.item.value.name, row.item.value.description ?? '', kindLabel(row), holds(row, names) ?? ''].join(' ').toLowerCase(); return words.every((word) => text.includes(word)); };
+          const shown = rows.filter((row) => (show === 'all' || row.kind === show) && matches(row));
           const usedBy = (row: Row) => uses(row.item.value.id, rows, snapshot);
           const blockers = deleting ? usedBy(deleting) : [];
           const noun = (row: Row) => (row.kind === 'addresses' ? 'address alias' : 'port alias');
           return (
             <Stack>
-              <SegmentedControl aria-label="Kind of alias" value={show} onChange={(next) => setShow(next as typeof show)}
-                data={[{ value: 'all', label: 'All' }, { value: 'addresses', label: 'Addresses' }, { value: 'ports', label: 'Ports' }]} />
-              {shown.length === 0 ? <Alert role="status" title="No aliases">{rows.length === 0 ? 'None is saved yet. A rule can name zones without any; an alias is for naming hosts, networks and ports.' : 'None of this kind is saved.'}</Alert> : (
+              {rows.length > 0 && (
+                <Group align="flex-end" gap="sm">
+                  <TextInput className="grow" label="Filter aliases" placeholder="A name, address or port" value={filter} onChange={(event) => setFilter(event.currentTarget.value)} />
+                  <SegmentedControl aria-label="Kind of alias" value={show} onChange={(next) => setShow(next as typeof show)}
+                    data={[{ value: 'all', label: 'All' }, { value: 'addresses', label: 'Addresses' }, { value: 'ports', label: 'Ports' }]} />
+                </Group>
+              )}
+              {shown.length === 0 ? <Alert role="status" title="No aliases">{rows.length === 0 ? 'None is saved yet. A rule can name zones without any; an alias is for naming hosts, networks and ports.' : words.length > 0 ? 'No alias matches the filter.' : 'None of this kind is saved.'}</Alert> : (
                 <Table className="data-table aliases" verticalSpacing="xs">
                   <Table.Thead><Table.Tr><Table.Th>Name</Table.Th><Table.Th>Kind</Table.Th><Table.Th>Holds</Table.Th><Table.Th>Used by</Table.Th>{canWrite && <Table.Th>Actions</Table.Th>}</Table.Tr></Table.Thead>
                   <Table.Tbody>
@@ -114,8 +138,8 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
                       return (
                         <Table.Tr key={alias.id}>
                           <Table.Td data-label="Name"><Text size="sm" fw={600}>{alias.name}</Text>{alias.description && <Text size="sm" c="dimmed">{alias.description}</Text>}</Table.Td>
-                          <Table.Td data-label="Kind"><Badge variant="default" className="alias">{row.kind === 'addresses' ? `address: ${row.item.value.kind}` : `port${row.item.value.protocol === 'group' ? ': group' : ''}`}</Badge></Table.Td>
-                          <Table.Td data-label="Holds"><Text size="sm">{holds(row, names)}</Text></Table.Td>
+                          <Table.Td data-label="Kind"><Badge variant={row.kind === 'addresses' ? 'default' : 'light'} color="gray" className="alias" tt="none">{kindLabel(row)}</Badge></Table.Td>
+                          <Table.Td data-label="Holds"><Holds row={row} names={names} /></Table.Td>
                           <Table.Td data-label="Used by">
                             {used.length === 0 ? <Text size="sm" c="dimmed">nothing</Text> : (
                               <details><summary>{used.length === 1 ? '1 use' : `${used.length} uses`}</summary><ul className="fixed-rules">{used.map((use) => <li key={use}>{use}</li>)}</ul></details>
@@ -125,7 +149,7 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
                             <Table.Td>
                               <Group gap="xs" wrap="nowrap">
                                 <Button size="compact-xs" variant="default" disabled={busy} aria-label={`Edit ${noun(row)} ${alias.name}`} onClick={() => setEditing(row)}>Edit</Button>
-                                <Button size="compact-xs" variant="default" color="red" disabled={busy} aria-label={`Delete ${noun(row)} ${alias.name}`} onClick={() => setDeleting(row)}>Delete</Button>
+                                <Button size="compact-xs" variant="subtle" color="red" disabled={busy} aria-label={`Delete ${noun(row)} ${alias.name}`} onClick={() => setDeleting(row)}>Delete</Button>
                               </Group>
                             </Table.Td>
                           )}
@@ -148,6 +172,7 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
                     onSaved();
                     // An alias just added is not hidden by the kind the table was narrowed to.
                     if (!saved && show !== kind) setShow('all');
+                    if (!saved) setFilter('');
                     await resource.reload();
                   }} />
               )}

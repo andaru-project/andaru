@@ -33,7 +33,7 @@ export function AliasEditor({ editing, rows, onClose, onSessionLost, onAbandoned
   const address = savedAddress?.value;
   const port = savedPort?.value;
   const noun = kind === 'addresses' ? 'address alias' : 'port alias';
-  const title = saved ? `Edit ${noun} ${saved.item.value.name}` : `Add ${noun}`;
+  const title = saved ? `Edit ${noun}: ${saved.item.value.name}` : `Add ${noun}`;
   const [name, setName] = useState(saved?.item.value.name ?? '');
   const [description, setDescription] = useState(saved?.item.value.description ?? '');
   const [what, setWhat] = useState<string>(address?.kind ?? port?.protocol ?? (kind === 'addresses' ? 'host' : 'tcp'));
@@ -48,6 +48,9 @@ export function AliasEditor({ editing, rows, onClose, onSessionLost, onAbandoned
   // A save may answer after this panel was closed and another opened: it then closes nothing.
   const open = useRef(true);
   useEffect(() => { open.current = true; return () => { open.current = false; }; }, []);
+  // A refusal shows above the form, which may be scrolled away from it: it comes into view once, when it arrives.
+  const failureRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (failure) failureRef.current?.scrollIntoView?.({ block: 'nearest' }); }, [failure]);
 
   // A group holds aliases of its own kind that are not groups, and never itself.
   const candidates = rows.filter((row) => row.kind === kind && row.item.value.id !== saved?.item.value.id && (row.kind === 'addresses' ? row.item.value.kind : row.item.value.protocol) !== 'group')
@@ -109,7 +112,7 @@ export function AliasEditor({ editing, rows, onClose, onSessionLost, onAbandoned
     <Drawer opened onClose={onClose} position="right" size="md" title={title} lockScroll={false} closeButtonProps={{ 'aria-label': 'Close' }}>
       <form onSubmit={submit} noValidate>
         <Stack>
-          {failure && <Alert color="red" role="alert" title="The alias was not saved">{failure}</Alert>}
+          {failure && <Alert ref={failureRef} color="red" role="alert" title="The alias was not saved">{failure}</Alert>}
           {/* What is sent is what the form held when Save was pressed: nothing is typed over it meanwhile. */}
           <Fieldset variant="unstyled" disabled={busy}>
             <Stack>
@@ -123,8 +126,8 @@ export function AliasEditor({ editing, rows, onClose, onSessionLost, onAbandoned
               {what === 'network' && <TextInput label="Network" description="A prefix with its length." placeholder="192.168.1.0/24" value={value} error={errors.get('prefix')} onChange={(event) => setValue(event.currentTarget.value)} />}
               {what === 'range' && (
                 <>
-                  <TextInput label="First address" value={value} error={errors.get('first')} onChange={(event) => setValue(event.currentTarget.value)} />
-                  <TextInput label="Last address" description="Of the same family, not before the first." value={last} error={errors.get('last')} onChange={(event) => setLast(event.currentTarget.value)} />
+                  <TextInput label="First address" placeholder="192.168.1.100" value={value} error={errors.get('first')} onChange={(event) => setValue(event.currentTarget.value)} />
+                  <TextInput label="Last address" description="The same family as the first address, and not below it." placeholder="192.168.1.199" value={last} error={errors.get('last')} onChange={(event) => setLast(event.currentTarget.value)} />
                 </>
               )}
             </>
@@ -139,7 +142,7 @@ export function AliasEditor({ editing, rows, onClose, onSessionLost, onAbandoned
           {what === 'group' && <MultiSelect label="Members" description="Aliases of the same kind that are not groups themselves." data={candidates} value={members} error={errors.get('members')} searchable clearable onChange={setMembers} />}
             </Stack>
           </Fieldset>
-          <Group justify="flex-end">
+          <Group justify="flex-end" className="drawer-actions">
             <Button variant="default" onClick={onClose}>Cancel</Button>
             <Button loading={busy} type="submit">Save alias</Button>
           </Group>
