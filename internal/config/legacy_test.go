@@ -161,3 +161,39 @@ func TestLegacyRuleWhoseSplitHalfNeverMatchesStillLoads(t *testing.T) {
 		t.Fatal("a rule that never matched in the form before was accepted")
 	}
 }
+
+// TestLegacyFormsLoad holds one document per later schema a release wrote: schema 2 when a link's password was
+// left unresolved by a restore, schema 3 when the configuration held roles. Each loads as the current form with
+// what made it that schema intact.
+func TestLegacyFormsLoad(t *testing.T) {
+	const eth, ppp, role = "lnk_00000001-0000-4000-8000-000000000001", "lnk_00000002-0000-4000-8000-000000000002", "rol_00000001-0000-4000-8000-000000000001"
+	links := []any{
+		map[string]any{"id": eth, "name": "wan0", "kind": "ethernet", "mtu": 1500, "enabled": true, "permanentMac": "02:00:00:00:00:01"},
+		map[string]any{"id": ppp, "name": "wan", "kind": "pppoe", "mtu": 1492, "enabled": true, "parent": eth, "username": "user", "password": map[string]any{"secret": "WAN_PASSWORD", "unresolved": true}},
+	}
+	objects := map[string]any{"addresses": []any{}, "services": []any{}}
+	policy := map[string]any{"input": []any{}, "forward": []any{}}
+	for _, tc := range []struct {
+		schema int
+		doc    map[string]any
+	}{
+		{2, map[string]any{"schemaVersion": 2, "links": links, "segments": []any{}, "zones": []any{}, "objects": objects, "policy": policy}},
+		{3, map[string]any{"schemaVersion": 3, "links": links, "segments": []any{}, "zones": []any{}, "objects": objects, "policy": policy,
+			"roles": []any{map[string]any{"id": role, "name": "Operator", "capabilities": []any{"configuration.write", "status.read"}}}}},
+	} {
+		raw, err := canonical(tc.doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d, stored, _, err := decodeSaved(raw)
+		if err != nil || stored != tc.schema || d.SchemaVersion != schemaVersion {
+			t.Fatalf("schema %d: stored=%d schema=%d: %v", tc.schema, stored, d.SchemaVersion, err)
+		}
+		if len(d.Links) != 2 || d.Links[1].Password == nil || !d.Links[1].Password.Unresolved {
+			t.Fatalf("schema %d: links: %+v", tc.schema, d.Links)
+		}
+		if tc.schema == 3 && (len(d.Roles) != 1 || d.Roles[0].ID != role || len(d.Roles[0].Capabilities) != 2) {
+			t.Fatalf("schema 3: roles: %+v", d.Roles)
+		}
+	}
+}

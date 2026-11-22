@@ -29,7 +29,7 @@ pfBlockerNG is a core part of Andaru, not an add-on, so its settings are Andaru'
 ## What exists
 
 - The saved configuration names its form: `schemaVersion`, 4 since the firewall rule model ([firewall rule model](2026-11-22-firewall-rule-model-design.md)). Saved versions are immutable and hashed, and each names its parent ([saved configuration design](2026-11-10-saved-network-configuration-design.md)).
-- Versions of schemas 1 to 3 load through an automatic migration on read (`decodeSaved` in `internal/config/legacy.go`); `TestLegacyDocumentReadsAsTheCurrentForm` checks it for schema 1. The migration runs on each read, and the store keeps the old bytes until the next save.
+- Versions of schemas 1 to 3 load through an automatic migration on read (`decodeSaved` in `internal/config/legacy.go`); `TestLegacyDocumentReadsAsTheCurrentForm` checks it for schema 1, and `TestLegacyFormsLoad` for schemas 2 and 3. The migration runs on each read, and the store keeps the old bytes until the next save.
 - The account database and the audit log name their layout in SQLite's `user_version`; the configuration and account backups carry a `schemaVersion` of their own.
 - No user decisions exist yet, and Andaru does not drive upgrades: an image is upgraded with `bootc` directly.
 
@@ -43,7 +43,7 @@ It tells the user which Andaru saved each version. What an engine can load is de
 
 ## To build
 
-1. **The loading test (rule 1).** One fixture per released schema version of each store (the configuration, the account database, the audit log and the backup formats), loaded by the current engine in a test. A change that raises a schema version adds a fixture of the previous one. The configuration's schema 1 has one; schemas 2 and 3, also released, have none yet.
+1. **The loading test (rule 1).** One fixture per released schema version of each store (the configuration, the account database, the audit log and the backup formats), loaded by the current engine in a test. A change that raises a schema version adds a fixture of the previous one. The configuration has one for each of its released schemas, 1 to 3; the other stores are still to be checked.
 2. **The decision record (rule 3).** Next to the migrations, keyed by the schema version it leaves: the predicate over the settings, the question and its choices, and the change each choice makes. Built with the first breaking change that needs one.
 3. **Safe mode (rule 6).** The engine serves sign-in and the decision pages and applies nothing new until the flows finish; the network keeps its last applied generation. On finishing, it saves the result as a new version and leaves safe mode. An automatic migration alone needs no safe mode, but its result is saved on start the same way, so the store stops holding the old form.
 4. **Downgrades (rule 7).** An engine that finds a head of a schema newer than it knows does not refuse the store: it starts from the newest saved version of a schema it can read, saves it as the new head, and says so. With none, it asks for a backup. This also covers a failed boot after step 6 saved under the new schema.
