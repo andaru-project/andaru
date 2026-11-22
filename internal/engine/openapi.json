@@ -484,7 +484,7 @@
           },
           "400": {"description": "Malformed multipart, archive, or options", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
           "403": {"$ref": "#/components/responses/Forbidden"},
-          "409": {"description": "Another expensive backup operation is running", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+          "409": {"description": "Another expensive backup operation is running; or the settings wait for decisions after an upgrade (SETTINGS_UPGRADE_PENDING)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
           "413": {"description": "Body, archive, or options limit exceeded", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
           "415": {"description": "Unsupported request media type", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
           "422": {"description": "Unsupported schema, scope, encryption, passphrase, or restoration", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},

@@ -491,8 +491,8 @@ func (s *Store) RealizationInput(ctx context.Context, version *Version) (result 
 }
 
 // ApplyInput is RealizationInput for an apply or a kept recovery network, refused while the version it reads (the
-// head, for every caller) waits for decisions after an upgrade, in the same read: realizing a provisional reading would put choices nobody made on the
-// network (settings safe mode).
+// head, for every caller) waits for decisions after an upgrade, in the same read: realizing a provisional reading
+// would put choices nobody made on the network (settings safe mode).
 func (s *Store) ApplyInput(ctx context.Context, version *Version) (RealizationInput, error) {
 	return s.realizationInput(ctx, version, true)
 }

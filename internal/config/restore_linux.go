@@ -115,6 +115,9 @@ func (s *Store) prepareRestore(ctx context.Context, actor authz.Actor, expected 
 	if _, err := ParseVersion(string(expected)); err != nil {
 		return nil, empty, fault("INVALID_REQUEST", "/expectedSavedVersion", "Invalid saved version.")
 	}
+	if decoded.needsDecisions {
+		return nil, empty, heldRestore(&savedState{}, decoded) // said before a stale version is
+	}
 	p, current, next, err := s.startSave(ctx, actor, restoreRequests(decoded))
 	if err != nil {
 		return nil, empty, err
