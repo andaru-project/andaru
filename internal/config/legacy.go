@@ -4,9 +4,9 @@ import (
 	"crypto/sha256"
 	_ "embed"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 )
 
@@ -59,54 +59,44 @@ func decodeSaved(raw []byte) (d declaration, stored int, origin map[string]strin
 	}
 	m := instance.(map[string]any)
 	origin = upgradeLegacy(m)
-	for {
-		upgraded, e := json.Marshal(m)
-		if e != nil {
-			return d, 0, nil, e
-		}
-		if d, err = decodeDeclaration(upgraded); err == nil || !dropNeverMatching(m, origin, err) {
-			return d, head.SchemaVersion, origin, err
-		}
+	upgraded, err := json.Marshal(m)
+	if err == nil && len(origin) > 0 {
+		upgraded, err = dropNeverMatching(m, origin, upgraded)
 	}
+	if err != nil {
+		return d, 0, nil, err
+	}
+	d, err = decodeDeclaration(upgraded)
+	return d, head.SchemaVersion, origin, err
 }
 
-// dropNeverMatching removes the rules a refusal names, when every one of them is a rule upgradeLegacy split
-// that can never match. A zone on a legacy side stood for both families, so "from lan or an IPv4 host, to an
-// IPv6 network" was a valid rule; its host half matches nothing, and the engine before rendered no line for it.
-func dropNeverMatching(m map[string]any, origin map[string]string, refusal error) bool {
-	var details validationError
-	rules, _ := m["rules"].([]any)
-	if !errors.As(refusal, &details) {
-		return false
+// dropNeverMatching removes the rules upgradeLegacy added that can never match, and returns the document
+// without them. A zone on a legacy side stood for both families, so "from lan or an IPv4 host, to an IPv6
+// network" was a valid rule; its host half matches nothing, which a rule of the current form may not, and the
+// engine before rendered no line for it. The half that keeps the legacy rule's ID is never such a half: it is
+// the one with the zones.
+func dropNeverMatching(m map[string]any, origin map[string]string, upgraded []byte) ([]byte, error) {
+	var d declaration
+	if err := json.Unmarshal(upgraded, &d); err != nil {
+		return upgraded, nil // not a document decodeDeclaration accepts, which says why
 	}
-	split := map[string]bool{}
-	for derived, from := range origin {
-		split[derived], split[from] = true, true
-	}
-	drop := map[int]bool{}
-	for _, detail := range details {
+	drop := map[string]bool{}
+	for _, detail := range validatePolicy(&d, len(d.Rules)*2+100) {
 		var n int
 		if detail.Message != neverAddresses && detail.Message != neverPorts {
-			return false
+			continue
 		}
-		if _, e := fmt.Sscanf(detail.Path, "/rules/%d/", &n); e != nil || n >= len(rules) {
-			return false
-		}
-		id, _ := rules[n].(map[string]any)["id"].(string)
-		if !split[id] {
-			return false
-		}
-		drop[n] = true
-		delete(origin, id)
-	}
-	kept := make([]any, 0, len(rules))
-	for i, r := range rules {
-		if !drop[i] {
-			kept = append(kept, r)
+		if _, e := fmt.Sscanf(detail.Path, "/rules/%d/", &n); e == nil && n < len(d.Rules) && origin[d.Rules[n].ID] != "" {
+			drop[d.Rules[n].ID] = true
+			delete(origin, d.Rules[n].ID)
 		}
 	}
-	m["rules"] = kept
-	return len(drop) > 0
+	if len(drop) == 0 {
+		return upgraded, nil
+	}
+	rules, _ := m["rules"].([]any)
+	m["rules"] = slices.DeleteFunc(rules, func(r any) bool { id, _ := r.(map[string]any)["id"].(string); return drop[id] })
+	return json.Marshal(m)
 }
 
 // upgradeLegacy turns a document of schema 1 to 3 into schema 4, keeping what it means:

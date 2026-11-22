@@ -46,7 +46,7 @@ func TestLegacyStoreReadsAndThenSavesInTheCurrentForm(t *testing.T) {
 
 	rules, err := s.List(ctx, "rules")
 	// The one list changed last when either of the two lists did.
-	if err != nil || len(rules.Items) != 5 || rules.Version != "2" {
+	if err != nil || len(rules.Items) != 7 || rules.Version != "2" {
 		t.Fatalf("rules of a legacy head: %+v %v", rules, err)
 	}
 	for _, item := range rules.Items {
@@ -72,9 +72,9 @@ func TestLegacyStoreReadsAndThenSavesInTheCurrentForm(t *testing.T) {
 	for _, c := range history.Changes {
 		changed = append(changed, c.Collection+" "+c.ID)
 	}
-	// A rule the upgrade split in two changed as two rules, which is what the version's value shows.
+	// A rule the upgrade split changed as every rule it became, which is what the version's value shows.
 	want := []string{"aliases.addresses " + adrHost, "aliases.ports " + svcDNS, "rules " + rulA, "rules " + rulB, "rules " + rulC,
-		"rules " + derivedRuleID(rulA, 1), "rules " + derivedRuleID(rulB, 1), "rules rules", "zones " + legacyZone}
+		"rules " + derivedRuleID(rulA, 1), "rules " + derivedRuleID(rulB, 1), "rules " + derivedRuleID(rulB, 2), "rules " + derivedRuleID(rulB, 3), "rules rules", "zones " + legacyZone}
 	slices.Sort(want)
 	if !slices.Equal(changed, want) {
 		t.Fatalf("what version 1 changed, in today's names:\n got %v\nwant %v", changed, want)
@@ -92,7 +92,7 @@ func TestLegacyStoreReadsAndThenSavesInTheCurrentForm(t *testing.T) {
 
 	// The first save writes the current form, and records every alias and rule with it.
 	derived := derivedRuleID(rulA, 1)
-	order, err := json.Marshal([]string{derived, rulA, rulB, derivedRuleID(rulB, 1), rulC})
+	order, err := json.Marshal([]string{derived, rulA, rulB, derivedRuleID(rulB, 1), derivedRuleID(rulB, 2), derivedRuleID(rulB, 3), rulC})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestLegacyStoreReadsAndThenSavesInTheCurrentForm(t *testing.T) {
 	}
 	s = openTestStore(t, root)
 	rules, err = s.List(ctx, "rules")
-	if err != nil || len(rules.Items) != 5 || rules.Version != "3" {
+	if err != nil || len(rules.Items) != 7 || rules.Version != "3" {
 		t.Fatalf("rules after the first save and a restart: %+v %v", rules, err)
 	}
 	for _, item := range rules.Items {
@@ -125,7 +125,7 @@ func TestLegacyStoreReadsAndThenSavesInTheCurrentForm(t *testing.T) {
 		t.Fatalf("port alias after the first save: %+v %v", alias, err)
 	}
 	// The version of the form before still loads, for the history and for a rollback to it.
-	if old, err := s.Version(ctx, "1"); err != nil || len(old.Changes) != 9 {
+	if old, err := s.Version(ctx, "1"); err != nil || len(old.Changes) != 11 {
 		t.Fatalf("version 1 after the first save: %+v %v", old, err)
 	}
 	if err = VerifyRecoveryState(ctx, root); err != nil {
@@ -180,7 +180,7 @@ func TestRestoreOntoALegacyHead(t *testing.T) {
 	}
 	s = openTestStore(t, root)
 	rules, err := s.List(ctx, "rules")
-	if err != nil || len(rules.Items) != 5 {
+	if err != nil || len(rules.Items) != 7 {
 		t.Fatalf("rules after a restore and a restart: %+v %v", rules, err)
 	}
 	for _, item := range rules.Items {

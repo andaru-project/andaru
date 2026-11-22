@@ -416,8 +416,9 @@ func (s *Store) Version(ctx context.Context, id Version) (result VersionView, er
 		// What changed a rule the upgrade split changed the rules it was split into, which the value shows.
 		for derived, from := range state.origin {
 			if change.Collection == "rules" && change.ID == from {
-				change.ID = derived
-				result.Changes = append(result.Changes, change)
+				split := change
+				split.ID = derived
+				result.Changes = append(result.Changes, split)
 			}
 		}
 	}

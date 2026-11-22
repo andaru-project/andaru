@@ -28,10 +28,11 @@ var icmpTypes = map[string][]string{
 }
 
 // validatePolicy checks the aliases, the rules and the management section against each other and the topology.
-func validatePolicy(d *declaration) []FieldError {
+// It reports limit errors at most.
+func validatePolicy(d *declaration, limit int) []FieldError {
 	var out []FieldError
 	bad := func(path, msg string) {
-		if len(out) < 100 {
+		if len(out) < limit {
 			out = append(out, FieldError{path, msg})
 		}
 	}

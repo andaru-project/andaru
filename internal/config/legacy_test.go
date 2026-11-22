@@ -23,9 +23,9 @@ func legacyDocument(t *testing.T) []byte {
 			"services":  []any{map[string]any{"id": svcDNS, "name": "dns", "protocol": "udp", "ports": []any{"53"}}},
 		},
 		"policy": map[string]any{
-			// "From lan or from the nas" to the firewall, and "from lan to the nas or to lan" through it.
+			// "From lan or from the nas" to the firewall, and "from lan or the nas, to the nas or to lan" through it.
 			"input":   []any{rule(rulA, "dns", []any{adrHost, legacyZone}, []any{})},
-			"forward": []any{rule(rulB, "dns", []any{legacyZone}, []any{adrHost, legacyZone}), rule(rulC, "any", []any{}, []any{})},
+			"forward": []any{rule(rulB, "dns", []any{legacyZone, adrHost}, []any{adrHost, legacyZone}), rule(rulC, "any", []any{}, []any{})},
 		},
 	})
 	if err != nil {
@@ -59,6 +59,8 @@ func TestLegacyDocumentReadsAsTheCurrentForm(t *testing.T) {
 		{derivedRuleID(rulA, 1), none, host, firewall, none, dns},
 		{rulB, zone, none, zone, none, dns},
 		{derivedRuleID(rulB, 1), zone, none, none, host, dns},
+		{derivedRuleID(rulB, 2), none, host, zone, none, dns},
+		{derivedRuleID(rulB, 3), none, host, none, host, dns},
 		{rulC, none, none, none, none, dns},
 	}
 	if len(got) != len(want) {
@@ -70,7 +72,7 @@ func TestLegacyDocumentReadsAsTheCurrentForm(t *testing.T) {
 			t.Fatalf("rule %d: got %+v, want %+v", i, g, w)
 		}
 	}
-	if len(origin) != 2 || origin[derivedRuleID(rulA, 1)] != rulA || origin[derivedRuleID(rulB, 1)] != rulB {
+	if len(origin) != 4 || origin[derivedRuleID(rulA, 1)] != rulA || origin[derivedRuleID(rulB, 1)] != rulB || origin[derivedRuleID(rulB, 3)] != rulB {
 		t.Fatalf("origin: %v", origin)
 	}
 	// The same document reads the same way each time, IDs included: the store upgrades it on every load.

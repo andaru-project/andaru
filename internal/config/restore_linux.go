@@ -173,7 +173,15 @@ func (s *Store) RestoreMatches(ctx context.Context, version Version, target Rest
 	if err != nil {
 		return false, err
 	}
-	return savedVersion == version && bytes.Equal(bytes.TrimRight(configBody, "\n"), bytes.TrimRight(target.Configuration, "\n")) && bytes.Equal(bytes.TrimRight(secretBody, "\n"), bytes.TrimRight(target.ConfigurationSecrets, "\n")), nil
+	same := bytes.Equal(bytes.TrimRight(configBody, "\n"), bytes.TrimRight(target.Configuration, "\n"))
+	if !same {
+		// This engine finished a restore the engine before had journalled: the store holds the document as it reads now.
+		if d, _, _, e := decodeSaved(target.Configuration); e == nil {
+			now, e := canonical(d)
+			same = e == nil && bytes.Equal(now, configBody)
+		}
+	}
+	return savedVersion == version && same && bytes.Equal(bytes.TrimRight(secretBody, "\n"), bytes.TrimRight(target.ConfigurationSecrets, "\n")), nil
 }
 
 func prepareRestoration(current *savedState, decoded decodedBackup, next Version, now time.Time) (preparedChange, RestorePreview, error) {

@@ -137,7 +137,7 @@ func decodeDeclaration(raw []byte) (declaration, error) {
 	if e = json.Unmarshal(raw, &d); e != nil {
 		return d, validationError{{Path: "", Message: "Expected bounded integer fields."}}
 	}
-	if details := slices.Concat(validateRoles(&d), validateTopology(&d), validatePolicy(&d), validateNAT(&d), validateServices(&d)); len(details) > 0 {
+	if details := slices.Concat(validateRoles(&d), validateTopology(&d), validatePolicy(&d, 100), validateNAT(&d), validateServices(&d)); len(details) > 0 {
 		return declaration{}, validationError(details)
 	}
 	normalizeDeclaration(&d)
