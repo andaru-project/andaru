@@ -209,3 +209,121 @@ it('says the alias changed underneath when its save is refused for that, and ope
   await waitFor(() => expect(sent(fetch, 'PUT')).toHaveLength(2));
   expect(new Headers(sent(fetch, 'PUT')[1][1]?.headers).get('If-Match')).toBe('"svc_web.5"');
 });
+
+it('sends each kind of alias with that kind\'s fields alone, whatever the form held before', async () => {
+  const user = userEvent.setup();
+  const bodies: unknown[] = [];
+  show({
+    'POST /api/v1/config/aliases/addresses': (init) => { bodies.push(JSON.parse(String(init?.body))); return jsonResponse(201, { value: addresses[0], version: '10' }); },
+    'POST /api/v1/config/aliases/ports': (init) => { bodies.push(JSON.parse(String(init?.body))); return jsonResponse(201, { value: ports[0], version: '10' }); },
+  });
+  const add = async (kind: 'address' | 'port', fill: (panel: HTMLElement) => Promise<void>) => {
+    await user.click(await screen.findByRole('button', { name: `Add ${kind} alias` }));
+    const panel = await screen.findByRole('dialog', { name: `Add ${kind} alias` });
+    await fill(panel);
+    await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: `Add ${kind} alias` })).not.toBeInTheDocument());
+  };
+  // A range typed first, then the kind changed to one address: the last address does not travel.
+  await add('address', async (panel) => {
+    await user.type(within(panel).getByLabelText(/^Name/), '  one host ');
+    await user.type(within(panel).getByLabelText('Description'), 'Why');
+    await user.selectOptions(within(panel).getByLabelText('Kind'), 'A range of addresses');
+    await user.type(within(panel).getByLabelText('First address'), '10.0.0.1');
+    await user.type(within(panel).getByLabelText('Last address'), '10.0.0.9');
+    await user.selectOptions(within(panel).getByLabelText('Kind'), 'One address');
+  });
+  await add('address', async (panel) => {
+    await user.type(within(panel).getByLabelText(/^Name/), 'a range');
+    await user.selectOptions(within(panel).getByLabelText('Kind'), 'A range of addresses');
+    await user.type(within(panel).getByLabelText('First address'), '10.0.0.1');
+    await user.type(within(panel).getByLabelText('Last address'), '10.0.0.9');
+  });
+  await add('port', async (panel) => {
+    await user.type(within(panel).getByLabelText(/^Name/), 'any ping');
+    await user.type(within(panel).getByLabelText('Ports'), '80');
+    await user.selectOptions(within(panel).getByLabelText('Protocol'), 'ICMP (IPv4)');
+  });
+  expect(bodies).toEqual([
+    { name: 'one host', description: 'Why', kind: 'host', address: '10.0.0.1' },
+    { name: 'a range', kind: 'range', first: '10.0.0.1', last: '10.0.0.9' },
+    { name: 'any ping', protocol: 'icmp' },
+  ]);
+});
+
+it('offers a group the aliases of its kind that are not groups, and never itself', async () => {
+  const user = userEvent.setup();
+  show();
+  await user.click(await screen.findByRole('button', { name: 'Edit address alias servers' }));
+  const panel = await screen.findByRole('dialog', { name: 'Edit address alias servers' });
+  const members = within(panel).getByLabelText('Members');
+  await user.click(members);
+  expect(within(document.getElementById(members.getAttribute('aria-controls')!)!).getAllByRole('option', { hidden: true }).map((option) => option.textContent)).toEqual(['lab', 'nas', 'pool']);
+});
+
+it('does not ask the engine to make a group of an alias that is in one', async () => {
+  const user = userEvent.setup();
+  const { fetch } = show();
+  await user.click(await screen.findByRole('button', { name: 'Edit address alias nas' }));
+  const panel = await screen.findByRole('dialog', { name: 'Edit address alias nas' });
+  await user.selectOptions(within(panel).getByLabelText('Kind'), 'A group of address aliases');
+  await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
+  expect(within(panel).getByText('This alias is in the group servers, and a group cannot hold a group.')).toBeInTheDocument();
+  expect(sent(fetch, 'PUT')).toHaveLength(0);
+  // Changing the kind again takes the refusal with it.
+  await user.selectOptions(within(panel).getByLabelText('Kind'), 'One address');
+  expect(within(panel).queryByText(/cannot hold a group/)).not.toBeInTheDocument();
+});
+
+it('says what happened when a save or a delete is refused, and reads the list again', async () => {
+  const user = userEvent.setup();
+  const onSessionLost = vi.fn();
+  const refuse = (status: number, code: string) => jsonResponse(status, { error: { code, message: 'Refused.' } });
+  const fetch = fetchRoutes({
+    '/api/v1/config/aliases/addresses': list(addresses), '/api/v1/config/aliases/ports': list(ports), '/api/v1/config': config,
+    'PUT /api/v1/config/aliases/addresses/adr_pool': refuse(404, 'NOT_FOUND'),
+    'PUT /api/v1/config/aliases/ports/svc_web': refuse(401, 'UNAUTHENTICATED'),
+    'DELETE /api/v1/config/aliases/ports/svc_usual': refuse(422, 'VALIDATION_FAILED'),
+    'DELETE /api/v1/config/aliases/ports/svc_any6': refuse(412, 'PRECONDITION_FAILED'),
+  });
+  render(<AliasesScreen api={new ApiClient('csrf')} session={session(['configuration.read', 'configuration.write'])} onSaved={vi.fn()} onSessionLost={onSessionLost} />);
+  const reads = () => fetch.mock.calls.filter(([path, init]) => path === '/api/v1/config' && !init?.method).length;
+  const remove = async (name: string) => {
+    await user.click(await screen.findByRole('button', { name: `Delete port alias ${name}` }));
+    await user.click(within(await screen.findByRole('dialog', { name: 'Delete alias' })).getByRole('button', { name: 'Delete alias' }));
+  };
+  await remove('usual');
+  expect(await screen.findByText(/Something began to name this alias/)).toBeInTheDocument();
+  await waitFor(() => expect(reads()).toBe(2));
+  await remove('any ICMPv6');
+  expect(await screen.findByText(/changed by someone else. The list now shows what is saved; nothing was deleted/)).toBeInTheDocument();
+  await waitFor(() => expect(reads()).toBe(3));
+
+  await user.click(await screen.findByRole('button', { name: 'Edit address alias pool' }));
+  let panel = await screen.findByRole('dialog', { name: 'Edit address alias pool' });
+  await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
+  expect(await within(panel).findByText(/This address alias was deleted by someone else/)).toBeInTheDocument();
+  await waitFor(() => expect(reads()).toBe(4));
+  await user.click(within(panel).getByRole('button', { name: 'Cancel' }));
+
+  await user.click(await screen.findByRole('button', { name: 'Edit port alias web' }));
+  panel = await screen.findByRole('dialog', { name: 'Edit port alias web' });
+  await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
+  await waitFor(() => expect(onSessionLost).toHaveBeenCalledTimes(1));
+  expect(reads()).toBe(4);
+});
+
+it('shows the table again as saved after a save', async () => {
+  const user = userEvent.setup();
+  let saved = false;
+  show({
+    '/api/v1/config/aliases/ports': () => jsonResponse(200, list(saved ? [...ports, { id: 'svc_new', name: 'mail', protocol: 'tcp', ports: ['25'] }] : ports)),
+    'POST /api/v1/config/aliases/ports': () => { saved = true; return jsonResponse(201, { value: { id: 'svc_new', name: 'mail', protocol: 'tcp', ports: ['25'] }, version: '10' }); },
+  });
+  await user.click(await screen.findByRole('button', { name: 'Add port alias' }));
+  const panel = await screen.findByRole('dialog', { name: 'Add port alias' });
+  await user.type(within(panel).getByLabelText(/^Name/), 'mail');
+  await user.type(within(panel).getByLabelText('Ports'), '25');
+  await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
+  expect(await screen.findByText('TCP 25')).toBeInTheDocument();
+});

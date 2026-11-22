@@ -46,6 +46,13 @@ export function AliasEditor({ editing, rows, onClose, onSessionLost, onSave }: A
   const candidates = rows.filter((row) => row.kind === kind && row.item.value.id !== saved?.item.value.id && (row.kind === 'addresses' ? row.item.value.kind : row.item.value.protocol) !== 'group')
     .map((row) => ({ value: row.item.value.id, label: row.item.value.name }));
 
+  // Another kind shows other fields: what was said of the old ones goes with them.
+  function change(next: string) {
+    setWhat(next);
+    setErrors(new Map());
+    setFailure('');
+  }
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     setFailure('');
@@ -56,6 +63,12 @@ export function AliasEditor({ editing, rows, onClose, onSessionLost, onSave }: A
     // The engine refuses a name another alias of the kind has, and may blame the other one by its ID.
     if (rows.some((row) => row.kind === kind && row.item.value.id !== saved?.item.value.id && row.item.value.name === name.trim())) {
       setErrors(new Map([['name', `Another ${noun} has this name.`]]));
+      return;
+    }
+    // A group holds no groups, so an alias that is in one cannot become one.
+    const holder = saved && what === 'group' ? rows.find((row) => row.item.value.members?.includes(saved.item.value.id)) : undefined;
+    if (holder) {
+      setErrors(new Map([[kind === 'addresses' ? 'kind' : 'protocol', `This alias is in the group ${holder.item.value.name}, and a group cannot hold a group.`]]));
       return;
     }
     setBusy(true);
@@ -91,7 +104,7 @@ export function AliasEditor({ editing, rows, onClose, onSessionLost, onSave }: A
           <Textarea autosize label="Description" maxLength={4096} minRows={1} maxRows={4} value={description} error={errors.get('description')} onChange={(event) => setDescription(event.currentTarget.value)} />
           {kind === 'addresses' ? (
             <>
-              <NativeSelect label="Kind" value={what} error={errors.get('kind')} onChange={(event) => setWhat(event.currentTarget.value)}
+              <NativeSelect label="Kind" value={what} error={errors.get('kind')} onChange={(event) => change(event.currentTarget.value)}
                 data={[{ value: 'host', label: 'One address' }, { value: 'network', label: 'A network' }, { value: 'range', label: 'A range of addresses' }, { value: 'group', label: 'A group of address aliases' }]} />
               {what === 'host' && <TextInput label="Address" description="IPv4 or IPv6." placeholder="192.168.1.10" value={value} error={errors.get('address')} onChange={(event) => setValue(event.currentTarget.value)} />}
               {what === 'network' && <TextInput label="Network" description="A prefix with its length." placeholder="192.168.1.0/24" value={value} error={errors.get('prefix')} onChange={(event) => setValue(event.currentTarget.value)} />}
@@ -104,7 +117,7 @@ export function AliasEditor({ editing, rows, onClose, onSessionLost, onSave }: A
             </>
           ) : (
             <>
-              <NativeSelect label="Protocol" value={what} error={errors.get('protocol')} onChange={(event) => { setWhat(event.currentTarget.value); setTypes([]); }}
+              <NativeSelect label="Protocol" value={what} error={errors.get('protocol')} onChange={(event) => { change(event.currentTarget.value); setTypes([]); }}
                 data={[{ value: 'tcp', label: 'TCP' }, { value: 'udp', label: 'UDP' }, { value: 'icmp', label: 'ICMP (IPv4)' }, { value: 'icmpv6', label: 'ICMPv6' }, { value: 'group', label: 'A group of port aliases' }]} />
               {(what === 'tcp' || what === 'udp') && <TextInput label="Ports" description="Ports and ranges, separated by commas: 80, 443, 8000-8100." value={ports} error={errors.get('ports')} onChange={(event) => setPorts(event.currentTarget.value)} />}
               {(what === 'icmp' || what === 'icmpv6') && <MultiSelect label="Types" description="Empty is every type." data={icmpTypes[what]} value={types} error={errors.get('types')} clearable onChange={setTypes} />}

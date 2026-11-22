@@ -65,6 +65,8 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
       onSaved();
     } catch (requestError) {
       if (requestError instanceof ApiError && requestError.status === 412) setError('The alias was changed by someone else. The list now shows what is saved; nothing was deleted.');
+      // Refused as in use: something began to name it after this page read the configuration.
+      else if (requestError instanceof ApiError && requestError.status === 422) setError('Something began to name this alias, so it was not deleted. The list now shows what names it.');
       else reportError(requestError, onSessionLost, setError);
       if (requestError instanceof ApiError && requestError.status === 401) return;
     }
