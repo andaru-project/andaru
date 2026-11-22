@@ -112,3 +112,33 @@ func TestLaterDecisionSeesEarlierChoice(t *testing.T) {
 		t.Fatalf("schema 3: %+v %v", questions, err)
 	}
 }
+
+// A decision runs on the document of its schema, before the migration: a predicate reading a form only schemas 1 to
+// 3 have (policy.forward) finds its objects.
+func TestDecisionRunsBeforeTheMigration(t *testing.T) {
+	record := zoneDecision("forward", 1, func(map[string]any) bool { return true })
+	record.objects = func(doc map[string]any) []string {
+		policy, _ := doc["policy"].(map[string]any)
+		var ids []string
+		forward, _ := policy["forward"].([]any)
+		for _, r := range forward {
+			ids = append(ids, r.(map[string]any)["id"].(string))
+		}
+		return ids
+	}
+	withDecisions(t, record)
+	if _, _, _, questions, err := decodeSavedWith(legacyAt(t, 1), nil); err != nil || len(questions) != 1 || len(questions[0].Objects) == 0 {
+		t.Fatalf("questions: %+v %v", questions, err)
+	}
+}
+
+// Answers name their question by ID, so no two records share one.
+func TestDecisionIDsAreUnique(t *testing.T) {
+	seen := map[string]bool{}
+	for _, d := range decisions {
+		if seen[d.id] {
+			t.Fatalf("decision %q is recorded twice", d.id)
+		}
+		seen[d.id] = true
+	}
+}

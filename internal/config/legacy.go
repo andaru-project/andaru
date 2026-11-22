@@ -167,7 +167,7 @@ func upgradeLegacy(m map[string]any) map[string]string {
 		m["rules"] = rules
 		delete(m, "policy")
 	}
-	m["schemaVersion"] = schemaVersion
+	m["schemaVersion"] = legacyTarget
 	return origin
 }
 

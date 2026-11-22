@@ -56,7 +56,7 @@ func decide(doc map[string]any, from int, answers map[string]string) ([]Question
 		if len(objects) == 0 {
 			continue
 		}
-		q := Question{ID: d.id, Question: d.question, Choices: d.choices, Provisional: d.provisional, Objects: objects, Choice: d.provisional}
+		q := Question{ID: d.id, Question: d.question, Choices: slices.Clone(d.choices), Provisional: d.provisional, Objects: objects, Choice: d.provisional}
 		if answer, ok := answers[d.id]; ok {
 			if !slices.ContainsFunc(d.choices, func(c Choice) bool { return c.ID == answer }) {
 				return nil, fault("VALIDATION_FAILED", "/choices/"+d.id, fmt.Sprintf("Expected one of the choices of question %q.", d.id))
