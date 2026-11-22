@@ -325,3 +325,64 @@ threading.Event().wait()
 		}
 	}
 }
+
+// A side's zone and addresses must both match, "not" leaves the named addresses out, and only a rule that names
+// the firewall reaches it: "any" is every network, never the box.
+func TestRuleSidesInNamespace(t *testing.T) {
+	l := newLab(t)
+	const lanZone, peer, other = "zon_00000002-0000-4000-8000-000000000002", "adr_00000008-0000-4000-8000-000000000008", "adr_00000009-0000-4000-8000-000000000009"
+	side := func(zones []any, not bool, addresses ...any) map[string]any {
+		s := map[string]any{"zones": zones, "addresses": append([]any{}, addresses...)}
+		if not {
+			s["not"] = true
+		}
+		return s
+	}
+	with := func(from, to map[string]any) {
+		t.Helper()
+		l.load(change(t, fixture(t, "filter-two-zones"), func(d map[string]any) {
+			aliases := d["aliases"].(map[string]any)
+			aliases["addresses"] = append(aliases["addresses"].([]any),
+				map[string]any{"id": peer, "name": "the LAN peer", "kind": "host", "address": "10.2.0.2"},
+				map[string]any{"id": other, "name": "another host", "kind": "host", "address": "10.2.0.99"})
+			d["rules"] = []any{map[string]any{"id": "rul_00000009-0000-4000-8000-000000000009", "name": "the rule", "enabled": true, "action": "accept",
+				"from": from, "to": to, "ports": []any{}, "log": false}}
+		}))
+	}
+	l.listen(l.wan, 8080)
+	l.listen(l.fw, 8080)
+	lan, anywhere, firewall := []any{lanZone}, side([]any{}, false), side([]any{firewallZone}, false)
+	out := func() bool { return l.connects(l.lan, "10.1.0.2", 8080) }
+	in := func() bool { return l.connects(l.lan, "10.2.0.1", 8080) }
+
+	with(side(lan, false, peer), anywhere)
+	if !out() {
+		t.Error("the peer, arriving from its zone, was refused")
+	}
+	if in() {
+		t.Error("a rule to any network reached the firewall itself")
+	}
+	with(side(lan, false, other), anywhere)
+	if out() {
+		t.Error("a host the rule does not name passed because its zone matched")
+	}
+	with(side([]any{"zon_00000001-0000-4000-8000-000000000001"}, false, peer), anywhere)
+	if out() {
+		t.Error("a host arriving from another zone passed because its address matched")
+	}
+	with(side(lan, true, peer), anywhere)
+	if out() {
+		t.Error("a host the rule leaves out passed")
+	}
+	with(side(lan, true, other), anywhere)
+	if !out() {
+		t.Error("a host the rule does not leave out was refused")
+	}
+	with(side(lan, false, peer), firewall)
+	if !in() {
+		t.Error("a rule to the firewall did not reach it")
+	}
+	if out() {
+		t.Error("a rule to the firewall let traffic through it")
+	}
+}
