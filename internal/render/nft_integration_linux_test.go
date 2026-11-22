@@ -386,3 +386,23 @@ func TestRuleSidesInNamespace(t *testing.T) {
 		t.Error("a rule to the firewall let traffic through it")
 	}
 }
+
+// The heaviest line a forward renders, with as many left-out sources as validation allows (config.maxLeftOut),
+// still loads: the kernel caps the matches on one rule.
+func TestLeftOutCapLoads(t *testing.T) {
+	l := newLab(t)
+	const maxLeftOut = 40
+	in := change(t, fixture(t, "nat-port-forwards"), func(d map[string]any) {
+		aliases := d["aliases"].(map[string]any)
+		var from []any
+		for i := range maxLeftOut {
+			id := fmt.Sprintf("adr_%08x-0000-4000-8000-%012x", 0x100+i, 0x100+i)
+			aliases["addresses"] = append(aliases["addresses"].([]any), map[string]any{"id": id, "name": id[:12], "kind": "network", "prefix": fmt.Sprintf("10.%d.0.0/16", 100+i)})
+			from = append(from, id)
+		}
+		f := d["nat"].(map[string]any)["portForwards"].([]any)[2].(map[string]any)
+		f["from"], f["fromNegated"], f["protocol"], f["log"] = from, true, "tcp-udp", true
+		f["to"], f["toNegated"] = map[string]any{"address": from[0]}, true
+	})
+	l.load(in)
+}

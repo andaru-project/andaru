@@ -92,6 +92,11 @@ func validateNAT(d *declaration) []FieldError {
 			}
 		}
 		six := f.Family == "ipv6"
+		// The left-out sources share one nft line, as a negated rule side does. An empty negation has always meant
+		// any source, and saved forwards hold it, so it stays.
+		if f.FromNegated && len(f.From) > maxLeftOut {
+			bad(p+"/from", fmt.Sprintf("A port forward leaves out at most %d sources. Put more of them in a group.", maxLeftOut))
+		}
 		for j, a := range f.From {
 			refFamily(fmt.Sprintf("%s/from/%d", p, j), a, six)
 		}

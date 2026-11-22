@@ -11,9 +11,11 @@ import (
 // maxRuleLines caps the nft lines one rule renders to.
 const maxRuleLines = 4096
 
-// maxLeftOut caps the aliases a side leaves out: they share one nft rule, and the kernel refuses a rule of about
-// sixty such matches. A group is one match whatever it holds.
-const maxLeftOut = 16
+// maxLeftOut caps the aliases left out on one nft line, where each is one match whatever it holds. The kernel caps a
+// rule's expression bytes: it refused the heaviest line a port forward renders at 49 aliases (6.12, amd64, measured
+// 2026-11-22), and 40 leaves room for other kernels and one more match. A group is one alias.
+// TestLeftOutCapLoads (render, integration) loads that line at this cap: change both together.
+const maxLeftOut = 40
 
 // What a rule that can never match is told. A legacy rule split by upgradeLegacy may be such a rule.
 const (
@@ -222,6 +224,9 @@ func validatePolicy(d *declaration, limit int) []FieldError {
 		from, to := side("from", r.From), side("to", r.To)
 		if j := slices.Index(r.From.Zones, firewallZone); j >= 0 {
 			bad(fmt.Sprintf("%s/from/zones/%d", p, j), "The firewall is a destination only: there are no rules yet for what the firewall itself sends.")
+		}
+		if r.From.Not && r.To.Not && len(r.From.Addresses) <= maxLeftOut && len(r.To.Addresses) <= maxLeftOut && len(r.From.Addresses)+len(r.To.Addresses) > maxLeftOut {
+			bad(p+"/to/addresses", fmt.Sprintf("A rule leaves out at most %d aliases on its two sides together. Put more of them in a group.", maxLeftOut))
 		}
 		if r.toFirewall() && len(r.To.Zones) > 1 {
 			bad(p+"/to/zones", "The firewall stands alone as a destination. Reaching it and other zones takes two rules.")

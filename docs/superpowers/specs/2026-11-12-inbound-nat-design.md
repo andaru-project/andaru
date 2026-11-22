@@ -61,7 +61,7 @@ Both lists live under `nat` next to `outbound`. They are ordered: position is ev
 | `enabled` | A disabled forward stays in place and is not rendered. |
 | `ingressZones` | Zone IDs whose interfaces the connection arrives on; at least one. |
 | `protocol` | `tcp`, `udp` or `tcp-udp`. |
-| `from` | Address IDs. Empty means any source. `fromNegated: true` matches every source except these. |
+| `from` | Address IDs. Empty means any source. `fromNegated: true` matches every source except these, at most 40 (a group counts as one); with none, any source. |
 | `to` | The destination as the client sees it. Either `{"self": true}`, the firewall's own address on the interface the connection arrives on, whatever it is now (it follows DHCP and PPPoE changes without a re-render; pfSense's "This firewall (self)"), or `{"address": <address ID>}` (an IPv4 host, network, range or group). Required. `toNegated: true` matches every unicast destination except this one; such a forward has no reflection. |
 | `ports` | One port, or one `first-last` range, 1–65535. |
 | `noRedirect` | An exclusion: matching connections are left untranslated and later forwards are not consulted. An exclusion has no target, filter rule or reflection. |
@@ -79,7 +79,7 @@ Both lists live under `nat` next to `outbound`. They are ordered: position is ev
 | `zone` | The zone whose uplink interfaces carry the external address. |
 | `external` | An IPv4 address or prefix (host bits zero). |
 | `internal` | An IPv4 address or prefix with the same length as `external`. |
-| `destination` | Address IDs. Empty means any. When set, only connections to or from these peers are translated. `destinationNegated: true` translates connections with every peer except these: at least one, at most 16 (a group counts as one), and never on an exclusion. |
+| `destination` | Address IDs. Empty means any. When set, only connections to or from these peers are translated. `destinationNegated: true` translates connections with every peer except these: at least one, at most 40 (a group counts as one), and never on an exclusion. |
 | `noBinat` | An exclusion: `internal` is the hosts left out and `external` is absent. It applies to the entries after it, in both directions: their outbound `snat` skips those hosts, and their inbound `dnat` skips the external addresses those hosts would map to. Excluded hosts fall through to the ordinary outbound NAT, as in pfSense. |
 | `reflection` | Pure-NAT reflection for internal clients connecting to `external`. Default `false`. |
 
