@@ -205,7 +205,7 @@ func TestLegacyFormsLoad(t *testing.T) {
 	}
 }
 
-// A schema 3 forward negating no sources matched every source; it still loads, as a forward from any source.
+// A schema 3 forward negating no sources matched every source; it still loads as it was saved.
 func TestLegacyEmptyNegatedSourceLoads(t *testing.T) {
 	var doc map[string]any
 	if err := json.Unmarshal(legacyDocument(t), &doc); err != nil {
@@ -221,7 +221,7 @@ func TestLegacyEmptyNegatedSourceLoads(t *testing.T) {
 		t.Fatal(err)
 	}
 	d, _, _, err := decodeSaved(raw)
-	if err != nil || len(d.NAT.PortForwards) != 1 || d.NAT.PortForwards[0].FromNegated {
+	if err != nil || len(d.NAT.PortForwards) != 1 || !d.NAT.PortForwards[0].FromNegated {
 		t.Fatalf("forwards %+v: %#v", d.NAT.PortForwards, err)
 	}
 }

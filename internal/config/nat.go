@@ -13,6 +13,26 @@ import (
 // maxNATMapEntries caps the map entries shifted port ranges render, which grow with ports, zones and sources.
 const maxNATMapEntries = 65536
 
+// leftOutSources checks the port forwards a save writes: a negated source names at least one alias, and its aliases
+// fit one nft line. It runs on save only, so a forward saved before these limits still loads (settings rule 1).
+func leftOutSources(d *declaration, written func(id string) bool) validationError {
+	var out validationError
+	for i, f := range d.NAT.PortForwards {
+		if !f.FromNegated || !written(f.ID) {
+			continue
+		}
+		p := fmt.Sprintf("/nat/portForwards/%d", i)
+		if len(f.From) == 0 {
+			out = append(out, FieldError{p + "/fromNegated", "Name the sources to leave out."})
+		}
+		// The left-out sources share one nft line, as a negated rule side does.
+		if len(f.From) > maxLeftOut {
+			out = append(out, FieldError{p + "/from", fmt.Sprintf("A port forward leaves out at most %d sources. Put more of them in a group.", maxLeftOut)})
+		}
+	}
+	return out
+}
+
 // validateNAT checks the port forwards and 1:1 entries against the zones, address objects and the
 // firewall's own static addresses, with pfSense's rules.
 func validateNAT(d *declaration) []FieldError {
@@ -92,15 +112,6 @@ func validateNAT(d *declaration) []FieldError {
 			}
 		}
 		six := f.Family == "ipv6"
-		if f.FromNegated {
-			if len(f.From) == 0 {
-				bad(p+"/fromNegated", "Name the sources to leave out.")
-			}
-			// The left-out sources share one nft line, as a negated rule side does.
-			if len(f.From) > maxLeftOut {
-				bad(p+"/from", fmt.Sprintf("A port forward leaves out at most %d sources. Put more of them in a group.", maxLeftOut))
-			}
-		}
 		for j, a := range f.From {
 			refFamily(fmt.Sprintf("%s/from/%d", p, j), a, six)
 		}

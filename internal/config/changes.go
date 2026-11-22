@@ -588,6 +588,12 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 		return empty, boundaryFault(e)
 	}
 	d = validated
+	if failure := leftOutSources(&d, func(id string) bool {
+		_, ok := writes[objectKey{"nat.portForwards", id}]
+		return ok
+	}); failure != nil {
+		return empty, rebaseValidation(failure, &d, origins, input)
+	}
 	for i, l := range d.Links {
 		if l.Password != nil && !l.Password.Unresolved {
 			if _, ok := current.Secrets.Scopes["core"][l.Password.Secret]; !ok {
