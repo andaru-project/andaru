@@ -22,6 +22,7 @@ import type {
   Token,
   TokenIssueResponse,
   Traffic,
+  UpgradeView,
   Usage,
   User,
   VersionDetail,
@@ -353,6 +354,16 @@ export class ApiClient {
   // The whole order, every rule once, guarded by the list's version: a 412 means someone else reordered.
   orderRules(ids: string[], version: string) {
     return this.request('/api/v1/config/rules/order', { method: 'PUT', headers: { 'If-Match': `"order.${version}"` }, body: JSON.stringify(ids) }, true);
+  }
+
+  // The head's questions after an upgrade, with the choices given so far. It saves nothing.
+  upgradePreview(choices: Record<string, string> = {}) {
+    return this.request<UpgradeView>('/api/v1/config/upgrade/preview', { method: 'POST', body: JSON.stringify({ choices }) }, true);
+  }
+
+  // Answers every question of the head the questions came from and saves the result.
+  finishUpgrade(choices: Record<string, string>, expectedSavedVersion: string) {
+    return this.request<{ savedVersion: string }>('/api/v1/config/upgrade', { method: 'POST', body: JSON.stringify({ choices, expectedSavedVersion }) }, true);
   }
 
   finishApply(id: string, action: 'confirmation' | 'rollback') {

@@ -163,3 +163,38 @@ it('asks nothing about the box for an account that may not read status', async (
   await screen.findByText('Saved changes are not applied yet');
   expect(fetchMock.mock.calls.map(([url]) => url)).not.toContain('/api/v1/status/system');
 });
+
+const question = { id: 'rename', question: 'Rename the zones?', choices: [{ id: 'keep', label: 'Keep', description: '' }], provisional: 'keep', objects: ['zon_lan'], choice: 'keep', answered: false };
+
+it('opens on Finish the upgrade while the saved settings wait for decisions, and says so on every other page', async () => {
+  fetchRoutes({
+    '/api/v1/applies': unapplied,
+    '/api/v1/versions?': { state: 'saved', items: [] },
+    'POST /api/v1/config/upgrade/preview': { savedVersion: '5', questions: [question] },
+  });
+  mount('/');
+  expect(await screen.findByRole('heading', { name: 'Finish the upgrade' })).toBeInTheDocument();
+  expect(await screen.findByText('Rename the zones?')).toBeInTheDocument();
+  expect(screen.queryByRole('link', { name: 'Answer the questions' })).not.toBeInTheDocument();
+});
+
+it('leaves the dashboard alone when no decision waits', async () => {
+  fetchRoutes({
+    '/api/v1/applies': unapplied,
+    '/api/v1/versions?': { state: 'saved', items: [] },
+    'POST /api/v1/config/upgrade/preview': { savedVersion: '5', questions: [] },
+  });
+  mount('/system/session');
+  expect(await screen.findByRole('heading', { name: 'Current session' })).toBeInTheDocument();
+  expect(screen.queryByText('Finish the upgrade')).not.toBeInTheDocument();
+});
+
+it('points to the questions from any other page', async () => {
+  fetchRoutes({
+    '/api/v1/applies': unapplied,
+    '/api/v1/versions?': { state: 'saved', items: [] },
+    'POST /api/v1/config/upgrade/preview': { savedVersion: '5', questions: [question] },
+  });
+  mount('/system/session');
+  expect(await screen.findByRole('link', { name: 'Answer the questions' })).toBeInTheDocument();
+});

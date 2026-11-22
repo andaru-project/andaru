@@ -296,3 +296,8 @@ export interface Rule {
 export interface OrderedList<T> extends SavedList<T> {
   version: string;
 }
+
+// A decision a breaking change needs, as the saved head was read with it (settings safe mode).
+export interface UpgradeChoice { id: string; label: string; description: string }
+export interface UpgradeQuestion { id: string; question: string; choices: UpgradeChoice[]; provisional: string; objects: string[]; choice: string; answered: boolean }
+export interface UpgradeView { savedVersion: string; questions: UpgradeQuestion[] }

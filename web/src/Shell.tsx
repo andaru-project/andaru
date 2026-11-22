@@ -1,4 +1,4 @@
-import { AccordionChevron, Alert, AppShell, Badge, Burger, Button, Group, Image, Menu, NavLink, Stack, Text, Title } from '@mantine/core';
+import { AccordionChevron, Alert, Anchor, AppShell, Badge, Burger, Button, Group, Image, Menu, NavLink, Stack, Text, Title } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useMatch, useNavigate } from 'react-router';
@@ -16,6 +16,7 @@ import { RolesScreen } from './screens/RolesScreen';
 import { RulesScreen } from './screens/RulesScreen';
 import { SessionScreen } from './screens/SessionScreen';
 import { TokensScreen } from './screens/TokensScreen';
+import { UpgradeScreen } from './screens/UpgradeScreen';
 import { SystemDetailsScreen } from './screens/SystemWidget';
 import { UsersScreen } from './screens/UsersScreen';
 import type { Session, User } from './types';
@@ -66,6 +67,13 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   useVisiblePoll(system.refresh, systemPollMilliseconds, canReadStatus);
 
   useVisiblePoll(changes.refresh, pollMilliseconds, canReadChanges);
+
+  // Whether the saved settings wait for decisions after an upgrade (settings safe mode). It changes only with an
+  // upgrade, a restore or the answers, so it is read once per visit and again when answered.
+  const loadUpgrade = useCallback(() => (canReadChanges ? api.upgradePreview() : Promise.resolve(undefined)), [api, canReadChanges]);
+  const upgrade = useResource(loadUpgrade, onSessionLost);
+  const upgradePending = (upgrade.data?.questions.length ?? 0) > 0;
+  const onUpgradePage = pathname === '/system/upgrade';
 
   // When the API answers again, show what the server says rather than what was last seen.
   const wasConnected = useRef(connected);
@@ -178,9 +186,11 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
           {/* Review and apply owns these controls on its own page. */}
           {/* The Changes page says this itself. Elsewhere, a state that cannot be read must not look like nothing pending. */}
           {!onChangesPage && changes.error && <Alert color="orange" role="alert" title="Whether changes are pending cannot be read">{changes.error}</Alert>}
+          {upgradePending && !onUpgradePage && <Alert color="orange" role="status" title="Finish the upgrade">The saved settings need decisions before anything can be saved or applied. <Anchor component={Link} to="/system/upgrade">Answer the questions</Anchor></Alert>}
           {!onChangesPage && <PendingNotice api={api} session={session} state={changes.data} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />}
           <Routes>
-            <Route path="/" element={<DashboardScreen api={api} session={session} system={system} onSessionLost={onSessionLost} />} />
+            <Route path="/" element={upgradePending ? <Navigate to="/system/upgrade" replace /> : <DashboardScreen api={api} session={session} system={system} onSessionLost={onSessionLost} />} />
+            {canReadChanges && <Route path="/system/upgrade" element={<UpgradeScreen api={api} session={session} onFinished={() => { void upgrade.reload(); void reloadChanges(); }} onSessionLost={onSessionLost} />} />}
             {pages.filter(([path]) => visible.has(path)).map(([path, element]) => <Route key={path} path={path} element={element} />)}
             <Route path="/system/session" element={<SessionScreen session={session} />} />
             <Route path="*" element={<Navigate to="/" replace />} />
