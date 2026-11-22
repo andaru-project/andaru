@@ -1,53 +1,44 @@
-# Settings across Andaru versions: rollback and upgrading again
+# Settings across Andaru versions: upgrades and downgrades
 
-Status: a draft for the owner, 2026-11-22. The direction is the owner's ([#121](https://github.com/andaru-project/andaru/issues/121)); the calls below are the author's and await review. Only "Step 1" is implemented. Contracts remain provisional until Andaru 1.0.
+Status: the owner's rules, 2026-11-22 ([#121](https://github.com/andaru-project/andaru/issues/121)). Only "Implemented" below is built. Contracts remain provisional until Andaru 1.0.
 
-## The problem
+## The rules
 
-An image can go back: `bootc rollback` boots the previous deployment. The settings do not go back with it. An older engine may then meet settings a newer Andaru wrote, in a form it does not know. Today it refuses the store and does not serve.
+1. **Older settings always load on a newer Andaru.** This is a testing rule: the current engine must load settings of every schema version a release ever wrote.
+2. **Settings name their schema version.** Every stored document carries its schema version, so the engine always knows which form it is loading.
+3. **A breaking change has one of two plans, stated explicitly:**
+   - **Migration or grandfathering:** automatic. The engine converts the settings, or keeps the old behaviour for settings that relied on it.
+   - **User decision:** for each schema version that needs one, a record holds its predicates (which settings need a decision), the question with its choices, and what each choice does to the settings.
+4. **Releases list their breaking changes**, and the user sees that list before upgrading.
+5. **Upgrades need a reboot.** Where possible, migrations and decisions run before that reboot. The result is saved as a new version of the new schema, and the new Andaru loads it directly.
+6. **Otherwise, the engine resolves it on start.** When the latest saved settings need a migration or a decision for the running Andaru, the engine starts in safe mode and runs those flows. Once the choices are made, it processes the settings, saves them for this Andaru, and the upgrade continues, ideally with at most one extra reboot.
+7. **Downgrades are not guaranteed to keep the settings.** A downgrade means restoring settings from the version being returned to: a version that Andaru saved, or a backup taken under it.
 
-## The owner's direction
+Each upgrade is a function of the saved settings and the running Andaru alone, with no further state to keep in step.
 
-1. **Compatibility first.** A change avoids breaking readers in either direction wherever it can.
-2. **The saved versions are segmented by the Andaru version that wrote them.** They are immutable and under version control already, so "the settings as this Andaru last had them" is the latest version it wrote.
-3. **The user chooses, and is always told.** When an engine loads settings a newer Andaru wrote, the user chooses between going back to the latest configuration this Andaru wrote, and resolving the differences with the newer one. What an engine could not read is said, even when it could carry on.
+## What exists
 
-## What the configuration store already gives
+- The saved configuration names its form: `schemaVersion`, 4 since the firewall rule model ([firewall rule model](2026-11-22-firewall-rule-model-design.md)). Saved versions are immutable and hashed, and each names its parent ([saved configuration design](2026-11-10-saved-network-configuration-design.md)).
+- Versions of schemas 1 to 3 load through an automatic migration on read (`decodeSaved` in `internal/config/legacy.go`), checked by `TestLegacyDocumentReadsAsTheCurrentForm`.
+- The account database names its layout in SQLite's `user_version`; the configuration and account backups carry a `schemaVersion` of their own.
+- No user decisions exist yet, and Andaru does not drive upgrades: an image is upgraded with `bootc` directly.
 
-- Saved versions are immutable, hashed, and each names its parent ([saved configuration design](2026-11-10-saved-network-configuration-design.md)).
-- A change of form rewrites nothing: versions of an earlier form are read through an upgrade on load ([firewall rule model](2026-11-22-firewall-rule-model-design.md)).
-- A version's parent need not be the version before it, so two lines of history can live in one store.
-
-## Step 1, implemented: every saved version names its writer
+## Implemented: every saved version names the Andaru that wrote it
 
 - A table beside the others, `version_writers`, holds the Andaru version that saved each version. An older engine never reads it and still opens the store.
-- The history and each version's view serve it as `writtenBy`. A version has none when the Andaru that saved it did not record it: every engine up to `0.5.0-a.4`, also when it comes back after a rollback and saves.
-- The engine writes its build's version. A release writes its release version; an image built without one writes `0.0.0-dev`, a pull request's image `0.0.0-prN`, and a bare `go build` writes `development`. A build with no version at all still saves, and its versions read as having no recorded writer.
+- The history and each version's view serve it as `writtenBy`. A version has none when its Andaru did not record it: every engine up to `0.5.0-a.4`.
+- A release writes its release version; an image built without one writes `0.0.0-dev`, a pull request's image `0.0.0-prN`, and a bare `go build` writes `development`.
 
-This lands before the next release, so that every version saved from then on can be told apart. Nothing else changes yet: an engine still refuses a head of a form it does not know.
+Under rule 7 this is how a downgrade finds the settings to restore: the latest version written by the Andaru being returned to.
 
-## Step 2, proposed: an engine that finds a newer Andaru's settings
+## To build
 
-On opening the store, the engine looks at the saved head:
+1. **The loading test (rule 1).** One fixture per released schema version of each store, loaded by the current engine in a test. A change that raises a schema version adds a fixture of the previous one. Schema 3 has one. Schemas 1 and 2, also released, load through the same path but have no fixture yet.
+2. **The decision record (rule 3).** Next to the migrations, keyed by the schema version it leaves: the predicate over the settings, the question and its choices, and the change each choice makes. Built with the first breaking change that needs one.
+3. **Safe mode (rule 6).** The engine serves sign-in and the decision pages and applies nothing new until the flows finish; the network keeps its last applied generation. On finishing, it saves the result as a new version and leaves safe mode.
+4. **Breaking changes in releases (rule 4).** Each release's notes carry the list. Showing it before upgrading needs Andaru to drive upgrades, a feature of its own.
+5. **Before the reboot (rule 5).** With that feature, the running Andaru runs the new image's engine against the saved settings before rebooting, so the new release's migrations and decisions run in the old system and save under the new schema.
 
-- **Written by this Andaru or an older one:** as today.
-- **Written by a newer Andaru:** the engine does not refuse the store. It serves, in a state the API and the web UI show on every page, like the pending notice: "These settings were last saved by Andaru X, which is newer than this one."
-  - It works from **the latest version this Andaru can read**: the newest version of a form it knows. That is normally the latest one it wrote itself.
-  - Applying is not offered until the user has chosen.
-- **The choice:**
-  - **Go back to this Andaru's settings.** The engine saves a new version whose content is the latest version it wrote, with that version as its parent. The newer Andaru's versions stay in the store, untouched, as a second line of history.
-  - **Keep the newer settings,** when the engine can read them: their form is one it knows, so nothing is lost. It then says what it does not understand, if anything, and carries on from the newer head.
-  - **Resolve the differences,** when it can read both: the same comparison the Review and apply page makes between two versions, object by object, with the user picking a side for each object that differs.
-  - When the newer head is of a form this engine cannot read, only the first is possible, and the page says why.
+## Released engines
 
-## Step 3, proposed: upgrading again
-
-The newer Andaru boots again and finds that the head was saved by an older Andaru on top of a line it left behind. It offers the same three: carry on with the current settings, go back to the latest it wrote itself, or resolve the differences. Both lines are readable to it, so all three are always possible.
-
-## Open for the owner
-
-1. **Comparing Andaru versions.** "Newer" needs an order between `0.5.0-a.4`, `0.5.0`, a nightly and `development`. Proposed: the release order of the version strings, with a nightly and every development form (`development`, `0.0.0-dev`, `0.0.0-prN`) treated as unlike any other version, so that they ask instead of assuming. A version with no recorded writer was saved by `0.5.0-a.4` or older.
-2. **What "this Andaru" means.** Proposed: the exact version string. A patch release then asks once after an upgrade done again; the alternative is to group by the settings' form, which asks less often and is less exact.
-3. **The other stores.** The account database, the audit log and the web preferences have no version history. Proposed: the account database gets the snapshot the issue first described (a copy at the old layout before a migration, which an older engine opens), since accounts must work for anyone to make the choice above; the audit log is append-only and is left alone; preferences are dropped when unreadable, and the user is told.
-4. **Engines already released,** up to `0.5.0-a.4`, refuse a newer form. The first upgrade past them cannot be rolled back after a save, whatever is built here. Proposed: the release notes of the next release say so.
-5. **Whether an apply is blocked until the choice is made,** as proposed, or only warned about.
+Engines up to `0.5.0-a.4` refuse settings of a form they do not know. Under rule 7 that is expected: going back to one means restoring settings it wrote.
