@@ -130,6 +130,18 @@ func TestAddressTo(t *testing.T) {
 		`iifname @`+natWAN+` ct mark & 0x0000ffff == 0x00000001 ip daddr 192.0.2.10 tcp dport 80 accept comment "`+pfwWeb+`"`)
 }
 
+// A negated destination is the complement of the plain one, for the firewall itself and for an address alias.
+func TestNegatedTo(t *testing.T) {
+	script := table(t, render(t, natChange(t, func(f []any) {
+		f[0].(map[string]any)["toNegated"] = true
+		f[3].(map[string]any)["to"] = map[string]any{"address": "adr_00000007-0000-4000-8000-000000000007"}
+		f[3].(map[string]any)["toNegated"] = true
+	})))
+	inOrder(t, chainOf(t, script, "prerouting"),
+		`iifname @`+natWAN+` meta nfproto ipv4 fib daddr . iif type != local tcp dport 8080 ct mark set ct mark & 0xffff0000 | 0x00000001 log prefix "andaru `+pfwWeb+` " dnat ip to 192.0.2.10:80 comment "`+pfwWeb+`"`,
+		`iifname @`+natWAN+` ip daddr != @`+natBlocked+` tcp dport 2222 ct mark set ct mark & 0xffff0000 | 0x00000004 redirect to :22 comment "`+pfwSSH+`"`)
+}
+
 // A target that is one of the firewall's own addresses is local delivery: its rule goes in input.
 func TestForwardToAFirewallAddress(t *testing.T) {
 	script := table(t, render(t, natChange(t, func(f []any) {
@@ -279,6 +291,17 @@ func TestOneToOneReflectionKeepsDestination(t *testing.T) {
 	})))
 	inOrder(t, chainOf(t, script, "prerouting"),
 		`iifname @internal ip saddr @`+natPartner+` ip daddr != { 203.0.113.31 } dnat ip prefix to ip daddr map { 203.0.113.16/28 : 192.0.2.16/28 } comment "`+otoBlock+`"`)
+}
+
+// A negated 1:1 destination names every left-out peer on one line, both ways.
+func TestOneToOneNegatedDestination(t *testing.T) {
+	script := table(t, render(t, change(t, fixture(t, "nat-one-to-one"), func(d map[string]any) {
+		d["nat"].(map[string]any)["oneToOne"].([]any)[2].(map[string]any)["destinationNegated"] = true
+	})))
+	inOrder(t, chainOf(t, script, "prerouting"),
+		`iifname @`+natWAN+` ip saddr != @`+natPartner+` ip daddr != { 203.0.113.31 } dnat ip prefix to ip daddr map { 203.0.113.16/28 : 192.0.2.16/28 } comment "`+otoBlock+`"`)
+	inOrder(t, chainOf(t, script, "postrouting"),
+		`oifname @`+natWAN+` ip daddr != @`+natPartner+` ip saddr != { 192.0.2.31 } snat ip prefix to ip saddr map { 192.0.2.16/28 : 203.0.113.16/28 } comment "`+otoBlock+`"`)
 }
 
 // A target the firewall learned by DHCP is local delivery too: its rule goes in input.

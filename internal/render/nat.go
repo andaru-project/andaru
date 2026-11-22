@@ -81,9 +81,11 @@ func (f *filter) portForwards() (prerouting, forward, input []string) {
 			}
 		}
 		// fib matches either family: the guard keeps an IPv4 forward to self off the firewall's IPv6 addresses.
-		to := nfproto + " fib daddr . iif type local"
+		// A negated destination is the exact complement: not an address of the ingress interface, or not in the alias.
+		neg := map[bool]string{false: "", true: "!= "}[pf.ToNegated]
+		to := nfproto + " fib daddr . iif type " + neg + "local"
 		if !pf.To.Self {
-			to = ip + " daddr @" + setName(pf.To.Address) + fam
+			to = ip + " daddr " + neg + "@" + setName(pf.To.Address) + fam
 		}
 		// ct status dnat says a connection was translated, not by whom: each forward marks what it translates in the
 		// low 16 bits of the connection mark, and its rule admits that mark only. The high bits are left to others.
@@ -282,9 +284,16 @@ func (f *filter) oneToOne() (prerouting, postrouting []string) {
 		comment := fmt.Sprintf("comment %q", o.ID)
 		kw, in := mapping(external, internal)
 		_, out := mapping(internal, external)
-		// Each destination object is an alternative, one line each; none means any peer.
+		// Each destination object is an alternative, one line each; none means any peer. Negated, one line names them all.
 		sources, peers := []string{""}, []string{""}
-		if len(o.Destination) > 0 {
+		if len(o.Destination) > 0 && o.DestinationNegated {
+			var s, p []string
+			for _, id := range o.Destination {
+				s = append(s, "ip saddr != @"+setName(id)+"_4")
+				p = append(p, "ip daddr != @"+setName(id)+"_4")
+			}
+			sources, peers = []string{strings.Join(s, " ")}, []string{strings.Join(p, " ")}
+		} else if len(o.Destination) > 0 {
 			sources, peers = nil, nil
 			for _, id := range o.Destination {
 				sources = append(sources, "ip saddr @"+setName(id)+"_4")

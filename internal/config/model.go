@@ -217,6 +217,7 @@ type portForward struct {
 	From         []string   `json:"from"`
 	FromNegated  bool       `json:"fromNegated,omitempty"`
 	To           natAddress `json:"to"`
+	ToNegated    bool       `json:"toNegated,omitempty"`
 	Ports        string     `json:"ports"`
 	NoRedirect   bool       `json:"noRedirect,omitempty"`
 	Target       *natTarget `json:"target,omitempty"`
@@ -236,8 +237,10 @@ type oneToOne struct {
 	External    string   `json:"external,omitempty"`
 	Internal    string   `json:"internal"`
 	Destination []string `json:"destination"`
-	NoBinat     bool     `json:"noBinat,omitempty"`
-	Reflection  bool     `json:"reflection,omitempty"`
+	// DestinationNegated makes the destination "every peer but these".
+	DestinationNegated bool `json:"destinationNegated,omitempty"`
+	NoBinat            bool `json:"noBinat,omitempty"`
+	Reflection         bool `json:"reflection,omitempty"`
 }
 type management struct {
 	Segment        string   `json:"segment"`
