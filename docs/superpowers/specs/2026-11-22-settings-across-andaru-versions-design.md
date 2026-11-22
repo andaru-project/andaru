@@ -18,6 +18,14 @@ Releases use semantic versioning; nightlies will be named by their date, as in p
 
 Each upgrade is a function of the saved settings and the running Andaru alone, with no further state to keep in step.
 
+## pfBlockerNG
+
+pfBlockerNG is a core part of Andaru, not an add-on, so its settings are Andaru's settings: the same schema versioning, migrations, user decisions and guarantees, with no separate scheme.
+
+- Today pfBlockerNG uses its major.minor version as the settings' schema and has no user decision step: grandfathering has always been possible. Inside Andaru that separation does not exist.
+- pfBlockerNG on other platforms has no such guarantees: the platform's settings may have constraints of their own.
+- pfBlockerNG as a standalone application (the Core) follows the same rules for its own configuration.
+
 ## What exists
 
 - The saved configuration names its form: `schemaVersion`, 4 since the firewall rule model ([firewall rule model](2026-11-22-firewall-rule-model-design.md)). Saved versions are immutable and hashed, and each names its parent ([saved configuration design](2026-11-10-saved-network-configuration-design.md)).
