@@ -301,7 +301,8 @@ it('reads the rules and the configuration again when a save landed between the t
 
 it('keeps the grips while a move is being saved, so the keyboard stays on the one that moved', async () => {
   const user = userEvent.setup();
-  show({ 'PUT /api/v1/config/rules/order': { order: [], version: '10' } });
+  let answer: (response: Response) => void = () => {};
+  const { fetch, onSaved } = show({ 'PUT /api/v1/config/rules/order': () => new Promise<Response>((resolve) => { answer = resolve; }) });
   await screen.findByText('Old rule');
   await user.click(screen.getByRole('button', { name: 'Edit order' }));
   const grip = screen.getByRole('button', { name: 'Move rule 3, Old rule' });
@@ -310,7 +311,19 @@ it('keeps the grips while a move is being saved, so the keyboard stays on the on
   await user.keyboard('[Space]');
   await user.keyboard('[ArrowUp]');
   await user.keyboard('[Space]');
-  // The same element all through: it was never taken out of the page.
+  // The save is out: the same element is still there, marked idle, and nothing else can be moved.
+  await waitFor(() => expect(sent(fetch, 'PUT')).toHaveLength(1));
   expect(grip).toBeInTheDocument();
+  expect(grip).toHaveAttribute('data-disabled');
   expect(screen.getAllByRole('button', { name: /^Move rule/ })).toHaveLength(3);
+  answer(jsonResponse(200, { order: [], version: '10' }));
+  await waitFor(() => expect(onSaved).toHaveBeenCalled());
+  await waitFor(() => expect(grip).not.toHaveAttribute('data-disabled'));
+  expect(grip).toHaveFocus();
+});
+
+it('shows the rules after three tries even when the two reads never agree', async () => {
+  const { fetch } = show({ '/api/v1/config': { ...config(), savedVersion: '8' } });
+  await screen.findByText('LAN out, except the printers');
+  expect(fetch.mock.calls.filter(([path]) => path === '/api/v1/config')).toHaveLength(3);
 });

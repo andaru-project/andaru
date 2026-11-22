@@ -66,6 +66,7 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onSave }: R
       setErrors(fields);
       // Someone else's change underneath keeps what was typed here, and says what happened.
       if (error instanceof ApiError && error.status === 412) setFailure('This rule was changed by someone else while it was open here. Close the panel to see what is saved, then make the change again.');
+      else if (error instanceof ApiError && error.status === 404) setFailure('This rule was deleted by someone else while it was open here. Close the panel; to keep it, add it again.');
       else if (fields.size === 0 || fields.has('')) setFailure(fields.get('') ?? apiErrorMessage(error));
       // Refusals beside their fields are also said once, aloud, where the form begins.
       else setFailure('Some of the fields below were refused.');

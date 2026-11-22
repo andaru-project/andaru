@@ -60,7 +60,8 @@ function Row({ item, position, names: known, canWrite, unlocked, busy, onToggle,
     <Table.Tr ref={setNodeRef} className="rule" data-disabled={!rule.enabled || undefined} data-dragging={isDragging || undefined} style={{ transform: CSS.Translate.toString(transform), transition }}>
       <Table.Td data-label="Position">
         <Group gap="xs" wrap="nowrap">
-          {unlocked && <ActionIcon className="widget-grip" size="lg" variant="subtle" color="gray" ref={setActivatorNodeRef} {...attributes} {...listeners} aria-label={`Move ${title}`}><Grip /></ActionIcon>}
+          {/* While a save is out the grip stays, so the keyboard keeps its place, and looks as idle as it is. */}
+          {unlocked && <ActionIcon className="widget-grip" size="lg" variant="subtle" color="gray" id={`grip-${rule.id}`} data-disabled={busy || undefined} ref={setActivatorNodeRef} {...attributes} {...listeners} aria-label={`Move ${title}`}><Grip /></ActionIcon>}
           <Text size="sm">{position}</Text>
         </Group>
       </Table.Td>
@@ -142,7 +143,7 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
           </Group>
         )}
       </Group>
-      {canWrite && filtered && <Text c="dimmed" size="sm">The order is locked while the filter is in use: a move among hidden rules would be a guess.</Text>}
+      {canWrite && filtered && (resource.data?.list.items.length ?? 0) > 1 && <Text c="dimmed" size="sm">The order is locked while the filter is in use: a move among hidden rules would be a guess.</Text>}
       {error && <Alert color="red" role="alert" title="The rules were not changed" withCloseButton onClose={() => setError('')}>{error}</Alert>}
       <Loaded resource={resource} what="rules">
         {({ list, snapshot }) => {
@@ -175,10 +176,11 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
           const instructions = { draggable: 'To move a rule, press Space or Enter on its grip, move it with the arrow keys, then press Space or Enter to drop it, or Escape to put it back.' };
           // A drop is a saved edit: the whole order, guarded by the list's version.
           function dropped({ active, over }: DragEndEvent) {
-            if (!over || active.id === over.id) return;
+            if (busy || !over || active.id === over.id) return;
             const next = arrayMove(order, order.indexOf(String(active.id)), order.indexOf(String(over.id)));
             setMoved(next);
-            void change(() => api.orderRules(next, list.version));
+            // The row is put elsewhere in the page, which can take the focus off its grip: it goes back there.
+            void change(() => api.orderRules(next, list.version)).then(() => { if (document.activeElement === document.body) document.getElementById(`grip-${active.id}`)?.focus(); });
           }
 
           return (
@@ -228,8 +230,9 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
                     try {
                       await api.saveRule(rule, editing === 'new' ? undefined : editing);
                     } catch (error) {
-                      // The rule changed or went underneath: the panel, once closed, must open on what is saved.
-                      if (error instanceof ApiError && (error.status === 412 || error.status === 404)) await resource.reload();
+                      // The rule may have changed or gone underneath, or been saved with the answer lost: the
+                      // page reads what is saved, so the panel, once closed, opens on that.
+                      if (!(error instanceof ApiError && error.status === 401)) await resource.reload();
                       throw error;
                     }
                     onSaved();
