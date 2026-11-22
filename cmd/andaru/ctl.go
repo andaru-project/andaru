@@ -39,7 +39,7 @@ type applyReply struct {
 	Files    []json.RawMessage
 }
 
-var objectIDPattern = regexp.MustCompile(`^(lnk|seg|zon|adr|svc|rul|dhp|pfw|oto|dh6|vip)_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+var objectIDPattern = regexp.MustCompile(`^(lnk|seg|zon|adr|svc|rul|dhp|pfw|oto|dh6|vip|rol)_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 var applyIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
 
 // errUsage marks a usage error; its text is never printed, the caller prints the command's usage.
@@ -64,7 +64,7 @@ func validChanged(item config.ChangedView) bool {
 		if item.ID == item.Collection {
 			return validVersion(item.Version) && item.Version != "0"
 		}
-	case "links", "segments", "zones", "aliases.addresses", "aliases.ports", "dhcp", "dhcp6", "virtualAddresses":
+	case "links", "segments", "zones", "aliases.addresses", "aliases.ports", "dhcp", "dhcp6", "virtualAddresses", "roles":
 	default:
 		return false
 	}
