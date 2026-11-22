@@ -72,13 +72,6 @@ func restoreRequests(decoded decodedBackup) []objectKey {
 	requested := make([]objectKey, 0, len(index))
 	for key := range index {
 		requested = append(requested, key)
-		// Both policy lists share one creation-identity index, including deleted IDs.
-		if key.Collection == "policy.input" {
-			requested = append(requested, objectKey{"policy.forward", key.ID})
-		}
-		if key.Collection == "policy.forward" {
-			requested = append(requested, objectKey{"policy.input", key.ID})
-		}
 	}
 	return requested
 }
@@ -228,9 +221,6 @@ func prepareRestoration(current *savedState, decoded decodedBackup, next Version
 			blocked[reference.Secret] = true
 		}
 	}
-	if decoded.configuration != nil && (current.Config.SchemaVersion == 2 || len(unresolved) != 0) {
-		candidate.SchemaVersion = 2
-	}
 	for name := range unresolved {
 		preview.UnresolvedSecrets = append(preview.UnresolvedSecrets, name)
 	}
@@ -273,15 +263,6 @@ func prepareRestoration(current *savedState, decoded decodedBackup, next Version
 			}
 		}
 		for key, value := range after {
-			if key.Collection == "policy.input" || key.Collection == "policy.forward" {
-				other := "policy.input"
-				if key.Collection == other {
-					other = "policy.forward"
-				}
-				if _, exists := current.Versions[objectKey{other, key.ID}]; exists {
-					return empty, preview, fault("VALIDATION_FAILED", "/configuration", "An imported rule identity belongs to another collection in destination history.")
-				}
-			}
 			old, exists := before[key]
 			if !exists {
 				_, known := current.Versions[key]
@@ -319,6 +300,8 @@ func prepareRestoration(current *savedState, decoded decodedBackup, next Version
 			}
 		}
 	}
+	carryLegacy(current, after, changes)
+	prepared.State.legacy, prepared.State.origin = false, nil
 	for key, change := range changes {
 		prepared.State.Versions[key] = objectVersion{Version: next, Deleted: change.Deleted}
 		prepared.Changed = append(prepared.Changed, change)

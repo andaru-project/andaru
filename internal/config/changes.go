@@ -131,6 +131,10 @@ type savedState struct {
 	Secrets                secretDocument
 	Versions               map[objectKey]objectVersion
 	configBody, secretBody []byte
+	// legacy says the version was saved in a form before schema 4, and origin which of its rules were split
+	// from which: see decodeSaved.
+	legacy bool
+	origin map[string]string
 }
 type preparedChange struct {
 	State                  savedState
@@ -148,9 +152,9 @@ func initialState() savedState {
 // Ordered collections keep their order; their list is versioned under {collection, collection}.
 // Singletons are versioned the same way and written with replace or delete.
 var (
-	orderedCollections = []string{"policy.input", "policy.forward", "nat.portForwards", "nat.oneToOne"}
+	orderedCollections = []string{"rules", "nat.portForwards", "nat.oneToOne"}
 	singletons         = []string{"management", "nat.outbound", "dns"}
-	collections        = append([]string{"links", "segments", "zones", "roles", "addresses", "services", "dhcp", "dhcp6", "virtualAddresses"}, append(slices.Clone(orderedCollections), singletons...)...)
+	collections        = append([]string{"links", "segments", "zones", "roles", "aliases.addresses", "aliases.ports", "dhcp", "dhcp6", "virtualAddresses"}, append(slices.Clone(orderedCollections), singletons...)...)
 )
 
 func validCollection(s string) bool { return slices.Contains(collections, s) }
@@ -172,7 +176,7 @@ func newID(collection string) (string, error) {
 	}
 	b[6] = (b[6] & 15) | 64
 	b[8] = (b[8] & 63) | 128
-	prefix := map[string]string{"links": "lnk", "segments": "seg", "zones": "zon", "roles": "rol", "addresses": "adr", "services": "svc", "policy.input": "rul", "policy.forward": "rul", "dhcp": "dhp", "dhcp6": "dh6", "virtualAddresses": "vip", "nat.portForwards": "pfw", "nat.oneToOne": "oto"}[collection]
+	prefix := map[string]string{"links": "lnk", "segments": "seg", "zones": "zon", "roles": "rol", "aliases.addresses": "adr", "aliases.ports": "svc", "rules": "rul", "dhcp": "dhp", "dhcp6": "dh6", "virtualAddresses": "vip", "nat.portForwards": "pfw", "nat.oneToOne": "oto"}[collection]
 	return fmt.Sprintf("%s_%x-%x-%x-%x-%x", prefix, b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
 func rank(code string) int {
@@ -204,17 +208,14 @@ func objects(d *declaration) map[objectKey]any {
 	for i := range d.Roles {
 		m[objectKey{"roles", d.Roles[i].ID}] = &d.Roles[i]
 	}
-	for i := range d.Objects.Addresses {
-		m[objectKey{"addresses", d.Objects.Addresses[i].ID}] = &d.Objects.Addresses[i]
+	for i := range d.Aliases.Addresses {
+		m[objectKey{"aliases.addresses", d.Aliases.Addresses[i].ID}] = &d.Aliases.Addresses[i]
 	}
-	for i := range d.Objects.Services {
-		m[objectKey{"services", d.Objects.Services[i].ID}] = &d.Objects.Services[i]
+	for i := range d.Aliases.Ports {
+		m[objectKey{"aliases.ports", d.Aliases.Ports[i].ID}] = &d.Aliases.Ports[i]
 	}
-	for i := range d.Policy.Input {
-		m[objectKey{"policy.input", d.Policy.Input[i].ID}] = &d.Policy.Input[i]
-	}
-	for i := range d.Policy.Forward {
-		m[objectKey{"policy.forward", d.Policy.Forward[i].ID}] = &d.Policy.Forward[i]
+	for i := range d.Rules {
+		m[objectKey{"rules", d.Rules[i].ID}] = &d.Rules[i]
 	}
 	for i := range d.NAT.PortForwards {
 		m[objectKey{"nat.portForwards", d.NAT.PortForwards[i].ID}] = &d.NAT.PortForwards[i]
@@ -503,7 +504,7 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 	if d.Roles, e = rewrite(d.Roles, "roles", writes, deleted, createKeys, func(x authz.Role) string { return x.ID }); e != nil {
 		return empty, e
 	}
-	if d.Objects.Addresses, e = rewrite(d.Objects.Addresses, "addresses", writes, deleted, createKeys, func(x address) string { return x.ID }); e != nil {
+	if d.Aliases.Addresses, e = rewrite(d.Aliases.Addresses, "aliases.addresses", writes, deleted, createKeys, func(x address) string { return x.ID }); e != nil {
 		return empty, e
 	}
 	if d.DHCP, e = rewrite(d.DHCP, "dhcp", writes, deleted, createKeys, func(x dhcpEntry) string { return x.ID }); e != nil {
@@ -515,16 +516,14 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 	if d.DHCP6, e = rewrite(d.DHCP6, "dhcp6", writes, deleted, createKeys, func(x dhcp6Entry) string { return x.ID }); e != nil {
 		return empty, e
 	}
-	if d.Objects.Services, e = rewrite(d.Objects.Services, "services", writes, deleted, createKeys, func(x service) string { return x.ID }); e != nil {
+	if d.Aliases.Ports, e = rewrite(d.Aliases.Ports, "aliases.ports", writes, deleted, createKeys, func(x portAlias) string { return x.ID }); e != nil {
 		return empty, e
 	}
 	for _, col := range orderedCollections {
 		var f *Fault
 		switch col {
-		case "policy.input":
-			f = rewriteOrdered(&d.Policy.Input, col, func(x rule) string { return x.ID }, input, keys, orders, writes, deleted, createKeys)
-		case "policy.forward":
-			f = rewriteOrdered(&d.Policy.Forward, col, func(x rule) string { return x.ID }, input, keys, orders, writes, deleted, createKeys)
+		case "rules":
+			f = rewriteOrdered(&d.Rules, col, func(x rule) string { return x.ID }, input, keys, orders, writes, deleted, createKeys)
 		case "nat.portForwards":
 			f = rewriteOrdered(&d.NAT.PortForwards, col, func(x portForward) string { return x.ID }, input, keys, orders, writes, deleted, createKeys)
 		case "nat.oneToOne":
@@ -573,17 +572,7 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 	if f := vipStillTargeted(&current.Config, &d, input); f != nil {
 		return empty, f
 	}
-	for _, l := range d.Links {
-		if l.Password != nil && l.Password.Unresolved {
-			d.SchemaVersion = 2
-			break
-		}
-	}
-	if len(d.Roles) > 0 || d.SchemaVersion == 3 {
-		d.SchemaVersion = 3
-	} else {
-		d.Roles = nil
-	}
+	d.SchemaVersion = schemaVersion
 	raw, e := json.Marshal(d)
 	if e != nil {
 		return empty, e
@@ -672,6 +661,8 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 	}
 	if !same {
 		p.State.Version = next
+		carryLegacy(current, after, changes)
+		p.State.legacy, p.State.origin = false, nil
 		for key, ch := range changes {
 			p.State.Versions[key] = objectVersion{Version: next, Deleted: ch.Deleted}
 			p.Changed = append(p.Changed, ch)
@@ -767,12 +758,16 @@ func resolveReferences(v map[string]any, col string, labels map[string]string) {
 		}
 	}
 	switch col {
-	case "addresses", "services":
+	case "aliases.addresses", "aliases.ports":
 		resolveAll(v, "members")
-	case "policy.input", "policy.forward":
-		resolveAll(v, "from")
-		resolveAll(v, "to")
-		resolveAll(v, "services")
+	case "rules":
+		for _, side := range []string{"from", "to"} {
+			if m, ok := v[side].(map[string]any); ok {
+				resolveAll(m, "zones")
+				resolveAll(m, "addresses")
+			}
+		}
+		resolveAll(v, "ports")
 	case "management", "dhcp", "dhcp6":
 		resolve(v, "segment")
 		resolveAll(v, "allowedSources")
@@ -820,13 +815,11 @@ func owner(d *declaration, path string) (objectKey, string) {
 			return objectKey{}, ""
 		}
 		p = append([]string{"nat." + p[1]}, p[2:]...)
-	case "objects":
-		p = p[1:]
-	case "policy":
+	case "aliases":
 		if len(p) < 2 {
 			return objectKey{}, ""
 		}
-		p = append([]string{"policy." + p[1]}, p[2:]...)
+		p = append([]string{"aliases." + p[1]}, p[2:]...)
 	}
 	if len(p) < 2 {
 		return objectKey{}, ""
@@ -845,14 +838,12 @@ func owner(d *declaration, path string) (objectKey, string) {
 		id = d.Zones[n].ID
 	case col == "roles" && n < len(d.Roles):
 		id = d.Roles[n].ID
-	case col == "addresses" && n < len(d.Objects.Addresses):
-		id = d.Objects.Addresses[n].ID
-	case col == "services" && n < len(d.Objects.Services):
-		id = d.Objects.Services[n].ID
-	case col == "policy.input" && n < len(d.Policy.Input):
-		id = d.Policy.Input[n].ID
-	case col == "policy.forward" && n < len(d.Policy.Forward):
-		id = d.Policy.Forward[n].ID
+	case col == "aliases.addresses" && n < len(d.Aliases.Addresses):
+		id = d.Aliases.Addresses[n].ID
+	case col == "aliases.ports" && n < len(d.Aliases.Ports):
+		id = d.Aliases.Ports[n].ID
+	case col == "rules" && n < len(d.Rules):
+		id = d.Rules[n].ID
 	case col == "dhcp" && n < len(d.DHCP):
 		id = d.DHCP[n].ID
 	case col == "virtualAddresses" && n < len(d.VirtualAddresses):

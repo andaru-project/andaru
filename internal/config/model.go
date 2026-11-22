@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"slices"
 	"strconv"
 
 	"github.com/andaru-project/andaru/internal/authz"
@@ -11,6 +12,10 @@ const requestLimit = 1 << 20
 const documentLimit = 4 << 20
 const objectLimit = 10000
 const schemaURI = "https://andaru.invalid/api/v1/schema"
+
+// schemaVersion is the saved configuration's form: 4 since the firewall's rules are one list between zones and
+// its objects are aliases. Documents of the forms before it load through upgradeLegacy.
+const schemaVersion = 4
 
 type Version string
 
@@ -130,7 +135,11 @@ type segment struct {
 }
 type zone struct{ identity }
 
-// address is a filter address object: one host, network or range, or a group of those.
+// firewallZone is the built-in zone that is the box itself. Nothing stores it: it has no interfaces and no
+// name to change, and a rule names it as its destination to reach the firewall.
+const firewallZone = "zon_firewall"
+
+// address is an address alias: one host, network or range, or a group of those.
 type address struct {
 	identity
 	Kind    string   `json:"kind"`
@@ -141,8 +150,9 @@ type address struct {
 	Members []string `json:"members,omitempty"`
 }
 
-// service is a filter service object: tcp or udp ports, icmp or icmpv6 types, or a group of those.
-type service struct {
+// portAlias is a port alias: tcp or udp ports, icmp or icmpv6 types, or a group of those. Its ID keeps the
+// svc_ prefix of the services it was saved as.
+type portAlias struct {
 	identity
 	Protocol string   `json:"protocol"`
 	Ports    []string `json:"ports,omitempty"`
@@ -150,23 +160,32 @@ type service struct {
 	Members  []string `json:"members,omitempty"`
 }
 
-// rule is one policy rule; its position in its list is its execution order.
+// ruleSide is where a rule's traffic comes from or goes to: the zone it arrives in or leaves by, and the
+// addresses within it. Both must match. No zones is any network, never the firewall; no addresses is every
+// address. Not turns the addresses into "none of these".
+type ruleSide struct {
+	Zones     []string `json:"zones"`
+	Addresses []string `json:"addresses"`
+	Not       bool     `json:"not,omitempty"`
+}
+
+// rule is one firewall rule; its position in the list is its execution order.
 type rule struct {
 	identity
-	Enabled  bool     `json:"enabled"`
-	Action   string   `json:"action"`
-	From     []string `json:"from"`
-	To       []string `json:"to"`
-	Services []string `json:"services"`
-	Log      bool     `json:"log"`
+	Enabled bool     `json:"enabled"`
+	Action  string   `json:"action"`
+	From    ruleSide `json:"from"`
+	To      ruleSide `json:"to"`
+	Ports   []string `json:"ports"`
+	Log     bool     `json:"log"`
 }
-type objectSet struct {
-	Addresses []address `json:"addresses"`
-	Services  []service `json:"services"`
-}
-type policy struct {
-	Input   []rule `json:"input"`
-	Forward []rule `json:"forward"`
+
+// toFirewall reports that the rule's destination is the box, so it belongs to the input chain.
+func (r rule) toFirewall() bool { return slices.Contains(r.To.Zones, firewallZone) }
+
+type aliasSet struct {
+	Addresses []address   `json:"addresses"`
+	Ports     []portAlias `json:"ports"`
 }
 type outbound struct {
 	Mode string `json:"mode"`
@@ -177,7 +196,7 @@ type natSettings struct {
 	OneToOne     []oneToOne    `json:"oneToOne,omitempty"`
 }
 
-// natAddress is a port forward's destination as the client sees it: the firewall itself or an address object.
+// natAddress is a port forward's destination as the client sees it: the firewall itself or an address alias.
 type natAddress struct {
 	Self    bool   `json:"self,omitempty"`
 	Address string `json:"address,omitempty"`
@@ -297,8 +316,8 @@ type declaration struct {
 	Segments      []segment    `json:"segments"`
 	Zones         []zone       `json:"zones"`
 	Roles         []authz.Role `json:"roles,omitzero"`
-	Objects       objectSet    `json:"objects,omitzero"`
-	Policy        policy       `json:"policy,omitzero"`
+	Aliases       aliasSet     `json:"aliases,omitzero"`
+	Rules         []rule       `json:"rules,omitzero"`
 	NAT           natSettings  `json:"nat,omitzero"`
 	Management    *management  `json:"management,omitempty"`
 	DHCP          []dhcpEntry  `json:"dhcp,omitzero"`
@@ -315,7 +334,7 @@ type virtualAddress struct {
 }
 
 func emptyDeclaration() declaration {
-	return declaration{SchemaVersion: 1, Links: []link{}, Segments: []segment{}, Zones: []zone{}}
+	return declaration{SchemaVersion: schemaVersion, Links: []link{}, Segments: []segment{}, Zones: []zone{}}
 }
 func linkMembers(l link) []string {
 	if l.Members == nil {

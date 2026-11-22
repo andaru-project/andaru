@@ -574,12 +574,8 @@ func validManifest(m backup.Manifest) bool {
 			return false
 		}
 		last = position
-		name, maximum := "config.json", 2
+		name, maximum := "config.json", backup.MaximumConfigSchema
 		switch scope {
-		case "configuration":
-			if m.FormatVersion == 2 {
-				maximum = 3
-			}
 		case "users":
 			name, maximum = "users.json", 1
 		case "configurationSecrets":

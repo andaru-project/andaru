@@ -45,7 +45,7 @@ var applyIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
 // errUsage marks a usage error; its text is never printed, the caller prints the command's usage.
 var errUsage = errors.New("invalid arguments")
 
-var collections = []string{"links", "segments", "zones", "addresses", "services", "dhcp", "dhcp6", "virtualAddresses", "policy/input", "policy/forward", "nat/port-forwards", "nat/one-to-one"}
+var collections = []string{"links", "segments", "zones", "aliases/addresses", "aliases/ports", "dhcp", "dhcp6", "virtualAddresses", "rules", "nat/port-forwards", "nat/one-to-one"}
 
 // singletons are the configuration objects that exist at most once and have no ID.
 var singletons = []string{"management", "nat/outbound", "dns"}
@@ -60,11 +60,11 @@ func validChanged(item config.ChangedView) bool {
 	case "management", "nat.outbound", "dns":
 		var value map[string]any
 		return item.ID == item.Collection && (item.Deleted || validVersion(item.Version) && item.Version != "0" && json.Unmarshal(item.Value, &value) == nil)
-	case "policy.input", "policy.forward", "nat.portForwards", "nat.oneToOne":
+	case "rules", "nat.portForwards", "nat.oneToOne":
 		if item.ID == item.Collection {
 			return validVersion(item.Version) && item.Version != "0"
 		}
-	case "links", "segments", "zones", "addresses", "services", "dhcp", "dhcp6", "virtualAddresses":
+	case "links", "segments", "zones", "aliases.addresses", "aliases.ports", "dhcp", "dhcp6", "virtualAddresses":
 	default:
 		return false
 	}
@@ -97,7 +97,7 @@ func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 		version := ""
 		chain := ""
 		if verb == "order" && len(leaf) > 0 {
-			// andaru ctl config order input|forward|nat/port-forwards|nat/one-to-one --version V <id>...: the list comes before the flags.
+			// andaru ctl config order rules|nat/port-forwards|nat/one-to-one --version V <id>...: the list comes before the flags.
 			chain, leaf = leaf[0], leaf[1:]
 		}
 		if verb == "replace" || verb == "delete" || verb == "order" {
@@ -115,8 +115,8 @@ func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 			}
 		}
 		if verb == "order" {
-			path, prefix := map[string]string{"input": "policy/input", "forward": "policy/forward", "nat/port-forwards": "nat/port-forwards", "nat/one-to-one": "nat/one-to-one"}[chain],
-				map[string]string{"input": "rul_", "forward": "rul_", "nat/port-forwards": "pfw_", "nat/one-to-one": "oto_"}[chain]
+			path, prefix := map[string]string{"rules": "rules", "nat/port-forwards": "nat/port-forwards", "nat/one-to-one": "nat/one-to-one"}[chain],
+				map[string]string{"rules": "rul_", "nat/port-forwards": "pfw_", "nat/one-to-one": "oto_"}[chain]
 			if path == "" {
 				return req, errUsage
 			}
@@ -481,7 +481,7 @@ func validDeclarationView(raw json.RawMessage) bool {
 		SchemaVersion          int
 		Links, Segments, Zones []json.RawMessage
 	}
-	return json.Unmarshal(raw, &d) == nil && (d.SchemaVersion == 1 || d.SchemaVersion == 2 || d.SchemaVersion == 3) && d.Links != nil && d.Segments != nil && d.Zones != nil
+	return json.Unmarshal(raw, &d) == nil && d.SchemaVersion == 4 && d.Links != nil && d.Segments != nil && d.Zones != nil
 }
 func validEnvelope(kind string, body []byte) bool {
 	if !jsontext.Value(body).IsValid() {

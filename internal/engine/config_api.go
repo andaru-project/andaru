@@ -56,21 +56,35 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 			collection = strings.Join(parts[1:], ".")
 			route, id = "singleton", collection
 			allowed = []string{"GET", "HEAD", "PUT", "DELETE"}
-		case len(parts) >= 3 && parts[0] == "config" && (parts[1] == "policy" && (parts[2] == "input" || parts[2] == "forward") ||
-			parts[1] == "nat" && (parts[2] == "port-forwards" || parts[2] == "one-to-one")):
-			collection = map[string]string{"input": "policy.input", "forward": "policy.forward", "port-forwards": "nat.portForwards", "one-to-one": "nat.oneToOne"}[parts[2]]
+		case len(parts) >= 2 && parts[0] == "config" && (parts[1] == "rules" ||
+			len(parts) >= 3 && parts[1] == "nat" && (parts[2] == "port-forwards" || parts[2] == "one-to-one")):
+			// An ordered list: its entries, and their order as a resource of its own.
+			collection = "rules"
+			rest := parts[2:]
+			if parts[1] == "nat" {
+				collection, rest = map[string]string{"port-forwards": "nat.portForwards", "one-to-one": "nat.oneToOne"}[parts[2]], parts[3:]
+			}
 			switch {
-			case len(parts) == 3:
+			case len(rest) == 0:
 				route = "collection"
 				allowed = []string{"GET", "HEAD", "POST"}
-			case len(parts) == 4 && parts[3] == "order":
+			case len(rest) == 1 && rest[0] == "order":
 				route, id = "order", "order"
 				allowed = []string{"PUT"}
-			case len(parts) == 4 && parts[3] != "":
+			case len(rest) == 1 && rest[0] != "":
+				route, id = "object", rest[0]
+				allowed = []string{"GET", "HEAD", "PUT", "DELETE"}
+			}
+		case len(parts) >= 3 && parts[0] == "config" && parts[1] == "aliases" && (parts[2] == "addresses" || parts[2] == "ports"):
+			collection = "aliases." + parts[2]
+			if len(parts) == 3 {
+				route = "collection"
+				allowed = []string{"GET", "HEAD", "POST"}
+			} else if len(parts) == 4 && parts[3] != "" {
 				route, id = "object", parts[3]
 				allowed = []string{"GET", "HEAD", "PUT", "DELETE"}
 			}
-		case len(parts) >= 2 && parts[0] == "config" && slices.Contains([]string{"links", "segments", "zones", "roles", "addresses", "services", "dhcp", "dhcp6", "virtualAddresses"}, parts[1]):
+		case len(parts) >= 2 && parts[0] == "config" && slices.Contains([]string{"links", "segments", "zones", "roles", "dhcp", "dhcp6", "virtualAddresses"}, parts[1]):
 			collection = parts[1]
 			if len(parts) == 2 {
 				route = "collection"

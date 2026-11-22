@@ -20,17 +20,20 @@ var SchemaBundle []byte
 var secretSchema []byte
 
 type schemaSet struct {
-	declaration, changes, secret, backupSecret *jsonschema.Schema
+	declaration, legacy, changes, secret, backupSecret *jsonschema.Schema
 	objects                                    map[string]*jsonschema.Schema
 }
 
 var schemas = sync.OnceValues(func() (*schemaSet, error) {
-	c, e := newSchemaCompiler(map[string][]byte{schemaURI: SchemaBundle, "https://andaru.invalid/private/config-secrets-v1": secretSchema, "https://andaru.invalid/private/backup-config-secrets-v1": backupSecretSchema})
+	c, e := newSchemaCompiler(map[string][]byte{schemaURI: SchemaBundle, legacySchemaURI: legacySchema, "https://andaru.invalid/private/config-secrets-v1": secretSchema, "https://andaru.invalid/private/backup-config-secrets-v1": backupSecretSchema})
 	if e != nil {
 		return nil, e
 	}
 	var s schemaSet
 	if s.declaration, e = c.Compile(schemaURI + "#/$defs/declaration"); e != nil {
+		return nil, e
+	}
+	if s.legacy, e = c.Compile(legacySchemaURI + "#/$defs/declaration"); e != nil {
 		return nil, e
 	}
 	if s.changes, e = c.Compile(schemaURI + "#/$defs/changes"); e != nil {
@@ -43,8 +46,8 @@ var schemas = sync.OnceValues(func() (*schemaSet, error) {
 		return nil, e
 	}
 	s.objects = make(map[string]*jsonschema.Schema, 16)
-	for collection, kind := range map[string]string{"links": "link", "segments": "segment", "zones": "zone", "roles": "role", "addresses": "address", "services": "service",
-		"policy.input": "rule", "policy.forward": "rule", "management": "managementFields#", "nat.outbound": "outboundFields#", "dhcp": "dhcp", "dhcp6": "dhcp6", "virtualAddresses": "virtualAddress", "dns": "dnsService#", "nat.portForwards": "portForward", "nat.oneToOne": "oneToOne"} {
+	for collection, kind := range map[string]string{"links": "link", "segments": "segment", "zones": "zone", "roles": "role", "aliases.addresses": "address", "aliases.ports": "portAlias",
+		"rules": "rule", "management": "managementFields#", "nat.outbound": "outboundFields#", "dhcp": "dhcp", "dhcp6": "dhcp6", "virtualAddresses": "virtualAddress", "dns": "dnsService#", "nat.portForwards": "portForward", "nat.oneToOne": "oneToOne"} {
 		kind, whole := strings.CutSuffix(kind, "#")
 		if !whole {
 			kind += "Write"
@@ -104,7 +107,7 @@ func schemaErrors(err error) error {
 	return details
 }
 func safePointer(tokens []string) string {
-	const fields = " schemaVersion links segments zones roles capabilities builtIn objects policy nat management dhcp dns ranges leaseTime dnsServers staticLeases mac hostname upstreams tlsName localDomain registerLeases outbound segment allowedSources input forward action to services log protocol ports types address prefix first last before order id name description kind mtu enabled permanentMac parent vlanId members mode username password secret set expectedVersion isSet updatedAt version addressing ipv4 ipv6 addresses gateway requestPrefixLength from subnetId ra managed otherInfo priority routerLifetime validLifetime preferredLifetime pref64 portForwards oneToOne dhcp6 duid prefixDelegation delegatedLength excludedPrefix prefixId length virtualAddresses family ingressZones fromNegated ports noRedirect target targetPort filterRule reflection self external internal destination noBinat prefixOnly withoutRA sendRelease duid dns servers searchDomains op collection localId operations state savedVersion value items unusedSecrets "
+	const fields = " aliases rules not schemaVersion links segments zones roles capabilities builtIn objects policy nat management dhcp dns ranges leaseTime dnsServers staticLeases mac hostname upstreams tlsName localDomain registerLeases outbound segment allowedSources input forward action to services log protocol ports types address prefix first last before order id name description kind mtu enabled permanentMac parent vlanId members mode username password secret set expectedVersion isSet updatedAt version addressing ipv4 ipv6 addresses gateway requestPrefixLength from subnetId ra managed otherInfo priority routerLifetime validLifetime preferredLifetime pref64 portForwards oneToOne dhcp6 duid prefixDelegation delegatedLength excludedPrefix prefixId length virtualAddresses family ingressZones fromNegated ports noRedirect target targetPort filterRule reflection self external internal destination noBinat prefixOnly withoutRA sendRelease duid dns servers searchDomains op collection localId operations state savedVersion value items unusedSecrets "
 	var b strings.Builder
 	for _, t := range tokens {
 		if _, e := strconv.ParseUint(t, 10, 32); e != nil && t != "unresolved" && !strings.Contains(fields, " "+t+" ") {

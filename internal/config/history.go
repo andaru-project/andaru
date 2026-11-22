@@ -2,14 +2,17 @@ package config
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/andaru-project/andaru/internal/authz"
@@ -39,23 +42,28 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 		}
 		return state, info, diagnostic("load-config-scan", e)
 	}
-	if number < 0 || (schemaVersion != 1 && schemaVersion != 2 && schemaVersion != 3) || len(ch) != 32 || len(sh) != 32 || len(cb) > documentLimit {
+	if number < 0 || schemaVersion < 1 || schemaVersion > 4 || len(ch) != 32 || len(sh) != 32 || len(cb) > documentLimit {
 		return state, info, diagnostic("load-config-metadata", nil)
 	}
 	hash := sha256.Sum256(cb)
 	if !bytes.Equal(hash[:], ch) {
 		return state, info, diagnostic("load-config-hash", nil)
 	}
-	d, e := decodeDeclaration(cb)
+	d, stored, origin, e := decodeSaved(cb)
+	if errors.Is(e, errNotCanonical) {
+		return state, info, diagnostic("load-config-canonical", nil)
+	}
 	if e != nil {
 		return state, info, diagnostic("load-config-schema", e)
 	}
-	if d.SchemaVersion != schemaVersion {
+	if stored != schemaVersion {
 		return state, info, diagnostic("load-config-schema-mismatch", nil)
 	}
-	canonicalBody, e := canonical(d)
-	if e != nil || !bytes.Equal(canonicalBody, cb) {
-		return state, info, diagnostic("load-config-canonical", e)
+	if state.legacy, state.origin = stored < d.SchemaVersion, origin; state.legacy {
+		// What a batch that changes nothing is compared with: the document as it reads now.
+		if cb, e = canonical(d); e != nil {
+			return state, info, diagnostic("load-config-canonical", e)
+		}
 	}
 	state.Version = Version(strconv.FormatInt(number, 10))
 	info.ID = state.Version
@@ -105,7 +113,7 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 			}
 		}
 	}
-	state.Versions, e = loadObjectVersions(ctx, conn, &d, number, requested, false)
+	state.Versions, e = loadObjectVersions(ctx, conn, &state, number, requested, false)
 	if e != nil {
 		return state, info, e
 	}
@@ -113,8 +121,8 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 }
 
 // A cold recovery check may encounter additive tables that normal startup creates.
-func loadObjectVersions(ctx context.Context, conn *sql.Conn, d *declaration, number int64, requested []objectKey, allowAbsentTables bool) (map[objectKey]objectVersion, error) {
-	active := objects(d)
+func loadObjectVersions(ctx context.Context, conn *sql.Conn, state *savedState, number int64, requested []objectKey, allowAbsentTables bool) (map[objectKey]objectVersion, error) {
+	active := objects(&state.Config)
 	wanted := map[objectKey]bool{}
 	for k := range active {
 		wanted[k] = true
@@ -129,6 +137,7 @@ func loadObjectVersions(ctx context.Context, conn *sql.Conn, d *declaration, num
 		}
 	}
 	versions := make(map[objectKey]objectVersion, len(wanted))
+	latest := map[objectKey]int64{}
 	for _, col := range collections {
 		ids := []string{}
 		for key := range wanted {
@@ -139,7 +148,12 @@ func loadObjectVersions(ctx context.Context, conn *sql.Conn, d *declaration, num
 		if len(ids) == 0 {
 			continue
 		}
-		table := changeTable(col)
+		// A version of a form before schema 4 has its aliases and rules recorded under the names they had, and
+		// a rule the upgrade split from another has the version of the rule it came from.
+		table, recorded := changeTable(col), []string{col}
+		if state.legacy && legacyCollections[col] != nil {
+			table, recorded = "policy_changes", legacyCollections[col]
+		}
 		if allowAbsentTables && table != "object_changes" {
 			var count int
 			if err := conn.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&count); err != nil {
@@ -149,29 +163,45 @@ func loadObjectVersions(ctx context.Context, conn *sql.Conn, d *declaration, num
 				continue
 			}
 		}
-		raw, _ := json.Marshal(ids)
-		rows, err := conn.QueryContext(ctx, `SELECT c.object_id,c.version_id,c.deleted FROM `+table+` c WHERE c.collection=? AND c.object_id IN (SELECT value FROM json_each(?)) AND c.version_id=(SELECT max(n.version_id) FROM `+table+` n WHERE n.collection=c.collection AND n.object_id=c.object_id AND n.version_id<=?)`, col, string(raw), number)
-		if err != nil {
-			return nil, diagnostic("load-object-metadata-query", err)
-		}
-		for rows.Next() {
-			var oid string
-			var version int64
-			var deleted bool
-			if err = rows.Scan(&oid, &version, &deleted); err != nil {
-				rows.Close()
-				return nil, diagnostic("load-object-metadata-scan", err)
+		for _, name := range recorded {
+			asked := map[string][]string{}
+			for _, id := range ids {
+				was := cmp.Or(state.origin[id], id)
+				if id == col {
+					was = name
+				}
+				asked[was] = append(asked[was], id)
 			}
-			if version <= 0 || version > number {
-				rows.Close()
-				return nil, diagnostic("load-object-metadata-range", nil)
+			raw, _ := json.Marshal(slices.Collect(maps.Keys(asked)))
+			rows, err := conn.QueryContext(ctx, `SELECT c.object_id,c.version_id,c.deleted FROM `+table+` c WHERE c.collection=? AND c.object_id IN (SELECT value FROM json_each(?)) AND c.version_id=(SELECT max(n.version_id) FROM `+table+` n WHERE n.collection=c.collection AND n.object_id=c.object_id AND n.version_id<=?)`, name, string(raw), number)
+			if err != nil {
+				return nil, diagnostic("load-object-metadata-query", err)
 			}
-			versions[objectKey{col, oid}] = objectVersion{Version: Version(strconv.FormatInt(version, 10)), Deleted: deleted}
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return nil, diagnostic("load-object-metadata-rows", err)
+			for rows.Next() {
+				var oid string
+				var version int64
+				var deleted bool
+				if err = rows.Scan(&oid, &version, &deleted); err != nil {
+					rows.Close()
+					return nil, diagnostic("load-object-metadata-scan", err)
+				}
+				if version <= 0 || version > number {
+					rows.Close()
+					return nil, diagnostic("load-object-metadata-range", nil)
+				}
+				for _, id := range asked[oid] {
+					// The rule list was two lists: it changed last when either did.
+					if version > latest[objectKey{col, id}] {
+						latest[objectKey{col, id}] = version
+						versions[objectKey{col, id}] = objectVersion{Version: Version(strconv.FormatInt(version, 10)), Deleted: deleted}
+					}
+				}
+			}
+			err = rows.Err()
+			rows.Close()
+			if err != nil {
+				return nil, diagnostic("load-object-metadata-rows", err)
+			}
 		}
 	}
 	for key := range active {
@@ -360,7 +390,13 @@ func (s *Store) Version(ctx context.Context, id Version) (result VersionView, er
 	}
 	result = VersionView{State: "saved", VersionInfo: info, Value: snapshot.Value, Changes: []objectChange{}}
 	number, _ := strconvVersion(id)
-	rows, e := conn.QueryContext(ctx, "SELECT collection,object_id,created,deleted FROM object_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM policy_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM service_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM nat_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM dhcp6_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM vip_changes WHERE version_id=? UNION ALL SELECT collection,object_id,created,deleted FROM role_changes WHERE version_id=? ORDER BY 1,2", number, number, number, number, number, number, number)
+	var query []string
+	var arguments []any
+	for _, table := range changeTables {
+		query = append(query, "SELECT collection,object_id,created,deleted FROM "+table+" WHERE version_id=?")
+		arguments = append(arguments, number)
+	}
+	rows, e := conn.QueryContext(ctx, strings.Join(query, " UNION ALL ")+" ORDER BY 1,2", arguments...)
 	if e != nil {
 		return result, diagnostic("version-changes-query", e)
 	}
@@ -370,8 +406,19 @@ func (s *Store) Version(ctx context.Context, id Version) (result VersionView, er
 		if e = rows.Scan(&change.Collection, &change.ID, &change.Created, &change.Deleted); e != nil {
 			return result, diagnostic("version-changes-scan", e)
 		}
+		// A version of a form before schema 4 recorded the aliases and the two rule lists under other names.
+		if current := currentCollection(change.Collection); current != change.Collection {
+			if change.ID == change.Collection {
+				change.ID = current
+			}
+			change.Collection = current
+		}
 		result.Changes = append(result.Changes, change)
 	}
+	slices.SortFunc(result.Changes, func(a, b objectChange) int {
+		return compareKeys(objectKey{a.Collection, a.ID}, objectKey{b.Collection, b.ID})
+	})
+	result.Changes = slices.Compact(result.Changes)
 	if e = rows.Err(); e != nil {
 		return result, diagnostic("version-changes-rows", e)
 	}
@@ -421,12 +468,8 @@ func (s *Store) RealizationInput(ctx context.Context, version *Version) (result 
 func orderedIDs(d *declaration, collection string) []string {
 	var ids []string
 	switch collection {
-	case "policy.input":
-		for _, r := range d.Policy.Input {
-			ids = append(ids, r.ID)
-		}
-	case "policy.forward":
-		for _, r := range d.Policy.Forward {
+	case "rules":
+		for _, r := range d.Rules {
 			ids = append(ids, r.ID)
 		}
 	case "nat.portForwards":

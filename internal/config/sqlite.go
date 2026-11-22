@@ -23,7 +23,7 @@ CREATE TABLE versions(id INTEGER PRIMARY KEY,parent_id INTEGER REFERENCES versio
 CREATE TABLE pointers(name TEXT PRIMARY KEY CHECK(name='saved'),version_id INTEGER NOT NULL REFERENCES versions(id));
 CREATE TABLE object_changes(collection TEXT NOT NULL CHECK(collection IN ('links','segments','zones')),object_id TEXT NOT NULL,version_id INTEGER NOT NULL REFERENCES versions(id),created INTEGER NOT NULL CHECK(created IN (0,1)),deleted INTEGER NOT NULL CHECK(deleted IN (0,1)),CHECK(NOT(created AND deleted)),PRIMARY KEY(collection,object_id,version_id));
 CREATE UNIQUE INDEX creation_identity ON object_changes(object_id) WHERE created=1;
-` + policyDDL + serviceDDL + natDDL + dhcp6DDL + vipDDL + roleDDL
+` + policyDDL + serviceDDL + natDDL + dhcp6DDL + vipDDL + roleDDL + firewallDDL
 
 // policyDDL holds the versions of the filter's objects, lists and singletons. It is added beside
 // object_changes rather than widening that table's CHECK, so an existing store gains it with one
@@ -51,8 +51,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS dhcp6_creation_identity ON dhcp6_changes(objec
 const roleDDL = `CREATE TABLE IF NOT EXISTS role_changes(collection TEXT NOT NULL CHECK(collection='roles'),object_id TEXT NOT NULL,version_id INTEGER NOT NULL REFERENCES versions(id),created INTEGER NOT NULL CHECK(created IN (0,1)),deleted INTEGER NOT NULL CHECK(deleted IN (0,1)),CHECK(NOT(created AND deleted)),PRIMARY KEY(collection,object_id,version_id));
 CREATE UNIQUE INDEX IF NOT EXISTS role_creation_identity ON role_changes(object_id) WHERE created=1;`
 
+// firewallDDL holds the versions of the aliases and the rules since schema 4, added beside the others as
+// policy_changes was. The versions of the forms before stay in policy_changes under the names they had.
+const firewallDDL = `CREATE TABLE IF NOT EXISTS firewall_changes(collection TEXT NOT NULL CHECK(collection IN ('aliases.addresses','aliases.ports','rules')),object_id TEXT NOT NULL,version_id INTEGER NOT NULL REFERENCES versions(id),created INTEGER NOT NULL CHECK(created IN (0,1)),deleted INTEGER NOT NULL CHECK(deleted IN (0,1)),CHECK(NOT(created AND deleted)),PRIMARY KEY(collection,object_id,version_id));
+CREATE UNIQUE INDEX IF NOT EXISTS firewall_creation_identity ON firewall_changes(object_id) WHERE created=1;`
+
+// changeTables are all the tables object versions are recorded in.
+var changeTables = []string{"object_changes", "policy_changes", "service_changes", "nat_changes", "dhcp6_changes", "vip_changes", "role_changes", "firewall_changes"}
+
 // changeTable is where a collection's object versions are recorded.
 func changeTable(collection string) string {
+	if legacyCollections[collection] != nil {
+		return "firewall_changes"
+	}
 	if collection == "links" || collection == "segments" || collection == "zones" {
 		return "object_changes"
 	}

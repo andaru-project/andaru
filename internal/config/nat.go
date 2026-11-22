@@ -27,7 +27,7 @@ func validateNAT(d *declaration) []FieldError {
 		zones[z.ID] = true
 	}
 	addresses := map[string]address{}
-	for _, a := range d.Objects.Addresses {
+	for _, a := range d.Aliases.Addresses {
 		addresses[a.ID] = a
 	}
 	// has says whether an address object can match the family six selects. Groups hold no groups (the

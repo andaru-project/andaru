@@ -11,13 +11,13 @@ import (
 // maxRuleLines caps the nft lines one rule renders to.
 const maxRuleLines = 4096
 
-// ICMP types a service may name; nft knows them by these names.
+// ICMP types a port alias may name; nft knows them by these names.
 var icmpTypes = map[string][]string{
 	"icmp":   {"echo-request", "echo-reply", "destination-unreachable", "time-exceeded", "parameter-problem", "timestamp-request", "timestamp-reply"},
 	"icmpv6": {"echo-request", "echo-reply", "destination-unreachable", "packet-too-big", "time-exceeded", "parameter-problem"},
 }
 
-// validatePolicy checks the filter sections against each other and the topology.
+// validatePolicy checks the aliases, the rules and the management section against each other and the topology.
 func validatePolicy(d *declaration) []FieldError {
 	var out []FieldError
 	bad := func(path, msg string) {
@@ -40,9 +40,9 @@ func validatePolicy(d *declaration) []FieldError {
 
 	addresses := map[string]*address{}
 	seen := map[string]bool{}
-	for i := range d.Objects.Addresses {
-		a := &d.Objects.Addresses[i]
-		unique("/objects/addresses", i, a.identity, seen)
+	for i := range d.Aliases.Addresses {
+		a := &d.Aliases.Addresses[i]
+		unique("/aliases/addresses", i, a.identity, seen)
 		addresses[a.ID] = a
 	}
 	// families says which address families an address object holds: 4, 6 or both for a group.
@@ -53,9 +53,9 @@ func validatePolicy(d *declaration) []FieldError {
 		}
 		return 6
 	}
-	for i := range d.Objects.Addresses {
-		a := &d.Objects.Addresses[i]
-		p := fmt.Sprintf("/objects/addresses/%d", i)
+	for i := range d.Aliases.Addresses {
+		a := &d.Aliases.Addresses[i]
+		p := fmt.Sprintf("/aliases/addresses/%d", i)
 		f := map[int]bool{}
 		fields := map[string]bool{"address": a.Address != "", "prefix": a.Prefix != "", "first": a.First != "" || a.Last != "", "members": a.Members != nil}
 		want := map[string]string{"host": "address", "network": "prefix", "range": "first", "group": "members"}[a.Kind]
@@ -97,13 +97,13 @@ func validatePolicy(d *declaration) []FieldError {
 			for j, m := range a.Members {
 				member, ok := addresses[m]
 				if !ok || member.Kind == "group" {
-					bad(fmt.Sprintf("%s/members/%d", p, j), "Members must be existing addresses that are not groups.")
+					bad(fmt.Sprintf("%s/members/%d", p, j), "Members must be existing address aliases that are not groups.")
 				}
 			}
 		}
 		families[a.ID] = f
 	}
-	for _, a := range d.Objects.Addresses {
+	for _, a := range d.Aliases.Addresses {
 		if a.Kind == "group" {
 			for _, m := range a.Members {
 				for family := range families[m] {
@@ -113,28 +113,28 @@ func validatePolicy(d *declaration) []FieldError {
 		}
 	}
 
-	services := map[string]*service{}
+	services := map[string]*portAlias{}
 	seen = map[string]bool{}
-	for i := range d.Objects.Services {
-		s := &d.Objects.Services[i]
-		unique("/objects/services", i, s.identity, seen)
+	for i := range d.Aliases.Ports {
+		s := &d.Aliases.Ports[i]
+		unique("/aliases/ports", i, s.identity, seen)
 		services[s.ID] = s
 	}
-	for i := range d.Objects.Services {
-		s := &d.Objects.Services[i]
-		p := fmt.Sprintf("/objects/services/%d", i)
+	for i := range d.Aliases.Ports {
+		s := &d.Aliases.Ports[i]
+		p := fmt.Sprintf("/aliases/ports/%d", i)
 		ports, types, members := s.Protocol == "tcp" || s.Protocol == "udp", icmpTypes[s.Protocol] != nil, s.Protocol == "group"
 		if !ports && s.Ports != nil {
-			bad(p+"/ports", "Only tcp and udp services have ports.")
+			bad(p+"/ports", "Only tcp and udp port aliases have ports.")
 		}
 		if !types && s.Types != nil {
-			bad(p+"/types", "Only icmp and icmpv6 services have types.")
+			bad(p+"/types", "Only icmp and icmpv6 port aliases have types.")
 		}
 		if !members && s.Members != nil {
 			bad(p+"/members", "Only groups have members.")
 		}
 		if ports && len(s.Ports) == 0 {
-			bad(p+"/ports", "A tcp or udp service needs at least one port.")
+			bad(p+"/ports", "A tcp or udp port alias needs at least one port.")
 		}
 		for j, raw := range s.Ports {
 			lo, hi, isRange := strings.Cut(raw, "-")
@@ -157,7 +157,7 @@ func validatePolicy(d *declaration) []FieldError {
 		}
 		for j, m := range s.Members {
 			if member, ok := services[m]; !ok || member.Protocol == "group" {
-				bad(fmt.Sprintf("%s/members/%d", p, j), "Members must be existing services that are not groups.")
+				bad(fmt.Sprintf("%s/members/%d", p, j), "Members must be existing port aliases that are not groups.")
 			}
 		}
 	}
@@ -166,72 +166,94 @@ func validatePolicy(d *declaration) []FieldError {
 	for _, z := range d.Zones {
 		zones[z.ID] = true
 	}
-	for chain, rules := range map[string][]rule{"input": d.Policy.Input, "forward": d.Policy.Forward} {
-		seen := map[string]bool{}
-		for i, r := range rules {
-			p := fmt.Sprintf("/policy/%s/%d", chain, i)
-			unique("/policy/"+chain, i, r.identity, seen)
-			if !slices.Contains([]string{"accept", "drop", "reject"}, r.Action) {
-				bad(p+"/action", "Expected accept, drop or reject.")
+	ruleIDs := map[string]bool{}
+	for i, r := range d.Rules {
+		p := fmt.Sprintf("/rules/%d", i)
+		// A rule's name says what it is for and need not be the only one: its place in the list tells rules apart.
+		if ruleIDs[r.ID] {
+			bad(p+"/id", "Duplicate object identity.")
+		}
+		ruleIDs[r.ID] = true
+		if invalidText(r.Name, true) {
+			bad(p+"/name", "Control or format characters are not allowed.")
+		}
+		if !slices.Contains([]string{"accept", "drop", "reject"}, r.Action) {
+			bad(p+"/action", "Expected accept, drop or reject.")
+		}
+		// side checks one side and returns the families its addresses hold; none means it matches both.
+		side := func(field string, s ruleSide) map[int]bool {
+			for j, ref := range s.Zones {
+				if ref != firewallZone && !zones[ref] {
+					bad(fmt.Sprintf("%s/%s/zones/%d", p, field, j), "Expected an existing zone.")
+				}
 			}
-			if chain == "input" && len(r.To) > 0 {
-				bad(p+"/to", "An input rule's destination is the firewall itself.")
+			f := map[int]bool{}
+			for j, ref := range s.Addresses {
+				if addresses[ref] == nil {
+					bad(fmt.Sprintf("%s/%s/addresses/%d", p, field, j), "Expected an existing address alias.")
+				}
+				for family := range families[ref] {
+					f[family] = true
+				}
 			}
-			// sides collects the families of each side's addresses; a side without addresses matches both.
-			side := func(field string, refs []string) map[int]bool {
-				f := map[int]bool{}
-				for j, ref := range refs {
-					switch {
-					case zones[ref]:
-						// A zone is an alternative that matches either family.
-						f[4], f[6] = true, true
-					case addresses[ref] != nil:
-						for family := range families[ref] {
-							f[family] = true
-						}
-					default:
-						bad(fmt.Sprintf("%s/%s/%d", p, field, j), "Expected an existing zone or address.")
+			if s.Not {
+				if len(s.Addresses) == 0 {
+					bad(fmt.Sprintf("%s/%s/not", p, field), "Name the addresses to leave out.")
+				}
+				// Every address but the named ones: either family can match.
+				return map[int]bool{}
+			}
+			return f
+		}
+		from, to := side("from", r.From), side("to", r.To)
+		if j := slices.Index(r.From.Zones, firewallZone); j >= 0 {
+			bad(fmt.Sprintf("%s/from/zones/%d", p, j), "The firewall is a destination only: there are no rules yet for what the firewall itself sends.")
+		}
+		if r.toFirewall() && len(r.To.Zones) > 1 {
+			bad(p+"/to/zones", "The firewall stands alone as a destination. Reaching it and other zones takes two rules.")
+		}
+		if len(from) > 0 && len(to) > 0 && !(from[4] && to[4]) && !(from[6] && to[6]) {
+			bad(p+"/to/addresses", "The source and destination addresses are of different families, so this rule can never match.")
+		}
+		// The families a port alias can match: icmp only IPv4, icmpv6 only IPv6, ports both.
+		offered, leaves := map[int]bool{}, 0
+		for j, ref := range r.Ports {
+			s := services[ref]
+			if s == nil {
+				bad(fmt.Sprintf("%s/ports/%d", p, j), "Expected an existing port alias.")
+				continue
+			}
+			for _, m := range append([]string{ref}, s.Members...) {
+				if member := services[m]; member != nil {
+					switch member.Protocol {
+					case "icmp":
+						offered[4] = true
+						leaves++
+					case "icmpv6":
+						offered[6] = true
+						leaves++
+					case "tcp", "udp":
+						offered[4], offered[6] = true, true
+						leaves++
 					}
 				}
-				return f
 			}
-			from, to := side("from", r.From), side("to", r.To)
-			if len(from) > 0 && len(to) > 0 && !(from[4] && to[4]) && !(from[6] && to[6]) {
-				bad(p+"/to", "The source and destination addresses are of different families, so this rule can never match.")
+		}
+		meets := func(f int) bool { return (len(from) == 0 || from[f]) && (len(to) == 0 || to[f]) && offered[f] }
+		if len(offered) > 0 && !meets(4) && !meets(6) {
+			bad(p+"/ports", "No port alias is of the family of the rule's addresses, so this rule can never match.")
+		}
+		// Each zone x address x port alias combination of the two sides is one nft line; a runaway rule would
+		// exhaust the host's filter. Times two: an alias holding both families renders one line per family.
+		// A negated side is one line whatever it names.
+		lines := func(s ruleSide) int {
+			if s.Not {
+				return max(1, len(s.Zones))
 			}
-			// The families a service can match: icmp only IPv4, icmpv6 only IPv6, ports both.
-			offered, leaves := map[int]bool{}, 0
-			for j, ref := range r.Services {
-				s := services[ref]
-				if s == nil {
-					bad(fmt.Sprintf("%s/services/%d", p, j), "Expected an existing service.")
-					continue
-				}
-				for _, m := range append([]string{ref}, s.Members...) {
-					if member := services[m]; member != nil {
-						switch member.Protocol {
-						case "icmp":
-							offered[4] = true
-							leaves++
-						case "icmpv6":
-							offered[6] = true
-							leaves++
-						case "tcp", "udp":
-							offered[4], offered[6] = true, true
-							leaves++
-						}
-					}
-				}
-			}
-			meets := func(f int) bool { return (len(from) == 0 || from[f]) && (len(to) == 0 || to[f]) && offered[f] }
-			if len(offered) > 0 && !meets(4) && !meets(6) {
-				bad(p+"/services", "No service is of the family of the rule's addresses, so this rule can never match.")
-			}
-			// Each from x to x service combination is one nft line; a runaway rule would exhaust the host's filter.
-			// Times two: a reference holding both families renders one line per family.
-			if 2*max(1, len(r.From))*max(1, len(r.To))*max(1, leaves) > maxRuleLines {
-				bad(p, "This rule expands to too many filter lines. Use address groups or fewer services.")
-			}
+			return max(1, len(s.Zones)) * max(1, len(s.Addresses))
+		}
+		if 2*lines(r.From)*lines(r.To)*max(1, leaves) > maxRuleLines {
+			bad(p, "This rule expands to too many filter lines. Use address groups or fewer port aliases.")
 		}
 	}
 
@@ -241,7 +263,7 @@ func validatePolicy(d *declaration) []FieldError {
 		}
 		for j, ref := range m.AllowedSources {
 			if addresses[ref] == nil {
-				bad(fmt.Sprintf("/management/allowedSources/%d", j), "Expected an existing address.")
+				bad(fmt.Sprintf("/management/allowedSources/%d", j), "Expected an existing address alias.")
 			}
 		}
 	}
