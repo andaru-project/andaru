@@ -49,6 +49,7 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onSave }: R
     event.preventDefault();
     if (!name.trim()) {
       setErrors(new Map([['name', 'A rule needs a name.']]));
+      setFailure('');
       return;
     }
     setBusy(true);
@@ -66,6 +67,8 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onSave }: R
       // Someone else's change underneath keeps what was typed here, and says what happened.
       if (error instanceof ApiError && error.status === 412) setFailure('This rule was changed by someone else while it was open here. Close the panel to see what is saved, then make the change again.');
       else if (fields.size === 0 || fields.has('')) setFailure(fields.get('') ?? apiErrorMessage(error));
+      // Refusals beside their fields are also said once, aloud, where the form begins.
+      else setFailure('Some of the fields below were refused.');
     } finally {
       setBusy(false);
     }
@@ -87,7 +90,7 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onSave }: R
   );
 
   return (
-    <Drawer opened onClose={onClose} position="right" size="md" title={rule ? `Edit ${rule.name}` : 'Add rule'}>
+    <Drawer opened onClose={onClose} position="right" size="md" title={rule ? `Edit ${rule.name}` : 'Add rule'} lockScroll={false} closeButtonProps={{ 'aria-label': 'Close' }}>
       <form onSubmit={submit} noValidate>
         <Stack>
           {failure && <Alert color="red" role="alert" title="The rule was not saved">{failure}</Alert>}

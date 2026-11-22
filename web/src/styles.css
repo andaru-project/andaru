@@ -477,7 +477,7 @@ path.traffic-sent {
 
 /* The rules: a disabled rule keeps its place, dimmed. A rule being moved lifts above the others. */
 .rule[data-disabled] td:not(:nth-child(2)):not(.rule-actions) {
-  opacity: 0.55;
+  opacity: 0.7;
 }
 
 .rule[data-dragging] {

@@ -54,16 +54,18 @@ function Row({ item, position, names: known, canWrite, unlocked, busy, onToggle,
 }) {
   const rule = item.value;
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id: rule.id, disabled: !unlocked });
+  // Names may repeat, so a control says the rule's place as well.
+  const title = `rule ${position}, ${rule.name}`;
   return (
     <Table.Tr ref={setNodeRef} className="rule" data-disabled={!rule.enabled || undefined} data-dragging={isDragging || undefined} style={{ transform: CSS.Translate.toString(transform), transition }}>
       <Table.Td data-label="Position">
         <Group gap="xs" wrap="nowrap">
-          {unlocked && <ActionIcon className="widget-grip" size="lg" variant="subtle" color="gray" ref={setActivatorNodeRef} {...attributes} {...listeners} aria-label={`Move ${rule.name}`}><Grip /></ActionIcon>}
+          {unlocked && <ActionIcon className="widget-grip" size="lg" variant="subtle" color="gray" ref={setActivatorNodeRef} {...attributes} {...listeners} aria-label={`Move ${title}`}><Grip /></ActionIcon>}
           <Text size="sm">{position}</Text>
         </Group>
       </Table.Td>
       <Table.Td data-label="Enabled">
-        {canWrite ? <Switch checked={rule.enabled} disabled={busy} onChange={onToggle} aria-label={`${rule.name} enabled`} /> : <Text size="sm">{rule.enabled ? 'on' : 'off'}</Text>}
+        {canWrite ? <Switch checked={rule.enabled} disabled={busy} onChange={onToggle} aria-label={`Enable ${title}`} /> : <Text size="sm">{rule.enabled ? 'on' : 'off'}</Text>}
       </Table.Td>
       <Table.Td data-label="Action">
         <Group gap={6} wrap="nowrap">
@@ -80,8 +82,8 @@ function Row({ item, position, names: known, canWrite, unlocked, busy, onToggle,
       {canWrite && (
         <Table.Td className="rule-actions">
           <Group gap="xs" wrap="nowrap">
-            <Button size="compact-xs" variant="default" disabled={busy} aria-label={`Edit ${rule.name}`} onClick={onEdit}>Edit</Button>
-            <Button size="compact-xs" variant="default" color="red" disabled={busy} aria-label={`Delete ${rule.name}`} onClick={onDelete}>Delete</Button>
+            <Button size="compact-xs" variant="default" disabled={busy} aria-label={`Edit ${title}`} onClick={onEdit}>Edit</Button>
+            <Button size="compact-xs" variant="default" color="red" disabled={busy} aria-label={`Delete ${title}`} onClick={onDelete}>Delete</Button>
           </Group>
         </Table.Td>
       )}
@@ -102,7 +104,7 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
   const [filter, setFilter] = useState('');
   const [unlocked, setUnlocked] = useState(false);
   const [editing, setEditing] = useState<SavedObject<Rule> | 'new'>();
-  const [deleting, setDeleting] = useState<SavedObject<Rule>>();
+  const [deleting, setDeleting] = useState<{ item: SavedObject<Rule>; position: number }>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [moved, setMoved] = useState<string[]>();
@@ -139,6 +141,7 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
           </Group>
         )}
       </Group>
+      {canWrite && filtered && <Text c="dimmed" size="sm">The order is locked while the filter is in use: a move among hidden rules would be a guess.</Text>}
       {error && <Alert color="red" role="alert" title="The rules were not changed" withCloseButton onClose={() => setError('')}>{error}</Alert>}
       <Loaded resource={resource} what="rules">
         {({ list, snapshot }) => {
@@ -146,12 +149,16 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
           const order = moved ?? list.items.map((item) => item.value.id);
           const byID = new Map(list.items.map((item) => [item.value.id, item]));
           const items = order.flatMap((id) => byID.get(id) ?? []);
-          const text = filter.trim().toLowerCase();
-          const matches = (rule: Rule) => [rule.name, rule.description ?? '', rule.action,
-            ...[...rule.from.zones, ...rule.to.zones].map((id) => (id === firewallZone ? 'this firewall' : known.zones.get(id) ?? '')),
-            ...[...rule.from.addresses, ...rule.to.addresses].map((id) => known.addresses.get(id) ?? ''),
-            ...rule.ports.map((id) => known.ports.get(id) ?? '')].some((word) => word.toLowerCase().includes(text));
-          const shown = items.map((item, index) => ({ item, position: index + 1 })).filter(({ item }) => text === '' || matches(item.value));
+          // Every word of the filter must be somewhere in what the row shows.
+          const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
+          const matches = (rule: Rule) => {
+            const row = [rule.name, rule.description ?? '', rule.action, rule.log ? 'logs' : '', rule.from.not || rule.to.not ? 'not' : '',
+              ...[...rule.from.zones, ...rule.to.zones].map((id) => (id === firewallZone ? 'this firewall' : known.zones.get(id) ?? '')),
+              ...[...rule.from.addresses, ...rule.to.addresses].map((id) => known.addresses.get(id) ?? ''),
+              ...rule.ports.map((id) => known.ports.get(id) ?? '')].join(' ').toLowerCase();
+            return words.every((word) => row.includes(word));
+          };
+          const shown = items.map((item, index) => ({ item, position: index + 1 })).filter(({ item }) => matches(item.value));
           const management = snapshot.value.segments.find((segment) => segment.id === snapshot.value.management?.segment);
           // The forwards the filter lets in by itself: enabled ones that translate and keep their own rule.
           const forwards = (snapshot.value.nat?.portForwards ?? []).filter((forward) => forward.enabled && !forward.noRedirect && forward.filterRule === 'auto').length;
@@ -180,17 +187,19 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
                   Without one the packet filter is off, and a configuration that holds rules or NAT is refused when it is applied. The management segment is set with the <Anchor component={Link} to="/network/interfaces">interfaces</Anchor>.
                 </Alert>
               )}
-              <Paper component="section" withBorder p="md" aria-labelledby="fixed-rules">
-                <Title order={3} size="h5" mb="xs" id="fixed-rules">Before any rule</Title>
-                <ul className="fixed-rules">
-                  <li>Traffic of a connection already allowed, and what relates to it, is accepted. Invalid packets are dropped.</li>
-                  <li>Loopback and IPv6 neighbour discovery are accepted, and DHCP requests on the segments this firewall serves.</li>
-                  {management && <li><strong>Anti-lockout:</strong> SSH to this firewall from the management segment, {management.name}, is always accepted{snapshot.value.management?.allowedSources?.length ? ', from its allowed sources' : ''}.</li>}
-                  {forwards > 0 && <li>Port forwards let their own traffic in ({forwards}).</li>}
-                </ul>
-              </Paper>
+              {management && (
+                <Paper component="section" withBorder p="md" aria-labelledby="fixed-rules">
+                  <Title order={3} size="h5" mb="xs" id="fixed-rules">Before any rule</Title>
+                  <ul className="fixed-rules">
+                    <li>Traffic of a connection already allowed, and what relates to it, is accepted. Invalid packets are dropped.</li>
+                    <li>Loopback and IPv6 neighbour discovery are accepted, and DHCP requests on the segments this firewall serves.</li>
+                    <li><strong>Anti-lockout:</strong> SSH to this firewall from the management segment, {management.name}, is always accepted{snapshot.value.management?.allowedSources?.length ? ', from its allowed sources' : ''}.</li>
+                    {forwards > 0 && <li>Port forwards let their own traffic in ({forwards}).</li>}
+                  </ul>
+                </Paper>
+              )}
               {list.items.length === 0 ? (
-                <Alert role="status" title="No rules">Traffic between networks is dropped, and so is traffic to this firewall, except what is listed above.</Alert>
+                <Alert role="status" title="No rules">{management ? 'Traffic between networks is dropped, and so is traffic to this firewall, except what is listed above.' : 'No rule is saved.'}</Alert>
               ) : (
                 <>
                   <TextInput label="Filter rules" placeholder="A name, zone, alias or action" value={filter} onChange={(event) => { setFilter(event.currentTarget.value); setUnlocked(false); }} />
@@ -202,14 +211,14 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
                           {shown.map(({ item, position }) => (
                             <Row key={item.value.id} item={item} position={position} names={known} canWrite={canWrite} unlocked={unlocked && !busy} busy={busy}
                               onToggle={() => void change(() => api.saveRule({ ...item.value, enabled: !item.value.enabled }, item))}
-                              onEdit={() => setEditing(item)} onDelete={() => setDeleting(item)} />
+                              onEdit={() => setEditing(item)} onDelete={() => setDeleting({ item, position })} />
                           ))}
                         </Table.Tbody>
                       </Table>
                     </SortableContext>
                   </DndContext>
                   {shown.length === 0 && <Text c="dimmed" size="sm">No rule matches the filter.</Text>}
-                  <Text c="dimmed" size="sm">Everything else is dropped.</Text>
+                  {management && <Text c="dimmed" size="sm">Everything else is dropped.</Text>}
                 </>
               )}
               {editing && (
@@ -220,6 +229,8 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
                     try {
                       await api.saveRule(rule, editing === 'new' ? undefined : editing);
                       onSaved();
+                      // A rule just added is not hidden by a filter typed before it.
+                      if (editing === 'new') setFilter('');
                     } finally {
                       await resource.reload();
                     }
@@ -229,12 +240,12 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
           );
         }}
       </Loaded>
-      <Modal opened={Boolean(deleting)} onClose={() => setDeleting(undefined)} title="Delete rule" centered>
+      <Modal opened={Boolean(deleting)} onClose={() => setDeleting(undefined)} title="Delete rule" centered lockScroll={false} closeButtonProps={{ 'aria-label': 'Close' }}>
         <Stack>
-          <Text>Delete the rule <strong>{deleting?.value.name}</strong>? What it allows or stops changes when the saved configuration is applied.</Text>
+          <Text>Delete rule {deleting?.position}, <strong>{deleting?.item.value.name}</strong>? What it allows or stops changes when the saved configuration is applied.</Text>
           <Group justify="flex-end">
             <Button variant="default" onClick={() => setDeleting(undefined)}>Cancel</Button>
-            <Button color="red" loading={busy} onClick={() => { const item = deleting!; void change(() => api.deleteRule(item.value.id, item.version)).then(() => setDeleting(undefined)); }}>Delete rule</Button>
+            <Button color="red" loading={busy} onClick={() => { const { item } = deleting!; void change(() => api.deleteRule(item.value.id, item.version)).then(() => setDeleting(undefined)); }}>Delete rule</Button>
           </Group>
         </Stack>
       </Modal>

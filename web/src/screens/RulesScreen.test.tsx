@@ -64,7 +64,10 @@ it('says what Andaru always does before any rule, and counts the port forwards t
 it('says the filter is off without a management segment, rather than showing rules that look live', async () => {
   show({ '/api/v1/config': config({ management: undefined }) });
   expect(await screen.findByText('No management segment is set')).toBeInTheDocument();
-  expect(screen.getByRole('region', { name: 'Before any rule' })).not.toHaveTextContent('Anti-lockout');
+  // No filter is loaded, so the page does not describe one.
+  await screen.findByText('Old rule');
+  expect(screen.queryByRole('region', { name: 'Before any rule' })).not.toBeInTheDocument();
+  expect(screen.queryByText('Everything else is dropped.')).not.toBeInTheDocument();
 });
 
 it('says why nothing passes when there are no rules', async () => {
@@ -78,13 +81,23 @@ it('filters without renumbering, and keeps the order locked while rows are hidde
   show();
   await screen.findByText('Old rule');
   await user.click(screen.getByRole('button', { name: 'Edit order' }));
-  expect(screen.getByRole('button', { name: 'Move Old rule' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Move rule 3, Old rule' })).toBeInTheDocument();
   await user.type(screen.getByLabelText('Filter rules'), 'firewall');
   expect(rows()).toHaveLength(1);
   expect(within(rows()[0]).getAllByRole('cell')[0]).toHaveTextContent('2');
-  // Typing in the filter locks the order again, and the button says it cannot be unlocked now.
+  // Typing in the filter locks the order again, and the page says why it cannot be unlocked now.
   expect(screen.queryByRole('button', { name: /^Move / })).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Edit order' })).toBeDisabled();
+  expect(screen.getByText(/The order is locked while the filter is in use/)).toBeInTheDocument();
+  // Every word must be in the row, and the words the row shows count: "logs", "not".
+  const filter = screen.getByLabelText('Filter rules');
+  for (const [text, positions] of [['lan wan', ['1']], ['logs', ['2']], ['not printers', ['1']], ['wan dns', []], ['  ', ['1', '2', '3']]] as const) {
+    await user.clear(filter);
+    await user.type(filter, text);
+    expect(screen.queryAllByRole('row').slice(1).map((row) => within(row).getAllByRole('cell')[0].textContent)).toEqual(positions);
+  }
+  // A filter of spaces hides nothing, so it locks nothing.
+  expect(screen.getByRole('button', { name: 'Edit order' })).toBeEnabled();
 });
 
 it('gives an account that may not write no controls', async () => {
@@ -100,7 +113,7 @@ it('gives an account that may not write no controls', async () => {
 it('saves the enabled switch at once, as one version-checked edit', async () => {
   const user = userEvent.setup();
   const { fetch, onSaved } = show({ 'PUT /api/v1/config/rules/rul_c': { value: { ...saved[2], enabled: true }, version: '10' } });
-  await user.click(await screen.findByRole('switch', { name: 'Old rule enabled' }));
+  await user.click(await screen.findByRole('switch', { name: 'Enable rule 3, Old rule' }));
   await waitFor(() => expect(onSaved).toHaveBeenCalled());
   const [[path, init]] = sent(fetch, 'PUT');
   expect(path).toBe('/api/v1/config/rules/rul_c');
@@ -114,7 +127,7 @@ it('moves a rule by its grip with the keyboard, and sends the whole order with t
   await screen.findByText('Old rule');
   expect(screen.queryByRole('button', { name: /^Move / })).not.toBeInTheDocument();
   await user.click(screen.getByRole('button', { name: 'Edit order' }));
-  screen.getByRole('button', { name: 'Move Old rule' }).focus();
+  screen.getByRole('button', { name: 'Move rule 3, Old rule' }).focus();
   // jsdom lays nothing out, so every row sits at the origin: the test gives each a place.
   rows().forEach((row, index) => { row.getBoundingClientRect = () => new DOMRect(0, index * 40, 600, 40); });
   await user.keyboard('[Space]');
@@ -130,7 +143,7 @@ it('moves a rule by its grip with the keyboard, and sends the whole order with t
 it('reloads and says so when a rule changed underneath, and never guesses', async () => {
   const user = userEvent.setup();
   const { fetch } = show({ 'PUT /api/v1/config/rules/rul_c': jsonResponse(412, { error: { code: 'PRECONDITION_FAILED', message: 'The object changed.' } }) });
-  await user.click(await screen.findByRole('switch', { name: 'Old rule enabled' }));
+  await user.click(await screen.findByRole('switch', { name: 'Enable rule 3, Old rule' }));
   expect(await screen.findByText(/changed by someone else/)).toBeInTheDocument();
   expect(fetch.mock.calls.filter(([path, init]) => path === '/api/v1/config/rules' && !init?.method).length).toBeGreaterThan(1);
 });
@@ -138,9 +151,9 @@ it('reloads and says so when a rule changed underneath, and never guesses', asyn
 it('asks once before deleting a rule, naming it', async () => {
   const user = userEvent.setup();
   const { fetch, onSaved } = show({ 'DELETE /api/v1/config/rules/rul_b': new Response(null, { status: 204 }) });
-  await user.click(await screen.findByRole('button', { name: 'Delete DNS to the firewall' }));
+  await user.click(await screen.findByRole('button', { name: 'Delete rule 2, DNS to the firewall' }));
   const dialog = await screen.findByRole('dialog', { name: 'Delete rule' });
-  expect(dialog).toHaveTextContent('DNS to the firewall');
+  expect(dialog).toHaveTextContent('Delete rule 2, DNS to the firewall?');
   expect(sent(fetch, 'DELETE')).toHaveLength(0);
   await user.click(within(dialog).getByRole('button', { name: 'Delete rule' }));
   await waitFor(() => expect(onSaved).toHaveBeenCalled());
@@ -164,28 +177,80 @@ it('creates a rule from the panel, and shows the engine\'s refusals beside their
   await user.click(within(panel).getByRole('radio', { name: 'Reject' }));
   await user.click(within(panel).getByRole('button', { name: 'Save rule' }));
   expect(await within(panel).findByText('The firewall stands alone as a destination.')).toBeInTheDocument();
+  expect(within(within(panel).getByRole('group', { name: 'To' })).getByText('The firewall stands alone as a destination.')).toBeInTheDocument();
+  expect(within(within(panel).getByRole('group', { name: 'From' })).queryByText('The firewall stands alone as a destination.')).not.toBeInTheDocument();
+  expect(within(panel).getByRole('alert')).toHaveTextContent('Some of the fields below were refused.');
   // What was typed is kept after a refusal.
   expect(within(panel).getByLabelText(/^Name/)).toHaveValue('Guests out');
   await user.click(within(panel).getByRole('button', { name: 'Save rule' }));
   await waitFor(() => expect(onSaved).toHaveBeenCalled());
   expect(JSON.parse(String(sent(fetch, 'POST')[1][1]?.body))).toEqual({ name: 'Guests out', enabled: true, action: 'reject', from: side(), to: side(), ports: [], log: false });
+  expect(new Headers(sent(fetch, 'POST')[1][1]?.headers).get('X-Andaru-CSRF')).toBe('csrf');
+  // The panel closes and the list is read again.
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Add rule' })).not.toBeInTheDocument());
+  expect(fetch.mock.calls.filter(([path, init]) => path === '/api/v1/config/rules' && !init?.method).length).toBeGreaterThan(1);
 });
 
-it('opens a saved rule in the panel and saves it against its version, dropping "not" with no address to leave out', async () => {
+it('opens a saved rule in the panel with every field as saved, and saves it whole against its version', async () => {
   const user = userEvent.setup();
-  const { fetch } = show({
-    '/api/v1/config/rules': list([rule('rul_a', 'LAN out', { from: { zones: [lan], addresses: [], not: true } })]),
-    'PUT /api/v1/config/rules/rul_a': { value: rule('rul_a', 'LAN out'), version: '10' },
-  });
-  await user.click(await screen.findByRole('button', { name: 'Edit LAN out' }));
+  const full = rule('rul_a', 'LAN out', { description: 'Why it is here', enabled: false, action: 'drop', from: side([lan], ['adr_printers'], true), to: side([wan]), ports: ['svc_https'], log: false });
+  const { fetch } = show({ '/api/v1/config/rules': list([full]), 'PUT /api/v1/config/rules/rul_a': { value: full, version: '10' } });
+  await user.click(await screen.findByRole('button', { name: 'Edit rule 1, LAN out' }));
   const panel = await screen.findByRole('dialog', { name: 'Edit LAN out' });
   await user.click(within(panel).getByRole('switch', { name: 'Log what this rule matches' }));
   await user.click(within(panel).getByRole('button', { name: 'Save rule' }));
   await waitFor(() => expect(sent(fetch, 'PUT')).toHaveLength(1));
   const [[, init]] = sent(fetch, 'PUT');
   expect(new Headers(init?.headers).get('If-Match')).toBe('"rul_a.5"');
-  expect(JSON.parse(String(init?.body))).toMatchObject({ from: { zones: [lan], addresses: [] }, log: true });
-  expect(JSON.parse(String(init?.body)).from).not.toHaveProperty('not');
+  // Nothing the form did not touch is lost or changed.
+  expect(JSON.parse(String(init?.body))).toEqual({ ...full, id: undefined, log: true });
+});
+
+it('drops "not" from a side that names no address to leave out', async () => {
+  const user = userEvent.setup();
+  const { fetch } = show({
+    '/api/v1/config/rules': list([rule('rul_a', 'LAN out', { from: { zones: [lan], addresses: [], not: true } })]),
+    'PUT /api/v1/config/rules/rul_a': { value: rule('rul_a', 'LAN out'), version: '10' },
+  });
+  await user.click(await screen.findByRole('button', { name: 'Edit rule 1, LAN out' }));
+  await user.click(within(await screen.findByRole('dialog', { name: 'Edit LAN out' })).getByRole('button', { name: 'Save rule' }));
+  await waitFor(() => expect(sent(fetch, 'PUT')).toHaveLength(1));
+  expect(JSON.parse(String(sent(fetch, 'PUT')[0][1]?.body)).from).toEqual({ zones: [lan], addresses: [] });
+});
+
+it('lets the firewall stand alone as a destination: choosing it leaves the other zones, and choosing another leaves it', async () => {
+  const user = userEvent.setup();
+  const { fetch } = show({ 'POST /api/v1/config/rules': jsonResponse(201, { value: rule('rul_new', 'To the box'), version: '10' }) });
+  await user.click(await screen.findByRole('button', { name: 'Add rule' }));
+  const panel = await screen.findByRole('dialog', { name: 'Add rule' });
+  await user.type(within(panel).getByLabelText(/^Name/), 'To the box');
+  const zones = within(panel).getByLabelText('To: zones');
+  // The picker's list belongs to its field; jsdom does not lay it out, so it is asked for whether shown or not.
+  const options = (field: HTMLElement) => within(document.getElementById(field.getAttribute('aria-controls')!)!).getAllByRole('option', { hidden: true });
+  const pick = async (name: string) => { await user.click(zones); await user.click(options(zones).find((option) => option.textContent === name)!); };
+  // It is offered to a rule's destination, and never to its source.
+  const from = within(panel).getByLabelText('From: zones');
+  await user.click(from);
+  expect(options(from).map((option) => option.textContent)).toEqual(['lan', 'wan']);
+  await user.click(zones);
+  expect(options(zones).map((option) => option.textContent)).toEqual(['This firewall', 'lan', 'wan']);
+  await pick('wan');
+  await pick('This firewall');
+  await user.click(within(panel).getByRole('button', { name: 'Save rule' }));
+  await waitFor(() => expect(sent(fetch, 'POST')).toHaveLength(1));
+  expect(JSON.parse(String(sent(fetch, 'POST')[0][1]?.body)).to).toEqual({ zones: ['zon_firewall'], addresses: [] });
+});
+
+it('signs the session out when the panel\'s save finds it gone', async () => {
+  const user = userEvent.setup();
+  const onSessionLost = vi.fn();
+  fetchRoutes({ '/api/v1/config/rules': list(), '/api/v1/config': config(), 'POST /api/v1/config/rules': jsonResponse(401, { error: { code: 'UNAUTHENTICATED', message: 'Sign in.' } }) });
+  render(<MemoryRouter><RulesScreen api={new ApiClient('csrf')} session={session(['configuration.read', 'configuration.write'])} onSaved={vi.fn()} onSessionLost={onSessionLost} /></MemoryRouter>);
+  await user.click(await screen.findByRole('button', { name: 'Add rule' }));
+  const panel = await screen.findByRole('dialog', { name: 'Add rule' });
+  await user.type(within(panel).getByLabelText(/^Name/), 'A rule');
+  await user.click(within(panel).getByRole('button', { name: 'Save rule' }));
+  await waitFor(() => expect(onSessionLost).toHaveBeenCalled());
 });
 
 it('puts a rule back and says so when someone else reordered first', async () => {
@@ -193,7 +258,7 @@ it('puts a rule back and says so when someone else reordered first', async () =>
   show({ 'PUT /api/v1/config/rules/order': jsonResponse(412, { error: { code: 'PRECONDITION_FAILED', message: 'The list changed.' } }) });
   await screen.findByText('Old rule');
   await user.click(screen.getByRole('button', { name: 'Edit order' }));
-  screen.getByRole('button', { name: 'Move Old rule' }).focus();
+  screen.getByRole('button', { name: 'Move rule 3, Old rule' }).focus();
   rows().forEach((row, index) => { row.getBoundingClientRect = () => new DOMRect(0, index * 40, 600, 40); });
   await user.keyboard('[Space]');
   await user.keyboard('[ArrowUp]');
@@ -213,12 +278,12 @@ it('reads the list again when the panel\'s save is refused, so the rule opens ne
       return jsonResponse(412, { error: { code: 'PRECONDITION_FAILED', message: 'The object changed.' } });
     },
   });
-  await user.click(await screen.findByRole('button', { name: 'Edit DNS to the firewall' }));
+  await user.click(await screen.findByRole('button', { name: 'Edit rule 1, DNS to the firewall' }));
   let panel = await screen.findByRole('dialog', { name: 'Edit DNS to the firewall' });
   await user.click(within(panel).getByRole('button', { name: 'Save rule' }));
   expect(await within(panel).findByText(/changed by someone else/)).toBeInTheDocument();
   await user.click(within(panel).getByRole('button', { name: 'Cancel' }));
-  await user.click(await screen.findByRole('button', { name: 'Edit DNS to the firewall' }));
+  await user.click(await screen.findByRole('button', { name: 'Edit rule 1, DNS to the firewall' }));
   panel = await screen.findByRole('dialog', { name: 'Edit DNS to the firewall' });
   await user.click(within(panel).getByRole('button', { name: 'Save rule' }));
   await waitFor(() => expect(sent(fetch, 'PUT')).toHaveLength(2));
