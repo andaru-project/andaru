@@ -1,4 +1,5 @@
 import type {
+  AliasKinds,
   Applies,
   Apply,
   AuditEvent,
@@ -13,6 +14,7 @@ import type {
   Preview,
   Role,
   Rule,
+  SavedList,
   SavedObject,
   SavedRolePage,
   Session,
@@ -276,6 +278,23 @@ export class ApiClient {
 
   config() {
     return this.request<Snapshot>('/api/v1/config');
+  }
+
+  aliases<K extends keyof AliasKinds>(kind: K) {
+    return this.request<SavedList<AliasKinds[K]>>(`/api/v1/config/aliases/${kind}`);
+  }
+
+  // An alias is saved whole. Without a saved one it is created.
+  saveAlias<K extends keyof AliasKinds>(kind: K, alias: Omit<AliasKinds[K], 'id'>, saved?: SavedObject<AliasKinds[K]>) {
+    const path = `/api/v1/config/aliases/${kind}`;
+    if (!saved) return this.request<SavedObject<AliasKinds[K]>>(path, { method: 'POST', body: JSON.stringify(alias) }, true);
+    return this.request<SavedObject<AliasKinds[K]>>(`${path}/${encodeURIComponent(saved.value.id)}`, {
+      method: 'PUT', headers: { 'If-Match': `"${saved.value.id}.${saved.version}"` }, body: JSON.stringify(alias),
+    }, true);
+  }
+
+  deleteAlias(kind: keyof AliasKinds, id: string, version: string) {
+    return this.request(`/api/v1/config/aliases/${kind}/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { 'If-Match': `"${id}.${version}"` } }, true);
   }
 
   rules() {
