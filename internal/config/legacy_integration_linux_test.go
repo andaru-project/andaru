@@ -11,8 +11,9 @@ import (
 )
 
 // legacyStore is a store whose two versions were written by an engine before schema 4: the document in that
-// form, and its object versions in the tables and under the names that engine used. Version 1 created
-// everything; version 2, the saved head, reordered the forward rules, leaving the document as it was.
+// form, and its object versions in the tables and under the names that engine used, without the tables added
+// since (its tables as 0.5.0-a.4 left them), reopened by this engine. Version 1 created everything; version 2, the saved
+// head, reordered the forward rules, leaving the document as it was.
 func legacyStore(t *testing.T) (*Store, string) {
 	t.Helper()
 	ctx := context.Background()
@@ -37,7 +38,12 @@ func legacyStore(t *testing.T) (*Store, string) {
 	exec("INSERT INTO versions SELECT 2,1,1,?,secrets_sha256,created_at,actor,1 FROM versions WHERE id=0", hash[:])
 	exec("INSERT INTO policy_changes VALUES('policy.forward','policy.forward',2,0,0)")
 	exec("UPDATE pointers SET version_id=2 WHERE name='saved'")
-	return s, root
+	exec("DROP TABLE firewall_changes")
+	exec("DROP TABLE version_writers")
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return openTestStore(t, root), root
 }
 
 func TestLegacyStoreReadsAndThenSavesInTheCurrentForm(t *testing.T) {
@@ -204,15 +210,8 @@ func TestSavedVersionsNameTheirWriter(t *testing.T) {
 	ctx := context.Background()
 	old := Writer
 	t.Cleanup(func() { Writer = old })
-	s, root := legacyStore(t)
-	// A store an engine before left: no table of writers at all. Opening it adds the table.
-	if _, err := s.configDB.ExecContext(ctx, "DROP TABLE version_writers"); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-	s = openTestStore(t, root)
+	// A store an engine before left has no table of writers at all; opening it adds the table.
+	s, _ := legacyStore(t)
 	Writer = "0.5.0-a.5"
 	if _, err := s.Save(ctx, systemRootActor, createZone("guest")); err != nil {
 		t.Fatal(err)
