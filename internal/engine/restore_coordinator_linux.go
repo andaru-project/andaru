@@ -256,15 +256,7 @@ func (c *restoreCoordinator) reconcileLocked(ctx context.Context, journal *resto
 	if journal.State != "prepared" {
 		return errRestoreStateConflict
 	}
-	// A restore a newer Andaru committed, and a downgrade then set aside with every other newer version, is done.
-	setAside := false
 	if journal.TargetSavedVersion != "" {
-		var err error
-		if setAside, err = c.configuration.Newer(ctx, config.Version(journal.TargetSavedVersion)); err != nil {
-			return err
-		}
-	}
-	if journal.TargetSavedVersion != "" && !setAside {
 		matches, err := c.configuration.RestoreMatches(ctx, journal.TargetSavedVersion, journal.Configuration)
 		if err != nil {
 			return err

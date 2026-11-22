@@ -358,12 +358,6 @@ func TestNewerHeadOpensOnTheNewestReadableVersion(t *testing.T) {
 	if _, err = s.Version(ctx, newer); !errors.As(err, &f) || f.Code != "NOT_FOUND" {
 		t.Fatalf("reading the newer version: %v", err)
 	}
-	// A restore journal naming it finds it set aside; the store's own versions are not.
-	for v, want := range map[Version]bool{newer: true, "4": false, "99": false} {
-		if got, err := s.Newer(ctx, v); err != nil || got != want {
-			t.Fatalf("Newer(%s) = %t %v", v, got, err)
-		}
-	}
 	// Its roles still read, for the live generation that names it; the caller checks them against its digest.
 	if roles, err := s.Roles(ctx, newer); err != nil || len(roles) != 1 || roles[0].Name != "Operator" {
 		t.Fatalf("roles of the newer version: %+v %v", roles, err)
