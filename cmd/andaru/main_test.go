@@ -398,6 +398,7 @@ func TestSaveEnvelopeAcceptsFilterResults(t *testing.T) {
 	save := `{"state":"saved","savedVersion":"4","created":{},"items":[
 		{"collection":"rules","id":"rul_00000001-0000-4000-8000-000000000001","value":` + rule + `,"version":"4"},
 		{"collection":"rules","id":"rules","version":"4"},
+		{"collection":"roles","id":"rol_00000001-0000-4000-8000-000000000001","value":{"id":"rol_00000001-0000-4000-8000-000000000001","name":"Operator","capabilities":["status.read"]},"version":"4"},
 		{"collection":"management","id":"management","value":{"segment":"seg_00000001-0000-4000-8000-000000000001"},"version":"4"},
 		{"collection":"nat.outbound","id":"nat.outbound","deleted":true}]}`
 	if !validEnvelope("save", []byte(save)) {

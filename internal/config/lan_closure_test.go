@@ -231,3 +231,21 @@ func TestKeptSegmentLeavesIncompleteLegacyAdvertisements(t *testing.T) {
 		t.Error("an incomplete advertisement changed")
 	}
 }
+
+// Schema 3 requires the roles key, so a copy kept under it with only the built-in roles keeps an empty list.
+func TestKeptRecoveryOfSchema3WithoutCustomRolesRestores(t *testing.T) {
+	var d map[string]any
+	if err := json.Unmarshal(legacyDocument(t), &d); err != nil {
+		t.Fatal(err)
+	}
+	d["schemaVersion"] = 3
+	d["roles"] = []any{map[string]any{"id": "administrator", "name": "Administrator", "capabilities": []any{"configuration.read"}, "builtIn": "administrator"}}
+	body, _ := json.Marshal(map[string]any{"declaration": d})
+	docs, err := KeptDeclaration(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateBackupDocuments(RestoreDocuments{Configuration: docs.Configuration}); err != nil {
+		t.Fatalf("kept schema 3 copy refused: %v\n%s", err, docs.Configuration)
+	}
+}

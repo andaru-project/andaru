@@ -197,7 +197,8 @@ func KeptDeclaration(body []byte) (RestoreDocuments, error) {
 				return RestoreDocuments{}, err
 			}
 			roles = slices.DeleteFunc(roles, func(r map[string]json.RawMessage) bool { _, builtIn := r["builtIn"]; return builtIn })
-			if len(roles) == 0 {
+			// Schema 3 requires the key, so a copy kept under it keeps an empty list.
+			if len(roles) == 0 && string(d["schemaVersion"]) != "3" {
 				delete(d, "roles")
 			} else if d["roles"], err = json.Marshal(roles); err != nil {
 				return RestoreDocuments{}, err
