@@ -85,6 +85,9 @@ const (
 	ActionAuditRetentionPruned   Action = "audit.retention_pruned"
 )
 
+// AuditExportTarget marks an audit.queried event that exported the log rather than read a page of it.
+const AuditExportTarget = "export"
+
 const (
 	ResultPending      Result = "pending"
 	ResultSuccess      Result = "success"
@@ -307,6 +310,9 @@ func validTarget(action Action, target string) bool {
 		return len(target) <= 9 && canonicalPositiveUint(target)
 	case ActionBackupRestored:
 		return len(target) == 32 && strings.ToLower(target) == target && isHex(target)
+	case ActionAuditQueried:
+		// An export of the log is its own event: it never coalesces with the reads of a screen that polls.
+		return target == AuditExportTarget
 	default:
 		return false
 	}

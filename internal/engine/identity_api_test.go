@@ -135,12 +135,13 @@ func TestIdentityAPICreationTargetsAndTokenReplay(t *testing.T) {
 		if event.Action == audit.ActionTokenCreated && event.Target == tokenResult.Selector && event.Actor == (authz.Actor{Kind: authz.ActorSystem, ID: "root"}) {
 			found["token"] = true
 		}
-		// Repeated reads by one actor coalesce into one event that counts them.
-		if event.Action == audit.ActionAuditQueried && event.Result == audit.ResultSuccess {
-			queries += int(event.Count)
+		// A read of a page and an export of the log are each their own event.
+		if event.Action == audit.ActionAuditQueried && event.Result == audit.ResultSuccess && event.Count == 1 {
+			queries++
+			found["export"] = found["export"] || event.Target == audit.AuditExportTarget
 		}
 	}
-	if !found["account"] || !found["token"] || queries != 2 {
+	if !found["account"] || !found["token"] || !found["export"] || queries != 2 {
 		t.Fatalf("actual generated creation targets or audited reads missing: creations=%+v queryCount=%d", found, queries)
 	}
 	// order=desc reads newest first, and its cursor pages towards older events.
@@ -153,13 +154,26 @@ func TestIdentityAPICreationTargetsAndTokenReplay(t *testing.T) {
 	var older auditPage
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, rootRequest(http.MethodGet, "/api/v1/audit/events?order=desc&limit=1&cursor="+newest.NextCursor))
-	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &older) != nil || len(older.Items) != 1 || older.Items[0].ID >= newest.Items[0].ID {
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &older) != nil || len(older.Items) != 1 || older.Items[0].ID != events[len(events)-2].ID {
 		t.Fatalf("older page status=%d body=%s", response.Code, response.Body)
 	}
+	var oldest auditPage
 	response = httptest.NewRecorder()
-	handler.ServeHTTP(response, rootRequest(http.MethodGet, "/api/v1/audit/events?order=sideways"))
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("unknown order status=%d", response.Code)
+	handler.ServeHTTP(response, rootRequest(http.MethodGet, "/api/v1/audit/events?order=asc&limit=1"))
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &oldest) != nil || len(oldest.Items) != 1 || oldest.Items[0].ID != events[0].ID {
+		t.Fatalf("oldest page status=%d body=%s", response.Code, response.Body)
+	}
+	for _, path := range []string{"/api/v1/audit/events?order=sideways", "/api/v1/audit/events?order=desc&cursor=9223372036854775808"} {
+		response = httptest.NewRecorder()
+		handler.ServeHTTP(response, rootRequest(http.MethodGet, path))
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("%s status=%d", path, response.Code)
+		}
+	}
+	// A query refused as invalid is not recorded as the store failing.
+	after, err := audits.ListEventsBefore(context.Background(), 0, 1)
+	if err != nil || len(after) != 1 || after[0].Result == audit.ResultUnavailable {
+		t.Fatalf("newest event after refused queries = %+v, %v", after, err)
 	}
 }
 

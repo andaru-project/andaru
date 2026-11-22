@@ -37,7 +37,7 @@ New owner choices, 2026-11-15:
 - RBAC uses stable resource/action capabilities, not endpoint or page privileges.
 - Browser session idle timeout is 30 minutes; absolute lifetime 12 hours; maximum five sessions per human user. A successful sixth login revokes the oldest.
 - Per-account and per-source login backoff starts after five failures, grows exponentially and caps at 15 minutes. There is no permanent network lockout.
-- Security audit retention is 365 days, capped at 100,000 events. Repeated blocked-login failures are coalesced so attackers cannot cheaply evict useful history.
+- Security audit retention is 365 days, capped at 100,000 events. Repeated blocked-login failures are coalesced so attackers cannot cheaply evict useful history, and so are one actor's repeated reads of the log, so a screen that polls it does not either. An export of the log is its own event (target `export`) and never coalesces with page reads. A coalesced event keeps its first ID and takes the time of its latest occurrence.
 - API token expiration is optional. New-token default is 90 days; when expiration is set it may be at most one year. No-expiry requires explicit selection and warning.
 - Password-change revocation is optional per API token, default on. Account disable/delete always invalidates tokens.
 - Service accounts have no password and cannot create browser sessions. Their roles may change without invalidating tokens; every request dynamically intersects token scope with currently effective role capabilities.
@@ -299,7 +299,7 @@ Retention:
 - retain events up to 365 days and at most 100,000 records;
 - reserve 20,000 slots for administrator/password/role changes, token revocation, secret export, setup/recovery/factory reset and audit-health events; ordinary events cannot consume this reserve;
 - use the remaining 80,000-event general pool for login/session/permission and token-creation lifecycle events;
-- repeated blocked-login failures are coalesced before storage;
+- repeated blocked-login failures, and one actor's repeated reads of the log, are coalesced before storage;
 - self-service token creation is limited to 100 issued tokens per account per rolling 365 days, in addition to the 50-active-token cap; when its general audit budget is unavailable, new creation fails but revocation remains available through the reserve;
 - protected events younger than 365 days are never count-pruned; reaching a category budget rejects new non-safety operations in that category and raises a visible health alert;
 - prune only expired/eligible lower-value events after a successful append transaction; and

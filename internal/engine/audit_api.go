@@ -84,9 +84,13 @@ func (h *auditAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusForbidden, "FORBIDDEN", "A verified actor is required.")
 		return
 	}
+	target := ""
+	if r.URL.Path == "/api/v1/audit/export" {
+		target = audit.AuditExportTarget
+	}
 	events, err := list(r.Context(), after, limit)
 	if err != nil {
-		h.recordQueryFailure(r, actor)
+		h.recordQueryFailure(r, actor, target, err)
 		writeAuditError(w, r, err)
 		return
 	}
@@ -94,14 +98,14 @@ func (h *auditAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if len(events) == limit && len(events) > 0 {
 		next, nextErr := list(r.Context(), events[len(events)-1].ID, 1)
 		if nextErr != nil {
-			h.recordQueryFailure(r, actor)
+			h.recordQueryFailure(r, actor, target, nextErr)
 			writeAuditError(w, r, nextErr)
 			return
 		}
 		hasNext = len(next) != 0
 	}
 	if _, err = h.coordinator.audits.Append(r.Context(), audit.Event{
-		Actor: actor.Actor, Source: actor.Source, Action: audit.ActionAuditQueried,
+		Actor: actor.Actor, Source: actor.Source, Action: audit.ActionAuditQueried, Target: target,
 		Result: audit.ResultSuccess, Category: audit.CategoryGeneral,
 	}); err != nil {
 		writeAuditError(w, r, err)
@@ -125,9 +129,13 @@ func (h *auditAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, r, http.StatusOK, page)
 }
 
-func (h *auditAPI) recordQueryFailure(r *http.Request, actor requestActor) {
+func (h *auditAPI) recordQueryFailure(r *http.Request, actor requestActor, target string, err error) {
+	// A query refused as invalid is the caller's mistake, not the store failing.
+	if errors.Is(err, audit.ErrInvalid) {
+		return
+	}
 	_, _ = h.coordinator.audits.Append(r.Context(), audit.Event{
-		Actor: actor.Actor, Source: actor.Source, Action: audit.ActionAuditQueried,
+		Actor: actor.Actor, Source: actor.Source, Action: audit.ActionAuditQueried, Target: target,
 		Result: audit.ResultUnavailable, Category: audit.CategoryGeneral,
 		Metadata: map[string]string{audit.MetadataReasonCode: audit.ReasonStorageFailure},
 	})
