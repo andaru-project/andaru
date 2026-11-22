@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"strings"
@@ -43,7 +44,7 @@ func decodeSaved(raw []byte) (d declaration, stored int, origin map[string]strin
 	}
 	if head.SchemaVersion >= schemaVersion {
 		d, err = decodeDeclaration(raw)
-		return d, d.SchemaVersion, nil, err
+		return d, head.SchemaVersion, nil, err
 	}
 	instance, err := decodeStrictLimit(raw, documentLimit)
 	if err != nil {
@@ -56,13 +57,56 @@ func decodeSaved(raw []byte) (d declaration, stored int, origin map[string]strin
 	if err = s.legacy.Validate(instance); err != nil {
 		return d, 0, nil, schemaErrors(err)
 	}
-	origin = upgradeLegacy(instance.(map[string]any))
-	upgraded, err := json.Marshal(instance)
-	if err != nil {
-		return d, 0, nil, err
+	m := instance.(map[string]any)
+	origin = upgradeLegacy(m)
+	for {
+		upgraded, e := json.Marshal(m)
+		if e != nil {
+			return d, 0, nil, e
+		}
+		if d, err = decodeDeclaration(upgraded); err == nil || !dropNeverMatching(m, origin, err) {
+			return d, head.SchemaVersion, origin, err
+		}
 	}
-	d, err = decodeDeclaration(upgraded)
-	return d, head.SchemaVersion, origin, err
+}
+
+// dropNeverMatching removes the rules a refusal names, when every one of them is a rule upgradeLegacy split
+// that can never match. A zone on a legacy side stood for both families, so "from lan or an IPv4 host, to an
+// IPv6 network" was a valid rule; its host half matches nothing, and the engine before rendered no line for it.
+func dropNeverMatching(m map[string]any, origin map[string]string, refusal error) bool {
+	var details validationError
+	rules, _ := m["rules"].([]any)
+	if !errors.As(refusal, &details) {
+		return false
+	}
+	split := map[string]bool{}
+	for derived, from := range origin {
+		split[derived], split[from] = true, true
+	}
+	drop := map[int]bool{}
+	for _, detail := range details {
+		var n int
+		if detail.Message != neverAddresses && detail.Message != neverPorts {
+			return false
+		}
+		if _, e := fmt.Sscanf(detail.Path, "/rules/%d/", &n); e != nil || n >= len(rules) {
+			return false
+		}
+		id, _ := rules[n].(map[string]any)["id"].(string)
+		if !split[id] {
+			return false
+		}
+		drop[n] = true
+		delete(origin, id)
+	}
+	kept := make([]any, 0, len(rules))
+	for i, r := range rules {
+		if !drop[i] {
+			kept = append(kept, r)
+		}
+	}
+	m["rules"] = kept
+	return len(drop) > 0
 }
 
 // upgradeLegacy turns a document of schema 1 to 3 into schema 4, keeping what it means:
@@ -141,19 +185,20 @@ func derivedRuleID(id string, n int) string {
 // carryLegacy makes the first version saved in the current form record every alias, every rule and the rule
 // list as changed. That version and those after it then find their object versions in firewall_changes alone,
 // and only the versions of the form before are read through legacyCollections.
-func carryLegacy(current *savedState, after map[objectKey]any, changes map[objectKey]objectChange) {
-	if !current.legacy {
+func carryLegacy(next *savedState, after map[objectKey]any, changes map[objectKey]objectChange) {
+	if !next.legacy {
 		return
 	}
-	keys := []objectKey{listKey("rules")}
-	for key := range after {
-		if legacyCollections[key.Collection] != nil {
-			keys = append(keys, key)
-		}
-	}
-	for _, key := range keys {
+	next.legacy, next.origin = false, nil
+	carry := func(key objectKey) {
 		if _, changed := changes[key]; !changed {
 			changes[key] = objectChange{Collection: key.Collection, ID: key.ID}
+		}
+	}
+	carry(listKey("rules"))
+	for key := range after {
+		if legacyCollections[key.Collection] != nil {
+			carry(key)
 		}
 	}
 }

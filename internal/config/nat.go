@@ -55,7 +55,7 @@ func validateNAT(d *declaration) []FieldError {
 	}
 	refFamily := func(path, id string, six bool) {
 		if _, ok := addresses[id]; !ok {
-			bad(path, "Expected an existing address.")
+			bad(path, "Expected an existing address alias.")
 		} else if six && !has(id, true, false) {
 			bad(path, "Expected an address with IPv6 addresses for an IPv6 port forward.")
 		} else if !six && !has(id, false, false) {

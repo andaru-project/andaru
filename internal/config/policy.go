@@ -11,6 +11,16 @@ import (
 // maxRuleLines caps the nft lines one rule renders to.
 const maxRuleLines = 4096
 
+// maxLeftOut caps the aliases a side leaves out: they share one nft rule, and the kernel refuses a rule of about
+// sixty such matches. A group is one match whatever it holds.
+const maxLeftOut = 16
+
+// What a rule that can never match is told. A legacy rule split by upgradeLegacy may be such a rule.
+const (
+	neverAddresses = "The source and destination addresses are of different families, so this rule can never match."
+	neverPorts     = "No port alias is of the family of the rule's addresses, so this rule can never match."
+)
+
 // ICMP types a port alias may name; nft knows them by these names.
 var icmpTypes = map[string][]string{
 	"icmp":   {"echo-request", "echo-reply", "destination-unreachable", "time-exceeded", "parameter-problem", "timestamp-request", "timestamp-reply"},
@@ -200,6 +210,9 @@ func validatePolicy(d *declaration) []FieldError {
 				if len(s.Addresses) == 0 {
 					bad(fmt.Sprintf("%s/%s/not", p, field), "Name the addresses to leave out.")
 				}
+				if len(s.Addresses) > maxLeftOut {
+					bad(fmt.Sprintf("%s/%s/addresses", p, field), fmt.Sprintf("A side leaves out at most %d aliases. Put more of them in a group.", maxLeftOut))
+				}
 				// Every address but the named ones: either family can match.
 				return map[int]bool{}
 			}
@@ -213,7 +226,7 @@ func validatePolicy(d *declaration) []FieldError {
 			bad(p+"/to/zones", "The firewall stands alone as a destination. Reaching it and other zones takes two rules.")
 		}
 		if len(from) > 0 && len(to) > 0 && !(from[4] && to[4]) && !(from[6] && to[6]) {
-			bad(p+"/to/addresses", "The source and destination addresses are of different families, so this rule can never match.")
+			bad(p+"/to/addresses", neverAddresses)
 		}
 		// The families a port alias can match: icmp only IPv4, icmpv6 only IPv6, ports both.
 		offered, leaves := map[int]bool{}, 0
@@ -241,7 +254,7 @@ func validatePolicy(d *declaration) []FieldError {
 		}
 		meets := func(f int) bool { return (len(from) == 0 || from[f]) && (len(to) == 0 || to[f]) && offered[f] }
 		if len(offered) > 0 && !meets(4) && !meets(6) {
-			bad(p+"/ports", "No port alias is of the family of the rule's addresses, so this rule can never match.")
+			bad(p+"/ports", neverPorts)
 		}
 		// Each zone x address x port alias combination of the two sides is one nft line; a runaway rule would
 		// exhaust the host's filter. Times two: an alias holding both families renders one line per family.

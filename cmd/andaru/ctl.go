@@ -115,9 +115,8 @@ func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 			}
 		}
 		if verb == "order" {
-			path, prefix := map[string]string{"rules": "rules", "nat/port-forwards": "nat/port-forwards", "nat/one-to-one": "nat/one-to-one"}[chain],
-				map[string]string{"rules": "rul_", "nat/port-forwards": "pfw_", "nat/one-to-one": "oto_"}[chain]
-			if path == "" {
+			prefix := map[string]string{"rules": "rul_", "nat/port-forwards": "pfw_", "nat/one-to-one": "oto_"}[chain]
+			if prefix == "" {
 				return req, errUsage
 			}
 			for _, id := range leaf {
@@ -125,7 +124,7 @@ func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 					return req, errUsage
 				}
 			}
-			req.method, req.path, req.kind = "PUT", "/api/v1/config/"+path+"/order", "order"
+			req.method, req.path, req.kind = "PUT", "/api/v1/config/"+chain+"/order", "order"
 			req.tag = `"order.` + version + `"`
 			req.payload, _ = json.Marshal(append([]string{}, leaf...))
 			return req, nil

@@ -23,7 +23,7 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 	var info VersionInfo
 	var number int64
 	var parent sql.NullInt64
-	var schemaVersion int
+	var schema int
 	var cb, ch, sh []byte
 	query := `SELECT v.id,v.parent_id,v.schema_version,v.created_at,v.actor,v.changed_object_count,d.body,v.config_sha256,v.secrets_sha256 FROM versions v JOIN documents d ON d.sha256=v.config_sha256 `
 	var row *sql.Row
@@ -36,13 +36,13 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 		}
 		row = conn.QueryRowContext(ctx, query+`WHERE v.id=?`, n)
 	}
-	if e := row.Scan(&number, &parent, &schemaVersion, &info.CreatedAt, &info.Actor, &info.ChangedObjectCount, &cb, &ch, &sh); e != nil {
+	if e := row.Scan(&number, &parent, &schema, &info.CreatedAt, &info.Actor, &info.ChangedObjectCount, &cb, &ch, &sh); e != nil {
 		if errors.Is(e, sql.ErrNoRows) && id != "" {
 			return state, info, fault("NOT_FOUND", "", "Saved version does not exist.")
 		}
 		return state, info, diagnostic("load-config-scan", e)
 	}
-	if number < 0 || schemaVersion < 1 || schemaVersion > 4 || len(ch) != 32 || len(sh) != 32 || len(cb) > documentLimit {
+	if number < 0 || schema < 1 || schema > schemaVersion || len(ch) != 32 || len(sh) != 32 || len(cb) > documentLimit {
 		return state, info, diagnostic("load-config-metadata", nil)
 	}
 	hash := sha256.Sum256(cb)
@@ -53,13 +53,14 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 	if e != nil {
 		return state, info, diagnostic("load-config-schema", e)
 	}
-	if stored != schemaVersion {
+	if stored != schema {
 		return state, info, diagnostic("load-config-schema-mismatch", nil)
 	}
 	// A version of an earlier form keeps the bytes it was saved with, and the document as it reads now is what
 	// a batch that changes nothing is compared with.
 	canonicalBody, e := canonical(d)
-	if state.legacy, state.origin = stored < d.SchemaVersion, origin; e != nil || !state.legacy && !bytes.Equal(canonicalBody, cb) {
+	state.legacy, state.origin, state.storedBody = stored < schemaVersion, origin, cb
+	if e != nil || !state.legacy && !bytes.Equal(canonicalBody, cb) {
 		return state, info, diagnostic("load-config-canonical", e)
 	}
 	cb = canonicalBody
@@ -146,8 +147,7 @@ func loadObjectVersions(ctx context.Context, conn *sql.Conn, state *savedState, 
 		if len(ids) == 0 {
 			continue
 		}
-		// A version of a form before schema 4 has its aliases and rules recorded under the names they had, and
-		// a rule the upgrade split from another has the version of the rule it came from.
+		// A version of a form before schema 4 has its aliases and rules recorded under the names they had.
 		table, recorded := changeTable(col), []string{col}
 		if state.legacy && legacyCollections[col] != nil {
 			table, recorded = "policy_changes", legacyCollections[col]
@@ -164,6 +164,7 @@ func loadObjectVersions(ctx context.Context, conn *sql.Conn, state *savedState, 
 		for _, name := range recorded {
 			asked := map[string][]string{}
 			for _, id := range ids {
+				// A rule the upgrade split from another has the version of the rule it came from.
 				was := cmp.Or(state.origin[id], id)
 				if id == col {
 					was = name
@@ -189,9 +190,9 @@ func loadObjectVersions(ctx context.Context, conn *sql.Conn, state *savedState, 
 				}
 				for _, id := range asked[oid] {
 					// The rule list was two lists: it changed last when either did.
-					if version > latest[objectKey{col, id}] {
-						latest[objectKey{col, id}] = version
-						versions[objectKey{col, id}] = objectVersion{Version: Version(strconv.FormatInt(version, 10)), Deleted: deleted}
+					if key := (objectKey{col, id}); version > latest[key] {
+						latest[key] = version
+						versions[key] = objectVersion{Version: Version(strconv.FormatInt(version, 10)), Deleted: deleted}
 					}
 				}
 			}
@@ -394,7 +395,7 @@ func (s *Store) Version(ctx context.Context, id Version) (result VersionView, er
 		query = append(query, "SELECT collection,object_id,created,deleted FROM "+table+" WHERE version_id=?")
 		arguments = append(arguments, number)
 	}
-	rows, e := conn.QueryContext(ctx, strings.Join(query, " UNION ALL ")+" ORDER BY 1,2", arguments...)
+	rows, e := conn.QueryContext(ctx, strings.Join(query, " UNION ALL "), arguments...)
 	if e != nil {
 		return result, diagnostic("version-changes-query", e)
 	}
@@ -412,14 +413,21 @@ func (s *Store) Version(ctx context.Context, id Version) (result VersionView, er
 			change.Collection = current
 		}
 		result.Changes = append(result.Changes, change)
+		// What changed a rule the upgrade split changed the rules it was split into, which the value shows.
+		for derived, from := range state.origin {
+			if change.Collection == "rules" && change.ID == from {
+				change.ID = derived
+				result.Changes = append(result.Changes, change)
+			}
+		}
+	}
+	if e = rows.Err(); e != nil {
+		return result, diagnostic("version-changes-rows", e)
 	}
 	slices.SortFunc(result.Changes, func(a, b objectChange) int {
 		return compareKeys(objectKey{a.Collection, a.ID}, objectKey{b.Collection, b.ID})
 	})
 	result.Changes = slices.Compact(result.Changes)
-	if e = rows.Err(); e != nil {
-		return result, diagnostic("version-changes-rows", e)
-	}
 	return result, nil
 }
 

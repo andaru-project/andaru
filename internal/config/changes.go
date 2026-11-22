@@ -135,6 +135,8 @@ type savedState struct {
 	// from which: see decodeSaved.
 	legacy bool
 	origin map[string]string
+	// storedBody is the version's document as the store holds it, which for a legacy version is not configBody.
+	storedBody []byte
 }
 type preparedChange struct {
 	State                  savedState
@@ -661,8 +663,7 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 	}
 	if !same {
 		p.State.Version = next
-		carryLegacy(current, after, changes)
-		p.State.legacy, p.State.origin = false, nil
+		carryLegacy(&p.State, after, changes)
 		for key, ch := range changes {
 			p.State.Versions[key] = objectVersion{Version: next, Deleted: ch.Deleted}
 			p.Changed = append(p.Changed, ch)

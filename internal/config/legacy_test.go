@@ -25,7 +25,7 @@ func legacyDocument(t *testing.T) []byte {
 		"policy": map[string]any{
 			// "From lan or from the nas" to the firewall, and "from lan to the nas or to lan" through it.
 			"input":   []any{rule(rulA, "dns", []any{adrHost, legacyZone}, []any{})},
-			"forward": []any{rule(rulB, "dns", []any{legacyZone}, []any{adrHost, legacyZone}), rule("rul_00000003-0000-4000-8000-000000000003", "any", []any{}, []any{})},
+			"forward": []any{rule(rulB, "dns", []any{legacyZone}, []any{adrHost, legacyZone}), rule(rulC, "any", []any{}, []any{})},
 		},
 	})
 	if err != nil {
@@ -59,7 +59,7 @@ func TestLegacyDocumentReadsAsTheCurrentForm(t *testing.T) {
 		{derivedRuleID(rulA, 1), none, host, firewall, none, dns},
 		{rulB, zone, none, zone, none, dns},
 		{derivedRuleID(rulB, 1), zone, none, none, host, dns},
-		{"rul_00000003-0000-4000-8000-000000000003", none, none, none, none, dns},
+		{rulC, none, none, none, none, dns},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("rules: %+v", got)
@@ -104,5 +104,58 @@ func TestLegacyDocumentIsStillChecked(t *testing.T) {
 				t.Fatal("accepted")
 			}
 		})
+	}
+}
+
+// A zone on a legacy side stood for both families, so a rule could pair "lan or an IPv4 host" with what only
+// IPv6 reaches. Split, its host half can never match: it is left out, as the engine before rendered nothing for it.
+func TestLegacyRuleWhoseSplitHalfNeverMatchesStillLoads(t *testing.T) {
+	for name, edit := range map[string]func(objects, policy map[string]any){
+		"an IPv6 destination": func(objects, policy map[string]any) {
+			objects["addresses"] = append(objects["addresses"].([]any), map[string]any{"id": adrNet6, "name": "v6net", "kind": "network", "prefix": "2001:db8::/64"})
+			rule := policy["forward"].([]any)[0].(map[string]any)
+			rule["from"], rule["to"] = []any{adrHost, legacyZone}, []any{adrNet6}
+		},
+		"an ICMPv6 service": func(objects, policy map[string]any) {
+			objects["services"] = append(objects["services"].([]any), map[string]any{"id": svcGroup, "name": "ping6", "protocol": "icmpv6", "types": []any{"echo-request"}})
+			policy["forward"].([]any)[0].(map[string]any)["from"] = []any{adrHost, legacyZone}
+			policy["forward"].([]any)[0].(map[string]any)["to"] = []any{}
+			policy["forward"].([]any)[0].(map[string]any)["services"] = []any{svcGroup}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var m map[string]any
+			if err := json.Unmarshal(legacyDocument(t), &m); err != nil {
+				t.Fatal(err)
+			}
+			edit(m["objects"].(map[string]any), m["policy"].(map[string]any))
+			raw, _ := json.Marshal(m)
+			d, _, origin, err := decodeSaved(raw)
+			if err != nil {
+				t.Fatalf("a document the engine before saved does not load: %v", err)
+			}
+			var ids []string
+			for _, r := range d.Rules {
+				ids = append(ids, r.ID)
+			}
+			// rulB's zone half stays and its host half is gone; rulA is split as before.
+			if want := []string{rulA, derivedRuleID(rulA, 1), rulB, rulC}; !slices.Equal(ids, want) {
+				t.Fatalf("rules %v, want %v", ids, want)
+			}
+			if _, kept := origin[derivedRuleID(rulB, 1)]; kept || len(origin) != 1 {
+				t.Fatalf("origin still names the rule left out: %v", origin)
+			}
+		})
+	}
+	// A rule that can never match and was not split is refused, as any document's is.
+	var m map[string]any
+	_ = json.Unmarshal(legacyDocument(t), &m)
+	objects := m["objects"].(map[string]any)
+	objects["addresses"] = append(objects["addresses"].([]any), map[string]any{"id": adrNet6, "name": "v6net", "kind": "network", "prefix": "2001:db8::/64"})
+	rule := m["policy"].(map[string]any)["forward"].([]any)[1].(map[string]any)
+	rule["from"], rule["to"] = []any{adrHost}, []any{adrNet6}
+	raw, _ := json.Marshal(m)
+	if _, _, _, err := decodeSaved(raw); err == nil {
+		t.Fatal("a rule that never matched in the form before was accepted")
 	}
 }

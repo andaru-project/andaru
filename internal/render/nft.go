@@ -294,7 +294,7 @@ func (f *filter) rule(r rule) []string {
 				}
 				if len(none) == 0 {
 					// Nothing of this family is left out, so all of it matches.
-					none = []string{"meta nfproto " + map[family]string{4: "ipv4", 6: "ipv6"}[fam]}
+					none = []string{fmt.Sprintf("meta nfproto ipv%d", fam)}
 				}
 				addresses = append(addresses, match{strings.Join(none, " "), fam})
 			}
@@ -307,13 +307,15 @@ func (f *filter) rule(r rule) []string {
 				}
 			}
 		}
-		zones := []string{""}
-		// The firewall is no interface: the input chain is what makes a rule one to it.
-		if named := slices.DeleteFunc(slices.Clone(s.Zones), func(z string) bool { return z == firewallZone }); len(named) > 0 {
-			zones = zones[:0]
-			for _, z := range named {
+		var zones []string
+		for _, z := range s.Zones {
+			// The firewall is no interface: the input chain is what makes a rule one to it.
+			if z != firewallZone {
 				zones = append(zones, fmt.Sprintf("%s @%s", iface, setName(z)))
 			}
+		}
+		if len(zones) == 0 {
+			zones = []string{""}
 		}
 		var out []match
 		for _, z := range zones {

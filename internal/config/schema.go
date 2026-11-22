@@ -21,7 +21,7 @@ var secretSchema []byte
 
 type schemaSet struct {
 	declaration, legacy, changes, secret, backupSecret *jsonschema.Schema
-	objects                                    map[string]*jsonschema.Schema
+	objects                                            map[string]*jsonschema.Schema
 }
 
 var schemas = sync.OnceValues(func() (*schemaSet, error) {

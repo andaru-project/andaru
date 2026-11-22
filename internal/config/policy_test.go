@@ -14,6 +14,7 @@ const (
 	svcGroup = "svc_00000002-0000-4000-8000-000000000002"
 	rulA     = "rul_00000001-0000-4000-8000-000000000001"
 	rulB     = "rul_00000002-0000-4000-8000-000000000002"
+	rulC     = "rul_00000003-0000-4000-8000-000000000003"
 )
 
 // side is one side of a rule: its zones and, within them, its addresses.
@@ -133,6 +134,13 @@ func TestPolicyValidation(t *testing.T) {
 		"not without addresses": {func(d map[string]any) {
 			fwd(d, 0)["from"] = map[string]any{"zones": []any{zoneOf(d)}, "addresses": []any{}, "not": true}
 		}, "/rules/0/from/not"},
+		"too many left out": {func(d map[string]any) {
+			left := make([]any, maxLeftOut+1)
+			for i := range left {
+				left[i] = adrHost
+			}
+			fwd(d, 0)["from"] = map[string]any{"zones": []any{}, "addresses": left, "not": true}
+		}, "/rules/0/from/addresses"},
 		"a side that is a list": {func(d map[string]any) { fwd(d, 0)["from"] = []any{zoneOf(d)} }, "/rules/0/from"},
 		"families never meet":   {func(d map[string]any) { fwd(d, 0)["from"] = side(nil, adrHost); fwd(d, 0)["to"] = side(nil, adrNet6) }, "/rules/0/to/addresses"},
 		"port alias family never meets": {func(d map[string]any) {
@@ -219,6 +227,23 @@ func TestZoneDoesNotGiveASideAFamily(t *testing.T) {
 	r["from"] = map[string]any{"zones": []any{zone}, "addresses": []any{adrHost}, "not": true}
 	if _, err := decodeMap(t, d); err != nil {
 		t.Fatalf("every address but an IPv4 host refused towards an IPv6 network: %v", err)
+	}
+}
+
+// A side that leaves addresses out is one filter line whatever it names, so it does not count towards the cap.
+func TestLeftOutSideIsOneLine(t *testing.T) {
+	d := policyFixture(t)
+	r := item(d["rules"].([]any), 0)
+	left, to := make([]any, maxLeftOut), make([]any, 300)
+	for i := range left {
+		left[i] = adrHost
+	}
+	for i := range to {
+		to[i] = adrHost
+	}
+	r["from"], r["to"], r["ports"] = map[string]any{"zones": []any{}, "addresses": left, "not": true}, side(nil, to...), []any{}
+	if _, err := decodeMap(t, d); err != nil {
+		t.Fatal(err)
 	}
 }
 

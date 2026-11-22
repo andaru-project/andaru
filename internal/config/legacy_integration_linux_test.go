@@ -10,8 +10,9 @@ import (
 	"testing"
 )
 
-// legacyStore is a store whose saved head, version 1, was written by an engine before schema 4: the document in
-// that form, and its object versions in the tables and under the names that engine used.
+// legacyStore is a store whose two versions were written by an engine before schema 4: the document in that
+// form, and its object versions in the tables and under the names that engine used. Version 1 created
+// everything; version 2, the saved head, reordered the forward rules, leaving the document as it was.
 func legacyStore(t *testing.T) (*Store, string) {
 	t.Helper()
 	ctx := context.Background()
@@ -28,12 +29,14 @@ func legacyStore(t *testing.T) (*Store, string) {
 	exec("INSERT INTO documents VALUES(?,?)", hash[:], body)
 	exec("INSERT INTO versions SELECT 1,0,1,?,secrets_sha256,created_at,actor,7 FROM versions WHERE id=0", hash[:])
 	exec("INSERT INTO object_changes VALUES('zones',?,1,1,0)", legacyZone)
-	for _, row := range [][2]string{{"addresses", adrHost}, {"services", svcDNS}, {"policy.input", rulA}, {"policy.forward", rulB}, {"policy.forward", "rul_00000003-0000-4000-8000-000000000003"}} {
+	for _, row := range [][2]string{{"addresses", adrHost}, {"services", svcDNS}, {"policy.input", rulA}, {"policy.forward", rulB}, {"policy.forward", rulC}} {
 		exec("INSERT INTO policy_changes VALUES(?,?,1,1,0)", row[0], row[1])
 	}
 	exec("INSERT INTO policy_changes VALUES('policy.input','policy.input',1,0,0)")
 	exec("INSERT INTO policy_changes VALUES('policy.forward','policy.forward',1,0,0)")
-	exec("UPDATE pointers SET version_id=1 WHERE name='saved'")
+	exec("INSERT INTO versions SELECT 2,1,1,?,secrets_sha256,created_at,actor,1 FROM versions WHERE id=0", hash[:])
+	exec("INSERT INTO policy_changes VALUES('policy.forward','policy.forward',2,0,0)")
+	exec("UPDATE pointers SET version_id=2 WHERE name='saved'")
 	return s, root
 }
 
@@ -42,7 +45,8 @@ func TestLegacyStoreReadsAndThenSavesInTheCurrentForm(t *testing.T) {
 	s, root := legacyStore(t)
 
 	rules, err := s.List(ctx, "rules")
-	if err != nil || len(rules.Items) != 5 || rules.Version != "1" {
+	// The one list changed last when either of the two lists did.
+	if err != nil || len(rules.Items) != 5 || rules.Version != "2" {
 		t.Fatalf("rules of a legacy head: %+v %v", rules, err)
 	}
 	for _, item := range rules.Items {
@@ -68,7 +72,11 @@ func TestLegacyStoreReadsAndThenSavesInTheCurrentForm(t *testing.T) {
 	for _, c := range history.Changes {
 		changed = append(changed, c.Collection+" "+c.ID)
 	}
-	if want := []string{"aliases.addresses " + adrHost, "aliases.ports " + svcDNS, "rules " + rulA, "rules " + rulB, "rules rul_00000003-0000-4000-8000-000000000003", "rules rules", "zones " + legacyZone}; !slices.Equal(changed, want) {
+	// A rule the upgrade split in two changed as two rules, which is what the version's value shows.
+	want := []string{"aliases.addresses " + adrHost, "aliases.ports " + svcDNS, "rules " + rulA, "rules " + rulB, "rules " + rulC,
+		"rules " + derivedRuleID(rulA, 1), "rules " + derivedRuleID(rulB, 1), "rules rules", "zones " + legacyZone}
+	slices.Sort(want)
+	if !slices.Equal(changed, want) {
 		t.Fatalf("what version 1 changed, in today's names:\n got %v\nwant %v", changed, want)
 	}
 
@@ -78,18 +86,19 @@ func TestLegacyStoreReadsAndThenSavesInTheCurrentForm(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result, err := s.Save(ctx, systemRootActor, same); err != nil || result.SavedVersion != "1" {
+	if result, err := s.Save(ctx, systemRootActor, same); err != nil || result.SavedVersion != "2" {
 		t.Fatalf("an unchanged batch on a legacy head: %+v %v", result, err)
 	}
 
 	// The first save writes the current form, and records every alias and rule with it.
 	derived := derivedRuleID(rulA, 1)
-	order, err := json.Marshal([]string{derived, rulA, rulB, derivedRuleID(rulB, 1), "rul_00000003-0000-4000-8000-000000000003"})
+	order, err := json.Marshal([]string{derived, rulA, rulB, derivedRuleID(rulB, 1), rulC})
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := s.Save(ctx, systemRootActor, Changes{Operations: []Operation{{Op: "order", Collection: "rules", ExpectedVersion: &one, Value: order}}})
-	if err != nil || result.SavedVersion != "2" {
+	two := Version("2")
+	result, err := s.Save(ctx, systemRootActor, Changes{Operations: []Operation{{Op: "order", Collection: "rules", ExpectedVersion: &two, Value: order}}})
+	if err != nil || result.SavedVersion != "3" {
 		t.Fatalf("reordering a legacy head: %+v %v", result, err)
 	}
 	exported, err := s.Export(ctx, false)
@@ -104,19 +113,19 @@ func TestLegacyStoreReadsAndThenSavesInTheCurrentForm(t *testing.T) {
 	}
 	s = openTestStore(t, root)
 	rules, err = s.List(ctx, "rules")
-	if err != nil || len(rules.Items) != 5 || rules.Version != "2" {
+	if err != nil || len(rules.Items) != 5 || rules.Version != "3" {
 		t.Fatalf("rules after the first save and a restart: %+v %v", rules, err)
 	}
 	for _, item := range rules.Items {
-		if item.Version != "2" {
+		if item.Version != "3" {
 			t.Fatalf("a rule was not carried into the current form's history: %s %s", item.Version, item.Value)
 		}
 	}
-	if alias, _, err := s.Get(ctx, "aliases.ports", svcDNS); err != nil || alias.Version != "2" {
+	if alias, _, err := s.Get(ctx, "aliases.ports", svcDNS); err != nil || alias.Version != "3" {
 		t.Fatalf("port alias after the first save: %+v %v", alias, err)
 	}
 	// The version of the form before still loads, for the history and for a rollback to it.
-	if old, err := s.Version(ctx, "1"); err != nil || len(old.Changes) != 7 {
+	if old, err := s.Version(ctx, "1"); err != nil || len(old.Changes) != 9 {
 		t.Fatalf("version 1 after the first save: %+v %v", old, err)
 	}
 	if err = VerifyRecoveryState(ctx, root); err != nil {
@@ -143,5 +152,43 @@ func TestLegacyStoreIsLeftAsItWasUntilASave(t *testing.T) {
 	}
 	if err := VerifyRecoveryState(ctx, root); err != nil {
 		t.Fatalf("recovery check of a legacy store: %v", err)
+	}
+}
+
+// A restore onto a head of the form before saves the current form too, with every rule and alias recorded, and
+// the engine that wrote a restore journal before the upgrade still finds its document in the store.
+func TestRestoreOntoALegacyHead(t *testing.T) {
+	ctx := context.Background()
+	s, root := legacyStore(t)
+	before, err := s.Export(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var secrets []byte
+	if err = s.secretDB.QueryRowContext(ctx, "SELECT body FROM documents").Scan(&secrets); err != nil {
+		t.Fatal(err)
+	}
+	if matches, err := s.RestoreMatches(ctx, "2", RestoreDocuments{Configuration: legacyDocument(t), ConfigurationSecrets: secrets}); err != nil || !matches {
+		t.Fatalf("the head no longer matches the document it was saved as: %t %v", matches, err)
+	}
+	result, err := s.Restore(ctx, rootRestoreActor, before.SavedVersion, RestoreDocuments{Configuration: legacyDocument(t)})
+	if err != nil || result.SavedVersion != "3" {
+		t.Fatalf("restore: %+v %v", result, err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s = openTestStore(t, root)
+	rules, err := s.List(ctx, "rules")
+	if err != nil || len(rules.Items) != 5 {
+		t.Fatalf("rules after a restore and a restart: %+v %v", rules, err)
+	}
+	for _, item := range rules.Items {
+		if item.Version != "3" {
+			t.Fatalf("a rule was not carried into the current form's history: %s %s", item.Version, item.Value)
+		}
+	}
+	if err = VerifyRecoveryState(ctx, root); err != nil {
+		t.Fatal(err)
 	}
 }

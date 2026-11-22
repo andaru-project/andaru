@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 
@@ -68,12 +69,7 @@ func restoreRequests(decoded decodedBackup) []objectKey {
 	if decoded.configuration == nil {
 		return nil
 	}
-	index := objects(decoded.configuration)
-	requested := make([]objectKey, 0, len(index))
-	for key := range index {
-		requested = append(requested, key)
-	}
-	return requested
+	return slices.Collect(maps.Keys(objects(decoded.configuration)))
 }
 
 func (s *Store) PreviewRestore(ctx context.Context, input RestoreDocuments) (result RestorePreview, err error) {
@@ -169,7 +165,8 @@ func (s *Store) RestoreMatches(ctx context.Context, version Version, target Rest
 	var configBody, secretBody []byte
 	err := s.read(ctx, "", nil, func(state savedState, _ VersionInfo) error {
 		savedVersion = state.Version
-		configBody = state.configBody
+		// The stored bytes: a journal written by the engine before names a document of the form before.
+		configBody = state.storedBody
 		secretBody = state.secretBody
 		return nil
 	})
@@ -300,8 +297,7 @@ func prepareRestoration(current *savedState, decoded decodedBackup, next Version
 			}
 		}
 	}
-	carryLegacy(current, after, changes)
-	prepared.State.legacy, prepared.State.origin = false, nil
+	carryLegacy(&prepared.State, after, changes)
 	for key, change := range changes {
 		prepared.State.Versions[key] = objectVersion{Version: next, Deleted: change.Deleted}
 		prepared.Changed = append(prepared.Changed, change)

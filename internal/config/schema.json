@@ -1319,7 +1319,7 @@
             "$ref": "#/$defs/ruleStored"
           },
           "minItems": 0,
-          "maxItems": 10000
+          "maxItems": 80000
         },
         "nat": {
           "type": "object",
@@ -1455,7 +1455,7 @@
             "$ref": "#/$defs/ruleStored"
           },
           "minItems": 0,
-          "maxItems": 10000
+          "maxItems": 80000
         },
         "nat": {
           "type": "object",
@@ -1879,7 +1879,7 @@
                       "$ref": "#/$defs/ruleID"
                     },
                     "minItems": 0,
-                    "maxItems": 10000
+                    "maxItems": 80000
                   }
                 },
                 "required": [
