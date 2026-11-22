@@ -74,6 +74,8 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   const head = changes.data?.head;
   const loadUpgrade = useCallback(() => (canReadChanges && head !== undefined ? api.upgradePreview() : Promise.resolve(undefined)), [api, canReadChanges, head]);
   const upgrade = useResource(loadUpgrade, onSessionLost);
+  const upgradeError = upgrade.error;
+  const reloadUpgrade = upgrade.reload;
   const upgradePending = (upgrade.data?.questions.length ?? 0) > 0;
   const onUpgradePage = useMatch('/system/upgrade') !== null;
   // The visit opens on the questions once, so the dashboard stays reachable for those who cannot answer.
@@ -87,9 +89,13 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   // When the API answers again, show what the server says rather than what was last seen.
   const wasConnected = useRef(connected);
   useEffect(() => {
-    if (connected && !wasConnected.current) void reloadChanges();
+    if (connected && !wasConnected.current) {
+      void reloadChanges();
+      // A check that failed while the box did not answer is tried again; the head may not have moved.
+      if (upgradeError) void reloadUpgrade();
+    }
     wasConnected.current = connected;
-  }, [connected, reloadChanges]);
+  }, [connected, reloadChanges, upgradeError, reloadUpgrade]);
 
   const groups = [
     { label: 'Network', items: [{ to: '/network/interfaces', label: 'Interfaces', visible: capabilities.has('status.read') }] },

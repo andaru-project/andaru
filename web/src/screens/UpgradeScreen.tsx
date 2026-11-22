@@ -1,6 +1,6 @@
 import { Alert, Badge, Button, Group, Paper, Radio, Stack, Text, Title } from '@mantine/core';
 import { useCallback, useState } from 'react';
-import { ApiClient, reportError } from '../api';
+import { ApiClient, ApiError, reportError } from '../api';
 import type { Session, UpgradeView } from '../types';
 import { useResource } from '../useResource';
 import { Loaded } from './Loaded';
@@ -33,6 +33,8 @@ export function UpgradeScreen({ api, session, onFinished, onSessionLost }: Upgra
       onFinished();
     } catch (requestError) {
       reportError(requestError, onSessionLost, setError);
+      // The saved settings changed meanwhile: read their questions again, against the new head.
+      if (requestError instanceof ApiError && requestError.status === 412) void view.reload();
     } finally {
       setBusy(false);
     }
@@ -55,9 +57,7 @@ export function UpgradeScreen({ api, session, onFinished, onSessionLost }: Upgra
               {current.questions.map((question) => (
                 <Paper key={question.id} withBorder p="md">
                   <Stack gap="xs">
-                    <Text fw={600}>{question.question}</Text>
-                    <Text size="sm" c="dimmed">About: {question.objects.join(', ')}</Text>
-                    <Radio.Group value={choices[question.id] ?? ''} onChange={(choice) => setChoices((given) => ({ ...given, [question.id]: choice }))} aria-label={question.question}>
+                    <Radio.Group label={question.question} description={`About: ${question.objects.join(', ')}`} value={choices[question.id] ?? ''} onChange={(choice) => setChoices((given) => ({ ...given, [question.id]: choice }))}>
                       <Stack gap="xs">
                         {question.choices.map((choice) => (
                           <Radio key={choice.id} value={choice.id} disabled={!canWrite || busy} label={

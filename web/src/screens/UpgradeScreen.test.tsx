@@ -66,3 +66,33 @@ it('shows the questions read-only to an account that cannot change the configura
   expect(screen.queryByRole('button', { name: 'Save the answers' })).not.toBeInTheDocument();
   expect(screen.getByText(/needs permission to change the configuration/)).toBeInTheDocument();
 });
+
+it('reads the questions again when the saved settings changed before the answers saved', async () => {
+  let head = '7';
+  const posted: string[] = [];
+  fetchRoutes({
+    'POST /api/v1/config/upgrade/preview': () => jsonResponse(200, { savedVersion: head, questions: [{ ...first, answered: true, choice: 'keep' }] }),
+    'POST /api/v1/config/upgrade': (init) => {
+      const body = JSON.parse(String(init?.body)) as { expectedSavedVersion: string };
+      posted.push(body.expectedSavedVersion);
+      if (body.expectedSavedVersion !== head) return jsonResponse(412, { error: { code: 'PRECONDITION_FAILED', message: 'Precondition Failed' } });
+      return jsonResponse(200, { state: 'saved', savedVersion: '10' });
+    },
+  });
+  render(<UpgradeScreen api={new ApiClient('csrf')} session={session(['configuration.read', 'configuration.write'])} onFinished={vi.fn()} onSessionLost={vi.fn()} />);
+  const save = await screen.findByRole('button', { name: 'Save the answers' });
+  await vi.waitFor(() => expect(save).toBeEnabled());
+  head = '9';
+  await userEvent.click(save);
+  expect(await screen.findByRole('alert')).toBeInTheDocument();
+  await vi.waitFor(() => expect(save).toBeEnabled());
+  await userEvent.click(save);
+  expect(await screen.findByText('Saved as version 10')).toBeInTheDocument();
+  expect(posted).toEqual(['7', '9']);
+});
+
+it('names the choices of each question after it', async () => {
+  engine();
+  render(<UpgradeScreen api={new ApiClient('csrf')} session={session(['configuration.read'])} onFinished={vi.fn()} onSessionLost={vi.fn()} />);
+  expect(await screen.findByRole('radiogroup', { name: 'What becomes of the zones?' })).toBeInTheDocument();
+});
