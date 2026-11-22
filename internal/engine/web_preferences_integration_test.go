@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/config"
@@ -124,5 +125,29 @@ func TestWebPreferencesBelongToTheSignedInAccount(t *testing.T) {
 	login = first
 	if response := call(http.MethodGet, ""); response.Body.String() != layout {
 		t.Fatalf("the second account's save changed the first one's document: %s", response.Body)
+	}
+
+	// A read marked as a poll leaves the session's idle time running; an unmarked one resets it.
+	lastSeen := func() time.Time {
+		t.Helper()
+		var sessions []identity.Session
+		if err := handler.withLiveAuthorization(ctx, func(_ authz.Snapshot, epoch uint64) error {
+			var listErr error
+			sessions, listErr = store.ListSessions(ctx, login.Account.ID, epoch)
+			return listErr
+		}); err != nil || len(sessions) != 1 {
+			t.Fatalf("sessions %+v: %v", sessions, err)
+		}
+		return sessions[0].LastSeenAt
+	}
+	before := lastSeen()
+	time.Sleep(1100 * time.Millisecond) // the stored time has whole seconds
+	expect(call(http.MethodGet, "", header("X-Andaru-Background", "1")), http.StatusOK, layout)
+	if after := lastSeen(); !after.Equal(before) {
+		t.Fatalf("a poll moved the session's last activity from %v to %v", before, after)
+	}
+	expect(call(http.MethodGet, ""), http.StatusOK, layout)
+	if after := lastSeen(); !after.After(before) {
+		t.Fatalf("a read left the session's last activity at %v", after)
 	}
 }

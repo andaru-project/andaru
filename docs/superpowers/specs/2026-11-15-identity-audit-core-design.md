@@ -251,7 +251,7 @@ Update token `lastUsedAt` at most once per hour per token so read-heavy automati
 
 Session IDs and CSRF tokens are separate random 256-bit values with selector+secret wire forms; only selectors and SHA-256 secret hashes are stored. Rotate at login; never accept unknown client-supplied IDs. `GET /api/v1/session` on a valid same-origin cookie session rotates/returns a new CSRF secret after page reload; same-origin policy and `SameSite=Strict` prevent another site from reading it.
 
-- idle timeout: 30 minutes, server-enforced;
+- idle timeout: 30 minutes, server-enforced. A read the web UI sends with no user input (a pointer press, key press or wheel turn) since its previous request carries `X-Andaru-Background: 1` and does not count as activity, so polling does not keep an unattended screen signed in. A write always counts, and so does `GET /api/v1/session`, which the web UI sends when the page loads;
 - absolute lifetime: 12 hours, server-enforced;
 - maximum five sessions per human user; successful sixth login revokes the oldest transactionally;
 - password or account-role assignment change revokes all sessions;

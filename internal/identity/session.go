@@ -232,7 +232,8 @@ func (s *store) createSession(ctx context.Context, accountID string, accountEpoc
 	}, nil
 }
 
-func (s *store) AuthenticateSession(ctx context.Context, selector, secret string, authorizationEpoch uint64) (Principal, error) {
+// AuthenticateSession checks a browser session. A request that is not activity (a poll) leaves its idle time running.
+func (s *store) AuthenticateSession(ctx context.Context, selector, secret string, authorizationEpoch uint64, activity bool) (Principal, error) {
 	if err := ctx.Err(); err != nil {
 		return Principal{}, err
 	}
@@ -300,11 +301,13 @@ func (s *store) AuthenticateSession(ctx context.Context, selector, secret string
 		}
 		return Principal{}, ErrAuthentication
 	}
-	if _, err = tx.ExecContext(ctx, "UPDATE sessions SET last_seen_at=? WHERE session_selector=?", now, selectorBytes); err != nil {
-		return Principal{}, err
-	}
-	if err = tx.Commit(); err != nil {
-		return Principal{}, err
+	if activity {
+		if _, err = tx.ExecContext(ctx, "UPDATE sessions SET last_seen_at=? WHERE session_selector=?", now, selectorBytes); err != nil {
+			return Principal{}, err
+		}
+		if err = tx.Commit(); err != nil {
+			return Principal{}, err
+		}
 	}
 	return Principal{
 		Account: account, Actor: authz.Actor{Kind: authz.ActorAccount, ID: accountID}, SessionSelector: selector,
@@ -354,7 +357,7 @@ func (s *store) ValidateCSRF(ctx context.Context, sessionSelector, sessionSecret
 }
 
 func (s *store) RotateCSRF(ctx context.Context, sessionSelector, sessionSecret string, authorizationEpoch uint64) (string, error) {
-	if _, err := s.AuthenticateSession(ctx, sessionSelector, sessionSecret, authorizationEpoch); err != nil {
+	if _, err := s.AuthenticateSession(ctx, sessionSelector, sessionSecret, authorizationEpoch, true); err != nil {
 		return "", err
 	}
 	selectorBytes, err := decodeSessionPart(sessionSelector)

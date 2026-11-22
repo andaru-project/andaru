@@ -40,7 +40,7 @@ func TestPasswordIntentPrecedesSessionAndOwnSessionLifecycle(t *testing.T) {
 	if err = store.RevokeSession(ctx, admin.ID, selector); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.AuthenticateSession(ctx, selector, secret, 7); !errors.Is(err, ErrAuthentication) {
+	if _, err = store.AuthenticateSession(ctx, selector, secret, 7, true); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("revoked session authentication = %v", err)
 	}
 	if err = store.RevokeSession(ctx, admin.ID, selector); !errors.Is(err, ErrNotFound) {
