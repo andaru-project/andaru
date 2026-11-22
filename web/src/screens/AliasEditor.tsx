@@ -48,6 +48,9 @@ export function AliasEditor({ editing, rows, onClose, onSessionLost, onAbandoned
   // A save may answer after this panel was closed and another opened: it then closes nothing.
   const open = useRef(true);
   useEffect(() => { open.current = true; return () => { open.current = false; }; }, []);
+  // A refusal shows above the form, which may be scrolled away from it: it comes into view once, when it arrives.
+  const failureRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (failure) failureRef.current?.scrollIntoView?.({ block: 'nearest' }); }, [failure]);
 
   // A group holds aliases of its own kind that are not groups, and never itself.
   const candidates = rows.filter((row) => row.kind === kind && row.item.value.id !== saved?.item.value.id && (row.kind === 'addresses' ? row.item.value.kind : row.item.value.protocol) !== 'group')
@@ -109,7 +112,7 @@ export function AliasEditor({ editing, rows, onClose, onSessionLost, onAbandoned
     <Drawer opened onClose={onClose} position="right" size="md" title={title} lockScroll={false} closeButtonProps={{ 'aria-label': 'Close' }}>
       <form onSubmit={submit} noValidate>
         <Stack>
-          {failure && <Alert ref={(node) => node?.scrollIntoView?.({ block: 'nearest' })} color="red" role="alert" title="The alias was not saved">{failure}</Alert>}
+          {failure && <Alert ref={failureRef} color="red" role="alert" title="The alias was not saved">{failure}</Alert>}
           {/* What is sent is what the form held when Save was pressed: nothing is typed over it meanwhile. */}
           <Fieldset variant="unstyled" disabled={busy}>
             <Stack>

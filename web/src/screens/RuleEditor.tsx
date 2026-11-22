@@ -36,6 +36,9 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onAbandoned
   // A save may answer after this panel was closed and another opened: it then closes nothing.
   const open = useRef(true);
   useEffect(() => { open.current = true; return () => { open.current = false; }; }, []);
+  // A refusal shows above the form, which may be scrolled away from it: it comes into view once, when it arrives.
+  const failureRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (failure) failureRef.current?.scrollIntoView?.({ block: 'nearest' }); }, [failure]);
 
   const option = (item: { id: string; name: string }) => ({ value: item.id, label: item.name });
   const zones = snapshot.value.zones.map(option);
@@ -89,7 +92,7 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onAbandoned
     <Drawer opened onClose={onClose} position="right" size="md" title={rule ? `Edit rule: ${rule.name}` : 'Add rule'} lockScroll={false} closeButtonProps={{ 'aria-label': 'Close' }}>
       <form onSubmit={submit} noValidate>
         <Stack>
-          {failure && <Alert ref={(node) => node?.scrollIntoView?.({ block: 'nearest' })} color="red" role="alert" title="The rule was not saved">{failure}</Alert>}
+          {failure && <Alert ref={failureRef} color="red" role="alert" title="The rule was not saved">{failure}</Alert>}
           {!rule && <Text size="sm" c="dimmed">A new rule is added at the bottom of the list. Move it with Edit order.</Text>}
           {/* What is sent is what the form held when Save was pressed: nothing is typed over it meanwhile. */}
           <Fieldset variant="unstyled" disabled={busy}>

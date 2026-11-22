@@ -346,3 +346,13 @@ it('lets only the grips act while the order is unlocked, and says each rule\'s s
   expect(screen.getByRole('switch', { name: 'Enable rule 1, LAN out, except the printers' })).toBeEnabled();
   expect(screen.getByRole('button', { name: 'Add rule' })).toBeEnabled();
 });
+
+it('names each side\'s except switch by its side, and says where a new rule goes', async () => {
+  const user = userEvent.setup();
+  show();
+  await user.click(await screen.findByRole('button', { name: 'Add rule' }));
+  const panel = await screen.findByRole('dialog', { name: 'Add rule' });
+  expect(within(panel).getByRole('switch', { name: /^From: except these addresses/ })).toBeDisabled();
+  expect(within(panel).getByRole('switch', { name: /^To: except these addresses/ })).toBeDisabled();
+  expect(within(panel).getByText(/A new rule is added at the bottom of the list/)).toBeInTheDocument();
+});

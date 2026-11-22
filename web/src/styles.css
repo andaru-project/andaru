@@ -383,9 +383,13 @@ path.traffic-sent {
 
   /* A switch saves at a tap, and a list of uses opens at one: their whole row is the target. Padding, not a
      flex box, so a summary keeps its disclosure mark and a segment its centred label. */
-  .mantine-Switch-body,
+  /* A switch's body is a flex row already, so its height can grow; a summary keeps its display. */
+  .mantine-Switch-body {
+    min-height: 2.75rem;
+  }
+
   .data-table summary {
-    padding-block: 0.6rem;
+    padding-block: 0.7rem;
   }
 
   .mantine-SegmentedControl-label {
