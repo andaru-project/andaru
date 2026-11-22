@@ -83,6 +83,9 @@ func TestPortForwardValidation(t *testing.T) {
 		"to the firewall": {func(d map[string]any) map[string]any {
 			return forward(d, map[string]any{"target": map[string]any{"self": true}, "targetPort": 22})
 		}},
+		"negated sources at the cap": {func(d map[string]any) map[string]any {
+			return forward(d, map[string]any{"from": slices.Repeat([]any{natPeer}, maxLeftOut), "fromNegated": true})
+		}},
 		"negated self": {func(d map[string]any) map[string]any { return forward(d, map[string]any{"toNegated": true}) }},
 		"negated address": {func(d map[string]any) map[string]any {
 			return forward(d, map[string]any{"to": map[string]any{"address": natOther}, "toNegated": true})

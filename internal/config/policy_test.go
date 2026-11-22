@@ -241,6 +241,9 @@ func TestLeftOutSideIsOneLine(t *testing.T) {
 	d := policyFixture(t)
 	r := item(d["rules"].([]any), 0)
 	left, to := make([]any, maxLeftOut), make([]any, 300)
+	if maxLeftOut != 40 {
+		t.Fatal("maxLeftOut changed: change TestLeftOutCapLoads (render, integration) with it")
+	}
 	for i := range left {
 		left[i] = adrHost
 	}

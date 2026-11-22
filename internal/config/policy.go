@@ -11,10 +11,11 @@ import (
 // maxRuleLines caps the nft lines one rule renders to.
 const maxRuleLines = 4096
 
-// maxLeftOut caps the aliases left out on one nft line, where each is one match whatever it holds: the kernel
-// refused the heaviest line a port forward renders at 50 (measured, 2026-11-22). A group is one alias.
+// maxLeftOut caps the aliases left out on one nft line, where each is one match whatever it holds. The kernel caps a
+// rule's expression bytes: it refused the heaviest line a port forward renders at 49 aliases (6.12, amd64, measured
+// 2026-11-22), and 40 leaves room for other kernels and one more match. A group is one alias.
 // TestLeftOutCapLoads (render, integration) loads that line at this cap: change both together.
-const maxLeftOut = 48
+const maxLeftOut = 40
 
 // What a rule that can never match is told. A legacy rule split by upgradeLegacy may be such a rule.
 const (

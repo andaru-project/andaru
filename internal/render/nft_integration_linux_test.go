@@ -391,7 +391,7 @@ func TestRuleSidesInNamespace(t *testing.T) {
 // still loads: the kernel caps the matches on one rule.
 func TestLeftOutCapLoads(t *testing.T) {
 	l := newLab(t)
-	const maxLeftOut = 48
+	const maxLeftOut = 40
 	in := change(t, fixture(t, "nat-port-forwards"), func(d map[string]any) {
 		aliases := d["aliases"].(map[string]any)
 		var from []any
