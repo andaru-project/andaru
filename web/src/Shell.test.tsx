@@ -179,14 +179,25 @@ it('opens on Finish the upgrade while the saved settings wait for decisions, and
 });
 
 it('leaves the dashboard alone when no decision waits', async () => {
-  fetchRoutes({
+  const fetchMock = fetchRoutes({
     '/api/v1/applies': unapplied,
     '/api/v1/versions?': { state: 'saved', items: [] },
     'POST /api/v1/config/upgrade/preview': { savedVersion: '5', questions: [] },
   });
+  mount('/');
+  await vi.waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url === '/api/v1/config/upgrade/preview')).toBe(true));
+  expect(screen.queryByRole('heading', { name: 'Finish the upgrade' })).not.toBeInTheDocument();
+  expect(screen.queryByText('Answer the questions')).not.toBeInTheDocument();
+});
+
+it('says when it cannot tell whether decisions wait', async () => {
+  fetchRoutes({
+    '/api/v1/applies': unapplied,
+    '/api/v1/versions?': { state: 'saved', items: [] },
+    'POST /api/v1/config/upgrade/preview': jsonResponse(503, { error: { code: 'STORE_UNAVAILABLE', message: 'Unavailable.' } }),
+  });
   mount('/system/session');
-  expect(await screen.findByRole('heading', { name: 'Current session' })).toBeInTheDocument();
-  expect(screen.queryByText('Finish the upgrade')).not.toBeInTheDocument();
+  expect(await screen.findByText('Whether the settings wait for decisions cannot be read')).toBeInTheDocument();
 });
 
 it('points to the questions from any other page', async () => {

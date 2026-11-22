@@ -52,6 +52,7 @@ it('asks each question, the ones a choice raises too, and saves the answers agai
   await vi.waitFor(() => expect(save).toBeEnabled());
   await userEvent.click(save);
   expect(await screen.findByText('Saved as version 8')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Save the answers' })).not.toBeInTheDocument();
   expect(bodies.at(-1)).toEqual({ choices: { first: 'mark', second: 'keep' }, expectedSavedVersion: '7' });
   expect(onFinished).toHaveBeenCalled();
 });

@@ -19,7 +19,7 @@ export function UpgradeScreen({ api, session, onFinished, onSessionLost }: Upgra
   const canWrite = session.capabilities.includes('configuration.write');
   const [choices, setChoices] = useState<Record<string, string>>({});
   const load = useCallback(() => api.upgradePreview(choices), [api, choices]);
-  const view = useResource<UpgradeView>(load, onSessionLost);
+  const view = useResource(load, onSessionLost);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState('');
@@ -45,10 +45,11 @@ export function UpgradeScreen({ api, session, onFinished, onSessionLost }: Upgra
         <Text c="dimmed">This Andaru reads the saved settings with the choices marked as current until someone answers. Until then, nothing can be saved or applied; the network keeps running as it was.</Text>
       </div>
       {saved && <Alert color="green" role="status" title={`Saved as version ${saved}`}>Review and apply the saved settings to put them on the network.</Alert>}
-      <Loaded resource={view} what="the questions">
+      {!saved && <Loaded resource={view} what="the questions">
         {(current) => {
-          const open = current.questions.filter((question) => !question.answered);
           if (current.questions.length === 0) return <Text>The saved settings wait for no decision.</Text>;
+          const open = current.questions.filter((question) => !question.answered);
+          const openText = open.length === 1 ? 'One question is still open.' : `${open.length} questions are still open.`;
           return (
             <Stack>
               {current.questions.map((question) => (
@@ -56,7 +57,7 @@ export function UpgradeScreen({ api, session, onFinished, onSessionLost }: Upgra
                   <Stack gap="xs">
                     <Text fw={600}>{question.question}</Text>
                     <Text size="sm" c="dimmed">About: {question.objects.join(', ')}</Text>
-                    <Radio.Group value={choices[question.id] ?? ''} onChange={(choice) => setChoices({ ...choices, [question.id]: choice })} aria-label={question.question}>
+                    <Radio.Group value={choices[question.id] ?? ''} onChange={(choice) => setChoices((given) => ({ ...given, [question.id]: choice }))} aria-label={question.question}>
                       <Stack gap="xs">
                         {question.choices.map((choice) => (
                           <Radio key={choice.id} value={choice.id} disabled={!canWrite || busy} label={
@@ -72,13 +73,17 @@ export function UpgradeScreen({ api, session, onFinished, onSessionLost }: Upgra
                 </Paper>
               ))}
               {error && <Alert color="red" role="alert">{error}</Alert>}
-              {canWrite
-                ? <Group><Button disabled={open.length > 0 || busy} loading={busy} onClick={() => void finish(current)}>Save the answers</Button>{open.length > 0 && <Text size="sm" c="dimmed">{open.length === 1 ? 'One question is' : `${open.length} questions are`} still open.</Text>}</Group>
-                : <Text c="dimmed">Answering needs permission to change the configuration.</Text>}
+              {canWrite ? (
+                <Group>
+                  {/* While the questions for the latest choice load, the answers on screen may not be the ones asked. */}
+                  <Button disabled={open.length > 0 || busy || view.loading} loading={busy} onClick={() => void finish(current)}>Save the answers</Button>
+                  {open.length > 0 && <Text size="sm" c="dimmed">{openText}</Text>}
+                </Group>
+              ) : <Text c="dimmed">Answering needs permission to change the configuration.</Text>}
             </Stack>
           );
         }}
-      </Loaded>
+      </Loaded>}
     </Stack>
   );
 }
