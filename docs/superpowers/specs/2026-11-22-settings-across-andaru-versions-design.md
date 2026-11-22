@@ -18,6 +18,14 @@ Releases use semantic versioning; nightlies will be named by their date, as in p
 
 Each upgrade is a function of the saved settings and the running Andaru alone, with no further state to keep in step.
 
+### Defaults and grandfathering
+
+A release may change a setting's default, as pfBlockerNG does. A new default does not change the settings of existing users (the owner, 2026-11-22), and grandfathering is how they keep what they had.
+
+- **A changed default is a breaking change** when settings can leave the setting unset, since an unset setting reads as the default. It raises the schema version like any other.
+- **One grandfathering strategy writes the old default explicitly.** Say a setting defaulted to A and the better choice is now B. The migration writes A into every existing document that left the setting unset, and the new default B applies only to settings created after it, such as a new installation. Existing users keep A until they choose B.
+- **Writing the old default is one strategy, not the only one.** Each changed default, added option or removed option states its own plan: a migration, another kind of grandfathering, or a user decision.
+
 ## pfBlockerNG
 
 pfBlockerNG is a core part of Andaru, not an add-on, so its settings are Andaru's settings: the same schema versioning, migrations, user decisions and guarantees, with no separate scheme.
