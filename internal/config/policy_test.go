@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -141,6 +142,11 @@ func TestPolicyValidation(t *testing.T) {
 			}
 			fwd(d, 0)["from"] = map[string]any{"zones": []any{}, "addresses": left, "not": true}
 		}, "/rules/0/from/addresses"},
+		"too many left out on both sides": {func(d map[string]any) {
+			left := slices.Repeat([]any{adrHost}, maxLeftOut/2+1)
+			fwd(d, 0)["from"] = map[string]any{"zones": []any{}, "addresses": left, "not": true}
+			fwd(d, 0)["to"] = map[string]any{"zones": []any{}, "addresses": left, "not": true}
+		}, "/rules/0/to/addresses"},
 		"a side that is a list": {func(d map[string]any) { fwd(d, 0)["from"] = []any{zoneOf(d)} }, "/rules/0/from"},
 		"families never meet":   {func(d map[string]any) { fwd(d, 0)["from"] = side(nil, adrHost); fwd(d, 0)["to"] = side(nil, adrNet6) }, "/rules/0/to/addresses"},
 		"port alias family never meets": {func(d map[string]any) {

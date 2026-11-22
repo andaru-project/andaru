@@ -131,6 +131,8 @@ func TestPortForwardValidation(t *testing.T) {
 		"unknown from":       {map[string]any{"from": []any{"adr_00000009-0000-4000-8000-000000000009"}}, p + "/from/0"},
 		"unknown to":         {map[string]any{"to": map[string]any{"address": "adr_00000009-0000-4000-8000-000000000009"}}, p + "/to/address"},
 		"negated reflection": {map[string]any{"toNegated": true, "reflection": true}, p + "/reflection"},
+		"negated no source":  {map[string]any{"fromNegated": true}, p + "/fromNegated"},
+		"negated too many":   {map[string]any{"from": slices.Repeat([]any{natPeer}, maxLeftOut+1), "fromNegated": true}, p + "/from"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := natFixture(t)
