@@ -35,9 +35,10 @@ On start, the engine works out the questions for the head, with the provisional 
 - **Restoring a backup works.** A restore saves a new head, and so does a reset that brings back a kept LAN copy. When that head also needs a decision, the hold carries on with its questions.
 - **Nothing is kept between starts.** The questions come from the head each time, and the answers are used all at once, so a reboot in the middle asks again. The upgrade stays a function of the saved settings and the running Andaru alone.
 
-Implemented: the hold keeps no state. Every save whose head has questions answers `409 SETTINGS_UPGRADE_PENDING`, and so does every apply (`heldInput` in the engine); `MigrateHead` leaves such a head alone. Restoring a backup of a schema that needs no decision works and ends the hold. Two departures from the text above, until a real record exists:
+Implemented: the hold keeps no state. Every save whose head has questions answers `409 SETTINGS_UPGRADE_PENDING`, and so does every apply and every write of the kept recovery network (`ApplyInput`, in the same read); `MigrateHead` leaves such a head alone. A backup taken during the hold carries the document as saved, so its questions travel with it. Restoring a backup of a schema that needs no decision works and ends the hold. Two departures from the text above, until a real record exists:
 
 - **A backup that itself needs decisions is not restored** (`VALIDATION_FAILED` at `/configuration`): restoring it would save its provisional choices, and answering on restore is not offered yet. A reset that brings back a kept copy goes through the same restore, so the first real record decides whether a recovery may read its kept copy provisionally.
+- **A rollback's copy reads provisionally:** after a rollback, the newest version the older Andaru reads is copied as the head in its current schema, with its provisional choices. It needs a schema 5 and a real record to happen; that record's slice keeps such a copy in its own schema instead.
 - **No audit event yet:** configuration saves are not audited at all today (`configuration.saved` is defined and unused); the answers join them when they are.
 
 ## Answering

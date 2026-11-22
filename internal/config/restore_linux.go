@@ -99,6 +99,9 @@ func (s *Store) prepareRestore(ctx context.Context, actor authz.Actor, expected 
 	if _, err := ParseVersion(string(expected)); err != nil {
 		return nil, empty, fault("INVALID_REQUEST", "/expectedSavedVersion", "Invalid saved version.")
 	}
+	if decoded.needsDecisions {
+		return nil, empty, fault("VALIDATION_FAILED", "/configuration", "This backup needs decisions to read in this Andaru, and restoring such a backup is not offered yet.")
+	}
 	p, current, next, err := s.startSave(ctx, actor, restoreRequests(decoded))
 	if err != nil {
 		return nil, empty, err

@@ -99,7 +99,7 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	}()
 	defer func() { cancel(context.Canceled); <-stopped }()
 	read := hostReader{Links: host.ReadLinks, Facts: host.ReadRealizerFacts, Managed: host.ReadManaged, BootUnit: host.ReadBootUnit}
-	applies := newAppliesHandler(heldInput(store), read, newSystemdRunner(stateDir), stateDir, identities, coordinator)
+	applies := newAppliesHandler(store.ApplyInput, read, newSystemdRunner(stateDir), stateDir, identities, coordinator)
 	identityAPI := newIdentityAPI(identities, store, coordinator)
 	auditAPI := newAuditAPI(coordinator)
 	backups := newBackupHandler(store, identities, coordinator, stateDir, host.ReadLinks)
@@ -457,19 +457,4 @@ func claimWebSocket(path string) (_ *os.File, err error) {
 
 func rootOwnedSocket(info os.FileInfo) bool {
 	return info.Mode()&os.ModeSocket != 0 && securefs.RootOwned(info)
-}
-
-// heldInput is the store's realization input for an apply, refused while the settings wait for decisions after an
-// upgrade: applying their provisional reading would put choices nobody made on the network (settings safe mode).
-func heldInput(store *config.Store) func(context.Context, *config.Version) (config.RealizationInput, error) {
-	return func(ctx context.Context, version *config.Version) (config.RealizationInput, error) {
-		pending, err := store.UpgradePreview(ctx, nil)
-		if err != nil {
-			return config.RealizationInput{}, err
-		}
-		if len(pending.Questions) > 0 {
-			return config.RealizationInput{}, config.ErrUpgradePending
-		}
-		return store.RealizationInput(ctx, version)
-	}
 }

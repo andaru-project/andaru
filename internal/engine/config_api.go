@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -35,7 +34,10 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 				writeError(w, r, http.StatusServiceUnavailable, "STORE_UNAVAILABLE", "The state directory is missing.")
 				return
 			}
-			if err := writeRecovery(r.Context(), store); err != nil {
+			if err := writeRecovery(r.Context(), store); errors.Is(err, config.ErrUpgradePending) {
+				writeConfigurationError(w, r, err)
+				return
+			} else if err != nil {
 				slog.Error("store the recovery network", "error", err)
 				writeError(w, r, http.StatusServiceUnavailable, "STORE_UNAVAILABLE", "The recovery network was not stored.")
 				return
@@ -51,10 +53,12 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 		case len(parts) == 2 && parts[0] == "config" && parts[1] == "changes":
 			route = "changes"
 			allowed = []string{"POST"}
-		case len(parts) == 2 && parts[0] == "config" && parts[1] == "upgrade",
-			len(parts) == 3 && parts[0] == "config" && parts[1] == "upgrade" && parts[2] == "preview":
-			// Finishing an upgrade: the head's questions with the choices given so far, and the answers saved.
-			route = strings.Join(parts[1:], "-")
+		case len(parts) == 2 && parts[0] == "config" && parts[1] == "upgrade":
+			// Finishing an upgrade: the answers saved, and below the questions with the choices given so far.
+			route = "upgrade"
+			allowed = []string{"POST"}
+		case len(parts) == 3 && parts[0] == "config" && parts[1] == "upgrade" && parts[2] == "preview":
+			route = "upgrade-preview"
 			allowed = []string{"POST"}
 		case len(parts) == 3 && parts[0] == "config" && parts[1] == "nat" && parts[2] == "outbound",
 			len(parts) == 2 && parts[0] == "config" && (parts[1] == "management" || parts[1] == "dns"):
@@ -203,9 +207,7 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 				Choices              map[string]string `json:"choices"`
 				ExpectedSavedVersion config.Version    `json:"expectedSavedVersion"`
 			}
-			decoder := json.NewDecoder(bytes.NewReader(raw))
-			decoder.DisallowUnknownFields()
-			if e = decoder.Decode(&request); e != nil || decoder.More() {
+			if !strictJSON(raw, &request, "choices", "expectedSavedVersion") {
 				writeError(w, r, 400, "INVALID_REQUEST", "Expected choices and, to save them, expectedSavedVersion.")
 				return
 			}
@@ -406,7 +408,7 @@ func recordLiveLAN(ctx context.Context, store *config.Store, actor authz.Actor) 
 var recoveryKeptRoot string
 
 func writeRecovery(ctx context.Context, store *config.Store) error {
-	input, err := store.RealizationInput(ctx, nil)
+	input, err := store.ApplyInput(ctx, nil)
 	if err != nil {
 		return err
 	}

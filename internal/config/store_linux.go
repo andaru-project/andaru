@@ -483,7 +483,7 @@ func (s *Store) prepareSave(ctx context.Context, actor authz.Actor, input Change
 	}()
 	// The hold (settings safe mode): a save on top of a provisional reading would make its choices permanent.
 	if len(current.questions) > 0 {
-		return nil, errUpgradePending
+		return nil, ErrUpgradePending
 	}
 	p.prepared, e = prepareChanges(&current, input, next, time.Now().UTC())
 	if e != nil {

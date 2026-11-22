@@ -15,11 +15,8 @@ type UpgradeView struct {
 	Questions    []Question `json:"questions"`
 }
 
-// errUpgradePending refuses what would make a provisional choice permanent while the head waits for decisions.
-var errUpgradePending = &Fault{Code: "SETTINGS_UPGRADE_PENDING", Details: []FieldError{{Message: "The settings wait for decisions after an upgrade. Answer them first."}}}
-
-// ErrUpgradePending is errUpgradePending for the engine's own refusals, such as an apply.
-var ErrUpgradePending error = errUpgradePending
+// ErrUpgradePending refuses what would make a provisional choice permanent while the head waits for decisions.
+var ErrUpgradePending error = &Fault{Code: "SETTINGS_UPGRADE_PENDING", Details: []FieldError{{Message: "The settings wait for decisions after an upgrade. Answer them first."}}}
 
 // UpgradePreview works out the head's questions with the choices given so far (settings safe mode). With none
 // given, it says whether the settings wait for decisions at all.
@@ -78,8 +75,12 @@ func (s *Store) Upgrade(ctx context.Context, actor authz.Actor, expected Version
 	if len(missing) > 0 {
 		return SaveResult{}, &Fault{Code: "VALIDATION_FAILED", Details: missing}
 	}
-	if p.prepared, _, err = prepareRestoration(&current, decodedBackup{configuration: &answered, ownSecrets: true}, next, time.Now().UTC()); err != nil {
+	var preview RestorePreview
+	if p.prepared, preview, err = prepareRestoration(&current, decodedBackup{configuration: &answered, ownSecrets: true}, next, time.Now().UTC()); err != nil {
 		return SaveResult{}, err
+	}
+	if len(preview.BlockingSecrets) != 0 {
+		return SaveResult{}, fault("VALIDATION_FAILED", "/choices", "These choices name a secret the store does not hold.")
 	}
 	saved, err := p.publish(ctx)
 	if err == nil {

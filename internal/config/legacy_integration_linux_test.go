@@ -8,8 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
-	"strings"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -406,6 +406,20 @@ func TestHeldHeadWaitsForItsAnswers(t *testing.T) {
 	}
 	if _, err = s.Save(ctx, systemRootActor, createZone("guest")); faultCode(err) != "SETTINGS_UPGRADE_PENDING" {
 		t.Fatalf("a save during the hold: %v", err)
+	}
+	if _, err = s.ApplyInput(ctx, nil); faultCode(err) != "SETTINGS_UPGRADE_PENDING" {
+		t.Fatalf("an apply during the hold: %v", err)
+	}
+	if _, err = s.RealizationInput(ctx, nil); err != nil {
+		t.Fatalf("a preview during the hold: %v", err)
+	}
+	// A backup taken now carries the document as saved, questions and all; it can be inspected, not restored.
+	backup, err := s.Export(ctx, false)
+	if err != nil || string(backup.Configuration) != string(legacyDocument(t)) {
+		t.Fatalf("export during the hold: %v", err)
+	}
+	if err = ValidateBackupDocuments(RestoreDocuments{Configuration: backup.Configuration}); err != nil {
+		t.Fatalf("inspecting it: %v", err)
 	}
 	if saved, err := s.MigrateHead(ctx); err != nil || saved != "" {
 		t.Fatalf("a held head was migrated: %q %v", saved, err)

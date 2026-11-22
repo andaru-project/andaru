@@ -487,11 +487,25 @@ type RealizationInput struct {
 // RealizationInput returns one saved version with the secrets its links
 // reference. A nil version means the saved head.
 func (s *Store) RealizationInput(ctx context.Context, version *Version) (result RealizationInput, err error) {
+	return s.realizationInput(ctx, version, false)
+}
+
+// ApplyInput is RealizationInput for an apply or a kept recovery network, refused while the head waits for
+// decisions after an upgrade, in the same read: realizing a provisional reading would put choices nobody made on the
+// network (settings safe mode).
+func (s *Store) ApplyInput(ctx context.Context, version *Version) (RealizationInput, error) {
+	return s.realizationInput(ctx, version, true)
+}
+
+func (s *Store) realizationInput(ctx context.Context, version *Version, held bool) (result RealizationInput, err error) {
 	id := Version("")
 	if version != nil {
 		id = *version
 	}
 	err = s.read(ctx, id, nil, func(state savedState, _ VersionInfo) error {
+		if held && len(state.questions) > 0 {
+			return ErrUpgradePending
+		}
 		if e := checkResolvedReferences(&state.Config); e != nil {
 			return e
 		}
