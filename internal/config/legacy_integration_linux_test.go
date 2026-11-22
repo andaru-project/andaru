@@ -175,6 +175,11 @@ func TestRestoreOntoALegacyHead(t *testing.T) {
 	if err != nil || result.SavedVersion != "3" {
 		t.Fatalf("restore: %+v %v", result, err)
 	}
+	// The journal of a restore the engine before began names the document in its form; the store now holds it
+	// as it reads today.
+	if matches, err := s.RestoreMatches(ctx, "3", RestoreDocuments{Configuration: legacyDocument(t), ConfigurationSecrets: secrets}); err != nil || !matches {
+		t.Fatalf("the restored head does not match the document it was restored from: %t %v", matches, err)
+	}
 	if err = s.Close(); err != nil {
 		t.Fatal(err)
 	}

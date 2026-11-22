@@ -174,7 +174,7 @@ func (s *Store) RestoreMatches(ctx context.Context, version Version, target Rest
 		return false, err
 	}
 	same := bytes.Equal(bytes.TrimRight(configBody, "\n"), bytes.TrimRight(target.Configuration, "\n"))
-	if !same {
+	if !same && savedVersion == version {
 		// This engine finished a restore the engine before had journalled: the store holds the document as it reads now.
 		if d, _, _, e := decodeSaved(target.Configuration); e == nil {
 			now, e := canonical(d)
