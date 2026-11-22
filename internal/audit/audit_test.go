@@ -1164,3 +1164,50 @@ type staticOperationSource struct{ record OperationRecord }
 func (s staticOperationSource) LookupOperation(_ context.Context, id string) (OperationRecord, bool, error) {
 	return s.record, s.record.OperationID == id, nil
 }
+
+// A screen that polls the log reads it again and again; those reads make one event that counts them.
+func TestAuditQueriesCoalesce(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx := context.Background()
+	event := testEvent(ActionAuditQueried, CategoryGeneral, ResultSuccess)
+	for range 3 {
+		if _, err := s.Append(ctx, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A read that failed is its own event.
+	failed := event
+	failed.Result, failed.Metadata = ResultUnavailable, map[string]string{MetadataReasonCode: ReasonStorageFailure}
+	if _, err := s.Append(ctx, failed); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListEvents(ctx, 0, 100)
+	if err != nil || len(got) != 2 || got[0].Count != 3 || got[1].Result != ResultUnavailable {
+		t.Fatalf("events = %+v, %v", got, err)
+	}
+}
+
+func TestListEventsBeforeReadsNewestFirst(t *testing.T) {
+	s, _ := openTestStore(t)
+	ctx := context.Background()
+	for _, action := range []Action{ActionSessionLogout, ActionAuditQueried, ActionSessionLogout, ActionAuditHealth} {
+		category := CategoryGeneral
+		if action == ActionAuditHealth {
+			category = CategoryProtected
+		}
+		if _, err := s.Append(ctx, testEvent(action, category, ResultSuccess)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, err := s.ListEventsBefore(ctx, 0, 2)
+	if err != nil || len(first) != 2 || first[0].ID != 4 || first[1].ID != 3 {
+		t.Fatalf("newest page = %+v, %v", first, err)
+	}
+	rest, err := s.ListEventsBefore(ctx, first[1].ID, 10)
+	if err != nil || len(rest) != 2 || rest[0].ID != 2 || rest[1].ID != 1 {
+		t.Fatalf("older page = %+v, %v", rest, err)
+	}
+	if _, err := s.ListEventsBefore(ctx, 1<<63, 1); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("out of range cursor: %v", err)
+	}
+}

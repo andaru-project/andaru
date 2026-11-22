@@ -135,7 +135,7 @@ it('marks the connection lost when a request gets no response', async () => {
   window.history.pushState({}, '', '/system/audit');
   render(<App />);
 
-  const more = await screen.findByRole('button', { name: 'Load more events' });
+  const more = await screen.findByRole('button', { name: 'Load older events' });
   reachable = false;
   await userEvent.click(more);
   expect(await screen.findByText('Connection lost', { selector: '.mantine-Badge-label' })).toBeInTheDocument();
