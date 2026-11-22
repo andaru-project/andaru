@@ -64,7 +64,7 @@ This document amends the [shell design](2026-11-21-web-ui-shell-design.md): its 
     - **Changes:** nothing pending, saved but not applied, or awaiting confirmation with its countdown (`config/changes`, `applies`, served).
     - **IPv6 prefixes:** each delegated prefix and where it went (`status/prefixes`, served).
     - **Services:** DHCP, DNS and the packet filter: running or not, and since when.
-    - **Recent activity:** the last few audit events (`audit/events?order=desc&limit=5`, served; repeated reads of the log coalesce, so polling it does not flood it), for accounts with `audit.read`.
+    - **Recent activity:** the last few audit events (`audit/events?order=desc&limit=10`, served; repeated reads of the log coalesce, so polling it does not flood it), for accounts with `audit.read`. Built (2026-11-22): the action, its time and actor, a count when repeated, and the result when it is not success; successful reads of the log are left out, or the widget's own polling would take a line; polled every 10 seconds; "All events" opens the Audit page.
 
 11. **The engine gains three read-only resources,** beside `status/links` and `status/prefixes` and under the same `status.read` capability, which both built-in roles hold. A new capability would change what the built-in roles are for no gain: who may see the interfaces may see the machine.
     - **`status/system`,** what changes rarely: the System widget's version, clock, uptime, machine and CPU, and the System details page's identity, hardware, features, level, microcode, vulnerabilities and update state. Sources are the kernel's own files (`/proc/cpuinfo`, `/sys/class/dmi/id`, `/sys/devices/system/cpu/vulnerabilities`) and `bootc status`. The engine reads them; no helper runs.
