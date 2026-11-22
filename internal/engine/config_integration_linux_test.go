@@ -109,6 +109,12 @@ func TestConfigurationHTTPContract(t *testing.T) {
 		t.Fatal("HEAD contract")
 	}
 	assertAPIError(t, configCall(h, "PATCH", path, `{}`, ""), 405, "METHOD_NOT_ALLOWED")
+	// Settings that wait for no decision ask nothing, and have nothing to answer.
+	if pending := configCall(h, "POST", "/api/v1/config/upgrade/preview", `{}`, ""); pending.Code != 200 || !strings.Contains(pending.Body.String(), `"questions":[]`) {
+		t.Fatalf("upgrade preview: %d %s", pending.Code, pending.Body)
+	}
+	assertAPIError(t, configCall(h, "POST", "/api/v1/config/upgrade", `{"choices":{},"expectedSavedVersion":"2"}`, ""), 412, "PRECONDITION_FAILED")
+	assertAPIError(t, configCall(h, "POST", "/api/v1/config/upgrade", `{"answers":{}}`, ""), 400, "INVALID_REQUEST")
 	contract := configCall(h, "GET", "/api/v1/openapi.json", "", "")
 	var document struct {
 		Paths map[string]map[string]any `json:"paths"`
@@ -120,6 +126,7 @@ func TestConfigurationHTTPContract(t *testing.T) {
 		"/api/v1/status/links": {"get", "head"}, "/api/v1/status/prefixes": {"get", "head"}, "/api/v1/status/system": {"get", "head"}, "/api/v1/status/usage": {"get", "head"}, "/api/v1/status/traffic": {"get", "head"}, "/api/v1/openapi.json": {"get", "head"},
 		"/api/v1/schema": {"get", "head"}, "/api/v1/config": {"get", "head"}, "/api/v1/config/{collection}": {"get", "head", "post"},
 		"/api/v1/config/{collection}/{id}": {"get", "head", "put", "delete"}, "/api/v1/config/changes": {"post"},
+		"/api/v1/config/upgrade": {"post"}, "/api/v1/config/upgrade/preview": {"post"},
 		"/api/v1/versions": {"get", "head"}, "/api/v1/versions/{id}": {"get", "head"}, "/api/v1/preview/network": {"get", "head"},
 		"/api/v1/applies": {"get", "head", "post"}, "/api/v1/applies/{id}": {"get", "head"},
 		"/api/v1/applies/{id}/confirmation": {"post"}, "/api/v1/applies/{id}/rollback": {"post"},

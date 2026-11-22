@@ -146,3 +146,19 @@ func TestDecisionIDsAreUnique(t *testing.T) {
 		seen[d.id] = true
 	}
 }
+
+// A kept copy that needs decisions is refused before a reset brings it back, since it could only restore with its
+// provisional choices.
+func TestKeptCopyNeedingDecisionsIsRefused(t *testing.T) {
+	body, err := json.Marshal(map[string]any{"declaration": json.RawMessage(legacyAt(t, 1)), "secrets": map[string]string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = KeptDeclaration(body); err != nil {
+		t.Fatalf("without decisions: %v", err)
+	}
+	withDecisions(t, zoneDecision("rename", 1, func(map[string]any) bool { return true }))
+	if _, err = KeptDeclaration(body); err == nil {
+		t.Fatal("a kept copy needing decisions was accepted")
+	}
+}

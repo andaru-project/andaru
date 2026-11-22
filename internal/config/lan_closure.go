@@ -219,7 +219,13 @@ func KeptDeclaration(body []byte) (RestoreDocuments, error) {
 		return RestoreDocuments{}, err
 	}
 	docs := RestoreDocuments{Configuration: declarationBody, ConfigurationSecrets: secrets}
-	return docs, ValidateBackupDocuments(docs)
+	// A copy that needs decisions could only restore with its provisional choices, so it is refused before a reset
+	// stops anything (settings safe mode).
+	decoded, err := decodeBackupDocuments(docs)
+	if err == nil && decoded.needsDecisions {
+		err = errors.New("the kept copy needs decisions to read in this Andaru")
+	}
+	return docs, err
 }
 
 func nonNil[T any](s []T) []T {

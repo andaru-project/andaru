@@ -371,7 +371,8 @@ func (s *Store) MigrateHead(ctx context.Context) (Version, error) {
 		return "", err
 	}
 	defer p.Close()
-	if !current.legacy {
+	// A head that needs decisions waits for them: saving it now would make its provisional choices permanent.
+	if !current.legacy || len(current.questions) > 0 {
 		return "", p.Close()
 	}
 	// A restore of nothing saves the head as it reads now: in the current form, with the rules and aliases it
@@ -480,6 +481,10 @@ func (s *Store) prepareSave(ctx context.Context, actor authz.Actor, input Change
 			p.Close()
 		}
 	}()
+	// The hold (settings safe mode): a save on top of a provisional reading would make its choices permanent.
+	if len(current.questions) > 0 {
+		return nil, ErrUpgradePending
+	}
 	p.prepared, e = prepareChanges(&current, input, next, time.Now().UTC())
 	if e != nil {
 		return nil, e

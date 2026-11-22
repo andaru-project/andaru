@@ -63,6 +63,8 @@ func buildEngineRoutes() []routeCapability {
 	add(authz.ConfigurationRead, "/api/v1/config/{collection}/{id}", read...)
 	add(authz.ConfigurationWrite, "/api/v1/config/{collection}/{id}", http.MethodPut, http.MethodDelete)
 	add(authz.ConfigurationWrite, "/api/v1/config/changes", http.MethodPost)
+	add(authz.ConfigurationRead, "/api/v1/config/upgrade/preview", http.MethodPost)
+	add(authz.ConfigurationWrite, "/api/v1/config/upgrade", http.MethodPost)
 	add(authz.ConfigurationRead, "/api/v1/versions", read...)
 	add(authz.ConfigurationRead, "/api/v1/versions/{id}", read...)
 	add(authz.ConfigurationRead, "/api/v1/preview/network", read...)

@@ -28,6 +28,12 @@ type backupSecretDocument struct {
 type decodedBackup struct {
 	configuration *declaration
 	secrets       *backupSecretDocument
+	// ownSecrets says the configuration is read against the store's own secrets, as an upgrade's is, so its
+	// references stay resolved.
+	ownSecrets bool
+	// needsDecisions says the configuration reads with provisional choices; restoring it would save them as the
+	// user's, and answering them on restore is not offered yet.
+	needsDecisions bool
 }
 
 // Export captures logical documents from one saved pair, never public views or SQL rows.
@@ -35,6 +41,10 @@ func (s *Store) Export(ctx context.Context, includeSecrets bool) (result BackupD
 	err = s.read(ctx, "", nil, func(state savedState, _ VersionInfo) error {
 		result.SavedVersion = state.Version
 		result.Configuration = state.configBody
+		// A head that waits for decisions is exported as saved, so a restore of the backup still asks them.
+		if len(state.questions) > 0 {
+			result.Configuration = state.storedBody
+		}
 		if includeSecrets {
 			core := make(map[string]backupSecretEntry, len(state.Secrets.Scopes["core"]))
 			for name, entry := range state.Secrets.Scopes["core"] {
@@ -63,11 +73,11 @@ func decodeBackupDocuments(input RestoreDocuments) (decodedBackup, error) {
 	}
 	if input.Configuration != nil {
 		// A backup taken before schema 4 restores as the configuration it is now.
-		d, _, _, err := decodeSaved(input.Configuration)
+		d, _, _, questions, err := decodeSavedWith(input.Configuration, nil)
 		if err != nil {
 			return decoded, boundaryFault(err)
 		}
-		decoded.configuration = &d
+		decoded.configuration, decoded.needsDecisions = &d, len(questions) > 0
 	}
 	if input.ConfigurationSecrets != nil {
 		instance, err := decodeStrictLimit(input.ConfigurationSecrets, documentLimit)

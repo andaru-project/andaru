@@ -183,6 +183,16 @@ live-generation protections. Failed publication can retain a root-only orphan
 secret document. `secure_delete` is enabled but does not erase retained history
 or promise forensic removal from WALs, snapshots, SSDs or backups.
 
+### Settings across Andaru versions
+
+On start, the engine saves a head of an older schema as a new version of the current one, and a head of a newer schema (after a rollback) opens on a copy of the newest version this Andaru reads ([settings design](../superpowers/specs/2026-11-22-settings-across-andaru-versions-design.md)). A breaking change may come with decisions; while the head needs any, the settings are held ([safe mode](../superpowers/specs/2026-11-22-settings-safe-mode-design.md)):
+
+- Saves and applies answer `409 SETTINGS_UPGRADE_PENDING`. Reads, versions (with their `questions`), backups and restores of a backup that needs no decision still work.
+- `POST /api/v1/config/upgrade/preview` with `{"choices": {…}}` returns the head's questions with the choices given so far (`configuration.read`).
+- `POST /api/v1/config/upgrade` with `{"choices": {…}, "expectedSavedVersion": "…"}` answers every question and saves the result (`configuration.write`). A missing or unknown choice is `422`, a stale head `412`.
+
+No decision record exists yet; the first comes with the first breaking change that needs one.
+
 ## Portable backups and saved-state restore
 
 Portable backups use the running engine's validated logical configuration stores,

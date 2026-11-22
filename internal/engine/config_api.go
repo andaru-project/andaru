@@ -34,7 +34,10 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 				writeError(w, r, http.StatusServiceUnavailable, "STORE_UNAVAILABLE", "The state directory is missing.")
 				return
 			}
-			if err := writeRecovery(r.Context(), store); err != nil {
+			if err := writeRecovery(r.Context(), store); errors.Is(err, config.ErrUpgradePending) {
+				writeConfigurationError(w, r, err)
+				return
+			} else if err != nil {
 				slog.Error("store the recovery network", "error", err)
 				writeError(w, r, http.StatusServiceUnavailable, "STORE_UNAVAILABLE", "The recovery network was not stored.")
 				return
@@ -49,6 +52,13 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 			allowed = []string{"GET", "HEAD"}
 		case len(parts) == 2 && parts[0] == "config" && parts[1] == "changes":
 			route = "changes"
+			allowed = []string{"POST"}
+		case len(parts) == 2 && parts[0] == "config" && parts[1] == "upgrade":
+			// Finishing an upgrade: the answers saved, and below the questions with the choices given so far.
+			route = "upgrade"
+			allowed = []string{"POST"}
+		case len(parts) == 3 && parts[0] == "config" && parts[1] == "upgrade" && parts[2] == "preview":
+			route = "upgrade-preview"
 			allowed = []string{"POST"}
 		case len(parts) == 3 && parts[0] == "config" && parts[1] == "nat" && parts[2] == "outbound",
 			len(parts) == 2 && parts[0] == "config" && (parts[1] == "management" || parts[1] == "dns"):
@@ -192,6 +202,32 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 			}
 			return
 		}
+		if route == "upgrade" || route == "upgrade-preview" {
+			var request struct {
+				Choices              map[string]string `json:"choices"`
+				ExpectedSavedVersion config.Version    `json:"expectedSavedVersion"`
+			}
+			if !strictJSON(raw, &request, "choices", "expectedSavedVersion") {
+				writeError(w, r, 400, "INVALID_REQUEST", "Expected choices and, to save them, expectedSavedVersion.")
+				return
+			}
+			if route == "upgrade-preview" {
+				v, e := store.UpgradePreview(r.Context(), request.Choices)
+				send(200, v, e)
+				return
+			}
+			actor, ok := actorFromRequest(r)
+			if !ok {
+				writeError(w, r, http.StatusForbidden, "FORBIDDEN", "A verified actor is required.")
+				return
+			}
+			result, e := store.Upgrade(r.Context(), actor.Actor, request.ExpectedSavedVersion, request.Choices)
+			if e == nil {
+				w.Header().Set("Andaru-Saved-Version", string(result.SavedVersion))
+			}
+			send(200, result, e)
+			return
+		}
 		var changes config.Changes
 		if route == "changes" {
 			changes, e = config.DecodeChanges(raw)
@@ -332,6 +368,8 @@ func writeConfigurationError(w http.ResponseWriter, r *http.Request, e error) {
 		status = 404
 	case "PRECONDITION_FAILED":
 		status = 412
+	case "SETTINGS_UPGRADE_PENDING":
+		status = 409
 	case "REQUEST_TOO_LARGE":
 		status = 413
 	case "VALIDATION_FAILED":
@@ -370,7 +408,7 @@ func recordLiveLAN(ctx context.Context, store *config.Store, actor authz.Actor) 
 var recoveryKeptRoot string
 
 func writeRecovery(ctx context.Context, store *config.Store) error {
-	input, err := store.RealizationInput(ctx, nil)
+	input, err := store.ApplyInput(ctx, nil)
 	if err != nil {
 		return err
 	}

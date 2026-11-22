@@ -484,7 +484,7 @@
           },
           "400": {"description": "Malformed multipart, archive, or options", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
           "403": {"$ref": "#/components/responses/Forbidden"},
-          "409": {"description": "Another expensive backup operation is running", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+          "409": {"description": "Another expensive backup operation is running; or the settings wait for decisions after an upgrade (SETTINGS_UPGRADE_PENDING)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
           "413": {"description": "Body, archive, or options limit exceeded", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
           "415": {"description": "Unsupported request media type", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
           "422": {"description": "Unsupported schema, scope, encryption, passphrase, or restoration", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
@@ -512,7 +512,7 @@
           "200": {"description": "Recorded complete selected-store outcome, including idempotent replay", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RestoreSaved"}}}},
           "400": {"description": "Malformed multipart, archive, or options", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
           "403": {"$ref": "#/components/responses/Forbidden"},
-          "409": {"description": "Another expensive backup operation is running", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+          "409": {"description": "Another expensive backup operation is running; or the settings wait for decisions after an upgrade (SETTINGS_UPGRADE_PENDING)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
           "412": {"description": "Saved head or identity revision differs from its preview precondition", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
           "413": {"description": "Body, archive, or options limit exceeded", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
           "415": {"description": "Unsupported request media type", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
@@ -953,7 +953,7 @@
               }
             }
           },
-          "412": {
+          "409": {"description": "The settings wait for decisions after an upgrade (SETTINGS_UPGRADE_PENDING)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "412": {
             "description": "Structured failure; no secret values",
             "content": {
               "application/json": {
@@ -1235,7 +1235,7 @@
               }
             }
           },
-          "412": {
+          "409": {"description": "The settings wait for decisions after an upgrade (SETTINGS_UPGRADE_PENDING)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "412": {
             "description": "Structured failure; no secret values",
             "content": {
               "application/json": {
@@ -1361,7 +1361,7 @@
               }
             }
           },
-          "412": {
+          "409": {"description": "The settings wait for decisions after an upgrade (SETTINGS_UPGRADE_PENDING)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "412": {
             "description": "Structured failure; no secret values",
             "content": {
               "application/json": {
@@ -1449,6 +1449,8 @@
         }
       ]
     },
+    "/api/v1/config/upgrade/preview": {"post": {"operationId": "previewUpgradeDecisions", "description": "The questions the saved head needs to read in this Andaru's schema, with the choices given so far. A question an earlier choice raises follows it, unanswered. Saves nothing.", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UpgradeRequest"}}}}, "responses": {"200": {"description": "The head's questions", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UpgradeView"}}}}, "400": {"description": "Structured failure; no secret values", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "403": {"description": "Structured failure; no secret values", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "405": {"description": "Structured failure; no secret values", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "413": {"description": "Structured failure; no secret values", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "422": {"description": "Structured failure; no secret values", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "503": {"description": "Structured failure; no secret values", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}}}},
+    "/api/v1/config/upgrade": {"post": {"operationId": "answerUpgradeDecisions", "description": "Answers every question of the head named by expectedSavedVersion and saves the result as a new version. Saves and applies answer 409 SETTINGS_UPGRADE_PENDING until this is done or a backup is restored.", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UpgradeRequest"}}}}, "responses": {"200": {"description": "Saved state; never applied networking", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SaveResult"}}}}, "400": {"description": "Structured failure; no secret values", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "403": {"description": "Structured failure; no secret values", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "405": {"description": "Structured failure; no secret values", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "412": {"description": "Structured failure; no secret values", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "413": {"description": "Structured failure; no secret values", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "422": {"description": "Structured failure; no secret values", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "428": {"description": "Structured failure; no secret values", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "503": {"description": "Structured failure; no secret values", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}}}},
     "/api/v1/config/changes": {
       "post": {
         "operationId": "saveAtomicChanges",
@@ -1503,7 +1505,7 @@
               }
             }
           },
-          "412": {
+          "409": {"description": "The settings wait for decisions after an upgrade (SETTINGS_UPGRADE_PENDING)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "412": {
             "description": "Structured failure; no secret values",
             "content": {
               "application/json": {
@@ -2688,7 +2690,7 @@
               }
             }
           },
-          "412": {
+          "409": {"description": "The settings wait for decisions after an upgrade (SETTINGS_UPGRADE_PENDING)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "412": {
             "description": "Structured failure; no secret values",
             "content": {
               "application/json": {
@@ -2965,7 +2967,7 @@
               }
             }
           },
-          "412": {
+          "409": {"description": "The settings wait for decisions after an upgrade (SETTINGS_UPGRADE_PENDING)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "412": {
             "description": "Structured failure; no secret values",
             "content": {
               "application/json": {
@@ -3091,7 +3093,7 @@
               }
             }
           },
-          "412": {
+          "409": {"description": "The settings wait for decisions after an upgrade (SETTINGS_UPGRADE_PENDING)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "412": {
             "description": "Structured failure; no secret values",
             "content": {
               "application/json": {
@@ -3227,7 +3229,7 @@
               }
             }
           },
-          "412": {
+          "409": {"description": "The settings wait for decisions after an upgrade (SETTINGS_UPGRADE_PENDING)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "412": {
             "description": "Structured failure; no secret values",
             "content": {
               "application/json": {
@@ -3483,7 +3485,7 @@
               }
             }
           },
-          "412": {
+          "409": {"description": "The settings wait for decisions after an upgrade (SETTINGS_UPGRADE_PENDING)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "412": {
             "description": "Structured failure; no secret values",
             "content": {
               "application/json": {
@@ -3762,7 +3764,7 @@
               }
             }
           },
-          "412": {
+          "409": {"description": "The settings wait for decisions after an upgrade (SETTINGS_UPGRADE_PENDING)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "412": {
             "description": "Structured failure; no secret values",
             "content": {
               "application/json": {
@@ -3888,7 +3890,7 @@
               }
             }
           },
-          "412": {
+          "409": {"description": "The settings wait for decisions after an upgrade (SETTINGS_UPGRADE_PENDING)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "412": {
             "description": "Structured failure; no secret values",
             "content": {
               "application/json": {
@@ -4178,7 +4180,7 @@
               }
             }
           },
-          "412": {
+          "409": {"description": "The settings wait for decisions after an upgrade (SETTINGS_UPGRADE_PENDING)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "412": {
             "description": "Structured failure; no secret values",
             "content": {
               "application/json": {
@@ -4305,7 +4307,7 @@
               }
             }
           },
-          "412": {
+          "409": {"description": "The settings wait for decisions after an upgrade (SETTINGS_UPGRADE_PENDING)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "412": {
             "description": "Structured failure; no secret values",
             "content": {
               "application/json": {
@@ -4575,7 +4577,7 @@
               }
             }
           },
-          "412": {
+          "409": {"description": "The settings wait for decisions after an upgrade (SETTINGS_UPGRADE_PENDING)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "412": {
             "description": "Structured failure; no secret values",
             "content": {
               "application/json": {
@@ -4702,7 +4704,7 @@
               }
             }
           },
-          "412": {
+          "409": {"description": "The settings wait for decisions after an upgrade (SETTINGS_UPGRADE_PENDING)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "412": {
             "description": "Structured failure; no secret values",
             "content": {
               "application/json": {
@@ -4972,7 +4974,7 @@
               }
             }
           },
-          "412": {
+          "409": {"description": "The settings wait for decisions after an upgrade (SETTINGS_UPGRADE_PENDING)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "412": {
             "description": "Structured failure; no secret values",
             "content": {
               "application/json": {
@@ -5099,7 +5101,7 @@
               }
             }
           },
-          "412": {
+          "409": {"description": "The settings wait for decisions after an upgrade (SETTINGS_UPGRADE_PENDING)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "412": {
             "description": "Structured failure; no secret values",
             "content": {
               "application/json": {
@@ -5358,7 +5360,7 @@
               }
             }
           },
-          "412": {
+          "409": {"description": "The settings wait for decisions after an upgrade (SETTINGS_UPGRADE_PENDING)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "412": {
             "description": "Structured failure; no secret values",
             "content": {
               "application/json": {
@@ -5648,7 +5650,7 @@
               }
             }
           },
-          "412": {
+          "409": {"description": "The settings wait for decisions after an upgrade (SETTINGS_UPGRADE_PENDING)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "412": {
             "description": "Structured failure; no secret values",
             "content": {
               "application/json": {
@@ -5774,7 +5776,7 @@
               }
             }
           },
-          "412": {
+          "409": {"description": "The settings wait for decisions after an upgrade (SETTINGS_UPGRADE_PENDING)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "412": {
             "description": "Structured failure; no secret values",
             "content": {
               "application/json": {
@@ -6071,7 +6073,7 @@
               }
             }
           },
-          "412": {
+          "409": {"description": "The settings wait for decisions after an upgrade (SETTINGS_UPGRADE_PENDING)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}, "412": {
             "description": "Structured failure; no secret values",
             "content": {
               "application/json": {
@@ -7432,6 +7434,8 @@
           }
         ]
       },
+      "UpgradeRequest": {"type": "object", "additionalProperties": false, "properties": {"choices": {"type": "object", "additionalProperties": {"type": "string"}, "description": "A choice ID for each question ID answered so far."}, "expectedSavedVersion": {"type": "string", "description": "The head the questions were worked out from; required to save."}}},
+      "UpgradeView": {"type": "object", "additionalProperties": false, "required": ["savedVersion", "questions"], "properties": {"savedVersion": {"type": "string"}, "questions": {"type": "array", "items": {"$ref": "#/components/schemas/UpgradeQuestion"}}}},
       "UpgradeQuestion": {
         "type": "object",
         "additionalProperties": false,
