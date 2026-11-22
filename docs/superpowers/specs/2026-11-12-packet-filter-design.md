@@ -1,5 +1,7 @@
 # Packet filter and outbound NAT
 
+> The rule and object model below (two rule lists, `objects`) was replaced on 2026-11-22: see [firewall rules as one list between zones](2026-11-22-firewall-rule-model-design.md). The rest holds.
+
 ## Status and intent
 
 Requested in conversation: the MVP needs firewall rule creation and management ([issue #1](https://github.com/andaru-project/andaru/issues/1), journey steps 5, 7 and 8). Owner decisions in conversation, 2026-11-12:

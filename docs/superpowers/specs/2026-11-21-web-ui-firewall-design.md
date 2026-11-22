@@ -8,7 +8,7 @@ The second web UI slice makes Andaru usable as a firewall from the browser: seei
 
 It builds on the shell ([shell design](2026-11-21-web-ui-shell-design.md)): every save shows the pending notice, and Review and apply makes it live. Nothing on these pages applies anything.
 
-The API serves `policy.input` and `policy.forward` with their order operation, `addresses` and `services` ([packet filter design](2026-11-12-packet-filter-design.md)). The owner decided on 2026-11-21 that the firewall itself is a zone (call 2). That makes the two lists one, which is engine work that comes first: [#113](https://github.com/andaru-project/andaru/issues/113). Beyond that and call 9, this slice adds no engine behaviour.
+The API serves `rules` with its order operation, `aliases.addresses` and `aliases.ports` ([firewall rule model](2026-11-22-firewall-rule-model-design.md)). The owner decided on 2026-11-21 that the firewall itself is a zone (call 2). That made the engine's two lists one, which came first: [#113](https://github.com/andaru-project/andaru/issues/113). Beyond that and call 9, this slice adds no engine behaviour.
 
 ## Author calls
 

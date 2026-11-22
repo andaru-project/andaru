@@ -57,10 +57,11 @@ export function clock(iso: string) {
 
 type Declaration = Record<string, unknown>;
 
-// objectAt finds one object of a declaration view. A change whose ID is its collection's name
-// is a singleton (management, dns, nat.outbound) or the order of an ordered list.
+// objectAt finds one object of a declaration view: a collection's name is its path in the view
+// (aliases.addresses, nat.portForwards). A change whose ID is its collection's name is a singleton
+// (management, dns, nat.outbound) or the order of an ordered list (rules).
 export function objectAt(declaration: Declaration, collection: string, id: string): unknown {
-  const path = collection === 'addresses' || collection === 'services' ? ['objects', collection] : collection.split('.');
+  const path = collection.split('.');
   let node: unknown = declaration;
   for (const key of path) node = node && typeof node === 'object' ? (node as Declaration)[key] : undefined;
   const items = Array.isArray(node) ? (node as Array<{ id?: string }>) : undefined;
