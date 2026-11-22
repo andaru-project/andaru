@@ -14,6 +14,8 @@ Status: the owner's rules, 2026-11-22 ([#121](https://github.com/andaru-project/
 6. **Otherwise, the engine resolves it on start.** When the latest saved settings need a migration or a decision for the running Andaru, the engine starts in safe mode and runs those flows. Once the choices are made, it processes the settings, saves them for this Andaru, and the upgrade continues, ideally with at most one extra reboot.
 7. **Downgrades are not guaranteed to keep the settings.** A downgrade means restoring settings from the version being returned to: a version that Andaru saved, or a backup taken under it.
 
+Releases use semantic versioning; nightlies are named by their date, as in pfBlockerNG. The settings' schema version, not the Andaru version, decides which migrations and decisions apply.
+
 Each upgrade is a function of the saved settings and the running Andaru alone, with no further state to keep in step.
 
 ## What exists
@@ -27,7 +29,7 @@ Each upgrade is a function of the saved settings and the running Andaru alone, w
 
 - A table beside the others, `version_writers`, holds the Andaru version that saved each version. An older engine never reads it and still opens the store.
 - The history and each version's view serve it as `writtenBy`. A version has none when its Andaru did not record it: every engine up to `0.5.0-a.4`.
-- A release writes its release version; an image built without one writes `0.0.0-dev`, a pull request's image `0.0.0-prN`, and a bare `go build` writes `development`.
+- A release writes its release version, and a nightly will write its date; an image built without one writes `0.0.0-dev`, a pull request's image `0.0.0-prN`, and a bare `go build` writes `development`.
 
 Under rule 7 this is how a downgrade finds the settings to restore: the latest version written by the Andaru being returned to.
 
