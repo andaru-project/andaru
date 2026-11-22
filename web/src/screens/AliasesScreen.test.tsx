@@ -364,3 +364,18 @@ it('says on the page what became of a save whose panel was closed before it answ
   expect(await screen.findByText('The store is busy.')).toBeInTheDocument();
   expect(screen.getByRole('dialog', { name: 'Add address alias' })).toBeInTheDocument();
 });
+
+it('filters by every word of what a row shows, beside the kind', async () => {
+  const user = userEvent.setup();
+  show();
+  await screen.findByText('nas');
+  const filter = screen.getByLabelText('Filter aliases');
+  for (const [text, names] of [['192.168', ['nasThe file server', 'pool']], ['tcp 443', ['web']], ['address group', ['servers']], ['file server', ['nasThe file server']]] as const) {
+    await user.clear(filter);
+    await user.type(filter, text);
+    expect(rows().map((row) => within(row).getAllByRole('cell')[0].textContent)).toEqual(names);
+  }
+  await user.clear(filter);
+  await user.type(filter, 'nothing like it');
+  expect(screen.getByText('No alias matches the filter.')).toBeInTheDocument();
+});

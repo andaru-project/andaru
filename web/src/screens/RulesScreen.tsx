@@ -141,7 +141,7 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
           <Group gap="xs">
             {/* A move among hidden rows would be a guess, so the order stays locked while the filter hides any. */}
             <Button size="xs" variant="default" disabled={!unlocked && (filtered || resource.data.list.items.length < 2)} leftSection={<EditMark editing={unlocked} />} onClick={() => setUnlocked(!unlocked)}>{unlocked ? 'Done' : 'Edit order'}</Button>
-            <Button size="xs" onClick={() => setEditing('new')}>Add rule</Button>
+            <Button size="xs" disabled={unlocked} onClick={() => setEditing('new')}>Add rule</Button>
           </Group>
         )}
       </Group>

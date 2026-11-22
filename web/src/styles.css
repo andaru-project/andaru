@@ -381,13 +381,15 @@ path.traffic-sent {
     min-width: 2.75rem;
   }
 
-  /* A switch saves at a tap, and a list of uses opens at one: their whole row is the target. */
+  /* A switch saves at a tap, and a list of uses opens at one: their whole row is the target. Padding, not a
+     flex box, so a summary keeps its disclosure mark and a segment its centred label. */
   .mantine-Switch-body,
-  .mantine-SegmentedControl-label,
   .data-table summary {
-    align-items: center;
-    display: flex;
-    min-height: 2.75rem;
+    padding-block: 0.6rem;
+  }
+
+  .mantine-SegmentedControl-label {
+    padding-block: 0.7rem;
   }
 }
 
@@ -547,7 +549,11 @@ path.traffic-sent {
   color: var(--mantine-color-gray-4);
 }
 
-/* A side panel's Save and Cancel stay in view however long its form. */
+/* A side panel's Save and Cancel stay in view however long its form, and a focused field never hides under them. */
+.mantine-Drawer-content {
+  scroll-padding-bottom: 5rem;
+}
+
 .drawer-actions {
   background: var(--mantine-color-body);
   border-top: 1px solid var(--mantine-color-default-border);

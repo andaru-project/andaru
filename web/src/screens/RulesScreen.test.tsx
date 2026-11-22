@@ -327,3 +327,22 @@ it('shows the rules after three tries even when the two reads never agree', asyn
   await screen.findByText('LAN out, except the printers');
   expect(fetch.mock.calls.filter(([path]) => path === '/api/v1/config')).toHaveLength(3);
 });
+
+it('lets only the grips act while the order is unlocked, and says each rule\'s state in words', async () => {
+  const user = userEvent.setup();
+  show();
+  await screen.findByText('Old rule');
+  // A side that names nothing is any network; ports that name nothing are any.
+  const third = within(rows()[2]).getAllByRole('cell');
+  expect(third[3]).toHaveTextContent('any network');
+  expect(third[5]).toHaveTextContent(/^any$/);
+  await user.click(screen.getByRole('button', { name: 'Edit order' }));
+  expect(screen.queryByRole('switch')).not.toBeInTheDocument();
+  expect(within(rows()[0]).getAllByRole('cell')[1]).toHaveTextContent('on');
+  expect(within(rows()[2]).getAllByRole('cell')[1]).toHaveTextContent('off');
+  for (const name of ['Edit rule 1, LAN out, except the printers', 'Delete rule 1, LAN out, except the printers', 'Add rule']) expect(screen.getByRole('button', { name })).toBeDisabled();
+  expect(screen.getByText(/Drag a rule by its grip to move it/)).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Done' }));
+  expect(screen.getByRole('switch', { name: 'Enable rule 1, LAN out, except the printers' })).toBeEnabled();
+  expect(screen.getByRole('button', { name: 'Add rule' })).toBeEnabled();
+});

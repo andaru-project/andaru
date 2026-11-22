@@ -109,7 +109,7 @@ export function AliasEditor({ editing, rows, onClose, onSessionLost, onAbandoned
     <Drawer opened onClose={onClose} position="right" size="md" title={title} lockScroll={false} closeButtonProps={{ 'aria-label': 'Close' }}>
       <form onSubmit={submit} noValidate>
         <Stack>
-          {failure && <Alert color="red" role="alert" title="The alias was not saved">{failure}</Alert>}
+          {failure && <Alert ref={(node) => node?.scrollIntoView?.({ block: 'nearest' })} color="red" role="alert" title="The alias was not saved">{failure}</Alert>}
           {/* What is sent is what the form held when Save was pressed: nothing is typed over it meanwhile. */}
           <Fieldset variant="unstyled" disabled={busy}>
             <Stack>

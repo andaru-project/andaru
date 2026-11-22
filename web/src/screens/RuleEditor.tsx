@@ -74,12 +74,12 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onAbandoned
   const sideFields = (label: string, key: 'from' | 'to', value: RuleSide, set: (next: RuleSide) => void, zoneOptions: Array<{ value: string; label: string }>, zoneHelp: string) => (
     <Fieldset legend={label}>
       <Stack gap="xs">
-        <MultiSelect label={`${label}: zones`} description={zoneHelp} data={zoneOptions} value={value.zones} error={errors.get(`${key}/zones`)} searchable clearable nothingFoundMessage="No zone by that name." 
+        <MultiSelect label={`${label}: zones`} description={zoneHelp} data={zoneOptions} value={value.zones} error={errors.get(`${key}/zones`)} searchable clearable nothingFoundMessage="No zone by that name."
           // The firewall stands alone as a destination: choosing it leaves the other zones, and choosing another leaves it.
           onChange={(next) => set({ ...value, zones: next.includes(firewallZone) && !value.zones.includes(firewallZone) ? [firewallZone] : next.length > 1 ? next.filter((id) => id !== firewallZone) : next })} />
         <MultiSelect label={`${label}: addresses`} description="Address aliases within those zones. Empty is every address." data={addresses} value={value.addresses} error={errors.get(`${key}/addresses`)} searchable clearable nothingFoundMessage={noAlias}
           onChange={(next) => set({ ...value, addresses: next })} />
-        <Switch label="Except these addresses" description="Matches every other address in the chosen zones. Name an address first." checked={Boolean(value.not)} disabled={value.addresses.length === 0} error={errors.get(`${key}/not`)}
+        <Switch label={`${label}: except these addresses`} description="Matches every other address in the chosen zones. Name an address first." checked={Boolean(value.not)} disabled={value.addresses.length === 0} error={errors.get(`${key}/not`)}
           onChange={(event) => set({ ...value, not: event.currentTarget.checked })} />
       </Stack>
     </Fieldset>
@@ -89,7 +89,7 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onAbandoned
     <Drawer opened onClose={onClose} position="right" size="md" title={rule ? `Edit rule: ${rule.name}` : 'Add rule'} lockScroll={false} closeButtonProps={{ 'aria-label': 'Close' }}>
       <form onSubmit={submit} noValidate>
         <Stack>
-          {failure && <Alert color="red" role="alert" title="The rule was not saved">{failure}</Alert>}
+          {failure && <Alert ref={(node) => node?.scrollIntoView?.({ block: 'nearest' })} color="red" role="alert" title="The rule was not saved">{failure}</Alert>}
           {!rule && <Text size="sm" c="dimmed">A new rule is added at the bottom of the list. Move it with Edit order.</Text>}
           {/* What is sent is what the form held when Save was pressed: nothing is typed over it meanwhile. */}
           <Fieldset variant="unstyled" disabled={busy}>
