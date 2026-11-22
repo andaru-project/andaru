@@ -19,7 +19,8 @@ The Rules page (2026-11-22): the list in execution order with each rule as a sen
 - **"This firewall" is a dark, filled chip,** where a zone is a tinted one; it has no other mark.
 - **On a narrow screen the name is on the second line,** under the position, the switch and the action: beside them it had no room.
 - **Without a management segment** the page says so and shows neither the fixed block nor "Everything else is dropped", since no filter is loaded.
-- **Not built yet:** the Aliases page and creating an alias from a picker (the pickers offer the aliases that exist), the offer of starter rules on an empty list, the list of rules that still use an alias on a refused delete, and what changed underneath after a version conflict in the editor (it says that the rule changed and keeps what was typed). The anti-lockout line names SSH only, which is what the engine accepts today.
+- **The Aliases page** (2026-11-22): one table of address and port aliases by name, with a filter by kind, what each holds, and what still names it (rules by their place, groups, the management segment's allowed sources, port forwards and one-to-one NAT). The editor is the same side panel. An alias that is still named is not offered for deletion: the dialog lists what names it, taken from the saved configuration, so the engine's refusal is never the first the user hears of it.
+- **Not built yet:** creating an alias from a rule's picker (the pickers offer the aliases that exist), the shared field that takes a literal address or an alias's name, the offer of starter rules on an empty list, and what changed underneath after a version conflict in an editor (it says that the object changed and keeps what was typed). The anti-lockout line names SSH only, which is what the engine accepts today.
 
 ## Author calls
 

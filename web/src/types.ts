@@ -75,12 +75,6 @@ export interface SavedObject<T> {
   version: string;
 }
 
-export interface SavedRolePage {
-  state: 'saved';
-  savedVersion: string;
-  items: Array<SavedObject<Role>>;
-}
-
 export interface Apply {
   id: string;
   savedVersion: string;
@@ -232,8 +226,45 @@ export interface Snapshot {
     zones: Array<{ id: string; name: string }>;
     management?: { segment: string; allowedSources?: string[] };
     aliases?: { addresses: Array<{ id: string; name: string }>; ports: Array<{ id: string; name: string }> };
-    nat?: { portForwards?: Array<{ id: string; enabled: boolean; noRedirect?: boolean; filterRule?: string }> };
+    rules?: Rule[];
+    nat?: {
+      portForwards?: Array<{ id: string; name: string; enabled: boolean; noRedirect?: boolean; filterRule?: string; from?: string[]; to?: { address?: string } }>;
+      oneToOne?: Array<{ id: string; name: string; destination?: string[] }>;
+    };
   };
+}
+
+// An address alias: one host, network or range, or a group of other address aliases.
+export interface AddressAlias {
+  id: string;
+  name: string;
+  description?: string;
+  kind: 'host' | 'network' | 'range' | 'group';
+  address?: string;
+  prefix?: string;
+  first?: string;
+  last?: string;
+  members?: string[];
+}
+
+// A port alias: TCP or UDP ports, ICMP or ICMPv6 types, or a group of other port aliases.
+export interface PortAlias {
+  id: string;
+  name: string;
+  description?: string;
+  protocol: 'tcp' | 'udp' | 'icmp' | 'icmpv6' | 'group';
+  ports?: string[];
+  types?: string[];
+  members?: string[];
+}
+
+export interface AliasKinds { addresses: AddressAlias; ports: PortAlias }
+
+// A collection as the engine serves it.
+export interface SavedList<T> {
+  state: 'saved';
+  savedVersion: string;
+  items: Array<SavedObject<T>>;
 }
 
 // The firewall itself is a zone no configuration stores: a rule names it as its destination to reach the box.
@@ -260,9 +291,6 @@ export interface Rule {
 }
 
 // An ordered list as the engine serves it: its items in order, and the version that guards the order.
-export interface OrderedList<T> {
-  state: 'saved';
-  savedVersion: string;
+export interface OrderedList<T> extends SavedList<T> {
   version: string;
-  items: Array<SavedObject<T>>;
 }

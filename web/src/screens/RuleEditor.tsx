@@ -1,6 +1,6 @@
 import { Alert, Button, Drawer, Fieldset, Group, MultiSelect, SegmentedControl, Stack, Switch, Text, Textarea, TextInput } from '@mantine/core';
-import { useState, type FormEvent } from 'react';
-import { ApiError, apiErrorMessage } from '../api';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { ApiError, fieldErrors, saveFailure } from '../api';
 import { firewallZone, type Rule, type RuleSide, type Snapshot } from '../types';
 
 interface RuleEditorProps {
@@ -8,25 +8,18 @@ interface RuleEditorProps {
   snapshot: Snapshot;
   onClose(): void;
   onSessionLost(): void;
+  // A save failed after the panel was closed.
+  onAbandoned(message: string): void;
   onSave(rule: Omit<Rule, 'id'>): Promise<void>;
 }
 
 const anySide: RuleSide = { zones: [], addresses: [] };
 
-// The engine is the authority on what a rule may be. Its refusals name fields by path ("/from/zones/0"); each
-// shows beside the field it is about, and one about no field here shows above the form.
-function fieldErrors(error: unknown) {
-  const fields = new Map<string, string>();
-  if (!(error instanceof ApiError)) return fields;
-  for (const detail of error.details) {
-    const field = /^\/(name|description|action|ports|(?:from|to)\/(?:zones|addresses|not))(?:\/|$)/.exec(detail.path ?? '')?.[1] ?? '';
-    fields.set(field, [fields.get(field), detail.message].filter(Boolean).join(' '));
-  }
-  return fields;
-}
+// The engine is the authority on what a rule may be: its refusals show beside the fields they name.
+const field = /^\/(name|description|action|ports|(?:from|to)\/(?:zones|addresses|not))(?:\/|$)/;
 
 // The editor is a panel beside the list, so the order stays in view while a rule is written.
-export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onSave }: RuleEditorProps) {
+export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onAbandoned, onSave }: RuleEditorProps) {
   const [name, setName] = useState(rule?.name ?? '');
   const [description, setDescription] = useState(rule?.description ?? '');
   const [enabled, setEnabled] = useState(rule?.enabled ?? true);
@@ -38,6 +31,9 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onSave }: R
   const [errors, setErrors] = useState(new Map<string, string>());
   const [failure, setFailure] = useState('');
   const [busy, setBusy] = useState(false);
+  // A save may answer after this panel was closed and another opened: it then closes nothing.
+  const open = useRef(true);
+  useEffect(() => { open.current = true; return () => { open.current = false; }; }, []);
 
   const option = (item: { id: string; name: string }) => ({ value: item.id, label: item.name });
   const zones = snapshot.value.zones.map(option);
@@ -59,17 +55,14 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onSave }: R
     const side = (value: RuleSide): RuleSide => ({ zones: value.zones, addresses: value.addresses, ...(value.not && value.addresses.length > 0 ? { not: true } : {}) });
     try {
       await onSave({ name: name.trim(), ...(description ? { description } : {}), enabled, action, from: side(from), to: side(to), ports, log });
-      onClose();
+      if (open.current) onClose();
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) return onSessionLost();
-      const fields = fieldErrors(error);
+      // The panel was closed while the save was out: the page says what became of it.
+      if (!open.current) return onAbandoned(saveFailure(error, new Map(), 'rule'));
+      const fields = fieldErrors(error, field);
       setErrors(fields);
-      // Someone else's change underneath keeps what was typed here, and says what happened.
-      if (error instanceof ApiError && error.status === 412) setFailure('This rule was changed by someone else while it was open here. Close the panel to see what is saved, then make the change again.');
-      else if (error instanceof ApiError && error.status === 404) setFailure('This rule was deleted by someone else while it was open here. Close the panel; to keep it, add it again.');
-      else if (fields.size === 0 || fields.has('')) setFailure(fields.get('') ?? apiErrorMessage(error));
-      // Refusals beside their fields are also said once, aloud, where the form begins.
-      else setFailure('Some of the fields below were refused.');
+      setFailure(saveFailure(error, fields, 'rule'));
     } finally {
       setBusy(false);
     }
