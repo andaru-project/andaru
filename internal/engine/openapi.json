@@ -7346,6 +7346,10 @@
           "changedObjectCount": {
             "type": "integer",
             "minimum": 0
+          },
+          "writtenBy": {
+            "type": "string",
+            "description": "The Andaru version that saved this version; absent when the Andaru that saved it did not record it."
           }
         }
       },

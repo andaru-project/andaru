@@ -197,3 +197,49 @@ func TestRestoreOntoALegacyHead(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Every saved version says which Andaru wrote it, so an engine that finds versions a newer Andaru saved can tell
+// them from its own. A version whose Andaru did not record it says nothing.
+func TestSavedVersionsNameTheirWriter(t *testing.T) {
+	ctx := context.Background()
+	old := Writer
+	t.Cleanup(func() { Writer = old })
+	s, root := legacyStore(t)
+	// A store an engine before left: no table of writers at all. Opening it adds the table.
+	if _, err := s.configDB.ExecContext(ctx, "DROP TABLE version_writers"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s = openTestStore(t, root)
+	Writer = "0.5.0-a.5"
+	if _, err := s.Save(ctx, systemRootActor, createZone("guest")); err != nil {
+		t.Fatal(err)
+	}
+	// A build without a version still saves, and reads as one that did not record its writer.
+	Writer = ""
+	if _, err := s.Save(ctx, systemRootActor, createZone("iot")); err != nil {
+		t.Fatal(err)
+	}
+	history, err := s.History(ctx, nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, item := range history.Items {
+		got = append(got, string(item.ID)+"="+item.WrittenBy)
+	}
+	if want := []string{"4=", "3=0.5.0-a.5", "2=", "1=", "0="}; !slices.Equal(got, want) {
+		t.Fatalf("writers %v, want %v", got, want)
+	}
+	if one, err := s.Version(ctx, "3"); err != nil || one.WrittenBy != "0.5.0-a.5" {
+		t.Fatalf("version 3: %+v %v", one.VersionInfo, err)
+	}
+	// A store made now names the writer of its first version too.
+	Writer = "0.5.0-a.5"
+	fresh, err := openTestStore(t, ownedDir(t)).History(ctx, nil, 10)
+	if err != nil || len(fresh.Items) != 1 || fresh.Items[0].WrittenBy != "0.5.0-a.5" {
+		t.Fatalf("a new store's history: %+v %v", fresh.Items, err)
+	}
+}

@@ -25,7 +25,7 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 	var parent sql.NullInt64
 	var schema int
 	var cb, ch, sh []byte
-	query := `SELECT v.id,v.parent_id,v.schema_version,v.created_at,v.actor,v.changed_object_count,d.body,v.config_sha256,v.secrets_sha256 FROM versions v JOIN documents d ON d.sha256=v.config_sha256 `
+	query := `SELECT v.id,v.parent_id,v.schema_version,v.created_at,v.actor,v.changed_object_count,d.body,v.config_sha256,v.secrets_sha256,coalesce(w.andaru_version,'') FROM versions v JOIN documents d ON d.sha256=v.config_sha256 LEFT JOIN version_writers w ON w.version_id=v.id `
 	var row *sql.Row
 	if id == "" {
 		row = conn.QueryRowContext(ctx, query+`JOIN pointers p ON p.version_id=v.id WHERE p.name='saved'`)
@@ -36,7 +36,7 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 		}
 		row = conn.QueryRowContext(ctx, query+`WHERE v.id=?`, n)
 	}
-	if e := row.Scan(&number, &parent, &schema, &info.CreatedAt, &info.Actor, &info.ChangedObjectCount, &cb, &ch, &sh); e != nil {
+	if e := row.Scan(&number, &parent, &schema, &info.CreatedAt, &info.Actor, &info.ChangedObjectCount, &cb, &ch, &sh, &info.WrittenBy); e != nil {
 		if errors.Is(e, sql.ErrNoRows) && id != "" {
 			return state, info, fault("NOT_FOUND", "", "Saved version does not exist.")
 		}
@@ -333,7 +333,7 @@ func (s *Store) History(ctx context.Context, before *Version, limit int) (result
 	if e = verifyPragmas(ctx, conn, false); e != nil {
 		return result, e
 	}
-	rows, e := conn.QueryContext(ctx, "SELECT id,parent_id,created_at,actor,changed_object_count FROM versions WHERE id<? ORDER BY id DESC LIMIT ?", upper, limit+1)
+	rows, e := conn.QueryContext(ctx, "SELECT v.id,v.parent_id,v.created_at,v.actor,v.changed_object_count,coalesce(w.andaru_version,'') FROM versions v LEFT JOIN version_writers w ON w.version_id=v.id WHERE v.id<? ORDER BY v.id DESC LIMIT ?", upper, limit+1)
 	if e != nil {
 		return result, diagnostic("history-query", e)
 	}
@@ -343,7 +343,7 @@ func (s *Store) History(ctx context.Context, before *Version, limit int) (result
 		var number int64
 		var parent sql.NullInt64
 		var info VersionInfo
-		if e = rows.Scan(&number, &parent, &info.CreatedAt, &info.Actor, &info.ChangedObjectCount); e != nil {
+		if e = rows.Scan(&number, &parent, &info.CreatedAt, &info.Actor, &info.ChangedObjectCount, &info.WrittenBy); e != nil {
 			return result, diagnostic("history-scan", e)
 		}
 		info.ID = Version(fmt.Sprint(number))

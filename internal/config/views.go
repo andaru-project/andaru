@@ -43,6 +43,8 @@ type VersionInfo struct {
 	CreatedAt          string   `json:"createdAt"`
 	Actor              string   `json:"actor"`
 	ChangedObjectCount int      `json:"changedObjectCount"`
+	// WrittenBy is the Andaru version that saved this version; absent when the Andaru that saved it did not record it.
+	WrittenBy string `json:"writtenBy,omitempty"`
 }
 type HistoryView struct {
 	State      string        `json:"state"`
