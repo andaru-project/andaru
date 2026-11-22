@@ -115,7 +115,8 @@ export class ApiClient {
     if (csrf && this.csrfToken) headers.set('X-Andaru-CSRF', this.csrfToken);
     // No caller passes a signal or names GET, so a request without a method is a read.
     const read = !init.method;
-    if (read && !input) headers.set('X-Andaru-Background', '1');
+    const carried = input;
+    if (read && !carried) headers.set('X-Andaru-Background', '1');
     input = false;
 
     // A read that never answers would hold its page's polling for good; a write may take as long as it takes.
@@ -128,6 +129,7 @@ export class ApiClient {
     try {
       response = await fetch(path, { ...init, headers, signal, credentials: 'same-origin', cache: 'no-store' });
     } catch {
+      input ||= carried; // the engine never received it, so the input still has to reach it
       throw disconnected();
     }
 

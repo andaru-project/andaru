@@ -86,3 +86,12 @@ it('marks a read with no input since the previous request as a poll, and never a
     expect(background(fetchMock.mock.calls.length - 1)).toBe('1');
   }
 });
+
+it('keeps input for the next read when a request never reached the engine', async () => {
+  const fetchMock = fetchQueue(new TypeError('network failed'), jsonResponse(200, { items: [] }));
+  const api = new ApiClient();
+  document.dispatchEvent(new KeyboardEvent('keydown'));
+  await expect(api.links()).rejects.toEqual(expect.objectContaining({ code: 'DISCONNECTED' }));
+  await api.links();
+  expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get('X-Andaru-Background')).toBeNull();
+});
