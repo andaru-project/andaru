@@ -346,6 +346,13 @@ func TestNewerHeadOpensOnTheNewestReadableVersion(t *testing.T) {
 	if _, err = s.Version(ctx, "2"); !errors.As(err, &f) || f.Code != "NOT_FOUND" {
 		t.Fatalf("reading the newer version: %v", err)
 	}
+	// Its roles still read, for the live generation that names it; the caller checks them against its digest.
+	if roles, err := s.Roles(ctx, "2"); err != nil || len(roles) != 0 {
+		t.Fatalf("roles of the newer version: %+v %v", roles, err)
+	}
+	if rules, err := s.List(ctx, "rules"); err != nil || rules.Version != "3" {
+		t.Fatalf("the rule list reads its version from elsewhere than the copy: %+v %v", rules.Version, err)
+	}
 	if _, err = s.Save(ctx, systemRootActor, createZone("iot")); err != nil {
 		t.Fatal(err)
 	}

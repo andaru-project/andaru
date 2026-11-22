@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -459,6 +460,7 @@ func (s *Store) fallBack(ctx context.Context) error {
 	if _, err = p.publish(ctx); err != nil {
 		return err
 	}
+	slog.Warn("settings of a newer Andaru set aside: the saved head is now a copy of the newest version this Andaru reads", "copied", current.Version, "head", next)
 	return p.Close()
 }
 

@@ -70,7 +70,7 @@ Saved versions are immutable, and an upgrade saves its migrated settings as a ne
 - The changes saved under the newer Andaru are lost. A rollback normally comes within weeks of the upgrade, so that is a minor inconvenience; a backup taken under the older Andaru remains the other way back.
 - With no such version in the history (the store was created by the newer Andaru), the engine refuses the store as today, and only the backup remains.
 
-Implemented: `Open` does this (`fallBack` in `internal/config/store_linux.go`). Every object and list of the copy is recorded as changed in it, so none reads its version from the newer versions in between. Engines up to `0.5.0-a.4` predate it and refuse such a store.
+Implemented: `Open` does this (`fallBack` in `internal/config/store_linux.go`). Every object and list of the copy is recorded as changed in it, so none reads its version from the newer versions in between. An object only the newer versions hold is deleted in it. The newer versions read as ones this Andaru cannot read, except for their roles: the live generation still names one until the next apply, and its roles are trusted only when they match the digest that generation recorded, so signing in keeps working. Engines up to `0.5.0-a.4` predate it and refuse such a store.
 
 ## Released engines
 
