@@ -98,7 +98,9 @@ func validateNAT(d *declaration) []FieldError {
 		if f.To.Address != "" {
 			refFamily(p+"/to/address", f.To.Address, six)
 		}
-		if six && f.Reflection {
+		if f.ToNegated && f.Reflection {
+			bad(p+"/reflection", "A negated destination names no outside address for internal clients to ask, so it has no reflection.")
+		} else if six && f.Reflection {
 			bad(p+"/reflection", "An IPv6 port forward reaches the firewall itself from every zone it names, so it has no reflection.")
 		}
 		first, last, ok := portSpan(f.Ports)
@@ -169,7 +171,7 @@ func validateNAT(d *declaration) []FieldError {
 		}
 		for _, zone := range slices.Compact(slices.Sorted(slices.Values(f.IngressZones))) {
 			for _, protocol := range protocols {
-				key := fmt.Sprintf("%s|%t|%s|%t|%s|%s|%s", cmp.Or(f.Family, "ipv4"), f.FromNegated, from, f.To.Self, f.To.Address, zone, protocol)
+				key := fmt.Sprintf("%s|%t|%s|%t|%t|%s|%s|%s", cmp.Or(f.Family, "ipv4"), f.FromNegated, from, f.ToNegated, f.To.Self, f.To.Address, zone, protocol)
 				buckets[key] = append(buckets[key], entry{i, spans[i].first, spans[i].last})
 			}
 		}
@@ -231,6 +233,15 @@ func validateNAT(d *declaration) []FieldError {
 		for j, a := range o.Destination {
 			ref(fmt.Sprintf("%s/destination/%d", p, j), a)
 		}
+		if o.DestinationNegated {
+			if len(o.Destination) == 0 && !o.NoBinat {
+				bad(p+"/destinationNegated", "Name the destinations to leave out.")
+			}
+			// The left-out destinations share one nft rule, as a negated rule side does.
+			if len(o.Destination) > maxLeftOut {
+				bad(p+"/destination", fmt.Sprintf("A 1:1 entry leaves out at most %d destinations. Put more of them in a group.", maxLeftOut))
+			}
+		}
 		internal, ok := prefix4(o.Internal)
 		if !ok {
 			bad(p+"/internal", "Expected an IPv4 address or a prefix with its host bits zero.")
@@ -242,7 +253,7 @@ func validateNAT(d *declaration) []FieldError {
 				bad(p+"/external", "An exclusion maps nothing, so it has no external address.")
 			}
 			// It is matched on its internal hosts and zone alone; anything else would be silently ignored.
-			if len(o.Destination) > 0 {
+			if len(o.Destination) > 0 || o.DestinationNegated {
 				bad(p+"/destination", "An exclusion applies to every peer; it has no destination.")
 			}
 			if o.Reflection {

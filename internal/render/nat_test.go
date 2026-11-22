@@ -130,6 +130,25 @@ func TestAddressTo(t *testing.T) {
 		`iifname @`+natWAN+` ct mark & 0x0000ffff == 0x00000001 ip daddr 192.0.2.10 tcp dport 80 accept comment "`+pfwWeb+`"`)
 }
 
+// A negated destination is the complement of the plain one among unicast destinations, for the firewall itself
+// and for an address alias. Its internal clients reach a target beside them through the hairpin masquerade.
+func TestNegatedTo(t *testing.T) {
+	script := table(t, render(t, natChange(t, func(f []any) {
+		f[0].(map[string]any)["toNegated"] = true
+		f[3].(map[string]any)["to"] = map[string]any{"address": "adr_00000007-0000-4000-8000-000000000007"}
+		f[3].(map[string]any)["toNegated"] = true
+	})))
+	inOrder(t, chainOf(t, script, "prerouting"),
+		`iifname @`+natWAN+` meta nfproto ipv4 fib daddr . iif type != local fib daddr type != { broadcast, multicast } tcp dport 8080 ct mark set ct mark & 0xffff0000 | 0x00000001 log prefix "andaru `+pfwWeb+` " dnat ip to 192.0.2.10:80 comment "`+pfwWeb+`"`,
+		`iifname @`+natWAN+` ip daddr != @`+natBlocked+` fib daddr type != { broadcast, multicast } tcp dport 2222 ct mark set ct mark & 0xffff0000 | 0x00000004 redirect to :22 comment "`+pfwSSH+`"`)
+	inOrder(t, chainOf(t, script, "postrouting"), `oifname "ens19" ct status dnat ip saddr 192.0.2.0/24 masquerade comment "reflection"`)
+	// A negated forward to the firewall itself has no reply to bring back.
+	local := table(t, render(t, natChange(t, func(f []any) { f[3].(map[string]any)["toNegated"] = true })))
+	if strings.Contains(local, `comment "reflection"`) {
+		t.Fatalf("hairpin for a local target:\n%s", local)
+	}
+}
+
 // A target that is one of the firewall's own addresses is local delivery: its rule goes in input.
 func TestForwardToAFirewallAddress(t *testing.T) {
 	script := table(t, render(t, natChange(t, func(f []any) {
@@ -279,6 +298,24 @@ func TestOneToOneReflectionKeepsDestination(t *testing.T) {
 	})))
 	inOrder(t, chainOf(t, script, "prerouting"),
 		`iifname @internal ip saddr @`+natPartner+` ip daddr != { 203.0.113.31 } dnat ip prefix to ip daddr map { 203.0.113.16/28 : 192.0.2.16/28 } comment "`+otoBlock+`"`)
+}
+
+// A negated 1:1 destination names every left-out peer on one line, both ways and on its reflection copy.
+func TestOneToOneNegatedDestination(t *testing.T) {
+	const other = "adr_00000008-0000-4000-8000-000000000008"
+	script := table(t, render(t, change(t, fixture(t, "nat-one-to-one"), func(d map[string]any) {
+		d["aliases"].(map[string]any)["addresses"] = append(d["aliases"].(map[string]any)["addresses"].([]any),
+			map[string]any{"id": other, "name": "other", "kind": "host", "address": "198.51.100.8"})
+		o := d["nat"].(map[string]any)["oneToOne"].([]any)[2].(map[string]any)
+		o["destination"] = append(o["destination"].([]any), other)
+		o["destinationNegated"], o["reflection"] = true, true
+	})))
+	not := `ip saddr != @` + natPartner + ` ip saddr != @adr_00000008_0000_4000_8000_000000000008_4`
+	inOrder(t, chainOf(t, script, "prerouting"),
+		`iifname @`+natWAN+` `+not+` ip daddr != { 203.0.113.31 } dnat ip prefix to ip daddr map { 203.0.113.16/28 : 192.0.2.16/28 } comment "`+otoBlock+`"`,
+		`iifname @internal `+not+` ip daddr != { 203.0.113.31 } dnat ip prefix to ip daddr map { 203.0.113.16/28 : 192.0.2.16/28 } comment "`+otoBlock+`"`)
+	inOrder(t, chainOf(t, script, "postrouting"),
+		`oifname @`+natWAN+` ip daddr != @`+natPartner+` ip daddr != @adr_00000008_0000_4000_8000_000000000008_4 ip saddr != { 192.0.2.31 } snat ip prefix to ip saddr map { 192.0.2.16/28 : 203.0.113.16/28 } comment "`+otoBlock+`"`)
 }
 
 // A target the firewall learned by DHCP is local delivery too: its rule goes in input.

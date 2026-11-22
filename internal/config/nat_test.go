@@ -83,6 +83,17 @@ func TestPortForwardValidation(t *testing.T) {
 		"to the firewall": {func(d map[string]any) map[string]any {
 			return forward(d, map[string]any{"target": map[string]any{"self": true}, "targetPort": 22})
 		}},
+		"negated self": {func(d map[string]any) map[string]any { return forward(d, map[string]any{"toNegated": true}) }},
+		"negated address": {func(d map[string]any) map[string]any {
+			return forward(d, map[string]any{"to": map[string]any{"address": natOther}, "toNegated": true})
+		}},
+		// Not to the firewall and to the firewall are disjoint, so the same ports do not overlap.
+		"forwards differing only in negation": {
+			func(d map[string]any) map[string]any { return forward(d, nil) },
+			func(d map[string]any) map[string]any {
+				return forward(d, map[string]any{"id": pfwB, "name": "web2", "toNegated": true})
+			},
+		},
 		"forwards differing only in source": {
 			func(d map[string]any) map[string]any { return forward(d, map[string]any{"from": []any{natPeer}}) },
 			func(d map[string]any) map[string]any {
@@ -119,6 +130,7 @@ func TestPortForwardValidation(t *testing.T) {
 		"exclusion target":   {map[string]any{"noRedirect": true}, p + "/target"},
 		"unknown from":       {map[string]any{"from": []any{"adr_00000009-0000-4000-8000-000000000009"}}, p + "/from/0"},
 		"unknown to":         {map[string]any{"to": map[string]any{"address": "adr_00000009-0000-4000-8000-000000000009"}}, p + "/to/address"},
+		"negated reflection": {map[string]any{"toNegated": true, "reflection": true}, p + "/reflection"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := natFixture(t)
@@ -163,6 +175,9 @@ func TestOneToOneValidation(t *testing.T) {
 		"exclusion with external": {map[string]any{"noBinat": true}, p + "/external"},
 		"unknown zone":            {map[string]any{"zone": "zon_00000009-0000-4000-8000-000000000009"}, p + "/zone"},
 		"unknown destination":     {map[string]any{"destination": []any{"adr_00000009-0000-4000-8000-000000000009"}}, p + "/destination/0"},
+		"negated nothing":         {map[string]any{"destinationNegated": true}, p + "/destinationNegated"},
+		"negated too many":        {map[string]any{"destination": slices.Repeat([]any{natPeer}, maxLeftOut+1), "destinationNegated": true}, p + "/destination"},
+		"negated exclusion":       {map[string]any{"noBinat": true, "external": nil, "destinationNegated": true}, p + "/destination"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := natFixture(t)
@@ -183,6 +198,13 @@ func TestOneToOneValidation(t *testing.T) {
 		lan["addresses"] = []any{"192.0.2.7/24", "192.0.2.8/24"}
 		setNAT(d, "oneToOne", mapping(d, map[string]any{"external": "192.0.2.8", "internal": "198.18.0.30"}))
 		accepted(t, d)
+	})
+	t.Run("negated destination", func(t *testing.T) {
+		d := natFixture(t)
+		setNAT(d, "oneToOne", mapping(d, map[string]any{"destination": []any{natPeer, natOther}, "destinationNegated": true}))
+		if !accepted(t, d).NAT.OneToOne[0].DestinationNegated {
+			t.Fatal("destinationNegated lost")
+		}
 	})
 	t.Run("exclusion", func(t *testing.T) {
 		d := natFixture(t)

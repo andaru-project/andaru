@@ -167,7 +167,7 @@ type natPoint struct {
 type portForward struct {
 	ID, Protocol, Ports, FilterRule  string
 	Enabled, FromNegated, NoRedirect bool
-	Reflection, Log                  bool
+	ToNegated, Reflection, Log       bool
 	IngressZones, From               []string
 	To                               natPoint
 	Target                           *natPoint
@@ -175,9 +175,9 @@ type portForward struct {
 	Family                           string
 }
 type oneToOne struct {
-	ID, Zone, External, Internal string
-	Enabled, NoBinat, Reflection bool
-	Destination                  []string
+	ID, Zone, External, Internal                     string
+	Enabled, NoBinat, Reflection, DestinationNegated bool
+	Destination                                      []string
 }
 
 // filtered reports that the declaration switches the packet filter on: a management segment is set.

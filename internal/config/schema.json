@@ -3170,6 +3170,9 @@
             "fromNegated": {
               "type": "boolean"
             },
+            "toNegated": {
+              "type": "boolean"
+            },
             "to": {
               "oneOf": [
                 {
@@ -3328,6 +3331,9 @@
               },
               "minItems": 0,
               "maxItems": 1000
+            },
+            "destinationNegated": {
+              "type": "boolean"
             },
             "noBinat": {
               "type": "boolean"
