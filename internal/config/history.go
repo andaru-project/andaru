@@ -49,7 +49,7 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 	if !bytes.Equal(hash[:], ch) {
 		return state, info, diagnostic("load-config-hash", nil)
 	}
-	d, stored, origin, e := decodeSaved(cb)
+	d, stored, origin, questions, e := decodeSavedWith(cb, nil)
 	if e != nil {
 		return state, info, diagnostic("load-config-schema", e)
 	}
@@ -59,7 +59,7 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 	// A version of an earlier form keeps the bytes it was saved with, and the document as it reads now is what
 	// a batch that changes nothing is compared with.
 	canonicalBody, e := canonical(d)
-	state.legacy, state.origin, state.storedBody = stored < schemaVersion, origin, cb
+	state.legacy, state.origin, state.storedBody, state.questions = stored < schemaVersion, origin, cb, questions
 	if e != nil || !state.legacy && !bytes.Equal(canonicalBody, cb) {
 		return state, info, diagnostic("load-config-canonical", e)
 	}
@@ -387,7 +387,7 @@ func (s *Store) Version(ctx context.Context, id Version) (result VersionView, er
 	if e != nil {
 		return result, e
 	}
-	result = VersionView{State: "saved", VersionInfo: info, Value: snapshot.Value, Changes: []objectChange{}}
+	result = VersionView{State: "saved", VersionInfo: info, Value: snapshot.Value, Changes: []objectChange{}, Questions: state.questions}
 	number, _ := strconvVersion(id)
 	var query []string
 	var arguments []any

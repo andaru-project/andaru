@@ -1,6 +1,6 @@
 # Safe mode for settings that need a decision
 
-Status: proposed, 2026-11-22, for step 3 of [settings across Andaru versions](2026-11-22-settings-across-andaru-versions-design.md) ([#121](https://github.com/andaru-project/andaru/issues/121)). Nothing here is built. The owner asked for safe mode to be built now, so the mechanism comes before the first breaking change that needs it, tested with a decision record that exists only in the tests. The owner's decisions are under "Owner decisions".
+Status: proposed, 2026-11-22, for step 3 of [settings across Andaru versions](2026-11-22-settings-across-andaru-versions-design.md) ([#121](https://github.com/andaru-project/andaru/issues/121)). Decision records are built; the hold, its API and the web page are not. The owner asked for safe mode to be built now, so the mechanism comes before the first breaking change that needs it, tested with a decision record that exists only in the tests. The owner's decisions are under "Owner decisions".
 
 ## The problem
 
@@ -22,6 +22,8 @@ The upgrade from schema *n* to *n+1* applies each matching record of schema *n* 
 ## Reading a version nobody has answered for
 
 Every read of a stored document of an older schema (`decodeSaved`: the history, the live version's roles, an export, a backup, a kept copy) upgrades it with the provisional choices. A version always reads, and a reader can tell that it read provisionally: a version's view says so, with the questions it holds.
+
+Implemented: the records are `decisions` in `internal/config/decisions.go`, applied by `decodeSavedWith`, and a version's view lists its `questions`. None exists outside the tests. Schemas 1 to 3 migrate in one step, so a test record of one of them sees the document as saved, with the earlier records applied; a real record only ever comes with a migration from schema 4 on, which adds its own step. An answer must name a decision record; one whose question an earlier answer no longer raises is left unused.
 
 ## The hold
 

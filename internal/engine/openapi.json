@@ -7420,10 +7420,79 @@
                   },
                   "additionalProperties": false
                 }
+              },
+              "questions": {
+                "type": "array",
+                "description": "The decisions this version needs to read in the current schema. It reads with the provisional choices until they are answered.",
+                "items": {
+                  "$ref": "#/components/schemas/UpgradeQuestion"
+                }
               }
             }
           }
         ]
+      },
+      "UpgradeQuestion": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "question",
+          "choices",
+          "provisional",
+          "objects",
+          "choice",
+          "answered"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "question": {
+            "type": "string"
+          },
+          "choices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "label",
+                "description"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "provisional": {
+            "type": "string",
+            "description": "The choice the settings read with while nobody has answered."
+          },
+          "objects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The IDs of the objects the decision is about."
+          },
+          "choice": {
+            "type": "string",
+            "description": "The choice this reading used: the answer given, or the provisional one."
+          },
+          "answered": {
+            "type": "boolean"
+          }
+        }
       },
       "Resolution": {
         "type": "object",
