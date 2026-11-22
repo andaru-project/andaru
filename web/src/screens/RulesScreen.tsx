@@ -4,7 +4,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { ActionIcon, Alert, Anchor, Badge, Button, Group, Modal, Paper, Stack, Switch, Table, Text, TextInput, Title } from '@mantine/core';
 import { useCallback, useState } from 'react';
 import { Link } from 'react-router';
-import { ApiError, apiErrorMessage, type ApiClient } from '../api';
+import { ApiError, reportError, type ApiClient } from '../api';
 import { firewallZone, type Rule, type RuleSide, type SavedObject, type Session, type Snapshot } from '../types';
 import { useResource } from '../useResource';
 import { Loaded } from './Loaded';
@@ -39,7 +39,7 @@ function Side({ side, names: known }: { side: RuleSide; names: Names }) {
   return (
     <Group gap={6}>
       {side.zones.length === 0 && side.addresses.length === 0 && <Text size="sm" c="dimmed">any</Text>}
-      {toFirewall && <Badge className="firewall-zone" variant="filled" color="dark">This firewall</Badge>}
+      {toFirewall && <Badge variant="filled" color="dark">This firewall</Badge>}
       {side.zones.filter((id) => id !== firewallZone).map((id) => <ZoneBadge key={id} name={known.zones.get(id) ?? 'unknown zone'} />)}
       {side.not && <Text size="sm" fw={600}>not</Text>}
       {side.addresses.map((id) => <Badge key={id} className="alias" variant="default">{known.addresses.get(id) ?? 'unknown alias'}</Badge>)}
@@ -54,17 +54,16 @@ function Row({ item, position, names: known, canWrite, unlocked, busy, onToggle,
 }) {
   const rule = item.value;
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id: rule.id, disabled: !unlocked });
-  const title = rule.name || `rule ${position}`;
   return (
     <Table.Tr ref={setNodeRef} className="rule" data-disabled={!rule.enabled || undefined} data-dragging={isDragging || undefined} style={{ transform: CSS.Translate.toString(transform), transition }}>
       <Table.Td data-label="Position">
         <Group gap="xs" wrap="nowrap">
-          {unlocked && <ActionIcon className="widget-grip" size="lg" variant="subtle" color="gray" ref={setActivatorNodeRef} {...attributes} {...listeners} aria-label={`Move ${title}`}><Grip /></ActionIcon>}
+          {unlocked && <ActionIcon className="widget-grip" size="lg" variant="subtle" color="gray" ref={setActivatorNodeRef} {...attributes} {...listeners} aria-label={`Move ${rule.name}`}><Grip /></ActionIcon>}
           <Text size="sm">{position}</Text>
         </Group>
       </Table.Td>
       <Table.Td data-label="Enabled">
-        {canWrite ? <Switch checked={rule.enabled} disabled={busy} onChange={onToggle} aria-label={`${title} enabled`} /> : <Text size="sm">{rule.enabled ? 'on' : 'off'}</Text>}
+        {canWrite ? <Switch checked={rule.enabled} disabled={busy} onChange={onToggle} aria-label={`${rule.name} enabled`} /> : <Text size="sm">{rule.enabled ? 'on' : 'off'}</Text>}
       </Table.Td>
       <Table.Td data-label="Action">
         <Group gap={6} wrap="nowrap">
@@ -79,10 +78,10 @@ function Row({ item, position, names: known, canWrite, unlocked, busy, onToggle,
       </Table.Td>
       <Table.Td data-label="Name"><Text size="sm" fw={600}>{rule.name}</Text>{rule.description && <Text size="sm" c="dimmed">{rule.description}</Text>}</Table.Td>
       {canWrite && (
-        <Table.Td>
+        <Table.Td className="rule-actions">
           <Group gap="xs" wrap="nowrap">
-            <Button size="compact-xs" variant="default" aria-label={`Edit ${title}`} onClick={onEdit}>Edit</Button>
-            <Button size="compact-xs" variant="default" color="red" aria-label={`Delete ${title}`} onClick={onDelete}>Delete</Button>
+            <Button size="compact-xs" variant="default" disabled={busy} aria-label={`Edit ${rule.name}`} onClick={onEdit}>Edit</Button>
+            <Button size="compact-xs" variant="default" color="red" disabled={busy} aria-label={`Delete ${rule.name}`} onClick={onDelete}>Delete</Button>
           </Group>
         </Table.Td>
       )}
@@ -92,10 +91,13 @@ function Row({ item, position, names: known, canWrite, unlocked, busy, onToggle,
 
 export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScreenProps) {
   const canWrite = session.capabilities.includes('configuration.write');
-  // The rules with their versions, and the configuration they name things from, read together.
+  // The rules with their versions, and the configuration they name things from. They are two reads: when a save
+  // landed between them they are read again, so a rule never names an alias the page has not got.
   const resource = useResource(useCallback(async () => {
-    const [list, snapshot] = await Promise.all([api.rules(), api.config()]);
-    return { list, snapshot };
+    for (let tries = 0; ; tries++) {
+      const [list, snapshot] = await Promise.all([api.rules(), api.config()]);
+      if (list.savedVersion === snapshot.savedVersion || tries === 2) return { list, snapshot };
+    }
   }, [api]), onSessionLost);
   const [filter, setFilter] = useState('');
   const [unlocked, setUnlocked] = useState(false);
@@ -115,15 +117,15 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
       await send();
       onSaved();
     } catch (requestError) {
-      if (requestError instanceof ApiError && requestError.status === 401) onSessionLost();
-      else if (requestError instanceof ApiError && requestError.status === 412) setError('The rules were changed by someone else. The list now shows what is saved; nothing of this change was.');
-      else setError(apiErrorMessage(requestError));
-    } finally {
-      await resource.reload();
-      setMoved(undefined);
-      setBusy(false);
+      if (requestError instanceof ApiError && requestError.status === 412) setError('The rules were changed by someone else. The list now shows what is saved; nothing of this change was.');
+      else reportError(requestError, onSessionLost, setError);
+      if (requestError instanceof ApiError && requestError.status === 401) return;
     }
+    await resource.reload();
+    setMoved(undefined);
+    setBusy(false);
   }
+  const filtered = filter.trim() !== '';
 
   return (
     <Stack>
@@ -132,7 +134,7 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
         {canWrite && resource.data && (
           <Group gap="xs">
             {/* A move among hidden rows would be a guess, so the order stays locked while the filter hides any. */}
-            <Button size="xs" variant="default" disabled={filter !== '' || resource.data.list.items.length < 2} leftSection={<EditMark editing={unlocked} />} onClick={() => setUnlocked(!unlocked)}>{unlocked ? 'Done' : 'Edit order'}</Button>
+            <Button size="xs" variant="default" disabled={!unlocked && (filtered || resource.data.list.items.length < 2)} leftSection={<EditMark editing={unlocked} />} onClick={() => setUnlocked(!unlocked)}>{unlocked ? 'Done' : 'Edit order'}</Button>
             <Button size="xs" onClick={() => setEditing('new')}>Add rule</Button>
           </Group>
         )}
@@ -142,7 +144,8 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
         {({ list, snapshot }) => {
           const known = names(snapshot);
           const order = moved ?? list.items.map((item) => item.value.id);
-          const items = order.flatMap((id) => list.items.filter((item) => item.value.id === id));
+          const byID = new Map(list.items.map((item) => [item.value.id, item]));
+          const items = order.flatMap((id) => byID.get(id) ?? []);
           const text = filter.trim().toLowerCase();
           const matches = (rule: Rule) => [rule.name, rule.description ?? '', rule.action,
             ...[...rule.from.zones, ...rule.to.zones].map((id) => (id === firewallZone ? 'this firewall' : known.zones.get(id) ?? '')),
@@ -150,9 +153,10 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
             ...rule.ports.map((id) => known.ports.get(id) ?? '')].some((word) => word.toLowerCase().includes(text));
           const shown = items.map((item, index) => ({ item, position: index + 1 })).filter(({ item }) => text === '' || matches(item.value));
           const management = snapshot.value.segments.find((segment) => segment.id === snapshot.value.management?.segment);
-          const forwards = (snapshot.value.nat?.portForwards ?? []).filter((forward) => forward.filterRule !== 'none').length;
+          // The forwards the filter lets in by itself: enabled ones that translate and keep their own rule.
+          const forwards = (snapshot.value.nat?.portForwards ?? []).filter((forward) => forward.enabled && !forward.noRedirect && forward.filterRule === 'auto').length;
 
-          const title = (id: UniqueIdentifier) => items.find((item) => item.value.id === id)?.value.name || 'the rule';
+          const title = (id: UniqueIdentifier) => byID.get(String(id))?.value.name;
           const place = (id: UniqueIdentifier) => `position ${order.indexOf(String(id)) + 1} of ${order.length}`;
           const announcements: Announcements = {
             onDragStart: ({ active }) => `Picked up ${title(active.id)}, at ${place(active.id)}.`,
@@ -172,8 +176,8 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
           return (
             <Stack>
               {!management && (
-                <Alert color="orange" title="The packet filter is off">
-                  No management segment is set: applying this configuration leaves the packet filter off, and no rule here takes effect. The management segment is set with the <Anchor component={Link} to="/network/interfaces">interfaces</Anchor>.
+                <Alert color="orange" title="No management segment is set">
+                  Without one the packet filter is off, and a configuration that holds rules or NAT is refused when it is applied. The management segment is set with the <Anchor component={Link} to="/network/interfaces">interfaces</Anchor>.
                 </Alert>
               )}
               <Paper component="section" withBorder p="md" aria-labelledby="fixed-rules">
@@ -196,8 +200,8 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
                         <Table.Thead><Table.Tr><Table.Th>#</Table.Th><Table.Th>On</Table.Th><Table.Th>Action</Table.Th><Table.Th>From</Table.Th><Table.Th>To</Table.Th><Table.Th>Ports</Table.Th><Table.Th>Name</Table.Th>{canWrite && <Table.Th>Actions</Table.Th>}</Table.Tr></Table.Thead>
                         <Table.Tbody>
                           {shown.map(({ item, position }) => (
-                            <Row key={item.value.id} item={item} position={position} names={known} canWrite={canWrite} unlocked={unlocked && canWrite} busy={busy}
-                              onToggle={() => void change(() => api.saveRule({ ...item.value, enabled: !item.value.enabled }, { id: item.value.id, version: item.version }))}
+                            <Row key={item.value.id} item={item} position={position} names={known} canWrite={canWrite} unlocked={unlocked && !busy} busy={busy}
+                              onToggle={() => void change(() => api.saveRule({ ...item.value, enabled: !item.value.enabled }, item))}
                               onEdit={() => setEditing(item)} onDelete={() => setDeleting(item)} />
                           ))}
                         </Table.Tbody>
@@ -211,9 +215,14 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
               {editing && (
                 <RuleEditor key={editing === 'new' ? 'new' : editing.value.id} rule={editing === 'new' ? undefined : editing.value} snapshot={snapshot} onClose={() => setEditing(undefined)} onSessionLost={onSessionLost}
                   onSave={async (rule) => {
-                    await api.saveRule(rule, editing === 'new' ? undefined : { id: editing.value.id, version: editing.version });
-                    onSaved();
-                    await resource.reload();
+                    // A refused save reads the list again too: the rule may have changed underneath, and the
+                    // panel, once closed, must open on what is saved.
+                    try {
+                      await api.saveRule(rule, editing === 'new' ? undefined : editing);
+                      onSaved();
+                    } finally {
+                      await resource.reload();
+                    }
                   }} />
               )}
             </Stack>

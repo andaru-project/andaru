@@ -21,14 +21,14 @@ const config = (value: Record<string, unknown> = {}) => ({ state: 'saved', saved
   segments: [{ id: 'seg_lan', name: 'LAN', link: 'lnk_a', zone: lan, addressing: { ipv4: { mode: 'static' }, ipv6: { mode: 'none' } } }],
   management: { segment: 'seg_lan' },
   aliases: { addresses: [{ id: 'adr_printers', name: 'printers', kind: 'group' }], ports: [{ id: 'svc_https', name: 'HTTPS', protocol: 'tcp' }, { id: 'svc_dns', name: 'DNS', protocol: 'udp' }] },
-  nat: { portForwards: [{ id: 'pfw_a' }, { id: 'pfw_b', filterRule: 'none' }] },
+  nat: { portForwards: [{ id: 'pfw_a', enabled: true, filterRule: 'auto' }, { id: 'pfw_b', enabled: true, filterRule: 'none' }, { id: 'pfw_c', enabled: false, filterRule: 'auto' }, { id: 'pfw_d', enabled: true, noRedirect: true }] },
   ...value,
 } });
 const list = (items = saved) => ({ state: 'saved', savedVersion: '9', version: '7', items: items.map((value) => ({ value, version: '5' })) });
 
-function show(routes: Record<string, unknown> = {}, capabilities = ['configuration.read', 'configuration.write']) {
+function show(routes: Parameters<typeof fetchRoutes>[0] = {}, capabilities = ['configuration.read', 'configuration.write']) {
   const onSaved = vi.fn();
-  const fetch = fetchRoutes({ '/api/v1/config/rules': list(), '/api/v1/config': config(), ...routes } as Parameters<typeof fetchRoutes>[0]);
+  const fetch = fetchRoutes({ '/api/v1/config/rules': list(), '/api/v1/config': config(), ...routes });
   render(<MemoryRouter><RulesScreen api={new ApiClient('csrf')} session={session(capabilities)} onSaved={onSaved} onSessionLost={vi.fn()} /></MemoryRouter>);
   return { fetch, onSaved };
 }
@@ -63,7 +63,7 @@ it('says what Andaru always does before any rule, and counts the port forwards t
 
 it('says the filter is off without a management segment, rather than showing rules that look live', async () => {
   show({ '/api/v1/config': config({ management: undefined }) });
-  expect(await screen.findByText('The packet filter is off')).toBeInTheDocument();
+  expect(await screen.findByText('No management segment is set')).toBeInTheDocument();
   expect(screen.getByRole('region', { name: 'Before any rule' })).not.toHaveTextContent('Anti-lockout');
 });
 
@@ -127,7 +127,7 @@ it('moves a rule by its grip with the keyboard, and sends the whole order with t
   expect(JSON.parse(String(init?.body))).toEqual(['rul_a', 'rul_c', 'rul_b']);
 });
 
-it('reloads and says so when someone else reordered, and never guesses', async () => {
+it('reloads and says so when a rule changed underneath, and never guesses', async () => {
   const user = userEvent.setup();
   const { fetch } = show({ 'PUT /api/v1/config/rules/rul_c': jsonResponse(412, { error: { code: 'PRECONDITION_FAILED', message: 'The object changed.' } }) });
   await user.click(await screen.findByRole('switch', { name: 'Old rule enabled' }));
@@ -186,4 +186,41 @@ it('opens a saved rule in the panel and saves it against its version, dropping "
   expect(new Headers(init?.headers).get('If-Match')).toBe('"rul_a.5"');
   expect(JSON.parse(String(init?.body))).toMatchObject({ from: { zones: [lan], addresses: [] }, log: true });
   expect(JSON.parse(String(init?.body)).from).not.toHaveProperty('not');
+});
+
+it('puts a rule back and says so when someone else reordered first', async () => {
+  const user = userEvent.setup();
+  show({ 'PUT /api/v1/config/rules/order': jsonResponse(412, { error: { code: 'PRECONDITION_FAILED', message: 'The list changed.' } }) });
+  await screen.findByText('Old rule');
+  await user.click(screen.getByRole('button', { name: 'Edit order' }));
+  screen.getByRole('button', { name: 'Move Old rule' }).focus();
+  rows().forEach((row, index) => { row.getBoundingClientRect = () => new DOMRect(0, index * 40, 600, 40); });
+  await user.keyboard('[Space]');
+  await user.keyboard('[ArrowUp]');
+  await user.keyboard('[Space]');
+  expect(await screen.findByText(/changed by someone else/)).toBeInTheDocument();
+  await waitFor(() => expect(rows().map((row) => within(row).getAllByRole('cell')[6].textContent)).toEqual(['LAN out, except the printers', 'DNS to the firewall', 'Old ruleKept for reference']));
+});
+
+it('reads the list again when the panel\'s save is refused, so the rule opens next on what is saved', async () => {
+  const user = userEvent.setup();
+  let version = '5';
+  const { fetch } = show({
+    '/api/v1/config/rules': () => jsonResponse(200, { state: 'saved', savedVersion: '9', version: '7', items: [{ value: saved[1], version }] }),
+    'PUT /api/v1/config/rules/rul_b': () => {
+      if (version !== '5') return jsonResponse(200, { value: saved[1], version: '7' });
+      version = '6';
+      return jsonResponse(412, { error: { code: 'PRECONDITION_FAILED', message: 'The object changed.' } });
+    },
+  });
+  await user.click(await screen.findByRole('button', { name: 'Edit DNS to the firewall' }));
+  let panel = await screen.findByRole('dialog', { name: 'Edit DNS to the firewall' });
+  await user.click(within(panel).getByRole('button', { name: 'Save rule' }));
+  expect(await within(panel).findByText(/changed by someone else/)).toBeInTheDocument();
+  await user.click(within(panel).getByRole('button', { name: 'Cancel' }));
+  await user.click(await screen.findByRole('button', { name: 'Edit DNS to the firewall' }));
+  panel = await screen.findByRole('dialog', { name: 'Edit DNS to the firewall' });
+  await user.click(within(panel).getByRole('button', { name: 'Save rule' }));
+  await waitFor(() => expect(sent(fetch, 'PUT')).toHaveLength(2));
+  expect(new Headers(sent(fetch, 'PUT')[1][1]?.headers).get('If-Match')).toBe('"rul_b.6"');
 });

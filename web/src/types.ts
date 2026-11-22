@@ -231,36 +231,13 @@ export interface Snapshot {
     segments: Segment[];
     zones: Array<{ id: string; name: string }>;
     management?: { segment: string; allowedSources?: string[] };
-    aliases?: { addresses: AddressAlias[]; ports: PortAlias[] };
-    rules?: Rule[];
-    nat?: { portForwards?: Array<{ id: string; filterRule?: string }> };
+    aliases?: { addresses: Array<{ id: string; name: string }>; ports: Array<{ id: string; name: string }> };
+    nat?: { portForwards?: Array<{ id: string; enabled: boolean; noRedirect?: boolean; filterRule?: string }> };
   };
 }
 
 // The firewall itself is a zone no configuration stores: a rule names it as its destination to reach the box.
 export const firewallZone = 'zon_firewall';
-
-export interface AddressAlias {
-  id: string;
-  name: string;
-  description?: string;
-  kind: 'host' | 'network' | 'range' | 'group';
-  address?: string;
-  prefix?: string;
-  first?: string;
-  last?: string;
-  members?: string[];
-}
-
-export interface PortAlias {
-  id: string;
-  name: string;
-  description?: string;
-  protocol: 'tcp' | 'udp' | 'icmp' | 'icmpv6' | 'group';
-  ports?: string[];
-  types?: string[];
-  members?: string[];
-}
 
 // A side of a rule: the zones traffic arrives in or leaves by, and the address aliases within them. Both must
 // match. No zones is any network, never the firewall; no addresses is every address; not is "none of these".

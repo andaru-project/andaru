@@ -228,8 +228,9 @@ body {
   word-break: keep-all;
 }
 
-/* A state is a word or two: it is never cut short to fit its column. */
-.data-table td[data-label="State"] .mantine-Badge-root {
+/* A state is a word or two, and so is what a rule names: they are never cut short to fit a column. */
+.data-table td[data-label="State"] .mantine-Badge-root,
+.rules .mantine-Badge-root {
   min-width: max-content;
 }
 
@@ -475,7 +476,7 @@ path.traffic-sent {
 }
 
 /* The rules: a disabled rule keeps its place, dimmed. A rule being moved lifts above the others. */
-.rule[data-disabled] td:not(:nth-child(2)):not(:last-child) {
+.rule[data-disabled] td:not(:nth-child(2)):not(.rule-actions) {
   opacity: 0.55;
 }
 
@@ -484,11 +485,6 @@ path.traffic-sent {
   box-shadow: var(--mantine-shadow-md);
   position: relative;
   z-index: 1;
-}
-
-/* A rule's words are never cut short to fit a column: the columns give way. */
-.rules .mantine-Badge-root {
-  min-width: max-content;
 }
 
 /* An alias is who; a zone is where. The alias chip is plain so the two never read alike. */

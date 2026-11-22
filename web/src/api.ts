@@ -283,10 +283,10 @@ export class ApiClient {
   }
 
   // A rule is saved whole. Without an ID it is created, at the end of the list.
-  saveRule(rule: Omit<Rule, 'id'>, saved?: { id: string; version: string }) {
+  saveRule(rule: Omit<Rule, 'id'>, saved?: SavedObject<Rule>) {
     if (!saved) return this.request<SavedObject<Rule>>('/api/v1/config/rules', { method: 'POST', body: JSON.stringify(rule) }, true);
-    return this.request<SavedObject<Rule>>(`/api/v1/config/rules/${encodeURIComponent(saved.id)}`, {
-      method: 'PUT', headers: { 'If-Match': `"${saved.id}.${saved.version}"` }, body: JSON.stringify(rule),
+    return this.request<SavedObject<Rule>>(`/api/v1/config/rules/${encodeURIComponent(saved.value.id)}`, {
+      method: 'PUT', headers: { 'If-Match': `"${saved.value.id}.${saved.version}"` }, body: JSON.stringify(rule),
     }, true);
   }
 
