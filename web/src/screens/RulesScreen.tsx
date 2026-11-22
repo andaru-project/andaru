@@ -53,7 +53,7 @@ function Row({ item, position, names: known, canWrite, unlocked, busy, onToggle,
   onToggle(): void; onEdit(): void; onDelete(): void;
 }) {
   const rule = item.value;
-  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id: rule.id, disabled: !unlocked });
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id: rule.id, disabled: !unlocked || busy });
   // Names may repeat, so a control says the rule's place as well.
   const title = `rule ${position}, ${rule.name}`;
   return (
@@ -94,7 +94,7 @@ function Row({ item, position, names: known, canWrite, unlocked, busy, onToggle,
 export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScreenProps) {
   const canWrite = session.capabilities.includes('configuration.write');
   // The rules with their versions, and the configuration they name things from. They are two reads: when a save
-  // landed between them they are read again, so a rule never names an alias the page has not got.
+  // landed between them they are read again, twice at most, so a rule seldom names an alias the page has not got.
   const resource = useResource(useCallback(async () => {
     for (let tries = 0; ; tries++) {
       const [list, snapshot] = await Promise.all([api.rules(), api.config()]);
@@ -127,7 +127,8 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
     setMoved(undefined);
     setBusy(false);
   }
-  const filtered = filter.trim() !== '';
+  // The filter field shows only with rules to filter, so only then does it lock anything.
+  const filtered = filter.trim() !== '' && (resource.data?.list.items.length ?? 0) > 0;
 
   return (
     <Stack>
@@ -153,9 +154,9 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
           const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
           const matches = (rule: Rule) => {
             const row = [rule.name, rule.description ?? '', rule.action, rule.log ? 'logs' : '', rule.from.not || rule.to.not ? 'not' : '',
-              ...[...rule.from.zones, ...rule.to.zones].map((id) => (id === firewallZone ? 'this firewall' : known.zones.get(id) ?? '')),
-              ...[...rule.from.addresses, ...rule.to.addresses].map((id) => known.addresses.get(id) ?? ''),
-              ...rule.ports.map((id) => known.ports.get(id) ?? '')].join(' ').toLowerCase();
+              ...[...rule.from.zones, ...rule.to.zones].map((id) => (id === firewallZone ? 'this firewall' : known.zones.get(id) ?? 'unknown zone')),
+              ...[...rule.from.addresses, ...rule.to.addresses].map((id) => known.addresses.get(id) ?? 'unknown alias'),
+              ...rule.ports.map((id) => known.ports.get(id) ?? 'unknown alias')].join(' ').toLowerCase();
             return words.every((word) => row.includes(word));
           };
           const shown = items.map((item, index) => ({ item, position: index + 1 })).filter(({ item }) => matches(item.value));
@@ -163,7 +164,7 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
           // The forwards the filter lets in by itself: enabled ones that translate and keep their own rule.
           const forwards = (snapshot.value.nat?.portForwards ?? []).filter((forward) => forward.enabled && !forward.noRedirect && forward.filterRule === 'auto').length;
 
-          const title = (id: UniqueIdentifier) => byID.get(String(id))?.value.name;
+          const title = (id: UniqueIdentifier) => byID.get(String(id))?.value.name ?? 'the rule';
           const place = (id: UniqueIdentifier) => `position ${order.indexOf(String(id)) + 1} of ${order.length}`;
           const announcements: Announcements = {
             onDragStart: ({ active }) => `Picked up ${title(active.id)}, at ${place(active.id)}.`,
@@ -209,7 +210,7 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
                         <Table.Thead><Table.Tr><Table.Th>#</Table.Th><Table.Th>On</Table.Th><Table.Th>Action</Table.Th><Table.Th>From</Table.Th><Table.Th>To</Table.Th><Table.Th>Ports</Table.Th><Table.Th>Name</Table.Th>{canWrite && <Table.Th>Actions</Table.Th>}</Table.Tr></Table.Thead>
                         <Table.Tbody>
                           {shown.map(({ item, position }) => (
-                            <Row key={item.value.id} item={item} position={position} names={known} canWrite={canWrite} unlocked={unlocked && !busy} busy={busy}
+                            <Row key={item.value.id} item={item} position={position} names={known} canWrite={canWrite} unlocked={unlocked} busy={busy}
                               onToggle={() => void change(() => api.saveRule({ ...item.value, enabled: !item.value.enabled }, item))}
                               onEdit={() => setEditing(item)} onDelete={() => setDeleting({ item, position })} />
                           ))}
@@ -224,16 +225,17 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
               {editing && (
                 <RuleEditor key={editing === 'new' ? 'new' : editing.value.id} rule={editing === 'new' ? undefined : editing.value} snapshot={snapshot} onClose={() => setEditing(undefined)} onSessionLost={onSessionLost}
                   onSave={async (rule) => {
-                    // A refused save reads the list again too: the rule may have changed underneath, and the
-                    // panel, once closed, must open on what is saved.
                     try {
                       await api.saveRule(rule, editing === 'new' ? undefined : editing);
-                      onSaved();
-                      // A rule just added is not hidden by a filter typed before it.
-                      if (editing === 'new') setFilter('');
-                    } finally {
-                      await resource.reload();
+                    } catch (error) {
+                      // The rule changed or went underneath: the panel, once closed, must open on what is saved.
+                      if (error instanceof ApiError && (error.status === 412 || error.status === 404)) await resource.reload();
+                      throw error;
                     }
+                    onSaved();
+                    // A rule just added is not hidden by a filter typed before it.
+                    if (editing === 'new') setFilter('');
+                    await resource.reload();
                   }} />
               )}
             </Stack>

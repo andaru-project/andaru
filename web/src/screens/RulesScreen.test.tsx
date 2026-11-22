@@ -289,3 +289,28 @@ it('reads the list again when the panel\'s save is refused, so the rule opens ne
   await waitFor(() => expect(sent(fetch, 'PUT')).toHaveLength(2));
   expect(new Headers(sent(fetch, 'PUT')[1][1]?.headers).get('If-Match')).toBe('"rul_b.6"');
 });
+
+it('reads the rules and the configuration again when a save landed between the two reads', async () => {
+  let reads = 0;
+  show({ '/api/v1/config': () => jsonResponse(200, reads++ === 0 ? { ...config({ aliases: { addresses: [], ports: [] } }), savedVersion: '8' } : config()) });
+  await screen.findByText('LAN out, except the printers');
+  // The first configuration was older than the rules and did not hold the alias the first rule names.
+  expect(within(rows()[0]).getAllByRole('cell')[3]).toHaveTextContent('printers');
+  expect(screen.queryByText('unknown alias')).not.toBeInTheDocument();
+});
+
+it('keeps the grips while a move is being saved, so the keyboard stays on the one that moved', async () => {
+  const user = userEvent.setup();
+  show({ 'PUT /api/v1/config/rules/order': { order: [], version: '10' } });
+  await screen.findByText('Old rule');
+  await user.click(screen.getByRole('button', { name: 'Edit order' }));
+  const grip = screen.getByRole('button', { name: 'Move rule 3, Old rule' });
+  grip.focus();
+  rows().forEach((row, index) => { row.getBoundingClientRect = () => new DOMRect(0, index * 40, 600, 40); });
+  await user.keyboard('[Space]');
+  await user.keyboard('[ArrowUp]');
+  await user.keyboard('[Space]');
+  // The same element all through: it was never taken out of the page.
+  expect(grip).toBeInTheDocument();
+  expect(screen.getAllByRole('button', { name: /^Move rule/ })).toHaveLength(3);
+});
