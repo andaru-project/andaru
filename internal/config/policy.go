@@ -13,6 +13,7 @@ const maxRuleLines = 4096
 
 // maxLeftOut caps the aliases left out on one nft line, where each is one match whatever it holds: the kernel
 // refused the heaviest line a port forward renders at 50 (measured, 2026-11-22). A group is one alias.
+// TestLeftOutCapLoads (render, integration) loads that line at this cap: change both together.
 const maxLeftOut = 48
 
 // What a rule that can never match is told. A legacy rule split by upgradeLegacy may be such a rule.
@@ -223,7 +224,7 @@ func validatePolicy(d *declaration, limit int) []FieldError {
 		if j := slices.Index(r.From.Zones, firewallZone); j >= 0 {
 			bad(fmt.Sprintf("%s/from/zones/%d", p, j), "The firewall is a destination only: there are no rules yet for what the firewall itself sends.")
 		}
-		if r.From.Not && r.To.Not && len(r.From.Addresses)+len(r.To.Addresses) > maxLeftOut {
+		if r.From.Not && r.To.Not && len(r.From.Addresses) <= maxLeftOut && len(r.To.Addresses) <= maxLeftOut && len(r.From.Addresses)+len(r.To.Addresses) > maxLeftOut {
 			bad(p+"/to/addresses", fmt.Sprintf("A rule leaves out at most %d aliases on its two sides together. Put more of them in a group.", maxLeftOut))
 		}
 		if r.toFirewall() && len(r.To.Zones) > 1 {
