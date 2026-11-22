@@ -14,6 +14,8 @@ interface RuleEditorProps {
 }
 
 const anySide: RuleSide = { zones: [], addresses: [] };
+// The pickers offer the aliases that exist; a literal address or port is entered as an alias first.
+const noAlias = 'No alias by that name. Aliases are made under Firewall ▸ Aliases.';
 
 // The engine is the authority on what a rule may be: its refusals show beside the fields they name.
 const field = /^\/(name|description|action|ports|(?:from|to)\/(?:zones|addresses|not))(?:\/|$)/;
@@ -69,25 +71,26 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onAbandoned
   }
 
   // One side of the rule: where, and within that, who.
-  const sideFields = (label: string, key: 'from' | 'to', value: RuleSide, set: (next: RuleSide) => void, zoneOptions: Array<{ value: string; label: string }>) => (
+  const sideFields = (label: string, key: 'from' | 'to', value: RuleSide, set: (next: RuleSide) => void, zoneOptions: Array<{ value: string; label: string }>, zoneHelp: string) => (
     <Fieldset legend={label}>
       <Stack gap="xs">
-        <MultiSelect label={`${label}: zones`} description="Empty is any network, never this firewall." data={zoneOptions} value={value.zones} error={errors.get(`${key}/zones`)} searchable clearable
+        <MultiSelect label={`${label}: zones`} description={zoneHelp} data={zoneOptions} value={value.zones} error={errors.get(`${key}/zones`)} searchable clearable nothingFoundMessage="No zone by that name." 
           // The firewall stands alone as a destination: choosing it leaves the other zones, and choosing another leaves it.
           onChange={(next) => set({ ...value, zones: next.includes(firewallZone) && !value.zones.includes(firewallZone) ? [firewallZone] : next.length > 1 ? next.filter((id) => id !== firewallZone) : next })} />
-        <MultiSelect label={`${label}: addresses`} description="Address aliases within those zones. Empty is every address." data={addresses} value={value.addresses} error={errors.get(`${key}/addresses`)} searchable clearable
+        <MultiSelect label={`${label}: addresses`} description="Address aliases within those zones. Empty is every address." data={addresses} value={value.addresses} error={errors.get(`${key}/addresses`)} searchable clearable nothingFoundMessage={noAlias}
           onChange={(next) => set({ ...value, addresses: next })} />
-        <Switch label="Not these addresses: every address but them" checked={Boolean(value.not)} disabled={value.addresses.length === 0} error={errors.get(`${key}/not`)}
+        <Switch label="Except these addresses" description="Matches every other address in the chosen zones. Name an address first." checked={Boolean(value.not)} disabled={value.addresses.length === 0} error={errors.get(`${key}/not`)}
           onChange={(event) => set({ ...value, not: event.currentTarget.checked })} />
       </Stack>
     </Fieldset>
   );
 
   return (
-    <Drawer opened onClose={onClose} position="right" size="md" title={rule ? `Edit ${rule.name}` : 'Add rule'} lockScroll={false} closeButtonProps={{ 'aria-label': 'Close' }}>
+    <Drawer opened onClose={onClose} position="right" size="md" title={rule ? `Edit rule: ${rule.name}` : 'Add rule'} lockScroll={false} closeButtonProps={{ 'aria-label': 'Close' }}>
       <form onSubmit={submit} noValidate>
         <Stack>
           {failure && <Alert color="red" role="alert" title="The rule was not saved">{failure}</Alert>}
+          {!rule && <Text size="sm" c="dimmed">A new rule is added at the bottom of the list. Move it with Edit order.</Text>}
           {/* What is sent is what the form held when Save was pressed: nothing is typed over it meanwhile. */}
           <Fieldset variant="unstyled" disabled={busy}>
             <Stack>
@@ -101,14 +104,14 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onAbandoned
             <Text size="xs" c="dimmed">Drop says nothing to the sender. Reject tells it the traffic was refused.</Text>
             {errors.get('action') && <Text size="xs" className="error-text">{errors.get('action')}</Text>}
           </div>
-          {sideFields('From', 'from', from, setFrom, zones)}
-          {sideFields('To', 'to', to, setTo, [{ value: firewallZone, label: 'This firewall' }, ...zones])}
+          {sideFields('From', 'from', from, setFrom, zones, 'Empty is any network.')}
+          {sideFields('To', 'to', to, setTo, [{ value: firewallZone, label: 'This firewall' }, ...zones], 'Empty is any network, never this firewall: choose This firewall for traffic to the box itself.')}
           {toFirewall && <Text size="sm" c="dimmed">To this firewall: the rule decides what may reach the box itself, and lets nothing through it.</Text>}
-          <MultiSelect label="Ports" description="Port aliases. Empty is any protocol and port." data={portAliases} value={ports} error={errors.get('ports')} searchable clearable onChange={setPorts} />
+          <MultiSelect label="Ports" description="Port aliases. Empty is any protocol and port." data={portAliases} value={ports} error={errors.get('ports')} searchable clearable nothingFoundMessage={noAlias} onChange={setPorts} />
           <Switch label="Log what this rule matches" checked={log} onChange={(event) => setLog(event.currentTarget.checked)} />
             </Stack>
           </Fieldset>
-          <Group justify="flex-end">
+          <Group justify="flex-end" className="drawer-actions">
             <Button variant="default" onClick={onClose}>Cancel</Button>
             <Button loading={busy} type="submit">Save rule</Button>
           </Group>

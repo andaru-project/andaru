@@ -5,5 +5,5 @@ import { zoneColor } from '../zones';
 // the page's own text colour so it reads on any tint, and "zone" before it is for whoever hears the page and
 // not the pill's shape.
 export function ZoneBadge({ name }: { name: string | undefined }) {
-  return name ? <Badge color={zoneColor(name)} variant="light" style={{ '--badge-color': 'var(--mantine-color-text)', '--badge-bd': `1px solid var(--mantine-color-${zoneColor(name)}-outline)` }}><VisuallyHidden>zone {name}</VisuallyHidden><span aria-hidden="true">{name}</span></Badge> : null;
+  return name ? <Badge color={zoneColor(name)} variant="light" tt="none" style={{ '--badge-color': 'var(--mantine-color-text)', '--badge-bd': `1px solid var(--mantine-color-${zoneColor(name)}-outline)` }}><VisuallyHidden>zone {name}</VisuallyHidden><span aria-hidden="true">{name}</span></Badge> : null;
 }

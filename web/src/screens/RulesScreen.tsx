@@ -38,11 +38,11 @@ function Side({ side, names: known }: { side: RuleSide; names: Names }) {
   const toFirewall = side.zones.includes(firewallZone);
   return (
     <Group gap={6}>
-      {side.zones.length === 0 && side.addresses.length === 0 && <Text size="sm" c="dimmed">any</Text>}
-      {toFirewall && <Badge variant="filled" color="dark">This firewall</Badge>}
+      {side.zones.length === 0 && side.addresses.length === 0 && <Text size="sm" c="dimmed">any network</Text>}
+      {toFirewall && <Badge variant="filled" color="dark" tt="none">This firewall</Badge>}
       {side.zones.filter((id) => id !== firewallZone).map((id) => <ZoneBadge key={id} name={known.zones.get(id) ?? 'unknown zone'} />)}
       {side.not && <Text size="sm" fw={600}>not</Text>}
-      {side.addresses.map((id) => <Badge key={id} className="alias" variant="default">{known.addresses.get(id) ?? 'unknown alias'}</Badge>)}
+      {side.addresses.map((id) => <Badge key={id} className="alias" variant="default" tt="none">{known.addresses.get(id) ?? 'unknown alias'}</Badge>)}
     </Group>
   );
 }
@@ -66,7 +66,9 @@ function Row({ item, position, names: known, canWrite, unlocked, busy, onToggle,
         </Group>
       </Table.Td>
       <Table.Td data-label="Enabled">
-        {canWrite ? <Switch checked={rule.enabled} disabled={busy} onChange={onToggle} aria-label={`Enable ${title}`} /> : <Text size="sm">{rule.enabled ? 'on' : 'off'}</Text>}
+        {/* While the order is unlocked only the grips act, so a finger near one changes nothing else: the state is
+            then said in words, as a disabled switch reads as off whatever it holds. */}
+        {canWrite && !unlocked ? <Switch checked={rule.enabled} disabled={busy} onChange={onToggle} aria-label={`Enable ${title}`} /> : <Text size="sm">{rule.enabled ? 'on' : 'off'}</Text>}
       </Table.Td>
       <Table.Td data-label="Action">
         <Group gap={6} wrap="nowrap">
@@ -77,14 +79,14 @@ function Row({ item, position, names: known, canWrite, unlocked, busy, onToggle,
       <Table.Td data-label="From"><Side side={rule.from} names={known} /></Table.Td>
       <Table.Td data-label="To"><Side side={rule.to} names={known} /></Table.Td>
       <Table.Td data-label="Ports">
-        {rule.ports.length === 0 ? <Text size="sm" c="dimmed">any</Text> : <Group gap={6}>{rule.ports.map((id) => <Badge key={id} className="alias" variant="default">{known.ports.get(id) ?? 'unknown alias'}</Badge>)}</Group>}
+        {rule.ports.length === 0 ? <Text size="sm" c="dimmed">any</Text> : <Group gap={6}>{rule.ports.map((id) => <Badge key={id} className="alias" variant="default" tt="none">{known.ports.get(id) ?? 'unknown alias'}</Badge>)}</Group>}
       </Table.Td>
       <Table.Td data-label="Name"><Text size="sm" fw={600}>{rule.name}</Text>{rule.description && <Text size="sm" c="dimmed">{rule.description}</Text>}</Table.Td>
       {canWrite && (
         <Table.Td className="rule-actions">
           <Group gap="xs" wrap="nowrap">
-            <Button size="compact-xs" variant="default" disabled={busy} aria-label={`Edit ${title}`} onClick={onEdit}>Edit</Button>
-            <Button size="compact-xs" variant="default" color="red" disabled={busy} aria-label={`Delete ${title}`} onClick={onDelete}>Delete</Button>
+            <Button size="compact-xs" variant="default" disabled={busy || unlocked} aria-label={`Edit ${title}`} onClick={onEdit}>Edit</Button>
+            <Button size="compact-xs" variant="subtle" color="red" disabled={busy || unlocked} aria-label={`Delete ${title}`} onClick={onDelete}>Delete</Button>
           </Group>
         </Table.Td>
       )}
@@ -143,7 +145,6 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
           </Group>
         )}
       </Group>
-      {canWrite && filtered && (resource.data?.list.items.length ?? 0) > 1 && <Text c="dimmed" size="sm">The order is locked while the filter is in use: a move among hidden rules would be a guess.</Text>}
       {error && <Alert color="red" role="alert" title="The rules were not changed" withCloseButton onClose={() => setError('')}>{error}</Alert>}
       <Loaded resource={resource} what="rules">
         {({ list, snapshot }) => {
@@ -199,7 +200,7 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
                     <li>Traffic of a connection already allowed, and what relates to it, is accepted. Invalid packets are dropped.</li>
                     <li>Loopback and IPv6 neighbour discovery are accepted, and DHCP requests on the segments this firewall serves.</li>
                     <li><strong>Anti-lockout:</strong> SSH to this firewall from the management segment, {management.name}, is always accepted{snapshot.value.management?.allowedSources?.length ? ', from its allowed sources' : ''}.</li>
-                    {forwards > 0 && <li>Port forwards let their own traffic in ({forwards}).</li>}
+                    {forwards > 0 && <li>Port forwards that let their own traffic in: {forwards}.</li>}
                   </ul>
                 </Paper>
               )}
@@ -208,6 +209,8 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
               ) : (
                 <>
                   <TextInput label="Filter rules" placeholder="A name, zone, alias or action" value={filter} onChange={(event) => { setFilter(event.currentTarget.value); setUnlocked(false); }} />
+                  {canWrite && filtered && list.items.length > 1 && <Text c="dimmed" size="sm">The order is locked while the filter is in use: a move among hidden rules would be a guess.</Text>}
+                  {unlocked && <Text c="dimmed" size="sm">Drag a rule by its grip to move it. Choose Done to edit rules again.</Text>}
                   <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={dropped} accessibility={{ announcements, screenReaderInstructions: instructions }}>
                     <SortableContext items={order} strategy={verticalListSortingStrategy}>
                       <Table className="data-table rules" verticalSpacing="xs">

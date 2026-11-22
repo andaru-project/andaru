@@ -15,6 +15,7 @@ The API serves `rules` with its order operation, `aliases.addresses` and `aliase
 The Rules page (2026-11-22): the list in execution order with each rule as a sentence of names, the fixed block, the filter, the enabled switch, deleting, the editor as a side panel, and reordering by a grip with touch, pointer and keyboard. It differs from the calls below in these points, each the author's and open to review:
 
 - **The order is unlocked by an "Edit order" button with a pencil,** which becomes "Done", as the dashboard's layout is. The owner moved the dashboard from a padlock to the pencil, and the two pages should not differ.
+- **While the order is unlocked only the grips act** (2026-11-22, after a design critique): Edit and Delete rest, and the enabled state is said in words, so a finger near a grip changes nothing else.
 - **Rule names may repeat,** as the engine now allows. Every control therefore says the rule's place with its name.
 - **"This firewall" is a dark, filled chip,** where a zone is a tinted one; it has no other mark.
 - **On a narrow screen the name is on the second line,** under the position, the switch and the action: beside them it had no room.
