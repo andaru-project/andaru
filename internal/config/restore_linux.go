@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 
@@ -68,19 +69,7 @@ func restoreRequests(decoded decodedBackup) []objectKey {
 	if decoded.configuration == nil {
 		return nil
 	}
-	index := objects(decoded.configuration)
-	requested := make([]objectKey, 0, len(index))
-	for key := range index {
-		requested = append(requested, key)
-		// Both policy lists share one creation-identity index, including deleted IDs.
-		if key.Collection == "policy.input" {
-			requested = append(requested, objectKey{"policy.forward", key.ID})
-		}
-		if key.Collection == "policy.forward" {
-			requested = append(requested, objectKey{"policy.input", key.ID})
-		}
-	}
-	return requested
+	return slices.Collect(maps.Keys(objects(decoded.configuration)))
 }
 
 func (s *Store) PreviewRestore(ctx context.Context, input RestoreDocuments) (result RestorePreview, err error) {
@@ -176,14 +165,23 @@ func (s *Store) RestoreMatches(ctx context.Context, version Version, target Rest
 	var configBody, secretBody []byte
 	err := s.read(ctx, "", nil, func(state savedState, _ VersionInfo) error {
 		savedVersion = state.Version
-		configBody = state.configBody
+		// The stored bytes: a journal written by the engine before names a document of the form before.
+		configBody = state.storedBody
 		secretBody = state.secretBody
 		return nil
 	})
 	if err != nil {
 		return false, err
 	}
-	return savedVersion == version && bytes.Equal(bytes.TrimRight(configBody, "\n"), bytes.TrimRight(target.Configuration, "\n")) && bytes.Equal(bytes.TrimRight(secretBody, "\n"), bytes.TrimRight(target.ConfigurationSecrets, "\n")), nil
+	same := bytes.Equal(bytes.TrimRight(configBody, "\n"), bytes.TrimRight(target.Configuration, "\n"))
+	if !same && savedVersion == version {
+		// This engine finished a restore the engine before had journalled: the store holds the document as it reads now.
+		if d, _, _, e := decodeSaved(target.Configuration); e == nil {
+			now, e := canonical(d)
+			same = e == nil && bytes.Equal(now, configBody)
+		}
+	}
+	return savedVersion == version && same && bytes.Equal(bytes.TrimRight(secretBody, "\n"), bytes.TrimRight(target.ConfigurationSecrets, "\n")), nil
 }
 
 func prepareRestoration(current *savedState, decoded decodedBackup, next Version, now time.Time) (preparedChange, RestorePreview, error) {
@@ -228,9 +226,6 @@ func prepareRestoration(current *savedState, decoded decodedBackup, next Version
 			blocked[reference.Secret] = true
 		}
 	}
-	if decoded.configuration != nil && (current.Config.SchemaVersion == 2 || len(unresolved) != 0) {
-		candidate.SchemaVersion = 2
-	}
 	for name := range unresolved {
 		preview.UnresolvedSecrets = append(preview.UnresolvedSecrets, name)
 	}
@@ -273,15 +268,6 @@ func prepareRestoration(current *savedState, decoded decodedBackup, next Version
 			}
 		}
 		for key, value := range after {
-			if key.Collection == "policy.input" || key.Collection == "policy.forward" {
-				other := "policy.input"
-				if key.Collection == other {
-					other = "policy.forward"
-				}
-				if _, exists := current.Versions[objectKey{other, key.ID}]; exists {
-					return empty, preview, fault("VALIDATION_FAILED", "/configuration", "An imported rule identity belongs to another collection in destination history.")
-				}
-			}
 			old, exists := before[key]
 			if !exists {
 				_, known := current.Versions[key]
@@ -319,6 +305,7 @@ func prepareRestoration(current *savedState, decoded decodedBackup, next Version
 			}
 		}
 	}
+	carryLegacy(&prepared.State, after, changes)
 	for key, change := range changes {
 		prepared.State.Versions[key] = objectVersion{Version: next, Deleted: change.Deleted}
 		prepared.Changed = append(prepared.Changed, change)

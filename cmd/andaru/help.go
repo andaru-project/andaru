@@ -108,11 +108,10 @@ Commands:
   order    Set the order of a list: every entry's ID once, first to last
   changes  Save the batch of changes on stdin, all or nothing
 
-Collections: links, segments, zones, addresses, services, dhcp, dhcp6,
-  virtualAddresses, policy/input, policy/forward, nat/port-forwards,
-  nat/one-to-one
+Collections: links, segments, zones, aliases/addresses, aliases/ports, dhcp,
+  dhcp6, virtualAddresses, rules, nat/port-forwards, nat/one-to-one
 Singletons: management, nat/outbound, dns
-Lists: input, forward, nat/port-forwards, nat/one-to-one
+Lists: rules, nat/port-forwards, nat/one-to-one
 
 Options:
   --version V  the version your last read returned; 0 sets a singleton

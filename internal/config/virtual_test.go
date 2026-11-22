@@ -106,7 +106,7 @@ func TestIPv6PortForwards(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := vipFixture(t)
-			d["objects"].(map[string]any)["addresses"] = append(d["objects"].(map[string]any)["addresses"].([]any),
+			d["aliases"].(map[string]any)["addresses"] = append(d["aliases"].(map[string]any)["addresses"].([]any),
 				map[string]any{"id": "adr_00000003-0000-4000-8000-000000000003", "name": "v6peer", "kind": "host", "address": "2001:db8::7"})
 			if fields["from"] != nil {
 				fields["from"] = []any{"adr_00000003-0000-4000-8000-000000000003"}
@@ -278,7 +278,7 @@ func TestIPv6ForwardSourceGroupFamily(t *testing.T) {
 	)
 	build := func(group string) map[string]any {
 		d := vipFixture(t)
-		objs := d["objects"].(map[string]any)
+		objs := d["aliases"].(map[string]any)
 		objs["addresses"] = append(objs["addresses"].([]any),
 			map[string]any{"id": v6host, "name": "peer6", "kind": "host", "address": "2001:db8::7"},
 			map[string]any{"id": v4grp, "name": "g4", "kind": "group", "members": []any{natPeer}},

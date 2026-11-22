@@ -27,7 +27,7 @@ func validateNAT(d *declaration) []FieldError {
 		zones[z.ID] = true
 	}
 	addresses := map[string]address{}
-	for _, a := range d.Objects.Addresses {
+	for _, a := range d.Aliases.Addresses {
 		addresses[a.ID] = a
 	}
 	// has says whether an address object can match the family six selects. Groups hold no groups (the
@@ -55,7 +55,7 @@ func validateNAT(d *declaration) []FieldError {
 	}
 	refFamily := func(path, id string, six bool) {
 		if _, ok := addresses[id]; !ok {
-			bad(path, "Expected an existing address.")
+			bad(path, "Expected an existing address alias.")
 		} else if six && !has(id, true, false) {
 			bad(path, "Expected an address with IPv6 addresses for an IPv6 port forward.")
 		} else if !six && !has(id, false, false) {

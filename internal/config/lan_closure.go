@@ -53,7 +53,7 @@ func managementLAN(d declaration, secrets map[string]string) ([]byte, error) {
 	}
 	// A group's members come along, so the copy validates on its own.
 	byID := map[string]address{}
-	for _, item := range d.Objects.Addresses {
+	for _, item := range d.Aliases.Addresses {
 		byID[item.ID] = item
 	}
 	wanted := map[string]bool{}
@@ -68,7 +68,7 @@ func managementLAN(d declaration, secrets map[string]string) ([]byte, error) {
 		pending = append(pending, byID[id].Members...)
 	}
 	var addresses []address
-	for _, item := range d.Objects.Addresses {
+	for _, item := range d.Aliases.Addresses {
 		if wanted[item.ID] {
 			addresses = append(addresses, item)
 		}
@@ -162,10 +162,9 @@ func KeptDeclaration(body []byte) (RestoreDocuments, error) {
 			}
 		}
 		d := declaration{
-			SchemaVersion: 1, Management: doc.Management,
+			SchemaVersion: schemaVersion, Management: doc.Management,
 			Links: nonNil(doc.Links), Segments: nonNil(doc.Segments), Zones: nonNil(doc.Zones),
-			Objects: objectSet{Addresses: nonNil(doc.Addresses), Services: []service{}},
-			Policy:  policy{Input: []rule{}, Forward: []rule{}},
+			Aliases: aliasSet{Addresses: nonNil(doc.Addresses), Ports: []portAlias{}},
 		}
 		// The recorder refused an uplink; a copy edited afterwards is refused here the same way.
 		if _, err := managementLAN(d, nil); err != nil {

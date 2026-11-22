@@ -98,10 +98,20 @@ type service struct {
 	ID, Protocol          string
 	Ports, Types, Members []string
 }
+
+// firewallZone is the built-in zone that is the box itself: a rule to it belongs to the input chain.
+const firewallZone = "zon_firewall"
+
+// ruleSide is a zone part and an address part, and both must match. Not makes the addresses "none of these".
+type ruleSide struct {
+	Zones, Addresses []string
+	Not              bool
+}
 type rule struct {
-	ID, Action         string
-	Enabled, Log       bool
-	From, To, Services []string
+	ID, Action   string
+	Enabled, Log bool
+	From, To     ruleSide
+	Ports        []string
 }
 type declaration struct {
 	Links    []link    `json:"links"`
@@ -109,15 +119,12 @@ type declaration struct {
 	Zones    []struct {
 		ID string `json:"id"`
 	} `json:"zones"`
-	Objects struct {
+	Aliases struct {
 		Addresses []address `json:"addresses"`
-		Services  []service `json:"services"`
-	} `json:"objects"`
-	Policy struct {
-		Input   []rule `json:"input"`
-		Forward []rule `json:"forward"`
-	} `json:"policy"`
-	NAT struct {
+		Ports     []service `json:"ports"`
+	} `json:"aliases"`
+	Rules []rule `json:"rules"`
+	NAT   struct {
 		Outbound struct {
 			Mode string `json:"mode"`
 		} `json:"outbound"`

@@ -32,6 +32,9 @@ func normalizeDeclaration(d *declaration) {
 	for i := range d.Roles {
 		slices.Sort(d.Roles[i].Capabilities)
 	}
+	if len(d.Roles) == 0 {
+		d.Roles = nil // absent, as before roles existed
+	}
 	for i := range d.Links {
 		if d.Links[i].Members != nil {
 			slices.Sort(*d.Links[i].Members)
@@ -42,17 +45,17 @@ func normalizeDeclaration(d *declaration) {
 		slices.Sort(d.Segments[i].Addressing.IPv6.Addresses)
 		d.Segments[i].Addressing.IPv6.DUID = strings.ToLower(d.Segments[i].Addressing.IPv6.DUID)
 	}
-	// Objects are sets; policy lists are ordered and keep their order.
-	slices.SortFunc(d.Objects.Addresses, func(a, b address) int { return strings.Compare(a.ID, b.ID) })
-	slices.SortFunc(d.Objects.Services, func(a, b service) int { return strings.Compare(a.ID, b.ID) })
-	for i := range d.Objects.Addresses {
-		slices.Sort(d.Objects.Addresses[i].Members)
+	// Aliases are sets; the rules are ordered and keep their order.
+	slices.SortFunc(d.Aliases.Addresses, func(a, b address) int { return strings.Compare(a.ID, b.ID) })
+	slices.SortFunc(d.Aliases.Ports, func(a, b portAlias) int { return strings.Compare(a.ID, b.ID) })
+	for i := range d.Aliases.Addresses {
+		slices.Sort(d.Aliases.Addresses[i].Members)
 	}
-	for i := range d.Objects.Services {
-		slices.Sort(d.Objects.Services[i].Members)
+	for i := range d.Aliases.Ports {
+		slices.Sort(d.Aliases.Ports[i].Members)
 	}
-	if len(d.Objects.Addresses)+len(d.Objects.Services) == 0 {
-		d.Objects = objectSet{}
+	if len(d.Aliases.Addresses)+len(d.Aliases.Ports) == 0 {
+		d.Aliases = aliasSet{}
 	}
 	// An empty list is no list, so a declaration that never had NAT entries keeps its bytes.
 	if len(d.NAT.PortForwards) == 0 {
@@ -66,8 +69,15 @@ func normalizeDeclaration(d *declaration) {
 			d.NAT.PortForwards[i].FilterRule = "auto"
 		}
 	}
-	if len(d.Policy.Input)+len(d.Policy.Forward) == 0 {
-		d.Policy = policy{}
+	if len(d.Rules) == 0 {
+		d.Rules = nil
+	}
+	// A side's zones and addresses are sets.
+	for i := range d.Rules {
+		for _, side := range []*ruleSide{&d.Rules[i].From, &d.Rules[i].To} {
+			slices.Sort(side.Zones)
+			slices.Sort(side.Addresses)
+		}
 	}
 	if d.Management != nil {
 		slices.Sort(d.Management.AllowedSources)

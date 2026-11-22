@@ -124,9 +124,33 @@
       ],
       "allOf": [
         {
-          "if": {"properties": {"isSet": {"const": true}}},
-          "then": {"required": ["updatedAt"], "properties": {"unresolved": {"const": false}}},
-          "else": {"required": ["unresolved"], "properties": {"unresolved": {"const": true}}}
+          "if": {
+            "properties": {
+              "isSet": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "updatedAt"
+            ],
+            "properties": {
+              "unresolved": {
+                "const": false
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "unresolved"
+            ],
+            "properties": {
+              "unresolved": {
+                "const": true
+              }
+            }
+          }
         }
       ],
       "additionalProperties": false
@@ -1125,7 +1149,7 @@
           "$ref": "#/$defs/addressWrite"
         },
         {
-          "$ref": "#/$defs/serviceWrite"
+          "$ref": "#/$defs/portAliasWrite"
         },
         {
           "$ref": "#/$defs/ruleWrite"
@@ -1227,7 +1251,9 @@
       "type": "object",
       "properties": {
         "schemaVersion": {
-          "enum": [1, 2, 3]
+          "enum": [
+            4
+          ]
         },
         "links": {
           "type": "array",
@@ -1261,7 +1287,7 @@
           "minItems": 0,
           "maxItems": 10000
         },
-        "objects": {
+        "aliases": {
           "type": "object",
           "properties": {
             "addresses": {
@@ -1272,10 +1298,10 @@
               "minItems": 0,
               "maxItems": 10000
             },
-            "services": {
+            "ports": {
               "type": "array",
               "items": {
-                "$ref": "#/$defs/serviceStored"
+                "$ref": "#/$defs/portAliasStored"
               },
               "minItems": 0,
               "maxItems": 10000
@@ -1283,35 +1309,17 @@
           },
           "required": [
             "addresses",
-            "services"
+            "ports"
           ],
           "additionalProperties": false
         },
-        "policy": {
-          "type": "object",
-          "properties": {
-            "input": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/ruleStored"
-              },
-              "minItems": 0,
-              "maxItems": 10000
-            },
-            "forward": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/ruleStored"
-              },
-              "minItems": 0,
-              "maxItems": 10000
-            }
+        "rules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ruleStored"
           },
-          "required": [
-            "input",
-            "forward"
-          ],
-          "additionalProperties": false
+          "minItems": 0,
+          "maxItems": 80000
         },
         "nat": {
           "type": "object",
@@ -1373,24 +1381,15 @@
         "segments",
         "zones"
       ],
-      "allOf": [
-        {
-          "if": {"properties": {"schemaVersion": {"const": 1}}},
-          "then": {"properties": {"links": {"items": {"properties": {"password": {"properties": {"unresolved": {"const": false}}}}}}}}
-        },
-        {
-          "if": {"properties": {"schemaVersion": {"enum": [1, 2]}}},
-          "then": {"not": {"required": ["roles"]}},
-          "else": {"required": ["roles"]}
-        }
-      ],
       "additionalProperties": false
     },
     "declarationView": {
       "type": "object",
       "properties": {
         "schemaVersion": {
-          "enum": [1, 2, 3]
+          "enum": [
+            4
+          ]
         },
         "links": {
           "type": "array",
@@ -1424,7 +1423,7 @@
           "minItems": 2,
           "maxItems": 10002
         },
-        "objects": {
+        "aliases": {
           "type": "object",
           "properties": {
             "addresses": {
@@ -1435,10 +1434,10 @@
               "minItems": 0,
               "maxItems": 10000
             },
-            "services": {
+            "ports": {
               "type": "array",
               "items": {
-                "$ref": "#/$defs/serviceStored"
+                "$ref": "#/$defs/portAliasStored"
               },
               "minItems": 0,
               "maxItems": 10000
@@ -1446,35 +1445,17 @@
           },
           "required": [
             "addresses",
-            "services"
+            "ports"
           ],
           "additionalProperties": false
         },
-        "policy": {
-          "type": "object",
-          "properties": {
-            "input": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/ruleStored"
-              },
-              "minItems": 0,
-              "maxItems": 10000
-            },
-            "forward": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/ruleStored"
-              },
-              "minItems": 0,
-              "maxItems": 10000
-            }
+        "rules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ruleStored"
           },
-          "required": [
-            "input",
-            "forward"
-          ],
-          "additionalProperties": false
+          "minItems": 0,
+          "maxItems": 80000
         },
         "nat": {
           "type": "object",
@@ -1537,8 +1518,6 @@
         "zones",
         "roles"
       ],
-      "if": {"properties": {"schemaVersion": {"const": 1}}},
-      "then": {"properties": {"links": {"items": {"properties": {"password": {"properties": {"unresolved": {"const": false}}}}}}}},
       "additionalProperties": false
     },
     "changes": {
@@ -1645,7 +1624,7 @@
                   },
                   "collection": {
                     "enum": [
-                      "addresses"
+                      "aliases.addresses"
                     ]
                   },
                   "localId": {
@@ -1671,7 +1650,7 @@
                   },
                   "collection": {
                     "enum": [
-                      "addresses"
+                      "aliases.addresses"
                     ]
                   },
                   "id": {
@@ -1700,7 +1679,7 @@
                   },
                   "collection": {
                     "enum": [
-                      "addresses"
+                      "aliases.addresses"
                     ]
                   },
                   "id": {
@@ -1725,7 +1704,7 @@
                   },
                   "collection": {
                     "enum": [
-                      "services"
+                      "aliases.ports"
                     ]
                   },
                   "localId": {
@@ -1733,7 +1712,7 @@
                     "pattern": "^[A-Za-z][A-Za-z0-9_]{0,31}$"
                   },
                   "value": {
-                    "$ref": "#/$defs/serviceWrite"
+                    "$ref": "#/$defs/portAliasWrite"
                   }
                 },
                 "required": [
@@ -1751,7 +1730,7 @@
                   },
                   "collection": {
                     "enum": [
-                      "services"
+                      "aliases.ports"
                     ]
                   },
                   "id": {
@@ -1761,7 +1740,7 @@
                     "$ref": "#/$defs/version"
                   },
                   "value": {
-                    "$ref": "#/$defs/serviceWrite"
+                    "$ref": "#/$defs/portAliasWrite"
                   }
                 },
                 "required": [
@@ -1780,7 +1759,7 @@
                   },
                   "collection": {
                     "enum": [
-                      "services"
+                      "aliases.ports"
                     ]
                   },
                   "id": {
@@ -1805,8 +1784,7 @@
                   },
                   "collection": {
                     "enum": [
-                      "policy.input",
-                      "policy.forward"
+                      "rules"
                     ]
                   },
                   "localId": {
@@ -1835,8 +1813,7 @@
                   },
                   "collection": {
                     "enum": [
-                      "policy.input",
-                      "policy.forward"
+                      "rules"
                     ]
                   },
                   "id": {
@@ -1865,8 +1842,7 @@
                   },
                   "collection": {
                     "enum": [
-                      "policy.input",
-                      "policy.forward"
+                      "rules"
                     ]
                   },
                   "id": {
@@ -1891,8 +1867,7 @@
                   },
                   "collection": {
                     "enum": [
-                      "policy.input",
-                      "policy.forward"
+                      "rules"
                     ]
                   },
                   "expectedVersion": {
@@ -1904,7 +1879,7 @@
                       "$ref": "#/$defs/ruleID"
                     },
                     "minItems": 0,
-                    "maxItems": 10000
+                    "maxItems": 80000
                   }
                 },
                 "required": [
@@ -2507,7 +2482,7 @@
           "$ref": "#/$defs/addressStored"
         },
         {
-          "$ref": "#/$defs/serviceStored"
+          "$ref": "#/$defs/portAliasStored"
         },
         {
           "$ref": "#/$defs/ruleStored"
@@ -2631,11 +2606,11 @@
       "type": "string",
       "pattern": "^(adr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|@[A-Za-z][A-Za-z0-9_]{0,31})$"
     },
-    "serviceID": {
+    "portAliasID": {
       "type": "string",
       "pattern": "^svc_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
-    "serviceRef": {
+    "portAliasRef": {
       "type": "string",
       "pattern": "^(svc_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|@[A-Za-z][A-Za-z0-9_]{0,31})$"
     },
@@ -2647,9 +2622,38 @@
       "type": "string",
       "pattern": "^(rul_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|@[A-Za-z][A-Za-z0-9_]{0,31})$"
     },
-    "policyRef": {
+    "ruleZoneRef": {
       "type": "string",
-      "pattern": "^((zon|adr)_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|@[A-Za-z][A-Za-z0-9_]{0,31})$"
+      "pattern": "^(zon_firewall|zon_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|@[A-Za-z][A-Za-z0-9_]{0,31})$"
+    },
+    "ruleSide": {
+      "type": "object",
+      "properties": {
+        "zones": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ruleZoneRef"
+          },
+          "minItems": 0,
+          "maxItems": 1000
+        },
+        "addresses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/addressRef"
+          },
+          "minItems": 0,
+          "maxItems": 1000
+        },
+        "not": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "zones",
+        "addresses"
+      ],
+      "additionalProperties": false
     },
     "addressFields": {
       "allOf": [
@@ -2701,7 +2705,7 @@
         }
       ]
     },
-    "serviceFields": {
+    "portAliasFields": {
       "allOf": [
         {
           "$ref": "#/$defs/identity"
@@ -2710,7 +2714,7 @@
           "type": "object",
           "properties": {
             "id": {
-              "$ref": "#/$defs/serviceID"
+              "$ref": "#/$defs/portAliasID"
             },
             "protocol": {
               "enum": [
@@ -2742,7 +2746,7 @@
             "members": {
               "type": "array",
               "items": {
-                "$ref": "#/$defs/serviceRef"
+                "$ref": "#/$defs/portAliasRef"
               },
               "minItems": 0,
               "maxItems": 1000
@@ -2776,25 +2780,15 @@
               ]
             },
             "from": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/policyRef"
-              },
-              "minItems": 0,
-              "maxItems": 1000
+              "$ref": "#/$defs/ruleSide"
             },
             "to": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/policyRef"
-              },
-              "minItems": 0,
-              "maxItems": 1000
+              "$ref": "#/$defs/ruleSide"
             },
-            "services": {
+            "ports": {
               "type": "array",
               "items": {
-                "$ref": "#/$defs/serviceRef"
+                "$ref": "#/$defs/portAliasRef"
               },
               "minItems": 0,
               "maxItems": 1000
@@ -2808,7 +2802,7 @@
             "action",
             "from",
             "to",
-            "services",
+            "ports",
             "log"
           ]
         }
@@ -2837,10 +2831,10 @@
       ],
       "unevaluatedProperties": false
     },
-    "serviceStored": {
+    "portAliasStored": {
       "allOf": [
         {
-          "$ref": "#/$defs/serviceFields"
+          "$ref": "#/$defs/portAliasFields"
         },
         {
           "type": "object",
@@ -2852,10 +2846,10 @@
       ],
       "unevaluatedProperties": false
     },
-    "serviceWrite": {
+    "portAliasWrite": {
       "allOf": [
         {
-          "$ref": "#/$defs/serviceFields"
+          "$ref": "#/$defs/portAliasFields"
         }
       ],
       "unevaluatedProperties": false

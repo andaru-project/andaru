@@ -139,9 +139,13 @@ func renderDisaster(root string) func([]byte) error {
 			Links    json.RawMessage `json:"links"`
 			Segments json.RawMessage `json:"segments"`
 			Zones    json.RawMessage `json:"zones"`
-			// Management, and the objects its sources name, give the kept LAN its filter: without them none renders.
+			// Management, and the aliases its sources name, give the kept LAN its filter: without them none renders.
 			Management json.RawMessage `json:"management"`
-			Objects    json.RawMessage `json:"objects"`
+			Aliases    json.RawMessage `json:"aliases"`
+			// A copy kept before the aliases had that name.
+			Objects struct {
+				Addresses json.RawMessage `json:"addresses"`
+			} `json:"objects"`
 			// A lan-closure carries the address objects its allowed sources name at the top level, not under objects.
 			Addresses json.RawMessage `json:"addresses"`
 		}
@@ -158,10 +162,14 @@ func renderDisaster(root string) func([]byte) error {
 		if len(doc.Management) > 0 {
 			floor["management"] = doc.Management
 		}
-		if len(doc.Objects) > 0 {
-			floor["objects"] = doc.Objects
-		} else if len(doc.Addresses) > 0 {
-			floor["objects"] = map[string]json.RawMessage{"addresses": doc.Addresses}
+		kept := doc.Objects.Addresses
+		if len(kept) == 0 {
+			kept = doc.Addresses
+		}
+		if len(doc.Aliases) > 0 {
+			floor["aliases"] = doc.Aliases
+		} else if len(kept) > 0 {
+			floor["aliases"] = map[string]json.RawMessage{"addresses": kept}
 		}
 		decl, err := json.Marshal(floor)
 		if err != nil {

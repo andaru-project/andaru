@@ -84,13 +84,13 @@ The actual OpenAPI 3.1 document is embedded from [`internal/engine/openapi.json`
 | `GET /api/v1/versions` | Bounded saved history, default 50/max 100; exclusive `before` cursor |
 | `GET /api/v1/versions/{id}` | Secret-free immutable saved snapshot |
 | `GET /api/v1/preview/network` | Files a saved version would hand to systemd-networkd and pppd on this host, redacted, with findings; `state:"preview"`; optional `?savedVersion=N` |
-| `GET/POST /api/v1/config/{addresses\|services}`, `…/{id}` | Address and service objects for the packet filter |
-| `GET/POST /api/v1/config/policy/{input\|forward}` | A rule list in execution order with its `version`; `POST ?before=<rule id>` places a new rule |
-| `GET/PUT/DELETE /api/v1/config/policy/{chain}/{id}` | One rule, version-checked like any object |
-| `PUT /api/v1/config/policy/{chain}/order` | Reorder a list: every rule ID once, `If-Match: "order.N"`; replies with the new `order` and its `version` |
+| `GET/POST /api/v1/config/aliases/{addresses\|ports}`, `…/{id}` | Address aliases and port aliases, which rules, NAT entries and the management section name |
+| `GET/POST /api/v1/config/rules` | The firewall rules in execution order with the list's `version`; `POST ?before=<rule id>` places a new rule |
+| `GET/PUT/DELETE /api/v1/config/rules/{id}` | One rule, version-checked like any object |
+| `PUT /api/v1/config/rules/order` | Reorder the rules: every rule ID once, `If-Match: "order.N"`; replies with the new `order` and its `version` |
 | `GET/POST /api/v1/config/nat/{port-forwards\|one-to-one}` | An inbound NAT list in evaluation order with its `version`; `POST ?before=<entry id>` places a new entry |
 | `GET/PUT/DELETE /api/v1/config/nat/{list}/{id}` | One NAT entry, version-checked like any object |
-| `PUT /api/v1/config/nat/{list}/order` | Reorder a NAT list, as for the policy lists |
+| `PUT /api/v1/config/nat/{list}/order` | Reorder a NAT list, as for the rules |
 | `GET/PUT/DELETE /api/v1/config/management`, `/api/v1/config/nat/outbound` | Single objects, `If-Match: "management.N"` / `"nat.outbound.N"`, `0` while unset |
 | `GET/POST /api/v1/config/dhcp`, `GET/PUT/DELETE /api/v1/config/dhcp/{id}` | DHCP servers, one per served segment |
 | `GET/PUT/DELETE /api/v1/config/dns` | The DNS service, `If-Match: "dns.N"`, `0` while unset |
@@ -458,18 +458,22 @@ Boot needs `andaru-network-boot.service` ([unit](../../packaging/systemd/andaru-
 
 ### Packet filter
 
-Andaru filters with its own nftables table, `inet andaru`, applied, confirmed and rolled back together with the network files of the same generation. Design and limits: [packet filter and outbound NAT](../superpowers/specs/2026-11-12-packet-filter-design.md).
+Andaru filters with its own nftables table, `inet andaru`, applied, confirmed and rolled back together with the network files of the same generation. Design and limits: [packet filter and outbound NAT](../superpowers/specs/2026-11-12-packet-filter-design.md), and for the rules and aliases [firewall rules as one list between zones](../superpowers/specs/2026-11-22-firewall-rule-model-design.md).
 
 ```sh
-sudo andaru ctl config list policy/forward              # rules in execution order, and the list's version
-printf '%s\n' '{"name":"web","protocol":"tcp","ports":["80","443"]}' | sudo andaru ctl config create services
-sudo andaru ctl config order forward --version 12 "$RULE_B" "$RULE_A"
+sudo andaru ctl config list rules                        # rules in execution order, and the list's version
+printf '%s\n' '{"name":"web","protocol":"tcp","ports":["80","443"]}' | sudo andaru ctl config create aliases/ports
+sudo andaru ctl config order rules --version 12 "$RULE_B" "$RULE_A"
 sudo andaru ctl preview network                          # shows "nft:inet/andaru" beside the networkd files
 ```
 
 - **The filter switches on with `management.segment`.** While it is unset there is no table and nothing forwards, as before; rules or outbound NAT without it are refused with `MANAGEMENT_REQUIRED`. SSH (22/tcp) is always accepted on the management segment, from `allowedSources` when set; no rule can remove that.
-- **Objects:** addresses are hosts, networks, ranges or one-level groups of those; services are tcp/udp ports and ranges, icmp/icmpv6 types, or groups.
-- **Rules:** `policy.input` (to the firewall) and `policy.forward` (through it), tried in list order: `accept`, `drop` or `reject`, `from`/`to` zones or addresses (empty means any), `services`, `log` (to the kernel log). A rule matches IPv4 and IPv6 alike unless its addresses are of one family. Reordering is its own version-checked operation, so two sessions cannot reorder past each other.
+- **Aliases:** address aliases are hosts, networks, ranges or one-level groups of those; port aliases are tcp/udp ports and ranges, icmp/icmpv6 types, or groups.
+- **Rules:** one list, `rules`, tried in order: `accept`, `drop` or `reject`, `from`, `to`, `ports` (port aliases; empty means any protocol and port), `log` (to the kernel log). A rule matches IPv4 and IPv6 alike unless its addresses are of one family. Reordering is its own version-checked operation, so two sessions cannot reorder past each other.
+- **A side of a rule** (`from`, `to`) is `{"zones": […], "addresses": […], "not": true}`, and both parts must match: the zone traffic arrives in or leaves by (any of them; empty means any network), and the address aliases within it (any of them; empty means every address). `not` turns the addresses into "none of these", so "from lan, except the printers" is one rule; it takes at most 16 aliases, and a group counts as one.
+- **The firewall is a zone,** `zon_firewall`: a rule reaches the box only by naming it in `to.zones`, alone. "Any" never means the firewall, so traffic to everywhere and to the box is two rules. It is a destination only: the firewall's own outgoing traffic is not filtered.
+- **Limits:** a negated side takes 16 aliases; the rule list holds up to 80,000 rules, and one order request about 24,000 IDs within the 1 MiB request limit.
+- **Configurations saved before schema 4** (two rule lists, `objects`) load as the configuration they are now, and the first save writes the current form. An image rolled back after that save does not open the store.
 - **Fixed rules, before every rule:** established and related accepted, invalid dropped, loopback and ICMPv6 neighbour discovery accepted, DHCPv6 replies accepted, and on each segment with a `dhcp6` entry DHCPv6 requests from link-local clients (UDP 546 to 547); everything unmatched is dropped. The firewall's own outgoing traffic is not filtered.
 - **Outbound NAT** `automatic` masquerades IPv4 forwarded out of every segment with a default route (a static gateway, DHCP or PPPoE). IPv6 is routed, not translated.
 - **Applying:** the filter is loaded before the networkd files, and when going back to a generation without one the table is deleted only after the files, with IPv4 and IPv6 forwarding switched off just before it; going back to no generation loads the bare filter first. Boot loads the confirmed filter before networkd starts, with each adapter's name looked up again by its MAC, so a card the kernel names differently after a reboot keeps its rules; a filter that does not load makes boot fall back to the last-known-good generation, files and filter together.

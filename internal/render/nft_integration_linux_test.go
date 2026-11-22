@@ -115,12 +115,11 @@ func TestFilterInNamespace(t *testing.T) {
 	// The starter policy, with one drop placed above the LAN's accept for port 8080.
 	in := change(t, fixture(t, "filter-two-zones"), func(d map[string]any) {
 		svc := map[string]any{"id": "svc_00000009-0000-4000-8000-000000000009", "name": "alt-web", "protocol": "tcp", "ports": []any{"8080"}}
-		objects := d["objects"].(map[string]any)
-		objects["services"] = append(objects["services"].([]any), svc)
-		policy := d["policy"].(map[string]any)
+		aliases := d["aliases"].(map[string]any)
+		aliases["ports"] = append(aliases["ports"].([]any), svc)
 		drop := map[string]any{"id": "rul_00000009-0000-4000-8000-000000000009", "name": "no alt-web", "enabled": true, "action": "drop",
-			"from": []any{"zon_00000002-0000-4000-8000-000000000002"}, "to": []any{}, "services": []any{svc["id"]}, "log": false}
-		policy["forward"] = append([]any{drop}, policy["forward"].([]any)...)
+			"from": map[string]any{"zones": []any{"zon_00000002-0000-4000-8000-000000000002"}, "addresses": []any{}}, "to": map[string]any{"zones": []any{}, "addresses": []any{}}, "ports": []any{svc["id"]}, "log": false}
+		d["rules"] = append([]any{drop}, d["rules"].([]any)...)
 	})
 	l.load(in)
 	l.load(in) // replacing the table again is one atomic transaction
@@ -174,7 +173,7 @@ func TestPortForwardsInNamespace(t *testing.T) {
 			}
 		}
 		// The exclusion now names the WAN neighbour, so its connections on 1000-1001 stay untranslated.
-		addresses := d["objects"].(map[string]any)["addresses"].([]any)
+		addresses := d["aliases"].(map[string]any)["addresses"].([]any)
 		addresses[len(addresses)-1].(map[string]any)["address"] = "10.1.0.2"
 	})
 	l.load(in)
@@ -217,9 +216,8 @@ func TestOneToOneInNamespace(t *testing.T) {
 		nat["oneToOne"] = nat["oneToOne"].([]any)[:2]
 		delete(nat, "portForwards")
 		// 1:1 has no associated rule: the policy admits the WAN to the host, as an operator would write it.
-		policy := d["policy"].(map[string]any)
-		policy["forward"] = append(policy["forward"].([]any), map[string]any{"id": "rul_00000009-0000-4000-8000-000000000009", "name": "to the server",
-			"enabled": true, "action": "accept", "from": []any{"zon_00000001-0000-4000-8000-000000000001"}, "to": []any{"zon_00000002-0000-4000-8000-000000000002"}, "services": []any{}, "log": false})
+		d["rules"] = append(d["rules"].([]any), map[string]any{"id": "rul_00000009-0000-4000-8000-000000000009", "name": "to the server",
+			"enabled": true, "action": "accept", "from": map[string]any{"zones": []any{"zon_00000001-0000-4000-8000-000000000001"}, "addresses": []any{}}, "to": map[string]any{"zones": []any{"zon_00000002-0000-4000-8000-000000000002"}, "addresses": []any{}}, "ports": []any{}, "log": false})
 	})
 	l.load(in)
 	wait := func(peers, want string) {
@@ -254,9 +252,9 @@ func TestOneToOneInNamespace(t *testing.T) {
 func TestForwardRuleAdmitsOnlyItsOwnTranslations(t *testing.T) {
 	l := newLab(t)
 	in := change(t, fixture(t, "nat-port-forwards"), func(d map[string]any) {
-		addresses := d["objects"].(map[string]any)["addresses"].([]any)
+		addresses := d["aliases"].(map[string]any)["addresses"].([]any)
 		addresses = append(addresses, map[string]any{"id": "adr_00000008-0000-4000-8000-000000000008", "name": "routed", "kind": "host", "address": "10.9.9.9"})
-		d["objects"].(map[string]any)["addresses"] = addresses
+		d["aliases"].(map[string]any)["addresses"] = addresses
 		nat := d["nat"].(map[string]any)
 		forwards := nat["portForwards"].([]any)
 		b := map[string]any{"id": "pfw_00000009-0000-4000-8000-000000000009", "name": "routed-ssh", "enabled": true,
@@ -325,5 +323,66 @@ threading.Event().wait()
 		if got := l.connects(l.wan, c.addr, c.port); got != c.want {
 			t.Errorf("%s: connected %v, want %v", c.what, got, c.want)
 		}
+	}
+}
+
+// A side's zone and addresses must both match, "not" leaves the named addresses out, and only a rule that names
+// the firewall reaches it: "any" is every network, never the box.
+func TestRuleSidesInNamespace(t *testing.T) {
+	l := newLab(t)
+	const lanZone, peer, other = "zon_00000002-0000-4000-8000-000000000002", "adr_00000008-0000-4000-8000-000000000008", "adr_00000009-0000-4000-8000-000000000009"
+	side := func(zones []any, not bool, addresses ...any) map[string]any {
+		s := map[string]any{"zones": zones, "addresses": append([]any{}, addresses...)}
+		if not {
+			s["not"] = true
+		}
+		return s
+	}
+	with := func(from, to map[string]any) {
+		t.Helper()
+		l.load(change(t, fixture(t, "filter-two-zones"), func(d map[string]any) {
+			aliases := d["aliases"].(map[string]any)
+			aliases["addresses"] = append(aliases["addresses"].([]any),
+				map[string]any{"id": peer, "name": "the LAN peer", "kind": "host", "address": "10.2.0.2"},
+				map[string]any{"id": other, "name": "another host", "kind": "host", "address": "10.2.0.99"})
+			d["rules"] = []any{map[string]any{"id": "rul_00000009-0000-4000-8000-000000000009", "name": "the rule", "enabled": true, "action": "accept",
+				"from": from, "to": to, "ports": []any{}, "log": false}}
+		}))
+	}
+	l.listen(l.wan, 8080)
+	l.listen(l.fw, 8080)
+	lan, anywhere, firewall := []any{lanZone}, side([]any{}, false), side([]any{firewallZone}, false)
+	out := func() bool { return l.connects(l.lan, "10.1.0.2", 8080) }
+	in := func() bool { return l.connects(l.lan, "10.2.0.1", 8080) }
+
+	with(side(lan, false, peer), anywhere)
+	if !out() {
+		t.Error("the peer, arriving from its zone, was refused")
+	}
+	if in() {
+		t.Error("a rule to any network reached the firewall itself")
+	}
+	with(side(lan, false, other), anywhere)
+	if out() {
+		t.Error("a host the rule does not name passed because its zone matched")
+	}
+	with(side([]any{"zon_00000001-0000-4000-8000-000000000001"}, false, peer), anywhere)
+	if out() {
+		t.Error("a host arriving from another zone passed because its address matched")
+	}
+	with(side(lan, true, peer), anywhere)
+	if out() {
+		t.Error("a host the rule leaves out passed")
+	}
+	with(side(lan, true, other), anywhere)
+	if !out() {
+		t.Error("a host the rule does not leave out was refused")
+	}
+	with(side(lan, false, peer), firewall)
+	if !in() {
+		t.Error("a rule to the firewall did not reach it")
+	}
+	if out() {
+		t.Error("a rule to the firewall let traffic through it")
 	}
 }

@@ -18,7 +18,7 @@ func setName(id string) string { return strings.ReplaceAll(id, "-", "_") }
 // family is 4 or 6; 0 means a line that matches both.
 type family int
 
-// filter renders table inet andaru: fixed rules, the policy lists in order, and outbound NAT.
+// filter renders table inet andaru: fixed rules, the rules in order, and outbound NAT.
 type filter struct {
 	r        *renderer
 	sets     []string
@@ -32,7 +32,7 @@ type filter struct {
 func (r *renderer) filterChains() {
 	d := r.d
 	if !d.filtered() {
-		if len(d.Policy.Input)+len(d.Policy.Forward) > 0 || d.NAT.Outbound.Mode == "automatic" || len(d.NAT.PortForwards)+len(d.NAT.OneToOne) > 0 {
+		if len(d.Rules) > 0 || d.NAT.Outbound.Mode == "automatic" || len(d.NAT.PortForwards)+len(d.NAT.OneToOne) > 0 {
 			r.find("error", "MANAGEMENT_REQUIRED", "/management", "Rules and NAT take effect only with a management segment, which keeps SSH reachable whatever the rules say. Set management.segment.")
 		}
 		return
@@ -44,7 +44,7 @@ func (r *renderer) filterChains() {
 		r.find("error", "FOREIGN_FILTER", unit, unit+" is enabled and would replace or override Andaru's packet filter at boot. Disable it.")
 	}
 	f := &filter{r: r, families: map[string]map[family][]string{}, services: map[string]service{}}
-	for _, s := range d.Objects.Services {
+	for _, s := range d.Aliases.Ports {
 		f.services[s.ID] = s
 	}
 	f.addresses()
@@ -137,14 +137,17 @@ func (r *renderer) filterChains() {
 			f.set("virtual_4", "ipv4_addr", "", v)
 		}
 	}
-	// A forward's own rule comes before the policy, so no later rule can shadow it.
+	// A forward's own rule comes before the rules, so no later rule can shadow it.
 	input = append(input, boundInput...)
-	for _, rule := range d.Policy.Input {
-		input = append(input, f.rule(rule, false)...)
-	}
 	forward := append([]string{"ct state established,related accept", "ct state invalid drop"}, boundForward...)
-	for _, rule := range d.Policy.Forward {
-		forward = append(forward, f.rule(rule, true)...)
+	// One list, two chains: a rule to the firewall is an input rule, any other a forward rule. A packet meets
+	// only one chain, so each chain keeps the list's order and nothing else of it matters.
+	for _, rule := range d.Rules {
+		if slices.Contains(rule.To.Zones, firewallZone) {
+			input = append(input, f.rule(rule)...)
+		} else {
+			forward = append(forward, f.rule(rule)...)
+		}
 	}
 
 	var body strings.Builder
@@ -181,7 +184,7 @@ func (r *renderer) filterChains() {
 		}
 	}
 	script := cards.String() + head + "\tcomment \"sha256:" + hex.EncodeToString(sum[:]) + "\"\n" + body.String() + "}\n"
-	r.file(nftPath, "0644", script, []string{"/policy", "/nat", "/management"})
+	r.file(nftPath, "0644", script, []string{"/rules", "/aliases", "/nat", "/management"})
 }
 
 func quoted(names []string) []string {
@@ -211,7 +214,7 @@ func (f *filter) set(name, typ, flags string, elements []string) {
 // addresses renders each address object as one interval set per family it holds.
 func (f *filter) addresses() {
 	byID := map[string]address{}
-	for _, a := range f.r.d.Objects.Addresses {
+	for _, a := range f.r.d.Aliases.Addresses {
 		byID[a.ID] = a
 	}
 	single := func(a address) (family, string) {
@@ -228,7 +231,7 @@ func (f *filter) addresses() {
 		}
 		return 0, ""
 	}
-	for _, a := range f.r.d.Objects.Addresses {
+	for _, a := range f.r.d.Aliases.Addresses {
 		elements := map[family][]string{}
 		members := []address{a}
 		if a.Kind == "group" {
@@ -265,9 +268,10 @@ func ipKey(f family) string {
 	return "ip6"
 }
 
-// rule renders one policy rule as nft lines: one per source entry, destination entry, service and family.
-// Entries of one side are alternatives, which one nft line cannot express when they mix zones and addresses.
-func (f *filter) rule(r rule, forward bool) []string {
+// rule renders one rule as nft lines: one per zone, address alias and port alias of each side, and family.
+// Within a side the zone and the address must both match, so they share a line; the zones are alternatives, and
+// so are the addresses, unless the side says "not": then one line names them all.
+func (f *filter) rule(r rule) []string {
 	if !r.Enabled {
 		return nil
 	}
@@ -275,33 +279,57 @@ func (f *filter) rule(r rule, forward bool) []string {
 		expr string
 		fam  family // 0: any family
 	}
-	side := func(refs []string, iface, dir string) []match {
-		if len(refs) == 0 {
-			return []match{{}}
-		}
-		var out []match
-		for _, ref := range refs {
-			if fams, ok := f.families[ref]; ok {
-				for _, fam := range []family{4, 6} {
-					if len(fams[fam]) > 0 {
-						out = append(out, match{fmt.Sprintf("%s %s @%s_%d", ipKey(fam), dir, setName(ref), fam), fam})
+	side := func(s ruleSide, iface, dir string) []match {
+		var addresses []match
+		switch {
+		case len(s.Addresses) == 0:
+			addresses = []match{{}}
+		case s.Not:
+			for _, fam := range []family{4, 6} {
+				var none []string
+				for _, ref := range s.Addresses {
+					if len(f.families[ref][fam]) > 0 {
+						none = append(none, fmt.Sprintf("%s %s != @%s_%d", ipKey(fam), dir, setName(ref), fam))
 					}
 				}
-				continue
+				if len(none) == 0 {
+					// Nothing of this family is left out, so all of it matches.
+					none = []string{fmt.Sprintf("meta nfproto ipv%d", fam)}
+				}
+				addresses = append(addresses, match{strings.Join(none, " "), fam})
 			}
-			out = append(out, match{fmt.Sprintf("%s @%s", iface, setName(ref)), 0})
+		default:
+			for _, ref := range s.Addresses {
+				for _, fam := range []family{4, 6} {
+					if len(f.families[ref][fam]) > 0 {
+						addresses = append(addresses, match{fmt.Sprintf("%s %s @%s_%d", ipKey(fam), dir, setName(ref), fam), fam})
+					}
+				}
+			}
+		}
+		var zones []string
+		for _, z := range s.Zones {
+			// The firewall is no interface: the input chain is what makes a rule one to it.
+			if z != firewallZone {
+				zones = append(zones, fmt.Sprintf("%s @%s", iface, setName(z)))
+			}
+		}
+		if len(zones) == 0 {
+			zones = []string{""}
+		}
+		var out []match
+		for _, z := range zones {
+			for _, a := range addresses {
+				out = append(out, match{strings.TrimSpace(z + " " + a.expr), a.fam})
+			}
 		}
 		return out
 	}
-	from := side(r.From, "iifname", "saddr")
-	to := []match{{}}
-	if forward {
-		to = side(r.To, "oifname", "daddr")
-	}
+	from, to := side(r.From, "iifname", "saddr"), side(r.To, "oifname", "daddr")
 	services := []service{{}}
-	if len(r.Services) > 0 {
+	if len(r.Ports) > 0 {
 		services = nil
-		for _, id := range r.Services {
+		for _, id := range r.Ports {
 			s := f.services[id]
 			if s.Protocol != "group" {
 				services = append(services, s)

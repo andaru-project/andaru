@@ -67,22 +67,23 @@ func VerifyRecoveryState(ctx context.Context, stateDir string) error {
 	if err != nil {
 		return fmt.Errorf("read recovery saved state: %w", err)
 	}
-	if version < 0 || (schema != 1 && schema != 2) || len(configBody) > documentLimit || len(configHash) != sha256.Size || len(secretHash) != sha256.Size {
+	if version < 0 || schema < 1 || schema > schemaVersion || len(configBody) > documentLimit || len(configHash) != sha256.Size || len(secretHash) != sha256.Size {
 		return errors.New("invalid recovery saved-state metadata")
 	}
 	sum := sha256.Sum256(configBody)
 	if !bytes.Equal(sum[:], configHash) {
 		return errors.New("recovery configuration hash mismatch")
 	}
-	declaration, err := decodeDeclaration(configBody)
+	declaration, stored, origin, err := decodeSaved(configBody)
 	if err != nil {
 		return errors.New("invalid recovery configuration document")
 	}
-	if declaration.SchemaVersion != schema {
+	if stored != schema {
 		return errors.New("recovery configuration schema mismatch")
 	}
+	// A version of an earlier form is read through its upgrade, and its bytes are those of that form.
 	normalized, err := canonical(declaration)
-	if err != nil || !bytes.Equal(normalized, configBody) {
+	if err != nil || stored == schemaVersion && !bytes.Equal(normalized, configBody) {
 		return errors.New("recovery configuration is not canonical")
 	}
 	var secretBody []byte
@@ -122,7 +123,7 @@ func VerifyRecoveryState(ctx context.Context, stateDir string) error {
 		return err
 	}
 	defer conn.Close()
-	if _, err = loadObjectVersions(ctx, conn, &declaration, version, nil, true); err != nil {
+	if _, err = loadObjectVersions(ctx, conn, &savedState{Config: declaration, legacy: stored < schemaVersion, origin: origin}, version, nil, true); err != nil {
 		return fmt.Errorf("invalid recovery object history: %w", err)
 	}
 	return nil

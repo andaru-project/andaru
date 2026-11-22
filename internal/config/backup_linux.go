@@ -62,7 +62,8 @@ func decodeBackupDocuments(input RestoreDocuments) (decodedBackup, error) {
 		return decoded, fault("INVALID_REQUEST", "", "Select at least one backup store.")
 	}
 	if input.Configuration != nil {
-		d, err := decodeDeclaration(input.Configuration)
+		// A backup taken before schema 4 restores as the configuration it is now.
+		d, _, _, err := decodeSaved(input.Configuration)
 		if err != nil {
 			return decoded, boundaryFault(err)
 		}

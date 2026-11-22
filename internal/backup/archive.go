@@ -101,6 +101,10 @@ func unapplied(source Source) []string {
 	return []string{}
 }
 
+// MaximumConfigSchema is the newest form of the saved configuration a backup may hold. An engine that knows
+// only an older form refuses the archive as unsupported.
+const MaximumConfigSchema = 4
+
 func documentSchema(raw []byte, maximum int) (int, error) {
 	if len(raw) > MaxDocumentSize {
 		return 0, &Error{Code: "ARCHIVE_LIMIT"}
@@ -150,11 +154,7 @@ func Encode(ctx context.Context, source Source, docs Documents, passphrase strin
 		data        json.RawMessage
 		maximum     int
 	}
-	maximumConfigSchema := 2
-	if format == 2 {
-		maximumConfigSchema = 3
-	}
-	documents := []document{{"config.json", "configuration", docs.Configuration, maximumConfigSchema}}
+	documents := []document{{"config.json", "configuration", docs.Configuration, MaximumConfigSchema}}
 	if docs.Users != nil {
 		documents = append(documents, document{"users.json", "users", docs.Users, 1})
 	}
@@ -275,12 +275,8 @@ func decodeManifest(raw []byte) (Manifest, error) {
 			return Manifest{}, &Error{Code: "UNSUPPORTED_SCHEMA"}
 		}
 		last, seen[scope] = position, true
-		name, maximum := "config.json", 2
+		name, maximum := "config.json", MaximumConfigSchema
 		switch scope {
-		case "configuration":
-			if manifest.FormatVersion == 2 {
-				maximum = 3
-			}
 		case "users":
 			name, maximum = "users.json", 1
 		case "configurationSecrets":
@@ -552,10 +548,7 @@ func Decode(ctx context.Context, raw []byte, passphrase string) (Archive, error)
 		}
 		maximum := 1
 		if name == "config.json" {
-			maximum = 2
-			if manifest.FormatVersion == 2 {
-				maximum = 3
-			}
+			maximum = MaximumConfigSchema
 		}
 		version, err := documentSchema(data, maximum)
 		if err != nil {

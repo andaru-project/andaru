@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 4,
   "links": [
     {
       "id": "lnk_00000001-0000-4000-8000-000000000001",
@@ -69,9 +69,9 @@
       "name": "lan"
     }
   ],
-  "objects": {
+  "aliases": {
     "addresses": [],
-    "services": [
+    "ports": [
       {
         "id": "svc_00000001-0000-4000-8000-000000000001",
         "name": "ping",
@@ -107,76 +107,106 @@
       }
     ]
   },
-  "policy": {
-    "input": [
-      {
-        "id": "rul_00000001-0000-4000-8000-000000000001",
-        "name": "lan ping",
-        "enabled": true,
-        "action": "accept",
-        "from": [
+  "rules": [
+    {
+      "id": "rul_00000001-0000-4000-8000-000000000001",
+      "name": "lan ping",
+      "enabled": true,
+      "action": "accept",
+      "from": {
+        "zones": [
           "zon_00000002-0000-4000-8000-000000000002"
         ],
-        "to": [],
-        "services": [
-          "svc_00000001-0000-4000-8000-000000000001"
-        ],
-        "log": false
+        "addresses": []
       },
-      {
-        "id": "rul_00000002-0000-4000-8000-000000000002",
-        "name": "lan dns",
-        "enabled": true,
-        "action": "accept",
-        "from": [
+      "to": {
+        "zones": [
+          "zon_firewall"
+        ],
+        "addresses": []
+      },
+      "ports": [
+        "svc_00000001-0000-4000-8000-000000000001"
+      ],
+      "log": false
+    },
+    {
+      "id": "rul_00000002-0000-4000-8000-000000000002",
+      "name": "lan dns",
+      "enabled": true,
+      "action": "accept",
+      "from": {
+        "zones": [
           "zon_00000002-0000-4000-8000-000000000002"
         ],
-        "to": [],
-        "services": [
-          "svc_00000004-0000-4000-8000-000000000004"
-        ],
-        "log": false
-      }
-    ],
-    "forward": [
-      {
-        "id": "rul_00000007-0000-4000-8000-000000000007",
-        "name": "off",
-        "enabled": false,
-        "action": "drop",
-        "from": [],
-        "to": [],
-        "services": [],
-        "log": false
+        "addresses": []
       },
-      {
-        "id": "rul_00000008-0000-4000-8000-000000000008",
-        "name": "logged drop",
-        "enabled": true,
-        "action": "drop",
-        "from": [
+      "to": {
+        "zones": [
+          "zon_firewall"
+        ],
+        "addresses": []
+      },
+      "ports": [
+        "svc_00000004-0000-4000-8000-000000000004"
+      ],
+      "log": false
+    },
+    {
+      "id": "rul_00000007-0000-4000-8000-000000000007",
+      "name": "off",
+      "enabled": false,
+      "action": "drop",
+      "from": {
+        "zones": [],
+        "addresses": []
+      },
+      "to": {
+        "zones": [],
+        "addresses": []
+      },
+      "ports": [],
+      "log": false
+    },
+    {
+      "id": "rul_00000008-0000-4000-8000-000000000008",
+      "name": "logged drop",
+      "enabled": true,
+      "action": "drop",
+      "from": {
+        "zones": [
           "zon_00000001-0000-4000-8000-000000000001"
         ],
-        "to": [
-          "zon_00000002-0000-4000-8000-000000000002"
-        ],
-        "services": [],
-        "log": true
+        "addresses": []
       },
-      {
-        "id": "rul_00000003-0000-4000-8000-000000000003",
-        "name": "lan out",
-        "enabled": true,
-        "action": "accept",
-        "from": [
+      "to": {
+        "zones": [
           "zon_00000002-0000-4000-8000-000000000002"
         ],
-        "to": [],
-        "services": [],
-        "log": false
-      }
-    ]
-  },
+        "addresses": []
+      },
+      "ports": [],
+      "log": true
+    },
+    {
+      "id": "rul_00000003-0000-4000-8000-000000000003",
+      "name": "lan out",
+      "enabled": true,
+      "action": "accept",
+      "from": {
+        "zones": [
+          "zon_00000002-0000-4000-8000-000000000002"
+        ],
+        "addresses": []
+      },
+      "to": {
+        "zones": [],
+        "addresses": []
+      },
+      "ports": [],
+      "log": false
+    }
+  ],
   "nat": {
     "outbound": {
       "mode": "none"

@@ -123,8 +123,9 @@ func TestConfigurationHTTPContract(t *testing.T) {
 		"/api/v1/versions": {"get", "head"}, "/api/v1/versions/{id}": {"get", "head"}, "/api/v1/preview/network": {"get", "head"},
 		"/api/v1/applies": {"get", "head", "post"}, "/api/v1/applies/{id}": {"get", "head"},
 		"/api/v1/applies/{id}/confirmation": {"post"}, "/api/v1/applies/{id}/rollback": {"post"},
-		"/api/v1/config/policy/{chain}": {"get", "head", "post"}, "/api/v1/config/policy/{chain}/{id}": {"get", "head", "put", "delete"},
-		"/api/v1/config/policy/{chain}/order": {"put"}, "/api/v1/config/nat/{list}": {"get", "head", "post"},
+		"/api/v1/config/rules": {"get", "head", "post"}, "/api/v1/config/rules/{id}": {"get", "head", "put", "delete"},
+		"/api/v1/config/aliases/{kind}": {"get", "head", "post"}, "/api/v1/config/aliases/{kind}/{id}": {"get", "head", "put", "delete"},
+		"/api/v1/config/rules/order": {"put"}, "/api/v1/config/nat/{list}": {"get", "head", "post"},
 		"/api/v1/config/nat/{list}/{id}": {"get", "head", "put", "delete"}, "/api/v1/config/nat/{list}/order": {"put"},
 		"/api/v1/config/management": {"get", "head", "put", "delete"}, "/api/v1/config/nat/outbound": {"get", "head", "put", "delete"},
 		"/api/v1/config/dns": {"get", "head", "put", "delete"}, "/api/v1/backups": {"post"},
@@ -495,7 +496,7 @@ func engineENOSP() error {
 func TestPolicyRoutes(t *testing.T) {
 	h, _ := configurationFixture(t)
 	rule := func(name string) string {
-		return `{"name":"` + name + `","enabled":true,"action":"accept","from":[],"to":[],"services":[],"log":false}`
+		return `{"name":"` + name + `","enabled":true,"action":"accept","from":{"zones":[],"addresses":[]},"to":{"zones":[],"addresses":[]},"ports":[],"log":false}`
 	}
 	expect := func(w *httptest.ResponseRecorder, status int) {
 		t.Helper()
@@ -503,15 +504,15 @@ func TestPolicyRoutes(t *testing.T) {
 			t.Fatalf("status %d, want %d: %s", w.Code, status, w.Body)
 		}
 	}
-	a := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/policy/forward", rule("a"), "")))
-	b := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/policy/forward", rule("b"), "")))
-	w := configCall(h, "POST", "/api/v1/config/policy/forward?before="+a, rule("c"), "")
+	a := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/rules", rule("a"), "")))
+	b := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/rules", rule("b"), "")))
+	w := configCall(h, "POST", "/api/v1/config/rules?before="+a, rule("c"), "")
 	expect(w, 201)
 	c := valueID(t, apiObject(t, w))
 
 	list := func() (ids []string, tag string) {
 		t.Helper()
-		w := configCall(h, "GET", "/api/v1/config/policy/forward", "", "")
+		w := configCall(h, "GET", "/api/v1/config/rules", "", "")
 		expect(w, 200)
 		var v struct {
 			Items   []config.ObjectView
@@ -529,10 +530,10 @@ func TestPolicyRoutes(t *testing.T) {
 	if !slices.Equal(ids, []string{c, a, b}) || tag == "" {
 		t.Fatalf("order %v tag %q", ids, tag)
 	}
-	expect(configCall(h, "PUT", "/api/v1/config/policy/forward/order", `["`+b+`","`+a+`","`+c+`"]`, ""), 428)
-	expect(configCall(h, "PUT", "/api/v1/config/policy/forward/order", `["`+b+`","`+a+`"]`, tag), 422)
-	expect(configCall(h, "PUT", "/api/v1/config/policy/forward/order", `["`+b+`","`+a+`","`+c+`"]`, tag), 200)
-	expect(configCall(h, "PUT", "/api/v1/config/policy/forward/order", `["`+c+`","`+a+`","`+b+`"]`, tag), 412)
+	expect(configCall(h, "PUT", "/api/v1/config/rules/order", `["`+b+`","`+a+`","`+c+`"]`, ""), 428)
+	expect(configCall(h, "PUT", "/api/v1/config/rules/order", `["`+b+`","`+a+`"]`, tag), 422)
+	expect(configCall(h, "PUT", "/api/v1/config/rules/order", `["`+b+`","`+a+`","`+c+`"]`, tag), 200)
+	expect(configCall(h, "PUT", "/api/v1/config/rules/order", `["`+c+`","`+a+`","`+b+`"]`, tag), 412)
 	if ids, _ = list(); !slices.Equal(ids, []string{b, a, c}) {
 		t.Fatalf("order after PUT %v", ids)
 	}
@@ -544,10 +545,10 @@ func TestPolicyRoutes(t *testing.T) {
 	if !strings.Contains(w.Body.String(), `"automatic"`) {
 		t.Fatalf("outbound %s", w.Body)
 	}
-	addr := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/addresses", `{"name":"nas","kind":"host","address":"192.0.2.10"}`, "")))
-	expect(configCall(h, "GET", "/api/v1/config/addresses/"+addr, "", ""), 200)
-	expect(configCall(h, "POST", "/api/v1/config/services", `{"name":"dns","protocol":"udp","ports":["53"]}`, ""), 201)
-	expect(configCall(h, "GET", "/api/v1/config/policy/sideways", "", ""), 404)
+	addr := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/aliases/addresses", `{"name":"nas","kind":"host","address":"192.0.2.10"}`, "")))
+	expect(configCall(h, "GET", "/api/v1/config/aliases/addresses/"+addr, "", ""), 200)
+	expect(configCall(h, "POST", "/api/v1/config/aliases/ports", `{"name":"dns","protocol":"udp","ports":["53"]}`, ""), 201)
+	expect(configCall(h, "GET", "/api/v1/config/aliases/sideways", "", ""), 404)
 }
 
 func TestFilterRoutesMatchTheContract(t *testing.T) {
@@ -576,14 +577,14 @@ func TestFilterRoutesMatchTheContract(t *testing.T) {
 			t.Fatalf("%s violates %s: %v", doc, def, e)
 		}
 	}
-	rule := `{"name":"a","enabled":true,"action":"accept","from":[],"to":[],"services":[],"log":false}`
+	rule := `{"name":"a","enabled":true,"action":"accept","from":{"zones":[],"addresses":[]},"to":{"zones":[],"addresses":[]},"ports":[],"log":false}`
 	for _, body := range []string{rule, `{"name":"nas","kind":"host","address":"192.0.2.10"}`, `{"name":"dns","protocol":"udp","ports":["53"]}`,
 		`{"segment":"seg_00000001-0000-4000-8000-000000000001"}`, `{"mode":"automatic"}`} {
 		conforms("objectWrite", body)
 	}
 	for path, body := range map[string]string{
-		"/api/v1/config/policy/forward": rule, "/api/v1/config/addresses": `{"name":"nas","kind":"host","address":"192.0.2.10"}`,
-		"/api/v1/config/services": `{"name":"dns","protocol":"udp","ports":["53"]}`,
+		"/api/v1/config/rules": rule, "/api/v1/config/aliases/addresses": `{"name":"nas","kind":"host","address":"192.0.2.10"}`,
+		"/api/v1/config/aliases/ports": `{"name":"dns","protocol":"udp","ports":["53"]}`,
 	} {
 		w := configCall(h, "POST", path, body, "")
 		if w.Code != 201 {
@@ -598,7 +599,7 @@ func TestFilterRoutesMatchTheContract(t *testing.T) {
 	conforms("objectView", w.Body.String())
 	conforms("objectView", configCall(h, "GET", "/api/v1/config/nat/outbound", "", "").Body.String())
 	// A rule list carries its own order version.
-	list := configCall(h, "GET", "/api/v1/config/policy/forward", "", "")
+	list := configCall(h, "GET", "/api/v1/config/rules", "", "")
 	if !strings.Contains(list.Body.String(), `"version"`) {
 		t.Fatalf("list lacks its version: %s", list.Body)
 	}
@@ -647,7 +648,7 @@ func TestFilterRoutesMatchTheContract(t *testing.T) {
 		t.Fatal(e)
 	}
 	for _, enum := range [][]string{changed.Properties.Collection.Enum, envelope.Properties.Error.Properties.Current.Properties.Collection.Enum} {
-		for _, name := range []string{"addresses", "services", "policy.input", "policy.forward", "management", "nat.outbound"} {
+		for _, name := range []string{"aliases.addresses", "aliases.ports", "rules", "management", "nat.outbound"} {
 			if !slices.Contains(enum, name) {
 				t.Fatalf("collection enum %v lacks %s", enum, name)
 			}
@@ -660,15 +661,15 @@ func TestSingletonAndOrderTagsAreNotInterchangeable(t *testing.T) {
 	// Another resource's tag must not pass as "unset" (version 0).
 	assertAPIError(t, configCall(h, "PUT", "/api/v1/config/nat/outbound", `{"mode":"automatic"}`, `"management.1"`), 412, "PRECONDITION_FAILED")
 	assertAPIError(t, configCall(h, "GET", "/api/v1/config/nat/outbound", "", ""), 404, "NOT_FOUND")
-	assertAPIError(t, configCall(h, "PUT", "/api/v1/config/policy/forward/order", `[]`, `"nat.outbound.0"`), 412, "PRECONDITION_FAILED")
+	assertAPIError(t, configCall(h, "PUT", "/api/v1/config/rules/order", `[]`, `"nat.outbound.0"`), 412, "PRECONDITION_FAILED")
 
 	rule := func(name string) string {
-		return `{"name":"` + name + `","enabled":true,"action":"accept","from":[],"to":[],"services":[],"log":false}`
+		return `{"name":"` + name + `","enabled":true,"action":"accept","from":{"zones":[],"addresses":[]},"to":{"zones":[],"addresses":[]},"ports":[],"log":false}`
 	}
-	a := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/policy/forward", rule("a"), "")))
-	b := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/policy/forward", rule("b"), "")))
-	tag := configCall(h, "GET", "/api/v1/config/policy/forward", "", "").Header().Get("ETag")
-	w := configCall(h, "PUT", "/api/v1/config/policy/forward/order", `["`+b+`","`+a+`"]`, tag)
+	a := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/rules", rule("a"), "")))
+	b := valueID(t, apiObject(t, configCall(h, "POST", "/api/v1/config/rules", rule("b"), "")))
+	tag := configCall(h, "GET", "/api/v1/config/rules", "", "").Header().Get("ETag")
+	w := configCall(h, "PUT", "/api/v1/config/rules/order", `["`+b+`","`+a+`"]`, tag)
 	var reply struct {
 		SavedVersion, Version string
 		Order                 []string
@@ -677,7 +678,7 @@ func TestSingletonAndOrderTagsAreNotInterchangeable(t *testing.T) {
 		reply.Version != reply.SavedVersion || w.Header().Get("ETag") != `"order.`+reply.Version+`"` {
 		t.Fatalf("order reply %d %s %v", w.Code, w.Body, w.Header())
 	}
-	if got := configCall(h, "GET", "/api/v1/config/policy/forward", "", "").Header().Get("ETag"); got != w.Header().Get("ETag") {
+	if got := configCall(h, "GET", "/api/v1/config/rules", "", "").Header().Get("ETag"); got != w.Header().Get("ETag") {
 		t.Fatalf("order reply tag %q, list tag %q", w.Header().Get("ETag"), got)
 	}
 }
@@ -735,7 +736,7 @@ func TestServiceRoutesMatchTheContract(t *testing.T) {
 	}
 }
 
-// The NAT lists are served exactly as the policy lists are.
+// The NAT lists are served exactly as the rules are.
 func TestNATListRoutes(t *testing.T) {
 	h, _ := configurationFixture(t)
 	expect := func(w *httptest.ResponseRecorder, status int) {
