@@ -1,6 +1,6 @@
 # Safe mode for settings that need a decision
 
-Status: proposed, 2026-11-22, for step 3 of [settings across Andaru versions](2026-11-22-settings-across-andaru-versions-design.md) ([#121](https://github.com/andaru-project/andaru/issues/121)). Nothing here is built. The owner asked for safe mode to be built now, so the mechanism comes before the first breaking change that needs it, tested with a decision record that exists only in the tests. The questions under "Owner decisions" are open.
+Status: proposed, 2026-11-22, for step 3 of [settings across Andaru versions](2026-11-22-settings-across-andaru-versions-design.md) ([#121](https://github.com/andaru-project/andaru/issues/121)). Nothing here is built. The owner asked for safe mode to be built now, so the mechanism comes before the first breaking change that needs it, tested with a decision record that exists only in the tests. The owner's decisions are under "Owner decisions".
 
 ## The problem
 
@@ -43,8 +43,10 @@ The web UI opens on a "Finish the upgrade" page after sign-in, with one card per
 
 ## Owner decisions
 
-1. **Saving an automatic migration on start.** Rule 6 says settings needing only a migration are also saved for the new Andaru on start. Recommended: keep today's behaviour instead, where the old bytes stay until the next save. If the head is saved as schema 4 at the first boot of a new image and that image then fails, `bootc rollback` boots `0.5.0-a.4`, which knows schemas 1 to 3 and refuses the store. The box would need a factory reset and a restored backup. Without the save, the rollback keeps working until someone saves. An answered decision has to save, so the hold accepts that cost only then.
-2. **Add-ons.** None exist yet. Recommended: when they arrive, none starts while the engine holds the settings, and the engine starts them when the hold ends. This is not the boot flag of the [first boot design](2026-11-19-first-boot-safe-mode-resets-design.md), which systemd checks before the engine has decided, so the add-on slice builds the ordering.
+Decided by the owner, 2026-11-22.
+
+1. **An automatic migration is saved on start** (rule 6). A head of an older schema that needs only a migration is upgraded and saved as a new version for this Andaru when the engine starts, with no hold. The version it came from stays in the history unchanged, so a rollback to the older Andaru starts from it ([downgrades](2026-11-22-settings-across-andaru-versions-design.md#downgrades)). The changes saved under the newer Andaru are not carried back; a rollback normally comes within weeks of the upgrade, so little is lost.
+2. **Add-ons stay off during the hold.** The hold is safe mode, and add-ons are off in safe mode. None exist yet; when they arrive, the engine starts them once the hold ends. The boot flag of the [first boot design](2026-11-19-first-boot-safe-mode-resets-design.md) is checked by systemd before the engine has read the settings, so the add-on slice builds that ordering.
 
 ## Tests
 
@@ -54,7 +56,7 @@ The web UI opens on a "Finish the upgrade" page after sign-in, with one card per
   - applies and saves refuse;
   - answering with the other choice saves a version whose document matches that choice.
 - Two test records on consecutive steps, where the first choice decides whether the second question is asked: the preview shows it, and an answer set that misses it is refused.
-- A head that no record matches starts as today.
+- A head that no record matches starts as today, and one that needs only a migration is saved as a new version of the current schema, its parent left unchanged.
 - A stale `expectedSavedVersion`, a missing or unknown choice, and an account without `configuration.write` are refused, and nothing is saved.
 - A restore of a backup needing the decision keeps the hold, and a reboot during the hold asks the same questions again.
 
