@@ -56,6 +56,9 @@ type VersionView struct {
 	VersionInfo
 	Value   json.RawMessage `json:"value"`
 	Changes []objectChange  `json:"changes"`
+	// Questions are the decisions this version needs to read in the current schema; it reads with the provisional
+	// choices until they are answered.
+	Questions []Question `json:"questions,omitempty"`
 }
 type secretView struct {
 	Secret     string  `json:"secret"`

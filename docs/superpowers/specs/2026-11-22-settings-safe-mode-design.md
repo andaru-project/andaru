@@ -23,6 +23,8 @@ The upgrade from schema *n* to *n+1* applies each matching record of schema *n* 
 
 Every read of a stored document of an older schema (`decodeSaved`: the history, the live version's roles, an export, a backup, a kept copy) upgrades it with the provisional choices. A version always reads, and a reader can tell that it read provisionally: a version's view says so, with the questions it holds.
 
+Implemented: the records are `decisions` in `internal/config/decisions.go`, applied by `decodeSavedWith`, and a version's view lists its `questions`. None exists outside the tests.
+
 ## The hold
 
 On start, the engine works out the questions for the head, with the provisional choices. With none, it starts as it does today. With some, it holds the settings:

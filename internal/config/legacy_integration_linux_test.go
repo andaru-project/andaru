@@ -242,3 +242,13 @@ func TestSavedVersionsNameTheirWriter(t *testing.T) {
 		t.Fatalf("a new store's history: %+v %v", fresh.Items, err)
 	}
 }
+
+// A version that needs a decision says so in its view, with the questions it holds.
+func TestVersionViewListsItsQuestions(t *testing.T) {
+	withDecisions(t, zoneDecision("rename", 1, func(map[string]any) bool { return true }))
+	s, _ := legacyStore(t)
+	v, err := s.Version(context.Background(), "2")
+	if err != nil || len(v.Questions) != 1 || v.Questions[0].ID != "rename" || v.Questions[0].Answered {
+		t.Fatalf("version view: %+v %v", v.Questions, err)
+	}
+}

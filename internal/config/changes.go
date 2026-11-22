@@ -137,6 +137,8 @@ type savedState struct {
 	origin map[string]string
 	// storedBody is the version's document as the store holds it, which for a legacy version is not configBody.
 	storedBody []byte
+	// questions are the decisions the version's upgrade met, read with their provisional choices.
+	questions []Question
 }
 type preparedChange struct {
 	State                  savedState
