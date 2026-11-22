@@ -1,7 +1,7 @@
 import { Alert, Badge, Button, Group, Modal, SegmentedControl, Stack, Table, Text, Title } from '@mantine/core';
 import { useCallback, useState } from 'react';
 import { ApiError, reportError, type ApiClient } from '../api';
-import type { AddressAlias, AliasKinds, PortAlias, Rule, SavedObject, Session, Snapshot } from '../types';
+import type { AddressAlias, AliasKinds, PortAlias, SavedObject, Session, Snapshot } from '../types';
 import { useResource } from '../useResource';
 import { AliasEditor } from './AliasEditor';
 import { Loaded } from './Loaded';
@@ -14,7 +14,6 @@ export type Row = { kind: 'addresses'; item: SavedObject<AddressAlias> } | { kin
 
 const protocols: Record<PortAlias['protocol'], string> = { tcp: 'TCP', udp: 'UDP', icmp: 'ICMP', icmpv6: 'ICMPv6', group: 'group' };
 
-// What an alias holds, in a line.
 function holds(row: Row, names: Map<string, string>) {
   const members = (ids: string[] = []) => ids.map((id) => names.get(id) ?? 'unknown alias').join(', ');
   if (row.kind === 'addresses') {
@@ -29,23 +28,28 @@ function holds(row: Row, names: Map<string, string>) {
 
 // uses says what still names an alias, in the words of the pages those things are on. The engine refuses to
 // delete an alias in use; the page says by what, so the refusal is never the first the user hears of it.
-function uses(id: string, rules: Rule[], rows: Row[], snapshot: Snapshot) {
+function uses(id: string, rows: Row[], snapshot: Snapshot) {
   const found: string[] = [];
-  rules.forEach((rule, index) => {
+  (snapshot.value.rules ?? []).forEach((rule, index) => {
     if ([...rule.from.addresses, ...rule.to.addresses, ...rule.ports].includes(id)) found.push(`Rule ${index + 1}, ${rule.name}`);
   });
   for (const row of rows) if (row.item.value.members?.includes(id)) found.push(`Alias ${row.item.value.name}`);
   if (snapshot.value.management?.allowedSources?.includes(id)) found.push('The management segment\'s allowed sources');
-  for (const forward of snapshot.value.nat?.portForwards ?? []) if (forward.from?.includes(id) || forward.to?.address === id) found.push(`Port forward ${forward.name ?? ''}`.trim());
-  for (const entry of snapshot.value.nat?.oneToOne ?? []) if (entry.destination?.includes(id)) found.push(`One-to-one NAT ${entry.name ?? ''}`.trim());
+  for (const forward of snapshot.value.nat?.portForwards ?? []) if (forward.from?.includes(id) || forward.to?.address === id) found.push(`Port forward ${forward.name}`);
+  for (const entry of snapshot.value.nat?.oneToOne ?? []) if (entry.destination?.includes(id)) found.push(`One-to-one NAT ${entry.name}`);
   return found;
 }
 
 export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesScreenProps) {
   const canWrite = session.capabilities.includes('configuration.write');
+  // The aliases with their versions, and the configuration that names them. They are three reads: when a save
+  // landed between them they are read again, twice at most, so "nothing names it" is seldom said of an alias
+  // something just began to name.
   const resource = useResource(useCallback(async () => {
-    const [addresses, ports, rules, snapshot] = await Promise.all([api.aliases('addresses'), api.aliases('ports'), api.rules(), api.config()]);
-    return { addresses, ports, rules, snapshot };
+    for (let tries = 0; ; tries++) {
+      const [addresses, ports, snapshot] = await Promise.all([api.aliases('addresses'), api.aliases('ports'), api.config()]);
+      if ((addresses.savedVersion === snapshot.savedVersion && ports.savedVersion === snapshot.savedVersion) || tries === 2) return { addresses, ports, snapshot };
+    }
   }, [api]), onSessionLost);
   const [show, setShow] = useState<'all' | Kind>('all');
   const [editing, setEditing] = useState<Row | Kind>();
@@ -82,14 +86,16 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
       </Group>
       {error && <Alert color="red" role="alert" title="The aliases were not changed" withCloseButton onClose={() => setError('')}>{error}</Alert>}
       <Loaded resource={resource} what="aliases">
-        {({ addresses, ports, rules, snapshot }) => {
+        {({ addresses, ports, snapshot }) => {
           const rows: Row[] = [
             ...addresses.items.map((item): Row => ({ kind: 'addresses', item })),
             ...ports.items.map((item): Row => ({ kind: 'ports', item })),
           ].sort((a, b) => a.item.value.name.localeCompare(b.item.value.name));
           const names = new Map(rows.map((row) => [row.item.value.id, row.item.value.name]));
           const shown = rows.filter((row) => show === 'all' || row.kind === show);
-          const usedBy = (row: Row) => uses(row.item.value.id, rules.items.map((item) => item.value), rows, snapshot);
+          const usedBy = (row: Row) => uses(row.item.value.id, rows, snapshot);
+          const blockers = deleting ? usedBy(deleting) : [];
+          const noun = (row: Row) => (row.kind === 'addresses' ? 'address alias' : 'port alias');
           return (
             <Stack>
               <SegmentedControl aria-label="Kind of alias" value={show} onChange={(next) => setShow(next as typeof show)}
@@ -114,8 +120,8 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
                           {canWrite && (
                             <Table.Td>
                               <Group gap="xs" wrap="nowrap">
-                                <Button size="compact-xs" variant="default" aria-label={`Edit ${alias.name}`} onClick={() => setEditing(row)}>Edit</Button>
-                                <Button size="compact-xs" variant="default" color="red" aria-label={`Delete ${alias.name}`} onClick={() => setDeleting(row)}>Delete</Button>
+                                <Button size="compact-xs" variant="default" disabled={busy} aria-label={`Edit ${noun(row)} ${alias.name}`} onClick={() => setEditing(row)}>Edit</Button>
+                                <Button size="compact-xs" variant="default" color="red" disabled={busy} aria-label={`Delete ${noun(row)} ${alias.name}`} onClick={() => setDeleting(row)}>Delete</Button>
                               </Group>
                             </Table.Td>
                           )}
@@ -136,21 +142,23 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
                       throw requestError;
                     }
                     onSaved();
+                    // An alias just added is not hidden by the kind the table was narrowed to.
+                    if (!saved) setShow('all');
                     await resource.reload();
                   }} />
               )}
-              <Modal opened={Boolean(deleting)} onClose={() => setDeleting(undefined)} title="Delete alias" centered lockScroll={false} closeButtonProps={{ 'aria-label': 'Close' }}>
-                {deleting && (usedBy(deleting).length > 0 ? (
+              <Modal opened={Boolean(deleting)} onClose={() => setDeleting(undefined)} title="Delete alias" centered lockScroll={false} closeButtonProps={{ 'aria-label': 'Close', disabled: busy }} closeOnEscape={!busy} closeOnClickOutside={!busy}>
+                {deleting && (blockers.length > 0 ? (
                   <Stack>
                     <Text><strong>{deleting.item.value.name}</strong> cannot be deleted while these name it. Take it out of them first:</Text>
-                    <ul className="fixed-rules">{usedBy(deleting).map((use) => <li key={use}>{use}</li>)}</ul>
+                    <ul className="fixed-rules">{blockers.map((use) => <li key={use}>{use}</li>)}</ul>
                     <Group justify="flex-end"><Button variant="default" onClick={() => setDeleting(undefined)}>Keep it</Button></Group>
                   </Stack>
                 ) : (
                   <Stack>
                     <Text>Delete the alias <strong>{deleting.item.value.name}</strong>? Nothing names it.</Text>
                     <Group justify="flex-end">
-                      <Button variant="default" onClick={() => setDeleting(undefined)}>Cancel</Button>
+                      <Button variant="default" disabled={busy} onClick={() => setDeleting(undefined)}>Cancel</Button>
                       <Button color="red" loading={busy} onClick={() => void remove(deleting)}>Delete alias</Button>
                     </Group>
                   </Stack>

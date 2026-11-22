@@ -16,7 +16,6 @@ import type {
   Rule,
   SavedList,
   SavedObject,
-  SavedRolePage,
   Session,
   Snapshot,
   SystemInfo,
@@ -52,6 +51,30 @@ export function apiErrorMessage(error: unknown): string {
     return details ? `${error.message} ${details}` : error.message;
   }
   return 'The request could not be completed.';
+}
+
+// fieldErrors sorts an engine refusal by the form field each detail is about. The engine names fields by path
+// ("/from/zones/0"); field picks the form's field out of one, and a detail about no field of the form goes
+// under "", to show above it. A field refused more than once for one reason says it once.
+export function fieldErrors(error: unknown, field: RegExp) {
+  const fields = new Map<string, string>();
+  if (!(error instanceof ApiError)) return fields;
+  for (const detail of error.details) {
+    const name = field.exec(detail.path ?? '')?.[1] ?? '';
+    const said = fields.get(name);
+    if (!said?.includes(detail.message)) fields.set(name, [said, detail.message].filter(Boolean).join(' '));
+  }
+  return fields;
+}
+
+// saveFailure is what a side panel says above its form when a save was refused. Someone else's change
+// underneath keeps what was typed and says what happened; refusals beside their fields are also said once,
+// where the form begins, for whoever hears the page.
+export function saveFailure(error: unknown, fields: Map<string, string>, what: string) {
+  if (error instanceof ApiError && error.status === 412) return `This ${what} was changed by someone else while it was open here. Close the panel to see what is saved, then make the change again.`;
+  if (error instanceof ApiError && error.status === 404) return `This ${what} was deleted by someone else while it was open here. Close the panel; to keep it, add it again.`;
+  if (fields.size === 0 || fields.has('')) return fields.get('') ?? apiErrorMessage(error);
+  return 'Some of the fields below were refused.';
 }
 
 // reportError signs the session out on a 401 and shows any other error's message.
@@ -196,7 +219,7 @@ export class ApiClient {
   }
 
   savedRoles() {
-    return this.request<SavedRolePage>('/api/v1/config/roles');
+    return this.request<SavedList<Role>>('/api/v1/config/roles');
   }
 
   capabilities(cursor = '') {
@@ -284,13 +307,16 @@ export class ApiClient {
     return this.request<SavedList<AliasKinds[K]>>(`/api/v1/config/aliases/${kind}`);
   }
 
-  // An alias is saved whole. Without a saved one it is created.
-  saveAlias<K extends keyof AliasKinds>(kind: K, alias: Omit<AliasKinds[K], 'id'>, saved?: SavedObject<AliasKinds[K]>) {
-    const path = `/api/v1/config/aliases/${kind}`;
-    if (!saved) return this.request<SavedObject<AliasKinds[K]>>(path, { method: 'POST', body: JSON.stringify(alias) }, true);
-    return this.request<SavedObject<AliasKinds[K]>>(`${path}/${encodeURIComponent(saved.value.id)}`, {
-      method: 'PUT', headers: { 'If-Match': `"${saved.value.id}.${saved.version}"` }, body: JSON.stringify(alias),
+  // An object is saved whole: created without a saved one, and otherwise replaced against its version.
+  private save<T extends { id: string }>(path: string, value: Omit<T, 'id'>, saved?: SavedObject<T>) {
+    if (!saved) return this.request<SavedObject<T>>(path, { method: 'POST', body: JSON.stringify(value) }, true);
+    return this.request<SavedObject<T>>(`${path}/${encodeURIComponent(saved.value.id)}`, {
+      method: 'PUT', headers: { 'If-Match': `"${saved.value.id}.${saved.version}"` }, body: JSON.stringify(value),
     }, true);
+  }
+
+  saveAlias<K extends keyof AliasKinds>(kind: K, alias: Omit<AliasKinds[K], 'id'>, saved?: SavedObject<AliasKinds[K]>) {
+    return this.save(`/api/v1/config/aliases/${kind}`, alias, saved);
   }
 
   deleteAlias(kind: keyof AliasKinds, id: string, version: string) {
@@ -301,12 +327,9 @@ export class ApiClient {
     return this.request<OrderedList<Rule>>('/api/v1/config/rules');
   }
 
-  // A rule is saved whole. Without an ID it is created, at the end of the list.
+  // A new rule goes to the end of the list.
   saveRule(rule: Omit<Rule, 'id'>, saved?: SavedObject<Rule>) {
-    if (!saved) return this.request<SavedObject<Rule>>('/api/v1/config/rules', { method: 'POST', body: JSON.stringify(rule) }, true);
-    return this.request<SavedObject<Rule>>(`/api/v1/config/rules/${encodeURIComponent(saved.value.id)}`, {
-      method: 'PUT', headers: { 'If-Match': `"${saved.value.id}.${saved.version}"` }, body: JSON.stringify(rule),
-    }, true);
+    return this.save('/api/v1/config/rules', rule, saved);
   }
 
   deleteRule(id: string, version: string) {

@@ -75,12 +75,6 @@ export interface SavedObject<T> {
   version: string;
 }
 
-export interface SavedRolePage {
-  state: 'saved';
-  savedVersion: string;
-  items: Array<SavedObject<Role>>;
-}
-
 export interface Apply {
   id: string;
   savedVersion: string;
@@ -232,9 +226,10 @@ export interface Snapshot {
     zones: Array<{ id: string; name: string }>;
     management?: { segment: string; allowedSources?: string[] };
     aliases?: { addresses: Array<{ id: string; name: string }>; ports: Array<{ id: string; name: string }> };
+    rules?: Rule[];
     nat?: {
-      portForwards?: Array<{ id: string; name?: string; enabled: boolean; noRedirect?: boolean; filterRule?: string; from?: string[]; to?: { address?: string } }>;
-      oneToOne?: Array<{ id: string; name?: string; destination?: string[] }>;
+      portForwards?: Array<{ id: string; name: string; enabled: boolean; noRedirect?: boolean; filterRule?: string; from?: string[]; to?: { address?: string } }>;
+      oneToOne?: Array<{ id: string; name: string; destination?: string[] }>;
     };
   };
 }
@@ -296,9 +291,6 @@ export interface Rule {
 }
 
 // An ordered list as the engine serves it: its items in order, and the version that guards the order.
-export interface OrderedList<T> {
-  state: 'saved';
-  savedVersion: string;
+export interface OrderedList<T> extends SavedList<T> {
   version: string;
-  items: Array<SavedObject<T>>;
 }

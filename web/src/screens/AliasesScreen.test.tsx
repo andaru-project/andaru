@@ -24,8 +24,8 @@ const rules = [
   { id: 'rul_b', name: 'Lab out', enabled: true, action: 'accept', from: side([], ['adr_lab']), to: side(), ports: [], log: false },
 ];
 const list = (items: unknown[]) => ({ state: 'saved', savedVersion: '9', items: items.map((value) => ({ value, version: '4' })) });
-const config = { state: 'saved', savedVersion: '9', unusedSecrets: [], value: {
-  links: [], segments: [], zones: [], management: { segment: 'seg_lan', allowedSources: ['adr_pool'] },
+const config = { state: 'saved', savedVersion: '9', value: {
+  rules, management: { segment: 'seg_lan', allowedSources: ['adr_pool'] },
   nat: { portForwards: [{ id: 'pfw_a', name: 'web in', enabled: true, from: ['adr_lab'], to: { address: 'adr_nas' } }], oneToOne: [{ id: 'oto_a', name: 'mail', destination: ['adr_lab'] }] },
 } };
 
@@ -33,7 +33,7 @@ function show(routes: Parameters<typeof fetchRoutes>[0] = {}, capabilities = ['c
   const onSaved = vi.fn();
   const fetch = fetchRoutes({
     '/api/v1/config/aliases/addresses': list(addresses), '/api/v1/config/aliases/ports': list(ports),
-    '/api/v1/config/rules': { ...list(rules), version: '3' }, '/api/v1/config': config, ...routes,
+    '/api/v1/config': config, ...routes,
   });
   render(<AliasesScreen api={new ApiClient('csrf')} session={session(capabilities)} onSaved={onSaved} onSessionLost={vi.fn()} />);
   return { fetch, onSaved };
@@ -77,16 +77,22 @@ it('narrows the table to one kind', async () => {
   expect(rows()).toHaveLength(4);
 });
 
-it('gives an account that may not write no controls, and says so when nothing is saved', async () => {
-  show({ '/api/v1/config/aliases/addresses': list([]), '/api/v1/config/aliases/ports': list([]) }, ['configuration.read']);
+it('gives an account that may not write no controls', async () => {
+  show({}, ['configuration.read']);
+  await screen.findByText('nas');
+  expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  expect(screen.queryByRole('columnheader', { name: 'Actions' })).not.toBeInTheDocument();
+});
+
+it('says so when nothing is saved', async () => {
+  show({ '/api/v1/config/aliases/addresses': list([]), '/api/v1/config/aliases/ports': list([]) });
   expect(await screen.findByText('No aliases')).toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: /alias/ })).not.toBeInTheDocument();
 });
 
 it('does not offer to delete an alias that is still named, and says by what', async () => {
   const user = userEvent.setup();
   const { fetch } = show();
-  await user.click(await screen.findByRole('button', { name: 'Delete pool' }));
+  await user.click(await screen.findByRole('button', { name: 'Delete address alias pool' }));
   const dialog = await screen.findByRole('dialog', { name: 'Delete alias' });
   expect(dialog).toHaveTextContent("The management segment's allowed sources");
   expect(within(dialog).queryByRole('button', { name: 'Delete alias' })).not.toBeInTheDocument();
@@ -96,8 +102,8 @@ it('does not offer to delete an alias that is still named, and says by what', as
 
 it('deletes an alias nothing names, against its version, after asking', async () => {
   const user = userEvent.setup();
-  const { fetch, onSaved } = show({ 'DELETE /api/v1/config/aliases/ports/svc_usual': new Response(null, { status: 204 }) });
-  await user.click(await screen.findByRole('button', { name: 'Delete usual' }));
+  const { fetch, onSaved } = show({ 'DELETE /api/v1/config/aliases/ports/svc_usual': { state: 'saved', savedVersion: '10' } });
+  await user.click(await screen.findByRole('button', { name: 'Delete port alias usual' }));
   const dialog = await screen.findByRole('dialog', { name: 'Delete alias' });
   await user.click(within(dialog).getByRole('button', { name: 'Delete alias' }));
   await waitFor(() => expect(onSaved).toHaveBeenCalled());
@@ -106,7 +112,7 @@ it('deletes an alias nothing names, against its version, after asking', async ()
   expect(new Headers(init?.headers).get('If-Match')).toBe('"svc_usual.4"');
 });
 
-it('adds an address alias of each kind with only that kind\'s fields, and shows a refusal beside its field', async () => {
+it('adds a network alias with only its kind\'s fields, and shows a refusal beside its field', async () => {
   const user = userEvent.setup();
   let refuse = true;
   const { fetch, onSaved } = show({ 'POST /api/v1/config/aliases/addresses': () => {
@@ -135,7 +141,7 @@ it('adds a port alias from ports typed with commas and spaces', async () => {
   await user.click(await screen.findByRole('button', { name: 'Add port alias' }));
   const panel = await screen.findByRole('dialog', { name: 'Add port alias' });
   await user.type(within(panel).getByLabelText(/^Name/), 'mail');
-  await user.type(within(panel).getByLabelText('Ports'), '25, 465  587,8000-8100');
+  await user.type(within(panel).getByLabelText('Ports'), '25, 465  587,8000 - 8100,');
   await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
   await waitFor(() => expect(sent(fetch, 'POST')).toHaveLength(1));
   expect(JSON.parse(String(sent(fetch, 'POST')[0][1]?.body))).toEqual({ name: 'mail', protocol: 'tcp', ports: ['25', '465', '587', '8000-8100'] });
@@ -144,8 +150,8 @@ it('adds a port alias from ports typed with commas and spaces', async () => {
 it('opens a saved alias with its fields and saves it whole against its version', async () => {
   const user = userEvent.setup();
   const { fetch } = show({ 'PUT /api/v1/config/aliases/addresses/adr_pool': { value: addresses[2], version: '10' }, 'PUT /api/v1/config/aliases/ports/svc_usual': { value: ports[3], version: '10' } });
-  await user.click(await screen.findByRole('button', { name: 'Edit pool' }));
-  let panel = await screen.findByRole('dialog', { name: 'Edit pool' });
+  await user.click(await screen.findByRole('button', { name: 'Edit address alias pool' }));
+  let panel = await screen.findByRole('dialog', { name: 'Edit address alias pool' });
   await user.clear(within(panel).getByLabelText('Last address'));
   await user.type(within(panel).getByLabelText('Last address'), '192.168.1.80');
   await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
@@ -153,10 +159,53 @@ it('opens a saved alias with its fields and saves it whole against its version',
   expect(new Headers(sent(fetch, 'PUT')[0][1]?.headers).get('If-Match')).toBe('"adr_pool.4"');
   expect(JSON.parse(String(sent(fetch, 'PUT')[0][1]?.body))).toEqual({ name: 'pool', kind: 'range', first: '192.168.1.50', last: '192.168.1.80' });
   // A group keeps its members when nothing about them is touched.
-  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Edit pool' })).not.toBeInTheDocument());
-  await user.click(await screen.findByRole('button', { name: 'Edit usual' }));
-  panel = await screen.findByRole('dialog', { name: 'Edit usual' });
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Edit address alias pool' })).not.toBeInTheDocument());
+  await user.click(await screen.findByRole('button', { name: 'Edit port alias usual' }));
+  panel = await screen.findByRole('dialog', { name: 'Edit port alias usual' });
   await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
   await waitFor(() => expect(sent(fetch, 'PUT')).toHaveLength(2));
   expect(JSON.parse(String(sent(fetch, 'PUT')[1][1]?.body))).toEqual({ name: 'usual', protocol: 'group', members: ['svc_web', 'svc_ping'] });
+});
+
+it('refuses a name another alias of the kind has before asking the engine, and shows an added alias whatever kind the table showed', async () => {
+  const user = userEvent.setup();
+  const { fetch } = show({ 'POST /api/v1/config/aliases/ports': jsonResponse(201, { value: { id: 'svc_new', name: 'nas', protocol: 'udp', ports: ['2049'] }, version: '10' }) });
+  await screen.findByText('nas');
+  await user.click(screen.getByRole('radio', { name: 'Addresses' }));
+  await user.click(screen.getByRole('button', { name: 'Add port alias' }));
+  const panel = await screen.findByRole('dialog', { name: 'Add port alias' });
+  await user.type(within(panel).getByLabelText(/^Name/), 'web');
+  await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
+  expect(within(panel).getByText('Another port alias has this name.')).toBeInTheDocument();
+  expect(sent(fetch, 'POST')).toHaveLength(0);
+  // An address alias may have the name: the two kinds are named apart.
+  await user.clear(within(panel).getByLabelText(/^Name/));
+  await user.type(within(panel).getByLabelText(/^Name/), 'nas');
+  await user.type(within(panel).getByLabelText('Ports'), '2049');
+  await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
+  await waitFor(() => expect(sent(fetch, 'POST')).toHaveLength(1));
+  await waitFor(() => expect(screen.getByRole('radio', { name: 'All' })).toBeChecked());
+});
+
+it('says the alias changed underneath when its save is refused for that, and opens it next on what is saved', async () => {
+  const user = userEvent.setup();
+  let version = '4';
+  const { fetch } = show({
+    '/api/v1/config/aliases/ports': () => jsonResponse(200, { state: 'saved', savedVersion: '9', items: ports.map((value) => ({ value, version })) }),
+    'PUT /api/v1/config/aliases/ports/svc_web': () => {
+      if (version !== '4') return jsonResponse(200, { value: ports[0], version: '6' });
+      version = '5';
+      return jsonResponse(412, { error: { code: 'PRECONDITION_FAILED', message: 'The object changed.' } });
+    },
+  });
+  await user.click(await screen.findByRole('button', { name: 'Edit port alias web' }));
+  let panel = await screen.findByRole('dialog', { name: 'Edit port alias web' });
+  await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
+  expect(await within(panel).findByText(/This port alias was changed by someone else/)).toBeInTheDocument();
+  await user.click(within(panel).getByRole('button', { name: 'Cancel' }));
+  await user.click(await screen.findByRole('button', { name: 'Edit port alias web' }));
+  panel = await screen.findByRole('dialog', { name: 'Edit port alias web' });
+  await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
+  await waitFor(() => expect(sent(fetch, 'PUT')).toHaveLength(2));
+  expect(new Headers(sent(fetch, 'PUT')[1][1]?.headers).get('If-Match')).toBe('"svc_web.5"');
 });

@@ -1,6 +1,6 @@
 import { Alert, Button, Drawer, Group, MultiSelect, NativeSelect, Stack, Textarea, TextInput } from '@mantine/core';
 import { useState, type FormEvent } from 'react';
-import { ApiError, apiErrorMessage } from '../api';
+import { ApiError, fieldErrors, saveFailure } from '../api';
 import type { AddressAlias, AliasKinds, PortAlias, SavedObject } from '../types';
 import type { Row } from './AliasesScreen';
 
@@ -19,22 +19,17 @@ const icmpTypes = {
   icmpv6: ['echo-request', 'echo-reply', 'destination-unreachable', 'packet-too-big', 'time-exceeded', 'parameter-problem'],
 };
 
-// The engine's refusals name fields by path ("/members/0"); each shows beside its field, the rest above the form.
-function fieldErrors(error: unknown) {
-  const fields = new Map<string, string>();
-  if (!(error instanceof ApiError)) return fields;
-  for (const detail of error.details) {
-    const field = /^\/(name|description|kind|protocol|address|prefix|first|last|members|ports|types)(?:\/|$)/.exec(detail.path ?? '')?.[1] ?? '';
-    fields.set(field, [fields.get(field), detail.message].filter(Boolean).join(' '));
-  }
-  return fields;
-}
+const field = /^\/(name|description|kind|protocol|address|prefix|first|last|members|ports|types)(?:\/|$)/;
 
 export function AliasEditor({ editing, rows, onClose, onSessionLost, onSave }: AliasEditorProps) {
   const kind = typeof editing === 'string' ? editing : editing.kind;
   const saved = typeof editing === 'string' ? undefined : editing;
-  const address = saved?.kind === 'addresses' ? saved.item.value : undefined;
-  const port = saved?.kind === 'ports' ? saved.item.value : undefined;
+  const savedAddress = saved?.kind === 'addresses' ? saved.item : undefined;
+  const savedPort = saved?.kind === 'ports' ? saved.item : undefined;
+  const address = savedAddress?.value;
+  const port = savedPort?.value;
+  const noun = kind === 'addresses' ? 'address alias' : 'port alias';
+  const title = saved ? `Edit ${noun} ${saved.item.value.name}` : `Add ${noun}`;
   const [name, setName] = useState(saved?.item.value.name ?? '');
   const [description, setDescription] = useState(saved?.item.value.description ?? '');
   const [what, setWhat] = useState<string>(address?.kind ?? port?.protocol ?? (kind === 'addresses' ? 'host' : 'tcp'));
@@ -58,6 +53,11 @@ export function AliasEditor({ editing, rows, onClose, onSessionLost, onSave }: A
       setErrors(new Map([['name', 'An alias needs a name.']]));
       return;
     }
+    // The engine refuses a name another alias of the kind has, and may blame the other one by its ID.
+    if (rows.some((row) => row.kind === kind && row.item.value.id !== saved?.item.value.id && row.item.value.name === name.trim())) {
+      setErrors(new Map([['name', `Another ${noun} has this name.`]]));
+      return;
+    }
     setBusy(true);
     setErrors(new Map());
     const identity = { name: name.trim(), ...(description ? { description } : {}) };
@@ -65,29 +65,25 @@ export function AliasEditor({ editing, rows, onClose, onSessionLost, onSave }: A
       if (kind === 'addresses') {
         const body: Omit<AddressAlias, 'id'> = { ...identity, kind: what as AddressAlias['kind'],
           ...(what === 'host' ? { address: value.trim() } : what === 'network' ? { prefix: value.trim() } : what === 'range' ? { first: value.trim(), last: last.trim() } : { members }) };
-        await onSave('addresses', body, saved?.kind === 'addresses' ? saved.item : undefined);
+        await onSave('addresses', body, savedAddress);
       } else {
         const body: Omit<PortAlias, 'id'> = { ...identity, protocol: what as PortAlias['protocol'],
-          ...(what === 'group' ? { members } : what === 'tcp' || what === 'udp' ? { ports: ports.split(/[\s,]+/).filter(Boolean) } : types.length > 0 ? { types } : {}) };
-        await onSave('ports', body, saved?.kind === 'ports' ? saved.item : undefined);
+          ...(what === 'group' ? { members } : what === 'tcp' || what === 'udp' ? { ports: ports.replace(/\s*-\s*/g, '-').split(/[\s,]+/).filter(Boolean) } : types.length > 0 ? { types } : {}) };
+        await onSave('ports', body, savedPort);
       }
       onClose();
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) return onSessionLost();
-      const fields = fieldErrors(error);
+      const fields = fieldErrors(error, field);
       setErrors(fields);
-      if (error instanceof ApiError && error.status === 412) setFailure('This alias was changed by someone else while it was open here. Close the panel to see what is saved, then make the change again.');
-      else if (error instanceof ApiError && error.status === 404) setFailure('This alias was deleted by someone else while it was open here. Close the panel; to keep it, add it again.');
-      else if (fields.size === 0 || fields.has('')) setFailure(fields.get('') ?? apiErrorMessage(error));
-      else setFailure('Some of the fields below were refused.');
+      setFailure(saveFailure(error, fields, noun));
     } finally {
       setBusy(false);
     }
   }
 
-  const title = saved ? `Edit ${saved.item.value.name}` : kind === 'addresses' ? 'Add address alias' : 'Add port alias';
   return (
-    <Drawer opened onClose={onClose} position="right" size="md" title={title} lockScroll={false} closeButtonProps={{ 'aria-label': 'Close' }}>
+    <Drawer opened onClose={onClose} position="right" size="md" title={title} lockScroll={false} closeButtonProps={{ 'aria-label': 'Close', disabled: busy }} closeOnEscape={!busy} closeOnClickOutside={!busy}>
       <form onSubmit={submit} noValidate>
         <Stack>
           {failure && <Alert color="red" role="alert" title="The alias was not saved">{failure}</Alert>}
@@ -116,7 +112,7 @@ export function AliasEditor({ editing, rows, onClose, onSessionLost, onSave }: A
           )}
           {what === 'group' && <MultiSelect label="Members" description="Aliases of the same kind that are not groups themselves." data={candidates} value={members} error={errors.get('members')} searchable clearable onChange={setMembers} />}
           <Group justify="flex-end">
-            <Button variant="default" onClick={onClose}>Cancel</Button>
+            <Button variant="default" disabled={busy} onClick={onClose}>Cancel</Button>
             <Button loading={busy} type="submit">Save alias</Button>
           </Group>
         </Stack>

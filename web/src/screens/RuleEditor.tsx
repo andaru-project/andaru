@@ -1,6 +1,6 @@
 import { Alert, Button, Drawer, Fieldset, Group, MultiSelect, SegmentedControl, Stack, Switch, Text, Textarea, TextInput } from '@mantine/core';
 import { useState, type FormEvent } from 'react';
-import { ApiError, apiErrorMessage } from '../api';
+import { ApiError, fieldErrors, saveFailure } from '../api';
 import { firewallZone, type Rule, type RuleSide, type Snapshot } from '../types';
 
 interface RuleEditorProps {
@@ -13,17 +13,8 @@ interface RuleEditorProps {
 
 const anySide: RuleSide = { zones: [], addresses: [] };
 
-// The engine is the authority on what a rule may be. Its refusals name fields by path ("/from/zones/0"); each
-// shows beside the field it is about, and one about no field here shows above the form.
-function fieldErrors(error: unknown) {
-  const fields = new Map<string, string>();
-  if (!(error instanceof ApiError)) return fields;
-  for (const detail of error.details) {
-    const field = /^\/(name|description|action|ports|(?:from|to)\/(?:zones|addresses|not))(?:\/|$)/.exec(detail.path ?? '')?.[1] ?? '';
-    fields.set(field, [fields.get(field), detail.message].filter(Boolean).join(' '));
-  }
-  return fields;
-}
+// The engine is the authority on what a rule may be: its refusals show beside the fields they name.
+const field = /^\/(name|description|action|ports|(?:from|to)\/(?:zones|addresses|not))(?:\/|$)/;
 
 // The editor is a panel beside the list, so the order stays in view while a rule is written.
 export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onSave }: RuleEditorProps) {
@@ -62,14 +53,9 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onSave }: R
       onClose();
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) return onSessionLost();
-      const fields = fieldErrors(error);
+      const fields = fieldErrors(error, field);
       setErrors(fields);
-      // Someone else's change underneath keeps what was typed here, and says what happened.
-      if (error instanceof ApiError && error.status === 412) setFailure('This rule was changed by someone else while it was open here. Close the panel to see what is saved, then make the change again.');
-      else if (error instanceof ApiError && error.status === 404) setFailure('This rule was deleted by someone else while it was open here. Close the panel; to keep it, add it again.');
-      else if (fields.size === 0 || fields.has('')) setFailure(fields.get('') ?? apiErrorMessage(error));
-      // Refusals beside their fields are also said once, aloud, where the form begins.
-      else setFailure('Some of the fields below were refused.');
+      setFailure(saveFailure(error, fields, 'rule'));
     } finally {
       setBusy(false);
     }
@@ -91,7 +77,7 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onSave }: R
   );
 
   return (
-    <Drawer opened onClose={onClose} position="right" size="md" title={rule ? `Edit ${rule.name}` : 'Add rule'} lockScroll={false} closeButtonProps={{ 'aria-label': 'Close' }}>
+    <Drawer opened onClose={onClose} position="right" size="md" title={rule ? `Edit ${rule.name}` : 'Add rule'} lockScroll={false} closeButtonProps={{ 'aria-label': 'Close', disabled: busy }} closeOnEscape={!busy} closeOnClickOutside={!busy}>
       <form onSubmit={submit} noValidate>
         <Stack>
           {failure && <Alert color="red" role="alert" title="The rule was not saved">{failure}</Alert>}
@@ -111,7 +97,7 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onSave }: R
           <MultiSelect label="Ports" description="Port aliases. Empty is any protocol and port." data={portAliases} value={ports} error={errors.get('ports')} searchable clearable onChange={setPorts} />
           <Switch label="Log what this rule matches" checked={log} onChange={(event) => setLog(event.currentTarget.checked)} />
           <Group justify="flex-end">
-            <Button variant="default" onClick={onClose}>Cancel</Button>
+            <Button variant="default" disabled={busy} onClick={onClose}>Cancel</Button>
             <Button loading={busy} type="submit">Save rule</Button>
           </Group>
         </Stack>
