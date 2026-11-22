@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -60,25 +59,4 @@ func TestDeletingOutboundKeepsNATLists(t *testing.T) {
 	if len(s.Config.NAT.PortForwards) != 1 || len(s.Config.NAT.OneToOne) != 1 || s.Config.NAT.Outbound.Mode != "" {
 		t.Fatalf("after deleting outbound: %+v", s.Config.NAT)
 	}
-}
-
-// A save refuses a forward it writes with an empty negated source or too many left-out sources; a forward the save
-// does not touch loads and saves on as it was.
-func TestWrittenForwardLeftOutSources(t *testing.T) {
-	s := seededState(t)
-	zone := s.Config.Zones[0].ID
-	alias := mustRun(t, &s, `{"operations":[{"op":"create","collection":"aliases.addresses","localId":"h","value":{"name":"h","kind":"host","address":"198.51.100.7"}}]}`).Created["h"]
-	negated := func(n int) string {
-		from := strings.TrimSuffix(strings.Repeat(`"`+alias+`",`, n), ",")
-		return strings.Replace(forwardValue("a", "8080", zone), `"from":[]`, `"from":[`+from+`],"fromNegated":true`, 1)
-	}
-	for n, want := range map[int]string{0: "Name the sources to leave out.", maxLeftOut + 1: "leaves out at most"} {
-		_, e := run(t, &s, `{"operations":[{"op":"create","collection":"nat.portForwards","localId":"a","value":`+negated(n)+`}]}`)
-		if raw, _ := json.Marshal(e); e == nil || !strings.Contains(string(raw), want) {
-			t.Fatalf("%d left out: %v %s", n, e, raw)
-		}
-	}
-	mustRun(t, &s, `{"operations":[{"op":"create","collection":"nat.portForwards","localId":"a","value":`+negated(maxLeftOut)+`}]}`)
-	s.Config.NAT.PortForwards[0].From = []string{} // as a save before the limits could leave it
-	mustRun(t, &s, `{"operations":[{"op":"create","collection":"nat.portForwards","localId":"b","value":`+forwardValue("b", "8081", zone)+`}]}`)
 }

@@ -142,6 +142,17 @@ func upgradeLegacy(m map[string]any) map[string]string {
 		m["rules"] = rules
 		delete(m, "policy")
 	}
+	// A forward negating no sources matched every source; schema 4 refuses the empty negation.
+	if nat, ok := m["nat"].(map[string]any); ok {
+		forwards, _ := nat["portForwards"].([]any)
+		for _, f := range forwards {
+			if f, ok := f.(map[string]any); ok && f["fromNegated"] == true {
+				if from, _ := f["from"].([]any); len(from) == 0 {
+					delete(f, "fromNegated")
+				}
+			}
+		}
+	}
 	m["schemaVersion"] = schemaVersion
 	return origin
 }
