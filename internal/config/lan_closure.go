@@ -200,7 +200,7 @@ func KeptDeclaration(body []byte) (RestoreDocuments, error) {
 			// Schema 3 requires the key, so a copy kept under it keeps an empty list.
 			if len(roles) == 0 && string(d["schemaVersion"]) != "3" {
 				delete(d, "roles")
-			} else if d["roles"], err = json.Marshal(nonNil(roles)); err != nil {
+			} else if d["roles"], err = json.Marshal(roles); err != nil {
 				return RestoreDocuments{}, err
 			}
 			if declarationBody, err = json.Marshal(d); err != nil {
