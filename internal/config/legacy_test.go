@@ -161,3 +161,46 @@ func TestLegacyRuleWhoseSplitHalfNeverMatchesStillLoads(t *testing.T) {
 		t.Fatal("a rule that never matched in the form before was accepted")
 	}
 }
+
+// TestLegacyFormsLoad holds documents of the later schemas a release wrote. A release moved a configuration to
+// schema 2 once a restore left a link's password unresolved, and to schema 3 once it held roles; either stayed
+// after that, so schema 3 also comes with no roles. Each is the schema 1 document with those additions, and loads
+// as the current form with its rules upgraded and what made it that schema intact.
+func TestLegacyFormsLoad(t *testing.T) {
+	const eth, ppp, role = "lnk_00000001-0000-4000-8000-000000000001", "lnk_00000002-0000-4000-8000-000000000002", "rol_00000001-0000-4000-8000-000000000001"
+	links := []any{
+		map[string]any{"id": eth, "name": "wan0", "kind": "ethernet", "mtu": 1500, "enabled": true, "permanentMac": "02:00:00:00:00:01"},
+		map[string]any{"id": ppp, "name": "wan", "kind": "pppoe", "mtu": 1492, "enabled": true, "parent": eth, "username": "user", "password": map[string]any{"secret": "WAN_PASSWORD", "unresolved": true}},
+	}
+	roles := []any{map[string]any{"id": role, "name": "Operator", "capabilities": []any{"configuration.write", "status.read"}}}
+	for _, tc := range []struct {
+		schema int
+		roles  []any
+	}{{2, nil}, {3, roles}, {3, []any{}}} {
+		var doc map[string]any
+		if err := json.Unmarshal(legacyDocument(t), &doc); err != nil {
+			t.Fatal(err)
+		}
+		doc["schemaVersion"], doc["links"] = tc.schema, links
+		if tc.roles != nil {
+			doc["roles"] = tc.roles
+		}
+		raw, err := canonical(doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d, stored, _, err := decodeSaved(raw)
+		if err != nil || stored != tc.schema || d.SchemaVersion != schemaVersion {
+			t.Fatalf("schema %d: stored=%d schema=%d: %v", tc.schema, stored, d.SchemaVersion, err)
+		}
+		if len(d.Rules) != 7 || len(d.Aliases.Addresses) != 1 {
+			t.Fatalf("schema %d: rules %d, aliases %+v", tc.schema, len(d.Rules), d.Aliases)
+		}
+		if len(d.Links) != 2 || d.Links[1].Password == nil || !d.Links[1].Password.Unresolved {
+			t.Fatalf("schema %d: links: %+v", tc.schema, d.Links)
+		}
+		if len(d.Roles) != len(tc.roles) || len(tc.roles) == 1 && (d.Roles[0].ID != role || len(d.Roles[0].Capabilities) != 2) {
+			t.Fatalf("schema %d: roles: %+v", tc.schema, d.Roles)
+		}
+	}
+}
