@@ -17,6 +17,9 @@ var legacySchema []byte
 
 const legacySchemaURI = "https://andaru.invalid/private/config-schema-v3"
 
+// legacyTarget is the schema upgradeLegacy turns schemas 1 to 3 into.
+const legacyTarget = 4
+
 // legacyCollections is where the store recorded a collection's object versions before schema 4.
 var legacyCollections = map[string][]string{"aliases.addresses": {"addresses"}, "aliases.ports": {"services"}, "rules": {"policy.input", "policy.forward"}}
 
@@ -67,13 +70,14 @@ func decodeSavedWith(raw []byte, answers map[string]string) (d declaration, stor
 		return d, 0, nil, nil, schemaErrors(err)
 	}
 	m := instance.(map[string]any)
-	for from := head.SchemaVersion; from < 4; from++ {
+	for from := head.SchemaVersion; from < legacyTarget; from++ {
 		met, err := decide(m, from, answers)
 		if err != nil {
 			return d, 0, nil, nil, err
 		}
 		questions = append(questions, met...)
 	}
+	// The migration from schema 4 adds its step after this one: its decisions, then its change.
 	origin = upgradeLegacy(m)
 	upgraded, err := json.Marshal(m)
 	if err == nil && len(origin) > 0 {
@@ -81,6 +85,11 @@ func decodeSavedWith(raw []byte, answers map[string]string) (d declaration, stor
 	}
 	if err != nil {
 		return d, 0, nil, nil, err
+	}
+	for id := range answers {
+		if !slices.ContainsFunc(questions, func(q Question) bool { return q.ID == id }) {
+			return d, 0, nil, nil, fault("VALIDATION_FAILED", "/choices", fmt.Sprintf("This version has no question %q.", id))
+		}
 	}
 	d, err = decodeDeclaration(upgraded)
 	return d, head.SchemaVersion, origin, questions, err

@@ -80,6 +80,9 @@ func TestDecisionReadsProvisionallyUntilAnswered(t *testing.T) {
 	if _, _, _, _, err = decodeSavedWith(raw, map[string]string{"rename": "nope"}); err == nil {
 		t.Fatal("an answer that is no choice was accepted")
 	}
+	if _, _, _, _, err = decodeSavedWith(raw, map[string]string{"renme": "rename"}); err == nil {
+		t.Fatal("an answer to no question was accepted")
+	}
 	// A document of the current schema meets no decision of an older one.
 	current, err := canonical(d)
 	if err != nil {
