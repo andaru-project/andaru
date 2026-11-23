@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"database/sql"
 	"fmt"
+	"runtime"
 	"sync"
+	"weak"
 
 	"github.com/google/uuid"
 	mqtt "github.com/mochi-mqtt/server/v2"
@@ -29,9 +31,11 @@ type store struct {
 	// discarding holds the clients a discard was asked for, so each is dropped once; drops counts the drops
 	// still running, which Stop waits for.
 	discarding sync.Map
-	// writers names each connection for the rows it writes (writer).
+	// writers names each connection for the rows it writes (writer), by a weak pointer to its client.
 	writers sync.Map
-	drops   sync.WaitGroup
+	// clientRows serialises the writes of client rows, so one is never written after a successor's.
+	clientRows sync.Mutex
+	drops      sync.WaitGroup
 	// stopping is set by Stop, under dropsMu, so no drop starts once Stop waits for them.
 	dropsMu  sync.Mutex
 	stopping bool
@@ -66,6 +70,18 @@ func (s *store) Init(config any) error {
 		db.Close()
 		return err
 	}
+	// Stores from before rows recorded their writer get the column; their rows are nobody's.
+	var hasWriter bool
+	if err := db.QueryRow(`SELECT count(*) > 0 FROM pragma_table_info('mqtt_state') WHERE name = 'writer'`).Scan(&hasWriter); err != nil {
+		db.Close()
+		return err
+	}
+	if !hasWriter {
+		if _, err := db.Exec(`ALTER TABLE mqtt_state ADD COLUMN writer TEXT NOT NULL DEFAULT ''`); err != nil {
+			db.Close()
+			return err
+		}
+	}
 	// A crash between a discard deleting a client's row and the drop forgetting the rest leaves rows of a
 	// session that is gone. mochi would load its subscriptions without a client, so they go here.
 	if _, err := db.Exec(`DELETE FROM mqtt_state AS r WHERE r.kind IN (?, ?) AND NOT EXISTS (
@@ -88,10 +104,17 @@ func (s *store) Stop() error {
 
 // writer names the connection cl is, for the rows it writes. A client ID outlives its connections: a takeover or
 // a clean start puts another connection on it, whose rows have the same keys. A connection's late hook deletes
-// only the rows it wrote itself (delOwn), so it cannot delete its successor's. The name is forgotten when the
-// connection ends; a hook after that writes under a new name that no delete of its own will match.
+// only the rows it wrote itself (delOwn), so it cannot delete its successor's. The name lasts as long as the
+// client: a persistent session outlives its connection, and its offline deliveries are written under it.
 func (s *store) writer(cl *mqtt.Client) string {
-	name, _ := s.writers.LoadOrStore(cl, uuid.NewString())
+	key := weak.Make(cl)
+	if name, ok := s.writers.Load(key); ok {
+		return name.(string)
+	}
+	name, loaded := s.writers.LoadOrStore(key, uuid.NewString())
+	if !loaded {
+		runtime.AddCleanup(cl, func(key weak.Pointer[mqtt.Client]) { s.writers.Delete(key) }, key)
+	}
 	return name.(string)
 }
 
@@ -187,7 +210,12 @@ func message(kind, id string, cl *mqtt.Client, pk packets.Packet, sent int64) *s
 
 func inflightKey(cl *mqtt.Client, pk packets.Packet) string { return cl.ID + ":" + pk.FormatID() }
 
+// updateClient writes cl's client row while cl holds the session. The check and the write run under clientRows:
+// a successor writes its row only once mochi made it current, so a write of cl's after that finds cl no longer
+// current, and none can overwrite the successor's.
 func (s *store) updateClient(cl *mqtt.Client) {
+	s.clientRows.Lock()
+	defer s.clientRows.Unlock()
 	if _, discarding := s.discarding.Load(cl); discarding || !s.current(cl) {
 		return
 	}
@@ -220,7 +248,6 @@ func (s *store) OnSessionEstablished(cl *mqtt.Client, _ packets.Packet) { s.upda
 func (s *store) OnWillSent(cl *mqtt.Client, _ packets.Packet)           { s.updateClient(cl) }
 
 func (s *store) OnDisconnect(cl *mqtt.Client, _ error, expire bool) {
-	defer s.writers.Delete(cl)
 	if expire {
 		if s.current(cl) {
 			s.forget(cl.ID)

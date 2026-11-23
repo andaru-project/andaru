@@ -842,3 +842,40 @@ func TestLateHooksDeleteOnlyTheirOwnRows(t *testing.T) {
 		t.Fatal("a stale connection's completion deleted its successor's delivery row")
 	}
 }
+
+// A store from before rows recorded their writer gets the column, and its sessions keep working.
+func TestStoreWithoutWriterColumnIsMigrated(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bus.db")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`CREATE TABLE mqtt_state (kind TEXT NOT NULL, key TEXT NOT NULL, value BLOB NOT NULL, PRIMARY KEY (kind, key)) WITHOUT ROWID`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	h := &harness{t: t, path: path}
+	h.start(Options{})
+	web := h.mustConnect("web", nil, true)
+	web.subscribe(t, "config/#")
+	h.eventually("the session stored", func() bool { return h.rows("mqtt_state", "key LIKE 'web%' AND writer != ''") == 2 })
+}
+
+// An offline session's discard deletes its client row before the drop too: the client's writer name outlives
+// its connection.
+func TestOfflineDiscardDeletesTheClientRowAtOnce(t *testing.T) {
+	h := newHarness(t, Options{MaximumInflight: 2})
+	held := make(chan struct{})
+	drop := h.bus.store.drop
+	h.bus.store.drop = func(cl *mqtt.Client, why packets.Code) *mqtt.Client { <-held; return drop(cl, why) }
+	defer close(held)
+	web := h.mustConnect("web", nil, true)
+	web.subscribe(t, "config/#")
+	web.leave(t)
+	for i := 0; i < 3; i++ {
+		if err := h.bus.Publish("config/head", []byte{byte('0' + i)}, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.eventually("the client row deleted", func() bool { return h.rows("mqtt_state", "kind = 'CL' AND key = 'web'") == 0 })
+}
