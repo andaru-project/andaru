@@ -113,7 +113,7 @@ func (c *restoreCoordinator) Execute(ctx context.Context, request coordinatedRes
 		})
 	})
 	if err != nil {
-		if errors.Is(err, errRestoreAbandoned) {
+		if errors.Is(err, errRestoreAbandoned) || errors.Is(err, errJournalNewer) {
 			return result, errors.Join(err, c.security.audits.Finish(ctx, audit.Outcome{OperationID: request.OperationID, Result: audit.ResultNotCommitted}))
 		}
 		if _, found, journalErr := c.readJournal(request.OperationID); journalErr == nil && !found {
@@ -292,11 +292,17 @@ func (c *restoreCoordinator) reconcileLocked(ctx context.Context, journal *resto
 			// start: the version it expected was set aside by a rollback, or its configuration does not read here
 			// without provisional choices (settings safe mode). Nothing is published, and the identities stay as
 			// they are.
-			expectedNewer, err := c.configuration.Newer(ctx, journal.ExpectedSavedVersion)
+			expectedNewer := false
+			if journal.ExpectedSavedVersion != "" {
+				if expectedNewer, err = c.configuration.Newer(ctx, journal.ExpectedSavedVersion); err != nil {
+					return err
+				}
+			}
+			restorable, err := config.RestorableHere(journal.Configuration)
 			if err != nil {
 				return err
 			}
-			if expectedNewer || !config.RestorableHere(journal.Configuration) {
+			if expectedNewer || !restorable {
 				return c.abandon(journal)
 			}
 			current, err := c.configuration.Export(ctx, true)
@@ -356,7 +362,10 @@ func (c *restoreCoordinator) reconcileLocked(ctx context.Context, journal *resto
 func (c *restoreCoordinator) abandon(journal *restoreJournal) error {
 	slog.Warn("restore abandoned: it never settled and can no longer", "operation", journal.OperationID)
 	journal.State = "abandoned"
-	return errors.Join(c.writeJournal(*journal), errRestoreAbandoned)
+	if err := c.writeJournal(*journal); err != nil {
+		return err
+	}
+	return errRestoreAbandoned
 }
 
 func (c *restoreCoordinator) atCrashPoint(point string) error {

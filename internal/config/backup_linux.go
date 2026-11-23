@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"strings"
 )
 
@@ -62,10 +63,14 @@ func (s *Store) Export(ctx context.Context, includeSecrets bool) (result BackupD
 }
 
 // RestorableHere reports whether a backup's documents restore in this Andaru: they read, and without provisional
-// choices (settings safe mode).
-func RestorableHere(input RestoreDocuments) bool {
+// choices (settings safe mode). A failure that is not about the documents is returned.
+func RestorableHere(input RestoreDocuments) (bool, error) {
 	decoded, err := decodeBackupDocuments(input)
-	return err == nil && !decoded.needsDecisions
+	var f *Fault
+	if errors.As(err, &f) && (f.Code == "VALIDATION_FAILED" || f.Code == "INVALID_REQUEST") {
+		return false, nil
+	}
+	return err == nil && !decoded.needsDecisions, err
 }
 
 func ValidateBackupDocuments(input RestoreDocuments) error {
