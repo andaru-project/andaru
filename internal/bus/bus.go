@@ -18,6 +18,7 @@ import (
 	"net"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	mqtt "github.com/mochi-mqtt/server/v2"
@@ -93,9 +94,10 @@ func Open(o Options) (*Bus, error) {
 	if o.MaximumInflight != 0 {
 		capabilities.MaximumInflight = o.MaximumInflight
 	}
-	server := mqtt.New(&mqtt.Options{InlineClient: true, Logger: o.Logger, Capabilities: capabilities})
+	// A client that stops reading must not hold a write, and with it the publishers and the bus's close.
+	server := mqtt.New(&mqtt.Options{InlineClient: true, Logger: o.Logger, Capabilities: capabilities, ClientNetWriteTimeout: 10 * time.Second})
 
-	st := &store{server: server, maximumInflight: int(capabilities.MaximumInflight)}
+	st := &store{server: server, maximumInflight: int(capabilities.MaximumInflight), drop: server.DropSession}
 	if err := server.AddHook(&access{grants: o.Grants, authenticate: o.Authenticate}, nil); err != nil {
 		return nil, err
 	}

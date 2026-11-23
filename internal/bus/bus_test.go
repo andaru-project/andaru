@@ -373,9 +373,7 @@ func TestEngineClientDurableAcrossRestart(t *testing.T) {
 	}
 }
 
-// A subscriber that falls MaximumInflight messages behind loses its session
-// instead of losing messages silently.
-// A discarded session stays discarded across a restart: nothing of it is left to load.
+// A discard finishes before the bus closes, so a restart finds nothing of the session.
 func TestDiscardedSessionStaysGoneAfterRestart(t *testing.T) {
 	h := newHarness(t, Options{MaximumInflight: 2})
 	web := h.mustConnect("web", nil, true)
@@ -392,6 +390,8 @@ func TestDiscardedSessionStaysGoneAfterRestart(t *testing.T) {
 	}
 }
 
+// A subscriber that falls MaximumInflight messages behind loses its session
+// instead of losing messages silently.
 func TestSessionDiscardedAtInflightLimit(t *testing.T) {
 	h := newHarness(t, Options{MaximumInflight: 2})
 	web := h.mustConnect("web", nil, true)
@@ -670,8 +670,8 @@ func TestUserNamesCannotOverlap(t *testing.T) {
 	}
 }
 
-// A durable publish that reuses the packet ID of a delivery the client has not acknowledged does not cost the
-// delivery: the client is disconnected and gets it again when it reconnects.
+// A client's publish that reuses the packet ID of a delivery it has not acknowledged is taken, and does not cost
+// the delivery: its stored row survives the publish's acknowledgement.
 func TestPublishCannotTakeAPendingDeliverysPacketID(t *testing.T) {
 	h := newHarness(t, Options{})
 	conn, err := net.Dial("tcp", h.addr)
@@ -701,8 +701,96 @@ func TestPublishCannotTakeAPendingDeliverysPacketID(t *testing.T) {
 	// The delivery outlives a restart, so its stored row outlived the publish's acknowledgement.
 	h.restart()
 	addon = h.mustConnect("addon", nil, true)
-	for got := map[string]bool{}; !got["held"]; {
-		p := addon.receive(t)
-		got[string(p.Payload)] = true
+	for string(addon.receive(t).Payload) != "held" {
+	}
+}
+
+// The bus offers at most QoS 1: at QoS 2 mochi could overwrite a delivery with a client's publish of its ID.
+func TestQoSIsAtMostOne(t *testing.T) {
+	h := newHarness(t, Options{})
+	addon := h.mustConnect("addon", nil, true)
+	suback, err := addon.Subscribe(context.Background(), &paho.Subscribe{Subscriptions: []paho.SubscribeOptions{{Topic: "alias/#", QoS: 2}}})
+	if err != nil || suback.Reasons[0] != 1 {
+		t.Fatalf("QoS 2 subscription: %v, %v", suback, err)
+	}
+}
+
+// A discard deletes the client's row before the drop runs, so a crash in between finds no session.
+func TestDiscardDeletesTheClientRowAtOnce(t *testing.T) {
+	h := newHarness(t, Options{MaximumInflight: 2})
+	held := make(chan struct{})
+	drop := h.bus.store.drop
+	h.bus.store.drop = func(cl *mqtt.Client, why packets.Code) *mqtt.Client { <-held; return drop(cl, why) }
+	defer close(held)
+	web := h.mustConnect("web", nil, false)
+	web.subscribe(t, "config/#")
+	for i := 0; i < 3; i++ {
+		if err := h.bus.Publish("config/head", []byte{byte('0' + i)}, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.eventually("the client row deleted", func() bool { return h.rows("mqtt_state", "kind = 'CL' AND key = 'web'") == 0 })
+}
+
+// Discarding a client whose session was taken over drops the session where it is now, rows and all.
+func TestDiscardFollowsTheSession(t *testing.T) {
+	h := newHarness(t, Options{})
+	web := h.mustConnect("web", nil, true)
+	web.subscribe(t, "config/#")
+	old, _ := h.bus.server.Clients.Get("web")
+	h.mustConnect("web", nil, true) // takes the session over
+	h.bus.store.discard(old, packets.ErrImplementationSpecificError)
+	h.eventually("the session forgotten", func() bool { return h.rows("mqtt_state", "key LIKE 'web%'") == 0 })
+	h.restart()
+	if web = h.mustConnect("web", nil, true); web.connack.SessionPresent {
+		t.Fatal("the dropped session came back after a restart")
+	}
+}
+
+// A dropped connection's own late UNSUBSCRIBE leaves a successor's rows alone; only the drop forgets.
+func TestDroppedClientsUnsubscribeForgetsNothing(t *testing.T) {
+	h := newHarness(t, Options{})
+	web := h.mustConnect("web", nil, true)
+	web.subscribe(t, "config/#")
+	old, _ := h.bus.server.Clients.Get("web")
+	if h.bus.server.DropSession(old, packets.ErrImplementationSpecificError) != old {
+		t.Fatal("not dropped")
+	}
+	web = h.mustConnect("web", nil, true)
+	web.subscribe(t, "config/#")
+	h.bus.store.OnUnsubscribed(old, packets.Packet{PacketID: 7, Filters: packets.Subscriptions{{Filter: "config/#"}}})
+	if n := h.rows("mqtt_state", "key = 'web' OR key = 'web:config/#'"); n != 2 {
+		t.Fatalf("%d of the successor's 2 rows left", n)
+	}
+}
+
+// Rows left without their client by a crash do not come back as a session's subscriptions.
+func TestOrphanRowsAreRemovedOnOpen(t *testing.T) {
+	h := newHarness(t, Options{})
+	if _, err := h.bus.store.db.Exec(`INSERT INTO mqtt_state(kind, key, value) VALUES (?, 'ghost:config/#', x'00'), (?, 'ghost:1', x'00')`,
+		storage.SubscriptionKey, storage.InflightKey); err != nil {
+		t.Fatal(err)
+	}
+	h.restart()
+	if n := h.rows("mqtt_state", "key LIKE 'ghost%'"); n != 0 {
+		t.Fatalf("%d orphan rows left", n)
+	}
+}
+
+// A takeover clears the old client's inflight messages after its successor inherited them under the same keys;
+// their rows stay.
+func TestTakeoverKeepsTheDeliveriesRows(t *testing.T) {
+	h := newHarness(t, Options{})
+	web := h.mustConnect("web", nil, false)
+	web.subscribe(t, "config/#")
+	if err := h.bus.Publish("config/head", []byte("held"), true); err != nil {
+		t.Fatal(err)
+	}
+	held := web.receive(t)
+	old, _ := h.bus.server.Clients.Get("web")
+	h.mustConnect("web", nil, false) // takes the session over
+	h.bus.store.OnQosDropped(old, packets.Packet{PacketID: held.PacketID})
+	if n := h.rows("mqtt_state", "kind = 'IFM'"); n != 1 {
+		t.Fatalf("%d delivery rows, want 1", n)
 	}
 }

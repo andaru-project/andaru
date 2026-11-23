@@ -23,10 +23,15 @@ type store struct {
 	db              *sql.DB
 	server          *mqtt.Server
 	maximumInflight int
+	// drop is server.DropSession; tests hold it back.
+	drop func(*mqtt.Client, packets.Code) *mqtt.Client
 	// discarding holds the clients a discard was asked for, so each is dropped once; drops counts the drops
 	// still running, which Stop waits for.
 	discarding sync.Map
 	drops      sync.WaitGroup
+	// stopping is set by Stop, under dropsMu, so no drop starts once Stop waits for them.
+	dropsMu  sync.Mutex
+	stopping bool
 }
 
 func (*store) ID() string { return "store" }
@@ -58,11 +63,22 @@ func (s *store) Init(config any) error {
 		db.Close()
 		return err
 	}
+	// A crash between a discard deleting a client's row and the drop forgetting the rest leaves rows of a
+	// session that is gone. mochi would load its subscriptions without a client, so they go here.
+	if _, err := db.Exec(`DELETE FROM mqtt_state AS r WHERE r.kind IN (?, ?) AND NOT EXISTS (
+		SELECT 1 FROM mqtt_state AS c WHERE c.kind = ? AND c.key = substr(r.key, 1, instr(r.key, ':') - 1))`,
+		storage.SubscriptionKey, storage.InflightKey, storage.ClientKey); err != nil {
+		db.Close()
+		return err
+	}
 	s.db = db
 	return nil
 }
 
 func (s *store) Stop() error {
+	s.dropsMu.Lock()
+	s.stopping = true
+	s.dropsMu.Unlock()
 	s.drops.Wait()
 	return s.db.Close()
 }
@@ -121,11 +137,16 @@ func (s *store) discard(cl *mqtt.Client, why packets.Code) {
 	if s.current(cl) {
 		_ = s.del(storage.ClientKey, cl.ID)
 	}
+	s.dropsMu.Lock()
+	defer s.dropsMu.Unlock()
+	if s.stopping {
+		return // the client row is gone; the rest goes when the store opens next
+	}
 	s.drops.Add(1)
 	go func() {
 		defer s.drops.Done()
 		defer s.discarding.Delete(cl)
-		if holder := s.server.DropSession(cl, why); holder != nil {
+		if holder := s.drop(cl, why); holder != nil {
 			s.Log.Warn("bus session discarded", "client", holder.ID, "reason", why.Reason)
 		}
 	}()
@@ -150,7 +171,7 @@ func message(kind, id string, cl *mqtt.Client, pk packets.Packet, sent int64) *s
 func inflightKey(cl *mqtt.Client, pk packets.Packet) string { return cl.ID + ":" + pk.FormatID() }
 
 func (s *store) updateClient(cl *mqtt.Client) {
-	if !s.current(cl) {
+	if _, discarding := s.discarding.Load(cl); discarding || !s.current(cl) {
 		return
 	}
 	props := cl.Properties.Props.Copy(false)
@@ -213,8 +234,13 @@ func (s *store) OnUnsubscribed(cl *mqtt.Client, pk packets.Packet) {
 	if cl.Net.Inline {
 		return
 	}
+	// The drop unsubscribes the holder with a packet of its own (packet ID 0), under the session lock: its rows
+	// go then. A late UNSUBSCRIBE from the dropped connection itself changes nothing, since a successor may
+	// already hold rows under the same ID.
 	if cl.IsDropped() {
-		s.forget(cl.ID)
+		if pk.PacketID == 0 {
+			s.forget(cl.ID)
+		}
 		return
 	}
 	for _, f := range pk.Filters {
@@ -247,7 +273,14 @@ func (s *store) OnQosPublish(cl *mqtt.Client, pk packets.Packet, sent int64, _ i
 // acknowledgement, and the completion is the client's own publish with the same ID (mochi keeps both directions
 // by packet ID, mochi-mqtt/server#545): the delivery's row stays. A failed delete only means the message is sent
 // again later, which at least once allows.
+//
+// A client whose session was taken over or dropped completes nothing of the session's: a takeover clears the old
+// client's inflight messages after its successor inherited them under the same keys, and a stale connection may
+// still acknowledge its own publish with an ID its successor uses. A drop has forgotten the rows already.
 func (s *store) OnQosComplete(cl *mqtt.Client, pk packets.Packet) {
+	if cl.IsTakenOver() || cl.IsDropped() {
+		return
+	}
 	if _, held := cl.State.Inflight.Get(pk.PacketID); held {
 		return
 	}
