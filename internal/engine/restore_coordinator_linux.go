@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -26,8 +27,15 @@ import (
 var (
 	errRestoreOperationConflict = errors.New("restore operation ID was reused with different content")
 	errRestoreStateConflict     = errors.New("restore state no longer matches the recorded old or new outcome")
-	restoreOperationPattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
-	restoreBackupIDPattern      = regexp.MustCompile(`^[0-9a-f]{32}$`)
+	// restoreJournalStates are a journal's states: prepared until both halves settle, then committed, or abandoned
+	// when it can no longer settle.
+	restoreJournalStates = []string{"prepared", "committed", "abandoned"}
+	// errRestoreAbandoned is a recorded restore that never settled and was set aside; see reconcileLocked.
+	errRestoreAbandoned = errors.New("the recorded restore was abandoned")
+	// errJournalNewer is a journal of a format a newer Andaru wrote; it is left for that Andaru.
+	errJournalNewer         = errors.New("restore journal of a newer format")
+	restoreOperationPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+	restoreBackupIDPattern  = regexp.MustCompile(`^[0-9a-f]{32}$`)
 )
 
 type coordinatedIdentityStore interface {
@@ -105,6 +113,9 @@ func (c *restoreCoordinator) Execute(ctx context.Context, request coordinatedRes
 		})
 	})
 	if err != nil {
+		if errors.Is(err, errRestoreAbandoned) || errors.Is(err, errJournalNewer) {
+			return result, errors.Join(err, c.security.audits.Finish(ctx, audit.Outcome{OperationID: request.OperationID, Result: audit.ResultNotCommitted}))
+		}
 		if _, found, journalErr := c.readJournal(request.OperationID); journalErr == nil && !found {
 			err = errors.Join(err, c.security.audits.Finish(ctx, audit.Outcome{OperationID: request.OperationID, Result: audit.ResultNotCommitted}))
 		}
@@ -126,6 +137,9 @@ func (c *restoreCoordinator) executeLocked(ctx context.Context, request coordina
 		if existing.State == "committed" {
 			existing.Result.Replayed = true
 			return existing.Result, nil
+		}
+		if existing.State == "abandoned" {
+			return result, errRestoreAbandoned
 		}
 		if err = c.reconcileLocked(ctx, &existing); err != nil {
 			return result, err
@@ -217,12 +231,12 @@ func (c *restoreCoordinator) Reconcile(ctx context.Context) error {
 	}
 	for i := range journals {
 		journal := &journals[i]
-		if journal.State == "committed" {
+		if journal.State == "committed" || journal.State == "abandoned" {
 			continue
 		}
 		if err = generation.Observe(ctx, generation.Dir(c.stateDir), func(generation.Observation) error {
 			return c.security.withAuthorizationLock(ctx, func() error { return c.reconcileLocked(ctx, journal) })
-		}); err != nil {
+		}); err != nil && !errors.Is(err, errRestoreAbandoned) {
 			return fmt.Errorf("reconcile restore operation %s: %w", journal.OperationID, err)
 		}
 	}
@@ -239,6 +253,9 @@ type restoreAuditSource struct {
 
 func (s restoreAuditSource) LookupOperation(ctx context.Context, operationID string) (audit.OperationRecord, bool, error) {
 	journal, found, err := s.coordinator.readJournal(operationID)
+	if errors.Is(err, errJournalNewer) {
+		err = nil // looked up as an unsettled restore is
+	}
 	if err != nil || !found || journal.State != "committed" {
 		if err != nil {
 			return audit.OperationRecord{}, false, err
@@ -256,12 +273,39 @@ func (c *restoreCoordinator) reconcileLocked(ctx context.Context, journal *resto
 	if journal.State != "prepared" {
 		return errRestoreStateConflict
 	}
+	// A configuration half published and then set aside by a rollback, with every other newer version, is done: a
+	// later save cannot have taken its version while this journal stayed unsettled, since that stops every start.
+	setAside := false
 	if journal.TargetSavedVersion != "" {
+		var err error
+		if setAside, err = c.configuration.Newer(ctx, journal.TargetSavedVersion); err != nil {
+			return err
+		}
+	}
+	if journal.TargetSavedVersion != "" && !setAside {
 		matches, err := c.configuration.RestoreMatches(ctx, journal.TargetSavedVersion, journal.Configuration)
 		if err != nil {
 			return err
 		}
 		if !matches {
+			// It must be published now. When this Andaru cannot, the restore is abandoned rather than stopping every
+			// start: the version it expected was set aside by a rollback, or its configuration does not read here
+			// without provisional choices (settings safe mode). Nothing is published, and the identities stay as
+			// they are.
+			expectedNewer := false
+			if journal.ExpectedSavedVersion != "" {
+				if expectedNewer, err = c.configuration.Newer(ctx, journal.ExpectedSavedVersion); err != nil {
+					return err
+				}
+			}
+			// The journal holds the secrets in the store's own form, not a backup's, so the configuration alone is read.
+			restorable, err := config.RestorableHere(config.RestoreDocuments{Configuration: journal.Configuration.Configuration})
+			if err != nil {
+				return err
+			}
+			if expectedNewer || !restorable {
+				return c.abandon(journal)
+			}
 			current, err := c.configuration.Export(ctx, true)
 			if err != nil {
 				return err
@@ -269,7 +313,11 @@ func (c *restoreCoordinator) reconcileLocked(ctx context.Context, journal *resto
 			if current.SavedVersion != journal.ExpectedSavedVersion {
 				return errRestoreStateConflict
 			}
-			prepared, err := c.configuration.PrepareRestore(ctx, journal.Actor, journal.ExpectedSavedVersion, journal.Configuration)
+			portable, err := journal.Configuration.Portable(journal.TargetSavedVersion)
+			if err != nil {
+				return err
+			}
+			prepared, err := c.configuration.PrepareRestore(ctx, journal.Actor, journal.ExpectedSavedVersion, portable)
 			if err != nil {
 				return err
 			}
@@ -315,6 +363,16 @@ func (c *restoreCoordinator) reconcileLocked(ctx context.Context, journal *resto
 	return c.writeJournal(*journal)
 }
 
+// abandon records that a prepared restore can no longer settle, and says so to the caller.
+func (c *restoreCoordinator) abandon(journal *restoreJournal) error {
+	slog.Warn("restore abandoned: it never settled and can no longer", "operation", journal.OperationID)
+	journal.State = "abandoned"
+	if err := c.writeJournal(*journal); err != nil {
+		return err
+	}
+	return errRestoreAbandoned
+}
+
 func (c *restoreCoordinator) atCrashPoint(point string) error {
 	if c.crash == nil {
 		return nil
@@ -347,7 +405,7 @@ func validRestoreActor(actor authz.Actor) bool {
 }
 
 func (c *restoreCoordinator) writeJournal(journal restoreJournal) error {
-	if !restoreOperationPattern.MatchString(journal.OperationID) || !validRestoreActor(journal.Actor) || !validSource(journal.Source) || !restoreBackupIDPattern.MatchString(journal.Target) || journal.SchemaVersion != 1 || (journal.State != "prepared" && journal.State != "committed") || journal.RequestHash == "" {
+	if !restoreOperationPattern.MatchString(journal.OperationID) || !validRestoreActor(journal.Actor) || !validSource(journal.Source) || !restoreBackupIDPattern.MatchString(journal.Target) || journal.SchemaVersion != 1 || !slices.Contains(restoreJournalStates, journal.State) || journal.RequestHash == "" {
 		return errRestoreStateConflict
 	}
 	if err := c.ensureJournalDir(); err != nil {
@@ -437,6 +495,10 @@ func (c *restoreCoordinator) readJournals() ([]restoreJournal, error) {
 		}
 		operationID := strings.TrimSuffix(entry.Name(), ".json")
 		journal, found, err := c.readJournal(operationID)
+		if errors.Is(err, errJournalNewer) {
+			slog.Warn("restore journal of a newer Andaru left alone", "operation", operationID)
+			continue
+		}
 		if err != nil || !found {
 			return nil, errors.Join(err, errRestoreStateConflict)
 		}
@@ -462,10 +524,16 @@ func decodeRestoreJournal(raw []byte) (restoreJournal, error) {
 	var journal restoreJournal
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
+	var head struct {
+		SchemaVersion int `json:"schemaVersion"`
+	}
+	if json.Unmarshal(raw, &head) == nil && head.SchemaVersion > 1 {
+		return restoreJournal{}, errJournalNewer
+	}
 	if decoder.Decode(&journal) != nil || decoder.Decode(&struct{}{}) != io.EOF {
 		return restoreJournal{}, errRestoreStateConflict
 	}
-	if journal.SchemaVersion != 1 || !restoreOperationPattern.MatchString(journal.OperationID) || !validRestoreActor(journal.Actor) || !validSource(journal.Source) || !restoreBackupIDPattern.MatchString(journal.Target) || (journal.State != "prepared" && journal.State != "committed") || journal.RequestHash == "" {
+	if journal.SchemaVersion != 1 || !restoreOperationPattern.MatchString(journal.OperationID) || !validRestoreActor(journal.Actor) || !validSource(journal.Source) || !restoreBackupIDPattern.MatchString(journal.Target) || !slices.Contains(restoreJournalStates, journal.State) || journal.RequestHash == "" {
 		return restoreJournal{}, errRestoreStateConflict
 	}
 	return journal, nil

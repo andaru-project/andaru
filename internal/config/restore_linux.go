@@ -203,7 +203,26 @@ func (s *Store) RestoreMatches(ctx context.Context, version Version, target Rest
 			same = e == nil && bytes.Equal(now, configBody)
 		}
 	}
-	return savedVersion == version && same && bytes.Equal(bytes.TrimRight(secretBody, "\n"), bytes.TrimRight(target.ConfigurationSecrets, "\n")), nil
+	return savedVersion == version && same && sameSecrets(secretBody, target.ConfigurationSecrets), nil
+}
+
+// sameSecrets compares two secret documents of the store's own form by what each secret is: its kind, value and
+// version. A restore prepared again from its journal saves the same secrets at another time.
+func sameSecrets(a, b []byte) bool {
+	if bytes.Equal(bytes.TrimRight(a, "\n"), bytes.TrimRight(b, "\n")) {
+		return true
+	}
+	var x, y secretDocument
+	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil || len(x.Scopes["core"]) != len(y.Scopes["core"]) {
+		return false
+	}
+	for name, s := range x.Scopes["core"] {
+		t, ok := y.Scopes["core"][name]
+		if !ok || s.Kind != t.Kind || s.Value != t.Value || s.Version != t.Version {
+			return false
+		}
+	}
+	return true
 }
 
 func prepareRestoration(current *savedState, decoded decodedBackup, next Version, now time.Time) (preparedChange, RestorePreview, error) {

@@ -285,6 +285,8 @@ Both were then shut down; Proxmox reported them stopped, matching their initial
 state. This qualification does not establish physical power-loss behavior,
 arm64 hardware, NFS/SMB durability or a full cryptographic audit.
 
+A restore journal whose configuration must still be published but cannot be here, because a rollback set aside the version it expected or because its configuration needs decisions, is abandoned at start instead of blocking it; a replay of it answers `409 RESTORE_ABANDONED`. A configuration it published that a rollback then set aside counts as done. A journal of a newer format is left alone.
+
 ## Factory reset
 
 `andaru ctl factory-reset run` deletes every Andaru account, setting, saved version,

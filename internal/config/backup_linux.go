@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"strings"
 )
 
@@ -59,6 +60,43 @@ func (s *Store) Export(ctx context.Context, includeSecrets bool) (result BackupD
 		return BackupDocuments{}, err
 	}
 	return result, nil
+}
+
+// Portable turns the documents a prepared restore records (PreparedRestore.TargetDocuments), with target its saved
+// version, back into a backup's, for a restore that is prepared again. A restore of secrets gives every secret its
+// target version; one of the configuration alone records the store's secrets as they were, which then stay out.
+func (input RestoreDocuments) Portable(target Version) (RestoreDocuments, error) {
+	if input.ConfigurationSecrets == nil {
+		return input, nil
+	}
+	var stored secretDocument
+	if err := json.Unmarshal(input.ConfigurationSecrets, &stored); err != nil {
+		return input, boundaryFault(err)
+	}
+	restored := len(stored.Scopes["core"]) == 0
+	for _, entry := range stored.Scopes["core"] {
+		restored = restored || entry.Version == target
+	}
+	if !restored {
+		return RestoreDocuments{Configuration: input.Configuration}, nil
+	}
+	core := make(map[string]backupSecretEntry, len(stored.Scopes["core"]))
+	for name, entry := range stored.Scopes["core"] {
+		core[name] = backupSecretEntry{Kind: entry.Kind, Value: entry.Value}
+	}
+	secrets, err := canonical(backupSecretDocument{SchemaVersion: 1, Scopes: map[string]map[string]backupSecretEntry{"core": core}})
+	return RestoreDocuments{Configuration: input.Configuration, ConfigurationSecrets: secrets}, err
+}
+
+// RestorableHere reports whether a backup's documents restore in this Andaru: they read, and without provisional
+// choices (settings safe mode). A failure that is not about the documents is returned.
+func RestorableHere(input RestoreDocuments) (bool, error) {
+	decoded, err := decodeBackupDocuments(input)
+	var f *Fault
+	if errors.As(err, &f) && (f.Code == "VALIDATION_FAILED" || f.Code == "INVALID_REQUEST") {
+		return false, nil
+	}
+	return err == nil && !decoded.needsDecisions, err
 }
 
 func ValidateBackupDocuments(input RestoreDocuments) error {
