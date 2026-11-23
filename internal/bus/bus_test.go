@@ -645,3 +645,12 @@ func TestForgetRemovesOneClient(t *testing.T) {
 		t.Fatalf("%d of 3 neighbouring rows left", n)
 	}
 }
+
+// User names cannot overlap as client IDs: none may hold the slash or the colon an ID is built with.
+func TestUserNamesCannotOverlap(t *testing.T) {
+	for _, user := range []string{"", "agent/team", "agent:team"} {
+		if _, err := Open(Options{Path: filepath.Join(t.TempDir(), "bus.db"), Grants: map[string]Grants{"agent": {}, user: {}}}); err == nil {
+			t.Errorf("user name %q accepted", user)
+		}
+	}
+}

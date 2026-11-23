@@ -16,6 +16,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strings"
 	"sync/atomic"
 
 	"github.com/google/uuid"
@@ -66,6 +67,13 @@ const engineListener = "engine"
 // Open starts the broker, loads the stored sessions and publishes whatever an
 // earlier run left in the outbox.
 func Open(o Options) (*Bus, error) {
+	// A client ID is its user name, alone or before a slash, and holds no colon; with names of that form, no two
+	// users can claim the same ID.
+	for user := range o.Grants {
+		if user == "" || strings.ContainsAny(user, "/:") {
+			return nil, fmt.Errorf("bus: user name %q is empty or holds a slash or a colon", user)
+		}
+	}
 	if o.Logger == nil {
 		o.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
