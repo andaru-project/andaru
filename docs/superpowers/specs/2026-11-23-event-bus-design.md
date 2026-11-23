@@ -47,6 +47,8 @@ Andaru's own built-in subsystems hold grants defined in the code. The engine's o
 
 **Durable events, from a change to the bus.** A durable event is written in the same SQLite transaction as what it reports, to an outbox table in the store that owns it. After the commit, the engine publishes it with QoS 1 and deletes it from the outbox. On start, the engine publishes whatever is left in the outbox first. A crash between the publish and the delete publishes the event twice, which at-least-once allows.
 
+**Durable events from another process.** An add-on (or `andaru-web`) publishes with QoS 1 and its MQTT client resends until the broker acknowledges with PUBACK. mochi sends that PUBACK before it stores the message for any subscriber, so an engine crash in between would lose an event the publisher believes was taken. Andaru's `OnPublish` hook, which runs before the PUBACK and may refuse the publish, writes a durable publish to the bus's own outbox and returns an error if it cannot; the PUBACK then carries that error and the client publishes again. The outbox is drained as above. What an add-on has not yet handed to the broker is the add-on's own concern.
+
 **Durable events, from the bus to a subscriber.** A durable subscriber keeps a persistent session. The storage hook writes every message the broker holds for it before the broker tries to send it, and deletes it when the subscriber acknowledges. After a restart, the broker loads the sessions and their messages and sends them again.
 
 **When the bus cannot keep its promise.** Three cases lose a durable message for a subscriber:
