@@ -15,6 +15,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 	mqtt "github.com/mochi-mqtt/server/v2"
@@ -51,6 +52,8 @@ type Bus struct {
 	server *mqtt.Server
 	store  *store
 	engine *pipeListener
+	// subscriptions numbers inline subscriptions, which mochi tells apart by filter and number.
+	subscriptions atomic.Int64
 }
 
 const engineListener = "engine"
@@ -130,8 +133,15 @@ func (b *Bus) Publish(topic string, payload []byte, durable bool) error {
 
 // Subscribe calls handler for every event on filter, in the engine and without
 // acknowledgement: non-durable. A durable subscriber in the engine uses Dial.
-func (b *Bus) Subscribe(filter string, id int, handler func(topic string, payload []byte)) error {
-	return b.server.Subscribe(filter, id, func(_ *mqtt.Client, _ packets.Subscription, pk packets.Packet) {
+// handler runs in the publisher's goroutine and must not block. The returned
+// function ends the subscription.
+func (b *Bus) Subscribe(filter string, handler func(topic string, payload []byte)) (func(), error) {
+	id := int(b.subscriptions.Add(1))
+	err := b.server.Subscribe(filter, id, func(_ *mqtt.Client, _ packets.Subscription, pk packets.Packet) {
 		handler(pk.TopicName, pk.Payload)
 	})
+	if err != nil {
+		return nil, err
+	}
+	return func() { _ = b.server.Unsubscribe(filter, id) }, nil
 }

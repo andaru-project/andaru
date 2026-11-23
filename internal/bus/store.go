@@ -167,7 +167,11 @@ func (s *store) OnDisconnect(cl *mqtt.Client, _ error, expire bool) {
 
 func (s *store) OnClientExpired(cl *mqtt.Client) { s.forget(cl.ID) }
 
+// Inline subscriptions are the engine's non-durable ones and are not kept.
 func (s *store) OnSubscribed(cl *mqtt.Client, pk packets.Packet, reasonCodes []byte) {
+	if cl.Net.Inline {
+		return
+	}
 	for i, f := range pk.Filters {
 		if reasonCodes[i] >= packets.ErrUnspecifiedError.Code {
 			continue
@@ -185,6 +189,9 @@ func (s *store) OnSubscribed(cl *mqtt.Client, pk packets.Packet, reasonCodes []b
 }
 
 func (s *store) OnUnsubscribed(cl *mqtt.Client, pk packets.Packet) {
+	if cl.Net.Inline {
+		return
+	}
 	for _, f := range pk.Filters {
 		if err := s.del(storage.SubscriptionKey, cl.ID+":"+f.Filter); err != nil {
 			s.discard(cl, packets.ErrImplementationSpecificError)

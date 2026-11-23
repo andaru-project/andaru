@@ -1,12 +1,14 @@
 # The event bus
 
-Status: proposed, 2026-11-23, for [#154](https://github.com/andaru-project/andaru/issues/154). The owner chose MQTT for the bus, with an embedded broker, and asked for it to come before the add-on model. The owner's decisions are under "Owner decisions". A spike on branch `spike/mqtt-bus` tried the broker with a SQLite store.
+Status: steps 1 and 2 built, 2026-11-23, for [#154](https://github.com/andaru-project/andaru/issues/154). The owner chose MQTT for the bus, with an embedded broker, and asked for it to come before the add-on model. The owner's decisions are under "Owner decisions". A spike on branch `spike/mqtt-bus` tried the broker with a SQLite store.
 
 ## The problem
 
 Andaru's processes learn of changes in different ways today: the web UI polls for a new settings head or build, and the engine re-reads what it needs. Add-ons will need the same: a certificate renewed, an alias changed or deleted. pfSense offers such hooks only to some packages; Andaru offers them to everyone allowed to have them.
 
 One bus carries these changes. Andaru's own processes subscribe to it mostly in memory, and add-ons subscribe over a socket. A process reads the current state once when it starts, and from then on events drive it.
+
+The web UI follows the bus through the engine: the engine serves the events a browser may see as Server-Sent Events, and `andaru-web` passes the stream through like any other API request. A browser never speaks MQTT.
 
 ## Owner decisions
 
@@ -37,7 +39,9 @@ The engine starts the broker before it serves its API and stops it after. The br
 
 - **In-memory connections**, for Andaru's own durable subscribers in the engine, such as the notification subsystem. They connect as ordinary MQTT clients over an in-process listener, so they get acknowledgements and the store like any other client.
 - **Inline subscriptions**, mochi's direct callbacks, for Andaru's own non-durable subscribers in the engine. There is no acknowledgement and nothing is stored; they are QoS 0.
-- **A Unix socket**, root-owned like the engine's API socket, for other processes: `andaru-web` and, later, add-ons. A client authenticates with the account token system that already exists. A browser does not connect to the broker; `andaru-web` subscribes for it.
+- **A Unix socket**, `bus.sock` beside the engine's API socket, root-owned with mode 0600 in the engine's runtime directory. Only root reaches it, so a client there is trusted with the grants of the user name it gives. `andaru realize` publishes on it. Add-ons will need a socket of their own, where a client authenticates with the account token system; it comes with the add-on model.
+
+A browser does not connect to the broker. The engine serves `GET /api/v1/events` on its web socket: it checks the session cookie and `configuration.read`, subscribes inline to `config/head` and `apply/+`, and writes each event's payload as one Server-Sent Event. Every 25 seconds it writes a comment and checks the session again, so a stream ends within that time of its session ending or losing the capability; neither opening nor keeping the stream counts as activity for the idle timeout. A browser that falls 16 events behind loses its stream. `andaru-web` passes the stream through with a backend connection pool of its own, so open pages never hold up API requests, and without its write timeout.
 
 Andaru's own built-in subsystems hold grants defined in the code. The engine's own publishes go through mochi's inline client, which bypasses the broker's permission check, so a built-in publisher is checked by the code that calls the bus rather than at the broker.
 
@@ -66,23 +70,30 @@ One case remains: a failed write followed by an engine restart before the subscr
 ## What comes first
 
 1. **The broker and its store.** `internal/bus`: the broker in the engine, the SQLite storage hook from the spike, the in-memory listener, the session discard rules, and the permission hook with built-in grants. Tests for restart redelivery, the session discard in each of the three cases, and grants at both ends.
-2. **The first event.** `config/head`, non-durable, published after each save, and `andaru-web` subscribing to it over the Unix socket, so the web UI learns of a new head or build without polling (which also settles [#150](https://github.com/andaru-project/andaru/issues/150)).
+2. **The first events.** `config/head`, non-durable, published after each save, and `apply/<id>`, published by `andaru realize` after each activate, confirm and rollback, the timer's rollback included. The web UI follows both through the engine's event stream instead of polling the change state every 15 seconds.
 3. **Notifications** ([#116](https://github.com/andaru-project/andaru/issues/116)): the notification subsystem as their subscriber, durable itself, and the outbox for the first durable publishes.
 4. **Add-ons:** the grants from manifests, when the add-on model exists.
 
-## Proof of concept
+## What is built
 
-Step 1 is built as a proof of concept in `internal/bus`, not yet started by the engine:
+Step 1 is `internal/bus`, which the engine starts:
 
 - **`Open`** starts the broker with the SQLite store, an in-memory listener for the engine's own clients (`Dial`) and the listeners it is given, then publishes what the outbox holds.
-- **`Publish(topic, payload, durable)`** and **`Subscribe`** (inline, non-durable) are the engine's side.
+- **`Publish(topic, payload, durable)`** and **`Subscribe`** (inline, non-durable, ended by the function it returns) are the engine's side. Inline subscriptions are not stored.
 - **Grants** are topic filters per MQTT user name, checked on connect, publish, subscribe and delivery. A grant covers a filter only if it matches everything the filter can match, so `alias/+` does not cover `alias/#`. Clients on other listeners also pass `Authenticate`; the engine's own do not. Only MQTT 5 clients connect, since older ones cannot be told that a durable publish was refused.
 - **The outbox is the bus's own** for now. The engine's durable publishes are written to it before they are published; the transaction shared with the change they report comes with the first store that publishes durably.
 - **The store does not keep mochi's `$SYS` counters**: mochi updates them every second, and writing them would wear the disk for nothing.
 
 The tests run real MQTT clients (`eclipse/paho.golang`, a test dependency) against the broker and restart it on the same file. They cover redelivery to an offline subscriber and of an unacknowledged message, non-durable events not being kept, the outbox on both paths, grants at every check, the engine's in-memory clients, and the session discard at the in-flight limit and on a failed write. Removing any of those mechanisms fails a test.
 
+Step 2:
+
+- **`config/head`.** The configuration store calls `OnSave` with each version committed as the head, at its one commit point, so a save, a restore, an upgrade's answers and a migration on start all publish. The payload's `data` is `{"version": "<id>"}`, type `config.head.changed`.
+- **`apply/<id>`.** The engine runs every `andaru realize` verb on a generation with `--bus-socket`, including the rollback its timer runs while no request waits. After the verb, whether it succeeded or not, realize connects with paho, publishes `{"id": <id>}` of type `apply.changed` with QoS 0, and disconnects; if the engine is down it only warns. Boot runs without the flag: the engine starts after it, and its subscribers read the state when they connect.
+- **The web UI** opens the stream when the account may read the configuration, reads the change state when the stream opens and at every event, and leaves a dropped stream to the browser to reopen. A hidden tab closes its stream, and opens it again, reading the state, when it is shown. A stream the server refuses (the session ended, the engine is down) is opened again after 15 seconds, and the change state is read then too, so a lost session or connection shows as a poll would show it.
+
 ## Risks
 
 - **mochi-mqtt's last release is v2.7.9, of March 2025.** Andaru depends on its hook interface, its store loading and its session handling. If it stops being usable, the broker can be replaced behind the same topics and payloads, since add-ons speak MQTT, not mochi.
-- **It adds dependencies:** `rs/xid` and `gorilla/websocket`, the latter for a listener Andaru does not use.
+- **It adds dependencies:** `rs/xid` and `gorilla/websocket`, the latter for a listener Andaru does not use, and `eclipse/paho.golang` for `andaru realize`.
+- **A browser holds one HTTP/1.1 connection per visible tab for the stream.** `andaru-web` serves HTTP/1.1 only, and browsers allow six connections per host. A hidden tab closes its stream and reads again when shown, so only six visible windows of one browser would leave their API requests waiting. HTTP/2 in `andaru-web` would lift this.

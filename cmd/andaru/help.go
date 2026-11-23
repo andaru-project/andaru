@@ -51,9 +51,9 @@ Options:
                        exact HTTPS management origin; repeat for each origin
 `
 
-const realizeUsage = `usage: andaru realize [--state-dir PATH] activate|confirm N
-       andaru realize [--state-dir PATH] rollback N REASON
-       andaru realize [--state-dir PATH] boot|leases|prefixes|factory-reset
+const realizeUsage = `usage: andaru realize [OPTIONS] activate|confirm N
+       andaru realize [OPTIONS] rollback N REASON
+       andaru realize [OPTIONS] boot|leases|prefixes|factory-reset
 `
 
 const realizeHelp = `Privileged host steps. The engine runs them in transient systemd units, and
@@ -70,7 +70,9 @@ Verbs:
   factory-reset      Run or resume the factory reset ctl factory-reset planned
 
 Options:
-  --state-dir PATH  absolute private state directory (default ` + defaultStateDir + `)
+  --state-dir PATH   absolute private state directory (default ` + defaultStateDir + `)
+  --bus-socket PATH  the engine's event bus socket, told of each activate,
+                     confirm and rollback; without it, the bus is not told
 `
 
 const ctlUsage = "usage: andaru ctl [--socket PATH] COMMAND [ARGUMENTS]\n"

@@ -403,3 +403,31 @@ func TestSessionDiscardedWhenStoreWriteFails(t *testing.T) {
 	}
 	web.nothing(t)
 }
+
+// An inline subscription gets what is published while it lasts, and nothing of it is stored.
+func TestInlineSubscription(t *testing.T) {
+	h := newHarness(t, Options{})
+	got := make(chan string, 4)
+	stop, err := h.bus.Subscribe("config/#", func(topic string, payload []byte) { got <- topic + " " + string(payload) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.bus.Publish("config/head", []byte("7"), false); err != nil {
+		t.Fatal(err)
+	}
+	if g := <-got; g != "config/head 7" {
+		t.Fatalf("got %q", g)
+	}
+	if n := h.rows("mqtt_state", "1"); n != 0 {
+		t.Fatalf("%d rows stored for an inline subscription", n)
+	}
+	stop()
+	if err := h.bus.Publish("config/head", []byte("8"), false); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case g := <-got:
+		t.Fatalf("got %q after the subscription ended", g)
+	case <-time.After(100 * time.Millisecond):
+	}
+}

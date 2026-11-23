@@ -20,7 +20,7 @@ import { UpgradeScreen } from './screens/UpgradeScreen';
 import { SystemDetailsScreen } from './screens/SystemWidget';
 import { UsersScreen } from './screens/UsersScreen';
 import type { Session, User } from './types';
-import { useResource, useVisiblePoll } from './useResource';
+import { useEvents, useResource, useVisiblePoll } from './useResource';
 
 interface ShellProps {
   api: ApiClient;
@@ -30,7 +30,6 @@ interface ShellProps {
   onSessionLost(): void;
 }
 
-const pollMilliseconds = 15_000;
 const systemPollMilliseconds = 60_000;
 
 // Branches the user closed, kept per browser. Storage may be unavailable; the tree then starts open.
@@ -66,10 +65,12 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   const system = useResource(loadSystem, onSessionLost);
   useVisiblePoll(system.refresh, systemPollMilliseconds, canReadStatus);
 
-  useVisiblePoll(changes.refresh, pollMilliseconds, canReadChanges);
+  // Saves and applies, from this tab or any other, reach the shell as events; it reads the change state at each.
+  // A read waits for no answer still out: one that was served before the change would show it unchanged.
+  useEvents(useCallback(() => { void reloadChanges(); }, [reloadChanges]), canReadChanges);
 
   // Whether the saved settings wait for decisions after an upgrade (settings safe mode). It changes only with a new
-  // saved head (an upgrade, a restore, the answers), so it is read again when the polled head moves, never on a timer:
+  // saved head (an upgrade, a restore, the answers), so it is read again when the head moves, never on a timer:
   // the preview is a POST, and polling it would count as activity and keep an idle session alive.
   // An upgrade that brings decisions for the same saved head moves no head, so a new build or boot reads it again too.
   const head = changes.data?.head;
@@ -78,11 +79,11 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   const upgrade = useResource(loadUpgrade, onSessionLost);
   const upgradeError = upgrade.error;
   const reloadUpgrade = upgrade.reload;
-  // A check that failed is tried again with each answered poll of the change state, until it reads.
-  const polled = changes.data;
+  // A check that failed is tried again with each answered read of the change state, until it reads.
+  const read = changes.data;
   useEffect(() => {
-    if (upgradeError && polled) void reloadUpgrade();
-  }, [polled, upgradeError, reloadUpgrade]);
+    if (upgradeError && read) void reloadUpgrade();
+  }, [read, upgradeError, reloadUpgrade]);
   const upgradePending = (upgrade.data?.questions.length ?? 0) > 0;
   const onUpgradePage = useMatch('/system/upgrade') !== null;
   // The visit opens on the questions once, so the dashboard stays reachable for those who cannot answer.

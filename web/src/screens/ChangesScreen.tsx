@@ -44,7 +44,7 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
   const load = useCallback(async () => {
     const [applies, first] = await Promise.all([api.listApplies(), api.versions(100)]);
     const liveSaved = liveApply(applies)?.savedVersion ?? '0';
-    // The newest apply the review saw; a newer one in the shell's poll means live may have moved.
+    // The newest apply the review saw; a newer one in the shell's change state means live may have moved.
     const lastApply = applies.items[0]?.id ?? '0';
     const reviewed = first.items[0]?.id ?? '0';
     const saved: VersionInfo[] = [];
@@ -122,7 +122,7 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
   const detail = review.data;
   const changes = detail?.changes;
   // Stale only when the shell has seen something newer than the review; a review newer than the
-  // shell's last poll (another session applied meanwhile) is not stale.
+  // shell's last read (another session applied meanwhile) is not stale.
   const stale = !detail ? '' : newer(state.head, detail.reviewed) ? `Saved version ${state.head} arrived since this review.` : newer(latest?.id ?? '0', detail.lastApply) ? 'The live configuration changed since this review.' : '';
   const changed = changes ? differences(changes.baseline.value, changes.versions[0].value, changes.versions.flatMap((version) => version.changes)) : [];
   const errors = changes?.preview.findings.filter((finding) => finding.severity === 'error') ?? [];

@@ -148,8 +148,17 @@ func newHandler(backendSocket, assetsDirectory string, origins, hosts map[string
 		return nil, errors.New("asset directory must contain a regular index.html")
 	}
 	proxy := newProxy(backendSocket)
+	// Event streams hold their backend connections for as long as their pages are open, so they have connections
+	// of their own and never leave the API requests waiting for one.
+	events := newProxy(backendSocket)
 	assets := http.FileServer(http.Dir(assetsDirectory))
 	router := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/events" {
+			// The stream lasts as long as the page; the server's write timeout is for responses that end.
+			_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+			events.ServeHTTP(w, r)
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			proxy.ServeHTTP(w, r)
 			return

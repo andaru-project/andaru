@@ -61,6 +61,7 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 	flags := flag.NewFlagSet("realize", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	stateDir := flags.String("state-dir", defaultStateDir, "")
+	busSocket := flags.String("bus-socket", "", "")
 	// Help flags are taken out first, so one standing where a flag's value belongs does not hide the verb.
 	help := helpRequested(args)
 	parseErr := flags.Parse(slices.DeleteFunc(slices.Clone(args), isHelp))
@@ -72,7 +73,8 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 		fmt.Fprint(stdout, realizeHelp)
 		return 0
 	}
-	if parseErr != nil || !known || !filepath.IsAbs(*stateDir) || filepath.Clean(*stateDir) != *stateDir {
+	if parseErr != nil || !known || !filepath.IsAbs(*stateDir) || filepath.Clean(*stateDir) != *stateDir ||
+		*busSocket != "" && (!filepath.IsAbs(*busSocket) || filepath.Clean(*busSocket) != *busSocket) {
 		return usageError(stderr, realizeUsage, "andaru realize")
 	}
 	rest := flags.Args()[1:]
@@ -119,6 +121,12 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 		err = verbs.SyncLeases(ctx)
 	case "prefixes":
 		err = verbs.SyncPrefixes(ctx)
+	}
+	// A verb on a generation may change its state even when it fails, so the bus hears of each one.
+	if id != 0 && *busSocket != "" {
+		if tellErr := tellApply(ctx, *busSocket, id); tellErr != nil {
+			fmt.Fprintln(stderr, "event bus not told of the apply:", tellErr)
+		}
 	}
 	if err == nil {
 		return 0

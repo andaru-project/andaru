@@ -86,6 +86,16 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 			result = err
 		}
 	}()
+	events, closeEvents, err := openBus(stateDir, socketPath)
+	if err != nil {
+		return fmt.Errorf("start the event bus: %w", err)
+	}
+	defer func() {
+		if err := closeEvents(); err != nil && result == nil {
+			result = err
+		}
+	}()
+	store.OnSave(publishHead(events))
 	coordinator := newSecurityCoordinator(identities, audits, stateDir)
 	lifetime, cancel := context.WithCancelCause(ctx)
 	stopped := make(chan struct{})
@@ -99,7 +109,7 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	}()
 	defer func() { cancel(context.Canceled); <-stopped }()
 	read := hostReader{Links: host.ReadLinks, Facts: host.ReadRealizerFacts, Managed: host.ReadManaged, BootUnit: host.ReadBootUnit}
-	applies := newAppliesHandler(store.ApplyInput, read, newSystemdRunner(stateDir), stateDir, identities, coordinator)
+	applies := newAppliesHandler(store.ApplyInput, read, newSystemdRunner(stateDir, filepath.Join(filepath.Dir(socketPath), "bus.sock")), stateDir, identities, coordinator)
 	identityAPI := newIdentityAPI(identities, store, coordinator)
 	auditAPI := newAuditAPI(coordinator)
 	backups := newBackupHandler(store, identities, coordinator, stateDir, host.ReadLinks)
@@ -127,7 +137,7 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 		err = serveUnix(lifetime, socketPath, rootAPI)
 	} else {
 		var webAPI http.Handler
-		webAPI, err = newWebAPI(identities, store, coordinator, rootAPI, stateDir, web.Origins)
+		webAPI, err = newWebAPI(identities, store, coordinator, rootAPI, events, stateDir, web.Origins)
 		if err != nil {
 			return err
 		}
@@ -161,42 +171,11 @@ func serveUnix(ctx context.Context, socketPath string, handler http.Handler) (re
 	if ctx.Err() != nil {
 		return nil
 	}
-	parent := filepath.Dir(socketPath)
-	if err := securefs.CheckAncestors(filepath.Dir(parent)); err != nil {
+	listener, closeListener, err := listenRootSocket(socketPath, "engine")
+	if err != nil {
 		return err
 	}
-	if err := os.Mkdir(parent, 0700); err != nil && !os.IsExist(err) {
-		return fmt.Errorf("create engine runtime directory: %w", err)
-	}
-	info, err := os.Lstat(parent)
-	if err != nil {
-		return fmt.Errorf("inspect engine runtime directory: %w", err)
-	}
-	if !info.IsDir() || info.Mode().Perm() != 0700 || !securefs.RootOwned(info) {
-		return errors.New("engine socket parent must be a root-owned directory with mode 0700, not a symlink")
-	}
-	if _, err := os.Lstat(socketPath); err == nil {
-		return errors.New("engine socket path already exists; investigate it rather than replacing it")
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("inspect engine socket path: %w", err)
-	}
-	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
-	if err != nil {
-		return fmt.Errorf("listen on engine socket: %w", err)
-	}
-	listener.SetUnlinkOnClose(false)
-	owned, err := os.Lstat(socketPath)
-	if err != nil || owned.Mode()&os.ModeSocket == 0 || !securefs.RootOwned(owned) {
-		_ = listener.Close()
-		return errors.New("cannot establish ownership of the bound engine socket")
-	}
-	defer func() {
-		_ = listener.Close()
-		result = errors.Join(result, removeOwnedSocket(socketPath, owned))
-	}()
-	if err := os.Chmod(socketPath, 0600); err != nil {
-		return fmt.Errorf("protect engine socket: %w", err)
-	}
+	defer func() { result = errors.Join(result, closeListener()) }()
 
 	return serveHTTP(ctx, listener, handler, func(ctx context.Context, connection net.Conn) context.Context {
 		unix, ok := connection.(*net.UnixConn)
@@ -210,6 +189,48 @@ func serveUnix(ctx context.Context, socketPath string, handler http.Handler) (re
 		}
 		return context.WithValue(ctx, peerKey{}, peerIdentity{uid: uid, verified: true})
 	})
+}
+
+// listenRootSocket binds a socket only root can reach, in a root-owned directory of mode 0700 it creates if needed.
+// closeListener closes it and removes the socket file.
+func listenRootSocket(socketPath, name string) (_ *net.UnixListener, closeListener func() error, _ error) {
+	parent := filepath.Dir(socketPath)
+	if err := securefs.CheckAncestors(filepath.Dir(parent)); err != nil {
+		return nil, nil, err
+	}
+	if err := os.Mkdir(parent, 0700); err != nil && !os.IsExist(err) {
+		return nil, nil, fmt.Errorf("create engine runtime directory: %w", err)
+	}
+	info, err := os.Lstat(parent)
+	if err != nil {
+		return nil, nil, fmt.Errorf("inspect engine runtime directory: %w", err)
+	}
+	if !info.IsDir() || info.Mode().Perm() != 0700 || !securefs.RootOwned(info) {
+		return nil, nil, errors.New(name + " socket parent must be a root-owned directory with mode 0700, not a symlink")
+	}
+	if _, err := os.Lstat(socketPath); err == nil {
+		return nil, nil, errors.New(name + " socket path already exists; investigate it rather than replacing it")
+	} else if !os.IsNotExist(err) {
+		return nil, nil, fmt.Errorf("inspect %s socket path: %w", name, err)
+	}
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
+	if err != nil {
+		return nil, nil, fmt.Errorf("listen on %s socket: %w", name, err)
+	}
+	listener.SetUnlinkOnClose(false)
+	owned, err := os.Lstat(socketPath)
+	if err != nil || owned.Mode()&os.ModeSocket == 0 || !securefs.RootOwned(owned) {
+		_ = listener.Close()
+		return nil, nil, errors.New("cannot establish ownership of the bound " + name + " socket")
+	}
+	closeListener = func() error {
+		_ = listener.Close()
+		return removeOwnedSocket(socketPath, owned)
+	}
+	if err := os.Chmod(socketPath, 0600); err != nil {
+		return nil, nil, errors.Join(fmt.Errorf("protect %s socket: %w", name, err), closeListener())
+	}
+	return listener, closeListener, nil
 }
 
 func serveWebUnix(ctx context.Context, web WebSocketOptions, handler http.Handler) (result error) {

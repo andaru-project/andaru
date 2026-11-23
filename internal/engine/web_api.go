@@ -13,6 +13,7 @@ import (
 
 	"github.com/andaru-project/andaru/internal/audit"
 	"github.com/andaru-project/andaru/internal/authz"
+	"github.com/andaru-project/andaru/internal/bus"
 	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/identity"
 )
@@ -35,6 +36,7 @@ type webAPI struct {
 	configuration *config.Store
 	coordinator   *securityCoordinator
 	rootAPI       http.Handler
+	events        *bus.Bus
 	stateDir      string
 	origins       map[string]struct{}
 	hosts         map[string]struct{}
@@ -75,13 +77,13 @@ type webStartupStatus struct {
 	SetupRequired bool `json:"setupRequired"`
 }
 
-func newWebAPI(identities identity.Store, configuration *config.Store, coordinator *securityCoordinator, rootAPI http.Handler, stateDir string, configuredOrigins []string) (http.Handler, error) {
+func newWebAPI(identities identity.Store, configuration *config.Store, coordinator *securityCoordinator, rootAPI http.Handler, events *bus.Bus, stateDir string, configuredOrigins []string) (http.Handler, error) {
 	origins, hosts, err := managementOrigins(configuredOrigins)
 	if err != nil {
 		return nil, err
 	}
 	return &webAPI{
-		identities: identities, configuration: configuration, coordinator: coordinator, rootAPI: rootAPI,
+		identities: identities, configuration: configuration, coordinator: coordinator, rootAPI: rootAPI, events: events,
 		stateDir: stateDir, origins: origins, hosts: hosts,
 	}, nil
 }
@@ -136,6 +138,10 @@ func (h *webAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/api/v1/session/preferences" {
 		h.preferences(w, r, source)
+		return
+	}
+	if r.URL.Path == eventsPath {
+		h.eventStream(w, r, source)
 		return
 	}
 	if r.URL.Path == "/api/v1/sessions" || strings.HasPrefix(r.URL.Path, "/api/v1/sessions/") {
@@ -492,17 +498,22 @@ func (h *webAPI) protected(w http.ResponseWriter, r *http.Request, source string
 	}
 	actor := requestActor{Actor: principal.Actor, Source: source, AccountID: principal.Account.ID, Capabilities: slices.Clone(principal.Capabilities)}
 	if !hasCapability(actor, route.Capability) && !ownPasswordChange(actor, r.Method, r.URL.Path) {
-		if _, err = h.coordinator.audits.Append(r.Context(), audit.Event{
-			Actor: actor.Actor, Source: source, Action: audit.ActionPermissionDenied, Result: audit.ResultDenied,
-			Category: audit.CategoryGeneral, Metadata: map[string]string{audit.MetadataReasonCode: audit.ReasonPermissionDenied},
-		}); err != nil {
-			writeError(w, r, http.StatusServiceUnavailable, "AUDIT_UNAVAILABLE", "Authorization is temporarily unavailable.")
-			return
-		}
-		writeError(w, r, http.StatusForbidden, "FORBIDDEN", "The verified actor lacks the required capability.")
+		h.deny(w, r, actor)
 		return
 	}
 	h.rootAPI.ServeHTTP(w, r.WithContext(withVerifiedPrincipal(r.Context(), principal, source)))
+}
+
+// deny records and answers a request the actor lacks the capability for.
+func (h *webAPI) deny(w http.ResponseWriter, r *http.Request, actor requestActor) {
+	if _, err := h.coordinator.audits.Append(r.Context(), audit.Event{
+		Actor: actor.Actor, Source: actor.Source, Action: audit.ActionPermissionDenied, Result: audit.ResultDenied,
+		Category: audit.CategoryGeneral, Metadata: map[string]string{audit.MetadataReasonCode: audit.ReasonPermissionDenied},
+	}); err != nil {
+		writeError(w, r, http.StatusServiceUnavailable, "AUDIT_UNAVAILABLE", "Authorization is temporarily unavailable.")
+		return
+	}
+	writeError(w, r, http.StatusForbidden, "FORBIDDEN", "The verified actor lacks the required capability.")
 }
 
 func (h *webAPI) cookiePrincipal(w http.ResponseWriter, r *http.Request, _ string) (identity.Principal, string, string, authz.Snapshot, uint64, bool) {
@@ -547,8 +558,12 @@ func (h *webAPI) readCookiePrincipal(r *http.Request) (identity.Principal, strin
 }
 
 // userActivity is false for a read the web UI marks as made without the user (a poll), so that a screen left
-// open still reaches the idle timeout. A write is always activity.
+// open still reaches the idle timeout, and for the event stream, which a browser opens and reopens on its own.
+// A write is always activity.
 func userActivity(r *http.Request) bool {
+	if r.URL.Path == eventsPath {
+		return false
+	}
 	return (r.Method != http.MethodGet && r.Method != http.MethodHead) || r.Header.Get("X-Andaru-Background") != "1"
 }
 
