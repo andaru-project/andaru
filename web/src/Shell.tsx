@@ -87,7 +87,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   const { colorScheme, setColorScheme } = useMantineColorScheme();
   const timeZone = useTimeZone();
   const [timeZoneAt, setTimeZoneAt] = useState<number | null>(null);
-  const zoneChoices = useMemo(() => (timeZoneAt !== null ? timeZoneOptions() : []), [timeZoneAt]);
+  const zoneChoices = useMemo(() => (timeZoneAt !== null ? timeZoneOptions(timeZone) : []), [timeZoneAt, timeZone]);
   const capabilities = useMemo(() => new Set(session.capabilities), [session.capabilities]);
   const [opened, { toggle, close }] = useDisclosure();
   const { pathname } = useLocation();
