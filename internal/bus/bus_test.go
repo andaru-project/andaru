@@ -461,8 +461,11 @@ func TestCleanSessionLeavesNothing(t *testing.T) {
 	if _, err = c.Connect(ctx, &paho.Connect{ClientID: "passing", CleanStart: true, Username: "agent", UsernameFlag: true, Password: []byte("secret"), PasswordFlag: true}); err != nil {
 		t.Fatal(err)
 	}
-	if n := h.rows("mqtt_state", "key='passing'"); n != 1 {
-		t.Fatalf("%d rows while connected", n)
+	// mochi answers the connect before it stores the client, so the row is waited for.
+	for start := time.Now(); h.rows("mqtt_state", "key='passing'") != 1; time.Sleep(10 * time.Millisecond) {
+		if time.Since(start) > 5*time.Second {
+			t.Fatal("the connected client was not stored")
+		}
 	}
 	c.Disconnect(&paho.Disconnect{})
 	time.Sleep(100 * time.Millisecond)
