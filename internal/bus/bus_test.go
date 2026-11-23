@@ -467,11 +467,11 @@ func TestGapUntilDone(t *testing.T) {
 	if err = web.Ack("ui", gap.Seq); err != nil { // the first connection's gap: not this one
 		t.Fatal(err)
 	}
-	nothing(t, web.Messages())
+	h.publish("config/head", "1", true)
+	nothing(t, web.Messages()) // the gap is still pending, so the event waits
 	if err = web.Ack("ui", again.Seq); err != nil {
 		t.Fatal(err)
 	}
-	h.publish("config/head", "1", true)
 	if d := receive(t, web.Messages()); d.Gap || string(d.Payload) != "1" {
 		t.Fatalf("got %+v, want the event after the acked gap", d)
 	}
