@@ -198,7 +198,9 @@ func (h *Hook) OnSysInfoTick(sys *system.Info) {
 	h.put(storage.SysInfoKey, storage.SysInfoKey, &storage.SystemInfo{ID: storage.SysInfoKey, T: storage.SysInfoKey, Info: *sys.Clone()})
 }
 
-func (h *Hook) StoredClients() ([]storage.Client, error) { return all[storage.Client](h, storage.ClientKey) }
+func (h *Hook) StoredClients() ([]storage.Client, error) {
+	return all[storage.Client](h, storage.ClientKey)
+}
 func (h *Hook) StoredSubscriptions() ([]storage.Subscription, error) {
 	return all[storage.Subscription](h, storage.SubscriptionKey)
 }

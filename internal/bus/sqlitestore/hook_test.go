@@ -49,7 +49,10 @@ func start(t *testing.T, path string) (*mqtt.Server, string) {
 
 type testWriter struct{ t *testing.T }
 
-func (w testWriter) Write(p []byte) (int, error) { w.t.Log(string(bytes.TrimSpace(p))); return len(p), nil }
+func (w testWriter) Write(p []byte) (int, error) {
+	w.t.Log(string(bytes.TrimSpace(p)))
+	return len(p), nil
+}
 
 // connect opens a persistent session; ack false leaves every received message unacknowledged.
 func connect(t *testing.T, address string, ack bool) (*paho.Client, chan *paho.Publish) {
