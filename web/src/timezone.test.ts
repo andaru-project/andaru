@@ -43,6 +43,7 @@ describe('timezone formatting', () => {
     expect(getTimeZone()).toBe('Europe/Berlin');
     expect(screen.getByText('Europe/Berlin')).toBeInTheDocument();
 
+    globalThis.localStorage?.clear?.();
     act(() => { window.dispatchEvent(new StorageEvent('storage', { key: null })); });
     expect(getTimeZone()).toBe('local');
     expect(screen.getByText('local')).toBeInTheDocument();
