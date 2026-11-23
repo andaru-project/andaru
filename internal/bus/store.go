@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"fmt"
+	"sync"
 
 	mqtt "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/hooks/storage"
@@ -22,6 +23,8 @@ type store struct {
 	db              *sql.DB
 	server          *mqtt.Server
 	maximumInflight int
+	// dropping holds the client IDs whose session is being dropped, for OnUnsubscribed.
+	dropping sync.Map
 }
 
 func (*store) ID() string { return "store" }
@@ -100,16 +103,19 @@ func (s *store) current(cl *mqtt.Client) bool {
 
 // discard drops a client's session, so that it reconnects with Session
 // Present off and knows it may have missed messages.
+// discard drops the session cl holds, or the one that took it over holds, so that the client reconnects without
+// one. mochi's DropSession serialises it with a takeover of the same client ID, and runs OnUnsubscribed under that
+// lock, where the session's rows are forgotten: a connection that came in after the drop keeps its own. It runs
+// apart from the hook that asks for it, since mochi holds the same lock while it calls OnUnsubscribed on a
+// takeover or an expiry.
 func (s *store) discard(cl *mqtt.Client, why packets.Code) {
-	if !s.current(cl) {
-		return
-	}
-	s.Log.Warn("bus session discarded", "client", cl.ID, "reason", why.Reason)
-	s.server.Clients.Delete(cl.ID)
-	s.server.UnsubscribeClient(cl)
-	cl.ClearInflights()
-	s.forget(cl.ID)
-	_ = s.server.DisconnectClient(cl, why)
+	go func() {
+		s.dropping.Store(cl.ID, true)
+		defer s.dropping.Delete(cl.ID)
+		if holder := s.server.DropSession(cl, why); holder != nil {
+			s.Log.Warn("bus session discarded", "client", holder.ID, "reason", why.Reason)
+		}
+	}()
 }
 
 func message(kind, id string, cl *mqtt.Client, pk packets.Packet, sent int64) *storage.Message {
@@ -191,6 +197,10 @@ func (s *store) OnSubscribed(cl *mqtt.Client, pk packets.Packet, reasonCodes []b
 
 func (s *store) OnUnsubscribed(cl *mqtt.Client, pk packets.Packet) {
 	if cl.Net.Inline {
+		return
+	}
+	if _, ok := s.dropping.Load(cl.ID); ok {
+		s.forget(cl.ID)
 		return
 	}
 	for _, f := range pk.Filters {

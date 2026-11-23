@@ -28,3 +28,5 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )
+
+replace github.com/mochi-mqtt/server/v2 => github.com/andaru-project/mochi-server/v2 v2.7.10-0.20261123171528-8467318aab91
