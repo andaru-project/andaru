@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/eclipse/paho.golang/paho"
+	mqtt "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/packets"
 )
 
@@ -51,10 +52,11 @@ func (h *harness) start(o Options) {
 	h.bus, h.addr = b, l.Addr().String()
 }
 
-func (h *harness) restart(o Options) {
+// restart starts the bus again on the same file, with default options.
+func (h *harness) restart() {
 	h.t.Helper()
 	h.bus.Close()
-	h.start(o)
+	h.start(Options{})
 }
 
 type client struct {
@@ -198,7 +200,7 @@ func TestDurableEventReachesOfflineSubscriberAfterRestart(t *testing.T) {
 	if n := h.rows("outbox", "1"); n != 0 {
 		t.Fatalf("outbox = %d after publish, want 0", n)
 	}
-	h.restart(Options{})
+	h.restart()
 
 	web = h.mustConnect("web", nil, true)
 	if !web.connack.SessionPresent {
@@ -223,7 +225,7 @@ func TestUnacknowledgedEventIsRedeliveredAfterRestart(t *testing.T) {
 	}
 	web.receive(t)
 	web.leave(t)
-	h.restart(Options{})
+	h.restart()
 
 	web = h.mustConnect("web", nil, true)
 	if p := web.receive(t); string(p.Payload) != "v43" {
@@ -253,7 +255,7 @@ func TestOutboxIsPublishedOnStart(t *testing.T) {
 	if err := h.bus.store.outboxPut("engine:crashed", "config/head", []byte("v44")); err != nil {
 		t.Fatal(err)
 	}
-	h.restart(Options{})
+	h.restart()
 
 	web = h.mustConnect("web", nil, true)
 	if p := web.receive(t); string(p.Payload) != "v44" {
@@ -293,7 +295,7 @@ func TestClientPublishGoesThroughOutbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	addon.leave(t)
-	h.restart(Options{})
+	h.restart()
 	addon = h.mustConnect("addon", nil, true)
 	if p := addon.receive(t); p.Topic != "alias/wan" || string(p.Payload) != "pending" {
 		t.Fatalf("got %s %q", p.Topic, p.Payload)
@@ -341,7 +343,7 @@ func TestEngineClientDurableAcrossRestart(t *testing.T) {
 	if err := h.bus.Publish("notification/engine", []byte("disk filling"), true); err != nil {
 		t.Fatal(err)
 	}
-	h.restart(Options{})
+	h.restart()
 	if conn, err = h.bus.Dial(); err != nil {
 		t.Fatal(err)
 	}
@@ -430,4 +432,87 @@ func TestInlineSubscription(t *testing.T) {
 		t.Fatalf("got %q after the subscription ended", g)
 	case <-time.After(100 * time.Millisecond):
 	}
+}
+
+// Only MQTT 5 clients connect: an older one could not be told that its durable publish was refused.
+func TestOnlyMQTT5Connects(t *testing.T) {
+	a := &access{grants: testGrants, authenticate: func(_, _ []byte) bool { return true }}
+	for version, want := range map[byte]bool{3: false, 4: false, 5: true} {
+		cl := &mqtt.Client{Net: mqtt.ClientConnection{Listener: "tcp"}}
+		cl.Properties.Username, cl.Properties.ProtocolVersion = []byte("web"), version
+		if got := a.OnConnectAuthenticate(cl, packets.Packet{}); got != want {
+			t.Errorf("MQTT %d: connected %v", version, got)
+		}
+	}
+}
+
+// A client without a session to keep leaves nothing in the store once it is gone.
+func TestCleanSessionLeavesNothing(t *testing.T) {
+	h := newHarness(t, Options{})
+	conn, err := net.Dial("tcp", h.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := paho.NewClient(paho.ClientConfig{Conn: conn})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err = c.Connect(ctx, &paho.Connect{ClientID: "passing", CleanStart: true, Username: "agent", UsernameFlag: true, Password: []byte("secret"), PasswordFlag: true}); err != nil {
+		t.Fatal(err)
+	}
+	if n := h.rows("mqtt_state", "key='passing'"); n != 1 {
+		t.Fatalf("%d rows while connected", n)
+	}
+	c.Disconnect(&paho.Disconnect{})
+	time.Sleep(100 * time.Millisecond)
+	if n := h.rows("mqtt_state", "key LIKE 'passing%'"); n != 0 {
+		t.Fatalf("%d rows left", n)
+	}
+}
+
+// An unsubscribed filter is forgotten, so a restart does not bring it back.
+func TestUnsubscribeIsForgotten(t *testing.T) {
+	h := newHarness(t, Options{})
+	addon := h.mustConnect("addon", nil, true)
+	addon.subscribe(t, "alias/#")
+	if n := h.rows("mqtt_state", "key='addon:alias/#'"); n != 1 {
+		t.Fatalf("%d subscription rows", n)
+	}
+	if _, err := addon.Unsubscribe(context.Background(), &paho.Unsubscribe{Topics: []string{"alias/#"}}); err != nil {
+		t.Fatal(err)
+	}
+	if n := h.rows("mqtt_state", "key='addon:alias/#'"); n != 0 {
+		t.Fatalf("%d subscription rows after unsubscribing", n)
+	}
+}
+
+// The engine's durable publish is in the outbox while it is delivered, so a crash then publishes it again on start;
+// a non-durable one never is.
+func TestEnginePublishGoesThroughOutbox(t *testing.T) {
+	h := newHarness(t, Options{})
+	held := make(chan int, 2)
+	if _, err := h.bus.Subscribe("config/#", func(string, []byte) { held <- h.rows("outbox", "1") }); err != nil {
+		t.Fatal(err)
+	}
+	for _, durable := range []bool{true, false} {
+		if err := h.bus.Publish("config/head", []byte("1"), durable); err != nil {
+			t.Fatal(err)
+		}
+		if n, want := <-held, map[bool]int{true: 1, false: 0}[durable]; n != want {
+			t.Fatalf("durable %v: %d outbox rows during delivery", durable, n)
+		}
+	}
+	if n := h.rows("outbox", "1"); n != 0 {
+		t.Fatalf("%d outbox rows after delivery", n)
+	}
+}
+
+// Nothing is retained: an event reports a change, and one missed is read from state, not kept for later.
+func TestNothingIsRetained(t *testing.T) {
+	h := newHarness(t, Options{})
+	agent := h.mustConnect("agent", nil, true)
+	_, _ = agent.Publish(context.Background(), &paho.Publish{Topic: "alias/lan", Payload: []byte("1"), Retain: true})
+	time.Sleep(100 * time.Millisecond)
+	addon := h.mustConnect("addon", nil, true)
+	addon.subscribe(t, "alias/#")
+	addon.nothing(t)
 }

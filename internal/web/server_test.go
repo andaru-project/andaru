@@ -36,7 +36,7 @@ func TestProxyOverwritesSourceAndIdentityMetadata(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(assets, "index.html"), []byte("INDEX"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	handler, err := newHandler(backendPath, assets, map[string]struct{}{"https://router.example": {}}, map[string]struct{}{"router.example": {}})
+	handler, err := newHandler(backendPath, assets, map[string]struct{}{"https://router.example": {}}, map[string]struct{}{"router.example": {}}, context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestPublicHostOriginHeadersAndStaticFallback(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(assets, "index.html"), []byte("INDEX"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	handler, err := newHandler(filepath.Join(t.TempDir(), "missing.sock"), assets, map[string]struct{}{"https://router.example": {}}, map[string]struct{}{"router.example": {}})
+	handler, err := newHandler(filepath.Join(t.TempDir(), "missing.sock"), assets, map[string]struct{}{"https://router.example": {}}, map[string]struct{}{"router.example": {}}, context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,8 +115,11 @@ func TestWebConfigurationRefusesDefaultsAndWildcards(t *testing.T) {
 	}
 }
 
-// An event stream outlives the server's read and write timeouts, and each event reaches the browser as it is sent.
+// An event stream outlives the server's read and write timeouts, and its own limit on each write, and each event
+// reaches the browser as it is sent.
 func TestEventStreamOutlivesTheTimeouts(t *testing.T) {
+	defer func(previous time.Duration) { streamWriteTimeout = previous }(streamWriteTimeout)
+	streamWriteTimeout = 100 * time.Millisecond
 	backendPath := filepath.Join(t.TempDir(), "engine.sock")
 	listener, err := net.Listen("unix", backendPath)
 	if err != nil {
@@ -136,7 +139,7 @@ func TestEventStreamOutlivesTheTimeouts(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(assets, "index.html"), []byte("INDEX"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	handler, err := newHandler(backendPath, assets, map[string]struct{}{"https://router.example": {}}, map[string]struct{}{"router.example": {}})
+	handler, err := newHandler(backendPath, assets, map[string]struct{}{"https://router.example": {}}, map[string]struct{}{"router.example": {}}, context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,4 +162,71 @@ func TestEventStreamOutlivesTheTimeouts(t *testing.T) {
 		}
 		_, _ = reader.ReadString('\n')
 	}
+}
+
+// A stream ends, and lets go of the engine, when its browser stops reading and when andaru-web shuts down.
+func TestEventStreamEndsWhenStalledOrShutDown(t *testing.T) {
+	defer func(previous time.Duration) { streamWriteTimeout = previous }(streamWriteTimeout)
+	streamWriteTimeout = 200 * time.Millisecond
+	backendPath := filepath.Join(t.TempDir(), "engine.sock")
+	listener, err := net.Listen("unix", backendPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ended := make(chan struct{}, 2)
+	chunk := "data: " + strings.Repeat("x", 32<<10) + "\n\n"
+	backend := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() { ended <- struct{}{} }()
+		w.Header().Set("Content-Type", "text/event-stream")
+		for r.Context().Err() == nil {
+			if _, err := io.WriteString(w, chunk); err != nil {
+				return
+			}
+			w.(http.Flusher).Flush()
+			if r.URL.Query().Has("slow") {
+				time.Sleep(50 * time.Millisecond)
+			}
+		}
+	})}
+	go func() { _ = backend.Serve(listener) }()
+	t.Cleanup(func() { _ = backend.Close() })
+	assets := t.TempDir()
+	if err = os.WriteFile(filepath.Join(assets, "index.html"), []byte("INDEX"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	streams, endStreams := context.WithCancel(context.Background())
+	handler, err := newHandler(backendPath, assets, map[string]struct{}{"https://router.example": {}}, map[string]struct{}{"router.example": {}}, streams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewTLSServer(handler)
+	defer server.Close()
+	open := func(query string) *http.Response {
+		t.Helper()
+		request, _ := http.NewRequest(http.MethodGet, server.URL+"/api/v1/events"+query, nil)
+		request.Host = "router.example"
+		response, err := server.Client().Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+	wait := func(what string) {
+		t.Helper()
+		select {
+		case <-ended:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("the engine's stream outlived %s", what)
+		}
+	}
+
+	stalled := open("")
+	defer stalled.Body.Close()
+	wait("a browser that stopped reading")
+
+	reading := open("?slow")
+	defer reading.Body.Close()
+	go func() { _, _ = io.Copy(io.Discard, reading.Body) }()
+	endStreams()
+	wait("the shutdown")
 }

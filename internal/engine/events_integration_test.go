@@ -5,11 +5,13 @@ package engine
 import (
 	"bufio"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -53,7 +55,14 @@ func TestEventStreamFollowsTheSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.SetPassword(ctx, nobody.ID, revision, []byte(password)); err != nil {
+	if revision, err = store.SetPassword(ctx, nobody.ID, revision, []byte(password)); err != nil {
+		t.Fatal(err)
+	}
+	reader, revision, err := store.CreateAccount(ctx, identity.CreateAccountInput{Login: "reader", DisplayName: "Reader", Kind: identity.Human, Enabled: true, RoleIDs: []string{authz.ReadOnlyRoleID}}, revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revision, err = store.SetPassword(ctx, reader.ID, revision, []byte(password)); err != nil {
 		t.Fatal(err)
 	}
 	liveGenerationFixture(t, ctx, stateDir, configuration)
@@ -97,6 +106,7 @@ func TestEventStreamFollowsTheSession(t *testing.T) {
 
 	admin := signIn("rootadmin")
 	none := signIn("nobody")
+	readerLogin := signIn("reader")
 	for _, refused := range []struct {
 		method string
 		login  *identity.LoginResult
@@ -129,6 +139,9 @@ func TestEventStreamFollowsTheSession(t *testing.T) {
 				if !ok {
 					t.Fatalf("stream ended before %q", want)
 				}
+				if strings.Contains(line, "injected") {
+					t.Fatalf("a payload that is not JSON reached the stream: %q", line)
+				}
 				if strings.HasPrefix(line, "data: ") && strings.Contains(line, want) {
 					return
 				}
@@ -141,6 +154,10 @@ func TestEventStreamFollowsTheSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	next(`"type":"config.head.changed"`)
+	// A payload that is not JSON could carry line breaks that end its event and add fields: it is dropped.
+	if err = events.Publish("apply/9", []byte("{}\r\rdata: injected"), false); err != nil {
+		t.Fatal(err)
+	}
 	payload, _ := bus.NewEvent("apply.changed", "realize", map[string]int{"id": 3})
 	if err = events.Publish("apply/3", payload, false); err != nil {
 		t.Fatal(err)
@@ -150,6 +167,46 @@ func TestEventStreamFollowsTheSession(t *testing.T) {
 	// Opening and keeping the stream are not activity: they leave the session to its idle timeout.
 	if userActivity(httptest.NewRequest(http.MethodGet, eventsPath, nil)) {
 		t.Fatal("the event stream counts as activity")
+	}
+
+	// A browser that stops reading loses its stream once 16 events wait for it, and the publisher never waits.
+	stalled := &stalledWriter{header: http.Header{}, flushed: make(chan struct{}), release: make(chan struct{})}
+	request := httptest.NewRequest(http.MethodGet, "https://router.example"+eventsPath, nil)
+	request.Header.Set(WebSourceHeader, "192.0.2.20")
+	request.AddCookie(&http.Cookie{Name: webSessionCookie, Value: admin.SessionCookie})
+	ended := make(chan struct{})
+	go func() {
+		defer close(ended)
+		handler.ServeHTTP(stalled, request.WithContext(context.WithValue(request.Context(), peerKey{}, peerIdentity{uid: 123, verified: true, web: true})))
+	}()
+	<-stalled.flushed
+	for range 20 {
+		if err = events.Publish("apply/3", payload, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(stalled.release)
+	select {
+	case <-ended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a stalled stream was kept")
+	}
+
+	// A stream ends when its account loses configuration.read, though its session goes on.
+	lost := open(http.MethodGet, &readerLogin)
+	defer lost.Body.Close()
+	if lost.StatusCode != http.StatusOK {
+		t.Fatalf("reader stream: %d", lost.StatusCode)
+	}
+	if _, _, err = store.UpdateAccount(ctx, reader.ID, revision, identity.UpdateAccountInput{RoleIDs: &[]string{}}); err != nil {
+		t.Fatal(err)
+	}
+	lostEnded := make(chan error, 1)
+	go func() { _, err := io.Copy(io.Discard, lost.Body); lostEnded <- err }()
+	select {
+	case <-lostEnded:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stream outlived the account's configuration.read")
 	}
 
 	selector, secret, _ := splitCredential(admin.SessionCookie)
@@ -167,4 +224,19 @@ func TestEventStreamFollowsTheSession(t *testing.T) {
 			t.Fatal("the stream outlived its session")
 		}
 	}
+}
+
+// stalledWriter is a browser that takes the stream's headers and then stops reading until released.
+type stalledWriter struct {
+	header           http.Header
+	flushed, release chan struct{}
+	once             sync.Once
+}
+
+func (w *stalledWriter) Header() http.Header { return w.header }
+func (w *stalledWriter) WriteHeader(int)     {}
+func (w *stalledWriter) Flush()              { w.once.Do(func() { close(w.flushed) }) }
+func (w *stalledWriter) Write(p []byte) (int, error) {
+	<-w.release
+	return len(p), nil
 }

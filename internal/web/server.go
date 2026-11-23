@@ -35,7 +35,10 @@ func Serve(ctx context.Context, config Config) error {
 	if err != nil {
 		return err
 	}
-	handler, err := newHandler(config.BackendSocket, config.AssetsDirectory, origins, hosts)
+	// Event streams never go idle, so a shutdown ends them rather than waiting for them.
+	streams, endStreams := context.WithCancel(context.Background())
+	defer endStreams()
+	handler, err := newHandler(config.BackendSocket, config.AssetsDirectory, origins, hosts, streams)
 	if err != nil {
 		return err
 	}
@@ -61,6 +64,7 @@ func Serve(ctx context.Context, config Config) error {
 			Certificates: []tls.Certificate{certificate},
 		},
 	}
+	server.RegisterOnShutdown(endStreams)
 	served := make(chan error, 1)
 	go func() { served <- server.Serve(tls.NewListener(listener, server.TLSConfig)) }()
 	select {
@@ -138,7 +142,8 @@ func explicitListenAddress(value string) error {
 	return nil
 }
 
-func newHandler(backendSocket, assetsDirectory string, origins, hosts map[string]struct{}) (http.Handler, error) {
+// newHandler serves the assets and the API. Event streams end when streams does.
+func newHandler(backendSocket, assetsDirectory string, origins, hosts map[string]struct{}, streams context.Context) (http.Handler, error) {
 	assetInfo, err := os.Lstat(assetsDirectory)
 	if err != nil || !assetInfo.IsDir() || assetInfo.Mode()&os.ModeSymlink != 0 {
 		return nil, errors.New("asset directory must be a real directory")
@@ -154,9 +159,13 @@ func newHandler(backendSocket, assetsDirectory string, origins, hosts map[string
 	assets := http.FileServer(http.Dir(assetsDirectory))
 	router := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/events" {
-			// The stream lasts as long as the page; the server's write timeout is for responses that end.
-			_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
-			events.ServeHTTP(w, r)
+			// The stream lasts as long as the page, so instead of the server's write timeout each write must finish
+			// within streamWriteTimeout: a browser that stops reading loses its stream and its backend connection.
+			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(streamWriteTimeout))
+			ctx, cancel := context.WithCancel(r.Context())
+			defer cancel()
+			defer context.AfterFunc(streams, cancel)()
+			events.ServeHTTP(rollingDeadline{w}, r.WithContext(ctx))
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/api/") {
@@ -218,3 +227,16 @@ func validatePublicRequest(next http.Handler, origins, hosts map[string]struct{}
 func requestChangesState(method string) bool {
 	return method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions
 }
+
+// streamWriteTimeout bounds each write of an event stream. The engine writes at least every 25 seconds.
+var streamWriteTimeout = time.Minute
+
+// rollingDeadline gives each write of a stream streamWriteTimeout to finish.
+type rollingDeadline struct{ http.ResponseWriter }
+
+func (w rollingDeadline) Write(p []byte) (int, error) {
+	_ = http.NewResponseController(w.ResponseWriter).SetWriteDeadline(time.Now().Add(streamWriteTimeout))
+	return w.ResponseWriter.Write(p)
+}
+
+func (w rollingDeadline) Unwrap() http.ResponseWriter { return w.ResponseWriter }

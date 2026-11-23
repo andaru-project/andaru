@@ -29,9 +29,9 @@ func (*store) ID() string { return "store" }
 func (*store) Provides(b byte) bool {
 	return bytes.Contains([]byte{
 		mqtt.OnSessionEstablished, mqtt.OnDisconnect, mqtt.OnSubscribed, mqtt.OnUnsubscribed,
-		mqtt.OnRetainMessage, mqtt.OnWillSent, mqtt.OnQosPublish, mqtt.OnQosComplete, mqtt.OnQosDropped,
-		mqtt.OnClientExpired, mqtt.OnRetainedExpired, mqtt.OnPublish, mqtt.OnPublished,
-		mqtt.StoredClients, mqtt.StoredInflightMessages, mqtt.StoredRetainedMessages, mqtt.StoredSubscriptions,
+		mqtt.OnWillSent, mqtt.OnQosPublish, mqtt.OnQosComplete, mqtt.OnQosDropped,
+		mqtt.OnClientExpired, mqtt.OnPublish, mqtt.OnPublished,
+		mqtt.StoredClients, mqtt.StoredInflightMessages, mqtt.StoredSubscriptions,
 	}, []byte{b})
 }
 
@@ -200,16 +200,6 @@ func (s *store) OnUnsubscribed(cl *mqtt.Client, pk packets.Packet) {
 	}
 }
 
-func (s *store) OnRetainMessage(cl *mqtt.Client, pk packets.Packet, r int64) {
-	if r == -1 {
-		_ = s.del(storage.RetainedKey, pk.TopicName)
-		return
-	}
-	_ = s.put(storage.RetainedKey, pk.TopicName, message(storage.RetainedKey, pk.TopicName, cl, pk, 0))
-}
-
-func (s *store) OnRetainedExpired(topic string) { _ = s.del(storage.RetainedKey, topic) }
-
 // OnQosPublish runs once a message is held for a client and before it is sent.
 // The broker drops messages beyond MaximumInflight without telling anyone, so
 // a client that reaches it loses its session first.
@@ -342,7 +332,4 @@ func (s *store) StoredSubscriptions() ([]storage.Subscription, error) {
 }
 func (s *store) StoredInflightMessages() ([]storage.Message, error) {
 	return all[storage.Message](s, storage.InflightKey)
-}
-func (s *store) StoredRetainedMessages() ([]storage.Message, error) {
-	return all[storage.Message](s, storage.RetainedKey)
 }

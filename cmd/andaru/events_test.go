@@ -63,7 +63,8 @@ func TestRealizeTellsTheBusOfEachApply(t *testing.T) {
 			t.Fatalf("%s: the bus was not told", row.args)
 		}
 	}
-	if code, stderr := realize("leases", &fakeVerbs{}); code != 0 || stderr != "" {
+	// A verb on no generation has nothing to tell.
+	if code, stderr := realize("--bus-socket "+socket+" leases", &fakeVerbs{}); code != 0 || stderr != "" {
 		t.Fatalf("leases: exit %d, %q", code, stderr)
 	}
 	if code, stderr := realize("--bus-socket "+filepath.Join(dir, "none.sock")+" confirm 4", &fakeVerbs{}); code != 0 || !strings.Contains(stderr, "event bus not told") {

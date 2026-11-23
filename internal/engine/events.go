@@ -2,12 +2,14 @@ package engine
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
-	"sync"
+	"strconv"
 	"time"
 
 	"github.com/andaru-project/andaru/internal/authz"
@@ -21,15 +23,33 @@ const eventsPath = "/api/v1/events"
 // within this long of its session ending or losing configuration.read.
 var eventsHeartbeat = 25 * time.Second
 
-// openBus starts the event bus with its store in the state directory and its socket beside the engine's, where
-// only root reaches it: andaru realize publishes the state of each apply there.
-func openBus(stateDir, engineSocket string) (*bus.Bus, func() error, error) {
-	listener, closeListener, err := listenRootSocket(filepath.Join(filepath.Dir(engineSocket), "bus.sock"), "bus")
+// openBus starts the event bus with its store in the state directory and its socket where only root reaches it:
+// andaru realize publishes the state of each apply there. A store the bus cannot open is moved aside and the bus
+// starts with an empty one, rather than stopping the engine: every subscriber then finds its session gone, the
+// bus's signal that it may have missed events.
+func openBus(stateDir, socket string) (*bus.Bus, func() error, error) {
+	path := filepath.Join(stateDir, "bus.db")
+	events, closeEvents, err := startBus(path, socket)
+	if err == nil {
+		return events, closeEvents, nil
+	}
+	aside := path + ".unreadable-" + strconv.FormatInt(time.Now().Unix(), 10)
+	slog.Error("event bus store unreadable; starting with an empty one", "error", err, "moved_to", aside)
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if renameErr := os.Rename(path+suffix, aside+suffix); renameErr != nil && !errors.Is(renameErr, os.ErrNotExist) {
+			return nil, nil, errors.Join(err, renameErr)
+		}
+	}
+	return startBus(path, socket)
+}
+
+func startBus(path, socket string) (*bus.Bus, func() error, error) {
+	listener, closeListener, err := listenRootSocket(socket, "bus")
 	if err != nil {
 		return nil, nil, err
 	}
 	events, err := bus.Open(bus.Options{
-		Path:   filepath.Join(stateDir, "bus.db"),
+		Path:   path,
 		Grants: map[string]bus.Grants{"realize": {Publish: []string{"apply/+"}}},
 		// The socket is root's alone, so whoever connects is trusted with the grants of the name it gives.
 		Authenticate: func(_, _ []byte) bool { return true },
@@ -52,6 +72,19 @@ func publishHead(events *bus.Bus) func(config.Version) {
 		}
 		if err != nil {
 			slog.Warn("publish saved head", "version", version, "error", err)
+		}
+	}
+}
+
+// publishApply tells subscribers that an apply changed, as andaru realize does after each verb.
+func publishApply(events *bus.Bus, source string) func(int) {
+	return func(id int) {
+		payload, err := bus.NewEvent("apply.changed", source, map[string]int{"id": id})
+		if err == nil {
+			err = events.Publish("apply/"+strconv.Itoa(id), payload, false)
+		}
+		if err != nil {
+			slog.Warn("publish apply", "generation", id, "error", err)
 		}
 	}
 }
@@ -80,13 +113,15 @@ func (h *webAPI) eventStream(w http.ResponseWriter, r *http.Request, source stri
 	// A browser too slow to take its events loses the stream rather than holding up the publisher; it opens the
 	// stream again and reads the state anew.
 	queue := make(chan []byte, 16)
-	behind := make(chan struct{})
-	var once sync.Once
+	behind := make(chan struct{}, 1)
 	deliver := func(_ string, payload []byte) {
 		select {
 		case queue <- payload:
 		default:
-			once.Do(func() { close(behind) })
+			select {
+			case behind <- struct{}{}:
+			default:
+			}
 		}
 	}
 	for _, filter := range []string{"config/head", "apply/+"} {
@@ -114,11 +149,14 @@ func (h *webAPI) eventStream(w http.ResponseWriter, r *http.Request, source stri
 		case <-behind:
 			return
 		case payload := <-queue:
-			// Each line of the payload is a data line, so no payload can end the event early.
-			for _, line := range bytes.Split(payload, []byte("\n")) {
-				message = append(append(append(message, "data: "...), line...), '\n')
+			// Compact JSON holds no line break, so a payload is one data line and cannot end its event early or
+			// add fields to it. Anything else is not an event.
+			var compact bytes.Buffer
+			if err := json.Compact(&compact, payload); err != nil {
+				slog.WarnContext(r.Context(), "event dropped: not JSON", "error", err)
+				continue
 			}
-			message = append(message, '\n')
+			message = append(append([]byte("data: "), compact.Bytes()...), "\n\n"...)
 		case <-heartbeat.C:
 			current, _, _, _, _, err := h.readCookiePrincipal(r)
 			if err != nil || !allowed(requestActor{Actor: current.Actor, Capabilities: current.Capabilities}) {

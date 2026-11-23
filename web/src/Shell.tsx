@@ -67,7 +67,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
 
   // Saves and applies, from this tab or any other, reach the shell as events; it reads the change state at each.
   // A read waits for no answer still out: one that was served before the change would show it unchanged.
-  useEvents(useCallback(() => { void reloadChanges(); }, [reloadChanges]), canReadChanges);
+  useEvents(reloadChanges, canReadChanges);
 
   // Whether the saved settings wait for decisions after an upgrade (settings safe mode). It changes only with a new
   // saved head (an upgrade, a restore, the answers), so it is read again when the head moves, never on a timer:

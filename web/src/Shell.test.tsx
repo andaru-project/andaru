@@ -51,13 +51,23 @@ it('reads the change state when the event stream opens and at each event, and op
   expect(appliesReads(fetchMock)).toBe(4);
   await answered();
 
-  // A dropped stream is the browser's to reopen; a refused one is the page's, after 15 seconds.
+  // A failed stream is read after once, until a stream opens again, so a lost connection shows. A dropped stream is
+  // the browser's to reopen; a refused one is the page's, after 15 seconds.
   act(() => { stream.fail(false); });
-  expect(appliesReads(fetchMock)).toBe(4);
+  expect(appliesReads(fetchMock)).toBe(5);
+  act(() => { stream.fail(false); });
+  expect(appliesReads(fetchMock)).toBe(5);
+  await answered();
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   act(() => { stream.fail(true); });
   expect(appliesReads(fetchMock)).toBe(5);
   expect(openStreams()).toHaveLength(0);
+  act(() => { vi.advanceTimersByTime(15_000); });
+  const [reopened] = openStreams();
+  act(() => { reopened.open(); });
+  expect(appliesReads(fetchMock)).toBe(6);
+  act(() => { reopened.fail(true); });
+  expect(appliesReads(fetchMock)).toBe(7);
   act(() => { vi.advanceTimersByTime(15_000); });
   expect(openStreams()).toHaveLength(1);
 
@@ -71,7 +81,15 @@ it('reads the change state when the event stream opens and at each event, and op
   act(() => { document.dispatchEvent(new Event('visibilitychange')); });
   act(() => { openStreams()[0].open(); });
   expect(openStreams()).toHaveLength(1);
-  expect(appliesReads(fetchMock)).toBe(6);
+  expect(appliesReads(fetchMock)).toBe(8);
+});
+
+it('closes its event stream when it goes away', () => {
+  routes();
+  const { unmount } = render(<MemoryRouter initialEntries={['/system/session']}><Shell api={new ApiClient('csrf')} session={reader} connected onLogout={vi.fn()} onSessionLost={vi.fn()} /></MemoryRouter>);
+  expect(openStreams()).toHaveLength(1);
+  unmount();
+  expect(openStreams()).toHaveLength(0);
 });
 
 it('opens no event stream for an account that may not read the configuration', () => {

@@ -37,6 +37,7 @@ type applyBench struct {
 	coordinator *securityCoordinator
 	mu          sync.Mutex
 	calls       []string
+	stored      []int // generations announced on the bus
 	reads       int
 	armErr      error
 	skip        bool          // Realize fails before the verb runs
@@ -210,7 +211,7 @@ func newApplyBench(t *testing.T) *applyBench {
 	}
 	b.identities = &applyIdentityState{revision: 1, accounts: map[string]identity.Account{}}
 	b.coordinator = &securityCoordinator{stateDir: b.state}
-	applies := newAppliesHandler(input, read, b, b.state, b.identities, b.coordinator)
+	applies := newAppliesHandler(input, read, b, b.state, b.identities, b.coordinator, func(id int) { b.stored = append(b.stored, id) })
 	b.h = newHandler(read.Links, newSavedHandler(nil, read.Links, read.Facts, applies, nil))
 	return b
 }
@@ -282,6 +283,9 @@ func TestApplyHappyPath(t *testing.T) {
 	}
 	if !slices.Equal(b.calls, []string{"arm 1 180", "activate 1"}) {
 		t.Fatalf("calls = %q; the timer must be armed before anything changes", b.calls)
+	}
+	if !slices.Equal(b.stored, []int{1}) {
+		t.Fatalf("announced %v", b.stored)
 	}
 	if again := b.decode(b.call(http.MethodGet, "/api/v1/applies/1", ""), http.StatusOK); again.State != got.State || !again.Deadline.Equal(*got.Deadline) {
 		t.Fatalf("read back = %+v", again)
@@ -359,8 +363,8 @@ func TestApplyRefusedStoresNothing(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || len(body.Error.Findings) != 1 || body.Error.Findings[0].Code != "BOOT_UNIT_DISABLED" {
 		t.Fatalf("findings = %s", w.Body)
 	}
-	if len(b.calls) != 0 || len(b.numbered()) != 0 {
-		t.Fatalf("a refused apply left %q %q", b.calls, b.numbered())
+	if len(b.calls) != 0 || len(b.numbered()) != 0 || len(b.stored) != 0 {
+		t.Fatalf("a refused apply left %q %q %v", b.calls, b.numbered(), b.stored)
 	}
 }
 

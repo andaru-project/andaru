@@ -69,6 +69,8 @@ func Open(o Options) (*Bus, error) {
 	}
 	capabilities := mqtt.NewDefaultServerCapabilities()
 	capabilities.MaximumSessionExpiryInterval = o.MaximumSessionExpiry
+	// An event is news of a change, read from state when missed; a retained one would outlive what it reports.
+	capabilities.RetainAvailable = 0
 	if o.MaximumInflight != 0 {
 		capabilities.MaximumInflight = o.MaximumInflight
 	}

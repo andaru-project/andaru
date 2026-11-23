@@ -86,7 +86,8 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 			result = err
 		}
 	}()
-	events, closeEvents, err := openBus(stateDir, socketPath)
+	busSocket := filepath.Join(filepath.Dir(socketPath), "bus.sock")
+	events, closeEvents, err := openBus(stateDir, busSocket)
 	if err != nil {
 		return fmt.Errorf("start the event bus: %w", err)
 	}
@@ -109,7 +110,7 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	}()
 	defer func() { cancel(context.Canceled); <-stopped }()
 	read := hostReader{Links: host.ReadLinks, Facts: host.ReadRealizerFacts, Managed: host.ReadManaged, BootUnit: host.ReadBootUnit}
-	applies := newAppliesHandler(store.ApplyInput, read, newSystemdRunner(stateDir, filepath.Join(filepath.Dir(socketPath), "bus.sock")), stateDir, identities, coordinator)
+	applies := newAppliesHandler(store.ApplyInput, read, newSystemdRunner(stateDir, busSocket), stateDir, identities, coordinator, publishApply(events, "engine"))
 	identityAPI := newIdentityAPI(identities, store, coordinator)
 	auditAPI := newAuditAPI(coordinator)
 	backups := newBackupHandler(store, identities, coordinator, stateDir, host.ReadLinks)

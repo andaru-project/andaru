@@ -63,15 +63,16 @@ export function useVisiblePoll(reload: () => void, milliseconds: number, enabled
 const reopenMilliseconds = 15_000;
 
 // useEvents calls read when the engine's event stream opens and at each event on it, in place of a poll: the events
-// say only that something changed, and read fetches what. The browser reopens a stream that drops; one the server
-// refuses (the session ended, the engine is down) is opened again 15 seconds later, and read runs then too, so a
-// lost session or connection shows as a poll would show it. A hidden tab holds no stream: a browser allows six
-// connections to a host, and each stream keeps one.
+// say only that something changed, and read fetches what. read runs too when a stream fails, once until it opens
+// again, so a lost session or connection shows as a poll would show it. The browser reopens a stream that drops;
+// one the server refuses (the session ended, the engine is down) is opened again 15 seconds later. A hidden tab
+// holds no stream: a browser allows six connections to a host, and each stream keeps one.
 export function useEvents(read: () => void, enabled = true) {
   useEffect(() => {
     if (!enabled) return;
     let source: EventSource | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let failed = false;
     const close = () => {
       source?.close();
       source = undefined;
@@ -80,12 +81,15 @@ export function useEvents(read: () => void, enabled = true) {
     const open = () => {
       close();
       const opened = new EventSource('/api/v1/events');
-      opened.onopen = read;
+      opened.onopen = () => {
+        failed = false;
+        read();
+      };
       opened.onmessage = read;
       opened.onerror = () => {
-        if (opened.readyState !== EventSource.CLOSED) return;
-        read();
-        timer = setTimeout(open, reopenMilliseconds);
+        if (!failed) read();
+        failed = true;
+        if (opened.readyState === EventSource.CLOSED) timer = setTimeout(open, reopenMilliseconds);
       };
       source = opened;
     };
