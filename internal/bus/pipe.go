@@ -2,10 +2,13 @@ package bus
 
 import (
 	"net"
+	"os"
 	"sync"
+
+	"golang.org/x/sys/unix"
 )
 
-// pipeListener hands out in-memory connections to the engine's own clients.
+// pipeListener hands out connections to the engine's own clients, which never leave the process.
 type pipeListener struct {
 	conns chan net.Conn
 	done  chan struct{}
@@ -32,14 +35,37 @@ func (l *pipeListener) Close() error {
 
 func (l *pipeListener) Addr() net.Addr { return pipeAddr{} }
 
+// dial connects through a socket pair: unlike net.Pipe it buffers, and a packet a client writes in several pieces
+// cannot interleave with another, which mochi would read as malformed.
 func (l *pipeListener) dial() (net.Conn, error) {
-	client, server := net.Pipe()
+	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	client, err := fileConn(fds[0])
+	if err != nil {
+		unix.Close(fds[1])
+		return nil, err
+	}
+	server, err := fileConn(fds[1])
+	if err != nil {
+		client.Close()
+		return nil, err
+	}
 	select {
 	case l.conns <- server:
 		return client, nil
 	case <-l.done:
+		client.Close()
+		server.Close()
 		return nil, net.ErrClosed
 	}
+}
+
+func fileConn(fd int) (net.Conn, error) {
+	f := os.NewFile(uintptr(fd), "bus")
+	defer f.Close()
+	return net.FileConn(f)
 }
 
 type pipeAddr struct{}

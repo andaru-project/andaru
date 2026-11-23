@@ -160,6 +160,16 @@ func (h *harness) rows(table, where string) int {
 	return n
 }
 
+// eventually waits up to five seconds for done.
+func (h *harness) eventually(what string, done func() bool) {
+	h.t.Helper()
+	for start := time.Now(); !done(); time.Sleep(10 * time.Millisecond) {
+		if time.Since(start) > 5*time.Second {
+			h.t.Fatalf("waited for %s", what)
+		}
+	}
+}
+
 func TestCovers(t *testing.T) {
 	for _, c := range []struct {
 		grant, filter string
@@ -281,9 +291,8 @@ func TestClientPublishGoesThroughOutbox(t *testing.T) {
 	if p := addon.receive(t); p.Topic != "alias/lan" {
 		t.Fatalf("got %s", p.Topic)
 	}
-	if n := h.rows("outbox", "1"); n != 0 {
-		t.Fatalf("outbox = %d after publish, want 0", n)
-	}
+	// mochi acknowledges before it delivers, and the row goes once every session holds the event.
+	h.eventually("the outbox to empty", func() bool { return h.rows("outbox", "1") == 0 })
 
 	// The engine dies after the hook kept a publish and before the broker
 	// delivered it: the next start publishes it.
@@ -461,12 +470,8 @@ func TestCleanSessionLeavesNothing(t *testing.T) {
 	if _, err = c.Connect(ctx, &paho.Connect{ClientID: "passing", CleanStart: true, Username: "agent", UsernameFlag: true, Password: []byte("secret"), PasswordFlag: true}); err != nil {
 		t.Fatal(err)
 	}
-	// mochi answers the connect before it stores the client, so the row is waited for.
-	for start := time.Now(); h.rows("mqtt_state", "key='passing'") != 1; time.Sleep(10 * time.Millisecond) {
-		if time.Since(start) > 5*time.Second {
-			t.Fatal("the connected client was not stored")
-		}
-	}
+	// mochi answers the connect before it stores the client.
+	h.eventually("the client to be stored", func() bool { return h.rows("mqtt_state", "key='passing'") == 1 })
 	c.Disconnect(&paho.Disconnect{})
 	time.Sleep(100 * time.Millisecond)
 	if n := h.rows("mqtt_state", "key LIKE 'passing%'"); n != 0 {
