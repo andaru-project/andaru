@@ -1,10 +1,10 @@
-import { AccordionChevron, Alert, Anchor, AppShell, Badge, Burger, Button, Group, Image, Menu, NavLink, Stack, Text, Title } from '@mantine/core';
+import { AccordionChevron, Alert, Anchor, AppShell, Badge, Burger, Button, Group, Image, Menu, NavLink, Stack, Text, Title, useMantineColorScheme, type MantineColorScheme } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useMatch, useNavigate } from 'react-router';
 import { ApiClient, reportError } from './api';
 import mark from './andaru-icon.svg';
-import { loadChangeState } from './changes';
+import { loadChangeState, pendingNotice } from './changes';
 import { PendingNotice } from './PendingNotice';
 import { AliasesScreen } from './screens/AliasesScreen';
 import { AuditScreen } from './screens/AuditScreen';
@@ -33,6 +33,27 @@ interface ShellProps {
 const pollMilliseconds = 15_000;
 const systemPollMilliseconds = 60_000;
 
+const pageTitles: Record<string, string> = {
+  '/': 'Dashboard',
+  '/network/interfaces': 'Interfaces',
+  '/firewall/rules': 'Rules',
+  '/firewall/aliases': 'Aliases',
+  '/changes': 'Review and apply',
+  '/system/details': 'System details',
+  '/system/users': 'Users',
+  '/system/roles': 'Roles',
+  '/system/tokens': 'API tokens',
+  '/system/audit': 'Security audit',
+  '/system/upgrade': 'Finish the upgrade',
+  '/system/session': 'Current session',
+};
+
+const schemes: Array<{ value: MantineColorScheme; label: string }> = [
+  { value: 'auto', label: 'System' },
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' },
+];
+
 // Branches the user closed, kept per browser. Storage may be unavailable; the tree then starts open.
 const closedKey = 'andaru.nav.closed';
 function storedClosed(): string[] {
@@ -45,6 +66,7 @@ function storedClosed(): string[] {
 }
 
 export function Shell({ api, session, connected, onLogout, onSessionLost }: ShellProps) {
+  const { colorScheme, setColorScheme } = useMantineColorScheme();
   const capabilities = useMemo(() => new Set(session.capabilities), [session.capabilities]);
   const [opened, { toggle, close }] = useDisclosure();
   const { pathname } = useLocation();
@@ -138,7 +160,23 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
     setSeenPath(pathname);
     if (currentBranch && closed.includes(currentBranch)) setClosed(closed.filter((item) => item !== currentBranch));
   }
-  const pageLink = (to: string, label: string) => <NavLink className="nav-item" key={to} component={Link} to={to} label={label} active={pathname === to} aria-current={pathname === to ? 'page' : undefined} onClick={close} />;
+  const hostname = system.data?.info.hostname;
+  useEffect(() => {
+    const normalized = pathname.endsWith('/') && pathname.length > 1 ? pathname.slice(0, -1) : pathname;
+    const title = pageTitles[normalized];
+    document.title = [title, hostname, 'Andaru'].filter(Boolean).join(' — ');
+  }, [pathname, hostname]);
+
+  const pending = changes.data ? pendingNotice(changes.data) : null;
+  const changesBadge = pending ? ({
+    unapplied: <Badge size="xs" color="yellow" variant="light">Pending</Badge>,
+    activating: <Badge size="xs" color="blue" variant="light">Applying</Badge>,
+    awaiting: <Badge size="xs" color="orange" variant="filled">Confirm</Badge>,
+    failed: <Badge size="xs" color="red" variant="light">Failed</Badge>,
+    rolled_back: <Badge size="xs" color="red" variant="light">Rolled back</Badge>,
+  })[pending.kind] : undefined;
+
+  const pageLink = (to: string, label: string, rightSection?: ReactNode) => <NavLink className="nav-item" key={to} component={Link} to={to} label={label} rightSection={rightSection} active={pathname === to} aria-current={pathname === to ? 'page' : undefined} onClick={close} />;
 
   async function changePassword() {
     setAccountError('');
@@ -180,6 +218,12 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
               <Menu.Dropdown>
                 <Menu.Item onClick={() => void navigate('/system/session')}>Session details</Menu.Item>
                 {capabilities.has('users.read') && <Menu.Item onClick={() => void changePassword()}>Change password</Menu.Item>}
+                <Menu.Divider />
+                <Menu.Label>Appearance</Menu.Label>
+                {schemes.map(({ value, label }) => (
+                  <Menu.Item key={value} rightSection={colorScheme === value ? <span aria-hidden="true">✓</span> : undefined} aria-checked={colorScheme === value} onClick={() => setColorScheme(value)}>{label}</Menu.Item>
+                ))}
+                <Menu.Divider />
                 <Menu.Item onClick={onLogout}>Sign out</Menu.Item>
               </Menu.Dropdown>
             </Menu>
@@ -196,7 +240,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
                   focus. It holds no children of its own, or NavLink would toggle on the Space key and the browser
                   again on the click that key makes. */}
               <NavLink className="nav-branch" component="button" type="button" label={group.label} aria-expanded={open} rightSection={<AccordionChevron className="nav-chevron" data-open={open || undefined} />} onClick={() => toggleBranch(group.label)} />
-              {open && <div className="nav-children">{group.items.map((item) => pageLink(item.to, item.label))}</div>}
+              {open && <div className="nav-children">{group.items.map((item) => pageLink(item.to, item.label, item.to === '/changes' ? changesBadge : undefined))}</div>}
             </div>
           );
         })}

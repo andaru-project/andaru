@@ -20,8 +20,10 @@ it('keeps saved role edits visibly separate from effective live permissions', as
 
   expect(await screen.findByText('Saved roles are not live permissions')).toBeInTheDocument();
   expect(screen.getByText(/saving a role never activates it/i)).toBeInTheDocument();
-  expect(screen.getAllByText('Saved draft').length).toBeGreaterThan(0);
-  expect(screen.getAllByText('Effective live').length).toBeGreaterThan(0);
+  expect(screen.getAllByText('Saved draft')).toHaveLength(1);
+  expect(screen.getAllByText('Effective live')).toHaveLength(1);
+  expect(screen.getByText('status.read').closest('td')).toHaveAttribute('data-label', 'Saved draft');
+  expect(screen.getByText('status.read, configuration.read').closest('td')).toHaveAttribute('data-label', 'Effective live');
 });
 
 it('leaves applying to the Review and apply page', async () => {

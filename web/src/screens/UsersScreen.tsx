@@ -98,7 +98,7 @@ export function UsersScreen({ api, session, onSessionLost }: UsersScreenProps) {
         </ScrollArea>
       )}
       {nextCursor && <Button variant="default" onClick={() => void loadMore()}>Load more users</Button>}
-      {editing && <UserDialog key={editing === 'new' ? 'new' : editing.id} user={editing === 'new' ? undefined : editing} revision={revision} roles={roles} onClose={() => setEditing(null)} onSessionLost={onSessionLost} onSave={saveUser} />}
+      {editing && <UserDialog key={editing === 'new' ? 'new' : editing.id} user={editing === 'new' ? undefined : editing} revision={editing === 'new' ? revision : editing.revision} roles={roles} onClose={() => setEditing(null)} onSessionLost={onSessionLost} onSave={saveUser} />}
       {passwordUser && <PasswordDialog user={passwordUser} selfAccountId={session.account.id} onClose={() => setPasswordUser(null)} onSessionLost={onSessionLost} onSave={async (currentPassword, newPassword) => { await api.changePassword(passwordUser.id, { currentPassword, newPassword, expectedRevision: passwordUser.revision }); await load(); }} />}
       <Modal opened={Boolean(deleting)} onClose={() => setDeleting(null)} title="Delete user" centered>
         <Stack><Text>Delete <strong>{deleting?.login}</strong>? The account’s sessions and tokens will stop working. The server will refuse removal of the final recovery administrator.</Text><Group justify="flex-end"><Button variant="default" onClick={() => setDeleting(null)}>Cancel</Button><Button color="red" onClick={() => void deleteUser()}>Delete user</Button></Group></Stack>

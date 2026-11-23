@@ -43,7 +43,7 @@ export function PendingNotice({ api, session, state, onChanged, onSessionLost }:
   return (
     <Alert color="orange" role="status" title={`Applied, awaiting confirmation: rolls back at ${apply.deadline ? clock(apply.deadline) : 'an unknown time'}`}>
       <Group>
-        {remaining && <Text size="sm">{remaining} left</Text>}
+        {remaining && <Text size="sm" className="tabular">{remaining} left</Text>}
         {session.capabilities.includes('configuration.confirm') && <Button size="xs" disabled={busy} onClick={() => void finish(apply.id, 'confirmation')}>Confirm</Button>}
         {session.capabilities.includes('configuration.apply') && <Button size="xs" color="red" variant="default" disabled={busy} onClick={() => void finish(apply.id, 'rollback')}>Roll back</Button>}
         <Anchor component={Link} to="/changes">Review and apply</Anchor>

@@ -1,4 +1,5 @@
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router';
 import { expect, it, vi } from 'vitest';
 import { ApiClient } from '../api';
 import { fetchRoutes, jsonResponse } from '../test/fetch';
@@ -35,7 +36,7 @@ function show(routes: Parameters<typeof fetchRoutes>[0] = {}, capabilities = ['c
     '/api/v1/config/aliases/addresses': list(addresses), '/api/v1/config/aliases/ports': list(ports),
     '/api/v1/config': config, ...routes,
   });
-  render(<AliasesScreen api={new ApiClient('csrf')} session={session(capabilities)} onSaved={onSaved} onSessionLost={vi.fn()} />);
+  render(<MemoryRouter><AliasesScreen api={new ApiClient('csrf')} session={session(capabilities)} onSaved={onSaved} onSessionLost={vi.fn()} /></MemoryRouter>);
   return { fetch, onSaved };
 }
 const rows = () => screen.getAllByRole('row').slice(1);
@@ -306,7 +307,7 @@ it('says what happened when a save or a delete is refused, and reads the list ag
     'DELETE /api/v1/config/aliases/ports/svc_usual': refuse(422, 'VALIDATION_FAILED'),
     'DELETE /api/v1/config/aliases/ports/svc_any6': refuse(412, 'PRECONDITION_FAILED'),
   });
-  render(<AliasesScreen api={new ApiClient('csrf')} session={session(['configuration.read', 'configuration.write'])} onSaved={vi.fn()} onSessionLost={onSessionLost} />);
+  render(<MemoryRouter><AliasesScreen api={new ApiClient('csrf')} session={session(['configuration.read', 'configuration.write'])} onSaved={vi.fn()} onSessionLost={onSessionLost} /></MemoryRouter>);
   const reads = () => fetch.mock.calls.filter(([path, init]) => path === '/api/v1/config' && !init?.method).length;
   const remove = async (name: string) => {
     await user.click(await screen.findByRole('button', { name: `Delete port alias ${name}` }));

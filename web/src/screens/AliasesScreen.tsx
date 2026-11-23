@@ -1,5 +1,6 @@
-import { Alert, Badge, Button, Group, Modal, SegmentedControl, Stack, Table, Text, TextInput, Title } from '@mantine/core';
+import { Alert, Anchor, Badge, Button, Group, Modal, ScrollArea, SegmentedControl, Stack, Table, Text, TextInput, Title } from '@mantine/core';
 import { useCallback, useState } from 'react';
+import { Link } from 'react-router';
 import { ApiError, reportError, type ApiClient } from '../api';
 import type { AddressAlias, AliasKinds, PortAlias, SavedObject, Session, Snapshot } from '../types';
 import { useResource } from '../useResource';
@@ -41,17 +42,19 @@ function holds(row: Row, names: Map<string, string>) {
   return `${protocols[alias.protocol]} ${what.length > 0 ? what.join(', ') : 'any type'}`;
 }
 
+interface Usage { label: string; to?: string }
+
 // uses says what still names an alias, in the words of the pages those things are on. The engine refuses to
 // delete an alias in use; the page says by what, so the refusal is never the first the user hears of it.
-function uses(id: string, rows: Row[], snapshot: Snapshot) {
-  const found: string[] = [];
+function uses(id: string, rows: Row[], snapshot: Snapshot): Usage[] {
+  const found: Usage[] = [];
   (snapshot.value.rules ?? []).forEach((rule, index) => {
-    if ([...rule.from.addresses, ...rule.to.addresses, ...rule.ports].includes(id)) found.push(`Rule ${index + 1}, ${rule.name}`);
+    if ([...rule.from.addresses, ...rule.to.addresses, ...rule.ports].includes(id)) found.push({ label: `Rule ${index + 1}, ${rule.name}`, to: '/firewall/rules' });
   });
-  for (const row of rows) if (row.item.value.members?.includes(id)) found.push(`Alias ${row.item.value.name}`);
-  if (snapshot.value.management?.allowedSources?.includes(id)) found.push('The management segment\'s allowed sources');
-  for (const forward of snapshot.value.nat?.portForwards ?? []) if (forward.from?.includes(id) || forward.to?.address === id) found.push(`Port forward ${forward.name}`);
-  for (const entry of snapshot.value.nat?.oneToOne ?? []) if (entry.destination?.includes(id)) found.push(`One-to-one NAT ${entry.name}`);
+  for (const row of rows) if (row.item.value.members?.includes(id)) found.push({ label: `Alias ${row.item.value.name}` });
+  if (snapshot.value.management?.allowedSources?.includes(id)) found.push({ label: 'The management segment\'s allowed sources', to: '/network/interfaces' });
+  for (const forward of snapshot.value.nat?.portForwards ?? []) if (forward.from?.includes(id) || forward.to?.address === id) found.push({ label: `Port forward ${forward.name}` });
+  for (const entry of snapshot.value.nat?.oneToOne ?? []) if (entry.destination?.includes(id)) found.push({ label: `One-to-one NAT ${entry.name}` });
   return found;
 }
 
@@ -129,35 +132,37 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
                 </Group>
               )}
               {shown.length === 0 ? <Alert role="status" title="No aliases">{rows.length === 0 ? 'None is saved yet. A rule can name zones without any; an alias is for naming hosts, networks and ports.' : words.length > 0 ? 'No alias matches the filter.' : 'None of this kind is saved.'}</Alert> : (
-                <Table className="data-table aliases" verticalSpacing="xs">
-                  <Table.Thead><Table.Tr><Table.Th>Name</Table.Th><Table.Th>Kind</Table.Th><Table.Th>Holds</Table.Th><Table.Th>Used by</Table.Th>{canWrite && <Table.Th>Actions</Table.Th>}</Table.Tr></Table.Thead>
-                  <Table.Tbody>
-                    {shown.map((row) => {
-                      const alias = row.item.value;
-                      const used = usedBy(row);
-                      return (
-                        <Table.Tr key={alias.id}>
-                          <Table.Td data-label="Name"><Text size="sm" fw={600}>{alias.name}</Text>{alias.description && <Text size="sm" c="dimmed">{alias.description}</Text>}</Table.Td>
-                          <Table.Td data-label="Kind"><Badge variant={row.kind === 'addresses' ? 'default' : 'light'} color="gray" className="alias" tt="none">{kindLabel(row)}</Badge></Table.Td>
-                          <Table.Td data-label="Holds"><Holds row={row} names={names} /></Table.Td>
-                          <Table.Td data-label="Used by">
-                            {used.length === 0 ? <Text size="sm" c="dimmed">nothing</Text> : (
-                              <details><summary>{used.length === 1 ? '1 use' : `${used.length} uses`}</summary><ul className="fixed-rules">{used.map((use) => <li key={use}>{use}</li>)}</ul></details>
-                            )}
-                          </Table.Td>
-                          {canWrite && (
-                            <Table.Td>
-                              <Group gap="xs" wrap="nowrap">
-                                <Button size="compact-xs" variant="default" disabled={busy} aria-label={`Edit ${noun(row)} ${alias.name}`} onClick={() => setEditing(row)}>Edit</Button>
-                                <Button size="compact-xs" variant="subtle" color="red" disabled={busy} aria-label={`Delete ${noun(row)} ${alias.name}`} onClick={() => setDeleting(row)}>Delete</Button>
-                              </Group>
+                <ScrollArea>
+                  <Table className="data-table aliases" verticalSpacing="xs">
+                    <Table.Thead><Table.Tr><Table.Th>Name</Table.Th><Table.Th>Kind</Table.Th><Table.Th>Holds</Table.Th><Table.Th>Used by</Table.Th>{canWrite && <Table.Th>Actions</Table.Th>}</Table.Tr></Table.Thead>
+                    <Table.Tbody>
+                      {shown.map((row) => {
+                        const alias = row.item.value;
+                        const used = usedBy(row);
+                        return (
+                          <Table.Tr key={alias.id}>
+                            <Table.Td data-label="Name"><Text size="sm" fw={600}>{alias.name}</Text>{alias.description && <Text size="sm" c="dimmed">{alias.description}</Text>}</Table.Td>
+                            <Table.Td data-label="Kind"><Badge variant={row.kind === 'addresses' ? 'default' : 'light'} color="gray" className="alias" tt="none">{kindLabel(row)}</Badge></Table.Td>
+                            <Table.Td data-label="Holds"><Holds row={row} names={names} /></Table.Td>
+                            <Table.Td data-label="Used by">
+                              {used.length === 0 ? <Text size="sm" c="dimmed">nothing</Text> : (
+                                <details><summary>{used.length === 1 ? '1 use' : `${used.length} uses`}</summary><ul className="fixed-rules">{used.map((use) => <li key={use.label}>{use.to ? <Anchor component={Link} to={use.to} size="sm">{use.label}</Anchor> : use.label}</li>)}</ul></details>
+                              )}
                             </Table.Td>
-                          )}
-                        </Table.Tr>
-                      );
-                    })}
-                  </Table.Tbody>
-                </Table>
+                            {canWrite && (
+                              <Table.Td>
+                                <Group gap="xs" wrap="nowrap">
+                                  <Button size="compact-xs" variant="default" disabled={busy} aria-label={`Edit ${noun(row)} ${alias.name}`} onClick={() => setEditing(row)}>Edit</Button>
+                                  <Button size="compact-xs" variant="subtle" color="red" disabled={busy} aria-label={`Delete ${noun(row)} ${alias.name}`} onClick={() => setDeleting(row)}>Delete</Button>
+                                </Group>
+                              </Table.Td>
+                            )}
+                          </Table.Tr>
+                        );
+                      })}
+                    </Table.Tbody>
+                  </Table>
+                </ScrollArea>
               )}
               {editing && (
                 <AliasEditor key={typeof editing === 'string' ? editing : editing.item.value.id} editing={editing} rows={rows} onClose={() => setEditing(undefined)} onSessionLost={onSessionLost} onAbandoned={setError} onRefused={() => void resource.reload()}
@@ -180,7 +185,7 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
                 {deleting && (blockers.length > 0 ? (
                   <Stack>
                     <Text><strong>{deleting.item.value.name}</strong> cannot be deleted while these name it. Take it out of them first:</Text>
-                    <ul className="fixed-rules">{blockers.map((use) => <li key={use}>{use}</li>)}</ul>
+                    <ul className="fixed-rules">{blockers.map((use) => <li key={use.label}>{use.to ? <Anchor component={Link} to={use.to} size="sm" onClick={() => setDeleting(undefined)}>{use.label}</Anchor> : use.label}</li>)}</ul>
                     <Group justify="flex-end"><Button variant="default" onClick={() => setDeleting(undefined)}>Keep it</Button></Group>
                   </Stack>
                 ) : (

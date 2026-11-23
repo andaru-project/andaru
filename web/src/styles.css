@@ -9,8 +9,9 @@
   --andaru-chrome: #152330;
   --andaru-accent: #ffb21c;
   --andaru-ground: #f2f4f6;
-  /* Error text beside other text: Mantine's red is 3.3:1 on white. */
+  /* Error and warning text beside other text: Mantine's default red/orange are under 4.5:1 on white. */
   --andaru-error-text: var(--mantine-color-red-9);
+  --andaru-warning-text: var(--mantine-color-orange-9);
   --andaru-diff-old: #fbdcd9;
   --andaru-diff-new: #d5efdb;
 }
@@ -27,6 +28,7 @@
      then no colour at all. The scheme's own selector cannot be rewritten away. */
   --andaru-ground: var(--mantine-color-dark-8);
   --andaru-error-text: var(--mantine-color-red-4);
+  --andaru-warning-text: var(--mantine-color-orange-4);
   --andaru-diff-old: #4a2326;
   --andaru-diff-new: #1f3d27;
   --mantine-color-dimmed: #9a9a9a;
@@ -537,8 +539,18 @@ path.traffic-sent {
   outline-color: #fff;
 }
 
+.facts td,
+.traffic-figures td,
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
 .error-text {
   color: var(--andaru-error-text);
+}
+
+.warning-text {
+  color: var(--andaru-warning-text);
 }
 
 /* A link inside an alert takes the alert's text colour, underlined: the link colour is under 4:1 on dark tints. */

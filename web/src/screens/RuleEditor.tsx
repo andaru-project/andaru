@@ -1,5 +1,6 @@
-import { Alert, Button, Drawer, Fieldset, Group, MultiSelect, SegmentedControl, Stack, Switch, Text, Textarea, TextInput } from '@mantine/core';
+import { Alert, Anchor, Button, Drawer, Fieldset, Group, MultiSelect, SegmentedControl, Stack, Switch, Text, Textarea, TextInput } from '@mantine/core';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { Link } from 'react-router';
 import { ApiError, fieldErrors, saveFailure } from '../api';
 import { firewallZone, type Rule, type RuleSide, type Snapshot } from '../types';
 
@@ -15,7 +16,7 @@ interface RuleEditorProps {
 
 const anySide: RuleSide = { zones: [], addresses: [] };
 // The pickers offer the aliases that exist; a literal address or port is entered as an alias first.
-const noAlias = 'No alias by that name. Aliases are made under Firewall ▸ Aliases.';
+const noAlias = <>No alias by that name. Aliases are made under <Anchor component={Link} to="/firewall/aliases" size="sm">Firewall ▸ Aliases</Anchor>.</>;
 
 // The engine is the authority on what a rule may be: its refusals show beside the fields they name.
 const field = /^\/(name|description|action|ports|(?:from|to)\/(?:zones|addresses|not))(?:\/|$)/;
