@@ -879,3 +879,23 @@ func TestOfflineDiscardDeletesTheClientRowAtOnce(t *testing.T) {
 	}
 	h.eventually("the client row deleted", func() bool { return h.rows("mqtt_state", "kind = 'CL' AND key = 'web'") == 0 })
 }
+
+// A session loaded after a restart is its client's: discarding it offline deletes its client row before the drop.
+func TestLoadedSessionDiscardDeletesTheClientRowAtOnce(t *testing.T) {
+	h := newHarness(t, Options{})
+	web := h.mustConnect("web", nil, true)
+	web.subscribe(t, "config/#")
+	web.leave(t)
+	h.bus.Close()
+	h.start(Options{MaximumInflight: 2})
+	held := make(chan struct{})
+	drop := h.bus.store.drop
+	h.bus.store.drop = func(cl *mqtt.Client, why packets.Code) *mqtt.Client { <-held; return drop(cl, why) }
+	defer close(held)
+	for i := 0; i < 3; i++ {
+		if err := h.bus.Publish("config/head", []byte{byte('0' + i)}, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.eventually("the client row deleted", func() bool { return h.rows("mqtt_state", "kind = 'CL' AND key = 'web'") == 0 })
+}

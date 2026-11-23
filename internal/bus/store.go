@@ -82,6 +82,12 @@ func (s *store) Init(config any) error {
 			return err
 		}
 	}
+	// No connection outlives the process: the rows of the sessions loaded now are nobody's, and the client that
+	// holds each session adopts them (delOwn).
+	if _, err := db.Exec(`UPDATE mqtt_state SET writer = '' WHERE writer != ''`); err != nil {
+		db.Close()
+		return err
+	}
 	// A crash between a discard deleting a client's row and the drop forgetting the rest leaves rows of a
 	// session that is gone. mochi would load its subscriptions without a client, so they go here.
 	if _, err := db.Exec(`DELETE FROM mqtt_state AS r WHERE r.kind IN (?, ?) AND NOT EXISTS (
@@ -130,9 +136,10 @@ func (s *store) put(kind, key, writer string, value storage.Serializable) error 
 	return err
 }
 
-// delOwn deletes a row only if writer wrote it last.
+// delOwn deletes a row only if writer wrote it last, or nobody did: a row loaded from an earlier run belongs to
+// whichever client holds its session now. A successor's rows always carry its own name.
 func (s *store) delOwn(kind, key, writer string) {
-	if _, err := s.db.Exec(`DELETE FROM mqtt_state WHERE kind = ? AND key = ? AND writer = ?`, kind, key, writer); err != nil {
+	if _, err := s.db.Exec(`DELETE FROM mqtt_state WHERE kind = ? AND key = ? AND writer IN (?, '')`, kind, key, writer); err != nil {
 		s.Log.Error("bus store delete failed", "error", err, "kind", kind, "key", key)
 	}
 }
