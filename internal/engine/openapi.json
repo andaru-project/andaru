@@ -512,7 +512,7 @@
           "200": {"description": "Recorded complete selected-store outcome, including idempotent replay", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RestoreSaved"}}}},
           "400": {"description": "Malformed multipart, archive, or options", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
           "403": {"$ref": "#/components/responses/Forbidden"},
-          "409": {"description": "Another expensive backup operation is running; or the settings wait for decisions after an upgrade (SETTINGS_UPGRADE_PENDING)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+          "409": {"description": "Another expensive backup operation is running; or the settings wait for decisions after an upgrade (SETTINGS_UPGRADE_PENDING); or the recorded restore was abandoned (RESTORE_ABANDONED)", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
           "412": {"description": "Saved head or identity revision differs from its preview precondition", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
           "413": {"description": "Body, archive, or options limit exceeded", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
           "415": {"description": "Unsupported request media type", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},

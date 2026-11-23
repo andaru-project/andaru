@@ -18,6 +18,29 @@ import (
 	"github.com/andaru-project/andaru/internal/authz"
 )
 
+// Newer reports whether a saved version exists and is of a schema newer than this Andaru knows: one a downgrade set
+// aside (settings design, "Downgrades").
+func (s *Store) Newer(ctx context.Context, version Version) (bool, error) {
+	n, err := strconvVersion(version)
+	if err != nil {
+		return false, fault("INVALID_REQUEST", "", "Invalid version.")
+	}
+	release, err := s.acquire(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer release()
+	var schema int
+	err = s.configDB.QueryRowContext(ctx, "SELECT schema_version FROM versions WHERE id=?", n).Scan(&schema)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, diagnostic("newer-scan", err)
+	}
+	return schema > schemaVersion, nil
+}
+
 // Roles returns the roles of a saved version. A version of a schema newer than this Andaru knows, which the live
 // generation still names after a rollback, is read for its roles alone; the caller trusts them only when they match
 // the digest that generation recorded, so only roles that were applied are used.
