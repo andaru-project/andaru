@@ -69,7 +69,8 @@ func init() {
 		_, err = coordinator.Execute(ctx, coordinatedRestoreRequest{
 			OperationID: "restore-crash-operation", Fingerprint: []byte("fixed-restore-request"), Actor: authz.Actor{Kind: authz.ActorSystem, ID: "root"}, Source: "unix:uid:0", Target: "0123456789abcdef0123456789abcdef",
 			ExpectedSavedVersion: configurationDocuments.SavedVersion, ExpectedIdentityRevision: revision,
-			Configuration: config.RestoreDocuments{Configuration: configurationDocuments.Configuration, ConfigurationSecrets: configurationDocuments.ConfigurationSecrets},
+			// A secret, so the journal records secrets in the store's own form, which a restore prepared again must read.
+			Configuration: config.RestoreDocuments{Configuration: configurationDocuments.Configuration, ConfigurationSecrets: []byte(`{"schemaVersion":1,"secrets":{"core":{"WAN_PASSWORD":{"kind":"password","value":"restored"}}}}`)},
 			Identity:      identity.RestoreDocuments{Users: identityDocuments.Users, UserCredentials: identityDocuments.UserCredentials},
 		})
 		if err != nil {

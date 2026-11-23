@@ -298,7 +298,8 @@ func (c *restoreCoordinator) reconcileLocked(ctx context.Context, journal *resto
 					return err
 				}
 			}
-			restorable, err := config.RestorableHere(journal.Configuration)
+			// The journal holds the secrets in the store's own form, not a backup's, so the configuration alone is read.
+			restorable, err := config.RestorableHere(config.RestoreDocuments{Configuration: journal.Configuration.Configuration})
 			if err != nil {
 				return err
 			}
@@ -312,7 +313,11 @@ func (c *restoreCoordinator) reconcileLocked(ctx context.Context, journal *resto
 			if current.SavedVersion != journal.ExpectedSavedVersion {
 				return errRestoreStateConflict
 			}
-			prepared, err := c.configuration.PrepareRestore(ctx, journal.Actor, journal.ExpectedSavedVersion, journal.Configuration)
+			portable, err := journal.Configuration.Portable()
+			if err != nil {
+				return err
+			}
+			prepared, err := c.configuration.PrepareRestore(ctx, journal.Actor, journal.ExpectedSavedVersion, portable)
 			if err != nil {
 				return err
 			}

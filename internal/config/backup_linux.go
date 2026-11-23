@@ -62,6 +62,24 @@ func (s *Store) Export(ctx context.Context, includeSecrets bool) (result BackupD
 	return result, nil
 }
 
+// Portable turns the documents a prepared restore records (PreparedRestore.TargetDocuments) back into a backup's:
+// the secrets in the store's own form become a backup's secrets, for a restore that is prepared again.
+func (input RestoreDocuments) Portable() (RestoreDocuments, error) {
+	if input.ConfigurationSecrets == nil {
+		return input, nil
+	}
+	var stored secretDocument
+	if err := json.Unmarshal(input.ConfigurationSecrets, &stored); err != nil {
+		return input, boundaryFault(err)
+	}
+	core := make(map[string]backupSecretEntry, len(stored.Scopes["core"]))
+	for name, entry := range stored.Scopes["core"] {
+		core[name] = backupSecretEntry{Kind: entry.Kind, Value: entry.Value}
+	}
+	secrets, err := canonical(backupSecretDocument{SchemaVersion: 1, Scopes: map[string]map[string]backupSecretEntry{"core": core}})
+	return RestoreDocuments{Configuration: input.Configuration, ConfigurationSecrets: secrets}, err
+}
+
 // RestorableHere reports whether a backup's documents restore in this Andaru: they read, and without provisional
 // choices (settings safe mode). A failure that is not about the documents is returned.
 func RestorableHere(input RestoreDocuments) (bool, error) {
