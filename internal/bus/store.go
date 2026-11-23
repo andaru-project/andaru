@@ -30,7 +30,7 @@ func (*store) Provides(b byte) bool {
 	return bytes.Contains([]byte{
 		mqtt.OnSessionEstablished, mqtt.OnDisconnect, mqtt.OnSubscribed, mqtt.OnUnsubscribed,
 		mqtt.OnWillSent, mqtt.OnQosPublish, mqtt.OnQosComplete, mqtt.OnQosDropped,
-		mqtt.OnClientExpired, mqtt.OnPublish, mqtt.OnPublished,
+		mqtt.OnClientExpired, mqtt.OnPublish, mqtt.OnPublished, mqtt.OnPacketRead,
 		mqtt.StoredClients, mqtt.StoredInflightMessages, mqtt.StoredSubscriptions,
 	}, []byte{b})
 }
@@ -221,6 +221,22 @@ func (s *store) OnQosComplete(cl *mqtt.Client, pk packets.Packet) {
 }
 
 func (s *store) OnQosDropped(cl *mqtt.Client, pk packets.Packet) { s.OnQosComplete(cl, pk) }
+
+// OnPacketRead refuses a durable publish whose packet ID is that of a delivery the client has not acknowledged
+// yet. mochi keeps both directions in one map by packet ID and would drop the delivery to make room for the
+// publish. The client is disconnected instead: its session keeps the delivery, which it gets again when it
+// reconnects, and its client sends the publish again.
+func (s *store) OnPacketRead(cl *mqtt.Client, pk packets.Packet) (packets.Packet, error) {
+	if pk.FixedHeader.Type != packets.Publish || pk.FixedHeader.Qos == 0 {
+		return pk, nil
+	}
+	if held, ok := cl.State.Inflight.Get(pk.PacketID); ok && held.FixedHeader.Type == packets.Publish {
+		s.Log.Warn("bus publish reuses a pending delivery's packet ID; client disconnected", "client", cl.ID, "packet", pk.PacketID)
+		_ = s.server.DisconnectClient(cl, packets.ErrPacketIdentifierInUse)
+		return pk, packets.ErrRejectPacket
+	}
+	return pk, nil
+}
 
 // outboxKey names a durable publish from a client outside the engine. The
 // packet ID is not reused before the broker acknowledges it.

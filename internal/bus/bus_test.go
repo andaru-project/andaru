@@ -1,6 +1,7 @@
 package bus
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -648,6 +649,40 @@ func TestUserNamesCannotOverlap(t *testing.T) {
 	for _, user := range []string{"", "agent/team", "agent:team"} {
 		if _, err := Open(Options{Path: filepath.Join(t.TempDir(), "bus.db"), Grants: map[string]Grants{"agent": {}, user: {}}}); err == nil {
 			t.Errorf("user name %q accepted", user)
+		}
+	}
+}
+
+// A durable publish that reuses the packet ID of a delivery the client has not acknowledged does not cost the
+// delivery: the client is disconnected and gets it again when it reconnects.
+func TestPublishCannotTakeAPendingDeliverysPacketID(t *testing.T) {
+	h := newHarness(t, Options{})
+	conn, err := net.Dial("tcp", h.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addon := h.mustConnect("addon", conn, false)
+	addon.subscribe(t, "alias/#")
+	if err = h.bus.Publish("alias/wan", []byte("held"), true); err != nil {
+		t.Fatal(err)
+	}
+	held := addon.receive(t)
+	// paho numbers its own publishes, so the colliding one is written by hand on the client's connection.
+	var raw bytes.Buffer
+	publish := packets.Packet{FixedHeader: packets.FixedHeader{Type: packets.Publish, Qos: 1}, TopicName: "alias/lan",
+		PacketID: held.PacketID, Payload: []byte("mine"), ProtocolVersion: 5}
+	if err = publish.PublishEncode(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = conn.Write(raw.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	addon.leave(t)
+	addon = h.mustConnect("addon", nil, true)
+	for {
+		if p := addon.receive(t); string(p.Payload) == "held" {
+			break
 		}
 	}
 }
