@@ -5,7 +5,8 @@ import { ActionIcon, Alert, Anchor, Badge, Button, Group, Modal, Paper, ScrollAr
 import { useCallback, useState } from 'react';
 import { Link } from 'react-router';
 import { ApiError, reportError, type ApiClient } from '../api';
-import { firewallZone, type AddressAlias, type PortAlias, type Rule, type RuleSide, type SavedObject, type Session, type Snapshot } from '../types';
+import { formatAddressAlias, formatPortAlias } from '../format';
+import { firewallZone, type Rule, type RuleSide, type SavedObject, type Session, type Snapshot } from '../types';
 import { useResource } from '../useResource';
 import { Loaded } from './Loaded';
 import { EditMark, Grip } from './Marks';
@@ -23,23 +24,6 @@ interface Names {
   portSummary: Map<string, string>;
 }
 
-const protocolLabels: Record<PortAlias['protocol'], string> = { tcp: 'TCP', udp: 'UDP', icmp: 'ICMP', icmpv6: 'ICMPv6', group: 'group' };
-
-function summarizeAddress(alias: Partial<AddressAlias>, byID: Map<string, string>): string | undefined {
-  if (alias.kind === 'host') return alias.address;
-  if (alias.kind === 'network') return alias.prefix;
-  if (alias.kind === 'range' && alias.first && alias.last) return `${alias.first} to ${alias.last}`;
-  if (alias.kind === 'group' && alias.members?.length) return alias.members.map((id) => byID.get(id) ?? 'unknown alias').join(', ');
-  return undefined;
-}
-
-function summarizePort(alias: Partial<PortAlias>, byID: Map<string, string>): string | undefined {
-  if (!alias.protocol) return undefined;
-  if (alias.protocol === 'group') return alias.members?.length ? alias.members.map((id) => byID.get(id) ?? 'unknown alias').join(', ') : undefined;
-  const items = alias.ports ?? alias.types ?? [];
-  return `${protocolLabels[alias.protocol]} ${items.length > 0 ? items.join(', ') : 'any'}`;
-}
-
 function names(snapshot: Snapshot): Names {
   const byID = (items: Array<{ id: string; name: string }> = []) => new Map(items.map((item) => [item.id, item.name]));
   const addressAliases = snapshot.value.aliases?.addresses ?? [];
@@ -48,12 +32,12 @@ function names(snapshot: Snapshot): Names {
   const ports = byID(portAliases);
   const addressSummary = new Map<string, string>();
   for (const alias of addressAliases) {
-    const summary = summarizeAddress(alias, addresses);
+    const summary = formatAddressAlias(alias, addresses);
     if (summary) addressSummary.set(alias.id, summary);
   }
   const portSummary = new Map<string, string>();
   for (const alias of portAliases) {
-    const summary = summarizePort(alias, ports);
+    const summary = formatPortAlias(alias, ports);
     if (summary) portSummary.set(alias.id, summary);
   }
   return { zones: byID(snapshot.value.zones), addresses, addressSummary, ports, portSummary };

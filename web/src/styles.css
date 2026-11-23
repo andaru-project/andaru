@@ -505,7 +505,8 @@ path.traffic-sent {
 }
 
 /* An alias is who; a zone is where. The alias chip is plain so the two never read alike. */
-.alias {
+.alias,
+.plain-badge {
   text-transform: none;
 }
 

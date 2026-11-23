@@ -157,24 +157,29 @@ function collectionItems(declaration: Declaration, path: string): Array<{ id?: u
 // referenceNames maps internal object IDs from live and saved declarations to human-readable names for diff display.
 // Head names win over live names when an object was renamed; if two distinct IDs share a name, each keeps its ID suffix.
 export function referenceNames(live: Declaration, head: Declaration): Map<string, string> {
-  const raw = new Map<string, string>([[firewallZone, 'This firewall']]);
+  const names = new Map<string, string>([[firewallZone, 'This firewall']]);
   for (const source of [live, head]) {
     for (const path of namedCollections) {
       for (const item of collectionItems(source, path)) {
-        if (typeof item.id === 'string' && typeof item.name === 'string' && item.name) raw.set(item.id, item.name);
+        if (item && typeof item === 'object' && typeof item.id === 'string' && item.id && item.id !== firewallZone && typeof item.name === 'string' && item.name) {
+          names.set(item.id, item.name);
+        }
       }
     }
   }
   const counts = new Map<string, number>();
-  for (const name of raw.values()) counts.set(name, (counts.get(name) ?? 0) + 1);
-  const resolved = new Map<string, string>();
-  for (const [id, name] of raw) resolved.set(id, (counts.get(name) ?? 0) > 1 ? `${name} (${id})` : name);
-  return resolved;
+  for (const name of names.values()) counts.set(name, (counts.get(name) ?? 0) + 1);
+  for (const [id, name] of names) {
+    if ((counts.get(name) ?? 0) > 1) names.set(id, `${name} (${id})`);
+  }
+  return names;
 }
 
-// resolveReferences replaces known object IDs inside a diff value with their display names while keeping own "id" fields intact.
+const nonReferenceKeys = new Set(['id', 'name', 'description', 'action', 'protocol', 'kind', 'mode', 'address', 'prefix', 'first', 'last']);
+
+// resolveReferences replaces known object IDs inside a diff value with their display names while keeping own identity and free-text fields intact.
 export function resolveReferences(value: unknown, names: Map<string, string>, key?: string): unknown {
-  if (typeof value === 'string') return key === 'id' ? value : names.get(value) ?? value;
+  if (typeof value === 'string') return key && nonReferenceKeys.has(key) ? value : names.get(value) ?? value;
   if (Array.isArray(value)) return value.map((item) => resolveReferences(item, names));
   if (value && typeof value === 'object') {
     const out: Record<string, unknown> = {};

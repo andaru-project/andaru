@@ -66,5 +66,8 @@ describe('referenceNames and resolveReferences', () => {
       ports: ['HTTPS'],
     });
     expect(resolveReferences(['rul_1', 'rul_2'], names)).toEqual(['Allow (rul_1)', 'Allow (rul_2)']);
+    expect(resolveReferences({ id: 'zon_lan', name: 'zon_lan', description: 'zon_lan', zone: 'zon_lan' }, names)).toEqual({
+      id: 'zon_lan', name: 'zon_lan', description: 'zon_lan', zone: 'Trusted',
+    });
   });
 });

@@ -2,6 +2,7 @@ import { Alert, Anchor, Badge, Button, Group, Modal, ScrollArea, SegmentedContro
 import { useCallback, useState } from 'react';
 import { Link } from 'react-router';
 import { ApiError, reportError, type ApiClient } from '../api';
+import { formatAddressAlias, formatPortAlias } from '../format';
 import type { AddressAlias, AliasKinds, PortAlias, SavedObject, Session, Snapshot } from '../types';
 import { useResource } from '../useResource';
 import { Address } from './Address';
@@ -14,7 +15,6 @@ type Kind = keyof AliasKinds;
 // One row of the page: an alias of either kind, with the version that guards it.
 export type Row = { kind: 'addresses'; item: SavedObject<AddressAlias> } | { kind: 'ports'; item: SavedObject<PortAlias> };
 
-const protocols: Record<PortAlias['protocol'], string> = { tcp: 'TCP', udp: 'UDP', icmp: 'ICMP', icmpv6: 'ICMPv6', group: 'group' };
 const kinds: Record<AddressAlias['kind'], string> = { host: 'Host', network: 'Network', range: 'Range', group: 'Address group' };
 const kindLabel = (row: Row) => (row.kind === 'addresses' ? kinds[row.item.value.kind] : row.item.value.protocol === 'group' ? 'Port group' : 'Port');
 
@@ -31,15 +31,7 @@ function Holds({ row, names }: { row: Row; names: Map<string, string> }) {
 
 // What an alias holds, as words for the filter to search.
 function holds(row: Row, names: Map<string, string>) {
-  const members = (ids: string[] = []) => ids.map((id) => names.get(id) ?? 'unknown alias').join(', ');
-  if (row.kind === 'addresses') {
-    const alias = row.item.value;
-    return { host: alias.address, network: alias.prefix, range: `${alias.first} to ${alias.last}`, group: members(alias.members) }[alias.kind];
-  }
-  const alias = row.item.value;
-  if (alias.protocol === 'group') return members(alias.members);
-  const what = alias.ports ?? alias.types ?? [];
-  return `${protocols[alias.protocol]} ${what.length > 0 ? what.join(', ') : 'any type'}`;
+  return row.kind === 'addresses' ? formatAddressAlias(row.item.value, names) : formatPortAlias(row.item.value, names);
 }
 
 interface Usage { label: string; to?: string }

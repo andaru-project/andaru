@@ -1,4 +1,4 @@
-import { Group, Progress, Stack, Text } from '@mantine/core';
+import { Group, Progress, Stack, Text, VisuallyHidden } from '@mantine/core';
 import { useCallback, useRef } from 'react';
 import type { ApiClient } from '../api';
 import { bytes } from '../format';
@@ -49,7 +49,10 @@ export function ResourcesView({ usage, before }: { usage: Usage; before?: Usage 
       {usage.temperatures.map((temperature, index) => (
         <Group key={`${temperature.sensor} ${index}`} justify="space-between" gap="xs" wrap="nowrap">
           <Text size="sm" c="dimmed">{temperature.sensor || 'Sensor'}</Text>
-          <Text size="sm" className={temperature.celsius >= 85 ? 'tabular error-text' : temperature.celsius >= 70 ? 'tabular warning-text' : 'tabular'}>{temperature.celsius.toFixed(1)} °C</Text>
+          <Text size="sm" className={temperature.celsius >= 85 ? 'tabular error-text' : temperature.celsius >= 70 ? 'tabular warning-text' : 'tabular'}>
+            {temperature.celsius.toFixed(1)} °C
+            {temperature.celsius >= 85 ? <VisuallyHidden> (high)</VisuallyHidden> : temperature.celsius >= 70 ? <VisuallyHidden> (warm)</VisuallyHidden> : null}
+          </Text>
         </Group>
       ))}
     </Stack>
