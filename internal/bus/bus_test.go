@@ -457,24 +457,32 @@ func TestOnlyMQTT5Connects(t *testing.T) {
 	}
 }
 
-// A client without a session to keep leaves nothing in the store once it is gone.
+// A client without a session to keep leaves nothing in the store once it is gone, whatever its ID is made of.
 func TestCleanSessionLeavesNothing(t *testing.T) {
 	h := newHarness(t, Options{})
 	conn, err := net.Dial("tcp", h.addr)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := paho.NewClient(paho.ClientConfig{Conn: conn})
+	// It never acknowledges, so the bus holds what it is sent.
+	c := paho.NewClient(paho.ClientConfig{Conn: conn, EnableManualAcknowledgment: true})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, err = c.Connect(ctx, &paho.Connect{ClientID: "agent/passing", CleanStart: true, Username: "agent", UsernameFlag: true, Password: []byte("secret"), PasswordFlag: true}); err != nil {
+	if _, err = c.Connect(ctx, &paho.Connect{ClientID: "web/é", CleanStart: true, Username: "web", UsernameFlag: true, Password: []byte("secret"), PasswordFlag: true}); err != nil {
 		t.Fatal(err)
 	}
 	// mochi answers the connect before it stores the client.
-	h.eventually("the client to be stored", func() bool { return h.rows("mqtt_state", "key='agent/passing'") == 1 })
+	h.eventually("the client to be stored", func() bool { return h.rows("mqtt_state", "key='web/é'") == 1 })
+	if _, err = c.Subscribe(ctx, &paho.Subscribe{Subscriptions: []paho.SubscribeOptions{{Topic: "config/#", QoS: 1}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err = h.bus.Publish("config/head", []byte("1"), true); err != nil {
+		t.Fatal(err)
+	}
+	h.eventually("the subscription and the held message stored", func() bool { return h.rows("mqtt_state", "key LIKE 'web/é:%'") == 2 })
 	c.Disconnect(&paho.Disconnect{})
 	time.Sleep(100 * time.Millisecond)
-	if n := h.rows("mqtt_state", "key LIKE 'agent/passing%'"); n != 0 {
+	if n := h.rows("mqtt_state", "key LIKE 'web/é%'"); n != 0 {
 		t.Fatalf("%d rows left", n)
 	}
 }
@@ -614,5 +622,26 @@ func TestHeldMessagesKeepTopicAndAge(t *testing.T) {
 	twoDays := time.Now().Unix() + 2*24*3600
 	if dropped := cl.ClearExpiredInflights(twoDays, h.bus.server.Options.Capabilities.MaximumMessageExpiryInterval); len(dropped) != 0 {
 		t.Fatalf("dropped %v after two days", dropped)
+	}
+}
+
+// forget removes one client's rows, by bytes: a multibyte ID loses all of its own and none of its neighbours'.
+func TestForgetRemovesOneClient(t *testing.T) {
+	h := newHarness(t, Options{})
+	keys := map[string]string{
+		"web/é:config/#": storage.SubscriptionKey, "web/é:1": storage.InflightKey,
+		"web/éx:1": storage.InflightKey, "web:1": storage.InflightKey, "web/:1": storage.InflightKey,
+	}
+	for key, kind := range keys {
+		if _, err := h.bus.store.db.Exec(`INSERT INTO mqtt_state(kind, key, value) VALUES (?, ?, x'00')`, kind, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.bus.store.forget("web/é")
+	if n := h.rows("mqtt_state", "key LIKE 'web/é:%'"); n != 0 {
+		t.Fatalf("%d of its rows left", n)
+	}
+	if n := h.rows("mqtt_state", "key IN ('web/éx:1', 'web:1', 'web/:1')"); n != 3 {
+		t.Fatalf("%d of 3 neighbouring rows left", n)
 	}
 }

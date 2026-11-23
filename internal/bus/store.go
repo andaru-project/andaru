@@ -84,7 +84,8 @@ func (s *store) del(kind, key string) error {
 func (s *store) forget(id string) {
 	_ = s.del(storage.ClientKey, id)
 	for _, kind := range []string{storage.SubscriptionKey, storage.InflightKey} {
-		if _, err := s.db.Exec(`DELETE FROM mqtt_state WHERE kind = ? AND substr(key, 1, ?) = ?`, kind, len(id)+1, id+":"); err != nil {
+		// The keys of one client are "<id>:…", which sort from "<id>:" up to "<id>;", byte by byte.
+		if _, err := s.db.Exec(`DELETE FROM mqtt_state WHERE kind = ? AND key >= ? AND key < ?`, kind, id+":", id+";"); err != nil {
 			s.Log.Error("bus store delete failed", "error", err, "kind", kind, "client", id)
 		}
 	}
