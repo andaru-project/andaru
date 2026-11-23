@@ -72,7 +72,8 @@ A **subscription** is live and not stored. It gets every event on its filter fro
 
 - the events aged out of the log, whether the consumer was away or attached and behind;
 - the consumer itself was removed for being away;
-- the store was replaced.
+- the store was replaced;
+- the consumer came back with another filter, since what the old one skipped is not coming back.
 
 A gap is stored with the consumer, and stays pending until the consumer is done with it, as an event would be: in the engine, until its handler returns nil; over the socket, until the client acks the gap's `seq`. That one signal covers every way a durable consumer can miss an event: the notification subsystem, for one, marks that notifications may have been missed.
 
@@ -93,7 +94,7 @@ A client connects to a Unix socket and exchanges one JSON object per line each w
    - `{"op":"gap","consumer":…,"seq":…}`;
    - `{"op":"detached","consumer":…}`, when another connection took the consumer over.
 
-A write to a client has ten seconds. A client 256 frames behind is disconnected, so it never holds up a publisher. A consumer that cannot read the log tries again after a second. `internal/bus` has the Go client, `bus.Dial`, whose replies never wait for its events to be read.
+A write to a client has ten seconds. A client 256 frames behind is disconnected, so it never holds up a publisher. A connection may read 64 consumers and hold 256 subscriptions, and a consumer's name has at most 128 bytes. A refused client is told why before its connection closes. A consumer that cannot read the log tries again after a second. `internal/bus` has the Go client, `bus.Dial`, whose replies never wait for its events to be read.
 
 ### Sockets
 

@@ -37,35 +37,47 @@ func (b *Bus) attach(name, filter string) (*attachment, int64, bool, error) {
 	now := time.Now().Unix()
 	var cursor int64
 	var gap bool
-	err := b.db.QueryRow(`SELECT cursor, gap FROM consumers WHERE name = ?`, name).Scan(&cursor, &gap)
+	// One transaction: the store has one connection, so a prune cannot run between the reads and the writes.
+	tx, err := b.db.Begin()
+	if err != nil {
+		return nil, 0, false, err
+	}
+	defer tx.Rollback()
+	var stored string
+	err = tx.QueryRow(`SELECT cursor, gap, filter FROM consumers WHERE name = ?`, name).Scan(&cursor, &gap, &stored)
 	if errors.Is(err, sql.ErrNoRows) {
 		// A consumer that expired, or that the store lost when it was replaced, comes back to a gap; a new one
 		// starts at the end of the log.
 		var res sql.Result
-		if res, err = b.db.Exec(`DELETE FROM expired WHERE name = ?`, name); err == nil {
+		if res, err = tx.Exec(`DELETE FROM expired WHERE name = ?`, name); err == nil {
 			var n, lostUntil int64
 			if n, err = res.RowsAffected(); err == nil {
-				err = b.db.QueryRow(`SELECT coalesce((SELECT value FROM meta WHERE key = 'lost_until'), 0)`).Scan(&lostUntil)
+				err = tx.QueryRow(`SELECT coalesce((SELECT value FROM meta WHERE key = 'lost_until'), 0)`).Scan(&lostUntil)
 			}
 			if err == nil {
 				if gap = n > 0 || now < lostUntil; !gap {
-					cursor, err = b.tail()
+					err = tx.QueryRow(`SELECT coalesce((SELECT seq FROM sqlite_sequence WHERE name = 'events'), 0)`).Scan(&cursor)
 				}
 			}
 		}
 		if err == nil {
-			_, err = b.db.Exec(`INSERT INTO consumers (name, filter, cursor, gap, seen) VALUES (?, ?, ?, ?, ?)`, name, filter, cursor, gap, now)
+			_, err = tx.Exec(`INSERT INTO consumers (name, filter, cursor, gap, seen) VALUES (?, ?, ?, ?, ?)`, name, filter, cursor, gap, now)
 		}
 	} else if err == nil {
-		_, err = b.db.Exec(`UPDATE consumers SET filter = ?, seen = ? WHERE name = ?`, filter, now, name)
+		// Events the old filter skipped may match the new one: they are not coming back.
+		gap = gap || stored != filter
+		_, err = tx.Exec(`UPDATE consumers SET filter = ?, gap = ?, seen = ? WHERE name = ?`, filter, gap, now, name)
 	}
 	var pruned int64
 	if err == nil {
-		pruned, err = b.pruned()
+		err = tx.QueryRow(`SELECT coalesce((SELECT value FROM meta WHERE key = 'pruned'), 0)`).Scan(&pruned)
 	}
 	if err == nil && cursor < pruned {
 		cursor, gap = pruned, true
-		err = b.markGap(name, cursor)
+		_, err = tx.Exec(`UPDATE consumers SET gap = 1, cursor = ? WHERE name = ?`, cursor, name)
+	}
+	if err == nil {
+		err = tx.Commit()
 	}
 	if err != nil {
 		return nil, 0, false, err
@@ -95,13 +107,6 @@ func (b *Bus) release(a *attachment) {
 		delete(b.attached, a.name)
 	}
 	b.mu.Unlock()
-}
-
-// tail is the sequence number of the newest durable event ever written.
-func (b *Bus) tail() (int64, error) {
-	var seq int64
-	err := b.db.QueryRow(`SELECT coalesce((SELECT seq FROM sqlite_sequence WHERE name = 'events'), 0)`).Scan(&seq)
-	return seq, err
 }
 
 // pruned is the sequence number up to which events were removed by age: a consumer behind it has a gap.
@@ -285,33 +290,43 @@ func (b *Bus) prune(now time.Time) error {
 		attached = append(attached, name)
 	}
 	b.mu.Unlock()
+	tx, err := b.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	for _, name := range attached {
-		if _, err := b.db.Exec(`UPDATE consumers SET seen = ? WHERE name = ?`, now.Unix(), name); err != nil {
+		if _, err := tx.Exec(`UPDATE consumers SET seen = ? WHERE name = ?`, now.Unix(), name); err != nil {
 			return err
 		}
 	}
-	// An expired consumer leaves its name, so that coming back it is told of the gap rather than started anew.
-	if _, err := b.db.Exec(`INSERT OR REPLACE INTO expired (name, time) SELECT name, ? FROM consumers WHERE seen < ?`, now.Unix(), horizon); err != nil {
-		return err
-	}
-	if _, err := b.db.Exec(`DELETE FROM consumers WHERE seen < ?`, horizon); err != nil {
-		return err
-	}
-	if _, err := b.db.Exec(`DELETE FROM expired WHERE time < ?`, now.Add(-10*b.opt.Retention).Unix()); err != nil {
-		return err
-	}
-	if _, err := b.db.Exec(`DELETE FROM events WHERE seq <= (SELECT coalesce(min(cursor), (SELECT coalesce(max(seq), 0) FROM events)) FROM consumers)`); err != nil {
-		return err
+	for _, stmt := range []struct {
+		sql  string
+		args []any
+	}{
+		// An expired consumer leaves its name, so that coming back it is told of the gap rather than started anew.
+		{`INSERT OR REPLACE INTO expired (name, time) SELECT name, ? FROM consumers WHERE seen < ?`, []any{now.Unix(), horizon}},
+		{`DELETE FROM consumers WHERE seen < ?`, []any{horizon}},
+		{`DELETE FROM expired WHERE time < ?`, []any{now.Add(-10 * b.opt.Retention).Unix()}},
+		{`DELETE FROM events WHERE seq <= (SELECT coalesce(min(cursor), (SELECT coalesce(max(seq), 0) FROM events)) FROM consumers)`, nil},
+	} {
+		if _, err := tx.Exec(stmt.sql, stmt.args...); err != nil {
+			return err
+		}
 	}
 	var aged sql.NullInt64
-	if err := b.db.QueryRow(`SELECT max(seq) FROM events WHERE time < ?`, horizon).Scan(&aged); err != nil || !aged.Valid {
+	if err := tx.QueryRow(`SELECT max(seq) FROM events WHERE time < ?`, horizon).Scan(&aged); err != nil {
 		return err
 	}
-	if _, err := b.db.Exec(`DELETE FROM events WHERE seq <= ?`, aged.Int64); err != nil {
-		return err
+	if aged.Valid {
+		if _, err := tx.Exec(`DELETE FROM events WHERE seq <= ?`, aged.Int64); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT INTO meta (key, value) VALUES ('pruned', ?) ON CONFLICT (key) DO UPDATE SET value = max(value, excluded.value)`, aged.Int64); err != nil {
+			return err
+		}
 	}
-	_, err := b.db.Exec(`INSERT INTO meta (key, value) VALUES ('pruned', ?) ON CONFLICT (key) DO UPDATE SET value = max(value, excluded.value)`, aged.Int64)
-	return err
+	return tx.Commit()
 }
 
 func (b *Bus) pruneEvery(every time.Duration) {

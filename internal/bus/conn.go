@@ -35,6 +35,9 @@ const (
 	window       = 64               // events a consumer is sent before it acks
 	writeTimeout = 10 * time.Second // a client that stops reading loses its connection
 	helloTimeout = 10 * time.Second
+	maxReads     = 64  // consumers a connection reads
+	maxSubs      = 256 // subscriptions a connection holds
+	maxName      = 128 // bytes of a consumer's name
 )
 
 type conn struct {
@@ -176,7 +179,11 @@ func (c *conn) read() {
 	}
 	grants, known := c.b.opt.Grants[hello.User]
 	if !known || c.b.opt.Authenticate == nil || !c.b.opt.Authenticate(hello.User, hello.Token) {
-		c.send(frame{Op: "error", ID: hello.ID, Message: "not authorized"})
+		// Written here, not queued: the connection closes next, and the client is owed the reason.
+		if line, err := json.Marshal(frame{Op: "error", ID: hello.ID, Message: "not authorized"}); err == nil {
+			_ = c.nc.SetWriteDeadline(time.Now().Add(writeTimeout))
+			_, _ = c.nc.Write(append(line, '\n'))
+		}
 		return
 	}
 	c.user, c.grants = hello.User, grants
@@ -221,6 +228,12 @@ func (c *conn) subscribe(filter string) error {
 	if !validFilter(filter) || !allowed(c.grants.Subscribe, filter) {
 		return errNotGranted
 	}
+	c.mu.Lock()
+	full := len(c.stops) >= maxSubs+maxReads
+	c.mu.Unlock()
+	if full {
+		return errors.New("too many subscriptions")
+	}
 	stop, err := c.b.subscribe(filter, func(m Message) {
 		c.send(frame{Op: "event", Topic: m.Topic, Payload: m.Payload, Seq: m.Seq})
 	})
@@ -235,14 +248,19 @@ func (c *conn) subscribe(filter string) error {
 // consume attaches the client's consumer f.Consumer and starts sending it what is pending: its gap, if one is,
 // then the durable events after its cursor, at most window of them before an ack.
 func (c *conn) consume(f frame) error {
-	if f.Consumer == "" || strings.ContainsRune(f.Consumer, 0) || !validFilter(f.Filter) || !allowed(c.grants.Subscribe, f.Filter) {
+	if f.Consumer == "" || len(f.Consumer) > maxName || strings.ContainsRune(f.Consumer, 0) || !validFilter(f.Filter) ||
+		!allowed(c.grants.Subscribe, f.Filter) {
 		return errNotGranted
 	}
 	c.mu.Lock()
 	_, already := c.reads[f.Consumer]
+	full := len(c.reads) >= maxReads
 	c.mu.Unlock()
 	if already {
 		return errors.New("already consuming")
+	}
+	if full {
+		return errors.New("too many consumers")
 	}
 	if !c.b.track() {
 		return errors.New("bus: closed")

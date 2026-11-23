@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -622,5 +623,80 @@ func TestStaleAckLeavesTheGap(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 		web.Close()
+	}
+}
+
+// Consumers of the same name are each user's own.
+func TestConsumersAreEachUsersOwn(t *testing.T) {
+	h := newHarness(t, Options{Grants: map[string]Grants{"web": {Subscribe: []string{"config/#"}}, "cli": {Subscribe: []string{"config/#"}}}})
+	web, cli := h.dial("web"), h.dial("cli")
+	for _, c := range []*Client{web, cli} {
+		if err := c.Consume(ctx(t), "ui", "config/#"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.publish("config/head", "1", true)
+	for _, c := range []*Client{web, cli} {
+		if d := receive(t, c.Messages()); string(d.Payload) != "1" || d.Detached {
+			t.Fatalf("got %+v", d)
+		}
+	}
+}
+
+// A consumer attached but idle is not removed for being away; one gone for ten times the retention comes back new.
+func TestConsumerExpiry(t *testing.T) {
+	h := newHarness(t, Options{Retention: time.Hour})
+	stop, err := h.bus.Consume("notify", "config/#", func(Message) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = h.bus.prune(time.Now().Add(2 * time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if n := rows(t, h, "consumers"); n != 1 {
+		t.Fatal("an attached consumer was removed for being away")
+	}
+	stop()
+	if err = h.bus.prune(time.Now().Add(4 * time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err = h.bus.prune(time.Now().Add(15 * time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if n := rows(t, h, "expired"); n != 0 {
+		t.Fatal("a removed consumer's name was kept past ten times the retention")
+	}
+	got := make(chan Message, 1)
+	if _, err = h.bus.Consume("notify", "config/#", func(m Message) error { got <- m; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	nothing(t, got)
+}
+
+// A consumer whose filter changes is told of a gap: what the old filter skipped is not coming back.
+func TestFilterChangeIsAGap(t *testing.T) {
+	h := newHarness(t, Options{})
+	stop, err := h.bus.Consume("notify", "config/head", func(Message) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop()
+	got := make(chan Message, 1)
+	if _, err = h.bus.Consume("notify", "config/#", func(m Message) error { got <- m; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if m := receive(t, got); !m.Gap {
+		t.Fatalf("got %+v, want a gap", m)
+	}
+}
+
+// A refused client is told why.
+func TestRefusalSaysWhy(t *testing.T) {
+	h := newHarness(t, Options{})
+	for range 20 {
+		_, err := Dial(ctx(t), h.socket, "web", "wrong")
+		if err == nil || !strings.Contains(err.Error(), "not authorized") {
+			t.Fatalf("refused with %v", err)
+		}
 	}
 }
