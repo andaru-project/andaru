@@ -190,6 +190,12 @@ func (s *store) updateClient(cl *mqtt.Client) {
 	})
 	if err != nil {
 		s.discard(cl, packets.ErrImplementationSpecificError)
+		return
+	}
+	// A discard that began after the checks above deleted the row before this put it back: discard marks the
+	// client before it deletes, so one of the two sees the other.
+	if _, discarding := s.discarding.Load(cl); discarding || cl.IsDropped() {
+		_ = s.del(storage.ClientKey, cl.ID)
 	}
 }
 

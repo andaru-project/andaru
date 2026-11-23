@@ -29,4 +29,4 @@ require (
 	modernc.org/memory v1.12.1 // indirect
 )
 
-replace github.com/mochi-mqtt/server/v2 => github.com/andaru-project/mochi-server/v2 v2.7.10-0.20261123174835-d795288e1f0d
+replace github.com/mochi-mqtt/server/v2 => github.com/andaru-project/mochi-server/v2 v2.7.10-0.20261123181038-f7e46951de95

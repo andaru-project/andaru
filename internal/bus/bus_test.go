@@ -788,7 +788,8 @@ func TestTakeoverKeepsTheDeliveriesRows(t *testing.T) {
 	}
 	held := web.receive(t)
 	old, _ := h.bus.server.Clients.Get("web")
-	h.mustConnect("web", nil, false) // takes the session over
+	successor := h.mustConnect("web", nil, false) // takes the session over
+	successor.receive(t)                          // its re-sent delivery: the resend has rewritten the row
 	h.bus.store.OnQosDropped(old, packets.Packet{PacketID: held.PacketID})
 	if n := h.rows("mqtt_state", "kind = 'IFM'"); n != 1 {
 		t.Fatalf("%d delivery rows, want 1", n)
