@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Example netplane configuration (copy and customize; never commit real secrets)
+server:
+  listen: ":8099"
+  db_path: "/data/netplane.db"
+  retention: "24h"
+  trust_ingress_proxy: true
+  # Bearer token required for API access outside Home Assistant Ingress (export
+  # NETPLANE_API_TOKEN before starting; in the add-on, set the api_token option).
+  # Remove this line only when the server listens on loopback (listen: "127.0.0.1:8099").
+  api_token_secret: "${NETPLANE_API_TOKEN}"
+  # Without a token, only IP addresses, single-label names and private suffixes (.local,
+  # .lan, .home.arpa, .internal, .localhost) are accepted as Host; list other names here
+  # as bare host names (no scheme, port or wildcard).
+  # allowed_hosts: ["netplane.example.net"]
+  # Origins allowed to send writes when a reverse proxy rewrites Host:
+  # trusted_origins: ["https://netplane.example.net"]
+
+targets:
+  - id: core-pfsense
+    name: Core Firewall
+    driver: pfsense
+    endpoint: "https://192.0.2.1"
+    poll_interval: "15s"
+    # Certificates are verified; see the OPNsense target below.
+    secrets:
+      api_key: "${PFSENSE_API_KEY}"
+
+  - id: core-opnsense
+    name: Edge Firewall
+    driver: opnsense
+    endpoint: "https://192.0.2.2"
+    poll_interval: "15s"
+    # The certificate is verified: give the firewall one the system trusts (for example
+    # from an ACME CA). insecure_skip_verify: true accepts any certificate, so anyone who
+    # can intercept the connection gets the API secret; use it only on a network you trust.
+    # An API key of a dedicated user; README lists the privileges it needs.
+    secrets:
+      api_key: "${OPNSENSE_API_KEY}"
+      api_secret: "${OPNSENSE_API_SECRET}"
+
+  - id: sw-rtl
+    name: Access Switch
+    driver: rtlplayground
+    endpoint: "http://192.0.2.10"
+    # The driver enforces at least 30s; the switch's MCU also serves Prometheus and its web UI.
+    poll_interval: "60s"
+    settings:
+      # Requires `prometheus on` on the switch: ports, counters, SFP DOM and identity come
+      # from its public exporter at http://<host>:9100/metrics (override with metrics_url).
+      # The firmware has no TLS, so the optional password crosses the LAN unencrypted.
+      allow_insecure_http: true
+    # Optional: uncomment and set RTL_SWITCH_PASS to add LLDP, LAG, the management IP and
+    # the forwarding table. The driver keeps a single login session (the firmware has 4)
+    # and refreshes this data slowly.
+    # secrets:
+    #   password: "${RTL_SWITCH_PASS}"
+
+  - id: unifi-controller
+    name: UniFi Network
+    driver: unifi
+    endpoint: "https://192.0.2.20:11443"
+    poll_interval: "15s"
+    settings:
+      site: "default"
+      is_unifi_os: true
+    secrets:
+      username: "${UNIFI_USER}"
+      password: "${UNIFI_PASS}"
+
+  - id: sw-snmp-core
+    name: Core SNMP Switch
+    driver: snmp
+    endpoint: "192.0.2.30:161"
+    poll_interval: "30s"
+    settings:
+      version: "3"
+      username: "netplane"
+      auth_protocol: "SHA256"
+      priv_protocol: "AES"
+    secrets:
+      auth_passphrase: "${SNMP_AUTH_PASS}"
+      priv_passphrase: "${SNMP_PRIV_PASS}"
