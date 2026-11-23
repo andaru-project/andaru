@@ -606,7 +606,7 @@ func (s *Store) QueryLinkSamples(ctx context.Context, deviceID, ifName string, s
 			SELECT target_id FROM link_samples
 			WHERE device_id = ? AND if_name = ? AND ts >= ?
 			GROUP BY target_id
-			ORDER BY COUNT(*) DESC, MAX(ts) DESC, target_id ASC
+			ORDER BY (target_id != '') DESC, COUNT(*) DESC, MAX(ts) DESC, target_id ASC
 			LIMIT 1
 		  )
 		ORDER BY ts ASC
