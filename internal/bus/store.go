@@ -23,8 +23,10 @@ type store struct {
 	db              *sql.DB
 	server          *mqtt.Server
 	maximumInflight int
-	// dropping holds the client IDs whose session is being dropped, for OnUnsubscribed.
-	dropping sync.Map
+	// discarding holds the clients a discard was asked for, so each is dropped once; drops counts the drops
+	// still running, which Stop waits for.
+	discarding sync.Map
+	drops      sync.WaitGroup
 }
 
 func (*store) ID() string { return "store" }
@@ -33,7 +35,7 @@ func (*store) Provides(b byte) bool {
 	return bytes.Contains([]byte{
 		mqtt.OnSessionEstablished, mqtt.OnDisconnect, mqtt.OnSubscribed, mqtt.OnUnsubscribed,
 		mqtt.OnWillSent, mqtt.OnQosPublish, mqtt.OnQosComplete, mqtt.OnQosDropped,
-		mqtt.OnClientExpired, mqtt.OnPublish, mqtt.OnPublished, mqtt.OnPacketRead,
+		mqtt.OnClientExpired, mqtt.OnPublish, mqtt.OnPublished,
 		mqtt.StoredClients, mqtt.StoredInflightMessages, mqtt.StoredSubscriptions,
 	}, []byte{b})
 }
@@ -60,7 +62,10 @@ func (s *store) Init(config any) error {
 	return nil
 }
 
-func (s *store) Stop() error { return s.db.Close() }
+func (s *store) Stop() error {
+	s.drops.Wait()
+	return s.db.Close()
+}
 
 func (s *store) put(kind, key string, value storage.Serializable) error {
 	data, err := value.MarshalBinary()
@@ -101,17 +106,25 @@ func (s *store) current(cl *mqtt.Client) bool {
 	return ok && existing == cl
 }
 
-// discard drops a client's session, so that it reconnects with Session
-// Present off and knows it may have missed messages.
-// discard drops the session cl holds, or the one that took it over holds, so that the client reconnects without
-// one. mochi's DropSession serialises it with a takeover of the same client ID, and runs OnUnsubscribed under that
-// lock, where the session's rows are forgotten: a connection that came in after the drop keeps its own. It runs
-// apart from the hook that asks for it, since mochi holds the same lock while it calls OnUnsubscribed on a
-// takeover or an expiry.
+// discard drops the session cl holds, or the one a client that took it over holds, so that the client reconnects
+// without one and knows it may have missed messages. While cl still holds the session, its row goes first, so a
+// restart before the drop finds no session either. A client is dropped once. The drop itself is mochi's DropSession, which takes the lock a takeover holds; mochi
+// holds that lock while it runs some hooks, so the drop runs apart from the hook that asks for it. The session's
+// other rows are forgotten in OnUnsubscribed, which the drop runs under that lock.
 func (s *store) discard(cl *mqtt.Client, why packets.Code) {
+	if cl.IsDropped() {
+		return
+	}
+	if _, asked := s.discarding.LoadOrStore(cl, struct{}{}); asked {
+		return
+	}
+	if s.current(cl) {
+		_ = s.del(storage.ClientKey, cl.ID)
+	}
+	s.drops.Add(1)
 	go func() {
-		s.dropping.Store(cl.ID, true)
-		defer s.dropping.Delete(cl.ID)
+		defer s.drops.Done()
+		defer s.discarding.Delete(cl)
 		if holder := s.server.DropSession(cl, why); holder != nil {
 			s.Log.Warn("bus session discarded", "client", holder.ID, "reason", why.Reason)
 		}
@@ -175,8 +188,9 @@ func (s *store) OnDisconnect(cl *mqtt.Client, _ error, expire bool) {
 func (s *store) OnClientExpired(cl *mqtt.Client) { s.forget(cl.ID) }
 
 // Inline subscriptions are the engine's non-durable ones and are not kept.
+// A dropped client's rows are gone; one of its hooks still running does not write new ones.
 func (s *store) OnSubscribed(cl *mqtt.Client, pk packets.Packet, reasonCodes []byte) {
-	if cl.Net.Inline {
+	if cl.Net.Inline || cl.IsDropped() {
 		return
 	}
 	for i, f := range pk.Filters {
@@ -199,7 +213,7 @@ func (s *store) OnUnsubscribed(cl *mqtt.Client, pk packets.Packet) {
 	if cl.Net.Inline {
 		return
 	}
-	if _, ok := s.dropping.Load(cl.ID); ok {
+	if cl.IsDropped() {
 		s.forget(cl.ID)
 		return
 	}
@@ -215,6 +229,9 @@ func (s *store) OnUnsubscribed(cl *mqtt.Client, pk packets.Packet) {
 // The broker drops messages beyond MaximumInflight without telling anyone, so
 // a client that reaches it loses its session first.
 func (s *store) OnQosPublish(cl *mqtt.Client, pk packets.Packet, sent int64, _ int) {
+	if cl.IsDropped() {
+		return
+	}
 	key := inflightKey(cl, pk)
 	if err := s.put(storage.InflightKey, key, message(storage.InflightKey, key, cl, pk, sent)); err != nil {
 		s.discard(cl, packets.ErrImplementationSpecificError)
@@ -225,28 +242,19 @@ func (s *store) OnQosPublish(cl *mqtt.Client, pk packets.Packet, sent int64, _ i
 	}
 }
 
-// A failed delete only means the message is sent again later, which at least once allows.
+// OnQosComplete forgets a delivery once mochi has. mochi removes an acknowledged delivery from the client's
+// inflight messages before it calls this, so a packet ID still held there is a delivery waiting for its
+// acknowledgement, and the completion is the client's own publish with the same ID (mochi keeps both directions
+// by packet ID, mochi-mqtt/server#545): the delivery's row stays. A failed delete only means the message is sent
+// again later, which at least once allows.
 func (s *store) OnQosComplete(cl *mqtt.Client, pk packets.Packet) {
+	if _, held := cl.State.Inflight.Get(pk.PacketID); held {
+		return
+	}
 	_ = s.del(storage.InflightKey, inflightKey(cl, pk))
 }
 
 func (s *store) OnQosDropped(cl *mqtt.Client, pk packets.Packet) { s.OnQosComplete(cl, pk) }
-
-// OnPacketRead refuses a durable publish whose packet ID is that of a delivery the client has not acknowledged
-// yet. mochi keeps both directions in one map by packet ID and would drop the delivery to make room for the
-// publish. The client is disconnected instead: its session keeps the delivery, which it gets again when it
-// reconnects, and its client sends the publish again.
-func (s *store) OnPacketRead(cl *mqtt.Client, pk packets.Packet) (packets.Packet, error) {
-	if pk.FixedHeader.Type != packets.Publish || pk.FixedHeader.Qos == 0 {
-		return pk, nil
-	}
-	if held, ok := cl.State.Inflight.Get(pk.PacketID); ok && held.FixedHeader.Type == packets.Publish {
-		s.Log.Warn("bus publish reuses a pending delivery's packet ID; client disconnected", "client", cl.ID, "packet", pk.PacketID)
-		_ = s.server.DisconnectClient(cl, packets.ErrPacketIdentifierInUse)
-		return pk, packets.ErrRejectPacket
-	}
-	return pk, nil
-}
 
 // outboxKey names a durable publish from a client outside the engine. The
 // packet ID is not reused before the broker acknowledges it.

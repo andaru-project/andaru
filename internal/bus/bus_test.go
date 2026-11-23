@@ -375,6 +375,23 @@ func TestEngineClientDurableAcrossRestart(t *testing.T) {
 
 // A subscriber that falls MaximumInflight messages behind loses its session
 // instead of losing messages silently.
+// A discarded session stays discarded across a restart: nothing of it is left to load.
+func TestDiscardedSessionStaysGoneAfterRestart(t *testing.T) {
+	h := newHarness(t, Options{MaximumInflight: 2})
+	web := h.mustConnect("web", nil, true)
+	web.subscribe(t, "config/#")
+	web.leave(t)
+	for i := 0; i < 3; i++ {
+		if err := h.bus.Publish("config/head", []byte{byte('0' + i)}, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.restart()
+	if web = h.mustConnect("web", nil, true); web.connack.SessionPresent {
+		t.Fatal("a discarded session came back after a restart")
+	}
+}
+
 func TestSessionDiscardedAtInflightLimit(t *testing.T) {
 	h := newHarness(t, Options{MaximumInflight: 2})
 	web := h.mustConnect("web", nil, true)
@@ -677,12 +694,15 @@ func TestPublishCannotTakeAPendingDeliverysPacketID(t *testing.T) {
 	if _, err = conn.Write(raw.Bytes()); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(200 * time.Millisecond)
-	addon.leave(t)
+	// The publish is taken: the client's own subscription brings it back.
+	if p := addon.receive(t); string(p.Payload) != "mine" {
+		t.Fatalf("got %s %q", p.Topic, p.Payload)
+	}
+	// The delivery outlives a restart, so its stored row outlived the publish's acknowledgement.
+	h.restart()
 	addon = h.mustConnect("addon", nil, true)
-	for {
-		if p := addon.receive(t); string(p.Payload) == "held" {
-			break
-		}
+	for got := map[string]bool{}; !got["held"]; {
+		p := addon.receive(t)
+		got[string(p.Payload)] = true
 	}
 }

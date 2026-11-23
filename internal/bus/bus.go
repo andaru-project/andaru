@@ -84,6 +84,9 @@ func Open(o Options) (*Bus, error) {
 	capabilities.MaximumSessionExpiryInterval = o.MaximumSessionExpiry
 	// An event is news of a change, read from state when missed; a retained one would outlive what it reports.
 	capabilities.RetainAvailable = 0
+	// Durable means QoS 1. At QoS 2 mochi could overwrite a delivery waiting for its acknowledgement with a client's
+	// publish of the same packet ID (mochi-mqtt/server#545).
+	capabilities.MaximumQos = 1
 	// mochi drops a held message a day old even when its publisher set no expiry, and the session would go on
 	// without it. A durable message is kept as long as its session.
 	capabilities.MaximumMessageExpiryInterval = 0
