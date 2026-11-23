@@ -164,22 +164,28 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		snap.MarkUnavailable(driver.SectionZones)
 		snap.MarkUnavailable(driver.SectionFirewalls)
 	} else {
-		for _, z := range savedResp.Zones {
+		segsByZone := map[string][]string{}
+		for _, seg := range savedResp.Value.Segments {
+			if seg.Zone != "" {
+				segsByZone[seg.Zone] = append(segsByZone[seg.Zone], seg.ID)
+			}
+		}
+		for _, z := range savedResp.Value.Zones {
 			snap.Zones = append(snap.Zones, model.Zone{
 				DeviceID:   devID,
 				ID:         z.ID,
 				Name:       z.Name,
-				SegmentIDs: z.SegmentIDs,
+				SegmentIDs: segsByZone[z.ID],
 			})
 		}
-		policyCount := len(savedResp.Policy.Input) + len(savedResp.Policy.Forward)
-		natCount := len(savedResp.NAT.PortForwards) + len(savedResp.NAT.OneToOne)
+		policyCount := len(savedResp.Value.Rules)
+		natCount := len(savedResp.Value.NAT.PortForwards) + len(savedResp.Value.NAT.OneToOne)
 		snap.Firewalls = append(snap.Firewalls, model.FirewallState{
 			DeviceID:        devID,
 			Engine:          "nftables",
 			PolicyRuleCount: &policyCount,
 			NatRuleCount:    &natCount,
-			SavedVersion:    fmt.Sprintf("%v", savedResp.Version),
+			SavedVersion:    savedResp.SavedVersion,
 			Services:        []model.ServiceStatus{},
 		})
 	}
@@ -248,19 +254,23 @@ type andaruLink struct {
 }
 
 type andaruSavedConfig struct {
-	State   string `json:"state"`
-	Version any    `json:"version"`
-	Zones   []struct {
-		ID         string   `json:"id"`
-		Name       string   `json:"name"`
-		SegmentIDs []string `json:"segmentIds"`
-	} `json:"zones"`
-	Policy struct {
-		Input   []any `json:"input"`
-		Forward []any `json:"forward"`
-	} `json:"policy"`
-	NAT struct {
-		PortForwards []any `json:"portForwards"`
-		OneToOne     []any `json:"oneToOne"`
-	} `json:"nat"`
+	State        string `json:"state"`
+	SavedVersion string `json:"savedVersion"`
+	Value        struct {
+		Segments []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+			Link string `json:"link"`
+			Zone string `json:"zone"`
+		} `json:"segments"`
+		Zones []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"zones"`
+		Rules []any `json:"rules"`
+		NAT   struct {
+			PortForwards []any `json:"portForwards"`
+			OneToOne     []any `json:"oneToOne"`
+		} `json:"nat"`
+	} `json:"value"`
 }

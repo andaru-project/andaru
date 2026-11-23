@@ -31,10 +31,14 @@ func TestAndaruDriverPoll(t *testing.T) {
 		case "/api/v1/config":
 			_, _ = w.Write([]byte(`{
 				"state": "saved",
-				"version": 7,
-				"zones": [{"id": "z-lan", "name": "lan", "segmentIds": ["eth0"]}],
-				"policy": {"input": [{}, {}], "forward": [{}]},
-				"nat": {"portForwards": [{}], "oneToOne": []}
+				"savedVersion": "7",
+				"value": {
+					"schemaVersion": 1,
+					"segments": [{"id": "seg_lan", "name": "LAN", "link": "lnk_eth0", "zone": "z-lan"}],
+					"zones": [{"id": "z-lan", "name": "lan"}],
+					"rules": [{}, {}, {}],
+					"nat": {"portForwards": [{}], "oneToOne": []}
+				}
 			}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -69,10 +73,10 @@ func TestAndaruDriverPoll(t *testing.T) {
 	if len(snap.Segments) != 1 || len(snap.Segments[0].Addresses) != 2 {
 		t.Fatalf("unexpected dual-stack segment: %+v", snap.Segments)
 	}
-	if len(snap.Zones) != 1 || snap.Zones[0].Name != "lan" {
+	if len(snap.Zones) != 1 || snap.Zones[0].Name != "lan" || !slices.Equal(snap.Zones[0].SegmentIDs, []string{"seg_lan"}) {
 		t.Fatalf("unexpected zones: %+v", snap.Zones)
 	}
-	if len(snap.Firewalls) != 1 || *snap.Firewalls[0].PolicyRuleCount != 3 || snap.Firewalls[0].SavedVersion != "7" {
+	if len(snap.Firewalls) != 1 || *snap.Firewalls[0].PolicyRuleCount != 3 || *snap.Firewalls[0].NatRuleCount != 1 || snap.Firewalls[0].SavedVersion != "7" {
 		t.Fatalf("unexpected firewall state: %+v", snap.Firewalls)
 	}
 }
