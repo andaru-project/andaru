@@ -61,10 +61,11 @@ func (s *Store) Export(ctx context.Context, includeSecrets bool) (result BackupD
 	return result, nil
 }
 
-// NeedsDecisions reports whether a backup's configuration reads only with provisional choices in this Andaru.
-func NeedsDecisions(input RestoreDocuments) bool {
+// RestorableHere reports whether a backup's documents restore in this Andaru: they read, and without provisional
+// choices (settings safe mode).
+func RestorableHere(input RestoreDocuments) bool {
 	decoded, err := decodeBackupDocuments(input)
-	return err == nil && decoded.needsDecisions
+	return err == nil && !decoded.needsDecisions
 }
 
 func ValidateBackupDocuments(input RestoreDocuments) error {

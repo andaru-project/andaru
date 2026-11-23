@@ -171,8 +171,23 @@ func TestRestoreCoordinatorCrashRecoveryAndReplay(t *testing.T) {
 				t.Fatal(err)
 			}
 			journal, found, err := coordinator.readJournal("restore-crash-operation")
+			if rollback && crashPoint == "after-config-publication" {
+				// The configuration was published, then set aside with every newer version: that half is done, and the
+				// identities are still restored.
+				if err != nil || !found || journal.State != "committed" {
+					t.Fatalf("journal=%+v found=%v err=%v", journal, found, err)
+				}
+				if newer, err := configuration.Newer(ctx, journal.TargetSavedVersion); err != nil || !newer {
+					t.Fatalf("restored version not set aside: %v %v", newer, err)
+				}
+				if matches, err := identities.RestoreMatches(ctx, identity.BackupDocuments{IdentityRevision: journal.TargetIdentityRevision, Users: journal.Identity.Users, UserCredentials: journal.Identity.UserCredentials}); err != nil || !matches {
+					t.Fatalf("identity target=%v err=%v", matches, err)
+				}
+				return
+			}
 			if rollback {
-				// It can no longer settle, so it is abandoned, not reconciled, and its replay says so.
+				// The configuration must still be published, against a version a rollback set aside: abandoned, and its
+				// replay says so.
 				if err != nil || !found || journal.State != "abandoned" {
 					t.Fatalf("journal=%+v found=%v err=%v", journal, found, err)
 				}
