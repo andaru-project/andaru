@@ -3,6 +3,7 @@ package web
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"io"
 	"net"
 	"net/http"
@@ -118,8 +119,16 @@ func TestWebConfigurationRefusesDefaultsAndWildcards(t *testing.T) {
 // An event stream outlives the server's read and write timeouts, and its own limit on each write, and each event
 // reaches the browser as it is sent.
 func TestEventStreamOutlivesTheTimeouts(t *testing.T) {
+	for _, h2 := range []bool{false, true} {
+		t.Run(map[bool]string{false: "HTTP/1.1", true: "HTTP/2"}[h2], func(t *testing.T) { eventStreamOutlivesTheTimeouts(t, h2) })
+	}
+}
+
+func eventStreamOutlivesTheTimeouts(t *testing.T, h2 bool) {
 	defer func(previous time.Duration) { streamWriteTimeout = previous }(streamWriteTimeout)
-	streamWriteTimeout = 100 * time.Millisecond
+	// Over HTTP/2 a write deadline resets the stream when it passes, written to or not, so it must outlast the
+	// gap between writes (200 ms here, 25 s from the engine); the server's own timeouts are shorter than either.
+	streamWriteTimeout = 300 * time.Millisecond
 	backendPath := filepath.Join(t.TempDir(), "engine.sock")
 	listener, err := net.Listen("unix", backendPath)
 	if err != nil {
@@ -145,6 +154,7 @@ func TestEventStreamOutlivesTheTimeouts(t *testing.T) {
 	}
 	server := httptest.NewUnstartedServer(handler)
 	server.Config.ReadTimeout, server.Config.WriteTimeout = 100*time.Millisecond, 100*time.Millisecond
+	server.EnableHTTP2 = h2
 	server.StartTLS()
 	defer server.Close()
 	request, _ := http.NewRequest(http.MethodGet, server.URL+"/api/v1/events", nil)
@@ -154,6 +164,9 @@ func TestEventStreamOutlivesTheTimeouts(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer response.Body.Close()
+	if want := map[bool]int{false: 1, true: 2}[h2]; response.ProtoMajor != want {
+		t.Fatalf("HTTP/%d, want HTTP/%d", response.ProtoMajor, want)
+	}
 	reader := bufio.NewReader(response.Body)
 	for i := range 3 {
 		line, err := reader.ReadString('\n')
@@ -166,6 +179,12 @@ func TestEventStreamOutlivesTheTimeouts(t *testing.T) {
 
 // A stream ends, and lets go of the engine, when its browser stops reading and when andaru-web shuts down.
 func TestEventStreamEndsWhenStalledOrShutDown(t *testing.T) {
+	for _, h2 := range []bool{false, true} {
+		t.Run(map[bool]string{false: "HTTP/1.1", true: "HTTP/2"}[h2], func(t *testing.T) { eventStreamEndsWhenStalledOrShutDown(t, h2) })
+	}
+}
+
+func eventStreamEndsWhenStalledOrShutDown(t *testing.T, h2 bool) {
 	defer func(previous time.Duration) { streamWriteTimeout = previous }(streamWriteTimeout)
 	streamWriteTimeout = 200 * time.Millisecond
 	backendPath := filepath.Join(t.TempDir(), "engine.sock")
@@ -199,7 +218,9 @@ func TestEventStreamEndsWhenStalledOrShutDown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewTLSServer(handler)
+	server := httptest.NewUnstartedServer(handler)
+	server.EnableHTTP2 = h2
+	server.StartTLS()
 	defer server.Close()
 	open := func(query string) *http.Response {
 		t.Helper()
@@ -229,4 +250,29 @@ func TestEventStreamEndsWhenStalledOrShutDown(t *testing.T) {
 	go func() { _, _ = io.Copy(io.Discard, reading.Body) }()
 	endStreams()
 	wait("the shutdown")
+}
+
+// The server offers HTTP/2, and still answers HTTP/1.1.
+func TestServerOffersHTTP2(t *testing.T) {
+	certified := httptest.NewTLSServer(http.NotFoundHandler())
+	certified.Close()
+	server := newServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, r.Proto) }), certified.TLS.Certificates[0])
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = server.Serve(tls.NewListener(listener, server.TLSConfig)) }()
+	defer server.Close()
+	for _, h2 := range []bool{true, false} {
+		transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, ForceAttemptHTTP2: h2}
+		response, err := (&http.Client{Transport: transport}).Get("https://" + listener.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		if want := map[bool]string{true: "HTTP/2.0", false: "HTTP/1.1"}[h2]; string(body) != want {
+			t.Errorf("served %s, want %s", body, want)
+		}
+	}
 }
