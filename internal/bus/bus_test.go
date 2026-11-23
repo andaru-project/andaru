@@ -2,652 +2,441 @@ package bus
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"net"
+	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
-
-	"github.com/eclipse/paho.golang/paho"
-	mqtt "github.com/mochi-mqtt/server/v2"
-	"github.com/mochi-mqtt/server/v2/hooks/storage"
-	"github.com/mochi-mqtt/server/v2/packets"
 )
 
 var testGrants = map[string]Grants{
-	"web":    {Subscribe: []string{"config/#"}},
-	"addon":  {Publish: []string{"alias/+"}, Subscribe: []string{"alias/#"}},
-	"agent":  {Publish: []string{"alias/+"}},
-	"notify": {Subscribe: []string{"notification/#"}},
+	"web":   {Subscribe: []string{"config/#"}},
+	"addon": {Publish: []string{"alias/+"}, Subscribe: []string{"alias/#"}},
 }
 
 type harness struct {
-	t    *testing.T
-	path string
-	bus  *Bus
-	addr string
+	t      *testing.T
+	dir    string
+	bus    *Bus
+	socket string
+	opt    Options
 }
 
 func newHarness(t *testing.T, o Options) *harness {
-	h := &harness{t: t, path: filepath.Join(t.TempDir(), "bus.db")}
-	h.start(o)
+	dir, err := os.MkdirTemp("", "bus") // a Unix socket path must stay short
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	h := &harness{t: t, dir: dir, opt: o}
+	h.start()
+	t.Cleanup(func() { h.bus.Close() })
 	return h
 }
 
-func (h *harness) start(o Options) {
+func (h *harness) start() {
 	h.t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	h.socket = filepath.Join(h.dir, "bus.sock")
+	_ = os.Remove(h.socket)
+	l, err := net.Listen("unix", h.socket)
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	o.Path = h.path
+	o := h.opt
+	o.Path = filepath.Join(h.dir, "bus.db")
 	if o.Grants == nil {
 		o.Grants = testGrants
 	}
-	o.Authenticate = func(_, password []byte) bool { return string(password) == "secret" }
-	o.Listeners = map[string]net.Listener{"tcp": l}
-	b, err := Open(o)
-	if err != nil {
+	o.Authenticate = func(_, token string) bool { return token == "secret" }
+	o.Listeners = map[string]net.Listener{"test": l}
+	if h.bus, err = Open(o); err != nil {
 		h.t.Fatal(err)
 	}
-	h.bus, h.addr = b, l.Addr().String()
 }
 
-// restart starts the bus again on the same file, with default options.
 func (h *harness) restart() {
 	h.t.Helper()
-	h.bus.Close()
-	h.start(Options{})
-}
-
-type client struct {
-	*paho.Client
-	received chan *paho.Publish
-	connack  *paho.Connack
-}
-
-// connect opens a persistent session for user; with ack false it never
-// acknowledges what it receives. conn nil dials the TCP listener.
-func (h *harness) connect(user, password string, conn net.Conn, ack bool) (*client, error) {
-	h.t.Helper()
-	if conn == nil {
-		var err error
-		if conn, err = net.Dial("tcp", h.addr); err != nil {
-			h.t.Fatal(err)
-		}
+	if err := h.bus.Close(); err != nil {
+		h.t.Fatal(err)
 	}
-	c := &client{received: make(chan *paho.Publish, 64)}
-	c.Client = paho.NewClient(paho.ClientConfig{
-		Conn: conn,
-		// Without manual acknowledgement paho acknowledges once the handler returns.
-		EnableManualAcknowledgment: !ack,
-		OnPublishReceived: []func(paho.PublishReceived) (bool, error){func(p paho.PublishReceived) (bool, error) {
-			c.received <- p.Packet
-			return true, nil
-		}},
-	})
-	expiry := uint32(3600)
+	h.start()
+}
+
+func (h *harness) dial(user string) *Client {
+	h.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	connack, err := c.Connect(ctx, &paho.Connect{ClientID: user, KeepAlive: 30, CleanStart: false,
-		Username: user, UsernameFlag: true, Password: []byte(password), PasswordFlag: password != "",
-		Properties: &paho.ConnectProperties{SessionExpiryInterval: &expiry}})
-	c.connack = connack
+	c, err := Dial(ctx, h.socket, user, "secret")
 	if err != nil {
-		conn.Close()
-		return c, err
+		h.t.Fatalf("dial %s: %v", user, err)
 	}
-	h.t.Cleanup(func() { c.Disconnect(&paho.Disconnect{}) })
-	return c, nil
-}
-
-func (h *harness) mustConnect(user string, conn net.Conn, ack bool) *client {
-	h.t.Helper()
-	c, err := h.connect(user, "secret", conn, ack)
-	if err != nil {
-		h.t.Fatalf("connect %s: %v", user, err)
-	}
+	h.t.Cleanup(func() { c.Close() })
 	return c
 }
 
-func (c *client) subscribe(t *testing.T, filter string) byte {
-	t.Helper()
-	suback, err := c.Subscribe(context.Background(), &paho.Subscribe{Subscriptions: []paho.SubscribeOptions{{Topic: filter, QoS: 1}}})
-	if suback == nil {
-		t.Fatalf("subscribe %s: %v", filter, err)
+func (h *harness) publish(topic, payload string, durable bool) {
+	h.t.Helper()
+	if err := h.bus.Publish(topic, []byte(payload), durable); err != nil {
+		h.t.Fatal(err)
 	}
-	return suback.Reasons[0]
 }
 
-func (c *client) leave(t *testing.T) {
-	t.Helper()
-	c.Disconnect(&paho.Disconnect{})
-	time.Sleep(100 * time.Millisecond)
-}
-
-func (c *client) receive(t *testing.T) *paho.Publish {
+func receive[T any](t *testing.T, ch <-chan T) T {
 	t.Helper()
 	select {
-	case p := <-c.received:
-		return p
+	case v, ok := <-ch:
+		if !ok {
+			t.Fatal("closed")
+		}
+		return v
 	case <-time.After(5 * time.Second):
-		t.Fatal("no message")
-		return nil
+		t.Fatal("nothing received")
 	}
+	var zero T
+	return zero
 }
 
-func (c *client) nothing(t *testing.T) {
+func nothing[T any](t *testing.T, ch <-chan T) {
 	t.Helper()
 	select {
-	case p := <-c.received:
-		t.Fatalf("unexpected message %s %q", p.Topic, p.Payload)
+	case v := <-ch:
+		t.Fatalf("unexpected %+v", v)
 	case <-time.After(200 * time.Millisecond):
 	}
 }
 
-func (h *harness) rows(table, where string) int {
-	h.t.Helper()
-	db, err := sql.Open("sqlite", "file:"+h.path)
-	if err != nil {
-		h.t.Fatal(err)
-	}
-	defer db.Close()
-	var n int
-	if err := db.QueryRow(`SELECT count(*) FROM ` + table + ` WHERE ` + where).Scan(&n); err != nil {
-		h.t.Fatal(err)
-	}
-	return n
+func ctx(t *testing.T) context.Context {
+	c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	return c
 }
 
-// eventually waits up to five seconds for done.
-func (h *harness) eventually(what string, done func() bool) {
-	h.t.Helper()
-	for start := time.Now(); !done(); time.Sleep(10 * time.Millisecond) {
-		if time.Since(start) > 5*time.Second {
-			h.t.Fatalf("waited for %s", what)
+func TestTopics(t *testing.T) {
+	for _, c := range []struct {
+		filter, topic string
+		want          bool
+	}{
+		{"config/#", "config/head", true}, {"config/#", "config", true}, {"config/+", "config/head", true},
+		{"config/+", "config/head/x", false}, {"alias/+", "config/head", false}, {"#", "a/b", true},
+	} {
+		if got := match(c.filter, c.topic); got != c.want {
+			t.Errorf("match(%q, %q) = %v", c.filter, c.topic, got)
 		}
 	}
-}
-
-func TestCovers(t *testing.T) {
 	for _, c := range []struct {
 		grant, filter string
 		want          bool
 	}{
-		{"config/#", "config/head", true},
-		{"config/#", "config/a/b", true},
-		{"config/#", "config/#", true},
-		{"config/#", "config", true},
-		{"config/#", "alias/x", false},
-		{"alias/+", "alias/x", true},
-		{"alias/+", "alias/+", true},
-		{"alias/+", "alias/#", false},
-		{"alias/+", "alias/x/y", false},
-		{"alias/+", "alias", false},
-		{"alias/x", "alias/+", false},
-		{"alias/x", "alias/x", true},
-		{"#", "anything/at/all", true},
+		{"alias/#", "alias/+", true}, {"alias/+", "alias/#", false}, {"alias/+", "alias/lan", true}, {"#", "anything/#", true},
 	} {
 		if got := covers(c.grant, c.filter); got != c.want {
-			t.Errorf("covers(%q, %q) = %v, want %v", c.grant, c.filter, got, c.want)
+			t.Errorf("covers(%q, %q) = %v", c.grant, c.filter, got)
+		}
+	}
+	for topic, want := range map[string]bool{"config/head": true, "config/+": false, "config//head": false, "": false} {
+		if validTopic(topic) != want {
+			t.Errorf("validTopic(%q) != %v", topic, want)
+		}
+	}
+	for filter, want := range map[string]bool{"config/#": true, "#/x": false, "a+/b": false, "+/b": true} {
+		if validFilter(filter) != want {
+			t.Errorf("validFilter(%q) != %v", filter, want)
 		}
 	}
 }
 
-// A durable event for a subscriber that is offline is stored, survives a
-// restart, and is delivered when the subscriber comes back.
-func TestDurableEventReachesOfflineSubscriberAfterRestart(t *testing.T) {
+func TestPublishRefusesWhatIsNotAnEvent(t *testing.T) {
 	h := newHarness(t, Options{})
-	web := h.mustConnect("web", nil, true)
-	web.subscribe(t, "config/#")
-	web.leave(t)
-
-	if err := h.bus.Publish("config/head", []byte("v42"), true); err != nil {
-		t.Fatal(err)
+	if h.bus.Publish("config/head", []byte("not json"), true) == nil {
+		t.Error("a payload that is not JSON was published")
 	}
-	if n := h.rows("mqtt_state", "kind = 'IFM'"); n != 1 {
-		t.Fatalf("stored messages = %d, want 1", n)
-	}
-	if n := h.rows("outbox", "1"); n != 0 {
-		t.Fatalf("outbox = %d after publish, want 0", n)
-	}
-	h.restart()
-
-	web = h.mustConnect("web", nil, true)
-	if !web.connack.SessionPresent {
-		t.Fatal("session lost across restart")
-	}
-	if p := web.receive(t); p.Topic != "config/head" || string(p.Payload) != "v42" {
-		t.Fatalf("got %s %q", p.Topic, p.Payload)
-	}
-	time.Sleep(100 * time.Millisecond)
-	if n := h.rows("mqtt_state", "kind = 'IFM'"); n != 0 {
-		t.Fatalf("stored messages after ack = %d, want 0", n)
+	if h.bus.Publish("config/+", []byte("{}"), true) == nil {
+		t.Error("a wildcard topic was published")
 	}
 }
 
-// A message delivered but never acknowledged is delivered again after a restart.
-func TestUnacknowledgedEventIsRedeliveredAfterRestart(t *testing.T) {
-	h := newHarness(t, Options{})
-	web := h.mustConnect("web", nil, false)
-	web.subscribe(t, "config/#")
-	if err := h.bus.Publish("config/head", []byte("v43"), true); err != nil {
-		t.Fatal(err)
-	}
-	web.receive(t)
-	web.leave(t)
-	h.restart()
-
-	web = h.mustConnect("web", nil, true)
-	if p := web.receive(t); string(p.Payload) != "v43" {
-		t.Fatalf("got %q", p.Payload)
-	}
-}
-
-// A non-durable event is not kept for a subscriber that is away.
-func TestNonDurableEventIsNotKept(t *testing.T) {
-	h := newHarness(t, Options{})
-	web := h.mustConnect("web", nil, true)
-	web.subscribe(t, "config/#")
-	web.leave(t)
-	if err := h.bus.Publish("config/head", []byte("gone"), false); err != nil {
-		t.Fatal(err)
-	}
-	web = h.mustConnect("web", nil, true)
-	web.nothing(t)
-}
-
-// An engine publish left in the outbox by a crash is published on the next start.
-func TestOutboxIsPublishedOnStart(t *testing.T) {
-	h := newHarness(t, Options{})
-	web := h.mustConnect("web", nil, true)
-	web.subscribe(t, "config/#")
-	web.leave(t)
-	if err := h.bus.store.outboxPut("engine:crashed", "config/head", []byte("v44")); err != nil {
-		t.Fatal(err)
-	}
-	h.restart()
-
-	web = h.mustConnect("web", nil, true)
-	if p := web.receive(t); string(p.Payload) != "v44" {
-		t.Fatalf("got %q", p.Payload)
-	}
-	if n := h.rows("outbox", "1"); n != 0 {
-		t.Fatalf("outbox = %d after start, want 0", n)
-	}
-}
-
-// A durable publish from outside the engine is kept in the outbox before the
-// broker acknowledges it, and leaves it once every session holds it.
-func TestClientPublishGoesThroughOutbox(t *testing.T) {
-	h := newHarness(t, Options{})
-	addon := h.mustConnect("addon", nil, true)
-	addon.subscribe(t, "alias/#")
-	agent := h.mustConnect("agent", nil, true)
-	if _, err := agent.Publish(context.Background(), &paho.Publish{Topic: "alias/lan", QoS: 1, Payload: []byte("changed")}); err != nil {
-		t.Fatal(err)
-	}
-	if p := addon.receive(t); p.Topic != "alias/lan" {
-		t.Fatalf("got %s", p.Topic)
-	}
-	// mochi acknowledges before it delivers, and the row goes once every session holds the event.
-	h.eventually("the outbox to empty", func() bool { return h.rows("outbox", "1") == 0 })
-
-	// The engine dies after the hook kept a publish and before the broker
-	// delivered it: the next start publishes it.
-	cl, ok := h.bus.server.Clients.Get("agent")
-	if !ok {
-		t.Fatal("agent not connected")
-	}
-	pk := packets.Packet{FixedHeader: packets.FixedHeader{Type: packets.Publish, Qos: 1},
-		TopicName: "alias/wan", Payload: []byte("pending"), Origin: "agent", PacketID: 7, Created: time.Now().Unix()}
-	if _, err := h.bus.store.OnPublish(cl, pk); err != nil {
-		t.Fatal(err)
-	}
-	addon.leave(t)
-	h.restart()
-	addon = h.mustConnect("addon", nil, true)
-	if p := addon.receive(t); p.Topic != "alias/wan" || string(p.Payload) != "pending" {
-		t.Fatalf("got %s %q", p.Topic, p.Payload)
-	}
-}
-
-// Grants are checked when connecting, publishing and subscribing.
-func TestGrants(t *testing.T) {
-	h := newHarness(t, Options{})
-	if _, err := h.connect("web", "wrong", nil, true); err == nil {
-		t.Fatal("wrong password accepted")
-	}
-	if _, err := h.connect("stranger", "secret", nil, true); err == nil {
-		t.Fatal("user without grants accepted")
-	}
-	web := h.mustConnect("web", nil, true)
-	if code := web.subscribe(t, "notification/#"); code < 0x80 {
-		t.Fatalf("web subscribed to notification/#: reason %#x", code)
-	}
-	addon := h.mustConnect("addon", nil, true)
-	addon.subscribe(t, "alias/#")
-	if code := addon.subscribe(t, "#"); code < 0x80 {
-		t.Fatalf("addon subscribed to #: reason %#x", code)
-	}
-	resp, err := addon.Publish(context.Background(), &paho.Publish{Topic: "config/head", QoS: 1, Payload: []byte("x")})
-	if err == nil && (resp == nil || resp.ReasonCode < 0x80) {
-		t.Fatal("addon published to config/head")
-	}
-	addon.nothing(t)
-}
-
-// The engine's own clients connect in memory without a password, and still need grants.
-func TestEngineClientDurableAcrossRestart(t *testing.T) {
-	h := newHarness(t, Options{})
-	conn, err := h.bus.Dial()
-	if err != nil {
-		t.Fatal(err)
-	}
-	notify, err := h.connect("notify", "", conn, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	notify.subscribe(t, "notification/#")
-	notify.leave(t)
-	if err := h.bus.Publish("notification/engine", []byte("disk filling"), true); err != nil {
-		t.Fatal(err)
-	}
-	h.restart()
-	if conn, err = h.bus.Dial(); err != nil {
-		t.Fatal(err)
-	}
-	notify, err = h.connect("notify", "", conn, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p := notify.receive(t); string(p.Payload) != "disk filling" {
-		t.Fatalf("got %q", p.Payload)
-	}
-
-	conn, _ = h.bus.Dial()
-	if _, err := h.connect("stranger", "", conn, true); err == nil {
-		t.Fatal("engine client without grants accepted")
-	}
-}
-
-// A subscriber that falls MaximumInflight messages behind loses its session
-// instead of losing messages silently.
-func TestSessionDiscardedAtInflightLimit(t *testing.T) {
-	h := newHarness(t, Options{MaximumInflight: 2})
-	web := h.mustConnect("web", nil, true)
-	web.subscribe(t, "config/#")
-	web.leave(t)
-	for i := 0; i < 3; i++ {
-		if err := h.bus.Publish("config/head", []byte{byte('0' + i)}, true); err != nil {
-			t.Fatal(err)
-		}
-	}
-	web = h.mustConnect("web", nil, true)
-	if web.connack.SessionPresent {
-		t.Fatal("session kept past the in-flight limit")
-	}
-	if n := h.rows("mqtt_state", "kind IN ('IFM', 'SUB')"); n != 0 {
-		t.Fatalf("stored rows of the discarded session = %d, want 0", n)
-	}
-}
-
-// A store write that fails discards the session of the client it was for.
-func TestSessionDiscardedWhenStoreWriteFails(t *testing.T) {
-	h := newHarness(t, Options{})
-	web := h.mustConnect("web", nil, true)
-	web.subscribe(t, "config/#")
-	web.leave(t)
-
-	if _, err := h.bus.store.db.Exec(`DROP TABLE mqtt_state`); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.bus.Publish("config/head", []byte("lost"), true); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.bus.store.db.Exec(`CREATE TABLE mqtt_state (
-		kind TEXT NOT NULL, key TEXT NOT NULL, value BLOB NOT NULL, PRIMARY KEY (kind, key)) WITHOUT ROWID`); err != nil {
-		t.Fatal(err)
-	}
-	web = h.mustConnect("web", nil, true)
-	if web.connack.SessionPresent {
-		t.Fatal("session kept after a failed write")
-	}
-	web.nothing(t)
-}
-
-// An inline subscription gets what is published while it lasts, and nothing of it is stored.
-func TestInlineSubscription(t *testing.T) {
+// A live subscription gets durable and non-durable events from now on, and nothing once it ends.
+func TestSubscribe(t *testing.T) {
 	h := newHarness(t, Options{})
 	got := make(chan string, 4)
 	stop, err := h.bus.Subscribe("config/#", func(topic string, payload []byte) { got <- topic + " " + string(payload) })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.bus.Publish("config/head", []byte("7"), false); err != nil {
+	h.publish("config/head", "1", false)
+	h.publish("config/head", "2", true)
+	h.publish("alias/lan", "3", true)
+	if g := receive(t, got); g != "config/head 1" {
+		t.Fatal(g)
+	}
+	if g := receive(t, got); g != "config/head 2" {
+		t.Fatal(g)
+	}
+	nothing(t, got)
+	stop()
+	h.publish("config/head", "4", false)
+	nothing(t, got)
+}
+
+// A durable consumer gets each durable event after its cursor once handled, in order, across restarts; a new one
+// starts at the end of the log; a handler's error retries the event.
+func TestConsume(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.publish("config/head", "0", true) // before the consumer exists: not its
+	got := make(chan string, 8)
+	fail := true
+	stop, err := h.bus.Consume("notify", "config/#", func(m Message) error {
+		if string(m.Payload) == "2" && fail {
+			fail = false
+			return errors.New("not now")
+		}
+		got <- string(m.Payload)
+		return nil
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if g := <-got; g != "config/head 7" {
-		t.Fatalf("got %q", g)
+	h.publish("config/head", "1", true)
+	h.publish("config/head", "9", false) // not durable: not a consumer's
+	h.publish("alias/lan", "8", true)    // not its filter
+	h.publish("config/head", "2", true)
+	for _, want := range []string{"1", "2"} {
+		if g := receive(t, got); g != want {
+			t.Fatalf("got %s, want %s", g, want)
+		}
 	}
-	if n := h.rows("mqtt_state", "1"); n != 0 {
-		t.Fatalf("%d rows stored for an inline subscription", n)
+	nothing(t, got)
+	stop()
+
+	h.publish("config/head", "3", true) // while nobody reads
+	h.restart()
+	if _, err = h.bus.Consume("notify", "config/#", func(m Message) error { got <- string(m.Payload); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if g := receive(t, got); g != "3" {
+		t.Fatalf("after a restart got %s, want 3", g)
+	}
+	nothing(t, got)
+}
+
+// A consumer behind the log's retention is told of the gap, then reads on from what is kept.
+func TestGap(t *testing.T) {
+	h := newHarness(t, Options{Retention: time.Hour})
+	stop, err := h.bus.Consume("notify", "config/#", func(Message) error { return nil })
+	if err != nil {
+		t.Fatal(err)
 	}
 	stop()
-	if err := h.bus.Publish("config/head", []byte("8"), false); err != nil {
+	h.publish("config/head", "10", true)
+	if err = h.bus.prune(time.Now().Add(2 * time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case g := <-got:
-		t.Fatalf("got %q after the subscription ended", g)
-	case <-time.After(100 * time.Millisecond):
+	h.publish("config/head", "11", true)
+	got := make(chan Message, 4)
+	if _, err = h.bus.Consume("notify", "config/#", func(m Message) error { got <- m; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if m := receive(t, got); !m.Gap {
+		t.Fatalf("got %+v, want the gap first", m)
+	}
+	if m := receive(t, got); string(m.Payload) != "11" {
+		t.Fatalf("got %+v", m)
 	}
 }
 
-// Only MQTT 5 clients connect: an older one could not be told that its durable publish was refused.
-func TestOnlyMQTT5Connects(t *testing.T) {
-	a := &access{grants: testGrants, authenticate: func(_, _ []byte) bool { return true }}
-	for version, want := range map[byte]bool{3: false, 4: false, 5: true} {
-		cl := &mqtt.Client{ID: "web", Net: mqtt.ClientConnection{Listener: "tcp"}}
-		cl.Properties.Username, cl.Properties.ProtocolVersion = []byte("web"), version
-		if got := a.OnConnectAuthenticate(cl, packets.Packet{}); got != want {
-			t.Errorf("MQTT %d: connected %v", version, got)
-		}
-	}
-}
-
-// A client without a session to keep leaves nothing in the store once it is gone, whatever its ID is made of.
-func TestCleanSessionLeavesNothing(t *testing.T) {
-	h := newHarness(t, Options{})
-	conn, err := net.Dial("tcp", h.addr)
+// Pruning keeps what a consumer has not read, drops what every consumer is done with, and drops a consumer
+// nobody attached for the retention.
+func TestPrune(t *testing.T) {
+	h := newHarness(t, Options{Retention: time.Hour})
+	done := make(chan string, 4)
+	stop, err := h.bus.Consume("fast", "config/#", func(Message) error { done <- "fast"; return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
-	// It never acknowledges, so the bus holds what it is sent.
-	c := paho.NewClient(paho.ClientConfig{Conn: conn, EnableManualAcknowledgment: true})
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if _, err = c.Connect(ctx, &paho.Connect{ClientID: "web/é", CleanStart: true, Username: "web", UsernameFlag: true, Password: []byte("secret"), PasswordFlag: true}); err != nil {
+	unblock := make(chan struct{})
+	slow, err := h.bus.Consume("slow", "config/#", func(Message) error { <-unblock; done <- "slow"; return nil })
+	if err != nil {
 		t.Fatal(err)
 	}
-	// mochi answers the connect before it stores the client.
-	h.eventually("the client to be stored", func() bool { return h.rows("mqtt_state", "key='web/é'") == 1 })
-	if _, err = c.Subscribe(ctx, &paho.Subscribe{Subscriptions: []paho.SubscribeOptions{{Topic: "config/#", QoS: 1}}}); err != nil {
+	h.publish("config/head", "1", true)
+	receive(t, done)
+	if err = h.bus.prune(time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err = h.bus.Publish("config/head", []byte("1"), true); err != nil {
+	if n := rows(t, h, "events"); n != 1 {
+		t.Fatalf("%d events kept, want 1: slow has not read it", n)
+	}
+	close(unblock)
+	receive(t, done)
+	h.eventually(func() bool { return h.bus.prune(time.Now()) == nil && rows(t, h, "events") == 0 })
+	slow()
+	stop()
+	if err = h.bus.prune(time.Now().Add(2 * time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	h.eventually("the subscription and the held message stored", func() bool { return h.rows("mqtt_state", "key LIKE 'web/é:%'") == 2 })
-	c.Disconnect(&paho.Disconnect{})
-	h.eventually("nothing left of the client", func() bool { return h.rows("mqtt_state", "key LIKE 'web/é%'") == 0 })
-}
-
-// An unsubscribed filter is forgotten, so a restart does not bring it back.
-func TestUnsubscribeIsForgotten(t *testing.T) {
-	h := newHarness(t, Options{})
-	addon := h.mustConnect("addon", nil, true)
-	addon.subscribe(t, "alias/#")
-	if n := h.rows("mqtt_state", "key='addon:alias/#'"); n != 1 {
-		t.Fatalf("%d subscription rows", n)
-	}
-	if _, err := addon.Unsubscribe(context.Background(), &paho.Unsubscribe{Topics: []string{"alias/#"}}); err != nil {
-		t.Fatal(err)
-	}
-	if n := h.rows("mqtt_state", "key='addon:alias/#'"); n != 0 {
-		t.Fatalf("%d subscription rows after unsubscribing", n)
+	if n := rows(t, h, "consumers"); n != 0 {
+		t.Fatalf("%d consumers kept past the retention", n)
 	}
 }
 
-// The engine's durable publish is in the outbox while it is delivered, so a crash then publishes it again on start;
-// a non-durable one never is.
-func TestEnginePublishGoesThroughOutbox(t *testing.T) {
-	h := newHarness(t, Options{})
-	held := make(chan int, 2)
-	if _, err := h.bus.Subscribe("config/#", func(string, []byte) { held <- h.rows("outbox", "1") }); err != nil {
-		t.Fatal(err)
-	}
-	for _, durable := range []bool{true, false} {
-		if err := h.bus.Publish("config/head", []byte("1"), durable); err != nil {
-			t.Fatal(err)
-		}
-		if n, want := <-held, map[bool]int{true: 1, false: 0}[durable]; n != want {
-			t.Fatalf("durable %v: %d outbox rows during delivery", durable, n)
+func (h *harness) eventually(done func() bool) {
+	h.t.Helper()
+	for start := time.Now(); !done(); time.Sleep(10 * time.Millisecond) {
+		if time.Since(start) > 5*time.Second {
+			h.t.Fatal("waited in vain")
 		}
 	}
-	if n := h.rows("outbox", "1"); n != 0 {
-		t.Fatalf("%d outbox rows after delivery", n)
-	}
 }
 
-// Nothing is retained: an event reports a change, and one missed is read from state, not kept for later.
-func TestNothingIsRetained(t *testing.T) {
+func rows(t *testing.T, h *harness, table string) int {
+	t.Helper()
+	var n int
+	if err := h.bus.db.QueryRow(`SELECT count(*) FROM ` + table).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// A client authenticates, publishes and subscribes within its grants only.
+func TestClientGrants(t *testing.T) {
 	h := newHarness(t, Options{})
-	agent := h.mustConnect("agent", nil, true)
-	_, _ = agent.Publish(context.Background(), &paho.Publish{Topic: "alias/lan", Payload: []byte("1"), Retain: true})
+	if _, err := Dial(ctx(t), h.socket, "web", "wrong"); err == nil {
+		t.Error("a wrong token was accepted")
+	}
+	if _, err := Dial(ctx(t), h.socket, "stranger", "secret"); err == nil {
+		t.Error("a user without grants was accepted")
+	}
+	web, addon := h.dial("web"), h.dial("addon")
+	if err := web.Subscribe(ctx(t), "config/#"); err != nil {
+		t.Fatal(err)
+	}
+	if web.Subscribe(ctx(t), "alias/#") == nil {
+		t.Error("web subscribed to alias/#")
+	}
+	if addon.Subscribe(ctx(t), "alias/lan/#") != nil || addon.Subscribe(ctx(t), "#") == nil {
+		t.Error("the addon's subscribe grants were not applied")
+	}
+	if addon.Publish(ctx(t), "config/head", []byte("{}"), false) == nil {
+		t.Error("addon published to config/head")
+	}
+	if err := addon.Publish(ctx(t), "alias/lan", []byte(`{"v":1}`), true); err != nil {
+		t.Fatal(err)
+	}
+	if web.Consume(ctx(t), "mine", "alias/#") == nil {
+		t.Error("web consumed alias/#")
+	}
+	h.publish("config/head", "1", false)
+	if d := receive(t, web.Messages()); d.Topic != "config/head" || string(d.Payload) != "1" {
+		t.Fatalf("got %+v", d)
+	}
+	nothing(t, web.Messages())
+}
+
+// A client's durable consumer gets what it has not acked again when it reconnects, and not what it acked.
+func TestClientConsume(t *testing.T) {
+	h := newHarness(t, Options{})
+	web := h.dial("web")
+	if err := web.Consume(ctx(t), "ui", "config/#"); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 3 {
+		h.publish("config/head", strconv.Itoa(i), true)
+	}
+	var last Delivery
+	for range 3 {
+		last = receive(t, web.Messages())
+		if last.Consumer != "ui" {
+			t.Fatalf("got %+v", last)
+		}
+	}
+	if err := web.Ack("ui", last.Seq-1); err != nil { // the first two
+		t.Fatal(err)
+	}
 	time.Sleep(100 * time.Millisecond)
-	addon := h.mustConnect("addon", nil, true)
-	addon.subscribe(t, "alias/#")
-	addon.nothing(t)
+	web.Close()
+	h.restart()
+	web = h.dial("web")
+	if err := web.Consume(ctx(t), "ui", "config/#"); err != nil {
+		t.Fatal(err)
+	}
+	if d := receive(t, web.Messages()); string(d.Payload) != "2" {
+		t.Fatalf("got %+v, want only the unacked 2", d)
+	}
+	nothing(t, web.Messages())
 }
 
-// A store whose rows cannot be loaded fails Open with ErrStore, so the engine can set it aside.
-func TestUnloadableStoreIsErrStore(t *testing.T) {
+// A consumer gets at most window events before it acks.
+func TestClientConsumeWindow(t *testing.T) {
 	h := newHarness(t, Options{})
-	h.bus.Close()
-	db, err := sql.Open("sqlite", "file:"+h.path)
-	if err != nil {
+	web := h.dial("web")
+	if err := web.Consume(ctx(t), "ui", "config/#"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = db.Exec(`INSERT INTO mqtt_state(kind, key, value) VALUES (?, 'broken', x'00ff')`, storage.ClientKey); err != nil {
+	for i := range window + 10 {
+		h.publish("config/head", strconv.Itoa(i), true)
+	}
+	var last Delivery
+	for range window {
+		last = receive(t, web.Messages())
+	}
+	nothing(t, web.Messages())
+	if err := web.Ack("ui", last.Seq); err != nil {
 		t.Fatal(err)
 	}
-	db.Close()
-	if _, err = Open(Options{Path: h.path, Grants: testGrants}); !errors.Is(err, ErrStore) {
+	for range 10 {
+		receive(t, web.Messages())
+	}
+}
+
+// A consumer's name is read by one attachment at a time: a new one takes it over.
+func TestConsumerTakeover(t *testing.T) {
+	h := newHarness(t, Options{})
+	first, second := h.dial("web"), h.dial("web")
+	if err := first.Consume(ctx(t), "ui", "config/#"); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Consume(ctx(t), "ui", "config/#"); err != nil {
+		t.Fatal(err)
+	}
+	h.publish("config/head", "1", true)
+	receive(t, second.Messages())
+	nothing(t, first.Messages())
+}
+
+// A store the bus cannot open is ErrStore, so the engine can set it aside.
+func TestUnusableStoreIsErrStore(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bus.db")
+	if err := os.WriteFile(path, []byte("not a database, not even close to one"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(Options{Path: path}); !errors.Is(err, ErrStore) {
 		t.Fatalf("Open: %v", err)
 	}
 }
 
-// A client may hold only its own user's sessions, and may not ask the broker to publish for it.
-func TestConnectRules(t *testing.T) {
-	h := newHarness(t, Options{})
-	try := func(c *paho.Connect) error {
-		t.Helper()
-		conn, err := net.Dial("tcp", h.addr)
-		if err != nil {
-			t.Fatal(err)
-		}
-		client := paho.NewClient(paho.ClientConfig{Conn: conn})
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		c.Username, c.UsernameFlag, c.Password, c.PasswordFlag = "agent", true, []byte("secret"), true
-		_, err = client.Connect(ctx, c)
-		if err == nil {
-			client.Disconnect(&paho.Disconnect{})
-		}
-		return err
-	}
-	for _, id := range []string{"agent", "agent/7"} {
-		if err := try(&paho.Connect{ClientID: id, CleanStart: true}); err != nil {
-			t.Errorf("%s refused: %v", id, err)
-		}
-	}
-	for _, id := range []string{"notify", "agents", "agent:7", "agent/7:x"} {
-		if err := try(&paho.Connect{ClientID: id, CleanStart: true}); err == nil {
-			t.Errorf("%s accepted", id)
-		}
-	}
-	will := &paho.Connect{ClientID: "agent", CleanStart: true, WillMessage: &paho.WillMessage{Topic: "alias/lan", Payload: []byte("x")}}
-	if err := try(will); err == nil {
-		t.Error("a Will accepted")
-	}
-}
-
-// What the bus holds for a client keeps its topic: the client gets no outbound aliases, and a held message is kept
-// as long as its session, not a day.
-func TestHeldMessagesKeepTopicAndAge(t *testing.T) {
-	h := newHarness(t, Options{})
-	conn, err := net.Dial("tcp", h.addr)
+// A consumer that is kept but whose events aged out of the log is told of the gap.
+func TestGapByAge(t *testing.T) {
+	h := newHarness(t, Options{Retention: time.Hour})
+	stop, err := h.bus.Consume("notify", "config/#", func(Message) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := paho.NewClient(paho.ClientConfig{Conn: conn, EnableManualAcknowledgment: true})
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	aliases := uint16(10)
-	if _, err = c.Connect(ctx, &paho.Connect{ClientID: "web", Username: "web", UsernameFlag: true, Password: []byte("secret"), PasswordFlag: true,
-		Properties: &paho.ConnectProperties{TopicAliasMaximum: &aliases}}); err != nil {
+	stop()
+	h.publish("config/head", "1", true)
+	if _, err = h.bus.db.Exec(`UPDATE events SET time = time - 7200`); err != nil {
 		t.Fatal(err)
 	}
-	defer c.Disconnect(&paho.Disconnect{})
-	if _, err = c.Subscribe(ctx, &paho.Subscribe{Subscriptions: []paho.SubscribeOptions{{Topic: "config/#", QoS: 1}}}); err != nil {
+	if err = h.bus.prune(time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	for range 2 {
-		if err = h.bus.Publish("config/head", []byte("1"), true); err != nil {
-			t.Fatal(err)
-		}
+	got := make(chan Message, 2)
+	if _, err = h.bus.Consume("notify", "config/#", func(m Message) error { got <- m; return nil }); err != nil {
+		t.Fatal(err)
 	}
-	cl, _ := h.bus.server.Clients.Get("web")
-	h.eventually("both held", func() bool { return cl.State.Inflight.Len() == 2 })
-	for _, pk := range cl.State.Inflight.GetAll(false) {
-		if pk.TopicName != "config/head" {
-			t.Fatalf("held message topic %q", pk.TopicName)
-		}
+	if m := receive(t, got); !m.Gap {
+		t.Fatalf("got %+v, want the gap", m)
 	}
-	twoDays := time.Now().Unix() + 2*24*3600
-	if dropped := cl.ClearExpiredInflights(twoDays, h.bus.server.Options.Capabilities.MaximumMessageExpiryInterval); len(dropped) != 0 {
-		t.Fatalf("dropped %v after two days", dropped)
-	}
-}
-
-// forget removes one client's rows, by bytes: a multibyte ID loses all of its own and none of its neighbours'.
-func TestForgetRemovesOneClient(t *testing.T) {
-	h := newHarness(t, Options{})
-	keys := map[string]string{
-		"web/é:config/#": storage.SubscriptionKey, "web/é:1": storage.InflightKey,
-		"web/éx:1": storage.InflightKey, "web:1": storage.InflightKey, "web/:1": storage.InflightKey,
-	}
-	for key, kind := range keys {
-		if _, err := h.bus.store.db.Exec(`INSERT INTO mqtt_state(kind, key, value) VALUES (?, ?, x'00')`, kind, key); err != nil {
-			t.Fatal(err)
-		}
-	}
-	h.bus.store.forget("web/é")
-	if n := h.rows("mqtt_state", "key LIKE 'web/é:%'"); n != 0 {
-		t.Fatalf("%d of its rows left", n)
-	}
-	if n := h.rows("mqtt_state", "key IN ('web/éx:1', 'web:1', 'web/:1')"); n != 3 {
-		t.Fatalf("%d of 3 neighbouring rows left", n)
-	}
-}
-
-// User names cannot overlap as client IDs: none may hold the slash or the colon an ID is built with.
-func TestUserNamesCannotOverlap(t *testing.T) {
-	for _, user := range []string{"", "agent/team", "agent:team"} {
-		if _, err := Open(Options{Path: filepath.Join(t.TempDir(), "bus.db"), Grants: map[string]Grants{"agent": {}, user: {}}}); err == nil {
-			t.Errorf("user name %q accepted", user)
-		}
-	}
+	nothing(t, got)
 }

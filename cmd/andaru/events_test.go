@@ -24,7 +24,7 @@ func TestRealizeTellsTheBusOfEachApply(t *testing.T) {
 	}
 	events, err := bus.Open(bus.Options{
 		Path: filepath.Join(dir, "bus.db"), Grants: map[string]bus.Grants{"realize": {Publish: []string{"apply/+"}}},
-		Authenticate: func(_, _ []byte) bool { return true }, Listeners: map[string]net.Listener{"root": listener},
+		Authenticate: func(_, _ string) bool { return true }, Listeners: map[string]net.Listener{"root": listener},
 	})
 	if err != nil {
 		t.Fatal(err)

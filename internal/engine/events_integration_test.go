@@ -154,9 +154,9 @@ func TestEventStreamFollowsTheSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	next(`"type":"config.head.changed"`)
-	// A payload that is not JSON could carry line breaks that end its event and add fields: it is dropped.
-	if err = events.Publish("apply/9", []byte("{}\r\rdata: injected"), false); err != nil {
-		t.Fatal(err)
+	// A payload that is not JSON could carry line breaks that end its event and add fields: the bus refuses it.
+	if err = events.Publish("apply/9", []byte("{}\r\rdata: injected"), false); err == nil {
+		t.Fatal("the bus took a payload that is not JSON")
 	}
 	payload, _ := bus.NewEvent("apply.changed", "realize", map[string]int{"id": 3})
 	if err = events.Publish("apply/3", payload, false); err != nil {

@@ -57,7 +57,7 @@ func startBus(path, socket string) (*bus.Bus, func() error, error) {
 		Path:   path,
 		Grants: map[string]bus.Grants{"realize": {Publish: []string{"apply/+"}}},
 		// The socket is root's alone, so whoever connects is trusted with the grants of the name it gives.
-		Authenticate: func(_, _ []byte) bool { return true },
+		Authenticate: func(_, _ string) bool { return true },
 		Listeners:    map[string]net.Listener{"root": listener},
 		Logger:       slog.Default().With("component", "bus"),
 	})

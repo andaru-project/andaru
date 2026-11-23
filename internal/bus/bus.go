@@ -1,28 +1,25 @@
-// Package bus is Andaru's event bus: an MQTT 5 broker embedded in the engine,
-// with its sessions and undelivered messages kept in SQLite.
+// Package bus is Andaru's event bus: a log of events kept in SQLite, with live subscribers in memory and durable
+// consumers that read the log from a cursor.
 //
-// A durable event is published with QoS 1 and reaches every subscriber with a
-// persistent session at least once, across restarts. A non-durable event is
-// QoS 0 and is lost if a process dies. When the bus cannot keep a durable
-// subscriber's messages (a store write fails, or the subscriber falls
-// MaximumInflight messages behind), it discards that subscriber's session;
-// the subscriber sees Session Present off when it reconnects and knows it may
-// have missed events.
+// A durable event is written to the log before Publish returns. Each durable consumer reads the log after its
+// cursor and moves the cursor when it has handled an event, so it gets every durable event at least once, across
+// restarts of the bus and of the consumer. A non-durable event is only handed to the live subscribers, and is
+// lost if a process dies. A consumer that falls behind the log's retention is told it missed events (a gap) and
+// carries on from the oldest event kept.
 package bus
 
 import (
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
-	"strings"
-	"sync/atomic"
+	"sync"
+	"time"
 
-	"github.com/google/uuid"
-	mqtt "github.com/mochi-mqtt/server/v2"
-	"github.com/mochi-mqtt/server/v2/listeners"
-	"github.com/mochi-mqtt/server/v2/packets"
+	_ "modernc.org/sqlite"
 )
 
 // Grants are the topic filters a client may publish to and subscribe to.
@@ -32,135 +29,192 @@ type Grants struct {
 }
 
 type Options struct {
-	// Path is the SQLite file holding sessions, undelivered messages and the outbox.
+	// Path is the SQLite file holding the log and the consumers' cursors.
 	Path string
-	// Grants by MQTT user name. A client whose user name has no grants cannot connect.
+	// Grants by user name. A client whose user name has no grants cannot connect.
 	Grants map[string]Grants
-	// Authenticate checks a client on Listeners. Clients connecting through Dial
-	// are the engine's own and are not asked. Nil refuses every listener client.
-	Authenticate func(username, password []byte) bool
+	// Authenticate checks a client's user name and token on Listeners. Nil refuses every client.
+	Authenticate func(user, token string) bool
 	// Listeners by ID, for clients outside the engine.
 	Listeners map[string]net.Listener
-	// MaximumInflight is how many unacknowledged messages a client may hold
-	// before its session is discarded. Zero means 8192.
-	MaximumInflight uint16
-	// MaximumSessionExpiry caps, in seconds, how long a disconnected session
-	// is kept. Zero means seven days.
-	MaximumSessionExpiry uint32
-	Logger               *slog.Logger
+	// Retention is how long the log keeps an event, and how long a consumer nobody attaches is kept. Zero means
+	// seven days.
+	Retention time.Duration
+	Logger    *slog.Logger
 }
 
-// ErrStore wraps a failure to open or load the store at Options.Path: a damaged file, or a disk that fails while
-// it is opened.
+// Message is an event as a subscriber or consumer gets it. Seq orders durable events; it is 0 for an event a
+// live subscriber got that was not durable. Gap is a message of its own: events this consumer should have had
+// were pruned before it read them.
+type Message struct {
+	Seq     int64
+	Topic   string
+	Payload json.RawMessage
+	Gap     bool
+}
+
+// ErrStore wraps a failure to open the store at Options.Path: a damaged file, or a disk that fails while it is
+// opened.
 var ErrStore = errors.New("bus store unusable")
 
 type Bus struct {
-	server *mqtt.Server
-	store  *store
-	engine *pipeListener
-	// subscriptions numbers inline subscriptions, which mochi tells apart by filter and number.
-	subscriptions atomic.Int64
+	db  *sql.DB
+	opt Options
+	log *slog.Logger
+
+	mu        sync.Mutex
+	subs      map[int]*subscriber
+	nextSub   int
+	attached  map[string]*attachment // durable consumers being read, by name
+	wake      chan struct{}          // closed and replaced at each durable event
+	listeners []net.Listener
+	conns     map[*conn]struct{}
+
+	closed chan struct{}
+	done   sync.WaitGroup
 }
 
-const engineListener = "engine"
+type subscriber struct {
+	filter  string
+	deliver func(Message) // must not block
+}
 
-// Open starts the broker, loads the stored sessions and publishes whatever an
-// earlier run left in the outbox.
+// Open opens the store, prunes it and starts serving Listeners.
 func Open(o Options) (*Bus, error) {
-	// A client ID is its user name, alone or before a slash, and holds no colon; with names of that form, no two
-	// users can claim the same ID.
-	for user := range o.Grants {
-		if user == "" || strings.ContainsAny(user, "/:") {
-			return nil, fmt.Errorf("bus: user name %q is empty or holds a slash or a colon", user)
-		}
-	}
 	if o.Logger == nil {
 		o.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	if o.MaximumSessionExpiry == 0 {
-		o.MaximumSessionExpiry = 7 * 24 * 3600
+	if o.Retention == 0 {
+		o.Retention = 7 * 24 * time.Hour
 	}
-	capabilities := mqtt.NewDefaultServerCapabilities()
-	capabilities.MaximumSessionExpiryInterval = o.MaximumSessionExpiry
-	// An event is news of a change, read from state when missed; a retained one would outlive what it reports.
-	capabilities.RetainAvailable = 0
-	// mochi drops a held message a day old even when its publisher set no expiry, and the session would go on
-	// without it. A durable message is kept as long as its session.
-	capabilities.MaximumMessageExpiryInterval = 0
-	if o.MaximumInflight != 0 {
-		capabilities.MaximumInflight = o.MaximumInflight
-	}
-	server := mqtt.New(&mqtt.Options{InlineClient: true, Logger: o.Logger, Capabilities: capabilities})
-
-	st := &store{server: server, maximumInflight: int(capabilities.MaximumInflight)}
-	if err := server.AddHook(&access{grants: o.Grants, authenticate: o.Authenticate}, nil); err != nil {
-		return nil, err
-	}
-	if err := server.AddHook(st, o.Path); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrStore, err)
-	}
-	engine := newPipeListener()
-	b := &Bus{server: server, store: st, engine: engine}
-	if err := server.AddListener(listeners.NewNet(engineListener, engine)); err != nil {
-		server.Close()
-		return nil, err
-	}
-	for id, l := range o.Listeners {
-		if id == engineListener {
-			server.Close()
-			return nil, errors.New("bus: listener ID engine is reserved")
-		}
-		if err := server.AddListener(listeners.NewNet(id, l)); err != nil {
-			server.Close()
-			return nil, err
+	for user := range o.Grants {
+		if user == "" {
+			return nil, errors.New("bus: empty user name")
 		}
 	}
-	// With no listeners or hooks from configuration, Serve fails only on loading the store.
-	if err := server.Serve(); err != nil {
-		server.Close()
+	db, err := openStore(o.Path)
+	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrStore, err)
 	}
-	if err := st.drain(); err != nil {
-		server.Close()
+	b := &Bus{db: db, opt: o, log: o.Logger, subs: map[int]*subscriber{}, attached: map[string]*attachment{},
+		wake: make(chan struct{}), conns: map[*conn]struct{}{}, closed: make(chan struct{})}
+	if err = b.prune(time.Now()); err != nil {
+		db.Close()
 		return nil, fmt.Errorf("%w: %w", ErrStore, err)
+	}
+	b.done.Add(1)
+	go b.pruneEvery(time.Hour)
+	for _, l := range o.Listeners {
+		b.listeners = append(b.listeners, l)
+		b.done.Add(1)
+		go b.serve(l)
 	}
 	return b, nil
 }
 
-func (b *Bus) Close() error { return b.server.Close() }
-
-// Dial connects one of the engine's own MQTT clients, in memory. Its user
-// name still needs grants.
-func (b *Bus) Dial() (net.Conn, error) { return b.engine.dial() }
-
-// Publish sends an event from the engine. A durable event goes through the
-// outbox, so a crash before it reaches every subscriber's session publishes it
-// again on the next start.
-func (b *Bus) Publish(topic string, payload []byte, durable bool) error {
-	if !durable {
-		return b.server.Publish(topic, payload, false, 0)
-	}
-	key := "engine:" + uuid.NewString()
-	if err := b.store.outboxPut(key, topic, payload); err != nil {
-		return err
-	}
-	if err := b.server.Publish(topic, payload, false, 1); err != nil {
-		return err
-	}
-	return b.store.outboxDelete(key)
-}
-
-// Subscribe calls handler for every event on filter, in the engine and without
-// acknowledgement: non-durable. A durable subscriber in the engine uses Dial.
-// handler runs in the publisher's goroutine and must not block. The returned
-// function ends the subscription.
-func (b *Bus) Subscribe(filter string, handler func(topic string, payload []byte)) (func(), error) {
-	id := int(b.subscriptions.Add(1))
-	err := b.server.Subscribe(filter, id, func(_ *mqtt.Client, _ packets.Subscription, pk packets.Packet) {
-		handler(pk.TopicName, pk.Payload)
-	})
+func openStore(path string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, err
 	}
-	return func() { _ = b.server.Unsubscribe(filter, id) }, nil
+	db.SetMaxOpenConns(1)
+	if _, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS events (
+			seq INTEGER PRIMARY KEY AUTOINCREMENT, topic TEXT NOT NULL, payload BLOB NOT NULL, time INTEGER NOT NULL);
+		CREATE INDEX IF NOT EXISTS events_time ON events (time);
+		CREATE TABLE IF NOT EXISTS consumers (
+			name TEXT PRIMARY KEY, filter TEXT NOT NULL, cursor INTEGER NOT NULL, seen INTEGER NOT NULL) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS expired (name TEXT PRIMARY KEY, time INTEGER NOT NULL) WITHOUT ROWID;
+		CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL) WITHOUT ROWID`); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
+// Close stops the listeners and the clients' connections, waits for them, and closes the store.
+func (b *Bus) Close() error {
+	b.mu.Lock()
+	select {
+	case <-b.closed:
+		b.mu.Unlock()
+		return nil
+	default:
+	}
+	close(b.closed)
+	for _, l := range b.listeners {
+		_ = l.Close()
+	}
+	for c := range b.conns {
+		_ = c.nc.Close()
+	}
+	b.mu.Unlock()
+	b.done.Wait()
+	return b.db.Close()
+}
+
+// Publish sends an event from the engine. A durable event is in the log when Publish returns; the payload must be
+// JSON.
+func (b *Bus) Publish(topic string, payload []byte, durable bool) error {
+	if !validTopic(topic) {
+		return fmt.Errorf("bus: invalid topic %q", topic)
+	}
+	if !json.Valid(payload) {
+		return errors.New("bus: the payload is not JSON")
+	}
+	m := Message{Topic: topic, Payload: payload}
+	if durable {
+		res, err := b.db.Exec(`INSERT INTO events (topic, payload, time) VALUES (?, ?, ?)`, topic, payload, time.Now().Unix())
+		if err != nil {
+			return err
+		}
+		if m.Seq, err = res.LastInsertId(); err != nil {
+			return err
+		}
+	}
+	b.mu.Lock()
+	targets := make([]*subscriber, 0, len(b.subs))
+	for _, s := range b.subs {
+		if match(s.filter, topic) {
+			targets = append(targets, s)
+		}
+	}
+	if durable {
+		close(b.wake)
+		b.wake = make(chan struct{})
+	}
+	b.mu.Unlock()
+	for _, s := range targets {
+		s.deliver(m)
+	}
+	return nil
+}
+
+// Subscribe calls handler for every event on filter published from now on, durable or not, in the publisher's
+// goroutine: it must not block. The returned function ends the subscription.
+func (b *Bus) Subscribe(filter string, handler func(topic string, payload []byte)) (func(), error) {
+	return b.subscribe(filter, func(m Message) { handler(m.Topic, m.Payload) })
+}
+
+func (b *Bus) subscribe(filter string, deliver func(Message)) (func(), error) {
+	if !validFilter(filter) {
+		return nil, fmt.Errorf("bus: invalid filter %q", filter)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.nextSub++
+	id := b.nextSub
+	b.subs[id] = &subscriber{filter: filter, deliver: deliver}
+	return func() {
+		b.mu.Lock()
+		delete(b.subs, id)
+		b.mu.Unlock()
+	}, nil
+}
+
+// waitFor returns a channel that is closed at the next durable event.
+func (b *Bus) waitFor() <-chan struct{} {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.wake
 }
