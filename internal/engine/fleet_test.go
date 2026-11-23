@@ -165,8 +165,10 @@ func TestFleetAPIAuthzAndTargetLifecycle(t *testing.T) {
 		return r.WithContext(context.WithValue(r.Context(), peerKey{}, peerIdentity{uid: 0, verified: true}))
 	}
 	withCaps := func(r *http.Request, caps ...authz.Capability) *http.Request {
+		const testAccountID = "00000000-0000-4000-8000-000000000001"
 		return r.WithContext(context.WithValue(r.Context(), authenticatedActorKey{}, requestActor{
-			Actor:        authz.Actor{Kind: authz.ActorAccount, ID: "acc_test"},
+			Actor:        authz.Actor{Kind: authz.ActorAccount, ID: testAccountID},
+			AccountID:    testAccountID,
 			Source:       "127.0.0.1",
 			Capabilities: caps,
 		}))
