@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { differences, fieldChanges, objectAt } from './changes';
+import { differences, fieldChanges, objectAt, referenceNames, resolveReferences } from './changes';
 
 const rule = (id: string, name: string) => ({ id, name, enabled: true, action: 'accept' });
 
@@ -43,5 +43,28 @@ describe('fieldChanges', () => {
   });
   it('treats a list order or a missing side as one value', () => {
     expect(fieldChanges(['a', 'b'], ['b', 'a'])).toEqual([{ field: '', before: ['a', 'b'], after: ['b', 'a'] }]);
+  });
+});
+
+describe('referenceNames and resolveReferences', () => {
+  it('resolves known IDs to names, keeps own id fields intact, and disambiguates duplicate names', () => {
+    const live = {
+      zones: [{ id: 'zon_lan', name: 'LAN' }],
+      aliases: { addresses: [{ id: 'adr_nas', name: 'NAS' }], ports: [{ id: 'svc_web', name: 'HTTPS' }] },
+      rules: [rule('rul_1', 'Allow'), rule('rul_2', 'Allow')],
+    };
+    const head = {
+      zones: [{ id: 'zon_lan', name: 'Trusted' }],
+      aliases: { addresses: [{ id: 'adr_nas', name: 'NAS' }], ports: [{ id: 'svc_web', name: 'HTTPS' }] },
+      rules: [rule('rul_2', 'Allow'), rule('rul_1', 'Allow')],
+    };
+    const names = referenceNames(live, head);
+    expect(resolveReferences({ id: 'rul_1', from: { zones: ['zon_lan'], addresses: ['adr_nas'] }, to: { zones: ['zon_firewall'] }, ports: ['svc_web'] }, names)).toEqual({
+      id: 'rul_1',
+      from: { zones: ['Trusted'], addresses: ['NAS'] },
+      to: { zones: ['This firewall'] },
+      ports: ['HTTPS'],
+    });
+    expect(resolveReferences(['rul_1', 'rul_2'], names)).toEqual(['Allow (rul_1)', 'Allow (rul_2)']);
   });
 });

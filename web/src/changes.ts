@@ -1,6 +1,6 @@
 import { useCallback, useRef, useSyncExternalStore } from 'react';
 import type { ApiClient } from './api';
-import type { Applies, Apply } from './types';
+import { firewallZone, type Applies, type Apply } from './types';
 
 // ChangeState is what the shell polls: every apply, and the saved head's version.
 export interface ChangeState {
@@ -134,4 +134,54 @@ export function fieldChanges(before: unknown, after: unknown): Array<{ field: st
     .map((field) => ({ field, before: a[field], after: b[field] }));
   // The caller found the two differ; if no field does (key order), show them whole rather than an empty table.
   return fields.length ? fields : [{ field: '', before, after }];
+}
+
+const namedCollections = [
+  'links',
+  'segments',
+  'zones',
+  'roles',
+  'rules',
+  'aliases.addresses',
+  'aliases.ports',
+  'nat.portForwards',
+  'nat.oneToOne',
+];
+
+function collectionItems(declaration: Declaration, path: string): Array<{ id?: unknown; name?: unknown }> {
+  let node: unknown = declaration;
+  for (const key of path.split('.')) node = node && typeof node === 'object' ? (node as Declaration)[key] : undefined;
+  return Array.isArray(node) ? (node as Array<{ id?: unknown; name?: unknown }>) : [];
+}
+
+// referenceNames maps internal object IDs from live and saved declarations to human-readable names for diff display.
+// Head names win over live names when an object was renamed; if two distinct IDs share a name, each keeps its ID suffix.
+export function referenceNames(live: Declaration, head: Declaration): Map<string, string> {
+  const raw = new Map<string, string>([[firewallZone, 'This firewall']]);
+  for (const source of [live, head]) {
+    for (const path of namedCollections) {
+      for (const item of collectionItems(source, path)) {
+        if (typeof item.id === 'string' && typeof item.name === 'string' && item.name) raw.set(item.id, item.name);
+      }
+    }
+  }
+  const counts = new Map<string, number>();
+  for (const name of raw.values()) counts.set(name, (counts.get(name) ?? 0) + 1);
+  const resolved = new Map<string, string>();
+  for (const [id, name] of raw) resolved.set(id, (counts.get(name) ?? 0) > 1 ? `${name} (${id})` : name);
+  return resolved;
+}
+
+// resolveReferences replaces known object IDs inside a diff value with their display names while keeping own "id" fields intact.
+export function resolveReferences(value: unknown, names: Map<string, string>, key?: string): unknown {
+  if (typeof value === 'string') return key === 'id' ? value : names.get(value) ?? value;
+  if (Array.isArray(value)) return value.map((item) => resolveReferences(item, names));
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [entryKey, entryValue] of Object.entries(value as Record<string, unknown>)) {
+      out[entryKey] = resolveReferences(entryValue, names, entryKey);
+    }
+    return out;
+  }
+  return value;
 }
