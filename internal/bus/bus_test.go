@@ -3,6 +3,7 @@ package bus
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"net"
 	"path/filepath"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/eclipse/paho.golang/paho"
 	mqtt "github.com/mochi-mqtt/server/v2"
+	"github.com/mochi-mqtt/server/v2/hooks/storage"
 	"github.com/mochi-mqtt/server/v2/packets"
 )
 
@@ -515,4 +517,21 @@ func TestNothingIsRetained(t *testing.T) {
 	addon := h.mustConnect("addon", nil, true)
 	addon.subscribe(t, "alias/#")
 	addon.nothing(t)
+}
+
+// A store whose rows cannot be loaded fails Open with ErrStore, so the engine can set it aside.
+func TestUnloadableStoreIsErrStore(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.bus.Close()
+	db, err := sql.Open("sqlite", "file:"+h.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`INSERT INTO mqtt_state(kind, key, value) VALUES (?, 'broken', x'00ff')`, storage.ClientKey); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	if _, err = Open(Options{Path: h.path, Grants: testGrants}); !errors.Is(err, ErrStore) {
+		t.Fatalf("Open: %v", err)
+	}
 }

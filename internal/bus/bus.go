@@ -49,7 +49,8 @@ type Options struct {
 	Logger               *slog.Logger
 }
 
-// ErrStore wraps a failure to open or load the store: the file at Options.Path cannot be used.
+// ErrStore wraps a failure to open or load the store at Options.Path: a damaged file, or a disk that fails while
+// it is opened.
 var ErrStore = errors.New("bus store unusable")
 
 type Bus struct {
