@@ -18,7 +18,8 @@ Some things an administrator must hear about without looking for them: an apply 
 - **The channels are e-mail (SMTP), Telegram, Pushover, ntfy and a generic webhook.** The webhook is an HTTP POST of the notification's JSON, which also covers Slack, Discord, Matrix and Gotify.
 - **Who sees and manages notifications:** `notifications.read` lets an account see the list and the count; `notifications.manage` lets it configure channels and dismiss notifications. A notification that needs another capability to be seen (an apply needs `configuration.read`) is shown only to accounts that have it as well.
 - **The first sources:** a failed or rolled-back apply, settings waiting for upgrade decisions, notifications that may have been missed, and a disk filling up. Alias refreshes (#115) and certificates join when they exist.
-- **Fetching and resolving for #115 runs in a separate unprivileged service**, not in the engine. This design proposes that the same service sends notifications (below).
+- **Fetching and resolving for #115 runs in a separate unprivileged service**, not in the engine, **and the same service sends notifications:** `andaru-outbound`, one process that talks to the outside world (owner, 2026-11-23).
+- **A change to the channels takes effect when it is saved,** without an apply (owner, 2026-11-23). Channels change nothing on the network the box runs.
 
 ## The notification event
 
@@ -66,11 +67,11 @@ The channels are a collection of the saved settings (`notifications.channels`), 
 - **its credentials, as references to the secret store:** the SMTP password, the Telegram bot token, the Pushover application token, an optional ntfy token, and optional webhook headers;
 - **its filter:** a minimum severity, and optional lists of sources and types. An empty list means all.
 
-They are versioned, backed up and restored like every other setting. **Proposed:** a change to the channels takes effect when it is saved, without an apply. Channels change nothing on the network the box runs, so the apply and confirmation that guard the network would only be in the way. *Needs the owner's answer.*
+They are versioned, backed up and restored like every other setting, and take effect when saved, without an apply.
 
 ### The outbound service
 
-Sending needs the network, and the engine has none (`RestrictAddressFamilies=AF_UNIX AF_NETLINK`, no capabilities). **Proposed:** the unprivileged service that #115 adds for fetching and resolving, `andaru-outbound`, also sends notifications. It is one process that talks to the outside world, with no privilege and nothing else. *Needs the owner's answer.*
+Sending needs the network, and the engine has none (`RestrictAddressFamilies=AF_UNIX AF_NETLINK`, no capabilities). The unprivileged service that #115 adds for fetching and resolving, `andaru-outbound`, also sends notifications: one process that talks to the outside world, with no privilege and nothing else.
 
 - **How a notification is handed over.** For each raise that a channel's filter passes, the layer publishes a delivery job durably on `delivery/<channel>`. The job holds the rendered message and what the channel needs to send it, credentials included.
 - **How it is received.** The outbound service subscribes to `delivery/#` with a persistent session. It sends the job, and acknowledges it once the channel accepted it or the job is given up.
@@ -105,6 +106,4 @@ Every channel gets a "Send a test" action on its settings page. The test goes th
 
 ## Open
 
-- Whether channels take effect without an apply (proposed above).
-- Whether `andaru-outbound` is one service for #115 and #116 (proposed above).
 - Quiet hours and rate limits per channel: not proposed. A channel's filter is the only control until they are asked for.
