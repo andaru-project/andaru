@@ -75,7 +75,7 @@ A **subscription** is live and not stored. It gets every event on its filter fro
 - the store was replaced;
 - the consumer came back with another filter, since what the old one skipped is not coming back.
 
-A gap is stored with the consumer, and stays pending until the consumer is done with it, as an event would be: in the engine, until its handler returns nil; over the socket, until the client acks the gap's `seq`. That one signal covers every way a durable consumer can miss an event: the notification subsystem, for one, marks that notifications may have been missed.
+A gap is stored with the consumer, and stays pending until the consumer is done with it, as an event would be: in the engine, until its handler returns nil; over the socket, until the client acks the gap frame's `seq`, a negative token of that frame's own, so that no ack of an event clears it. A consumer's row is written only by the attachment that holds it: one taken over cannot move the new reader's cursor or touch its gap. That one signal covers every way a durable consumer can miss an event: the notification subsystem, for one, marks that notifications may have been missed.
 
 **The store.** A store the bus cannot open is moved aside (`bus.db.unreadable-<time>`) and the bus starts with an empty one, rather than stopping the engine. For ten times the retention, every consumer that comes back to it is told of a gap. A prune that fails when the store opens leaves the store as it is, and is tried again within the hour.
 
@@ -88,13 +88,13 @@ A client connects to a Unix socket and exchanges one JSON object per line each w
    - `publish`, with `topic`, `payload` and `durable`. A durable publish is answered once the event is in the log.
    - `subscribe`, with `filter`.
    - `consume`, with `consumer` and `filter`.
-3. **Acks.** `{"op":"ack","consumer":…,"seq":…}` says a consumer is done with its events up to `seq`, or with its gap when `seq` is the gap's. It gets no answer.
+3. **Acks.** `{"op":"ack","consumer":…,"seq":…}` says a consumer is done with its events up to `seq`, or with its gap when `seq` is the gap frame's token. It gets no answer.
 4. **From the bus.** The bus sends:
    - `{"op":"event","topic":…,"payload":…,"seq":…}`, which names the `consumer` when it is for one;
    - `{"op":"gap","consumer":…,"seq":…}`;
    - `{"op":"detached","consumer":…}`, when another connection took the consumer over.
 
-A write to a client has ten seconds. A client 256 frames behind is disconnected, so it never holds up a publisher. A connection may read 64 consumers and hold 256 subscriptions, and a consumer's name has at most 128 bytes. A refused client is told why before its connection closes. A consumer that cannot read the log tries again after a second. `internal/bus` has the Go client, `bus.Dial`, whose replies never wait for its events to be read.
+A write to a client has ten seconds. A client 256 frames behind is disconnected, so it never holds up a publisher. A connection may read 64 consumers and hold 256 subscriptions, and a consumer's name has at most 128 bytes. A refused client is told why before its connection closes. A consumer that cannot read the log tries again after a second. `internal/bus` has the Go client, `bus.Dial`, whose replies never wait for its events to be read; a client that leaves 4096 deliveries unread loses its connection, as on the bus's side.
 
 ### Sockets
 

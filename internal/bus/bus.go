@@ -18,6 +18,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -73,6 +74,7 @@ type Bus struct {
 	subs      map[int]*subscriber
 	nextSub   int
 	attached  map[string]*attachment // durable consumers being read, by name
+	owners    atomic.Int64           // numbers attachments, from the time the bus opened so as not to repeat after a restart
 	wake      chan struct{}          // closed and replaced at each durable event
 	listeners []net.Listener
 	conns     map[*conn]struct{}
@@ -105,6 +107,7 @@ func Open(o Options) (*Bus, error) {
 	}
 	b := &Bus{db: db, opt: o, log: o.Logger, subs: map[int]*subscriber{}, attached: map[string]*attachment{},
 		wake: make(chan struct{}), conns: map[*conn]struct{}{}, closed: make(chan struct{})}
+	b.owners.Store(time.Now().UnixNano())
 	if o.LostHistory {
 		if _, err = db.Exec(`INSERT INTO meta (key, value) VALUES ('lost_until', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
 			time.Now().Add(10*o.Retention).Unix()); err != nil {
@@ -138,15 +141,20 @@ func openStore(path string) (*sql.DB, error) {
 		CREATE INDEX IF NOT EXISTS events_time ON events (time);
 		CREATE TABLE IF NOT EXISTS consumers (
 			name TEXT PRIMARY KEY, filter TEXT NOT NULL, cursor INTEGER NOT NULL, gap INTEGER NOT NULL DEFAULT 0,
-			seen INTEGER NOT NULL) WITHOUT ROWID;
+			seen INTEGER NOT NULL, owner INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID;
 		CREATE TABLE IF NOT EXISTS expired (name TEXT PRIMARY KEY, time INTEGER NOT NULL) WITHOUT ROWID;
 		CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL) WITHOUT ROWID`); err != nil {
 		db.Close()
 		return nil, err
 	}
-	var hasGap bool
-	if err = db.QueryRow(`SELECT count(*) > 0 FROM pragma_table_info('consumers') WHERE name = 'gap'`).Scan(&hasGap); err == nil && !hasGap {
-		_, err = db.Exec(`ALTER TABLE consumers ADD COLUMN gap INTEGER NOT NULL DEFAULT 0`)
+	for _, column := range []string{"gap", "owner"} {
+		var has bool
+		if err = db.QueryRow(`SELECT count(*) > 0 FROM pragma_table_info('consumers') WHERE name = ?`, column).Scan(&has); err == nil && !has {
+			_, err = db.Exec(`ALTER TABLE consumers ADD COLUMN ` + column + ` INTEGER NOT NULL DEFAULT 0`)
+		}
+		if err != nil {
+			break
+		}
 	}
 	if err != nil {
 		db.Close()

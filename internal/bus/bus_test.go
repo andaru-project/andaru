@@ -453,10 +453,15 @@ func TestGapUntilDone(t *testing.T) {
 	if err = web.Consume(ctx(t), "ui", "config/#"); err != nil {
 		t.Fatal(err)
 	}
-	if d := receive(t, web.Messages()); !d.Gap {
-		t.Fatalf("got %+v, want the unacked gap again", d)
+	again := receive(t, web.Messages())
+	if !again.Gap {
+		t.Fatalf("got %+v, want the unacked gap again", again)
 	}
-	if err = web.Ack("ui", gap.Seq); err != nil {
+	if err = web.Ack("ui", gap.Seq); err != nil { // the first connection's gap: not this one
+		t.Fatal(err)
+	}
+	nothing(t, web.Messages())
+	if err = web.Ack("ui", again.Seq); err != nil {
 		t.Fatal(err)
 	}
 	h.publish("config/head", "1", true)
@@ -698,5 +703,93 @@ func TestRefusalSaysWhy(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "not authorized") {
 			t.Fatalf("refused with %v", err)
 		}
+	}
+}
+
+// A gap handled once stays handled: after a restart in the engine, after a reconnection over the socket.
+func TestHandledGapStaysHandled(t *testing.T) {
+	h := newHarness(t, Options{LostHistory: true})
+	got := make(chan Message, 2)
+	stop, err := h.bus.Consume("notify", "config/#", func(m Message) error { got <- m; return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := receive(t, got); !m.Gap {
+		t.Fatalf("got %+v", m)
+	}
+	web := h.dial("web")
+	if err = web.Consume(ctx(t), "ui", "config/#"); err != nil {
+		t.Fatal(err)
+	}
+	gap := receive(t, web.Messages())
+	if !gap.Gap {
+		t.Fatalf("got %+v", gap)
+	}
+	if err = web.Ack("ui", gap.Seq); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	stop()
+	web.Close()
+	h.restart()
+	if _, err = h.bus.Consume("notify", "config/#", func(m Message) error { got <- m; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	nothing(t, got)
+	web = h.dial("web")
+	if err = web.Consume(ctx(t), "ui", "config/#"); err != nil {
+		t.Fatal(err)
+	}
+	nothing(t, web.Messages())
+}
+
+// A backlog of events a client's consumer does not want is read through to the one it does.
+func TestClientBacklogOfOthers(t *testing.T) {
+	h := newHarness(t, Options{})
+	web := h.dial("web")
+	if err := web.Consume(ctx(t), "ui", "config/head"); err != nil {
+		t.Fatal(err)
+	}
+	web.Close()
+	for i := range 3 * batch {
+		h.publish("config/other", strconv.Itoa(i), true)
+	}
+	h.publish("config/head", `"wanted"`, true)
+	web = h.dial("web")
+	if err := web.Consume(ctx(t), "ui", "config/head"); err != nil {
+		t.Fatal(err)
+	}
+	if d := receive(t, web.Messages()); string(d.Payload) != `"wanted"` {
+		t.Fatalf("got %+v", d)
+	}
+}
+
+func TestPayloadLimit(t *testing.T) {
+	h := newHarness(t, Options{})
+	big := []byte(`"` + strings.Repeat("x", maxPayload) + `"`)
+	if h.bus.Publish("config/head", big, true) == nil {
+		t.Fatal("a payload over the limit was published")
+	}
+}
+
+// An attachment that was taken over writes nothing of the consumer's: not its cursor, not its gap.
+func TestTakenOverAttachmentWritesNothing(t *testing.T) {
+	h := newHarness(t, Options{})
+	old, _, _, err := h.bus.attach("engine/x", "config/head")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, gap, err := h.bus.attach("engine/x", "config/#"); err != nil || !gap {
+		t.Fatalf("taking over with another filter: gap %v, %v", gap, err)
+	}
+	h.bus.saveCursor(old, 99)
+	h.bus.clearGap(old)
+	var cursor int64
+	var gap bool
+	if err = h.bus.db.QueryRow(`SELECT cursor, gap FROM consumers WHERE name = 'engine/x'`).Scan(&cursor, &gap); err != nil {
+		t.Fatal(err)
+	}
+	if cursor == 99 || !gap {
+		t.Fatalf("the old attachment wrote the row: cursor %d, gap %v", cursor, gap)
 	}
 }

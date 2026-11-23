@@ -23,8 +23,14 @@ type Client struct {
 	queued   *sync.Cond
 	messages chan Delivery
 	done     chan struct{}
+	closing  chan struct{}
+	once     sync.Once
 	err      error
 }
+
+// clientQueue is how many deliveries a client may leave unread before its connection is closed, as the bus does
+// with a client that stops reading.
+const clientQueue = 4096
 
 // Delivery is what a client got: an event, a gap or the loss of a consumer to another connection (Detached).
 // Consumer names the consumer it is for, or is empty for a subscription.
@@ -40,7 +46,8 @@ func Dial(ctx context.Context, socket, user, token string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &Client{nc: nc, pending: map[int64]chan error{}, messages: make(chan Delivery), done: make(chan struct{})}
+	c := &Client{nc: nc, pending: map[int64]chan error{}, messages: make(chan Delivery), done: make(chan struct{}),
+		closing: make(chan struct{})}
 	c.queued = sync.NewCond(&c.mu)
 	go c.read()
 	go c.pump()
@@ -75,7 +82,11 @@ func (c *Client) Ack(name string, seq int64) error {
 	return c.write(context.Background(), frame{Op: "ack", Consumer: name, Seq: seq})
 }
 
-func (c *Client) Close() error { return c.nc.Close() }
+// Close ends the connection; deliveries not yet read are dropped.
+func (c *Client) Close() error {
+	c.once.Do(func() { close(c.closing) })
+	return c.nc.Close()
+}
 
 func (c *Client) write(ctx context.Context, f frame) error {
 	line, err := json.Marshal(f)
@@ -120,7 +131,12 @@ func (c *Client) request(ctx context.Context, f frame) error {
 		forget()
 		return ctx.Err()
 	case <-c.done:
-		return c.err
+		select {
+		case err := <-reply: // a reply that came before the connection ended stands
+			return err
+		default:
+			return c.err
+		}
 	}
 }
 
@@ -157,9 +173,16 @@ func (c *Client) read() {
 		}
 		if d != nil {
 			c.mu.Lock()
-			c.queue = append(c.queue, *d)
-			c.queued.Signal()
+			full := len(c.queue) >= clientQueue
+			if !full {
+				c.queue = append(c.queue, *d)
+				c.queued.Signal()
+			}
 			c.mu.Unlock()
+			if full {
+				_ = c.nc.Close() // nobody reads Messages: the connection ends, as the bus would end it
+				break
+			}
 		}
 	}
 	c.mu.Lock()
@@ -184,6 +207,10 @@ func (c *Client) pump() {
 		d := c.queue[0]
 		c.queue = c.queue[1:]
 		c.mu.Unlock()
-		c.messages <- d
+		select {
+		case c.messages <- d:
+		case <-c.closing:
+			return
+		}
 	}
 }

@@ -50,20 +50,27 @@ type conn struct {
 	once   sync.Once
 	mu     sync.Mutex
 	reads  map[string]*reading // the consumers this connection reads, by the client's name
-	stops  []func()
+	stops  []func()            // its subscriptions
 }
 
-// reading is a consumer a connection reads: acks for it are noted here and never block the connection.
+// reading is a consumer a connection reads: acks for it are noted here and never block the connection. Events have
+// positive sequence numbers; a gap frame carries a negative token of its own, and only an ack of that token is
+// the gap's.
 type reading struct {
 	a      *attachment
 	mu     sync.Mutex
 	acked  int64
+	gapAck int64
 	signal chan struct{}
 }
 
 func (r *reading) ack(seq int64) {
 	r.mu.Lock()
-	r.acked = max(r.acked, seq)
+	if seq < 0 {
+		r.gapAck = seq
+	} else {
+		r.acked = max(r.acked, seq)
+	}
 	r.mu.Unlock()
 	select {
 	case r.signal <- struct{}{}:
@@ -71,10 +78,10 @@ func (r *reading) ack(seq int64) {
 	}
 }
 
-func (r *reading) latest() int64 {
+func (r *reading) latest() (int64, int64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.acked
+	return r.acked, r.gapAck
 }
 
 func (b *Bus) serve(l net.Listener) {
@@ -112,9 +119,16 @@ func (c *conn) close() {
 		_ = c.nc.Close()
 		c.mu.Lock()
 		stops := c.stops
+		reads := make([]*reading, 0, len(c.reads))
+		for _, r := range c.reads {
+			reads = append(reads, r)
+		}
 		c.mu.Unlock()
 		for _, stop := range stops {
 			stop()
+		}
+		for _, r := range reads {
+			c.b.release(r.a)
 		}
 		c.b.mu.Lock()
 		delete(c.b.conns, c)
@@ -229,7 +243,7 @@ func (c *conn) subscribe(filter string) error {
 		return errNotGranted
 	}
 	c.mu.Lock()
-	full := len(c.stops) >= maxSubs+maxReads
+	full := len(c.stops) >= maxSubs
 	c.mu.Unlock()
 	if full {
 		return errors.New("too many subscriptions")
@@ -273,7 +287,6 @@ func (c *conn) consume(f frame) error {
 	r := &reading{a: a, signal: make(chan struct{}, 1)}
 	c.mu.Lock()
 	c.reads[f.Consumer] = r
-	c.stops = append(c.stops, func() { c.b.release(a) })
 	c.mu.Unlock()
 	go c.deliver(r, f.Consumer, f.Filter, cursor, gap)
 	return nil
@@ -284,28 +297,31 @@ func (c *conn) deliver(r *reading, name, filter string, cursor int64, gap bool) 
 	b, a := c.b, r.a
 	defer b.done.Done()
 	defer func() {
+		b.mu.Lock()
+		takenOver := b.attached[a.name] != a && b.attached[a.name] != nil
+		b.mu.Unlock()
 		b.release(a)
 		c.mu.Lock()
 		if c.reads[name] == r {
 			delete(c.reads, name)
 		}
 		c.mu.Unlock()
-		select {
-		case <-a.stop:
-			c.send(frame{Op: "detached", Consumer: name}) // taken over: the client may consume the name again
-		default:
+		if takenOver {
+			c.send(frame{Op: "detached", Consumer: name}) // the client may consume the name again
 		}
 	}()
 	sent := cursor
 	var inflight []int64
 	gapSent := false
+	var gapToken int64
 	for {
 		wake := b.waitFor()
 		var pause <-chan time.Time
 		switch {
 		case gap:
 			if !gapSent {
-				if !c.send(frame{Op: "gap", Consumer: name, Seq: cursor}) {
+				gapToken = -b.owners.Add(1)
+				if !c.send(frame{Op: "gap", Consumer: name, Seq: gapToken}) {
 					return
 				}
 				gapSent = true
@@ -318,9 +334,7 @@ func (c *conn) deliver(r *reading, name, filter string, cursor int64, gap bool) 
 				pause = time.After(readRetry)
 			case gapTo > 0:
 				// Events after the last one sent are gone. What was sent and not acked is sent again after the gap.
-				if err := b.markGap(a.name, gapTo); err != nil {
-					b.log.Error("bus consumer gap not stored", "consumer", a.name, "error", err)
-				}
+				b.markGap(a, gapTo)
 				cursor, sent, inflight, gap, gapSent = gapTo, gapTo, nil, true, false
 				continue
 			}
@@ -338,7 +352,7 @@ func (c *conn) deliver(r *reading, name, filter string, cursor int64, gap bool) 
 			}
 			if len(inflight) == 0 && sent > cursor {
 				cursor = sent // nothing waits for an ack: the events read were not this consumer's
-				b.saveCursor(a.name, cursor)
+				b.saveCursor(a, cursor)
 			}
 			if len(msgs) == batch && len(inflight) < window {
 				continue
@@ -346,10 +360,10 @@ func (c *conn) deliver(r *reading, name, filter string, cursor int64, gap bool) 
 		}
 		select {
 		case <-r.signal:
-			seq := r.latest()
+			seq, gapAck := r.latest()
 			if gap {
-				if gapSent && seq >= cursor {
-					b.clearGap(a.name)
+				if gapSent && gapAck == gapToken {
+					b.clearGap(a)
 					gap = false
 				}
 				continue
@@ -362,7 +376,7 @@ func (c *conn) deliver(r *reading, name, filter string, cursor int64, gap bool) 
 			}
 			if seq > cursor && seq <= sent {
 				cursor = seq
-				b.saveCursor(a.name, cursor)
+				b.saveCursor(a, cursor)
 			}
 		case <-wake:
 		case <-pause:

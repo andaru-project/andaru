@@ -19,6 +19,7 @@ import (
 // a new one takes the name over.
 type attachment struct {
 	name   string
+	owner  int64 // stored with the consumer: only this attachment writes its cursor and gap
 	stop   chan struct{}
 	closed bool
 }
@@ -35,6 +36,7 @@ func (b *Bus) attach(name, filter string) (*attachment, int64, bool, error) {
 		return nil, 0, false, fmt.Errorf("bus: invalid filter %q", filter)
 	}
 	now := time.Now().Unix()
+	owner := b.owners.Add(1)
 	var cursor int64
 	var gap bool
 	// One transaction: the store has one connection, so a prune cannot run between the reads and the writes.
@@ -61,12 +63,12 @@ func (b *Bus) attach(name, filter string) (*attachment, int64, bool, error) {
 			}
 		}
 		if err == nil {
-			_, err = tx.Exec(`INSERT INTO consumers (name, filter, cursor, gap, seen) VALUES (?, ?, ?, ?, ?)`, name, filter, cursor, gap, now)
+			_, err = tx.Exec(`INSERT INTO consumers (name, filter, cursor, gap, seen, owner) VALUES (?, ?, ?, ?, ?, ?)`, name, filter, cursor, gap, now, owner)
 		}
 	} else if err == nil {
 		// Events the old filter skipped may match the new one: they are not coming back.
 		gap = gap || stored != filter
-		_, err = tx.Exec(`UPDATE consumers SET filter = ?, gap = ?, seen = ? WHERE name = ?`, filter, gap, now, name)
+		_, err = tx.Exec(`UPDATE consumers SET filter = ?, gap = ?, seen = ?, owner = ? WHERE name = ?`, filter, gap, now, owner, name)
 	}
 	var pruned int64
 	if err == nil {
@@ -82,7 +84,7 @@ func (b *Bus) attach(name, filter string) (*attachment, int64, bool, error) {
 	if err != nil {
 		return nil, 0, false, err
 	}
-	a := &attachment{name: name, stop: make(chan struct{})}
+	a := &attachment{name: name, owner: owner, stop: make(chan struct{})}
 	b.mu.Lock()
 	if old := b.attached[name]; old != nil {
 		old.detach()
@@ -116,26 +118,27 @@ func (b *Bus) pruned() (int64, error) {
 	return seq, err
 }
 
-func (b *Bus) setCursor(name string, cursor int64) error {
-	_, err := b.db.Exec(`UPDATE consumers SET cursor = ?, seen = ? WHERE name = ? AND cursor < ?`, cursor, time.Now().Unix(), name, cursor)
-	return err
-}
+// The consumer's row is written only by the attachment that owns it: one taken over may still be finishing a
+// pass, and must not move the new reader's cursor or touch its gap.
 
-func (b *Bus) saveCursor(name string, cursor int64) {
-	if err := b.setCursor(name, cursor); err != nil {
-		b.log.Error("bus consumer cursor not saved", "consumer", name, "error", err)
+func (b *Bus) saveCursor(a *attachment, cursor int64) {
+	if _, err := b.db.Exec(`UPDATE consumers SET cursor = ?, seen = ? WHERE name = ? AND owner = ? AND cursor < ?`,
+		cursor, time.Now().Unix(), a.name, a.owner, cursor); err != nil {
+		b.log.Error("bus consumer cursor not saved", "consumer", a.name, "error", err)
 	}
 }
 
-// markGap stores a pending gap for name, with its cursor moved past the events that are gone.
-func (b *Bus) markGap(name string, to int64) error {
-	_, err := b.db.Exec(`UPDATE consumers SET gap = 1, cursor = max(cursor, ?), seen = ? WHERE name = ?`, to, time.Now().Unix(), name)
-	return err
+// markGap stores a pending gap, with the cursor moved past the events that are gone.
+func (b *Bus) markGap(a *attachment, to int64) {
+	if _, err := b.db.Exec(`UPDATE consumers SET gap = 1, cursor = max(cursor, ?), seen = ? WHERE name = ? AND owner = ?`,
+		to, time.Now().Unix(), a.name, a.owner); err != nil {
+		b.log.Error("bus consumer gap not stored", "consumer", a.name, "error", err)
+	}
 }
 
-func (b *Bus) clearGap(name string) {
-	if _, err := b.db.Exec(`UPDATE consumers SET gap = 0, seen = ? WHERE name = ?`, time.Now().Unix(), name); err != nil {
-		b.log.Error("bus consumer gap not cleared", "consumer", name, "error", err)
+func (b *Bus) clearGap(a *attachment) {
+	if _, err := b.db.Exec(`UPDATE consumers SET gap = 0, seen = ? WHERE name = ? AND owner = ?`, time.Now().Unix(), a.name, a.owner); err != nil {
+		b.log.Error("bus consumer gap not cleared", "consumer", a.name, "error", err)
 	}
 }
 
@@ -191,7 +194,7 @@ func (b *Bus) Consume(name, filter string, handler func(Message) error) (func(),
 				if !b.retry(a, func() error { return handler(Message{Gap: true, Seq: cursor}) }) {
 					return
 				}
-				b.clearGap(a.name)
+				b.clearGap(a)
 				gap = false
 			}
 			wake := b.waitFor()
@@ -202,9 +205,7 @@ func (b *Bus) Consume(name, filter string, handler func(Message) error) (func(),
 				b.log.Error("bus consumer read failed", "consumer", a.name, "error", err)
 				pause = time.After(readRetry)
 			case gapTo > 0:
-				if err := b.markGap(a.name, gapTo); err != nil {
-					b.log.Error("bus consumer gap not stored", "consumer", a.name, "error", err)
-				}
+				b.markGap(a, gapTo)
 				cursor, gap = gapTo, true
 				continue
 			}
@@ -218,12 +219,12 @@ func (b *Bus) Consume(name, filter string, handler func(Message) error) (func(),
 					if !b.retry(a, func() error { return handler(m) }) {
 						return
 					}
-					b.saveCursor(a.name, m.Seq)
+					b.saveCursor(a, m.Seq)
 				}
 				cursor = m.Seq
 			}
 			if len(msgs) > 0 {
-				b.saveCursor(a.name, cursor) // past the events that were not this consumer's
+				b.saveCursor(a, cursor) // past the events that were not this consumer's
 			}
 			if len(msgs) == batch {
 				continue
