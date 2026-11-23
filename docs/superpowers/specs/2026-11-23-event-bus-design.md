@@ -38,7 +38,7 @@ The web UI follows the bus through the engine: the engine serves the events a br
 
 A topic names what changed, from the general to the specific, with `/` between levels: `config/head`, `apply/<id>`, `alias/<id>`, `certificate/<id>`, `notification/<source>`. A filter may use `+` for one level, and `#` as its last level for any number of levels, none included. A grant covers a filter only if it matches everything the filter can match, so `alias/+` does not cover `alias/#`.
 
-The payload is JSON, and the bus refuses anything else. It holds:
+The payload is JSON of at most 512 KiB, and the bus refuses anything else. It holds:
 
 - **`id`:** unique per event. A subscriber that sees an `id` again drops the duplicate.
 - **`type`:** the event, such as `config.head.changed`. Its name carries a version when its payload changes incompatibly (`…changed.v2`), under the same rules as the settings schema.
@@ -47,18 +47,19 @@ The payload is JSON, and the bus refuses anything else. It holds:
 
 ## The bus
 
-The engine opens the bus before it serves its API, and closes it after. The bus is one SQLite file, `bus.db` in the state directory, with three tables:
+The engine opens the bus before it serves its API, and closes it after. The bus is one SQLite file, `bus.db` in the state directory, with four tables:
 
 - **`events`:** the log of durable events, numbered in order (`seq`).
-- **`consumers`:** each durable consumer, with its filter and its cursor (the last event it is done with).
+- **`consumers`:** each durable consumer, with its filter, its cursor (the last event it is done with) and whether a gap is pending.
 - **`expired`:** the names of consumers removed for being away too long.
+- **`meta`:** how far events were removed by age, and until when a replaced store gives returning consumers a gap.
 
 A consumer can be read in two ways:
 
 - **In the engine (`Consume`).** The engine reads one with a handler: an event is done with once the handler returns nil, and an error retries it after a pause.
 - **Over the socket.** A client reads its own consumer. It is sent at most 64 events before it acknowledges, and its acknowledgements are cumulative.
-  - A client's consumers are named under its user name, so no client reads another's.
-  - A consumer is read by one connection at a time; a new one takes it over.
+  - A client's consumers are named under its user name, apart from the engine's, so no client reads another's. User names hold no `/`.
+  - A consumer is read by one connection at a time. A new one takes it over, and the old connection gets a `detached` frame and may consume the name again.
   - A client that reconnects gets everything after its cursor again.
 
 A new consumer starts at the end of the log, since it reads the state it follows when it starts.
@@ -67,9 +68,15 @@ A **subscription** is live and not stored. It gets every event on its filter fro
 
 **Retention.** The log keeps an event until every consumer is done with it, and for at most the retention period, seven days by default. A consumer nobody reads for the retention period is removed, and its name is kept for ten times as long.
 
-**Gaps.** A consumer that comes back after events it should have had were removed is told so with a gap, before anything else, and reads on from the oldest event kept. This happens when the events aged out, or when the consumer itself was removed. That one signal covers every way a durable consumer can miss an event: the notification subsystem, for one, marks that notifications may have been missed.
+**Gaps.** A consumer is told with a gap, before anything else, when events it should have had are gone. It then reads on from the oldest event kept. A gap arises in three ways:
 
-**The store.** A store the bus cannot open is moved aside (`bus.db.unreadable-<time>`) and the bus starts with an empty one, rather than stopping the engine. Every consumer is then new, and reads the state it follows.
+- the events aged out of the log, whether the consumer was away or attached and behind;
+- the consumer itself was removed for being away;
+- the store was replaced.
+
+A gap is stored with the consumer, and stays pending until the consumer is done with it, as an event would be: in the engine, until its handler returns nil; over the socket, until the client acks the gap's `seq`. That one signal covers every way a durable consumer can miss an event: the notification subsystem, for one, marks that notifications may have been missed.
+
+**The store.** A store the bus cannot open is moved aside (`bus.db.unreadable-<time>`) and the bus starts with an empty one, rather than stopping the engine. For ten times the retention, every consumer that comes back to it is told of a gap. A prune that fails when the store opens leaves the store as it is, and is tried again within the hour.
 
 ### The protocol
 
@@ -80,12 +87,13 @@ A client connects to a Unix socket and exchanges one JSON object per line each w
    - `publish`, with `topic`, `payload` and `durable`. A durable publish is answered once the event is in the log.
    - `subscribe`, with `filter`.
    - `consume`, with `consumer` and `filter`.
-3. **Acks.** `{"op":"ack","consumer":…,"seq":…}` says a consumer is done with its events up to `seq`. It gets no answer.
+3. **Acks.** `{"op":"ack","consumer":…,"seq":…}` says a consumer is done with its events up to `seq`, or with its gap when `seq` is the gap's. It gets no answer.
 4. **From the bus.** The bus sends:
    - `{"op":"event","topic":…,"payload":…,"seq":…}`, which names the `consumer` when it is for one;
-   - `{"op":"gap","consumer":…}`.
+   - `{"op":"gap","consumer":…,"seq":…}`;
+   - `{"op":"detached","consumer":…}`, when another connection took the consumer over.
 
-A write to a client has ten seconds. A client 256 frames behind is disconnected, so it never holds up a publisher. `internal/bus` has the Go client, `bus.Dial`.
+A write to a client has ten seconds. A client 256 frames behind is disconnected, so it never holds up a publisher. A consumer that cannot read the log tries again after a second. `internal/bus` has the Go client, `bus.Dial`, whose replies never wait for its events to be read.
 
 ### Sockets
 
@@ -115,8 +123,8 @@ A browser does not connect to the bus.
 
 1. **The bus** (`internal/bus`), as described above, started by the engine with `bus.sock`. The tests cover:
    - live subscriptions;
-   - consumers in the engine and over the socket: order, retries, the window and acknowledgements, a restart, and a takeover of a name;
-   - gaps by age and by expiry;
+   - consumers in the engine and over the socket: order, retries, the window and acknowledgements, a backlog of several batches, a restart, a new consumer at the end of the log, and a takeover of a name with the old connection still working;
+   - gaps by age, while attached, by expiry and for a replaced store, each pending until done with;
    - pruning;
    - grants at both ends and authentication;
    - an unusable store.

@@ -7,24 +7,30 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"time"
 )
 
 // Client is a connection to the bus from another process. Events for its subscriptions and consumers arrive on
-// Messages; a consumer's events are acked with Ack once handled.
+// Messages; a consumer's events, and its gap, are acked with Ack once handled. Replies never wait for Messages to
+// be read.
 type Client struct {
 	nc       net.Conn
 	writeMu  sync.Mutex
 	mu       sync.Mutex
 	nextID   int64
 	pending  map[int64]chan error
+	queue    []Delivery
+	queued   *sync.Cond
 	messages chan Delivery
 	done     chan struct{}
 	err      error
 }
 
-// Delivery is an event a client got: Consumer names the consumer it is for, or is empty for a subscription.
+// Delivery is what a client got: an event, a gap or the loss of a consumer to another connection (Detached).
+// Consumer names the consumer it is for, or is empty for a subscription.
 type Delivery struct {
 	Consumer string
+	Detached bool
 	Message
 }
 
@@ -34,8 +40,10 @@ func Dial(ctx context.Context, socket, user, token string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &Client{nc: nc, pending: map[int64]chan error{}, messages: make(chan Delivery, queued), done: make(chan struct{})}
+	c := &Client{nc: nc, pending: map[int64]chan error{}, messages: make(chan Delivery), done: make(chan struct{})}
+	c.queued = sync.NewCond(&c.mu)
 	go c.read()
+	go c.pump()
 	if err = c.request(ctx, frame{Op: "hello", User: user, Token: token}); err != nil {
 		_ = c.Close()
 		return nil, err
@@ -43,7 +51,7 @@ func Dial(ctx context.Context, socket, user, token string) (*Client, error) {
 	return c, nil
 }
 
-// Messages are the events for the client's subscriptions and consumers. It is closed when the connection ends.
+// Messages are the events, gaps and detachments for the client. It is closed when the connection ends.
 func (c *Client) Messages() <-chan Delivery { return c.messages }
 
 // Publish sends an event; a durable one is in the bus's log when Publish returns.
@@ -56,25 +64,31 @@ func (c *Client) Subscribe(ctx context.Context, filter string) error {
 	return c.request(ctx, frame{Op: "subscribe", Filter: filter})
 }
 
-// Consume reads the durable consumer name: the durable events on filter after its cursor.
+// Consume reads the durable consumer name: its gap if one is pending, then the durable events on filter after its
+// cursor.
 func (c *Client) Consume(ctx context.Context, name, filter string) error {
 	return c.request(ctx, frame{Op: "consume", Consumer: name, Filter: filter})
 }
 
-// Ack says the consumer is done with its events up to seq.
+// Ack says the consumer is done with its events up to seq, or with its gap when seq is the gap's.
 func (c *Client) Ack(name string, seq int64) error {
-	return c.write(frame{Op: "ack", Consumer: name, Seq: seq})
+	return c.write(context.Background(), frame{Op: "ack", Consumer: name, Seq: seq})
 }
 
 func (c *Client) Close() error { return c.nc.Close() }
 
-func (c *Client) write(f frame) error {
+func (c *Client) write(ctx context.Context, f frame) error {
 	line, err := json.Marshal(f)
 	if err != nil {
 		return err
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(writeTimeout)
+	}
+	_ = c.nc.SetWriteDeadline(deadline)
 	_, err = c.nc.Write(append(line, '\n'))
 	return err
 }
@@ -90,19 +104,28 @@ func (c *Client) request(ctx context.Context, f frame) error {
 	f.ID = c.nextID
 	c.pending[f.ID] = reply
 	c.mu.Unlock()
-	if err := c.write(f); err != nil {
+	forget := func() {
+		c.mu.Lock()
+		delete(c.pending, f.ID)
+		c.mu.Unlock()
+	}
+	if err := c.write(ctx, f); err != nil {
+		forget()
 		return err
 	}
 	select {
 	case err := <-reply:
 		return err
 	case <-ctx.Done():
+		forget()
 		return ctx.Err()
 	case <-c.done:
 		return c.err
 	}
 }
 
+// read takes frames off the connection: replies go to their requests at once, deliveries to the queue pump sends
+// to Messages.
 func (c *Client) read() {
 	scanner := bufio.NewScanner(c.nc)
 	scanner.Buffer(make([]byte, 4096), maxFrame)
@@ -111,6 +134,7 @@ func (c *Client) read() {
 		if json.Unmarshal(scanner.Bytes(), &f) != nil {
 			break
 		}
+		var d *Delivery
 		switch f.Op {
 		case "ok", "error":
 			c.mu.Lock()
@@ -125,14 +149,41 @@ func (c *Client) read() {
 				}
 			}
 		case "event":
-			c.messages <- Delivery{Consumer: f.Consumer, Message: Message{Seq: f.Seq, Topic: f.Topic, Payload: f.Payload}}
+			d = &Delivery{Consumer: f.Consumer, Message: Message{Seq: f.Seq, Topic: f.Topic, Payload: f.Payload}}
 		case "gap":
-			c.messages <- Delivery{Consumer: f.Consumer, Message: Message{Gap: true}}
+			d = &Delivery{Consumer: f.Consumer, Message: Message{Seq: f.Seq, Gap: true}}
+		case "detached":
+			d = &Delivery{Consumer: f.Consumer, Detached: true}
+		}
+		if d != nil {
+			c.mu.Lock()
+			c.queue = append(c.queue, *d)
+			c.queued.Signal()
+			c.mu.Unlock()
 		}
 	}
 	c.mu.Lock()
 	c.err = errors.New("bus: connection closed")
+	c.queued.Signal()
 	c.mu.Unlock()
 	close(c.done)
-	close(c.messages)
+}
+
+// pump hands the queue to Messages in order, and closes Messages after the last delivery once the connection ends.
+func (c *Client) pump() {
+	defer close(c.messages)
+	for {
+		c.mu.Lock()
+		for len(c.queue) == 0 && c.err == nil {
+			c.queued.Wait()
+		}
+		if len(c.queue) == 0 {
+			c.mu.Unlock()
+			return
+		}
+		d := c.queue[0]
+		c.queue = c.queue[1:]
+		c.mu.Unlock()
+		c.messages <- d
+	}
 }

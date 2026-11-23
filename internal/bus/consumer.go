@@ -7,9 +7,13 @@ import (
 	"time"
 )
 
-// A durable consumer has a name, a filter and a cursor: the sequence number of the last durable event it is done
-// with. It reads the log after its cursor. A new consumer starts at the end of the log: it reads the state it
-// follows when it starts, and needs only what changes after.
+// A durable consumer has a name, a filter, a cursor (the sequence number of the last durable event it is done
+// with) and maybe a pending gap. It reads the log after its cursor. A new consumer starts at the end of the log: it
+// reads the state it follows when it starts, and needs only what changes after.
+//
+// A gap is pending when events the consumer should have had are gone: they aged out of the log, the consumer was
+// removed for being away, or the store was replaced. The gap is stored with the consumer and delivered before
+// anything else, and stays pending until the consumer is done with it, as an event would.
 
 // attachment is a consumer being read, in the engine or by a client. One name is read by one attachment at a time;
 // a new one takes the name over.
@@ -21,46 +25,50 @@ type attachment struct {
 
 const batch = 100
 
-// attach loads or creates the consumer name with filter, and reports its cursor and whether events it should
-// have had were pruned. It takes the name over from any earlier attachment.
+// readRetry is how long a consumer waits after the log could not be read.
+const readRetry = time.Second
+
+// attach loads or creates the consumer name with filter, and returns its cursor and whether a gap is pending. It
+// takes the name over from any earlier attachment.
 func (b *Bus) attach(name, filter string) (*attachment, int64, bool, error) {
 	if !validFilter(filter) {
 		return nil, 0, false, fmt.Errorf("bus: invalid filter %q", filter)
 	}
 	now := time.Now().Unix()
-	var cursor, pruned int64
-	expired := false
-	err := b.db.QueryRow(`SELECT cursor FROM consumers WHERE name = ?`, name).Scan(&cursor)
+	var cursor int64
+	var gap bool
+	err := b.db.QueryRow(`SELECT cursor, gap FROM consumers WHERE name = ?`, name).Scan(&cursor, &gap)
 	if errors.Is(err, sql.ErrNoRows) {
-		// A consumer that expired comes back to a gap, and reads what is kept; a new one starts at the end.
+		// A consumer that expired, or that the store lost when it was replaced, comes back to a gap; a new one
+		// starts at the end of the log.
 		var res sql.Result
 		if res, err = b.db.Exec(`DELETE FROM expired WHERE name = ?`, name); err == nil {
-			var n int64
-			if n, err = res.RowsAffected(); err == nil && n > 0 {
-				expired = true
-				err = b.db.QueryRow(`SELECT coalesce((SELECT min(seq) FROM events), (SELECT coalesce(max(seq), 0) FROM sqlite_sequence WHERE name = 'events') + 1) - 1`).Scan(&cursor)
-			} else if err == nil {
-				cursor, err = b.tail()
+			var n, lostUntil int64
+			if n, err = res.RowsAffected(); err == nil {
+				err = b.db.QueryRow(`SELECT coalesce((SELECT value FROM meta WHERE key = 'lost_until'), 0)`).Scan(&lostUntil)
+			}
+			if err == nil {
+				if gap = n > 0 || now < lostUntil; !gap {
+					cursor, err = b.tail()
+				}
 			}
 		}
 		if err == nil {
-			_, err = b.db.Exec(`INSERT INTO consumers (name, filter, cursor, seen) VALUES (?, ?, ?, ?)`, name, filter, cursor, now)
+			_, err = b.db.Exec(`INSERT INTO consumers (name, filter, cursor, gap, seen) VALUES (?, ?, ?, ?, ?)`, name, filter, cursor, gap, now)
 		}
 	} else if err == nil {
 		_, err = b.db.Exec(`UPDATE consumers SET filter = ?, seen = ? WHERE name = ?`, filter, now, name)
 	}
+	var pruned int64
 	if err == nil {
-		err = b.db.QueryRow(`SELECT coalesce((SELECT value FROM meta WHERE key = 'pruned'), 0)`).Scan(&pruned)
+		pruned, err = b.pruned()
+	}
+	if err == nil && cursor < pruned {
+		cursor, gap = pruned, true
+		err = b.markGap(name, cursor)
 	}
 	if err != nil {
 		return nil, 0, false, err
-	}
-	gap := expired || cursor < pruned
-	if gap {
-		cursor = pruned
-		if err = b.setCursor(name, cursor); err != nil {
-			return nil, 0, false, err
-		}
 	}
 	a := &attachment{name: name, stop: make(chan struct{})}
 	b.mu.Lock()
@@ -96,54 +104,104 @@ func (b *Bus) tail() (int64, error) {
 	return seq, err
 }
 
+// pruned is the sequence number up to which events were removed by age: a consumer behind it has a gap.
+func (b *Bus) pruned() (int64, error) {
+	var seq int64
+	err := b.db.QueryRow(`SELECT coalesce((SELECT value FROM meta WHERE key = 'pruned'), 0)`).Scan(&seq)
+	return seq, err
+}
+
 func (b *Bus) setCursor(name string, cursor int64) error {
 	_, err := b.db.Exec(`UPDATE consumers SET cursor = ?, seen = ? WHERE name = ? AND cursor < ?`, cursor, time.Now().Unix(), name, cursor)
 	return err
 }
 
-// read returns the durable events after seq, oldest first.
-func (b *Bus) read(after int64) ([]Message, error) {
+func (b *Bus) saveCursor(name string, cursor int64) {
+	if err := b.setCursor(name, cursor); err != nil {
+		b.log.Error("bus consumer cursor not saved", "consumer", name, "error", err)
+	}
+}
+
+// markGap stores a pending gap for name, with its cursor moved past the events that are gone.
+func (b *Bus) markGap(name string, to int64) error {
+	_, err := b.db.Exec(`UPDATE consumers SET gap = 1, cursor = max(cursor, ?), seen = ? WHERE name = ?`, to, time.Now().Unix(), name)
+	return err
+}
+
+func (b *Bus) clearGap(name string) {
+	if _, err := b.db.Exec(`UPDATE consumers SET gap = 0, seen = ? WHERE name = ?`, time.Now().Unix(), name); err != nil {
+		b.log.Error("bus consumer gap not cleared", "consumer", name, "error", err)
+	}
+}
+
+// read returns the durable events after seq, oldest first, or the point the log was pruned to when events after
+// seq are gone.
+func (b *Bus) read(after int64) ([]Message, int64, error) {
+	pruned, err := b.pruned()
+	if err != nil {
+		return nil, 0, err
+	}
+	if after < pruned {
+		return nil, pruned, nil
+	}
 	rows, err := b.db.Query(`SELECT seq, topic, payload FROM events WHERE seq > ? ORDER BY seq LIMIT ?`, after, batch)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	var out []Message
 	for rows.Next() {
 		var m Message
 		if err = rows.Scan(&m.Seq, &m.Topic, &m.Payload); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		out = append(out, m)
 	}
-	return out, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	return out, 0, nil
 }
 
-// Consume reads the durable consumer name in the engine: handler gets each durable event on filter after the
-// consumer's cursor, in order, and a Gap message first if events it should have had were pruned. An event is done
-// with once handler returns nil; an error retries it after a pause. The returned function stops reading and
-// returns once handler will not be called again; it must not be called from handler. The bus closes only once
-// handler has returned.
+// Consume reads the durable consumer name in the engine: handler gets a Gap message first if one is pending, then
+// each durable event on filter after the consumer's cursor, in order. A message is done with once handler returns
+// nil; an error retries it after a pause. The returned function stops reading and returns once handler will not
+// be called again; it must not be called from handler. The bus closes only once handler has returned.
 func (b *Bus) Consume(name, filter string, handler func(Message) error) (func(), error) {
-	a, cursor, gap, err := b.attach("engine/"+name, filter)
+	if !b.track() {
+		return nil, errors.New("bus: closed")
+	}
+	a, cursor, gap, err := b.attach(engineConsumer(name), filter)
 	if err != nil {
+		b.done.Done()
 		return nil, err
 	}
 	exited := make(chan struct{})
-	b.done.Add(1)
 	go func() {
 		defer b.done.Done()
 		defer close(exited)
 		defer b.release(a)
-		if gap && !b.retry(a, func() error { return handler(Message{Gap: true}) }) {
-			return
-		}
 		for {
+			if gap {
+				if !b.retry(a, func() error { return handler(Message{Gap: true, Seq: cursor}) }) {
+					return
+				}
+				b.clearGap(a.name)
+				gap = false
+			}
 			wake := b.waitFor()
-			msgs, err := b.read(cursor)
-			if err != nil {
+			msgs, gapTo, err := b.read(cursor)
+			var pause <-chan time.Time
+			switch {
+			case err != nil:
 				b.log.Error("bus consumer read failed", "consumer", a.name, "error", err)
-				msgs = nil
+				pause = time.After(readRetry)
+			case gapTo > 0:
+				if err := b.markGap(a.name, gapTo); err != nil {
+					b.log.Error("bus consumer gap not stored", "consumer", a.name, "error", err)
+				}
+				cursor, gap = gapTo, true
+				continue
 			}
 			for _, m := range msgs {
 				select {
@@ -151,19 +209,23 @@ func (b *Bus) Consume(name, filter string, handler func(Message) error) (func(),
 					return
 				default:
 				}
-				if match(filter, m.Topic) && !b.retry(a, func() error { return handler(m) }) {
-					return
+				if match(filter, m.Topic) {
+					if !b.retry(a, func() error { return handler(m) }) {
+						return
+					}
+					b.saveCursor(a.name, m.Seq)
 				}
 				cursor = m.Seq
-				if err := b.setCursor(a.name, cursor); err != nil {
-					b.log.Error("bus consumer cursor not saved", "consumer", a.name, "error", err)
-				}
+			}
+			if len(msgs) > 0 {
+				b.saveCursor(a.name, cursor) // past the events that were not this consumer's
 			}
 			if len(msgs) == batch {
 				continue
 			}
 			select {
 			case <-wake:
+			case <-pause:
 			case <-a.stop:
 				return
 			case <-b.closed:
@@ -175,6 +237,24 @@ func (b *Bus) Consume(name, filter string, handler func(Message) error) (func(),
 		b.release(a)
 		<-exited
 	}, nil
+}
+
+// engineConsumer and clientConsumer name consumers so that the engine's and each user's never meet: user names
+// hold no slash.
+func engineConsumer(name string) string       { return "engine/" + name }
+func clientConsumer(user, name string) string { return "client/" + user + "/" + name }
+
+// track counts a goroutine Close waits for, unless the bus is closing.
+func (b *Bus) track() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	select {
+	case <-b.closed:
+		return false
+	default:
+		b.done.Add(1)
+		return true
+	}
 }
 
 // retry calls f until it returns nil, pausing between tries; false when the attachment ends first.
@@ -200,10 +280,16 @@ func (b *Bus) retry(a *attachment, f func() error) bool {
 func (b *Bus) prune(now time.Time) error {
 	horizon := now.Add(-b.opt.Retention).Unix()
 	b.mu.Lock()
+	attached := make([]string, 0, len(b.attached))
 	for name := range b.attached {
-		_, _ = b.db.Exec(`UPDATE consumers SET seen = ? WHERE name = ?`, now.Unix(), name)
+		attached = append(attached, name)
 	}
 	b.mu.Unlock()
+	for _, name := range attached {
+		if _, err := b.db.Exec(`UPDATE consumers SET seen = ? WHERE name = ?`, now.Unix(), name); err != nil {
+			return err
+		}
+	}
 	// An expired consumer leaves its name, so that coming back it is told of the gap rather than started anew.
 	if _, err := b.db.Exec(`INSERT OR REPLACE INTO expired (name, time) SELECT name, ? FROM consumers WHERE seen < ?`, now.Unix(), horizon); err != nil {
 		return err

@@ -25,11 +25,11 @@ var eventsHeartbeat = 25 * time.Second
 
 // openBus starts the event bus with its store in the state directory and its socket where only root reaches it:
 // andaru realize publishes the state of each apply there. A store the bus cannot open is moved aside and the bus
-// starts with an empty one, rather than stopping the engine: every subscriber then finds its session gone, the
-// bus's signal that it may have missed events.
+// starts with an empty one, rather than stopping the engine: every durable consumer that comes back is then told
+// of a gap, the bus's signal that it may have missed events.
 func openBus(stateDir, socket string) (*bus.Bus, func() error, error) {
 	path := filepath.Join(stateDir, "bus.db")
-	events, closeEvents, err := startBus(path, socket)
+	events, closeEvents, err := startBus(path, socket, false)
 	if !errors.Is(err, bus.ErrStore) {
 		return events, closeEvents, err
 	}
@@ -41,14 +41,14 @@ func openBus(stateDir, socket string) (*bus.Bus, func() error, error) {
 			return nil, nil, errors.Join(err, renameErr)
 		}
 	}
-	events, closeEvents, retryErr := startBus(path, socket)
+	events, closeEvents, retryErr := startBus(path, socket, true)
 	if retryErr != nil {
 		return nil, nil, errors.Join(err, retryErr)
 	}
 	return events, closeEvents, nil
 }
 
-func startBus(path, socket string) (*bus.Bus, func() error, error) {
+func startBus(path, socket string, lost bool) (*bus.Bus, func() error, error) {
 	listener, closeListener, err := listenRootSocket(socket, "bus")
 	if err != nil {
 		return nil, nil, err
@@ -59,6 +59,7 @@ func startBus(path, socket string) (*bus.Bus, func() error, error) {
 		// The socket is root's alone, so whoever connects is trusted with the grants of the name it gives.
 		Authenticate: func(_, _ string) bool { return true },
 		Listeners:    map[string]net.Listener{"root": listener},
+		LostHistory:  lost,
 		Logger:       slog.Default().With("component", "bus"),
 	})
 	if err != nil {

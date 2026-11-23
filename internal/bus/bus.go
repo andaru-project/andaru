@@ -16,6 +16,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,7 +41,10 @@ type Options struct {
 	// Retention is how long the log keeps an event, and how long a consumer nobody attaches is kept. Zero means
 	// seven days.
 	Retention time.Duration
-	Logger    *slog.Logger
+	// LostHistory says the store at Path replaces one that was lost: every consumer that comes back within ten
+	// times Retention is told of a gap.
+	LostHistory bool
+	Logger      *slog.Logger
 }
 
 // Message is an event as a subscriber or consumer gets it. Seq orders durable events; it is 0 for an event a
@@ -52,6 +56,9 @@ type Message struct {
 	Payload json.RawMessage
 	Gap     bool
 }
+
+// maxPayload bounds an event's payload, so that every frame that carries one fits a line of the protocol.
+const maxPayload = 512 << 10
 
 // ErrStore wraps a failure to open the store at Options.Path: a damaged file, or a disk that fails while it is
 // opened.
@@ -88,8 +95,8 @@ func Open(o Options) (*Bus, error) {
 		o.Retention = 7 * 24 * time.Hour
 	}
 	for user := range o.Grants {
-		if user == "" {
-			return nil, errors.New("bus: empty user name")
+		if user == "" || strings.ContainsAny(user, "/\x00") {
+			return nil, fmt.Errorf("bus: user name %q is empty or holds a slash", user)
 		}
 	}
 	db, err := openStore(o.Path)
@@ -98,9 +105,16 @@ func Open(o Options) (*Bus, error) {
 	}
 	b := &Bus{db: db, opt: o, log: o.Logger, subs: map[int]*subscriber{}, attached: map[string]*attachment{},
 		wake: make(chan struct{}), conns: map[*conn]struct{}{}, closed: make(chan struct{})}
+	if o.LostHistory {
+		if _, err = db.Exec(`INSERT INTO meta (key, value) VALUES ('lost_until', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+			time.Now().Add(10*o.Retention).Unix()); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("%w: %w", ErrStore, err)
+		}
+	}
+	// A store that opened is kept: a prune that fails now is tried again within the hour.
 	if err = b.prune(time.Now()); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("%w: %w", ErrStore, err)
+		b.log.Error("bus prune failed", "error", err)
 	}
 	b.done.Add(1)
 	go b.pruneEvery(time.Hour)
@@ -123,9 +137,18 @@ func openStore(path string) (*sql.DB, error) {
 			seq INTEGER PRIMARY KEY AUTOINCREMENT, topic TEXT NOT NULL, payload BLOB NOT NULL, time INTEGER NOT NULL);
 		CREATE INDEX IF NOT EXISTS events_time ON events (time);
 		CREATE TABLE IF NOT EXISTS consumers (
-			name TEXT PRIMARY KEY, filter TEXT NOT NULL, cursor INTEGER NOT NULL, seen INTEGER NOT NULL) WITHOUT ROWID;
+			name TEXT PRIMARY KEY, filter TEXT NOT NULL, cursor INTEGER NOT NULL, gap INTEGER NOT NULL DEFAULT 0,
+			seen INTEGER NOT NULL) WITHOUT ROWID;
 		CREATE TABLE IF NOT EXISTS expired (name TEXT PRIMARY KEY, time INTEGER NOT NULL) WITHOUT ROWID;
 		CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL) WITHOUT ROWID`); err != nil {
+		db.Close()
+		return nil, err
+	}
+	var hasGap bool
+	if err = db.QueryRow(`SELECT count(*) > 0 FROM pragma_table_info('consumers') WHERE name = 'gap'`).Scan(&hasGap); err == nil && !hasGap {
+		_, err = db.Exec(`ALTER TABLE consumers ADD COLUMN gap INTEGER NOT NULL DEFAULT 0`)
+	}
+	if err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -145,10 +168,14 @@ func (b *Bus) Close() error {
 	for _, l := range b.listeners {
 		_ = l.Close()
 	}
+	conns := make([]*conn, 0, len(b.conns))
 	for c := range b.conns {
-		_ = c.nc.Close()
+		conns = append(conns, c)
 	}
 	b.mu.Unlock()
+	for _, c := range conns {
+		c.close()
+	}
 	b.done.Wait()
 	return b.db.Close()
 }
@@ -159,8 +186,8 @@ func (b *Bus) Publish(topic string, payload []byte, durable bool) error {
 	if !validTopic(topic) {
 		return fmt.Errorf("bus: invalid topic %q", topic)
 	}
-	if !json.Valid(payload) {
-		return errors.New("bus: the payload is not JSON")
+	if len(payload) > maxPayload || !json.Valid(payload) {
+		return errors.New("bus: the payload is not JSON, or larger than 512 KiB")
 	}
 	m := Message{Topic: topic, Payload: payload}
 	if durable {

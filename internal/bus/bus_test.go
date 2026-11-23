@@ -390,7 +390,8 @@ func TestClientConsumeWindow(t *testing.T) {
 	}
 }
 
-// A consumer's name is read by one attachment at a time: a new one takes it over.
+// A consumer's name is read by one attachment at a time: a new one takes it over, and the old connection is told,
+// keeps working, and may take the name back.
 func TestConsumerTakeover(t *testing.T) {
 	h := newHarness(t, Options{})
 	first, second := h.dial("web"), h.dial("web")
@@ -400,9 +401,160 @@ func TestConsumerTakeover(t *testing.T) {
 	if err := second.Consume(ctx(t), "ui", "config/#"); err != nil {
 		t.Fatal(err)
 	}
+	if d := receive(t, first.Messages()); !d.Detached || d.Consumer != "ui" {
+		t.Fatalf("got %+v, want ui detached", d)
+	}
 	h.publish("config/head", "1", true)
 	receive(t, second.Messages())
 	nothing(t, first.Messages())
+	if err := first.Ack("ui", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Subscribe(ctx(t), "config/#"); err != nil {
+		t.Fatalf("the old connection stopped answering after an ack: %v", err)
+	}
+	if err := first.Consume(ctx(t), "ui", "config/#"); err != nil {
+		t.Fatalf("the old connection could not take the name back: %v", err)
+	}
+}
+
+// A gap stays pending until the consumer is done with it, across restarts: in the engine, until its handler
+// returns nil; over the socket, until the client acks it.
+func TestGapUntilDone(t *testing.T) {
+	h := newHarness(t, Options{Retention: time.Hour, LostHistory: true})
+	got := make(chan Message, 4)
+	stop, err := h.bus.Consume("notify", "config/#", func(m Message) error { got <- m; return errors.New("not yet") })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := receive(t, got); !m.Gap {
+		t.Fatalf("got %+v", m)
+	}
+	stop()
+	h.restart()
+	if _, err = h.bus.Consume("notify", "config/#", func(m Message) error { got <- m; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if m := receive(t, got); !m.Gap {
+		t.Fatalf("after a restart got %+v, want the gap still pending", m)
+	}
+
+	web := h.dial("web")
+	if err = web.Consume(ctx(t), "ui", "config/#"); err != nil {
+		t.Fatal(err)
+	}
+	gap := receive(t, web.Messages())
+	if !gap.Gap {
+		t.Fatalf("got %+v", gap)
+	}
+	web.Close()
+	web = h.dial("web")
+	if err = web.Consume(ctx(t), "ui", "config/#"); err != nil {
+		t.Fatal(err)
+	}
+	if d := receive(t, web.Messages()); !d.Gap {
+		t.Fatalf("got %+v, want the unacked gap again", d)
+	}
+	if err = web.Ack("ui", gap.Seq); err != nil {
+		t.Fatal(err)
+	}
+	h.publish("config/head", "1", true)
+	if d := receive(t, web.Messages()); d.Gap || string(d.Payload) != "1" {
+		t.Fatalf("got %+v, want the event after the acked gap", d)
+	}
+}
+
+// Events pruned while a consumer is attached and behind are a gap too.
+func TestPrunedWhileAttached(t *testing.T) {
+	h := newHarness(t, Options{Retention: time.Hour})
+	got := make(chan Message, 4)
+	blocked, unblock := make(chan struct{}), make(chan struct{})
+	if _, err := h.bus.Consume("notify", "config/#", func(m Message) error {
+		if string(m.Payload) == "1" {
+			close(blocked)
+			<-unblock
+		}
+		got <- m
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.publish("config/head", "1", true)
+	<-blocked // the consumer holds 1; 2 is still only in the log
+	h.publish("config/head", "2", true)
+	if _, err := h.bus.db.Exec(`UPDATE events SET time = time - 7200`); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.bus.prune(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	h.publish("config/head", "3", true)
+	close(unblock)
+	for _, want := range []string{"1", "gap", "3"} {
+		m := receive(t, got)
+		if g := map[bool]string{true: "gap", false: string(m.Payload)}[m.Gap]; g != want {
+			t.Fatalf("got %s, want %s", g, want)
+		}
+	}
+}
+
+// More than a batch of events waiting is read to the end, without a new event to wake the reader.
+func TestBacklog(t *testing.T) {
+	h := newHarness(t, Options{})
+	stop, err := h.bus.Consume("notify", "config/#", func(Message) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop()
+	web := h.dial("web")
+	if err = web.Consume(ctx(t), "ui", "config/#"); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 3 * batch {
+		h.publish("config/head", strconv.Itoa(i), true)
+	}
+	got := make(chan Message, 3*batch)
+	if _, err = h.bus.Consume("notify", "config/#", func(m Message) error { got <- m; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 3 * batch {
+		if m := receive(t, got); string(m.Payload) != strconv.Itoa(i) {
+			t.Fatalf("got %s, want %d", m.Payload, i)
+		}
+	}
+	for i := range 3 * batch {
+		d := receive(t, web.Messages())
+		if string(d.Payload) != strconv.Itoa(i) {
+			t.Fatalf("client got %s, want %d", d.Payload, i)
+		}
+		if err = web.Ack("ui", d.Seq); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A new consumer starts at the end of the log, and stays there across a restart.
+func TestNewConsumerStartsAtTheEnd(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.publish("config/head", "1", true)
+	stop, err := h.bus.Consume("notify", "config/#", func(Message) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop()
+	h.restart()
+	got := make(chan Message, 2)
+	if _, err = h.bus.Consume("notify", "config/#", func(m Message) error { got <- m; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	nothing(t, got)
+}
+
+// User names cannot reach another's consumers: none may hold a slash.
+func TestUserNamesHoldNoSlash(t *testing.T) {
+	if _, err := Open(Options{Path: filepath.Join(t.TempDir(), "bus.db"), Grants: map[string]Grants{"engine/x": {}}}); err == nil {
+		t.Fatal("a user name with a slash was accepted")
+	}
 }
 
 // A store the bus cannot open is ErrStore, so the engine can set it aside.
@@ -439,4 +591,36 @@ func TestGapByAge(t *testing.T) {
 		t.Fatalf("got %+v, want the gap", m)
 	}
 	nothing(t, got)
+}
+
+// A client's ack of anything before its gap does not clear the gap.
+func TestStaleAckLeavesTheGap(t *testing.T) {
+	h := newHarness(t, Options{Retention: time.Hour})
+	web := h.dial("web")
+	if err := web.Consume(ctx(t), "ui", "config/#"); err != nil {
+		t.Fatal(err)
+	}
+	web.Close()
+	h.publish("config/head", "1", true)
+	if _, err := h.bus.db.Exec(`UPDATE events SET time = time - 7200`); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.bus.prune(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		web = h.dial("web")
+		if err := web.Consume(ctx(t), "ui", "config/#"); err != nil {
+			t.Fatal(err)
+		}
+		gap := receive(t, web.Messages())
+		if !gap.Gap || gap.Seq == 0 {
+			t.Fatalf("got %+v, want a gap past event 1", gap)
+		}
+		if err := web.Ack("ui", gap.Seq-1); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(100 * time.Millisecond)
+		web.Close()
+	}
 }
