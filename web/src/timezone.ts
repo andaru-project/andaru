@@ -77,7 +77,7 @@ function offsetFromPart(raw: string | undefined): string {
 }
 
 function getTimestampFormatter(zone: string | undefined): Intl.DateTimeFormat {
-  const key = zone ?? 'local';
+  const key = zone ?? browserTimeZone();
   let formatter = timestampFormatters.get(key);
   if (!formatter) {
     formatter = new Intl.DateTimeFormat('en-US', {
@@ -97,7 +97,7 @@ function getTimestampFormatter(zone: string | undefined): Intl.DateTimeFormat {
 }
 
 function getTimeFormatter(zone: string | undefined): Intl.DateTimeFormat {
-  const key = zone ?? 'local';
+  const key = zone ?? browserTimeZone();
   let formatter = timeFormatters.get(key);
   if (!formatter) {
     formatter = new Intl.DateTimeFormat('en-GB', {
