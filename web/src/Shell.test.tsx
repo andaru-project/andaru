@@ -1,6 +1,7 @@
 import { MemoryRouter } from 'react-router';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ApiClient } from './api';
+import type { Apply } from './types';
 import { Shell } from './Shell';
 import { openStreams } from './test/events';
 import { fetchRoutes, jsonResponse } from './test/fetch';
@@ -105,6 +106,27 @@ it('reads the change state again every 15 seconds after a failed read, until one
   act(() => { vi.advanceTimersByTime(15_000); });
   await answered();
   expect(appliesReads(fetchMock)).toBe(3);
+  act(() => { vi.advanceTimersByTime(30_000); });
+  expect(appliesReads(fetchMock)).toBe(3);
+});
+
+it('reads the change state every 15 seconds while an apply is under way, and not after', async () => {
+  const answered = () => act(async () => { await new Promise((resolve) => setTimeout(resolve)); });
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  let state: Apply['state'] = 'awaiting_confirmation';
+  const fetchMock = fetchRoutes({
+    '/api/v1/applies': () => jsonResponse(200, { pointers, items: [apply({ state })] }),
+    '/api/v1/versions?': { state: 'saved', items: [] },
+  });
+  mount('/system/session');
+  await answered();
+  act(() => { vi.advanceTimersByTime(15_000); });
+  expect(appliesReads(fetchMock)).toBe(2);
+  state = 'confirmed';
+  await answered();
+  act(() => { vi.advanceTimersByTime(15_000); });
+  expect(appliesReads(fetchMock)).toBe(3);
+  await answered();
   act(() => { vi.advanceTimersByTime(30_000); });
   expect(appliesReads(fetchMock)).toBe(3);
 });

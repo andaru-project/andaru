@@ -69,8 +69,12 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   // Saves and applies, from this tab or any other, reach the shell as events; it reads the change state at each.
   // A read waits for no answer still out: one that was served before the change would show it unchanged.
   useEvents(reloadChanges, canReadChanges);
-  // A read that failed is tried again every 15 seconds until one answers: a healthy stream may bring no other event.
-  useVisiblePoll(changes.refresh, retryMilliseconds, canReadChanges && changes.error !== '');
+  // The change state is read again every 15 seconds while a read has failed, until one answers, and while an apply is
+  // activating or awaits confirmation: a healthy stream may bring no other event, and the events are not durable, so
+  // a lost one must not hide the confirmation an apply waits for.
+  const latestState = changes.data?.applies.items[0]?.state;
+  const applying = latestState === 'activating' || latestState === 'awaiting_confirmation';
+  useVisiblePoll(changes.refresh, retryMilliseconds, canReadChanges && (changes.error !== '' || applying));
 
   // Whether the saved settings wait for decisions after an upgrade (settings safe mode). It changes only with a new
   // saved head (an upgrade, a restore, the answers), so it is read again when the head moves, never on a timer:

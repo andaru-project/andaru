@@ -481,10 +481,7 @@ func TestCleanSessionLeavesNothing(t *testing.T) {
 	}
 	h.eventually("the subscription and the held message stored", func() bool { return h.rows("mqtt_state", "key LIKE 'web/é:%'") == 2 })
 	c.Disconnect(&paho.Disconnect{})
-	time.Sleep(100 * time.Millisecond)
-	if n := h.rows("mqtt_state", "key LIKE 'web/é%'"); n != 0 {
-		t.Fatalf("%d rows left", n)
-	}
+	h.eventually("nothing left of the client", func() bool { return h.rows("mqtt_state", "key LIKE 'web/é%'") == 0 })
 }
 
 // An unsubscribed filter is forgotten, so a restart does not bring it back.
