@@ -1,4 +1,4 @@
-import { AccordionChevron, Alert, AppShell, Badge, Burger, Button, Group, Image, Menu, NavLink, Stack, Text, Title } from '@mantine/core';
+import { AccordionChevron, Alert, Anchor, AppShell, Badge, Burger, Button, Group, Image, Menu, NavLink, Stack, Text, Title } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useMatch, useNavigate } from 'react-router';
@@ -16,6 +16,7 @@ import { RolesScreen } from './screens/RolesScreen';
 import { RulesScreen } from './screens/RulesScreen';
 import { SessionScreen } from './screens/SessionScreen';
 import { TokensScreen } from './screens/TokensScreen';
+import { UpgradeScreen } from './screens/UpgradeScreen';
 import { SystemDetailsScreen } from './screens/SystemWidget';
 import { UsersScreen } from './screens/UsersScreen';
 import type { Session, User } from './types';
@@ -67,12 +68,41 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
 
   useVisiblePoll(changes.refresh, pollMilliseconds, canReadChanges);
 
+  // Whether the saved settings wait for decisions after an upgrade (settings safe mode). It changes only with a new
+  // saved head (an upgrade, a restore, the answers), so it is read again when the polled head moves, never on a timer:
+  // the preview is a POST, and polling it would count as activity and keep an idle session alive.
+  // An upgrade that brings decisions for the same saved head moves no head, so a new build or boot reads it again too.
+  const head = changes.data?.head;
+  const build = system.data ? `${system.data.info.version} ${system.data.info.bootedAt ?? ''}` : '';
+  const loadUpgrade = useCallback(() => (canReadChanges && head !== undefined ? api.upgradePreview() : Promise.resolve(undefined)), [api, canReadChanges, head, build]); // eslint-disable-line react-hooks/exhaustive-deps
+  const upgrade = useResource(loadUpgrade, onSessionLost);
+  const upgradeError = upgrade.error;
+  const reloadUpgrade = upgrade.reload;
+  // A check that failed is tried again with each answered poll of the change state, until it reads.
+  const polled = changes.data;
+  useEffect(() => {
+    if (upgradeError && polled) void reloadUpgrade();
+  }, [polled, upgradeError, reloadUpgrade]);
+  const upgradePending = (upgrade.data?.questions.length ?? 0) > 0;
+  const onUpgradePage = useMatch('/system/upgrade') !== null;
+  // The visit opens on the questions once, so the dashboard stays reachable for those who cannot answer.
+  const openedUpgrade = useRef(false);
+  useEffect(() => {
+    if (!upgradePending || openedUpgrade.current) return;
+    openedUpgrade.current = true;
+    if (pathname === '/') navigate('/system/upgrade', { replace: true });
+  }, [upgradePending, pathname, navigate]);
+
   // When the API answers again, show what the server says rather than what was last seen.
   const wasConnected = useRef(connected);
   useEffect(() => {
-    if (connected && !wasConnected.current) void reloadChanges();
+    if (connected && !wasConnected.current) {
+      void reloadChanges();
+      // A check that failed while the box did not answer is tried again; the head may not have moved.
+      if (upgradeError) void reloadUpgrade();
+    }
     wasConnected.current = connected;
-  }, [connected, reloadChanges]);
+  }, [connected, reloadChanges, upgradeError, reloadUpgrade]);
 
   const groups = [
     { label: 'Network', items: [{ to: '/network/interfaces', label: 'Interfaces', visible: capabilities.has('status.read') }] },
@@ -178,9 +208,12 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
           {/* Review and apply owns these controls on its own page. */}
           {/* The Changes page says this itself. Elsewhere, a state that cannot be read must not look like nothing pending. */}
           {!onChangesPage && changes.error && <Alert color="orange" role="alert" title="Whether changes are pending cannot be read">{changes.error}</Alert>}
+          {upgrade.error && !onUpgradePage && <Alert color="orange" role="alert" title="Whether the settings wait for decisions cannot be read">{upgrade.error}</Alert>}
+          {upgradePending && !onUpgradePage && <Alert color="orange" role="status" title="Finish the upgrade">The saved settings need decisions before anything can be saved or applied. <Anchor component={Link} to="/system/upgrade">Answer the questions</Anchor></Alert>}
           {!onChangesPage && <PendingNotice api={api} session={session} state={changes.data} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />}
           <Routes>
             <Route path="/" element={<DashboardScreen api={api} session={session} system={system} onSessionLost={onSessionLost} />} />
+            {canReadChanges && <Route path="/system/upgrade" element={<UpgradeScreen api={api} session={session} onFinished={() => { void reloadUpgrade(); void reloadChanges(); }} onSessionLost={onSessionLost} />} />}
             {pages.filter(([path]) => visible.has(path)).map(([path, element]) => <Route key={path} path={path} element={element} />)}
             <Route path="/system/session" element={<SessionScreen session={session} />} />
             <Route path="*" element={<Navigate to="/" replace />} />

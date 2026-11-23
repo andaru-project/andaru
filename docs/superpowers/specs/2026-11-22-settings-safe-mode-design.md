@@ -1,6 +1,6 @@
 # Safe mode for settings that need a decision
 
-Status: proposed, 2026-11-22, for step 3 of [settings across Andaru versions](2026-11-22-settings-across-andaru-versions-design.md) ([#121](https://github.com/andaru-project/andaru/issues/121)). Decision records, the hold and its API are built; the web page and the console's status line are not. The owner asked for safe mode to be built now, so the mechanism comes before the first breaking change that needs it, tested with a decision record that exists only in the tests. The owner's decisions are under "Owner decisions".
+Status: proposed, 2026-11-22, for step 3 of [settings across Andaru versions](2026-11-22-settings-across-andaru-versions-design.md) ([#121](https://github.com/andaru-project/andaru/issues/121)). Decision records, the hold, its API and the web page are built; the console's status line waits for a console status display. The owner asked for safe mode to be built now, so the mechanism comes before the first breaking change that needs it, tested with a decision record that exists only in the tests. The owner's decisions are under "Owner decisions".
 
 ## The problem
 
@@ -47,7 +47,7 @@ Implemented: the hold keeps no state. Every save whose head has questions answer
 - `POST /api/v1/config/upgrade` takes a choice for every question and `expectedSavedVersion`, the head the questions were worked out from. The engine upgrades the head with those choices, validates the result, and saves it as a new version. The account that answered is its actor, and this Andaru is its writer. An audit event records each choice. The hold then ends in place, without a reboot, since the network was never touched.
 - Answering needs `configuration.write`, the capability that writes the configuration. While no account holds it, the hold lasts until an account manager grants it, which works because roles read provisionally, or until a backup is restored. That is no different from a store nobody can write today.
 
-Implemented: both routes, with `configuration.read` for the preview and `configuration.write` to save. The web page and the console's status line are not built yet.
+Implemented: both routes, with `configuration.read` for the preview and `configuration.write` to save, and the web page (`UpgradeScreen`): the web UI opens on it while decisions wait, and every other page says so. The console has no status display yet; the line comes with one.
 
 The web UI opens on a "Finish the upgrade" page after sign-in, with one card per question listing its objects and choices, the provisional one marked. Accounts without `configuration.write` see the page read-only. The console's status says the settings are waiting for a decision in the web UI.
 

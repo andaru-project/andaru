@@ -163,3 +163,49 @@ it('asks nothing about the box for an account that may not read status', async (
   await screen.findByText('Saved changes are not applied yet');
   expect(fetchMock.mock.calls.map(([url]) => url)).not.toContain('/api/v1/status/system');
 });
+
+const question = { id: 'rename', question: 'Rename the zones?', choices: [{ id: 'keep', label: 'Keep', description: '' }], provisional: 'keep', objects: ['zon_lan'], choice: 'keep', answered: false };
+
+it('opens on Finish the upgrade while the saved settings wait for decisions, and says so on every other page', async () => {
+  fetchRoutes({
+    '/api/v1/applies': unapplied,
+    '/api/v1/versions?': { state: 'saved', items: [] },
+    'POST /api/v1/config/upgrade/preview': { savedVersion: '5', questions: [question] },
+  });
+  mount('/');
+  expect(await screen.findByRole('heading', { name: 'Finish the upgrade' })).toBeInTheDocument();
+  expect(await screen.findByText('Rename the zones?')).toBeInTheDocument();
+  expect(screen.queryByRole('link', { name: 'Answer the questions' })).not.toBeInTheDocument();
+});
+
+it('leaves the dashboard alone when no decision waits', async () => {
+  const fetchMock = fetchRoutes({
+    '/api/v1/applies': unapplied,
+    '/api/v1/versions?': { state: 'saved', items: [] },
+    'POST /api/v1/config/upgrade/preview': { savedVersion: '5', questions: [] },
+  });
+  mount('/');
+  await vi.waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url === '/api/v1/config/upgrade/preview')).toBe(true));
+  expect(screen.queryByRole('heading', { name: 'Finish the upgrade' })).not.toBeInTheDocument();
+  expect(screen.queryByText('Answer the questions')).not.toBeInTheDocument();
+});
+
+it('says when it cannot tell whether decisions wait', async () => {
+  fetchRoutes({
+    '/api/v1/applies': unapplied,
+    '/api/v1/versions?': { state: 'saved', items: [] },
+    'POST /api/v1/config/upgrade/preview': jsonResponse(503, { error: { code: 'STORE_UNAVAILABLE', message: 'Unavailable.' } }),
+  });
+  mount('/system/session');
+  expect(await screen.findByText('Whether the settings wait for decisions cannot be read')).toBeInTheDocument();
+});
+
+it('points to the questions from any other page', async () => {
+  fetchRoutes({
+    '/api/v1/applies': unapplied,
+    '/api/v1/versions?': { state: 'saved', items: [] },
+    'POST /api/v1/config/upgrade/preview': { savedVersion: '5', questions: [question] },
+  });
+  mount('/system/session');
+  expect(await screen.findByRole('link', { name: 'Answer the questions' })).toBeInTheDocument();
+});
