@@ -1,6 +1,5 @@
 import { Alert, Anchor, Button, Drawer, Fieldset, Group, MultiSelect, SegmentedControl, Stack, Switch, Text, Textarea, TextInput } from '@mantine/core';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { Link } from 'react-router';
 import { ApiError, fieldErrors, saveFailure } from '../api';
 import { firewallZone, type Rule, type RuleSide, type Snapshot } from '../types';
 
@@ -16,7 +15,7 @@ interface RuleEditorProps {
 
 const anySide: RuleSide = { zones: [], addresses: [] };
 // The pickers offer the aliases that exist; a literal address or port is entered as an alias first.
-const noAlias = <>No alias by that name. Aliases are made under <Anchor component={Link} to="/firewall/aliases" size="sm">Firewall ▸ Aliases</Anchor>.</>;
+const noAlias = 'No alias by that name. Aliases are made under Firewall ▸ Aliases.';
 
 // The engine is the authority on what a rule may be: its refusals show beside the fields they name.
 const field = /^\/(name|description|action|ports|(?:from|to)\/(?:zones|addresses|not))(?:\/|$)/;
@@ -112,6 +111,7 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onAbandoned
           {sideFields('To', 'to', to, setTo, [{ value: firewallZone, label: 'This firewall' }, ...zones], 'Empty is any network, never this firewall: choose This firewall for traffic to the box itself.')}
           {toFirewall && <Text size="sm" c="dimmed">To this firewall: the rule decides what may reach the box itself, and lets nothing through it.</Text>}
           <MultiSelect label="Ports" description="Port aliases. Empty is any protocol and port." data={portAliases} value={ports} error={errors.get('ports')} searchable clearable nothingFoundMessage={noAlias} onChange={setPorts} />
+          <Text size="xs" c="dimmed">Need a new address or port alias? <Anchor href="/firewall/aliases" target="_blank" rel="noopener noreferrer" size="xs">Open Firewall ▸ Aliases in a new tab</Anchor> so this draft stays open.</Text>
           <Switch label="Log what this rule matches" checked={log} onChange={(event) => setLog(event.currentTarget.checked)} />
             </Stack>
           </Fieldset>
