@@ -1,6 +1,6 @@
 # Notifications
 
-Status: proposed, 2026-11-23, for [#116](https://github.com/andaru-project/andaru/issues/116). It builds on the event bus ([design](2026-11-23-event-bus-design.md), #154). The owner's decisions are under "Owner decisions"; the rest is proposed and marked where it needs an answer.
+Status: proposed, 2026-11-23, for [#116](https://github.com/andaru-project/andaru/issues/116). It builds on the event bus ([design](2026-11-23-event-bus-design.md), #154, #164): a SQLite log with durable consumers that read from a cursor and are told of gaps. The owner's decisions are under "Owner decisions"; the rest is proposed.
 
 ## The problem
 
@@ -32,16 +32,18 @@ The bus payload is the usual envelope (`id`, `type`, `time`, `source`, `data`). 
 - **`link`:** optional, a path in the web UI where it can be acted on, such as `/changes`.
 - **`requires`:** optional, the capability an account needs, besides `notifications.read`, to see it.
 
-A clear carries only `key`. Notifications are published durably (QoS 1): a lost notification is the case this system exists to prevent.
+A clear carries only `key`. Notifications are published durably: a lost notification is the case this system exists to prevent.
+
+**Sources state their notifications when they start.** A source's change and its durable event are written to two stores (the bus's log is its own file), so a crash between the two loses the event. Each source therefore raises what is true, and clears what is not, every time the engine starts: the failed apply, the decisions waiting, the full disk. A raise of an active notification only updates it, so the repeats cost nothing, and a raise lost to a crash comes back on the next start.
 
 ## The notification layer
 
-The layer runs in the engine. It is the bus's first durable subscriber: an MQTT client over the engine's in-process listener (`Bus.Dial`), with a persistent session subscribed to `notification/#`.
+The layer runs in the engine, as the bus's first durable consumer: `Consume("notifications", "notification/#", handler)`.
 
-- **What it keeps.** The active notifications are kept in `notifications.db` in the state directory, keyed by source and key. A raise inserts or updates one, a clear or a dismissal moves it to a bounded history (the last 500, or 30 days), and a dismissal records who dismissed it.
-- **When it acknowledges.** It acknowledges an event only after the event is committed to `notifications.db` and handed to delivery, so a crash in between delivers the event again. A raise is idempotent by key, and a repeated event is recognised by its `id`.
-- **Missed notifications.** When the layer connects and finds no session (`Session Present` off), events may have been lost: a store failure, the in-flight limit, or a session that expired. It raises its own notification, "Notifications may have been missed", with severity `warning`. The notification links to the log.
-- **What it reads at start.** The active list comes from `notifications.db`, so a restart shows the same list.
+- **What it keeps.** The active notifications are kept in `notifications.db` in the state directory, keyed by source and key. A raise inserts or updates one; a clear or a dismissal moves it to a bounded history (the last 500, or 30 days); a dismissal records who dismissed it.
+- **When it is done with an event.** Its handler returns nil only once the event is committed to `notifications.db` and its delivery jobs are published, so the bus delivers the event again after a crash in between. The event's `id` is stored with the change it made: one seen before changes nothing again, and its delivery jobs are published again with their same IDs, which the outbound service recognises.
+- **Missed notifications.** The bus tells the layer of a gap when events it should have had are gone: they aged out while the layer was behind, the layer's consumer was removed for being away, or the bus's store was replaced. The layer then raises its own notification, "Notifications may have been missed", with severity `warning`, linking to the log. The gap is done with once that notification is committed.
+- **What it reads at start.** The active list comes from `notifications.db`, so a restart shows the same list. The layer attaches its consumer before it serves the list, as the bus's design asks of every consumer.
 - **Who may publish.** The bus checks the publish grant; the layer also checks that an event's source matches the topic it came on.
 
 ## The web UI
@@ -49,7 +51,7 @@ The layer runs in the engine. It is the bus's first durable subscriber: an MQTT 
 - **The header** shows the number of active notifications the account may see. The count is coloured by the highest severity among them.
 - **The Notifications page** lists them: subject, severity, source, when, the detail, and the link. Accounts with `notifications.manage` can dismiss one; a dismissed notification comes back if its source raises it again.
 - **A dashboard widget** shows the newest few.
-- **Live updates.** The engine adds `notification/#` to the event stream (`GET /api/v1/events`). Each event the stream sends is filtered per account by `notifications.read` and `requires`. The page reads the list again at each event, as the shell does for the change state.
+- **Live updates.** After each change to its list, the layer publishes a non-durable `notifications/changed` event with no content. The engine adds that topic to the event stream (`GET /api/v1/events`) for accounts with `notifications.read`, and the page reads the list again at each event, as the shell does for the change state. The stream never carries a notification, so only the layer subscribes to `notification/#`, and the list the page reads is filtered per account by the API.
 
 ## Delivery
 
@@ -73,11 +75,12 @@ They are versioned, backed up and restored like every other setting, and take ef
 
 Sending needs the network, and the engine has none (`RestrictAddressFamilies=AF_UNIX AF_NETLINK`, no capabilities). The unprivileged service that #115 adds for fetching and resolving, `andaru-outbound`, also sends notifications: one process that talks to the outside world, with no privilege and nothing else.
 
-- **How a notification is handed over.** For each raise that a channel's filter passes, the layer publishes a delivery job durably on `delivery/<channel>`. The job holds the rendered message and what the channel needs to send it, credentials included.
-- **How it is received.** The outbound service subscribes to `delivery/#` with a persistent session. It sends the job, and acknowledges it once the channel accepted it or the job is given up.
+- **How a notification is handed over.** For each raise that a channel's filter passes, the layer publishes a delivery job durably on `delivery/<channel>`. The job holds its ID (the notification event's `id` and the channel's), the rendered message, and what the channel needs to send it, credentials included.
+- **How it is received.** The outbound service reads its own durable consumer, `deliveries`, on `delivery/#`, through the bus's client. It sends each job and acks it once the channel accepted it or the job is given up. It remembers the IDs of the jobs it sent for a day, so a job published again after a crash is not sent twice.
 - **Retries.** A failed send is retried with backoff for up to an hour, then given up and logged. A channel that fails three jobs in a row raises its own notification, `delivery/<channel>`; that notification is not sent to the failing channel.
-- **Where the outbound service connects.** It is not root, so it cannot reach `bus.sock`. The bus gets a second socket for Andaru's own unprivileged services, at `/run/andaru-services/bus.sock`. Its peer is checked by user ID, as the web socket's is, and `andaru-outbound` connects there with the grants for its user name: subscribe to `delivery/#` (and to its #115 topics), and publish its delivery results and #115 results.
-- **Credentials travel with the job.** They sit in `bus.db`, which is root's alone in the 0700 state directory, until the job is acknowledged. The alternative is for the outbound service to read the secret store, which would give it all the secrets rather than only those it sends with.
+- **Missed deliveries.** If the bus tells the outbound service of a gap, jobs were lost before they were sent. It raises a notification saying so, which the layer shows and sends like any other.
+- **Where the outbound service connects.** It is not root, so it cannot reach `bus.sock`. The bus gets a second socket for Andaru's own unprivileged services, `/run/andaru-services/bus.sock`. A client there is known by its peer user ID, as on the engine's web socket, not by a token: `andaru-outbound`'s user is granted to subscribe to `delivery/#` (and to its #115 topics) and to publish on `notification/delivery` and its #115 results. The bus's options gain this: a listener that names its clients by their peer user ID.
+- **Credentials travel with the job.** They are in `bus.db`, which is root's alone in the 0700 state directory, until every consumer is done with the job and the log is pruned. The alternative is for the outbound service to read the secret store, which would give it all the secrets rather than only those it sends with.
 
 ### What each channel sends
 
@@ -93,16 +96,17 @@ Every channel gets a "Send a test" action on its settings page. The test goes th
 
 - **Applies:** the engine raises `apply/<id>` when an apply fails or is rolled back, and clears it when a later apply is confirmed. This is `warning`, or `critical` for an automatic rollback.
 - **Upgrade decisions:** raised while the saved settings wait for decisions (safe mode), and cleared when they are answered. This is `warning`, linking to `/system/upgrade`.
-- **Missed notifications:** above.
+- **Missed notifications** and **missed deliveries:** above.
 - **Disk:** the engine raises `disk/<mount>` when the state directory's file system passes 90% (`warning`) or 97% (`critical`), and clears it below 85%. It checks once a minute.
+
+Each states its notifications when the engine starts, as above.
 
 ## What comes first
 
-1. **#165** (bus silent loss) — done in the branch before this one.
-2. **The layer and its store:** the durable subscriber, `notifications.db`, raise, clear and dismiss, the missed-notifications notice, and the capabilities.
-3. **The sources above.**
-4. **The web UI:** the count, the page, the widget, and the stream.
-5. **The outbound service and the services socket**, shared with #115, and **the channels**, one by one: webhook first, since it needs no format of its own, then ntfy, Pushover, Telegram and e-mail.
+1. **The layer and its store:** the durable consumer, `notifications.db`, raise, clear and dismiss, the missed-notifications notice, and the capabilities.
+2. **The sources above**, each stating its notifications at start.
+3. **The web UI:** the count, the page, the widget, and `notifications/changed` in the stream.
+4. **The services socket** in the bus, with peer user IDs, and **the outbound service**, shared with #115, then **the channels** one by one: webhook first, since it needs no format of its own, then ntfy, Pushover, Telegram and e-mail.
 
 ## Open
 
