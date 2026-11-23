@@ -30,17 +30,22 @@ var eventsHeartbeat = 25 * time.Second
 func openBus(stateDir, socket string) (*bus.Bus, func() error, error) {
 	path := filepath.Join(stateDir, "bus.db")
 	events, closeEvents, err := startBus(path, socket)
-	if err == nil {
-		return events, closeEvents, nil
+	if !errors.Is(err, bus.ErrStore) {
+		return events, closeEvents, err
 	}
 	aside := path + ".unreadable-" + strconv.FormatInt(time.Now().Unix(), 10)
 	slog.Error("event bus store unreadable; starting with an empty one", "error", err, "moved_to", aside)
-	for _, suffix := range []string{"", "-wal", "-shm"} {
+	// The journal goes first: left beside a new store, it would be replayed into it.
+	for _, suffix := range []string{"-wal", "-shm", ""} {
 		if renameErr := os.Rename(path+suffix, aside+suffix); renameErr != nil && !errors.Is(renameErr, os.ErrNotExist) {
 			return nil, nil, errors.Join(err, renameErr)
 		}
 	}
-	return startBus(path, socket)
+	events, closeEvents, retryErr := startBus(path, socket)
+	if retryErr != nil {
+		return nil, nil, errors.Join(err, retryErr)
+	}
+	return events, closeEvents, nil
 }
 
 func startBus(path, socket string) (*bus.Bus, func() error, error) {

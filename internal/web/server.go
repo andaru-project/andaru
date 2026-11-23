@@ -159,9 +159,9 @@ func newHandler(backendSocket, assetsDirectory string, origins, hosts map[string
 	assets := http.FileServer(http.Dir(assetsDirectory))
 	router := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/events" {
-			// The stream lasts as long as the page, so instead of the server's write timeout each write must finish
-			// within streamWriteTimeout: a browser that stops reading loses its stream and its backend connection.
-			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(streamWriteTimeout))
+			// The stream lasts as long as the page, so from its first write on, instead of the server's write timeout,
+			// each write must finish within streamWriteTimeout: a browser that stops reading loses its stream and
+			// its backend connection.
 			ctx, cancel := context.WithCancel(r.Context())
 			defer cancel()
 			defer context.AfterFunc(streams, cancel)()

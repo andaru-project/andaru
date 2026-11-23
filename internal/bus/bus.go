@@ -12,6 +12,7 @@ package bus
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -48,6 +49,9 @@ type Options struct {
 	Logger               *slog.Logger
 }
 
+// ErrStore wraps a failure to open or load the store: the file at Options.Path cannot be used.
+var ErrStore = errors.New("bus store unusable")
+
 type Bus struct {
 	server *mqtt.Server
 	store  *store
@@ -81,7 +85,7 @@ func Open(o Options) (*Bus, error) {
 		return nil, err
 	}
 	if err := server.AddHook(st, o.Path); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrStore, err)
 	}
 	engine := newPipeListener()
 	b := &Bus{server: server, store: st, engine: engine}
@@ -99,13 +103,14 @@ func Open(o Options) (*Bus, error) {
 			return nil, err
 		}
 	}
+	// With no listeners or hooks from configuration, Serve fails only on loading the store.
 	if err := server.Serve(); err != nil {
 		server.Close()
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrStore, err)
 	}
 	if err := st.drain(); err != nil {
 		server.Close()
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrStore, err)
 	}
 	return b, nil
 }
