@@ -84,6 +84,31 @@ it('reads the change state when the event stream opens and at each event, and op
   expect(appliesReads(fetchMock)).toBe(8);
 });
 
+it('reads the change state again every 15 seconds after a failed read, until one answers', async () => {
+  const answered = () => act(async () => { await new Promise((resolve) => setTimeout(resolve)); });
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  let fail = false;
+  const fetchMock = fetchRoutes({
+    '/api/v1/applies': () => (fail ? jsonResponse(503, { error: { code: 'X', message: 'down', details: [] } }) : jsonResponse(200, unapplied)),
+    '/api/v1/versions?': { state: 'saved', items: [] },
+  });
+  mount('/system/session');
+  await answered();
+  act(() => { vi.advanceTimersByTime(15_000); });
+  expect(appliesReads(fetchMock)).toBe(1);
+
+  fail = true;
+  act(() => { openStreams()[0].message(); });
+  await answered();
+  expect(appliesReads(fetchMock)).toBe(2);
+  fail = false;
+  act(() => { vi.advanceTimersByTime(15_000); });
+  await answered();
+  expect(appliesReads(fetchMock)).toBe(3);
+  act(() => { vi.advanceTimersByTime(30_000); });
+  expect(appliesReads(fetchMock)).toBe(3);
+});
+
 it('closes its event stream when it goes away', () => {
   routes();
   const { unmount } = render(<MemoryRouter initialEntries={['/system/session']}><Shell api={new ApiClient('csrf')} session={reader} connected onLogout={vi.fn()} onSessionLost={vi.fn()} /></MemoryRouter>);

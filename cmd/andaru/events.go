@@ -23,7 +23,7 @@ func tellApply(ctx context.Context, socket string, id int) error {
 	}
 	client := paho.NewClient(paho.ClientConfig{Conn: conn})
 	if _, err = client.Connect(ctx, &paho.Connect{
-		ClientID: "realize-" + strconv.Itoa(os.Getpid()), CleanStart: true, Username: "realize", UsernameFlag: true,
+		ClientID: "realize/" + strconv.Itoa(os.Getpid()), CleanStart: true, Username: "realize", UsernameFlag: true,
 	}); err != nil {
 		_ = conn.Close()
 		return err

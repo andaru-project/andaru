@@ -449,7 +449,7 @@ func TestInlineSubscription(t *testing.T) {
 func TestOnlyMQTT5Connects(t *testing.T) {
 	a := &access{grants: testGrants, authenticate: func(_, _ []byte) bool { return true }}
 	for version, want := range map[byte]bool{3: false, 4: false, 5: true} {
-		cl := &mqtt.Client{Net: mqtt.ClientConnection{Listener: "tcp"}}
+		cl := &mqtt.Client{ID: "web", Net: mqtt.ClientConnection{Listener: "tcp"}}
 		cl.Properties.Username, cl.Properties.ProtocolVersion = []byte("web"), version
 		if got := a.OnConnectAuthenticate(cl, packets.Packet{}); got != want {
 			t.Errorf("MQTT %d: connected %v", version, got)
@@ -467,14 +467,14 @@ func TestCleanSessionLeavesNothing(t *testing.T) {
 	c := paho.NewClient(paho.ClientConfig{Conn: conn})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, err = c.Connect(ctx, &paho.Connect{ClientID: "passing", CleanStart: true, Username: "agent", UsernameFlag: true, Password: []byte("secret"), PasswordFlag: true}); err != nil {
+	if _, err = c.Connect(ctx, &paho.Connect{ClientID: "agent/passing", CleanStart: true, Username: "agent", UsernameFlag: true, Password: []byte("secret"), PasswordFlag: true}); err != nil {
 		t.Fatal(err)
 	}
 	// mochi answers the connect before it stores the client.
-	h.eventually("the client to be stored", func() bool { return h.rows("mqtt_state", "key='passing'") == 1 })
+	h.eventually("the client to be stored", func() bool { return h.rows("mqtt_state", "key='agent/passing'") == 1 })
 	c.Disconnect(&paho.Disconnect{})
 	time.Sleep(100 * time.Millisecond)
-	if n := h.rows("mqtt_state", "key LIKE 'passing%'"); n != 0 {
+	if n := h.rows("mqtt_state", "key LIKE 'agent/passing%'"); n != 0 {
 		t.Fatalf("%d rows left", n)
 	}
 }
@@ -541,5 +541,78 @@ func TestUnloadableStoreIsErrStore(t *testing.T) {
 	db.Close()
 	if _, err = Open(Options{Path: h.path, Grants: testGrants}); !errors.Is(err, ErrStore) {
 		t.Fatalf("Open: %v", err)
+	}
+}
+
+// A client may hold only its own user's sessions, and may not ask the broker to publish for it.
+func TestConnectRules(t *testing.T) {
+	h := newHarness(t, Options{})
+	try := func(c *paho.Connect) error {
+		t.Helper()
+		conn, err := net.Dial("tcp", h.addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		client := paho.NewClient(paho.ClientConfig{Conn: conn})
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		c.Username, c.UsernameFlag, c.Password, c.PasswordFlag = "agent", true, []byte("secret"), true
+		_, err = client.Connect(ctx, c)
+		if err == nil {
+			client.Disconnect(&paho.Disconnect{})
+		}
+		return err
+	}
+	for _, id := range []string{"agent", "agent/7"} {
+		if err := try(&paho.Connect{ClientID: id, CleanStart: true}); err != nil {
+			t.Errorf("%s refused: %v", id, err)
+		}
+	}
+	for _, id := range []string{"notify", "agents", "agent:7", "agent/7:x"} {
+		if err := try(&paho.Connect{ClientID: id, CleanStart: true}); err == nil {
+			t.Errorf("%s accepted", id)
+		}
+	}
+	will := &paho.Connect{ClientID: "agent", CleanStart: true, WillMessage: &paho.WillMessage{Topic: "alias/lan", Payload: []byte("x")}}
+	if err := try(will); err == nil {
+		t.Error("a Will accepted")
+	}
+}
+
+// What the bus holds for a client keeps its topic: the client gets no outbound aliases, and a held message is kept
+// as long as its session, not a day.
+func TestHeldMessagesKeepTopicAndAge(t *testing.T) {
+	h := newHarness(t, Options{})
+	conn, err := net.Dial("tcp", h.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := paho.NewClient(paho.ClientConfig{Conn: conn, EnableManualAcknowledgment: true})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	aliases := uint16(10)
+	if _, err = c.Connect(ctx, &paho.Connect{ClientID: "web", Username: "web", UsernameFlag: true, Password: []byte("secret"), PasswordFlag: true,
+		Properties: &paho.ConnectProperties{TopicAliasMaximum: &aliases}}); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Disconnect(&paho.Disconnect{})
+	if _, err = c.Subscribe(ctx, &paho.Subscribe{Subscriptions: []paho.SubscribeOptions{{Topic: "config/#", QoS: 1}}}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err = h.bus.Publish("config/head", []byte("1"), true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cl, _ := h.bus.server.Clients.Get("web")
+	h.eventually("both held", func() bool { return cl.State.Inflight.Len() == 2 })
+	for _, pk := range cl.State.Inflight.GetAll(false) {
+		if pk.TopicName != "config/head" {
+			t.Fatalf("held message topic %q", pk.TopicName)
+		}
+	}
+	twoDays := time.Now().Unix() + 2*24*3600
+	if dropped := cl.ClearExpiredInflights(twoDays, h.bus.server.Options.Capabilities.MaximumMessageExpiryInterval); len(dropped) != 0 {
+		t.Fatalf("dropped %v after two days", dropped)
 	}
 }

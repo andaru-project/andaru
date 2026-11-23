@@ -31,6 +31,7 @@ interface ShellProps {
 }
 
 const systemPollMilliseconds = 60_000;
+const retryMilliseconds = 15_000;
 
 // Branches the user closed, kept per browser. Storage may be unavailable; the tree then starts open.
 const closedKey = 'andaru.nav.closed';
@@ -68,6 +69,8 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   // Saves and applies, from this tab or any other, reach the shell as events; it reads the change state at each.
   // A read waits for no answer still out: one that was served before the change would show it unchanged.
   useEvents(reloadChanges, canReadChanges);
+  // A read that failed is tried again every 15 seconds until one answers: a healthy stream may bring no other event.
+  useVisiblePoll(changes.refresh, retryMilliseconds, canReadChanges && changes.error !== '');
 
   // Whether the saved settings wait for decisions after an upgrade (settings safe mode). It changes only with a new
   // saved head (an upgrade, a restore, the answers), so it is read again when the head moves, never on a timer:

@@ -76,6 +76,9 @@ func Open(o Options) (*Bus, error) {
 	capabilities.MaximumSessionExpiryInterval = o.MaximumSessionExpiry
 	// An event is news of a change, read from state when missed; a retained one would outlive what it reports.
 	capabilities.RetainAvailable = 0
+	// mochi drops a held message a day old even when its publisher set no expiry, and the session would go on
+	// without it. A durable message is kept as long as its session.
+	capabilities.MaximumMessageExpiryInterval = 0
 	if o.MaximumInflight != 0 {
 		capabilities.MaximumInflight = o.MaximumInflight
 	}
