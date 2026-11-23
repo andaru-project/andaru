@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -257,6 +258,9 @@ func TestPrune(t *testing.T) {
 		t.Fatal(err)
 	}
 	unblock := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(unblock) }) }
+	t.Cleanup(release) // runs before the harness closes the bus, which waits for the handler
 	slow, err := h.bus.Consume("slow", "config/#", func(Message) error { <-unblock; done <- "slow"; return nil })
 	if err != nil {
 		t.Fatal(err)
@@ -269,7 +273,7 @@ func TestPrune(t *testing.T) {
 	if n := rows(t, h, "events"); n != 1 {
 		t.Fatalf("%d events kept, want 1: slow has not read it", n)
 	}
-	close(unblock)
+	release()
 	receive(t, done)
 	h.eventually(func() bool { return h.bus.prune(time.Now()) == nil && rows(t, h, "events") == 0 })
 	slow()
@@ -355,7 +359,10 @@ func TestClientConsume(t *testing.T) {
 	if err := web.Ack("ui", last.Seq-1); err != nil { // the first two
 		t.Fatal(err)
 	}
-	time.Sleep(100 * time.Millisecond)
+	h.eventually(func() bool {
+		var cursor int64
+		return h.bus.db.QueryRow(`SELECT cursor FROM consumers WHERE name = 'client/web/ui'`).Scan(&cursor) == nil && cursor == last.Seq-1
+	})
 	web.Close()
 	h.restart()
 	web = h.dial("web")
@@ -474,10 +481,13 @@ func TestGapUntilDone(t *testing.T) {
 func TestPrunedWhileAttached(t *testing.T) {
 	h := newHarness(t, Options{Retention: time.Hour})
 	got := make(chan Message, 4)
-	blocked, unblock := make(chan struct{}), make(chan struct{})
+	blocked, unblock := make(chan struct{}, 1), make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(unblock) }) }
+	t.Cleanup(release)
 	if _, err := h.bus.Consume("notify", "config/#", func(m Message) error {
 		if string(m.Payload) == "1" {
-			close(blocked)
+			blocked <- struct{}{}
 			<-unblock
 		}
 		got <- m
@@ -486,7 +496,7 @@ func TestPrunedWhileAttached(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.publish("config/head", "1", true)
-	<-blocked // the consumer holds 1; 2 is still only in the log
+	receive(t, blocked) // the consumer holds 1; 2 is still only in the log
 	h.publish("config/head", "2", true)
 	if _, err := h.bus.db.Exec(`UPDATE events SET time = time - 7200`); err != nil {
 		t.Fatal(err)
@@ -495,7 +505,7 @@ func TestPrunedWhileAttached(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.publish("config/head", "3", true)
-	close(unblock)
+	release()
 	for _, want := range []string{"1", "gap", "3"} {
 		m := receive(t, got)
 		if g := map[bool]string{true: "gap", false: string(m.Payload)}[m.Gap]; g != want {
@@ -791,5 +801,39 @@ func TestTakenOverAttachmentWritesNothing(t *testing.T) {
 	}
 	if cursor == 99 || !gap {
 		t.Fatalf("the old attachment wrote the row: cursor %d, gap %v", cursor, gap)
+	}
+}
+
+// A store path holding ? or # names that file.
+func TestStorePathIsLiteral(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a?b#c.db")
+	b, err := Open(Options{Path: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Close()
+	if _, err = os.Stat(path); err != nil {
+		t.Fatalf("the store is not at its path: %v", err)
+	}
+}
+
+// A payload the JSON encoder would escape reaches a client at its own size.
+func TestUnescapedFrames(t *testing.T) {
+	h := newHarness(t, Options{})
+	web := h.dial("web")
+	if err := web.Consume(ctx(t), "ui", "config/#"); err != nil {
+		t.Fatal(err)
+	}
+	payload := `"` + strings.Repeat("<", maxPayload-2) + `"`
+	h.publish("config/head", payload, true)
+	if d := receive(t, web.Messages()); string(d.Payload) != payload {
+		t.Fatalf("got %d bytes", len(d.Payload))
+	}
+}
+
+func TestGrantsAreFilters(t *testing.T) {
+	if _, err := Open(Options{Path: filepath.Join(t.TempDir(), "bus.db"), Grants: map[string]Grants{"web": {Subscribe: []string{"config/#/head"}}}}); err == nil {
+		t.Fatal("a grant that is not a filter was accepted")
 	}
 }

@@ -35,6 +35,8 @@ func (b *Bus) attach(name, filter string) (*attachment, int64, bool, error) {
 	if !validFilter(filter) {
 		return nil, 0, false, fmt.Errorf("bus: invalid filter %q", filter)
 	}
+	b.attachMu.Lock()
+	defer b.attachMu.Unlock()
 	now := time.Now().Unix()
 	owner := b.owners.Add(1)
 	var cursor int64
@@ -145,14 +147,21 @@ func (b *Bus) clearGap(a *attachment) {
 // read returns the durable events after seq, oldest first, or the point the log was pruned to when events after
 // seq are gone.
 func (b *Bus) read(after int64) ([]Message, int64, error) {
-	pruned, err := b.pruned()
+	// One transaction, so the prune mark and the events are of the same moment: a prune between the two would
+	// otherwise hide the events it removed.
+	tx, err := b.db.Begin()
 	if err != nil {
+		return nil, 0, err
+	}
+	defer tx.Rollback()
+	var pruned int64
+	if err = tx.QueryRow(`SELECT coalesce((SELECT value FROM meta WHERE key = 'pruned'), 0)`).Scan(&pruned); err != nil {
 		return nil, 0, err
 	}
 	if after < pruned {
 		return nil, pruned, nil
 	}
-	rows, err := b.db.Query(`SELECT seq, topic, payload FROM events WHERE seq > ? ORDER BY seq LIMIT ?`, after, batch)
+	rows, err := tx.Query(`SELECT seq, topic, payload FROM events WHERE seq > ? ORDER BY seq LIMIT ?`, after, batch)
 	if err != nil {
 		return nil, 0, err
 	}

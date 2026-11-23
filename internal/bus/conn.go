@@ -2,6 +2,7 @@ package bus
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net"
@@ -154,12 +155,12 @@ func (c *conn) write() {
 
 // send queues f for the client; a client too far behind is disconnected rather than holding up the bus.
 func (c *conn) send(f frame) bool {
-	line, err := json.Marshal(f)
+	line, err := encode(f)
 	if err != nil {
 		return false
 	}
 	select {
-	case c.out <- append(line, '\n'):
+	case c.out <- line:
 		return true
 	case <-c.gone:
 		return false
@@ -229,6 +230,15 @@ func (c *conn) read() {
 	}
 }
 
+// encode writes f as a line, without escaping <, > and &: a payload then takes its own size in the frame.
+func encode(f frame) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	err := enc.Encode(f)
+	return buf.Bytes(), err
+}
+
 var errNotGranted = errors.New("not granted")
 
 func (c *conn) publish(f frame) error {
@@ -253,6 +263,13 @@ func (c *conn) subscribe(filter string) error {
 	})
 	if err == nil {
 		c.mu.Lock()
+		select {
+		case <-c.gone: // closed while registering: close took its snapshot of the stops without this one
+			c.mu.Unlock()
+			stop()
+			return nil
+		default:
+		}
 		c.stops = append(c.stops, stop)
 		c.mu.Unlock()
 	}

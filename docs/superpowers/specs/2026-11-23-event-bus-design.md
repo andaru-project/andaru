@@ -8,7 +8,7 @@ The bus was first built on MQTT, with the mochi-mqtt broker embedded in the engi
 
 Andaru's processes learn of changes in different ways today. The web UI polls for a new settings head or build, and the engine re-reads what it needs. Add-ons will need the same: a certificate renewed, an alias changed or deleted. pfSense offers such hooks only to some packages; Andaru offers them to everyone allowed to have them.
 
-One bus carries these changes. Andaru's own processes subscribe to it in memory, and other processes subscribe over a socket. A process reads the current state once when it starts, and from then on events drive it.
+One bus carries these changes. Andaru's own processes subscribe to it in memory, and other processes subscribe over a socket. A process reads the current state once when it starts, and from then on events drive it. It subscribes, or attaches its consumer, before it reads the state: a change made while it reads then arrives as an event, and none falls between the read and the subscription.
 
 The web UI follows the bus through the engine: the engine serves the events a browser may see as Server-Sent Events, and `andaru-web` passes the stream through like any other API request.
 
@@ -38,7 +38,7 @@ The web UI follows the bus through the engine: the engine serves the events a br
 
 A topic names what changed, from the general to the specific, with `/` between levels: `config/head`, `apply/<id>`, `alias/<id>`, `certificate/<id>`, `notification/<source>`. A filter may use `+` for one level, and `#` as its last level for any number of levels, none included. A grant covers a filter only if it matches everything the filter can match, so `alias/+` does not cover `alias/#`.
 
-The payload is JSON of at most 512 KiB, and the bus refuses anything else. It holds:
+The payload is JSON of at most 512 KiB, and the bus refuses anything else; a topic has at most 1 KiB. Frames are written without escaping, so an event takes its own size in a frame and every event fits a line of the protocol. It holds:
 
 - **`id`:** unique per event. A subscriber that sees an `id` again drops the duplicate.
 - **`type`:** the event, such as `config.head.changed`. Its name carries a version when its payload changes incompatibly (`…changed.v2`), under the same rules as the settings schema.

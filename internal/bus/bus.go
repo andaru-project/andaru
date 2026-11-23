@@ -16,6 +16,8 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -58,8 +60,12 @@ type Message struct {
 	Gap     bool
 }
 
-// maxPayload bounds an event's payload, so that every frame that carries one fits a line of the protocol.
-const maxPayload = 512 << 10
+// maxPayload and maxTopic bound an event, so that every frame that carries one fits a line of the protocol: frames
+// are encoded without escaping, so a payload takes its own size in a frame.
+const (
+	maxPayload = 512 << 10
+	maxTopic   = 1 << 10
+)
 
 // ErrStore wraps a failure to open the store at Options.Path: a damaged file, or a disk that fails while it is
 // opened.
@@ -70,6 +76,7 @@ type Bus struct {
 	opt Options
 	log *slog.Logger
 
+	attachMu  sync.Mutex // one attach at a time, from its transaction to its registration
 	mu        sync.Mutex
 	subs      map[int]*subscriber
 	nextSub   int
@@ -96,9 +103,14 @@ func Open(o Options) (*Bus, error) {
 	if o.Retention == 0 {
 		o.Retention = 7 * 24 * time.Hour
 	}
-	for user := range o.Grants {
+	for user, g := range o.Grants {
 		if user == "" || strings.ContainsAny(user, "/\x00") {
 			return nil, fmt.Errorf("bus: user name %q is empty or holds a slash", user)
+		}
+		for _, filter := range append(slices.Clone(g.Publish), g.Subscribe...) {
+			if !validFilter(filter) {
+				return nil, fmt.Errorf("bus: %s's grant %q is not a filter", user, filter)
+			}
 		}
 	}
 	db, err := openStore(o.Path)
@@ -130,7 +142,8 @@ func Open(o Options) (*Bus, error) {
 }
 
 func openStore(path string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)&_pragma=busy_timeout(5000)")
+	// The path is escaped, so a ? or # in it is part of the file's name and not of the URI's options.
+	db, err := sql.Open("sqlite", "file:"+(&url.URL{Path: path}).EscapedPath()+"?_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +204,7 @@ func (b *Bus) Close() error {
 // Publish sends an event from the engine. A durable event is in the log when Publish returns; the payload must be
 // JSON.
 func (b *Bus) Publish(topic string, payload []byte, durable bool) error {
-	if !validTopic(topic) {
+	if !validTopic(topic) || len(topic) > maxTopic {
 		return fmt.Errorf("bus: invalid topic %q", topic)
 	}
 	if len(payload) > maxPayload || !json.Valid(payload) {

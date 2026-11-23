@@ -89,18 +89,21 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) write(ctx context.Context, f frame) error {
-	line, err := json.Marshal(f)
+	line, err := encode(f)
 	if err != nil {
 		return err
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	if err = ctx.Err(); err != nil {
+		return err
+	}
 	deadline, ok := ctx.Deadline()
 	if !ok {
 		deadline = time.Now().Add(writeTimeout)
 	}
 	_ = c.nc.SetWriteDeadline(deadline)
-	_, err = c.nc.Write(append(line, '\n'))
+	_, err = c.nc.Write(line)
 	return err
 }
 
@@ -210,6 +213,8 @@ func (c *Client) pump() {
 		select {
 		case c.messages <- d:
 		case <-c.closing:
+			return
+		case <-c.done: // the connection ended: what nobody took is dropped, and durable consumers get it again
 			return
 		}
 	}
