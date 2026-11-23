@@ -558,7 +558,7 @@ func TestUnloadableStoreIsErrStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = db.Exec(`INSERT INTO mqtt_state(kind, key, value) VALUES (?, 'broken', x'00ff')`, storage.ClientKey); err != nil {
+	if _, err = db.Exec(`INSERT INTO mqtt_state(kind, key, value, writer) VALUES (?, 'broken', x'00ff', '')`, storage.ClientKey); err != nil {
 		t.Fatal(err)
 	}
 	db.Close()
@@ -648,7 +648,7 @@ func TestForgetRemovesOneClient(t *testing.T) {
 		"web/éx:1": storage.InflightKey, "web:1": storage.InflightKey, "web/:1": storage.InflightKey,
 	}
 	for key, kind := range keys {
-		if _, err := h.bus.store.db.Exec(`INSERT INTO mqtt_state(kind, key, value) VALUES (?, ?, x'00')`, kind, key); err != nil {
+		if _, err := h.bus.store.db.Exec(`INSERT INTO mqtt_state(kind, key, value, writer) VALUES (?, ?, x'00', '')`, kind, key); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -767,7 +767,7 @@ func TestDroppedClientsUnsubscribeForgetsNothing(t *testing.T) {
 // Rows left without their client by a crash do not come back as a session's subscriptions.
 func TestOrphanRowsAreRemovedOnOpen(t *testing.T) {
 	h := newHarness(t, Options{})
-	if _, err := h.bus.store.db.Exec(`INSERT INTO mqtt_state(kind, key, value) VALUES (?, 'ghost:config/#', x'00'), (?, 'ghost:1', x'00')`,
+	if _, err := h.bus.store.db.Exec(`INSERT INTO mqtt_state(kind, key, value, writer) VALUES (?, 'ghost:config/#', x'00', ''), (?, 'ghost:1', x'00', '')`,
 		storage.SubscriptionKey, storage.InflightKey); err != nil {
 		t.Fatal(err)
 	}
@@ -793,5 +793,52 @@ func TestTakeoverKeepsTheDeliveriesRows(t *testing.T) {
 	h.bus.store.OnQosDropped(old, packets.Packet{PacketID: held.PacketID})
 	if n := h.rows("mqtt_state", "kind = 'IFM'"); n != 1 {
 		t.Fatalf("%d delivery rows, want 1", n)
+	}
+}
+
+// A connection's late hooks delete only the rows it wrote: not a clean-start successor's client row, nor a
+// delivery row its successor stored under the same key.
+func TestLateHooksDeleteOnlyTheirOwnRows(t *testing.T) {
+	h := newHarness(t, Options{})
+	web := h.mustConnect("web", nil, true)
+	web.subscribe(t, "config/#")
+	old, _ := h.bus.server.Clients.Get("web")
+
+	// A clean start replaces the session; discarding the old client leaves the new one's row.
+	conn, err := net.Dial("tcp", h.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	successor := &client{received: make(chan *paho.Publish, 8)}
+	successor.Client = paho.NewClient(paho.ClientConfig{Conn: conn, EnableManualAcknowledgment: true,
+		OnPublishReceived: []func(paho.PublishReceived) (bool, error){func(p paho.PublishReceived) (bool, error) {
+			successor.received <- p.Packet
+			return true, nil
+		}}})
+	expiry := uint32(3600)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err = successor.Connect(ctx, &paho.Connect{ClientID: "web", CleanStart: true, Username: "web", UsernameFlag: true,
+		Password: []byte("secret"), PasswordFlag: true, Properties: &paho.ConnectProperties{SessionExpiryInterval: &expiry}}); err != nil {
+		t.Fatal(err)
+	}
+	defer successor.Disconnect(&paho.Disconnect{})
+	h.eventually("the successor's row", func() bool { return h.rows("mqtt_state", "kind = 'CL' AND key = 'web'") == 1 })
+	h.bus.store.discard(old, packets.ErrImplementationSpecificError)
+	h.bus.store.drops.Wait()
+	if n := h.rows("mqtt_state", "kind = 'CL' AND key = 'web'"); n != 1 {
+		t.Fatal("discarding the replaced client deleted its successor's row")
+	}
+
+	// A stale connection completing a packet ID deletes no delivery row its successor stored with that ID.
+	successor.subscribe(t, "config/#")
+	if err = h.bus.Publish("config/head", []byte("held"), true); err != nil {
+		t.Fatal(err)
+	}
+	held := successor.receive(t)
+	stale := &mqtt.Client{ID: "web", State: mqtt.ClientState{Inflight: mqtt.NewInflights()}}
+	h.bus.store.OnQosComplete(stale, packets.Packet{PacketID: held.PacketID})
+	if n := h.rows("mqtt_state", "kind = 'IFM'"); n != 1 {
+		t.Fatal("a stale connection's completion deleted its successor's delivery row")
 	}
 }

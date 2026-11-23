@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/google/uuid"
 	mqtt "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/hooks/storage"
 	"github.com/mochi-mqtt/server/v2/packets"
@@ -28,7 +29,9 @@ type store struct {
 	// discarding holds the clients a discard was asked for, so each is dropped once; drops counts the drops
 	// still running, which Stop waits for.
 	discarding sync.Map
-	drops      sync.WaitGroup
+	// writers names each connection for the rows it writes (writer).
+	writers sync.Map
+	drops   sync.WaitGroup
 	// stopping is set by Stop, under dropsMu, so no drop starts once Stop waits for them.
 	dropsMu  sync.Mutex
 	stopping bool
@@ -57,7 +60,7 @@ func (s *store) Init(config any) error {
 	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS mqtt_state (
-			kind TEXT NOT NULL, key TEXT NOT NULL, value BLOB NOT NULL, PRIMARY KEY (kind, key)) WITHOUT ROWID;
+			kind TEXT NOT NULL, key TEXT NOT NULL, value BLOB NOT NULL, writer TEXT NOT NULL, PRIMARY KEY (kind, key)) WITHOUT ROWID;
 		CREATE TABLE IF NOT EXISTS outbox (
 			seq INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL UNIQUE, topic TEXT NOT NULL, payload BLOB NOT NULL)`); err != nil {
 		db.Close()
@@ -83,16 +86,32 @@ func (s *store) Stop() error {
 	return s.db.Close()
 }
 
-func (s *store) put(kind, key string, value storage.Serializable) error {
+// writer names the connection cl is, for the rows it writes. A client ID outlives its connections: a takeover or
+// a clean start puts another connection on it, whose rows have the same keys. A connection's late hook deletes
+// only the rows it wrote itself (delOwn), so it cannot delete its successor's. The name is forgotten when the
+// connection ends; a hook after that writes under a new name that no delete of its own will match.
+func (s *store) writer(cl *mqtt.Client) string {
+	name, _ := s.writers.LoadOrStore(cl, uuid.NewString())
+	return name.(string)
+}
+
+func (s *store) put(kind, key, writer string, value storage.Serializable) error {
 	data, err := value.MarshalBinary()
 	if err == nil {
-		_, err = s.db.Exec(`INSERT INTO mqtt_state (kind, key, value) VALUES (?, ?, ?)
-			ON CONFLICT (kind, key) DO UPDATE SET value = excluded.value`, kind, key, data)
+		_, err = s.db.Exec(`INSERT INTO mqtt_state (kind, key, value, writer) VALUES (?, ?, ?, ?)
+			ON CONFLICT (kind, key) DO UPDATE SET value = excluded.value, writer = excluded.writer`, kind, key, data, writer)
 	}
 	if err != nil {
 		s.Log.Error("bus store write failed", "error", err, "kind", kind, "key", key)
 	}
 	return err
+}
+
+// delOwn deletes a row only if writer wrote it last.
+func (s *store) delOwn(kind, key, writer string) {
+	if _, err := s.db.Exec(`DELETE FROM mqtt_state WHERE kind = ? AND key = ? AND writer = ?`, kind, key, writer); err != nil {
+		s.Log.Error("bus store delete failed", "error", err, "kind", kind, "key", key)
+	}
 }
 
 func (s *store) del(kind, key string) error {
@@ -134,9 +153,7 @@ func (s *store) discard(cl *mqtt.Client, why packets.Code) {
 	if _, asked := s.discarding.LoadOrStore(cl, struct{}{}); asked {
 		return
 	}
-	if s.current(cl) {
-		_ = s.del(storage.ClientKey, cl.ID)
-	}
+	s.delOwn(storage.ClientKey, cl.ID, s.writer(cl))
 	s.dropsMu.Lock()
 	defer s.dropsMu.Unlock()
 	if s.stopping {
@@ -175,7 +192,7 @@ func (s *store) updateClient(cl *mqtt.Client) {
 		return
 	}
 	props := cl.Properties.Props.Copy(false)
-	err := s.put(storage.ClientKey, cl.ID, &storage.Client{
+	err := s.put(storage.ClientKey, cl.ID, s.writer(cl), &storage.Client{
 		ID: cl.ID, T: storage.ClientKey, Remote: cl.Net.Remote, Listener: cl.Net.Listener,
 		Username: cl.Properties.Username, Clean: cl.Properties.Clean,
 		ProtocolVersion: cl.Properties.ProtocolVersion,
@@ -195,7 +212,7 @@ func (s *store) updateClient(cl *mqtt.Client) {
 	// A discard that began after the checks above deleted the row before this put it back: discard marks the
 	// client before it deletes, so one of the two sees the other.
 	if _, discarding := s.discarding.Load(cl); discarding || cl.IsDropped() {
-		_ = s.del(storage.ClientKey, cl.ID)
+		s.delOwn(storage.ClientKey, cl.ID, s.writer(cl))
 	}
 }
 
@@ -203,6 +220,7 @@ func (s *store) OnSessionEstablished(cl *mqtt.Client, _ packets.Packet) { s.upda
 func (s *store) OnWillSent(cl *mqtt.Client, _ packets.Packet)           { s.updateClient(cl) }
 
 func (s *store) OnDisconnect(cl *mqtt.Client, _ error, expire bool) {
+	defer s.writers.Delete(cl)
 	if expire {
 		if s.current(cl) {
 			s.forget(cl.ID)
@@ -225,7 +243,7 @@ func (s *store) OnSubscribed(cl *mqtt.Client, pk packets.Packet, reasonCodes []b
 			continue
 		}
 		key := cl.ID + ":" + f.Filter
-		if err := s.put(storage.SubscriptionKey, key, &storage.Subscription{
+		if err := s.put(storage.SubscriptionKey, key, s.writer(cl), &storage.Subscription{
 			ID: key, T: storage.SubscriptionKey, Client: cl.ID, Qos: reasonCodes[i], Filter: f.Filter,
 			Identifier: f.Identifier, NoLocal: f.NoLocal, RetainHandling: f.RetainHandling,
 			RetainAsPublished: f.RetainAsPublished,
@@ -265,7 +283,7 @@ func (s *store) OnQosPublish(cl *mqtt.Client, pk packets.Packet, sent int64, _ i
 		return
 	}
 	key := inflightKey(cl, pk)
-	if err := s.put(storage.InflightKey, key, message(storage.InflightKey, key, cl, pk, sent)); err != nil {
+	if err := s.put(storage.InflightKey, key, s.writer(cl), message(storage.InflightKey, key, cl, pk, sent)); err != nil {
 		s.discard(cl, packets.ErrImplementationSpecificError)
 		return
 	}
@@ -290,7 +308,7 @@ func (s *store) OnQosComplete(cl *mqtt.Client, pk packets.Packet) {
 	if _, held := cl.State.Inflight.Get(pk.PacketID); held {
 		return
 	}
-	_ = s.del(storage.InflightKey, inflightKey(cl, pk))
+	s.delOwn(storage.InflightKey, inflightKey(cl, pk), s.writer(cl))
 }
 
 func (s *store) OnQosDropped(cl *mqtt.Client, pk packets.Packet) { s.OnQosComplete(cl, pk) }
