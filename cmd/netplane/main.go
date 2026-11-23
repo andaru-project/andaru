@@ -58,7 +58,7 @@ func usage() {
 func runServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	cfgPath := fs.String("config", "", "Path to netplane YAML configuration file")
-	listen := fs.String("listen", "", "Override HTTP listen address (default 127.0.0.1:8099 without token, :8099 with config)")
+	listen := fs.String("listen", "", "Override HTTP listen address (default 127.0.0.1:8099 without token, :8099 with token)")
 	dbPath := fs.String("db", "", "Override SQLite database path")
 	haOptions := fs.String("ha-options", "", "Home Assistant add-on options.json to export as environment (api_token, secrets)")
 	allowUnauth := fs.Bool("allow-unauthenticated", false, "Allow serving the API without a token on non-loopback addresses")
@@ -91,7 +91,7 @@ func runServe(args []string) error {
 			Server: config.ServerConfig{
 				Listen:            defaultListen,
 				DBPath:            "netplane.db",
-				TrustIngressProxy: true,
+				TrustIngressProxy: *haOptions != "",
 				ResolvedAPIToken:  token,
 			},
 			Retention: 24 * time.Hour,
@@ -117,19 +117,21 @@ func runServe(args []string) error {
 	defer func() { _ = st.Close() }()
 	st.SetRetention(cfg.Retention)
 
-	enabled := map[string]bool{}
-	for _, t := range cfg.Targets {
-		enabled[t.ID] = t.Enabled
-	}
-	if err := st.PruneTargets(ctx, enabled); err != nil {
-		return fmt.Errorf("prune stale targets: %w", err)
-	}
-	for _, t := range cfg.Targets {
-		if !t.Enabled {
-			continue // disabled targets keep no stored state
+	if *cfgPath != "" {
+		enabled := map[string]bool{}
+		for _, t := range cfg.Targets {
+			enabled[t.ID] = t.Enabled
 		}
-		if err := st.UpsertTarget(ctx, t); err != nil {
-			return fmt.Errorf("persist target %s: %w", t.ID, err)
+		if err := st.PruneTargets(ctx, enabled); err != nil {
+			return fmt.Errorf("prune stale targets: %w", err)
+		}
+		for _, t := range cfg.Targets {
+			if !t.Enabled {
+				continue // disabled targets keep no stored state
+			}
+			if err := st.UpsertTarget(ctx, t); err != nil {
+				return fmt.Errorf("persist target %s: %w", t.ID, err)
+			}
 		}
 	}
 
@@ -159,6 +161,7 @@ func runServe(args []string) error {
 		Addr:              cfg.Server.Listen,
 		Handler:           srv,
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       60 * time.Second,
 		// Request contexts end on SIGTERM so open SSE streams don't stall Shutdown for its full timeout.
 		BaseContext: func(net.Listener) context.Context { return ctx },
 	}
