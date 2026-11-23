@@ -264,6 +264,24 @@ it('says when it cannot tell whether decisions wait', async () => {
   expect(await screen.findByText('Whether the settings wait for decisions cannot be read')).toBeInTheDocument();
 });
 
+it('asks again every 15 seconds whether decisions wait, while it cannot tell', async () => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  let down = true;
+  const fetchMock = fetchRoutes({
+    '/api/v1/applies': unapplied,
+    '/api/v1/versions?': { state: 'saved', items: [] },
+    'POST /api/v1/config/upgrade/preview': () => (down ? jsonResponse(503, { error: { code: 'STORE_UNAVAILABLE', message: 'Unavailable.' } }) : jsonResponse(200, { savedVersion: '5', questions: [question] })),
+  });
+  mount('/system/session');
+  expect(await screen.findByText('Whether the settings wait for decisions cannot be read')).toBeInTheDocument();
+  const previews = () => fetchMock.mock.calls.filter(([url]) => url === '/api/v1/config/upgrade/preview').length;
+  const before = previews();
+  down = false;
+  act(() => { vi.advanceTimersByTime(15_000); });
+  expect(previews()).toBe(before + 1);
+  expect(await screen.findByRole('link', { name: 'Answer the questions' })).toBeInTheDocument();
+});
+
 it('points to the questions from any other page', async () => {
   fetchRoutes({
     '/api/v1/applies': unapplied,

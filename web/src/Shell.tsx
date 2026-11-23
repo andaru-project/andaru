@@ -82,7 +82,9 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   const upgrade = useResource(loadUpgrade, onSessionLost);
   const upgradeError = upgrade.error;
   const reloadUpgrade = upgrade.reload;
-  // A check that failed is tried again with each answered read of the change state, until it reads.
+  // A check that failed is tried again every 15 seconds, and with each answered read of the change state, until it
+  // reads: a healthy stream may bring no other event.
+  useVisiblePoll(upgrade.refresh, retryMilliseconds, upgradeError !== '');
   const read = changes.data;
   useEffect(() => {
     if (upgradeError && read) void reloadUpgrade();
