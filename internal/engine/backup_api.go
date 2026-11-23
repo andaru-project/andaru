@@ -620,6 +620,8 @@ func writeRestoreError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, errRestoreOperationConflict):
 		writeError(w, r, http.StatusConflict, "IDEMPOTENCY_CONFLICT", "Operation ID conflicts with a different recorded restore.")
+	case errors.Is(err, errJournalNewer):
+		writeError(w, r, http.StatusConflict, "IDEMPOTENCY_CONFLICT", "Operation ID belongs to a restore a newer Andaru recorded.")
 	case errors.Is(err, errRestoreAbandoned):
 		writeError(w, r, http.StatusConflict, "RESTORE_ABANDONED", "This restore never settled and was set aside; start a new one.")
 	case errors.Is(err, errRestoreStateConflict):
