@@ -70,6 +70,18 @@ One case remains: a failed write followed by an engine restart before the subscr
 3. **Notifications** ([#116](https://github.com/andaru-project/andaru/issues/116)): the notification subsystem as their subscriber, durable itself, and the outbox for the first durable publishes.
 4. **Add-ons:** the grants from manifests, when the add-on model exists.
 
+## Proof of concept
+
+Step 1 is built as a proof of concept in `internal/bus`, not yet started by the engine:
+
+- **`Open`** starts the broker with the SQLite store, an in-memory listener for the engine's own clients (`Dial`) and the listeners it is given, then publishes what the outbox holds.
+- **`Publish(topic, payload, durable)`** and **`Subscribe`** (inline, non-durable) are the engine's side.
+- **Grants** are topic filters per MQTT user name, checked on connect, publish, subscribe and delivery. A grant covers a filter only if it matches everything the filter can match, so `alias/+` does not cover `alias/#`. Clients on other listeners also pass `Authenticate`; the engine's own do not. Only MQTT 5 clients connect, since older ones cannot be told that a durable publish was refused.
+- **The outbox is the bus's own** for now. The engine's durable publishes are written to it before they are published; the transaction shared with the change they report comes with the first store that publishes durably.
+- **The store does not keep mochi's `$SYS` counters**: mochi updates them every second, and writing them would wear the disk for nothing.
+
+The tests run real MQTT clients (`eclipse/paho.golang`, a test dependency) against the broker and restart it on the same file. They cover redelivery to an offline subscriber and of an unacknowledged message, non-durable events not being kept, the outbox on both paths, grants at every check, the engine's in-memory clients, and the session discard at the in-flight limit and on a failed write. Removing any of those mechanisms fails a test.
+
 ## Risks
 
 - **mochi-mqtt's last release is v2.7.9, of March 2025.** Andaru depends on its hook interface, its store loading and its session handling. If it stops being usable, the broker can be replaced behind the same topics and payloads, since add-ons speak MQTT, not mochi.
