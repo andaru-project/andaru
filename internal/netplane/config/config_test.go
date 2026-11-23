@@ -177,3 +177,11 @@ func TestTrustedOriginsValidated(t *testing.T) {
 		t.Fatal("an origin without a scheme was accepted")
 	}
 }
+
+func TestRejectsMultipleYAMLDocuments(t *testing.T) {
+	lookup := func(string) (string, bool) { return "", false }
+	raw := []byte("server: {}\n---\ntargets:\n  - id: sw1\n")
+	if _, err := Parse(raw, lookup); err == nil {
+		t.Fatal("multiple YAML documents should be rejected")
+	}
+}

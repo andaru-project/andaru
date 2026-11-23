@@ -358,6 +358,9 @@ func TestAnalyzeEdgeCases(t *testing.T) {
 		if h := hop(t, vlan(t, f, 20), "e1"); h.State != HopLeak {
 			t.Errorf("VLAN 20 hop on split-PVID LAG = %+v, want leak", h)
 		}
+		if v20 := vlan(t, f, 20); !slices.Contains(v20.Reached, "a") {
+			t.Errorf("VLAN 20 reached = %v, want tagged reachability to a preserved despite native leak", v20.Reached)
+		}
 
 		// Peer with a third PVID (30) facing the split-PVID LAG [1, 20] emits cross-end leak findings too.
 		state.Links = append(state.Links, model.Link{DeviceID: "fw", IfName: "p0", PVID: ip(30), TaggedVLANs: []int{20}})
@@ -585,6 +588,25 @@ func TestAnalyzeEdgeCases(t *testing.T) {
 		}
 		if want := []string{"a:radio0:Alpha", "b:radio1:Zulu"}; !slices.Equal(ssidKeys, want) {
 			t.Errorf("SSIDs = %v, want %v", ssidKeys, want)
+		}
+	})
+
+	t.Run("LAG member without PVID does not establish native VLAN membership", func(t *testing.T) {
+		state, g := chain([]model.Link{
+			{DeviceID: "fw", IfName: "p0", PVID: ip(10), TaggedVLANs: []int{20}},
+			{DeviceID: "a", IfName: "m1", PVID: ip(10), TaggedVLANs: []int{20}},
+			{DeviceID: "a", IfName: "m2", TaggedVLANs: []int{20}}, // no PVID
+		}, nil)
+		state.LagGroups = []model.LagGroup{{DeviceID: "a", ID: "bond", Name: "bond", MemberLinks: []string{"m1", "m2"}}}
+		g.Edges[0].ToLink = "bond"
+		f := Analyze(state, g)
+		if h := hop(t, vlan(t, f, 20), "e1"); h.State != HopCarried {
+			t.Errorf("VLAN 20 hop = %+v, want carried", h)
+		}
+		if hasHop(vlan(t, f, 10), "e1") {
+			if h := hop(t, vlan(t, f, 10), "e1"); h.State == HopCarried {
+				t.Errorf("VLAN 10 hop = %+v, must not be carried when m2 has no PVID", h)
+			}
 		}
 	})
 

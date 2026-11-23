@@ -243,7 +243,7 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 				CPUPct:        ud.SystemStats.CPU.Float64(),
 				MemUsedBytes:  ud.SysStats.MemUsed,
 				MemTotalBytes: ud.SysStats.MemTotal,
-				Load1:         ud.SysStats.LoadAvg1,
+				Load1:         ud.SysStats.LoadAvg1.Float64(),
 			},
 			Sensors:   sensors,
 			PoEBudget: poeBudget,
@@ -549,9 +549,9 @@ type unifiDevice struct {
 	HasTemperature     bool    `json:"has_temperature"`
 	GeneralTemperature float64 `json:"general_temperature"`
 	SysStats           struct {
-		LoadAvg1 float64 `json:"loadavg_1"`
-		MemTotal uint64  `json:"mem_total"`
-		MemUsed  uint64  `json:"mem_used"`
+		LoadAvg1 flexFloat `json:"loadavg_1"`
+		MemTotal uint64    `json:"mem_total"`
+		MemUsed  uint64    `json:"mem_used"`
 	} `json:"sys_stats"`
 	SystemStats struct {
 		CPU flexFloat `json:"cpu"`

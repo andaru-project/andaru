@@ -58,9 +58,10 @@ func usage() {
 func runServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	cfgPath := fs.String("config", "", "Path to netplane YAML configuration file")
-	listen := fs.String("listen", "", "Override HTTP listen address (default :8099)")
+	listen := fs.String("listen", "", "Override HTTP listen address (default 127.0.0.1:8099 without token, :8099 with config)")
 	dbPath := fs.String("db", "", "Override SQLite database path")
 	haOptions := fs.String("ha-options", "", "Home Assistant add-on options.json to export as environment (api_token, secrets)")
+	allowUnauth := fs.Bool("allow-unauthenticated", false, "Allow serving the API without a token on non-loopback addresses")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -81,12 +82,17 @@ func runServe(args []string) error {
 			return err
 		}
 	} else {
+		token := os.Getenv(config.TokenEnv)
+		defaultListen := "127.0.0.1:8099"
+		if token != "" {
+			defaultListen = ":8099"
+		}
 		cfg = &config.Config{
 			Server: config.ServerConfig{
-				Listen:            ":8099",
+				Listen:            defaultListen,
 				DBPath:            "netplane.db",
 				TrustIngressProxy: true,
-				ResolvedAPIToken:  os.Getenv(config.TokenEnv),
+				ResolvedAPIToken:  token,
 			},
 			Retention: 24 * time.Hour,
 		}
@@ -96,6 +102,9 @@ func runServe(args []string) error {
 	}
 	if *dbPath != "" {
 		cfg.Server.DBPath = *dbPath
+	}
+	if cfg.Server.ResolvedAPIToken == "" && !*allowUnauth && !isLoopbackListen(cfg.Server.Listen) {
+		return fmt.Errorf("refusing to serve unauthenticated API on non-loopback address %q (set %s, bind loopback, or pass -allow-unauthenticated)", cfg.Server.Listen, config.TokenEnv)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -196,4 +205,16 @@ func registerDrivers(reg *driver.Registry) {
 	} {
 		_ = reg.Register(d)
 	}
+}
+
+func isLoopbackListen(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil || host == "" {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

@@ -107,8 +107,12 @@ func New(opts Options) *Server {
 	return s
 }
 
-// ServeHTTP delegates to the wrapped middleware chain.
+// ServeHTTP delegates to the wrapped middleware chain, bounding unread request bodies on every route
+// without affecting body-free SSE streams.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.ContentLength != 0 || len(r.TransferEncoding) > 0 {
+		_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(15 * time.Second))
+	}
 	s.handler.ServeHTTP(w, r)
 }
 

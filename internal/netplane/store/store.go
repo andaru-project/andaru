@@ -318,9 +318,9 @@ func (s *Store) SaveSnapshot(ctx context.Context, snap *driver.Snapshot) (*drive
 
 		if l.Counters != nil || l.Rates != nil || sfpRx != nil || sfpTemp != nil || poeW != nil {
 			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO link_samples (device_id, if_name, ts, rx_bps, tx_bps, rx_errors, tx_errors, sfp_rx_dbm, sfp_temp_c, poe_watts)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			`, l.DeviceID, l.IfName, tsNano, rxBps, txBps, int64(rxErr), int64(txErr), sfpRx, sfpTemp, poeW); err != nil {
+				INSERT INTO link_samples (target_id, device_id, if_name, ts, rx_bps, tx_bps, rx_errors, tx_errors, sfp_rx_dbm, sfp_temp_c, poe_watts)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`, snap.TargetID, l.DeviceID, l.IfName, tsNano, rxBps, txBps, int64(rxErr), int64(txErr), sfpRx, sfpTemp, poeW); err != nil {
 				return nil, err
 			}
 		}
@@ -548,12 +548,20 @@ func (s *Store) GetDevice(ctx context.Context, id string) (*model.Device, bool, 
 
 // QueryLinkSamples returns rolling telemetry samples for a link since the given time.
 func (s *Store) QueryLinkSamples(ctx context.Context, deviceID, ifName string, since time.Time) ([]LinkSample, error) {
+	sinceNano := since.UTC().UnixNano()
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT ts, rx_bps, tx_bps, rx_errors, tx_errors, sfp_rx_dbm, sfp_temp_c, poe_watts
 		FROM link_samples
 		WHERE device_id = ? AND if_name = ? AND ts >= ?
+		  AND target_id = (
+			SELECT target_id FROM link_samples
+			WHERE device_id = ? AND if_name = ? AND ts >= ?
+			GROUP BY target_id
+			ORDER BY COUNT(*) DESC, MAX(ts) DESC, target_id ASC
+			LIMIT 1
+		  )
 		ORDER BY ts ASC
-	`, deviceID, ifName, since.UTC().UnixNano())
+	`, deviceID, ifName, sinceNano, deviceID, ifName, sinceNano)
 	if err != nil {
 		return nil, err
 	}

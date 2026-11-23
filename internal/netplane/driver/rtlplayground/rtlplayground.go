@@ -255,9 +255,12 @@ func (c *client) do(ctx context.Context, req *http.Request, limit int64) (*http.
 		return nil, nil, transportError{err}
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, limit))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		return nil, nil, transportError{err} // a reply stalled or cut mid-body
+	}
+	if int64(len(body)) > limit {
+		return nil, nil, fmt.Errorf("response body exceeds %d-byte limit", limit)
 	}
 	return resp, body, nil
 }

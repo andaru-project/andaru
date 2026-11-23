@@ -308,9 +308,11 @@ func (a *analyzer) port(dev, name string) membership {
 	if len(reported) > 0 {
 		m.known = true
 		pvids := map[int]bool{}
+		pvidMembers := 0
 		for i, l := range reported {
 			if l.PVID != nil && validVLAN(*l.PVID) {
 				pvids[*l.PVID] = true
+				pvidMembers++
 			}
 			if i == 0 {
 				for _, t := range l.TaggedVLANs {
@@ -320,7 +322,7 @@ func (a *analyzer) port(dev, name string) membership {
 			}
 			maps.DeleteFunc(m.tagged, func(t int, _ bool) bool { return !slices.Contains(l.TaggedVLANs, t) })
 		}
-		if len(pvids) == 1 {
+		if len(pvids) == 1 && pvidMembers == len(reported) {
 			for p := range pvids {
 				m.pvid = &p
 			}
@@ -510,7 +512,7 @@ func (a *analyzer) trace(v int) (VLAN, []Finding) {
 		if h.State == "" {
 			continue
 		}
-		if h.State == HopCarried || h.State == HopUnverified {
+		if h.State == HopCarried || h.State == HopUnverified || (h.State == HopLeak && h.FromMode == ModeTagged && h.ToMode == ModeTagged) {
 			adj[e.FromID] = append(adj[e.FromID], e.ToID)
 			adj[e.ToID] = append(adj[e.ToID], e.FromID)
 		}

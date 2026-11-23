@@ -139,6 +139,12 @@ func Parse(data []byte, lookupEnv func(string) (string, bool)) (*Config, error) 
 	if err := dec.Decode(&fc); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("parse YAML config: %w", err)
 	}
+	var extra any
+	if err := dec.Decode(&extra); err == nil {
+		return nil, fmt.Errorf("parse YAML config: multiple YAML documents are not supported")
+	} else if !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("parse YAML config: %w", err)
+	}
 
 	if fc.Server.Listen == "" {
 		fc.Server.Listen = ":8099"

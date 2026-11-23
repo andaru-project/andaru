@@ -263,6 +263,62 @@ func side(e *Edge, devID string) *string {
 
 // lldpEdges adds direct LLDP edges (confidence 1.0).
 func (s *solver) lldpEdges() {
+	type pendingLLDP struct {
+		pk        pairKey
+		devID     string
+		peerID    string
+		localName string
+		remote    string
+		kind      EdgeKind
+		spd       int
+		members   []string
+	}
+	var pending []pendingLLDP
+
+	mergeEdge := func(existing *Edge, devID, peerID, localName, remoteName string, kind EdgeKind, spd int, members []string) {
+		if !s.confirmed[existing][devID] {
+			*side(existing, devID) = localName
+		}
+		if *side(existing, peerID) == "" {
+			*side(existing, peerID) = remoteName
+		}
+		s.confirmed[existing][devID] = true
+		if kind == EdgeLAG {
+			existing.Kind = EdgeLAG
+		}
+		if existing.SpeedMbps == 0 && spd > 0 {
+			existing.SpeedMbps = spd
+		}
+		if len(existing.MemberLinks) == 0 && len(members) > 0 {
+			existing.MemberLinks = members
+		}
+	}
+	addEdge := func(pk pairKey, devID, peerID, localName, remoteName string, kind EdgeKind, spd int, members []string) {
+		e := &Edge{
+			FromID:      devID,
+			FromLink:    localName,
+			ToID:        peerID,
+			ToLink:      remoteName,
+			Kind:        kind,
+			Evidence:    EvidenceLLDP,
+			Confidence:  1.0,
+			SpeedMbps:   spd,
+			MemberLinks: members,
+		}
+		s.infraEdges[pk] = append(s.infraEdges[pk], e)
+		s.confirmed[e] = map[string]bool{devID: true}
+	}
+	findExact := func(pk pairKey, devID, peerID, localName, remoteName string) *Edge {
+		for _, e := range s.infraEdges[pk] {
+			if *side(e, devID) == localName || (remoteName != "" && *side(e, peerID) == remoteName) {
+				return e
+			}
+		}
+		return nil
+	}
+
+	// Pass 1: resolve exact port matches and record initial one-sided edges; defer unmatched
+	// reverse records so parallel links are never mispaired by record order.
 	for _, n := range s.state.LLDP {
 		if _, ok := s.devByID[n.DeviceID]; !ok {
 			continue
@@ -286,58 +342,63 @@ func (s *solver) lldpEdges() {
 			members = rMembers
 		}
 
-		// Same link: an endpoint port matches. Otherwise a reverse record whose port IDs are
-		// spelled differently joins an edge this device has not confirmed yet.
-		var existing *Edge
-		for _, e := range s.infraEdges[pk] {
-			if *side(e, n.DeviceID) == localName || (remoteName != "" && *side(e, peerID) == remoteName) {
-				existing = e
-				break
-			}
-		}
-		if existing == nil {
-			for _, e := range s.infraEdges[pk] {
-				if !s.confirmed[e][n.DeviceID] {
-					existing = e
-					break
-				}
-			}
-		}
-		if existing != nil {
-			if !s.confirmed[existing][n.DeviceID] {
-				*side(existing, n.DeviceID) = localName
-			}
-			if *side(existing, peerID) == "" {
-				*side(existing, peerID) = remoteName
-			}
-			s.confirmed[existing][n.DeviceID] = true
-			if kind == EdgeLAG {
-				existing.Kind = EdgeLAG
-			}
-			if existing.SpeedMbps == 0 && spd > 0 {
-				existing.SpeedMbps = spd
-			}
-			if len(existing.MemberLinks) == 0 && len(members) > 0 {
-				existing.MemberLinks = members
-			}
-		} else {
-			e := &Edge{
-				FromID:      n.DeviceID,
-				FromLink:    localName,
-				ToID:        peerID,
-				ToLink:      remoteName,
-				Kind:        kind,
-				Evidence:    EvidenceLLDP,
-				Confidence:  1.0,
-				SpeedMbps:   spd,
-				MemberLinks: members,
-			}
-			s.infraEdges[pk] = append(s.infraEdges[pk], e)
-			s.confirmed[e] = map[string]bool{n.DeviceID: true}
-		}
 		s.infraPorts[devPortKey{n.DeviceID, localName}] = true
 		if remoteName != "" {
 			s.infraPorts[devPortKey{peerID, remoteName}] = true
+		}
+
+		if existing := findExact(pk, n.DeviceID, peerID, localName, remoteName); existing != nil {
+			mergeEdge(existing, n.DeviceID, peerID, localName, remoteName, kind, spd, members)
+			continue
+		}
+		hasUnconfirmed := false
+		for _, e := range s.infraEdges[pk] {
+			if !s.confirmed[e][n.DeviceID] {
+				hasUnconfirmed = true
+				break
+			}
+		}
+		if hasUnconfirmed {
+			pending = append(pending, pendingLLDP{pk, n.DeviceID, peerID, localName, remoteName, kind, spd, members})
+		} else {
+			addEdge(pk, n.DeviceID, peerID, localName, remoteName, kind, spd, members)
+		}
+	}
+
+	// Pass 2: retry exact matches, then apply the single-unmatched-pair fallback only when
+	// unambiguous (one unmatched record and one unconfirmed edge for that pair/device).
+	type pairDev struct {
+		pk    pairKey
+		devID string
+	}
+	remaining := make(map[pairDev][]pendingLLDP)
+	var order []pairDev
+	for _, p := range pending {
+		if existing := findExact(p.pk, p.devID, p.peerID, p.localName, p.remote); existing != nil {
+			mergeEdge(existing, p.devID, p.peerID, p.localName, p.remote, p.kind, p.spd, p.members)
+			continue
+		}
+		k := pairDev{p.pk, p.devID}
+		if _, seen := remaining[k]; !seen {
+			order = append(order, k)
+		}
+		remaining[k] = append(remaining[k], p)
+	}
+	for _, k := range order {
+		recs := remaining[k]
+		var unconfirmed []*Edge
+		for _, e := range s.infraEdges[k.pk] {
+			if !s.confirmed[e][k.devID] {
+				unconfirmed = append(unconfirmed, e)
+			}
+		}
+		if len(recs) == 1 && len(unconfirmed) == 1 {
+			p := recs[0]
+			mergeEdge(unconfirmed[0], p.devID, p.peerID, p.localName, p.remote, p.kind, p.spd, p.members)
+			continue
+		}
+		for _, p := range recs {
+			addEdge(p.pk, p.devID, p.peerID, p.localName, p.remote, p.kind, p.spd, p.members)
 		}
 	}
 }
