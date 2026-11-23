@@ -2,6 +2,7 @@ import { Button, ComboboxChevron, Group, Menu, Stack, Table, Text, VisuallyHidde
 import { useCallback, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction, type KeyboardEvent, type PointerEvent } from 'react';
 import type { ApiClient } from '../api';
 import { bitrate } from '../format';
+import { formatTime, useTimeZone } from '../timezone';
 import { chosenLabel, figures, firstShown, hourMilliseconds, merge, newest, rates, roundUp, thin, type RatePoint } from '../traffic';
 import type { Traffic } from '../types';
 import { usePolledResource } from '../useResource';
@@ -43,7 +44,6 @@ function area(points: RatePoint[], pick: (point: RatePoint) => number | null, x:
 }
 
 const shown = (rate: number | null) => (rate === null ? '—' : bitrate(rate));
-const clock = (at: number) => new Date(at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 
 // An interface's lines take its zone's colour: a shade dark enough on the light ground, and a light one in the
 // dark scheme. The two are custom properties the stylesheet reads; without a zone it falls back to its own.
@@ -67,6 +67,7 @@ function Figures({ arrow, name, heard, line, values }: { arrow: string; name: st
 // any interface, so an interface that has gone shows where it stopped. live is false while the box does not
 // answer: what is held is then the past, and has no rate now.
 function Graph({ entry, zone, end, intervalSeconds, live }: { entry: Traffic['interfaces'][number]; zone: string | undefined; end: number; intervalSeconds: number; live: boolean }) {
+  const timeZone = useTimeZone();
   // every is each reading's rate, for the figures; points is what is drawn and marked, thinned to a line.
   const every = rates(entry.samples, intervalSeconds);
   const points = thin(every, 180, intervalSeconds);
@@ -122,7 +123,7 @@ function Graph({ entry, zone, end, intervalSeconds, live }: { entry: Traffic['in
       {/* One line under the graph: the span while nothing is marked, the marked point's time and rates when one is. */}
       <Group justify="space-between" wrap="nowrap" aria-live="polite">
         {mark
-          ? <Text size="xs" className="tabular">{clock(mark.at)} · <span aria-hidden="true">↓</span> {shown(mark.rx)} · <span aria-hidden="true">↑</span> {shown(mark.tx)}</Text>
+          ? <Text size="xs" className="tabular">{formatTime(mark.at, timeZone)} · <span aria-hidden="true">↓</span> {shown(mark.rx)} · <span aria-hidden="true">↑</span> {shown(mark.tx)}</Text>
           : <><Text c="dimmed" size="xs">−1 h</Text><Text c="dimmed" size="xs">now</Text></>}
       </Group>
       <Table className="traffic-figures" withRowBorders={false} verticalSpacing={2} horizontalSpacing={4}>

@@ -1,5 +1,6 @@
 import { useCallback, useRef, useSyncExternalStore } from 'react';
 import type { ApiClient } from './api';
+import { formatTime } from './timezone';
 import { firewallZone, type Applies, type Apply } from './types';
 
 // ChangeState is what the shell follows: every apply, and the saved head's version.
@@ -51,8 +52,8 @@ export function describe(result: Apply) {
   return `Apply ${result.id}: ${stateLabels[result.state]}.${result.reason ? ` ${result.reason}` : ''}`;
 }
 
-export function clock(iso: string) {
-  return new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+export function clock(iso: string, timeZone?: string) {
+  return formatTime(iso, timeZone);
 }
 
 type Declaration = Record<string, unknown>;

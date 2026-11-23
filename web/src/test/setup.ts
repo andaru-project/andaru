@@ -14,6 +14,7 @@ class ResizeObserverStub {
   disconnect() {}
 }
 vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+Element.prototype.scrollIntoView ??= () => {};
 Object.defineProperty(document, 'fonts', {
   configurable: true,
   value: { addEventListener() {}, removeEventListener() {}, ready: Promise.resolve() },

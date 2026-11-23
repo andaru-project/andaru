@@ -1,4 +1,4 @@
-import { AccordionChevron, Alert, Anchor, AppShell, Badge, Burger, Button, Group, Image, Menu, NavLink, Stack, Text, Title, useMantineColorScheme, type MantineColorScheme } from '@mantine/core';
+import { AccordionChevron, Alert, Anchor, AppShell, Badge, Burger, Button, Group, Image, Menu, Modal, NavLink, Select, Stack, Text, Title, useMantineColorScheme, type MantineColorScheme } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useMatch, useNavigate } from 'react-router';
@@ -7,6 +7,7 @@ import mark from './andaru-icon.svg';
 import { loadChangeState, pendingNotice } from './changes';
 import { PendingNotice } from './PendingNotice';
 import { FleetWorkspace } from './netplane/FleetWorkspace';
+import { formatTimestamp, setTimeZone, timeZoneOptions, useTimeZone } from './timezone';
 import { AliasesScreen } from './screens/AliasesScreen';
 import { AuditScreen } from './screens/AuditScreen';
 import { ChangesScreen } from './screens/ChangesScreen';
@@ -84,6 +85,9 @@ function storedClosed(): string[] {
 
 export function Shell({ api, session, connected, onLogout, onSessionLost }: ShellProps) {
   const { colorScheme, setColorScheme } = useMantineColorScheme();
+  const timeZone = useTimeZone();
+  const [timeZoneAt, setTimeZoneAt] = useState<number | null>(null);
+  const zoneChoices = useMemo(() => (timeZoneAt !== null ? timeZoneOptions() : []), [timeZoneAt]);
   const capabilities = useMemo(() => new Set(session.capabilities), [session.capabilities]);
   const [opened, { toggle, close }] = useDisclosure();
   const { pathname } = useLocation();
@@ -276,6 +280,8 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
                   <Menu.Item key={value} role="menuitemradio" rightSection={colorScheme === value ? <span aria-hidden="true">✓</span> : undefined} aria-checked={colorScheme === value} onClick={() => setColorScheme(value)}>{label}</Menu.Item>
                 ))}
                 <Menu.Divider />
+                <Menu.Item onClick={() => setTimeZoneAt(Date.now())}>Time zone…</Menu.Item>
+                <Menu.Divider />
                 <Menu.Item onClick={onLogout}>Sign out</Menu.Item>
               </Menu.Dropdown>
             </Menu>
@@ -330,6 +336,14 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
         </Stack>
       </AppShell.Main>
       {passwordUser && <PasswordDialog user={passwordUser} selfAccountId={session.account.id} onClose={() => setPasswordUser(null)} onSessionLost={onSessionLost} onSave={async (currentPassword, newPassword) => { await api.changePassword(passwordUser.id, { currentPassword, newPassword, expectedRevision: passwordUser.revision }); }} />}
+      <Modal opened={timeZoneAt !== null} onClose={() => setTimeZoneAt(null)} title="Display time zone" centered closeButtonProps={{ 'aria-label': 'Close' }}>
+        <Stack>
+          <Text size="sm" c="dimmed">Used to display timestamps across Andaru in this browser. The appliance clock on the dashboard stays in UTC.</Text>
+          <Select label="Time zone" data={zoneChoices} value={timeZone} searchable allowDeselect={false} onChange={(value) => { if (value) setTimeZone(value); }} />
+          {timeZoneAt !== null && <Text size="sm" className="tabular">Preview: {formatTimestamp(timeZoneAt, timeZone)}</Text>}
+          <Group justify="flex-end"><Button variant="default" onClick={() => setTimeZoneAt(null)}>Done</Button></Group>
+        </Stack>
+      </Modal>
     </AppShell>
   );
 }

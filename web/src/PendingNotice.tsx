@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Link } from 'react-router';
 import { ApiClient, reportError } from './api';
 import { clock, pendingNotice, useCountdown, type ChangeState } from './changes';
+import { useTimeZone } from './timezone';
 import type { Session } from './types';
 
 interface PendingNoticeProps {
@@ -14,6 +15,7 @@ interface PendingNoticeProps {
 }
 
 export function PendingNotice({ api, session, state, onChanged, onSessionLost }: PendingNoticeProps) {
+  const timeZone = useTimeZone();
   const notice = state ? pendingNotice(state) : null;
   const remaining = useCountdown(notice?.kind === 'awaiting' ? notice.apply.deadline : undefined);
   const [busy, setBusy] = useState(false);
@@ -41,7 +43,7 @@ export function PendingNotice({ api, session, state, onChanged, onSessionLost }:
   }
   const { apply } = notice;
   return (
-    <Alert color="orange" role="status" title={`Applied, awaiting confirmation: rolls back at ${apply.deadline ? clock(apply.deadline) : 'an unknown time'}`}>
+    <Alert color="orange" role="status" title={`Applied, awaiting confirmation: rolls back at ${apply.deadline ? clock(apply.deadline, timeZone) : 'an unknown time'}`}>
       <Group>
         {remaining && <Text size="sm" className="tabular">{remaining} left</Text>}
         {session.capabilities.includes('configuration.confirm') && <Button size="xs" disabled={busy} onClick={() => void finish(apply.id, 'confirmation')}>Confirm</Button>}
