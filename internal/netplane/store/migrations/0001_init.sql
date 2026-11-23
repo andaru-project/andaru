@@ -53,7 +53,6 @@ CREATE TABLE IF NOT EXISTS link_counter_state (
 
 CREATE TABLE IF NOT EXISTS link_samples (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    target_id  TEXT NOT NULL DEFAULT '',
     device_id  TEXT NOT NULL,
     if_name    TEXT NOT NULL,
     ts         INTEGER NOT NULL,

@@ -97,11 +97,60 @@ func (s *Store) migrate(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, string(sqlBytes)); err != nil {
 		return fmt.Errorf("apply migration 0001: %w", err)
 	}
-	_, err = s.db.ExecContext(ctx,
+	if _, err := s.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (1, ?)`,
 		time.Now().UTC().UnixNano(),
-	)
-	return err
+	); err != nil {
+		return err
+	}
+
+	var v2 int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = 2`).Scan(&v2); err != nil {
+		return err
+	}
+	if v2 == 0 {
+		hasCol, err := s.hasColumn(ctx, "link_samples", "target_id")
+		if err != nil {
+			return err
+		}
+		if !hasCol {
+			m2, err := migrationsFS.ReadFile("migrations/0002_link_samples_target.sql")
+			if err != nil {
+				return fmt.Errorf("read migration 0002: %w", err)
+			}
+			if _, err := s.db.ExecContext(ctx, string(m2)); err != nil {
+				return fmt.Errorf("apply migration 0002: %w", err)
+			}
+		}
+		if _, err := s.db.ExecContext(ctx,
+			`INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (2, ?)`,
+			time.Now().UTC().UnixNano(),
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) hasColumn(ctx context.Context, table, column string) (bool, error) {
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // UpsertTarget saves a target configuration (excluding runtime ResolvedSecrets).

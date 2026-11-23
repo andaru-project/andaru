@@ -247,17 +247,33 @@ func TestSolveParallelLLDPLinks(t *testing.T) {
 		t.Fatalf("edges = %+v, want one a:p1->b:q1", g.Edges)
 	}
 
-	// Parallel links whose remote port IDs do not match local names must not be mispaired by order.
+	// Parallel links whose remote port IDs do not match local names must not be mispaired by order;
+	// both directions stay as separate unconfirmed edges rather than guessing a cross-pairing.
 	state.LLDP = []model.LldpNeighbor{
 		{DeviceID: "a", LocalLink: "p1", ChassisID: "00:00:00:00:00:0b", RemotePort: "Gi0/1"},
 		{DeviceID: "a", LocalLink: "p2", ChassisID: "00:00:00:00:00:0b", RemotePort: "Gi0/2"},
 		{DeviceID: "b", LocalLink: "q2", ChassisID: "00:00:00:00:00:0a", RemotePort: "Port 2"},
 		{DeviceID: "b", LocalLink: "q1", ChassisID: "00:00:00:00:00:0a", RemotePort: "Port 1"},
 	}
-	for _, e := range Solve(state, time.Unix(0, 0)).Edges {
+	unpaired := Solve(state, time.Unix(0, 0)).Edges
+	if len(unpaired) != 4 {
+		t.Fatalf("ambiguous parallel LLDP edges = %d (%+v), want 4 unpaired edges", len(unpaired), unpaired)
+	}
+	for _, e := range unpaired {
 		if (e.FromLink == "p1" && e.ToLink == "q2") || (e.FromLink == "p2" && e.ToLink == "q1") {
 			t.Fatalf("parallel LLDP links mispaired by record order: %+v", e)
 		}
+	}
+
+	// Parallel links from the same device reporting the same remote port ID (e.g. peer chassis MAC)
+	// must stay two distinct edges rather than collapsing p2 into p1.
+	state.LLDP = []model.LldpNeighbor{
+		{DeviceID: "a", LocalLink: "p1", ChassisID: "00:00:00:00:00:0b", RemotePort: "00:00:00:00:00:0b"},
+		{DeviceID: "a", LocalLink: "p2", ChassisID: "00:00:00:00:00:0b", RemotePort: "00:00:00:00:00:0b"},
+	}
+	sameRemote := Solve(state, time.Unix(0, 0)).Edges
+	if len(sameRemote) != 2 {
+		t.Fatalf("parallel links with identical remote port ID = %d (%+v), want 2", len(sameRemote), sameRemote)
 	}
 }
 

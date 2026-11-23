@@ -3,6 +3,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -517,5 +518,45 @@ func TestSaveSnapshotCarryWindowFollowsPollInterval(t *testing.T) {
 	late := &driver.Snapshot{TargetID: "u1", CollectedAt: t0.Add(111 * time.Minute), PollInterval: 20 * time.Minute, Unavailable: []driver.Section{driver.SectionClients}}
 	if _, err := st.SaveSnapshot(ctx, late); err != nil || len(late.Clients) != 0 {
 		t.Fatalf("carried past three intervals: %v, %v", late.Clients, err)
+	}
+}
+
+func TestMigrateLegacyV1Database(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "legacy.db")
+
+	// Simulate an existing DB created by standalone netplane with migration 0001 only (no link_samples.target_id).
+	rawDB, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initSQL, err := migrationsFS.ReadFile("migrations/0001_init.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rawDB.ExecContext(ctx, string(initSQL)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rawDB.ExecContext(ctx, `INSERT INTO schema_migrations (version, applied_at) VALUES (1, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = rawDB.Close()
+
+	st, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("Open legacy DB: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+
+	t0 := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	snap := &driver.Snapshot{TargetID: "t1", CollectedAt: t0, Links: []model.Link{{
+		DeviceID: "d1", IfName: "lan1", Counters: &model.PortCounters{RxBytes: 100},
+	}}}
+	if _, err := st.SaveSnapshot(ctx, snap); err != nil {
+		t.Fatalf("SaveSnapshot after v2 migration: %v", err)
+	}
+	got, err := st.QueryLinkSamples(ctx, "d1", "lan1", t0.Add(-time.Second))
+	if err != nil || len(got) != 1 {
+		t.Fatalf("QueryLinkSamples = (%+v, %v), want 1 sample", got, err)
 	}
 }

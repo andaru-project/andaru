@@ -310,7 +310,7 @@ func (s *solver) lldpEdges() {
 	}
 	findExact := func(pk pairKey, devID, peerID, localName, remoteName string) *Edge {
 		for _, e := range s.infraEdges[pk] {
-			if *side(e, devID) == localName || (remoteName != "" && *side(e, peerID) == remoteName) {
+			if *side(e, devID) == localName || (!s.confirmed[e][devID] && remoteName != "" && *side(e, peerID) == remoteName) {
 				return e
 			}
 		}
