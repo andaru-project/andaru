@@ -209,3 +209,17 @@ it('points to the questions from any other page', async () => {
   mount('/system/session');
   expect(await screen.findByRole('link', { name: 'Answer the questions' })).toBeInTheDocument();
 });
+
+it('sets the document title with the page and hostname, and marks pending changes in navigation', async () => {
+  fetchRoutes({
+    '/api/v1/status/system': { version: '0.5.0-a.4', hostname: 'edge', time: '2026-11-21T12:00:00Z', bootedAt: null },
+    '/api/v1/applies': unapplied,
+    '/api/v1/versions?': { state: 'saved', items: [{ id: '5', createdAt: '2026-11-21T11:00:00Z', actor: 'admin', changedObjectCount: 1 }] },
+  });
+  const { unmount } = render(<MemoryRouter initialEntries={['/system/session']}><Shell api={new ApiClient('csrf')} session={session(['status.read', 'configuration.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} /></MemoryRouter>);
+  await screen.findByText('edge');
+  expect(document.title).toBe('Current session — edge — Andaru');
+  expect(await screen.findByRole('link', { name: /Review and apply.*Pending/i })).toBeInTheDocument();
+  unmount();
+  expect(document.title).toBe('Andaru administration');
+});

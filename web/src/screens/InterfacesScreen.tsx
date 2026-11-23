@@ -1,8 +1,8 @@
-import { Alert, Badge, Group, Loader, ScrollArea, Stack, Table, Text, Title } from '@mantine/core';
+import { Alert, Badge, Button, Group, Loader, ScrollArea, Stack, Table, Text, Title } from '@mantine/core';
 import { useCallback } from 'react';
 import { ApiClient, reportError } from '../api';
 import { stateColor, stateLabel, type LinkStatus, type Preview, type SavedLink, type Segment, type Session, type Snapshot } from '../types';
-import { useResource } from '../useResource';
+import { useResource, useVisiblePoll } from '../useResource';
 import { bindingFindings, kernelName, zonesByInterface } from '../zones';
 import { Address } from './Address';
 import { ZoneBadge } from './ZoneBadge';
@@ -52,6 +52,7 @@ export function InterfacesScreen({ api, session, onSessionLost }: InterfacesScre
     return { links: links.items, saved, savedError };
   }, [api, canReadConfig, onSessionLost]);
   const resource = useResource(load, onSessionLost);
+  useVisiblePoll(resource.refresh, 10_000);
 
   if (!resource.data) return resource.error ? <Alert color="red" role="alert" title="Interfaces request failed">{resource.error}</Alert> : <Loader aria-label="Loading interfaces" />;
 
@@ -67,7 +68,10 @@ export function InterfacesScreen({ api, session, onSessionLost }: InterfacesScre
 
   return (
     <Stack>
-      <div><Title order={2}>Interfaces</Title><Text c="dimmed">Network links the box reports now, beside what the saved configuration puts on them.</Text></div>
+      <Group justify="space-between" align="flex-end">
+        <div><Title order={2}>Interfaces</Title><Text c="dimmed">Network links the box reports now, beside what the saved configuration puts on them.</Text></div>
+        <Button size="xs" variant="default" loading={resource.loading} onClick={() => void resource.reload()}>Refresh</Button>
+      </Group>
       {resource.error && <Alert color="red" role="alert" title="Interfaces request failed">{resource.error}</Alert>}
       {savedError && <Alert color="red" role="alert" title="The saved configuration could not be read">{savedError} Only live links are shown.</Alert>}
       {!canReadConfig && <Alert color="gray" role="status">Your account cannot read the saved configuration, so only live links are shown.</Alert>}

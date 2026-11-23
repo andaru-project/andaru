@@ -12,7 +12,7 @@ it('uses no light-dark() in the stylesheets', () => {
 
 it('gives each colour it took out of light-dark() its dark value under the dark scheme', () => {
   const dark = /:root\[data-mantine-color-scheme="dark"\] \{([^}]*)\}/.exec(read('src/styles.css'))?.[1] ?? '';
-  for (const name of ['--andaru-ground', '--andaru-error-text', '--andaru-diff-old', '--andaru-diff-new']) expect(dark).toContain(`${name}:`);
+  for (const name of ['--andaru-ground', '--andaru-error-text', '--andaru-warning-text', '--andaru-diff-old', '--andaru-diff-new']) expect(dark).toContain(`${name}:`);
 });
 
 // Download and upload are told apart by more than strength: upload is dashed.

@@ -1,4 +1,4 @@
-import { Group, Progress, Stack, Text } from '@mantine/core';
+import { Group, Progress, Stack, Text, VisuallyHidden } from '@mantine/core';
 import { useCallback, useRef } from 'react';
 import type { ApiClient } from '../api';
 import { bytes } from '../format';
@@ -17,7 +17,7 @@ function Measure({ label, share, figures }: { label: string; share: number | nul
     <div>
       <Group justify="space-between" gap="xs" wrap="nowrap">
         <Text size="sm" c="dimmed">{label}</Text>
-        <Text size="sm" ta="right">{figures}</Text>
+        <Text size="sm" ta="right" className="tabular">{figures}</Text>
       </Group>
       <Progress value={filled} color={filled >= 90 ? 'red' : filled >= 75 ? 'orange' : undefined} aria-label={share === null ? `${label}: not known yet` : label} />
     </div>
@@ -41,7 +41,7 @@ export function ResourcesView({ usage, before }: { usage: Usage; before?: Usage 
   return (
     <Stack gap="xs">
       <Measure label="CPU" share={cpu} figures={percent(cpu)} />
-      {usage.load && <Group justify="space-between" gap="xs"><Text size="sm" c="dimmed">Load 1 · 5 · 15 min</Text><Text size="sm">{usage.load.map((value) => value.toFixed(2)).join(' · ')}</Text></Group>}
+      {usage.load && <Group justify="space-between" gap="xs"><Text size="sm" c="dimmed">Load 1 · 5 · 15 min</Text><Text size="sm" className="tabular">{usage.load.map((value) => value.toFixed(2)).join(' · ')}</Text></Group>}
       {memory.totalBytes > 0 && <Room label="Memory" availableBytes={memory.availableBytes} totalBytes={memory.totalBytes} />}
       {memory.swapTotalBytes > 0 && <Room label="Swap" availableBytes={memory.swapFreeBytes} totalBytes={memory.swapTotalBytes} />}
       {usage.fileSystems.map((fileSystem, index) => <Room key={`${fileSystem.mountPoint} ${index}`} label={`Disk ${fileSystem.mountPoint}`} availableBytes={fileSystem.availableBytes} totalBytes={fileSystem.totalBytes} />)}
@@ -49,7 +49,10 @@ export function ResourcesView({ usage, before }: { usage: Usage; before?: Usage 
       {usage.temperatures.map((temperature, index) => (
         <Group key={`${temperature.sensor} ${index}`} justify="space-between" gap="xs" wrap="nowrap">
           <Text size="sm" c="dimmed">{temperature.sensor || 'Sensor'}</Text>
-          <Text size="sm">{temperature.celsius.toFixed(1)} °C</Text>
+          <Text size="sm" className={temperature.celsius >= 85 ? 'tabular error-text' : temperature.celsius >= 70 ? 'tabular warning-text' : 'tabular'}>
+            {temperature.celsius.toFixed(1)} °C
+            {temperature.celsius >= 85 ? <VisuallyHidden> (high)</VisuallyHidden> : temperature.celsius >= 70 ? <VisuallyHidden> (warm)</VisuallyHidden> : null}
+          </Text>
         </Group>
       ))}
     </Stack>

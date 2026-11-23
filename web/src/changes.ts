@@ -1,6 +1,6 @@
 import { useCallback, useRef, useSyncExternalStore } from 'react';
 import type { ApiClient } from './api';
-import type { Applies, Apply } from './types';
+import { firewallZone, type Applies, type Apply } from './types';
 
 // ChangeState is what the shell polls: every apply, and the saved head's version.
 export interface ChangeState {
@@ -134,4 +134,75 @@ export function fieldChanges(before: unknown, after: unknown): Array<{ field: st
     .map((field) => ({ field, before: a[field], after: b[field] }));
   // The caller found the two differ; if no field does (key order), show them whole rather than an empty table.
   return fields.length ? fields : [{ field: '', before, after }];
+}
+
+const namedCollections = [
+  'links',
+  'segments',
+  'zones',
+  'roles',
+  'rules',
+  'aliases.addresses',
+  'aliases.ports',
+  'nat.portForwards',
+  'nat.oneToOne',
+];
+
+function collectionItems(declaration: Declaration, path: string): Array<{ id?: unknown; name?: unknown }> {
+  let node: unknown = declaration;
+  for (const key of path.split('.')) node = node && typeof node === 'object' ? (node as Declaration)[key] : undefined;
+  return Array.isArray(node) ? (node as Array<{ id?: unknown; name?: unknown }>) : [];
+}
+
+// referenceNames maps internal object IDs from live and saved declarations to human-readable names for diff display.
+// Head names win over live names when an object was renamed; if two distinct IDs share a name, each keeps its ID suffix.
+export function referenceNames(live: Declaration, head: Declaration): Map<string, string> {
+  const names = new Map<string, string>([[firewallZone, 'This firewall']]);
+  for (const source of [live, head]) {
+    for (const path of namedCollections) {
+      for (const item of collectionItems(source, path)) {
+        if (item && typeof item === 'object' && typeof item.id === 'string' && item.id && item.id !== firewallZone && typeof item.name === 'string' && item.name) {
+          names.set(item.id, item.name);
+        }
+      }
+    }
+  }
+  const counts = new Map<string, number>();
+  for (const name of names.values()) counts.set(name, (counts.get(name) ?? 0) + 1);
+  for (const [id, name] of names) {
+    if ((counts.get(name) ?? 0) > 1) names.set(id, `${name} (${id})`);
+  }
+  return names;
+}
+
+// Schema-defined reference paths per collection, relative to one object (empty string = root list order).
+const referencePaths: Record<string, Set<string>> = {
+  links: new Set(['parent', 'members']),
+  segments: new Set(['link', 'zone', 'addressing.ipv6.from']),
+  'aliases.addresses': new Set(['members']),
+  'aliases.ports': new Set(['members']),
+  rules: new Set(['', 'from.zones', 'from.addresses', 'to.zones', 'to.addresses', 'ports']),
+  management: new Set(['segment', 'allowedSources']),
+  'nat.portForwards': new Set(['', 'ingressZones', 'from', 'to.address', 'ports']),
+  'nat.oneToOne': new Set(['', 'zone', 'destination']),
+};
+
+// resolveReferences replaces known object IDs only at schema-defined reference paths for the given collection.
+export function resolveReferences(value: unknown, names: Map<string, string>, collection: string, path = ''): unknown {
+  const allowed = referencePaths[collection];
+  if (!allowed) return value;
+  if (typeof value === 'string') return allowed.has(path) ? names.get(value) ?? value : value;
+  if (Array.isArray(value)) {
+    if (!allowed.has(path)) return value;
+    return value.map((item) => (typeof item === 'string' ? names.get(item) ?? item : item));
+  }
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [entryKey, entryValue] of Object.entries(value as Record<string, unknown>)) {
+      const nextPath = path ? `${path}.${entryKey}` : entryKey;
+      out[entryKey] = resolveReferences(entryValue, names, collection, nextPath);
+    }
+    return out;
+  }
+  return value;
 }

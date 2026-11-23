@@ -227,7 +227,10 @@ export interface Snapshot {
     segments: Segment[];
     zones: Array<{ id: string; name: string }>;
     management?: { segment: string; allowedSources?: string[] };
-    aliases?: { addresses: Array<{ id: string; name: string }>; ports: Array<{ id: string; name: string }> };
+    aliases?: {
+      addresses: Array<Partial<AddressAlias> & { id: string; name: string }>;
+      ports: Array<Partial<PortAlias> & { id: string; name: string }>;
+    };
     rules?: Rule[];
     nat?: {
       portForwards?: Array<{ id: string; name: string; enabled: boolean; noRedirect?: boolean; filterRule?: string; from?: string[]; to?: { address?: string } }>;

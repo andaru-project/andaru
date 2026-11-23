@@ -1,7 +1,7 @@
 import { Alert, Badge, Button, Code, Group, List, Loader, Paper, Radio, ScrollArea, Stack, Table, Text, Title } from '@mantine/core';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiClient, ApiError, reportError } from '../api';
-import { clock, describe, differences, fieldChanges, liveApply, newer, stateLabels, useCountdown, type ChangeState } from '../changes';
+import { clock, describe, differences, fieldChanges, liveApply, newer, referenceNames, resolveReferences, stateLabels, useCountdown, type ChangeState } from '../changes';
 import type { Finding, Session, VersionInfo } from '../types';
 import { useResource } from '../useResource';
 
@@ -125,6 +125,7 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
   // shell's last poll (another session applied meanwhile) is not stale.
   const stale = !detail ? '' : newer(state.head, detail.reviewed) ? `Saved version ${state.head} arrived since this review.` : newer(latest?.id ?? '0', detail.lastApply) ? 'The live configuration changed since this review.' : '';
   const changed = changes ? differences(changes.baseline.value, changes.versions[0].value, changes.versions.flatMap((version) => version.changes)) : [];
+  const names = changes ? referenceNames(changes.baseline.value, changes.versions[0].value) : new Map<string, string>();
   const errors = changes?.preview.findings.filter((finding) => finding.severity === 'error') ?? [];
   const warnings = changes?.preview.findings.filter((finding) => finding.severity === 'warning') ?? [];
   const inFlight = latest?.state === 'awaiting_confirmation' || latest?.state === 'activating';
@@ -178,12 +179,12 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
                         {fieldChanges(item.before, item.after).map((change) => (
                           <Table.Tr key={change.field}>
                             <Table.Td data-label="Field"><Text ff="monospace" size="sm">{change.field || 'value'}</Text></Table.Td>
-                            <Table.Td data-label="Live">{change.before === undefined ? <Text c="dimmed" size="sm">Not set</Text> : <Code className="diff-old">{compact(change.before)}</Code>}</Table.Td>
-                            <Table.Td data-label="Saved">{change.after === undefined ? <Text c="dimmed" size="sm">Not set</Text> : <Code className="diff-new">{compact(change.after)}</Code>}</Table.Td>
+                            <Table.Td data-label="Live">{change.before === undefined ? <Text c="dimmed" size="sm">Not set</Text> : <Code className="diff-old">{compact(resolveReferences(change.before, names, item.collection, change.field))}</Code>}</Table.Td>
+                            <Table.Td data-label="Saved">{change.after === undefined ? <Text c="dimmed" size="sm">Not set</Text> : <Code className="diff-new">{compact(resolveReferences(change.after, names, item.collection, change.field))}</Code>}</Table.Td>
                           </Table.Tr>
                         ))}
                       </Table.Tbody></Table></ScrollArea>
-                    ) : <Code block className={item.kind === 'created' ? 'diff-new' : 'diff-old'}>{pretty(item.kind === 'created' ? item.after : item.before)}</Code>}
+                    ) : <Code block className={item.kind === 'created' ? 'diff-new' : 'diff-old'}>{pretty(resolveReferences(item.kind === 'created' ? item.after : item.before, names, item.collection))}</Code>}
                   </div>
                 ))}
               </>
@@ -215,7 +216,7 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
         <Title order={3} size="h4" mb="sm">History</Title>
         {state.applies.items.length === 0 ? <Text>No apply yet.</Text> : (
           <ScrollArea><Table className="data-table" striped aria-label="Apply history"><Table.Thead><Table.Tr><Table.Th>Apply</Table.Th><Table.Th>State</Table.Th><Table.Th>Saved version</Table.Th><Table.Th>Time</Table.Th><Table.Th>Reason</Table.Th></Table.Tr></Table.Thead><Table.Tbody>
-            {state.applies.items.slice(0, 20).map((item) => <Table.Tr key={item.id}><Table.Td data-label="Apply">{item.id}</Table.Td><Table.Td data-label="State">{stateLabels[item.state]}</Table.Td><Table.Td data-label="Saved version">{item.savedVersion}</Table.Td><Table.Td data-label="Time">{new Date(item.createdAt).toLocaleString()}</Table.Td><Table.Td data-label="Reason">{item.reason || '—'}</Table.Td></Table.Tr>)}
+            {state.applies.items.slice(0, 20).map((item) => <Table.Tr key={item.id}><Table.Td data-label="Apply" className="tabular">{item.id}</Table.Td><Table.Td data-label="State">{stateLabels[item.state]}</Table.Td><Table.Td data-label="Saved version" className="tabular">{item.savedVersion}</Table.Td><Table.Td data-label="Time" className="tabular">{new Date(item.createdAt).toLocaleString()}</Table.Td><Table.Td data-label="Reason">{item.reason || '—'}</Table.Td></Table.Tr>)}
           </Table.Tbody></Table></ScrollArea>
         )}
       </Paper>

@@ -105,7 +105,7 @@ function Graph({ entry, zone, end, intervalSeconds, live }: { entry: Traffic['in
       {/* The scale and the span are labels beside the graph, not in it, where the lines would run through them. */}
       <Group gap="xs" mb={4} justify="space-between">
         <Group gap="xs"><Text ff="monospace" fw={600}>{entry.name}</Text><ZoneBadge name={zone} /></Group>
-        <Text c="dimmed" size="xs">0 – {bitrate(top)}</Text>
+        <Text c="dimmed" size="xs" className="tabular">0 – {bitrate(top)}</Text>
       </Group>
       <div className="traffic-frame" tabIndex={0} role="group" aria-label={`${entry.name} over the last hour: the arrow keys read out a point`} onPointerMove={nearest} onPointerDown={nearest} onPointerCancel={() => setMarked(undefined)} onPointerLeave={(event) => { if (event.pointerType !== 'touch') setMarked(undefined); }} onKeyDown={step} onBlur={() => setMarked(undefined)}>
         <svg className="traffic-graph" viewBox={`0 0 ${width} ${height}`} aria-hidden="true" preserveAspectRatio="none">
@@ -122,7 +122,7 @@ function Graph({ entry, zone, end, intervalSeconds, live }: { entry: Traffic['in
       {/* One line under the graph: the span while nothing is marked, the marked point's time and rates when one is. */}
       <Group justify="space-between" wrap="nowrap" aria-live="polite">
         {mark
-          ? <Text size="xs">{clock(mark.at)} · <span aria-hidden="true">↓</span> {shown(mark.rx)} · <span aria-hidden="true">↑</span> {shown(mark.tx)}</Text>
+          ? <Text size="xs" className="tabular">{clock(mark.at)} · <span aria-hidden="true">↓</span> {shown(mark.rx)} · <span aria-hidden="true">↑</span> {shown(mark.tx)}</Text>
           : <><Text c="dimmed" size="xs">−1 h</Text><Text c="dimmed" size="xs">now</Text></>}
       </Group>
       <Table className="traffic-figures" withRowBorders={false} verticalSpacing={2} horizontalSpacing={4}>

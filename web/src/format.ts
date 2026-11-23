@@ -1,3 +1,5 @@
+import type { AddressAlias, PortAlias } from './types';
+
 // scaled writes a quantity in the largest unit that keeps it readable: one decimal below ten, none from ten up.
 function scaled(value: number, base: number, units: string[]) {
   let unit = 0;
@@ -24,3 +26,20 @@ export function duration(seconds: number) {
 }
 
 export const plural = (count: number, unit: string) => `${count} ${unit}${count === 1 ? '' : 's'}`;
+
+const protocolLabels: Record<PortAlias['protocol'], string> = { tcp: 'TCP', udp: 'UDP', icmp: 'ICMP', icmpv6: 'ICMPv6', group: 'group' };
+
+export function formatAddressAlias(alias: Partial<AddressAlias>, names: Map<string, string>): string | undefined {
+  if (alias.kind === 'host') return alias.address;
+  if (alias.kind === 'network') return alias.prefix;
+  if (alias.kind === 'range' && alias.first && alias.last) return `${alias.first} to ${alias.last}`;
+  if (alias.kind === 'group') return alias.members?.length ? alias.members.map((id) => names.get(id) ?? 'unknown alias').join(', ') : '';
+  return undefined;
+}
+
+export function formatPortAlias(alias: Partial<PortAlias>, names: Map<string, string>): string | undefined {
+  if (!alias.protocol) return undefined;
+  if (alias.protocol === 'group') return alias.members?.length ? alias.members.map((id) => names.get(id) ?? 'unknown alias').join(', ') : '';
+  const items = alias.ports ?? alias.types ?? [];
+  return `${protocolLabels[alias.protocol]} ${items.length > 0 ? items.join(', ') : 'any type'}`;
+}
