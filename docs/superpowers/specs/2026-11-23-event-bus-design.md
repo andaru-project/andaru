@@ -13,7 +13,8 @@ One bus carries these changes. Andaru's own processes subscribe to it mostly in 
 - **MQTT 5, with an embedded broker.** The broker is [mochi-mqtt](https://github.com/mochi-mqtt/server) (`github.com/mochi-mqtt/server/v2`), running inside the engine. It is not a separate daemon. Add-ons use any MQTT client.
 - **Durable means at least once.** A durable event is published with QoS 1. The broker keeps it until each subscriber acknowledges it, across restarts of the broker and of the subscriber. Subscribers must handle duplicates.
 - **Non-durable events take the risk.** An event published with QoS 0 is delivered once, if the subscriber is there. It is lost if a process dies, and whoever publishes or subscribes to it accepts that.
-- **A change to state that a process reads at start is non-durable.** A certificate changed, firewall rules modified, an alias changed or removed: a subscriber that missed one because a process died re-reads the state when it starts or reconnects anyway. The event is a convenient way to learn of a change while running, not the record of it. Durable events are those whose content cannot be read back from state, such as notifications.
+- **A change to state that a process reads at start is non-durable.** A certificate changed, firewall rules modified, an alias changed or removed: a subscriber that missed one because a process died re-reads the state when it starts or reconnects anyway. The event is a convenient way to learn of a change while running, not the record of it. Durable events are for content that cannot be read back from state.
+- **The publisher chooses, per publish.** Durability is the QoS the publisher sends with, not a property of the topic. A notifier may publish its notifications durably or not.
 - **The store is SQLite.** The broker keeps its sessions, subscriptions and undelivered messages in SQLite, through a storage hook Andaru writes. It does not use the Badger, Pebble, Bolt or Redis hooks that mochi ships.
 - **Permissions at both ends.** Every topic is gated twice. A publisher may publish only on the topics it is granted for publishing; a subscriber may subscribe only to the topics it is granted for subscribing. The bus never redacts an event; a subscriber that shows an event to a user filters what that user may see.
 - **Notifications are events.** Andaru's own subsystems publish notification events, and so do add-ons granted that permission. Only the notification subsystem may subscribe to them.
@@ -64,7 +65,7 @@ One case remains: a failed write followed by an engine restart before the subscr
 
 1. **The broker and its store.** `internal/bus`: the broker in the engine, the SQLite storage hook from the spike, the in-memory listener, the session discard rules, and the permission hook with built-in grants. Tests for restart redelivery, the session discard in each of the three cases, and grants at both ends.
 2. **The first event.** `config/head`, non-durable, published after each save, and `andaru-web` subscribing to it over the Unix socket, so the web UI learns of a new head or build without polling (which also settles [#150](https://github.com/andaru-project/andaru/issues/150)).
-3. **Notifications** ([#116](https://github.com/andaru-project/andaru/issues/116)): the first durable events, with the outbox, and the notification subsystem as their subscriber.
+3. **Notifications** ([#116](https://github.com/andaru-project/andaru/issues/116)): the notification subsystem as their subscriber, durable itself, and the outbox for the first durable publishes.
 4. **Add-ons:** the grants from manifests, when the add-on model exists.
 
 ## Risks
