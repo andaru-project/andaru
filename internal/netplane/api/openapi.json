@@ -1,0 +1,199 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "netplane API",
+    "version": "0.1.0",
+    "license": {
+      "name": "Apache-2.0",
+      "identifier": "Apache-2.0"
+    },
+    "description": "Open network configuration, information, and diagnostics plane HTTP/SSE wire contract. Browser guards apply to every operation: a write from another origin (not in server.trusted_origins) gets 403 CROSS_ORIGIN, and without an API token a request whose Host is a public DNS name not in server.allowed_hosts gets 421 HOST_NOT_ALLOWED."
+  },
+  "security": [{ "bearerAuth": [] }, { "cookieAuth": [] }, {}],
+  "paths": {
+    "/api/v1/health": {
+      "get": {
+        "operationId": "getHealth",
+        "summary": "Server health; per-target polling status only for authenticated callers",
+        "security": [],
+        "responses": {
+          "200": { "description": "Healthy" }
+        }
+      }
+    },
+    "/api/v1/openapi.json": {
+      "get": {
+        "operationId": "getOpenAPI",
+        "summary": "Embedded OpenAPI 3.1 specification",
+        "responses": {
+          "200": { "description": "OpenAPI JSON" }
+        }
+      }
+    },
+    "/api/v1/state": {
+      "get": {
+        "operationId": "getState",
+        "summary": "Merged observed/live network state across all targets",
+        "responses": {
+          "200": { "description": "NetworkState" }
+        }
+      }
+    },
+    "/api/v1/devices": {
+      "get": {
+        "operationId": "listDevices",
+        "summary": "List all managed devices",
+        "responses": {
+          "200": { "description": "Device list envelope" }
+        }
+      }
+    },
+    "/api/v1/devices/{id}": {
+      "get": {
+        "operationId": "getDevice",
+        "summary": "Detailed device view including links, segments, VPNs, radios, and clients",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "DeviceDetail" },
+          "404": { "description": "Not found" }
+        }
+      }
+    },
+    "/api/v1/devices/{id}/links/{ifName}/samples": {
+      "get": {
+        "operationId": "getLinkSamples",
+        "summary": "Rolling telemetry samples for one physical link",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "ifName", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "since", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "LinkSample list envelope" }
+        }
+      }
+    },
+    "/api/v1/topology": {
+      "get": {
+        "operationId": "getTopology",
+        "summary": "Solved cross-vendor L2/L3/Wi-Fi topology graph",
+        "responses": {
+          "200": { "description": "TopologyGraph" }
+        }
+      }
+    },
+    "/api/v1/vlans/flow": {
+      "get": {
+        "operationId": "getVlanFlow",
+        "summary": "Every VLAN traced port by port across the topology, with dead-end and leak findings",
+        "responses": {
+          "200": { "description": "VlanFlow" }
+        }
+      }
+    },
+    "/api/v1/clients": {
+      "get": {
+        "operationId": "listClients",
+        "summary": "List observed wired and wireless clients",
+        "parameters": [
+          { "name": "online", "in": "query", "required": false, "schema": { "type": "boolean" } },
+          { "name": "q", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Client list envelope" }
+        }
+      }
+    },
+    "/api/v1/targets": {
+      "get": {
+        "operationId": "listTargets",
+        "summary": "List configured polling targets (secrets redacted)",
+        "responses": {
+          "200": { "description": "TargetConfig list envelope" }
+        }
+      }
+    },
+    "/api/v1/targets/{id}/poll": {
+      "post": {
+        "operationId": "pollTargetNow",
+        "summary": "Trigger an immediate synchronous poll of a target",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "TargetStatus" },
+          "404": { "description": "Target not found" },
+          "409": { "description": "Target is disabled" }
+        }
+      }
+    },
+    "/api/v1/diagnostics": {
+      "get": {
+        "operationId": "listDiagnostics",
+        "summary": "List recent diagnostic runs",
+        "parameters": [
+          { "name": "device_id", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer" } }
+        ],
+        "responses": {
+          "200": { "description": "DiagnosticResult list envelope" }
+        }
+      },
+      "post": {
+        "operationId": "runDiagnostic",
+        "summary": "Execute an on-demand diagnostic (fdb_lookup; ping and traceroute on OpenWrt; ping on pfSense and OPNsense; no driver runs cable_test yet)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["kind", "target"],
+                "properties": {
+                  "kind": { "type": "string", "enum": ["fdb_lookup", "ping", "traceroute", "cable_test"] },
+                  "device_id": { "type": "string", "description": "Required for every kind except fdb_lookup" },
+                  "target": { "type": "string", "description": "MAC, IP or hostname for fdb_lookup; the IP address or DNS name to ping or trace for device-side kinds" },
+                  "params": { "type": "object", "additionalProperties": { "type": "string" }, "description": "ping: count (1 to 10, default 3)" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "DiagnosticResult" },
+          "400": { "description": "Invalid diagnostic request" },
+          "404": { "description": "Device or target not found" },
+          "500": { "description": "The stored state could not be read or the result could not be saved" },
+          "501": { "description": "The device's driver cannot run this kind" },
+          "502": { "description": "The device-side diagnostic failed to run" }
+        }
+      }
+    },
+    "/api/v1/events/stream": {
+      "get": {
+        "operationId": "streamEvents",
+        "summary": "Server-Sent Events stream of live network transitions",
+        "responses": {
+          "200": { "description": "text/event-stream" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Required on /api/v1/* (except /health) when the server has an API token configured."
+      },
+      "cookieAuth": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "netplane_token",
+        "description": "Same token, set by the browser UI because EventSource cannot send headers."
+      }
+    }
+  }
+}

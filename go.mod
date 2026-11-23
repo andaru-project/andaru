@@ -7,9 +7,11 @@ require (
 	github.com/charmbracelet/x/term v0.2.1
 	github.com/creack/pty v1.1.24
 	github.com/google/uuid v1.6.0
+	github.com/gosnmp/gosnmp v1.47.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	golang.org/x/crypto v0.55.0
 	golang.org/x/sys v0.50.0
+	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.62.0
 )
 

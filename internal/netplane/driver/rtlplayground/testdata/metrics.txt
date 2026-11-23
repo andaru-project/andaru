@@ -1,0 +1,45 @@
+# Shape of an RTLPlayground /metrics scrape (fork main, fe02652c); identifiers are documentation values.
+# TYPE node_uname_info gauge
+node_uname_info{sysname="RTLPlayground",release="v0.1.0-fe02652c",version="2026-11-22 02:16:05",machine="MokerLink ZX-SWTGW218AS",nodename="switch-test",domainname="(none)"} 1
+# TYPE node_boot_time_seconds gauge
+node_boot_time_seconds 1795315744
+# TYPE node_time_seconds gauge
+node_time_seconds 1795356725
+# TYPE node_hwmon_temp_celsius gauge
+node_hwmon_temp_celsius{chip="thermal_thermal_zone0",sensor="temp1"} 56.546
+node_hwmon_temp_celsius{chip="sfp_lan9",sensor="temp1"} 41.25
+# TYPE node_network_info gauge
+node_network_info{device="lan1",address="02:00:5e:00:53:01",broadcast="ff:ff:ff:ff:ff:ff",operstate="up",ifalias="uplink \"core\""} 1
+node_network_info{device="lan2",address="02:00:5e:00:53:01",broadcast="ff:ff:ff:ff:ff:ff",operstate="lowerlayerdown",ifalias=""} 1
+node_network_info{device="lan3",address="02:00:5e:00:53:01",broadcast="ff:ff:ff:ff:ff:ff",operstate="down",ifalias=""} 1
+node_network_info{device="lan9",address="02:00:5e:00:53:01",broadcast="ff:ff:ff:ff:ff:ff",operstate="up",ifalias=""} 1
+# TYPE node_network_carrier gauge
+node_network_carrier{device="lan1"} 1
+node_network_carrier{device="lan2"} 0
+node_network_carrier{device="lan3"} 0
+node_network_carrier{device="lan9"} 1
+# TYPE node_network_speed_bytes gauge
+node_network_speed_bytes{device="lan1"} 312500000
+node_network_speed_bytes{device="lan9"} 1250000000
+# TYPE node_network_receive_bytes_total counter
+node_network_receive_bytes_total{device="lan1"} 1850697659
+node_network_receive_bytes_total{device="lan2"} 0
+node_network_receive_bytes_total{device="lan3"} 0
+node_network_receive_bytes_total{device="lan9"} 9007199254740993
+# TYPE node_network_transmit_bytes_total counter
+node_network_transmit_bytes_total{device="lan1"} 131689966
+node_network_transmit_bytes_total{device="lan9"} 12642037834
+# TYPE node_network_receive_errs_total counter
+node_network_receive_errs_total{device="lan1"} 3
+# TYPE rtlplayground_sfp_info gauge
+rtlplayground_sfp_info{device="lan9",vendor="10Gtek",model="SFP-10G-SR",serial="TEST0001"} 1
+# TYPE rtlplayground_sfp_los gauge
+rtlplayground_sfp_los{device="lan9"} 0
+# TYPE rtlplayground_sfp_voltage_volts gauge
+rtlplayground_sfp_voltage_volts{device="lan9"} 3.3
+# TYPE rtlplayground_sfp_tx_bias_amperes gauge
+rtlplayground_sfp_tx_bias_amperes{device="lan9"} 0.0065
+# TYPE rtlplayground_sfp_tx_power_watts gauge
+rtlplayground_sfp_tx_power_watts{device="lan9"} 0.0005
+# TYPE rtlplayground_sfp_rx_power_watts gauge
+rtlplayground_sfp_rx_power_watts{device="lan9"} 0
