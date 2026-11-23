@@ -62,15 +62,23 @@ func (s *Store) Export(ctx context.Context, includeSecrets bool) (result BackupD
 	return result, nil
 }
 
-// Portable turns the documents a prepared restore records (PreparedRestore.TargetDocuments) back into a backup's:
-// the secrets in the store's own form become a backup's secrets, for a restore that is prepared again.
-func (input RestoreDocuments) Portable() (RestoreDocuments, error) {
+// Portable turns the documents a prepared restore records (PreparedRestore.TargetDocuments), with target its saved
+// version, back into a backup's, for a restore that is prepared again. A restore of secrets gives every secret its
+// target version; one of the configuration alone records the store's secrets as they were, which then stay out.
+func (input RestoreDocuments) Portable(target Version) (RestoreDocuments, error) {
 	if input.ConfigurationSecrets == nil {
 		return input, nil
 	}
 	var stored secretDocument
 	if err := json.Unmarshal(input.ConfigurationSecrets, &stored); err != nil {
 		return input, boundaryFault(err)
+	}
+	restored := len(stored.Scopes["core"]) == 0
+	for _, entry := range stored.Scopes["core"] {
+		restored = restored || entry.Version == target
+	}
+	if !restored {
+		return RestoreDocuments{Configuration: input.Configuration}, nil
 	}
 	core := make(map[string]backupSecretEntry, len(stored.Scopes["core"]))
 	for name, entry := range stored.Scopes["core"] {

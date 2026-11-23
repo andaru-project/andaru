@@ -313,7 +313,7 @@ func (c *restoreCoordinator) reconcileLocked(ctx context.Context, journal *resto
 			if current.SavedVersion != journal.ExpectedSavedVersion {
 				return errRestoreStateConflict
 			}
-			portable, err := journal.Configuration.Portable()
+			portable, err := journal.Configuration.Portable(journal.TargetSavedVersion)
 			if err != nil {
 				return err
 			}
