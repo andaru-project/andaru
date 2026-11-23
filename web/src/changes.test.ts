@@ -59,15 +59,16 @@ describe('referenceNames and resolveReferences', () => {
       rules: [rule('rul_2', 'Allow'), rule('rul_1', 'Allow')],
     };
     const names = referenceNames(live, head);
-    expect(resolveReferences({ id: 'rul_1', from: { zones: ['zon_lan'], addresses: ['adr_nas'] }, to: { zones: ['zon_firewall'] }, ports: ['svc_web'] }, names)).toEqual({
+    expect(resolveReferences({ id: 'rul_1', from: { zones: ['zon_lan'], addresses: ['adr_nas'] }, to: { zones: ['zon_firewall'] }, ports: ['svc_web'] }, names, 'rules')).toEqual({
       id: 'rul_1',
       from: { zones: ['Trusted'], addresses: ['NAS'] },
       to: { zones: ['This firewall'] },
       ports: ['HTTPS'],
     });
-    expect(resolveReferences(['rul_1', 'rul_2'], names)).toEqual(['Allow (rul_1)', 'Allow (rul_2)']);
-    expect(resolveReferences({ id: 'zon_lan', name: 'zon_lan', description: 'zon_lan', zone: 'zon_lan' }, names)).toEqual({
-      id: 'zon_lan', name: 'zon_lan', description: 'zon_lan', zone: 'Trusted',
+    expect(resolveReferences(['rul_1', 'rul_2'], names, 'rules')).toEqual(['Allow (rul_1)', 'Allow (rul_2)']);
+    // Non-reference fields (such as PPPoE username or free-text name/description) are never substituted even when matching an ID.
+    expect(resolveReferences({ id: 'lnk_1', name: 'zon_lan', username: 'zon_firewall', parent: 'zon_lan' }, names, 'links')).toEqual({
+      id: 'lnk_1', name: 'zon_lan', username: 'zon_firewall', parent: 'Trusted',
     });
   });
 });

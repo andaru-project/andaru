@@ -175,16 +175,32 @@ export function referenceNames(live: Declaration, head: Declaration): Map<string
   return names;
 }
 
-const nonReferenceKeys = new Set(['id', 'name', 'description', 'action', 'protocol', 'kind', 'mode', 'address', 'prefix', 'first', 'last']);
+// Schema-defined reference paths per collection, relative to one object (empty string = root list order).
+const referencePaths: Record<string, Set<string>> = {
+  links: new Set(['parent', 'members']),
+  segments: new Set(['link', 'zone', 'addressing.ipv6.from']),
+  'aliases.addresses': new Set(['members']),
+  'aliases.ports': new Set(['members']),
+  rules: new Set(['', 'from.zones', 'from.addresses', 'to.zones', 'to.addresses', 'ports']),
+  management: new Set(['segment', 'allowedSources']),
+  'nat.portForwards': new Set(['', 'ingressZones', 'from', 'to.address', 'ports']),
+  'nat.oneToOne': new Set(['', 'zone', 'destination']),
+};
 
-// resolveReferences replaces known object IDs inside a diff value with their display names while keeping own identity and free-text fields intact.
-export function resolveReferences(value: unknown, names: Map<string, string>, key?: string): unknown {
-  if (typeof value === 'string') return key && nonReferenceKeys.has(key) ? value : names.get(value) ?? value;
-  if (Array.isArray(value)) return value.map((item) => resolveReferences(item, names));
+// resolveReferences replaces known object IDs only at schema-defined reference paths for the given collection.
+export function resolveReferences(value: unknown, names: Map<string, string>, collection: string, path = ''): unknown {
+  const allowed = referencePaths[collection];
+  if (!allowed) return value;
+  if (typeof value === 'string') return allowed.has(path) ? names.get(value) ?? value : value;
+  if (Array.isArray(value)) {
+    if (!allowed.has(path)) return value;
+    return value.map((item) => (typeof item === 'string' ? names.get(item) ?? item : item));
+  }
   if (value && typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const [entryKey, entryValue] of Object.entries(value as Record<string, unknown>)) {
-      out[entryKey] = resolveReferences(entryValue, names, entryKey);
+      const nextPath = path ? `${path}.${entryKey}` : entryKey;
+      out[entryKey] = resolveReferences(entryValue, names, collection, nextPath);
     }
     return out;
   }

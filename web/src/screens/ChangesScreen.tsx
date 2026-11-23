@@ -179,12 +179,12 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
                         {fieldChanges(item.before, item.after).map((change) => (
                           <Table.Tr key={change.field}>
                             <Table.Td data-label="Field"><Text ff="monospace" size="sm">{change.field || 'value'}</Text></Table.Td>
-                            <Table.Td data-label="Live">{change.before === undefined ? <Text c="dimmed" size="sm">Not set</Text> : <Code className="diff-old">{compact(resolveReferences(change.before, names, change.field))}</Code>}</Table.Td>
-                            <Table.Td data-label="Saved">{change.after === undefined ? <Text c="dimmed" size="sm">Not set</Text> : <Code className="diff-new">{compact(resolveReferences(change.after, names, change.field))}</Code>}</Table.Td>
+                            <Table.Td data-label="Live">{change.before === undefined ? <Text c="dimmed" size="sm">Not set</Text> : <Code className="diff-old">{compact(resolveReferences(change.before, names, item.collection, change.field))}</Code>}</Table.Td>
+                            <Table.Td data-label="Saved">{change.after === undefined ? <Text c="dimmed" size="sm">Not set</Text> : <Code className="diff-new">{compact(resolveReferences(change.after, names, item.collection, change.field))}</Code>}</Table.Td>
                           </Table.Tr>
                         ))}
                       </Table.Tbody></Table></ScrollArea>
-                    ) : <Code block className={item.kind === 'created' ? 'diff-new' : 'diff-old'}>{pretty(resolveReferences(item.kind === 'created' ? item.after : item.before, names))}</Code>}
+                    ) : <Code block className={item.kind === 'created' ? 'diff-new' : 'diff-old'}>{pretty(resolveReferences(item.kind === 'created' ? item.after : item.before, names, item.collection))}</Code>}
                   </div>
                 ))}
               </>
