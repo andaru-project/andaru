@@ -23,6 +23,17 @@ export function UpgradeScreen({ api, session, onFinished, onSessionLost }: Upgra
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState('');
+  // Answers belong to the head they were given for: when the saved settings move, they are cleared and asked again.
+  const [head, setHead] = useState('');
+  const [restarted, setRestarted] = useState(false);
+  const latest = view.data?.savedVersion;
+  if (latest !== undefined && latest !== head) {
+    setHead(latest);
+    if (head !== '' && Object.keys(choices).length > 0) {
+      setChoices({});
+      setRestarted(true);
+    }
+  }
 
   async function finish(current: UpgradeView) {
     setBusy(true);
@@ -34,7 +45,7 @@ export function UpgradeScreen({ api, session, onFinished, onSessionLost }: Upgra
     } catch (requestError) {
       reportError(requestError, onSessionLost, setError);
       // The saved settings changed meanwhile: their questions are read again, against the new head, from no answers.
-      if (requestError instanceof ApiError && requestError.status === 412) setChoices({});
+      if (requestError instanceof ApiError && requestError.status === 412) void view.reload();
     } finally {
       setBusy(false);
     }
@@ -47,6 +58,8 @@ export function UpgradeScreen({ api, session, onFinished, onSessionLost }: Upgra
         <Text c="dimmed">This Andaru reads the saved settings with the choices marked as current until someone answers. Until then, nothing can be saved or applied; the network keeps running as it was.</Text>
       </div>
       {saved && <Alert color="green" role="status" title={`Saved as version ${saved}`}>Review and apply the saved settings to put them on the network.</Alert>}
+      {restarted && !saved && <Alert color="yellow" role="status" title="The saved settings changed">Their questions were read again; answer them anew.</Alert>}
+      {!saved && view.error && <Group><Button variant="default" onClick={() => void view.reload()}>Try again</Button></Group>}
       {!saved && <Loaded resource={view} what="the questions">
         {(current) => {
           if (current.questions.length === 0) return <Text>The saved settings wait for no decision.</Text>;

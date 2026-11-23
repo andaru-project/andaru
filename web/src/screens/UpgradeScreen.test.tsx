@@ -67,7 +67,7 @@ it('shows the questions read-only to an account that cannot change the configura
   expect(screen.getByText(/needs permission to change the configuration/)).toBeInTheDocument();
 });
 
-it('reads the questions again when the saved settings changed before the answers saved', async () => {
+it('reads the questions again, from no answers, when the saved settings changed before the answers saved', async () => {
   let head = '7';
   const posted: string[] = [];
   fetchRoutes({
@@ -95,4 +95,38 @@ it('names the choices of each question after it', async () => {
   engine();
   render(<UpgradeScreen api={new ApiClient('csrf')} session={session(['configuration.read'])} onFinished={vi.fn()} onSessionLost={vi.fn()} />);
   expect(await screen.findByRole('radiogroup', { name: 'What becomes of the zones?' })).toBeInTheDocument();
+});
+
+it('offers to try again when the questions cannot be read', async () => {
+  let fail = true;
+  fetchRoutes({
+    'POST /api/v1/config/upgrade/preview': () => (fail ? jsonResponse(503, { error: { code: 'STORE_UNAVAILABLE', message: 'Unavailable.' } }) : jsonResponse(200, { savedVersion: '7', questions: [first] })),
+  });
+  render(<UpgradeScreen api={new ApiClient('csrf')} session={session(['configuration.read', 'configuration.write'])} onFinished={vi.fn()} onSessionLost={vi.fn()} />);
+  const retry = await screen.findByRole('button', { name: 'Try again' });
+  fail = false;
+  await userEvent.click(retry);
+  expect(await screen.findByText('What becomes of the zones?')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+});
+
+it('clears answers given for an earlier head when the saved settings move', async () => {
+  let head = '7';
+  const previews: Array<Record<string, string>> = [];
+  fetchRoutes({
+    'POST /api/v1/config/upgrade/preview': (init) => {
+      const { choices: given } = JSON.parse(String(init?.body)) as { choices: Record<string, string> };
+      previews.push(given);
+      const questions = [{ ...first, answered: 'first' in given, choice: given.first ?? 'keep' }, { ...second, answered: 'second' in given, choice: given.second ?? 'keep' }];
+      return jsonResponse(200, { savedVersion: head, questions });
+    },
+  });
+  render(<UpgradeScreen api={new ApiClient('csrf')} session={session(['configuration.read', 'configuration.write'])} onFinished={vi.fn()} onSessionLost={vi.fn()} />);
+  await userEvent.click((await screen.findAllByRole('radio', { name: /Mark them/ }))[0]);
+  await vi.waitFor(() => expect(previews.at(-1)).toEqual({ first: 'mark' }));
+  head = '9';
+  await userEvent.click(screen.getAllByRole('radio', { name: /Keep the zones/ })[1]);
+  expect(await screen.findByText('The saved settings changed')).toBeInTheDocument();
+  await vi.waitFor(() => expect(previews.at(-1)).toEqual({}));
+  expect(screen.getByRole('button', { name: 'Save the answers' })).toBeDisabled();
 });
