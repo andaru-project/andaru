@@ -102,13 +102,20 @@ function DeploymentSection({
   );
 }
 
+function bootedIdentity(status?: UpdateStatus): string {
+  const b = status?.booted;
+  return b ? `${b.digest ?? ''}|${b.version ?? ''}` : '';
+}
+
 export function UpdatesScreen({ api, session, update, onSessionLost }: UpdatesScreenProps) {
   const canManage = session.capabilities.includes('configuration.apply');
   const [busy, setBusy] = useState<UpdateAction | null>(null);
   const [actionError, setActionError] = useState('');
-  const [rebooting, setRebooting] = useState(false);
+  const [rebootedFrom, setRebootedFrom] = useState<string | null>(null);
   const [confirmKind, setConfirmKind] = useState<'reboot' | 'rollback' | null>(null);
 
+  const currentBooted = bootedIdentity(update.data);
+  const rebooting = rebootedFrom !== null && (update.data === undefined || (currentBooted === rebootedFrom && update.data.rebootNeeded));
   const activeOp = update.data?.state === 'staging' || update.data?.state === 'checking' || update.data?.state === 'rolling_back';
   // Poll every 3 s while an async stage or engine-side check is running.
   useVisiblePoll(update.refresh, 3_000, activeOp && !rebooting);
@@ -122,7 +129,7 @@ export function UpdatesScreen({ api, session, update, onSessionLost }: UpdatesSc
       else if (kind === 'rollback') await api.rollbackUpdate();
       else {
         await api.rebootSystem();
-        setRebooting(true);
+        setRebootedFrom(currentBooted);
         return;
       }
       await update.reload();

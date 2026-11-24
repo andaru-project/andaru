@@ -123,3 +123,49 @@ it('explains when the host is not running a bootc appliance image', async () => 
 
   expect(await screen.findByText(/not booted from a bootc-managed Andaru appliance image/i)).toBeInTheDocument();
 });
+
+it('clears the rebooting banner and re-enables controls once the appliance returns on the new image', async () => {
+  fetchRoutes({
+    'POST /api/v1/system/update/reboot': () => new Response(JSON.stringify({ rebooting: true }), { status: 202, headers: { 'Content-Type': 'application/json' } }),
+  });
+  const api = new ApiClient('csrf-tok');
+  const mgr = session(['status.read', 'configuration.apply']);
+  const staged: UpdateStatus = {
+    ...availableStatus,
+    state: 'staged',
+    available: undefined,
+    staged: availableStatus.available,
+    rebootNeeded: true,
+  };
+  const makeResource = (data: UpdateStatus) => ({
+    data,
+    loading: false,
+    error: '',
+    refresh: () => Promise.resolve(),
+    reload: () => Promise.resolve(),
+  });
+
+  const { rerender } = render(<UpdatesScreen api={api} session={mgr} update={makeResource(staged)} onSessionLost={noopSessionLost} />);
+  await userEvent.click(screen.getByRole('button', { name: 'Reboot to apply' }));
+  await userEvent.click(await screen.findByRole('button', { name: 'Reboot now' }));
+
+  expect(await screen.findByText('Rebooting appliance')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Check for updates' })).toBeDisabled();
+
+  // Stale poll before boot completes keeps rebooting state active.
+  rerender(<UpdatesScreen api={api} session={mgr} update={makeResource({ ...staged })} onSessionLost={noopSessionLost} />);
+  expect(screen.getByText('Rebooting appliance')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Check for updates' })).toBeDisabled();
+
+  // Post-reboot status with the new booted deployment clears rebooting and re-enables controls.
+  const bootedNew: UpdateStatus = {
+    supported: true,
+    state: 'up_to_date',
+    booted: availableStatus.available,
+    rollback: availableStatus.booted,
+    rebootNeeded: false,
+  };
+  rerender(<UpdatesScreen api={api} session={mgr} update={makeResource(bootedNew)} onSessionLost={noopSessionLost} />);
+  expect(screen.queryByText('Rebooting appliance')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Check for updates' })).toBeEnabled();
+});
