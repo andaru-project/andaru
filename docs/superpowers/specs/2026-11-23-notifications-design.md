@@ -107,7 +107,7 @@ Every channel gets a "Send a test" action on its settings page. The test goes th
 - **Missed notifications** and **missed deliveries:** above.
 - **Disk:** the engine raises `disk/state` when the state directory's file system passes 90% (`warning`) or 97% (`critical`). A critical one eases to a warning below 95%, and a warning clears below 85%. It checks once a minute.
 
-Each states its notifications when the engine starts, as above. The engine's notifications have the source `engine`. After the start, it works them out again at each apply event, each save and each minute, and publishes only what changed. At the start it also clears each one that may have been raised before and is not so now (the upgrade, the disk, and every earlier apply that failed or was rolled back), since the layer may not yet have read what came before.
+Each states its notifications when the engine starts, as above. The engine's notifications have the source `engine`. After the start, it works them out again at each apply event, each save and each minute, and publishes only what changed. At the start it also clears each one that may have been raised before and is not so now (the upgrade, the disk, and every earlier apply that failed or was rolled back), since the layer may not yet have read what came before. Each such clear waits until its part can be read, and is tried again until it is published.
 
 ## What comes first
 

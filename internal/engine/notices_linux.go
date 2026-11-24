@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -41,8 +40,11 @@ type notices struct {
 	stateDir string
 	upgrade  func(context.Context) (bool, error)
 	disk     func() (float64, error)
-	// sent is what the engine last said of each of its notifications that is raised.
+	// sent is what the engine last said of each of its notifications that is raised. One with no subject is one that
+	// may be raised from before this start: it is said again, or cleared, once its part is read and the publish works.
 	sent map[string]notify.Raise
+	// restated says whether the applies were read since this start, to mark those that may be raised from before.
+	restated bool
 	// interrupted is the apply the last run found interrupted: one is raised only when two runs in a row find it,
 	// since an apply between two of its writes reads as interrupted for a moment.
 	interrupted string
@@ -71,14 +73,11 @@ func (n *notices) nudge() {
 	}
 }
 
-// run states everything once, given what the layer shows as active, then again at each nudge and each minute.
+// run states everything, given what the layer shows as active, then again at each nudge and each minute. What the
+// layer shows may be behind the bus at start, so whatever may be raised is said again or cleared.
 func (n *notices) run(ctx context.Context, active []notify.Notification) {
-	for _, a := range active {
-		if a.Source == noticeSource {
-			n.sent[a.Key] = a.Raise
-		}
-	}
-	n.state(ctx, true)
+	n.begin(active)
+	n.state(ctx)
 	tick := time.NewTicker(time.Minute)
 	defer tick.Stop()
 	for {
@@ -88,14 +87,22 @@ func (n *notices) run(ctx context.Context, active []notify.Notification) {
 		case <-n.poke:
 		case <-tick.C:
 		}
-		n.state(ctx, false)
+		n.state(ctx)
 	}
 }
 
-func (n *notices) state(ctx context.Context, all bool) {
+// begin marks what may be raised from before this start.
+func (n *notices) begin(active []notify.Notification) {
+	n.sent, n.restated, n.interrupted = map[string]notify.Raise{upgradeKey: {Key: upgradeKey}, diskKey: {Key: diskKey}}, false, ""
+	for _, a := range active {
+		if a.Source == noticeSource {
+			n.sent[a.Key] = notify.Raise{Key: a.Key, Severity: a.Severity} // the severity keeps the disk's steps
+		}
+	}
+}
+
+func (n *notices) state(ctx context.Context) {
 	want := map[string]notify.Raise{}
-	// may are the keys that may be raised from an earlier start, cleared by the first run when not wanted.
-	may := []string{upgradeKey, diskKey}
 	// A part that cannot be read keeps what was said of it, rather than clearing it.
 	read := func(part string, err error, match func(string) bool) bool {
 		if err == nil {
@@ -111,12 +118,16 @@ func (n *notices) state(ctx context.Context, all bool) {
 				want[k] = r
 			}
 		}
-		may = slices.DeleteFunc(may, match)
 		return false
 	}
 	ended, err := n.applies(want)
-	if read("applies", err, func(k string) bool { return strings.HasPrefix(k, "apply/") }) {
-		may = append(may, ended...)
+	if read("applies", err, func(k string) bool { return strings.HasPrefix(k, "apply/") }) && !n.restated {
+		n.restated = true
+		for _, k := range ended {
+			if _, ok := n.sent[k]; !ok {
+				n.sent[k] = notify.Raise{Key: k}
+			}
+		}
 	}
 	if pending, err := n.upgrade(ctx); read("upgrade decisions", err, func(k string) bool { return k == upgradeKey }) && pending {
 		want[upgradeKey] = notify.Raise{Key: upgradeKey, Severity: notify.Warning,
@@ -130,20 +141,13 @@ func (n *notices) state(ctx context.Context, all bool) {
 		}
 	}
 	for k, r := range want {
-		if (all || n.sent[k] != r) && n.say(r) {
+		if n.sent[k] != r && n.say(r) {
 			n.sent[k] = r
 		}
 	}
 	for k := range n.sent {
 		if _, ok := want[k]; !ok && n.say(notify.Raise{Key: k}) {
 			delete(n.sent, k)
-		}
-	}
-	if all {
-		for _, k := range may {
-			if _, ok := want[k]; !ok {
-				n.say(notify.Raise{Key: k})
-			}
 		}
 	}
 }
@@ -186,7 +190,7 @@ func (n *notices) applies(want map[string]notify.Raise) ([]string, error) {
 		case r.Severity == "":
 		case !last || p.Confirmed != nil && g.ID <= *p.Confirmed:
 			ended = append(ended, r.Key)
-		case g.Reason == "interrupted" && n.interrupted != r.Key && n.sent[r.Key] != r:
+		case g.Reason == "interrupted" && n.interrupted != r.Key && n.sent[r.Key].Severity == "":
 			interrupted = r.Key
 		default:
 			want[r.Key] = r

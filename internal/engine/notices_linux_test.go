@@ -62,10 +62,13 @@ func (b *noticeBench) pending(t *testing.T, id int) {
 	}
 }
 
-// run states once and returns what was published, by key; a clear has no severity.
-func (b *noticeBench) run(all bool) map[string]notify.Raise {
+// run states once, after a start that found active when start, and returns what was published, by key; a clear has no severity.
+func (b *noticeBench) run(start bool, active ...notify.Notification) map[string]notify.Raise {
 	b.said = nil
-	b.state(context.Background(), all)
+	if start {
+		b.begin(active)
+	}
+	b.state(context.Background())
 	out := map[string]notify.Raise{}
 	for _, r := range b.said {
 		out[r.Key] = r
@@ -111,8 +114,7 @@ func TestNoticesApplies(t *testing.T) {
 		t.Fatalf("said %+v", said)
 	}
 	// After a start, what is still so is said again, and what may be raised from before is cleared.
-	b.sent, b.interrupted = map[string]notify.Raise{"apply/7": b.sent["apply/7"]}, ""
-	said = b.run(true)
+	said = b.run(true, notify.Notification{Source: noticeSource, Raise: b.sent["apply/7"]})
 	if said["apply/7"].Severity != notify.Critical || said["apply/2"].Severity != "" || said["apply/5"].Severity != "" {
 		t.Fatalf("said %+v", said)
 	}
@@ -153,6 +155,44 @@ func TestNoticesRetryWhatFailedToPublish(t *testing.T) {
 	b.run(false)
 	b.publish = func(r notify.Raise) error { b.said = append(b.said, r); return nil }
 	if said := b.run(false); said[upgradeKey].Severity != notify.Warning {
+		t.Fatalf("said %+v", said)
+	}
+}
+
+// What may be raised from before a start is cleared once it can be, even when the first try cannot.
+func TestNoticesStartClearsRetry(t *testing.T) {
+	b := newNoticeBench(t)
+	b.generation(t, 1, generation.Failed, "bad", "null")
+	b.generation(t, 2, generation.Confirmed, "", "2")
+	pointers := filepath.Join(generation.Dir(b.dir), "pointers.json")
+	if err := os.WriteFile(pointers, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b.publish = func(notify.Raise) error { return errors.New("bus closed") }
+	b.run(true)
+	b.publish = func(r notify.Raise) error { b.said = append(b.said, r); return nil }
+	// The publish works again, the applies cannot be read yet: the upgrade and the disk are cleared.
+	if said := b.run(false); len(said) != 2 || said[upgradeKey].Severity != "" || said[diskKey].Severity != "" {
+		t.Fatalf("said %+v", said)
+	}
+	b.generation(t, 2, generation.Confirmed, "", "2")
+	if said := b.run(false); len(said) != 1 || said["apply/1"].Key == "" || said["apply/1"].Severity != "" {
+		t.Fatalf("said %+v", said)
+	}
+	if said := b.run(false); len(said) != 0 {
+		t.Fatalf("said %+v", said)
+	}
+}
+
+// A part that cannot be read at start is neither said nor cleared until it can be.
+func TestNoticesStartWaitsForUnreadable(t *testing.T) {
+	b := newNoticeBench(t)
+	b.fail = errors.New("unreadable")
+	if said := b.run(true, notify.Notification{Source: noticeSource, Raise: notify.Raise{Key: diskKey, Severity: notify.Warning}}); len(said) != 0 {
+		t.Fatalf("said %+v", said)
+	}
+	b.fail, b.used = nil, 0.88
+	if said := b.run(false); len(said) != 2 || said[diskKey].Severity != notify.Warning || said[upgradeKey].Severity != "" {
 		t.Fatalf("said %+v", said)
 	}
 }
