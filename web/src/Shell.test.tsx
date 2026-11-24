@@ -6,6 +6,7 @@ import { configureNetplaneApi } from './netplane/api';
 import { setRoutePrefix } from './netplane/routing';
 import { Shell } from './Shell';
 import { openStreams } from './test/events';
+import { setTimeZone } from './timezone';
 import { fetchRoutes, jsonResponse } from './test/fetch';
 import { apply, pointers, session } from './test/fixtures';
 import { act, render, screen } from './test/render';
@@ -37,6 +38,7 @@ afterEach(() => {
   visibility = 'visible';
   configureNetplaneApi(null);
   setRoutePrefix('');
+  setTimeZone('local');
   vi.useRealTimers();
 });
 
@@ -501,3 +503,17 @@ it('shows Update and Reboot badges on the System -> Updates navigation link', as
   );
   expect(await screen.findByRole('link', { name: /Updates.*Reboot/i })).toBeInTheDocument();
 });
+
+it('lets the user pick a display time zone from the account menu and updates timestamps immediately', async () => {
+  const user = userEvent.setup();
+  routes();
+  mount('/system/session');
+  await user.click(screen.getByRole('button', { name: 'Administrator' }));
+  await user.click(await screen.findByRole('menuitem', { name: 'Time zone…' }, { timeout: 5000 }));
+  const input = await screen.findByRole('combobox', { name: 'Time zone' }, { timeout: 5000 });
+  await user.clear(input);
+  await user.paste('Europe/Berlin');
+  await user.keyboard('{ArrowDown}{Enter}');
+  await user.click(screen.getByRole('button', { name: 'Done' }));
+  expect(screen.getByText('2026-11-16 13:00:00 +01:00')).toBeInTheDocument();
+}, 15_000);

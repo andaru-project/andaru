@@ -1,6 +1,7 @@
 import { Alert, Badge, Button, Group, Modal, Paper, Stack, Table, Text, Title } from '@mantine/core';
 import { useState, type ReactNode } from 'react';
 import { reportError, type ApiClient } from '../api';
+import { formatTimestamp, useTimeZone } from '../timezone';
 import type { Session, UpdateDeployment, UpdateStatus } from '../types';
 import { useVisiblePoll, type Resource } from '../useResource';
 import { Loaded } from './Loaded';
@@ -22,11 +23,10 @@ function Facts({ children }: { children: ReactNode }) {
   return <Table className="facts" withRowBorders={false} verticalSpacing={2} horizontalSpacing={0}><Table.Tbody>{children}</Table.Tbody></Table>;
 }
 
-function formatUtc(iso?: string): string {
+function formatWhen(iso: string | undefined, timeZone: string): string {
   if (!iso) return '—';
-  const ms = Date.parse(iso);
-  if (!Number.isFinite(ms)) return iso;
-  return `${new Date(ms).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+  const formatted = formatTimestamp(iso, timeZone);
+  return formatted === '—' ? iso : formatted;
 }
 
 function shortDigest(digest?: string): string {
@@ -47,12 +47,13 @@ const stateMeta: Record<UpdateStatus['state'], { color: string; label: string }>
 };
 
 function DeploymentRows({ deployment }: { deployment: UpdateDeployment }) {
+  const timeZone = useTimeZone();
   return (
     <>
       {deployment.version && <Row label="Version"><Text span ff="monospace" fw={600}>{deployment.version}</Text></Row>}
       {deployment.image && <Row label="Image"><Text span ff="monospace" size="sm">{deployment.image}</Text></Row>}
       {deployment.digest && <Row label="Digest"><Text span ff="monospace" size="sm" title={deployment.digest}>{shortDigest(deployment.digest)}</Text></Row>}
-      {deployment.timestamp && <Row label="Built">{formatUtc(deployment.timestamp)}</Row>}
+      {deployment.timestamp && <Row label="Built">{formatWhen(deployment.timestamp, timeZone)}</Row>}
       {deployment.signature && (
         <Row label="Signature">
           <Badge size="xs" variant="light" color={deployment.signature === 'containerPolicy' ? 'green' : 'gray'} className="plain-badge">
@@ -108,6 +109,7 @@ function bootedIdentity(status?: UpdateStatus): string {
 }
 
 export function UpdatesScreen({ api, session, update, onSessionLost }: UpdatesScreenProps) {
+  const timeZone = useTimeZone();
   const canManage = session.capabilities.includes('configuration.apply');
   const [busy, setBusy] = useState<UpdateAction | null>(null);
   const [actionError, setActionError] = useState('');
@@ -189,7 +191,7 @@ export function UpdatesScreen({ api, session, update, onSessionLost }: UpdatesSc
                   <Text size="sm" c="dimmed">
                     This host is not booted from a bootc-managed Andaru appliance image, so image updates are unavailable here.
                   </Text>
-                  {status.checkedAt && <Text size="xs" c="dimmed">Last checked: {formatUtc(status.checkedAt)}</Text>}
+                  {status.checkedAt && <Text size="xs" c="dimmed" className="tabular">Last checked: {formatWhen(status.checkedAt, timeZone)}</Text>}
                 </Stack>
               </Paper>
             );
@@ -214,7 +216,7 @@ export function UpdatesScreen({ api, session, update, onSessionLost }: UpdatesSc
                 </Group>
                 <Facts>
                   {status.booted && <DeploymentRows deployment={status.booted} />}
-                  <Row label="Last checked">{formatUtc(status.checkedAt)}</Row>
+                  <Row label="Last checked">{formatWhen(status.checkedAt, timeZone)}</Row>
                 </Facts>
               </Paper>
 

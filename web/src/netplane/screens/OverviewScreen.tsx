@@ -22,6 +22,7 @@ import {
 import { DriverBadge, FindingBadge } from '../components/Badges';
 import { AlertRow, CardHeader, FindingCounts } from '../components/ui';
 import { devicePath, netplanePath, vlanFlowPath } from '../routing';
+import { formatTime, formatTimestamp, useTimeZone } from '../../timezone';
 import {
   describeFinding,
   findingKey,
@@ -48,6 +49,7 @@ export function OverviewScreen({
   devicesById,
 }: Props) {
   const navigate = useNavigate();
+  const timeZone = useTimeZone();
 
   const devices = state?.devices ?? [];
   const links = state?.links ?? [];
@@ -94,7 +96,7 @@ export function OverviewScreen({
           <Text size="sm" c="dimmed">
             Cross-vendor status across {devices.length} device{devices.length === 1 ? '' : 's'}
             {drivers.length > 0 ? ` and ${drivers.length} driver${drivers.length === 1 ? '' : 's'}` : ''}
-            {generatedAt ? ` · updated ${new Date(generatedAt).toLocaleTimeString()}` : ''}
+            {generatedAt ? ` · updated ${formatTime(generatedAt, timeZone)}` : ''}
           </Text>
         </div>
         <Group gap="xs">
@@ -237,7 +239,7 @@ export function OverviewScreen({
               severity="crit"
               badge={<Badge size="xs" variant="light" color="red">CRIT · OFFLINE</Badge>}
               title={<Text size="sm" fw={600}>{d.name} is unreachable</Text>}
-              subtitle={`${d.driver}${d.mgmt_ip ? ` · ${d.mgmt_ip}` : ''} · last seen ${new Date(d.last_seen).toLocaleString()}`}
+              subtitle={`${d.driver}${d.mgmt_ip ? ` · ${d.mgmt_ip}` : ''} · last seen ${formatTimestamp(d.last_seen, timeZone)}`}
               subtitleMono
               action={
                 <Button size="compact-xs" variant="default" component={Link} to={devicePath(d.id)}>
@@ -495,7 +497,7 @@ export function OverviewScreen({
                         {ev.type}
                       </Badge>
                       <Text size="xs" c="dimmed" ff="monospace">
-                        {new Date(ev.timestamp).toLocaleTimeString()}
+                        {formatTime(ev.timestamp, timeZone)}
                       </Text>
                     </Group>
                     <Text size="xs">{ev.summary}</Text>

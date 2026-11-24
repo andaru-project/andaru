@@ -2,6 +2,7 @@ import { Alert, Badge, Button, Code, Group, List, Loader, Paper, Radio, ScrollAr
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiClient, ApiError, reportError } from '../api';
 import { clock, describe, differences, fieldChanges, liveApply, newer, referenceNames, resolveReferences, stateLabels, useCountdown, type ChangeState } from '../changes';
+import { formatTimestamp, useTimeZone } from '../timezone';
 import type { Finding, Session, VersionInfo } from '../types';
 import { useResource } from '../useResource';
 
@@ -29,6 +30,7 @@ function FindingsList({ findings }: { findings: Finding[] }) {
 }
 
 export function ChangesScreen({ api, session, state, stateError, connected, onChanged, onSessionLost }: ChangesScreenProps) {
+  const timeZone = useTimeZone();
   const canApply = session.capabilities.includes('configuration.apply');
   const canConfirm = session.capabilities.includes('configuration.confirm');
   const live = state ? liveApply(state.applies) : null;
@@ -129,7 +131,7 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
   const errors = changes?.preview.findings.filter((finding) => finding.severity === 'error') ?? [];
   const warnings = changes?.preview.findings.filter((finding) => finding.severity === 'warning') ?? [];
   const inFlight = latest?.state === 'awaiting_confirmation' || latest?.state === 'activating';
-  const deadline = latest?.deadline ? clock(latest.deadline) : 'its deadline';
+  const deadline = latest?.deadline ? clock(latest.deadline, timeZone) : 'its deadline';
 
   return (
     <Stack>
@@ -170,7 +172,7 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
             <Title order={3} size="h4">What would change</Title>
             {!detail ? <Loader aria-label="Loading the review" /> : !changes ? (!review.error && <Text role="status">Nothing to apply: every saved change is live.</Text>) : (
               <>
-                <Stack gap="xs">{changes.versions.map((version) => <div key={version.id}><Text fw={600}>Saved version {version.id} by {version.actor} at {new Date(version.createdAt).toLocaleString()}</Text><Text size="sm" c="dimmed">{version.changes.length === 1 ? '1 changed object' : `${version.changes.length} changed objects`}</Text></div>)}</Stack>
+                <Stack gap="xs">{changes.versions.map((version) => <div key={version.id}><Text fw={600} className="tabular">Saved version {version.id} by {version.actor} at {formatTimestamp(version.createdAt, timeZone)}</Text><Text size="sm" c="dimmed">{version.changes.length === 1 ? '1 changed object' : `${version.changes.length} changed objects`}</Text></div>)}</Stack>
                 {changed.length === 0 ? <Text role="status">The saved versions end where the live one started.</Text> : changed.map((item) => (
                   <div key={`${item.collection} ${item.id}`} aria-label={`${item.label} ${item.kind}`}>
                     <Group gap="xs"><Badge color={item.kind === 'created' ? 'green' : item.kind === 'deleted' ? 'red' : 'yellow'}>{item.kind}</Badge><Text fw={600}>{item.label}</Text><Text size="sm" c="dimmed">{item.collection}</Text></Group>
@@ -216,7 +218,7 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
         <Title order={3} size="h4" mb="sm">History</Title>
         {state.applies.items.length === 0 ? <Text>No apply yet.</Text> : (
           <ScrollArea><Table className="data-table" striped aria-label="Apply history"><Table.Thead><Table.Tr><Table.Th>Apply</Table.Th><Table.Th>State</Table.Th><Table.Th>Saved version</Table.Th><Table.Th>Time</Table.Th><Table.Th>Reason</Table.Th></Table.Tr></Table.Thead><Table.Tbody>
-            {state.applies.items.slice(0, 20).map((item) => <Table.Tr key={item.id}><Table.Td data-label="Apply" className="tabular">{item.id}</Table.Td><Table.Td data-label="State">{stateLabels[item.state]}</Table.Td><Table.Td data-label="Saved version" className="tabular">{item.savedVersion}</Table.Td><Table.Td data-label="Time" className="tabular">{new Date(item.createdAt).toLocaleString()}</Table.Td><Table.Td data-label="Reason">{item.reason || '—'}</Table.Td></Table.Tr>)}
+            {state.applies.items.slice(0, 20).map((item) => <Table.Tr key={item.id}><Table.Td data-label="Apply" className="tabular">{item.id}</Table.Td><Table.Td data-label="State">{stateLabels[item.state]}</Table.Td><Table.Td data-label="Saved version" className="tabular">{item.savedVersion}</Table.Td><Table.Td data-label="Time" className="tabular">{formatTimestamp(item.createdAt, timeZone)}</Table.Td><Table.Td data-label="Reason">{item.reason || '—'}</Table.Td></Table.Tr>)}
           </Table.Tbody></Table></ScrollArea>
         )}
       </Paper>

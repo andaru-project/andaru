@@ -1,12 +1,14 @@
 import { Alert, Badge, Button, Group, Loader, Modal, ScrollArea, Select, Stack, Table, Text, Textarea, Title } from '@mantine/core';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ApiClient, ApiError, apiErrorMessage } from '../api';
+import { formatTimestamp, useTimeZone } from '../timezone';
 import type { Page, Role, Session, Token, TokenIssueResponse, User } from '../types';
 import { TokenDialog } from './TokenDialog';
 
 interface TokensScreenProps { api: ApiClient; session: Session; onSessionLost(): void }
 
 export function TokensScreen({ api, session, onSessionLost }: TokensScreenProps) {
+  const timeZone = useTimeZone();
   const canManageAll = session.capabilities.includes('tokens.manageAll');
   const ownUser = useMemo<User>(() => ({ id: session.account.id, login: session.account.login, displayName: session.account.displayName, kind: 'human', enabled: true, roleIds: [], revision: 0, createdAt: 0, updatedAt: 0 }), [session.account]);
   const [users, setUsers] = useState<User[]>([ownUser]);
@@ -122,7 +124,7 @@ export function TokensScreen({ api, session, onSessionLost }: TokensScreenProps)
       {error && <Alert color="red" role="alert" title="Token request failed">{error}</Alert>}
       {canManageAll && <Group align="flex-end"><Select data={users.map((user) => ({ value: user.id, label: `${user.displayName || user.login} (${user.login})` }))} label="Token owner" searchable value={accountId} onChange={(value) => void selectAccount(value)} />{nextUsers && <Button variant="default" onClick={() => void loadMoreUsers()}>Load more users</Button>}</Group>}
       {loading ? <Loader aria-label="Loading tokens" /> : tokens.length === 0 ? <Alert role="status">No tokens for this account.</Alert> : (
-        <ScrollArea><Table className="data-table" striped><Table.Thead><Table.Tr><Table.Th>Name</Table.Th><Table.Th>Scope</Table.Th><Table.Th>Expiration</Table.Th><Table.Th>Last used</Table.Th><Table.Th>Actions</Table.Th></Table.Tr></Table.Thead><Table.Tbody>{tokens.map((token) => <Table.Tr key={token.selector}><Table.Td data-label="Name"><Text fw={600}>{token.name}</Text><Text c="dimmed" size="xs">{token.selector}</Text></Table.Td><Table.Td data-label="Scope">{token.scope.join(', ') || 'No capabilities'}</Table.Td><Table.Td data-label="Expiration">{token.noExpiry ? <Badge color="yellow">No expiry</Badge> : token.expiresAt ? new Date(token.expiresAt).toLocaleString() : '—'}</Table.Td><Table.Td data-label="Last used">{token.lastUsedAt ? new Date(token.lastUsedAt).toLocaleString() : 'Never'}</Table.Td><Table.Td data-label="Actions">{token.revokedAt ? <Badge color="gray">Revoked</Badge> : <Button aria-label={`Revoke ${token.name}`} color="red" size="xs" variant="subtle" onClick={() => setRevoke(token)}>Revoke</Button>}</Table.Td></Table.Tr>)}</Table.Tbody></Table></ScrollArea>
+        <ScrollArea><Table className="data-table" striped><Table.Thead><Table.Tr><Table.Th>Name</Table.Th><Table.Th>Scope</Table.Th><Table.Th>Expiration</Table.Th><Table.Th>Last used</Table.Th><Table.Th>Actions</Table.Th></Table.Tr></Table.Thead><Table.Tbody>{tokens.map((token) => <Table.Tr key={token.selector}><Table.Td data-label="Name"><Text fw={600}>{token.name}</Text><Text c="dimmed" size="xs">{token.selector}</Text></Table.Td><Table.Td data-label="Scope">{token.scope.join(', ') || 'No capabilities'}</Table.Td><Table.Td data-label="Expiration" className="tabular">{token.noExpiry ? <Badge color="yellow">No expiry</Badge> : token.expiresAt ? formatTimestamp(token.expiresAt, timeZone) : '—'}</Table.Td><Table.Td data-label="Last used" className="tabular">{token.lastUsedAt ? formatTimestamp(token.lastUsedAt, timeZone) : 'Never'}</Table.Td><Table.Td data-label="Actions">{token.revokedAt ? <Badge color="gray">Revoked</Badge> : <Button aria-label={`Revoke ${token.name}`} color="red" size="xs" variant="subtle" onClick={() => setRevoke(token)}>Revoke</Button>}</Table.Td></Table.Tr>)}</Table.Tbody></Table></ScrollArea>
       )}
       {nextTokens && <Button variant="default" onClick={() => void loadMoreTokens()}>Load more tokens</Button>}
       {creating && <TokenDialog account={target} capabilities={availableCapabilities} onClose={() => setCreating(false)} onSessionLost={onSessionLost} onSave={(input) => api.createToken(input)} onIssued={(response) => { setIssued(response); void loadTokens(accountId); }} />}
