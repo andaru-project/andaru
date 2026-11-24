@@ -20,6 +20,7 @@ type Client struct {
 	nextID   int64
 	pending  map[int64]chan error
 	queue    []Delivery
+	bytes    int // payload bytes in queue
 	queued   *sync.Cond
 	messages chan Delivery
 	done     chan struct{}
@@ -28,9 +29,12 @@ type Client struct {
 	err      error
 }
 
-// clientQueue is how many deliveries a client may leave unread before its connection is closed, as the bus does
-// with a client that stops reading.
-const clientQueue = 4096
+// clientQueue and clientQueueBytes bound the deliveries a client may leave unread before its connection is closed,
+// as the bus does with a client that stops reading. A durable consumer then reads on from its cursor.
+const (
+	clientQueue      = 4096
+	clientQueueBytes = 64 << 20
+)
 
 // Delivery is what a client got: an event, a gap or the loss of a consumer to another connection (Detached).
 // Consumer names the consumer it is for, or is empty for a subscription.
@@ -103,7 +107,10 @@ func (c *Client) write(ctx context.Context, f frame) error {
 		deadline = time.Now().Add(writeTimeout)
 	}
 	_ = c.nc.SetWriteDeadline(deadline)
-	_, err = c.nc.Write(line)
+	if _, err = c.nc.Write(line); err != nil {
+		// Part of the line may have gone: whatever follows would be read as its rest.
+		_ = c.nc.Close()
+	}
 	return err
 }
 
@@ -176,9 +183,10 @@ func (c *Client) read() {
 		}
 		if d != nil {
 			c.mu.Lock()
-			full := len(c.queue) >= clientQueue
+			full := len(c.queue) >= clientQueue || c.bytes+len(d.Payload) > clientQueueBytes
 			if !full {
 				c.queue = append(c.queue, *d)
+				c.bytes += len(d.Payload)
 				c.queued.Signal()
 			}
 			c.mu.Unlock()
@@ -198,6 +206,11 @@ func (c *Client) read() {
 // pump hands the queue to Messages in order, and closes Messages after the last delivery once the connection ends.
 func (c *Client) pump() {
 	defer close(c.messages)
+	defer func() {
+		c.mu.Lock()
+		c.queue, c.bytes = nil, 0 // what nobody took is not kept
+		c.mu.Unlock()
+	}()
 	for {
 		c.mu.Lock()
 		for len(c.queue) == 0 && c.err == nil {
@@ -209,6 +222,7 @@ func (c *Client) pump() {
 		}
 		d := c.queue[0]
 		c.queue = c.queue[1:]
+		c.bytes -= len(d.Payload)
 		c.mu.Unlock()
 		select {
 		case c.messages <- d:

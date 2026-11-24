@@ -212,6 +212,9 @@ func serveUnix(ctx context.Context, socketPath string, handler http.Handler) (re
 // listenRootSocket binds a socket only root can reach, in a root-owned directory of mode 0700 it creates if needed.
 // closeListener closes it and removes the socket file.
 func listenRootSocket(socketPath, name string) (_ *net.UnixListener, closeListener func() error, _ error) {
+	if !filepath.IsAbs(socketPath) || filepath.Clean(socketPath) != socketPath || len(socketPath) >= 108 {
+		return nil, nil, errors.New(name + " socket requires a canonical absolute path shorter than 108 bytes")
+	}
 	parent := filepath.Dir(socketPath)
 	if err := securefs.CheckAncestors(filepath.Dir(parent)); err != nil {
 		return nil, nil, err

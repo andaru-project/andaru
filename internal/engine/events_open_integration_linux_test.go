@@ -50,3 +50,10 @@ func TestUnreadableBusStoreIsMovedAside(t *testing.T) {
 		t.Fatalf("a socket failure moved the store aside: %v", err)
 	}
 }
+
+// A socket path that is not absolute is refused before anything is created for it.
+func TestRelativeBusSocketIsRefused(t *testing.T) {
+	if _, _, err := listenRootSocket("bus.sock", "bus"); err == nil {
+		t.Fatal("a relative socket path was accepted")
+	}
+}

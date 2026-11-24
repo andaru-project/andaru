@@ -837,3 +837,45 @@ func TestGrantsAreFilters(t *testing.T) {
 		t.Fatal("a grant that is not a filter was accepted")
 	}
 }
+
+func TestOpenRefusesANegativeRetention(t *testing.T) {
+	if _, err := Open(Options{Path: filepath.Join(t.TempDir(), "bus.db"), Retention: -time.Hour}); err == nil {
+		t.Fatal("a negative retention was accepted")
+	}
+}
+
+// A closed bus takes no event and calls no handler.
+func TestPublishAfterClose(t *testing.T) {
+	h := newHarness(t, Options{})
+	called := false
+	if _, err := h.bus.Subscribe("config/#", func(string, []byte) { called = true }); err != nil {
+		t.Fatal(err)
+	}
+	h.bus.Close()
+	if h.bus.Publish("config/head", []byte("1"), false) == nil || called {
+		t.Fatal("a closed bus took a live event")
+	}
+}
+
+// A stale gap token sent after the valid one does not undo the gap's ack.
+func TestStaleTokenAfterTheGapAck(t *testing.T) {
+	h := newHarness(t, Options{LostHistory: true})
+	web := h.dial("web")
+	if err := web.Consume(ctx(t), "ui", "config/#"); err != nil {
+		t.Fatal(err)
+	}
+	gap := receive(t, web.Messages())
+	if !gap.Gap {
+		t.Fatalf("got %+v", gap)
+	}
+	if err := web.Ack("ui", gap.Seq); err != nil {
+		t.Fatal(err)
+	}
+	if err := web.Ack("ui", gap.Seq-1); err != nil {
+		t.Fatal(err)
+	}
+	h.publish("config/head", "1", true)
+	if d := receive(t, web.Messages()); string(d.Payload) != "1" {
+		t.Fatalf("got %+v, want the event after the acked gap", d)
+	}
+}

@@ -22,6 +22,7 @@ type attachment struct {
 	owner  int64 // stored with the consumer: only this attachment writes its cursor and gap
 	stop   chan struct{}
 	closed bool
+	taken  bool // another attachment took the name over; under b.mu
 }
 
 const batch = 100
@@ -89,6 +90,7 @@ func (b *Bus) attach(name, filter string) (*attachment, int64, bool, error) {
 	a := &attachment{name: name, owner: owner, stop: make(chan struct{})}
 	b.mu.Lock()
 	if old := b.attached[name]; old != nil {
+		old.taken = true
 		old.detach()
 	}
 	b.attached[name] = a
@@ -138,10 +140,11 @@ func (b *Bus) markGap(a *attachment, to int64) {
 	}
 }
 
-func (b *Bus) clearGap(a *attachment) {
-	if _, err := b.db.Exec(`UPDATE consumers SET gap = 0, seen = ? WHERE name = ? AND owner = ?`, time.Now().Unix(), a.name, a.owner); err != nil {
-		b.log.Error("bus consumer gap not cleared", "consumer", a.name, "error", err)
-	}
+// clearGap stores that the consumer is done with its gap. Its caller retries a failure: a gap left stored would be
+// delivered again after a restart, though it was handled.
+func (b *Bus) clearGap(a *attachment) error {
+	_, err := b.db.Exec(`UPDATE consumers SET gap = 0, seen = ? WHERE name = ? AND owner = ?`, time.Now().Unix(), a.name, a.owner)
+	return err
 }
 
 // read returns the durable events after seq, oldest first, or the point the log was pruned to when events after
@@ -203,7 +206,9 @@ func (b *Bus) Consume(name, filter string, handler func(Message) error) (func(),
 				if !b.retry(a, func() error { return handler(Message{Gap: true, Seq: cursor}) }) {
 					return
 				}
-				b.clearGap(a)
+				if !b.retry(a, func() error { return b.clearGap(a) }) {
+					return
+				}
 				gap = false
 			}
 			wake := b.waitFor()
@@ -294,6 +299,9 @@ func (b *Bus) retry(a *attachment, f func() error) bool {
 // events older than Retention. Pruning by age records how far it went, so a consumer behind it learns of the gap.
 func (b *Bus) prune(now time.Time) error {
 	horizon := now.Add(-b.opt.Retention).Unix()
+	// No attach between the list of attached consumers and the transaction: one would be removed for being away.
+	b.attachMu.Lock()
+	defer b.attachMu.Unlock()
 	b.mu.Lock()
 	attached := make([]string, 0, len(b.attached))
 	for name := range b.attached {

@@ -58,17 +58,21 @@ type conn struct {
 // positive sequence numbers; a gap frame carries a negative token of its own, and only an ack of that token is
 // the gap's.
 type reading struct {
-	a      *attachment
-	mu     sync.Mutex
-	acked  int64
-	gapAck int64
-	signal chan struct{}
+	a        *attachment
+	mu       sync.Mutex
+	acked    int64
+	gapToken int64 // the token of the gap frame sent last; 0 while none is pending
+	gapAcked bool
+	signal   chan struct{}
 }
 
 func (r *reading) ack(seq int64) {
 	r.mu.Lock()
 	if seq < 0 {
-		r.gapAck = seq
+		// Only the pending gap's own token counts: an old one can neither clear it nor undo its ack.
+		if seq == r.gapToken {
+			r.gapAcked = true
+		}
 	} else {
 		r.acked = max(r.acked, seq)
 	}
@@ -79,10 +83,17 @@ func (r *reading) ack(seq int64) {
 	}
 }
 
-func (r *reading) latest() (int64, int64) {
+func (r *reading) latest() (int64, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.acked, r.gapAck
+	return r.acked, r.gapAcked
+}
+
+// expectGap records the token of the gap frame about to be sent; an ack of any other token is not this gap's.
+func (r *reading) expectGap(token int64) {
+	r.mu.Lock()
+	r.gapToken, r.gapAcked = token, false
+	r.mu.Unlock()
 }
 
 func (b *Bus) serve(l net.Listener) {
@@ -315,7 +326,7 @@ func (c *conn) deliver(r *reading, name, filter string, cursor int64, gap bool) 
 	defer b.done.Done()
 	defer func() {
 		b.mu.Lock()
-		takenOver := b.attached[a.name] != a && b.attached[a.name] != nil
+		takenOver := a.taken
 		b.mu.Unlock()
 		b.release(a)
 		c.mu.Lock()
@@ -330,14 +341,14 @@ func (c *conn) deliver(r *reading, name, filter string, cursor int64, gap bool) 
 	sent := cursor
 	var inflight []int64
 	gapSent := false
-	var gapToken int64
 	for {
 		wake := b.waitFor()
 		var pause <-chan time.Time
 		switch {
 		case gap:
 			if !gapSent {
-				gapToken = -b.owners.Add(1)
+				gapToken := -b.owners.Add(1)
+				r.expectGap(gapToken)
 				if !c.send(frame{Op: "gap", Consumer: name, Seq: gapToken}) {
 					return
 				}
@@ -377,10 +388,13 @@ func (c *conn) deliver(r *reading, name, filter string, cursor int64, gap bool) 
 		}
 		select {
 		case <-r.signal:
-			seq, gapAck := r.latest()
+			seq, gapAcked := r.latest()
 			if gap {
-				if gapSent && gapAck == gapToken {
-					b.clearGap(a)
+				if gapSent && gapAcked {
+					if !b.retry(a, func() error { return b.clearGap(a) }) {
+						return
+					}
+					r.expectGap(0)
 					gap = false
 				}
 				continue

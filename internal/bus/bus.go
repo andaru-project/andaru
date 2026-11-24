@@ -100,6 +100,9 @@ func Open(o Options) (*Bus, error) {
 	if o.Logger == nil {
 		o.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
+	if o.Retention < 0 {
+		return nil, errors.New("bus: negative retention")
+	}
 	if o.Retention == 0 {
 		o.Retention = 7 * 24 * time.Hour
 	}
@@ -209,6 +212,11 @@ func (b *Bus) Publish(topic string, payload []byte, durable bool) error {
 	}
 	if len(payload) > maxPayload || !json.Valid(payload) {
 		return errors.New("bus: the payload is not JSON, or larger than 512 KiB")
+	}
+	select {
+	case <-b.closed:
+		return errors.New("bus: closed")
+	default:
 	}
 	m := Message{Topic: topic, Payload: payload}
 	if durable {
