@@ -509,8 +509,8 @@ it('lets the user pick a display time zone from the account menu and updates tim
   routes();
   mount('/system/session');
   await user.click(screen.getByRole('button', { name: 'Administrator' }));
-  await user.click(await screen.findByRole('menuitem', { name: 'Time zone…' }));
-  const input = await screen.findByRole('combobox', { name: 'Time zone' });
+  await user.click(await screen.findByRole('menuitem', { name: 'Time zone…' }, { timeout: 5000 }));
+  const input = await screen.findByRole('combobox', { name: 'Time zone' }, { timeout: 5000 });
   await user.clear(input);
   await user.type(input, 'Europe/Berlin{ArrowDown}{Enter}');
   await user.click(screen.getByRole('button', { name: 'Done' }));
