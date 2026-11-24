@@ -52,7 +52,8 @@ type Options struct {
 
 // Message is an event as a subscriber or consumer gets it. Seq orders durable events; it is 0 for an event a
 // live subscriber got that was not durable. Gap is a message of its own: events this consumer should have had
-// were pruned before it read them.
+// were pruned before it read them. A gap's Seq is the consumer's new cursor in the engine; over the socket it is a
+// negative token, not a position, to pass back to Ack as it is.
 type Message struct {
 	Seq     int64
 	Topic   string
@@ -82,6 +83,7 @@ type Bus struct {
 	nextSub   int
 	attached  map[string]*attachment // durable consumers being read, by name
 	owners    atomic.Int64           // numbers attachments, from the time the bus opened so as not to repeat after a restart
+	gaps      atomic.Int64           // numbers gap frames from 1: a token any JSON client holds exactly
 	wake      chan struct{}          // closed and replaced at each durable event
 	listeners []net.Listener
 	conns     map[*conn]struct{}
@@ -213,11 +215,10 @@ func (b *Bus) Publish(topic string, payload []byte, durable bool) error {
 	if len(payload) > maxPayload || !json.Valid(payload) {
 		return errors.New("bus: the payload is not JSON, or larger than 512 KiB")
 	}
-	select {
-	case <-b.closed:
+	if !b.track() { // held to the end, so Close waits for the store write and the handlers
 		return errors.New("bus: closed")
-	default:
 	}
+	defer b.done.Done()
 	m := Message{Topic: topic, Payload: payload}
 	if durable {
 		res, err := b.db.Exec(`INSERT INTO events (topic, payload, time) VALUES (?, ?, ?)`, topic, payload, time.Now().Unix())

@@ -226,9 +226,7 @@ func (c *Client) pump() {
 		c.mu.Unlock()
 		select {
 		case c.messages <- d:
-		case <-c.closing:
-			return
-		case <-c.done: // the connection ended: what nobody took is dropped, and durable consumers get it again
+		case <-c.closing: // closed by its owner: what nobody took is dropped, and durable consumers get it again
 			return
 		}
 	}

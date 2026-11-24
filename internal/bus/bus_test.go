@@ -3,6 +3,7 @@ package bus
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -732,13 +733,17 @@ func TestHandledGapStaysHandled(t *testing.T) {
 		t.Fatal(err)
 	}
 	gap := receive(t, web.Messages())
-	if !gap.Gap {
-		t.Fatalf("got %+v", gap)
+	if !gap.Gap || gap.Seq >= 0 || gap.Seq < -(1<<53) {
+		t.Fatalf("got %+v, want a gap whose token a JSON client holds exactly", gap)
 	}
 	if err = web.Ack("ui", gap.Seq); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(100 * time.Millisecond)
+	h.eventually(func() bool {
+		var pending int64
+		err := h.bus.db.QueryRow(`SELECT gap FROM consumers WHERE name = 'client/web/ui'`).Scan(&pending)
+		return err == nil && pending == 0
+	})
 	stop()
 	web.Close()
 	h.restart()
@@ -877,5 +882,52 @@ func TestStaleTokenAfterTheGapAck(t *testing.T) {
 	h.publish("config/head", "1", true)
 	if d := receive(t, web.Messages()); string(d.Payload) != "1" {
 		t.Fatalf("got %+v, want the event after the acked gap", d)
+	}
+}
+
+// A client keeps what reached it before the connection ended, and Messages closes after it.
+func TestClientKeepsWhatCameBeforeTheEnd(t *testing.T) {
+	h := newHarness(t, Options{})
+	web := h.dial("web")
+	if err := web.Subscribe(ctx(t), "config/#"); err != nil {
+		t.Fatal(err)
+	}
+	h.publish("config/head", `1`, false)
+	h.publish("config/head", `2`, false)
+	h.eventually(func() bool { // the pump holds 1, waiting for a reader; 2 is queued
+		web.mu.Lock()
+		defer web.mu.Unlock()
+		return len(web.queue) == 1
+	})
+	if err := h.bus.Close(); err != nil {
+		t.Fatal(err)
+	}
+	<-web.done
+	for _, want := range []string{`1`, `2`} {
+		if d := receive(t, web.Messages()); string(d.Payload) != want {
+			t.Fatalf("got %+v, want %s", d, want)
+		}
+	}
+	if _, open := <-web.Messages(); open {
+		t.Fatal("Messages still open")
+	}
+}
+
+// A frame larger than the bus reads is refused with a reason.
+func TestOversizedFrameSaysWhy(t *testing.T) {
+	h := newHarness(t, Options{})
+	nc, err := net.Dial("unix", h.socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	_ = nc.SetDeadline(time.Now().Add(5 * time.Second))
+	go func() {
+		_, _ = nc.Write([]byte(`{"op":"hello","id":1,"user":"web","token":"secret"}` + "\n"))
+		_, _ = nc.Write([]byte(`{"op":"publish","topic":"config/head","payload":"` + strings.Repeat("x", maxFrame) + `"}` + "\n"))
+	}()
+	all, _ := io.ReadAll(nc)
+	if !strings.Contains(string(all), "larger than 1 MiB") {
+		t.Fatalf("got %q", all)
 	}
 }

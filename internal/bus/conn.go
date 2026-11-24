@@ -239,6 +239,13 @@ func (c *conn) read() {
 			c.reply(f.ID, errors.New("unknown op"))
 		}
 	}
+	if errors.Is(scanner.Err(), bufio.ErrTooLong) {
+		// Written here, not queued: the connection closes next, and the client is owed the reason.
+		if line, err := encode(frame{Op: "error", Message: "frame larger than 1 MiB"}); err == nil {
+			_ = c.nc.SetWriteDeadline(time.Now().Add(writeTimeout))
+			_, _ = c.nc.Write(line)
+		}
+	}
 }
 
 // encode writes f as a line, without escaping <, > and &: a payload then takes its own size in the frame.
@@ -347,7 +354,7 @@ func (c *conn) deliver(r *reading, name, filter string, cursor int64, gap bool) 
 		switch {
 		case gap:
 			if !gapSent {
-				gapToken := -b.owners.Add(1)
+				gapToken := -b.gaps.Add(1)
 				r.expectGap(gapToken)
 				if !c.send(frame{Op: "gap", Consumer: name, Seq: gapToken}) {
 					return

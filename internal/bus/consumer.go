@@ -115,13 +115,6 @@ func (b *Bus) release(a *attachment) {
 	b.mu.Unlock()
 }
 
-// pruned is the sequence number up to which events were removed by age: a consumer behind it has a gap.
-func (b *Bus) pruned() (int64, error) {
-	var seq int64
-	err := b.db.QueryRow(`SELECT coalesce((SELECT value FROM meta WHERE key = 'pruned'), 0)`).Scan(&seq)
-	return seq, err
-}
-
 // The consumer's row is written only by the attachment that owns it: one taken over may still be finishing a
 // pass, and must not move the new reader's cursor or touch its gap.
 

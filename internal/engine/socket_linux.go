@@ -220,11 +220,11 @@ func listenRootSocket(socketPath, name string) (_ *net.UnixListener, closeListen
 		return nil, nil, err
 	}
 	if err := os.Mkdir(parent, 0700); err != nil && !os.IsExist(err) {
-		return nil, nil, fmt.Errorf("create engine runtime directory: %w", err)
+		return nil, nil, fmt.Errorf("create %s socket directory: %w", name, err)
 	}
 	info, err := os.Lstat(parent)
 	if err != nil {
-		return nil, nil, fmt.Errorf("inspect engine runtime directory: %w", err)
+		return nil, nil, fmt.Errorf("inspect %s socket directory: %w", name, err)
 	}
 	if !info.IsDir() || info.Mode().Perm() != 0700 || !securefs.RootOwned(info) {
 		return nil, nil, errors.New(name + " socket parent must be a root-owned directory with mode 0700, not a symlink")
