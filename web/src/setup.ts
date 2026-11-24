@@ -1,16 +1,11 @@
 import type { ConfigBatchOperation } from './types';
 
-export type MgmtIPv4Mode = 'static' | 'dhcp';
-export type MgmtIPv6Mode = 'none' | 'static' | 'delegated';
-export type WanIPv4Mode = 'dhcp' | 'static' | 'none';
-export type WanIPv6Mode = 'none' | 'dhcp6' | 'slaac' | 'static';
-
 export interface SetupNetworkDraft {
   mgmtMac: string;
   mgmtName: string;
-  mgmtIpv4Mode: MgmtIPv4Mode;
+  mgmtIpv4Mode: 'static' | 'dhcp';
   mgmtIpv4Address: string;
-  mgmtIpv6Mode: MgmtIPv6Mode;
+  mgmtIpv6Mode: 'none' | 'static' | 'delegated';
   mgmtIpv6Address: string;
   mgmtIpv6RaMode: 'unmanaged' | 'router' | 'disabled';
   serveDhcp: boolean;
@@ -19,14 +14,20 @@ export interface SetupNetworkDraft {
   serveDns: boolean;
   wanMac: string;
   wanName: string;
-  wanIpv4Mode: WanIPv4Mode;
+  wanIpv4Mode: 'dhcp' | 'static' | 'none';
   wanIpv4Address: string;
   wanIpv4Gateway: string;
-  wanIpv6Mode: WanIPv6Mode;
+  wanIpv6Mode: 'none' | 'dhcp6' | 'slaac' | 'static';
   wanIpv6Address: string;
   wanIpv6Gateway: string;
   wanDhcp6PrefixLen: string;
   wanDnsServers: string;
+}
+
+export interface SetupSingletonVersions {
+  management?: string;
+  dns?: string;
+  natOutbound?: string;
 }
 
 /** Suggest a default .100-.199 DHCP range when the management IPv4 address is a /24. */
@@ -37,15 +38,22 @@ export function defaultDhcpRange(cidr: string): { start: string; end: string } |
   return { start: `${a}.${b}.${c}.100`, end: `${a}.${b}.${c}.199` };
 }
 
+export function effectiveMgmtIpv6Mode(draft: SetupNetworkDraft): 'none' | 'static' | 'delegated' {
+  if (draft.mgmtIpv6Mode === 'delegated' && (!draft.wanMac || draft.wanIpv6Mode !== 'dhcp6')) {
+    return 'none';
+  }
+  return draft.mgmtIpv6Mode;
+}
+
 function parseDnsServers(raw: string): string[] {
-  return raw
-    .split(/[\s,]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  return raw.split(/[\s,]+/).filter(Boolean);
 }
 
 /** Build the atomic /api/v1/config/changes batch for the setup assistant's network choices. */
-export function buildSetupOperations(draft: SetupNetworkDraft): ConfigBatchOperation[] {
+export function buildSetupOperations(
+  draft: SetupNetworkDraft,
+  versions: SetupSingletonVersions = {},
+): ConfigBatchOperation[] {
   const ops: ConfigBatchOperation[] = [
     { op: 'create', collection: 'zones', localId: 'lan_zone', value: { name: 'LAN' } },
     {
@@ -57,6 +65,9 @@ export function buildSetupOperations(draft: SetupNetworkDraft): ConfigBatchOpera
   ];
 
   const hasWan = Boolean(draft.wanMac);
+  const servingDns = draft.mgmtIpv4Mode === 'static' && draft.serveDns;
+  const dnsList = parseDnsServers(draft.wanDnsServers);
+
   if (hasWan) {
     const wanIpv4: Record<string, unknown> =
       draft.wanIpv4Mode === 'static'
@@ -72,8 +83,9 @@ export function buildSetupOperations(draft: SetupNetworkDraft): ConfigBatchOpera
             }
           : { mode: draft.wanIpv6Mode };
     const wanAddressing: Record<string, unknown> = { ipv4: wanIpv4, ipv6: wanIpv6 };
-    const dnsList = parseDnsServers(draft.wanDnsServers);
-    if ((draft.wanIpv4Mode === 'static' || draft.wanIpv6Mode === 'static') && dnsList.length > 0) {
+    // When the DNS service is enabled, Andaru requires upstream DNS servers on dns.upstreams
+    // rather than on the WAN segment.
+    if (!servingDns && (draft.wanIpv4Mode === 'static' || draft.wanIpv6Mode === 'static') && dnsList.length > 0) {
       wanAddressing.dns = { servers: dnsList };
     }
     ops.push(
@@ -97,10 +109,11 @@ export function buildSetupOperations(draft: SetupNetworkDraft): ConfigBatchOpera
     draft.mgmtIpv4Mode === 'static'
       ? { mode: 'static', addresses: [draft.mgmtIpv4Address.trim()] }
       : { mode: 'dhcp' };
+  const ipv6Mode = effectiveMgmtIpv6Mode(draft);
   const mgmtIpv6: Record<string, unknown> =
-    draft.mgmtIpv6Mode === 'static'
+    ipv6Mode === 'static'
       ? { mode: 'static', addresses: [draft.mgmtIpv6Address.trim()], ra: { mode: draft.mgmtIpv6RaMode } }
-      : draft.mgmtIpv6Mode === 'delegated' && hasWan && draft.wanIpv6Mode === 'dhcp6'
+      : ipv6Mode === 'delegated'
         ? { mode: 'delegated', from: '@wan_seg', subnetId: '0', ra: { mode: draft.mgmtIpv6RaMode } }
         : { mode: 'none' };
 
@@ -111,7 +124,12 @@ export function buildSetupOperations(draft: SetupNetworkDraft): ConfigBatchOpera
       localId: 'mgmt_seg',
       value: { name: 'Management LAN', link: '@mgmt_link', zone: '@lan_zone', addressing: { ipv4: mgmtIpv4, ipv6: mgmtIpv6 } },
     },
-    { op: 'replace', collection: 'management', value: { segment: '@mgmt_seg' } },
+    {
+      op: 'replace',
+      collection: 'management',
+      expectedVersion: versions.management ?? '0',
+      value: { segment: '@mgmt_seg' },
+    },
   );
 
   if (draft.mgmtIpv4Mode === 'static' && draft.serveDhcp) {
@@ -125,11 +143,24 @@ export function buildSetupOperations(draft: SetupNetworkDraft): ConfigBatchOpera
       },
     });
   }
-  if (draft.mgmtIpv4Mode === 'static' && draft.serveDns) {
-    ops.push({ op: 'replace', collection: 'dns', value: { mode: 'recursive', segments: ['@mgmt_seg'] } });
+  if (servingDns) {
+    const useForward = hasWan && (draft.wanIpv4Mode === 'static' || draft.wanIpv6Mode === 'static') && dnsList.length > 0;
+    ops.push({
+      op: 'replace',
+      collection: 'dns',
+      expectedVersion: versions.dns ?? '0',
+      value: useForward
+        ? { mode: 'forward', upstreams: dnsList.map((address) => ({ address, protocol: 'do53' })), segments: ['@mgmt_seg'] }
+        : { mode: 'recursive', segments: ['@mgmt_seg'] },
+    });
   }
   if (hasWan) {
-    ops.push({ op: 'replace', collection: 'nat.outbound', value: { mode: 'automatic' } });
+    ops.push({
+      op: 'replace',
+      collection: 'nat.outbound',
+      expectedVersion: versions.natOutbound ?? '0',
+      value: { mode: 'automatic' },
+    });
   }
   return ops;
 }

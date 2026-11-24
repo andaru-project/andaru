@@ -1,10 +1,11 @@
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiClient } from '../api';
+import { buildSetupOperations, defaultDhcpRange, effectiveMgmtIpv6Mode, type SetupNetworkDraft } from '../setup';
 import { fetchRoutes } from '../test/fetch';
 import { session } from '../test/fixtures';
 import { render, screen } from '../test/render';
-import { buildSetupOperations, defaultDhcpRange, type SetupNetworkDraft } from '../setup';
+import { SetupBootstrapScreen } from './SetupBootstrapScreen';
 import { SetupWizardScreen } from './SetupWizardScreen';
 
 const sampleLinks = [
@@ -13,14 +14,14 @@ const sampleLinks = [
   { name: 'enp2s0', index: 3, operState: 'up', linkType: 'ether', linkAddress: '52:54:00:aa:bb:02', mtu: 1500, addresses: [] },
 ];
 
-describe('SetupWizardScreen', () => {
-  it('validates passwords and bootstraps the initial admin with setup code and SSH key', async () => {
+describe('SetupBootstrapScreen & SetupWizardScreen', () => {
+  it('validates passwords and bootstraps the initial admin with setup code', async () => {
     const bootstrapped = session(['status.read', 'configuration.read', 'configuration.write', 'configuration.apply']);
     const fetchMock = fetchRoutes({
       'POST /api/v1/setup/bootstrap': () => new Response(JSON.stringify(bootstrapped), { status: 201, headers: { 'Content-Type': 'application/json' } }),
     });
     const onBootstrapped = vi.fn();
-    render(<SetupWizardScreen api={new ApiClient('')} onBootstrapped={onBootstrapped} />);
+    render(<SetupBootstrapScreen api={new ApiClient('')} onBootstrapped={onBootstrapped} onAlreadyConfigured={vi.fn()} />);
 
     expect(screen.getByText(/andaru ctl setup-code/i)).toBeInTheDocument();
 
@@ -33,27 +34,46 @@ describe('SetupWizardScreen', () => {
     const confirm = screen.getByLabelText(/Confirm password/i);
     await userEvent.clear(confirm);
     await userEvent.type(confirm, 'correct-horse-battery-9');
-    await userEvent.type(screen.getByLabelText(/SSH public key/i), 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest admin@laptop');
     await userEvent.click(screen.getByRole('button', { name: /Create administrator and continue/i }));
 
     await vi.waitFor(() => expect(onBootstrapped).toHaveBeenCalledWith(bootstrapped));
     const call = fetchMock.mock.calls.find(([url]) => url === '/api/v1/setup/bootstrap');
-    expect(call).toBeDefined();
     const sent = JSON.parse(String(call?.[1]?.body)) as Record<string, string>;
     expect(sent.setupCode).toBe('ABCD-EFGH-JKMN-PQRS');
     expect(sent.login).toBe('admin');
-    expect(sent.sshPublicKey).toContain('ssh-ed25519');
   });
 
-  it('walks through system, management, WAN, review, apply, and confirmation', async () => {
+  it('transitions to login when bootstrap returns 409 ALREADY_CONFIGURED', async () => {
+    fetchRoutes({
+      'POST /api/v1/setup/bootstrap': () => new Response(JSON.stringify({ error: { code: 'ALREADY_CONFIGURED', message: 'An administrator account already exists.' } }), { status: 409, headers: { 'Content-Type': 'application/json' } }),
+    });
+    const onAlreadyConfigured = vi.fn();
+    render(<SetupBootstrapScreen api={new ApiClient('')} onBootstrapped={vi.fn()} onAlreadyConfigured={onAlreadyConfigured} />);
+
+    await userEvent.type(screen.getByRole('textbox', { name: /One-time setup code/i }), 'ABCD-EFGH-JKMN-PQRS');
+    await userEvent.type(screen.getByLabelText(/^Password/i), 'correct-horse-battery-9');
+    await userEvent.type(screen.getByLabelText(/Confirm password/i), 'correct-horse-battery-9');
+    await userEvent.click(screen.getByRole('button', { name: /Create administrator and continue/i }));
+
+    await vi.waitFor(() => expect(onAlreadyConfigured).toHaveBeenCalledWith('An administrator account already exists.'));
+  });
+
+  it('walks through system, management, WAN, review, retry-safe apply, hostname, and confirmation', async () => {
+    let previewCalls = 0;
     const fetchMock = fetchRoutes({
       '/api/v1/status/system': { version: '0.5.0-a.5', hostname: 'localhost', time: '2026-11-24T17:00:00Z', bootedAt: null },
       '/api/v1/status/links': { items: sampleLinks },
       '/api/v1/config': { savedVersion: '0', value: { links: [], segments: [], zones: [], roles: [] } },
-      'POST /api/v1/system/hostname': () => new Response(JSON.stringify({ hostname: 'andaru-gw' }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
       'POST /api/v1/config/changes': () => new Response(JSON.stringify({ savedVersion: '1' }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
-      '/api/v1/preview/network?savedVersion=1': { savedVersion: '1', resolved: [], findings: [] },
+      '/api/v1/preview/network?savedVersion=1': () => {
+        previewCalls++;
+        if (previewCalls === 1) {
+          return new Response(JSON.stringify({ savedVersion: '1', resolved: [], findings: [{ severity: 'error', code: 'TEST', message: 'Transient check error' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({ savedVersion: '1', resolved: [], findings: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      },
       'POST /api/v1/applies': () => new Response(JSON.stringify({ id: '1', state: 'awaiting_confirmation', savedVersion: '1', deadline: '2026-11-24T17:03:00Z' }), { status: 201, headers: { 'Content-Type': 'application/json' } }),
+      'POST /api/v1/system/hostname': () => new Response(JSON.stringify({ hostname: 'andaru-gw' }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
       'POST /api/v1/applies/1/confirmation': () => new Response(JSON.stringify({ id: '1', state: 'confirmed', savedVersion: '1' }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
     });
     const onComplete = vi.fn();
@@ -64,26 +84,25 @@ describe('SetupWizardScreen', () => {
     await userEvent.clear(hostInput);
     await userEvent.type(hostInput, 'andaru-gw');
     await userEvent.click(screen.getByRole('button', { name: /Next: Management LAN/i }));
-
-    expect(await screen.findByLabelText(/Management IPv4 address/i)).toHaveValue('192.168.1.1/24');
-    await userEvent.click(screen.getByRole('button', { name: /Next: WAN/i }));
-
+    await userEvent.click(await screen.findByRole('button', { name: /Next: WAN/i }));
     await userEvent.click(await screen.findByRole('button', { name: /Next: Review & Apply/i }));
-    expect(await screen.findByText('andaru-gw')).toBeInTheDocument();
 
+    // First click hits preview error; hostname must NOT be changed yet.
+    await userEvent.click(screen.getByRole('button', { name: /Save and apply/i }));
+    expect(await screen.findByText('Transient check error')).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/system/hostname')).toHaveLength(0);
+
+    // Retry reuses committedVersion without posting /api/v1/config/changes a second time.
     await userEvent.click(screen.getByRole('button', { name: /Save and apply/i }));
     expect(await screen.findByText(/Configuration applied — confirm connectivity/i)).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/config/changes')).toHaveLength(1);
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/system/hostname')).toHaveLength(1);
 
     await userEvent.click(screen.getByRole('button', { name: /Confirm apply/i }));
     await vi.waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
-
-    expect(fetchMock.mock.calls.some(([url]) => url === '/api/v1/system/hostname')).toBe(true);
-    expect(fetchMock.mock.calls.some(([url]) => url === '/api/v1/config/changes')).toBe(true);
-    expect(fetchMock.mock.calls.some(([url]) => url === '/api/v1/applies')).toBe(true);
-    expect(fetchMock.mock.calls.some(([url]) => url === '/api/v1/applies/1/confirmation')).toBe(true);
   });
 
-  it('builds atomic config operations for static LAN + DHCP + DNS + WAN and omits WAN/DHCP when disabled', () => {
+  it('builds singleton expectedVersion="0", forward DNS upstreams for static WAN, and effectiveMgmtIpv6Mode', () => {
     expect(defaultDhcpRange('10.20.30.1/24')).toEqual({ start: '10.20.30.100', end: '10.20.30.199' });
     expect(defaultDhcpRange('10.20.30.1/16')).toBeNull();
 
@@ -101,35 +120,31 @@ describe('SetupWizardScreen', () => {
       serveDns: true,
       wanMac: '52:54:00:AA:BB:02',
       wanName: 'enp2s0',
-      wanIpv4Mode: 'dhcp',
-      wanIpv4Address: '',
-      wanIpv4Gateway: '',
-      wanIpv6Mode: 'dhcp6',
+      wanIpv4Mode: 'static',
+      wanIpv4Address: '203.0.113.2/30',
+      wanIpv4Gateway: '203.0.113.1',
+      wanIpv6Mode: 'none',
       wanIpv6Address: '',
       wanIpv6Gateway: '',
       wanDhcp6PrefixLen: '56',
-      wanDnsServers: '',
+      wanDnsServers: '1.1.1.1, 9.9.9.9',
     };
-    const full = buildSetupOperations(base);
-    expect(full.map((o) => `${o.op}:${o.collection}`)).toEqual([
-      'create:zones',
-      'create:links',
-      'create:zones',
-      'create:links',
-      'create:segments',
-      'create:segments',
-      'replace:management',
-      'create:dhcp',
-      'replace:dns',
-      'replace:nat.outbound',
-    ]);
+    expect(effectiveMgmtIpv6Mode(base)).toBe('none');
 
-    const minimal = buildSetupOperations({ ...base, mgmtIpv4Mode: 'dhcp', mgmtIpv6Mode: 'none', wanMac: '', serveDhcp: false, serveDns: false });
-    expect(minimal.map((o) => `${o.op}:${o.collection}`)).toEqual([
-      'create:zones',
-      'create:links',
-      'create:segments',
-      'replace:management',
-    ]);
+    const ops = buildSetupOperations(base);
+    const mgmtOp = ops.find((o) => o.collection === 'management');
+    const dnsOp = ops.find((o) => o.collection === 'dns');
+    const natOp = ops.find((o) => o.collection === 'nat.outbound');
+    const wanSeg = ops.find((o) => o.localId === 'wan_seg');
+
+    expect(mgmtOp?.expectedVersion).toBe('0');
+    expect(natOp?.expectedVersion).toBe('0');
+    expect(dnsOp?.expectedVersion).toBe('0');
+    expect(dnsOp?.value).toEqual({
+      mode: 'forward',
+      upstreams: [{ address: '1.1.1.1', protocol: 'do53' }, { address: '9.9.9.9', protocol: 'do53' }],
+      segments: ['@mgmt_seg'],
+    });
+    expect((wanSeg?.value?.addressing as Record<string, unknown>).dns).toBeUndefined();
   });
 });

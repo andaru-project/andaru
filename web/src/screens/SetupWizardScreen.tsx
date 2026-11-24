@@ -2,12 +2,9 @@ import {
   Alert,
   Badge,
   Button,
-  Code,
   Group,
-  Image,
   Loader,
   Paper,
-  PasswordInput,
   SegmentedControl,
   Select,
   Stack,
@@ -15,21 +12,16 @@ import {
   Switch,
   Table,
   Text,
-  Textarea,
   TextInput,
   Title,
 } from '@mantine/core';
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
-import mark from '../andaru-icon.svg';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ApiClient, apiErrorMessage, reportError } from '../api';
 import {
   buildSetupOperations,
   defaultDhcpRange,
-  type MgmtIPv4Mode,
-  type MgmtIPv6Mode,
+  effectiveMgmtIpv6Mode,
   type SetupNetworkDraft,
-  type WanIPv4Mode,
-  type WanIPv6Mode,
 } from '../setup';
 import { formatTime, formatTimestamp, setTimeZone, timeZoneOptions, useTimeZone } from '../timezone';
 import type { Apply, LinkStatus, Session } from '../types';
@@ -47,8 +39,7 @@ const hostnamePattern = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 
 interface SetupWizardScreenProps {
   api: ApiClient;
-  session?: Session | null;
-  onBootstrapped?(session: Session): void;
+  session: Session;
   onComplete?(): void;
   onSessionLost?(): void;
 }
@@ -59,24 +50,12 @@ function linkOptionLabel(link: LinkStatus): string {
   return `${link.name} (${mac}) · ${link.operState}${ips ? ` · ${ips}` : ''}`;
 }
 
-export function SetupWizardScreen({ api, session, onBootstrapped, onComplete, onSessionLost }: SetupWizardScreenProps) {
-  const preAuth = !session;
+export function SetupWizardScreen({ api, onComplete, onSessionLost }: SetupWizardScreenProps) {
   const activeTimeZone = useTimeZone();
   const zoneChoices = useMemo(() => timeZoneOptions(activeTimeZone), [activeTimeZone]);
 
-  // Pre-auth bootstrap fields (Step 0 when no admin exists).
-  const [setupCode, setSetupCode] = useState('');
-  const [login, setLogin] = useState('admin');
-  const [displayName, setDisplayName] = useState('Administrator');
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [sshPublicKey, setSshPublicKey] = useState('');
-  const [bootstrapBusy, setBootstrapBusy] = useState(false);
-  const [bootstrapError, setBootstrapError] = useState('');
-
-  // Authenticated wizard state (Steps 0..3 when signed in).
   const [step, setStep] = useState(0);
-  const [loadingHost, setLoadingHost] = useState(!preAuth);
+  const [loadingHost, setLoadingHost] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [links, setLinks] = useState<LinkStatus[]>([]);
   const [initialHostname, setInitialHostname] = useState('');
@@ -84,7 +63,11 @@ export function SetupWizardScreen({ api, session, onBootstrapped, onComplete, on
   const [selectedZone, setSelectedZone] = useState(activeTimeZone);
   const [previewAt] = useState(() => Date.now());
   const [savedVersion, setSavedVersion] = useState<string | undefined>(undefined);
-  const [existingConfigCount, setExistingConfigCount] = useState(0);
+  const [hasExistingConfig, setHasExistingConfig] = useState(false);
+
+  // If config save succeeds but preview/apply fails, retries reuse committedVersion instead of
+  // re-creating duplicate zones/links. Editing any network field clears committedVersion.
+  const [committedVersion, setCommittedVersion] = useState<string | null>(null);
 
   const [draft, setDraft] = useState<SetupNetworkDraft>({
     mgmtMac: '',
@@ -116,13 +99,17 @@ export function SetupWizardScreen({ api, session, onBootstrapped, onComplete, on
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [completed, setCompleted] = useState(false);
 
+  const updateDraft = useCallback((patch: Partial<SetupNetworkDraft>) => {
+    setCommittedVersion(null);
+    setDraft((cur) => ({ ...cur, ...patch }));
+  }, []);
+
   const handleSessionError = useCallback((error: unknown, setMsg: (msg: string) => void) => {
     if (onSessionLost) reportError(error, onSessionLost, setMsg);
     else setMsg(apiErrorMessage(error));
   }, [onSessionLost]);
 
   const loadHostData = useCallback(async () => {
-    if (!session) return;
     setLoadingHost(true);
     setLoadError('');
     try {
@@ -137,7 +124,7 @@ export function SetupWizardScreen({ api, session, onBootstrapped, onComplete, on
       setHostname((cur) => cur || sys.hostname);
       if (snap) {
         setSavedVersion(snap.savedVersion);
-        setExistingConfigCount(snap.value.links.length + snap.value.segments.length);
+        setHasExistingConfig(snap.value.links.length + snap.value.segments.length > 0);
       }
       setDraft((cur) => {
         if (cur.mgmtMac) return cur;
@@ -156,132 +143,10 @@ export function SetupWizardScreen({ api, session, onBootstrapped, onComplete, on
     } finally {
       setLoadingHost(false);
     }
-  }, [api, session, handleSessionError]);
+  }, [api, handleSessionError]);
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch on mount, not derived state
-  useEffect(() => { if (session) void loadHostData(); }, [session, loadHostData]);
-
-  async function submitBootstrap(event: FormEvent) {
-    event.preventDefault();
-    setBootstrapError('');
-    if (password !== confirmPassword) {
-      setBootstrapError('Passwords do not match.');
-      return;
-    }
-    if (password.length < 8) {
-      setBootstrapError('Password must be at least 8 characters.');
-      return;
-    }
-    setBootstrapBusy(true);
-    try {
-      const created = await api.bootstrapSetup({
-        setupCode: setupCode.trim(),
-        login: login.trim(),
-        displayName: displayName.trim() || login.trim(),
-        password,
-        ...(sshPublicKey.trim() ? { sshPublicKey: sshPublicKey.trim() } : {}),
-      });
-      setPassword('');
-      setConfirmPassword('');
-      onBootstrapped?.(created);
-    } catch (error) {
-      setBootstrapError(apiErrorMessage(error));
-    } finally {
-      setBootstrapBusy(false);
-    }
-  }
-
-  // Pre-auth full-page wizard (Step 1: create administrator with console setup code).
-  if (preAuth) {
-    return (
-      <div className="login-page">
-        <Paper className="setup-card" component="main" withBorder p="xl">
-          <form onSubmit={submitBootstrap}>
-            <Stack gap="md">
-              <Group gap="sm" wrap="nowrap">
-                <Image src={mark} alt="" w={40} h={40} />
-                <div>
-                  <Title order={1} size="h2">Andaru setup assistant</Title>
-                  <Text c="dimmed" size="sm">Create the first administrator account, then configure management and WAN networking.</Text>
-                </div>
-              </Group>
-
-              <Alert color="blue" role="status" title="One-time setup code required">
-                <Stack gap="xs">
-                  <Text size="sm">On the local appliance console (screen or serial), run this command to display the one-time setup code:</Text>
-                  <Code block>sudo andaru ctl setup-code</Code>
-                </Stack>
-              </Alert>
-
-              {bootstrapError && <Alert color="red" role="alert" title="Setup failed">{bootstrapError}</Alert>}
-
-              <TextInput
-                label="One-time setup code"
-                description="16-character code shown on the appliance console (dashes optional)."
-                placeholder="XXXX-XXXX-XXXX-XXXX"
-                required
-                autoFocus
-                value={setupCode}
-                onChange={(e) => setSetupCode(e.currentTarget.value)}
-              />
-
-              <div className="setup-grid">
-                <TextInput
-                  label="Administrator login"
-                  autoComplete="username"
-                  required
-                  maxLength={64}
-                  value={login}
-                  onChange={(e) => setLogin(e.currentTarget.value)}
-                />
-                <TextInput
-                  label="Display name"
-                  maxLength={128}
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.currentTarget.value)}
-                />
-              </div>
-
-              <div className="setup-grid">
-                <PasswordInput
-                  label="Password"
-                  autoComplete="new-password"
-                  required
-                  minLength={8}
-                  maxLength={512}
-                  value={password}
-                  onChange={(e) => setPassword(e.currentTarget.value)}
-                />
-                <PasswordInput
-                  label="Confirm password"
-                  autoComplete="new-password"
-                  required
-                  minLength={8}
-                  maxLength={512}
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.currentTarget.value)}
-                />
-              </div>
-
-              <Textarea
-                label="SSH public key (optional)"
-                description="OpenSSH public key (e.g. ssh-ed25519 AAAA...) for root console access."
-                placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... admin@workstation"
-                minRows={2}
-                styles={{ input: { fontFamily: 'var(--mantine-font-family-monospace)' } }}
-                value={sshPublicKey}
-                onChange={(e) => setSshPublicKey(e.currentTarget.value)}
-              />
-
-              <Group justify="flex-end">
-                <Button type="submit" loading={bootstrapBusy}>Create administrator and continue</Button>
-              </Group>
-            </Stack>
-          </form>
-        </Paper>
-      </div>
-    );
-  }
+  useEffect(() => { void loadHostData(); }, [loadHostData]);
 
   const normalizedHostname = hostname.trim().toLowerCase();
   const hostnameValid = normalizedHostname === '' || hostnamePattern.test(normalizedHostname);
@@ -290,6 +155,8 @@ export function SetupWizardScreen({ api, session, onBootstrapped, onComplete, on
     { value: '', label: 'None yet (configure WAN later)' },
     ...links.filter((l) => (l.linkAddress ?? '') !== draft.mgmtMac).map((l) => ({ value: l.linkAddress ?? '', label: linkOptionLabel(l) })),
   ];
+  const wanSupportsDelegation = Boolean(draft.wanMac) && draft.wanIpv6Mode === 'dhcp6';
+  const resolvedMgmtIpv6 = effectiveMgmtIpv6Mode(draft);
 
   const canAdvanceMgmt =
     Boolean(draft.mgmtMac) &&
@@ -308,20 +175,25 @@ export function SetupWizardScreen({ api, session, onBootstrapped, onComplete, on
     setApplyError('');
     try {
       setTimeZone(selectedZone);
-      if (normalizedHostname && normalizedHostname !== initialHostname.toLowerCase()) {
-        await api.setHostname(normalizedHostname);
-        setInitialHostname(normalizedHostname);
+      let versionToApply = committedVersion;
+      if (!versionToApply) {
+        const ops = buildSetupOperations(draft);
+        const saved = await api.applyConfigChanges(ops, savedVersion);
+        setSavedVersion(saved.savedVersion);
+        setCommittedVersion(saved.savedVersion);
+        versionToApply = saved.savedVersion;
       }
-      const ops = buildSetupOperations(draft);
-      const saved = await api.applyConfigChanges(ops, savedVersion);
-      setSavedVersion(saved.savedVersion);
-      const preview = await api.previewNetwork(saved.savedVersion);
+      const preview = await api.previewNetwork(versionToApply);
       const errors = preview.findings.filter((f) => f.severity === 'error');
       if (errors.length > 0) {
         setApplyError(errors.map((e) => e.message).join(' '));
         return;
       }
-      const applied = await api.apply(saved.savedVersion, applyConfirmSeconds);
+      const applied = await api.apply(versionToApply, applyConfirmSeconds);
+      if (normalizedHostname && normalizedHostname !== initialHostname.toLowerCase()) {
+        await api.setHostname(normalizedHostname);
+        setInitialHostname(normalizedHostname);
+      }
       setPendingApply(applied);
     } catch (error) {
       handleSessionError(error, setApplyError);
@@ -360,7 +232,7 @@ export function SetupWizardScreen({ api, session, onBootstrapped, onComplete, on
         )}
       </Group>
 
-      {existingConfigCount > 0 && !pendingApply && !completed && (
+      {hasExistingConfig && !pendingApply && !completed && (
         <Alert color="yellow" role="status" title="Existing configuration detected">
           This appliance already has saved network objects. Saving from the setup assistant adds new zones, links, and segments alongside them; review carefully before applying.
         </Alert>
@@ -401,7 +273,7 @@ export function SetupWizardScreen({ api, session, onBootstrapped, onComplete, on
                 />
                 <Text size="sm" c="dimmed" className="tabular">Preview: {formatTimestamp(previewAt, selectedZone)}</Text>
                 <Group justify="flex-end">
-                  <Button disabled={!hostnameValid} onClick={() => { setTimeZone(selectedZone); setStep(1); }}>Next: Management LAN</Button>
+                  <Button disabled={!hostnameValid} onClick={() => setStep(1)}>Next: Management LAN</Button>
                 </Group>
               </Stack>
             </Stepper.Step>
@@ -419,12 +291,11 @@ export function SetupWizardScreen({ api, session, onBootstrapped, onComplete, on
                     onChange={(mac) => {
                       if (!mac) return;
                       const found = links.find((l) => l.linkAddress === mac);
-                      setDraft((cur) => ({
-                        ...cur,
+                      updateDraft({
                         mgmtMac: mac,
-                        mgmtName: found?.name ?? cur.mgmtName,
-                        wanMac: cur.wanMac === mac ? '' : cur.wanMac,
-                      }));
+                        mgmtName: found?.name ?? draft.mgmtName,
+                        wanMac: draft.wanMac === mac ? '' : draft.wanMac,
+                      });
                     }}
                   />
                 )}
@@ -437,7 +308,7 @@ export function SetupWizardScreen({ api, session, onBootstrapped, onComplete, on
                       { value: 'static', label: 'Static (recommended)' },
                       { value: 'dhcp', label: 'DHCP client' },
                     ]}
-                    onChange={(v) => setDraft((cur) => ({ ...cur, mgmtIpv4Mode: v as MgmtIPv4Mode }))}
+                    onChange={(v) => updateDraft({ mgmtIpv4Mode: v as SetupNetworkDraft['mgmtIpv4Mode'] })}
                   />
                 </div>
 
@@ -454,28 +325,27 @@ export function SetupWizardScreen({ api, session, onBootstrapped, onComplete, on
                       onChange={(e) => {
                         const val = e.currentTarget.value;
                         const range = defaultDhcpRange(val);
-                        setDraft((cur) => ({
-                          ...cur,
+                        updateDraft({
                           mgmtIpv4Address: val,
                           ...(range ? { dhcpStart: range.start, dhcpEnd: range.end } : {}),
-                        }));
+                        });
                       }}
                     />
                     <Switch
                       label="Serve DHCP on Management LAN"
                       checked={draft.serveDhcp}
-                      onChange={(e) => setDraft((cur) => ({ ...cur, serveDhcp: e.currentTarget.checked }))}
+                      onChange={(e) => updateDraft({ serveDhcp: e.currentTarget.checked })}
                     />
                     {draft.serveDhcp && (
                       <div className="setup-grid">
-                        <TextInput label="DHCP pool start" value={draft.dhcpStart} onChange={(e) => setDraft((cur) => ({ ...cur, dhcpStart: e.currentTarget.value }))} />
-                        <TextInput label="DHCP pool end" value={draft.dhcpEnd} onChange={(e) => setDraft((cur) => ({ ...cur, dhcpEnd: e.currentTarget.value }))} />
+                        <TextInput label="DHCP pool start" value={draft.dhcpStart} onChange={(e) => updateDraft({ dhcpStart: e.currentTarget.value })} />
+                        <TextInput label="DHCP pool end" value={draft.dhcpEnd} onChange={(e) => updateDraft({ dhcpEnd: e.currentTarget.value })} />
                       </div>
                     )}
                     <Switch
-                      label="Serve recursive DNS on Management LAN"
+                      label="Serve DNS on Management LAN"
                       checked={draft.serveDns}
-                      onChange={(e) => setDraft((cur) => ({ ...cur, serveDns: e.currentTarget.checked }))}
+                      onChange={(e) => updateDraft({ serveDns: e.currentTarget.checked })}
                     />
                   </>
                 )}
@@ -487,9 +357,9 @@ export function SetupWizardScreen({ api, session, onBootstrapped, onComplete, on
                     data={[
                       { value: 'none', label: 'None' },
                       { value: 'static', label: 'Static' },
-                      { value: 'delegated', label: 'Delegated from WAN' },
+                      { value: 'delegated', label: 'Delegated from WAN', disabled: !wanSupportsDelegation },
                     ]}
-                    onChange={(v) => setDraft((cur) => ({ ...cur, mgmtIpv6Mode: v as MgmtIPv6Mode }))}
+                    onChange={(v) => updateDraft({ mgmtIpv6Mode: v as SetupNetworkDraft['mgmtIpv6Mode'] })}
                   />
                 </div>
 
@@ -498,7 +368,7 @@ export function SetupWizardScreen({ api, session, onBootstrapped, onComplete, on
                     label="Management IPv6 address (CIDR)"
                     placeholder="fd00:1::1/64"
                     value={draft.mgmtIpv6Address}
-                    onChange={(e) => setDraft((cur) => ({ ...cur, mgmtIpv6Address: e.currentTarget.value }))}
+                    onChange={(e) => updateDraft({ mgmtIpv6Address: e.currentTarget.value })}
                   />
                 )}
 
@@ -519,7 +389,7 @@ export function SetupWizardScreen({ api, session, onBootstrapped, onComplete, on
                   onChange={(mac) => {
                     const value = mac ?? '';
                     const found = links.find((l) => l.linkAddress === value);
-                    setDraft((cur) => ({ ...cur, wanMac: value, wanName: found?.name ?? 'wan0' }));
+                    updateDraft({ wanMac: value, wanName: found?.name ?? 'wan0' });
                   }}
                 />
 
@@ -534,14 +404,14 @@ export function SetupWizardScreen({ api, session, onBootstrapped, onComplete, on
                           { value: 'static', label: 'Static' },
                           { value: 'none', label: 'None' },
                         ]}
-                        onChange={(v) => setDraft((cur) => ({ ...cur, wanIpv4Mode: v as WanIPv4Mode }))}
+                        onChange={(v) => updateDraft({ wanIpv4Mode: v as SetupNetworkDraft['wanIpv4Mode'] })}
                       />
                     </div>
 
                     {draft.wanIpv4Mode === 'static' && (
                       <div className="setup-grid">
-                        <TextInput label="WAN IPv4 address (CIDR)" placeholder="203.0.113.2/30" value={draft.wanIpv4Address} onChange={(e) => setDraft((cur) => ({ ...cur, wanIpv4Address: e.currentTarget.value }))} />
-                        <TextInput label="IPv4 gateway" placeholder="203.0.113.1" value={draft.wanIpv4Gateway} onChange={(e) => setDraft((cur) => ({ ...cur, wanIpv4Gateway: e.currentTarget.value }))} />
+                        <TextInput label="WAN IPv4 address (CIDR)" placeholder="203.0.113.2/30" value={draft.wanIpv4Address} onChange={(e) => updateDraft({ wanIpv4Address: e.currentTarget.value })} />
+                        <TextInput label="IPv4 gateway" placeholder="203.0.113.1" value={draft.wanIpv4Gateway} onChange={(e) => updateDraft({ wanIpv4Gateway: e.currentTarget.value })} />
                       </div>
                     )}
 
@@ -555,7 +425,7 @@ export function SetupWizardScreen({ api, session, onBootstrapped, onComplete, on
                           { value: 'slaac', label: 'SLAAC' },
                           { value: 'static', label: 'Static' },
                         ]}
-                        onChange={(v) => setDraft((cur) => ({ ...cur, wanIpv6Mode: v as WanIPv6Mode }))}
+                        onChange={(v) => updateDraft({ wanIpv6Mode: v as SetupNetworkDraft['wanIpv6Mode'] })}
                       />
                     </div>
 
@@ -564,14 +434,14 @@ export function SetupWizardScreen({ api, session, onBootstrapped, onComplete, on
                         label="Requested prefix delegation length (optional)"
                         placeholder="56"
                         value={draft.wanDhcp6PrefixLen}
-                        onChange={(e) => setDraft((cur) => ({ ...cur, wanDhcp6PrefixLen: e.currentTarget.value }))}
+                        onChange={(e) => updateDraft({ wanDhcp6PrefixLen: e.currentTarget.value })}
                       />
                     )}
 
                     {draft.wanIpv6Mode === 'static' && (
                       <div className="setup-grid">
-                        <TextInput label="WAN IPv6 address (CIDR)" placeholder="2001:db8::2/64" value={draft.wanIpv6Address} onChange={(e) => setDraft((cur) => ({ ...cur, wanIpv6Address: e.currentTarget.value }))} />
-                        <TextInput label="IPv6 gateway" placeholder="2001:db8::1" value={draft.wanIpv6Gateway} onChange={(e) => setDraft((cur) => ({ ...cur, wanIpv6Gateway: e.currentTarget.value }))} />
+                        <TextInput label="WAN IPv6 address (CIDR)" placeholder="2001:db8::2/64" value={draft.wanIpv6Address} onChange={(e) => updateDraft({ wanIpv6Address: e.currentTarget.value })} />
+                        <TextInput label="IPv6 gateway" placeholder="2001:db8::1" value={draft.wanIpv6Gateway} onChange={(e) => updateDraft({ wanIpv6Gateway: e.currentTarget.value })} />
                       </div>
                     )}
 
@@ -581,7 +451,7 @@ export function SetupWizardScreen({ api, session, onBootstrapped, onComplete, on
                         description="Comma- or space-separated IPv4/IPv6 addresses."
                         placeholder="1.1.1.1, 9.9.9.9"
                         value={draft.wanDnsServers}
-                        onChange={(e) => setDraft((cur) => ({ ...cur, wanDnsServers: e.currentTarget.value }))}
+                        onChange={(e) => updateDraft({ wanDnsServers: e.currentTarget.value })}
                       />
                     )}
                   </>
@@ -620,11 +490,11 @@ export function SetupWizardScreen({ api, session, onBootstrapped, onComplete, on
                       <Row label="Management LAN">
                         {draft.mgmtName} (<Text span ff="monospace" inherit>{draft.mgmtMac}</Text>) ·{' '}
                         {draft.mgmtIpv4Mode === 'static' ? draft.mgmtIpv4Address : 'DHCP'}
-                        {draft.mgmtIpv6Mode !== 'none' ? ` · IPv6 ${draft.mgmtIpv6Mode === 'static' ? draft.mgmtIpv6Address : 'delegated'}` : ''}
+                        {resolvedMgmtIpv6 !== 'none' ? ` · IPv6 ${resolvedMgmtIpv6 === 'static' ? draft.mgmtIpv6Address : 'delegated'}` : ''}
                       </Row>
                       <Row label="LAN services">
                         {draft.mgmtIpv4Mode === 'static'
-                          ? `${draft.serveDhcp ? `DHCP (${draft.dhcpStart}–${draft.dhcpEnd})` : 'No DHCP'} · ${draft.serveDns ? 'Recursive DNS' : 'No DNS'}`
+                          ? `${draft.serveDhcp ? `DHCP (${draft.dhcpStart}–${draft.dhcpEnd})` : 'No DHCP'} · ${draft.serveDns ? 'DNS' : 'No DNS'}`
                           : 'None (DHCP client management)'}
                       </Row>
                       <Row label="WAN">

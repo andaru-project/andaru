@@ -4,10 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
-	"encoding/json"
+	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -17,8 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/crypto/ssh"
-
 	"github.com/andaru-project/andaru/internal/audit"
 	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/identity"
@@ -27,16 +24,23 @@ import (
 const (
 	setupCodeAlphabet      = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 	setupCodeLength        = 16
-	setupBootstrapLimit    = 16 << 10
+	setupBootstrapLimit    = 8 << 10
 	setupMaxFailedAttempts = 5
 	setupBackoffWindow     = 15 * time.Minute
+	setupMaxTrackedSources = 64
 	hostnameBodyLimit      = 1024
 )
 
 var (
 	errSetupCodeInvalid     = errors.New("invalid setup code")
 	errSetupCodeRateLimited = errors.New("too many failed setup code attempts")
+	errSetupCodeConsumed    = errors.New("setup code already consumed")
 )
+
+type setupFailureBucket struct {
+	count       int
+	windowStart time.Time
+}
 
 // setupCodeStore holds the one-time console setup code used to unlock WebUI bootstrap before any
 // administrator account exists. The code is persisted with mode 0600 in <stateDir>/setup-code and
@@ -45,21 +49,14 @@ type setupCodeStore struct {
 	stateDir string
 	now      func() time.Time
 
-	mu          sync.Mutex
-	code        string // normalized 16-char Crockford Base32
-	failures    int
-	windowStart time.Time
+	mu       sync.Mutex
+	code     string // normalized 16-char Crockford Base32
+	consumed bool
+	failures map[string]*setupFailureBucket
 }
 
 func newSetupCodeStore(stateDir string) *setupCodeStore {
 	return &setupCodeStore{stateDir: stateDir, now: time.Now}
-}
-
-func (s *setupCodeStore) clock() time.Time {
-	if s.now != nil {
-		return s.now()
-	}
-	return time.Now()
 }
 
 func (s *setupCodeStore) path() string {
@@ -107,29 +104,30 @@ func generateSetupCode() (string, error) {
 	return string(out), nil
 }
 
-func (s *setupCodeStore) writeFile(formatted string) error {
-	if err := os.MkdirAll(s.stateDir, 0o700); err != nil {
-		return err
-	}
-	tmp := s.path() + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+func (s *setupCodeStore) regenerateLocked() (string, error) {
+	norm, err := generateSetupCode()
 	if err != nil {
-		return err
+		return "", err
 	}
-	_, writeErr := f.WriteString(formatted + "\n")
-	syncErr := f.Sync()
-	closeErr := f.Close()
-	if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
-		_ = os.Remove(tmp)
-		return err
+	formatted := formatSetupCode(norm)
+	if err := os.MkdirAll(s.stateDir, 0o700); err != nil {
+		return "", err
 	}
-	return os.Rename(tmp, s.path())
+	if err := writeFileAtomic(s.path(), []byte(formatted+"\n"), 0o600); err != nil {
+		return "", err
+	}
+	s.code = norm
+	s.failures = nil
+	return formatted, nil
 }
 
 // Current returns the active formatted setup code, reading from disk or generating one if absent.
 func (s *setupCodeStore) Current() (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.consumed {
+		return "", errSetupCodeConsumed
+	}
 	if len(s.code) == setupCodeLength {
 		return formatSetupCode(s.code), nil
 	}
@@ -139,69 +137,70 @@ func (s *setupCodeStore) Current() (string, error) {
 			return formatSetupCode(norm), nil
 		}
 	}
-	norm, err := generateSetupCode()
-	if err != nil {
-		return "", err
-	}
-	formatted := formatSetupCode(norm)
-	if err := s.writeFile(formatted); err != nil {
-		return "", err
-	}
-	s.code = norm
-	return formatted, nil
+	return s.regenerateLocked()
 }
 
-// Rotate generates and persists a fresh setup code and resets the failure window.
+// Rotate generates and persists a fresh setup code and resets per-source failure counters.
 func (s *setupCodeStore) Rotate() (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	norm, err := generateSetupCode()
-	if err != nil {
-		return "", err
+	if s.consumed {
+		return "", errSetupCodeConsumed
 	}
-	formatted := formatSetupCode(norm)
-	if err := s.writeFile(formatted); err != nil {
-		return "", err
-	}
-	s.code = norm
-	s.failures = 0
-	s.windowStart = time.Time{}
-	return formatted, nil
+	return s.regenerateLocked()
 }
 
-// Verify checks candidate against the active setup code in constant time with rate limiting.
-func (s *setupCodeStore) Verify(candidate string) error {
+// Verify checks candidate against the active setup code in constant time with per-source rate limiting.
+func (s *setupCodeStore) Verify(source, candidate string) error {
 	if _, err := s.Current(); err != nil {
 		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	now := s.clock()
-	if !s.windowStart.IsZero() && now.Sub(s.windowStart) >= setupBackoffWindow {
-		s.failures = 0
-		s.windowStart = time.Time{}
+	if s.consumed {
+		return errSetupCodeConsumed
 	}
-	if s.failures >= setupMaxFailedAttempts {
+	now := s.now()
+	if s.failures == nil {
+		s.failures = make(map[string]*setupFailureBucket)
+	}
+	bucket, ok := s.failures[source]
+	if ok && now.Sub(bucket.windowStart) >= setupBackoffWindow {
+		delete(s.failures, source)
+		ok = false
+	}
+	if ok && bucket.count >= setupMaxFailedAttempts {
 		return errSetupCodeRateLimited
 	}
 	norm := normalizeSetupCode(candidate)
 	if len(norm) != setupCodeLength || subtle.ConstantTimeCompare([]byte(norm), []byte(s.code)) != 1 {
-		if s.windowStart.IsZero() {
-			s.windowStart = now
+		if !ok {
+			if len(s.failures) >= setupMaxTrackedSources {
+				for k, v := range s.failures {
+					if now.Sub(v.windowStart) >= setupBackoffWindow {
+						delete(s.failures, k)
+					}
+				}
+				if len(s.failures) >= setupMaxTrackedSources {
+					return errSetupCodeRateLimited
+				}
+			}
+			bucket = &setupFailureBucket{windowStart: now}
+			s.failures[source] = bucket
 		}
-		s.failures++
+		bucket.count++
 		return errSetupCodeInvalid
 	}
 	return nil
 }
 
-// Clear removes the setup code from memory and disk once bootstrap completes.
+// Clear removes the setup code from memory and disk while holding the lock and marks it consumed.
 func (s *setupCodeStore) Clear() {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.code = ""
-	s.failures = 0
-	s.windowStart = time.Time{}
-	s.mu.Unlock()
+	s.consumed = true
+	s.failures = nil
 	_ = os.Remove(s.path())
 }
 
@@ -264,61 +263,18 @@ func newSetupCodeHandler(identities identity.Store, codes *setupCodeStore) http.
 }
 
 type webSetupBootstrapRequest struct {
-	SetupCode    string `json:"setupCode"`
-	Login        string `json:"login"`
-	DisplayName  string `json:"displayName"`
-	Password     string `json:"password"`
-	SSHPublicKey string `json:"sshPublicKey"`
+	SetupCode   string `json:"setupCode"`
+	Login       string `json:"login"`
+	DisplayName string `json:"displayName"`
+	Password    string `json:"password"`
 }
 
-func validateAuthorizedKey(raw string) ([]byte, error) {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return nil, nil
+func randomOperationID() (string, error) {
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "", err
 	}
-	if strings.ContainsAny(trimmed, "\r\n") {
-		return nil, errors.New("SSH public key must be a single line")
-	}
-	pub, comment, options, rest, err := ssh.ParseAuthorizedKey([]byte(trimmed))
-	if err != nil {
-		return nil, errors.New("SSH public key is not a valid OpenSSH public key")
-	}
-	if len(options) > 0 {
-		return nil, errors.New("SSH public key must not include authorized_keys options")
-	}
-	if strings.TrimSpace(string(rest)) != "" {
-		return nil, errors.New("SSH public key must contain only one key")
-	}
-	line := strings.TrimSuffix(string(ssh.MarshalAuthorizedKey(pub)), "\n")
-	comment = strings.TrimSpace(comment)
-	if comment != "" && !strings.ContainsAny(comment, "\r\n\t") && len(comment) <= 128 {
-		line += " " + comment
-	}
-	return []byte(line + "\n"), nil
-}
-
-func writeInitialAuthorizedKey(stateDir string, keyLine []byte) error {
-	if len(keyLine) == 0 {
-		return nil
-	}
-	sshDir := filepath.Join(stateDir, "ssh")
-	if err := os.MkdirAll(sshDir, 0o700); err != nil {
-		return err
-	}
-	target := filepath.Join(sshDir, "authorized_keys")
-	tmp := target + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	_, writeErr := f.Write(keyLine)
-	syncErr := f.Sync()
-	closeErr := f.Close()
-	if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return os.Rename(tmp, target)
+	return "setup-" + hex.EncodeToString(buf[:]), nil
 }
 
 func (h *webAPI) setupBootstrap(w http.ResponseWriter, r *http.Request, source string) {
@@ -343,7 +299,7 @@ func (h *webAPI) setupBootstrap(w http.ResponseWriter, r *http.Request, source s
 		writeError(w, r, http.StatusConflict, "ALREADY_CONFIGURED", "An administrator account already exists.")
 		return
 	}
-	raw, request, ok := decodeIdentityBody[webSetupBootstrapRequest](w, r, setupBootstrapLimit, "setupCode", "login", "displayName", "password", "sshPublicKey")
+	raw, request, ok := decodeIdentityBody[webSetupBootstrapRequest](w, r, setupBootstrapLimit, "setupCode", "login", "displayName", "password")
 	if !ok {
 		return
 	}
@@ -352,27 +308,32 @@ func (h *webAPI) setupBootstrap(w http.ResponseWriter, r *http.Request, source s
 		writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Setup code, login, and password are required.")
 		return
 	}
-	keyLine, keyErr := validateAuthorizedKey(request.SSHPublicKey)
-	if keyErr != nil {
-		writeError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", keyErr.Error())
-		return
-	}
-	if err := h.setupCodes.Verify(request.SetupCode); err != nil {
+	if err := h.setupCodes.Verify(source, request.SetupCode); err != nil {
+		if errors.Is(err, errSetupCodeConsumed) {
+			writeError(w, r, http.StatusConflict, "ALREADY_CONFIGURED", "An administrator account already exists.")
+			return
+		}
 		if errors.Is(err, errSetupCodeRateLimited) {
-			_, _ = h.coordinator.audits.Append(r.Context(), audit.Event{
+			if _, auditErr := h.coordinator.audits.Append(r.Context(), audit.Event{
 				Actor: authz.Actor{Kind: authz.ActorSystem, ID: "root"}, Source: source, Action: audit.ActionLoginBackoff,
 				Result: audit.ResultFailure, Category: audit.CategoryGeneral,
 				Metadata: map[string]string{audit.MetadataReasonCode: audit.ReasonRateLimited},
-			})
+			}); auditErr != nil {
+				writeError(w, r, http.StatusServiceUnavailable, "AUDIT_UNAVAILABLE", "Setup verification is temporarily unavailable.")
+				return
+			}
 			writeError(w, r, http.StatusTooManyRequests, "RATE_LIMITED", "Too many failed setup code attempts; wait or rotate the code on the console.")
 			return
 		}
 		if errors.Is(err, errSetupCodeInvalid) {
-			_, _ = h.coordinator.audits.Append(r.Context(), audit.Event{
+			if _, auditErr := h.coordinator.audits.Append(r.Context(), audit.Event{
 				Actor: authz.Actor{Kind: authz.ActorSystem, ID: "root"}, Source: source, Action: audit.ActionLoginFailure,
 				Result: audit.ResultFailure, Category: audit.CategoryGeneral,
 				Metadata: map[string]string{audit.MetadataReasonCode: audit.ReasonInvalidCredentials},
-			})
+			}); auditErr != nil {
+				writeError(w, r, http.StatusServiceUnavailable, "AUDIT_UNAVAILABLE", "Setup verification is temporarily unavailable.")
+				return
+			}
 			writeError(w, r, http.StatusUnauthorized, "INVALID_SETUP_CODE", "The setup code does not match the code shown on the appliance console.")
 			return
 		}
@@ -380,61 +341,52 @@ func (h *webAPI) setupBootstrap(w http.ResponseWriter, r *http.Request, source s
 		return
 	}
 
-	var createdAccount identity.Account
-	password := []byte(request.Password)
-	defer clear(password)
-	lockErr := h.coordinator.withAuthorizationLock(r.Context(), func() error {
-		var bootErr error
-		createdAccount, _, bootErr = h.identities.BootstrapAdmin(r.Context(), request.Login, request.DisplayName, password)
-		return bootErr
+	// Verify live authorization is readable before creating the administrator so bootstrap never
+	// creates an account that cannot immediately sign in.
+	if _, _, err := h.readLiveAuthorization(r.Context()); err != nil {
+		writeError(w, r, http.StatusServiceUnavailable, "AUTHENTICATION_UNAVAILABLE", "Live authorization is not ready yet; retry once the engine finishes starting.")
+		return
+	}
+
+	opID, err := randomOperationID()
+	if err != nil {
+		writeError(w, r, http.StatusServiceUnavailable, "SETUP_UNAVAILABLE", "Setup verification is temporarily unavailable.")
+		return
+	}
+	actor := requestActor{
+		Actor:  authz.Actor{Kind: authz.ActorSystem, ID: "root"},
+		Source: source,
+	}
+	execution, execErr := h.coordinator.execute(r.Context(), actor, opID, raw, audit.ActionAccountCreated, audit.CategoryProtected, "", func(ctx context.Context) (string, any, error) {
+		password := []byte(request.Password)
+		account, _, bootErr := h.identities.BootstrapAdmin(ctx, request.Login, request.DisplayName, password)
+		clear(password)
+		return account.ID, nil, bootErr
 	})
-	if lockErr != nil {
-		if errors.Is(lockErr, identity.ErrConflict) || errors.Is(lockErr, identity.ErrDuplicate) {
+	if execErr != nil {
+		slog.ErrorContext(r.Context(), "web setup bootstrap audit/lock failed", "error", execErr)
+		writeError(w, r, http.StatusServiceUnavailable, "AUDIT_UNAVAILABLE", "Administrator creation is temporarily unavailable.")
+		return
+	}
+	if execution.MutationErr != nil {
+		if errors.Is(execution.MutationErr, identity.ErrConflict) || errors.Is(execution.MutationErr, identity.ErrDuplicate) {
 			h.setupCodes.Clear()
 			writeError(w, r, http.StatusConflict, "ALREADY_CONFIGURED", "An administrator account already exists.")
 			return
 		}
-		if errors.Is(lockErr, identity.ErrPasswordPolicy) || errors.Is(lockErr, identity.ErrInvalid) {
-			writeError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", lockErr.Error())
+		if errors.Is(execution.MutationErr, identity.ErrPasswordPolicy) || errors.Is(execution.MutationErr, identity.ErrInvalid) {
+			writeError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", execution.MutationErr.Error())
 			return
 		}
-		slog.ErrorContext(r.Context(), "web setup bootstrap failed", "error", lockErr)
+		slog.ErrorContext(r.Context(), "web setup bootstrap failed", "error", execution.MutationErr)
 		writeError(w, r, http.StatusServiceUnavailable, "IDENTITY_UNAVAILABLE", "Administrator creation failed.")
 		return
 	}
 
 	h.setupCodes.Clear()
-	if err := writeInitialAuthorizedKey(h.stateDir, keyLine); err != nil {
-		slog.WarnContext(r.Context(), "could not save initial SSH public key", "error", err)
-	}
-	_, _ = h.coordinator.audits.Append(r.Context(), audit.Event{
-		Actor: authz.Actor{Kind: authz.ActorAccount, ID: createdAccount.ID}, Source: source, Action: audit.ActionAccountCreated,
-		Target: createdAccount.ID, Result: audit.ResultSuccess, Category: audit.CategoryGeneral,
-	})
-
-	snapshot, epoch, err := h.readLiveAuthorization(r.Context())
-	if err != nil {
-		writeError(w, r, http.StatusServiceUnavailable, "AUTHENTICATION_UNAVAILABLE", "Administrator was created, but signing in failed; sign in on the login page.")
-		return
-	}
-	result, err := h.identities.AuthenticatePasswordWithIntent(r.Context(), request.Login, request.Password, source, epoch, func(account identity.Account) error {
-		_, auditErr := h.coordinator.audits.Append(r.Context(), audit.Event{
-			Actor: authz.Actor{Kind: authz.ActorAccount, ID: account.ID}, Source: source, Action: audit.ActionLoginSuccess,
-			Target: account.ID, Result: audit.ResultSuccess, Category: audit.CategoryGeneral,
-		})
-		if auditErr != nil {
-			return errors.Join(errWebAuditUnavailable, auditErr)
-		}
-		return nil
-	})
+	password := request.Password
 	request.Password = ""
-	if err != nil {
-		writeError(w, r, http.StatusServiceUnavailable, "AUTHENTICATION_UNAVAILABLE", "Administrator was created, but signing in failed; sign in on the login page.")
-		return
-	}
-	capabilities := snapshot.Resolve(result.Account.RoleIDs)
-	setSessionCookie(w, result.SessionCookie, result.ExpiresAt)
-	writeJSON(w, r, http.StatusCreated, sessionResponse(result.Account, capabilities, result.CSRFSecret, result.ExpiresAt))
+	h.authenticateAndStartSession(w, r, source, request.Login, password, http.StatusCreated)
 }
 
 // ValidateHostname checks that name is a valid RFC 1123 single-label appliance hostname.
@@ -455,61 +407,37 @@ func ValidateHostname(name string) (string, error) {
 	return trimmed, nil
 }
 
-type hostnameRunner interface {
-	SetHostname(ctx context.Context, hostname string) error
-}
-
-type systemdHostnameRunner struct {
-	exec func(ctx context.Context, name string, args ...string) error
-}
-
-func newSystemdHostnameRunner() hostnameRunner {
-	return systemdHostnameRunner{
-		exec: func(ctx context.Context, name string, args ...string) error {
-			out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
-			if err != nil {
-				return fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(string(out)))
-			}
-			return nil
-		},
-	}
-}
-
-func (s systemdHostnameRunner) SetHostname(ctx context.Context, hostname string) error {
-	return s.exec(ctx, "/usr/bin/systemd-run",
+func runSetHostnameUnit(ctx context.Context, hostname string) error {
+	out, err := exec.CommandContext(ctx, "/usr/bin/systemd-run",
 		"--quiet", "--collect", "--wait",
-		"--unit=andaru-set-hostname", "-p", "RuntimeMaxSec=30",
+		"--unit=andaru-realize-set-hostname", "-p", "RuntimeMaxSec=30",
 		andaruBinary, "realize", "set-hostname", hostname,
-	)
+	).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("systemd-run: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 type hostnameRequest struct {
 	Hostname string `json:"hostname"`
 }
 
-func newHostnameHandler(runner hostnameRunner) http.Handler {
-	if runner == nil {
-		runner = newSystemdHostnameRunner()
+func newHostnameHandler(setHostname func(ctx context.Context, hostname string) error) http.Handler {
+	if setHostname == nil {
+		setHostname = runSetHostnameUnit
 	}
+	var mu sync.Mutex
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			w.Header().Set("Allow", "POST")
-			writeError(w, r, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed.")
+			methodNotAllowed(w, r, "POST")
 			return
 		}
 		if !noQuery(w, r) {
 			return
 		}
-		body, err := io.ReadAll(io.LimitReader(r.Body, hostnameBodyLimit+1))
-		if err != nil || len(body) > hostnameBodyLimit {
-			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Invalid hostname request.")
-			return
-		}
-		var req hostnameRequest
-		dec := json.NewDecoder(strings.NewReader(string(body)))
-		dec.DisallowUnknownFields()
-		if err := dec.Decode(&req); err != nil {
-			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Invalid hostname request.")
+		_, req, ok := decodeIdentityBody[hostnameRequest](w, r, hostnameBodyLimit, "hostname")
+		if !ok {
 			return
 		}
 		normalized, err := ValidateHostname(req.Hostname)
@@ -517,7 +445,10 @@ func newHostnameHandler(runner hostnameRunner) http.Handler {
 			writeError(w, r, http.StatusUnprocessableEntity, "VALIDATION_FAILED", err.Error())
 			return
 		}
-		if err := runner.SetHostname(r.Context(), normalized); err != nil {
+		mu.Lock()
+		err = setHostname(r.Context(), normalized)
+		mu.Unlock()
+		if err != nil {
 			slog.WarnContext(r.Context(), "set hostname failed", "hostname", normalized, "error", err)
 			writeError(w, r, http.StatusBadGateway, "HOSTNAME_FAILED", "Could not apply the new hostname.")
 			return

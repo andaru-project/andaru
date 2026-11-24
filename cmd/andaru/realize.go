@@ -99,6 +99,9 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 	blocked, denyAll := resetBlocks()
 	if blocked && verb != "boot" {
 		fmt.Fprintln(stderr, "a factory reset is in progress; "+verb+" waits for it")
+		if verb == "set-hostname" {
+			return 1
+		}
 		return 0
 	}
 	switch verb {

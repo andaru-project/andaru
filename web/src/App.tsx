@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { BrowserRouter } from 'react-router';
 import { ApiClient, ApiError, apiErrorMessage } from './api';
 import { LoginScreen } from './screens/LoginScreen';
-import { SetupWizardScreen } from './screens/SetupWizardScreen';
+import { SetupBootstrapScreen } from './screens/SetupBootstrapScreen';
 import { Shell } from './Shell';
 import type { Session } from './types';
 
@@ -75,13 +75,17 @@ export function App() {
   if (disconnected) return <Container size="sm" py="xl"><Alert color="red" role="alert" title="Cannot reach the Andaru service"><Stack><Text>The management service is disconnected. No change was sent.</Text><Button onClick={() => void connect()}>Retry connection</Button></Stack></Alert></Container>;
   if (!session && setupRequired) {
     return (
-      <SetupWizardScreen
+      <SetupBootstrapScreen
         api={api}
         onBootstrapped={(created) => {
           setSession(created);
           setSetupRequired(false);
           setNotice('');
           window.history.replaceState(null, '', '/setup');
+        }}
+        onAlreadyConfigured={(message) => {
+          setSetupRequired(false);
+          setNotice(message);
         }}
       />
     );

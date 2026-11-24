@@ -342,7 +342,6 @@ export interface SetupBootstrapRequest {
   login: string;
   displayName: string;
   password: string;
-  sshPublicKey?: string;
 }
 
 export interface ConfigBatchOperation {

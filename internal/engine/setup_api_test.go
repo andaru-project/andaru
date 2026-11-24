@@ -2,8 +2,6 @@ package engine
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -14,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"golang.org/x/crypto/ssh"
+	"github.com/andaru-project/andaru/internal/config"
 )
 
-func TestSetupCodeStoreLifecycleAndRateLimit(t *testing.T) {
+func TestSetupCodeStoreLifecycleAndPerSourceRateLimit(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Date(2026, 11, 24, 18, 0, 0, 0, time.UTC)
 	store := &setupCodeStore{stateDir: dir, now: func() time.Time { return now }}
@@ -45,27 +43,30 @@ func TestSetupCodeStoreLifecycleAndRateLimit(t *testing.T) {
 	}
 
 	// Case-insensitive and dash-free verification succeeds.
-	if err := store.Verify(strings.ToLower(strings.ReplaceAll(code, "-", ""))); err != nil {
+	if err := store.Verify("192.0.2.10", strings.ToLower(strings.ReplaceAll(code, "-", ""))); err != nil {
 		t.Fatalf("Verify normalized valid code: %v", err)
 	}
 
-	// Five bad attempts trigger rate limiting.
+	// Five bad attempts from one source rate-limit that source only (not another source).
 	for i := range setupMaxFailedAttempts {
-		if err := store.Verify("0000-0000-0000-0000"); !errors.Is(err, errSetupCodeInvalid) {
+		if err := store.Verify("192.0.2.99", "0000-0000-0000-0000"); !errors.Is(err, errSetupCodeInvalid) {
 			t.Fatalf("attempt %d: got %v, want errSetupCodeInvalid", i, err)
 		}
 	}
-	if err := store.Verify(code); !errors.Is(err, errSetupCodeRateLimited) {
-		t.Fatalf("expected rate limit even for valid code, got %v", err)
+	if err := store.Verify("192.0.2.99", code); !errors.Is(err, errSetupCodeRateLimited) {
+		t.Fatalf("expected rate limit for abusing source, got %v", err)
+	}
+	if err := store.Verify("192.0.2.10", code); err != nil {
+		t.Fatalf("real admin source must not be locked out by another source: %v", err)
 	}
 
-	// Advancing past backoff window allows verification again.
+	// Advancing past backoff window allows the rate-limited source again.
 	now = now.Add(setupBackoffWindow + time.Second)
-	if err := store.Verify(code); err != nil {
+	if err := store.Verify("192.0.2.99", code); err != nil {
 		t.Fatalf("Verify after backoff window: %v", err)
 	}
 
-	// Rotate replaces the code; Clear removes the file.
+	// Rotate replaces the code; Clear removes the file and prevents regeneration.
 	rotated, err := store.Rotate()
 	if err != nil || rotated == code {
 		t.Fatalf("Rotate: got %q (%v), want new code", rotated, err)
@@ -74,37 +75,8 @@ func TestSetupCodeStoreLifecycleAndRateLimit(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "setup-code")); !os.IsNotExist(err) {
 		t.Fatalf("setup-code must be removed after Clear, got err=%v", err)
 	}
-}
-
-func TestValidateAuthorizedKey(t *testing.T) {
-	pub, _, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("GenerateKey: %v", err)
-	}
-	sshPub, err := ssh.NewPublicKey(pub)
-	if err != nil {
-		t.Fatalf("NewPublicKey: %v", err)
-	}
-	valid := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sshPub))) + " admin@laptop"
-
-	out, err := validateAuthorizedKey(valid)
-	if err != nil {
-		t.Fatalf("valid key rejected: %v", err)
-	}
-	if !strings.HasSuffix(string(out), " admin@laptop\n") {
-		t.Fatalf("unexpected marshaled key: %q", string(out))
-	}
-	if out, err := validateAuthorizedKey("   "); err != nil || len(out) != 0 {
-		t.Fatalf("blank key: got %q %v", out, err)
-	}
-	for _, bad := range []string{
-		"not-a-key",
-		`command="/bin/sh" ` + valid,
-		valid + "\n" + valid,
-	} {
-		if _, err := validateAuthorizedKey(bad); err == nil {
-			t.Fatalf("expected rejection for %q", bad)
-		}
+	if _, err := store.Current(); !errors.Is(err, errSetupCodeConsumed) {
+		t.Fatalf("Current after Clear must fail with errSetupCodeConsumed, got %v", err)
 	}
 }
 
@@ -120,13 +92,14 @@ func TestValidateHostnameAndHandler(t *testing.T) {
 	}
 
 	var applied string
-	h := newHostnameHandler(hostnameRunnerFunc(func(_ context.Context, name string) error {
+	h := newHostnameHandler(func(_ context.Context, name string) error {
 		applied = name
 		return nil
-	}))
+	})
 
-	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/system/hostname", strings.NewReader(`{"hostname":"Edge-GW"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || applied != "edge-gw" {
 		t.Fatalf("POST hostname: code=%d applied=%q body=%s", rec.Code, applied, rec.Body.String())
@@ -136,16 +109,34 @@ func TestValidateHostnameAndHandler(t *testing.T) {
 		t.Fatalf("unexpected reply: %v %s", err, rec.Body.String())
 	}
 
-	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/system/hostname", strings.NewReader(`{"hostname":"bad.name"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("invalid hostname: got %d, want 422", rec.Code)
 	}
 }
 
-type hostnameRunnerFunc func(ctx context.Context, hostname string) error
-
-func (f hostnameRunnerFunc) SetHostname(ctx context.Context, hostname string) error {
-	return f(ctx, hostname)
+// TestSetupWizardBatchDecodesCleanly verifies the exact JSON shape emitted by web/src/setup.ts
+// passes Andaru's real config.DecodeChanges schema and precondition checks.
+func TestSetupWizardBatchDecodesCleanly(t *testing.T) {
+	batch := `{
+		"expectedSavedVersion": "0",
+		"operations": [
+			{"op":"create","collection":"zones","localId":"lan_zone","value":{"name":"LAN"}},
+			{"op":"create","collection":"links","localId":"mgmt_link","value":{"name":"enp1s0","kind":"ethernet","permanentMac":"52:54:00:aa:bb:01","mtu":1500,"enabled":true}},
+			{"op":"create","collection":"zones","localId":"wan_zone","value":{"name":"WAN"}},
+			{"op":"create","collection":"links","localId":"wan_link","value":{"name":"enp2s0","kind":"ethernet","permanentMac":"52:54:00:aa:bb:02","mtu":1500,"enabled":true}},
+			{"op":"create","collection":"segments","localId":"wan_seg","value":{"name":"WAN","link":"@wan_link","zone":"@wan_zone","addressing":{"ipv4":{"mode":"static","addresses":["203.0.113.2/30"],"gateway":"203.0.113.1"},"ipv6":{"mode":"none"}}}},
+			{"op":"create","collection":"segments","localId":"mgmt_seg","value":{"name":"Management LAN","link":"@mgmt_link","zone":"@lan_zone","addressing":{"ipv4":{"mode":"static","addresses":["192.168.1.1/24"]},"ipv6":{"mode":"none"}}}},
+			{"op":"replace","collection":"management","expectedVersion":"0","value":{"segment":"@mgmt_seg"}},
+			{"op":"create","collection":"dhcp","value":{"name":"Management DHCP","segment":"@mgmt_seg","ranges":[{"first":"192.168.1.100","last":"192.168.1.199"}]}},
+			{"op":"replace","collection":"dns","expectedVersion":"0","value":{"mode":"forward","upstreams":[{"address":"1.1.1.1","protocol":"do53"}],"segments":["@mgmt_seg"]}},
+			{"op":"replace","collection":"nat.outbound","expectedVersion":"0","value":{"mode":"automatic"}}
+		]
+	}`
+	if _, err := config.DecodeChanges([]byte(batch)); err != nil {
+		t.Fatalf("DecodeChanges rejected setup wizard batch: %v", err)
+	}
 }

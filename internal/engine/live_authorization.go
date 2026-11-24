@@ -65,8 +65,17 @@ func liveRoleSnapshot(ctx context.Context, stateDir string, configuration *confi
 		return authz.Snapshot{}, generation.Generation{}, errLiveAuthorizationUnavailable
 	}
 	pointers, err := generation.ReadPointers(generation.Dir(stateDir))
-	if err != nil || pointers.Live == nil {
+	if err != nil {
 		return authz.Snapshot{}, generation.Generation{}, errors.Join(errLiveAuthorizationUnavailable, err)
+	}
+	if pointers.Live == nil {
+		// On a brand-new appliance before the first generation is applied, built-in roles apply;
+		// liveAuthorizationLocked still checks that state.LiveDigest is empty.
+		snapshot, snapErr := authz.NewSnapshot(nil)
+		if snapErr != nil {
+			return authz.Snapshot{}, generation.Generation{}, errors.Join(errLiveAuthorizationUnavailable, snapErr)
+		}
+		return snapshot, generation.Generation{}, nil
 	}
 	live, err := generation.Read(generation.Dir(stateDir), *pointers.Live)
 	if err != nil {

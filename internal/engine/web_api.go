@@ -184,11 +184,7 @@ func (h *webAPI) startupStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusServiceUnavailable, "IDENTITY_UNAVAILABLE", "Identity status is unavailable.")
 		return
 	}
-	if revision == 0 && h.setupCodes != nil {
-		if _, codeErr := h.setupCodes.Current(); codeErr != nil {
-			slog.WarnContext(r.Context(), "could not prepare setup code", "error", codeErr)
-		}
-	} else if revision > 0 && h.setupCodes != nil {
+	if revision > 0 && h.setupCodes != nil {
 		h.setupCodes.Clear()
 	}
 	writeJSON(w, r, http.StatusOK, webStartupStatus{SetupRequired: revision == 0})
@@ -219,12 +215,18 @@ func (h *webAPI) login(w http.ResponseWriter, r *http.Request, source string) {
 	if !ok {
 		return
 	}
+	password := request.Password
+	request.Password = ""
+	h.authenticateAndStartSession(w, r, source, request.Login, password, http.StatusOK)
+}
+
+func (h *webAPI) authenticateAndStartSession(w http.ResponseWriter, r *http.Request, source, loginName, password string, successStatus int) {
 	snapshot, epoch, err := h.readLiveAuthorization(r.Context())
 	if err != nil {
 		h.loginError(w, r, source, err)
 		return
 	}
-	result, err := h.identities.AuthenticatePasswordWithIntent(r.Context(), request.Login, request.Password, source, epoch, func(account identity.Account) error {
+	result, err := h.identities.AuthenticatePasswordWithIntent(r.Context(), loginName, password, source, epoch, func(account identity.Account) error {
 		_, auditErr := h.coordinator.audits.Append(r.Context(), audit.Event{
 			Actor: authz.Actor{Kind: authz.ActorAccount, ID: account.ID}, Source: source, Action: audit.ActionLoginSuccess,
 			Target: account.ID, Result: audit.ResultSuccess, Category: audit.CategoryGeneral,
@@ -234,7 +236,6 @@ func (h *webAPI) login(w http.ResponseWriter, r *http.Request, source string) {
 		}
 		return nil
 	})
-	request.Password = ""
 	if err != nil {
 		h.loginError(w, r, source, err)
 		return
@@ -253,7 +254,7 @@ func (h *webAPI) login(w http.ResponseWriter, r *http.Request, source string) {
 	snapshot = confirmed
 	capabilities := snapshot.Resolve(result.Account.RoleIDs)
 	setSessionCookie(w, result.SessionCookie, result.ExpiresAt)
-	writeJSON(w, r, http.StatusOK, sessionResponse(result.Account, capabilities, result.CSRFSecret, result.ExpiresAt))
+	writeJSON(w, r, successStatus, sessionResponse(result.Account, capabilities, result.CSRFSecret, result.ExpiresAt))
 }
 
 func (h *webAPI) loginError(w http.ResponseWriter, r *http.Request, source string, loginErr error) {
