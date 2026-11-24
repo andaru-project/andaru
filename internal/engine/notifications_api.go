@@ -13,7 +13,7 @@ import (
 const notificationsPath = "/api/v1/notifications"
 
 // notificationsAPI lists the active notifications an actor may see, and dismisses them. Without a layer, which did
-// not open, every request is answered as unavailable.
+// not open, a well-formed request is answered as unavailable.
 type notificationsAPI struct{ layer *notify.Layer }
 
 func (h notificationsAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {

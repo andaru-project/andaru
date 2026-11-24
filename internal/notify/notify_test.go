@@ -188,12 +188,16 @@ func TestRefusedEventsAreSkipped(t *testing.T) {
 		{Key: "x", Severity: Info, Subject: "s", Detail: "a\u0085b"},
 		{Key: "x\ny", Severity: Info, Subject: "s"},
 		{Key: "x", Severity: Info, Subject: "\ufeffs"},
+		{Key: "x\u200b", Severity: Info, Subject: "s"},
+		{Key: "x", Severity: Info, Subject: "tag\U000e0041"},
 	} {
 		b.publish("disk", r)
 	}
-	timeless, _ := json.Marshal(bus.Event{ID: "e1", Type: RaisedType, Source: "disk", Data: Raise{Key: "timeless", Severity: Info, Subject: "s"}})
-	if err := b.events.Publish("notification/disk", timeless, true); err != nil {
-		t.Fatal(err)
+	for i, at := range []time.Time{{}, time.Date(0, 1, 1, 0, 0, 0, 0, time.FixedZone("", 3600))} {
+		timeless, _ := json.Marshal(bus.Event{ID: fmt.Sprint("e", i), Type: RaisedType, Time: at, Source: "disk", Data: Raise{Key: "timeless", Severity: Info, Subject: "s"}})
+		if err := b.events.Publish("notification/disk", timeless, true); err != nil {
+			t.Fatal(err)
+		}
 	}
 	joined := Raise{Key: "joined", Severity: Info, Subject: "Backup 👨\u200d👩\u200d👧 done", Detail: "می\u200cخواهم"} // joiners are text
 	b.publish("disk", joined)
@@ -297,6 +301,24 @@ func TestTimes(t *testing.T) {
 	}
 	if !times["s1"].Equal(past) {
 		t.Fatalf("one from the past dated %v, want %v", times["s1"], past)
+	}
+}
+
+// A change from a source whose clock went back does not date the notification earlier than it was.
+func TestUpdatedNeverGoesBack(t *testing.T) {
+	b := newBench(t)
+	b.publish("disk", full)
+	b.changed()
+	first := b.active()[0].Updated
+	changed := full
+	changed.Detail = "92% used"
+	payload, _ := json.Marshal(bus.Event{ID: "back", Type: RaisedType, Time: first.Add(-time.Hour), Source: "disk", Data: changed})
+	if err := b.events.Publish("notification/disk", payload, true); err != nil {
+		t.Fatal(err)
+	}
+	b.changed()
+	if got := b.active()[0]; got.Detail != changed.Detail || got.Updated.Before(first) {
+		t.Fatalf("%+v, updated before %v", got, first)
 	}
 }
 

@@ -235,13 +235,14 @@ func (l *Layer) apply(tx *sql.Tx, m bus.Message) (bool, error) {
 	return raise(tx, e.Source, r, at)
 }
 
-// text is valid UTF-8 of at most max bytes with no control character but the line breaks lines allows, and none
-// that reorders or breaks what is shown: the bidi controls, the line and paragraph separators, a byte order mark.
-// Joiners stay: emoji and many scripts need them.
+// text is valid UTF-8 of at most max bytes with no control character but the line breaks lines allows, and no
+// invisible one that hides, reorders or breaks what is shown: format characters (bidi controls, zero-width spaces,
+// tags) and the line and paragraph separators. The zero-width joiner and non-joiner stay: emoji and many scripts
+// need them.
 func text(s string, max int, lines bool) bool {
 	return utf8.ValidString(s) && len(s) <= max && !strings.ContainsFunc(s, func(c rune) bool {
-		return unicode.IsControl(c) && !(lines && c == '\n') || unicode.Is(unicode.Bidi_Control, c) ||
-			c == '\u2028' || c == '\u2029' || c == '\ufeff'
+		return unicode.IsControl(c) && !(lines && c == '\n') || unicode.Is(unicode.Cf, c) && c != '\u200c' && c != '\u200d' ||
+			c == '\u2028' || c == '\u2029'
 	})
 }
 
@@ -256,8 +257,8 @@ func validate(topic string, e bus.Event, r Raise) error {
 	switch {
 	case e.ID == "" || len(e.ID) > 64:
 		return errors.New("invalid event ID")
-	case e.Time.IsZero():
-		return errors.New("no time")
+	case e.Time.Before(time.Unix(0, 0)): // none, or one JSON cannot write back
+		return errors.New("no time, or one before 1970")
 	case topic != "notification/"+e.Source:
 		return fmt.Errorf("source %q does not match the topic", e.Source)
 	case r.Key == "" || !text(r.Key, 256, false):
@@ -285,7 +286,7 @@ func raise(tx *sql.Tx, source string, r Raise, at time.Time) (bool, error) {
 	res, err := tx.Exec(`INSERT INTO active (source, key, severity, subject, detail, link, requires, raised, updated)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (source, key) DO UPDATE SET severity = excluded.severity, subject = excluded.subject,
-			detail = excluded.detail, link = excluded.link, requires = excluded.requires, updated = excluded.updated
+			detail = excluded.detail, link = excluded.link, requires = excluded.requires, updated = max(updated, excluded.updated)
 		WHERE (severity, subject, detail, link, requires) IS NOT (excluded.severity, excluded.subject, excluded.detail, excluded.link, excluded.requires)`,
 		source, r.Key, r.Severity, r.Subject, r.Detail, r.Link, r.Requires, at.Unix(), at.Unix())
 	if err != nil {

@@ -111,10 +111,21 @@ func TestNotificationsUnavailable(t *testing.T) {
 	h := newHandlerWithServices(nil, http.NotFoundHandler(), nil, nil, nil, nil, notificationsAPI{})
 	actor := requestActor{Actor: authz.Actor{Kind: authz.ActorAccount, ID: "00000000-0000-4000-8000-000000000001"},
 		AccountID: "00000000-0000-4000-8000-000000000001", Source: "unix", Capabilities: []authz.Capability{authz.NotificationsRead}}
-	r := httptest.NewRequest(http.MethodGet, notificationsPath, nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), authenticatedActorKey{}, actor)))
-	assertAPIError(t, w, http.StatusServiceUnavailable, "NOTIFICATIONS_UNAVAILABLE")
+	actor.Capabilities = append(actor.Capabilities, authz.NotificationsManage)
+	for _, row := range []struct {
+		method, path string
+		status       int
+		code         string
+	}{
+		{http.MethodGet, notificationsPath, http.StatusServiceUnavailable, "NOTIFICATIONS_UNAVAILABLE"},
+		{http.MethodPost, notificationsPath + "/1/dismiss", http.StatusServiceUnavailable, "NOTIFICATIONS_UNAVAILABLE"},
+		{http.MethodPost, notificationsPath + "/x/dismiss", http.StatusNotFound, "NOT_FOUND"},
+	} {
+		r := httptest.NewRequest(row.method, row.path, nil)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), authenticatedActorKey{}, actor)))
+		assertAPIError(t, w, row.status, row.code)
+	}
 }
 
 func TestStreamFiltersFollowCapabilities(t *testing.T) {
