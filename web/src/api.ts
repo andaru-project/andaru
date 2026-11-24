@@ -466,6 +466,6 @@ export class ApiClient {
   }
 
   dismissNotification(id: number) {
-    return this.request<void>(`/api/v1/notifications/${encodeURIComponent(String(id))}/dismiss`, { method: 'POST' }, true);
+    return this.request<void>(`/api/v1/notifications/${id}/dismiss`, { method: 'POST' }, true);
   }
 }

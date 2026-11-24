@@ -567,10 +567,72 @@ it('dispatches stream events by type so notifications.changed refreshes only not
   expect(appliesReads(fetchMock)).toBe(4);
   expect(notificationsReads()).toBe(3);
 
+  // A type it does not know, or a message it cannot read, reloads everything rather than miss a change.
   act(() => { stream.message({ type: 'other.event' }); });
   await answered();
-  expect(appliesReads(fetchMock)).toBe(4);
-  expect(notificationsReads()).toBe(3);
+  expect(appliesReads(fetchMock)).toBe(5);
+  expect(notificationsReads()).toBe(4);
+
+  act(() => { stream.message('not json'); });
+  await answered();
+  expect(appliesReads(fetchMock)).toBe(6);
+  expect(notificationsReads()).toBe(5);
+});
+
+it('reads the notifications again when the connection comes back, and every 15 seconds while a read fails', async () => {
+  vi.useFakeTimers();
+  try {
+    let fail = true;
+    const fetchMock = fetchRoutes({
+      '/api/v1/notifications': () => (fail ? jsonResponse(503, { error: { code: 'NOTIFICATIONS_UNAVAILABLE', message: 'Unavailable.' } }) : jsonResponse(200, { items: [] })),
+    });
+    const reads = () => fetchMock.mock.calls.filter(([url]) => url === '/api/v1/notifications').length;
+    const api = new ApiClient('csrf');
+    const readNotifications = session(['notifications.read']);
+    const [onLogout, onSessionLost] = [vi.fn(), vi.fn()];
+    const view = (connected: boolean) => (
+      <MemoryRouter initialEntries={['/system/session']}>
+        <Shell api={api} session={readNotifications} connected={connected} onLogout={onLogout} onSessionLost={onSessionLost} />
+      </MemoryRouter>
+    );
+    const { rerender } = render(view(true));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(reads()).toBe(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+    expect(reads()).toBe(2);
+    fail = false;
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+    expect(reads()).toBe(3);
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(reads()).toBe(3);
+
+    rerender(view(false));
+    expect(reads()).toBe(3);
+    rerender(view(true));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(reads()).toBe(4);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it('does not show an out-of-date count as current once a read fails', async () => {
+  let fail = false;
+  fetchRoutes({
+    '/api/v1/applies': unapplied,
+    '/api/v1/versions?': { state: 'saved', items: [] },
+    '/api/v1/notifications': () => (fail ? jsonResponse(503, { error: { code: 'NOTIFICATIONS_UNAVAILABLE', message: 'Unavailable.' } }) : jsonResponse(200, { items: [] })),
+  });
+  render(
+    <MemoryRouter initialEntries={['/system/session']}>
+      <Shell api={new ApiClient('csrf')} session={session(['configuration.read', 'notifications.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} />
+    </MemoryRouter>,
+  );
+  expect(await screen.findByRole('link', { name: '0 notifications' })).toBeInTheDocument();
+  fail = true;
+  const [stream] = openStreams();
+  act(() => { stream.message({ type: 'notifications.changed' }); });
+  expect(await screen.findByRole('link', { name: 'Notifications unavailable' })).toHaveTextContent('—');
 });
 
 it('opens the event stream with only notifications.read without requesting changes', async () => {
@@ -592,7 +654,7 @@ it.each([
   { label: 'warning wins over info', items: [notification(1, 'info'), notification(2, 'warning')], severity: 'warning', color: 'orange', count: '2' },
   { label: 'info is blue', items: [notification(1, 'info')], severity: 'info', color: 'blue', count: '1' },
   { label: 'zero is neutral', items: [], severity: 'none', color: null, count: '0' },
-])('colours the header notification count by highest severity: $label', async ({ items, severity, color, count }) => {
+])('colours the header notification count by highest severity: $label', async ({ items, severity, count }) => {
   fetchRoutes({ '/api/v1/notifications': { items } });
   render(
     <MemoryRouter initialEntries={['/system/session']}>
@@ -602,8 +664,6 @@ it.each([
   const link = await screen.findByRole('link', { name: /^\d+ notification/ });
   expect(link).toHaveTextContent(count);
   expect(link).toHaveAttribute('data-severity', severity);
-  if (color) expect(link).toHaveAttribute('data-color', color);
-  else expect(link).not.toHaveAttribute('data-color');
 });
 
 it('hides header notifications and nav link without notifications.read, and shares one fetch across header, dashboard and page', async () => {
@@ -647,6 +707,6 @@ it('shows the 503 state in the header and on the Notifications page', async () =
   );
   expect(await screen.findByRole('link', { name: 'Notifications unavailable' })).toHaveAttribute('data-severity', 'unavailable');
   const alert = await screen.findByRole('alert');
-  expect(alert).toHaveTextContent('Notifications are unavailable');
+  expect(alert).toHaveTextContent('The notifications could not be read');
   expect(alert).toHaveTextContent('Notifications are temporarily unavailable.');
 });

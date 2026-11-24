@@ -64,9 +64,10 @@ body {
   flex-shrink: 0;
 }
 
-/* A long account name must not push the header off a phone, nor squeeze the connection state out of reading. */
+/* A long account name must not push the header off a phone, nor squeeze the connection state or the notification
+   count out of reading: at 320 pixels they and the menu button share what the box's name gives up. */
 .app-header .account-button {
-  max-width: 45vw;
+  max-width: 35vw;
 }
 
 .app-header .mantine-Badge-root {

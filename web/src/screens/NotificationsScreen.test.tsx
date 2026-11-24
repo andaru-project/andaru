@@ -42,6 +42,8 @@ it('lists subject, severity badge, source, formatted timestamp, plain-text detai
     sample(),
     sample({ id: 2, source: 'upgrade', key: 'upgrade/pending', severity: 'warning', subject: 'Upgrade decisions waiting', detail: undefined, link: '/system/upgrade', updated: '2026-11-23T08:30:00Z' }),
     sample({ id: 3, source: 'disk', key: 'disk/var', severity: 'info', subject: 'External link ignored', detail: 'Check disk usage', link: '//evil.example/phish', updated: '2026-11-23T07:00:00Z' }),
+    sample({ id: 4, severity: 'info', subject: 'Tab link ignored', link: '/\t/evil.example', updated: '2026-11-23T06:00:00Z' }),
+    sample({ id: 5, severity: 'info', subject: 'Backslash link ignored', link: '/\\evil.example', updated: '2026-11-23T05:00:00Z' }),
   ];
 
   render(
@@ -51,7 +53,7 @@ it('lists subject, severity badge, source, formatted timestamp, plain-text detai
   );
 
   const articles = screen.getAllByRole('article');
-  expect(articles).toHaveLength(3);
+  expect(articles).toHaveLength(5);
 
   expect(within(articles[0]).getByText('critical')).toBeInTheDocument();
   expect(within(articles[0]).getByText('Apply 12 rolled back automatically')).toBeInTheDocument();
@@ -66,6 +68,31 @@ it('lists subject, severity badge, source, formatted timestamp, plain-text detai
 
   expect(within(articles[2]).getByText('info')).toBeInTheDocument();
   expect(within(articles[2]).queryByRole('link')).not.toBeInTheDocument();
+  expect(within(articles[3]).queryByRole('link')).not.toBeInTheDocument();
+  expect(within(articles[4]).queryByRole('link')).not.toBeInTheDocument();
+});
+
+it('reloads the list when the notification is already gone, and hands a lost session back without reloading', async () => {
+  let status = 404;
+  fetchRoutes({
+    'POST /api/v1/notifications/1/dismiss': () => jsonResponse(status, { error: { code: 'NOT_FOUND', message: 'Not found.' } }),
+  });
+  const reload = vi.fn(async () => undefined);
+  const onSessionLost = vi.fn();
+  render(
+    <MemoryRouter>
+      <NotificationsScreen api={new ApiClient('csrf')} session={session(['notifications.read', 'notifications.manage'])} notifications={resourceOf({ data: { items: [sample()] }, reload })} onSessionLost={onSessionLost} />
+    </MemoryRouter>,
+  );
+  const button = screen.getByRole('button', { name: 'Dismiss Apply 12 rolled back automatically' });
+  await userEvent.click(button);
+  expect(reload).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+  status = 401;
+  await userEvent.click(button);
+  expect(onSessionLost).toHaveBeenCalledTimes(1);
+  expect(reload).toHaveBeenCalledTimes(1);
 });
 
 it('shows Dismiss only with notifications.manage and reloads the list after dismissing', async () => {
@@ -108,7 +135,7 @@ it('shows the 503 unavailable alert and the empty state', async () => {
     </MemoryRouter>,
   );
   const alert = screen.getByRole('alert');
-  expect(alert).toHaveTextContent('Notifications are unavailable');
+  expect(alert).toHaveTextContent('The notifications could not be read');
   expect(alert).toHaveTextContent('Notifications are temporarily unavailable.');
   expect(screen.queryByText('No active notifications.')).not.toBeInTheDocument();
   unavailableView.unmount();
@@ -126,7 +153,7 @@ it('shows the 503 unavailable alert and the empty state', async () => {
   expect(screen.getByRole('status')).toHaveTextContent('No active notifications.');
 });
 
-it('shows an unavailable alert when dismiss fails with 503', async () => {
+it('says the dismiss failed, with the message of the server, when it fails with 503', async () => {
   fetchRoutes({
     'POST /api/v1/notifications/1/dismiss': () => jsonResponse(503, { error: { code: 'NOTIFICATIONS_UNAVAILABLE', message: 'Notifications are temporarily unavailable.' } }),
   });
@@ -143,7 +170,7 @@ it('shows an unavailable alert when dismiss fails with 503', async () => {
 
   await userEvent.click(screen.getByRole('button', { name: 'Dismiss Apply 12 rolled back automatically' }));
   const alert = await screen.findByRole('alert');
-  expect(alert).toHaveTextContent('Notifications are unavailable');
+  expect(alert).toHaveTextContent('Could not dismiss the notification');
   expect(alert).toHaveTextContent('Notifications are temporarily unavailable.');
 });
 

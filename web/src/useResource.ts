@@ -64,15 +64,13 @@ const reopenMilliseconds = 15_000;
 
 // eventType reads the bus event type from an SSE message's JSON payload. An empty or unreadable
 // message returns undefined so callers fall back to refreshing all subscribed state.
-function eventType(data: unknown): string | undefined {
-  if (typeof data !== 'string' || data === '') return undefined;
+function eventType(data: string): string | undefined {
   try {
-    const parsed: unknown = JSON.parse(data);
-    if (parsed && typeof parsed === 'object' && 'type' in parsed && typeof parsed.type === 'string') return parsed.type;
+    const type: unknown = JSON.parse(data)?.type;
+    return typeof type === 'string' ? type : undefined;
   } catch {
     return undefined;
   }
-  return undefined;
 }
 
 // useEvents calls onEvent when the engine's event stream opens and at each event on it, in place of a poll: the

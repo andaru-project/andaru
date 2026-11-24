@@ -1,10 +1,10 @@
 import { Alert, Anchor, Badge, Button, Group, Loader, Paper, Stack, Text, Title } from '@mantine/core';
 import { useState } from 'react';
 import { Link } from 'react-router';
-import { ApiClient, ApiError, apiErrorMessage } from '../api';
+import { ApiClient, ApiError, reportError } from '../api';
 import { isSafeAppLink, severityColor } from '../notifications';
 import { formatTimestamp, useTimeZone } from '../timezone';
-import type { Notification, NotificationList, Session } from '../types';
+import type { Notification, NotificationList, NotificationSeverity, Session } from '../types';
 import type { Resource } from '../useResource';
 import { Loaded } from './Loaded';
 
@@ -17,31 +17,33 @@ interface NotificationsScreenProps {
 
 const widgetLimit = 5;
 
+function SeverityBadge({ severity }: { severity: NotificationSeverity }) {
+  return <Badge size="sm" className="plain-badge" color={severityColor[severity]} variant={severity === 'critical' ? 'filled' : 'light'}>{severity}</Badge>;
+}
+
 export function NotificationsScreen({ api, session, notifications, onSessionLost }: NotificationsScreenProps) {
   const timeZone = useTimeZone();
   const canManage = session.capabilities.includes('notifications.manage');
   const [dismissing, setDismissing] = useState<number | null>(null);
-  const [dismissError, setDismissError] = useState<{ unavailable: boolean; message: string } | null>(null);
+  const [dismissError, setDismissError] = useState('');
   const items = notifications.data?.items ?? [];
 
   async function dismiss(item: Notification) {
     setDismissing(item.id);
-    setDismissError(null);
+    setDismissError('');
     try {
       await api.dismissNotification(item.id);
-      await notifications.reload();
     } catch (error) {
-      if (error instanceof ApiError && error.status === 404) {
-        await notifications.reload();
-      } else if (error instanceof ApiError && error.status === 401) {
-        onSessionLost();
-      } else {
-        const unavailable = error instanceof ApiError && (error.status === 503 || error.code === 'NOTIFICATIONS_UNAVAILABLE');
-        setDismissError({ unavailable, message: apiErrorMessage(error) });
+      // Not found is gone already, or no longer the caller's to see: the list read next says which.
+      if (!(error instanceof ApiError && error.status === 404)) {
+        reportError(error, onSessionLost, setDismissError);
+        if (error instanceof ApiError && error.status === 401) return;
       }
     } finally {
       setDismissing(null);
     }
+    // The change event reloads the list too, but the stream may be down.
+    await notifications.reload();
   }
 
   return (
@@ -51,10 +53,10 @@ export function NotificationsScreen({ api, session, notifications, onSessionLost
           <Title order={2}>Notifications</Title>
           <Text c="dimmed">Active alerts and notices from the appliance, newest first.</Text>
         </div>
-        <Button size="xs" variant="default" loading={notifications.loading && items.length > 0} onClick={() => { setDismissError(null); void notifications.reload(); }}>Refresh</Button>
+        <Button size="xs" variant="default" loading={notifications.loading && items.length > 0} onClick={() => { setDismissError(''); void notifications.reload(); }}>Refresh</Button>
       </Group>
-      {notifications.error && <Alert color="orange" role="alert" title="Notifications are unavailable">{notifications.error}</Alert>}
-      {dismissError && <Alert color="red" role="alert" title={dismissError.unavailable ? 'Notifications are unavailable' : 'Could not dismiss notification'}>{dismissError.message}</Alert>}
+      {notifications.error && <Alert color="orange" role="alert" title="The notifications could not be read">{notifications.error}</Alert>}
+      {dismissError && <Alert color="red" role="alert" title="Could not dismiss the notification">{dismissError}</Alert>}
       {notifications.data === undefined
         ? (!notifications.error && <Loader aria-label="Loading notifications" />)
         : items.length === 0
@@ -66,7 +68,7 @@ export function NotificationsScreen({ api, session, notifications, onSessionLost
                   <Stack gap="xs">
                     <Group justify="space-between" align="flex-start" wrap="nowrap">
                       <Group gap="xs" wrap="wrap">
-                        <Badge size="sm" className="plain-badge" color={severityColor[item.severity]} variant={item.severity === 'critical' ? 'filled' : 'light'}>{item.severity}</Badge>
+                        <SeverityBadge severity={item.severity} />
                         <Text fw={600}>{item.subject}</Text>
                       </Group>
                       {canManage && (
@@ -113,11 +115,12 @@ export function NotificationsWidget({ resource }: { resource: Resource<Notificat
               <div key={item.id}>
                 <Group justify="space-between" gap="xs" wrap="nowrap" align="flex-start">
                   <Text size="sm" fw={600}>{item.subject}</Text>
-                  <Badge size="sm" className="plain-badge" color={severityColor[item.severity]} variant={item.severity === 'critical' ? 'filled' : 'light'}>{item.severity}</Badge>
+                  <SeverityBadge severity={item.severity} />
                 </Group>
                 <Text size="xs" c="dimmed" className="tabular">{formatTimestamp(item.updated, timeZone)} · {item.source}</Text>
               </div>
             ))}
+            {list.items.length > widgetLimit && <Text size="xs" c="dimmed">and {list.items.length - widgetLimit} more</Text>}
           </Stack>
         );
       }}

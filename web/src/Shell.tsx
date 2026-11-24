@@ -94,8 +94,9 @@ function HeaderNotifications({ notifications }: { notifications: Resource<Notifi
   const items = notifications.data?.items;
   const count = items?.length;
   const highest = items ? highestSeverity(items) : undefined;
-  const unavailable = count === undefined && notifications.error !== '';
-  const active = count !== undefined && count > 0 && highest !== undefined;
+  // A read that fails after one that answered leaves the count out of date: it is not shown as if it were current.
+  const unavailable = notifications.error !== '';
+  const active = !unavailable && highest !== undefined;
   const label = unavailable
     ? 'Notifications unavailable'
     : count === undefined
@@ -114,7 +115,6 @@ function HeaderNotifications({ notifications }: { notifications: Resource<Notifi
       leftSection={<Bell />}
       aria-label={label}
       data-severity={active ? highest : unavailable ? 'unavailable' : 'none'}
-      data-color={active ? severityColor[highest] : undefined}
     >
       {unavailable ? '—' : count !== undefined ? <span className="tabular">{count}</span> : null}
     </Button>
@@ -157,19 +157,14 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   useVisiblePoll(update.refresh, systemPollMilliseconds, canReadStatus);
 
   // Saves, applies and notification changes reach the shell on one event stream, dispatched by event type so each
-  // change reloads only its own resource. On stream open/error (no type), every subscribed resource reloads.
+  // change reloads only its own resource. With no type (the stream opened or failed) or one it does not know, every
+  // resource reloads: a reader without the capability reads nothing.
   const handleEvent = useCallback((type?: string) => {
-    if (type === undefined) {
-      if (canReadChanges) void reloadChanges();
-      if (canReadNotifications) void reloadNotifications();
-      return;
-    }
-    if (type === 'notifications.changed') {
-      if (canReadNotifications) void reloadNotifications();
-    } else if (type === 'config.head.changed' || type === 'apply.changed') {
-      if (canReadChanges) void reloadChanges();
-    }
-  }, [canReadChanges, canReadNotifications, reloadChanges, reloadNotifications]);
+    const changed = type === 'config.head.changed' || type === 'apply.changed';
+    const noticed = type === 'notifications.changed';
+    if (!noticed) void reloadChanges();
+    if (!changed) void reloadNotifications();
+  }, [reloadChanges, reloadNotifications]);
   useEvents(handleEvent, canReadChanges || canReadNotifications);
   // The change state is read again every 15 seconds while a read has failed, until one answers, and while an apply is
   // activating or awaits confirmation: a healthy stream may bring no other event, and the events are not durable, so
@@ -210,13 +205,13 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   const wasConnected = useRef(connected);
   useEffect(() => {
     if (connected && !wasConnected.current) {
-      if (canReadChanges) void reloadChanges();
-      if (canReadNotifications) void reloadNotifications();
+      void reloadChanges();
+      void reloadNotifications();
       // A check that failed while the box did not answer is tried again; the head may not have moved.
       if (upgradeError) void reloadUpgrade();
     }
     wasConnected.current = connected;
-  }, [connected, canReadChanges, reloadChanges, canReadNotifications, reloadNotifications, upgradeError, reloadUpgrade]);
+  }, [connected, reloadChanges, reloadNotifications, upgradeError, reloadUpgrade]);
 
   const groups = [
     {

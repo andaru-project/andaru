@@ -143,7 +143,7 @@ export function DashboardScreen({ api, session, system, notifications, update, o
   ];
   const allowed = all.filter((widget) => session.capabilities.includes(widget.capability));
 
-  // The layout is kept with the account. It is read before any widget shows, so a hidden widget never loads and
+  // The layout is kept with the account. It is read before any widget shows, so a hidden widget never loads (the notifications, which the header shares, excepted) and
   // nothing jumps; what the user then changes shows at once and is saved behind it. While it cannot be read the
   // default order shows and the layout stays locked: a save would replace preferences this page has not seen.
   const preferences = useResource(useCallback(() => api.preferences(), [api]), onSessionLost);
