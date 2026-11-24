@@ -157,23 +157,25 @@ func eventStreamOutlivesTheTimeouts(t *testing.T, h2 bool) {
 	server.EnableHTTP2 = h2
 	server.StartTLS()
 	defer server.Close()
-	request, _ := http.NewRequest(http.MethodGet, server.URL+"/api/v1/events", nil)
-	request.Host = "router.example"
-	response, err := server.Client().Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
-	if want := map[bool]int{false: 1, true: 2}[h2]; response.ProtoMajor != want {
-		t.Fatalf("HTTP/%d, want HTTP/%d", response.ProtoMajor, want)
-	}
-	reader := bufio.NewReader(response.Body)
-	for i := range 3 {
-		line, err := reader.ReadString('\n')
-		if want := "data: " + strconv.Itoa(i) + "\n"; err != nil || line != want {
-			t.Fatalf("line %d = %q, %v; want %q", i, line, err, want)
+	for _, path := range []string{"/api/v1/events", "/api/v1/fleet/events/stream"} {
+		request, _ := http.NewRequest(http.MethodGet, server.URL+path, nil)
+		request.Host = "router.example"
+		response, err := server.Client().Do(request)
+		if err != nil {
+			t.Fatal(err)
 		}
-		_, _ = reader.ReadString('\n')
+		defer response.Body.Close()
+		if want := map[bool]int{false: 1, true: 2}[h2]; response.ProtoMajor != want {
+			t.Fatalf("HTTP/%d, want HTTP/%d", response.ProtoMajor, want)
+		}
+		reader := bufio.NewReader(response.Body)
+		for i := range 3 {
+			line, err := reader.ReadString('\n')
+			if want := "data: " + strconv.Itoa(i) + "\n"; err != nil || line != want {
+				t.Fatalf("line %d = %q, %v; want %q", i, line, err, want)
+			}
+			_, _ = reader.ReadString('\n')
+		}
 	}
 }
 

@@ -31,7 +31,11 @@ export class FakeEventSource {
   close() {
     this.readyState = FakeEventSource.CLOSED;
   }
+
+  // Named events, as the fleet's stream uses; they never fire here.
+  addEventListener() {}
+  removeEventListener() {}
 }
 
-// openStreams are the streams a page holds now.
-export const openStreams = () => FakeEventSource.opened.filter((source) => source.readyState !== FakeEventSource.CLOSED);
+// openStreams are the bus event streams a page holds now.
+export const openStreams = () => FakeEventSource.opened.filter((source) => source.url === '/api/v1/events' && source.readyState !== FakeEventSource.CLOSED);

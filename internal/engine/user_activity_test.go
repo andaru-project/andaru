@@ -26,4 +26,9 @@ func TestOnlyMarkedReadsAreNotActivity(t *testing.T) {
 			t.Errorf("%s with %q: activity=%v, want %v", c.method, c.header, got, c.activity)
 		}
 	}
+
+	sseReq := httptest.NewRequest("GET", "/api/v1/fleet/events/stream", nil)
+	if userActivity(sseReq) {
+		t.Errorf("GET /api/v1/fleet/events/stream: activity=true, want false")
+	}
 }

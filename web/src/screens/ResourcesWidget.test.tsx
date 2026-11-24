@@ -34,6 +34,15 @@ it('shows each measure as a label, its figures and a bar', () => {
   expect(figures('coretemp Package id 0')).toBe('45.5 °C');
 });
 
+it('marks elevated and high sensor temperatures with warning and error styles', () => {
+  render(<ResourcesView usage={{ ...usage, temperatures: [
+    { sensor: 'warm', celsius: 72.0 },
+    { sensor: 'hot', celsius: 86.5 },
+  ] }} before={before} />);
+  expect(screen.getByText('72.0 °C')).toHaveClass('warning-text');
+  expect(screen.getByText('86.5 °C')).toHaveClass('error-text');
+});
+
 it('leaves out what the box does not have, and guesses nothing', () => {
   render(<ResourcesView usage={{ ...usage, load: null, connections: null, temperatures: [], fileSystems: [], memory: { ...usage.memory, swapTotalBytes: 0, swapFreeBytes: 0 } }} />);
   // One reading gives no share of the processors.

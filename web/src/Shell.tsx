@@ -1,11 +1,12 @@
-import { AccordionChevron, Alert, Anchor, AppShell, Badge, Burger, Button, Group, Image, Menu, NavLink, Stack, Text, Title } from '@mantine/core';
+import { AccordionChevron, Alert, Anchor, AppShell, Badge, Burger, Button, Group, Image, Menu, NavLink, Stack, Text, Title, useMantineColorScheme, type MantineColorScheme } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useMatch, useNavigate } from 'react-router';
 import { ApiClient, reportError } from './api';
 import mark from './andaru-icon.svg';
-import { loadChangeState } from './changes';
+import { loadChangeState, pendingNotice } from './changes';
 import { PendingNotice } from './PendingNotice';
+import { FleetWorkspace } from './netplane/FleetWorkspace';
 import { AliasesScreen } from './screens/AliasesScreen';
 import { AuditScreen } from './screens/AuditScreen';
 import { ChangesScreen } from './screens/ChangesScreen';
@@ -33,6 +34,41 @@ interface ShellProps {
 const systemPollMilliseconds = 60_000;
 const retryMilliseconds = 15_000;
 
+const pageTitles: Record<string, string> = {
+  '/': 'Dashboard',
+  '/network/interfaces': 'Interfaces',
+  '/network/topology': 'Topology',
+  '/network/vlans': 'VLANs & Segments',
+  '/network/vlans/flow': 'VLAN Flow',
+  '/network/devices': 'Devices',
+  '/network/clients': 'Clients',
+  '/network/diagnostics': 'Diagnostics',
+  '/firewall/rules': 'Rules',
+  '/firewall/aliases': 'Aliases',
+  '/changes': 'Review and apply',
+  '/system/details': 'System details',
+  '/system/users': 'Users',
+  '/system/roles': 'Roles',
+  '/system/tokens': 'API tokens',
+  '/system/audit': 'Security audit',
+  '/system/upgrade': 'Finish the upgrade',
+  '/system/session': 'Current session',
+};
+
+const schemes: Array<{ value: MantineColorScheme; label: string }> = [
+  { value: 'auto', label: 'System' },
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' },
+];
+
+const pendingBadges: Record<NonNullable<ReturnType<typeof pendingNotice>>['kind'], { color: string; variant: 'light' | 'filled'; label: string }> = {
+  unapplied: { color: 'yellow', variant: 'light', label: 'Pending' },
+  activating: { color: 'blue', variant: 'light', label: 'Applying' },
+  awaiting: { color: 'orange', variant: 'filled', label: 'Confirm' },
+  failed: { color: 'red', variant: 'light', label: 'Failed' },
+  rolled_back: { color: 'red', variant: 'light', label: 'Rolled back' },
+};
+
 // Branches the user closed, kept per browser. Storage may be unavailable; the tree then starts open.
 const closedKey = 'andaru.nav.closed';
 function storedClosed(): string[] {
@@ -45,6 +81,7 @@ function storedClosed(): string[] {
 }
 
 export function Shell({ api, session, connected, onLogout, onSessionLost }: ShellProps) {
+  const { colorScheme, setColorScheme } = useMantineColorScheme();
   const capabilities = useMemo(() => new Set(session.capabilities), [session.capabilities]);
   const [opened, { toggle, close }] = useDisclosure();
   const { pathname } = useLocation();
@@ -115,7 +152,18 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   }, [connected, reloadChanges, upgradeError, reloadUpgrade]);
 
   const groups = [
-    { label: 'Network', items: [{ to: '/network/interfaces', label: 'Interfaces', visible: capabilities.has('status.read') }] },
+    {
+      label: 'Network',
+      items: [
+        { to: '/network/interfaces', label: 'Interfaces', visible: canReadStatus },
+        { to: '/network/topology', label: 'Topology', visible: canReadStatus },
+        { to: '/network/vlans', label: 'VLANs & Segments', visible: canReadStatus },
+        { to: '/network/vlans/flow', label: 'VLAN Flow', visible: canReadStatus },
+        { to: '/network/devices', label: 'Devices', visible: canReadStatus },
+        { to: '/network/clients', label: 'Clients', visible: canReadStatus },
+        { to: '/network/diagnostics', label: 'Diagnostics', visible: canReadStatus },
+      ],
+    },
     { label: 'Firewall', items: [{ to: '/firewall/rules', label: 'Rules', visible: canReadChanges }, { to: '/firewall/aliases', label: 'Aliases', visible: canReadChanges }] },
     { label: 'Changes', items: [{ to: '/changes', label: 'Review and apply', visible: canReadChanges }] },
     {
@@ -141,14 +189,30 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
     } catch { /* the tree still works for this visit */ }
   }, [closed, labels]);
   const toggleBranch = (label: string) => setClosed(closed.includes(label) ? closed.filter((item) => item !== label) : [...closed, label]);
+  const normalizedPath = pathname.endsWith('/') && pathname.length > 1 ? pathname.slice(0, -1) : pathname;
+  const isNavItemActive = (to: string) => normalizedPath === to || (to === '/network/devices' && normalizedPath.startsWith('/network/devices/'));
   // The branch that holds the current page is open, however the page was reached.
-  const currentBranch = groups.find((group) => group.items.some((item) => item.to === pathname))?.label;
+  const currentBranch = groups.find((group) => group.items.some((item) => isNavItemActive(item.to)))?.label;
   const [seenPath, setSeenPath] = useState('');
   if (seenPath !== pathname) {
     setSeenPath(pathname);
     if (currentBranch && closed.includes(currentBranch)) setClosed(closed.filter((item) => item !== currentBranch));
   }
-  const pageLink = (to: string, label: string) => <NavLink className="nav-item" key={to} component={Link} to={to} label={label} active={pathname === to} aria-current={pathname === to ? 'page' : undefined} onClick={close} />;
+  const hostname = system.data?.info.hostname;
+  useEffect(() => {
+    const title = pageTitles[normalizedPath] ?? (normalizedPath.startsWith('/network/devices/') ? 'Device' : undefined);
+    document.title = [title, hostname, 'Andaru'].filter(Boolean).join(' — ');
+    return () => { document.title = 'Andaru administration'; };
+  }, [normalizedPath, hostname]);
+
+  const pending = changes.data ? pendingNotice(changes.data) : null;
+  const badge = pending ? pendingBadges[pending.kind] : undefined;
+  const changesBadge = badge ? <Badge size="xs" color={badge.color} variant={badge.variant}>{badge.label}</Badge> : undefined;
+
+  const pageLink = (to: string, label: string, rightSection?: ReactNode) => {
+    const active = isNavItemActive(to);
+    return <NavLink className="nav-item" key={to} component={Link} to={to} label={label} rightSection={rightSection} active={active} aria-current={active ? 'page' : undefined} onClick={close} />;
+  };
 
   async function changePassword() {
     setAccountError('');
@@ -190,6 +254,12 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
               <Menu.Dropdown>
                 <Menu.Item onClick={() => void navigate('/system/session')}>Session details</Menu.Item>
                 {capabilities.has('users.read') && <Menu.Item onClick={() => void changePassword()}>Change password</Menu.Item>}
+                <Menu.Divider />
+                <Menu.Label>Appearance</Menu.Label>
+                {schemes.map(({ value, label }) => (
+                  <Menu.Item key={value} role="menuitemradio" rightSection={colorScheme === value ? <span aria-hidden="true">✓</span> : undefined} aria-checked={colorScheme === value} onClick={() => setColorScheme(value)}>{label}</Menu.Item>
+                ))}
+                <Menu.Divider />
                 <Menu.Item onClick={onLogout}>Sign out</Menu.Item>
               </Menu.Dropdown>
             </Menu>
@@ -206,7 +276,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
                   focus. It holds no children of its own, or NavLink would toggle on the Space key and the browser
                   again on the click that key makes. */}
               <NavLink className="nav-branch" component="button" type="button" label={group.label} aria-expanded={open} rightSection={<AccordionChevron className="nav-chevron" data-open={open || undefined} />} onClick={() => toggleBranch(group.label)} />
-              {open && <div className="nav-children">{group.items.map((item) => pageLink(item.to, item.label))}</div>}
+              {open && <div className="nav-children">{group.items.map((item) => pageLink(item.to, item.label, item.to === '/changes' ? changesBadge : undefined))}</div>}
             </div>
           );
         })}
@@ -225,6 +295,19 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
             <Route path="/" element={<DashboardScreen api={api} session={session} system={system} onSessionLost={onSessionLost} />} />
             {canReadChanges && <Route path="/system/upgrade" element={<UpgradeScreen api={api} session={session} onFinished={() => { void reloadUpgrade(); void reloadChanges(); }} onSessionLost={onSessionLost} />} />}
             {pages.filter(([path]) => visible.has(path)).map(([path, element]) => <Route key={path} path={path} element={element} />)}
+            {canReadStatus && (
+              <Route
+                path="/network/*"
+                element={
+                  <FleetWorkspace
+                    csrfToken={session.csrfToken}
+                    canReadTargets={canReadChanges}
+                    canWrite={capabilities.has('configuration.write')}
+                    onSessionLost={onSessionLost}
+                  />
+                }
+              />
+            )}
             <Route path="/system/session" element={<SessionScreen session={session} />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

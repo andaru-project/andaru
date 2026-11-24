@@ -59,3 +59,22 @@ it('lets an administrator change their own password and keeps another built-in r
   expect(screen.getByRole('dialog')).toHaveTextContent('8–128 Unicode characters');
   expect(screen.getByLabelText(/New password/)).toBeDisabled();
 });
+
+it('sends the edited user revision when updating a user', async () => {
+  const other = { id: '11111111-1111-4111-8111-111111111111', login: 'other', displayName: 'Other', kind: 'human', enabled: true, roleIds: ['administrator'], revision: 9, createdAt: 1, updatedAt: 1 };
+  fetchQueue(
+    jsonResponse(200, { items: [...userPage.items, other] }), jsonResponse(200, roles),
+    jsonResponse(200, { ...other, displayName: 'Other Updated', revision: 10 }),
+    jsonResponse(200, { items: [...userPage.items, { ...other, displayName: 'Other Updated', revision: 10 }] }), jsonResponse(200, roles),
+  );
+  render(<UsersScreen api={new ApiClient('csrf')} session={{ ...baseSession, capabilities: ['users.read', 'users.manage'] }} onSessionLost={vi.fn()} />);
+
+  await userEvent.click(await screen.findByRole('button', { name: /edit other/i }));
+  const displayName = screen.getByLabelText('Display name');
+  await userEvent.clear(displayName);
+  await userEvent.type(displayName, 'Other Updated');
+  await userEvent.click(screen.getByRole('button', { name: 'Save user' }));
+
+  const patchCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.find(([, init]) => init?.method === 'PATCH');
+  expect(JSON.parse(String(patchCall?.[1]?.body))).toMatchObject({ displayName: 'Other Updated', expectedRevision: 9 });
+});

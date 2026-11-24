@@ -165,7 +165,7 @@ func newHandler(backendSocket, assetsDirectory string, origins, hosts map[string
 	events := newProxy(backendSocket)
 	assets := http.FileServer(http.Dir(assetsDirectory))
 	router := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/v1/events" {
+		if r.URL.Path == "/api/v1/events" || r.URL.Path == "/api/v1/fleet/events/stream" { // the bus's and the fleet's
 			// The stream lasts as long as the page, so from its first write on, instead of the server's write timeout,
 			// each write must finish within streamWriteTimeout: a browser that stops reading loses its stream and
 			// its backend connection.

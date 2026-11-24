@@ -557,14 +557,17 @@ func (h *webAPI) readCookiePrincipal(r *http.Request) (identity.Principal, strin
 	return principal, selector, secret, snapshot, epoch, nil
 }
 
-// userActivity is false for a read the web UI marks as made without the user (a poll), so that a screen left
-// open still reaches the idle timeout, and for the event stream, which a browser opens and reopens on its own.
-// A write is always activity.
+// userActivity is false for a read the web UI marks as made without the user (a poll), and for the event streams
+// (the bus's and the fleet's), which a browser opens and reopens on its own and whose EventSource cannot set
+// headers, so that a screen left open still reaches the idle timeout. A write is always activity.
 func userActivity(r *http.Request) bool {
-	if r.URL.Path == eventsPath {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return true
+	}
+	if r.Header.Get("X-Andaru-Background") == "1" {
 		return false
 	}
-	return (r.Method != http.MethodGet && r.Method != http.MethodHead) || r.Header.Get("X-Andaru-Background") != "1"
+	return r.URL.Path != eventsPath && r.URL.Path != "/api/v1/fleet/events/stream"
 }
 
 func (h *webAPI) withLiveAuthorization(ctx context.Context, fn func(authz.Snapshot, uint64) error) error {

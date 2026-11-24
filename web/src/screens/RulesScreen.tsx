@@ -1,10 +1,11 @@
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type Announcements, type DragEndEvent, type UniqueIdentifier } from '@dnd-kit/core';
 import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { ActionIcon, Alert, Anchor, Badge, Button, Group, Modal, Paper, Stack, Switch, Table, Text, TextInput, Title } from '@mantine/core';
+import { ActionIcon, Alert, Anchor, Badge, Button, Group, Modal, Paper, ScrollArea, Stack, Switch, Table, Text, TextInput, Title } from '@mantine/core';
 import { useCallback, useState } from 'react';
 import { Link } from 'react-router';
 import { ApiError, reportError, type ApiClient } from '../api';
+import { formatAddressAlias, formatPortAlias } from '../format';
 import { firewallZone, type Rule, type RuleSide, type SavedObject, type Session, type Snapshot } from '../types';
 import { useResource } from '../useResource';
 import { Loaded } from './Loaded';
@@ -14,12 +15,32 @@ import { ZoneBadge } from './ZoneBadge';
 
 interface RulesScreenProps { api: ApiClient; session: Session; onSaved(): void; onSessionLost(): void }
 
-// Names for what a rule refers to, from the saved configuration the rules were read with.
-interface Names { zones: Map<string, string>; addresses: Map<string, string>; ports: Map<string, string> }
+// Names and summaries for what a rule refers to, from the saved configuration the rules were read with.
+interface Names {
+  zones: Map<string, string>;
+  addresses: Map<string, string>;
+  addressSummary: Map<string, string>;
+  ports: Map<string, string>;
+  portSummary: Map<string, string>;
+}
 
 function names(snapshot: Snapshot): Names {
   const byID = (items: Array<{ id: string; name: string }> = []) => new Map(items.map((item) => [item.id, item.name]));
-  return { zones: byID(snapshot.value.zones), addresses: byID(snapshot.value.aliases?.addresses), ports: byID(snapshot.value.aliases?.ports) };
+  const addressAliases = snapshot.value.aliases?.addresses ?? [];
+  const portAliases = snapshot.value.aliases?.ports ?? [];
+  const addresses = byID(addressAliases);
+  const ports = byID(portAliases);
+  const addressSummary = new Map<string, string>();
+  for (const alias of addressAliases) {
+    const summary = formatAddressAlias(alias, addresses);
+    if (summary) addressSummary.set(alias.id, summary);
+  }
+  const portSummary = new Map<string, string>();
+  for (const alias of portAliases) {
+    const summary = formatPortAlias(alias, ports);
+    if (summary) portSummary.set(alias.id, summary);
+  }
+  return { zones: byID(snapshot.value.zones), addresses, addressSummary, ports, portSummary };
 }
 
 // A mark beside each action's word: the word says it, the mark and the colour help the eye down the column.
@@ -42,7 +63,7 @@ function Side({ side, names: known }: { side: RuleSide; names: Names }) {
       {toFirewall && <Badge variant="filled" color="dark" tt="none">This firewall</Badge>}
       {side.zones.filter((id) => id !== firewallZone).map((id) => <ZoneBadge key={id} name={known.zones.get(id) ?? 'unknown zone'} />)}
       {side.not && <Text size="sm" fw={600}>not</Text>}
-      {side.addresses.map((id) => <Badge key={id} className="alias" variant="default" tt="none">{known.addresses.get(id) ?? 'unknown alias'}</Badge>)}
+      {side.addresses.map((id) => <Badge key={id} className="alias" variant="default" tt="none" title={known.addressSummary.get(id)}>{known.addresses.get(id) ?? 'unknown alias'}</Badge>)}
     </Group>
   );
 }
@@ -62,7 +83,7 @@ function Row({ item, position, names: known, canWrite, unlocked, busy, onToggle,
         <Group gap="xs" wrap="nowrap">
           {/* While a save is out the grip stays, so the keyboard keeps its place, and looks as idle as it is. */}
           {unlocked && <ActionIcon className="widget-grip" size="lg" variant="subtle" color="gray" id={`grip-${rule.id}`} data-disabled={busy || undefined} ref={setActivatorNodeRef} {...attributes} {...listeners} aria-label={`Move ${title}`}><Grip /></ActionIcon>}
-          <Text size="sm">{position}</Text>
+          <Text size="sm" className="tabular">{position}</Text>
         </Group>
       </Table.Td>
       <Table.Td data-label="Enabled">
@@ -79,7 +100,7 @@ function Row({ item, position, names: known, canWrite, unlocked, busy, onToggle,
       <Table.Td data-label="From"><Side side={rule.from} names={known} /></Table.Td>
       <Table.Td data-label="To"><Side side={rule.to} names={known} /></Table.Td>
       <Table.Td data-label="Ports">
-        {rule.ports.length === 0 ? <Text size="sm" c="dimmed">any</Text> : <Group gap={6}>{rule.ports.map((id) => <Badge key={id} className="alias" variant="default" tt="none">{known.ports.get(id) ?? 'unknown alias'}</Badge>)}</Group>}
+        {rule.ports.length === 0 ? <Text size="sm" c="dimmed">any</Text> : <Group gap={6}>{rule.ports.map((id) => <Badge key={id} className="alias" variant="default" tt="none" title={known.portSummary.get(id)}>{known.ports.get(id) ?? 'unknown alias'}</Badge>)}</Group>}
       </Table.Td>
       <Table.Td data-label="Name"><Text size="sm" fw={600}>{rule.name}</Text>{rule.description && <Text size="sm" c="dimmed">{rule.description}</Text>}</Table.Td>
       {canWrite && (
@@ -213,16 +234,18 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
                   {unlocked && <Text c="dimmed" size="sm">Drag a rule by its grip to move it. Choose Done to edit rules again.</Text>}
                   <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={dropped} accessibility={{ announcements, screenReaderInstructions: instructions }}>
                     <SortableContext items={order} strategy={verticalListSortingStrategy}>
-                      <Table className="data-table rules" verticalSpacing="xs">
-                        <Table.Thead><Table.Tr><Table.Th>#</Table.Th><Table.Th>On</Table.Th><Table.Th>Action</Table.Th><Table.Th>From</Table.Th><Table.Th>To</Table.Th><Table.Th>Ports</Table.Th><Table.Th>Name</Table.Th>{canWrite && <Table.Th>Actions</Table.Th>}</Table.Tr></Table.Thead>
-                        <Table.Tbody>
-                          {shown.map(({ item, position }) => (
-                            <Row key={item.value.id} item={item} position={position} names={known} canWrite={canWrite} unlocked={unlocked} busy={busy}
-                              onToggle={() => void change(() => api.saveRule({ ...item.value, enabled: !item.value.enabled }, item))}
-                              onEdit={() => setEditing(item)} onDelete={() => setDeleting({ item, position })} />
-                          ))}
-                        </Table.Tbody>
-                      </Table>
+                      <ScrollArea>
+                        <Table className="data-table rules" verticalSpacing="xs">
+                          <Table.Thead><Table.Tr><Table.Th>#</Table.Th><Table.Th>On</Table.Th><Table.Th>Action</Table.Th><Table.Th>From</Table.Th><Table.Th>To</Table.Th><Table.Th>Ports</Table.Th><Table.Th>Name</Table.Th>{canWrite && <Table.Th>Actions</Table.Th>}</Table.Tr></Table.Thead>
+                          <Table.Tbody>
+                            {shown.map(({ item, position }) => (
+                              <Row key={item.value.id} item={item} position={position} names={known} canWrite={canWrite} unlocked={unlocked} busy={busy}
+                                onToggle={() => void change(() => api.saveRule({ ...item.value, enabled: !item.value.enabled }, item))}
+                                onEdit={() => setEditing(item)} onDelete={() => setDeleting({ item, position })} />
+                            ))}
+                          </Table.Tbody>
+                        </Table>
+                      </ScrollArea>
                     </SortableContext>
                   </DndContext>
                   {shown.length === 0 && <Text c="dimmed" size="sm">No rule matches the filter.</Text>}

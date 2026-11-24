@@ -6198,6 +6198,312 @@
           }
         }
       ]
+    },
+    "/api/v1/fleet/state": {
+      "get": {
+        "operationId": "getFleetState",
+        "summary": "Read current fleet network state",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "head": {
+        "operationId": "headGetFleetState",
+        "summary": "Check read current fleet network state",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/fleet/devices": {
+      "get": {
+        "operationId": "listFleetDevices",
+        "summary": "List fleet devices",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "head": {
+        "operationId": "headListFleetDevices",
+        "summary": "Check list fleet devices",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/fleet/devices/{id}": {
+      "get": {
+        "operationId": "getFleetDevice",
+        "summary": "Read fleet device details",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "head": {
+        "operationId": "headGetFleetDevice",
+        "summary": "Check read fleet device details",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/fleet/devices/{id}/links/{ifName}/samples": {
+      "get": {
+        "operationId": "listFleetLinkSamples",
+        "summary": "Read link telemetry samples",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "head": {
+        "operationId": "headListFleetLinkSamples",
+        "summary": "Check read link telemetry samples",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/fleet/topology": {
+      "get": {
+        "operationId": "getFleetTopology",
+        "summary": "Read fleet topology graph",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "head": {
+        "operationId": "headGetFleetTopology",
+        "summary": "Check read fleet topology graph",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/fleet/vlans/flow": {
+      "get": {
+        "operationId": "getFleetVlanFlow",
+        "summary": "Read fleet VLAN flow analysis",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "head": {
+        "operationId": "headGetFleetVlanFlow",
+        "summary": "Check read fleet vlan flow analysis",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/fleet/clients": {
+      "get": {
+        "operationId": "listFleetClients",
+        "summary": "List fleet clients",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "head": {
+        "operationId": "headListFleetClients",
+        "summary": "Check list fleet clients",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/fleet/targets": {
+      "get": {
+        "operationId": "listFleetTargets",
+        "summary": "List fleet polling targets",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "head": {
+        "operationId": "headListFleetTargets",
+        "summary": "Check list fleet polling targets",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "post": {
+        "operationId": "upsertFleetTarget",
+        "summary": "Create or update a fleet polling target",
+        "responses": {
+          "200": {
+            "description": "Target saved"
+          },
+          "400": {
+            "description": "Invalid target"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/fleet/targets/{id}": {
+      "delete": {
+        "operationId": "deleteFleetTarget",
+        "summary": "Delete a fleet polling target",
+        "responses": {
+          "200": {
+            "description": "Target deleted"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Target not found"
+          }
+        }
+      }
+    },
+    "/api/v1/fleet/targets/{id}/poll": {
+      "post": {
+        "operationId": "pollFleetTarget",
+        "summary": "Trigger an immediate poll of a fleet target",
+        "responses": {
+          "200": {
+            "description": "Poll completed"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/fleet/diagnostics": {
+      "get": {
+        "operationId": "listFleetDiagnostics",
+        "summary": "List fleet diagnostic runs",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "head": {
+        "operationId": "headListFleetDiagnostics",
+        "summary": "Check list fleet diagnostic runs",
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "post": {
+        "operationId": "runFleetDiagnostic",
+        "summary": "Run a fleet diagnostic probe",
+        "responses": {
+          "200": {
+            "description": "Diagnostic completed"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/v1/fleet/events/stream": {
+      "get": {
+        "operationId": "streamFleetEvents",
+        "summary": "Stream fleet events over Server-Sent Events",
+        "responses": {
+          "200": {
+            "description": "Event stream"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
     }
   },
   "components": {

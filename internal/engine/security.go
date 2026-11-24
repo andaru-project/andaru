@@ -106,6 +106,20 @@ func buildEngineRoutes() []routeCapability {
 	add(authz.TokensManageSelf, "/api/v1/tokens/{selector}", http.MethodDelete)
 	add(authz.AuditRead, "/api/v1/audit/events", read...)
 	add(authz.AuditRead, "/api/v1/audit/export", read...)
+	add(authz.StatusRead, "/api/v1/fleet/state", read...)
+	add(authz.StatusRead, "/api/v1/fleet/devices", read...)
+	add(authz.StatusRead, "/api/v1/fleet/devices/{id}", read...)
+	add(authz.StatusRead, "/api/v1/fleet/devices/{id}/links/{ifName}/samples", read...)
+	add(authz.StatusRead, "/api/v1/fleet/topology", read...)
+	add(authz.StatusRead, "/api/v1/fleet/vlans/flow", read...)
+	add(authz.StatusRead, "/api/v1/fleet/clients", read...)
+	add(authz.ConfigurationRead, "/api/v1/fleet/targets", read...)
+	add(authz.ConfigurationWrite, "/api/v1/fleet/targets", http.MethodPost)
+	add(authz.ConfigurationWrite, "/api/v1/fleet/targets/{id}", http.MethodDelete)
+	add(authz.ConfigurationWrite, "/api/v1/fleet/targets/{id}/poll", http.MethodPost)
+	add(authz.StatusRead, "/api/v1/fleet/diagnostics", read...)
+	add(authz.ConfigurationWrite, "/api/v1/fleet/diagnostics", http.MethodPost)
+	add(authz.StatusRead, "/api/v1/fleet/events/stream", http.MethodGet)
 	return routes
 }
 
