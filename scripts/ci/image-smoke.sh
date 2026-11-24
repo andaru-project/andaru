@@ -65,7 +65,7 @@ for u in systemd-networkd.service andaru-engine.service andaru-network-boot.serv
 	andaru-leases.path andaru-prefixes.path andaru-prefixes.timer andaru-update-check.timer kea-dhcp4.service kea-dhcp6.service unbound.service; do
 	state "$u" enabled
 done
-# Nothing updates the image by itself: a factory reset has no fence against an update until the update path exists.
+# Nothing downloads or installs image updates automatically; andaru-update-check.timer checks metadata only.
 for u in sshd.service zincati.service andaru-web.service bootc-fetch-apply-updates.timer rpm-ostreed-automatic.timer; do
 	state "$u" disabled
 done

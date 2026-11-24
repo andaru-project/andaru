@@ -6511,14 +6511,18 @@
         "summary": "Read cached bootc software update status",
         "responses": {
           "200": { "description": "Software update status" },
-          "403": { "$ref": "#/components/responses/Forbidden" }
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "405": { "description": "Method not allowed" },
+          "503": { "description": "Update status unavailable" }
         }
       },
       "head": {
         "operationId": "headSystemUpdateStatus",
         "responses": {
           "200": { "description": "Software update status" },
-          "403": { "$ref": "#/components/responses/Forbidden" }
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "405": { "description": "Method not allowed" },
+          "503": { "description": "Update status unavailable" }
         }
       }
     },
@@ -6529,17 +6533,21 @@
         "responses": {
           "200": { "description": "Updated software update status" },
           "403": { "$ref": "#/components/responses/Forbidden" },
-          "409": { "description": "Another update operation is already running" }
+          "405": { "description": "Method not allowed" },
+          "409": { "description": "Another update operation is already running" },
+          "502": { "description": "Update check command failed" },
+          "503": { "description": "Update status unavailable" }
         }
       }
     },
     "/api/v1/system/update/stage": {
       "post": {
         "operationId": "stageSystemUpdate",
-        "summary": "Download and stage the next signed appliance image without rebooting",
+        "summary": "Start downloading and staging the next signed appliance image asynchronously",
         "responses": {
-          "200": { "description": "Staged software update status" },
+          "202": { "description": "Staging started" },
           "403": { "$ref": "#/components/responses/Forbidden" },
+          "405": { "description": "Method not allowed" },
           "409": { "description": "System is busy or another update operation is running" }
         }
       }
@@ -6551,7 +6559,10 @@
         "responses": {
           "200": { "description": "Rollback queued" },
           "403": { "$ref": "#/components/responses/Forbidden" },
-          "409": { "description": "System is busy or another update operation is running" }
+          "405": { "description": "Method not allowed" },
+          "409": { "description": "System is busy or another update operation is running" },
+          "502": { "description": "Rollback command failed" },
+          "503": { "description": "Update status unavailable" }
         }
       }
     },
@@ -6562,7 +6573,9 @@
         "responses": {
           "202": { "description": "Reboot initiated" },
           "403": { "$ref": "#/components/responses/Forbidden" },
-          "409": { "description": "System is busy or another update operation is running" }
+          "405": { "description": "Method not allowed" },
+          "409": { "description": "System is busy or another update operation is running" },
+          "502": { "description": "Reboot command failed" }
         }
       }
     }

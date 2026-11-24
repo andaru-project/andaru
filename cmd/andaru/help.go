@@ -54,6 +54,8 @@ Options:
 const realizeUsage = `usage: andaru realize [OPTIONS] activate|confirm N
        andaru realize [OPTIONS] rollback N REASON
        andaru realize [OPTIONS] boot|leases|prefixes|factory-reset
+       andaru realize [OPTIONS] update-check|update-stage
+       andaru realize [OPTIONS] update-rollback|update-reboot
 `
 
 const realizeHelp = `Privileged host steps. The engine runs them in transient systemd units, and
@@ -68,6 +70,10 @@ Verbs:
   leases             Publish DHCP lease names and route delegated prefixes
   prefixes           Follow the delegated IPv6 prefix into the DHCPv6 server
   factory-reset      Run or resume the factory reset ctl factory-reset planned
+  update-check       Check for signed appliance image updates and cache status
+  update-stage       Download and stage the next signed appliance image
+  update-rollback    Queue rollback to the previous appliance image
+  update-reboot      Reboot the appliance into the staged deployment
 
 Options:
   --state-dir PATH   absolute private state directory (default ` + defaultStateDir + `)

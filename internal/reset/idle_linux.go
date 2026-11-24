@@ -30,18 +30,24 @@ var realizationUnits = []string{"andaru-leases.service", "andaru-prefixes.servic
 
 // checkIdle refuses a reset while an apply is pending or active, or a realize or update job is queued or running.
 func checkIdle(ctx context.Context, run commandRunner, stateDir string) error {
-	if err := idleApplications(stateDir); err != nil {
-		return err
-	}
-	return idleUnits(ctx, run, "andaru-realize-*.service", "andaru-update-*.service")
+	return checkIdleUnits(ctx, run, stateDir, "andaru-realize-*.service", "andaru-update-*.service")
 }
 
-// CheckApplyIdle refuses an update mutation while an apply is pending or active, or a realize job is queued or running.
+// CheckApplyIdle refuses an update mutation while an apply is pending or active, or a realize/lease/prefix job is queued or running.
 func CheckApplyIdle(ctx context.Context, stateDir string, run func(context.Context, string, ...string) ([]byte, error)) error {
+	return checkIdleUnits(ctx, run, stateDir, "andaru-realize-*.service", "andaru-leases.service", "andaru-prefixes.service")
+}
+
+// CheckPendingApply checks only generation pointers on disk (no privilege or systemctl needed).
+func CheckPendingApply(stateDir string) error {
+	return idleApplications(stateDir)
+}
+
+func checkIdleUnits(ctx context.Context, run commandRunner, stateDir string, patterns ...string) error {
 	if err := idleApplications(stateDir); err != nil {
 		return err
 	}
-	return idleUnits(ctx, run, "andaru-realize-*.service")
+	return idleUnits(ctx, run, patterns...)
 }
 
 // stopWriters stops the web service and the units that write Andaru's state, then waits for running realizers.
@@ -100,12 +106,10 @@ func drainRealizers(ctx context.Context, run commandRunner) error {
 }
 
 func idleUnits(ctx context.Context, run commandRunner, patterns ...string) error {
-	for _, verb := range []string{"list-jobs", "list-units"} {
-		args := []string{verb, "--no-legend", "--no-pager", "--plain"}
-		if verb == "list-units" {
-			args = append(args, "--state=active,activating,deactivating,reloading")
-		}
-		args = append(args, patterns...)
+	for _, args := range [][]string{
+		append([]string{"list-jobs", "--no-legend", "--no-pager", "--plain"}, patterns...),
+		append([]string{"list-units", "--state=active,activating,deactivating,reloading", "--no-legend", "--no-pager", "--plain"}, patterns...),
+	} {
 		raw, err := run(ctx, "systemctl", args...)
 		if err != nil {
 			return fmt.Errorf("inspect independent realization work: %w", err)

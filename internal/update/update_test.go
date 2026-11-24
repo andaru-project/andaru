@@ -3,6 +3,7 @@ package update
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -41,7 +42,7 @@ const sampleAvailableJSON = `{
         "image": {
           "image": "ghcr.io/andaru-project/andaru:0.5.0-a.3",
           "transport": "registry",
-          "signature": "containerPolicy"
+          "signature": {"ostreeRemote": "fedora"}
         },
         "version": "0.5.0-a.3",
         "imageDigest": "sha256:0000"
@@ -79,6 +80,36 @@ const sampleStagedJSON = `{
   }
 }`
 
+const sampleRollbackQueuedJSON = `{
+  "apiVersion": "org.containers.bootc/v1",
+  "kind": "Host",
+  "status": {
+    "booted": {
+      "image": {
+        "image": {
+          "image": "ghcr.io/andaru-project/andaru:stable",
+          "transport": "registry",
+          "signature": "containerPolicy"
+        },
+        "version": "0.5.0-a.4",
+        "imageDigest": "sha256:1111"
+      }
+    },
+    "rollback": {
+      "image": {
+        "image": {
+          "image": "ghcr.io/andaru-project/andaru:0.5.0-a.3",
+          "transport": "registry",
+          "signature": "containerPolicy"
+        },
+        "version": "0.5.0-a.3",
+        "imageDigest": "sha256:0000"
+      }
+    },
+    "rollbackQueued": true
+  }
+}`
+
 func TestParseBootcStatus(t *testing.T) {
 	st, err := ParseBootcStatus([]byte(sampleAvailableJSON))
 	if err != nil {
@@ -93,7 +124,7 @@ func TestParseBootcStatus(t *testing.T) {
 	if st.Available == nil || st.Available.Version != "0.5.0-a.5" || st.Available.Digest != "sha256:2222" {
 		t.Fatalf("unexpected available: %+v", st.Available)
 	}
-	if st.Rollback == nil || st.Rollback.Version != "0.5.0-a.3" {
+	if st.Rollback == nil || st.Rollback.Version != "0.5.0-a.3" || st.Rollback.Signature != "ostreeRemote" {
 		t.Fatalf("unexpected rollback: %+v", st.Rollback)
 	}
 
@@ -103,6 +134,14 @@ func TestParseBootcStatus(t *testing.T) {
 	}
 	if staged.State != StateStaged || !staged.RebootNeeded || staged.Staged == nil || staged.Staged.Version != "0.5.0-a.5" {
 		t.Fatalf("unexpected staged status: %+v", staged)
+	}
+
+	rb, err := ParseBootcStatus([]byte(sampleRollbackQueuedJSON))
+	if err != nil {
+		t.Fatalf("ParseBootcStatus rollbackQueued: %v", err)
+	}
+	if !rb.RollbackQueued || !rb.RebootNeeded || rb.State != StateStaged {
+		t.Fatalf("expected rollbackQueued + rebootNeeded, got %+v", rb)
 	}
 
 	// Same digest cachedUpdate collapses to up_to_date.
@@ -131,6 +170,12 @@ func TestManagerCheckStageRollbackAndIdleFence(t *testing.T) {
 	var calls []string
 	statusJSON := sampleAvailableJSON
 
+	// Missing cache returns unchecked baseline.
+	initial, err := ReadStatus(dir)
+	if err != nil || !initial.Supported || initial.State != StateUnchecked {
+		t.Fatalf("initial ReadStatus: err=%v st=%+v", err, initial)
+	}
+
 	mgr := Manager{
 		StateDir: dir,
 		Now:      func() time.Time { return now },
@@ -139,8 +184,11 @@ func TestManagerCheckStageRollbackAndIdleFence(t *testing.T) {
 			if len(args) >= 1 && args[0] == "status" {
 				return []byte(statusJSON), nil
 			}
-			if len(args) >= 1 && args[0] == "upgrade" && len(args) == 2 && args[1] == "--quiet" {
+			if len(args) >= 2 && args[0] == "upgrade" && args[1] == "--quiet" {
 				statusJSON = sampleStagedJSON
+			}
+			if len(args) >= 1 && args[0] == "rollback" {
+				statusJSON = sampleRollbackQueuedJSON
 			}
 			return nil, nil
 		},
@@ -153,12 +201,13 @@ func TestManagerCheckStageRollbackAndIdleFence(t *testing.T) {
 	if st.State != StateAvailable || st.CheckedAt == nil || !st.CheckedAt.Equal(now) {
 		t.Fatalf("unexpected check status: %+v", st)
 	}
-	cached, exists, err := ReadStatus(dir)
-	if err != nil || !exists || cached.State != StateAvailable {
-		t.Fatalf("cached status mismatch: exists=%v err=%v st=%+v", exists, err, cached)
+	info, err := os.Stat(StatusPath(dir))
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("status.json mode=%v err=%v, want 0600", info.Mode().Perm(), err)
 	}
 
-	// Busy idle check blocks Stage, Rollback, and Reboot before calling bootc/systemctl.
+	// Busy idle check blocks Stage, Rollback, and Reboot WITHOUT calling bootc or systemctl.
+	calls = nil
 	busy := mgr
 	busy.CheckIdle = func(context.Context) error { return errors.New("apply pending") }
 	if _, err := busy.Stage(context.Background()); err == nil || !strings.Contains(err.Error(), "busy") {
@@ -170,14 +219,26 @@ func TestManagerCheckStageRollbackAndIdleFence(t *testing.T) {
 	if err := busy.Reboot(context.Background()); err == nil || !strings.Contains(err.Error(), "busy") {
 		t.Fatalf("expected busy error on Reboot, got %v", err)
 	}
+	if len(calls) != 0 {
+		t.Fatalf("expected zero commands executed when busy, got %v", calls)
+	}
 
-	// Idle Stage succeeds and persists staged state.
+	// Idle Stage succeeds and persists staged state without clobbering CheckedAt.
 	staged, err := mgr.Stage(context.Background())
 	if err != nil {
 		t.Fatalf("Stage: %v", err)
 	}
-	if staged.State != StateStaged || !staged.RebootNeeded {
-		t.Fatalf("expected staged with rebootNeeded, got %+v", staged)
+	if staged.State != StateStaged || !staged.RebootNeeded || staged.CheckedAt == nil || !staged.CheckedAt.Equal(now) {
+		t.Fatalf("expected staged with rebootNeeded + preserved CheckedAt, got %+v", staged)
+	}
+
+	// Idle Rollback sets rollbackQueued + rebootNeeded.
+	rb, err := mgr.Rollback(context.Background())
+	if err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if !rb.RollbackQueued || !rb.RebootNeeded {
+		t.Fatalf("expected rollbackQueued + rebootNeeded, got %+v", rb)
 	}
 
 	// Missing bootc binary records unsupported without error.

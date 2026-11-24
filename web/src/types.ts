@@ -314,6 +314,7 @@ export interface UpdateDeployment {
 }
 
 export type UpdateState =
+  | 'unchecked'
   | 'unsupported'
   | 'up_to_date'
   | 'available'
@@ -330,6 +331,7 @@ export interface UpdateStatus {
   available?: UpdateDeployment;
   staged?: UpdateDeployment;
   rollback?: UpdateDeployment;
+  rollbackQueued?: boolean;
   checkedAt?: string;
   error?: string;
   rebootNeeded: boolean;

@@ -19,7 +19,7 @@ import { SessionScreen } from './screens/SessionScreen';
 import { TokensScreen } from './screens/TokensScreen';
 import { UpgradeScreen } from './screens/UpgradeScreen';
 import { UpdatesScreen } from './screens/UpdatesScreen';
-import { SystemDetailsScreen } from './screens/SystemWidget';
+import { SystemDetailsScreen, updateNotice } from './screens/SystemWidget';
 import { UsersScreen } from './screens/UsersScreen';
 import type { Session, User } from './types';
 import { useEvents, useResource, useVisiblePoll } from './useResource';
@@ -215,13 +215,14 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   const pending = changes.data ? pendingNotice(changes.data) : null;
   const badge = pending ? pendingBadges[pending.kind] : undefined;
   const changesBadge = badge ? <Badge size="xs" color={badge.color} variant={badge.variant}>{badge.label}</Badge> : undefined;
-  const updateBadge = update.data?.supported
-    ? update.data.rebootNeeded
-      ? <Badge size="xs" color="teal" variant="filled">Reboot</Badge>
-      : update.data.state === 'available'
-        ? <Badge size="xs" color="orange" variant="filled">Update</Badge>
-        : undefined
+  const updNotice = updateNotice(update.data);
+  const updateBadge = updNotice?.navLabel
+    ? <Badge size="xs" color={updNotice.color} variant={updNotice.variant}>{updNotice.navLabel}</Badge>
     : undefined;
+  const navBadges: Record<string, ReactNode> = {
+    '/changes': changesBadge,
+    '/system/updates': updateBadge,
+  };
 
   const pageLink = (to: string, label: string, rightSection?: ReactNode) => {
     const active = isNavItemActive(to);
@@ -291,7 +292,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
                   focus. It holds no children of its own, or NavLink would toggle on the Space key and the browser
                   again on the click that key makes. */}
               <NavLink className="nav-branch" component="button" type="button" label={group.label} aria-expanded={open} rightSection={<AccordionChevron className="nav-chevron" data-open={open || undefined} />} onClick={() => toggleBranch(group.label)} />
-              {open && <div className="nav-children">{group.items.map((item) => pageLink(item.to, item.label, item.to === '/changes' ? changesBadge : item.to === '/system/updates' ? updateBadge : undefined))}</div>}
+              {open && <div className="nav-children">{group.items.map((item) => pageLink(item.to, item.label, navBadges[item.to]))}</div>}
             </div>
           );
         })}

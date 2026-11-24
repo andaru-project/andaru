@@ -89,10 +89,14 @@ it('shows available update, stages it, and confirms reboot with CSRF header', as
   expect(new Headers(rebootCall?.[1]?.headers).get('X-Andaru-CSRF')).toBe('csrf-tok');
 });
 
-it('queues rollback after confirmation', async () => {
+it('queues rollback after confirmation and offers Reboot to apply even when staged is absent', async () => {
+  let current: UpdateStatus = availableStatus;
   const fetchMock = fetchRoutes({
-    '/api/v1/system/update': availableStatus,
-    'POST /api/v1/system/update/rollback': { ...availableStatus, state: 'staged', staged: availableStatus.rollback, rebootNeeded: true },
+    '/api/v1/system/update': () => new Response(JSON.stringify(current), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    'POST /api/v1/system/update/rollback': () => {
+      current = { ...availableStatus, state: 'staged', available: undefined, staged: undefined, rollbackQueued: true, rebootNeeded: true };
+      return new Response(JSON.stringify(current), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    },
   });
 
   render(<Harness api={new ApiClient('csrf-tok')} capabilities={['status.read', 'configuration.apply']} />);
@@ -100,6 +104,8 @@ it('queues rollback after confirmation', async () => {
   await userEvent.click(await screen.findByRole('button', { name: 'Queue rollback' }));
 
   expect(fetchMock.mock.calls.some(([url, init]) => url === '/api/v1/system/update/rollback' && init?.method === 'POST')).toBe(true);
+  expect(await screen.findByRole('button', { name: 'Reboot to apply' })).toBeInTheDocument();
+  expect(screen.getByText('Rollback queued for next boot')).toBeInTheDocument();
 });
 
 it('hides update controls for read-only accounts', async () => {

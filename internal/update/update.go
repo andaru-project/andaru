@@ -13,6 +13,9 @@ import (
 )
 
 const (
+	bootcBinary = "/usr/bin/bootc"
+
+	StateUnchecked   = "unchecked"
 	StateUnsupported = "unsupported"
 	StateUpToDate    = "up_to_date"
 	StateAvailable   = "available"
@@ -34,28 +37,26 @@ type Deployment struct {
 
 // Status is the persisted and API-served software update state for an Andaru appliance.
 type Status struct {
-	Supported    bool        `json:"supported"`
-	State        string      `json:"state"`
-	Booted       *Deployment `json:"booted,omitempty"`
-	Available    *Deployment `json:"available,omitempty"`
-	Staged       *Deployment `json:"staged,omitempty"`
-	Rollback     *Deployment `json:"rollback,omitempty"`
-	CheckedAt    *time.Time  `json:"checkedAt,omitempty"`
-	Error        string      `json:"error,omitempty"`
-	RebootNeeded bool        `json:"rebootNeeded"`
+	Supported      bool        `json:"supported"`
+	State          string      `json:"state"`
+	Booted         *Deployment `json:"booted,omitempty"`
+	Available      *Deployment `json:"available,omitempty"`
+	Staged         *Deployment `json:"staged,omitempty"`
+	Rollback       *Deployment `json:"rollback,omitempty"`
+	RollbackQueued bool        `json:"rollbackQueued,omitempty"`
+	CheckedAt      *time.Time  `json:"checkedAt,omitempty"`
+	Error          string      `json:"error,omitempty"`
+	RebootNeeded   bool        `json:"rebootNeeded"`
 }
 
 // CommandRunner runs a host command and returns its combined or standard output.
 type CommandRunner func(ctx context.Context, name string, args ...string) ([]byte, error)
 
-// IdleChecker verifies no apply or realize job is in flight before mutating bootc deployments.
-type IdleChecker func(ctx context.Context) error
-
 // Manager executes bootc update operations and persists status into StateDir/update/status.json.
 type Manager struct {
 	StateDir  string
 	Run       CommandRunner
-	CheckIdle IdleChecker
+	CheckIdle func(context.Context) error
 	Now       func() time.Time
 }
 
@@ -74,20 +75,20 @@ func StatusPath(stateDir string) string {
 }
 
 // ReadStatus loads the cached update status from stateDir. If no cache exists yet, it returns
-// an unsupported/unchecked baseline without error so callers can still render cleanly.
-func ReadStatus(stateDir string) (Status, bool, error) {
+// an unchecked baseline so a fresh appliance prompts for or awaits its first check.
+func ReadStatus(stateDir string) (Status, error) {
 	raw, err := os.ReadFile(StatusPath(stateDir))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return Status{Supported: false, State: StateUnsupported}, false, nil
+			return Status{Supported: true, State: StateUnchecked}, nil
 		}
-		return Status{}, false, fmt.Errorf("read update status: %w", err)
+		return Status{}, fmt.Errorf("read update status: %w", err)
 	}
 	var st Status
 	if err := json.Unmarshal(raw, &st); err != nil {
-		return Status{}, false, fmt.Errorf("parse update status: %w", err)
+		return Status{}, fmt.Errorf("parse update status: %w", err)
 	}
-	return st, true, nil
+	return st, nil
 }
 
 // WriteStatus persists status atomically inside stateDir/update/status.json (mode 0600).
@@ -106,12 +107,7 @@ func WriteStatus(stateDir string, st Status) error {
 		return fmt.Errorf("create temp update status: %w", err)
 	}
 	tmpPath := tmp.Name()
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = os.Remove(tmpPath)
-		}
-	}()
+	defer func() { _ = os.Remove(tmpPath) }()
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("chmod temp update status: %w", err)
@@ -130,16 +126,16 @@ func WriteStatus(stateDir string, st Status) error {
 	if err := os.Rename(tmpPath, StatusPath(stateDir)); err != nil {
 		return fmt.Errorf("publish update status: %w", err)
 	}
-	cleanup = false
 	return nil
 }
 
 // bootc status --json subset (org.containers.bootc/v1).
 type bootcStatusDoc struct {
 	Status struct {
-		Booted   *bootcDeploymentSlot `json:"booted"`
-		Staged   *bootcDeploymentSlot `json:"staged"`
-		Rollback *bootcDeploymentSlot `json:"rollback"`
+		Booted         *bootcDeploymentSlot `json:"booted"`
+		Staged         *bootcDeploymentSlot `json:"staged"`
+		Rollback       *bootcDeploymentSlot `json:"rollback"`
+		RollbackQueued bool                 `json:"rollbackQueued"`
 	} `json:"status"`
 }
 
@@ -168,7 +164,16 @@ func parseSignature(raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &s); err == nil {
 		return s
 	}
-	return trimmed
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err == nil {
+		if _, ok := obj["ostreeRemote"]; ok {
+			return "ostreeRemote"
+		}
+		for k := range obj {
+			return k
+		}
+	}
+	return ""
 }
 
 func toDeployment(img *bootcImageStatus) *Deployment {
@@ -197,9 +202,10 @@ func ParseBootcStatus(raw []byte) (Status, error) {
 		return Status{Supported: false, State: StateUnsupported}, nil
 	}
 	st := Status{
-		Supported: true,
-		Booted:    toDeployment(doc.Status.Booted.Image),
-		Available: toDeployment(doc.Status.Booted.CachedUpdate),
+		Supported:      true,
+		Booted:         toDeployment(doc.Status.Booted.Image),
+		Available:      toDeployment(doc.Status.Booted.CachedUpdate),
+		RollbackQueued: doc.Status.RollbackQueued,
 	}
 	if doc.Status.Staged != nil {
 		st.Staged = toDeployment(doc.Status.Staged.Image)
@@ -212,7 +218,7 @@ func ParseBootcStatus(raw []byte) (Status, error) {
 		st.Available = nil
 	}
 	switch {
-	case st.Staged != nil:
+	case st.Staged != nil || st.RollbackQueued:
 		st.State = StateStaged
 		st.RebootNeeded = true
 	case st.Available != nil:
@@ -237,10 +243,24 @@ func (m Manager) run(ctx context.Context, name string, args ...string) ([]byte, 
 	return DefaultCommandRunner(ctx, name, args...)
 }
 
+func isMissing(err error) bool {
+	return errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist)
+}
+
+func (m Manager) ensureIdle(ctx context.Context, action string) error {
+	if m.CheckIdle == nil {
+		return nil
+	}
+	if err := m.CheckIdle(ctx); err != nil {
+		return fmt.Errorf("cannot %s while system is busy: %w", action, err)
+	}
+	return nil
+}
+
 func (m Manager) readLiveBootc(ctx context.Context) (Status, error) {
-	raw, err := m.run(ctx, "/usr/bin/bootc", "status", "--json")
+	raw, err := m.run(ctx, bootcBinary, "status", "--json")
 	if err != nil {
-		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
+		if isMissing(err) {
 			return Status{Supported: false, State: StateUnsupported}, nil
 		}
 		return Status{}, err
@@ -248,34 +268,44 @@ func (m Manager) readLiveBootc(ctx context.Context) (Status, error) {
 	return ParseBootcStatus(raw)
 }
 
+func (m Manager) recordFailure(prev Status, err error, checkedAt *time.Time) Status {
+	failed := prev
+	if failed.Booted == nil && !failed.Supported {
+		failed = Status{Supported: false}
+	}
+	failed.State = StateError
+	failed.Error = err.Error()
+	if checkedAt != nil {
+		failed.CheckedAt = checkedAt
+	}
+	_ = WriteStatus(m.StateDir, failed)
+	return failed
+}
+
 // Check runs `bootc upgrade --check`, reads `bootc status --json`, and persists the result.
 func (m Manager) Check(ctx context.Context) (Status, error) {
-	prev, _, _ := ReadStatus(m.StateDir)
+	unlock, err := acquireLock(m.StateDir)
+	if err != nil {
+		return Status{}, err
+	}
+	defer unlock()
+
+	prev, _ := ReadStatus(m.StateDir)
 	now := m.now()
 
-	_, checkErr := m.run(ctx, "/usr/bin/bootc", "upgrade", "--check")
-	if checkErr != nil && (errors.Is(checkErr, exec.ErrNotFound) || errors.Is(checkErr, os.ErrNotExist)) {
+	_, checkErr := m.run(ctx, bootcBinary, "upgrade", "--check")
+	if checkErr != nil && isMissing(checkErr) {
 		st := Status{Supported: false, State: StateUnsupported, CheckedAt: &now}
-		_ = WriteStatus(m.StateDir, st)
-		return st, nil
+		return st, WriteStatus(m.StateDir, st)
 	}
 
 	st, statusErr := m.readLiveBootc(ctx)
 	if statusErr != nil {
-		if prev.Supported {
-			st = prev
-		} else {
-			st = Status{Supported: true}
-		}
-		st.State = StateError
-		st.CheckedAt = &now
+		errToRecord := statusErr
 		if checkErr != nil {
-			st.Error = checkErr.Error()
-		} else {
-			st.Error = statusErr.Error()
+			errToRecord = checkErr
 		}
-		_ = WriteStatus(m.StateDir, st)
-		return st, errors.New(st.Error)
+		return m.recordFailure(prev, errToRecord, &now), errToRecord
 	}
 
 	st.CheckedAt = &now
@@ -285,101 +315,79 @@ func (m Manager) Check(ctx context.Context) (Status, error) {
 		_ = WriteStatus(m.StateDir, st)
 		return st, checkErr
 	}
-	if err := WriteStatus(m.StateDir, st); err != nil {
-		return st, err
-	}
-	return st, nil
+	return st, WriteStatus(m.StateDir, st)
 }
 
 // Stage verifies the engine is idle, downloads and stages the next signed image via `bootc upgrade`,
 // and persists the resulting staged status. It never reboots automatically.
 func (m Manager) Stage(ctx context.Context) (Status, error) {
-	if m.CheckIdle != nil {
-		if err := m.CheckIdle(ctx); err != nil {
-			return Status{}, fmt.Errorf("cannot stage update while system is busy: %w", err)
-		}
+	unlock, err := acquireLock(m.StateDir)
+	if err != nil {
+		return Status{}, err
 	}
-	prev, _, _ := ReadStatus(m.StateDir)
-	if prev.Supported {
-		staging := prev
-		staging.State = StateStaging
-		staging.Error = ""
-		_ = WriteStatus(m.StateDir, staging)
-	}
+	defer unlock()
 
-	if _, err := m.run(ctx, "/usr/bin/bootc", "upgrade", "--quiet"); err != nil {
-		now := m.now()
-		failed := prev
-		if !failed.Supported {
-			failed = Status{Supported: true}
-		}
-		failed.State = StateError
-		failed.Error = err.Error()
-		failed.CheckedAt = &now
-		_ = WriteStatus(m.StateDir, failed)
-		return failed, err
+	if err := m.ensureIdle(ctx, "stage update"); err != nil {
+		return Status{}, err
+	}
+	prev, _ := ReadStatus(m.StateDir)
+
+	if _, err := m.run(ctx, bootcBinary, "upgrade", "--quiet"); err != nil {
+		return m.recordFailure(prev, err, nil), err
 	}
 
 	st, err := m.readLiveBootc(ctx)
 	if err != nil {
-		return Status{}, err
+		return m.recordFailure(prev, err, nil), err
 	}
-	now := m.now()
-	st.CheckedAt = &now
-	if err := WriteStatus(m.StateDir, st); err != nil {
-		return st, err
+	if prev.CheckedAt != nil {
+		st.CheckedAt = prev.CheckedAt
 	}
-	return st, nil
+	return st, WriteStatus(m.StateDir, st)
 }
 
 // Rollback verifies the engine is idle, queues the previous bootc deployment via `bootc rollback`,
 // and persists the updated status with RebootNeeded set.
 func (m Manager) Rollback(ctx context.Context) (Status, error) {
-	if m.CheckIdle != nil {
-		if err := m.CheckIdle(ctx); err != nil {
-			return Status{}, fmt.Errorf("cannot roll back update while system is busy: %w", err)
-		}
+	unlock, err := acquireLock(m.StateDir)
+	if err != nil {
+		return Status{}, err
 	}
-	prev, _, _ := ReadStatus(m.StateDir)
-	if prev.Supported {
-		rolling := prev
-		rolling.State = StateRollingBack
-		rolling.Error = ""
-		_ = WriteStatus(m.StateDir, rolling)
-	}
+	defer unlock()
 
-	if _, err := m.run(ctx, "/usr/bin/bootc", "rollback"); err != nil {
-		failed := prev
-		if !failed.Supported {
-			failed = Status{Supported: true}
-		}
-		failed.State = StateError
-		failed.Error = err.Error()
-		_ = WriteStatus(m.StateDir, failed)
-		return failed, err
+	if err := m.ensureIdle(ctx, "roll back update"); err != nil {
+		return Status{}, err
+	}
+	prev, _ := ReadStatus(m.StateDir)
+
+	if _, err := m.run(ctx, bootcBinary, "rollback"); err != nil {
+		return m.recordFailure(prev, err, nil), err
 	}
 
 	st, err := m.readLiveBootc(ctx)
 	if err != nil {
-		return Status{}, err
+		return m.recordFailure(prev, err, nil), err
 	}
 	if prev.CheckedAt != nil {
 		st.CheckedAt = prev.CheckedAt
 	}
-	st.RebootNeeded = true
-	if err := WriteStatus(m.StateDir, st); err != nil {
-		return st, err
+	if st.RollbackQueued || st.Staged != nil {
+		st.RebootNeeded = true
 	}
-	return st, nil
+	return st, WriteStatus(m.StateDir, st)
 }
 
 // Reboot verifies the engine is idle and triggers a clean host reboot via systemctl.
 func (m Manager) Reboot(ctx context.Context) error {
-	if m.CheckIdle != nil {
-		if err := m.CheckIdle(ctx); err != nil {
-			return fmt.Errorf("cannot reboot while system is busy: %w", err)
-		}
+	unlock, err := acquireLock(m.StateDir)
+	if err != nil {
+		return err
 	}
-	_, err := m.run(ctx, "/usr/bin/systemctl", "reboot")
+	defer unlock()
+
+	if err := m.ensureIdle(ctx, "reboot"); err != nil {
+		return err
+	}
+	_, err = m.run(ctx, "/usr/bin/systemctl", "reboot")
 	return err
 }

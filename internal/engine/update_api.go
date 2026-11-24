@@ -8,7 +8,9 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/andaru-project/andaru/internal/reset"
 	"github.com/andaru-project/andaru/internal/update"
 )
 
@@ -37,12 +39,15 @@ func newSystemdUpdateRunner(stateDir string) updateRunner {
 	}
 }
 
+// RunVerb starts a transient systemd unit named andaru-update-run-<suffix> so it never clashes
+// with the packaged andaru-update-check.service while still matching andaru-update-*.service.
 func (s systemdUpdateRunner) RunVerb(ctx context.Context, verb string) error {
 	runtimeLimit := "RuntimeMaxSec=300"
 	if verb == "update-stage" {
 		runtimeLimit = "RuntimeMaxSec=900"
 	}
-	args := []string{"--quiet", "--collect", "--unit=andaru-" + verb, "-p", runtimeLimit}
+	suffix := strings.TrimPrefix(verb, "update-")
+	args := []string{"--quiet", "--collect", "--unit=andaru-update-run-" + suffix, "-p", runtimeLimit}
 	if verb != "update-reboot" {
 		args = append(args, "--wait")
 	}
@@ -51,18 +56,24 @@ func (s systemdUpdateRunner) RunVerb(ctx context.Context, verb string) error {
 }
 
 type updateAPI struct {
-	stateDir string
-	runner   updateRunner
+	stateDir  string
+	runner    updateRunner
+	checkIdle func(stateDir string) error
 
-	mu     sync.Mutex
-	busyOp string
+	mu      sync.Mutex
+	busyOp  string
+	lastErr string
 }
 
 func newUpdateAPI(stateDir string, runner updateRunner) http.Handler {
 	if runner == nil {
 		runner = newSystemdUpdateRunner(stateDir)
 	}
-	return &updateAPI{stateDir: stateDir, runner: runner}
+	return &updateAPI{
+		stateDir:  stateDir,
+		runner:    runner,
+		checkIdle: reset.CheckPendingApply,
+	}
 }
 
 func (u *updateAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -75,54 +86,87 @@ func (u *updateAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		u.handleStatus(w, r)
 	case updateAPIPrefix + "/check":
-		u.handleAction(w, r, update.StateChecking, "update-check", false)
+		u.handleSyncAction(w, r, update.StateChecking, "update-check", false)
 	case updateAPIPrefix + "/stage":
-		u.handleAction(w, r, update.StateStaging, "update-stage", false)
+		u.handleStage(w, r)
 	case updateAPIPrefix + "/rollback":
-		u.handleAction(w, r, update.StateRollingBack, "update-rollback", false)
+		u.handleSyncAction(w, r, update.StateRollingBack, "update-rollback", true)
 	case updateAPIPrefix + "/reboot":
-		u.handleAction(w, r, "rebooting", "update-reboot", true)
+		u.handleReboot(w, r)
 	default:
 		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
 	}
 }
 
+func reconcileBootedStatus(st update.Status) update.Status {
+	// Right after rebooting into a staged image (before the post-boot check timer runs),
+	// status.json may still report the new buildVersion as staged/rebootNeeded.
+	if st.RebootNeeded && st.Staged != nil && st.Staged.Version != "" && st.Staged.Version == buildVersion {
+		st.Booted = st.Staged
+		st.Staged = nil
+		st.Available = nil
+		st.RollbackQueued = false
+		st.RebootNeeded = false
+		st.State = update.StateUpToDate
+		st.Error = ""
+	}
+	return st
+}
+
 func (u *updateAPI) handleStatus(w http.ResponseWriter, r *http.Request) {
-	st, _, err := update.ReadStatus(u.stateDir)
+	st, err := update.ReadStatus(u.stateDir)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "update status unavailable", "error", err)
 		writeError(w, r, http.StatusServiceUnavailable, "UPDATE_UNAVAILABLE", "Software update status is unavailable; inspect the engine journal.")
 		return
 	}
+	st = reconcileBootedStatus(st)
 	u.mu.Lock()
 	busy := u.busyOp
+	lastErr := u.lastErr
 	u.mu.Unlock()
 	if busy != "" && busy != "rebooting" {
 		st.State = busy
+		st.Error = ""
+	} else if lastErr != "" && st.Error == "" {
+		st.State = update.StateError
+		st.Error = lastErr
 	}
 	writeJSON(w, r, http.StatusOK, st)
 }
 
-func (u *updateAPI) handleAction(w http.ResponseWriter, r *http.Request, opState, verb string, asyncReboot bool) {
+func (u *updateAPI) beginOp(w http.ResponseWriter, r *http.Request, opState string, requireIdle bool) bool {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
 		writeError(w, r, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed.")
-		return
+		return false
+	}
+	if requireIdle && u.checkIdle != nil {
+		if err := u.checkIdle(u.stateDir); err != nil {
+			writeError(w, r, http.StatusConflict, "SYSTEM_BUSY", "A network apply is pending or active; finish or confirm it before updating.")
+			return false
+		}
 	}
 	u.mu.Lock()
 	if u.busyOp != "" {
 		current := u.busyOp
 		u.mu.Unlock()
 		writeError(w, r, http.StatusConflict, "UPDATE_IN_PROGRESS", "Another software update operation ("+current+") is already running.")
-		return
+		return false
 	}
 	u.busyOp = opState
+	u.lastErr = ""
 	u.mu.Unlock()
+	return true
+}
+
+func (u *updateAPI) handleSyncAction(w http.ResponseWriter, r *http.Request, opState, verb string, requireIdle bool) {
+	if !u.beginOp(w, r, opState, requireIdle) {
+		return
+	}
 	defer func() {
 		u.mu.Lock()
-		if !asyncReboot || u.busyOp == opState {
-			u.busyOp = ""
-		}
+		u.busyOp = ""
 		u.mu.Unlock()
 	}()
 
@@ -135,14 +179,56 @@ func (u *updateAPI) handleAction(w http.ResponseWriter, r *http.Request, opState
 		writeError(w, r, http.StatusBadGateway, "UPDATE_FAILED", err.Error())
 		return
 	}
-	if asyncReboot {
-		writeJSON(w, r, http.StatusAccepted, map[string]bool{"rebooting": true})
-		return
-	}
-	st, _, err := update.ReadStatus(u.stateDir)
+	st, err := update.ReadStatus(u.stateDir)
 	if err != nil {
 		writeError(w, r, http.StatusServiceUnavailable, "UPDATE_UNAVAILABLE", "Software update completed but its status could not be read.")
 		return
 	}
-	writeJSON(w, r, http.StatusOK, st)
+	writeJSON(w, r, http.StatusOK, reconcileBootedStatus(st))
+}
+
+// handleStage runs `bootc upgrade` asynchronously so slow image downloads never hit the 180s web
+// proxy timeout or orphan the busy guard when a client disconnects.
+func (u *updateAPI) handleStage(w http.ResponseWriter, r *http.Request) {
+	if !u.beginOp(w, r, update.StateStaging, true) {
+		return
+	}
+	st, err := update.ReadStatus(u.stateDir)
+	if err != nil {
+		st = update.Status{Supported: true}
+	}
+	st = reconcileBootedStatus(st)
+	st.State = update.StateStaging
+	st.Error = ""
+
+	bgCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 16*time.Minute)
+	go func() {
+		defer cancel()
+		err := u.runner.RunVerb(bgCtx, "update-stage")
+		u.mu.Lock()
+		u.busyOp = ""
+		if err != nil {
+			slog.Warn("software update stage failed", "error", err)
+			u.lastErr = err.Error()
+		}
+		u.mu.Unlock()
+	}()
+
+	writeJSON(w, r, http.StatusAccepted, st)
+}
+
+func (u *updateAPI) handleReboot(w http.ResponseWriter, r *http.Request) {
+	if !u.beginOp(w, r, "rebooting", true) {
+		return
+	}
+	if err := u.runner.RunVerb(r.Context(), "update-reboot"); err != nil {
+		u.mu.Lock()
+		u.busyOp = ""
+		u.mu.Unlock()
+		slog.WarnContext(r.Context(), "software update reboot failed", "error", err)
+		writeError(w, r, http.StatusBadGateway, "UPDATE_FAILED", err.Error())
+		return
+	}
+	// Keep busyOp="rebooting" so no second reboot or update starts while the host shuts down.
+	writeJSON(w, r, http.StatusAccepted, map[string]bool{"rebooting": true})
 }

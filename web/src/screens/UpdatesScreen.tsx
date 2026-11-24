@@ -2,7 +2,7 @@ import { Alert, Badge, Button, Group, Modal, Paper, Stack, Table, Text, Title } 
 import { useState, type ReactNode } from 'react';
 import { reportError, type ApiClient } from '../api';
 import type { Session, UpdateDeployment, UpdateStatus } from '../types';
-import type { Resource } from '../useResource';
+import { useVisiblePoll, type Resource } from '../useResource';
 import { Loaded } from './Loaded';
 
 interface UpdatesScreenProps {
@@ -11,6 +11,8 @@ interface UpdatesScreenProps {
   update: Resource<UpdateStatus | undefined>;
   onSessionLost(): void;
 }
+
+type UpdateAction = 'check' | 'stage' | 'rollback' | 'reboot';
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return <Table.Tr><Table.Th scope="row">{label}</Table.Th><Table.Td>{children}</Table.Td></Table.Tr>;
@@ -33,6 +35,7 @@ function shortDigest(digest?: string): string {
 }
 
 const stateMeta: Record<UpdateStatus['state'], { color: string; label: string }> = {
+  unchecked: { color: 'gray', label: 'Not checked yet' },
   up_to_date: { color: 'green', label: 'Up to date' },
   available: { color: 'orange', label: 'Update available' },
   staged: { color: 'teal', label: 'Staged — reboot required' },
@@ -61,14 +64,56 @@ function DeploymentRows({ deployment }: { deployment: UpdateDeployment }) {
   );
 }
 
+function DeploymentSection({
+  id,
+  title,
+  badgeColor,
+  badgeVariant,
+  badgeLabel,
+  deployment,
+  note,
+  action,
+}: {
+  id: string;
+  title: string;
+  badgeColor: string;
+  badgeVariant: 'filled' | 'light';
+  badgeLabel: string;
+  deployment?: UpdateDeployment;
+  note?: string;
+  action?: ReactNode;
+}) {
+  return (
+    <Paper component="section" withBorder p="md" aria-labelledby={id}>
+      <Group justify="space-between" mb="sm">
+        <Title order={3} size="h5" id={id}>{title}</Title>
+        <Badge color={badgeColor} variant={badgeVariant}>{badgeLabel}</Badge>
+      </Group>
+      <Stack gap="sm">
+        {deployment && (
+          <Facts>
+            <DeploymentRows deployment={deployment} />
+          </Facts>
+        )}
+        {note && <Text size="sm" c="dimmed">{note}</Text>}
+        {action && <Group>{action}</Group>}
+      </Stack>
+    </Paper>
+  );
+}
+
 export function UpdatesScreen({ api, session, update, onSessionLost }: UpdatesScreenProps) {
   const canManage = session.capabilities.includes('configuration.apply');
-  const [busy, setBusy] = useState<'check' | 'stage' | 'rollback' | 'reboot' | null>(null);
+  const [busy, setBusy] = useState<UpdateAction | null>(null);
   const [actionError, setActionError] = useState('');
   const [rebooting, setRebooting] = useState(false);
   const [confirmKind, setConfirmKind] = useState<'reboot' | 'rollback' | null>(null);
 
-  async function runAction(kind: 'check' | 'stage' | 'rollback' | 'reboot') {
+  const activeOp = update.data?.state === 'staging' || update.data?.state === 'checking' || update.data?.state === 'rolling_back';
+  // Poll every 3 s while an async stage or engine-side check is running.
+  useVisiblePoll(update.refresh, 3_000, activeOp && !rebooting);
+
+  async function runAction(kind: UpdateAction) {
     setBusy(kind);
     setActionError('');
     try {
@@ -83,6 +128,7 @@ export function UpdatesScreen({ api, session, update, onSessionLost }: UpdatesSc
       await update.reload();
     } catch (error) {
       reportError(error, onSessionLost, setActionError);
+      void update.reload();
     } finally {
       setBusy(null);
     }
@@ -99,7 +145,7 @@ export function UpdatesScreen({ api, session, update, onSessionLost }: UpdatesSc
           <Button
             variant="default"
             loading={busy === 'check'}
-            disabled={busy !== null || rebooting}
+            disabled={busy !== null || activeOp || rebooting}
             onClick={() => void runAction('check')}
           >
             Check for updates
@@ -123,7 +169,7 @@ export function UpdatesScreen({ api, session, update, onSessionLost }: UpdatesSc
         {(status) => {
           if (!status) return null;
           const badge = stateMeta[status.state] ?? stateMeta.unsupported;
-          const inProgress = busy !== null || status.state === 'checking' || status.state === 'staging' || status.state === 'rolling_back';
+          const inProgress = busy !== null || activeOp;
 
           if (!status.supported) {
             return (
@@ -141,6 +187,8 @@ export function UpdatesScreen({ api, session, update, onSessionLost }: UpdatesSc
               </Paper>
             );
           }
+
+          const pendingDeployment = status.staged ?? (status.rollbackQueued ? status.rollback : undefined);
 
           return (
             <Stack>
@@ -163,88 +211,79 @@ export function UpdatesScreen({ api, session, update, onSessionLost }: UpdatesSc
                 </Facts>
               </Paper>
 
-              {status.staged && (
-                <Paper component="section" withBorder p="md" aria-labelledby="updates-staged">
-                  <Group justify="space-between" mb="sm">
-                    <Title order={3} size="h5" id="updates-staged">Staged for next boot</Title>
-                    <Badge color="teal" variant="filled">Reboot required</Badge>
-                  </Group>
-                  <Stack gap="sm">
-                    <Facts>
-                      <DeploymentRows deployment={status.staged} />
-                    </Facts>
-                    <Text size="sm" c="dimmed">
-                      The signed image is verified and staged on disk. Reboot when you are ready to switch to it.
-                    </Text>
-                    {canManage && (
-                      <Group>
-                        <Button
-                          color="teal"
-                          loading={busy === 'reboot'}
-                          disabled={inProgress || rebooting}
-                          onClick={() => setConfirmKind('reboot')}
-                        >
-                          Reboot to apply
-                        </Button>
-                      </Group>
-                    )}
-                  </Stack>
-                </Paper>
+              {(status.staged || status.rebootNeeded) && (
+                <DeploymentSection
+                  id="updates-staged"
+                  title={status.rollbackQueued && !status.staged ? 'Rollback queued for next boot' : 'Staged for next boot'}
+                  badgeColor="teal"
+                  badgeVariant="filled"
+                  badgeLabel="Reboot required"
+                  deployment={pendingDeployment}
+                  note={
+                    status.rollbackQueued && !status.staged
+                      ? 'The previous deployment is queued for the next boot. Reboot when you are ready to switch back.'
+                      : 'The signed image is verified and staged on disk. Reboot when you are ready to switch to it.'
+                  }
+                  action={
+                    canManage ? (
+                      <Button
+                        color="teal"
+                        loading={busy === 'reboot'}
+                        disabled={inProgress || rebooting}
+                        onClick={() => setConfirmKind('reboot')}
+                      >
+                        Reboot to apply
+                      </Button>
+                    ) : undefined
+                  }
+                />
               )}
 
-              {status.available && !status.staged && (
-                <Paper component="section" withBorder p="md" aria-labelledby="updates-available">
-                  <Group justify="space-between" mb="sm">
-                    <Title order={3} size="h5" id="updates-available">Available update</Title>
-                    <Badge color="orange" variant="filled">Ready to download</Badge>
-                  </Group>
-                  <Stack gap="sm">
-                    <Facts>
-                      <DeploymentRows deployment={status.available} />
-                    </Facts>
-                    <Text size="sm" c="dimmed">
-                      Downloading stages the signed image without interrupting traffic. You choose when to reboot.
-                    </Text>
-                    {canManage && (
-                      <Group>
-                        <Button
-                          loading={busy === 'stage'}
-                          disabled={inProgress || rebooting}
-                          onClick={() => void runAction('stage')}
-                        >
-                          Download and stage update
-                        </Button>
-                      </Group>
-                    )}
-                  </Stack>
-                </Paper>
+              {status.available && !status.staged && !status.rollbackQueued && (
+                <DeploymentSection
+                  id="updates-available"
+                  title="Available update"
+                  badgeColor="orange"
+                  badgeVariant="filled"
+                  badgeLabel={status.state === 'staging' ? 'Downloading…' : 'Ready to download'}
+                  deployment={status.available}
+                  note="Downloading stages the signed image without interrupting traffic. You choose when to reboot."
+                  action={
+                    canManage ? (
+                      <Button
+                        loading={busy === 'stage' || status.state === 'staging'}
+                        disabled={inProgress || rebooting}
+                        onClick={() => void runAction('stage')}
+                      >
+                        Download and stage update
+                      </Button>
+                    ) : undefined
+                  }
+                />
               )}
 
               {status.rollback && (
-                <Paper component="section" withBorder p="md" aria-labelledby="updates-rollback">
-                  <Group justify="space-between" mb="sm">
-                    <Title order={3} size="h5" id="updates-rollback">Previous image (rollback)</Title>
-                    <Badge color="gray" variant="light">Retained</Badge>
-                  </Group>
-                  <Stack gap="sm">
-                    <Facts>
-                      <DeploymentRows deployment={status.rollback} />
-                    </Facts>
-                    {canManage && (
-                      <Group>
-                        <Button
-                          variant="default"
-                          color="orange"
-                          loading={busy === 'rollback'}
-                          disabled={inProgress || rebooting}
-                          onClick={() => setConfirmKind('rollback')}
-                        >
-                          Roll back to previous version
-                        </Button>
-                      </Group>
-                    )}
-                  </Stack>
-                </Paper>
+                <DeploymentSection
+                  id="updates-rollback"
+                  title="Previous image (rollback)"
+                  badgeColor="gray"
+                  badgeVariant="light"
+                  badgeLabel={status.rollbackQueued ? 'Queued' : 'Retained'}
+                  deployment={status.rollback}
+                  action={
+                    canManage && !status.rollbackQueued ? (
+                      <Button
+                        variant="default"
+                        color="orange"
+                        loading={busy === 'rollback'}
+                        disabled={inProgress || rebooting}
+                        onClick={() => setConfirmKind('rollback')}
+                      >
+                        Roll back to previous version
+                      </Button>
+                    ) : undefined
+                  }
+                />
               )}
             </Stack>
           );

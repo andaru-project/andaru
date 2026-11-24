@@ -36,37 +36,45 @@ function useBoxClock(info: SystemInfo, loadedAt: number) {
   );
 }
 
-function UpdatePill({ update }: { update?: UpdateStatus }) {
+export interface UpdateNotice {
+  color: string;
+  variant: 'filled' | 'light';
+  pillLabel: string;
+  navLabel?: string;
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- shared helper for SystemWidget and Shell
+export function updateNotice(update?: UpdateStatus): UpdateNotice | null {
   if (!update || !update.supported) return null;
   if (update.rebootNeeded) {
-    return (
-      <Badge component={Link} to="/system/updates" size="xs" variant="filled" color="teal" className="update-pill plain-badge">
-        Reboot to apply {update.staged?.version || 'update'}
-      </Badge>
-    );
+    const version = update.staged?.version || (update.rollbackQueued ? update.rollback?.version : undefined) || 'update';
+    return { color: 'teal', variant: 'filled', pillLabel: `Reboot to apply ${version}`, navLabel: 'Reboot' };
   }
   if (update.state === 'available') {
-    return (
-      <Badge component={Link} to="/system/updates" size="xs" variant="filled" color="orange" className="update-pill plain-badge">
-        Update available: {update.available?.version || 'new version'}
-      </Badge>
-    );
+    return {
+      color: 'orange',
+      variant: 'filled',
+      pillLabel: `Update available: ${update.available?.version || 'new version'}`,
+      navLabel: 'Update',
+    };
   }
   if (update.state === 'up_to_date') {
-    return (
-      <Badge component={Link} to="/system/updates" size="xs" variant="light" color="green" className="update-pill plain-badge">
-        Up to date
-      </Badge>
-    );
+    return { color: 'green', variant: 'light', pillLabel: 'Up to date' };
   }
   if (update.state === 'error') {
-    return (
-      <Badge component={Link} to="/system/updates" size="xs" variant="light" color="red" className="update-pill plain-badge">
-        Update check failed
-      </Badge>
-    );
+    return { color: 'red', variant: 'light', pillLabel: 'Update check failed' };
   }
   return null;
+}
+
+function UpdatePill({ update }: { update?: UpdateStatus }) {
+  const notice = updateNotice(update);
+  if (!notice) return null;
+  return (
+    <Badge component={Link} to="/system/updates" size="xs" variant={notice.variant} color={notice.color} className="update-pill plain-badge">
+      {notice.pillLabel}
+    </Badge>
+  );
 }
 
 // The dashboard's widget: what changes or says something is wrong, and a line each for the machine and its

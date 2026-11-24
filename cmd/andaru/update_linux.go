@@ -19,7 +19,6 @@ func updateVerb(ctx context.Context, verb, stateDir string, stderr io.Writer) in
 	}
 	mgr := update.Manager{
 		StateDir: stateDir,
-		Run:      update.DefaultCommandRunner,
 		CheckIdle: func(ctx context.Context) error {
 			return reset.CheckApplyIdle(ctx, stateDir, update.DefaultCommandRunner)
 		},
