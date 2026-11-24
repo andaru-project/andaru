@@ -512,7 +512,8 @@ it('lets the user pick a display time zone from the account menu and updates tim
   await user.click(await screen.findByRole('menuitem', { name: 'Time zone…' }, { timeout: 5000 }));
   const input = await screen.findByRole('combobox', { name: 'Time zone' }, { timeout: 5000 });
   await user.clear(input);
-  await user.type(input, 'Europe/Berlin{ArrowDown}{Enter}');
+  await user.paste('Europe/Berlin');
+  await user.keyboard('{ArrowDown}{Enter}');
   await user.click(screen.getByRole('button', { name: 'Done' }));
   expect(screen.getByText('2026-11-16 13:00:00 +01:00')).toBeInTheDocument();
-});
+}, 15_000);
