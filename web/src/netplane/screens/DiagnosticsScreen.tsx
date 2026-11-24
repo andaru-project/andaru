@@ -21,6 +21,7 @@ import {
   type DiagnosticResult,
   type NetplaneEvent,
 } from '../api';
+import { formatTime, useTimeZone } from '../../timezone';
 
 interface Props {
   devices: Device[];
@@ -39,6 +40,7 @@ export function DiagnosticsScreen({
   canRunDiagnostics = true,
   onDiagnosticCompleted,
 }: Props) {
+  const timeZone = useTimeZone();
   const [diagKind, setDiagKind] = useState<string>('fdb_lookup');
   const [diagDeviceId, setDiagDeviceId] = useState<string>('');
   const [diagTarget, setDiagTarget] = useState('');
@@ -188,7 +190,7 @@ export function DiagnosticsScreen({
                     {ev.type}
                   </Badge>
                   <Text size="xs" c="dimmed" ff="monospace">
-                    {new Date(ev.timestamp).toLocaleTimeString()}
+                    {formatTime(ev.timestamp, timeZone)}
                   </Text>
                 </Group>
                 <Text size="xs" mt={4}>{ev.summary}</Text>
