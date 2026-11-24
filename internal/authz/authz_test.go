@@ -25,7 +25,7 @@ func TestCapabilityCatalogAndBuiltIns(t *testing.T) {
 	if !slices.Equal(builtIns[0].Capabilities, catalog) {
 		t.Fatalf("administrator does not dynamically grant the catalog: %v", builtIns[0].Capabilities)
 	}
-	wantReadOnly := []Capability{ConfigurationRead, StatusRead}
+	wantReadOnly := []Capability{ConfigurationRead, NotificationsRead, StatusRead}
 	if !slices.Equal(builtIns[1].Capabilities, wantReadOnly) {
 		t.Fatalf("read-only grants are not the explicit safe list: %v", builtIns[1].Capabilities)
 	}
@@ -88,7 +88,7 @@ func TestRoleResolve(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := snapshot.Resolve([]string{custom[0].ID, ReadOnlyRoleID, "missing"}); !slices.Equal(got, []Capability{ConfigurationRead, ConfigurationWrite, StatusRead}) {
+	if got := snapshot.Resolve([]string{custom[0].ID, ReadOnlyRoleID, "missing"}); !slices.Equal(got, []Capability{ConfigurationRead, ConfigurationWrite, NotificationsRead, StatusRead}) {
 		t.Fatalf("unexpected resolved capabilities: %v", got)
 	}
 	if got := snapshot.Resolve([]string{AdministratorRoleID}); !slices.Equal(got, Catalog()) {
@@ -132,7 +132,7 @@ func TestSnapshotResolvesBuiltInRoles(t *testing.T) {
 	if got := snapshot.Resolve([]string{AdministratorRoleID}); !slices.Equal(got, want) {
 		t.Fatalf("administrator resolves to %v, want the whole catalog %v", got, want)
 	}
-	if got := snapshot.Resolve([]string{ReadOnlyRoleID}); !slices.Equal(got, []Capability{ConfigurationRead, StatusRead}) {
+	if got := snapshot.Resolve([]string{ReadOnlyRoleID}); !slices.Equal(got, []Capability{ConfigurationRead, NotificationsRead, StatusRead}) {
 		t.Fatalf("read-only resolves to %v", got)
 	}
 	if len(snapshot.Roles) != 0 {

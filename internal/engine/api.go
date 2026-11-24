@@ -69,10 +69,10 @@ func newHandlerWithAPIs(readLinks func(context.Context) ([]host.LinkStatus, erro
 }
 
 func newHandlerWithFleet(readLinks func(context.Context) ([]host.LinkStatus, error), configuration, identityAPI, auditAPI, fleetAPI http.Handler) http.Handler {
-	return newHandlerWithServices(readLinks, configuration, identityAPI, auditAPI, fleetAPI, nil)
+	return newHandlerWithServices(readLinks, configuration, identityAPI, auditAPI, fleetAPI, nil, nil)
 }
 
-func newHandlerWithServices(readLinks func(context.Context) ([]host.LinkStatus, error), configuration, identityAPI, auditAPI, fleetAPI, updateAPI http.Handler) http.Handler {
+func newHandlerWithServices(readLinks func(context.Context) ([]host.LinkStatus, error), configuration, identityAPI, auditAPI, fleetAPI, updateAPI, notificationsAPI http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
@@ -90,6 +90,10 @@ func newHandlerWithServices(readLinks func(context.Context) ([]host.LinkStatus, 
 		}
 		if strings.HasPrefix(r.URL.Path, fleetAPIPrefix+"/") && fleetAPI != nil {
 			fleetAPI.ServeHTTP(w, r)
+			return
+		}
+		if (r.URL.Path == notificationsPath || strings.HasPrefix(r.URL.Path, notificationsPath+"/")) && notificationsAPI != nil {
+			notificationsAPI.ServeHTTP(w, r)
 			return
 		}
 		if (r.URL.Path == updateAPIPrefix || strings.HasPrefix(r.URL.Path, updateAPIPrefix+"/")) && updateAPI != nil {

@@ -106,7 +106,7 @@ func TestUpdateAPILifecycleAndAuthz(t *testing.T) {
 		func(context.Context) ([]host.LinkStatus, error) { return nil, nil },
 		http.NotFoundHandler(),
 		nil, nil, nil,
-		uapi,
+		uapi, nil,
 	)
 
 	// Uncached GET returns unchecked cleanly.

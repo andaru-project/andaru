@@ -1005,6 +1005,8 @@
         "configuration.confirm",
         "configuration.read",
         "configuration.write",
+        "notifications.manage",
+        "notifications.read",
         "status.read",
         "tokens.manageAll",
         "tokens.manageSelf",

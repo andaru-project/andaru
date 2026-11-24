@@ -42,9 +42,16 @@ The layer runs in the engine, as the bus's first durable consumer: `Consume("not
 
 - **What it keeps.** The active notifications are kept in `notifications.db` in the state directory, keyed by source and key. A raise inserts or updates one; a clear or a dismissal moves it to a bounded history (the last 500, or 30 days); a dismissal records who dismissed it.
 - **When it is done with an event.** Its handler returns nil only once the event is committed to `notifications.db` and its delivery jobs are published, so the bus delivers the event again after a crash in between. The event's `id` is stored with the change it made: one seen before changes nothing again, and its delivery jobs are published again with their same IDs, which the outbound service recognises.
-- **Missed notifications.** The bus tells the layer of a gap when events it should have had are gone: they aged out while the layer was behind, the layer's consumer was removed for being away, or the bus's store was replaced. The layer then raises its own notification, "Notifications may have been missed", with severity `warning`, linking to the log. The gap is done with once that notification is committed.
+- **Missed notifications.** The bus tells the layer of a gap when events it should have had are gone: they aged out while the layer was behind, the layer's consumer was removed for being away, or the bus's store was replaced. The layer then raises its own notification, "Notifications may have been missed", with severity `warning`, pointing to the engine journal. The gap is done with once that notification is committed.
 - **What it reads at start.** The active list comes from `notifications.db`, so a restart shows the same list. The layer attaches its consumer before it serves the list, as the bus's design asks of every consumer.
 - **Who may publish.** The bus checks the publish grant; the layer also checks that an event's source matches the topic it came on.
+- **What it refuses.** An event it cannot read is logged and skipped rather than retried, since a retry would hold up every notification after it: one whose source does not match its topic, an unknown type or severity, an empty key or subject, a link that is not a path in the web UI, or a `requires` that is not a capability.
+
+## The API
+
+- **`GET /api/v1/notifications`** (`notifications.read`) lists the active notifications the caller may see, the most recently raised or changed first.
+- **`POST /api/v1/notifications/{id}/dismiss`** (`notifications.manage`) dismisses one. A notification the caller may not see is not found. The dismissal is recorded in the layer's history with the account that made it.
+- The built-in read-only role has `notifications.read`; the administrator has both.
 
 ## The web UI
 

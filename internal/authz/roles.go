@@ -36,7 +36,7 @@ var roleIDPattern = regexp.MustCompile(`^rol_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3
 func BuiltIns() []Role {
 	return []Role{
 		{ID: AdministratorRoleID, Name: "Administrator", Capabilities: Catalog(), BuiltIn: AdministratorRoleID},
-		{ID: ReadOnlyRoleID, Name: "Read-only", Capabilities: []Capability{ConfigurationRead, StatusRead}, BuiltIn: ReadOnlyRoleID},
+		{ID: ReadOnlyRoleID, Name: "Read-only", Capabilities: []Capability{ConfigurationRead, NotificationsRead, StatusRead}, BuiltIn: ReadOnlyRoleID},
 	}
 }
 
