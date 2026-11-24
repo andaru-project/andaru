@@ -1103,3 +1103,18 @@ func TestVersionListsVirtualAddressChanges(t *testing.T) {
 		t.Fatalf("changes %+v %v", v.Changes, e)
 	}
 }
+
+// OnSave hears of each committed head, in order.
+func TestOnSaveHearsEachCommittedHead(t *testing.T) {
+	s := openTestStore(t, ownedDir(t))
+	var saved []Version
+	s.OnSave(func(v Version) { saved = append(saved, v) })
+	for _, name := range []string{"one", "two"} {
+		if _, err := s.Save(context.Background(), systemRootActor, createZone(name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !slices.Equal(saved, []Version{"1", "2"}) {
+		t.Fatalf("saved %v", saved)
+	}
+}

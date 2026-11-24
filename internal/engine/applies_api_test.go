@@ -37,6 +37,7 @@ type applyBench struct {
 	coordinator *securityCoordinator
 	mu          sync.Mutex
 	calls       []string
+	stored      []int // generations announced on the bus
 	reads       int
 	armErr      error
 	skip        bool          // Realize fails before the verb runs
@@ -210,7 +211,7 @@ func newApplyBench(t *testing.T) *applyBench {
 	}
 	b.identities = &applyIdentityState{revision: 1, accounts: map[string]identity.Account{}}
 	b.coordinator = &securityCoordinator{stateDir: b.state}
-	applies := newAppliesHandler(input, read, b, b.state, b.identities, b.coordinator)
+	applies := newAppliesHandler(input, read, b, b.state, b.identities, b.coordinator, func(id int) { b.stored = append(b.stored, id) })
 	b.h = newHandler(read.Links, newSavedHandler(nil, read.Links, read.Facts, applies, nil))
 	return b
 }
@@ -282,6 +283,9 @@ func TestApplyHappyPath(t *testing.T) {
 	}
 	if !slices.Equal(b.calls, []string{"arm 1 180", "activate 1"}) {
 		t.Fatalf("calls = %q; the timer must be armed before anything changes", b.calls)
+	}
+	if !slices.Equal(b.stored, []int{1, 1}) { // stored, then realized
+		t.Fatalf("announced %v", b.stored)
 	}
 	if again := b.decode(b.call(http.MethodGet, "/api/v1/applies/1", ""), http.StatusOK); again.State != got.State || !again.Deadline.Equal(*got.Deadline) {
 		t.Fatalf("read back = %+v", again)
@@ -359,8 +363,8 @@ func TestApplyRefusedStoresNothing(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || len(body.Error.Findings) != 1 || body.Error.Findings[0].Code != "BOOT_UNIT_DISABLED" {
 		t.Fatalf("findings = %s", w.Body)
 	}
-	if len(b.calls) != 0 || len(b.numbered()) != 0 {
-		t.Fatalf("a refused apply left %q %q", b.calls, b.numbered())
+	if len(b.calls) != 0 || len(b.numbered()) != 0 || len(b.stored) != 0 {
+		t.Fatalf("a refused apply left %q %q %v", b.calls, b.numbered(), b.stored)
 	}
 }
 
@@ -515,7 +519,7 @@ func TestAppliesRequireRoot(t *testing.T) {
 
 func TestSystemdRunnerUnitNamesAreDistinct(t *testing.T) {
 	var argv [][]string
-	runner := systemdRunner{stateDir: "/srv/state", exec: func(_ context.Context, name string, args ...string) error {
+	runner := systemdRunner{stateDir: "/srv/state", busSocket: "/run/andaru/bus.sock", exec: func(_ context.Context, name string, args ...string) error {
 		argv = append(argv, append([]string{name}, args...))
 		return nil
 	}}
@@ -533,7 +537,9 @@ func TestSystemdRunnerUnitNamesAreDistinct(t *testing.T) {
 	runner.Disarm(t.Context(), 3)
 	units := map[string]bool{}
 	for _, call := range argv[:4] {
-		if call[0] != "/usr/bin/systemd-run" || !slices.Contains(call, "--collect") || !slices.Contains(call, "RuntimeMaxSec=180") {
+		// Each verb, the timer's rollback too, tells the bus of the apply's new state.
+		bus := slices.Index(call, "--bus-socket")
+		if call[0] != "/usr/bin/systemd-run" || !slices.Contains(call, "--collect") || !slices.Contains(call, "RuntimeMaxSec=180") || bus < 0 || call[bus+1] != "/run/andaru/bus.sock" {
 			t.Fatalf("argv = %q", call)
 		}
 		i := slices.IndexFunc(call, func(a string) bool { return strings.HasPrefix(a, "--unit=") })
@@ -545,10 +551,10 @@ func TestSystemdRunnerUnitNamesAreDistinct(t *testing.T) {
 	}
 	arm := strings.Join(argv[0], " ")
 	// A rollback that fails once (lock held, /run full) must be tried again: nothing else will undo the change.
-	if !strings.Contains(arm, "-p Restart=on-failure -p RestartSec=10") || !strings.Contains(arm, "--unit=andaru-rollback-3 --on-active=180 --timer-property=AccuracySec=1s") || !strings.HasSuffix(arm, "/usr/bin/andaru realize --state-dir /srv/state rollback 3 deadline") {
+	if !strings.Contains(arm, "-p Restart=on-failure -p RestartSec=10") || !strings.Contains(arm, "--unit=andaru-rollback-3 --on-active=180 --timer-property=AccuracySec=1s") || !strings.HasSuffix(arm, "/usr/bin/andaru realize --state-dir /srv/state --bus-socket /run/andaru/bus.sock rollback 3 deadline") {
 		t.Fatalf("arm = %q", arm)
 	}
-	if early := strings.Join(argv[3], " "); !strings.Contains(early, " --wait ") || !strings.HasSuffix(early, "/usr/bin/andaru realize --state-dir /srv/state rollback 3 requested") {
+	if early := strings.Join(argv[3], " "); !strings.Contains(early, " --wait ") || !strings.HasSuffix(early, "/usr/bin/andaru realize --state-dir /srv/state --bus-socket /run/andaru/bus.sock rollback 3 requested") {
 		t.Fatalf("early rollback = %q", early)
 	}
 	if !slices.Equal(argv[4], []string{"/usr/bin/systemctl", "stop", "andaru-rollback-3.timer"}) {

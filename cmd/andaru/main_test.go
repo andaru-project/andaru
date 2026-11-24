@@ -268,7 +268,7 @@ func TestRealizeExitCodes(t *testing.T) {
 		verbs := &fakeVerbs{err: row.err}
 		var diagnostics bytes.Buffer
 		var dir string
-		code := realizeCommand(context.Background(), append([]string{"--state-dir", "/srv/state"}, row.args...), nil, &diagnostics, func(stateDir string) (realizeVerbs, error) {
+		code := realizeCommand(context.Background(), append([]string{"--state-dir", "/srv/state"}, row.args...), nil, &diagnostics, func(stateDir, _ string) (realizeVerbs, error) {
 			dir = stateDir
 			return verbs, nil
 		})
@@ -276,7 +276,7 @@ func TestRealizeExitCodes(t *testing.T) {
 			t.Fatalf("%q: exit=%d calls=%q dir=%q stderr=%q", row.args, code, verbs.calls, dir, diagnostics.String())
 		}
 	}
-	code := realizeCommand(context.Background(), []string{"boot"}, nil, io.Discard, func(string) (realizeVerbs, error) { return nil, errors.New("not root") })
+	code := realizeCommand(context.Background(), []string{"boot"}, nil, io.Discard, func(string, string) (realizeVerbs, error) { return nil, errors.New("not root") })
 	if code != 1 {
 		t.Fatalf("a refused privilege check exited %d", code)
 	}

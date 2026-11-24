@@ -33,12 +33,18 @@ type Store struct {
 	fenced, closed     atomic.Bool
 	closeOnce          sync.Once
 	closeErr           error
+	// saved is told of each new head once it is committed.
+	saved func(Version)
 }
 
 func unavailable() *Fault {
 	return fault("STORE_UNAVAILABLE", "", "Configuration storage is unavailable; inspect the engine journal.")
 }
 func (s *Store) Failure() <-chan error { return s.failure }
+
+// OnSave calls fn with each version saved as the head, after its commit and while the store is still held, so the
+// calls come in the order of the saves. fn must not block. It is set before the store is shared.
+func (s *Store) OnSave(fn func(Version)) { s.saved = fn }
 func (s *Store) fail(stage string, cause error) error {
 	if s.fenced.CompareAndSwap(false, true) {
 		diagnostic(stage, cause)
@@ -542,6 +548,9 @@ func (p *pendingSave) commitConfiguration(ctx context.Context) (SaveResult, erro
 		return SaveResult{}, p.s.fail("publish-config-commit", e)
 	}
 	p.active = false
+	if p.s.saved != nil {
+		p.s.saved(p.prepared.State.Version)
+	}
 	return resultView(p.prepared)
 }
 func (p *pendingSave) Close() error {

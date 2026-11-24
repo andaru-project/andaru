@@ -143,7 +143,7 @@ func TestConfigurationHTTPContract(t *testing.T) {
 		"/api/v1/tokens/{selector}": {"delete"}, "/api/v1/audit/events": {"get", "head"},
 		"/api/v1/audit/export": {"get", "head"},
 		"/api/v1/session":      {"get", "post", "delete"}, "/api/v1/sessions": {"get"}, "/api/v1/session/preferences": {"get", "put"},
-		"/api/v1/sessions/{id}": {"delete"}, "/api/v1/startup-status": {"get", "head"},
+		"/api/v1/sessions/{id}": {"delete"}, "/api/v1/startup-status": {"get", "head"}, "/api/v1/events": {"get"},
 		"/api/v1/fleet/state": {"get", "head"}, "/api/v1/fleet/devices": {"get", "head"},
 		"/api/v1/fleet/devices/{id}": {"get", "head"}, "/api/v1/fleet/devices/{id}/links/{ifName}/samples": {"get", "head"},
 		"/api/v1/fleet/topology": {"get", "head"}, "/api/v1/fleet/vlans/flow": {"get", "head"},

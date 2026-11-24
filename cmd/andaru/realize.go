@@ -34,12 +34,20 @@ type realizeVerbs interface {
 }
 
 // newRealizer builds the privileged actor for the real host.
-func newRealizer(stateDir string) (realizeVerbs, error) {
+func newRealizer(stateDir, busSocket string) (realizeVerbs, error) {
 	if os.Geteuid() != 0 {
 		return nil, errors.New("realize requires root")
 	}
+	var activating func(id int)
+	if busSocket != "" {
+		activating = func(id int) {
+			if err := tellApply(context.Background(), busSocket, id); err != nil {
+				fmt.Fprintln(os.Stderr, "event bus not told of the activation:", err)
+			}
+		}
+	}
 	return generation.Realizer{
-		StateDir: stateDir, RenderDisaster: renderDisaster(""),
+		StateDir: stateDir, RenderDisaster: renderDisaster(""), Activating: activating,
 		Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
 			// One stuck tool must not hold the generations lock.
 			ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -57,10 +65,11 @@ func newRealizer(stateDir string) (realizeVerbs, error) {
 }
 
 // realizeCommand runs one privileged verb. Usage is checked before privilege so a typo never looks like a permission problem.
-func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer, build func(stateDir string) (realizeVerbs, error)) int {
+func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer, build func(stateDir, busSocket string) (realizeVerbs, error)) int {
 	flags := flag.NewFlagSet("realize", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	stateDir := flags.String("state-dir", defaultStateDir, "")
+	busSocket := flags.String("bus-socket", "", "")
 	// Help flags are taken out first, so one standing where a flag's value belongs does not hide the verb.
 	help := helpRequested(args)
 	parseErr := flags.Parse(slices.DeleteFunc(slices.Clone(args), isHelp))
@@ -72,7 +81,8 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 		fmt.Fprint(stdout, realizeHelp)
 		return 0
 	}
-	if parseErr != nil || !known || !filepath.IsAbs(*stateDir) || filepath.Clean(*stateDir) != *stateDir {
+	if parseErr != nil || !known || !filepath.IsAbs(*stateDir) || filepath.Clean(*stateDir) != *stateDir ||
+		*busSocket != "" && (!filepath.IsAbs(*busSocket) || filepath.Clean(*busSocket) != *busSocket) {
 		return usageError(stderr, realizeUsage, "andaru realize")
 	}
 	rest := flags.Args()[1:]
@@ -92,7 +102,7 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 	if len(rest) > 0 {
 		id, _ = strconv.Atoi(rest[0])
 	}
-	verbs, err := build(*stateDir)
+	verbs, err := build(*stateDir, *busSocket)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -119,6 +129,12 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 		err = verbs.SyncLeases(ctx)
 	case "prefixes":
 		err = verbs.SyncPrefixes(ctx)
+	}
+	// A verb on a generation may change its state even when it fails, so the bus hears of each one.
+	if id != 0 && *busSocket != "" {
+		if tellErr := tellApply(ctx, *busSocket, id); tellErr != nil {
+			fmt.Fprintln(stderr, "event bus not told of the apply:", tellErr)
+		}
 	}
 	if err == nil {
 		return 0

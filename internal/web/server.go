@@ -35,7 +35,10 @@ func Serve(ctx context.Context, config Config) error {
 	if err != nil {
 		return err
 	}
-	handler, err := newHandler(config.BackendSocket, config.AssetsDirectory, origins, hosts)
+	// Event streams never go idle, so a shutdown ends them rather than waiting for them.
+	streams, endStreams := context.WithCancel(context.Background())
+	defer endStreams()
+	handler, err := newHandler(config.BackendSocket, config.AssetsDirectory, origins, hosts, streams)
 	if err != nil {
 		return err
 	}
@@ -48,19 +51,8 @@ func Serve(ctx context.Context, config Config) error {
 		return err
 	}
 	defer listener.Close()
-	server := &http.Server{
-		Handler:           handler,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       180 * time.Second,
-		WriteTimeout:      180 * time.Second,
-		IdleTimeout:       30 * time.Second,
-		MaxHeaderBytes:    32 << 10,
-		ErrorLog:          log.New(io.Discard, "", 0),
-		TLSConfig: &tls.Config{
-			MinVersion:   tls.VersionTLS13,
-			Certificates: []tls.Certificate{certificate},
-		},
-	}
+	server := newServer(handler, certificate)
+	server.RegisterOnShutdown(endStreams)
 	served := make(chan error, 1)
 	go func() { served <- server.Serve(tls.NewListener(listener, server.TLSConfig)) }()
 	select {
@@ -81,6 +73,25 @@ func Serve(ctx context.Context, config Config) error {
 		return nil
 	}
 	return err
+}
+
+// newServer serves handler over TLS 1.3, with HTTP/2 offered first: a page's requests and its event stream share
+// one connection, which HTTP/1.1 would not let them do.
+func newServer(handler http.Handler, certificate tls.Certificate) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       180 * time.Second,
+		WriteTimeout:      180 * time.Second,
+		IdleTimeout:       30 * time.Second,
+		MaxHeaderBytes:    32 << 10,
+		ErrorLog:          log.New(io.Discard, "", 0),
+		TLSConfig: &tls.Config{
+			MinVersion:   tls.VersionTLS13,
+			Certificates: []tls.Certificate{certificate},
+			NextProtos:   []string{"h2", "http/1.1"},
+		},
+	}
 }
 
 func validateConfig(config Config) (map[string]struct{}, map[string]struct{}, error) {
@@ -138,7 +149,8 @@ func explicitListenAddress(value string) error {
 	return nil
 }
 
-func newHandler(backendSocket, assetsDirectory string, origins, hosts map[string]struct{}) (http.Handler, error) {
+// newHandler serves the assets and the API. Event streams end when streams does.
+func newHandler(backendSocket, assetsDirectory string, origins, hosts map[string]struct{}, streams context.Context) (http.Handler, error) {
 	assetInfo, err := os.Lstat(assetsDirectory)
 	if err != nil || !assetInfo.IsDir() || assetInfo.Mode()&os.ModeSymlink != 0 {
 		return nil, errors.New("asset directory must be a real directory")
@@ -148,8 +160,21 @@ func newHandler(backendSocket, assetsDirectory string, origins, hosts map[string
 		return nil, errors.New("asset directory must contain a regular index.html")
 	}
 	proxy := newProxy(backendSocket)
+	// Event streams hold their backend connections for as long as their pages are open, so they have connections
+	// of their own and never leave the API requests waiting for one.
+	events := newProxy(backendSocket)
 	assets := http.FileServer(http.Dir(assetsDirectory))
 	router := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/events" || r.URL.Path == "/api/v1/fleet/events/stream" { // the bus's and the fleet's
+			// The stream lasts as long as the page, so from its first write on, instead of the server's write timeout,
+			// each write must finish within streamWriteTimeout: a browser that stops reading loses its stream and
+			// its backend connection.
+			ctx, cancel := context.WithCancel(r.Context())
+			defer cancel()
+			defer context.AfterFunc(streams, cancel)()
+			events.ServeHTTP(rollingDeadline{w}, r.WithContext(ctx))
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			proxy.ServeHTTP(w, r)
 			return
@@ -209,3 +234,17 @@ func validatePublicRequest(next http.Handler, origins, hosts map[string]struct{}
 func requestChangesState(method string) bool {
 	return method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions
 }
+
+// streamWriteTimeout bounds each write of an event stream. Over HTTP/2 it also ends a stream that is not written to
+// for that long, so it must outlast the engine's heartbeat, every 25 seconds.
+var streamWriteTimeout = time.Minute
+
+// rollingDeadline gives each write of a stream streamWriteTimeout to finish.
+type rollingDeadline struct{ http.ResponseWriter }
+
+func (w rollingDeadline) Write(p []byte) (int, error) {
+	_ = http.NewResponseController(w.ResponseWriter).SetWriteDeadline(time.Now().Add(streamWriteTimeout))
+	return w.ResponseWriter.Write(p)
+}
+
+func (w rollingDeadline) Unwrap() http.ResponseWriter { return w.ResponseWriter }

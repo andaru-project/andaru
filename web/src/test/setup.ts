@@ -1,8 +1,13 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup } from '@testing-library/react';
 import { afterEach, vi } from 'vitest';
+import { FakeEventSource } from './events';
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  FakeEventSource.opened = [];
+});
+vi.stubGlobal('EventSource', FakeEventSource);
 class ResizeObserverStub {
   observe() {}
   unobserve() {}

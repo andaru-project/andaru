@@ -131,6 +131,41 @@
         }
       }
     },
+    "/api/v1/events": {
+      "get": {
+        "operationId": "streamEvents",
+        "summary": "Follow the events that change what the web UI shows, as Server-Sent Events",
+        "description": "Each event is one data line holding the event bus's JSON payload (id, type, time, source, data): config.head.changed when a new head is saved, apply.changed when an apply changes state. Events are not kept: a client reads the state when the stream opens and again at every event. A comment line arrives every 25 seconds; the stream ends within that time of its session ending or losing configuration.read, and a stream that falls behind is closed. Opening or keeping the stream does not count as activity for the session's idle timeout.",
+        "x-andaru-web-auth-route": true,
+        "responses": {
+          "200": {
+            "description": "The stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query string, a request body, or a session cookie together with an Authorization header"
+          },
+          "401": {
+            "description": "Session is missing or invalid"
+          },
+          "403": {
+            "description": "The account lacks configuration.read"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "description": "Identity, the audit log or the event bus is unavailable"
+          }
+        }
+      }
+    },
     "/api/v1/status/prefixes": {
       "get": {
         "operationId": "readDelegatedPrefixes",

@@ -1,9 +1,11 @@
 import { MemoryRouter } from 'react-router';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ApiClient } from './api';
+import type { Apply } from './types';
 import { configureNetplaneApi } from './netplane/api';
 import { setRoutePrefix } from './netplane/routing';
 import { Shell } from './Shell';
+import { openStreams } from './test/events';
 import { fetchRoutes, jsonResponse } from './test/fetch';
 import { apply, pointers, session } from './test/fixtures';
 import { act, render, screen } from './test/render';
@@ -40,28 +42,112 @@ afterEach(() => {
 
 const appliesReads = (fetchMock: ReturnType<typeof fetchRoutes>) => fetchMock.mock.calls.filter(([url]) => url === '/api/v1/applies').length;
 
-it('polls the change state every 15 seconds while the tab is visible, and when it becomes visible', async () => {
-  // A poll waits for the answer that is still out, so each answer is let in before the next tick.
+it('reads the change state when the event stream opens and at each event, and opens a refused stream again', async () => {
   const answered = () => act(async () => { await new Promise((resolve) => setTimeout(resolve)); });
-  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
   const fetchMock = routes();
   mount('/system/session');
   expect(appliesReads(fetchMock)).toBe(1);
-  await answered();
+  const [stream] = openStreams();
+  expect(stream.url).toBe('/api/v1/events');
 
-  act(() => { vi.advanceTimersByTime(14_999); });
-  expect(appliesReads(fetchMock)).toBe(1);
-  act(() => { vi.advanceTimersByTime(1); });
+  act(() => { stream.open(); });
   expect(appliesReads(fetchMock)).toBe(2);
+  // A read already out does not hold back the next: it may have been answered before the change.
+  act(() => { stream.message(); stream.message(); });
+  expect(appliesReads(fetchMock)).toBe(4);
   await answered();
 
+  // A failed stream is read after once, until a stream opens again, so a lost connection shows. A dropped stream is
+  // the browser's to reopen; a refused one is the page's, after 15 seconds.
+  act(() => { stream.fail(false); });
+  expect(appliesReads(fetchMock)).toBe(5);
+  act(() => { stream.fail(false); });
+  expect(appliesReads(fetchMock)).toBe(5);
+  await answered();
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  act(() => { stream.fail(true); });
+  expect(appliesReads(fetchMock)).toBe(5);
+  expect(openStreams()).toHaveLength(0);
+  act(() => { vi.advanceTimersByTime(15_000); });
+  const [reopened] = openStreams();
+  act(() => { reopened.open(); });
+  expect(appliesReads(fetchMock)).toBe(6);
+  act(() => { reopened.fail(true); });
+  expect(appliesReads(fetchMock)).toBe(7);
+  act(() => { vi.advanceTimersByTime(15_000); });
+  expect(openStreams()).toHaveLength(1);
+
+  // A hidden tab gives its connection back, and reads again when it is shown.
   visibility = 'hidden';
-  act(() => { vi.advanceTimersByTime(30_000); });
-  expect(appliesReads(fetchMock)).toBe(2);
-
+  act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+  expect(openStreams()).toHaveLength(0);
+  act(() => { vi.advanceTimersByTime(15_000); });
+  expect(openStreams()).toHaveLength(0);
   visibility = 'visible';
   act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+  act(() => { openStreams()[0].open(); });
+  expect(openStreams()).toHaveLength(1);
+  expect(appliesReads(fetchMock)).toBe(8);
+});
+
+it('reads the change state again every 15 seconds after a failed read, until one answers', async () => {
+  const answered = () => act(async () => { await new Promise((resolve) => setTimeout(resolve)); });
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  let fail = false;
+  const fetchMock = fetchRoutes({
+    '/api/v1/applies': () => (fail ? jsonResponse(503, { error: { code: 'X', message: 'down', details: [] } }) : jsonResponse(200, unapplied)),
+    '/api/v1/versions?': { state: 'saved', items: [] },
+  });
+  mount('/system/session');
+  await answered();
+  act(() => { vi.advanceTimersByTime(15_000); });
+  expect(appliesReads(fetchMock)).toBe(1);
+
+  fail = true;
+  act(() => { openStreams()[0].message(); });
+  await answered();
+  expect(appliesReads(fetchMock)).toBe(2);
+  fail = false;
+  act(() => { vi.advanceTimersByTime(15_000); });
+  await answered();
   expect(appliesReads(fetchMock)).toBe(3);
+  act(() => { vi.advanceTimersByTime(30_000); });
+  expect(appliesReads(fetchMock)).toBe(3);
+});
+
+it('reads the change state every 15 seconds while an apply is under way, and not after', async () => {
+  const answered = () => act(async () => { await new Promise((resolve) => setTimeout(resolve)); });
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  let state: Apply['state'] = 'awaiting_confirmation';
+  const fetchMock = fetchRoutes({
+    '/api/v1/applies': () => jsonResponse(200, { pointers, items: [apply({ state })] }),
+    '/api/v1/versions?': { state: 'saved', items: [] },
+  });
+  mount('/system/session');
+  await answered();
+  act(() => { vi.advanceTimersByTime(15_000); });
+  expect(appliesReads(fetchMock)).toBe(2);
+  state = 'confirmed';
+  await answered();
+  act(() => { vi.advanceTimersByTime(15_000); });
+  expect(appliesReads(fetchMock)).toBe(3);
+  await answered();
+  act(() => { vi.advanceTimersByTime(30_000); });
+  expect(appliesReads(fetchMock)).toBe(3);
+});
+
+it('closes its event stream when it goes away', () => {
+  routes();
+  const { unmount } = render(<MemoryRouter initialEntries={['/system/session']}><Shell api={new ApiClient('csrf')} session={reader} connected onLogout={vi.fn()} onSessionLost={vi.fn()} /></MemoryRouter>);
+  expect(openStreams()).toHaveLength(1);
+  unmount();
+  expect(openStreams()).toHaveLength(0);
+});
+
+it('opens no event stream for an account that may not read the configuration', () => {
+  fetchRoutes({});
+  render(<MemoryRouter initialEntries={['/system/session']}><Shell api={new ApiClient('csrf')} session={session([])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} /></MemoryRouter>);
+  expect(openStreams()).toHaveLength(0);
 });
 
 it('reloads the change state when the connection comes back', () => {
@@ -203,6 +289,24 @@ it('says when it cannot tell whether decisions wait', async () => {
   });
   mount('/system/session');
   expect(await screen.findByText('Whether the settings wait for decisions cannot be read')).toBeInTheDocument();
+});
+
+it('asks again every 15 seconds whether decisions wait, while it cannot tell', async () => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  let down = true;
+  const fetchMock = fetchRoutes({
+    '/api/v1/applies': unapplied,
+    '/api/v1/versions?': { state: 'saved', items: [] },
+    'POST /api/v1/config/upgrade/preview': () => (down ? jsonResponse(503, { error: { code: 'STORE_UNAVAILABLE', message: 'Unavailable.' } }) : jsonResponse(200, { savedVersion: '5', questions: [question] })),
+  });
+  mount('/system/session');
+  expect(await screen.findByText('Whether the settings wait for decisions cannot be read')).toBeInTheDocument();
+  const previews = () => fetchMock.mock.calls.filter(([url]) => url === '/api/v1/config/upgrade/preview').length;
+  const before = previews();
+  down = false;
+  act(() => { vi.advanceTimersByTime(15_000); });
+  expect(previews()).toBe(before + 1);
+  expect(await screen.findByRole('link', { name: 'Answer the questions' })).toBeInTheDocument();
 });
 
 it('points to the questions from any other page', async () => {

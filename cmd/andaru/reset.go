@@ -174,7 +174,7 @@ func productionResetEnv(socket string) reset.Env {
 		}
 		return out, err
 	}
-	realizer, _ := newRealizer(resetStateDir)
+	realizer, _ := newRealizer(resetStateDir, "")
 	r, _ := realizer.(generation.Realizer)
 	return reset.Env{
 		StateDir: resetStateDir, Dir: resetDir, Realizer: r, Run: run,

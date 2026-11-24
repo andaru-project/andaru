@@ -2,7 +2,7 @@ import { useCallback, useRef, useSyncExternalStore } from 'react';
 import type { ApiClient } from './api';
 import { firewallZone, type Applies, type Apply } from './types';
 
-// ChangeState is what the shell polls: every apply, and the saved head's version.
+// ChangeState is what the shell follows: every apply, and the saved head's version.
 export interface ChangeState {
   applies: Applies;
   head: string;

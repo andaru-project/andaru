@@ -147,15 +147,18 @@ type appliesHandler struct {
 	stateDir    string
 	identities  applyIdentity
 	coordinator *securityCoordinator
+	// stored hears of each generation once it is stored, before realize runs it, and again once realize returns;
+	// realize also tells of what it does, but only on a best-effort basis.
+	stored func(id int)
 	// mu keeps two requests from preparing generations against the same host state.
 	mu sync.Mutex
 }
 
 // newAppliesHandler serves applies: the engine renders, gates and stores; realize, run by PID 1, changes the host.
-func newAppliesHandler(input func(context.Context, *config.Version) (config.RealizationInput, error), read hostReader, runner realizeRunner, stateDir string, identities applyIdentity, coordinator *securityCoordinator) http.Handler {
+func newAppliesHandler(input func(context.Context, *config.Version) (config.RealizationInput, error), read hostReader, runner realizeRunner, stateDir string, identities applyIdentity, coordinator *securityCoordinator, stored func(id int)) http.Handler {
 	return &appliesHandler{
 		input: input, read: read, runner: runner, dir: generation.Dir(stateDir), stateDir: stateDir,
-		identities: identities, coordinator: coordinator,
+		identities: identities, coordinator: coordinator, stored: stored,
 	}
 }
 
@@ -391,6 +394,7 @@ func (h *appliesHandler) create(w http.ResponseWriter, r *http.Request) {
 		h.unavailable(w, r, "store generation", err)
 		return
 	}
+	h.stored(id)
 	if closure, cerr := config.LANClosure(input.Value, input.Secrets); cerr == nil {
 		path := filepath.Join(h.dir, strconv.Itoa(id), "lan-closure.json")
 		if werr := os.WriteFile(path, closure, 0o600); werr != nil {
@@ -412,6 +416,7 @@ func (h *appliesHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	runErr := h.runner.Realize(ctx, "activate", id)
+	h.stored(id)
 	g, err := generation.Read(h.dir, id)
 	if err != nil || (g.State.State == generation.Failed && g.Reason == "never started") {
 		// Whether the unit ran is unknown, so the timer stays armed: it does nothing when there is nothing to undo.
@@ -499,6 +504,7 @@ func (h *appliesHandler) finish(w http.ResponseWriter, r *http.Request, id int, 
 		}
 	}
 	runErr := h.runner.Realize(ctx, verb, id, extra...)
+	h.stored(id)
 	g, err := generation.Read(h.dir, id)
 	if err != nil {
 		h.unavailable(w, r, verb+" generation", errors.Join(runErr, err))

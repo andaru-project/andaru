@@ -27,11 +27,13 @@ type realizeRunner interface {
 
 type systemdRunner struct {
 	stateDir string
-	exec     func(ctx context.Context, name string, args ...string) error
+	// busSocket is where realize tells the engine's subscribers of each apply's state.
+	busSocket string
+	exec      func(ctx context.Context, name string, args ...string) error
 }
 
-func newSystemdRunner(stateDir string) realizeRunner {
-	return systemdRunner{stateDir: stateDir, exec: func(ctx context.Context, name string, args ...string) error {
+func newSystemdRunner(stateDir, busSocket string) realizeRunner {
+	return systemdRunner{stateDir: stateDir, busSocket: busSocket, exec: func(ctx context.Context, name string, args ...string) error {
 		out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("%s: %w: %s", name, err, out)
@@ -41,7 +43,7 @@ func newSystemdRunner(stateDir string) realizeRunner {
 }
 
 func (s systemdRunner) command(verb string, id int, extra ...string) []string {
-	return append([]string{andaruBinary, "realize", "--state-dir", s.stateDir, verb, strconv.Itoa(id)}, extra...)
+	return append([]string{andaruBinary, "realize", "--state-dir", s.stateDir, "--bus-socket", s.busSocket, verb, strconv.Itoa(id)}, extra...)
 }
 
 func (s systemdRunner) Arm(ctx context.Context, id, seconds int) error {

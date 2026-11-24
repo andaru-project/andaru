@@ -97,9 +97,9 @@ func TestUsageErrorsShowTheCommandAndAHint(t *testing.T) {
 		{[]string{"ctl", "backup", "create"}, "usage: andaru ctl backup create", "Run 'andaru ctl backup --help' for details."},
 		{[]string{"ctl", "kept"}, "usage: andaru ctl kept store-recovery", "Run 'andaru ctl kept --help' for details."},
 		{[]string{"ctl", "factory-reset", "go"}, "usage: andaru ctl factory-reset run|abort|status", "Run 'andaru ctl factory-reset --help' for details."},
-		{[]string{"realize", "activate"}, "usage: andaru realize [--state-dir PATH] activate|confirm N", "Run 'andaru realize --help' for details."},
-		{[]string{"realize", "bogus", "--help"}, "usage: andaru realize [--state-dir PATH] activate|confirm N", "Run 'andaru realize --help' for details."},
-		{[]string{"realize", "--help", "bogus"}, "usage: andaru realize [--state-dir PATH] activate|confirm N", "Run 'andaru realize --help' for details."},
+		{[]string{"realize", "activate"}, "usage: andaru realize [OPTIONS] activate|confirm N", "Run 'andaru realize --help' for details."},
+		{[]string{"realize", "bogus", "--help"}, "usage: andaru realize [OPTIONS] activate|confirm N", "Run 'andaru realize --help' for details."},
+		{[]string{"realize", "--help", "bogus"}, "usage: andaru realize [OPTIONS] activate|confirm N", "Run 'andaru realize --help' for details."},
 	} {
 		var out, diag bytes.Buffer
 		code := run(context.Background(), row.args, strings.NewReader(""), &out, &diag)
@@ -141,7 +141,7 @@ func TestRealizeHelpRunsNoVerb(t *testing.T) {
 	} {
 		verbs := &fakeVerbs{}
 		var out, diag bytes.Buffer
-		code := realizeCommand(context.Background(), strings.Fields(args), &out, &diag, func(string) (realizeVerbs, error) { return verbs, nil })
+		code := realizeCommand(context.Background(), strings.Fields(args), &out, &diag, func(string, string) (realizeVerbs, error) { return verbs, nil })
 		if code != 0 || diag.Len() != 0 || strings.Join(verbs.calls, ",") != want || (want == "") != strings.Contains(out.String(), "rollback N REASON") {
 			t.Errorf("%q: exit=%d calls=%q stdout=%q stderr=%q", args, code, verbs.calls, out.String(), diag.String())
 		}
