@@ -328,7 +328,7 @@ export function OverviewScreen({
             </Button>
           </CardHeader>
           <Table.ScrollContainer minWidth={0} type="native">
-            <Table highlightOnHover className="data-table">
+            <Table highlightOnHover className="np-data-table">
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>Device</Table.Th>

@@ -405,6 +405,12 @@ export interface NetplaneApiConfig {
   csrfToken?: string;
   /** Called on HTTP 401 instead of prompting for a standalone API token. */
   onUnauthorized?: () => void;
+  /**
+   * Consumes pending user input for read requests. When provided and returning `false` (or when
+   * a read is explicitly marked `background`), `X-Andaru-Background: 1` is sent so unattended
+   * polling does not reset Andaru's session idle timeout.
+   */
+  consumeActivity?: () => boolean;
 }
 
 let apiConfig: NetplaneApiConfig | null = null;
@@ -461,7 +467,8 @@ function promptForToken(): Promise<boolean> {
     if (!token) return false;
     // Scope to the app's base path so other apps on the origin (e.g. other HA ingress add-ons) never get it.
     const path = apiBasePath();
-    document.cookie = `netplane_token=${encodeURIComponent(token)}; path=${path}; SameSite=Strict`;
+    const secure = window.location.protocol === 'https:' ? '; Secure' : '';
+    document.cookie = `netplane_token=${encodeURIComponent(token)}; path=${path}; SameSite=Strict${secure}`;
     authGen++;
     window.dispatchEvent(new Event(AUTH_EVENT));
     return true;
@@ -471,22 +478,39 @@ function promptForToken(): Promise<boolean> {
   return tokenPrompt;
 }
 
+const readTimeoutMs = 30_000;
+
+interface FetchOptions {
+  background?: boolean;
+}
+
 async function fetchJSON<T>(
   path: string,
   init?: RequestInit,
   retried = false,
   cfg: NetplaneApiConfig | null = apiConfig,
+  opts?: FetchOptions,
 ): Promise<T> {
   const gen = authGen;
   const method = (init?.method ?? 'GET').toUpperCase();
+  const isRead = method === 'GET' || method === 'HEAD';
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
-  if (cfg?.csrfToken && method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+  if (cfg?.csrfToken && !isRead && method !== 'OPTIONS') {
     headers['X-Andaru-CSRF'] = cfg.csrfToken;
   }
+  if (isRead && cfg?.consumeActivity) {
+    const hasActivity = opts?.background ? false : cfg.consumeActivity();
+    if (!hasActivity) {
+      headers['X-Andaru-Background'] = '1';
+    }
+  }
+  const signal = init?.signal ?? (isRead && typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(readTimeoutMs) : undefined);
   const resp = await fetch(buildApiUrl(path, cfg), {
     credentials: 'same-origin',
+    cache: 'no-store',
+    signal,
     ...init,
     headers: {
       ...headers,
@@ -499,7 +523,7 @@ async function fetchJSON<T>(
       throw new Error('HTTP 401: authentication required');
     }
     if (!retried && (gen !== authGen || (await promptForToken()))) {
-      return fetchJSON<T>(path, init, true, cfg);
+      return fetchJSON<T>(path, init, true, cfg, opts);
     }
   }
   if (!resp.ok) {
@@ -510,14 +534,14 @@ async function fetchJSON<T>(
 }
 
 export const api = {
-  getState: () => fetchJSON<NetworkState>('/state'),
-  getDevice: (id: string) => fetchJSON<DeviceDetail>(`/devices/${encodeURIComponent(id)}`),
-  getTopology: () => fetchJSON<TopologyGraph>('/topology'),
-  getVLANFlow: () => fetchJSON<VLANFlow>('/vlans/flow'),
-  listTargets: () => fetchJSON<{ items: TargetConfig[] }>('/targets').then((r) => r.items),
+  getState: (opts?: FetchOptions) => fetchJSON<NetworkState>('/state', undefined, false, apiConfig, opts),
+  getDevice: (id: string, opts?: FetchOptions) => fetchJSON<DeviceDetail>(`/devices/${encodeURIComponent(id)}`, undefined, false, apiConfig, opts),
+  getTopology: (opts?: FetchOptions) => fetchJSON<TopologyGraph>('/topology', undefined, false, apiConfig, opts),
+  getVLANFlow: (opts?: FetchOptions) => fetchJSON<VLANFlow>('/vlans/flow', undefined, false, apiConfig, opts),
+  listTargets: (opts?: FetchOptions) => fetchJSON<{ items: TargetConfig[] }>('/targets', undefined, false, apiConfig, opts).then((r) => r.items),
   pollTarget: (id: string) => fetchJSON<unknown>(`/targets/${encodeURIComponent(id)}/poll`, { method: 'POST' }),
-  listDiagnostics: (limit = 30) =>
-    fetchJSON<{ items: DiagnosticResult[] }>(`/diagnostics?limit=${limit}`).then((r) => r.items),
+  listDiagnostics: (limit = 30, opts?: FetchOptions) =>
+    fetchJSON<{ items: DiagnosticResult[] }>(`/diagnostics?limit=${limit}`, undefined, false, apiConfig, opts).then((r) => r.items),
   runDiagnostic: (req: { kind: string; device_id?: string; target: string; params?: Record<string, string> }) =>
     fetchJSON<DiagnosticResult>('/diagnostics', { method: 'POST', body: JSON.stringify(req) }),
 };

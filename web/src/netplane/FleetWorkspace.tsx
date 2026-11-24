@@ -1,14 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import './styles.css';
 import { Alert, Badge, Button, Group, Stack } from '@mantine/core';
-import { useEffect, useMemo } from 'react';
 import { Link, Navigate, Route, Routes } from 'react-router';
-import {
-  configureNetplaneApi,
-  type Device,
-  type VLANFlowVLAN,
-} from './api';
-import { getRoutePrefix, setRoutePrefix, vlanFlowPath } from './routing';
+import { consumeUserActivity } from '../api';
+import { configureNetplaneApi } from './api';
+import { setRoutePrefix, vlanFlowPath } from './routing';
 import { ClientsScreen } from './screens/ClientsScreen';
 import { DeviceDetailScreen } from './screens/DeviceDetailScreen';
 import { DevicesScreen } from './screens/DevicesScreen';
@@ -16,8 +12,7 @@ import { DiagnosticsScreen } from './screens/DiagnosticsScreen';
 import { TopologyScreen } from './screens/TopologyScreen';
 import { VlanFlowScreen } from './screens/VlanFlowScreen';
 import { VlansScreen } from './screens/VlansScreen';
-import { useFleetData } from './useFleetData';
-import { buildVlanColorMap } from './vlanUtils';
+import { useFleetData, useFleetLookups } from './useFleetData';
 
 export interface FleetWorkspaceProps {
   csrfToken: string;
@@ -32,44 +27,28 @@ export function FleetWorkspace({
   canWrite,
   onSessionLost,
 }: FleetWorkspaceProps) {
-  // Ensure child routes render `/network/...` links and hit `/api/v1/fleet/*` from the very first render.
-  if (getRoutePrefix() !== '/network') {
-    setRoutePrefix('/network');
-  }
+  // Configure synchronously so child routes render `/network/...` links and hit `/api/v1/fleet/*`
+  // from the very first render and across StrictMode remounts.
+  setRoutePrefix('/network');
   configureNetplaneApi({
     apiPrefix: 'api/v1/fleet',
     csrfToken,
     onUnauthorized: onSessionLost,
+    consumeActivity: consumeUserActivity,
   });
 
-  useEffect(() => {
-    setRoutePrefix('/network');
-    configureNetplaneApi({
-      apiPrefix: 'api/v1/fleet',
-      csrfToken,
-      onUnauthorized: onSessionLost,
-    });
-  }, [csrfToken, onSessionLost]);
-
   const fleet = useFleetData({ canReadTargets, canPoll: canWrite });
+  const {
+    devices,
+    clients,
+    findings,
+    devicesById,
+    vlansById,
+    vlanColors,
+    hasCrit,
+    enabledTargets,
+  } = useFleetLookups(fleet.state, fleet.flow, fleet.targets);
 
-  const devices = useMemo(() => fleet.state?.devices ?? [], [fleet.state?.devices]);
-  const clients = fleet.state?.clients ?? [];
-  const findings = fleet.flow?.findings ?? [];
-  const vlans = useMemo(() => fleet.flow?.vlans ?? [], [fleet.flow?.vlans]);
-
-  const devicesById = useMemo(
-    () => new Map<string, Device>(devices.map((d) => [d.id, d])),
-    [devices],
-  );
-  const vlansById = useMemo(
-    () => new Map<number, VLANFlowVLAN>(vlans.map((v) => [v.id, v])),
-    [vlans],
-  );
-  const vlanColors = useMemo(() => buildVlanColorMap(vlans), [vlans]);
-
-  const hasCrit = findings.some((f) => f.severity === 'crit');
-  const enabledTargets = fleet.targets.filter((t) => t.enabled);
   const canPollTargets = canWrite && enabledTargets.length > 0;
 
   return (
@@ -83,7 +62,7 @@ export function FleetWorkspace({
             color={hasCrit ? 'red' : 'yellow'}
             variant="filled"
           >
-            ⚠ {findings.length} VLAN {findings.length === 1 ? 'issue' : 'issues'}
+            <span aria-hidden="true">⚠</span> {findings.length} VLAN {findings.length === 1 ? 'issue' : 'issues'}
           </Button>
         )}
         <Badge

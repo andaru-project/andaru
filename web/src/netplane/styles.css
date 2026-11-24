@@ -71,7 +71,7 @@
   color: #fff;
 }
 
-.app-brand-link {
+.np-brand-link {
   display: inline-flex;
   align-items: center;
   gap: 0.6rem;
@@ -80,8 +80,15 @@
   min-width: 0;
 }
 
-.app-controls {
+.np-controls {
   flex-shrink: 0;
+}
+
+.np-data-table th {
+  color: var(--mantine-color-dimmed);
+  font-size: var(--mantine-font-size-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .np-nav-group-label {

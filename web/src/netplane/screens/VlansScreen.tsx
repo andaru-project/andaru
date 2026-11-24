@@ -107,7 +107,7 @@ export function VlansScreen({ flow, state, devicesById, vlanColors }: Props) {
           <Text size="xs" c="dimmed">Click any row to trace its propagation in VLAN Flow</Text>
         </CardHeader>
         <Table.ScrollContainer minWidth={0} type="native">
-          <Table highlightOnHover className="data-table">
+          <Table highlightOnHover className="np-data-table">
             <Table.Thead>
               <Table.Tr>
                 <Table.Th>VLAN</Table.Th>
@@ -254,7 +254,7 @@ export function VlansScreen({ flow, state, devicesById, vlanColors }: Props) {
         </CardHeader>
 
         <Table.ScrollContainer minWidth={0} type="native">
-          <Table highlightOnHover className="data-table">
+          <Table highlightOnHover className="np-data-table">
             <Table.Thead>
               <Table.Tr>
                 <Table.Th>Device & Port</Table.Th>
@@ -389,7 +389,7 @@ export function VlansScreen({ flow, state, devicesById, vlanColors }: Props) {
             <Title order={4} size="h5">Other Segments ({nonVlanSegments.length})</Title>
           </CardHeader>
           <Table.ScrollContainer minWidth={0} type="native">
-            <Table highlightOnHover className="data-table">
+            <Table highlightOnHover className="np-data-table">
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>Device</Table.Th>

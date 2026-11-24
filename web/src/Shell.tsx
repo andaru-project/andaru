@@ -42,7 +42,7 @@ const pageTitles: Record<string, string> = {
   '/network/vlans/flow': 'VLAN Flow',
   '/network/devices': 'Devices',
   '/network/clients': 'Clients',
-  '/network/diagnostics': 'Diagnostics & Events',
+  '/network/diagnostics': 'Diagnostics',
   '/firewall/rules': 'Rules',
   '/firewall/aliases': 'Aliases',
   '/changes': 'Review and apply',
@@ -179,7 +179,8 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
     } catch { /* the tree still works for this visit */ }
   }, [closed, labels]);
   const toggleBranch = (label: string) => setClosed(closed.includes(label) ? closed.filter((item) => item !== label) : [...closed, label]);
-  const isNavItemActive = (to: string) => pathname === to || (to === '/network/devices' && pathname.startsWith('/network/devices/'));
+  const normalizedPath = pathname.endsWith('/') && pathname.length > 1 ? pathname.slice(0, -1) : pathname;
+  const isNavItemActive = (to: string) => normalizedPath === to || (to === '/network/devices' && normalizedPath.startsWith('/network/devices/'));
   // The branch that holds the current page is open, however the page was reached.
   const currentBranch = groups.find((group) => group.items.some((item) => isNavItemActive(item.to)))?.label;
   const [seenPath, setSeenPath] = useState('');
@@ -189,11 +190,10 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   }
   const hostname = system.data?.info.hostname;
   useEffect(() => {
-    const normalized = pathname.endsWith('/') && pathname.length > 1 ? pathname.slice(0, -1) : pathname;
-    const title = pageTitles[normalized] ?? (normalized.startsWith('/network/devices/') ? 'Device' : undefined);
+    const title = pageTitles[normalizedPath] ?? (normalizedPath.startsWith('/network/devices/') ? 'Device' : undefined);
     document.title = [title, hostname, 'Andaru'].filter(Boolean).join(' — ');
     return () => { document.title = 'Andaru administration'; };
-  }, [pathname, hostname]);
+  }, [normalizedPath, hostname]);
 
   const pending = changes.data ? pendingNotice(changes.data) : null;
   const badge = pending ? pendingBadges[pending.kind] : undefined;

@@ -96,6 +96,7 @@ jobs:
 
       - name: Verify cmd/netplane embedui build
         run: |
+          test -f web/dist-netplane/index.html
           go vet -tags=embedui ./cmd/netplane ./web
           CGO_ENABLED=0 go build -tags=embedui -o /tmp/netplane ./cmd/netplane
           rm -f /tmp/netplane

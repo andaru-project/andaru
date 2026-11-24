@@ -286,7 +286,7 @@ export function DeviceDetailScreen({
             <Title order={4} size="h5">L3 Segments & Zones ({detail.segments.length})</Title>
           </CardHeader>
           <Table.ScrollContainer minWidth={0} type="native">
-            <Table highlightOnHover className="data-table">
+            <Table highlightOnHover className="np-data-table">
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>Segment</Table.Th>
@@ -346,7 +346,7 @@ export function DeviceDetailScreen({
             <Title order={4} size="h5">Wireless Radios & SSIDs</Title>
           </CardHeader>
           <Table.ScrollContainer minWidth={0} type="native">
-            <Table highlightOnHover className="data-table">
+            <Table highlightOnHover className="np-data-table">
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>Radio</Table.Th>
@@ -503,7 +503,7 @@ export function DeviceDetailScreen({
             <Title order={4} size="h5">All Ports ({detail.links.length})</Title>
           </CardHeader>
           <Table.ScrollContainer minWidth={0} type="native">
-            <Table highlightOnHover className="data-table">
+            <Table highlightOnHover className="np-data-table">
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>Port</Table.Th>
@@ -571,7 +571,7 @@ export function DeviceDetailScreen({
             <Title order={4} size="h5">Attached Clients ({detail.clients.length})</Title>
           </CardHeader>
           <Table.ScrollContainer minWidth={0} type="native">
-            <Table highlightOnHover className="data-table">
+            <Table highlightOnHover className="np-data-table">
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>Hostname</Table.Th>

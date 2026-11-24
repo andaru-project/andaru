@@ -14,7 +14,7 @@ import {
   TextInput,
   Title,
 } from '@mantine/core';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   api,
   type Device,
@@ -44,6 +44,7 @@ export function DiagnosticsScreen({
   const [diagTarget, setDiagTarget] = useState('');
   const [pingCount, setPingCount] = useState<number | string>(3);
   const [diagBusy, setDiagBusy] = useState(false);
+  const busyRef = useRef(false);
   const [diagError, setDiagError] = useState<string | null>(null);
 
   const capableDevices = devices.filter((d) => d.capabilities.includes(`cap:diag_${diagKind}`));
@@ -52,7 +53,8 @@ export function DiagnosticsScreen({
   const canRun = canRunDiagnostics && diagTarget.trim() !== '' && (diagKind === 'fdb_lookup' || diagDeviceId !== '');
 
   const runDiag = async () => {
-    if (!canRun || diagBusy) return;
+    if (!canRun || busyRef.current) return;
+    busyRef.current = true;
     setDiagBusy(true);
     setDiagError(null);
     try {
@@ -70,6 +72,7 @@ export function DiagnosticsScreen({
     } catch (e) {
       setDiagError(e instanceof Error ? e.message : String(e));
     } finally {
+      busyRef.current = false;
       setDiagBusy(false);
     }
   };

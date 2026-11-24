@@ -14,17 +14,15 @@ import {
   useMantineColorScheme,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
-import { Fragment, type ReactNode, useMemo } from 'react';
+import { Fragment, type ReactNode } from 'react';
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router';
 import {
-  type Device,
   type DiagnosticResult,
   type NetplaneEvent,
   type NetworkState,
   type TargetConfig,
   type TopologyGraph,
   type VLANFlow,
-  type VLANFlowVLAN,
 } from './api';
 import {
   AndaruMark,
@@ -44,7 +42,7 @@ import { OverviewScreen } from './screens/OverviewScreen';
 import { TopologyScreen } from './screens/TopologyScreen';
 import { VlanFlowScreen } from './screens/VlanFlowScreen';
 import { VlansScreen } from './screens/VlansScreen';
-import { buildVlanColorMap } from './vlanUtils';
+import { useFleetLookups } from './useFleetData';
 
 interface NavItem {
   to: string;
@@ -115,24 +113,19 @@ export function Shell({
   const { setColorScheme } = useMantineColorScheme();
   const computedColorScheme = useComputedColorScheme('light', { getInitialValueInEffect: true });
 
-  const devices = useMemo(() => state?.devices ?? [], [state?.devices]);
-  const clients = state?.clients ?? [];
-  const findings = flow?.findings ?? [];
-  const vlans = useMemo(() => flow?.vlans ?? [], [flow?.vlans]);
+  const {
+    devices,
+    clients,
+    findings,
+    vlans,
+    devicesById,
+    vlansById,
+    vlanColors,
+    hasCrit,
+    enabledTargets,
+  } = useFleetLookups(state, flow, targets);
 
-  const devicesById = useMemo(
-    () => new Map<string, Device>(devices.map((d) => [d.id, d])),
-    [devices],
-  );
-  const vlansById = useMemo(
-    () => new Map<number, VLANFlowVLAN>(vlans.map((v) => [v.id, v])),
-    [vlans],
-  );
-  const vlanColors = useMemo(() => buildVlanColorMap(vlans), [vlans]);
-
-  const hasCrit = findings.some((f) => f.severity === 'crit');
   const onlineClients = clients.filter((c) => c.online).length;
-  const enabledTargets = targets.filter((t) => t.enabled);
 
   const isActive = (target: string) => {
     if (target === '/') return pathname === '/' || pathname === '/overview';
@@ -170,7 +163,7 @@ export function Shell({
               size="sm"
               aria-label={opened ? 'Close navigation' : 'Open navigation'}
             />
-            <Link to="/" className="app-brand-link" aria-label="Andaru Netplane Home" onClick={close}>
+            <Link to="/" className="np-brand-link" aria-label="Andaru Netplane Home" onClick={close}>
               <AndaruMark size={28} />
               <Title className="app-title" order={1} size="h4" c="white">
                 Andaru Netplane
@@ -178,7 +171,7 @@ export function Shell({
             </Link>
           </Group>
 
-          <Group className="app-controls" gap="xs" wrap="nowrap">
+          <Group className="np-controls" gap="xs" wrap="nowrap">
             {findings.length > 0 && (
               <Button
                 component={Link}

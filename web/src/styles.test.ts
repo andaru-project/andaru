@@ -31,11 +31,13 @@ it('draws upload dashed', () => {
   expect(/path\.traffic-sent \{[^}]*stroke-dasharray/.test(read('src/styles.css'))).toBe(true);
 });
 
-// Andaru's CSP (style-src 'self') blocks Mantine InlineStyles <style> tags injected by SimpleGrid and responsive props.
-it('uses no Mantine SimpleGrid or responsive style objects under src/netplane/', () => {
+// Andaru's CSP (style-src 'self') blocks Mantine InlineStyles <style> tags injected by SimpleGrid/Grid and responsive props,
+// and Andaru's .data-table mobile stacking expects data-label attributes that Netplane tables do not carry.
+it('uses no Mantine SimpleGrid/Grid, responsive style objects, or unlabelled .data-table under src/netplane/', () => {
   for (const file of listTsxFiles('src/netplane')) {
     const src = readFileSync(file, 'utf8');
-    expect(src, `${file} must not use SimpleGrid`).not.toContain('SimpleGrid');
-    expect(src, `${file} must not use responsive style objects`).not.toMatch(/=\{\{\s*base:/);
+    expect(src, `${file} must not use SimpleGrid or Grid`).not.toMatch(/\bSimpleGrid\b|<Grid\b/);
+    expect(src, `${file} must not use responsive style objects`).not.toMatch(/=\{\{[^}]*\b(?:base|xs|sm|md|lg|xl)\s*:/);
+    expect(src, `${file} must use np-data-table instead of data-table`).not.toContain('className="data-table"');
   }
 });
