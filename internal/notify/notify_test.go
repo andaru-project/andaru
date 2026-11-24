@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -384,5 +385,16 @@ func TestChangeSortsFirst(t *testing.T) {
 	b.changed()
 	if got := b.active(); got[0].Key != full.Key {
 		t.Fatalf("the changed one sorts after %q", got[0].Key)
+	}
+}
+
+func TestDetailIsAccepted(t *testing.T) {
+	for _, s := range []string{"exit 1:\tbad\r\n\x1b[0m‮ \xff", strings.Repeat("é", detailMax)} {
+		if d := Detail(s); !text(d, detailMax, true) || len(s) > detailMax && len(d) < detailMax-1 {
+			t.Errorf("Detail(%q) = %q", s[:min(len(s), 40)], d[:min(len(d), 40)])
+		}
+	}
+	if d := Detail("line one\nline two"); d != "line one\nline two" {
+		t.Errorf("lines changed: %q", d)
 	}
 }

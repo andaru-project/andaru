@@ -97,10 +97,16 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 			result = err
 		}
 	}()
-	store.OnSave(publishHead(events))
+	sources := newNotices(events, stateDir, func(ctx context.Context) (bool, error) {
+		view, err := store.UpgradePreview(ctx, nil)
+		return len(view.Questions) > 0, err
+	})
+	head := publishHead(events)
+	store.OnSave(func(v config.Version) { head(v); sources.nudge() })
 	// Without its store the layer does not read: notifications wait in the bus's log, for its retention, until a
 	// start that opens it, and the API answers that they are unavailable.
 	notificationsHandler := notificationsAPI{}
+	var active []notify.Notification
 	if layer, err := notify.Open(filepath.Join(stateDir, "notifications.db"), events, slog.Default().With("component", "notifications")); err != nil {
 		slog.Error("notifications unavailable", "error", err)
 	} else {
@@ -110,6 +116,9 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 			}
 		}()
 		notificationsHandler.layer = layer
+		if active, err = layer.Active(); err != nil {
+			slog.Warn("notifications: read the active list", "error", err)
+		}
 	}
 	coordinator := newSecurityCoordinator(identities, audits, stateDir)
 	lifetime, cancel := context.WithCancelCause(ctx)
@@ -143,6 +152,15 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	} else if saved != "" {
 		slog.Info("settings saved in the current schema", "version", saved)
 	}
+	// The engine states its notifications once the head is in the current schema, and again as applies and saves go.
+	stopApplies, err := events.Subscribe("apply/+", func(string, []byte) { sources.nudge() })
+	if err != nil {
+		return fmt.Errorf("follow applies for notifications: %w", err)
+	}
+	defer stopApplies()
+	noticed := make(chan struct{})
+	go func() { defer close(noticed); sources.run(lifetime, active) }()
+	defer func() { cancel(context.Canceled); <-noticed }()
 	// The traffic history fills for as long as the engine serves, and the sampler is gone before this returns.
 	sampled := make(chan struct{})
 	go func() { defer close(sampled); sampleTraffic(lifetime, traffic, systemRoot) }()

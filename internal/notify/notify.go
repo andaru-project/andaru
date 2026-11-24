@@ -46,6 +46,9 @@ const (
 	historySize = 500
 )
 
+// detailMax is the longest detail, in bytes.
+const detailMax = 4096
+
 // Raise is what a source says about one of its notifications: data of a notification.raised.v1 event.
 type Raise struct {
 	Key      string `json:"key"`
@@ -251,10 +254,29 @@ func (l *Layer) apply(tx *sql.Tx, m bus.Message) (bool, error) {
 // tags) and the line and paragraph separators. The zero-width joiner and non-joiner stay: emoji and many scripts
 // need them.
 func text(s string, max int, lines bool) bool {
-	return utf8.ValidString(s) && len(s) <= max && !strings.ContainsFunc(s, func(c rune) bool {
-		return unicode.IsControl(c) && !(lines && c == '\n') || unicode.Is(unicode.Cf, c) && c != '\u200c' && c != '\u200d' ||
-			c == '\u2028' || c == '\u2029'
-	})
+	return utf8.ValidString(s) && len(s) <= max && !strings.ContainsFunc(s, func(c rune) bool { return banned(c, lines) })
+}
+
+// banned reports whether text may not hold c: control characters (but a new line where lines may break), invisible
+// format characters other than the zero-width joiner and non-joiner, and line and paragraph separators.
+func banned(c rune, lines bool) bool {
+	return unicode.IsControl(c) && !(lines && c == '\n') || unicode.Is(unicode.Cf, c) && c != '\u200c' && c != '\u200d' ||
+		c == '\u2028' || c == '\u2029'
+}
+
+// Detail makes s, such as an error a tool wrote, a detail the layer accepts: what text may not hold becomes a space,
+// and it is cut to the detail's limit.
+func Detail(s string) string {
+	s = strings.Map(func(c rune) rune {
+		if banned(c, true) {
+			return ' '
+		}
+		return c
+	}, strings.ToValidUTF8(s, "\uFFFD"))
+	if len(s) > detailMax {
+		s = strings.ToValidUTF8(s[:detailMax], "") // drops a character the cut split
+	}
+	return s
 }
 
 // path reports whether link is a path in the web UI: one a browser cannot read as another site's (//host, /\host).
@@ -282,7 +304,7 @@ func validate(topic string, e bus.Event, r Raise) error {
 		return fmt.Errorf("unknown severity %q", r.Severity)
 	case r.Subject == "" || !text(r.Subject, 256, false):
 		return errors.New("invalid subject")
-	case !text(r.Detail, 4096, true):
+	case !text(r.Detail, detailMax, true):
 		return errors.New("invalid detail")
 	case r.Link != "" && !path(r.Link):
 		return errors.New("a link must be a path in the web UI")
