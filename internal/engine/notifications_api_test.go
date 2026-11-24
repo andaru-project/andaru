@@ -45,7 +45,7 @@ func TestNotificationsAPI(t *testing.T) {
 			t.Fatal("the notifications were not recorded")
 		}
 	}
-	h := newHandlerWithServices(nil, http.NotFoundHandler(), nil, nil, nil, nil, notificationsAPI{layer: layer})
+	h := newHandlerWithAllServices(nil, http.NotFoundHandler(), nil, nil, nil, nil, nil, nil, notificationsAPI{layer: layer})
 	call := func(method, path string, capabilities ...authz.Capability) *httptest.ResponseRecorder {
 		t.Helper()
 		actor := requestActor{Actor: authz.Actor{Kind: authz.ActorAccount, ID: "00000000-0000-4000-8000-000000000001"},
@@ -108,7 +108,7 @@ func TestNotificationsAPI(t *testing.T) {
 
 // Without a layer, which did not open, the API says notifications are unavailable rather than not there.
 func TestNotificationsUnavailable(t *testing.T) {
-	h := newHandlerWithServices(nil, http.NotFoundHandler(), nil, nil, nil, nil, notificationsAPI{})
+	h := newHandlerWithAllServices(nil, http.NotFoundHandler(), nil, nil, nil, nil, nil, nil, notificationsAPI{})
 	actor := requestActor{Actor: authz.Actor{Kind: authz.ActorAccount, ID: "00000000-0000-4000-8000-000000000001"},
 		AccountID: "00000000-0000-4000-8000-000000000001", Source: "unix", Capabilities: []authz.Capability{authz.NotificationsRead}}
 	actor.Capabilities = append(actor.Capabilities, authz.NotificationsManage)

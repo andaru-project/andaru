@@ -98,6 +98,7 @@ func buildEngineRoutes() []routeCapability {
 	add(authz.UsersRead, "/api/v1/users", read...)
 	add(authz.UsersManage, "/api/v1/users", http.MethodPost)
 	add(authz.UsersManage, "/api/v1/users/bootstrap-admin", http.MethodPost)
+	add(authz.UsersManage, "/api/v1/setup/code", http.MethodGet, http.MethodHead, http.MethodPost)
 	add(authz.UsersRead, "/api/v1/users/{id}", read...)
 	add(authz.UsersManage, "/api/v1/users/{id}", http.MethodPatch, http.MethodDelete)
 	add(authz.UsersManage, "/api/v1/users/{id}/password", http.MethodPut)
@@ -127,6 +128,7 @@ func buildEngineRoutes() []routeCapability {
 	add(authz.ConfigurationApply, "/api/v1/system/update/stage", http.MethodPost)
 	add(authz.ConfigurationApply, "/api/v1/system/update/rollback", http.MethodPost)
 	add(authz.ConfigurationApply, "/api/v1/system/update/reboot", http.MethodPost)
+	add(authz.ConfigurationApply, "/api/v1/system/hostname", http.MethodPost)
 	return routes
 }
 

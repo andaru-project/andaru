@@ -76,7 +76,7 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 	verb := flags.Arg(0)
 	want := map[string]int{
 		"activate": 1, "rollback": 2, "confirm": 1, "boot": 0, "leases": 0, "prefixes": 0, "factory-reset": 0,
-		"update-check": 0, "update-stage": 0, "update-rollback": 0, "update-reboot": 0,
+		"update-check": 0, "update-stage": 0, "update-rollback": 0, "update-reboot": 0, "set-hostname": 1,
 	}
 	n, known := want[verb]
 	// A help flag anywhere is a request for help, never a rollback REASON; an unknown verb stays a usage error.
@@ -89,7 +89,7 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 		return usageError(stderr, realizeUsage, "andaru realize")
 	}
 	rest := flags.Args()[1:]
-	if len(rest) != n || (n > 0 && !generationID.MatchString(rest[0])) {
+	if len(rest) != n || (n > 0 && verb != "set-hostname" && !generationID.MatchString(rest[0])) {
 		return usageError(stderr, realizeUsage, "andaru realize")
 	}
 	if verb == "factory-reset" {
@@ -99,11 +99,16 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 	blocked, denyAll := resetBlocks()
 	if blocked && verb != "boot" {
 		fmt.Fprintln(stderr, "a factory reset is in progress; "+verb+" waits for it")
+		if verb == "set-hostname" {
+			return 1
+		}
 		return 0
 	}
 	switch verb {
 	case "update-check", "update-stage", "update-rollback", "update-reboot":
 		return updateVerb(ctx, verb, *stateDir, stderr)
+	case "set-hostname":
+		return setHostnameVerb(ctx, rest[0], stderr)
 	}
 	id := 0
 	if len(rest) > 0 {

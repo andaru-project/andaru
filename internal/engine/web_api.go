@@ -37,6 +37,7 @@ type webAPI struct {
 	coordinator   *securityCoordinator
 	rootAPI       http.Handler
 	events        *bus.Bus
+	setupCodes    *setupCodeStore
 	stateDir      string
 	origins       map[string]struct{}
 	hosts         map[string]struct{}
@@ -78,13 +79,20 @@ type webStartupStatus struct {
 }
 
 func newWebAPI(identities identity.Store, configuration *config.Store, coordinator *securityCoordinator, rootAPI http.Handler, events *bus.Bus, stateDir string, configuredOrigins []string) (http.Handler, error) {
+	return newWebAPIWithSetupCodes(identities, configuration, coordinator, rootAPI, events, newSetupCodeStore(stateDir), stateDir, configuredOrigins)
+}
+
+func newWebAPIWithSetupCodes(identities identity.Store, configuration *config.Store, coordinator *securityCoordinator, rootAPI http.Handler, events *bus.Bus, setupCodes *setupCodeStore, stateDir string, configuredOrigins []string) (http.Handler, error) {
 	origins, hosts, err := managementOrigins(configuredOrigins)
 	if err != nil {
 		return nil, err
 	}
+	if setupCodes == nil {
+		setupCodes = newSetupCodeStore(stateDir)
+	}
 	return &webAPI{
 		identities: identities, configuration: configuration, coordinator: coordinator, rootAPI: rootAPI, events: events,
-		stateDir: stateDir, origins: origins, hosts: hosts,
+		setupCodes: setupCodes, stateDir: stateDir, origins: origins, hosts: hosts,
 	}, nil
 }
 
@@ -132,6 +140,14 @@ func (h *webAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.startupStatus(w, r)
 		return
 	}
+	if r.URL.Path == "/api/v1/setup/bootstrap" {
+		h.setupBootstrap(w, r, source)
+		return
+	}
+	if r.URL.Path == "/api/v1/setup/code" {
+		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
+		return
+	}
 	if r.URL.Path == "/api/v1/session" {
 		h.session(w, r, source)
 		return
@@ -168,6 +184,9 @@ func (h *webAPI) startupStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusServiceUnavailable, "IDENTITY_UNAVAILABLE", "Identity status is unavailable.")
 		return
 	}
+	if revision > 0 && h.setupCodes != nil {
+		h.setupCodes.Clear()
+	}
 	writeJSON(w, r, http.StatusOK, webStartupStatus{SetupRequired: revision == 0})
 }
 
@@ -196,12 +215,18 @@ func (h *webAPI) login(w http.ResponseWriter, r *http.Request, source string) {
 	if !ok {
 		return
 	}
+	password := request.Password
+	request.Password = ""
+	h.authenticateAndStartSession(w, r, source, request.Login, password, http.StatusOK)
+}
+
+func (h *webAPI) authenticateAndStartSession(w http.ResponseWriter, r *http.Request, source, loginName, password string, successStatus int) {
 	snapshot, epoch, err := h.readLiveAuthorization(r.Context())
 	if err != nil {
 		h.loginError(w, r, source, err)
 		return
 	}
-	result, err := h.identities.AuthenticatePasswordWithIntent(r.Context(), request.Login, request.Password, source, epoch, func(account identity.Account) error {
+	result, err := h.identities.AuthenticatePasswordWithIntent(r.Context(), loginName, password, source, epoch, func(account identity.Account) error {
 		_, auditErr := h.coordinator.audits.Append(r.Context(), audit.Event{
 			Actor: authz.Actor{Kind: authz.ActorAccount, ID: account.ID}, Source: source, Action: audit.ActionLoginSuccess,
 			Target: account.ID, Result: audit.ResultSuccess, Category: audit.CategoryGeneral,
@@ -211,7 +236,6 @@ func (h *webAPI) login(w http.ResponseWriter, r *http.Request, source string) {
 		}
 		return nil
 	})
-	request.Password = ""
 	if err != nil {
 		h.loginError(w, r, source, err)
 		return
@@ -230,7 +254,7 @@ func (h *webAPI) login(w http.ResponseWriter, r *http.Request, source string) {
 	snapshot = confirmed
 	capabilities := snapshot.Resolve(result.Account.RoleIDs)
 	setSessionCookie(w, result.SessionCookie, result.ExpiresAt)
-	writeJSON(w, r, http.StatusOK, sessionResponse(result.Account, capabilities, result.CSRFSecret, result.ExpiresAt))
+	writeJSON(w, r, successStatus, sessionResponse(result.Account, capabilities, result.CSRFSecret, result.ExpiresAt))
 }
 
 func (h *webAPI) loginError(w http.ResponseWriter, r *http.Request, source string, loginErr error) {

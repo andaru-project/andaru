@@ -336,3 +336,24 @@ export interface UpdateStatus {
   error?: string;
   rebootNeeded: boolean;
 }
+
+export interface SetupBootstrapRequest {
+  setupCode: string;
+  login: string;
+  displayName: string;
+  password: string;
+}
+
+export interface ConfigBatchOperation {
+  op: 'create' | 'replace' | 'delete';
+  collection: string;
+  localId?: string;
+  id?: string;
+  expectedVersion?: string;
+  value?: Record<string, unknown>;
+}
+
+export interface ConfigChangesResult {
+  savedVersion: string;
+  created?: Record<string, string>;
+}

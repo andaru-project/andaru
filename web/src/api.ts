@@ -3,11 +3,14 @@ import type {
   Applies,
   Apply,
   AuditEvent,
+  ConfigBatchOperation,
+  ConfigChangesResult,
   ErrorDetail,
   Finding,
   History,
   LinkStatus,
   OrderedList,
+  SetupBootstrapRequest,
   Page,
   PrefixView,
   Preferences,
@@ -187,6 +190,41 @@ export class ApiClient {
 
   startupStatus() {
     return this.request<{ setupRequired: boolean }>('/api/v1/startup-status');
+  }
+
+  async bootstrapSetup(input: SetupBootstrapRequest) {
+    const session = await this.request<Session>('/api/v1/setup/bootstrap', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+    this.setCSRFToken(session.csrfToken);
+    return session;
+  }
+
+  setHostname(hostname: string) {
+    return this.request<{ hostname: string }>('/api/v1/system/hostname', {
+      method: 'POST',
+      body: JSON.stringify({ hostname }),
+    }, true);
+  }
+
+  applyConfigChanges(operations: ConfigBatchOperation[], expectedSavedVersion?: string) {
+    const body: { operations: ConfigBatchOperation[]; expectedSavedVersion?: string } = { operations };
+    if (expectedSavedVersion !== undefined) body.expectedSavedVersion = expectedSavedVersion;
+    return this.request<ConfigChangesResult>('/api/v1/config/changes', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }, true);
+  }
+
+  async singletonVersion(singleton: 'management' | 'dns' | 'nat/outbound'): Promise<string> {
+    try {
+      const obj = await this.request<{ version: string }>(`/api/v1/config/${singleton}`);
+      return obj.version || '0';
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) return '0';
+      throw error;
+    }
   }
 
   listUsers(cursor = '') {
