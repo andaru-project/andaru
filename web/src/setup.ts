@@ -1,4 +1,4 @@
-import type { ConfigBatchOperation } from './types';
+import { firewallZone, type ConfigBatchOperation } from './types';
 
 export interface SetupNetworkDraft {
   mgmtMac: string;
@@ -160,6 +160,75 @@ export function buildSetupOperations(
       collection: 'nat.outbound',
       expectedVersion: versions.natOutbound ?? '0',
       value: { mode: 'automatic' },
+    });
+  }
+
+  // Setting management.segment enables default-drop input/forward nftables chains; add baseline
+  // rules so HTTPS management stays reachable/confirmable, LAN DNS works when enabled, and LAN
+  // clients can forward out to WAN.
+  ops.push(
+    {
+      op: 'create',
+      collection: 'aliases.ports',
+      localId: 'port_https',
+      value: { name: 'HTTPS', protocol: 'tcp', ports: ['443'] },
+    },
+    {
+      op: 'create',
+      collection: 'rules',
+      value: {
+        name: 'Allow WebUI on LAN',
+        enabled: true,
+        action: 'accept',
+        from: { zones: ['@lan_zone'], addresses: [] },
+        to: { zones: [firewallZone], addresses: [] },
+        ports: ['@port_https'],
+        log: false,
+      },
+    },
+  );
+  if (servingDns) {
+    ops.push(
+      {
+        op: 'create',
+        collection: 'aliases.ports',
+        localId: 'port_dns_udp',
+        value: { name: 'DNS (UDP)', protocol: 'udp', ports: ['53'] },
+      },
+      {
+        op: 'create',
+        collection: 'aliases.ports',
+        localId: 'port_dns_tcp',
+        value: { name: 'DNS (TCP)', protocol: 'tcp', ports: ['53'] },
+      },
+      {
+        op: 'create',
+        collection: 'rules',
+        value: {
+          name: 'Allow DNS on LAN',
+          enabled: true,
+          action: 'accept',
+          from: { zones: ['@lan_zone'], addresses: [] },
+          to: { zones: [firewallZone], addresses: [] },
+          ports: ['@port_dns_udp', '@port_dns_tcp'],
+          log: false,
+        },
+      },
+    );
+  }
+  if (hasWan) {
+    ops.push({
+      op: 'create',
+      collection: 'rules',
+      value: {
+        name: 'Allow LAN to WAN',
+        enabled: true,
+        action: 'accept',
+        from: { zones: ['@lan_zone'], addresses: [] },
+        to: { zones: ['@wan_zone'], addresses: [] },
+        ports: [],
+        log: false,
+      },
     });
   }
   return ops;

@@ -93,13 +93,51 @@ describe('SetupBootstrapScreen & SetupWizardScreen', () => {
     expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/system/hostname')).toHaveLength(0);
 
     // Retry reuses committedVersion without posting /api/v1/config/changes a second time.
-    await userEvent.click(screen.getByRole('button', { name: /Save and apply/i }));
+    await userEvent.click(screen.getByRole('button', { name: /Retry apply/i }));
     expect(await screen.findByText(/Configuration applied — confirm connectivity/i)).toBeInTheDocument();
     expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/config/changes')).toHaveLength(1);
     expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/system/hostname')).toHaveLength(1);
 
     await userEvent.click(screen.getByRole('button', { name: /Confirm apply/i }));
     await vi.waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+  });
+
+  it('retains confirmation controls if setHostname fails and rejects terminal failed applies', async () => {
+    let applyCount = 0;
+    fetchRoutes({
+      '/api/v1/status/system': { version: '0.5.0-a.5', hostname: 'localhost', time: '2026-11-24T17:00:00Z', bootedAt: null },
+      '/api/v1/status/links': { items: sampleLinks },
+      '/api/v1/config': { savedVersion: '0', value: { links: [], segments: [], zones: [], roles: [] } },
+      'POST /api/v1/config/changes': () => new Response(JSON.stringify({ savedVersion: '1' }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+      '/api/v1/preview/network?savedVersion=1': { savedVersion: '1', resolved: [], findings: [] },
+      'POST /api/v1/applies': () => {
+        applyCount++;
+        if (applyCount === 1) {
+          return new Response(JSON.stringify({ id: '1', state: 'failed', savedVersion: '1', reason: 'nftables syntax error' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({ id: '2', state: 'awaiting_confirmation', savedVersion: '1', deadline: '2026-11-24T17:03:00Z' }), { status: 201, headers: { 'Content-Type': 'application/json' } });
+      },
+      'POST /api/v1/system/hostname': () => new Response(JSON.stringify({ error: { code: 'HOSTNAME_FAILED', message: 'hostnamectl failed' } }), { status: 502, headers: { 'Content-Type': 'application/json' } }),
+    });
+    const admin = session(['status.read', 'configuration.read', 'configuration.write', 'configuration.apply']);
+    render(<SetupWizardScreen api={new ApiClient('csrf-tok')} session={admin} onComplete={vi.fn()} />);
+
+    const hostInput = await screen.findByLabelText(/Appliance hostname/i);
+    await userEvent.clear(hostInput);
+    await userEvent.type(hostInput, 'andaru-gw');
+    await userEvent.click(screen.getByRole('button', { name: /Next: Management LAN/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /Next: WAN/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /Next: Review & Apply/i }));
+
+    // First apply returns state='failed' -> shows error, not confirmation banner.
+    await userEvent.click(screen.getByRole('button', { name: /Save and apply/i }));
+    expect(await screen.findByText('nftables syntax error')).toBeInTheDocument();
+    expect(screen.queryByText(/Configuration applied — confirm connectivity/i)).not.toBeInTheDocument();
+
+    // Second apply succeeds, setHostname fails -> confirmation banner STILL shown with warning.
+    await userEvent.click(screen.getByRole('button', { name: /Retry apply/i }));
+    expect(await screen.findByText(/Configuration applied — confirm connectivity/i)).toBeInTheDocument();
+    expect(await screen.findByText(/hostname could not be updated/i)).toBeInTheDocument();
   });
 
   it('builds singleton expectedVersion="0", forward DNS upstreams for static WAN, and effectiveMgmtIpv6Mode', () => {
@@ -146,5 +184,7 @@ describe('SetupBootstrapScreen & SetupWizardScreen', () => {
       segments: ['@mgmt_seg'],
     });
     expect((wanSeg?.value?.addressing as Record<string, unknown>).dns).toBeUndefined();
+    const ruleNames = ops.filter((o) => o.collection === 'rules').map((o) => o.value?.name);
+    expect(ruleNames).toEqual(['Allow WebUI on LAN', 'Allow DNS on LAN', 'Allow LAN to WAN']);
   });
 });

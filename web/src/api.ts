@@ -217,6 +217,16 @@ export class ApiClient {
     }, true);
   }
 
+  async singletonVersion(singleton: 'management' | 'dns' | 'nat/outbound'): Promise<string> {
+    try {
+      const obj = await this.request<{ version: string }>(`/api/v1/config/${singleton}`);
+      return obj.version || '0';
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) return '0';
+      throw error;
+    }
+  }
+
   listUsers(cursor = '') {
     const query = new URLSearchParams({ limit: '100' });
     if (cursor) query.set('cursor', cursor);

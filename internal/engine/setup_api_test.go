@@ -133,7 +133,13 @@ func TestSetupWizardBatchDecodesCleanly(t *testing.T) {
 			{"op":"replace","collection":"management","expectedVersion":"0","value":{"segment":"@mgmt_seg"}},
 			{"op":"create","collection":"dhcp","value":{"name":"Management DHCP","segment":"@mgmt_seg","ranges":[{"first":"192.168.1.100","last":"192.168.1.199"}]}},
 			{"op":"replace","collection":"dns","expectedVersion":"0","value":{"mode":"forward","upstreams":[{"address":"1.1.1.1","protocol":"do53"}],"segments":["@mgmt_seg"]}},
-			{"op":"replace","collection":"nat.outbound","expectedVersion":"0","value":{"mode":"automatic"}}
+			{"op":"replace","collection":"nat.outbound","expectedVersion":"0","value":{"mode":"automatic"}},
+			{"op":"create","collection":"aliases.ports","localId":"port_https","value":{"name":"HTTPS","protocol":"tcp","ports":["443"]}},
+			{"op":"create","collection":"rules","value":{"name":"Allow WebUI on LAN","enabled":true,"action":"accept","from":{"zones":["@lan_zone"],"addresses":[]},"to":{"zones":["zon_firewall"],"addresses":[]},"ports":["@port_https"],"log":false}},
+			{"op":"create","collection":"aliases.ports","localId":"port_dns_udp","value":{"name":"DNS (UDP)","protocol":"udp","ports":["53"]}},
+			{"op":"create","collection":"aliases.ports","localId":"port_dns_tcp","value":{"name":"DNS (TCP)","protocol":"tcp","ports":["53"]}},
+			{"op":"create","collection":"rules","value":{"name":"Allow DNS on LAN","enabled":true,"action":"accept","from":{"zones":["@lan_zone"],"addresses":[]},"to":{"zones":["zon_firewall"],"addresses":[]},"ports":["@port_dns_udp","@port_dns_tcp"],"log":false}},
+			{"op":"create","collection":"rules","value":{"name":"Allow LAN to WAN","enabled":true,"action":"accept","from":{"zones":["@lan_zone"],"addresses":[]},"to":{"zones":["@wan_zone"],"addresses":[]},"ports":[],"log":false}}
 		]
 	}`
 	if _, err := config.DecodeChanges([]byte(batch)); err != nil {

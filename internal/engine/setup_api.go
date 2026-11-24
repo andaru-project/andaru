@@ -344,7 +344,7 @@ func (h *webAPI) setupBootstrap(w http.ResponseWriter, r *http.Request, source s
 	// Verify live authorization is readable before creating the administrator so bootstrap never
 	// creates an account that cannot immediately sign in.
 	if _, _, err := h.readLiveAuthorization(r.Context()); err != nil {
-		writeError(w, r, http.StatusServiceUnavailable, "AUTHENTICATION_UNAVAILABLE", "Live authorization is not ready yet; retry once the engine finishes starting.")
+		writeError(w, r, http.StatusServiceUnavailable, "SETUP_UNAVAILABLE", "Live authorization is not ready yet; retry once the engine finishes starting.")
 		return
 	}
 

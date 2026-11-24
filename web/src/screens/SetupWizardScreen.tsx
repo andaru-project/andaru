@@ -22,9 +22,11 @@ import {
   defaultDhcpRange,
   effectiveMgmtIpv6Mode,
   type SetupNetworkDraft,
+  type SetupSingletonVersions,
 } from '../setup';
 import { formatTime, formatTimestamp, setTimeZone, timeZoneOptions, useTimeZone } from '../timezone';
 import type { Apply, LinkStatus, Session } from '../types';
+import { useVisiblePoll } from '../useResource';
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return <Table.Tr><Table.Th scope="row">{label}</Table.Th><Table.Td>{children}</Table.Td></Table.Tr>;
@@ -63,10 +65,11 @@ export function SetupWizardScreen({ api, onComplete, onSessionLost }: SetupWizar
   const [selectedZone, setSelectedZone] = useState(activeTimeZone);
   const [previewAt] = useState(() => Date.now());
   const [savedVersion, setSavedVersion] = useState<string | undefined>(undefined);
+  const [singletonVersions, setSingletonVersions] = useState<SetupSingletonVersions>({});
   const [hasExistingConfig, setHasExistingConfig] = useState(false);
 
-  // If config save succeeds but preview/apply fails, retries reuse committedVersion instead of
-  // re-creating duplicate zones/links. Editing any network field clears committedVersion.
+  // Once config save commits, step navigation is locked so retries reuse committedVersion
+  // instead of re-creating duplicate zones/links or colliding on singleton versions.
   const [committedVersion, setCommittedVersion] = useState<string | null>(null);
 
   const [draft, setDraft] = useState<SetupNetworkDraft>({
@@ -95,12 +98,12 @@ export function SetupWizardScreen({ api, onComplete, onSessionLost }: SetupWizar
 
   const [applyBusy, setApplyBusy] = useState(false);
   const [applyError, setApplyError] = useState('');
+  const [hostnameWarning, setHostnameWarning] = useState('');
   const [pendingApply, setPendingApply] = useState<Apply | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [completed, setCompleted] = useState(false);
 
   const updateDraft = useCallback((patch: Partial<SetupNetworkDraft>) => {
-    setCommittedVersion(null);
     setDraft((cur) => ({ ...cur, ...patch }));
   }, []);
 
@@ -113,15 +116,19 @@ export function SetupWizardScreen({ api, onComplete, onSessionLost }: SetupWizar
     setLoadingHost(true);
     setLoadError('');
     try {
-      const [sys, linkReply, snap] = await Promise.all([
+      const [sys, linkReply, snap, mgmtVer, dnsVer, natVer] = await Promise.all([
         api.system(),
         api.links(),
         api.config().catch(() => null),
+        api.singletonVersion('management').catch(() => '0'),
+        api.singletonVersion('dns').catch(() => '0'),
+        api.singletonVersion('nat/outbound').catch(() => '0'),
       ]);
       const physical = linkReply.items.filter((l) => l.linkType !== 'loopback' && Boolean(l.linkAddress));
       setLinks(physical);
       setInitialHostname(sys.hostname);
       setHostname((cur) => cur || sys.hostname);
+      setSingletonVersions({ management: mgmtVer, dns: dnsVer, natOutbound: natVer });
       if (snap) {
         setSavedVersion(snap.savedVersion);
         setHasExistingConfig(snap.value.links.length + snap.value.segments.length > 0);
@@ -170,14 +177,39 @@ export function SetupWizardScreen({ api, onComplete, onSessionLost }: SetupWizar
       (draft.wanIpv4Mode !== 'static' || (draft.wanIpv4Address.trim().includes('/') && Boolean(draft.wanIpv4Gateway.trim()))) &&
       (draft.wanIpv6Mode !== 'static' || (draft.wanIpv6Address.trim().includes('/') && Boolean(draft.wanIpv6Gateway.trim()))));
 
+  // Refresh pending apply state from the engine so an expired rollback or external confirmation clears cleanly.
+  const refreshPendingApply = useCallback(async () => {
+    if (!pendingApply) return;
+    try {
+      const applies = await api.listApplies();
+      const latest = applies.items.find((item) => item.id === pendingApply.id);
+      if (!latest) return;
+      if (latest.state === 'activating' || latest.state === 'awaiting_confirmation') {
+        setPendingApply(latest);
+      } else if (latest.state === 'confirmed') {
+        setPendingApply(null);
+        setCompleted(true);
+        onComplete?.();
+      } else {
+        setPendingApply(null);
+        setApplyError(latest.reason || `Apply #${latest.id} ended in state "${latest.state}".`);
+      }
+    } catch {
+      // Transient poll errors while network transitions are expected; keep showing confirmation controls.
+    }
+  }, [api, pendingApply, onComplete]);
+
+  useVisiblePoll(refreshPendingApply, 3_000, pendingApply !== null);
+
   async function saveAndApply() {
     setApplyBusy(true);
     setApplyError('');
+    setHostnameWarning('');
     try {
       setTimeZone(selectedZone);
       let versionToApply = committedVersion;
       if (!versionToApply) {
-        const ops = buildSetupOperations(draft);
+        const ops = buildSetupOperations(draft, singletonVersions);
         const saved = await api.applyConfigChanges(ops, savedVersion);
         setSavedVersion(saved.savedVersion);
         setCommittedVersion(saved.savedVersion);
@@ -190,11 +222,26 @@ export function SetupWizardScreen({ api, onComplete, onSessionLost }: SetupWizar
         return;
       }
       const applied = await api.apply(versionToApply, applyConfirmSeconds);
-      if (normalizedHostname && normalizedHostname !== initialHostname.toLowerCase()) {
-        await api.setHostname(normalizedHostname);
-        setInitialHostname(normalizedHostname);
+      if (applied.state !== 'activating' && applied.state !== 'awaiting_confirmation') {
+        if (applied.state === 'confirmed') {
+          setCompleted(true);
+          onComplete?.();
+          return;
+        }
+        setApplyError(applied.reason || `Apply #${applied.id} did not enter confirmation (${applied.state}).`);
+        return;
       }
+      // Retain pendingApply immediately before attempting the hostname change so confirmation and
+      // rollback controls remain available even if setHostname fails.
       setPendingApply(applied);
+      if (normalizedHostname && normalizedHostname !== initialHostname.toLowerCase()) {
+        try {
+          await api.setHostname(normalizedHostname);
+          setInitialHostname(normalizedHostname);
+        } catch (hostErr) {
+          setHostnameWarning(`Network applied, but hostname could not be updated: ${apiErrorMessage(hostErr)}`);
+        }
+      }
     } catch (error) {
       handleSessionError(error, setApplyError);
     } finally {
@@ -251,7 +298,7 @@ export function SetupWizardScreen({ api, onComplete, onSessionLost }: SetupWizar
         <Loader aria-label="Loading appliance hardware" />
       ) : (
         <Paper withBorder p="lg">
-          <Stepper active={step} onStepClick={(next) => { if (!pendingApply && next < step) setStep(next); }}>
+          <Stepper active={step} onStepClick={(next) => { if (!applyBusy && !committedVersion && !pendingApply && next < step) setStep(next); }}>
             <Stepper.Step label="System" description="Hostname & time zone">
               <Stack gap="md" mt="md">
                 <TextInput
@@ -467,6 +514,7 @@ export function SetupWizardScreen({ api, onComplete, onSessionLost }: SetupWizar
             <Stepper.Step label="Review & Apply" description="Verify & confirm">
               <Stack gap="md" mt="md">
                 {applyError && <Alert color="red" role="alert" title="Apply failed">{applyError}</Alert>}
+                {hostnameWarning && <Alert color="yellow" role="status" title="Hostname warning">{hostnameWarning}</Alert>}
 
                 {pendingApply ? (
                   <Alert color="orange" role="status" title="Configuration applied — confirm connectivity">
@@ -513,8 +561,10 @@ export function SetupWizardScreen({ api, onComplete, onSessionLost }: SetupWizar
                       Changes are saved atomically, validated against the live hardware, and applied with a {applyConfirmSeconds}-second automatic rollback timer.
                     </Text>
                     <Group justify="space-between">
-                      <Button variant="default" disabled={applyBusy} onClick={() => setStep(2)}>Back</Button>
-                      <Button loading={applyBusy} disabled={!draft.mgmtMac} onClick={() => void saveAndApply()}>Save and apply</Button>
+                      <Button variant="default" disabled={applyBusy || committedVersion !== null} onClick={() => setStep(2)}>Back</Button>
+                      <Button loading={applyBusy} disabled={!draft.mgmtMac} onClick={() => void saveAndApply()}>
+                        {committedVersion ? 'Retry apply' : 'Save and apply'}
+                      </Button>
                     </Group>
                   </>
                 )}
