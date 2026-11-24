@@ -335,23 +335,54 @@ func TestDismissOnlyWhatIsSeen(t *testing.T) {
 	}
 }
 
-// What is kept of ended notifications, and of events seen, goes after 30 days.
+// What is kept of ended notifications, and of events seen, goes after 30 days: at the next event, with nothing
+// ending, and at the next start.
 func TestOldRecordsArePruned(t *testing.T) {
 	b := newBench(t)
-	old := time.Now().Add(-historyAge - time.Hour).Unix()
-	if _, err := b.layer.db.Exec(`INSERT INTO history (source, key, severity, subject, raised, ended, dismissed_by) VALUES ('disk', 'old', 'info', 's', ?, ?, '');
-		INSERT INTO seen (source, event, time) VALUES ('disk', 'old', ?)`, old, old, old); err != nil {
-		t.Fatal(err)
+	old := time.Now().Add(-historyAge - time.Hour).UnixMilli()
+	plant := func() {
+		if _, err := b.layer.db.Exec(`INSERT INTO history (source, key, severity, subject, raised, ended, dismissed_by) VALUES ('disk', 'old', 'info', 's', ?1, ?1, '');
+			INSERT INTO seen (source, event, time) VALUES ('disk', 'old', ?1)`, old); err != nil {
+			t.Fatal(err)
+		}
 	}
+	kept := func() int {
+		var n int
+		if err := b.layer.db.QueryRow(`SELECT (SELECT count(*) FROM history WHERE key = 'old') + (SELECT count(*) FROM seen WHERE event = 'old')`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	plant()
 	b.publish("disk", full)
 	b.changed()
-	b.publish("disk", Raise{Key: full.Key})
-	b.changed()
-	var history, seen int
-	if err := b.layer.db.QueryRow(`SELECT (SELECT count(*) FROM history WHERE key = 'old'), (SELECT count(*) FROM seen WHERE event = 'old')`).Scan(&history, &seen); err != nil {
-		t.Fatal(err)
+	if n := kept(); n != 0 {
+		t.Fatalf("an event kept %d old records", n)
 	}
-	if history != 0 || seen != 0 {
-		t.Fatalf("kept %d old history rows and %d old events", history, seen)
+	plant()
+	b.close()
+	b.open(false)
+	if n := kept(); n != 0 {
+		t.Fatalf("a start kept %d old records", n)
+	}
+}
+
+// A change within the same second as other raises still puts its notification first.
+func TestChangeSortsFirst(t *testing.T) {
+	b := newBench(t)
+	other := full
+	other.Key = "other"
+	b.publish("disk", full)
+	b.changed()
+	time.Sleep(5 * time.Millisecond)
+	b.publish("disk", other)
+	b.changed()
+	time.Sleep(5 * time.Millisecond)
+	changed := full
+	changed.Detail = "92% used"
+	b.publish("disk", changed)
+	b.changed()
+	if got := b.active(); got[0].Key != full.Key {
+		t.Fatalf("the changed one sorts after %q", got[0].Key)
 	}
 }

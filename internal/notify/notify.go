@@ -91,7 +91,12 @@ func Open(path string, events *bus.Bus, log *slog.Logger) (*Layer, error) {
 			id INTEGER PRIMARY KEY, source TEXT NOT NULL, key TEXT NOT NULL, severity TEXT NOT NULL,
 			subject TEXT NOT NULL, raised INTEGER NOT NULL, ended INTEGER NOT NULL, dismissed_by TEXT NOT NULL);
 		CREATE TABLE IF NOT EXISTS seen (
-			source TEXT NOT NULL, event TEXT NOT NULL, time INTEGER NOT NULL, PRIMARY KEY (source, event)) WITHOUT ROWID`); err != nil {
+			source TEXT NOT NULL, event TEXT NOT NULL, time INTEGER NOT NULL, PRIMARY KEY (source, event)) WITHOUT ROWID;
+		CREATE INDEX IF NOT EXISTS seen_time ON seen (time);
+		CREATE INDEX IF NOT EXISTS history_ended ON history (ended)`); err == nil {
+		_, err = db.Exec(expire, expiry())
+	}
+	if err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -124,11 +129,17 @@ func (l *Layer) Active() ([]Notification, error) {
 		if err = rows.Scan(&n.ID, &n.Source, &n.Key, &n.Severity, &n.Subject, &n.Detail, &n.Link, &n.Requires, &raised, &updated); err != nil {
 			return nil, err
 		}
-		n.Raised, n.Updated = time.Unix(raised, 0).UTC(), time.Unix(updated, 0).UTC()
+		n.Raised, n.Updated = time.UnixMilli(raised).UTC(), time.UnixMilli(updated).UTC()
 		list = append(list, n)
 	}
 	return list, rows.Err()
 }
+
+// Times in the store are Unix milliseconds. What is kept of ended notifications and of events seen expires with
+// age at each start and each event, besides the history's limit in size at each end.
+const expire = `DELETE FROM history WHERE ended < ?1; DELETE FROM seen WHERE time < ?1`
+
+func expiry() int64 { return time.Now().Add(-historyAge).UnixMilli() }
 
 // Dismiss ends the active notification id on behalf of by, if sees says by may see what it requires. It comes back
 // if its source raises it again. False when there is no such notification by may see.
@@ -212,14 +223,14 @@ func (l *Layer) apply(tx *sql.Tx, m bus.Message) (bool, error) {
 		return false, nil
 	}
 	// An event seen before is one delivered again after a crash: it changes nothing twice.
-	res, err := tx.Exec(`INSERT INTO seen (source, event, time) VALUES (?, ?, ?) ON CONFLICT DO NOTHING`, e.Source, e.ID, time.Now().Unix())
+	res, err := tx.Exec(`INSERT INTO seen (source, event, time) VALUES (?, ?, ?) ON CONFLICT DO NOTHING`, e.Source, e.ID, time.Now().UnixMilli())
 	if err != nil {
 		return false, err
 	}
 	if n, err := res.RowsAffected(); err != nil || n == 0 {
 		return false, err
 	}
-	if _, err = tx.Exec(`DELETE FROM seen WHERE time < ?`, time.Now().Add(-historyAge).Unix()); err != nil {
+	if _, err = tx.Exec(expire, expiry()); err != nil {
 		return false, err
 	}
 	l.log.Info("notification", "type", e.Type, "source", e.Source, "key", r.Key, "severity", r.Severity, "subject", r.Subject)
@@ -288,7 +299,7 @@ func raise(tx *sql.Tx, source string, r Raise, at time.Time) (bool, error) {
 		ON CONFLICT (source, key) DO UPDATE SET severity = excluded.severity, subject = excluded.subject,
 			detail = excluded.detail, link = excluded.link, requires = excluded.requires, updated = max(updated, excluded.updated)
 		WHERE (severity, subject, detail, link, requires) IS NOT (excluded.severity, excluded.subject, excluded.detail, excluded.link, excluded.requires)`,
-		source, r.Key, r.Severity, r.Subject, r.Detail, r.Link, r.Requires, at.Unix(), at.Unix())
+		source, r.Key, r.Severity, r.Subject, r.Detail, r.Link, r.Requires, at.UnixMilli(), at.UnixMilli())
 	if err != nil {
 		return false, err
 	}
@@ -300,7 +311,7 @@ func raise(tx *sql.Tx, source string, r Raise, at time.Time) (bool, error) {
 func end(tx *sql.Tx, where string, args []any, dismissedBy string) (bool, error) {
 	now := time.Now()
 	res, err := tx.Exec(`INSERT INTO history (source, key, severity, subject, raised, ended, dismissed_by)
-		SELECT source, key, severity, subject, raised, ?, ? FROM active WHERE `+where, append([]any{now.Unix(), dismissedBy}, args...)...)
+		SELECT source, key, severity, subject, raised, ?, ? FROM active WHERE `+where, append([]any{now.UnixMilli(), dismissedBy}, args...)...)
 	if err != nil {
 		return false, err
 	}
@@ -310,7 +321,7 @@ func end(tx *sql.Tx, where string, args []any, dismissedBy string) (bool, error)
 	if _, err = tx.Exec(`DELETE FROM active WHERE `+where, args...); err != nil {
 		return false, err
 	}
-	_, err = tx.Exec(`DELETE FROM history WHERE ended < ? OR id <= (SELECT max(id) FROM history) - ?`, now.Add(-historyAge).Unix(), historySize)
+	_, err = tx.Exec(`DELETE FROM history WHERE id <= (SELECT max(id) FROM history) - ?`, historySize)
 	return err == nil, err
 }
 
