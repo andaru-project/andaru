@@ -249,4 +249,65 @@ func TestFleetAPIAuthzAndTargetLifecycle(t *testing.T) {
 	if got := fleet.secrets.Get("sw-lab"); len(got) != 0 {
 		t.Fatalf("expected sw-lab secret to be deleted, got %v", got)
 	}
+
+	// Reject unix:// endpoints, sub-5s poll intervals, and invalid target IDs.
+	for _, bad := range []string{
+		`{"id":"local-sock","driver":"andaru","endpoint":"unix:///run/andaru/engine.sock"}`,
+		`{"id":"fast-poll","driver":"snmp","endpoint":"192.0.2.30","poll_interval":"100ms"}`,
+		`{"id":"bad id?","driver":"snmp","endpoint":"192.0.2.30"}`,
+	} {
+		rec = httptest.NewRecorder()
+		handler.ServeHTTP(rec, withRoot(httptest.NewRequest(http.MethodPost, "/api/v1/fleet/targets", strings.NewReader(bad))))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("POST invalid target %s = %d, want 400", bad, rec.Code)
+		}
+	}
+
+	// Deleting target A must NOT wipe disabled target B, and omitting secrets on update preserves them.
+	for _, body := range []string{
+		`{"id":"sw-a","driver":"snmp","endpoint":"192.0.2.31","secrets":{"community":"comm-a"}}`,
+		`{"id":"sw-b","driver":"snmp","endpoint":"192.0.2.32","enabled":false,"secrets":{"community":"comm-b"}}`,
+	} {
+		rec = httptest.NewRecorder()
+		handler.ServeHTTP(rec, withRoot(httptest.NewRequest(http.MethodPost, "/api/v1/fleet/targets", strings.NewReader(body))))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("POST target = %d: %s", rec.Code, rec.Body.String())
+		}
+	}
+	// Update sw-b without secrets field: existing secret must be preserved.
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, withRoot(httptest.NewRequest(http.MethodPost, "/api/v1/fleet/targets", strings.NewReader(`{"id":"sw-b","name":"Disabled Switch","driver":"snmp","endpoint":"192.0.2.32","enabled":false}`))))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update sw-b without secrets = %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := fleet.secrets.Get("sw-b")["community"]; got != "comm-b" {
+		t.Fatalf("sw-b secret after update = %q, want comm-b", got)
+	}
+	// Delete sw-a; sw-b must survive in both memory and SQLite.
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, withRoot(httptest.NewRequest(http.MethodDelete, "/api/v1/fleet/targets/sw-a", nil)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE sw-a = %d: %s", rec.Code, rec.Body.String())
+	}
+	stored, err := fleet.store.ListTargets(ctx)
+	if err != nil {
+		t.Fatalf("ListTargets: %v", err)
+	}
+	foundB := false
+	for _, st := range stored {
+		if st.ID == "sw-b" {
+			foundB = true
+		}
+	}
+	if !foundB {
+		t.Fatalf("disabled target sw-b was wiped when sw-a was deleted: %+v", stored)
+	}
+
+	// Fleet unavailable fallback returns 503 without taking down core engine.
+	unavail := newHandlerWithFleet(local.ReadLinks, http.NotFoundHandler(), nil, nil, fleetUnavailableHandler())
+	rec = httptest.NewRecorder()
+	unavail.ServeHTTP(rec, withRoot(httptest.NewRequest(http.MethodGet, "/api/v1/fleet/topology", nil)))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("fleet unavailable status = %d, want 503", rec.Code)
+	}
 }

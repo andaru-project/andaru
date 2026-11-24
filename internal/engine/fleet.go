@@ -4,11 +4,12 @@ package engine
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -30,8 +31,20 @@ import (
 const (
 	fleetAPIPrefix       = "/api/v1/fleet"
 	fleetLocalInterval   = 15 * time.Second
+	minFleetPollInterval = 5 * time.Second
 	maxFleetTargetBodySz = 64 * 1024
+	maxFleetTargetName   = 128
 )
+
+var validFleetTargetID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+
+// fleetUnavailableHandler returns 503 on /api/v1/fleet/* when the fleet store failed to initialize,
+// so a corrupt fleet DB or secrets file never prevents the core firewall engine from starting.
+func fleetUnavailableHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, r, http.StatusServiceUnavailable, "FLEET_UNAVAILABLE", "Fleet service is unavailable; inspect the engine journal.")
+	})
+}
 
 type fleetService struct {
 	store   *npstore.Store
@@ -43,6 +56,7 @@ type fleetService struct {
 	api     *npapi.Server
 	logger  *slog.Logger
 
+	mutateMu    sync.Mutex // serializes target upsert/delete across store, secrets, map, and poller
 	mu          sync.Mutex
 	targets     map[string]npdriver.TargetConfig
 	runCtx      context.Context
@@ -245,11 +259,7 @@ func (f *fleetService) refreshLocal(ctx context.Context) error {
 		return err
 	}
 	snap.PollInterval = fleetLocalInterval
-	snap.Normalize()
-	if _, err := f.store.SaveSnapshot(ctx, snap); err != nil {
-		return err
-	}
-	return nil
+	return f.poller.IngestSnapshot(ctx, snap)
 }
 
 func (f *fleetService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -289,6 +299,19 @@ func (f *fleetService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.api.ServeHTTP(w, rewritten)
 }
 
+func normalizeTargetSecrets(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		if k != "" && v != "" {
+			out[k] = v
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func (f *fleetService) handleUpsertTarget(w http.ResponseWriter, r *http.Request) {
 	body := http.MaxBytesReader(w, r.Body, maxFleetTargetBodySz)
 	var req fleetTargetRequest
@@ -298,24 +321,39 @@ func (f *fleetService) handleUpsertTarget(w http.ResponseWriter, r *http.Request
 		writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", fmt.Sprintf("Invalid target payload: %v", err))
 		return
 	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Unexpected trailing data in target payload.")
+		return
+	}
 
 	req.ID = strings.TrimSpace(req.ID)
+	req.Name = strings.TrimSpace(req.Name)
 	req.Driver = strings.TrimSpace(req.Driver)
 	req.Endpoint = strings.TrimSpace(req.Endpoint)
-	if req.ID == "" || strings.Contains(req.ID, "/") || req.ID == fleetLocalTargetID {
-		writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Target id must be non-empty, contain no '/', and not be 'local'.")
+	if !validFleetTargetID.MatchString(req.ID) || req.ID == fleetLocalTargetID {
+		writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Target id must match [A-Za-z0-9._-]{1,64} and not be 'local'.")
+		return
+	}
+	if len(req.Name) > maxFleetTargetName {
+		writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Target name exceeds 128 characters.")
 		return
 	}
 	if req.Driver == "" || req.Endpoint == "" {
 		writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Target driver and endpoint are required.")
 		return
 	}
+	// Reject unix:// endpoints in engine-hosted mode: the engine runs as root and the local Andaru
+	// host is already built in as target "local".
+	if strings.HasPrefix(strings.ToLower(req.Endpoint), "unix://") {
+		writeError(w, r, http.StatusBadRequest, "INVALID_TARGET", "Unix socket endpoints are not permitted for engine-hosted fleet targets.")
+		return
+	}
 
 	pollInterval := 30 * time.Second
 	if req.PollInterval != "" {
 		d, err := time.ParseDuration(req.PollInterval)
-		if err != nil || d <= 0 {
-			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Invalid poll_interval duration.")
+		if err != nil || d < minFleetPollInterval {
+			writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", fmt.Sprintf("poll_interval must be at least %s.", minFleetPollInterval))
 			return
 		}
 		pollInterval = d
@@ -326,10 +364,16 @@ func (f *fleetService) handleUpsertTarget(w http.ResponseWriter, r *http.Request
 		enabled = *req.Enabled
 	}
 
-	// Preserve existing secrets if caller omitted the secrets map on update.
-	resolvedSecrets := req.Secrets
-	if resolvedSecrets == nil {
+	f.mutateMu.Lock()
+	defer f.mutateMu.Unlock()
+
+	// Preserve existing secrets if caller omitted the secrets map on update; otherwise normalize
+	// (dropping empty entries) before validation so runtime and post-restart behavior match.
+	var resolvedSecrets map[string]string
+	if req.Secrets == nil {
 		resolvedSecrets = f.secrets.Get(req.ID)
+	} else {
+		resolvedSecrets = normalizeTargetSecrets(req.Secrets)
 	}
 
 	cfg := npdriver.TargetConfig{
@@ -352,13 +396,21 @@ func (f *fleetService) handleUpsertTarget(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if err := f.store.UpsertTarget(r.Context(), cfg); err != nil {
+	opCtx := context.WithoutCancel(r.Context())
+	if err := f.store.UpsertTarget(opCtx, cfg); err != nil {
 		f.logger.ErrorContext(r.Context(), "persist fleet target failed", "target", cfg.ID, "error", err)
 		writeError(w, r, http.StatusInternalServerError, "STORE_ERROR", "Failed to persist target.")
 		return
 	}
+	if !cfg.Enabled {
+		if err := f.store.ClearTargetState(opCtx, cfg.ID); err != nil {
+			f.logger.ErrorContext(r.Context(), "clear disabled fleet target state failed", "target", cfg.ID, "error", err)
+			writeError(w, r, http.StatusInternalServerError, "STORE_ERROR", "Failed to clear disabled target state.")
+			return
+		}
+	}
 	if req.Secrets != nil {
-		if err := f.secrets.Set(cfg.ID, req.Secrets); err != nil {
+		if err := f.secrets.Set(cfg.ID, resolvedSecrets); err != nil {
 			f.logger.ErrorContext(r.Context(), "persist fleet target secrets failed", "target", cfg.ID, "error", err)
 			writeError(w, r, http.StatusInternalServerError, "SECRET_STORE_ERROR", "Failed to store target credentials.")
 			return
@@ -381,31 +433,34 @@ func (f *fleetService) handleDeleteTarget(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	f.mutateMu.Lock()
+	defer f.mutateMu.Unlock()
+
 	f.mu.Lock()
-	if _, ok := f.targets[id]; !ok {
-		f.mu.Unlock()
+	_, exists := f.targets[id]
+	f.mu.Unlock()
+	if !exists {
 		writeError(w, r, http.StatusNotFound, "NOT_FOUND", fmt.Sprintf("Target %q not found.", id))
 		return
 	}
-	delete(f.targets, id)
-	keep := map[string]bool{fleetLocalTargetID: true}
-	for tid, t := range f.targets {
-		if t.Enabled {
-			keep[tid] = true
-		}
-	}
-	f.api.SetTargets(f.allTargetConfigsLocked())
-	f.mu.Unlock()
-	f.reloadPoller()
 
-	if err := f.secrets.Delete(id); err != nil {
-		f.logger.WarnContext(r.Context(), "delete fleet target secrets failed", "target", id, "error", err)
-	}
-	if err := f.store.PruneTargets(r.Context(), keep); err != nil && !errors.Is(err, context.Canceled) {
-		f.logger.ErrorContext(r.Context(), "prune deleted fleet target failed", "target", id, "error", err)
+	// Persist deletion before mutating memory, using WithoutCancel so a client disconnect cannot
+	// leave the row surviving after reporting success.
+	opCtx := context.WithoutCancel(r.Context())
+	if err := f.store.DeleteTarget(opCtx, id); err != nil {
+		f.logger.ErrorContext(r.Context(), "delete fleet target failed", "target", id, "error", err)
 		writeError(w, r, http.StatusInternalServerError, "STORE_ERROR", "Failed to remove target state.")
 		return
 	}
+	if err := f.secrets.Delete(id); err != nil {
+		f.logger.WarnContext(r.Context(), "delete fleet target secrets failed", "target", id, "error", err)
+	}
+
+	f.mu.Lock()
+	delete(f.targets, id)
+	f.api.SetTargets(f.allTargetConfigsLocked())
+	f.mu.Unlock()
+	f.reloadPoller()
 
 	f.logger.InfoContext(r.Context(), "fleet target deleted", "target", id)
 	writeJSON(w, r, http.StatusOK, map[string]any{"deleted": id})

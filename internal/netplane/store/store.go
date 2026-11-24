@@ -227,6 +227,33 @@ func (s *Store) DeleteTarget(ctx context.Context, id string) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM link_counter_state WHERE target_id = ?`, id); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM topology_snapshots`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ClearTargetState deletes a target's cached snapshot, devices, counter baselines, and cached
+// topology while preserving its target configuration row (for disabled targets).
+func (s *Store) ClearTargetState(ctx context.Context, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM target_snapshots WHERE target_id = ?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM devices WHERE target_id = ?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM link_counter_state WHERE target_id = ?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM topology_snapshots`); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 

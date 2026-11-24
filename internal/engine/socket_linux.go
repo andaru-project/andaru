@@ -122,20 +122,24 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	sampled := make(chan struct{})
 	go func() { defer close(sampled); sampleTraffic(lifetime, traffic, systemRoot) }()
 	defer func() { cancel(context.Canceled); <-sampled }()
+	var fleetAPI http.Handler
 	fleet, err := openFleetService(lifetime, stateDir, localHostSource{
 		ReadLinks:  host.ReadLinks,
 		ReadConfig: store.Snapshot,
 	}, slog.Default())
 	if err != nil {
-		return fmt.Errorf("open fleet service: %w", err)
+		slog.Error("fleet service unavailable; continuing without fleet API", "error", err)
+		fleetAPI = fleetUnavailableHandler()
+	} else {
+		fleet.Start(lifetime)
+		defer func() {
+			if err := fleet.Close(); err != nil && result == nil {
+				result = err
+			}
+		}()
+		fleetAPI = fleet
 	}
-	fleet.Start(lifetime)
-	defer func() {
-		if err := fleet.Close(); err != nil && result == nil {
-			result = err
-		}
-	}()
-	rootAPI := newHandlerWithFleet(host.ReadLinks, newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, applies, backups), identityAPI, auditAPI, fleet)
+	rootAPI := newHandlerWithFleet(host.ReadLinks, newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, applies, backups), identityAPI, auditAPI, fleetAPI)
 	if web == nil {
 		err = serveUnix(lifetime, socketPath, rootAPI)
 	} else {
