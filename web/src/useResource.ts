@@ -62,12 +62,24 @@ export function useVisiblePoll(reload: () => void, milliseconds: number, enabled
 
 const reopenMilliseconds = 15_000;
 
-// useEvents calls read when the engine's event stream opens and at each event on it, in place of a poll: the events
-// say only that something changed, and read fetches what. read runs too when a stream fails, once until it opens
-// again, so a lost session or connection shows as a poll would show it. The browser reopens a stream that drops;
-// one the server refuses (the session ended, the engine is down) is opened again 15 seconds later. A hidden tab
-// holds no stream: a browser allows six connections to a host, and each stream keeps one.
-export function useEvents(read: () => void, enabled = true) {
+// eventType reads the bus event type from an SSE message's JSON payload. An empty or unreadable
+// message returns undefined so callers fall back to refreshing all subscribed state.
+function eventType(data: string): string | undefined {
+  try {
+    const type: unknown = JSON.parse(data)?.type;
+    return typeof type === 'string' ? type : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// useEvents calls onEvent when the engine's event stream opens and at each event on it, in place of a poll: the
+// events say only that something changed, and onEvent fetches what. On open or a stream failure (once until it opens
+// again) type is undefined so every subscribed resource refreshes; on a typed event, type names the bus event so
+// only what changed reloads. The browser reopens a stream that drops; one the server refuses (the session ended,
+// the engine is down) is opened again 15 seconds later. A hidden tab holds no stream: a browser allows six
+// connections to a host, and each stream keeps one.
+export function useEvents(onEvent: (type?: string) => void, enabled = true) {
   useEffect(() => {
     if (!enabled) return;
     let source: EventSource | undefined;
@@ -83,11 +95,13 @@ export function useEvents(read: () => void, enabled = true) {
       const opened = new EventSource('/api/v1/events');
       opened.onopen = () => {
         failed = false;
-        read();
+        onEvent();
       };
-      opened.onmessage = read;
+      opened.onmessage = (event) => {
+        onEvent(eventType(event.data));
+      };
       opened.onerror = () => {
-        if (!failed) read();
+        if (!failed) onEvent();
         failed = true;
         if (opened.readyState === EventSource.CLOSED) timer = setTimeout(open, reopenMilliseconds);
       };
@@ -100,5 +114,5 @@ export function useEvents(read: () => void, enabled = true) {
       document.removeEventListener('visibilitychange', follow);
       close();
     };
-  }, [enabled, read]);
+  }, [enabled, onEvent]);
 }

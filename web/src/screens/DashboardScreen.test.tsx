@@ -12,12 +12,13 @@ const link = (name: string, operState: string, addresses: Array<[string, number,
   addresses: addresses.map(([address, prefixLength, scope]) => ({ family: 'ipv4', address, prefixLength, scope })),
 });
 
-// The System widget has its own tests; here it is one more widget, still loading.
+// The System and Notifications widgets have their own tests; here they are other widgets, still loading.
 const noSystem = { error: '', loading: true, reload: vi.fn(), refresh: vi.fn() };
+const noNotifications = { error: '', loading: true, reload: vi.fn(), refresh: vi.fn() };
 
 // mount returns once the layout has been read or has failed to be: no widget shows before that.
-async function mount(capabilities: string[]) {
-  render(<MemoryRouter><DashboardScreen api={new ApiClient('csrf')} session={session(capabilities)} system={noSystem} onSessionLost={vi.fn()} /></MemoryRouter>);
+async function mount(capabilities: string[], notifications: Parameters<typeof DashboardScreen>[0]['notifications'] = noNotifications) {
+  render(<MemoryRouter><DashboardScreen api={new ApiClient('csrf')} session={session(capabilities)} system={noSystem} notifications={notifications} onSessionLost={vi.fn()} /></MemoryRouter>);
   await waitFor(() => expect(screen.queryByLabelText('Loading the layout')).not.toBeInTheDocument());
 }
 
@@ -160,7 +161,7 @@ it('hides and shows a widget, saving the whole preferences and keeping what it d
   await userEvent.click(screen.getByRole('button', { name: 'Show Interfaces' }));
   expect(titles()).toEqual(['System', 'Interfaces', 'Resources', 'Network activity', 'IPv6 prefixes']);
 
-  const order = ['system', 'interfaces', 'resources', 'traffic', 'prefixes', 'activity'];
+  const order = ['system', 'interfaces', 'resources', 'traffic', 'prefixes', 'activity', 'notifications'];
   expect(saves(fetchMock)).toEqual([
     { another: { version: 'keeps this' }, dashboard: { order, hidden: ['interfaces'] } },
     { another: { version: 'keeps this' }, dashboard: { order, hidden: [] } },
@@ -191,7 +192,7 @@ it('reads the layout before any widget shows, so a hidden widget never asks the 
     '/api/v1/status/links': { items: [] },
     '/api/v1/status/prefixes': { wans: [] },
   });
-  render(<MemoryRouter><DashboardScreen api={new ApiClient('csrf')} session={session(everything)} system={noSystem} onSessionLost={vi.fn()} /></MemoryRouter>);
+  render(<MemoryRouter><DashboardScreen api={new ApiClient('csrf')} session={session(everything)} system={noSystem} notifications={noNotifications} onSessionLost={vi.fn()} /></MemoryRouter>);
   expect(screen.getByLabelText('Loading the layout')).toBeInTheDocument();
   expect(screen.queryByRole('region')).not.toBeInTheDocument();
   await act(async () => { answer(jsonResponse(200, { dashboard: { hidden: ['interfaces'] } })); await Promise.resolve(); });
@@ -214,7 +215,7 @@ it('moves a widget by its grip with the keyboard, and saves the new order', asyn
   await userEvent.keyboard('{ArrowRight}');
   await userEvent.keyboard('{Enter}');
   await waitFor(() => expect(titles()).toEqual(['System', 'Interfaces', 'Network activity', 'Resources', 'IPv6 prefixes']));
-  await waitFor(() => expect(saves(fetchMock)).toEqual([{ dashboard: { order: ['system', 'interfaces', 'traffic', 'resources', 'prefixes', 'activity'], hidden: [] } }]));
+  await waitFor(() => expect(saves(fetchMock)).toEqual([{ dashboard: { order: ['system', 'interfaces', 'traffic', 'resources', 'prefixes', 'activity', 'notifications'], hidden: [] } }]));
   expect(screen.getByRole('status', { hidden: true })).toHaveTextContent('Dropped Resources at position 4 of 5.');
   rect.mockRestore();
 });
@@ -235,7 +236,7 @@ it('sends saves one at a time, each on what the last one stored, and skips one t
   // The box answers with what it now holds, which another feature has written a key into.
   await act(async () => { held[0](jsonResponse(200, { other: 'kept', dashboard: { hidden: ['resources'] } })); await Promise.resolve(); });
   await waitFor(() => expect(saves(fetchMock)).toHaveLength(2));
-  expect(saves(fetchMock)[1]).toEqual({ other: 'kept', dashboard: { order: ['system', 'interfaces', 'resources', 'traffic', 'prefixes', 'activity'], hidden: ['interfaces', 'resources', 'prefixes'] } });
+  expect(saves(fetchMock)[1]).toEqual({ other: 'kept', dashboard: { order: ['system', 'interfaces', 'resources', 'traffic', 'prefixes', 'activity', 'notifications'], hidden: ['interfaces', 'resources', 'prefixes'] } });
 });
 
 it('moves focus to the edit button when the button that was pressed goes away', async () => {
@@ -288,7 +289,7 @@ it('shows the system description it is handed, or why it has none', async () => 
     cpu: { model: 'Test CPU', cores: 2, threads: 2, microcode: '', level: '', features: { cryptography: [], security: [], virtualization: [] }, vulnerabilities: [] },
     hardware: { vendor: '', product: '', serial: '', boardVendor: '', board: '', biosVendor: '', biosVersion: '', biosDate: '' } };
   const base = { error: '', loading: false, reload: vi.fn(), refresh: vi.fn() };
-  const screenWith = (system: Parameters<typeof DashboardScreen>[0]['system']) => <MemoryRouter><DashboardScreen api={new ApiClient('csrf')} session={session(['status.read'])} system={system} onSessionLost={vi.fn()} /></MemoryRouter>;
+  const screenWith = (system: Parameters<typeof DashboardScreen>[0]['system']) => <MemoryRouter><DashboardScreen api={new ApiClient('csrf')} session={session(['status.read'])} system={system} notifications={noNotifications} onSessionLost={vi.fn()} /></MemoryRouter>;
   const view = render(screenWith({ ...base, data: { info, loadedAt: Date.now() } }));
   const system = await screen.findByRole('region', { name: 'System' });
   expect(within(system).getByRole('rowheader', { name: 'Version' }).nextElementSibling).toHaveTextContent('0.5.0-a.4');
@@ -298,4 +299,23 @@ it('shows the system description it is handed, or why it has none', async () => 
 
   view.rerender(screenWith({ ...base, error: 'The system description is unavailable.' }));
   expect(within(screen.getByRole('region', { name: 'System' })).getByRole('alert')).toHaveTextContent('The system description is unavailable.');
+});
+
+it('shows the Notifications widget only with notifications.read, listing the newest five with a link to the page', async () => {
+  fetchRoutes({});
+  const items = Array.from({ length: 6 }, (_, index) => ({
+    id: index + 1,
+    source: 'disk',
+    key: `disk/${index + 1}`,
+    severity: index === 0 ? 'critical' as const : 'warning' as const,
+    subject: `Notice ${index + 1}`,
+    raised: '2026-11-23T10:00:00Z',
+    updated: `2026-11-23T10:0${index}:00Z`,
+  }));
+  await mount(['notifications.read'], { data: { items }, error: '', loading: false, reload: vi.fn(), refresh: vi.fn() });
+
+  const widget = screen.getByRole('region', { name: 'Notifications' });
+  expect(screen.getByRole('link', { name: 'Notifications: All notifications' })).toHaveAttribute('href', '/system/notifications');
+  for (let i = 1; i <= 5; i++) expect(within(widget).getByText(`Notice ${i}`)).toBeInTheDocument();
+  expect(within(widget).queryByText('Notice 6')).not.toBeInTheDocument();
 });

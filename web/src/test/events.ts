@@ -6,7 +6,7 @@ export class FakeEventSource {
   static opened: FakeEventSource[] = [];
   readyState = FakeEventSource.CONNECTING;
   onopen: (() => void) | null = null;
-  onmessage: (() => void) | null = null;
+  onmessage: ((event: MessageEvent<string>) => void) | null = null;
   onerror: (() => void) | null = null;
 
   constructor(readonly url: string) {
@@ -18,8 +18,9 @@ export class FakeEventSource {
     this.onopen?.();
   }
 
-  message() {
-    this.onmessage?.();
+  message(payload?: string | object) {
+    const data = typeof payload === 'string' ? payload : payload ? JSON.stringify(payload) : '';
+    this.onmessage?.(new MessageEvent('message', { data }));
   }
 
   // fail is a dropped stream the browser reopens itself, or with closed a refusal it leaves to the page.

@@ -47,20 +47,27 @@ body {
   color: #fff;
 }
 
-.app-header .account-button {
+.app-header .account-button,
+.app-header .notification-neutral {
   background: transparent;
   border-color: rgb(255 255 255 / 35%);
   color: #fff;
 }
 
-.app-header .account-button:hover {
+.app-header .account-button:hover,
+.app-header .notification-neutral:hover {
   background: rgb(255 255 255 / 12%);
   color: #fff;
 }
 
-/* A long account name must not push the header off a phone, nor squeeze the connection state out of reading. */
+.app-header .notification-button {
+  flex-shrink: 0;
+}
+
+/* A long account name must not push the header off a phone, nor squeeze the connection state or the notification
+   count out of reading: at 320 pixels they and the menu button share what the box's name gives up. */
 .app-header .account-button {
-  max-width: 45vw;
+  max-width: 35vw;
 }
 
 .app-header .mantine-Badge-root {
@@ -603,4 +610,8 @@ path.traffic-sent {
 
 .grow {
   flex: 1 1 14rem;
+}
+
+.notification-detail {
+  white-space: pre-wrap;
 }

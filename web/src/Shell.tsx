@@ -5,6 +5,8 @@ import { Link, Navigate, Route, Routes, useLocation, useMatch, useNavigate } fro
 import { ApiClient, reportError } from './api';
 import mark from './andaru-icon.svg';
 import { loadChangeState, pendingNotice } from './changes';
+import { plural } from './format';
+import { highestSeverity, severityColor } from './notifications';
 import { PendingNotice } from './PendingNotice';
 import { FleetWorkspace } from './netplane/FleetWorkspace';
 import { formatTimestamp, setTimeZone, timeZoneOptions, useTimeZone } from './timezone';
@@ -13,6 +15,8 @@ import { AuditScreen } from './screens/AuditScreen';
 import { ChangesScreen } from './screens/ChangesScreen';
 import { DashboardScreen } from './screens/DashboardScreen';
 import { InterfacesScreen } from './screens/InterfacesScreen';
+import { Bell } from './screens/Marks';
+import { NotificationsScreen } from './screens/NotificationsScreen';
 import { PasswordDialog } from './screens/PasswordDialog';
 import { RolesScreen } from './screens/RolesScreen';
 import { RulesScreen } from './screens/RulesScreen';
@@ -23,8 +27,8 @@ import { UpgradeScreen } from './screens/UpgradeScreen';
 import { UpdatesScreen } from './screens/UpdatesScreen';
 import { SystemDetailsScreen, updateNotice } from './screens/SystemWidget';
 import { UsersScreen } from './screens/UsersScreen';
-import type { Session, User } from './types';
-import { useEvents, useResource, useVisiblePoll } from './useResource';
+import type { NotificationList, Session, User } from './types';
+import { useEvents, useResource, useVisiblePoll, type Resource } from './useResource';
 
 interface ShellProps {
   api: ApiClient;
@@ -52,6 +56,7 @@ const pageTitles: Record<string, string> = {
   '/changes': 'Review and apply',
   '/system/details': 'System details',
   '/system/updates': 'Software updates',
+  '/system/notifications': 'Notifications',
   '/system/users': 'Users',
   '/system/roles': 'Roles',
   '/system/tokens': 'API tokens',
@@ -85,6 +90,37 @@ function storedClosed(): string[] {
   }
 }
 
+function HeaderNotifications({ notifications }: { notifications: Resource<NotificationList | undefined> }) {
+  const items = notifications.data?.items;
+  const count = items?.length;
+  const highest = items ? highestSeverity(items) : undefined;
+  // A read that fails after one that answered leaves the count out of date: it is not shown as if it were current.
+  const unavailable = notifications.error !== '';
+  const active = !unavailable && highest !== undefined;
+  const label = unavailable
+    ? 'Notifications unavailable'
+    : count === undefined
+      ? 'Notifications'
+      : active
+        ? `${plural(count, 'notification')}, highest severity ${highest}`
+        : '0 notifications';
+  return (
+    <Button
+      component={Link}
+      to="/system/notifications"
+      size="xs"
+      variant={active ? 'filled' : 'default'}
+      color={active ? severityColor[highest] : undefined}
+      className={active ? 'notification-button' : 'notification-button notification-neutral'}
+      leftSection={<Bell />}
+      aria-label={label}
+      data-severity={active ? highest : unavailable ? 'unavailable' : 'none'}
+    >
+      {unavailable ? '—' : count !== undefined ? <span className="tabular">{count}</span> : null}
+    </Button>
+  );
+}
+
 export function Shell({ api, session, connected, onLogout, onSessionLost }: ShellProps) {
   const { colorScheme, setColorScheme } = useMantineColorScheme();
   const timeZone = useTimeZone();
@@ -103,6 +139,11 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   const changes = useResource(loadChanges, onSessionLost);
   const reloadChanges = changes.reload;
 
+  const canReadNotifications = capabilities.has('notifications.read');
+  const loadNotifications = useCallback(() => (canReadNotifications ? api.notifications() : Promise.resolve(undefined)), [api, canReadNotifications]);
+  const notifications = useResource(loadNotifications, onSessionLost);
+  const reloadNotifications = notifications.reload;
+
   // What the box is, for the header and the dashboard, with the browser's clock when it arrived so its time and
   // uptime can run on. It changes with a reboot or an upgrade, which do happen behind an open tab, so it is read
   // again each minute: often enough for that, and for a first read that failed.
@@ -115,15 +156,23 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   const update = useResource(loadUpdate, onSessionLost);
   useVisiblePoll(update.refresh, systemPollMilliseconds, canReadStatus);
 
-  // Saves and applies, from this tab or any other, reach the shell as events; it reads the change state at each.
-  // A read waits for no answer still out: one that was served before the change would show it unchanged.
-  useEvents(reloadChanges, canReadChanges);
+  // Saves, applies and notification changes reach the shell on one event stream, dispatched by event type so each
+  // change reloads only its own resource. With no type (the stream opened or failed) or one it does not know, every
+  // resource reloads: a reader without the capability reads nothing.
+  const handleEvent = useCallback((type?: string) => {
+    const changed = type === 'config.head.changed' || type === 'apply.changed';
+    const noticed = type === 'notifications.changed';
+    if (!noticed) void reloadChanges();
+    if (!changed) void reloadNotifications();
+  }, [reloadChanges, reloadNotifications]);
+  useEvents(handleEvent, canReadChanges || canReadNotifications);
   // The change state is read again every 15 seconds while a read has failed, until one answers, and while an apply is
   // activating or awaits confirmation: a healthy stream may bring no other event, and the events are not durable, so
   // a lost one must not hide the confirmation an apply waits for.
   const latestState = changes.data?.applies.items[0]?.state;
   const applying = latestState === 'activating' || latestState === 'awaiting_confirmation';
   useVisiblePoll(changes.refresh, retryMilliseconds, canReadChanges && (changes.error !== '' || applying));
+  useVisiblePoll(notifications.refresh, retryMilliseconds, canReadNotifications && notifications.error !== '');
 
   // Whether the saved settings wait for decisions after an upgrade (settings safe mode). It changes only with a new
   // saved head (an upgrade, a restore, the answers), so it is read again when the head moves, never on a timer:
@@ -157,11 +206,12 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   useEffect(() => {
     if (connected && !wasConnected.current) {
       void reloadChanges();
+      void reloadNotifications();
       // A check that failed while the box did not answer is tried again; the head may not have moved.
       if (upgradeError) void reloadUpgrade();
     }
     wasConnected.current = connected;
-  }, [connected, reloadChanges, upgradeError, reloadUpgrade]);
+  }, [connected, reloadChanges, reloadNotifications, upgradeError, reloadUpgrade]);
 
   const groups = [
     {
@@ -183,6 +233,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
       items: [
         { to: '/system/details', label: 'Details', visible: canReadStatus },
         { to: '/system/updates', label: 'Updates', visible: canReadStatus },
+        { to: '/system/notifications', label: 'Notifications', visible: canReadNotifications },
         { to: '/system/users', label: 'Users', visible: capabilities.has('users.read') },
         { to: '/system/roles', label: 'Roles', visible: capabilities.has('users.read') || canReadChanges },
         { to: '/system/tokens', label: 'Tokens', visible: capabilities.has('tokens.manageSelf') || capabilities.has('tokens.manageAll') },
@@ -251,6 +302,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
     ['/changes', <ChangesScreen api={api} session={session} state={changes.data} stateError={changes.error} connected={connected} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/system/details', <SystemDetailsScreen system={system} />],
     ['/system/updates', <UpdatesScreen api={api} session={session} update={update} onSessionLost={onSessionLost} />],
+    ['/system/notifications', <NotificationsScreen api={api} session={session} notifications={notifications} onSessionLost={onSessionLost} />],
     ['/system/users', <UsersScreen api={api} session={session} onSessionLost={onSessionLost} />],
     ['/system/roles', <RolesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/system/tokens', <TokensScreen api={api} session={session} onSessionLost={onSessionLost} />],
@@ -271,6 +323,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
           <Group className="app-session" gap="sm" wrap="nowrap">
             {/* Connected is the usual state and says so quietly; a lost connection is the one that shouts. */}
             <Badge color={connected ? 'green' : 'red'} variant={connected ? 'dot' : 'filled'} className={connected ? 'quiet-badge' : undefined} role="status">{connected ? 'Connected' : 'Connection lost'}</Badge>
+            {canReadNotifications && <HeaderNotifications notifications={notifications} />}
             <Menu position="bottom-end">
               <Menu.Target><Button className="account-button" variant="default" size="xs">{session.account.displayName || session.account.login}</Button></Menu.Target>
               <Menu.Dropdown>
@@ -321,7 +374,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
           )}
           {!onChangesPage && <PendingNotice api={api} session={session} state={changes.data} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />}
           <Routes>
-            <Route path="/" element={<DashboardScreen api={api} session={session} system={system} update={update.data} onSessionLost={onSessionLost} />} />
+            <Route path="/" element={<DashboardScreen api={api} session={session} system={system} notifications={notifications} update={update.data} onSessionLost={onSessionLost} />} />
             {capabilities.has('configuration.apply') && (
               <Route
                 path="/setup"
