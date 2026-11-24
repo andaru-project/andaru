@@ -6025,7 +6025,7 @@
         "operationId": "listNotifications",
         "x-required-capability": "notifications.read",
         "summary": "List the active notifications the caller may see, the most recently raised or changed first",
-        "description": "Times are the engine's, from when it recorded the raise. A notification that requires another capability is listed only for callers that have it as well. The list changes as sources raise and clear notifications and as they are dismissed; the event stream carries notifications.changed after each change.",
+        "description": "A raise dated later than when the engine recorded it is dated then. A notification that requires another capability is listed only for callers that have it as well. The list changes as sources raise and clear notifications and as they are dismissed; the event stream carries notifications.changed after each change.",
         "responses": {
           "200": {"description": "The active notifications", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/NotificationList"}}}},
           "403": {"$ref": "#/components/responses/Forbidden"},
@@ -6036,7 +6036,7 @@
       "head": {"operationId": "headNotifications", "x-required-capability": "notifications.read", "responses": {"200": {"description": "The notifications were read; no body"}, "403": {"description": "Peer denied; no body"}, "503": {"description": "Unavailable; no body"}}}
     },
     "/api/v1/notifications/{id}/dismiss": {
-      "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^[1-9][0-9]{0,17}$"}}],
+      "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^[1-9][0-9]{0,18}$"}}],
       "post": {
         "operationId": "dismissNotification",
         "x-required-capability": "notifications.manage",

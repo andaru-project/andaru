@@ -25,10 +25,6 @@ func (h notificationsAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !noQuery(w, r) {
 		return
 	}
-	if h.layer == nil {
-		h.unavailable(w, r)
-		return
-	}
 	// Seeing a notification takes notifications.read and the capability it requires, if any; one the actor may not
 	// see is one they cannot dismiss either, and is answered as not there.
 	sees := func(requires string) bool {
@@ -37,6 +33,10 @@ func (h notificationsAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == notificationsPath {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			methodNotAllowed(w, r, "GET, HEAD")
+			return
+		}
+		if h.layer == nil {
+			h.unavailable(w, r)
 			return
 		}
 		list, err := h.layer.Active()
@@ -65,6 +65,10 @@ func (h notificationsAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !requireNoBody(w, r) {
+		return
+	}
+	if h.layer == nil {
+		h.unavailable(w, r)
 		return
 	}
 	by := actor.AccountID

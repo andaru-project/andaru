@@ -187,6 +187,7 @@ func TestRefusedEventsAreSkipped(t *testing.T) {
 		{Key: "x", Severity: Info, Subject: "two\u2028lines"},
 		{Key: "x", Severity: Info, Subject: "s", Detail: "a\u0085b"},
 		{Key: "x\ny", Severity: Info, Subject: "s"},
+		{Key: "x", Severity: Info, Subject: "\ufeffs"},
 	} {
 		b.publish("disk", r)
 	}
@@ -194,10 +195,13 @@ func TestRefusedEventsAreSkipped(t *testing.T) {
 	if err := b.events.Publish("notification/disk", timeless, true); err != nil {
 		t.Fatal(err)
 	}
+	joined := Raise{Key: "joined", Severity: Info, Subject: "Backup 👨\u200d👩\u200d👧 done", Detail: "می\u200cخواهم"} // joiners are text
+	b.publish("disk", joined)
+	b.changed()
 	b.publish("disk", full) // read past them
 	b.changed()
 	b.settled()
-	if got := b.active(); len(got) != 1 || got[0].Source != "disk" || got[0].Raise != full {
+	if got := b.active(); len(got) != 2 || got[0].Source != "disk" || got[0].Raise != full || got[1].Raise != joined {
 		t.Fatalf("active %+v", got)
 	}
 }
@@ -269,16 +273,30 @@ func TestEventSeenPerSource(t *testing.T) {
 	}
 }
 
-// A notification's times are the layer's: a source cannot date one into the future to keep it on top.
-func TestTimesAreTheLayers(t *testing.T) {
+// A source cannot date a notification into the future to keep it on top; one read late keeps its time.
+func TestTimes(t *testing.T) {
 	b := newBench(t)
-	payload, _ := json.Marshal(bus.Event{ID: "e1", Type: RaisedType, Time: time.Now().AddDate(100, 0, 0), Source: "addon", Data: full})
-	if err := b.events.Publish("notification/addon", payload, true); err != nil {
-		t.Fatal(err)
+	past := time.Now().Add(-48 * time.Hour).Truncate(time.Second)
+	before := time.Now().Truncate(time.Second)
+	for i, at := range []time.Time{time.Now().AddDate(100, 0, 0), past} {
+		payload, _ := json.Marshal(bus.Event{ID: fmt.Sprint(i), Type: RaisedType, Time: at, Source: fmt.Sprint("s", i), Data: full})
+		if err := b.events.Publish(fmt.Sprint("notification/s", i), payload, true); err != nil {
+			t.Fatal(err)
+		}
+		b.changed()
 	}
-	b.changed()
-	if got := b.active()[0]; got.Raised.After(time.Now()) || got.Updated.After(time.Now()) {
-		t.Fatalf("dated %v, %v", got.Raised, got.Updated)
+	times := map[string]time.Time{}
+	for _, n := range b.active() {
+		if !n.Raised.Equal(n.Updated) {
+			t.Fatalf("%s raised %v, updated %v", n.Source, n.Raised, n.Updated)
+		}
+		times[n.Source] = n.Raised
+	}
+	if future := times["s0"]; future.Before(before) || future.After(time.Now()) {
+		t.Fatalf("one from the future dated %v", future)
+	}
+	if !times["s1"].Equal(past) {
+		t.Fatalf("one from the past dated %v, want %v", times["s1"], past)
 	}
 }
 

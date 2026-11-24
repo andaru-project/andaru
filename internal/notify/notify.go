@@ -226,15 +226,22 @@ func (l *Layer) apply(tx *sql.Tx, m bus.Message) (bool, error) {
 	if e.Type == ClearedType {
 		return end(tx, `source = ? AND key = ?`, []any{e.Source, r.Key}, "")
 	}
-	// The time is the layer's, not the event's: a source does not set where its notification sorts.
-	return raise(tx, e.Source, r, time.Now())
+	// An event from the future is dated now: a source does not keep its notification on top by its clock. One read
+	// late, from a backlog, keeps the time it happened.
+	at := time.Now()
+	if e.Time.Before(at) {
+		at = e.Time
+	}
+	return raise(tx, e.Source, r, at)
 }
 
-// text is valid UTF-8 of at most max bytes with no control or format character (a bidi override, a line or
-// paragraph separator) but the line breaks lines allows.
+// text is valid UTF-8 of at most max bytes with no control character but the line breaks lines allows, and none
+// that reorders or breaks what is shown: the bidi controls, the line and paragraph separators, a byte order mark.
+// Joiners stay: emoji and many scripts need them.
 func text(s string, max int, lines bool) bool {
 	return utf8.ValidString(s) && len(s) <= max && !strings.ContainsFunc(s, func(c rune) bool {
-		return (unicode.IsControl(c) && !(lines && c == '\n')) || unicode.Is(unicode.Cf, c) || c == '\u2028' || c == '\u2029'
+		return unicode.IsControl(c) && !(lines && c == '\n') || unicode.Is(unicode.Bidi_Control, c) ||
+			c == '\u2028' || c == '\u2029' || c == '\ufeff'
 	})
 }
 
