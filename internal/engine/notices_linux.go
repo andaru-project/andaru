@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -17,11 +18,13 @@ import (
 // noticeSource names the engine's own notifications: they travel on notification/engine.
 const noticeSource = "engine"
 
-// The disk notification rises at these shares of the state directory's file system in use, and clears below the last.
+// The disk notification rises to a warning and to critical at these shares of the state directory's file system in
+// use, and falls back below the lower mark of each, so a disk that hovers at one mark does not flip it every minute.
 const (
 	diskWarning  = 0.90
-	diskCritical = 0.97
 	diskClear    = 0.85
+	diskCritical = 0.97
+	diskEased    = 0.95
 )
 
 const (
@@ -29,9 +32,10 @@ const (
 	diskKey    = "disk/state"
 )
 
-// notices states the engine's notifications: applies that failed or were rolled back since the last confirmed one,
-// saved settings that wait for upgrade decisions, and a filling disk. Each run works all of them out again and
-// publishes what changed since the last; the first publishes them all, so one lost to a crash comes back.
+// notices states the engine's notifications: the last apply, when it failed or was rolled back after the last
+// confirmed one, saved settings that wait for upgrade decisions, and a filling disk. Each run works all of them out
+// again and publishes what changed since the last. The first publishes them all, so one lost to a crash comes back,
+// and clears every one that may be raised and is not, since what the layer shows at start may still be behind.
 type notices struct {
 	publish  func(notify.Raise) error
 	stateDir string
@@ -39,7 +43,12 @@ type notices struct {
 	disk     func() (float64, error)
 	// sent is what the engine last said of each of its notifications that is raised.
 	sent map[string]notify.Raise
-	poke chan struct{}
+	// interrupted is the apply the last run found interrupted: one is raised only when two runs in a row find it,
+	// since an apply between two of its writes reads as interrupted for a moment.
+	interrupted string
+	// failing is the error each part last failed to read with, so a part that stays unreadable is logged once.
+	failing map[string]string
+	poke    chan struct{}
 }
 
 func newNotices(events *bus.Bus, stateDir string, upgrade func(context.Context) (bool, error)) *notices {
@@ -49,6 +58,7 @@ func newNotices(events *bus.Bus, stateDir string, upgrade func(context.Context) 
 		upgrade:  upgrade,
 		disk:     func() (float64, error) { return diskUsed(stateDir) },
 		sent:     map[string]notify.Raise{},
+		failing:  map[string]string{},
 		poke:     make(chan struct{}, 1),
 	}
 }
@@ -84,30 +94,40 @@ func (n *notices) run(ctx context.Context, active []notify.Notification) {
 
 func (n *notices) state(ctx context.Context, all bool) {
 	want := map[string]notify.Raise{}
+	// may are the keys that may be raised from an earlier start, cleared by the first run when not wanted.
+	may := []string{upgradeKey, diskKey}
 	// A part that cannot be read keeps what was said of it, rather than clearing it.
-	keep := func(part string, err error, match func(string) bool) {
-		slog.Warn("notifications: read "+part, "error", err)
+	read := func(part string, err error, match func(string) bool) bool {
+		if err == nil {
+			delete(n.failing, part)
+			return true
+		}
+		if n.failing[part] != err.Error() {
+			n.failing[part] = err.Error()
+			slog.Warn("notifications: read "+part, "error", err)
+		}
 		for k, r := range n.sent {
 			if match(k) {
 				want[k] = r
 			}
 		}
+		may = slices.DeleteFunc(may, match)
+		return false
 	}
-	if err := n.applies(want); err != nil {
-		keep("applies", err, func(k string) bool { return strings.HasPrefix(k, "apply/") })
+	ended, err := n.applies(want)
+	if read("applies", err, func(k string) bool { return strings.HasPrefix(k, "apply/") }) {
+		may = append(may, ended...)
 	}
-	if pending, err := n.upgrade(ctx); err != nil {
-		keep("upgrade decisions", err, func(k string) bool { return k == upgradeKey })
-	} else if pending {
+	if pending, err := n.upgrade(ctx); read("upgrade decisions", err, func(k string) bool { return k == upgradeKey }) && pending {
 		want[upgradeKey] = notify.Raise{Key: upgradeKey, Severity: notify.Warning,
 			Subject: "The settings wait for decisions after an upgrade",
 			Detail:  "Nothing can be saved or applied until they are answered.",
 			Link:    "/system/upgrade", Requires: string(authz.ConfigurationRead)}
 	}
-	if used, err := n.disk(); err != nil {
-		keep("disk use", err, func(k string) bool { return k == diskKey })
-	} else if r, ok := diskNotice(used, n.sent[diskKey].Severity != ""); ok {
-		want[diskKey] = r
+	if used, err := n.disk(); read("disk use", err, func(k string) bool { return k == diskKey }) {
+		if r, ok := diskNotice(used, n.sent[diskKey].Severity); ok {
+			want[diskKey] = r
+		}
 	}
 	for k, r := range want {
 		if (all || n.sent[k] != r) && n.say(r) {
@@ -117,6 +137,13 @@ func (n *notices) state(ctx context.Context, all bool) {
 	for k := range n.sent {
 		if _, ok := want[k]; !ok && n.say(notify.Raise{Key: k}) {
 			delete(n.sent, k)
+		}
+	}
+	if all {
+		for _, k := range may {
+			if _, ok := want[k]; !ok {
+				n.say(notify.Raise{Key: k})
+			}
 		}
 	}
 }
@@ -130,18 +157,21 @@ func (n *notices) say(r notify.Raise) bool {
 	return true
 }
 
-// applies adds each apply that failed or was rolled back after the last confirmed one.
-func (n *notices) applies(want map[string]notify.Raise) error {
+// applies adds the last apply that started, when it failed or was rolled back after the last confirmed one. It
+// returns the other applies that failed or were rolled back, which an earlier run may have raised.
+func (n *notices) applies(want map[string]notify.Raise) ([]string, error) {
 	p, gens, err := generation.List(generation.Dir(n.stateDir))
 	if err != nil {
-		return err
+		return nil, err
 	}
-	for _, g := range gens {
+	var ended []string
+	last, interrupted := true, ""
+	for _, g := range gens { // the newest first
 		// One never started is also one whose apply is starting now, and one that could not start said so to its caller.
-		if p.Confirmed != nil && g.ID <= *p.Confirmed || g.Reason == "never started" {
+		if g.Reason == "never started" {
 			continue
 		}
-		r := notify.Raise{Key: fmt.Sprintf("apply/%d", g.ID), Detail: g.Reason, Link: "/changes", Requires: string(authz.ConfigurationRead)}
+		r := notify.Raise{Key: fmt.Sprintf("apply/%d", g.ID), Detail: notify.Detail(g.Reason), Link: "/changes", Requires: string(authz.ConfigurationRead)}
 		switch g.State.State {
 		case generation.Failed:
 			r.Severity, r.Subject = notify.Warning, fmt.Sprintf("Apply %d failed", g.ID)
@@ -151,26 +181,33 @@ func (n *notices) applies(want map[string]notify.Raise) error {
 			if strings.HasPrefix(g.Reason, "requested") {
 				r.Severity = notify.Warning
 			}
-		default:
-			continue
 		}
-		want[r.Key] = r
+		switch {
+		case r.Severity == "":
+		case !last || p.Confirmed != nil && g.ID <= *p.Confirmed:
+			ended = append(ended, r.Key)
+		case g.Reason == "interrupted" && n.interrupted != r.Key && n.sent[r.Key] != r:
+			interrupted = r.Key
+		default:
+			want[r.Key] = r
+		}
+		last = false
 	}
-	return nil
+	n.interrupted = interrupted
+	return ended, nil
 }
 
-// diskNotice is the disk notification for used, the share of the file system in use; raised says whether it is raised now.
-func diskNotice(used float64, raised bool) (notify.Raise, bool) {
-	r := notify.Raise{Key: diskKey, Severity: notify.Warning, Subject: "The disk holding Andaru's state is over 90% full",
-		Detail: "Andaru keeps its settings, generations and logs there. Free some space before it runs out."}
+// diskNotice is the disk notification for used, the share of the file system in use, given the severity it has now.
+func diskNotice(used float64, now string) (notify.Raise, bool) {
 	switch {
-	case used >= diskCritical:
-		r.Severity, r.Subject = notify.Critical, "The disk holding Andaru's state is over 97% full"
-	case used >= diskWarning, raised && used >= diskClear:
-	default:
-		return notify.Raise{}, false
+	case used >= diskCritical, now == notify.Critical && used >= diskEased:
+		return notify.Raise{Key: diskKey, Severity: notify.Critical, Subject: "The disk holding Andaru's state is almost full",
+			Detail: "Andaru keeps its settings, generations and logs there. Free some space now: a full disk stops saves and applies."}, true
+	case used >= diskWarning, now != "" && used >= diskClear:
+		return notify.Raise{Key: diskKey, Severity: notify.Warning, Subject: "The disk holding Andaru's state is filling up",
+			Detail: "Andaru keeps its settings, generations and logs there. Free some space before it runs out."}, true
 	}
-	return r, true
+	return notify.Raise{}, false
 }
 
 // diskUsed is the share of dir's file system in use, as df counts it: blocks kept for root count as unavailable.

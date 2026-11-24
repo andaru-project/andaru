@@ -102,12 +102,12 @@ Every channel gets a "Send a test" action on its settings page. The test goes th
 
 ## The first sources
 
-- **Applies:** the engine raises `apply/<id>` when an apply fails or is rolled back, and clears it when a later apply is confirmed. This is `warning`, or `critical` for an automatic rollback. An apply that never started is left out: its caller was told, and one that is starting looks the same.
+- **Applies:** the engine raises `apply/<id>` when the last apply failed or was rolled back after the last confirmed one, and clears it when a later apply starts. This is `warning`, or `critical` for a rollback nobody asked for. An apply that never started is left out: its caller was told, and one that is starting looks the same. An apply that reads as interrupted is raised only when two checks in a row find it so, since one between two of its writes reads that way for a moment. The detail is the reason the apply recorded, with what a notification cannot hold replaced.
 - **Upgrade decisions:** raised while the saved settings wait for decisions (safe mode), and cleared when they are answered. This is `warning`, linking to `/system/upgrade`.
 - **Missed notifications** and **missed deliveries:** above.
-- **Disk:** the engine raises `disk/state` when the state directory's file system passes 90% (`warning`) or 97% (`critical`), and clears it below 85%. It checks once a minute.
+- **Disk:** the engine raises `disk/state` when the state directory's file system passes 90% (`warning`) or 97% (`critical`). A critical one eases to a warning below 95%, and a warning clears below 85%. It checks once a minute.
 
-Each states its notifications when the engine starts, as above. The engine's notifications have the source `engine`. After the start, it works them out again at each apply event, each save and each minute, and publishes only what changed.
+Each states its notifications when the engine starts, as above. The engine's notifications have the source `engine`. After the start, it works them out again at each apply event, each save and each minute, and publishes only what changed. At the start it also clears each one that may have been raised before and is not so now (the upgrade, the disk, and every earlier apply that failed or was rolled back), since the layer may not yet have read what came before.
 
 ## What comes first
 
