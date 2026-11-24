@@ -9,7 +9,9 @@
   },
   "scripts": {
     "build": "tsc --noEmit && vite build",
+    "build:netplane": "tsc --noEmit && vite build --config vite.netplane.config.ts",
     "dev": "vite",
+    "dev:netplane": "vite --config vite.netplane.config.ts --open /netplane.html",
     "lint": "eslint . --max-warnings=0",
     "test": "vitest run",
     "theme": "vitest run src/theme.test.ts -u",

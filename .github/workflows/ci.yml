@@ -85,6 +85,7 @@ jobs:
           npm run typecheck
           npm run test
           npm run build
+          npm run build:netplane
           sh ../scripts/ci/npm-audit.sh
 
   native-linux:

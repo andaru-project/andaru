@@ -7,7 +7,7 @@ import { expect, it } from 'vitest';
 const read = (file: string) => readFileSync(file, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
 
 it('uses no light-dark() in the stylesheets', () => {
-  for (const file of ['src/styles.css', 'src/theme.css']) expect(read(file)).not.toContain('light-dark(');
+  for (const file of ['src/styles.css', 'src/theme.css', 'src/netplane/styles.css']) expect(read(file)).not.toContain('light-dark(');
 });
 
 it('gives each colour it took out of light-dark() its dark value under the dark scheme', () => {

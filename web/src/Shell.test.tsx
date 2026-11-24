@@ -223,3 +223,82 @@ it('sets the document title with the page and hostname, and marks pending change
   unmount();
   expect(document.title).toBe('Andaru administration');
 });
+
+it('mounts the fleet screens under /network/* for status.read without requesting targets when configuration.read is absent', async () => {
+  const fetchMock = fetchRoutes({
+    '/api/v1/status/system': { version: '0.5.0-a.4', hostname: 'edge', time: '2026-11-21T12:00:00Z', bootedAt: null },
+    '/api/v1/fleet/state': {
+      devices: [{ id: 'local', name: 'edge', driver: 'andaru', role: 'router', online: true, capabilities: [], system_stats: {}, sensors: [], firmware: {}, uptime_sec: 120 }],
+      links: [],
+      lag_groups: [],
+      segments: [],
+      zones: [],
+      gateways: [],
+      routes: [],
+      vpns: [],
+      firewalls: [],
+      radios: [],
+      wireless_uplinks: [],
+      clients: [],
+    },
+    '/api/v1/fleet/topology': { generated_at: '2026-11-21T12:00:00Z', root_ids: ['local'], nodes: [], edges: [] },
+    '/api/v1/fleet/vlans/flow': { generated_at: '2026-11-21T12:00:00Z', vlans: [], findings: [] },
+    '/api/v1/fleet/diagnostics?limit=30': { items: [] },
+  });
+  render(
+    <MemoryRouter initialEntries={['/network/topology']}>
+      <Shell api={new ApiClient('csrf')} session={session(['status.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} />
+    </MemoryRouter>,
+  );
+  expect(await screen.findByRole('heading', { name: 'Topology' })).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'VLAN Flow' })).toHaveAttribute('href', '/network/vlans/flow');
+  expect(screen.getByRole('link', { name: 'Devices' })).toHaveAttribute('href', '/network/devices');
+  await vi.waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url === '/api/v1/fleet/topology')).toBe(true));
+  expect(fetchMock.mock.calls.map(([url]) => url)).not.toContain('/api/v1/fleet/targets');
+  expect(document.title).toBe('Topology — edge — Andaru');
+});
+
+it('keeps Devices active and loads /api/v1/fleet/devices/:id on device detail routes', async () => {
+  fetchRoutes({
+    '/api/v1/status/system': { version: '0.5.0-a.4', hostname: 'edge', time: '2026-11-21T12:00:00Z', bootedAt: null },
+    '/api/v1/fleet/state': {
+      devices: [{ id: 'sw-core', name: 'Core Switch', driver: 'snmp', role: 'switch', online: true, capabilities: [], system_stats: {}, sensors: [], firmware: {}, uptime_sec: 120 }],
+      links: [],
+      lag_groups: [],
+      segments: [],
+      zones: [],
+      gateways: [],
+      routes: [],
+      vpns: [],
+      firewalls: [],
+      radios: [],
+      wireless_uplinks: [],
+      clients: [],
+    },
+    '/api/v1/fleet/topology': { generated_at: '2026-11-21T12:00:00Z', root_ids: ['sw-core'], nodes: [], edges: [] },
+    '/api/v1/fleet/vlans/flow': { generated_at: '2026-11-21T12:00:00Z', vlans: [], findings: [] },
+    '/api/v1/fleet/diagnostics?limit=30': { items: [] },
+    '/api/v1/fleet/devices/sw-core': {
+      device: { id: 'sw-core', name: 'Core Switch', driver: 'snmp', role: 'switch', online: true, capabilities: [], system_stats: {}, sensors: [], firmware: {}, uptime_sec: 120 },
+      links: [],
+      lag_groups: [],
+      segments: [],
+      zones: [],
+      gateways: [],
+      routes: [],
+      vpns: [],
+      firewalls: [],
+      radios: [],
+      wireless_uplinks: [],
+      clients: [],
+    },
+  });
+  render(
+    <MemoryRouter initialEntries={['/network/devices/sw-core']}>
+      <Shell api={new ApiClient('csrf')} session={session(['status.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} />
+    </MemoryRouter>,
+  );
+  expect(await screen.findByRole('heading', { name: 'Core Switch' })).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'Devices' })).toHaveAttribute('aria-current', 'page');
+  expect(document.title).toBe('Device — edge — Andaru');
+});
