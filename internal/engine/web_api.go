@@ -37,6 +37,7 @@ type webAPI struct {
 	coordinator   *securityCoordinator
 	rootAPI       http.Handler
 	events        *bus.Bus
+	setupCodes    *setupCodeStore
 	stateDir      string
 	origins       map[string]struct{}
 	hosts         map[string]struct{}
@@ -78,13 +79,20 @@ type webStartupStatus struct {
 }
 
 func newWebAPI(identities identity.Store, configuration *config.Store, coordinator *securityCoordinator, rootAPI http.Handler, events *bus.Bus, stateDir string, configuredOrigins []string) (http.Handler, error) {
+	return newWebAPIWithSetupCodes(identities, configuration, coordinator, rootAPI, events, newSetupCodeStore(stateDir), stateDir, configuredOrigins)
+}
+
+func newWebAPIWithSetupCodes(identities identity.Store, configuration *config.Store, coordinator *securityCoordinator, rootAPI http.Handler, events *bus.Bus, setupCodes *setupCodeStore, stateDir string, configuredOrigins []string) (http.Handler, error) {
 	origins, hosts, err := managementOrigins(configuredOrigins)
 	if err != nil {
 		return nil, err
 	}
+	if setupCodes == nil {
+		setupCodes = newSetupCodeStore(stateDir)
+	}
 	return &webAPI{
 		identities: identities, configuration: configuration, coordinator: coordinator, rootAPI: rootAPI, events: events,
-		stateDir: stateDir, origins: origins, hosts: hosts,
+		setupCodes: setupCodes, stateDir: stateDir, origins: origins, hosts: hosts,
 	}, nil
 }
 
@@ -132,6 +140,14 @@ func (h *webAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.startupStatus(w, r)
 		return
 	}
+	if r.URL.Path == "/api/v1/setup/bootstrap" {
+		h.setupBootstrap(w, r, source)
+		return
+	}
+	if r.URL.Path == "/api/v1/setup/code" {
+		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
+		return
+	}
 	if r.URL.Path == "/api/v1/session" {
 		h.session(w, r, source)
 		return
@@ -167,6 +183,13 @@ func (h *webAPI) startupStatus(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, r, http.StatusServiceUnavailable, "IDENTITY_UNAVAILABLE", "Identity status is unavailable.")
 		return
+	}
+	if revision == 0 && h.setupCodes != nil {
+		if _, codeErr := h.setupCodes.Current(); codeErr != nil {
+			slog.WarnContext(r.Context(), "could not prepare setup code", "error", codeErr)
+		}
+	} else if revision > 0 && h.setupCodes != nil {
+		h.setupCodes.Clear()
 	}
 	writeJSON(w, r, http.StatusOK, webStartupStatus{SetupRequired: revision == 0})
 }

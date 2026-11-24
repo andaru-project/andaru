@@ -56,6 +56,7 @@ const realizeUsage = `usage: andaru realize [OPTIONS] activate|confirm N
        andaru realize [OPTIONS] boot|leases|prefixes|factory-reset
        andaru realize [OPTIONS] update-check|update-stage
        andaru realize [OPTIONS] update-rollback|update-reboot
+       andaru realize [OPTIONS] set-hostname NAME
 `
 
 const realizeHelp = `Privileged host steps. The engine runs them in transient systemd units, and
@@ -74,6 +75,7 @@ Verbs:
   update-stage       Download and stage the next signed appliance image
   update-rollback    Queue rollback to the previous appliance image
   update-reboot      Reboot the appliance into the staged deployment
+  set-hostname NAME  Set the static appliance hostname via hostnamectl
 
 Options:
   --state-dir PATH   absolute private state directory (default ` + defaultStateDir + `)
@@ -96,6 +98,9 @@ var ctlCommands = []ctlCommand{
 		"\nEach WAN's requested length, its current prefix and lifetimes, each\ndelegated segment's /64 and each pool's range, as JSON on stdout.\n"},
 	{"openapi", "Print the engine API's OpenAPI description",
 		"usage: andaru ctl openapi\n", ""},
+	{"setup-code", "Show or rotate the one-time WebUI first-boot setup code",
+		"usage: andaru ctl setup-code [--rotate]\n",
+		"\nPrints the one-time setup code while no administrator account exists.\n"},
 	{"config", "Read and change the saved configuration",
 		`usage: andaru ctl config show
        andaru ctl config list|create COLLECTION

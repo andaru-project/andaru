@@ -17,6 +17,7 @@ import { PasswordDialog } from './screens/PasswordDialog';
 import { RolesScreen } from './screens/RolesScreen';
 import { RulesScreen } from './screens/RulesScreen';
 import { SessionScreen } from './screens/SessionScreen';
+import { SetupWizardScreen } from './screens/SetupWizardScreen';
 import { TokensScreen } from './screens/TokensScreen';
 import { UpgradeScreen } from './screens/UpgradeScreen';
 import { UpdatesScreen } from './screens/UpdatesScreen';
@@ -38,6 +39,7 @@ const retryMilliseconds = 15_000;
 
 const pageTitles: Record<string, string> = {
   '/': 'Dashboard',
+  '/setup': 'Setup assistant',
   '/network/interfaces': 'Interfaces',
   '/network/topology': 'Topology',
   '/network/vlans': 'VLANs & Segments',
@@ -312,9 +314,31 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
           {!onChangesPage && changes.error && <Alert color="orange" role="alert" title="Whether changes are pending cannot be read">{changes.error}</Alert>}
           {upgrade.error && !onUpgradePage && <Alert color="orange" role="alert" title="Whether the settings wait for decisions cannot be read">{upgrade.error}</Alert>}
           {upgradePending && !onUpgradePage && <Alert color="orange" role="status" title="Finish the upgrade">The saved settings need decisions before anything can be saved or applied. <Anchor component={Link} to="/system/upgrade">Answer the questions</Anchor></Alert>}
+          {capabilities.has('configuration.apply') && changes.data?.head === '0' && pathname !== '/setup' && (
+            <Alert color="blue" role="status" title="Initial setup">
+              This appliance has no saved network configuration yet. <Anchor component={Link} to="/setup">Open setup assistant</Anchor>
+            </Alert>
+          )}
           {!onChangesPage && <PendingNotice api={api} session={session} state={changes.data} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />}
           <Routes>
             <Route path="/" element={<DashboardScreen api={api} session={session} system={system} update={update.data} onSessionLost={onSessionLost} />} />
+            {capabilities.has('configuration.apply') && (
+              <Route
+                path="/setup"
+                element={
+                  <SetupWizardScreen
+                    api={api}
+                    session={session}
+                    onSessionLost={onSessionLost}
+                    onComplete={() => {
+                      void reloadChanges();
+                      void system.reload();
+                      void navigate('/');
+                    }}
+                  />
+                }
+              />
+            )}
             {canReadChanges && <Route path="/system/upgrade" element={<UpgradeScreen api={api} session={session} onFinished={() => { void reloadUpgrade(); void reloadChanges(); }} onSessionLost={onSessionLost} />} />}
             {pages.filter(([path]) => visible.has(path)).map(([path, element]) => <Route key={path} path={path} element={element} />)}
             {canReadStatus && (
