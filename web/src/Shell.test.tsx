@@ -409,7 +409,7 @@ it('keeps Devices active and loads /api/v1/fleet/devices/:id on device detail ro
   );
   expect(await screen.findByRole('heading', { name: 'Core Switch' })).toBeInTheDocument();
   expect(screen.getByRole('link', { name: 'Devices' })).toHaveAttribute('aria-current', 'page');
-  expect(document.title).toBe('Device — edge — Andaru');
+  await vi.waitFor(() => expect(document.title).toBe('Device — edge — Andaru'));
 });
 
 it('wires session CSRF token, onSessionLost on 401, and background header on periodic fleet polls', async () => {

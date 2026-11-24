@@ -14,7 +14,10 @@ import (
 	"github.com/andaru-project/andaru/internal/update"
 )
 
-const updateAPIPrefix = "/api/v1/system/update"
+const (
+	updateAPIPrefix = "/api/v1/system/update"
+	rebootCooldown  = 60 * time.Second
+)
 
 // updateRunner asks PID 1 to execute privileged bootc/reboot verbs on behalf of the unprivileged engine.
 type updateRunner interface {
@@ -47,11 +50,11 @@ func (s systemdUpdateRunner) RunVerb(ctx context.Context, verb string) error {
 		runtimeLimit = "RuntimeMaxSec=900"
 	}
 	suffix := strings.TrimPrefix(verb, "update-")
-	args := []string{"--quiet", "--collect", "--unit=andaru-update-run-" + suffix, "-p", runtimeLimit}
-	if verb != "update-reboot" {
-		args = append(args, "--wait")
+	args := []string{
+		"--quiet", "--collect", "--wait",
+		"--unit=andaru-update-run-" + suffix, "-p", runtimeLimit,
+		andaruBinary, "realize", "--state-dir", s.stateDir, verb,
 	}
-	args = append(args, andaruBinary, "realize", "--state-dir", s.stateDir, verb)
 	return s.exec(ctx, "/usr/bin/systemd-run", args...)
 }
 
@@ -59,10 +62,13 @@ type updateAPI struct {
 	stateDir  string
 	runner    updateRunner
 	checkIdle func(stateDir string) error
+	now       func() time.Time
 
-	mu      sync.Mutex
-	busyOp  string
-	lastErr string
+	mu             sync.Mutex
+	busyOp         string
+	rebootingUntil time.Time
+	lastErr        string
+	lastErrAt      time.Time
 }
 
 func newUpdateAPI(stateDir string, runner updateRunner) http.Handler {
@@ -73,7 +79,15 @@ func newUpdateAPI(stateDir string, runner updateRunner) http.Handler {
 		stateDir:  stateDir,
 		runner:    runner,
 		checkIdle: reset.CheckPendingApply,
+		now:       time.Now,
 	}
+}
+
+func (u *updateAPI) clock() time.Time {
+	if u.now != nil {
+		return u.now()
+	}
+	return time.Now()
 }
 
 func (u *updateAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -99,9 +113,17 @@ func (u *updateAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func reconcileBootedStatus(st update.Status) update.Status {
-	// Right after rebooting into a staged image (before the post-boot check timer runs),
-	// status.json may still report the new buildVersion as staged/rebootNeeded.
-	if st.RebootNeeded && st.Staged != nil && st.Staged.Version != "" && st.Staged.Version == buildVersion {
+	// Right after rebooting into a staged image or queued rollback (before the post-boot check
+	// timer runs), status.json may still report the new buildVersion as pending reboot.
+	// Guard on Booted.Version != buildVersion so a same-version rebuild/re-tag isn't falsely
+	// reconciled before reboot.
+	if !st.RebootNeeded || buildVersion == "" {
+		return st
+	}
+	if st.Booted != nil && st.Booted.Version == buildVersion {
+		return st
+	}
+	if st.Staged != nil && st.Staged.Version == buildVersion {
 		st.Booted = st.Staged
 		st.Staged = nil
 		st.Available = nil
@@ -109,8 +131,25 @@ func reconcileBootedStatus(st update.Status) update.Status {
 		st.RebootNeeded = false
 		st.State = update.StateUpToDate
 		st.Error = ""
+		return st
+	}
+	if st.RollbackQueued && st.Rollback != nil && st.Rollback.Version == buildVersion {
+		st.Booted = st.Rollback
+		st.Rollback = nil
+		st.Staged = nil
+		st.RollbackQueued = false
+		st.RebootNeeded = false
+		st.State = update.StateUpToDate
+		st.Error = ""
 	}
 	return st
+}
+
+func (u *updateAPI) expireRebootLocked(now time.Time) {
+	if u.busyOp == "rebooting" && !u.rebootingUntil.IsZero() && !now.Before(u.rebootingUntil) {
+		u.busyOp = ""
+		u.rebootingUntil = time.Time{}
+	}
 }
 
 func (u *updateAPI) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -121,9 +160,17 @@ func (u *updateAPI) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st = reconcileBootedStatus(st)
+	now := u.clock()
 	u.mu.Lock()
+	u.expireRebootLocked(now)
 	busy := u.busyOp
 	lastErr := u.lastErr
+	lastErrAt := u.lastErrAt
+	if lastErr != "" && st.Error == "" && st.CheckedAt != nil && st.CheckedAt.After(lastErrAt) {
+		u.lastErr = ""
+		u.lastErrAt = time.Time{}
+		lastErr = ""
+	}
 	u.mu.Unlock()
 	if busy != "" && busy != "rebooting" {
 		st.State = busy
@@ -147,7 +194,9 @@ func (u *updateAPI) beginOp(w http.ResponseWriter, r *http.Request, opState stri
 			return false
 		}
 	}
+	now := u.clock()
 	u.mu.Lock()
+	u.expireRebootLocked(now)
 	if u.busyOp != "" {
 		current := u.busyOp
 		u.mu.Unlock()
@@ -156,8 +205,14 @@ func (u *updateAPI) beginOp(w http.ResponseWriter, r *http.Request, opState stri
 	}
 	u.busyOp = opState
 	u.lastErr = ""
+	u.lastErrAt = time.Time{}
 	u.mu.Unlock()
 	return true
+}
+
+func isBusyError(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "busy") || strings.Contains(msg, "pending") || strings.Contains(msg, "queued or running")
 }
 
 func (u *updateAPI) handleSyncAction(w http.ResponseWriter, r *http.Request, opState, verb string, requireIdle bool) {
@@ -172,7 +227,7 @@ func (u *updateAPI) handleSyncAction(w http.ResponseWriter, r *http.Request, opS
 
 	if err := u.runner.RunVerb(r.Context(), verb); err != nil {
 		slog.WarnContext(r.Context(), "software update verb failed", "verb", verb, "error", err)
-		if strings.Contains(err.Error(), "busy") || strings.Contains(err.Error(), "pending") || strings.Contains(err.Error(), "queued or running") {
+		if isBusyError(err) {
 			writeError(w, r, http.StatusConflict, "SYSTEM_BUSY", "A network apply or realization job is in progress; retry once the box is idle.")
 			return
 		}
@@ -210,6 +265,7 @@ func (u *updateAPI) handleStage(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			slog.Warn("software update stage failed", "error", err)
 			u.lastErr = err.Error()
+			u.lastErrAt = u.clock()
 		}
 		u.mu.Unlock()
 	}()
@@ -224,11 +280,20 @@ func (u *updateAPI) handleReboot(w http.ResponseWriter, r *http.Request) {
 	if err := u.runner.RunVerb(r.Context(), "update-reboot"); err != nil {
 		u.mu.Lock()
 		u.busyOp = ""
+		u.rebootingUntil = time.Time{}
 		u.mu.Unlock()
 		slog.WarnContext(r.Context(), "software update reboot failed", "error", err)
+		if isBusyError(err) {
+			writeError(w, r, http.StatusConflict, "SYSTEM_BUSY", "A network apply or realization job is in progress; retry once the box is idle.")
+			return
+		}
 		writeError(w, r, http.StatusBadGateway, "UPDATE_FAILED", err.Error())
 		return
 	}
-	// Keep busyOp="rebooting" so no second reboot or update starts while the host shuts down.
+	// Hold busyOp="rebooting" for rebootCooldown so no duplicate reboot or update starts while
+	// the host shuts down, without wedging the engine if a reboot is cancelled.
+	u.mu.Lock()
+	u.rebootingUntil = u.clock().Add(rebootCooldown)
+	u.mu.Unlock()
 	writeJSON(w, r, http.StatusAccepted, map[string]bool{"rebooting": true})
 }

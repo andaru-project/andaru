@@ -388,6 +388,6 @@ func (m Manager) Reboot(ctx context.Context) error {
 	if err := m.ensureIdle(ctx, "reboot"); err != nil {
 		return err
 	}
-	_, err = m.run(ctx, "/usr/bin/systemctl", "reboot")
+	_, err = m.run(ctx, "/usr/bin/systemctl", "reboot", "--no-block")
 	return err
 }

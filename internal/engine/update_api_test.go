@@ -55,8 +55,8 @@ func TestSystemdUpdateRunnerArgsAvoidUnitClash(t *testing.T) {
 	if !slices.Contains(calls[1], "--unit=andaru-update-run-stage") || !slices.Contains(calls[1], "RuntimeMaxSec=900") {
 		t.Fatalf("stage args unexpected: %v", calls[1])
 	}
-	if !slices.Contains(calls[2], "--unit=andaru-update-run-reboot") || slices.Contains(calls[2], "--wait") {
-		t.Fatalf("reboot must not pass --wait, got %v", calls[2])
+	if !slices.Contains(calls[2], "--unit=andaru-update-run-reboot") || !slices.Contains(calls[2], "--wait") {
+		t.Fatalf("reboot must pass --wait so lock/idle refusals are reported synchronously, got %v", calls[2])
 	}
 }
 
@@ -225,5 +225,115 @@ func TestUpdateAPILifecycleAndAuthz(t *testing.T) {
 	}
 	if len(wantCaps) > 0 {
 		t.Fatalf("missing capability declarations: %v", wantCaps)
+	}
+}
+
+func TestUpdateAPIRebootCooldownAndBusyError(t *testing.T) {
+	dir := t.TempDir()
+	cur := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	var nextErr error
+	uapi := &updateAPI{
+		stateDir: dir,
+		runner:   stubUpdateRunner{run: func(context.Context, string) error { return nextErr }},
+		now:      func() time.Time { return cur },
+	}
+
+	// Failure inside the reboot unit clears busyOp and maps busy error to 409.
+	nextErr = errors.New("another update operation is busy")
+	rec := httptest.NewRecorder()
+	uapi.ServeHTTP(rec, rootRequest(http.MethodPost, "/api/v1/system/update/reboot"))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("reboot busy failure: got %d, want 409 (%s)", rec.Code, rec.Body.String())
+	}
+
+	// Retry succeeds once idle, then blocks duplicate reboot during cooldown.
+	nextErr = nil
+	rec = httptest.NewRecorder()
+	uapi.ServeHTTP(rec, rootRequest(http.MethodPost, "/api/v1/system/update/reboot"))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("reboot retry: got %d, want 202 (%s)", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	uapi.ServeHTTP(rec, rootRequest(http.MethodPost, "/api/v1/system/update/reboot"))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("duplicate reboot during cooldown: got %d, want 409", rec.Code)
+	}
+
+	// After rebootCooldown elapses (e.g. reboot cancelled), engine is no longer wedged.
+	cur = cur.Add(rebootCooldown + time.Second)
+	rec = httptest.NewRecorder()
+	uapi.ServeHTTP(rec, rootRequest(http.MethodPost, "/api/v1/system/update/reboot"))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("reboot after cooldown: got %d, want 202 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestReconcileBootedStatusRollbackAndSameVersionRebuild(t *testing.T) {
+	prev := buildVersion
+	defer func() { buildVersion = prev }()
+
+	// Same-version rebuild (new digest, same version string) must NOT clear rebootNeeded before reboot.
+	buildVersion = "0.5.0-a.4"
+	rebuild := reconcileBootedStatus(update.Status{
+		Supported:    true,
+		State:        update.StateStaged,
+		Booted:       &update.Deployment{Version: "0.5.0-a.4", Digest: "sha256:old"},
+		Staged:       &update.Deployment{Version: "0.5.0-a.4", Digest: "sha256:new"},
+		RebootNeeded: true,
+	})
+	if !rebuild.RebootNeeded || rebuild.State != update.StateStaged {
+		t.Fatalf("same-version rebuild must keep rebootNeeded, got %+v", rebuild)
+	}
+
+	// Queued rollback reconciles once booted into the rollback version.
+	buildVersion = "0.5.0-a.3"
+	rolledBack := reconcileBootedStatus(update.Status{
+		Supported:      true,
+		State:          update.StateStaged,
+		Booted:         &update.Deployment{Version: "0.5.0-a.4", Digest: "sha256:new"},
+		Rollback:       &update.Deployment{Version: "0.5.0-a.3", Digest: "sha256:old"},
+		RollbackQueued: true,
+		RebootNeeded:   true,
+	})
+	if rolledBack.RebootNeeded || rolledBack.RollbackQueued || rolledBack.State != update.StateUpToDate || rolledBack.Booted == nil || rolledBack.Booted.Version != "0.5.0-a.3" {
+		t.Fatalf("expected reconciled rollback status, got %+v", rolledBack)
+	}
+}
+
+func TestUpdateAPIClearsStaleStageErrorAfterNewerCheck(t *testing.T) {
+	dir := t.TempDir()
+	errTime := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	uapi := &updateAPI{
+		stateDir:  dir,
+		runner:    stubUpdateRunner{},
+		now:       func() time.Time { return errTime },
+		lastErr:   "registry timeout",
+		lastErrAt: errTime,
+	}
+
+	// Older check still surfaces the in-memory stage error.
+	older := errTime.Add(-time.Minute)
+	if err := update.WriteStatus(dir, update.Status{Supported: true, State: update.StateAvailable, CheckedAt: &older}); err != nil {
+		t.Fatalf("WriteStatus older: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	uapi.ServeHTTP(rec, rootRequest(http.MethodGet, "/api/v1/system/update"))
+	var st update.Status
+	_ = json.Unmarshal(rec.Body.Bytes(), &st)
+	if st.State != update.StateError || st.Error != "registry timeout" {
+		t.Fatalf("expected stage error with older check, got %+v", st)
+	}
+
+	// Newer successful timer check clears the stale in-memory error.
+	newer := errTime.Add(time.Minute)
+	if err := update.WriteStatus(dir, update.Status{Supported: true, State: update.StateAvailable, CheckedAt: &newer}); err != nil {
+		t.Fatalf("WriteStatus newer: %v", err)
+	}
+	rec = httptest.NewRecorder()
+	uapi.ServeHTTP(rec, rootRequest(http.MethodGet, "/api/v1/system/update"))
+	st = update.Status{}
+	_ = json.Unmarshal(rec.Body.Bytes(), &st)
+	if st.State != update.StateAvailable || st.Error != "" {
+		t.Fatalf("expected stale stage error cleared by newer check, got %+v", st)
 	}
 }
