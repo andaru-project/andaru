@@ -58,10 +58,20 @@ func BindingFindings(declaration json.RawMessage, links []host.LinkStatus) ([]Fi
 var kernelKind = map[string]string{"vlan": "vlan", "bridge": "bridge", "bond": "bond", "pppoe": "ppp"}
 var namePrefix = map[string]string{"vlan": "vl", "bridge": "br", "bond": "bo", "pppoe": "pp"}
 
+// KernelName returns the deterministic kernel interface name Andaru assigns to a virtual link
+// (vlan, bridge, bond, pppoe), or "" for physical/unknown kinds.
+func KernelName(kind, id string) string {
+	prefix, ok := namePrefix[kind]
+	if !ok {
+		return ""
+	}
+	hex := strings.ReplaceAll(id[strings.IndexByte(id, '_')+1:], "-", "")
+	return prefix + hex[:min(12, len(hex))]
+}
+
 // derivedName is at most 14 bytes: user names may be 128 code points, kernel names 15 bytes.
 func derivedName(l link) string {
-	hex := strings.ReplaceAll(l.ID[strings.IndexByte(l.ID, '_')+1:], "-", "")
-	return namePrefix[l.Kind] + hex[:min(12, len(hex))]
+	return KernelName(l.Kind, l.ID)
 }
 
 func (r *renderer) assignNames() {

@@ -13,6 +13,7 @@ import (
 	"github.com/andaru-project/andaru/internal/host"
 	npdriver "github.com/andaru-project/andaru/internal/netplane/driver"
 	npmodel "github.com/andaru-project/andaru/internal/netplane/model"
+	"github.com/andaru-project/andaru/internal/render"
 )
 
 const (
@@ -81,12 +82,15 @@ func buildLocalSnapshot(ctx context.Context, src localHostSource, now time.Time)
 			continue
 		}
 		obsByName[al.Name] = al
-		if m := strings.ToLower(strings.TrimSpace(al.PermanentAddress)); m != "" {
-			obsByMAC[m] = al
-		}
-		if m := strings.ToLower(strings.TrimSpace(al.LinkAddress)); m != "" {
-			if _, ok := obsByMAC[m]; !ok {
+		// Only kindless Ethernet interfaces are physical NICs; VLANs, bridges, and bonds inherit
+		// their parent's MAC and must not shadow the hardware link.
+		if al.LinkType == "ether" && al.Kind == "" {
+			if m := strings.ToLower(strings.TrimSpace(al.PermanentAddress)); m != "" {
 				obsByMAC[m] = al
+			} else if m := strings.ToLower(strings.TrimSpace(al.LinkAddress)); m != "" {
+				if _, ok := obsByMAC[m]; !ok {
+					obsByMAC[m] = al
+				}
 			}
 		}
 		rawMACs = append(rawMACs, al.LinkAddress)
@@ -170,16 +174,21 @@ func buildLocalSnapshot(ctx context.Context, src localHostSource, now time.Time)
 		snap.MarkUnavailable(npdriver.SectionZones)
 		snap.MarkUnavailable(npdriver.SectionFirewalls)
 	} else {
-		// Map declared link IDs to OS interface names (prefer observed PermanentMAC match, then Name).
+		// Map declared link IDs to OS interface names using the renderer's exact resolution rules:
+		// physical Ethernet links match kindless hardware MACs; virtual links use render.KernelName.
 		linkIfName := make(map[string]string, len(decl.Links))
 		linkByID := make(map[string]int, len(decl.Links))
 		for i, dl := range decl.Links {
 			linkByID[dl.ID] = i
 			ifName := dl.Name
-			if m := strings.ToLower(strings.TrimSpace(dl.PermanentMAC)); m != "" {
-				if obs, ok := obsByMAC[m]; ok {
-					ifName = obs.Name
+			if dl.Kind == "ethernet" {
+				if m := strings.ToLower(strings.TrimSpace(dl.PermanentMAC)); m != "" {
+					if obs, ok := obsByMAC[m]; ok {
+						ifName = obs.Name
+					}
 				}
+			} else if derived := render.KernelName(dl.Kind, dl.ID); derived != "" {
+				ifName = derived
 			}
 			linkIfName[dl.ID] = ifName
 		}

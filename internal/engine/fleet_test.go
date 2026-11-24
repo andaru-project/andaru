@@ -19,6 +19,7 @@ import (
 	"github.com/andaru-project/andaru/internal/host"
 	"github.com/andaru-project/andaru/internal/netplane/topology"
 	"github.com/andaru-project/andaru/internal/netplane/vlanflow"
+	"github.com/andaru-project/andaru/internal/render"
 )
 
 func TestFleetSecretsEncryptedAtRest(t *testing.T) {
@@ -55,6 +56,13 @@ func TestFleetSecretsEncryptedAtRest(t *testing.T) {
 }
 
 func TestBuildLocalSnapshotMapsHostAndConfig(t *testing.T) {
+	const (
+		bondID   = "lnk_00000000-0000-4000-8000-000000000003"
+		vlanID   = "lnk_00000000-0000-4000-8000-000000000004"
+	)
+	bondKernel := render.KernelName("bond", bondID)
+	vlanKernel := render.KernelName("vlan", vlanID)
+
 	src := localHostSource{
 		Hostname: func() string { return "andaru-gw" },
 		ReadLinks: func(context.Context) ([]host.LinkStatus, error) {
@@ -62,8 +70,9 @@ func TestBuildLocalSnapshotMapsHostAndConfig(t *testing.T) {
 				{IfIndex: 1, Name: "lo", LinkType: "loopback", MTU: 65536, OperState: "UNKNOWN", Flags: []string{"UP", "LOOPBACK"}},
 				{IfIndex: 2, Name: "enp1s0", LinkType: "ether", MTU: 1500, OperState: "UP", Flags: []string{"UP", "RUNNING"}, LinkAddress: "00:11:22:33:44:01", PermanentAddress: "00:11:22:33:44:01"},
 				{IfIndex: 3, Name: "enp2s0", LinkType: "ether", MTU: 1500, OperState: "UP", Flags: []string{"UP", "RUNNING"}, LinkAddress: "00:11:22:33:44:02", PermanentAddress: "00:11:22:33:44:02"},
-				{IfIndex: 4, Name: "bond0", LinkType: "ether", MTU: 1500, OperState: "UP", Flags: []string{"UP", "RUNNING"}, LinkAddress: "00:11:22:33:44:01"},
-				{IfIndex: 5, Name: "bond0.10", LinkType: "ether", MTU: 1500, OperState: "UP", Flags: []string{"UP", "RUNNING"}, LinkAddress: "00:11:22:33:44:01", Addresses: []host.AddressStatus{
+				// Virtual links inherit the physical NIC's MAC and must not shadow enp1s0 in hardware MAC lookup.
+				{IfIndex: 4, Name: bondKernel, LinkType: "ether", Kind: "bond", MTU: 1500, OperState: "UP", Flags: []string{"UP", "RUNNING"}, LinkAddress: "00:11:22:33:44:01", PermanentAddress: "00:11:22:33:44:01"},
+				{IfIndex: 5, Name: vlanKernel, LinkType: "ether", Kind: "vlan", MTU: 1500, OperState: "UP", Flags: []string{"UP", "RUNNING"}, LinkAddress: "00:11:22:33:44:01", PermanentAddress: "00:11:22:33:44:01", Addresses: []host.AddressStatus{
 					{Family: "ipv4", Address: "10.10.10.1", PrefixLength: 24, Scope: "global"},
 				}},
 			}, nil
@@ -75,13 +84,13 @@ func TestBuildLocalSnapshotMapsHostAndConfig(t *testing.T) {
 				Value: []byte(`{
 					"schemaVersion": 1,
 					"links": [
-						{"id": "lnk_1", "name": "eth0", "kind": "ethernet", "enabled": true, "permanentMac": "00:11:22:33:44:01"},
-						{"id": "lnk_2", "name": "eth1", "kind": "ethernet", "enabled": true, "permanentMac": "00:11:22:33:44:02"},
-						{"id": "lnk_bond", "name": "bond0", "kind": "bond", "enabled": true, "members": ["lnk_1", "lnk_2"]},
-						{"id": "lnk_v10", "name": "bond0.10", "kind": "vlan", "enabled": true, "parent": "lnk_bond", "vlanId": 10}
+						{"id": "lnk_00000000-0000-4000-8000-000000000001", "name": "uplink-a", "kind": "ethernet", "enabled": true, "permanentMac": "00:11:22:33:44:01"},
+						{"id": "lnk_00000000-0000-4000-8000-000000000002", "name": "uplink-b", "kind": "ethernet", "enabled": true, "permanentMac": "00:11:22:33:44:02"},
+						{"id": "` + bondID + `", "name": "Core LAG", "kind": "bond", "enabled": true, "members": ["lnk_00000000-0000-4000-8000-000000000001", "lnk_00000000-0000-4000-8000-000000000002"]},
+						{"id": "` + vlanID + `", "name": "LAN VLAN 10", "kind": "vlan", "enabled": true, "parent": "` + bondID + `", "vlanId": 10}
 					],
 					"segments": [
-						{"id": "seg_lan", "name": "LAN", "link": "lnk_v10", "zone": "zon_lan"}
+						{"id": "seg_lan", "name": "LAN", "link": "` + vlanID + `", "zone": "zon_lan"}
 					],
 					"zones": [
 						{"id": "zon_lan", "name": "lan"}
@@ -101,19 +110,19 @@ func TestBuildLocalSnapshotMapsHostAndConfig(t *testing.T) {
 	if len(snap.Devices) != 1 || snap.Devices[0].ID != fleetLocalDeviceID || snap.Devices[0].Name != "andaru-gw" || snap.Devices[0].MgmtIP != "10.10.10.1" {
 		t.Fatalf("unexpected local device: %+v", snap.Devices)
 	}
-	if len(snap.LagGroups) != 1 || snap.LagGroups[0].Name != "bond0" || !slices.Equal(snap.LagGroups[0].MemberLinks, []string{"enp1s0", "enp2s0"}) {
+	if len(snap.LagGroups) != 1 || snap.LagGroups[0].Name != bondKernel || !slices.Equal(snap.LagGroups[0].MemberLinks, []string{"enp1s0", "enp2s0"}) {
 		t.Fatalf("unexpected lag groups: %+v", snap.LagGroups)
 	}
 	foundBondVLAN := false
 	for _, l := range snap.Links {
-		if l.IfName == "bond0" && slices.Contains(l.TaggedVLANs, 10) {
+		if l.IfName == bondKernel && slices.Contains(l.TaggedVLANs, 10) {
 			foundBondVLAN = true
 		}
 	}
 	if !foundBondVLAN {
-		t.Fatalf("expected bond0 to carry tagged VLAN 10, links = %+v", snap.Links)
+		t.Fatalf("expected %s to carry tagged VLAN 10, links = %+v", bondKernel, snap.Links)
 	}
-	if len(snap.Segments) != 1 || snap.Segments[0].ParentLink != "bond0" || snap.Segments[0].VLANID == nil || *snap.Segments[0].VLANID != 10 || snap.Segments[0].ZoneID != "zon_lan" {
+	if len(snap.Segments) != 1 || snap.Segments[0].ParentLink != bondKernel || snap.Segments[0].VLANID == nil || *snap.Segments[0].VLANID != 10 || snap.Segments[0].ZoneID != "zon_lan" || len(snap.Segments[0].Addresses) != 1 {
 		t.Fatalf("unexpected segments: %+v", snap.Segments)
 	}
 	if len(snap.Zones) != 1 || !slices.Equal(snap.Zones[0].SegmentIDs, []string{"seg_lan"}) {
