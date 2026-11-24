@@ -37,13 +37,16 @@ export function NotificationsScreen({ api, session, notifications, onSessionLost
       // Not found is gone already, or no longer the caller's to see: the list read next says which.
       if (!(error instanceof ApiError && error.status === 404)) {
         reportError(error, onSessionLost, setDismissError);
-        if (error instanceof ApiError && error.status === 401) return;
+        if (error instanceof ApiError && error.status === 401) {
+          setDismissing(null);
+          return;
+        }
       }
-    } finally {
-      setDismissing(null);
     }
-    // The change event reloads the list too, but the stream may be down.
+    // The change event reloads the list too, but the stream may be down. The button stays busy until the list is read,
+    // so a dismissed notification is not offered again.
     await notifications.reload();
+    setDismissing(null);
   }
 
   return (

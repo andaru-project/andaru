@@ -23,7 +23,12 @@ export function highestSeverity(items: readonly Notification[]): NotificationSev
 
 // isSafeAppLink allows only in-app paths that a browser cannot read as another site's. The page's own origin must
 // come back from the URL parser itself: it drops tabs and new lines and reads a backslash as a slash, so `/\t/host`
-// and `/\host` are `//host`.
+// and `/\host` are `//host`. One it cannot parse is no link.
 export function isSafeAppLink(link: string | undefined): link is string {
-  return typeof link === 'string' && link.startsWith('/') && new URL(link, window.location.origin).origin === window.location.origin;
+  if (typeof link !== 'string' || !link.startsWith('/')) return false;
+  try {
+    return new URL(link, window.location.origin).origin === window.location.origin;
+  } catch {
+    return false;
+  }
 }
