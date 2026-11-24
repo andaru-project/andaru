@@ -22,7 +22,7 @@ import (
 const eventsPath = "/api/v1/events"
 
 // eventsHeartbeat is how often an open event stream is written to and its session checked again: a stream ends
-// within this long of its session ending or losing a capability it was opened with.
+// within this long of its session ending or its capabilities changing.
 var eventsHeartbeat = 25 * time.Second
 
 // openBus starts the event bus with its store in the state directory and its socket where only root reaches it:
@@ -181,8 +181,8 @@ func (h *webAPI) eventStream(w http.ResponseWriter, r *http.Request, source stri
 			message = append(append([]byte("data: "), compact.Bytes()...), "\n\n"...)
 		case <-heartbeat.C:
 			current, _, _, _, _, err := h.readCookiePrincipal(r)
-			// A stream opened with a capability the account no longer has ends; the browser opens it again with what
-			// the account has now.
+			// A stream whose account's capabilities changed what it would carry ends; the browser opens it again with
+			// what the account has now.
 			if err != nil || !slices.Equal(streamFilters(requestActor{Actor: current.Actor, Capabilities: current.Capabilities}), filters) {
 				return
 			}

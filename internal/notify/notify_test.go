@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -19,9 +20,9 @@ type bench struct {
 	changes chan struct{}
 }
 
-func newBench(t *testing.T, lost bool) *bench {
+func newBench(t *testing.T) *bench {
 	b := &bench{t: t, dir: t.TempDir(), changes: make(chan struct{}, 64)}
-	b.open(lost)
+	b.open(false)
 	t.Cleanup(b.close)
 	return b
 }
@@ -90,10 +91,12 @@ func (b *bench) history() int {
 	return n
 }
 
+func all(string) bool { return true }
+
 var full = Raise{Key: "var", Severity: Warning, Subject: "The disk is filling up", Detail: "91% used", Link: "/system", Requires: "status.read"}
 
 func TestRaiseUpdateClear(t *testing.T) {
-	b := newBench(t, false)
+	b := newBench(t)
 	b.publish("disk", full)
 	b.changed()
 	if got := b.active(); len(got) != 1 || got[0].Source != "disk" || got[0].Raise != full {
@@ -119,7 +122,7 @@ func TestRaiseUpdateClear(t *testing.T) {
 
 // An event delivered again, after a crash between the store and the bus's cursor, changes nothing twice.
 func TestEventSeenOnce(t *testing.T) {
-	b := newBench(t, false)
+	b := newBench(t)
 	payload, err := bus.NewEvent(RaisedType, "disk", full)
 	if err != nil {
 		t.Fatal(err)
@@ -129,7 +132,7 @@ func TestEventSeenOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.changed()
-	if _, err = b.layer.Dismiss(b.active()[0].ID, "usr_1"); err != nil {
+	if _, err = b.layer.Dismiss(b.active()[0].ID, "usr_1", all); err != nil {
 		t.Fatal(err)
 	}
 	b.changed()
@@ -143,11 +146,11 @@ func TestEventSeenOnce(t *testing.T) {
 }
 
 func TestDismissAndRaiseAgain(t *testing.T) {
-	b := newBench(t, false)
+	b := newBench(t)
 	b.publish("disk", full)
 	b.changed()
 	id := b.active()[0].ID
-	if ok, err := b.layer.Dismiss(id, "usr_1"); err != nil || !ok {
+	if ok, err := b.layer.Dismiss(id, "usr_1", all); err != nil || !ok {
 		t.Fatal(ok, err)
 	}
 	b.changed()
@@ -155,7 +158,7 @@ func TestDismissAndRaiseAgain(t *testing.T) {
 	if err := b.layer.db.QueryRow(`SELECT dismissed_by FROM history`).Scan(&by); err != nil || by != "usr_1" {
 		t.Fatalf("dismissed by %q: %v", by, err)
 	}
-	if ok, err := b.layer.Dismiss(id, "usr_1"); err != nil || ok {
+	if ok, err := b.layer.Dismiss(id, "usr_1", all); err != nil || ok {
 		t.Fatal("dismissed twice", ok, err)
 	}
 	b.publish("disk", full)
@@ -166,7 +169,7 @@ func TestDismissAndRaiseAgain(t *testing.T) {
 }
 
 func TestRefusedEventsAreSkipped(t *testing.T) {
-	b := newBench(t, false)
+	b := newBench(t)
 	forged, _ := bus.NewEvent(RaisedType, "applies", full) // on another source's topic
 	if err := b.events.Publish("notification/disk", forged, true); err != nil {
 		t.Fatal(err)
@@ -178,8 +181,18 @@ func TestRefusedEventsAreSkipped(t *testing.T) {
 		{Key: "x", Severity: Info, Subject: "s", Link: "//example.com"},
 		{Key: "x", Severity: Info, Subject: "s", Requires: "everything"},
 		{Key: "", Severity: Info, Subject: "s"},
+		{Key: "x", Severity: Info, Subject: "s", Link: "/\\evil.example"},
+		{Key: "x", Severity: Info, Subject: "s", Link: "/\x7f"},
+		{Key: "x", Severity: Info, Subject: "ok\u202egnp.exe"},
+		{Key: "x", Severity: Info, Subject: "two\u2028lines"},
+		{Key: "x", Severity: Info, Subject: "s", Detail: "a\u0085b"},
+		{Key: "x\ny", Severity: Info, Subject: "s"},
 	} {
 		b.publish("disk", r)
+	}
+	timeless, _ := json.Marshal(bus.Event{ID: "e1", Type: RaisedType, Source: "disk", Data: Raise{Key: "timeless", Severity: Info, Subject: "s"}})
+	if err := b.events.Publish("notification/disk", timeless, true); err != nil {
+		t.Fatal(err)
 	}
 	b.publish("disk", full) // read past them
 	b.changed()
@@ -190,7 +203,7 @@ func TestRefusedEventsAreSkipped(t *testing.T) {
 }
 
 func TestListSurvivesRestart(t *testing.T) {
-	b := newBench(t, false)
+	b := newBench(t)
 	b.publish("disk", full)
 	b.changed()
 	b.close()
@@ -202,7 +215,7 @@ func TestListSurvivesRestart(t *testing.T) {
 }
 
 func TestGapRaisesMissed(t *testing.T) {
-	b := newBench(t, false)
+	b := newBench(t)
 	b.close()
 	for _, suffix := range []string{"", "-wal", "-shm"} { // the bus's store was replaced, as openBus does with one it cannot read
 		if err := os.Remove(filepath.Join(b.dir, "bus.db"+suffix)); err != nil && !os.IsNotExist(err) {
@@ -218,7 +231,7 @@ func TestGapRaisesMissed(t *testing.T) {
 }
 
 func TestHistoryIsBounded(t *testing.T) {
-	b := newBench(t, false)
+	b := newBench(t)
 	tx, err := b.layer.db.Begin()
 	if err != nil {
 		t.Fatal(err)
@@ -238,5 +251,67 @@ func TestHistoryIsBounded(t *testing.T) {
 	}
 	if n := b.history(); n != historySize {
 		t.Fatalf("history holds %d", n)
+	}
+}
+
+// The same event ID from two sources is two events: one source cannot suppress another's by reusing its ID.
+func TestEventSeenPerSource(t *testing.T) {
+	b := newBench(t)
+	for _, source := range []string{"addon", "disk"} {
+		payload, _ := json.Marshal(bus.Event{ID: "same", Type: RaisedType, Time: time.Now(), Source: source, Data: full})
+		if err := b.events.Publish("notification/"+source, payload, true); err != nil {
+			t.Fatal(err)
+		}
+		b.changed()
+	}
+	if got := b.active(); len(got) != 2 {
+		t.Fatalf("active %+v", got)
+	}
+}
+
+// A notification's times are the layer's: a source cannot date one into the future to keep it on top.
+func TestTimesAreTheLayers(t *testing.T) {
+	b := newBench(t)
+	payload, _ := json.Marshal(bus.Event{ID: "e1", Type: RaisedType, Time: time.Now().AddDate(100, 0, 0), Source: "addon", Data: full})
+	if err := b.events.Publish("notification/addon", payload, true); err != nil {
+		t.Fatal(err)
+	}
+	b.changed()
+	if got := b.active()[0]; got.Raised.After(time.Now()) || got.Updated.After(time.Now()) {
+		t.Fatalf("dated %v, %v", got.Raised, got.Updated)
+	}
+}
+
+// One that may not be seen is not dismissed.
+func TestDismissOnlyWhatIsSeen(t *testing.T) {
+	b := newBench(t)
+	b.publish("disk", full)
+	b.changed()
+	if ok, err := b.layer.Dismiss(b.active()[0].ID, "usr_1", func(requires string) bool { return requires != "status.read" }); err != nil || ok {
+		t.Fatal("dismissed one it may not see", ok, err)
+	}
+	if len(b.active()) != 1 {
+		t.Fatal("it ended")
+	}
+}
+
+// What is kept of ended notifications, and of events seen, goes after 30 days.
+func TestOldRecordsArePruned(t *testing.T) {
+	b := newBench(t)
+	old := time.Now().Add(-historyAge - time.Hour).Unix()
+	if _, err := b.layer.db.Exec(`INSERT INTO history (source, key, severity, subject, raised, ended, dismissed_by) VALUES ('disk', 'old', 'info', 's', ?, ?, '');
+		INSERT INTO seen (source, event, time) VALUES ('disk', 'old', ?)`, old, old, old); err != nil {
+		t.Fatal(err)
+	}
+	b.publish("disk", full)
+	b.changed()
+	b.publish("disk", Raise{Key: full.Key})
+	b.changed()
+	var history, seen int
+	if err := b.layer.db.QueryRow(`SELECT (SELECT count(*) FROM history WHERE key = 'old'), (SELECT count(*) FROM seen WHERE event = 'old')`).Scan(&history, &seen); err != nil {
+		t.Fatal(err)
+	}
+	if history != 0 || seen != 0 {
+		t.Fatalf("kept %d old history rows and %d old events", history, seen)
 	}
 }

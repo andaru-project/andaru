@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	_ "modernc.org/sqlite"
@@ -26,6 +27,7 @@ import (
 const (
 	Filter       = "notification/#"
 	ChangedTopic = "notifications/changed"
+	ChangedType  = "notifications.changed"
 	RaisedType   = "notification.raised.v1"
 	ClearedType  = "notification.cleared.v1"
 	consumer     = "notifications"
@@ -59,7 +61,7 @@ type Notification struct {
 	ID     int64     `json:"id"`
 	Source string    `json:"source"`
 	Raised time.Time `json:"raised"`
-	// Updated is when its source last raised it.
+	// Updated is when it was raised or last changed.
 	Updated time.Time `json:"updated"`
 	Raise
 }
@@ -88,7 +90,8 @@ func Open(path string, events *bus.Bus, log *slog.Logger) (*Layer, error) {
 		CREATE TABLE IF NOT EXISTS history (
 			id INTEGER PRIMARY KEY, source TEXT NOT NULL, key TEXT NOT NULL, severity TEXT NOT NULL,
 			subject TEXT NOT NULL, raised INTEGER NOT NULL, ended INTEGER NOT NULL, dismissed_by TEXT NOT NULL);
-		CREATE TABLE IF NOT EXISTS seen (event TEXT PRIMARY KEY, time INTEGER NOT NULL) WITHOUT ROWID`); err != nil {
+		CREATE TABLE IF NOT EXISTS seen (
+			source TEXT NOT NULL, event TEXT NOT NULL, time INTEGER NOT NULL, PRIMARY KEY (source, event)) WITHOUT ROWID`); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -127,14 +130,21 @@ func (l *Layer) Active() ([]Notification, error) {
 	return list, rows.Err()
 }
 
-// Dismiss ends the active notification id on behalf of by. It comes back if its source raises it again. False when
-// there is no such notification.
-func (l *Layer) Dismiss(id int64, by string) (bool, error) {
+// Dismiss ends the active notification id on behalf of by, if sees says by may see what it requires. It comes back
+// if its source raises it again. False when there is no such notification by may see.
+func (l *Layer) Dismiss(id int64, by string, sees func(requires string) bool) (bool, error) {
 	tx, err := l.db.Begin()
 	if err != nil {
 		return false, err
 	}
 	defer tx.Rollback()
+	// Read in the transaction that ends it: a raise in between may have changed what it requires.
+	var requires string
+	if err = tx.QueryRow(`SELECT requires FROM active WHERE id = ?`, id).Scan(&requires); errors.Is(err, sql.ErrNoRows) || err == nil && !sees(requires) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
 	ended, err := end(tx, `id = ?`, []any{id}, by)
 	if err != nil || !ended {
 		return false, err
@@ -191,30 +201,18 @@ func (l *Layer) handle(m bus.Message) error {
 // apply records the event in m. An event it cannot read is logged and skipped: retrying it would hold up every
 // notification after it.
 func (l *Layer) apply(tx *sql.Tx, m bus.Message) (bool, error) {
-	var e struct {
-		ID     string          `json:"id"`
-		Type   string          `json:"type"`
-		Time   time.Time       `json:"time"`
-		Source string          `json:"source"`
-		Data   json.RawMessage `json:"data"`
-	}
 	var r Raise
+	e := bus.Event{Data: &r}
 	err := json.Unmarshal(m.Payload, &e)
 	if err == nil {
-		err = json.Unmarshal(e.Data, &r)
-	}
-	if err == nil {
-		err = validate(m.Topic, e.ID, e.Type, e.Source, r)
-	}
-	if err == nil && e.Time.IsZero() {
-		err = errors.New("no time")
+		err = validate(m.Topic, e, r)
 	}
 	if err != nil {
 		l.log.Error("notification skipped", "topic", m.Topic, "seq", m.Seq, "error", err)
 		return false, nil
 	}
 	// An event seen before is one delivered again after a crash: it changes nothing twice.
-	res, err := tx.Exec(`INSERT INTO seen (event, time) VALUES (?, ?) ON CONFLICT DO NOTHING`, e.ID, time.Now().Unix())
+	res, err := tx.Exec(`INSERT INTO seen (source, event, time) VALUES (?, ?, ?) ON CONFLICT DO NOTHING`, e.Source, e.ID, time.Now().Unix())
 	if err != nil {
 		return false, err
 	}
@@ -228,31 +226,46 @@ func (l *Layer) apply(tx *sql.Tx, m bus.Message) (bool, error) {
 	if e.Type == ClearedType {
 		return end(tx, `source = ? AND key = ?`, []any{e.Source, r.Key}, "")
 	}
-	return raise(tx, e.Source, r, e.Time)
+	// The time is the layer's, not the event's: a source does not set where its notification sorts.
+	return raise(tx, e.Source, r, time.Now())
 }
 
-func validate(topic, id, typ, source string, r Raise) error {
-	text := func(s string, max int) bool {
-		return utf8.ValidString(s) && len(s) <= max && !strings.ContainsFunc(s, func(c rune) bool { return c < 0x20 && c != '\n' })
-	}
+// text is valid UTF-8 of at most max bytes with no control or format character (a bidi override, a line or
+// paragraph separator) but the line breaks lines allows.
+func text(s string, max int, lines bool) bool {
+	return utf8.ValidString(s) && len(s) <= max && !strings.ContainsFunc(s, func(c rune) bool {
+		return (unicode.IsControl(c) && !(lines && c == '\n')) || unicode.Is(unicode.Cf, c) || c == '\u2028' || c == '\u2029'
+	})
+}
+
+// path reports whether link is a path in the web UI: one a browser cannot read as another site's (//host, /\host).
+func path(link string) bool {
+	u, err := url.Parse(link)
+	return err == nil && u.Scheme == "" && u.Host == "" && strings.HasPrefix(link, "/") && !strings.HasPrefix(link, "//") &&
+		!strings.Contains(link, "\\") && text(link, 1024, false)
+}
+
+func validate(topic string, e bus.Event, r Raise) error {
 	switch {
-	case id == "" || len(id) > 64:
-		return errors.New("no event ID")
-	case topic != "notification/"+source:
-		return fmt.Errorf("source %q does not match the topic", source)
-	case r.Key == "" || !text(r.Key, 256) || strings.Contains(r.Key, "\n"):
+	case e.ID == "" || len(e.ID) > 64:
+		return errors.New("invalid event ID")
+	case e.Time.IsZero():
+		return errors.New("no time")
+	case topic != "notification/"+e.Source:
+		return fmt.Errorf("source %q does not match the topic", e.Source)
+	case r.Key == "" || !text(r.Key, 256, false):
 		return errors.New("invalid key")
-	case typ == ClearedType:
+	case e.Type == ClearedType:
 		return nil
-	case typ != RaisedType:
-		return fmt.Errorf("unknown type %q", typ)
+	case e.Type != RaisedType:
+		return fmt.Errorf("unknown type %q", e.Type)
 	case r.Severity != Info && r.Severity != Warning && r.Severity != Critical:
 		return fmt.Errorf("unknown severity %q", r.Severity)
-	case r.Subject == "" || !text(r.Subject, 256) || strings.Contains(r.Subject, "\n"):
+	case r.Subject == "" || !text(r.Subject, 256, false):
 		return errors.New("invalid subject")
-	case !text(r.Detail, 4096):
+	case !text(r.Detail, 4096, true):
 		return errors.New("invalid detail")
-	case r.Link != "" && (!strings.HasPrefix(r.Link, "/") || strings.HasPrefix(r.Link, "//") || !text(r.Link, 1024) || strings.Contains(r.Link, "\n")):
+	case r.Link != "" && !path(r.Link):
 		return errors.New("a link must be a path in the web UI")
 	case r.Requires != "" && !slices.Contains(authz.Catalog(), authz.Capability(r.Requires)):
 		return fmt.Errorf("unknown capability %q", r.Requires)
@@ -296,7 +309,7 @@ func end(tx *sql.Tx, where string, args []any, dismissedBy string) (bool, error)
 // changed tells subscribers, the web UI's event streams, that the list changed. It is not durable: a stream reads
 // the list again whenever it opens.
 func (l *Layer) changed() {
-	payload, err := bus.NewEvent("notifications.changed", "engine", struct{}{})
+	payload, err := bus.NewEvent(ChangedType, "engine", struct{}{})
 	if err == nil {
 		err = l.events.Publish(ChangedTopic, payload, false)
 	}

@@ -12,7 +12,8 @@ import (
 
 const notificationsPath = "/api/v1/notifications"
 
-// notificationsAPI lists the active notifications an actor may see, and dismisses them.
+// notificationsAPI lists the active notifications an actor may see, and dismisses them. Without a layer, which did
+// not open, every request is answered as unavailable.
 type notificationsAPI struct{ layer *notify.Layer }
 
 func (h notificationsAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -24,20 +25,36 @@ func (h notificationsAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !noQuery(w, r) {
 		return
 	}
+	if h.layer == nil {
+		h.unavailable(w, r)
+		return
+	}
+	// Seeing a notification takes notifications.read and the capability it requires, if any; one the actor may not
+	// see is one they cannot dismiss either, and is answered as not there.
+	sees := func(requires string) bool {
+		return hasCapability(actor, authz.NotificationsRead) && (requires == "" || hasCapability(actor, authz.Capability(requires)))
+	}
 	if r.URL.Path == notificationsPath {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			methodNotAllowed(w, r, "GET, HEAD")
 			return
 		}
-		list, err := h.visible(w, r, actor)
+		list, err := h.layer.Active()
 		if err != nil {
+			slog.ErrorContext(r.Context(), "read notifications", "error", err)
+			h.unavailable(w, r)
 			return
 		}
-		writeJSON(w, r, http.StatusOK, map[string]any{"items": list})
+		shown := list[:0]
+		for _, n := range list {
+			if sees(n.Requires) {
+				shown = append(shown, n)
+			}
+		}
+		writeJSON(w, r, http.StatusOK, map[string]any{"items": shown})
 		return
 	}
-	rest, _ := strings.CutPrefix(r.URL.Path, notificationsPath+"/")
-	idText, dismiss := strings.CutSuffix(rest, "/dismiss")
+	idText, dismiss := strings.CutSuffix(strings.TrimPrefix(r.URL.Path, notificationsPath+"/"), "/dismiss")
 	id, err := strconv.ParseInt(idText, 10, 64)
 	if !dismiss || err != nil || id < 1 || strconv.FormatInt(id, 10) != idText {
 		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
@@ -50,25 +67,14 @@ func (h notificationsAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !requireNoBody(w, r) {
 		return
 	}
-	// A notification the actor may not see is one they cannot dismiss either, and is answered as not there.
-	list, err := h.visible(w, r, actor)
-	if err != nil {
-		return
-	}
-	found := false
-	for _, n := range list {
-		found = found || n.ID == id
-	}
 	by := actor.AccountID
 	if by == "" {
 		by = actor.Actor.ID
 	}
-	if found {
-		found, err = h.layer.Dismiss(id, by)
-	}
+	found, err := h.layer.Dismiss(id, by, sees)
 	if err != nil {
 		slog.ErrorContext(r.Context(), "dismiss notification", "id", id, "error", err)
-		writeError(w, r, http.StatusServiceUnavailable, "NOTIFICATIONS_UNAVAILABLE", "Notifications are temporarily unavailable.")
+		h.unavailable(w, r)
 		return
 	}
 	if !found {
@@ -78,19 +84,6 @@ func (h notificationsAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// visible is the active list filtered to what actor may see; it answers the request itself on an error.
-func (h notificationsAPI) visible(w http.ResponseWriter, r *http.Request, actor requestActor) ([]notify.Notification, error) {
-	list, err := h.layer.Active()
-	if err != nil {
-		slog.ErrorContext(r.Context(), "read notifications", "error", err)
-		writeError(w, r, http.StatusServiceUnavailable, "NOTIFICATIONS_UNAVAILABLE", "Notifications are temporarily unavailable.")
-		return nil, err
-	}
-	shown := list[:0]
-	for _, n := range list {
-		if n.Requires == "" || hasCapability(actor, authz.Capability(n.Requires)) {
-			shown = append(shown, n)
-		}
-	}
-	return shown, nil
+func (notificationsAPI) unavailable(w http.ResponseWriter, r *http.Request) {
+	writeError(w, r, http.StatusServiceUnavailable, "NOTIFICATIONS_UNAVAILABLE", "Notifications are temporarily unavailable.")
 }

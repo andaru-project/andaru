@@ -87,15 +87,18 @@ func TestNotificationsAPI(t *testing.T) {
 	if w := call(http.MethodPost, dismiss("var"), authz.NotificationsRead); w.Code != http.StatusForbidden {
 		t.Fatalf("dismissed without notifications.manage: %d", w.Code)
 	}
-	if w := call(http.MethodPost, dismiss("apply/3"), authz.NotificationsManage); w.Code != http.StatusNotFound {
+	if w := call(http.MethodPost, dismiss("apply/3"), authz.NotificationsRead, authz.NotificationsManage); w.Code != http.StatusNotFound {
 		t.Fatalf("dismissed one it may not see: %d", w.Code)
 	}
+	if w := call(http.MethodPost, dismiss("var"), authz.NotificationsManage); w.Code != http.StatusNotFound {
+		t.Fatalf("dismissed without notifications.read: %d", w.Code)
+	}
 	for _, path := range []string{notificationsPath + "/0/dismiss", notificationsPath + "/01/dismiss", notificationsPath + "/x/dismiss", notificationsPath + "/999/dismiss"} {
-		if w := call(http.MethodPost, path, authz.NotificationsManage); w.Code != http.StatusNotFound {
+		if w := call(http.MethodPost, path, authz.NotificationsRead, authz.NotificationsManage); w.Code != http.StatusNotFound {
 			t.Fatalf("%s: %d", path, w.Code)
 		}
 	}
-	if w := call(http.MethodPost, dismiss("var"), authz.NotificationsManage); w.Code != http.StatusNoContent {
+	if w := call(http.MethodPost, dismiss("var"), authz.NotificationsRead, authz.NotificationsManage); w.Code != http.StatusNoContent {
 		t.Fatalf("dismiss: %d %s", w.Code, w.Body)
 	}
 	if got := keys(call(http.MethodGet, notificationsPath, authz.NotificationsRead, authz.ConfigurationRead)); !slices.Equal(got, []string{"apply/3"}) {
@@ -103,6 +106,16 @@ func TestNotificationsAPI(t *testing.T) {
 	}
 }
 
+// Without a layer, which did not open, the API says notifications are unavailable rather than not there.
+func TestNotificationsUnavailable(t *testing.T) {
+	h := newHandlerWithServices(nil, http.NotFoundHandler(), nil, nil, nil, nil, notificationsAPI{})
+	actor := requestActor{Actor: authz.Actor{Kind: authz.ActorAccount, ID: "00000000-0000-4000-8000-000000000001"},
+		AccountID: "00000000-0000-4000-8000-000000000001", Source: "unix", Capabilities: []authz.Capability{authz.NotificationsRead}}
+	r := httptest.NewRequest(http.MethodGet, notificationsPath, nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), authenticatedActorKey{}, actor)))
+	assertAPIError(t, w, http.StatusServiceUnavailable, "NOTIFICATIONS_UNAVAILABLE")
+}
 
 func TestStreamFiltersFollowCapabilities(t *testing.T) {
 	for _, row := range []struct {
