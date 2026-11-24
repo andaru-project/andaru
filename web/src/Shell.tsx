@@ -18,7 +18,8 @@ import { RulesScreen } from './screens/RulesScreen';
 import { SessionScreen } from './screens/SessionScreen';
 import { TokensScreen } from './screens/TokensScreen';
 import { UpgradeScreen } from './screens/UpgradeScreen';
-import { SystemDetailsScreen } from './screens/SystemWidget';
+import { UpdatesScreen } from './screens/UpdatesScreen';
+import { SystemDetailsScreen, updateNotice } from './screens/SystemWidget';
 import { UsersScreen } from './screens/UsersScreen';
 import type { Session, User } from './types';
 import { useEvents, useResource, useVisiblePoll } from './useResource';
@@ -47,6 +48,7 @@ const pageTitles: Record<string, string> = {
   '/firewall/aliases': 'Aliases',
   '/changes': 'Review and apply',
   '/system/details': 'System details',
+  '/system/updates': 'Software updates',
   '/system/users': 'Users',
   '/system/roles': 'Roles',
   '/system/tokens': 'API tokens',
@@ -102,6 +104,10 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   const loadSystem = useCallback(async () => (canReadStatus ? { info: await api.system(), loadedAt: Date.now() } : undefined), [api, canReadStatus]);
   const system = useResource(loadSystem, onSessionLost);
   useVisiblePoll(system.refresh, systemPollMilliseconds, canReadStatus);
+
+  const loadUpdate = useCallback(() => (canReadStatus ? api.updateStatus() : Promise.resolve(undefined)), [api, canReadStatus]);
+  const update = useResource(loadUpdate, onSessionLost);
+  useVisiblePoll(update.refresh, systemPollMilliseconds, canReadStatus);
 
   // Saves and applies, from this tab or any other, reach the shell as events; it reads the change state at each.
   // A read waits for no answer still out: one that was served before the change would show it unchanged.
@@ -169,7 +175,8 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
     {
       label: 'System',
       items: [
-        { to: '/system/details', label: 'Details', visible: capabilities.has('status.read') },
+        { to: '/system/details', label: 'Details', visible: canReadStatus },
+        { to: '/system/updates', label: 'Updates', visible: canReadStatus },
         { to: '/system/users', label: 'Users', visible: capabilities.has('users.read') },
         { to: '/system/roles', label: 'Roles', visible: capabilities.has('users.read') || canReadChanges },
         { to: '/system/tokens', label: 'Tokens', visible: capabilities.has('tokens.manageSelf') || capabilities.has('tokens.manageAll') },
@@ -208,6 +215,14 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   const pending = changes.data ? pendingNotice(changes.data) : null;
   const badge = pending ? pendingBadges[pending.kind] : undefined;
   const changesBadge = badge ? <Badge size="xs" color={badge.color} variant={badge.variant}>{badge.label}</Badge> : undefined;
+  const updNotice = updateNotice(update.data);
+  const updateBadge = updNotice?.navLabel
+    ? <Badge size="xs" color={updNotice.color} variant={updNotice.variant}>{updNotice.navLabel}</Badge>
+    : undefined;
+  const navBadges: Record<string, ReactNode> = {
+    '/changes': changesBadge,
+    '/system/updates': updateBadge,
+  };
 
   const pageLink = (to: string, label: string, rightSection?: ReactNode) => {
     const active = isNavItemActive(to);
@@ -229,6 +244,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
     ['/firewall/aliases', <AliasesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/changes', <ChangesScreen api={api} session={session} state={changes.data} stateError={changes.error} connected={connected} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/system/details', <SystemDetailsScreen system={system} />],
+    ['/system/updates', <UpdatesScreen api={api} session={session} update={update} onSessionLost={onSessionLost} />],
     ['/system/users', <UsersScreen api={api} session={session} onSessionLost={onSessionLost} />],
     ['/system/roles', <RolesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/system/tokens', <TokensScreen api={api} session={session} onSessionLost={onSessionLost} />],
@@ -276,7 +292,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
                   focus. It holds no children of its own, or NavLink would toggle on the Space key and the browser
                   again on the click that key makes. */}
               <NavLink className="nav-branch" component="button" type="button" label={group.label} aria-expanded={open} rightSection={<AccordionChevron className="nav-chevron" data-open={open || undefined} />} onClick={() => toggleBranch(group.label)} />
-              {open && <div className="nav-children">{group.items.map((item) => pageLink(item.to, item.label, item.to === '/changes' ? changesBadge : undefined))}</div>}
+              {open && <div className="nav-children">{group.items.map((item) => pageLink(item.to, item.label, navBadges[item.to]))}</div>}
             </div>
           );
         })}
@@ -292,7 +308,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
           {upgradePending && !onUpgradePage && <Alert color="orange" role="status" title="Finish the upgrade">The saved settings need decisions before anything can be saved or applied. <Anchor component={Link} to="/system/upgrade">Answer the questions</Anchor></Alert>}
           {!onChangesPage && <PendingNotice api={api} session={session} state={changes.data} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />}
           <Routes>
-            <Route path="/" element={<DashboardScreen api={api} session={session} system={system} onSessionLost={onSessionLost} />} />
+            <Route path="/" element={<DashboardScreen api={api} session={session} system={system} update={update.data} onSessionLost={onSessionLost} />} />
             {canReadChanges && <Route path="/system/upgrade" element={<UpgradeScreen api={api} session={session} onFinished={() => { void reloadUpgrade(); void reloadChanges(); }} onSessionLost={onSessionLost} />} />}
             {pages.filter(([path]) => visible.has(path)).map(([path, element]) => <Route key={path} path={path} element={element} />)}
             {canReadStatus && (

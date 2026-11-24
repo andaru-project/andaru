@@ -409,7 +409,7 @@ it('keeps Devices active and loads /api/v1/fleet/devices/:id on device detail ro
   );
   expect(await screen.findByRole('heading', { name: 'Core Switch' })).toBeInTheDocument();
   expect(screen.getByRole('link', { name: 'Devices' })).toHaveAttribute('aria-current', 'page');
-  expect(document.title).toBe('Device — edge — Andaru');
+  await vi.waitFor(() => expect(document.title).toBe('Device — edge — Andaru'));
 });
 
 it('wires session CSRF token, onSessionLost on 401, and background header on periodic fleet polls', async () => {
@@ -475,4 +475,29 @@ it('wires session CSRF token, onSessionLost on 401, and background header on per
   act(() => { vi.advanceTimersByTime(15_000); });
   await vi.waitFor(() => expect(onSessionLost).toHaveBeenCalled());
   expect(promptSpy).not.toHaveBeenCalled();
+});
+
+it('shows Update and Reboot badges on the System -> Updates navigation link', async () => {
+  fetchRoutes({
+    '/api/v1/status/system': { version: '0.5.0-a.4', hostname: 'edge', time: '2026-11-21T12:00:00Z', bootedAt: null },
+    '/api/v1/system/update': { supported: true, state: 'available', available: { version: '0.5.0-a.5' }, rebootNeeded: false },
+  });
+  const first = render(
+    <MemoryRouter initialEntries={['/system/session']}>
+      <Shell api={new ApiClient('csrf')} session={session(['status.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} />
+    </MemoryRouter>,
+  );
+  expect(await screen.findByRole('link', { name: /Updates.*Update/i })).toBeInTheDocument();
+  first.unmount();
+
+  fetchRoutes({
+    '/api/v1/status/system': { version: '0.5.0-a.4', hostname: 'edge', time: '2026-11-21T12:00:00Z', bootedAt: null },
+    '/api/v1/system/update': { supported: true, state: 'staged', staged: { version: '0.5.0-a.5' }, rebootNeeded: true },
+  });
+  render(
+    <MemoryRouter initialEntries={['/system/session']}>
+      <Shell api={new ApiClient('csrf')} session={session(['status.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} />
+    </MemoryRouter>,
+  );
+  expect(await screen.findByRole('link', { name: /Updates.*Reboot/i })).toBeInTheDocument();
 });

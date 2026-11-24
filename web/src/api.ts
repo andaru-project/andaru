@@ -22,6 +22,7 @@ import type {
   Token,
   TokenIssueResponse,
   Traffic,
+  UpdateStatus,
   UpgradeView,
   Usage,
   User,
@@ -399,5 +400,25 @@ export class ApiClient {
     const query = new URLSearchParams({ order: 'desc', limit: String(limit) });
     if (cursor) query.set('cursor', cursor);
     return this.request<Page<AuditEvent>>(`/api/v1/audit/events?${query}`);
+  }
+
+  updateStatus() {
+    return this.request<UpdateStatus>('/api/v1/system/update');
+  }
+
+  checkUpdate() {
+    return this.request<UpdateStatus>('/api/v1/system/update/check', { method: 'POST' }, true);
+  }
+
+  stageUpdate() {
+    return this.request<UpdateStatus>('/api/v1/system/update/stage', { method: 'POST' }, true);
+  }
+
+  rollbackUpdate() {
+    return this.request<UpdateStatus>('/api/v1/system/update/rollback', { method: 'POST' }, true);
+  }
+
+  rebootSystem() {
+    return this.request<{ rebooting: boolean }>('/api/v1/system/update/reboot', { method: 'POST' }, true);
   }
 }

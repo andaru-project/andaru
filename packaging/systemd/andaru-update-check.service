@@ -1,0 +1,12 @@
+[Unit]
+Description=Andaru periodic software update check
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/andaru realize update-check
+TimeoutStartSec=5min
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=andaru-update-check

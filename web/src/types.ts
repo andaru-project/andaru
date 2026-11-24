@@ -304,3 +304,35 @@ export interface OrderedList<T> extends SavedList<T> {
 export interface UpgradeChoice { id: string; label: string; description: string }
 export interface UpgradeQuestion { id: string; question: string; choices: UpgradeChoice[]; provisional: string; objects: string[]; choice: string; answered: boolean }
 export interface UpgradeView { savedVersion: string; questions: UpgradeQuestion[] }
+
+export interface UpdateDeployment {
+  image?: string;
+  version?: string;
+  digest?: string;
+  timestamp?: string;
+  signature?: string;
+}
+
+export type UpdateState =
+  | 'unchecked'
+  | 'unsupported'
+  | 'up_to_date'
+  | 'available'
+  | 'staged'
+  | 'checking'
+  | 'staging'
+  | 'rolling_back'
+  | 'error';
+
+export interface UpdateStatus {
+  supported: boolean;
+  state: UpdateState;
+  booted?: UpdateDeployment;
+  available?: UpdateDeployment;
+  staged?: UpdateDeployment;
+  rollback?: UpdateDeployment;
+  rollbackQueued?: boolean;
+  checkedAt?: string;
+  error?: string;
+  rebootNeeded: boolean;
+}

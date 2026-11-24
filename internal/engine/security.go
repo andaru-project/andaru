@@ -120,6 +120,11 @@ func buildEngineRoutes() []routeCapability {
 	add(authz.StatusRead, "/api/v1/fleet/diagnostics", read...)
 	add(authz.ConfigurationWrite, "/api/v1/fleet/diagnostics", http.MethodPost)
 	add(authz.StatusRead, "/api/v1/fleet/events/stream", http.MethodGet)
+	add(authz.StatusRead, "/api/v1/system/update", read...)
+	add(authz.ConfigurationApply, "/api/v1/system/update/check", http.MethodPost)
+	add(authz.ConfigurationApply, "/api/v1/system/update/stage", http.MethodPost)
+	add(authz.ConfigurationApply, "/api/v1/system/update/rollback", http.MethodPost)
+	add(authz.ConfigurationApply, "/api/v1/system/update/reboot", http.MethodPost)
 	return routes
 }
 

@@ -150,7 +150,8 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 		}()
 		fleetAPI = fleet
 	}
-	rootAPI := newHandlerWithFleet(host.ReadLinks, newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, applies, backups), identityAPI, auditAPI, fleetAPI)
+	updateAPI := newUpdateAPI(stateDir, nil)
+	rootAPI := newHandlerWithServices(host.ReadLinks, newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, applies, backups), identityAPI, auditAPI, fleetAPI, updateAPI)
 	if web == nil {
 		err = serveUnix(lifetime, socketPath, rootAPI)
 	} else {

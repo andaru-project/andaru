@@ -1,0 +1,12 @@
+[Unit]
+Description=Andaru periodic software update check timer
+
+[Timer]
+# Checks registry metadata only (bootc upgrade --check); never downloads or installs automatically.
+OnBootSec=1min
+OnUnitActiveSec=6h
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

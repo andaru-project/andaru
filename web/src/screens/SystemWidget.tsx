@@ -1,7 +1,8 @@
-import { Paper, Stack, Table, Text, Title } from '@mantine/core';
+import { Badge, Group, Paper, Stack, Table, Text, Title } from '@mantine/core';
 import { useCallback, useState, type ReactNode } from 'react';
+import { Link } from 'react-router';
 import { bytes, duration, plural } from '../format';
-import type { SystemInfo } from '../types';
+import type { SystemInfo, UpdateStatus } from '../types';
 import { useVisiblePoll, type Resource } from '../useResource';
 import { Loaded } from './Loaded';
 
@@ -35,16 +36,62 @@ function useBoxClock(info: SystemInfo, loadedAt: number) {
   );
 }
 
+export interface UpdateNotice {
+  color: string;
+  variant: 'filled' | 'light';
+  pillLabel: string;
+  navLabel?: string;
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- shared helper for SystemWidget and Shell
+export function updateNotice(update?: UpdateStatus): UpdateNotice | null {
+  if (!update || !update.supported) return null;
+  if (update.rebootNeeded) {
+    const version = update.staged?.version || (update.rollbackQueued ? update.rollback?.version : undefined) || 'update';
+    return { color: 'teal', variant: 'filled', pillLabel: `Reboot to apply ${version}`, navLabel: 'Reboot' };
+  }
+  if (update.state === 'available') {
+    return {
+      color: 'orange',
+      variant: 'filled',
+      pillLabel: `Update available: ${update.available?.version || 'new version'}`,
+      navLabel: 'Update',
+    };
+  }
+  if (update.state === 'up_to_date') {
+    return { color: 'green', variant: 'light', pillLabel: 'Up to date' };
+  }
+  if (update.state === 'error') {
+    return { color: 'red', variant: 'light', pillLabel: 'Update check failed' };
+  }
+  return null;
+}
+
+function UpdatePill({ update }: { update?: UpdateStatus }) {
+  const notice = updateNotice(update);
+  if (!notice) return null;
+  return (
+    <Badge component={Link} to="/system/updates" size="xs" variant={notice.variant} color={notice.color} className="update-pill plain-badge">
+      {notice.pillLabel}
+    </Badge>
+  );
+}
+
 // The dashboard's widget: what changes or says something is wrong, and a line each for the machine and its
 // processor. The header names the box; the rest of what it is made of is looked up rarely, and is on the
 // System details page.
-export function SystemWidget({ info, loadedAt }: { info: SystemInfo; loadedAt: number }) {
+export function SystemWidget({ info, loadedAt, update }: { info: SystemInfo; loadedAt: number; update?: UpdateStatus }) {
   const running = useBoxClock(info, loadedAt);
   // A guest that names no machine is still said to be one.
   const machine = words(info.hardware.vendor, info.hardware.product) || (info.guest ? 'virtual machine' : '');
   return (
     <Facts>
-      <Row label="Version">{info.version}</Row>
+      <Row label="Version">
+        <Group gap="xs" wrap="wrap">
+          <span>{info.version}</span>
+          <UpdatePill update={update} />
+        </Group>
+      </Row>
       {running}
       {machine && <Row label="Machine">{machine}</Row>}
       <Row label="CPU">{info.cpu.model || info.architecture}, {plural(info.cpu.cores, 'core')}</Row>

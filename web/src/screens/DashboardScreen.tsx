@@ -8,7 +8,7 @@ import { Link } from 'react-router';
 import { reportError, type ApiClient } from '../api';
 import { arrange, moved } from '../dashboardLayout';
 import { zonesByInterface } from '../zones';
-import { stateColor, stateLabel, type DashboardLayout, type Preferences, type Session, type SystemInfo } from '../types';
+import { stateColor, stateLabel, type DashboardLayout, type Preferences, type Session, type SystemInfo, type UpdateStatus } from '../types';
 import { usePolledResource, useResource, useVisiblePoll, type Resource } from '../useResource';
 import { Address } from './Address';
 import { Loaded } from './Loaded';
@@ -23,6 +23,7 @@ interface DashboardScreenProps {
   api: ApiClient;
   session: Session;
   system: Resource<{ info: SystemInfo; loadedAt: number } | undefined>;
+  update?: UpdateStatus;
   onSessionLost(): void;
 }
 
@@ -114,7 +115,7 @@ function PrefixesWidget({ api, zones, onSessionLost }: WidgetProps) {
 
 const noZones = new Map<string, string>();
 
-export function DashboardScreen({ api, session, system, onSessionLost }: DashboardScreenProps) {
+export function DashboardScreen({ api, session, system, update, onSessionLost }: DashboardScreenProps) {
   // Which zone each interface is in comes from the saved configuration, for accounts that may read it. It is
   // read when the dashboard opens, and again until it has been read: it changes with a save, which is made on
   // another page. zonesKnown says the answer is in, so a choice that depends on it can be made; an account
@@ -130,7 +131,7 @@ export function DashboardScreen({ api, session, system, onSessionLost }: Dashboa
   const zonesKnown = zoneMap.data !== undefined;
   const trafficChoice = useState<TrafficChoice>({});
   const all: Array<{ id: string; title: string; to?: string; more?: string; capability: string; body: ReactNode }> = [
-    { id: 'system', title: 'System', to: '/system/details', more: 'Details', capability: 'status.read', body: <Loaded resource={system} what="the system description">{(loaded) => loaded && <SystemWidget info={loaded.info} loadedAt={loaded.loadedAt} />}</Loaded> },
+    { id: 'system', title: 'System', to: '/system/details', more: 'Details', capability: 'status.read', body: <Loaded resource={system} what="the system description">{(loaded) => loaded && <SystemWidget info={loaded.info} loadedAt={loaded.loadedAt} update={update} />}</Loaded> },
     { id: 'interfaces', title: 'Interfaces', to: '/network/interfaces', more: 'Manage', capability: 'status.read', body: <InterfacesWidget api={api} zones={zones} onSessionLost={onSessionLost} /> },
     { id: 'resources', title: 'Resources', capability: 'status.read', body: <ResourcesWidget api={api} onSessionLost={onSessionLost} /> },
     { id: 'traffic', title: 'Network activity', capability: 'status.read', body: <TrafficWidget api={api} zones={zones} zonesKnown={zonesKnown} choice={trafficChoice} onSessionLost={onSessionLost} /> },
