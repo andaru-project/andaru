@@ -115,7 +115,7 @@ export function UpdatesScreen({ api, session, update, onSessionLost }: UpdatesSc
   const [confirmKind, setConfirmKind] = useState<'reboot' | 'rollback' | null>(null);
 
   const currentBooted = bootedIdentity(update.data);
-  const rebooting = rebootedFrom !== null && (update.data === undefined || (currentBooted === rebootedFrom && update.data.rebootNeeded));
+  const rebooting = rebootedFrom !== null && (currentBooted === '' || currentBooted === rebootedFrom);
   const activeOp = update.data?.state === 'staging' || update.data?.state === 'checking' || update.data?.state === 'rolling_back';
   // Poll every 3 s while an async stage or engine-side check is running.
   useVisiblePoll(update.refresh, 3_000, activeOp && !rebooting);

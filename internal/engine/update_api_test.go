@@ -162,8 +162,8 @@ func TestUpdateAPILifecycleAndAuthz(t *testing.T) {
 	h.ServeHTTP(rec, rootRequest(http.MethodGet, "/api/v1/system/update"))
 	buildVersion = prevVersion
 	_ = json.Unmarshal(rec.Body.Bytes(), &st)
-	if st.State != update.StateUpToDate || st.RebootNeeded || st.Booted == nil || st.Booted.Version != "0.5.0-a.5" {
-		t.Fatalf("expected reconciled up_to_date after reboot, got %+v", st)
+	if st.State != update.StateUpToDate || st.RebootNeeded || st.Booted == nil || st.Booted.Version != "0.5.0-a.5" || st.Rollback == nil || st.Rollback.Version != "0.5.0-a.4" {
+		t.Fatalf("expected reconciled up_to_date with previous booted as rollback, got %+v", st)
 	}
 
 	// POST /rollback queues rollback.
@@ -238,12 +238,20 @@ func TestUpdateAPIRebootCooldownAndBusyError(t *testing.T) {
 		now:      func() time.Time { return cur },
 	}
 
-	// Failure inside the reboot unit clears busyOp and maps busy error to 409.
-	nextErr = errors.New("another update operation is busy")
+	// Lock refusal (update.ErrLocked) inside the reboot unit clears busyOp and maps to 409 UPDATE_IN_PROGRESS.
+	nextErr = errors.New("/usr/bin/systemd-run: exit status 1: " + update.ErrLocked.Error())
 	rec := httptest.NewRecorder()
 	uapi.ServeHTTP(rec, rootRequest(http.MethodPost, "/api/v1/system/update/reboot"))
 	if rec.Code != http.StatusConflict {
-		t.Fatalf("reboot busy failure: got %d, want 409 (%s)", rec.Code, rec.Body.String())
+		t.Fatalf("reboot lock refusal: got %d, want 409 (%s)", rec.Code, rec.Body.String())
+	}
+	var errBody struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &errBody); err != nil || errBody.Error.Code != "UPDATE_IN_PROGRESS" {
+		t.Fatalf("reboot lock refusal code: got %q, want UPDATE_IN_PROGRESS (%s)", errBody.Error.Code, rec.Body.String())
 	}
 
 	// Retry succeeds once idle, then blocks duplicate reboot during cooldown.
@@ -295,8 +303,10 @@ func TestReconcileBootedStatusRollbackAndSameVersionRebuild(t *testing.T) {
 		RollbackQueued: true,
 		RebootNeeded:   true,
 	})
-	if rolledBack.RebootNeeded || rolledBack.RollbackQueued || rolledBack.State != update.StateUpToDate || rolledBack.Booted == nil || rolledBack.Booted.Version != "0.5.0-a.3" {
-		t.Fatalf("expected reconciled rollback status, got %+v", rolledBack)
+	if rolledBack.RebootNeeded || rolledBack.RollbackQueued || rolledBack.State != update.StateUpToDate ||
+		rolledBack.Booted == nil || rolledBack.Booted.Version != "0.5.0-a.3" ||
+		rolledBack.Rollback == nil || rolledBack.Rollback.Version != "0.5.0-a.4" {
+		t.Fatalf("expected reconciled rollback status preserving previous booted as rollback, got %+v", rolledBack)
 	}
 }
 

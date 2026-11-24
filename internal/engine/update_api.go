@@ -124,7 +124,9 @@ func reconcileBootedStatus(st update.Status) update.Status {
 		return st
 	}
 	if st.Staged != nil && st.Staged.Version == buildVersion {
+		prev := st.Booted
 		st.Booted = st.Staged
+		st.Rollback = prev
 		st.Staged = nil
 		st.Available = nil
 		st.RollbackQueued = false
@@ -134,8 +136,9 @@ func reconcileBootedStatus(st update.Status) update.Status {
 		return st
 	}
 	if st.RollbackQueued && st.Rollback != nil && st.Rollback.Version == buildVersion {
+		prev := st.Booted
 		st.Booted = st.Rollback
-		st.Rollback = nil
+		st.Rollback = prev
 		st.Staged = nil
 		st.RollbackQueued = false
 		st.RebootNeeded = false
@@ -210,9 +213,17 @@ func (u *updateAPI) beginOp(w http.ResponseWriter, r *http.Request, opState stri
 	return true
 }
 
-func isBusyError(err error) bool {
+func writeRunnerError(w http.ResponseWriter, r *http.Request, err error) {
 	msg := err.Error()
-	return strings.Contains(msg, "busy") || strings.Contains(msg, "pending") || strings.Contains(msg, "queued or running")
+	if strings.Contains(msg, update.ErrLocked.Error()) {
+		writeError(w, r, http.StatusConflict, "UPDATE_IN_PROGRESS", "Another software update operation is already running.")
+		return
+	}
+	if strings.Contains(msg, "busy") || strings.Contains(msg, "pending") || strings.Contains(msg, "queued or running") {
+		writeError(w, r, http.StatusConflict, "SYSTEM_BUSY", "A network apply or realization job is in progress; retry once the box is idle.")
+		return
+	}
+	writeError(w, r, http.StatusBadGateway, "UPDATE_FAILED", msg)
 }
 
 func (u *updateAPI) handleSyncAction(w http.ResponseWriter, r *http.Request, opState, verb string, requireIdle bool) {
@@ -227,11 +238,7 @@ func (u *updateAPI) handleSyncAction(w http.ResponseWriter, r *http.Request, opS
 
 	if err := u.runner.RunVerb(r.Context(), verb); err != nil {
 		slog.WarnContext(r.Context(), "software update verb failed", "verb", verb, "error", err)
-		if isBusyError(err) {
-			writeError(w, r, http.StatusConflict, "SYSTEM_BUSY", "A network apply or realization job is in progress; retry once the box is idle.")
-			return
-		}
-		writeError(w, r, http.StatusBadGateway, "UPDATE_FAILED", err.Error())
+		writeRunnerError(w, r, err)
 		return
 	}
 	st, err := update.ReadStatus(u.stateDir)
@@ -283,11 +290,7 @@ func (u *updateAPI) handleReboot(w http.ResponseWriter, r *http.Request) {
 		u.rebootingUntil = time.Time{}
 		u.mu.Unlock()
 		slog.WarnContext(r.Context(), "software update reboot failed", "error", err)
-		if isBusyError(err) {
-			writeError(w, r, http.StatusConflict, "SYSTEM_BUSY", "A network apply or realization job is in progress; retry once the box is idle.")
-			return
-		}
-		writeError(w, r, http.StatusBadGateway, "UPDATE_FAILED", err.Error())
+		writeRunnerError(w, r, err)
 		return
 	}
 	// Hold busyOp="rebooting" for rebootCooldown so no duplicate reboot or update starts while

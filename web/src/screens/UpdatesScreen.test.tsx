@@ -152,8 +152,16 @@ it('clears the rebooting banner and re-enables controls once the appliance retur
   expect(await screen.findByText('Rebooting appliance')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Check for updates' })).toBeDisabled();
 
-  // Stale poll before boot completes keeps rebooting state active.
+  // Stale poll, same booted image with rebootNeeded=false, or unchecked status with missing booted keep rebooting active.
   rerender(<UpdatesScreen api={api} session={mgr} update={makeResource({ ...staged })} onSessionLost={noopSessionLost} />);
+  expect(screen.getByText('Rebooting appliance')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Check for updates' })).toBeDisabled();
+
+  rerender(<UpdatesScreen api={api} session={mgr} update={makeResource({ ...staged, rebootNeeded: false })} onSessionLost={noopSessionLost} />);
+  expect(screen.getByText('Rebooting appliance')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Check for updates' })).toBeDisabled();
+
+  rerender(<UpdatesScreen api={api} session={mgr} update={makeResource({ supported: true, state: 'unchecked', rebootNeeded: false })} onSessionLost={noopSessionLost} />);
   expect(screen.getByText('Rebooting appliance')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Check for updates' })).toBeDisabled();
 
