@@ -1,0 +1,119 @@
+import { useCallback, useMemo } from 'react';
+import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router';
+import { expect, it } from 'vitest';
+import { ApiClient } from '../api';
+import { fetchRoutes } from '../test/fetch';
+import { session } from '../test/fixtures';
+import { render, screen } from '../test/render';
+import type { UpdateStatus } from '../types';
+import { useResource } from '../useResource';
+import { UpdatesScreen } from './UpdatesScreen';
+
+const availableStatus: UpdateStatus = {
+  supported: true,
+  state: 'available',
+  booted: {
+    image: 'ghcr.io/andaru-project/andaru:stable',
+    version: '0.5.0-a.4',
+    digest: 'sha256:11111111111111111111111111111111',
+    timestamp: '2026-11-23T10:00:00Z',
+    signature: 'containerPolicy',
+  },
+  available: {
+    image: 'ghcr.io/andaru-project/andaru:stable',
+    version: '0.5.0-a.5',
+    digest: 'sha256:22222222222222222222222222222222',
+    timestamp: '2026-11-24T10:00:00Z',
+    signature: 'containerPolicy',
+  },
+  rollback: {
+    image: 'ghcr.io/andaru-project/andaru:0.5.0-a.3',
+    version: '0.5.0-a.3',
+    digest: 'sha256:00000000000000000000000000000000',
+    signature: 'containerPolicy',
+  },
+  checkedAt: '2026-11-24T11:00:00Z',
+  rebootNeeded: false,
+};
+
+const stagedStatus: UpdateStatus = {
+  ...availableStatus,
+  state: 'staged',
+  available: undefined,
+  staged: availableStatus.available,
+  rebootNeeded: true,
+};
+
+const noopSessionLost = () => {};
+
+function Harness({ api, capabilities }: { api: ApiClient; capabilities: string[] }) {
+  const load = useCallback(() => api.updateStatus(), [api]);
+  const update = useResource(load, noopSessionLost);
+  const sess = useMemo(() => session(capabilities), [capabilities]);
+  return (
+    <MemoryRouter>
+      <UpdatesScreen api={api} session={sess} update={update} onSessionLost={noopSessionLost} />
+    </MemoryRouter>
+  );
+}
+
+it('shows available update, stages it, and confirms reboot with CSRF header', async () => {
+  let current: UpdateStatus = availableStatus;
+  const fetchMock = fetchRoutes({
+    '/api/v1/system/update': () => new Response(JSON.stringify(current), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    'POST /api/v1/system/update/check': () => new Response(JSON.stringify(current), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    'POST /api/v1/system/update/stage': () => {
+      current = stagedStatus;
+      return new Response(JSON.stringify(current), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    },
+    'POST /api/v1/system/update/reboot': { rebooting: true },
+  });
+
+  render(<Harness api={new ApiClient('csrf-tok')} capabilities={['status.read', 'configuration.apply']} />);
+
+  expect(await screen.findByText('0.5.0-a.4')).toBeInTheDocument();
+  expect(screen.getByText('0.5.0-a.5')).toBeInTheDocument();
+  expect(screen.getByText('0.5.0-a.3')).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole('button', { name: 'Download and stage update' }));
+  expect(await screen.findByRole('button', { name: 'Reboot to apply' })).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole('button', { name: 'Reboot to apply' }));
+  expect(await screen.findByText('Reboot appliance now?')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: 'Reboot now' }));
+  expect(await screen.findByText('Rebooting appliance')).toBeInTheDocument();
+
+  const rebootCall = fetchMock.mock.calls.find(([url, init]) => url === '/api/v1/system/update/reboot' && init?.method === 'POST');
+  expect(rebootCall).toBeDefined();
+  expect(new Headers(rebootCall?.[1]?.headers).get('X-Andaru-CSRF')).toBe('csrf-tok');
+});
+
+it('queues rollback after confirmation', async () => {
+  const fetchMock = fetchRoutes({
+    '/api/v1/system/update': availableStatus,
+    'POST /api/v1/system/update/rollback': { ...availableStatus, state: 'staged', staged: availableStatus.rollback, rebootNeeded: true },
+  });
+
+  render(<Harness api={new ApiClient('csrf-tok')} capabilities={['status.read', 'configuration.apply']} />);
+  await userEvent.click(await screen.findByRole('button', { name: 'Roll back to previous version' }));
+  await userEvent.click(await screen.findByRole('button', { name: 'Queue rollback' }));
+
+  expect(fetchMock.mock.calls.some(([url, init]) => url === '/api/v1/system/update/rollback' && init?.method === 'POST')).toBe(true);
+});
+
+it('hides update controls for read-only accounts', async () => {
+  fetchRoutes({ '/api/v1/system/update': availableStatus });
+  render(<Harness api={new ApiClient('csrf-tok')} capabilities={['status.read']} />);
+
+  expect(await screen.findByText('Read-only access')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Check for updates' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Download and stage update' })).not.toBeInTheDocument();
+});
+
+it('explains when the host is not running a bootc appliance image', async () => {
+  fetchRoutes({ '/api/v1/system/update': { supported: false, state: 'unsupported', rebootNeeded: false } });
+  render(<Harness api={new ApiClient('csrf-tok')} capabilities={['status.read', 'configuration.apply']} />);
+
+  expect(await screen.findByText(/not booted from a bootc-managed Andaru appliance image/i)).toBeInTheDocument();
+});

@@ -72,7 +72,7 @@ RUN sed -i "s|@NAMESPACE@|${SIGNED_NAMESPACE}|" /etc/containers/policy.json /etc
     semodule -i /usr/share/andaru/selinux/andaru.cil && \
     systemctl enable systemd-networkd.service andaru-engine.service andaru-network-boot.service \
         andaru-factory-reset.service andaru-install-cleanup.service andaru-leases.path andaru-prefixes.path andaru-prefixes.timer \
-        kea-dhcp4.service kea-dhcp6.service unbound.service && \
+        andaru-update-check.timer kea-dhcp4.service kea-dhcp6.service unbound.service && \
     systemctl disable sshd.service zincati.service andaru-web.service && \
     # Masked, not disabled: enabling systemd-networkd, as presets do on first boot, enables wait-online with it. Every
     # link Andaru writes is RequiredForOnline=no, so it would only wait out its timeout on every boot.

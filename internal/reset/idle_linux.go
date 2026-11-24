@@ -28,12 +28,20 @@ var preparationUnits = []string{"andaru-leases.path", "andaru-prefixes.path", "a
 // realizationUnits are the realizers the path and timer units start; a reset waits for them, it never kills them.
 var realizationUnits = []string{"andaru-leases.service", "andaru-prefixes.service"}
 
-// checkIdle refuses a reset while an apply is pending or active, or a realize job is queued or running.
+// checkIdle refuses a reset while an apply is pending or active, or a realize or update job is queued or running.
 func checkIdle(ctx context.Context, run commandRunner, stateDir string) error {
 	if err := idleApplications(stateDir); err != nil {
 		return err
 	}
-	return idleRealizationJobs(ctx, run)
+	return idleUnits(ctx, run, "andaru-realize-*.service", "andaru-update-*.service")
+}
+
+// CheckApplyIdle refuses an update mutation while an apply is pending or active, or a realize job is queued or running.
+func CheckApplyIdle(ctx context.Context, stateDir string, run func(context.Context, string, ...string) ([]byte, error)) error {
+	if err := idleApplications(stateDir); err != nil {
+		return err
+	}
+	return idleUnits(ctx, run, "andaru-realize-*.service")
 }
 
 // stopWriters stops the web service and the units that write Andaru's state, then waits for running realizers.
@@ -47,7 +55,7 @@ func stopWriters(ctx context.Context, run commandRunner) error {
 	if err := drainRealizers(ctx, run); err != nil {
 		return err
 	}
-	return idleRealizationJobs(ctx, run)
+	return idleUnits(ctx, run, "andaru-realize-*.service", "andaru-update-*.service")
 }
 
 // writerUnits are the units stopWriters stops, in the order a reset starts them again.
@@ -91,11 +99,13 @@ func drainRealizers(ctx context.Context, run commandRunner) error {
 	}
 }
 
-func idleRealizationJobs(ctx context.Context, run commandRunner) error {
-	for _, args := range [][]string{
-		{"list-jobs", "--no-legend", "--no-pager", "--plain", "andaru-realize-*.service"},
-		{"list-units", "--state=active,activating,deactivating,reloading", "--no-legend", "--no-pager", "--plain", "andaru-realize-*.service"},
-	} {
+func idleUnits(ctx context.Context, run commandRunner, patterns ...string) error {
+	for _, verb := range []string{"list-jobs", "list-units"} {
+		args := []string{verb, "--no-legend", "--no-pager", "--plain"}
+		if verb == "list-units" {
+			args = append(args, "--state=active,activating,deactivating,reloading")
+		}
+		args = append(args, patterns...)
 		raw, err := run(ctx, "systemctl", args...)
 		if err != nil {
 			return fmt.Errorf("inspect independent realization work: %w", err)

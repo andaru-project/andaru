@@ -69,6 +69,10 @@ func newHandlerWithAPIs(readLinks func(context.Context) ([]host.LinkStatus, erro
 }
 
 func newHandlerWithFleet(readLinks func(context.Context) ([]host.LinkStatus, error), configuration, identityAPI, auditAPI, fleetAPI http.Handler) http.Handler {
+	return newHandlerWithServices(readLinks, configuration, identityAPI, auditAPI, fleetAPI, nil)
+}
+
+func newHandlerWithServices(readLinks func(context.Context) ([]host.LinkStatus, error), configuration, identityAPI, auditAPI, fleetAPI, updateAPI http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
@@ -86,6 +90,10 @@ func newHandlerWithFleet(readLinks func(context.Context) ([]host.LinkStatus, err
 		}
 		if strings.HasPrefix(r.URL.Path, fleetAPIPrefix+"/") && fleetAPI != nil {
 			fleetAPI.ServeHTTP(w, r)
+			return
+		}
+		if (r.URL.Path == updateAPIPrefix || strings.HasPrefix(r.URL.Path, updateAPIPrefix+"/")) && updateAPI != nil {
+			updateAPI.ServeHTTP(w, r)
 			return
 		}
 		saved := r.URL.Path == "/api/v1/schema" || r.URL.Path == "/api/v1/config" || strings.HasPrefix(r.URL.Path, "/api/v1/config/") || r.URL.Path == "/api/v1/versions" || strings.HasPrefix(r.URL.Path, "/api/v1/versions/") || r.URL.Path == previewPath || r.URL.Path == "/api/v1/kept/recovery" || isBackupPath(r.URL.Path)

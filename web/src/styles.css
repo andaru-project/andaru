@@ -510,6 +510,15 @@ path.traffic-sent {
   text-transform: none;
 }
 
+.update-pill {
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.update-pill:hover {
+  filter: brightness(0.94);
+}
+
 .fixed-rules {
   color: var(--mantine-color-dimmed);
   display: grid;

@@ -74,7 +74,10 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 	help := helpRequested(args)
 	parseErr := flags.Parse(slices.DeleteFunc(slices.Clone(args), isHelp))
 	verb := flags.Arg(0)
-	want := map[string]int{"activate": 1, "rollback": 2, "confirm": 1, "boot": 0, "leases": 0, "prefixes": 0, "factory-reset": 0}
+	want := map[string]int{
+		"activate": 1, "rollback": 2, "confirm": 1, "boot": 0, "leases": 0, "prefixes": 0, "factory-reset": 0,
+		"update-check": 0, "update-stage": 0, "update-rollback": 0, "update-reboot": 0,
+	}
 	n, known := want[verb]
 	// A help flag anywhere is a request for help, never a rollback REASON; an unknown verb stays a usage error.
 	if verb == "help" || help && (known || verb == "") {
@@ -97,6 +100,10 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 	if blocked && verb != "boot" {
 		fmt.Fprintln(stderr, "a factory reset is in progress; "+verb+" waits for it")
 		return 0
+	}
+	switch verb {
+	case "update-check", "update-stage", "update-rollback", "update-reboot":
+		return updateVerb(ctx, verb, *stateDir, stderr)
 	}
 	id := 0
 	if len(rest) > 0 {

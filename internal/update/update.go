@@ -1,0 +1,385 @@
+package update
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+const (
+	StateUnsupported = "unsupported"
+	StateUpToDate    = "up_to_date"
+	StateAvailable   = "available"
+	StateStaged      = "staged"
+	StateChecking    = "checking"
+	StateStaging     = "staging"
+	StateRollingBack = "rolling_back"
+	StateError       = "error"
+)
+
+// Deployment describes one bootc image deployment (booted, available, staged, or rollback).
+type Deployment struct {
+	Image     string     `json:"image,omitempty"`
+	Version   string     `json:"version,omitempty"`
+	Digest    string     `json:"digest,omitempty"`
+	Timestamp *time.Time `json:"timestamp,omitempty"`
+	Signature string     `json:"signature,omitempty"`
+}
+
+// Status is the persisted and API-served software update state for an Andaru appliance.
+type Status struct {
+	Supported    bool        `json:"supported"`
+	State        string      `json:"state"`
+	Booted       *Deployment `json:"booted,omitempty"`
+	Available    *Deployment `json:"available,omitempty"`
+	Staged       *Deployment `json:"staged,omitempty"`
+	Rollback     *Deployment `json:"rollback,omitempty"`
+	CheckedAt    *time.Time  `json:"checkedAt,omitempty"`
+	Error        string      `json:"error,omitempty"`
+	RebootNeeded bool        `json:"rebootNeeded"`
+}
+
+// CommandRunner runs a host command and returns its combined or standard output.
+type CommandRunner func(ctx context.Context, name string, args ...string) ([]byte, error)
+
+// IdleChecker verifies no apply or realize job is in flight before mutating bootc deployments.
+type IdleChecker func(ctx context.Context) error
+
+// Manager executes bootc update operations and persists status into StateDir/update/status.json.
+type Manager struct {
+	StateDir  string
+	Run       CommandRunner
+	CheckIdle IdleChecker
+	Now       func() time.Time
+}
+
+// DefaultCommandRunner executes host commands via os/exec.
+func DefaultCommandRunner(ctx context.Context, name string, args ...string) ([]byte, error) {
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	if err != nil {
+		return out, fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return out, nil
+}
+
+// StatusPath returns the canonical status cache path inside stateDir.
+func StatusPath(stateDir string) string {
+	return filepath.Join(stateDir, "update", "status.json")
+}
+
+// ReadStatus loads the cached update status from stateDir. If no cache exists yet, it returns
+// an unsupported/unchecked baseline without error so callers can still render cleanly.
+func ReadStatus(stateDir string) (Status, bool, error) {
+	raw, err := os.ReadFile(StatusPath(stateDir))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return Status{Supported: false, State: StateUnsupported}, false, nil
+		}
+		return Status{}, false, fmt.Errorf("read update status: %w", err)
+	}
+	var st Status
+	if err := json.Unmarshal(raw, &st); err != nil {
+		return Status{}, false, fmt.Errorf("parse update status: %w", err)
+	}
+	return st, true, nil
+}
+
+// WriteStatus persists status atomically inside stateDir/update/status.json (mode 0600).
+func WriteStatus(stateDir string, st Status) error {
+	dir := filepath.Join(stateDir, "update")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create update state dir: %w", err)
+	}
+	raw, err := json.MarshalIndent(st, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode update status: %w", err)
+	}
+	raw = append(raw, '\n')
+	tmp, err := os.CreateTemp(dir, "status-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp update status: %w", err)
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("chmod temp update status: %w", err)
+	}
+	if _, err := tmp.Write(raw); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write temp update status: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("sync temp update status: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp update status: %w", err)
+	}
+	if err := os.Rename(tmpPath, StatusPath(stateDir)); err != nil {
+		return fmt.Errorf("publish update status: %w", err)
+	}
+	cleanup = false
+	return nil
+}
+
+// bootc status --json subset (org.containers.bootc/v1).
+type bootcStatusDoc struct {
+	Status struct {
+		Booted   *bootcDeploymentSlot `json:"booted"`
+		Staged   *bootcDeploymentSlot `json:"staged"`
+		Rollback *bootcDeploymentSlot `json:"rollback"`
+	} `json:"status"`
+}
+
+type bootcDeploymentSlot struct {
+	Image        *bootcImageStatus `json:"image"`
+	CachedUpdate *bootcImageStatus `json:"cachedUpdate"`
+}
+
+type bootcImageStatus struct {
+	Image struct {
+		Image     string          `json:"image"`
+		Transport string          `json:"transport"`
+		Signature json.RawMessage `json:"signature"`
+	} `json:"image"`
+	Version     string     `json:"version"`
+	Timestamp   *time.Time `json:"timestamp"`
+	ImageDigest string     `json:"imageDigest"`
+}
+
+func parseSignature(raw json.RawMessage) string {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	return trimmed
+}
+
+func toDeployment(img *bootcImageStatus) *Deployment {
+	if img == nil {
+		return nil
+	}
+	if img.Image.Image == "" && img.Version == "" && img.ImageDigest == "" {
+		return nil
+	}
+	return &Deployment{
+		Image:     img.Image.Image,
+		Version:   img.Version,
+		Digest:    img.ImageDigest,
+		Timestamp: img.Timestamp,
+		Signature: parseSignature(img.Image.Signature),
+	}
+}
+
+// ParseBootcStatus parses `bootc status --json` output into an Andaru update Status.
+func ParseBootcStatus(raw []byte) (Status, error) {
+	var doc bootcStatusDoc
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return Status{}, fmt.Errorf("parse bootc status: %w", err)
+	}
+	if doc.Status.Booted == nil || doc.Status.Booted.Image == nil {
+		return Status{Supported: false, State: StateUnsupported}, nil
+	}
+	st := Status{
+		Supported: true,
+		Booted:    toDeployment(doc.Status.Booted.Image),
+		Available: toDeployment(doc.Status.Booted.CachedUpdate),
+	}
+	if doc.Status.Staged != nil {
+		st.Staged = toDeployment(doc.Status.Staged.Image)
+	}
+	if doc.Status.Rollback != nil {
+		st.Rollback = toDeployment(doc.Status.Rollback.Image)
+	}
+	// Ignore cachedUpdate when it points at the already-booted digest.
+	if st.Available != nil && st.Booted != nil && st.Available.Digest != "" && st.Available.Digest == st.Booted.Digest {
+		st.Available = nil
+	}
+	switch {
+	case st.Staged != nil:
+		st.State = StateStaged
+		st.RebootNeeded = true
+	case st.Available != nil:
+		st.State = StateAvailable
+	default:
+		st.State = StateUpToDate
+	}
+	return st, nil
+}
+
+func (m Manager) now() time.Time {
+	if m.Now != nil {
+		return m.Now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func (m Manager) run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if m.Run != nil {
+		return m.Run(ctx, name, args...)
+	}
+	return DefaultCommandRunner(ctx, name, args...)
+}
+
+func (m Manager) readLiveBootc(ctx context.Context) (Status, error) {
+	raw, err := m.run(ctx, "/usr/bin/bootc", "status", "--json")
+	if err != nil {
+		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
+			return Status{Supported: false, State: StateUnsupported}, nil
+		}
+		return Status{}, err
+	}
+	return ParseBootcStatus(raw)
+}
+
+// Check runs `bootc upgrade --check`, reads `bootc status --json`, and persists the result.
+func (m Manager) Check(ctx context.Context) (Status, error) {
+	prev, _, _ := ReadStatus(m.StateDir)
+	now := m.now()
+
+	_, checkErr := m.run(ctx, "/usr/bin/bootc", "upgrade", "--check")
+	if checkErr != nil && (errors.Is(checkErr, exec.ErrNotFound) || errors.Is(checkErr, os.ErrNotExist)) {
+		st := Status{Supported: false, State: StateUnsupported, CheckedAt: &now}
+		_ = WriteStatus(m.StateDir, st)
+		return st, nil
+	}
+
+	st, statusErr := m.readLiveBootc(ctx)
+	if statusErr != nil {
+		if prev.Supported {
+			st = prev
+		} else {
+			st = Status{Supported: true}
+		}
+		st.State = StateError
+		st.CheckedAt = &now
+		if checkErr != nil {
+			st.Error = checkErr.Error()
+		} else {
+			st.Error = statusErr.Error()
+		}
+		_ = WriteStatus(m.StateDir, st)
+		return st, errors.New(st.Error)
+	}
+
+	st.CheckedAt = &now
+	if checkErr != nil {
+		st.State = StateError
+		st.Error = checkErr.Error()
+		_ = WriteStatus(m.StateDir, st)
+		return st, checkErr
+	}
+	if err := WriteStatus(m.StateDir, st); err != nil {
+		return st, err
+	}
+	return st, nil
+}
+
+// Stage verifies the engine is idle, downloads and stages the next signed image via `bootc upgrade`,
+// and persists the resulting staged status. It never reboots automatically.
+func (m Manager) Stage(ctx context.Context) (Status, error) {
+	if m.CheckIdle != nil {
+		if err := m.CheckIdle(ctx); err != nil {
+			return Status{}, fmt.Errorf("cannot stage update while system is busy: %w", err)
+		}
+	}
+	prev, _, _ := ReadStatus(m.StateDir)
+	if prev.Supported {
+		staging := prev
+		staging.State = StateStaging
+		staging.Error = ""
+		_ = WriteStatus(m.StateDir, staging)
+	}
+
+	if _, err := m.run(ctx, "/usr/bin/bootc", "upgrade", "--quiet"); err != nil {
+		now := m.now()
+		failed := prev
+		if !failed.Supported {
+			failed = Status{Supported: true}
+		}
+		failed.State = StateError
+		failed.Error = err.Error()
+		failed.CheckedAt = &now
+		_ = WriteStatus(m.StateDir, failed)
+		return failed, err
+	}
+
+	st, err := m.readLiveBootc(ctx)
+	if err != nil {
+		return Status{}, err
+	}
+	now := m.now()
+	st.CheckedAt = &now
+	if err := WriteStatus(m.StateDir, st); err != nil {
+		return st, err
+	}
+	return st, nil
+}
+
+// Rollback verifies the engine is idle, queues the previous bootc deployment via `bootc rollback`,
+// and persists the updated status with RebootNeeded set.
+func (m Manager) Rollback(ctx context.Context) (Status, error) {
+	if m.CheckIdle != nil {
+		if err := m.CheckIdle(ctx); err != nil {
+			return Status{}, fmt.Errorf("cannot roll back update while system is busy: %w", err)
+		}
+	}
+	prev, _, _ := ReadStatus(m.StateDir)
+	if prev.Supported {
+		rolling := prev
+		rolling.State = StateRollingBack
+		rolling.Error = ""
+		_ = WriteStatus(m.StateDir, rolling)
+	}
+
+	if _, err := m.run(ctx, "/usr/bin/bootc", "rollback"); err != nil {
+		failed := prev
+		if !failed.Supported {
+			failed = Status{Supported: true}
+		}
+		failed.State = StateError
+		failed.Error = err.Error()
+		_ = WriteStatus(m.StateDir, failed)
+		return failed, err
+	}
+
+	st, err := m.readLiveBootc(ctx)
+	if err != nil {
+		return Status{}, err
+	}
+	if prev.CheckedAt != nil {
+		st.CheckedAt = prev.CheckedAt
+	}
+	st.RebootNeeded = true
+	if err := WriteStatus(m.StateDir, st); err != nil {
+		return st, err
+	}
+	return st, nil
+}
+
+// Reboot verifies the engine is idle and triggers a clean host reboot via systemctl.
+func (m Manager) Reboot(ctx context.Context) error {
+	if m.CheckIdle != nil {
+		if err := m.CheckIdle(ctx); err != nil {
+			return fmt.Errorf("cannot reboot while system is busy: %w", err)
+		}
+	}
+	_, err := m.run(ctx, "/usr/bin/systemctl", "reboot")
+	return err
+}

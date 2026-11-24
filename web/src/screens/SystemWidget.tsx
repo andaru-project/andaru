@@ -1,7 +1,8 @@
-import { Paper, Stack, Table, Text, Title } from '@mantine/core';
+import { Badge, Group, Paper, Stack, Table, Text, Title } from '@mantine/core';
 import { useCallback, useState, type ReactNode } from 'react';
+import { Link } from 'react-router';
 import { bytes, duration, plural } from '../format';
-import type { SystemInfo } from '../types';
+import type { SystemInfo, UpdateStatus } from '../types';
 import { useVisiblePoll, type Resource } from '../useResource';
 import { Loaded } from './Loaded';
 
@@ -35,16 +36,54 @@ function useBoxClock(info: SystemInfo, loadedAt: number) {
   );
 }
 
+function UpdatePill({ update }: { update?: UpdateStatus }) {
+  if (!update || !update.supported) return null;
+  if (update.rebootNeeded) {
+    return (
+      <Badge component={Link} to="/system/updates" size="xs" variant="filled" color="teal" className="update-pill plain-badge">
+        Reboot to apply {update.staged?.version || 'update'}
+      </Badge>
+    );
+  }
+  if (update.state === 'available') {
+    return (
+      <Badge component={Link} to="/system/updates" size="xs" variant="filled" color="orange" className="update-pill plain-badge">
+        Update available: {update.available?.version || 'new version'}
+      </Badge>
+    );
+  }
+  if (update.state === 'up_to_date') {
+    return (
+      <Badge component={Link} to="/system/updates" size="xs" variant="light" color="green" className="update-pill plain-badge">
+        Up to date
+      </Badge>
+    );
+  }
+  if (update.state === 'error') {
+    return (
+      <Badge component={Link} to="/system/updates" size="xs" variant="light" color="red" className="update-pill plain-badge">
+        Update check failed
+      </Badge>
+    );
+  }
+  return null;
+}
+
 // The dashboard's widget: what changes or says something is wrong, and a line each for the machine and its
 // processor. The header names the box; the rest of what it is made of is looked up rarely, and is on the
 // System details page.
-export function SystemWidget({ info, loadedAt }: { info: SystemInfo; loadedAt: number }) {
+export function SystemWidget({ info, loadedAt, update }: { info: SystemInfo; loadedAt: number; update?: UpdateStatus }) {
   const running = useBoxClock(info, loadedAt);
   // A guest that names no machine is still said to be one.
   const machine = words(info.hardware.vendor, info.hardware.product) || (info.guest ? 'virtual machine' : '');
   return (
     <Facts>
-      <Row label="Version">{info.version}</Row>
+      <Row label="Version">
+        <Group gap="xs" wrap="wrap">
+          <span>{info.version}</span>
+          <UpdatePill update={update} />
+        </Group>
+      </Row>
       {running}
       {machine && <Row label="Machine">{machine}</Row>}
       <Row label="CPU">{info.cpu.model || info.architecture}, {plural(info.cpu.cores, 'core')}</Row>

@@ -1,3 +1,4 @@
+import { MemoryRouter } from 'react-router';
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, render, screen } from '../test/render';
 import type { SystemInfo } from '../types';
@@ -113,4 +114,30 @@ it('keeps the dashboard widget short: what changes, and a line each for the mach
   render(<SystemWidget info={hardware} loadedAt={Date.now()} />);
   expect(screen.getAllByRole('rowheader').map((header) => header.textContent)).toEqual(['Version', 'Clock', 'Uptime', 'Machine', 'CPU']);
   expect(value('CPU')).toBe('Intel(R) Core(TM) i5-1235U, 10 cores');
+});
+
+it('shows a clickable upgrade notification pill beside the version when an update is available or staged', () => {
+  const { rerender } = render(
+    <MemoryRouter>
+      <SystemWidget
+        info={hardware}
+        loadedAt={Date.now()}
+        update={{ supported: true, state: 'available', available: { version: '0.5.0-a.5' }, rebootNeeded: false }}
+      />
+    </MemoryRouter>,
+  );
+  const availPill = screen.getByRole('link', { name: 'Update available: 0.5.0-a.5' });
+  expect(availPill).toHaveAttribute('href', '/system/updates');
+
+  rerender(
+    <MemoryRouter>
+      <SystemWidget
+        info={hardware}
+        loadedAt={Date.now()}
+        update={{ supported: true, state: 'staged', staged: { version: '0.5.0-a.5' }, rebootNeeded: true }}
+      />
+    </MemoryRouter>,
+  );
+  const rebootPill = screen.getByRole('link', { name: 'Reboot to apply 0.5.0-a.5' });
+  expect(rebootPill).toHaveAttribute('href', '/system/updates');
 });
