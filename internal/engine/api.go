@@ -73,6 +73,10 @@ func newHandlerWithFleet(readLinks func(context.Context) ([]host.LinkStatus, err
 }
 
 func newHandlerWithServices(readLinks func(context.Context) ([]host.LinkStatus, error), configuration, identityAPI, auditAPI, fleetAPI, updateAPI http.Handler) http.Handler {
+	return newHandlerWithAllServices(readLinks, configuration, identityAPI, auditAPI, fleetAPI, updateAPI, nil, nil)
+}
+
+func newHandlerWithAllServices(readLinks func(context.Context) ([]host.LinkStatus, error), configuration, identityAPI, auditAPI, fleetAPI, updateAPI, setupCodeAPI, hostnameAPI http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
@@ -82,6 +86,14 @@ func newHandlerWithServices(readLinks func(context.Context) ([]host.LinkStatus, 
 		}
 		if (r.URL.Path == "/api/v1/capabilities" || r.URL.Path == "/api/v1/roles" || strings.HasPrefix(r.URL.Path, "/api/v1/users") || strings.HasPrefix(r.URL.Path, "/api/v1/tokens")) && identityAPI != nil {
 			identityAPI.ServeHTTP(w, r)
+			return
+		}
+		if r.URL.Path == "/api/v1/setup/code" && setupCodeAPI != nil {
+			setupCodeAPI.ServeHTTP(w, r)
+			return
+		}
+		if r.URL.Path == "/api/v1/system/hostname" && hostnameAPI != nil {
+			hostnameAPI.ServeHTTP(w, r)
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/api/v1/audit/") && auditAPI != nil {

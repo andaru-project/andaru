@@ -152,7 +152,8 @@ func TestConfigurationHTTPContract(t *testing.T) {
 		"/api/v1/fleet/diagnostics": {"get", "head", "post"}, "/api/v1/fleet/events/stream": {"get"},
 		"/api/v1/system/update": {"get", "head"}, "/api/v1/system/update/check": {"post"},
 		"/api/v1/system/update/stage": {"post"}, "/api/v1/system/update/rollback": {"post"},
-		"/api/v1/system/update/reboot": {"post"},
+		"/api/v1/system/update/reboot": {"post"}, "/api/v1/system/hostname": {"post"},
+		"/api/v1/setup/code": {"get", "head", "post"}, "/api/v1/setup/bootstrap": {"post"},
 	}
 	if len(document.Paths) != len(expected) {
 		t.Fatalf("unimplemented or missing contract paths: %d", len(document.Paths))

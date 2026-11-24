@@ -6578,6 +6578,66 @@
           "502": { "description": "Reboot command failed" }
         }
       }
+    },
+    "/api/v1/system/hostname": {
+      "post": {
+        "operationId": "setSystemHostname",
+        "summary": "Set the static appliance hostname",
+        "responses": {
+          "200": { "description": "Hostname updated" },
+          "400": { "description": "Invalid request" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "405": { "description": "Method not allowed" },
+          "422": { "description": "Invalid hostname" },
+          "502": { "description": "Hostname command failed" }
+        }
+      }
+    },
+    "/api/v1/setup/code": {
+      "get": {
+        "operationId": "getSetupCode",
+        "summary": "Read the active one-time console setup code (root local socket only)",
+        "responses": {
+          "200": { "description": "Current setup code status" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      },
+      "head": {
+        "operationId": "headSetupCode",
+        "summary": "Check the active one-time console setup code (root local socket only)",
+        "responses": {
+          "200": { "description": "Current setup code status" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      },
+      "post": {
+        "operationId": "rotateSetupCode",
+        "summary": "Rotate the active one-time console setup code (root local socket only)",
+        "responses": {
+          "200": { "description": "New setup code" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "409": { "description": "Administrator already exists" }
+        }
+      }
+    },
+    "/api/v1/setup/bootstrap": {
+      "post": {
+        "x-andaru-web-auth-route": true,
+        "operationId": "bootstrapAdminFromWebSetup",
+        "summary": "Create the initial administrator account using the one-time console setup code and sign in",
+        "responses": {
+          "201": { "description": "Administrator created and session established" },
+          "400": { "description": "Invalid request" },
+          "401": { "description": "Invalid setup code" },
+          "403": { "description": "Origin check failed" },
+          "409": { "description": "Administrator already exists" },
+          "413": { "description": "Request body too large" },
+          "415": { "description": "Unsupported media type" },
+          "422": { "description": "Validation failed" },
+          "429": { "description": "Too many failed setup code attempts" },
+          "503": { "description": "Setup or audit unavailable" }
+        }
+      }
     }
   },
   "components": {

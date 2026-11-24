@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { BrowserRouter } from 'react-router';
 import { ApiClient, ApiError, apiErrorMessage } from './api';
 import { LoginScreen } from './screens/LoginScreen';
+import { SetupBootstrapScreen } from './screens/SetupBootstrapScreen';
 import { Shell } from './Shell';
 import type { Session } from './types';
 
@@ -72,7 +73,24 @@ export function App() {
 
   if (loading) return <Container py="xl"><Loader aria-label="Connecting to Andaru" /></Container>;
   if (disconnected) return <Container size="sm" py="xl"><Alert color="red" role="alert" title="Cannot reach the Andaru service"><Stack><Text>The management service is disconnected. No change was sent.</Text><Button onClick={() => void connect()}>Retry connection</Button></Stack></Alert></Container>;
-  if (!session) return <LoginScreen notice={notice} setupRequired={setupRequired} onLogin={login} />;
+  if (!session && setupRequired) {
+    return (
+      <SetupBootstrapScreen
+        api={api}
+        onBootstrapped={(created) => {
+          setSession(created);
+          setSetupRequired(false);
+          setNotice('');
+          window.history.replaceState(null, '', '/setup');
+        }}
+        onAlreadyConfigured={(message) => {
+          setSetupRequired(false);
+          setNotice(message);
+        }}
+      />
+    );
+  }
+  if (!session) return <LoginScreen notice={notice} setupRequired={false} onLogin={login} />;
 
   return <BrowserRouter><Shell api={api} session={session} connected={connected} onLogout={() => void logout()} onSessionLost={sessionLost} /></BrowserRouter>;
 }

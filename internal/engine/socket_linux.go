@@ -150,13 +150,16 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 		}()
 		fleetAPI = fleet
 	}
+	setupCodes := newSetupCodeStore(stateDir)
+	setupCodeAPI := newSetupCodeHandler(identities, setupCodes)
+	hostnameAPI := newHostnameHandler(nil)
 	updateAPI := newUpdateAPI(stateDir, nil)
-	rootAPI := newHandlerWithServices(host.ReadLinks, newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, applies, backups), identityAPI, auditAPI, fleetAPI, updateAPI)
+	rootAPI := newHandlerWithAllServices(host.ReadLinks, newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, applies, backups), identityAPI, auditAPI, fleetAPI, updateAPI, setupCodeAPI, hostnameAPI)
 	if web == nil {
 		err = serveUnix(lifetime, socketPath, rootAPI)
 	} else {
 		var webAPI http.Handler
-		webAPI, err = newWebAPI(identities, store, coordinator, rootAPI, events, stateDir, web.Origins)
+		webAPI, err = newWebAPIWithSetupCodes(identities, store, coordinator, rootAPI, events, setupCodes, stateDir, web.Origins)
 		if err != nil {
 			return err
 		}
