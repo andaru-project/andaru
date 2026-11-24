@@ -15,16 +15,16 @@ function isValidTimeZone(zone: string): boolean {
   }
 }
 
-function readStored(): string {
+function readStored(): string | undefined {
   try {
     const value = localStorage.getItem(storageKey);
     return value && isValidTimeZone(value) ? value : 'local';
   } catch {
-    return 'local';
+    return undefined;
   }
 }
 
-let current = readStored();
+let current = readStored() ?? 'local';
 
 function notify() {
   for (const listener of listeners) listener();
@@ -32,7 +32,7 @@ function notify() {
 
 function onStorage(event: StorageEvent) {
   if (event.key !== null && event.key !== storageKey) return;
-  current = readStored();
+  current = readStored() ?? 'local';
   notify();
 }
 
@@ -51,7 +51,11 @@ export function setTimeZone(next: string) {
 }
 
 function subscribe(listener: () => void) {
-  if (listeners.size === 0 && typeof window !== 'undefined') window.addEventListener('storage', onStorage);
+  if (listeners.size === 0) {
+    const stored = readStored();
+    if (stored !== undefined) current = stored;
+    if (typeof window !== 'undefined') window.addEventListener('storage', onStorage);
+  }
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
@@ -67,46 +71,52 @@ export function browserTimeZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 }
 
-function resolvedZone(choice: string): string | undefined {
-  return !choice || choice === 'local' || !isValidTimeZone(choice) ? undefined : choice;
-}
-
 function offsetFromPart(raw: string | undefined): string {
   if (!raw || raw === 'GMT' || raw === 'UTC') return '+00:00';
   return raw.replace(/^(?:GMT|UTC)/, '').replace(/\u2212/g, '-');
 }
 
-function getTimestampFormatter(zone: string | undefined): Intl.DateTimeFormat {
+function getTimestampFormatter(choice: string): Intl.DateTimeFormat {
+  const zone = !choice || choice === 'local' ? undefined : choice;
   const key = zone ?? browserTimeZone();
   let formatter = timestampFormatters.get(key);
   if (!formatter) {
-    formatter = new Intl.DateTimeFormat('en-US', {
-      timeZone: zone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hourCycle: 'h23',
-      timeZoneName: 'longOffset',
-    });
+    try {
+      formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: zone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hourCycle: 'h23',
+        timeZoneName: 'longOffset',
+      });
+    } catch {
+      return getTimestampFormatter('local');
+    }
     timestampFormatters.set(key, formatter);
   }
   return formatter;
 }
 
-function getTimeFormatter(zone: string | undefined): Intl.DateTimeFormat {
+function getTimeFormatter(choice: string): Intl.DateTimeFormat {
+  const zone = !choice || choice === 'local' ? undefined : choice;
   const key = zone ?? browserTimeZone();
   let formatter = timeFormatters.get(key);
   if (!formatter) {
-    formatter = new Intl.DateTimeFormat('en-GB', {
-      timeZone: zone,
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hourCycle: 'h23',
-    });
+    try {
+      formatter = new Intl.DateTimeFormat('en-GB', {
+        timeZone: zone,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hourCycle: 'h23',
+      });
+    } catch {
+      return getTimeFormatter('local');
+    }
     timeFormatters.set(key, formatter);
   }
   return formatter;
@@ -116,7 +126,7 @@ function getTimeFormatter(zone: string | undefined): Intl.DateTimeFormat {
 export function formatTimestamp(input: string | number | Date, choice = current): string {
   const date = input instanceof Date ? input : new Date(input);
   if (Number.isNaN(date.getTime())) return '—';
-  const parts = getTimestampFormatter(resolvedZone(choice)).formatToParts(date);
+  const parts = getTimestampFormatter(choice).formatToParts(date);
   const pick = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? '';
   return `${pick('year')}-${pick('month')}-${pick('day')} ${pick('hour')}:${pick('minute')}:${pick('second')} ${offsetFromPart(pick('timeZoneName'))}`;
 }
@@ -125,7 +135,7 @@ export function formatTimestamp(input: string | number | Date, choice = current)
 export function formatTime(input: string | number | Date, choice = current): string {
   const date = input instanceof Date ? input : new Date(input);
   if (Number.isNaN(date.getTime())) return '—';
-  return getTimeFormatter(resolvedZone(choice)).format(date);
+  return getTimeFormatter(choice).format(date);
 }
 
 export function timeZoneOptions(active = current): Array<{ value: string; label: string }> {
