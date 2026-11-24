@@ -102,12 +102,12 @@ Every channel gets a "Send a test" action on its settings page. The test goes th
 
 ## The first sources
 
-- **Applies:** the engine raises `apply/<id>` when an apply fails or is rolled back, and clears it when a later apply is confirmed. This is `warning`, or `critical` for an automatic rollback.
+- **Applies:** the engine raises `apply/<id>` when an apply fails or is rolled back, and clears it when a later apply is confirmed. This is `warning`, or `critical` for an automatic rollback. An apply that never started is left out: its caller was told, and one that is starting looks the same.
 - **Upgrade decisions:** raised while the saved settings wait for decisions (safe mode), and cleared when they are answered. This is `warning`, linking to `/system/upgrade`.
 - **Missed notifications** and **missed deliveries:** above.
-- **Disk:** the engine raises `disk/<mount>` when the state directory's file system passes 90% (`warning`) or 97% (`critical`), and clears it below 85%. It checks once a minute.
+- **Disk:** the engine raises `disk/state` when the state directory's file system passes 90% (`warning`) or 97% (`critical`), and clears it below 85%. It checks once a minute.
 
-Each states its notifications when the engine starts, as above.
+Each states its notifications when the engine starts, as above. The engine's notifications have the source `engine`. After the start, it works them out again at each apply event, each save and each minute, and publishes only what changed.
 
 ## What comes first
 
