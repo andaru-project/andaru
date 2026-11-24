@@ -20,6 +20,7 @@ import (
 	"github.com/andaru-project/andaru/internal/bus"
 	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/identity"
+	"github.com/andaru-project/andaru/internal/notify"
 )
 
 // The event stream sends a signed-in reader each saved head and each apply's state, and ends with its session.
@@ -163,6 +164,11 @@ func TestEventStreamFollowsTheSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	next(`"id":3`)
+	changed, _ := bus.NewEvent("notifications.changed", "engine", struct{}{})
+	if err = events.Publish(notify.ChangedTopic, changed, false); err != nil {
+		t.Fatal(err)
+	}
+	next(`"type":"notifications.changed"`)
 
 	// Opening and keeping the stream are not activity: they leave the session to its idle timeout.
 	if userActivity(httptest.NewRequest(http.MethodGet, eventsPath, nil)) {

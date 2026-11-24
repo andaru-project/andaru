@@ -9,18 +9,20 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"time"
 
 	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/bus"
 	"github.com/andaru-project/andaru/internal/config"
+	"github.com/andaru-project/andaru/internal/notify"
 )
 
 const eventsPath = "/api/v1/events"
 
 // eventsHeartbeat is how often an open event stream is written to and its session checked again: a stream ends
-// within this long of its session ending or losing configuration.read.
+// within this long of its session ending or its capabilities changing.
 var eventsHeartbeat = 25 * time.Second
 
 // openBus starts the event bus with its store in the state directory and its socket where only root reaches it:
@@ -95,8 +97,22 @@ func publishApply(events *bus.Bus, source string) func(int) {
 	}
 }
 
+// streamFilters are the topics an account's event stream carries: the saved head and the applies for one that reads
+// the configuration, and that the notifications changed for one that reads them. The stream never carries a
+// notification itself: the list is read through the API, filtered for the account.
+func streamFilters(actor requestActor) []string {
+	var filters []string
+	if hasCapability(actor, authz.ConfigurationRead) {
+		filters = append(filters, "config/head", "apply/+")
+	}
+	if hasCapability(actor, authz.NotificationsRead) {
+		filters = append(filters, notify.ChangedTopic)
+	}
+	return filters
+}
+
 // eventStream sends the browser the events that change what the shell shows, as Server-Sent Events: a new saved
-// head and each apply's state. The browser reads that state again when the stream opens and at every event, so
+// head, each apply's state, and changes to the notifications. The browser reads that state again when the stream opens and at every event, so
 // the events carry nothing it must keep. The stream ends when its session does, and the browser opens it again.
 func (h *webAPI) eventStream(w http.ResponseWriter, r *http.Request, source string) {
 	if r.Method != http.MethodGet {
@@ -110,9 +126,9 @@ func (h *webAPI) eventStream(w http.ResponseWriter, r *http.Request, source stri
 	if !ok {
 		return
 	}
-	allowed := func(actor requestActor) bool { return hasCapability(actor, authz.ConfigurationRead) }
 	actor := requestActor{Actor: principal.Actor, Source: source, AccountID: principal.Account.ID, Capabilities: principal.Capabilities}
-	if !allowed(actor) {
+	filters := streamFilters(actor)
+	if len(filters) == 0 {
 		h.deny(w, r, actor)
 		return
 	}
@@ -130,7 +146,7 @@ func (h *webAPI) eventStream(w http.ResponseWriter, r *http.Request, source stri
 			}
 		}
 	}
-	for _, filter := range []string{"config/head", "apply/+"} {
+	for _, filter := range filters {
 		stop, err := h.events.Subscribe(filter, deliver)
 		if err != nil {
 			slog.ErrorContext(r.Context(), "subscribe to events", "error", err)
@@ -165,7 +181,9 @@ func (h *webAPI) eventStream(w http.ResponseWriter, r *http.Request, source stri
 			message = append(append([]byte("data: "), compact.Bytes()...), "\n\n"...)
 		case <-heartbeat.C:
 			current, _, _, _, _, err := h.readCookiePrincipal(r)
-			if err != nil || !allowed(requestActor{Actor: current.Actor, Capabilities: current.Capabilities}) {
+			// A stream whose account's capabilities changed what it would carry ends; the browser opens it again with
+			// what the account has now.
+			if err != nil || !slices.Equal(streamFilters(requestActor{Actor: current.Actor, Capabilities: current.Capabilities}), filters) {
 				return
 			}
 			message = []byte(":\n\n")

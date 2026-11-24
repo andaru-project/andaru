@@ -135,7 +135,7 @@
       "get": {
         "operationId": "streamEvents",
         "summary": "Follow the events that change what the web UI shows, as Server-Sent Events",
-        "description": "Each event is one data line holding the event bus's JSON payload (id, type, time, source, data): config.head.changed when a new head is saved, apply.changed when an apply changes state. Events are not kept: a client reads the state when the stream opens and again at every event. A comment line arrives every 25 seconds; the stream ends within that time of its session ending or losing configuration.read, and a stream that falls behind is closed. Opening or keeping the stream does not count as activity for the session's idle timeout.",
+        "description": "Each event is one data line holding the event bus's JSON payload (id, type, time, source, data): config.head.changed when a new head is saved and apply.changed when an apply changes state, for callers with configuration.read; notifications.changed when the active notifications change, for callers with notifications.read. Events are not kept: a client reads the state when the stream opens and again at every event. A comment line arrives every 25 seconds; the stream ends within that time of its session ending or of a change in the capabilities it was opened with, and a stream that falls behind is closed. Opening or keeping the stream does not count as activity for the session's idle timeout.",
         "x-andaru-web-auth-route": true,
         "responses": {
           "200": {
@@ -155,7 +155,7 @@
             "description": "Session is missing or invalid"
           },
           "403": {
-            "description": "The account lacks configuration.read"
+            "description": "The account has neither configuration.read nor notifications.read"
           },
           "405": {
             "$ref": "#/components/responses/MethodNotAllowed"
@@ -6020,6 +6020,37 @@
         "responses": {"200": {"description": "Committed revocation metadata", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OperationResult"}}}}}
       }
     },
+    "/api/v1/notifications": {
+      "get": {
+        "operationId": "listNotifications",
+        "x-required-capability": "notifications.read",
+        "summary": "List the active notifications the caller may see, the most recently raised or changed first",
+        "description": "A raise dated later than when the engine recorded it is dated then. A notification that requires another capability is listed only for callers that have it as well. The list changes as sources raise and clear notifications and as they are dismissed; the event stream carries notifications.changed after each change.",
+        "responses": {
+          "200": {"description": "The active notifications", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/NotificationList"}}}},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "405": {"$ref": "#/components/responses/MethodNotAllowed"},
+          "503": {"description": "Structured failure; no secret values", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}
+        }
+      },
+      "head": {"operationId": "headNotifications", "x-required-capability": "notifications.read", "responses": {"200": {"description": "The notifications were read; no body"}, "403": {"description": "Peer denied; no body"}, "503": {"description": "Unavailable; no body"}}}
+    },
+    "/api/v1/notifications/{id}/dismiss": {
+      "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^[1-9][0-9]{0,18}$"}}],
+      "post": {
+        "operationId": "dismissNotification",
+        "x-required-capability": "notifications.manage",
+        "summary": "Dismiss an active notification",
+        "description": "The notification ends, and is recorded with who dismissed it. It comes back if its source raises it again. A notification the caller may not see is not found.",
+        "responses": {
+          "204": {"description": "Dismissed"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"description": "Structured failure; no secret values", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+          "405": {"$ref": "#/components/responses/MethodNotAllowed"},
+          "503": {"description": "Structured failure; no secret values", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}
+        }
+      }
+    },
     "/api/v1/audit/events": {
       "get": {
         "operationId": "listAuditEvents",
@@ -8363,7 +8394,7 @@
         "type": "object",
         "required": ["items"],
         "properties": {
-          "items": {"type": "array", "items": {"type": "string", "enum": ["audit.read", "backups.create", "backups.exportSecrets", "backups.restore", "configuration.apply", "configuration.confirm", "configuration.read", "configuration.write", "status.read", "tokens.manageAll", "tokens.manageSelf", "users.manage", "users.read"]}},
+          "items": {"type": "array", "items": {"type": "string", "enum": ["audit.read", "backups.create", "backups.exportSecrets", "backups.restore", "configuration.apply", "configuration.confirm", "configuration.read", "configuration.write", "notifications.manage", "notifications.read", "status.read", "tokens.manageAll", "tokens.manageSelf", "users.manage", "users.read"]}},
           "nextCursor": {"type": "string"}
         }
       },
@@ -8432,6 +8463,27 @@
         "properties": {
           "items": {"type": "array", "items": {"$ref": "#/components/schemas/Token"}},
           "nextCursor": {"type": "string"}
+        }
+      },
+      "NotificationList": {
+        "type": "object",
+        "required": ["items"],
+        "properties": {"items": {"type": "array", "items": {"$ref": "#/components/schemas/Notification"}}}
+      },
+      "Notification": {
+        "type": "object",
+        "required": ["id", "source", "key", "severity", "subject", "raised", "updated"],
+        "properties": {
+          "id": {"type": "integer", "description": "Names this notification until it ends, for dismissing it"},
+          "source": {"type": "string", "description": "What raised it: applies, upgrade, disk, notifications, an add-on"},
+          "key": {"type": "string", "description": "What it is about, unique within its source, such as apply/12"},
+          "severity": {"type": "string", "enum": ["info", "warning", "critical"]},
+          "subject": {"type": "string"},
+          "detail": {"type": "string", "description": "A few lines of plain text"},
+          "link": {"type": "string", "description": "A path in the web UI where it can be acted on, such as /changes"},
+          "requires": {"type": "string", "description": "The capability, besides notifications.read, needed to see it"},
+          "raised": {"type": "string", "format": "date-time"},
+          "updated": {"type": "string", "format": "date-time", "description": "When it was raised or last changed"}
         }
       },
       "AuditEvent": {

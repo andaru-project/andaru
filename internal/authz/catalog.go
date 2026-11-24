@@ -5,19 +5,21 @@ import "slices"
 type Capability string
 
 const (
-	AuditRead             Capability = "audit.read"
-	BackupsCreate         Capability = "backups.create"
-	BackupsExportSecrets  Capability = "backups.exportSecrets"
-	BackupsRestore        Capability = "backups.restore"
-	ConfigurationApply    Capability = "configuration.apply"
-	ConfigurationConfirm  Capability = "configuration.confirm"
-	ConfigurationRead     Capability = "configuration.read"
-	ConfigurationWrite    Capability = "configuration.write"
-	StatusRead            Capability = "status.read"
-	TokensManageAll       Capability = "tokens.manageAll"
-	TokensManageSelf      Capability = "tokens.manageSelf"
-	UsersManage           Capability = "users.manage"
-	UsersRead             Capability = "users.read"
+	AuditRead            Capability = "audit.read"
+	BackupsCreate        Capability = "backups.create"
+	BackupsExportSecrets Capability = "backups.exportSecrets"
+	BackupsRestore       Capability = "backups.restore"
+	ConfigurationApply   Capability = "configuration.apply"
+	ConfigurationConfirm Capability = "configuration.confirm"
+	ConfigurationRead    Capability = "configuration.read"
+	ConfigurationWrite   Capability = "configuration.write"
+	NotificationsManage  Capability = "notifications.manage"
+	NotificationsRead    Capability = "notifications.read"
+	StatusRead           Capability = "status.read"
+	TokensManageAll      Capability = "tokens.manageAll"
+	TokensManageSelf     Capability = "tokens.manageSelf"
+	UsersManage          Capability = "users.manage"
+	UsersRead            Capability = "users.read"
 )
 
 var catalog = []Capability{
@@ -29,6 +31,8 @@ var catalog = []Capability{
 	ConfigurationConfirm,
 	ConfigurationRead,
 	ConfigurationWrite,
+	NotificationsManage,
+	NotificationsRead,
 	StatusRead,
 	TokensManageAll,
 	TokensManageSelf,

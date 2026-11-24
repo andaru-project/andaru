@@ -105,6 +105,8 @@ func buildEngineRoutes() []routeCapability {
 	add(authz.TokensManageSelf, "/api/v1/tokens", read...)
 	add(authz.TokensManageSelf, "/api/v1/tokens", http.MethodPost)
 	add(authz.TokensManageSelf, "/api/v1/tokens/{selector}", http.MethodDelete)
+	add(authz.NotificationsRead, "/api/v1/notifications", read...)
+	add(authz.NotificationsManage, "/api/v1/notifications/{id}/dismiss", http.MethodPost)
 	add(authz.AuditRead, "/api/v1/audit/events", read...)
 	add(authz.AuditRead, "/api/v1/audit/export", read...)
 	add(authz.StatusRead, "/api/v1/fleet/state", read...)

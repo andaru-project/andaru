@@ -17,6 +17,7 @@ import (
 	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/host"
 	"github.com/andaru-project/andaru/internal/identity"
+	"github.com/andaru-project/andaru/internal/notify"
 	"github.com/andaru-project/andaru/internal/securefs"
 )
 
@@ -97,6 +98,19 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 		}
 	}()
 	store.OnSave(publishHead(events))
+	// Without its store the layer does not read: notifications wait in the bus's log, for its retention, until a
+	// start that opens it, and the API answers that they are unavailable.
+	notificationsHandler := notificationsAPI{}
+	if layer, err := notify.Open(filepath.Join(stateDir, "notifications.db"), events, slog.Default().With("component", "notifications")); err != nil {
+		slog.Error("notifications unavailable", "error", err)
+	} else {
+		defer func() {
+			if err := layer.Close(); err != nil && result == nil {
+				result = err
+			}
+		}()
+		notificationsHandler.layer = layer
+	}
 	coordinator := newSecurityCoordinator(identities, audits, stateDir)
 	lifetime, cancel := context.WithCancelCause(ctx)
 	stopped := make(chan struct{})
@@ -154,7 +168,7 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	setupCodeAPI := newSetupCodeHandler(identities, setupCodes)
 	hostnameAPI := newHostnameHandler(nil)
 	updateAPI := newUpdateAPI(stateDir, nil)
-	rootAPI := newHandlerWithAllServices(host.ReadLinks, newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, applies, backups), identityAPI, auditAPI, fleetAPI, updateAPI, setupCodeAPI, hostnameAPI)
+	rootAPI := newHandlerWithAllServices(host.ReadLinks, newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, applies, backups), identityAPI, auditAPI, fleetAPI, updateAPI, setupCodeAPI, hostnameAPI, notificationsHandler)
 	if web == nil {
 		err = serveUnix(lifetime, socketPath, rootAPI)
 	} else {
