@@ -357,3 +357,22 @@ export interface ConfigChangesResult {
   savedVersion: string;
   created?: Record<string, string>;
 }
+
+export type NotificationSeverity = 'info' | 'warning' | 'critical';
+
+export interface Notification {
+  id: number;
+  source: string;
+  key: string;
+  severity: NotificationSeverity;
+  subject: string;
+  detail?: string;
+  link?: string;
+  requires?: string;
+  raised: string;
+  updated: string;
+}
+
+export interface NotificationList {
+  items: Notification[];
+}

@@ -15,3 +15,13 @@ export function Grip() {
     </svg>
   );
 }
+
+// Bell mark for the header notification count.
+export function Bell() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12.5 11H3.5c.8-.9 1.2-2 1.2-3.5a3.3 3.3 0 0 1 6.6 0c0 1.5.4 2.6 1.2 3.5Z" />
+      <path d="M6.5 13a1.6 1.6 0 0 0 3 0" />
+    </svg>
+  );
+}

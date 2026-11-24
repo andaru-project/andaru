@@ -47,15 +47,21 @@ body {
   color: #fff;
 }
 
-.app-header .account-button {
+.app-header .account-button,
+.app-header .notification-neutral {
   background: transparent;
   border-color: rgb(255 255 255 / 35%);
   color: #fff;
 }
 
-.app-header .account-button:hover {
+.app-header .account-button:hover,
+.app-header .notification-neutral:hover {
   background: rgb(255 255 255 / 12%);
   color: #fff;
+}
+
+.app-header .notification-button {
+  flex-shrink: 0;
 }
 
 /* A long account name must not push the header off a phone, nor squeeze the connection state out of reading. */
@@ -603,4 +609,8 @@ path.traffic-sent {
 
 .grow {
   flex: 1 1 14rem;
+}
+
+.notification-detail {
+  white-space: pre-wrap;
 }

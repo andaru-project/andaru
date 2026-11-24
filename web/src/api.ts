@@ -9,6 +9,7 @@ import type {
   Finding,
   History,
   LinkStatus,
+  NotificationList,
   OrderedList,
   SetupBootstrapRequest,
   Page,
@@ -458,5 +459,13 @@ export class ApiClient {
 
   rebootSystem() {
     return this.request<{ rebooting: boolean }>('/api/v1/system/update/reboot', { method: 'POST' }, true);
+  }
+
+  notifications() {
+    return this.request<NotificationList>('/api/v1/notifications');
+  }
+
+  dismissNotification(id: number) {
+    return this.request<void>(`/api/v1/notifications/${encodeURIComponent(String(id))}/dismiss`, { method: 'POST' }, true);
   }
 }
