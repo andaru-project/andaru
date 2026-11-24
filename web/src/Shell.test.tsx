@@ -1,10 +1,13 @@
 import { MemoryRouter } from 'react-router';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ApiClient } from './api';
+import { configureNetplaneApi } from './netplane/api';
+import { setRoutePrefix } from './netplane/routing';
 import { Shell } from './Shell';
 import { fetchRoutes, jsonResponse } from './test/fetch';
 import { apply, pointers, session } from './test/fixtures';
 import { act, render, screen } from './test/render';
+import userEvent from '@testing-library/user-event';
 
 const reader = session(['configuration.read']);
 const unapplied = { pointers: { ...pointers, confirmed: '1', live: '1' }, items: [apply({})] };
@@ -30,6 +33,8 @@ Object.defineProperty(document, 'visibilityState', { configurable: true, get: ()
 
 afterEach(() => {
   visibility = 'visible';
+  configureNetplaneApi(null);
+  setRoutePrefix('');
   vi.useRealTimers();
 });
 
@@ -222,4 +227,148 @@ it('sets the document title with the page and hostname, and marks pending change
   expect(await screen.findByRole('link', { name: /Review and apply.*Pending/i })).toBeInTheDocument();
   unmount();
   expect(document.title).toBe('Andaru administration');
+});
+
+it('mounts the fleet screens under /network/* for status.read without requesting targets when configuration.read is absent', async () => {
+  const fetchMock = fetchRoutes({
+    '/api/v1/status/system': { version: '0.5.0-a.4', hostname: 'edge', time: '2026-11-21T12:00:00Z', bootedAt: null },
+    '/api/v1/fleet/state': {
+      devices: [{ id: 'local', name: 'edge', driver: 'andaru', role: 'router', online: true, capabilities: [], system_stats: {}, sensors: [], firmware: {}, uptime_sec: 120 }],
+      links: [],
+      lag_groups: [],
+      segments: [],
+      zones: [],
+      gateways: [],
+      routes: [],
+      vpns: [],
+      firewalls: [],
+      radios: [],
+      wireless_uplinks: [],
+      clients: [],
+    },
+    '/api/v1/fleet/topology': { generated_at: '2026-11-21T12:00:00Z', root_ids: ['local'], nodes: [], edges: [] },
+    '/api/v1/fleet/vlans/flow': { generated_at: '2026-11-21T12:00:00Z', vlans: [], findings: [] },
+    '/api/v1/fleet/diagnostics?limit=30': { items: [] },
+  });
+  render(
+    <MemoryRouter initialEntries={['/network/topology']}>
+      <Shell api={new ApiClient('csrf')} session={session(['status.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} />
+    </MemoryRouter>,
+  );
+  expect(await screen.findByRole('heading', { name: 'Topology' })).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'VLAN Flow' })).toHaveAttribute('href', '/network/vlans/flow');
+  expect(screen.getByRole('link', { name: 'Devices' })).toHaveAttribute('href', '/network/devices');
+  await vi.waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url === '/api/v1/fleet/topology')).toBe(true));
+  expect(fetchMock.mock.calls.map(([url]) => url)).not.toContain('/api/v1/fleet/targets');
+  expect(document.title).toBe('Topology — edge — Andaru');
+});
+
+it('keeps Devices active and loads /api/v1/fleet/devices/:id on device detail routes', async () => {
+  fetchRoutes({
+    '/api/v1/status/system': { version: '0.5.0-a.4', hostname: 'edge', time: '2026-11-21T12:00:00Z', bootedAt: null },
+    '/api/v1/fleet/state': {
+      devices: [{ id: 'sw-core', name: 'Core Switch', driver: 'snmp', role: 'switch', online: true, capabilities: [], system_stats: {}, sensors: [], firmware: {}, uptime_sec: 120 }],
+      links: [],
+      lag_groups: [],
+      segments: [],
+      zones: [],
+      gateways: [],
+      routes: [],
+      vpns: [],
+      firewalls: [],
+      radios: [],
+      wireless_uplinks: [],
+      clients: [],
+    },
+    '/api/v1/fleet/topology': { generated_at: '2026-11-21T12:00:00Z', root_ids: ['sw-core'], nodes: [], edges: [] },
+    '/api/v1/fleet/vlans/flow': { generated_at: '2026-11-21T12:00:00Z', vlans: [], findings: [] },
+    '/api/v1/fleet/diagnostics?limit=30': { items: [] },
+    '/api/v1/fleet/devices/sw-core': {
+      device: { id: 'sw-core', name: 'Core Switch', driver: 'snmp', role: 'switch', online: true, capabilities: [], system_stats: {}, sensors: [], firmware: {}, uptime_sec: 120 },
+      links: [],
+      lag_groups: [],
+      segments: [],
+      zones: [],
+      gateways: [],
+      routes: [],
+      vpns: [],
+      firewalls: [],
+      radios: [],
+      wireless_uplinks: [],
+      clients: [],
+    },
+  });
+  render(
+    <MemoryRouter initialEntries={['/network/devices/sw-core']}>
+      <Shell api={new ApiClient('csrf')} session={session(['status.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} />
+    </MemoryRouter>,
+  );
+  expect(await screen.findByRole('heading', { name: 'Core Switch' })).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'Devices' })).toHaveAttribute('aria-current', 'page');
+  expect(document.title).toBe('Device — edge — Andaru');
+});
+
+it('wires session CSRF token, onSessionLost on 401, and background header on periodic fleet polls', async () => {
+  const emptyState = {
+    devices: [],
+    links: [],
+    lag_groups: [],
+    segments: [],
+    zones: [],
+    gateways: [],
+    routes: [],
+    vpns: [],
+    firewalls: [],
+    radios: [],
+    wireless_uplinks: [],
+    clients: [],
+  };
+  const fetchMock = fetchRoutes({
+    '/api/v1/status/system': { version: '0.5.0-a.4', hostname: 'edge', time: '2026-11-21T12:00:00Z', bootedAt: null },
+    '/api/v1/applies': unapplied,
+    '/api/v1/versions?': { state: 'saved', items: [] },
+    '/api/v1/fleet/state': emptyState,
+    '/api/v1/fleet/topology': { generated_at: '2026-11-21T12:00:00Z', root_ids: [], nodes: [], edges: [] },
+    '/api/v1/fleet/vlans/flow': { generated_at: '2026-11-21T12:00:00Z', vlans: [], findings: [] },
+    '/api/v1/fleet/targets': { items: [{ id: 'sw-1', name: 'Switch 1', driver: 'snmp', endpoint: '10.0.0.2', enabled: true, poll_interval: 30 }] },
+    '/api/v1/fleet/diagnostics?limit=30': { items: [] },
+    'POST /api/v1/fleet/targets/sw-1/poll': { ok: true },
+  });
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  const fleetSession = { ...session(['status.read', 'configuration.read', 'configuration.write']), csrfToken: 'shell-csrf-secret' };
+  const onSessionLost = vi.fn();
+  render(
+    <MemoryRouter initialEntries={['/network/topology']}>
+      <Shell api={new ApiClient(fleetSession.csrfToken)} session={fleetSession} connected onLogout={vi.fn()} onSessionLost={onSessionLost} />
+    </MemoryRouter>,
+  );
+
+  const pollBtn = await screen.findByRole('button', { name: 'Poll all' });
+  await userEvent.click(pollBtn);
+  const pollCall = fetchMock.mock.calls.find(([url, init]) => url === '/api/v1/fleet/targets/sw-1/poll' && init?.method === 'POST');
+  expect(pollCall).toBeDefined();
+  expect(new Headers(pollCall?.[1]?.headers).get('X-Andaru-CSRF')).toBe('shell-csrf-secret');
+
+  // Unattended periodic fleet polls must carry X-Andaru-Background: 1.
+  const beforePollCount = fetchMock.mock.calls.filter(([url]) => url === '/api/v1/fleet/state').length;
+  act(() => { vi.advanceTimersByTime(15_000); });
+  await vi.waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/fleet/state').length).toBe(beforePollCount + 1));
+  const bgStateCall = fetchMock.mock.calls.filter(([url]) => url === '/api/v1/fleet/state').at(-1);
+  expect(new Headers(bgStateCall?.[1]?.headers).get('X-Andaru-Background')).toBe('1');
+
+  // A 401 on a fleet read calls onSessionLost and never triggers window.prompt.
+  const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('unused');
+  fetchRoutes({
+    '/api/v1/status/system': { version: '0.5.0-a.4', hostname: 'edge', time: '2026-11-21T12:00:00Z', bootedAt: null },
+    '/api/v1/applies': unapplied,
+    '/api/v1/versions?': { state: 'saved', items: [] },
+    '/api/v1/fleet/state': () => jsonResponse(401, { error: { code: 'UNAUTHORIZED', message: 'Expired' } }),
+    '/api/v1/fleet/topology': () => jsonResponse(401, { error: { code: 'UNAUTHORIZED', message: 'Expired' } }),
+    '/api/v1/fleet/vlans/flow': () => jsonResponse(401, { error: { code: 'UNAUTHORIZED', message: 'Expired' } }),
+    '/api/v1/fleet/targets': () => jsonResponse(401, { error: { code: 'UNAUTHORIZED', message: 'Expired' } }),
+    '/api/v1/fleet/diagnostics?limit=30': () => jsonResponse(401, { error: { code: 'UNAUTHORIZED', message: 'Expired' } }),
+  });
+  act(() => { vi.advanceTimersByTime(15_000); });
+  await vi.waitFor(() => expect(onSessionLost).toHaveBeenCalled());
+  expect(promptSpy).not.toHaveBeenCalled();
 });

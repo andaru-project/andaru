@@ -97,6 +97,12 @@ for (const type of ['pointerdown', 'keydown', 'wheel']) {
   document.addEventListener(type, () => { input = true; }, { capture: true, passive: true });
 }
 
+export function consumeUserActivity(): boolean {
+  const carried = input;
+  input = false;
+  return carried;
+}
+
 export class ApiClient {
   // onConnection hears whether each request got a response, for the shell's connection state.
   constructor(private csrfToken = '', private readonly onConnection?: (connected: boolean) => void) {}

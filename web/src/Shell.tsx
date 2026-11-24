@@ -6,6 +6,7 @@ import { ApiClient, reportError } from './api';
 import mark from './andaru-icon.svg';
 import { loadChangeState, pendingNotice } from './changes';
 import { PendingNotice } from './PendingNotice';
+import { FleetWorkspace } from './netplane/FleetWorkspace';
 import { AliasesScreen } from './screens/AliasesScreen';
 import { AuditScreen } from './screens/AuditScreen';
 import { ChangesScreen } from './screens/ChangesScreen';
@@ -36,6 +37,12 @@ const systemPollMilliseconds = 60_000;
 const pageTitles: Record<string, string> = {
   '/': 'Dashboard',
   '/network/interfaces': 'Interfaces',
+  '/network/topology': 'Topology',
+  '/network/vlans': 'VLANs & Segments',
+  '/network/vlans/flow': 'VLAN Flow',
+  '/network/devices': 'Devices',
+  '/network/clients': 'Clients',
+  '/network/diagnostics': 'Diagnostics',
   '/firewall/rules': 'Rules',
   '/firewall/aliases': 'Aliases',
   '/changes': 'Review and apply',
@@ -135,7 +142,18 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   }, [connected, reloadChanges, upgradeError, reloadUpgrade]);
 
   const groups = [
-    { label: 'Network', items: [{ to: '/network/interfaces', label: 'Interfaces', visible: capabilities.has('status.read') }] },
+    {
+      label: 'Network',
+      items: [
+        { to: '/network/interfaces', label: 'Interfaces', visible: canReadStatus },
+        { to: '/network/topology', label: 'Topology', visible: canReadStatus },
+        { to: '/network/vlans', label: 'VLANs & Segments', visible: canReadStatus },
+        { to: '/network/vlans/flow', label: 'VLAN Flow', visible: canReadStatus },
+        { to: '/network/devices', label: 'Devices', visible: canReadStatus },
+        { to: '/network/clients', label: 'Clients', visible: canReadStatus },
+        { to: '/network/diagnostics', label: 'Diagnostics', visible: canReadStatus },
+      ],
+    },
     { label: 'Firewall', items: [{ to: '/firewall/rules', label: 'Rules', visible: canReadChanges }, { to: '/firewall/aliases', label: 'Aliases', visible: canReadChanges }] },
     { label: 'Changes', items: [{ to: '/changes', label: 'Review and apply', visible: canReadChanges }] },
     {
@@ -161,8 +179,10 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
     } catch { /* the tree still works for this visit */ }
   }, [closed, labels]);
   const toggleBranch = (label: string) => setClosed(closed.includes(label) ? closed.filter((item) => item !== label) : [...closed, label]);
+  const normalizedPath = pathname.endsWith('/') && pathname.length > 1 ? pathname.slice(0, -1) : pathname;
+  const isNavItemActive = (to: string) => normalizedPath === to || (to === '/network/devices' && normalizedPath.startsWith('/network/devices/'));
   // The branch that holds the current page is open, however the page was reached.
-  const currentBranch = groups.find((group) => group.items.some((item) => item.to === pathname))?.label;
+  const currentBranch = groups.find((group) => group.items.some((item) => isNavItemActive(item.to)))?.label;
   const [seenPath, setSeenPath] = useState('');
   if (seenPath !== pathname) {
     setSeenPath(pathname);
@@ -170,17 +190,19 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   }
   const hostname = system.data?.info.hostname;
   useEffect(() => {
-    const normalized = pathname.endsWith('/') && pathname.length > 1 ? pathname.slice(0, -1) : pathname;
-    const title = pageTitles[normalized];
+    const title = pageTitles[normalizedPath] ?? (normalizedPath.startsWith('/network/devices/') ? 'Device' : undefined);
     document.title = [title, hostname, 'Andaru'].filter(Boolean).join(' — ');
     return () => { document.title = 'Andaru administration'; };
-  }, [pathname, hostname]);
+  }, [normalizedPath, hostname]);
 
   const pending = changes.data ? pendingNotice(changes.data) : null;
   const badge = pending ? pendingBadges[pending.kind] : undefined;
   const changesBadge = badge ? <Badge size="xs" color={badge.color} variant={badge.variant}>{badge.label}</Badge> : undefined;
 
-  const pageLink = (to: string, label: string, rightSection?: ReactNode) => <NavLink className="nav-item" key={to} component={Link} to={to} label={label} rightSection={rightSection} active={pathname === to} aria-current={pathname === to ? 'page' : undefined} onClick={close} />;
+  const pageLink = (to: string, label: string, rightSection?: ReactNode) => {
+    const active = isNavItemActive(to);
+    return <NavLink className="nav-item" key={to} component={Link} to={to} label={label} rightSection={rightSection} active={active} aria-current={active ? 'page' : undefined} onClick={close} />;
+  };
 
   async function changePassword() {
     setAccountError('');
@@ -263,6 +285,19 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
             <Route path="/" element={<DashboardScreen api={api} session={session} system={system} onSessionLost={onSessionLost} />} />
             {canReadChanges && <Route path="/system/upgrade" element={<UpgradeScreen api={api} session={session} onFinished={() => { void reloadUpgrade(); void reloadChanges(); }} onSessionLost={onSessionLost} />} />}
             {pages.filter(([path]) => visible.has(path)).map(([path, element]) => <Route key={path} path={path} element={element} />)}
+            {canReadStatus && (
+              <Route
+                path="/network/*"
+                element={
+                  <FleetWorkspace
+                    csrfToken={session.csrfToken}
+                    canReadTargets={canReadChanges}
+                    canWrite={capabilities.has('configuration.write')}
+                    onSessionLost={onSessionLost}
+                  />
+                }
+              />
+            )}
             <Route path="/system/session" element={<SessionScreen session={session} />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

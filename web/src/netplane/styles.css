@@ -1,0 +1,665 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* Andaru Netplane UI tokens and component styles (layered on top of Andaru's styles.css) */
+
+:root {
+  /* Netplane semantic tokens (light) */
+  --np-brand-amber: #ffb21c;
+
+  --np-bg-surface: #ffffff;
+  --np-bg-subtle: #f1f3f5;
+  --np-bg-svg: #fbfcfd;
+  --np-bg-bezel: #1b222c;
+  --np-bg-bezel-port: #26303d;
+  --np-bg-bezel-fiber: #142842;
+
+  --np-border: #c9d0d8;
+  --np-border-subtle: #e9ecef;
+  --np-border-strong: #adb5bd;
+
+  --np-text: #17212c;
+  --np-text-dim: #526171;
+
+  --np-primary: #0ca678;
+  --np-primary-soft: rgba(12, 166, 120, 0.11);
+  --np-primary-text: #087f5b;
+
+  --np-amber: #b36b00;
+  --np-amber-bright: #e67700;
+  --np-amber-soft: rgba(230, 119, 0, 0.12);
+  --np-red: #c92a2a;
+  --np-red-soft: rgba(201, 42, 42, 0.11);
+  --np-gray-muted: #868e96;
+}
+
+:root[data-mantine-color-scheme="dark"] {
+  --np-bg-surface: #1a1b1e;
+  --np-bg-subtle: #25262b;
+  --np-bg-svg: #121417;
+  --np-bg-bezel: #0f1318;
+  --np-bg-bezel-port: #1e2530;
+  --np-bg-bezel-fiber: #112238;
+
+  --np-border: #2c2e33;
+  --np-border-subtle: #25262b;
+  --np-border-strong: #373a40;
+
+  --np-text: #e9ecef;
+  --np-text-dim: #9a9a9a;
+
+  --np-primary: #20c997;
+  --np-primary-soft: rgba(32, 201, 151, 0.15);
+  --np-primary-text: #38d9a9;
+
+  --np-amber: #fab005;
+  --np-amber-bright: #ff922b;
+  --np-amber-soft: rgba(250, 176, 5, 0.16);
+  --np-red: #ff6b6b;
+  --np-red-soft: rgba(255, 107, 107, 0.16);
+  --np-gray-muted: #909296;
+}
+
+/* ================= Standalone Netplane Header Controls ================= */
+
+.app-header .np-header-action {
+  background: transparent;
+  border-color: rgb(255 255 255 / 35%);
+  color: #fff;
+}
+
+.app-header .np-header-action:hover {
+  background: rgb(255 255 255 / 12%);
+  color: #fff;
+}
+
+.np-brand-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: #fff;
+  text-decoration: none;
+  min-width: 0;
+}
+
+.np-controls {
+  flex-shrink: 0;
+}
+
+.np-data-table th {
+  color: var(--mantine-color-dimmed);
+  font-size: var(--mantine-font-size-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.np-nav-group-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--np-text-dim);
+  padding: 10px 10px 4px;
+}
+
+.np-nav-group-label:first-child {
+  padding-top: 2px;
+}
+
+.np-mono {
+  font-family: var(--mantine-font-family-monospace);
+}
+
+/* ================= KPIs, Alerts & Callouts ================= */
+
+.np-kpi-btn {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  padding: 13px 15px;
+  border-radius: var(--mantine-radius-md);
+  border: 1px solid var(--np-border);
+  background: var(--np-bg-surface);
+  color: var(--np-text);
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.np-kpi-btn:hover {
+  border-color: var(--np-primary);
+  background: var(--np-bg-subtle);
+}
+
+.np-kpi-btn:focus-visible {
+  outline: 2px solid var(--np-primary);
+  outline-offset: 2px;
+}
+
+.np-alert-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--np-border-subtle);
+  border-left: 3px solid transparent;
+}
+
+.np-alert-row:last-child {
+  border-bottom: none;
+}
+
+.np-alert-row.crit {
+  border-left-color: var(--np-red);
+}
+
+.np-alert-row.warn {
+  border-left-color: var(--np-amber-bright);
+}
+
+.np-alert-row.selected {
+  background: var(--np-primary-soft);
+}
+
+.np-callout {
+  padding: 11px 14px;
+  border-radius: var(--mantine-radius-sm);
+  border: 1px solid var(--np-border);
+  border-left: 3px solid var(--np-primary);
+  background: var(--np-bg-subtle);
+}
+
+.np-callout.crit {
+  border-left-color: var(--np-red);
+  background: var(--np-red-soft);
+}
+
+.np-callout.warn {
+  border-left-color: var(--np-amber-bright);
+  background: var(--np-amber-soft);
+}
+
+/* ================= Hardware Port Faceplate ================= */
+
+.np-faceplate-bezel {
+  background: var(--np-bg-bezel);
+  border: 1px solid #303a47;
+  border-radius: var(--mantine-radius-md);
+  padding: 16px;
+  color: #e9ecef;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.np-faceplate-top-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  font-size: 11.5px;
+  color: #9aa5b1;
+  font-family: var(--mantine-font-family-monospace);
+  flex-wrap: wrap;
+}
+
+.np-faceplate-ports-strip {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.np-faceplate-bank {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.np-faceplate-divider {
+  width: 1px;
+  background: #364152;
+  margin: 2px 4px;
+}
+
+.np-lag-bracket {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px;
+  border: 1px dashed #38bdf8;
+  border-radius: 6px;
+  background: rgba(56, 189, 248, 0.06);
+}
+
+.np-lag-bracket-label {
+  font-family: var(--mantine-font-family-monospace);
+  font-size: 10px;
+  font-weight: 700;
+  color: #7dd3fc;
+  text-align: center;
+  letter-spacing: 0.04em;
+}
+
+.np-lag-bracket-ports {
+  display: flex;
+  gap: 6px;
+}
+
+.np-port-tile {
+  position: relative;
+  min-width: 72px;
+  padding: 8px 6px 7px;
+  border-radius: 5px;
+  background: var(--np-bg-bezel-port);
+  border: 2px solid #475569;
+  color: #f8fafc;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  transition: transform 100ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.np-port-tile:hover {
+  transform: translateY(-1px);
+  border-color: #94a3b8;
+}
+
+.np-port-tile:focus-visible {
+  outline: 2px solid var(--np-brand-amber);
+  outline-offset: 2px;
+}
+
+.np-port-tile.fiber {
+  background: var(--np-bg-bezel-fiber);
+}
+
+.np-port-tile.up {
+  border-color: #2f9e44;
+}
+
+.np-port-tile.up.fiber {
+  border-color: #22b8cf;
+}
+
+.np-port-tile.stp-block {
+  border-color: #f59f00;
+}
+
+.np-port-tile.down {
+  border-color: #3f4854;
+  opacity: 0.72;
+}
+
+.np-port-tile.disabled {
+  border-color: #3f4854;
+  border-style: dashed;
+  opacity: 0.55;
+}
+
+.np-port-tile.selected {
+  border-color: var(--np-brand-amber) !important;
+  box-shadow: 0 0 0 2px rgba(255, 178, 28, 0.35);
+  opacity: 1;
+}
+
+.np-port-tile.vlan-dim {
+  opacity: 0.34;
+}
+
+.np-port-tile.vlan-match {
+  opacity: 1;
+  box-shadow: 0 0 0 2px rgba(32, 201, 151, 0.4);
+}
+
+.np-port-jack {
+  width: 28px;
+  height: 18px;
+  border-radius: 2px;
+  border: 1.5px solid rgba(255, 255, 255, 0.22);
+  background: #0d1117;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 2px;
+  gap: 2px;
+}
+
+.np-port-jack.fiber-cage {
+  width: 32px;
+  border-color: rgba(56, 189, 248, 0.45);
+  background: #091321;
+}
+
+.np-port-led {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #475569;
+}
+
+.np-port-tile.up .np-port-led {
+  background: #40c057;
+  box-shadow: 0 0 5px #40c057;
+}
+
+.np-port-tile.up.fiber .np-port-led {
+  background: #22b8cf;
+  box-shadow: 0 0 5px #22b8cf;
+}
+
+.np-port-tile.stp-block .np-port-led {
+  background: #fab005;
+  box-shadow: 0 0 5px #fab005;
+}
+
+.np-port-name {
+  font-family: var(--mantine-font-family-monospace);
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.np-port-speed {
+  font-family: var(--mantine-font-family-monospace);
+  font-size: 10px;
+  font-weight: 600;
+  color: #8ce99a;
+}
+
+.np-port-tile.up.fiber .np-port-speed {
+  color: #66d9e8;
+}
+
+.np-port-tile.stp-block .np-port-speed {
+  color: #ffd43b;
+}
+
+.np-port-tile.down .np-port-speed,
+.np-port-tile.disabled .np-port-speed {
+  color: #868e96;
+}
+
+.np-port-tags-row {
+  display: flex;
+  gap: 3px;
+  justify-content: center;
+  flex-wrap: wrap;
+  min-height: 15px;
+}
+
+.np-port-mini {
+  font-family: var(--mantine-font-family-monospace);
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 0 4px;
+  border-radius: 2px;
+  line-height: 15px;
+}
+
+.np-port-mini-poe { background: #f59f00; color: #17212c; }
+.np-port-mini-sfp { background: #0c8599; color: #ffffff; }
+.np-port-mini-dom { background: #e03131; color: #ffffff; }
+.np-port-mini-stp { background: #e67700; color: #ffffff; }
+.np-port-mini-anom { background: #e03131; color: #ffffff; }
+.np-port-mini-t { background: #0ca678; color: #ffffff; }
+.np-port-mini-u { background: transparent; border: 1px solid #38d9a9; color: #63e6be; }
+
+/* ================= Tag Chips, Matrix & Flow Canvas ================= */
+
+.np-vlan-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.np-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 3px;
+  font-family: var(--mantine-font-family-monospace);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.np-tag-chip.t {
+  background: var(--np-primary-soft);
+  color: var(--np-primary-text);
+  border: 1px solid var(--np-primary);
+}
+
+.np-tag-chip.u {
+  background: var(--np-bg-subtle);
+  color: var(--np-text);
+  border: 1.5px dashed var(--np-text-dim);
+}
+
+.np-tag-chip.unverified {
+  background: var(--np-bg-subtle);
+  color: var(--np-gray-muted);
+  border: 1.5px dotted var(--np-gray-muted);
+}
+
+.np-tag-chip.anom-leak {
+  background: var(--np-red-soft);
+  color: var(--np-red);
+  border: 1.5px solid var(--np-red);
+  cursor: pointer;
+}
+
+.np-tag-chip.anom-dead {
+  background: var(--np-amber-soft);
+  color: var(--np-amber);
+  border: 1.5px dashed var(--np-amber-bright);
+  cursor: pointer;
+}
+
+.np-svg-stage {
+  background: var(--np-bg-svg);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.np-svg-stage svg {
+  display: block;
+}
+
+.np-legend-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 9px 14px;
+  border-top: 1px solid var(--np-border-subtle);
+  background: var(--np-bg-subtle);
+  font-size: 12px;
+  color: var(--np-text-dim);
+}
+
+.np-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.np-vlan-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: var(--mantine-radius-sm);
+  border: 1px solid var(--np-border-strong);
+  background: var(--np-bg-surface);
+  color: var(--np-text);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.np-vlan-pill:hover {
+  background: var(--np-bg-subtle);
+}
+
+.np-vlan-pill.active {
+  border-color: var(--np-primary);
+  background: var(--np-primary-soft);
+  color: var(--np-primary-text);
+}
+
+.np-port-compare-side {
+  padding: 10px 12px;
+  border-radius: var(--mantine-radius-sm);
+  border: 1px solid var(--np-border);
+  background: var(--np-bg-subtle);
+}
+
+/* ================= Responsive Layout (CSP-safe: no Mantine SimpleGrid/responsive InlineStyles) ================= */
+
+.np-grid-canvas-side {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 16px;
+  align-items: start;
+}
+
+.np-grid-2-asym {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.np-grid-2-xs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.np-grid-2-md {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--mantine-spacing-md);
+}
+
+.np-grid-4-sm {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--mantine-spacing-sm);
+}
+
+.np-grid-4-sm-xs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--mantine-spacing-xs);
+}
+
+.np-grid-4-md {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--mantine-spacing-sm);
+}
+
+.np-grid-telemetry {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(13rem, 100%), 1fr));
+  gap: var(--mantine-spacing-md);
+}
+
+.np-filter-input {
+  width: 240px;
+  max-width: 100%;
+}
+
+.np-grid-canvas-side > *,
+.np-grid-2-asym > *,
+.np-grid-2-xs > *,
+.np-grid-2-md > *,
+.np-grid-4-sm > *,
+.np-grid-4-sm-xs > *,
+.np-grid-4-md > *,
+.np-grid-telemetry > * {
+  min-width: 0;
+}
+
+@media (max-width: 1120px) {
+  .np-grid-canvas-side {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 61.99375em) {
+  .np-grid-2-md {
+    grid-template-columns: 1fr;
+  }
+
+  .np-grid-4-md {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 56.24375em) {
+  .np-grid-2-asym {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 47.99375em) {
+  .np-grid-4-sm,
+  .np-grid-4-sm-xs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .np-filter-input {
+    width: 100%;
+  }
+}
+
+@media (max-width: 35.99375em) {
+  .np-grid-2-xs {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 37.4375em) {
+  .np-hide-xs {
+    display: none;
+  }
+
+  .np-alert-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+/* VLAN Flow: a focused lane shows a halo along its own path; other SVG controls get an outline. */
+.np-lane-focus {
+  pointer-events: none; /* the halo must not take clicks meant for a neighbouring lane */
+  stroke: transparent;
+  stroke-width: 10px;
+  stroke-linecap: round;
+}
+
+.np-lane:focus-visible {
+  outline: none;
+}
+
+.np-lane:focus-visible .np-lane-focus {
+  stroke: var(--np-primary);
+  stroke-opacity: 0.55;
+}
+
+.np-svg-stage svg g[role='button']:not(.np-lane):focus-visible {
+  outline: 2px solid var(--np-primary);
+  outline-offset: 2px;
+}

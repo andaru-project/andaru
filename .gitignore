@@ -4,5 +4,6 @@
 # The browser client is rebuilt from its committed npm lockfile.
 /web/node_modules/
 /web/dist/
+/web/dist-netplane/
 /web/*.tsbuildinfo
 /web/.vitest/
