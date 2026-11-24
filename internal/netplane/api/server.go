@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/andaru-project/andaru/internal/netplane/driver"
@@ -42,6 +43,7 @@ type Options struct {
 	TrustedIngressCIDRs []string
 	AllowedHosts        []string // extra Host names accepted without an API token
 	TrustedOrigins      []string // extra origins allowed to send writes, as browsers serialize them
+	SkipBrowserGuards   bool     // true when mounted inside an authenticated host (e.g. internal/engine)
 	WebFS               fs.FS    // optional embedded SPA root containing index.html
 	Logger              *slog.Logger
 }
@@ -70,7 +72,8 @@ type Server struct {
 	handler        http.Handler
 	trustedIngress []netip.Prefix
 	csrf           *http.CrossOriginProtection
-	targets        map[string]driver.TargetConfig // read-only after New
+	targetsMu      sync.RWMutex
+	targets        map[string]driver.TargetConfig
 }
 
 // New constructs a Server ready to mount on an http.Server.
@@ -103,8 +106,23 @@ func New(opts Options) *Server {
 			opts.Logger.Warn("ignoring invalid trusted origin", "origin", o, "err", err) // config.Parse validates
 		}
 	}
-	s.handler = s.withBrowserGuards(s.withIngress(s.withAuth(s.mux)))
+	if opts.SkipBrowserGuards {
+		s.handler = s.mux
+	} else {
+		s.handler = s.withBrowserGuards(s.withIngress(s.withAuth(s.mux)))
+	}
 	return s
+}
+
+// SetTargets replaces the server's active target map safely at runtime.
+func (s *Server) SetTargets(targets []driver.TargetConfig) {
+	next := make(map[string]driver.TargetConfig, len(targets))
+	for _, t := range targets {
+		next[t.ID] = t
+	}
+	s.targetsMu.Lock()
+	s.targets = next
+	s.targetsMu.Unlock()
 }
 
 // ServeHTTP delegates to the wrapped middleware chain, bounding unread request bodies on every route
@@ -326,16 +344,21 @@ func (s *Server) handleClients(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListTargets(w http.ResponseWriter, _ *http.Request) {
+	s.targetsMu.RLock()
 	items := make([]driver.TargetConfig, 0, len(s.targets))
 	for _, t := range s.targets {
 		items = append(items, t) // ResolvedSecrets is json:"-"
 	}
+	s.targetsMu.RUnlock()
+	slices.SortFunc(items, func(a, b driver.TargetConfig) int { return strings.Compare(a.ID, b.ID) })
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (s *Server) handlePollTarget(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	s.targetsMu.RLock()
 	cfg, ok := s.targets[id]
+	s.targetsMu.RUnlock()
 	if !ok {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", fmt.Sprintf("target %q not found", id))
 		return
@@ -424,7 +447,9 @@ func (s *Server) handleRunDiagnostic(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", fmt.Sprintf("device %q not found", req.DeviceID))
 		return
 	}
+	s.targetsMu.RLock()
 	cfg, hasTarget := s.targets[dev.TargetID]
+	s.targetsMu.RUnlock()
 	if !hasTarget {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", fmt.Sprintf("target %q for device %q not found", dev.TargetID, req.DeviceID))
 		return

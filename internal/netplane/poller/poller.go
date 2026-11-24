@@ -155,6 +155,42 @@ func (s *Scheduler) PollOnce(ctx context.Context, cfg driver.TargetConfig) error
 	return nil
 }
 
+// IngestSnapshot persists a pre-built snapshot (such as an in-process local host observation)
+// through the same per-target lock, diff/event publication, and topology recomputation path as PollOnce.
+func (s *Scheduler) IngestSnapshot(ctx context.Context, snap *driver.Snapshot) error {
+	if snap == nil || snap.TargetID == "" {
+		return fmt.Errorf("snapshot target_id is required")
+	}
+	lock, _ := s.pollLocks.LoadOrStore(snap.TargetID, &sync.Mutex{})
+	lock.(*sync.Mutex).Lock()
+	defer lock.(*sync.Mutex).Unlock()
+
+	now := time.Now().UTC()
+	if snap.CollectedAt.IsZero() {
+		snap.CollectedAt = now
+	}
+	snap.Normalize()
+
+	cfg := driver.TargetConfig{ID: snap.TargetID, Driver: "andaru"}
+	prev, err := s.store.SaveSnapshot(ctx, snap)
+	if err != nil {
+		if ctx.Err() != nil {
+			return err
+		}
+		s.recordError(cfg, now, err)
+		return fmt.Errorf("save snapshot %s: %w", snap.TargetID, err)
+	}
+	s.recordSuccess(cfg, now)
+
+	if s.bus != nil {
+		for _, ev := range events.DiffSnapshots(prev, snap) {
+			s.bus.Publish(ev)
+		}
+	}
+	s.recomputeTopology(ctx, snap.TargetID)
+	return nil
+}
+
 // markOffline flags a failing target's devices and clients offline, publishes the resulting
 // device.offline / client.left events, and re-solves the topology.
 func (s *Scheduler) markOffline(ctx context.Context, cfg driver.TargetConfig, now time.Time) {
