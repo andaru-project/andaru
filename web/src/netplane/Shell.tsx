@@ -202,7 +202,7 @@ export function Shell({
             <Button
               size="xs"
               variant="default"
-              className="header-action"
+              className="np-header-action"
               loading={pollBusy}
               onClick={onPollAll}
               title={enabledTargets.length > 0 ? 'Poll all enabled targets now' : 'Refresh network state'}
@@ -212,7 +212,7 @@ export function Shell({
             <Button
               size="xs"
               variant="default"
-              className="header-action"
+              className="np-header-action"
               onClick={toggleScheme}
               aria-label={`Switch to ${computedColorScheme === 'dark' ? 'light' : 'dark'} theme`}
             >

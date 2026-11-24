@@ -60,13 +60,13 @@
 
 /* ================= Standalone Netplane Header Controls ================= */
 
-.app-header .header-action {
+.app-header .np-header-action {
   background: transparent;
   border-color: rgb(255 255 255 / 35%);
   color: #fff;
 }
 
-.app-header .header-action:hover {
+.app-header .np-header-action:hover {
   background: rgb(255 255 255 / 12%);
   color: #fff;
 }
@@ -517,7 +517,7 @@
   background: var(--np-bg-subtle);
 }
 
-/* ================= Responsive Layout ================= */
+/* ================= Responsive Layout (CSP-safe: no Mantine SimpleGrid/responsive InlineStyles) ================= */
 
 .np-grid-canvas-side {
   display: grid;
@@ -533,8 +533,55 @@
   align-items: start;
 }
 
+.np-grid-2-xs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.np-grid-2-md {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--mantine-spacing-md);
+}
+
+.np-grid-4-sm {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--mantine-spacing-sm);
+}
+
+.np-grid-4-sm-xs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--mantine-spacing-xs);
+}
+
+.np-grid-4-md {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--mantine-spacing-sm);
+}
+
+.np-grid-telemetry {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(13rem, 100%), 1fr));
+  gap: var(--mantine-spacing-md);
+}
+
+.np-filter-input {
+  width: 240px;
+  max-width: 100%;
+}
+
 .np-grid-canvas-side > *,
-.np-grid-2-asym > * {
+.np-grid-2-asym > *,
+.np-grid-2-xs > *,
+.np-grid-2-md > *,
+.np-grid-4-sm > *,
+.np-grid-4-sm-xs > *,
+.np-grid-4-md > *,
+.np-grid-telemetry > * {
   min-width: 0;
 }
 
@@ -544,8 +591,35 @@
   }
 }
 
+@media (max-width: 61.99375em) {
+  .np-grid-2-md {
+    grid-template-columns: 1fr;
+  }
+
+  .np-grid-4-md {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 56.24375em) {
   .np-grid-2-asym {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 47.99375em) {
+  .np-grid-4-sm,
+  .np-grid-4-sm-xs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .np-filter-input {
+    width: 100%;
+  }
+}
+
+@media (max-width: 35.99375em) {
+  .np-grid-2-xs {
     grid-template-columns: 1fr;
   }
 }
@@ -578,7 +652,7 @@
   stroke-opacity: 0.55;
 }
 
-svg g[role='button']:not(.np-lane):focus-visible {
+.np-svg-stage svg g[role='button']:not(.np-lane):focus-visible {
   outline: 2px solid var(--np-primary);
   outline-offset: 2px;
 }

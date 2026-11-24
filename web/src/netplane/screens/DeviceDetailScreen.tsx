@@ -8,7 +8,6 @@ import {
   Loader,
   Progress,
   Select,
-  SimpleGrid,
   Stack,
   Table,
   Text,
@@ -233,7 +232,7 @@ export function DeviceDetailScreen({
         {devices.length > 1 && (
           <Select
             size="xs"
-            w={{ base: '100%', sm: 240 }}
+            className="np-filter-input"
             aria-label="Switch device"
             value={dev.id}
             onChange={(val) => {
@@ -247,13 +246,13 @@ export function DeviceDetailScreen({
       {/* Hardware Telemetry Strip (only rendered when telemetry fields exist) */}
       {telemetryItems.length > 0 && (
         <Card withBorder radius="md" p="md">
-          <SimpleGrid cols={{ base: 1, xs: 2, md: Math.min(4, telemetryItems.length) }} spacing="md">
+          <div className="np-grid-telemetry">
             {telemetryItems.map((item) => (
               <Stat key={item.label} label={item.label} mb={3}>
                 {item.content}
               </Stat>
             ))}
-          </SimpleGrid>
+          </div>
         </Card>
       )}
 
@@ -406,7 +405,7 @@ export function DeviceDetailScreen({
 
       {/* Gateways, Firewall & VPNs */}
       {(detail.gateways.length > 0 || detail.firewall || detail.vpns.length > 0) && (
-        <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
+        <div className="np-grid-2-md">
           {detail.gateways.length > 0 && (
             <Card withBorder radius="md" p="md">
               <Title order={4} size="h5" mb="sm">Gateways</Title>
@@ -494,7 +493,7 @@ export function DeviceDetailScreen({
               </Stack>
             </Card>
           )}
-        </SimpleGrid>
+        </div>
       )}
 
       {/* Full Ports Table (complement to faceplate) */}

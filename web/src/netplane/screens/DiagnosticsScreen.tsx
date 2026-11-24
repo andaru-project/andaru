@@ -9,7 +9,6 @@ import {
   NumberInput,
   Paper,
   Select,
-  SimpleGrid,
   Stack,
   Text,
   TextInput,
@@ -84,7 +83,7 @@ export function DiagnosticsScreen({
         </Text>
       </div>
 
-      <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
+      <div className="np-grid-2-md">
         <Card withBorder radius="md" p="md">
           <Title order={4} size="h5" mb="sm">Run Diagnostic</Title>
           <Stack gap="xs">
@@ -197,7 +196,7 @@ export function DiagnosticsScreen({
             )}
           </Stack>
         </Card>
-      </SimpleGrid>
+      </div>
     </Stack>
   );
 }

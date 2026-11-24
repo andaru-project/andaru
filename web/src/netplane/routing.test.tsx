@@ -220,6 +220,22 @@ describe('Ingress base href routing', () => {
       await expect(api.getState()).rejects.toThrow('HTTP 401');
       expect(onUnauthorized).toHaveBeenCalledTimes(1);
       expect(promptSpy).not.toHaveBeenCalled();
+
+      // A 401 arriving after configureNetplaneApi(null) must still use the request's snapshot config, never prompt.
+      let resolveDelayed!: (r: Response) => void;
+      fetchSpy.mockImplementationOnce(() => new Promise<Response>((r) => { resolveDelayed = r; }));
+      const pending = api.getState();
+      configureNetplaneApi(null);
+      resolveDelayed(new Response('unauthorized', { status: 401 }));
+      await expect(pending).rejects.toThrow('HTTP 401');
+      expect(onUnauthorized).toHaveBeenCalledTimes(2);
+      expect(promptSpy).not.toHaveBeenCalled();
+
+      // Structured JSON error responses surface their message field instead of raw JSON.
+      fetchSpy.mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: { code: 'FLEET_UNAVAILABLE', message: 'Fleet subsystem disabled.' } }), { status: 503 }),
+      );
+      await expect(api.getState()).rejects.toThrow('Fleet subsystem disabled.');
     } finally {
       configureNetplaneApi(null);
       setRoutePrefix('');

@@ -6,7 +6,6 @@ import {
   Card,
   Group,
   Progress,
-  SimpleGrid,
   Stack,
   Table,
   Text,
@@ -109,7 +108,7 @@ export function OverviewScreen({
       </Group>
 
       {/* Compact 4-KPI Strip */}
-      <SimpleGrid cols={{ base: 2, md: 4 }} spacing="sm">
+      <div className="np-grid-4-md">
         <button type="button" className="np-kpi-btn" onClick={() => void navigate(netplanePath('/devices'))}>
           <Text size="xs" fw={600} c="dimmed" tt="uppercase">Devices Online</Text>
           <Text size="xl" fw={700} ff="monospace">{onlineDevices} / {devices.length}</Text>
@@ -207,7 +206,7 @@ export function OverviewScreen({
             </Text>
           </button>
         )}
-      </SimpleGrid>
+      </div>
 
       {/* Attention Required */}
       <Card withBorder radius="md" p={0}>

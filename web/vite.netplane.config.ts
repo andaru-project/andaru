@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { renameSync } from 'node:fs';
+import { existsSync, renameSync } from 'node:fs';
 import { resolve } from 'node:path';
 import react from '@vitejs/plugin-react';
 import { defineConfig, type Plugin } from 'vite';
@@ -7,9 +7,13 @@ import { defineConfig, type Plugin } from 'vite';
 function renameNetplaneHtml(): Plugin {
   return {
     name: 'rename-netplane-html',
+    apply: 'build',
     closeBundle() {
       const outDir = resolve(import.meta.dirname, 'dist-netplane');
-      renameSync(resolve(outDir, 'netplane.html'), resolve(outDir, 'index.html'));
+      const src = resolve(outDir, 'netplane.html');
+      if (existsSync(src)) {
+        renameSync(src, resolve(outDir, 'index.html'));
+      }
     },
   };
 }

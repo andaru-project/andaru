@@ -56,7 +56,7 @@ export function DevicesScreen({ state, flow }: Props) {
         </div>
         <TextInput
           size="xs"
-          w={{ base: '100%', sm: 260 }}
+          className="np-filter-input"
           placeholder="Filter devices, driver, model, IP..."
           value={query}
           onChange={(e) => setQuery(e.currentTarget.value)}

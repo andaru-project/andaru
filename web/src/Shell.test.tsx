@@ -1,6 +1,8 @@
 import { MemoryRouter } from 'react-router';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ApiClient } from './api';
+import { configureNetplaneApi } from './netplane/api';
+import { setRoutePrefix } from './netplane/routing';
 import { Shell } from './Shell';
 import { fetchRoutes, jsonResponse } from './test/fetch';
 import { apply, pointers, session } from './test/fixtures';
@@ -30,6 +32,8 @@ Object.defineProperty(document, 'visibilityState', { configurable: true, get: ()
 
 afterEach(() => {
   visibility = 'visible';
+  configureNetplaneApi(null);
+  setRoutePrefix('');
   vi.useRealTimers();
 });
 

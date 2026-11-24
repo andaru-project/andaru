@@ -49,10 +49,6 @@ export function FleetWorkspace({
       csrfToken,
       onUnauthorized: onSessionLost,
     });
-    return () => {
-      configureNetplaneApi(null);
-      setRoutePrefix('');
-    };
   }, [csrfToken, onSessionLost]);
 
   const fleet = useFleetData({ canReadTargets, canPoll: canWrite });

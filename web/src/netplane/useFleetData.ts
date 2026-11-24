@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useVisiblePoll } from '../useResource';
 import {
   api,
   apiUrl,
@@ -95,9 +96,12 @@ export function useFleetData({
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- initial fetch on mount
     void refreshAll();
-    const timer = window.setInterval(() => void refreshAll(), 15_000);
-    return () => window.clearInterval(timer);
   }, [refreshAll]);
+
+  const pollTick = useCallback(() => {
+    void refreshAll();
+  }, [refreshAll]);
+  useVisiblePoll(pollTick, 15_000);
 
   useEffect(() => {
     if (!listenAuthEvent) return;

@@ -5,7 +5,6 @@ import {
   Card,
   Group,
   SegmentedControl,
-  SimpleGrid,
   Stack,
   Text,
   Title,
@@ -227,7 +226,7 @@ export function VlanFlowScreen({ flow, state, topology, devicesById, vlansById, 
                 <Text size="sm">{activeFinding.message}</Text>
 
                 {/* Side-by-side port comparison from API hop ends */}
-                <SimpleGrid cols={{ base: 1, xs: 2 }} spacing={10}>
+                <div className="np-grid-2-xs">
                   <PortSide
                     label={portLabel(devicesById, activeFinding.device_id, activeFinding.link)}
                     vlanId={activeFinding.vlans[0]}
@@ -242,7 +241,7 @@ export function VlanFlowScreen({ flow, state, topology, devicesById, vlansById, 
                     pvid={activeFindingHop ? (hopMatchesOrder ? activeFindingHop.to_pvid : activeFindingHop.from_pvid) : undefined}
                     tagged={activeFindingHop ? (hopMatchesOrder ? activeFindingHop.to_tagged : activeFindingHop.from_tagged) : []}
                   />
-                </SimpleGrid>
+                </div>
 
                 <Stat label="Consequence" mb={2} className={`np-callout ${activeFinding.severity}`}>
                   <Text size="xs">{activeFindingDesc.consequence}</Text>

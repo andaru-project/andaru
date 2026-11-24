@@ -71,7 +71,7 @@ export function ClientsScreen({ clients, flow, devicesById, vlansById, vlanColor
         <Group gap="xs" wrap="wrap">
           <TextInput
             size="xs"
-            w={{ base: '100%', sm: 220 }}
+            className="np-filter-input"
             placeholder="Search hostname, IP, MAC, SSID..."
             value={query}
             onChange={(e) => setQuery(e.currentTarget.value)}

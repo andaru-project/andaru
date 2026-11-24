@@ -425,9 +425,32 @@ let tokenPrompt: Promise<boolean> | null = null;
 // Bumped on each stored token, so a 401 sent before it retries with the new cookie instead of prompting again.
 let authGen = 0;
 
-export function apiUrl(path: string): string {
-  const prefix = (apiConfig?.apiPrefix ?? 'api/v1').replace(/^\/+|\/+$/g, '');
+function buildApiUrl(path: string, cfg: NetplaneApiConfig | null): string {
+  const prefix = (cfg?.apiPrefix ?? 'api/v1').replace(/^\/+|\/+$/g, '');
   return `${apiBasePath()}${prefix}${path}`;
+}
+
+export function apiUrl(path: string): string {
+  return buildApiUrl(path, apiConfig);
+}
+
+function formatErrorMessage(status: number, text: string): string {
+  const trimmed = text.trim();
+  if (trimmed) {
+    try {
+      const parsed = JSON.parse(trimmed) as { error?: { message?: unknown }; message?: unknown };
+      if (typeof parsed.error?.message === 'string' && parsed.error.message) {
+        return parsed.error.message;
+      }
+      if (typeof parsed.message === 'string' && parsed.message) {
+        return parsed.message;
+      }
+    } catch {
+      // Non-JSON body; fall through to raw text.
+    }
+    return `HTTP ${status}: ${trimmed}`;
+  }
+  return `HTTP ${status}`;
 }
 
 // promptForToken stores the API token in a SameSite=Strict cookie, which fetch and
@@ -448,16 +471,21 @@ function promptForToken(): Promise<boolean> {
   return tokenPrompt;
 }
 
-async function fetchJSON<T>(path: string, init?: RequestInit, retried = false): Promise<T> {
+async function fetchJSON<T>(
+  path: string,
+  init?: RequestInit,
+  retried = false,
+  cfg: NetplaneApiConfig | null = apiConfig,
+): Promise<T> {
   const gen = authGen;
   const method = (init?.method ?? 'GET').toUpperCase();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
-  if (apiConfig?.csrfToken && method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
-    headers['X-Andaru-CSRF'] = apiConfig.csrfToken;
+  if (cfg?.csrfToken && method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+    headers['X-Andaru-CSRF'] = cfg.csrfToken;
   }
-  const resp = await fetch(apiUrl(path), {
+  const resp = await fetch(buildApiUrl(path, cfg), {
     credentials: 'same-origin',
     ...init,
     headers: {
@@ -466,17 +494,17 @@ async function fetchJSON<T>(path: string, init?: RequestInit, retried = false): 
     },
   });
   if (resp.status === 401) {
-    if (apiConfig?.onUnauthorized) {
-      apiConfig.onUnauthorized();
+    if (cfg?.onUnauthorized) {
+      cfg.onUnauthorized();
       throw new Error('HTTP 401: authentication required');
     }
     if (!retried && (gen !== authGen || (await promptForToken()))) {
-      return fetchJSON<T>(path, init, true);
+      return fetchJSON<T>(path, init, true, cfg);
     }
   }
   if (!resp.ok) {
     const text = await resp.text();
-    throw new Error(`HTTP ${resp.status}: ${text}`);
+    throw new Error(formatErrorMessage(resp.status, text));
   }
   return resp.json() as Promise<T>;
 }

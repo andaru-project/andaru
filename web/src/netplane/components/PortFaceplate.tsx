@@ -6,7 +6,6 @@ import {
   Group,
   Paper,
   Progress,
-  SimpleGrid,
   Stack,
   Text,
   Tooltip,
@@ -283,7 +282,7 @@ export function PortFaceplate({
             </CardHeader>
 
             <Stack gap="sm" p="md">
-              <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="sm">
+              <div className="np-grid-4-sm">
                 <Stat label="Throughput (RX / TX)">
                   <Text size="xs" ff="monospace" mt={2}>
                     {selected.rates
@@ -326,7 +325,7 @@ export function PortFaceplate({
                       : ''}
                   </Text>
                 </Stat>
-              </SimpleGrid>
+              </div>
 
               <Group
                 gap="xs"
@@ -407,7 +406,7 @@ export function PortFaceplate({
                       {selected.sfp.alert_state.toUpperCase()}
                     </Badge>
                   </Group>
-                  <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="xs">
+                  <div className="np-grid-4-sm-xs">
                     <Stat label="RX Optical Power">
                       <Text
                         size="xs"
@@ -434,7 +433,7 @@ export function PortFaceplate({
                         {selected.sfp.bias_ma != null ? ` · ${selected.sfp.bias_ma.toFixed(1)} mA` : ''}
                       </Text>
                     </Stat>
-                  </SimpleGrid>
+                  </div>
                   {selected.sfp.rx_power_dbm != null && (
                     <Stack gap={4} mt="xs">
                       <Group justify="space-between">
