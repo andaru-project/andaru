@@ -284,7 +284,7 @@ func TestApplyHappyPath(t *testing.T) {
 	if !slices.Equal(b.calls, []string{"arm 1 180", "activate 1"}) {
 		t.Fatalf("calls = %q; the timer must be armed before anything changes", b.calls)
 	}
-	if !slices.Equal(b.stored, []int{1}) {
+	if !slices.Equal(b.stored, []int{1, 1}) { // stored, then realized
 		t.Fatalf("announced %v", b.stored)
 	}
 	if again := b.decode(b.call(http.MethodGet, "/api/v1/applies/1", ""), http.StatusOK); again.State != got.State || !again.Deadline.Equal(*got.Deadline) {

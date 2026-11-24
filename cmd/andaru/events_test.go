@@ -40,7 +40,7 @@ func TestRealizeTellsTheBusOfEachApply(t *testing.T) {
 	}
 	realize := func(args string, verbs *fakeVerbs) (int, string) {
 		var stderr bytes.Buffer
-		code := realizeCommand(context.Background(), strings.Fields(args), nil, &stderr, func(string) (realizeVerbs, error) { return verbs, nil })
+		code := realizeCommand(context.Background(), strings.Fields(args), nil, &stderr, func(string, string) (realizeVerbs, error) { return verbs, nil })
 		return code, stderr.String()
 	}
 	for _, row := range []struct {

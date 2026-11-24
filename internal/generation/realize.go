@@ -51,6 +51,9 @@ type Realizer struct {
 	RenderDisaster func(body []byte) error
 	// KeptRoot is the test seam. Production leaves it empty and uses kept.Root.
 	KeptRoot string
+	// Activating, when set, hears that a generation is activating, before the wait for networkd: until then the
+	// generation reads as never started.
+	Activating func(id int)
 	// failAt lets tests stop a verb before a named write, as a kill would.
 	failAt func(step string) error
 	// afterLeaseRead lets tests act while a lease sync is running.
@@ -425,6 +428,9 @@ func (r Realizer) Activate(ctx context.Context, id int) (result error) {
 	p.Pending = &id
 	if err := r.writePointers("activate:pointers-pending", p); err != nil {
 		return err
+	}
+	if r.Activating != nil {
+		r.Activating(id)
 	}
 
 	// The filter goes in before anything forwards or listens on the new files; the reason is why it did not.

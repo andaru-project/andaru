@@ -32,7 +32,7 @@ func realizeWith(t *testing.T, stateDir, verb string) (string, []string) {
 	t.Helper()
 	verbs := &fakeVerbs{}
 	var stderr bytes.Buffer
-	if code := realizeCommand(context.Background(), []string{"--state-dir", stateDir, verb}, nil, &stderr, func(string) (realizeVerbs, error) { return verbs, nil }); code != 0 {
+	if code := realizeCommand(context.Background(), []string{"--state-dir", stateDir, verb}, nil, &stderr, func(string, string) (realizeVerbs, error) { return verbs, nil }); code != 0 {
 		t.Fatalf("%s exited %d: %s", verb, code, stderr.String())
 	}
 	return stderr.String(), verbs.calls

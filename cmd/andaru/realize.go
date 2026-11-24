@@ -34,12 +34,20 @@ type realizeVerbs interface {
 }
 
 // newRealizer builds the privileged actor for the real host.
-func newRealizer(stateDir string) (realizeVerbs, error) {
+func newRealizer(stateDir, busSocket string) (realizeVerbs, error) {
 	if os.Geteuid() != 0 {
 		return nil, errors.New("realize requires root")
 	}
+	var activating func(id int)
+	if busSocket != "" {
+		activating = func(id int) {
+			if err := tellApply(context.Background(), busSocket, id); err != nil {
+				fmt.Fprintln(os.Stderr, "event bus not told of the activation:", err)
+			}
+		}
+	}
 	return generation.Realizer{
-		StateDir: stateDir, RenderDisaster: renderDisaster(""),
+		StateDir: stateDir, RenderDisaster: renderDisaster(""), Activating: activating,
 		Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
 			// One stuck tool must not hold the generations lock.
 			ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -57,7 +65,7 @@ func newRealizer(stateDir string) (realizeVerbs, error) {
 }
 
 // realizeCommand runs one privileged verb. Usage is checked before privilege so a typo never looks like a permission problem.
-func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer, build func(stateDir string) (realizeVerbs, error)) int {
+func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer, build func(stateDir, busSocket string) (realizeVerbs, error)) int {
 	flags := flag.NewFlagSet("realize", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	stateDir := flags.String("state-dir", defaultStateDir, "")
@@ -94,7 +102,7 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 	if len(rest) > 0 {
 		id, _ = strconv.Atoi(rest[0])
 	}
-	verbs, err := build(*stateDir)
+	verbs, err := build(*stateDir, *busSocket)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1

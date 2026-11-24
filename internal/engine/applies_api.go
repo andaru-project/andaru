@@ -147,7 +147,8 @@ type appliesHandler struct {
 	stateDir    string
 	identities  applyIdentity
 	coordinator *securityCoordinator
-	// stored hears of each generation once it is stored, before realize runs it; realize tells of what follows.
+	// stored hears of each generation once it is stored, before realize runs it, and again once realize returns;
+	// realize also tells of what it does, but only on a best-effort basis.
 	stored func(id int)
 	// mu keeps two requests from preparing generations against the same host state.
 	mu sync.Mutex
@@ -415,6 +416,7 @@ func (h *appliesHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	runErr := h.runner.Realize(ctx, "activate", id)
+	h.stored(id)
 	g, err := generation.Read(h.dir, id)
 	if err != nil || (g.State.State == generation.Failed && g.Reason == "never started") {
 		// Whether the unit ran is unknown, so the timer stays armed: it does nothing when there is nothing to undo.
@@ -502,6 +504,7 @@ func (h *appliesHandler) finish(w http.ResponseWriter, r *http.Request, id int, 
 		}
 	}
 	runErr := h.runner.Realize(ctx, verb, id, extra...)
+	h.stored(id)
 	g, err := generation.Read(h.dir, id)
 	if err != nil {
 		h.unavailable(w, r, verb+" generation", errors.Join(runErr, err))

@@ -133,7 +133,7 @@ A browser does not connect to the bus.
    Removing any of those mechanisms fails a test.
 2. **The first events.**
    - **`config/head`.** The configuration store calls `OnSave` with each version committed as the head, at its one commit point. A save, a restore, an upgrade's answers and a migration on start all publish. The type is `config.head.changed`, with `data` `{"version": "<id>"}`.
-   - **`apply/<id>`.** The engine publishes it once it has stored a new generation, before realize runs it. `andaru realize` publishes it after each activate, confirm and rollback, the timer's rollback included. The engine passes `--bus-socket` for that, and if the engine is down realize only warns. The type is `apply.changed`, with `data` `{"id": <id>}`.
+   - **`apply/<id>`.** The engine publishes it once it has stored a new generation, before realize runs it, and again when realize returns to the engine. `andaru realize` publishes it once an activation has begun (before the wait for networkd, which can take 30 seconds), and after each activate, confirm and rollback, the timer's rollback included. The engine passes `--bus-socket` for that, and if the engine is down realize only warns. The type is `apply.changed`, with `data` `{"id": <id>}`.
    - **The web UI** follows both through the engine's stream instead of polling every 15 seconds:
      - It reads the change state when the stream opens and at every event.
      - It reads once when a stream fails.

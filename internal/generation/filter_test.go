@@ -1,6 +1,7 @@
 package generation
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -37,8 +38,13 @@ func (b *bench) lastIndex(prefix string) int {
 func TestActivateLoadsFilterFirst(t *testing.T) {
 	b := newBench(t)
 	id := b.gen(filtered(one, "aa"))
+	var told []string // the state each time Activating was called
+	b.r.Activating = func(got int) { told = append(told, fmt.Sprint(got, " ", b.read(got).State.State)) }
 	if err := b.r.Activate(t.Context(), id); err != nil {
 		t.Fatal(err)
+	}
+	if want := fmt.Sprint(id, " ", Activating); !slices.Equal(told, []string{want}) {
+		t.Fatalf("told %q, want %q", told, want)
 	}
 	if load, reload := b.index("nft -f"), b.index("networkctl reload"); load < 0 || load > reload {
 		t.Fatalf("filter not loaded before the files: %q", b.net.argv)

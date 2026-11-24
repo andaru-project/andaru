@@ -141,7 +141,7 @@ func TestRealizeHelpRunsNoVerb(t *testing.T) {
 	} {
 		verbs := &fakeVerbs{}
 		var out, diag bytes.Buffer
-		code := realizeCommand(context.Background(), strings.Fields(args), &out, &diag, func(string) (realizeVerbs, error) { return verbs, nil })
+		code := realizeCommand(context.Background(), strings.Fields(args), &out, &diag, func(string, string) (realizeVerbs, error) { return verbs, nil })
 		if code != 0 || diag.Len() != 0 || strings.Join(verbs.calls, ",") != want || (want == "") != strings.Contains(out.String(), "rollback N REASON") {
 			t.Errorf("%q: exit=%d calls=%q stdout=%q stderr=%q", args, code, verbs.calls, out.String(), diag.String())
 		}
