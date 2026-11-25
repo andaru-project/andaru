@@ -20,12 +20,14 @@ const noAlias = 'No alias by that name. Aliases are made under Firewall ▸ Alia
 
 // The engine is the authority on what a rule may be: its refusals show beside the fields they name.
 // A chosen zone looks as it does everywhere else: in its own colour. This firewall is no zone and keeps the plain pill.
-function zonePill({ option, onRemove, disabled }: ComboboxRenderPillInput) {
-  const coloured = option.value !== firewallZone;
+// A zone the configuration no longer has has no option: its pill shows the ID, uncoloured, as Mantine's would.
+function zonePill({ option, value, onRemove, disabled }: ComboboxRenderPillInput) {
+  const label = option?.label ?? String(value);
+  const coloured = option !== undefined && option.value !== firewallZone;
   return (
-    <Pill withRemoveButton={!disabled} onRemove={onRemove} removeButtonProps={{ 'aria-label': `Remove ${option.label}` }}
-      style={coloured ? { background: `var(--mantine-color-${zoneColor(option.label)}-light)`, boxShadow: `inset 0 0 0 1px var(--mantine-color-${zoneColor(option.label)}-outline)` } : undefined}>
-      {option.label}
+    <Pill withRemoveButton={!disabled && !option?.disabled} onRemove={onRemove} removeButtonProps={{ 'aria-label': `Remove ${label}` }}
+      style={coloured ? { background: `var(--mantine-color-${zoneColor(label)}-light)`, boxShadow: `inset 0 0 0 1px var(--mantine-color-${zoneColor(label)}-outline)` } : undefined}>
+      {label}
     </Pill>
   );
 }
@@ -90,7 +92,7 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onAbandoned
     <Fieldset legend={label}>
       <Stack gap="xs">
         <MultiSelect label={`${label}: zones`} description={zoneHelp} data={zoneOptions} value={value.zones} error={errors.get(`${key}/zones`)} searchable clearable nothingFoundMessage="No zone by that name."
-          renderPill={zonePill} renderOption={({ option }) => option.value === firewallZone ? option.label : <Badge color={zoneColor(option.label)} variant="light" tt="none" style={{ '--badge-color': 'var(--mantine-color-text)' }}>{option.label}</Badge>}
+          renderPill={zonePill} renderOption={({ option }) => option.value === firewallZone ? option.label : <Badge color={zoneColor(option.label)} variant="light" tt="none" style={{ '--badge-color': 'var(--mantine-color-text)', '--badge-bd': `1px solid var(--mantine-color-${zoneColor(option.label)}-outline)` }}>{option.label}</Badge>}
           // The firewall stands alone as a destination: choosing it leaves the other zones, and choosing another leaves it.
           onChange={(next) => set({ ...value, zones: next.includes(firewallZone) && !value.zones.includes(firewallZone) ? [firewallZone] : next.length > 1 ? next.filter((id) => id !== firewallZone) : next })} />
         <MultiSelect label={`${label}: addresses`} description="Address aliases within those zones. Empty is every address." data={addresses} value={value.addresses} error={errors.get(`${key}/addresses`)} searchable clearable nothingFoundMessage={noAlias}

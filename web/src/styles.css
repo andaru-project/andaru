@@ -503,6 +503,7 @@ path.traffic-sent {
   /* A side panel too: its own size, wider than a phone, otherwise tracked a page that a dropdown had widened. */
   .mantine-Drawer-content {
     flex: 0 0 100vw;
+    max-width: 100%;
   }
 
   /* A fixed height, as Mantine's own fullScreen has: the content then scrolls when it is taller than the screen.

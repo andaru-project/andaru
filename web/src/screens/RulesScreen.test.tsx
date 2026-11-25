@@ -361,3 +361,12 @@ it('names each side\'s except switch by its side, and says where a new rule goes
   expect(within(panel).getByRole('switch', { name: /^To: except these addresses/ })).toBeDisabled();
   expect(within(panel).getByText(/A new rule is added at the bottom of the list/)).toBeInTheDocument();
 });
+
+it('edits a rule that names a zone the configuration no longer has, showing its ID uncoloured', async () => {
+  const user = userEvent.setup();
+  show({ '/api/v1/config/rules': list([rule('rul_gone', 'Gone zone', { from: side(['zon_gone']) })]) });
+  await user.click(await screen.findByRole('button', { name: 'Edit rule 1, Gone zone' }));
+  const panel = await screen.findByRole('dialog', { name: 'Edit rule: Gone zone' });
+  const pill = within(panel).getByText('zon_gone').closest<HTMLElement>('.mantine-Pill-root')!;
+  expect(pill.style.background).toBe('');
+});
