@@ -174,11 +174,14 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
                       <Group gap="xs">
                         <Text fw={600}>{link.name}</Text>
                         {segment && <ZoneBadge name={zoneName(segment.zone)} />}
-                        {management && <Badge variant="light">Management</Badge>}
                         {conflict && <Badge color="red" variant="light">Conflict: several saved links</Badge>}
                       </Group>
-                      {(kind || !segment || segment.name !== link.name) && (
-                        <Text c="dimmed" size="sm">{[kind, !segment ? 'No segment' : segment.name !== link.name ? `Segment ${segment.name}` : undefined].filter(Boolean).join(' · ')}</Text>
+                      {/* Under the name: the interface's role, and its kind and segment when they are not the usual. */}
+                      {(management || kind || !segment || segment.name !== link.name) && (
+                        <Group gap="xs" mt={4}>
+                          {management && <Badge variant="light">Management</Badge>}
+                          {(kind || !segment || segment.name !== link.name) && <Text c="dimmed" size="sm">{[kind, !segment ? 'No segment' : segment.name !== link.name ? `Segment ${segment.name}` : undefined].filter(Boolean).join(' · ')}</Text>}
+                        </Group>
                       )}
                       {finding && <Text size="sm" className="error-text">{finding}</Text>}
                     </Table.Td>
