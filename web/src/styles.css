@@ -193,6 +193,21 @@ body {
   gap: var(--mantine-spacing-md);
 }
 
+.widget-columns[data-unlocked] {
+  align-items: stretch;
+}
+
+/* While the layout is unlocked every column reaches as far down as the longest, and the room below its last widget
+   takes a drop. */
+.widget-column-end {
+  border-radius: var(--mantine-radius-md);
+  flex: 1 0 4rem;
+}
+
+.widget-column-end[data-over] {
+  outline: 2px dashed var(--mantine-color-dimmed);
+}
+
 .widget-column {
   display: flex;
   flex: 1 1 0;
