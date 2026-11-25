@@ -25,6 +25,10 @@ export interface InterfaceDraft {
   searchDomains: string;
 }
 
+// isPort says whether a live link is hardware a saved Ethernet link can name, by its permanent address, as the
+// renderer matches it. A VLAN, bridge or veth has a kind of its own, and the loopback is no Ethernet device.
+export const isPort = (live?: LinkStatus) => live?.linkType === 'ether' && !live.kind && Boolean(live.permanentAddress);
+
 // The zone option that makes a new zone from the name typed beside it.
 export const newZoneOption = '__new';
 

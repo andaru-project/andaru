@@ -6,16 +6,14 @@ import { useResource, useVisiblePoll } from '../useResource';
 import { bindingFindings, kernelName, zonesByInterface } from '../zones';
 import { Address } from './Address';
 import { InterfaceEditor } from './InterfaceEditor';
+import { isPort } from '../interfaceEdit';
 import { ZoneBadge } from './ZoneBadge';
 
 interface InterfacesScreenProps { api: ApiClient; session: Session; onSaved(): void; onSessionLost(): void }
 
 // What the panel opens on: the saved objects as read just now, with their versions, and the port on the box.
-interface Editing { link?: SavedObject<SavedLink>; segment?: SavedObject<Segment>; live?: LinkStatus }
-
-// A port can be added when it is hardware, which a saved link names by its permanent address. A VLAN, bridge or
-// veth is a kind of link of its own, and the loopback is no Ethernet device.
-const addable = (live?: LinkStatus) => live?.linkType === 'ether' && !live.kind && Boolean(live.permanentAddress);
+// It keeps the snapshot it opened with, so a poll that fails to read the configuration does not close it.
+interface Editing { link?: SavedObject<SavedLink>; segment?: SavedObject<Segment>; live?: LinkStatus; snapshot: Snapshot }
 
 const unboundLabel: Record<string, string> = { HARDWARE_MISSING: 'Missing', HARDWARE_AMBIGUOUS: 'Unresolved' };
 
@@ -88,7 +86,7 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
         link ? api.configObject<SavedLink>('links', link.id) : Promise.resolve(undefined),
         segment ? api.configObject<Segment>('segments', segment.id) : Promise.resolve(undefined),
       ]);
-      setEditing({ link: savedLink, segment: savedSegment, live });
+      if (saved) setEditing({ link: savedLink, segment: savedSegment, live, snapshot: saved.snapshot });
     } catch (failure) {
       reportError(failure, onSessionLost, setError);
     } finally {
@@ -146,7 +144,7 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
                     {/* Two saved links on one port are a conflict to remove first; the row's badge says so. */}
                     {link
                       ? !conflict && <Button size="xs" variant="default" loading={opening === key} aria-label={`Edit ${link.name}`} onClick={() => void edit(key, live, link, segment)}>Edit</Button>
-                      : addable(live) && <Button size="xs" variant="light" loading={opening === key} aria-label={`Add ${live?.name} to the configuration`} onClick={() => void edit(key, live, undefined, undefined)}>Add</Button>}
+                      : isPort(live) && <Button size="xs" variant="light" loading={opening === key} aria-label={`Add ${live?.name} to the configuration`} onClick={() => void edit(key, live, undefined, undefined)}>Add</Button>}
                   </Table.Td>
                 )}
               </Table.Tr>
@@ -154,8 +152,8 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
           })}
         </Table.Tbody></Table></ScrollArea>
       )}
-      {editing && saved && (
-        <InterfaceEditor key={editing.link?.value.id ?? editing.live?.name} {...editing} snapshot={saved.snapshot} onClose={() => setEditing(undefined)}
+      {editing && (
+        <InterfaceEditor key={editing.link?.value.id ?? editing.live?.name} {...editing} onClose={() => setEditing(undefined)}
           onSessionLost={onSessionLost} onAbandoned={setSaveError} onSave={save} />
       )}
     </Stack>

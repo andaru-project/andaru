@@ -118,7 +118,7 @@ export function InterfaceEditor({ link, segment, live, snapshot, onClose, onSess
               <Fieldset legend="Interface">
                 <Stack gap="xs">
                   <TextInput data-autofocus label="Name" maxLength={128} required value={draft.name} error={errors.get('name')} onChange={(event) => set({ name: event.currentTarget.value })} />
-                  {(live?.linkAddress || link?.value.permanentMac) && <Text size="sm" c="dimmed">{link?.value.kind ?? 'ethernet'} · <Text span ff="monospace" inherit>{link?.value.permanentMac ?? live?.linkAddress}</Text></Text>}
+                  {(live?.permanentAddress || link?.value.permanentMac) && <Text size="sm" c="dimmed">{link?.value.kind ?? 'ethernet'} · <Text span ff="monospace" inherit>{link?.value.permanentMac ?? live?.permanentAddress}</Text></Text>}
                   <Switch label="Enabled" checked={draft.enabled} onChange={(event) => set({ enabled: event.currentTarget.checked })} />
                   <TextInput label="MTU" inputMode="numeric" required value={draft.mtu} error={errors.get('mtu')} onChange={(event) => set({ mtu: event.currentTarget.value })} />
                 </Stack>

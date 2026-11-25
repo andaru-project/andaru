@@ -10,9 +10,9 @@ import { SetupWizardScreen } from './SetupWizardScreen';
 
 const sampleLinks = [
   { name: 'lo', index: 1, operState: 'unknown', linkType: 'loopback', linkAddress: '00:00:00:00:00:00', mtu: 65536, addresses: [] },
-  { name: 'enp1s0', index: 2, operState: 'up', linkType: 'ether', linkAddress: '52:54:00:aa:bb:01', mtu: 1500, addresses: [{ family: 'ipv4', address: '192.168.1.1', prefixLength: 24 }] },
-  { name: 'enp2s0', index: 3, operState: 'up', linkType: 'ether', linkAddress: '02:00:00:00:00:99', permanentAddress: '52:54:00:aa:bb:02', mtu: 1500, addresses: [] },
   { name: 'docker0', index: 4, operState: 'up', linkType: 'ether', kind: 'bridge', linkAddress: '02:42:ac:11:00:01', permanentAddress: '02:42:ac:11:00:01', mtu: 1500, addresses: [] },
+  { name: 'enp1s0', index: 2, operState: 'up', linkType: 'ether', linkAddress: '52:54:00:aa:bb:01', permanentAddress: '52:54:00:aa:bb:01', mtu: 1500, addresses: [{ family: 'ipv4', address: '192.168.1.1', prefixLength: 24 }] },
+  { name: 'enp2s0', index: 3, operState: 'up', linkType: 'ether', linkAddress: '02:00:00:00:00:99', permanentAddress: '52:54:00:aa:bb:02', mtu: 1500, addresses: [] },
 ];
 
 describe('SetupBootstrapScreen & SetupWizardScreen', () => {

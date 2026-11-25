@@ -15,6 +15,7 @@ import {
   TextInput,
   Title,
 } from '@mantine/core';
+import { isPort } from '../interfaceEdit';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ApiClient, apiErrorMessage, reportError } from '../api';
 import {
@@ -124,10 +125,8 @@ export function SetupWizardScreen({ api, onComplete, onSessionLost }: SetupWizar
         api.singletonVersion('dns').catch(() => '0'),
         api.singletonVersion('nat/outbound').catch(() => '0'),
       ]);
-      // A saved Ethernet link names hardware by its permanent address; a VLAN, bridge or veth is no port to assign.
-      const physical = linkReply.items
-        .filter((l) => l.linkType !== 'loopback' && !l.kind && Boolean(l.linkAddress))
-        .map((l) => ({ ...l, linkAddress: l.permanentAddress || l.linkAddress }));
+      // A saved Ethernet link names a port by its permanent address, which is the address this page goes by.
+      const physical = linkReply.items.filter(isPort).map((l) => ({ ...l, linkAddress: l.permanentAddress }));
       setLinks(physical);
       setInitialHostname(sys.hostname);
       setHostname((cur) => cur || sys.hostname);
@@ -138,7 +137,7 @@ export function SetupWizardScreen({ api, onComplete, onSessionLost }: SetupWizar
       }
       setDraft((cur) => {
         if (cur.mgmtMac) return cur;
-        const firstUp = physical.find((l) => l.operState === 'up') ?? physical[0];
+        const firstUp = physical.find((l) => l.operState.toUpperCase() === 'UP') ?? physical[0];
         const second = physical.find((l) => l !== firstUp);
         return {
           ...cur,
