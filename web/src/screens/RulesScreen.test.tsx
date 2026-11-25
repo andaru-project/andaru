@@ -5,6 +5,7 @@ import { ApiClient } from '../api';
 import { fetchRoutes, jsonResponse } from '../test/fetch';
 import { session } from '../test/fixtures';
 import { render, screen, waitFor, within } from '../test/render';
+import { zoneColor } from '../zones';
 import { RulesScreen } from './RulesScreen';
 
 const lan = 'zon_lan';
@@ -235,7 +236,11 @@ it('lets the firewall stand alone as a destination: choosing it leaves the other
   await user.click(zones);
   expect(options(zones).map((option) => option.textContent)).toEqual(['This firewall', 'lan', 'wan']);
   await pick('wan');
+  // A chosen zone shows in its own colour, as it does in the list.
+  const pill = (name: string) => within(panel).getAllByText(name).map((label) => label.closest<HTMLElement>('.mantine-Pill-root')).find(Boolean)!;
+  expect(pill('wan').style.background).toBe(`var(--mantine-color-${zoneColor('wan')}-light)`);
   await pick('This firewall');
+  expect(pill('This firewall').style.background).toBe('');
   await user.click(within(panel).getByRole('button', { name: 'Save rule' }));
   await waitFor(() => expect(sent(fetch, 'POST')).toHaveLength(1));
   expect(JSON.parse(String(sent(fetch, 'POST')[0][1]?.body)).to).toEqual({ zones: ['zon_firewall'], addresses: [] });

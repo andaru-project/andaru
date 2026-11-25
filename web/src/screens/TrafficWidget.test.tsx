@@ -46,7 +46,7 @@ it('shows a graph for each interface, top to bottom, with its zone and its figur
   expect(row('ens19', 'Download')).toEqual(['1.0 kbps', '1.0 kbps', '1.0 kbps']);
   // The scale and the span are labels on the graph, not a sentence.
   expect(within(graph('ens18')).getByText('0 – 4.0 Mbps')).toBeInTheDocument();
-  expect(within(graph('ens18')).getByText('−1 h')).toBeInTheDocument();
+  expect(within(graph('ens18')).getByText('1 hour ago')).toBeInTheDocument();
   expect(within(graph('ens18')).getByText('now')).toBeInTheDocument();
 });
 
@@ -79,7 +79,7 @@ it('reads out the point under the pointer, a finger or the arrow keys: its time 
   render(<TrafficView traffic={pair} zones={zones} selected={['ens18']} live onSelect={vi.fn()} />);
   const frame = within(graph('ens18')).getByRole('group');
   const readout = () => graph('ens18').querySelector('[aria-live]')!.textContent;
-  expect(readout()).toBe('−1 hnow');
+  expect(readout()).toBe('1 hour agonow');
   expect(graph('ens18').querySelector('.traffic-dot')).not.toBeInTheDocument();
 
   // The keys start from the newest point and step back and forth; Escape lets go.
@@ -92,7 +92,7 @@ it('reads out the point under the pointer, a finger or the arrow keys: its time 
   await userEvent.keyboard('{ArrowLeft}{ArrowLeft}{ArrowLeft}{ArrowLeft}');
   expect(readout()).toMatch(/↓ 1\.0 Mbps/);
   await userEvent.keyboard('{Escape}');
-  expect(readout()).toBe('−1 hnow');
+  expect(readout()).toBe('1 hour agonow');
 
   // A pointer at the right edge is on the newest point; leaving lets go.
   frame.getBoundingClientRect = () => DOMRect.fromRect({ x: 0, y: 0, width: 500, height: 200 });
@@ -102,14 +102,14 @@ it('reads out the point under the pointer, a finger or the arrow keys: its time 
   fireEvent.pointerMove(frame, { clientX: 499, pointerType: 'mouse' });
   expect(readout()).toMatch(/↓ 2\.0 Mbps/);
   fireEvent.pointerLeave(frame, { pointerType: 'mouse' });
-  expect(readout()).toBe('−1 hnow');
+  expect(readout()).toBe('1 hour agonow');
   // A finger leaves as it lifts: its mark stays. A touch that becomes a scroll is cancelled: its mark goes.
   fireEvent.pointerDown(frame, { clientX: 500, pointerType: 'touch' });
   fireEvent.pointerLeave(frame, { pointerType: 'touch' });
   expect(readout()).toMatch(/↓ 4\.0 Mbps/);
   fireEvent.pointerDown(frame, { clientX: 499, pointerType: 'touch' });
   fireEvent.pointerCancel(frame, { pointerType: 'touch' });
-  expect(readout()).toBe('−1 hnow');
+  expect(readout()).toBe('1 hour agonow');
 });
 
 it('shows every interface when there are one or two, whatever was chosen before', () => {
