@@ -118,7 +118,7 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
       <div key={line.family} className="address-line">
         <Text size="xs" c="dimmed">{line.method ? `${line.family} · ${line.method}` : line.family}</Text>
         {line.addresses.map((address) => <Address key={address} value={address} />)}
-        {line.pending.length > 0 && <Group gap={6} align="baseline"><Badge size="xs" color="yellow" variant="light">Pending</Badge><div>{line.pending.map((address) => <Address key={address} value={address} />)}</div></Group>}
+        {line.pending.length > 0 && <Group gap={6} align="baseline"><Badge size="xs" color="yellow" variant="light" style={{ '--badge-color': 'var(--mantine-color-text)' }}>Pending</Badge><div>{line.pending.map((address) => <Address key={address} value={address} />)}</div></Group>}
       </div>
     ));
   };
@@ -184,11 +184,12 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
                     </Table.Td>
                     <Table.Td data-label="Device">
                       {live ? <Text ff="monospace">{live.name}</Text> : <Text c="dimmed">No device</Text>}
-                      <Text c="dimmed" size="sm"><Text span ff="monospace" inherit>{live?.linkAddress || link.permanentMac || ''}</Text>{mtu && <>{(live?.linkAddress || link.permanentMac) && ' · '}{mtu}</>}</Text>
+                      {(live?.linkAddress || link.permanentMac || mtu) && <Text c="dimmed" size="sm"><Text span ff="monospace" inherit>{live?.linkAddress || link.permanentMac}</Text>{mtu && <>{(live?.linkAddress || link.permanentMac) && ' · '}{mtu}</>}</Text>}
                     </Table.Td>
                     <Table.Td data-label="State">
                       {stateBadge(live, state)}
-                      {live && !link.enabled && <Text size="xs" c="dimmed">Pending: off</Text>}
+                      {/* Applied, a disabled link is down: only while it is still up is the change waiting. */}
+                      {live && !link.enabled && live.flags.some((flag) => flag.toUpperCase() === 'UP') && <Text size="xs" c="dimmed">Pending: off</Text>}
                     </Table.Td>
                     <Table.Td data-label="Addresses">{addressesCell(live, segment)}</Table.Td>
                     {editable && <Table.Td>{actionButton(key, 'Edit', `Edit ${link.name}`, () => void edit(key, live, link, segment), 'default')}</Table.Td>}

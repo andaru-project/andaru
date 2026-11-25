@@ -208,6 +208,17 @@ it('keeps a loopback the configuration names, and marks a disabled link that has
   expect(within(row('LAN port')).getByText('Pending: off')).toBeInTheDocument();
 });
 
+it('says nothing pending once a disabled link is down', async () => {
+  fetchRoutes({
+    '/api/v1/status/links': { items: [{ ...live(2, 'enp1s0', '52:54:00:aa:bb:01'), operState: 'DOWN', flags: ['BROADCAST'] }] },
+    '/api/v1/config': { state: 'saved', savedVersion: '7', unusedSecrets: [], value: { links: [{ ...ethernet(lanPort, 'LAN port', '52:54:00:aa:bb:01'), enabled: false }], segments: [], zones: [] } },
+    '/api/v1/preview/network?savedVersion=7': { state: 'preview', savedVersion: '7', realizable: true, resolved: [{ link: lanPort, interface: 'enp1s0' }], files: [], findings: [] },
+  });
+  await showInterfaces();
+
+  expect(within(row('LAN port')).queryByText('Pending: off')).not.toBeInTheDocument();
+});
+
 const writer = session(['status.read', 'configuration.read', 'configuration.write']);
 
 it('offers no edits to an account that cannot write the configuration', async () => {
