@@ -225,12 +225,12 @@ it('lets the firewall stand alone as a destination: choosing it leaves the other
   await user.click(await screen.findByRole('button', { name: 'Add rule' }));
   const panel = await screen.findByRole('dialog', { name: 'Add rule' });
   await user.type(within(panel).getByLabelText(/^Name/), 'To the box');
-  const zones = within(panel).getByLabelText('To: zones');
+  const zones = within(panel).getByLabelText('To: zones', { selector: 'input' });
   // The picker's list belongs to its field; jsdom does not lay it out, so it is asked for whether shown or not.
   const options = (field: HTMLElement) => within(document.getElementById(field.getAttribute('aria-controls')!)!).getAllByRole('option', { hidden: true });
   const pick = async (name: string) => { await user.click(zones); await user.click(options(zones).find((option) => option.textContent === name)!); };
   // It is offered to a rule's destination, and never to its source.
-  const from = within(panel).getByLabelText('From: zones');
+  const from = within(panel).getByLabelText('From: zones', { selector: 'input' });
   await user.click(from);
   expect(options(from).map((option) => option.textContent)).toEqual(['lan', 'wan']);
   await user.click(zones);

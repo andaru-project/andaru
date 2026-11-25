@@ -257,7 +257,7 @@ it('offers a group the aliases of its kind that are not groups, and never itself
   show();
   await user.click(await screen.findByRole('button', { name: 'Edit address alias servers' }));
   const panel = await screen.findByRole('dialog', { name: 'Edit address alias: servers' });
-  const members = within(panel).getByLabelText('Members');
+  const members = within(panel).getByLabelText('Members', { selector: 'input' });
   await user.click(members);
   expect(within(document.getElementById(members.getAttribute('aria-controls')!)!).getAllByRole('option', { hidden: true }).map((option) => option.textContent)).toEqual(['lab', 'nas', 'pool']);
 });
