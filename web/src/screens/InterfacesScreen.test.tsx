@@ -132,6 +132,28 @@ it('shows both saved links that land on one device', async () => {
   expect(row('Spare port')).toHaveTextContent('Conflict');
 });
 
+it('lets each of two conflicting saved links be edited, so either can be removed', async () => {
+  const second = 'lnk_44444444-4444-4444-8444-444444444444';
+  routes({ links: [ethernet(lanPort, 'LAN port', '52:54:00:aa:bb:01'), ethernet(second, 'Spare port', '52:54:00:aa:bb:01')], findings: [], resolved: [{ link: lanPort, interface: 'enp1s0' }, { link: second, interface: 'enp1s0' }] });
+  render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={vi.fn()} onSessionLost={vi.fn()} />);
+
+  expect(await screen.findByRole('button', { name: 'Edit LAN port' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Edit Spare port' })).toBeInTheDocument();
+});
+
+it('opens no panel on a segment that moved to another link after the page loaded', async () => {
+  const user = userEvent.setup();
+  routes({ extra: {
+    [`/api/v1/config/links/${lanPort}`]: { version: '4', value: ethernet(lanPort, 'LAN port', '52:54:00:aa:bb:01') },
+    '/api/v1/config/segments/seg_lan': { version: '7', value: { id: 'seg_lan', name: 'LAN', link: guestVlan, zone: 'zon_lan', addressing: { ipv4: { mode: 'dhcp' }, ipv6: { mode: 'none' } } } },
+  } });
+  render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={vi.fn()} onSessionLost={vi.fn()} />);
+  await user.click(await screen.findByRole('button', { name: 'Edit LAN port' }));
+
+  expect(await screen.findByRole('alert', { name: 'The interface could not be opened' })).toHaveTextContent('changed by someone else');
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+});
+
 it('keeps the live links when the saved configuration cannot be read', async () => {
   fetchRoutes({
     '/api/v1/status/links': { items: [live(2, 'enp1s0', '52:54:00:aa:bb:01')] },

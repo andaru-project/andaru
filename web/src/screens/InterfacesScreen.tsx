@@ -86,7 +86,9 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
         link ? api.configObject<SavedLink>('links', link.id) : Promise.resolve(undefined),
         segment ? api.configObject<Segment>('segments', segment.id) : Promise.resolve(undefined),
       ]);
-      if (saved) setEditing({ link: savedLink, segment: savedSegment, live, snapshot: saved.snapshot });
+      // The two reads are apart: a segment moved to another link meanwhile would be written back onto this one.
+      if (savedSegment && savedSegment.value.link !== savedLink?.value.id) setError('This interface was changed by someone else while it was opening. Refresh, then try again.');
+      else if (saved) setEditing({ link: savedLink, segment: savedSegment, live, snapshot: saved.snapshot });
     } catch (failure) {
       reportError(failure, onSessionLost, setError);
     } finally {
@@ -141,9 +143,9 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
                 )}
                 {editable && (
                   <Table.Td data-label="">
-                    {/* Two saved links on one port are a conflict to remove first; the row's badge says so. */}
+                    {/* Each of two saved links on one port is its own object: either can be edited or removed. */}
                     {link
-                      ? !conflict && <Button size="xs" variant="default" loading={opening === key} aria-label={`Edit ${link.name}`} onClick={() => void edit(key, live, link, segment)}>Edit</Button>
+                      ? <Button size="xs" variant="default" loading={opening === key} aria-label={`Edit ${link.name}`} onClick={() => void edit(key, live, link, segment)}>Edit</Button>
                       : isPort(live) && <Button size="xs" variant="light" loading={opening === key} aria-label={`Add ${live?.name} to the configuration`} onClick={() => void edit(key, live, undefined, undefined)}>Add</Button>}
                   </Table.Td>
                 )}
