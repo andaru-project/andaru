@@ -43,7 +43,7 @@ func TestAPILinksContractAndFailures(t *testing.T) {
 	h := newHandler(func(context.Context) ([]host.LinkStatus, error) {
 		return []host.LinkStatus{{
 			IfIndex: 2, Name: "eth0", LinkType: "ether", MTU: 1500, OperState: "UP",
-			Flags: []string{"UP"}, LinkAddress: "02:00:00:00:00:02",
+			Flags: []string{"UP"}, LinkAddress: "02:00:00:00:00:02", PermanentAddress: "02:00:00:00:00:01",
 			Addresses: []host.AddressStatus{{Family: "ipv4", Address: "192.0.2.7", PrefixLength: 24, Scope: "global"}},
 		}}, nil
 	}, http.NotFoundHandler())
@@ -61,7 +61,8 @@ func TestAPILinksContractAndFailures(t *testing.T) {
 		t.Fatalf("missing items array: %#v", body)
 	}
 	link := items[0].(map[string]any)
-	if link["name"] != "eth0" || link["ifIndex"] != float64(2) || link["mtu"] != float64(1500) || link["linkAddress"] != "02:00:00:00:00:02" {
+	if link["name"] != "eth0" || link["ifIndex"] != float64(2) || link["mtu"] != float64(1500) || link["linkAddress"] != "02:00:00:00:00:02" ||
+		link["permanentAddress"] != "02:00:00:00:00:01" || link["kind"] != nil {
 		t.Fatalf("incorrect observed metadata: %#v", link)
 	}
 	address := link["addresses"].([]any)[0].(map[string]any)

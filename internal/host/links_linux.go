@@ -41,9 +41,9 @@ type LinkStatus struct {
 	LinkAddress string          `json:"linkAddress,omitempty"`
 	Addresses   []AddressStatus `json:"addresses"`
 	// Kind is the kernel link kind (vlan, bridge, ...); empty for physical devices.
-	Kind string `json:"-"`
+	Kind string `json:"kind,omitempty"`
 	// PermanentAddress is the hardware address a device cannot change; virtual links inherit theirs.
-	PermanentAddress string `json:"-"`
+	PermanentAddress string `json:"permanentAddress,omitempty"`
 }
 
 // -d adds linkinfo: without it a VLAN is indistinguishable from the NIC whose MAC it inherits.

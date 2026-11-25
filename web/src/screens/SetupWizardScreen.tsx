@@ -124,7 +124,10 @@ export function SetupWizardScreen({ api, onComplete, onSessionLost }: SetupWizar
         api.singletonVersion('dns').catch(() => '0'),
         api.singletonVersion('nat/outbound').catch(() => '0'),
       ]);
-      const physical = linkReply.items.filter((l) => l.linkType !== 'loopback' && Boolean(l.linkAddress));
+      // A saved Ethernet link names hardware by its permanent address; a VLAN, bridge or veth is no port to assign.
+      const physical = linkReply.items
+        .filter((l) => l.linkType !== 'loopback' && !l.kind && Boolean(l.linkAddress))
+        .map((l) => ({ ...l, linkAddress: l.permanentAddress || l.linkAddress }));
       setLinks(physical);
       setInitialHostname(sys.hostname);
       setHostname((cur) => cur || sys.hostname);

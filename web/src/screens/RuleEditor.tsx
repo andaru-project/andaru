@@ -1,8 +1,9 @@
-import { Alert, Anchor, Badge, Button, Drawer, Fieldset, Group, MultiSelect, Pill, SegmentedControl, Stack, Switch, Text, Textarea, TextInput, type ComboboxRenderPillInput } from '@mantine/core';
+import { Alert, Anchor, Button, Drawer, Fieldset, Group, MultiSelect, Pill, SegmentedControl, Stack, Switch, Text, Textarea, TextInput, type ComboboxRenderPillInput } from '@mantine/core';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, fieldErrors, saveFailure } from '../api';
 import { firewallZone, type Rule, type RuleSide, type Snapshot } from '../types';
 import { zoneColor } from '../zones';
+import { ZonePill } from './ZoneBadge';
 
 interface RuleEditorProps {
   rule?: Rule;
@@ -92,7 +93,7 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onAbandoned
     <Fieldset legend={label}>
       <Stack gap="xs">
         <MultiSelect label={`${label}: zones`} description={zoneHelp} data={zoneOptions} value={value.zones} error={errors.get(`${key}/zones`)} searchable clearable nothingFoundMessage="No zone by that name."
-          renderPill={zonePill} renderOption={({ option }) => option.value === firewallZone ? option.label : <Badge color={zoneColor(option.label)} variant="light" tt="none" style={{ '--badge-color': 'var(--mantine-color-text)', '--badge-bd': `1px solid var(--mantine-color-${zoneColor(option.label)}-outline)` }}>{option.label}</Badge>}
+          renderPill={zonePill} renderOption={({ option }) => option.value === firewallZone ? option.label : <ZonePill name={option.label} />}
           // The firewall stands alone as a destination: choosing it leaves the other zones, and choosing another leaves it.
           onChange={(next) => set({ ...value, zones: next.includes(firewallZone) && !value.zones.includes(firewallZone) ? [firewallZone] : next.length > 1 ? next.filter((id) => id !== firewallZone) : next })} />
         <MultiSelect label={`${label}: addresses`} description="Address aliases within those zones. Empty is every address." data={addresses} value={value.addresses} error={errors.get(`${key}/addresses`)} searchable clearable nothingFoundMessage={noAlias}

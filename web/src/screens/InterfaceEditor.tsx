@@ -1,9 +1,9 @@
-import { Alert, Badge, Button, Drawer, Fieldset, Group, Select, Stack, Switch, Text, TextInput } from '@mantine/core';
+import { Alert, Button, Drawer, Fieldset, Group, Select, Stack, Switch, Text, TextInput } from '@mantine/core';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, saveFailure } from '../api';
-import { draftOf, interfaceErrors, interfaceOperations, newZone, removeOperations, type InterfaceDraft, type OperationTarget } from '../interfaceEdit';
+import { draftOf, interfaceErrors, interfaceOperations, newZoneOption, removeOperations, type InterfaceDraft } from '../interfaceEdit';
 import type { ConfigBatchOperation, LinkStatus, SavedLink, SavedObject, Segment, Snapshot } from '../types';
-import { zoneColor } from '../zones';
+import { ZonePill } from './ZoneBadge';
 
 interface InterfaceEditorProps {
   link?: SavedObject<SavedLink>;
@@ -39,7 +39,7 @@ export function InterfaceEditor({ link, segment, live, snapshot, onClose, onSess
 
   const set = (next: Partial<InterfaceDraft>) => setDraft((current) => ({ ...current, ...next }));
   const managed = segment !== undefined && snapshot.value.management?.segment === segment.value.id;
-  const zones = [...snapshot.value.zones.map((zone) => ({ value: zone.id, label: zone.name })), { value: newZone, label: 'New zone…' }];
+  const zones = [...snapshot.value.zones.map((zone) => ({ value: zone.id, label: zone.name })), { value: newZoneOption, label: 'New zone…' }];
   // A delegated prefix comes from another segment's DHCPv6 client.
   const delegators = snapshot.value.segments.filter((item) => item.id !== segment?.value.id && item.addressing.ipv6.mode === 'dhcp6').map((item) => ({ value: item.id, label: item.name }));
   const modes4 = link?.value.kind === 'pppoe' ? [...ipv4Modes, { value: 'ppp', label: 'PPP' }] : ipv4Modes;
@@ -53,16 +53,20 @@ export function InterfaceEditor({ link, segment, live, snapshot, onClose, onSess
     if (!draft.assigned) return found;
     if (!draft.segmentName.trim()) found.set('segmentName', 'The network needs a name.');
     if (!draft.zone) found.set('zone', 'Choose the zone this network is in.');
-    if (draft.zone === newZone && !draft.newZone.trim()) found.set('newZone', 'Name the new zone.');
+    if (draft.zone === newZoneOption && !draft.newZone.trim()) found.set('newZone', 'Name the new zone.');
     if (!draft.ipv4Mode) found.set('ipv4', 'Choose how this network gets its IPv4 address.');
-    else if (draft.ipv4Mode === 'static' && !draft.ipv4Addresses.trim()) found.set('ipv4', 'A static address needs at least one address, such as 192.168.2.1/24.');
+    else if (draft.ipv4Mode === 'static' && !draft.ipv4Addresses.trim()) found.set('ipv4Addresses', 'A static address needs at least one address, such as 192.168.2.1/24.');
     if (!draft.ipv6Mode) found.set('ipv6', 'Choose how this network gets its IPv6 address.');
-    else if (draft.ipv6Mode === 'static' && !draft.ipv6Addresses.trim()) found.set('ipv6', 'A static address needs at least one address, such as 2001:db8::1/64.');
-    else if (draft.ipv6Mode === 'delegated' && (!draft.ipv6From || !draft.ipv6SubnetId.trim())) found.set('ipv6', 'Choose the network whose prefix is delegated, and a subnet ID such as 1.');
+    else if (draft.ipv6Mode === 'static' && !draft.ipv6Addresses.trim()) found.set('ipv6Addresses', 'A static address needs at least one address, such as 2001:db8::1/64.');
+    else if (draft.ipv6Mode === 'dhcp6' && draft.ipv6PrefixLength.trim() && !/^([1-9]|[1-5][0-9]|6[0-4])$/.test(draft.ipv6PrefixLength.trim())) found.set('ipv6PrefixLength', 'A prefix length is a whole number from 1 to 64.');
+    else if (draft.ipv6Mode === 'delegated') {
+      if (!draft.ipv6From) found.set('ipv6From', 'Choose the network whose prefix is delegated.');
+      if (!draft.ipv6SubnetId.trim()) found.set('ipv6SubnetId', 'Give a subnet ID, such as 1.');
+    }
     return found;
   }
 
-  async function send(operations: ConfigBatchOperation[], targets: OperationTarget[]) {
+  async function send(operations: ConfigBatchOperation[]) {
     setBusy(true);
     setErrors(new Map());
     setFailure('');
@@ -72,7 +76,7 @@ export function InterfaceEditor({ link, segment, live, snapshot, onClose, onSess
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) return onSessionLost();
       if (!open.current) return onAbandoned(saveFailure(error, new Map(), 'interface'));
-      const fields = interfaceErrors(error, targets);
+      const fields = interfaceErrors(error, operations);
       setErrors(fields);
       setFailure(saveFailure(error, fields, 'interface'));
     } finally {
@@ -88,15 +92,13 @@ export function InterfaceEditor({ link, segment, live, snapshot, onClose, onSess
       setFailure('');
       return;
     }
-    const { operations, targets } = interfaceOperations(draft, link, segment, live);
-    void send(operations, targets);
+    void send(interfaceOperations(draft, link, segment, live));
   }
 
   function remove() {
     if (!link) return;
     if (!removing) return setRemoving(true);
-    const operations = removeOperations(link, segment);
-    void send(operations, operations.map((operation): OperationTarget => (operation.collection === 'links' ? 'link' : 'segment')));
+    void send(removeOperations(link, segment));
   }
 
   const title = link ? `Edit interface: ${link.value.name}` : `Add ${live?.name ?? 'interface'} to the configuration`;
@@ -129,9 +131,9 @@ export function InterfaceEditor({ link, segment, live, snapshot, onClose, onSess
                     <Stack gap="xs">
                       <TextInput label="Network name" maxLength={128} required value={draft.segmentName} error={errors.get('segmentName')} onChange={(event) => set({ segmentName: event.currentTarget.value })} />
                       <Select label="Zone" description="Firewall rules name zones, not interfaces." data={zones} value={draft.zone || null} error={errors.get('zone')} allowDeselect={false}
-                        renderOption={({ option }) => option.value === newZone ? option.label : <Badge color={zoneColor(option.label)} variant="light" tt="none" style={{ '--badge-color': 'var(--mantine-color-text)', '--badge-bd': `1px solid var(--mantine-color-${zoneColor(option.label)}-outline)` }}>{option.label}</Badge>}
+                        renderOption={({ option }) => option.value === newZoneOption ? option.label : <ZonePill name={option.label} />}
                         onChange={(value) => set({ zone: value ?? '' })} />
-                      {draft.zone === newZone && <TextInput label="New zone name" maxLength={128} required value={draft.newZone} error={errors.get('newZone')} onChange={(event) => set({ newZone: event.currentTarget.value })} />}
+                      {draft.zone === newZoneOption && <TextInput label="New zone name" maxLength={128} required value={draft.newZone} error={errors.get('newZone')} onChange={(event) => set({ newZone: event.currentTarget.value })} />}
                     </Stack>
                   </Fieldset>
                   <Fieldset legend="IPv4">
@@ -139,8 +141,8 @@ export function InterfaceEditor({ link, segment, live, snapshot, onClose, onSess
                       <Select label="IPv4 address" data={modes4} value={draft.ipv4Mode || null} error={errors.get('ipv4')} allowDeselect={false} onChange={(value) => set({ ipv4Mode: value ?? '' })} />
                       {draft.ipv4Mode === 'static' && (
                         <>
-                          <TextInput label="IPv4 addresses" description="With prefix length; separate several with commas." placeholder="192.168.2.1/24" value={draft.ipv4Addresses} onChange={(event) => set({ ipv4Addresses: event.currentTarget.value })} />
-                          <TextInput label="IPv4 gateway" description="Only on the network that leads to the Internet." placeholder="203.0.113.1" value={draft.ipv4Gateway} onChange={(event) => set({ ipv4Gateway: event.currentTarget.value })} />
+                          <TextInput label="IPv4 addresses" description="With prefix length; separate several with commas." placeholder="192.168.2.1/24" value={draft.ipv4Addresses} error={errors.get('ipv4Addresses')} onChange={(event) => set({ ipv4Addresses: event.currentTarget.value })} />
+                          <TextInput label="IPv4 gateway" description="Only on the network that leads to the Internet." placeholder="203.0.113.1" value={draft.ipv4Gateway} error={errors.get('ipv4Gateway')} onChange={(event) => set({ ipv4Gateway: event.currentTarget.value })} />
                         </>
                       )}
                     </Stack>
@@ -150,17 +152,17 @@ export function InterfaceEditor({ link, segment, live, snapshot, onClose, onSess
                       <Select label="IPv6 address" data={ipv6Modes} value={draft.ipv6Mode || null} error={errors.get('ipv6')} allowDeselect={false} onChange={(value) => set({ ipv6Mode: value ?? '' })} />
                       {draft.ipv6Mode === 'static' && (
                         <>
-                          <TextInput label="IPv6 addresses" description="With prefix length; separate several with commas." placeholder="2001:db8::1/64" value={draft.ipv6Addresses} onChange={(event) => set({ ipv6Addresses: event.currentTarget.value })} />
-                          <TextInput label="IPv6 gateway" placeholder="2001:db8::ffff" value={draft.ipv6Gateway} onChange={(event) => set({ ipv6Gateway: event.currentTarget.value })} />
+                          <TextInput label="IPv6 addresses" description="With prefix length; separate several with commas." placeholder="2001:db8::1/64" value={draft.ipv6Addresses} error={errors.get('ipv6Addresses')} onChange={(event) => set({ ipv6Addresses: event.currentTarget.value })} />
+                          <TextInput label="IPv6 gateway" placeholder="2001:db8::ffff" value={draft.ipv6Gateway} error={errors.get('ipv6Gateway')} onChange={(event) => set({ ipv6Gateway: event.currentTarget.value })} />
                         </>
                       )}
                       {draft.ipv6Mode === 'dhcp6' && (
-                        <TextInput label="Prefix length to request" description="Empty asks for an address only. 56 or 60 gives prefixes to delegate to other networks." inputMode="numeric" placeholder="56" value={draft.ipv6PrefixLength} onChange={(event) => set({ ipv6PrefixLength: event.currentTarget.value })} />
+                        <TextInput label="Prefix length to request" description="Empty asks for an address only. 56 or 60 gives prefixes to delegate to other networks." inputMode="numeric" placeholder="56" value={draft.ipv6PrefixLength} error={errors.get('ipv6PrefixLength')} onChange={(event) => set({ ipv6PrefixLength: event.currentTarget.value })} />
                       )}
                       {draft.ipv6Mode === 'delegated' && (
                         <>
-                          <Select label="Prefix from" description="A network whose DHCPv6 client receives the prefix." data={delegators} value={draft.ipv6From || null} nothingFoundMessage="No network has a DHCPv6 client." onChange={(value) => set({ ipv6From: value ?? '' })} />
-                          <TextInput label="Subnet ID" description="Hexadecimal, 1 to 4 digits: which /64 of the delegated prefix." placeholder="1" value={draft.ipv6SubnetId} onChange={(event) => set({ ipv6SubnetId: event.currentTarget.value })} />
+                          <Select label="Prefix from" description="A network whose DHCPv6 client receives the prefix." data={delegators} value={draft.ipv6From || null} error={errors.get('ipv6From')} nothingFoundMessage="No network has a DHCPv6 client." onChange={(value) => set({ ipv6From: value ?? '' })} />
+                          <TextInput label="Subnet ID" description="Hexadecimal, 1 to 4 digits: which /64 of the delegated prefix." placeholder="1" value={draft.ipv6SubnetId} error={errors.get('ipv6SubnetId')} onChange={(event) => set({ ipv6SubnetId: event.currentTarget.value })} />
                         </>
                       )}
                     </Stack>
@@ -168,7 +170,7 @@ export function InterfaceEditor({ link, segment, live, snapshot, onClose, onSess
                   <Fieldset legend="DNS">
                     <Stack gap="xs">
                       <TextInput label="DNS servers" description="For the box itself, on this network. Empty takes what DHCP gives." placeholder="1.1.1.1, 2606:4700:4700::1111" value={draft.dnsServers} error={errors.get('dns')} onChange={(event) => set({ dnsServers: event.currentTarget.value })} />
-                      {draft.dnsServers.trim() && <TextInput label="Search domains" placeholder="lan.example" value={draft.searchDomains} onChange={(event) => set({ searchDomains: event.currentTarget.value })} />}
+                      {draft.dnsServers.trim() && <TextInput label="Search domains" placeholder="lan.example" value={draft.searchDomains} error={errors.get('searchDomains')} onChange={(event) => set({ searchDomains: event.currentTarget.value })} />}
                     </Stack>
                   </Fieldset>
                 </>

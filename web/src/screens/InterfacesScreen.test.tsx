@@ -9,8 +9,8 @@ import { InterfacesScreen } from './InterfacesScreen';
 const lanPort = 'lnk_11111111-1111-4111-8111-111111111111';
 const guestVlan = 'lnk_22222222-2222-4222-8222-222222222222';
 const gone = 'lnk_33333333-3333-4333-8333-333333333333';
-const live = (ifIndex: number, name: string, linkAddress: string, addresses: string[] = []) => ({
-  ifIndex, name, linkType: 'ether', mtu: 1500, operState: 'UP', flags: ['UP'], linkAddress,
+const live = (ifIndex: number, name: string, linkAddress: string, addresses: string[] = [], kind?: string) => ({
+  ifIndex, name, linkType: 'ether', mtu: 1500, operState: 'UP', flags: ['UP'], linkAddress, permanentAddress: linkAddress, ...(kind ? { kind } : {}),
   addresses: addresses.map((address) => ({ family: 'ipv4', address, prefixLength: 24, scope: 'global' })),
 });
 const ethernet = (id: string, name: string, permanentMac: string) => ({ id, name, kind: 'ethernet', mtu: 1500, enabled: true, permanentMac });
@@ -18,11 +18,11 @@ const missingFinding = { severity: 'error', code: 'HARDWARE_MISSING', path: '/li
 
 function routes({ links, findings = [missingFinding], resolved = [{ link: lanPort, interface: 'enp1s0' }], config, extra = {} }: { links?: unknown[]; findings?: unknown[]; resolved?: unknown[]; config?: unknown; extra?: Parameters<typeof fetchRoutes>[0] } = {}) {
   return fetchRoutes({
-    ...extra,
     '/api/v1/status/links': { items: [
       live(2, 'enp1s0', '52:54:00:aa:bb:01', ['192.168.1.1']),
       live(3, 'enp2s0', '52:54:00:aa:bb:02'),
-      live(4, 'vl222222222222', '52:54:00:aa:bb:01'),
+      live(4, 'vl222222222222', '52:54:00:aa:bb:01', [], 'vlan'),
+      live(5, 'docker0', '02:42:ac:11:00:01', [], 'bridge'),
     ] },
     '/api/v1/config': config ?? { state: 'saved', savedVersion: '7', unusedSecrets: [], value: {
       links: links ?? [
@@ -38,6 +38,7 @@ function routes({ links, findings = [missingFinding], resolved = [{ link: lanPor
       management: { segment: 'seg_lan' },
     } },
     '/api/v1/preview/network?savedVersion=7': { state: 'preview', savedVersion: '7', realizable: false, resolved, files: [], findings },
+    ...extra,
   });
 }
 
@@ -211,9 +212,59 @@ it('edits an interface against the versions read when the panel opened, and says
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 });
 
-it('offers to add a port the configuration does not have', async () => {
+it('offers to add a hardware port the configuration does not have, and no virtual link', async () => {
   routes();
   render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={vi.fn()} onSessionLost={vi.fn()} />);
   expect(await screen.findByRole('button', { name: 'Add enp2s0 to the configuration' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Edit LAN port' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Add docker0 to the configuration' })).not.toBeInTheDocument();
+});
+
+it('offers no edits while the saved configuration cannot be read', async () => {
+  routes({ extra: { '/api/v1/config': () => jsonResponse(503, { error: { code: 'UNAVAILABLE', message: 'The store is busy.' } }) } });
+  render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={vi.fn()} onSessionLost={vi.fn()} />);
+  expect(await screen.findByText('The saved configuration could not be read')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /^(Edit|Add) / })).not.toBeInTheDocument();
+});
+
+it('removes an interface and its network after a second, explicit press', async () => {
+  const user = userEvent.setup();
+  const sent = vi.fn<(init: RequestInit | undefined) => Response>(() => jsonResponse(200, { savedVersion: '8' }));
+  routes({ extra: {
+    [`/api/v1/config/links/${guestVlan}`]: { version: '2', value: { id: guestVlan, name: 'Guest VLAN', kind: 'vlan', mtu: 1500, enabled: true, parent: lanPort, vlanId: 20 } },
+    '/api/v1/config/segments/seg_guest': { version: '3', value: { id: 'seg_guest', name: 'Guest', link: guestVlan, zone: 'zon_guest', addressing: { ipv4: { mode: 'dhcp' }, ipv6: { mode: 'slaac' } } } },
+    'POST /api/v1/config/changes': sent,
+  } });
+  render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={vi.fn()} onSessionLost={vi.fn()} />);
+  await user.click(await screen.findByRole('button', { name: 'Edit Guest VLAN' }));
+  const panel = await screen.findByRole('dialog');
+  await user.click(within(panel).getByRole('button', { name: 'Remove…' }));
+  expect(sent).not.toHaveBeenCalled();
+  await user.click(within(panel).getByRole('button', { name: 'Remove it' }));
+
+  await vi.waitFor(() => expect(sent).toHaveBeenCalled());
+  expect(JSON.parse(String(sent.mock.calls[0][0]?.body))).toEqual({ operations: [
+    { op: 'delete', collection: 'segments', id: 'seg_guest', expectedVersion: '3' },
+    { op: 'delete', collection: 'links', id: guestVlan, expectedVersion: '2' },
+  ] });
+});
+
+it('shows a refusal beside the field it names and keeps the panel open', async () => {
+  const user = userEvent.setup();
+  routes({ extra: {
+    [`/api/v1/config/links/${lanPort}`]: { version: '4', value: ethernet(lanPort, 'LAN port', '52:54:00:aa:bb:01') },
+    '/api/v1/config/segments/seg_lan': { version: '6', value: { id: 'seg_lan', name: 'LAN', link: lanPort, zone: 'zon_lan', addressing: { ipv4: { mode: 'static', addresses: ['192.168.1.1/24'] }, ipv6: { mode: 'none' } } } },
+    'POST /api/v1/config/changes': jsonResponse(422, { error: { code: 'VALIDATION_FAILED', message: 'Refused.', details: [{ path: '/operations/0/value/addressing/ipv4/addresses/0', message: 'Not an IPv4 prefix.' }] } }),
+  } });
+  render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={vi.fn()} onSessionLost={vi.fn()} />);
+  await user.click(await screen.findByRole('button', { name: 'Edit LAN port' }));
+  const panel = await screen.findByRole('dialog');
+  const addresses = within(panel).getByLabelText('IPv4 addresses', { exact: false });
+  await user.clear(addresses);
+  await user.type(addresses, 'nonsense');
+  await user.click(within(panel).getByRole('button', { name: 'Save interface' }));
+
+  expect(await within(panel).findByText('Not an IPv4 prefix.')).toBeInTheDocument();
+  expect(addresses).toHaveAttribute('aria-invalid', 'true');
+  expect(within(panel).getByText('Some of the fields below were refused.')).toBeInTheDocument();
 });

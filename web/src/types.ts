@@ -143,6 +143,9 @@ export interface LinkStatus {
   operState: string;
   flags: string[];
   linkAddress?: string;
+  // The kernel link kind, absent for a physical device; and the hardware address saved Ethernet links name.
+  kind?: string;
+  permanentAddress?: string;
   addresses: Array<{ family: 'ipv4' | 'ipv6'; address: string; prefixLength: number; scope: string }>;
 }
 

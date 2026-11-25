@@ -1,4 +1,4 @@
-import { ApiError } from './api';
+import { fieldErrors } from './api';
 import type { ConfigBatchOperation, LinkStatus, SavedLink, SavedObject, Segment } from './types';
 
 // What the interface panel edits: the link, and the segment that puts a network on it.
@@ -26,7 +26,7 @@ export interface InterfaceDraft {
 }
 
 // The zone option that makes a new zone from the name typed beside it.
-export const newZone = '__new';
+export const newZoneOption = '__new';
 
 type Fields = Record<string, unknown>;
 
@@ -110,34 +110,26 @@ function same(a: unknown, b: unknown): boolean {
   return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
 }
 
-// What each operation of a batch is, so a refusal shows beside the field it names.
-export type OperationTarget = 'zone' | 'link' | 'segment';
-
-export interface InterfaceChange {
-  operations: ConfigBatchOperation[];
-  targets: OperationTarget[];
-}
-
 // interfaceOperations is the one batch that makes the configuration say what the panel says: a new zone, the link,
 // and its segment created, replaced or deleted. Only what changed is sent, so an unchanged link is not rewritten.
-export function interfaceOperations(draft: InterfaceDraft, link: SavedObject<SavedLink> | undefined, segment: SavedObject<Segment> | undefined, live: LinkStatus | undefined): InterfaceChange {
+export function interfaceOperations(draft: InterfaceDraft, link: SavedObject<SavedLink> | undefined, segment: SavedObject<Segment> | undefined, live: LinkStatus | undefined): ConfigBatchOperation[] {
   const operations: ConfigBatchOperation[] = [];
-  const targets: OperationTarget[] = [];
-  const add = (target: OperationTarget, operation: ConfigBatchOperation) => { operations.push(operation); targets.push(target); };
-
+  // A PPPoE password is read as its state, not its value: left out of a replace, the engine keeps it.
+  const saved: Fields = { ...link?.value };
+  delete saved.password;
   const linkValue: Fields = link
-    ? { ...link.value, name: draft.name.trim(), enabled: draft.enabled, mtu: Number(draft.mtu) }
-    : { name: draft.name.trim(), kind: 'ethernet', permanentMac: (live?.linkAddress ?? '').toLowerCase(), mtu: Number(draft.mtu), enabled: draft.enabled };
-  if (!link) add('link', { op: 'create', collection: 'links', localId: 'link', value: linkValue });
-  else if (!same(linkValue, link.value)) add('link', { op: 'replace', collection: 'links', id: link.value.id, expectedVersion: link.version, value: linkValue });
+    ? { ...saved, name: draft.name.trim(), enabled: draft.enabled, mtu: Number(draft.mtu) }
+    : { name: draft.name.trim(), kind: 'ethernet', permanentMac: (live?.permanentAddress ?? '').toLowerCase(), mtu: Number(draft.mtu), enabled: draft.enabled };
+  if (!link) operations.push({ op: 'create', collection: 'links', localId: 'link', value: linkValue });
+  else if (!same(linkValue, saved)) operations.push({ op: 'replace', collection: 'links', id: link.value.id, expectedVersion: link.version, value: linkValue });
 
   if (!draft.assigned) {
-    if (segment) add('segment', { op: 'delete', collection: 'segments', id: segment.value.id, expectedVersion: segment.version });
-    return { operations, targets };
+    if (segment) operations.push({ op: 'delete', collection: 'segments', id: segment.value.id, expectedVersion: segment.version });
+    return operations;
   }
   let zone = draft.zone;
-  if (zone === newZone) {
-    add('zone', { op: 'create', collection: 'zones', localId: 'zone', value: { name: draft.newZone.trim() } });
+  if (zone === newZoneOption) {
+    operations.push({ op: 'create', collection: 'zones', localId: 'zone', value: { name: draft.newZone.trim() } });
     zone = '@zone';
   }
   const savedAddressing = (segment?.value.addressing ?? {}) as Fields;
@@ -154,9 +146,9 @@ export function interfaceOperations(draft: InterfaceDraft, link: SavedObject<Sav
     addressing.dns = dns;
   }
   const segmentValue: Fields = { ...segment?.value, name: draft.segmentName.trim(), link: link?.value.id ?? '@link', zone, addressing };
-  if (!segment) add('segment', { op: 'create', collection: 'segments', value: segmentValue });
-  else if (!same(segmentValue, segment.value)) add('segment', { op: 'replace', collection: 'segments', id: segment.value.id, expectedVersion: segment.version, value: segmentValue });
-  return { operations, targets };
+  if (!segment) operations.push({ op: 'create', collection: 'segments', value: segmentValue });
+  else if (!same(segmentValue, segment.value)) operations.push({ op: 'replace', collection: 'segments', id: segment.value.id, expectedVersion: segment.version, value: segmentValue });
+  return operations;
 }
 
 // removeOperations takes the interface out of the configuration: its segment, then its link.
@@ -167,22 +159,24 @@ export function removeOperations(link: SavedObject<SavedLink>, segment: SavedObj
   ];
 }
 
-// The panel's field for each part of an object the engine may refuse.
-const fieldOf: Record<OperationTarget, Array<[RegExp, string]>> = {
-  zone: [[/^\/name/, 'newZone']],
-  link: [[/^\/name/, 'name'], [/^\/mtu/, 'mtu']],
-  segment: [[/^\/name/, 'segmentName'], [/^\/zone/, 'zone'], [/^\/addressing\/ipv4/, 'ipv4'], [/^\/addressing\/ipv6/, 'ipv6'], [/^\/addressing\/dns/, 'dns']],
+// The panel's field for each part of an object the engine may refuse, by the object's collection; the first match wins.
+const fieldOf: Record<string, Array<[RegExp, string]>> = {
+  zones: [[/^\/name/, 'newZone']],
+  links: [[/^\/name/, 'name'], [/^\/mtu/, 'mtu']],
+  segments: [
+    [/^\/name/, 'segmentName'], [/^\/zone/, 'zone'],
+    [/^\/addressing\/ipv4\/addresses/, 'ipv4Addresses'], [/^\/addressing\/ipv4\/gateway/, 'ipv4Gateway'], [/^\/addressing\/ipv4/, 'ipv4'],
+    [/^\/addressing\/ipv6\/addresses/, 'ipv6Addresses'], [/^\/addressing\/ipv6\/gateway/, 'ipv6Gateway'], [/^\/addressing\/ipv6\/requestPrefixLength/, 'ipv6PrefixLength'],
+    [/^\/addressing\/ipv6\/from/, 'ipv6From'], [/^\/addressing\/ipv6\/subnetId/, 'ipv6SubnetId'], [/^\/addressing\/ipv6/, 'ipv6'],
+    [/^\/addressing\/dns\/searchDomains/, 'searchDomains'], [/^\/addressing\/dns/, 'dns'],
+  ],
 };
 
 // interfaceErrors puts each of the engine's refusals of a batch beside its field; the rest go above the form.
-export function interfaceErrors(error: unknown, targets: OperationTarget[]) {
-  const said = new Map<string, Set<string>>();
-  if (!(error instanceof ApiError)) return new Map<string, string>();
-  for (const detail of error.details) {
-    const match = /^\/operations\/(\d+)\/value(\/.*)?$/.exec(detail.path ?? '');
-    const target = match ? targets[Number(match[1])] : undefined;
-    const name = (target && fieldOf[target].find(([pattern]) => pattern.test(match?.[2] ?? ''))?.[1]) ?? '';
-    said.set(name, (said.get(name) ?? new Set()).add(detail.message));
-  }
-  return new Map([...said].map(([name, messages]) => [name, [...messages].join(' ')]));
+export function interfaceErrors(error: unknown, operations: ConfigBatchOperation[]) {
+  return fieldErrors(error, (path) => {
+    const match = /^\/operations\/(\d+)\/value(\/.*)?$/.exec(path);
+    const fields = match ? fieldOf[operations[Number(match[1])]?.collection] : undefined;
+    return fields?.find(([pattern]) => pattern.test(match?.[2] ?? ''))?.[1] ?? '';
+  });
 }

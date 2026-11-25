@@ -13,6 +13,10 @@ interface InterfacesScreenProps { api: ApiClient; session: Session; onSaved(): v
 // What the panel opens on: the saved objects as read just now, with their versions, and the port on the box.
 interface Editing { link?: SavedObject<SavedLink>; segment?: SavedObject<Segment>; live?: LinkStatus }
 
+// A port can be added when it is hardware, which a saved link names by its permanent address. A VLAN, bridge or
+// veth is a kind of link of its own, and the loopback is no Ethernet device.
+const addable = (live?: LinkStatus) => live?.linkType === 'ether' && !live.kind && Boolean(live.permanentAddress);
+
 const unboundLabel: Record<string, string> = { HARDWARE_MISSING: 'Missing', HARDWARE_AMBIGUOUS: 'Unresolved' };
 
 interface Row { key: string; live?: LinkStatus; saved?: SavedLink; state?: string; finding?: string; conflict?: boolean }
@@ -44,6 +48,7 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
   const [editing, setEditing] = useState<Editing>();
   const [opening, setOpening] = useState('');
   const [error, setError] = useState('');
+  const [saveError, setSaveError] = useState('');
   const load = useCallback(async () => {
     let savedError = '';
     // The saved side is optional: when it fails, the live links still show.
@@ -74,8 +79,8 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
   // The pill by an interface's name is the dashboard's: one rule for which zone an interface is in.
   const zones = saved ? zonesByInterface(saved.snapshot, saved.preview) : undefined;
   // The panel reads the objects again, so a save is guarded by the versions they have now.
-  const edit = async (key: string, live: LinkStatus | undefined, link: SavedLink | undefined) => {
-    const segment = link && segmentOf(link);
+  const edit = async (key: string, live: LinkStatus | undefined, link: SavedLink | undefined, segment: Segment | undefined) => {
+    if (opening) return;
     setOpening(key);
     setError('');
     try {
@@ -95,8 +100,8 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
     onSaved();
     void resource.reload();
   };
-  // A port can be added when the box can say which hardware it is; a virtual or loopback link cannot.
-  const addable = (live: LinkStatus | undefined) => Boolean(live?.linkAddress) && live?.linkType === 'ether';
+  // Edits start from the saved configuration: without it, nothing on the page says what is saved.
+  const editable = canWrite && Boolean(saved);
 
   return (
     <Stack>
@@ -105,11 +110,12 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
         <Button size="xs" variant="default" loading={resource.loading} onClick={() => void resource.reload()}>Refresh</Button>
       </Group>
       {error && <Alert color="red" role="alert" title="The interface could not be opened" withCloseButton onClose={() => setError('')}>{error}</Alert>}
+      {saveError && <Alert color="red" role="alert" title="The interface was not saved" withCloseButton onClose={() => setSaveError('')}>{saveError}</Alert>}
       {resource.error && <Alert color="red" role="alert" title="Interfaces request failed">{resource.error}</Alert>}
       {savedError && <Alert color="red" role="alert" title="The saved configuration could not be read">{savedError} Only live links are shown.</Alert>}
       {!canReadConfig && <Alert color="gray" role="status">Your account cannot read the saved configuration, so only live links are shown.</Alert>}
       {rows.length === 0 ? <Alert role="status">The box reports no network links.</Alert> : (
-        <ScrollArea><Table verticalSpacing="sm" withTableBorder className="data-table"><Table.Thead><Table.Tr><Table.Th>Interface</Table.Th><Table.Th>State</Table.Th><Table.Th>Addresses</Table.Th>{showSaved && <><Table.Th>Saved configuration</Table.Th><Table.Th>Addressing</Table.Th></>}{canWrite && <Table.Th><VisuallyHidden>Actions</VisuallyHidden></Table.Th>}</Table.Tr></Table.Thead><Table.Tbody>
+        <ScrollArea><Table verticalSpacing="sm" withTableBorder className="data-table"><Table.Thead><Table.Tr><Table.Th>Interface</Table.Th><Table.Th>State</Table.Th><Table.Th>Addresses</Table.Th>{showSaved && <><Table.Th>Saved configuration</Table.Th><Table.Th>Addressing</Table.Th></>}{editable && <Table.Th><VisuallyHidden>Actions</VisuallyHidden></Table.Th>}</Table.Tr></Table.Thead><Table.Tbody>
           {rows.map(({ key, live, saved: link, state, finding, conflict }) => {
             const segment = link && segmentOf(link);
             return (
@@ -135,11 +141,12 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
                     <Table.Td data-label="Addressing">{segment ? <><Text size="sm">IPv4 {segment.addressing.ipv4.mode}</Text><Text size="sm">IPv6 {segment.addressing.ipv6.mode}</Text></> : <Text c="dimmed">—</Text>}</Table.Td>
                   </>
                 )}
-                {canWrite && (
+                {editable && (
                   <Table.Td data-label="">
+                    {/* Two saved links on one port are a conflict to remove first; the row's badge says so. */}
                     {link
-                      ? <Button size="xs" variant="default" loading={opening === key} disabled={conflict} aria-label={`Edit ${link.name}`} onClick={() => void edit(key, live, link)}>Edit</Button>
-                      : addable(live) && <Button size="xs" variant="light" loading={opening === key} aria-label={`Add ${live?.name} to the configuration`} onClick={() => void edit(key, live, undefined)}>Add</Button>}
+                      ? !conflict && <Button size="xs" variant="default" loading={opening === key} aria-label={`Edit ${link.name}`} onClick={() => void edit(key, live, link, segment)}>Edit</Button>
+                      : addable(live) && <Button size="xs" variant="light" loading={opening === key} aria-label={`Add ${live?.name} to the configuration`} onClick={() => void edit(key, live, undefined, undefined)}>Add</Button>}
                   </Table.Td>
                 )}
               </Table.Tr>
@@ -149,7 +156,7 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
       )}
       {editing && saved && (
         <InterfaceEditor key={editing.link?.value.id ?? editing.live?.name} {...editing} snapshot={saved.snapshot} onClose={() => setEditing(undefined)}
-          onSessionLost={onSessionLost} onAbandoned={setError} onSave={save} />
+          onSessionLost={onSessionLost} onAbandoned={setSaveError} onSave={save} />
       )}
     </Stack>
   );

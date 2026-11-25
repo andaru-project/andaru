@@ -62,11 +62,12 @@ export function apiErrorMessage(error: unknown): string {
 // fieldErrors sorts an engine refusal by the form field each detail is about. The engine names fields by path
 // ("/from/zones/0"); field picks the form's field out of one, and a detail about no field of the form goes
 // under "", to show above it. A field refused more than once for one reason says it once.
-export function fieldErrors(error: unknown, field: RegExp) {
+export function fieldErrors(error: unknown, field: RegExp | ((path: string) => string)) {
   const said = new Map<string, Set<string>>();
   if (!(error instanceof ApiError)) return new Map<string, string>();
   for (const detail of error.details) {
-    const name = field.exec(detail.path ?? '')?.[1] ?? '';
+    const path = detail.path ?? '';
+    const name = typeof field === 'function' ? field(path) : field.exec(path)?.[1] ?? '';
     said.set(name, (said.get(name) ?? new Set()).add(detail.message));
   }
   return new Map([...said].map(([name, messages]) => [name, [...messages].join(' ')]));
