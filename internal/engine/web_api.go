@@ -207,9 +207,20 @@ func (h *webAPI) login(w http.ResponseWriter, r *http.Request, source string) {
 	if !noQuery(w, r) || !h.requireOrigin(w, r) {
 		return
 	}
-	if cookieCredentialPresent(r) || len(r.Header.Values("Authorization")) != 0 {
+	if len(r.Header.Values("Authorization")) != 0 {
 		writeError(w, r, http.StatusBadRequest, "AMBIGUOUS_CREDENTIALS", "Login requests cannot carry an existing credential.")
 		return
+	}
+	// A cookie that no longer authenticates (an ended session) is replaced by the new one; the browser cannot drop it
+	// on its own, since it is HttpOnly.
+	if cookieCredentialPresent(r) {
+		if _, _, _, _, _, err := h.readCookiePrincipal(r); err == nil {
+			writeError(w, r, http.StatusBadRequest, "AMBIGUOUS_CREDENTIALS", "Login requests cannot carry an existing credential.")
+			return
+		} else if !errors.Is(err, identity.ErrAuthentication) {
+			writeError(w, r, http.StatusServiceUnavailable, "AUTHENTICATION_UNAVAILABLE", "Authentication is temporarily unavailable.")
+			return
+		}
 	}
 	_, request, ok := decodeIdentityBody[webLoginRequest](w, r, webLoginBodyLimit, "login", "password")
 	if !ok {

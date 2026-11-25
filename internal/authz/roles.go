@@ -87,11 +87,13 @@ func (s Snapshot) Resolve(roleIDs []string) []Capability {
 	return result
 }
 
+// Digest fingerprints the custom roles a configuration defines. The built-in roles are left out: they come with
+// the software, so an upgrade that changes them changes no configuration's authorization.
 func Digest(custom []Role) (string, error) {
 	if err := ValidateRoles(custom); err != nil {
 		return "", err
 	}
-	roles := append(BuiltIns(), cloneRoles(custom)...)
+	roles := cloneRoles(custom)
 	for i := range roles {
 		slices.Sort(roles[i].Capabilities)
 	}

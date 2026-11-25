@@ -1,9 +1,19 @@
 package authz
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"slices"
 	"testing"
 )
+
+// Built-in roles ship with the software: an upgrade that changes them must not change any configuration's digest.
+func TestDigestLeavesTheBuiltInRolesOut(t *testing.T) {
+	want := sha256.Sum256([]byte("[]"))
+	if got, err := Digest(nil); err != nil || got != hex.EncodeToString(want[:]) {
+		t.Fatalf("Digest(nil) = %q, error=%v; want the digest of no roles", got, err)
+	}
+}
 
 func TestCapabilityCatalogAndBuiltIns(t *testing.T) {
 	catalog := Catalog()

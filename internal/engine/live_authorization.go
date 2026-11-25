@@ -31,16 +31,12 @@ func initializeAuthorizationState(ctx context.Context, stateDir string) error {
 			return err
 		}
 		defer lock.Close()
-		state, err := lock.Read()
-		if err == nil {
-			if state.LiveDigest != digest {
-				return fmt.Errorf("%w: live authorization digest mismatch", errLiveAuthorizationUnavailable)
-			}
-			return nil
-		}
-		if !errors.Is(err, authz.ErrStateUnavailable) {
+		_, err = lock.Read()
+		if err != nil && !errors.Is(err, authz.ErrStateUnavailable) {
 			return err
 		}
+		// A live digest the state does not hold, as an upgrade that changes how digests are computed leaves, moves the
+		// epoch on: every session ends and people sign in again, instead of no one getting in.
 		_, err = lock.Advance(digest)
 		return err
 	})
@@ -91,8 +87,10 @@ func liveRoleSnapshot(ctx context.Context, stateDir string, configuration *confi
 			custom = append(custom, role)
 		}
 	}
+	// Not checked against live.AuthorizationDigest: a saved version's roles never change, but the digest of a
+	// generation applied by an older release may have been computed differently.
 	snapshot, err := authz.NewSnapshot(custom)
-	if err != nil || snapshot.Digest != live.AuthorizationDigest {
+	if err != nil {
 		return authz.Snapshot{}, generation.Generation{}, errors.Join(errLiveAuthorizationUnavailable, err)
 	}
 	return snapshot, live, nil
