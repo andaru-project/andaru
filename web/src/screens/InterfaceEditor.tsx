@@ -164,6 +164,7 @@ export function InterfaceEditor({ link, segment, live, snapshot, onClose, onSess
                         <>
                           <Select label="Prefix from" description="A network whose DHCPv6 client receives the prefix." data={delegators} value={draft.ipv6From || null} error={errors.get('ipv6From')} nothingFoundMessage="No network has a DHCPv6 client." onChange={(value) => set({ ipv6From: value ?? '' })} />
                           <TextInput label="Subnet ID" description="Hexadecimal, 1 to 4 digits: which /64 of the delegated prefix." placeholder="1" value={draft.ipv6SubnetId} error={errors.get('ipv6SubnetId')} onChange={(event) => set({ ipv6SubnetId: event.currentTarget.value })} />
+                          <TextInput label="Static IPv6 addresses" description="Optional, beside the delegated prefix, such as a unique local address. The DNS service answers on the first." placeholder="fd00:1::1/64" value={draft.ipv6Addresses} error={errors.get('ipv6Addresses')} onChange={(event) => set({ ipv6Addresses: event.currentTarget.value })} />
                         </>
                       )}
                     </Stack>

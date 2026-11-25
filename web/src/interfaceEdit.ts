@@ -90,13 +90,20 @@ function ipv4Of(draft: InterfaceDraft, saved: Fields | undefined): Fields {
 }
 
 function ipv6Of(draft: InterfaceDraft, saved: Fields | undefined): Fields {
-  // Without IPv6 there is nothing to advertise: the engine refuses router advertisements on a network with none.
-  const out = family(saved, draft.ipv6Mode, draft.ipv6Mode === 'none' ? [] : ['ra']);
-  // A delegated prefix's lifetimes are the upstream lease's, and the engine refuses them set by hand.
-  if (draft.ipv6Mode === 'delegated' && saved?.mode !== 'delegated' && out.ra) {
+  const out = family(saved, draft.ipv6Mode, ['ra']);
+  if (out.ra) {
     const ra: Fields = { ...(out.ra as Fields) };
-    delete ra.validLifetime;
-    delete ra.preferredLifetime;
+    // Without IPv6 there is nothing to advertise, and the engine refuses advertisements on such a network: they are
+    // turned off, their other settings kept for when IPv6 returns. The older form says it with enabled.
+    if (draft.ipv6Mode === 'none') {
+      if ('enabled' in ra) ra.enabled = false;
+      else ra.mode = 'disabled';
+    }
+    // A delegated prefix's lifetimes are the upstream lease's, and the engine refuses them set by hand.
+    if (draft.ipv6Mode === 'delegated') {
+      delete ra.validLifetime;
+      delete ra.preferredLifetime;
+    }
     out.ra = ra;
   }
   if (draft.ipv6Mode === 'static') {
@@ -107,7 +114,8 @@ function ipv6Of(draft: InterfaceDraft, saved: Fields | undefined): Fields {
   } else if (draft.ipv6Mode === 'delegated') {
     put(out, 'from', draft.ipv6From);
     put(out, 'subnetId', draft.ipv6SubnetId.trim());
-    // Addresses within a delegated prefix are not shown here: they stay as saved, and a new mode starts without.
+    // Static addresses beside the delegated prefix, such as a unique local one.
+    put(out, 'addresses', words(draft.ipv6Addresses));
   }
   return out;
 }
