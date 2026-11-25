@@ -139,6 +139,13 @@ it('applies the stored layout: its order, its hidden widgets, and a widget new s
   await waitFor(() => expect(titles()).toEqual(['IPv6 prefixes', 'System', 'Interfaces', 'Resources', 'Network activity']));
 });
 
+it('applies an arrangement made by hand at this column count over the order', async () => {
+  // jsdom lays nothing out, so the dashboard has one column: an arrangement for one column applies, one for three does not.
+  layoutRoutes({ dashboard: { order: ['system', 'resources', 'interfaces', 'traffic', 'prefixes'], columns: { 1: [['traffic', 'system', 'prefixes', 'interfaces', 'resources']], 3: [['system'], ['resources'], ['interfaces', 'traffic', 'prefixes']] } } });
+  await mount(everything);
+  await waitFor(() => expect(titles()).toEqual(['Network activity', 'System', 'IPv6 prefixes', 'Interfaces', 'Resources']));
+});
+
 it('stays locked until asked: nothing moves or hides by accident', async () => {
   layoutRoutes({ dashboard: { hidden: ['interfaces'] } });
   await mount(everything);
@@ -215,8 +222,41 @@ it('moves a widget by its grip with the keyboard, and saves the new order', asyn
   await userEvent.keyboard('{ArrowRight}');
   await userEvent.keyboard('{Enter}');
   await waitFor(() => expect(titles()).toEqual(['System', 'Interfaces', 'Network activity', 'Resources', 'IPv6 prefixes']));
-  await waitFor(() => expect(saves(fetchMock)).toEqual([{ dashboard: { order: ['system', 'interfaces', 'traffic', 'resources', 'prefixes', 'activity', 'notifications'], hidden: [] } }]));
+  await waitFor(() => expect(saves(fetchMock)).toEqual([{ dashboard: { order: ['system', 'interfaces', 'traffic', 'resources', 'prefixes', 'activity', 'notifications'], hidden: [], columns: { 1: [['system', 'interfaces', 'traffic', 'resources', 'prefixes', 'activity', 'notifications']] } } }]));
   expect(screen.getByRole('status', { hidden: true })).toHaveTextContent('Dropped Resources at position 4 of 5.');
+  rect.mockRestore();
+});
+
+it('keeps a hidden widget in its place in the arrangement when another moves', async () => {
+  const rect = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+    const index = [...document.querySelectorAll('.widget')].indexOf(this.closest('.widget') ?? this);
+    return DOMRect.fromRect(index < 0 ? {} : { x: index * 400, y: 0, width: 380, height: 200 });
+  });
+  const fetchMock = layoutRoutes({ dashboard: { hidden: ['interfaces'], columns: { 1: [['system', 'interfaces', 'resources', 'traffic', 'prefixes']] } } });
+  await mount(everything);
+  await unlock();
+  screen.getByRole('button', { name: 'Move Resources' }).focus();
+  await userEvent.keyboard('{Enter}');
+  await userEvent.keyboard('{ArrowRight}');
+  await userEvent.keyboard('{Enter}');
+  await waitFor(() => expect(titles().slice(0, 4)).toEqual(['System', 'Network activity', 'Resources', 'IPv6 prefixes']));
+  await waitFor(() => expect((saves(fetchMock).at(-1) as { dashboard?: { columns?: unknown } } | undefined)?.dashboard?.columns).toEqual({ 1: [['system', 'interfaces', 'traffic', 'resources', 'prefixes', 'activity', 'notifications']] }));
+  rect.mockRestore();
+});
+
+it('keeps a hidden widget in its place in the first arrangement made at a column count', async () => {
+  const rect = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+    const index = [...document.querySelectorAll('.widget')].indexOf(this.closest('.widget') ?? this);
+    return DOMRect.fromRect(index < 0 ? {} : { x: index * 400, y: 0, width: 380, height: 200 });
+  });
+  const fetchMock = layoutRoutes({ dashboard: { hidden: ['interfaces'] } });
+  await mount(everything);
+  await unlock();
+  screen.getByRole('button', { name: 'Move Resources' }).focus();
+  await userEvent.keyboard('{Enter}');
+  await userEvent.keyboard('{ArrowRight}');
+  await userEvent.keyboard('{Enter}');
+  await waitFor(() => expect((saves(fetchMock).at(-1) as { dashboard?: { columns?: unknown } } | undefined)?.dashboard?.columns).toEqual({ 1: [['system', 'interfaces', 'traffic', 'resources', 'prefixes', 'activity', 'notifications']] }));
   rect.mockRestore();
 });
 
