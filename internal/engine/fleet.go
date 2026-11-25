@@ -348,6 +348,11 @@ func (f *fleetService) handleUpsertTarget(w http.ResponseWriter, r *http.Request
 		writeError(w, r, http.StatusBadRequest, "INVALID_TARGET", "Unix socket endpoints are not permitted for engine-hosted fleet targets.")
 		return
 	}
+	// local:// is the built-in target's, which runs diagnostics in process.
+	if strings.HasPrefix(strings.ToLower(req.Endpoint), "local://") {
+		writeError(w, r, http.StatusBadRequest, "INVALID_TARGET", "Local endpoints are reserved for the built-in local Andaru host.")
+		return
+	}
 
 	pollInterval := 30 * time.Second
 	if req.PollInterval != "" {

@@ -195,6 +195,13 @@ func TestFleetAPIAuthzAndTargetLifecycle(t *testing.T) {
 		t.Fatalf("POST /api/v1/fleet/targets with StatusRead = %d, want 403", rec.Code)
 	}
 
+	// No user target may claim the engine's own in-process endpoint.
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, withRoot(httptest.NewRequest(http.MethodPost, "/api/v1/fleet/targets", strings.NewReader(`{"id":"me","driver":"andaru","endpoint":"LOCAL://engine"}`))))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("POST /api/v1/fleet/targets with local://engine = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+
 	// Trigger local host refresh and verify local Andaru appears in topology and VLAN flow.
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, withRoot(httptest.NewRequest(http.MethodPost, "/api/v1/fleet/targets/local/poll", nil)))
