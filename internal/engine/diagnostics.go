@@ -73,6 +73,10 @@ func (d *localDiagnostics) Run(ctx context.Context, req npmodel.DiagnosticReques
 		said := out.String()
 		out = cappedBuffer{}
 		if err = d.readJournal(ctx, unit, &out); err != nil {
+			// A caller that left gets its own error, not the journal read it cut short.
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			return nil, err
 		}
 		_, _ = out.Write([]byte(said))
@@ -116,22 +120,22 @@ func diagnosticCommand(req npmodel.DiagnosticRequest, host string) ([]string, ti
 func (d *localDiagnostics) readJournal(ctx context.Context, unit string, out io.Writer) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	for _, argv := range [][]string{
-		{"/usr/bin/journalctl", "--sync"},
-		{"/usr/bin/journalctl", "--quiet", "--no-pager", "--output=cat", "_SYSTEMD_UNIT=" + unit, "_TRANSPORT=stdout"},
-	} {
-		var said cappedBuffer
-		w := io.Writer(&said)
-		if argv[1] != "--sync" {
-			w = io.MultiWriter(out, &said)
-		}
-		code, err := d.exec(ctx, argv, w)
-		if err == nil && code != 0 {
-			err = fmt.Errorf("exit status %d: %s", code, strings.TrimSpace(said.String()))
-		}
-		if err != nil {
-			return fmt.Errorf("read the diagnostic's output from the journal: %w", err)
-		}
+	if err := d.journal(ctx, io.Discard, "--sync"); err != nil {
+		return err
+	}
+	return d.journal(ctx, out, "--quiet", "--no-pager", "--output=cat", "_SYSTEMD_UNIT="+unit, "_TRANSPORT=stdout")
+}
+
+// journal runs journalctl with args, its output into out; a failure says journalctl's last line.
+func (d *localDiagnostics) journal(ctx context.Context, out io.Writer, args ...string) error {
+	var said cappedBuffer
+	code, err := d.exec(ctx, append([]string{"/usr/bin/journalctl"}, args...), io.MultiWriter(out, &said))
+	if err == nil && code != 0 {
+		lines := strings.Split(strings.TrimSpace(said.String()), "\n")
+		err = fmt.Errorf("exit status %d: %s", code, lines[len(lines)-1])
+	}
+	if err != nil {
+		return fmt.Errorf("read the diagnostic's output from the journal: %w", err)
 	}
 	return nil
 }

@@ -105,7 +105,7 @@ func TestLocalDiagnosticsRun(t *testing.T) {
 	if !strings.HasPrefix(unit, "andaru-diagnostic-") || !slices.Equal(read, []string{"/usr/bin/journalctl", "--quiet", "--no-pager", "--output=cat", "_SYSTEMD_UNIT=" + unit, "_TRANSPORT=stdout"}) {
 		t.Fatalf("unit %q, journal read %q", unit, read)
 	}
-	// The tool runs in a transient unit as nobody with no capabilities, after the unit's own options.
+	// The tool runs in a transient unit as andaru-diag with no capabilities, after the unit's own options.
 	want := []string{"/usr/bin/systemd-run", "--quiet", "--wait", "--collect", "--unit=" + unit, "--service-type=exec",
 		"-p", "RuntimeMaxSec=22",
 		"-p", "User=andaru-diag",

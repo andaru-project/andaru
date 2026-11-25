@@ -39,7 +39,7 @@ func TestLocalDiagnosticsRealTools(t *testing.T) {
 	}
 }
 
-// The transient unit runs ping and traceroute with no capabilities and a dynamic user; it needs systemd as PID 1.
+// The transient unit runs ping and traceroute as a fixed user with no capabilities; it needs systemd as PID 1.
 func TestLocalDiagnosticsTransientUnit(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("systemd-run needs root")
@@ -56,8 +56,11 @@ func TestLocalDiagnosticsTransientUnit(t *testing.T) {
 	}
 	for _, req := range reqs {
 		d := newLocalDiagnostics()
-		// The image declares andaru-diag; a host without it runs the unit as nobody.
+		// The image declares andaru-diag; a development host without it runs the unit as nobody.
 		if _, err := user.Lookup(diagnosticUser); err != nil {
+			if os.Getenv("ANDARU_TEST_REQUIRE_TOOLS") == "1" {
+				t.Fatalf("%s does not exist: %v", diagnosticUser, err)
+			}
 			d.user = "nobody"
 		}
 		if res, err := d.Run(context.Background(), req); err != nil || !res.OK {
