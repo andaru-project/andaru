@@ -91,3 +91,11 @@ it('drops a static address and gateway when the mode becomes DHCP', () => {
   expect(operations[0].value?.addressing).toMatchObject({ ipv4: { mode: 'dhcp' } });
   expect((operations[0].value?.addressing as { ipv4: object }).ipv4).toEqual({ mode: 'dhcp' });
 });
+
+it('leaves router advertisements behind with IPv6, and their lifetimes behind for a delegated prefix', () => {
+  const lan = { ...segment, value: { ...segment.value, addressing: { ipv4: { mode: 'static', addresses: ['192.168.1.1/24'] }, ipv6: { mode: 'static', addresses: ['2001:db8::1/64'], ra: { mode: 'unmanaged', validLifetime: 3600, preferredLifetime: 1800 } } } } } as unknown as SavedObject<Segment>;
+  const draft = draftOf(link.value, lan.value, undefined);
+  expect((interfaceOperations({ ...draft, ipv6Mode: 'none' }, link, lan, undefined)[0].value?.addressing as { ipv6: object }).ipv6).toEqual({ mode: 'none' });
+  expect((interfaceOperations({ ...draft, ipv6Mode: 'delegated', ipv6From: 'seg_wan', ipv6SubnetId: '1' }, link, lan, undefined)[0].value?.addressing as { ipv6: object }).ipv6)
+    .toEqual({ mode: 'delegated', ra: { mode: 'unmanaged' }, from: 'seg_wan', subnetId: '1' });
+});

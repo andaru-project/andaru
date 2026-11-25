@@ -72,7 +72,7 @@ function put(target: Fields, key: string, value: unknown) {
 }
 
 // An addressing family keeps what the panel does not show (router advertisements, DHCPv6 options) while its mode
-// stays; a new mode starts over, keeping only the router advertisements, which every IPv6 mode carries.
+// stays; a new mode starts over, keeping only the router advertisements, which IPv6 modes other than none carry.
 function family(saved: Fields | undefined, mode: string, keep: string[]): Fields {
   if (saved?.mode === mode) return { ...saved };
   const out: Fields = { mode };
@@ -90,7 +90,15 @@ function ipv4Of(draft: InterfaceDraft, saved: Fields | undefined): Fields {
 }
 
 function ipv6Of(draft: InterfaceDraft, saved: Fields | undefined): Fields {
-  const out = family(saved, draft.ipv6Mode, ['ra']);
+  // Without IPv6 there is nothing to advertise: the engine refuses router advertisements on a network with none.
+  const out = family(saved, draft.ipv6Mode, draft.ipv6Mode === 'none' ? [] : ['ra']);
+  // A delegated prefix's lifetimes are the upstream lease's, and the engine refuses them set by hand.
+  if (draft.ipv6Mode === 'delegated' && saved?.mode !== 'delegated' && out.ra) {
+    const ra: Fields = { ...(out.ra as Fields) };
+    delete ra.validLifetime;
+    delete ra.preferredLifetime;
+    out.ra = ra;
+  }
   if (draft.ipv6Mode === 'static') {
     put(out, 'addresses', words(draft.ipv6Addresses));
     put(out, 'gateway', draft.ipv6Gateway.trim());
@@ -99,7 +107,7 @@ function ipv6Of(draft: InterfaceDraft, saved: Fields | undefined): Fields {
   } else if (draft.ipv6Mode === 'delegated') {
     put(out, 'from', draft.ipv6From);
     put(out, 'subnetId', draft.ipv6SubnetId.trim());
-    put(out, 'addresses', words(draft.ipv6Addresses));
+    // Addresses within a delegated prefix are not shown here: they stay as saved, and a new mode starts without.
   }
   return out;
 }
