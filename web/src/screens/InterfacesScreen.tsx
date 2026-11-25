@@ -1,13 +1,17 @@
-import { Alert, Badge, Button, Group, Loader, ScrollArea, Stack, Table, Text, Title } from '@mantine/core';
-import { useCallback } from 'react';
+import { Alert, Badge, Button, Group, Loader, ScrollArea, Stack, Table, Text, Title, VisuallyHidden } from '@mantine/core';
+import { useCallback, useState } from 'react';
 import { ApiClient, reportError } from '../api';
-import { stateColor, stateLabel, type LinkStatus, type Preview, type SavedLink, type Segment, type Session, type Snapshot } from '../types';
+import { stateColor, stateLabel, type ConfigBatchOperation, type LinkStatus, type Preview, type SavedLink, type SavedObject, type Segment, type Session, type Snapshot } from '../types';
 import { useResource, useVisiblePoll } from '../useResource';
 import { bindingFindings, kernelName, zonesByInterface } from '../zones';
 import { Address } from './Address';
+import { InterfaceEditor } from './InterfaceEditor';
 import { ZoneBadge } from './ZoneBadge';
 
-interface InterfacesScreenProps { api: ApiClient; session: Session; onSessionLost(): void }
+interface InterfacesScreenProps { api: ApiClient; session: Session; onSaved(): void; onSessionLost(): void }
+
+// What the panel opens on: the saved objects as read just now, with their versions, and the port on the box.
+interface Editing { link?: SavedObject<SavedLink>; segment?: SavedObject<Segment>; live?: LinkStatus }
 
 const unboundLabel: Record<string, string> = { HARDWARE_MISSING: 'Missing', HARDWARE_AMBIGUOUS: 'Unresolved' };
 
@@ -34,8 +38,12 @@ function join(links: LinkStatus[], snapshot: Snapshot, preview: Preview): Row[] 
   ];
 }
 
-export function InterfacesScreen({ api, session, onSessionLost }: InterfacesScreenProps) {
+export function InterfacesScreen({ api, session, onSaved, onSessionLost }: InterfacesScreenProps) {
   const canReadConfig = session.capabilities.includes('configuration.read');
+  const canWrite = canReadConfig && session.capabilities.includes('configuration.write');
+  const [editing, setEditing] = useState<Editing>();
+  const [opening, setOpening] = useState('');
+  const [error, setError] = useState('');
   const load = useCallback(async () => {
     let savedError = '';
     // The saved side is optional: when it fails, the live links still show.
@@ -65,6 +73,30 @@ export function InterfacesScreen({ api, session, onSessionLost }: InterfacesScre
   const zoneName = (id: string) => saved?.snapshot.value.zones.find((zone) => zone.id === id)?.name ?? id;
   // The pill by an interface's name is the dashboard's: one rule for which zone an interface is in.
   const zones = saved ? zonesByInterface(saved.snapshot, saved.preview) : undefined;
+  // The panel reads the objects again, so a save is guarded by the versions they have now.
+  const edit = async (key: string, live: LinkStatus | undefined, link: SavedLink | undefined) => {
+    const segment = link && segmentOf(link);
+    setOpening(key);
+    setError('');
+    try {
+      const [savedLink, savedSegment] = await Promise.all([
+        link ? api.configObject<SavedLink>('links', link.id) : Promise.resolve(undefined),
+        segment ? api.configObject<Segment>('segments', segment.id) : Promise.resolve(undefined),
+      ]);
+      setEditing({ link: savedLink, segment: savedSegment, live });
+    } catch (failure) {
+      reportError(failure, onSessionLost, setError);
+    } finally {
+      setOpening('');
+    }
+  };
+  const save = async (operations: ConfigBatchOperation[]) => {
+    await api.applyConfigChanges(operations);
+    onSaved();
+    void resource.reload();
+  };
+  // A port can be added when the box can say which hardware it is; a virtual or loopback link cannot.
+  const addable = (live: LinkStatus | undefined) => Boolean(live?.linkAddress) && live?.linkType === 'ether';
 
   return (
     <Stack>
@@ -72,11 +104,12 @@ export function InterfacesScreen({ api, session, onSessionLost }: InterfacesScre
         <div><Title order={2}>Interfaces</Title><Text c="dimmed">Network links the box reports now, beside what the saved configuration puts on them.</Text></div>
         <Button size="xs" variant="default" loading={resource.loading} onClick={() => void resource.reload()}>Refresh</Button>
       </Group>
+      {error && <Alert color="red" role="alert" title="The interface could not be opened" withCloseButton onClose={() => setError('')}>{error}</Alert>}
       {resource.error && <Alert color="red" role="alert" title="Interfaces request failed">{resource.error}</Alert>}
       {savedError && <Alert color="red" role="alert" title="The saved configuration could not be read">{savedError} Only live links are shown.</Alert>}
       {!canReadConfig && <Alert color="gray" role="status">Your account cannot read the saved configuration, so only live links are shown.</Alert>}
       {rows.length === 0 ? <Alert role="status">The box reports no network links.</Alert> : (
-        <ScrollArea><Table verticalSpacing="sm" withTableBorder className="data-table"><Table.Thead><Table.Tr><Table.Th>Interface</Table.Th><Table.Th>State</Table.Th><Table.Th>Addresses</Table.Th>{showSaved && <><Table.Th>Saved configuration</Table.Th><Table.Th>Addressing</Table.Th></>}</Table.Tr></Table.Thead><Table.Tbody>
+        <ScrollArea><Table verticalSpacing="sm" withTableBorder className="data-table"><Table.Thead><Table.Tr><Table.Th>Interface</Table.Th><Table.Th>State</Table.Th><Table.Th>Addresses</Table.Th>{showSaved && <><Table.Th>Saved configuration</Table.Th><Table.Th>Addressing</Table.Th></>}{canWrite && <Table.Th><VisuallyHidden>Actions</VisuallyHidden></Table.Th>}</Table.Tr></Table.Thead><Table.Tbody>
           {rows.map(({ key, live, saved: link, state, finding, conflict }) => {
             const segment = link && segmentOf(link);
             return (
@@ -102,10 +135,21 @@ export function InterfacesScreen({ api, session, onSessionLost }: InterfacesScre
                     <Table.Td data-label="Addressing">{segment ? <><Text size="sm">IPv4 {segment.addressing.ipv4.mode}</Text><Text size="sm">IPv6 {segment.addressing.ipv6.mode}</Text></> : <Text c="dimmed">—</Text>}</Table.Td>
                   </>
                 )}
+                {canWrite && (
+                  <Table.Td data-label="">
+                    {link
+                      ? <Button size="xs" variant="default" loading={opening === key} disabled={conflict} aria-label={`Edit ${link.name}`} onClick={() => void edit(key, live, link)}>Edit</Button>
+                      : addable(live) && <Button size="xs" variant="light" loading={opening === key} aria-label={`Add ${live?.name} to the configuration`} onClick={() => void edit(key, live, undefined)}>Add</Button>}
+                  </Table.Td>
+                )}
               </Table.Tr>
             );
           })}
         </Table.Tbody></Table></ScrollArea>
+      )}
+      {editing && saved && (
+        <InterfaceEditor key={editing.link?.value.id ?? editing.live?.name} {...editing} snapshot={saved.snapshot} onClose={() => setEditing(undefined)}
+          onSessionLost={onSessionLost} onAbandoned={setError} onSave={save} />
       )}
     </Stack>
   );

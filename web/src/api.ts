@@ -364,6 +364,11 @@ export class ApiClient {
     return this.request<Snapshot>('/api/v1/config');
   }
 
+  // One saved object with its version, for a change guarded against someone else's.
+  configObject<T>(collection: string, id: string) {
+    return this.request<SavedObject<T>>(`/api/v1/config/${collection}/${encodeURIComponent(id)}`);
+  }
+
   aliases<K extends keyof AliasKinds>(kind: K) {
     return this.request<SavedList<AliasKinds[K]>>(`/api/v1/config/aliases/${kind}`);
   }

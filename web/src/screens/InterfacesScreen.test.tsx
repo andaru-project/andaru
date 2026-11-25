@@ -1,3 +1,4 @@
+import userEvent from '@testing-library/user-event';
 import { expect, it, vi } from 'vitest';
 import { ApiClient } from '../api';
 import { fetchRoutes, jsonResponse } from '../test/fetch';
@@ -15,8 +16,9 @@ const live = (ifIndex: number, name: string, linkAddress: string, addresses: str
 const ethernet = (id: string, name: string, permanentMac: string) => ({ id, name, kind: 'ethernet', mtu: 1500, enabled: true, permanentMac });
 const missingFinding = { severity: 'error', code: 'HARDWARE_MISSING', path: '/links/2/permanentMac', message: 'No interface with this permanent MAC is present.' };
 
-function routes({ links, findings = [missingFinding], resolved = [{ link: lanPort, interface: 'enp1s0' }], config }: { links?: unknown[]; findings?: unknown[]; resolved?: unknown[]; config?: unknown } = {}) {
+function routes({ links, findings = [missingFinding], resolved = [{ link: lanPort, interface: 'enp1s0' }], config, extra = {} }: { links?: unknown[]; findings?: unknown[]; resolved?: unknown[]; config?: unknown; extra?: Parameters<typeof fetchRoutes>[0] } = {}) {
   return fetchRoutes({
+    ...extra,
     '/api/v1/status/links': { items: [
       live(2, 'enp1s0', '52:54:00:aa:bb:01', ['192.168.1.1']),
       live(3, 'enp2s0', '52:54:00:aa:bb:02'),
@@ -43,7 +45,7 @@ const admin = session(['status.read', 'configuration.read']);
 const row = (text: string) => screen.getByText(text).closest('tr') as HTMLElement;
 
 async function showInterfaces(who = admin) {
-  render(<InterfacesScreen api={new ApiClient()} session={who} onSessionLost={vi.fn()} />);
+  render(<InterfacesScreen api={new ApiClient()} session={who} onSaved={vi.fn()} onSessionLost={vi.fn()} />);
   await screen.findAllByText('enp1s0');
 }
 
@@ -173,4 +175,45 @@ it('keeps a loopback the configuration names, and marks a disabled link that has
 
   expect(row('lo')).toHaveTextContent('Loopback');
   expect(within(row('enp1s0')).getByText('Disabled')).toBeInTheDocument();
+});
+
+const writer = session(['status.read', 'configuration.read', 'configuration.write']);
+
+it('offers no edits to an account that cannot write the configuration', async () => {
+  routes();
+  await showInterfaces();
+  expect(screen.queryByRole('button', { name: /^(Edit|Add) / })).not.toBeInTheDocument();
+});
+
+it('edits an interface against the versions read when the panel opened, and says the change is pending', async () => {
+  const user = userEvent.setup();
+  const sent = vi.fn<(init: RequestInit | undefined) => Response>(() => jsonResponse(200, { savedVersion: '8' }));
+  const onSaved = vi.fn();
+  routes({ extra: {
+    [`/api/v1/config/links/${lanPort}`]: { version: '4', value: ethernet(lanPort, 'LAN port', '52:54:00:aa:bb:01') },
+    '/api/v1/config/segments/seg_lan': { version: '6', value: { id: 'seg_lan', name: 'LAN', link: lanPort, zone: 'zon_lan', addressing: { ipv4: { mode: 'static', addresses: ['192.168.1.1/24'] }, ipv6: { mode: 'none' } } } },
+    'POST /api/v1/config/changes': sent,
+  } });
+  render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={onSaved} onSessionLost={vi.fn()} />);
+  await user.click(await screen.findByRole('button', { name: 'Edit LAN port' }));
+
+  const panel = await screen.findByRole('dialog');
+  expect(panel).toHaveTextContent('You manage Andaru through this interface');
+  const mtu = within(panel).getByLabelText(/^MTU/);
+  await user.clear(mtu);
+  await user.type(mtu, '9000');
+  await user.click(within(panel).getByRole('button', { name: 'Save interface' }));
+
+  await vi.waitFor(() => expect(onSaved).toHaveBeenCalled());
+  expect(JSON.parse(String(sent.mock.calls[0][0]?.body))).toEqual({ operations: [
+    { op: 'replace', collection: 'links', id: lanPort, expectedVersion: '4', value: { ...ethernet(lanPort, 'LAN port', '52:54:00:aa:bb:01'), mtu: 9000 } },
+  ] });
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+});
+
+it('offers to add a port the configuration does not have', async () => {
+  routes();
+  render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={vi.fn()} onSessionLost={vi.fn()} />);
+  expect(await screen.findByRole('button', { name: 'Add enp2s0 to the configuration' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Edit LAN port' })).toBeInTheDocument();
 });
