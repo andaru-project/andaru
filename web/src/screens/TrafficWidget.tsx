@@ -124,7 +124,7 @@ function Graph({ entry, zone, end, intervalSeconds, live }: { entry: Traffic['in
       <Group justify="space-between" wrap="nowrap" aria-live="polite">
         {mark
           ? <Text size="xs" className="tabular">{formatTime(mark.at, timeZone)} · <span aria-hidden="true">↓</span> {shown(mark.rx)} · <span aria-hidden="true">↑</span> {shown(mark.tx)}</Text>
-          : <><Text c="dimmed" size="xs">−1 h</Text><Text c="dimmed" size="xs">now</Text></>}
+          : <><Text c="dimmed" size="xs">1 hour ago</Text><Text c="dimmed" size="xs">now</Text></>}
       </Group>
       <Table className="traffic-figures" withRowBorders={false} verticalSpacing={2} horizontalSpacing={4}>
         <Table.Thead><Table.Tr><Table.Td /><Table.Th>Current</Table.Th><Table.Th>Avg</Table.Th><Table.Th>Max</Table.Th></Table.Tr></Table.Thead>

@@ -5,6 +5,7 @@ import { ApiClient } from '../api';
 import { fetchRoutes, jsonResponse } from '../test/fetch';
 import { session } from '../test/fixtures';
 import { render, screen, waitFor, within } from '../test/render';
+import { zoneColor } from '../zones';
 import { RulesScreen } from './RulesScreen';
 
 const lan = 'zon_lan';
@@ -235,7 +236,11 @@ it('lets the firewall stand alone as a destination: choosing it leaves the other
   await user.click(zones);
   expect(options(zones).map((option) => option.textContent)).toEqual(['This firewall', 'lan', 'wan']);
   await pick('wan');
+  // A chosen zone shows in its own colour, as it does in the list.
+  const pill = (name: string) => within(panel).getAllByText(name).map((label) => label.closest<HTMLElement>('.mantine-Pill-root')).find(Boolean)!;
+  expect(pill('wan').style.background).toBe(`var(--mantine-color-${zoneColor('wan')}-light)`);
   await pick('This firewall');
+  expect(pill('This firewall').style.background).toBe('');
   await user.click(within(panel).getByRole('button', { name: 'Save rule' }));
   await waitFor(() => expect(sent(fetch, 'POST')).toHaveLength(1));
   expect(JSON.parse(String(sent(fetch, 'POST')[0][1]?.body)).to).toEqual({ zones: ['zon_firewall'], addresses: [] });
@@ -355,4 +360,13 @@ it('names each side\'s except switch by its side, and says where a new rule goes
   expect(within(panel).getByRole('switch', { name: /^From: except these addresses/ })).toBeDisabled();
   expect(within(panel).getByRole('switch', { name: /^To: except these addresses/ })).toBeDisabled();
   expect(within(panel).getByText(/A new rule is added at the bottom of the list/)).toBeInTheDocument();
+});
+
+it('edits a rule that names a zone the configuration no longer has, showing its ID uncoloured', async () => {
+  const user = userEvent.setup();
+  show({ '/api/v1/config/rules': list([rule('rul_gone', 'Gone zone', { from: side(['zon_gone']) })]) });
+  await user.click(await screen.findByRole('button', { name: 'Edit rule 1, Gone zone' }));
+  const panel = await screen.findByRole('dialog', { name: 'Edit rule: Gone zone' });
+  const pill = within(panel).getByText('zon_gone').closest<HTMLElement>('.mantine-Pill-root')!;
+  expect(pill.style.background).toBe('');
 });

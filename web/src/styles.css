@@ -34,6 +34,12 @@
   --mantine-color-dimmed: #9a9a9a;
 }
 
+/* The scrollbar's room is kept whether it shows or not. The dashboard counts its columns from its width: a
+   scrollbar that came with one column count and went with the other made the layout flip back and forth. */
+html {
+  scrollbar-gutter: stable;
+}
+
 body {
   margin: 0;
   min-width: 20rem;
@@ -492,6 +498,12 @@ path.traffic-sent {
 
   .mantine-Modal-inner {
     padding: 0;
+  }
+
+  /* A side panel too: its own size, wider than a phone, otherwise tracked a page that a dropdown had widened. */
+  .mantine-Drawer-content {
+    flex: 0 0 100vw;
+    max-width: 100%;
   }
 
   /* A fixed height, as Mantine's own fullScreen has: the content then scrolls when it is taller than the screen.

@@ -37,6 +37,17 @@ it('sizes a phone dialog by the screen', () => {
   expect(/\.mantine-Modal-content \{[^}]*flex: 0 0 100vw/.test(read('src/styles.css'))).toBe(true);
 });
 
+// The dashboard counts its columns from its width: the scrollbar's room is kept, so its coming and going does not
+// change that count and flip the layout back and forth.
+it('keeps the scrollbar gutter', () => {
+  expect(/html \{[^}]*scrollbar-gutter: stable/.test(read('src/styles.css'))).toBe(true);
+});
+
+// On a phone a side panel is as wide as the screen, as a dialog is: its own size is wider than a phone.
+it('sizes a phone side panel by the screen', () => {
+  expect(/\.mantine-Drawer-content \{\s*flex: 0 0 100vw;\s*max-width: 100%/.test(read('src/styles.css'))).toBe(true);
+});
+
 // Download and upload are told apart by more than strength: upload is dashed.
 it('draws upload dashed', () => {
   expect(/path\.traffic-sent \{[^}]*stroke-dasharray/.test(read('src/styles.css'))).toBe(true);

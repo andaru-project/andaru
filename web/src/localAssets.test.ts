@@ -8,3 +8,7 @@ it('loads no runtime asset from another origin', async () => {
     expect(html).not.toMatch(/(?:src|href)=["']https?:\/\//i);
   }
 });
+
+it('gives the page the Andaru mark as its icon', async () => {
+  expect(await readFile(join(import.meta.dirname, '../index.html'), 'utf8')).toMatch(/<link rel="icon" type="image\/svg\+xml" href="\/src\/andaru-icon.svg" \/>/);
+});
