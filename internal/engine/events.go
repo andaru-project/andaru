@@ -180,7 +180,7 @@ func (h *webAPI) eventStream(w http.ResponseWriter, r *http.Request, source stri
 			}
 			message = append(append([]byte("data: "), compact.Bytes()...), "\n\n"...)
 		case <-heartbeat.C:
-			current, _, _, _, _, err := h.readCookiePrincipal(r)
+			current, _, _, _, _, err := h.readCookiePrincipal(r, userActivity(r))
 			// A stream whose account's capabilities changed what it would carry ends; the browser opens it again with
 			// what the account has now.
 			if err != nil || !slices.Equal(streamFilters(requestActor{Actor: current.Actor, Capabilities: current.Capabilities}), filters) {

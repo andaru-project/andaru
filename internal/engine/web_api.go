@@ -207,8 +207,7 @@ func (h *webAPI) login(w http.ResponseWriter, r *http.Request, source string) {
 	if !noQuery(w, r) || !h.requireOrigin(w, r) {
 		return
 	}
-	if cookieCredentialPresent(r) || len(r.Header.Values("Authorization")) != 0 {
-		writeError(w, r, http.StatusBadRequest, "AMBIGUOUS_CREDENTIALS", "Login requests cannot carry an existing credential.")
+	if h.refuseExistingCredential(w, r, "Login requests cannot carry an existing credential.") {
 		return
 	}
 	_, request, ok := decodeIdentityBody[webLoginRequest](w, r, webLoginBodyLimit, "login", "password")
@@ -366,7 +365,7 @@ func (h *webAPI) logout(w http.ResponseWriter, r *http.Request, source string) {
 	if !noQuery(w, r) || !h.requireOrigin(w, r) {
 		return
 	}
-	principal, selector, secret, _, _, err := h.readCookiePrincipal(r)
+	principal, selector, secret, _, _, err := h.readCookiePrincipal(r, userActivity(r))
 	if errors.Is(err, identity.ErrAuthentication) {
 		clearSessionCookie(w)
 		w.WriteHeader(http.StatusNoContent)
@@ -541,7 +540,7 @@ func (h *webAPI) deny(w http.ResponseWriter, r *http.Request, actor requestActor
 }
 
 func (h *webAPI) cookiePrincipal(w http.ResponseWriter, r *http.Request, _ string) (identity.Principal, string, string, authz.Snapshot, uint64, bool) {
-	principal, selector, secret, snapshot, epoch, err := h.readCookiePrincipal(r)
+	principal, selector, secret, snapshot, epoch, err := h.readCookiePrincipal(r, userActivity(r))
 	if errors.Is(err, errAmbiguousCredentials) {
 		writeError(w, r, http.StatusBadRequest, "AMBIGUOUS_CREDENTIALS", "Cookie and bearer credentials cannot be combined.")
 		return identity.Principal{}, "", "", authz.Snapshot{}, 0, false
@@ -557,7 +556,7 @@ func (h *webAPI) cookiePrincipal(w http.ResponseWriter, r *http.Request, _ strin
 	return principal, selector, secret, snapshot, epoch, true
 }
 
-func (h *webAPI) readCookiePrincipal(r *http.Request) (identity.Principal, string, string, authz.Snapshot, uint64, error) {
+func (h *webAPI) readCookiePrincipal(r *http.Request, activity bool) (identity.Principal, string, string, authz.Snapshot, uint64, error) {
 	if len(r.Header.Values("Authorization")) != 0 {
 		return identity.Principal{}, "", "", authz.Snapshot{}, 0, errAmbiguousCredentials
 	}
@@ -571,7 +570,7 @@ func (h *webAPI) readCookiePrincipal(r *http.Request) (identity.Principal, strin
 	err := h.withLiveAuthorization(r.Context(), func(live authz.Snapshot, liveEpoch uint64) error {
 		snapshot, epoch = live, liveEpoch
 		var authErr error
-		principal, authErr = h.identities.AuthenticateSession(r.Context(), selector, secret, epoch, userActivity(r))
+		principal, authErr = h.identities.AuthenticateSession(r.Context(), selector, secret, epoch, activity)
 		return authErr
 	})
 	if err != nil {
@@ -672,6 +671,29 @@ func sessionCredential(r *http.Request) (string, string, bool) {
 
 func cookieCredentialPresent(r *http.Request) bool {
 	return len(r.CookiesNamed(webSessionCookie)) != 0
+}
+
+// refuseExistingCredential answers a request that would start a session while carrying a credential that still
+// works: a bearer token, several session cookies or a live one. A single cookie whose session has ended is let
+// through for the new one to replace, since the browser cannot drop an HttpOnly cookie itself.
+func (h *webAPI) refuseExistingCredential(w http.ResponseWriter, r *http.Request, message string) bool {
+	cookies := len(r.CookiesNamed(webSessionCookie))
+	if cookies == 0 && len(r.Header.Values("Authorization")) == 0 {
+		return false
+	}
+	err := errAmbiguousCredentials
+	if cookies == 1 {
+		_, _, _, _, _, err = h.readCookiePrincipal(r, false)
+	}
+	switch {
+	case errors.Is(err, identity.ErrAuthentication):
+		return false
+	case err == nil || errors.Is(err, errAmbiguousCredentials):
+		writeError(w, r, http.StatusBadRequest, "AMBIGUOUS_CREDENTIALS", message)
+	default:
+		writeError(w, r, http.StatusServiceUnavailable, "AUTHENTICATION_UNAVAILABLE", "Authentication is temporarily unavailable.")
+	}
+	return true
 }
 
 func bearerCredential(values []string) (string, string, bool) {

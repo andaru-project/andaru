@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/andaru-project/andaru/internal/authz"
@@ -31,17 +32,14 @@ func initializeAuthorizationState(ctx context.Context, stateDir string) error {
 			return err
 		}
 		defer lock.Close()
-		state, err := lock.Read()
-		if err == nil {
-			if state.LiveDigest != digest {
-				return fmt.Errorf("%w: live authorization digest mismatch", errLiveAuthorizationUnavailable)
-			}
-			return nil
+		before, readErr := lock.Read()
+		// A live digest the state does not hold (a legacy manifest without one, or an activation cut short) moves the
+		// epoch on: every session ends and people sign in again, instead of no one getting in.
+		after, err := lock.Advance(digest)
+		if err == nil && readErr == nil && after.AuthorizationEpoch != before.AuthorizationEpoch {
+			slog.WarnContext(ctx, "live authorization digest differed from the recorded one; every session has ended",
+				"recorded", before.LiveDigest, "live", digest, "epoch", after.AuthorizationEpoch)
 		}
-		if !errors.Is(err, authz.ErrStateUnavailable) {
-			return err
-		}
-		_, err = lock.Advance(digest)
 		return err
 	})
 }
@@ -85,17 +83,24 @@ func liveRoleSnapshot(ctx context.Context, stateDir string, configuration *confi
 	if err != nil {
 		return authz.Snapshot{}, generation.Generation{}, errors.Join(errLiveAuthorizationUnavailable, err)
 	}
+	// Not checked against live.AuthorizationDigest: a saved version's roles never change, but the digest of a
+	// generation applied by an older release may have been computed differently.
+	snapshot, err := customRoleSnapshot(roles)
+	if err != nil {
+		return authz.Snapshot{}, generation.Generation{}, errors.Join(errLiveAuthorizationUnavailable, err)
+	}
+	return snapshot, live, nil
+}
+
+// customRoleSnapshot resolves a saved version's roles: the built-in ones among them come from this software.
+func customRoleSnapshot(roles []authz.Role) (authz.Snapshot, error) {
 	custom := make([]authz.Role, 0, len(roles))
 	for _, role := range roles {
 		if role.BuiltIn == "" {
 			custom = append(custom, role)
 		}
 	}
-	snapshot, err := authz.NewSnapshot(custom)
-	if err != nil || snapshot.Digest != live.AuthorizationDigest {
-		return authz.Snapshot{}, generation.Generation{}, errors.Join(errLiveAuthorizationUnavailable, err)
-	}
-	return snapshot, live, nil
+	return authz.NewSnapshot(custom)
 }
 
 func liveAuthorizationLocked(ctx context.Context, stateDir string, configuration *config.Store, lock *authz.StateLock) (authz.Snapshot, uint64, error) {
