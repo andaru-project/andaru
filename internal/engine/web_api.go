@@ -365,7 +365,7 @@ func (h *webAPI) logout(w http.ResponseWriter, r *http.Request, source string) {
 	if !noQuery(w, r) || !h.requireOrigin(w, r) {
 		return
 	}
-	principal, selector, secret, _, _, err := h.readCookiePrincipal(r)
+	principal, selector, secret, _, _, err := h.readCookiePrincipal(r, userActivity(r))
 	if errors.Is(err, identity.ErrAuthentication) {
 		clearSessionCookie(w)
 		w.WriteHeader(http.StatusNoContent)
@@ -540,7 +540,7 @@ func (h *webAPI) deny(w http.ResponseWriter, r *http.Request, actor requestActor
 }
 
 func (h *webAPI) cookiePrincipal(w http.ResponseWriter, r *http.Request, _ string) (identity.Principal, string, string, authz.Snapshot, uint64, bool) {
-	principal, selector, secret, snapshot, epoch, err := h.readCookiePrincipal(r)
+	principal, selector, secret, snapshot, epoch, err := h.readCookiePrincipal(r, userActivity(r))
 	if errors.Is(err, errAmbiguousCredentials) {
 		writeError(w, r, http.StatusBadRequest, "AMBIGUOUS_CREDENTIALS", "Cookie and bearer credentials cannot be combined.")
 		return identity.Principal{}, "", "", authz.Snapshot{}, 0, false
@@ -556,7 +556,7 @@ func (h *webAPI) cookiePrincipal(w http.ResponseWriter, r *http.Request, _ strin
 	return principal, selector, secret, snapshot, epoch, true
 }
 
-func (h *webAPI) readCookiePrincipal(r *http.Request) (identity.Principal, string, string, authz.Snapshot, uint64, error) {
+func (h *webAPI) readCookiePrincipal(r *http.Request, activity bool) (identity.Principal, string, string, authz.Snapshot, uint64, error) {
 	if len(r.Header.Values("Authorization")) != 0 {
 		return identity.Principal{}, "", "", authz.Snapshot{}, 0, errAmbiguousCredentials
 	}
@@ -570,7 +570,7 @@ func (h *webAPI) readCookiePrincipal(r *http.Request) (identity.Principal, strin
 	err := h.withLiveAuthorization(r.Context(), func(live authz.Snapshot, liveEpoch uint64) error {
 		snapshot, epoch = live, liveEpoch
 		var authErr error
-		principal, authErr = h.identities.AuthenticateSession(r.Context(), selector, secret, epoch, userActivity(r))
+		principal, authErr = h.identities.AuthenticateSession(r.Context(), selector, secret, epoch, activity)
 		return authErr
 	})
 	if err != nil {
@@ -683,7 +683,7 @@ func (h *webAPI) refuseExistingCredential(w http.ResponseWriter, r *http.Request
 	}
 	err := errAmbiguousCredentials
 	if cookies == 1 {
-		_, _, _, _, _, err = h.readCookiePrincipal(r)
+		_, _, _, _, _, err = h.readCookiePrincipal(r, false)
 	}
 	switch {
 	case errors.Is(err, identity.ErrAuthentication):

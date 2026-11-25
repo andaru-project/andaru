@@ -684,6 +684,9 @@ func TestFilterGates(t *testing.T) {
 // The live generation's digest may come from a release that computed it differently. An apply that changes no
 // role keeps that digest, so it is no authorization change: no sign-out, and a token may still confirm it.
 func TestUnchangedRolesKeepTheLiveDigestFromAnOlderRelease(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("authorization state requires root")
+	}
 	b := newApplyBench(t)
 	first := b.apply(applyBody)
 	b.decode(b.call(http.MethodPost, appliesPath+"/"+first.ID+"/confirmation", ""), http.StatusOK)

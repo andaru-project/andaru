@@ -362,12 +362,18 @@ func (h *appliesHandler) create(w http.ResponseWriter, r *http.Request) {
 	// Roles unchanged from the live generation keep its digest, which an older release may have computed
 	// differently: otherwise the first apply after such an upgrade would count as an authorization change.
 	if pointers.Live != nil {
-		if live, liveErr := generation.Read(h.dir, *pointers.Live); liveErr == nil && live.AuthorizationDigest != digest {
-			if roles, rolesErr := h.roles(ctx, config.Version(live.SavedVersion)); rolesErr == nil {
-				if same, sameErr := customRoleSnapshot(roles); sameErr == nil && same.Digest == digest {
+		live, liveErr := generation.Read(h.dir, *pointers.Live)
+		if liveErr == nil && live.AuthorizationDigest != digest {
+			var roles []authz.Role
+			var same authz.Snapshot
+			if roles, liveErr = h.roles(ctx, config.Version(live.SavedVersion)); liveErr == nil {
+				if same, liveErr = customRoleSnapshot(roles); liveErr == nil && same.Digest == digest {
 					digest = live.AuthorizationDigest
 				}
 			}
+		}
+		if liveErr != nil {
+			slog.WarnContext(ctx, "live roles unreadable; this apply counts as an authorization change", "error", liveErr)
 		}
 	}
 	manifest := generation.Manifest{
