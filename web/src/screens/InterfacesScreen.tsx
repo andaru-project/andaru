@@ -116,37 +116,48 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
       {savedError && <Alert color="red" role="alert" title="The saved configuration could not be read">{savedError} Only live links are shown.</Alert>}
       {!canReadConfig && <Alert color="gray" role="status">Your account cannot read the saved configuration, so only live links are shown.</Alert>}
       {rows.length === 0 ? <Alert role="status">The box reports no network links.</Alert> : (
-        <ScrollArea><Table verticalSpacing="sm" withTableBorder className="data-table"><Table.Thead><Table.Tr><Table.Th>Interface</Table.Th><Table.Th>State</Table.Th><Table.Th>Addresses</Table.Th>{showSaved && <><Table.Th>Saved configuration</Table.Th><Table.Th>Addressing</Table.Th></>}{editable && <Table.Th><VisuallyHidden>Actions</VisuallyHidden></Table.Th>}</Table.Tr></Table.Thead><Table.Tbody>
+        <ScrollArea><Table verticalSpacing="sm" withTableBorder className="data-table"><Table.Thead><Table.Tr><Table.Th>Interface</Table.Th><Table.Th>State</Table.Th><Table.Th>Addresses</Table.Th>{showSaved && <Table.Th>Segment</Table.Th>}{editable && <Table.Th><VisuallyHidden>Actions</VisuallyHidden></Table.Th>}</Table.Tr></Table.Thead><Table.Tbody>
           {rows.map(({ key, live, saved: link, state, finding, conflict }) => {
             const segment = link && segmentOf(link);
+            const management = segment !== undefined && saved?.snapshot.value.management?.segment === segment.id;
             return (
               <Table.Tr key={key}>
+                {/* The port: what the configuration calls it, its zone, whether Andaru is managed through it; then the device. */}
                 <Table.Td data-label="Interface">
-                  {live ? <Group gap="xs"><Text ff="monospace" fw={600}>{live.name}</Text><ZoneBadge name={zones?.get(live.name)} /></Group> : <Text c="dimmed">No device</Text>}
-                  <Text c="dimmed" size="sm"><Text span ff="monospace" inherit>{live?.linkAddress || link?.permanentMac || 'no MAC'}</Text> · {live?.linkType ?? link?.kind} · MTU {live?.mtu ?? link?.mtu}</Text>
+                  <Group gap="xs">
+                    {link ? <Text fw={600}>{link.name}</Text> : <Text ff="monospace" fw={600}>{live?.name}</Text>}
+                    {live && <ZoneBadge name={zones?.get(live.name)} />}
+                    {management && <Badge variant="light">Management</Badge>}
+                    {live && link && !link.enabled && <Badge color="gray" variant="light">Disabled</Badge>}
+                    {conflict && <Badge color="red" variant="light">Conflict: several saved links</Badge>}
+                  </Group>
+                  <Text c="dimmed" size="sm">
+                    {link && <><Text span ff="monospace" inherit>{live?.name ?? 'no device'}</Text> · </>}
+                    <Text span ff="monospace" inherit>{live?.linkAddress || link?.permanentMac || 'no MAC'}</Text> · {link?.kind ?? live?.kind ?? live?.linkType} · MTU {live?.mtu ?? link?.mtu}
+                  </Text>
+                  {finding && <Text size="sm" className="error-text">{finding}</Text>}
                 </Table.Td>
                 <Table.Td data-label="State">{live ? <Badge variant="dot" color={stateColor[live.operState] ?? 'gray'}>{stateLabel(live.operState)}</Badge> : <Badge variant="dot" color={state === 'Disabled' ? 'gray' : 'red'}>{state}</Badge>}</Table.Td>
                 <Table.Td data-label="Addresses">{live?.addresses.length ? live.addresses.map((address) => <Address key={`${address.address}/${address.prefixLength}`} value={`${address.address}/${address.prefixLength}`} />) : <Text c="dimmed">—</Text>}</Table.Td>
+                {/* The network the saved configuration puts on the port, which may not be applied yet. */}
                 {showSaved && (
-                  <>
-                    <Table.Td data-label="Saved configuration">
-                      {link ? (
-                        <>
-                          <Group gap="xs"><Text fw={600}>{link.name}</Text>{segment && saved?.snapshot.value.management?.segment === segment.id && <Badge variant="light">Management</Badge>}{live && !link.enabled && <Badge color="gray" variant="light">Disabled</Badge>}</Group>
-                          <Text c="dimmed" size="sm">{link.kind} link{segment ? <> · segment {segment.name} · zone {zoneName(segment.zone)}</> : ' · no segment'}</Text>
-                        </>
-                      ) : <Text c="dimmed">Not in the configuration</Text>}
-                      {conflict && <Badge color="red" variant="light">Conflict: several saved links</Badge>}
-                      {finding && <Text size="sm" className="error-text">{finding}</Text>}
-                    </Table.Td>
-                    {/* What is saved, which may not be applied yet: the live addresses are in their own column. */}
-                    <Table.Td data-label="Addressing">{segment ? ([['IPv4', ipv4Modes, segment.addressing.ipv4], ['IPv6', ipv6Modes, segment.addressing.ipv6]] as const).map(([family, modes, value]) => (
-                      <Text key={family} size="sm" c={value.mode === 'none' ? 'dimmed' : undefined}>
-                        {family} {modeLabel(modes, value.mode)}
-                        {(value as { addresses?: string[] }).addresses?.map((address) => <Text key={address} span ff="monospace" inherit> {address}</Text>)}
-                      </Text>
-                    )) : <Text c="dimmed">—</Text>}</Table.Td>
-                  </>
+                  <Table.Td data-label="Segment">
+                    {!link ? <Text c="dimmed">Not in the configuration</Text> : !segment ? <Text c="dimmed">No segment</Text> : (
+                      <>
+                        {/* The zone is a badge, as everywhere; here only when the interface column does not already show it. */}
+                        <Group gap="xs">
+                          <Text size="sm" fw={500}>{segment.name}</Text>
+                          {(!live || zones?.get(live.name) !== zoneName(segment.zone)) && <ZoneBadge name={zoneName(segment.zone)} />}
+                        </Group>
+                        {([['IPv4', ipv4Modes, segment.addressing.ipv4], ['IPv6', ipv6Modes, segment.addressing.ipv6]] as const).map(([family, modes, value]) => (
+                          <Text key={family} size="sm" c={value.mode === 'none' ? 'dimmed' : undefined}>
+                            {family} {modeLabel(modes, value.mode)}
+                            {(value as { addresses?: string[] }).addresses?.map((address) => <Address key={address} value={address} />)}
+                          </Text>
+                        ))}
+                      </>
+                    )}
+                  </Table.Td>
                 )}
                 {editable && (
                   <Table.Td>

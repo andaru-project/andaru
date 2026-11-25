@@ -48,14 +48,15 @@ export function InterfaceEditor({ link, segment, live, snapshot, onClose, onSess
   const open = useRef(true);
   useEffect(() => { open.current = true; return () => { open.current = false; }; }, []);
   const failureRef = useRef<HTMLDivElement>(null);
+  // Remove… leaves the bar when a removal is blocked: the focus goes to Cancel, not to the page.
+  const cancelRef = useRef<HTMLButtonElement>(null);
   useEffect(() => { if (failure) failureRef.current?.scrollIntoView?.({ block: 'nearest' }); }, [failure]);
   // A refused field may be scrolled out of view: the first one comes into view and takes the focus.
   const formRef = useRef<HTMLFormElement>(null);
   useEffect(() => {
     if (errors.size === 0) return;
-    const field = formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]');
-    field?.scrollIntoView?.({ block: 'center' });
-    field?.focus();
+    formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.scrollIntoView?.({ block: 'center' });
+    formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]:not(:disabled)')?.focus();
   }, [errors]);
 
   const set = (next: Partial<InterfaceDraft>) => setDraft((current) => ({ ...current, ...next }));
@@ -73,7 +74,7 @@ export function InterfaceEditor({ link, segment, live, snapshot, onClose, onSess
     const found = new Map<string, string>();
     if (!draft.name.trim()) found.set('name', 'An interface needs a name.');
     const mtu = Number(draft.mtu);
-    if (!Number.isInteger(mtu) || mtu < 68 || mtu > 65535) found.set('mtu', 'The MTU is a whole number from 68 to 65535.');
+    if (!Number.isInteger(mtu) || mtu < 68 || mtu > 65535) found.set('mtu', 'From 68 to 65535.');
     if (!draft.assigned) return found;
     if (!draft.segmentName.trim()) found.set('segmentName', 'The segment needs a name.');
     if (!draft.zone) found.set('zone', 'Choose the zone this segment is in.');
@@ -121,7 +122,11 @@ export function InterfaceEditor({ link, segment, live, snapshot, onClose, onSess
 
   function remove() {
     if (!link) return;
-    if (!removing) return setRemoving(true);
+    if (!removing) {
+      setRemoving(true);
+      if (blockers.length > 0) requestAnimationFrame(() => cancelRef.current?.focus());
+      return;
+    }
     void send(removeOperations(link, segment));
   }
 
@@ -154,9 +159,10 @@ export function InterfaceEditor({ link, segment, live, snapshot, onClose, onSess
                   {managed && !draft.enabled && <Alert color="red" role="alert">Disabled, this interface stops carrying the connection you manage Andaru through, until the apply rolls back.</Alert>}
                 </Stack>
               </Fieldset>
-              <Switch label="Carries a segment" description="A segment is the network on this interface: its zone and addresses. Off for a port that only carries VLANs or is a bridge member."
-                checked={draft.assigned} disabled={managed} onChange={(event) => set({ assigned: event.currentTarget.checked })} />
-              {managed && <Text size="xs" c="dimmed">The management segment stays: move management to another segment first.</Text>}
+              <Switch label="Carries a segment" checked={draft.assigned} disabled={managed} onChange={(event) => set({ assigned: event.currentTarget.checked })}
+                description={managed
+                  ? 'On, and it stays: you manage Andaru through this segment. Move management to another segment first.'
+                  : 'A segment is the network on this interface: its zone and addresses. Off for a port that only carries VLANs or is a bridge member.'} />
               {dropsSegment && (
                 <Alert color="red" role="alert" title={`Saving removes the segment ${segment?.value.name}`}>
                   Its zone, IPv4 and IPv6 addresses, DNS and router advertisement settings go with it.
@@ -227,9 +233,9 @@ export function InterfaceEditor({ link, segment, live, snapshot, onClose, onSess
               </Alert>
             )}
             <Group justify="space-between">
-              {link ? <Button color="red" variant={removing ? 'filled' : 'subtle'} loading={busy && removing} disabled={removing && blockers.length > 0} onClick={remove}>{removing ? 'Remove it' : 'Remove…'}</Button> : <span />}
+              {link && !(removing && blockers.length > 0) ? <Button color="red" variant={removing ? 'filled' : 'subtle'} loading={busy && removing} onClick={remove}>{removing ? 'Remove it' : 'Remove…'}</Button> : <span />}
               <Group>
-                <Button variant="default" onClick={removing ? () => setRemoving(false) : onClose}>Cancel</Button>
+                <Button ref={cancelRef} variant="default" onClick={removing ? () => setRemoving(false) : onClose}>Cancel</Button>
                 {!removing && <Button loading={busy} type="submit">Save interface</Button>}
               </Group>
             </Group>

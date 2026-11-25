@@ -57,10 +57,12 @@ it('joins live links with the saved links, segments and zones on them', async ()
   const lan = row('enp1s0');
   expect(lan).toHaveTextContent('LAN port');
   expect(lan).toHaveTextContent('Trusted');
-  expect(lan).toHaveTextContent('IPv4 Static 192.168.1.1/24');
+  expect(lan).toHaveTextContent('IPv4 Static192.168.1.1/24');
   expect(lan).toHaveTextContent('IPv6 None');
   expect(lan).toHaveTextContent('192.168.1.1/24');
   expect(within(lan).getByText('Management')).toBeInTheDocument();
+  // The zone is said once, by the badge beside the interface's name, not again in the saved column.
+  expect(within(lan).getAllByText(/zone Trusted/)).toHaveLength(1);
 
   const guest = row('vl222222222222');
   expect(guest).toHaveTextContent('Guest VLAN');
@@ -162,7 +164,7 @@ it('keeps the live links when the saved configuration cannot be read', async () 
   await showInterfaces();
 
   expect(screen.getByRole('alert', { name: 'The saved configuration could not be read' })).toHaveTextContent('The store is busy.');
-  expect(screen.queryByText('Saved configuration')).not.toBeInTheDocument();
+  expect(screen.queryByText('Configuration')).not.toBeInTheDocument();
 });
 
 it('shows only live links without configuration.read', async () => {
@@ -309,7 +311,8 @@ it('keeps the management segment, and says what keeps the management interface f
   expect(within(panel).getByText('This interface cannot be removed yet')).toBeInTheDocument();
   expect(within(panel).getByText('You manage Andaru through this interface.')).toBeInTheDocument();
   expect(within(panel).getByText('Guest VLAN is a VLAN on this interface.')).toBeInTheDocument();
-  expect(within(panel).getByRole('button', { name: 'Remove it' })).toBeDisabled();
+  expect(within(panel).queryByRole('button', { name: 'Remove it' })).not.toBeInTheDocument();
+  await vi.waitFor(() => expect(within(panel).getByRole('button', { name: 'Cancel' })).toHaveFocus());
   expect(within(panel).getByLabelText(/^Name/)).toBeDisabled();
   expect(sent).not.toHaveBeenCalled();
 });
