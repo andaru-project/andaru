@@ -74,8 +74,12 @@ body {
   flex-shrink: 0;
 }
 
+/* Mantine fixes the navbar's height to the viewport and leaves the overflow visible: on a phone, the links below
+   the fold could not be reached. */
 .app-navbar {
   background: var(--andaru-ground);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .nav-item,

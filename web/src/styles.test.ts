@@ -26,6 +26,11 @@ it('gives each colour it took out of light-dark() its dark value under the dark 
   for (const name of ['--andaru-ground', '--andaru-error-text', '--andaru-warning-text', '--andaru-diff-old', '--andaru-diff-new']) expect(dark).toContain(`${name}:`);
 });
 
+// The navbar is as tall as the viewport: the links under the fold are reached by scrolling it.
+it('scrolls the navigation', () => {
+  expect(/\.app-navbar \{[^}]*overflow-y: auto/.test(read('src/styles.css'))).toBe(true);
+});
+
 // Download and upload are told apart by more than strength: upload is dashed.
 it('draws upload dashed', () => {
   expect(/path\.traffic-sent \{[^}]*stroke-dasharray/.test(read('src/styles.css'))).toBe(true);

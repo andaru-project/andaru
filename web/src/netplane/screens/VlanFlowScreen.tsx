@@ -155,7 +155,7 @@ export function VlanFlowScreen({ flow, state, topology, devicesById, vlansById, 
               );
             })}
             {vlans.length === 0 && (
-              <Text size="xs" c="dimmed">No VLANs reported by /api/v1/vlans/flow yet.</Text>
+              <Text size="xs" c="dimmed">No VLANs reported yet.</Text>
             )}
           </Group>
 
