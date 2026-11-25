@@ -83,13 +83,15 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
     setOpening(key);
     setError('');
     try {
-      const [savedLink, savedSegment] = await Promise.all([
+      // The configuration too: which segment is the management one, the zones and the rest the panel reads.
+      const [savedLink, savedSegment, snapshot] = await Promise.all([
         link ? api.configObject<SavedLink>('links', link.id) : Promise.resolve(undefined),
         segment ? api.configObject<Segment>('segments', segment.id) : Promise.resolve(undefined),
+        api.config(),
       ]);
       // The two reads are apart: a segment moved to another link meanwhile would be written back onto this one.
       if (savedSegment && savedSegment.value.link !== savedLink?.value.id) setError('This interface was changed by someone else while it was opening. Refresh, then try again.');
-      else if (saved) setEditing({ link: savedLink, segment: savedSegment, live, snapshot: saved.snapshot });
+      else setEditing({ link: savedLink, segment: savedSegment, live, snapshot });
     } catch (failure) {
       reportError(failure, onSessionLost, setError);
     } finally {

@@ -361,3 +361,19 @@ it('brings the first refused field into focus', async () => {
   expect(addresses).toHaveFocus();
   expect(within(panel).getByText('A static address needs at least one address, such as 192.168.2.1/24.')).toBeInTheDocument();
 });
+
+it('reads which segment is the management one when the panel opens, not when the page loaded', async () => {
+  const user = userEvent.setup();
+  let reads = 0;
+  const value = (management: string) => ({ state: 'saved', savedVersion: '7', unusedSecrets: [], value: {
+    links: [ethernet(lanPort, 'LAN port', '52:54:00:aa:bb:01')],
+    segments: [{ id: 'seg_lan', name: 'LAN', link: lanPort, zone: 'zon_lan', addressing: { ipv4: { mode: 'dhcp' }, ipv6: { mode: 'none' } } }],
+    zones: [{ id: 'zon_lan', name: 'Trusted' }],
+    management: { segment: management },
+  } });
+  routes({ extra: { ...lanObjects, '/api/v1/config': () => jsonResponse(200, value(reads++ === 0 ? 'seg_other' : 'seg_lan')) } });
+  render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={vi.fn()} onSessionLost={vi.fn()} />);
+  await user.click(await screen.findByRole('button', { name: 'Edit LAN port' }));
+
+  expect(await within(await screen.findByRole('dialog')).findByText('You manage Andaru through this interface')).toBeInTheDocument();
+});
