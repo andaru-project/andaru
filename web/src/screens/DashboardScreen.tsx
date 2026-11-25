@@ -52,11 +52,12 @@ const underPointer: CollisionDetection = (args) => {
 // A widget is dragged by its grip alone: anywhere else on it, a finger scrolls the page. The grip is a button, so
 // the keyboard moves a widget through the same control (Space or Enter picks up and drops, the arrows move,
 // Escape puts back). Translate, not Transform: widgets differ in height, and a scaled one is distorted.
-// While a widget is carried, the one it would drop before is marked.
+// While a widget is carried over another column, the one it would drop before is marked; its own column makes room.
 function Widget({ id, title, to, more, unlocked, onHide, children }: { id: string; title: string; to?: string; more?: string; unlocked: boolean; onHide(): void; children: ReactNode }) {
-  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging, isOver } = useSortable({ id, disabled: !unlocked });
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging, isOver, active, data } = useSortable({ id, disabled: !unlocked });
+  const across = isOver && active?.data.current?.sortable?.containerId !== data.sortable.containerId;
   return (
-    <Paper ref={setNodeRef} className="widget" data-dragging={isDragging || undefined} data-over={(isOver && !isDragging) || undefined} style={{ transform: CSS.Translate.toString(transform), transition }} component="section" withBorder p="md" aria-labelledby={`widget-${id}`}>
+    <Paper ref={setNodeRef} className="widget" data-dragging={isDragging || undefined} data-over={across || undefined} style={{ transform: CSS.Translate.toString(transform), transition }} component="section" withBorder p="md" aria-labelledby={`widget-${id}`}>
       <Group justify="space-between" align="flex-start" wrap="nowrap" mb="sm">
         {/* Every title looks the same. Where a page has the full view, a link at the other edge names it. */}
         <Title order={3} size="h5" id={`widget-${id}`}>{title}</Title>
@@ -235,8 +236,8 @@ export function DashboardScreen({ api, session, system, notifications, update, o
     // The arrangement keeps the hidden widgets where they were, so one shown again comes back to its place.
     const base = withHidden(layout.columns?.[columnCount], columnIds, shownIds);
     const next = dropAt(base, String(active.id), column, end ? undefined : target);
-    if (JSON.stringify(next) === JSON.stringify(base)) return;
     const shownNext = next.map((items) => items.filter((id) => shownIds.includes(id)));
+    if (JSON.stringify(shownNext) === JSON.stringify(columnIds)) return;
     save({ ...layout, order: withShown(layout.order, shownIds, readAcross(shownNext)), columns: { ...layout.columns, [columnCount]: next } });
   }
 
