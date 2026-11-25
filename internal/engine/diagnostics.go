@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -17,6 +18,8 @@ import (
 )
 
 const (
+	// diagnosticUser runs the tools; it owns nothing and only they run as it.
+	diagnosticUser = "andaru-diag"
 	// diagnosticSlots bounds the runs at once; a run beyond them is refused, not queued.
 	diagnosticSlots = 2
 )
@@ -26,16 +29,18 @@ var errDiagnosticsBusy = fmt.Errorf("%w: other diagnostics are running on this b
 
 // localDiagnostics runs ping and traceroute on this box for the fleet's built-in device. The
 // engine has no IP sockets of its own (its unit allows AF_UNIX and AF_NETLINK only), so each run
-// is a transient unit of PID 1's with a dynamic user, no capabilities, and IP sockets.
+// is a transient unit of PID 1's, as diagnosticUser with no capabilities.
 type localDiagnostics struct {
 	slots chan struct{}
-	// transient runs the tool through systemd-run; tests run it directly.
+	// transient runs the tool through systemd-run as user, its output read back from the journal;
+	// tests run it directly.
 	transient bool
+	user      string
 	exec      func(ctx context.Context, argv []string, out io.Writer) (exitCode int, err error)
 }
 
 func newLocalDiagnostics() *localDiagnostics {
-	return &localDiagnostics{slots: make(chan struct{}, diagnosticSlots), transient: true, exec: execDiagnostic}
+	return &localDiagnostics{slots: make(chan struct{}, diagnosticSlots), transient: true, user: diagnosticUser, exec: execDiagnostic}
 }
 
 // Run runs req's ping or traceroute and parses its output.
@@ -54,17 +59,34 @@ func (d *localDiagnostics) Run(ctx context.Context, req npmodel.DiagnosticReques
 	default:
 		return nil, errDiagnosticsBusy
 	}
+	var unit string
 	if d.transient {
-		argv = append(transientDiagnosticUnit(timeout), argv...)
+		unit = "andaru-diagnostic-" + strconv.FormatUint(rand.Uint64(), 16) + ".service"
+		argv = append(transientDiagnosticUnit(timeout, unit, d.user), argv...)
 	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var out cappedBuffer
 	code, err := d.exec(runCtx, argv, &out)
+	// Taken now: reading the output back may outlast the tool's budget without the tool having done so.
+	timedOut := runCtx.Err() != nil
+	if unit != "" && err == nil && !timedOut {
+		// The tool's output, which the unit logged, then what systemd-run itself said (a unit that did not start).
+		said := out.String()
+		out = cappedBuffer{}
+		if err = d.readJournal(ctx, unit, &out); err != nil {
+			// A caller that left gets its own error, not the journal read it cut short.
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, err
+		}
+		_, _ = out.Write([]byte(said))
+	}
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	if runCtx.Err() != nil {
+	if timedOut {
 		return nil, fmt.Errorf("%s did not finish within %s", req.Kind, timeout)
 	}
 	if err != nil {
@@ -95,18 +117,52 @@ func diagnosticCommand(req npmodel.DiagnosticRequest, host string) ([]string, ti
 	return nil, 0, fmt.Errorf("%w: andaru runs ping and traceroute, not %s", npdriver.ErrDiagnosticUnsupported, req.Kind)
 }
 
-// transientDiagnosticUnit is the systemd-run prefix of a run: PID 1 stops the unit at the
-// timeout even when the engine's wait for it ends first.
-func transientDiagnosticUnit(timeout time.Duration) []string {
-	return []string{"/usr/bin/systemd-run", "--quiet", "--pipe", "--wait", "--collect", "--service-type=exec",
+// readJournal reads back what unit's tool printed, once the journal holds all of it. It has a
+// budget of its own: a tool that used most of its time still has its output read.
+func (d *localDiagnostics) readJournal(ctx context.Context, unit string, out io.Writer) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := d.journal(ctx, io.Discard, "--sync"); err != nil {
+		return err
+	}
+	return d.journal(ctx, out, "--quiet", "--no-pager", "--output=cat", "_SYSTEMD_UNIT="+unit, "_TRANSPORT=stdout")
+}
+
+// journal runs journalctl with args, its output into out; a failure says journalctl's last line.
+func (d *localDiagnostics) journal(ctx context.Context, out io.Writer, args ...string) error {
+	var said cappedBuffer
+	code, err := d.exec(ctx, append([]string{"/usr/bin/journalctl"}, args...), io.MultiWriter(out, &said))
+	if err == nil && code != 0 {
+		lines := strings.Split(strings.TrimSpace(said.String()), "\n")
+		err = fmt.Errorf("exit status %d: %s", code, lines[len(lines)-1])
+	}
+	if err != nil {
+		return fmt.Errorf("read the diagnostic's output from the journal: %w", err)
+	}
+	return nil
+}
+
+// transientDiagnosticUnit is the systemd-run prefix of a run as unit, which logs the tool's output
+// to the journal: PID 1 stops the unit at the timeout even when the engine's wait for it ends first.
+//
+// Fedora's SELinux policy confines ping and traceroute in their own domains (ping_t,
+// traceroute_t), and refuses the transition into them under NoNewPrivileges, which DynamicUser
+// implies: so a fixed user, and no NoNewPrivileges. The seccomp-based settings do not imply it
+// here, PID 1 installing them while still privileged. The output goes to the journal, which those
+// domains may write: --pipe fails from inside a service on systemd 262 ("Bad message"), and they
+// may not write a file the engine could read.
+func transientDiagnosticUnit(timeout time.Duration, unit, user string) []string {
+	return []string{"/usr/bin/systemd-run", "--quiet", "--wait", "--collect", "--unit=" + unit, "--service-type=exec",
 		"-p", "RuntimeMaxSec=" + strconv.Itoa(int(timeout.Seconds())),
-		"-p", "DynamicUser=yes",
+		"-p", "User=" + user,
 		"-p", "CapabilityBoundingSet=",
-		"-p", "NoNewPrivileges=yes",
+		"-p", "AmbientCapabilities=",
 		// IP for the probes; AF_UNIX and AF_NETLINK for name resolution.
 		"-p", "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK",
-		"-p", "PrivateDevices=yes",
+		"-p", "ProtectSystem=strict",
 		"-p", "ProtectHome=yes",
+		"-p", "PrivateTmp=yes",
+		"-p", "PrivateDevices=yes",
 		"-p", "ProtectKernelTunables=yes",
 		"-p", "ProtectKernelModules=yes",
 		"-p", "ProtectKernelLogs=yes",
@@ -117,12 +173,16 @@ func transientDiagnosticUnit(timeout time.Duration) []string {
 		"-p", "ProcSubset=pid",
 		"-p", "RestrictNamespaces=yes",
 		"-p", "RestrictRealtime=yes",
+		"-p", "RestrictSUIDSGID=yes",
 		"-p", "LockPersonality=yes",
 		"-p", "MemoryDenyWriteExecute=yes",
 		"-p", "SystemCallArchitectures=native",
 		"-p", "SystemCallFilter=@system-service",
 		"-p", "TasksMax=4",
 		"-p", "MemoryMax=64M",
+		"-p", "StandardInput=null",
+		"-p", "StandardOutput=journal",
+		"-p", "StandardError=journal",
 		"--"}
 }
 
