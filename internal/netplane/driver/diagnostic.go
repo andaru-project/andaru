@@ -129,3 +129,56 @@ func LastLine(s string) string {
 	lines := strings.Split(strings.TrimSpace(s), "\n")
 	return strings.TrimSpace(lines[len(lines)-1])
 }
+
+// TracerouteHop is one line of traceroute output; Address is empty when the probe timed out.
+type TracerouteHop struct {
+	TTL     int      `json:"ttl"`
+	Address string   `json:"address,omitempty"`
+	RTTMs   *float64 `json:"rtt_ms,omitempty"`
+}
+
+var (
+	traceDestRE = regexp.MustCompile(`^traceroute6? to \S+ \(([^)]+)\)`)
+	traceHopRE  = regexp.MustCompile(`^\s*(\d+)\s+(\S+)(?:\s+([\d.]+) ms)?`)
+)
+
+// TracerouteResult parses traceroute -n -q 1 output, BusyBox's or Linux traceroute 2.x's. The
+// run succeeds when the last hop is the destination address.
+func TracerouteResult(req model.DiagnosticRequest, host string, code int, output string) *model.DiagnosticResult {
+	res := &model.DiagnosticResult{Kind: req.Kind, DeviceID: req.DeviceID, Target: host, RawOutput: output}
+	dest := ""
+	hops := []TracerouteHop{}
+	for line := range strings.SplitSeq(output, "\n") {
+		if m := traceDestRE.FindStringSubmatch(line); m != nil {
+			dest = m[1]
+			continue
+		}
+		m := traceHopRE.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		hop := TracerouteHop{}
+		hop.TTL, _ = strconv.Atoi(m[1])
+		if m[2] != "*" {
+			hop.Address = m[2]
+		}
+		if m[3] != "" {
+			v, _ := strconv.ParseFloat(m[3], 64)
+			hop.RTTMs = &v
+		}
+		hops = append(hops, hop)
+	}
+	if dest == "" || code != 0 {
+		res.Summary = fmt.Sprintf("traceroute %s failed", host)
+		res.Error = LastLine(output)
+		return res
+	}
+	res.Structured = map[string]any{"destination": dest, "hops": hops}
+	res.OK = len(hops) > 0 && hops[len(hops)-1].Address == dest
+	if res.OK {
+		res.Summary = fmt.Sprintf("%s (%s) reached in %d hops", host, dest, len(hops))
+	} else {
+		res.Summary = fmt.Sprintf("%s (%s) not reached within %d hops", host, dest, len(hops))
+	}
+	return res
+}

@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -91,58 +90,5 @@ func (d *Driver) RunDiagnostic(ctx context.Context, cfg driver.TargetConfig, req
 	if req.Kind == model.DiagPing {
 		return driver.PingResult(req, host, output), nil
 	}
-	return tracerouteResult(req, host, out.Code, output), nil
-}
-
-// tracerouteHop is one line of traceroute output; Address is empty when the probe timed out.
-type tracerouteHop struct {
-	TTL     int      `json:"ttl"`
-	Address string   `json:"address,omitempty"`
-	RTTMs   *float64 `json:"rtt_ms,omitempty"`
-}
-
-var (
-	traceDestRE = regexp.MustCompile(`^traceroute6? to \S+ \(([^)]+)\)`)
-	traceHopRE  = regexp.MustCompile(`^\s*(\d+)\s+(\S+)(?:\s+([\d.]+) ms)?`)
-)
-
-// tracerouteResult parses BusyBox traceroute -n -q 1 output. The run succeeds when the last
-// hop is the destination address.
-func tracerouteResult(req model.DiagnosticRequest, host string, code int, output string) *model.DiagnosticResult {
-	res := &model.DiagnosticResult{Kind: req.Kind, DeviceID: req.DeviceID, Target: host, RawOutput: output}
-	dest := ""
-	hops := []tracerouteHop{}
-	for line := range strings.SplitSeq(output, "\n") {
-		if m := traceDestRE.FindStringSubmatch(line); m != nil {
-			dest = m[1]
-			continue
-		}
-		m := traceHopRE.FindStringSubmatch(line)
-		if m == nil {
-			continue
-		}
-		hop := tracerouteHop{}
-		hop.TTL, _ = strconv.Atoi(m[1])
-		if m[2] != "*" {
-			hop.Address = m[2]
-		}
-		if m[3] != "" {
-			v, _ := strconv.ParseFloat(m[3], 64)
-			hop.RTTMs = &v
-		}
-		hops = append(hops, hop)
-	}
-	if dest == "" || code != 0 {
-		res.Summary = fmt.Sprintf("traceroute %s failed", host)
-		res.Error = driver.LastLine(output)
-		return res
-	}
-	res.Structured = map[string]any{"destination": dest, "hops": hops}
-	res.OK = len(hops) > 0 && hops[len(hops)-1].Address == dest
-	if res.OK {
-		res.Summary = fmt.Sprintf("%s (%s) reached in %d hops", host, dest, len(hops))
-	} else {
-		res.Summary = fmt.Sprintf("%s (%s) not reached within %d hops", host, dest, len(hops))
-	}
-	return res
+	return driver.TracerouteResult(req, host, out.Code, output), nil
 }
