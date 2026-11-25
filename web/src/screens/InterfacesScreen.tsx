@@ -1,7 +1,7 @@
 import { Alert, Badge, Button, Group, Loader, ScrollArea, Stack, Table, Text, Title, VisuallyHidden } from '@mantine/core';
 import { useCallback, useState } from 'react';
 import { ApiClient, reportError } from '../api';
-import { isPort } from '../interfaceEdit';
+import { ipv4Modes, ipv6Modes, isPort, modeLabel } from '../interfaceEdit';
 import { stateColor, stateLabel, type ConfigBatchOperation, type LinkStatus, type Preview, type SavedLink, type SavedObject, type Segment, type Session, type Snapshot } from '../types';
 import { useResource, useVisiblePoll } from '../useResource';
 import { bindingFindings, kernelName, zonesByInterface } from '../zones';
@@ -139,15 +139,21 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
                       {conflict && <Badge color="red" variant="light">Conflict: several saved links</Badge>}
                       {finding && <Text size="sm" className="error-text">{finding}</Text>}
                     </Table.Td>
-                    <Table.Td data-label="Addressing">{segment ? <><Text size="sm">IPv4 {segment.addressing.ipv4.mode}</Text><Text size="sm">IPv6 {segment.addressing.ipv6.mode}</Text></> : <Text c="dimmed">—</Text>}</Table.Td>
+                    {/* What is saved, which may not be applied yet: the live addresses are in their own column. */}
+                    <Table.Td data-label="Addressing">{segment ? ([['IPv4', ipv4Modes, segment.addressing.ipv4], ['IPv6', ipv6Modes, segment.addressing.ipv6]] as const).map(([family, modes, value]) => (
+                      <Text key={family} size="sm" c={value.mode === 'none' ? 'dimmed' : undefined}>
+                        {family} {modeLabel(modes, value.mode)}
+                        {(value as { addresses?: string[] }).addresses?.map((address) => <Text key={address} span ff="monospace" inherit> {address}</Text>)}
+                      </Text>
+                    )) : <Text c="dimmed">—</Text>}</Table.Td>
                   </>
                 )}
                 {editable && (
-                  <Table.Td data-label="">
+                  <Table.Td>
                     {/* Each of two saved links on one port is its own object: either can be edited or removed. */}
                     {link
-                      ? <Button size="xs" variant="default" loading={opening === key} aria-label={`Edit ${link.name}`} onClick={() => void edit(key, live, link, segment)}>Edit</Button>
-                      : isPort(live) && <Button size="xs" variant="light" loading={opening === key} aria-label={`Add ${live?.name} to the configuration`} onClick={() => void edit(key, live, undefined, undefined)}>Add</Button>}
+                      ? <Button size="xs" variant="default" loading={opening === key} disabled={Boolean(opening) && opening !== key} aria-label={`Edit ${link.name}`} onClick={() => void edit(key, live, link, segment)}>Edit</Button>
+                      : isPort(live) && <Button size="xs" variant="light" loading={opening === key} disabled={Boolean(opening) && opening !== key} aria-label={`Add ${live?.name} to the configuration`} onClick={() => void edit(key, live, undefined, undefined)}>Add</Button>}
                   </Table.Td>
                 )}
               </Table.Tr>

@@ -57,16 +57,16 @@ it('joins live links with the saved links, segments and zones on them', async ()
   const lan = row('enp1s0');
   expect(lan).toHaveTextContent('LAN port');
   expect(lan).toHaveTextContent('Trusted');
-  expect(lan).toHaveTextContent('IPv4 static');
-  expect(lan).toHaveTextContent('IPv6 none');
+  expect(lan).toHaveTextContent('IPv4 Static 192.168.1.1/24');
+  expect(lan).toHaveTextContent('IPv6 None');
   expect(lan).toHaveTextContent('192.168.1.1/24');
   expect(within(lan).getByText('Management')).toBeInTheDocument();
 
   const guest = row('vl222222222222');
   expect(guest).toHaveTextContent('Guest VLAN');
   expect(guest).toHaveTextContent('Guests');
-  expect(guest).toHaveTextContent('IPv4 dhcp');
-  expect(guest).toHaveTextContent('IPv6 slaac');
+  expect(guest).toHaveTextContent('IPv4 DHCP client');
+  expect(guest).toHaveTextContent('IPv6 SLAAC');
   expect(within(guest).queryByText('Management')).not.toBeInTheDocument();
 });
 
@@ -289,4 +289,55 @@ it('shows a refusal beside the field it names and keeps the panel open', async (
   expect(await within(panel).findByText('Not an IPv4 prefix.')).toBeInTheDocument();
   expect(addresses).toHaveAttribute('aria-invalid', 'true');
   expect(within(panel).getByText('Some of the fields below were refused.')).toBeInTheDocument();
+});
+
+const lanObjects = {
+  [`/api/v1/config/links/${lanPort}`]: { version: '4', value: ethernet(lanPort, 'LAN port', '52:54:00:aa:bb:01') },
+  '/api/v1/config/segments/seg_lan': { version: '6', value: { id: 'seg_lan', name: 'LAN', link: lanPort, zone: 'zon_lan', addressing: { ipv4: { mode: 'static', addresses: ['192.168.1.1/24'] }, ipv6: { mode: 'none' } } } },
+};
+
+it('keeps the management segment, and says what keeps the management interface from being removed', async () => {
+  const user = userEvent.setup();
+  const sent = vi.fn<(init: RequestInit | undefined) => Response>(() => jsonResponse(200, { savedVersion: '8' }));
+  routes({ extra: { ...lanObjects, 'POST /api/v1/config/changes': sent } });
+  render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={vi.fn()} onSessionLost={vi.fn()} />);
+  await user.click(await screen.findByRole('button', { name: 'Edit LAN port' }));
+  const panel = await screen.findByRole('dialog');
+
+  expect(within(panel).getByRole('switch', { name: /Carries a segment/ })).toBeDisabled();
+  await user.click(within(panel).getByRole('button', { name: 'Remove…' }));
+  expect(within(panel).getByText('This interface cannot be removed yet')).toBeInTheDocument();
+  expect(within(panel).getByText('You manage Andaru through this interface.')).toBeInTheDocument();
+  expect(within(panel).getByText('Guest VLAN is a VLAN on this interface.')).toBeInTheDocument();
+  expect(within(panel).getByRole('button', { name: 'Remove it' })).toBeDisabled();
+  expect(within(panel).getByLabelText(/^Name/)).toBeDisabled();
+  expect(sent).not.toHaveBeenCalled();
+});
+
+it('warns before a save removes a segment', async () => {
+  const user = userEvent.setup();
+  routes({ extra: {
+    [`/api/v1/config/links/${guestVlan}`]: { version: '2', value: { id: guestVlan, name: 'Guest VLAN', kind: 'vlan', mtu: 1500, enabled: true, parent: lanPort, vlanId: 20 } },
+    '/api/v1/config/segments/seg_guest': { version: '3', value: { id: 'seg_guest', name: 'Guest', link: guestVlan, zone: 'zon_guest', addressing: { ipv4: { mode: 'dhcp' }, ipv6: { mode: 'slaac' } } } },
+  } });
+  render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={vi.fn()} onSessionLost={vi.fn()} />);
+  await user.click(await screen.findByRole('button', { name: 'Edit Guest VLAN' }));
+  const panel = await screen.findByRole('dialog');
+  await user.click(within(panel).getByRole('switch', { name: /Carries a segment/ }));
+
+  expect(within(panel).getByRole('alert', { name: 'Saving removes the segment Guest' })).toBeInTheDocument();
+});
+
+it('brings the first refused field into focus', async () => {
+  const user = userEvent.setup();
+  routes({ extra: lanObjects });
+  render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={vi.fn()} onSessionLost={vi.fn()} />);
+  await user.click(await screen.findByRole('button', { name: 'Edit LAN port' }));
+  const panel = await screen.findByRole('dialog');
+  const addresses = within(panel).getByLabelText(/^IPv4 addresses/);
+  await user.clear(addresses);
+  await user.click(within(panel).getByRole('button', { name: 'Save interface' }));
+
+  expect(addresses).toHaveFocus();
+  expect(within(panel).getByText('A static address needs at least one address, such as 192.168.2.1/24.')).toBeInTheDocument();
 });

@@ -649,6 +649,11 @@ path.traffic-sent {
   flex: 1 1 14rem;
 }
 
+/* Addresses, gateways and IDs typed into a form read as they do in the tables. */
+.mono-input {
+  font-family: var(--mantine-font-family-monospace);
+}
+
 .notification-detail {
   white-space: pre-wrap;
 }

@@ -25,6 +25,14 @@ export interface InterfaceDraft {
   searchDomains: string;
 }
 
+// How a segment gets its addresses, in the words the panel and the table use.
+export const ipv4Modes = [{ value: 'none', label: 'None' }, { value: 'dhcp', label: 'DHCP client' }, { value: 'static', label: 'Static' }, { value: 'ppp', label: 'PPP' }];
+export const ipv6Modes = [
+  { value: 'none', label: 'None' }, { value: 'slaac', label: 'SLAAC' }, { value: 'dhcp6', label: 'DHCPv6 client' },
+  { value: 'static', label: 'Static' }, { value: 'delegated', label: 'From a delegated prefix' },
+];
+export const modeLabel = (modes: Array<{ value: string; label: string }>, mode: string) => modes.find((item) => item.value === mode)?.label ?? mode;
+
 // isPort says whether a live link is hardware a saved Ethernet link can name, by its permanent address, as the
 // renderer matches it. A VLAN, bridge or veth has a kind of its own, and the loopback is no Ethernet device.
 export const isPort = (live?: LinkStatus) => live?.linkType === 'ether' && !live.kind && Boolean(live.permanentAddress);
