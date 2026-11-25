@@ -234,7 +234,7 @@ export function DashboardScreen({ api, session, system, notifications, update, o
     const end = target.startsWith(columnEnd);
     const column = end ? Number(target.slice(columnEnd.length)) : columnIds.findIndex((items) => items.includes(target));
     // The arrangement keeps the hidden widgets where they were, so one shown again comes back to its place.
-    const base = withHidden(layout.columns?.[columnCount], columnIds, shownIds);
+    const base = withHidden(layout.columns?.[columnCount], columnIds, shownIds, layout.order);
     const next = dropAt(base, String(active.id), column, end ? undefined : target);
     const shownNext = next.map((items) => items.filter((id) => shownIds.includes(id)));
     if (JSON.stringify(shownNext) === JSON.stringify(columnIds)) return;

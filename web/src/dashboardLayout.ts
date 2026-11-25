@@ -50,9 +50,21 @@ export function dropAt(columns: string[][], id: string, column: number, over?: s
   return next;
 }
 
-// withHidden puts back, around the shown widgets as laid out, the hidden ones the arrangement held, in their places.
-export function withHidden(arranged: string[][] | undefined, columns: string[][], shown: string[]) {
-  if (arranged?.length !== columns.length) return columns;
+// withHidden puts back, around the shown widgets as laid out, the hidden ones in their places: where the arrangement
+// held them, or with no arrangement at this count yet, each after the shown widget it follows in the order.
+export function withHidden(arranged: string[][] | undefined, columns: string[][], shown: string[], order: string[]) {
+  if (arranged?.length !== columns.length) {
+    const next = columns.map((column) => [...column]);
+    let after: string | undefined;
+    for (const id of order) {
+      if (!shown.includes(id)) {
+        const column = after === undefined ? next[0] : next.find((items) => items.includes(after!));
+        column?.splice(after === undefined ? 0 : column.indexOf(after) + 1, 0, id);
+      }
+      after = id;
+    }
+    return next;
+  }
   return columns.map((column, index) => {
     const queue = [...column];
     const merged = arranged[index].flatMap((id) => (shown.includes(id) ? (queue.length > 0 ? [queue.shift()!] : []) : [id]));

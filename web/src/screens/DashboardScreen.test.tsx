@@ -222,7 +222,7 @@ it('moves a widget by its grip with the keyboard, and saves the new order', asyn
   await userEvent.keyboard('{ArrowRight}');
   await userEvent.keyboard('{Enter}');
   await waitFor(() => expect(titles()).toEqual(['System', 'Interfaces', 'Network activity', 'Resources', 'IPv6 prefixes']));
-  await waitFor(() => expect(saves(fetchMock)).toEqual([{ dashboard: { order: ['system', 'interfaces', 'traffic', 'resources', 'prefixes', 'activity', 'notifications'], hidden: [], columns: { 1: [['system', 'interfaces', 'traffic', 'resources', 'prefixes']] } } }]));
+  await waitFor(() => expect(saves(fetchMock)).toEqual([{ dashboard: { order: ['system', 'interfaces', 'traffic', 'resources', 'prefixes', 'activity', 'notifications'], hidden: [], columns: { 1: [['system', 'interfaces', 'traffic', 'resources', 'prefixes', 'activity', 'notifications']] } } }]));
   expect(screen.getByRole('status', { hidden: true })).toHaveTextContent('Dropped Resources at position 4 of 5.');
   rect.mockRestore();
 });
@@ -241,6 +241,22 @@ it('keeps a hidden widget in its place in the arrangement when another moves', a
   await userEvent.keyboard('{Enter}');
   await waitFor(() => expect(titles().slice(0, 4)).toEqual(['System', 'Network activity', 'Resources', 'IPv6 prefixes']));
   await waitFor(() => expect((saves(fetchMock).at(-1) as { dashboard?: { columns?: unknown } } | undefined)?.dashboard?.columns).toEqual({ 1: [['system', 'interfaces', 'traffic', 'resources', 'prefixes']] }));
+  rect.mockRestore();
+});
+
+it('keeps a hidden widget in its place in the first arrangement made at a column count', async () => {
+  const rect = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+    const index = [...document.querySelectorAll('.widget')].indexOf(this.closest('.widget') ?? this);
+    return DOMRect.fromRect(index < 0 ? {} : { x: index * 400, y: 0, width: 380, height: 200 });
+  });
+  const fetchMock = layoutRoutes({ dashboard: { hidden: ['interfaces'] } });
+  await mount(everything);
+  await unlock();
+  screen.getByRole('button', { name: 'Move Resources' }).focus();
+  await userEvent.keyboard('{Enter}');
+  await userEvent.keyboard('{ArrowRight}');
+  await userEvent.keyboard('{Enter}');
+  await waitFor(() => expect((saves(fetchMock).at(-1) as { dashboard?: { columns?: unknown } } | undefined)?.dashboard?.columns).toEqual({ 1: [['system', 'interfaces', 'traffic', 'resources', 'prefixes', 'activity', 'notifications']] }));
   rect.mockRestore();
 });
 
