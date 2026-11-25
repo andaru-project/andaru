@@ -240,7 +240,7 @@ it('keeps a hidden widget in its place in the arrangement when another moves', a
   await userEvent.keyboard('{ArrowRight}');
   await userEvent.keyboard('{Enter}');
   await waitFor(() => expect(titles().slice(0, 4)).toEqual(['System', 'Network activity', 'Resources', 'IPv6 prefixes']));
-  await waitFor(() => expect((saves(fetchMock).at(-1) as { dashboard?: { columns?: unknown } } | undefined)?.dashboard?.columns).toEqual({ 1: [['system', 'interfaces', 'traffic', 'resources', 'prefixes']] }));
+  await waitFor(() => expect((saves(fetchMock).at(-1) as { dashboard?: { columns?: unknown } } | undefined)?.dashboard?.columns).toEqual({ 1: [['system', 'interfaces', 'traffic', 'resources', 'prefixes', 'activity', 'notifications']] }));
   rect.mockRestore();
 });
 
