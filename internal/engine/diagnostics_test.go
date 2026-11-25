@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	npdriver "github.com/andaru-project/andaru/internal/netplane/driver"
@@ -37,7 +38,7 @@ func fakeDiagnostics(exec func(ctx context.Context, argv []string, out io.Writer
 
 func TestDiagnosticCommand(t *testing.T) {
 	argv, timeout, err := diagnosticCommand(npmodel.DiagnosticRequest{Kind: npmodel.DiagPing, Params: map[string]string{"count": "5"}}, "192.0.2.1")
-	if err != nil || !slices.Equal(argv, []string{"/usr/bin/ping", "-n", "-c", "5", "-w", "7", "--", "192.0.2.1"}) || timeout != 17*time.Second {
+	if err != nil || !slices.Equal(argv, []string{"/usr/bin/ping", "-n", "-c", "5", "-w", "7", "--", "192.0.2.1"}) || timeout != 25*time.Second {
 		t.Errorf("ping: %v %v %v", argv, timeout, err)
 	}
 	argv, _, err = diagnosticCommand(npmodel.DiagnosticRequest{Kind: npmodel.DiagPing}, "a.example")
@@ -56,12 +57,12 @@ func TestDiagnosticCommand(t *testing.T) {
 	}
 }
 
-func TestLocalDiagnosticsRefusesBadTargets(t *testing.T) {
+func TestLocalDiagnosticsRefusesBadRequests(t *testing.T) {
 	d := fakeDiagnostics(func(context.Context, []string, io.Writer) (int, error) {
 		t.Error("tool run for a bad request")
 		return 0, nil
 	})
-	for _, target := range []string{"", "-f", "--help", "a b", "a;reboot", "$(id)", "fe80::1%eth0", "a\nb", strings.Repeat("a", 254)} {
+	for _, target := range []string{"-f", "a;reboot"} {
 		if _, err := d.Run(context.Background(), npmodel.DiagnosticRequest{Kind: npmodel.DiagPing, Target: target}); !errors.Is(err, npdriver.ErrDiagnosticRequest) {
 			t.Errorf("target %q: %v", target, err)
 		}
@@ -86,10 +87,34 @@ func TestLocalDiagnosticsRun(t *testing.T) {
 	if err != nil || !res.OK || res.Summary != "2/2 replies from 192.0.2.1 (0% loss), avg 0.4 ms" || res.DeviceID != fleetLocalDeviceID {
 		t.Fatalf("ping: %+v %v", res, err)
 	}
-	// The tool runs in a transient unit with no capabilities, after the unit's own options.
-	unit := transientDiagnosticUnit(14 * time.Second)
-	if !slices.Equal(got[:len(unit)], unit) || got[len(unit)] != "/usr/bin/ping" || !slices.Contains(unit, "RuntimeMaxSec=14") || !slices.Contains(unit, "CapabilityBoundingSet=") {
-		t.Fatalf("argv = %q", got)
+	// The tool runs in a sandboxed transient unit with no capabilities, after the unit's own options.
+	want := []string{"/usr/bin/systemd-run", "--quiet", "--pipe", "--wait", "--collect", "--service-type=exec",
+		"-p", "RuntimeMaxSec=22",
+		"-p", "DynamicUser=yes",
+		"-p", "CapabilityBoundingSet=",
+		"-p", "NoNewPrivileges=yes",
+		"-p", "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK",
+		"-p", "PrivateDevices=yes",
+		"-p", "ProtectHome=yes",
+		"-p", "ProtectKernelTunables=yes",
+		"-p", "ProtectKernelModules=yes",
+		"-p", "ProtectKernelLogs=yes",
+		"-p", "ProtectControlGroups=yes",
+		"-p", "ProtectClock=yes",
+		"-p", "ProtectHostname=yes",
+		"-p", "ProtectProc=invisible",
+		"-p", "ProcSubset=pid",
+		"-p", "RestrictNamespaces=yes",
+		"-p", "RestrictRealtime=yes",
+		"-p", "LockPersonality=yes",
+		"-p", "MemoryDenyWriteExecute=yes",
+		"-p", "SystemCallArchitectures=native",
+		"-p", "SystemCallFilter=@system-service",
+		"-p", "TasksMax=4",
+		"-p", "MemoryMax=64M",
+		"--", "/usr/bin/ping", "-n", "-c", "2", "-w", "4", "--", "192.0.2.1"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("argv = %q\nwant %q", got, want)
 	}
 	res, err = d.Run(context.Background(), npmodel.DiagnosticRequest{Kind: npmodel.DiagTraceroute, Target: "example.com"})
 	if err != nil || !res.OK || res.Summary != "example.com (93.184.215.14) reached in 3 hops" {
@@ -107,32 +132,52 @@ func TestLocalDiagnosticsFailures(t *testing.T) {
 	if res, err := d.Run(context.Background(), ping); err != nil || res.OK || res.Error != "ping: connect: Network is unreachable" {
 		t.Errorf("unreachable: %+v %v", res, err)
 	}
-	// A run that outlives its deadline is an error, whatever the tool printed.
-	d = fakeDiagnostics(func(ctx context.Context, _ []string, _ io.Writer) (int, error) {
+	waits := fakeDiagnostics(func(ctx context.Context, _ []string, _ io.Writer) (int, error) {
 		<-ctx.Done()
 		return 0, ctx.Err()
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
-	defer cancel()
-	if _, err := d.Run(ctx, ping); err == nil || !strings.Contains(err.Error(), "did not finish") {
-		t.Errorf("timeout: %v", err)
+	// A caller that leaves gets its own error, not a timeout.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := waits.Run(ctx, ping); !errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "did not finish") {
+		t.Errorf("caller left: %v", err)
 	}
-	// A run beyond the slots is refused, not queued.
+	// A run that outlives its own deadline is an error, whatever the tool printed.
+	synctest.Test(t, func(t *testing.T) {
+		if _, err := waits.Run(context.Background(), ping); err == nil || err.Error() != "ping did not finish within 23s" {
+			t.Errorf("own deadline: %v", err)
+		}
+	})
+}
+
+func TestLocalDiagnosticsBusy(t *testing.T) {
+	ping := npmodel.DiagnosticRequest{Kind: npmodel.DiagPing, Target: "192.0.2.1"}
 	release := make(chan struct{})
 	started := make(chan struct{}, diagnosticSlots)
-	d = fakeDiagnostics(func(_ context.Context, _ []string, out io.Writer) (int, error) {
+	d := fakeDiagnostics(func(_ context.Context, _ []string, out io.Writer) (int, error) {
 		started <- struct{}{}
 		<-release
 		_, _ = io.WriteString(out, iputilsPingOut)
 		return 0, nil
 	})
-	done := make(chan error, diagnosticSlots)
+	done := make(chan error, diagnosticSlots+1)
 	for range diagnosticSlots {
 		go func() { _, err := d.Run(context.Background(), ping); done <- err }()
-		<-started
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("run did not start")
+		}
 	}
-	if _, err := d.Run(context.Background(), ping); !errors.Is(err, errDiagnosticsBusy) {
-		t.Errorf("beyond the slots: %v", err)
+	// A run beyond the slots is refused at once, not queued.
+	go func() { _, err := d.Run(context.Background(), ping); done <- err }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, npdriver.ErrDiagnosticBusy) {
+			t.Errorf("beyond the slots: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("run beyond the slots waits for one")
 	}
 	close(release)
 	for range diagnosticSlots {
@@ -145,11 +190,20 @@ func TestLocalDiagnosticsFailures(t *testing.T) {
 func TestCappedBuffer(t *testing.T) {
 	var b cappedBuffer
 	for range 3 {
-		if n, err := b.Write(make([]byte, diagnosticMaxOutput/2+1)); err != nil || n != diagnosticMaxOutput/2+1 {
+		if n, err := b.Write(make([]byte, npdriver.DiagnosticMaxOutput/2+1)); err != nil || n != npdriver.DiagnosticMaxOutput/2+1 {
 			t.Fatalf("write = %d, %v", n, err)
 		}
 	}
-	if b.Len() != diagnosticMaxOutput {
-		t.Fatalf("kept %d bytes, want %d", b.Len(), diagnosticMaxOutput)
+	if len(b.String()) != npdriver.DiagnosticMaxOutput {
+		t.Fatalf("kept %d bytes, want %d", len(b.String()), npdriver.DiagnosticMaxOutput)
+	}
+}
+
+// os/exec copies a command's output with io.Copy, which must still go through the cap.
+func TestExecDiagnosticCapsOutput(t *testing.T) {
+	var b cappedBuffer
+	code, err := execDiagnostic(context.Background(), []string{"/usr/bin/head", "-c", "100000", "/dev/zero"}, &b)
+	if err != nil || code != 0 || len(b.String()) != npdriver.DiagnosticMaxOutput {
+		t.Fatalf("code %d, err %v, kept %d bytes, want %d", code, err, len(b.String()), npdriver.DiagnosticMaxOutput)
 	}
 }

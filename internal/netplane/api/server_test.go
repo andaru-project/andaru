@@ -64,6 +64,8 @@ func (apiMockDriver) RunDiagnostic(_ context.Context, _ driver.TargetConfig, req
 		return nil, fmt.Errorf("%w: mock", driver.ErrDiagnosticUnsupported)
 	case req.Target == "-bad":
 		return nil, fmt.Errorf("%w: mock", driver.ErrDiagnosticRequest)
+	case req.Target == "busy":
+		return nil, fmt.Errorf("%w: mock", driver.ErrDiagnosticBusy)
 	case req.Target == "unreachable":
 		return nil, errors.New("connection refused")
 	case req.Target == "unsaveable":
@@ -352,6 +354,7 @@ func TestDiagnosticsFdbLookupAndDeviceRPC(t *testing.T) {
 		{"POST", "/api/v1/diagnostics", `{"kind":"mtr","device_id":"mock:02:51:0a:00:00:01","target":"1"}`, http.StatusBadRequest},
 		{"POST", "/api/v1/diagnostics", `{"kind":"ping","device_id":"mock:02:51:0a:00:00:01","target":"-bad"}`, http.StatusBadRequest},
 		{"POST", "/api/v1/diagnostics", `{"kind":"ping","device_id":"mock:02:51:0a:00:00:01","target":"unreachable"}`, http.StatusBadGateway},
+		{"POST", "/api/v1/diagnostics", `{"kind":"ping","device_id":"mock:02:51:0a:00:00:01","target":"busy"}`, http.StatusServiceUnavailable},
 		// A run whose history write fails is reported, not returned as saved.
 		{"POST", "/api/v1/diagnostics", `{"kind":"ping","device_id":"mock:02:51:0a:00:00:01","target":"unsaveable"}`, http.StatusInternalServerError},
 	} {

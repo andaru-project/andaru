@@ -142,22 +142,6 @@ func TestOpenWrtTraceroute(t *testing.T) {
 	}
 }
 
-func TestTracerouteResultNotReachedOrFailed(t *testing.T) {
-	req := model.DiagnosticRequest{Kind: model.DiagTraceroute}
-	partial := strings.Join(strings.Split(traceOut, "\n")[:3], "\n")
-	if res := driver.TracerouteResult(req, "example.com", 0, partial); res.OK || res.Summary != "example.com (93.184.215.14) not reached within 2 hops" {
-		t.Errorf("partial: %+v", res)
-	}
-	if res := driver.TracerouteResult(req, "nope.lan", 1, "traceroute: bad address 'nope.lan'"); res.OK || res.Error != "traceroute: bad address 'nope.lan'" {
-		t.Errorf("failed: %+v", res)
-	}
-	// A run that exits non-zero after its header fails even when hops were printed.
-	broken := partial + "\ntraceroute: sendto: Network unreachable"
-	if res := driver.TracerouteResult(req, "example.com", 1, broken); res.OK || res.Structured != nil || res.Error != "traceroute: sendto: Network unreachable" {
-		t.Errorf("non-zero exit: %+v", res)
-	}
-}
-
 func TestOpenWrtDiagnosticErrors(t *testing.T) {
 	// Requests refused before any call to the device.
 	never := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("device called") }))

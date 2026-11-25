@@ -17,6 +17,15 @@ var (
 	ErrDiagnosticUnsupported = errors.New("diagnostic not supported by this driver")
 	// ErrDiagnosticRequest means the request itself is invalid (HTTP 400).
 	ErrDiagnosticRequest = errors.New("invalid diagnostic request")
+	// ErrDiagnosticBusy means the device runs as many diagnostics as it allows; try again (HTTP 503).
+	ErrDiagnosticBusy = errors.New("diagnostics busy")
+)
+
+const (
+	// DiagnosticMaxOutput bounds the output a run keeps; a bounded ping or traceroute prints far less.
+	DiagnosticMaxOutput = 64 << 10
+	// TracerouteMaxHops bounds a traceroute: one probe of at most 1 s per hop keeps a run under about 20 s.
+	TracerouteMaxHops = 20
 )
 
 // hostnameRE is a DNS name. The first character is never '-', so the device's ping or

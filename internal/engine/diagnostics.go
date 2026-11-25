@@ -19,14 +19,10 @@ import (
 const (
 	// diagnosticSlots bounds the runs at once; a run beyond them is refused, not queued.
 	diagnosticSlots = 2
-	// diagnosticMaxOutput bounds what a run keeps of its output; a bounded run prints far less.
-	diagnosticMaxOutput = 64 << 10
-	// tracerouteMaxHops with one probe of at most 1 s per hop keeps a traceroute under about 20 s.
-	tracerouteMaxHops = 20
 )
 
 // errDiagnosticsBusy refuses a run while diagnosticSlots runs are going.
-var errDiagnosticsBusy = errors.New("other diagnostics are running on this box; try again shortly")
+var errDiagnosticsBusy = fmt.Errorf("%w: other diagnostics are running on this box; try again shortly", npdriver.ErrDiagnosticBusy)
 
 // localDiagnostics runs ping and traceroute on this box for the fleet's built-in device. The
 // engine has no IP sockets of its own (its unit allows AF_UNIX and AF_NETLINK only), so each run
@@ -61,11 +57,14 @@ func (d *localDiagnostics) Run(ctx context.Context, req npmodel.DiagnosticReques
 	if d.transient {
 		argv = append(transientDiagnosticUnit(timeout), argv...)
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var out cappedBuffer
-	code, err := d.exec(ctx, argv, &out)
+	code, err := d.exec(runCtx, argv, &out)
 	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if runCtx.Err() != nil {
 		return nil, fmt.Errorf("%s did not finish within %s", req.Kind, timeout)
 	}
 	if err != nil {
@@ -87,10 +86,11 @@ func diagnosticCommand(req npmodel.DiagnosticRequest, host string) ([]string, ti
 		if err != nil {
 			return nil, 0, err
 		}
-		// -w ends the run when replies never come; the rest is for name resolution.
-		return []string{"/usr/bin/ping", "-n", "-c", strconv.Itoa(n), "-w", strconv.Itoa(n + 2), "--", host}, time.Duration(n+12) * time.Second, nil
+		// -w ends the run when replies never come; the rest is for the unit's start and name
+		// resolution (glibc's default is two tries of 5 s).
+		return []string{"/usr/bin/ping", "-n", "-c", strconv.Itoa(n), "-w", strconv.Itoa(n + 2), "--", host}, time.Duration(n+20) * time.Second, nil
 	case npmodel.DiagTraceroute:
-		return []string{"/usr/bin/traceroute", "-n", "-q", "1", "-w", "1", "-m", strconv.Itoa(tracerouteMaxHops), "--", host}, 40 * time.Second, nil
+		return []string{"/usr/bin/traceroute", "-n", "-q", "1", "-w", "1", "-m", strconv.Itoa(npdriver.TracerouteMaxHops), "--", host}, 40 * time.Second, nil
 	}
 	return nil, 0, fmt.Errorf("%w: andaru runs ping and traceroute, not %s", npdriver.ErrDiagnosticUnsupported, req.Kind)
 }
@@ -109,7 +109,20 @@ func transientDiagnosticUnit(timeout time.Duration) []string {
 		"-p", "ProtectHome=yes",
 		"-p", "ProtectKernelTunables=yes",
 		"-p", "ProtectKernelModules=yes",
+		"-p", "ProtectKernelLogs=yes",
 		"-p", "ProtectControlGroups=yes",
+		"-p", "ProtectClock=yes",
+		"-p", "ProtectHostname=yes",
+		"-p", "ProtectProc=invisible",
+		"-p", "ProcSubset=pid",
+		"-p", "RestrictNamespaces=yes",
+		"-p", "RestrictRealtime=yes",
+		"-p", "LockPersonality=yes",
+		"-p", "MemoryDenyWriteExecute=yes",
+		"-p", "SystemCallArchitectures=native",
+		"-p", "SystemCallFilter=@system-service",
+		"-p", "TasksMax=4",
+		"-p", "MemoryMax=64M",
 		"--"}
 }
 
@@ -124,12 +137,16 @@ func execDiagnostic(ctx context.Context, argv []string, out io.Writer) (int, err
 	return 0, err
 }
 
-// cappedBuffer keeps the first diagnosticMaxOutput bytes written to it and drops the rest.
-type cappedBuffer struct{ bytes.Buffer }
+// cappedBuffer keeps the first npdriver.DiagnosticMaxOutput bytes written to it and drops the
+// rest. The buffer is a named field: an embedded one would lend it ReadFrom, which io.Copy (and
+// so os/exec) would call instead of Write.
+type cappedBuffer struct{ buf bytes.Buffer }
 
 func (b *cappedBuffer) Write(p []byte) (int, error) {
-	if room := diagnosticMaxOutput - b.Len(); room > 0 {
-		b.Buffer.Write(p[:min(len(p), room)])
+	if room := npdriver.DiagnosticMaxOutput - b.buf.Len(); room > 0 {
+		b.buf.Write(p[:min(len(p), room)])
 	}
 	return len(p), nil
 }
+
+func (b *cappedBuffer) String() string { return b.buf.String() }

@@ -38,7 +38,7 @@ func TestLocalDiagnosticsRealTools(t *testing.T) {
 	}
 }
 
-// The transient unit runs ping with no capabilities and a dynamic user; it needs systemd as PID 1.
+// The transient unit runs ping and traceroute with no capabilities and a dynamic user; it needs systemd as PID 1.
 func TestLocalDiagnosticsTransientUnit(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("systemd-run needs root")
@@ -49,8 +49,13 @@ func TestLocalDiagnosticsTransientUnit(t *testing.T) {
 	if _, err := os.Stat("/usr/bin/ping"); err != nil {
 		t.Skip("/usr/bin/ping not installed")
 	}
-	res, err := newLocalDiagnostics().Run(context.Background(), npmodel.DiagnosticRequest{Kind: npmodel.DiagPing, Target: "127.0.0.1", Params: map[string]string{"count": "1"}})
-	if err != nil || !res.OK {
-		t.Fatalf("%+v %v", res, err)
+	reqs := []npmodel.DiagnosticRequest{{Kind: npmodel.DiagPing, Target: "127.0.0.1", Params: map[string]string{"count": "1"}}}
+	if _, err := os.Stat("/usr/bin/traceroute"); err == nil {
+		reqs = append(reqs, npmodel.DiagnosticRequest{Kind: npmodel.DiagTraceroute, Target: "127.0.0.1"})
+	}
+	for _, req := range reqs {
+		if res, err := newLocalDiagnostics().Run(context.Background(), req); err != nil || !res.OK {
+			t.Errorf("%s: %+v %v", req.Kind, res, err)
+		}
 	}
 }

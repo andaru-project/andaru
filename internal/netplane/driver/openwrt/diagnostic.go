@@ -13,10 +13,6 @@ import (
 	"github.com/andaru-project/andaru/internal/netplane/model"
 )
 
-// tracerouteMaxHops bounds a traceroute: one probe per hop with a 1 s wait keeps a run under
-// about 20 s, well inside uhttpd's default 60 s script timeout.
-const tracerouteMaxHops = 20
-
 // RunDiagnostic runs ping or traceroute on the device through rpcd's file.exec, which the
 // account's ACL must grant for the tool (LuCI's luci-mod-network-diagnostics grant does).
 // It logs in to a session of its own, so it never races a poll over the kept session, and
@@ -44,7 +40,8 @@ func (d *Driver) RunDiagnostic(ctx context.Context, cfg driver.TargetConfig, req
 		paths, args = []string{"/bin/ping", "/usr/bin/ping"}, []string{"-c", strconv.Itoa(n), "-w", strconv.Itoa(n + 2), host}
 	case model.DiagTraceroute:
 		paths = []string{"/usr/bin/traceroute", "/bin/traceroute"}
-		args = []string{"-n", "-q", "1", "-w", "1", "-m", strconv.Itoa(tracerouteMaxHops), host}
+		// TracerouteMaxHops keeps a run well inside uhttpd's default 60 s script timeout.
+		args = []string{"-n", "-q", "1", "-w", "1", "-m", strconv.Itoa(driver.TracerouteMaxHops), host}
 	}
 
 	client := driver.NewHTTPClient(cfg, 60*time.Second)

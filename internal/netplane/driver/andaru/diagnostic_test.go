@@ -24,13 +24,16 @@ func TestAndaruRemoteDiagnostic(t *testing.T) {
 		if req.DeviceID != "andaru:local" || req.Target != "192.0.2.1" || req.Kind != model.DiagPing || req.Params["count"] != "2" {
 			t.Errorf("request %+v", req)
 		}
-		_, _ = w.Write([]byte(`{"id":"diag-1","kind":"ping","device_id":"andaru:local","target":"192.0.2.1","ok":true,"summary":"2/2 replies from 192.0.2.1 (0% loss)","structured":{"transmitted":2,"received":2,"loss_pct":0},"duration_ms":1004}`))
+		// A remote's answer cannot change what was asked, nor keep more output than a local run.
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "diag-1", "kind": "traceroute", "device_id": "andaru:local", "target": "198.51.100.1", "ok": true,
+			"summary": "2/2 replies from 192.0.2.1 (0% loss)", "structured": map[string]any{"transmitted": 2, "received": 2, "loss_pct": 0},
+			"duration_ms": 1004, "raw_output": strings.Repeat("x", driver.DiagnosticMaxOutput+1)})
 	}))
 	defer srv.Close()
 	cfg := driver.TargetConfig{ID: "fw2", Driver: "andaru", Endpoint: srv.URL, ResolvedSecrets: map[string]string{"api_token": "tok"}}
 	cfg.Settings = map[string]any{"allow_insecure_http": true}
 	res, err := New().RunDiagnostic(context.Background(), cfg, model.DiagnosticRequest{Kind: model.DiagPing, DeviceID: "andaru:fw2", Target: " 192.0.2.1", Params: map[string]string{"count": "2"}})
-	if err != nil || !res.OK || res.ID != "" || res.DeviceID != "andaru:fw2" || res.DurationMs != 1004 || res.Summary != "2/2 replies from 192.0.2.1 (0% loss)" {
+	if err != nil || !res.OK || res.ID != "" || res.DeviceID != "andaru:fw2" || res.Kind != model.DiagPing || res.Target != "192.0.2.1" || len(res.RawOutput) != driver.DiagnosticMaxOutput || res.DurationMs != 1004 || res.Summary != "2/2 replies from 192.0.2.1 (0% loss)" {
 		t.Fatalf("res=%+v err=%v", res, err)
 	}
 }
@@ -42,17 +45,19 @@ func TestAndaruRemoteDiagnosticErrors(t *testing.T) {
 		text   string
 	}{
 		{http.StatusBadRequest, driver.ErrDiagnosticRequest, "HTTP 400"},
+		{http.StatusServiceUnavailable, driver.ErrDiagnosticBusy, "HTTP 503"},
 		{http.StatusNotImplemented, driver.ErrDiagnosticUnsupported, "predates"},
 		{http.StatusForbidden, nil, "configuration.write"},
 		{http.StatusBadGateway, nil, "HTTP 502"},
 	} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(tc.status)
-			_, _ = w.Write([]byte(`{"error":{"code":"X","message":"no"}}`))
+			_, _ = w.Write([]byte(`{"error":{"code":"X","message":"remote says no"}}`))
 		}))
 		_, err := New().RunDiagnostic(context.Background(), driver.TargetConfig{ID: "fw2", Endpoint: srv.URL}, model.DiagnosticRequest{Kind: model.DiagTraceroute, Target: "a.example"})
 		srv.Close()
-		if err == nil || (tc.is != nil && !errors.Is(err, tc.is)) || !strings.Contains(err.Error(), tc.text) {
+		// The remote's own explanation reaches the user.
+		if err == nil || (tc.is != nil && !errors.Is(err, tc.is)) || !strings.Contains(err.Error(), tc.text) || !strings.Contains(err.Error(), ": remote says no") {
 			t.Errorf("HTTP %d: %v", tc.status, err)
 		}
 	}

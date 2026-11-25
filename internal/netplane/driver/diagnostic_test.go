@@ -86,6 +86,23 @@ func TestPingResult(t *testing.T) {
 	}
 }
 
+// BusyBox traceroute -n -q 1: a run that stops short, or fails.
+func TestTracerouteResultNotReachedOrFailed(t *testing.T) {
+	req := model.DiagnosticRequest{Kind: model.DiagTraceroute}
+	partial := "traceroute to example.com (93.184.215.14), 20 hops max, 46 byte packets\n 1  192.0.2.1  0.512 ms\n 2  *"
+	if res := TracerouteResult(req, "example.com", 0, partial); res.OK || res.Summary != "example.com (93.184.215.14) not reached within 2 hops" {
+		t.Errorf("partial: %+v", res)
+	}
+	if res := TracerouteResult(req, "nope.lan", 1, "traceroute: bad address 'nope.lan'"); res.OK || res.Error != "traceroute: bad address 'nope.lan'" {
+		t.Errorf("failed: %+v", res)
+	}
+	// A run that exits non-zero after its header fails even when hops were printed.
+	broken := partial + "\ntraceroute: sendto: Network unreachable"
+	if res := TracerouteResult(req, "example.com", 1, broken); res.OK || res.Structured != nil || res.Error != "traceroute: sendto: Network unreachable" {
+		t.Errorf("non-zero exit: %+v", res)
+	}
+}
+
 // Linux traceroute 2.x (Fedora's traceroute package) with -n -q 1: unreachable marks follow
 // the time, and an IPv6 run names the address twice.
 func TestTracerouteResultLinux(t *testing.T) {
