@@ -44,6 +44,7 @@ it('shows only the navigation the capabilities allow and routes between pages', 
   render(<App />);
 
   const navigation = await screen.findByRole('navigation', { name: 'Main navigation' });
+  await userEvent.click(within(navigation).getByRole('button', { name: 'System' }));
   expect(within(navigation).getAllByRole('link').map((link) => link.textContent)).toEqual(['Dashboard', 'Users', 'Roles', 'Audit']);
   expect(within(navigation).queryByText('Network')).not.toBeInTheDocument();
   expect(within(navigation).queryByText('Changes')).not.toBeInTheDocument();
@@ -71,39 +72,37 @@ it('shows every branch to an administrator and starts on the dashboard', async (
   render(<App />);
 
   const navigation = await screen.findByRole('navigation', { name: 'Main navigation' });
-  // A branch label is a button, so the keyboard reaches it; it says whether it is open.
-  for (const label of ['Network', 'Firewall', 'Changes', 'System']) expect(within(navigation).getByRole('button', { name: label })).toHaveAttribute('aria-expanded', 'true');
-  expect(within(navigation).getAllByRole('link').map((link) => link.textContent)).toEqual(['Dashboard', 'Interfaces', 'Topology', 'VLANs & Segments', 'VLAN Flow', 'Devices', 'Clients', 'Diagnostics', 'Rules', 'Aliases', 'Review and apply', 'Details', 'Updates', 'Users', 'Roles', 'Tokens', 'Audit']);
+  // A branch label is a button, so the keyboard reaches it; it says whether it is open. The dashboard is in none.
+  const branch = (label: string) => within(navigation).getByRole('button', { name: label });
+  for (const label of ['Network', 'Firewall', 'Changes', 'System']) expect(branch(label)).toHaveAttribute('aria-expanded', 'false');
+  expect(within(navigation).getAllByRole('link').map((link) => link.textContent)).toEqual(['Dashboard']);
   expect(await screen.findByRole('heading', { name: 'Dashboard' })).toBeInTheDocument();
   expect(window.location.pathname).toBe('/');
+
+  // Opening a branch closes the one that was open.
+  await userEvent.click(branch('System'));
+  expect(within(navigation).getAllByRole('link').map((link) => link.textContent)).toEqual(['Dashboard', 'Details', 'Updates', 'Users', 'Roles', 'Tokens', 'Audit']);
+  await userEvent.click(branch('Firewall'));
+  expect(branch('System')).toHaveAttribute('aria-expanded', 'false');
+  expect(within(navigation).getAllByRole('link').map((link) => link.textContent)).toEqual(['Dashboard', 'Rules', 'Aliases']);
+  await userEvent.click(branch('Network'));
+  expect(within(navigation).getAllByRole('link').map((link) => link.textContent)).toEqual(['Dashboard', 'Interfaces', 'Topology', 'VLANs & Segments', 'VLAN Flow', 'Devices', 'Clients', 'Diagnostics']);
 
   await userEvent.click(within(navigation).getByRole('link', { name: 'Interfaces' }));
   expect(await screen.findByRole('heading', { name: 'Interfaces', level: 2 })).toBeInTheDocument();
 });
 
-it('keeps a closed branch closed across visits, and opens the branch of the page it lands on', async () => {
-  const routes = {
-    '/api/v1/session': session(['users.read', 'audit.read']),
+it('opens only the branch of the page it lands on', async () => {
+  window.history.pushState({}, '', '/system/audit');
+  fetchRoutes({
+    '/api/v1/session': session(['status.read', 'users.read', 'audit.read']),
     '/api/v1/users': { items: [] },
     '/api/v1/roles': { items: [] },
     '/api/v1/audit/events': { items: [] },
-  };
-  fetchRoutes(routes);
-  const first = render(<App />);
-  const system = await screen.findByRole('button', { name: 'System' });
-  await userEvent.click(system);
-  expect(system).toHaveAttribute('aria-expanded', 'false');
-  first.unmount();
-
-  fetchRoutes(routes);
-  const second = render(<App />);
-  expect(await screen.findByRole('button', { name: 'System' })).toHaveAttribute('aria-expanded', 'false');
-  second.unmount();
-
-  window.history.pushState({}, '', '/system/audit');
-  fetchRoutes(routes);
+  });
   render(<App />);
   expect(await screen.findByRole('button', { name: 'System' })).toHaveAttribute('aria-expanded', 'true');
+  expect(screen.getByRole('button', { name: 'Network' })).toHaveAttribute('aria-expanded', 'false');
   expect(await screen.findByRole('heading', { name: 'Security audit' })).toBeInTheDocument();
 });
 
@@ -117,6 +116,8 @@ it('opens a closed branch when a link inside the session leads into it, and Spac
   render(<App />);
   const network = await screen.findByRole('button', { name: 'Network' });
   network.focus();
+  await userEvent.keyboard(' ');
+  expect(network).toHaveAttribute('aria-expanded', 'true');
   await userEvent.keyboard(' ');
   expect(network).toHaveAttribute('aria-expanded', 'false');
 

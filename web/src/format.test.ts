@@ -1,5 +1,11 @@
 import { expect, it } from 'vitest';
-import { bitrate, bytes, duration } from './format';
+import { bitrate, bytes, duration, firmwareDate } from './format';
+
+it('writes a firmware date as an ISO date', () => {
+  expect(firmwareDate('08/26/2026')).toBe('2026-08-26');
+  expect(firmwareDate('2026-08-26')).toBe('2026-08-26');
+  expect(firmwareDate('')).toBe('');
+});
 
 it('writes a size in the largest unit that keeps it readable', () => {
   expect(bytes(0)).toBe('0 B');

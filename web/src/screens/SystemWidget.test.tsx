@@ -28,7 +28,7 @@ it('shows what the box is, a line for each fact it reports', () => {
   expect(value('Uptime')).toBe('3 days 4 hours');
   expect(value('Machine')).toBe('Protectli VP2420');
   expect(value('Serial')).toBe('ABC123');
-  expect(value('BIOS')).toBe('coreboot v1.2.1 03/14/2026');
+  expect(value('BIOS')).toBe('coreboot v1.2.1 2026-03-14');
   expect(value('CPU')).toBe('Intel(R) Core(TM) i5-1235U, 10 cores, 12 threads');
   expect(value('Level')).toBe('x86-64-v3');
   expect(value('Microcode')).toBe('0x437');
