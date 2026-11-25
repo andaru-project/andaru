@@ -164,7 +164,7 @@ it('keeps the live links when the saved configuration cannot be read', async () 
   await showInterfaces();
 
   expect(screen.getByRole('alert', { name: 'The saved configuration could not be read' })).toHaveTextContent('The store is busy.');
-  expect(screen.queryByText('Configuration')).not.toBeInTheDocument();
+  expect(screen.queryByText('Saved configuration')).not.toBeInTheDocument();
 });
 
 it('shows only live links without configuration.read', async () => {
