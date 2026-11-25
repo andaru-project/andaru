@@ -6,6 +6,7 @@ package engine
 import (
 	"context"
 	"os"
+	"os/user"
 	"testing"
 
 	npmodel "github.com/andaru-project/andaru/internal/netplane/model"
@@ -54,7 +55,12 @@ func TestLocalDiagnosticsTransientUnit(t *testing.T) {
 		reqs = append(reqs, npmodel.DiagnosticRequest{Kind: npmodel.DiagTraceroute, Target: "127.0.0.1"})
 	}
 	for _, req := range reqs {
-		if res, err := newLocalDiagnostics().Run(context.Background(), req); err != nil || !res.OK {
+		d := newLocalDiagnostics()
+		// The image declares andaru-diag; a host without it runs the unit as nobody.
+		if _, err := user.Lookup(diagnosticUser); err != nil {
+			d.user = "nobody"
+		}
+		if res, err := d.Run(context.Background(), req); err != nil || !res.OK {
 			t.Errorf("%s: %+v %v", req.Kind, res, err)
 		}
 	}

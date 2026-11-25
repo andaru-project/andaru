@@ -35,6 +35,7 @@ grep -aqF "$VERSION" /usr/bin/andaru || fail "andaru was not built as $VERSION"
 for p in systemd-networkd kea kea-hooks unbound ppp openvpn qemu-guest-agent iputils traceroute; do
 	rpm -q --quiet "$p" || fail "$p is not installed"
 done
+grep -q "^u andaru-diag " /usr/lib/sysusers.d/andaru.conf || fail "andaru-diag, the user diagnostics run as, is not declared"
 for p in moby-engine containerd; do
 	! rpm -q --quiet "$p" || fail "$p is installed"
 done

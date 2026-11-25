@@ -108,16 +108,29 @@ func TestLocalDiagnosticsRun(t *testing.T) {
 	// The tool runs in a transient unit as nobody with no capabilities, after the unit's own options.
 	want := []string{"/usr/bin/systemd-run", "--quiet", "--wait", "--collect", "--unit=" + unit, "--service-type=exec",
 		"-p", "RuntimeMaxSec=22",
-		"-p", "User=nobody",
+		"-p", "User=andaru-diag",
 		"-p", "CapabilityBoundingSet=",
 		"-p", "AmbientCapabilities=",
+		"-p", "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK",
 		"-p", "ProtectSystem=strict",
 		"-p", "ProtectHome=yes",
 		"-p", "PrivateTmp=yes",
 		"-p", "PrivateDevices=yes",
 		"-p", "ProtectKernelTunables=yes",
 		"-p", "ProtectKernelModules=yes",
+		"-p", "ProtectKernelLogs=yes",
 		"-p", "ProtectControlGroups=yes",
+		"-p", "ProtectClock=yes",
+		"-p", "ProtectHostname=yes",
+		"-p", "ProtectProc=invisible",
+		"-p", "ProcSubset=pid",
+		"-p", "RestrictNamespaces=yes",
+		"-p", "RestrictRealtime=yes",
+		"-p", "RestrictSUIDSGID=yes",
+		"-p", "LockPersonality=yes",
+		"-p", "MemoryDenyWriteExecute=yes",
+		"-p", "SystemCallArchitectures=native",
+		"-p", "SystemCallFilter=@system-service",
 		"-p", "TasksMax=4",
 		"-p", "MemoryMax=64M",
 		"-p", "StandardInput=null",
@@ -136,9 +149,14 @@ func TestLocalDiagnosticsRun(t *testing.T) {
 func TestLocalDiagnosticsFailures(t *testing.T) {
 	ping := npmodel.DiagnosticRequest{Kind: npmodel.DiagPing, Target: "192.0.2.1"}
 	// A tool that fails before its summary is a failed run, with its last line as the error.
-	d := fakeDiagnostics(func(_ context.Context, _ []string, out io.Writer) (int, error) {
-		_, _ = io.WriteString(out, "ping: connect: Network is unreachable\n")
-		return 2, nil
+	d := fakeDiagnostics(func(_ context.Context, argv []string, out io.Writer) (int, error) {
+		switch {
+		case argv[0] == "/usr/bin/systemd-run":
+			return 2, nil
+		case argv[1] == "--quiet":
+			_, _ = io.WriteString(out, "ping: connect: Network is unreachable\n")
+		}
+		return 0, nil
 	})
 	if res, err := d.Run(context.Background(), ping); err != nil || res.OK || res.Error != "ping: connect: Network is unreachable" {
 		t.Errorf("unreachable: %+v %v", res, err)
@@ -159,6 +177,50 @@ func TestLocalDiagnosticsFailures(t *testing.T) {
 			t.Errorf("own deadline: %v", err)
 		}
 	})
+}
+
+// The output is read back from the journal after a sync, and a journal that cannot be read fails the run
+// rather than handing journalctl's complaint to the parser as the tool's output.
+func TestLocalDiagnosticsJournal(t *testing.T) {
+	var calls []string
+	run := func(failing string) (*npmodel.DiagnosticResult, error) {
+		calls = nil
+		return fakeDiagnostics(func(_ context.Context, argv []string, out io.Writer) (int, error) {
+			call := argv[0]
+			if call == "/usr/bin/journalctl" {
+				call += " " + argv[1]
+			}
+			calls = append(calls, call)
+			if call == failing {
+				_, _ = io.WriteString(out, "No journal files were found.")
+				return 1, nil
+			}
+			if call == "/usr/bin/journalctl --quiet" {
+				_, _ = io.WriteString(out, iputilsPingOut)
+			}
+			return 0, nil
+		}).Run(context.Background(), npmodel.DiagnosticRequest{Kind: npmodel.DiagPing, Target: "192.0.2.1", Params: map[string]string{"count": "2"}})
+	}
+	res, err := run("")
+	if err != nil || !res.OK || !slices.Equal(calls, []string{"/usr/bin/systemd-run", "/usr/bin/journalctl --sync", "/usr/bin/journalctl --quiet"}) {
+		t.Fatalf("run: %+v %v, calls %q", res, err, calls)
+	}
+	for _, failing := range []string{"/usr/bin/journalctl --sync", "/usr/bin/journalctl --quiet"} {
+		if res, err := run(failing); err == nil || !strings.Contains(err.Error(), "No journal files were found") {
+			t.Errorf("%s failing: %+v %v", failing, res, err)
+		}
+	}
+	// A unit that did not start: what systemd-run said is the output.
+	res, err = fakeDiagnostics(func(_ context.Context, argv []string, out io.Writer) (int, error) {
+		if argv[0] == "/usr/bin/systemd-run" {
+			_, _ = io.WriteString(out, "Failed to start transient service unit: Access denied")
+			return 1, nil
+		}
+		return 0, nil
+	}).Run(context.Background(), npmodel.DiagnosticRequest{Kind: npmodel.DiagPing, Target: "192.0.2.1"})
+	if err != nil || res.OK || !strings.Contains(res.RawOutput, "Failed to start transient service unit") {
+		t.Errorf("unit not started: %+v %v", res, err)
+	}
 }
 
 func TestLocalDiagnosticsBusy(t *testing.T) {
