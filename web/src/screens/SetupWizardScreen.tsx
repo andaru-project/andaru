@@ -15,9 +15,9 @@ import {
   TextInput,
   Title,
 } from '@mantine/core';
-import { isPort } from '../interfaceEdit';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ApiClient, apiErrorMessage, reportError } from '../api';
+import { isPort } from '../interfaceEdit';
 import {
   buildSetupOperations,
   defaultDhcpRange,

@@ -1,12 +1,13 @@
 import { Alert, Badge, Button, Group, Loader, ScrollArea, Stack, Table, Text, Title, VisuallyHidden } from '@mantine/core';
 import { useCallback, useState } from 'react';
 import { ApiClient, reportError } from '../api';
+import { isPort } from '../interfaceEdit';
 import { stateColor, stateLabel, type ConfigBatchOperation, type LinkStatus, type Preview, type SavedLink, type SavedObject, type Segment, type Session, type Snapshot } from '../types';
 import { useResource, useVisiblePoll } from '../useResource';
 import { bindingFindings, kernelName, zonesByInterface } from '../zones';
 import { Address } from './Address';
 import { InterfaceEditor } from './InterfaceEditor';
-import { isPort } from '../interfaceEdit';
+
 import { ZoneBadge } from './ZoneBadge';
 
 interface InterfacesScreenProps { api: ApiClient; session: Session; onSaved(): void; onSessionLost(): void }
