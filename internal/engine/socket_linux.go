@@ -133,7 +133,7 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	}()
 	defer func() { cancel(context.Canceled); <-stopped }()
 	read := hostReader{Links: host.ReadLinks, Facts: host.ReadRealizerFacts, Managed: host.ReadManaged, BootUnit: host.ReadBootUnit}
-	applies := newAppliesHandler(store.ApplyInput, read, newSystemdRunner(stateDir, busSocket), stateDir, identities, coordinator, publishApply(events, "engine"))
+	applies := newAppliesHandler(store.ApplyInput, store.Roles, read, newSystemdRunner(stateDir, busSocket), stateDir, identities, coordinator, publishApply(events, "engine"))
 	identityAPI := newIdentityAPI(identities, store, coordinator)
 	auditAPI := newAuditAPI(coordinator)
 	backups := newBackupHandler(store, identities, coordinator, stateDir, host.ReadLinks)

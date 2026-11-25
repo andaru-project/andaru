@@ -141,6 +141,7 @@ type applyIdentity interface {
 
 type appliesHandler struct {
 	input       func(context.Context, *config.Version) (config.RealizationInput, error)
+	roles       func(context.Context, config.Version) ([]authz.Role, error)
 	read        hostReader
 	runner      realizeRunner
 	dir         string
@@ -155,9 +156,9 @@ type appliesHandler struct {
 }
 
 // newAppliesHandler serves applies: the engine renders, gates and stores; realize, run by PID 1, changes the host.
-func newAppliesHandler(input func(context.Context, *config.Version) (config.RealizationInput, error), read hostReader, runner realizeRunner, stateDir string, identities applyIdentity, coordinator *securityCoordinator, stored func(id int)) http.Handler {
+func newAppliesHandler(input func(context.Context, *config.Version) (config.RealizationInput, error), roles func(context.Context, config.Version) ([]authz.Role, error), read hostReader, runner realizeRunner, stateDir string, identities applyIdentity, coordinator *securityCoordinator, stored func(id int)) http.Handler {
 	return &appliesHandler{
-		input: input, read: read, runner: runner, dir: generation.Dir(stateDir), stateDir: stateDir,
+		input: input, roles: roles, read: read, runner: runner, dir: generation.Dir(stateDir), stateDir: stateDir,
 		identities: identities, coordinator: coordinator, stored: stored,
 	}
 }
@@ -357,8 +358,20 @@ func (h *appliesHandler) create(w http.ResponseWriter, r *http.Request) {
 		h.unavailable(w, r, "resolve candidate authorization", err)
 		return
 	}
+	digest := authorization.Digest
+	// Roles unchanged from the live generation keep its digest, which an older release may have computed
+	// differently: otherwise the first apply after such an upgrade would count as an authorization change.
+	if pointers.Live != nil {
+		if live, liveErr := generation.Read(h.dir, *pointers.Live); liveErr == nil && live.AuthorizationDigest != digest {
+			if roles, rolesErr := h.roles(ctx, config.Version(live.SavedVersion)); rolesErr == nil {
+				if same, sameErr := customRoleSnapshot(roles); sameErr == nil && same.Digest == digest {
+					digest = live.AuthorizationDigest
+				}
+			}
+		}
+	}
 	manifest := generation.Manifest{
-		SavedVersion: string(input.SavedVersion), AuthorizationDigest: authorization.Digest,
+		SavedVersion: string(input.SavedVersion), AuthorizationDigest: digest,
 		CreatedAt: time.Now().UTC(), ConfirmTimeoutSeconds: timeout,
 	}
 	contents := map[string][]byte{}

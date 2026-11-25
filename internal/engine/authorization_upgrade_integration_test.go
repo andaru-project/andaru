@@ -4,7 +4,6 @@ package engine
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -19,8 +18,8 @@ import (
 	"github.com/andaru-project/andaru/internal/identity"
 )
 
-// An upgrade may compute authorization digests differently from the release that applied the live generation, as
-// one that changed them to leave the built-in roles out does. That must end the sessions, never refuse everyone.
+// The live generation's digest may differ from the one the authorization state holds (a legacy manifest, an
+// activation cut short) and may not be what this release computes from its roles. Sessions end; no one is refused.
 func TestLiveDigestFromAnOlderReleaseEndsSessionsInsteadOfLockingEveryoneOut(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("root-owned stores require root")
@@ -91,25 +90,35 @@ func TestLoginReplacesAnEndedSessionCookieButRefusesALiveOne(t *testing.T) {
 	liveGenerationFixture(t, ctx, stateDir, configuration)
 	const origin = "https://router.example"
 	handler := &webAPI{identities: store, configuration: configuration, stateDir: stateDir, origins: map[string]struct{}{origin: {}}, hosts: map[string]struct{}{"router.example": {}}}
-	var live identity.LoginResult
-	if err = handler.withLiveAuthorization(ctx, func(_ authz.Snapshot, epoch uint64) error {
-		var loginErr error
-		live, loginErr = store.AuthenticatePassword(ctx, "rootadmin", password, "192.0.2.20", epoch)
-		return loginErr
-	}); err != nil {
+	signIn := func() string {
+		t.Helper()
+		var login identity.LoginResult
+		if err := handler.withLiveAuthorization(ctx, func(_ authz.Snapshot, epoch uint64) error {
+			var loginErr error
+			login, loginErr = store.AuthenticatePassword(ctx, "rootadmin", password, "192.0.2.20", epoch)
+			return loginErr
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return login.SessionCookie
+	}
+	live, ended := signIn(), signIn()
+	selector, secret, _ := strings.Cut(ended, ".")
+	if err = store.Logout(ctx, selector, secret); err != nil {
 		t.Fatal(err)
 	}
-	ended := base64.RawURLEncoding.EncodeToString(make([]byte, 16)) + "." + base64.RawURLEncoding.EncodeToString(make([]byte, 32))
 
 	// The body is refused after the credential checks, so nothing past them (the audit store) is reached.
-	login := func(cookie string) *httptest.ResponseRecorder {
+	login := func(cookies ...string) *httptest.ResponseRecorder {
 		t.Helper()
 		r := httptest.NewRequest(http.MethodPost, origin+"/api/v1/session", strings.NewReader(`not json`))
 		r.Host = "router.example"
 		r.Header.Set(WebSourceHeader, "192.0.2.20")
 		r.Header.Set("Origin", origin)
 		r.Header.Set("Content-Type", "application/json")
-		r.AddCookie(&http.Cookie{Name: webSessionCookie, Value: cookie})
+		for _, cookie := range cookies {
+			r.AddCookie(&http.Cookie{Name: webSessionCookie, Value: cookie})
+		}
 		r = r.WithContext(context.WithValue(r.Context(), peerKey{}, peerIdentity{uid: 123, verified: true, web: true}))
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, r)
@@ -118,7 +127,22 @@ func TestLoginReplacesAnEndedSessionCookieButRefusesALiveOne(t *testing.T) {
 	if response := login(ended); strings.Contains(response.Body.String(), "AMBIGUOUS_CREDENTIALS") || response.Code != http.StatusBadRequest {
 		t.Fatalf("ended session cookie: status=%d body=%s, want the body refused, not the cookie", response.Code, response.Body)
 	}
-	if response := login(live.SessionCookie); response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "AMBIGUOUS_CREDENTIALS") {
-		t.Fatalf("live session cookie: status=%d body=%s, want AMBIGUOUS_CREDENTIALS", response.Code, response.Body)
+	for name, cookies := range map[string][]string{"live session cookie": {live}, "ended and live session cookies": {ended, live}} {
+		if response := login(cookies...); response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "AMBIGUOUS_CREDENTIALS") {
+			t.Fatalf("%s: status=%d body=%s, want AMBIGUOUS_CREDENTIALS", name, response.Code, response.Body)
+		}
+	}
+	// Whether a cookie still works cannot be told while authorization is changing: the request is turned away.
+	lock, err := authz.Acquire(ctx, stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = lock.SetPending(authz.PendingTransition{GenerationID: 1, Phase: authz.TransitionActivate, IdentityRevision: 1, AuthorizationDigest: strings.Repeat("ab", 32)})
+	lock.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response := login(ended); response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "AUTHENTICATION_UNAVAILABLE") {
+		t.Fatalf("cookie during an authorization change: status=%d body=%s, want AUTHENTICATION_UNAVAILABLE", response.Code, response.Body)
 	}
 }

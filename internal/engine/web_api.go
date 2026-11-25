@@ -207,20 +207,8 @@ func (h *webAPI) login(w http.ResponseWriter, r *http.Request, source string) {
 	if !noQuery(w, r) || !h.requireOrigin(w, r) {
 		return
 	}
-	if len(r.Header.Values("Authorization")) != 0 {
-		writeError(w, r, http.StatusBadRequest, "AMBIGUOUS_CREDENTIALS", "Login requests cannot carry an existing credential.")
+	if h.refuseExistingCredential(w, r, "Login requests cannot carry an existing credential.") {
 		return
-	}
-	// A cookie that no longer authenticates (an ended session) is replaced by the new one; the browser cannot drop it
-	// on its own, since it is HttpOnly.
-	if cookieCredentialPresent(r) {
-		if _, _, _, _, _, err := h.readCookiePrincipal(r); err == nil {
-			writeError(w, r, http.StatusBadRequest, "AMBIGUOUS_CREDENTIALS", "Login requests cannot carry an existing credential.")
-			return
-		} else if !errors.Is(err, identity.ErrAuthentication) {
-			writeError(w, r, http.StatusServiceUnavailable, "AUTHENTICATION_UNAVAILABLE", "Authentication is temporarily unavailable.")
-			return
-		}
 	}
 	_, request, ok := decodeIdentityBody[webLoginRequest](w, r, webLoginBodyLimit, "login", "password")
 	if !ok {
@@ -683,6 +671,29 @@ func sessionCredential(r *http.Request) (string, string, bool) {
 
 func cookieCredentialPresent(r *http.Request) bool {
 	return len(r.CookiesNamed(webSessionCookie)) != 0
+}
+
+// refuseExistingCredential answers a request that would start a session while carrying a credential that still
+// works: a bearer token, several session cookies or a live one. A single cookie whose session has ended is let
+// through for the new one to replace, since the browser cannot drop an HttpOnly cookie itself.
+func (h *webAPI) refuseExistingCredential(w http.ResponseWriter, r *http.Request, message string) bool {
+	cookies := len(r.CookiesNamed(webSessionCookie))
+	if cookies == 0 && len(r.Header.Values("Authorization")) == 0 {
+		return false
+	}
+	err := errAmbiguousCredentials
+	if cookies == 1 {
+		_, _, _, _, _, err = h.readCookiePrincipal(r)
+	}
+	switch {
+	case errors.Is(err, identity.ErrAuthentication):
+		return false
+	case err == nil || errors.Is(err, errAmbiguousCredentials):
+		writeError(w, r, http.StatusBadRequest, "AMBIGUOUS_CREDENTIALS", message)
+	default:
+		writeError(w, r, http.StatusServiceUnavailable, "AUTHENTICATION_UNAVAILABLE", "Authentication is temporarily unavailable.")
+	}
+	return true
 }
 
 func bearerCredential(values []string) (string, string, bool) {

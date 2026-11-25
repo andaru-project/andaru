@@ -285,8 +285,7 @@ func (h *webAPI) setupBootstrap(w http.ResponseWriter, r *http.Request, source s
 	if !noQuery(w, r) || !h.requireOrigin(w, r) {
 		return
 	}
-	if cookieCredentialPresent(r) || len(r.Header.Values("Authorization")) != 0 {
-		writeError(w, r, http.StatusBadRequest, "AMBIGUOUS_CREDENTIALS", "Setup bootstrap requests cannot carry an existing credential.")
+	if h.refuseExistingCredential(w, r, "Setup bootstrap requests cannot carry an existing credential.") {
 		return
 	}
 	revision, err := h.identities.Revision(r.Context())

@@ -211,7 +211,7 @@ func newApplyBench(t *testing.T) *applyBench {
 	}
 	b.identities = &applyIdentityState{revision: 1, accounts: map[string]identity.Account{}}
 	b.coordinator = &securityCoordinator{stateDir: b.state}
-	applies := newAppliesHandler(input, read, b, b.state, b.identities, b.coordinator, func(id int) { b.stored = append(b.stored, id) })
+	applies := newAppliesHandler(input, func(context.Context, config.Version) ([]authz.Role, error) { return nil, nil }, read, b, b.state, b.identities, b.coordinator, func(id int) { b.stored = append(b.stored, id) })
 	b.h = newHandler(read.Links, newSavedHandler(nil, read.Links, read.Facts, applies, nil))
 	return b
 }
@@ -678,5 +678,52 @@ func TestFilterGates(t *testing.T) {
 				t.Fatalf("a refused apply left %q %q", b.calls, b.numbered())
 			}
 		})
+	}
+}
+
+// The live generation's digest may come from a release that computed it differently. An apply that changes no
+// role keeps that digest, so it is no authorization change: no sign-out, and a token may still confirm it.
+func TestUnchangedRolesKeepTheLiveDigestFromAnOlderRelease(t *testing.T) {
+	b := newApplyBench(t)
+	first := b.apply(applyBody)
+	b.decode(b.call(http.MethodPost, appliesPath+"/"+first.ID+"/confirmation", ""), http.StatusOK)
+	legacy := strings.Repeat("ab", 32)
+	path := filepath.Join(generation.Dir(b.state), first.ID, "manifest.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err = json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest["authorizationDigest"] = legacy
+	if raw, err = json.Marshal(manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := authz.Acquire(t.Context(), b.state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = lock.Advance(legacy)
+	lock.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := b.authorizationState()
+
+	second := b.apply(applyBody)
+	token := identity.Principal{
+		Account: identity.Account{ID: "00000000-0000-4000-8000-000000000001", Kind: identity.Service, Enabled: true},
+		Actor:   authz.Actor{Kind: authz.ActorToken, ID: strings.Repeat("A", 22)}, Capabilities: []authz.Capability{authz.ConfigurationConfirm},
+	}
+	if response := b.callPrincipal(http.MethodPost, appliesPath+"/"+second.ID+"/confirmation", token); response.Code != http.StatusOK {
+		t.Fatalf("token confirmation after an upgrade status=%d body=%s", response.Code, response.Body)
+	}
+	if after := b.authorizationState(); after != before {
+		t.Fatalf("authorization state moved from %+v to %+v though no role changed", before, after)
 	}
 }
