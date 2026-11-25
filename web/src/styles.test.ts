@@ -45,7 +45,7 @@ it('keeps the scrollbar gutter', () => {
 
 // On a phone a side panel is as wide as the screen, as a dialog is: its own size is wider than a phone.
 it('sizes a phone side panel by the screen', () => {
-  expect(/\.mantine-Drawer-content \{\s*flex: 0 0 100vw/.test(read('src/styles.css'))).toBe(true);
+  expect(/\.mantine-Drawer-content \{\s*flex: 0 0 100vw;\s*max-width: 100%/.test(read('src/styles.css'))).toBe(true);
 });
 
 // Download and upload are told apart by more than strength: upload is dashed.
