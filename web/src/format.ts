@@ -26,7 +26,7 @@ export function duration(seconds: number) {
 }
 
 // Firmware writes its date as MM/DD/YYYY (SMBIOS); dates are shown ISO. Anything else is shown as it is.
-export const firmwareDate = (value: string) => value.replace(/^(\d{2})\/(\d{2})\/(\d{4})$/, '$3-$1-$2');
+export const firmwareDate = (value: string) => value.replace(/^(0[1-9]|1[0-2])\/(0[1-9]|[12]\d|3[01])\/(\d{4})$/, '$3-$1-$2');
 
 export const plural = (count: number, unit: string) => `${count} ${unit}${count === 1 ? '' : 's'}`;
 
