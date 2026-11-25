@@ -1,7 +1,7 @@
 import { Badge, Group, Paper, Stack, Table, Text, Title } from '@mantine/core';
 import { useCallback, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
-import { bytes, duration, plural } from '../format';
+import { bytes, duration, firmwareDate, plural } from '../format';
 import type { SystemInfo, UpdateStatus } from '../types';
 import { useVisiblePoll, type Resource } from '../useResource';
 import { Loaded } from './Loaded';
@@ -114,7 +114,7 @@ export function SystemFacts({ info, loadedAt }: { info: SystemInfo; loadedAt: nu
   const unknown = cpu.vulnerabilities.filter((item) => !['vulnerable', 'mitigated', 'not_affected'].includes(item.state)).map((item) => item.name).join(', ');
   const machine = words(hardware.vendor, hardware.product);
   const board = words(hardware.boardVendor, hardware.board);
-  const firmware = words(hardware.biosVendor, hardware.biosVersion, hardware.biosDate);
+  const firmware = words(hardware.biosVendor, hardware.biosVersion, firmwareDate(hardware.biosDate));
   return (
     <Stack className="details">
       <Card title="Software">

@@ -74,8 +74,12 @@ body {
   flex-shrink: 0;
 }
 
+/* Mantine fixes the navbar's height to the viewport and leaves the overflow visible: on a phone, the links below
+   the fold could not be reached. */
 .app-navbar {
   background: var(--andaru-ground);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .nav-item,
@@ -490,10 +494,12 @@ path.traffic-sent {
     padding: 0;
   }
 
-  /* A fixed height, as Mantine's own fullScreen has: the content then scrolls when it is taller than the screen. */
+  /* A fixed height, as Mantine's own fullScreen has: the content then scrolls when it is taller than the screen.
+     The width is the screen's, not a share of the page's: a select's dropdown that overflowed the page widened
+     the dialog with it, which moved the dropdown again, and the dialog flickered between two layouts. */
   .mantine-Modal-content {
     border-radius: 0;
-    flex: 1;
+    flex: 0 0 100vw;
     height: 100dvh;
     max-height: 100dvh;
   }

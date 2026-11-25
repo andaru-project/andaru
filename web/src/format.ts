@@ -25,6 +25,9 @@ export function duration(seconds: number) {
   return parts.slice(first, first + 2).filter(([count]) => count > 0).map(([count, unit]) => plural(count, unit)).join(' ');
 }
 
+// Firmware writes its date as MM/DD/YYYY (SMBIOS); dates are shown ISO. Anything else is shown as it is.
+export const firmwareDate = (value: string) => value.replace(/^(0[1-9]|1[0-2])\/(0[1-9]|[12]\d|3[01])\/(\d{4})$/, '$3-$1-$2');
+
 export const plural = (count: number, unit: string) => `${count} ${unit}${count === 1 ? '' : 's'}`;
 
 const protocolLabels: Record<PortAlias['protocol'], string> = { tcp: 'TCP', udp: 'UDP', icmp: 'ICMP', icmpv6: 'ICMPv6', group: 'group' };

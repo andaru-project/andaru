@@ -1,6 +1,6 @@
 import { AccordionChevron, Alert, Anchor, AppShell, Badge, Burger, Button, Group, Image, Menu, Modal, NavLink, Select, Stack, Text, Title, useMantineColorScheme, type MantineColorScheme } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useMatch, useNavigate } from 'react-router';
 import { ApiClient, reportError } from './api';
 import mark from './andaru-icon.svg';
@@ -78,17 +78,6 @@ const pendingBadges: Record<NonNullable<ReturnType<typeof pendingNotice>>['kind'
   failed: { color: 'red', variant: 'light', label: 'Failed' },
   rolled_back: { color: 'red', variant: 'light', label: 'Rolled back' },
 };
-
-// Branches the user closed, kept per browser. Storage may be unavailable; the tree then starts open.
-const closedKey = 'andaru.nav.closed';
-function storedClosed(): string[] {
-  try {
-    const value: unknown = JSON.parse(localStorage.getItem(closedKey) ?? '[]');
-    return Array.isArray(value) ? value.filter((item) => typeof item === 'string') as string[] : [];
-  } catch {
-    return [];
-  }
-}
 
 function HeaderNotifications({ notifications }: { notifications: Resource<NotificationList | undefined> }) {
   const items = notifications.data?.items;
@@ -243,25 +232,18 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   ].map((group) => ({ ...group, items: group.items.filter((item) => item.visible) })).filter((group) => group.items.length > 0);
   const visible = new Set(groups.flatMap((group) => group.items.map((item) => item.to)));
 
-  // Closed branches, as this visit has them. Opening the branch of the page one lands on is a change like a click,
-  // so both are stored the same way; labels this account does not have are dropped.
-  const [closed, setClosed] = useState(storedClosed);
-  const labels = groups.map((group) => group.label).join('\n');
-  useEffect(() => {
-    try {
-      localStorage.setItem(closedKey, JSON.stringify(closed.filter((label) => labels.split('\n').includes(label))));
-    } catch { /* the tree still works for this visit */ }
-  }, [closed, labels]);
-  const toggleBranch = (label: string) => setClosed(closed.includes(label) ? closed.filter((item) => item !== label) : [...closed, label]);
   const normalizedPath = pathname.endsWith('/') && pathname.length > 1 ? pathname.slice(0, -1) : pathname;
   const isNavItemActive = (to: string) => normalizedPath === to || (to === '/network/devices' && normalizedPath.startsWith('/network/devices/'));
-  // The branch that holds the current page is open, however the page was reached.
+  // One branch is open at a time, so the tree fits a phone: the one holding the current page, however the page was
+  // reached, until another is opened.
   const currentBranch = groups.find((group) => group.items.some((item) => isNavItemActive(item.to)))?.label;
-  const [seenPath, setSeenPath] = useState('');
+  const [openBranch, setOpenBranch] = useState(currentBranch);
+  const [seenPath, setSeenPath] = useState(pathname);
   if (seenPath !== pathname) {
     setSeenPath(pathname);
-    if (currentBranch && closed.includes(currentBranch)) setClosed(closed.filter((item) => item !== currentBranch));
+    if (currentBranch) setOpenBranch(currentBranch);
   }
+  const toggleBranch = (label: string) => setOpenBranch(openBranch === label ? undefined : label);
   const hostname = system.data?.info.hostname;
   useEffect(() => {
     const title = pageTitles[normalizedPath] ?? (normalizedPath.startsWith('/network/devices/') ? 'Device' : undefined);
@@ -346,13 +328,14 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
       <AppShell.Navbar className="app-navbar" p="xs" component="nav" aria-label="Main navigation">
         {pageLink('/', 'Dashboard')}
         {groups.map((group) => {
-          const open = !closed.includes(group.label);
+          const open = openBranch === group.label;
           return (
             <div key={group.label}>
               {/* A branch label is not a page, so it is a button: an anchor without an address takes no keyboard
                   focus. It holds no children of its own, or NavLink would toggle on the Space key and the browser
                   again on the click that key makes. */}
-              <NavLink className="nav-branch" component="button" type="button" label={group.label} aria-expanded={open} rightSection={<AccordionChevron className="nav-chevron" data-open={open || undefined} />} onClick={() => toggleBranch(group.label)} />
+              {/* A closed branch carries its pages' badges, so pending changes and updates stay in sight. */}
+              <NavLink className="nav-branch" component="button" type="button" label={group.label} aria-expanded={open} rightSection={<Group gap={4} wrap="nowrap">{!open && group.items.map((item) => <Fragment key={item.to}>{navBadges[item.to]}</Fragment>)}<AccordionChevron className="nav-chevron" data-open={open || undefined} /></Group>} onClick={() => toggleBranch(group.label)} />
               {open && <div className="nav-children">{group.items.map((item) => pageLink(item.to, item.label, navBadges[item.to]))}</div>}
             </div>
           );

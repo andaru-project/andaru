@@ -330,6 +330,8 @@ it('sets the document title with the page and hostname, and marks pending change
   const { unmount } = render(<MemoryRouter initialEntries={['/system/session']}><Shell api={new ApiClient('csrf')} session={session(['status.read', 'configuration.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} /></MemoryRouter>);
   await screen.findByText('edge');
   expect(document.title).toBe('Current session — edge — Andaru');
+  // The page is in no branch, so Changes is closed and carries the badge itself.
+  await userEvent.click(await screen.findByRole('button', { name: /Changes.*Pending/i }));
   expect(await screen.findByRole('link', { name: /Review and apply.*Pending/i })).toBeInTheDocument();
   unmount();
   expect(document.title).toBe('Andaru administration');
@@ -489,7 +491,7 @@ it('shows Update and Reboot badges on the System -> Updates navigation link', as
       <Shell api={new ApiClient('csrf')} session={session(['status.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} />
     </MemoryRouter>,
   );
-  expect(await screen.findByRole('link', { name: /Updates.*Update/i })).toBeInTheDocument();
+  expect(await screen.findByRole('button', { name: /System.*Update/i })).toBeInTheDocument();
   first.unmount();
 
   fetchRoutes({
@@ -501,7 +503,7 @@ it('shows Update and Reboot badges on the System -> Updates navigation link', as
       <Shell api={new ApiClient('csrf')} session={session(['status.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} />
     </MemoryRouter>,
   );
-  expect(await screen.findByRole('link', { name: /Updates.*Reboot/i })).toBeInTheDocument();
+  expect(await screen.findByRole('button', { name: /System.*Reboot/i })).toBeInTheDocument();
 });
 
 it('lets the user pick a display time zone from the account menu and updates timestamps immediately', async () => {

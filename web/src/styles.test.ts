@@ -26,6 +26,17 @@ it('gives each colour it took out of light-dark() its dark value under the dark 
   for (const name of ['--andaru-ground', '--andaru-error-text', '--andaru-warning-text', '--andaru-diff-old', '--andaru-diff-new']) expect(dark).toContain(`${name}:`);
 });
 
+// The navbar is as tall as the viewport: the links under the fold are reached by scrolling it.
+it('scrolls the navigation', () => {
+  expect(/\.app-navbar \{[^}]*overflow-y: auto/.test(read('src/styles.css'))).toBe(true);
+});
+
+// On a phone a dialog is as wide as the screen, not a share of the page: a dropdown that overflowed the page
+// widened the dialog with it and the two chased each other.
+it('sizes a phone dialog by the screen', () => {
+  expect(/\.mantine-Modal-content \{[^}]*flex: 0 0 100vw/.test(read('src/styles.css'))).toBe(true);
+});
+
 // Download and upload are told apart by more than strength: upload is dashed.
 it('draws upload dashed', () => {
   expect(/path\.traffic-sent \{[^}]*stroke-dasharray/.test(read('src/styles.css'))).toBe(true);
