@@ -473,6 +473,9 @@ func (s *Server) handleRunDiagnostic(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, driver.ErrDiagnosticUnsupported):
 		writeError(w, http.StatusNotImplemented, "UNSUPPORTED", err.Error())
 		return
+	case errors.Is(err, driver.ErrDiagnosticBusy):
+		writeError(w, http.StatusServiceUnavailable, "DIAG_BUSY", err.Error())
+		return
 	case err != nil:
 		writeError(w, http.StatusBadGateway, "DIAG_FAILED", err.Error())
 		return

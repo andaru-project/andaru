@@ -103,14 +103,20 @@ func DoJSON(ctx context.Context, client *http.Client, method, url string, auth f
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// REST APIs explain a refusal in "message" (pfSense, OPNsense auth failures) or
-		// "errorMessage" (OPNsense application errors).
+		// REST APIs explain a refusal in "message" (pfSense, OPNsense auth failures),
+		// "errorMessage" (OPNsense application errors) or "error": {"message"} (Andaru). Other
+		// APIs' "error" is a string, so it is decoded on its own.
 		var e struct {
-			Message      string `json:"message"`
-			ErrorMessage string `json:"errorMessage"`
+			Message      string          `json:"message"`
+			ErrorMessage string          `json:"errorMessage"`
+			Error        json.RawMessage `json:"error"`
 		}
 		_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
-		return &StatusError{Code: resp.StatusCode, Message: cleanMessage(cmp.Or(e.Message, e.ErrorMessage))}
+		var nested struct {
+			Message string `json:"message"`
+		}
+		_ = json.Unmarshal(e.Error, &nested)
+		return &StatusError{Code: resp.StatusCode, Message: cleanMessage(cmp.Or(e.Message, e.ErrorMessage, nested.Message))}
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(out)
 }

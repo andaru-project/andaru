@@ -134,6 +134,12 @@ func TestDoJSON(t *testing.T) {
 		case "/app":
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = w.Write([]byte(`{"errorMessage":"invalid"}`))
+		case "/andaru":
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":{"code":"DIAG_BUSY","message":"busy\nnow"}}`))
+		case "/strerr":
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_, _ = w.Write([]byte(`{"error":"short","message":"long text"}`))
 		case "/moved":
 			w.WriteHeader(http.StatusNotModified)
 		default:
@@ -162,6 +168,8 @@ func TestDoJSON(t *testing.T) {
 	}{
 		{"/ok", nil, 401, "HTTP 401: bad key"},
 		{"/app", auth, 400, "HTTP 400: invalid"},
+		{"/andaru", auth, 503, "HTTP 503: busy now"},
+		{"/strerr", auth, 422, "HTTP 422: long text"},
 		{"/moved", auth, 304, "HTTP 304"},
 		{"/html", auth, 500, "HTTP 500"},
 	} {

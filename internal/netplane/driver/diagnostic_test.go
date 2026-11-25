@@ -3,6 +3,7 @@ package driver
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/andaru-project/andaru/internal/netplane/model"
@@ -82,5 +83,42 @@ func TestPingResult(t *testing.T) {
 		if res := PingResult(model.DiagnosticRequest{}, "x", out); res.Error != want {
 			t.Errorf("error for %q = %q, want %q", out, res.Error, want)
 		}
+	}
+}
+
+// BusyBox traceroute -n -q 1: a run that stops short, or fails.
+func TestTracerouteResultNotReachedOrFailed(t *testing.T) {
+	req := model.DiagnosticRequest{Kind: model.DiagTraceroute}
+	partial := "traceroute to example.com (93.184.215.14), 20 hops max, 46 byte packets\n 1  192.0.2.1  0.512 ms\n 2  *"
+	if res := TracerouteResult(req, "example.com", 0, partial); res.OK || res.Summary != "example.com (93.184.215.14) not reached within 2 hops" {
+		t.Errorf("partial: %+v", res)
+	}
+	if res := TracerouteResult(req, "nope.lan", 1, "traceroute: bad address 'nope.lan'"); res.OK || res.Error != "traceroute: bad address 'nope.lan'" {
+		t.Errorf("failed: %+v", res)
+	}
+	// A run that exits non-zero after its header fails even when hops were printed.
+	broken := partial + "\ntraceroute: sendto: Network unreachable"
+	if res := TracerouteResult(req, "example.com", 1, broken); res.OK || res.Structured != nil || res.Error != "traceroute: sendto: Network unreachable" {
+		t.Errorf("non-zero exit: %+v", res)
+	}
+}
+
+// Linux traceroute 2.x (Fedora's traceroute package) with -n -q 1: unreachable marks follow
+// the time, and an IPv6 run names the address twice.
+func TestTracerouteResultLinux(t *testing.T) {
+	req := model.DiagnosticRequest{Kind: model.DiagTraceroute}
+	out := "traceroute to 2001:db8::1 (2001:db8::1), 20 hops max, 80 byte packets\n 1  2001:db8:1::1  0.512 ms\n 2  *\n 3  2001:db8::1  4.100 ms"
+	res := TracerouteResult(req, "2001:db8::1", 0, out)
+	hops := res.Structured.(map[string]any)["hops"].([]TracerouteHop)
+	if !res.OK || res.Summary != "2001:db8::1 (2001:db8::1) reached in 3 hops" || len(hops) != 3 || hops[1].Address != "" || *hops[2].RTTMs != 4.1 {
+		t.Errorf("reached: %+v %+v", res, hops)
+	}
+	out = "traceroute to 192.0.2.9 (192.0.2.9), 20 hops max, 60 byte packets\n 1  192.0.2.1  0.4 ms\n 2  192.0.2.1  3001.2 ms !H"
+	if res := TracerouteResult(req, "192.0.2.9", 0, out); res.OK || res.Summary != "192.0.2.9 (192.0.2.9) not reached within 2 hops" {
+		t.Errorf("host unreachable: %+v", res)
+	}
+	out = "name.invalid: Name or service not known\nCannot handle \"host\" cmdline arg `name.invalid' on position 1 (argc 9)"
+	if res := TracerouteResult(req, "name.invalid", 2, out); res.OK || res.Structured != nil || !strings.HasPrefix(res.Error, "Cannot handle") {
+		t.Errorf("unresolvable: %+v", res)
 	}
 }

@@ -32,7 +32,7 @@ label=$("$engine" image inspect --format '{{index .Config.Labels "org.opencontai
 "$engine" run --rm -e VERSION="$version" "$image" sh -eu -c '
 fail() { echo "image-smoke: $*" >&2; exit 1; }
 grep -aqF "$VERSION" /usr/bin/andaru || fail "andaru was not built as $VERSION"
-for p in systemd-networkd kea kea-hooks unbound ppp openvpn qemu-guest-agent; do
+for p in systemd-networkd kea kea-hooks unbound ppp openvpn qemu-guest-agent iputils traceroute; do
 	rpm -q --quiet "$p" || fail "$p is not installed"
 done
 for p in moby-engine containerd; do

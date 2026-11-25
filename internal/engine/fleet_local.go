@@ -12,13 +12,14 @@ import (
 	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/host"
 	npdriver "github.com/andaru-project/andaru/internal/netplane/driver"
+	"github.com/andaru-project/andaru/internal/netplane/driver/andaru"
 	npmodel "github.com/andaru-project/andaru/internal/netplane/model"
 	"github.com/andaru-project/andaru/internal/render"
 )
 
 const (
 	fleetLocalTargetID = "local"
-	fleetLocalDeviceID = "andaru:local"
+	fleetLocalDeviceID = andaru.LocalDeviceID
 )
 
 // localHostSource supplies live local-appliance data to build the built-in root device snapshot.
@@ -132,6 +133,8 @@ func buildLocalSnapshot(ctx context.Context, src localHostSource, now time.Time)
 				npmodel.CapConfigApply,
 				npmodel.CapConfigRollbackTimer,
 				npmodel.CapConfigBackup,
+				npmodel.CapDiagPing,
+				npmodel.CapDiagTraceroute,
 			},
 		}},
 	}

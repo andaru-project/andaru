@@ -4,7 +4,7 @@
 set -eu
 
 art=${1:?directory of test binaries}
-dnf -yq install nftables kea kea-hooks unbound iproute iputils procps-ng python3 >/dev/null
+dnf -yq install nftables kea kea-hooks unbound iproute iputils traceroute procps-ng python3 >/dev/null
 # Fedora's Unbound configuration names a trust anchor that unbound-checkconf requires.
 unbound-anchor -a /var/lib/unbound/root.key || test -s /var/lib/unbound/root.key
 export ANDARU_TEST_REQUIRE_TOOLS=1

@@ -17,6 +17,7 @@ import (
 	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/host"
+	npmodel "github.com/andaru-project/andaru/internal/netplane/model"
 	"github.com/andaru-project/andaru/internal/netplane/topology"
 	"github.com/andaru-project/andaru/internal/netplane/vlanflow"
 	"github.com/andaru-project/andaru/internal/render"
@@ -110,6 +111,9 @@ func TestBuildLocalSnapshotMapsHostAndConfig(t *testing.T) {
 	if len(snap.Devices) != 1 || snap.Devices[0].ID != fleetLocalDeviceID || snap.Devices[0].Name != "andaru-gw" || snap.Devices[0].MgmtIP != "10.10.10.1" {
 		t.Fatalf("unexpected local device: %+v", snap.Devices)
 	}
+	if caps := snap.Devices[0].Capabilities; !slices.Contains(caps, npmodel.CapDiagPing) || !slices.Contains(caps, npmodel.CapDiagTraceroute) {
+		t.Fatalf("local device offers no ping or traceroute: %v", caps)
+	}
 	if len(snap.LagGroups) != 1 || snap.LagGroups[0].Name != bondKernel || !slices.Equal(snap.LagGroups[0].MemberLinks, []string{"enp1s0", "enp2s0"}) {
 		t.Fatalf("unexpected lag groups: %+v", snap.LagGroups)
 	}
@@ -191,6 +195,13 @@ func TestFleetAPIAuthzAndTargetLifecycle(t *testing.T) {
 		t.Fatalf("POST /api/v1/fleet/targets with StatusRead = %d, want 403", rec.Code)
 	}
 
+	// No user target may claim the engine's own in-process endpoint.
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, withRoot(httptest.NewRequest(http.MethodPost, "/api/v1/fleet/targets", strings.NewReader(`{"id":"me","driver":"andaru","endpoint":"LOCAL://engine"}`))))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("POST /api/v1/fleet/targets with local://engine = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+
 	// Trigger local host refresh and verify local Andaru appears in topology and VLAN flow.
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, withRoot(httptest.NewRequest(http.MethodPost, "/api/v1/fleet/targets/local/poll", nil)))
@@ -222,6 +233,25 @@ func TestFleetAPIAuthzAndTargetLifecycle(t *testing.T) {
 	}
 	if len(flow.VLANs) != 1 || flow.VLANs[0].ID != 20 || len(flow.VLANs[0].Gateways) != 1 {
 		t.Fatalf("expected VLAN 20 gateway from local Andaru host, got %+v", flow.VLANs)
+	}
+
+	// Diagnostics on the local box need configuration.write, and a bad request never reaches a tool.
+	for _, tc := range []struct {
+		caps []authz.Capability
+		body string
+		want int
+	}{
+		{[]authz.Capability{authz.StatusRead}, `{"kind":"ping","device_id":"andaru:local","target":"192.0.2.1"}`, http.StatusForbidden},
+		{[]authz.Capability{authz.ConfigurationWrite}, `{"kind":"ping","device_id":"andaru:local","target":"-f"}`, http.StatusBadRequest},
+		{[]authz.Capability{authz.ConfigurationWrite}, `{"kind":"ping","device_id":"andaru:local","target":"192.0.2.1","params":{"count":"11"}}`, http.StatusBadRequest},
+		{[]authz.Capability{authz.ConfigurationWrite}, `{"kind":"traceroute","device_id":"andaru:local","target":"a.example; reboot"}`, http.StatusBadRequest},
+		{[]authz.Capability{authz.ConfigurationWrite}, `{"kind":"cable_test","device_id":"andaru:local","target":"eth0"}`, http.StatusNotImplemented},
+	} {
+		rec = httptest.NewRecorder()
+		handler.ServeHTTP(rec, withCaps(httptest.NewRequest(http.MethodPost, "/api/v1/fleet/diagnostics", strings.NewReader(tc.body)), tc.caps...))
+		if rec.Code != tc.want {
+			t.Errorf("POST /api/v1/fleet/diagnostics %s with %v = %d, want %d: %s", tc.body, tc.caps, rec.Code, tc.want, rec.Body.String())
+		}
 	}
 
 	// Upsert a remote target with encrypted credentials and verify secret never leaks in API response.
