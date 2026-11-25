@@ -93,7 +93,7 @@ func openFleetService(ctx context.Context, stateDir string, local localHostSourc
 
 	reg := npdriver.NewRegistry()
 	for _, d := range []npdriver.Driver{
-		andaru.New(),
+		&andaru.Driver{LocalDiagnostics: newLocalDiagnostics().Run},
 		openwrt.New(),
 		opnsense.New(),
 		pfsense.New(),
@@ -243,7 +243,7 @@ func (f *fleetService) allTargetConfigsLocked() []npdriver.TargetConfig {
 		ID:           fleetLocalTargetID,
 		Name:         "Local Andaru Host",
 		Driver:       "andaru",
-		Endpoint:     "local://engine",
+		Endpoint:     andaru.LocalEndpoint,
 		Enabled:      true,
 		PollInterval: fleetLocalInterval,
 	})

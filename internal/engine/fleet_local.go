@@ -132,6 +132,8 @@ func buildLocalSnapshot(ctx context.Context, src localHostSource, now time.Time)
 				npmodel.CapConfigApply,
 				npmodel.CapConfigRollbackTimer,
 				npmodel.CapConfigBackup,
+				npmodel.CapDiagPing,
+				npmodel.CapDiagTraceroute,
 			},
 		}},
 	}

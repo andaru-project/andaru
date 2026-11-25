@@ -14,7 +14,10 @@ import (
 )
 
 // Driver polls an Andaru firewall via its OpenAPI 3.1 REST API (HTTP/HTTPS or unix:// socket).
-type Driver struct{}
+type Driver struct {
+	// LocalDiagnostics runs a diagnostic on this box, for the engine's built-in target at LocalEndpoint.
+	LocalDiagnostics func(context.Context, model.DiagnosticRequest) (*model.DiagnosticResult, error)
+}
 
 // New returns a new Andaru driver.
 func New() *Driver { return &Driver{} }
@@ -90,6 +93,8 @@ func (d *Driver) Poll(ctx context.Context, cfg driver.TargetConfig) (*driver.Sna
 		model.CapConfigApply,
 		model.CapConfigRollbackTimer,
 		model.CapConfigBackup,
+		model.CapDiagPing,
+		model.CapDiagTraceroute,
 	}
 
 	snap := &driver.Snapshot{

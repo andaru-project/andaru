@@ -67,6 +67,9 @@ func TestAndaruDriverPoll(t *testing.T) {
 	if snap.Devices[0].ID != "andaru:andaru-core" || snap.Devices[0].PrimaryMAC != "00:11:22:33:44:01" {
 		t.Fatalf("device identity = %q (primary MAC %q), want target-keyed ID", snap.Devices[0].ID, snap.Devices[0].PrimaryMAC)
 	}
+	if caps := snap.Devices[0].Capabilities; !slices.Contains(caps, model.CapDiagPing) || !slices.Contains(caps, model.CapDiagTraceroute) || slices.Contains(caps, model.CapDiagCableTest) {
+		t.Fatalf("diagnostic capabilities = %v", caps)
+	}
 	if len(snap.Links) != 1 || snap.Links[0].IfName != "eth0" || !snap.Links[0].LinkUp {
 		t.Fatalf("unexpected links: %+v", snap.Links)
 	}
