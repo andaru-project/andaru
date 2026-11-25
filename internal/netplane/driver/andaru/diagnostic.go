@@ -57,8 +57,6 @@ func (d *Driver) RunDiagnostic(ctx context.Context, cfg driver.TargetConfig, req
 		switch driver.HTTPStatus(err) {
 		case http.StatusBadRequest:
 			return nil, fmt.Errorf("%w: andaru fleet/diagnostics: %v", driver.ErrDiagnosticRequest, err)
-		case http.StatusServiceUnavailable:
-			return nil, fmt.Errorf("%w: andaru fleet/diagnostics: %v", driver.ErrDiagnosticBusy, err)
 		case http.StatusNotImplemented:
 			return nil, fmt.Errorf("%w: andaru fleet/diagnostics: %v (the remote Andaru predates diagnostics on its own box)", driver.ErrDiagnosticUnsupported, err)
 		case http.StatusUnauthorized, http.StatusForbidden:

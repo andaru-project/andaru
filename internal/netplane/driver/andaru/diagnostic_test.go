@@ -45,7 +45,8 @@ func TestAndaruRemoteDiagnosticErrors(t *testing.T) {
 		text   string
 	}{
 		{http.StatusBadRequest, driver.ErrDiagnosticRequest, "HTTP 400"},
-		{http.StatusServiceUnavailable, driver.ErrDiagnosticBusy, "HTTP 503"},
+		// A remote 503 may be busy or unavailable: its own message says which.
+		{http.StatusServiceUnavailable, nil, "HTTP 503"},
 		{http.StatusNotImplemented, driver.ErrDiagnosticUnsupported, "predates"},
 		{http.StatusForbidden, nil, "configuration.write"},
 		{http.StatusBadGateway, nil, "HTTP 502"},

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os/exec"
 	"slices"
 	"strings"
 	"testing"
@@ -201,8 +202,12 @@ func TestCappedBuffer(t *testing.T) {
 
 // os/exec copies a command's output with io.Copy, which must still go through the cap.
 func TestExecDiagnosticCapsOutput(t *testing.T) {
+	head, err := exec.LookPath("head")
+	if err != nil {
+		t.Skip("head is not installed")
+	}
 	var b cappedBuffer
-	code, err := execDiagnostic(context.Background(), []string{"/usr/bin/head", "-c", "100000", "/dev/zero"}, &b)
+	code, err := execDiagnostic(context.Background(), []string{head, "-c", "100000", "/dev/zero"}, &b)
 	if err != nil || code != 0 || len(b.String()) != npdriver.DiagnosticMaxOutput {
 		t.Fatalf("code %d, err %v, kept %d bytes, want %d", code, err, len(b.String()), npdriver.DiagnosticMaxOutput)
 	}

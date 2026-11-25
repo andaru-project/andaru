@@ -87,7 +87,7 @@ func diagnosticCommand(req npmodel.DiagnosticRequest, host string) ([]string, ti
 			return nil, 0, err
 		}
 		// -w ends the run when replies never come; the rest is for the unit's start and name
-		// resolution (glibc's default is two tries of 5 s).
+		// resolution through the image's one stub resolver (glibc's default is two tries of 5 s).
 		return []string{"/usr/bin/ping", "-n", "-c", strconv.Itoa(n), "-w", strconv.Itoa(n + 2), "--", host}, time.Duration(n+20) * time.Second, nil
 	case npmodel.DiagTraceroute:
 		return []string{"/usr/bin/traceroute", "-n", "-q", "1", "-w", "1", "-m", strconv.Itoa(npdriver.TracerouteMaxHops), "--", host}, 40 * time.Second, nil
