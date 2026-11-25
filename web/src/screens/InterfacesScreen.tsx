@@ -1,13 +1,12 @@
 import { Alert, Badge, Button, Group, Loader, ScrollArea, Stack, Table, Text, Title, VisuallyHidden } from '@mantine/core';
 import { useCallback, useState } from 'react';
 import { ApiClient, reportError } from '../api';
-import { ipv4Modes, ipv6Modes, isPort, modeLabel } from '../interfaceEdit';
+import { addressLines, isPort } from '../interfaceEdit';
 import { stateColor, stateLabel, type ConfigBatchOperation, type LinkStatus, type Preview, type SavedLink, type SavedObject, type Segment, type Session, type Snapshot } from '../types';
 import { useResource, useVisiblePoll } from '../useResource';
-import { bindingFindings, kernelName, zonesByInterface } from '../zones';
+import { bindingFindings, kernelName } from '../zones';
 import { Address } from './Address';
 import { InterfaceEditor } from './InterfaceEditor';
-
 import { ZoneBadge } from './ZoneBadge';
 
 interface InterfacesScreenProps { api: ApiClient; session: Session; onSaved(): void; onSessionLost(): void }
@@ -70,13 +69,14 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
 
   const { links, saved, savedError } = resource.data;
   // The loopback is not a port anyone configures: it shows only if the configuration names it.
-  const all = saved ? join(links, saved.snapshot, saved.preview) : links.map((live): Row => ({ key: live.name, live }));
-  const rows = all.filter((row) => row.saved || row.live?.linkType !== 'loopback');
-  const showSaved = Boolean(saved);
+  const all = (saved ? join(links, saved.snapshot, saved.preview) : links.map((live): Row => ({ key: live.name, live })))
+    .filter((row) => row.saved || row.live?.linkType !== 'loopback');
+  // One row per configured interface; what the box has beyond them goes to a table of its own.
+  const configured = all.filter((row) => row.saved);
+  const others = all.filter((row) => !row.saved);
   const segmentOf = (link: SavedLink): Segment | undefined => saved?.snapshot.value.segments.find((segment) => segment.link === link.id);
   const zoneName = (id: string) => saved?.snapshot.value.zones.find((zone) => zone.id === id)?.name ?? id;
-  // The pill by an interface's name is the dashboard's: one rule for which zone an interface is in.
-  const zones = saved ? zonesByInterface(saved.snapshot, saved.preview) : undefined;
+  const linkName = (id: string) => saved?.snapshot.value.links.find((link) => link.id === id)?.name ?? 'another link';
   // The panel reads the objects again, so a save is guarded by the versions they have now.
   const edit = async (key: string, live: LinkStatus | undefined, link: SavedLink | undefined, segment: Segment | undefined) => {
     if (opening) return;
@@ -104,10 +104,52 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
   // Edits start from the saved configuration: without it, nothing on the page says what is saved.
   const editable = canWrite && Boolean(saved);
 
+  // What a link is, said only when it is not a plain Ethernet port.
+  const kindLine = (link: SavedLink) => {
+    const extra = link as SavedLink & { vlanId?: number; parent?: string };
+    if (link.kind === 'vlan') return `VLAN ${extra.vlanId} on ${extra.parent ? linkName(extra.parent) : 'its parent'}`;
+    if (link.kind === 'pppoe') return `PPPoE on ${extra.parent ? linkName(extra.parent) : 'its parent'}`;
+    return { bridge: 'Bridge', bond: 'Bond' }[link.kind as string];
+  };
+  const addressesCell = (live: LinkStatus | undefined, segment: Segment | undefined) => {
+    const lines = addressLines(live, segment);
+    if (lines.length === 0) return <Text c="dimmed">—</Text>;
+    return lines.map((line) => (
+      <div key={line.family} className="address-line">
+        <Text size="xs" c="dimmed">{line.method ? `${line.family} · ${line.method}` : line.family}</Text>
+        {line.addresses.map((address) => <Address key={address} value={address} />)}
+        {line.pending.length > 0 && <Group gap={6} align="baseline"><Badge size="xs" color="yellow" variant="light">Pending</Badge><div>{line.pending.map((address) => <Address key={address} value={address} />)}</div></Group>}
+      </div>
+    ));
+  };
+  const stateBadge = (live: LinkStatus | undefined, state: string | undefined) => live
+    ? <Badge variant="dot" color={stateColor[live.operState] ?? 'gray'}>{stateLabel(live.operState)}</Badge>
+    : <Badge variant="dot" color={state === 'Disabled' ? 'gray' : 'red'}>{state}</Badge>;
+  const actionButton = (key: string, label: string, ariaLabel: string, onClick: () => void, variant: 'default' | 'light') => (
+    <Button size="xs" variant={variant} loading={opening === key} disabled={Boolean(opening) && opening !== key} aria-label={ariaLabel} onClick={onClick}>{label}</Button>
+  );
+
+  // Links the configuration does not name: hardware ports can be added; without the configuration, every link.
+  const othersTable = (
+    <ScrollArea><Table verticalSpacing="sm" withTableBorder className="data-table interfaces"><Table.Thead><Table.Tr><Table.Th>Device</Table.Th><Table.Th>State</Table.Th><Table.Th>Addresses</Table.Th>{editable && <Table.Th><VisuallyHidden>Actions</VisuallyHidden></Table.Th>}</Table.Tr></Table.Thead><Table.Tbody>
+      {others.map(({ key, live }) => live && (
+        <Table.Tr key={key}>
+          <Table.Td data-label="Device">
+            <Text ff="monospace" fw={600}>{live.name}</Text>
+            <Text c="dimmed" size="sm"><Text span ff="monospace" inherit>{live.linkAddress || 'no MAC'}</Text>{live.kind && ` · ${live.kind}`}{live.mtu !== 1500 && ` · MTU ${live.mtu}`}</Text>
+          </Table.Td>
+          <Table.Td data-label="State">{stateBadge(live, undefined)}</Table.Td>
+          <Table.Td data-label="Addresses">{addressesCell(live, undefined)}</Table.Td>
+          {editable && <Table.Td>{isPort(live) && actionButton(key, 'Add', `Add ${live.name} to the configuration`, () => void edit(key, live, undefined, undefined), 'light')}</Table.Td>}
+        </Table.Tr>
+      ))}
+    </Table.Tbody></Table></ScrollArea>
+  );
+
   return (
     <Stack>
       <Group justify="space-between" align="flex-end">
-        <div><Title order={2}>Interfaces</Title><Text c="dimmed">Network links the box reports now, beside what the saved configuration puts on them.</Text></div>
+        <div><Title order={2}>Interfaces</Title><Text c="dimmed">{saved ? 'Configured network interfaces and their live state.' : 'Network links the box reports now.'}</Text></div>
         <Button size="xs" variant="default" loading={resource.loading} onClick={() => void resource.reload()}>Refresh</Button>
       </Group>
       {error && <Alert color="red" role="alert" title="The interface could not be opened" withCloseButton onClose={() => setError('')}>{error}</Alert>}
@@ -115,55 +157,53 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
       {resource.error && <Alert color="red" role="alert" title="Interfaces request failed">{resource.error}</Alert>}
       {savedError && <Alert color="red" role="alert" title="The saved configuration could not be read">{savedError} Only live links are shown.</Alert>}
       {!canReadConfig && <Alert color="gray" role="status">Your account cannot read the saved configuration, so only live links are shown.</Alert>}
-      {rows.length === 0 ? <Alert role="status">The box reports no network links.</Alert> : (
-        <ScrollArea><Table verticalSpacing="sm" withTableBorder className="data-table"><Table.Thead><Table.Tr><Table.Th>Interface</Table.Th><Table.Th>State</Table.Th><Table.Th>Addresses</Table.Th>{showSaved && <><Table.Th>Saved configuration</Table.Th><Table.Th>Addressing</Table.Th></>}{editable && <Table.Th><VisuallyHidden>Actions</VisuallyHidden></Table.Th>}</Table.Tr></Table.Thead><Table.Tbody>
-          {rows.map(({ key, live, saved: link, state, finding, conflict }) => {
-            const segment = link && segmentOf(link);
-            return (
-              <Table.Tr key={key}>
-                <Table.Td data-label="Interface">
-                  {live ? <Group gap="xs"><Text ff="monospace" fw={600}>{live.name}</Text><ZoneBadge name={zones?.get(live.name)} /></Group> : <Text c="dimmed">No device</Text>}
-                  <Text c="dimmed" size="sm"><Text span ff="monospace" inherit>{live?.linkAddress || link?.permanentMac || 'no MAC'}</Text> · {live?.linkType ?? link?.kind} · MTU {live?.mtu ?? link?.mtu}</Text>
-                </Table.Td>
-                <Table.Td data-label="State">{live ? <Badge variant="dot" color={stateColor[live.operState] ?? 'gray'}>{stateLabel(live.operState)}</Badge> : <Badge variant="dot" color={state === 'Disabled' ? 'gray' : 'red'}>{state}</Badge>}</Table.Td>
-                <Table.Td data-label="Addresses">{live?.addresses.length ? live.addresses.map((address) => <Address key={`${address.address}/${address.prefixLength}`} value={`${address.address}/${address.prefixLength}`} />) : <Text c="dimmed">—</Text>}</Table.Td>
-                {showSaved && (
-                  <>
-                    <Table.Td data-label="Saved configuration">
-                      {link ? (
-                        <>
-                          <Group gap="xs"><Text fw={600}>{link.name}</Text>{segment && saved?.snapshot.value.management?.segment === segment.id && <Badge variant="light">Management</Badge>}{live && !link.enabled && <Badge color="gray" variant="light">Disabled</Badge>}</Group>
-                          {/* The zone is a badge, as everywhere; here only when the name column does not already show it. */}
-                          <Group gap="xs">
-                            <Text c="dimmed" size="sm">{link.kind} link{segment ? <> · segment {segment.name}</> : ' · no segment'}</Text>
-                            {segment && (!live || zones?.get(live.name) !== zoneName(segment.zone)) && <ZoneBadge name={zoneName(segment.zone)} />}
-                          </Group>
-                        </>
-                      ) : <Text c="dimmed">Not in the configuration</Text>}
-                      {conflict && <Badge color="red" variant="light">Conflict: several saved links</Badge>}
+      {all.length === 0 ? <Alert role="status">The box reports no network links.</Alert> : !saved ? othersTable : (
+        <>
+          {configured.length === 0 ? <Alert role="status">The configuration names no interfaces yet.</Alert> : (
+            <ScrollArea><Table verticalSpacing="sm" withTableBorder className="data-table interfaces"><Table.Thead><Table.Tr><Table.Th>Interface</Table.Th><Table.Th>Device</Table.Th><Table.Th>State</Table.Th><Table.Th>Addresses</Table.Th>{editable && <Table.Th><VisuallyHidden>Actions</VisuallyHidden></Table.Th>}</Table.Tr></Table.Thead><Table.Tbody>
+              {configured.map(({ key, live, saved: link, state, finding, conflict }) => {
+                if (!link) return null;
+                const segment = segmentOf(link);
+                const management = segment !== undefined && saved.snapshot.value.management?.segment === segment.id;
+                const kind = kindLine(link);
+                const mtu = live && live.mtu !== link.mtu ? `MTU ${live.mtu} → ${link.mtu}` : link.mtu !== 1500 ? `MTU ${link.mtu}` : undefined;
+                return (
+                  <Table.Tr key={key}>
+                    {/* The interface as configured: its name, zone and role; its kind and segment only when unusual. */}
+                    <Table.Td data-label="Interface">
+                      <Group gap="xs">
+                        <Text fw={600}>{link.name}</Text>
+                        {segment && <ZoneBadge name={zoneName(segment.zone)} />}
+                        {management && <Badge variant="light">Management</Badge>}
+                        {conflict && <Badge color="red" variant="light">Conflict: several saved links</Badge>}
+                      </Group>
+                      {(kind || !segment || segment.name !== link.name) && (
+                        <Text c="dimmed" size="sm">{[kind, !segment ? 'No segment' : segment.name !== link.name ? `Segment ${segment.name}` : undefined].filter(Boolean).join(' · ')}</Text>
+                      )}
                       {finding && <Text size="sm" className="error-text">{finding}</Text>}
                     </Table.Td>
-                    {/* What is saved, which may not be applied yet: the live addresses are in their own column. */}
-                    <Table.Td data-label="Addressing">{segment ? ([['IPv4', ipv4Modes, segment.addressing.ipv4], ['IPv6', ipv6Modes, segment.addressing.ipv6]] as const).map(([family, modes, value]) => (
-                      <Text key={family} size="sm" c={value.mode === 'none' ? 'dimmed' : undefined}>
-                        {family} {modeLabel(modes, value.mode)}
-                        {(value as { addresses?: string[] }).addresses?.map((address) => <Address key={address} value={address} />)}
-                      </Text>
-                    )) : <Text c="dimmed">—</Text>}</Table.Td>
-                  </>
-                )}
-                {editable && (
-                  <Table.Td>
-                    {/* Each of two saved links on one port is its own object: either can be edited or removed. */}
-                    {link
-                      ? <Button size="xs" variant="default" loading={opening === key} disabled={Boolean(opening) && opening !== key} aria-label={`Edit ${link.name}`} onClick={() => void edit(key, live, link, segment)}>Edit</Button>
-                      : isPort(live) && <Button size="xs" variant="light" loading={opening === key} disabled={Boolean(opening) && opening !== key} aria-label={`Add ${live?.name} to the configuration`} onClick={() => void edit(key, live, undefined, undefined)}>Add</Button>}
-                  </Table.Td>
-                )}
-              </Table.Tr>
-            );
-          })}
-        </Table.Tbody></Table></ScrollArea>
+                    <Table.Td data-label="Device">
+                      {live ? <Text ff="monospace">{live.name}</Text> : <Text c="dimmed">No device</Text>}
+                      <Text c="dimmed" size="sm"><Text span ff="monospace" inherit>{live?.linkAddress || link.permanentMac || ''}</Text>{mtu && <>{(live?.linkAddress || link.permanentMac) && ' · '}{mtu}</>}</Text>
+                    </Table.Td>
+                    <Table.Td data-label="State">
+                      {stateBadge(live, state)}
+                      {live && !link.enabled && <Text size="xs" c="dimmed">Pending: off</Text>}
+                    </Table.Td>
+                    <Table.Td data-label="Addresses">{addressesCell(live, segment)}</Table.Td>
+                    {editable && <Table.Td>{actionButton(key, 'Edit', `Edit ${link.name}`, () => void edit(key, live, link, segment), 'default')}</Table.Td>}
+                  </Table.Tr>
+                );
+              })}
+            </Table.Tbody></Table></ScrollArea>
+          )}
+          {others.length > 0 && (
+            <>
+              <div><Title order={3} size="h4">Not in the configuration</Title><Text c="dimmed" size="sm">Links on the box the configuration does not name. A hardware port can be added.</Text></div>
+              {othersTable}
+            </>
+          )}
+        </>
       )}
       {editing && (
         <InterfaceEditor key={editing.link?.value.id ?? editing.live?.name} {...editing} onClose={() => setEditing(undefined)}

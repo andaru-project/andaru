@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { ApiError } from './api';
-import { draftOf, interfaceErrors, interfaceOperations, newZoneOption, removeOperations } from './interfaceEdit';
+import { addressLines, draftOf, interfaceErrors, interfaceOperations, newZoneOption, removeOperations } from './interfaceEdit';
 import type { LinkStatus, SavedLink, SavedObject, Segment } from './types';
 
 const port: LinkStatus = { ifIndex: 3, name: 'enp2s0', linkType: 'ether', mtu: 1500, operState: 'UP', flags: [], linkAddress: '02:00:00:00:00:99', permanentAddress: '52:54:00:AA:BB:02', addresses: [] };
@@ -102,4 +102,17 @@ it('turns router advertisements off without IPv6, and leaves their lifetimes beh
     .toEqual({ mode: 'delegated', ra: { mode: 'unmanaged' }, from: 'seg_wan', subnetId: '1', addresses: ['2001:db8::1/64'] });
   const older = { ...lan, value: { ...lan.value, addressing: { ...lan.value.addressing, ipv6: { mode: 'static', addresses: ['2001:db8::1/64'], ra: { enabled: true, managed: false, otherInfo: true } } } } } as unknown as SavedObject<Segment>;
   expect(ipv6({ ipv6Mode: 'none' }, older)).toEqual({ mode: 'none', ra: { enabled: false, managed: false, otherInfo: true } });
+});
+
+it('pairs each method with the live addresses, and says which saved ones are not applied yet', () => {
+  const lan = { id: 'seg_l', name: 'lan', link: 'lnk_l', zone: 'zon_l', addressing: { ipv4: { mode: 'static', addresses: ['192.168.1.1/24', '192.168.9.1/24'] }, ipv6: { mode: 'none' } } } as unknown as Segment;
+  const device = { ...port, addresses: [
+    { family: 'ipv4' as const, address: '192.168.1.1', prefixLength: 24, scope: 'global' },
+    { family: 'ipv6' as const, address: 'fe80::1', prefixLength: 64, scope: 'link' },
+  ] };
+  expect(addressLines(device, lan)).toEqual([{ family: 'IPv4', method: 'Static', addresses: ['192.168.1.1/24'], pending: ['192.168.9.1/24'] }]);
+  // No device: the saved addresses are what there is to show.
+  expect(addressLines(undefined, lan)).toEqual([{ family: 'IPv4', method: 'Static', addresses: ['192.168.1.1/24', '192.168.9.1/24'], pending: [] }]);
+  // No segment: the live addresses, with no method.
+  expect(addressLines(device, undefined)).toEqual([{ family: 'IPv4', method: undefined, addresses: ['192.168.1.1/24'], pending: [] }]);
 });

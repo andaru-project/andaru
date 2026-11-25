@@ -54,21 +54,23 @@ it('joins live links with the saved links, segments and zones on them', async ()
   routes();
   await showInterfaces();
 
-  const lan = row('enp1s0');
-  expect(lan).toHaveTextContent('LAN port');
-  expect(lan).toHaveTextContent('Trusted');
-  expect(lan).toHaveTextContent('IPv4 Static192.168.1.1/24');
-  expect(lan).toHaveTextContent('IPv6 None');
-  expect(lan).toHaveTextContent('192.168.1.1/24');
-  expect(within(lan).getByText('Management')).toBeInTheDocument();
-  // The zone is said once, by the badge beside the interface's name, not again in the saved column.
+  const lan = row('LAN port');
+  expect(lan).toHaveTextContent('enp1s0');
   expect(within(lan).getAllByText(/zone Trusted/)).toHaveLength(1);
+  expect(within(lan).getByText('Management')).toBeInTheDocument();
+  // Each family's method with its live addresses; a family with neither is left out.
+  expect(lan).toHaveTextContent('IPv4 · Static192.168.1.1/24');
+  expect(lan).not.toHaveTextContent('IPv6');
+  // A plain Ethernet port says nothing of its kind, and a segment named apart from its link says its name.
+  expect(lan).not.toHaveTextContent('ethernet');
+  expect(lan).toHaveTextContent('Segment LAN');
 
-  const guest = row('vl222222222222');
-  expect(guest).toHaveTextContent('Guest VLAN');
+  const guest = row('Guest VLAN');
+  expect(guest).toHaveTextContent('vl222222222222');
   expect(guest).toHaveTextContent('Guests');
-  expect(guest).toHaveTextContent('IPv4 DHCP client');
-  expect(guest).toHaveTextContent('IPv6 SLAAC');
+  expect(guest).toHaveTextContent('VLAN 20 on LAN port');
+  expect(guest).toHaveTextContent('IPv4 · DHCP');
+  expect(guest).toHaveTextContent('IPv6 · SLAAC');
   expect(within(guest).queryByText('Management')).not.toBeInTheDocument();
 });
 
@@ -76,8 +78,11 @@ it('lists a saved link with no live device as missing and an unused live device 
   routes();
   await showInterfaces();
 
-  expect(within(row('enp2s0')).getByText('Not in the configuration')).toBeInTheDocument();
+  // A port the configuration does not name is listed apart from the configured interfaces.
+  expect(screen.getByRole('heading', { name: 'Not in the configuration' })).toBeInTheDocument();
+  expect(row('enp2s0').closest('table')).not.toBe(row('LAN port').closest('table'));
   const missing = row('Old port');
+  expect(missing).toHaveTextContent('No device');
   expect(within(missing).getByText('Missing')).toBeInTheDocument();
   expect(missing).toHaveTextContent('No interface with this permanent MAC is present.');
   expect(missing).toHaveTextContent('52:54:00:aa:bb:09');
@@ -87,7 +92,7 @@ it('does not join a link the preview will not realize to the device with its nam
   routes({ findings: [missingFinding, { severity: 'error', code: 'NAME_COLLISION', path: '/links/1', message: 'The interface name vl222222222222 derived for this link is already taken.' }] });
   await showInterfaces();
 
-  expect(within(row('vl222222222222')).getByText('Not in the configuration')).toBeInTheDocument();
+  expect(row('vl222222222222').closest('table')).not.toBe(row('Guest VLAN').closest('table'));
   const guest = row('Guest VLAN');
   expect(within(guest).getByText('Not realized')).toBeInTheDocument();
   expect(guest).toHaveTextContent('already taken');
@@ -198,8 +203,9 @@ it('keeps a loopback the configuration names, and marks a disabled link that has
   });
   await showInterfaces();
 
-  expect(row('lo')).toHaveTextContent('Loopback');
-  expect(within(row('enp1s0')).getByText('Disabled')).toBeInTheDocument();
+  expect(row('Loopback')).toHaveTextContent('lo');
+  // Disabled in the configuration while the device is up: the change waits for an apply.
+  expect(within(row('LAN port')).getByText('Pending: off')).toBeInTheDocument();
 });
 
 const writer = session(['status.read', 'configuration.read', 'configuration.write']);

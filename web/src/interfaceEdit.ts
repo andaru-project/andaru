@@ -33,6 +33,33 @@ export const ipv6Modes = [
 ];
 export const modeLabel = (modes: Array<{ value: string; label: string }>, mode: string) => modes.find((item) => item.value === mode)?.label ?? mode;
 
+// The table's short words for a method; the panel uses the full ones above.
+const shortMethod: Record<string, string> = { dhcp: 'DHCP', static: 'Static', ppp: 'PPP', slaac: 'SLAAC', dhcp6: 'DHCPv6', delegated: 'Delegated' };
+
+export interface AddressLine {
+  family: 'IPv4' | 'IPv6';
+  method?: string;
+  addresses: string[];
+  // Saved static addresses the device does not have yet: a change not applied.
+  pending: string[];
+}
+
+// addressLines pairs each family's saved method with the addresses it has: the live ones, link-local left out,
+// and the saved static ones where they differ; with no device on the box, the saved ones alone. A family with no
+// method and no address is left out.
+// shortcut: addresses compare as written, case aside; an IPv6 address saved in another spelling shows as pending.
+export function addressLines(live: LinkStatus | undefined, segment: Segment | undefined): AddressLine[] {
+  return (['IPv4', 'IPv6'] as const).flatMap((family) => {
+    const saved = segment?.addressing[family === 'IPv4' ? 'ipv4' : 'ipv6'] as { mode: string; addresses?: string[] } | undefined;
+    const method = saved && saved.mode !== 'none' ? shortMethod[saved.mode] ?? saved.mode : undefined;
+    const fixed = saved?.addresses ?? [];
+    const now = (live?.addresses ?? []).filter((item) => item.family === family.toLowerCase() && item.scope !== 'link').map((item) => `${item.address}/${item.prefixLength}`);
+    const addresses = live ? now : fixed;
+    const pending = live ? fixed.filter((address) => !now.some((item) => item.toLowerCase() === address.toLowerCase())) : [];
+    return method || addresses.length > 0 || pending.length > 0 ? [{ family, method, addresses, pending }] : [];
+  });
+}
+
 // isPort says whether a live link is hardware a saved Ethernet link can name, by its permanent address, as the
 // renderer matches it. A VLAN, bridge or veth has a kind of its own, and the loopback is no Ethernet device.
 export const isPort = (live?: LinkStatus) => live?.linkType === 'ether' && !live.kind && Boolean(live.permanentAddress);
