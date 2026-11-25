@@ -68,7 +68,9 @@ func (d *localDiagnostics) Run(ctx context.Context, req npmodel.DiagnosticReques
 	defer cancel()
 	var out cappedBuffer
 	code, err := d.exec(runCtx, argv, &out)
-	if unit != "" && err == nil && runCtx.Err() == nil {
+	// Taken now: reading the output back may outlast the tool's budget without the tool having done so.
+	timedOut := runCtx.Err() != nil
+	if unit != "" && err == nil && !timedOut {
 		// The tool's output, which the unit logged, then what systemd-run itself said (a unit that did not start).
 		said := out.String()
 		out = cappedBuffer{}
@@ -84,7 +86,7 @@ func (d *localDiagnostics) Run(ctx context.Context, req npmodel.DiagnosticReques
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	if runCtx.Err() != nil {
+	if timedOut {
 		return nil, fmt.Errorf("%s did not finish within %s", req.Kind, timeout)
 	}
 	if err != nil {

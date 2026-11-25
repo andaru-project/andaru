@@ -177,6 +177,22 @@ func TestLocalDiagnosticsFailures(t *testing.T) {
 			t.Errorf("own deadline: %v", err)
 		}
 	})
+	// A tool that finished in time is not timed out by reading its output back past that time.
+	synctest.Test(t, func(t *testing.T) {
+		late := fakeDiagnostics(func(_ context.Context, argv []string, out io.Writer) (int, error) {
+			switch {
+			case argv[0] == "/usr/bin/systemd-run":
+				time.Sleep(22 * time.Second)
+			case argv[1] == "--quiet":
+				time.Sleep(4 * time.Second)
+				_, _ = io.WriteString(out, iputilsPingOut)
+			}
+			return 0, nil
+		})
+		if res, err := late.Run(context.Background(), ping); err != nil || !res.OK {
+			t.Errorf("slow journal read: %+v %v", res, err)
+		}
+	})
 }
 
 // The output is read back from the journal after a sync, and a journal that cannot be read fails the run
