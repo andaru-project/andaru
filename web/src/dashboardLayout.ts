@@ -10,10 +10,15 @@ export function arrange(known: string[], stored: DashboardLayout | undefined): D
   const order = names(stored?.order), hidden = names(stored?.hidden);
   const ordered = [...order.filter((id) => known.includes(id)), ...known.filter((id) => !order.includes(id))];
   const arranged = { order: ordered, hidden: ordered.filter((id) => hidden.includes(id)) };
-  if (!Array.isArray(stored?.columns)) return arranged;
-  // A name counts once across the columns too, in the first column that holds it.
-  const seen = new Set<string>();
-  const columns = stored.columns.map((column) => names(column).filter((id) => known.includes(id) && !seen.has(id) && seen.add(id)));
+  const kept = stored?.columns;
+  if (typeof kept !== 'object' || kept === null || Array.isArray(kept)) return arranged;
+  const columns: Record<string, string[][]> = {};
+  for (const [count, value] of Object.entries(kept)) {
+    if (!/^[1-9]\d?$/.test(count) || !Array.isArray(value) || value.length !== Number(count)) continue;
+    // A name counts once across the columns too, in the first column that holds it.
+    const seen = new Set<string>();
+    columns[count] = value.map((column) => names(column).filter((id) => known.includes(id) && !seen.has(id) && seen.add(id)));
+  }
   return { ...arranged, columns };
 }
 
@@ -43,6 +48,16 @@ export function dropAt(columns: string[][], id: string, column: number, over?: s
   const at = to < 0 ? next[column].length : from >= 0 && from < to ? to : next[column].indexOf(over!);
   next[column].splice(at, 0, id);
   return next;
+}
+
+// withHidden puts back, around the shown widgets as laid out, the hidden ones the arrangement held, in their places.
+export function withHidden(arranged: string[][] | undefined, columns: string[][], shown: string[]) {
+  if (arranged?.length !== columns.length) return columns;
+  return columns.map((column, index) => {
+    const queue = [...column];
+    const merged = arranged[index].flatMap((id) => (shown.includes(id) ? (queue.length > 0 ? [queue.shift()!] : []) : [id]));
+    return [...merged, ...queue];
+  });
 }
 
 // withShown puts the shown widgets in a new order. Widgets that are not on the page, hidden or not this account's

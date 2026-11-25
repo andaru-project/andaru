@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { arrange, columnsFor, dropAt, readAcross, withShown } from './dashboardLayout';
+import { arrange, columnsFor, dropAt, readAcross, withHidden, withShown } from './dashboardLayout';
 
 it('puts a stored layout over the widgets this version has', () => {
   expect(arrange(['a', 'b', 'c'], {})).toEqual({ order: ['a', 'b', 'c'], hidden: [] });
@@ -17,8 +17,18 @@ it('takes nothing about a stored layout on trust', () => {
   expect(arrange(['a', 'b', 'c'], { order: ['b', 'b', 'a'], hidden: ['a', 'a'] })).toEqual({ order: ['b', 'a', 'c'], hidden: ['a'] });
 });
 
-it('keeps a hand-made arrangement, each name once and only names it knows', () => {
-  expect(arrange(['a', 'b', 'c'], { columns: [['b', 'gone'], ['a', 'b'], 'x' as never] })).toEqual({ order: ['a', 'b', 'c'], hidden: [], columns: [['b'], ['a'], []] });
+it('keeps the hand-made arrangements by column count, each name once and only names it knows', () => {
+  expect(arrange(['a', 'b', 'c'], { columns: { 3: [['b', 'gone'], ['a', 'b'], 'x' as never], 1: [['c', 'a']] } })).toEqual({ order: ['a', 'b', 'c'], hidden: [], columns: { 3: [['b'], ['a'], []], 1: [['c', 'a']] } });
+  // A count that is not one, or columns that are not that many, are not an arrangement.
+  expect(arrange(['a'], { columns: { 0: [], x: [['a']], 2: [['a']] } as never })).toEqual({ order: ['a'], hidden: [], columns: {} });
+  for (const columns of [null, [['a']], 'a']) expect(arrange(['a'], { columns } as never)).toEqual({ order: ['a'], hidden: [] });
+});
+
+it('keeps hidden widgets in their places around the shown ones', () => {
+  // "h" is hidden: the shown widgets are laid out without it, and it goes back between them.
+  expect(withHidden([['a', 'h', 'b'], ['c']], [['a', 'b'], ['c', 'n']], ['a', 'b', 'c', 'n'])).toEqual([['a', 'h', 'b'], ['c', 'n']]);
+  // No arrangement at this count: nothing to put back.
+  expect(withHidden(undefined, [['a']], ['a'])).toEqual([['a']]);
 });
 
 it('lays the shown widgets out as arranged at that column count, and deals them in turn otherwise', () => {

@@ -6,7 +6,7 @@ import { useCallback, useRef, useState, type ReactNode } from 'react';
 import { useElementSize } from '@mantine/hooks';
 import { Link } from 'react-router';
 import { reportError, type ApiClient } from '../api';
-import { arrange, columnsFor, dropAt, readAcross, withShown } from '../dashboardLayout';
+import { arrange, columnsFor, dropAt, readAcross, withHidden, withShown } from '../dashboardLayout';
 import { zonesByInterface } from '../zones';
 import { stateColor, stateLabel, type DashboardLayout, type NotificationList, type Preferences, type Session, type SystemInfo, type UpdateStatus } from '../types';
 import { usePolledResource, useResource, useVisiblePoll, type Resource } from '../useResource';
@@ -35,9 +35,6 @@ interface WidgetProps { api: ApiClient; zones: Map<string, string>; onSessionLos
 
 const pollMilliseconds = 10_000;
 
-// A widget is dragged by its grip alone: anywhere else on it, a finger scrolls the page. The grip is a button, so
-// the keyboard moves a widget through the same control (Space or Enter picks up and drops, the arrows move,
-// Escape puts back). Translate, not Transform: widgets differ in height, and a scaled one is distorted.
 // The room below a column's last widget, while the layout is unlocked: a widget dropped there goes to the end of it.
 const columnEnd = 'column-end:';
 function ColumnEnd({ column }: { column: number }) {
@@ -52,10 +49,14 @@ const underPointer: CollisionDetection = (args) => {
   return under.length > 0 ? under : closestCenter(args);
 };
 
+// A widget is dragged by its grip alone: anywhere else on it, a finger scrolls the page. The grip is a button, so
+// the keyboard moves a widget through the same control (Space or Enter picks up and drops, the arrows move,
+// Escape puts back). Translate, not Transform: widgets differ in height, and a scaled one is distorted.
+// While a widget is carried, the one it would drop before is marked.
 function Widget({ id, title, to, more, unlocked, onHide, children }: { id: string; title: string; to?: string; more?: string; unlocked: boolean; onHide(): void; children: ReactNode }) {
-  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id, disabled: !unlocked });
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging, isOver } = useSortable({ id, disabled: !unlocked });
   return (
-    <Paper ref={setNodeRef} className="widget" data-dragging={isDragging || undefined} style={{ transform: CSS.Translate.toString(transform), transition }} component="section" withBorder p="md" aria-labelledby={`widget-${id}`}>
+    <Paper ref={setNodeRef} className="widget" data-dragging={isDragging || undefined} data-over={(isOver && !isDragging) || undefined} style={{ transform: CSS.Translate.toString(transform), transition }} component="section" withBorder p="md" aria-labelledby={`widget-${id}`}>
       <Group justify="space-between" align="flex-start" wrap="nowrap" mb="sm">
         {/* Every title looks the same. Where a page has the full view, a link at the other edge names it. */}
         <Title order={3} size="h5" id={`widget-${id}`}>{title}</Title>
@@ -176,7 +177,7 @@ export function DashboardScreen({ api, session, system, notifications, update, o
   const { ref: gridRef, width: gridWidth } = useElementSize();
   const columnCount = Math.max(1, Math.floor((gridWidth + 16) / (320 + 16)));
   const shownIds = shown.map((widget) => widget.id);
-  const columnIds = columnsFor(shownIds, columnCount, layout.columns);
+  const columnIds = columnsFor(shownIds, columnCount, layout.columns?.[columnCount]);
   const columns = columnIds.map((column) => column.map((id) => shown.find((widget) => widget.id === id)!));
   // A drag starts after a few pixels, so a tap on the grip is not one.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
@@ -209,8 +210,10 @@ export function DashboardScreen({ api, session, system, notifications, update, o
   // What a screen reader hears while a widget moves: its title and its place, not the library's identifiers.
   const name = (id: UniqueIdentifier) => all.find((widget) => widget.id === id)?.title ?? String(id);
   const place = (id: UniqueIdentifier) => {
-    if (String(id).startsWith(columnEnd)) return `the end of column ${Number(String(id).slice(columnEnd.length)) + 1}`;
+    if (String(id).startsWith(columnEnd)) return columnCount > 1 ? `the end of column ${Number(String(id).slice(columnEnd.length)) + 1}` : 'the end';
     const column = columnIds.findIndex((items) => items.includes(String(id)));
+    // A widget that left the page while it was carried has no place to name.
+    if (column < 0) return 'a place no longer shown';
     const at = `position ${columnIds[column].indexOf(String(id)) + 1} of ${columnIds[column].length}`;
     return columnCount > 1 ? `${at} in column ${column + 1}` : at;
   };
@@ -223,15 +226,18 @@ export function DashboardScreen({ api, session, system, notifications, update, o
   const instructions = { draggable: 'To move a widget, press Space or Enter on its grip, move it with the arrow keys, then press Space or Enter to drop it, or Escape to put it back.' };
 
   // A drop lands on a widget, or on the room below a column's last one. What is saved is the columns as they now
-  // are, for this column count, and the same read across for any other.
+  // are, for this column count beside those made at others, and the same read across for a count not arranged.
   function dropped({ active, over }: DragEndEvent) {
     if (!over || active.id === over.id) return;
     const target = String(over.id);
     const end = target.startsWith(columnEnd);
     const column = end ? Number(target.slice(columnEnd.length)) : columnIds.findIndex((items) => items.includes(target));
-    const next = dropAt(columnIds, String(active.id), column, end ? undefined : target);
-    if (JSON.stringify(next) === JSON.stringify(columnIds)) return;
-    save({ ...layout, order: withShown(layout.order, shownIds, readAcross(next)), columns: next });
+    // The arrangement keeps the hidden widgets where they were, so one shown again comes back to its place.
+    const base = withHidden(layout.columns?.[columnCount], columnIds, shownIds);
+    const next = dropAt(base, String(active.id), column, end ? undefined : target);
+    if (JSON.stringify(next) === JSON.stringify(base)) return;
+    const shownNext = next.map((items) => items.filter((id) => shownIds.includes(id)));
+    save({ ...layout, order: withShown(layout.order, shownIds, readAcross(shownNext)), columns: { ...layout.columns, [columnCount]: next } });
   }
 
   if (allowed.length === 0) return <Stack><Title order={2}>Dashboard</Title><Alert role="status">Your account can see none of the dashboard's widgets.</Alert></Stack>;

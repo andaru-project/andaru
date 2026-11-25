@@ -148,8 +148,8 @@ export interface LinkStatus {
 
 // What the web UI keeps for the account. The engine stores it and reads none of it; keys this version does not
 // know belong to another version and are kept as they are.
-// columns is the arrangement as last made by hand, for that many columns; order is it read across, for any other.
-export interface DashboardLayout { order?: string[]; hidden?: string[]; columns?: string[][] }
+// columns holds the arrangements made by hand, by column count; order is the last one read across, for any other.
+export interface DashboardLayout { order?: string[]; hidden?: string[]; columns?: Record<string, string[][]> }
 export interface Preferences { dashboard?: DashboardLayout; [key: string]: unknown }
 
 // How hard the box is working, as GET /api/v1/status/usage serves it. The processor counters are cumulative.

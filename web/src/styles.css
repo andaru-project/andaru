@@ -204,6 +204,10 @@ body {
   flex: 1 0 4rem;
 }
 
+.widget[data-over] {
+  box-shadow: 0 -3px 0 var(--mantine-color-dimmed);
+}
+
 .widget-column-end[data-over] {
   outline: 2px dashed var(--mantine-color-dimmed);
 }

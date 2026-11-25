@@ -141,7 +141,7 @@ it('applies the stored layout: its order, its hidden widgets, and a widget new s
 
 it('applies an arrangement made by hand at this column count over the order', async () => {
   // jsdom lays nothing out, so the dashboard has one column: an arrangement for one column applies, one for three does not.
-  layoutRoutes({ dashboard: { order: ['system', 'resources', 'interfaces', 'traffic', 'prefixes'], columns: [['traffic', 'system', 'prefixes', 'interfaces', 'resources']] } });
+  layoutRoutes({ dashboard: { order: ['system', 'resources', 'interfaces', 'traffic', 'prefixes'], columns: { 1: [['traffic', 'system', 'prefixes', 'interfaces', 'resources']], 3: [['system'], ['resources'], ['interfaces', 'traffic', 'prefixes']] } } });
   await mount(everything);
   await waitFor(() => expect(titles()).toEqual(['Network activity', 'System', 'IPv6 prefixes', 'Interfaces', 'Resources']));
 });
@@ -222,7 +222,7 @@ it('moves a widget by its grip with the keyboard, and saves the new order', asyn
   await userEvent.keyboard('{ArrowRight}');
   await userEvent.keyboard('{Enter}');
   await waitFor(() => expect(titles()).toEqual(['System', 'Interfaces', 'Network activity', 'Resources', 'IPv6 prefixes']));
-  await waitFor(() => expect(saves(fetchMock)).toEqual([{ dashboard: { order: ['system', 'interfaces', 'traffic', 'resources', 'prefixes', 'activity', 'notifications'], hidden: [], columns: [['system', 'interfaces', 'traffic', 'resources', 'prefixes']] } }]));
+  await waitFor(() => expect(saves(fetchMock)).toEqual([{ dashboard: { order: ['system', 'interfaces', 'traffic', 'resources', 'prefixes', 'activity', 'notifications'], hidden: [], columns: { 1: [['system', 'interfaces', 'traffic', 'resources', 'prefixes']] } } }]));
   expect(screen.getByRole('status', { hidden: true })).toHaveTextContent('Dropped Resources at position 4 of 5.');
   rect.mockRestore();
 });
