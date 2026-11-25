@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -26,10 +27,10 @@ var errDiagnosticsBusy = fmt.Errorf("%w: other diagnostics are running on this b
 
 // localDiagnostics runs ping and traceroute on this box for the fleet's built-in device. The
 // engine has no IP sockets of its own (its unit allows AF_UNIX and AF_NETLINK only), so each run
-// is a transient unit of PID 1's with a dynamic user, no capabilities, and IP sockets.
+// is a transient unit of PID 1's, as nobody with no capabilities.
 type localDiagnostics struct {
 	slots chan struct{}
-	// transient runs the tool through systemd-run; tests run it directly.
+	// transient runs the tool through systemd-run, its output read back from the journal; tests run it directly.
 	transient bool
 	exec      func(ctx context.Context, argv []string, out io.Writer) (exitCode int, err error)
 }
@@ -54,13 +55,24 @@ func (d *localDiagnostics) Run(ctx context.Context, req npmodel.DiagnosticReques
 	default:
 		return nil, errDiagnosticsBusy
 	}
+	var unit string
 	if d.transient {
-		argv = append(transientDiagnosticUnit(timeout), argv...)
+		unit = "andaru-diagnostic-" + strconv.FormatUint(rand.Uint64(), 16) + ".service"
+		argv = append(transientDiagnosticUnit(timeout, unit), argv...)
 	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var out cappedBuffer
 	code, err := d.exec(runCtx, argv, &out)
+	if unit != "" && err == nil && runCtx.Err() == nil {
+		// The tool's output, which the unit logged, then what systemd-run itself said (a unit that did not start).
+		said := out.String()
+		out = cappedBuffer{}
+		if _, err = d.exec(runCtx, []string{"/usr/bin/journalctl", "--sync"}, io.Discard); err == nil {
+			_, err = d.exec(runCtx, []string{"/usr/bin/journalctl", "--quiet", "--no-pager", "--output=cat", "_SYSTEMD_UNIT=" + unit, "_TRANSPORT=stdout"}, &out)
+		}
+		_, _ = out.Write([]byte(said))
+	}
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
@@ -95,34 +107,33 @@ func diagnosticCommand(req npmodel.DiagnosticRequest, host string) ([]string, ti
 	return nil, 0, fmt.Errorf("%w: andaru runs ping and traceroute, not %s", npdriver.ErrDiagnosticUnsupported, req.Kind)
 }
 
-// transientDiagnosticUnit is the systemd-run prefix of a run: PID 1 stops the unit at the
-// timeout even when the engine's wait for it ends first.
-func transientDiagnosticUnit(timeout time.Duration) []string {
-	return []string{"/usr/bin/systemd-run", "--quiet", "--pipe", "--wait", "--collect", "--service-type=exec",
+// transientDiagnosticUnit is the systemd-run prefix of a run as unit, which logs the tool's output
+// to the journal: PID 1 stops the unit at the timeout even when the engine's wait for it ends first.
+//
+// Fedora's SELinux policy confines ping and traceroute in their own domains (ping_t,
+// traceroute_t), and refuses the transition into them under NoNewPrivileges. So the unit has none
+// of the settings that imply it for a service with a user: DynamicUser, RestrictAddressFamilies,
+// SystemCallFilter and the other seccomp-based ones. Those domains confine the tools instead.
+// The output goes to the journal, which those domains may write: --pipe fails from inside a
+// service on systemd 262 ("Bad message"), and they may not write a file the engine could read.
+func transientDiagnosticUnit(timeout time.Duration, unit string) []string {
+	return []string{"/usr/bin/systemd-run", "--quiet", "--wait", "--collect", "--unit=" + unit, "--service-type=exec",
 		"-p", "RuntimeMaxSec=" + strconv.Itoa(int(timeout.Seconds())),
-		"-p", "DynamicUser=yes",
+		"-p", "User=nobody",
 		"-p", "CapabilityBoundingSet=",
-		"-p", "NoNewPrivileges=yes",
-		// IP for the probes; AF_UNIX and AF_NETLINK for name resolution.
-		"-p", "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK",
-		"-p", "PrivateDevices=yes",
+		"-p", "AmbientCapabilities=",
+		"-p", "ProtectSystem=strict",
 		"-p", "ProtectHome=yes",
+		"-p", "PrivateTmp=yes",
+		"-p", "PrivateDevices=yes",
 		"-p", "ProtectKernelTunables=yes",
 		"-p", "ProtectKernelModules=yes",
-		"-p", "ProtectKernelLogs=yes",
 		"-p", "ProtectControlGroups=yes",
-		"-p", "ProtectClock=yes",
-		"-p", "ProtectHostname=yes",
-		"-p", "ProtectProc=invisible",
-		"-p", "ProcSubset=pid",
-		"-p", "RestrictNamespaces=yes",
-		"-p", "RestrictRealtime=yes",
-		"-p", "LockPersonality=yes",
-		"-p", "MemoryDenyWriteExecute=yes",
-		"-p", "SystemCallArchitectures=native",
-		"-p", "SystemCallFilter=@system-service",
 		"-p", "TasksMax=4",
 		"-p", "MemoryMax=64M",
+		"-p", "StandardInput=null",
+		"-p", "StandardOutput=journal",
+		"-p", "StandardError=journal",
 		"--"}
 }
 

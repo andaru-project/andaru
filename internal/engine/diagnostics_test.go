@@ -74,45 +74,55 @@ func TestLocalDiagnosticsRefusesBadRequests(t *testing.T) {
 }
 
 func TestLocalDiagnosticsRun(t *testing.T) {
-	var got []string
+	var got, read []string
+	var unit, tool string
+	// As on the box: the unit logs the tool's output, and the journal hands it back by the unit's name.
 	d := fakeDiagnostics(func(_ context.Context, argv []string, out io.Writer) (int, error) {
-		got = argv
-		if slices.Contains(argv, "/usr/bin/traceroute") {
-			_, _ = io.WriteString(out, linuxTracerouteOut)
-			return 0, nil
+		switch {
+		case argv[0] == "/usr/bin/journalctl" && slices.Contains(argv, "--sync"):
+		case argv[0] == "/usr/bin/journalctl":
+			read = argv
+			_, _ = io.WriteString(out, tool)
+		default:
+			got = argv
+			for _, arg := range argv {
+				if name, ok := strings.CutPrefix(arg, "--unit="); ok {
+					unit = name
+				}
+			}
+			tool = iputilsPingOut
+			if slices.Contains(argv, "/usr/bin/traceroute") {
+				tool = linuxTracerouteOut
+			}
 		}
-		_, _ = io.WriteString(out, iputilsPingOut)
 		return 0, nil
 	})
 	res, err := d.Run(context.Background(), npmodel.DiagnosticRequest{Kind: npmodel.DiagPing, DeviceID: fleetLocalDeviceID, Target: " 192.0.2.1 ", Params: map[string]string{"count": "2"}})
 	if err != nil || !res.OK || res.Summary != "2/2 replies from 192.0.2.1 (0% loss), avg 0.4 ms" || res.DeviceID != fleetLocalDeviceID {
 		t.Fatalf("ping: %+v %v", res, err)
 	}
-	// The tool runs in a sandboxed transient unit with no capabilities, after the unit's own options.
-	want := []string{"/usr/bin/systemd-run", "--quiet", "--pipe", "--wait", "--collect", "--service-type=exec",
+	// Each run is its own unit, and only what its tool printed is read back.
+	if !strings.HasPrefix(unit, "andaru-diagnostic-") || !slices.Equal(read, []string{"/usr/bin/journalctl", "--quiet", "--no-pager", "--output=cat", "_SYSTEMD_UNIT=" + unit, "_TRANSPORT=stdout"}) {
+		t.Fatalf("unit %q, journal read %q", unit, read)
+	}
+	// The tool runs in a transient unit as nobody with no capabilities, after the unit's own options.
+	want := []string{"/usr/bin/systemd-run", "--quiet", "--wait", "--collect", "--unit=" + unit, "--service-type=exec",
 		"-p", "RuntimeMaxSec=22",
-		"-p", "DynamicUser=yes",
+		"-p", "User=nobody",
 		"-p", "CapabilityBoundingSet=",
-		"-p", "NoNewPrivileges=yes",
-		"-p", "RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK",
-		"-p", "PrivateDevices=yes",
+		"-p", "AmbientCapabilities=",
+		"-p", "ProtectSystem=strict",
 		"-p", "ProtectHome=yes",
+		"-p", "PrivateTmp=yes",
+		"-p", "PrivateDevices=yes",
 		"-p", "ProtectKernelTunables=yes",
 		"-p", "ProtectKernelModules=yes",
-		"-p", "ProtectKernelLogs=yes",
 		"-p", "ProtectControlGroups=yes",
-		"-p", "ProtectClock=yes",
-		"-p", "ProtectHostname=yes",
-		"-p", "ProtectProc=invisible",
-		"-p", "ProcSubset=pid",
-		"-p", "RestrictNamespaces=yes",
-		"-p", "RestrictRealtime=yes",
-		"-p", "LockPersonality=yes",
-		"-p", "MemoryDenyWriteExecute=yes",
-		"-p", "SystemCallArchitectures=native",
-		"-p", "SystemCallFilter=@system-service",
 		"-p", "TasksMax=4",
 		"-p", "MemoryMax=64M",
+		"-p", "StandardInput=null",
+		"-p", "StandardOutput=journal",
+		"-p", "StandardError=journal",
 		"--", "/usr/bin/ping", "-n", "-c", "2", "-w", "4", "--", "192.0.2.1"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("argv = %q\nwant %q", got, want)
@@ -155,10 +165,14 @@ func TestLocalDiagnosticsBusy(t *testing.T) {
 	ping := npmodel.DiagnosticRequest{Kind: npmodel.DiagPing, Target: "192.0.2.1"}
 	release := make(chan struct{})
 	started := make(chan struct{}, diagnosticSlots)
-	d := fakeDiagnostics(func(_ context.Context, _ []string, out io.Writer) (int, error) {
+	// Only the unit's run is held; reading its output back is not.
+	d := fakeDiagnostics(func(_ context.Context, argv []string, out io.Writer) (int, error) {
+		if argv[0] == "/usr/bin/journalctl" {
+			_, _ = io.WriteString(out, iputilsPingOut)
+			return 0, nil
+		}
 		started <- struct{}{}
 		<-release
-		_, _ = io.WriteString(out, iputilsPingOut)
 		return 0, nil
 	})
 	done := make(chan error, diagnosticSlots+1)
