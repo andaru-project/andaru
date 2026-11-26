@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import { ApiError } from './api';
-import { addressLines, draftOf, interfaceErrors, interfaceOperations, newZoneOption, removeOperations } from './interfaceEdit';
-import type { LinkStatus, SavedLink, SavedObject, Segment } from './types';
+import { addressLines, draftOf, interfaceErrors, interfaceOperations, memberLinkOptions, newZoneOption, removeOperations, vlanParentOptions } from './interfaceEdit';
+import type { LinkStatus, SavedLink, SavedObject, Segment, Snapshot } from './types';
 
 const port: LinkStatus = { ifIndex: 3, name: 'enp2s0', linkType: 'ether', mtu: 1500, operState: 'UP', flags: [], linkAddress: '02:00:00:00:00:99', permanentAddress: '52:54:00:AA:BB:02', addresses: [] };
 const link: SavedObject<SavedLink> = { version: '4', value: { id: 'lnk_a', name: 'WAN port', kind: 'ethernet', mtu: 1500, enabled: true, permanentMac: '52:54:00:aa:bb:01' } };
@@ -115,4 +115,81 @@ it('pairs each method with the live addresses, and says which saved ones are not
   expect(addressLines(undefined, lan)).toEqual([{ family: 'IPv4', method: 'Static', addresses: ['192.168.1.1/24', '192.168.9.1/24'], pending: [] }]);
   // No segment: the live addresses, with no method.
   expect(addressLines(device, undefined)).toEqual([{ family: 'IPv4', method: undefined, addresses: ['192.168.1.1/24'], pending: [] }]);
+});
+
+it('builds create and replace operations for VLAN, bridge, and bond links', () => {
+  const vlanDraft = { ...draftOf(undefined, undefined, undefined, 'vlan'), name: 'Guest VLAN', parent: 'lnk_a', vlanId: '20', segmentName: 'Guest', zone: 'zon_guest', ipv4Mode: 'static', ipv4Addresses: '10.20.0.1/24', ipv6Mode: 'none' };
+  expect(interfaceOperations(vlanDraft, undefined, undefined, undefined)).toEqual([
+    { op: 'create', collection: 'links', localId: 'link', value: { name: 'Guest VLAN', kind: 'vlan', parent: 'lnk_a', vlanId: 20, mtu: 1500, enabled: true } },
+    { op: 'create', collection: 'segments', value: { name: 'Guest', link: '@link', zone: 'zon_guest', addressing: { ipv4: { mode: 'static', addresses: ['10.20.0.1/24'] }, ipv6: { mode: 'none' } } } },
+  ]);
+
+  const bridgeDraft = { ...draftOf(undefined, undefined, undefined, 'bridge'), name: 'LAN bridge', members: ['lnk_b', 'lnk_c'], assigned: false };
+  expect(interfaceOperations(bridgeDraft, undefined, undefined, undefined)).toEqual([
+    { op: 'create', collection: 'links', localId: 'link', value: { name: 'LAN bridge', kind: 'bridge', members: ['lnk_b', 'lnk_c'], mtu: 1500, enabled: true } },
+  ]);
+
+  const bondDraft = draftOf(undefined, undefined, undefined, 'bond');
+  expect(bondDraft.assigned).toBe(false);
+  expect(bondDraft.bondMode).toBe('802.3ad');
+  expect(interfaceOperations({ ...bondDraft, name: 'Uplink bond', bondMode: 'active-backup', members: ['lnk_b', 'lnk_c'] }, undefined, undefined, undefined)).toEqual([
+    { op: 'create', collection: 'links', localId: 'link', value: { name: 'Uplink bond', kind: 'bond', mode: 'active-backup', members: ['lnk_b', 'lnk_c'], mtu: 1500, enabled: true } },
+  ]);
+
+  // Editing an existing VLAN without changes sends nothing; changing its tag replaces only the link.
+  const savedVlan: SavedObject<SavedLink> = { version: '3', value: { id: 'lnk_v', name: 'Guest VLAN', kind: 'vlan', mtu: 1500, enabled: true, parent: 'lnk_a', vlanId: 20 } };
+  const unchanged = draftOf(savedVlan.value, undefined, undefined);
+  expect(interfaceOperations(unchanged, savedVlan, undefined, undefined)).toEqual([]);
+  expect(interfaceOperations({ ...unchanged, vlanId: '30' }, savedVlan, undefined, undefined)).toEqual([
+    { op: 'replace', collection: 'links', id: 'lnk_v', expectedVersion: '3', value: { ...savedVlan.value, vlanId: 30 } },
+  ]);
+});
+
+it('maps virtual link refusal paths to their fields', () => {
+  const operations = interfaceOperations({ ...draftOf(undefined, undefined, undefined, 'bond'), name: 'Bond 0', members: ['lnk_a'] }, undefined, undefined, undefined);
+  const error = new ApiError(422, 'VALIDATION_FAILED', 'Refused.', [
+    { path: '/operations/0/value/parent', message: 'Bad parent.' },
+    { path: '/operations/0/value/vlanId', message: 'Duplicate tag.' },
+    { path: '/operations/0/value/members/0', message: 'Invalid member.' },
+    { path: '/operations/0/value/mode', message: 'Unsupported mode.' },
+  ]);
+  expect(interfaceErrors(error, operations)).toEqual(new Map([
+    ['parent', 'Bad parent.'],
+    ['vlanId', 'Duplicate tag.'],
+    ['members', 'Invalid member.'],
+    ['bondMode', 'Unsupported mode.'],
+  ]));
+});
+
+it('filters eligible VLAN parents and bridge/bond members according to link rules', () => {
+  const snapshot: Snapshot = {
+    state: 'saved',
+    savedVersion: '5',
+    value: {
+      links: [
+        { id: 'lnk_free', name: 'Free eth', kind: 'ethernet', mtu: 1500, enabled: true, permanentMac: '52:54:00:00:00:01' },
+        { id: 'lnk_seg', name: 'Segmented eth', kind: 'ethernet', mtu: 1500, enabled: true, permanentMac: '52:54:00:00:00:02' },
+        { id: 'lnk_trunk', name: 'Trunk eth', kind: 'ethernet', mtu: 1500, enabled: true, permanentMac: '52:54:00:00:00:03' },
+        { id: 'lnk_vlan', name: 'VLAN 10', kind: 'vlan', mtu: 1500, enabled: true, parent: 'lnk_trunk', vlanId: 10 },
+        { id: 'lnk_pppoe', name: 'ISP PPPoE', kind: 'pppoe', mtu: 1492, enabled: true, parent: 'lnk_trunk' },
+        { id: 'lnk_bond_member', name: 'Bond member eth', kind: 'ethernet', mtu: 1500, enabled: true, permanentMac: '52:54:00:00:00:04' },
+        { id: 'lnk_bond', name: 'Bond 0', kind: 'bond', mtu: 1500, enabled: true, mode: '802.3ad', members: ['lnk_bond_member'] },
+        { id: 'lnk_br', name: 'Bridge 0', kind: 'bridge', mtu: 1500, enabled: true, members: [] },
+        { id: 'lnk_br_vlan', name: 'Bridge VLAN 50', kind: 'vlan', mtu: 1500, enabled: true, parent: 'lnk_br', vlanId: 50 },
+      ],
+      segments: [{ id: 'seg_1', name: 'LAN', link: 'lnk_seg', zone: 'zon_1', addressing: { ipv4: { mode: 'dhcp' }, ipv6: { mode: 'none' } } }],
+      zones: [{ id: 'zon_1', name: 'LAN' }],
+    },
+  };
+
+  // VLAN parents exclude PPPoE, enslaved members, self, and direct/transitive dependents of self.
+  expect(vlanParentOptions(snapshot, undefined, '').map((o) => o.value)).toEqual(['lnk_free', 'lnk_seg', 'lnk_trunk', 'lnk_vlan', 'lnk_bond', 'lnk_br', 'lnk_br_vlan']);
+  expect(vlanParentOptions(snapshot, 'lnk_trunk', '').map((o) => o.value)).toEqual(['lnk_free', 'lnk_seg', 'lnk_bond', 'lnk_br', 'lnk_br_vlan']);
+  expect(vlanParentOptions(snapshot, 'lnk_br', '').map((o) => o.value)).toEqual(['lnk_free', 'lnk_seg', 'lnk_trunk', 'lnk_vlan', 'lnk_bond']);
+
+  // Bridge members allow unassigned Ethernet, VLAN, and bond links with no children or other master, excluding dependents (lnk_br_vlan depends on lnk_br).
+  expect(memberLinkOptions(snapshot, 'bridge', 'lnk_br', []).map((o) => o.value)).toEqual(['lnk_free', 'lnk_vlan', 'lnk_bond']);
+  // Bond members allow only unassigned Ethernet ports with no children or other master, keeping and deduplicating current members of self.
+  expect(memberLinkOptions(snapshot, 'bond', undefined, []).map((o) => o.value)).toEqual(['lnk_free']);
+  expect(memberLinkOptions(snapshot, 'bond', 'lnk_bond', ['lnk_bond_member', 'lnk_missing', 'lnk_missing']).map((o) => o.value)).toEqual(['lnk_free', 'lnk_bond_member', 'lnk_missing']);
 });
