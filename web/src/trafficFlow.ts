@@ -189,19 +189,19 @@ function isIpv6Uplink(segment: Segment): boolean {
   return Boolean(segment.addressing.ipv6.gateway) || segment.addressing.ipv6.mode === 'slaac' || segment.addressing.ipv6.mode === 'dhcp6';
 }
 
-// Match a saved link to its live LinkStatus by permanent MAC (Ethernet) or derived kernel name (virtual links).
+// Match a saved link to its live LinkStatus by unique permanent MAC (Ethernet) or derived kernel name (virtual links).
 function findLiveLink(link: SavedLink | undefined, liveLinks: LinkStatus[]): LinkStatus | undefined {
   if (!link) return undefined;
   if (link.kind === 'ethernet') {
     if (link.permanentMac) {
       const targetMac = link.permanentMac.toLowerCase();
-      const byMac = liveLinks.find((l) => l.linkType === 'ether' && !l.kind && (l.permanentAddress ?? l.linkAddress)?.toLowerCase() === targetMac);
-      if (byMac) return byMac;
+      const matches = liveLinks.filter((l) => l.linkType === 'ether' && !l.kind && (l.permanentAddress ?? l.linkAddress)?.toLowerCase() === targetMac);
+      return matches.length === 1 ? matches[0] : undefined;
     }
     return liveLinks.find((l) => l.name === link.name);
   }
   const derived = kernelName(link, new Map());
-  return (derived ? liveLinks.find((l) => l.name === derived) : undefined) ?? liveLinks.find((l) => l.name === link.name);
+  return derived ? liveLinks.find((l) => l.name === derived) : undefined;
 }
 
 function aliasHasFamily(aliasId: string, family: 4 | 6, byId: Map<string, Partial<AddressAlias> & { id: string; name: string }>, seen = new Set<string>()): boolean {
@@ -619,8 +619,9 @@ export function simulateTrafficFlow(
       for (const raw of seg.addressing.ipv6.addresses ?? []) {
         const p = parsePrefix(raw);
         if (!p || p.family !== 6) continue;
-        usableSegmentPrefixes.push({ segment: seg, prefix: p, staticIpv4: false });
-        localOwners.push({ ip: p.ip, owner: { label: `Interface ${seg.name}`, to: '/network/interfaces', segmentId: seg.id, isVirtual: false } });
+        const linkLocal = isLinkLocalIpv6(p.ip);
+        if (!linkLocal) usableSegmentPrefixes.push({ segment: seg, prefix: p, staticIpv4: false });
+        localOwners.push({ ip: p.ip, owner: { label: `Interface ${seg.name}`, to: '/network/interfaces', segmentId: seg.id, isVirtual: false, linkLocal } });
       }
     }
 
@@ -672,7 +673,23 @@ export function simulateTrafficFlow(
 
   const isLocalTarget4 = (ip: ParsedIp): boolean => Boolean(findLocalOwner(ip));
 
-  // Table-wide hairpin reflection flag, matching nft.go:124-131 + nat.go:107,173,316.
+  // Table-wide hairpin reflection flag, matching nft.go:124-131 + nat.go:107,173,283-316.
+  const hasActiveOneToOneReflection = (() => {
+    const excludedByZone = new Map<string, ParsedPrefix[]>();
+    for (const o of snapshot.nat?.oneToOne ?? []) {
+      if (!o.enabled) continue;
+      const internal = parsePrefix(o.internal);
+      if (!internal || internal.family !== 4) continue;
+      if (o.noBinat) {
+        excludedByZone.set(o.zone, [...(excludedByZone.get(o.zone) ?? []), internal]);
+        continue;
+      }
+      const wholeExcluded = (excludedByZone.get(o.zone) ?? []).some((x) => x.bits <= internal.bits && prefixContains(x, internal.ip));
+      if (!wholeExcluded && o.reflection) return true;
+    }
+    return false;
+  })();
+
   const reflectionEnabled = hasManagement && (
     (snapshot.nat?.portForwards ?? []).some((pf) => {
       if (!pf.enabled || pf.noRedirect) return false;
@@ -685,19 +702,41 @@ export function simulateTrafficFlow(
       }
       return false;
     })
-    || (snapshot.nat?.oneToOne ?? []).some((o) => o.enabled && !o.noBinat && Boolean(o.reflection))
+    || hasActiveOneToOneReflection
   );
 
   // Stage 1: Ingress
+  const ingressRef: DecidingRef = { label: `Interface ${ingressSegment.name}`, to: '/network/interfaces' };
   steps.push({
     stage: 'ingress',
     title: 'Ingress',
     summary: `Enters on ${ingressSegment.name}${ingressLink && ingressLink.name !== ingressSegment.name ? ` (${ingressLink.name})` : ''} in zone ${ingressZone?.name ?? ingressSegment.zone}.`,
-    outcome: !ingressUsable ? 'warn' : 'pass',
-    decidedBy: { label: `Interface ${ingressSegment.name}`, to: '/network/interfaces' },
+    outcome: !ingressUsable ? 'drop' : 'pass',
+    decidedBy: ingressRef,
     zone: ingressZoneInfo,
     detail: originalTuple,
   });
+
+  if (!ingressUsable) {
+    steps.push({
+      stage: 'verdict',
+      title: 'Verdict',
+      summary: `Ingress interface ${ingressSegment.name} is disabled; traffic cannot enter this interface.`,
+      outcome: 'drop',
+      decidedBy: ingressRef,
+      detail: originalTuple,
+    });
+    return {
+      verdict: 'drop',
+      verdictLabel: 'Interface disabled',
+      chain: 'none',
+      originalTuple,
+      finalTuple: originalTuple,
+      decidedBy: ingressRef,
+      warnings,
+      steps,
+    };
+  }
 
   // Stage 2: Pre-routing NAT (Port forwards, then 1:1 NAT DNAT)
   let effectiveDstIp = origDstIp;
@@ -763,8 +802,29 @@ export function simulateTrafficFlow(
 
       const newPort = pf.targetPort !== undefined ? pf.targetPort + (origDstPort - span.first) : origDstPort;
       if (pf.target?.self) {
-        // Linux netfilter `redirect` rewrites destination IP to the ingress interface's primary IP.
+        // Linux netfilter `redirect` rewrites destination IP to the ingress interface's primary IP (drops if IPv4 is absent on ingress).
         const ingressPrimary = localOwners.find((o) => o.owner.segmentId === ingressSegment.id && !o.owner.isVirtual && !o.owner.linkLocal && o.ip.family === origDstIp.family)?.ip;
+        if (!ingressPrimary && origDstIp.family === 4) {
+          if (ingressSegment.addressing.ipv4.mode === 'none') {
+            steps.push({
+              stage: 'prerouting',
+              title: 'Pre-routing NAT',
+              summary: `Redirect "${pf.name}" dropped: ingress interface ${ingressSegment.name} has no IPv4 address.`,
+              outcome: 'drop',
+              decidedBy: ref,
+            });
+            steps.push({
+              stage: 'verdict',
+              title: 'Verdict',
+              summary: `Dropped by Linux netfilter redirect because ${ingressSegment.name} has no IPv4 address.`,
+              outcome: 'drop',
+              decidedBy: ref,
+              detail: originalTuple,
+            });
+            return { verdict: 'drop', verdictLabel: 'Dropped', chain: 'none', originalTuple, finalTuple: originalTuple, decidedBy: ref, warnings, steps };
+          }
+          warnings.push(`Ingress interface ${ingressSegment.name} has no known live IPv4 address; redirect target address is dynamic.`);
+        }
         if (ingressPrimary) effectiveDstIp = ingressPrimary;
         effectiveDstPort = newPort;
         matchedPortForward = { pf, index: i, isLocalTarget: true, toSelf: true };
@@ -773,10 +833,10 @@ export function simulateTrafficFlow(
         steps.push({
           stage: 'prerouting',
           title: 'Pre-routing NAT',
-          summary: `${usedReflection ? 'Reflected and redirected' : 'Redirected'} to this firewall${ingressPrimary ? ` (${ingressPrimary.canonical})` : ''}${newPort !== origDstPort ? ` on port ${newPort}` : ''}.`,
+          summary: `${usedReflection ? 'Reflected and redirected' : 'Redirected'} to this firewall${ingressPrimary ? ` (${ingressPrimary.canonical})` : ' (dynamic ingress address)'}${newPort !== origDstPort ? ` on port ${newPort}` : ''}.`,
           outcome: 'transform',
           decidedBy: ref,
-          detail: `${formatEndpoint(origDstIp, origDstPort)} → ${formatEndpoint(effectiveDstIp, newPort)}`,
+          detail: ingressPrimary ? `${formatEndpoint(origDstIp, origDstPort)} → ${formatEndpoint(ingressPrimary, newPort)}` : `${formatEndpoint(origDstIp, origDstPort)} → firewall:${newPort}`,
         });
         break;
       }
@@ -841,6 +901,7 @@ export function simulateTrafficFlow(
   let chain: 'input' | 'forward' | 'none' = 'none';
   let egressSegment: Segment | undefined;
   let egressZoneId: string | undefined;
+  let connectedRoutePrefix: ParsedPrefix | undefined;
 
   const ingressPrefixes = usableSegmentPrefixes.filter((e) => e.segment.id === ingressSegment.id).map((e) => e.prefix);
   const isIngressBroadcast = effectiveDstIp.family === 4 && (
@@ -852,6 +913,14 @@ export function simulateTrafficFlow(
   const localOwner = matchedPortForward?.toSelf
     ? { label: `This firewall (${ingressSegment.name})`, to: '/network/interfaces', segmentId: ingressSegment.id, isVirtual: false }
     : findLocalOwner(effectiveDstIp);
+
+  const stopUnroutable = (summary: string, verdictSummary: string): TrafficSimulation => {
+    const finalTuple = formatTuple(probe.protocol, srcIp, srcPort, effectiveDstIp, effectiveDstPort, icmpType);
+    const decidedBy: DecidingRef = { label: 'Routing table (Interfaces)', to: '/network/interfaces' };
+    steps.push({ stage: 'routing', title: 'Routing', summary, outcome: 'drop', decidedBy });
+    steps.push({ stage: 'verdict', title: 'Verdict', summary: verdictSummary, outcome: 'drop', decidedBy, detail: finalTuple });
+    return { verdict: 'no_route', verdictLabel: 'No route', chain: 'none', originalTuple, finalTuple, decidedBy, warnings, steps };
+  };
 
   if (localOwner || isIngressBroadcast || isLocalMulticast) {
     chain = 'input';
@@ -882,9 +951,16 @@ export function simulateTrafficFlow(
       }
     }
     if (bestConnected) {
+      if ((isLinkLocalIpv6(srcIp) || isLinkLocalIpv6(effectiveDstIp)) && bestConnected.segment.id !== ingressSegment.id) {
+        return stopUnroutable(
+          `IPv6 link-local traffic cannot be forwarded from ${ingressSegment.name} to ${bestConnected.segment.name} (RFC 4291).`,
+          'Packet cannot be forwarded across links (link-local scope).',
+        );
+      }
       chain = 'forward';
       egressSegment = bestConnected.segment;
       egressZoneId = egressSegment.zone;
+      connectedRoutePrefix = bestConnected.prefix;
       const ez = zonesById.get(egressZoneId);
       steps.push({
         stage: 'routing',
@@ -896,6 +972,12 @@ export function simulateTrafficFlow(
         detail: 'Chain: forward',
       });
     } else {
+      if (isLinkLocalIpv6(srcIp) || isLinkLocalIpv6(effectiveDstIp)) {
+        return stopUnroutable(
+          'IPv6 link-local addresses cannot be forwarded via a default route (RFC 4291).',
+          'Packet cannot be forwarded across links (link-local scope).',
+        );
+      }
       const uplinks = snapshot.segments.filter((s) => {
         if (!isLinkUsable(s.link, linksById)) return false;
         return effectiveDstIp.family === 4 ? isUplink(s, linksById) : isIpv6Uplink(s);
@@ -906,6 +988,12 @@ export function simulateTrafficFlow(
         egressZoneId = egressSegment.zone;
         const ez = zonesById.get(egressZoneId);
         const gw = effectiveDstIp.family === 4 ? egressSegment.addressing.ipv4.gateway : egressSegment.addressing.ipv6.gateway;
+        if (!gw) {
+          const hasLiveAddr = localOwners.some((o) => o.owner.segmentId === egressSegment!.id && !o.owner.linkLocal && o.ip.family === effectiveDstIp.family);
+          if (!hasLiveAddr) {
+            warnings.push(`Uplink ${egressSegment.name} uses dynamic IPv${effectiveDstIp.family} with no observed live address; assuming its lease installs a default route.`);
+          }
+        }
         if (uplinks.length > 1) {
           warnings.push(`Multiple IPv${effectiveDstIp.family} uplinks exist (${uplinks.map((u) => u.name).join(', ')}); assuming default route via ${egressSegment.name}.`);
         }
@@ -919,24 +1007,10 @@ export function simulateTrafficFlow(
           detail: 'Chain: forward',
         });
       } else {
-        const finalTuple = formatTuple(probe.protocol, srcIp, srcPort, effectiveDstIp, effectiveDstPort, icmpType);
-        const decidedBy: DecidingRef = { label: 'Routing table (Interfaces)', to: '/network/interfaces' };
-        steps.push({
-          stage: 'routing',
-          title: 'Routing',
-          summary: `No connected subnet or IPv${effectiveDstIp.family} default gateway reaches ${effectiveDstIp.canonical}.`,
-          outcome: 'drop',
-          decidedBy,
-        });
-        steps.push({
-          stage: 'verdict',
-          title: 'Verdict',
-          summary: 'Packet cannot be routed (no route to host).',
-          outcome: 'drop',
-          decidedBy,
-          detail: finalTuple,
-        });
-        return { verdict: 'no_route', verdictLabel: 'No route', chain: 'none', originalTuple, finalTuple, decidedBy, warnings, steps };
+        return stopUnroutable(
+          `No connected subnet or IPv${effectiveDstIp.family} default gateway reaches ${effectiveDstIp.canonical}.`,
+          'Packet cannot be routed (no route to host).',
+        );
       }
     }
   }
@@ -995,11 +1069,11 @@ export function simulateTrafficFlow(
       });
     }
 
-    // 5b: Hairpin NAT reflection masquerade (nft.go:124-131)
+    // 5b: Hairpin NAT reflection masquerade (nft.go:124-131): eligible on source prefix match, source IP from dst next-hop route.
     if (!snatApplied && reflectionEnabled && didDnat && srcIp.family === 4 && !isUplink(egressSegment, linksById) && egressSegment.addressing.ipv4.mode === 'static') {
       const segPrefix = usableSegmentPrefixes.find((e) => e.segment.id === egressSegment.id && e.staticIpv4 && prefixContains(e.prefix, srcIp));
       if (segPrefix) {
-        effectiveSrcIp = segPrefix.prefix.ip;
+        effectiveSrcIp = connectedRoutePrefix?.family === 4 ? connectedRoutePrefix.ip : segPrefix.prefix.ip;
         snatApplied = true;
         steps.push({
           stage: 'postrouting',

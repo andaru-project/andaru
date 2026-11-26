@@ -234,11 +234,31 @@ export function TrafficFlowScreen({ api, session, onSessionLost }: TrafficFlowSc
             setSubmittedProbe(probe);
           }
 
+          const sourceSelector = canCompareLive ? (
+            <SegmentedControl
+              size="xs"
+              aria-label="Configuration to evaluate"
+              value={effectiveSource}
+              onChange={(value) => setSourceMode(value === 'live' ? 'live' : 'saved')}
+              data={[
+                { value: 'saved', label: `Saved (v${saved.savedVersion})` },
+                { value: 'live', label: `Live (v${liveVersion})` },
+              ]}
+            />
+          ) : (
+            <Badge size="sm" variant="light" color="blue">
+              {liveVersion === saved.savedVersion ? `Saved & live (v${saved.savedVersion})` : activeVersionLabel}
+            </Badge>
+          );
+
           if (activeConfig.segments.length === 0) {
             return (
-              <Alert role="status" title="No segments configured">
-                Configure at least one interface with a segment on <Anchor component={Link} to="/network/interfaces">Interfaces</Anchor> before simulating traffic.
-              </Alert>
+              <Stack>
+                <Group justify="flex-end">{sourceSelector}</Group>
+                <Alert role="status" title="No segments configured">
+                  Configure at least one interface with a segment on <Anchor component={Link} to="/network/interfaces">Interfaces</Anchor> before simulating traffic.
+                </Alert>
+              </Stack>
             );
           }
 
@@ -249,22 +269,7 @@ export function TrafficFlowScreen({ api, session, onSessionLost }: TrafficFlowSc
                   <Stack gap="sm">
                     <Group justify="space-between" align="center" wrap="wrap">
                       <Title order={3} size="h5">Hypothetical packet</Title>
-                      {canCompareLive ? (
-                        <SegmentedControl
-                          size="xs"
-                          aria-label="Configuration to evaluate"
-                          value={effectiveSource}
-                          onChange={(value) => setSourceMode(value === 'live' ? 'live' : 'saved')}
-                          data={[
-                            { value: 'saved', label: `Saved (v${saved.savedVersion})` },
-                            { value: 'live', label: `Live (v${liveVersion})` },
-                          ]}
-                        />
-                      ) : (
-                        <Badge size="sm" variant="light" color="blue">
-                          {liveVersion === saved.savedVersion ? `Saved & live (v${saved.savedVersion})` : activeVersionLabel}
-                        </Badge>
-                      )}
+                      {sourceSelector}
                     </Group>
 
                     <div className="traffic-flow-grid">

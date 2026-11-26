@@ -432,4 +432,160 @@ describe('simulateTrafficFlow', () => {
     expect(noV6.verdict).toBe('no_route');
     expect(noV6.chain).toBe('none');
   });
+
+  it('handles disabled ingress, MAC mismatch, link-local scoping/forwarding, IPv4-less redirect, excluded 1:1 reflection, and dual-subnet hairpin', () => {
+    // Disabled ingress stops at ingress instead of matching zone allow rules.
+    const disabledDmz: Snapshot['value'] = {
+      ...baseConfig,
+      links: baseConfig.links.map((l) => (l.id === 'lnk_dmz' ? { ...l, enabled: false } : l)),
+      rules: [{ id: 'rul_allow_all', name: 'Allow all', enabled: true, action: 'accept', from: { zones: ['zon_dmz'], addresses: [] }, to: { zones: ['zon_wan'], addresses: [] }, ports: [], log: false }],
+    };
+    const fromDisabled = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_dmz', protocol: 'tcp', srcIp: '10.20.0.10', dstIp: '1.1.1.1', dstPort: 443 },
+      disabledDmz,
+    );
+    expect(fromDisabled.verdict).toBe('drop');
+    expect(fromDisabled.verdictLabel).toBe('Interface disabled');
+
+    // Ethernet link with mismatched permanent MAC does not adopt another interface's live lease by name.
+    const dynamicWan: Snapshot['value'] = {
+      ...baseConfig,
+      segments: baseConfig.segments.map((s) => (s.id === 'seg_wan'
+        ? { ...s, addressing: { ipv4: { mode: 'dhcp' }, ipv6: { mode: 'none' } } }
+        : s)),
+    };
+    const wrongMacLive: LinkStatus[] = [{
+      ifIndex: 2,
+      name: 'WAN port',
+      linkType: 'ether',
+      mtu: 1500,
+      operState: 'UP',
+      flags: ['UP'],
+      permanentAddress: '52:54:00:ff:ff:ff',
+      addresses: [{ family: 'ipv4', address: '198.51.100.99', prefixLength: 24, scope: 'global' }],
+    }];
+    const mismatch = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '192.168.1.50', dstIp: '1.1.1.1', dstPort: 443 },
+      dynamicWan,
+      wrongMacLive,
+    );
+    expect(mismatch.finalTuple).not.toContain('198.51.100.99');
+    expect(mismatch.warnings.some((w) => w.includes('no observed live address'))).toBe(true);
+
+    // IPv6 link-local source cannot cross links to connected WAN subnet, and DMZ static fe80::1 is scoped to DMZ.
+    const withDmzLinkLocal: Snapshot['value'] = {
+      ...baseConfig,
+      segments: baseConfig.segments.map((s) => (s.id === 'seg_dmz'
+        ? { ...s, addressing: { ...s.addressing, ipv6: { mode: 'static', addresses: ['fe80::1/64'] } } }
+        : s)),
+    };
+    const crossLinkLl = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'icmpv6', srcIp: 'fe80::1234', dstIp: '2001:db8:1::99', icmpType: 'echo-request' },
+      withDmzLinkLocal,
+    );
+    expect(crossLinkLl.verdict).toBe('no_route');
+    const otherSegLl = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'icmpv6', srcIp: 'fe80::1234', dstIp: 'fe80::1', icmpType: 'echo-request' },
+      withDmzLinkLocal,
+    );
+    expect(otherSegLl.verdict).toBe('no_route');
+
+    // IPv4 target.self redirect drops on an IPv4-less ingress interface.
+    const ipv4LessDmz: Snapshot['value'] = {
+      ...baseConfig,
+      segments: baseConfig.segments.map((s) => (s.id === 'seg_dmz'
+        ? { ...s, addressing: { ipv4: { mode: 'none' }, ipv6: { mode: 'none' } } }
+        : s)),
+      nat: {
+        ...baseConfig.nat,
+        portForwards: [{
+          id: 'pfw_redir',
+          name: 'DNS redirect',
+          enabled: true,
+          ingressZones: ['zon_dmz'],
+          protocol: 'udp',
+          from: [],
+          to: { self: true },
+          toNegated: true,
+          ports: '53',
+          target: { self: true },
+          filterRule: 'auto',
+        }],
+      },
+    };
+    const droppedRedir = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_dmz', protocol: 'udp', srcIp: '10.20.0.10', dstIp: '8.8.8.8', dstPort: 53 },
+      ipv4LessDmz,
+    );
+    expect(droppedRedir.verdict).toBe('drop');
+    expect(droppedRedir.steps.find((s) => s.stage === 'prerouting')?.summary).toMatch(/has no IPv4 address/);
+
+    // Dual-subnet DMZ hairpin selects the translated destination's connected route prefix (10.30.0.1), not source prefix (10.20.0.1).
+    const dualDmz: Snapshot['value'] = {
+      ...baseConfig,
+      segments: baseConfig.segments.map((s) => (s.id === 'seg_dmz'
+        ? { ...s, addressing: { ipv4: { mode: 'static', addresses: ['10.20.0.1/24', '10.30.0.1/24'] }, ipv6: { mode: 'none' } } }
+        : s)),
+      rules: [
+        ...baseConfig.rules!,
+        { id: 'rul_dmz_any', name: 'DMZ hairpin', enabled: true, action: 'accept', from: { zones: ['zon_dmz'], addresses: [] }, to: { zones: ['zon_dmz'], addresses: [] }, ports: [], log: false },
+      ],
+      nat: {
+        ...baseConfig.nat,
+        portForwards: [{
+          id: 'pfw_dual',
+          name: 'Web dual',
+          enabled: true,
+          ingressZones: ['zon_wan'],
+          protocol: 'tcp',
+          from: [],
+          to: { self: true },
+          ports: '443',
+          target: { address: '10.30.0.15' },
+          filterRule: 'auto',
+          reflection: true,
+        }],
+      },
+    };
+    const dualHairpin = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_dmz', protocol: 'tcp', srcIp: '10.20.0.99', dstIp: '203.0.113.2', dstPort: 443 },
+      dualDmz,
+    );
+    expect(dualHairpin.verdict).toBe('accept');
+    expect(dualHairpin.finalTuple).toBe('TCP 10.30.0.1 → 10.30.0.15:443');
+
+    // Fully excluded reflected 1:1 mapping does not enable table-wide hairpin reflection.
+    const excludedReflection: Snapshot['value'] = {
+      ...baseConfig,
+      rules: [
+        ...baseConfig.rules!,
+        { id: 'rul_dmz_any', name: 'DMZ any', enabled: true, action: 'accept', from: { zones: ['zon_dmz'], addresses: [] }, to: { zones: ['zon_dmz'], addresses: [] }, ports: [], log: false },
+      ],
+      nat: {
+        outbound: { mode: 'automatic' },
+        portForwards: [{
+          id: 'pfw_dmz_noreflect',
+          name: 'DMZ local DNAT',
+          enabled: true,
+          ingressZones: ['zon_dmz'],
+          protocol: 'tcp',
+          from: [],
+          to: { self: true },
+          ports: '443',
+          target: { address: '10.20.0.15' },
+          filterRule: 'auto',
+          reflection: false,
+        }],
+        oneToOne: [
+          { id: 'oto_excl', name: 'Exclude all', enabled: true, zone: 'zon_wan', internal: '10.20.0.0/24', destination: [], noBinat: true },
+          { id: 'oto_refl', name: 'Excluded reflected', enabled: true, zone: 'zon_wan', external: '203.0.113.50/32', internal: '10.20.0.50/32', destination: [], reflection: true },
+        ],
+      },
+    };
+    const noHairpin = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_dmz', protocol: 'tcp', srcIp: '10.20.0.99', dstIp: '10.20.0.1', dstPort: 443 },
+      excludedReflection,
+    );
+    expect(noHairpin.finalTuple).toBe('TCP 10.20.0.99 → 10.20.0.15:443');
+  });
 });
