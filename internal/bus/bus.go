@@ -66,11 +66,11 @@ type Message struct {
 	Gap     bool
 }
 
-// maxPayload and maxTopic bound an event, so that every frame that carries one fits a line of the protocol: frames
+// MaxPayload and MaxTopic, in bytes, bound an event, so that every frame that carries one fits a line of the protocol: frames
 // are encoded without escaping, so a payload takes its own size in a frame.
 const (
-	maxPayload = 512 << 10
-	maxTopic   = 1 << 10
+	MaxPayload = 512 << 10
+	MaxTopic   = 1 << 10
 )
 
 // pruneInterval is how often the store is pruned; a variable only so that tests need not wait an hour.
@@ -224,10 +224,10 @@ func (b *Bus) Close() error {
 // Publish sends an event from the engine. A durable event is in the log when Publish returns; the payload must be
 // JSON.
 func (b *Bus) Publish(topic string, payload []byte, durable bool) error {
-	if !validTopic(topic) || len(topic) > maxTopic {
+	if !validTopic(topic) || len(topic) > MaxTopic {
 		return fmt.Errorf("bus: invalid topic %q", topic)
 	}
-	if len(payload) > maxPayload || !json.Valid(payload) {
+	if len(payload) > MaxPayload || !json.Valid(payload) {
 		return errors.New("bus: the payload is not JSON, or larger than 512 KiB")
 	}
 	if !b.track() { // held to the end, so Close waits for the store write and the handlers

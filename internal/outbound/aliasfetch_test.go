@@ -401,7 +401,7 @@ func TestAliasRefreshDuringFetch(t *testing.T) {
 	}
 }
 
-// A result too large for the bus is sent as a failure, so the engine records it, and its request is acked; the
+// A result larger than the bus takes is sent as a failure, so the engine records it, and its request is acked; the
 // session goes on. A request whose result topic the bus would refuse is skipped.
 func TestRefusedAliasResultIsSentAsAFailure(t *testing.T) {
 	b := newAliasBench(t)
@@ -427,7 +427,7 @@ func TestRefusedAliasResultIsSentAsAFailure(t *testing.T) {
 	// All three were acked: a new session gets none of them again.
 	b.none(200 * time.Millisecond) // the acks go out after the results
 	b.stop()
-	b.run(&Service{Log: slog.New(slog.DiscardHandler)})
+	b.run(&Service{Lookup: fakeLookup(nil), Log: slog.New(slog.DiscardHandler)})
 	b.none(300 * time.Millisecond)
 }
 

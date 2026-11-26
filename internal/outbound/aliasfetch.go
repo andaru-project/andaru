@@ -162,7 +162,7 @@ type feed struct {
 }
 
 // handleAlias answers one request and returns the events it settles: none when another fetch of the same source
-// answers it or the session ended first, or several. An error is a result not published, not even as a failure: it ends the session.
+// answers it or the session ended first, or several. An error is a result not published on a session that ended.
 func (s *Service) handleAlias(ctx context.Context, c *bus.Client, slots chan struct{}, m bus.Message) ([]int64, error) {
 	alias := strings.TrimPrefix(m.Topic, "alias-fetch/")
 	var req aliasfeed.Request
@@ -170,8 +170,9 @@ func (s *Service) handleAlias(ctx context.Context, c *bus.Client, slots chan str
 	err := json.Unmarshal(m.Payload, &e)
 	switch {
 	case err != nil:
-	case alias == "" || strings.ContainsAny(alias, "/+#"): // its results' topic would be refused, every time
-		err = fmt.Errorf("alias %q", alias)
+	case !strings.HasPrefix(m.Topic, "alias-fetch/") || strings.Contains(alias, "/") ||
+		len(aliasfeed.ResultTopic(alias)) > bus.MaxTopic: // the bus would refuse its results, every time
+		err = fmt.Errorf("alias %q", cut(alias, 100))
 	case e.Type != aliasfeed.RequestType || req.ID == "" || req.Hash == "":
 		err = fmt.Errorf("type %q, request %q, hash %q", e.Type, req.ID, req.Hash)
 	case req.Kind == "url" && req.URL == "", req.Kind == "hostnames" && len(req.Names) == 0:
@@ -215,24 +216,23 @@ func (s *Service) handleAlias(ctx context.Context, c *bus.Client, slots chan str
 	r, entries := s.fetch(ctx, alias, req)
 	r.Request = f.newest // f no longer changes
 	payload, err := bus.NewEvent(aliasfeed.ResultType, User, r)
+	if err == nil && len(payload) > bus.MaxPayload {
+		// The bus would refuse it, or end the connection over a frame too long: the engine is told it failed instead.
+		r = aliasfeed.Result{Request: r.Request, Hash: r.Hash, Error: fmt.Sprintf("the result is larger than the bus takes (%d KiB)", bus.MaxPayload>>10)}
+		payload, err = bus.NewEvent(aliasfeed.ResultType, User, r)
+	}
 	if err == nil {
 		err = c.Publish(ctx, aliasfeed.ResultTopic(alias), payload, true)
 	}
-	if err != nil && ctx.Err() == nil {
-		// The bus refused the result, as one too large: it is told the fetch failed instead, so the engine records the
-		// failure and warns. A failure it refuses too means the bus is in trouble or closing.
-		s.Log.Error("alias result refused by the bus; a failure is sent instead", "alias", alias, "error", err)
-		failed := aliasfeed.Result{Request: r.Request, Hash: r.Hash, Error: "the result could not be sent: " + cut(err.Error(), 200)}
-		if payload, err = bus.NewEvent(aliasfeed.ResultType, User, failed); err == nil {
-			err = c.Publish(ctx, aliasfeed.ResultTopic(alias), payload, true)
-		}
-		if err == nil {
-			return f.seqs, nil
-		}
+	if refused := (*bus.RefusedError)(nil); errors.As(err, &refused) {
+		// The bus would refuse it again: the requests are acked, and the session, with the notifications it sends,
+		// goes on. The engine asks again at its next refresh.
+		s.Log.Error("alias result refused by the bus; the request is dropped", "alias", alias, "error", err)
+		return f.seqs, nil
 	}
 	if err != nil {
-		// The session ended, or the bus refuses even a failure. Unacked, the requests come again, but only to a new
-		// session: this one's acks would wait for them.
+		// The session ended. Unacked, the requests come again, but only to a new session: this one's acks would wait
+		// for them.
 		return nil, fmt.Errorf("publish the result for alias %s: %w", alias, err)
 	}
 	switch {
