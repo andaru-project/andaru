@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { backupFilename, formatByteSize, restoreBlockers, validateBackupPassphrase } from './backup';
+import { backupFilename, restoreBlockers, validateBackupPassphrase } from './backup';
 import type { RestorePreviewResponse } from './types';
 
 it('validates backup passphrases against empty, null byte, and 1024-byte UTF-8 limits', () => {
@@ -11,14 +11,10 @@ it('validates backup passphrases against empty, null byte, and 1024-byte UTF-8 l
   expect(validateBackupPassphrase('correct horse battery staple')).toBeUndefined();
 });
 
-it('builds sanitized backup filenames with .zip or .age extensions and formats byte sizes', () => {
+it('builds sanitized backup filenames with .zip or .age extensions', () => {
   expect(backupFilename('Edge GW 01!', '14', '2026-11-26T14:05:09.123456Z', false)).toBe('andaru-backup-edge-gw-01-v14-20261126-140509Z.zip');
-  expect(backupFilename(undefined, '14', '2026-11-26T14:05:09Z', true)).toBe('andaru-backup-andaru-v14-20261126-140509Z.age');
+  expect(backupFilename(undefined, '0', '2026-11-26T14:05:09Z', true)).toBe('andaru-backup-andaru-v0-20261126-140509Z.age');
   expect(backupFilename('', '', 'invalid', false)).toBe('andaru-backup-andaru.zip');
-
-  expect(formatByteSize(512)).toBe('512 B');
-  expect(formatByteSize(2048)).toBe('2.0 KiB');
-  expect(formatByteSize(3 * 1024 * 1024)).toBe('3.0 MiB');
 });
 
 it('collects hard restore blockers from a restore preview', () => {

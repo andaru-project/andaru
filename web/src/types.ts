@@ -663,7 +663,6 @@ export interface BackupCreateOptions {
 
 export interface BackupDownload {
   blob: Blob;
-  contentType: string;
   encrypted: boolean;
   savedVersion: string;
   identityRevision: string;

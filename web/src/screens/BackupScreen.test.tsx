@@ -1,7 +1,8 @@
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiClient } from '../api';
+import { maxBackupUploadBytes } from '../backup';
 import { fetchRoutes, jsonResponse } from '../test/fetch';
 import { session } from '../test/fixtures';
 import { render, screen, within } from '../test/render';
@@ -23,6 +24,17 @@ const sampleManifest = {
   savedButUnappliedAreas: ['network'],
 };
 
+const origCreateObjectURL = Object.getOwnPropertyDescriptor(URL, 'createObjectURL');
+const origRevokeObjectURL = Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL');
+
+afterEach(() => {
+  if (origCreateObjectURL) Object.defineProperty(URL, 'createObjectURL', origCreateObjectURL);
+  else delete (URL as unknown as Record<string, unknown>).createObjectURL;
+  if (origRevokeObjectURL) Object.defineProperty(URL, 'revokeObjectURL', origRevokeObjectURL);
+  else delete (URL as unknown as Record<string, unknown>).revokeObjectURL;
+  vi.restoreAllMocks();
+});
+
 function renderScreen(caps: string[], onRestored = vi.fn(), onSessionLost = vi.fn()) {
   return render(
     <MemoryRouter>
@@ -32,11 +44,16 @@ function renderScreen(caps: string[], onRestored = vi.fn(), onSessionLost = vi.f
 }
 
 describe('BackupScreen', () => {
-  it('downloads a plain backup without secrets and an encrypted backup with passphrase and re-authentication', async () => {
+  it('downloads plain and encrypted backups (including credentials-only), validates passphrase, and clears secrets', async () => {
     const user = userEvent.setup();
     const createObjectURL = vi.fn(() => 'blob:mock');
     const revokeObjectURL = vi.fn();
-    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL, revokeObjectURL }));
+    Object.defineProperty(URL, 'createObjectURL', { value: createObjectURL, configurable: true, writable: true });
+    Object.defineProperty(URL, 'revokeObjectURL', { value: revokeObjectURL, configurable: true, writable: true });
+    const downloadedNames: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      downloadedNames.push(this.download);
+    });
 
     const createCalls: Array<Record<string, unknown>> = [];
     fetchRoutes({
@@ -63,9 +80,10 @@ describe('BackupScreen', () => {
     await user.click(screen.getByRole('button', { name: 'Download backup' }));
     expect(await screen.findByText(/andaru-backup-andaru-gw-v12-20261126-140500Z\.zip/)).toBeInTheDocument();
     expect(createCalls[0]).toEqual({ includeSecrets: false });
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    expect(downloadedNames[0]).toBe('andaru-backup-andaru-gw-v12-20261126-140500Z.zip');
 
-    // Enable configuration secrets + user credentials -> validates passphrase match and account password.
-    await user.click(screen.getByRole('switch', { name: /Include configuration secrets/ }));
+    // Credentials-only export (`includeSecrets: false, includeCredentials: true`).
     await user.click(screen.getByRole('switch', { name: /Include user credentials/ }));
     await user.type(screen.getByLabelText(/^Archive passphrase/), 'my-strong-passphrase');
     await user.type(screen.getByLabelText(/^Confirm passphrase/), 'mismatch');
@@ -81,12 +99,12 @@ describe('BackupScreen', () => {
 
     expect(await screen.findByText(/andaru-backup-andaru-gw-v12-20261126-140500Z\.age/)).toBeInTheDocument();
     expect(createCalls[1]).toEqual({
-      includeSecrets: true,
+      includeSecrets: false,
       includeCredentials: true,
       passphrase: 'my-strong-passphrase',
       password: 'admin-pass',
     });
-    // Sensitive fields are cleared immediately after download.
+    expect(downloadedNames[1]).toBe('andaru-backup-andaru-gw-v12-20261126-140500Z.age');
     expect(screen.getByLabelText(/^Archive passphrase/)).toHaveValue('');
     expect(screen.getByLabelText(/^Confirm passphrase/)).toHaveValue('');
     expect(screen.getByLabelText(/^Your current password/)).toHaveValue('');
@@ -98,7 +116,7 @@ describe('BackupScreen', () => {
     expect(screen.getByText(/backups\.exportSecrets/)).toBeInTheDocument();
   });
 
-  it('inspects, previews, confirms, and executes a restore with idempotency and revision preconditions', async () => {
+  it('inspects, previews, handles 412 and transient retry idempotency, and gates post-restore links by capability', async () => {
     const user = userEvent.setup();
     const onRestored = vi.fn();
     const previewOptions: Array<Record<string, unknown>> = [];
@@ -115,8 +133,8 @@ describe('BackupScreen', () => {
         return jsonResponse(200, {
           state: 'restore-preview',
           manifest: sampleManifest,
-          expectedSavedVersion: '15',
-          expectedIdentityRevision: 7,
+          expectedSavedVersion: '0',
+          expectedIdentityRevision: 0,
           configurationChanges: { created: 1, updated: 2, deleted: 0 },
           secretChanges: { created: 0, updated: 1, deleted: 0 },
           userChanges: { created: 0, updated: 1, deleted: 0 },
@@ -136,28 +154,38 @@ describe('BackupScreen', () => {
         if (restoreOptions.length === 1) {
           return jsonResponse(412, { error: { code: 'PRECONDITION_FAILED', message: 'Version changed.' } });
         }
+        if (restoreOptions.length === 2) {
+          return jsonResponse(503, { error: { code: 'STORE_UNAVAILABLE', message: 'Temporary busy.' } });
+        }
         return jsonResponse(200, {
           state: 'saved',
-          savedVersion: '16',
-          identityRevision: 8,
+          savedVersion: '1',
+          identityRevision: 1,
           unresolvedSecrets: ['WAN_PASSWORD'],
-          replayed: false,
+          replayed: true,
         });
       },
     });
 
-    renderScreen(['backups.restore'], onRestored);
+    renderScreen(['backups.restore', 'configuration.read', 'status.read'], onRestored);
     expect(screen.queryByRole('heading', { name: 'Create backup' })).not.toBeInTheDocument();
 
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
-    const archive = new File(['dummy-age-data'], 'backup.age', { type: 'application/octet-stream' });
-    await user.upload(fileInput, archive);
+    const archive1 = new File(['dummy-age-data'], 'backup.age', { type: 'application/octet-stream' });
+    await user.upload(fileInput, archive1);
     await user.type(screen.getByLabelText(/^Archive passphrase/), 'restore-pass');
+
+    // Switching to another file clears the previous archive's passphrase.
+    const archive2 = new File(['dummy-age-data-2'], 'backup2.age', { type: 'application/octet-stream' });
+    await user.upload(fileInput, archive2);
+    expect(screen.getByLabelText(/^Archive passphrase/)).toHaveValue('');
+
+    await user.type(screen.getByLabelText(/^Archive passphrase/), 'restore-pass-2');
     await user.click(screen.getByRole('button', { name: 'Inspect archive' }));
 
     expect(await screen.findByText('0123456789abcdef0123456789abcdef')).toBeInTheDocument();
     expect(screen.getByText(/Backup contained unapplied changes/)).toBeInTheDocument();
-    expect(previewOptions[0]).toEqual({ passphrase: 'restore-pass' });
+    expect(previewOptions[0]).toEqual({ passphrase: 'restore-pass-2' });
 
     // Uncheck configurationSecrets so only configuration and users are restored.
     await user.click(screen.getByRole('checkbox', { name: /Configuration secrets/ }));
@@ -168,35 +196,42 @@ describe('BackupScreen', () => {
     expect(within(table).getByText('Users')).toBeInTheDocument();
     expect(screen.getByText(/Hardware differences detected/)).toBeInTheDocument();
     expect(screen.getByText(/Secrets will be marked unresolved/)).toBeInTheDocument();
-    expect(previewOptions[1]).toEqual({ passphrase: 'restore-pass', stores: ['configuration', 'users'] });
 
-    // First execute returns 412 -> displays clear re-preview message.
+    // First execute returns 412 -> clears stale preview (button gone) while keeping error visible.
     await user.click(screen.getByRole('button', { name: 'Restore selected data…' }));
-    await user.click(screen.getByRole('button', { name: 'Confirm restore' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Confirm restore' }));
     expect(await screen.findByText(/The appliance changed after this restore was previewed/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Restore selected data…' })).not.toBeInTheDocument();
     expect(restoreOptions[0]).toMatchObject({
-      passphrase: 'restore-pass',
+      passphrase: 'restore-pass-2',
       stores: ['configuration', 'users'],
-      expectedSavedVersion: '15',
-      expectedIdentityRevision: 7,
+      expectedSavedVersion: '0',
+      expectedIdentityRevision: 0,
     });
-    expect(typeof restoreOptions[0].operationId).toBe('string');
 
-    // Re-preview gets a fresh operationId and succeeds.
+    // Re-preview gets a fresh operationId; transient 503 preserves operationId for idempotent retry.
     await user.click(screen.getByRole('button', { name: 'Preview restore' }));
     await user.click(await screen.findByRole('button', { name: 'Restore selected data…' }));
-    await user.click(screen.getByRole('button', { name: 'Confirm restore' }));
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Confirm restore' }));
+    expect(await screen.findByText('Temporary busy.')).toBeInTheDocument();
 
-    expect(await screen.findByText('Backup restored')).toBeInTheDocument();
+    // Retry reuses the exact same operationId and handles replayed: true.
+    await user.click(screen.getByRole('button', { name: 'Restore selected data…' }));
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Confirm restore' }));
+    expect(await screen.findByText('Restore already completed (replayed)')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open Review and apply' })).toHaveAttribute('href', '/changes');
     expect(screen.getByRole('link', { name: 'Open Interfaces' })).toHaveAttribute('href', '/network/interfaces');
     expect(onRestored).toHaveBeenCalledTimes(1);
     expect(restoreOptions[1].operationId).not.toBe(restoreOptions[0].operationId);
+    expect(restoreOptions[2].operationId).toBe(restoreOptions[1].operationId);
     expect(screen.getByLabelText(/^Archive passphrase/)).toHaveValue('');
   });
 
-  it('blocks restore when preview reports blocking secrets, missing roles, or root-console requirement', async () => {
+  it('blocks restore on blocking secrets/roles/root-console and handles SETTINGS_UPGRADE_PENDING, RESTORE_ABANDONED, and 401', async () => {
     const user = userEvent.setup();
+    const onSessionLost = vi.fn();
+    let previewCount = 0;
     fetchRoutes({
       'POST /api/v1/restores/preview': (init) => {
         const form = init?.body as FormData;
@@ -204,40 +239,88 @@ describe('BackupScreen', () => {
         if (!Array.isArray(opts.stores) || opts.stores.length === 0) {
           return jsonResponse(200, { state: 'inspection', manifest: sampleManifest });
         }
+        previewCount += 1;
+        if (previewCount === 1) {
+          return jsonResponse(409, { error: { code: 'SETTINGS_UPGRADE_PENDING', message: 'Conflict' } });
+        }
+        if (previewCount === 2) {
+          return jsonResponse(200, {
+            state: 'restore-preview',
+            manifest: sampleManifest,
+            expectedSavedVersion: '15',
+            expectedIdentityRevision: 7,
+            configurationChanges: { created: 0, updated: 0, deleted: 0 },
+            secretChanges: { created: 0, updated: 0, deleted: 1 },
+            userChanges: { created: 0, updated: 1, deleted: 0 },
+            credentialChanges: { created: 0, updated: 0, deleted: 0 },
+            unresolvedSecrets: [],
+            blockingSecrets: ['DSL_PASSWORD'],
+            missingRoleIds: ['rol_missing'],
+            requiresRootAdministrator: true,
+            recoveryAdministrators: [],
+            hardwareFindings: [],
+          });
+        }
         return jsonResponse(200, {
           state: 'restore-preview',
           manifest: sampleManifest,
           expectedSavedVersion: '15',
           expectedIdentityRevision: 7,
-          configurationChanges: { created: 0, updated: 0, deleted: 0 },
-          secretChanges: { created: 0, updated: 0, deleted: 1 },
-          userChanges: { created: 0, updated: 1, deleted: 0 },
+          configurationChanges: { created: 0, updated: 1, deleted: 0 },
+          secretChanges: { created: 0, updated: 0, deleted: 0 },
+          userChanges: { created: 0, updated: 0, deleted: 0 },
           credentialChanges: { created: 0, updated: 0, deleted: 0 },
           unresolvedSecrets: [],
-          blockingSecrets: ['DSL_PASSWORD'],
-          missingRoleIds: ['rol_missing'],
-          requiresRootAdministrator: true,
+          blockingSecrets: [],
+          missingRoleIds: [],
+          requiresRootAdministrator: false,
           recoveryAdministrators: [],
           hardwareFindings: [],
         });
       },
+      'POST /api/v1/restores': (() => {
+        let calls = 0;
+        return () => {
+          calls += 1;
+          if (calls === 1) return jsonResponse(409, { error: { code: 'RESTORE_ABANDONED', message: 'Restore abandoned.' } });
+          return jsonResponse(401, { error: { code: 'SESSION_EXPIRED', message: 'Sign in again.' } });
+        };
+      })(),
     });
 
-    renderScreen(['backups.restore']);
+    renderScreen(['backups.restore'], vi.fn(), onSessionLost);
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
     await user.upload(fileInput, new File(['zip'], 'backup.zip', { type: 'application/zip' }));
     await user.click(screen.getByRole('button', { name: 'Inspect archive' }));
-    await user.click(await screen.findByRole('button', { name: 'Preview restore' }));
 
+    // SETTINGS_UPGRADE_PENDING shows actionable upgrade message instead of bare "Conflict".
+    await user.click(await screen.findByRole('button', { name: 'Preview restore' }));
+    expect(await screen.findByText(/Saved settings require upgrade decisions before restoring/)).toBeInTheDocument();
+
+    // Blockers prevent confirmation.
+    await user.click(screen.getByRole('button', { name: 'Preview restore' }));
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('Restore cannot proceed');
     expect(alert).toHaveTextContent('DSL_PASSWORD');
     expect(alert).toHaveTextContent('rol_missing');
     expect(alert).toHaveTextContent('andaru ctl restore');
     expect(screen.queryByRole('button', { name: 'Restore selected data…' })).not.toBeInTheDocument();
+
+    // RESTORE_ABANDONED clears stale preview and dead operationId.
+    await user.click(screen.getByRole('button', { name: 'Preview restore' }));
+    await user.click(await screen.findByRole('button', { name: 'Restore selected data…' }));
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Confirm restore' }));
+    expect(await screen.findByText(/Restore abandoned\. Run Preview restore/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Restore selected data…' })).not.toBeInTheDocument();
+
+    // 401 invokes onSessionLost.
+    await user.click(screen.getByRole('button', { name: 'Preview restore' }));
+    await user.click(await screen.findByRole('button', { name: 'Restore selected data…' }));
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Confirm restore' }));
+    await vi.waitFor(() => expect(onSessionLost).toHaveBeenCalledTimes(1));
   });
 
-  it('rejects empty or oversized backup files before uploading', async () => {
+  it('rejects empty and oversized backup files before uploading', async () => {
     const user = userEvent.setup();
     const fetchMock = fetchRoutes({});
     renderScreen(['backups.restore']);
@@ -246,6 +329,13 @@ describe('BackupScreen', () => {
     const emptyFile = new File([], 'empty.zip', { type: 'application/zip' });
     await user.upload(fileInput, emptyFile);
     expect(screen.getByRole('alert')).toHaveTextContent('The selected archive file is empty.');
+    await user.click(screen.getByRole('button', { name: 'Inspect archive' }));
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const oversized = new File(['x'], 'huge.age', { type: 'application/octet-stream' });
+    Object.defineProperty(oversized, 'size', { value: maxBackupUploadBytes + 1 });
+    await user.upload(fileInput, oversized);
+    expect(screen.getByRole('alert')).toHaveTextContent(/Archive exceeds the .* upload limit/);
     await user.click(screen.getByRole('button', { name: 'Inspect archive' }));
     expect(fetchMock).not.toHaveBeenCalled();
   });

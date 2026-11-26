@@ -301,7 +301,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
     ['/changes', <ChangesScreen api={api} session={session} state={changes.data} stateError={changes.error} connected={connected} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/system/details', <SystemDetailsScreen system={system} />],
     ['/system/updates', <UpdatesScreen api={api} session={session} update={update} onSessionLost={onSessionLost} />],
-    ['/system/backups', <BackupScreen api={api} session={session} hostname={hostname} onRestored={() => { void reloadChanges(); void reloadUpgrade(); void reloadNotifications(); }} onSessionLost={onSessionLost} />],
+    ['/system/backups', <BackupScreen api={api} session={session} hostname={hostname} onRestored={() => { void reloadChanges(); void reloadNotifications(); }} onSessionLost={onSessionLost} />],
     ['/system/notifications', <NotificationsScreen api={api} session={session} notifications={notifications} onSessionLost={onSessionLost} />],
     ['/system/users', <UsersScreen api={api} session={session} onSessionLost={onSessionLost} />],
     ['/system/roles', <RolesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],

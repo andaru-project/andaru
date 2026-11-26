@@ -1,29 +1,39 @@
 import type { BackupStore, RestorePreviewResponse } from './types';
 
-// Matches internal/web/proxy.go maxProxyBody (17 MiB) and internal/backup/crypto.go MaxPassphraseBytes (1024).
-export const maxBackupUploadBytes = 17 * 1024 * 1024;
+// Leaves 80 KiB (backupOptionsMax + multipart framing) below internal/web/proxy.go's 17 MiB maxProxyBody.
+export const maxBackupUploadBytes = 17 * 1024 * 1024 - 80 * 1024;
 export const maxPassphraseBytes = 1024;
 
-export const backupStoreOrder: readonly BackupStore[] = [
-  'configuration',
-  'configurationSecrets',
-  'users',
-  'userCredentials',
-];
+export interface BackupStoreInfo {
+  label: string;
+  description: string;
+  changes: 'configurationChanges' | 'secretChanges' | 'userChanges' | 'credentialChanges';
+}
 
-export const backupStoreLabel: Record<BackupStore, string> = {
-  configuration: 'Configuration',
-  configurationSecrets: 'Configuration secrets',
-  users: 'Users',
-  userCredentials: 'User credentials',
+export const backupStores: Record<BackupStore, BackupStoreInfo> = {
+  configuration: {
+    label: 'Configuration',
+    description: 'Interfaces, segments, zones, firewall rules, NAT, aliases, DHCP, DNS, and roles.',
+    changes: 'configurationChanges',
+  },
+  configurationSecrets: {
+    label: 'Configuration secrets',
+    description: 'Stored secret values such as PPPoE passwords.',
+    changes: 'secretChanges',
+  },
+  users: {
+    label: 'Users',
+    description: 'Local administrator and operator accounts and role assignments.',
+    changes: 'userChanges',
+  },
+  userCredentials: {
+    label: 'User credentials',
+    description: 'Password hashes and API token hashes.',
+    changes: 'credentialChanges',
+  },
 };
 
-export const backupStoreDescription: Record<BackupStore, string> = {
-  configuration: 'Interfaces, segments, zones, firewall rules, NAT, aliases, DHCP, DNS, and roles.',
-  configurationSecrets: 'Stored secret values such as PPPoE passwords.',
-  users: 'Local administrator and operator accounts and role assignments.',
-  userCredentials: 'Password hashes and API token hashes.',
-};
+export const backupStoreOrder = Object.keys(backupStores) as BackupStore[];
 
 const utf8Encoder = new TextEncoder();
 
@@ -34,12 +44,6 @@ export function validateBackupPassphrase(passphrase: string): string | undefined
     return `Passphrase must be ${maxPassphraseBytes} bytes or fewer.`;
   }
   return undefined;
-}
-
-export function formatByteSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 export function backupFilename(

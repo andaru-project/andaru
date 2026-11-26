@@ -8,6 +8,7 @@ import {
   FileInput,
   Group,
   List,
+  Modal,
   Paper,
   PasswordInput,
   Stack,
@@ -18,22 +19,20 @@ import {
 } from '@mantine/core';
 import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
-import { ApiClient, ApiError, apiErrorMessage, reportError } from '../api';
+import { ApiClient, ApiError, reportError } from '../api';
 import {
   backupFilename,
-  backupStoreDescription,
-  backupStoreLabel,
   backupStoreOrder,
-  formatByteSize,
+  backupStores,
   maxBackupUploadBytes,
   restoreBlockers,
   validateBackupPassphrase,
 } from '../backup';
+import { bytes } from '../format';
 import { formatTimestamp, useTimeZone } from '../timezone';
 import type {
   BackupManifest,
   BackupStore,
-  RestoreCounts,
   RestorePreviewResponse,
   RestoreSavedResponse,
   Session,
@@ -48,6 +47,7 @@ interface BackupScreenProps {
 }
 
 const mono = { input: 'mono-input' };
+const downloadRevokeMilliseconds = 60_000;
 
 function triggerDownload(blob: Blob, filename: string) {
   if (typeof URL.createObjectURL !== 'function') return;
@@ -59,20 +59,14 @@ function triggerDownload(blob: Blob, filename: string) {
   document.body.appendChild(link);
   link.click();
   link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1_000);
+  setTimeout(() => URL.revokeObjectURL(url), downloadRevokeMilliseconds);
 }
 
-function storeChangesOf(preview: RestorePreviewResponse, store: BackupStore): RestoreCounts {
-  switch (store) {
-    case 'configuration':
-      return preview.configurationChanges;
-    case 'configurationSecrets':
-      return preview.secretChanges;
-    case 'users':
-      return preview.userChanges;
-    case 'userCredentials':
-      return preview.credentialChanges;
-  }
+function archiveFileError(file: File | null): string | undefined {
+  if (!file) return 'Choose a backup archive file first.';
+  if (file.size === 0) return 'The selected archive file is empty.';
+  if (file.size > maxBackupUploadBytes) return `Archive exceeds the ${bytes(maxBackupUploadBytes)} upload limit.`;
+  return undefined;
 }
 
 export function BackupScreen({ api, session, hostname, onRestored, onSessionLost }: BackupScreenProps) {
@@ -80,6 +74,8 @@ export function BackupScreen({ api, session, hostname, onRestored, onSessionLost
   const canCreate = session.capabilities.includes('backups.create');
   const canExportSecrets = session.capabilities.includes('backups.exportSecrets');
   const canRestore = session.capabilities.includes('backups.restore');
+  const canReadConfig = session.capabilities.includes('configuration.read');
+  const canReadStatus = session.capabilities.includes('status.read');
 
   // Create backup state.
   const [includeSecrets, setIncludeSecrets] = useState(false);
@@ -101,27 +97,40 @@ export function BackupScreen({ api, session, hostname, onRestored, onSessionLost
   // Restore backup state.
   const [archiveFile, setArchiveFile] = useState<File | null>(null);
   const [restorePassphrase, setRestorePassphrase] = useState('');
-  const [inspectBusy, setInspectBusy] = useState(false);
+  const [restoreBusy, setRestoreBusy] = useState<null | 'inspect' | 'preview' | 'restore'>(null);
   const [inspectError, setInspectError] = useState('');
   const [manifest, setManifest] = useState<BackupManifest | null>(null);
   const [selectedStores, setSelectedStores] = useState<BackupStore[]>([]);
-  const [previewBusy, setPreviewBusy] = useState(false);
   const [previewError, setPreviewError] = useState('');
-  const [preview, setPreview] = useState<RestorePreviewResponse | null>(null);
-  const [operationId, setOperationId] = useState('');
+  const [previewState, setPreviewState] = useState<{ data: RestorePreviewResponse; operationId: string } | null>(null);
   const [confirming, setConfirming] = useState(false);
-  const [restoreBusy, setRestoreBusy] = useState(false);
   const [restoreError, setRestoreError] = useState('');
   const [restoreResult, setRestoreResult] = useState<{
     response: RestoreSavedResponse;
     restoredStores: BackupStore[];
   } | null>(null);
 
+  const restoreFlowBusy = restoreBusy !== null;
   const sensitiveExport = canExportSecrets && (includeSecrets || includeCredentials);
   const exportPassphraseErr = sensitiveExport && exportPassphrase ? validateBackupPassphrase(exportPassphrase) : undefined;
   const exportConfirmErr = sensitiveExport && exportPassphraseConfirm && exportPassphraseConfirm !== exportPassphrase
     ? 'Passphrases do not match.'
     : undefined;
+
+  function clearPreview() {
+    setPreviewState(null);
+    setPreviewError('');
+    setConfirming(false);
+    setRestoreError('');
+  }
+
+  function resetRestoreFlow(clearResult = true) {
+    setInspectError('');
+    setManifest(null);
+    setSelectedStores([]);
+    clearPreview();
+    if (clearResult) setRestoreResult(null);
+  }
 
   function toggleSensitive(kind: 'secrets' | 'credentials', checked: boolean) {
     const nextSecrets = kind === 'secrets' ? checked : includeSecrets;
@@ -138,6 +147,7 @@ export function BackupScreen({ api, session, hostname, onRestored, onSessionLost
 
   async function handleCreateBackup(event: FormEvent) {
     event.preventDefault();
+    if (createBusy) return;
     setCreateError('');
     setCreateSuccess(null);
 
@@ -189,29 +199,13 @@ export function BackupScreen({ api, session, hostname, onRestored, onSessionLost
     }
   }
 
-  function resetRestoreFlow(clearResult = true) {
-    setInspectError('');
-    setManifest(null);
-    setSelectedStores([]);
-    setPreviewError('');
-    setPreview(null);
-    setOperationId('');
-    setConfirming(false);
-    setRestoreError('');
-    if (clearResult) setRestoreResult(null);
-  }
-
   function handleFileChange(file: File | null) {
     setArchiveFile(file);
+    setRestorePassphrase('');
     resetRestoreFlow(true);
-    if (!file) {
-      setRestorePassphrase('');
-      return;
-    }
-    if (file.size === 0) {
-      setInspectError('The selected archive file is empty.');
-    } else if (file.size > maxBackupUploadBytes) {
-      setInspectError(`Archive exceeds the ${formatByteSize(maxBackupUploadBytes)} upload limit.`);
+    if (file) {
+      const fileErr = archiveFileError(file);
+      if (fileErr) setInspectError(fileErr);
     }
   }
 
@@ -222,16 +216,10 @@ export function BackupScreen({ api, session, hostname, onRestored, onSessionLost
 
   async function handleInspect(event: FormEvent) {
     event.preventDefault();
-    if (!archiveFile) {
-      setInspectError('Choose a backup archive file first.');
-      return;
-    }
-    if (archiveFile.size === 0) {
-      setInspectError('The selected archive file is empty.');
-      return;
-    }
-    if (archiveFile.size > maxBackupUploadBytes) {
-      setInspectError(`Archive exceeds the ${formatByteSize(maxBackupUploadBytes)} upload limit.`);
+    if (restoreFlowBusy) return;
+    const fileErr = archiveFileError(archiveFile);
+    if (fileErr || !archiveFile) {
+      setInspectError(fileErr ?? 'Choose a backup archive file first.');
       return;
     }
     if (restorePassphrase) {
@@ -242,75 +230,67 @@ export function BackupScreen({ api, session, hostname, onRestored, onSessionLost
       }
     }
 
-    setInspectBusy(true);
-    setInspectError('');
-    setPreviewError('');
-    setPreview(null);
-    setOperationId('');
-    setConfirming(false);
-    setRestoreError('');
-    setRestoreResult(null);
+    setRestoreBusy('inspect');
+    resetRestoreFlow(true);
     try {
       const res = await api.inspectBackup(archiveFile, restorePassphrase || undefined);
       setManifest(res.manifest);
-      const available = backupStoreOrder.filter((store) => res.manifest.scopes.includes(store));
-      setSelectedStores(available);
+      setSelectedStores(backupStoreOrder.filter((store) => res.manifest.scopes.includes(store)));
     } catch (error) {
-      setManifest(null);
-      setSelectedStores([]);
       reportError(error, onSessionLost, setInspectError);
     } finally {
-      setInspectBusy(false);
+      setRestoreBusy(null);
     }
   }
 
-  function handleStoreToggle(store: BackupStore, checked: boolean) {
-    setSelectedStores((current) => {
-      const next = checked ? [...current, store] : current.filter((item) => item !== store);
-      return backupStoreOrder.filter((item) => next.includes(item));
-    });
-    setPreview(null);
-    setPreviewError('');
-    setOperationId('');
-    setConfirming(false);
-    setRestoreError('');
+  function handleStoresChange(values: string[]) {
+    const selected = new Set(values);
+    setSelectedStores(backupStoreOrder.filter((store) => selected.has(store)));
+    clearPreview();
+  }
+
+  function reportRestoreFailure(error: unknown, setMessage: (msg: string) => void) {
+    if (error instanceof ApiError && error.code === 'SETTINGS_UPGRADE_PENDING') {
+      setMessage('Saved settings require upgrade decisions before restoring. Open Finish the upgrade first.');
+      return;
+    }
+    reportError(error, onSessionLost, setMessage);
   }
 
   async function handlePreviewRestore() {
-    if (!archiveFile || selectedStores.length === 0) return;
-    setPreviewBusy(true);
-    setPreviewError('');
-    setRestoreError('');
-    setConfirming(false);
+    if (restoreFlowBusy || !archiveFile || selectedStores.length === 0) return;
+    setRestoreBusy('preview');
+    clearPreview();
     try {
       const res = await api.previewRestore(archiveFile, {
         ...(restorePassphrase ? { passphrase: restorePassphrase } : {}),
         stores: selectedStores,
       });
-      setPreview(res);
-      setOperationId(crypto.randomUUID());
+      setPreviewState({ data: res, operationId: crypto.randomUUID() });
     } catch (error) {
-      setPreview(null);
-      setOperationId('');
-      reportError(error, onSessionLost, setPreviewError);
+      reportRestoreFailure(error, setPreviewError);
     } finally {
-      setPreviewBusy(false);
+      setRestoreBusy(null);
     }
   }
 
+  const includesConfig = selectedStores.includes('configuration') || selectedStores.includes('configurationSecrets');
+  const includesIdentity = selectedStores.includes('users') || selectedStores.includes('userCredentials');
+
   async function handleExecuteRestore() {
-    if (!archiveFile || !preview || selectedStores.length === 0 || !operationId) return;
-    const includesConfig = selectedStores.includes('configuration') || selectedStores.includes('configurationSecrets');
-    const includesIdentity = selectedStores.includes('users') || selectedStores.includes('userCredentials');
-    setRestoreBusy(true);
+    if (restoreFlowBusy || !archiveFile || !previewState || selectedStores.length === 0) return;
+    setRestoreBusy('restore');
     setRestoreError('');
     try {
+      const expectedSavedVersion = previewState.data.expectedSavedVersion;
       const saved = await api.executeRestore(archiveFile, {
         ...(restorePassphrase ? { passphrase: restorePassphrase } : {}),
         stores: selectedStores,
-        operationId,
-        ...(includesConfig && preview.expectedSavedVersion ? { expectedSavedVersion: preview.expectedSavedVersion } : {}),
-        ...(includesIdentity ? { expectedIdentityRevision: preview.expectedIdentityRevision } : {}),
+        operationId: previewState.operationId,
+        ...(includesConfig && expectedSavedVersion !== undefined && expectedSavedVersion !== ''
+          ? { expectedSavedVersion }
+          : {}),
+        ...(includesIdentity ? { expectedIdentityRevision: previewState.data.expectedIdentityRevision } : {}),
       });
       const restoredStores = [...selectedStores];
       setRestorePassphrase('');
@@ -319,24 +299,26 @@ export function BackupScreen({ api, session, hostname, onRestored, onSessionLost
       setRestoreResult({ response: saved, restoredStores });
       onRestored();
     } catch (error) {
-      if (error instanceof ApiError && error.status === 401) {
-        onSessionLost();
-        return;
-      }
       if (error instanceof ApiError && error.status === 412) {
+        clearPreview();
         setRestoreError('The appliance changed after this restore was previewed. Run Preview restore again before confirming.');
-        setConfirming(false);
         return;
       }
-      setRestoreError(apiErrorMessage(error));
+      if (error instanceof ApiError && (error.code === 'RESTORE_ABANDONED' || error.code === 'IDEMPOTENCY_CONFLICT')) {
+        clearPreview();
+        setRestoreError(`${error.message} Run Preview restore to start a fresh restore.`);
+        return;
+      }
+      setConfirming(false);
+      reportRestoreFailure(error, setRestoreError);
     } finally {
-      setRestoreBusy(false);
+      setRestoreBusy(null);
     }
   }
 
+  const preview = previewState?.data ?? null;
   const blockers = preview ? restoreBlockers(preview) : [];
   const availableStores = manifest ? backupStoreOrder.filter((store) => manifest.scopes.includes(store)) : [];
-  const includesIdentity = selectedStores.includes('users') || selectedStores.includes('userCredentials');
 
   return (
     <Stack className="details" gap="md">
@@ -357,7 +339,7 @@ export function BackupScreen({ api, session, hostname, onRestored, onSessionLost
               {createError && <Alert color="red" role="alert" title="Backup failed">{createError}</Alert>}
               {createSuccess && (
                 <Alert color="green" role="status" title="Backup downloaded">
-                  Saved <Text span ff="monospace" inherit>{createSuccess.filename}</Text> ({formatByteSize(createSuccess.size)},{' '}
+                  Saved <Text span ff="monospace" inherit>{createSuccess.filename}</Text> ({bytes(createSuccess.size)},{' '}
                   {createSuccess.encrypted ? 'encrypted age archive' : 'plain ZIP'})
                   {createSuccess.savedVersion ? ` · config v${createSuccess.savedVersion}` : ''}
                   {createSuccess.identityRevision ? ` · identity rev ${createSuccess.identityRevision}` : ''}
@@ -450,20 +432,23 @@ export function BackupScreen({ api, session, hostname, onRestored, onSessionLost
               <Alert color="green" role="status" title={restoreResult.response.replayed ? 'Restore already completed (replayed)' : 'Backup restored'}>
                 <Stack gap="xs">
                   <Text size="sm">
-                    Restored {restoreResult.restoredStores.map((store) => backupStoreLabel[store]).join(', ')}.
+                    Restored {restoreResult.restoredStores.map((store) => backupStores[store].label).join(', ')}.
                     {restoreResult.response.savedVersion ? ` Saved configuration version: ${restoreResult.response.savedVersion}.` : ''}
                     {restoreResult.response.identityRevision !== undefined ? ` Identity revision: ${restoreResult.response.identityRevision}.` : ''}
                   </Text>
                   {(restoreResult.restoredStores.includes('configuration') || restoreResult.restoredStores.includes('configurationSecrets')) && (
                     <Text size="sm">
-                      Network changes are saved but not yet applied. <Anchor component={Link} to="/changes">Open Review and apply</Anchor> to activate them.
+                      Network changes are saved but not yet applied.{' '}
+                      {canReadConfig
+                        ? <><Anchor component={Link} to="/changes">Open Review and apply</Anchor> to activate them.</>
+                        : 'An operator with configuration access must review and apply them.'}
                     </Text>
                   )}
                   {restoreResult.response.unresolvedSecrets.length > 0 && (
                     <Text size="sm">
                       Unresolved secrets must be re-entered before applying:{' '}
-                      <Text span ff="monospace" inherit>{restoreResult.response.unresolvedSecrets.join(', ')}</Text>.{' '}
-                      <Anchor component={Link} to="/network/interfaces">Open Interfaces</Anchor>
+                      <Text span ff="monospace" inherit>{restoreResult.response.unresolvedSecrets.join(', ')}</Text>.
+                      {canReadStatus && <> <Anchor component={Link} to="/network/interfaces">Open Interfaces</Anchor></>}
                     </Text>
                   )}
                 </Stack>
@@ -474,11 +459,12 @@ export function BackupScreen({ api, session, hostname, onRestored, onSessionLost
               <Stack gap="xs">
                 <FileInput
                   label="Backup archive"
-                  description={`Select a .zip or encrypted .age backup file (up to ${formatByteSize(maxBackupUploadBytes)}).`}
+                  description={`Select a .zip or encrypted .age backup file (up to ${bytes(maxBackupUploadBytes)}).`}
                   placeholder="Choose a backup file…"
                   accept=".zip,.age,application/zip,application/octet-stream"
                   clearable
-                  disabled={inspectBusy || previewBusy || restoreBusy}
+                  clearButtonProps={{ 'aria-label': 'Clear selected file' }}
+                  disabled={restoreFlowBusy}
                   value={archiveFile}
                   onChange={handleFileChange}
                 />
@@ -487,13 +473,13 @@ export function BackupScreen({ api, session, hostname, onRestored, onSessionLost
                   label="Archive passphrase (encrypted backups)"
                   description="Leave empty for plain .zip backups; required for encrypted .age backups."
                   autoComplete="off"
-                  disabled={inspectBusy || previewBusy || restoreBusy}
+                  disabled={restoreFlowBusy}
                   value={restorePassphrase}
                   onChange={(event) => handleRestorePassphraseChange(event.currentTarget.value)}
                 />
                 {inspectError && <Alert color="red" role="alert" title="Could not inspect archive">{inspectError}</Alert>}
                 <Group>
-                  <Button type="submit" variant="default" loading={inspectBusy} disabled={!archiveFile || previewBusy || restoreBusy}>
+                  <Button type="submit" variant="default" loading={restoreBusy === 'inspect'} disabled={!archiveFile || restoreFlowBusy}>
                     Inspect archive
                   </Button>
                 </Group>
@@ -507,7 +493,7 @@ export function BackupScreen({ api, session, hostname, onRestored, onSessionLost
                   <Title order={4} size="h5">Archive details</Title>
                   <Table className="facts" withRowBorders={false} verticalSpacing={2} horizontalSpacing={0} aria-label="Archive manifest">
                     <Table.Tbody>
-                      <Table.Tr><Table.Th scope="row">Backup ID</Table.Th><Table.Td><Text ff="monospace" size="sm">{manifest.backupId}</Text></Table.Td></Table.Tr>
+                      <Table.Tr><Table.Th scope="row">Backup ID</Table.Th><Table.Td><Text ff="monospace" size="sm" style={{ overflowWrap: 'anywhere' }}>{manifest.backupId}</Text></Table.Td></Table.Tr>
                       <Table.Tr><Table.Th scope="row">Captured</Table.Th><Table.Td>{formatTimestamp(manifest.createdAt, timeZone)}</Table.Td></Table.Tr>
                       <Table.Tr><Table.Th scope="row">Andaru version</Table.Th><Table.Td><Text ff="monospace" size="sm">{manifest.andaruVersion}</Text></Table.Td></Table.Tr>
                       <Table.Tr><Table.Th scope="row">Saved version</Table.Th><Table.Td><Text ff="monospace" size="sm">{manifest.savedVersion}</Text></Table.Td></Table.Tr>
@@ -515,7 +501,7 @@ export function BackupScreen({ api, session, hostname, onRestored, onSessionLost
                         <Table.Th scope="row">Included stores</Table.Th>
                         <Table.Td>
                           <Group gap={6}>
-                            {availableStores.map((store) => <Badge key={store} size="sm" variant="light">{backupStoreLabel[store]}</Badge>)}
+                            {availableStores.map((store) => <Badge key={store} size="sm" variant="light">{backupStores[store].label}</Badge>)}
                           </Group>
                         </Table.Td>
                       </Table.Tr>
@@ -528,25 +514,26 @@ export function BackupScreen({ api, session, hostname, onRestored, onSessionLost
                     </Alert>
                   )}
 
-                  <Stack gap="xs">
-                    <Text size="sm" fw={500}>Stores to restore</Text>
-                    {availableStores.map((store) => (
-                      <Checkbox
-                        key={store}
-                        label={backupStoreLabel[store]}
-                        description={backupStoreDescription[store]}
-                        checked={selectedStores.includes(store)}
-                        disabled={previewBusy || restoreBusy}
-                        onChange={(event) => handleStoreToggle(store, event.currentTarget.checked)}
-                      />
-                    ))}
-                  </Stack>
+                  <Checkbox.Group label="Stores to restore" value={selectedStores} onChange={handleStoresChange}>
+                    <Stack gap="xs" mt={4}>
+                      {availableStores.map((store) => (
+                        <Checkbox
+                          key={store}
+                          value={store}
+                          label={backupStores[store].label}
+                          description={backupStores[store].description}
+                          disabled={restoreFlowBusy}
+                        />
+                      ))}
+                    </Stack>
+                  </Checkbox.Group>
 
                   {previewError && <Alert color="red" role="alert" title="Could not preview restore">{previewError}</Alert>}
+                  {restoreError && !preview && <Alert color="red" role="alert" title="Restore failed">{restoreError}</Alert>}
                   <Group>
                     <Button
-                      loading={previewBusy}
-                      disabled={selectedStores.length === 0 || restoreBusy}
+                      loading={restoreBusy === 'preview'}
+                      disabled={selectedStores.length === 0 || restoreFlowBusy}
                       onClick={() => void handlePreviewRestore()}
                     >
                       Preview restore
@@ -572,10 +559,10 @@ export function BackupScreen({ api, session, hostname, onRestored, onSessionLost
                     </Table.Thead>
                     <Table.Tbody>
                       {selectedStores.map((store) => {
-                        const counts = storeChangesOf(preview, store);
+                        const counts = preview[backupStores[store].changes];
                         return (
                           <Table.Tr key={store}>
-                            <Table.Td data-label="Store">{backupStoreLabel[store]}</Table.Td>
+                            <Table.Td data-label="Store">{backupStores[store].label}</Table.Td>
                             <Table.Td data-label="Created" className="tabular">{counts.created}</Table.Td>
                             <Table.Td data-label="Updated" className="tabular">{counts.updated}</Table.Td>
                             <Table.Td data-label="Deleted" className="tabular">{counts.deleted}</Table.Td>
@@ -623,23 +610,11 @@ export function BackupScreen({ api, session, hostname, onRestored, onSessionLost
                         Restoring writes to the saved store without immediately applying network changes.
                         {includesIdentity ? ' Restoring users or credentials may sign out active sessions.' : ''}
                       </Text>
-                      {confirming ? (
-                        <Alert color="red" role="alert" title="Confirm backup restore">
-                          <Stack gap="xs">
-                            <Text size="sm">
-                              This overwrites the selected saved stores ({selectedStores.map((store) => backupStoreLabel[store]).join(', ')}) on this appliance.
-                            </Text>
-                            <Group>
-                              <Button color="red" loading={restoreBusy} onClick={() => void handleExecuteRestore()}>Confirm restore</Button>
-                              <Button variant="default" disabled={restoreBusy} onClick={() => setConfirming(false)}>Cancel</Button>
-                            </Group>
-                          </Stack>
-                        </Alert>
-                      ) : (
-                        <Group>
-                          <Button color="red" variant="light" onClick={() => setConfirming(true)}>Restore selected data…</Button>
-                        </Group>
-                      )}
+                      <Group>
+                        <Button color="red" variant="light" disabled={restoreFlowBusy} onClick={() => setConfirming(true)}>
+                          Restore selected data…
+                        </Button>
+                      </Group>
                     </>
                   )}
                 </Stack>
@@ -648,6 +623,25 @@ export function BackupScreen({ api, session, hostname, onRestored, onSessionLost
           </Stack>
         </Paper>
       )}
+
+      <Modal
+        opened={confirming && preview !== null}
+        onClose={() => { if (!restoreFlowBusy) setConfirming(false); }}
+        title="Confirm backup restore"
+        centered
+        closeButtonProps={{ 'aria-label': 'Close' }}
+      >
+        <Stack>
+          <Text size="sm">
+            This overwrites the selected saved stores ({selectedStores.map((store) => backupStores[store].label).join(', ')}) on this appliance.
+            {includesIdentity ? ' Restoring users or credentials may sign out active sessions.' : ''}
+          </Text>
+          <Group justify="flex-end">
+            <Button variant="default" disabled={restoreFlowBusy} onClick={() => setConfirming(false)}>Cancel</Button>
+            <Button color="red" loading={restoreBusy === 'restore'} disabled={restoreFlowBusy} onClick={() => void handleExecuteRestore()}>Confirm restore</Button>
+          </Group>
+        </Stack>
+      </Modal>
     </Stack>
   );
 }

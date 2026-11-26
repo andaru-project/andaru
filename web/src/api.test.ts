@@ -95,3 +95,38 @@ it('keeps input for the next read when a request fails to connect', async () => 
   await api.links();
   expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get('X-Andaru-Background')).toBeNull();
 });
+
+it('omits Content-Type for FormData restore uploads and sends X-Andaru-CSRF', async () => {
+  const fetchMock = fetchQueue(jsonResponse(200, { state: 'inspection', manifest: { backupId: 'abc', scopes: [] } }));
+  const api = new ApiClient('csrf-tok');
+  await api.inspectBackup(new Blob(['zip']), 'pass');
+
+  const init = fetchMock.mock.calls[0]?.[1];
+  const headers = new Headers(init?.headers);
+  expect(headers.get('X-Andaru-CSRF')).toBe('csrf-tok');
+  expect(headers.has('Content-Type')).toBe(false);
+  expect(init?.body).toBeInstanceOf(FormData);
+});
+
+it('handles createBackup binary streaming, 401 session clear, and mid-stream blob disconnect', async () => {
+  const connection = vi.fn();
+  const brokenResponse = new Response('partial', { status: 200, headers: { 'Content-Type': 'application/zip' } });
+  vi.spyOn(brokenResponse, 'blob').mockRejectedValue(new TypeError('stream aborted'));
+
+  const fetchMock = fetchQueue(
+    brokenResponse,
+    jsonResponse(401, { error: { code: 'SESSION_EXPIRED', message: 'Sign in again.' } }),
+    jsonResponse(200, { items: [] }),
+  );
+  const api = new ApiClient('csrf-tok', connection);
+
+  await expect(api.createBackup({ includeSecrets: false })).rejects.toMatchObject({ status: 0, code: 'DISCONNECTED' });
+  expect(connection).toHaveBeenLastCalledWith(false);
+  expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get('X-Andaru-CSRF')).toBe('csrf-tok');
+
+  await expect(api.createBackup({ includeSecrets: false })).rejects.toMatchObject({ status: 401, code: 'SESSION_EXPIRED' });
+  // 401 cleared the CSRF token.
+  await api.finishApply('1', 'rollback').catch(() => {});
+  expect(new Headers(fetchMock.mock.calls[2]?.[1]?.headers).has('X-Andaru-CSRF')).toBe(false);
+  vi.restoreAllMocks();
+});

@@ -166,9 +166,27 @@ export class ApiClient {
     this.csrfToken = '';
   }
 
-  private async request<T>(path: string, init: RequestInit = {}, csrf = false): Promise<T> {
+  private disconnectedError() {
+    this.onConnection?.(false);
+    return new ApiError(0, 'DISCONNECTED', 'Cannot reach the Andaru service. Check the connection and try again.');
+  }
+
+  private toApiError(response: Response, body: unknown): ApiError {
+    const envelope = body as ErrorEnvelope | undefined;
+    const code = envelope?.error?.code ?? `HTTP_${response.status}`;
+    const message = envelope?.error?.message ?? 'The server refused the request.';
+    if (response.status === 401) this.clearSession();
+    return new ApiError(response.status, code, message, envelope?.error?.details ?? [], envelope?.error?.findings ?? []);
+  }
+
+  private async send(
+    path: string,
+    init: RequestInit = {},
+    csrf = false,
+    accept = 'application/json',
+  ): Promise<{ response: Response; carried: boolean; callerSignal?: AbortSignal; signal?: AbortSignal; cleanup(): void }> {
     const headers = new Headers(init.headers);
-    headers.set('Accept', 'application/json');
+    headers.set('Accept', accept);
     if (init.body && !(init.body instanceof FormData)) headers.set('Content-Type', 'application/json');
     if (csrf && this.csrfToken) headers.set('X-Andaru-CSRF', this.csrfToken);
     // No caller passes a signal or names GET, so a request without a method is a read.
@@ -182,27 +200,28 @@ export class ApiClient {
     const callerSignal = init.signal ?? undefined;
     const timeoutSignal = read ? AbortSignal.timeout(readTimeoutMilliseconds) : undefined;
     const { signal, cleanup } = combineSignals(callerSignal, timeoutSignal);
-    const disconnected = () => {
-      this.onConnection?.(false);
-      return new ApiError(0, 'DISCONNECTED', 'Cannot reach the Andaru service. Check the connection and try again.');
-    };
     let response: Response;
+    try {
+      response = await fetch(path, { ...init, headers, signal, credentials: 'same-origin', cache: 'no-store' });
+    } catch (err) {
+      cleanup();
+      if (callerSignal?.aborted) {
+        input ||= carried;
+        throw err;
+      }
+      // Most likely the engine never received it, so the input waits for the next request. A read that timed out
+      // may have reached it, and restoring there would let one hung read keep the session alive.
+      if (!signal?.aborted) input ||= carried;
+      throw this.disconnectedError();
+    }
+    this.onConnection?.(true);
+    return { response, carried, callerSignal, signal, cleanup };
+  }
+
+  private async request<T>(path: string, init: RequestInit = {}, csrf = false): Promise<T> {
+    const { response, carried, callerSignal, signal, cleanup } = await this.send(path, init, csrf);
     let body: unknown;
     try {
-      try {
-        response = await fetch(path, { ...init, headers, signal, credentials: 'same-origin', cache: 'no-store' });
-      } catch (err) {
-        if (callerSignal?.aborted) {
-          input ||= carried;
-          throw err;
-        }
-        // Most likely the engine never received it, so the input waits for the next request. A read that timed out
-        // may have reached it, and restoring there would let one hung read keep the session alive.
-        if (!signal?.aborted) input ||= carried;
-        throw disconnected();
-      }
-
-      this.onConnection?.(true);
       if (response.status === 204) return undefined as T;
       try {
         body = await response.json();
@@ -212,19 +231,13 @@ export class ApiClient {
           throw err;
         }
         // The limit can also pass while the body arrives; that is no answer, not an empty one.
-        if (signal?.aborted) throw disconnected();
+        if (signal?.aborted) throw this.disconnectedError();
         body = undefined;
       }
     } finally {
       cleanup();
     }
-    if (!response.ok) {
-      const envelope = body as ErrorEnvelope | undefined;
-      const code = envelope?.error?.code ?? `HTTP_${response.status}`;
-      const message = envelope?.error?.message ?? 'The server refused the request.';
-      if (response.status === 401) this.clearSession();
-      throw new ApiError(response.status, code, message, envelope?.error?.details ?? [], envelope?.error?.findings ?? []);
-    }
+    if (!response.ok) throw this.toApiError(response, body);
     return body as T;
   }
 
@@ -649,64 +662,54 @@ export class ApiClient {
   }
 
   async createBackup(options: BackupCreateOptions): Promise<BackupDownload> {
-    const headers = new Headers({
-      Accept: 'application/zip, application/octet-stream, application/json',
-      'Content-Type': 'application/json',
-    });
-    if (this.csrfToken) headers.set('X-Andaru-CSRF', this.csrfToken);
-    const carried = input;
-    input = false;
-    let response: Response;
+    const { response, cleanup } = await this.send(
+      '/api/v1/backups',
+      { method: 'POST', body: JSON.stringify(options) },
+      true,
+      'application/zip, application/octet-stream, application/json',
+    );
     try {
-      response = await fetch('/api/v1/backups', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(options),
-        credentials: 'same-origin',
-        cache: 'no-store',
-      });
-    } catch {
-      input ||= carried;
-      this.onConnection?.(false);
-      throw new ApiError(0, 'DISCONNECTED', 'Cannot reach the Andaru service. Check the connection and try again.');
-    }
-    this.onConnection?.(true);
-    if (!response.ok) {
-      let body: unknown;
-      try {
-        body = await response.json();
-      } catch {
-        body = undefined;
+      if (!response.ok) {
+        let body: unknown;
+        try {
+          body = await response.json();
+        } catch {
+          body = undefined;
+        }
+        throw this.toApiError(response, body);
       }
-      const envelope = body as ErrorEnvelope | undefined;
-      const code = envelope?.error?.code ?? `HTTP_${response.status}`;
-      const message = envelope?.error?.message ?? 'The server refused the request.';
-      if (response.status === 401) this.clearSession();
-      throw new ApiError(response.status, code, message, envelope?.error?.details ?? [], envelope?.error?.findings ?? []);
+      let blob: Blob;
+      try {
+        blob = await response.blob();
+      } catch {
+        throw this.disconnectedError();
+      }
+      const contentType = response.headers.get('Content-Type') ?? 'application/octet-stream';
+      return {
+        blob,
+        encrypted: contentType.toLowerCase().startsWith('application/octet-stream'),
+        savedVersion: response.headers.get('Andaru-Saved-Version') ?? '',
+        identityRevision: response.headers.get('Andaru-Identity-Revision') ?? '',
+        capturedAt: response.headers.get('Andaru-Captured-At') ?? '',
+      };
+    } finally {
+      cleanup();
     }
-    const contentType = response.headers.get('Content-Type') ?? 'application/octet-stream';
-    return {
-      blob: await response.blob(),
-      contentType,
-      encrypted: contentType.toLowerCase().startsWith('application/octet-stream'),
-      savedVersion: response.headers.get('Andaru-Saved-Version') ?? '',
-      identityRevision: response.headers.get('Andaru-Identity-Revision') ?? '',
-      capturedAt: response.headers.get('Andaru-Captured-At') ?? '',
-    };
   }
 
-  inspectBackup(archive: Blob, passphrase?: string) {
-    const body = new FormData();
-    body.append('archive', archive);
-    body.append('options', JSON.stringify(passphrase ? { passphrase } : {}));
-    return this.request<BackupInspectionResponse>('/api/v1/restores/preview', { method: 'POST', body }, true);
-  }
-
-  previewRestore(archive: Blob, options: { passphrase?: string; stores: BackupStore[] }) {
+  private postRestoreForm<T>(path: string, archive: Blob, options: Record<string, unknown>) {
     const body = new FormData();
     body.append('archive', archive);
     body.append('options', JSON.stringify(options));
-    return this.request<RestorePreviewResponse>('/api/v1/restores/preview', { method: 'POST', body }, true);
+    return this.request<T>(path, { method: 'POST', body }, true);
+  }
+
+  inspectBackup(archive: Blob, passphrase?: string) {
+    return this.postRestoreForm<BackupInspectionResponse>('/api/v1/restores/preview', archive, passphrase ? { passphrase } : {});
+  }
+
+  previewRestore(archive: Blob, options: { passphrase?: string; stores: BackupStore[] }) {
+    return this.postRestoreForm<RestorePreviewResponse>('/api/v1/restores/preview', archive, options);
   }
 
   executeRestore(
@@ -719,9 +722,6 @@ export class ApiClient {
       expectedIdentityRevision?: number;
     },
   ) {
-    const body = new FormData();
-    body.append('archive', archive);
-    body.append('options', JSON.stringify(options));
-    return this.request<RestoreSavedResponse>('/api/v1/restores', { method: 'POST', body }, true);
+    return this.postRestoreForm<RestoreSavedResponse>('/api/v1/restores', archive, options);
   }
 }
