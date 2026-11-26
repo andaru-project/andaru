@@ -7,8 +7,11 @@ import {
   channelSecretsOf,
   existingChannelSecretsOf,
   nextChannelSecretName,
+  parseEmailAddress,
   sharedSecretHolders,
   validateChannelDraft,
+  validateEmailHost,
+  validateEmailPort,
   validateNtfyServer,
   validateNtfyTopic,
   validateTelegramChatId,
@@ -284,20 +287,17 @@ describe('notificationChannels', () => {
       chatId: '-1001',
     });
 
-    // Unknown future kind (e.g. email): secrets collected recursively, non-SecretView objects preserved intact,
+    // Unknown future kind (e.g. pagerduty): secrets collected recursively, non-SecretView objects preserved intact,
     // and prototype-property kind names never read Object.prototype.
-    const futureEmail: NotificationChannel = {
-      id: 'ntf_email',
-      name: 'SMTP Ops',
+    const futurePagerDuty: NotificationChannel = {
+      id: 'ntf_pd',
+      name: 'PD Ops',
       enabled: true,
-      kind: 'email',
+      kind: 'pagerduty',
       filter: { minSeverity: 'critical' },
-      email: {
-        host: 'mail.example',
-        port: 587,
-        from: 'andaru@example.com',
-        to: ['ops@example.com'],
-        password: { secret: 'SHARED_SMTP_PASS', isSet: true, version: '4', updatedAt: '2026-11-26T00:00:00Z' },
+      pagerduty: {
+        region: 'us',
+        routingKey: { secret: 'SHARED_PD_KEY', isSet: true, version: '4', updatedAt: '2026-11-26T00:00:00Z' },
         backupAuth: { secret: 'BACKUP_PASS', isSet: false, version: '0', unresolved: true },
         metadata: { secret: 'not-a-secret-view', version: '1', extra: 'keep-me' },
       },
@@ -307,35 +307,252 @@ describe('notificationChannels', () => {
       name: 'Other',
       enabled: true,
       kind: 'ntfy',
-      ntfy: { server: 'https://ntfy.sh', topic: 'x', token: { secret: 'SHARED_SMTP_PASS', isSet: true, version: '4' } },
+      ntfy: { server: 'https://ntfy.sh', topic: 'x', token: { secret: 'SHARED_PD_KEY', isSet: true, version: '4' } },
     };
-    expect(channelSecretsOf(futureEmail).map((e) => e.view.secret)).toEqual(['SHARED_SMTP_PASS', 'BACKUP_PASS']);
-    expect(existingChannelSecretsOf([futureEmail, otherSharing])).toEqual(['SHARED_SMTP_PASS', 'BACKUP_PASS']);
-    expect(sharedSecretHolders('SHARED_SMTP_PASS', otherSharing.id, [futureEmail, otherSharing])).toEqual(['SMTP Ops']);
+    expect(channelSecretsOf(futurePagerDuty).map((e) => e.view.secret)).toEqual(['SHARED_PD_KEY', 'BACKUP_PASS']);
+    expect(existingChannelSecretsOf([futurePagerDuty, otherSharing])).toEqual(['SHARED_PD_KEY', 'BACKUP_PASS']);
+    expect(sharedSecretHolders('SHARED_PD_KEY', otherSharing.id, [futurePagerDuty, otherSharing])).toEqual(['PD Ops']);
 
-    const disabledEmail = buildChannelWrite({ ...channelDraftOf(futureEmail), enabled: false }, futureEmail);
-    expect(disabledEmail).toEqual({
-      name: 'SMTP Ops',
+    const disabledFuture = buildChannelWrite({ ...channelDraftOf(futurePagerDuty), enabled: false }, futurePagerDuty);
+    expect(disabledFuture).toEqual({
+      name: 'PD Ops',
       enabled: false,
-      kind: 'email',
+      kind: 'pagerduty',
       filter: { minSeverity: 'critical' },
-      email: {
-        host: 'mail.example',
-        port: 587,
-        from: 'andaru@example.com',
-        to: ['ops@example.com'],
-        password: { secret: 'SHARED_SMTP_PASS' },
+      pagerduty: {
+        region: 'us',
+        routingKey: { secret: 'SHARED_PD_KEY' },
         backupAuth: { secret: 'BACKUP_PASS', unresolved: true },
         metadata: { secret: 'not-a-secret-view', version: '1', extra: 'keep-me' },
       },
     });
-    expect('webhook' in disabledEmail).toBe(false);
+    expect('webhook' in disabledFuture).toBe(false);
 
     // Hostile prototype-key kind name must not read Object.prototype properties.
     const protoChannel: NotificationChannel = { id: 'ntf_proto', name: 'Proto', enabled: true, kind: 'toString' };
     expect(channelSecretsOf(protoChannel)).toEqual([]);
     const protoWrite = buildChannelWrite(channelDraftOf(protoChannel), protoChannel);
     expect(Object.hasOwn(protoWrite, 'toString')).toBe(false);
+  });
+
+  it('validates and builds email (SMTP) channels including auth pairing, hosts, ports, and recipients', () => {
+    expect(validateEmailHost('smtp.example.com')).toBeUndefined();
+    expect(validateEmailHost('localhost')).toBeUndefined();
+    expect(validateEmailHost('192.0.2.10')).toBeUndefined();
+    expect(validateEmailHost('2001:db8::1')).toBeUndefined();
+    expect(validateEmailHost('::ffff:192.0.2.1')).toBeUndefined();
+    expect(validateEmailHost('::1')).toBeUndefined();
+    expect(validateEmailHost('')).toMatch(/Enter an SMTP host/);
+    expect(validateEmailHost('smtp.example.com.')).toMatch(/host name or IP/i);
+    expect(validateEmailHost('12345')).toMatch(/host name or IP/i);
+    expect(validateEmailHost('192.168.1.300')).toMatch(/host name or IP/i);
+    expect(validateEmailHost('01.2.3.4')).toMatch(/host name or IP/i);
+    expect(validateEmailHost('https://smtp.example.com')).toMatch(/no scheme, port, or path/i);
+    expect(validateEmailHost('smtp.example.com:465')).toMatch(/no scheme, port, or path/i);
+    expect(validateEmailHost('smtp.example.com/path')).toMatch(/no scheme, port, or path/i);
+    expect(validateEmailHost('fe80::1%eth0')).toMatch(/host name or IP/i);
+    expect(validateEmailHost('[::1]')).toMatch(/host name or IP/i);
+    expect(validateEmailHost(`${'a.'.repeat(127)}a`)).toMatch(/253 characters/);
+
+    expect(validateEmailPort('465')).toBeUndefined();
+    expect(validateEmailPort('587')).toBeUndefined();
+    expect(validateEmailPort('0')).toMatch(/1 to 65535/);
+    expect(validateEmailPort('65536')).toMatch(/1 to 65535/);
+    expect(validateEmailPort('100000')).toMatch(/1 to 65535/);
+    expect(validateEmailPort('465.5')).toMatch(/1 to 65535/);
+
+    expect(parseEmailAddress('ops@example.com')).toEqual({ address: 'ops@example.com' });
+    expect(parseEmailAddress('Andaru <Alerts@Example.com>')).toEqual({ address: 'alerts@example.com' });
+    expect(parseEmailAddress('"Doe, Jane" <jane@example.com>')).toEqual({ address: 'jane@example.com' });
+    expect(parseEmailAddress('"Ops <1>" <ops@example.com>')).toEqual({ address: 'ops@example.com' });
+    expect(parseEmailAddress('Ops (On call) <ops@example.com>')).toEqual({ address: 'ops@example.com' });
+    expect(parseEmailAddress('ops@example.com (Ops)')).toEqual({ address: 'ops@example.com' });
+    expect(parseEmailAddress('Andaru <alerts@example.com> (Primary)')).toEqual({ address: 'alerts@example.com' });
+    expect('error' in parseEmailAddress('Ops (unclosed <ops@example.com>')).toBe(true);
+    expect('error' in parseEmailAddress('"a b"@example.com')).toBe(true);
+    expect('error' in parseEmailAddress('a@b@example.com')).toBe(true);
+    expect('error' in parseEmailAddress('a@b.com, Ops <c@d.com>')).toBe(true);
+    expect('error' in parseEmailAddress('Bad, Name <a@b.com>')).toBe(true);
+    expect('error' in parseEmailAddress('Foo@Bar <a@b.com>')).toBe(true);
+    expect('error' in parseEmailAddress('"Unclosed <a@b.com>')).toBe(true);
+    expect('error' in parseEmailAddress('Andaru < a@b.com >')).toBe(true);
+    expect('error' in parseEmailAddress('.@.')).toBe(true);
+    expect('error' in parseEmailAddress('a..b@example.com')).toBe(true);
+    expect('error' in parseEmailAddress('a@.example.com')).toBe(true);
+    expect('error' in parseEmailAddress('a@example.com.')).toBe(true);
+    expect('error' in parseEmailAddress('ops@example.com\r\nBcc: evil@example.com')).toBe(true);
+    expect(parseEmailAddress(`${'A'.repeat(64)} <ops@example.com>`)).toEqual({ address: 'ops@example.com' });
+    expect(parseEmailAddress(`"${'A'.repeat(64)}" <ops@example.com>`)).toEqual({ address: 'ops@example.com' });
+    expect('error' in parseEmailAddress(`${'A'.repeat(65)} <ops@example.com>`)).toBe(true);
+    expect('error' in parseEmailAddress(`${'é'.repeat(33)} <ops@example.com>`)).toBe(true);
+    expect(parseEmailAddress(`ops@example.com (${'A'.repeat(64)})`)).toEqual({ address: 'ops@example.com' });
+    expect('error' in parseEmailAddress(`ops@example.com (${'A'.repeat(65)})`)).toBe(true);
+    expect('error' in parseEmailAddress(`ops@example.com (${'é'.repeat(33)})`)).toBe(true);
+    expect('error' in parseEmailAddress('(Lead) ops@example.com')).toBe(true);
+    // RFC 2047 encoded display names are measured after decoding (not by encoded token length).
+    const rfc2047Ok = `=?UTF-8?Q?${'=C3=A9'.repeat(10)}?=`;
+    const rfc2047TooLong = `=?UTF-8?Q?${'=C3=A9'.repeat(33)}?=`;
+    expect(parseEmailAddress(`${rfc2047Ok} <ops@example.com>`)).toEqual({ address: 'ops@example.com' });
+    expect(parseEmailAddress(`ops@example.com (${rfc2047Ok})`)).toEqual({ address: 'ops@example.com' });
+    expect(parseEmailAddress('"Doe," Jane <jane@example.com>')).toEqual({ address: 'jane@example.com' });
+    expect(parseEmailAddress('"Ops" "Team" <ops@example.com>')).toEqual({ address: 'ops@example.com' });
+    expect(parseEmailAddress('"Ops" =?UTF-8?Q?=C3=A9?= <ops@example.com>')).toEqual({ address: 'ops@example.com' });
+    expect('error' in parseEmailAddress(`${rfc2047TooLong} <ops@example.com>`)).toBe(true);
+    expect('error' in parseEmailAddress(`"${rfc2047Ok}" <ops@example.com>`)).toBe(true);
+    expect('error' in parseEmailAddress('=?UTF-8?Q?Hi=0D=0A?= <ops@example.com>')).toBe(true);
+
+    // Username without password, duplicate recipients (case-insensitive), empty/overflow recipients.
+    const badAuth = validateChannelDraft(
+      {
+        ...channelDraftOf(),
+        name: 'SMTP',
+        kind: 'email',
+        emailHost: 'smtp.example.com',
+        emailPort: '587',
+        emailSecurity: 'starttls',
+        emailUsername: 'alerts@example.com',
+        emailFrom: 'Andaru <alerts@example.com>',
+        emailTo: ['Ops <OPS@example.com>', 'ops@example.com'],
+      },
+      undefined,
+    );
+    expect(badAuth.get('emailPassword')).toMatch(/username requires a password/i);
+    expect(badAuth.get('emailTo')).toMatch(/unique/i);
+
+    const emptyAndOverflow = validateChannelDraft(
+      { ...channelDraftOf(), name: 'SMTP', kind: 'email', emailHost: 'smtp.example.com', emailPort: '465', emailFrom: 'a@b.com', emailTo: [] },
+      undefined,
+    );
+    expect(emptyAndOverflow.get('emailTo')).toMatch(/at least one recipient/i);
+    const tooMany = validateChannelDraft(
+      {
+        ...channelDraftOf(),
+        name: 'SMTP',
+        kind: 'email',
+        emailHost: 'smtp.example.com',
+        emailPort: '465',
+        emailFrom: 'a@b.com',
+        emailTo: Array.from({ length: 21 }, (_, i) => `u${i}@example.com`),
+      },
+      undefined,
+    );
+    expect(tooMany.get('emailTo')).toMatch(/At most 20/);
+
+    const passwordOnly = validateChannelDraft(
+      {
+        ...channelDraftOf(),
+        name: 'SMTP',
+        kind: 'email',
+        emailHost: 'smtp.example.com',
+        emailPort: '465',
+        emailPassword: 'secret',
+        emailFrom: 'alerts@example.com',
+        emailTo: ['ops@example.com'],
+      },
+      undefined,
+    );
+    expect(passwordOnly.get('emailUsername')).toMatch(/password requires a username/i);
+
+    // Unauthenticated build omits username and password.
+    const unauthWrite = buildChannelWrite(
+      {
+        ...channelDraftOf(),
+        name: 'SMTP Relay',
+        kind: 'email',
+        emailHost: 'relay.internal',
+        emailPort: '587',
+        emailSecurity: 'starttls',
+        emailFrom: 'Andaru <alerts@example.com>',
+        emailTo: ['ops@example.com', 'oncall@example.com'],
+      },
+      undefined,
+    );
+    expect(unauthWrite).toEqual({
+      name: 'SMTP Relay',
+      enabled: true,
+      kind: 'email',
+      filter: { minSeverity: 'info' },
+      email: {
+        host: 'relay.internal',
+        port: 587,
+        security: 'starttls',
+        from: 'Andaru <alerts@example.com>',
+        to: ['ops@example.com', 'oncall@example.com'],
+      },
+    });
+
+    // Authenticated build preserves leading/trailing whitespace in SMTP username and password and allocates fresh PASSWORD secret.
+    const authWrite = buildChannelWrite(
+      {
+        ...channelDraftOf(),
+        name: 'SMTP Auth',
+        kind: 'email',
+        emailHost: 'smtp.example.com',
+        emailPort: '465',
+        emailSecurity: 'tls',
+        emailUsername: ' alerts@example.com ',
+        emailPassword: ' hunter2 ',
+        emailFrom: 'Andaru <alerts@example.com>',
+        emailTo: ['ops@example.com'],
+      },
+      undefined,
+    );
+    expect(authWrite.email).toEqual({
+      host: 'smtp.example.com',
+      port: 465,
+      security: 'tls',
+      username: ' alerts@example.com ',
+      password: { secret: 'NOTIFY_SMTP_AUTH_PASSWORD', set: ' hunter2 ', expectedVersion: '0' },
+      from: 'Andaru <alerts@example.com>',
+      to: ['ops@example.com'],
+    });
+
+    const savedEmail: NotificationChannel = {
+      id: 'ntf_mail',
+      name: 'SMTP Auth',
+      enabled: true,
+      kind: 'email',
+      email: {
+        host: 'smtp.example.com',
+        port: 465,
+        security: 'tls',
+        username: 'alerts@example.com',
+        password: { secret: 'SMTP_PW', isSet: false, version: '0', unresolved: true },
+        from: 'Andaru <alerts@example.com>',
+        to: ['ops@example.com'],
+      },
+    };
+    expect(channelSecretsOf(savedEmail)).toEqual([
+      { label: 'Password', view: { secret: 'SMTP_PW', isSet: false, version: '0', unresolved: true }, optional: true },
+    ]);
+    // Clearing username without checking removeEmailPassword flags username with clear guidance.
+    const clearedUserOnly = validateChannelDraft({ ...channelDraftOf(savedEmail), emailUsername: '' }, savedEmail);
+    expect(clearedUserOnly.get('emailUsername')).toMatch(/Remove password/i);
+    // Checking removeEmailPassword while username is still set flags the focusable emailUsername field, not disabled password.
+    const removedPwOnly = validateChannelDraft({ ...channelDraftOf(savedEmail), removeEmailPassword: true }, savedEmail);
+    expect(removedPwOnly.get('emailUsername')).toMatch(/Clear the username/i);
+    expect(removedPwOnly.has('emailPassword')).toBe(false);
+    // Keeping existing unresolved password echoes unresolved: true; rotating allocates fresh expectedVersion '0'.
+    expect(buildChannelWrite({ ...channelDraftOf(savedEmail), enabled: false }, savedEmail).email?.password).toEqual({
+      secret: 'SMTP_PW',
+      unresolved: true,
+    });
+    expect(buildChannelWrite({ ...channelDraftOf(savedEmail), emailPassword: 'new-pw' }, savedEmail).email?.password).toEqual({
+      secret: 'NOTIFY_SMTP_AUTH_PASSWORD',
+      set: 'new-pw',
+      expectedVersion: '0',
+    });
+    // Switching from email to webhook drops email sub-object.
+    const switchedToWebhook = buildChannelWrite({ ...channelDraftOf(savedEmail), kind: 'webhook', webhookUrl: 'https://hooks.example/x' }, savedEmail);
+    expect('email' in switchedToWebhook).toBe(false);
+    expect(switchedToWebhook.webhook?.url.set).toBe('https://hooks.example/x');
+    // Clearing username AND checking removeEmailPassword strips both credentials.
+    const strippedAuth = buildChannelWrite(
+      { ...channelDraftOf(savedEmail), emailUsername: '', removeEmailPassword: true },
+      savedEmail,
+    );
+    expect(strippedAuth.email?.username).toBeUndefined();
+    expect(strippedAuth.email?.password).toBeUndefined();
   });
 
   it('maps 422 validation pointer paths (direct and collection-prefixed) to form fields', () => {
@@ -351,6 +568,13 @@ describe('notificationChannels', () => {
       { path: '/pushover/user', message: 'Bad user key.' },
       { path: '/telegram/token/secret', message: 'Bad bot token.' },
       { path: '/notifications/channels/3/telegram/chatId', message: 'Bad chat id.' },
+      { path: '/email/host', message: 'Bad host.' },
+      { path: '/email/port', message: 'Bad port.' },
+      { path: '/email/security', message: 'Bad security.' },
+      { path: '/email/username', message: 'Bad user.' },
+      { path: '/notifications/channels/4/email/password/set', message: 'Bad pass.' },
+      { path: '/email/from', message: 'Bad from.' },
+      { path: '/notifications/channels/4/email/to/0', message: 'Bad recipient.' },
     ]);
     expect(channelFieldErrors(err)).toEqual(new Map([
       ['name', 'Name already exists in this collection.'],
@@ -364,6 +588,13 @@ describe('notificationChannels', () => {
       ['pushoverUser', 'Bad user key.'],
       ['telegramToken', 'Bad bot token.'],
       ['telegramChatId', 'Bad chat id.'],
+      ['emailHost', 'Bad host.'],
+      ['emailPort', 'Bad port.'],
+      ['emailSecurity', 'Bad security.'],
+      ['emailUsername', 'Bad user.'],
+      ['emailPassword', 'Bad pass.'],
+      ['emailFrom', 'Bad from.'],
+      ['emailTo', 'Bad recipient.'],
     ]));
   });
 });

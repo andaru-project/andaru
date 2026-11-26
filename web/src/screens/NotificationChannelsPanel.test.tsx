@@ -456,7 +456,7 @@ describe('NotificationChannelsPanel', () => {
     await waitFor(() => expect(onSessionLost).toHaveBeenCalledTimes(1));
   });
 
-  it('creates ntfy and Telegram channels and renders reverse-proxy targets', async () => {
+  it('creates an ntfy channel and renders reverse-proxy targets', async () => {
     const user = userEvent.setup();
     const postPayloads: unknown[] = [];
 
@@ -482,21 +482,23 @@ describe('NotificationChannelsPanel', () => {
       },
     });
 
+    const pasteInto = async (el: HTMLElement, text: string) => { await user.click(el); await user.paste(text); };
+
     render(<NotificationChannelsPanel api={new ApiClient('csrf')} canManage onSessionLost={vi.fn()} />);
     expect(await screen.findByText('https://ntfy.example/proxy/andaru-alerts')).toBeInTheDocument();
     expect(screen.getByText('None')).toBeInTheDocument();
 
     // Create an ntfy channel with a reverse-proxy path and optional token.
     await user.click(screen.getByRole('button', { name: 'Add channel' }));
-    let dialog = await screen.findByRole('dialog', { name: 'Add notification channel' });
+    const dialog = await screen.findByRole('dialog', { name: 'Add notification channel' });
     await user.click(within(dialog).getByLabelText(/^Channel kind/, { selector: 'input' }));
     await user.click(await screen.findByRole('option', { name: 'ntfy' }));
-    await user.type(within(dialog).getByLabelText(/^Name/, { selector: 'input' }), 'ops-ntfy-2');
+    await pasteInto(within(dialog).getByLabelText(/^Name/, { selector: 'input' }), 'ops-ntfy-2');
     const serverInput = within(dialog).getByLabelText(/^Server URL/, { selector: 'input' });
     await user.clear(serverInput);
-    await user.type(serverInput, 'https://ntfy.example/subpath');
-    await user.type(within(dialog).getByLabelText(/^Topic/, { selector: 'input' }), 'alerts_1');
-    await user.type(within(dialog).getByLabelText(/^Access token/, { selector: 'input' }), 'tk_secret');
+    await pasteInto(serverInput, 'https://ntfy.example/subpath');
+    await pasteInto(within(dialog).getByLabelText(/^Topic/, { selector: 'input' }), 'alerts_1');
+    await pasteInto(within(dialog).getByLabelText(/^Access token/, { selector: 'input' }), 'tk_secret');
     await user.click(within(dialog).getByRole('button', { name: 'Add channel' }));
     await waitFor(() => expect(postPayloads).toHaveLength(1));
     expect(postPayloads[0]).toEqual({
@@ -510,18 +512,34 @@ describe('NotificationChannelsPanel', () => {
         token: { secret: 'NOTIFY_OPS_NTFY_2_TOKEN', set: 'tk_secret', expectedVersion: '0' },
       },
     });
+  });
 
-    // Create a Telegram channel via the kind selector.
-    await user.click(screen.getByRole('button', { name: 'Add channel' }));
-    dialog = await screen.findByRole('dialog', { name: 'Add notification channel' });
+  it('creates a Telegram channel via the kind selector', async () => {
+    const user = userEvent.setup();
+    let postPayload: unknown;
+
+    fetchRoutes({
+      'GET /api/v1/config/notifications/channels': () => jsonResponse(200, { state: 'saved', savedVersion: '10', items: [] }),
+      'GET /api/v1/config': () => jsonResponse(200, { state: 'saved', savedVersion: '10', value: { links: [], segments: [], zones: [] } }),
+      'POST /api/v1/config/notifications/channels': (init) => {
+        postPayload = JSON.parse(String(init?.body ?? '{}'));
+        return jsonResponse(201, { state: 'saved', savedVersion: '11', version: '11', value: { id: 'ntf_tg', ...(postPayload as object) } });
+      },
+    });
+
+    const pasteInto = async (el: HTMLElement, text: string) => { await user.click(el); await user.paste(text); };
+
+    render(<NotificationChannelsPanel api={new ApiClient('csrf')} canManage onSessionLost={vi.fn()} />);
+    await user.click(await screen.findByRole('button', { name: 'Add channel' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add notification channel' });
     await user.click(within(dialog).getByLabelText(/^Channel kind/, { selector: 'input' }));
     await user.click(await screen.findByRole('option', { name: 'Telegram' }));
-    await user.type(within(dialog).getByLabelText(/^Name/, { selector: 'input' }), 'ops-tg');
-    await user.type(within(dialog).getByLabelText(/^Bot token/, { selector: 'input' }), '123456:BOT_SECRET');
-    await user.type(within(dialog).getByLabelText(/^Chat ID/, { selector: 'input' }), '-1001234567890');
+    await pasteInto(within(dialog).getByLabelText(/^Name/, { selector: 'input' }), 'ops-tg');
+    await pasteInto(within(dialog).getByLabelText(/^Bot token/, { selector: 'input' }), '123456:BOT_SECRET');
+    await pasteInto(within(dialog).getByLabelText(/^Chat ID/, { selector: 'input' }), '-1001234567890');
     await user.click(within(dialog).getByRole('button', { name: 'Add channel' }));
-    await waitFor(() => expect(postPayloads).toHaveLength(2));
-    expect(postPayloads[1]).toEqual({
+    await waitFor(() => expect(postPayload).toBeDefined());
+    expect(postPayload).toEqual({
       name: 'ops-tg',
       enabled: true,
       kind: 'telegram',
@@ -538,39 +556,38 @@ describe('NotificationChannelsPanel', () => {
     let postPayload: unknown;
     let putPayload: unknown;
 
-    const futureEmailChannel: SavedObject<NotificationChannel> = {
+    const futurePagerDutyChannel: SavedObject<NotificationChannel> = {
       version: '7',
       value: {
-        id: 'ntf_email',
-        name: 'ops-email',
+        id: 'ntf_pd',
+        name: 'ops-pd',
         enabled: true,
-        kind: 'email',
+        kind: 'pagerduty',
         filter: { minSeverity: 'critical' },
-        email: {
-          host: 'smtp.example',
-          from: 'andaru@example.com',
-          password: { secret: 'SMTP_PASS', isSet: true, version: '7' },
+        pagerduty: {
+          region: 'us',
+          routingKey: { secret: 'PD_KEY', isSet: true, version: '7' },
         },
       },
     };
 
     fetchRoutes({
-      'GET /api/v1/config/notifications/channels': () => jsonResponse(200, { state: 'saved', savedVersion: '10', items: [futureEmailChannel] }),
-      'GET /api/v1/config/notifications/channels/ntf_email': () => jsonResponse(200, { state: 'saved', savedVersion: '10', ...futureEmailChannel }),
+      'GET /api/v1/config/notifications/channels': () => jsonResponse(200, { state: 'saved', savedVersion: '10', items: [futurePagerDutyChannel] }),
+      'GET /api/v1/config/notifications/channels/ntf_pd': () => jsonResponse(200, { state: 'saved', savedVersion: '10', ...futurePagerDutyChannel }),
       'GET /api/v1/config': () => jsonResponse(200, { state: 'saved', savedVersion: '10', value: { links: [], segments: [], zones: [] } }),
       'POST /api/v1/config/notifications/channels': (init) => {
         postPayload = JSON.parse(String(init?.body ?? '{}'));
         return jsonResponse(201, { state: 'saved', savedVersion: '11', version: '11', value: { id: 'ntf_po', ...(postPayload as object) } });
       },
-      'PUT /api/v1/config/notifications/channels/ntf_email': (init) => {
+      'PUT /api/v1/config/notifications/channels/ntf_pd': (init) => {
         putPayload = JSON.parse(String(init?.body ?? '{}'));
-        return jsonResponse(200, { state: 'saved', savedVersion: '12', version: '12', value: futureEmailChannel.value });
+        return jsonResponse(200, { state: 'saved', savedVersion: '12', version: '12', value: futurePagerDutyChannel.value });
       },
     });
 
     render(<NotificationChannelsPanel api={new ApiClient('csrf')} canManage onSessionLost={vi.fn()} />);
-    expect(await screen.findByText('email')).toBeInTheDocument();
-    expect(screen.getByText(/password:\s*set/i)).toBeInTheDocument();
+    expect(await screen.findByText('pagerduty')).toBeInTheDocument();
+    expect(screen.getByText(/routingKey:\s*set/i)).toBeInTheDocument();
 
     // Create a Pushover channel.
     await user.click(screen.getByRole('button', { name: 'Add channel' }));
@@ -593,23 +610,176 @@ describe('NotificationChannelsPanel', () => {
       },
     });
 
-    // Edit unknown future kind (email): kind selector disabled, read-only alert shown, disable echoes email sub-object intact.
-    await user.click(screen.getByRole('button', { name: 'Edit ops-email' }));
-    dialog = await screen.findByRole('dialog', { name: 'Edit channel: ops-email' });
+    // Edit unknown future kind (pagerduty): kind selector disabled, read-only alert shown, disable echoes sub-object intact.
+    await user.click(screen.getByRole('button', { name: 'Edit ops-pd' }));
+    dialog = await screen.findByRole('dialog', { name: 'Edit channel: ops-pd' });
     expect(within(dialog).getByText('Delivery settings are read-only')).toBeInTheDocument();
     expect(within(dialog).getByLabelText(/^Channel kind/, { selector: 'input' })).toBeDisabled();
     await user.click(within(dialog).getByRole('switch'));
     await user.click(within(dialog).getByRole('button', { name: 'Save channel' }));
     await waitFor(() => expect(putPayload).toBeDefined());
     expect(putPayload).toEqual({
-      name: 'ops-email',
+      name: 'ops-pd',
       enabled: false,
-      kind: 'email',
+      kind: 'pagerduty',
       filter: { minSeverity: 'critical' },
+      pagerduty: {
+        region: 'us',
+        routingKey: { secret: 'PD_KEY' },
+      },
+    });
+  });
+
+  it('creates an e-mail (SMTP) channel with STARTTLS/TLS port prefill and quoted-comma recipient support', async () => {
+    const user = userEvent.setup();
+    let postPayload: unknown;
+
+    fetchRoutes({
+      'GET /api/v1/config/notifications/channels': () => jsonResponse(200, { state: 'saved', savedVersion: '10', items: [] }),
+      'GET /api/v1/config': () => jsonResponse(200, { state: 'saved', savedVersion: '10', value: { links: [], segments: [], zones: [] } }),
+      'POST /api/v1/config/notifications/channels': (init) => {
+        postPayload = JSON.parse(String(init?.body ?? '{}'));
+        return jsonResponse(201, { state: 'saved', savedVersion: '11', version: '11', value: { id: 'ntf_mail2', ...(postPayload as object) } });
+      },
+    });
+
+    render(<NotificationChannelsPanel api={new ApiClient('csrf')} canManage onSessionLost={vi.fn()} />);
+    await screen.findByText('No notification channels');
+
+    // Switching Security prefills 465 <-> 587 and preserves custom ports.
+    await user.click(screen.getByRole('button', { name: 'Add channel' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add notification channel' });
+    await user.click(within(dialog).getByLabelText(/^Channel kind/, { selector: 'input' }));
+    await user.click(await screen.findByRole('option', { name: 'E-mail (SMTP)' }));
+    const portInput = within(dialog).getByLabelText(/^SMTP port/, { selector: 'input' });
+    expect(portInput).toHaveValue('465');
+    await user.click(within(dialog).getByLabelText(/^Security/, { selector: 'input' }));
+    await user.click(await screen.findByRole('option', { name: 'STARTTLS (port 587)' }));
+    expect(portInput).toHaveValue('587');
+    await user.click(within(dialog).getByLabelText(/^Security/, { selector: 'input' }));
+    await user.click(await screen.findByRole('option', { name: 'Implicit TLS (port 465)' }));
+    expect(portInput).toHaveValue('465');
+    await user.clear(portInput);
+    await user.click(portInput);
+    await user.paste('2525');
+    await user.click(within(dialog).getByLabelText(/^Security/, { selector: 'input' }));
+    await user.click(await screen.findByRole('option', { name: 'STARTTLS (port 587)' }));
+    expect(portInput).toHaveValue('2525');
+
+    const pasteInto = async (input: HTMLElement, text: string) => {
+      await user.click(input);
+      await user.paste(text);
+    };
+    const usernameInput = within(dialog).getByLabelText(/^SMTP username/, { selector: 'input' });
+    expect(usernameInput).toHaveAttribute('autocomplete', 'off');
+    await pasteInto(within(dialog).getByLabelText(/^Name/, { selector: 'input' }), 'ops-smtp');
+    await pasteInto(within(dialog).getByLabelText(/^SMTP host/, { selector: 'input' }), 'smtp.example.com');
+    await pasteInto(within(dialog).getByLabelText(/^From/, { selector: 'input' }), 'Andaru <alerts@example.com>');
+    // Quoted display name with comma stays a single recipient tag on paste (splitChars={[]}); Enter adds typed addresses.
+    const recipientsInput = within(dialog).getByLabelText(/^Recipients/, { selector: 'input' });
+    await pasteInto(recipientsInput, '"Doe, Jane" <jane@example.com>');
+    await user.type(recipientsInput, 'ops@example.com{Enter}');
+    await pasteInto(usernameInput, 'alerts@example.com');
+    await pasteInto(within(dialog).getByLabelText(/^SMTP password/, { selector: 'input' }), 'smtp-secret');
+    await user.click(within(dialog).getByRole('button', { name: 'Add channel' }));
+    await waitFor(() => expect(postPayload).toBeDefined());
+    expect(postPayload).toEqual({
+      name: 'ops-smtp',
+      enabled: true,
+      kind: 'email',
+      filter: { minSeverity: 'info' },
       email: {
-        host: 'smtp.example',
-        from: 'andaru@example.com',
-        password: { secret: 'SMTP_PASS' },
+        host: 'smtp.example.com',
+        port: 2525,
+        security: 'starttls',
+        username: 'alerts@example.com',
+        password: { secret: 'NOTIFY_OPS_SMTP_PASSWORD', set: 'smtp-secret', expectedVersion: '0' },
+        from: 'Andaru <alerts@example.com>',
+        to: ['"Doe, Jane" <jane@example.com>', 'ops@example.com'],
+      },
+    });
+  });
+
+  it('renders IPv6 SMTP targets, focuses SMTP username when removing password with username set, and removes credentials cleanly', async () => {
+    const user = userEvent.setup();
+    let putPayload: unknown;
+    let reject422Once = true;
+
+    const existingEmail: SavedObject<NotificationChannel> = {
+      version: '3',
+      value: {
+        id: 'ntf_mail',
+        name: 'ops-mail',
+        enabled: true,
+        kind: 'email',
+        filter: { minSeverity: 'warning' },
+        email: {
+          host: '2001:db8::1',
+          port: 465,
+          security: 'tls',
+          username: 'alerts@example.com',
+          password: { secret: 'SMTP_PASS', isSet: true, version: '3' },
+          from: 'Andaru <alerts@example.com>',
+          to: ['ops@example.com'],
+        },
+      },
+    };
+
+    fetchRoutes({
+      'GET /api/v1/config/notifications/channels': () => jsonResponse(200, { state: 'saved', savedVersion: '10', items: [existingEmail] }),
+      'GET /api/v1/config/notifications/channels/ntf_mail': () => jsonResponse(200, { state: 'saved', savedVersion: '10', ...existingEmail }),
+      'GET /api/v1/config': () => jsonResponse(200, { state: 'saved', savedVersion: '10', value: { links: [], segments: [], zones: [] } }),
+      'PUT /api/v1/config/notifications/channels/ntf_mail': (init) => {
+        if (reject422Once) {
+          reject422Once = false;
+          return jsonResponse(422, {
+            error: {
+              code: 'VALIDATION_FAILED',
+              message: 'Invalid.',
+              details: [{ path: '/email/to/0', message: 'Recipient rejected.' }],
+            },
+          });
+        }
+        putPayload = JSON.parse(String(init?.body ?? '{}'));
+        return jsonResponse(200, { state: 'saved', savedVersion: '12', version: '12', value: existingEmail.value });
+      },
+    });
+
+    render(<NotificationChannelsPanel api={new ApiClient('csrf')} canManage onSessionLost={vi.fn()} />);
+    expect(await screen.findByText('[2001:db8::1]:465')).toBeInTheDocument();
+    expect(screen.getByText(/Password:\s*set/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Edit ops-mail' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit channel: ops-mail' });
+
+    // Checking Remove password while username is still filled focuses SMTP username (enabled), not disabled password.
+    await user.click(within(dialog).getByLabelText('Remove password'));
+    expect(within(dialog).getByLabelText(/^SMTP password/, { selector: 'input' })).toBeDisabled();
+    await user.click(within(dialog).getByRole('button', { name: 'Save channel' }));
+    expect(await within(dialog).findByText(/Clear the username/i)).toBeInTheDocument();
+    const usernameInput = within(dialog).getByLabelText(/^SMTP username/, { selector: 'input' });
+    expect(usernameInput).toHaveAttribute('aria-invalid', 'true');
+    expect(usernameInput).toHaveFocus();
+
+    // Clear username, hit server 422 on /email/to/0 (verifies aria-invalid on TagsInput), then succeed.
+    await user.clear(usernameInput);
+    await user.click(within(dialog).getByRole('button', { name: 'Save channel' }));
+    expect(await within(dialog).findByText('Recipient rejected.')).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(/^Recipients/, { selector: 'input' })).toHaveAttribute('aria-invalid', 'true');
+
+    await user.click(within(dialog).getByRole('button', { name: 'Save channel' }));
+    await waitFor(() => expect(putPayload).toBeDefined());
+    expect(putPayload).toEqual({
+      name: 'ops-mail',
+      enabled: true,
+      kind: 'email',
+      filter: { minSeverity: 'warning' },
+      email: {
+        host: '2001:db8::1',
+        port: 465,
+        security: 'tls',
+        from: 'Andaru <alerts@example.com>',
+        to: ['ops@example.com'],
       },
     });
   });

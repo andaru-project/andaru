@@ -1,5 +1,6 @@
 import { fieldErrors } from './api';
 import type {
+  EmailChannelSecurity,
   KnownNotificationChannelKind,
   NotificationChannel,
   NotificationChannelKind,
@@ -28,6 +29,14 @@ export interface NotificationChannelDraft {
   pushoverUser: string;
   telegramToken: string;
   telegramChatId: string;
+  emailHost: string;
+  emailPort: string;
+  emailSecurity: EmailChannelSecurity;
+  emailUsername: string;
+  emailPassword: string;
+  removeEmailPassword: boolean;
+  emailFrom: string;
+  emailTo: string[];
 }
 
 export const knownNotificationSources = ['engine', 'apply', 'upgrade', 'disk', 'delivery', 'notifications'];
@@ -37,6 +46,7 @@ export const channelKindLabel: Record<KnownNotificationChannelKind, string> = {
   ntfy: 'ntfy',
   pushover: 'Pushover',
   telegram: 'Telegram',
+  email: 'E-mail',
 };
 
 export function isKnownChannelKind(kind: string): kind is KnownNotificationChannelKind {
@@ -114,7 +124,10 @@ export function channelSecretsOf(channel: NotificationChannel): ChannelSecretEnt
   if (channel.kind === 'telegram') {
     return channel.telegram?.token ? [{ label: 'Bot token', view: channel.telegram.token }] : [];
   }
-  // Forward-compatible recursive scan of unknown kind sub-objects (e.g. future email kind).
+  if (channel.kind === 'email') {
+    return channel.email?.password ? [{ label: 'Password', view: channel.email.password, optional: true }] : [];
+  }
+  // Forward-compatible recursive scan of unknown kind sub-objects.
   const out: ChannelSecretEntry[] = [];
   if (!topLevelChannelKeys.has(channel.kind) && !forbiddenObjectKeys.has(channel.kind) && Object.hasOwn(channel, channel.kind)) {
     collectUnknownSecrets(channel[channel.kind], '', out);
@@ -157,6 +170,14 @@ export function channelDraftOf(channel?: NotificationChannel): NotificationChann
     pushoverUser: '',
     telegramToken: '',
     telegramChatId: channel?.telegram?.chatId ?? '',
+    emailHost: channel?.email?.host ?? '',
+    emailPort: channel?.email ? String(channel.email.port) : '465',
+    emailSecurity: channel?.email?.security ?? 'tls',
+    emailUsername: channel?.email?.username ?? '',
+    emailPassword: '',
+    removeEmailPassword: false,
+    emailFrom: channel?.email?.from ?? '',
+    emailTo: [...(channel?.email?.to ?? [])],
   };
 }
 
@@ -179,7 +200,7 @@ export function existingChannelSecretsOf(channels: NotificationChannel[], snapsh
 // Allocate a collision-free core secret name matching ^[A-Za-z_][A-Za-z0-9_]{0,63}$.
 export function nextChannelSecretName(
   channelName: string,
-  suffix: 'URL' | 'AUTH' | 'TOKEN' | 'USER',
+  suffix: 'URL' | 'AUTH' | 'TOKEN' | 'USER' | 'PASSWORD',
   existingSecrets: Iterable<string> = [],
 ): string {
   const used = new Set(existingSecrets);
@@ -267,13 +288,297 @@ export function validateTelegramChatId(raw: string): string | undefined {
   return undefined;
 }
 
-function validateSecretValue(raw: string, articleLabel: string, fieldLabel: string, required: boolean): string | undefined {
+const emailHostCharLimit = 253;
+const emailUsernameCharLimit = 256;
+const emailAddressCharLimit = 512;
+const emailDisplayNameByteLimit = 64;
+const emailMaxRecipients = 20;
+const dnsHostnamePattern = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/i;
+const ipv4Pattern = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+const forbiddenEmailAddrChars = /[ <>"\\()[\],;:]/;
+const unquotedDisplaySpecials = /[()<>@,;:\\"[\]]/;
+
+function isValidIPv4(value: string): boolean {
+  const match = ipv4Pattern.exec(value);
+  if (!match) return false;
+  return match.slice(1).every((part) => (part === '0' || !part.startsWith('0')) && Number(part) <= 255);
+}
+
+function isValidIPv6(value: string): boolean {
+  if (!value.includes(':') || /[\s[\]%/?#@\\]/.test(value)) return false;
+  try {
+    new URL(`http://[${value}]`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function validateEmailHost(raw: string): string | undefined {
   const trimmed = raw.trim();
-  if (!trimmed) return required ? `Enter ${articleLabel}.` : undefined;
-  if (controlChars.test(trimmed)) {
+  if (!trimmed) return 'Enter an SMTP host.';
+  if (controlOrFormatChars.test(trimmed) || /\s/.test(trimmed)) {
+    return 'SMTP host cannot contain whitespace, control, or format characters.';
+  }
+  if (trimmed.length > emailHostCharLimit) {
+    return `SMTP host must be ${emailHostCharLimit} characters or fewer.`;
+  }
+  if (isValidIPv4(trimmed) || isValidIPv6(trimmed)) return undefined;
+  const labels = trimmed.split('.');
+  const lastLabel = labels[labels.length - 1];
+  if (dnsHostnamePattern.test(trimmed) && !/^\d+$/.test(lastLabel)) {
+    return undefined;
+  }
+  return 'Enter a host name or IP address, with no scheme, port, or path.';
+}
+
+export function validateEmailPort(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return 'Enter an SMTP port.';
+  if (!/^\d+$/.test(trimmed)) return 'Port must be a whole number from 1 to 65535.';
+  const port = Number(trimmed);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+    return 'Port must be a whole number from 1 to 65535.';
+  }
+  return undefined;
+}
+
+// Strip balanced RFC 5322 comments (...) outside quoted strings so valid addresses such as
+// "Ops (On call) <ops@example.com>" or "ops@example.com (Ops)" parse consistently with net/mail.ParseAddress.
+// Returns undefined if quotes or parentheses are unbalanced.
+function stripRfc5322Comments(input: string): { text: string; comments: Array<{ text: string; afterText: boolean }> } | undefined {
+  let out = '';
+  let inQuotes = false;
+  let commentDepth = 0;
+  let commentBuf = '';
+  let commentAfterText = false;
+  const comments: Array<{ text: string; afterText: boolean }> = [];
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i];
+    if (inQuotes) {
+      out += ch;
+      if (ch === '\\') {
+        if (i + 1 >= input.length) return undefined;
+        out += input[++i];
+      } else if (ch === '"') {
+        inQuotes = false;
+      }
+      continue;
+    }
+    if (commentDepth > 0) {
+      if (ch === '\\') {
+        if (i + 1 >= input.length) return undefined;
+        commentBuf += input[++i];
+      } else if (ch === '(') {
+        commentDepth += 1;
+        commentBuf += ch;
+      } else if (ch === ')') {
+        commentDepth -= 1;
+        if (commentDepth === 0) {
+          comments.push({ text: commentBuf.trim(), afterText: commentAfterText });
+          commentBuf = '';
+          out += ' ';
+        } else {
+          commentBuf += ch;
+        }
+      } else {
+        commentBuf += ch;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inQuotes = true;
+      out += ch;
+    } else if (ch === '(') {
+      commentDepth = 1;
+      commentBuf = '';
+      commentAfterText = out.trim().length > 0;
+    } else if (ch === ')') {
+      return undefined;
+    } else {
+      out += ch;
+    }
+  }
+  return inQuotes || commentDepth !== 0 ? undefined : { text: out.trim(), comments };
+}
+
+const rfc2047WordPattern = /=\?([A-Za-z0-9_-]+)\?([QqBb])\?([^?\s]*)\?=/g;
+
+function decodeRfc2047Word(charset: string, encoding: string, payload: string): string | undefined {
+  const cs = charset.toLowerCase();
+  let bytes: Uint8Array;
+  if (encoding.toLowerCase() === 'b') {
+    try {
+      const bin = atob(payload);
+      bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+    } catch {
+      return undefined;
+    }
+  } else {
+    const out: number[] = [];
+    for (let i = 0; i < payload.length; i += 1) {
+      const ch = payload[i];
+      if (ch === '_') {
+        out.push(0x20);
+      } else if (ch === '=' && /^[0-9A-Fa-f]{2}$/.test(payload.slice(i + 1, i + 3))) {
+        out.push(Number.parseInt(payload.slice(i + 1, i + 3), 16));
+        i += 2;
+      } else if (ch === '=') {
+        return undefined;
+      } else {
+        out.push(ch.charCodeAt(0));
+      }
+    }
+    bytes = new Uint8Array(out);
+  }
+  if (cs === 'utf-8' || cs === 'utf8' || cs === 'us-ascii') {
+    return new TextDecoder('utf-8').decode(bytes);
+  }
+  if (cs === 'iso-8859-1' || cs === 'latin1') {
+    return Array.from(bytes, (b) => String.fromCharCode(b)).join('');
+  }
+  return undefined;
+}
+
+function decodeRfc2047Words(input: string): string {
+  const collapsed = input.replace(/(\?=)\s+(?==\?[A-Za-z0-9_-]+\?[QqBb]\?[^?\s]*\?=)/g, '$1');
+  return collapsed.replace(rfc2047WordPattern, (full, charset: string, encoding: string, payload: string) => (
+    decodeRfc2047Word(charset, encoding, payload) ?? full
+  ));
+}
+
+function parseDisplayPhrase(raw: string): string | undefined {
+  const words: Array<{ text: string; encodedWord: boolean }> = [];
+  let i = 0;
+  while (i < raw.length) {
+    while (i < raw.length && /\s/.test(raw[i])) i += 1;
+    if (i >= raw.length) break;
+    if (raw[i] === '"') {
+      i += 1;
+      let buf = '';
+      let closed = false;
+      while (i < raw.length) {
+        const ch = raw[i++];
+        if (ch === '\\') {
+          if (i >= raw.length) return undefined;
+          buf += raw[i++];
+        } else if (ch === '"') {
+          closed = true;
+          break;
+        } else {
+          buf += ch;
+        }
+      }
+      if (!closed) return undefined;
+      words.push({ text: buf, encodedWord: false });
+    } else {
+      const start = i;
+      while (i < raw.length && !/\s/.test(raw[i]) && !unquotedDisplaySpecials.test(raw[i])) i += 1;
+      if (i === start) return undefined;
+      const token = raw.slice(start, i);
+      const isEncoded = /^=\?[A-Za-z0-9_-]+\?[QqBb]\?[^?\s]*\?=$/.test(token);
+      words.push({ text: isEncoded ? decodeRfc2047Words(token) : token, encodedWord: isEncoded });
+    }
+  }
+  let out = '';
+  for (let k = 0; k < words.length; k += 1) {
+    if (k > 0 && !(words[k - 1].encodedWord && words[k].encodedWord)) out += ' ';
+    out += words[k].text;
+  }
+  return out;
+}
+
+function validateDisplayName(decoded: string): string | undefined {
+  if (controlOrFormatChars.test(decoded)) {
+    return 'Control or format characters are not allowed.';
+  }
+  if (utf8ByteLength(decoded) > emailDisplayNameByteLimit) {
+    return `Display name must be ${emailDisplayNameByteLimit} bytes or fewer.`;
+  }
+  return undefined;
+}
+
+// Parse one RFC 5322 address ("ops@example.com", "Display Name <ops@example.com>", or with RFC 5322 comments)
+// suitable for SMTP MAIL FROM / RCPT TO (no quoted local part, no control/format chars, exactly one '@').
+export function parseEmailAddress(raw: string): { address: string } | { error: string } {
+  const trimmed = raw.trim();
+  if (!trimmed) return { error: 'Enter an e-mail address.' };
+  if (controlOrFormatChars.test(trimmed)) {
+    return { error: 'Control or format characters are not allowed.' };
+  }
+  if (trimmed.length < 3 || trimmed.length > emailAddressCharLimit) {
+    return { error: `E-mail address must be 3 to ${emailAddressCharLimit} characters.` };
+  }
+
+  const stripped = stripRfc5322Comments(trimmed);
+  if (stripped === undefined) {
+    return { error: 'Enter one e-mail address, such as Andaru <alerts@example.com>.' };
+  }
+  const uncommented = stripped.text;
+
+  let addr = uncommented;
+  if (uncommented.endsWith('>')) {
+    const lt = uncommented.lastIndexOf('<');
+    if (lt < 0) {
+      return { error: 'Enter one e-mail address, such as Andaru <alerts@example.com>.' };
+    }
+    const displayName = uncommented.slice(0, lt).trim();
+    if (displayName) {
+      const parsed = parseDisplayPhrase(displayName);
+      if (parsed === undefined) {
+        return { error: 'Quote display names containing special characters, or use a plain address.' };
+      }
+      const nameErr = validateDisplayName(parsed);
+      if (nameErr) return { error: nameErr };
+    }
+    addr = uncommented.slice(lt + 1, -1);
+  } else if (uncommented.includes('<') || uncommented.includes('>')) {
+    return { error: 'Enter one e-mail address, such as Andaru <alerts@example.com>.' };
+  } else if (stripped.comments.length > 0) {
+    if (stripped.comments.some((c) => !c.afterText)) {
+      return { error: 'Enter one e-mail address, such as Andaru <alerts@example.com>.' };
+    }
+    const nameErr = validateDisplayName(decodeRfc2047Words(stripped.comments[0].text));
+    if (nameErr) return { error: nameErr };
+  }
+
+  const at = addr.indexOf('@');
+  const local = at > 0 ? addr.slice(0, at) : '';
+  const domain = at > 0 ? addr.slice(at + 1) : '';
+  if (
+    !local
+    || !domain
+    || addr.indexOf('@', at + 1) !== -1
+    || forbiddenEmailAddrChars.test(addr)
+    || /\s/.test(addr)
+    || local.startsWith('.')
+    || local.endsWith('.')
+    || local.includes('..')
+    || domain.startsWith('.')
+    || domain.endsWith('.')
+    || domain.includes('..')
+  ) {
+    return { error: 'Enter one e-mail address without a quoted local part, such as ops@example.com.' };
+  }
+  return { address: addr.toLowerCase() };
+}
+
+const normalizeEmailRecipients = (raw: string[]) => raw.map((item) => item.trim()).filter(Boolean);
+
+function validateSecretValue(
+  raw: string,
+  articleLabel: string,
+  fieldLabel: string,
+  required: boolean,
+  preserveWhitespace = false,
+): string | undefined {
+  const value = preserveWhitespace ? raw : raw.trim();
+  if (!value) return required ? `Enter ${articleLabel}.` : undefined;
+  if (controlChars.test(value)) {
     return `${fieldLabel} cannot contain control characters or line breaks.`;
   }
-  if (utf8ByteLength(trimmed) > secretByteLimit) {
+  if (utf8ByteLength(value) > secretByteLimit) {
     return `${fieldLabel} must be ${secretByteLimit} bytes or fewer.`;
   }
   return undefined;
@@ -350,6 +655,71 @@ export function validateChannelDraft(
     if (tokErr) errors.set('telegramToken', tokErr);
     const chatErr = validateTelegramChatId(draft.telegramChatId);
     if (chatErr) errors.set('telegramChatId', chatErr);
+  } else if (draft.kind === 'email') {
+    const hostErr = validateEmailHost(draft.emailHost);
+    if (hostErr) errors.set('emailHost', hostErr);
+    const portErr = validateEmailPort(draft.emailPort);
+    if (portErr) errors.set('emailPort', portErr);
+
+    const username = draft.emailUsername;
+    if (username && controlOrFormatChars.test(username)) {
+      errors.set('emailUsername', 'Control or format characters are not allowed.');
+    } else if (username.length > emailUsernameCharLimit) {
+      errors.set('emailUsername', `Username must be ${emailUsernameCharLimit} characters or fewer.`);
+    }
+
+    const existingPassword = sameKind ? saved?.email?.password : undefined;
+    const hasNewPassword = !draft.removeEmailPassword && draft.emailPassword !== '';
+    const keepsExistingPassword = Boolean(existingPassword) && !draft.removeEmailPassword;
+    const willSendPassword = hasNewPassword || keepsExistingPassword;
+
+    if (!draft.removeEmailPassword) {
+      const pwErr = validateSecretValue(draft.emailPassword, 'a password', 'Password', false, true);
+      if (pwErr) errors.set('emailPassword', pwErr);
+    }
+
+    if (username && !willSendPassword) {
+      if (draft.removeEmailPassword) {
+        if (!errors.has('emailUsername')) {
+          errors.set('emailUsername', 'Clear the username, or uncheck "Remove password" to keep SMTP authentication.');
+        }
+      } else if (!errors.has('emailPassword')) {
+        errors.set('emailPassword', 'A username requires a password.');
+      }
+    } else if (!username && willSendPassword && !errors.has('emailUsername')) {
+      errors.set(
+        'emailUsername',
+        keepsExistingPassword && !hasNewPassword
+          ? 'Enter a username, or check "Remove password" to disable SMTP authentication.'
+          : 'A password requires a username.',
+      );
+    }
+
+    const parsedFrom = parseEmailAddress(draft.emailFrom);
+    if ('error' in parsedFrom) {
+      errors.set('emailFrom', parsedFrom.error);
+    }
+
+    const recipients = normalizeEmailRecipients(draft.emailTo);
+    if (recipients.length === 0) {
+      errors.set('emailTo', 'Enter at least one recipient e-mail address.');
+    } else if (recipients.length > emailMaxRecipients) {
+      errors.set('emailTo', `At most ${emailMaxRecipients} recipients can be configured.`);
+    } else {
+      const seen = new Set<string>();
+      for (const recipient of recipients) {
+        const parsed = parseEmailAddress(recipient);
+        if ('error' in parsed) {
+          errors.set('emailTo', parsed.error);
+          break;
+        }
+        if (seen.has(parsed.address)) {
+          errors.set('emailTo', 'Each recipient address must be unique.');
+          break;
+        }
+        seen.add(parsed.address);
+      }
+    }
   }
 
   return errors;
@@ -375,16 +745,17 @@ function writeOptionalSecret(
   rawValue: string,
   remove: boolean,
   channelName: string,
-  suffix: 'URL' | 'AUTH' | 'TOKEN' | 'USER',
+  suffix: 'URL' | 'AUTH' | 'TOKEN' | 'USER' | 'PASSWORD',
   existing: SecretView | undefined,
   used: Set<string>,
+  preserveWhitespace = false,
 ): SecretWrite | undefined {
   if (remove) return undefined;
-  const trimmed = rawValue.trim();
-  if (trimmed !== '') {
+  const value = preserveWhitespace ? rawValue : rawValue.trim();
+  if (value !== '') {
     const secret = nextChannelSecretName(channelName, suffix, used);
     used.add(secret);
-    return { secret, set: trimmed, expectedVersion: '0' };
+    return { secret, set: value, expectedVersion: '0' };
   }
   if (existing) {
     return { secret: existing.secret, ...(existing.unresolved ? { unresolved: true } : {}) };
@@ -481,6 +852,30 @@ export function buildChannelWrite(
       },
     };
   }
+  if (draft.kind === 'email') {
+    const username = draft.emailUsername;
+    const password = writeOptionalSecret(
+      draft.emailPassword,
+      draft.removeEmailPassword,
+      name,
+      'PASSWORD',
+      sameKind ? saved?.email?.password : undefined,
+      used,
+      true,
+    );
+    return {
+      ...base,
+      email: {
+        host: draft.emailHost.trim(),
+        port: Number(draft.emailPort.trim()),
+        security: draft.emailSecurity,
+        ...(username ? { username } : {}),
+        ...(password ? { password } : {}),
+        from: draft.emailFrom.trim(),
+        to: normalizeEmailRecipients(draft.emailTo),
+      },
+    };
+  }
 
   // Unknown future kind: preserve its own sub-object unchanged (stripping SecretView metadata).
   if (
@@ -513,6 +908,13 @@ export function channelFieldErrors(error: unknown): Map<string, string> {
     if (clean === '/pushover/user' || clean.startsWith('/pushover/user/')) return 'pushoverUser';
     if (clean === '/telegram/token' || clean.startsWith('/telegram/token/')) return 'telegramToken';
     if (clean === '/telegram/chatId') return 'telegramChatId';
+    if (clean === '/email/host') return 'emailHost';
+    if (clean === '/email/port') return 'emailPort';
+    if (clean === '/email/security') return 'emailSecurity';
+    if (clean === '/email/username') return 'emailUsername';
+    if (clean === '/email/password' || clean.startsWith('/email/password/')) return 'emailPassword';
+    if (clean === '/email/from') return 'emailFrom';
+    if (clean === '/email/to' || clean.startsWith('/email/to/')) return 'emailTo';
     return '';
   });
 }
