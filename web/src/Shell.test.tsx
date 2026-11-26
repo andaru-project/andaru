@@ -730,6 +730,23 @@ it('shows the 503 state in the header and on the Notifications page', async () =
   expect(alert).toHaveTextContent('Notifications are temporarily unavailable.');
 });
 
+it('lets a configuration.read-only account open /system/notifications to view channels without the header bell', async () => {
+  fetchRoutes({
+    '/api/v1/applies': unapplied,
+    '/api/v1/versions?': { state: 'saved', items: [] },
+    '/api/v1/config/notifications/channels': { state: 'saved', savedVersion: '10', items: [] },
+  });
+  render(
+    <MemoryRouter initialEntries={['/system/notifications']}>
+      <Shell api={new ApiClient('csrf')} session={session(['configuration.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} />
+    </MemoryRouter>,
+  );
+  expect(await screen.findByRole('heading', { name: 'Notifications' })).toBeInTheDocument();
+  expect(await screen.findByText('No notification channels')).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'Notifications' })).toBeInTheDocument();
+  expect(document.querySelector('.notification-button')).toBeNull();
+});
+
 it('shows System -> Backups only when the session has backup capabilities', async () => {
   fetchRoutes({});
   const first = render(

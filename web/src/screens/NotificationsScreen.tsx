@@ -1,4 +1,4 @@
-import { Alert, Anchor, Badge, Button, Group, Loader, Paper, Stack, Text, Title } from '@mantine/core';
+import { Alert, Anchor, Badge, Button, Group, Loader, Paper, Stack, Tabs, Text, Title } from '@mantine/core';
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { ApiClient, ApiError, reportError } from '../api';
@@ -7,11 +7,13 @@ import { formatTimestamp, useTimeZone } from '../timezone';
 import type { Notification, NotificationList, NotificationSeverity, Session } from '../types';
 import type { Resource } from '../useResource';
 import { Loaded } from './Loaded';
+import { NotificationChannelsPanel } from './NotificationChannelsPanel';
 
 interface NotificationsScreenProps {
   api: ApiClient;
   session: Session;
   notifications: Resource<NotificationList | undefined>;
+  onSaved?(): void;
   onSessionLost(): void;
 }
 
@@ -21,9 +23,12 @@ function SeverityBadge({ severity }: { severity: NotificationSeverity }) {
   return <Badge size="sm" className="plain-badge" color={severityColor[severity]} variant={severity === 'critical' ? 'filled' : 'light'}>{severity}</Badge>;
 }
 
-export function NotificationsScreen({ api, session, notifications, onSessionLost }: NotificationsScreenProps) {
+export function NotificationsScreen({ api, session, notifications, onSaved, onSessionLost }: NotificationsScreenProps) {
   const timeZone = useTimeZone();
+  const canReadActive = session.capabilities.includes('notifications.read');
+  const canReadChannels = session.capabilities.includes('configuration.read');
   const canManage = session.capabilities.includes('notifications.manage');
+  const [tab, setTab] = useState<'active' | 'channels'>(canReadActive ? 'active' : 'channels');
   const [dismissing, setDismissing] = useState<number | null>(null);
   const [dismissError, setDismissError] = useState('');
   const items = notifications.data?.items ?? [];
@@ -49,15 +54,8 @@ export function NotificationsScreen({ api, session, notifications, onSessionLost
     setDismissing(null);
   }
 
-  return (
+  const activeContent = (
     <Stack>
-      <Group justify="space-between" align="flex-end">
-        <div>
-          <Title order={2}>Notifications</Title>
-          <Text c="dimmed">Active alerts and notices from the appliance, newest first.</Text>
-        </div>
-        <Button size="xs" variant="default" loading={notifications.loading && items.length > 0} onClick={() => { setDismissError(''); void notifications.reload(); }}>Refresh</Button>
-      </Group>
       {notifications.error && <Alert color="orange" role="alert" title="The notifications could not be read">{notifications.error}</Alert>}
       {dismissError && <Alert color="red" role="alert" title="Could not dismiss the notification">{dismissError}</Alert>}
       {notifications.data === undefined
@@ -101,6 +99,46 @@ export function NotificationsScreen({ api, session, notifications, onSessionLost
               ))}
             </Stack>
           )}
+    </Stack>
+  );
+
+  const showTabs = canReadActive && canReadChannels;
+  const activeTab = showTabs ? tab : canReadActive ? 'active' : 'channels';
+
+  return (
+    <Stack>
+      <Group justify="space-between" align="flex-end">
+        <div>
+          <Title order={2}>Notifications</Title>
+          <Text c="dimmed">
+            {activeTab === 'channels'
+              ? 'Delivery channels configured to forward appliance alerts.'
+              : 'Active alerts and notices from the appliance, newest first.'}
+          </Text>
+        </div>
+        {activeTab === 'active' && (
+          <Button size="xs" variant="default" loading={notifications.loading && items.length > 0} onClick={() => { setDismissError(''); void notifications.reload(); }}>Refresh</Button>
+        )}
+      </Group>
+
+      {showTabs ? (
+        <Tabs value={tab} onChange={(value) => setTab(value === 'channels' ? 'channels' : 'active')}>
+          <Tabs.List mb="md">
+            <Tabs.Tab value="active">Active</Tabs.Tab>
+            <Tabs.Tab value="channels">Channels</Tabs.Tab>
+          </Tabs.List>
+          <Tabs.Panel value="active">{activeContent}</Tabs.Panel>
+          <Tabs.Panel value="channels">
+            {tab === 'channels' && (
+              <NotificationChannelsPanel api={api} canManage={canManage} onSaved={onSaved} onSessionLost={onSessionLost} />
+            )}
+          </Tabs.Panel>
+        </Tabs>
+      ) : canReadChannels && !canReadActive ? (
+        <NotificationChannelsPanel api={api} canManage={canManage} onSaved={onSaved} onSessionLost={onSessionLost} />
+      ) : (
+        activeContent
+      )}
     </Stack>
   );
 }

@@ -23,6 +23,8 @@ import type {
   LinkStatus,
   LldpNeighbor,
   ManagementConfig,
+  NotificationChannel,
+  NotificationChannelWrite,
   NotificationList,
   OneToOneNat,
   OrderedList,
@@ -480,7 +482,7 @@ export class ApiClient {
   }
 
   // An object is saved whole: created without a saved one, and otherwise replaced against its version.
-  private save<T extends { id: string }>(path: string, value: Omit<T, 'id'>, saved?: SavedObject<T>) {
+  private save<T extends { id: string }, W = Omit<T, 'id'>>(path: string, value: W, saved?: SavedObject<T>) {
     if (!saved) return this.request<SavedObject<T>>(path, { method: 'POST', body: JSON.stringify(value) }, true);
     return this.request<SavedObject<T>>(`${path}/${encodeURIComponent(saved.value.id)}`, {
       method: 'PUT', headers: { 'If-Match': `"${saved.value.id}.${saved.version}"` }, body: JSON.stringify(value),
@@ -517,6 +519,24 @@ export class ApiClient {
 
   deleteVirtualAddress(id: string, version: string) {
     return this.request(`/api/v1/config/virtualAddresses/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { 'If-Match': `"${id}.${version}"` } }, true);
+  }
+
+  notificationChannels() {
+    return this.request<SavedList<NotificationChannel>>('/api/v1/config/notifications/channels');
+  }
+
+  notificationChannel(id: string) {
+    return this.request<SavedObject<NotificationChannel>>(`/api/v1/config/notifications/channels/${encodeURIComponent(id)}`);
+  }
+
+  saveNotificationChannel(channel: NotificationChannelWrite, saved?: SavedObject<NotificationChannel>) {
+    return this.save('/api/v1/config/notifications/channels', channel, saved);
+  }
+
+  deleteNotificationChannel(id: string, version: string) {
+    return this.request(`/api/v1/config/notifications/channels/${encodeURIComponent(id)}`, {
+      method: 'DELETE', headers: { 'If-Match': `"${id}.${version}"` },
+    }, true);
   }
 
   rules() {
