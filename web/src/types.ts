@@ -487,6 +487,11 @@ export interface Zone {
   color?: ZoneColor;
 }
 
+export interface ManagementConfig {
+  segment: string;
+  allowedSources?: string[];
+}
+
 export interface Snapshot {
   state: 'saved';
   savedVersion: string;
@@ -495,7 +500,7 @@ export interface Snapshot {
     links: SavedLink[];
     segments: Segment[];
     zones: Zone[];
-    management?: { segment: string; allowedSources?: string[] };
+    management?: ManagementConfig;
     dhcp?: Dhcp4Entry[];
     dhcp6?: Dhcp6Entry[];
     dns?: DnsService;
