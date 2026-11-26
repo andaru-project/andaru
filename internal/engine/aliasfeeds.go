@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -428,16 +429,23 @@ func (f *aliasFeeds) tell(a config.DynamicAlias, s aliasfeed.State, failuresBefo
 }
 
 // forget removes the state of each source no wanted generation names whose last attempt is older than keepUnwanted,
-// and clears the notification of each alias no wanted generation names any more, once since this start.
+// and each state moved aside longer ago, and clears the notification of each alias no wanted generation names any
+// more, once since this start.
 func (f *aliasFeeds) forget(want map[source]wanted) {
 	named := map[string]bool{}
 	for src := range want {
 		named[src.alias] = true
 		delete(f.cleared, src.alias)
 	}
-	for id, hashes := range aliasfeed.Sources(f.stateDir) {
+	sources := aliasfeed.Sources(f.stateDir)
+	dirs, _ := os.ReadDir(aliasfeed.Dir(f.stateDir))
+	for _, d := range dirs {
+		id := d.Name()
+		if !d.IsDir() {
+			continue
+		}
 		failing := false
-		for _, hash := range hashes {
+		for _, hash := range sources[id] {
 			src := source{id, hash}
 			if _, ok := want[src]; ok {
 				continue
@@ -451,11 +459,28 @@ func (f *aliasFeeds) forget(want map[source]wanted) {
 				f.log.Warn("remove an unwanted alias source's state", "alias", id, "error", err)
 			}
 		}
+		f.forgetCorrupt(id)
 		// Empty, the alias's directory goes too; with any file left, it stays.
 		_ = os.Remove(filepath.Join(aliasfeed.Dir(f.stateDir), id))
 		if !named[id] && failing && !f.cleared[id] {
 			f.tell(config.DynamicAlias{ID: id}, aliasfeed.State{}, aliasFailures)
 			f.cleared[id] = true
+		}
+	}
+}
+
+// forgetCorrupt removes the states of an alias that were moved aside more than keepUnwanted ago.
+func (f *aliasFeeds) forgetCorrupt(id string) {
+	dir := filepath.Join(aliasfeed.Dir(f.stateDir), id)
+	files, _ := os.ReadDir(dir)
+	for _, file := range files {
+		_, at, ok := strings.Cut(file.Name(), aliasfeed.Corrupt)
+		sec, err := strconv.ParseInt(at, 10, 64)
+		if !ok || err != nil || f.now().Sub(time.Unix(sec, 0)) < keepUnwanted {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, file.Name())); err != nil {
+			f.log.Warn("remove an alias source's state moved aside", "alias", id, "error", err)
 		}
 	}
 }

@@ -34,7 +34,9 @@ func aliasFill(stateDir string, script []byte) []byte {
 		var list []string
 		if id, ok := ids[alias]; ok {
 			v4, v6 := readMembers(stateDir, id, hash)
-			list = map[string][]string{"4": v4, "6": v6}[family]
+			if list = v4; family == "6" {
+				list = v6
+			}
 		}
 		set := alias + "_" + family
 		out.WriteString("flush set inet andaru " + set + "\n")
@@ -45,9 +47,10 @@ func aliasFill(stateDir string, script []byte) []byte {
 	return []byte(out.String())
 }
 
-// readMembers reads a source's members by family, checked again: a state that does not read gives none.
+// readMembers reads a source's members by family, checked again: a state that does not read gives none, and is left
+// for the engine to move aside.
 func readMembers(stateDir, id, hash string) (v4, v6 []string) {
-	s, err := aliasfeed.Load(stateDir, id, hash)
+	s, err := aliasfeed.Read(stateDir, id, hash)
 	if err != nil {
 		slog.Warn("alias set not filled; it matches nothing", "alias", id, "error", err)
 		return nil, nil

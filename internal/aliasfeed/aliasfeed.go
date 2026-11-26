@@ -134,11 +134,12 @@ func Sources(stateDir string) map[string][]string {
 	return out
 }
 
-// Load reads a source's state; none yet is an empty one. A file that does not decode is renamed aside, to
-// <hash>.json.corrupt-<unix seconds>, and Load returns an empty state with the error that says so.
-func Load(stateDir, alias, hash string) (State, error) {
-	path := Path(stateDir, alias, hash)
-	data, err := os.ReadFile(path)
+// errCorrupt is what Read returns, wrapped, for a state file that does not decode.
+var errCorrupt = errors.New("state does not decode")
+
+// Read reads a source's state and changes nothing; none yet is an empty one.
+func Read(stateDir, alias, hash string) (State, error) {
+	data, err := os.ReadFile(Path(stateDir, alias, hash))
 	if errors.Is(err, fs.ErrNotExist) {
 		return State{}, nil
 	}
@@ -147,11 +148,25 @@ func Load(stateDir, alias, hash string) (State, error) {
 	}
 	var s State
 	if err := json.Unmarshal(data, &s); err != nil {
-		aside := path + ".corrupt-" + strconv.FormatInt(time.Now().Unix(), 10)
-		return State{}, errors.Join(fmt.Errorf("state does not decode, moved to %s: %w", aside, err), os.Rename(path, aside))
+		return State{}, fmt.Errorf("%w: %w", errCorrupt, err)
 	}
 	return s, nil
 }
+
+// Load reads a source's state as Read does, for a writer: a file that does not decode is renamed aside, to
+// <hash>.json.corrupt-<unix seconds>, and Load returns an empty state with the error that says so.
+func Load(stateDir, alias, hash string) (State, error) {
+	s, err := Read(stateDir, alias, hash)
+	if !errors.Is(err, errCorrupt) {
+		return s, err
+	}
+	path := Path(stateDir, alias, hash)
+	aside := path + Corrupt + strconv.FormatInt(time.Now().Unix(), 10)
+	return State{}, errors.Join(fmt.Errorf("%w, moved to %s", err, aside), os.Rename(path, aside))
+}
+
+// Corrupt is what a state file moved aside has after its name, before the unix seconds it was moved at.
+const Corrupt = ".corrupt-"
 
 // Members checks a list of addresses and networks and returns it in the form the sets take: each an IPv4 or IPv6
 // address or network, a network without host bits, an IPv4-mapped address as IPv4, sorted, each once, at most

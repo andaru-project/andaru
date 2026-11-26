@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -368,10 +369,18 @@ func TestUnwantedSourcesAreRemovedByAge(t *testing.T) {
 	if _, ok, err := b.f.refresh(t.Context(), urlAlias); ok || err != nil {
 		t.Fatal("refreshed a removed alias")
 	}
+	// A state moved aside goes after as long, so the alias's directory can go.
+	aside := aliasfeed.Path(b.f.stateDir, gone.alias, gone.hash) + aliasfeed.Corrupt + strconv.FormatInt(b.now.Unix(), 10)
+	if err := os.WriteFile(aside, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	b.now = b.now.Add(keepUnwanted - time.Minute)
 	b.f.schedule(t.Context())
 	if _, err := os.Stat(aliasfeed.Path(b.f.stateDir, gone.alias, gone.hash)); err != nil {
 		t.Fatalf("state removed early: %v", err)
+	}
+	if _, err := os.Stat(aside); err != nil {
+		t.Fatalf("moved-aside state removed early: %v", err)
 	}
 	b.now = b.now.Add(2 * time.Minute)
 	b.f.schedule(t.Context())
@@ -478,6 +487,17 @@ func TestAliasesAPI(t *testing.T) {
 		if string(item) != want[i] {
 			t.Errorf("item %d:\n got %s\nwant %s", i, item, want[i])
 		}
+	}
+	// The status only reads: a state that does not decode is shown empty, and left where it is.
+	path := aliasfeed.Path(b.f.stateDir, hostAlias, b.src(1).hash)
+	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if w = call(http.MethodGet, aliasesPath+"/status", authz.ConfigurationRead); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"entries":0`) {
+		t.Fatalf("status: %d %s", w.Code, w.Body)
+	}
+	if aside, _ := filepath.Glob(path + aliasfeed.Corrupt + "*"); len(aside) != 0 {
+		t.Fatalf("moved aside: %v", aside)
 	}
 	// A request that cannot be recorded is not sent, and the refresh is unavailable.
 	b.now = b.now.Add(refreshEvery)

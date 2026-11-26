@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/andaru-project/andaru/internal/aliasfeed"
 )
 
 const aliasesPath = "/api/v1/aliases/addresses"
@@ -87,7 +89,11 @@ func (h aliasesAPI) status(w http.ResponseWriter, r *http.Request) {
 	}
 	items := []aliasStatus{}
 	for _, a := range list {
-		s := h.feeds.load(sourceOf(a))
+		// Read only: a state that does not decode is moved aside by the engine's next write, not by a read.
+		s, err := aliasfeed.Read(h.feeds.stateDir, a.ID, sourceOf(a).hash)
+		if err != nil {
+			slog.WarnContext(r.Context(), "read an alias source's state", "alias", a.ID, "error", err)
+		}
 		item := aliasStatus{ID: a.ID, Name: a.Name, Kind: a.Kind, LastSuccess: when(s.LastSuccess), LastAttempt: when(s.LastAttempt),
 			Entries: len(s.Members), LastError: s.LastError, Failures: s.Failures}
 		for _, name := range a.Names {

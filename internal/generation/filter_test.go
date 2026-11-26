@@ -410,7 +410,13 @@ func TestAliasFill(t *testing.T) {
 	if got := string(aliasFill(b.r.StateDir, []byte(dynamicScript("aa")))); got != want {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
 	}
-	// A state that holds what is not a list flushes only; one that does not decode is moved aside.
+	// A comment that is not a hash is not this filter's: the set is never filled, nor its comment used in a path.
+	b.aliasState("adr_0001-aa", "../../aliases/xx", "192.0.2.99")
+	odd := strings.ReplaceAll(dynamicScript("aa"), "feed:"+liveFeed, "feed:../../aliases/xx")
+	if got := string(aliasFill(b.r.StateDir, []byte(odd))); got != "flush set inet andaru adr_0002_bb_4\n" {
+		t.Fatalf("got\n%s", got)
+	}
+	// A state that holds what is not a list flushes only; one that does not decode too, and is left where it is.
 	writeFile(t, aliasfeed.Path(b.r.StateDir, "adr_0001-aa", liveFeed), `{"members":["not an address"]}`)
 	if got := string(aliasFill(b.r.StateDir, []byte(dynamicScript("aa")))); strings.Contains(got, "add element") {
 		t.Fatalf("got\n%s", got)
@@ -419,7 +425,7 @@ func TestAliasFill(t *testing.T) {
 	if got := string(aliasFill(b.r.StateDir, []byte(dynamicScript("aa")))); strings.Contains(got, "add element") {
 		t.Fatalf("got\n%s", got)
 	}
-	if aside, _ := filepath.Glob(aliasfeed.Path(b.r.StateDir, "adr_0001-aa", liveFeed) + ".corrupt-*"); len(aside) != 1 {
+	if aside, _ := filepath.Glob(aliasfeed.Path(b.r.StateDir, "adr_0001-aa", liveFeed) + ".corrupt-*"); len(aside) != 0 {
 		t.Fatalf("moved aside: %v", aside)
 	}
 	if got := aliasFill(b.r.StateDir, []byte(script("aa"))); got != nil {
