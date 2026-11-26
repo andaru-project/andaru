@@ -296,6 +296,28 @@ describe('DnsScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     expect(await screen.findByText('Saved DNS configuration changed elsewhere')).toBeInTheDocument();
   });
+
+  it('keeps newly enabled DNS state visible even if the follow-up reload fails', async () => {
+    let created = false;
+    fetchRoutes({
+      '/api/v1/config': () => (created
+        ? jsonResponse(503, { error: { code: 'UNAVAILABLE', message: 'Temporary read error.', details: [] } })
+        : jsonResponse(200, sampleSnapshot)),
+      '/api/v1/config/dns': () => jsonResponse(404, { error: { code: 'NOT_FOUND', message: 'Not configured.', details: [] } }),
+      'PUT /api/v1/config/dns': (init) => {
+        created = true;
+        const body = JSON.parse(String(init?.body)) as DnsService;
+        return jsonResponse(200, { state: 'saved', savedVersion: '9', version: '1', value: body });
+      },
+    });
+    renderDns();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Enable DNS service' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Enable DNS' }));
+
+    expect(await screen.findByText('Serving')).toBeInTheDocument();
+    expect(screen.queryByText('DNS service is off')).not.toBeInTheDocument();
+  });
 });
 
 describe('dnsEdit helpers', () => {

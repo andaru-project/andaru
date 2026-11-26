@@ -30,6 +30,7 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
   const resource = useResource(load, onSessionLost);
 
   const [enabling, setEnabling] = useState(false);
+  const [savedOverride, setSavedOverride] = useState<{ value: SavedObject<DnsService> | null } | undefined>();
   const [draft, setDraft] = useState<DnsDraft | null>(null);
   const [baseVersion, setBaseVersion] = useState('0');
   const [dirty, setDirty] = useState(false);
@@ -65,6 +66,7 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
 
   if (resource.data !== seenData && !busy) {
     setSeenData(resource.data);
+    setSavedOverride(undefined);
     if (resource.data) {
       const serverVersion = resource.data.dns?.version ?? '0';
       if ((!dirty && !disabling) || draft === null) {
@@ -90,7 +92,8 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
       : <Loader aria-label="Loading DNS" />;
   }
 
-  const { snapshot, dns } = resource.data;
+  const { snapshot } = resource.data;
+  const dns = savedOverride ? savedOverride.value : resource.data.dns;
   const serverVersion = dns?.version ?? '0';
   const activeDraft = draft ?? dnsDraftOf(dns?.value, snapshot);
   const remoteChanged = dirty && serverVersion !== baseVersion;
@@ -192,6 +195,7 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
     try {
       const saved = await api.saveDns(dnsPayload(pruned), baseVersion);
       if (!mounted.current) return;
+      setSavedOverride({ value: saved });
       setDraft(dnsDraftOf(saved.value, snapshot));
       setBaseVersion(saved.version);
       onSaved();
@@ -225,6 +229,9 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
     try {
       await api.deleteDns(baseVersion);
       if (!mounted.current) return;
+      setSavedOverride({ value: null });
+      setDraft(dnsDraftOf(null, snapshot));
+      setBaseVersion('0');
       onSaved();
       await resource.reload();
       if (!mounted.current) return;
@@ -556,6 +563,10 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
                         if (disabling) {
                           restoreDisableFocus.current = true;
                           setDisabling(false);
+                          if (!dirty) {
+                            setDraft(dnsDraftOf(dns?.value, snapshot));
+                            setBaseVersion(serverVersion);
+                          }
                         } else {
                           resetForm();
                         }
