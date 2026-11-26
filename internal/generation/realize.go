@@ -273,7 +273,7 @@ func (r Realizer) dropStaleIPv6(ctx context.Context, to []placed) {
 			PrefixLength int    `json:"prefixlen"`
 		} `json:"addr_info"`
 	}
-	if err == nil {
+	if err == nil && len(data) > 0 {
 		err = json.Unmarshal(data, &links)
 	}
 	if err != nil {
@@ -289,29 +289,50 @@ func (r Realizer) dropStaleIPv6(ctx context.Context, to []placed) {
 		if f < 0 || takesDynamicIPv6(to[f].data) {
 			continue
 		}
+		declared := declaredPrefixes(to[f].data)
+		routes := map[netip.Prefix]bool{}
 		for _, a := range l.Addresses {
-			prefix, err := netip.ParseAddr(a.Local)
+			ip, err := netip.ParseAddr(a.Local)
 			if err != nil { // ip lists an empty object for each address the filter left out
 				continue
 			}
-			address := netip.PrefixFrom(prefix, a.PrefixLength)
-			for _, argv := range [][]string{
-				{"-6", "address", "del", address.String(), "dev", l.Name},
-				{"-6", "route", "del", address.Masked().String(), "dev", l.Name},
-			} {
-				if _, err := r.Run(ctx, "/usr/bin/ip", argv...); err != nil {
-					slog.Warn("remove stale IPv6 configuration", "interface", l.Name, "address", address, "error", err)
-				}
+			address := netip.PrefixFrom(ip, a.PrefixLength)
+			r.ip(ctx, l.Name, address, "address", "del", address.String(), "dev", l.Name)
+			// A /128 has no prefix route, and one the new file still numbers stays.
+			if route := address.Masked(); route.Bits() < 128 && !routes[route] && !slices.ContainsFunc(declared, route.Overlaps) {
+				routes[route] = true
+				r.ip(ctx, l.Name, address, "route", "del", route.String(), "dev", l.Name)
 			}
 		}
 	}
 }
 
-// takesDynamicIPv6 says whether a rendered .network file may get IPv6 addresses from delegation or router
+// ip runs one ip -6 command of dropStaleIPv6 and logs its failure.
+func (r Realizer) ip(ctx context.Context, link string, address netip.Prefix, argv ...string) {
+	if _, err := r.Run(ctx, "/usr/bin/ip", append([]string{"-6"}, argv...)...); err != nil {
+		slog.Warn("remove stale IPv6 configuration", "interface", link, "address", address, "error", err)
+	}
+}
+
+// declaredPrefixes lists the static addresses a rendered .network file declares.
+func declaredPrefixes(data []byte) []netip.Prefix {
+	var out []netip.Prefix
+	for line := range strings.SplitSeq(string(data), "\n") {
+		if value, ok := strings.CutPrefix(line, "Address="); ok {
+			if p, err := netip.ParsePrefix(value); err == nil {
+				out = append(out, p)
+			}
+		}
+	}
+	return out
+}
+
+// takesDynamicIPv6 says whether a rendered .network file may get IPv6 addresses from DHCPv6, delegation or router
 // advertisements, which networkd accepts unless told not to, or belongs to a PPP session.
 func takesDynamicIPv6(data []byte) bool {
 	lines := strings.Split(string(data), "\n")
-	return pppNetwork(data) || slices.Contains(lines, "DHCPPrefixDelegation=yes") || !slices.Contains(lines, "IPv6AcceptRA=no")
+	return pppNetwork(data) || !slices.Contains(lines, "IPv6AcceptRA=no") ||
+		slices.ContainsFunc(lines, func(l string) bool { return l == "DHCPPrefixDelegation=yes" || l == "DHCP=yes" || l == "DHCP=ipv6" })
 }
 
 type observation struct {
