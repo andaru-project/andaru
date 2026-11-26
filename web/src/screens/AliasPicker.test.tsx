@@ -373,4 +373,39 @@ describe('AliasPicker', () => {
     await waitFor(() => expect((singleInput as HTMLInputElement).value).toBe('lan-net'));
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes('Use+'))).toBe(false);
   });
+
+  it('reuses a matching port alias on 422 collision using protocol (without kind)', async () => {
+    const user = userEvent.setup();
+    let searchCalls = 0;
+
+    fetchRoutes({
+      '/api/v1/config/aliases/search': () => {
+        searchCalls += 1;
+        if (searchCalls === 1) {
+          return jsonResponse(200, { state: 'saved', savedVersion: '5', items: [] });
+        }
+        return jsonResponse(200, {
+          state: 'saved',
+          savedVersion: '5',
+          items: [{ id: 'svc_existing_443', name: 'tcp/443', protocol: 'tcp', summary: 'TCP 443', score: 1000, highlights: [{ text: 'tcp/443', match: true }] }],
+        });
+      },
+      'POST /api/v1/config/aliases/ports': () => jsonResponse(422, { error: { code: 'VALIDATION_FAILED', message: 'Duplicate name.' } }),
+    });
+
+    function PortHarness({ api }: { api: ApiClient }) {
+      const [ports, setPorts] = useState<string[]>([]);
+      return (
+        <MantineProvider>
+          <AliasMultiSelect api={api} aliasType="ports" debounceMs={10} label="Ports" initialOptions={[]} value={ports} onChange={setPorts} />
+        </MantineProvider>
+      );
+    }
+
+    render(<PortHarness api={new ApiClient('csrf')} />);
+    const input = screen.getByLabelText('Ports', { selector: 'input' });
+    await user.type(input, '443');
+    await user.click(await screen.findByText('Use TCP 443'));
+    expect(await screen.findByText('tcp/443', { selector: 'span' })).toBeInTheDocument();
+  });
 });

@@ -188,6 +188,7 @@ function useAliasSearch({
 
   function resetSearch(next = '') {
     cancelPending();
+    if (!mountedRef.current) return;
     setSearchValue(next);
     setRemote(null);
     setLoading(false);
@@ -344,11 +345,12 @@ function useAliasSearch({
           if (!mountedRef.current || scopeSeqRef.current !== startScopeSeq) return null;
           const exactName = found.items.find((item) => item.name === candidate.payload.name);
           if (exactName) {
-            if (exactName.kind === candidate.expectedKind && exactName.summary === candidate.expectedSummary) {
+            const exactKind = exactName.kind ?? exactName.protocol;
+            if (exactKind === candidate.expectedKind && exactName.summary === candidate.expectedSummary) {
               rememberLabels([exactName]);
               return { id: exactName.id, name: exactName.name };
             }
-            setCreateError(`An alias named "${candidate.payload.name}" already exists with different values (${exactName.summary ?? exactName.kind}).`);
+            setCreateError(`An alias named "${candidate.payload.name}" already exists with different values (${exactName.summary || exactKind || 'unknown'}).`);
             return null;
           }
         } catch (lookupErr: unknown) {
@@ -499,6 +501,7 @@ export function AliasSelect(props: AliasSelectProps) {
 
   function handleChange(next: string | null) {
     if (next && next.startsWith(createOptionPrefix)) {
+      if (creatingRef.current) return;
       const candidate = createByValue.get(next);
       if (!candidate) return;
       void resolveLiteral(candidate).then((created) => {
