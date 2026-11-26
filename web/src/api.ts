@@ -17,6 +17,7 @@ import type {
   Dhcp4Entry,
   Dhcp6Entry,
   DnsService,
+  DynamicAliasStatus,
   ErrorDetail,
   Finding,
   History,
@@ -500,6 +501,14 @@ export class ApiClient {
 
   deleteAlias(kind: keyof AliasKinds, id: string, version: string) {
     return this.request(`/api/v1/config/aliases/${kind}/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { 'If-Match': `"${id}.${version}"` } }, true);
+  }
+
+  dynamicAliasStatus() {
+    return this.request<{ items: DynamicAliasStatus[] }>('/api/v1/aliases/addresses/status');
+  }
+
+  refreshDynamicAlias(id: string) {
+    return this.request<{ request: string }>(`/api/v1/aliases/addresses/${encodeURIComponent(id)}/refresh`, { method: 'POST' }, true);
   }
 
   zones() {

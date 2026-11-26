@@ -514,3 +514,154 @@ it('edits existing dynamic aliases and blocks switching an alias in a forbidden 
   expect(within(panel).getByText(/management segment's allowed sources/i)).toBeInTheDocument();
   expect(sent(fetch, 'PUT')).toHaveLength(1);
 });
+
+it('shows dynamic alias fetch status, failure streaks, and per-name resolutions (read-only sees status without refresh controls)', async () => {
+  const dynamicAddresses = [
+    ...addresses,
+    { id: 'adr_cf', name: 'cf-feed', kind: 'url', url: 'https://www.cloudflare.com/ips-v4', refreshSeconds: 3600 },
+    { id: 'adr_vpn', name: 'vpn-peers', kind: 'hostnames', names: ['vpn.example.com', 'dead.example.com'], refreshSeconds: 300 },
+    { id: 'adr_new', name: 'fresh-feed', kind: 'url', url: 'https://lists.example/new', refreshSeconds: 600 },
+  ];
+  show({
+    '/api/v1/config/aliases/addresses': list(dynamicAddresses),
+    '/api/v1/aliases/addresses/status': {
+      items: [
+        {
+          id: 'adr_cf',
+          name: 'cf-feed',
+          kind: 'url',
+          lastSuccess: '2026-11-26T20:00:00Z',
+          lastAttempt: '2026-11-26T21:00:00Z',
+          entries: 14,
+          lastError: 'upstream HTTP 503',
+          failures: 3,
+        },
+        {
+          id: 'adr_vpn',
+          name: 'vpn-peers',
+          kind: 'hostnames',
+          lastSuccess: '2026-11-26T20:30:00Z',
+          lastAttempt: '2026-11-26T20:30:00Z',
+          entries: 2,
+          failures: 0,
+          names: [
+            { name: 'vpn.example.com', addresses: ['203.0.113.10', '2001:db8::10'], resolvedAt: '2026-11-26T20:30:00Z' },
+            { name: 'dead.example.com', addresses: [], error: 'NXDOMAIN', resolvedAt: null },
+          ],
+        },
+        {
+          id: 'adr_new',
+          name: 'fresh-feed',
+          kind: 'url',
+          lastSuccess: null,
+          lastAttempt: null,
+          entries: 0,
+          failures: 0,
+        },
+      ],
+    },
+  }, ['configuration.read']);
+
+  expect(await screen.findByText(/14 entries · Last updated/)).toBeInTheDocument();
+  const failureMsg = screen.getByText(/Last refresh failed \(3 failures in a row\): upstream HTTP 503\. Keeping the last good list\./);
+  expect(failureMsg).toHaveClass('error-text');
+  expect(screen.getByText(/2 entries · Last updated/)).toBeInTheDocument();
+  expect(screen.getByText('Resolved names (2)')).toBeInTheDocument();
+  expect(screen.getByText('203.0.113.10, 2001:db8::10')).toBeInTheDocument();
+  expect(screen.getByText('NXDOMAIN')).toBeInTheDocument();
+  expect(screen.getByText('Not fetched yet')).toBeInTheDocument();
+  // Read-only accounts see status without write/refresh controls.
+  expect(screen.queryByRole('button')).not.toBeInTheDocument();
+});
+
+it('requests an immediate dynamic alias refresh without marking config unsaved, locks actions, and handles 404/503/401', async () => {
+  const user = userEvent.setup();
+  const onSessionLost = vi.fn();
+  const onSaved = vi.fn();
+  const dynamicAddresses = [
+    ...addresses,
+    { id: 'adr_cf', name: 'cf-feed', kind: 'url', url: 'https://www.cloudflare.com/ips-v4', refreshSeconds: 3600 },
+  ];
+  let mode: 'hold' | '404' | '503' | '401' = 'hold';
+  let releaseRefresh: ((res: Response) => void) | undefined;
+  let statusCalls = 0;
+
+  const fetch = fetchRoutes({
+    '/api/v1/config/aliases/addresses': list(dynamicAddresses),
+    '/api/v1/config/aliases/ports': list(ports),
+    '/api/v1/config': config,
+    '/api/v1/aliases/addresses/status': () => {
+      statusCalls += 1;
+      return jsonResponse(200, {
+        items: [{
+          id: 'adr_cf',
+          name: 'cf-feed',
+          kind: 'url',
+          lastSuccess: statusCalls > 1 ? '2026-11-26T22:00:00Z' : null,
+          lastAttempt: statusCalls > 1 ? '2026-11-26T22:00:00Z' : null,
+          entries: statusCalls > 1 ? 5 : 0,
+          failures: 0,
+        }],
+      });
+    },
+    'POST /api/v1/aliases/addresses/adr_cf/refresh': () => {
+      if (mode === 'hold') return new Promise<Response>((resolve) => { releaseRefresh = resolve; });
+      if (mode === '404') return jsonResponse(404, { error: { code: 'NOT_FOUND', message: 'Gone.' } });
+      if (mode === '503') return jsonResponse(503, { error: { code: 'ALIASES_UNAVAILABLE', message: 'Aliases are temporarily unavailable.' } });
+      return jsonResponse(401, { error: { code: 'UNAUTHENTICATED', message: 'Expired.' } });
+    },
+  });
+
+  render(<MemoryRouter><AliasesScreen api={new ApiClient('csrf')} session={session(['configuration.read', 'configuration.write'])} onSaved={onSaved} onSessionLost={onSessionLost} /></MemoryRouter>);
+  expect(await screen.findByText('Not fetched yet')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Refresh address alias nas' })).not.toBeInTheDocument();
+
+  const refreshBtn = screen.getByRole('button', { name: 'Refresh address alias cf-feed' });
+  await user.click(refreshBtn);
+  await waitFor(() => expect(releaseRefresh).toBeDefined());
+  // Actions are locked while refresh is in flight.
+  expect(screen.getByRole('button', { name: 'Edit address alias cf-feed' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Delete address alias cf-feed' })).toBeDisabled();
+
+  releaseRefresh!(jsonResponse(202, { request: 'req_1' }));
+  expect(await screen.findByText(/Refresh requested for cf-feed/)).toBeInTheDocument();
+  expect(await screen.findByText(/5 entries · Last updated/)).toBeInTheDocument();
+  expect(onSaved).not.toHaveBeenCalled();
+
+  const [[path, init]] = sent(fetch, 'POST');
+  expect(path).toBe('/api/v1/aliases/addresses/adr_cf/refresh');
+  expect(init?.body).toBeUndefined();
+  expect(new Headers(init?.headers).get('X-Andaru-CSRF')).toBe('csrf');
+
+  // 503 error shows refresh-specific error banner.
+  mode = '503';
+  await user.click(screen.getByRole('button', { name: 'Refresh address alias cf-feed' }));
+  expect(await screen.findByText('Could not refresh alias')).toBeInTheDocument();
+  expect(screen.getByText('Aliases are temporarily unavailable.')).toBeInTheDocument();
+
+  // 404 reloads and explains the alias is no longer dynamic.
+  mode = '404';
+  const before404 = statusCalls;
+  await user.click(screen.getByRole('button', { name: 'Refresh address alias cf-feed' }));
+  expect(await screen.findByText(/deleted or is no longer fed from a URL or host names/i)).toBeInTheDocument();
+  await waitFor(() => expect(statusCalls).toBeGreaterThan(before404));
+
+  // 401 signs out.
+  mode = '401';
+  await user.click(screen.getByRole('button', { name: 'Refresh address alias cf-feed' }));
+  await waitFor(() => expect(onSessionLost).toHaveBeenCalledTimes(1));
+});
+
+it('keeps the aliases table usable when dynamic alias status returns 503', async () => {
+  const dynamicAddresses = [
+    ...addresses,
+    { id: 'adr_cf', name: 'cf-feed', kind: 'url', url: 'https://www.cloudflare.com/ips-v4', refreshSeconds: 3600 },
+  ];
+  show({
+    '/api/v1/config/aliases/addresses': list(dynamicAddresses),
+    '/api/v1/aliases/addresses/status': jsonResponse(503, { error: { code: 'ALIASES_UNAVAILABLE', message: 'Status store unavailable.' } }),
+  });
+  expect(await screen.findByText('Dynamic alias status unavailable')).toBeInTheDocument();
+  expect(screen.getByText('Status store unavailable.')).toBeInTheDocument();
+  expect(screen.getByText('https://www.cloudflare.com/ips-v4')).toBeInTheDocument();
+});
