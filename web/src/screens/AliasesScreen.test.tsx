@@ -459,6 +459,7 @@ it('creates URL list and host-name aliases, validates locally, and maps 422 fiel
   await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
   await waitFor(() => expect(created).toHaveLength(1));
   expect(created[0]).toEqual({ name: 'cf-ips', kind: 'url', url: 'https://www.cloudflare.com/ips-v4', refreshSeconds: 3600 });
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Add address alias' })).not.toBeInTheDocument());
 
   // Create a host-name alias: switching kind prefills 300s default and normalizes/dedupes pasted hostnames.
   await user.click(screen.getByRole('button', { name: 'Add address alias' }));
@@ -466,10 +467,11 @@ it('creates URL list and host-name aliases, validates locally, and maps 422 fiel
   await user.selectOptions(within(panel).getByLabelText('Kind'), 'hostnames');
   expect(within(panel).getByLabelText(/^Refresh interval/)).toHaveValue('300');
   await pasteInto(within(panel).getByLabelText(/^Name/), 'remote-office');
-  await user.type(within(panel).getByLabelText(/^Host names/, { selector: 'input' }), 'Office.Example.COM{Enter}');
+  await pasteInto(within(panel).getByLabelText(/^Host names/, { selector: 'input' }), 'Office.Example.COM, office.example.com');
   await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
   await waitFor(() => expect(created).toHaveLength(2));
   expect(created[1]).toEqual({ name: 'remote-office', kind: 'hostnames', names: ['office.example.com'], refreshSeconds: 300 });
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Add address alias' })).not.toBeInTheDocument());
 });
 
 it('edits existing dynamic aliases and blocks switching an alias in a forbidden placement to dynamic', async () => {
@@ -480,7 +482,7 @@ it('edits existing dynamic aliases and blocks switching an alias in a forbidden 
     { id: 'adr_vpn', name: 'vpn-peers', kind: 'hostnames', names: ['vpn.example.com'], refreshSeconds: 900 },
   ];
 
-  show({
+  const { fetch } = show({
     '/api/v1/config/aliases/addresses': list(dynamicAddresses),
     'PUT /api/v1/config/aliases/addresses/adr_vpn': (init) => {
       updatedBody = JSON.parse(String(init?.body ?? '{}'));
@@ -499,6 +501,7 @@ it('edits existing dynamic aliases and blocks switching an alias in a forbidden 
     names: ['vpn.example.com'],
     refreshSeconds: 900,
   }));
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Edit address alias: vpn-peers' })).not.toBeInTheDocument());
 
   // Trying to switch an alias used in management.allowedSources ('pool') to a URL list is blocked locally.
   await user.click(screen.getByRole('button', { name: 'Edit address alias pool' }));
@@ -509,4 +512,5 @@ it('edits existing dynamic aliases and blocks switching an alias in a forbidden 
   await user.paste('https://lists.example/ips');
   await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
   expect(within(panel).getByText(/management segment's allowed sources/i)).toBeInTheDocument();
+  expect(sent(fetch, 'PUT')).toHaveLength(1);
 });

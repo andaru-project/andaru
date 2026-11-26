@@ -1,10 +1,11 @@
 import { Alert, Button, Drawer, Fieldset, Group, MultiSelect, SegmentedControl, Select, Stack, Switch, Text, Textarea, TextInput } from '@mantine/core';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiClient, ApiError, saveFailure } from '../api';
+import { useDynamicAliasTracker } from '../dynamicAlias';
 import {
   addressAliasesForFamily, checkOneToOne, checkPortForward, oneToOneDraftOf, oneToOneErrors, oneToOnePayload, portForwardDraftOf, portForwardErrors, portForwardPayload, type OneToOneDraft, type PortForwardDraft,
 } from '../natEdit';
-import { isDynamicAddressAlias, type AliasSearchItem, type OneToOneNat, type PortForward, type Snapshot } from '../types';
+import { type OneToOneNat, type PortForward, type Snapshot } from '../types';
 import { zoneColorMap } from '../zones';
 import { AliasMultiSelect, AliasSelect } from './AliasPicker';
 import { ZonePill, ZoneSelectionPill } from './ZoneBadge';
@@ -97,22 +98,6 @@ interface PortForwardEditorProps {
   onAbandoned(message: string): void;
   onAliasCreated?(): void;
   onSave(value: Omit<PortForward, 'id'>): Promise<void>;
-}
-
-function useDynamicAliasTracker(addressById: Map<string, { kind?: string }>) {
-  const [resolvedDynamicIds, setResolvedDynamicIds] = useState<Set<string>>(() => new Set());
-  const onItemsResolved = useCallback((items: AliasSearchItem[]) => {
-    const dynamicIds = items.filter((item) => isDynamicAddressAlias(item)).map((item) => item.id);
-    if (dynamicIds.length === 0) return;
-    setResolvedDynamicIds((prev) => {
-      if (dynamicIds.every((id) => prev.has(id))) return prev;
-      const next = new Set(prev);
-      for (const id of dynamicIds) next.add(id);
-      return next;
-    });
-  }, []);
-  const isDynamicId = (id: string) => isDynamicAddressAlias(addressById.get(id)) || resolvedDynamicIds.has(id);
-  return { onItemsResolved, isDynamicId };
 }
 
 function withSelectedLabels(

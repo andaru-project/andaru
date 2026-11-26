@@ -1,4 +1,6 @@
+import { useCallback, useState } from 'react';
 import { plural } from './format';
+import { isDynamicAddressAlias, type AliasSearchItem } from './types';
 
 export const minAliasRefreshSeconds = 60;
 export const maxAliasRefreshSeconds = 86400;
@@ -122,4 +124,26 @@ export function formatRefreshInterval(seconds: number): string {
   if (minutes > 0) parts.push(plural(minutes, 'minute'));
   if (secs > 0 || parts.length === 0) parts.push(plural(secs, 'second'));
   return parts.join(' ');
+}
+
+export function useDynamicAliasTracker(addressById: Map<string, { kind?: string }>) {
+  const [resolvedDynamic, setResolvedDynamic] = useState<Map<string, boolean>>(() => new Map());
+  const onItemsResolved = useCallback((items: AliasSearchItem[]) => {
+    if (items.length === 0) return;
+    setResolvedDynamic((prev) => {
+      let changed = false;
+      for (const item of items) {
+        if (prev.get(item.id) !== isDynamicAddressAlias(item)) {
+          changed = true;
+          break;
+        }
+      }
+      if (!changed) return prev;
+      const next = new Map(prev);
+      for (const item of items) next.set(item.id, isDynamicAddressAlias(item));
+      return next;
+    });
+  }, []);
+  const isDynamicId = (id: string) => resolvedDynamic.get(id) ?? isDynamicAddressAlias(addressById.get(id));
+  return { onItemsResolved, isDynamicId };
 }

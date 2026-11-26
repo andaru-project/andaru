@@ -1,7 +1,8 @@
 import { Alert, Anchor, Button, Drawer, Fieldset, Group, MultiSelect, SegmentedControl, Stack, Switch, Text, Textarea, TextInput } from '@mantine/core';
 import { useCallback, useEffect, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react';
 import { ApiClient, ApiError, fieldErrors, saveFailure } from '../api';
-import { firewallZone, isDynamicAddressAlias, type AliasSearchItem, type Rule, type RuleSide, type Snapshot } from '../types';
+import { useDynamicAliasTracker } from '../dynamicAlias';
+import { firewallZone, isDynamicAddressAlias, type Rule, type RuleSide, type Snapshot } from '../types';
 import { zoneColorMap } from '../zones';
 import { AliasMultiSelect } from './AliasPicker';
 import { ZonePill, ZoneSelectionPill } from './ZoneBadge';
@@ -37,19 +38,8 @@ export function RuleEditor({ api, rule, snapshot, onClose, onSessionLost, onAban
   const [failure, setFailure] = useState('');
   const [busy, setBusy] = useState(false);
   const [creatingAliases, setCreatingAliases] = useState(0);
-  const [resolvedDynamicIds, setResolvedDynamicIds] = useState<Set<string>>(() => new Set());
   const onCreatingChange = useCallback((creating: boolean) => {
     setCreatingAliases((count) => Math.max(0, count + (creating ? 1 : -1)));
-  }, []);
-  const onItemsResolved = useCallback((items: AliasSearchItem[]) => {
-    const dynamicIds = items.filter((item) => isDynamicAddressAlias(item)).map((item) => item.id);
-    if (dynamicIds.length === 0) return;
-    setResolvedDynamicIds((prev) => {
-      if (dynamicIds.every((id) => prev.has(id))) return prev;
-      const next = new Set(prev);
-      for (const id of dynamicIds) next.add(id);
-      return next;
-    });
   }, []);
   // A save may answer after this panel was closed and another opened: it then closes nothing.
   const open = useRef(true);
@@ -94,7 +84,7 @@ export function RuleEditor({ api, rule, snapshot, onClose, onSessionLost, onAban
     }
   }
 
-  const isDynamicId = (id: string) => isDynamicAddressAlias(addressById.get(id)) || resolvedDynamicIds.has(id);
+  const { onItemsResolved, isDynamicId } = useDynamicAliasTracker(addressById);
 
   // One side of the rule: where, and within that, who.
   const sideFields = (label: string, key: 'from' | 'to', value: RuleSide, set: Dispatch<SetStateAction<RuleSide>>, zoneOptions: Array<{ value: string; label: string }>, zoneHelp: string) => {
