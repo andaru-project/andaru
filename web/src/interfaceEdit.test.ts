@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { ApiError } from './api';
-import { addressLines, draftOf, interfaceErrors, interfaceOperations, memberLinkOptions, newZoneOption, removeOperations, vlanParentOptions } from './interfaceEdit';
+import { addressLines, draftOf, interfaceErrors, interfaceOperations, memberLinkOptions, newZoneOption, nextPppoeSecretName, removeOperations, vlanParentOptions } from './interfaceEdit';
 import type { LinkStatus, SavedLink, SavedObject, Segment, Snapshot } from './types';
 
 const port: LinkStatus = { ifIndex: 3, name: 'enp2s0', linkType: 'ether', mtu: 1500, operState: 'UP', flags: [], linkAddress: '02:00:00:00:00:99', permanentAddress: '52:54:00:AA:BB:02', addresses: [] };
@@ -293,5 +293,95 @@ it('serializes per-link LLDP options and maps LLDP refusal paths', () => {
   expect(interfaceErrors(error, [{ op: 'replace', collection: 'links', value: {} }])).toEqual(new Map([
     ['lldp', 'Bad lldp.'],
     ['emitLldp', 'Bad emitLldp.'],
+  ]));
+});
+
+it('allocates unique PPPoE secret names, creates/updates PPPoE links, and maps credential refusal paths', () => {
+  expect(nextPppoeSecretName('Fiber WAN', [])).toBe('PPPOE_FIBER_WAN_PASSWORD');
+  expect(nextPppoeSecretName('Fiber WAN', ['PPPOE_FIBER_WAN_PASSWORD', 'PPPOE_FIBER_WAN_PASSWORD_2'])).toBe('PPPOE_FIBER_WAN_PASSWORD_3');
+  expect(nextPppoeSecretName('123!!!', [])).toBe('PPPOE_123_PASSWORD');
+  expect(nextPppoeSecretName('---', [])).toBe('PPPOE_PASSWORD');
+
+  const snapshot: Snapshot = {
+    state: 'saved',
+    savedVersion: '4',
+    unusedSecrets: ['PPPOE_FIBER_WAN_PASSWORD'],
+    value: { links: [link.value], segments: [], zones: [{ id: 'zon_wan', name: 'WAN' }] },
+  };
+  const createDraft = {
+    ...draftOf(undefined, undefined, undefined, 'pppoe'),
+    name: 'Fiber WAN',
+    parent: 'lnk_a',
+    pppoeUsername: 'user@isp.example',
+    pppoePassword: 'secret-value',
+    segmentName: 'Fiber WAN',
+    zone: 'zon_wan',
+  };
+  expect(createDraft.mtu).toBe('1492');
+  expect(createDraft.assigned).toBe(true);
+  expect(createDraft.ipv4Mode).toBe('ppp');
+  expect(createDraft.ipv6Mode).toBe('none');
+  expect(interfaceOperations(createDraft, undefined, undefined, undefined, snapshot)).toEqual([
+    {
+      op: 'create',
+      collection: 'links',
+      localId: 'link',
+      value: {
+        name: 'Fiber WAN',
+        kind: 'pppoe',
+        mtu: 1492,
+        enabled: true,
+        parent: 'lnk_a',
+        username: 'user@isp.example',
+        password: { secret: 'PPPOE_FIBER_WAN_PASSWORD_2', set: 'secret-value', expectedVersion: '0' },
+      },
+    },
+    {
+      op: 'create',
+      collection: 'segments',
+      value: { name: 'Fiber WAN', link: '@link', zone: 'zon_wan', addressing: { ipv4: { mode: 'ppp' }, ipv6: { mode: 'none' } } },
+    },
+  ]);
+
+  // Updating an existing PPPoE password uses the stored secret name and expectedVersion.
+  const existing: SavedObject<SavedLink> = {
+    version: '7',
+    value: {
+      id: 'lnk_p',
+      name: 'DSL',
+      kind: 'pppoe',
+      mtu: 1492,
+      enabled: true,
+      parent: 'lnk_a',
+      username: 'old@isp',
+      password: { secret: 'DSL_PASSWORD', isSet: true, version: '3', updatedAt: '2026-01-01T00:00:00Z' },
+    },
+  };
+  expect(interfaceOperations({ ...draftOf(existing.value, undefined, undefined), assigned: false, pppoePassword: 'rotated' }, existing, undefined, undefined, snapshot)).toEqual([
+    {
+      op: 'replace',
+      collection: 'links',
+      id: 'lnk_p',
+      expectedVersion: '7',
+      value: {
+        id: 'lnk_p',
+        name: 'DSL',
+        kind: 'pppoe',
+        mtu: 1492,
+        enabled: true,
+        parent: 'lnk_a',
+        username: 'old@isp',
+        password: { secret: 'DSL_PASSWORD', set: 'rotated', expectedVersion: '3' },
+      },
+    },
+  ]);
+
+  const error = new ApiError(422, 'VALIDATION_FAILED', 'Refused.', [
+    { path: '/operations/0/value/username', message: 'Bad username.' },
+    { path: '/operations/0/value/password/set', message: 'Bad password.' },
+  ]);
+  expect(interfaceErrors(error, [{ op: 'create', collection: 'links', value: {} }])).toEqual(new Map([
+    ['pppoeUsername', 'Bad username.'],
+    ['pppoePassword', 'Bad password.'],
   ]));
 });

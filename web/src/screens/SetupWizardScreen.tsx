@@ -5,6 +5,7 @@ import {
   Group,
   Loader,
   Paper,
+  PasswordInput,
   SegmentedControl,
   Select,
   Stack,
@@ -17,7 +18,7 @@ import {
 } from '@mantine/core';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ApiClient, apiErrorMessage, reportError } from '../api';
-import { isPort } from '../interfaceEdit';
+import { existingSecretsOf, isPort, pppoeCredentialByteLimit, utf8ByteLength } from '../interfaceEdit';
 import {
   buildSetupOperations,
   defaultDhcpRange,
@@ -90,6 +91,9 @@ export function SetupWizardScreen({ api, onComplete, onSessionLost }: SetupWizar
     wanIpv4Mode: 'dhcp',
     wanIpv4Address: '',
     wanIpv4Gateway: '',
+    wanPppoeUsername: '',
+    wanPppoePassword: '',
+    wanPppoeVlanId: '',
     wanIpv6Mode: 'none',
     wanIpv6Address: '',
     wanIpv6Gateway: '',
@@ -130,7 +134,12 @@ export function SetupWizardScreen({ api, onComplete, onSessionLost }: SetupWizar
       setLinks(physical);
       setInitialHostname(sys.hostname);
       setHostname((cur) => cur || sys.hostname);
-      setSingletonVersions({ management: mgmtVer, dns: dnsVer, natOutbound: natVer });
+      setSingletonVersions({
+        management: mgmtVer,
+        dns: dnsVer,
+        natOutbound: natVer,
+        existingSecrets: existingSecretsOf(snap ?? undefined),
+      });
       if (snap) {
         setSavedVersion(snap.savedVersion);
         setHasExistingConfig(snap.value.links.length + snap.value.segments.length > 0);
@@ -173,11 +182,30 @@ export function SetupWizardScreen({ api, onComplete, onSessionLost }: SetupWizar
     (!draft.serveDhcp || draft.mgmtIpv4Mode !== 'static' || (Boolean(draft.dhcpStart.trim()) && Boolean(draft.dhcpEnd.trim()))) &&
     (draft.mgmtIpv6Mode !== 'static' || draft.mgmtIpv6Address.trim().includes('/'));
 
+  const pppoeUsername = (draft.wanPppoeUsername ?? '').trim();
+  const pppoePassword = draft.wanPppoePassword ?? '';
+  const pppoeVlanRaw = (draft.wanPppoeVlanId ?? '').trim();
+  const pppoeUsernameError = draft.wanIpv4Mode === 'pppoe' && utf8ByteLength(pppoeUsername) > pppoeCredentialByteLimit
+    ? `Username must be ${pppoeCredentialByteLimit} bytes or fewer.`
+    : undefined;
+  const pppoePasswordError = draft.wanIpv4Mode !== 'pppoe'
+    ? undefined
+    : pppoePassword.includes('\0')
+      ? 'Password cannot contain null bytes.'
+      : utf8ByteLength(pppoePassword) > pppoeCredentialByteLimit
+        ? `Password must be ${pppoeCredentialByteLimit} bytes or fewer.`
+        : undefined;
+  const pppoeVlanNum = /^\d+$/.test(pppoeVlanRaw) ? Number(pppoeVlanRaw) : NaN;
+  const pppoeVlanError = draft.wanIpv4Mode === 'pppoe' && pppoeVlanRaw !== '' && !(pppoeVlanNum >= 1 && pppoeVlanNum <= 4094)
+    ? 'A VLAN ID is a whole number from 1 to 4094.'
+    : undefined;
+
   const canAdvanceWan =
     !draft.wanMac ||
     ((draft.wanIpv4Mode !== 'none' || draft.wanIpv6Mode !== 'none') &&
       (draft.wanIpv4Mode !== 'static' || (draft.wanIpv4Address.trim().includes('/') && Boolean(draft.wanIpv4Gateway.trim()))) &&
-      (draft.wanIpv6Mode !== 'static' || (draft.wanIpv6Address.trim().includes('/') && Boolean(draft.wanIpv6Gateway.trim()))));
+      (draft.wanIpv4Mode !== 'pppoe' || (Boolean(pppoeUsername) && !pppoeUsernameError && pppoePassword.length > 0 && !pppoePasswordError && !pppoeVlanError)) &&
+      (draft.wanIpv6Mode !== 'static' || (draft.wanIpv4Mode !== 'pppoe' && draft.wanIpv6Address.trim().includes('/') && Boolean(draft.wanIpv6Gateway.trim()))));
 
   // Refresh pending apply state from the engine so an expired rollback or external confirmation clears cleanly.
   const refreshPendingApply = useCallback(async () => {
@@ -450,12 +478,54 @@ export function SetupWizardScreen({ api, onComplete, onSessionLost }: SetupWizar
                         value={draft.wanIpv4Mode}
                         data={[
                           { value: 'dhcp', label: 'DHCP' },
+                          { value: 'pppoe', label: 'PPPoE' },
                           { value: 'static', label: 'Static' },
                           { value: 'none', label: 'None' },
                         ]}
-                        onChange={(v) => updateDraft({ wanIpv4Mode: v as SetupNetworkDraft['wanIpv4Mode'] })}
+                        onChange={(v) => {
+                          const mode = v as SetupNetworkDraft['wanIpv4Mode'];
+                          updateDraft({
+                            wanIpv4Mode: mode,
+                            ...(mode === 'pppoe' && draft.wanIpv6Mode === 'static' ? { wanIpv6Mode: 'none' } : {}),
+                          });
+                        }}
                       />
                     </div>
+
+                    {draft.wanIpv4Mode === 'pppoe' && (
+                      <>
+                        <div className="setup-grid">
+                          <TextInput
+                            label="PPPoE username"
+                            autoComplete="off"
+                            maxLength={255}
+                            required
+                            placeholder="user@isp.example"
+                            value={draft.wanPppoeUsername ?? ''}
+                            error={pppoeUsernameError}
+                            onChange={(e) => updateDraft({ wanPppoeUsername: e.currentTarget.value })}
+                          />
+                          <PasswordInput
+                            label="PPPoE password"
+                            autoComplete="new-password"
+                            maxLength={255}
+                            required
+                            value={draft.wanPppoePassword ?? ''}
+                            error={pppoePasswordError}
+                            onChange={(e) => updateDraft({ wanPppoePassword: e.currentTarget.value })}
+                          />
+                        </div>
+                        <TextInput
+                          label="WAN VLAN ID (optional)"
+                          description="802.1Q tag (1–4094) if your ISP requires PPPoE over a VLAN. Leave empty for untagged PPPoE."
+                          inputMode="numeric"
+                          placeholder="6"
+                          value={draft.wanPppoeVlanId ?? ''}
+                          error={pppoeVlanError}
+                          onChange={(e) => updateDraft({ wanPppoeVlanId: e.currentTarget.value })}
+                        />
+                      </>
+                    )}
 
                     {draft.wanIpv4Mode === 'static' && (
                       <div className="setup-grid">
@@ -472,7 +542,7 @@ export function SetupWizardScreen({ api, onComplete, onSessionLost }: SetupWizar
                           { value: 'none', label: 'None' },
                           { value: 'dhcp6', label: 'DHCPv6' },
                           { value: 'slaac', label: 'SLAAC' },
-                          { value: 'static', label: 'Static' },
+                          { value: 'static', label: 'Static', disabled: draft.wanIpv4Mode === 'pppoe' },
                         ]}
                         onChange={(v) => updateDraft({ wanIpv6Mode: v as SetupNetworkDraft['wanIpv6Mode'] })}
                       />
@@ -550,7 +620,10 @@ export function SetupWizardScreen({ api, onComplete, onSessionLost }: SetupWizar
                       <Row label="WAN">
                         {draft.wanMac ? (
                           <>
-                            {draft.wanName} (<Text span ff="monospace" inherit>{draft.wanMac}</Text>) · IPv4 {draft.wanIpv4Mode}
+                            {draft.wanName} (<Text span ff="monospace" inherit>{draft.wanMac}</Text>)
+                            {draft.wanIpv4Mode === 'pppoe'
+                              ? ` · PPPoE (${pppoeUsername}${pppoeVlanRaw ? `, VLAN ${pppoeVlanRaw}` : ''})`
+                              : ` · IPv4 ${draft.wanIpv4Mode}`}
                             {draft.wanIpv6Mode !== 'none' ? ` · IPv6 ${draft.wanIpv6Mode}` : ''} ·{' '}
                             <Badge size="sm" variant="light">Automatic outbound NAT</Badge>
                           </>

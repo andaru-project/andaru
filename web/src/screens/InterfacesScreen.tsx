@@ -226,7 +226,10 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
   // What a link is, said only when it is not a plain Ethernet port.
   const kindLine = (link: SavedLink) => {
     if (link.kind === 'vlan') return `VLAN ${link.vlanId} on ${link.parent ? linkName(link.parent) : 'its parent'}`;
-    if (link.kind === 'pppoe') return `PPPoE on ${link.parent ? linkName(link.parent) : 'its parent'}`;
+    if (link.kind === 'pppoe') {
+      const base = `PPPoE on ${link.parent ? linkName(link.parent) : 'its parent'}`;
+      return link.password?.unresolved ? `${base} · Password unresolved` : base;
+    }
     if (link.kind === 'bridge') {
       const names = (link.members ?? []).map(linkName);
       const detail = [link.stp ? 'STP' : undefined, names.length > 0 ? names.join(', ') : 'no members'].filter(Boolean).join(' · ');
@@ -294,6 +297,7 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
                 <Menu.Item onClick={() => void createVirtual('vlan')}>VLAN</Menu.Item>
                 <Menu.Item onClick={() => void createVirtual('bridge')}>Bridge</Menu.Item>
                 <Menu.Item onClick={() => void createVirtual('bond')}>Bond</Menu.Item>
+                <Menu.Item onClick={() => void createVirtual('pppoe')}>PPPoE</Menu.Item>
               </Menu.Dropdown>
             </Menu>
           )}
