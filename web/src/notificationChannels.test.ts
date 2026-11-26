@@ -97,26 +97,27 @@ describe('notificationChannels', () => {
       authorization: { secret: 'OPS_AUTH' },
     });
 
-    // Resolving URL and removing authorization omits authorization and sends expectedVersion on URL.
+    // Entering a new URL or auth value allocates a fresh secret (expectedVersion: '0') so no other
+    // channel referencing the old secret (including one added concurrently) can be silently modified.
     const resolvedAndRemoved = buildChannelWrite(
       { ...channelDraftOf(saved), webhookUrl: 'https://hooks.example/new', removeAuth: true },
       saved,
     );
     expect(resolvedAndRemoved.webhook).toEqual({
-      url: { secret: 'OPS_URL', set: 'https://hooks.example/new', expectedVersion: '0' },
+      url: { secret: 'NOTIFY_OPS_SLACK_URL', set: 'https://hooks.example/new', expectedVersion: '0' },
     });
 
-    // Rotating an existing secret (or resolving a pre-existing versioned unresolved secret) preserves its version.
     const rotated = buildChannelWrite(
       { ...channelDraftOf(saved), webhookAuth: 'Bearer rotated' },
       saved,
     );
     expect(rotated.webhook).toEqual({
       url: { secret: 'OPS_URL', unresolved: true },
-      authorization: { secret: 'OPS_AUTH', set: 'Bearer rotated', expectedVersion: '8' },
+      authorization: { secret: 'NOTIFY_OPS_SLACK_AUTH', set: 'Bearer rotated', expectedVersion: '0' },
     });
 
-    // Editing a secret shared with another channel allocates a fresh secret so the other channel is untouched.
+    // Even if another channel concurrently starts referencing OPS_URL after open (not in existingSecrets),
+    // saving a new URL still writes a fresh secret rather than mutating OPS_URL in place.
     const second: NotificationChannel = {
       id: 'ntf_2',
       name: 'Secondary',
@@ -128,11 +129,10 @@ describe('notificationChannels', () => {
     const separated = buildChannelWrite(
       { ...channelDraftOf(saved), webhookUrl: 'https://hooks.example/separate' },
       saved,
-      existingChannelSecretsOf([saved, second]),
-      ['OPS_URL'],
+      ['NOTIFY_OPS_SLACK_URL'],
     );
     expect(separated.webhook).toEqual({
-      url: { secret: 'NOTIFY_OPS_SLACK_URL', set: 'https://hooks.example/separate', expectedVersion: '0' },
+      url: { secret: 'NOTIFY_OPS_SLACK_URL_2', set: 'https://hooks.example/separate', expectedVersion: '0' },
       authorization: { secret: 'OPS_AUTH' },
     });
   });

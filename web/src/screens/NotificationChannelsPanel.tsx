@@ -158,10 +158,7 @@ function NotificationChannelEditor({
     submittingRef.current = true;
     setBusy(true);
     setErrors(new Map());
-    const sharedSecrets: string[] = [];
-    if (existingUrl?.secret && sharedUrlHolders.length > 0) sharedSecrets.push(existingUrl.secret);
-    if (existingAuth?.secret && sharedAuthHolders.length > 0) sharedSecrets.push(existingAuth.secret);
-    const payload = buildChannelWrite(draft, saved?.value, existingSecrets, sharedSecrets);
+    const payload = buildChannelWrite(draft, saved?.value, existingSecrets);
     try {
       await onSave(payload, saved);
       if (openRef.current) onClose();
