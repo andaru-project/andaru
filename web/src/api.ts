@@ -1,3 +1,4 @@
+import { filenameFromDisposition } from './download';
 import type {
   AliasKinds,
   AliasSearchParams,
@@ -5,6 +6,7 @@ import type {
   Applies,
   Apply,
   AuditEvent,
+  AuditExportDownload,
   BackupCreateOptions,
   BackupDownload,
   BackupInspectionResponse,
@@ -48,6 +50,7 @@ import type {
   User,
   VersionDetail,
   VirtualAddress,
+  WebSessionPage,
   Zone,
 } from './types';
 
@@ -262,6 +265,14 @@ export class ApiClient {
     } finally {
       this.clearSession();
     }
+  }
+
+  listSessions() {
+    return this.request<WebSessionPage>('/api/v1/sessions');
+  }
+
+  revokeSession(id: string) {
+    return this.request<void>(`/api/v1/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }, true);
   }
 
   startupStatus() {
@@ -646,6 +657,16 @@ export class ApiClient {
     return this.request<Page<AuditEvent>>(`/api/v1/audit/events?${query}`);
   }
 
+  async exportAudit(cursor = '', limit = 100, order: 'asc' | 'desc' = 'desc'): Promise<AuditExportDownload> {
+    const query = new URLSearchParams({ order, limit: String(limit) });
+    if (cursor) query.set('cursor', cursor);
+    const { blob, headers } = await this.requestBlob(`/api/v1/audit/export?${query}`, {}, false, 'application/json');
+    return {
+      blob,
+      filename: filenameFromDisposition(headers.get('Content-Disposition'), 'andaru-audit.json'),
+    };
+  }
+
   updateStatus() {
     return this.request<UpdateStatus>('/api/v1/system/update');
   }
@@ -674,13 +695,13 @@ export class ApiClient {
     return this.request<void>(`/api/v1/notifications/${id}/dismiss`, { method: 'POST' }, true);
   }
 
-  async createBackup(options: BackupCreateOptions): Promise<BackupDownload> {
-    const { response, cleanup } = await this.send(
-      '/api/v1/backups',
-      { method: 'POST', body: JSON.stringify(options) },
-      true,
-      'application/zip, application/octet-stream, application/json',
-    );
+  private async requestBlob(
+    path: string,
+    init: RequestInit,
+    write: boolean,
+    accept: string,
+  ): Promise<{ blob: Blob; headers: Headers }> {
+    const { response, cleanup } = await this.send(path, init, write, accept);
     try {
       if (!response.ok) {
         let body: unknown;
@@ -697,17 +718,27 @@ export class ApiClient {
       } catch {
         throw this.disconnectedError();
       }
-      const contentType = response.headers.get('Content-Type') ?? 'application/octet-stream';
-      return {
-        blob,
-        encrypted: contentType.toLowerCase().startsWith('application/octet-stream'),
-        savedVersion: response.headers.get('Andaru-Saved-Version') ?? '',
-        identityRevision: response.headers.get('Andaru-Identity-Revision') ?? '',
-        capturedAt: response.headers.get('Andaru-Captured-At') ?? '',
-      };
+      return { blob, headers: response.headers };
     } finally {
       cleanup();
     }
+  }
+
+  async createBackup(options: BackupCreateOptions): Promise<BackupDownload> {
+    const { blob, headers } = await this.requestBlob(
+      '/api/v1/backups',
+      { method: 'POST', body: JSON.stringify(options) },
+      true,
+      'application/zip, application/octet-stream, application/json',
+    );
+    const contentType = headers.get('Content-Type') ?? 'application/octet-stream';
+    return {
+      blob,
+      encrypted: contentType.toLowerCase().startsWith('application/octet-stream'),
+      savedVersion: headers.get('Andaru-Saved-Version') ?? '',
+      identityRevision: headers.get('Andaru-Identity-Revision') ?? '',
+      capturedAt: headers.get('Andaru-Captured-At') ?? '',
+    };
   }
 
   private postRestoreForm<T>(path: string, archive: Blob, options: Record<string, unknown>) {

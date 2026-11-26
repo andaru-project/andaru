@@ -32,3 +32,41 @@ it('filters loaded audit events by action, actor or result', async () => {
   expect(screen.getByText('login.failed')).toBeInTheDocument();
   expect(screen.queryByText('rule.created')).not.toBeInTheDocument();
 });
+
+it('exports audit JSON via /api/v1/audit/export and handles export errors and 401', async () => {
+  const user = userEvent.setup();
+  const onSessionLost = vi.fn();
+  const createObjectURL = vi.fn(() => 'blob:audit-export');
+  const revokeObjectURL = vi.fn();
+  vi.stubGlobal('URL', Object.assign(URL, { createObjectURL, revokeObjectURL }));
+  const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+  fetchQueue(
+    jsonResponse(200, { items: [{ id: 2, at: '2026-11-16T11:00:00Z', actor: { kind: 'account', id: 'admin' }, source: '192.0.2.1', action: 'login.success', target: 'admin', result: 'success', category: 'general', count: 1, metadata: {} }] }),
+    new Response(JSON.stringify({ items: [] }), {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Disposition': 'attachment; filename="audit-2026.json"',
+      },
+    }),
+    jsonResponse(503, { error: { code: 'UNAVAILABLE', message: 'Audit store offline.' } }),
+    jsonResponse(401, { error: { code: 'UNAUTHENTICATED', message: 'Session expired.' } }),
+  );
+  const fetchMock = globalThis.fetch;
+
+  render(<AuditScreen api={new ApiClient()} onSessionLost={onSessionLost} />);
+  await screen.findByText('login.success');
+
+  await user.click(screen.getByRole('button', { name: 'Export JSON' }));
+  expect(fetchMock).toHaveBeenLastCalledWith('/api/v1/audit/export?order=desc&limit=100', expect.anything());
+  expect(createObjectURL).toHaveBeenCalledTimes(1);
+  expect(clickSpy).toHaveBeenCalledTimes(1);
+
+  await user.click(screen.getByRole('button', { name: 'Export JSON' }));
+  expect(await screen.findByText('Audit store offline.')).toBeInTheDocument();
+
+  await user.click(screen.getByRole('button', { name: 'Export JSON' }));
+  expect(onSessionLost).toHaveBeenCalledTimes(1);
+  clickSpy.mockRestore();
+});

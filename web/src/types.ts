@@ -6,6 +6,23 @@ export interface Session {
   idleTimeoutSeconds: number;
 }
 
+export interface WebSessionItem {
+  id: string;
+  createdAt: string;
+  lastSeenAt: string;
+  expiresAt: string;
+  current: boolean;
+}
+
+export interface WebSessionPage {
+  items: WebSessionItem[];
+}
+
+export interface AuditExportDownload {
+  blob: Blob;
+  filename: string;
+}
+
 export interface User {
   id: string;
   login: string;

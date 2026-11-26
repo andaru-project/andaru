@@ -421,7 +421,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
                 }
               />
             )}
-            <Route path="/system/session" element={<SessionScreen session={session} />} />
+            <Route path="/system/session" element={<SessionScreen api={api} session={session} onSessionLost={onSessionLost} />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Stack>

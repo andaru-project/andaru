@@ -1,6 +1,7 @@
 import { Alert, Badge, Button, Group, Loader, ScrollArea, Stack, Table, Text, TextInput, Title } from '@mantine/core';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiClient, ApiError, apiErrorMessage } from '../api';
+import { triggerDownload } from '../download';
 import { formatTimestamp, useTimeZone } from '../timezone';
 import type { AuditEvent } from '../types';
 
@@ -12,6 +13,7 @@ export function AuditScreen({ api, onSessionLost }: AuditScreenProps) {
   const [nextCursor, setNextCursor] = useState('');
   const [filter, setFilter] = useState('');
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState('');
   const requestId = useRef(0);
   useEffect(() => () => { requestId.current += 1; }, []);
@@ -72,11 +74,28 @@ export function AuditScreen({ api, onSessionLost }: AuditScreenProps) {
   };
   const shown = events.filter(matches);
 
+  async function exportJson() {
+    if (exporting) return;
+    setExporting(true);
+    setError('');
+    try {
+      const result = await api.exportAudit();
+      triggerDownload(result.blob, result.filename);
+    } catch (requestError) {
+      handleError(requestError);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <Stack>
-      <Group justify="space-between" align="flex-end">
+      <Group justify="space-between" align="flex-end" wrap="wrap">
         <div><Title order={2}>Security audit</Title><Text c="dimmed">Security-relevant actions and outcomes retained by the engine, newest first.</Text></div>
-        <Button size="xs" variant="default" loading={loading && events.length > 0} onClick={() => void load()}>Refresh</Button>
+        <Group gap="xs">
+          <Button size="xs" variant="default" loading={exporting} onClick={() => void exportJson()}>Export JSON</Button>
+          <Button size="xs" variant="default" loading={loading && events.length > 0} onClick={() => void load()}>Refresh</Button>
+        </Group>
       </Group>
       {error && <Alert color="red" role="alert" title="Audit request failed">{error}</Alert>}
       {events.length > 0 && <TextInput label="Filter events" placeholder="An action, actor, target or result" value={filter} onChange={(event) => setFilter(event.currentTarget.value)} />}
