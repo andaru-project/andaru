@@ -143,12 +143,18 @@ describe('AliasPicker', () => {
     expect(onConnection).not.toHaveBeenCalledWith(false);
   });
 
-  it('supports single-select alias autocomplete and handles 401 session loss and search errors', async () => {
+  it('supports single-select alias autocomplete, cancels in-flight search on external value change, and handles 401 and errors', async () => {
     const user = userEvent.setup();
     const onSessionLost = vi.fn();
-    let mode: 'ok' | 'unauth' | 'fail' = 'ok';
+    let mode: 'ok' | 'hold' | 'unauth' | 'fail' = 'ok';
+    let heldSignal: AbortSignal | undefined;
+    let releaseHeld: ((res: Response) => void) | undefined;
     fetchRoutes({
-      '/api/v1/config/aliases/search': () => {
+      '/api/v1/config/aliases/search': (init) => {
+        if (mode === 'hold') {
+          heldSignal = init?.signal ?? undefined;
+          return new Promise<Response>((resolve) => { releaseHeld = resolve; });
+        }
         if (mode === 'unauth') return jsonResponse(401, { error: { code: 'UNAUTHENTICATED', message: 'Expired.' } });
         if (mode === 'fail') return jsonResponse(500, { error: { code: 'INTERNAL', message: 'Boom.' } });
         return jsonResponse(200, {
@@ -179,9 +185,22 @@ describe('AliasPicker', () => {
     });
     await user.click(opt);
     expect((singleInput as HTMLInputElement).value).toBe('db-primary');
-    // External value changes sync the single-select display input cleanly.
+
+    // External value change while a search is in flight aborts the request and ignores stale results.
+    mode = 'hold';
+    await user.clear(singleInput);
+    await user.type(singleInput, 'web');
+    await waitFor(() => expect(releaseHeld).toBeDefined());
     await user.click(screen.getByRole('button', { name: 'Reset external' }));
     expect((singleInput as HTMLInputElement).value).toBe('lan-net');
+    expect(heldSignal?.aborted).toBe(true);
+    releaseHeld?.(jsonResponse(200, {
+      state: 'saved',
+      savedVersion: '4',
+      items: [{ id: 'adr_stale', name: 'web-stale', kind: 'host', summary: '10.9.9.9', score: 900, highlights: [{ text: 'web', match: true }, { text: '-stale', match: false }] }],
+    }));
+    await waitFor(() => expect((singleInput as HTMLInputElement).value).toBe('lan-net'));
+    expect(screen.queryByText('web-stale')).not.toBeInTheDocument();
     unmount();
 
     mode = 'fail';

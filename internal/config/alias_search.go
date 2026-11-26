@@ -284,10 +284,20 @@ func matchAlias(id, name, description, kind, protocol, summary string, qRunes []
 	return item, true
 }
 
+func foldRune(r rune) rune {
+	minR := r
+	for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+		if f < minR {
+			minR = f
+		}
+	}
+	return minR
+}
+
 func toLowerRunes(s string) []rune {
 	out := []rune(s)
 	for i, r := range out {
-		out[i] = unicode.ToLower(r)
+		out[i] = foldRune(r)
 	}
 	return out
 }

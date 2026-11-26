@@ -25,6 +25,9 @@ func TestParseAliasSearchQuery(t *testing.T) {
 	if q.Type != "addresses" || q.Query != "web" || q.Kind != "host" || q.Family != "ipv4" || !q.ExcludeGroups || q.Exclude != "adr_self" || q.Limit != 15 {
 		t.Fatalf("unexpected parsed query: %+v", q)
 	}
+	if _, errMsg := parseAliasSearchQuery(url.Values{"type": {"addresses"}, "q": {strings.Repeat("é", 256)}}); errMsg != "" {
+		t.Fatalf("256 multibyte runes should fit maxLength 256, got: %s", errMsg)
+	}
 
 	cases := []struct {
 		name   string

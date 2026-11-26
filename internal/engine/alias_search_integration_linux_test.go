@@ -69,4 +69,10 @@ func TestAliasSearchEndpoint(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("invalid type = %d, want 400", w.Code)
 	}
+
+	// Malformed percent encoding returns 400 rather than falling back to browsing.
+	w = configCall(h, http.MethodGet, "/api/v1/config/aliases/search?type=addresses&q=%ZZ", "", "")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("malformed query encoding = %d, want 400", w.Code)
+	}
 }

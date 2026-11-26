@@ -126,6 +126,7 @@ func TestAliasSearchSubsequenceTypoAndSummary(t *testing.T) {
 			Addresses: []address{
 				{identity: identity{ID: "adr_db", Name: "database_prod"}, Kind: "host", Address: "10.0.0.10"},
 				{identity: identity{ID: "adr_uni", Name: "İstanbul-edge"}, Kind: "host", Address: "10.0.0.11"},
+				{identity: identity{ID: "adr_sigma", Name: "ος"}, Kind: "host", Address: "10.0.0.12"},
 			},
 		},
 	}
@@ -136,6 +137,10 @@ func TestAliasSearchSubsequenceTypoAndSummary(t *testing.T) {
 	uni := searchAliasesInDeclaration(extra, "1", AliasSearchQuery{Type: "addresses", Query: "edge"})
 	if len(uni.Items) != 1 || joinSegments(uni.Items[0].Highlights) != "İstanbul-edge" || boldText(uni.Items[0].Highlights) != "İstanbul-[edge]" {
 		t.Fatalf("unicode highlights = %+v", uni.Items)
+	}
+	sigma := searchAliasesInDeclaration(extra, "1", AliasSearchQuery{Type: "addresses", Query: "ΟΣ"})
+	if len(sigma.Items) != 1 || sigma.Items[0].ID != "adr_sigma" || boldText(sigma.Items[0].Highlights) != "[ος]" {
+		t.Fatalf("unicode case-fold sigma = %+v, want adr_sigma", sigma.Items)
 	}
 }
 

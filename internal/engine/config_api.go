@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/config"
@@ -159,7 +160,12 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 				}
 				send(200, v, e)
 			case "aliases-search":
-				q, msg := parseAliasSearchQuery(r.URL.Query())
+				values, parseErr := url.ParseQuery(r.URL.RawQuery)
+				if parseErr != nil {
+					writeError(w, r, 400, "INVALID_REQUEST", "Invalid alias search query encoding.")
+					return
+				}
+				q, msg := parseAliasSearchQuery(values)
 				if msg != "" {
 					writeError(w, r, 400, "INVALID_REQUEST", msg)
 					return
@@ -464,11 +470,11 @@ func parseAliasSearchQuery(values url.Values) (config.AliasSearchQuery, string) 
 	if out.Type != "addresses" && out.Type != "ports" {
 		return config.AliasSearchQuery{}, "Alias search type must be addresses or ports."
 	}
-	if len(out.Query) > 256 {
-		return config.AliasSearchQuery{}, "Alias search query is too long."
+	if !utf8.ValidString(out.Query) || utf8.RuneCountInString(out.Query) > 256 {
+		return config.AliasSearchQuery{}, "Alias search query is invalid or too long."
 	}
-	if len(out.Exclude) > 128 {
-		return config.AliasSearchQuery{}, "Alias search exclude ID is too long."
+	if !utf8.ValidString(out.Exclude) || utf8.RuneCountInString(out.Exclude) > 128 {
+		return config.AliasSearchQuery{}, "Alias search exclude ID is invalid or too long."
 	}
 	if out.Kind != "" {
 		validKinds := []string{"host", "network", "range", "group"}

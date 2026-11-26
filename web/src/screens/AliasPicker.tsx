@@ -36,18 +36,9 @@ export interface AliasSelectProps extends AliasSearchBaseProps {
   onChange(value: string | null): void;
 }
 
-function truncateUtf8(text: string, maxBytes: number): string {
-  const encoder = new TextEncoder();
-  if (encoder.encode(text).length <= maxBytes) return text;
-  let out = '';
-  let bytes = 0;
-  for (const ch of text) {
-    const len = encoder.encode(ch).length;
-    if (bytes + len > maxBytes) break;
-    out += ch;
-    bytes += len;
-  }
-  return out;
+function truncateCodePoints(text: string, maxChars: number): string {
+  const chars = Array.from(text);
+  return chars.length <= maxChars ? text : chars.slice(0, maxChars).join('');
 }
 
 function Highlighted({ segments }: { segments: TextSegment[] }) {
@@ -137,12 +128,13 @@ function useAliasSearch({
     };
   }, []);
 
-  // Cancel pending work whenever search scope changes (e.g. switching IPv4/IPv6 family).
+  // Cancel pending work whenever search scope or external single selection changes.
   useEffect(() => {
     clearTimeout(timerRef.current);
     abortRef.current?.abort();
+    abortRef.current = undefined;
     seqRef.current += 1;
-  }, [scopeKey]);
+  }, [scopeKey, singleSelected]);
 
   function cancelPending() {
     clearTimeout(timerRef.current);
@@ -154,7 +146,7 @@ function useAliasSearch({
   function handleSearchChange(next: string) {
     setSearchValue(next);
     cancelPending();
-    const trimmed = truncateUtf8(next.trim(), 256);
+    const trimmed = truncateCodePoints(next.trim(), 256);
     if (trimmed === '' || (singleSelectedLabel !== undefined && next === singleSelectedLabel)) {
       setRemote(null);
       setLoading(false);

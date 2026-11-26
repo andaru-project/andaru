@@ -3412,6 +3412,7 @@
           "name": "kind",
           "in": "query",
           "required": false,
+          "description": "Filter by alias sub-kind: host, network, range, or group when type=addresses; tcp, udp, icmp, icmpv6, or group when type=ports.",
           "schema": {
             "type": "string",
             "enum": [
@@ -3430,6 +3431,7 @@
           "name": "family",
           "in": "query",
           "required": false,
+          "description": "Filter address aliases by IP family (valid only when type=addresses).",
           "schema": {
             "type": "string",
             "enum": [
@@ -3502,6 +3504,16 @@
           },
           "405": {
             "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "description": "Configuration store unavailable; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
           }
         }
       },
@@ -3517,6 +3529,9 @@
           },
           "403": {
             "description": "Peer denied; no body"
+          },
+          "503": {
+            "description": "Configuration store unavailable; no body"
           }
         }
       }
