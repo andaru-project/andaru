@@ -68,6 +68,9 @@ const (
 	maxTopic   = 1 << 10
 )
 
+// pruneInterval is how often the store is pruned; a variable only so that tests need not wait an hour.
+var pruneInterval = time.Hour
+
 // ErrStore wraps a failure to open the store at Options.Path: a damaged file, or a disk that fails while it is
 // opened.
 var ErrStore = errors.New("bus store unusable")
@@ -137,7 +140,7 @@ func Open(o Options) (*Bus, error) {
 		b.log.Error("bus prune failed", "error", err)
 	}
 	b.done.Add(1)
-	go b.pruneEvery(time.Hour)
+	go b.pruneEvery(pruneInterval)
 	for _, l := range o.Listeners {
 		b.listeners = append(b.listeners, l)
 		b.done.Add(1)

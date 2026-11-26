@@ -31,15 +31,18 @@ type frame struct {
 }
 
 const (
-	maxFrame     = 1 << 20          // a payload is at most maxPayload, half of it
-	queued       = 256              // frames waiting for a client; a client this far behind is disconnected
-	window       = 64               // events a consumer is sent before it acks
-	writeTimeout = 10 * time.Second // a client that stops reading loses its connection
+	maxFrame     = 1 << 20 // a payload is at most maxPayload, half of it
+	queued       = 256     // frames waiting for a client; a client this far behind is disconnected
+	window       = 64      // events a consumer is sent before it acks
 	helloTimeout = 10 * time.Second
 	maxReads     = 64  // consumers a connection reads
 	maxSubs      = 256 // subscriptions a connection holds
 	maxName      = 128 // bytes of a consumer's name
 )
+
+// writeTimeout is how long a write to the other side may take: a peer that stops reading loses its connection. A
+// variable only so that tests need not wait for it.
+var writeTimeout = 10 * time.Second
 
 type conn struct {
 	b      *Bus
