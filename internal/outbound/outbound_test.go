@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/andaru-project/andaru/internal/aliasfeed"
 	"github.com/andaru-project/andaru/internal/bus"
 	"github.com/andaru-project/andaru/internal/delivery"
 	"github.com/andaru-project/andaru/internal/notify"
@@ -56,8 +57,9 @@ func (b *bench) open(lost bool) {
 		b.t.Fatal(err)
 	}
 	b.bus, err = bus.Open(bus.Options{
-		Path:         filepath.Join(b.dir, "bus.db"),
-		Grants:       map[string]bus.Grants{User: {Publish: []string{"notification/delivery"}, Subscribe: []string{delivery.Filter}}},
+		Path: filepath.Join(b.dir, "bus.db"),
+		Grants: map[string]bus.Grants{User: {Publish: []string{"notification/delivery", "alias-result/+"},
+			Subscribe: []string{delivery.Filter, aliasfeed.Filter}}},
 		Authenticate: func(_, _ string) bool { return true },
 		Listeners:    map[string]net.Listener{"test": l},
 		LostHistory:  lost,
