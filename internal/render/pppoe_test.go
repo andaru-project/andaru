@@ -82,6 +82,11 @@ func TestPPPoEFindings(t *testing.T) {
 			in.Secrets = map[string]string{"WAN_PASSWORD": long}
 			return in
 		}},
+		{"password with a newline", "error", "CREDENTIAL_INVALID", "/links/2/password", true, func() Input {
+			in := fixture(t, "owner")
+			in.Secrets = map[string]string{"WAN_PASSWORD": "x\nplugin /tmp/evil.so"}
+			return in
+		}},
 		{"static IPv6 on PPP", "error", "UNSUPPORTED_COMBINATION", "/segments/0/addressing/ipv6/mode", false, func() Input {
 			return change(t, fixture(t, "pppoe-ethernet"), func(d map[string]any) {
 				v6(d)["mode"] = "static"

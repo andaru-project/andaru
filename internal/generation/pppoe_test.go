@@ -173,7 +173,9 @@ func TestDHCPUplinkMovesToPPPoE(t *testing.T) {
 	}{
 		{"up", "one", "", false},
 		{"up from the factory file", "one", "", true},
-		{"never up", "wrong", "the IPv4 default route is gone", false},
+		{"never up", "wrong", "the IPv4 default route is gone; PPPoE session pp0 is not up", false},
+		// A parent that also takes a lease of its own must still get one.
+		{"parent keeps DHCP", "one", "eth0 lost its IPv4 address", false},
 	} {
 		b := newBench(t)
 		if s.factory {
@@ -188,6 +190,10 @@ func TestDHCPUplinkMovesToPPPoE(t *testing.T) {
 		b.r.VerifyWait = 100 * b.r.Poll
 		files := session("nic-eth0\npassword \"" + s.password + "\"\n")
 		files["50-andaru-eth0.network"] = parent
+		if s.name == "parent keeps DHCP" {
+			files["50-andaru-eth0.network"] = uplinkDHCP
+			b.net.noLease = true
+		}
 		err := b.applyConfirmed(files)
 		if (err == nil) != (s.want == "") || err != nil && !strings.Contains(err.Error(), s.want) {
 			t.Fatalf("%s: apply = %v, want %q", s.name, err, s.want)
@@ -207,5 +213,16 @@ func TestInterfaceThatIsNoParentKeepsItsAddress(t *testing.T) {
 	id := b.gen(files)
 	if err := b.r.Activate(t.Context(), id); err == nil || !strings.Contains(err.Error(), "eth1 lost its IPv4 address") {
 		t.Fatalf("activate = %v, want eth1's lost address", err)
+	}
+}
+
+func TestAsksIPv4(t *testing.T) {
+	for data, want := range map[string]bool{
+		"DHCP=yes\n": true, "DHCP=ipv4\n": true, "Address=192.0.2.1/24\n": true, "Address=nonsense\n": true,
+		"DHCP=ipv6\n": false, "DHCP=no\n": false, "Address=2001:db8::1/64\n": false, "": false,
+	} {
+		if got := asksIPv4([]byte("[Network]\n" + data)); got != want {
+			t.Errorf("asksIPv4(%q) = %v, want %v", data, got, want)
+		}
 	}
 }

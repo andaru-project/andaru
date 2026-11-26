@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 const redacted = "<redacted>"
@@ -91,6 +92,10 @@ func (r *renderer) pppoe(i int) {
 	}
 	if len(password) > credentialLimit {
 		r.find("error", "CREDENTIAL_TOO_LONG", linkPath(i, "password"), "pppd truncates passwords longer than 255 bytes; authentication would fail.")
+	}
+	// pppd reads its options a line and a word at a time: a control character would end the password and start an option.
+	if strings.ContainsFunc(password, unicode.IsControl) {
+		r.find("error", "CREDENTIAL_INVALID", linkPath(i, "password"), "Control characters are not allowed in a PPPoE password.")
 	}
 	options := func(passwordWord string) string {
 		lines := []string{

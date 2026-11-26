@@ -326,6 +326,21 @@ func (o observation) connected() (names []string, route bool) {
 	return names, route
 }
 
+// asksIPv4 says whether a rendered .network file gives its interface an IPv4 address of its own.
+func asksIPv4(data []byte) bool {
+	for line := range strings.SplitSeq(string(data), "\n") {
+		if value, ok := strings.CutPrefix(line, "DHCP="); ok && (value == "yes" || value == "ipv4") {
+			return true
+		}
+		if value, ok := strings.CutPrefix(line, "Address="); ok {
+			if p, err := netip.ParsePrefix(value); err != nil || p.Addr().Is4() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // unmet says why the host does not yet run the generation; "" means it does.
 func (o observation) unmet(set []placed, names []string, route bool) string {
 	for _, f := range set {
@@ -366,7 +381,13 @@ func (o observation) unmet(set []placed, names []string, route bool) string {
 		}
 	}
 	if route && o.route == "" {
-		return "the IPv4 default route is gone"
+		why := "the IPv4 default route is gone"
+		for _, name := range pppSessions(set) {
+			if l, ok := o.link(name); !ok || !globalIPv4(l) {
+				why += "; PPPoE session " + name + " is not up"
+			}
+		}
+		return why
 	}
 	return ""
 }
@@ -433,8 +454,12 @@ func (r Realizer) Activate(ctx context.Context, id int) (result error) {
 		if l, _ := before.link(name); l.Kind == "ppp" {
 			return !slices.Contains(pppSessions(next), name)
 		}
-		// Nor is the address of an interface a session now runs over: the session carries the uplink instead.
-		return slices.Contains(pppParents(next), name)
+		// Nor is the address of an interface a session now runs over, unless its own file still asks for one.
+		if !slices.Contains(pppParents(next), name) {
+			return false
+		}
+		i := slices.IndexFunc(next, func(f placed) bool { return filepath.Base(f.path) == "50-andaru-"+name+".network" })
+		return i < 0 || !asksIPv4(next[i].data)
 	})
 
 	// State first: a kill before the pointer moves leaves a generation that was never pending.

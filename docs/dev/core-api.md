@@ -414,6 +414,7 @@ What is rendered:
 | `KERNEL_SUPPORT_MISSING` | error | `/dev/ppp` is absent. Try `modprobe ppp_generic`. If the module does not exist, the kernel has no PPP: Debian's cloud kernel (`linux-image-cloud-*`) omits it, so install `linux-image-amd64` or `linux-image-arm64` and boot it. |
 | `INTERFACE_NAME_UNSUPPORTED` | error | A PPPoE parent NIC has a kernel name outside `[A-Za-z0-9_.:-]`. |
 | `CREDENTIAL_TOO_LONG` | error | pppd truncates user names and passwords over 255 bytes. |
+| `CREDENTIAL_INVALID` | error | A PPPoE password holds a control character, such as a newline, which pppd would read as the start of another option. |
 | `UNSUPPORTED_COMBINATION` | error or warning | A PPPoE segment may use IPv4 `ppp`/`none` and IPv6 `none`/`slaac`/`dhcp6`, at least one of them, without RA. A PPPoE link with no segment is left out (warning). |
 | `DEPENDENCY_UNAVAILABLE` | warning | Something was left out because a link it needs is missing, ambiguous or disabled. A bridge or bond keeps its remaining members. |
 | `RA_PREFIX_UNSUPPORTED` | warning | Router advertisements were requested where nothing can be announced. |
