@@ -54,7 +54,7 @@ func (h aliasesAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, ok := strings.CutSuffix(strings.TrimPrefix(r.URL.Path, aliasesPath+"/"), "/refresh")
-	if !ok || !strings.HasPrefix(r.URL.Path, aliasesPath+"/") || id == "" || strings.Contains(id, "/") {
+	if !ok || id == "" || strings.Contains(id, "/") { // api.go routes only paths under aliasesPath+"/" here
 		writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
 		return
 	}
