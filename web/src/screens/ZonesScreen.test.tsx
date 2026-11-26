@@ -172,4 +172,46 @@ describe('ZonesScreen', () => {
     expect(screen.queryByRole('button', { name: 'Add zone' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Edit zone DMZ' })).not.toBeInTheDocument();
   });
+
+  it('binds collection-indexed 422 errors, supports keyboard colour selection, and handles 412 and 401', async () => {
+    const user = userEvent.setup();
+    let putMode: '422' | '412' | '401' = '422';
+    fetchRoutes({
+      '/api/v1/config/zones': { state: 'saved', savedVersion: '9', items: savedZones },
+      '/api/v1/config': sampleSnapshot,
+      'PUT /api/v1/config/zones/zon_dmz': () => {
+        if (putMode === '422') {
+          return jsonResponse(422, { error: { code: 'VALIDATION_FAILED', message: 'Invalid.', details: [{ path: '/zones/0/name', message: 'Name already exists in this collection.' }] } });
+        }
+        if (putMode === '412') {
+          return jsonResponse(412, { error: { code: 'PRECONDITION_FAILED', message: 'Stale.' } });
+        }
+        return jsonResponse(401, { error: { code: 'UNAUTHENTICATED', message: 'Expired.' } });
+      },
+    });
+    const { onSessionLost } = renderZones();
+
+    await user.click(await screen.findByRole('button', { name: 'Edit zone DMZ' }));
+    const drawer = await screen.findByRole('dialog', { name: 'Edit zone: DMZ' });
+
+    // Keyboard ArrowRight moves selection from Violet to Indigo.
+    const violetRadio = within(drawer).getByRole('radio', { name: 'Violet' });
+    violetRadio.focus();
+    await user.keyboard('{ArrowRight}');
+    expect(within(drawer).getByRole('radio', { name: 'Indigo' })).toHaveAttribute('aria-checked', 'true');
+
+    // /zones/0/name 422 binds to the Name field.
+    await user.click(within(drawer).getByRole('button', { name: 'Save zone' }));
+    expect(await within(drawer).findByText('Name already exists in this collection.')).toBeInTheDocument();
+
+    // 412 shows conflict alert inside drawer.
+    putMode = '412';
+    await user.click(within(drawer).getByRole('button', { name: 'Save zone' }));
+    expect(await within(drawer).findByText(/changed by someone else/i)).toBeInTheDocument();
+
+    // 401 triggers onSessionLost.
+    putMode = '401';
+    await user.click(within(drawer).getByRole('button', { name: 'Save zone' }));
+    await waitFor(() => expect(onSessionLost).toHaveBeenCalledTimes(1));
+  });
 });

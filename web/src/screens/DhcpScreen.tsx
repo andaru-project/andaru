@@ -8,6 +8,7 @@ import {
 import { formatTimestamp, useTimeZone } from '../timezone';
 import type { Dhcp4Entry, Dhcp6Entry, Lease4, Lease6, LeaseState, LeaseView, SavedObject, Segment, Session, Snapshot } from '../types';
 import { useResource, useVisiblePoll } from '../useResource';
+import { zoneColorMap } from '../zones';
 import { Address } from './Address';
 import { DhcpEditor, type DhcpEditorTarget } from './DhcpEditor';
 import { MakeStaticModal, type MakeStaticTarget } from './MakeStaticModal';
@@ -164,7 +165,7 @@ export function DhcpScreen({ api, session, onSaved, onSessionLost }: DhcpScreenP
     : (canReadConfig ? 'servers' : 'leases');
   const segments = snapshot?.value.segments ?? [];
   const zones = new Map((snapshot?.value.zones ?? []).map((z) => [z.id, z.name]));
-  const zoneColors = new Map((snapshot?.value.zones ?? []).filter((z) => z.color).map((z) => [z.id, z.color!]));
+  const zoneColors = zoneColorMap(snapshot?.value.zones ?? []);
   const segmentById = new Map(segments.map((s) => [s.id, s]));
   const dhcp4BySegment = new Map((snapshot?.value.dhcp ?? []).map((e) => [e.segment, e]));
   const dhcp6BySegment = new Map((snapshot?.value.dhcp6 ?? []).map((e) => [e.segment, e]));
