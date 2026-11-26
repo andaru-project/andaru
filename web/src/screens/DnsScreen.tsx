@@ -37,6 +37,7 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
   const [errors, setErrors] = useState(new Map<string, string>());
   const [errorFocusTick, setErrorFocusTick] = useState(0);
   const [failure, setFailure] = useState('');
+  const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [disabling, setDisabling] = useState(false);
 
@@ -46,7 +47,7 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
   const formRef = useRef<HTMLFormElement>(null);
   const keepRef = useRef<HTMLButtonElement>(null);
   const disableRef = useRef<HTMLButtonElement>(null);
-  const wasDisabling = useRef(false);
+  const restoreDisableFocus = useRef(false);
   useEffect(() => { if (failure) failureRef.current?.scrollIntoView?.({ block: 'nearest' }); }, [failure]);
   useEffect(() => {
     if (errorFocusTick === 0) return;
@@ -54,16 +55,19 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
     formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]:not(:disabled)')?.focus();
   }, [errorFocusTick]);
   useEffect(() => {
-    if (disabling) keepRef.current?.focus();
-    else if (wasDisabling.current) disableRef.current?.focus();
-    wasDisabling.current = disabling;
+    if (disabling) {
+      keepRef.current?.focus();
+    } else if (restoreDisableFocus.current) {
+      restoreDisableFocus.current = false;
+      disableRef.current?.focus();
+    }
   }, [disabling]);
 
-  if (resource.data !== seenData) {
+  if (resource.data !== seenData && !busy) {
     setSeenData(resource.data);
     if (resource.data) {
       const serverVersion = resource.data.dns?.version ?? '0';
-      if (!dirty || draft === null) {
+      if ((!dirty && !disabling) || draft === null) {
         setDraft(dnsDraftOf(resource.data.dns?.value, resource.data.snapshot));
         setBaseVersion(serverVersion);
         if (resource.data.dns) setEnabling(false);
@@ -73,6 +77,9 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
         setBaseVersion('0');
         setDirty(false);
         setDisabling(false);
+        setErrors(new Map());
+        setFailure('');
+        setNotice('The DNS service was disabled elsewhere. Your unsaved edits were discarded.');
       }
     }
   }
@@ -181,15 +188,18 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
     setBusy(true);
     setErrors(new Map());
     setFailure('');
+    setNotice('');
     try {
       const saved = await api.saveDns(dnsPayload(pruned), baseVersion);
       if (!mounted.current) return;
+      setDraft(dnsDraftOf(saved.value, snapshot));
       setBaseVersion(saved.version);
-      setDirty(false);
-      setDisabling(false);
       onSaved();
       await resource.reload();
-      if (mounted.current) setEnabling(false);
+      if (!mounted.current) return;
+      setDirty(false);
+      setEnabling(false);
+      setDisabling(false);
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) return onSessionLost();
       if (!mounted.current) return;
@@ -211,14 +221,16 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
     setBusy(true);
     setErrors(new Map());
     setFailure('');
+    setNotice('');
     try {
       await api.deleteDns(baseVersion);
+      if (!mounted.current) return;
+      onSaved();
+      await resource.reload();
       if (!mounted.current) return;
       setDirty(false);
       setEnabling(false);
       setDisabling(false);
-      onSaved();
-      await resource.reload();
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) return onSessionLost();
       if (!mounted.current) return;
@@ -250,6 +262,10 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
       </Group>
 
       {resource.error && <Alert color="red" role="alert" title="DNS request failed">{resource.error}</Alert>}
+
+      {notice && (
+        <Alert color="yellow" role="status" withCloseButton onClose={() => setNotice('')}>{notice}</Alert>
+      )}
 
       {remoteChanged && (
         <Alert color="yellow" role="status" title="Saved DNS configuration changed elsewhere">
@@ -536,7 +552,14 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
                       ref={keepRef}
                       variant="default"
                       disabled={busy}
-                      onClick={() => (disabling ? setDisabling(false) : resetForm())}
+                      onClick={() => {
+                        if (disabling) {
+                          restoreDisableFocus.current = true;
+                          setDisabling(false);
+                        } else {
+                          resetForm();
+                        }
+                      }}
                     >
                       {disabling ? 'Keep DNS' : dns ? 'Reset' : 'Cancel'}
                     </Button>
