@@ -290,79 +290,97 @@ func listenRootSocket(socketPath, name string) (_ *net.UnixListener, closeListen
 	return listener, closeListener, nil
 }
 
-func serveWebUnix(ctx context.Context, web WebSocketOptions, handler http.Handler) (result error) {
-	socketPath := web.SocketPath
-	if os.Geteuid() != 0 {
-		return errors.New("the engine requires root")
-	}
+// listenGroupSocket binds a socket of mode 0660 for one group, in a root-owned directory of mode 0710 with that group,
+// which it creates if needed, and takes it over from a killed engine (claimWebSocket). closeListener closes it,
+// removes the socket file and gives the claim back.
+func listenGroupSocket(socketPath string, gid uint32, name string) (_ *net.UnixListener, closeListener func() error, result error) {
 	if !filepath.IsAbs(socketPath) || filepath.Clean(socketPath) != socketPath || len(socketPath) >= 108 {
-		return errors.New("web engine socket requires a canonical absolute path shorter than 108 bytes")
-	}
-	if ctx.Err() != nil {
-		return nil
+		return nil, nil, errors.New(name + " socket requires a canonical absolute path shorter than 108 bytes")
 	}
 	parent := filepath.Dir(socketPath)
 	if err := securefs.CheckAncestors(filepath.Dir(parent)); err != nil {
-		return err
+		return nil, nil, err
 	}
 	created := false
 	if err := os.Mkdir(parent, 0710); err == nil {
 		created = true
-		if err = os.Chown(parent, 0, int(web.GID)); err != nil {
+		if err = os.Chown(parent, 0, int(gid)); err != nil {
 			_ = os.Remove(parent)
-			return fmt.Errorf("set web engine runtime directory group: %w", webGroupHint(err, web.GID))
+			return nil, nil, fmt.Errorf("set %s runtime directory group: %w", name, webGroupHint(err, gid))
 		}
 		if err = os.Chmod(parent, 0710); err != nil {
 			_ = os.Remove(parent)
-			return fmt.Errorf("protect web engine runtime directory: %w", err)
+			return nil, nil, fmt.Errorf("protect %s runtime directory: %w", name, err)
 		}
 	} else if !os.IsExist(err) {
-		return fmt.Errorf("create web engine runtime directory: %w", err)
+		return nil, nil, fmt.Errorf("create %s runtime directory: %w", name, err)
 	}
 	info, err := os.Lstat(parent)
 	if err != nil {
-		return fmt.Errorf("inspect web engine runtime directory: %w", err)
+		return nil, nil, fmt.Errorf("inspect %s runtime directory: %w", name, err)
 	}
 	stat, statOK := info.Sys().(*syscall.Stat_t)
-	if !info.IsDir() || info.Mode().Perm() != 0710 || !securefs.RootOwned(info) || !statOK || stat.Gid != web.GID {
+	if !info.IsDir() || info.Mode().Perm() != 0710 || !securefs.RootOwned(info) || !statOK || stat.Gid != gid {
 		if created {
 			_ = os.Remove(parent)
 		}
-		return errors.New("web engine socket parent must be a root-owned 0710 directory with the configured group, not a symlink")
+		return nil, nil, errors.New(name + " socket parent must be a root-owned 0710 directory with the configured group, not a symlink")
 	}
 	claim, err := claimWebSocket(socketPath)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	defer claim.Close()
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
 	if err != nil {
-		return fmt.Errorf("listen on web engine socket: %w", err)
+		_ = claim.Close()
+		return nil, nil, fmt.Errorf("listen on %s socket: %w", name, err)
 	}
 	listener.SetUnlinkOnClose(false)
 	bound, err := os.Lstat(socketPath)
 	if err != nil || bound.Mode()&os.ModeSocket == 0 || !securefs.RootOwned(bound) {
 		_ = listener.Close()
-		return errors.New("cannot establish ownership of the bound web engine socket")
+		_ = claim.Close()
+		return nil, nil, errors.New("cannot establish ownership of the bound " + name + " socket")
+	}
+	closeListener = func() error {
+		_ = listener.Close()
+		err := removeOwnedSocket(socketPath, bound)
+		return errors.Join(err, claim.Close())
 	}
 	defer func() {
-		_ = listener.Close()
-		result = errors.Join(result, removeOwnedSocket(socketPath, bound))
+		if result != nil {
+			_ = closeListener()
+		}
 	}()
-	if err = os.Chown(socketPath, 0, int(web.GID)); err != nil {
-		return fmt.Errorf("set web engine socket group: %w", webGroupHint(err, web.GID))
+	if err = os.Chown(socketPath, 0, int(gid)); err != nil {
+		return nil, nil, fmt.Errorf("set %s socket group: %w", name, webGroupHint(err, gid))
 	}
 	if err = os.Chmod(socketPath, 0660); err != nil {
-		return fmt.Errorf("protect web engine socket: %w", err)
+		return nil, nil, fmt.Errorf("protect %s socket: %w", name, err)
 	}
 	owned, err := os.Lstat(socketPath)
 	if err != nil {
-		return fmt.Errorf("inspect bound web engine socket: %w", err)
+		return nil, nil, fmt.Errorf("inspect bound %s socket: %w", name, err)
 	}
 	socketStat, statOK := owned.Sys().(*syscall.Stat_t)
-	if owned.Mode()&os.ModeSocket == 0 || owned.Mode().Perm() != 0660 || !securefs.RootOwned(owned) || !os.SameFile(bound, owned) || !statOK || socketStat.Gid != web.GID {
-		return errors.New("cannot establish ownership and mode of the bound web engine socket")
+	if owned.Mode()&os.ModeSocket == 0 || owned.Mode().Perm() != 0660 || !securefs.RootOwned(owned) || !os.SameFile(bound, owned) || !statOK || socketStat.Gid != gid {
+		return nil, nil, errors.New("cannot establish ownership and mode of the bound " + name + " socket")
 	}
+	return listener, closeListener, nil
+}
+
+func serveWebUnix(ctx context.Context, web WebSocketOptions, handler http.Handler) (result error) {
+	if os.Geteuid() != 0 {
+		return errors.New("the engine requires root")
+	}
+	if ctx.Err() != nil {
+		return nil
+	}
+	listener, closeListener, err := listenGroupSocket(web.SocketPath, web.GID, "web engine")
+	if err != nil {
+		return err
+	}
+	defer func() { result = errors.Join(result, closeListener()) }()
 	verified := &webPeerListener{UnixListener: listener, uid: web.UID}
 	return serveHTTP(ctx, verified, handler, func(ctx context.Context, connection net.Conn) context.Context {
 		peer, ok := connection.(*verifiedWebConn)

@@ -36,6 +36,7 @@ for p in systemd-networkd kea kea-hooks unbound ppp openvpn qemu-guest-agent ipu
 	rpm -q --quiet "$p" || fail "$p is not installed"
 done
 grep -q "^u andaru-diag " /usr/lib/sysusers.d/andaru.conf || fail "andaru-diag, the user diagnostics run as, is not declared"
+grep -q "^g andaru-services " /usr/lib/sysusers.d/andaru.conf || fail "andaru-services, the group of the services bus socket, is not declared"
 for p in moby-engine containerd; do
 	! rpm -q --quiet "$p" || fail "$p is installed"
 done

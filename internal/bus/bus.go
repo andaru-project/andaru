@@ -41,6 +41,11 @@ type Options struct {
 	Authenticate func(user, token string) bool
 	// Listeners by ID, for clients outside the engine.
 	Listeners map[string]net.Listener
+	// PeerListeners by ID, for Andaru's unprivileged services: a client there must give the user name PeerUser maps
+	// its peer user ID to, whatever token it sends. Grants stay per user name.
+	PeerListeners map[string]net.Listener
+	// PeerUser names the user a peer user ID belongs to. Nil refuses every client on PeerListeners.
+	PeerUser func(uid uint32) (string, error)
 	// Retention is how long the log keeps an event, and how long a consumer nobody attaches is kept. Zero means
 	// seven days.
 	Retention time.Duration
@@ -141,10 +146,12 @@ func Open(o Options) (*Bus, error) {
 	}
 	b.done.Add(1)
 	go b.pruneEvery(pruneInterval)
-	for _, l := range o.Listeners {
-		b.listeners = append(b.listeners, l)
-		b.done.Add(1)
-		go b.serve(l)
+	for peer, listeners := range map[bool]map[string]net.Listener{false: o.Listeners, true: o.PeerListeners} {
+		for _, l := range listeners {
+			b.listeners = append(b.listeners, l)
+			b.done.Add(1)
+			go b.serve(l, peer)
+		}
 	}
 	return b, nil
 }

@@ -99,7 +99,8 @@ A write to a client has ten seconds. A client 256 frames behind is disconnected,
 ### Sockets
 
 - **`bus.sock`, for Andaru's root processes.** It sits beside the engine's API socket: root-owned, mode 0600, in the engine's runtime directory. Only root reaches it, so a client there is trusted with the grants of the user name it gives. `andaru realize` publishes on it.
-- **For add-ons and Andaru's unprivileged services.** They will need a socket of their own, where a client authenticates. It comes with the add-on model and with the outbound service of #115 and #116.
+- **`/run/andaru-services/bus.sock`, for Andaru's unprivileged services** (#173). tmpfiles.d creates the directory, root-owned and mode 0710 with the group `andaru-services`; the engine binds the socket there, mode 0660 in that group, as it does the web socket. A client is known by its peer user ID (`SO_PEERCRED`): its hello must give the user name that user ID has, whatever token it sends, or it is refused. Grants stay per user name; the first is `andaru-outbound`'s, which may subscribe to `delivery/#` and publish on `notification/delivery`. Without the group, as on a host where sysusers.d has not run, the engine starts without this socket and says so.
+- **For add-ons.** They will need a socket of their own, where a client authenticates. It comes with the add-on model.
 
 ### The web UI
 
@@ -144,7 +145,7 @@ A browser does not connect to the bus.
 ## What comes next
 
 3. **Notifications** ([#116](https://github.com/andaru-project/andaru/issues/116), [design](2026-11-23-notifications-design.md)): the notification subsystem as the first durable consumer.
-4. **The socket for unprivileged services and add-ons**, with authentication, for the outbound service and, later, the grants from add-on manifests.
+4. **The socket for unprivileged services** (done in #173), and later one for add-ons, with the grants from add-on manifests.
 
 ## Risks
 
