@@ -239,36 +239,46 @@ describe('NotificationChannelsPanel', () => {
     await user.click(screen.getByRole('button', { name: 'Edit ops' }));
     const editDialog = await screen.findByRole('dialog', { name: 'Edit channel: ops' });
 
-    const beforeReads = listReads;
+    let beforeReads = listReads;
     await user.click(within(editDialog).getByRole('button', { name: 'Save channel' }));
     expect(await screen.findByText('This secret belongs to another kind of object.')).toBeInTheDocument();
+    await waitFor(() => expect(listReads).toBeGreaterThan(beforeReads));
     const urlInput = within(editDialog).getByLabelText(/^Webhook URL/, { selector: 'input' });
     expect(urlInput).toHaveAttribute('aria-invalid', 'true');
     expect(urlInput).toHaveAttribute('autocomplete', 'new-password');
 
     putMode = 'missing';
+    beforeReads = listReads;
     await user.click(within(editDialog).getByRole('button', { name: 'Save channel' }));
     expect(await screen.findByText(/deleted by someone else/i)).toBeInTheDocument();
     await waitFor(() => expect(listReads).toBeGreaterThan(beforeReads));
 
     putMode = 'conflict';
+    beforeReads = listReads;
     await user.click(within(editDialog).getByRole('button', { name: 'Save channel' }));
     expect(await screen.findByText(/changed by someone else/i)).toBeInTheDocument();
+    await waitFor(() => expect(listReads).toBeGreaterThan(beforeReads));
 
-    putMode = 'unauth';
-    await user.click(within(editDialog).getByRole('button', { name: 'Save channel' }));
-    await waitFor(() => expect(onSessionLost).toHaveBeenCalledTimes(1));
-
-    // Close drawer and verify DELETE 412 and 404 friendly messages + reload.
+    // Close drawer and verify DELETE 412 and 404 friendly messages + reload before simulating 401 session loss.
     await user.click(within(editDialog).getByRole('button', { name: 'Cancel' }));
     await user.click(screen.getByRole('button', { name: 'Delete ops' }));
+    beforeReads = listReads;
     await user.click(screen.getByRole('button', { name: 'Delete channel' }));
     expect(await screen.findByText(/changed elsewhere while the confirmation was open/i)).toBeInTheDocument();
+    await waitFor(() => expect(listReads).toBeGreaterThan(beforeReads));
 
     deleteStatus = 404;
     await user.click(screen.getByRole('button', { name: 'Delete ops' }));
+    beforeReads = listReads;
     await user.click(screen.getByRole('button', { name: 'Delete channel' }));
     expect(await screen.findByText(/already deleted elsewhere/i)).toBeInTheDocument();
+    await waitFor(() => expect(listReads).toBeGreaterThan(beforeReads));
+
+    putMode = 'unauth';
+    await user.click(screen.getByRole('button', { name: 'Edit ops' }));
+    const unauthDialog = await screen.findByRole('dialog', { name: 'Edit channel: ops' });
+    await user.click(within(unauthDialog).getByRole('button', { name: 'Save channel' }));
+    await waitFor(() => expect(onSessionLost).toHaveBeenCalledTimes(1));
   });
 
   it('shows the Channels tab on NotificationsScreen with notifications.read + configuration.read, and Channels-only with configuration.read alone', async () => {
