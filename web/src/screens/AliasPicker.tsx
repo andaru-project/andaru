@@ -1,7 +1,10 @@
 import { Loader, MultiSelect, Select, Text, type ComboboxItem, type ComboboxParsedItem, type OptionsFilter } from '@mantine/core';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ApiClient, ApiError } from '../api';
+import { parseAliasLiterals, type LiteralAliasCandidate } from '../aliasLiteral';
+import { ApiClient, ApiError, apiErrorMessage } from '../api';
 import type { AliasKinds, AliasSearchItem, TextSegment } from '../types';
+
+const createOptionPrefix = '__create_alias__:';
 
 export interface AliasOption {
   value: string;
@@ -23,6 +26,8 @@ interface AliasSearchBaseProps {
   clearable?: boolean;
   nothingFoundMessage?: string;
   debounceMs?: number;
+  allowCreateLiteral?: boolean;
+  onAliasCreated?: (alias: AliasKinds[keyof AliasKinds]) => void;
   onSessionLost?: () => void;
 }
 
@@ -51,6 +56,13 @@ function Highlighted({ segments }: { segments: TextSegment[] }) {
   );
 }
 
+function defaultNothingFound(aliasType: keyof AliasKinds, allowCreateLiteral: boolean): string {
+  if (!allowCreateLiteral) return 'No alias by that name. Aliases are made under Firewall ▸ Aliases.';
+  return aliasType === 'addresses'
+    ? 'No matching alias. Type an IPv4/IPv6 address, CIDR, or range to create one.'
+    : 'No matching alias. Type a port or protocol/port (e.g. 443, tcp/8080) to create one.';
+}
+
 function useAliasSearch({
   api,
   aliasType,
@@ -63,6 +75,8 @@ function useAliasSearch({
   singleSelected,
   nothingFoundMessage,
   debounceMs = 150,
+  allowCreateLiteral = true,
+  onAliasCreated,
   onSessionLost,
 }: {
   api: ApiClient;
@@ -76,6 +90,8 @@ function useAliasSearch({
   singleSelected?: string;
   nothingFoundMessage: string;
   debounceMs?: number;
+  allowCreateLiteral?: boolean;
+  onAliasCreated?: (alias: AliasKinds[keyof AliasKinds]) => void;
   onSessionLost?: () => void;
 }) {
   const scopeKey = `${aliasType}|${kind ?? ''}|${family ?? ''}|${excludeGroups ? '1' : '0'}|${exclude ?? ''}`;
@@ -90,11 +106,15 @@ function useAliasSearch({
   const [searchValue, setSearchValue] = useState(singleSelectedLabel ?? '');
   const [remote, setRemote] = useState<{ query: string; items: AliasSearchItem[] } | null>(null);
   const [loading, setLoading] = useState(false);
+  const [creating, setCreating] = useState(false);
   const [searchError, setSearchError] = useState('');
+  const [createError, setCreateError] = useState('');
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const abortRef = useRef<AbortController | undefined>(undefined);
   const seqRef = useRef(0);
+  const scopeSeqRef = useRef(0);
+  const creatingRef = useRef(false);
   const mountedRef = useRef(true);
 
   if (scopeKey !== seenScope) {
@@ -104,6 +124,7 @@ function useAliasSearch({
     setRemote(null);
     setLoading(false);
     setSearchError('');
+    setCreateError('');
     setSearchValue(singleSelectedLabel ?? '');
   } else if (singleSelected !== seenSingleValue) {
     setSeenSingleValue(singleSelected);
@@ -111,6 +132,7 @@ function useAliasSearch({
     setRemote(null);
     setLoading(false);
     setSearchError('');
+    setCreateError('');
     setSearchValue(singleSelectedLabel ?? '');
   } else if (singleSelectedLabel !== seenSingleLabel) {
     setSeenSingleLabel(singleSelectedLabel);
@@ -134,6 +156,7 @@ function useAliasSearch({
     abortRef.current?.abort();
     abortRef.current = undefined;
     seqRef.current += 1;
+    scopeSeqRef.current += 1;
   }, [scopeKey, singleSelected]);
 
   function cancelPending() {
@@ -145,6 +168,7 @@ function useAliasSearch({
 
   function handleSearchChange(next: string) {
     setSearchValue(next);
+    setCreateError('');
     cancelPending();
     const trimmed = truncateCodePoints(next.trim(), 256);
     if (trimmed === '' || (singleSelectedLabel !== undefined && next === singleSelectedLabel)) {
@@ -210,6 +234,23 @@ function useAliasSearch({
     return map;
   }, [remote]);
 
+  const createByValue = useMemo(() => {
+    const map = new Map<string, LiteralAliasCandidate>();
+    if (!allowCreateLiteral || loading || searchError) return map;
+    const trimmed = truncateCodePoints(searchValue.trim(), 256);
+    if (!trimmed || !remote || remote.query !== trimmed) return map;
+    const existingNames = new Set<string>();
+    for (const item of remote.items) existingNames.add(item.name);
+    for (const opt of initialOptions) existingNames.add(opt.label);
+    for (const label of Object.values(knownLabels)) existingNames.add(label);
+    const candidates = parseAliasLiterals(aliasType, trimmed, { family, kind });
+    for (const candidate of candidates) {
+      if (existingNames.has(candidate.payload.name)) continue;
+      map.set(`${createOptionPrefix}${candidate.key}`, candidate);
+    }
+    return map;
+  }, [allowCreateLiteral, loading, searchError, searchValue, remote, initialOptions, knownLabels, aliasType, family, kind]);
+
   const data = useMemo<AliasOption[]>(() => {
     const base = remote
       ? remote.items.map((item) => ({ value: item.id, label: item.name }))
@@ -217,6 +258,12 @@ function useAliasSearch({
     const seen = new Set(base.map((o) => o.value));
     const initialById = new Map(initialOptions.map((o) => [o.value, o.label]));
     const extras: AliasOption[] = [];
+    for (const [optValue, candidate] of createByValue) {
+      if (!seen.has(optValue)) {
+        seen.add(optValue);
+        extras.push({ value: optValue, label: candidate.label });
+      }
+    }
     for (const id of new Set(selected)) {
       if (!id || seen.has(id)) continue;
       seen.add(id);
@@ -224,7 +271,7 @@ function useAliasSearch({
       extras.push({ value: id, label });
     }
     return extras.length > 0 ? [...base, ...extras] : base;
-  }, [remote, initialOptions, selected, knownLabels]);
+  }, [remote, initialOptions, createByValue, selected, knownLabels]);
 
   const filter: OptionsFilter = ({ options }) => {
     const trimmed = searchValue.trim();
@@ -232,7 +279,7 @@ function useAliasSearch({
       return options;
     }
     if (remote) {
-      return options.filter((o: ComboboxParsedItem) => 'value' in o && remoteById.has(o.value));
+      return options.filter((o: ComboboxParsedItem) => 'value' in o && (remoteById.has(o.value) || createByValue.has(o.value)));
     }
     // Waiting on the first debounced backend response: show the searching placeholder instead of stale options.
     if (loading) return [];
@@ -240,6 +287,15 @@ function useAliasSearch({
   };
 
   function renderOption({ option }: { option: ComboboxItem }) {
+    const candidate = createByValue.get(option.value);
+    if (candidate) {
+      return (
+        <div>
+          <Text size="sm" fw={500} component="div">{candidate.label}</Text>
+          <Text size="xs" c="dimmed" component="div">{candidate.hint}</Text>
+        </div>
+      );
+    }
     const item = remoteById.get(option.value);
     if (item) {
       return (
@@ -259,12 +315,71 @@ function useAliasSearch({
     return option.label;
   }
 
+  async function resolveLiteral(candidate: LiteralAliasCandidate): Promise<{ id: string; name: string } | null> {
+    if (creatingRef.current) return null;
+    creatingRef.current = true;
+    const startScopeSeq = scopeSeqRef.current;
+    setCreating(true);
+    setCreateError('');
+    try {
+      const saved = await api.saveAlias(aliasType, candidate.payload as never);
+      onAliasCreated?.(saved.value);
+      if (!mountedRef.current || scopeSeqRef.current !== startScopeSeq) return null;
+      setKnownLabels((prev) => (prev[saved.value.id] === saved.value.name ? prev : { ...prev, [saved.value.id]: saved.value.name }));
+      return { id: saved.value.id, name: saved.value.name };
+    } catch (err: unknown) {
+      if (!mountedRef.current) return null;
+      if (err instanceof ApiError && err.status === 401) {
+        onSessionLost?.();
+        return null;
+      }
+      // If an alias with this exact name already exists outside the initial search page, find and reuse it.
+      if (err instanceof ApiError && err.status === 422) {
+        try {
+          const found = await api.searchAliases({
+            type: aliasType,
+            q: candidate.payload.name,
+            kind,
+            family,
+            excludeGroups,
+            exclude,
+            limit: 20,
+          });
+          if (!mountedRef.current || scopeSeqRef.current !== startScopeSeq) return null;
+          const exact = found.items.find((item) => item.name === candidate.payload.name);
+          if (exact) {
+            setKnownLabels((prev) => (prev[exact.id] === exact.name ? prev : { ...prev, [exact.id]: exact.name }));
+            return { id: exact.id, name: exact.name };
+          }
+        } catch (lookupErr: unknown) {
+          if (lookupErr instanceof ApiError && lookupErr.status === 401) {
+            onSessionLost?.();
+            return null;
+          }
+        }
+      }
+      if (mountedRef.current && scopeSeqRef.current === startScopeSeq) {
+        setCreateError(apiErrorMessage(err));
+      }
+      return null;
+    } finally {
+      creatingRef.current = false;
+      if (mountedRef.current) setCreating(false);
+    }
+  }
+
   const emptyMessage = searchError || (loading ? 'Searching aliases…' : nothingFoundMessage);
 
   return {
     data,
     searchValue,
-    loading,
+    loading: loading || creating,
+    creating,
+    creatingRef,
+    createByValue,
+    createError,
+    clearCreateError() { setCreateError(''); },
+    resolveLiteral,
     filter,
     emptyMessage,
     handleSearchChange,
@@ -294,12 +409,17 @@ export function AliasMultiSelect({
   placeholder,
   error,
   clearable,
-  nothingFoundMessage = 'No alias by that name. Aliases are made under Firewall ▸ Aliases.',
+  nothingFoundMessage,
   debounceMs,
+  allowCreateLiteral = true,
+  onAliasCreated,
   onSessionLost,
 }: AliasMultiSelectProps) {
+  const latestValueRef = useRef(value);
+  useEffect(() => { latestValueRef.current = value; }, [value]);
+
   const {
-    data, searchValue, loading, filter, emptyMessage, handleSearchChange, renderOption, resetSearch,
+    data, searchValue, loading, createByValue, createError, clearCreateError, resolveLiteral, filter, emptyMessage, handleSearchChange, renderOption, resetSearch,
   } = useAliasSearch({
     api,
     aliasType,
@@ -309,10 +429,29 @@ export function AliasMultiSelect({
     exclude,
     initialOptions,
     selected: value,
-    nothingFoundMessage,
+    nothingFoundMessage: nothingFoundMessage ?? defaultNothingFound(aliasType, allowCreateLiteral),
     debounceMs,
+    allowCreateLiteral,
+    onAliasCreated,
     onSessionLost,
   });
+
+  function handleChange(next: string[]) {
+    const createKey = next.find((item) => item.startsWith(createOptionPrefix));
+    if (!createKey) {
+      clearCreateError();
+      onChange(next);
+      return;
+    }
+    const candidate = createByValue.get(createKey);
+    if (!candidate) return;
+    void resolveLiteral(candidate).then((created) => {
+      if (!created) return;
+      const current = latestValueRef.current;
+      onChange(current.includes(created.id) ? current : [...current, created.id]);
+      resetSearch('');
+    });
+  }
 
   return (
     <MultiSelect
@@ -321,7 +460,7 @@ export function AliasMultiSelect({
       placeholder={placeholder}
       data={data}
       value={value}
-      error={error}
+      error={error || createError || undefined}
       searchable
       clearable={clearable}
       searchValue={searchValue}
@@ -331,7 +470,7 @@ export function AliasMultiSelect({
       renderOption={renderOption}
       rightSection={loading ? <Loader size="xs" /> : undefined}
       nothingFoundMessage={emptyMessage}
-      onChange={onChange}
+      onChange={handleChange}
     />
   );
 }
@@ -351,15 +490,17 @@ export function AliasSelect({
   placeholder,
   error,
   clearable,
-  nothingFoundMessage = 'No alias by that name. Aliases are made under Firewall ▸ Aliases.',
+  nothingFoundMessage,
   debounceMs,
+  allowCreateLiteral = true,
+  onAliasCreated,
   onSessionLost,
 }: AliasSelectProps) {
   const selected = useMemo(() => (value ? [value] : []), [value]);
   const lastPickedRef = useRef<{ value: string | null; label: string } | null>(null);
 
   const {
-    data, searchValue, loading, filter, emptyMessage, handleSearchChange, renderOption, resetSearch,
+    data, searchValue, loading, creatingRef, createByValue, createError, clearCreateError, resolveLiteral, filter, emptyMessage, handleSearchChange, renderOption, resetSearch,
   } = useAliasSearch({
     api,
     aliasType,
@@ -370,10 +511,31 @@ export function AliasSelect({
     initialOptions,
     selected,
     singleSelected: value ?? undefined,
-    nothingFoundMessage,
+    nothingFoundMessage: nothingFoundMessage ?? defaultNothingFound(aliasType, allowCreateLiteral),
     debounceMs,
+    allowCreateLiteral,
+    onAliasCreated,
     onSessionLost,
   });
+
+  function handleChange(next: string | null) {
+    if (next && next.startsWith(createOptionPrefix)) {
+      const candidate = createByValue.get(next);
+      if (!candidate) return;
+      void resolveLiteral(candidate).then((created) => {
+        if (!created) return;
+        lastPickedRef.current = { value: created.id, label: created.name };
+        onChange(created.id);
+        resetSearch(created.name);
+      });
+      return;
+    }
+    clearCreateError();
+    const chosen = next ? data.find((o) => o.value === next)?.label ?? '' : '';
+    lastPickedRef.current = { value: next, label: chosen };
+    onChange(next);
+    resetSearch(chosen);
+  }
 
   return (
     <Select
@@ -382,13 +544,14 @@ export function AliasSelect({
       placeholder={placeholder}
       data={data}
       value={value}
-      error={error}
+      error={error || createError || undefined}
       searchable
       clearable={clearable}
       searchValue={searchValue}
       onSearchChange={handleSearchChange}
       onDropdownOpen={() => { lastPickedRef.current = null; }}
       onDropdownClose={() => {
+        if (creatingRef.current) return;
         const picked = lastPickedRef.current;
         lastPickedRef.current = null;
         const chosen = picked
@@ -400,12 +563,7 @@ export function AliasSelect({
       renderOption={renderOption}
       rightSection={loading ? <Loader size="xs" /> : undefined}
       nothingFoundMessage={emptyMessage}
-      onChange={(next) => {
-        const chosen = next ? data.find((o) => o.value === next)?.label ?? '' : '';
-        lastPickedRef.current = { value: next, label: chosen };
-        onChange(next);
-        resetSearch(chosen);
-      }}
+      onChange={handleChange}
     />
   );
 }

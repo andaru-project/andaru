@@ -214,4 +214,140 @@ describe('AliasPicker', () => {
     await user.type(multiInput, 'abc');
     await waitFor(() => expect(onSessionLost).toHaveBeenCalledTimes(1));
   });
+
+  it('creates and selects literal address and port aliases inline in AliasMultiSelect and AliasSelect', async () => {
+    const user = userEvent.setup();
+    const onCreated = vi.fn();
+    const createdBodies: Array<{ url: string; body: unknown }> = [];
+
+    fetchRoutes({
+      '/api/v1/config/aliases/search': () => jsonResponse(200, {
+        state: 'saved',
+        savedVersion: '5',
+        items: [],
+      }),
+      'POST /api/v1/config/aliases/addresses': (init) => {
+        const parsed = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+        createdBodies.push({ url: '/api/v1/config/aliases/addresses', body: parsed });
+        const id = parsed.kind === 'network' ? 'adr_new_net' : 'adr_new_host';
+        return jsonResponse(201, { state: 'saved', savedVersion: '6', version: '1', value: { id, ...parsed } });
+      },
+      'POST /api/v1/config/aliases/ports': (init) => {
+        const parsed = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+        createdBodies.push({ url: '/api/v1/config/aliases/ports', body: parsed });
+        return jsonResponse(201, { state: 'saved', savedVersion: '7', version: '1', value: { id: 'svc_new_443', ...parsed } });
+      },
+    });
+
+    function LiteralHarness({ api }: { api: ApiClient }) {
+      const [addrs, setAddrs] = useState<string[]>([]);
+      const [ports, setPorts] = useState<string[]>([]);
+      const [single, setSingle] = useState<string | null>(null);
+      return (
+        <MantineProvider>
+          <AliasMultiSelect
+            api={api}
+            aliasType="addresses"
+            family="ipv4"
+            debounceMs={10}
+            label="Multi addresses"
+            initialOptions={[]}
+            value={addrs}
+            onAliasCreated={onCreated}
+            onChange={setAddrs}
+          />
+          <AliasMultiSelect
+            api={api}
+            aliasType="ports"
+            debounceMs={10}
+            label="Multi ports"
+            initialOptions={[]}
+            value={ports}
+            onAliasCreated={onCreated}
+            onChange={setPorts}
+          />
+          <AliasSelect
+            api={api}
+            aliasType="addresses"
+            family="ipv4"
+            debounceMs={10}
+            label="Single address"
+            initialOptions={[]}
+            value={single}
+            onAliasCreated={onCreated}
+            onChange={setSingle}
+          />
+        </MantineProvider>
+      );
+    }
+
+    const api = new ApiClient('csrf');
+    render(<LiteralHarness api={api} />);
+
+    // 1. Literal IPv4 host in AliasMultiSelect
+    const addrInput = screen.getByLabelText('Multi addresses', { selector: 'input' });
+    await user.type(addrInput, '192.168.1.50');
+    const hostOpt = await screen.findByText('Use 192.168.1.50');
+    await user.click(hostOpt);
+    expect(await screen.findByText('192.168.1.50', { selector: 'span' })).toBeInTheDocument();
+
+    // 2. Bare port in AliasMultiSelect offers TCP and UDP; choosing TCP creates tcp/443
+    const portInput = screen.getByLabelText('Multi ports', { selector: 'input' });
+    await user.type(portInput, '443');
+    expect(await screen.findByText('Use UDP 443')).toBeInTheDocument();
+    await user.click(screen.getByText('Use TCP 443'));
+    expect(await screen.findByText('tcp/443', { selector: 'span' })).toBeInTheDocument();
+
+    // 3. Literal CIDR in AliasSelect
+    const singleInput = screen.getByLabelText('Single address', { selector: 'input' });
+    await user.type(singleInput, '10.5.0.0/24');
+    await user.click(await screen.findByText('Use 10.5.0.0/24'));
+    await waitFor(() => expect((singleInput as HTMLInputElement).value).toBe('10.5.0.0/24'));
+
+    expect(createdBodies).toEqual([
+      { url: '/api/v1/config/aliases/addresses', body: { name: '192.168.1.50', kind: 'host', address: '192.168.1.50' } },
+      { url: '/api/v1/config/aliases/ports', body: { name: 'tcp/443', protocol: 'tcp', ports: ['443'] } },
+      { url: '/api/v1/config/aliases/addresses', body: { name: '10.5.0.0/24', kind: 'network', prefix: '10.5.0.0/24' } },
+    ]);
+    expect(onCreated).toHaveBeenCalledTimes(3);
+  });
+
+  it('reuses an existing alias on 422 collision and surfaces unexpected creation errors inline', async () => {
+    const user = userEvent.setup();
+    let searchCalls = 0;
+    let postMode: 'collision' | 'fail' = 'collision';
+
+    fetchRoutes({
+      '/api/v1/config/aliases/search': () => {
+        searchCalls += 1;
+        if (searchCalls === 1) {
+          return jsonResponse(200, { state: 'saved', savedVersion: '5', items: [] });
+        }
+        return jsonResponse(200, {
+          state: 'saved',
+          savedVersion: '5',
+          items: [{ id: 'adr_existing', name: '10.0.0.9', kind: 'host', summary: '10.0.0.9', score: 1000, highlights: [{ text: '10.0.0.9', match: true }] }],
+        });
+      },
+      'POST /api/v1/config/aliases/addresses': () => (
+        postMode === 'collision'
+          ? jsonResponse(422, { error: { code: 'VALIDATION_FAILED', message: 'Duplicate name.' } })
+          : jsonResponse(500, { error: { code: 'INTERNAL', message: 'Storage unavailable.' } })
+      ),
+    });
+
+    const api = new ApiClient('csrf');
+    render(<MultiHarness api={api} family="ipv4" />);
+
+    const input = screen.getByLabelText('Addresses', { selector: 'input' });
+    await user.type(input, '10.0.0.9');
+    await user.click(await screen.findByText('Use 10.0.0.9'));
+    expect(await screen.findByText('10.0.0.9', { selector: 'span' })).toBeInTheDocument();
+
+    postMode = 'fail';
+    searchCalls = 0;
+    await user.type(input, '10.0.0.10');
+    await user.click(await screen.findByText('Use 10.0.0.10'));
+    expect(await screen.findByText('Storage unavailable.')).toBeInTheDocument();
+  });
 });

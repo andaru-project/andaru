@@ -10,7 +10,6 @@ import { AliasMultiSelect, AliasSelect } from './AliasPicker';
 import { ZonePill, ZoneSelectionPill } from './ZoneBadge';
 
 const mono = { input: 'mono-input' };
-const noAlias = 'No alias by that name. Aliases are made under Firewall ▸ Aliases.';
 
 interface Option {
   value: string;
@@ -92,10 +91,11 @@ interface PortForwardEditorProps {
   onClose(): void;
   onSessionLost(): void;
   onAbandoned(message: string): void;
+  onAliasCreated?(): void;
   onSave(value: Omit<PortForward, 'id'>): Promise<void>;
 }
 
-export function PortForwardEditor({ api, entry, snapshot, onClose, onSessionLost, onAbandoned, onSave }: PortForwardEditorProps) {
+export function PortForwardEditor({ api, entry, snapshot, onClose, onSessionLost, onAbandoned, onAliasCreated, onSave }: PortForwardEditorProps) {
   const wanZone = snapshot.value.zones.find((z) => z.name.toLowerCase() === 'wan')?.id ?? snapshot.value.zones[0]?.id;
   const [draft, setDraft] = useState<PortForwardDraft>(() => portForwardDraftOf(entry, wanZone));
   const { errors, failure, busy, failureRef, formRef, runSubmit } = useDrawerForm({ noun: 'port forward', onClose, onSessionLost, onAbandoned });
@@ -194,11 +194,11 @@ export function PortForwardEditor({ api, entry, snapshot, onClose, onSessionLost
                     aliasType="addresses"
                     family={draft.family}
                     label="Source addresses (optional)"
-                    placeholder="Any source"
-                    nothingFoundMessage={noAlias}
+                    placeholder="Any source (alias or IP/CIDR)"
                     initialOptions={baseAddresses}
                     value={draft.from}
                     error={errors.get('from')}
+                    onAliasCreated={onAliasCreated}
                     onSessionLost={onSessionLost}
                     onChange={(from) => patch({ from, ...(from.length === 0 ? { fromNegated: false } : {}) })}
                   />
@@ -224,11 +224,11 @@ export function PortForwardEditor({ api, entry, snapshot, onClose, onSessionLost
                       aliasType="addresses"
                       family={draft.family}
                       label="Destination alias"
-                      placeholder="Choose an address alias"
-                      nothingFoundMessage={noAlias}
+                      placeholder="Choose an alias or type IP/CIDR"
                       initialOptions={baseAddresses}
                       value={draft.toAddress || null}
                       error={errors.get('to')}
+                      onAliasCreated={onAliasCreated}
                       onSessionLost={onSessionLost}
                       onChange={(value) => patch({ toAddress: value ?? '' })}
                     />
@@ -334,10 +334,11 @@ interface OneToOneEditorProps {
   onClose(): void;
   onSessionLost(): void;
   onAbandoned(message: string): void;
+  onAliasCreated?(): void;
   onSave(value: Omit<OneToOneNat, 'id'>): Promise<void>;
 }
 
-export function OneToOneEditor({ api, entry, snapshot, onClose, onSessionLost, onAbandoned, onSave }: OneToOneEditorProps) {
+export function OneToOneEditor({ api, entry, snapshot, onClose, onSessionLost, onAbandoned, onAliasCreated, onSave }: OneToOneEditorProps) {
   const wanZone = snapshot.value.zones.find((z) => z.name.toLowerCase() === 'wan')?.id ?? snapshot.value.zones[0]?.id;
   const [draft, setDraft] = useState<OneToOneDraft>(() => oneToOneDraftOf(entry, wanZone));
   const { errors, failure, busy, failureRef, formRef, runSubmit } = useDrawerForm({ noun: '1:1 NAT entry', onClose, onSessionLost, onAbandoned });
@@ -411,11 +412,11 @@ export function OneToOneEditor({ api, entry, snapshot, onClose, onSessionLost, o
                     aliasType="addresses"
                     family="ipv4"
                     label="Destination addresses (optional)"
-                    placeholder="Any destination"
-                    nothingFoundMessage={noAlias}
+                    placeholder="Any destination (alias or IPv4/CIDR)"
                     initialOptions={baseAddresses}
                     value={draft.destination}
                     error={errors.get('destination')}
+                    onAliasCreated={onAliasCreated}
                     onSessionLost={onSessionLost}
                     onChange={(destination) => patch({ destination, ...(destination.length === 0 ? { destinationNegated: false } : {}) })}
                   />

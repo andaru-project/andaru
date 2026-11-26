@@ -16,6 +16,7 @@ interface AliasEditorProps {
   onAbandoned(message: string): void;
   // The panel refused a save from the aliases it was given: they may be stale, and are read again.
   onRefused(): void;
+  onAliasCreated?(): void;
   onSave<K extends keyof AliasKinds>(kind: K, alias: Omit<AliasKinds[K], 'id'>, saved?: SavedObject<AliasKinds[K]>): Promise<void>;
 }
 
@@ -27,7 +28,7 @@ const icmpTypes = {
 
 const field = /^\/(name|description|kind|protocol|address|prefix|first|last|members|ports|types)(?:\/|$)/;
 
-export function AliasEditor({ api, editing, rows, onClose, onSessionLost, onAbandoned, onRefused, onSave }: AliasEditorProps) {
+export function AliasEditor({ api, editing, rows, onClose, onSessionLost, onAbandoned, onRefused, onAliasCreated, onSave }: AliasEditorProps) {
   const kind = typeof editing === 'string' ? editing : editing.kind;
   const saved = typeof editing === 'string' ? undefined : editing;
   const savedAddress = saved?.kind === 'addresses' ? saved.item : undefined;
@@ -148,11 +149,13 @@ export function AliasEditor({ api, editing, rows, onClose, onSessionLost, onAban
               excludeGroups
               exclude={saved?.item.value.id}
               label="Members"
-              description="Aliases of the same kind that are not groups themselves."
+              description={kind === 'addresses' ? 'Address aliases or literal IPs, CIDRs, or ranges (not groups).' : 'Port aliases or literal ports (not groups).'}
+              placeholder={kind === 'addresses' ? 'Alias name, 192.168.1.50, or 10.0.0.0/24' : 'Alias name, 443, or tcp/8000-8080'}
               initialOptions={candidates}
               value={members}
               error={errors.get('members')}
               clearable
+              onAliasCreated={onAliasCreated}
               onSessionLost={onSessionLost}
               onChange={setMembers}
             />
