@@ -216,8 +216,15 @@ func (s *Service) handleAlias(ctx context.Context, c *bus.Client, slots chan str
 	if err == nil {
 		err = c.Publish(ctx, aliasfeed.ResultTopic(alias), payload, true)
 	}
-	if err != nil {
-		// Also when the session ended during the fetch. Unacked, the requests come again, but only to a new
+	switch {
+	case err != nil && ctx.Err() == nil && c.Err() == nil:
+		// The bus refused this result on a live connection, as one too large: it would refuse it again, so the
+		// requests are acked and the engine asks again on its schedule. Ending the session would loop, and cut off
+		// the notifications being sent with it.
+		s.Log.Error("alias result refused by the bus; the request is dropped", "alias", alias, "error", err)
+		return f.seqs, nil
+	case err != nil:
+		// The session ended, during the fetch or the publish. Unacked, the requests come again, but only to a new
 		// session: this one's acks would wait for them.
 		return nil, fmt.Errorf("publish the result for alias %s: %w", alias, err)
 	}

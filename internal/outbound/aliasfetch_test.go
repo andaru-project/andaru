@@ -401,16 +401,22 @@ func TestAliasRefreshDuringFetch(t *testing.T) {
 	}
 }
 
-// A result the bus refuses ends the session, so the requests come again instead of holding the acks up.
-func TestAliasPublishFailureEndsSession(t *testing.T) {
+// A result the bus refuses on a live connection is dropped and its request acked: the bus would refuse it again, and
+// ending the session would loop and cut off the notifications being sent.
+func TestRefusedAliasResultIsDropped(t *testing.T) {
 	b := newAliasBench(t)
 	srv := serve(t, false, body("192.0.2.1\n"))
 	var log logBuf
 	b.run(&Service{Log: log.logger()})
 	b.send(aliasfeed.Request{ID: "r", Alias: "a/b", Hash: "h", Kind: "url", URL: srv.URL}) // alias-result/+ refuses a/b
-	eventually(t, "the session went on", func() bool { return log.count("bus connection lost") > 0 })
-	if log.count("publish the result for alias a/b") == 0 {
-		t.Fatal("the error was not logged")
+	eventually(t, "the refusal was not logged", func() bool { return log.count("alias result refused by the bus") > 0 })
+	// The session goes on: the next request is answered without a reconnect.
+	b.send(aliasfeed.Request{ID: "r2", Alias: "a", Hash: "h", Kind: "url", URL: srv.URL})
+	if _, r := b.next(10 * time.Second); r.Request != "r2" || !r.OK {
+		t.Fatalf("%+v", r)
+	}
+	if log.count("bus connection lost") != 0 {
+		t.Fatal("the session ended")
 	}
 }
 
