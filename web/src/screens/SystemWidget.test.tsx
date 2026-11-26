@@ -1,3 +1,4 @@
+import { fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -249,8 +250,11 @@ it('locks close controls while renaming, prevents double submit, allows normaliz
   await user.click(screen.getByRole('button', { name: 'Save hostname' }));
 
   expect(postCount).toBe(1);
+  expect(screen.getByRole('button', { name: 'Save hostname' })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled();
+  fireEvent.submit(input.closest('form')!);
+  expect(postCount).toBe(1);
 
   // Unmount mid-flight; when POST resolves, shell-owned system.reload() must still run.
   unmount();
