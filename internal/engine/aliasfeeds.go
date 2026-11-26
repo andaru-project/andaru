@@ -99,7 +99,8 @@ func newAliasFeeds(life context.Context, stateDir string, events *bus.Bus, alias
 }
 
 // savedAndLive returns the dynamic aliases of the saved head and of the generation that is live, by the saved version
-// it was applied from: none before the first apply.
+// it was applied from: none before the first apply. A saved version that does not read (gone after an update's
+// rollback, or a restore) is taken as the saved head, so every schedule and result does not fail on it.
 func savedAndLive(stateDir string, store *config.Store) func(context.Context) ([]config.DynamicAlias, []config.DynamicAlias, error) {
 	return func(ctx context.Context) ([]config.DynamicAlias, []config.DynamicAlias, error) {
 		saved, err := store.DynamicAliases(ctx)
@@ -116,6 +117,11 @@ func savedAndLive(stateDir string, store *config.Store) func(context.Context) ([
 			return saved, nil, err
 		}
 		live, err := store.DynamicAliasesAt(ctx, config.Version(g.SavedVersion))
+		if fault := (*config.Fault)(nil); errors.As(err, &fault) && fault.Code == "NOT_FOUND" {
+			slog.Warn("the live generation's saved version does not read; its aliases are taken as the saved head's",
+				"component", "aliases", "generation", g.ID, "version", g.SavedVersion, "error", err)
+			return saved, saved, nil
+		}
 		return saved, live, err
 	}
 }
