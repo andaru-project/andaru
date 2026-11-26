@@ -7,6 +7,7 @@ import { useResource, useVisiblePoll } from '../useResource';
 import { bindingFindings, kernelName } from '../zones';
 import { Address } from './Address';
 import { InterfaceEditor } from './InterfaceEditor';
+import { ManagementPanel } from './ManagementPanel';
 import { ZoneBadge } from './ZoneBadge';
 
 interface InterfacesScreenProps { api: ApiClient; session: Session; onSaved(): void; onSessionLost(): void }
@@ -372,6 +373,13 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
                     {othersTable}
                   </>
                 )}
+                <ManagementPanel
+                  api={api}
+                  snapshot={saved.snapshot}
+                  canWrite={editable}
+                  onSaved={() => { onSaved(); void resource.reload(); }}
+                  onSessionLost={onSessionLost}
+                />
               </>
             )}
           </Stack>

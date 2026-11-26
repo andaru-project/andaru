@@ -20,6 +20,7 @@ import type {
   LeaseView,
   LinkStatus,
   LldpNeighbor,
+  ManagementConfig,
   NotificationList,
   OneToOneNat,
   OrderedList,
@@ -586,6 +587,27 @@ export class ApiClient {
 
   deleteDhcp6(id: string, version: string) {
     return this.request(`/api/v1/config/dhcp6/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { 'If-Match': `"${id}.${version}"` } }, true);
+  }
+
+  async management(): Promise<SavedObject<ManagementConfig> | null> {
+    try {
+      return await this.request<SavedObject<ManagementConfig>>('/api/v1/config/management');
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) return null;
+      throw error;
+    }
+  }
+
+  saveManagement(value: ManagementConfig, version: string) {
+    return this.request<SavedObject<ManagementConfig>>('/api/v1/config/management', {
+      method: 'PUT', headers: { 'If-Match': `"management.${version}"` }, body: JSON.stringify(value),
+    }, true);
+  }
+
+  deleteManagement(version: string) {
+    return this.request('/api/v1/config/management', {
+      method: 'DELETE', headers: { 'If-Match': `"management.${version}"` },
+    }, true);
   }
 
   async dns(): Promise<SavedObject<DnsService> | null> {
