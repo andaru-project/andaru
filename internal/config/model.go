@@ -56,16 +56,26 @@ type secretReference struct {
 }
 type link struct {
 	identity
-	Kind         string           `json:"kind"`
-	MTU          int              `json:"mtu"`
-	Enabled      bool             `json:"enabled"`
-	PermanentMAC string           `json:"permanentMac,omitempty"`
-	Parent       string           `json:"parent,omitempty"`
-	VLANID       *int             `json:"vlanId,omitempty"`
-	Members      *[]string        `json:"members,omitempty"`
-	Mode         string           `json:"mode,omitempty"`
-	Username     string           `json:"username,omitempty"`
-	Password     *secretReference `json:"password,omitempty"`
+	Kind               string           `json:"kind"`
+	MTU                int              `json:"mtu"`
+	Enabled            bool             `json:"enabled"`
+	PermanentMAC       string           `json:"permanentMac,omitempty"`
+	Parent             string           `json:"parent,omitempty"`
+	VLANID             *int             `json:"vlanId,omitempty"`
+	Members            *[]string        `json:"members,omitempty"`
+	Mode               string           `json:"mode,omitempty"`
+	STP                *bool            `json:"stp,omitempty"`
+	STPPriority        *int             `json:"stpPriority,omitempty"`
+	ForwardDelay       *int             `json:"forwardDelay,omitempty"`
+	HelloTime          *int             `json:"helloTime,omitempty"`
+	MaxAge             *int             `json:"maxAge,omitempty"`
+	MulticastSnooping  *bool            `json:"multicastSnooping,omitempty"`
+	VLANFiltering      *bool            `json:"vlanFiltering,omitempty"`
+	LACPRate           string           `json:"lacpRate,omitempty"`
+	MIIMonitorMs       *int             `json:"miiMonitorMs,omitempty"`
+	TransmitHashPolicy string           `json:"transmitHashPolicy,omitempty"`
+	Username           string           `json:"username,omitempty"`
+	Password           *secretReference `json:"password,omitempty"`
 }
 type ipv4 struct {
 	Mode      string   `json:"mode"`

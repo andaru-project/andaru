@@ -193,3 +193,78 @@ it('filters eligible VLAN parents and bridge/bond members according to link rule
   expect(memberLinkOptions(snapshot, 'bond', undefined, []).map((o) => o.value)).toEqual(['lnk_free']);
   expect(memberLinkOptions(snapshot, 'bond', 'lnk_bond', ['lnk_bond_member', 'lnk_missing', 'lnk_missing']).map((o) => o.value)).toEqual(['lnk_free', 'lnk_bond_member', 'lnk_missing']);
 });
+
+it('serializes bridge STP/L2 options and bond L2 options, and strips mode-incompatible fields', () => {
+  // Bridge with STP + timers + multicastSnooping=false + vlanFiltering=true.
+  const brDraft = {
+    ...draftOf(undefined, undefined, undefined, 'bridge'),
+    name: 'Core bridge',
+    assigned: false,
+    stp: true,
+    stpPriority: '4096',
+    forwardDelay: '12',
+    helloTime: '2',
+    maxAge: '18',
+    multicastSnooping: false,
+    vlanFiltering: true,
+  };
+  expect(interfaceOperations(brDraft, undefined, undefined, undefined)).toEqual([
+    {
+      op: 'create',
+      collection: 'links',
+      localId: 'link',
+      value: {
+        name: 'Core bridge',
+        kind: 'bridge',
+        members: [],
+        mtu: 1500,
+        enabled: true,
+        stp: true,
+        stpPriority: 4096,
+        forwardDelay: 12,
+        helloTime: 2,
+        maxAge: 18,
+        multicastSnooping: false,
+        vlanFiltering: true,
+      },
+    },
+  ]);
+
+  // Turning STP off on an existing bridge removes STP timers cleanly; unchanged bridge with explicit defaults emits nothing.
+  const savedBr: SavedObject<SavedLink> = {
+    version: '4',
+    value: { id: 'lnk_br', name: 'Core bridge', kind: 'bridge', mtu: 1500, enabled: true, members: [], stp: true, stpPriority: 4096, forwardDelay: 12 },
+  };
+  expect(interfaceOperations(draftOf(savedBr.value, undefined, undefined), savedBr, undefined, undefined)).toEqual([]);
+  expect(interfaceOperations({ ...draftOf(savedBr.value, undefined, undefined), stp: false }, savedBr, undefined, undefined)).toEqual([
+    { op: 'replace', collection: 'links', id: 'lnk_br', expectedVersion: '4', value: { id: 'lnk_br', name: 'Core bridge', kind: 'bridge', mtu: 1500, enabled: true, members: [] } },
+  ]);
+
+  // Bond with 802.3ad LACP rate, hash policy, and MII monitor; switching mode to active-backup drops lacpRate and transmitHashPolicy.
+  const savedBond: SavedObject<SavedLink> = {
+    version: '5',
+    value: { id: 'lnk_bo', name: 'Uplink', kind: 'bond', mtu: 1500, enabled: true, mode: '802.3ad', members: ['lnk_a'], lacpRate: 'fast', transmitHashPolicy: 'layer3+4', miiMonitorMs: 100 },
+  };
+  expect(interfaceOperations(draftOf(savedBond.value, undefined, undefined), savedBond, undefined, undefined)).toEqual([]);
+  expect(interfaceOperations({ ...draftOf(savedBond.value, undefined, undefined), bondMode: 'active-backup' }, savedBond, undefined, undefined)).toEqual([
+    { op: 'replace', collection: 'links', id: 'lnk_bo', expectedVersion: '5', value: { id: 'lnk_bo', name: 'Uplink', kind: 'bond', mtu: 1500, enabled: true, mode: 'active-backup', members: ['lnk_a'], miiMonitorMs: 100 } },
+  ]);
+
+  // Field error mapping for bridge STP and bond L2 paths.
+  const error = new ApiError(422, 'VALIDATION_FAILED', 'Refused.', [
+    { path: '/operations/0/value/stpPriority', message: 'Bad priority.' },
+    { path: '/operations/0/value/stp', message: 'Bad stp.' },
+    { path: '/operations/0/value/forwardDelay', message: 'Bad delay.' },
+    { path: '/operations/0/value/lacpRate', message: 'Needs 802.3ad.' },
+    { path: '/operations/0/value/miiMonitorMs', message: 'Too large.' },
+    { path: '/operations/0/value/transmitHashPolicy', message: 'Unsupported mode.' },
+  ]);
+  expect(interfaceErrors(error, [{ op: 'create', collection: 'links', value: {} }])).toEqual(new Map([
+    ['stpPriority', 'Bad priority.'],
+    ['stp', 'Bad stp.'],
+    ['forwardDelay', 'Bad delay.'],
+    ['lacpRate', 'Needs 802.3ad.'],
+    ['miiMonitorMs', 'Too large.'],
+    ['transmitHashPolicy', 'Unsupported mode.'],
+  ]));
+});

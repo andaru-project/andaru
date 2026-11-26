@@ -105,6 +105,28 @@ func validateTopology(d *declaration) []FieldError {
 			}
 			vlans[key] = true
 		}
+		if l.Kind == "bridge" && (l.STP == nil || !*l.STP) {
+			if l.STPPriority != nil {
+				bad(p+"/stpPriority", "Requires STP to be enabled.")
+			}
+			if l.ForwardDelay != nil {
+				bad(p+"/forwardDelay", "Requires STP to be enabled.")
+			}
+			if l.HelloTime != nil {
+				bad(p+"/helloTime", "Requires STP to be enabled.")
+			}
+			if l.MaxAge != nil {
+				bad(p+"/maxAge", "Requires STP to be enabled.")
+			}
+		}
+		if l.Kind == "bond" {
+			if l.LACPRate != "" && l.Mode != "802.3ad" {
+				bad(p+"/lacpRate", "LACP transmit rate requires 802.3ad bond mode.")
+			}
+			if l.TransmitHashPolicy != "" && !slices.Contains([]string{"balance-xor", "802.3ad", "balance-tlb"}, l.Mode) {
+				bad(p+"/transmitHashPolicy", "Transmit hash policy requires balance-xor, 802.3ad, or balance-tlb mode.")
+			}
+		}
 		if invalidText(l.Username, false) {
 			bad(p+"/username", "Control characters are not allowed.")
 		}

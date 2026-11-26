@@ -208,6 +208,8 @@ export const stateLabel = (operState: string) => operState === 'LOWERLAYERDOWN' 
 
 export type VirtualLinkKind = 'vlan' | 'bridge' | 'bond';
 export type BondMode = 'balance-rr' | 'active-backup' | 'balance-xor' | 'broadcast' | '802.3ad' | 'balance-tlb' | 'balance-alb';
+export type LacpRate = 'slow' | 'fast';
+export type TransmitHashPolicy = 'layer2' | 'layer2+3' | 'layer3+4' | 'encap2+3' | 'encap3+4';
 
 export interface SavedLink {
   id: string;
@@ -220,6 +222,16 @@ export interface SavedLink {
   vlanId?: number;
   members?: string[];
   mode?: BondMode;
+  stp?: boolean;
+  stpPriority?: number;
+  forwardDelay?: number;
+  helloTime?: number;
+  maxAge?: number;
+  multicastSnooping?: boolean;
+  vlanFiltering?: boolean;
+  lacpRate?: LacpRate;
+  miiMonitorMs?: number;
+  transmitHashPolicy?: TransmitHashPolicy;
 }
 
 export interface Segment {

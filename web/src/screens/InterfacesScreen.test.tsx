@@ -553,3 +553,106 @@ it('validates duplicate VLAN IDs and parent MTU ceiling, and clamps default MTU 
   expect(await within(panel).findByText('VLAN 20 already exists on this parent (Guest VLAN).')).toBeInTheDocument();
   expect(sent).not.toHaveBeenCalled();
 });
+
+it('creates a bridge with STP, timers, and L2 options and shows STP in the table', async () => {
+  const user = userEvent.setup();
+  const free1 = 'lnk_77777777-7777-4777-8777-777777777777';
+  const brId = 'lnk_99999999-9999-4999-8999-999999999999';
+  const sent = vi.fn<(init: RequestInit | undefined) => Response>(() => jsonResponse(200, { savedVersion: '8' }));
+  routes({
+    links: [
+      ethernet(lanPort, 'LAN port', '52:54:00:aa:bb:01'),
+      ethernet(free1, 'Port A', '52:54:00:aa:bb:11'),
+      { id: brId, name: 'Existing bridge', kind: 'bridge', mtu: 1500, enabled: true, members: [free1], stp: true, vlanFiltering: true },
+    ],
+    findings: [],
+    extra: { 'POST /api/v1/config/changes': sent },
+  });
+  render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={vi.fn()} onSessionLost={vi.fn()} />);
+
+  expect(await screen.findByText(/Bridge \(STP · VLAN filtering · Port A\)/)).toBeInTheDocument();
+
+  await user.click(screen.getByRole('button', { name: 'Add virtual interface' }));
+  await user.click(await screen.findByRole('menuitem', { name: 'Bridge' }));
+  const panel = await screen.findByRole('dialog');
+  await user.type(within(panel).getByLabelText(/^Name/), 'Loop-safe bridge');
+  await user.click(within(panel).getByRole('switch', { name: /Carries a segment/ }));
+  await user.click(within(panel).getByRole('switch', { name: /Spanning Tree Protocol \(STP\)/ }));
+  await user.type(within(panel).getByLabelText(/^STP priority/), '4096');
+  await user.type(within(panel).getByLabelText(/^Forward delay/), '12');
+  await user.click(within(panel).getByRole('switch', { name: /IGMP\/MLD multicast snooping/ }));
+  await user.click(within(panel).getByRole('switch', { name: /VLAN filtering/ }));
+  await user.click(within(panel).getByRole('button', { name: 'Save interface' }));
+
+  await vi.waitFor(() => expect(sent).toHaveBeenCalled());
+  expect(JSON.parse(String(sent.mock.calls[0][0]?.body))).toEqual({
+    operations: [
+      {
+        op: 'create',
+        collection: 'links',
+        localId: 'link',
+        value: {
+          name: 'Loop-safe bridge',
+          kind: 'bridge',
+          members: [],
+          mtu: 1500,
+          enabled: true,
+          stp: true,
+          stpPriority: 4096,
+          forwardDelay: 12,
+          multicastSnooping: false,
+          vlanFiltering: true,
+        },
+      },
+    ],
+  });
+});
+
+it('creates an 802.3ad bond with LACP rate, hash policy, and MII monitor interval', async () => {
+  const user = userEvent.setup();
+  const free1 = 'lnk_77777777-7777-4777-8777-777777777777';
+  const sent = vi.fn<(init: RequestInit | undefined) => Response>(() => jsonResponse(200, { savedVersion: '8' }));
+  routes({
+    links: [
+      ethernet(lanPort, 'LAN port', '52:54:00:aa:bb:01'),
+      ethernet(free1, 'Port A', '52:54:00:aa:bb:11'),
+    ],
+    findings: [],
+    extra: { 'POST /api/v1/config/changes': sent },
+  });
+  render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={vi.fn()} onSessionLost={vi.fn()} />);
+
+  await user.click(await screen.findByRole('button', { name: 'Add virtual interface' }));
+  await user.click(await screen.findByRole('menuitem', { name: 'Bond' }));
+  const panel = await screen.findByRole('dialog');
+  await user.type(within(panel).getByLabelText(/^Name/), 'LACP Uplink');
+  const membersInput = within(panel).getByLabelText(/^Member interfaces/, { selector: 'input' });
+  await user.click(membersInput);
+  await user.click(await screen.findByRole('option', { name: 'Port A' }));
+  await user.selectOptions(within(panel).getByLabelText(/^LACP rate/), 'fast');
+  await user.selectOptions(within(panel).getByLabelText(/^Transmit hash policy/), 'layer3+4');
+  await user.type(within(panel).getByLabelText(/^MII monitor interval/), '100');
+  await user.click(within(panel).getByRole('button', { name: 'Save interface' }));
+
+  await vi.waitFor(() => expect(sent).toHaveBeenCalled());
+  expect(JSON.parse(String(sent.mock.calls[0][0]?.body))).toEqual({
+    operations: [
+      {
+        op: 'create',
+        collection: 'links',
+        localId: 'link',
+        value: {
+          name: 'LACP Uplink',
+          kind: 'bond',
+          mode: '802.3ad',
+          members: [free1],
+          mtu: 1500,
+          enabled: true,
+          lacpRate: 'fast',
+          transmitHashPolicy: 'layer3+4',
+          miiMonitorMs: 100,
+        },
+      },
+    ],
+  });
+});
