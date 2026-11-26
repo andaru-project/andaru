@@ -57,7 +57,7 @@ interface EditorState {
   saved?: SavedObject<NotificationChannel>;
   existingNames: string[];
   existingSecrets: string[];
-  sharedHoldersBySecret: Record<string, string[]>;
+  sharedHoldersBySecret: Map<string, string[]>;
 }
 
 const kindOptions: Array<{ value: NotificationChannelKind; label: string }> = [
@@ -93,7 +93,7 @@ function severitySummary(minSeverity: NotificationSeverity | undefined): { sever
 }
 
 function channelTargetSummary(ch: NotificationChannel): string | undefined {
-  if (ch.kind === 'ntfy' && ch.ntfy) return `${ch.ntfy.server}/${ch.ntfy.topic}`;
+  if (ch.kind === 'ntfy' && ch.ntfy) return `${ch.ntfy.server.replace(/\/+$/, '')}/${ch.ntfy.topic}`;
   if (ch.kind === 'telegram' && ch.telegram) return ch.telegram.chatId;
   return undefined;
 }
@@ -139,22 +139,21 @@ function SecretField({
   removed,
   onRemoveChange,
 }: SecretFieldProps) {
-  const sharedText = sharedHolders.length > 0 ? `, shared with ${sharedHolders.join(', ')}` : '';
   let description = freshDescription;
   if (existing) {
-    if (existing.unresolved) {
-      description = optionalPrefix
-        ? `${optionalPrefix} (${existing.secret}, unresolved${sharedText}). ${sharedHolders.length > 0 ? 'Entering a value saves a separate secret for this channel so other channels are not changed.' : unresolvedHint}`
-        : `Unresolved secret (${existing.secret}${sharedText}). ${sharedHolders.length > 0 ? 'Entering a new value saves a separate secret for this channel so other channels are not changed.' : unresolvedHint}`;
-    } else if (sharedHolders.length > 0) {
-      description = optionalPrefix
-        ? `${optionalPrefix} (${existing.secret}${sharedText}). Entering a new value saves a separate secret for this channel so other channels are not changed.`
-        : `Stored securely (${existing.secret}${sharedText}). Entering a new value saves a separate secret for this channel so other channels are not changed.`;
-    } else {
-      description = optionalPrefix
-        ? `${optionalPrefix} (${existing.secret}). Leave blank to keep the current value.`
-        : `Stored securely (${existing.secret}). Leave blank to keep the current value.`;
-    }
+    const shared = sharedHolders.length > 0;
+    const details = [
+      existing.secret,
+      ...(existing.unresolved && optionalPrefix ? ['unresolved'] : []),
+      ...(shared ? [`shared with ${sharedHolders.join(', ')}`] : []),
+    ].join(', ');
+    const prefix = optionalPrefix ?? (existing.unresolved ? 'Unresolved secret' : 'Stored securely');
+    const action = shared
+      ? 'Entering a new value saves a separate secret for this channel so other channels are not changed.'
+      : existing.unresolved
+        ? unresolvedHint
+        : 'Leave blank to keep the current value.';
+    description = `${prefix} (${details}). ${action}`;
   }
 
   return (
@@ -202,7 +201,7 @@ function NotificationChannelEditor({
   saved?: SavedObject<NotificationChannel>;
   existingNames: string[];
   existingSecrets: string[];
-  sharedHoldersBySecret: Record<string, string[]>;
+  sharedHoldersBySecret: Map<string, string[]>;
   onSave(value: NotificationChannelWrite, saved?: SavedObject<NotificationChannel>): Promise<void>;
   onClose(): void;
   onRefresh(): void;
@@ -213,6 +212,7 @@ function NotificationChannelEditor({
   const [failure, setFailure] = useState('');
   const [busy, setBusy] = useState(false);
   const [errorFocusTick, setErrorFocusTick] = useState(0);
+  const [failureFocusTick, setFailureFocusTick] = useState(0);
   const submittingRef = useRef(false);
   const openRef = useRef(true);
   const formRef = useRef<HTMLFormElement>(null);
@@ -224,10 +224,10 @@ function NotificationChannelEditor({
   }, []);
 
   useEffect(() => {
-    if (!failure) return;
+    if (failureFocusTick === 0) return;
     failureRef.current?.scrollIntoView?.({ block: 'nearest' });
-    if (errors.size === 0 || errors.has('')) failureRef.current?.focus?.();
-  }, [failure, errors]);
+    failureRef.current?.focus?.();
+  }, [failureFocusTick]);
 
   useEffect(() => {
     if (errorFocusTick === 0) return;
@@ -250,7 +250,7 @@ function NotificationChannelEditor({
   const existingPushoverUser = sameKind ? saved?.value.pushover?.user : undefined;
   const existingTelegramToken = sameKind ? saved?.value.telegram?.token : undefined;
 
-  const sharedFor = (view?: SecretView) => (view?.secret ? (sharedHoldersBySecret[view.secret] ?? []) : []);
+  const sharedFor = (view?: SecretView) => (view?.secret ? (sharedHoldersBySecret.get(view.secret) ?? []) : []);
   const selectKindOptions = unknownKind
     ? [...kindOptions, { value: draft.kind, label: draft.kind }]
     : kindOptions;
@@ -296,7 +296,11 @@ function NotificationChannelEditor({
       const fields = channelFieldErrors(error);
       setErrors(fields);
       setFailure(saveFailure(error, fields, 'notification channel'));
-      if (fields.size > 0 && !fields.has('')) setErrorFocusTick((t) => t + 1);
+      if (fields.size > 0 && !fields.has('')) {
+        setErrorFocusTick((t) => t + 1);
+      } else {
+        setFailureFocusTick((t) => t + 1);
+      }
     } finally {
       submittingRef.current = false;
       if (openRef.current) setBusy(false);
@@ -365,11 +369,13 @@ function NotificationChannelEditor({
                 onChange={(value) => {
                   if (value && isKnownChannelKind(value)) {
                     patch({ kind: value });
-                    setErrors((cur) => {
-                      const next = new Map(cur);
+                    const hadKindError = kindSpecificErrorFields.some((field) => errors.has(field));
+                    if (hadKindError) {
+                      const next = new Map(errors);
                       for (const field of kindSpecificErrorFields) next.delete(field);
-                      return next;
-                    });
+                      setErrors(next);
+                      if (next.size === 0) setFailure('');
+                    }
                   }
                 }}
               />
@@ -450,7 +456,7 @@ function NotificationChannelEditor({
                 <>
                   <TextInput
                     label="Server URL"
-                    description="http:// or https:// ntfy server with host only (no path, query, or credentials)."
+                    description="http:// or https:// ntfy server URL (may include a reverse-proxy path, with no credentials, query, or fragment)."
                     placeholder="https://ntfy.sh"
                     required
                     value={draft.ntfyServer}
@@ -637,7 +643,7 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
       setEditor({
         existingNames: channels.map((c) => c.name),
         existingSecrets: existingChannelSecretsOf(channels, snapshot),
-        sharedHoldersBySecret: {},
+        sharedHoldersBySecret: new Map(),
       });
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
@@ -666,10 +672,10 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
       ]);
       const channels = list.items.map((item) => item.value);
       if (!mountedRef.current) return;
-      const sharedHoldersBySecret: Record<string, string[]> = {};
+      const sharedHoldersBySecret = new Map<string, string[]>();
       for (const { view } of channelSecretsOf(current.value)) {
         if (view.secret) {
-          sharedHoldersBySecret[view.secret] = sharedSecretHolders(view.secret, current.value.id, channels);
+          sharedHoldersBySecret.set(view.secret, sharedSecretHolders(view.secret, current.value.id, channels));
         }
       }
       setEditor({
@@ -852,7 +858,7 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
                         <Table.Td data-label="Kind">
                           <Stack gap={2} align="flex-start">
                             <Badge size="sm" variant="default" className="plain-badge">{channelKindDisplay(ch.kind)}</Badge>
-                            {targetSummary && <Text size="xs" c="dimmed">{targetSummary}</Text>}
+                            {targetSummary && <Text size="xs" c="dimmed" className="channel-target">{targetSummary}</Text>}
                           </Stack>
                         </Table.Td>
                         <Table.Td data-label="Status">
@@ -875,8 +881,8 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
                             <Text size="sm" c="dimmed">None</Text>
                           ) : (
                             <Stack gap={2}>
-                              {secrets.map(({ label, view }, index) => (
-                                <Text key={`${label}:${view.secret}`} size={index === 0 ? 'sm' : 'xs'} c={index === 0 ? undefined : 'dimmed'}>
+                              {secrets.map(({ label, view, optional }) => (
+                                <Text key={`${label}:${view.secret}`} size={optional ? 'xs' : 'sm'} c={optional ? 'dimmed' : undefined}>
                                   {label}: {view.unresolved ? <Text span inherit className="error-text">unresolved</Text> : view.isSet ? 'set' : 'missing'}
                                 </Text>
                               ))}

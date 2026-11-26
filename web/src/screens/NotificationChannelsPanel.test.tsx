@@ -459,7 +459,7 @@ describe('NotificationChannelsPanel', () => {
   it('creates ntfy, Pushover, and Telegram channels and edits an unknown future kind read-only without corrupting its sub-object', async () => {
     const user = userEvent.setup();
     const postPayloads: unknown[] = [];
-    let putPayload: unknown;
+    const putPayloads: Record<string, unknown> = {};
 
     const futureEmailChannel: SavedObject<NotificationChannel> = {
       version: '7',
@@ -484,7 +484,7 @@ describe('NotificationChannelsPanel', () => {
         enabled: true,
         kind: 'ntfy',
         filter: { minSeverity: 'info' },
-        ntfy: { server: 'https://ntfy.sh', topic: 'andaru-alerts' },
+        ntfy: { server: 'https://ntfy.example/proxy/', topic: 'andaru-alerts' },
       },
     };
 
@@ -500,18 +500,18 @@ describe('NotificationChannelsPanel', () => {
         return jsonResponse(201, { state: 'saved', savedVersion: '11', version: '11', value: { id: `ntf_${postPayloads.length}`, ...parsed } });
       },
       'PUT /api/v1/config/notifications/channels/ntf_email': (init) => {
-        putPayload = JSON.parse(String(init?.body ?? '{}'));
+        putPayloads.ntf_email = JSON.parse(String(init?.body ?? '{}'));
         return jsonResponse(200, { state: 'saved', savedVersion: '12', version: '12', value: futureEmailChannel.value });
       },
     });
 
     render(<NotificationChannelsPanel api={new ApiClient('csrf')} canManage onSessionLost={vi.fn()} />);
-    expect(await screen.findByText('https://ntfy.sh/andaru-alerts')).toBeInTheDocument();
+    expect(await screen.findByText('https://ntfy.example/proxy/andaru-alerts')).toBeInTheDocument();
     expect(screen.getByText('None')).toBeInTheDocument();
     expect(screen.getByText('email')).toBeInTheDocument();
     expect(screen.getByText(/password:\s*set/i)).toBeInTheDocument();
 
-    // Create an ntfy channel with custom server and optional token.
+    // Create an ntfy channel with a reverse-proxy path and optional token.
     await user.click(screen.getByRole('button', { name: 'Add channel' }));
     let dialog = await screen.findByRole('dialog', { name: 'Add notification channel' });
     await user.click(within(dialog).getByLabelText(/^Channel kind/, { selector: 'input' }));
@@ -519,7 +519,7 @@ describe('NotificationChannelsPanel', () => {
     await user.type(within(dialog).getByLabelText(/^Name/, { selector: 'input' }), 'ops-ntfy-2');
     const serverInput = within(dialog).getByLabelText(/^Server URL/, { selector: 'input' });
     await user.clear(serverInput);
-    await user.type(serverInput, 'https://ntfy.example');
+    await user.type(serverInput, 'https://ntfy.example/subpath');
     await user.type(within(dialog).getByLabelText(/^Topic/, { selector: 'input' }), 'alerts_1');
     await user.type(within(dialog).getByLabelText(/^Access token/, { selector: 'input' }), 'tk_secret');
     await user.click(within(dialog).getByRole('button', { name: 'Add channel' }));
@@ -530,7 +530,7 @@ describe('NotificationChannelsPanel', () => {
       kind: 'ntfy',
       filter: { minSeverity: 'info' },
       ntfy: {
-        server: 'https://ntfy.example',
+        server: 'https://ntfy.example/subpath',
         topic: 'alerts_1',
         token: { secret: 'NOTIFY_OPS_NTFY_2_TOKEN', set: 'tk_secret', expectedVersion: '0' },
       },
@@ -585,8 +585,8 @@ describe('NotificationChannelsPanel', () => {
     expect(within(dialog).getByLabelText(/^Channel kind/, { selector: 'input' })).toBeDisabled();
     await user.click(within(dialog).getByRole('switch'));
     await user.click(within(dialog).getByRole('button', { name: 'Save channel' }));
-    await waitFor(() => expect(putPayload).toBeDefined());
-    expect(putPayload).toEqual({
+    await waitFor(() => expect(putPayloads.ntf_email).toBeDefined());
+    expect(putPayloads.ntf_email).toEqual({
       name: 'ops-email',
       enabled: false,
       kind: 'email',
@@ -595,6 +595,114 @@ describe('NotificationChannelsPanel', () => {
         host: 'smtp.example',
         from: 'andaru@example.com',
         password: { secret: 'SMTP_PASS' },
+      },
+    });
+  });
+
+  it('handles ntfy token removal, Pushover shared/unresolved secrets with 422 aria-invalid, and switching kind on edit without focus steal', async () => {
+    const user = userEvent.setup();
+    const putPayloads: Record<string, unknown> = {};
+    let pushoverRejectOnce = true;
+
+    const ntfyWithToken: SavedObject<NotificationChannel> = {
+      version: '4',
+      value: {
+        id: 'ntf_n1',
+        name: 'ntfy-auth',
+        enabled: true,
+        kind: 'ntfy',
+        filter: { minSeverity: 'info' },
+        ntfy: { server: 'https://ntfy.sh', topic: 'ops', token: { secret: 'SHARED_TOK', isSet: true, version: '4' } },
+      },
+    };
+    const pushoverChannel: SavedObject<NotificationChannel> = {
+      version: '6',
+      value: {
+        id: 'ntf_po1',
+        name: 'po-oncall',
+        enabled: true,
+        kind: 'pushover',
+        filter: { minSeverity: 'warning' },
+        pushover: {
+          token: { secret: 'SHARED_TOK', isSet: true, version: '4' },
+          user: { secret: 'PO_USER', isSet: false, version: '0', unresolved: true },
+        },
+      },
+    };
+
+    fetchRoutes({
+      'GET /api/v1/config/notifications/channels': () => jsonResponse(200, { state: 'saved', savedVersion: '10', items: [ntfyWithToken, pushoverChannel] }),
+      'GET /api/v1/config/notifications/channels/ntf_n1': () => jsonResponse(200, { state: 'saved', savedVersion: '10', ...ntfyWithToken }),
+      'GET /api/v1/config/notifications/channels/ntf_po1': () => jsonResponse(200, { state: 'saved', savedVersion: '10', ...pushoverChannel }),
+      'GET /api/v1/config': () => jsonResponse(200, { state: 'saved', savedVersion: '10', value: { links: [], segments: [], zones: [] } }),
+      'PUT /api/v1/config/notifications/channels/ntf_n1': (init) => {
+        putPayloads.ntf_n1 = JSON.parse(String(init?.body ?? '{}'));
+        return jsonResponse(200, { state: 'saved', savedVersion: '11', version: '11', value: ntfyWithToken.value });
+      },
+      'PUT /api/v1/config/notifications/channels/ntf_po1': (init) => {
+        if (pushoverRejectOnce) {
+          pushoverRejectOnce = false;
+          return jsonResponse(422, {
+            error: {
+              code: 'VALIDATION_FAILED',
+              message: 'Invalid.',
+              details: [{ path: '/pushover/token', message: 'Token rejected by server.' }],
+            },
+          });
+        }
+        putPayloads.ntf_po1 = JSON.parse(String(init?.body ?? '{}'));
+        return jsonResponse(200, { state: 'saved', savedVersion: '12', version: '12', value: pushoverChannel.value });
+      },
+    });
+
+    render(<NotificationChannelsPanel api={new ApiClient('csrf')} canManage onSessionLost={vi.fn()} />);
+    expect(await screen.findByText(/App token:\s*set/i)).toBeInTheDocument();
+    expect(screen.getByText(/User key:/i)).toHaveTextContent(/User key:\s*unresolved/i);
+
+    // Edit ntfy channel and remove optional access token.
+    await user.click(screen.getByRole('button', { name: 'Edit ntfy-auth' }));
+    let dialog = await screen.findByRole('dialog', { name: 'Edit channel: ntfy-auth' });
+    await user.click(within(dialog).getByLabelText('Remove access token'));
+    expect(within(dialog).getByLabelText(/^Access token/, { selector: 'input' })).toBeDisabled();
+    await user.click(within(dialog).getByRole('button', { name: 'Save channel' }));
+    await waitFor(() => expect(putPayloads.ntf_n1).toBeDefined());
+    expect(putPayloads.ntf_n1).toEqual({
+      name: 'ntfy-auth',
+      enabled: true,
+      kind: 'ntfy',
+      filter: { minSeverity: 'info' },
+      ntfy: { server: 'https://ntfy.sh', topic: 'ops' },
+    });
+
+    // Edit Pushover channel: shows shared secret disclosure + unresolved user key alert, 422 sets aria-invalid,
+    // and switching kind to Telegram clears stale kind error/banner and writes only the telegram sub-object.
+    await user.click(screen.getByRole('button', { name: 'Edit po-oncall' }));
+    dialog = await screen.findByRole('dialog', { name: 'Edit channel: po-oncall' });
+    expect(within(dialog).getByText(/shared with ntfy-auth/i)).toBeInTheDocument();
+    expect(within(dialog).getByText('User key needs to be restored')).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('button', { name: 'Save channel' }));
+    expect(await within(dialog).findByText('Token rejected by server.')).toBeInTheDocument();
+    const appTokenInput = within(dialog).getByLabelText(/^Application token/, { selector: 'input' });
+    expect(appTokenInput).toHaveAttribute('aria-invalid', 'true');
+    expect(appTokenInput).toHaveAttribute('autocomplete', 'new-password');
+
+    // Switch kind to Telegram: clears stale failure alert without focusing an alert, then submits telegram-only write.
+    await user.click(within(dialog).getByLabelText(/^Channel kind/, { selector: 'input' }));
+    await user.click(await screen.findByRole('option', { name: 'Telegram' }));
+    expect(within(dialog).queryByText('Notification channel was not saved')).not.toBeInTheDocument();
+    await user.type(within(dialog).getByLabelText(/^Bot token/, { selector: 'input' }), '999:NEW_BOT');
+    await user.type(within(dialog).getByLabelText(/^Chat ID/, { selector: 'input' }), '@oncall_team');
+    await user.click(within(dialog).getByRole('button', { name: 'Save channel' }));
+    await waitFor(() => expect(putPayloads.ntf_po1).toBeDefined());
+    expect(putPayloads.ntf_po1).toEqual({
+      name: 'po-oncall',
+      enabled: true,
+      kind: 'telegram',
+      filter: { minSeverity: 'warning' },
+      telegram: {
+        token: { secret: 'NOTIFY_PO_ONCALL_TOKEN', set: '999:NEW_BOT', expectedVersion: '0' },
+        chatId: '@oncall_team',
       },
     });
   });

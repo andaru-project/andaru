@@ -32,8 +32,6 @@ export interface NotificationChannelDraft {
 
 export const knownNotificationSources = ['engine', 'apply', 'upgrade', 'disk', 'delivery', 'notifications'];
 
-export const knownChannelKinds: KnownNotificationChannelKind[] = ['webhook', 'ntfy', 'pushover', 'telegram'];
-
 export const channelKindLabel: Record<KnownNotificationChannelKind, string> = {
   webhook: 'Webhook',
   ntfy: 'ntfy',
@@ -42,7 +40,7 @@ export const channelKindLabel: Record<KnownNotificationChannelKind, string> = {
 };
 
 export function isKnownChannelKind(kind: string): kind is KnownNotificationChannelKind {
-  return (knownChannelKinds as string[]).includes(kind);
+  return Object.hasOwn(channelKindLabel, kind);
 }
 
 export function channelKindDisplay(kind: string): string {
@@ -52,23 +50,32 @@ export function channelKindDisplay(kind: string): string {
 const controlChars = /\p{Cc}/u;
 const controlOrFormatChars = /[\p{Cc}\p{Cf}]/u;
 const ntfyTopicPattern = /^[A-Za-z0-9_-]{1,64}$/;
-const telegramChatIdPattern = /^(-?[0-9]+|@[A-Za-z0-9_]+)$/;
+const telegramChatIdPattern = /^(-?[0-9]{1,63}|@[A-Za-z0-9_]{1,63})$/;
 const utf8Encoder = new TextEncoder();
 const secretByteLimit = 4096;
+const ntfyServerCharLimit = 2048;
 const descriptionCharLimit = 4096;
 const utf8ByteLength = (value: string) => utf8Encoder.encode(value).length;
 
 const topLevelChannelKeys = new Set(['id', 'name', 'description', 'enabled', 'kind', 'filter']);
+const forbiddenObjectKeys = new Set(['__proto__', 'constructor', 'prototype']);
+const secretViewKeys = new Set(['secret', 'isSet', 'updatedAt', 'version', 'unresolved']);
 
 export interface ChannelSecretEntry {
   label: string;
   view: SecretView;
+  optional?: boolean;
 }
 
 function isSecretView(value: unknown): value is SecretView {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const obj = value as Record<string, unknown>;
-  return typeof obj.secret === 'string' && ('isSet' in obj || 'version' in obj || 'unresolved' in obj);
+  if (!Object.hasOwn(obj, 'secret') || typeof obj.secret !== 'string') return false;
+  const hasMetadata = (Object.hasOwn(obj, 'isSet') && typeof obj.isSet === 'boolean')
+    || (Object.hasOwn(obj, 'version') && typeof obj.version === 'string')
+    || (Object.hasOwn(obj, 'unresolved') && typeof obj.unresolved === 'boolean');
+  if (!hasMetadata) return false;
+  return Object.keys(obj).every((k) => secretViewKeys.has(k));
 }
 
 function collectUnknownSecrets(value: unknown, prefix: string, out: ChannelSecretEntry[]) {
@@ -89,27 +96,27 @@ function collectUnknownSecrets(value: unknown, prefix: string, out: ChannelSecre
 
 // Extract all secret references held by a channel across known and unknown future kind sub-objects.
 export function channelSecretsOf(channel: NotificationChannel): ChannelSecretEntry[] {
-  if (channel.kind === 'webhook' && channel.webhook) {
+  if (channel.kind === 'webhook') {
     const out: ChannelSecretEntry[] = [];
-    if (channel.webhook.url) out.push({ label: 'URL', view: channel.webhook.url });
-    if (channel.webhook.authorization) out.push({ label: 'Authorization', view: channel.webhook.authorization });
+    if (channel.webhook?.url) out.push({ label: 'URL', view: channel.webhook.url });
+    if (channel.webhook?.authorization) out.push({ label: 'Authorization', view: channel.webhook.authorization, optional: true });
     return out;
   }
-  if (channel.kind === 'ntfy' && channel.ntfy) {
-    return channel.ntfy.token ? [{ label: 'Token', view: channel.ntfy.token }] : [];
+  if (channel.kind === 'ntfy') {
+    return channel.ntfy?.token ? [{ label: 'Token', view: channel.ntfy.token, optional: true }] : [];
   }
-  if (channel.kind === 'pushover' && channel.pushover) {
+  if (channel.kind === 'pushover') {
     const out: ChannelSecretEntry[] = [];
-    if (channel.pushover.token) out.push({ label: 'App token', view: channel.pushover.token });
-    if (channel.pushover.user) out.push({ label: 'User key', view: channel.pushover.user });
+    if (channel.pushover?.token) out.push({ label: 'App token', view: channel.pushover.token });
+    if (channel.pushover?.user) out.push({ label: 'User key', view: channel.pushover.user });
     return out;
   }
-  if (channel.kind === 'telegram' && channel.telegram) {
-    return channel.telegram.token ? [{ label: 'Bot token', view: channel.telegram.token }] : [];
+  if (channel.kind === 'telegram') {
+    return channel.telegram?.token ? [{ label: 'Bot token', view: channel.telegram.token }] : [];
   }
   // Forward-compatible recursive scan of unknown kind sub-objects (e.g. future email kind).
   const out: ChannelSecretEntry[] = [];
-  if (!topLevelChannelKeys.has(channel.kind)) {
+  if (!topLevelChannelKeys.has(channel.kind) && !forbiddenObjectKeys.has(channel.kind) && Object.hasOwn(channel, channel.kind)) {
     collectUnknownSecrets(channel[channel.kind], '', out);
   }
   return out;
@@ -122,11 +129,11 @@ function echoUnknownKindSubObject(sub: unknown): unknown {
   }
   if (Array.isArray(sub)) return sub.map(echoUnknownKindSubObject);
   if (sub && typeof sub === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(sub as Record<string, unknown>)) {
-      if (v !== undefined) out[k] = echoUnknownKindSubObject(v);
-    }
-    return out;
+    return Object.fromEntries(
+      Object.entries(sub as Record<string, unknown>)
+        .filter(([, v]) => v !== undefined)
+        .map(([k, v]) => [k, echoUnknownKindSubObject(v)]),
+    );
   }
   return sub;
 }
@@ -208,30 +215,36 @@ export function validateWebhookUrl(raw: string, required: boolean): string | und
   return undefined;
 }
 
-// ntfy server must be an http(s) URL with host (and optional port) only: no path, query, fragment, or userinfo.
+const invalidNtfyServerMsg = 'Use an http:// or https:// server URL (optional proxy path, with no credentials, query, or fragment).';
+
+// ntfy server must be an http(s) URL (may include a reverse-proxy path) with no credentials, query, or fragment.
 export function validateNtfyServer(raw: string): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) return 'Enter an ntfy server URL.';
   if (controlChars.test(trimmed) || /\s/.test(trimmed)) {
     return 'Server URL cannot contain whitespace or control characters.';
   }
-  if (!/^https?:\/\/[^/?#\\@]+$/i.test(trimmed)) {
-    return 'Use an http:// or https:// server URL with a host only (no path, query, or credentials).';
+  if (trimmed.length > ntfyServerCharLimit) {
+    return `Server URL must be ${ntfyServerCharLimit} characters or fewer.`;
+  }
+  // Authority must be non-empty without userinfo (@), backslash, query (?), or fragment (#), and no empty trailing port (:).
+  const match = /^https?:\/\/([^/?#\\@]+)(?:\/[^?#\\]*)?$/i.exec(trimmed);
+  if (!match || match[1].endsWith(':')) {
+    return invalidNtfyServerMsg;
   }
   try {
     const parsed = new URL(trimmed);
     if (
       (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
       || !parsed.hostname
-      || parsed.username !== ''
-      || parsed.password !== ''
-      || parsed.search !== ''
-      || parsed.hash !== ''
+      || /^\.+$/.test(parsed.hostname)
+      || parsed.hostname.includes('..')
+      || parsed.port === '0'
     ) {
-      return 'Use an http:// or https:// server URL with a host only (no path, query, or credentials).';
+      return invalidNtfyServerMsg;
     }
   } catch {
-    return 'Use an http:// or https:// server URL with a host only (no path, query, or credentials).';
+    return invalidNtfyServerMsg;
   }
   return undefined;
 }
@@ -248,20 +261,20 @@ export function validateNtfyTopic(raw: string): string | undefined {
 export function validateTelegramChatId(raw: string): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) return 'Enter a Telegram chat ID.';
-  if (trimmed.length > 64 || !telegramChatIdPattern.test(trimmed)) {
+  if (!telegramChatIdPattern.test(trimmed)) {
     return 'Use a numeric chat ID (optional leading -) or @channelname (up to 64 characters).';
   }
   return undefined;
 }
 
-function validateSecretValue(raw: string, label: string, required: boolean): string | undefined {
+function validateSecretValue(raw: string, articleLabel: string, fieldLabel: string, required: boolean): string | undefined {
   const trimmed = raw.trim();
-  if (!trimmed) return required ? `Enter ${label}.` : undefined;
+  if (!trimmed) return required ? `Enter ${articleLabel}.` : undefined;
   if (controlChars.test(trimmed)) {
-    return `${label[0].toUpperCase()}${label.slice(1)} cannot contain control characters or line breaks.`;
+    return `${fieldLabel} cannot contain control characters or line breaks.`;
   }
   if (utf8ByteLength(trimmed) > secretByteLimit) {
-    return `${label[0].toUpperCase()}${label.slice(1)} must be ${secretByteLimit} bytes or fewer.`;
+    return `${fieldLabel} must be ${secretByteLimit} bytes or fewer.`;
   }
   return undefined;
 }
@@ -315,7 +328,7 @@ export function validateChannelDraft(
     const urlErr = validateWebhookUrl(draft.webhookUrl, !(sameKind && saved?.webhook?.url));
     if (urlErr) errors.set('webhookUrl', urlErr);
     if (!draft.removeWebhookAuth) {
-      const authErr = validateSecretValue(draft.webhookAuth, 'authorization header', false);
+      const authErr = validateSecretValue(draft.webhookAuth, 'an authorization header', 'Authorization header', false);
       if (authErr) errors.set('webhookAuth', authErr);
     }
   } else if (draft.kind === 'ntfy') {
@@ -324,16 +337,16 @@ export function validateChannelDraft(
     const topicErr = validateNtfyTopic(draft.ntfyTopic);
     if (topicErr) errors.set('ntfyTopic', topicErr);
     if (!draft.removeNtfyToken) {
-      const tokErr = validateSecretValue(draft.ntfyToken, 'access token', false);
+      const tokErr = validateSecretValue(draft.ntfyToken, 'an access token', 'Access token', false);
       if (tokErr) errors.set('ntfyToken', tokErr);
     }
   } else if (draft.kind === 'pushover') {
-    const tokErr = validateSecretValue(draft.pushoverToken, 'application token', !(sameKind && saved?.pushover?.token));
+    const tokErr = validateSecretValue(draft.pushoverToken, 'an application token', 'Application token', !(sameKind && saved?.pushover?.token));
     if (tokErr) errors.set('pushoverToken', tokErr);
-    const userErr = validateSecretValue(draft.pushoverUser, 'user key', !(sameKind && saved?.pushover?.user));
+    const userErr = validateSecretValue(draft.pushoverUser, 'a user key', 'User key', !(sameKind && saved?.pushover?.user));
     if (userErr) errors.set('pushoverUser', userErr);
   } else if (draft.kind === 'telegram') {
-    const tokErr = validateSecretValue(draft.telegramToken, 'bot token', !(sameKind && saved?.telegram?.token));
+    const tokErr = validateSecretValue(draft.telegramToken, 'a bot token', 'Bot token', !(sameKind && saved?.telegram?.token));
     if (tokErr) errors.set('telegramToken', tokErr);
     const chatErr = validateTelegramChatId(draft.telegramChatId);
     if (chatErr) errors.set('telegramChatId', chatErr);
@@ -358,32 +371,11 @@ export function sharedSecretHolders(
   return holders.sort((a, b) => a.localeCompare(b));
 }
 
-function writeRequiredSecret(
-  rawValue: string,
-  channelName: string,
-  suffix: 'URL' | 'TOKEN' | 'USER',
-  existing: SecretView | undefined,
-  used: Set<string>,
-): SecretWrite {
-  const trimmed = rawValue.trim();
-  if (trimmed !== '') {
-    const secret = nextChannelSecretName(channelName, suffix, used);
-    used.add(secret);
-    return { secret, set: trimmed, expectedVersion: '0' };
-  }
-  if (existing) {
-    return { secret: existing.secret, ...(existing.unresolved ? { unresolved: true } : {}) };
-  }
-  const secret = nextChannelSecretName(channelName, suffix, used);
-  used.add(secret);
-  return { secret, set: '', expectedVersion: '0' };
-}
-
 function writeOptionalSecret(
   rawValue: string,
   remove: boolean,
   channelName: string,
-  suffix: 'AUTH' | 'TOKEN',
+  suffix: 'URL' | 'AUTH' | 'TOKEN' | 'USER',
   existing: SecretView | undefined,
   used: Set<string>,
 ): SecretWrite | undefined {
@@ -398,6 +390,20 @@ function writeOptionalSecret(
     return { secret: existing.secret, ...(existing.unresolved ? { unresolved: true } : {}) };
   }
   return undefined;
+}
+
+function writeRequiredSecret(
+  rawValue: string,
+  channelName: string,
+  suffix: 'URL' | 'TOKEN' | 'USER',
+  existing: SecretView | undefined,
+  used: Set<string>,
+): SecretWrite {
+  const existingOrNew = writeOptionalSecret(rawValue, false, channelName, suffix, existing, used);
+  if (existingOrNew) return existingOrNew;
+  const secret = nextChannelSecretName(channelName, suffix, used);
+  used.add(secret);
+  return { secret, set: '', expectedVersion: '0' };
 }
 
 export function buildChannelWrite(
@@ -477,8 +483,15 @@ export function buildChannelWrite(
   }
 
   // Unknown future kind: preserve its own sub-object unchanged (stripping SecretView metadata).
-  if (saved && !topLevelChannelKeys.has(draft.kind) && saved[draft.kind] !== undefined) {
-    return { ...base, [draft.kind]: echoUnknownKindSubObject(saved[draft.kind]) };
+  if (
+    sameKind
+    && saved
+    && !topLevelChannelKeys.has(draft.kind)
+    && !forbiddenObjectKeys.has(draft.kind)
+    && Object.hasOwn(saved, draft.kind)
+    && saved[draft.kind] !== undefined
+  ) {
+    return { ...base, [draft.kind]: echoUnknownKindSubObject(saved[draft.kind]) } as NotificationChannelWrite;
   }
   return base;
 }

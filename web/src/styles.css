@@ -771,7 +771,8 @@ path.traffic-sent {
   user-select: none;
 }
 
-.traffic-flow-detail {
+.traffic-flow-detail,
+.channel-target {
   overflow-wrap: anywhere;
 }
 

@@ -762,7 +762,6 @@ export interface NotificationChannelWrite {
     token: SecretWrite;
     chatId: string;
   };
-  [extraKind: string]: unknown;
 }
 
 export type BackupStore = 'configuration' | 'configurationSecrets' | 'users' | 'userCredentials';
