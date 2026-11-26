@@ -5,10 +5,18 @@
 package aliasfeed
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/netip"
+	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -34,8 +42,10 @@ func ResultTopic(alias string) string { return "alias-result/" + alias }
 // Request asks for one fetch of a URL alias or one resolution of a host-name alias's names.
 type Request struct {
 	// ID is the request's own, which its result carries.
-	ID    string   `json:"id"`
-	Alias string   `json:"alias"`
+	ID    string `json:"id"`
+	Alias string `json:"alias"`
+	// Hash is the source's, Hash(Kind, URL, Names), which the result carries back.
+	Hash  string   `json:"hash"`
 	Kind  string   `json:"kind"` // "url" or "hostnames"
 	URL   string   `json:"url,omitempty"`
 	Names []string `json:"names,omitempty"`
@@ -44,6 +54,7 @@ type Request struct {
 // Result is the outcome of a request. OK with no members is an empty list; not OK keeps the last good list.
 type Result struct {
 	Request string   `json:"request"`
+	Hash    string   `json:"hash"` // the request's
 	OK      bool     `json:"ok"`
 	Members []string `json:"members,omitempty"` // addresses and networks, for a URL alias
 	Error   string   `json:"error,omitempty"`
@@ -58,10 +69,9 @@ type NameResult struct {
 	Error     string   `json:"error,omitempty"`
 }
 
-// State is what the engine keeps of an alias, in Path(stateDir, alias).
+// State is what the engine keeps of one source of an alias, in Path(stateDir, alias, hash): a changed URL or set of
+// names is a new source, with a state of its own that starts empty.
 type State struct {
-	// Hash is of the alias's kind, URL and names when last asked for: a change asks again at once.
-	Hash string `json:"hash"`
 	// Members is the last good list: for a host-name alias, every name's last good addresses.
 	Members     []string  `json:"members"`
 	LastSuccess time.Time `json:"lastSuccess,omitzero"`
@@ -69,7 +79,7 @@ type State struct {
 	LastError   string    `json:"lastError,omitempty"`
 	Failures    int       `json:"failures"`
 	Names       []Name    `json:"names,omitempty"`
-	// Pending are the requests sent since the hash last changed and not yet answered, oldest first.
+	// Pending are the requests sent for this source and not yet answered, oldest first.
 	Pending []string `json:"pending,omitempty"`
 }
 
@@ -81,9 +91,67 @@ type Name struct {
 	ResolvedAt time.Time `json:"resolvedAt,omitzero"`
 }
 
-// Dir is where the state files are; Path is one alias's.
-func Dir(stateDir string) string          { return filepath.Join(stateDir, "aliases") }
-func Path(stateDir, alias string) string { return filepath.Join(Dir(stateDir), alias+".json") }
+// Hash names a source: the kind and the URL, or the kind and the names, sorted and lower-cased. The filter carries
+// it in each set's comment, "feed:<hash>", so the sets are filled from the source the loaded filter was rendered for.
+func Hash(kind, url string, names []string) string {
+	key := []string{kind, url}
+	if kind == "hostnames" {
+		lower := make([]string, len(names))
+		for i, n := range names {
+			lower[i] = strings.ToLower(n)
+		}
+		slices.Sort(lower)
+		key = append([]string{kind}, lower...)
+	}
+	sum := sha256.Sum256([]byte(strings.Join(key, "\x00")))
+	return hex.EncodeToString(sum[:8])
+}
+
+// hashName is what Hash returns.
+var hashName = regexp.MustCompile(`^[0-9a-f]{16}$`)
+
+// Dir is where the state files are, one directory per alias; Path is one source's.
+func Dir(stateDir string) string { return filepath.Join(stateDir, "aliases") }
+func Path(stateDir, alias, hash string) string {
+	return filepath.Join(Dir(stateDir), alias, hash+".json")
+}
+
+// Sources returns the hash of each source with a state file, by alias.
+func Sources(stateDir string) map[string][]string {
+	out := map[string][]string{}
+	aliases, _ := os.ReadDir(Dir(stateDir))
+	for _, a := range aliases {
+		if !a.IsDir() {
+			continue
+		}
+		files, _ := os.ReadDir(filepath.Join(Dir(stateDir), a.Name()))
+		for _, f := range files {
+			if hash, ok := strings.CutSuffix(f.Name(), ".json"); ok && hashName.MatchString(hash) && f.Type().IsRegular() {
+				out[a.Name()] = append(out[a.Name()], hash)
+			}
+		}
+	}
+	return out
+}
+
+// Load reads a source's state; none yet is an empty one. A file that does not decode is renamed aside, to
+// <hash>.json.corrupt-<unix seconds>, and Load returns an empty state with the error that says so.
+func Load(stateDir, alias, hash string) (State, error) {
+	path := Path(stateDir, alias, hash)
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return State{}, nil
+	}
+	if err != nil {
+		return State{}, err
+	}
+	var s State
+	if err := json.Unmarshal(data, &s); err != nil {
+		aside := path + ".corrupt-" + strconv.FormatInt(time.Now().Unix(), 10)
+		return State{}, errors.Join(fmt.Errorf("state does not decode, moved to %s: %w", aside, err), os.Rename(path, aside))
+	}
+	return s, nil
+}
 
 // Members checks a list of addresses and networks and returns it in the form the sets take: each an IPv4 or IPv6
 // address or network, a network without host bits, an IPv4-mapped address as IPv4, sorted, each once, at most

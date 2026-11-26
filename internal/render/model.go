@@ -104,8 +104,8 @@ type segment struct {
 	} `json:"addressing"`
 }
 type address struct {
-	ID, Kind, Address, Prefix, First, Last string
-	Members                                []string
+	ID, Kind, Address, Prefix, First, Last, URL string
+	Members, Names                              []string
 }
 type service struct {
 	ID, Protocol          string

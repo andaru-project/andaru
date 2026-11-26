@@ -3,14 +3,13 @@ package engine
 import (
 	"cmp"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -22,6 +21,7 @@ import (
 	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/bus"
 	"github.com/andaru-project/andaru/internal/config"
+	"github.com/andaru-project/andaru/internal/generation"
 	"github.com/andaru-project/andaru/internal/notify"
 )
 
@@ -30,17 +30,39 @@ const (
 	aliasSource   = "alias"
 	aliasFailures = 3
 	aliasesPage   = "/firewall/aliases"
-	// maxPending bounds the requests an alias keeps waiting for, while andaru-outbound does not answer.
+	// maxPending bounds the requests a source keeps waiting for, while andaru-outbound does not answer.
 	maxPending = 16
+	// keepUnwanted is how long the state of a source no wanted generation names is kept after its last attempt: a
+	// rollback, or a boot of a kept generation, finds its list for as long.
+	keepUnwanted = 30 * 24 * time.Hour
+	// refreshEvery is how often "Refresh now" may ask for one alias.
+	refreshEvery = 10 * time.Second
 )
 
-// aliasFeeds keeps the address aliases fed from a URL or from host names: it asks andaru-outbound for each one's
-// list on its interval, keeps each result in the alias's state file, and loads a changed list into the filter.
+// source is one alias's URL or set of names, by its hash: the members belong to it, in its own state file.
+type source struct{ alias, hash string }
+
+func sourceOf(a config.DynamicAlias) source {
+	return source{a.ID, aliasfeed.Hash(a.Kind, a.URL, a.Names)}
+}
+
+// wanted is a source the saved head or the live generation names, with the alias as one of them saves it.
+type wanted struct {
+	alias config.DynamicAlias
+	// saved and live say which of the saved head and the live generation name it: the live filter holds its sets.
+	saved, live bool
+}
+
+// aliasFeeds keeps the address aliases fed from a URL or from host names: it asks andaru-outbound for the list of
+// every source the saved head or the live generation names, on its interval, keeps each result in the source's state
+// file, and loads a changed list into the filter. A saved change never touches the live filter: its sets are filled
+// from the sources the live filter was rendered for, and an apply finds its new sources already fetched.
 type aliasFeeds struct {
 	mu       sync.Mutex
 	stateDir string
-	aliases  func(context.Context) ([]config.DynamicAlias, error)
-	publish  func(topic string, payload []byte, durable bool) error
+	// aliases returns those of the saved head, and those of the live generation's saved version.
+	aliases func(context.Context) (saved, live []config.DynamicAlias, err error)
+	publish func(topic string, payload []byte, durable bool) error
 	// realize runs andaru realize aliases.
 	realize func(context.Context) error
 	now     func() time.Time
@@ -49,14 +71,46 @@ type aliasFeeds struct {
 	// owed says the sets may not hold what the state files do: a load failed, or none ran since this start, which
 	// may follow a crash between a state write and its load.
 	owed bool
+	// refreshed is each alias's last "Refresh now", and the request it published; cleared, the aliases no wanted
+	// generation names any more whose notification was cleared since this start.
+	refreshed map[string]refresh
+	cleared   map[string]bool
 }
 
-func newAliasFeeds(stateDir string, events *bus.Bus, aliases func(context.Context) ([]config.DynamicAlias, error), realize func(context.Context) error) *aliasFeeds {
+type refresh struct {
+	at      time.Time
+	request string
+}
+
+func newAliasFeeds(stateDir string, events *bus.Bus, aliases func(context.Context) ([]config.DynamicAlias, []config.DynamicAlias, error), realize func(context.Context) error) *aliasFeeds {
 	return &aliasFeeds{stateDir: stateDir, aliases: aliases, publish: events.Publish, realize: realize, now: time.Now,
-		log: slog.Default().With("component", "aliases"), poke: make(chan struct{}, 1), owed: true}
+		log: slog.Default().With("component", "aliases"), poke: make(chan struct{}, 1), owed: true,
+		refreshed: map[string]refresh{}, cleared: map[string]bool{}}
 }
 
-// nudge asks for a schedule soon: the saved aliases may have changed.
+// savedAndLive returns the dynamic aliases of the saved head and of the generation that is live, by the saved version
+// it was applied from: none before the first apply.
+func savedAndLive(stateDir string, store *config.Store) func(context.Context) ([]config.DynamicAlias, []config.DynamicAlias, error) {
+	return func(ctx context.Context) ([]config.DynamicAlias, []config.DynamicAlias, error) {
+		saved, err := store.DynamicAliases(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		dir := generation.Dir(stateDir)
+		p, err := generation.ReadPointers(dir)
+		if err != nil || p.Live == nil {
+			return saved, nil, err
+		}
+		g, err := generation.Read(dir, *p.Live)
+		if err != nil || g.SavedVersion == "" {
+			return saved, nil, err
+		}
+		live, err := store.DynamicAliasesAt(ctx, config.Version(g.SavedVersion))
+		return saved, live, err
+	}
+}
+
+// nudge asks for a schedule soon: the saved aliases or the live generation may have changed.
 func (f *aliasFeeds) nudge() {
 	select {
 	case f.poke <- struct{}{}:
@@ -64,7 +118,7 @@ func (f *aliasFeeds) nudge() {
 	}
 }
 
-// run schedules at start, at each nudge, and when the next alias is due.
+// run schedules at start, at each nudge, and when the next source is due.
 func (f *aliasFeeds) run(ctx context.Context) {
 	timer := time.NewTimer(0)
 	defer timer.Stop()
@@ -79,42 +133,57 @@ func (f *aliasFeeds) run(ctx context.Context) {
 	}
 }
 
-// aliasHash is of what a fetch asks for: when it changes, the alias is fetched at once.
-func aliasHash(a config.DynamicAlias) string {
-	sum := sha256.Sum256([]byte(a.Kind + "\x00" + a.URL + "\x00" + strings.Join(a.Names, "\x00")))
-	return hex.EncodeToString(sum[:])
+// want returns every source the saved head or the live generation names. A source both name is asked for on the
+// shorter interval.
+func (f *aliasFeeds) want(ctx context.Context) (map[source]wanted, error) {
+	saved, live, err := f.aliases(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := map[source]wanted{}
+	for i, list := range [][]config.DynamicAlias{saved, live} {
+		for _, a := range list {
+			w, ok := out[sourceOf(a)]
+			if !ok || a.RefreshSeconds < w.alias.RefreshSeconds {
+				w.alias = a
+			}
+			w.saved, w.live = w.saved || i == 0, w.live || i == 1
+			out[sourceOf(a)] = w
+		}
+	}
+	return out, nil
 }
 
-// due reports whether an alias is to be fetched now, and if not, how long until it is.
+// due reports whether a source is to be asked for now, and if not, how long until it is. A request not yet answered
+// counts as an attempt: no other is sent for one interval, so requests do not pile up while nobody answers.
 func due(a config.DynamicAlias, s aliasfeed.State, now time.Time) (bool, time.Duration) {
-	if s.LastAttempt.IsZero() || s.Hash != aliasHash(a) {
+	if s.LastAttempt.IsZero() {
 		return true, 0
 	}
 	wait := s.LastAttempt.Add(time.Duration(a.RefreshSeconds) * time.Second).Sub(now)
 	return wait <= 0, wait
 }
 
-// schedule asks for every alias that is due, removes the state of aliases no longer saved, and returns how long
-// until the next is due.
+// schedule asks for every wanted source that is due, removes the state of sources long unwanted, and returns how
+// long until the next is due.
 func (f *aliasFeeds) schedule(ctx context.Context) time.Duration {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	list, err := f.aliases(ctx)
+	want, err := f.want(ctx)
 	if err != nil {
-		f.log.Warn("read the saved aliases", "error", err)
+		f.log.Warn("read the saved and the live aliases", "error", err)
 		return time.Minute
 	}
-	f.forget(list)
+	f.forget(want)
 	next := time.Hour
-	for _, a := range list {
-		s, err := f.load(a.ID)
-		if err != nil {
-			f.log.Warn("read an alias's state; it is fetched again", "alias", a.ID, "error", err)
-		}
-		now := f.now()
-		fetch, wait := due(a, s, now)
+	// In a stable order, so the requests are too.
+	keys := slices.SortedFunc(maps.Keys(want), func(a, b source) int { return cmp.Or(cmp.Compare(a.alias, b.alias), cmp.Compare(a.hash, b.hash)) })
+	for _, src := range keys {
+		a := want[src].alias
+		s := f.load(src)
+		fetch, wait := due(a, s, f.now())
 		if fetch {
-			if _, err := f.request(a, s); err != nil {
+			if _, err := f.request(src, a, s); err != nil {
 				f.log.Warn("ask for an alias's list", "alias", a.ID, "name", a.Name, "error", err)
 				wait = time.Minute
 			} else {
@@ -126,54 +195,70 @@ func (f *aliasFeeds) schedule(ctx context.Context) time.Duration {
 	return next
 }
 
-// request publishes a durable request for a's list and records it in its state.
-func (f *aliasFeeds) request(a config.DynamicAlias, s aliasfeed.State) (string, error) {
-	if h := aliasHash(a); s.Hash != h {
-		// Answers to what was asked before are not this alias's list any more.
-		s.Hash, s.Pending = h, nil
-	}
-	req := aliasfeed.Request{ID: uuid.NewString(), Alias: a.ID, Kind: a.Kind, URL: a.URL, Names: a.Names}
+// request records a request for a source's list in its state, then publishes it, durable. A request that cannot be
+// recorded is not sent: its answer would be dropped.
+func (f *aliasFeeds) request(src source, a config.DynamicAlias, s aliasfeed.State) (string, error) {
+	req := aliasfeed.Request{ID: uuid.NewString(), Alias: a.ID, Hash: src.hash, Kind: a.Kind, URL: a.URL, Names: a.Names}
 	payload, err := bus.NewEvent(aliasfeed.RequestType, "engine", req)
-	if err == nil {
-		err = f.publish(aliasfeed.Topic(a.ID), payload, true)
-	}
 	if err != nil {
 		return "", err
 	}
-	s.LastAttempt = f.now().UTC()
-	s.Pending = append(s.Pending, req.ID)
-	if len(s.Pending) > maxPending {
-		s.Pending = s.Pending[len(s.Pending)-maxPending:]
+	asked := s
+	asked.LastAttempt = f.now().UTC()
+	asked.Pending = append(slices.Clone(s.Pending), req.ID)
+	if len(asked.Pending) > maxPending {
+		asked.Pending = asked.Pending[len(asked.Pending)-maxPending:]
 	}
-	return req.ID, f.save(a.ID, s)
+	if err := f.save(src, asked); err != nil {
+		return "", err
+	}
+	if err := f.publish(aliasfeed.Topic(a.ID), payload, true); err != nil {
+		// Unsent, it is no attempt: the source is asked for again at the next schedule.
+		if undo := f.save(src, s); undo != nil {
+			f.log.Warn("undo an unsent alias request", "alias", a.ID, "error", undo)
+		}
+		return "", err
+	}
+	return req.ID, nil
 }
 
-// refresh asks for an alias's list now; ok is false when id is not an alias fed from a URL or from host names.
+// refresh asks for an alias's list now, for its saved source and, when it differs, its live one; ok is false when id
+// is not an alias of the saved head fed from a URL or from host names. One alias is asked for at most once in
+// refreshEvery: a refresh sooner returns the request the last one published.
 func (f *aliasFeeds) refresh(ctx context.Context, id string) (request string, ok bool, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	a, ok, err := f.find(ctx, id)
-	if err != nil || !ok {
-		return "", ok, err
-	}
-	s, err := f.load(id)
+	want, err := f.want(ctx)
 	if err != nil {
-		f.log.Warn("read an alias's state; it is fetched again", "alias", id, "error", err)
+		return "", false, err
 	}
-	request, err = f.request(a, s)
-	return request, true, err
-}
-
-func (f *aliasFeeds) find(ctx context.Context, id string) (config.DynamicAlias, bool, error) {
-	list, err := f.aliases(ctx)
-	if err != nil {
-		return config.DynamicAlias{}, false, err
+	var saved, live []source
+	for src, w := range want {
+		switch {
+		case src.alias != id:
+		case w.saved:
+			saved = append(saved, src)
+		default:
+			live = append(live, src)
+		}
 	}
-	i := slices.IndexFunc(list, func(a config.DynamicAlias) bool { return a.ID == id })
-	if i < 0 {
-		return config.DynamicAlias{}, false, nil
+	if len(saved) == 0 {
+		return "", false, nil
 	}
-	return list[i], true, nil
+	if last, ok := f.refreshed[id]; ok && f.now().Sub(last.at) < refreshEvery {
+		return last.request, true, nil
+	}
+	for i, src := range append(saved, live...) {
+		r, err := f.request(src, want[src].alias, f.load(src))
+		if err != nil {
+			return "", true, err
+		}
+		if i == 0 {
+			request = r
+		}
+	}
+	f.refreshed[id] = refresh{f.now(), request}
+	return request, true, nil
 }
 
 // handle takes one result from andaru-outbound, then loads the lists into the filter if they may have changed. The
@@ -196,8 +281,9 @@ func (f *aliasFeeds) handle(m bus.Message) error {
 	return nil
 }
 
-// record keeps one result in its alias's state. A result for an alias no longer saved, or for a request it no longer
-// waits for, is dropped; one that cannot be decoded too, since trying it again would not change it.
+// record keeps one result in its source's state. A result for a source no wanted generation names, or for a request
+// its source no longer waits for (answered already, or pushed out), is dropped; one that cannot be decoded too, since
+// trying it again would not change it.
 func (f *aliasFeeds) record(m bus.Message) error {
 	if m.Gap {
 		f.log.Warn("alias results may have been missed; the aliases are fetched again on their interval")
@@ -213,19 +299,19 @@ func (f *aliasFeeds) record(m bus.Message) error {
 		f.log.Warn("alias result dropped: not a result", "alias", id)
 		return nil
 	}
-	a, ok, err := f.find(ctx, id)
+	want, err := f.want(ctx)
 	if err != nil {
 		return err // the store comes back; the result is tried again
 	}
+	src := source{id, r.Hash}
+	w, ok := want[src]
 	if !ok {
 		return nil
 	}
-	s, err := f.load(id)
-	if err != nil {
-		f.log.Warn("read an alias's state", "alias", id, "error", err)
-	}
+	a := w.alias
+	s := f.load(src)
 	i := slices.Index(s.Pending, r.Request)
-	if i < 0 || s.Hash != aliasHash(a) {
+	if i < 0 {
 		return nil
 	}
 	s.Pending = s.Pending[i+1:]
@@ -239,11 +325,11 @@ func (f *aliasFeeds) record(m bus.Message) error {
 		s.LastError, s.Failures = reason, s.Failures+1
 		f.log.Warn("alias list not fetched; the last good list stays", "alias", id, "name", a.Name, "reason", reason, "failures", s.Failures)
 	}
-	if err := f.save(id, s); err != nil {
+	if err := f.save(src, s); err != nil {
 		return err // unsaved, the result is tried again
 	}
 	f.tell(a, s, failures)
-	if changed {
+	if changed && w.live {
 		f.owed = true
 		payload, err := bus.NewEvent("alias.members.v1", "engine", map[string]any{"id": id, "members": s.Members})
 		if err == nil {
@@ -276,7 +362,8 @@ func apply(a config.DynamicAlias, s *aliasfeed.State, r aliasfeed.Result, now ti
 	if !r.OK && len(r.Names) == 0 {
 		return cmp.Or(r.Error, "lookup failed")
 	}
-	// Every name's answer is checked before any is kept.
+	// Every name's answer is checked before any is kept. The alias fails only when every name does: a name that
+	// failed keeps its last good addresses, and its error is shown.
 	names := make([]aliasfeed.Name, len(a.Names))
 	var failed []string
 	var all []string
@@ -289,6 +376,8 @@ func apply(a config.DynamicAlias, s *aliasfeed.State, r aliasfeed.Result, now ti
 		switch {
 		case !ok:
 			got.Error = "no answer"
+		case got.Error == "" && len(got.Addresses) == 0:
+			got.Error = "no addresses"
 		case got.Error == "":
 			addresses, err := aliasfeed.Members(got.Addresses)
 			if err == nil && slices.ContainsFunc(addresses, func(m string) bool { return strings.Contains(m, "/") }) {
@@ -310,11 +399,8 @@ func apply(a config.DynamicAlias, s *aliasfeed.State, r aliasfeed.Result, now ti
 		return "result not valid: " + err.Error()
 	}
 	s.Names, s.Members = names, members
-	if len(failed) > 0 {
+	if len(failed) == len(a.Names) {
 		return strings.Join(failed, "; ")
-	}
-	if !r.OK {
-		return cmp.Or(r.Error, "lookup failed")
 	}
 	s.LastSuccess = at
 	return ""
@@ -341,43 +427,49 @@ func (f *aliasFeeds) tell(a config.DynamicAlias, s aliasfeed.State, failuresBefo
 	}
 }
 
-// forget removes the state of aliases no longer saved as fed from a URL or from host names, and clears their
-// notification.
-func (f *aliasFeeds) forget(list []config.DynamicAlias) {
-	entries, err := os.ReadDir(aliasfeed.Dir(f.stateDir))
-	if err != nil {
-		return
+// forget removes the state of each source no wanted generation names whose last attempt is older than keepUnwanted,
+// and clears the notification of each alias no wanted generation names any more, once since this start.
+func (f *aliasFeeds) forget(want map[source]wanted) {
+	named := map[string]bool{}
+	for src := range want {
+		named[src.alias] = true
+		delete(f.cleared, src.alias)
 	}
-	for _, e := range entries {
-		id, ok := strings.CutSuffix(e.Name(), ".json")
-		if !ok || slices.ContainsFunc(list, func(a config.DynamicAlias) bool { return a.ID == id }) {
-			continue
+	for id, hashes := range aliasfeed.Sources(f.stateDir) {
+		failing := false
+		for _, hash := range hashes {
+			src := source{id, hash}
+			if _, ok := want[src]; ok {
+				continue
+			}
+			s := f.load(src)
+			failing = failing || s.Failures >= aliasFailures
+			if f.now().Sub(s.LastAttempt) < keepUnwanted {
+				continue
+			}
+			if err := os.Remove(aliasfeed.Path(f.stateDir, id, hash)); err != nil {
+				f.log.Warn("remove an unwanted alias source's state", "alias", id, "error", err)
+			}
 		}
-		s, _ := f.load(id)
-		if err := os.Remove(aliasfeed.Path(f.stateDir, id)); err != nil {
-			f.log.Warn("remove a removed alias's state", "alias", id, "error", err)
-			continue
+		// Empty, the alias's directory goes too; with any file left, it stays.
+		_ = os.Remove(filepath.Join(aliasfeed.Dir(f.stateDir), id))
+		if !named[id] && failing && !f.cleared[id] {
+			f.tell(config.DynamicAlias{ID: id}, aliasfeed.State{}, aliasFailures)
+			f.cleared[id] = true
 		}
-		f.tell(config.DynamicAlias{ID: id}, aliasfeed.State{}, s.Failures)
 	}
 }
 
-func (f *aliasFeeds) load(id string) (aliasfeed.State, error) {
-	var s aliasfeed.State
-	data, err := os.ReadFile(aliasfeed.Path(f.stateDir, id))
-	if errors.Is(err, fs.ErrNotExist) {
-		return s, nil
-	}
-	if err == nil {
-		err = json.Unmarshal(data, &s)
-	}
+// load reads a source's state: one that does not read is logged and starts empty.
+func (f *aliasFeeds) load(src source) aliasfeed.State {
+	s, err := aliasfeed.Load(f.stateDir, src.alias, src.hash)
 	if err != nil {
-		return aliasfeed.State{}, err
+		f.log.Warn("read an alias source's state; it starts empty", "alias", src.alias, "error", err)
 	}
-	return s, nil
+	return s
 }
 
-func (f *aliasFeeds) save(id string, s aliasfeed.State) error {
+func (f *aliasFeeds) save(src source, s aliasfeed.State) error {
 	if s.Members == nil {
 		s.Members = []string{}
 	}
@@ -385,8 +477,9 @@ func (f *aliasFeeds) save(id string, s aliasfeed.State) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(aliasfeed.Dir(f.stateDir), 0o700); err != nil {
+	path := aliasfeed.Path(f.stateDir, src.alias, src.hash)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	return writeFileAtomic(aliasfeed.Path(f.stateDir, id), append(data, '\n'), 0o600)
+	return writeFileAtomic(path, append(data, '\n'), 0o600)
 }

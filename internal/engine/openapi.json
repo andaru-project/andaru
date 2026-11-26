@@ -7050,7 +7050,7 @@
         "operationId": "refreshDynamicAlias",
         "x-required-capability": "configuration.write",
         "summary": "Fetch an alias's list now",
-        "description": "Publishes a request for the list of the saved address alias fed from a URL or from host names, which andaru-outbound fetches or resolves. The result shows in the alias's status; a changed list is loaded into the filter without an apply.",
+        "description": "Publishes a request for the list of the saved address alias fed from a URL or from host names, for its saved source and, when it differs, its live one, which andaru-outbound fetches or resolves. Within 10 seconds of the alias's last refresh nothing is published and that refresh's request is returned. The result shows in the alias's status; a changed live list is loaded into the filter without an apply.",
         "responses": {
           "202": {"description": "The request was published", "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false, "required": ["request"], "properties": {"request": {"type": "string", "description": "The request's ID"}}}}}},
           "403": {"$ref": "#/components/responses/Forbidden"},

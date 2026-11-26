@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -27,12 +28,13 @@ type published struct {
 }
 
 type feedBench struct {
-	t        *testing.T
-	f        *aliasFeeds
-	list     []config.DynamicAlias
-	sent     []published
-	now      time.Time
-	realized int
+	t *testing.T
+	f *aliasFeeds
+	// list is the saved head's aliases, live the live generation's.
+	list, live []config.DynamicAlias
+	sent       []published
+	now        time.Time
+	realized   int
 }
 
 const urlAlias, hostAlias = "adr_00000001-0000-4000-8000-000000000001", "adr_00000002-0000-4000-8000-000000000002"
@@ -43,15 +45,22 @@ func newFeedBench(t *testing.T) *feedBench {
 		{ID: hostAlias, Name: "vpn", Kind: "hostnames", Names: []string{"a.example", "b.example"}, RefreshSeconds: 60},
 	}}
 	b.f = &aliasFeeds{stateDir: t.TempDir(), log: slog.New(slog.DiscardHandler), poke: make(chan struct{}, 1),
-		aliases: func(context.Context) ([]config.DynamicAlias, error) { return slices.Clone(b.list), nil },
+		aliases: func(context.Context) ([]config.DynamicAlias, []config.DynamicAlias, error) {
+			return slices.Clone(b.list), slices.Clone(b.live), nil
+		},
 		publish: func(topic string, payload []byte, durable bool) error {
 			b.sent = append(b.sent, published{topic, payload, durable})
 			return nil
 		},
 		realize: func(context.Context) error { b.realized++; return nil },
-		now:     func() time.Time { return b.now }}
+		now:     func() time.Time { return b.now }, refreshed: map[string]refresh{}, cleared: map[string]bool{}}
+	// Applied: the live generation names what the saved head does.
+	b.live = slices.Clone(b.list)
 	return b
 }
+
+// src is the saved head's source of alias i.
+func (b *feedBench) src(i int) source { return sourceOf(b.list[i]) }
 
 // requests returns the requests published since the last call.
 func (b *feedBench) requests() []aliasfeed.Request {
@@ -69,8 +78,10 @@ func (b *feedBench) requests() []aliasfeed.Request {
 	return out
 }
 
+// ask publishes one request for the saved head's source of alias id, past the refresh limit, and returns its ID.
 func (b *feedBench) ask(id string) string {
 	b.t.Helper()
+	b.now = b.now.Add(refreshEvery)
 	request, ok, err := b.f.refresh(b.t.Context(), id)
 	if err != nil || !ok {
 		b.t.Fatal(ok, err)
@@ -79,8 +90,13 @@ func (b *feedBench) ask(id string) string {
 	return request
 }
 
+// answer delivers r for the saved head's source of alias id, unless r names a hash, and returns that source's state.
 func (b *feedBench) answer(id string, r aliasfeed.Result) aliasfeed.State {
 	b.t.Helper()
+	if r.Hash == "" {
+		i := slices.IndexFunc(b.list, func(a config.DynamicAlias) bool { return a.ID == id })
+		r.Hash = b.src(i).hash
+	}
 	payload, err := bus.NewEvent(aliasfeed.ResultType, "andaru-outbound", r)
 	if err != nil {
 		b.t.Fatal(err)
@@ -88,11 +104,7 @@ func (b *feedBench) answer(id string, r aliasfeed.Result) aliasfeed.State {
 	if err := b.f.handle(bus.Message{Seq: 1, Topic: aliasfeed.ResultTopic(id), Payload: payload}); err != nil {
 		b.t.Fatal(err)
 	}
-	s, err := b.f.load(id)
-	if err != nil {
-		b.t.Fatal(err)
-	}
-	return s
+	return b.f.load(source{id, r.Hash})
 }
 
 // notices returns the alias notifications published since the last call: the key and the severity, "" for a clear.
@@ -129,12 +141,23 @@ func TestAliasScheduleIsDueOnItsInterval(t *testing.T) {
 	if got = b.requests(); len(got) != 1 || got[0].Alias != hostAlias || !slices.Equal(got[0].Names, []string{"a.example", "b.example"}) || got[0].Kind != "hostnames" {
 		t.Fatalf("requests %+v", got)
 	}
-	// A changed URL is fetched at once, long before its interval.
+	// A changed URL is a new source, fetched at once, long before its interval.
 	b.list[0].URL = "https://www.cloudflare.com/ips-v6"
 	b.now = b.now.Add(time.Second)
 	b.f.schedule(t.Context())
-	if got = b.requests(); len(got) != 1 || got[0].Alias != urlAlias || got[0].URL != b.list[0].URL || got[0].Kind != "url" {
+	if got = b.requests(); len(got) != 1 || got[0].Alias != urlAlias || got[0].URL != b.list[0].URL || got[0].Kind != "url" || got[0].Hash != b.src(0).hash {
 		t.Fatalf("requests %+v", got)
+	}
+	// Unanswered, a source is not asked for again before its interval: requests do not pile up.
+	for range 6 {
+		b.now = b.now.Add(10 * time.Second)
+		b.f.schedule(t.Context())
+	}
+	if got = b.requests(); len(got) != 1 || got[0].Alias != hostAlias {
+		t.Fatalf("requests %+v", got)
+	}
+	if s := b.f.load(b.src(1)); len(s.Pending) != 3 {
+		t.Fatalf("pending %q", s.Pending)
 	}
 }
 
@@ -147,9 +170,9 @@ func TestAliasDue(t *testing.T) {
 		wait  time.Duration
 	}{
 		{aliasfeed.State{}, true, 0},
-		{aliasfeed.State{Hash: aliasHash(a), LastAttempt: now.Add(-time.Minute)}, false, 9 * time.Minute},
-		{aliasfeed.State{Hash: aliasHash(a), LastAttempt: now.Add(-10 * time.Minute)}, true, 0},
-		{aliasfeed.State{Hash: "other", LastAttempt: now}, true, 0},
+		{aliasfeed.State{LastAttempt: now.Add(-time.Minute)}, false, 9 * time.Minute},
+		{aliasfeed.State{LastAttempt: now.Add(-time.Minute), Pending: []string{"r"}}, false, 9 * time.Minute},
+		{aliasfeed.State{LastAttempt: now.Add(-10 * time.Minute)}, true, 0},
 	} {
 		if due, wait := due(a, row.state, now); due != row.due || (!due && wait != row.wait) {
 			t.Errorf("%+v: due %v in %v", row.state, due, wait)
@@ -216,11 +239,19 @@ func TestHostNameResultsKeepEachName(t *testing.T) {
 	if !slices.Equal(s.Members, []string{"192.0.2.1", "192.0.2.2", "2001:db8::1"}) || s.Failures != 0 {
 		t.Fatalf("state %+v", s)
 	}
-	// A failed name keeps what it last resolved to; the other's answer is taken.
+	// A failed name keeps what it last resolved to and shows its error; the other's answer is taken, and the alias,
+	// with one name answered, has not failed.
 	s = b.answer(hostAlias, aliasfeed.Result{Request: b.ask(hostAlias), Names: map[string]aliasfeed.NameResult{
 		"a.example": {Addresses: []string{"192.0.2.9"}}, "b.example": {Error: "NXDOMAIN"}}})
-	if !slices.Equal(s.Members, []string{"192.0.2.2", "192.0.2.9"}) || s.Failures != 1 || s.LastError != "b.example: NXDOMAIN" ||
+	if !slices.Equal(s.Members, []string{"192.0.2.2", "192.0.2.9"}) || s.Failures != 0 || s.LastError != "" || !s.LastSuccess.Equal(b.now) ||
 		s.Names[1].Error != "NXDOMAIN" || !slices.Equal(s.Names[1].Addresses, []string{"192.0.2.2"}) {
+		t.Fatalf("state %+v", s)
+	}
+	// Every name failing fails the alias; a name answered with no addresses, and none an error, failed.
+	s = b.answer(hostAlias, aliasfeed.Result{Request: b.ask(hostAlias), OK: true, Names: map[string]aliasfeed.NameResult{
+		"a.example": {}, "b.example": {Error: "SERVFAIL"}}})
+	if !slices.Equal(s.Members, []string{"192.0.2.2", "192.0.2.9"}) || s.Failures != 1 || s.LastError != "a.example: no addresses; b.example: SERVFAIL" ||
+		s.Names[0].Error != "no addresses" {
 		t.Fatalf("state %+v", s)
 	}
 	// A network for a name is not valid, and replaces nothing.
@@ -231,22 +262,169 @@ func TestHostNameResultsKeepEachName(t *testing.T) {
 	}
 }
 
-func TestRemovedAliasesLoseTheirState(t *testing.T) {
+// A result is kept only for the request and the source it answers.
+func TestAliasResultsMatchTheirRequest(t *testing.T) {
+	b := newFeedBench(t)
+	b.live = nil
+	req := b.ask(urlAlias)
+	old := b.src(0).hash
+	// The saved URL changed, and no generation is live: the old source's answer is dropped.
+	b.list[0].URL = "https://lists.example/v4"
+	if s := b.answer(urlAlias, aliasfeed.Result{Request: req, Hash: old, OK: true, Members: []string{"192.0.2.1"}}); len(s.Members) != 0 || b.realized != 0 {
+		t.Fatalf("state %+v", s)
+	}
+	// An answer for the right request but another hash is not this source's either.
+	req = b.ask(urlAlias)
+	if s := b.answer(urlAlias, aliasfeed.Result{Request: req, Hash: old, OK: true, Members: []string{"192.0.2.1"}}); len(s.Members) != 0 {
+		t.Fatalf("state %+v", s)
+	}
+	if s := b.f.load(b.src(0)); len(s.Pending) != 1 {
+		t.Fatalf("pending %q", s.Pending)
+	}
+	// The same answer twice is taken once.
+	first := b.answer(urlAlias, aliasfeed.Result{Request: req, OK: true, Members: []string{"192.0.2.1"}})
+	again := b.answer(urlAlias, aliasfeed.Result{Request: req, OK: false, Error: "late"})
+	if !slices.Equal(first.Members, []string{"192.0.2.1"}) || again.Failures != 0 || again.LastError != "" {
+		t.Fatalf("state %+v then %+v", first, again)
+	}
+	// The requests a source waits for are bounded: the oldest are pushed out, and their answers dropped.
+	var ids []string
+	for range maxPending + 2 {
+		ids = append(ids, b.ask(urlAlias))
+	}
+	if s := b.f.load(b.src(0)); !slices.Equal(s.Pending, ids[2:]) {
+		t.Fatalf("pending %q", s.Pending)
+	}
+	if s := b.answer(urlAlias, aliasfeed.Result{Request: ids[1], OK: true, Members: []string{"192.0.2.2"}}); !slices.Equal(s.Members, []string{"192.0.2.1"}) {
+		t.Fatalf("state %+v", s)
+	}
+}
+
+// A saved change never touches the live filter: its new source is fetched beside the live one, which keeps its list
+// and its refresh until an apply replaces it.
+func TestSavedChangesKeepTheLiveSource(t *testing.T) {
+	b := newFeedBench(t)
+	live := b.src(0)
+	b.answer(urlAlias, aliasfeed.Result{Request: b.ask(urlAlias), OK: true, Members: []string{"192.0.2.1"}})
+	if b.realized != 1 {
+		t.Fatalf("realized %d", b.realized)
+	}
+	b.list[0].URL = "https://lists.example/v4"
+	b.f.schedule(t.Context())
+	got := b.requests()
+	if len(got) != 2 || got[0].Hash == got[1].Hash {
+		t.Fatalf("requests %+v", got)
+	}
+	newer := slices.IndexFunc(got, func(r aliasfeed.Request) bool { return r.Hash == b.src(0).hash })
+	if newer < 0 || got[newer].URL != b.list[0].URL {
+		t.Fatalf("the saved source not prefetched: %+v", got)
+	}
+	// Its list is kept, and the live filter not loaded: it does not hold the new source's sets.
+	if s := b.answer(urlAlias, aliasfeed.Result{Request: got[newer].ID, OK: true, Members: []string{"198.51.100.0/24"}}); len(s.Members) != 1 || b.realized != 1 {
+		t.Fatalf("state %+v realized %d", s, b.realized)
+	}
+	if s := b.f.load(live); !slices.Equal(s.Members, []string{"192.0.2.1"}) {
+		t.Fatalf("the live source lost its list: %+v", s)
+	}
+	// The live source keeps refreshing on its interval.
+	b.now = b.now.Add(time.Hour)
+	b.f.schedule(t.Context())
+	if got = b.requests(); !slices.ContainsFunc(got, func(r aliasfeed.Request) bool { return r.Hash == live.hash }) {
+		t.Fatalf("requests %+v", got)
+	}
+	// Removed from the saved head, the live alias keeps its state, its refresh and its notification.
+	b.list = b.list[1:]
+	b.now = b.now.Add(time.Hour)
+	b.f.schedule(t.Context())
+	if got = b.requests(); !slices.ContainsFunc(got, func(r aliasfeed.Request) bool { return r.Hash == live.hash }) {
+		t.Fatalf("requests %+v", got)
+	}
+	if _, err := os.Stat(aliasfeed.Path(b.f.stateDir, live.alias, live.hash)); err != nil || len(b.notices()) != 0 {
+		t.Fatalf("live state: %v", err)
+	}
+}
+
+// The state of a source no wanted generation names stays 30 days after its last attempt, for a rollback or the boot
+// of a kept generation; the alias's notification is cleared once no wanted generation names it.
+func TestUnwantedSourcesAreRemovedByAge(t *testing.T) {
 	b := newFeedBench(t)
 	for range aliasFailures {
 		b.answer(urlAlias, aliasfeed.Result{Request: b.ask(urlAlias), Error: "timeout"})
 	}
 	b.notices()
-	b.list = b.list[1:]
+	gone := b.src(0)
+	b.list, b.live = b.list[1:], b.live[1:]
 	b.f.schedule(t.Context())
-	if _, err := os.Stat(aliasfeed.Path(b.f.stateDir, urlAlias)); !os.IsNotExist(err) {
-		t.Fatalf("state kept: %v", err)
+	if _, err := os.Stat(aliasfeed.Path(b.f.stateDir, gone.alias, gone.hash)); err != nil {
+		t.Fatalf("state removed at once: %v", err)
 	}
 	if got := b.notices(); !slices.Equal(got, []string{"alias/" + urlAlias + " "}) {
 		t.Fatalf("notices %q", got)
 	}
+	b.f.schedule(t.Context())
+	if got := b.notices(); len(got) != 0 {
+		t.Fatalf("cleared again: %q", got)
+	}
 	if _, ok, err := b.f.refresh(t.Context(), urlAlias); ok || err != nil {
 		t.Fatal("refreshed a removed alias")
+	}
+	b.now = b.now.Add(keepUnwanted - time.Minute)
+	b.f.schedule(t.Context())
+	if _, err := os.Stat(aliasfeed.Path(b.f.stateDir, gone.alias, gone.hash)); err != nil {
+		t.Fatalf("state removed early: %v", err)
+	}
+	b.now = b.now.Add(2 * time.Minute)
+	b.f.schedule(t.Context())
+	if _, err := os.Stat(filepath.Join(aliasfeed.Dir(b.f.stateDir), gone.alias)); !os.IsNotExist(err) {
+		t.Fatalf("state kept: %v", err)
+	}
+	if _, err := os.Stat(aliasfeed.Path(b.f.stateDir, hostAlias, b.src(0).hash)); err != nil {
+		t.Fatalf("a wanted state removed: %v", err)
+	}
+}
+
+// "Refresh now" asks for the saved source and the live one, at most once in refreshEvery per alias.
+func TestAliasRefreshIsLimited(t *testing.T) {
+	b := newFeedBench(t)
+	b.list[0].URL = "https://lists.example/v4"
+	first, _, err := b.f.refresh(t.Context(), urlAlias)
+	if got := b.requests(); err != nil || len(got) != 2 || got[0].ID != first || got[0].Hash != b.src(0).hash || got[1].Hash != sourceOf(b.live[0]).hash {
+		t.Fatalf("requests %+v %v", got, err)
+	}
+	b.now = b.now.Add(refreshEvery - time.Second)
+	if again, _, err := b.f.refresh(t.Context(), urlAlias); again != first || err != nil || len(b.requests()) != 0 {
+		t.Fatalf("refreshed again: %s %v", again, err)
+	}
+	if other, _, _ := b.f.refresh(t.Context(), hostAlias); other == first || len(b.requests()) != 1 {
+		t.Fatal("the limit is not per alias")
+	}
+	b.now = b.now.Add(time.Second)
+	if again, _, _ := b.f.refresh(t.Context(), urlAlias); again == first || len(b.requests()) != 2 {
+		t.Fatal("not refreshed after the limit")
+	}
+}
+
+// A request is recorded before it is published: one that cannot be recorded is not sent, and one not sent is no
+// attempt.
+func TestAliasRequestIsSavedBeforeItIsSent(t *testing.T) {
+	b := newFeedBench(t)
+	// A file where the alias's directory goes: its state cannot be written.
+	if err := os.MkdirAll(aliasfeed.Dir(b.f.stateDir), 0o700); err != nil || os.WriteFile(filepath.Join(aliasfeed.Dir(b.f.stateDir), urlAlias), nil, 0o600) != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := b.f.refresh(t.Context(), urlAlias); err == nil || len(b.requests()) != 0 {
+		t.Fatalf("sent unrecorded: %v", err)
+	}
+	if wait := b.f.schedule(t.Context()); wait != time.Minute || len(b.requests()) != 1 {
+		t.Fatalf("wait %v", wait)
+	}
+	b.f.publish = func(string, []byte, bool) error { return fmt.Errorf("bus closed") }
+	b.now = b.now.Add(time.Hour)
+	if _, _, err := b.f.refresh(t.Context(), hostAlias); err == nil {
+		t.Fatal("unsent refresh succeeded")
+	}
+	if s := b.f.load(b.src(1)); len(s.Pending) != 1 || !s.LastAttempt.Equal(b.now.Add(-time.Hour)) {
+		t.Fatalf("an unsent request recorded: %+v", s)
 	}
 }
 
@@ -290,16 +468,25 @@ func TestAliasesAPI(t *testing.T) {
 	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &status) != nil || len(status.Items) != 2 {
 		t.Fatalf("status: %d %s", w.Code, w.Body)
 	}
-	at := b.now.Format(time.RFC3339)
+	at, first := b.now.Format(time.RFC3339), b.now.Add(-refreshEvery).Format(time.RFC3339)
 	want := []string{
-		`{"id":"` + urlAlias + `","name":"cloudflare","kind":"url","lastSuccess":null,"lastAttempt":"` + at + `","entries":0,"failures":0}`,
-		`{"id":"` + hostAlias + `","name":"vpn","kind":"hostnames","lastSuccess":null,"lastAttempt":"` + at + `","entries":1,"lastError":"b.example: NXDOMAIN","failures":1,` +
+		`{"id":"` + urlAlias + `","name":"cloudflare","kind":"url","lastSuccess":null,"lastAttempt":"` + first + `","entries":0,"failures":0}`,
+		`{"id":"` + hostAlias + `","name":"vpn","kind":"hostnames","lastSuccess":"` + at + `","lastAttempt":"` + at + `","entries":1,"failures":0,` +
 			`"names":[{"name":"a.example","addresses":["192.0.2.1"],"resolvedAt":"` + at + `"},{"name":"b.example","addresses":[],"error":"NXDOMAIN","resolvedAt":null}]}`,
 	}
 	for i, item := range status.Items {
 		if string(item) != want[i] {
 			t.Errorf("item %d:\n got %s\nwant %s", i, item, want[i])
 		}
+	}
+	// A request that cannot be recorded is not sent, and the refresh is unavailable.
+	b.now = b.now.Add(refreshEvery)
+	dir := filepath.Join(aliasfeed.Dir(b.f.stateDir), urlAlias)
+	if err := os.RemoveAll(dir); err != nil || os.WriteFile(dir, nil, 0o600) != nil {
+		t.Fatal(err)
+	}
+	if w := call(http.MethodPost, refresh, authz.ConfigurationWrite); w.Code != http.StatusServiceUnavailable || len(b.requests()) != 0 {
+		t.Fatalf("refresh unrecorded: %d %s", w.Code, w.Body)
 	}
 }
 

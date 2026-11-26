@@ -2,8 +2,8 @@ package generation
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"regexp"
 	"strings"
@@ -11,12 +11,13 @@ import (
 	"github.com/andaru-project/andaru/internal/aliasfeed"
 )
 
-// dynamicSet is a set the filter declares without elements for an address alias fed from a URL or from host names:
-// the renderer gives every other address set its elements.
-var dynamicSet = regexp.MustCompile(`(?m)^\tset (adr_[0-9a-z_]+)_([46]) \{ type ipv[46]_addr; flags interval; auto-merge; \}$`)
+// dynamicSet is a set the filter declares without elements for an address alias fed from a URL or from host names,
+// with the hash of the source it was rendered for: the renderer gives every other address set its elements.
+var dynamicSet = regexp.MustCompile(`(?m)^\tset (adr_[0-9a-z_]+)_([46]) \{ type ipv[46]_addr; flags interval; auto-merge; comment "feed:([0-9a-f]{16})"; \}$`)
 
-// aliasFill returns the nft commands that load each such set script declares with the alias's last good members,
-// from its state file: a set whose alias has none, or one that cannot be read, is flushed only.
+// aliasFill returns the nft commands that load each such set script declares with the last good members of the
+// source its comment names, from that source's state file: a source without one, or one that cannot be read, has its
+// sets flushed only, so they match nothing.
 func aliasFill(stateDir string, script []byte) []byte {
 	sets := dynamicSet.FindAllSubmatch(script, -1)
 	if len(sets) == 0 {
@@ -24,18 +25,15 @@ func aliasFill(stateDir string, script []byte) []byte {
 	}
 	// A set is named after its alias with every hyphen an underscore.
 	ids := map[string]string{}
-	entries, _ := os.ReadDir(aliasfeed.Dir(stateDir))
-	for _, e := range entries {
-		if id, ok := strings.CutSuffix(e.Name(), ".json"); ok && e.Type().IsRegular() {
-			ids[strings.ReplaceAll(id, "-", "_")] = id
-		}
+	for id := range aliasfeed.Sources(stateDir) {
+		ids[strings.ReplaceAll(id, "-", "_")] = id
 	}
 	var out strings.Builder
 	for _, m := range sets {
-		alias, family := string(m[1]), string(m[2])
+		alias, family, hash := string(m[1]), string(m[2]), string(m[3])
 		var list []string
 		if id, ok := ids[alias]; ok {
-			v4, v6 := readMembers(aliasfeed.Path(stateDir, id))
+			v4, v6 := readMembers(stateDir, id, hash)
 			list = map[string][]string{"4": v4, "6": v6}[family]
 		}
 		set := alias + "_" + family
@@ -47,15 +45,16 @@ func aliasFill(stateDir string, script []byte) []byte {
 	return []byte(out.String())
 }
 
-// readMembers reads a state file's members by family, checked again: a file that does not read gives none.
-func readMembers(path string) (v4, v6 []string) {
-	data, err := os.ReadFile(path)
-	var s aliasfeed.State
-	if err != nil || json.Unmarshal(data, &s) != nil {
+// readMembers reads a source's members by family, checked again: a state that does not read gives none.
+func readMembers(stateDir, id, hash string) (v4, v6 []string) {
+	s, err := aliasfeed.Load(stateDir, id, hash)
+	if err != nil {
+		slog.Warn("alias set not filled; it matches nothing", "alias", id, "error", err)
 		return nil, nil
 	}
 	list, err := aliasfeed.Members(s.Members)
 	if err != nil {
+		slog.Warn("alias set not filled; it matches nothing", "alias", id, "error", err)
 		return nil, nil
 	}
 	return aliasfeed.Split(list)

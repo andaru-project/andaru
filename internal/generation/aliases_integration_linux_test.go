@@ -29,7 +29,8 @@ func TestAliasFillLoadsInNft(t *testing.T) {
 	golden := []byte(filter)
 	state := t.TempDir()
 	data, _ := json.Marshal(aliasfeed.State{Members: []string{"10.0.0.0/8", "10.1.0.0/16", "192.0.2.1", "2001:db8::/32"}})
-	writeFile(t, aliasfeed.Path(state, "adr_00000001-0000-4000-8000-000000000001"), string(data))
+	// The source the golden filter was rendered for: the alias's URL.
+	writeFile(t, aliasfeed.Path(state, "adr_00000001-0000-4000-8000-000000000001", aliasfeed.Hash("url", "https://www.cloudflare.com/ips-v4", nil)), string(data))
 	path := filepath.Join(t.TempDir(), "filter.nft")
 	writeFile(t, path, string(golden)+string(aliasFill(state, golden)))
 	out, err := exec.Command("unshare", "-n", "sh", "-c", `nft -f "$1" && nft list set inet andaru adr_00000001_0000_4000_8000_000000000001_4 &&

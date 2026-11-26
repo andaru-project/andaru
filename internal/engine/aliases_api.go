@@ -5,8 +5,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/andaru-project/andaru/internal/aliasfeed"
 )
 
 const aliasesPath = "/api/v1/aliases/addresses"
@@ -81,7 +79,7 @@ func (h aliasesAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h aliasesAPI) status(w http.ResponseWriter, r *http.Request) {
 	h.feeds.mu.Lock()
 	defer h.feeds.mu.Unlock()
-	list, err := h.feeds.aliases(r.Context())
+	list, _, err := h.feeds.aliases(r.Context())
 	if err != nil {
 		slog.ErrorContext(r.Context(), "read the saved aliases", "error", err)
 		writeError(w, r, http.StatusServiceUnavailable, "ALIASES_UNAVAILABLE", "Aliases are temporarily unavailable.")
@@ -89,10 +87,7 @@ func (h aliasesAPI) status(w http.ResponseWriter, r *http.Request) {
 	}
 	items := []aliasStatus{}
 	for _, a := range list {
-		s, err := h.feeds.load(a.ID)
-		if err != nil {
-			s = aliasfeed.State{LastError: "its state does not read: " + err.Error()}
-		}
+		s := h.feeds.load(sourceOf(a))
 		item := aliasStatus{ID: a.ID, Name: a.Name, Kind: a.Kind, LastSuccess: when(s.LastSuccess), LastAttempt: when(s.LastAttempt),
 			Entries: len(s.Members), LastError: s.LastError, Failures: s.Failures}
 		for _, name := range a.Names {

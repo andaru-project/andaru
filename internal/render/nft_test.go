@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/andaru-project/andaru/internal/aliasfeed"
 )
 
 func nftFile(t *testing.T, r Result) (File, bool) {
@@ -128,13 +130,15 @@ func TestNoClampForAnUnusableSession(t *testing.T) {
 	}
 }
 
-// An alias fed from a URL or from host names declares both family sets, empty, and a rule naming it renders a
-// line for each family, whatever its fetched list will hold.
+// An alias fed from a URL or from host names declares both family sets, empty, with its source's hash in their
+// comment, and a rule naming it renders a line for each family, whatever its fetched list will hold.
 func TestDynamicAliasRendersBothEmptySets(t *testing.T) {
 	const id, set, rule = "adr_00000009-0000-4000-8000-000000000009", "adr_00000009_0000_4000_8000_000000000009", "rul_00000009-0000-4000-8000-000000000009"
+	hashes := map[string]string{"url": aliasfeed.Hash("url", "https://www.cloudflare.com/ips-v4", nil),
+		"hostnames": aliasfeed.Hash("hostnames", "", []string{"VPN.example.com", "a.example"})}
 	for kind, fields := range map[string]map[string]any{
 		"url":       {"url": "https://www.cloudflare.com/ips-v4"},
-		"hostnames": {"names": []any{"vpn.example.com"}},
+		"hostnames": {"names": []any{"a.example", "vpn.example.com"}},
 	} {
 		t.Run(kind, func(t *testing.T) {
 			in := change(t, fixture(t, "filter-objects"), func(d map[string]any) {
@@ -152,8 +156,8 @@ func TestDynamicAliasRendersBothEmptySets(t *testing.T) {
 				t.Fatal("no filter rendered")
 			}
 			lines(t, f.Content,
-				"\tset "+set+"_4 { type ipv4_addr; flags interval; auto-merge; }",
-				"\tset "+set+"_6 { type ipv6_addr; flags interval; auto-merge; }",
+				"\tset "+set+"_4 { type ipv4_addr; flags interval; auto-merge; comment \"feed:"+hashes[kind]+"\"; }",
+				"\tset "+set+"_6 { type ipv6_addr; flags interval; auto-merge; comment \"feed:"+hashes[kind]+"\"; }",
 				"\t\tip saddr @"+set+"_4 accept comment \""+rule+"\"",
 				"\t\tip6 saddr @"+set+"_6 accept comment \""+rule+"\"")
 		})
