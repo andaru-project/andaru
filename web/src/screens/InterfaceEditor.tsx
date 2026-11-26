@@ -60,6 +60,7 @@ export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClos
   const [failure, setFailure] = useState('');
   const [busy, setBusy] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const mtuEdited = useRef(false);
   // A save may answer after this panel was closed and another opened: it then closes nothing.
   const open = useRef(true);
   useEffect(() => { open.current = true; return () => { open.current = false; }; }, []);
@@ -195,7 +196,7 @@ export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClos
                         const name = event.currentTarget.value;
                         setDraft((current) => ({ ...current, name, ...(!link && !live && current.segmentName === current.name ? { segmentName: name } : {}) }));
                       }} />
-                    <TextInput w="6rem" classNames={mono} label="MTU" inputMode="numeric" required value={draft.mtu} error={errors.get('mtu')} onChange={(event) => set({ mtu: event.currentTarget.value })} />
+                    <TextInput w="6rem" classNames={mono} label="MTU" inputMode="numeric" required value={draft.mtu} error={errors.get('mtu')} onChange={(event) => { mtuEdited.current = true; set({ mtu: event.currentTarget.value }); }} />
                   </Group>
                   {draft.kind === 'vlan' && (
                     <>
@@ -204,15 +205,11 @@ export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClos
                         onChange={(value) => {
                           const parentId = value ?? '';
                           const parent = snapshot.value.links.find((item) => item.id === parentId);
-                          setDraft((current) => {
-                            const prevParent = snapshot.value.links.find((item) => item.id === current.parent);
-                            const prevDefault = String(Math.min(1500, prevParent?.mtu ?? 1500));
-                            return {
-                              ...current,
-                              parent: parentId,
-                              ...(!link && parent && current.mtu === prevDefault ? { mtu: String(Math.min(1500, parent.mtu)) } : {}),
-                            };
-                          });
+                          setDraft((current) => ({
+                            ...current,
+                            parent: parentId,
+                            ...(!link && !mtuEdited.current && parent ? { mtu: String(Math.min(1500, parent.mtu)) } : {}),
+                          }));
                         }} />
                       <TextInput classNames={mono} label="VLAN ID" description="802.1Q tag from 1 to 4094." inputMode="numeric" required placeholder="20" value={draft.vlanId} error={errors.get('vlanId')} onChange={(event) => set({ vlanId: event.currentTarget.value })} />
                     </>

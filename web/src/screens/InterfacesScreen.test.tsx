@@ -516,14 +516,29 @@ it('validates duplicate VLAN IDs and parent MTU ceiling, and clamps default MTU 
   await user.type(within(panel).getByLabelText(/^Name/), 'Dup VLAN');
   await user.click(within(panel).getByRole('switch', { name: /Carries a segment/ }));
 
-  // Selecting sub-1500 parent clamps default 1500 MTU to parent MTU.
+  // Selecting sub-1500 parent clamps default 1500 MTU, and switching back to 1500 restores it before manual edits.
   const parentInput = within(panel).getByLabelText(/^Parent interface/, { selector: 'input' });
   await user.click(parentInput);
   await user.click(await screen.findByRole('option', { name: 'Small port' }));
   const mtuInput = within(panel).getByLabelText(/^MTU/);
   expect(mtuInput).toHaveValue('1400');
 
+  await user.click(parentInput);
+  await user.click(await screen.findByRole('option', { name: 'LAN port' }));
+  expect(mtuInput).toHaveValue('1500');
+
+  // Manually entering 1400 on LAN port, switching to Small port and back preserves the manual 1400 MTU.
+  await user.clear(mtuInput);
+  await user.type(mtuInput, '1400');
+  await user.click(parentInput);
+  await user.click(await screen.findByRole('option', { name: 'Small port' }));
+  await user.click(parentInput);
+  await user.click(await screen.findByRole('option', { name: 'LAN port' }));
+  expect(mtuInput).toHaveValue('1400');
+
   // Raising MTU above parent MTU is rejected client-side.
+  await user.click(parentInput);
+  await user.click(await screen.findByRole('option', { name: 'Small port' }));
   await user.clear(mtuInput);
   await user.type(mtuInput, '1450');
   await user.type(within(panel).getByLabelText(/^VLAN ID/), '20');
