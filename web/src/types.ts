@@ -689,6 +689,47 @@ export interface NotificationList {
   items: Notification[];
 }
 
+export type NotificationChannelKind = 'webhook';
+
+export interface NotificationChannelFilter {
+  minSeverity?: NotificationSeverity;
+  sources?: string[];
+}
+
+export interface WebhookChannelConfig {
+  url: SecretView;
+  authorization?: SecretView;
+}
+
+export interface NotificationChannel {
+  id: string;
+  name: string;
+  description?: string;
+  enabled?: boolean;
+  kind: NotificationChannelKind;
+  filter?: NotificationChannelFilter;
+  webhook?: WebhookChannelConfig;
+}
+
+export interface SecretWrite {
+  secret: string;
+  set?: string;
+  expectedVersion?: string;
+  unresolved?: boolean;
+}
+
+export interface NotificationChannelWrite {
+  name: string;
+  description?: string;
+  enabled?: boolean;
+  kind: NotificationChannelKind;
+  filter?: NotificationChannelFilter;
+  webhook?: {
+    url: SecretWrite;
+    authorization?: SecretWrite;
+  };
+}
+
 export type BackupStore = 'configuration' | 'configurationSecrets' | 'users' | 'userCredentials';
 
 export interface BackupCreateOptions {

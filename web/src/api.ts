@@ -23,6 +23,8 @@ import type {
   LinkStatus,
   LldpNeighbor,
   ManagementConfig,
+  NotificationChannel,
+  NotificationChannelWrite,
   NotificationList,
   OneToOneNat,
   OrderedList,
@@ -517,6 +519,31 @@ export class ApiClient {
 
   deleteVirtualAddress(id: string, version: string) {
     return this.request(`/api/v1/config/virtualAddresses/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { 'If-Match': `"${id}.${version}"` } }, true);
+  }
+
+  notificationChannels() {
+    return this.request<SavedList<NotificationChannel>>('/api/v1/config/notifications/channels');
+  }
+
+  notificationChannel(id: string) {
+    return this.request<SavedObject<NotificationChannel>>(`/api/v1/config/notifications/channels/${encodeURIComponent(id)}`);
+  }
+
+  saveNotificationChannel(channel: NotificationChannelWrite, saved?: SavedObject<NotificationChannel>) {
+    if (!saved) {
+      return this.request<SavedObject<NotificationChannel>>('/api/v1/config/notifications/channels', {
+        method: 'POST', body: JSON.stringify(channel),
+      }, true);
+    }
+    return this.request<SavedObject<NotificationChannel>>(`/api/v1/config/notifications/channels/${encodeURIComponent(saved.value.id)}`, {
+      method: 'PUT', headers: { 'If-Match': `"${saved.value.id}.${saved.version}"` }, body: JSON.stringify(channel),
+    }, true);
+  }
+
+  deleteNotificationChannel(id: string, version: string) {
+    return this.request(`/api/v1/config/notifications/channels/${encodeURIComponent(id)}`, {
+      method: 'DELETE', headers: { 'If-Match': `"${id}.${version}"` },
+    }, true);
   }
 
   rules() {

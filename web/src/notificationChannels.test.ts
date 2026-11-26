@@ -1,0 +1,109 @@
+import { describe, expect, it } from 'vitest';
+import { ApiError } from './api';
+import {
+  buildChannelWrite,
+  channelDraftOf,
+  channelFieldErrors,
+  existingChannelSecretsOf,
+  nextChannelSecretName,
+  validateChannelDraft,
+  validateWebhookUrl,
+} from './notificationChannels';
+import type { NotificationChannel } from './types';
+
+describe('notificationChannels', () => {
+  it('allocates collision-free secret names matching core secret rules', () => {
+    expect(nextChannelSecretName('Ops alerts', 'URL')).toBe('NOTIFY_OPS_ALERTS_URL');
+    expect(nextChannelSecretName('Ops alerts', 'AUTH', ['NOTIFY_OPS_ALERTS_AUTH'])).toBe('NOTIFY_OPS_ALERTS_AUTH_2');
+    expect(nextChannelSecretName('---', 'URL')).toBe('NOTIFY_URL');
+    expect(nextChannelSecretName(`${'a'.repeat(39)} b`, 'URL')).toBe(`NOTIFY_${'A'.repeat(39)}_URL`);
+  });
+
+  it('validates webhook URLs, duplicate names, and sources', () => {
+    expect(validateWebhookUrl('', true)).toBe('Enter a webhook URL.');
+    expect(validateWebhookUrl('', false)).toBeUndefined();
+    expect(validateWebhookUrl('ftp://hooks.example/x', true)).toMatch(/http:\/\/ or https:\/\//);
+    expect(validateWebhookUrl('https:///path', true)).toMatch(/http:\/\/ or https:\/\//);
+    expect(validateWebhookUrl('https://hooks.example:8443/notify', true)).toBeUndefined();
+
+    const errors = validateChannelDraft(
+      { ...channelDraftOf(), name: 'ops', sources: ['bad\x07src'], webhookUrl: 'not-a-url', webhookAuth: 'bad\0tok' },
+      undefined,
+      ['ops'],
+    );
+    expect(errors.get('name')).toMatch(/already has this name/i);
+    expect(errors.get('sources')).toMatch(/control characters/i);
+    expect(errors.get('webhookUrl')).toMatch(/http:\/\/ or https:\/\//);
+    expect(errors.get('webhookAuth')).toMatch(/null bytes/i);
+  });
+
+  it('builds create, unchanged keep, unresolved echo, secret rotation, and auth removal payloads', () => {
+    const createPayload = buildChannelWrite(
+      {
+        ...channelDraftOf(),
+        name: 'Ops Slack',
+        description: '  On-call room  ',
+        minSeverity: 'warning',
+        sources: ['upgrade', 'apply', 'apply'],
+        webhookUrl: ' https://hooks.example/token ',
+        webhookAuth: ' Bearer secret ',
+      },
+      undefined,
+      ['NOTIFY_OPS_SLACK_URL'],
+    );
+    expect(createPayload).toEqual({
+      name: 'Ops Slack',
+      description: 'On-call room',
+      enabled: true,
+      kind: 'webhook',
+      filter: { minSeverity: 'warning', sources: ['apply', 'upgrade'] },
+      webhook: {
+        url: { secret: 'NOTIFY_OPS_SLACK_URL_2', set: 'https://hooks.example/token', expectedVersion: '0' },
+        authorization: { secret: 'NOTIFY_OPS_SLACK_AUTH', set: 'Bearer secret', expectedVersion: '0' },
+      },
+    });
+
+    const saved: NotificationChannel = {
+      id: 'ntf_1',
+      name: 'Ops Slack',
+      enabled: true,
+      kind: 'webhook',
+      filter: { minSeverity: 'warning', sources: ['apply'] },
+      webhook: {
+        url: { secret: 'OPS_URL', isSet: false, version: '0', unresolved: true },
+        authorization: { secret: 'OPS_AUTH', isSet: true, version: '8' },
+      },
+    };
+
+    // Disabling a restored unresolved channel echoes unresolved: true on URL and preserves auth reference.
+    const keepUnresolved = buildChannelWrite({ ...channelDraftOf(saved), enabled: false }, saved, existingChannelSecretsOf([saved]));
+    expect(keepUnresolved.webhook).toEqual({
+      url: { secret: 'OPS_URL', unresolved: true },
+      authorization: { secret: 'OPS_AUTH' },
+    });
+
+    // Resolving URL and removing authorization omits authorization and sends expectedVersion on URL.
+    const resolvedAndRemoved = buildChannelWrite(
+      { ...channelDraftOf(saved), webhookUrl: 'https://hooks.example/new', removeAuth: true },
+      saved,
+    );
+    expect(resolvedAndRemoved.webhook).toEqual({
+      url: { secret: 'OPS_URL', set: 'https://hooks.example/new', expectedVersion: '0' },
+    });
+  });
+
+  it('maps 422 validation pointer paths (direct and collection-prefixed) to form fields', () => {
+    const err = new ApiError(422, 'VALIDATION_FAILED', 'Invalid.', [
+      { path: '/name', message: 'Name already exists in this collection.' },
+      { path: '/notifications/channels/0/filter/sources/0', message: 'Bad source.' },
+      { path: '/webhook/url', message: 'This secret belongs to another kind of object.' },
+      { path: '/webhook/authorization', message: 'Bad auth secret.' },
+    ]);
+    expect(channelFieldErrors(err)).toEqual(new Map([
+      ['name', 'Name already exists in this collection.'],
+      ['sources', 'Bad source.'],
+      ['webhookUrl', 'This secret belongs to another kind of object.'],
+      ['webhookAuth', 'Bad auth secret.'],
+    ]));
+  });
+});
