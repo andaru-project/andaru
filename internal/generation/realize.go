@@ -246,10 +246,101 @@ func (r Realizer) settle(ctx context.Context, from, to []placed) error {
 			slog.Warn("delete network device", "device", name, "error", err)
 		}
 	}
+	r.dropStaleIPv6(ctx, to)
 	if err := r.sessions(ctx, from, to); err != nil {
 		return err
 	}
 	return r.services(ctx, from, to)
+}
+
+// dropStaleIPv6 removes the dynamic IPv6 addresses, and their prefix routes, left on a link whose new file takes none.
+// networkd keeps a delegated address after the file that asked for it is replaced, through reload and reconfigure
+// alike, until its lifetime ends (#45). It removes addresses it did not configure itself, so on such a link any dynamic
+// address the file does not declare is stale. A failure is only logged: the address still expires.
+func (r Realizer) dropStaleIPv6(ctx context.Context, to []placed) {
+	data, err := r.Run(ctx, "/usr/bin/networkctl", "list", "--json=short")
+	var managed []host.Managed
+	if err == nil {
+		managed, err = host.ParseManaged(data)
+	}
+	if err == nil {
+		data, err = r.Run(ctx, "/usr/bin/ip", "-j", "-6", "address", "show", "scope", "global", "dynamic")
+	}
+	var links []struct {
+		Name      string `json:"ifname"`
+		Addresses []struct {
+			Local        string `json:"local"`
+			PrefixLength int    `json:"prefixlen"`
+		} `json:"addr_info"`
+	}
+	if err == nil && len(data) > 0 {
+		err = json.Unmarshal(data, &links)
+	}
+	if err != nil {
+		slog.Warn("find stale IPv6 addresses", "error", err)
+		return
+	}
+	for _, l := range links {
+		i := slices.IndexFunc(managed, func(m host.Managed) bool { return m.Name == l.Name })
+		if i < 0 {
+			continue
+		}
+		f := slices.IndexFunc(to, func(f placed) bool { return f.path == managed[i].NetworkFile })
+		if f < 0 || takesDynamicIPv6(to[f].data) {
+			continue
+		}
+		declared, declaredRoutes := declaredPrefixes(to[f].data)
+		routes := map[netip.Prefix]bool{}
+		for _, a := range l.Addresses {
+			ip, err := netip.ParseAddr(a.Local)
+			if err != nil { // ip lists an empty object for each address the filter left out
+				continue
+			}
+			address := netip.PrefixFrom(ip, a.PrefixLength)
+			if slices.ContainsFunc(declared, func(p netip.Prefix) bool { return p.Addr() == ip }) { // networkd may not have made it static yet
+				continue
+			}
+			r.ip(ctx, l.Name, address, "address", "del", address.String(), "dev", l.Name)
+			// A /128 has no prefix route, and the prefix of an address the new file declares keeps its own.
+			if route := address.Masked(); route.Bits() < 128 && !routes[route] && !slices.Contains(declaredRoutes, route) {
+				routes[route] = true
+				r.ip(ctx, l.Name, address, "route", "del", route.String(), "dev", l.Name)
+			}
+		}
+	}
+}
+
+// ip runs one ip -6 command of dropStaleIPv6 and logs its failure.
+func (r Realizer) ip(ctx context.Context, link string, address netip.Prefix, argv ...string) {
+	if _, err := r.Run(ctx, "/usr/bin/ip", append([]string{"-6"}, argv...)...); err != nil {
+		slog.Warn("remove stale IPv6 configuration", "interface", link, "address", address, "error", err)
+	}
+}
+
+// declaredPrefixes lists the static addresses a rendered .network file declares, and the routes it gets from them and
+// from its [Route] sections.
+func declaredPrefixes(data []byte) (addresses, routes []netip.Prefix) {
+	for line := range strings.SplitSeq(string(data), "\n") {
+		key, value, _ := strings.Cut(line, "=")
+		p, err := netip.ParsePrefix(value)
+		switch {
+		case err != nil:
+		case key == "Address":
+			addresses, routes = append(addresses, p), append(routes, p.Masked())
+		case key == "Destination":
+			routes = append(routes, p.Masked())
+		}
+	}
+	return addresses, routes
+}
+
+// takesDynamicIPv6 says whether a rendered .network file may get IPv6 addresses from DHCPv6, delegation or router
+// advertisements, which networkd accepts unless told not to, or belongs to a PPP session. It errs towards true: a
+// stale address it keeps only lives until its lifetime ends.
+func takesDynamicIPv6(data []byte) bool {
+	lines := strings.Split(string(data), "\n")
+	return pppNetwork(data) || !slices.Contains(lines, "IPv6AcceptRA=no") ||
+		slices.ContainsFunc(lines, func(l string) bool { return l == "DHCPPrefixDelegation=yes" || l == "DHCP=yes" || l == "DHCP=ipv6" })
 }
 
 type observation struct {
