@@ -159,16 +159,19 @@ func (f *aliasFeeds) apply() {
 	f.nudge()
 }
 
-// run schedules at start, at each nudge, and when the next source is due, and loads the lists after each apply.
+// run schedules at start, at each nudge, and when the next source is due, and loads the lists after each apply, off
+// the loop so a long load does not hold up the schedule; it returns once the loads it started are done.
 func (f *aliasFeeds) run(ctx context.Context) {
 	timer := time.NewTimer(0)
 	defer timer.Stop()
+	var loads sync.WaitGroup
+	defer loads.Wait()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-f.applied:
-			f.fill()
+			loads.Go(f.fill)
 			continue
 		case <-f.poke:
 		case <-timer.C:

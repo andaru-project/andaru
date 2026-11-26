@@ -601,6 +601,35 @@ func TestAnApplyLoadsTheLists(t *testing.T) {
 	}
 }
 
+// The load an apply asks for runs off the schedule: a long one does not hold up the next schedule.
+func TestAnApplyLoadDoesNotHoldUpTheSchedule(t *testing.T) {
+	b := newFeedBench(t)
+	started, done := make(chan struct{}), make(chan struct{})
+	b.f.realize = func(context.Context) error { close(started); <-done; return nil }
+	scheduled := make(chan struct{}, 8)
+	aliases := b.f.aliases
+	b.f.aliases = func(ctx context.Context) ([]config.DynamicAlias, []config.DynamicAlias, error) {
+		scheduled <- struct{}{}
+		return aliases(ctx)
+	}
+	ctx, stop := context.WithCancel(t.Context())
+	ran := make(chan struct{})
+	go func() { defer close(ran); b.f.run(ctx) }()
+	<-scheduled
+	b.f.owed.Store(true)
+	b.f.applied <- struct{}{}
+	<-started
+	b.f.nudge()
+	select {
+	case <-scheduled:
+	case <-time.After(5 * time.Second):
+		t.Error("the schedule waited for the load")
+	}
+	close(done)
+	stop()
+	<-ran
+}
+
 // A load stops with the engine, and stays owed, with no error logged.
 func TestAliasLoadStopsWithTheEngine(t *testing.T) {
 	b := newFeedBench(t)
