@@ -174,7 +174,7 @@ export function InterfaceEditor({ link, segment, live, snapshot, onClose, onSess
                     <Stack gap="xs">
                       <TextInput label="Segment name" maxLength={128} required value={draft.segmentName} error={errors.get('segmentName')} onChange={(event) => set({ segmentName: event.currentTarget.value })} />
                       <Select label="Zone" description="Firewall rules name zones, not interfaces." required data={zones} value={draft.zone || null} error={errors.get('zone')} allowDeselect={false}
-                        renderOption={({ option }) => option.value === newZoneOption ? option.label : <ZonePill name={option.label} />}
+                        renderOption={({ option }) => option.value === newZoneOption ? option.label : <ZonePill name={option.label} color={snapshot.value.zones.find((z) => z.id === option.value)?.color} />}
                         onChange={(value) => set({ zone: value ?? '' })} />
                       {draft.zone === newZoneOption && <TextInput label="New zone name" maxLength={128} required value={draft.newZone} error={errors.get('newZone')} onChange={(event) => set({ newZone: event.currentTarget.value })} />}
                     </Stack>

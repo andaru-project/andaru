@@ -35,7 +35,7 @@ function MultiHarness({
         family={family}
         excludeGroups={excludeGroups}
         exclude={exclude}
-        debounceMs={20}
+        debounceMs={120}
         label="Addresses"
         initialOptions={[{ value: 'adr_lan', label: 'lan-net' }]}
         value={value}

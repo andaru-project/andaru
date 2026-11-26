@@ -84,7 +84,7 @@ it('shows every branch to an administrator and starts on the dashboard', async (
   expect(within(navigation).getAllByRole('link').map((link) => link.textContent)).toEqual(['Dashboard', 'Details', 'Updates', 'Users', 'Roles', 'Tokens', 'Audit']);
   await userEvent.click(branch('Firewall'));
   expect(branch('System')).toHaveAttribute('aria-expanded', 'false');
-  expect(within(navigation).getAllByRole('link').map((link) => link.textContent)).toEqual(['Dashboard', 'Rules', 'NAT', 'Aliases']);
+  expect(within(navigation).getAllByRole('link').map((link) => link.textContent)).toEqual(['Dashboard', 'Rules', 'NAT', 'Aliases', 'Zones']);
   await userEvent.click(branch('Network'));
   expect(within(navigation).getAllByRole('link').map((link) => link.textContent)).toEqual(['Dashboard', 'Interfaces', 'DHCP', 'DNS', 'Topology', 'VLANs & Segments', 'VLAN Flow', 'Devices', 'Clients', 'Diagnostics']);
 

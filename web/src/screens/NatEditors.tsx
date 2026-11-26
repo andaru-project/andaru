@@ -5,6 +5,7 @@ import {
   addressAliasesForFamily, checkOneToOne, checkPortForward, oneToOneDraftOf, oneToOneErrors, oneToOnePayload, portForwardDraftOf, portForwardErrors, portForwardPayload, type OneToOneDraft, type PortForwardDraft,
 } from '../natEdit';
 import type { OneToOneNat, PortForward, Snapshot } from '../types';
+import { zoneColorMap } from '../zones';
 import { AliasMultiSelect, AliasSelect } from './AliasPicker';
 import { ZonePill, ZoneSelectionPill } from './ZoneBadge';
 
@@ -101,6 +102,7 @@ export function PortForwardEditor({ api, entry, snapshot, onClose, onSessionLost
 
   const patch = (next: Partial<PortForwardDraft>) => setDraft((prev) => ({ ...prev, ...next }));
   const baseZones = snapshot.value.zones.map((z) => ({ value: z.id, label: z.name }));
+  const zoneColors = zoneColorMap(snapshot.value.zones);
   const baseAddresses = addressAliasesForFamily(snapshot.value.aliases?.addresses ?? [], draft.family);
   const zones = withMissingOptions(baseZones, draft.ingressZones);
 
@@ -156,8 +158,8 @@ export function PortForwardEditor({ api, entry, snapshot, onClose, onSessionLost
                     data={zones}
                     value={draft.ingressZones}
                     error={errors.get('ingressZones')}
-                    renderOption={({ option }) => (option.label.endsWith(' (missing)') ? <Text size="sm" c="red">{option.label}</Text> : <ZonePill name={option.label} />)}
-                    renderPill={(input) => <ZoneSelectionPill {...input} />}
+                    renderOption={({ option }) => (option.label.endsWith(' (missing)') ? <Text size="sm" c="red">{option.label}</Text> : <ZonePill name={option.label} color={zoneColors.get(option.value)} />)}
+                    renderPill={(input) => <ZoneSelectionPill {...input} colors={zoneColors} />}
                     onChange={(ingressZones) => patch({ ingressZones })}
                   />
                   <Group align="flex-start" gap="xs" wrap="wrap">
@@ -342,6 +344,7 @@ export function OneToOneEditor({ api, entry, snapshot, onClose, onSessionLost, o
 
   const patch = (next: Partial<OneToOneDraft>) => setDraft((prev) => ({ ...prev, ...next }));
   const baseZones = snapshot.value.zones.map((z) => ({ value: z.id, label: z.name }));
+  const zoneColors = zoneColorMap(snapshot.value.zones);
   const baseAddresses = addressAliasesForFamily(snapshot.value.aliases?.addresses ?? [], 'ipv4');
   const zones = withMissingOptions(baseZones, draft.zone ? [draft.zone] : []);
 
@@ -372,7 +375,7 @@ export function OneToOneEditor({ api, entry, snapshot, onClose, onSessionLost, o
                 data={zones}
                 value={draft.zone || null}
                 error={errors.get('zone')}
-                renderOption={({ option }) => (option.label.endsWith(' (missing)') ? <Text size="sm" c="red">{option.label}</Text> : <ZonePill name={option.label} />)}
+                renderOption={({ option }) => (option.label.endsWith(' (missing)') ? <Text size="sm" c="red">{option.label}</Text> : <ZonePill name={option.label} color={zoneColors.get(option.value)} />)}
                 onChange={(value) => patch({ zone: value ?? '' })}
               />
               <Switch

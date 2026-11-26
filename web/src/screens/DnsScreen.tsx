@@ -8,6 +8,7 @@ import {
 } from '../dnsEdit';
 import type { DnsMode, DnsService, DnsUpstreamProtocol, SavedObject, Session, Snapshot } from '../types';
 import { useResource } from '../useResource';
+import { zoneColorMap } from '../zones';
 import { ZoneBadge } from './ZoneBadge';
 
 interface DnsScreenProps {
@@ -105,6 +106,7 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
   const segments = snapshot.value.segments;
   const segmentById = new Map(segments.map((s) => [s.id, s]));
   const zones = new Map(snapshot.value.zones.map((z) => [z.id, z.name]));
+  const zoneColors = zoneColorMap(snapshot.value.zones);
   const dhcp4Served = new Set((snapshot.value.dhcp ?? []).filter((d) => !d.dnsServers?.length).map((d) => d.segment));
   const dhcp6Served = new Set((snapshot.value.dhcp6 ?? []).filter((d) => !d.dnsServers?.length).map((d) => d.segment));
   const hostDnsSegments = segments.filter((s) => Boolean(s.addressing.dns));
@@ -454,7 +456,7 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
                                 label={
                                   <Group gap="xs" wrap="wrap">
                                     <Text fw={600} size="sm">{segment.name}</Text>
-                                    <ZoneBadge name={zones.get(segment.zone) ?? segment.zone} />
+                                    <ZoneBadge name={zones.get(segment.zone) ?? segment.zone} color={zoneColors.get(segment.zone)} />
                                   </Group>
                                 }
                               />

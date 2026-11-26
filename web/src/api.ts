@@ -40,6 +40,7 @@ import type {
   Usage,
   User,
   VersionDetail,
+  Zone,
 } from './types';
 
 interface ErrorEnvelope {
@@ -455,6 +456,18 @@ export class ApiClient {
 
   deleteAlias(kind: keyof AliasKinds, id: string, version: string) {
     return this.request(`/api/v1/config/aliases/${kind}/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { 'If-Match': `"${id}.${version}"` } }, true);
+  }
+
+  zones() {
+    return this.request<SavedList<Zone>>('/api/v1/config/zones');
+  }
+
+  saveZone(zone: Omit<Zone, 'id'>, saved?: SavedObject<Zone>) {
+    return this.save('/api/v1/config/zones', zone, saved);
+  }
+
+  deleteZone(id: string, version: string) {
+    return this.request(`/api/v1/config/zones/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { 'If-Match': `"${id}.${version}"` } }, true);
   }
 
   rules() {

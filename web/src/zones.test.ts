@@ -29,6 +29,8 @@ it('finds each interface\'s zone in the saved configuration, by the interface\'s
 it('gives a zone one colour everywhere: green inside, red outside, and the same for a name each time', () => {
   expect(zoneColor('lan')).toBe('green');
   expect(zoneColor('WAN')).toBe('red');
+  expect(zoneColor('lan', 'violet')).toBe('violet');
+  expect(zoneColor('lan', 'not-a-color')).toBe('green');
   expect(zoneColor('Guest')).toBe(zoneColor('guest'));
   const others = ['guest', 'dmz', 'iot', 'servers', 'mgmt', 'vpn', 'voip', 'kids', 'work', 'lab', 'lan2', 'wan2', 'constructor', 'toString', ''];
   for (const name of others) {
@@ -36,5 +38,5 @@ it('gives a zone one colour everywhere: green inside, red outside, and the same 
     expect(['blue', 'orange', 'teal', 'pink', 'cyan', 'lime']).toContain(zoneColor(name));
   }
   // Names spread over the palette: a handful of zones do not all look alike.
-  expect(new Set(others.map(zoneColor)).size).toBeGreaterThanOrEqual(4);
+  expect(new Set(others.map((name) => zoneColor(name))).size).toBeGreaterThanOrEqual(4);
 });
