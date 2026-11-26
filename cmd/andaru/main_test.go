@@ -242,6 +242,11 @@ func (f *fakeVerbs) SyncPrefixes(context.Context) error {
 	return f.err
 }
 
+func (f *fakeVerbs) FillAliases(context.Context) error {
+	f.calls = append(f.calls, "aliases")
+	return f.err
+}
+
 func (f *fakeVerbs) Fence(_ context.Context, denyAll bool) error {
 	f.calls = append(f.calls, fmt.Sprint("fence ", denyAll))
 	return f.err
@@ -264,6 +269,7 @@ func TestRealizeExitCodes(t *testing.T) {
 		{[]string{"boot"}, errors.New("nothing usable"), "boot", 0},
 		// A failed lease sync shows on its unit; the path unit runs it again at the next lease event.
 		{[]string{"leases"}, errors.New("Kea not answering"), "leases", 1},
+		{[]string{"aliases"}, nil, "aliases", 0},
 	} {
 		verbs := &fakeVerbs{err: row.err}
 		var diagnostics bytes.Buffer

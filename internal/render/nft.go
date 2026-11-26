@@ -7,6 +7,8 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
+
+	"github.com/andaru-project/andaru/internal/aliasfeed"
 )
 
 // nftPath labels the packet filter in a generation; it is loaded with nft, never written to /run.
@@ -64,9 +66,9 @@ func (r *renderer) filterChains() {
 		}
 	}
 	for _, z := range d.Zones {
-		f.set(setName(z.ID), "ifname", "", quoted(zones[z.ID]))
+		f.set(setName(z.ID), "ifname", "", quoted(zones[z.ID]), "")
 	}
-	f.set("uplinks", "ifname", "", quoted(uplinks))
+	f.set("uplinks", "ifname", "", quoted(uplinks), "")
 
 	mgmt := ""
 	for _, s := range d.Segments {
@@ -114,7 +116,7 @@ func (r *renderer) filterChains() {
 	for i, fam := range []family{4, 6} {
 		if len(allowed[i]) > 0 {
 			set := fmt.Sprintf("mgmt_%d", fam)
-			f.set(set, map[family]string{4: "ipv4_addr", 6: "ipv6_addr"}[fam], "interval", allowed[i])
+			f.set(set, map[family]string{4: "ipv4_addr", 6: "ipv6_addr"}[fam], "interval", allowed[i], "")
 			input = append(input, fmt.Sprintf("iifname %q %s saddr @%s tcp dport 22 accept", mgmt, ipKey(fam), set))
 		}
 	}
@@ -129,12 +131,12 @@ func (r *renderer) filterChains() {
 			// Replies to a hairpin connection must come back through the firewall, not straight from the server.
 			postrouting = append(postrouting, fmt.Sprintf("oifname %q ct status dnat ip saddr %s masquerade comment %q", owners[i], p.Masked(), "reflection"))
 		}
-		f.set("internal", "ifname", "", quoted(names))
+		f.set("internal", "ifname", "", quoted(names), "")
 		// A virtual address belongs to its service: reflection never takes it.
 		v := f.virtual4()
-		f.set("internal_4", "ipv4_addr", "", append(own, v...))
+		f.set("internal_4", "ipv4_addr", "", append(own, v...), "")
 		if len(v) > 0 {
-			f.set("virtual_4", "ipv4_addr", "", v)
+			f.set("virtual_4", "ipv4_addr", "", v, "")
 		}
 	}
 	// A forward's own rule comes before the rules, so no later rule can shadow it.
@@ -219,7 +221,8 @@ func quoted(names []string) []string {
 	return slices.Compact(out)
 }
 
-func (f *filter) set(name, typ, flags string, elements []string) {
+// set declares a set; a comment, such as an alias's source, is kept in the kernel with it.
+func (f *filter) set(name, typ, flags string, elements []string, comment string) {
 	s := "set " + name + " { type " + typ + ";"
 	if flags != "" {
 		s += " flags " + flags + ";"
@@ -227,6 +230,9 @@ func (f *filter) set(name, typ, flags string, elements []string) {
 	if flags == "interval" {
 		// Overlapping elements, such as a host inside a network of the same group, are merged rather than refused.
 		s += " auto-merge;"
+	}
+	if comment != "" {
+		s += fmt.Sprintf(" comment %q;", comment)
 	}
 	if len(elements) > 0 {
 		s += " elements = { " + strings.Join(elements, ", ") + " };"
@@ -268,14 +274,16 @@ func (f *filter) addresses() {
 				elements[fam] = append(elements[fam], e)
 			}
 		}
+		comment := ""
 		if a.Kind == "url" || a.Kind == "hostnames" {
-			// Filled after each load from the last fetched list; an alias that never fetched matches nothing.
+			// Filled after each load from the last list fetched from this source; one never fetched matches nothing.
 			elements[4], elements[6] = []string{}, []string{}
+			comment = "feed:" + aliasfeed.Hash(a.Kind, a.URL, a.Names)
 		}
 		f.families[a.ID] = elements
 		for _, fam := range []family{4, 6} {
 			if f.has(a.ID, fam) {
-				f.set(setName(a.ID)+fmt.Sprintf("_%d", fam), map[family]string{4: "ipv4_addr", 6: "ipv6_addr"}[fam], "interval", elements[fam])
+				f.set(setName(a.ID)+fmt.Sprintf("_%d", fam), map[family]string{4: "ipv4_addr", 6: "ipv6_addr"}[fam], "interval", elements[fam], comment)
 			}
 		}
 	}

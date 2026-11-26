@@ -30,6 +30,7 @@ type realizeVerbs interface {
 	Boot(ctx context.Context) error
 	SyncLeases(ctx context.Context) error
 	SyncPrefixes(ctx context.Context) error
+	FillAliases(ctx context.Context) error
 	Fence(ctx context.Context, denyAll bool) error
 }
 
@@ -75,7 +76,7 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 	parseErr := flags.Parse(slices.DeleteFunc(slices.Clone(args), isHelp))
 	verb := flags.Arg(0)
 	want := map[string]int{
-		"activate": 1, "rollback": 2, "confirm": 1, "boot": 0, "leases": 0, "prefixes": 0, "factory-reset": 0,
+		"activate": 1, "rollback": 2, "confirm": 1, "boot": 0, "leases": 0, "prefixes": 0, "aliases": 0, "factory-reset": 0,
 		"update-check": 0, "update-stage": 0, "update-rollback": 0, "update-reboot": 0, "set-hostname": 1,
 	}
 	n, known := want[verb]
@@ -99,7 +100,8 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 	blocked, denyAll := resetBlocks()
 	if blocked && verb != "boot" {
 		fmt.Fprintln(stderr, "a factory reset is in progress; "+verb+" waits for it")
-		if verb == "set-hostname" {
+		// The engine keeps owing these: it tries them again after the reset.
+		if verb == "set-hostname" || verb == "aliases" {
 			return 1
 		}
 		return 0
@@ -141,6 +143,8 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 		err = verbs.SyncLeases(ctx)
 	case "prefixes":
 		err = verbs.SyncPrefixes(ctx)
+	case "aliases":
+		err = verbs.FillAliases(ctx)
 	}
 	// A verb on a generation may change its state even when it fails, so the bus hears of each one.
 	if id != 0 && *busSocket != "" {

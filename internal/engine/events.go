@@ -62,7 +62,7 @@ const (
 // busGrants are what each client of the bus may publish and subscribe to, by user name.
 var busGrants = map[string]bus.Grants{
 	"realize":    {Publish: []string{"apply/+"}},
-	outboundUser: {Publish: []string{"notification/delivery"}, Subscribe: []string{"delivery/#"}},
+	outboundUser: {Publish: []string{"notification/delivery", "alias-result/+"}, Subscribe: []string{"delivery/#", "alias-fetch/#"}},
 }
 
 // outboundUser is andaru-outbound's user, and the name it has on the bus.

@@ -96,11 +96,11 @@ IPv6AcceptRA=no
 table inet andaru {}
 delete table inet andaru
 table inet andaru {
-	comment "sha256:8bcd852a3b5a350635bb380099d0ac2cc13136eba9749313f30fe3097c489f73"
-	set adr_00000001_0000_4000_8000_000000000001_4 { type ipv4_addr; flags interval; auto-merge; }
-	set adr_00000001_0000_4000_8000_000000000001_6 { type ipv6_addr; flags interval; auto-merge; }
-	set adr_00000002_0000_4000_8000_000000000002_4 { type ipv4_addr; flags interval; auto-merge; }
-	set adr_00000002_0000_4000_8000_000000000002_6 { type ipv6_addr; flags interval; auto-merge; }
+	comment "sha256:0f5cb977e4d13bdc9e6ff0c96bd242089516c07a1d6c04aa7f354122e687d679"
+	set adr_00000001_0000_4000_8000_000000000001_4 { type ipv4_addr; flags interval; auto-merge; comment "feed:b0619fc34c78c451"; }
+	set adr_00000001_0000_4000_8000_000000000001_6 { type ipv6_addr; flags interval; auto-merge; comment "feed:b0619fc34c78c451"; }
+	set adr_00000002_0000_4000_8000_000000000002_4 { type ipv4_addr; flags interval; auto-merge; comment "feed:df4cdf2215889814"; }
+	set adr_00000002_0000_4000_8000_000000000002_6 { type ipv6_addr; flags interval; auto-merge; comment "feed:df4cdf2215889814"; }
 	set zon_00000001_0000_4000_8000_000000000001 { type ifname; elements = { "ens18" }; }
 	set zon_00000002_0000_4000_8000_000000000002 { type ifname; elements = { "ens19" }; }
 	set uplinks { type ifname; elements = { "ens18" }; }

@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -559,6 +561,21 @@ func TestSystemdRunnerUnitNamesAreDistinct(t *testing.T) {
 	}
 	if !slices.Equal(argv[4], []string{"/usr/bin/systemctl", "stop", "andaru-rollback-3.timer"}) {
 		t.Fatalf("disarm = %q", argv[4])
+	}
+	// A verb on no generation names none, and its unit is its run's alone: one stuck does not block the next.
+	for range 2 {
+		if err := runner.Realize(t.Context(), "aliases", 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unit := regexp.MustCompile(` --unit=(andaru-realize-aliases-[0-9]+) `)
+	first, second := unit.FindStringSubmatch(strings.Join(argv[5], " ")), unit.FindStringSubmatch(strings.Join(argv[6], " "))
+	if first == nil || second == nil || first[1] == second[1] || !strings.HasSuffix(strings.Join(argv[5], " "), "--bus-socket /run/andaru/bus.sock aliases") {
+		t.Fatalf("aliases = %q, %q", argv[5], argv[6])
+	}
+	// The reset's idle check still sees it.
+	if ok, _ := path.Match("andaru-realize-*.service", first[1]+".service"); !ok {
+		t.Fatalf("%s escapes the reset's idle check", first[1])
 	}
 }
 
