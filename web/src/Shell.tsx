@@ -27,6 +27,7 @@ import { RulesScreen } from './screens/RulesScreen';
 import { SessionScreen } from './screens/SessionScreen';
 import { SetupWizardScreen } from './screens/SetupWizardScreen';
 import { TokensScreen } from './screens/TokensScreen';
+import { TrafficFlowScreen } from './screens/TrafficFlowScreen';
 import { UpgradeScreen } from './screens/UpgradeScreen';
 import { UpdatesScreen } from './screens/UpdatesScreen';
 import { SystemDetailsScreen, updateNotice } from './screens/SystemWidget';
@@ -59,7 +60,8 @@ const pageTitles: Record<string, string> = {
   '/network/vlans/flow': 'VLAN Flow',
   '/network/devices': 'Devices',
   '/network/clients': 'Clients',
-  '/network/diagnostics': 'Diagnostics',
+  '/network/diagnostics': 'Diagnostics & events',
+  '/diagnostics/traffic-flow': 'Traffic simulator',
   '/firewall/rules': 'Rules',
   '/firewall/nat': 'NAT',
   '/firewall/aliases': 'Aliases',
@@ -227,10 +229,16 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
         { to: '/network/vlans/flow', label: 'VLAN Flow', visible: canReadStatus },
         { to: '/network/devices', label: 'Devices', visible: canReadStatus },
         { to: '/network/clients', label: 'Clients', visible: canReadStatus },
-        { to: '/network/diagnostics', label: 'Diagnostics', visible: canReadStatus },
       ],
     },
     { label: 'Firewall', items: [{ to: '/firewall/rules', label: 'Rules', visible: canReadChanges }, { to: '/firewall/nat', label: 'NAT', visible: canReadChanges }, { to: '/firewall/aliases', label: 'Aliases', visible: canReadChanges }, { to: '/firewall/zones', label: 'Zones', visible: canReadChanges }] },
+    {
+      label: 'Diagnostics',
+      items: [
+        { to: '/diagnostics/traffic-flow', label: 'Traffic simulator', visible: canReadChanges },
+        { to: '/network/diagnostics', label: 'Tools & events', visible: canReadStatus },
+      ],
+    },
     { label: 'Changes', items: [{ to: '/changes', label: 'Review and apply', visible: canReadChanges }] },
     {
       label: 'System',
@@ -302,6 +310,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
     ['/firewall/nat', <NatScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/firewall/aliases', <AliasesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/firewall/zones', <ZonesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
+    ['/diagnostics/traffic-flow', <TrafficFlowScreen api={api} session={session} onSessionLost={onSessionLost} />],
     ['/changes', <ChangesScreen api={api} session={session} state={changes.data} stateError={changes.error} connected={connected} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/system/details', <SystemDetailsScreen system={system} />],
     ['/system/updates', <UpdatesScreen api={api} session={session} update={update} onSessionLost={onSessionLost} />],

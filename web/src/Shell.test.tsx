@@ -750,3 +750,20 @@ it('shows Network -> Virtual IPs when the session can read configuration', async
   expect(screen.getByRole('link', { name: 'Virtual IPs' })).toHaveAttribute('aria-current', 'page');
   expect(document.title).toBe('Virtual IPs — Andaru');
 });
+
+it('shows Diagnostics -> Traffic simulator when the session can read configuration', async () => {
+  fetchRoutes({
+    '/api/v1/applies': unapplied,
+    '/api/v1/versions?': { state: 'saved', items: [] },
+    '/api/v1/upgrade/preview': { questions: [] },
+    '/api/v1/config': { state: 'saved', savedVersion: '1', value: { links: [], segments: [], zones: [] } },
+  });
+  render(
+    <MemoryRouter initialEntries={['/diagnostics/traffic-flow']}>
+      <Shell api={new ApiClient('csrf')} session={session(['configuration.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} />
+    </MemoryRouter>,
+  );
+  expect(await screen.findByRole('heading', { name: 'Traffic simulator' })).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'Traffic simulator' })).toHaveAttribute('aria-current', 'page');
+  expect(document.title).toBe('Traffic simulator — Andaru');
+});
