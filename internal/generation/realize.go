@@ -568,6 +568,7 @@ func (r Realizer) Activate(ctx context.Context, id int) (result error) {
 		r.Activating(id)
 	}
 
+	r.noteOffloadDefaults(ctx)
 	// The filter goes in before anything forwards or listens on the new files; the reason is why it did not.
 	var reason string
 	if err := r.toward(ctx, &g, func() error {
@@ -756,6 +757,7 @@ func (r Realizer) Rollback(ctx context.Context, id int, reason string) (result e
 		}
 		return fmt.Errorf("roll back %d: nothing to restore: %w", id, err)
 	}
+	r.noteOffloadDefaults(ctx)
 	// Files first: once they are back, any later reload or boot is correct. But only a reload makes networkd stop
 	// running the unconfirmed files, so until one succeeds the generation stays pending and the timer retries.
 	// fallback already loaded the restored generation's filter; going back to none, the bare filter goes first.

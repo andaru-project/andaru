@@ -107,7 +107,11 @@ func ReadOffloads(ctx context.Context) ([]DeviceOffloads, error) {
 	return readOffloads(ctx, readCommand)
 }
 
-func readOffloads(ctx context.Context, run func(context.Context, string, ...string) ([]byte, error)) ([]DeviceOffloads, error) {
+// Runner runs a command and returns its output.
+type Runner = func(context.Context, string, ...string) ([]byte, error)
+
+// EthernetLinks lists the Ethernet devices.
+func EthernetLinks(ctx context.Context, run Runner) ([]LinkStatus, error) {
 	data, err := run(ctx, "/usr/bin/ip", linkInventoryArgs...)
 	if err != nil {
 		return nil, err
@@ -116,17 +120,40 @@ func readOffloads(ctx context.Context, run func(context.Context, string, ...stri
 	if err != nil {
 		return nil, err
 	}
-	out := []DeviceOffloads{}
-	for _, l := range slices.DeleteFunc(links, func(l LinkStatus) bool { return !Physical(l) }) {
-		data, err := run(ctx, Ethtool, "--json", "-k", l.Name)
-		if err != nil {
-			return nil, fmt.Errorf("read the features of %s: %w", l.Name, err)
+	return slices.DeleteFunc(links, func(l LinkStatus) bool { return !Physical(l) }), nil
+}
+
+// ReadFeatures reads a device's features.
+func ReadFeatures(ctx context.Context, run Runner, device string) (map[string]Feature, error) {
+	data, err := run(ctx, Ethtool, "--json", "-k", device)
+	if err == nil {
+		var features map[string]Feature
+		if features, err = ParseFeatures(data); err == nil {
+			return features, nil
 		}
-		features, err := ParseFeatures(data)
+	}
+	return nil, fmt.Errorf("read the features of %s: %w", device, err)
+}
+
+// readOffloads leaves out a device whose features cannot be read, one that went away since it was listed among them;
+// it fails only when no device can be read.
+func readOffloads(ctx context.Context, run Runner) ([]DeviceOffloads, error) {
+	links, err := EthernetLinks(ctx, run)
+	if err != nil {
+		return nil, err
+	}
+	out := []DeviceOffloads{}
+	var failure error
+	for _, l := range links {
+		features, err := ReadFeatures(ctx, run, l.Name)
 		if err != nil {
-			return nil, err
+			failure = err
+			continue
 		}
 		out = append(out, DeviceOffloads{Interface: l.Name, PermanentAddress: l.PermanentAddress, Offloads: ManagedOffloads(features)})
+	}
+	if len(out) == 0 && failure != nil {
+		return nil, failure
 	}
 	return out, nil
 }

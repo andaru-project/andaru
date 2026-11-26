@@ -1196,3 +1196,21 @@ it('shows live offloads on Ethernet and saves the ones changed', async () => {
     ],
   });
 });
+
+it('says when the device of a saved Ethernet link is not present', async () => {
+  const user = userEvent.setup();
+  const port = ethernet(lanPort, 'LAN port', '52:54:00:aa:bb:01');
+  routes({
+    links: [port],
+    findings: [],
+    extra: {
+      [`/api/v1/config/links/${lanPort}`]: { version: '4', value: port },
+      '/api/v1/config/segments/seg_lan': { version: '6', value: { id: 'seg_lan', name: 'LAN', link: lanPort, zone: 'zon_lan', addressing: { ipv4: { mode: 'static', addresses: ['192.168.1.1/24'] }, ipv6: { mode: 'none' } } } },
+      '/api/v1/status/offloads': { items: [] },
+    },
+  });
+  render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={vi.fn()} onSessionLost={vi.fn()} />);
+  await user.click(await screen.findByRole('button', { name: 'Edit LAN port' }));
+  const panel = await screen.findByRole('dialog');
+  expect(await within(panel).findByText('The device is not present: its live state is unknown.')).toBeInTheDocument();
+});

@@ -16,37 +16,51 @@ import (
 // under /run because a device's defaults are whatever its driver chose this boot.
 const offloadDefaultsPath = "/run/andaru-offloads/defaults.json"
 
-// offloadDefaults returns the recorded defaults and the Ethernet devices, first recording any device not seen yet as
-// it runs now: at boot that is before any .link file applies; a device that appears later has had none applied either.
-func (r Realizer) offloadDefaults(ctx context.Context) (map[string]map[string]bool, []host.LinkStatus, error) {
-	data, err := r.Run(ctx, "/usr/bin/ip", "-d", "-j", "address", "show")
+// neverRestored is the feature a default never brings back: the kernel turns LRO off on a device that forwards, and
+// turning a driver's LRO back on would break forwarding. It runs only where the operator turns it on.
+const neverRestored = "large-receive-offload"
+
+// recordOffloadDefaults records every Ethernet device not recorded yet, as it runs now, and returns the record and
+// the devices. udev applies an Andaru .link file when a device appears, so the features the files on disk declare
+// for a device say nothing of its driver and are left out: at boot there are none yet; a verb records before it
+// places its files, so a device that appeared under the old ones is judged by those.
+func (r Realizer) recordOffloadDefaults(ctx context.Context) (map[string]map[string]bool, []host.LinkStatus, error) {
+	links, err := host.EthernetLinks(ctx, r.Run)
 	if err != nil {
 		return nil, nil, err
 	}
-	links, err := host.ParseLinks(data)
-	if err != nil {
-		return nil, nil, err
-	}
-	links = slices.DeleteFunc(links, func(l host.LinkStatus) bool { return !host.Physical(l) })
 	path := r.Root + offloadDefaultsPath
 	record := map[string]map[string]bool{}
 	if _, err := readJSON(path, &record); err != nil {
-		return nil, nil, err
+		// Rewritten below: a device whose defaults are lost only keeps what it runs until the next boot.
+		slog.Warn("read the recorded device offloads", "error", err)
+		record = map[string]map[string]bool{}
 	}
+	var onDisk []placed
+	files, _ := filepath.Glob(r.Root + "/run/systemd/network/50-andaru-*.link")
+	for _, file := range files {
+		if data, err := os.ReadFile(file); err == nil {
+			onDisk = append(onDisk, placed{path: file, data: data})
+		}
+	}
+	applied := declaredOffloads(onDisk)
 	changed := false
 	for _, l := range links {
 		mac := strings.ToLower(l.PermanentAddress)
 		if _, ok := record[mac]; ok {
 			continue
 		}
-		features, err := r.features(ctx, l.Name)
+		features, err := host.ReadFeatures(ctx, r.Run, l.Name)
 		if err != nil {
-			return nil, nil, err
+			slog.Warn("record the device offloads", "device", l.Name, "error", err)
+			continue
 		}
 		defaults := map[string]bool{}
 		for _, o := range host.Offloads {
 			for _, name := range o.Features {
-				if f, ok := features[name]; ok && !f.Fixed {
+				f, ok := features[name]
+				_, declared := applied[mac][name]
+				if ok && !f.Fixed && !declared && name != neverRestored {
 					defaults[name] = f.Requested
 				}
 			}
@@ -64,12 +78,11 @@ func (r Realizer) offloadDefaults(ctx context.Context) (map[string]map[string]bo
 	return record, links, nil
 }
 
-func (r Realizer) features(ctx context.Context, device string) (map[string]host.Feature, error) {
-	data, err := r.Run(ctx, host.Ethtool, "--json", "-k", device)
-	if err != nil {
-		return nil, err
+// noteOffloadDefaults records the devices not recorded yet before a verb replaces the files udev applied to them.
+func (r Realizer) noteOffloadDefaults(ctx context.Context) {
+	if _, _, err := r.recordOffloadDefaults(ctx); err != nil {
+		slog.Warn("record the device offloads", "error", err)
 	}
-	return host.ParseFeatures(data)
 }
 
 // declaredOffloads reads the kernel features each .link file in set turns on or off, by permanent MAC.
@@ -101,12 +114,12 @@ func declaredOffloads(set []placed) map[string]map[string]bool {
 	return out
 }
 
-// applyOffloads runs every Ethernet device with the offloads set declares and its recorded defaults for the rest, so
-// an offload set back to the default, a rollback and a reset take effect without a reboot. udev applies .link files
-// only when a device appears, and asking it to again would also rename devices that are up. Failures are logged: a
-// device that refuses a feature still forwards, and the live state shows what it runs.
+// applyOffloads runs every Ethernet device, configured or not, with the offloads set declares and its recorded
+// defaults for the rest, so an offload set back to the default, a rollback and a reset take effect without a reboot.
+// udev applies .link files only when a device appears, and asking it to again would also rename devices that are up.
+// Failures are logged: a device that refuses a feature still forwards, and the live state shows what it runs.
 func (r Realizer) applyOffloads(ctx context.Context, set []placed) {
-	record, links, err := r.offloadDefaults(ctx)
+	record, links, err := r.recordOffloadDefaults(ctx)
 	if err != nil {
 		slog.Warn("read the device offloads", "error", err)
 		return
@@ -114,12 +127,10 @@ func (r Realizer) applyOffloads(ctx context.Context, set []placed) {
 	declared := declaredOffloads(set)
 	for _, l := range links {
 		mac := strings.ToLower(l.PermanentAddress)
-		want := maps.Clone(record[mac])
-		if want == nil {
-			want = map[string]bool{}
-		}
+		want := map[string]bool{}
+		maps.Copy(want, record[mac])
 		maps.Copy(want, declared[mac])
-		features, err := r.features(ctx, l.Name)
+		features, err := host.ReadFeatures(ctx, r.Run, l.Name)
 		if err != nil {
 			slog.Warn("read the device offloads", "device", l.Name, "error", err)
 			continue
@@ -127,7 +138,11 @@ func (r Realizer) applyOffloads(ctx context.Context, set []placed) {
 		var args []string
 		for _, name := range slices.Sorted(maps.Keys(want)) {
 			if f, ok := features[name]; ok && !f.Fixed && f.Requested != want[name] {
-				args = append(args, name, map[bool]string{true: "on", false: "off"}[want[name]])
+				value := "off"
+				if want[name] {
+					value = "on"
+				}
+				args = append(args, name, value)
 			}
 		}
 		if len(args) == 0 {

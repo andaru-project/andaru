@@ -97,9 +97,7 @@ func (r Realizer) copyKeptFirst(ctx context.Context, id int) {
 // Boot puts the confirmed generation into /run before networkd starts. It renders nothing.
 func (r Realizer) Boot(ctx context.Context) (result error) {
 	// Before any .link file applies, what each Ethernet device runs is its driver's default.
-	if _, _, err := r.offloadDefaults(ctx); err != nil {
-		slog.Warn("record the device offloads", "error", err)
-	}
+	r.noteOffloadDefaults(ctx)
 	if _, statErr := os.Lstat(r.StateDir); os.IsNotExist(statErr) {
 		return r.disasterBoot(ctx)
 	}
@@ -209,6 +207,8 @@ func (r Realizer) Boot(ctx context.Context) (result error) {
 		if err := r.place(nil, set); err != nil {
 			return err
 		}
+		// A candidate dropped above may have left offloads its files set; this one's run, and the defaults elsewhere.
+		r.applyOffloads(ctx, set)
 		if err := r.sessions(ctx, nil, set); err != nil {
 			slog.Error("start the PPPoE sessions", "error", err)
 		}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -75,6 +76,20 @@ func TestReadOffloadsOnlyEthernetDevices(t *testing.T) {
 		t.Fatalf("asked %v, got %+v; want %v", asked, got, want)
 	}
 
+	two := []byte(strings.Replace(string(inventory), `"ifname":"wan.10","link_type":"ether","mtu":1500,"operstate":"UP","flags":[],"address":"52:54:00:00:00:01","linkinfo":{"info_kind":"vlan"}`, `"ifname":"lan","link_type":"ether","mtu":1500,"operstate":"UP","flags":[],"address":"52:54:00:00:00:02"`, 1))
+	gone := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == Ethtool {
+			if args[len(args)-1] == "wan" {
+				return nil, errors.New("no such device")
+			}
+			return features, nil
+		}
+		return two, nil
+	}
+	// A device that went away is left out; the others still show.
+	if got, err := readOffloads(context.Background(), gone); err != nil || len(got) != 1 || got[0].Interface != "lan" {
+		t.Fatalf("got %+v, %v; want lan alone", got, err)
+	}
 	failing := func(_ context.Context, name string, args ...string) ([]byte, error) {
 		if name == Ethtool {
 			return nil, errors.New("no ethtool")
@@ -82,6 +97,6 @@ func TestReadOffloadsOnlyEthernetDevices(t *testing.T) {
 		return inventory, nil
 	}
 	if _, err := readOffloads(context.Background(), failing); err == nil {
-		t.Fatal("a device whose features cannot be read must fail the read")
+		t.Fatal("no device read must fail the read")
 	}
 }

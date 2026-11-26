@@ -32,7 +32,8 @@ function OffloadSettings({ api, mac, value, error, onSessionLost, onChange }: {
   onSessionLost(): void;
   onChange(next: Partial<Record<OffloadKey, boolean>>): void;
 }) {
-  const load = useCallback(async () => (api && mac ? (await api.deviceOffloads()).items.find((d) => d.permanentAddress.toLowerCase() === mac.toLowerCase()) : undefined), [api, mac]);
+  // null: the device is not on the box; undefined: nothing to ask.
+  const load = useCallback(async () => (api && mac ? (await api.deviceOffloads()).items.find((d) => d.permanentAddress.toLowerCase() === mac.toLowerCase()) ?? null : undefined), [api, mac]);
   const live = useResource(load, onSessionLost);
   const choose = (key: OffloadKey, mode: string) => {
     const next = { ...value };
@@ -43,8 +44,9 @@ function OffloadSettings({ api, mac, value, error, onSessionLost, onChange }: {
   return (
     <Fieldset legend="Offloads">
       <Stack gap="xs">
-        <Text size="sm" c="dimmed">Default keeps what the driver chose at boot. Changes apply live and return to the defaults on rollback.</Text>
+        <Text size="sm" c="dimmed">Default leaves an offload as the driver set it. Changes apply live, and a rollback undoes them.</Text>
         {live.error && <Text size="sm" c="red" role="alert">Live offload state is unavailable: {live.error}</Text>}
+        {live.data === null && <Text size="sm" c="dimmed">The device is not present: its live state is unknown.</Text>}
         {error && <Text size="sm" c="red" role="alert">{error}</Text>}
         <SimpleGrid cols={{ base: 1, xs: 2 }} spacing="xs">
           {offloadOptions.map(({ key, label }) => {
