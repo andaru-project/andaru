@@ -35,6 +35,8 @@ type link struct {
 		Secret     string `json:"secret"`
 		Unresolved bool   `json:"unresolved"`
 	} `json:"password"`
+	// Offloads holds only the offloads the operator set; the device default stands for the rest.
+	Offloads map[string]bool `json:"offloads"`
 }
 type advertisement struct {
 	Mode              string `json:"mode"`

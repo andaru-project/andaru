@@ -214,6 +214,48 @@
                 "customer-bridge"
               ]
             },
+            "offloads": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "receiveChecksum": {
+                  "type": "boolean"
+                },
+                "transmitChecksum": {
+                  "type": "boolean"
+                },
+                "tcpSegmentation": {
+                  "type": "boolean"
+                },
+                "tcp6Segmentation": {
+                  "type": "boolean"
+                },
+                "genericSegmentation": {
+                  "type": "boolean"
+                },
+                "genericReceive": {
+                  "type": "boolean"
+                },
+                "genericReceiveHardware": {
+                  "type": "boolean"
+                },
+                "largeReceive": {
+                  "type": "boolean"
+                },
+                "vlanReceiveAcceleration": {
+                  "type": "boolean"
+                },
+                "vlanTransmitAcceleration": {
+                  "type": "boolean"
+                },
+                "vlanReceiveFilter": {
+                  "type": "boolean"
+                },
+                "ntupleFilter": {
+                  "type": "boolean"
+                }
+              }
+            },
             "kind": {
               "const": "ethernet"
             }

@@ -96,6 +96,10 @@ func (r Realizer) copyKeptFirst(ctx context.Context, id int) {
 
 // Boot puts the confirmed generation into /run before networkd starts. It renders nothing.
 func (r Realizer) Boot(ctx context.Context) (result error) {
+	// Before any .link file applies, what each Ethernet device runs is its driver's default.
+	if _, _, err := r.offloadDefaults(ctx); err != nil {
+		slog.Warn("record the device offloads", "error", err)
+	}
 	if _, statErr := os.Lstat(r.StateDir); os.IsNotExist(statErr) {
 		return r.disasterBoot(ctx)
 	}

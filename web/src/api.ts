@@ -11,6 +11,7 @@ import type {
   BackupStore,
   ConfigBatchOperation,
   ConfigChangesResult,
+  DeviceOffloads,
   Dhcp4Entry,
   Dhcp6Entry,
   DnsService,
@@ -433,6 +434,10 @@ export class ApiClient {
 
   lldpNeighbors() {
     return this.request<{ items: LldpNeighbor[] }>('/api/v1/status/lldp');
+  }
+
+  deviceOffloads() {
+    return this.request<{ items: DeviceOffloads[] }>('/api/v1/status/offloads');
   }
 
   preferences() {

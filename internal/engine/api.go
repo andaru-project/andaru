@@ -37,6 +37,10 @@ type lldpResponse struct {
 	Items []host.LLDPNeighbor `json:"items"`
 }
 
+type offloadsResponse struct {
+	Items []host.DeviceOffloads `json:"items"`
+}
+
 type errorDetail = config.FieldError
 
 type errorBody struct {
@@ -63,6 +67,9 @@ var leasesNow = time.Now
 
 // readLLDP reads live LLDP neighbors from systemd-networkd; tests swap it.
 var readLLDP = host.ReadLLDPNeighbors
+
+// readOffloads reads the live offloads of the Ethernet devices; tests swap it.
+var readOffloads = host.ReadOffloads
 
 // systemRoot is where the system description reads the kernel's files; tests point it elsewhere.
 var systemRoot = ""
@@ -131,7 +138,7 @@ func newHandlerWithAllServices(readLinks func(context.Context) ([]host.LinkStatu
 			return
 		}
 		switch r.URL.Path {
-		case "/api/v1/status/links", "/api/v1/status/prefixes", "/api/v1/status/leases", "/api/v1/status/lldp", "/api/v1/status/system", "/api/v1/status/usage", "/api/v1/status/traffic", "/api/v1/openapi.json":
+		case "/api/v1/status/links", "/api/v1/status/prefixes", "/api/v1/status/leases", "/api/v1/status/lldp", "/api/v1/status/offloads", "/api/v1/status/system", "/api/v1/status/usage", "/api/v1/status/traffic", "/api/v1/openapi.json":
 		default:
 			writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
 			return
@@ -181,6 +188,18 @@ func newHandlerWithAllServices(readLinks func(context.Context) ([]host.LinkStatu
 				neighbors = []host.LLDPNeighbor{}
 			}
 			writeJSON(w, r, http.StatusOK, lldpResponse{Items: neighbors})
+			return
+		}
+		if r.URL.Path == "/api/v1/status/offloads" {
+			devices, err := readOffloads(r.Context())
+			if err != nil {
+				if r.Context().Err() == nil {
+					slog.ErrorContext(r.Context(), "device offloads unavailable", "error", err)
+				}
+				writeError(w, r, http.StatusServiceUnavailable, "INVENTORY_UNAVAILABLE", "Device offloads are unavailable; inspect the engine journal.")
+				return
+			}
+			writeJSON(w, r, http.StatusOK, offloadsResponse{Items: devices})
 			return
 		}
 		if r.URL.Path == "/api/v1/status/traffic" {

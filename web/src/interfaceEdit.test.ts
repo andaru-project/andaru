@@ -662,3 +662,22 @@ it('serializes IPv6 router advertisements, preserves unchanged legacy RA, valida
   );
   expect(foldedDisabled).toEqual(new Map([['raMode', 'Mode refused.'], ['', 'Bad lifetime.']]));
 });
+
+it('saves only the offloads set on Ethernet and maps their refusal path', () => {
+  const draft = { ...draftOf(link.value, segment.value, undefined), offloads: { largeReceive: false, genericReceive: true } };
+  expect(interfaceOperations(draft, link, segment, undefined)).toEqual([
+    { op: 'replace', collection: 'links', id: 'lnk_a', expectedVersion: '4', value: { ...link.value, offloads: { largeReceive: false, genericReceive: true } } },
+  ]);
+  const saved: SavedObject<SavedLink> = { version: '5', value: { ...link.value, offloads: { largeReceive: false } } };
+  expect(interfaceOperations(draftOf(saved.value, undefined, undefined), saved, undefined, undefined)).toEqual([]);
+  // Every offload back to the default drops the field.
+  expect(interfaceOperations({ ...draftOf(saved.value, undefined, undefined), offloads: {} }, saved, undefined, undefined)).toEqual([
+    { op: 'replace', collection: 'links', id: 'lnk_a', expectedVersion: '5', value: { ...link.value } },
+  ]);
+  const vlanDraft = { ...draftOf(undefined, undefined, undefined, 'vlan'), name: 'Guest', parent: 'lnk_a', vlanId: '20', assigned: false, offloads: { largeReceive: false } };
+  expect(interfaceOperations(vlanDraft, undefined, undefined, undefined)).toEqual([
+    { op: 'create', collection: 'links', localId: 'link', value: { name: 'Guest', kind: 'vlan', mtu: 1500, enabled: true, parent: 'lnk_a', vlanId: 20 } },
+  ]);
+  const error = new ApiError(422, 'VALIDATION_FAILED', 'Refused.', [{ path: '/operations/0/value/offloads/largeReceive', message: 'Bad offload.' }]);
+  expect(interfaceErrors(error, [{ op: 'replace', collection: 'links', value: {} }])).toEqual(new Map([['offloads', 'Bad offload.']]));
+});

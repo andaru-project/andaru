@@ -1,11 +1,14 @@
 import { Alert, Button, Drawer, Fieldset, Group, List, MultiSelect, NativeSelect, PasswordInput, Select, SimpleGrid, Stack, Switch, Text, TextInput } from '@mantine/core';
-import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { ApiError, saveFailure } from '../api';
-import { bondModes, draftOf, foldHiddenRaErrors, hashPolicyModes, interfaceErrors, interfaceOperations, ipv4Modes, ipv6Modes, lacpRates, lldpEmitModes, lldpReceiveModes, memberLinkOptions, modeLabel, newZoneOption, raModeDescription, raModes, raPriorities, removeOperations, supportsRouterAdvertisements, transmitHashPolicies, validatePppoePassword, validatePppoeUsername, validatePref64, validateRaDnsServers, vlanParentOptions, words, type InterfaceDraft } from '../interfaceEdit';
-import type { BondMode, ConfigBatchOperation, LacpRate, LinkStatus, LldpEmitMode, LldpReceiveMode, RaMode, RaPriority, SavedLink, SavedObject, Segment, Snapshot, TransmitHashPolicy, VirtualLinkKind } from '../types';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { ApiError, saveFailure, type ApiClient } from '../api';
+import { bondModes, draftOf, foldHiddenRaErrors, hashPolicyModes, interfaceErrors, interfaceOperations, ipv4Modes, ipv6Modes, lacpRates, lldpEmitModes, lldpReceiveModes, memberLinkOptions, modeLabel, newZoneOption, offloadOptions, raModeDescription, raModes, raPriorities, removeOperations, supportsRouterAdvertisements, transmitHashPolicies, validatePppoePassword, validatePppoeUsername, validatePref64, validateRaDnsServers, vlanParentOptions, words, type InterfaceDraft } from '../interfaceEdit';
+import type { BondMode, ConfigBatchOperation, LacpRate, LinkStatus, LldpEmitMode, LldpReceiveMode, OffloadKey, RaMode, RaPriority, SavedLink, SavedObject, Segment, Snapshot, TransmitHashPolicy, VirtualLinkKind } from '../types';
+import { useResource } from '../useResource';
 import { ZonePill } from './ZoneBadge';
 
 interface InterfaceEditorProps {
+  // Reads the device's live offloads; without it the panel shows the saved settings only.
+  api?: ApiClient;
   link?: SavedObject<SavedLink>;
   segment?: SavedObject<Segment>;
   live?: LinkStatus;
@@ -16,6 +19,47 @@ interface InterfaceEditorProps {
   // A save failed after the panel was closed.
   onAbandoned(message: string): void;
   onSave(operations: ConfigBatchOperation[]): Promise<void>;
+}
+
+const offloadModes = [{ value: 'default', label: 'Default' }, { value: 'on', label: 'On' }, { value: 'off', label: 'Off' }];
+
+// Each managed offload: what the device runs now, and whether the saved link turns it on, off or leaves the default.
+function OffloadSettings({ api, mac, value, error, onSessionLost, onChange }: {
+  api?: ApiClient;
+  mac?: string;
+  value: Partial<Record<OffloadKey, boolean>>;
+  error?: string;
+  onSessionLost(): void;
+  onChange(next: Partial<Record<OffloadKey, boolean>>): void;
+}) {
+  const load = useCallback(async () => (api && mac ? (await api.deviceOffloads()).items.find((d) => d.permanentAddress.toLowerCase() === mac.toLowerCase()) : undefined), [api, mac]);
+  const live = useResource(load, onSessionLost);
+  const choose = (key: OffloadKey, mode: string) => {
+    const next = { ...value };
+    if (mode === 'default') delete next[key];
+    else next[key] = mode === 'on';
+    onChange(next);
+  };
+  return (
+    <Fieldset legend="Offloads">
+      <Stack gap="xs">
+        <Text size="sm" c="dimmed">Default keeps what the driver chose at boot. Changes apply live and return to the defaults on rollback.</Text>
+        {live.error && <Text size="sm" c="red" role="alert">Live offload state is unavailable: {live.error}</Text>}
+        {error && <Text size="sm" c="red" role="alert">{error}</Text>}
+        <SimpleGrid cols={{ base: 1, xs: 2 }} spacing="xs">
+          {offloadOptions.map(({ key, label }) => {
+            const state = live.data?.offloads[key];
+            const saved = value[key];
+            const now = state ? `${state.active ? 'On' : 'Off'} now${state.fixed ? ', fixed by the device' : ''}` : live.data ? 'Not reported by the device' : live.loading ? 'Reading…' : undefined;
+            return (
+              <NativeSelect key={key} label={label} description={now} data={offloadModes} value={saved === undefined ? 'default' : saved ? 'on' : 'off'}
+                disabled={Boolean(state?.fixed) && saved === undefined} onChange={(event) => choose(key, event.currentTarget.value)} />
+            );
+          })}
+        </SimpleGrid>
+      </Stack>
+    </Fieldset>
+  );
 }
 
 // Addresses, gateways and IDs read in a fixed-width face, as they do in the table, so 0 and O, 1 and l differ.
@@ -54,7 +98,7 @@ function removalBlockers(snapshot: Snapshot, link: SavedLink, segment: Segment |
 
 // The panel edits an interface as the configuration holds it: the link, and the segment that puts a network on it.
 // What it does not show (DHCPv6 client options) is kept as saved.
-export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClose, onSessionLost, onAbandoned, onSave }: InterfaceEditorProps) {
+export function InterfaceEditor({ api, link, segment, live, newKind, snapshot, onClose, onSessionLost, onAbandoned, onSave }: InterfaceEditorProps) {
   const [draft, setDraft] = useState<InterfaceDraft>(() => draftOf(link?.value, segment?.value, live, newKind));
   const [errors, setErrors] = useState(new Map<string, string>());
   const [failure, setFailure] = useState('');
@@ -355,6 +399,7 @@ export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClos
                   {managed && !draft.enabled && <Alert color="red" role="alert">Disabled, this interface stops carrying the connection you manage Andaru through, until the apply rolls back.</Alert>}
                 </Stack>
               </Fieldset>
+              {draft.kind === 'ethernet' && <OffloadSettings api={api} mac={mac} value={draft.offloads} error={errors.get('offloads')} onSessionLost={onSessionLost} onChange={(offloads) => set({ offloads })} />}
               <Switch label="Carries a segment" checked={draft.assigned} disabled={managed || (Boolean(master) && !segment)} onChange={(event) => set({ assigned: event.currentTarget.checked })}
                 description={assignedDescription} />
               {draft.kind === 'pppoe' && !draft.assigned && (

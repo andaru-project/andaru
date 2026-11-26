@@ -1,6 +1,6 @@
 import { fieldErrors } from './api';
 import { parseIpv6Groups, raModeFrom } from './dhcpEdit';
-import type { BondMode, ConfigBatchOperation, LacpRate, LinkStatus, LldpEmitMode, LldpReceiveMode, RaConfig, RaMode, RaPriority, SavedLink, SavedObject, Segment, Snapshot, TransmitHashPolicy, VirtualLinkKind } from './types';
+import type { BondMode, ConfigBatchOperation, LacpRate, LinkStatus, LldpEmitMode, LldpReceiveMode, OffloadKey, RaConfig, RaMode, RaPriority, SavedLink, SavedObject, Segment, Snapshot, TransmitHashPolicy, VirtualLinkKind } from './types';
 
 export { raModeFrom };
 
@@ -27,6 +27,8 @@ export interface InterfaceDraft {
   transmitHashPolicy: TransmitHashPolicy | '';
   lldp: LldpReceiveMode;
   emitLldp: LldpEmitMode;
+  // Only the offloads set: the rest keep the device default.
+  offloads: Partial<Record<OffloadKey, boolean>>;
   // Whether the interface carries a network of its own: a segment, with a zone and addressing.
   // A link without one still serves as a VLAN trunk's parent or a bridge member.
   assigned: boolean;
@@ -93,6 +95,21 @@ export const lldpEmitModes: Array<{ value: LldpEmitMode; label: string }> = [
   { value: 'nearest-bridge', label: 'Nearest bridge' },
   { value: 'non-tpmr-bridge', label: 'Non-TPMR bridge' },
   { value: 'customer-bridge', label: 'Customer bridge' },
+];
+
+export const offloadOptions: Array<{ key: OffloadKey; label: string }> = [
+  { key: 'receiveChecksum', label: 'Receive checksum' },
+  { key: 'transmitChecksum', label: 'Transmit checksum' },
+  { key: 'tcpSegmentation', label: 'TCP segmentation (TSO)' },
+  { key: 'tcp6Segmentation', label: 'TCP segmentation over IPv6' },
+  { key: 'genericSegmentation', label: 'Generic segmentation (GSO)' },
+  { key: 'genericReceive', label: 'Generic receive (GRO)' },
+  { key: 'genericReceiveHardware', label: 'Hardware generic receive (GRO-HW)' },
+  { key: 'largeReceive', label: 'Large receive (LRO)' },
+  { key: 'vlanReceiveAcceleration', label: 'VLAN tag stripping' },
+  { key: 'vlanTransmitAcceleration', label: 'VLAN tag insertion' },
+  { key: 'vlanReceiveFilter', label: 'VLAN filter' },
+  { key: 'ntupleFilter', label: 'N-tuple filters' },
 ];
 
 export const raModes: Array<{ value: RaMode; label: string }> = [
@@ -364,6 +381,7 @@ export function draftOf(link: SavedLink | undefined, segment: Segment | undefine
     transmitHashPolicy: link?.transmitHashPolicy ?? '',
     lldp: link?.lldp ?? 'off',
     emitLldp: link?.emitLldp ?? 'off',
+    offloads: { ...link?.offloads },
     assigned: link ? Boolean(segment) : kind !== 'bond',
     segmentName: segment?.name ?? link?.name ?? live?.name ?? '',
     zone: segment?.zone ?? '',
@@ -568,9 +586,12 @@ export function interfaceOperations(
   if (draft.kind === 'ethernet') {
     putOptionalDefault(linkValue, saved, 'lldp', draft.lldp, 'off');
     putOptionalDefault(linkValue, saved, 'emitLldp', draft.emitLldp, 'off');
+    if (Object.keys(draft.offloads).length > 0) linkValue.offloads = { ...draft.offloads };
+    else delete linkValue.offloads;
   } else {
     delete linkValue.lldp;
     delete linkValue.emitLldp;
+    delete linkValue.offloads;
   }
   if (!link) operations.push({ op: 'create', collection: 'links', localId: 'link', value: linkValue });
   else if (!same(linkValue, saved)) operations.push({ op: 'replace', collection: 'links', id: link.value.id, expectedVersion: link.version, value: linkValue });
@@ -634,6 +655,7 @@ const fieldOf: Record<string, Array<[RegExp, string]>> = {
     [/^\/transmitHashPolicy(\/|$)/, 'transmitHashPolicy'],
     [/^\/lldp(\/|$)/, 'lldp'],
     [/^\/emitLldp(\/|$)/, 'emitLldp'],
+    [/^\/offloads(\/|$)/, 'offloads'],
   ],
   segments: [
     [/^\/name/, 'segmentName'], [/^\/zone/, 'zone'],

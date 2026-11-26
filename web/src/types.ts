@@ -212,6 +212,21 @@ export type LacpRate = 'slow' | 'fast';
 export type TransmitHashPolicy = 'layer2' | 'layer2+3' | 'layer3+4' | 'encap2+3' | 'encap3+4';
 export type LldpReceiveMode = 'off' | 'receive' | 'routers-only';
 export type LldpEmitMode = 'off' | 'nearest-bridge' | 'non-tpmr-bridge' | 'customer-bridge';
+export type OffloadKey =
+  | 'receiveChecksum' | 'transmitChecksum' | 'tcpSegmentation' | 'tcp6Segmentation' | 'genericSegmentation' | 'genericReceive'
+  | 'genericReceiveHardware' | 'largeReceive' | 'vlanReceiveAcceleration' | 'vlanTransmitAcceleration' | 'vlanReceiveFilter' | 'ntupleFilter';
+
+// An offload as a device runs it now; fixed: the device cannot change it.
+export interface OffloadState {
+  active: boolean;
+  fixed: boolean;
+}
+
+export interface DeviceOffloads {
+  interface: string;
+  permanentAddress: string;
+  offloads: Partial<Record<OffloadKey, OffloadState>>;
+}
 export type RaMode = 'disabled' | 'router' | 'unmanaged' | 'managed' | 'assisted' | 'stateless';
 export type RaPriority = 'low' | 'medium' | 'high';
 
@@ -271,6 +286,7 @@ export interface SavedLink {
   transmitHashPolicy?: TransmitHashPolicy;
   lldp?: LldpReceiveMode;
   emitLldp?: LldpEmitMode;
+  offloads?: Partial<Record<OffloadKey, boolean>>;
 }
 
 export interface Segment {

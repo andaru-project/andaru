@@ -252,6 +252,49 @@
         }
       }
     },
+    "/api/v1/status/offloads": {
+      "get": {
+        "operationId": "readDeviceOffloads",
+        "summary": "Read the live offloads of the Ethernet devices",
+        "description": "Reads, with ethtool, the offloads Andaru manages on each Ethernet device: whether each runs, and whether the device can change it.",
+        "responses": {
+          "200": {
+            "description": "The device offloads",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OffloadsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/InventoryUnavailable"
+          }
+        }
+      },
+      "head": {
+        "operationId": "headDeviceOffloads",
+        "summary": "Check the device offload view without returning a body",
+        "responses": {
+          "200": {
+            "description": "The device offloads were read; no body"
+          },
+          "403": {
+            "description": "Peer denied; no body"
+          },
+          "503": {
+            "description": "The device offloads are unavailable; no body"
+          }
+        }
+      }
+    },
     "/api/v1/status/prefixes": {
       "get": {
         "operationId": "readDelegatedPrefixes",
@@ -7584,6 +7627,97 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/LLDPNeighbor"
+            }
+          }
+        }
+      },
+      "OffloadState": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "active",
+          "fixed"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "fixed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DeviceOffloads": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "interface",
+          "permanentAddress",
+          "offloads"
+        ],
+        "properties": {
+          "interface": {
+            "type": "string"
+          },
+          "permanentAddress": {
+            "type": "string"
+          },
+          "offloads": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "An offload the device does not report is absent.",
+            "properties": {
+              "receiveChecksum": {
+                "$ref": "#/components/schemas/OffloadState"
+              },
+              "transmitChecksum": {
+                "$ref": "#/components/schemas/OffloadState"
+              },
+              "tcpSegmentation": {
+                "$ref": "#/components/schemas/OffloadState"
+              },
+              "tcp6Segmentation": {
+                "$ref": "#/components/schemas/OffloadState"
+              },
+              "genericSegmentation": {
+                "$ref": "#/components/schemas/OffloadState"
+              },
+              "genericReceive": {
+                "$ref": "#/components/schemas/OffloadState"
+              },
+              "genericReceiveHardware": {
+                "$ref": "#/components/schemas/OffloadState"
+              },
+              "largeReceive": {
+                "$ref": "#/components/schemas/OffloadState"
+              },
+              "vlanReceiveAcceleration": {
+                "$ref": "#/components/schemas/OffloadState"
+              },
+              "vlanTransmitAcceleration": {
+                "$ref": "#/components/schemas/OffloadState"
+              },
+              "vlanReceiveFilter": {
+                "$ref": "#/components/schemas/OffloadState"
+              },
+              "ntupleFilter": {
+                "$ref": "#/components/schemas/OffloadState"
+              }
+            }
+          }
+        }
+      },
+      "OffloadsResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeviceOffloads"
             }
           }
         }

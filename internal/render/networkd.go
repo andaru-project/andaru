@@ -8,6 +8,8 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
+
+	"github.com/andaru-project/andaru/internal/host"
 )
 
 const networkDir = "/run/systemd/network/50-andaru-"
@@ -252,7 +254,13 @@ func (r *renderer) networkd(i int) {
 		// Never match or rename by kernel name: it follows the slot, not the card.
 		match = "PermanentMACAddress=" + l.PermanentMac
 		// The declared name survives a reboot once whatever named the card before (netplan) is gone.
-		r.file(networkDir+name+".link", "0644", ini(section{"Match", []string{match}}, section{"Link", []string{"Name=" + name}}), []string{self})
+		keys := []string{"Name=" + name}
+		for _, o := range host.Offloads {
+			if on, ok := l.Offloads[o.Key]; ok {
+				keys = append(keys, o.Networkd+"="+yesNo(on))
+			}
+		}
+		r.file(networkDir+name+".link", "0644", ini(section{"Match", []string{match}}, section{"Link", keys}), []string{self})
 	} else {
 		var kind []section
 		switch l.Kind {

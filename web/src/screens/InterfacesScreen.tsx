@@ -381,7 +381,7 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
         </Tabs.Panel>
       </Tabs>
       {editing && (
-        <InterfaceEditor key={editing.link ? `link:${editing.link.value.id}` : editing.live ? `live:${editing.live.name}` : `new:${editing.newKind}`} {...editing} onClose={() => setEditing(undefined)}
+        <InterfaceEditor key={editing.link ? `link:${editing.link.value.id}` : editing.live ? `live:${editing.live.name}` : `new:${editing.newKind}`} {...editing} api={api} onClose={() => setEditing(undefined)}
           onSessionLost={onSessionLost} onAbandoned={setSaveError} onSave={save} />
       )}
     </Stack>

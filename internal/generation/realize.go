@@ -235,6 +235,7 @@ func (r Realizer) settle(ctx context.Context, from, to []placed) error {
 	if _, err := r.Run(ctx, "/usr/bin/networkctl", "reload"); err != nil {
 		return err
 	}
+	r.applyOffloads(ctx, to)
 	for _, f := range from {
 		name, isDevice := strings.CutSuffix(filepath.Base(f.path), ".netdev")
 		name, own := strings.CutPrefix(name, "50-andaru-")
