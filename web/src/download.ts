@@ -1,20 +1,30 @@
 const downloadRevokeMilliseconds = 60_000;
 
+function sanitizeFilename(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed === '.' || trimmed === '..') return null;
+  if (trimmed.includes('/') || trimmed.includes('\\')) return null;
+  for (let i = 0; i < trimmed.length; i++) {
+    const code = trimmed.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) return null;
+  }
+  return trimmed;
+}
+
 export function filenameFromDisposition(header: string | null, fallback: string): string {
   if (!header) return fallback;
-  const star = /filename\*\s*=\s*UTF-8''([^;\r\n]+)/i.exec(header);
+  const star = /(?:^|;)\s*filename\*\s*=\s*UTF-8'[^']*'([^;\r\n]+)/i.exec(header);
   if (star?.[1]) {
     try {
-      const decoded = decodeURIComponent(star[1].trim());
-      if (decoded && !decoded.includes('/') && !decoded.includes('\\')) return decoded;
+      const safe = sanitizeFilename(decodeURIComponent(star[1].trim()));
+      if (safe) return safe;
     } catch {
       // Fall through to plain filename parameter.
     }
   }
-  const plain = /filename\s*=\s*(?:"([^"\r\n]+)"|([^;\s\r\n]+))/i.exec(header);
-  const candidate = (plain?.[1] ?? plain?.[2] ?? '').trim();
-  if (candidate && !candidate.includes('/') && !candidate.includes('\\')) return candidate;
-  return fallback;
+  const plain = /(?:^|;)\s*filename\s*=\s*(?:"([^"\r\n]*)"|([^;\s"\r\n]+))/i.exec(header);
+  const candidate = plain?.[1] ?? plain?.[2] ?? '';
+  return sanitizeFilename(candidate) ?? fallback;
 }
 
 export function triggerDownload(blob: Blob, filename: string): void {
@@ -25,7 +35,10 @@ export function triggerDownload(blob: Blob, filename: string): void {
   link.download = filename;
   link.hidden = true;
   document.body.appendChild(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL?.(url), downloadRevokeMilliseconds);
+  try {
+    link.click();
+  } finally {
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL?.(url), downloadRevokeMilliseconds);
+  }
 }

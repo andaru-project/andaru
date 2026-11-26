@@ -20,6 +20,7 @@ import {
 import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
 import { ApiClient, ApiError, reportError } from '../api';
+import { triggerDownload } from '../download';
 import {
   backupFilename,
   backupStoreOrder,
@@ -48,20 +49,6 @@ interface BackupScreenProps {
 }
 
 const mono = { input: 'mono-input' };
-const downloadRevokeMilliseconds = 60_000;
-
-function triggerDownload(blob: Blob, filename: string) {
-  if (typeof URL.createObjectURL !== 'function') return;
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  link.style.display = 'none';
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL?.(url), downloadRevokeMilliseconds);
-}
 
 function archiveFileError(file: File | null): string | undefined {
   if (!file) return 'Choose a backup archive file first.';

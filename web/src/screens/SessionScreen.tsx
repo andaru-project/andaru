@@ -1,5 +1,5 @@
 import { Alert, Badge, Button, Group, Modal, Paper, ScrollArea, Stack, Table, Text, Title } from '@mantine/core';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiClient, ApiError, reportError } from '../api';
 import { formatTimestamp, useTimeZone } from '../timezone';
 import type { Session, WebSessionItem } from '../types';
@@ -12,6 +12,10 @@ interface SessionScreenProps {
   onSessionLost(): void;
 }
 
+function shortSessionId(id: string): string {
+  return id.length > 8 ? `…${id.slice(-8)}` : id;
+}
+
 export function SessionScreen({ api, session, onSessionLost }: SessionScreenProps) {
   const timeZone = useTimeZone();
   const load = useCallback(async () => (await api.listSessions()).items, [api]);
@@ -19,32 +23,45 @@ export function SessionScreen({ api, session, onSessionLost }: SessionScreenProp
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [confirmCurrent, setConfirmCurrent] = useState<WebSessionItem | null>(null);
   const [error, setError] = useState('');
+  const revokingRef = useRef(false);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   async function revoke(item: WebSessionItem) {
-    if (revokingId) return;
+    if (revokingRef.current) return;
+    revokingRef.current = true;
     setRevokingId(item.id);
     setError('');
     try {
-      await api.revokeSession(item.id);
-      setConfirmCurrent(null);
+      try {
+        await api.revokeSession(item.id);
+      } catch (requestError) {
+        // 404 means the session is already gone; treat it the same as a successful revocation.
+        if (!(requestError instanceof ApiError && requestError.status === 404)) throw requestError;
+      }
       if (item.current) {
+        if (mountedRef.current) setConfirmCurrent(null);
         onSessionLost();
         return;
       }
+      if (!mountedRef.current) return;
+      setConfirmCurrent(null);
       await resource.reload();
     } catch (requestError) {
-      if (requestError instanceof ApiError && requestError.status === 404) {
-        setConfirmCurrent(null);
-        if (item.current) {
-          onSessionLost();
-          return;
-        }
-        await resource.reload();
+      if (requestError instanceof ApiError && requestError.status === 401) {
+        onSessionLost();
         return;
       }
+      if (!mountedRef.current) return;
+      // Close the confirmation modal so the background error alert is visible and focused.
+      setConfirmCurrent(null);
       reportError(requestError, onSessionLost, setError);
     } finally {
-      setRevokingId(null);
+      revokingRef.current = false;
+      if (mountedRef.current) setRevokingId(null);
     }
   }
 
@@ -112,7 +129,7 @@ export function SessionScreen({ api, session, onSessionLost }: SessionScreenProp
                             ) : (
                               <Text size="sm">Session {idx + 1}</Text>
                             )}
-                            <Text size="xs" c="dimmed" ff="monospace">…{item.id.slice(-8)}</Text>
+                            <Text size="xs" c="dimmed" ff="monospace">{shortSessionId(item.id)}</Text>
                           </Group>
                         </Table.Td>
                         <Table.Td data-label="Created" className="tabular">{formatTimestamp(item.createdAt, timeZone)}</Table.Td>
@@ -146,11 +163,13 @@ export function SessionScreen({ api, session, onSessionLost }: SessionScreenProp
 
       <Modal
         opened={confirmCurrent !== null}
-        onClose={() => { if (!revokingId) setConfirmCurrent(null); }}
+        onClose={() => { if (!revokingRef.current) setConfirmCurrent(null); }}
+        closeOnClickOutside={revokingId === null}
+        closeOnEscape={revokingId === null}
         title="Revoke current session"
         centered
         lockScroll={false}
-        closeButtonProps={{ 'aria-label': 'Close' }}
+        closeButtonProps={{ 'aria-label': 'Close', disabled: revokingId !== null }}
       >
         <Stack>
           <Text size="sm">Revoking your current session signs you out of this browser immediately.</Text>

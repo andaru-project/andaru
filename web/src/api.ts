@@ -698,16 +698,21 @@ export class ApiClient {
   private async requestBlob(
     path: string,
     init: RequestInit,
-    write: boolean,
+    csrf: boolean,
     accept: string,
   ): Promise<{ blob: Blob; headers: Headers }> {
-    const { response, cleanup } = await this.send(path, init, write, accept);
+    const { response, carried, callerSignal, signal, cleanup } = await this.send(path, init, csrf, accept);
     try {
       if (!response.ok) {
         let body: unknown;
         try {
           body = await response.json();
-        } catch {
+        } catch (err) {
+          if (callerSignal?.aborted) {
+            input ||= carried;
+            throw err;
+          }
+          if (signal?.aborted) throw this.disconnectedError();
           body = undefined;
         }
         throw this.toApiError(response, body);
@@ -715,7 +720,11 @@ export class ApiClient {
       let blob: Blob;
       try {
         blob = await response.blob();
-      } catch {
+      } catch (err) {
+        if (callerSignal?.aborted) {
+          input ||= carried;
+          throw err;
+        }
         throw this.disconnectedError();
       }
       return { blob, headers: response.headers };
