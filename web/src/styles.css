@@ -704,3 +704,78 @@ path.traffic-sent {
   border-radius: var(--mantine-radius-default);
   padding: var(--mantine-spacing-xs);
 }
+
+.traffic-flow-diagram {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: var(--mantine-spacing-xs);
+}
+
+.traffic-flow-node {
+  flex: 1 1 12.5rem;
+  min-width: 12rem;
+  border-left-width: 4px;
+}
+
+.traffic-flow-node--pass {
+  border-left-color: var(--mantine-color-blue-filled);
+}
+
+.traffic-flow-node--transform {
+  border-left-color: var(--mantine-color-violet-filled);
+}
+
+.traffic-flow-node--accept {
+  border-left-color: var(--mantine-color-green-filled);
+}
+
+.traffic-flow-node--drop {
+  border-left-color: var(--mantine-color-red-filled);
+}
+
+.traffic-flow-node--reject {
+  border-left-color: var(--mantine-color-orange-filled);
+}
+
+.traffic-flow-node--warn {
+  border-left-color: var(--mantine-color-yellow-filled);
+}
+
+.traffic-flow-node--info {
+  border-left-color: var(--mantine-color-gray-5);
+}
+
+.traffic-flow-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--mantine-color-dimmed);
+  font-weight: 700;
+  padding: 0 2px;
+  user-select: none;
+}
+
+.traffic-flow-detail {
+  overflow-wrap: anywhere;
+}
+
+.traffic-flow-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: var(--mantine-font-size-sm);
+}
+
+@media (max-width: 600px) {
+  .traffic-flow-diagram {
+    flex-direction: column;
+  }
+
+  .traffic-flow-arrow {
+    transform: rotate(90deg);
+    padding: 0;
+  }
+}
