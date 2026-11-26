@@ -252,11 +252,8 @@ func prepareRestoration(current *savedState, decoded decodedBackup, next Version
 		}
 	}
 	unresolved, blocked := map[string]bool{}, map[string]bool{}
-	for i := range candidate.Links {
-		reference := candidate.Links[i].Password
-		if reference == nil {
-			continue
-		}
+	for _, h := range heldSecrets(&candidate) {
+		reference := h.ref
 		_, exists := secrets.Scopes["core"][reference.Secret]
 		if decoded.configuration != nil && !decoded.ownSecrets && (decoded.secrets == nil || !exists) {
 			reference.Unresolved = true
@@ -337,11 +334,10 @@ func prepareRestoration(current *savedState, decoded decodedBackup, next Version
 		}
 	}
 	if decoded.secrets != nil {
-		for _, l := range candidate.Links {
-			if l.Password != nil && !l.Password.Unresolved {
-				key := objectKey{"links", l.ID}
-				if _, changed := changes[key]; !changed {
-					changes[key] = objectChange{Collection: key.Collection, ID: key.ID}
+		for _, h := range heldSecrets(&candidate) {
+			if !h.ref.Unresolved {
+				if _, changed := changes[h.key]; !changed {
+					changes[h.key] = objectChange{Collection: h.key.Collection, ID: h.key.ID}
 				}
 			}
 		}

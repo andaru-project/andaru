@@ -111,9 +111,9 @@ func VerifyRecoveryState(ctx context.Context, stateDir string) error {
 	if err != nil || !bytes.Equal(normalized, secretBody) {
 		return errors.New("recovery secret document is not canonical")
 	}
-	for _, link := range declaration.Links {
-		if link.Password != nil && !link.Password.Unresolved {
-			if _, ok := secrets.Scopes["core"][link.Password.Secret]; !ok {
+	for _, h := range heldSecrets(&declaration) {
+		if !h.ref.Unresolved {
+			if _, ok := secrets.Scopes["core"][h.ref.Secret]; !ok {
 				return errors.New("recovery configuration references a missing secret")
 			}
 		}

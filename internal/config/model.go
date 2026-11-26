@@ -357,6 +357,30 @@ type declaration struct {
 	DNS           *dnsService  `json:"dns,omitempty"`
 	// VirtualAddresses are held by the firewall on no LAN, for its own services.
 	VirtualAddresses []virtualAddress `json:"virtualAddresses,omitzero"`
+	Notifications    notifications    `json:"notifications,omitzero"`
+}
+
+type notifications struct {
+	Channels []channel `json:"channels,omitempty"`
+}
+
+// channel is where notifications are sent. Enabled and the filter's minimum severity get their defaults on save.
+type channel struct {
+	identity
+	Enabled *bool         `json:"enabled,omitempty"`
+	Kind    string        `json:"kind"`
+	Filter  channelFilter `json:"filter"`
+	Webhook *webhook      `json:"webhook,omitempty"`
+}
+type channelFilter struct {
+	MinSeverity string   `json:"minSeverity,omitempty"`
+	Sources     []string `json:"sources,omitempty"`
+}
+
+// webhook's URL is a secret, since webhook URLs carry tokens; Authorization is the Authorization header's value.
+type webhook struct {
+	URL           secretReference  `json:"url"`
+	Authorization *secretReference `json:"authorization,omitempty"`
 }
 
 // virtualAddress is an address the firewall holds on its dummy interface, answered on every segment the filter lets reach it.

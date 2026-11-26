@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -102,6 +103,54 @@ func checkResolvedReferences(d *declaration) error {
 	}
 	if len(details) != 0 {
 		return &Fault{Code: "VALIDATION_FAILED", Details: details}
+	}
+	return nil
+}
+
+// heldSecret is a secret reference of a declaration, with the object that holds it and its path.
+type heldSecret struct {
+	key  objectKey
+	path string
+	ref  *secretReference
+}
+
+// heldSecrets are every secret reference of d.
+func heldSecrets(d *declaration) []heldSecret {
+	var out []heldSecret
+	for i := range d.Links {
+		if l := &d.Links[i]; l.Password != nil {
+			out = append(out, heldSecret{objectKey{"links", l.ID}, fmt.Sprintf("/links/%d/password", i), l.Password})
+		}
+	}
+	for i := range d.Notifications.Channels {
+		c := &d.Notifications.Channels[i]
+		if c.Webhook == nil {
+			continue
+		}
+		key, p := objectKey{"notifications.channels", c.ID}, fmt.Sprintf("/notifications/channels/%d/webhook", i)
+		out = append(out, heldSecret{key, p + "/url", &c.Webhook.URL})
+		if c.Webhook.Authorization != nil {
+			out = append(out, heldSecret{key, p + "/authorization", c.Webhook.Authorization})
+		}
+	}
+	return out
+}
+
+// secretField is a place in a written object that may hold a secret reference: parent[name], at path below the object.
+type secretField struct {
+	path   string
+	parent map[string]any
+	name   string
+}
+
+func secretFields(collection string, value map[string]any) []secretField {
+	switch collection {
+	case "links":
+		return []secretField{{"/password", value, "password"}}
+	case "notifications.channels":
+		if w, ok := value["webhook"].(map[string]any); ok {
+			return []secretField{{"/webhook/url", w, "url"}, {"/webhook/authorization", w, "authorization"}}
+		}
 	}
 	return nil
 }

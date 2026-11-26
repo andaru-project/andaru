@@ -133,6 +133,7 @@ func TestConfigurationHTTPContract(t *testing.T) {
 		"/api/v1/config/rules": {"get", "head", "post"}, "/api/v1/config/rules/{id}": {"get", "head", "put", "delete"},
 		"/api/v1/config/aliases/search": {"get", "head"},
 		"/api/v1/config/aliases/{kind}": {"get", "head", "post"}, "/api/v1/config/aliases/{kind}/{id}": {"get", "head", "put", "delete"},
+		"/api/v1/config/notifications/channels": {"get", "head", "post"}, "/api/v1/config/notifications/channels/{id}": {"get", "head", "put", "delete"},
 		"/api/v1/config/rules/order": {"put"}, "/api/v1/config/nat/{list}": {"get", "head", "post"},
 		"/api/v1/config/nat/{list}/{id}": {"get", "head", "put", "delete"}, "/api/v1/config/nat/{list}/order": {"put"},
 		"/api/v1/config/management": {"get", "head", "put", "delete"}, "/api/v1/config/nat/outbound": {"get", "head", "put", "delete"},
@@ -876,6 +877,37 @@ func TestVirtualAddressRoutes(t *testing.T) {
 		t.Fatal(e)
 	}
 	for view, path := range map[string]string{"snapshotView": "/api/v1/config", "collectionView": "/api/v1/config/virtualAddresses"} {
+		sch, e := compiler.Compile("https://andaru.invalid/api/v1/schema#/$defs/" + view)
+		if e != nil {
+			t.Fatal(e)
+		}
+		served, _ := jsonschema.UnmarshalJSON(bytes.NewReader(configCall(h, "GET", path, "", "").Body.Bytes()))
+		if e = sch.Validate(served); e != nil {
+			t.Fatalf("%s violates %s: %v", path, view, e)
+		}
+	}
+}
+
+func TestNotificationChannelRoutes(t *testing.T) {
+	h, _ := configurationFixture(t)
+	created := configCall(h, "POST", "/api/v1/config/notifications/channels", `{"name":"ops","kind":"webhook","webhook":{"url":{"secret":"OPS_URL","set":"https://hooks.example/x","expectedVersion":"0"}}}`, "")
+	if created.Code != 201 || !strings.HasPrefix(valueID(t, apiObject(t, created)), "ntf_") {
+		t.Fatalf("create %d %s", created.Code, created.Body)
+	}
+	if w := configCall(h, "GET", created.Header().Get("Location"), "", ""); w.Code != 200 {
+		t.Fatalf("Location %d", w.Code)
+	}
+	rawSchema := configCall(h, "GET", "/api/v1/schema", "", "")
+	instance, e := jsonschema.UnmarshalJSON(bytes.NewReader(rawSchema.Body.Bytes()))
+	if e != nil {
+		t.Fatal(e)
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.UseLoader(jsonschema.SchemeURLLoader{})
+	if e = compiler.AddResource("https://andaru.invalid/api/v1/schema", instance); e != nil {
+		t.Fatal(e)
+	}
+	for view, path := range map[string]string{"snapshotView": "/api/v1/config", "collectionView": "/api/v1/config/notifications/channels"} {
 		sch, e := compiler.Compile("https://andaru.invalid/api/v1/schema#/$defs/" + view)
 		if e != nil {
 			t.Fatal(e)

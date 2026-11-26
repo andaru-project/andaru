@@ -128,7 +128,8 @@ Commands:
   changes  Save the batch of changes on stdin, all or nothing
 
 Collections: links, segments, zones, aliases/addresses, aliases/ports, dhcp,
-  dhcp6, virtualAddresses, rules, nat/port-forwards, nat/one-to-one
+  dhcp6, virtualAddresses, notifications/channels, rules, nat/port-forwards,
+  nat/one-to-one
 Singletons: management, nat/outbound, dns
 Lists: rules, nat/port-forwards, nat/one-to-one
 

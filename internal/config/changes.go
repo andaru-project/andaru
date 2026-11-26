@@ -158,7 +158,7 @@ func initialState() savedState {
 var (
 	orderedCollections = []string{"rules", "nat.portForwards", "nat.oneToOne"}
 	singletons         = []string{"management", "nat.outbound", "dns"}
-	collections        = append([]string{"links", "segments", "zones", "roles", "aliases.addresses", "aliases.ports", "dhcp", "dhcp6", "virtualAddresses"}, append(slices.Clone(orderedCollections), singletons...)...)
+	collections        = append([]string{"links", "segments", "zones", "roles", "aliases.addresses", "aliases.ports", "dhcp", "dhcp6", "virtualAddresses", "notifications.channels"}, append(slices.Clone(orderedCollections), singletons...)...)
 )
 
 func validCollection(s string) bool { return slices.Contains(collections, s) }
@@ -180,7 +180,7 @@ func newID(collection string) (string, error) {
 	}
 	b[6] = (b[6] & 15) | 64
 	b[8] = (b[8] & 63) | 128
-	prefix := map[string]string{"links": "lnk", "segments": "seg", "zones": "zon", "roles": "rol", "aliases.addresses": "adr", "aliases.ports": "svc", "rules": "rul", "dhcp": "dhp", "dhcp6": "dh6", "virtualAddresses": "vip", "nat.portForwards": "pfw", "nat.oneToOne": "oto"}[collection]
+	prefix := map[string]string{"links": "lnk", "segments": "seg", "zones": "zon", "roles": "rol", "aliases.addresses": "adr", "aliases.ports": "svc", "rules": "rul", "dhcp": "dhp", "dhcp6": "dh6", "virtualAddresses": "vip", "notifications.channels": "ntf", "nat.portForwards": "pfw", "nat.oneToOne": "oto"}[collection]
 	return fmt.Sprintf("%s_%x-%x-%x-%x-%x", prefix, b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
 func rank(code string) int {
@@ -241,6 +241,9 @@ func objects(d *declaration) map[objectKey]any {
 	}
 	for i := range d.VirtualAddresses {
 		m[objectKey{"virtualAddresses", d.VirtualAddresses[i].ID}] = &d.VirtualAddresses[i]
+	}
+	for i := range d.Notifications.Channels {
+		m[objectKey{"notifications.channels", d.Notifications.Channels[i].ID}] = &d.Notifications.Channels[i]
 	}
 	if d.DNS != nil {
 		m[listKey("dns")] = d.DNS
@@ -381,9 +384,11 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 			continue
 		}
 		values[i] = value
-		if pw, ok := value["password"].(map[string]any); ok {
-			if _, set := pw["set"]; set {
-				pick(secretPrecondition(current.Secrets, pw, input.path(i, "/password/expectedVersion", true)), i)
+		for _, f := range secretFields(op.Collection, value) {
+			if pw, ok := f.parent[f.name].(map[string]any); ok {
+				if _, set := pw["set"]; set {
+					pick(secretPrecondition(current.Secrets, pw, input.path(i, f.path+"/expectedVersion", true)), i)
+				}
 			}
 		}
 	}
@@ -448,7 +453,7 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 	deleted := map[objectKey]bool{}
 	var createKeys []objectKey
 	changedSecrets := map[string]bool{}
-	setters := map[string]objectKey{}
+	setters := map[string]heldSecret{}
 	for i, op := range input.Operations {
 		key := keys[i]
 		origins[key] = i
@@ -461,14 +466,14 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 		}
 		value := values[i]
 		resolveReferences(value, op.Collection, labels)
-		if op.Collection == "links" {
-			if pw, ok := value["password"].(map[string]any); ok {
+		for _, f := range secretFields(op.Collection, value) {
+			if pw, ok := f.parent[f.name].(map[string]any); ok {
 				name, _ := pw["secret"].(string)
 				if set, ok := pw["set"].(string); ok {
 					if _, dup := setters[name]; dup {
-						return empty, fault("VALIDATION_FAILED", input.path(i, "/password", true), "Duplicate secret set command.")
+						return empty, fault("VALIDATION_FAILED", input.path(i, f.path, true), "Duplicate secret set command.")
 					}
-					setters[name] = key
+					setters[name] = heldSecret{key: key, path: f.path}
 					old, exists := current.Secrets.Scopes["core"][name]
 					if !exists || old.Value != set {
 						current.Secrets.Scopes["core"][name] = secretEntry{Kind: "password", Value: set, UpdatedAt: now.UTC().Format(time.RFC3339Nano), Version: next}
@@ -479,8 +484,8 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 				if pw["unresolved"] == true {
 					reference["unresolved"] = true
 				}
-				value["password"] = reference
-			} else if value["kind"] == "pppoe" && op.Op == "replace" {
+				f.parent[f.name] = reference
+			} else if op.Collection == "links" && value["kind"] == "pppoe" && op.Op == "replace" {
 				if old, ok := before[key].(*link); ok && old.Password != nil {
 					value["password"] = old.Password
 				}
@@ -515,6 +520,9 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 		return empty, e
 	}
 	if d.VirtualAddresses, e = rewrite(d.VirtualAddresses, "virtualAddresses", writes, deleted, createKeys, func(x virtualAddress) string { return x.ID }); e != nil {
+		return empty, e
+	}
+	if d.Notifications.Channels, e = rewrite(d.Notifications.Channels, "notifications.channels", writes, deleted, createKeys, func(x channel) string { return x.ID }); e != nil {
 		return empty, e
 	}
 	if d.DHCP6, e = rewrite(d.DHCP6, "dhcp6", writes, deleted, createKeys, func(x dhcp6Entry) string { return x.ID }); e != nil {
@@ -590,12 +598,18 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 		return empty, boundaryFault(e)
 	}
 	d = validated
-	for i, l := range d.Links {
-		if l.Password != nil && !l.Password.Unresolved {
-			if _, ok := current.Secrets.Scopes["core"][l.Password.Secret]; !ok {
-				path := fmt.Sprintf("/links/%d/password", i)
-				return empty, rebaseValidation(validationError{{path, "Named secret does not exist."}}, &d, origins, input)
+	for _, h := range heldSecrets(&d) {
+		if !h.ref.Unresolved {
+			if _, ok := current.Secrets.Scopes["core"][h.ref.Secret]; !ok {
+				return empty, rebaseValidation(validationError{{h.path, "Named secret does not exist."}}, &d, origins, input)
 			}
+		}
+	}
+	// A webhook URL is checked where its value is known: here, whichever operation set it.
+	for i, c := range d.Notifications.Channels {
+		if c.Webhook != nil && !c.Webhook.URL.Unresolved && !webhookURL(current.Secrets.Scopes["core"][c.Webhook.URL.Secret].Value) {
+			path := fmt.Sprintf("/notifications/channels/%d/webhook/url", i)
+			return empty, rebaseValidation(validationError{{path, "Expected the secret to hold an http or https URL with a host."}}, &d, origins, input)
 		}
 	}
 	if e = validateSecrets(current.Secrets, next); e != nil {
@@ -654,12 +668,11 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 			changes[listKey(op.Collection)] = objectChange{Collection: op.Collection, ID: op.Collection}
 		}
 	}
-	for _, l := range d.Links {
-		if l.Password != nil && changedSecrets[l.Password.Secret] {
-			key := objectKey{"links", l.ID}
-			resultSet[key] = true
-			if _, exists := changes[key]; !exists {
-				changes[key] = objectChange{Collection: "links", ID: l.ID}
+	for _, h := range heldSecrets(&d) {
+		if changedSecrets[h.ref.Secret] {
+			resultSet[h.key] = true
+			if _, exists := changes[h.key]; !exists {
+				changes[h.key] = objectChange{Collection: h.key.Collection, ID: h.key.ID}
 			}
 		}
 	}
@@ -818,11 +831,11 @@ func owner(d *declaration, path string) (objectKey, string) {
 			return objectKey{}, ""
 		}
 		p = append([]string{"nat." + p[1]}, p[2:]...)
-	case "aliases":
+	case "aliases", "notifications":
 		if len(p) < 2 {
 			return objectKey{}, ""
 		}
-		p = append([]string{"aliases." + p[1]}, p[2:]...)
+		p = append([]string{p[0] + "." + p[1]}, p[2:]...)
 	}
 	if len(p) < 2 {
 		return objectKey{}, ""
@@ -851,6 +864,8 @@ func owner(d *declaration, path string) (objectKey, string) {
 		id = d.DHCP[n].ID
 	case col == "virtualAddresses" && n < len(d.VirtualAddresses):
 		id = d.VirtualAddresses[n].ID
+	case col == "notifications.channels" && n < len(d.Notifications.Channels):
+		id = d.Notifications.Channels[n].ID
 	case col == "dhcp6" && n < len(d.DHCP6):
 		id = d.DHCP6[n].ID
 	case col == "nat.portForwards" && n < len(d.NAT.PortForwards):
@@ -928,18 +943,18 @@ func rebaseValidation(details validationError, d *declaration, origins map[objec
 }
 
 // rebaseSecrets blames the earliest batch operation whose own secret entry fails validation.
-func rebaseSecrets(failure validationError, doc secretDocument, head Version, setters map[string]objectKey, origins map[objectKey]int, input Changes) *Fault {
-	best := -1
-	for name, key := range setters {
+func rebaseSecrets(failure validationError, doc secretDocument, head Version, setters map[string]heldSecret, origins map[objectKey]int, input Changes) *Fault {
+	best, path := -1, "/password"
+	for name, setter := range setters {
 		one := secretDocument{SchemaVersion: doc.SchemaVersion, Scopes: map[string]map[string]secretEntry{"core": {name: doc.Scopes["core"][name]}}}
-		if validateSecrets(one, head) != nil && (best < 0 || origins[key] < best) {
-			best = origins[key]
+		if validateSecrets(one, head) != nil && (best < 0 || origins[setter.key] < best) {
+			best, path = origins[setter.key], setter.path
 		}
 	}
 	if best < 0 {
 		best = 0
 	}
-	return fault("VALIDATION_FAILED", input.path(best, "/password", true), failure[0].Message)
+	return fault("VALIDATION_FAILED", input.path(best, path, true), failure[0].Message)
 }
 
 // rewriteOrdered applies a batch's writes to one ordered list, then its placements (before) and reorders.

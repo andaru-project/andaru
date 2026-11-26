@@ -185,6 +185,20 @@ live-generation protections. Failed publication can retain a root-only orphan
 secret document. `secure_delete` is enabled but does not erase retained history
 or promise forensic removal from WALs, snapshots, SSDs or backups.
 
+### Notification channels
+
+Where notifications are sent, and which: the collection `notifications.channels` (`andaru ctl config … notifications/channels`, `/api/v1/config/notifications/channels`). Design: [Notifications](../superpowers/specs/2026-11-23-notifications-design.md) ([#175](https://github.com/andaru-project/andaru/issues/175)). Channels take effect when saved, without an apply. This release saves them; sending comes later.
+
+```sh
+printf '%s\n' '{"name":"ops","kind":"webhook","filter":{"minSeverity":"warning","sources":["apply"]},"webhook":{"url":{"secret":"OPS_WEBHOOK_URL","set":"https://hooks.example/T0K3N","expectedVersion":"0"},"authorization":{"secret":"OPS_WEBHOOK_AUTH","set":"Bearer TOKEN","expectedVersion":"0"}}}' \
+  | sudo andaru ctl config create notifications/channels
+```
+
+- **`kind`:** `webhook` only, for now.
+- **`enabled`:** defaults to `true` when omitted.
+- **`filter`:** `minSeverity` is `info` (the default), `warning` or `critical`; `sources` names the sources to send, and an empty or absent list means all of them.
+- **`webhook`:** `url` is a named secret, since webhook URLs carry tokens; its value must be an `http` or `https` URL with a host, which is checked on every save. `authorization`, optional, is a named secret sent as the `Authorization` header's value. Both are written and read like a PPPoE password; replacing a channel without `authorization` removes its reference.
+
 ### Settings across Andaru versions
 
 On start, the engine saves a head of an older schema as a new version of the current one, and a head of a newer schema (after a rollback) opens on a copy of the newest version this Andaru reads ([settings design](../superpowers/specs/2026-11-22-settings-across-andaru-versions-design.md)). A breaking change may come with decisions; while the head needs any, the settings are held ([safe mode](../superpowers/specs/2026-11-22-settings-safe-mode-design.md)):

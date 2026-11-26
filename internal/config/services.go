@@ -201,6 +201,7 @@ func validateServices(d *declaration) []FieldError {
 
 	validateDHCP6(d, bad)
 	validateVirtual(d, bad)
+	validateChannels(d, bad)
 
 	s := d.DNS
 	if s == nil {

@@ -171,9 +171,9 @@ func (s *Store) loadState(ctx context.Context, conn *sql.Conn, id Version, reque
 		return state, info, diagnostic("load-secret-canonical", e)
 	}
 	state.secretBody = sb
-	for _, l := range d.Links {
-		if l.Password != nil && !l.Password.Unresolved {
-			if _, ok := state.Secrets.Scopes["core"][l.Password.Secret]; !ok {
+	for _, h := range heldSecrets(&d) {
+		if !h.ref.Unresolved {
+			if _, ok := state.Secrets.Scopes["core"][h.ref.Secret]; !ok {
 				return state, info, diagnostic("load-secret-missing-ref", nil)
 			}
 		}
