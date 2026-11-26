@@ -456,7 +456,7 @@ describe('NotificationChannelsPanel', () => {
     await waitFor(() => expect(onSessionLost).toHaveBeenCalledTimes(1));
   });
 
-  it('creates ntfy and Telegram channels and renders reverse-proxy targets', async () => {
+  it('creates an ntfy channel and renders reverse-proxy targets', async () => {
     const user = userEvent.setup();
     const postPayloads: unknown[] = [];
 
@@ -482,21 +482,23 @@ describe('NotificationChannelsPanel', () => {
       },
     });
 
+    const pasteInto = async (el: HTMLElement, text: string) => { await user.click(el); await user.paste(text); };
+
     render(<NotificationChannelsPanel api={new ApiClient('csrf')} canManage onSessionLost={vi.fn()} />);
     expect(await screen.findByText('https://ntfy.example/proxy/andaru-alerts')).toBeInTheDocument();
     expect(screen.getByText('None')).toBeInTheDocument();
 
     // Create an ntfy channel with a reverse-proxy path and optional token.
     await user.click(screen.getByRole('button', { name: 'Add channel' }));
-    let dialog = await screen.findByRole('dialog', { name: 'Add notification channel' });
+    const dialog = await screen.findByRole('dialog', { name: 'Add notification channel' });
     await user.click(within(dialog).getByLabelText(/^Channel kind/, { selector: 'input' }));
     await user.click(await screen.findByRole('option', { name: 'ntfy' }));
-    await user.type(within(dialog).getByLabelText(/^Name/, { selector: 'input' }), 'ops-ntfy-2');
+    await pasteInto(within(dialog).getByLabelText(/^Name/, { selector: 'input' }), 'ops-ntfy-2');
     const serverInput = within(dialog).getByLabelText(/^Server URL/, { selector: 'input' });
     await user.clear(serverInput);
-    await user.type(serverInput, 'https://ntfy.example/subpath');
-    await user.type(within(dialog).getByLabelText(/^Topic/, { selector: 'input' }), 'alerts_1');
-    await user.type(within(dialog).getByLabelText(/^Access token/, { selector: 'input' }), 'tk_secret');
+    await pasteInto(serverInput, 'https://ntfy.example/subpath');
+    await pasteInto(within(dialog).getByLabelText(/^Topic/, { selector: 'input' }), 'alerts_1');
+    await pasteInto(within(dialog).getByLabelText(/^Access token/, { selector: 'input' }), 'tk_secret');
     await user.click(within(dialog).getByRole('button', { name: 'Add channel' }));
     await waitFor(() => expect(postPayloads).toHaveLength(1));
     expect(postPayloads[0]).toEqual({
@@ -510,18 +512,34 @@ describe('NotificationChannelsPanel', () => {
         token: { secret: 'NOTIFY_OPS_NTFY_2_TOKEN', set: 'tk_secret', expectedVersion: '0' },
       },
     });
+  });
 
-    // Create a Telegram channel via the kind selector.
-    await user.click(screen.getByRole('button', { name: 'Add channel' }));
-    dialog = await screen.findByRole('dialog', { name: 'Add notification channel' });
+  it('creates a Telegram channel via the kind selector', async () => {
+    const user = userEvent.setup();
+    let postPayload: unknown;
+
+    fetchRoutes({
+      'GET /api/v1/config/notifications/channels': () => jsonResponse(200, { state: 'saved', savedVersion: '10', items: [] }),
+      'GET /api/v1/config': () => jsonResponse(200, { state: 'saved', savedVersion: '10', value: { links: [], segments: [], zones: [] } }),
+      'POST /api/v1/config/notifications/channels': (init) => {
+        postPayload = JSON.parse(String(init?.body ?? '{}'));
+        return jsonResponse(201, { state: 'saved', savedVersion: '11', version: '11', value: { id: 'ntf_tg', ...(postPayload as object) } });
+      },
+    });
+
+    const pasteInto = async (el: HTMLElement, text: string) => { await user.click(el); await user.paste(text); };
+
+    render(<NotificationChannelsPanel api={new ApiClient('csrf')} canManage onSessionLost={vi.fn()} />);
+    await user.click(await screen.findByRole('button', { name: 'Add channel' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add notification channel' });
     await user.click(within(dialog).getByLabelText(/^Channel kind/, { selector: 'input' }));
     await user.click(await screen.findByRole('option', { name: 'Telegram' }));
-    await user.type(within(dialog).getByLabelText(/^Name/, { selector: 'input' }), 'ops-tg');
-    await user.type(within(dialog).getByLabelText(/^Bot token/, { selector: 'input' }), '123456:BOT_SECRET');
-    await user.type(within(dialog).getByLabelText(/^Chat ID/, { selector: 'input' }), '-1001234567890');
+    await pasteInto(within(dialog).getByLabelText(/^Name/, { selector: 'input' }), 'ops-tg');
+    await pasteInto(within(dialog).getByLabelText(/^Bot token/, { selector: 'input' }), '123456:BOT_SECRET');
+    await pasteInto(within(dialog).getByLabelText(/^Chat ID/, { selector: 'input' }), '-1001234567890');
     await user.click(within(dialog).getByRole('button', { name: 'Add channel' }));
-    await waitFor(() => expect(postPayloads).toHaveLength(2));
-    expect(postPayloads[1]).toEqual({
+    await waitFor(() => expect(postPayload).toBeDefined());
+    expect(postPayload).toEqual({
       name: 'ops-tg',
       enabled: true,
       kind: 'telegram',

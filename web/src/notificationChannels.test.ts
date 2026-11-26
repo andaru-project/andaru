@@ -385,6 +385,10 @@ describe('notificationChannels', () => {
     expect(parseEmailAddress(`"${'A'.repeat(64)}" <ops@example.com>`)).toEqual({ address: 'ops@example.com' });
     expect('error' in parseEmailAddress(`${'A'.repeat(65)} <ops@example.com>`)).toBe(true);
     expect('error' in parseEmailAddress(`${'é'.repeat(33)} <ops@example.com>`)).toBe(true);
+    expect(parseEmailAddress(`ops@example.com (${'A'.repeat(64)})`)).toEqual({ address: 'ops@example.com' });
+    expect('error' in parseEmailAddress(`ops@example.com (${'A'.repeat(65)})`)).toBe(true);
+    expect('error' in parseEmailAddress(`ops@example.com (${'é'.repeat(33)})`)).toBe(true);
+    expect('error' in parseEmailAddress('(Lead) ops@example.com')).toBe(true);
 
     // Username without password, duplicate recipients (case-insensitive), empty/overflow recipients.
     const badAuth = validateChannelDraft(

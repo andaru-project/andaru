@@ -347,10 +347,13 @@ export function validateEmailPort(raw: string): string | undefined {
 // Strip balanced RFC 5322 comments (...) outside quoted strings so valid addresses such as
 // "Ops (On call) <ops@example.com>" or "ops@example.com (Ops)" parse consistently with net/mail.ParseAddress.
 // Returns undefined if quotes or parentheses are unbalanced.
-function stripRfc5322Comments(input: string): string | undefined {
+function stripRfc5322Comments(input: string): { text: string; comments: Array<{ text: string; afterText: boolean }> } | undefined {
   let out = '';
   let inQuotes = false;
   let commentDepth = 0;
+  let commentBuf = '';
+  let commentAfterText = false;
+  const comments: Array<{ text: string; afterText: boolean }> = [];
   for (let i = 0; i < input.length; i += 1) {
     const ch = input[i];
     if (inQuotes) {
@@ -366,12 +369,21 @@ function stripRfc5322Comments(input: string): string | undefined {
     if (commentDepth > 0) {
       if (ch === '\\') {
         if (i + 1 >= input.length) return undefined;
-        i += 1;
+        commentBuf += input[++i];
       } else if (ch === '(') {
         commentDepth += 1;
+        commentBuf += ch;
       } else if (ch === ')') {
         commentDepth -= 1;
-        if (commentDepth === 0) out += ' ';
+        if (commentDepth === 0) {
+          comments.push({ text: commentBuf.trim(), afterText: commentAfterText });
+          commentBuf = '';
+          out += ' ';
+        } else {
+          commentBuf += ch;
+        }
+      } else {
+        commentBuf += ch;
       }
       continue;
     }
@@ -380,13 +392,15 @@ function stripRfc5322Comments(input: string): string | undefined {
       out += ch;
     } else if (ch === '(') {
       commentDepth = 1;
+      commentBuf = '';
+      commentAfterText = out.trim().length > 0;
     } else if (ch === ')') {
       return undefined;
     } else {
       out += ch;
     }
   }
-  return inQuotes || commentDepth !== 0 ? undefined : out.trim();
+  return inQuotes || commentDepth !== 0 ? undefined : { text: out.trim(), comments };
 }
 
 function parsedDisplayName(raw: string): string {
@@ -408,10 +422,11 @@ export function parseEmailAddress(raw: string): { address: string } | { error: s
     return { error: `E-mail address must be 3 to ${emailAddressCharLimit} characters.` };
   }
 
-  const uncommented = stripRfc5322Comments(trimmed);
-  if (uncommented === undefined) {
+  const stripped = stripRfc5322Comments(trimmed);
+  if (stripped === undefined) {
     return { error: 'Enter one e-mail address, such as Andaru <alerts@example.com>.' };
   }
+  const uncommented = stripped.text;
 
   let addr = uncommented;
   if (uncommented.endsWith('>')) {
@@ -429,6 +444,13 @@ export function parseEmailAddress(raw: string): { address: string } | { error: s
     addr = uncommented.slice(lt + 1, -1);
   } else if (uncommented.includes('<') || uncommented.includes('>')) {
     return { error: 'Enter one e-mail address, such as Andaru <alerts@example.com>.' };
+  } else if (stripped.comments.length > 0) {
+    if (stripped.comments.some((c) => !c.afterText)) {
+      return { error: 'Enter one e-mail address, such as Andaru <alerts@example.com>.' };
+    }
+    if (utf8ByteLength(stripped.comments[0].text) > emailDisplayNameByteLimit) {
+      return { error: `Display name must be ${emailDisplayNameByteLimit} bytes or fewer.` };
+    }
   }
 
   const at = addr.indexOf('@');
