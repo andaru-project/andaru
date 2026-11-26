@@ -1,5 +1,5 @@
 import { fieldErrors } from './api';
-import type { BondMode, ConfigBatchOperation, LinkStatus, SavedLink, SavedObject, Segment, Snapshot, VirtualLinkKind } from './types';
+import type { BondMode, ConfigBatchOperation, LacpRate, LinkStatus, SavedLink, SavedObject, Segment, Snapshot, TransmitHashPolicy, VirtualLinkKind } from './types';
 
 // What the interface panel edits: the link, and the segment that puts a network on it.
 export interface InterfaceDraft {
@@ -11,6 +11,15 @@ export interface InterfaceDraft {
   vlanId: string;
   members: string[];
   bondMode: BondMode | '';
+  stp: boolean;
+  stpPriority: string;
+  forwardDelay: string;
+  helloTime: string;
+  maxAge: string;
+  multicastSnooping: boolean;
+  lacpRate: LacpRate | '';
+  miiMonitorMs: string;
+  transmitHashPolicy: TransmitHashPolicy | '';
   // Whether the interface carries a network of its own: a segment, with a zone and addressing.
   // A link without one still serves as a VLAN trunk's parent or a bridge member.
   assigned: boolean;
@@ -39,6 +48,23 @@ export const bondModes: Array<{ value: BondMode; label: string }> = [
   { value: 'balance-tlb', label: 'Adaptive transmit load balancing (balance-tlb)' },
   { value: 'balance-alb', label: 'Adaptive load balancing (balance-alb)' },
 ];
+
+export const lacpRates: Array<{ value: '' | LacpRate; label: string }> = [
+  { value: '', label: 'Default (slow, 30s)' },
+  { value: 'slow', label: 'Slow (30s)' },
+  { value: 'fast', label: 'Fast (1s)' },
+];
+
+export const transmitHashPolicies: Array<{ value: '' | TransmitHashPolicy; label: string }> = [
+  { value: '', label: 'Default (layer2)' },
+  { value: 'layer2', label: 'Layer 2 (MAC)' },
+  { value: 'layer2+3', label: 'Layer 2+3 (MAC + IP)' },
+  { value: 'layer3+4', label: 'Layer 3+4 (IP + port)' },
+  { value: 'encap2+3', label: 'Encapsulated Layer 2+3' },
+  { value: 'encap3+4', label: 'Encapsulated Layer 3+4' },
+];
+
+export const hashPolicyModes = new Set<BondMode>(['balance-xor', '802.3ad']);
 
 // How a segment gets its addresses, in the words the panel and the table use.
 export const ipv4Modes = [{ value: 'none', label: 'None' }, { value: 'dhcp', label: 'DHCP client' }, { value: 'static', label: 'Static' }, { value: 'ppp', label: 'PPP' }];
@@ -173,6 +199,15 @@ export function draftOf(link: SavedLink | undefined, segment: Segment | undefine
     vlanId: link?.vlanId !== undefined ? String(link.vlanId) : '',
     members: link?.members ? [...link.members] : [],
     bondMode: link?.mode ?? (kind === 'bond' ? '802.3ad' : ''),
+    stp: link?.stp ?? false,
+    stpPriority: text(link?.stpPriority),
+    forwardDelay: text(link?.forwardDelay),
+    helloTime: text(link?.helloTime),
+    maxAge: text(link?.maxAge),
+    multicastSnooping: link?.multicastSnooping ?? true,
+    lacpRate: link?.lacpRate ?? '',
+    miiMonitorMs: link ? text(link.miiMonitorMs) : kind === 'bond' ? '100' : '',
+    transmitHashPolicy: link?.transmitHashPolicy ?? '',
     assigned: link ? Boolean(segment) : kind !== 'bond',
     segmentName: segment?.name ?? link?.name ?? live?.name ?? '',
     zone: segment?.zone ?? '',
@@ -256,6 +291,18 @@ function same(a: unknown, b: unknown): boolean {
   return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
 }
 
+function putOptionalBool(target: Fields, saved: Fields, key: string, value: boolean, defaultValue: boolean) {
+  if (value !== defaultValue) target[key] = value;
+  else if (saved[key] === defaultValue) target[key] = defaultValue;
+  else delete target[key];
+}
+
+function putOptionalInt(target: Fields, key: string, raw: string) {
+  const trimmed = raw.trim();
+  if (trimmed === '') delete target[key];
+  else target[key] = Number(trimmed);
+}
+
 // interfaceOperations is the one batch that makes the configuration say what the panel says: a new zone, the link,
 // and its segment created, replaced or deleted. Only what changed is sent, so an unchanged link is not rewritten.
 export function interfaceOperations(draft: InterfaceDraft, link: SavedObject<SavedLink> | undefined, segment: SavedObject<Segment> | undefined, live: LinkStatus | undefined): ConfigBatchOperation[] {
@@ -272,9 +319,27 @@ export function interfaceOperations(draft: InterfaceDraft, link: SavedObject<Sav
     linkValue.vlanId = Number(draft.vlanId);
   } else if (draft.kind === 'bridge') {
     linkValue.members = [...draft.members];
+    putOptionalBool(linkValue, saved, 'stp', draft.stp, false);
+    if (draft.stp) {
+      putOptionalInt(linkValue, 'stpPriority', draft.stpPriority);
+      putOptionalInt(linkValue, 'forwardDelay', draft.forwardDelay);
+      putOptionalInt(linkValue, 'helloTime', draft.helloTime);
+      putOptionalInt(linkValue, 'maxAge', draft.maxAge);
+    } else {
+      delete linkValue.stpPriority;
+      delete linkValue.forwardDelay;
+      delete linkValue.helloTime;
+      delete linkValue.maxAge;
+    }
+    putOptionalBool(linkValue, saved, 'multicastSnooping', draft.multicastSnooping, true);
   } else if (draft.kind === 'bond') {
     linkValue.mode = draft.bondMode;
     linkValue.members = [...draft.members];
+    if (draft.bondMode === '802.3ad' && draft.lacpRate) linkValue.lacpRate = draft.lacpRate;
+    else delete linkValue.lacpRate;
+    if (draft.bondMode && hashPolicyModes.has(draft.bondMode) && draft.transmitHashPolicy) linkValue.transmitHashPolicy = draft.transmitHashPolicy;
+    else delete linkValue.transmitHashPolicy;
+    putOptionalInt(linkValue, 'miiMonitorMs', draft.miiMonitorMs);
   }
   if (!link) operations.push({ op: 'create', collection: 'links', localId: 'link', value: linkValue });
   else if (!same(linkValue, saved)) operations.push({ op: 'replace', collection: 'links', id: link.value.id, expectedVersion: link.version, value: linkValue });
@@ -325,6 +390,15 @@ const fieldOf: Record<string, Array<[RegExp, string]>> = {
     [/^\/vlanId/, 'vlanId'],
     [/^\/members/, 'members'],
     [/^\/mode/, 'bondMode'],
+    [/^\/stpPriority(\/|$)/, 'stpPriority'],
+    [/^\/forwardDelay(\/|$)/, 'forwardDelay'],
+    [/^\/helloTime(\/|$)/, 'helloTime'],
+    [/^\/maxAge(\/|$)/, 'maxAge'],
+    [/^\/stp(\/|$)/, 'stp'],
+    [/^\/multicastSnooping(\/|$)/, 'multicastSnooping'],
+    [/^\/lacpRate(\/|$)/, 'lacpRate'],
+    [/^\/miiMonitorMs(\/|$)/, 'miiMonitorMs'],
+    [/^\/transmitHashPolicy(\/|$)/, 'transmitHashPolicy'],
   ],
   segments: [
     [/^\/name/, 'segmentName'], [/^\/zone/, 'zone'],

@@ -258,8 +258,45 @@ func (r *renderer) networkd(i int) {
 		switch l.Kind {
 		case "vlan":
 			kind = []section{{"VLAN", []string{fmt.Sprintf("Id=%d", *l.VLANID)}}}
+		case "bridge":
+			var bridge []string
+			if l.STP != nil {
+				bridge = append(bridge, "STP="+yesNo(*l.STP))
+			}
+			if l.STPPriority != nil {
+				bridge = append(bridge, fmt.Sprintf("Priority=%d", *l.STPPriority))
+			}
+			if l.ForwardDelay != nil {
+				bridge = append(bridge, fmt.Sprintf("ForwardDelaySec=%ds", *l.ForwardDelay))
+			}
+			if l.HelloTime != nil {
+				bridge = append(bridge, fmt.Sprintf("HelloTimeSec=%ds", *l.HelloTime))
+			}
+			if l.MaxAge != nil {
+				bridge = append(bridge, fmt.Sprintf("MaxAgeSec=%ds", *l.MaxAge))
+			}
+			if l.MulticastSnooping != nil {
+				bridge = append(bridge, "MulticastSnooping="+yesNo(*l.MulticastSnooping))
+			}
+			if len(bridge) > 0 {
+				kind = []section{{"Bridge", bridge}}
+			}
 		case "bond":
-			kind = []section{{"Bond", []string{"Mode=" + l.Mode}}}
+			bond := []string{"Mode=" + l.Mode}
+			if l.TransmitHashPolicy != "" {
+				bond = append(bond, "TransmitHashPolicy="+l.TransmitHashPolicy)
+			}
+			if l.LACPRate != "" {
+				bond = append(bond, "LACPTransmitRate="+l.LACPRate)
+			}
+			if l.MIIMonitorMs != nil {
+				if *l.MIIMonitorMs == 0 {
+					bond = append(bond, "MIIMonitorSec=0")
+				} else {
+					bond = append(bond, fmt.Sprintf("MIIMonitorSec=%dms", *l.MIIMonitorMs))
+				}
+			}
+			kind = []section{{"Bond", bond}}
 		}
 		r.file(networkDir+name+".netdev", "0644", ini(append([]section{{"NetDev", []string{"Name=" + name, "Kind=" + l.Kind}}}, kind...)...), []string{self})
 	}

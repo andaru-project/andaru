@@ -10,17 +10,26 @@ import (
 
 // The structs below decode the public snapshot JSON; the served JSON Schema is the contract.
 type link struct {
-	ID           string   `json:"id"`
-	Kind         string   `json:"kind"`
-	MTU          int      `json:"mtu"`
-	Enabled      bool     `json:"enabled"`
-	PermanentMac string   `json:"permanentMac"`
-	Parent       string   `json:"parent"`
-	VLANID       *int     `json:"vlanId"`
-	Members      []string `json:"members"`
-	Mode         string   `json:"mode"`
-	Username     string   `json:"username"`
-	Password     *struct {
+	ID                 string   `json:"id"`
+	Kind               string   `json:"kind"`
+	MTU                int      `json:"mtu"`
+	Enabled            bool     `json:"enabled"`
+	PermanentMac       string   `json:"permanentMac"`
+	Parent             string   `json:"parent"`
+	VLANID             *int     `json:"vlanId"`
+	Members            []string `json:"members"`
+	Mode               string   `json:"mode"`
+	STP                *bool    `json:"stp"`
+	STPPriority        *int     `json:"stpPriority"`
+	ForwardDelay       *int     `json:"forwardDelay"`
+	HelloTime          *int     `json:"helloTime"`
+	MaxAge             *int     `json:"maxAge"`
+	MulticastSnooping  *bool    `json:"multicastSnooping"`
+	LACPRate           string   `json:"lacpRate"`
+	MIIMonitorMs       *int     `json:"miiMonitorMs"`
+	TransmitHashPolicy string   `json:"transmitHashPolicy"`
+	Username           string   `json:"username"`
+	Password           *struct {
 		Secret     string `json:"secret"`
 		Unresolved bool   `json:"unresolved"`
 	} `json:"password"`
