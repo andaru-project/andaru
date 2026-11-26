@@ -618,6 +618,7 @@ describe('NotificationChannelsPanel', () => {
     const user = userEvent.setup();
     const putPayloads: Record<string, unknown> = {};
     let pushoverRejectOnce = true;
+    let configReads = 0;
 
     const ntfyWithToken: SavedObject<NotificationChannel> = {
       version: '4',
@@ -649,7 +650,16 @@ describe('NotificationChannelsPanel', () => {
       'GET /api/v1/config/notifications/channels': () => jsonResponse(200, { state: 'saved', savedVersion: '10', items: [ntfyWithToken, pushoverChannel] }),
       'GET /api/v1/config/notifications/channels/ntf_n1': () => jsonResponse(200, { state: 'saved', savedVersion: '10', ...ntfyWithToken }),
       'GET /api/v1/config/notifications/channels/ntf_po1': () => jsonResponse(200, { state: 'saved', savedVersion: '10', ...pushoverChannel }),
-      'GET /api/v1/config': () => jsonResponse(200, { state: 'saved', savedVersion: '10', value: { links: [], segments: [], zones: [] } }),
+      'GET /api/v1/config': () => {
+        configReads += 1;
+        return jsonResponse(200, {
+          state: 'saved',
+          savedVersion: '10',
+          // Simulate a concurrent secret added before the retry after 422.
+          unusedSecrets: configReads >= 3 ? ['NOTIFY_PO_ONCALL_TOKEN'] : [],
+          value: { links: [], segments: [], zones: [] },
+        });
+      },
       'PUT /api/v1/config/notifications/channels/ntf_n1': (init) => {
         putPayloads.ntf_n1 = JSON.parse(String(init?.body ?? '{}'));
         return jsonResponse(200, { state: 'saved', savedVersion: '11', version: '11', value: ntfyWithToken.value });
@@ -707,10 +717,8 @@ describe('NotificationChannelsPanel', () => {
     expect(appTokenInput).toHaveFocus();
     expect(within(dialog).getByText('Notification channel was not saved')).toBeInTheDocument();
 
-    // Trigger 422 again and switch kind to Telegram: clears stale kind error & failure alert, then writes telegram only.
-    pushoverRejectOnce = true;
-    await user.click(within(dialog).getByRole('button', { name: 'Save channel' }));
-    expect(await within(dialog).findByText('Token rejected by server.')).toBeInTheDocument();
+    // Switching kind to Telegram clears the stale field-error banner even after field errors were edited away,
+    // and uses the refreshed existingSecrets from the post-failure refresh on retry.
     await user.click(within(dialog).getByLabelText(/^Channel kind/, { selector: 'input' }));
     await user.click(await screen.findByRole('option', { name: 'Telegram' }));
     expect(within(dialog).queryByText('Notification channel was not saved')).not.toBeInTheDocument();
@@ -724,7 +732,7 @@ describe('NotificationChannelsPanel', () => {
       kind: 'telegram',
       filter: { minSeverity: 'warning' },
       telegram: {
-        token: { secret: 'NOTIFY_PO_ONCALL_TOKEN', set: '999:NEW_BOT', expectedVersion: '0' },
+        token: { secret: 'NOTIFY_PO_ONCALL_TOKEN_2', set: '999:NEW_BOT', expectedVersion: '0' },
         chatId: '@oncall_team',
       },
     });

@@ -210,6 +210,7 @@ function NotificationChannelEditor({
   const [draft, setDraft] = useState<NotificationChannelDraft>(() => channelDraftOf(saved?.value));
   const [errors, setErrors] = useState<Map<string, string>>(new Map());
   const [failure, setFailure] = useState('');
+  const [failureFromFields, setFailureFromFields] = useState(false);
   const [busy, setBusy] = useState(false);
   const [errorFocusTick, setErrorFocusTick] = useState(0);
   const [failureFocusTick, setFailureFocusTick] = useState(0);
@@ -272,6 +273,7 @@ function NotificationChannelEditor({
     event.preventDefault();
     if (submittingRef.current) return;
     setFailure('');
+    setFailureFromFields(false);
     const localErrors = validateChannelDraft(draft, saved?.value, existingNames);
     if (localErrors.size > 0) {
       setErrors(localErrors);
@@ -296,7 +298,9 @@ function NotificationChannelEditor({
       const fields = channelFieldErrors(error);
       setErrors(fields);
       setFailure(saveFailure(error, fields, 'notification channel'));
-      if (fields.size > 0 && !fields.has('')) {
+      const fieldOnlyFailure = fields.size > 0 && !fields.has('');
+      setFailureFromFields(fieldOnlyFailure);
+      if (fieldOnlyFailure) {
         setErrorFocusTick((t) => t + 1);
       } else {
         setFailureFocusTick((t) => t + 1);
@@ -370,11 +374,14 @@ function NotificationChannelEditor({
                   if (value && value !== draft.kind && isKnownChannelKind(value)) {
                     patch({ kind: value });
                     const hadKindError = kindSpecificErrorFields.some((field) => errors.has(field));
+                    const next = hadKindError ? new Map(errors) : errors;
                     if (hadKindError) {
-                      const next = new Map(errors);
                       for (const field of kindSpecificErrorFields) next.delete(field);
                       setErrors(next);
-                      if (next.size === 0) setFailure('');
+                    }
+                    if ((hadKindError || failureFromFields) && next.size === 0) {
+                      setFailure('');
+                      setFailureFromFields(false);
                     }
                   }
                 }}
@@ -774,6 +781,21 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
     }
   }
 
+  async function refreshEditorContext() {
+    if (!mountedRef.current) return;
+    void resource.reload();
+    try {
+      const [list, snapshot] = await Promise.all([api.notificationChannels(), readOptionalSnapshot()]);
+      if (!mountedRef.current) return;
+      const channels = list.items.map((item) => item.value);
+      const existingNames = channels.map((c) => c.name);
+      const existingSecrets = existingChannelSecretsOf(channels, snapshot);
+      setEditor((cur) => (cur ? { ...cur, existingNames, existingSecrets } : cur));
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) onSessionLost();
+    }
+  }
+
   const isBusyFor = (kind: 'open' | 'test', id: string) => busy?.kind === kind && busy.id === id;
 
   return (
@@ -949,7 +971,7 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
           sharedHoldersBySecret={editor.sharedHoldersBySecret}
           onSave={saveChannel}
           onClose={() => setEditor(null)}
-          onRefresh={() => { if (mountedRef.current) void resource.reload(); }}
+          onRefresh={() => { void refreshEditorContext(); }}
           onSessionLost={onSessionLost}
         />
       )}

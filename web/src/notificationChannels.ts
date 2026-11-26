@@ -229,7 +229,7 @@ export function validateNtfyServer(raw: string): string | undefined {
   }
   // Authority must be non-empty without userinfo (@), backslash, query (?), or fragment (#), and no empty trailing port (:).
   const match = /^https?:\/\/([^/?#\\@]+)(?:\/[^?#\\]*)?$/i.exec(trimmed);
-  if (!match || match[1].endsWith(':')) {
+  if (!match || match[1].endsWith(':') || /%(?![0-9a-fA-F]{2})/.test(trimmed)) {
     return invalidNtfyServerMsg;
   }
   try {

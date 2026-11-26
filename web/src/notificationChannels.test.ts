@@ -147,8 +147,11 @@ describe('notificationChannels', () => {
     expect(validateNtfyServer('https://ntfy.sh')).toBeUndefined();
     expect(validateNtfyServer('https://example.org/ntfy')).toBeUndefined();
     expect(validateNtfyServer('https://example.org/ntfy/')).toBeUndefined();
+    expect(validateNtfyServer('https://example.org/proxy/%20')).toBeUndefined();
     expect(validateNtfyServer('http://ntfy.internal:8080/sub/path')).toBeUndefined();
     expect(validateNtfyServer('http://[::1]:8080')).toBeUndefined();
+    expect(validateNtfyServer('https://ntfy.example/proxy/%zz')).toMatch(/no credentials, query, or fragment/);
+    expect(validateNtfyServer('https://ntfy.example/proxy/%2')).toMatch(/no credentials, query, or fragment/);
     expect(validateNtfyServer('https://user:pass@ntfy.sh')).toMatch(/no credentials, query, or fragment/);
     expect(validateNtfyServer('https://ntfy.sh?a=1')).toMatch(/no credentials, query, or fragment/);
     expect(validateNtfyServer('https://ntfy.sh#frag')).toMatch(/no credentials, query, or fragment/);
