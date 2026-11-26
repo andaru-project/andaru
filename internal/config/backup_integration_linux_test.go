@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
 	"testing"
 )
@@ -160,5 +161,37 @@ func TestNotificationChannelsPersistAndBackUp(t *testing.T) {
 	}
 	if second.Name != "off" || second.Enabled || second.MinSeverity != "info" || second.URL != ops.URL || second.Authorization != "" || second.Unresolved {
 		t.Fatalf("off %+v", second)
+	}
+
+	// ntfy, Pushover and Telegram channels are read with their own targets.
+	for _, body := range []string{
+		`{"name":"n","kind":"ntfy","ntfy":{"server":"https://ntfy.example","topic":"alerts","token":{"secret":"N_TOKEN","set":"tk","expectedVersion":"0"}}}`,
+		`{"name":"p","kind":"pushover","pushover":{"token":{"secret":"P_APP","set":"app","expectedVersion":"0"},"user":{"secret":"P_USER","set":"usr","expectedVersion":"0"}}}`,
+		`{"name":"t","kind":"telegram","telegram":{"token":{"secret":"T_BOT","set":"1:bot","expectedVersion":"0"},"chatId":"-100"}}`,
+	} {
+		c, err := ObjectChange("create", "notifications.channels", "", nil, []byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = s.Save(ctx, systemRootActor, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, err = s.NotificationChannels(ctx); err != nil || len(got) != 5 {
+		t.Fatalf("channels %+v %v", got, err)
+	}
+	byName := map[string]NotificationChannel{}
+	for _, c := range got {
+		c.ID, c.Sources = "", nil
+		byName[c.Name] = c
+	}
+	for name, want := range map[string]NotificationChannel{
+		"n": {Name: "n", Enabled: true, Kind: "ntfy", MinSeverity: "info", Server: "https://ntfy.example", Topic: "alerts", Token: "tk"},
+		"p": {Name: "p", Enabled: true, Kind: "pushover", MinSeverity: "info", Token: "app", User: "usr"},
+		"t": {Name: "t", Enabled: true, Kind: "telegram", MinSeverity: "info", Token: "1:bot", ChatID: "-100"},
+	} {
+		if !reflect.DeepEqual(byName[name], want) {
+			t.Errorf("%s: %+v", name, byName[name])
+		}
 	}
 }

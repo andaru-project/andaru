@@ -976,11 +976,15 @@ func rebaseValidation(details validationError, d *declaration, origins map[objec
 // heldUnresolved says whether old, a channel before the batch, holds name unresolved at path.
 func heldUnresolved(old any, path, name string) bool {
 	c, ok := old.(*channel)
-	if !ok || c.Webhook == nil {
+	if !ok {
 		return false
 	}
-	ref := map[string]*secretReference{"/webhook/url": &c.Webhook.URL, "/webhook/authorization": c.Webhook.Authorization}[path]
-	return ref != nil && ref.Secret == name && ref.Unresolved
+	for _, s := range c.secrets() {
+		if s.path == path {
+			return s.ref != nil && s.ref.Secret == name && s.ref.Unresolved
+		}
+	}
+	return false
 }
 
 // rebaseSecrets blames the earliest batch operation whose own secret entry fails validation.

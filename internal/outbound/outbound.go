@@ -303,6 +303,12 @@ func (s *Service) send(ctx context.Context, job delivery.Job) error {
 	switch job.Kind {
 	case delivery.Webhook:
 		return sendWebhook(ctx, s.HTTP, job)
+	case delivery.Ntfy:
+		return sendNtfy(ctx, s.HTTP, job)
+	case delivery.Pushover:
+		return sendPushover(ctx, s.HTTP, job)
+	case delivery.Telegram:
+		return sendTelegram(ctx, s.HTTP, job)
 	}
 	return permanent(fmt.Errorf("unknown channel kind %q", job.Kind))
 }

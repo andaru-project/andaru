@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -256,5 +257,36 @@ func TestOneChannelFailureKeepsTheOthers(t *testing.T) {
 	}
 	if got := jobs(t, ch); len(got) != 1 || got[0].job.Channel != opsChannel.ID {
 		t.Fatalf("jobs %+v", got)
+	}
+}
+
+// Each kind of channel's job carries its own target, and no other.
+func TestPublishJobTargetsEachKind(t *testing.T) {
+	events, ch := jobBus(t)
+	for _, row := range []struct {
+		c    config.NotificationChannel
+		want delivery.Job
+	}{
+		{config.NotificationChannel{Kind: delivery.Webhook, URL: "https://hook.example/T", Authorization: "Bearer A"},
+			delivery.Job{Webhook: &delivery.WebhookTarget{URL: "https://hook.example/T", Headers: map[string]string{"Authorization": "Bearer A"}}}},
+		{config.NotificationChannel{Kind: delivery.Ntfy, Server: "https://ntfy.sh", Topic: "alerts", Token: "tk"},
+			delivery.Job{Ntfy: &delivery.NtfyTarget{Server: "https://ntfy.sh", Topic: "alerts", Token: "tk"}}},
+		{config.NotificationChannel{Kind: delivery.Pushover, Token: "app", User: "usr"},
+			delivery.Job{Pushover: &delivery.PushoverTarget{Token: "app", User: "usr"}}},
+		{config.NotificationChannel{Kind: delivery.Telegram, Token: "1:bot", ChatID: "-100"},
+			delivery.Job{Telegram: &delivery.TelegramTarget{Token: "1:bot", ChatID: "-100"}}},
+	} {
+		row.c.ID = "ntf_" + row.c.Kind
+		if err := publishJob(events, row.c, "e:"+row.c.ID, "apply", time.Unix(1, 0), notify.Raise{Key: "k", Severity: notify.Info, Subject: "s"}, []byte(`{}`)); err != nil {
+			t.Fatal(err)
+		}
+		got := jobs(t, ch)
+		if len(got) != 1 {
+			t.Fatalf("%s: jobs %+v", row.c.Kind, got)
+		}
+		j := got[0].job
+		if j.Kind != row.c.Kind || fmt.Sprint(j.Webhook, j.Ntfy, j.Pushover, j.Telegram) != fmt.Sprint(row.want.Webhook, row.want.Ntfy, row.want.Pushover, row.want.Telegram) {
+			t.Errorf("%s: job %+v", row.c.Kind, j)
+		}
 	}
 }

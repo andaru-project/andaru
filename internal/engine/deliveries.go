@@ -61,11 +61,18 @@ func passes(c config.NotificationChannel, source, severity string) bool {
 func publishJob(events *bus.Bus, c config.NotificationChannel, id, source string, raised time.Time, r notify.Raise, event []byte) error {
 	job := delivery.Job{ID: id, Channel: c.ID, Name: c.Name, Kind: c.Kind, Event: event, Message: delivery.Message{
 		Source: source, Key: r.Key, Severity: r.Severity, Subject: r.Subject, Detail: r.Detail, Link: r.Link, Raised: raised}}
-	if c.Kind == delivery.Webhook {
+	switch c.Kind {
+	case delivery.Webhook:
 		job.Webhook = &delivery.WebhookTarget{URL: c.URL}
 		if c.Authorization != "" {
 			job.Webhook.Headers = map[string]string{"Authorization": c.Authorization}
 		}
+	case delivery.Ntfy:
+		job.Ntfy = &delivery.NtfyTarget{Server: c.Server, Topic: c.Topic, Token: c.Token}
+	case delivery.Pushover:
+		job.Pushover = &delivery.PushoverTarget{Token: c.Token, User: c.User}
+	case delivery.Telegram:
+		job.Telegram = &delivery.TelegramTarget{Token: c.Token, ChatID: c.ChatID}
 	}
 	payload, err := bus.NewEvent(delivery.JobType, "notifications", job)
 	if err == nil {

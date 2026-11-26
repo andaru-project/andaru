@@ -22,7 +22,10 @@ func Topic(channel string) string { return "delivery/" + channel }
 
 // Kinds of channel.
 const (
-	Webhook = "webhook"
+	Webhook  = "webhook"
+	Ntfy     = "ntfy"
+	Pushover = "pushover"
+	Telegram = "telegram"
 )
 
 // Job is one notification for one channel, with what the channel needs to send it, credentials included.
@@ -33,10 +36,17 @@ type Job struct {
 	Name    string  `json:"name"` // the channel's name, for the operator
 	Kind    string  `json:"kind"`
 	Message Message `json:"message"`
+	// Origin is the web UI's origin, such as https://fw.example, which makes the message's link a full URL; empty
+	// when not known, and a channel that needs a full URL then sends no link.
+	Origin string `json:"origin,omitempty"`
 	// Event is the notification's own event on the bus, which the webhook sends as it is.
 	Event json.RawMessage `json:"event"`
 	// Webhook is set for Kind Webhook.
 	Webhook *WebhookTarget `json:"webhook,omitempty"`
+	// Ntfy, Pushover and Telegram are set for their kinds.
+	Ntfy     *NtfyTarget     `json:"ntfy,omitempty"`
+	Pushover *PushoverTarget `json:"pushover,omitempty"`
+	Telegram *TelegramTarget `json:"telegram,omitempty"`
 }
 
 // Message is the notification a job sends.
@@ -54,4 +64,23 @@ type Message struct {
 type WebhookTarget struct {
 	URL     string            `json:"url"`
 	Headers map[string]string `json:"headers,omitempty"`
+}
+
+// NtfyTarget is a topic on an ntfy server; Token, when set, is sent as a bearer token.
+type NtfyTarget struct {
+	Server string `json:"server"`
+	Topic  string `json:"topic"`
+	Token  string `json:"token,omitempty"`
+}
+
+// PushoverTarget is a Pushover application's token and the user key it sends to.
+type PushoverTarget struct {
+	Token string `json:"token"`
+	User  string `json:"user"`
+}
+
+// TelegramTarget is a Telegram bot's token and the chat it sends to.
+type TelegramTarget struct {
+	Token  string `json:"token"`
+	ChatID string `json:"chatId"`
 }

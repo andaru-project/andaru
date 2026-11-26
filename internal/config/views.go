@@ -73,11 +73,27 @@ type linkView struct {
 }
 type channelView struct {
 	channel
-	Webhook *webhookView `json:"webhook,omitempty"`
+	Webhook  *webhookView  `json:"webhook,omitempty"`
+	Ntfy     *ntfyView     `json:"ntfy,omitempty"`
+	Pushover *pushoverView `json:"pushover,omitempty"`
+	Telegram *telegramView `json:"telegram,omitempty"`
 }
 type webhookView struct {
 	URL           *secretView `json:"url"`
 	Authorization *secretView `json:"authorization,omitempty"`
+}
+type ntfyView struct {
+	Server string      `json:"server"`
+	Topic  string      `json:"topic"`
+	Token  *secretView `json:"token,omitempty"`
+}
+type pushoverView struct {
+	Token *secretView `json:"token"`
+	User  *secretView `json:"user"`
+}
+type telegramView struct {
+	Token  *secretView `json:"token"`
+	ChatID string      `json:"chatId"`
 }
 
 // viewSecret is a reference's view: whether it is set, and its version, never its value.
@@ -111,6 +127,27 @@ func viewObject(v any, version Version, secrets secretDocument) (ObjectView, err
 				return ObjectView{}, e
 			}
 			if view.Webhook.Authorization, e = viewSecret(x.Webhook.Authorization, secrets); e != nil {
+				return ObjectView{}, e
+			}
+		}
+		if x.Ntfy != nil {
+			view.Ntfy = &ntfyView{Server: x.Ntfy.Server, Topic: x.Ntfy.Topic}
+			if view.Ntfy.Token, e = viewSecret(x.Ntfy.Token, secrets); e != nil {
+				return ObjectView{}, e
+			}
+		}
+		if x.Pushover != nil {
+			view.Pushover = &pushoverView{}
+			if view.Pushover.Token, e = viewSecret(&x.Pushover.Token, secrets); e != nil {
+				return ObjectView{}, e
+			}
+			if view.Pushover.User, e = viewSecret(&x.Pushover.User, secrets); e != nil {
+				return ObjectView{}, e
+			}
+		}
+		if x.Telegram != nil {
+			view.Telegram = &telegramView{ChatID: x.Telegram.ChatID}
+			if view.Telegram.Token, e = viewSecret(&x.Telegram.Token, secrets); e != nil {
 				return ObjectView{}, e
 			}
 		}
