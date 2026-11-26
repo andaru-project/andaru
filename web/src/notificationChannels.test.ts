@@ -4,10 +4,14 @@ import {
   buildChannelWrite,
   channelDraftOf,
   channelFieldErrors,
+  channelSecretsOf,
   existingChannelSecretsOf,
   nextChannelSecretName,
   sharedSecretHolders,
   validateChannelDraft,
+  validateNtfyServer,
+  validateNtfyTopic,
+  validateTelegramChatId,
   validateWebhookUrl,
 } from './notificationChannels';
 import type { NotificationChannel } from './types';
@@ -100,7 +104,7 @@ describe('notificationChannels', () => {
     // Entering a new URL or auth value allocates a fresh secret (expectedVersion: '0') so no other
     // channel referencing the old secret (including one added concurrently) can be silently modified.
     const resolvedAndRemoved = buildChannelWrite(
-      { ...channelDraftOf(saved), webhookUrl: 'https://hooks.example/new', removeAuth: true },
+      { ...channelDraftOf(saved), webhookUrl: 'https://hooks.example/new', removeWebhookAuth: true },
       saved,
     );
     expect(resolvedAndRemoved.webhook).toEqual({
@@ -137,18 +141,168 @@ describe('notificationChannels', () => {
     });
   });
 
+  it('validates and builds ntfy, pushover, telegram, kind switches, and unknown future kinds', () => {
+    // ntfy server & topic validation.
+    expect(validateNtfyServer('')).toMatch(/Enter an ntfy server URL/);
+    expect(validateNtfyServer('https://ntfy.sh/topic')).toMatch(/host only/);
+    expect(validateNtfyServer('https://ntfy.sh/')).toMatch(/host only/);
+    expect(validateNtfyServer('https://user:pass@ntfy.sh')).toMatch(/host only/);
+    expect(validateNtfyServer('https://ntfy.sh?a=1')).toMatch(/host only/);
+    expect(validateNtfyServer('https://ntfy.sh#frag')).toMatch(/host only/);
+    expect(validateNtfyServer('ftp://ntfy.sh')).toMatch(/host only/);
+    expect(validateNtfyServer('https://ntfy.sh')).toBeUndefined();
+    expect(validateNtfyServer('http://ntfy.internal:8080')).toBeUndefined();
+    expect(validateNtfyServer('http://[::1]:8080')).toBeUndefined();
+
+    expect(validateNtfyTopic('')).toMatch(/Enter an ntfy topic/);
+    expect(validateNtfyTopic('bad/topic')).toMatch(/1 to 64/);
+    expect(validateNtfyTopic('a'.repeat(65))).toMatch(/1 to 64/);
+    expect(validateNtfyTopic('andaru_alerts-1')).toBeUndefined();
+
+    // Telegram chatId validation.
+    expect(validateTelegramChatId('')).toMatch(/Enter a Telegram chat ID/);
+    expect(validateTelegramChatId('not_a_chat')).toMatch(/numeric chat ID/i);
+    expect(validateTelegramChatId('@bad-name')).toMatch(/numeric chat ID/i);
+    expect(validateTelegramChatId(`-${'1'.repeat(64)}`)).toMatch(/64 characters/);
+    expect(validateTelegramChatId('-1001234567890')).toBeUndefined();
+    expect(validateTelegramChatId('123456789')).toBeUndefined();
+    expect(validateTelegramChatId('@ops_alerts')).toBeUndefined();
+
+    // Build ntfy without token, then with token, then removing token.
+    const ntfyNoToken = buildChannelWrite(
+      { ...channelDraftOf(), name: 'Ntfy Ops', kind: 'ntfy', ntfyServer: 'https://ntfy.sh', ntfyTopic: 'andaru-alerts' },
+      undefined,
+    );
+    expect(ntfyNoToken).toEqual({
+      name: 'Ntfy Ops',
+      enabled: true,
+      kind: 'ntfy',
+      filter: { minSeverity: 'info' },
+      ntfy: { server: 'https://ntfy.sh', topic: 'andaru-alerts' },
+    });
+    expect('webhook' in ntfyNoToken).toBe(false);
+
+    const ntfySaved: NotificationChannel = {
+      id: 'ntf_ntfy',
+      name: 'Ntfy Ops',
+      enabled: true,
+      kind: 'ntfy',
+      ntfy: { server: 'https://ntfy.sh', topic: 'andaru-alerts', token: { secret: 'NTFY_TOK', isSet: true, version: '3' } },
+    };
+    const ntfyRemoved = buildChannelWrite({ ...channelDraftOf(ntfySaved), removeNtfyToken: true }, ntfySaved);
+    expect(ntfyRemoved.ntfy).toEqual({ server: 'https://ntfy.sh', topic: 'andaru-alerts' });
+
+    // Build Pushover (both required secrets).
+    const pushoverErrors = validateChannelDraft({ ...channelDraftOf(), name: 'PO', kind: 'pushover' }, undefined);
+    expect(pushoverErrors.get('pushoverToken')).toMatch(/application token/i);
+    expect(pushoverErrors.get('pushoverUser')).toMatch(/user key/i);
+
+    const pushoverWrite = buildChannelWrite(
+      { ...channelDraftOf(), name: 'PO', kind: 'pushover', pushoverToken: 'app-tok', pushoverUser: 'usr-key' },
+      undefined,
+    );
+    expect(pushoverWrite).toEqual({
+      name: 'PO',
+      enabled: true,
+      kind: 'pushover',
+      filter: { minSeverity: 'info' },
+      pushover: {
+        token: { secret: 'NOTIFY_PO_TOKEN', set: 'app-tok', expectedVersion: '0' },
+        user: { secret: 'NOTIFY_PO_USER', set: 'usr-key', expectedVersion: '0' },
+      },
+    });
+
+    // Build Telegram and verify kind switching requires new kind's secrets and emits only its sub-object.
+    const switchErrors = validateChannelDraft({ ...channelDraftOf(ntfySaved), kind: 'telegram', telegramChatId: '@ops' }, ntfySaved);
+    expect(switchErrors.get('telegramToken')).toMatch(/bot token/i);
+    const telegramWrite = buildChannelWrite(
+      { ...channelDraftOf(ntfySaved), kind: 'telegram', telegramToken: '123:abc', telegramChatId: ' -1001234567890 ' },
+      ntfySaved,
+      existingChannelSecretsOf([ntfySaved]),
+    );
+    expect(telegramWrite).toEqual({
+      name: 'Ntfy Ops',
+      enabled: true,
+      kind: 'telegram',
+      filter: { minSeverity: 'info' },
+      telegram: {
+        token: { secret: 'NOTIFY_NTFY_OPS_TOKEN', set: '123:abc', expectedVersion: '0' },
+        chatId: '-1001234567890',
+      },
+    });
+    expect('ntfy' in telegramWrite).toBe(false);
+
+    // Unknown future kind (e.g. email): secrets collected recursively, sub-object echoed unchanged without SecretView metadata.
+    const futureEmail: NotificationChannel = {
+      id: 'ntf_email',
+      name: 'SMTP Ops',
+      enabled: true,
+      kind: 'email',
+      filter: { minSeverity: 'critical' },
+      email: {
+        host: 'mail.example',
+        port: 587,
+        from: 'andaru@example.com',
+        to: ['ops@example.com'],
+        password: { secret: 'SHARED_SMTP_PASS', isSet: true, version: '4', updatedAt: '2026-11-26T00:00:00Z' },
+        backupAuth: { secret: 'BACKUP_PASS', isSet: false, version: '0', unresolved: true },
+      },
+    };
+    const otherSharing: NotificationChannel = {
+      id: 'ntf_other',
+      name: 'Other',
+      enabled: true,
+      kind: 'ntfy',
+      ntfy: { server: 'https://ntfy.sh', topic: 'x', token: { secret: 'SHARED_SMTP_PASS', isSet: true, version: '4' } },
+    };
+    expect(channelSecretsOf(futureEmail).map((e) => e.view.secret)).toEqual(['SHARED_SMTP_PASS', 'BACKUP_PASS']);
+    expect(existingChannelSecretsOf([futureEmail, otherSharing])).toEqual(['SHARED_SMTP_PASS', 'BACKUP_PASS']);
+    expect(sharedSecretHolders('SHARED_SMTP_PASS', otherSharing.id, [futureEmail, otherSharing])).toEqual(['SMTP Ops']);
+
+    const disabledEmail = buildChannelWrite({ ...channelDraftOf(futureEmail), enabled: false }, futureEmail);
+    expect(disabledEmail).toEqual({
+      name: 'SMTP Ops',
+      enabled: false,
+      kind: 'email',
+      filter: { minSeverity: 'critical' },
+      email: {
+        host: 'mail.example',
+        port: 587,
+        from: 'andaru@example.com',
+        to: ['ops@example.com'],
+        password: { secret: 'SHARED_SMTP_PASS' },
+        backupAuth: { secret: 'BACKUP_PASS', unresolved: true },
+      },
+    });
+    expect('webhook' in disabledEmail).toBe(false);
+  });
+
   it('maps 422 validation pointer paths (direct and collection-prefixed) to form fields', () => {
     const err = new ApiError(422, 'VALIDATION_FAILED', 'Invalid.', [
       { path: '/name', message: 'Name already exists in this collection.' },
       { path: '/notifications/channels/0/filter/sources/0', message: 'Bad source.' },
       { path: '/webhook/url', message: 'This secret belongs to another kind of object.' },
       { path: '/webhook/authorization', message: 'Bad auth secret.' },
+      { path: '/ntfy/server', message: 'Bad server.' },
+      { path: '/ntfy/topic', message: 'Bad topic.' },
+      { path: '/ntfy/token', message: 'Bad ntfy token.' },
+      { path: '/pushover/token', message: 'Bad app token.' },
+      { path: '/pushover/user', message: 'Bad user key.' },
+      { path: '/telegram/token', message: 'Bad bot token.' },
+      { path: '/telegram/chatId', message: 'Bad chat id.' },
     ]);
     expect(channelFieldErrors(err)).toEqual(new Map([
       ['name', 'Name already exists in this collection.'],
       ['sources', 'Bad source.'],
       ['webhookUrl', 'This secret belongs to another kind of object.'],
       ['webhookAuth', 'Bad auth secret.'],
+      ['ntfyServer', 'Bad server.'],
+      ['ntfyTopic', 'Bad topic.'],
+      ['ntfyToken', 'Bad ntfy token.'],
+      ['pushoverToken', 'Bad app token.'],
+      ['pushoverUser', 'Bad user key.'],
+      ['telegramToken', 'Bad bot token.'],
+      ['telegramChatId', 'Bad chat id.'],
     ]));
   });
 });

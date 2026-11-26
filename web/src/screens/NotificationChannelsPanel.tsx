@@ -24,8 +24,10 @@ import {
   buildChannelWrite,
   channelDraftOf,
   channelFieldErrors,
-  channelKindLabel,
+  channelKindDisplay,
+  channelSecretsOf,
   existingChannelSecretsOf,
+  isKnownChannelKind,
   knownNotificationSources,
   sharedSecretHolders,
   validateChannelDraft,
@@ -38,6 +40,7 @@ import type {
   NotificationChannelWrite,
   NotificationSeverity,
   SavedObject,
+  SecretView,
   Snapshot,
 } from '../types';
 import { useResource } from '../useResource';
@@ -54,13 +57,28 @@ interface EditorState {
   saved?: SavedObject<NotificationChannel>;
   existingNames: string[];
   existingSecrets: string[];
-  sharedUrlHolders: string[];
-  sharedAuthHolders: string[];
+  sharedHoldersBySecret: Record<string, string[]>;
 }
 
 const kindOptions: Array<{ value: NotificationChannelKind; label: string }> = [
   { value: 'webhook', label: 'Webhook (HTTP POST)' },
+  { value: 'ntfy', label: 'ntfy' },
+  { value: 'pushover', label: 'Pushover' },
+  { value: 'telegram', label: 'Telegram' },
 ];
+
+const kindSpecificErrorFields = [
+  'kind',
+  'webhookUrl',
+  'webhookAuth',
+  'ntfyServer',
+  'ntfyTopic',
+  'ntfyToken',
+  'pushoverToken',
+  'pushoverUser',
+  'telegramToken',
+  'telegramChatId',
+] as const;
 
 const severityOptions: Array<{ value: NotificationSeverity; label: string }> = [
   { value: 'info', label: 'Info (all severities)' },
@@ -74,12 +92,108 @@ function severitySummary(minSeverity: NotificationSeverity | undefined): { sever
   return { severity: sev, label: `${sev}+` };
 }
 
+function channelTargetSummary(ch: NotificationChannel): string | undefined {
+  if (ch.kind === 'ntfy' && ch.ntfy) return `${ch.ntfy.server}/${ch.ntfy.topic}`;
+  if (ch.kind === 'telegram' && ch.telegram) return ch.telegram.chatId;
+  return undefined;
+}
+
+interface SecretFieldProps {
+  label: string;
+  unresolvedTitle: string;
+  unresolvedBody: string;
+  existing?: SecretView;
+  sharedHolders: string[];
+  freshDescription: string;
+  optionalPrefix?: string;
+  unresolvedHint: string;
+  freshPlaceholder: string;
+  keepPlaceholder: string;
+  toggleLabel: string;
+  required?: boolean;
+  value: string;
+  error?: string;
+  onChange(value: string): void;
+  removeLabel?: string;
+  removed?: boolean;
+  onRemoveChange?(checked: boolean): void;
+}
+
+function SecretField({
+  label,
+  unresolvedTitle,
+  unresolvedBody,
+  existing,
+  sharedHolders,
+  freshDescription,
+  optionalPrefix,
+  unresolvedHint,
+  freshPlaceholder,
+  keepPlaceholder,
+  toggleLabel,
+  required,
+  value,
+  error,
+  onChange,
+  removeLabel,
+  removed,
+  onRemoveChange,
+}: SecretFieldProps) {
+  const sharedText = sharedHolders.length > 0 ? `, shared with ${sharedHolders.join(', ')}` : '';
+  let description = freshDescription;
+  if (existing) {
+    if (existing.unresolved) {
+      description = optionalPrefix
+        ? `${optionalPrefix} (${existing.secret}, unresolved${sharedText}). ${sharedHolders.length > 0 ? 'Entering a value saves a separate secret for this channel so other channels are not changed.' : unresolvedHint}`
+        : `Unresolved secret (${existing.secret}${sharedText}). ${sharedHolders.length > 0 ? 'Entering a new value saves a separate secret for this channel so other channels are not changed.' : unresolvedHint}`;
+    } else if (sharedHolders.length > 0) {
+      description = optionalPrefix
+        ? `${optionalPrefix} (${existing.secret}${sharedText}). Entering a new value saves a separate secret for this channel so other channels are not changed.`
+        : `Stored securely (${existing.secret}${sharedText}). Entering a new value saves a separate secret for this channel so other channels are not changed.`;
+    } else {
+      description = optionalPrefix
+        ? `${optionalPrefix} (${existing.secret}). Leave blank to keep the current value.`
+        : `Stored securely (${existing.secret}). Leave blank to keep the current value.`;
+    }
+  }
+
+  return (
+    <>
+      {existing?.unresolved && !removed && (
+        <Alert color="orange" role="status" title={unresolvedTitle}>
+          {unresolvedBody}
+        </Alert>
+      )}
+      <PasswordInput
+        label={label}
+        description={description}
+        placeholder={existing && !existing.unresolved ? keepPlaceholder : freshPlaceholder}
+        autoComplete="new-password"
+        visibilityToggleFocusable
+        visibilityToggleButtonProps={{ 'aria-label': toggleLabel }}
+        aria-invalid={Boolean(error) || undefined}
+        required={required}
+        disabled={removed}
+        value={value}
+        error={error}
+        onChange={(event) => onChange(event.currentTarget.value)}
+      />
+      {existing && removeLabel && onRemoveChange && (
+        <Checkbox
+          label={removeLabel}
+          checked={Boolean(removed)}
+          onChange={(event) => onRemoveChange(event.currentTarget.checked)}
+        />
+      )}
+    </>
+  );
+}
+
 function NotificationChannelEditor({
   saved,
   existingNames,
   existingSecrets,
-  sharedUrlHolders,
-  sharedAuthHolders,
+  sharedHoldersBySecret,
   onSave,
   onClose,
   onRefresh,
@@ -88,8 +202,7 @@ function NotificationChannelEditor({
   saved?: SavedObject<NotificationChannel>;
   existingNames: string[];
   existingSecrets: string[];
-  sharedUrlHolders: string[];
-  sharedAuthHolders: string[];
+  sharedHoldersBySecret: Record<string, string[]>;
   onSave(value: NotificationChannelWrite, saved?: SavedObject<NotificationChannel>): Promise<void>;
   onClose(): void;
   onRefresh(): void;
@@ -128,8 +241,19 @@ function NotificationChannelEditor({
     }
   }, [errorFocusTick]);
 
-  const existingUrl = saved?.value.webhook?.url;
-  const existingAuth = saved?.value.webhook?.authorization;
+  const sameKind = saved?.value.kind === draft.kind;
+  const unknownKind = !isKnownChannelKind(draft.kind);
+  const existingWebhookUrl = sameKind ? saved?.value.webhook?.url : undefined;
+  const existingWebhookAuth = sameKind ? saved?.value.webhook?.authorization : undefined;
+  const existingNtfyToken = sameKind ? saved?.value.ntfy?.token : undefined;
+  const existingPushoverToken = sameKind ? saved?.value.pushover?.token : undefined;
+  const existingPushoverUser = sameKind ? saved?.value.pushover?.user : undefined;
+  const existingTelegramToken = sameKind ? saved?.value.telegram?.token : undefined;
+
+  const sharedFor = (view?: SecretView) => (view?.secret ? (sharedHoldersBySecret[view.secret] ?? []) : []);
+  const selectKindOptions = unknownKind
+    ? [...kindOptions, { value: draft.kind, label: draft.kind }]
+    : kindOptions;
 
   function patch(update: Partial<NotificationChannelDraft>) {
     setDraft((cur) => ({ ...cur, ...update }));
@@ -203,7 +327,7 @@ function NotificationChannelEditor({
               <TextInput
                 data-autofocus
                 label="Name"
-                placeholder="ops-webhook"
+                placeholder="ops-alerts"
                 maxLength={128}
                 required
                 value={draft.name}
@@ -232,13 +356,21 @@ function NotificationChannelEditor({
               />
               <Select
                 label="Channel kind"
+                description={unknownKind ? 'This channel kind is not editable in this version of the web client. Its delivery settings will be kept unchanged.' : undefined}
                 allowDeselect={false}
-                data={kindOptions}
+                disabled={unknownKind}
+                data={selectKindOptions}
                 value={draft.kind}
                 error={errors.get('kind')}
                 onChange={(value) => {
-                  if (value === 'webhook') patch({ kind: value });
-                  clearFieldError('kind');
+                  if (value && isKnownChannelKind(value)) {
+                    patch({ kind: value });
+                    setErrors((cur) => {
+                      const next = new Map(cur);
+                      for (const field of kindSpecificErrorFields) next.delete(field);
+                      return next;
+                    });
+                  }
                 }}
               />
               <Select
@@ -266,74 +398,190 @@ function NotificationChannelEditor({
                   clearFieldError('sources');
                 }}
               />
-              {existingUrl?.unresolved && (
-                <Alert color="orange" role="status" title="Webhook URL needs to be restored">
-                  This channel&apos;s URL secret ({existingUrl.secret}) was left unresolved by a restore. Enter a new URL below to resolve it, or leave it blank to keep editing other fields.
-                </Alert>
+              {draft.kind === 'webhook' && (
+                <>
+                  <SecretField
+                    label="Webhook URL"
+                    unresolvedTitle="Webhook URL needs to be restored"
+                    unresolvedBody={`This channel's URL secret (${existingWebhookUrl?.secret ?? ''}) was left unresolved by a restore. Enter a new URL below to resolve it, or leave it blank to keep editing other fields.`}
+                    existing={existingWebhookUrl}
+                    sharedHolders={sharedFor(existingWebhookUrl)}
+                    freshDescription="Must be an http:// or https:// URL with a host. Stored in the secret store and never shown again."
+                    unresolvedHint="Enter an http:// or https:// URL to resolve."
+                    freshPlaceholder="https://hooks.example/services/..."
+                    keepPlaceholder="Leave blank to keep existing URL"
+                    toggleLabel="Toggle webhook URL visibility"
+                    required={!existingWebhookUrl}
+                    value={draft.webhookUrl}
+                    error={errors.get('webhookUrl')}
+                    onChange={(value) => {
+                      patch({ webhookUrl: value });
+                      clearFieldError('webhookUrl');
+                    }}
+                  />
+                  <SecretField
+                    label="Authorization header"
+                    unresolvedTitle="Authorization header needs to be restored"
+                    unresolvedBody={`The authorization secret (${existingWebhookAuth?.secret ?? ''}) was left unresolved by a restore. Enter a new value to resolve it, or remove it below.`}
+                    existing={existingWebhookAuth}
+                    sharedHolders={sharedFor(existingWebhookAuth)}
+                    freshDescription="Optional HTTP Authorization header value (for example, Bearer <token>). Stored in the secret store."
+                    optionalPrefix="Optional HTTP Authorization header"
+                    unresolvedHint="Enter a value to resolve."
+                    freshPlaceholder="Bearer ..."
+                    keepPlaceholder="Leave blank to keep existing header"
+                    toggleLabel="Toggle authorization header visibility"
+                    value={draft.webhookAuth}
+                    error={errors.get('webhookAuth')}
+                    onChange={(value) => {
+                      patch({ webhookAuth: value });
+                      clearFieldError('webhookAuth');
+                    }}
+                    removeLabel="Remove authorization header"
+                    removed={draft.removeWebhookAuth}
+                    onRemoveChange={(checked) => {
+                      patch({ removeWebhookAuth: checked, ...(checked ? { webhookAuth: '' } : {}) });
+                      clearFieldError('webhookAuth');
+                    }}
+                  />
+                </>
               )}
-              <PasswordInput
-                label="Webhook URL"
-                description={
-                  existingUrl
-                    ? existingUrl.unresolved
-                      ? `Unresolved secret (${existingUrl.secret}${sharedUrlHolders.length > 0 ? `, shared with ${sharedUrlHolders.join(', ')}` : ''}). ${sharedUrlHolders.length > 0 ? 'Entering an http:// or https:// URL saves a separate secret for this channel so other channels are not changed.' : 'Enter an http:// or https:// URL to resolve.'}`
-                      : sharedUrlHolders.length > 0
-                        ? `Stored securely (${existingUrl.secret}, shared with ${sharedUrlHolders.join(', ')}). Entering a new URL saves a separate secret for this channel so other channels are not changed.`
-                        : `Stored securely (${existingUrl.secret}). Leave blank to keep the current URL.`
-                    : 'Must be an http:// or https:// URL with a host. Stored in the secret store and never shown again.'
-                }
-                placeholder={existingUrl && !existingUrl.unresolved ? 'Leave blank to keep existing URL' : 'https://hooks.example/services/...'}
-                autoComplete="new-password"
-                visibilityToggleFocusable
-                visibilityToggleButtonProps={{ 'aria-label': 'Toggle webhook URL visibility' }}
-                aria-invalid={errors.has('webhookUrl') || undefined}
-                required={!existingUrl}
-                value={draft.webhookUrl}
-                error={errors.get('webhookUrl')}
-                onChange={(event) => {
-                  patch({ webhookUrl: event.currentTarget.value });
-                  clearFieldError('webhookUrl');
-                }}
-              />
-              {existingAuth?.unresolved && !draft.removeAuth && (
-                <Alert color="orange" role="status" title="Authorization header needs to be restored">
-                  The authorization secret ({existingAuth.secret}) was left unresolved by a restore. Enter a new value to resolve it, or remove it below.
-                </Alert>
+              {draft.kind === 'ntfy' && (
+                <>
+                  <TextInput
+                    label="Server URL"
+                    description="http:// or https:// ntfy server with host only (no path, query, or credentials)."
+                    placeholder="https://ntfy.sh"
+                    required
+                    value={draft.ntfyServer}
+                    error={errors.get('ntfyServer')}
+                    onChange={(event) => {
+                      patch({ ntfyServer: event.currentTarget.value });
+                      clearFieldError('ntfyServer');
+                    }}
+                  />
+                  <TextInput
+                    label="Topic"
+                    description="1 to 64 letters, digits, underscores, or hyphens."
+                    placeholder="andaru-alerts"
+                    maxLength={64}
+                    required
+                    value={draft.ntfyTopic}
+                    error={errors.get('ntfyTopic')}
+                    onChange={(event) => {
+                      patch({ ntfyTopic: event.currentTarget.value });
+                      clearFieldError('ntfyTopic');
+                    }}
+                  />
+                  <SecretField
+                    label="Access token"
+                    unresolvedTitle="Access token needs to be restored"
+                    unresolvedBody={`The access token secret (${existingNtfyToken?.secret ?? ''}) was left unresolved by a restore. Enter a new token to resolve it, or remove it below.`}
+                    existing={existingNtfyToken}
+                    sharedHolders={sharedFor(existingNtfyToken)}
+                    freshDescription="Optional ntfy access token (tk_...). Stored in the secret store and never shown again."
+                    optionalPrefix="Optional ntfy access token"
+                    unresolvedHint="Enter a token to resolve."
+                    freshPlaceholder="tk_..."
+                    keepPlaceholder="Leave blank to keep existing token"
+                    toggleLabel="Toggle ntfy access token visibility"
+                    value={draft.ntfyToken}
+                    error={errors.get('ntfyToken')}
+                    onChange={(value) => {
+                      patch({ ntfyToken: value });
+                      clearFieldError('ntfyToken');
+                    }}
+                    removeLabel="Remove access token"
+                    removed={draft.removeNtfyToken}
+                    onRemoveChange={(checked) => {
+                      patch({ removeNtfyToken: checked, ...(checked ? { ntfyToken: '' } : {}) });
+                      clearFieldError('ntfyToken');
+                    }}
+                  />
+                </>
               )}
-              <PasswordInput
-                label="Authorization header"
-                description={
-                  existingAuth
-                    ? existingAuth.unresolved
-                      ? `Optional HTTP Authorization header (${existingAuth.secret}, unresolved${sharedAuthHolders.length > 0 ? `, shared with ${sharedAuthHolders.join(', ')}` : ''}). ${sharedAuthHolders.length > 0 ? 'Entering a value saves a separate secret for this channel so other channels are not changed.' : 'Enter a value to resolve.'}`
-                      : sharedAuthHolders.length > 0
-                        ? `Optional HTTP Authorization header (${existingAuth.secret}, shared with ${sharedAuthHolders.join(', ')}). Entering a new value saves a separate secret for this channel so other channels are not changed.`
-                        : `Optional HTTP Authorization header (${existingAuth.secret}). Leave blank to keep the current value.`
-                    : 'Optional HTTP Authorization header value (for example, Bearer <token>). Stored in the secret store.'
-                }
-                placeholder={existingAuth && !existingAuth.unresolved ? 'Leave blank to keep existing header' : 'Bearer ...'}
-                autoComplete="new-password"
-                visibilityToggleFocusable
-                visibilityToggleButtonProps={{ 'aria-label': 'Toggle authorization header visibility' }}
-                aria-invalid={errors.has('webhookAuth') || undefined}
-                disabled={draft.removeAuth}
-                value={draft.webhookAuth}
-                error={errors.get('webhookAuth')}
-                onChange={(event) => {
-                  patch({ webhookAuth: event.currentTarget.value });
-                  clearFieldError('webhookAuth');
-                }}
-              />
-              {existingAuth && (
-                <Checkbox
-                  label="Remove authorization header"
-                  checked={draft.removeAuth}
-                  onChange={(event) => {
-                    const checked = event.currentTarget.checked;
-                    patch({ removeAuth: checked, ...(checked ? { webhookAuth: '' } : {}) });
-                    clearFieldError('webhookAuth');
-                  }}
-                />
+              {draft.kind === 'pushover' && (
+                <>
+                  <SecretField
+                    label="Application token"
+                    unresolvedTitle="Application token needs to be restored"
+                    unresolvedBody={`The application token secret (${existingPushoverToken?.secret ?? ''}) was left unresolved by a restore. Enter a new token below to resolve it, or leave it blank to keep editing other fields.`}
+                    existing={existingPushoverToken}
+                    sharedHolders={sharedFor(existingPushoverToken)}
+                    freshDescription="Pushover application API token. Stored in the secret store and never shown again."
+                    unresolvedHint="Enter a Pushover application token to resolve."
+                    freshPlaceholder="Application API token"
+                    keepPlaceholder="Leave blank to keep existing application token"
+                    toggleLabel="Toggle Pushover application token visibility"
+                    required={!existingPushoverToken}
+                    value={draft.pushoverToken}
+                    error={errors.get('pushoverToken')}
+                    onChange={(value) => {
+                      patch({ pushoverToken: value });
+                      clearFieldError('pushoverToken');
+                    }}
+                  />
+                  <SecretField
+                    label="User key"
+                    unresolvedTitle="User key needs to be restored"
+                    unresolvedBody={`The user key secret (${existingPushoverUser?.secret ?? ''}) was left unresolved by a restore. Enter a new user key below to resolve it, or leave it blank to keep editing other fields.`}
+                    existing={existingPushoverUser}
+                    sharedHolders={sharedFor(existingPushoverUser)}
+                    freshDescription="Pushover user or group key. Stored in the secret store and never shown again."
+                    unresolvedHint="Enter a Pushover user key to resolve."
+                    freshPlaceholder="User or group key"
+                    keepPlaceholder="Leave blank to keep existing user key"
+                    toggleLabel="Toggle Pushover user key visibility"
+                    required={!existingPushoverUser}
+                    value={draft.pushoverUser}
+                    error={errors.get('pushoverUser')}
+                    onChange={(value) => {
+                      patch({ pushoverUser: value });
+                      clearFieldError('pushoverUser');
+                    }}
+                  />
+                </>
+              )}
+              {draft.kind === 'telegram' && (
+                <>
+                  <SecretField
+                    label="Bot token"
+                    unresolvedTitle="Bot token needs to be restored"
+                    unresolvedBody={`The bot token secret (${existingTelegramToken?.secret ?? ''}) was left unresolved by a restore. Enter a new bot token below to resolve it, or leave it blank to keep editing other fields.`}
+                    existing={existingTelegramToken}
+                    sharedHolders={sharedFor(existingTelegramToken)}
+                    freshDescription="Telegram bot token from @BotFather. Stored in the secret store and never shown again."
+                    unresolvedHint="Enter a Telegram bot token to resolve."
+                    freshPlaceholder="123456:ABC-DEF..."
+                    keepPlaceholder="Leave blank to keep existing bot token"
+                    toggleLabel="Toggle Telegram bot token visibility"
+                    required={!existingTelegramToken}
+                    value={draft.telegramToken}
+                    error={errors.get('telegramToken')}
+                    onChange={(value) => {
+                      patch({ telegramToken: value });
+                      clearFieldError('telegramToken');
+                    }}
+                  />
+                  <TextInput
+                    label="Chat ID"
+                    description="Numeric chat ID (optional leading -) or @channelname."
+                    placeholder="-1001234567890"
+                    maxLength={64}
+                    required
+                    value={draft.telegramChatId}
+                    error={errors.get('telegramChatId')}
+                    onChange={(event) => {
+                      patch({ telegramChatId: event.currentTarget.value });
+                      clearFieldError('telegramChatId');
+                    }}
+                  />
+                </>
+              )}
+              {unknownKind && (
+                <Alert color="gray" role="status" title="Delivery settings are read-only">
+                  This channel uses a kind ({draft.kind}) that this web client cannot edit yet. You can still update its name, description, enabled state, or filter; its delivery settings and secrets will be kept unchanged.
+                </Alert>
               )}
               <Text size="xs" c="dimmed">
                 Channel changes take effect when saved, without applying network configuration.
@@ -389,8 +637,7 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
       setEditor({
         existingNames: channels.map((c) => c.name),
         existingSecrets: existingChannelSecretsOf(channels, snapshot),
-        sharedUrlHolders: [],
-        sharedAuthHolders: [],
+        sharedHoldersBySecret: {},
       });
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
@@ -419,12 +666,17 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
       ]);
       const channels = list.items.map((item) => item.value);
       if (!mountedRef.current) return;
+      const sharedHoldersBySecret: Record<string, string[]> = {};
+      for (const { view } of channelSecretsOf(current.value)) {
+        if (view.secret) {
+          sharedHoldersBySecret[view.secret] = sharedSecretHolders(view.secret, current.value.id, channels);
+        }
+      }
       setEditor({
         saved: current,
         existingNames: channels.map((c) => c.name),
         existingSecrets: existingChannelSecretsOf(channels, snapshot),
-        sharedUrlHolders: sharedSecretHolders(current.value.webhook?.url?.secret, current.value.id, channels),
-        sharedAuthHolders: sharedSecretHolders(current.value.webhook?.authorization?.secret, current.value.id, channels),
+        sharedHoldersBySecret,
       });
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
@@ -560,7 +812,7 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
             return (
               <Alert role="status" title="No notification channels">
                 {canManage
-                  ? 'No delivery channels are configured yet. Add a webhook channel to forward alerts outside the appliance.'
+                  ? 'No delivery channels are configured yet. Add a channel to forward alerts outside the appliance.'
                   : 'No delivery channels are configured yet.'}
               </Alert>
             );
@@ -585,9 +837,9 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
                     const enabled = ch.enabled ?? true;
                     const sev = severitySummary(ch.filter?.minSeverity);
                     const sources = ch.filter?.sources ?? [];
-                    const urlSecret = ch.webhook?.url;
-                    const authSecret = ch.webhook?.authorization;
-                    const hasUnresolved = Boolean(urlSecret?.unresolved || authSecret?.unresolved);
+                    const secrets = channelSecretsOf(ch);
+                    const hasUnresolved = secrets.some(({ view }) => Boolean(view.unresolved));
+                    const targetSummary = channelTargetSummary(ch);
                     return (
                       <Table.Tr key={ch.id}>
                         <Table.Td data-label="Channel">
@@ -598,7 +850,10 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
                           {ch.description && <Text size="sm" c="dimmed">{ch.description}</Text>}
                         </Table.Td>
                         <Table.Td data-label="Kind">
-                          <Badge size="sm" variant="default" className="plain-badge">{channelKindLabel[ch.kind] ?? ch.kind}</Badge>
+                          <Stack gap={2} align="flex-start">
+                            <Badge size="sm" variant="default" className="plain-badge">{channelKindDisplay(ch.kind)}</Badge>
+                            {targetSummary && <Text size="xs" c="dimmed">{targetSummary}</Text>}
+                          </Stack>
                         </Table.Td>
                         <Table.Td data-label="Status">
                           <Badge variant="dot" color={enabled ? 'green' : 'gray'}>{enabled ? 'Enabled' : 'Disabled'}</Badge>
@@ -616,16 +871,17 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
                           </Group>
                         </Table.Td>
                         <Table.Td data-label="Secrets">
-                          <Stack gap={2}>
-                            <Text size="sm">
-                              URL: {urlSecret?.unresolved ? <Text span inherit className="error-text">unresolved</Text> : urlSecret?.isSet ? 'set' : 'missing'}
-                            </Text>
-                            {authSecret && (
-                              <Text size="xs" c="dimmed">
-                                Authorization: {authSecret.unresolved ? <Text span inherit className="error-text">unresolved</Text> : authSecret.isSet ? 'set' : 'missing'}
-                              </Text>
-                            )}
-                          </Stack>
+                          {secrets.length === 0 ? (
+                            <Text size="sm" c="dimmed">None</Text>
+                          ) : (
+                            <Stack gap={2}>
+                              {secrets.map(({ label, view }, index) => (
+                                <Text key={`${label}:${view.secret}`} size={index === 0 ? 'sm' : 'xs'} c={index === 0 ? undefined : 'dimmed'}>
+                                  {label}: {view.unresolved ? <Text span inherit className="error-text">unresolved</Text> : view.isSet ? 'set' : 'missing'}
+                                </Text>
+                              ))}
+                            </Stack>
+                          )}
                         </Table.Td>
                         {canManage && (
                           <Table.Td>
@@ -684,8 +940,7 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
           saved={editor.saved}
           existingNames={editor.existingNames}
           existingSecrets={editor.existingSecrets}
-          sharedUrlHolders={editor.sharedUrlHolders}
-          sharedAuthHolders={editor.sharedAuthHolders}
+          sharedHoldersBySecret={editor.sharedHoldersBySecret}
           onSave={saveChannel}
           onClose={() => setEditor(null)}
           onRefresh={() => { if (mountedRef.current) void resource.reload(); }}

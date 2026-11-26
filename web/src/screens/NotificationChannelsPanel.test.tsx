@@ -455,4 +455,147 @@ describe('NotificationChannelsPanel', () => {
     await user.click(screen.getByRole('button', { name: 'Send test to ops' }));
     await waitFor(() => expect(onSessionLost).toHaveBeenCalledTimes(1));
   });
+
+  it('creates ntfy, Pushover, and Telegram channels and edits an unknown future kind read-only without corrupting its sub-object', async () => {
+    const user = userEvent.setup();
+    const postPayloads: unknown[] = [];
+    let putPayload: unknown;
+
+    const futureEmailChannel: SavedObject<NotificationChannel> = {
+      version: '7',
+      value: {
+        id: 'ntf_email',
+        name: 'ops-email',
+        enabled: true,
+        kind: 'email',
+        filter: { minSeverity: 'critical' },
+        email: {
+          host: 'smtp.example',
+          from: 'andaru@example.com',
+          password: { secret: 'SMTP_PASS', isSet: true, version: '7' },
+        },
+      },
+    };
+    const ntfyChannel: SavedObject<NotificationChannel> = {
+      version: '2',
+      value: {
+        id: 'ntf_ntfy',
+        name: 'ops-ntfy',
+        enabled: true,
+        kind: 'ntfy',
+        filter: { minSeverity: 'info' },
+        ntfy: { server: 'https://ntfy.sh', topic: 'andaru-alerts' },
+      },
+    };
+
+    const items: Array<SavedObject<NotificationChannel>> = [futureEmailChannel, ntfyChannel];
+
+    fetchRoutes({
+      'GET /api/v1/config/notifications/channels': () => jsonResponse(200, { state: 'saved', savedVersion: '10', items }),
+      'GET /api/v1/config/notifications/channels/ntf_email': () => jsonResponse(200, { state: 'saved', savedVersion: '10', ...futureEmailChannel }),
+      'GET /api/v1/config': () => jsonResponse(200, { state: 'saved', savedVersion: '10', value: { links: [], segments: [], zones: [] } }),
+      'POST /api/v1/config/notifications/channels': (init) => {
+        const parsed = JSON.parse(String(init?.body ?? '{}'));
+        postPayloads.push(parsed);
+        return jsonResponse(201, { state: 'saved', savedVersion: '11', version: '11', value: { id: `ntf_${postPayloads.length}`, ...parsed } });
+      },
+      'PUT /api/v1/config/notifications/channels/ntf_email': (init) => {
+        putPayload = JSON.parse(String(init?.body ?? '{}'));
+        return jsonResponse(200, { state: 'saved', savedVersion: '12', version: '12', value: futureEmailChannel.value });
+      },
+    });
+
+    render(<NotificationChannelsPanel api={new ApiClient('csrf')} canManage onSessionLost={vi.fn()} />);
+    expect(await screen.findByText('https://ntfy.sh/andaru-alerts')).toBeInTheDocument();
+    expect(screen.getByText('None')).toBeInTheDocument();
+    expect(screen.getByText('email')).toBeInTheDocument();
+    expect(screen.getByText(/password:\s*set/i)).toBeInTheDocument();
+
+    // Create an ntfy channel with custom server and optional token.
+    await user.click(screen.getByRole('button', { name: 'Add channel' }));
+    let dialog = await screen.findByRole('dialog', { name: 'Add notification channel' });
+    await user.click(within(dialog).getByLabelText(/^Channel kind/, { selector: 'input' }));
+    await user.click(await screen.findByRole('option', { name: 'ntfy' }));
+    await user.type(within(dialog).getByLabelText(/^Name/, { selector: 'input' }), 'ops-ntfy-2');
+    const serverInput = within(dialog).getByLabelText(/^Server URL/, { selector: 'input' });
+    await user.clear(serverInput);
+    await user.type(serverInput, 'https://ntfy.example');
+    await user.type(within(dialog).getByLabelText(/^Topic/, { selector: 'input' }), 'alerts_1');
+    await user.type(within(dialog).getByLabelText(/^Access token/, { selector: 'input' }), 'tk_secret');
+    await user.click(within(dialog).getByRole('button', { name: 'Add channel' }));
+    await waitFor(() => expect(postPayloads).toHaveLength(1));
+    expect(postPayloads[0]).toEqual({
+      name: 'ops-ntfy-2',
+      enabled: true,
+      kind: 'ntfy',
+      filter: { minSeverity: 'info' },
+      ntfy: {
+        server: 'https://ntfy.example',
+        topic: 'alerts_1',
+        token: { secret: 'NOTIFY_OPS_NTFY_2_TOKEN', set: 'tk_secret', expectedVersion: '0' },
+      },
+    });
+
+    // Create a Telegram channel via the kind selector.
+    await user.click(screen.getByRole('button', { name: 'Add channel' }));
+    dialog = await screen.findByRole('dialog', { name: 'Add notification channel' });
+    await user.click(within(dialog).getByLabelText(/^Channel kind/, { selector: 'input' }));
+    await user.click(await screen.findByRole('option', { name: 'Telegram' }));
+    await user.type(within(dialog).getByLabelText(/^Name/, { selector: 'input' }), 'ops-tg');
+    await user.type(within(dialog).getByLabelText(/^Bot token/, { selector: 'input' }), '123456:BOT_SECRET');
+    await user.type(within(dialog).getByLabelText(/^Chat ID/, { selector: 'input' }), '-1001234567890');
+    await user.click(within(dialog).getByRole('button', { name: 'Add channel' }));
+    await waitFor(() => expect(postPayloads).toHaveLength(2));
+    expect(postPayloads[1]).toEqual({
+      name: 'ops-tg',
+      enabled: true,
+      kind: 'telegram',
+      filter: { minSeverity: 'info' },
+      telegram: {
+        token: { secret: 'NOTIFY_OPS_TG_TOKEN', set: '123456:BOT_SECRET', expectedVersion: '0' },
+        chatId: '-1001234567890',
+      },
+    });
+
+    // Create a Pushover channel.
+    await user.click(screen.getByRole('button', { name: 'Add channel' }));
+    dialog = await screen.findByRole('dialog', { name: 'Add notification channel' });
+    await user.click(within(dialog).getByLabelText(/^Channel kind/, { selector: 'input' }));
+    await user.click(await screen.findByRole('option', { name: 'Pushover' }));
+    await user.type(within(dialog).getByLabelText(/^Name/, { selector: 'input' }), 'ops-po');
+    await user.type(within(dialog).getByLabelText(/^Application token/, { selector: 'input' }), 'app-secret');
+    await user.type(within(dialog).getByLabelText(/^User key/, { selector: 'input' }), 'user-secret');
+    await user.click(within(dialog).getByRole('button', { name: 'Add channel' }));
+    await waitFor(() => expect(postPayloads).toHaveLength(3));
+    expect(postPayloads[2]).toEqual({
+      name: 'ops-po',
+      enabled: true,
+      kind: 'pushover',
+      filter: { minSeverity: 'info' },
+      pushover: {
+        token: { secret: 'NOTIFY_OPS_PO_TOKEN', set: 'app-secret', expectedVersion: '0' },
+        user: { secret: 'NOTIFY_OPS_PO_USER', set: 'user-secret', expectedVersion: '0' },
+      },
+    });
+
+    // Edit unknown future kind (email): kind selector disabled, read-only alert shown, disable echoes email sub-object intact.
+    await user.click(screen.getByRole('button', { name: 'Edit ops-email' }));
+    dialog = await screen.findByRole('dialog', { name: 'Edit channel: ops-email' });
+    expect(within(dialog).getByText('Delivery settings are read-only')).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(/^Channel kind/, { selector: 'input' })).toBeDisabled();
+    await user.click(within(dialog).getByRole('switch'));
+    await user.click(within(dialog).getByRole('button', { name: 'Save channel' }));
+    await waitFor(() => expect(putPayload).toBeDefined());
+    expect(putPayload).toEqual({
+      name: 'ops-email',
+      enabled: false,
+      kind: 'email',
+      filter: { minSeverity: 'critical' },
+      email: {
+        host: 'smtp.example',
+        from: 'andaru@example.com',
+        password: { secret: 'SMTP_PASS' },
+      },
+    });
+  });
 });

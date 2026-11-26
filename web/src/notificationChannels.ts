@@ -1,9 +1,11 @@
 import { fieldErrors } from './api';
 import type {
+  KnownNotificationChannelKind,
   NotificationChannel,
   NotificationChannelKind,
   NotificationChannelWrite,
   NotificationSeverity,
+  SecretView,
   SecretWrite,
   Snapshot,
 } from './types';
@@ -17,21 +19,117 @@ export interface NotificationChannelDraft {
   sources: string[];
   webhookUrl: string;
   webhookAuth: string;
-  removeAuth: boolean;
+  removeWebhookAuth: boolean;
+  ntfyServer: string;
+  ntfyTopic: string;
+  ntfyToken: string;
+  removeNtfyToken: boolean;
+  pushoverToken: string;
+  pushoverUser: string;
+  telegramToken: string;
+  telegramChatId: string;
 }
 
 export const knownNotificationSources = ['engine', 'apply', 'upgrade', 'disk', 'delivery', 'notifications'];
 
-export const channelKindLabel: Record<NotificationChannelKind, string> = {
+export const knownChannelKinds: KnownNotificationChannelKind[] = ['webhook', 'ntfy', 'pushover', 'telegram'];
+
+export const channelKindLabel: Record<KnownNotificationChannelKind, string> = {
   webhook: 'Webhook',
+  ntfy: 'ntfy',
+  pushover: 'Pushover',
+  telegram: 'Telegram',
 };
+
+export function isKnownChannelKind(kind: string): kind is KnownNotificationChannelKind {
+  return (knownChannelKinds as string[]).includes(kind);
+}
+
+export function channelKindDisplay(kind: string): string {
+  return isKnownChannelKind(kind) ? channelKindLabel[kind] : kind;
+}
 
 const controlChars = /\p{Cc}/u;
 const controlOrFormatChars = /[\p{Cc}\p{Cf}]/u;
+const ntfyTopicPattern = /^[A-Za-z0-9_-]{1,64}$/;
+const telegramChatIdPattern = /^(-?[0-9]+|@[A-Za-z0-9_]+)$/;
 const utf8Encoder = new TextEncoder();
 const secretByteLimit = 4096;
 const descriptionCharLimit = 4096;
 const utf8ByteLength = (value: string) => utf8Encoder.encode(value).length;
+
+const topLevelChannelKeys = new Set(['id', 'name', 'description', 'enabled', 'kind', 'filter']);
+
+export interface ChannelSecretEntry {
+  label: string;
+  view: SecretView;
+}
+
+function isSecretView(value: unknown): value is SecretView {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const obj = value as Record<string, unknown>;
+  return typeof obj.secret === 'string' && ('isSet' in obj || 'version' in obj || 'unresolved' in obj);
+}
+
+function collectUnknownSecrets(value: unknown, prefix: string, out: ChannelSecretEntry[]) {
+  if (isSecretView(value)) {
+    out.push({ label: prefix || 'secret', view: value });
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => collectUnknownSecrets(item, prefix ? `${prefix}[${index}]` : `[${index}]`, out));
+    return;
+  }
+  if (value && typeof value === 'object') {
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      collectUnknownSecrets(v, prefix ? `${prefix}.${k}` : k, out);
+    }
+  }
+}
+
+// Extract all secret references held by a channel across known and unknown future kind sub-objects.
+export function channelSecretsOf(channel: NotificationChannel): ChannelSecretEntry[] {
+  if (channel.kind === 'webhook' && channel.webhook) {
+    const out: ChannelSecretEntry[] = [];
+    if (channel.webhook.url) out.push({ label: 'URL', view: channel.webhook.url });
+    if (channel.webhook.authorization) out.push({ label: 'Authorization', view: channel.webhook.authorization });
+    return out;
+  }
+  if (channel.kind === 'ntfy' && channel.ntfy) {
+    return channel.ntfy.token ? [{ label: 'Token', view: channel.ntfy.token }] : [];
+  }
+  if (channel.kind === 'pushover' && channel.pushover) {
+    const out: ChannelSecretEntry[] = [];
+    if (channel.pushover.token) out.push({ label: 'App token', view: channel.pushover.token });
+    if (channel.pushover.user) out.push({ label: 'User key', view: channel.pushover.user });
+    return out;
+  }
+  if (channel.kind === 'telegram' && channel.telegram) {
+    return channel.telegram.token ? [{ label: 'Bot token', view: channel.telegram.token }] : [];
+  }
+  // Forward-compatible recursive scan of unknown kind sub-objects (e.g. future email kind).
+  const out: ChannelSecretEntry[] = [];
+  if (!topLevelChannelKeys.has(channel.kind)) {
+    collectUnknownSecrets(channel[channel.kind], '', out);
+  }
+  return out;
+}
+
+// Echo an unknown kind's sub-object back in write form, converting any SecretView fields to { secret, unresolved? }.
+function echoUnknownKindSubObject(sub: unknown): unknown {
+  if (isSecretView(sub)) {
+    return { secret: sub.secret, ...(sub.unresolved ? { unresolved: true } : {}) };
+  }
+  if (Array.isArray(sub)) return sub.map(echoUnknownKindSubObject);
+  if (sub && typeof sub === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(sub as Record<string, unknown>)) {
+      if (v !== undefined) out[k] = echoUnknownKindSubObject(v);
+    }
+    return out;
+  }
+  return sub;
+}
 
 export function channelDraftOf(channel?: NotificationChannel): NotificationChannelDraft {
   return {
@@ -43,15 +141,24 @@ export function channelDraftOf(channel?: NotificationChannel): NotificationChann
     sources: [...(channel?.filter?.sources ?? [])],
     webhookUrl: '',
     webhookAuth: '',
-    removeAuth: false,
+    removeWebhookAuth: false,
+    ntfyServer: channel?.ntfy?.server ?? 'https://ntfy.sh',
+    ntfyTopic: channel?.ntfy?.topic ?? '',
+    ntfyToken: '',
+    removeNtfyToken: false,
+    pushoverToken: '',
+    pushoverUser: '',
+    telegramToken: '',
+    telegramChatId: channel?.telegram?.chatId ?? '',
   };
 }
 
 export function existingChannelSecretsOf(channels: NotificationChannel[], snapshot?: Snapshot): string[] {
   const names = new Set<string>();
   for (const ch of channels) {
-    if (ch.webhook?.url?.secret) names.add(ch.webhook.url.secret);
-    if (ch.webhook?.authorization?.secret) names.add(ch.webhook.authorization.secret);
+    for (const { view } of channelSecretsOf(ch)) {
+      if (view.secret) names.add(view.secret);
+    }
   }
   if (snapshot) {
     for (const link of snapshot.value.links) {
@@ -63,7 +170,11 @@ export function existingChannelSecretsOf(channels: NotificationChannel[], snapsh
 }
 
 // Allocate a collision-free core secret name matching ^[A-Za-z_][A-Za-z0-9_]{0,63}$.
-export function nextChannelSecretName(channelName: string, suffix: 'URL' | 'AUTH', existingSecrets: Iterable<string> = []): string {
+export function nextChannelSecretName(
+  channelName: string,
+  suffix: 'URL' | 'AUTH' | 'TOKEN' | 'USER',
+  existingSecrets: Iterable<string> = [],
+): string {
   const used = new Set(existingSecrets);
   const slug = channelName.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40).replace(/_+$/, '');
   const base = slug ? `NOTIFY_${slug}_${suffix}` : `NOTIFY_${suffix}`;
@@ -93,6 +204,64 @@ export function validateWebhookUrl(raw: string, required: boolean): string | und
     }
   } catch {
     return 'Use an http:// or https:// URL with a host.';
+  }
+  return undefined;
+}
+
+// ntfy server must be an http(s) URL with host (and optional port) only: no path, query, fragment, or userinfo.
+export function validateNtfyServer(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return 'Enter an ntfy server URL.';
+  if (controlChars.test(trimmed) || /\s/.test(trimmed)) {
+    return 'Server URL cannot contain whitespace or control characters.';
+  }
+  if (!/^https?:\/\/[^/?#\\@]+$/i.test(trimmed)) {
+    return 'Use an http:// or https:// server URL with a host only (no path, query, or credentials).';
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (
+      (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
+      || !parsed.hostname
+      || parsed.username !== ''
+      || parsed.password !== ''
+      || parsed.search !== ''
+      || parsed.hash !== ''
+    ) {
+      return 'Use an http:// or https:// server URL with a host only (no path, query, or credentials).';
+    }
+  } catch {
+    return 'Use an http:// or https:// server URL with a host only (no path, query, or credentials).';
+  }
+  return undefined;
+}
+
+export function validateNtfyTopic(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return 'Enter an ntfy topic.';
+  if (!ntfyTopicPattern.test(trimmed)) {
+    return 'Use 1 to 64 letters, digits, underscores, or hyphens.';
+  }
+  return undefined;
+}
+
+export function validateTelegramChatId(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return 'Enter a Telegram chat ID.';
+  if (trimmed.length > 64 || !telegramChatIdPattern.test(trimmed)) {
+    return 'Use a numeric chat ID (optional leading -) or @channelname (up to 64 characters).';
+  }
+  return undefined;
+}
+
+function validateSecretValue(raw: string, label: string, required: boolean): string | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return required ? `Enter ${label}.` : undefined;
+  if (controlChars.test(trimmed)) {
+    return `${label[0].toUpperCase()}${label.slice(1)} cannot contain control characters or line breaks.`;
+  }
+  if (utf8ByteLength(trimmed) > secretByteLimit) {
+    return `${label[0].toUpperCase()}${label.slice(1)} must be ${secretByteLimit} bytes or fewer.`;
   }
   return undefined;
 }
@@ -141,16 +310,33 @@ export function validateChannelDraft(
     errors.set('sources', 'Each source must be 1 to 64 characters without control or format characters.');
   }
 
-  const urlErr = validateWebhookUrl(draft.webhookUrl, !saved?.webhook?.url);
-  if (urlErr) errors.set('webhookUrl', urlErr);
-
-  if (!draft.removeAuth) {
-    const trimmedAuth = draft.webhookAuth.trim();
-    if (controlChars.test(trimmedAuth)) {
-      errors.set('webhookAuth', 'Authorization header cannot contain control characters or line breaks.');
-    } else if (utf8ByteLength(trimmedAuth) > secretByteLimit) {
-      errors.set('webhookAuth', `Authorization header must be ${secretByteLimit} bytes or fewer.`);
+  const sameKind = saved?.kind === draft.kind;
+  if (draft.kind === 'webhook') {
+    const urlErr = validateWebhookUrl(draft.webhookUrl, !(sameKind && saved?.webhook?.url));
+    if (urlErr) errors.set('webhookUrl', urlErr);
+    if (!draft.removeWebhookAuth) {
+      const authErr = validateSecretValue(draft.webhookAuth, 'authorization header', false);
+      if (authErr) errors.set('webhookAuth', authErr);
     }
+  } else if (draft.kind === 'ntfy') {
+    const serverErr = validateNtfyServer(draft.ntfyServer);
+    if (serverErr) errors.set('ntfyServer', serverErr);
+    const topicErr = validateNtfyTopic(draft.ntfyTopic);
+    if (topicErr) errors.set('ntfyTopic', topicErr);
+    if (!draft.removeNtfyToken) {
+      const tokErr = validateSecretValue(draft.ntfyToken, 'access token', false);
+      if (tokErr) errors.set('ntfyToken', tokErr);
+    }
+  } else if (draft.kind === 'pushover') {
+    const tokErr = validateSecretValue(draft.pushoverToken, 'application token', !(sameKind && saved?.pushover?.token));
+    if (tokErr) errors.set('pushoverToken', tokErr);
+    const userErr = validateSecretValue(draft.pushoverUser, 'user key', !(sameKind && saved?.pushover?.user));
+    if (userErr) errors.set('pushoverUser', userErr);
+  } else if (draft.kind === 'telegram') {
+    const tokErr = validateSecretValue(draft.telegramToken, 'bot token', !(sameKind && saved?.telegram?.token));
+    if (tokErr) errors.set('telegramToken', tokErr);
+    const chatErr = validateTelegramChatId(draft.telegramChatId);
+    if (chatErr) errors.set('telegramChatId', chatErr);
   }
 
   return errors;
@@ -165,11 +351,53 @@ export function sharedSecretHolders(
   const holders: string[] = [];
   for (const ch of channels) {
     if (ch.id === selfId) continue;
-    if (ch.webhook?.url?.secret === secretName || ch.webhook?.authorization?.secret === secretName) {
+    if (channelSecretsOf(ch).some(({ view }) => view.secret === secretName)) {
       holders.push(ch.name);
     }
   }
   return holders.sort((a, b) => a.localeCompare(b));
+}
+
+function writeRequiredSecret(
+  rawValue: string,
+  channelName: string,
+  suffix: 'URL' | 'TOKEN' | 'USER',
+  existing: SecretView | undefined,
+  used: Set<string>,
+): SecretWrite {
+  const trimmed = rawValue.trim();
+  if (trimmed !== '') {
+    const secret = nextChannelSecretName(channelName, suffix, used);
+    used.add(secret);
+    return { secret, set: trimmed, expectedVersion: '0' };
+  }
+  if (existing) {
+    return { secret: existing.secret, ...(existing.unresolved ? { unresolved: true } : {}) };
+  }
+  const secret = nextChannelSecretName(channelName, suffix, used);
+  used.add(secret);
+  return { secret, set: '', expectedVersion: '0' };
+}
+
+function writeOptionalSecret(
+  rawValue: string,
+  remove: boolean,
+  channelName: string,
+  suffix: 'AUTH' | 'TOKEN',
+  existing: SecretView | undefined,
+  used: Set<string>,
+): SecretWrite | undefined {
+  if (remove) return undefined;
+  const trimmed = rawValue.trim();
+  if (trimmed !== '') {
+    const secret = nextChannelSecretName(channelName, suffix, used);
+    used.add(secret);
+    return { secret, set: trimmed, expectedVersion: '0' };
+  }
+  if (existing) {
+    return { secret: existing.secret, ...(existing.unresolved ? { unresolved: true } : {}) };
+  }
+  return undefined;
 }
 
 export function buildChannelWrite(
@@ -182,41 +410,13 @@ export function buildChannelWrite(
   const sources = normalizeSources(draft.sources);
   const used = new Set(existingSecrets);
 
-  const existingUrl = saved?.webhook?.url;
-  const existingAuth = saved?.webhook?.authorization;
-  if (existingUrl?.secret) used.add(existingUrl.secret);
-  if (existingAuth?.secret) used.add(existingAuth.secret);
-
-  // Always allocate a fresh secret (expectedVersion: '0') when writing a new URL or auth value so
-  // editing one channel can never mutate a secret another channel references — even if another
-  // channel starts referencing the old secret concurrently between open and save.
-  const trimmedUrl = draft.webhookUrl.trim();
-  let urlWrite: SecretWrite;
-  if (trimmedUrl !== '') {
-    const secret = nextChannelSecretName(name, 'URL', used);
-    used.add(secret);
-    urlWrite = { secret, set: trimmedUrl, expectedVersion: '0' };
-  } else if (existingUrl) {
-    urlWrite = { secret: existingUrl.secret, ...(existingUrl.unresolved ? { unresolved: true } : {}) };
-  } else {
-    const secret = nextChannelSecretName(name, 'URL', used);
-    used.add(secret);
-    urlWrite = { secret, set: '', expectedVersion: '0' };
-  }
-
-  const trimmedAuth = draft.webhookAuth.trim();
-  let authWrite: SecretWrite | undefined;
-  if (!draft.removeAuth) {
-    if (trimmedAuth !== '') {
-      const secret = nextChannelSecretName(name, 'AUTH', used);
-      used.add(secret);
-      authWrite = { secret, set: trimmedAuth, expectedVersion: '0' };
-    } else if (existingAuth) {
-      authWrite = { secret: existingAuth.secret, ...(existingAuth.unresolved ? { unresolved: true } : {}) };
+  if (saved) {
+    for (const { view } of channelSecretsOf(saved)) {
+      if (view.secret) used.add(view.secret);
     }
   }
 
-  return {
+  const base: NotificationChannelWrite = {
     name,
     ...(description ? { description } : {}),
     enabled: draft.enabled,
@@ -225,11 +425,62 @@ export function buildChannelWrite(
       minSeverity: draft.minSeverity,
       ...(sources.length > 0 ? { sources } : {}),
     },
-    webhook: {
-      url: urlWrite,
-      ...(authWrite ? { authorization: authWrite } : {}),
-    },
   };
+
+  // Always allocate a fresh secret (expectedVersion: '0') when writing a new secret value so
+  // editing one channel can never mutate a secret another channel references concurrently.
+  const sameKind = saved?.kind === draft.kind;
+  if (draft.kind === 'webhook') {
+    const url = writeRequiredSecret(draft.webhookUrl, name, 'URL', sameKind ? saved?.webhook?.url : undefined, used);
+    const authorization = writeOptionalSecret(
+      draft.webhookAuth,
+      draft.removeWebhookAuth,
+      name,
+      'AUTH',
+      sameKind ? saved?.webhook?.authorization : undefined,
+      used,
+    );
+    return { ...base, webhook: { url, ...(authorization ? { authorization } : {}) } };
+  }
+  if (draft.kind === 'ntfy') {
+    const token = writeOptionalSecret(
+      draft.ntfyToken,
+      draft.removeNtfyToken,
+      name,
+      'TOKEN',
+      sameKind ? saved?.ntfy?.token : undefined,
+      used,
+    );
+    return {
+      ...base,
+      ntfy: {
+        server: draft.ntfyServer.trim(),
+        topic: draft.ntfyTopic.trim(),
+        ...(token ? { token } : {}),
+      },
+    };
+  }
+  if (draft.kind === 'pushover') {
+    const token = writeRequiredSecret(draft.pushoverToken, name, 'TOKEN', sameKind ? saved?.pushover?.token : undefined, used);
+    const user = writeRequiredSecret(draft.pushoverUser, name, 'USER', sameKind ? saved?.pushover?.user : undefined, used);
+    return { ...base, pushover: { token, user } };
+  }
+  if (draft.kind === 'telegram') {
+    const token = writeRequiredSecret(draft.telegramToken, name, 'TOKEN', sameKind ? saved?.telegram?.token : undefined, used);
+    return {
+      ...base,
+      telegram: {
+        token,
+        chatId: draft.telegramChatId.trim(),
+      },
+    };
+  }
+
+  // Unknown future kind: preserve its own sub-object unchanged (stripping SecretView metadata).
+  if (saved && !topLevelChannelKeys.has(draft.kind) && saved[draft.kind] !== undefined) {
+    return { ...base, [draft.kind]: echoUnknownKindSubObject(saved[draft.kind]) };
+  }
+  return base;
 }
 
 export function channelFieldErrors(error: unknown): Map<string, string> {
@@ -242,6 +493,13 @@ export function channelFieldErrors(error: unknown): Map<string, string> {
     if (clean === '/filter/sources' || clean.startsWith('/filter/sources/')) return 'sources';
     if (clean === '/webhook/url' || clean.startsWith('/webhook/url/')) return 'webhookUrl';
     if (clean === '/webhook/authorization' || clean.startsWith('/webhook/authorization/')) return 'webhookAuth';
+    if (clean === '/ntfy/server') return 'ntfyServer';
+    if (clean === '/ntfy/topic') return 'ntfyTopic';
+    if (clean === '/ntfy/token' || clean.startsWith('/ntfy/token/')) return 'ntfyToken';
+    if (clean === '/pushover/token' || clean.startsWith('/pushover/token/')) return 'pushoverToken';
+    if (clean === '/pushover/user' || clean.startsWith('/pushover/user/')) return 'pushoverUser';
+    if (clean === '/telegram/token' || clean.startsWith('/telegram/token/')) return 'telegramToken';
+    if (clean === '/telegram/chatId') return 'telegramChatId';
     return '';
   });
 }
