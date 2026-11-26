@@ -577,7 +577,7 @@ describe('simulateTrafficFlow', () => {
           reflection: false,
         }],
         oneToOne: [
-          { id: 'oto_excl', name: 'Exclude all', enabled: true, zone: 'zon_wan', internal: '10.20.0.0/24', destination: [], noBinat: true },
+          { id: 'oto_excl', name: 'Exclude range', enabled: true, zone: 'zon_wan', internal: '10.20.0.48/28', destination: [], noBinat: true },
           { id: 'oto_refl', name: 'Excluded reflected', enabled: true, zone: 'zon_wan', external: '203.0.113.50/32', internal: '10.20.0.50/32', destination: [], reflection: true },
         ],
       },
@@ -680,6 +680,7 @@ describe('simulateTrafficFlow', () => {
     expect(leasedPd.verdict).toBe('accept');
     expect(leasedPd.chain).toBe('forward');
     expect(leasedPd.steps.find((s) => s.stage === 'routing')?.summary).toMatch(/Delegated IPv6 prefix 2001:db8:100:20::\/60/);
+    expect(leasedPd.warnings.some((w) => w.includes('inferred from an active DHCPv6 lease'))).toBe(true);
 
     // When live leases are loaded but do not cover the destination, no_route is returned without the unavailable-leases warning.
     const unleasedPdWithData = simulateTrafficFlow(
@@ -699,7 +700,7 @@ describe('simulateTrafficFlow', () => {
     expect(connectedInsidePool.chain).toBe('forward');
     expect(connectedInsidePool.steps.find((s) => s.stage === 'routing')?.summary).toMatch(/Directly connected subnet 2001:db8:100::1\/64/);
 
-    // Dynamically derived PD pool (subnetId/length) resolved from livePrefixes returns no_route when unleased and warns when livePrefixes is absent.
+    // Dynamically derived PD pool (subnetId/length) derives placement from the selected config + WAN prefix (delegation.go:Place).
     const dynamicPdPool: Snapshot['value'] = {
       ...baseConfig,
       segments: baseConfig.segments.map((s) => {
@@ -718,34 +719,98 @@ describe('simulateTrafficFlow', () => {
         prefixDelegation: { subnetId: '1', length: 60, delegatedLength: 64 },
       }],
     };
-    const lanLiveLinks: LinkStatus[] = [
+    const pdLiveLinks: LinkStatus[] = [
+      { ifIndex: 1, name: 'enp1s0', linkType: 'ether', mtu: 1500, operState: 'UP', flags: ['UP'], permanentAddress: '52:54:00:aa:bb:01', addresses: [] },
       { ifIndex: 2, name: 'enp2s0', linkType: 'ether', mtu: 1500, operState: 'UP', flags: ['UP'], permanentAddress: '52:54:00:aa:bb:02', addresses: [{ family: 'ipv6', address: '2001:db8:aa00::1', prefixLength: 64, scope: 'global' }] },
     ];
+    const pdLivePrefixes = {
+      wans: [{
+        interface: 'enp1s0',
+        current: { prefix: '2001:db8:aa00::/56' },
+        segments: [{ interface: 'enp2s0', subnetId: '0', prefix: '2001:db8:aa00::/64' }],
+        pools: [{ interface: 'enp2s0', subnetId: '1', prefix: '2001:db8:aa00:10::/60' }],
+        notFitting: [],
+      }],
+    };
     const dynUnleased = simulateTrafficFlow(
-      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '2001:db8:aa00::50', dstIp: '2001:db8:aa10::99', dstPort: 443 },
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '2001:db8:aa00::50', dstIp: '2001:db8:aa00:10::99', dstPort: 443 },
       dynamicPdPool,
-      lanLiveLinks,
-      {
-        liveLeases6: [],
-        livePrefixes: {
-          wans: [{
-            interface: 'enp1s0',
-            current: { prefix: '2001:db8:aa00::/56' },
-            segments: [{ interface: 'enp2s0', subnetId: '0', prefix: '2001:db8:aa00::/64' }],
-            pools: [{ interface: 'enp2s0', subnetId: '1', prefix: '2001:db8:aa10::/60' }],
-            notFitting: [],
-          }],
-        },
-      },
+      pdLiveLinks,
+      { liveLeases6: [], livePrefixes: pdLivePrefixes },
     );
     expect(dynUnleased.verdict).toBe('no_route');
     expect(dynUnleased.decidedBy).toEqual({ label: 'DHCPv6 LAN dynamic PD', to: '/network/dhcp' });
 
+    // Saved config changing pool length from /60 to /62 derives 2001:db8:aa00:4::/62 from WAN current.prefix rather than stale live pools.
+    const savedNarrowedPool: Snapshot['value'] = {
+      ...dynamicPdPool,
+      dhcp6: [{
+        id: 'dh6_lan_dyn',
+        name: 'LAN dynamic PD',
+        segment: 'seg_lan',
+        prefixDelegation: { subnetId: '1', length: 62, delegatedLength: 64 },
+      }],
+    };
+    const dynNarrowed = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '2001:db8:aa00::50', dstIp: '2001:db8:aa00:4::99', dstPort: 443 },
+      savedNarrowedPool,
+      pdLiveLinks,
+      { liveLeases6: [], livePrefixes: pdLivePrefixes },
+    );
+    expect(dynNarrowed.verdict).toBe('no_route');
+    expect(dynNarrowed.steps.find((s) => s.stage === 'routing')?.summary).toMatch(/2001:db8:aa00:4::\/62/);
+
     const dynNoPrefixes = simulateTrafficFlow(
-      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '2001:db8:aa00::50', dstIp: '2001:db8:aa10::99', dstPort: 443 },
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '2001:db8:aa00::50', dstIp: '2001:db8:aa00:10::99', dstPort: 443 },
       dynamicPdPool,
-      lanLiveLinks,
+      pdLiveLinks,
     );
     expect(dynNoPrefixes.warnings.some((w) => w.includes('Dynamic DHCPv6 prefix-delegation pool prefixes were unavailable'))).toBe(true);
+
+    // IPv6 target.self redirect drops when ingress segment has ipv6.mode === 'none'.
+    const ipv6LessDmz: Snapshot['value'] = {
+      ...baseConfig,
+      nat: {
+        ...baseConfig.nat,
+        portForwards: [{
+          id: 'pfw_dns6_self',
+          name: 'DNS6 intercept',
+          enabled: true,
+          family: 'ipv6',
+          ingressZones: ['zon_dmz'],
+          protocol: 'udp',
+          from: [],
+          to: { self: true },
+          toNegated: true,
+          ports: '53',
+          target: { self: true },
+          filterRule: 'auto',
+        }],
+      },
+    };
+    const droppedRedir6 = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_dmz', protocol: 'udp', srcIp: '2001:db8:2::10', dstIp: '2606:4700:4700::1111', dstPort: 53 },
+      ipv6LessDmz,
+    );
+    expect(droppedRedir6.verdict).toBe('drop');
+    expect(droppedRedir6.steps.find((s) => s.stage === 'prerouting')?.summary).toMatch(/has no IPv6 address/);
+
+    // A live dummy interface sharing a saved VLAN's derived name must not supply the VLAN's live lease.
+    const vlanWan: Snapshot['value'] = {
+      ...baseConfig,
+      links: [
+        ...baseConfig.links,
+        { id: 'lnk_112233445566', name: 'WAN VLAN', kind: 'vlan', parent: 'lnk_wan', vlanId: 100, mtu: 1500, enabled: true },
+      ],
+      segments: baseConfig.segments.map((s) => (s.id === 'seg_wan'
+        ? { ...s, link: 'lnk_112233445566', addressing: { ipv4: { mode: 'dhcp' }, ipv6: { mode: 'none' } } }
+        : s)),
+    };
+    const dummyCollision = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '192.168.1.50', dstIp: '1.1.1.1', dstPort: 443 },
+      vlanWan,
+      [{ ifIndex: 9, name: 'vl112233445566', kind: 'dummy', linkType: 'ether', mtu: 1500, operState: 'UP', flags: ['UP'], addresses: [{ family: 'ipv4', address: '198.51.100.99', prefixLength: 24, scope: 'global' }] }],
+    );
+    expect(dummyCollision.finalTuple).not.toContain('198.51.100.99');
   });
 });

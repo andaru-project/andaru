@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { Link } from 'react-router';
 import { ApiClient, ApiError } from '../api';
 import { simulateTrafficFlow, validateProbe, type FlowStep, type FlowVerdict, type StepOutcome, type TrafficProbe, type TrafficProtocol } from '../trafficFlow';
-import type { Lease6, LinkStatus, PrefixView, Session, Snapshot } from '../types';
+import type { Applies, Lease6, LinkStatus, PrefixView, Session, Snapshot } from '../types';
 import { useResource } from '../useResource';
 import { Loaded } from './Loaded';
 import { ZoneBadge, ZonePill } from './ZoneBadge';
@@ -47,6 +47,7 @@ interface LoadedContext {
   liveLinks: LinkStatus[];
   liveLeases6: Lease6[] | null;
   livePrefixes: PrefixView | null;
+  liveStatusVersionMismatch: boolean;
 }
 
 function optional<T>(promise: Promise<T>, fallback: T): Promise<T> {
@@ -112,24 +113,37 @@ export function TrafficFlowScreen({ api, session, onSessionLost }: TrafficFlowSc
   const canReadStatus = session.capabilities.includes('status.read');
 
   const load = useCallback(async (): Promise<LoadedContext> => {
-    const [saved, applies, liveLinks, liveLeases6, livePrefixes] = await Promise.all([
-      api.config(),
-      optional(api.listApplies(), null),
-      canReadStatus ? optional(api.links().then((res) => res.items), []) : Promise.resolve([]),
-      canReadStatus ? optional(api.leases().then((res) => res.v6), null) : Promise.resolve(null),
-      canReadStatus ? optional(api.prefixes(), null) : Promise.resolve(null),
-    ]);
+    let saved!: Snapshot;
+    let applies: Applies | null = null;
+    let liveLinks: LinkStatus[] = [];
+    let liveLeases6: Lease6[] | null = null;
+    let livePrefixes: PrefixView | null = null;
+    let liveStatusVersionMismatch = false;
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      [saved, applies, liveLinks, liveLeases6, livePrefixes] = await Promise.all([
+        api.config(),
+        optional(api.listApplies(), null),
+        canReadStatus ? optional(api.links().then((res) => res.items), []) : Promise.resolve([]),
+        canReadStatus ? optional(api.leases().then((res) => res.v6), null) : Promise.resolve(null),
+        canReadStatus ? optional(api.prefixes(), null) : Promise.resolve(null),
+      ]);
+      if (!canReadStatus || !applies) break;
+      const appliesAfter = await optional(api.listApplies(), null);
+      if (!appliesAfter || appliesAfter.pointers.live === applies.pointers.live) break;
+      if (attempt === 1) liveStatusVersionMismatch = true;
+    }
 
     const liveApplyId = applies?.pointers.live;
     const liveVersion = liveApplyId
-      ? (applies.items.find((item) => item.id === liveApplyId)?.savedVersion ?? null)
+      ? (applies?.items.find((item) => item.id === liveApplyId)?.savedVersion ?? null)
       : null;
 
     const liveSnapshot = liveVersion && liveVersion !== saved.savedVersion
       ? await optional(api.version(liveVersion).then((detail) => normalizeConfigValue(detail.value)), null)
       : null;
 
-    return { saved, liveVersion, liveSnapshot, liveLinks, liveLeases6, livePrefixes };
+    return { saved, liveVersion, liveSnapshot, liveLinks, liveLeases6, livePrefixes, liveStatusVersionMismatch };
   }, [api, canReadStatus]);
 
   const resource = useResource(load, onSessionLost);
@@ -177,6 +191,7 @@ export function TrafficFlowScreen({ api, session, onSessionLost }: TrafficFlowSc
         evaluatingSavedDiffersFromLive: effectiveSource === 'saved' && canCompareLive,
         liveLeases6: data.liveLeases6 ?? undefined,
         livePrefixes: data.livePrefixes ?? undefined,
+        liveStatusVersionMismatch: data.liveStatusVersionMismatch,
       }),
       probeStaleInSource: false,
     };

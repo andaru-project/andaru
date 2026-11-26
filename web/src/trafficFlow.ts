@@ -189,7 +189,9 @@ function isIpv6Uplink(segment: Segment): boolean {
   return Boolean(segment.addressing.ipv6.gateway) || segment.addressing.ipv6.mode === 'slaac' || segment.addressing.ipv6.mode === 'dhcp6';
 }
 
-// Match a saved link to its live LinkStatus by unique permanent MAC (Ethernet) or derived kernel name (virtual links).
+const virtualKernelKind: Record<string, string> = { vlan: 'vlan', bridge: 'bridge', bond: 'bond', pppoe: 'ppp' };
+
+// Match a saved link to its live LinkStatus by unique permanent MAC (Ethernet) or derived kernel name + kind (virtual links).
 function findLiveLink(link: SavedLink | undefined, liveLinks: LinkStatus[]): LinkStatus | undefined {
   if (!link) return undefined;
   if (link.kind === 'ethernet') {
@@ -201,7 +203,29 @@ function findLiveLink(link: SavedLink | undefined, liveLinks: LinkStatus[]): Lin
     return liveLinks.find((l) => l.name === link.name);
   }
   const derived = kernelName(link, new Map());
-  return derived ? liveLinks.find((l) => l.name === derived) : undefined;
+  const expectedKind = virtualKernelKind[link.kind];
+  return derived ? liveLinks.find((l) => l.name === derived && (!expectedKind || l.kind === expectedKind)) : undefined;
+}
+
+// Place a delegated IPv6 subnet/pool inside base (mirrors internal/delegation/delegation.go:Place).
+function placeIpv6Prefix(base: ParsedPrefix, id: bigint, length: number): ParsedPrefix | null {
+  if (base.family !== 6) return null;
+  const free = length - base.bits;
+  if (free < 0 || length > 64 || id < 0n || (free < 64 && (id >> BigInt(free)) !== 0n)) {
+    return null;
+  }
+  const high = (base.network >> 64n) | (free > 0 ? (id << BigInt(64 - length)) : 0n);
+  const value = high << 64n;
+  const mask = length === 0 ? 0n : (ipv6Max << BigInt(128 - length)) & ipv6Max;
+  const canonical = formatIp(6, value);
+  return {
+    family: 6,
+    ip: { family: 6, value, canonical },
+    network: value & mask,
+    mask,
+    bits: length,
+    raw: `${canonical}/${length}`,
+  };
 }
 
 function aliasHasFamily(aliasId: string, family: 4 | 6, byId: Map<string, Partial<AddressAlias> & { id: string; name: string }>, seen = new Set<string>()): boolean {
@@ -570,7 +594,7 @@ export function simulateTrafficFlow(
   probe: TrafficProbe,
   snapshot: Snapshot['value'],
   liveLinks: LinkStatus[] = [],
-  options: { evaluatingSavedDiffersFromLive?: boolean; liveLeases6?: Lease6[]; livePrefixes?: PrefixView } = {},
+  options: { evaluatingSavedDiffersFromLive?: boolean; liveLeases6?: Lease6[]; livePrefixes?: PrefixView; liveStatusVersionMismatch?: boolean } = {},
 ): TrafficSimulation {
   const srcIp = parseIp(probe.srcIp)!;
   const origDstIp = parseIp(probe.dstIp)!;
@@ -603,6 +627,9 @@ export function simulateTrafficFlow(
   const hasManagement = Boolean(mgmtSegment && isLinkUsable(mgmtSegment.link, linksById));
   if (!hasManagement) {
     warnings.push('No usable management segment is configured: Andaru does not load firewall rules, NAT, or IP forwarding without one.');
+  }
+  if (options.liveStatusVersionMismatch) {
+    warnings.push('Live configuration changed while loading interface status; live addresses, leases, and prefixes may not match the displayed live version.');
   }
 
   // Gather usable segment prefixes and firewall-owned addresses (static + virtual + dynamic live).
@@ -813,28 +840,30 @@ export function simulateTrafficFlow(
 
       const newPort = pf.targetPort !== undefined ? pf.targetPort + (origDstPort - span.first) : origDstPort;
       if (pf.target?.self) {
-        // Linux netfilter `redirect` rewrites destination IP to the ingress interface's primary IP (drops if IPv4 is absent on ingress).
+        // Linux netfilter `redirect` rewrites destination IP to the ingress interface's primary IP (drops if that family is absent on ingress).
         const ingressPrimary = localOwners.find((o) => o.owner.segmentId === ingressSegment.id && !o.owner.isVirtual && !o.owner.linkLocal && o.ip.family === origDstIp.family)?.ip;
-        if (!ingressPrimary && origDstIp.family === 4) {
-          if (ingressSegment.addressing.ipv4.mode === 'none') {
+        if (!ingressPrimary) {
+          const familyName = origDstIp.family === 4 ? 'IPv4' : 'IPv6';
+          const familyMode = origDstIp.family === 4 ? ingressSegment.addressing.ipv4.mode : ingressSegment.addressing.ipv6.mode;
+          if (familyMode === 'none') {
             steps.push({
               stage: 'prerouting',
               title: 'Pre-routing NAT',
-              summary: `Redirect "${pf.name}" dropped: ingress interface ${ingressSegment.name} has no IPv4 address.`,
+              summary: `Redirect "${pf.name}" dropped: ingress interface ${ingressSegment.name} has no ${familyName} address.`,
               outcome: 'drop',
               decidedBy: ref,
             });
             steps.push({
               stage: 'verdict',
               title: 'Verdict',
-              summary: `Dropped by Linux netfilter redirect because ${ingressSegment.name} has no IPv4 address.`,
+              summary: `Dropped by Linux netfilter redirect because ${ingressSegment.name} has no ${familyName} address.`,
               outcome: 'drop',
               decidedBy: ref,
               detail: originalTuple,
             });
             return { verdict: 'drop', verdictLabel: 'Dropped', chain: 'none', originalTuple, finalTuple: originalTuple, decidedBy: ref, warnings, steps };
           }
-          warnings.push(`Ingress interface ${ingressSegment.name} has no known live IPv4 address; redirect target address is dynamic.`);
+          warnings.push(`Ingress interface ${ingressSegment.name} has no known live ${familyName} address; redirect target address is dynamic.`);
         }
         if (ingressPrimary) effectiveDstIp = ingressPrimary;
         effectiveDstPort = newPort;
@@ -985,27 +1014,28 @@ export function simulateTrafficFlow(
           }
           continue;
         }
-        // Dynamically derived pool (subnetId/length): resolve from /api/v1/status/prefixes when available.
-        const link = linksById.get(seg.link);
-        const segIface = findLiveLink(link, liveLinks)?.name
-          ?? (link && link.kind !== 'ethernet' ? kernelName(link, new Map()) : undefined);
-        if (!options.livePrefixes || !segIface) {
+        // Dynamically derived pool (subnetId/length): place inside the selected upstream WAN's observed prefix (delegation.go:Place).
+        const wanSeg = seg.addressing.ipv6.mode === 'delegated' && seg.addressing.ipv6.from
+          ? segmentsById.get(seg.addressing.ipv6.from)
+          : undefined;
+        const wanLink = wanSeg ? linksById.get(wanSeg.link) : undefined;
+        const wanIface = findLiveLink(wanLink, liveLinks)?.name
+          ?? (wanLink && wanLink.kind !== 'ethernet' ? kernelName(wanLink, new Map()) : undefined);
+        const wanView = wanIface ? options.livePrefixes?.wans.find((w) => w.interface === wanIface) : undefined;
+        const base = wanView?.current?.prefix ? parsePrefix(wanView.current.prefix) : null;
+        const rawSubnetId = e.prefixDelegation.subnetId?.trim() ?? '';
+        const poolLength = e.prefixDelegation.length;
+        if (!base || !/^[0-9a-fA-F]+$/.test(rawSubnetId) || poolLength === undefined) {
           hasUnresolvedDynamicPool = true;
           dhcp6BySegment.set(e.segment, [...(dhcp6BySegment.get(e.segment) ?? []), { name: e.name }]);
           continue;
         }
-        const wantSubnetId = e.prefixDelegation.subnetId ? Number.parseInt(e.prefixDelegation.subnetId, 16) : Number.NaN;
-        for (const wan of options.livePrefixes.wans) {
-          for (const place of wan.pools) {
-            if (!place.prefix || place.interface !== segIface) continue;
-            if (!Number.isNaN(wantSubnetId) && Number.parseInt(place.subnetId, 16) !== wantSubnetId) continue;
-            const pool = parsePrefix(place.prefix);
-            if (!pool || pool.family !== 6) continue;
-            if (prefixContains(pool, effectiveDstIp) && (!bestUnreachable || pool.bits > bestUnreachable.prefix.bits)) {
-              bestUnreachable = { segment: seg, entryName: e.name, prefix: pool };
-            }
-            dhcp6BySegment.set(e.segment, [...(dhcp6BySegment.get(e.segment) ?? []), { name: e.name, pool }]);
+        const pool = placeIpv6Prefix(base, BigInt(`0x${rawSubnetId}`), poolLength);
+        if (pool) {
+          if (prefixContains(pool, effectiveDstIp) && (!bestUnreachable || pool.bits > bestUnreachable.prefix.bits)) {
+            bestUnreachable = { segment: seg, entryName: e.name, prefix: pool };
           }
+          dhcp6BySegment.set(e.segment, [...(dhcp6BySegment.get(e.segment) ?? []), { name: e.name, pool }]);
         }
       }
       for (const lease of options.liveLeases6 ?? []) {
@@ -1046,9 +1076,7 @@ export function simulateTrafficFlow(
           'Packet cannot be forwarded across links (link-local scope).',
         );
       }
-      if (options.evaluatingSavedDiffersFromLive) {
-        warnings.push(`Delegated prefix ${bestDelegated.prefix.raw} is read from active live DHCPv6 leases.`);
-      }
+      warnings.push(`Delegated prefix ${bestDelegated.prefix.raw} is inferred from an active DHCPv6 lease (kernel route installation is not verified).`);
       chain = 'forward';
       egressSegment = bestDelegated.segment;
       egressZoneId = egressSegment.zone;
