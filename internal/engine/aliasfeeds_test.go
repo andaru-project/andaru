@@ -552,18 +552,20 @@ func TestAnApplyLoadsTheLists(t *testing.T) {
 	}
 }
 
-// A load stops with the engine, and stays owed.
+// A load stops with the engine, and stays owed, with no error logged.
 func TestAliasLoadStopsWithTheEngine(t *testing.T) {
 	b := newFeedBench(t)
 	life, stop := context.WithCancel(t.Context())
 	b.f.life = life
 	stop()
+	var logged strings.Builder
+	b.f.log = slog.New(slog.NewTextHandler(&logged, nil))
 	var got error
 	b.f.realize = func(ctx context.Context) error { got = ctx.Err(); return got }
 	b.f.owed.Store(true)
 	b.f.fill()
-	if got == nil || !b.f.owed.Load() {
-		t.Fatalf("load ran with %v", got)
+	if got == nil || !b.f.owed.Load() || logged.Len() != 0 {
+		t.Fatalf("load ran with %v, logged %q", got, logged.String())
 	}
 }
 

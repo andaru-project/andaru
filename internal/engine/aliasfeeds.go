@@ -317,7 +317,9 @@ func (f *aliasFeeds) fill() {
 	if err := f.realize(ctx); err != nil {
 		// The next result or apply tries again, and every load of the filter fills the sets.
 		f.owed.Store(true)
-		f.log.Error("alias lists not loaded into the filter", "error", err)
+		if f.life.Err() == nil { // stopping, the engine owes the load to its next start
+			f.log.Error("alias lists not loaded into the filter", "error", err)
+		}
 	}
 }
 
