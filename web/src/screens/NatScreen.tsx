@@ -26,6 +26,52 @@ const protocolLabel: Record<PortForward['protocol'], string> = {
   'tcp-udp': 'TCP/UDP',
 };
 
+function orderedEntries<T extends { id: string }>(
+  items: Array<SavedObject<T>>,
+  pendingOrder: string[] | undefined,
+): { order: string[]; byId: Map<string, SavedObject<T>>; ordered: Array<SavedObject<T>> } {
+  const savedOrder = items.map((item) => item.value.id);
+  const order = pendingOrder
+    ? [...pendingOrder, ...savedOrder.filter((id) => !pendingOrder.includes(id))]
+    : savedOrder;
+  const byId = new Map(items.map((item) => [item.value.id, item]));
+  const ordered = order.flatMap((id) => byId.get(id) ?? []);
+  return { order, byId, ordered };
+}
+
+function NatOrderToolbar({
+  description, canWrite, unlocked, filtered, count, addLabel, onToggleUnlock, onAdd,
+}: {
+  description: string;
+  canWrite: boolean;
+  unlocked: boolean;
+  filtered: boolean;
+  count: number;
+  addLabel: string;
+  onToggleUnlock(): void;
+  onAdd(): void;
+}) {
+  return (
+    <Group justify="space-between" align="flex-end" wrap="wrap">
+      <Text size="sm" c="dimmed">{description}</Text>
+      {canWrite && (
+        <Group gap="xs">
+          <Button
+            size="xs"
+            variant="default"
+            disabled={!unlocked && (filtered || count < 2)}
+            leftSection={<EditMark editing={unlocked} />}
+            onClick={onToggleUnlock}
+          >
+            {unlocked ? 'Done' : 'Edit order'}
+          </Button>
+          <Button size="xs" disabled={unlocked} onClick={onAdd}>{addLabel}</Button>
+        </Group>
+      )}
+    </Group>
+  );
+}
+
 function PortForwardRow({
   item, position, zones, addresses, canWrite, unlocked, busy, onToggle, onEdit, onDelete,
 }: {
@@ -224,7 +270,7 @@ export function NatScreen({ api, session, onSaved, onSessionLost }: NatScreenPro
     | { kind: 'port-forward'; item: SavedObject<PortForward>; position: number }
     | { kind: 'one-to-one'; item: SavedObject<OneToOneNat>; position: number }
   >();
-  const [moved, setMoved] = useState<string[]>();
+  const [moved, setMoved] = useState<{ tab: string; order: string[] }>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -255,6 +301,7 @@ export function NatScreen({ api, session, onSaved, onSessionLost }: NatScreenPro
   );
 
   async function change(send: () => Promise<unknown>, conflictNoun: string) {
+    if (busy) return;
     setBusy(true);
     setError('');
     try {
@@ -291,13 +338,16 @@ export function NatScreen({ api, session, onSaved, onSessionLost }: NatScreenPro
     } catch (requestError) {
       if (requestError instanceof ApiError && requestError.status === 401) return onSessionLost();
       if (mounted.current) setError(saveFailure(requestError, new Map(), 'outbound NAT setting'));
+      if (requestError instanceof ApiError && requestError.status === 412) {
+        await resource.reload();
+      }
     } finally {
       if (mounted.current) setBusy(false);
     }
   }
 
   function switchTab(next: string | null) {
-    if (!next) return;
+    if (!next || busy) return;
     setTab(next);
     setFilter('');
     setUnlocked(false);
@@ -323,16 +373,15 @@ export function NatScreen({ api, session, onSaved, onSessionLost }: NatScreenPro
           const management = snapshot.value.segments.find((s) => s.id === snapshot.value.management?.segment);
           const effectiveOutbound = outboundOverride ? outboundOverride.value : outbound;
           const savedOutboundMode: OutboundNatMode = effectiveOutbound?.value.mode ?? 'none';
+          const outboundServerVersion = effectiveOutbound?.version ?? '0';
+          const outboundRemoteChanged = outboundDirty && outboundServerVersion !== outboundBaseVersion;
 
           const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
 
-          // Port forwards ordering & filter.
-          const pfSavedOrder = forwards.items.map((item) => item.value.id);
-          const pfOrder = tab === 'port-forwards' && moved
-            ? [...moved, ...pfSavedOrder.filter((id) => !moved.includes(id))]
-            : pfSavedOrder;
-          const pfById = new Map(forwards.items.map((item) => [item.value.id, item]));
-          const pfItems = pfOrder.flatMap((id) => pfById.get(id) ?? []);
+          const { order: pfOrder, byId: pfById, ordered: pfItems } = orderedEntries(
+            forwards.items,
+            moved?.tab === 'port-forwards' ? moved.order : undefined,
+          );
           const pfFiltered = filter.trim() !== '' && forwards.items.length > 0;
           const pfShown = pfItems
             .map((item, idx) => ({ item, position: idx + 1 }))
@@ -350,13 +399,10 @@ export function NatScreen({ api, session, onSaved, onSessionLost }: NatScreenPro
               return words.every((w) => text.includes(w));
             });
 
-          // 1:1 NAT ordering & filter.
-          const o2oSavedOrder = oneToOne.items.map((item) => item.value.id);
-          const o2oOrder = tab === 'one-to-one' && moved
-            ? [...moved, ...o2oSavedOrder.filter((id) => !moved.includes(id))]
-            : o2oSavedOrder;
-          const o2oById = new Map(oneToOne.items.map((item) => [item.value.id, item]));
-          const o2oItems = o2oOrder.flatMap((id) => o2oById.get(id) ?? []);
+          const { order: o2oOrder, byId: o2oById, ordered: o2oItems } = orderedEntries(
+            oneToOne.items,
+            moved?.tab === 'one-to-one' ? moved.order : undefined,
+          );
           const o2oFiltered = filter.trim() !== '' && oneToOne.items.length > 0;
           const o2oShown = o2oItems
             .map((item, idx) => ({ item, position: idx + 1 }))
@@ -382,22 +428,21 @@ export function NatScreen({ api, session, onSaved, onSessionLost }: NatScreenPro
           };
           const instructions = { draggable: 'To move an entry, press Space or Enter on its grip, move with the arrow keys, then press Space or Enter to drop it.' };
 
-          function dropForward({ active, over }: DragEndEvent) {
-            if (busy || !over || active.id === over.id) return;
-            const next = arrayMove(pfOrder, pfOrder.indexOf(String(active.id)), pfOrder.indexOf(String(over.id)));
-            setMoved(next);
-            void change(() => api.orderPortForwards(next, forwards.version), 'port forwards').then(() => {
-              if (document.activeElement === document.body) document.getElementById(`grip-${active.id}`)?.focus();
-            });
-          }
-
-          function dropOneToOne({ active, over }: DragEndEvent) {
-            if (busy || !over || active.id === over.id) return;
-            const next = arrayMove(o2oOrder, o2oOrder.indexOf(String(active.id)), o2oOrder.indexOf(String(over.id)));
-            setMoved(next);
-            void change(() => api.orderOneToOneNats(next, oneToOne.version), '1:1 NAT entries').then(() => {
-              if (document.activeElement === document.body) document.getElementById(`grip-${active.id}`)?.focus();
-            });
+          function handleDrop(
+            tabKey: 'port-forwards' | 'one-to-one',
+            order: string[],
+            version: string,
+            noun: string,
+            saveOrder: (ids: string[], ver: string) => Promise<unknown>,
+          ) {
+            return ({ active, over }: DragEndEvent) => {
+              if (busy || !over || active.id === over.id) return;
+              const next = arrayMove(order, order.indexOf(String(active.id)), order.indexOf(String(over.id)));
+              setMoved({ tab: tabKey, order: next });
+              void change(() => saveOrder(next, version), noun).then(() => {
+                if (document.activeElement === document.body) document.getElementById(`grip-${active.id}`)?.focus();
+              });
+            };
           }
 
           return (
@@ -418,23 +463,16 @@ export function NatScreen({ api, session, onSaved, onSessionLost }: NatScreenPro
 
                 <Tabs.Panel value="port-forwards" pt="md">
                   <Stack>
-                    <Group justify="space-between" align="flex-end" wrap="wrap">
-                      <Text size="sm" c="dimmed">Tried from the top: the first matching port forward decides.</Text>
-                      {canWrite && (
-                        <Group gap="xs">
-                          <Button
-                            size="xs"
-                            variant="default"
-                            disabled={!unlocked && (pfFiltered || forwards.items.length < 2)}
-                            leftSection={<EditMark editing={unlocked} />}
-                            onClick={() => setUnlocked(!unlocked)}
-                          >
-                            {unlocked ? 'Done' : 'Edit order'}
-                          </Button>
-                          <Button size="xs" disabled={unlocked} onClick={() => setEditingForward('new')}>Add port forward</Button>
-                        </Group>
-                      )}
-                    </Group>
+                    <NatOrderToolbar
+                      description="Tried from the top: the first matching port forward decides."
+                      canWrite={canWrite}
+                      unlocked={unlocked}
+                      filtered={pfFiltered}
+                      count={forwards.items.length}
+                      addLabel="Add port forward"
+                      onToggleUnlock={() => setUnlocked(!unlocked)}
+                      onAdd={() => setEditingForward('new')}
+                    />
 
                     {forwards.items.length === 0 ? (
                       <Alert role="status" title="No port forwards">No port forward is saved.</Alert>
@@ -453,7 +491,7 @@ export function NatScreen({ api, session, onSaved, onSessionLost }: NatScreenPro
                         <DndContext
                           sensors={sensors}
                           collisionDetection={closestCenter}
-                          onDragEnd={dropForward}
+                          onDragEnd={handleDrop('port-forwards', pfOrder, forwards.version, 'port forwards', (ids, ver) => api.orderPortForwards(ids, ver))}
                           accessibility={{
                             announcements: makeAnnouncements(pfOrder, (id) => pfById.get(String(id))?.value.name ?? 'the port forward'),
                             screenReaderInstructions: instructions,
@@ -506,23 +544,16 @@ export function NatScreen({ api, session, onSaved, onSessionLost }: NatScreenPro
 
                 <Tabs.Panel value="one-to-one" pt="md">
                   <Stack>
-                    <Group justify="space-between" align="flex-end" wrap="wrap">
-                      <Text size="sm" c="dimmed">Maps an external IPv4 address or prefix to an internal one in both directions, evaluated from the top.</Text>
-                      {canWrite && (
-                        <Group gap="xs">
-                          <Button
-                            size="xs"
-                            variant="default"
-                            disabled={!unlocked && (o2oFiltered || oneToOne.items.length < 2)}
-                            leftSection={<EditMark editing={unlocked} />}
-                            onClick={() => setUnlocked(!unlocked)}
-                          >
-                            {unlocked ? 'Done' : 'Edit order'}
-                          </Button>
-                          <Button size="xs" disabled={unlocked} onClick={() => setEditingOneToOne('new')}>Add 1:1 entry</Button>
-                        </Group>
-                      )}
-                    </Group>
+                    <NatOrderToolbar
+                      description="Maps an external IPv4 address or prefix to an internal one in both directions, evaluated from the top."
+                      canWrite={canWrite}
+                      unlocked={unlocked}
+                      filtered={o2oFiltered}
+                      count={oneToOne.items.length}
+                      addLabel="Add 1:1 entry"
+                      onToggleUnlock={() => setUnlocked(!unlocked)}
+                      onAdd={() => setEditingOneToOne('new')}
+                    />
 
                     {oneToOne.items.length === 0 ? (
                       <Alert role="status" title="No 1:1 NAT entries">No 1:1 NAT mapping is saved.</Alert>
@@ -541,7 +572,7 @@ export function NatScreen({ api, session, onSaved, onSessionLost }: NatScreenPro
                         <DndContext
                           sensors={sensors}
                           collisionDetection={closestCenter}
-                          onDragEnd={dropOneToOne}
+                          onDragEnd={handleDrop('one-to-one', o2oOrder, oneToOne.version, '1:1 NAT entries', (ids, ver) => api.orderOneToOneNats(ids, ver))}
                           accessibility={{
                             announcements: makeAnnouncements(o2oOrder, (id) => o2oById.get(String(id))?.value.name ?? 'the 1:1 entry'),
                             screenReaderInstructions: instructions,
@@ -602,13 +633,19 @@ export function NatScreen({ api, session, onSaved, onSessionLost }: NatScreenPro
                           Automatic masquerade translates forwarded IPv4 traffic leaving uplink interfaces to each uplink&apos;s address. Any matching 1:1 NAT mapping runs first.
                         </Text>
                       </div>
+                      {outboundRemoteChanged && (
+                        <Alert color="yellow" role="status" title="Outbound NAT changed elsewhere">
+                          A newer saved outbound NAT setting was loaded. Click Reset to load the latest version before saving.
+                        </Alert>
+                      )}
                       <SegmentedControl
                         aria-label="Outbound NAT mode"
                         disabled={!canWrite || busy}
                         value={outboundMode}
                         onChange={(value) => {
-                          setOutboundMode(value as OutboundNatMode);
-                          setOutboundDirty(true);
+                          const next = value as OutboundNatMode;
+                          setOutboundMode(next);
+                          setOutboundDirty(effectiveOutbound === null || next !== savedOutboundMode);
                         }}
                         data={[
                           { value: 'automatic', label: 'Automatic masquerade' },
@@ -630,7 +667,7 @@ export function NatScreen({ api, session, onSaved, onSessionLost }: NatScreenPro
                               disabled={busy}
                               onClick={() => {
                                 setOutboundMode(savedOutboundMode);
-                                setOutboundBaseVersion(effectiveOutbound?.version ?? '0');
+                                setOutboundBaseVersion(outboundServerVersion);
                                 setOutboundDirty(false);
                               }}
                             >

@@ -1,9 +1,8 @@
-import { Alert, Anchor, Button, Drawer, Fieldset, Group, MultiSelect, Pill, SegmentedControl, Stack, Switch, Text, Textarea, TextInput, type ComboboxRenderPillInput } from '@mantine/core';
+import { Alert, Anchor, Button, Drawer, Fieldset, Group, MultiSelect, SegmentedControl, Stack, Switch, Text, Textarea, TextInput } from '@mantine/core';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, fieldErrors, saveFailure } from '../api';
 import { firewallZone, type Rule, type RuleSide, type Snapshot } from '../types';
-import { zoneColor } from '../zones';
-import { ZonePill } from './ZoneBadge';
+import { ZonePill, ZoneSelectionPill } from './ZoneBadge';
 
 interface RuleEditorProps {
   rule?: Rule;
@@ -20,19 +19,6 @@ const anySide: RuleSide = { zones: [], addresses: [] };
 const noAlias = 'No alias by that name. Aliases are made under Firewall ▸ Aliases.';
 
 // The engine is the authority on what a rule may be: its refusals show beside the fields they name.
-// A chosen zone looks as it does everywhere else: in its own colour. This firewall is no zone and keeps the plain pill.
-// A zone the configuration no longer has has no option: its pill shows the ID, uncoloured, as Mantine's would.
-function zonePill({ option, value, onRemove, disabled }: ComboboxRenderPillInput) {
-  const label = option?.label ?? String(value);
-  const coloured = option !== undefined && option.value !== firewallZone;
-  return (
-    <Pill withRemoveButton={!disabled && !option?.disabled} onRemove={onRemove} removeButtonProps={{ 'aria-label': `Remove ${label}` }}
-      style={coloured ? { background: `var(--mantine-color-${zoneColor(label)}-light)`, boxShadow: `inset 0 0 0 1px var(--mantine-color-${zoneColor(label)}-outline)` } : undefined}>
-      {label}
-    </Pill>
-  );
-}
-
 const field = /^\/(name|description|action|ports|(?:from|to)\/(?:zones|addresses|not))(?:\/|$)/;
 
 // The editor is a panel beside the list, so the order stays in view while a rule is written.
@@ -93,7 +79,7 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onAbandoned
     <Fieldset legend={label}>
       <Stack gap="xs">
         <MultiSelect label={`${label}: zones`} description={zoneHelp} data={zoneOptions} value={value.zones} error={errors.get(`${key}/zones`)} searchable clearable nothingFoundMessage="No zone by that name."
-          renderPill={zonePill} renderOption={({ option }) => option.value === firewallZone ? option.label : <ZonePill name={option.label} />}
+          renderPill={(input) => <ZoneSelectionPill {...input} />} renderOption={({ option }) => option.value === firewallZone ? option.label : <ZonePill name={option.label} />}
           // The firewall stands alone as a destination: choosing it leaves the other zones, and choosing another leaves it.
           onChange={(next) => set({ ...value, zones: next.includes(firewallZone) && !value.zones.includes(firewallZone) ? [firewallZone] : next.length > 1 ? next.filter((id) => id !== firewallZone) : next })} />
         <MultiSelect label={`${label}: addresses`} description="Address aliases within those zones. Empty is every address." data={addresses} value={value.addresses} error={errors.get(`${key}/addresses`)} searchable clearable nothingFoundMessage={noAlias}

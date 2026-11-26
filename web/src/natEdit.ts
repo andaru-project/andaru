@@ -67,7 +67,7 @@ export function portForwardDraftOf(entry?: PortForward, defaultZone?: string): P
     toNegated: Boolean(entry?.toNegated),
     ports: entry?.ports ?? '',
     noRedirect: Boolean(entry?.noRedirect),
-    targetKind: entry?.target?.self ? 'self' : (entry ? 'address' : (family === 'ipv6' ? 'self' : 'address')),
+    targetKind: entry?.target ? (entry.target.self ? 'self' : 'address') : (family === 'ipv6' ? 'self' : 'address'),
     targetAddress: entry?.target?.address ?? '',
     targetPort: entry?.targetPort !== undefined ? String(entry.targetPort) : '',
     filterRule: entry?.filterRule ?? 'auto',
@@ -80,6 +80,10 @@ export function checkPortForward(draft: PortForwardDraft): Map<string, string> {
   const found = new Map<string, string>();
   if (!draft.name.trim()) found.set('name', 'A port forward needs a name.');
   if (draft.ingressZones.length === 0) found.set('ingressZones', 'Choose at least one ingress zone.');
+  else if (draft.ingressZones.length > 64) found.set('ingressZones', 'At most 64 ingress zones are allowed.');
+  if (draft.fromNegated && draft.from.length > 32) {
+    found.set('from', 'A port forward leaves out at most 32 sources. Put more of them in a group.');
+  }
   if (draft.toKind === 'address' && !draft.toAddress) found.set('to', 'Choose a destination address alias.');
   const span = parsePortSpan(draft.ports);
   if (!span) found.set('ports', 'Expected a port or a first-last range within 1-65535.');
@@ -130,7 +134,7 @@ export function portForwardErrors(error: unknown, draft: PortForwardDraft): Map<
     const clean = path.replace(/^\/nat\/portForwards\/\d+\//, '').replace(/^\//, '');
     if (/^ingressZones(\/\d+)?$/.test(clean)) return 'ingressZones';
     if (/^from(\/\d+)?$/.test(clean)) return 'from';
-    if (clean === 'to' || clean === 'to/address' || clean === 'to/self') return 'to';
+    if (clean === 'to' || clean === 'to/address' || clean === 'to/self') return draft.toKind === 'self' ? '' : 'to';
     if (clean === 'target' || clean === 'target/address' || clean === 'target/self') return draft.noRedirect ? '' : 'target';
     if (clean === 'targetPort' || clean === 'filterRule') return draft.noRedirect ? '' : clean;
     if (clean === 'reflection') return (draft.noRedirect || draft.toNegated || draft.family === 'ipv6') ? '' : 'reflection';
@@ -165,6 +169,8 @@ export function checkOneToOne(draft: OneToOneDraft): Map<string, string> {
     if (!draft.external.trim()) found.set('external', 'Enter an external IPv4 address or prefix.');
     if (draft.destinationNegated && draft.destination.length === 0) {
       found.set('destinationNegated', 'Name the destinations to leave out.');
+    } else if (draft.destinationNegated && draft.destination.length > 32) {
+      found.set('destination', 'A 1:1 entry leaves out at most 32 destinations. Put more of them in a group.');
     }
   }
   return found;

@@ -1,29 +1,86 @@
-import { Alert, Button, Drawer, Fieldset, Group, MultiSelect, Pill, SegmentedControl, Select, Stack, Switch, Text, Textarea, TextInput, type ComboboxRenderPillInput } from '@mantine/core';
+import { Alert, Button, Drawer, Fieldset, Group, MultiSelect, SegmentedControl, Select, Stack, Switch, Text, Textarea, TextInput } from '@mantine/core';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, saveFailure } from '../api';
 import {
   checkOneToOne, checkPortForward, oneToOneDraftOf, oneToOneErrors, oneToOnePayload, portForwardDraftOf, portForwardErrors, portForwardPayload, type OneToOneDraft, type PortForwardDraft,
 } from '../natEdit';
 import type { OneToOneNat, PortForward, Snapshot } from '../types';
-import { zoneColor } from '../zones';
-import { ZonePill } from './ZoneBadge';
+import { ZonePill, ZoneSelectionPill } from './ZoneBadge';
 
 const mono = { input: 'mono-input' };
 const noAlias = 'No alias by that name. Aliases are made under Firewall ▸ Aliases.';
 
-function zonePill({ option, value, onRemove, disabled }: ComboboxRenderPillInput) {
-  const label = option?.label ?? String(value);
-  const coloured = option !== undefined;
-  return (
-    <Pill
-      withRemoveButton={!disabled && !option?.disabled}
-      onRemove={onRemove}
-      removeButtonProps={{ 'aria-label': `Remove ${label}` }}
-      style={coloured ? { background: `var(--mantine-color-${zoneColor(label)}-light)`, boxShadow: `inset 0 0 0 1px var(--mantine-color-${zoneColor(label)}-outline)` } : undefined}
-    >
-      {label}
-    </Pill>
-  );
+interface Option {
+  value: string;
+  label: string;
+}
+
+function withMissingOptions(options: Option[], selected: string[]): Option[] {
+  const known = new Set(options.map((o) => o.value));
+  const missing = selected.filter((id) => id && !known.has(id)).map((id) => ({ value: id, label: `${id} (missing)` }));
+  return missing.length > 0 ? [...options, ...missing] : options;
+}
+
+function useDrawerForm({
+  noun, onClose, onSessionLost, onAbandoned,
+}: {
+  noun: string;
+  onClose(): void;
+  onSessionLost(): void;
+  onAbandoned(message: string): void;
+}) {
+  const [errors, setErrors] = useState(new Map<string, string>());
+  const [errorFocusTick, setErrorFocusTick] = useState(0);
+  const [failure, setFailure] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const open = useRef(true);
+  useEffect(() => { open.current = true; return () => { open.current = false; }; }, []);
+  const failureRef = useRef<HTMLDivElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    if (!failure) return;
+    failureRef.current?.scrollIntoView?.({ block: 'nearest' });
+    if (errors.size === 0 || errors.has('')) failureRef.current?.focus?.();
+  }, [failure, errors]);
+  useEffect(() => {
+    if (errorFocusTick === 0) return;
+    formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.scrollIntoView?.({ block: 'center' });
+    formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]:not(:disabled)')?.focus();
+  }, [errorFocusTick]);
+
+  async function runSubmit(
+    validate: () => Map<string, string>,
+    send: () => Promise<void>,
+    mapErrors: (error: unknown) => Map<string, string>,
+  ) {
+    if (busy) return;
+    const found = validate();
+    if (found.size > 0) {
+      setErrors(found);
+      setFailure('');
+      setErrorFocusTick((n) => n + 1);
+      return;
+    }
+    setBusy(true);
+    setErrors(new Map());
+    setFailure('');
+    try {
+      await send();
+      if (open.current) onClose();
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) return onSessionLost();
+      if (!open.current) return onAbandoned(saveFailure(error, new Map(), noun));
+      const fields = mapErrors(error);
+      setErrors(fields);
+      if (fields.size > 0) setErrorFocusTick((n) => n + 1);
+      setFailure(saveFailure(error, fields, noun));
+    } finally {
+      if (open.current) setBusy(false);
+    }
+  }
+
+  return { errors, failure, busy, failureRef, formRef, runSubmit };
 }
 
 interface PortForwardEditorProps {
@@ -38,59 +95,29 @@ interface PortForwardEditorProps {
 export function PortForwardEditor({ entry, snapshot, onClose, onSessionLost, onAbandoned, onSave }: PortForwardEditorProps) {
   const wanZone = snapshot.value.zones.find((z) => z.name.toLowerCase() === 'wan')?.id ?? snapshot.value.zones[0]?.id;
   const [draft, setDraft] = useState<PortForwardDraft>(() => portForwardDraftOf(entry, wanZone));
-  const [errors, setErrors] = useState(new Map<string, string>());
-  const [errorFocusTick, setErrorFocusTick] = useState(0);
-  const [failure, setFailure] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  const open = useRef(true);
-  useEffect(() => { open.current = true; return () => { open.current = false; }; }, []);
-  const failureRef = useRef<HTMLDivElement>(null);
-  const formRef = useRef<HTMLFormElement>(null);
-  useEffect(() => { if (failure) failureRef.current?.scrollIntoView?.({ block: 'nearest' }); }, [failure]);
-  useEffect(() => {
-    if (errorFocusTick === 0) return;
-    formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.scrollIntoView?.({ block: 'center' });
-    formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]:not(:disabled)')?.focus();
-  }, [errorFocusTick]);
+  const { errors, failure, busy, failureRef, formRef, runSubmit } = useDrawerForm({ noun: 'port forward', onClose, onSessionLost, onAbandoned });
 
   const patch = (next: Partial<PortForwardDraft>) => setDraft((prev) => ({ ...prev, ...next }));
-  const zones = snapshot.value.zones.map((z) => ({ value: z.id, label: z.name }));
-  const addresses = (snapshot.value.aliases?.addresses ?? []).map((a) => ({ value: a.id, label: a.name }));
+  const baseZones = snapshot.value.zones.map((z) => ({ value: z.id, label: z.name }));
+  const baseAddresses = (snapshot.value.aliases?.addresses ?? []).map((a) => ({ value: a.id, label: a.name }));
+  const zones = withMissingOptions(baseZones, draft.ingressZones);
+  const fromAddresses = withMissingOptions(baseAddresses, draft.from);
+  const toAddresses = withMissingOptions(baseAddresses, draft.toAddress ? [draft.toAddress] : []);
 
-  async function submit(event: FormEvent) {
+  function submit(event: FormEvent) {
     event.preventDefault();
-    if (busy) return;
-    const found = checkPortForward(draft);
-    if (found.size > 0) {
-      setErrors(found);
-      setFailure('');
-      setErrorFocusTick((n) => n + 1);
-      return;
-    }
-    setBusy(true);
-    setErrors(new Map());
-    setFailure('');
-    try {
-      await onSave(portForwardPayload(draft));
-      if (open.current) onClose();
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 401) return onSessionLost();
-      if (!open.current) return onAbandoned(saveFailure(error, new Map(), 'port forward'));
-      const fields = portForwardErrors(error, draft);
-      setErrors(fields);
-      if (fields.size > 0) setErrorFocusTick((n) => n + 1);
-      setFailure(saveFailure(error, fields, 'port forward'));
-    } finally {
-      if (open.current) setBusy(false);
-    }
+    void runSubmit(
+      () => checkPortForward(draft),
+      () => onSave(portForwardPayload(draft)),
+      (err) => portForwardErrors(err, draft),
+    );
   }
 
   return (
     <Drawer opened onClose={onClose} position="right" size="lg" title={entry ? `Edit port forward: ${entry.name}` : 'Add port forward'} lockScroll={false} closeButtonProps={{ 'aria-label': 'Close' }}>
-      <form ref={formRef} onSubmit={(e) => void submit(e)} noValidate>
+      <form ref={formRef} onSubmit={submit} noValidate>
         <Stack>
-          {failure && <Alert ref={failureRef} color="red" role="alert" title="The port forward was not saved">{failure}</Alert>}
+          {failure && <Alert ref={failureRef} tabIndex={-1} color="red" role="alert" title="The port forward was not saved">{failure}</Alert>}
           <Fieldset variant="unstyled" disabled={busy}>
             <Stack>
               <TextInput data-autofocus label="Name" maxLength={128} required value={draft.name} error={errors.get('name')} onChange={(e) => patch({ name: e.currentTarget.value })} />
@@ -129,8 +156,8 @@ export function PortForwardEditor({ entry, snapshot, onClose, onSessionLost, onA
                     data={zones}
                     value={draft.ingressZones}
                     error={errors.get('ingressZones')}
-                    renderOption={({ option }) => <ZonePill name={option.label} />}
-                    renderPill={zonePill}
+                    renderOption={({ option }) => (option.label.endsWith(' (missing)') ? <Text size="sm" c="red">{option.label}</Text> : <ZonePill name={option.label} />)}
+                    renderPill={(input) => <ZoneSelectionPill {...input} />}
                     onChange={(ingressZones) => patch({ ingressZones })}
                   />
                   <Group align="flex-start" gap="xs" wrap="wrap">
@@ -165,7 +192,7 @@ export function PortForwardEditor({ entry, snapshot, onClose, onSessionLost, onA
                     placeholder="Any source"
                     searchable
                     nothingFoundMessage={noAlias}
-                    data={addresses}
+                    data={fromAddresses}
                     value={draft.from}
                     error={errors.get('from')}
                     onChange={(from) => patch({ from, ...(from.length === 0 ? { fromNegated: false } : {}) })}
@@ -192,7 +219,7 @@ export function PortForwardEditor({ entry, snapshot, onClose, onSessionLost, onA
                       placeholder="Choose an address alias"
                       searchable
                       nothingFoundMessage={noAlias}
-                      data={addresses}
+                      data={toAddresses}
                       value={draft.toAddress || null}
                       error={errors.get('to')}
                       onChange={(value) => patch({ toAddress: value ?? '' })}
@@ -304,59 +331,28 @@ interface OneToOneEditorProps {
 export function OneToOneEditor({ entry, snapshot, onClose, onSessionLost, onAbandoned, onSave }: OneToOneEditorProps) {
   const wanZone = snapshot.value.zones.find((z) => z.name.toLowerCase() === 'wan')?.id ?? snapshot.value.zones[0]?.id;
   const [draft, setDraft] = useState<OneToOneDraft>(() => oneToOneDraftOf(entry, wanZone));
-  const [errors, setErrors] = useState(new Map<string, string>());
-  const [errorFocusTick, setErrorFocusTick] = useState(0);
-  const [failure, setFailure] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  const open = useRef(true);
-  useEffect(() => { open.current = true; return () => { open.current = false; }; }, []);
-  const failureRef = useRef<HTMLDivElement>(null);
-  const formRef = useRef<HTMLFormElement>(null);
-  useEffect(() => { if (failure) failureRef.current?.scrollIntoView?.({ block: 'nearest' }); }, [failure]);
-  useEffect(() => {
-    if (errorFocusTick === 0) return;
-    formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.scrollIntoView?.({ block: 'center' });
-    formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]:not(:disabled)')?.focus();
-  }, [errorFocusTick]);
+  const { errors, failure, busy, failureRef, formRef, runSubmit } = useDrawerForm({ noun: '1:1 NAT entry', onClose, onSessionLost, onAbandoned });
 
   const patch = (next: Partial<OneToOneDraft>) => setDraft((prev) => ({ ...prev, ...next }));
-  const zones = snapshot.value.zones.map((z) => ({ value: z.id, label: z.name }));
-  const addresses = (snapshot.value.aliases?.addresses ?? []).map((a) => ({ value: a.id, label: a.name }));
+  const baseZones = snapshot.value.zones.map((z) => ({ value: z.id, label: z.name }));
+  const baseAddresses = (snapshot.value.aliases?.addresses ?? []).map((a) => ({ value: a.id, label: a.name }));
+  const zones = withMissingOptions(baseZones, draft.zone ? [draft.zone] : []);
+  const destinations = withMissingOptions(baseAddresses, draft.destination);
 
-  async function submit(event: FormEvent) {
+  function submit(event: FormEvent) {
     event.preventDefault();
-    if (busy) return;
-    const found = checkOneToOne(draft);
-    if (found.size > 0) {
-      setErrors(found);
-      setFailure('');
-      setErrorFocusTick((n) => n + 1);
-      return;
-    }
-    setBusy(true);
-    setErrors(new Map());
-    setFailure('');
-    try {
-      await onSave(oneToOnePayload(draft));
-      if (open.current) onClose();
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 401) return onSessionLost();
-      if (!open.current) return onAbandoned(saveFailure(error, new Map(), '1:1 NAT entry'));
-      const fields = oneToOneErrors(error, draft);
-      setErrors(fields);
-      if (fields.size > 0) setErrorFocusTick((n) => n + 1);
-      setFailure(saveFailure(error, fields, '1:1 NAT entry'));
-    } finally {
-      if (open.current) setBusy(false);
-    }
+    void runSubmit(
+      () => checkOneToOne(draft),
+      () => onSave(oneToOnePayload(draft)),
+      (err) => oneToOneErrors(err, draft),
+    );
   }
 
   return (
     <Drawer opened onClose={onClose} position="right" size="lg" title={entry ? `Edit 1:1 NAT: ${entry.name}` : 'Add 1:1 NAT entry'} lockScroll={false} closeButtonProps={{ 'aria-label': 'Close' }}>
-      <form ref={formRef} onSubmit={(e) => void submit(e)} noValidate>
+      <form ref={formRef} onSubmit={submit} noValidate>
         <Stack>
-          {failure && <Alert ref={failureRef} color="red" role="alert" title="The 1:1 NAT entry was not saved">{failure}</Alert>}
+          {failure && <Alert ref={failureRef} tabIndex={-1} color="red" role="alert" title="The 1:1 NAT entry was not saved">{failure}</Alert>}
           <Fieldset variant="unstyled" disabled={busy}>
             <Stack>
               <TextInput data-autofocus label="Name" maxLength={128} required value={draft.name} error={errors.get('name')} onChange={(e) => patch({ name: e.currentTarget.value })} />
@@ -370,7 +366,7 @@ export function OneToOneEditor({ entry, snapshot, onClose, onSessionLost, onAban
                 data={zones}
                 value={draft.zone || null}
                 error={errors.get('zone')}
-                renderOption={({ option }) => <ZonePill name={option.label} />}
+                renderOption={({ option }) => (option.label.endsWith(' (missing)') ? <Text size="sm" c="red">{option.label}</Text> : <ZonePill name={option.label} />)}
                 onChange={(value) => patch({ zone: value ?? '' })}
               />
               <Switch
@@ -406,7 +402,7 @@ export function OneToOneEditor({ entry, snapshot, onClose, onSessionLost, onAban
                     placeholder="Any destination"
                     searchable
                     nothingFoundMessage={noAlias}
-                    data={addresses}
+                    data={destinations}
                     value={draft.destination}
                     error={errors.get('destination')}
                     onChange={(destination) => patch({ destination, ...(destination.length === 0 ? { destinationNegated: false } : {}) })}

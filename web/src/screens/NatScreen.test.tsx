@@ -203,9 +203,88 @@ describe('NatScreen', () => {
     expect(screen.queryByRole('button', { name: 'Add port forward' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Edit order' })).not.toBeInTheDocument();
   });
+
+  it('edits an existing port forward, adds a 1:1 NAT entry, and handles outbound NAT 412 conflict', async () => {
+    let putForwardHeaders: HeadersInit | undefined;
+    let putForwardBody: Record<string, unknown> | undefined;
+    let postedO2o: Record<string, unknown> | undefined;
+    let outboundVersion = '1';
+    fetchRoutes({
+      '/api/v1/config': sampleSnapshot,
+      '/api/v1/config/nat/port-forwards': { state: 'saved', savedVersion: '5', version: '2', items: [{ value: sampleForward, version: '3' }] },
+      '/api/v1/config/nat/one-to-one': { state: 'saved', savedVersion: '5', version: '1', items: [] },
+      '/api/v1/config/nat/outbound': () => jsonResponse(200, { state: 'saved', savedVersion: '5', version: outboundVersion, value: { mode: 'automatic' } }),
+      'PUT /api/v1/config/nat/port-forwards/pfw_1': (init) => {
+        putForwardHeaders = init?.headers;
+        putForwardBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return jsonResponse(200, { value: { id: 'pfw_1', ...putForwardBody }, version: '4' });
+      },
+      'POST /api/v1/config/nat/one-to-one': (init) => {
+        postedO2o = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return jsonResponse(201, { value: { id: 'o2o_new', ...postedO2o }, version: '1' });
+      },
+      'PUT /api/v1/config/nat/outbound': () => {
+        outboundVersion = '2';
+        return jsonResponse(412, { error: { code: 'CONFLICT', message: 'Stale version.', details: [] } });
+      },
+    });
+    renderNat();
+
+    // Edit existing port forward.
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit port forward 1, HTTPS to web' }));
+    const pfDrawer = await screen.findByRole('dialog', { name: 'Edit port forward: HTTPS to web' });
+    fireEvent.change(within(pfDrawer).getByLabelText(/Target port/), { target: { value: '9443' } });
+    fireEvent.click(within(pfDrawer).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(putForwardBody?.targetPort).toBe(9443));
+    expect(new Headers(putForwardHeaders).get('If-Match')).toBe('"pfw_1.3"');
+
+    // Add a 1:1 NAT entry.
+    fireEvent.click(screen.getByRole('tab', { name: '1:1 NAT (0)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add 1:1 entry' }));
+    const o2oDrawer = await screen.findByRole('dialog', { name: 'Add 1:1 NAT entry' });
+    fireEvent.change(within(o2oDrawer).getByLabelText(/Name/), { target: { value: 'DMZ host' } });
+    fireEvent.change(within(o2oDrawer).getByLabelText(/Internal IPv4/), { target: { value: '192.168.10.70' } });
+    fireEvent.change(within(o2oDrawer).getByLabelText(/External IPv4/), { target: { value: '203.0.113.70' } });
+    fireEvent.click(within(o2oDrawer).getByRole('button', { name: 'Add 1:1 entry' }));
+    await waitFor(() => expect(postedO2o).toEqual({
+      name: 'DMZ host',
+      enabled: true,
+      zone: 'zon_wan',
+      internal: '192.168.10.70',
+      external: '203.0.113.70',
+      destination: [],
+    }));
+
+    // Outbound NAT 412 conflict reloads and surfaces remote-changed warning.
+    fireEvent.click(screen.getByRole('tab', { name: 'Outbound' }));
+    fireEvent.click(screen.getByLabelText('Disabled (none)'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save outbound NAT' }));
+    expect(await screen.findByText('Outbound NAT changed elsewhere')).toBeInTheDocument();
+  });
 });
 
 describe('natEdit helpers', () => {
+  it('defaults IPv6 noRedirect drafts to targetKind self and routes self-mode /to 422s to banner', () => {
+    const v6Excluded: PortForward = {
+      id: 'pfw_v6',
+      name: 'v6 bypass',
+      enabled: true,
+      family: 'ipv6',
+      ingressZones: ['zon_wan'],
+      protocol: 'tcp',
+      from: [],
+      to: { self: true },
+      ports: '443',
+      noRedirect: true,
+    };
+    const draft = portForwardDraftOf(v6Excluded);
+    expect(draft.targetKind).toBe('self');
+
+    const err = new ApiError(422, 'VALIDATION_FAILED', 'Validation failed.', [
+      { path: '/nat/portForwards/0/to', message: 'Destination refused.' },
+    ]);
+    expect(portForwardErrors(err, draft).get('')).toBe('Destination refused.');
+  });
   it('parses port spans strictly and rejects shifted overflow', () => {
     expect(parsePortSpan('443')).toEqual({ first: 443, last: 443 });
     expect(parsePortSpan('8000-8080')).toEqual({ first: 8000, last: 8080 });
