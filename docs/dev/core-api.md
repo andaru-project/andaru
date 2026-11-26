@@ -826,8 +826,9 @@ The lab found and this branch fixes: the apply's check read every `DNS=` line of
 The lab found, not yet fixed:
 
 - networkd 257 does not deprecate a replaced delegated prefix, as the design expects it to: clients keep the old address preferred for the rest of the lease's preferred lifetime, hours at many providers, while the provider no longer routes it.
-- After the failed apply's rollback on `c3783db`, `eth1`, IPv6 `none` in generation 1, still had `fd00:a5d::be24:11ff:fe17:6841/64` (1721 s valid) when the next apply began. networkd (257 and 259) keeps a delegated address through `networkctl reload` and `reconfigure` once the file that asked for it is replaced, while it does remove a dropped static address. Andaru now removes dynamic global IPv6 addresses after every reload, apply and rollback alike, on each link whose new file refuses router advertisements and takes no DHCPv6, delegation or PPP (#45).
 - `networkctl renew` sends no DHCPv6 message in systemd 257, so the prefix change waited for the renew timer.
+
+Fixed since: after the failed apply's rollback on `c3783db`, `eth1`, IPv6 `none` in generation 1, still had `fd00:a5d::be24:11ff:fe17:6841/64` (1721 s valid) when the next apply began. networkd (257 and 259) keeps a delegated address and its prefix route through `networkctl reload` and `reconfigure` once the file that asked for it is replaced, while it does remove a dropped static address. After every reload, apply and rollback alike, Andaru now removes the dynamic global IPv6 addresses and their prefix routes on each link whose new file refuses router advertisements and takes no delegation or PPP (#45).
 
 ### Delegated DHCPv6 Debian lab qualification
 

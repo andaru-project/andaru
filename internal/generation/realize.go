@@ -253,25 +253,18 @@ func (r Realizer) settle(ctx context.Context, from, to []placed) error {
 	return r.services(ctx, from, to)
 }
 
-// dropStaleIPv6 removes the dynamic IPv6 addresses left on a link whose new file takes none. networkd keeps a
-// delegated address after the file that asked for it is replaced, until its lifetime ends (#45). A failure is only
-// logged: the address still expires, and the change itself has been made.
+// dropStaleIPv6 removes the dynamic IPv6 addresses, and their prefix routes, left on a link whose new file takes none.
+// networkd keeps a delegated address after the file that asked for it is replaced, through reload and reconfigure
+// alike, until its lifetime ends (#45). It removes addresses it did not configure itself, so on such a link any dynamic
+// address is stale. A failure is only logged: the address still expires.
 func (r Realizer) dropStaleIPv6(ctx context.Context, to []placed) {
 	data, err := r.Run(ctx, "/usr/bin/networkctl", "list", "--json=short")
-	if err != nil {
-		slog.Warn("list links for stale IPv6 addresses", "error", err)
-		return
+	var managed []host.Managed
+	if err == nil {
+		managed, err = host.ParseManaged(data)
 	}
-	managed, err := host.ParseManaged(data)
-	if err != nil {
-		slog.Warn("list links for stale IPv6 addresses", "error", err)
-		return
-	}
-	if data, err = r.Run(ctx, "/usr/bin/ip", "-j", "-6", "address", "show", "scope", "global", "dynamic"); err != nil || len(data) == 0 {
-		if err != nil {
-			slog.Warn("list dynamic IPv6 addresses", "error", err)
-		}
-		return
+	if err == nil {
+		data, err = r.Run(ctx, "/usr/bin/ip", "-j", "-6", "address", "show", "scope", "global", "dynamic")
 	}
 	var links []struct {
 		Name      string `json:"ifname"`
@@ -280,42 +273,45 @@ func (r Realizer) dropStaleIPv6(ctx context.Context, to []placed) {
 			PrefixLength int    `json:"prefixlen"`
 		} `json:"addr_info"`
 	}
-	if err := json.Unmarshal(data, &links); err != nil {
-		slog.Warn("decode dynamic IPv6 addresses", "error", err)
+	if err == nil {
+		err = json.Unmarshal(data, &links)
+	}
+	if err != nil {
+		slog.Warn("find stale IPv6 addresses", "error", err)
 		return
 	}
 	for _, l := range links {
-		m := slices.IndexFunc(managed, func(m host.Managed) bool { return m.Name == l.Name })
-		if m < 0 {
+		i := slices.IndexFunc(managed, func(m host.Managed) bool { return m.Name == l.Name })
+		if i < 0 {
 			continue
 		}
-		f := slices.IndexFunc(to, func(f placed) bool { return f.path == managed[m].NetworkFile })
+		f := slices.IndexFunc(to, func(f placed) bool { return f.path == managed[i].NetworkFile })
 		if f < 0 || takesDynamicIPv6(to[f].data) {
 			continue
 		}
 		for _, a := range l.Addresses {
-			prefix := fmt.Sprintf("%s/%d", a.Local, a.PrefixLength)
-			if _, err := r.Run(ctx, "/usr/bin/ip", "-6", "address", "del", prefix, "dev", l.Name); err != nil {
-				slog.Warn("remove stale IPv6 address", "interface", l.Name, "address", prefix, "error", err)
+			prefix, err := netip.ParseAddr(a.Local)
+			if err != nil { // ip lists an empty object for each address the filter left out
+				continue
+			}
+			address := netip.PrefixFrom(prefix, a.PrefixLength)
+			for _, argv := range [][]string{
+				{"-6", "address", "del", address.String(), "dev", l.Name},
+				{"-6", "route", "del", address.Masked().String(), "dev", l.Name},
+			} {
+				if _, err := r.Run(ctx, "/usr/bin/ip", argv...); err != nil {
+					slog.Warn("remove stale IPv6 configuration", "interface", l.Name, "address", address, "error", err)
+				}
 			}
 		}
 	}
 }
 
-// takesDynamicIPv6 says whether a rendered .network file may get IPv6 addresses from DHCPv6, delegation or router
-// advertisements, or belongs to a PPP session, whose addresses pppd and networkd manage together. networkd accepts
-// advertisements unless told not to.
+// takesDynamicIPv6 says whether a rendered .network file may get IPv6 addresses from delegation or router
+// advertisements, which networkd accepts unless told not to, or belongs to a PPP session.
 func takesDynamicIPv6(data []byte) bool {
-	refusesRA := false
-	for line := range strings.SplitSeq(string(data), "\n") {
-		switch line {
-		case "DHCP=yes", "DHCP=ipv6", "DHCPPrefixDelegation=yes", "Type=ppp":
-			return true
-		case "IPv6AcceptRA=no":
-			refusesRA = true
-		}
-	}
-	return !refusesRA
+	lines := strings.Split(string(data), "\n")
+	return pppNetwork(data) || slices.Contains(lines, "DHCPPrefixDelegation=yes") || !slices.Contains(lines, "IPv6AcceptRA=no")
 }
 
 type observation struct {
