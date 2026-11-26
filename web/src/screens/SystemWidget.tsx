@@ -1,13 +1,14 @@
 import { Alert, Badge, Button, Group, Modal, Paper, Stack, Table, Text, TextInput, Title } from '@mantine/core';
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link } from 'react-router';
-import { ApiClient, ApiError, reportError } from '../api';
+import { ApiClient, apiErrorMessage, reportError } from '../api';
 import { bytes, duration, firmwareDate, plural } from '../format';
 import type { SystemInfo, UpdateStatus } from '../types';
 import { useVisiblePoll, type Resource } from '../useResource';
 import { Loaded } from './Loaded';
 
 const hostnamePattern = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+const hostnameError = 'Use 1 to 63 lowercase letters, digits, or hyphens; cannot start or end with a hyphen.';
 
 type System = Resource<{ info: SystemInfo; loadedAt: number } | undefined>;
 
@@ -172,17 +173,11 @@ export function SystemDetailsScreen({
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const submittingRef = useRef(false);
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
 
   const currentHostname = system.data?.info.hostname ?? '';
-  const currentNormalized = currentHostname.trim().toLowerCase();
   const normalizedDraft = draft.trim().toLowerCase();
   const liveInvalid = normalizedDraft !== '' && !hostnamePattern.test(normalizedDraft);
-  const unchanged = normalizedDraft !== '' && normalizedDraft === currentNormalized;
+  const unchanged = normalizedDraft !== '' && normalizedDraft === currentHostname;
 
   function openRename() {
     setDraft(currentHostname);
@@ -203,10 +198,10 @@ export function SystemDetailsScreen({
     event.preventDefault();
     if (!api || submittingRef.current) return;
     if (!normalizedDraft || !hostnamePattern.test(normalizedDraft)) {
-      setFieldError('Use 1 to 63 lowercase letters, digits, or hyphens; cannot start or end with a hyphen.');
+      setFieldError(hostnameError);
       return;
     }
-    if (normalizedDraft === currentNormalized) {
+    if (normalizedDraft === currentHostname) {
       setFieldError('Enter a different hostname.');
       return;
     }
@@ -216,25 +211,20 @@ export function SystemDetailsScreen({
     setSubmitError('');
     try {
       const updated = await api.setHostname(normalizedDraft);
-      if (!mountedRef.current) return;
+      void system.reload();
       setEditing(false);
       setNotice(`Hostname updated to ${updated.hostname}.`);
-      void system.reload();
     } catch (error) {
-      if (error instanceof ApiError && error.status === 401) {
-        onSessionLost?.();
-        return;
-      }
-      if (!mountedRef.current) return;
-      reportError(error, onSessionLost ?? (() => {}), setSubmitError);
+      if (onSessionLost) reportError(error, onSessionLost, setSubmitError);
+      else setSubmitError(apiErrorMessage(error));
     } finally {
       submittingRef.current = false;
-      if (mountedRef.current) setBusy(false);
+      setBusy(false);
     }
   }
 
   return (
-    <Stack>
+    <Stack className="details">
       <Group justify="space-between" align="flex-end" wrap="wrap">
         <div>
           <Title order={2}>System details</Title>
@@ -265,7 +255,7 @@ export function SystemDetailsScreen({
               value={draft}
               disabled={busy}
               required
-              error={fieldError || (liveInvalid ? 'Use 1 to 63 lowercase letters, digits, or hyphens; cannot start or end with a hyphen.' : undefined)}
+              error={fieldError || (liveInvalid ? hostnameError : undefined)}
               onChange={(event) => {
                 setDraft(event.currentTarget.value);
                 setFieldError('');

@@ -21,10 +21,7 @@ const hardware: SystemInfo = {
 
 const value = (label: string) => screen.getByRole('rowheader', { name: label }).nextElementSibling?.textContent;
 
-afterEach(() => {
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.useRealTimers());
 
 it('shows what the box is, a line for each fact it reports', () => {
   render(<Both info={hardware} loadedAt={Date.now()} />);
@@ -185,10 +182,21 @@ it('lets authorized operators change the appliance hostname from System details 
   expect(screen.getByRole('button', { name: 'Save hostname' })).toBeDisabled();
 
   await user.clear(input);
-  await user.type(input, '-bad.name-');
+  await user.type(input, '   ');
+  await user.click(screen.getByRole('button', { name: 'Save hostname' }));
+  expect(screen.getByText(/cannot start or end with a hyphen/i)).toBeInTheDocument();
+  expect(bodies).toHaveLength(0);
+
+  await user.clear(input);
+  await user.type(input, 'a'.repeat(64));
   expect(screen.getByText(/cannot start or end with a hyphen/i)).toBeInTheDocument();
   await user.click(screen.getByRole('button', { name: 'Save hostname' }));
   expect(bodies).toHaveLength(0);
+
+  const maxLen = 'a'.repeat(63);
+  await user.clear(input);
+  await user.type(input, maxLen);
+  expect(screen.queryByText(/cannot start or end with a hyphen/i)).not.toBeInTheDocument();
 
   await user.clear(input);
   await user.type(input, '  Edge-GW  ');
@@ -209,4 +217,43 @@ it('lets authorized operators change the appliance hostname from System details 
   mode = 'unauth';
   await user.click(screen.getByRole('button', { name: 'Save hostname' }));
   await waitFor(() => expect(onSessionLost).toHaveBeenCalledTimes(1));
+});
+
+it('locks close controls while renaming, prevents double submit, allows normalizing mixed-case hostname, and reloads shell system state even if unmounted mid-flight', async () => {
+  const user = userEvent.setup();
+  const reload = vi.fn().mockResolvedValue(undefined);
+  const system: Resource<{ info: SystemInfo; loadedAt: number } | undefined> = {
+    data: { info: { ...hardware, hostname: 'Edge' }, loadedAt: Date.now() },
+    error: '',
+    loading: false,
+    reload,
+    refresh: vi.fn(),
+  };
+
+  let resolvePost!: (res: Response) => void;
+  let postCount = 0;
+  fetchRoutes({
+    'POST /api/v1/system/hostname': () => {
+      postCount += 1;
+      return new Promise<Response>((resolve) => { resolvePost = resolve; });
+    },
+  });
+
+  const { unmount } = render(<SystemDetailsScreen system={system} api={new ApiClient('csrf')} canRename />);
+  await user.click(screen.getByRole('button', { name: 'Change hostname' }));
+  const input = await screen.findByLabelText(/Hostname/i, { selector: 'input' });
+  // Mixed-case reported hostname ("Edge") can be normalized to lowercase ("edge").
+  expect(screen.getByRole('button', { name: 'Save hostname' })).not.toBeDisabled();
+  await user.clear(input);
+  await user.type(input, 'edge');
+  await user.click(screen.getByRole('button', { name: 'Save hostname' }));
+
+  expect(postCount).toBe(1);
+  expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled();
+
+  // Unmount mid-flight; when POST resolves, shell-owned system.reload() must still run.
+  unmount();
+  resolvePost(jsonResponse(200, { hostname: 'edge' }));
+  await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
 });
