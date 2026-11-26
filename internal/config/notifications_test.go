@@ -252,3 +252,25 @@ func TestNewSecretTakesNoNameOfTheOtherKind(t *testing.T) {
 		t.Fatalf("%#v", e)
 	}
 }
+
+// A recovery copy is taken from the public view, with the links' secrets only: it drops the channels, so a factory
+// reset can still restore it.
+func TestRecoveryCopyWithChannelsRestores(t *testing.T) {
+	s := seededState(t)
+	p, e := channelChange(t, &s, "create", "", "", opsChannel, "8")
+	if e != nil {
+		t.Fatal(e)
+	}
+	view, e := publicSnapshot(p.State)
+	if e != nil {
+		t.Fatal(e)
+	}
+	body, _ := json.Marshal(map[string]any{"declaration": view.Value, "secrets": map[string]string{"WAN_PASSWORD": "TEST_ONLY"}})
+	docs, e := KeptDeclaration(body)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = ValidateBackupDocuments(docs); e != nil || bytes.Contains(docs.Configuration, []byte("notifications")) {
+		t.Fatalf("%#v %s", e, docs.Configuration)
+	}
+}
