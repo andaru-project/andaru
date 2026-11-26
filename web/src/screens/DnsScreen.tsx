@@ -22,19 +22,21 @@ const mono = { input: 'mono-input' };
 export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenProps) {
   const canWrite = session.capabilities.includes('configuration.write');
 
+  const readSeq = useRef(0);
   const load = useCallback(async () => {
+    const seq = ++readSeq.current;
     const [snapshot, dns] = await Promise.all([api.config(), api.dns()]);
-    return { snapshot, dns };
+    return { snapshot, dns, seq };
   }, [api]);
 
   const resource = useResource(load, onSessionLost);
 
   const [enabling, setEnabling] = useState(false);
-  const [savedOverride, setSavedOverride] = useState<{ value: SavedObject<DnsService> | null } | undefined>();
+  const [savedOverride, setSavedOverride] = useState<{ value: SavedObject<DnsService> | null; afterSeq: number } | undefined>();
   const [draft, setDraft] = useState<DnsDraft | null>(null);
   const [baseVersion, setBaseVersion] = useState('0');
   const [dirty, setDirty] = useState(false);
-  const [seenData, setSeenData] = useState<{ snapshot: Snapshot; dns: SavedObject<DnsService> | null } | undefined>();
+  const [seenData, setSeenData] = useState<{ snapshot: Snapshot; dns: SavedObject<DnsService> | null; seq: number } | undefined>();
   const [errors, setErrors] = useState(new Map<string, string>());
   const [errorFocusTick, setErrorFocusTick] = useState(0);
   const [failure, setFailure] = useState('');
@@ -66,22 +68,25 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
 
   if (resource.data !== seenData && !busy) {
     setSeenData(resource.data);
-    setSavedOverride(undefined);
     if (resource.data) {
-      const serverVersion = resource.data.dns?.version ?? '0';
-      if ((!dirty && !disabling) || draft === null) {
-        setDraft(dnsDraftOf(resource.data.dns?.value, resource.data.snapshot));
-        setBaseVersion(serverVersion);
-        if (resource.data.dns) setEnabling(false);
-      } else if (!resource.data.dns && !enabling) {
-        // Remote delete while editing: clear stale dirty state so the Off card renders cleanly.
-        setDraft(dnsDraftOf(null, resource.data.snapshot));
-        setBaseVersion('0');
-        setDirty(false);
-        setDisabling(false);
-        setErrors(new Map());
-        setFailure('');
-        setNotice('The DNS service was disabled elsewhere. Your unsaved edits were discarded.');
+      const supersedesOverride = !savedOverride || resource.data.seq > savedOverride.afterSeq;
+      if (supersedesOverride) {
+        if (savedOverride) setSavedOverride(undefined);
+        const serverVersion = resource.data.dns?.version ?? '0';
+        if ((!dirty && !disabling) || draft === null) {
+          setDraft(dnsDraftOf(resource.data.dns?.value, resource.data.snapshot));
+          setBaseVersion(serverVersion);
+          if (resource.data.dns) setEnabling(false);
+        } else if (!resource.data.dns && !enabling) {
+          // Remote delete while editing: clear stale dirty state so the Off card renders cleanly.
+          setDraft(dnsDraftOf(null, resource.data.snapshot));
+          setBaseVersion('0');
+          setDirty(false);
+          setDisabling(false);
+          setErrors(new Map());
+          setFailure('');
+          setNotice('The DNS service was disabled elsewhere. Your unsaved edits were discarded.');
+        }
       }
     }
   }
@@ -195,7 +200,7 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
     try {
       const saved = await api.saveDns(dnsPayload(pruned), baseVersion);
       if (!mounted.current) return;
-      setSavedOverride({ value: saved });
+      setSavedOverride({ value: saved, afterSeq: readSeq.current });
       setDraft(dnsDraftOf(saved.value, snapshot));
       setBaseVersion(saved.version);
       onSaved();
@@ -229,7 +234,7 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
     try {
       await api.deleteDns(baseVersion);
       if (!mounted.current) return;
-      setSavedOverride({ value: null });
+      setSavedOverride({ value: null, afterSeq: readSeq.current });
       setDraft(dnsDraftOf(null, snapshot));
       setBaseVersion('0');
       onSaved();
