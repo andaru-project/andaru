@@ -253,7 +253,7 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
                 </>
               )}
               {editing && (
-                <RuleEditor key={editing === 'new' ? 'new' : editing.value.id} rule={editing === 'new' ? undefined : editing.value} snapshot={snapshot} onClose={() => setEditing(undefined)} onSessionLost={onSessionLost} onAbandoned={setError}
+                <RuleEditor key={editing === 'new' ? 'new' : editing.value.id} api={api} rule={editing === 'new' ? undefined : editing.value} snapshot={snapshot} onClose={() => setEditing(undefined)} onSessionLost={onSessionLost} onAbandoned={setError}
                   onSave={async (rule) => {
                     try {
                       await api.saveRule(rule, editing === 'new' ? undefined : editing);

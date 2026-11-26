@@ -1,10 +1,12 @@
 import { Alert, Button, Drawer, Fieldset, Group, MultiSelect, NativeSelect, Stack, Textarea, TextInput } from '@mantine/core';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { ApiError, fieldErrors, saveFailure } from '../api';
+import { ApiClient, ApiError, fieldErrors, saveFailure } from '../api';
 import type { AddressAlias, AliasKinds, PortAlias, SavedObject } from '../types';
+import { AliasMultiSelect } from './AliasPicker';
 import type { Row } from './AliasesScreen';
 
 interface AliasEditorProps {
+  api: ApiClient;
   // A row to edit, or the kind of alias to add.
   editing: Row | keyof AliasKinds;
   rows: Row[];
@@ -25,7 +27,7 @@ const icmpTypes = {
 
 const field = /^\/(name|description|kind|protocol|address|prefix|first|last|members|ports|types)(?:\/|$)/;
 
-export function AliasEditor({ editing, rows, onClose, onSessionLost, onAbandoned, onRefused, onSave }: AliasEditorProps) {
+export function AliasEditor({ api, editing, rows, onClose, onSessionLost, onAbandoned, onRefused, onSave }: AliasEditorProps) {
   const kind = typeof editing === 'string' ? editing : editing.kind;
   const saved = typeof editing === 'string' ? undefined : editing;
   const savedAddress = saved?.kind === 'addresses' ? saved.item : undefined;
@@ -139,7 +141,22 @@ export function AliasEditor({ editing, rows, onClose, onSessionLost, onAbandoned
               {(what === 'icmp' || what === 'icmpv6') && <MultiSelect label="Types" description="Empty is every type." data={icmpTypes[what]} value={types} error={errors.get('types')} clearable onChange={setTypes} />}
             </>
           )}
-          {what === 'group' && <MultiSelect label="Members" description="Aliases of the same kind that are not groups themselves." data={candidates} value={members} error={errors.get('members')} searchable clearable onChange={setMembers} />}
+          {what === 'group' && (
+            <AliasMultiSelect
+              api={api}
+              aliasType={kind}
+              excludeGroups
+              exclude={saved?.item.value.id}
+              label="Members"
+              description="Aliases of the same kind that are not groups themselves."
+              initialOptions={candidates}
+              value={members}
+              error={errors.get('members')}
+              clearable
+              onSessionLost={onSessionLost}
+              onChange={setMembers}
+            />
+          )}
             </Stack>
           </Fieldset>
           <Group justify="flex-end" className="drawer-actions">

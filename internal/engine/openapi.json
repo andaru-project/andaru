@@ -3385,6 +3385,141 @@
         "description": "Reorder the list. The body is every rule ID of the list, once, in the new order; If-Match is the list's ETag."
       }
     },
+    "/api/v1/config/aliases/search": {
+      "get": {
+        "operationId": "searchSavedAliases",
+        "description": "Search saved address or port aliases by similarity, returning top matches ranked by relevance with bold highlight segments.",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "addresses",
+                "ports"
+              ]
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 256
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "host",
+                "network",
+                "range",
+                "group",
+                "tcp",
+                "udp",
+                "icmp",
+                "icmpv6"
+              ]
+            }
+          },
+          {
+            "name": "family",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ipv4",
+                "ipv6"
+              ]
+            }
+          },
+          {
+            "name": "excludeGroups",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "exclude",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ranked alias matches with highlight segments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasSearchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Structured failure; no secret values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          }
+        }
+      },
+      "head": {
+        "operationId": "headSearchSavedAliases",
+        "summary": "Check saved alias search without returning a response body",
+        "responses": {
+          "200": {
+            "description": "Search succeeded; no body"
+          },
+          "400": {
+            "description": "Invalid query; no body"
+          },
+          "403": {
+            "description": "Peer denied; no body"
+          }
+        }
+      }
+    },
     "/api/v1/config/aliases/{kind}": {
       "get": {
         "operationId": "listSavedObjectsAliases",
@@ -7882,6 +8017,104 @@
       },
       "CollectionResponse": {
         "$ref": "/api/v1/schema#/$defs/collectionView"
+      },
+      "TextSegment": {
+        "type": "object",
+        "required": [
+          "text",
+          "match"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "match": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "AliasSearchItem": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "summary",
+          "score",
+          "highlights"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "host",
+              "network",
+              "range",
+              "group"
+            ]
+          },
+          "protocol": {
+            "type": "string",
+            "enum": [
+              "tcp",
+              "udp",
+              "icmp",
+              "icmpv6",
+              "group"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "score": {
+            "type": "integer"
+          },
+          "highlights": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TextSegment"
+            }
+          },
+          "summaryHighlights": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TextSegment"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "AliasSearchResponse": {
+        "type": "object",
+        "required": [
+          "state",
+          "savedVersion",
+          "items"
+        ],
+        "properties": {
+          "state": {
+            "const": "saved"
+          },
+          "savedVersion": {
+            "$ref": "#/components/schemas/Version"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AliasSearchItem"
+            }
+          }
+        },
+        "additionalProperties": false
       },
       "OrderResponse": {
         "type": "object",

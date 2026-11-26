@@ -1,5 +1,7 @@
 import type {
   AliasKinds,
+  AliasSearchParams,
+  AliasSearchResponse,
   Applies,
   Apply,
   AuditEvent,
@@ -140,7 +142,12 @@ export class ApiClient {
     input = false;
 
     // A read that never answers would hold its page's polling for good; a write may take as long as it takes.
-    const signal = read ? AbortSignal.timeout(readTimeoutMilliseconds) : undefined;
+    // Combine an optional caller AbortSignal so cancelling a superseded search never marks the session disconnected.
+    const callerSignal = init.signal ?? undefined;
+    const timeoutSignal = read ? AbortSignal.timeout(readTimeoutMilliseconds) : undefined;
+    const signal = callerSignal && timeoutSignal
+      ? AbortSignal.any([callerSignal, timeoutSignal])
+      : (callerSignal ?? timeoutSignal);
     const disconnected = () => {
       this.onConnection?.(false);
       return new ApiError(0, 'DISCONNECTED', 'Cannot reach the Andaru service. Check the connection and try again.');
@@ -148,7 +155,8 @@ export class ApiClient {
     let response: Response;
     try {
       response = await fetch(path, { ...init, headers, signal, credentials: 'same-origin', cache: 'no-store' });
-    } catch {
+    } catch (err) {
+      if (callerSignal?.aborted) throw err;
       // Most likely the engine never received it, so the input waits for the next request. A read that timed out
       // may have reached it, and restoring there would let one hung read keep the session alive.
       if (!signal?.aborted) input ||= carried;
@@ -160,7 +168,8 @@ export class ApiClient {
     let body: unknown;
     try {
       body = await response.json();
-    } catch {
+    } catch (err) {
+      if (callerSignal?.aborted) throw err;
       // The limit can also pass while the body arrives; that is no answer, not an empty one.
       if (signal?.aborted) throw disconnected();
       body = undefined;
@@ -383,6 +392,17 @@ export class ApiClient {
 
   aliases<K extends keyof AliasKinds>(kind: K) {
     return this.request<SavedList<AliasKinds[K]>>(`/api/v1/config/aliases/${kind}`);
+  }
+
+  searchAliases(params: AliasSearchParams, signal?: AbortSignal) {
+    const query = new URLSearchParams({ type: params.type });
+    if (params.q !== undefined && params.q !== '') query.set('q', params.q);
+    if (params.kind) query.set('kind', params.kind);
+    if (params.family) query.set('family', params.family);
+    if (params.excludeGroups) query.set('excludeGroups', 'true');
+    if (params.exclude) query.set('exclude', params.exclude);
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    return this.request<AliasSearchResponse>(`/api/v1/config/aliases/search?${query.toString()}`, signal ? { signal } : {});
   }
 
   // An object is saved whole: created without a saved one, and otherwise replaced against its version.

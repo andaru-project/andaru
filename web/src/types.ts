@@ -454,6 +454,39 @@ export interface PortAlias {
 
 export interface AliasKinds { addresses: AddressAlias; ports: PortAlias }
 
+export interface TextSegment {
+  text: string;
+  match: boolean;
+}
+
+export interface AliasSearchItem {
+  id: string;
+  name: string;
+  description?: string;
+  kind?: AddressAlias['kind'];
+  protocol?: PortAlias['protocol'];
+  summary: string;
+  score: number;
+  highlights: TextSegment[];
+  summaryHighlights?: TextSegment[];
+}
+
+export interface AliasSearchResponse {
+  state: 'saved';
+  savedVersion: string;
+  items: AliasSearchItem[];
+}
+
+export interface AliasSearchParams {
+  type: keyof AliasKinds;
+  q?: string;
+  kind?: string;
+  family?: 'ipv4' | 'ipv6';
+  excludeGroups?: boolean;
+  exclude?: string;
+  limit?: number;
+}
+
 // A collection as the engine serves it.
 export interface SavedList<T> {
   state: 'saved';
