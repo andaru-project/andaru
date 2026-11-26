@@ -86,7 +86,7 @@ it('shows every branch to an administrator and starts on the dashboard', async (
   expect(branch('System')).toHaveAttribute('aria-expanded', 'false');
   expect(within(navigation).getAllByRole('link').map((link) => link.textContent)).toEqual(['Dashboard', 'Rules', 'Aliases']);
   await userEvent.click(branch('Network'));
-  expect(within(navigation).getAllByRole('link').map((link) => link.textContent)).toEqual(['Dashboard', 'Interfaces', 'Topology', 'VLANs & Segments', 'VLAN Flow', 'Devices', 'Clients', 'Diagnostics']);
+  expect(within(navigation).getAllByRole('link').map((link) => link.textContent)).toEqual(['Dashboard', 'Interfaces', 'DHCP', 'Topology', 'VLANs & Segments', 'VLAN Flow', 'Devices', 'Clients', 'Diagnostics']);
 
   await userEvent.click(within(navigation).getByRole('link', { name: 'Interfaces' }));
   expect(await screen.findByRole('heading', { name: 'Interfaces', level: 2 })).toBeInTheDocument();

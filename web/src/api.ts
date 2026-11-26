@@ -5,9 +5,12 @@ import type {
   AuditEvent,
   ConfigBatchOperation,
   ConfigChangesResult,
+  Dhcp4Entry,
+  Dhcp6Entry,
   ErrorDetail,
   Finding,
   History,
+  LeaseView,
   LinkStatus,
   NotificationList,
   OrderedList,
@@ -353,6 +356,10 @@ export class ApiClient {
     return this.request<PrefixView>('/api/v1/status/prefixes');
   }
 
+  leases() {
+    return this.request<LeaseView>('/api/v1/status/leases');
+  }
+
   preferences() {
     return this.request<Preferences>('/api/v1/session/preferences');
   }
@@ -406,6 +413,22 @@ export class ApiClient {
   // The whole order, every rule once, guarded by the list's version: a 412 means someone else reordered.
   orderRules(ids: string[], version: string) {
     return this.request('/api/v1/config/rules/order', { method: 'PUT', headers: { 'If-Match': `"order.${version}"` }, body: JSON.stringify(ids) }, true);
+  }
+
+  saveDhcp4(entry: Omit<Dhcp4Entry, 'id'>, saved?: SavedObject<Dhcp4Entry>) {
+    return this.save('/api/v1/config/dhcp', entry, saved);
+  }
+
+  deleteDhcp4(id: string, version: string) {
+    return this.request(`/api/v1/config/dhcp/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { 'If-Match': `"${id}.${version}"` } }, true);
+  }
+
+  saveDhcp6(entry: Omit<Dhcp6Entry, 'id'>, saved?: SavedObject<Dhcp6Entry>) {
+    return this.save('/api/v1/config/dhcp6', entry, saved);
+  }
+
+  deleteDhcp6(id: string, version: string) {
+    return this.request(`/api/v1/config/dhcp6/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { 'If-Match': `"${id}.${version}"` } }, true);
   }
 
   // The head's questions after an upgrade, with the choices given so far. It saves nothing.
