@@ -185,6 +185,13 @@ function isUplink(segment: Segment, linksById: Map<string, SavedLink>): boolean 
   return Boolean(segment.addressing.ipv4.gateway) || segment.addressing.ipv4.mode === 'dhcp' || link?.kind === 'pppoe';
 }
 
+// Mirrors internal/render/pppoe.go (only emits defaultroute when ipv4.mode === 'ppp', and noip when 'none').
+function isIpv4DefaultRoute(segment: Segment, linksById: Map<string, SavedLink>): boolean {
+  const link = linksById.get(segment.link);
+  if (link?.kind === 'pppoe') return segment.addressing.ipv4.mode === 'ppp';
+  return Boolean(segment.addressing.ipv4.gateway) || segment.addressing.ipv4.mode === 'dhcp';
+}
+
 function isIpv6Uplink(segment: Segment): boolean {
   return Boolean(segment.addressing.ipv6.gateway) || segment.addressing.ipv6.mode === 'slaac' || segment.addressing.ipv6.mode === 'dhcp6';
 }
@@ -1133,7 +1140,7 @@ export function simulateTrafficFlow(
       }
       const uplinks = snapshot.segments.filter((s) => {
         if (!isLinkUsable(s.link, linksById)) return false;
-        return effectiveDstIp.family === 4 ? isUplink(s, linksById) : isIpv6Uplink(s);
+        return effectiveDstIp.family === 4 ? isIpv4DefaultRoute(s, linksById) : isIpv6Uplink(s);
       });
       if (uplinks.length > 0) {
         chain = 'forward';

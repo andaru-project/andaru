@@ -856,5 +856,22 @@ describe('simulateTrafficFlow', () => {
       [{ ifIndex: 9, name: 'vl112233445566', kind: 'dummy', linkType: 'ether', mtu: 1500, operState: 'UP', flags: ['UP'], addresses: [{ family: 'ipv4', address: '198.51.100.99', prefixLength: 24, scope: 'global' }] }],
     );
     expect(dummyCollision.finalTuple).not.toContain('198.51.100.99');
+
+    // IPv6-only PPPoE WAN (ipv4.mode === 'none') installs no IPv4 default route (internal/render/pppoe.go emits noip).
+    const ipv6OnlyPppoe: Snapshot['value'] = {
+      ...baseConfig,
+      links: [
+        ...baseConfig.links,
+        { id: 'lnk_pppoe6', name: 'Fiber PPPoE', kind: 'pppoe', parent: 'lnk_wan', mtu: 1492, enabled: true },
+      ],
+      segments: baseConfig.segments.map((s) => (s.id === 'seg_wan'
+        ? { ...s, link: 'lnk_pppoe6', addressing: { ipv4: { mode: 'none' }, ipv6: { mode: 'dhcp6' } } }
+        : s)),
+    };
+    const noIpv4ViaPppoe6 = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '192.168.1.50', dstIp: '1.1.1.1', dstPort: 443 },
+      ipv6OnlyPppoe,
+    );
+    expect(noIpv4ViaPppoe6.verdict).toBe('no_route');
   });
 });
