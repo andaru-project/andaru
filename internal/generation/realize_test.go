@@ -35,7 +35,8 @@ type fakeNetworkd struct {
 	bound    map[string]string
 	address  map[string][]string
 	devices  map[string]bool
-	noLease  bool // DHCP servers stay silent
+	noLease  bool                // DHCP servers stay silent
+	dynamic  map[string][]string // dynamic global IPv6 addresses per interface, as a delegation leaves them
 	state    string
 	fail     string // commands starting with this fail
 	failWith string // the failure's text, "injected failure" when empty
@@ -147,6 +148,19 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 			routes = append(routes, map[string]any{"type": "unreachable", "dst": p, "dev": "lo", "protocol": "dhcp", "metric": 1024})
 		}
 		return json.Marshal(routes)
+	case command == "ip -j -6 address show scope global dynamic":
+		links := []map[string]any{}
+		for _, device := range slices.Sorted(maps.Keys(f.dynamic)) {
+			var addresses []map[string]any
+			for _, a := range f.dynamic[device] {
+				ip, _, _ := strings.Cut(a, "/")
+				addresses = append(addresses, map[string]any{"family": "inet6", "local": ip, "prefixlen": 64, "scope": "global", "dynamic": true})
+			}
+			links = append(links, map[string]any{"ifname": device, "addr_info": addresses})
+		}
+		return json.Marshal(links)
+	case strings.HasPrefix(command, "ip -6 address del ") && len(args) == 6:
+		f.dynamic[args[5]] = slices.DeleteFunc(f.dynamic[args[5]], func(a string) bool { return a == args[3] })
 	case command == "ip -j -6 addr show scope global":
 		return json.Marshal([]map[string]any{{"ifname": "ens19", "addr_info": append([]map[string]any{}, f.addr6...)}})
 	case command == "ip -6 route show proto 77":

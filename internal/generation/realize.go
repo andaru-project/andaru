@@ -246,10 +246,76 @@ func (r Realizer) settle(ctx context.Context, from, to []placed) error {
 			slog.Warn("delete network device", "device", name, "error", err)
 		}
 	}
+	r.dropStaleIPv6(ctx, to)
 	if err := r.sessions(ctx, from, to); err != nil {
 		return err
 	}
 	return r.services(ctx, from, to)
+}
+
+// dropStaleIPv6 removes the dynamic IPv6 addresses left on a link whose new file takes none. networkd keeps a
+// delegated address after the file that asked for it is replaced, until its lifetime ends (#45). A failure is only
+// logged: the address still expires, and the change itself has been made.
+func (r Realizer) dropStaleIPv6(ctx context.Context, to []placed) {
+	data, err := r.Run(ctx, "/usr/bin/networkctl", "list", "--json=short")
+	if err != nil {
+		slog.Warn("list links for stale IPv6 addresses", "error", err)
+		return
+	}
+	managed, err := host.ParseManaged(data)
+	if err != nil {
+		slog.Warn("list links for stale IPv6 addresses", "error", err)
+		return
+	}
+	if data, err = r.Run(ctx, "/usr/bin/ip", "-j", "-6", "address", "show", "scope", "global", "dynamic"); err != nil || len(data) == 0 {
+		if err != nil {
+			slog.Warn("list dynamic IPv6 addresses", "error", err)
+		}
+		return
+	}
+	var links []struct {
+		Name      string `json:"ifname"`
+		Addresses []struct {
+			Local        string `json:"local"`
+			PrefixLength int    `json:"prefixlen"`
+		} `json:"addr_info"`
+	}
+	if err := json.Unmarshal(data, &links); err != nil {
+		slog.Warn("decode dynamic IPv6 addresses", "error", err)
+		return
+	}
+	for _, l := range links {
+		m := slices.IndexFunc(managed, func(m host.Managed) bool { return m.Name == l.Name })
+		if m < 0 {
+			continue
+		}
+		f := slices.IndexFunc(to, func(f placed) bool { return f.path == managed[m].NetworkFile })
+		if f < 0 || takesDynamicIPv6(to[f].data) {
+			continue
+		}
+		for _, a := range l.Addresses {
+			prefix := fmt.Sprintf("%s/%d", a.Local, a.PrefixLength)
+			if _, err := r.Run(ctx, "/usr/bin/ip", "-6", "address", "del", prefix, "dev", l.Name); err != nil {
+				slog.Warn("remove stale IPv6 address", "interface", l.Name, "address", prefix, "error", err)
+			}
+		}
+	}
+}
+
+// takesDynamicIPv6 says whether a rendered .network file may get IPv6 addresses from DHCPv6, delegation or router
+// advertisements, or belongs to a PPP session, whose addresses pppd and networkd manage together. networkd accepts
+// advertisements unless told not to.
+func takesDynamicIPv6(data []byte) bool {
+	refusesRA := false
+	for line := range strings.SplitSeq(string(data), "\n") {
+		switch line {
+		case "DHCP=yes", "DHCP=ipv6", "DHCPPrefixDelegation=yes", "Type=ppp":
+			return true
+		case "IPv6AcceptRA=no":
+			refusesRA = true
+		}
+	}
+	return !refusesRA
 }
 
 type observation struct {
