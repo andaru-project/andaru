@@ -354,12 +354,13 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
   const load = useCallback(() => api.notificationChannels(), [api]);
   const resource = useResource(load, onSessionLost);
 
-  const [openingId, setOpeningId] = useState<string | null>(null);
+  const [busy, setBusy] = useState<{ kind: 'open' | 'test'; id: string } | null>(null);
+  const [testNotice, setTestNotice] = useState('');
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [deleting, setDeleting] = useState<SavedObject<NotificationChannel> | null>(null);
   const [deletingBusy, setDeletingBusy] = useState(false);
   const [actionError, setActionError] = useState('');
-  const openingRef = useRef(false);
+  const busyRef = useRef(false);
   const deletingRef = useRef(false);
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -376,10 +377,11 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
   }
 
   async function openCreate() {
-    if (openingRef.current) return;
-    openingRef.current = true;
-    setOpeningId('new');
+    if (!canManage || busyRef.current || deletingRef.current) return;
+    busyRef.current = true;
+    setBusy({ kind: 'open', id: 'new' });
     setActionError('');
+    setTestNotice('');
     try {
       const [list, snapshot] = await Promise.all([api.notificationChannels(), readOptionalSnapshot()]);
       const channels = list.items.map((item) => item.value);
@@ -398,16 +400,17 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
       if (!mountedRef.current) return;
       setActionError(apiErrorMessage(error));
     } finally {
-      openingRef.current = false;
-      if (mountedRef.current) setOpeningId(null);
+      busyRef.current = false;
+      if (mountedRef.current) setBusy(null);
     }
   }
 
   async function openEdit(id: string) {
-    if (openingRef.current) return;
-    openingRef.current = true;
-    setOpeningId(id);
+    if (!canManage || busyRef.current || deletingRef.current) return;
+    busyRef.current = true;
+    setBusy({ kind: 'open', id });
     setActionError('');
+    setTestNotice('');
     try {
       const [current, list, snapshot] = await Promise.all([
         api.notificationChannel(id),
@@ -436,8 +439,39 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
         setActionError(apiErrorMessage(error));
       }
     } finally {
-      openingRef.current = false;
-      if (mountedRef.current) setOpeningId(null);
+      busyRef.current = false;
+      if (mountedRef.current) setBusy(null);
+    }
+  }
+
+  async function sendTest(channel: NotificationChannel) {
+    if (!canManage || busyRef.current || deletingRef.current) return;
+    busyRef.current = true;
+    setBusy({ kind: 'test', id: channel.id });
+    setActionError('');
+    setTestNotice('');
+    try {
+      const result = await api.testNotificationChannel(channel.id);
+      if (!mountedRef.current) return;
+      setTestNotice(`Queued test notification for ${channel.name} (${result.job}). Delivery runs in the background; repeated delivery failures raise a notification.`);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        onSessionLost();
+        return;
+      }
+      if (!mountedRef.current) return;
+      if (error instanceof ApiError && error.status === 404) {
+        void resource.reload();
+        setActionError('This notification channel was deleted elsewhere. The list has been refreshed.');
+      } else {
+        if (error instanceof ApiError && error.status === 409) {
+          void resource.reload();
+        }
+        setActionError(apiErrorMessage(error));
+      }
+    } finally {
+      busyRef.current = false;
+      if (mountedRef.current) setBusy(null);
     }
   }
 
@@ -448,7 +482,7 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
   }
 
   async function confirmDelete() {
-    if (!deleting || deletingRef.current) return;
+    if (!deleting || deletingRef.current || busyRef.current) return;
     deletingRef.current = true;
     setDeletingBusy(true);
     setActionError('');
@@ -482,6 +516,8 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
     }
   }
 
+  const isBusyFor = (kind: 'open' | 'test', id: string) => busy?.kind === kind && busy.id === id;
+
   return (
     <Stack>
       <Group justify="space-between" align="flex-end" wrap="wrap">
@@ -492,21 +528,27 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
           {canManage && (
             <Button
               size="xs"
-              loading={openingId === 'new'}
-              disabled={openingId !== null && openingId !== 'new'}
+              loading={isBusyFor('open', 'new')}
+              disabled={busy !== null && !isBusyFor('open', 'new')}
               onClick={() => void openCreate()}
             >
               Add channel
             </Button>
           )}
-          <Button size="xs" variant="default" loading={resource.loading} onClick={() => { setActionError(''); void resource.reload(); }}>
+          <Button size="xs" variant="default" loading={resource.loading} onClick={() => { setActionError(''); setTestNotice(''); void resource.reload(); }}>
             Refresh
           </Button>
         </Group>
       </Group>
 
+      {testNotice && (
+        <Alert color="blue" role="status" title="Test notification queued" withCloseButton closeButtonLabel="Dismiss test notification notice" onClose={() => setTestNotice('')}>
+          {testNotice}
+        </Alert>
+      )}
+
       {actionError && (
-        <Alert color="red" role="alert" title="Notification channels were not changed" withCloseButton onClose={() => setActionError('')}>
+        <Alert color="red" role="alert" title="Notification channel action failed" withCloseButton closeButtonLabel="Dismiss error" onClose={() => setActionError('')}>
           {actionError}
         </Alert>
       )}
@@ -591,8 +633,18 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
                               <Button
                                 size="xs"
                                 variant="default"
-                                loading={openingId === ch.id}
-                                disabled={openingId !== null && openingId !== ch.id}
+                                loading={isBusyFor('test', ch.id)}
+                                disabled={busy !== null && !isBusyFor('test', ch.id)}
+                                aria-label={`Send test to ${ch.name}`}
+                                onClick={() => void sendTest(ch)}
+                              >
+                                Send test
+                              </Button>
+                              <Button
+                                size="xs"
+                                variant="default"
+                                loading={isBusyFor('open', ch.id)}
+                                disabled={busy !== null && !isBusyFor('open', ch.id)}
                                 aria-label={`Edit ${ch.name}`}
                                 onClick={() => void openEdit(ch.id)}
                               >
@@ -602,9 +654,14 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
                                 size="xs"
                                 variant="light"
                                 color="red"
-                                disabled={openingId !== null}
+                                disabled={busy !== null}
                                 aria-label={`Delete ${ch.name}`}
-                                onClick={() => { setActionError(''); setDeleting(item); }}
+                                onClick={() => {
+                                  if (busyRef.current || deletingRef.current) return;
+                                  setActionError('');
+                                  setTestNotice('');
+                                  setDeleting(item);
+                                }}
                               >
                                 Delete
                               </Button>
