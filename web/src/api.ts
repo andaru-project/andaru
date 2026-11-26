@@ -111,18 +111,23 @@ function combineSignals(caller?: AbortSignal, timeout?: AbortSignal): { signal?:
     return { signal: AbortSignal.any([caller, timeout]), cleanup: () => {} };
   }
   const controller = new AbortController();
-  const forward = () => controller.abort();
-  if (caller.aborted || timeout.aborted) {
-    controller.abort();
+  const onCallerAbort = () => controller.abort(caller.reason);
+  const onTimeoutAbort = () => controller.abort(timeout.reason);
+  if (caller.aborted) {
+    controller.abort(caller.reason);
     return { signal: controller.signal, cleanup: () => {} };
   }
-  caller.addEventListener('abort', forward, { once: true });
-  timeout.addEventListener('abort', forward, { once: true });
+  if (timeout.aborted) {
+    controller.abort(timeout.reason);
+    return { signal: controller.signal, cleanup: () => {} };
+  }
+  caller.addEventListener('abort', onCallerAbort, { once: true });
+  timeout.addEventListener('abort', onTimeoutAbort, { once: true });
   return {
     signal: controller.signal,
     cleanup() {
-      caller.removeEventListener('abort', forward);
-      timeout.removeEventListener('abort', forward);
+      caller.removeEventListener('abort', onCallerAbort);
+      timeout.removeEventListener('abort', onTimeoutAbort);
     },
   };
 }

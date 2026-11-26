@@ -94,8 +94,8 @@ function useAliasSearch({
     if (!singleSelected) return undefined;
     return initialOptions.find((o) => o.value === singleSelected)?.label ?? knownLabels[singleSelected] ?? `${singleSelected} (missing)`;
   }, [singleSelected, initialOptions, knownLabels]);
-  const singleKey = `${singleSelected ?? ''}|${singleSelectedLabel ?? ''}`;
-  const [seenSingleKey, setSeenSingleKey] = useState(singleKey);
+  const [seenSingleValue, setSeenSingleValue] = useState(singleSelected);
+  const [seenSingleLabel, setSeenSingleLabel] = useState(singleSelectedLabel);
   const [searchValue, setSearchValue] = useState(singleSelectedLabel ?? '');
   const [remote, setRemote] = useState<{ query: string; items: AliasSearchItem[] } | null>(null);
   const [loading, setLoading] = useState(false);
@@ -108,17 +108,24 @@ function useAliasSearch({
 
   if (scopeKey !== seenScope) {
     setSeenScope(scopeKey);
-    setSeenSingleKey(singleKey);
+    setSeenSingleValue(singleSelected);
+    setSeenSingleLabel(singleSelectedLabel);
     setRemote(null);
     setLoading(false);
     setSearchError('');
     setSearchValue(singleSelectedLabel ?? '');
-  } else if (singleKey !== seenSingleKey) {
-    setSeenSingleKey(singleKey);
+  } else if (singleSelected !== seenSingleValue) {
+    setSeenSingleValue(singleSelected);
+    setSeenSingleLabel(singleSelectedLabel);
     setRemote(null);
     setLoading(false);
     setSearchError('');
     setSearchValue(singleSelectedLabel ?? '');
+  } else if (singleSelectedLabel !== seenSingleLabel) {
+    setSeenSingleLabel(singleSelectedLabel);
+    if (searchValue === (seenSingleLabel ?? '')) {
+      setSearchValue(singleSelectedLabel ?? '');
+    }
   }
 
   useEffect(() => {
@@ -388,6 +395,7 @@ export function AliasSelect({
       clearable={clearable}
       searchValue={searchValue}
       onSearchChange={handleSearchChange}
+      onDropdownOpen={() => { lastPickedRef.current = null; }}
       onDropdownClose={() => {
         const picked = lastPickedRef.current;
         lastPickedRef.current = null;
