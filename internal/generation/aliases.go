@@ -76,13 +76,20 @@ func aliasFill(stateDir string, script []byte) []byte {
 	if len(sets) == 0 {
 		return nil
 	}
+	// Each source is read once, so its two families' sets hold the same version of its list.
+	read := map[[2]string][2][]string{}
 	var out strings.Builder
 	for _, set := range sets {
 		var list []string
 		if set.id != "" {
-			v4, v6 := readMembers(stateDir, set.id, set.hash)
-			if list = v4; set.family == "6" {
-				list = v6
+			key := [2]string{set.id, set.hash}
+			members, ok := read[key]
+			if !ok {
+				members[0], members[1] = readMembers(stateDir, set.id, set.hash)
+				read[key] = members
+			}
+			if list = members[0]; set.family == "6" {
+				list = members[1]
 			}
 		}
 		out.WriteString("flush set inet andaru " + set.name + "\n")
