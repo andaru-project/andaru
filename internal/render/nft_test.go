@@ -112,3 +112,18 @@ func TestFilterFindings(t *testing.T) {
 		}
 	}
 }
+
+// A PPPoE session that is not rendered has no interface whose handshakes need clamping.
+func TestNoClampForAnUnusableSession(t *testing.T) {
+	clamps := func(in Input) int {
+		f, _ := nftFile(t, render(t, in))
+		return strings.Count(f.Content, "maxseg size set")
+	}
+	if n := clamps(fixture(t, "filter-pppoe")); n != 4 {
+		t.Fatalf("%d clamps for one session, want 4", n)
+	}
+	in := change(t, fixture(t, "filter-pppoe"), func(d map[string]any) { item(d, "links", 0)["enabled"] = false })
+	if n := clamps(in); n != 0 {
+		t.Fatalf("%d clamps for a session whose parent is disabled", n)
+	}
+}
