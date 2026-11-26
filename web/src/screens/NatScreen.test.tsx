@@ -260,6 +260,14 @@ describe('NatScreen', () => {
     fireEvent.click(screen.getByLabelText('Disabled (none)'));
     fireEvent.click(screen.getByRole('button', { name: 'Save outbound NAT' }));
     expect(await screen.findByText('Outbound NAT changed elsewhere')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save outbound NAT' })).toBeDisabled();
+
+    // Returning to the saved mode cleans the draft and syncs its baseline to the reloaded version.
+    fireEvent.click(screen.getByLabelText('Automatic masquerade'));
+    expect(screen.queryByText('Outbound NAT changed elsewhere')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Disabled (none)'));
+    expect(screen.queryByText('Outbound NAT changed elsewhere')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save outbound NAT' })).toBeEnabled();
   });
 });
 

@@ -645,7 +645,9 @@ export function NatScreen({ api, session, onSaved, onSessionLost }: NatScreenPro
                         onChange={(value) => {
                           const next = value as OutboundNatMode;
                           setOutboundMode(next);
-                          setOutboundDirty(effectiveOutbound === null || next !== savedOutboundMode);
+                          const dirty = effectiveOutbound === null || next !== savedOutboundMode;
+                          setOutboundDirty(dirty);
+                          if (!dirty) setOutboundBaseVersion(outboundServerVersion);
                         }}
                         data={[
                           { value: 'automatic', label: 'Automatic masquerade' },
