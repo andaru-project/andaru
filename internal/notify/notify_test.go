@@ -2,6 +2,7 @@ package notify
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -19,10 +20,18 @@ type bench struct {
 	events  *bus.Bus
 	layer   *Layer
 	changes chan struct{}
+	sent    chan sent
+}
+
+// sent is a raise the layer handed on to the channels.
+type sent struct {
+	event   bus.Event
+	raise   Raise
+	payload string
 }
 
 func newBench(t *testing.T) *bench {
-	b := &bench{t: t, dir: t.TempDir(), changes: make(chan struct{}, 64)}
+	b := &bench{t: t, dir: t.TempDir(), changes: make(chan struct{}, 64), sent: make(chan sent, 64)}
 	b.open(false)
 	t.Cleanup(b.close)
 	return b
@@ -36,7 +45,10 @@ func (b *bench) open(lost bool) {
 	if _, err = b.events.Subscribe(ChangedTopic, func(string, []byte) { b.changes <- struct{}{} }); err != nil {
 		b.t.Fatal(err)
 	}
-	if b.layer, err = Open(filepath.Join(b.dir, "notifications.db"), b.events, slog.New(slog.DiscardHandler)); err != nil {
+	if b.layer, err = Open(filepath.Join(b.dir, "notifications.db"), b.events, slog.New(slog.DiscardHandler), func(e bus.Event, r Raise, payload []byte) error {
+		b.sent <- sent{e, r, string(payload)}
+		return nil
+	}); err != nil {
 		b.t.Fatal(err)
 	}
 }
@@ -397,4 +409,95 @@ func TestDetailIsAccepted(t *testing.T) {
 	if d := Detail("line one\nline two"); d != "line one\nline two" {
 		t.Errorf("lines changed: %q", d)
 	}
+}
+
+// Each raise that changes the list is handed on with its event as published; one that changes nothing, and a clear,
+// are not. One delivered again is handed on again, with the same ID.
+func TestRaisesAreDelivered(t *testing.T) {
+	b := newBench(t)
+	payload, err := bus.NewEvent(RaisedType, "disk", full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = b.events.Publish("notification/disk", payload, true); err != nil {
+		t.Fatal(err)
+	}
+	got := receiveSent(t, b.sent)
+	var published bus.Event
+	if err = json.Unmarshal(payload, &published); err != nil {
+		t.Fatal(err)
+	}
+	if got.payload != string(payload) || got.raise != full || got.event.ID != published.ID || got.event.Source != "disk" || !got.event.Time.Equal(published.Time) {
+		t.Fatalf("sent %+v", got)
+	}
+	b.publish("disk", full) // changes nothing
+	b.publish("disk", Raise{Key: "var"})
+	b.publish("disk", Raise{Key: "other", Severity: Info, Subject: "s"})
+	if got := receiveSent(t, b.sent); got.raise.Key != "other" {
+		t.Fatalf("sent %+v, want only the new raise", got)
+	}
+	if err = b.layer.handle(bus.Message{Seq: 1, Topic: "notification/disk", Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+	if again := receiveSent(t, b.sent); again.event.ID != published.ID || again.payload != string(payload) {
+		t.Fatalf("sent again %+v", again)
+	}
+	select {
+	case s := <-b.sent:
+		t.Fatalf("sent %+v", s)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// A raise the channels could not be told of is retried, and recorded once.
+func TestDeliveryFailureRetries(t *testing.T) {
+	b := newBench(t)
+	b.layer.Close()
+	fails := 1
+	var err error
+	b.layer, err = Open(filepath.Join(b.dir, "notifications.db"), b.events, slog.New(slog.DiscardHandler), func(e bus.Event, r Raise, payload []byte) error {
+		if fails > 0 {
+			fails--
+			return errors.New("bus closed")
+		}
+		b.sent <- sent{e, r, string(payload)}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.publish("disk", full)
+	if got := receiveSent(t, b.sent); got.raise != full {
+		t.Fatalf("sent %+v", got)
+	}
+	if got := b.active(); len(got) != 1 {
+		t.Fatalf("active %+v", got)
+	}
+}
+
+func TestGapIsDelivered(t *testing.T) {
+	b := newBench(t)
+	b.close()
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if err := os.Remove(filepath.Join(b.dir, "bus.db"+suffix)); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+	}
+	b.open(true)
+	got := receiveSent(t, b.sent)
+	var e bus.Event
+	if got.event.Source != "notifications" || got.raise.Key != "missed" || json.Unmarshal([]byte(got.payload), &e) != nil || e.ID != got.event.ID || e.Type != RaisedType {
+		t.Fatalf("sent %+v", got)
+	}
+}
+
+func receiveSent(t *testing.T, ch <-chan sent) sent {
+	t.Helper()
+	select {
+	case s := <-ch:
+		return s
+	case <-time.After(5 * time.Second):
+		t.Fatal("nothing sent")
+	}
+	return sent{}
 }

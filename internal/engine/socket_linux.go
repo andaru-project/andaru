@@ -108,7 +108,7 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	// start that opens it, and the API answers that they are unavailable.
 	notificationsHandler := notificationsAPI{}
 	var active []notify.Notification
-	if layer, err := notify.Open(filepath.Join(stateDir, "notifications.db"), events, slog.Default().With("component", "notifications")); err != nil {
+	if layer, err := notify.Open(filepath.Join(stateDir, "notifications.db"), events, slog.Default().With("component", "notifications"), nil); err != nil {
 		slog.Error("notifications unavailable", "error", err)
 	} else {
 		defer func() {
