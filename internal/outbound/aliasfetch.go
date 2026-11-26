@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -44,9 +46,13 @@ func aliasClient(rt http.RoundTripper) *http.Client {
 		}}
 }
 
-// lookupGo resolves a name's A and AAAA records with Go's own resolver, which never reads a name as an address.
+// goResolver is Go's own resolver, never the C library's. It takes a name that is an address as that address; the
+// engine's validation keeps addresses out of the names.
+var goResolver = &net.Resolver{PreferGo: true}
+
+// lookupGo resolves a name's A and AAAA records with goResolver.
 func lookupGo(ctx context.Context, name string) ([]netip.Addr, error) {
-	return (&net.Resolver{PreferGo: true}).LookupNetIP(ctx, "ip", name)
+	return goResolver.LookupNetIP(ctx, "ip", name)
 }
 
 // fetchList fetches and parses the list at rawURL. Its error holds no URL: a query string may hold a token.
@@ -58,6 +64,9 @@ func fetchList(ctx context.Context, client *http.Client, rawURL string) ([]strin
 	req.Header.Set("User-Agent", User)
 	resp, err := client.Do(req)
 	if err != nil {
+		if strings.Contains(err.Error(), "failed to parse Location header") {
+			return nil, errors.New("a redirect's Location does not parse") // net/http's error quotes it
+		}
 		return nil, redact(err)
 	}
 	defer resp.Body.Close()
@@ -74,13 +83,16 @@ func fetchList(ctx context.Context, client *http.Client, rawURL string) ([]strin
 	return parseList(body)
 }
 
-// parseList reads one address or network per line. Blank lines, lines starting with # or ;, and a comment after
-// whitespace and # are ignored; any other line that does not parse fails the whole list.
+// parseList reads one address or network per line, after a leading UTF-8 BOM. Blank lines, lines starting with #
+// or ;, and a comment after whitespace and # are ignored; any other line that does not parse fails the whole list.
+// The limit counts each entry once, in the form the sets take.
 func parseList(body []byte) ([]string, error) {
-	if t := bytes.TrimSpace(body); len(t) > 0 && t[0] == '<' || bytes.Contains(bytes.ToLower(body), []byte("<html")) {
+	body = bytes.TrimPrefix(body, []byte("\xef\xbb\xbf"))
+	// An HTML page (a login or error page served with 200) starts with a tag; no list line does.
+	if t := bytes.TrimSpace(body); len(t) > 0 && t[0] == '<' {
 		return nil, errors.New("not a list")
 	}
-	var out []string
+	seen := map[string]struct{}{}
 	n := 0
 	for line := range strings.Lines(string(body)) {
 		n++
@@ -91,15 +103,13 @@ func parseList(body []byte) ([]string, error) {
 		if line == "" || line[0] == '#' || line[0] == ';' {
 			continue
 		}
-		if _, err := aliasfeed.Members([]string{line}); err != nil {
-			return nil, fmt.Errorf("line %d: %w", n, err)
+		m, err := aliasfeed.Members([]string{line})
+		if err != nil {
+			return nil, fmt.Errorf("line %d: %q is not an address or a network", n, cut(line, 64))
 		}
-		if len(out) == aliasfeed.MaxMembers {
-			return nil, fmt.Errorf("more than %d entries", aliasfeed.MaxMembers)
-		}
-		out = append(out, line)
+		seen[m[0]] = struct{}{}
 	}
-	return aliasfeed.Members(out)
+	return aliasfeed.Members(slices.Collect(maps.Keys(seen)))
 }
 
 // resolve looks up each name at once, each within lookupFor. A name with no addresses failed.
@@ -119,13 +129,14 @@ func resolve(ctx context.Context, lookup func(context.Context, string) ([]netip.
 				r.Error = dns.Err // "no such host", without the server's address
 			case err != nil:
 				r.Error = err.Error()
-			case len(addrs) == 0:
-				r.Error = "no addresses"
 			}
-			if r.Error == "" {
-				for _, a := range addrs {
+			for _, a := range addrs {
+				if r.Error == "" && a.Zone() == "" { // a zoned address (fe80::1%eth0 in /etc/hosts) fits no set
 					r.Addresses = append(r.Addresses, a.Unmap().String())
 				}
+			}
+			if r.Error == "" && len(r.Addresses) == 0 {
+				r.Error = "no addresses"
 			}
 			mu.Lock()
 			out[name] = r
@@ -136,8 +147,9 @@ func resolve(ctx context.Context, lookup func(context.Context, string) ([]netip.
 	return out
 }
 
-// feeds collapses the requests for one source that arrive while it is being fetched: the fetch answers the newest
-// only, which the engine takes as the answer to every older one, so one fetch counts once.
+// feeds collapses the requests for one source that arrive while it waits for a fetch slot: the fetch answers the
+// newest only, which the engine takes as the answer to every older one, so one fetch counts once. A request that
+// arrives once the fetch has started gets a fetch of its own: it is answered with data fetched after it was asked.
 type feeds struct {
 	mu       sync.Mutex
 	inFlight map[string]*feed // by alias and hash
@@ -149,9 +161,9 @@ type feed struct {
 	seqs      []int64 // the bus events it answers
 }
 
-// handleAlias answers one request and returns the events it settles, which may be none (another fetch of the same
-// source answers it) or several; ok is false when the session ended before the result was published.
-func (s *Service) handleAlias(ctx context.Context, c *bus.Client, slots chan struct{}, m bus.Message) (seqs []int64, ok bool) {
+// handleAlias answers one request and returns the events it settles: none when another fetch of the same source
+// answers it or the session ended first, or several. An error is a result not published: it ends the session.
+func (s *Service) handleAlias(ctx context.Context, c *bus.Client, slots chan struct{}, m bus.Message) ([]int64, error) {
 	alias := strings.TrimPrefix(m.Topic, "alias-fetch/")
 	var req aliasfeed.Request
 	e := bus.Event{Data: &req}
@@ -167,7 +179,7 @@ func (s *Service) handleAlias(ctx context.Context, c *bus.Client, slots chan str
 	}
 	if err != nil {
 		s.Log.Error("alias request unreadable; skipped", "topic", m.Topic, "seq", m.Seq, "error", err)
-		return []int64{m.Seq}, true
+		return []int64{m.Seq}, nil
 	}
 	key := alias + "\x00" + req.Hash
 	s.feeds.mu.Lock()
@@ -177,12 +189,12 @@ func (s *Service) handleAlias(ctx context.Context, c *bus.Client, slots chan str
 		}
 		f.seqs = append(f.seqs, m.Seq)
 		s.feeds.mu.Unlock()
-		return nil, true
+		return nil, nil
 	}
 	f := &feed{newest: req.ID, newestSeq: m.Seq, seqs: []int64{m.Seq}}
 	s.feeds.inFlight[key] = f
 	s.feeds.mu.Unlock()
-	// Out of the map before the publish: a request that comes after is fetched anew, not answered by this fetch.
+	// Out of the map once the fetch starts: a request that comes after is fetched anew, not answered by this fetch.
 	leave := func() {
 		s.feeds.mu.Lock()
 		defer s.feeds.mu.Unlock()
@@ -195,28 +207,29 @@ func (s *Service) handleAlias(ctx context.Context, c *bus.Client, slots chan str
 	case slots <- struct{}{}:
 		defer func() { <-slots }()
 	case <-ctx.Done():
-		return nil, false
-	}
-	r, entries := s.fetch(ctx, alias, req)
-	if ctx.Err() != nil {
-		return nil, false // the bus delivers it again
+		return nil, nil
 	}
 	leave()
+	r, entries := s.fetch(ctx, alias, req)
 	r.Request = f.newest // f no longer changes
 	payload, err := bus.NewEvent(aliasfeed.ResultType, User, r)
 	if err == nil {
 		err = c.Publish(ctx, aliasfeed.ResultTopic(alias), payload, true)
 	}
 	if err != nil {
-		s.Log.Error("publish an alias result", "alias", alias, "error", err)
-		return nil, false // unacked, the bus delivers the requests again
+		// Also when the session ended during the fetch. Unacked, the requests come again, but only to a new
+		// session: this one's acks would wait for them.
+		return nil, fmt.Errorf("publish the result for alias %s: %w", alias, err)
 	}
-	if r.OK {
+	switch {
+	case r.OK:
 		s.Log.Info("alias list fetched", "alias", alias, "entries", entries)
-	} else {
+	case req.Kind == "url":
 		s.Log.Warn("alias list not fetched", "alias", alias, "reason", r.Error)
+	default: // each name's reason is logged already
+		s.Log.Warn("alias names not resolved", "alias", alias)
 	}
-	return f.seqs, true
+	return f.seqs, nil
 }
 
 // fetch fetches a URL alias's list or resolves a host-name alias's names, and counts the entries it got.

@@ -125,7 +125,7 @@ func (s *Service) session(ctx context.Context) error {
 		s.Ready()
 	}
 	var acks, aliasAcks order
-	done, aliasDone := make(chan int64), make(chan []int64)
+	done, aliasDone, aliasFailed := make(chan int64), make(chan []int64), make(chan error)
 	slots := make(chan struct{}, maxFetches)
 	var running sync.WaitGroup
 	defer running.Wait()
@@ -145,6 +145,8 @@ func (s *Service) session(ctx context.Context) error {
 					return err
 				}
 			}
+		case err := <-aliasFailed:
+			return err
 		case seqs := <-aliasDone:
 			var ack int64
 			for _, seq := range seqs {
@@ -174,7 +176,14 @@ func (s *Service) session(ctx context.Context) error {
 				running.Add(1)
 				go func(m bus.Message) {
 					defer running.Done()
-					if seqs, ok := s.handleAlias(ctx, c, slots, m); ok && len(seqs) > 0 {
+					seqs, err := s.handleAlias(ctx, c, slots, m)
+					switch {
+					case err != nil:
+						select {
+						case aliasFailed <- err:
+						case <-ctx.Done():
+						}
+					case len(seqs) > 0:
 						select {
 						case aliasDone <- seqs:
 						case <-ctx.Done():
