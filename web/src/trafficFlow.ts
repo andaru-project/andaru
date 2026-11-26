@@ -1,5 +1,7 @@
 import { parseIpv6Groups } from './dhcpEdit';
-import { firewallZone, type AddressAlias, type LinkStatus, type PortAlias, type PortForward, type RuleSide, type Segment, type Snapshot } from './types';
+import { parsePortSpan } from './natEdit';
+import { firewallZone, type AddressAlias, type LinkStatus, type PortAlias, type PortForward, type RuleSide, type SavedLink, type Segment, type Snapshot } from './types';
+import { kernelName } from './zones';
 
 export type TrafficProtocol = 'tcp' | 'udp' | 'icmp' | 'icmpv6';
 export type StepStage = 'ingress' | 'prerouting' | 'routing' | 'filter' | 'postrouting' | 'verdict';
@@ -22,13 +24,13 @@ export interface DecidingRef {
 }
 
 export interface FlowStep {
-  id: string;
   stage: StepStage;
   title: string;
   summary: string;
   outcome: StepOutcome;
   decidedBy?: DecidingRef;
   zone?: { name: string; color?: string };
+  isFirewall?: boolean;
   detail?: string;
 }
 
@@ -51,8 +53,9 @@ export interface ParsedIp {
 
 export interface ParsedPrefix {
   family: 4 | 6;
-  addr: bigint;
+  ip: ParsedIp;
   network: bigint;
+  mask: bigint;
   bits: number;
   raw: string;
 }
@@ -86,7 +89,6 @@ export function parseIp(raw: string): ParsedIp | null {
 }
 
 function formatIpv6(groups: string[]): string {
-  // RFC 5952 longest run of >= 2 zero groups compressed to ::.
   let bestStart = -1;
   let bestLen = 0;
   for (let i = 0; i < 8; ) {
@@ -100,9 +102,7 @@ function formatIpv6(groups: string[]): string {
     i = j;
   }
   if (bestStart < 0) return groups.join(':');
-  const left = groups.slice(0, bestStart).join(':');
-  const right = groups.slice(bestStart + bestLen).join(':');
-  return `${left}::${right}`;
+  return `${groups.slice(0, bestStart).join(':')}::${groups.slice(bestStart + bestLen).join(':')}`;
 }
 
 export function formatIp(family: 4 | 6, value: bigint): string {
@@ -127,7 +127,8 @@ export function parsePrefix(raw: string): ParsedPrefix | null {
   if (slash < 0) {
     const ip = parseIp(s);
     if (!ip) return null;
-    return { family: ip.family, addr: ip.value, network: ip.value, bits: ip.family === 4 ? 32 : 128, raw: s };
+    const mask = ip.family === 4 ? ipv4Max : ipv6Max;
+    return { family: ip.family, ip, network: ip.value, mask, bits: ip.family === 4 ? 32 : 128, raw: s };
   }
   const ip = parseIp(s.slice(0, slash));
   const lenStr = s.slice(slash + 1);
@@ -135,37 +136,29 @@ export function parsePrefix(raw: string): ParsedPrefix | null {
   const bits = Number(lenStr);
   const maxBits = ip.family === 4 ? 32 : 128;
   if (bits > maxBits) return null;
-  const hostBits = BigInt(maxBits - bits);
   const full = ip.family === 4 ? ipv4Max : ipv6Max;
-  const mask = bits === 0 ? 0n : (full << hostBits) & full;
-  return { family: ip.family, addr: ip.value, network: ip.value & mask, bits, raw: s };
+  const mask = bits === 0 ? 0n : (full << BigInt(maxBits - bits)) & full;
+  return { family: ip.family, ip, network: ip.value & mask, mask, bits, raw: s };
 }
 
 function prefixContains(prefix: ParsedPrefix, ip: ParsedIp): boolean {
-  if (prefix.family !== ip.family) return false;
-  const maxBits = prefix.family === 4 ? 32 : 128;
-  const hostBits = BigInt(maxBits - prefix.bits);
-  const full = prefix.family === 4 ? ipv4Max : ipv6Max;
-  const mask = prefix.bits === 0 ? 0n : (full << hostBits) & full;
-  return (ip.value & mask) === prefix.network;
-}
-
-function prefixOverlaps(a: ParsedPrefix, b: ParsedPrefix): boolean {
-  if (a.family !== b.family) return false;
-  const shorter = a.bits <= b.bits ? a : b;
-  const longer = a.bits <= b.bits ? b : a;
-  return prefixContains(shorter, { family: longer.family, value: longer.network, canonical: '' });
+  return prefix.family === ip.family && (ip.value & prefix.mask) === prefix.network;
 }
 
 function isLinkLocalIpv6(ip: ParsedIp): boolean {
   return ip.family === 6 && ((ip.value >> 118n) & 0x3ffn) === 0x3fan; // fe80::/10
 }
 
-function isBroadcastOrMulticast(ip: ParsedIp, segmentPrefixes: ParsedPrefix[]): boolean {
+function isLinkLocalMulticast(ip: ParsedIp): boolean {
+  if (ip.family === 4) return ((ip.value >> 8n) & 0xffffffn) === 0xe00000n; // 224.0.0.0/24
+  return ((ip.value >> 112n) & 0xffffn) === 0xff02n; // ff02::/16
+}
+
+function isBroadcastOrMulticast(ip: ParsedIp, enabledPrefixes: ParsedPrefix[]): boolean {
   if (ip.family === 4) {
     if (ip.value === ipv4Max) return true; // 255.255.255.255
     if (((ip.value >> 24n) & 0xf0n) === 0xe0n) return true; // 224.0.0.0/4
-    for (const p of segmentPrefixes) {
+    for (const p of enabledPrefixes) {
       if (p.family !== 4 || p.bits > 30) continue;
       const bcast = p.network | ((1n << BigInt(32 - p.bits)) - 1n);
       if (ip.value === bcast) return true;
@@ -175,13 +168,40 @@ function isBroadcastOrMulticast(ip: ParsedIp, segmentPrefixes: ParsedPrefix[]): 
   return ((ip.value >> 120n) & 0xffn) === 0xffn; // ff00::/8
 }
 
-function isUplink(segment: Segment, linksById: Map<string, Snapshot['value']['links'][number]>): boolean {
+// Walk parent links (vlan/pppoe) with cycle guard to mirror internal/render/resolve.go usability.
+function isLinkUsable(linkId: string, linksById: Map<string, SavedLink>, visited = new Set<string>()): boolean {
+  if (visited.has(linkId)) return false;
+  visited.add(linkId);
+  const link = linksById.get(linkId);
+  if (!link || !link.enabled) return false;
+  if ((link.kind === 'vlan' || link.kind === 'pppoe') && link.parent) {
+    return isLinkUsable(link.parent, linksById, visited);
+  }
+  return true;
+}
+
+function isUplink(segment: Segment, linksById: Map<string, SavedLink>): boolean {
   const link = linksById.get(segment.link);
   return Boolean(segment.addressing.ipv4.gateway) || segment.addressing.ipv4.mode === 'dhcp' || link?.kind === 'pppoe';
 }
 
 function isIpv6Uplink(segment: Segment): boolean {
   return Boolean(segment.addressing.ipv6.gateway) || segment.addressing.ipv6.mode === 'slaac' || segment.addressing.ipv6.mode === 'dhcp6';
+}
+
+// Match a saved link to its live LinkStatus by permanent MAC (Ethernet) or derived kernel name (virtual links).
+function findLiveLink(link: SavedLink | undefined, liveLinks: LinkStatus[]): LinkStatus | undefined {
+  if (!link) return undefined;
+  if (link.kind === 'ethernet') {
+    if (link.permanentMac) {
+      const targetMac = link.permanentMac.toLowerCase();
+      const byMac = liveLinks.find((l) => l.linkType === 'ether' && !l.kind && (l.permanentAddress ?? l.linkAddress)?.toLowerCase() === targetMac);
+      if (byMac) return byMac;
+    }
+    return liveLinks.find((l) => l.name === link.name);
+  }
+  const derived = kernelName(link, new Map());
+  return (derived ? liveLinks.find((l) => l.name === derived) : undefined) ?? liveLinks.find((l) => l.name === link.name);
 }
 
 function aliasHasFamily(aliasId: string, family: 4 | 6, byId: Map<string, Partial<AddressAlias> & { id: string; name: string }>, seen = new Set<string>()): boolean {
@@ -237,28 +257,11 @@ function matchesAddressList(
 ): boolean {
   if (refs.length === 0) return true;
   if (negated) {
-    // Matches nft.go:310-323: only aliases with elements in this family constrain it; if none do, all of this family matches.
     const sameFamily = refs.filter((id) => aliasHasFamily(id, ip.family, byId));
     if (sameFamily.length === 0) return true;
     return sameFamily.every((id) => !matchesAddressAlias(id, ip, byId));
   }
   return refs.some((id) => matchesAddressAlias(id, ip, byId));
-}
-
-function parsePortSpan(span: string): [number, number] | null {
-  const trimmed = span.trim();
-  const dash = trimmed.indexOf('-');
-  if (dash < 0) {
-    if (!/^\d+$/.test(trimmed)) return null;
-    const p = Number(trimmed);
-    return p >= 1 && p <= 65535 ? [p, p] : null;
-  }
-  const loStr = trimmed.slice(0, dash);
-  const hiStr = trimmed.slice(dash + 1);
-  if (!/^\d+$/.test(loStr) || !/^\d+$/.test(hiStr)) return null;
-  const lo = Number(loStr);
-  const hi = Number(hiStr);
-  return lo >= 1 && hi <= 65535 && lo <= hi ? [lo, hi] : null;
 }
 
 function matchesPortAlias(
@@ -281,7 +284,7 @@ function matchesPortAlias(
     if (dstPort === undefined) return false;
     return (alias.ports ?? []).some((entry) => {
       const span = parsePortSpan(entry);
-      return span !== null && dstPort >= span[0] && dstPort <= span[1];
+      return span !== null && dstPort >= span.first && dstPort <= span.last;
     });
   }
   const types = alias.types ?? [];
@@ -309,6 +312,49 @@ function matchesRuleSide(
 ): boolean {
   if (!isInputTo && side.zones.length > 0 && !side.zones.includes(zoneId)) return false;
   return matchesAddressList(side.addresses, Boolean(side.not), ip, addressesById);
+}
+
+// Shared 1:1 NAT matcher for inbound DNAT and outbound SNAT (matching internal/render/nat.go:258-326).
+function matchOneToOne(
+  entries: NonNullable<NonNullable<Snapshot['value']['nat']>['oneToOne']>,
+  direction: 'inbound' | 'outbound',
+  zoneId: string,
+  allowReflection: boolean,
+  translatedIp: ParsedIp,
+  peerIp: ParsedIp,
+  addressesById: Map<string, Partial<AddressAlias> & { id: string; name: string }>,
+): { index: number; name: string; mappedIp: ParsedIp; reflected: boolean } | undefined {
+  if (translatedIp.family !== 4) return undefined;
+  const excludedByZone = new Map<string, ParsedPrefix[]>();
+  for (let i = 0; i < entries.length; i += 1) {
+    const o = entries[i];
+    if (!o.enabled) continue;
+    const internal = parsePrefix(o.internal);
+    if (!internal || internal.family !== 4) continue;
+    if (o.noBinat) {
+      excludedByZone.set(o.zone, [...(excludedByZone.get(o.zone) ?? []), internal]);
+      continue;
+    }
+    const external = parsePrefix(o.external ?? '');
+    if (!external || external.family !== 4 || external.bits !== internal.bits) continue;
+
+    const normalZone = o.zone === zoneId;
+    const reflectZone = direction === 'inbound' && Boolean(o.reflection) && allowReflection;
+    if (!normalZone && !reflectZone) continue;
+    if (!matchesAddressList(o.destination, Boolean(o.destinationNegated), peerIp, addressesById)) continue;
+
+    const fromPrefix = direction === 'inbound' ? external : internal;
+    const toPrefix = direction === 'inbound' ? internal : external;
+    if (!prefixContains(fromPrefix, translatedIp)) continue;
+
+    const mappedVal = toPrefix.network + (translatedIp.value - fromPrefix.network);
+    const mappedIp: ParsedIp = { family: 4, value: mappedVal, canonical: formatIp(4, mappedVal) };
+    const internalIp = direction === 'inbound' ? mappedIp : translatedIp;
+    if ((excludedByZone.get(o.zone) ?? []).some((x) => prefixContains(x, internalIp))) continue;
+
+    return { index: i, name: o.name, mappedIp, reflected: !normalZone && reflectZone };
+  }
+  return undefined;
 }
 
 export function validateProbe(probe: TrafficProbe, snapshot: Snapshot['value']): Map<string, string> {
@@ -348,6 +394,165 @@ interface LocalOwner {
   to: string;
   segmentId?: string;
   isVirtual: boolean;
+  linkLocal?: boolean;
+}
+
+interface FilterDecision {
+  verdict: 'accept' | 'drop' | 'reject';
+  decidedBy: DecidingRef;
+  summary: string;
+  outcome: StepOutcome;
+  logged: boolean;
+  rejectTcpReset: boolean;
+}
+
+function evaluateFilter(params: {
+  chain: 'input' | 'forward';
+  hasManagement: boolean;
+  probe: TrafficProbe;
+  srcIp: ParsedIp;
+  srcPort?: number;
+  effectiveDstIp: ParsedIp;
+  effectiveDstPort?: number;
+  icmpType?: string;
+  ingressSegment: Segment;
+  egressZoneId?: string;
+  matchedPortForward?: { pf: PortForward; index: number; isLocalTarget: boolean };
+  snapshot: Snapshot['value'];
+  linksById: Map<string, SavedLink>;
+  addressesById: Map<string, Partial<AddressAlias> & { id: string; name: string }>;
+  portsById: Map<string, Partial<PortAlias> & { id: string; name: string }>;
+}): FilterDecision {
+  const {
+    chain, hasManagement, probe, srcIp, srcPort, effectiveDstIp, effectiveDstPort, icmpType,
+    ingressSegment, egressZoneId, matchedPortForward, snapshot, linksById, addressesById, portsById,
+  } = params;
+
+  if (!hasManagement) {
+    return {
+      verdict: 'accept',
+      decidedBy: { label: 'Management segment missing', to: '/network/interfaces' },
+      summary: 'Packet filter is not loaded without a usable management segment; packet passes unfiltered.',
+      outcome: 'warn',
+      logged: false,
+      rejectTcpReset: false,
+    };
+  }
+
+  const fixedRulesRef: DecidingRef = { label: 'Fixed rules (Firewall)', to: '/firewall/rules' };
+  const ingressUsable = isLinkUsable(ingressSegment.link, linksById);
+
+  // 4a: Fixed input rules (internal/render/nft.go:87-120)
+  if (chain === 'input') {
+    if (probe.protocol === 'icmpv6' && icmpType && ndpTypes.has(icmpType)) {
+      return { verdict: 'accept', decidedBy: fixedRulesRef, summary: `Allowed by fixed IPv6 Neighbor/Router Discovery rule (${icmpType}).`, outcome: 'accept', logged: false, rejectTcpReset: false };
+    }
+    if (probe.protocol === 'udp' && isLinkLocalIpv6(srcIp) && srcPort === 547 && effectiveDstPort === 546) {
+      return { verdict: 'accept', decidedBy: fixedRulesRef, summary: 'Allowed by fixed DHCPv6 client reply rule (UDP 547 → 546 from link-local).', outcome: 'accept', logged: false, rejectTcpReset: false };
+    }
+    if (probe.protocol === 'icmpv6' && isLinkLocalIpv6(srcIp) && icmpType && mldTypes.has(icmpType)) {
+      return { verdict: 'accept', decidedBy: fixedRulesRef, summary: `Allowed by fixed IPv6 Multicast Listener Discovery rule (${icmpType}).`, outcome: 'accept', logged: false, rejectTcpReset: false };
+    }
+    const servesDhcp4 = ingressUsable
+      && ingressSegment.addressing.ipv4.mode === 'static'
+      && (ingressSegment.addressing.ipv4.addresses?.length ?? 0) > 0
+      && (snapshot.dhcp ?? []).some((e) => e.segment === ingressSegment.id);
+    if (probe.protocol === 'udp' && srcPort === 68 && effectiveDstPort === 67 && servesDhcp4) {
+      return {
+        verdict: 'accept',
+        decidedBy: { label: `DHCPv4 on ${ingressSegment.name}`, to: '/network/dhcp' },
+        summary: `Allowed by fixed DHCPv4 server rule on ${ingressSegment.name}.`,
+        outcome: 'accept',
+        logged: false,
+        rejectTcpReset: false,
+      };
+    }
+    const hasStatic64 = ingressSegment.addressing.ipv6.mode === 'static'
+      && (ingressSegment.addressing.ipv6.addresses ?? []).some((raw) => {
+        const p = parsePrefix(raw);
+        return p !== null && p.family === 6 && p.bits === 64 && !isLinkLocalIpv6(p.ip);
+      });
+    const delegatedSource = ingressSegment.addressing.ipv6.mode === 'delegated' && ingressSegment.addressing.ipv6.from
+      ? snapshot.segments.find((s) => s.id === ingressSegment.addressing.ipv6.from)
+      : undefined;
+    const hasDelegated = Boolean(delegatedSource && isLinkUsable(delegatedSource.link, linksById));
+    const servesDhcp6 = ingressUsable && (hasStatic64 || hasDelegated) && (snapshot.dhcp6 ?? []).some((e) => e.segment === ingressSegment.id);
+    if (probe.protocol === 'udp' && isLinkLocalIpv6(srcIp) && srcPort === 546 && effectiveDstPort === 547 && servesDhcp6) {
+      return {
+        verdict: 'accept',
+        decidedBy: { label: `DHCPv6 on ${ingressSegment.name}`, to: '/network/dhcp' },
+        summary: `Allowed by fixed DHCPv6 server rule on ${ingressSegment.name}.`,
+        outcome: 'accept',
+        logged: false,
+        rejectTcpReset: false,
+      };
+    }
+    if (
+      probe.protocol === 'tcp'
+      && effectiveDstPort === 22
+      && snapshot.management?.segment === ingressSegment.id
+      && matchesAddressList(snapshot.management.allowedSources ?? [], false, srcIp, addressesById)
+    ) {
+      return {
+        verdict: 'accept',
+        decidedBy: { label: `Management SSH (${ingressSegment.name})`, to: '/network/interfaces' },
+        summary: `Allowed by fixed management SSH rule on ${ingressSegment.name} (TCP/22).`,
+        outcome: 'accept',
+        logged: false,
+        rejectTcpReset: false,
+      };
+    }
+  }
+
+  // 4b: Bound port-forward auto filter rule (nft.go:140-143, nat.go:153-168)
+  if (
+    matchedPortForward
+    && matchedPortForward.pf.filterRule === 'auto'
+    && matchedPortForward.pf.ingressZones.includes(ingressSegment.zone)
+    && chain === (matchedPortForward.isLocalTarget ? 'input' : 'forward')
+  ) {
+    return {
+      verdict: 'accept',
+      decidedBy: { label: `Port forward #${matchedPortForward.index + 1} auto rule (${matchedPortForward.pf.name})`, to: '/firewall/nat' },
+      summary: `Allowed by automatic filter rule bound to port forward "${matchedPortForward.pf.name}".`,
+      outcome: 'accept',
+      logged: false,
+      rejectTcpReset: false,
+    };
+  }
+
+  // 4c: User firewall rules in order (nft.go:146-152, 382-385)
+  const rules = snapshot.rules ?? [];
+  for (let i = 0; i < rules.length; i += 1) {
+    const rule = rules[i];
+    if (!rule.enabled) continue;
+    const isInputRule = rule.to.zones.includes(firewallZone);
+    if ((chain === 'input') !== isInputRule) continue;
+    if (!matchesRuleSide(rule.from, ingressSegment.zone, srcIp, false, addressesById)) continue;
+    if (!matchesRuleSide(rule.to, egressZoneId ?? '', effectiveDstIp, isInputRule, addressesById)) continue;
+    if (rule.ports.length > 0 && !rule.ports.some((pid) => matchesPortAlias(pid, probe.protocol, effectiveDstPort, icmpType, portsById))) continue;
+
+    // nft.go:383 emits `reject with tcp reset` only when a TCP port alias matched (not when ports is empty).
+    const rejectTcpReset = rule.action === 'reject' && probe.protocol === 'tcp' && rule.ports.length > 0;
+    return {
+      verdict: rule.action,
+      decidedBy: { label: `Rule #${i + 1} (${rule.name})`, to: '/firewall/rules' },
+      summary: `Matched rule #${i + 1} "${rule.name}": ${rule.action}${rejectTcpReset ? ' (TCP RST)' : ''}${rule.log ? ', logged' : ''}.`,
+      outcome: rule.action,
+      logged: rule.log,
+      rejectTcpReset,
+    };
+  }
+
+  // 4d: Default chain policy: drop (nft.go:165-166)
+  return {
+    verdict: 'drop',
+    decidedBy: { label: `Default ${chain} policy (drop)`, to: '/firewall/rules' },
+    summary: `No rule matched; dropped by default ${chain} chain policy.`,
+    outcome: 'drop',
+    logged: false,
+    rejectTcpReset: false,
+  };
 }
 
 // Simulate a hypothetical packet through Andaru's pre-routing NAT, routing, firewall filter, and post-routing NAT.
@@ -355,6 +560,7 @@ export function simulateTrafficFlow(
   probe: TrafficProbe,
   snapshot: Snapshot['value'],
   liveLinks: LinkStatus[] = [],
+  options: { evaluatingSavedDiffersFromLive?: boolean } = {},
 ): TrafficSimulation {
   const srcIp = parseIp(probe.srcIp)!;
   const origDstIp = parseIp(probe.dstIp)!;
@@ -368,40 +574,89 @@ export function simulateTrafficFlow(
   const portsById = new Map((snapshot.aliases?.ports ?? []).map((p) => [p.id, p]));
   const ingressSegment = snapshot.segments.find((s) => s.id === probe.ingressSegmentId)!;
   const ingressLink = linksById.get(ingressSegment.link);
+  const ingressUsable = isLinkUsable(ingressSegment.link, linksById);
   const ingressZone = zonesById.get(ingressSegment.zone);
   const ingressZoneInfo = ingressZone ? { name: ingressZone.name, color: ingressZone.color } : undefined;
-  const ingressIsInternal = !isUplink(ingressSegment, linksById);
+  const ingressIsInternal = ingressUsable && !isUplink(ingressSegment, linksById);
 
   const warnings: string[] = [];
   const steps: FlowStep[] = [];
   const originalTuple = formatTuple(probe.protocol, srcIp, srcPort, origDstIp, origDstPort, icmpType);
 
-  if (ingressLink && !ingressLink.enabled) {
-    warnings.push(`Ingress interface ${ingressLink.name} is disabled in this configuration.`);
+  if (!ingressUsable) {
+    warnings.push(`Ingress interface ${ingressLink?.name ?? ingressSegment.name} (or its parent) is disabled in this configuration.`);
   }
-  const hasManagement = Boolean(snapshot.management?.segment);
+  const mgmtSegment = snapshot.management?.segment
+    ? snapshot.segments.find((s) => s.id === snapshot.management?.segment)
+    : undefined;
+  const hasManagement = Boolean(mgmtSegment && isLinkUsable(mgmtSegment.link, linksById));
   if (!hasManagement) {
-    warnings.push('No management segment is configured: Andaru does not load firewall rules or NAT without one.');
+    warnings.push('No usable management segment is configured: Andaru does not load firewall rules or NAT without one.');
   }
 
-  // Gather all configured segment prefixes and firewall-owned addresses (static + virtual + live).
-  const allSegmentPrefixes: Array<{ segment: Segment; prefix: ParsedPrefix; enabled: boolean }> = [];
+  // Gather usable segment prefixes and firewall-owned addresses (static + virtual + dynamic live).
+  const usableSegmentPrefixes: Array<{ segment: Segment; prefix: ParsedPrefix; staticIpv4: boolean }> = [];
   const localOwners: Array<{ ip: ParsedIp; owner: LocalOwner }> = [];
   const internalOwn4 = new Set<bigint>();
   const virtual4 = new Set<bigint>();
+  let usedLiveDynamic = false;
 
   for (const seg of snapshot.segments) {
-    const enabled = linksById.get(seg.link)?.enabled !== false;
-    const rawList = [...(seg.addressing.ipv4.addresses ?? []), ...(seg.addressing.ipv6.addresses ?? [])];
-    for (const raw of rawList) {
-      const p = parsePrefix(raw);
+    if (!isLinkUsable(seg.link, linksById)) continue;
+    const link = linksById.get(seg.link);
+    const segUplink = isUplink(seg, linksById);
+
+    if (seg.addressing.ipv4.mode === 'static') {
+      for (const raw of seg.addressing.ipv4.addresses ?? []) {
+        const p = parsePrefix(raw);
+        if (!p || p.family !== 4) continue;
+        usableSegmentPrefixes.push({ segment: seg, prefix: p, staticIpv4: true });
+        localOwners.push({ ip: p.ip, owner: { label: `Interface ${seg.name}`, to: '/network/interfaces', segmentId: seg.id, isVirtual: false } });
+        if (!segUplink) internalOwn4.add(p.ip.value);
+      }
+    }
+    if (seg.addressing.ipv6.mode === 'static' || seg.addressing.ipv6.mode === 'delegated') {
+      for (const raw of seg.addressing.ipv6.addresses ?? []) {
+        const p = parsePrefix(raw);
+        if (!p || p.family !== 6) continue;
+        usableSegmentPrefixes.push({ segment: seg, prefix: p, staticIpv4: false });
+        localOwners.push({ ip: p.ip, owner: { label: `Interface ${seg.name}`, to: '/network/interfaces', segmentId: seg.id, isVirtual: false } });
+      }
+    }
+
+    // Merge live addresses only for dynamic addressing modes (plus link-local on ingress for DHCPv6/NDP/MLD).
+    const live = findLiveLink(link, liveLinks);
+    if (!live) continue;
+    const dynamicV4 = seg.addressing.ipv4.mode === 'dhcp' || link?.kind === 'pppoe';
+    const dynamicV6 = seg.addressing.ipv6.mode === 'slaac' || seg.addressing.ipv6.mode === 'dhcp6' || seg.addressing.ipv6.mode === 'delegated';
+    for (const a of live.addresses) {
+      const isLinkLocal = a.scope === 'link';
+      if (isLinkLocal) {
+        if (seg.id !== ingressSegment.id || a.family !== 'ipv6') continue;
+      } else if (a.family === 'ipv4' ? !dynamicV4 : !dynamicV6) {
+        continue;
+      }
+      const p = parsePrefix(`${a.address}/${a.prefixLength}`);
       if (!p) continue;
-      allSegmentPrefixes.push({ segment: seg, prefix: p, enabled });
-      const addrIp: ParsedIp = { family: p.family, value: p.addr, canonical: formatIp(p.family, p.addr) };
-      localOwners.push({ ip: addrIp, owner: { label: `Interface ${seg.name}`, to: '/network/interfaces', segmentId: seg.id, isVirtual: false } });
-      if (p.family === 4 && !isUplink(seg, linksById)) internalOwn4.add(p.addr);
+      if (!isLinkLocal) {
+        usedLiveDynamic = true;
+        if (!usableSegmentPrefixes.some((e) => e.segment.id === seg.id && e.prefix.family === p.family && e.prefix.ip.value === p.ip.value && e.prefix.bits === p.bits)) {
+          usableSegmentPrefixes.push({ segment: seg, prefix: p, staticIpv4: false });
+        }
+      }
+      if (!localOwners.some((o) => o.ip.family === p.family && o.ip.value === p.ip.value && (!isLinkLocal || o.owner.segmentId === seg.id))) {
+        localOwners.push({
+          ip: p.ip,
+          owner: { label: `Interface ${seg.name} (live)`, to: '/network/interfaces', segmentId: seg.id, isVirtual: false, linkLocal: isLinkLocal },
+        });
+      }
     }
   }
+
+  if (usedLiveDynamic && options.evaluatingSavedDiffersFromLive) {
+    warnings.push('Dynamic DHCP/PPPoE/SLAAC addresses are read from live interfaces because saved-only dynamic leases do not exist yet.');
+  }
+
   for (const vip of snapshot.virtualAddresses ?? []) {
     const ip = parseIp(vip.address);
     if (!ip) continue;
@@ -411,42 +666,34 @@ export function simulateTrafficFlow(
       internalOwn4.add(ip.value);
     }
   }
-  // Live link addresses (e.g. DHCPv4/PPPoE/SLAAC addresses learned on the appliance) matched by link name.
-  for (const live of liveLinks) {
-    const seg = snapshot.segments.find((s) => linksById.get(s.link)?.name === live.name);
-    if (!seg) continue;
-    const enabled = linksById.get(seg.link)?.enabled !== false;
-    for (const a of live.addresses) {
-      if (a.scope === 'link') continue;
-      const p = parsePrefix(`${a.address}/${a.prefixLength}`);
-      if (!p) continue;
-      if (!allSegmentPrefixes.some((e) => e.segment.id === seg.id && e.prefix.family === p.family && e.prefix.addr === p.addr && e.prefix.bits === p.bits)) {
-        allSegmentPrefixes.push({ segment: seg, prefix: p, enabled });
-      }
-      if (!localOwners.some((o) => o.ip.family === p.family && o.ip.value === p.addr)) {
-        localOwners.push({
-          ip: { family: p.family, value: p.addr, canonical: formatIp(p.family, p.addr) },
-          owner: { label: `Interface ${seg.name} (live)`, to: '/network/interfaces', segmentId: seg.id, isVirtual: false },
-        });
-      }
-    }
-  }
 
-  const findLocalOwner = (ip: ParsedIp, onSegmentId?: string): LocalOwner | undefined => {
-    if (onSegmentId) {
-      const exact = localOwners.find((o) => o.ip.family === ip.family && o.ip.value === ip.value && (o.owner.segmentId === onSegmentId || o.owner.isVirtual));
-      if (exact) return exact.owner;
-    }
-    return localOwners.find((o) => o.ip.family === ip.family && o.ip.value === ip.value)?.owner;
-  };
+  const findLocalOwner = (ip: ParsedIp): LocalOwner | undefined =>
+    localOwners.find((o) => o.ip.family === ip.family && o.ip.value === ip.value && (!o.owner.linkLocal || o.owner.segmentId === ingressSegment.id))?.owner;
+
+  const isLocalTarget4 = (ip: ParsedIp): boolean => Boolean(findLocalOwner(ip));
+
+  // Table-wide hairpin reflection flag, matching nft.go:124-131 + nat.go:107,173,316.
+  const reflectionEnabled = hasManagement && (
+    (snapshot.nat?.portForwards ?? []).some((pf) => {
+      if (!pf.enabled || pf.noRedirect) return false;
+      if (pf.reflection) return true;
+      if (pf.toNegated) {
+        const six = pf.family === 'ipv6';
+        const targetIp = pf.target?.address ? parseIp(pf.target.address) : null;
+        const local = six || Boolean(pf.target?.self) || Boolean(targetIp && isLocalTarget4(targetIp));
+        return !local;
+      }
+      return false;
+    })
+    || (snapshot.nat?.oneToOne ?? []).some((o) => o.enabled && !o.noBinat && Boolean(o.reflection))
+  );
 
   // Stage 1: Ingress
   steps.push({
-    id: 'ingress',
     stage: 'ingress',
     title: 'Ingress',
     summary: `Enters on ${ingressSegment.name}${ingressLink && ingressLink.name !== ingressSegment.name ? ` (${ingressLink.name})` : ''} in zone ${ingressZone?.name ?? ingressSegment.zone}.`,
-    outcome: ingressLink && !ingressLink.enabled ? 'warn' : 'pass',
+    outcome: !ingressUsable ? 'warn' : 'pass',
     decidedBy: { label: `Interface ${ingressSegment.name}`, to: '/network/interfaces' },
     zone: ingressZoneInfo,
     detail: originalTuple,
@@ -455,11 +702,12 @@ export function simulateTrafficFlow(
   // Stage 2: Pre-routing NAT (Port forwards, then 1:1 NAT DNAT)
   let effectiveDstIp = origDstIp;
   let effectiveDstPort = origDstPort;
-  let matchedPortForward: { pf: PortForward; index: number; reflected: boolean; toSelf: boolean } | undefined;
-  let dnatApplied = false;
-  let reflectedNat = false;
+  let matchedPortForward: { pf: PortForward; index: number; isLocalTarget: boolean; toSelf: boolean } | undefined;
+  let preroutingHandled = false;
+  let didDnat = false;
 
-  if (hasManagement) {
+  if (hasManagement && ingressUsable) {
+    const enabledPrefixList = usableSegmentPrefixes.map((e) => e.prefix);
     const portForwards = snapshot.nat?.portForwards ?? [];
     for (let i = 0; i < portForwards.length; i += 1) {
       const pf = portForwards[i];
@@ -469,7 +717,7 @@ export function simulateTrafficFlow(
       if (probe.protocol !== 'tcp' && probe.protocol !== 'udp') continue;
       if (pf.protocol !== 'tcp-udp' && pf.protocol !== probe.protocol) continue;
       const span = parsePortSpan(pf.ports);
-      if (!span || origDstPort === undefined || origDstPort < span[0] || origDstPort > span[1]) continue;
+      if (!span || origDstPort === undefined || origDstPort < span.first || origDstPort > span.last) continue;
       if (!matchesAddressList(pf.from, Boolean(pf.fromNegated), srcIp, addressesById)) continue;
 
       const normalIngress = pf.ingressZones.includes(ingressSegment.zone);
@@ -478,15 +726,15 @@ export function simulateTrafficFlow(
 
       const checkTo = (viaReflection: boolean): boolean => {
         if (pf.toNegated) {
-          if (isBroadcastOrMulticast(origDstIp, allSegmentPrefixes.map((e) => e.prefix))) return false;
-          if (pf.to.self) return !findLocalOwner(origDstIp, ingressSegment.id);
+          if (isBroadcastOrMulticast(origDstIp, enabledPrefixList)) return false;
+          if (pf.to.self) return !findLocalOwner(origDstIp);
           return !matchesAddressAlias(pf.to.address, origDstIp, addressesById);
         }
         if (viaReflection) {
           if (pf.to.self) return Boolean(findLocalOwner(origDstIp)) && !internalOwn4.has(origDstIp.value);
           return matchesAddressAlias(pf.to.address, origDstIp, addressesById) && !virtual4.has(origDstIp.value);
         }
-        if (pf.to.self) return Boolean(findLocalOwner(origDstIp, ingressSegment.id));
+        if (pf.to.self) return Boolean(findLocalOwner(origDstIp));
         return matchesAddressAlias(pf.to.address, origDstIp, addressesById);
       };
 
@@ -501,32 +749,34 @@ export function simulateTrafficFlow(
 
       const ref: DecidingRef = { label: `Port forward #${i + 1} (${pf.name})`, to: '/firewall/nat' };
       if (pf.noRedirect) {
+        // Matches nat.go:114-115 + nft.go:121-123: `accept` stops prerouting chain (both later forwards and 1:1 DNAT).
         steps.push({
-          id: 'prerouting',
           stage: 'prerouting',
           title: 'Pre-routing NAT',
           summary: `Matched no-redirect exception "${pf.name}"; destination address and port are unchanged.`,
           outcome: 'pass',
           decidedBy: ref,
         });
-        dnatApplied = true; // Stop further port-forward matching, matching nft `accept` in prerouting.
+        preroutingHandled = true;
         break;
       }
 
-      const newPort = pf.targetPort !== undefined ? pf.targetPort + (origDstPort - span[0]) : origDstPort;
+      const newPort = pf.targetPort !== undefined ? pf.targetPort + (origDstPort - span.first) : origDstPort;
       if (pf.target?.self) {
+        // Linux netfilter `redirect` rewrites destination IP to the ingress interface's primary IP.
+        const ingressPrimary = localOwners.find((o) => o.owner.segmentId === ingressSegment.id && !o.owner.isVirtual && !o.owner.linkLocal && o.ip.family === origDstIp.family)?.ip;
+        if (ingressPrimary) effectiveDstIp = ingressPrimary;
         effectiveDstPort = newPort;
-        matchedPortForward = { pf, index: i, reflected: usedReflection, toSelf: true };
-        dnatApplied = true;
-        reflectedNat = usedReflection;
+        matchedPortForward = { pf, index: i, isLocalTarget: true, toSelf: true };
+        preroutingHandled = true;
+        didDnat = true;
         steps.push({
-          id: 'prerouting',
           stage: 'prerouting',
           title: 'Pre-routing NAT',
-          summary: `${usedReflection ? 'Reflected and redirected' : 'Redirected'} to this firewall${newPort !== origDstPort ? ` on port ${newPort}` : ''}.`,
+          summary: `${usedReflection ? 'Reflected and redirected' : 'Redirected'} to this firewall${ingressPrimary ? ` (${ingressPrimary.canonical})` : ''}${newPort !== origDstPort ? ` on port ${newPort}` : ''}.`,
           outcome: 'transform',
           decidedBy: ref,
-          detail: `${formatEndpoint(origDstIp, origDstPort)} → firewall:${newPort}`,
+          detail: `${formatEndpoint(origDstIp, origDstPort)} → ${formatEndpoint(effectiveDstIp, newPort)}`,
         });
         break;
       }
@@ -535,11 +785,11 @@ export function simulateTrafficFlow(
         if (targetIp) {
           effectiveDstIp = targetIp;
           effectiveDstPort = newPort;
-          matchedPortForward = { pf, index: i, reflected: usedReflection, toSelf: false };
-          dnatApplied = true;
-          reflectedNat = usedReflection || Boolean(pf.toNegated);
+          const isLocalTarget = pfFamily === 6 || isLocalTarget4(targetIp);
+          matchedPortForward = { pf, index: i, isLocalTarget, toSelf: false };
+          preroutingHandled = true;
+          didDnat = true;
           steps.push({
-            id: 'prerouting',
             stage: 'prerouting',
             title: 'Pre-routing NAT',
             summary: `${usedReflection ? 'NAT reflection translated' : 'Translated'} destination to ${formatEndpoint(targetIp, newPort)}.`,
@@ -552,52 +802,34 @@ export function simulateTrafficFlow(
       }
     }
 
-    // 1:1 NAT inbound DNAT (IPv4 only, if no port forward matched).
-    if (!dnatApplied && origDstIp.family === 4) {
-      const excludedByZone = new Map<string, ParsedPrefix[]>();
-      const oneToOne = snapshot.nat?.oneToOne ?? [];
-      for (let i = 0; i < oneToOne.length; i += 1) {
-        const o = oneToOne[i];
-        if (!o.enabled) continue;
-        const internal = parsePrefix(o.internal);
-        if (!internal || internal.family !== 4) continue;
-        if (o.noBinat) {
-          excludedByZone.set(o.zone, [...(excludedByZone.get(o.zone) ?? []), internal]);
-          continue;
-        }
-        const external = parsePrefix(o.external ?? '');
-        if (!external || external.family !== 4 || external.bits !== internal.bits) continue;
-        const normalZone = o.zone === ingressSegment.zone;
-        const reflectZone = Boolean(o.reflection) && ingressIsInternal;
-        if (!normalZone && !reflectZone) continue;
-        if (!matchesAddressList(o.destination, Boolean(o.destinationNegated), srcIp, addressesById)) continue;
-        if (!prefixContains(external, origDstIp)) continue;
-
-        const mappedVal = internal.network + (origDstIp.value - external.network);
-        const mappedIp: ParsedIp = { family: 4, value: mappedVal, canonical: formatIp(4, mappedVal) };
-        const excluded = (excludedByZone.get(o.zone) ?? []).some((x) => prefixContains(x, mappedIp));
-        if (excluded) continue;
-
-        effectiveDstIp = mappedIp;
-        dnatApplied = true;
-        reflectedNat = !normalZone && reflectZone;
+    if (!preroutingHandled) {
+      const inboundOneToOne = matchOneToOne(
+        snapshot.nat?.oneToOne ?? [],
+        'inbound',
+        ingressSegment.zone,
+        ingressIsInternal,
+        origDstIp,
+        srcIp,
+        addressesById,
+      );
+      if (inboundOneToOne) {
+        effectiveDstIp = inboundOneToOne.mappedIp;
+        preroutingHandled = true;
+        didDnat = true;
         steps.push({
-          id: 'prerouting',
           stage: 'prerouting',
           title: 'Pre-routing NAT',
-          summary: `1:1 NAT${reflectedNat ? ' reflection' : ''} translated destination to ${mappedIp.canonical}.`,
+          summary: `1:1 NAT${inboundOneToOne.reflected ? ' reflection' : ''} translated destination to ${effectiveDstIp.canonical}.`,
           outcome: 'transform',
-          decidedBy: { label: `1:1 NAT #${i + 1} (${o.name})`, to: '/firewall/nat' },
-          detail: `${origDstIp.canonical} → ${mappedIp.canonical}`,
+          decidedBy: { label: `1:1 NAT #${inboundOneToOne.index + 1} (${inboundOneToOne.name})`, to: '/firewall/nat' },
+          detail: `${origDstIp.canonical} → ${effectiveDstIp.canonical}`,
         });
-        break;
       }
     }
   }
 
-  if (!dnatApplied) {
+  if (!preroutingHandled) {
     steps.push({
-      id: 'prerouting',
       stage: 'prerouting',
       title: 'Pre-routing NAT',
       summary: hasManagement ? 'No port forward or 1:1 DNAT entry matched.' : 'Skipped (packet filter inactive).',
@@ -610,28 +842,41 @@ export function simulateTrafficFlow(
   let egressSegment: Segment | undefined;
   let egressZoneId: string | undefined;
 
+  const ingressPrefixes = usableSegmentPrefixes.filter((e) => e.segment.id === ingressSegment.id).map((e) => e.prefix);
+  const isIngressBroadcast = effectiveDstIp.family === 4 && (
+    effectiveDstIp.value === ipv4Max
+    || ingressPrefixes.some((p) => p.family === 4 && p.bits <= 30 && effectiveDstIp.value === (p.network | ((1n << BigInt(32 - p.bits)) - 1n)))
+  );
+  const isLocalMulticast = isLinkLocalMulticast(effectiveDstIp);
+
   const localOwner = matchedPortForward?.toSelf
     ? { label: `This firewall (${ingressSegment.name})`, to: '/network/interfaces', segmentId: ingressSegment.id, isVirtual: false }
     : findLocalOwner(effectiveDstIp);
 
-  if (localOwner) {
+  if (localOwner || isIngressBroadcast || isLocalMulticast) {
     chain = 'input';
     egressZoneId = firewallZone;
+    const routeDecidedBy = localOwner
+      ? { label: localOwner.label, to: localOwner.to }
+      : { label: `Interface ${ingressSegment.name}`, to: '/network/interfaces' };
+    const routeSummary = localOwner
+      ? `Delivered locally to this firewall (${localOwner.label}).`
+      : isIngressBroadcast
+        ? `Local broadcast on ${ingressSegment.name}; delivered to this firewall.`
+        : `Link-local multicast on ${ingressSegment.name}; delivered to this firewall.`;
     steps.push({
-      id: 'routing',
       stage: 'routing',
       title: 'Routing',
-      summary: `Delivered locally to this firewall (${localOwner.label}).`,
+      summary: routeSummary,
       outcome: 'pass',
-      decidedBy: { label: localOwner.label, to: localOwner.to },
-      zone: { name: 'This firewall' },
-      detail: `Chain: input`,
+      decidedBy: routeDecidedBy,
+      isFirewall: true,
+      detail: 'Chain: input',
     });
   } else {
-    // Longest-prefix match among enabled connected segment subnets.
     let bestConnected: { segment: Segment; prefix: ParsedPrefix } | undefined;
-    for (const entry of allSegmentPrefixes) {
-      if (!entry.enabled || !prefixContains(entry.prefix, effectiveDstIp)) continue;
+    for (const entry of usableSegmentPrefixes) {
+      if (!prefixContains(entry.prefix, effectiveDstIp)) continue;
       if (!bestConnected || entry.prefix.bits > bestConnected.prefix.bits) {
         bestConnected = { segment: entry.segment, prefix: entry.prefix };
       }
@@ -642,19 +887,17 @@ export function simulateTrafficFlow(
       egressZoneId = egressSegment.zone;
       const ez = zonesById.get(egressZoneId);
       steps.push({
-        id: 'routing',
         stage: 'routing',
         title: 'Routing',
         summary: `Directly connected subnet ${bestConnected.prefix.raw} on ${egressSegment.name} (zone ${ez?.name ?? egressZoneId}).`,
         outcome: 'pass',
         decidedBy: { label: `Interface ${egressSegment.name}`, to: '/network/interfaces' },
         zone: ez ? { name: ez.name, color: ez.color } : undefined,
-        detail: `Chain: forward`,
+        detail: 'Chain: forward',
       });
     } else {
-      // Default route via an enabled uplink segment for this IP family.
       const uplinks = snapshot.segments.filter((s) => {
-        if (linksById.get(s.link)?.enabled === false) return false;
+        if (!isLinkUsable(s.link, linksById)) return false;
         return effectiveDstIp.family === 4 ? isUplink(s, linksById) : isIpv6Uplink(s);
       });
       if (uplinks.length > 0) {
@@ -667,20 +910,18 @@ export function simulateTrafficFlow(
           warnings.push(`Multiple IPv${effectiveDstIp.family} uplinks exist (${uplinks.map((u) => u.name).join(', ')}); assuming default route via ${egressSegment.name}.`);
         }
         steps.push({
-          id: 'routing',
           stage: 'routing',
           title: 'Routing',
           summary: `Default route via ${egressSegment.name}${gw ? ` (gateway ${gw})` : ''} in zone ${ez?.name ?? egressZoneId}.`,
           outcome: 'pass',
           decidedBy: { label: `Interface ${egressSegment.name}`, to: '/network/interfaces' },
           zone: ez ? { name: ez.name, color: ez.color } : undefined,
-          detail: `Chain: forward`,
+          detail: 'Chain: forward',
         });
       } else {
         const finalTuple = formatTuple(probe.protocol, srcIp, srcPort, effectiveDstIp, effectiveDstPort, icmpType);
         const decidedBy: DecidingRef = { label: 'Routing table (Interfaces)', to: '/network/interfaces' };
         steps.push({
-          id: 'routing',
           stage: 'routing',
           title: 'Routing',
           summary: `No connected subnet or IPv${effectiveDstIp.family} default gateway reaches ${effectiveDstIp.canonical}.`,
@@ -688,7 +929,6 @@ export function simulateTrafficFlow(
           decidedBy,
         });
         steps.push({
-          id: 'verdict',
           stage: 'verdict',
           title: 'Verdict',
           summary: 'Packet cannot be routed (no route to host).',
@@ -696,243 +936,72 @@ export function simulateTrafficFlow(
           decidedBy,
           detail: finalTuple,
         });
-        return {
-          verdict: 'no_route',
-          verdictLabel: 'No route',
-          chain: 'none',
-          originalTuple,
-          finalTuple,
-          decidedBy,
-          warnings,
-          steps,
-        };
+        return { verdict: 'no_route', verdictLabel: 'No route', chain: 'none', originalTuple, finalTuple, decidedBy, warnings, steps };
       }
     }
   }
 
   // Stage 4: Firewall filter (input or forward chain)
-  let filterVerdict: 'accept' | 'drop' | 'reject' = 'drop';
-  let filterDecidedBy: DecidingRef | undefined;
-  let filterLogged = false;
-
-  if (!hasManagement) {
-    filterVerdict = 'accept';
-    filterDecidedBy = { label: 'Management segment missing', to: '/network/interfaces' };
-    steps.push({
-      id: 'filter',
-      stage: 'filter',
-      title: `Firewall (${chain})`,
-      summary: 'Packet filter is not loaded without a management segment; packet passes unfiltered.',
-      outcome: 'warn',
-      decidedBy: filterDecidedBy,
-    });
-  } else {
-    let matchedFilter = false;
-
-    // 4a: Fixed input rules (nft.go:87-120)
-    if (chain === 'input') {
-      if (probe.protocol === 'icmpv6' && icmpType && ndpTypes.has(icmpType)) {
-        matchedFilter = true;
-        filterVerdict = 'accept';
-        steps.push({
-          id: 'filter',
-          stage: 'filter',
-          title: 'Firewall (input)',
-          summary: `Allowed by fixed IPv6 Neighbor/Router Discovery rule (${icmpType}).`,
-          outcome: 'accept',
-          decidedBy: { label: 'Fixed rules (Firewall)', to: '/firewall/rules' },
-        });
-      } else if (probe.protocol === 'udp' && isLinkLocalIpv6(srcIp) && srcPort === 547 && effectiveDstPort === 546) {
-        matchedFilter = true;
-        filterVerdict = 'accept';
-        steps.push({
-          id: 'filter',
-          stage: 'filter',
-          title: 'Firewall (input)',
-          summary: 'Allowed by fixed DHCPv6 client reply rule (UDP 547 → 546 from link-local).',
-          outcome: 'accept',
-          decidedBy: { label: 'Fixed rules (Firewall)', to: '/firewall/rules' },
-        });
-      } else if (probe.protocol === 'icmpv6' && isLinkLocalIpv6(srcIp) && icmpType && mldTypes.has(icmpType)) {
-        matchedFilter = true;
-        filterVerdict = 'accept';
-        steps.push({
-          id: 'filter',
-          stage: 'filter',
-          title: 'Firewall (input)',
-          summary: `Allowed by fixed IPv6 Multicast Listener Discovery rule (${icmpType}).`,
-          outcome: 'accept',
-          decidedBy: { label: 'Fixed rules (Firewall)', to: '/firewall/rules' },
-        });
-      } else if (
-        probe.protocol === 'udp'
-        && srcPort === 68
-        && effectiveDstPort === 67
-        && (snapshot.dhcp ?? []).some((e) => e.segment === ingressSegment.id)
-      ) {
-        matchedFilter = true;
-        filterVerdict = 'accept';
-        filterDecidedBy = { label: `DHCPv4 on ${ingressSegment.name}`, to: '/network/dhcp' };
-        steps.push({
-          id: 'filter',
-          stage: 'filter',
-          title: 'Firewall (input)',
-          summary: `Allowed by fixed DHCPv4 server rule on ${ingressSegment.name}.`,
-          outcome: 'accept',
-          decidedBy: filterDecidedBy,
-        });
-      } else if (
-        probe.protocol === 'udp'
-        && isLinkLocalIpv6(srcIp)
-        && srcPort === 546
-        && effectiveDstPort === 547
-        && (snapshot.dhcp6 ?? []).some((e) => e.segment === ingressSegment.id)
-      ) {
-        matchedFilter = true;
-        filterVerdict = 'accept';
-        filterDecidedBy = { label: `DHCPv6 on ${ingressSegment.name}`, to: '/network/dhcp' };
-        steps.push({
-          id: 'filter',
-          stage: 'filter',
-          title: 'Firewall (input)',
-          summary: `Allowed by fixed DHCPv6 server rule on ${ingressSegment.name}.`,
-          outcome: 'accept',
-          decidedBy: filterDecidedBy,
-        });
-      } else if (
-        probe.protocol === 'tcp'
-        && effectiveDstPort === 22
-        && snapshot.management?.segment === ingressSegment.id
-        && ((snapshot.management.allowedSources ?? []).length === 0
-          || matchesAddressList(snapshot.management.allowedSources ?? [], false, srcIp, addressesById))
-      ) {
-        matchedFilter = true;
-        filterVerdict = 'accept';
-        filterDecidedBy = { label: `Management SSH (${ingressSegment.name})`, to: '/network/interfaces' };
-        steps.push({
-          id: 'filter',
-          stage: 'filter',
-          title: 'Firewall (input)',
-          summary: `Allowed by fixed management SSH rule on ${ingressSegment.name} (TCP/22).`,
-          outcome: 'accept',
-          decidedBy: filterDecidedBy,
-        });
-      }
-    }
-
-    // 4b: Bound port-forward auto filter rule (nft.go:140-143, nat.go:153-168)
-    if (!matchedFilter && matchedPortForward && matchedPortForward.pf.filterRule === 'auto' && !matchedPortForward.reflected) {
-      matchedFilter = true;
-      filterVerdict = 'accept';
-      filterDecidedBy = {
-        label: `Port forward #${matchedPortForward.index + 1} auto rule (${matchedPortForward.pf.name})`,
-        to: '/firewall/nat',
-      };
-      steps.push({
-        id: 'filter',
-        stage: 'filter',
-        title: `Firewall (${chain})`,
-        summary: `Allowed by automatic filter rule bound to port forward "${matchedPortForward.pf.name}".`,
-        outcome: 'accept',
-        decidedBy: filterDecidedBy,
-      });
-    }
-
-    // 4c: User firewall rules in order (nft.go:146-152)
-    if (!matchedFilter) {
-      const rules = snapshot.rules ?? [];
-      for (let i = 0; i < rules.length; i += 1) {
-        const rule = rules[i];
-        if (!rule.enabled) continue;
-        const isInputRule = rule.to.zones.includes(firewallZone);
-        if ((chain === 'input') !== isInputRule) continue;
-        if (!matchesRuleSide(rule.from, ingressSegment.zone, srcIp, false, addressesById)) continue;
-        if (!matchesRuleSide(rule.to, egressZoneId ?? '', effectiveDstIp, isInputRule, addressesById)) continue;
-        if (rule.ports.length > 0 && !rule.ports.some((pid) => matchesPortAlias(pid, probe.protocol, effectiveDstPort, icmpType, portsById))) continue;
-
-        matchedFilter = true;
-        filterVerdict = rule.action;
-        filterLogged = rule.log;
-        filterDecidedBy = { label: `Rule #${i + 1} (${rule.name})`, to: '/firewall/rules' };
-        const rejectDetail = rule.action === 'reject' && probe.protocol === 'tcp' ? ' (TCP RST)' : '';
-        steps.push({
-          id: 'filter',
-          stage: 'filter',
-          title: `Firewall (${chain})`,
-          summary: `Matched rule #${i + 1} "${rule.name}": ${rule.action}${rejectDetail}${rule.log ? ', logged' : ''}.`,
-          outcome: rule.action,
-          decidedBy: filterDecidedBy,
-        });
-        break;
-      }
-    }
-
-    // 4d: Default chain policy: drop (nft.go:165-166)
-    if (!matchedFilter) {
-      filterVerdict = 'drop';
-      filterDecidedBy = { label: `Default ${chain} policy (drop)`, to: '/firewall/rules' };
-      steps.push({
-        id: 'filter',
-        stage: 'filter',
-        title: `Firewall (${chain})`,
-        summary: `No rule matched; dropped by default ${chain} chain policy.`,
-        outcome: 'drop',
-        decidedBy: filterDecidedBy,
-      });
-    }
-  }
+  const filter = evaluateFilter({
+    chain,
+    hasManagement,
+    probe,
+    srcIp,
+    srcPort,
+    effectiveDstIp,
+    effectiveDstPort,
+    icmpType,
+    ingressSegment,
+    egressZoneId,
+    matchedPortForward,
+    snapshot,
+    linksById,
+    addressesById,
+    portsById,
+  });
+  steps.push({
+    stage: 'filter',
+    title: `Firewall (${chain})`,
+    summary: filter.summary,
+    outcome: filter.outcome,
+    decidedBy: filter.decidedBy,
+  });
 
   // Stage 5: Post-routing NAT (only for accepted forwarded traffic)
   let effectiveSrcIp = srcIp;
   let snatNote = '';
-  if (chain === 'forward' && filterVerdict === 'accept' && egressSegment && hasManagement) {
+  if (chain === 'forward' && filter.verdict === 'accept' && egressSegment && hasManagement) {
     let snatApplied = false;
 
-    // 5a: 1:1 NAT outbound SNAT (IPv4 only, nat.go:258-324)
-    if (srcIp.family === 4) {
-      const excludedByZone = new Map<string, ParsedPrefix[]>();
-      const oneToOne = snapshot.nat?.oneToOne ?? [];
-      for (let i = 0; i < oneToOne.length; i += 1) {
-        const o = oneToOne[i];
-        if (!o.enabled) continue;
-        const internal = parsePrefix(o.internal);
-        if (!internal || internal.family !== 4) continue;
-        if (o.noBinat) {
-          excludedByZone.set(o.zone, [...(excludedByZone.get(o.zone) ?? []), internal]);
-          continue;
-        }
-        const external = parsePrefix(o.external ?? '');
-        if (!external || external.family !== 4 || external.bits !== internal.bits) continue;
-        if (o.zone !== egressSegment.zone) continue;
-        if (!matchesAddressList(o.destination, Boolean(o.destinationNegated), effectiveDstIp, addressesById)) continue;
-        if (!prefixContains(internal, srcIp)) continue;
-        const excluded = (excludedByZone.get(o.zone) ?? []).some((x) => prefixOverlaps(x, internal) && prefixContains(x, srcIp));
-        if (excluded) continue;
-
-        const mappedVal = external.network + (srcIp.value - internal.network);
-        effectiveSrcIp = { family: 4, value: mappedVal, canonical: formatIp(4, mappedVal) };
-        snatApplied = true;
-        steps.push({
-          id: 'postrouting',
-          stage: 'postrouting',
-          title: 'Post-routing NAT',
-          summary: `1:1 NAT translated source address to ${effectiveSrcIp.canonical}.`,
-          outcome: 'transform',
-          decidedBy: { label: `1:1 NAT #${i + 1} (${o.name})`, to: '/firewall/nat' },
-          detail: `${srcIp.canonical} → ${effectiveSrcIp.canonical}`,
-        });
-        break;
-      }
+    const outboundOneToOne = matchOneToOne(
+      snapshot.nat?.oneToOne ?? [],
+      'outbound',
+      egressSegment.zone,
+      false,
+      srcIp,
+      effectiveDstIp,
+      addressesById,
+    );
+    if (outboundOneToOne) {
+      effectiveSrcIp = outboundOneToOne.mappedIp;
+      snatApplied = true;
+      steps.push({
+        stage: 'postrouting',
+        title: 'Post-routing NAT',
+        summary: `1:1 NAT translated source address to ${effectiveSrcIp.canonical}.`,
+        outcome: 'transform',
+        decidedBy: { label: `1:1 NAT #${outboundOneToOne.index + 1} (${outboundOneToOne.name})`, to: '/firewall/nat' },
+        detail: `${srcIp.canonical} → ${effectiveSrcIp.canonical}`,
+      });
     }
 
-    // 5b: Hairpin NAT reflection masquerade (nft.go:130)
-    if (!snatApplied && reflectedNat && srcIp.family === 4 && egressSegment.id === ingressSegment.id) {
-      const segPrefix = allSegmentPrefixes.find((e) => e.segment.id === egressSegment.id && e.prefix.family === 4 && prefixContains(e.prefix, srcIp));
+    // 5b: Hairpin NAT reflection masquerade (nft.go:124-131)
+    if (!snatApplied && reflectionEnabled && didDnat && srcIp.family === 4 && !isUplink(egressSegment, linksById) && egressSegment.addressing.ipv4.mode === 'static') {
+      const segPrefix = usableSegmentPrefixes.find((e) => e.segment.id === egressSegment.id && e.staticIpv4 && prefixContains(e.prefix, srcIp));
       if (segPrefix) {
-        effectiveSrcIp = { family: 4, value: segPrefix.prefix.addr, canonical: formatIp(4, segPrefix.prefix.addr) };
+        effectiveSrcIp = segPrefix.prefix.ip;
         snatApplied = true;
         steps.push({
-          id: 'postrouting',
           stage: 'postrouting',
           title: 'Post-routing NAT',
           summary: `Hairpin reflection masqueraded source to ${effectiveSrcIp.canonical} on ${egressSegment.name}.`,
@@ -945,7 +1014,7 @@ export function simulateTrafficFlow(
 
     // 5c: Outbound automatic masquerade (nft.go:170-173)
     if (!snatApplied && srcIp.family === 4 && snapshot.nat?.outbound?.mode === 'automatic' && isUplink(egressSegment, linksById)) {
-      const egressAddr = localOwners.find((o) => o.owner.segmentId === egressSegment.id && o.ip.family === 4)?.ip;
+      const egressAddr = localOwners.find((o) => o.owner.segmentId === egressSegment.id && !o.owner.linkLocal && o.ip.family === 4)?.ip;
       snatApplied = true;
       if (egressAddr) {
         effectiveSrcIp = egressAddr;
@@ -953,7 +1022,6 @@ export function simulateTrafficFlow(
         snatNote = ` (masqueraded to ${egressSegment.name} IPv4)`;
       }
       steps.push({
-        id: 'postrouting',
         stage: 'postrouting',
         title: 'Post-routing NAT',
         summary: egressAddr
@@ -967,7 +1035,6 @@ export function simulateTrafficFlow(
 
     if (!snatApplied) {
       steps.push({
-        id: 'postrouting',
         stage: 'postrouting',
         title: 'Post-routing NAT',
         summary: 'No source NAT applied; original source address is preserved.',
@@ -978,37 +1045,36 @@ export function simulateTrafficFlow(
 
   // Stage 6: Final verdict
   const finalTuple = formatTuple(probe.protocol, effectiveSrcIp, srcPort, effectiveDstIp, effectiveDstPort, icmpType) + snatNote;
-  const verdictLabel = filterVerdict === 'accept'
+  const verdictLabel = filter.verdict === 'accept'
     ? 'Allowed'
-    : filterVerdict === 'reject'
-      ? (probe.protocol === 'tcp' ? 'Rejected (TCP RST)' : 'Rejected')
+    : filter.verdict === 'reject'
+      ? (filter.rejectTcpReset ? 'Rejected (TCP RST)' : 'Rejected')
       : 'Dropped';
 
-  const verdictSummary = filterVerdict === 'accept'
+  const verdictSummary = filter.verdict === 'accept'
     ? (chain === 'input'
-      ? `Traffic is delivered to this firewall${filterLogged ? ' (logged)' : ''}.`
-      : `Traffic is forwarded out ${egressSegment?.name ?? ''}${filterLogged ? ' (logged)' : ''}.`)
-    : filterVerdict === 'reject'
-      ? `Traffic is rejected${probe.protocol === 'tcp' ? ' with TCP RST' : ''}${filterLogged ? ' (logged)' : ''}.`
-      : `Traffic is silently dropped${filterLogged ? ' (logged)' : ''}.`;
+      ? `Traffic is delivered to this firewall${filter.logged ? ' (logged)' : ''}.`
+      : `Traffic is forwarded out ${egressSegment?.name ?? ''}${filter.logged ? ' (logged)' : ''}.`)
+    : filter.verdict === 'reject'
+      ? `Traffic is rejected${filter.rejectTcpReset ? ' with TCP RST' : ''}${filter.logged ? ' (logged)' : ''}.`
+      : `Traffic is silently dropped${filter.logged ? ' (logged)' : ''}.`;
 
   steps.push({
-    id: 'verdict',
     stage: 'verdict',
     title: 'Verdict',
     summary: verdictSummary,
-    outcome: filterVerdict,
-    decidedBy: filterDecidedBy,
+    outcome: filter.verdict,
+    decidedBy: filter.decidedBy,
     detail: finalTuple,
   });
 
   return {
-    verdict: filterVerdict,
+    verdict: filter.verdict,
     verdictLabel,
     chain,
     originalTuple,
     finalTuple,
-    decidedBy: filterDecidedBy,
+    decidedBy: filter.decidedBy,
     warnings,
     steps,
   };

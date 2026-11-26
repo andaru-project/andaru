@@ -1,8 +1,8 @@
-import { Alert, Anchor, Badge, Button, Card, Group, NativeSelect, Paper, SegmentedControl, Select, SimpleGrid, Stack, Text, TextInput, Title } from '@mantine/core';
-import { Fragment, useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { Alert, Anchor, Badge, Button, Card, Group, NativeSelect, Paper, SegmentedControl, Select, Stack, Text, TextInput, Title } from '@mantine/core';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
 import { ApiClient, ApiError } from '../api';
-import { simulateTrafficFlow, validateProbe, type FlowStep, type FlowVerdict, type StepOutcome, type TrafficProbe, type TrafficProtocol, type TrafficSimulation } from '../trafficFlow';
+import { simulateTrafficFlow, validateProbe, type FlowStep, type FlowVerdict, type StepOutcome, type TrafficProbe, type TrafficProtocol } from '../trafficFlow';
 import type { LinkStatus, Session, Snapshot } from '../types';
 import { useResource } from '../useResource';
 import { Loaded } from './Loaded';
@@ -23,14 +23,14 @@ const protocols: Array<{ value: TrafficProtocol; label: string }> = [
   { value: 'icmpv6', label: 'ICMPv6 (IPv6)' },
 ];
 
-const outcomeColor: Record<StepOutcome, string> = {
-  pass: 'blue',
-  transform: 'violet',
-  accept: 'green',
-  drop: 'red',
-  reject: 'orange',
-  info: 'gray',
-  warn: 'yellow',
+const outcomeStyle: Record<StepOutcome, { color: string; label: string }> = {
+  pass: { color: 'blue', label: 'Pass' },
+  transform: { color: 'violet', label: 'NAT' },
+  accept: { color: 'green', label: 'Allow' },
+  drop: { color: 'red', label: 'Drop' },
+  reject: { color: 'orange', label: 'Reject' },
+  info: { color: 'gray', label: 'No match' },
+  warn: { color: 'yellow', label: 'Warning' },
 };
 
 const verdictColor: Record<FlowVerdict, string> = {
@@ -47,6 +47,23 @@ interface LoadedContext {
   liveLinks: LinkStatus[];
 }
 
+function optional<T>(promise: Promise<T>, fallback: T): Promise<T> {
+  return promise.catch((error) => {
+    if (error instanceof ApiError && error.status === 401) throw error;
+    return fallback;
+  });
+}
+
+function normalizeConfigValue(raw: Record<string, unknown>): Snapshot['value'] {
+  const value = raw as Partial<Snapshot['value']>;
+  return {
+    ...value,
+    links: Array.isArray(value.links) ? value.links : [],
+    segments: Array.isArray(value.segments) ? value.segments : [],
+    zones: Array.isArray(value.zones) ? value.zones : [],
+  };
+}
+
 function parseOptionalPort(raw: string): number | undefined {
   const trimmed = raw.trim();
   if (!trimmed) return undefined;
@@ -55,16 +72,25 @@ function parseOptionalPort(raw: string): number | undefined {
 }
 
 function FlowStepCard({ step, index }: { step: FlowStep; index: number }) {
-  const color = outcomeColor[step.outcome];
+  const { color, label } = outcomeStyle[step.outcome];
   return (
-    <Paper withBorder radius="md" p="sm" className={`traffic-flow-node traffic-flow-node--${step.outcome}`}>
+    <Paper
+      withBorder
+      radius="md"
+      p="sm"
+      className={`traffic-flow-node traffic-flow-node--${step.outcome}`}
+    >
       <Stack gap={6}>
-        <Group justify="space-between" gap="xs" wrap="nowrap">
+        <Group justify="space-between" gap="xs" wrap="wrap">
           <Group gap={6} wrap="nowrap">
             <Badge size="xs" circle color={color} variant="filled">{index + 1}</Badge>
             <Text size="sm" fw={600}>{step.title}</Text>
           </Group>
-          {step.zone && <ZoneBadge name={step.zone.name} color={step.zone.color} />}
+          <Group gap={4} wrap="nowrap">
+            <Badge size="xs" color={color} variant="light">{label}</Badge>
+            {step.isFirewall && <Badge size="xs" variant="filled" color="dark" tt="none">This firewall</Badge>}
+            {step.zone && <ZoneBadge name={step.zone.name} color={step.zone.color} />}
+          </Group>
         </Group>
         <Text size="xs">{step.summary}</Text>
         {step.detail && <Text size="xs" c="dimmed" ff="monospace" className="traffic-flow-detail">{step.detail}</Text>}
@@ -86,16 +112,8 @@ export function TrafficFlowScreen({ api, session, onSessionLost }: TrafficFlowSc
   const load = useCallback(async (): Promise<LoadedContext> => {
     const [saved, applies, liveLinks] = await Promise.all([
       api.config(),
-      api.listApplies().catch((error) => {
-        if (error instanceof ApiError && error.status === 401) throw error;
-        return null;
-      }),
-      canReadStatus
-        ? api.links().then((res) => res.items).catch((error) => {
-          if (error instanceof ApiError && error.status === 401) throw error;
-          return [];
-        })
-        : Promise.resolve([]),
+      optional(api.listApplies(), null),
+      canReadStatus ? optional(api.links().then((res) => res.items), []) : Promise.resolve([]),
     ]);
 
     const liveApplyId = applies?.pointers.live;
@@ -103,18 +121,9 @@ export function TrafficFlowScreen({ api, session, onSessionLost }: TrafficFlowSc
       ? (applies.items.find((item) => item.id === liveApplyId)?.savedVersion ?? null)
       : null;
 
-    let liveSnapshot: Snapshot['value'] | null = null;
-    if (liveVersion && liveVersion !== saved.savedVersion) {
-      try {
-        const detail = await api.version(liveVersion);
-        liveSnapshot = detail.value as unknown as Snapshot['value'];
-      } catch (error) {
-        if (error instanceof ApiError && error.status === 401) throw error;
-        liveSnapshot = null;
-      }
-    } else if (liveVersion && liveVersion === saved.savedVersion) {
-      liveSnapshot = saved.value;
-    }
+    const liveSnapshot = liveVersion && liveVersion !== saved.savedVersion
+      ? await optional(api.version(liveVersion).then((detail) => normalizeConfigValue(detail.value)), null)
+      : null;
 
     return { saved, liveVersion, liveSnapshot, liveLinks };
   }, [api, canReadStatus]);
@@ -143,6 +152,30 @@ export function TrafficFlowScreen({ api, session, onSessionLost }: TrafficFlowSc
     }
   }, [errorFocusTick]);
 
+  const data = resource.data;
+  const canCompareLive = Boolean(data?.liveSnapshot);
+  const effectiveSource = canCompareLive ? sourceMode : 'saved';
+  const activeConfig = useMemo(
+    () => (data ? (effectiveSource === 'live' && data.liveSnapshot ? data.liveSnapshot : data.saved.value) : null),
+    [data, effectiveSource],
+  );
+  const activeVersionLabel = data
+    ? (effectiveSource === 'live' && data.liveVersion ? `Live (v${data.liveVersion})` : `Saved (v${data.saved.savedVersion})`)
+    : '';
+
+  const { simulation, probeStaleInSource } = useMemo(() => {
+    if (!submittedProbe || !activeConfig || !data) return { simulation: null, probeStaleInSource: false };
+    if (validateProbe(submittedProbe, activeConfig).size > 0) {
+      return { simulation: null, probeStaleInSource: true };
+    }
+    return {
+      simulation: simulateTrafficFlow(submittedProbe, activeConfig, data.liveLinks, {
+        evaluatingSavedDiffersFromLive: effectiveSource === 'saved' && canCompareLive,
+      }),
+      probeStaleInSource: false,
+    };
+  }, [submittedProbe, activeConfig, data, effectiveSource, canCompareLive]);
+
   const isPortProtocol = protocol === 'tcp' || protocol === 'udp';
 
   return (
@@ -158,12 +191,8 @@ export function TrafficFlowScreen({ api, session, onSessionLost }: TrafficFlowSc
       </Group>
 
       <Loaded resource={resource} what="configuration">
-        {({ saved, liveVersion, liveSnapshot, liveLinks }) => {
-          const canCompareLive = Boolean(liveVersion && liveSnapshot && liveVersion !== saved.savedVersion);
-          const effectiveSource = canCompareLive ? sourceMode : 'saved';
-          const activeConfig = effectiveSource === 'live' && liveSnapshot ? liveSnapshot : saved.value;
-          const activeVersionLabel = effectiveSource === 'live' && liveVersion ? `Live (v${liveVersion})` : `Saved (v${saved.savedVersion})`;
-
+        {({ saved, liveVersion }) => {
+          if (!activeConfig) return null;
           const zonesById = new Map(activeConfig.zones.map((z) => [z.id, z]));
           const linksById = new Map(activeConfig.links.map((l) => [l.id, l]));
 
@@ -185,6 +214,7 @@ export function TrafficFlowScreen({ api, session, onSessionLost }: TrafficFlowSc
 
           function submit(event: FormEvent) {
             event.preventDefault();
+            if (!activeConfig) return;
             const probe: TrafficProbe = {
               ingressSegmentId: selectedSegmentId,
               protocol,
@@ -202,11 +232,6 @@ export function TrafficFlowScreen({ api, session, onSessionLost }: TrafficFlowSc
               return;
             }
             setSubmittedProbe(probe);
-          }
-
-          let simulation: TrafficSimulation | null = null;
-          if (submittedProbe && validateProbe(submittedProbe, activeConfig).size === 0) {
-            simulation = simulateTrafficFlow(submittedProbe, activeConfig, liveLinks);
           }
 
           if (activeConfig.segments.length === 0) {
@@ -242,7 +267,7 @@ export function TrafficFlowScreen({ api, session, onSessionLost }: TrafficFlowSc
                       )}
                     </Group>
 
-                    <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+                    <div className="traffic-flow-grid">
                       <Select
                         label="Ingress interface"
                         required
@@ -252,11 +277,14 @@ export function TrafficFlowScreen({ api, session, onSessionLost }: TrafficFlowSc
                         error={errors.get('ingressSegmentId')}
                         renderOption={({ option }) => {
                           const seg = activeConfig.segments.find((s) => s.id === option.value);
+                          const link = seg ? linksById.get(seg.link) : undefined;
                           const zone = seg ? zonesById.get(seg.zone) : undefined;
                           return (
-                            <Group gap="xs" wrap="nowrap">
+                            <Group gap="xs" wrap="wrap">
                               {zone && <ZonePill name={zone.name} color={zone.color} />}
                               <Text size="sm">{seg?.name ?? option.label}</Text>
+                              {link && link.name !== seg?.name && <Text size="xs" c="dimmed" ff="monospace">{link.name}</Text>}
+                              {link && !link.enabled && <Badge size="xs" color="gray" variant="light">Disabled</Badge>}
                             </Group>
                           );
                         }}
@@ -270,13 +298,12 @@ export function TrafficFlowScreen({ api, session, onSessionLost }: TrafficFlowSc
                         onChange={(event) => {
                           const next = event.currentTarget.value as TrafficProtocol;
                           setProtocol(next);
-                          if (next === 'icmp' && !icmpType.trim()) setIcmpType('echo-request');
-                          if (next === 'icmpv6' && !icmpType.trim()) setIcmpType('echo-request');
+                          if ((next === 'icmp' || next === 'icmpv6') && !icmpType.trim()) setIcmpType('echo-request');
                         }}
                       />
-                    </SimpleGrid>
+                    </div>
 
-                    <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+                    <div className="traffic-flow-grid">
                       <TextInput
                         classNames={mono}
                         label="Source address"
@@ -304,13 +331,12 @@ export function TrafficFlowScreen({ api, session, onSessionLost }: TrafficFlowSc
                           description="Optional (e.g. echo-request, nd-neighbor-solicit)."
                           placeholder="echo-request"
                           value={icmpType}
-                          error={errors.get('icmpType')}
                           onChange={(event) => setIcmpType(event.currentTarget.value)}
                         />
                       )}
-                    </SimpleGrid>
+                    </div>
 
-                    <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+                    <div className="traffic-flow-grid">
                       <TextInput
                         classNames={mono}
                         label="Destination address"
@@ -332,7 +358,7 @@ export function TrafficFlowScreen({ api, session, onSessionLost }: TrafficFlowSc
                           onChange={(event) => setDstPort(event.currentTarget.value)}
                         />
                       )}
-                    </SimpleGrid>
+                    </div>
 
                     <Group justify="flex-end" gap="xs">
                       {submittedProbe && (
@@ -354,71 +380,79 @@ export function TrafficFlowScreen({ api, session, onSessionLost }: TrafficFlowSc
                 </form>
               </Card>
 
-              {simulation && (
-                <Stack gap="md">
-                  <Paper withBorder radius="md" p="md" role="status" aria-live="polite">
-                    <Group justify="space-between" align="flex-start" wrap="wrap" gap="sm">
-                      <Stack gap={4}>
-                        <Group gap="xs" wrap="wrap">
-                          <Badge size="lg" color={verdictColor[simulation.verdict]} variant="filled">
-                            {simulation.verdictLabel}
-                          </Badge>
-                          <Text size="sm" c="dimmed">Evaluated against {activeVersionLabel}</Text>
-                        </Group>
-                        <Text size="sm" ff="monospace">{simulation.originalTuple}</Text>
-                        {simulation.finalTuple !== simulation.originalTuple && (
-                          <Text size="sm" ff="monospace" c="dimmed">Final: {simulation.finalTuple}</Text>
+              <div role="status" aria-live="polite">
+                {probeStaleInSource && (
+                  <Alert color="yellow" title="Ingress interface not present in selected configuration">
+                    The simulated ingress interface does not exist in {activeVersionLabel}. Choose an interface above and click Simulate traffic.
+                  </Alert>
+                )}
+
+                {simulation && (
+                  <Stack gap="md">
+                    <Paper withBorder radius="md" p="md">
+                      <Group justify="space-between" align="flex-start" wrap="wrap" gap="sm">
+                        <Stack gap={4}>
+                          <Group gap="xs" wrap="wrap">
+                            <Badge size="lg" color={verdictColor[simulation.verdict]} variant="filled">
+                              {simulation.verdictLabel}
+                            </Badge>
+                            <Text size="sm" c="dimmed">Evaluated against {activeVersionLabel}</Text>
+                          </Group>
+                          <Text size="sm" ff="monospace">{simulation.originalTuple}</Text>
+                          {simulation.finalTuple !== simulation.originalTuple && (
+                            <Text size="sm" ff="monospace" c="dimmed">Final: {simulation.finalTuple}</Text>
+                          )}
+                        </Stack>
+                        {simulation.decidedBy && (
+                          <Text size="sm">
+                            Decided by{' '}
+                            <Anchor component={Link} to={simulation.decidedBy.to} fw={600}>{simulation.decidedBy.label}</Anchor>
+                          </Text>
                         )}
-                      </Stack>
-                      {simulation.decidedBy && (
-                        <Text size="sm">
-                          Decided by{' '}
-                          <Anchor component={Link} to={simulation.decidedBy.to} fw={600}>{simulation.decidedBy.label}</Anchor>
-                        </Text>
-                      )}
-                    </Group>
-                  </Paper>
+                      </Group>
+                    </Paper>
 
-                  {simulation.warnings.length > 0 && (
-                    <Alert color="yellow" role="status" title="Simulation notes">
-                      <Stack gap={4}>
-                        {simulation.warnings.map((warning) => (
-                          <Text key={warning} size="sm">{warning}</Text>
+                    {simulation.warnings.length > 0 && (
+                      <Alert color="yellow" title="Simulation notes">
+                        <Stack gap={4}>
+                          {simulation.warnings.map((warning) => (
+                            <Text key={warning} size="sm">{warning}</Text>
+                          ))}
+                        </Stack>
+                      </Alert>
+                    )}
+
+                    <Card withBorder radius="md" p="md" component="section" aria-labelledby="traffic-flow-diagram-heading">
+                      <Title id="traffic-flow-diagram-heading" order={3} size="h5" mb="sm">Flow diagram</Title>
+                      <ol className="traffic-flow-diagram">
+                        {simulation.steps.map((step, index) => (
+                          <li key={step.stage} className="traffic-flow-item">
+                            <FlowStepCard step={step} index={index} />
+                            {index < simulation.steps.length - 1 && (
+                              <span className="traffic-flow-arrow" aria-hidden="true">→</span>
+                            )}
+                          </li>
                         ))}
-                      </Stack>
-                    </Alert>
-                  )}
+                      </ol>
+                    </Card>
 
-                  <Card withBorder radius="md" p="md" component="section" aria-label="Traffic flow diagram">
-                    <Title order={3} size="h5" mb="sm">Flow diagram</Title>
-                    <div className="traffic-flow-diagram">
-                      {simulation.steps.map((step, index) => (
-                        <Fragment key={step.id}>
-                          <FlowStepCard step={step} index={index} />
-                          {index < simulation.steps.length - 1 && (
-                            <div className="traffic-flow-arrow" aria-hidden="true">→</div>
-                          )}
-                        </Fragment>
-                      ))}
-                    </div>
-                  </Card>
-
-                  <Card withBorder radius="md" p="md" component="section" aria-label="Step-by-step trace">
-                    <Title order={3} size="h5" mb="xs">Step-by-step trace</Title>
-                    <ol className="traffic-flow-list">
-                      {simulation.steps.map((step) => (
-                        <li key={step.id}>
-                          <strong>{step.title}:</strong> {step.summary}
-                          {step.detail && <> (<Text span ff="monospace" size="xs" inherit>{step.detail}</Text>)</>}
-                          {step.decidedBy && (
-                            <> — <Anchor component={Link} to={step.decidedBy.to} size="sm">{step.decidedBy.label}</Anchor></>
-                          )}
-                        </li>
-                      ))}
-                    </ol>
-                  </Card>
-                </Stack>
-              )}
+                    <Card withBorder radius="md" p="md" component="section" aria-labelledby="traffic-flow-trace-heading">
+                      <Title id="traffic-flow-trace-heading" order={3} size="h5" mb="xs">Step-by-step trace</Title>
+                      <ol className="traffic-flow-list">
+                        {simulation.steps.map((step) => (
+                          <li key={step.stage}>
+                            <strong>{step.title}:</strong> {step.summary}
+                            {step.detail && <> (<Text span ff="monospace" size="xs" inherit>{step.detail}</Text>)</>}
+                            {step.decidedBy && (
+                              <> — <Anchor component={Link} to={step.decidedBy.to} size="sm">{step.decidedBy.label}</Anchor></>
+                            )}
+                          </li>
+                        ))}
+                      </ol>
+                    </Card>
+                  </Stack>
+                )}
+              </div>
             </Stack>
           );
         }}

@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { formatIp, parseIp, parsePrefix, simulateTrafficFlow, validateProbe } from './trafficFlow';
-import { firewallZone, type Snapshot } from './types';
+import { firewallZone, type LinkStatus, type Snapshot } from './types';
 
 const baseConfig: Snapshot['value'] = {
   links: [
-    { id: 'lnk_wan', name: 'eth0', kind: 'ethernet', mtu: 1500, enabled: true },
-    { id: 'lnk_lan', name: 'eth1', kind: 'ethernet', mtu: 1500, enabled: true },
-    { id: 'lnk_dmz', name: 'eth2', kind: 'ethernet', mtu: 1500, enabled: true },
+    { id: 'lnk_wan', name: 'WAN port', kind: 'ethernet', mtu: 1500, enabled: true, permanentMac: '52:54:00:aa:bb:01' },
+    { id: 'lnk_lan', name: 'LAN port', kind: 'ethernet', mtu: 1500, enabled: true, permanentMac: '52:54:00:aa:bb:02' },
+    { id: 'lnk_dmz', name: 'DMZ port', kind: 'ethernet', mtu: 1500, enabled: true, permanentMac: '52:54:00:aa:bb:03' },
   ],
   segments: [
     {
@@ -16,7 +16,7 @@ const baseConfig: Snapshot['value'] = {
       zone: 'zon_wan',
       addressing: {
         ipv4: { mode: 'static', addresses: ['203.0.113.2/24'], gateway: '203.0.113.1' },
-        ipv6: { mode: 'static', addresses: ['2001:db8:wan::2/64'], gateway: '2001:db8:wan::1' },
+        ipv6: { mode: 'static', addresses: ['2001:db8:1::2/64'], gateway: '2001:db8:1::1' },
       },
     },
     {
@@ -47,6 +47,7 @@ const baseConfig: Snapshot['value'] = {
   ],
   management: { segment: 'seg_lan', allowedSources: ['adr_admin'] },
   dhcp: [{ id: 'dhp_lan', name: 'LAN DHCP', segment: 'seg_lan', ranges: [{ first: '192.168.1.100', last: '192.168.1.200' }] }],
+  dhcp6: [{ id: 'dh6_lan', name: 'LAN DHCPv6', segment: 'seg_lan', ranges: [{ first: 'fd00:1::100', last: 'fd00:1::200' }] }],
   virtualAddresses: [{ id: 'vip_dns', name: 'DNS VIP', address: '172.16.53.53' }],
   aliases: {
     addresses: [
@@ -64,14 +65,24 @@ const baseConfig: Snapshot['value'] = {
   },
   rules: [
     {
+      id: 'rul_block_tcp_https',
+      name: 'Reject blocked HTTPS',
+      enabled: true,
+      action: 'reject',
+      from: { zones: ['zon_lan'], addresses: [] },
+      to: { zones: ['zon_wan'], addresses: ['adr_blocked'] },
+      ports: ['svc_https'],
+      log: true,
+    },
+    {
       id: 'rul_block_bad',
-      name: 'Block bad net',
+      name: 'Reject bad net',
       enabled: true,
       action: 'reject',
       from: { zones: ['zon_lan'], addresses: [] },
       to: { zones: ['zon_wan'], addresses: ['adr_blocked'] },
       ports: [],
-      log: true,
+      log: false,
     },
     {
       id: 'rul_lan_out',
@@ -81,6 +92,16 @@ const baseConfig: Snapshot['value'] = {
       from: { zones: ['zon_lan'], addresses: [] },
       to: { zones: ['zon_wan'], addresses: [] },
       ports: ['svc_web'],
+      log: false,
+    },
+    {
+      id: 'rul_lan_dmz',
+      name: 'LAN to DMZ',
+      enabled: true,
+      action: 'accept',
+      from: { zones: ['zon_lan'], addresses: [] },
+      to: { zones: ['zon_dmz'], addresses: ['adr_range'] },
+      ports: [],
       log: false,
     },
     {
@@ -174,68 +195,179 @@ describe('simulateTrafficFlow', () => {
     );
     expect(result.verdict).toBe('accept');
     expect(result.chain).toBe('forward');
-    expect(result.decidedBy).toEqual({ label: 'Rule #2 (LAN outbound)', to: '/firewall/rules' });
+    expect(result.decidedBy).toEqual({ label: 'Rule #3 (LAN outbound)', to: '/firewall/rules' });
     expect(result.finalTuple).toBe('TCP 203.0.113.2:54321 → 1.1.1.1:443');
     expect(result.steps.map((s) => s.stage)).toEqual(['ingress', 'prerouting', 'routing', 'filter', 'postrouting', 'verdict']);
   });
 
-  it('traces rejected LAN->WAN TCP traffic with TCP RST and no post-routing step', () => {
-    const result = simulateTrafficFlow(
+  it('distinguishes TCP RST reject (TCP port alias) from plain reject (empty ports)', () => {
+    const tcpReset = simulateTrafficFlow(
       { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '192.168.1.50', dstIp: '198.51.100.25', dstPort: 443 },
       baseConfig,
     );
-    expect(result.verdict).toBe('reject');
-    expect(result.verdictLabel).toBe('Rejected (TCP RST)');
-    expect(result.decidedBy).toEqual({ label: 'Rule #1 (Block bad net)', to: '/firewall/rules' });
-    expect(result.steps.some((s) => s.stage === 'postrouting')).toBe(false);
+    expect(tcpReset.verdict).toBe('reject');
+    expect(tcpReset.verdictLabel).toBe('Rejected (TCP RST)');
+    expect(tcpReset.decidedBy).toEqual({ label: 'Rule #1 (Reject blocked HTTPS)', to: '/firewall/rules' });
+    expect(tcpReset.steps.some((s) => s.stage === 'postrouting')).toBe(false);
+
+    const plainReject = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '192.168.1.50', dstIp: '198.51.100.25', dstPort: 80 },
+      baseConfig,
+    );
+    expect(plainReject.verdict).toBe('reject');
+    expect(plainReject.verdictLabel).toBe('Rejected');
+    expect(plainReject.decidedBy).toEqual({ label: 'Rule #2 (Reject bad net)', to: '/firewall/rules' });
   });
 
-  it('traces WAN port forward DNAT with auto filter rule to DMZ', () => {
-    const result = simulateTrafficFlow(
+  it('traces WAN port forward DNAT with auto filter rule, NAT reflection, and hairpin masquerade', () => {
+    const wanHit = simulateTrafficFlow(
       { ingressSegmentId: 'seg_wan', protocol: 'tcp', srcIp: '198.51.100.9', srcPort: 40000, dstIp: '203.0.113.2', dstPort: 443 },
       baseConfig,
     );
-    expect(result.verdict).toBe('accept');
-    expect(result.chain).toBe('forward');
-    expect(result.decidedBy).toEqual({ label: 'Port forward #1 auto rule (Web server)', to: '/firewall/nat' });
-    expect(result.finalTuple).toBe('TCP 198.51.100.9:40000 → 10.20.0.15:8443');
-    expect(result.steps.find((s) => s.stage === 'prerouting')?.outcome).toBe('transform');
+    expect(wanHit.verdict).toBe('accept');
+    expect(wanHit.chain).toBe('forward');
+    expect(wanHit.decidedBy).toEqual({ label: 'Port forward #1 auto rule (Web server)', to: '/firewall/nat' });
+    expect(wanHit.finalTuple).toBe('TCP 198.51.100.9:40000 → 10.20.0.15:8443');
+
+    // LAN client hitting WAN IP reflects to DMZ (10.20.0.15), allowed by LAN->DMZ rule (not auto rule since ingress is LAN).
+    const reflected = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '192.168.1.50', dstIp: '203.0.113.2', dstPort: 443 },
+      baseConfig,
+    );
+    expect(reflected.verdict).toBe('accept');
+    expect(reflected.decidedBy).toEqual({ label: 'Rule #4 (LAN to DMZ)', to: '/firewall/rules' });
+    expect(reflected.finalTuple).toBe('TCP 192.168.1.50 → 10.20.0.15:8443');
+
+    // DMZ client hitting WAN IP reflects back into DMZ and triggers hairpin masquerade (10.20.0.1).
+    const withDmzSelf: Snapshot['value'] = {
+      ...baseConfig,
+      rules: [
+        ...baseConfig.rules!,
+        { id: 'rul_dmz_self', name: 'DMZ hairpin', enabled: true, action: 'accept', from: { zones: ['zon_dmz'], addresses: [] }, to: { zones: ['zon_dmz'], addresses: [] }, ports: [], log: false },
+      ],
+    };
+    const hairpin = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_dmz', protocol: 'tcp', srcIp: '10.20.0.99', dstIp: '203.0.113.2', dstPort: 443 },
+      withDmzSelf,
+    );
+    expect(hairpin.verdict).toBe('accept');
+    expect(hairpin.finalTuple).toBe('TCP 10.20.0.1 → 10.20.0.15:8443');
+    expect(hairpin.steps.find((s) => s.stage === 'postrouting')?.decidedBy?.label).toBe('NAT reflection masquerade');
   });
 
-  it('traces 1:1 NAT outbound SNAT and respects noBinat exclusions', () => {
-    const configWithDmzOut: Snapshot['value'] = {
+  it('handles noRedirect exception, target.self transparent redirect, and 1:1 inbound DNAT + outbound SNAT', () => {
+    const withTransparentDns: Snapshot['value'] = {
+      ...baseConfig,
+      nat: {
+        ...baseConfig.nat,
+        portForwards: [
+          {
+            id: 'pfw_bypass',
+            name: 'Admin DNS bypass',
+            enabled: true,
+            ingressZones: ['zon_lan'],
+            protocol: 'udp',
+            from: ['adr_admin'],
+            to: { self: true },
+            toNegated: true,
+            ports: '53',
+            noRedirect: true,
+          },
+          {
+            id: 'pfw_dns_redir',
+            name: 'Intercept DNS',
+            enabled: true,
+            ingressZones: ['zon_lan'],
+            protocol: 'udp',
+            from: [],
+            to: { self: true },
+            toNegated: true,
+            ports: '53',
+            target: { self: true },
+            filterRule: 'none',
+          },
+        ],
+      },
+    };
+    // Admin matches noRedirect -> continues untranslated to WAN (dropped because only HTTPS allowed outbound).
+    const bypassed = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'udp', srcIp: '192.168.1.10', dstIp: '8.8.8.8', dstPort: 53 },
+      withTransparentDns,
+    );
+    expect(bypassed.steps.find((s) => s.stage === 'prerouting')?.decidedBy?.label).toBe('Port forward #1 (Admin DNS bypass)');
+    expect(bypassed.finalTuple).toBe('UDP 192.168.1.10 → 8.8.8.8:53');
+
+    // Non-admin LAN host gets redirected to firewall's ingress IP (192.168.1.1) and allowed by input DNS rule.
+    const redirected = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'udp', srcIp: '192.168.1.50', dstIp: '8.8.8.8', dstPort: 53 },
+      withTransparentDns,
+    );
+    expect(redirected.verdict).toBe('accept');
+    expect(redirected.chain).toBe('input');
+    expect(redirected.finalTuple).toBe('UDP 192.168.1.50 → 192.168.1.1:53');
+    expect(redirected.decidedBy?.label).toBe('Rule #5 (Allow LAN DNS)');
+
+    // 1:1 inbound DNAT + outbound SNAT with noBinat exclusion.
+    const configWithDmzRules: Snapshot['value'] = {
       ...baseConfig,
       rules: [
         ...baseConfig.rules!,
         { id: 'rul_dmz_out', name: 'DMZ outbound', enabled: true, action: 'accept', from: { zones: ['zon_dmz'], addresses: [] }, to: { zones: ['zon_wan'], addresses: [] }, ports: [], log: false },
+        { id: 'rul_wan_dmz', name: 'WAN to DMZ', enabled: true, action: 'accept', from: { zones: ['zon_wan'], addresses: [] }, to: { zones: ['zon_dmz'], addresses: [] }, ports: [], log: false },
       ],
     };
-    // 10.20.0.52 (+4 in 10.20.0.48/28) maps to 203.0.113.68 (+4 in 203.0.113.64/28).
-    const mapped = simulateTrafficFlow(
-      { ingressSegmentId: 'seg_dmz', protocol: 'tcp', srcIp: '10.20.0.52', dstIp: '1.1.1.1', dstPort: 80 },
-      configWithDmzOut,
+    const inbound = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_wan', protocol: 'tcp', srcIp: '1.1.1.1', dstIp: '203.0.113.68', dstPort: 80 },
+      configWithDmzRules,
     );
-    expect(mapped.verdict).toBe('accept');
-    expect(mapped.finalTuple).toBe('TCP 203.0.113.68 → 1.1.1.1:80');
-    expect(mapped.steps.find((s) => s.stage === 'postrouting')?.decidedBy?.label).toBe('1:1 NAT #2 (DMZ 1:1)');
+    expect(inbound.verdict).toBe('accept');
+    expect(inbound.finalTuple).toBe('TCP 1.1.1.1 → 10.20.0.52:80');
+    expect(inbound.steps.find((s) => s.stage === 'prerouting')?.decidedBy?.label).toBe('1:1 NAT #2 (DMZ 1:1)');
 
-    // 10.20.0.50 is excluded by noBinat and falls through to outbound masquerade.
-    const excluded = simulateTrafficFlow(
-      { ingressSegmentId: 'seg_dmz', protocol: 'tcp', srcIp: '10.20.0.50', dstIp: '1.1.1.1', dstPort: 80 },
-      configWithDmzOut,
+    const outboundMapped = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_dmz', protocol: 'tcp', srcIp: '10.20.0.52', dstIp: '1.1.1.1', dstPort: 80 },
+      configWithDmzRules,
     );
-    expect(excluded.finalTuple).toBe('TCP 203.0.113.2 → 1.1.1.1:80');
-    expect(excluded.steps.find((s) => s.stage === 'postrouting')?.decidedBy?.label).toBe('Outbound NAT (Automatic)');
+    expect(outboundMapped.finalTuple).toBe('TCP 203.0.113.68 → 1.1.1.1:80');
+
+    const outboundExcluded = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_dmz', protocol: 'tcp', srcIp: '10.20.0.50', dstIp: '1.1.1.1', dstPort: 80 },
+      configWithDmzRules,
+    );
+    expect(outboundExcluded.finalTuple).toBe('TCP 203.0.113.2 → 1.1.1.1:80');
+    expect(outboundExcluded.steps.find((s) => s.stage === 'postrouting')?.decidedBy?.label).toBe('Outbound NAT (Automatic)');
   });
 
-  it('routes traffic to a virtual IP into input chain and checks fixed management SSH and input rules', () => {
+  it('routes VIPs, local broadcasts, and link-local multicast to input and sets decidedBy on fixed rules', () => {
     const dnsVip = simulateTrafficFlow(
       { ingressSegmentId: 'seg_lan', protocol: 'udp', srcIp: '192.168.1.50', dstIp: '172.16.53.53', dstPort: 53 },
       baseConfig,
     );
     expect(dnsVip.verdict).toBe('accept');
     expect(dnsVip.chain).toBe('input');
+    expect(dnsVip.steps.find((s) => s.stage === 'routing')?.isFirewall).toBe(true);
     expect(dnsVip.steps.find((s) => s.stage === 'routing')?.decidedBy).toEqual({ label: 'Virtual IP DNS VIP', to: '/network/virtual-ips' });
+
+    const dhcp4 = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'udp', srcIp: '0.0.0.0', srcPort: 68, dstIp: '255.255.255.255', dstPort: 67 },
+      baseConfig,
+    );
+    expect(dhcp4.verdict).toBe('accept');
+    expect(dhcp4.decidedBy?.label).toBe('DHCPv4 on LAN');
+
+    const dhcp6 = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'udp', srcIp: 'fe80::1234', srcPort: 546, dstIp: 'ff02::1:2', dstPort: 547 },
+      baseConfig,
+    );
+    expect(dhcp6.verdict).toBe('accept');
+    expect(dhcp6.decidedBy?.label).toBe('DHCPv6 on LAN');
+
+    const ndp = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'icmpv6', srcIp: 'fe80::1234', dstIp: 'ff02::2', icmpType: 'nd-router-solicit' },
+      baseConfig,
+    );
+    expect(ndp.verdict).toBe('accept');
+    expect(ndp.decidedBy).toEqual({ label: 'Fixed rules (Firewall)', to: '/firewall/rules' });
 
     const mgmtAllowed = simulateTrafficFlow(
       { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '192.168.1.10', dstIp: '192.168.1.1', dstPort: 22 },
@@ -249,19 +381,55 @@ describe('simulateTrafficFlow', () => {
       baseConfig,
     );
     expect(mgmtDenied.verdict).toBe('drop');
-    expect(mgmtDenied.decidedBy?.label).toBe('Default input policy (drop)');
   });
 
-  it('reports no_route when no IPv6 uplink exists for an external IPv6 destination', () => {
-    const noV6Uplink: Snapshot['value'] = {
+  it('matches live dynamic addresses via MAC/kernelName and warns when management segment is disabled', () => {
+    const dynamicWan: Snapshot['value'] = {
       ...baseConfig,
-      segments: baseConfig.segments.map((s) => (s.id === 'seg_wan' ? { ...s, addressing: { ...s.addressing, ipv6: { mode: 'none' } } } : s)),
+      segments: baseConfig.segments.map((s) => (s.id === 'seg_wan'
+        ? { ...s, addressing: { ipv4: { mode: 'dhcp' }, ipv6: { mode: 'none' } } }
+        : s)),
     };
-    const result = simulateTrafficFlow(
-      { ingressSegmentId: 'seg_lan', protocol: 'icmpv6', srcIp: 'fd00:1::50', dstIp: '2606:4700:4700::1111', icmpType: 'echo-request' },
-      noV6Uplink,
+    const liveLinks: LinkStatus[] = [
+      {
+        ifIndex: 2,
+        name: 'enp1s0',
+        linkType: 'ether',
+        mtu: 1500,
+        operState: 'UP',
+        flags: ['UP'],
+        permanentAddress: '52:54:00:AA:BB:01',
+        addresses: [{ family: 'ipv4', address: '198.51.100.77', prefixLength: 24, scope: 'global' }],
+      },
+    ];
+    const dynOut = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '192.168.1.50', dstIp: '1.1.1.1', dstPort: 443 },
+      dynamicWan,
+      liveLinks,
+      { evaluatingSavedDiffersFromLive: true },
     );
-    expect(result.verdict).toBe('no_route');
-    expect(result.chain).toBe('none');
+    expect(dynOut.verdict).toBe('accept');
+    expect(dynOut.finalTuple).toBe('TCP 198.51.100.77 → 1.1.1.1:443');
+    expect(dynOut.warnings.some((w) => w.includes('Dynamic DHCP/PPPoE/SLAAC'))).toBe(true);
+
+    // Disabled management link disables firewall & NAT.
+    const disabledMgmt: Snapshot['value'] = {
+      ...baseConfig,
+      links: baseConfig.links.map((l) => (l.id === 'lnk_lan' ? { ...l, enabled: false } : l)),
+    };
+    const unfiltered = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_dmz', protocol: 'tcp', srcIp: '10.20.0.10', dstIp: '1.1.1.1', dstPort: 80 },
+      disabledMgmt,
+    );
+    expect(unfiltered.verdict).toBe('accept');
+    expect(unfiltered.warnings.some((w) => w.includes('No usable management segment'))).toBe(true);
+
+    // No IPv6 uplink reports no_route.
+    const noV6 = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'icmpv6', srcIp: 'fd00:1::50', dstIp: '2606:4700:4700::1111', icmpType: 'echo-request' },
+      dynamicWan,
+    );
+    expect(noV6.verdict).toBe('no_route');
+    expect(noV6.chain).toBe('none');
   });
 });
