@@ -242,7 +242,7 @@ func (s *Service) retryOnce(ctx context.Context, c *bus.Client, item *retry) {
 		s.queueNotice(ctx, c)
 		return
 	}
-	if time.Since(item.First) > s.RetryFor { // its hour ran out while the service was down
+	if item.restored && time.Since(item.First) > s.RetryFor { // its hour ran out while the service was down
 		s.giveUp(ctx, c, item.Job, item.Attempts, errors.New("the retry window ran out before the service was back"))
 		if err := s.retries.remove(item.Job.ID); err != nil {
 			s.Log.Warn("remove a finished retry", "job", item.Job.ID, "error", err)

@@ -23,6 +23,7 @@ type retry struct {
 	Attempts int          `json:"attempts"`
 	Next     time.Time    `json:"next"`
 	busy     bool
+	restored bool // read from disk at start, not yet tried
 }
 
 type retries struct {
@@ -52,7 +53,7 @@ func openRetries(dir string) (*retries, error) {
 			_ = os.Remove(filepath.Join(r.dir, e.Name())) // a damaged entry cannot be sent
 			continue
 		}
-		item.Next = time.Time{} // after a restart, a queued job is tried at once
+		item.Next, item.restored = time.Time{}, true // after a restart, a queued job is tried at once
 		r.items[item.Job.ID] = &item
 	}
 	return r, nil
