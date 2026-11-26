@@ -135,13 +135,6 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	if err := events.Declare(outboundUser, aliasfeed.Consumer, aliasfeed.Filter); err != nil {
 		slog.Error("alias fetches may be missed until andaru-outbound attaches", "error", err)
 	}
-	stopResults, err := events.Consume(aliasfeed.ResultConsumer, aliasfeed.ResultFilter, feeds.handle)
-	if err != nil {
-		return fmt.Errorf("read alias results: %w", err)
-	}
-	defer stopResults()
-	// A load the consumer waits on stops before the consumer is waited for.
-	defer cancel(context.Canceled)
 	var active []notify.Notification
 	notifications := slog.Default().With("component", "notifications")
 	if layer, err := notify.Open(filepath.Join(stateDir, "notifications.db"), events, notifications, deliverNotifications(events, store.NotificationChannels, origin, notifications)); err != nil {
@@ -178,6 +171,14 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	} else if saved != "" {
 		slog.Info("settings saved in the current schema", "version", saved)
 	}
+	// Results are delivered, and may load the lists, once an interrupted restore is settled.
+	stopResults, err := events.Consume(aliasfeed.ResultConsumer, aliasfeed.ResultFilter, feeds.handle)
+	if err != nil {
+		return fmt.Errorf("read alias results: %w", err)
+	}
+	defer stopResults()
+	// A load the consumer waits on stops before the consumer is waited for.
+	defer cancel(context.Canceled)
 	// The engine states its notifications once the head is in the current schema, and again as applies and saves go.
 	stopApplies, err := events.Subscribe("apply/+", func(string, []byte) { sources.nudge(); feeds.apply() })
 	if err != nil {
