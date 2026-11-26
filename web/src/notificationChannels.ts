@@ -343,7 +343,52 @@ export function validateEmailPort(raw: string): string | undefined {
   return undefined;
 }
 
-// Parse one RFC 5322 address ("ops@example.com" or "Display Name <ops@example.com>")
+// Strip balanced RFC 5322 comments (...) outside quoted strings so valid addresses such as
+// "Ops (On call) <ops@example.com>" or "ops@example.com (Ops)" parse consistently with net/mail.ParseAddress.
+// Returns undefined if quotes or parentheses are unbalanced.
+function stripRfc5322Comments(input: string): string | undefined {
+  let out = '';
+  let inQuotes = false;
+  let commentDepth = 0;
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i];
+    if (inQuotes) {
+      out += ch;
+      if (ch === '\\') {
+        if (i + 1 >= input.length) return undefined;
+        out += input[++i];
+      } else if (ch === '"') {
+        inQuotes = false;
+      }
+      continue;
+    }
+    if (commentDepth > 0) {
+      if (ch === '\\') {
+        if (i + 1 >= input.length) return undefined;
+        i += 1;
+      } else if (ch === '(') {
+        commentDepth += 1;
+      } else if (ch === ')') {
+        commentDepth -= 1;
+        if (commentDepth === 0) out += ' ';
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inQuotes = true;
+      out += ch;
+    } else if (ch === '(') {
+      commentDepth = 1;
+    } else if (ch === ')') {
+      return undefined;
+    } else {
+      out += ch;
+    }
+  }
+  return inQuotes || commentDepth !== 0 ? undefined : out.trim();
+}
+
+// Parse one RFC 5322 address ("ops@example.com", "Display Name <ops@example.com>", or with RFC 5322 comments)
 // suitable for SMTP MAIL FROM / RCPT TO (no quoted local part, no control/format chars, exactly one '@').
 export function parseEmailAddress(raw: string): { address: string } | { error: string } {
   const trimmed = raw.trim();
@@ -355,18 +400,23 @@ export function parseEmailAddress(raw: string): { address: string } | { error: s
     return { error: `E-mail address must be 3 to ${emailAddressCharLimit} characters.` };
   }
 
-  let addr = trimmed;
-  if (trimmed.endsWith('>')) {
-    const lt = trimmed.lastIndexOf('<');
+  const uncommented = stripRfc5322Comments(trimmed);
+  if (uncommented === undefined) {
+    return { error: 'Enter one e-mail address, such as Andaru <alerts@example.com>.' };
+  }
+
+  let addr = uncommented;
+  if (uncommented.endsWith('>')) {
+    const lt = uncommented.lastIndexOf('<');
     if (lt < 0) {
       return { error: 'Enter one e-mail address, such as Andaru <alerts@example.com>.' };
     }
-    const displayName = trimmed.slice(0, lt).trim();
+    const displayName = uncommented.slice(0, lt).trim();
     if (displayName && !quotedDisplayNamePattern.test(displayName) && unquotedDisplaySpecials.test(displayName)) {
       return { error: 'Quote display names containing special characters, or use a plain address.' };
     }
-    addr = trimmed.slice(lt + 1, -1);
-  } else if (trimmed.includes('<') || trimmed.includes('>')) {
+    addr = uncommented.slice(lt + 1, -1);
+  } else if (uncommented.includes('<') || uncommented.includes('>')) {
     return { error: 'Enter one e-mail address, such as Andaru <alerts@example.com>.' };
   }
 
@@ -393,13 +443,19 @@ export function parseEmailAddress(raw: string): { address: string } | { error: s
 
 const normalizeEmailRecipients = (raw: string[]) => raw.map((item) => item.trim()).filter(Boolean);
 
-function validateSecretValue(raw: string, articleLabel: string, fieldLabel: string, required: boolean): string | undefined {
-  const trimmed = raw.trim();
-  if (!trimmed) return required ? `Enter ${articleLabel}.` : undefined;
-  if (controlChars.test(trimmed)) {
+function validateSecretValue(
+  raw: string,
+  articleLabel: string,
+  fieldLabel: string,
+  required: boolean,
+  preserveWhitespace = false,
+): string | undefined {
+  const value = preserveWhitespace ? raw : raw.trim();
+  if (!value) return required ? `Enter ${articleLabel}.` : undefined;
+  if (controlChars.test(value)) {
     return `${fieldLabel} cannot contain control characters or line breaks.`;
   }
-  if (utf8ByteLength(trimmed) > secretByteLimit) {
+  if (utf8ByteLength(value) > secretByteLimit) {
     return `${fieldLabel} must be ${secretByteLimit} bytes or fewer.`;
   }
   return undefined;
@@ -490,12 +546,12 @@ export function validateChannelDraft(
     }
 
     const existingPassword = sameKind ? saved?.email?.password : undefined;
-    const hasNewPassword = !draft.removeEmailPassword && draft.emailPassword.trim() !== '';
+    const hasNewPassword = !draft.removeEmailPassword && draft.emailPassword !== '';
     const keepsExistingPassword = Boolean(existingPassword) && !draft.removeEmailPassword;
     const willSendPassword = hasNewPassword || keepsExistingPassword;
 
     if (!draft.removeEmailPassword) {
-      const pwErr = validateSecretValue(draft.emailPassword, 'a password', 'Password', false);
+      const pwErr = validateSecretValue(draft.emailPassword, 'a password', 'Password', false, true);
       if (pwErr) errors.set('emailPassword', pwErr);
     }
 
@@ -569,13 +625,14 @@ function writeOptionalSecret(
   suffix: 'URL' | 'AUTH' | 'TOKEN' | 'USER' | 'PASSWORD',
   existing: SecretView | undefined,
   used: Set<string>,
+  preserveWhitespace = false,
 ): SecretWrite | undefined {
   if (remove) return undefined;
-  const trimmed = rawValue.trim();
-  if (trimmed !== '') {
+  const value = preserveWhitespace ? rawValue : rawValue.trim();
+  if (value !== '') {
     const secret = nextChannelSecretName(channelName, suffix, used);
     used.add(secret);
-    return { secret, set: trimmed, expectedVersion: '0' };
+    return { secret, set: value, expectedVersion: '0' };
   }
   if (existing) {
     return { secret: existing.secret, ...(existing.unresolved ? { unresolved: true } : {}) };
@@ -681,6 +738,7 @@ export function buildChannelWrite(
       'PASSWORD',
       sameKind ? saved?.email?.password : undefined,
       used,
+      true,
     );
     return {
       ...base,

@@ -365,6 +365,10 @@ describe('notificationChannels', () => {
     expect(parseEmailAddress('Andaru <Alerts@Example.com>')).toEqual({ address: 'alerts@example.com' });
     expect(parseEmailAddress('"Doe, Jane" <jane@example.com>')).toEqual({ address: 'jane@example.com' });
     expect(parseEmailAddress('"Ops <1>" <ops@example.com>')).toEqual({ address: 'ops@example.com' });
+    expect(parseEmailAddress('Ops (On call) <ops@example.com>')).toEqual({ address: 'ops@example.com' });
+    expect(parseEmailAddress('ops@example.com (Ops)')).toEqual({ address: 'ops@example.com' });
+    expect(parseEmailAddress('Andaru <alerts@example.com> (Primary)')).toEqual({ address: 'alerts@example.com' });
+    expect('error' in parseEmailAddress('Ops (unclosed <ops@example.com>')).toBe(true);
     expect('error' in parseEmailAddress('"a b"@example.com')).toBe(true);
     expect('error' in parseEmailAddress('a@b@example.com')).toBe(true);
     expect('error' in parseEmailAddress('a@b.com, Ops <c@d.com>')).toBe(true);
@@ -458,7 +462,7 @@ describe('notificationChannels', () => {
       },
     });
 
-    // Authenticated build allocates fresh PASSWORD secret; edit preserves, rotates, or removes credentials cleanly.
+    // Authenticated build preserves leading/trailing whitespace in SMTP passwords and allocates fresh PASSWORD secret.
     const authWrite = buildChannelWrite(
       {
         ...channelDraftOf(),
@@ -468,7 +472,7 @@ describe('notificationChannels', () => {
         emailPort: '465',
         emailSecurity: 'tls',
         emailUsername: 'alerts@example.com',
-        emailPassword: 'hunter2',
+        emailPassword: ' hunter2 ',
         emailFrom: 'Andaru <alerts@example.com>',
         emailTo: ['ops@example.com'],
       },
@@ -479,7 +483,7 @@ describe('notificationChannels', () => {
       port: 465,
       security: 'tls',
       username: 'alerts@example.com',
-      password: { secret: 'NOTIFY_SMTP_AUTH_PASSWORD', set: 'hunter2', expectedVersion: '0' },
+      password: { secret: 'NOTIFY_SMTP_AUTH_PASSWORD', set: ' hunter2 ', expectedVersion: '0' },
       from: 'Andaru <alerts@example.com>',
       to: ['ops@example.com'],
     });
