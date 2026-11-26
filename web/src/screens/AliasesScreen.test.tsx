@@ -381,23 +381,15 @@ it('filters by every word of what a row shows, beside the kind', async () => {
   expect(screen.getByText('No alias matches the filter.')).toBeInTheDocument();
 });
 
-it('creates and displays URL list (with HTTP warning) and host-name aliases, and excludes them from groups', async () => {
+it('displays URL list (with HTTP warning) and host-name aliases, and excludes them from groups', async () => {
   const user = userEvent.setup();
-  const created: unknown[] = [];
   const dynamicAddresses = [
     ...addresses,
     { id: 'adr_http', name: 'unencrypted-feed', kind: 'url', url: 'http://lists.example/ips.txt', refreshSeconds: 3600 },
     { id: 'adr_vpn', name: 'vpn-peers', kind: 'hostnames', names: ['vpn.example.com', 'backup.example.com'], refreshSeconds: 300 },
   ];
 
-  show({
-    '/api/v1/config/aliases/addresses': list(dynamicAddresses),
-    'POST /api/v1/config/aliases/addresses': (init) => {
-      const body = JSON.parse(String(init?.body ?? '{}'));
-      created.push(body);
-      return jsonResponse(201, { value: { id: `adr_new_${created.length}`, ...body }, version: '11' });
-    },
-  });
+  show({ '/api/v1/config/aliases/addresses': list(dynamicAddresses) });
 
   // Row shows URL, refresh cadence, and HTTP warning; hostnames row shows names and refresh cadence.
   expect(await screen.findByText('http://lists.example/ips.txt')).toBeInTheDocument();
@@ -408,20 +400,53 @@ it('creates and displays URL list (with HTTP warning) and host-name aliases, and
 
   // Group Members picker excludes both groups and dynamic (url/hostnames) aliases.
   await user.click(screen.getByRole('button', { name: 'Edit address alias servers' }));
-  let panel = await screen.findByRole('dialog', { name: 'Edit address alias: servers' });
+  const panel = await screen.findByRole('dialog', { name: 'Edit address alias: servers' });
   const membersInput = within(panel).getByLabelText('Members', { selector: 'input' });
   await user.click(membersInput);
   expect(within(document.getElementById(membersInput.getAttribute('aria-controls')!)!).getAllByRole('option', { hidden: true }).map((o) => o.textContent))
     .toEqual(['lab', 'nas', 'pool']);
-  await user.click(within(panel).getByRole('button', { name: 'Cancel' }));
+});
 
-  // Create a URL list alias: http:// shows warning in form, https:// clears it.
-  await user.click(screen.getByRole('button', { name: 'Add address alias' }));
-  panel = await screen.findByRole('dialog', { name: 'Add address alias' });
-  await user.selectOptions(within(panel).getByLabelText('Kind'), 'url');
+it('creates URL list and host-name aliases, validates locally, and maps 422 field errors', async () => {
+  const user = userEvent.setup();
+  const created: unknown[] = [];
+  let refuseFirstUrl = true;
+  show({
+    'POST /api/v1/config/aliases/addresses': (init) => {
+      const body = JSON.parse(String(init?.body ?? '{}'));
+      if (refuseFirstUrl && body.kind === 'url') {
+        refuseFirstUrl = false;
+        return jsonResponse(422, {
+          error: {
+            code: 'VALIDATION_FAILED',
+            message: 'Invalid alias.',
+            details: [
+              { path: '/url', message: 'Server refused this URL.' },
+              { path: '/refreshSeconds', message: 'Interval rejected.' },
+            ],
+          },
+        });
+      }
+      created.push(body);
+      return jsonResponse(201, { value: { id: `adr_new_${created.length}`, ...body }, version: '11' });
+    },
+  });
+
   const pasteInto = async (el: HTMLElement, text: string) => { await user.click(el); await user.paste(text); };
+
+  // Create a URL list alias: local validation blocks bad URL and focuses field; http:// shows warning; 422 maps to fields.
+  await user.click(await screen.findByRole('button', { name: 'Add address alias' }));
+  let panel = await screen.findByRole('dialog', { name: 'Add address alias' });
+  await user.selectOptions(within(panel).getByLabelText('Kind'), 'url');
   await pasteInto(within(panel).getByLabelText(/^Name/), 'cf-ips');
   const urlInput = within(panel).getByLabelText(/^URL/);
+  await pasteInto(urlInput, 'ftp://bad.example/ips');
+  await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
+  expect(within(panel).getByText(/Expected an https:\/\/ or http:\/\//)).toBeInTheDocument();
+  expect(urlInput).toHaveFocus();
+  expect(created).toHaveLength(0);
+
+  await user.clear(urlInput);
   await pasteInto(urlInput, 'http://lists.example/ips');
   expect(within(panel).getByText('HTTP is not secure')).toBeInTheDocument();
   await user.clear(urlInput);
@@ -429,17 +454,59 @@ it('creates and displays URL list (with HTTP warning) and host-name aliases, and
   expect(within(panel).queryByText('HTTP is not secure')).not.toBeInTheDocument();
   expect(within(panel).getByLabelText(/^Refresh interval/)).toHaveValue('3600');
   await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
+  expect(await within(panel).findByText('Server refused this URL.')).toBeInTheDocument();
+  expect(within(panel).getByText('Interval rejected.')).toBeInTheDocument();
+  await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
   await waitFor(() => expect(created).toHaveLength(1));
   expect(created[0]).toEqual({ name: 'cf-ips', kind: 'url', url: 'https://www.cloudflare.com/ips-v4', refreshSeconds: 3600 });
 
-  // Create a host-name alias: switching kind to hostnames prefills 300s default.
+  // Create a host-name alias: switching kind prefills 300s default and normalizes/dedupes pasted hostnames.
   await user.click(screen.getByRole('button', { name: 'Add address alias' }));
   panel = await screen.findByRole('dialog', { name: 'Add address alias' });
   await user.selectOptions(within(panel).getByLabelText('Kind'), 'hostnames');
   expect(within(panel).getByLabelText(/^Refresh interval/)).toHaveValue('300');
   await pasteInto(within(panel).getByLabelText(/^Name/), 'remote-office');
-  await user.type(within(panel).getByLabelText(/^Host names/, { selector: 'input' }), 'office.example.com{Enter}');
+  await user.type(within(panel).getByLabelText(/^Host names/, { selector: 'input' }), 'Office.Example.COM{Enter}');
   await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
   await waitFor(() => expect(created).toHaveLength(2));
   expect(created[1]).toEqual({ name: 'remote-office', kind: 'hostnames', names: ['office.example.com'], refreshSeconds: 300 });
+});
+
+it('edits existing dynamic aliases and blocks switching an alias in a forbidden placement to dynamic', async () => {
+  const user = userEvent.setup();
+  let updatedBody: unknown;
+  const dynamicAddresses = [
+    ...addresses,
+    { id: 'adr_vpn', name: 'vpn-peers', kind: 'hostnames', names: ['vpn.example.com'], refreshSeconds: 900 },
+  ];
+
+  show({
+    '/api/v1/config/aliases/addresses': list(dynamicAddresses),
+    'PUT /api/v1/config/aliases/addresses/adr_vpn': (init) => {
+      updatedBody = JSON.parse(String(init?.body ?? '{}'));
+      return jsonResponse(200, { value: { id: 'adr_vpn', ...(updatedBody as Record<string, unknown>) }, version: '5' });
+    },
+  });
+
+  // Edit existing hostnames alias: preserves saved custom refreshSeconds (900) and saves cleanly.
+  await user.click(await screen.findByRole('button', { name: 'Edit address alias vpn-peers' }));
+  let panel = await screen.findByRole('dialog', { name: 'Edit address alias: vpn-peers' });
+  expect(within(panel).getByLabelText(/^Refresh interval/)).toHaveValue('900');
+  await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
+  await waitFor(() => expect(updatedBody).toEqual({
+    name: 'vpn-peers',
+    kind: 'hostnames',
+    names: ['vpn.example.com'],
+    refreshSeconds: 900,
+  }));
+
+  // Trying to switch an alias used in management.allowedSources ('pool') to a URL list is blocked locally.
+  await user.click(screen.getByRole('button', { name: 'Edit address alias pool' }));
+  panel = await screen.findByRole('dialog', { name: 'Edit address alias: pool' });
+  await user.selectOptions(within(panel).getByLabelText('Kind'), 'url');
+  const urlInput = within(panel).getByLabelText(/^URL/);
+  await user.click(urlInput);
+  await user.paste('https://lists.example/ips');
+  await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
+  expect(within(panel).getByText(/management segment's allowed sources/i)).toBeInTheDocument();
 });

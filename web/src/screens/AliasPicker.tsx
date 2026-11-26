@@ -29,6 +29,7 @@ interface AliasSearchBaseProps {
   debounceMs?: number;
   onAliasCreated?: (alias: AliasKinds[keyof AliasKinds]) => void;
   onCreatingChange?: (creating: boolean) => void;
+  onItemsResolved?: (items: AliasSearchItem[]) => void;
   onSessionLost?: () => void;
 }
 
@@ -78,6 +79,7 @@ function useAliasSearch({
   debounceMs = 150,
   onAliasCreated,
   onCreatingChange,
+  onItemsResolved,
   onSessionLost,
 }: {
   api: ApiClient;
@@ -94,6 +96,7 @@ function useAliasSearch({
   debounceMs?: number;
   onAliasCreated?: (alias: AliasKinds[keyof AliasKinds]) => void;
   onCreatingChange?: (creating: boolean) => void;
+  onItemsResolved?: (items: AliasSearchItem[]) => void;
   onSessionLost?: () => void;
 }) {
   const scopeKey = `${aliasType}|${kind ?? ''}|${family ?? ''}|${excludeGroups ? '1' : '0'}|${excludeDynamic ? '1' : '0'}|${exclude ?? ''}`;
@@ -122,11 +125,13 @@ function useAliasSearch({
   const mountedRef = useRef(true);
   const onAliasCreatedRef = useRef(onAliasCreated);
   const onCreatingChangeRef = useRef(onCreatingChange);
+  const onItemsResolvedRef = useRef(onItemsResolved);
   const onSessionLostRef = useRef(onSessionLost);
 
   useLayoutEffect(() => {
     onAliasCreatedRef.current = onAliasCreated;
     onCreatingChangeRef.current = onCreatingChange;
+    onItemsResolvedRef.current = onItemsResolved;
     onSessionLostRef.current = onSessionLost;
   });
 
@@ -218,11 +223,12 @@ function useAliasSearch({
       abortRef.current = controller;
       void search(trimmed, controller.signal).then((res) => {
         if (!mountedRef.current || seq !== seqRef.current) return;
-        const items = aliasType === 'addresses' && (excludeDynamic || excludeGroups)
+        const items = aliasType === 'addresses' && excludeDynamic
           ? res.items.filter((item) => !isDynamicAddressAlias(item))
           : res.items;
         setRemote({ query: trimmed, items });
         rememberLabels(items);
+        onItemsResolvedRef.current?.(res.items);
         setLoading(false);
         setSearchError('');
       }).catch((err: unknown) => {
@@ -401,7 +407,7 @@ export function AliasMultiSelect(props: AliasMultiSelectProps) {
   const {
     api, aliasType, kind, family, excludeGroups, excludeDynamic, exclude, initialOptions, value, onChange,
     label, description, placeholder, error, clearable, nothingFoundMessage, debounceMs,
-    onAliasCreated, onCreatingChange, onSessionLost,
+    onAliasCreated, onCreatingChange, onItemsResolved, onSessionLost,
   } = props;
   const latestValueRef = useRef(value);
   const onChangeRef = useRef(onChange);
@@ -426,6 +432,7 @@ export function AliasMultiSelect(props: AliasMultiSelectProps) {
     debounceMs,
     onAliasCreated,
     onCreatingChange,
+    onItemsResolved,
     onSessionLost,
   });
 
@@ -473,7 +480,7 @@ export function AliasSelect(props: AliasSelectProps) {
   const {
     api, aliasType, kind, family, excludeGroups, excludeDynamic, exclude, initialOptions, value, onChange,
     label, description, placeholder, error, clearable, nothingFoundMessage, debounceMs,
-    onAliasCreated, onCreatingChange, onSessionLost,
+    onAliasCreated, onCreatingChange, onItemsResolved, onSessionLost,
   } = props;
   const selected = useMemo(() => (value ? [value] : []), [value]);
   const lastPickedLabelRef = useRef<string | null>(null);
@@ -501,6 +508,7 @@ export function AliasSelect(props: AliasSelectProps) {
     debounceMs,
     onAliasCreated,
     onCreatingChange,
+    onItemsResolved,
     onSessionLost,
   });
 

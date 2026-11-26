@@ -11,7 +11,7 @@ import {
   validateAliasRefreshSeconds,
   validateAliasUrl,
 } from '../dynamicAlias';
-import { isDynamicAddressAlias, type AddressAlias, type AliasKinds, type PortAlias, type SavedObject } from '../types';
+import { isDynamicAddressAlias, type AddressAlias, type AliasKinds, type PortAlias, type SavedObject, type Snapshot } from '../types';
 import { AliasMultiSelect } from './AliasPicker';
 import type { Row } from './AliasesScreen';
 
@@ -20,6 +20,7 @@ interface AliasEditorProps {
   // A row to edit, or the kind of alias to add.
   editing: Row | keyof AliasKinds;
   rows: Row[];
+  snapshot?: Snapshot;
   onClose(): void;
   onSessionLost(): void;
   // A save failed after the panel was closed.
@@ -32,7 +33,34 @@ interface AliasEditorProps {
 
 const field = /^\/(name|description|kind|protocol|address|prefix|first|last|members|url|names|refreshSeconds|ports|types)(?:\/|$)/;
 
-export function AliasEditor({ api, editing, rows, onClose, onSessionLost, onAbandoned, onRefused, onAliasCreated, onSave }: AliasEditorProps) {
+function forbiddenDynamicPlacement(id: string, rows: Row[], snapshot?: Snapshot): string | undefined {
+  const holder = rows.find((row) => row.item.value.members?.includes(id));
+  if (holder) return `This alias is in the group ${holder.item.value.name}, and a group cannot hold a URL or host-name alias yet.`;
+  if (snapshot?.value.management?.allowedSources?.includes(id)) {
+    return 'This alias is in the management segment\'s allowed sources, where URL and host-name aliases cannot be used yet.';
+  }
+  const negatedRule = (snapshot?.value.rules ?? []).find(
+    (rule) => (rule.from.not && rule.from.addresses.includes(id)) || (rule.to.not && rule.to.addresses.includes(id)),
+  );
+  if (negatedRule) {
+    return `This alias is left out of rule ${negatedRule.name}, and URL or host-name aliases cannot be left out yet.`;
+  }
+  const negatedForward = (snapshot?.value.nat?.portForwards ?? []).find(
+    (fwd) => (fwd.fromNegated && fwd.from?.includes(id)) || (fwd.toNegated && fwd.to?.address === id),
+  );
+  if (negatedForward) {
+    return `This alias is inverted in port forward ${negatedForward.name}, and URL or host-name aliases cannot be inverted yet.`;
+  }
+  const negatedOneToOne = (snapshot?.value.nat?.oneToOne ?? []).find(
+    (entry) => entry.destinationNegated && entry.destination?.includes(id),
+  );
+  if (negatedOneToOne) {
+    return `This alias is inverted in 1:1 NAT ${negatedOneToOne.name}, and URL or host-name aliases cannot be inverted yet.`;
+  }
+  return undefined;
+}
+
+export function AliasEditor({ api, editing, rows, snapshot, onClose, onSessionLost, onAbandoned, onRefused, onAliasCreated, onSave }: AliasEditorProps) {
   const kind = typeof editing === 'string' ? editing : editing.kind;
   const saved = typeof editing === 'string' ? undefined : editing;
   const savedAddress = saved?.kind === 'addresses' ? saved.item : undefined;
@@ -53,10 +81,12 @@ export function AliasEditor({ api, editing, rows, onClose, onSessionLost, onAban
       ? String(address.refreshSeconds)
       : String(address?.kind === 'hostnames' ? defaultHostnamesRefreshSeconds : defaultUrlRefreshSeconds),
   );
+  const refreshTouchedRef = useRef(address?.refreshSeconds !== undefined);
   const [ports, setPorts] = useState((port?.ports ?? []).join(', '));
   const [types, setTypes] = useState(port?.types ?? []);
   const [members, setMembers] = useState(saved?.item.value.members ?? []);
   const [errors, setErrors] = useState(new Map<string, string>());
+  const [errorFocusTick, setErrorFocusTick] = useState(0);
   const [failure, setFailure] = useState('');
   const [busy, setBusy] = useState(false);
   const [creatingAliases, setCreatingAliases] = useState(0);
@@ -68,7 +98,14 @@ export function AliasEditor({ api, editing, rows, onClose, onSessionLost, onAban
   useEffect(() => { open.current = true; return () => { open.current = false; }; }, []);
   // A refusal shows above the form, which may be scrolled away from it: it comes into view once, when it arrives.
   const failureRef = useRef<HTMLDivElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
   useEffect(() => { if (failure) failureRef.current?.scrollIntoView?.({ block: 'nearest' }); }, [failure]);
+  useEffect(() => {
+    if (errorFocusTick === 0) return;
+    const invalid = formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]:not(:disabled)');
+    invalid?.scrollIntoView?.({ block: 'nearest' });
+    invalid?.focus?.();
+  }, [errorFocusTick]);
 
   // A group holds aliases of its own kind that are not groups (and for addresses, not dynamic url/hostnames), and never itself.
   const candidates = rows
@@ -92,16 +129,12 @@ export function AliasEditor({ api, editing, rows, onClose, onSessionLost, onAban
 
   // Another kind shows other fields: what was said of the old ones goes with them, and the rest stays.
   function change(next: string) {
-    if (kind === 'addresses') {
-      const currentRefresh = refreshSeconds.trim();
-      if (next === 'hostnames' && currentRefresh === String(defaultUrlRefreshSeconds)) {
-        setRefreshSeconds(String(defaultHostnamesRefreshSeconds));
-      } else if (next === 'url' && currentRefresh === String(defaultHostnamesRefreshSeconds)) {
-        setRefreshSeconds(String(defaultUrlRefreshSeconds));
-      }
+    if (kind === 'addresses' && !refreshTouchedRef.current) {
+      if (next === 'hostnames') setRefreshSeconds(String(defaultHostnamesRefreshSeconds));
+      else if (next === 'url') setRefreshSeconds(String(defaultUrlRefreshSeconds));
     }
     setWhat(next);
-    setErrors(new Map([...errors].filter(([k]) => k === 'name' || k === 'description')));
+    setErrors((cur) => new Map([...cur].filter(([k]) => k === 'name' || k === 'description')));
   }
 
   async function submit(event: FormEvent) {
@@ -109,24 +142,33 @@ export function AliasEditor({ api, editing, rows, onClose, onSessionLost, onAban
     setFailure('');
     if (!name.trim()) {
       setErrors(new Map([['name', 'An alias needs a name.']]));
+      setErrorFocusTick((t) => t + 1);
       return;
     }
     // The engine refuses a name another alias of the kind has, and may blame the other one by its ID.
     if (rows.some((row) => row.kind === kind && row.item.value.id !== saved?.item.value.id && row.item.value.name === name.trim())) {
       setErrors(new Map([['name', `Another ${noun} has this name.`]]));
+      setErrorFocusTick((t) => t + 1);
       onRefused();
       return;
     }
-    // A group holds no groups nor dynamic aliases, so an alias that is in one cannot become one.
-    const nextIsDisallowedMember = what === 'group' || (kind === 'addresses' && (what === 'url' || what === 'hostnames'));
-    const holder = saved && nextIsDisallowedMember ? rows.find((row) => row.item.value.members?.includes(saved.item.value.id)) : undefined;
-    if (holder) {
-      const reason = what === 'group'
-        ? `This alias is in the group ${holder.item.value.name}, and a group cannot hold a group.`
-        : `This alias is in the group ${holder.item.value.name}, and a group cannot hold a URL or host-name alias yet.`;
-      setErrors(new Map([[kind === 'addresses' ? 'kind' : 'protocol', reason]]));
-      onRefused();
-      return;
+    if (saved && what === 'group') {
+      const holder = rows.find((row) => row.item.value.members?.includes(saved.item.value.id));
+      if (holder) {
+        setErrors(new Map([[kind === 'addresses' ? 'kind' : 'protocol', `This alias is in the group ${holder.item.value.name}, and a group cannot hold a group.`]]));
+        setErrorFocusTick((t) => t + 1);
+        onRefused();
+        return;
+      }
+    }
+    if (saved && kind === 'addresses' && (what === 'url' || what === 'hostnames')) {
+      const placementError = forbiddenDynamicPlacement(saved.item.value.id, rows, snapshot);
+      if (placementError) {
+        setErrors(new Map([['kind', placementError]]));
+        setErrorFocusTick((t) => t + 1);
+        onRefused();
+        return;
+      }
     }
     if (kind === 'addresses' && (what === 'url' || what === 'hostnames')) {
       const localErrors = new Map<string, string>();
@@ -141,6 +183,7 @@ export function AliasEditor({ api, editing, rows, onClose, onSessionLost, onAban
       if (refreshErr) localErrors.set('refreshSeconds', refreshErr);
       if (localErrors.size > 0) {
         setErrors(localErrors);
+        setErrorFocusTick((t) => t + 1);
         return;
       }
     }
@@ -177,6 +220,7 @@ export function AliasEditor({ api, editing, rows, onClose, onSessionLost, onAban
       if (!open.current) return onAbandoned(saveFailure(error, new Map(), noun));
       const fields = fieldErrors(error, field);
       setErrors(fields);
+      if (fields.size > 0 && !fields.has('')) setErrorFocusTick((t) => t + 1);
       setFailure(saveFailure(error, fields, noun));
     } finally {
       setBusy(false);
@@ -185,7 +229,7 @@ export function AliasEditor({ api, editing, rows, onClose, onSessionLost, onAban
 
   return (
     <Drawer opened onClose={onClose} position="right" size="md" title={title} lockScroll={false} closeButtonProps={{ 'aria-label': 'Close' }}>
-      <form onSubmit={submit} noValidate>
+      <form ref={formRef} onSubmit={submit} noValidate>
         <Stack>
           {failure && <Alert ref={failureRef} color="red" role="alert" title="The alias was not saved">{failure}</Alert>}
           {/* What is sent is what the form held when Save was pressed: nothing is typed over it meanwhile. */}
@@ -218,7 +262,6 @@ export function AliasEditor({ api, editing, rows, onClose, onSessionLost, onAban
                     label="URL"
                     description="https:// or http:// URL returning IPv4/IPv6 addresses or prefixes, one per line (# comments and blank lines ignored)."
                     placeholder="https://www.cloudflare.com/ips-v4"
-                    maxLength={2048}
                     required
                     value={url}
                     error={errors.get('url')}
@@ -229,41 +272,36 @@ export function AliasEditor({ api, editing, rows, onClose, onSessionLost, onAban
                       Not secure: anyone on the path can change the list, and with it what your rules allow.
                     </Alert>
                   )}
-                  <TextInput
-                    label="Refresh interval (seconds)"
-                    description="From 60 to 86400 seconds (24 hours)."
-                    placeholder="3600"
-                    inputMode="numeric"
-                    required
-                    value={refreshSeconds}
-                    error={errors.get('refreshSeconds')}
-                    onChange={(event) => { setRefreshSeconds(event.currentTarget.value); clearError('refreshSeconds'); }}
-                  />
                 </>
               )}
               {what === 'hostnames' && (
-                <>
-                  <TagsInput
-                    label="Host names"
-                    description="1 to 20 distinct host names resolved for A and AAAA records (not IP addresses). Press Enter after each name."
-                    placeholder="vpn.example.com"
-                    required
-                    clearable
-                    value={hostnames}
-                    error={errors.get('names')}
-                    onChange={(next) => { setHostnames(next); clearError('names'); }}
-                  />
-                  <TextInput
-                    label="Refresh interval (seconds)"
-                    description="From 60 to 86400 seconds (24 hours)."
-                    placeholder="300"
-                    inputMode="numeric"
-                    required
-                    value={refreshSeconds}
-                    error={errors.get('refreshSeconds')}
-                    onChange={(event) => { setRefreshSeconds(event.currentTarget.value); clearError('refreshSeconds'); }}
-                  />
-                </>
+                <TagsInput
+                  label="Host names"
+                  description="1 to 20 distinct host names resolved for A and AAAA records (not IP addresses). Press Enter after each name."
+                  placeholder="vpn.example.com"
+                  splitChars={[',', ' ', '\t', '\n', '\r']}
+                  required
+                  clearable
+                  value={hostnames}
+                  error={errors.get('names')}
+                  onChange={(next) => { setHostnames(normalizeAliasHostnames(next)); clearError('names'); }}
+                />
+              )}
+              {(what === 'url' || what === 'hostnames') && (
+                <TextInput
+                  label="Refresh interval (seconds)"
+                  description="From 60 to 86400 seconds (24 hours)."
+                  placeholder={what === 'hostnames' ? String(defaultHostnamesRefreshSeconds) : String(defaultUrlRefreshSeconds)}
+                  inputMode="numeric"
+                  required
+                  value={refreshSeconds}
+                  error={errors.get('refreshSeconds')}
+                  onChange={(event) => {
+                    refreshTouchedRef.current = true;
+                    setRefreshSeconds(event.currentTarget.value);
+                    clearError('refreshSeconds');
+                  }}
+                />
               )}
             </>
           ) : (
@@ -279,6 +317,7 @@ export function AliasEditor({ api, editing, rows, onClose, onSessionLost, onAban
               api={api}
               aliasType={kind}
               excludeGroups
+              excludeDynamic={kind === 'addresses'}
               exclude={saved?.item.value.id}
               label="Members"
               description={kind === 'addresses' ? 'Address aliases or literal IPs, CIDRs, or ranges (not groups, URL lists, or host-name aliases).' : 'Port aliases or literal ports (not groups).'}

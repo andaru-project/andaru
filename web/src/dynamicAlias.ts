@@ -10,7 +10,6 @@ const controlOrFormatChars = /[\p{Cc}\p{Cf}]/u;
 const urlCharLimit = 2048;
 const hostnameCharLimit = 253;
 const dnsHostnamePattern = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;
-const ipv4Pattern = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
 
 export function isInsecureHttpUrl(raw: string): boolean {
   return /^http:\/\//i.test(raw.trim());
@@ -29,23 +28,17 @@ export function validateAliasUrl(raw: string): string | undefined {
     return invalidAliasUrlMsg;
   }
   const authority = match[1];
-  // Extract optional explicit port after IPv6 literal or hostname so out-of-range / port 0 / non-numeric ports fail cleanly.
   const portMatch = authority.startsWith('[')
     ? /^\[[^\]]+\](?::(\d+))?$/.exec(authority)
     : /^[^:]+(?::(\d+))?$/.exec(authority);
   if (!portMatch) return invalidAliasUrlMsg;
   if (portMatch[1] !== undefined) {
     const port = Number(portMatch[1]);
-    if (!Number.isSafeInteger(port) || port < 1 || port > 65535) return invalidAliasUrlMsg;
+    if (port < 1 || port > 65535) return invalidAliasUrlMsg;
   }
   try {
     const parsed = new URL(trimmed);
-    if (
-      (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
-      || !parsed.hostname
-      || parsed.username !== ''
-      || parsed.password !== ''
-    ) {
+    if (!parsed.hostname || /^\.+$/.test(parsed.hostname) || parsed.hostname.includes('..')) {
       return invalidAliasUrlMsg;
     }
   } catch {
@@ -56,13 +49,7 @@ export function validateAliasUrl(raw: string): string | undefined {
 
 function isNumericResolverLabel(label: string): boolean {
   if (/^\d+$/.test(label)) return true;
-  if (/^0x[0-9a-f]+$/.test(label)) {
-    try {
-      return BigInt(label) <= 0xffffffffffffffffn;
-    } catch {
-      return false;
-    }
-  }
+  if (/^0x[0-9a-f]+$/.test(label)) return BigInt(label) <= 0xffffffffffffffffn;
   return false;
 }
 
@@ -72,11 +59,8 @@ export function validateAliasHostname(raw: string): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) return 'Expected a host name, such as vpn.example.com, not an address.';
   if (trimmed.length > hostnameCharLimit) return `Host name must be ${hostnameCharLimit} characters or fewer.`;
-  if (controlOrFormatChars.test(trimmed) || /\s/.test(trimmed)) {
-    return 'Expected a host name, such as vpn.example.com, not an address.';
-  }
   const lower = trimmed.toLowerCase();
-  if (lower.includes(':') || ipv4Pattern.test(lower) || !dnsHostnamePattern.test(lower)) {
+  if (!dnsHostnamePattern.test(lower)) {
     return 'Expected a host name, such as vpn.example.com, not an address.';
   }
   const labels = lower.split('.');
@@ -87,15 +71,24 @@ export function validateAliasHostname(raw: string): string | undefined {
 }
 
 export function normalizeAliasHostnames(raw: string[]): string[] {
-  return raw.map((item) => item.trim()).filter(Boolean);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of raw) {
+    const clean = item.trim().toLowerCase();
+    if (clean && !seen.has(clean)) {
+      seen.add(clean);
+      out.push(clean);
+    }
+  }
+  return out;
 }
 
 export function validateAliasHostnames(raw: string[]): string | undefined {
-  const names = normalizeAliasHostnames(raw);
-  if (names.length === 0) return 'Enter at least one host name.';
-  if (names.length > maxAliasHostnames) return `At most ${maxAliasHostnames} host names can be configured.`;
+  const trimmed = raw.map((item) => item.trim()).filter(Boolean);
+  if (trimmed.length === 0) return 'Enter at least one host name.';
+  if (trimmed.length > maxAliasHostnames) return `At most ${maxAliasHostnames} host names can be configured.`;
   const seen = new Set<string>();
-  for (const name of names) {
+  for (const name of trimmed) {
     const err = validateAliasHostname(name);
     if (err) return err;
     const key = name.toLowerCase();
@@ -111,7 +104,7 @@ export function validateAliasRefreshSeconds(raw: string): string | undefined {
     return `Expected a refresh interval from ${minAliasRefreshSeconds} to ${maxAliasRefreshSeconds} seconds.`;
   }
   const value = Number(trimmed);
-  if (!Number.isSafeInteger(value) || value < minAliasRefreshSeconds || value > maxAliasRefreshSeconds) {
+  if (value < minAliasRefreshSeconds || value > maxAliasRefreshSeconds) {
     return `Expected a refresh interval from ${minAliasRefreshSeconds} to ${maxAliasRefreshSeconds} seconds.`;
   }
   return undefined;

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   formatRefreshInterval,
   isInsecureHttpUrl,
+  normalizeAliasHostnames,
   validateAliasHostname,
   validateAliasHostnames,
   validateAliasRefreshSeconds,
@@ -28,11 +29,14 @@ describe('dynamicAlias', () => {
     expect(validateAliasUrl('https://lists.example/a b')).toMatch(/no spaces/);
     expect(validateAliasUrl('https://lists.example/\u202eips')).toMatch(/invisible characters/);
     expect(validateAliasUrl('https://lists.example/%zz')).toMatch(/https:\/\/ or http:\/\//);
+    expect(validateAliasUrl('https://./ips')).toMatch(/https:\/\/ or http:\/\//);
+    expect(validateAliasUrl('https://a..b/ips')).toMatch(/https:\/\/ or http:\/\//);
     expect(validateAliasUrl(`https://lists.example/${'a'.repeat(2040)}`)).toMatch(/2048 characters/);
   });
 
   it('validates host names, rejecting IPs, numeric resolver names, trailing dots, and duplicates', () => {
     expect(validateAliasHostname('vpn.example.com')).toBeUndefined();
+    expect(validateAliasHostname('VPN.Example.COM')).toBeUndefined();
     expect(validateAliasHostname('app.cafe')).toBeUndefined();
     expect(validateAliasHostname('edge-1.internal')).toBeUndefined();
     expect(validateAliasHostname('192.0.2.1')).toMatch(/host name/i);
@@ -43,6 +47,10 @@ describe('dynamicAlias', () => {
     expect(validateAliasHostname('vpn.example.com.')).toMatch(/host name/i);
     expect(validateAliasHostname('bad host')).toMatch(/host name/i);
 
+    expect(normalizeAliasHostnames(['  VPN.Example.COM ', 'vpn.example.com', 'app.cafe', ''])).toEqual([
+      'vpn.example.com',
+      'app.cafe',
+    ]);
     expect(validateAliasHostnames([])).toMatch(/at least one/i);
     expect(validateAliasHostnames(['vpn.example.com', 'VPN.EXAMPLE.COM'])).toMatch(/listed once/i);
     expect(validateAliasHostnames(Array.from({ length: 21 }, (_, i) => `h${i}.example.com`))).toMatch(/At most 20/);

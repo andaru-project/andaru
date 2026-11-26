@@ -1,7 +1,7 @@
 import { Alert, Anchor, Button, Drawer, Fieldset, Group, MultiSelect, SegmentedControl, Stack, Switch, Text, Textarea, TextInput } from '@mantine/core';
 import { useCallback, useEffect, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react';
 import { ApiClient, ApiError, fieldErrors, saveFailure } from '../api';
-import { firewallZone, isDynamicAddressAlias, type Rule, type RuleSide, type Snapshot } from '../types';
+import { firewallZone, isDynamicAddressAlias, type AliasSearchItem, type Rule, type RuleSide, type Snapshot } from '../types';
 import { zoneColorMap } from '../zones';
 import { AliasMultiSelect } from './AliasPicker';
 import { ZonePill, ZoneSelectionPill } from './ZoneBadge';
@@ -37,8 +37,19 @@ export function RuleEditor({ api, rule, snapshot, onClose, onSessionLost, onAban
   const [failure, setFailure] = useState('');
   const [busy, setBusy] = useState(false);
   const [creatingAliases, setCreatingAliases] = useState(0);
+  const [resolvedDynamicIds, setResolvedDynamicIds] = useState<Set<string>>(() => new Set());
   const onCreatingChange = useCallback((creating: boolean) => {
     setCreatingAliases((count) => Math.max(0, count + (creating ? 1 : -1)));
+  }, []);
+  const onItemsResolved = useCallback((items: AliasSearchItem[]) => {
+    const dynamicIds = items.filter((item) => isDynamicAddressAlias(item)).map((item) => item.id);
+    if (dynamicIds.length === 0) return;
+    setResolvedDynamicIds((prev) => {
+      if (dynamicIds.every((id) => prev.has(id))) return prev;
+      const next = new Set(prev);
+      for (const id of dynamicIds) next.add(id);
+      return next;
+    });
   }, []);
   // A save may answer after this panel was closed and another opened: it then closes nothing.
   const open = useRef(true);
@@ -53,7 +64,6 @@ export function RuleEditor({ api, rule, snapshot, onClose, onSessionLost, onAban
   const addressAliases = snapshot.value.aliases?.addresses ?? [];
   const addressById = new Map(addressAliases.map((a) => [a.id, a]));
   const addresses = addressAliases.map(option);
-  const staticAddresses = addressAliases.filter((a) => !isDynamicAddressAlias(a)).map(option);
   const portAliases = (snapshot.value.aliases?.ports ?? []).map(option);
   const toFirewall = to.zones.includes(firewallZone);
 
@@ -84,9 +94,14 @@ export function RuleEditor({ api, rule, snapshot, onClose, onSessionLost, onAban
     }
   }
 
+  const isDynamicId = (id: string) => isDynamicAddressAlias(addressById.get(id)) || resolvedDynamicIds.has(id);
+
   // One side of the rule: where, and within that, who.
   const sideFields = (label: string, key: 'from' | 'to', value: RuleSide, set: Dispatch<SetStateAction<RuleSide>>, zoneOptions: Array<{ value: string; label: string }>, zoneHelp: string) => {
-    const hasDynamic = value.addresses.some((id) => isDynamicAddressAlias(addressById.get(id)));
+    const hasDynamic = value.addresses.some(isDynamicId);
+    const sideInitialOptions = value.not
+      ? addressAliases.filter((a) => !isDynamicAddressAlias(a) || value.addresses.includes(a.id)).map(option)
+      : addresses;
     return (
       <Fieldset legend={label}>
         <Stack gap="xs">
@@ -94,9 +109,9 @@ export function RuleEditor({ api, rule, snapshot, onClose, onSessionLost, onAban
             renderPill={(input) => <ZoneSelectionPill {...input} colors={zoneColors} />} renderOption={({ option }) => option.value === firewallZone ? option.label : <ZonePill name={option.label} color={zoneColors.get(option.value)} />}
             // The firewall stands alone as a destination: choosing it leaves the other zones, and choosing another leaves it.
             onChange={(next) => set((prev) => ({ ...prev, zones: next.includes(firewallZone) && !prev.zones.includes(firewallZone) ? [firewallZone] : next.length > 1 ? next.filter((id) => id !== firewallZone) : next }))} />
-          <AliasMultiSelect api={api} aliasType="addresses" excludeDynamic={Boolean(value.not)} label={`${label}: addresses`} description="Aliases or literal IPs, CIDRs, or ranges within those zones. Empty is every address." placeholder="Alias name, 192.168.1.50, or 10.0.0.0/24" initialOptions={value.not ? staticAddresses : addresses} value={value.addresses} error={errors.get(`${key}/addresses`)} clearable onAliasCreated={onAliasCreated} onCreatingChange={onCreatingChange} onSessionLost={onSessionLost}
-            onChange={(next) => set((prev) => ({ ...prev, addresses: next }))} />
-          <Switch label={`${label}: except these addresses`} description={hasDynamic && !value.not ? 'URL and host-name aliases cannot be left out yet.' : 'Matches every other address in the chosen zones. Name an address first.'} checked={Boolean(value.not)} disabled={value.addresses.length === 0 || (hasDynamic && !value.not)} error={errors.get(`${key}/not`)}
+          <AliasMultiSelect api={api} aliasType="addresses" excludeDynamic={Boolean(value.not)} label={`${label}: addresses`} description="Aliases or literal IPs, CIDRs, or ranges within those zones. Empty is every address." placeholder="Alias name, 192.168.1.50, or 10.0.0.0/24" initialOptions={sideInitialOptions} value={value.addresses} error={errors.get(`${key}/addresses`)} clearable onAliasCreated={onAliasCreated} onCreatingChange={onCreatingChange} onItemsResolved={onItemsResolved} onSessionLost={onSessionLost}
+            onChange={(next) => set((prev) => ({ ...prev, addresses: next, ...(next.length === 0 ? { not: false } : {}) }))} />
+          <Switch label={`${label}: except these addresses`} description={hasDynamic ? 'URL and host-name aliases cannot be left out yet.' : 'Matches every other address in the chosen zones. Name an address first.'} checked={Boolean(value.not)} disabled={value.addresses.length === 0 || (hasDynamic && !value.not)} error={errors.get(`${key}/not`)}
             onChange={(event) => { const checked = event.currentTarget.checked; set((prev) => ({ ...prev, not: checked })); }} />
         </Stack>
       </Fieldset>

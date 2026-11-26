@@ -33,15 +33,15 @@ function Holds({ row, names }: { row: Row; names: Map<string, string> }) {
     if (alias.kind === 'host' && alias.address) return <Address value={alias.address} />;
     if (alias.kind === 'network' && alias.prefix) return <Address value={alias.prefix} />;
     if (alias.kind === 'range' && alias.first && alias.last) return <Group gap={4} wrap="wrap"><Address value={alias.first} />{' '}<Text size="sm">to</Text>{' '}<Address value={alias.last} /></Group>;
-    if (alias.kind === 'url' && alias.url) {
+    if (alias.kind === 'url') {
       return (
         <Stack gap={2} align="flex-start">
-          <Text size="sm" className="channel-target">{alias.url}</Text>
+          {alias.url && <Text size="sm" className="channel-target">{alias.url}</Text>}
           {alias.refreshSeconds !== undefined && (
             <Text size="xs" c="dimmed">Refreshes every {formatRefreshInterval(alias.refreshSeconds)}</Text>
           )}
-          {isInsecureHttpUrl(alias.url) && (
-            <Badge size="xs" color="orange" variant="light" tt="none">Not secure: anyone on the path can change the list</Badge>
+          {alias.url && isInsecureHttpUrl(alias.url) && (
+            <Text size="xs" className="warning-text">Not secure: anyone on the path can change the list.</Text>
           )}
         </Stack>
       );
@@ -188,7 +188,7 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
                 </ScrollArea>
               )}
               {editing && (
-                <AliasEditor key={typeof editing === 'string' ? editing : editing.item.value.id} api={api} editing={editing} rows={rows} onClose={() => setEditing(undefined)} onSessionLost={onSessionLost} onAbandoned={setError} onRefused={() => void resource.reload()} onAliasCreated={() => { onSaved(); void resource.reload(); }}
+                <AliasEditor key={typeof editing === 'string' ? editing : editing.item.value.id} api={api} editing={editing} rows={rows} snapshot={snapshot} onClose={() => setEditing(undefined)} onSessionLost={onSessionLost} onAbandoned={setError} onRefused={() => void resource.reload()} onAliasCreated={() => { onSaved(); void resource.reload(); }}
                   onSave={async (kind, alias, saved) => {
                     try {
                       await api.saveAlias(kind, alias, saved);

@@ -84,7 +84,7 @@ function ManagementEditor({ api, initial, snapshot, onClose, onSaved, onRefresh,
     segmentOptions.push({ value: segmentId, label: `${segmentId} (missing)` });
   }
   const addressOptions = (snapshot.value.aliases?.addresses ?? [])
-    .filter((a) => !isDynamicAddressAlias(a))
+    .filter((a) => !isDynamicAddressAlias(a) || allowedSources.includes(a.id))
     .map((a) => ({ value: a.id, label: a.name }));
 
   const selectedSegment = snapshot.value.segments.find((s) => s.id === segmentId);

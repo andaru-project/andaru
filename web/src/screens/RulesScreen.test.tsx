@@ -402,7 +402,8 @@ it('hides dynamic aliases when rule side negation is enabled and disables negati
 
   // Replacing with a static alias enables negation; toggling negation hides dynamic aliases from the picker.
   const clearBtn = fromInput.closest('.mantine-MultiSelect-wrapper')?.querySelector('button[aria-label], button') as HTMLButtonElement | null;
-  if (clearBtn) await user.click(clearBtn);
+  expect(clearBtn).not.toBeNull();
+  await user.click(clearBtn!);
   await user.click(fromInput);
   listbox = document.getElementById(fromInput.getAttribute('aria-controls')!)!;
   await user.click(within(listbox).getByRole('option', { name: 'printers', hidden: true }));
@@ -413,4 +414,35 @@ it('hides dynamic aliases when rule side negation is enabled and disables negati
   const negatedOptions = within(listbox).getAllByRole('option', { hidden: true }).map((o) => o.textContent);
   expect(negatedOptions).not.toContain('cf-feed');
   expect(negatedOptions).not.toContain('vpn-dns');
+
+  // Clearing all addresses while negation is active resets negation and makes dynamic aliases selectable again.
+  const clearPrinters = fromInput.closest('.mantine-MultiSelect-wrapper')?.querySelector('button[aria-label], button') as HTMLButtonElement | null;
+  expect(clearPrinters).not.toBeNull();
+  await user.click(clearPrinters!);
+  expect(fromNot).not.toBeChecked();
+  await user.click(fromInput);
+  listbox = document.getElementById(fromInput.getAttribute('aria-controls')!)!;
+  expect(within(listbox).getAllByRole('option', { hidden: true }).map((o) => o.textContent)).toContain('cf-feed');
+});
+
+it('disables rule side negation for a dynamic alias discovered via remote search', async () => {
+  const user = userEvent.setup();
+  show({
+    '/api/v1/config/aliases/search': () => jsonResponse(200, {
+      state: 'saved',
+      savedVersion: '9',
+      items: [
+        { id: 'adr_remote_feed', name: 'remote-feed', kind: 'url', summary: 'https://lists.example/ips', score: 900, highlights: [{ text: 'remote-feed', match: true }] },
+      ],
+    }),
+  });
+  await user.click(await screen.findByRole('button', { name: 'Add rule' }));
+  const panel = await screen.findByRole('dialog', { name: 'Add rule' });
+  const fromInput = within(panel).getByLabelText('From: addresses', { selector: 'input' });
+  await user.type(fromInput, 'remote');
+  const listbox = document.getElementById(fromInput.getAttribute('aria-controls')!)!;
+  const opt = await within(listbox).findByRole('option', { name: /remote-feed/, hidden: true });
+  await user.click(opt);
+  expect(within(panel).getByRole('switch', { name: /^From: except these addresses/ })).toBeDisabled();
+  expect(within(panel).getByText(/URL and host-name aliases cannot be left out yet/i)).toBeInTheDocument();
 });
