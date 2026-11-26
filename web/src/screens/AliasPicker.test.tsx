@@ -312,16 +312,23 @@ describe('AliasPicker', () => {
     expect(onCreated).toHaveBeenCalledTimes(3);
   });
 
-  it('reuses an existing alias on 422 collision and surfaces unexpected creation errors inline', async () => {
+  it('reuses a matching alias on 422 collision, refuses mismatched 422 aliases, and handles AliasSelect failure without leaking synthetic labels', async () => {
     const user = userEvent.setup();
     let searchCalls = 0;
-    let postMode: 'collision' | 'fail' = 'collision';
+    let collisionKind: 'matching' | 'mismatched' | 'fail' = 'matching';
 
-    fetchRoutes({
+    const fetchMock = fetchRoutes({
       '/api/v1/config/aliases/search': () => {
         searchCalls += 1;
         if (searchCalls === 1) {
           return jsonResponse(200, { state: 'saved', savedVersion: '5', items: [] });
+        }
+        if (collisionKind === 'mismatched') {
+          return jsonResponse(200, {
+            state: 'saved',
+            savedVersion: '5',
+            items: [{ id: 'adr_wrong', name: '10.0.0.11', kind: 'network', summary: '0.0.0.0/0', score: 1000, highlights: [{ text: '10.0.0.11', match: true }] }],
+          });
         }
         return jsonResponse(200, {
           state: 'saved',
@@ -330,24 +337,40 @@ describe('AliasPicker', () => {
         });
       },
       'POST /api/v1/config/aliases/addresses': () => (
-        postMode === 'collision'
-          ? jsonResponse(422, { error: { code: 'VALIDATION_FAILED', message: 'Duplicate name.' } })
-          : jsonResponse(500, { error: { code: 'INTERNAL', message: 'Storage unavailable.' } })
+        collisionKind === 'fail'
+          ? jsonResponse(500, { error: { code: 'INTERNAL', message: 'Storage unavailable.' } })
+          : jsonResponse(422, { error: { code: 'VALIDATION_FAILED', message: 'Duplicate name.' } })
       ),
     });
 
     const api = new ApiClient('csrf');
-    render(<MultiHarness api={api} family="ipv4" />);
+    const { unmount } = render(<MultiHarness api={api} family="ipv4" />);
 
     const input = screen.getByLabelText('Addresses', { selector: 'input' });
     await user.type(input, '10.0.0.9');
     await user.click(await screen.findByText('Use 10.0.0.9'));
     expect(await screen.findByText('10.0.0.9', { selector: 'span' })).toBeInTheDocument();
 
-    postMode = 'fail';
+    // 422 where existing alias has same name but different kind/summary -> refuses silent bind and shows error.
+    collisionKind = 'mismatched';
     searchCalls = 0;
-    await user.type(input, '10.0.0.10');
+    await user.type(input, '10.0.0.11');
+    await user.click(await screen.findByText('Use 10.0.0.11'));
+    expect(await screen.findByText(/already exists with different values/i)).toBeInTheDocument();
+    expect(screen.queryByText('10.0.0.11', { selector: 'span' })).not.toBeInTheDocument();
+    unmount();
+
+    // AliasSelect creation error restores prior selection label instead of leaving "Use ..." in the input,
+    // and never fires a search for the synthetic "Use ..." label.
+    collisionKind = 'fail';
+    searchCalls = 0;
+    render(<SingleHarness api={api} initial="adr_lan" />);
+    const singleInput = screen.getByLabelText('Destination alias', { selector: 'input' });
+    await user.clear(singleInput);
+    await user.type(singleInput, '10.0.0.10');
     await user.click(await screen.findByText('Use 10.0.0.10'));
     expect(await screen.findByText('Storage unavailable.')).toBeInTheDocument();
+    await waitFor(() => expect((singleInput as HTMLInputElement).value).toBe('lan-net'));
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('Use+'))).toBe(false);
   });
 });

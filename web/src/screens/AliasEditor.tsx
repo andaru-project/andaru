@@ -1,5 +1,6 @@
 import { Alert, Button, Drawer, Fieldset, Group, MultiSelect, NativeSelect, Stack, Textarea, TextInput } from '@mantine/core';
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { icmpTypes } from '../aliasLiteral';
 import { ApiClient, ApiError, fieldErrors, saveFailure } from '../api';
 import type { AddressAlias, AliasKinds, PortAlias, SavedObject } from '../types';
 import { AliasMultiSelect } from './AliasPicker';
@@ -19,12 +20,6 @@ interface AliasEditorProps {
   onAliasCreated?(): void;
   onSave<K extends keyof AliasKinds>(kind: K, alias: Omit<AliasKinds[K], 'id'>, saved?: SavedObject<AliasKinds[K]>): Promise<void>;
 }
-
-// The types an ICMP alias may name, as the engine knows them.
-const icmpTypes = {
-  icmp: ['echo-request', 'echo-reply', 'destination-unreachable', 'time-exceeded', 'parameter-problem', 'timestamp-request', 'timestamp-reply'],
-  icmpv6: ['echo-request', 'echo-reply', 'destination-unreachable', 'packet-too-big', 'time-exceeded', 'parameter-problem'],
-};
 
 const field = /^\/(name|description|kind|protocol|address|prefix|first|last|members|ports|types)(?:\/|$)/;
 
@@ -48,6 +43,10 @@ export function AliasEditor({ api, editing, rows, onClose, onSessionLost, onAban
   const [errors, setErrors] = useState(new Map<string, string>());
   const [failure, setFailure] = useState('');
   const [busy, setBusy] = useState(false);
+  const [creatingAliases, setCreatingAliases] = useState(0);
+  const onCreatingChange = useCallback((creating: boolean) => {
+    setCreatingAliases((count) => Math.max(0, count + (creating ? 1 : -1)));
+  }, []);
   // A save may answer after this panel was closed and another opened: it then closes nothing.
   const open = useRef(true);
   useEffect(() => { open.current = true; return () => { open.current = false; }; }, []);
@@ -156,6 +155,7 @@ export function AliasEditor({ api, editing, rows, onClose, onSessionLost, onAban
               error={errors.get('members')}
               clearable
               onAliasCreated={onAliasCreated}
+              onCreatingChange={onCreatingChange}
               onSessionLost={onSessionLost}
               onChange={setMembers}
             />
@@ -164,7 +164,7 @@ export function AliasEditor({ api, editing, rows, onClose, onSessionLost, onAban
           </Fieldset>
           <Group justify="flex-end" className="drawer-actions">
             <Button variant="default" onClick={onClose}>Cancel</Button>
-            <Button loading={busy} type="submit">Save alias</Button>
+            <Button loading={busy} disabled={creatingAliases > 0} type="submit">Save alias</Button>
           </Group>
         </Stack>
       </form>

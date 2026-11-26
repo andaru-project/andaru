@@ -1,5 +1,5 @@
 import { Alert, Anchor, Button, Drawer, Fieldset, Group, MultiSelect, SegmentedControl, Stack, Switch, Text, Textarea, TextInput } from '@mantine/core';
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react';
 import { ApiClient, ApiError, fieldErrors, saveFailure } from '../api';
 import { firewallZone, type Rule, type RuleSide, type Snapshot } from '../types';
 import { zoneColorMap } from '../zones';
@@ -36,6 +36,10 @@ export function RuleEditor({ api, rule, snapshot, onClose, onSessionLost, onAban
   const [errors, setErrors] = useState(new Map<string, string>());
   const [failure, setFailure] = useState('');
   const [busy, setBusy] = useState(false);
+  const [creatingAliases, setCreatingAliases] = useState(0);
+  const onCreatingChange = useCallback((creating: boolean) => {
+    setCreatingAliases((count) => Math.max(0, count + (creating ? 1 : -1)));
+  }, []);
   // A save may answer after this panel was closed and another opened: it then closes nothing.
   const open = useRef(true);
   useEffect(() => { open.current = true; return () => { open.current = false; }; }, []);
@@ -78,17 +82,17 @@ export function RuleEditor({ api, rule, snapshot, onClose, onSessionLost, onAban
   }
 
   // One side of the rule: where, and within that, who.
-  const sideFields = (label: string, key: 'from' | 'to', value: RuleSide, set: (next: RuleSide) => void, zoneOptions: Array<{ value: string; label: string }>, zoneHelp: string) => (
+  const sideFields = (label: string, key: 'from' | 'to', value: RuleSide, set: Dispatch<SetStateAction<RuleSide>>, zoneOptions: Array<{ value: string; label: string }>, zoneHelp: string) => (
     <Fieldset legend={label}>
       <Stack gap="xs">
         <MultiSelect label={`${label}: zones`} description={zoneHelp} data={zoneOptions} value={value.zones} error={errors.get(`${key}/zones`)} searchable clearable nothingFoundMessage="No zone by that name."
           renderPill={(input) => <ZoneSelectionPill {...input} colors={zoneColors} />} renderOption={({ option }) => option.value === firewallZone ? option.label : <ZonePill name={option.label} color={zoneColors.get(option.value)} />}
           // The firewall stands alone as a destination: choosing it leaves the other zones, and choosing another leaves it.
-          onChange={(next) => set({ ...value, zones: next.includes(firewallZone) && !value.zones.includes(firewallZone) ? [firewallZone] : next.length > 1 ? next.filter((id) => id !== firewallZone) : next })} />
-        <AliasMultiSelect api={api} aliasType="addresses" label={`${label}: addresses`} description="Aliases or literal IPs, CIDRs, or ranges within those zones. Empty is every address." placeholder="Alias name, 192.168.1.50, or 10.0.0.0/24" initialOptions={addresses} value={value.addresses} error={errors.get(`${key}/addresses`)} clearable onAliasCreated={onAliasCreated} onSessionLost={onSessionLost}
-          onChange={(next) => set({ ...value, addresses: next })} />
+          onChange={(next) => set((prev) => ({ ...prev, zones: next.includes(firewallZone) && !prev.zones.includes(firewallZone) ? [firewallZone] : next.length > 1 ? next.filter((id) => id !== firewallZone) : next }))} />
+        <AliasMultiSelect api={api} aliasType="addresses" label={`${label}: addresses`} description="Aliases or literal IPs, CIDRs, or ranges within those zones. Empty is every address." placeholder="Alias name, 192.168.1.50, or 10.0.0.0/24" initialOptions={addresses} value={value.addresses} error={errors.get(`${key}/addresses`)} clearable onAliasCreated={onAliasCreated} onCreatingChange={onCreatingChange} onSessionLost={onSessionLost}
+          onChange={(next) => set((prev) => ({ ...prev, addresses: next }))} />
         <Switch label={`${label}: except these addresses`} description="Matches every other address in the chosen zones. Name an address first." checked={Boolean(value.not)} disabled={value.addresses.length === 0} error={errors.get(`${key}/not`)}
-          onChange={(event) => set({ ...value, not: event.currentTarget.checked })} />
+          onChange={(event) => { const checked = event.currentTarget.checked; set((prev) => ({ ...prev, not: checked })); }} />
       </Stack>
     </Fieldset>
   );
@@ -115,14 +119,14 @@ export function RuleEditor({ api, rule, snapshot, onClose, onSessionLost, onAban
           {sideFields('From', 'from', from, setFrom, zones, 'Empty is any network.')}
           {sideFields('To', 'to', to, setTo, [{ value: firewallZone, label: 'This firewall' }, ...zones], 'Empty is any network, never this firewall: choose This firewall for traffic to the box itself.')}
           {toFirewall && <Text size="sm" c="dimmed">To this firewall: the rule decides what may reach the box itself, and lets nothing through it.</Text>}
-          <AliasMultiSelect api={api} aliasType="ports" label="Ports" description="Port aliases or literal ports (e.g. 443, tcp/8000-8080, udp/53). Empty is any protocol and port." placeholder="Alias name, 443, or tcp/8000-8080" initialOptions={portAliases} value={ports} error={errors.get('ports')} clearable onAliasCreated={onAliasCreated} onSessionLost={onSessionLost} onChange={setPorts} />
+          <AliasMultiSelect api={api} aliasType="ports" label="Ports" description="Port aliases or literal ports (e.g. 443, tcp/8000-8080, udp/53). Empty is any protocol and port." placeholder="Alias name, 443, or tcp/8000-8080" initialOptions={portAliases} value={ports} error={errors.get('ports')} clearable onAliasCreated={onAliasCreated} onCreatingChange={onCreatingChange} onSessionLost={onSessionLost} onChange={setPorts} />
           <Text size="xs" c="dimmed">Need a group or named alias? <Anchor href="/firewall/aliases" target="_blank" rel="noopener noreferrer" size="xs">Open Firewall ▸ Aliases in a new tab</Anchor> so this draft stays open.</Text>
           <Switch label="Log what this rule matches" checked={log} onChange={(event) => setLog(event.currentTarget.checked)} />
             </Stack>
           </Fieldset>
           <Group justify="flex-end" className="drawer-actions">
             <Button variant="default" onClick={onClose}>Cancel</Button>
-            <Button loading={busy} type="submit">Save rule</Button>
+            <Button loading={busy} disabled={creatingAliases > 0} type="submit">Save rule</Button>
           </Group>
         </Stack>
       </form>
