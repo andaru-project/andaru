@@ -1,8 +1,8 @@
-import { Alert, Badge, Button, Group, Loader, ScrollArea, Stack, Table, Text, Title, VisuallyHidden } from '@mantine/core';
+import { Alert, Badge, Button, ComboboxChevron, Group, Loader, Menu, ScrollArea, Stack, Table, Text, Title, VisuallyHidden } from '@mantine/core';
 import { useCallback, useState } from 'react';
 import { ApiClient, reportError } from '../api';
 import { addressLines, isPort } from '../interfaceEdit';
-import { stateColor, stateLabel, type ConfigBatchOperation, type LinkStatus, type Preview, type SavedLink, type SavedObject, type Segment, type Session, type Snapshot } from '../types';
+import { stateColor, stateLabel, type ConfigBatchOperation, type LinkStatus, type Preview, type SavedLink, type SavedObject, type Segment, type Session, type Snapshot, type VirtualLinkKind } from '../types';
 import { useResource, useVisiblePoll } from '../useResource';
 import { bindingFindings, kernelName } from '../zones';
 import { Address } from './Address';
@@ -13,7 +13,7 @@ interface InterfacesScreenProps { api: ApiClient; session: Session; onSaved(): v
 
 // What the panel opens on: the saved objects as read just now, with their versions, and the port on the box.
 // It keeps the snapshot it opened with, so a poll that fails to read the configuration does not close it.
-interface Editing { link?: SavedObject<SavedLink>; segment?: SavedObject<Segment>; live?: LinkStatus; snapshot: Snapshot }
+interface Editing { link?: SavedObject<SavedLink>; segment?: SavedObject<Segment>; live?: LinkStatus; newKind?: VirtualLinkKind; snapshot: Snapshot }
 
 const unboundLabel: Record<string, string> = { HARDWARE_MISSING: 'Missing', HARDWARE_AMBIGUOUS: 'Unresolved' };
 
@@ -99,6 +99,19 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
       setOpening('');
     }
   };
+  const createVirtual = async (kind: VirtualLinkKind) => {
+    if (opening) return;
+    setOpening(`new:${kind}`);
+    setError('');
+    try {
+      const snapshot = await api.config();
+      setEditing({ newKind: kind, snapshot });
+    } catch (failure) {
+      reportError(failure, onSessionLost, setError);
+    } finally {
+      setOpening('');
+    }
+  };
   const save = async (operations: ConfigBatchOperation[]) => {
     await api.applyConfigChanges(operations);
     onSaved();
@@ -109,10 +122,18 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
 
   // What a link is, said only when it is not a plain Ethernet port.
   const kindLine = (link: SavedLink) => {
-    const extra = link as SavedLink & { vlanId?: number; parent?: string };
-    if (link.kind === 'vlan') return `VLAN ${extra.vlanId} on ${extra.parent ? linkName(extra.parent) : 'its parent'}`;
-    if (link.kind === 'pppoe') return `PPPoE on ${extra.parent ? linkName(extra.parent) : 'its parent'}`;
-    return { bridge: 'Bridge', bond: 'Bond' }[link.kind as string];
+    if (link.kind === 'vlan') return `VLAN ${link.vlanId} on ${link.parent ? linkName(link.parent) : 'its parent'}`;
+    if (link.kind === 'pppoe') return `PPPoE on ${link.parent ? linkName(link.parent) : 'its parent'}`;
+    if (link.kind === 'bridge') {
+      const names = (link.members ?? []).map(linkName);
+      return names.length > 0 ? `Bridge (${names.join(', ')})` : 'Bridge (no members)';
+    }
+    if (link.kind === 'bond') {
+      const names = (link.members ?? []).map(linkName);
+      const detail = [link.mode, names.join(', ')].filter(Boolean).join(' · ');
+      return detail ? `Bond (${detail})` : 'Bond';
+    }
+    return undefined;
   };
   const addressesCell = (live: LinkStatus | undefined, segment: Segment | undefined) => {
     const lines = addressLines(live, segment);
@@ -153,7 +174,21 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
     <Stack>
       <Group justify="space-between" align="flex-end">
         <div><Title order={2}>Interfaces</Title><Text c="dimmed">{saved ? 'Configured network interfaces and their live state.' : 'Network links the box reports now.'}</Text></div>
-        <Button size="xs" variant="default" loading={resource.loading} onClick={() => void resource.reload()}>Refresh</Button>
+        <Group gap="xs">
+          {editable && (
+            <Menu position="bottom-end">
+              <Menu.Target>
+                <Button size="xs" rightSection={<ComboboxChevron />} loading={opening.startsWith('new:')} disabled={Boolean(opening) && !opening.startsWith('new:')}>Add virtual interface</Button>
+              </Menu.Target>
+              <Menu.Dropdown>
+                <Menu.Item onClick={() => void createVirtual('vlan')}>VLAN</Menu.Item>
+                <Menu.Item onClick={() => void createVirtual('bridge')}>Bridge</Menu.Item>
+                <Menu.Item onClick={() => void createVirtual('bond')}>Bond</Menu.Item>
+              </Menu.Dropdown>
+            </Menu>
+          )}
+          <Button size="xs" variant="default" loading={resource.loading} onClick={() => void resource.reload()}>Refresh</Button>
+        </Group>
       </Group>
       {error && <Alert color="red" role="alert" title="The interface could not be opened" withCloseButton onClose={() => setError('')}>{error}</Alert>}
       {saveError && <Alert color="red" role="alert" title="The interface was not saved" withCloseButton onClose={() => setSaveError('')}>{saveError}</Alert>}
@@ -213,7 +248,7 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
         </>
       )}
       {editing && (
-        <InterfaceEditor key={editing.link?.value.id ?? editing.live?.name} {...editing} onClose={() => setEditing(undefined)}
+        <InterfaceEditor key={editing.link?.value.id ?? editing.live?.name ?? editing.newKind} {...editing} onClose={() => setEditing(undefined)}
           onSessionLost={onSessionLost} onAbandoned={setSaveError} onSave={save} />
       )}
     </Stack>

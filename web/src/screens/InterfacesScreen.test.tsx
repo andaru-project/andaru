@@ -377,3 +377,120 @@ it('reads which segment is the management one when the panel opens, not when the
 
   expect(await within(await screen.findByRole('dialog')).findByText('You manage Andaru through this interface')).toBeInTheDocument();
 });
+
+it('creates a VLAN with a segment from the Add virtual interface menu', async () => {
+  const user = userEvent.setup();
+  const sent = vi.fn<(init: RequestInit | undefined) => Response>(() => jsonResponse(200, { savedVersion: '8' }));
+  const onSaved = vi.fn();
+  routes({ extra: { 'POST /api/v1/config/changes': sent } });
+  render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={onSaved} onSessionLost={vi.fn()} />);
+
+  await user.click(await screen.findByRole('button', { name: 'Add virtual interface' }));
+  await user.click(await screen.findByRole('menuitem', { name: 'VLAN' }));
+
+  const panel = await screen.findByRole('dialog');
+  expect(panel).toHaveTextContent('Add VLAN');
+  await user.type(within(panel).getByLabelText(/^Name/), 'IoT VLAN');
+  const parentInput = within(panel).getByLabelText(/^Parent interface/, { selector: 'input' });
+  await user.click(parentInput);
+  await user.click(await screen.findByRole('option', { name: 'LAN port' }));
+  await user.type(within(panel).getByLabelText(/^VLAN ID/), '30');
+  const zoneInput = within(panel).getByLabelText(/^Zone/, { selector: 'input' });
+  await user.click(zoneInput);
+  await user.click(await screen.findByRole('option', { name: 'Guests' }));
+  await user.selectOptions(within(panel).getByLabelText('IPv4 method'), 'dhcp');
+  await user.click(within(panel).getByRole('button', { name: 'Save interface' }));
+
+  await vi.waitFor(() => expect(onSaved).toHaveBeenCalled());
+  expect(JSON.parse(String(sent.mock.calls[0][0]?.body))).toEqual({
+    operations: [
+      { op: 'create', collection: 'links', localId: 'link', value: { name: 'IoT VLAN', kind: 'vlan', parent: lanPort, vlanId: 30, mtu: 1500, enabled: true } },
+      { op: 'create', collection: 'segments', value: { name: 'IoT VLAN', link: '@link', zone: 'zon_guest', addressing: { ipv4: { mode: 'dhcp' }, ipv6: { mode: 'none' } } } },
+    ],
+  });
+});
+
+it('creates a bond and shows bridge/bond details in the table', async () => {
+  const user = userEvent.setup();
+  const free1 = 'lnk_77777777-7777-4777-8777-777777777777';
+  const free2 = 'lnk_88888888-8888-4888-8888-888888888888';
+  const brId = 'lnk_99999999-9999-4999-8999-999999999999';
+  const sent = vi.fn<(init: RequestInit | undefined) => Response>(() => jsonResponse(200, { savedVersion: '8' }));
+  routes({
+    links: [
+      ethernet(lanPort, 'LAN port', '52:54:00:aa:bb:01'),
+      ethernet(free1, 'Port A', '52:54:00:aa:bb:11'),
+      ethernet(free2, 'Port B', '52:54:00:aa:bb:12'),
+      { id: brId, name: 'Trunk bridge', kind: 'bridge', mtu: 1500, enabled: true, members: [] },
+    ],
+    findings: [],
+    extra: { 'POST /api/v1/config/changes': sent },
+  });
+  render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={vi.fn()} onSessionLost={vi.fn()} />);
+
+  expect(await screen.findByText(/Bridge \(no members\)/)).toBeInTheDocument();
+
+  await user.click(screen.getByRole('button', { name: 'Add virtual interface' }));
+  await user.click(await screen.findByRole('menuitem', { name: 'Bond' }));
+
+  const panel = await screen.findByRole('dialog');
+  expect(panel).toHaveTextContent('Add bond');
+  await user.type(within(panel).getByLabelText(/^Name/), 'Uplink');
+  const membersInput = within(panel).getByLabelText(/^Member interfaces/, { selector: 'input' });
+  await user.click(membersInput);
+  await user.click(await screen.findByRole('option', { name: 'Port A' }));
+  await user.click(await screen.findByRole('option', { name: 'Port B' }));
+  await user.click(within(panel).getByRole('button', { name: 'Save interface' }));
+
+  await vi.waitFor(() => expect(sent).toHaveBeenCalled());
+  expect(JSON.parse(String(sent.mock.calls[0][0]?.body))).toEqual({
+    operations: [
+      { op: 'create', collection: 'links', localId: 'link', value: { name: 'Uplink', kind: 'bond', mode: '802.3ad', members: [free1, free2], mtu: 1500, enabled: true } },
+    ],
+  });
+});
+
+it('edits an existing VLAN tag and locks segment assignment on a bridge member', async () => {
+  const user = userEvent.setup();
+  const free1 = 'lnk_77777777-7777-4777-8777-777777777777';
+  const brId = 'lnk_99999999-9999-4999-8999-999999999999';
+  const sent = vi.fn<(init: RequestInit | undefined) => Response>(() => jsonResponse(200, { savedVersion: '8' }));
+  routes({
+    links: [
+      ethernet(lanPort, 'LAN port', '52:54:00:aa:bb:01'),
+      { id: guestVlan, name: 'Guest VLAN', kind: 'vlan', mtu: 1500, enabled: true, parent: lanPort, vlanId: 20 },
+      ethernet(free1, 'Member port', '52:54:00:aa:bb:11'),
+      { id: brId, name: 'LAN bridge', kind: 'bridge', mtu: 1500, enabled: true, members: [free1] },
+    ],
+    findings: [],
+    extra: {
+      [`/api/v1/config/links/${guestVlan}`]: { version: '2', value: { id: guestVlan, name: 'Guest VLAN', kind: 'vlan', mtu: 1500, enabled: true, parent: lanPort, vlanId: 20 } },
+      '/api/v1/config/segments/seg_guest': { version: '3', value: { id: 'seg_guest', name: 'Guest', link: guestVlan, zone: 'zon_guest', addressing: { ipv4: { mode: 'dhcp' }, ipv6: { mode: 'slaac' } } } },
+      [`/api/v1/config/links/${free1}`]: { version: '5', value: ethernet(free1, 'Member port', '52:54:00:aa:bb:11') },
+      'POST /api/v1/config/changes': sent,
+    },
+  });
+  render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={vi.fn()} onSessionLost={vi.fn()} />);
+
+  expect(await screen.findByText(/Bridge \(Member port\)/)).toBeInTheDocument();
+
+  // Edit Guest VLAN tag.
+  await user.click(screen.getByRole('button', { name: 'Edit Guest VLAN' }));
+  let panel = await screen.findByRole('dialog');
+  const vlanInput = within(panel).getByLabelText(/^VLAN ID/);
+  await user.clear(vlanInput);
+  await user.type(vlanInput, '40');
+  await user.click(within(panel).getByRole('button', { name: 'Save interface' }));
+  await vi.waitFor(() => expect(sent).toHaveBeenCalled());
+  expect(JSON.parse(String(sent.mock.calls[0][0]?.body))).toEqual({
+    operations: [
+      { op: 'replace', collection: 'links', id: guestVlan, expectedVersion: '2', value: { id: guestVlan, name: 'Guest VLAN', kind: 'vlan', mtu: 1500, enabled: true, parent: lanPort, vlanId: 40 } },
+    ],
+  });
+
+  // Member port cannot carry a segment while it belongs to LAN bridge.
+  await user.click(screen.getByRole('button', { name: 'Edit Member port' }));
+  panel = await screen.findByRole('dialog');
+  expect(within(panel).getByRole('switch', { name: /Carries a segment/ })).toBeDisabled();
+  expect(panel).toHaveTextContent('this interface is a member of LAN bridge');
+});

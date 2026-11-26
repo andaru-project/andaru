@@ -206,6 +206,9 @@ export const stateColor: Record<string, string> = { UP: 'green', DOWN: 'red', LO
 // stateLabel is a link's operational state in words: the kernel's own, but for the one it runs together.
 export const stateLabel = (operState: string) => operState === 'LOWERLAYERDOWN' ? 'lower layer down' : operState.toLowerCase();
 
+export type VirtualLinkKind = 'vlan' | 'bridge' | 'bond';
+export type BondMode = 'balance-rr' | 'active-backup' | 'balance-xor' | 'broadcast' | '802.3ad' | 'balance-tlb' | 'balance-alb';
+
 export interface SavedLink {
   id: string;
   name: string;
@@ -213,6 +216,11 @@ export interface SavedLink {
   mtu: number;
   enabled: boolean;
   permanentMac?: string;
+  parent?: string;
+  vlanId?: number;
+  members?: string[];
+  mode?: BondMode;
+  username?: string;
 }
 
 export interface Segment {

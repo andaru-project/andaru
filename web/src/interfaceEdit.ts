@@ -1,11 +1,16 @@
 import { fieldErrors } from './api';
-import type { ConfigBatchOperation, LinkStatus, SavedLink, SavedObject, Segment } from './types';
+import type { BondMode, ConfigBatchOperation, LinkStatus, SavedLink, SavedObject, Segment, Snapshot, VirtualLinkKind } from './types';
 
 // What the interface panel edits: the link, and the segment that puts a network on it.
 export interface InterfaceDraft {
+  kind: SavedLink['kind'];
   name: string;
   enabled: boolean;
   mtu: string;
+  parent: string;
+  vlanId: string;
+  members: string[];
+  bondMode: string;
   // Whether the interface carries a network of its own: a segment, with a zone and addressing.
   // A link without one still serves as a VLAN trunk's parent or a bridge member.
   assigned: boolean;
@@ -24,6 +29,16 @@ export interface InterfaceDraft {
   dnsServers: string;
   searchDomains: string;
 }
+
+export const bondModes: Array<{ value: BondMode; label: string }> = [
+  { value: '802.3ad', label: '802.3ad (LACP)' },
+  { value: 'active-backup', label: 'Active-backup' },
+  { value: 'balance-rr', label: 'Round-robin (balance-rr)' },
+  { value: 'balance-xor', label: 'XOR (balance-xor)' },
+  { value: 'broadcast', label: 'Broadcast' },
+  { value: 'balance-tlb', label: 'Adaptive transmit load balancing (balance-tlb)' },
+  { value: 'balance-alb', label: 'Adaptive load balancing (balance-alb)' },
+];
 
 // How a segment gets its addresses, in the words the panel and the table use.
 export const ipv4Modes = [{ value: 'none', label: 'None' }, { value: 'dhcp', label: 'DHCP client' }, { value: 'static', label: 'Static' }, { value: 'ppp', label: 'PPP' }];
@@ -73,16 +88,92 @@ const list = (value: unknown) => (Array.isArray(value) ? value.join(', ') : '');
 const text = (value: unknown) => (value === undefined ? '' : String(value));
 const words = (raw: string) => raw.split(/[\s,]+/).filter(Boolean);
 
-export function draftOf(link: SavedLink | undefined, segment: Segment | undefined, live: LinkStatus | undefined): InterfaceDraft {
+export interface LinkOption {
+  value: string;
+  label: string;
+}
+
+// Links that depend directly or transitively on selfId (via parent or members) cannot become selfId's parent or member without a cycle.
+function dependentsOf(links: SavedLink[], selfId: string | undefined): Set<string> {
+  const seen = new Set<string>();
+  if (!selfId) return seen;
+  const reverse = new Map<string, string[]>();
+  for (const item of links) {
+    if (item.parent) reverse.set(item.parent, [...(reverse.get(item.parent) ?? []), item.id]);
+    for (const member of item.members ?? []) reverse.set(member, [...(reverse.get(member) ?? []), item.id]);
+  }
+  const queue = [selfId];
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    for (const dependent of reverse.get(id) ?? []) {
+      if (!seen.has(dependent)) {
+        seen.add(dependent);
+        queue.push(dependent);
+      }
+    }
+  }
+  return seen;
+}
+
+function withSelectedLinks(options: LinkOption[], selected: string[], links: SavedLink[]): LinkOption[] {
+  const byId = new Map(links.map((item) => [item.id, item.name]));
+  const present = new Set(options.map((item) => item.value));
+  const missing = selected.filter((id) => id && !present.has(id)).map((id) => ({ value: id, label: byId.get(id) ?? id }));
+  return missing.length > 0 ? [...options, ...missing] : options;
+}
+
+// A VLAN parent must be a non-PPPoE link that is not a member of a bridge or bond, and cannot depend on this link.
+export function vlanParentOptions(snapshot: Snapshot, selfId: string | undefined, selected: string): LinkOption[] {
+  const links = snapshot.value.links;
+  const enslaved = new Set(links.flatMap((item) => item.members ?? []));
+  const blocked = dependentsOf(links, selfId);
+  const options = links
+    .filter((item) => item.id !== selfId && item.kind !== 'pppoe' && !enslaved.has(item.id) && !blocked.has(item.id))
+    .map((item) => ({ value: item.id, label: item.name }));
+  return withSelectedLinks(options, selected ? [selected] : [], links);
+}
+
+// Bridge/bond members cannot be PPPoE or bridges (bonds allow Ethernet only), cannot already belong to another master,
+// cannot carry a segment or child VLAN/PPPoE links, and cannot depend on this link.
+export function memberLinkOptions(snapshot: Snapshot, kind: 'bridge' | 'bond', selfId: string | undefined, selected: string[]): LinkOption[] {
+  const links = snapshot.value.links;
+  const masterOf = new Map<string, string>();
+  const parents = new Set<string>();
+  for (const item of links) {
+    for (const member of item.members ?? []) masterOf.set(member, item.id);
+    if (item.parent) parents.add(item.parent);
+  }
+  const segmented = new Set(snapshot.value.segments.map((item) => item.link));
+  const blocked = dependentsOf(links, selfId);
+  const options = links
+    .filter((item) => {
+      if (item.id === selfId || blocked.has(item.id)) return false;
+      if (kind === 'bond' ? item.kind !== 'ethernet' : item.kind === 'pppoe' || item.kind === 'bridge') return false;
+      const master = masterOf.get(item.id);
+      if (master && master !== selfId) return false;
+      if (segmented.has(item.id) || parents.has(item.id)) return false;
+      return true;
+    })
+    .map((item) => ({ value: item.id, label: item.name }));
+  return withSelectedLinks(options, selected, links);
+}
+
+export function draftOf(link: SavedLink | undefined, segment: Segment | undefined, live: LinkStatus | undefined, newKind?: VirtualLinkKind): InterfaceDraft {
+  const kind: SavedLink['kind'] = link?.kind ?? newKind ?? 'ethernet';
   const addressing = (segment?.addressing ?? {}) as Fields;
   const ipv4 = (addressing.ipv4 ?? { mode: 'none' }) as Fields;
   const ipv6 = (addressing.ipv6 ?? { mode: 'none' }) as Fields;
   const dns = (addressing.dns ?? {}) as Fields;
   return {
+    kind,
     name: link?.name ?? live?.name ?? '',
     enabled: link?.enabled ?? true,
     mtu: String(link?.mtu ?? live?.mtu ?? 1500),
-    assigned: Boolean(segment) || !link,
+    parent: link?.parent ?? '',
+    vlanId: link?.vlanId !== undefined ? String(link.vlanId) : '',
+    members: link?.members ? [...link.members] : [],
+    bondMode: link?.mode ?? (kind === 'bond' ? '802.3ad' : ''),
+    assigned: link ? Boolean(segment) : kind !== 'bond',
     segmentName: segment?.name ?? link?.name ?? live?.name ?? '',
     zone: segment?.zone ?? '',
     newZone: '',
@@ -174,7 +265,17 @@ export function interfaceOperations(draft: InterfaceDraft, link: SavedObject<Sav
   delete saved.password;
   const linkValue: Fields = link
     ? { ...saved, name: draft.name.trim(), enabled: draft.enabled, mtu: Number(draft.mtu) }
-    : { name: draft.name.trim(), kind: 'ethernet', permanentMac: (live?.permanentAddress ?? '').toLowerCase(), mtu: Number(draft.mtu), enabled: draft.enabled };
+    : { name: draft.name.trim(), kind: draft.kind, mtu: Number(draft.mtu), enabled: draft.enabled };
+  if (!link && draft.kind === 'ethernet') linkValue.permanentMac = (live?.permanentAddress ?? '').toLowerCase();
+  if (draft.kind === 'vlan') {
+    linkValue.parent = draft.parent;
+    linkValue.vlanId = Number(draft.vlanId);
+  } else if (draft.kind === 'bridge') {
+    linkValue.members = [...draft.members];
+  } else if (draft.kind === 'bond') {
+    linkValue.mode = draft.bondMode;
+    linkValue.members = [...draft.members];
+  }
   if (!link) operations.push({ op: 'create', collection: 'links', localId: 'link', value: linkValue });
   else if (!same(linkValue, saved)) operations.push({ op: 'replace', collection: 'links', id: link.value.id, expectedVersion: link.version, value: linkValue });
 
@@ -217,7 +318,14 @@ export function removeOperations(link: SavedObject<SavedLink>, segment: SavedObj
 // The panel's field for each part of an object the engine may refuse, by the object's collection; the first match wins.
 const fieldOf: Record<string, Array<[RegExp, string]>> = {
   zones: [[/^\/name/, 'newZone']],
-  links: [[/^\/name/, 'name'], [/^\/mtu/, 'mtu']],
+  links: [
+    [/^\/name/, 'name'],
+    [/^\/mtu/, 'mtu'],
+    [/^\/parent/, 'parent'],
+    [/^\/vlanId/, 'vlanId'],
+    [/^\/members/, 'members'],
+    [/^\/mode/, 'bondMode'],
+  ],
   segments: [
     [/^\/name/, 'segmentName'], [/^\/zone/, 'zone'],
     [/^\/addressing\/ipv4\/addresses/, 'ipv4Addresses'], [/^\/addressing\/ipv4\/gateway/, 'ipv4Gateway'], [/^\/addressing\/ipv4/, 'ipv4'],
