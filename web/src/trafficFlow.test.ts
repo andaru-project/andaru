@@ -587,5 +587,26 @@ describe('simulateTrafficFlow', () => {
       excludedReflection,
     );
     expect(noHairpin.finalTuple).toBe('TCP 10.20.0.99 → 10.20.0.15:443');
+
+    // Multi-subnet uplink masquerade selects the address matching the route next hop (gateway or connected subnet).
+    const multiSubnetWan: Snapshot['value'] = {
+      ...baseConfig,
+      segments: baseConfig.segments.map((s) => (s.id === 'seg_wan'
+        ? { ...s, addressing: { ipv4: { mode: 'static', addresses: ['10.0.0.2/24', '203.0.113.2/24'], gateway: '203.0.113.1' }, ipv6: { mode: 'none' } } }
+        : s)),
+    };
+    const viaGw = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '10.10.0.50', dstIp: '8.8.8.8', dstPort: 443 },
+      multiSubnetWan,
+    );
+    expect(viaGw.verdict).toBe('accept');
+    expect(viaGw.finalTuple).toBe('TCP 203.0.113.2 → 8.8.8.8:443');
+
+    const viaConnected = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '10.10.0.50', dstIp: '10.0.0.50', dstPort: 443 },
+      multiSubnetWan,
+    );
+    expect(viaConnected.verdict).toBe('accept');
+    expect(viaConnected.finalTuple).toBe('TCP 10.0.0.2 → 10.0.0.50:443');
   });
 });

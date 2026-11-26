@@ -1086,9 +1086,26 @@ export function simulateTrafficFlow(
       }
     }
 
-    // 5c: Outbound automatic masquerade (nft.go:170-173)
+    // 5c: Outbound automatic masquerade (nft.go:170-173): select source IP from the egress route's next hop (connected subnet or gateway).
     if (!snatApplied && srcIp.family === 4 && snapshot.nat?.outbound?.mode === 'automatic' && isUplink(egressSegment, linksById)) {
-      const egressAddr = localOwners.find((o) => o.owner.segmentId === egressSegment.id && !o.owner.linkLocal && o.ip.family === 4)?.ip;
+      let egressAddr: ParsedIp | undefined = connectedRoutePrefix?.family === 4 ? connectedRoutePrefix.ip : undefined;
+      if (!egressAddr && egressSegment.addressing.ipv4.gateway) {
+        const gwIp = parseIp(egressSegment.addressing.ipv4.gateway);
+        if (gwIp?.family === 4) {
+          let bestPrefix: ParsedPrefix | null = null;
+          for (const entry of usableSegmentPrefixes) {
+            if (entry.segment.id !== egressSegment.id || entry.prefix.family !== 4) continue;
+            if (!prefixContains(entry.prefix, gwIp)) continue;
+            if (!bestPrefix || entry.prefix.bits > bestPrefix.bits) {
+              bestPrefix = entry.prefix;
+            }
+          }
+          if (bestPrefix) egressAddr = bestPrefix.ip;
+        }
+      }
+      if (!egressAddr) {
+        egressAddr = localOwners.find((o) => o.owner.segmentId === egressSegment.id && !o.owner.isVirtual && !o.owner.linkLocal && o.ip.family === 4)?.ip;
+      }
       snatApplied = true;
       if (egressAddr) {
         effectiveSrcIp = egressAddr;
