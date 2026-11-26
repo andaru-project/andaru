@@ -256,7 +256,7 @@ func (r Realizer) settle(ctx context.Context, from, to []placed) error {
 // dropStaleIPv6 removes the dynamic IPv6 addresses, and their prefix routes, left on a link whose new file takes none.
 // networkd keeps a delegated address after the file that asked for it is replaced, through reload and reconfigure
 // alike, until its lifetime ends (#45). It removes addresses it did not configure itself, so on such a link any dynamic
-// address is stale. A failure is only logged: the address still expires.
+// address the file does not declare is stale. A failure is only logged: the address still expires.
 func (r Realizer) dropStaleIPv6(ctx context.Context, to []placed) {
 	data, err := r.Run(ctx, "/usr/bin/networkctl", "list", "--json=short")
 	var managed []host.Managed
@@ -289,7 +289,7 @@ func (r Realizer) dropStaleIPv6(ctx context.Context, to []placed) {
 		if f < 0 || takesDynamicIPv6(to[f].data) {
 			continue
 		}
-		declared := declaredPrefixes(to[f].data)
+		declared, declaredRoutes := declaredPrefixes(to[f].data)
 		routes := map[netip.Prefix]bool{}
 		for _, a := range l.Addresses {
 			ip, err := netip.ParseAddr(a.Local)
@@ -297,12 +297,12 @@ func (r Realizer) dropStaleIPv6(ctx context.Context, to []placed) {
 				continue
 			}
 			address := netip.PrefixFrom(ip, a.PrefixLength)
-			if slices.Contains(declared, address) { // networkd may not have made it static yet
+			if slices.ContainsFunc(declared, func(p netip.Prefix) bool { return p.Addr() == ip }) { // networkd may not have made it static yet
 				continue
 			}
 			r.ip(ctx, l.Name, address, "address", "del", address.String(), "dev", l.Name)
 			// A /128 has no prefix route, and the prefix of an address the new file declares keeps its own.
-			if route := address.Masked(); route.Bits() < 128 && !routes[route] && !slices.ContainsFunc(declared, func(p netip.Prefix) bool { return p.Masked() == route }) {
+			if route := address.Masked(); route.Bits() < 128 && !routes[route] && !slices.Contains(declaredRoutes, route) {
 				routes[route] = true
 				r.ip(ctx, l.Name, address, "route", "del", route.String(), "dev", l.Name)
 			}
@@ -317,17 +317,21 @@ func (r Realizer) ip(ctx context.Context, link string, address netip.Prefix, arg
 	}
 }
 
-// declaredPrefixes lists the static addresses a rendered .network file declares.
-func declaredPrefixes(data []byte) []netip.Prefix {
-	var out []netip.Prefix
+// declaredPrefixes lists the static addresses a rendered .network file declares, and the routes it gets from them and
+// from its [Route] sections.
+func declaredPrefixes(data []byte) (addresses, routes []netip.Prefix) {
 	for line := range strings.SplitSeq(string(data), "\n") {
-		if value, ok := strings.CutPrefix(line, "Address="); ok {
-			if p, err := netip.ParsePrefix(value); err == nil {
-				out = append(out, p)
-			}
+		key, value, _ := strings.Cut(line, "=")
+		p, err := netip.ParsePrefix(value)
+		switch {
+		case err != nil:
+		case key == "Address":
+			addresses, routes = append(addresses, p), append(routes, p.Masked())
+		case key == "Destination":
+			routes = append(routes, p.Masked())
 		}
 	}
-	return out
+	return addresses, routes
 }
 
 // takesDynamicIPv6 says whether a rendered .network file may get IPv6 addresses from DHCPv6, delegation or router

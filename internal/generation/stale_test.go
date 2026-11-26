@@ -84,9 +84,10 @@ func TestTakesDynamicIPv6(t *testing.T) {
 // only once.
 func TestStaleRouteKeepsADeclaredPrefix(t *testing.T) {
 	b := staleBench(t, lanDelegated)
-	b.net.dynamic["eth1"] = []string{"fd00:a5d::1/64", "fd00:a5d::2/64", "fd00:b::1/64", "fd00:c::1/128", "fd00:d::/60", "fd00:e::1/64"}
-	// fd00:d:0:1::1/64 sits inside the stale /60 without being it; fd00:e::1/64 is declared as it is.
-	static := "[Match]\nName=eth1\n\n[Network]\nLinkLocalAddressing=no\nIPv6AcceptRA=no\nAddress=fd00:b::9/64\nAddress=fd00:d:0:1::1/64\nAddress=fd00:e::1/64\n"
+	b.net.dynamic["eth1"] = []string{"fd00:a5d::1/64", "fd00:a5d::2/64", "fd00:b::1/64", "fd00:c::1/128", "fd00:d::/60", "fd00:e::1/64", "fd00:f::1/64"}
+	// fd00:d:0:1::1/64 sits inside the stale /60 without being it; fd00:e::1 is declared at another length; the
+	// [Route] keeps fd00:f::/64.
+	static := "[Match]\nName=eth1\n\n[Network]\nLinkLocalAddressing=no\nIPv6AcceptRA=no\nAddress=fd00:b::9/64\nAddress=fd00:d:0:1::1/64\nAddress=fd00:e::1/56\n\n[Route]\nDestination=fd00:f::/64\nGateway=fd00:b::1\n"
 	if err := b.applyConfirmed(map[string]string{"50-andaru-eth0.network": uplinkDHCP, "50-andaru-eth1.network": static}); err != nil {
 		t.Fatal(err)
 	}
