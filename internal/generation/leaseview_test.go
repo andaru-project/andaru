@@ -69,6 +69,9 @@ func TestSyncLeasesWritesLeaseViewAndEvaluatesExpiry(t *testing.T) {
 	if err := b.r.SyncLeases(t.Context()); err != nil {
 		t.Fatal(err)
 	}
+	if info, err := os.Stat(filepath.Join(b.net.root, leasesViewFile)); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("leases.json mode = %v (%v), want 0600", info, err)
+	}
 
 	// Read 90 minutes after baseTime: 3600s leases are expired, 7200s leases stay active.
 	now := time.Unix(baseTime+5400, 0).UTC()
@@ -105,6 +108,9 @@ func TestSyncLeasesWritesLeaseViewAndEvaluatesExpiry(t *testing.T) {
 	if err := b.r.SyncLeases(t.Context()); err != nil {
 		t.Fatal(err)
 	}
+	if info, err := os.Stat(filepath.Join(b.net.root, leasesViewFile)); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("leases.json mode = %v (%v), want 0600", info, err)
+	}
 	view, err = ReadLeaseView(b.net.root, time.Unix(baseTime+60, 0).UTC())
 	if err != nil {
 		t.Fatal(err)
@@ -130,6 +136,9 @@ func TestSyncLeasesUpdatesSnapshotWhenDNSUnchanged(t *testing.T) {
 	b.kea(lease{"192.168.40.130", "", 0, 1, 7200, 1780000000})
 	if err := b.r.SyncLeases(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+	if info, err := os.Stat(filepath.Join(b.net.root, leasesViewFile)); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("leases.json mode = %v (%v), want 0600", info, err)
 	}
 	raw, err := os.ReadFile(filepath.Join(b.net.root, leasesViewFile))
 	if err != nil || !strings.Contains(string(raw), "192.168.40.130") {

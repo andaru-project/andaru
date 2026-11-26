@@ -135,10 +135,12 @@ func validateServices(d *declaration) []FieldError {
 			}
 		}
 		if e.Gateway != "" {
-			if a, err := netip.ParseAddr(e.Gateway); err != nil || !a.Is4() || !subnet.Contains(a) || edge(a) {
+			a, err := netip.ParseAddr(e.Gateway)
+			switch {
+			case err != nil || !a.Is4() || !subnet.Contains(a) || edge(a):
 				bad(p+"/gateway", "Expected a host IPv4 address inside the segment's subnet.")
-			} else {
-				e.Gateway = a.String()
+			case slices.ContainsFunc(taken, func(t [2]netip.Addr) bool { return !a.Less(t[0]) && !t[1].Less(a) }):
+				bad(p+"/gateway", "The gateway address is inside a dynamic range.")
 			}
 		}
 		if e.DomainName != "" && !searchDomain.MatchString(e.DomainName) {
@@ -150,21 +152,17 @@ func validateServices(d *declaration) []FieldError {
 			}
 		}
 		for j, raw := range e.NTPServers {
-			if a, err := netip.ParseAddr(raw); err != nil || !a.Is4() {
-				bad(fmt.Sprintf("%s/ntpServers/%d", p, j), "Expected an IPv4 address.")
-			} else {
-				e.NTPServers[j] = a.String()
+			if a, err := netip.ParseAddr(raw); err != nil || !validV4ServerAddr(a) {
+				bad(fmt.Sprintf("%s/ntpServers/%d", p, j), "Expected a unicast IPv4 address.")
 			}
 		}
 		if e.NextServer != "" {
-			if a, err := netip.ParseAddr(e.NextServer); err != nil || !a.Is4() {
-				bad(p+"/nextServer", "Expected an IPv4 address.")
-			} else {
-				e.NextServer = a.String()
+			if a, err := netip.ParseAddr(e.NextServer); err != nil || !validV4ServerAddr(a) {
+				bad(p+"/nextServer", "Expected a unicast IPv4 address.")
 			}
 		}
-		if e.BootFileName != "" && !printableASCII(e.BootFileName) {
-			bad(p+"/bootFileName", "Expected printable ASCII characters.")
+		if e.BootFileName != "" && (len(e.BootFileName) > 127 || !printableASCII(e.BootFileName)) {
+			bad(p+"/bootFileName", "Expected up to 127 printable ASCII characters.")
 		}
 		validateDHCPOptions(e.Options, false, p, bad)
 		macs, addresses := map[string]bool{}, map[netip.Addr]bool{}
@@ -475,6 +473,10 @@ func listensOn(d *declaration, a netip.Addr) bool {
 	})
 }
 
+func validV4ServerAddr(a netip.Addr) bool {
+	return a.Is4() && !a.IsUnspecified() && !a.IsLoopback() && !a.IsMulticast() && a != netip.AddrFrom4([4]byte{255, 255, 255, 255})
+}
+
 func printableASCII(s string) bool {
 	for i := range len(s) {
 		if s[i] < 0x20 || s[i] > 0x7e {
@@ -493,17 +495,17 @@ func validateDHCP6Options(domainSearch, ntpServers []string, options []dhcpOptio
 	for j, raw := range ntpServers {
 		if a, err := netip.ParseAddr(raw); err != nil || !a.Is6() || a.Is4In6() || a.Zone() != "" || a.IsLinkLocalUnicast() || !validUnicast(a) {
 			bad(fmt.Sprintf("%s/ntpServers/%d", p, j), "Expected a unicast IPv6 address that is not link-local.")
-		} else {
-			ntpServers[j] = a.String()
 		}
 	}
 	validateDHCPOptions(options, true, p, bad)
 }
 
 var (
-	reservedDHCP4Codes = []int{1, 3, 6, 15, 42, 50, 51, 53, 54, 55, 57, 58, 59, 61, 67, 82, 119}
-	reservedDHCP6Codes = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 18, 23, 24, 25, 26, 31, 39}
+	reservedDHCP4Codes = []int{1, 3, 6, 15, 42, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 61, 67, 81, 82, 119}
+	reservedDHCP6Codes = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 18, 19, 20, 23, 24, 25, 26, 31, 37, 38, 39, 79}
 )
+
+var uintOptionBits = map[string]int{"uint8": 8, "uint16": 16, "uint32": 32}
 
 func validateDHCPOptions(options []dhcpOption, v6 bool, p string, bad func(string, string)) {
 	seen := map[int]bool{}
@@ -513,8 +515,7 @@ func validateDHCPOptions(options []dhcpOption, v6 bool, p string, bad func(strin
 		maxCode = 65535
 		reserved = reservedDHCP6Codes
 	}
-	for j := range options {
-		opt := &options[j]
+	for j, opt := range options {
 		op := fmt.Sprintf("%s/options/%d", p, j)
 		switch {
 		case opt.Code < 1 || opt.Code > maxCode:
@@ -537,7 +538,6 @@ func validateDHCPOptions(options []dhcpOption, v6 bool, p string, bad func(strin
 			if v6 {
 				maxAddrs = 15
 			}
-			var addrs []string
 			ok := len(parts) > 0 && len(parts) <= maxAddrs
 			for _, part := range parts {
 				a, err := netip.ParseAddr(strings.TrimSpace(part))
@@ -545,7 +545,6 @@ func validateDHCPOptions(options []dhcpOption, v6 bool, p string, bad func(strin
 					ok = false
 					break
 				}
-				addrs = append(addrs, a.String())
 			}
 			if !ok {
 				if v6 {
@@ -553,26 +552,11 @@ func validateDHCPOptions(options []dhcpOption, v6 bool, p string, bad func(strin
 				} else {
 					bad(op+"/data", "Expected one or more IPv4 addresses separated by commas (at most 63).")
 				}
-			} else {
-				opt.Data = strings.Join(addrs, ", ")
 			}
-		case "uint8":
-			if v, err := strconv.ParseUint(opt.Data, 10, 8); err != nil {
-				bad(op+"/data", "Expected an integer from 0 to 255.")
-			} else {
-				opt.Data = strconv.FormatUint(v, 10)
-			}
-		case "uint16":
-			if v, err := strconv.ParseUint(opt.Data, 10, 16); err != nil {
-				bad(op+"/data", "Expected an integer from 0 to 65535.")
-			} else {
-				opt.Data = strconv.FormatUint(v, 10)
-			}
-		case "uint32":
-			if v, err := strconv.ParseUint(opt.Data, 10, 32); err != nil {
-				bad(op+"/data", "Expected an integer from 0 to 4294967295.")
-			} else {
-				opt.Data = strconv.FormatUint(v, 10)
+		case "uint8", "uint16", "uint32":
+			bits := uintOptionBits[opt.Type]
+			if _, err := strconv.ParseUint(opt.Data, 10, bits); err != nil {
+				bad(op+"/data", fmt.Sprintf("Expected an integer from 0 to %d.", uint64(1)<<bits-1))
 			}
 		case "boolean":
 			if opt.Data != "true" && opt.Data != "false" {
@@ -581,10 +565,8 @@ func validateDHCPOptions(options []dhcpOption, v6 bool, p string, bad func(strin
 		case "hex":
 			if !dhcpHexPlain.MatchString(opt.Data) && !dhcpHexColon.MatchString(opt.Data) {
 				bad(op+"/data", "Expected an even number of hexadecimal digits, optionally separated by colons.")
-			} else if clean := strings.ToLower(strings.ReplaceAll(opt.Data, ":", "")); len(clean)/2 > 255 {
+			} else if clean := strings.ReplaceAll(opt.Data, ":", ""); len(clean)/2 > 255 {
 				bad(op+"/data", "Expected at most 255 bytes of hexadecimal data.")
-			} else {
-				opt.Data = clean
 			}
 		}
 	}

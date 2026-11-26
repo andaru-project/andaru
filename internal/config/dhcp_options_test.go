@@ -15,12 +15,19 @@ func TestDHCPOptionsValidationAndCanonicalization(t *testing.T) {
 		"gateway outside subnet": {func(d map[string]any) { entry(d)["gateway"] = "198.51.100.1" }, "/dhcp/0/gateway"},
 		"gateway on network":     {func(d map[string]any) { entry(d)["gateway"] = "192.0.2.0" }, "/dhcp/0/gateway"},
 		"gateway on broadcast":   {func(d map[string]any) { entry(d)["gateway"] = "192.0.2.255" }, "/dhcp/0/gateway"},
+		"gateway in pool":        {func(d map[string]any) { entry(d)["gateway"] = "192.0.2.150" }, "/dhcp/0/gateway"},
 		"gateway IPv6":           {func(d map[string]any) { entry(d)["gateway"] = "fd00::1" }, "/dhcp/0/gateway"},
 		"bad domainName":         {func(d map[string]any) { entry(d)["domainName"] = "bad..domain" }, "/dhcp/0/domainName"},
 		"bad domainSearch":       {func(d map[string]any) { entry(d)["domainSearch"] = []any{"ok.example", "-bad"} }, "/dhcp/0/domainSearch/1"},
 		"bad ntpServer":          {func(d map[string]any) { entry(d)["ntpServers"] = []any{"fd00::123"} }, "/dhcp/0/ntpServers/0"},
+		"broadcast ntpServer":    {func(d map[string]any) { entry(d)["ntpServers"] = []any{"255.255.255.255"} }, "/dhcp/0/ntpServers/0"},
+		"loopback ntpServer":     {func(d map[string]any) { entry(d)["ntpServers"] = []any{"127.0.0.1"} }, "/dhcp/0/ntpServers/0"},
 		"bad nextServer":         {func(d map[string]any) { entry(d)["nextServer"] = "not-an-ip" }, "/dhcp/0/nextServer"},
+		"broadcast nextServer":   {func(d map[string]any) { entry(d)["nextServer"] = "255.255.255.255" }, "/dhcp/0/nextServer"},
+		"multicast nextServer":   {func(d map[string]any) { entry(d)["nextServer"] = "224.0.0.1" }, "/dhcp/0/nextServer"},
+		"unspecified nextServer": {func(d map[string]any) { entry(d)["nextServer"] = "0.0.0.0" }, "/dhcp/0/nextServer"},
 		"bad bootFileName":       {func(d map[string]any) { entry(d)["bootFileName"] = "pxe\nnext" }, "/dhcp/0/bootFileName"},
+		"long bootFileName":      {func(d map[string]any) { entry(d)["bootFileName"] = strings.Repeat("a", 128) }, "/dhcp/0/bootFileName"},
 		"option code > 254": {func(d map[string]any) {
 			entry(d)["options"] = []any{map[string]any{"code": 255, "type": "uint8", "data": "1"}}
 		}, "/dhcp/0/options/0/code"},
@@ -30,8 +37,14 @@ func TestDHCPOptionsValidationAndCanonicalization(t *testing.T) {
 		"option reserved code 42": {func(d map[string]any) {
 			entry(d)["options"] = []any{map[string]any{"code": 42, "type": "ip", "data": "192.0.2.1"}}
 		}, "/dhcp/0/options/0/code"},
+		"option reserved code 52": {func(d map[string]any) {
+			entry(d)["options"] = []any{map[string]any{"code": 52, "type": "uint8", "data": "1"}}
+		}, "/dhcp/0/options/0/code"},
 		"option reserved code 67": {func(d map[string]any) {
 			entry(d)["options"] = []any{map[string]any{"code": 67, "type": "string", "data": "pxe"}}
+		}, "/dhcp/0/options/0/code"},
+		"option reserved code 81": {func(d map[string]any) {
+			entry(d)["options"] = []any{map[string]any{"code": 81, "type": "string", "data": "host"}}
 		}, "/dhcp/0/options/0/code"},
 		"option reserved code 119": {func(d map[string]any) {
 			entry(d)["options"] = []any{map[string]any{"code": 119, "type": "string", "data": "lan"}}
@@ -115,6 +128,34 @@ func TestDHCPOptionsValidationAndCanonicalization(t *testing.T) {
 	if len(opts) != 8 || opts[0].Code != 66 || opts[1].Code != 150 || opts[1].Data != "192.0.2.10, 192.0.2.11" || opts[2].Data != "aabbcc" || opts[3].Data != "7" || opts[7].Code != 252 || !opts[7].AlwaysSend {
 		t.Fatalf("unexpected canonical options: %+v", opts)
 	}
+
+	// Long valid payloads (32 IPv4s expanding >512 chars after normalization, and 255-byte colon-hex) must round-trip cleanly.
+	d2 := servicesFixture(t)
+	e2 := entry(d2)
+	ips := make([]string, 32)
+	for i := range ips {
+		ips[i] = "192.168.100.100"
+	}
+	hexBytes := make([]string, 255)
+	for i := range hexBytes {
+		hexBytes[i] = "AB"
+	}
+	e2["bootFileName"] = strings.Repeat("b", 127)
+	e2["options"] = []any{
+		map[string]any{"code": 150, "type": "ip", "data": strings.Join(ips, ",")},
+		map[string]any{"code": 224, "type": "hex", "data": strings.Join(hexBytes, ":")},
+	}
+	got2, err := decodeMap(t, d2)
+	if err != nil {
+		t.Fatalf("long valid options refused: %v", err)
+	}
+	stored, err := canonical(got2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeDeclaration(stored); err != nil {
+		t.Fatalf("canonical round-trip failed: %v", err)
+	}
 }
 
 func TestDHCP6OptionsValidation(t *testing.T) {
@@ -136,6 +177,9 @@ func TestDHCP6OptionsValidation(t *testing.T) {
 		}, "/dhcp6/0/options/0/code"},
 		"reserved code 31": {func(d map[string]any) {
 			entry6(d)["options"] = []any{map[string]any{"code": 31, "type": "ip", "data": "fd00:1::123"}}
+		}, "/dhcp6/0/options/0/code"},
+		"reserved code 79": {func(d map[string]any) {
+			entry6(d)["options"] = []any{map[string]any{"code": 79, "type": "hex", "data": "0001"}}
 		}, "/dhcp6/0/options/0/code"},
 		"ip option with IPv4": {func(d map[string]any) {
 			entry6(d)["options"] = []any{map[string]any{"code": 200, "type": "ip", "data": "192.0.2.1"}}

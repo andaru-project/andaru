@@ -71,18 +71,17 @@ func leaseTimes(cltt int64, valid int) (*time.Time, *time.Time) {
 }
 
 func compareAddrText(a, b string) int {
-	pa, ea := netip.ParsePrefix(a)
-	pb, eb := netip.ParsePrefix(b)
-	if ea == nil && eb == nil {
-		if c := pa.Addr().Compare(pb.Addr()); c != 0 {
-			return c
+	if strings.ContainsRune(a, '/') && strings.ContainsRune(b, '/') {
+		if pa, ea := netip.ParsePrefix(a); ea == nil {
+			if pb, eb := netip.ParsePrefix(b); eb == nil {
+				return cmp.Or(pa.Addr().Compare(pb.Addr()), cmp.Compare(pa.Bits(), pb.Bits()))
+			}
 		}
-		return cmp.Compare(pa.Bits(), pb.Bits())
 	}
-	aa, ea := netip.ParseAddr(a)
-	ab, eb := netip.ParseAddr(b)
-	if ea == nil && eb == nil {
-		return aa.Compare(ab)
+	if aa, ea := netip.ParseAddr(a); ea == nil {
+		if ab, eb := netip.ParseAddr(b); eb == nil {
+			return aa.Compare(ab)
+		}
 	}
 	return cmp.Compare(a, b)
 }
@@ -167,6 +166,12 @@ func readStoredLeaseView(root string) (LeaseView, error) {
 	return view, nil
 }
 
+func expireState(state *string, expiresAt *time.Time, now time.Time) {
+	if *state == "active" && expiresAt != nil && !expiresAt.After(now) {
+		*state = "expired"
+	}
+}
+
 // ReadLeaseView reads the lease snapshot written by andaru realize leases; it needs no access to Kea's socket.
 func ReadLeaseView(root string, now time.Time) (LeaseView, error) {
 	view, err := readStoredLeaseView(root)
@@ -174,14 +179,10 @@ func ReadLeaseView(root string, now time.Time) (LeaseView, error) {
 		return LeaseView{}, err
 	}
 	for i := range view.V4 {
-		if view.V4[i].State == "active" && view.V4[i].ExpiresAt != nil && !view.V4[i].ExpiresAt.After(now) {
-			view.V4[i].State = "expired"
-		}
+		expireState(&view.V4[i].State, view.V4[i].ExpiresAt, now)
 	}
 	for i := range view.V6 {
-		if view.V6[i].State == "active" && view.V6[i].ExpiresAt != nil && !view.V6[i].ExpiresAt.After(now) {
-			view.V6[i].State = "expired"
-		}
+		expireState(&view.V6[i].State, view.V6[i].ExpiresAt, now)
 	}
 	return view, nil
 }
@@ -205,5 +206,6 @@ func writeLeaseView(root string, v4 []Lease4View, v6 []Lease6View) error {
 	if err := os.MkdirAll(root+leasesDir, 0o755); err != nil {
 		return err
 	}
-	return writeAtomic(path, body, 0o644)
+	// Root-only (0600): andaru-engine runs as root and serves leases behind status.read; other daemons need only leases.conf.
+	return writeAtomic(path, body, 0o600)
 }

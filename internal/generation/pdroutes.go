@@ -69,10 +69,17 @@ type kea6Config struct {
 	}
 }
 
+type kea6Sync struct {
+	records []string
+	static  map[string]bool
+	view    []Lease6View
+	ok      bool
+}
+
 // syncKea6 returns the DHCPv6 lease names, its static names, and its lease view (with ok false when Kea could
 // not be queried), and reconciles the delegated-prefix routes; without a DHCPv6 server it removes every route it
 // installed. static4 are the DHCPv4 static names, which no DHCPv6 lease takes.
-func (r Realizer) syncKea6(ctx context.Context, static4 map[string]bool) ([]string, map[string]bool, []Lease6View, bool, error) {
+func (r Realizer) syncKea6(ctx context.Context, static4 map[string]bool) (kea6Sync, error) {
 	var cfg kea6Config
 	var leases []keaLease
 	// Taken before the lease list: the hook runs after Kea commits, so any lease an event names is in the list.
@@ -82,10 +89,10 @@ func (r Realizer) syncKea6(ctx context.Context, static4 map[string]bool) ([]stri
 	switch {
 	case os.IsNotExist(err):
 	case err != nil:
-		return nil, nil, nil, false, err
+		return kea6Sync{}, err
 	default:
 		if err := json.Unmarshal(raw, &cfg); err != nil {
-			return nil, nil, nil, false, fmt.Errorf("read the DHCPv6 server's configuration: %w", err)
+			return kea6Sync{}, fmt.Errorf("read the DHCPv6 server's configuration: %w", err)
 		}
 	}
 	static6 := staticNames6(cfg)
@@ -93,14 +100,14 @@ func (r Realizer) syncKea6(ctx context.Context, static4 map[string]bool) ([]stri
 	old := r.replacedPools()
 	table, served := r.nextHops(cfg, events, old)
 	if err := r.saveNextHops(table); err != nil {
-		return nil, static6, nil, false, err
+		return kea6Sync{static: static6}, err
 	}
 	done()
 	if running {
 		if leases, err = r.askLeases(ctx, kea6Socket, "lease6-get-all"); err != nil {
 			// Its own names and routes wait for it; the DHCPv4 names do not.
 			slog.Warn("ask the DHCPv6 server for its leases", "error", err)
-			return r.publishedNames(true), static6, nil, false, nil
+			return kea6Sync{records: r.publishedNames(true), static: static6}, nil
 		}
 	}
 	pools := delegatedPools(cfg)
@@ -110,9 +117,9 @@ func (r Realizer) syncKea6(ctx context.Context, static4 map[string]bool) ([]stri
 		}
 	}
 	if err := r.syncRoutes(ctx, leases, table, served, pools, r.waitingInterfaces(cfg)); err != nil {
-		return nil, static6, nil, false, err
+		return kea6Sync{static: static6}, err
 	}
-	return lease6Records(cfg, leases, static4), static6, buildLease6Views(cfg, leases), true, nil
+	return kea6Sync{records: lease6Records(cfg, leases, static4), static: static6, view: buildLease6Views(cfg, leases), ok: true}, nil
 }
 
 // staticNames6 are the names DHCPv6 static leases publish: only a static address does, a static prefix alone

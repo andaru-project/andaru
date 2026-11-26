@@ -2941,7 +2941,7 @@
         "data": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 512
+          "maxLength": 1100
         },
         "alwaysSend": {
           "type": "boolean"
@@ -3033,13 +3033,24 @@
             },
             "bootFileName": {
               "type": "string",
-              "maxLength": 128
+              "maxLength": 127
             },
             "options": {
               "type": "array",
               "maxItems": 32,
               "items": {
-                "$ref": "#/$defs/dhcpOption"
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/dhcpOption"
+                  },
+                  {
+                    "properties": {
+                      "code": {
+                        "maximum": 254
+                      }
+                    }
+                  }
+                ]
               }
             },
             "staticLeases": {

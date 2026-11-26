@@ -178,9 +178,9 @@ func (r Realizer) syncLeases(ctx context.Context) error {
 		}
 	}
 	// Its routes are reconciled whatever the DHCPv4 server does.
-	v6, static6, view6, ok6, err6 := r.syncKea6(ctx, staticNames4(cfg))
+	k6, err6 := r.syncKea6(ctx, staticNames4(cfg))
 	if err6 != nil {
-		v6, failed = r.publishedNames(true), err6
+		k6.records, failed = r.publishedNames(true), err6
 	}
 	records := []string{}
 	var view4 []Lease4View
@@ -195,23 +195,26 @@ func (r Realizer) syncLeases(ctx context.Context) error {
 		if r.afterLeaseRead != nil {
 			r.afterLeaseRead()
 		}
-		records = leaseRecords(cfg, leases, static6)
+		records = leaseRecords(cfg, leases, k6.static)
 		view4 = buildLease4Views(cfg, leases)
 		ok4 = true
 	}
-	if !ok4 || !ok6 {
-		prev, _ := readStoredLeaseView(r.Root)
-		if !ok4 {
-			view4 = prev.V4
+	if ok4 || k6.ok {
+		view6 := k6.view
+		if !ok4 || !k6.ok {
+			prev, _ := readStoredLeaseView(r.Root)
+			if !ok4 {
+				view4 = prev.V4
+			}
+			if !k6.ok {
+				view6 = prev.V6
+			}
 		}
-		if !ok6 {
-			view6 = prev.V6
+		if err := writeLeaseView(r.Root, view4, view6); err != nil {
+			failed = errors.Join(failed, err)
 		}
 	}
-	if err := writeLeaseView(r.Root, view4, view6); err != nil {
-		failed = errors.Join(failed, err)
-	}
-	records = append(records, v6...)
+	records = append(records, k6.records...)
 	body := "server:\n"
 	for _, line := range records {
 		body += "\t" + line + "\n"
