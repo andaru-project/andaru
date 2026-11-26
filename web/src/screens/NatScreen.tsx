@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { ApiError, reportError, saveFailure, type ApiClient } from '../api';
 import type { OneToOneNat, OutboundNat, OutboundNatMode, PortForward, SavedObject, Session, Snapshot } from '../types';
+import { zoneColorMap } from '../zones';
 import { useResource } from '../useResource';
 import { Address } from './Address';
 import { Loaded } from './Loaded';
@@ -73,11 +74,12 @@ function NatOrderToolbar({
 }
 
 function PortForwardRow({
-  item, position, zones, addresses, canWrite, unlocked, busy, onToggle, onEdit, onDelete,
+  item, position, zones, zoneColors, addresses, canWrite, unlocked, busy, onToggle, onEdit, onDelete,
 }: {
   item: SavedObject<PortForward>;
   position: number;
   zones: Map<string, string>;
+  zoneColors: Map<string, string>;
   addresses: Map<string, string>;
   canWrite: boolean;
   unlocked: boolean;
@@ -109,7 +111,7 @@ function PortForwardRow({
       </Table.Td>
       <Table.Td data-label="Ingress">
         <Group gap={6}>
-          {pf.ingressZones.map((id) => <ZoneBadge key={id} name={zones.get(id) ?? 'unknown zone'} />)}
+          {pf.ingressZones.map((id) => <ZoneBadge key={id} name={zones.get(id) ?? 'unknown zone'} color={zoneColors.get(id)} />)}
         </Group>
       </Table.Td>
       <Table.Td data-label="Match">
@@ -167,11 +169,12 @@ function PortForwardRow({
 }
 
 function OneToOneRow({
-  item, position, zones, addresses, canWrite, unlocked, busy, onToggle, onEdit, onDelete,
+  item, position, zones, zoneColors, addresses, canWrite, unlocked, busy, onToggle, onEdit, onDelete,
 }: {
   item: SavedObject<OneToOneNat>;
   position: number;
   zones: Map<string, string>;
+  zoneColors: Map<string, string>;
   addresses: Map<string, string>;
   canWrite: boolean;
   unlocked: boolean;
@@ -202,7 +205,7 @@ function OneToOneRow({
           : <Text size="sm">{entry.enabled ? 'on' : 'off'}</Text>}
       </Table.Td>
       <Table.Td data-label="Zone">
-        <ZoneBadge name={zones.get(entry.zone) ?? 'unknown zone'} />
+        <ZoneBadge name={zones.get(entry.zone) ?? 'unknown zone'} color={zoneColors.get(entry.zone)} />
       </Table.Td>
       <Table.Td data-label="External">
         {entry.noBinat
@@ -369,6 +372,7 @@ export function NatScreen({ api, session, onSaved, onSessionLost }: NatScreenPro
       <Loaded resource={resource} what="NAT settings">
         {({ forwards, oneToOne, outbound, snapshot }) => {
           const zones = new Map(snapshot.value.zones.map((z) => [z.id, z.name]));
+          const zoneColors = zoneColorMap(snapshot.value.zones);
           const addresses = new Map((snapshot.value.aliases?.addresses ?? []).map((a) => [a.id, a.name]));
           const management = snapshot.value.segments.find((s) => s.id === snapshot.value.management?.segment);
           const effectiveOutbound = outboundOverride ? outboundOverride.value : outbound;
@@ -518,6 +522,7 @@ export function NatScreen({ api, session, onSaved, onSessionLost }: NatScreenPro
                                       item={item}
                                       position={position}
                                       zones={zones}
+                                      zoneColors={zoneColors}
                                       addresses={addresses}
                                       canWrite={canWrite}
                                       unlocked={unlocked}
@@ -600,6 +605,7 @@ export function NatScreen({ api, session, onSaved, onSessionLost }: NatScreenPro
                                       item={item}
                                       position={position}
                                       zones={zones}
+                                      zoneColors={zoneColors}
                                       addresses={addresses}
                                       canWrite={canWrite}
                                       unlocked={unlocked}

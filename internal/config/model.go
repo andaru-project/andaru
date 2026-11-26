@@ -133,7 +133,10 @@ type segment struct {
 	Zone       string     `json:"zone"`
 	Addressing addressing `json:"addressing"`
 }
-type zone struct{ identity }
+type zone struct {
+	identity
+	Color string `json:"color,omitempty"`
+}
 
 // firewallZone is the built-in zone that is the box itself. Nothing stores it: it has no interfaces and no
 // name to change, and a rule names it as its destination to reach the firewall.

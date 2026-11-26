@@ -75,7 +75,8 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
   const configured = all.filter((row) => row.saved);
   const others = all.filter((row) => !row.saved);
   const segmentOf = (link: SavedLink): Segment | undefined => saved?.snapshot.value.segments.find((segment) => segment.link === link.id);
-  const zoneName = (id: string) => saved?.snapshot.value.zones.find((zone) => zone.id === id)?.name ?? id;
+  const zoneOf = (id: string) => saved?.snapshot.value.zones.find((zone) => zone.id === id);
+  const zoneName = (id: string) => zoneOf(id)?.name ?? id;
   const linkName = (id: string) => saved?.snapshot.value.links.find((link) => link.id === id)?.name ?? 'another link';
   // The panel reads the objects again, so a save is guarded by the versions they have now.
   const edit = async (key: string, live: LinkStatus | undefined, link: SavedLink | undefined, segment: Segment | undefined) => {
@@ -175,7 +176,7 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
                     <Table.Td data-label="Interface">
                       <Group gap="xs">
                         <Text fw={600}>{link.name}</Text>
-                        {segment && <ZoneBadge name={zoneName(segment.zone)} />}
+                        {segment && <ZoneBadge name={zoneName(segment.zone)} color={zoneOf(segment.zone)?.color} />}
                         {conflict && <Badge color="red" variant="light">Conflict: several saved links</Badge>}
                       </Group>
                       {/* Under the name: the interface's role, and its kind and segment when they are not the usual. */}

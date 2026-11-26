@@ -1,4 +1,4 @@
-import type { Finding, Preview, SavedLink, Snapshot } from './types';
+import type { Finding, Preview, SavedLink, Snapshot, Zone, ZoneColor } from './types';
 
 const namePrefix: Record<string, string> = { vlan: 'vl', bridge: 'br', bond: 'bo', pppoe: 'pp' };
 
@@ -45,14 +45,26 @@ export function zonesByInterface(snapshot: Snapshot, preview: Preview) {
   return zones;
 }
 
-// A zone keeps one colour everywhere. The two every box has take the colours firewalls have long given them,
-// green inside and red outside; any other zone takes one from its name, so it is the same on every page. Each
-// has a shade that shows as a line on the light ground, which yellow has not.
-const known = new Map([['lan', 'green'], ['wan', 'red']]);
-const palette = ['blue', 'orange', 'teal', 'pink', 'cyan', 'lime'];
-export function zoneColor(name: string) {
+// A zone keeps one colour everywhere. When an explicit colour is saved on the zone it takes precedence;
+// otherwise the two every box has take green (LAN) and red (WAN) and any other zone takes a deterministic
+// shade from its name. Every colour in the palette has a legible outline on both light and dark grounds.
+export const zoneColors: readonly ZoneColor[] = ['green', 'red', 'blue', 'orange', 'teal', 'pink', 'cyan', 'lime', 'violet', 'indigo'];
+const zoneColorSet = new Set<string>(zoneColors);
+const known = new Map<string, ZoneColor>([['lan', 'green'], ['wan', 'red']]);
+const palette: readonly ZoneColor[] = ['blue', 'orange', 'teal', 'pink', 'cyan', 'lime'];
+
+export function zoneColor(name: string, explicit?: string): ZoneColor {
+  if (explicit && zoneColorSet.has(explicit)) return explicit as ZoneColor;
   const lower = name.toLowerCase();
   let hash = 5381;
   for (const character of lower) hash = (hash * 33 + character.codePointAt(0)!) % 2147483647;
   return known.get(lower) ?? palette[hash % palette.length];
+}
+
+export function zoneColorMap(zones: Zone[]): Map<string, ZoneColor> {
+  const out = new Map<string, ZoneColor>();
+  for (const z of zones) {
+    if (z.color && zoneColorSet.has(z.color)) out.set(z.id, z.color);
+  }
+  return out;
 }

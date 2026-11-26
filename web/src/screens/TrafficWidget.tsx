@@ -47,7 +47,7 @@ const shown = (rate: number | null) => (rate === null ? '—' : bitrate(rate));
 
 // An interface's lines take its zone's colour: a shade dark enough on the light ground, and a light one in the
 // dark scheme. The two are custom properties the stylesheet reads; without a zone it falls back to its own.
-const lineColors = (zone: string) => ({ '--traffic-line-light': `var(--mantine-color-${zoneColor(zone)}-9)`, '--traffic-line-dark': `var(--mantine-color-${zoneColor(zone)}-4)` }) as CSSProperties;
+const lineColors = (zone: string, color?: string) => ({ '--traffic-line-light': `var(--mantine-color-${zoneColor(zone, color)}-9)`, '--traffic-line-dark': `var(--mantine-color-${zoneColor(zone, color)}-4)` }) as CSSProperties;
 
 // A direction's row of figures: its line as drawn, its arrow and name, then the rate now, the hour's average
 // and its peak. The row is the legend too.
@@ -66,7 +66,7 @@ function Figures({ arrow, name, heard, line, values }: { arrow: string; name: st
 // One interface's hour: its name and zone, the graph, and the same in figures. end is the newest reading of
 // any interface, so an interface that has gone shows where it stopped. live is false while the box does not
 // answer: what is held is then the past, and has no rate now.
-function Graph({ entry, zone, end, intervalSeconds, live }: { entry: Traffic['interfaces'][number]; zone: string | undefined; end: number; intervalSeconds: number; live: boolean }) {
+function Graph({ entry, zone, color, end, intervalSeconds, live }: { entry: Traffic['interfaces'][number]; zone: string | undefined; color?: string; end: number; intervalSeconds: number; live: boolean }) {
   const timeZone = useTimeZone();
   // every is each reading's rate, for the figures; points is what is drawn and marked, thinned to a line.
   const every = rates(entry.samples, intervalSeconds);
@@ -102,10 +102,10 @@ function Graph({ entry, zone, end, intervalSeconds, live }: { entry: Traffic['in
   const place = (rate: number): CSSProperties => ({ left: `${(x(mark!.at) / width) * 100}%`, top: `${(y(rate) / height) * 100}%` });
 
   return (
-    <section aria-label={`Traffic on ${entry.name}`} style={zone ? lineColors(zone) : undefined}>
+    <section aria-label={`Traffic on ${entry.name}`} style={zone ? lineColors(zone, color) : undefined}>
       {/* The scale and the span are labels beside the graph, not in it, where the lines would run through them. */}
       <Group gap="xs" mb={4} justify="space-between">
-        <Group gap="xs"><Text ff="monospace" fw={600}>{entry.name}</Text><ZoneBadge name={zone} /></Group>
+        <Group gap="xs"><Text ff="monospace" fw={600}>{entry.name}</Text><ZoneBadge name={zone} color={color} /></Group>
         <Text c="dimmed" size="xs" className="tabular">0 – {bitrate(top)}</Text>
       </Group>
       <div className="traffic-frame" tabIndex={0} role="group" aria-label={`${entry.name} over the last hour: the arrow keys read out a point`} onPointerMove={nearest} onPointerDown={nearest} onPointerCancel={() => setMarked(undefined)} onPointerLeave={(event) => { if (event.pointerType !== 'touch') setMarked(undefined); }} onKeyDown={step} onBlur={() => setMarked(undefined)}>
@@ -137,7 +137,7 @@ function Graph({ entry, zone, end, intervalSeconds, live }: { entry: Traffic['in
   );
 }
 
-export function TrafficView({ traffic, zones, selected, live, onSelect }: { traffic: Traffic; zones: Map<string, string>; selected: string[]; live: boolean; onSelect(names: string[]): void }) {
+export function TrafficView({ traffic, zones, zoneColors, selected, live, onSelect }: { traffic: Traffic; zones: Map<string, string>; zoneColors?: Map<string, string>; selected: string[]; live: boolean; onSelect(names: string[]): void }) {
   const end = newest(traffic)?.time;
   if (traffic.interfaces.length === 0 || end === undefined) return <Text c="dimmed">No readings yet.</Text>;
   // With one or two interfaces all of them show and there is nothing to choose. With more, the chosen ones
@@ -159,7 +159,10 @@ export function TrafficView({ traffic, zones, selected, live, onSelect }: { traf
           </Menu.Dropdown>
         </Menu>
       )}
-      {drawn.map((entry) => <Graph key={entry.name} entry={entry} zone={zones.get(entry.name)} end={end} intervalSeconds={traffic.intervalSeconds} live={live} />)}
+      {drawn.map((entry) => {
+        const zone = zones.get(entry.name);
+        return <Graph key={entry.name} entry={entry} zone={zone} color={zone ? zoneColors?.get(zone) : undefined} end={end} intervalSeconds={traffic.intervalSeconds} live={live} />;
+      })}
     </Stack>
   );
 }
@@ -167,7 +170,7 @@ export function TrafficView({ traffic, zones, selected, live, onSelect }: { traf
 // Which interfaces show: the user's choice, and the first choice made for them.
 export interface TrafficChoice { selected?: string[]; first?: { names: string[]; zoned: boolean } }
 
-export function TrafficWidget({ api, zones, zonesKnown, choice, onSessionLost }: { api: ApiClient; zones: Map<string, string>; zonesKnown: boolean; choice?: [TrafficChoice, Dispatch<SetStateAction<TrafficChoice>>]; onSessionLost(): void }) {
+export function TrafficWidget({ api, zones, zoneColors, zonesKnown, choice, onSessionLost }: { api: ApiClient; zones: Map<string, string>; zoneColors?: Map<string, string>; zonesKnown: boolean; choice?: [TrafficChoice, Dispatch<SetStateAction<TrafficChoice>>]; onSessionLost(): void }) {
   // The hour is read once; after that the box is asked only for what came after the newest reading held.
   const held = useRef<Traffic>(undefined);
   const resource = usePolledResource(useCallback(async () => {
@@ -186,5 +189,5 @@ export function TrafficWidget({ api, zones, zonesKnown, choice, onSessionLost }:
   const setSelected = (names: string[]) => setChoice((held) => ({ ...held, selected: names }));
   const traffic = resource.data;
   if (traffic && traffic.interfaces.length > 2 && (!first || (!first.zoned && zonesKnown))) setChoice((held) => ({ ...held, first: { names: firstShown(traffic, zones), zoned: zonesKnown } }));
-  return <Loaded resource={resource} what="traffic">{(loaded) => <TrafficView traffic={loaded} zones={zones} selected={selected ?? first?.names ?? firstShown(loaded, zones)} live={resource.error === ''} onSelect={setSelected} />}</Loaded>;
+  return <Loaded resource={resource} what="traffic">{(loaded) => <TrafficView traffic={loaded} zones={zones} zoneColors={zoneColors} selected={selected ?? first?.names ?? firstShown(loaded, zones)} live={resource.error === ''} onSelect={setSelected} />}</Loaded>;
 }

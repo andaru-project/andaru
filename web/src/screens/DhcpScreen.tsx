@@ -164,6 +164,7 @@ export function DhcpScreen({ api, session, onSaved, onSessionLost }: DhcpScreenP
     : (canReadConfig ? 'servers' : 'leases');
   const segments = snapshot?.value.segments ?? [];
   const zones = new Map((snapshot?.value.zones ?? []).map((z) => [z.id, z.name]));
+  const zoneColors = new Map((snapshot?.value.zones ?? []).filter((z) => z.color).map((z) => [z.id, z.color!]));
   const segmentById = new Map(segments.map((s) => [s.id, s]));
   const dhcp4BySegment = new Map((snapshot?.value.dhcp ?? []).map((e) => [e.segment, e]));
   const dhcp6BySegment = new Map((snapshot?.value.dhcp6 ?? []).map((e) => [e.segment, e]));
@@ -315,7 +316,7 @@ export function DhcpScreen({ api, session, onSaved, onSessionLost }: DhcpScreenP
                                 <Table.Td data-label="Segment">
                                   <Group gap="xs">
                                     <Text fw={600}>{segment.name}</Text>
-                                    <ZoneBadge name={zones.get(segment.zone) ?? segment.zone} />
+                                    <ZoneBadge name={zones.get(segment.zone) ?? segment.zone} color={zoneColors.get(segment.zone)} />
                                   </Group>
                                   {info && <Text size="sm" c="dimmed" ff="monospace">{info.subnet}</Text>}
                                 </Table.Td>
@@ -384,7 +385,7 @@ export function DhcpScreen({ api, session, onSaved, onSessionLost }: DhcpScreenP
                                 <Table.Td data-label="Segment">
                                   <Group gap="xs">
                                     <Text fw={600}>{segment.name}</Text>
-                                    <ZoneBadge name={zones.get(segment.zone) ?? segment.zone} />
+                                    <ZoneBadge name={zones.get(segment.zone) ?? segment.zone} color={zoneColors.get(segment.zone)} />
                                   </Group>
                                   <Text size="sm" c="dimmed" ff="monospace">
                                     {delegated ? `Delegated · subnet ${segment.addressing.ipv6.subnetId ?? '0'}` : static6?.prefix}
@@ -539,7 +540,7 @@ export function DhcpScreen({ api, session, onSaved, onSessionLost }: DhcpScreenP
                               {seg ? (
                                 <Group gap="xs">
                                   <Text size="sm">{seg.name}</Text>
-                                  <ZoneBadge name={zones.get(seg.zone) ?? seg.zone} />
+                                  <ZoneBadge name={zones.get(seg.zone) ?? seg.zone} color={zoneColors.get(seg.zone)} />
                                 </Group>
                               ) : (
                                 <Text size="sm" c="dimmed">{item.lease.segment || '—'}</Text>

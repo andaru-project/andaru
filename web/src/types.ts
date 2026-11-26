@@ -403,13 +403,22 @@ export interface OneToOneNat {
   reflection?: boolean;
 }
 
+export type ZoneColor = 'green' | 'red' | 'blue' | 'orange' | 'teal' | 'pink' | 'cyan' | 'lime' | 'violet' | 'indigo';
+
+export interface Zone {
+  id: string;
+  name: string;
+  description?: string;
+  color?: ZoneColor;
+}
+
 export interface Snapshot {
   state: 'saved';
   savedVersion: string;
   value: {
     links: SavedLink[];
     segments: Segment[];
-    zones: Array<{ id: string; name: string }>;
+    zones: Zone[];
     management?: { segment: string; allowedSources?: string[] };
     dhcp?: Dhcp4Entry[];
     dhcp6?: Dhcp6Entry[];

@@ -30,6 +30,7 @@ import { UpgradeScreen } from './screens/UpgradeScreen';
 import { UpdatesScreen } from './screens/UpdatesScreen';
 import { SystemDetailsScreen, updateNotice } from './screens/SystemWidget';
 import { UsersScreen } from './screens/UsersScreen';
+import { ZonesScreen } from './screens/ZonesScreen';
 import type { NotificationList, Session, User } from './types';
 import { useEvents, useResource, useVisiblePoll, type Resource } from './useResource';
 
@@ -59,6 +60,7 @@ const pageTitles: Record<string, string> = {
   '/firewall/rules': 'Rules',
   '/firewall/nat': 'NAT',
   '/firewall/aliases': 'Aliases',
+  '/firewall/zones': 'Zones',
   '/changes': 'Review and apply',
   '/system/details': 'System details',
   '/system/updates': 'Software updates',
@@ -223,7 +225,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
         { to: '/network/diagnostics', label: 'Diagnostics', visible: canReadStatus },
       ],
     },
-    { label: 'Firewall', items: [{ to: '/firewall/rules', label: 'Rules', visible: canReadChanges }, { to: '/firewall/nat', label: 'NAT', visible: canReadChanges }, { to: '/firewall/aliases', label: 'Aliases', visible: canReadChanges }] },
+    { label: 'Firewall', items: [{ to: '/firewall/rules', label: 'Rules', visible: canReadChanges }, { to: '/firewall/nat', label: 'NAT', visible: canReadChanges }, { to: '/firewall/aliases', label: 'Aliases', visible: canReadChanges }, { to: '/firewall/zones', label: 'Zones', visible: canReadChanges }] },
     { label: 'Changes', items: [{ to: '/changes', label: 'Review and apply', visible: canReadChanges }] },
     {
       label: 'System',
@@ -292,6 +294,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
     ['/firewall/rules', <RulesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/firewall/nat', <NatScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/firewall/aliases', <AliasesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
+    ['/firewall/zones', <ZonesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/changes', <ChangesScreen api={api} session={session} state={changes.data} stateError={changes.error} connected={connected} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/system/details', <SystemDetailsScreen system={system} />],
     ['/system/updates', <UpdatesScreen api={api} session={session} update={update} onSessionLost={onSessionLost} />],

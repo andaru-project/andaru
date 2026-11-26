@@ -7,6 +7,7 @@ import { Link } from 'react-router';
 import { ApiError, reportError, type ApiClient } from '../api';
 import { formatAddressAlias, formatPortAlias } from '../format';
 import { firewallZone, type Rule, type RuleSide, type SavedObject, type Session, type Snapshot } from '../types';
+import { zoneColorMap } from '../zones';
 import { useResource } from '../useResource';
 import { Loaded } from './Loaded';
 import { EditMark, Grip } from './Marks';
@@ -18,6 +19,7 @@ interface RulesScreenProps { api: ApiClient; session: Session; onSaved(): void; 
 // Names and summaries for what a rule refers to, from the saved configuration the rules were read with.
 interface Names {
   zones: Map<string, string>;
+  zoneColors: Map<string, string>;
   addresses: Map<string, string>;
   addressSummary: Map<string, string>;
   ports: Map<string, string>;
@@ -40,7 +42,7 @@ function names(snapshot: Snapshot): Names {
     const summary = formatPortAlias(alias, ports);
     if (summary) portSummary.set(alias.id, summary);
   }
-  return { zones: byID(snapshot.value.zones), addresses, addressSummary, ports, portSummary };
+  return { zones: byID(snapshot.value.zones), zoneColors: zoneColorMap(snapshot.value.zones), addresses, addressSummary, ports, portSummary };
 }
 
 // A mark beside each action's word: the word says it, the mark and the colour help the eye down the column.
@@ -61,7 +63,7 @@ function Side({ side, names: known }: { side: RuleSide; names: Names }) {
     <Group gap={6}>
       {side.zones.length === 0 && side.addresses.length === 0 && <Text size="sm" c="dimmed">any network</Text>}
       {toFirewall && <Badge variant="filled" color="dark" tt="none">This firewall</Badge>}
-      {side.zones.filter((id) => id !== firewallZone).map((id) => <ZoneBadge key={id} name={known.zones.get(id) ?? 'unknown zone'} />)}
+      {side.zones.filter((id) => id !== firewallZone).map((id) => <ZoneBadge key={id} name={known.zones.get(id) ?? 'unknown zone'} color={known.zoneColors.get(id)} />)}
       {side.not && <Text size="sm" fw={600}>not</Text>}
       {side.addresses.map((id) => <Badge key={id} className="alias" variant="default" tt="none" title={known.addressSummary.get(id)}>{known.addresses.get(id) ?? 'unknown alias'}</Badge>)}
     </Group>

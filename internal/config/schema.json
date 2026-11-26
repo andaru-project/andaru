@@ -937,6 +937,21 @@
           "properties": {
             "id": {
               "$ref": "#/$defs/zoneID"
+            },
+            "color": {
+              "type": "string",
+              "enum": [
+                "green",
+                "red",
+                "blue",
+                "orange",
+                "teal",
+                "pink",
+                "cyan",
+                "lime",
+                "violet",
+                "indigo"
+              ]
             }
           },
           "required": []

@@ -2,6 +2,7 @@ import { Alert, Anchor, Button, Drawer, Fieldset, Group, MultiSelect, SegmentedC
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiClient, ApiError, fieldErrors, saveFailure } from '../api';
 import { firewallZone, type Rule, type RuleSide, type Snapshot } from '../types';
+import { zoneColorMap } from '../zones';
 import { AliasMultiSelect } from './AliasPicker';
 import { ZonePill, ZoneSelectionPill } from './ZoneBadge';
 
@@ -45,6 +46,7 @@ export function RuleEditor({ api, rule, snapshot, onClose, onSessionLost, onAban
 
   const option = (item: { id: string; name: string }) => ({ value: item.id, label: item.name });
   const zones = snapshot.value.zones.map(option);
+  const zoneColors = zoneColorMap(snapshot.value.zones);
   const addresses = (snapshot.value.aliases?.addresses ?? []).map(option);
   const portAliases = (snapshot.value.aliases?.ports ?? []).map(option);
   const toFirewall = to.zones.includes(firewallZone);
@@ -81,7 +83,7 @@ export function RuleEditor({ api, rule, snapshot, onClose, onSessionLost, onAban
     <Fieldset legend={label}>
       <Stack gap="xs">
         <MultiSelect label={`${label}: zones`} description={zoneHelp} data={zoneOptions} value={value.zones} error={errors.get(`${key}/zones`)} searchable clearable nothingFoundMessage="No zone by that name."
-          renderPill={(input) => <ZoneSelectionPill {...input} />} renderOption={({ option }) => option.value === firewallZone ? option.label : <ZonePill name={option.label} />}
+          renderPill={(input) => <ZoneSelectionPill {...input} colors={zoneColors} />} renderOption={({ option }) => option.value === firewallZone ? option.label : <ZonePill name={option.label} color={zoneColors.get(option.value)} />}
           // The firewall stands alone as a destination: choosing it leaves the other zones, and choosing another leaves it.
           onChange={(next) => set({ ...value, zones: next.includes(firewallZone) && !value.zones.includes(firewallZone) ? [firewallZone] : next.length > 1 ? next.filter((id) => id !== firewallZone) : next })} />
         <AliasMultiSelect api={api} aliasType="addresses" label={`${label}: addresses`} description="Address aliases within those zones. Empty is every address." initialOptions={addresses} value={value.addresses} error={errors.get(`${key}/addresses`)} clearable nothingFoundMessage={noAlias} onSessionLost={onSessionLost}

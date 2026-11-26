@@ -31,7 +31,7 @@ interface DashboardScreenProps {
 
 // zones says which zone each interface is in, by interface name; empty for an account that may not read the
 // saved configuration, or before it has been read.
-interface WidgetProps { api: ApiClient; zones: Map<string, string>; onSessionLost(): void }
+interface WidgetProps { api: ApiClient; zones: Map<string, string>; zoneColors?: Map<string, string>; onSessionLost(): void }
 
 const pollMilliseconds = 10_000;
 
@@ -72,7 +72,7 @@ function Widget({ id, title, to, more, unlocked, onHide, children }: { id: strin
   );
 }
 
-function InterfacesWidget({ api, zones, onSessionLost }: WidgetProps) {
+function InterfacesWidget({ api, zones, zoneColors, onSessionLost }: WidgetProps) {
   const resource = usePolledResource(useCallback(() => api.links(), [api]), onSessionLost, pollMilliseconds);
   return (
     <Loaded resource={resource} what="interfaces">
@@ -81,12 +81,15 @@ function InterfacesWidget({ api, zones, onSessionLost }: WidgetProps) {
         if (links.length === 0) return <Text c="dimmed">The box reports no network links.</Text>;
         return (
           <ul className="plain-list">
-            {links.map((link) => (
-              <li key={link.name}>
-                <Group gap="xs"><Text ff="monospace" fw={600}>{link.name}</Text><ZoneBadge name={zones.get(link.name)} /><Badge variant="dot" color={stateColor[link.operState] ?? 'gray'}>{stateLabel(link.operState)}</Badge></Group>
-                {link.addresses.filter((address) => address.scope !== 'link').map((address) => <Address key={address.address} value={`${address.address}/${address.prefixLength}`} size="xs" />)}
-              </li>
-            ))}
+            {links.map((link) => {
+              const zone = zones.get(link.name);
+              return (
+                <li key={link.name}>
+                  <Group gap="xs"><Text ff="monospace" fw={600}>{link.name}</Text><ZoneBadge name={zone} color={zone ? zoneColors?.get(zone) : undefined} /><Badge variant="dot" color={stateColor[link.operState] ?? 'gray'}>{stateLabel(link.operState)}</Badge></Group>
+                  {link.addresses.filter((address) => address.scope !== 'link').map((address) => <Address key={address.address} value={`${address.address}/${address.prefixLength}`} size="xs" />)}
+                </li>
+              );
+            })}
           </ul>
         );
       }}
@@ -96,16 +99,16 @@ function InterfacesWidget({ api, zones, onSessionLost }: WidgetProps) {
 
 // One line for an interface and its prefix, the same for the uplink that holds the delegation and for every
 // place a part of it went: who, in which zone, what.
-function PrefixLine({ name, zone, note, prefix }: { name: string; zone: string | undefined; note?: string; prefix: string | null | undefined }) {
+function PrefixLine({ name, zone, color, note, prefix }: { name: string; zone: string | undefined; color?: string; note?: string; prefix: string | null | undefined }) {
   return (
     <div>
-      <Group gap="xs"><Text ff="monospace" fw={600}>{name}</Text><ZoneBadge name={zone} />{note && <Text size="sm" c="dimmed">{note}</Text>}</Group>
+      <Group gap="xs"><Text ff="monospace" fw={600}>{name}</Text><ZoneBadge name={zone} color={color} />{note && <Text size="sm" c="dimmed">{note}</Text>}</Group>
       {prefix ? <Address value={prefix} size="xs" /> : <Text className="error-text" size="sm">no prefix held</Text>}
     </div>
   );
 }
 
-function PrefixesWidget({ api, zones, onSessionLost }: WidgetProps) {
+function PrefixesWidget({ api, zones, zoneColors, onSessionLost }: WidgetProps) {
   const resource = usePolledResource(useCallback(() => api.prefixes(), [api]), onSessionLost, pollMilliseconds);
   return (
     <Loaded resource={resource} what="IPv6 prefixes">
@@ -113,17 +116,26 @@ function PrefixesWidget({ api, zones, onSessionLost }: WidgetProps) {
         if (wans.length === 0) return <Text c="dimmed">No uplink asks for a delegated prefix.</Text>;
         return (
           <ul className="plain-list">
-            {wans.map((wan) => (
-              <li key={wan.interface}>
-                <PrefixLine name={wan.interface} zone={zones.get(wan.interface)} note="delegated" prefix={wan.current?.prefix} />
-                {/* A segment's subnet ID and a pool's are separate number spaces, so the prefix is the key. */}
-                <ul className="plain-list prefix-parts">
-                  {wan.segments.filter((place) => place.prefix).map((place) => <li key={place.prefix}><PrefixLine name={place.interface} zone={zones.get(place.interface)} prefix={place.prefix} /></li>)}
-                  {wan.pools.filter((place) => place.prefix).map((place) => <li key={place.prefix}><PrefixLine name={place.interface} zone={zones.get(place.interface)} note="pool" prefix={place.prefix} /></li>)}
-                </ul>
-                {wan.notFitting.length > 0 && <Text className="error-text" size="sm">No room for: {wan.notFitting.join(', ')}</Text>}
-              </li>
-            ))}
+            {wans.map((wan) => {
+              const wanZone = zones.get(wan.interface);
+              return (
+                <li key={wan.interface}>
+                  <PrefixLine name={wan.interface} zone={wanZone} color={wanZone ? zoneColors?.get(wanZone) : undefined} note="delegated" prefix={wan.current?.prefix} />
+                  {/* A segment's subnet ID and a pool's are separate number spaces, so the prefix is the key. */}
+                  <ul className="plain-list prefix-parts">
+                    {wan.segments.filter((place) => place.prefix).map((place) => {
+                      const z = zones.get(place.interface);
+                      return <li key={place.prefix}><PrefixLine name={place.interface} zone={z} color={z ? zoneColors?.get(z) : undefined} prefix={place.prefix} /></li>;
+                    })}
+                    {wan.pools.filter((place) => place.prefix).map((place) => {
+                      const z = zones.get(place.interface);
+                      return <li key={place.prefix}><PrefixLine name={place.interface} zone={z} color={z ? zoneColors?.get(z) : undefined} note="pool" prefix={place.prefix} /></li>;
+                    })}
+                  </ul>
+                  {wan.notFitting.length > 0 && <Text className="error-text" size="sm">No room for: {wan.notFitting.join(', ')}</Text>}
+                </li>
+              );
+            })}
           </ul>
         );
       }}
@@ -140,20 +152,23 @@ export function DashboardScreen({ api, session, system, notifications, update, o
   // that may not read the configuration has its answer at once, and it is that there are none to know.
   const canReadConfig = session.capabilities.includes('configuration.read');
   const zoneMap = useResource(useCallback(async () => {
-    if (!canReadConfig) return noZones;
+    if (!canReadConfig) return { zones: noZones, zoneColors: noZones };
     const snapshot = await api.config();
-    return zonesByInterface(snapshot, await api.previewNetwork(snapshot.savedVersion));
+    const zones = zonesByInterface(snapshot, await api.previewNetwork(snapshot.savedVersion));
+    const zoneColors = new Map(snapshot.value.zones.filter((z) => z.color).map((z) => [z.name, z.color!]));
+    return { zones, zoneColors };
   }, [api, canReadConfig]), onSessionLost);
   useVisiblePoll(zoneMap.refresh, pollMilliseconds, !zoneMap.data);
-  const zones = zoneMap.data ?? noZones;
+  const zones = zoneMap.data?.zones ?? noZones;
+  const zoneColors = zoneMap.data?.zoneColors ?? noZones;
   const zonesKnown = zoneMap.data !== undefined;
   const trafficChoice = useState<TrafficChoice>({});
   const all: Array<{ id: string; title: string; to?: string; more?: string; capability: string; body: ReactNode }> = [
     { id: 'system', title: 'System', to: '/system/details', more: 'Details', capability: 'status.read', body: <Loaded resource={system} what="the system description">{(loaded) => loaded && <SystemWidget info={loaded.info} loadedAt={loaded.loadedAt} update={update} />}</Loaded> },
-    { id: 'interfaces', title: 'Interfaces', to: '/network/interfaces', more: 'Manage', capability: 'status.read', body: <InterfacesWidget api={api} zones={zones} onSessionLost={onSessionLost} /> },
+    { id: 'interfaces', title: 'Interfaces', to: '/network/interfaces', more: 'Manage', capability: 'status.read', body: <InterfacesWidget api={api} zones={zones} zoneColors={zoneColors} onSessionLost={onSessionLost} /> },
     { id: 'resources', title: 'Resources', capability: 'status.read', body: <ResourcesWidget api={api} onSessionLost={onSessionLost} /> },
-    { id: 'traffic', title: 'Network activity', capability: 'status.read', body: <TrafficWidget api={api} zones={zones} zonesKnown={zonesKnown} choice={trafficChoice} onSessionLost={onSessionLost} /> },
-    { id: 'prefixes', title: 'IPv6 prefixes', capability: 'status.read', body: <PrefixesWidget api={api} zones={zones} onSessionLost={onSessionLost} /> },
+    { id: 'traffic', title: 'Network activity', capability: 'status.read', body: <TrafficWidget api={api} zones={zones} zoneColors={zoneColors} zonesKnown={zonesKnown} choice={trafficChoice} onSessionLost={onSessionLost} /> },
+    { id: 'prefixes', title: 'IPv6 prefixes', capability: 'status.read', body: <PrefixesWidget api={api} zones={zones} zoneColors={zoneColors} onSessionLost={onSessionLost} /> },
     { id: 'activity', title: 'Recent activity', to: '/system/audit', more: 'All events', capability: 'audit.read', body: <RecentActivityWidget api={api} onSessionLost={onSessionLost} /> },
     { id: 'notifications', title: 'Notifications', to: '/system/notifications', more: 'All notifications', capability: 'notifications.read', body: <NotificationsWidget resource={notifications} /> },
   ];
