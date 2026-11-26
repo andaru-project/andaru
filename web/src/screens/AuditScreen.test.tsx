@@ -81,13 +81,16 @@ it('exports audit JSON via /api/v1/audit/export with filename and blob, announce
   expect(createObjectURL).toHaveBeenCalledTimes(1);
   expect(clickSpy).toHaveBeenCalledTimes(1);
   expect(capturedDownload).toBe('audit-2026.json');
-  expect(capturedBlob).toBeInstanceOf(Blob);
-  const blobText = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(reader.error);
-    reader.readAsText(capturedBlob!);
-  });
+  expect(capturedBlob).toBeDefined();
+  expect(capturedBlob!.size).toBe(exportedBody.length);
+  const blobText = typeof capturedBlob!.text === 'function'
+    ? await capturedBlob!.text()
+    : await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(reader.error);
+        reader.readAsText(capturedBlob!);
+      });
   expect(blobText).toBe(exportedBody);
 
   await user.click(screen.getByRole('button', { name: 'Export JSON' }));
