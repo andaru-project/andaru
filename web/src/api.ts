@@ -1,3 +1,4 @@
+import { filenameFromDisposition } from './download';
 import type {
   AliasKinds,
   AliasSearchParams,
@@ -5,6 +6,7 @@ import type {
   Applies,
   Apply,
   AuditEvent,
+  AuditExportDownload,
   BackupCreateOptions,
   BackupDownload,
   BackupInspectionResponse,
@@ -21,6 +23,9 @@ import type {
   LeaseView,
   LinkStatus,
   LldpNeighbor,
+  ManagementConfig,
+  NotificationChannel,
+  NotificationChannelWrite,
   NotificationList,
   OneToOneNat,
   OrderedList,
@@ -49,6 +54,7 @@ import type {
   User,
   VersionDetail,
   VirtualAddress,
+  WebSessionPage,
   Zone,
 } from './types';
 
@@ -265,6 +271,14 @@ export class ApiClient {
     }
   }
 
+  listSessions() {
+    return this.request<WebSessionPage>('/api/v1/sessions');
+  }
+
+  revokeSession(id: string) {
+    return this.request<void>(`/api/v1/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }, true);
+  }
+
   startupStatus() {
     return this.request<{ setupRequired: boolean }>('/api/v1/startup-status');
   }
@@ -473,7 +487,7 @@ export class ApiClient {
   }
 
   // An object is saved whole: created without a saved one, and otherwise replaced against its version.
-  private save<T extends { id: string }>(path: string, value: Omit<T, 'id'>, saved?: SavedObject<T>) {
+  private save<T extends { id: string }, W = Omit<T, 'id'>>(path: string, value: W, saved?: SavedObject<T>) {
     if (!saved) return this.request<SavedObject<T>>(path, { method: 'POST', body: JSON.stringify(value) }, true);
     return this.request<SavedObject<T>>(`${path}/${encodeURIComponent(saved.value.id)}`, {
       method: 'PUT', headers: { 'If-Match': `"${saved.value.id}.${saved.version}"` }, body: JSON.stringify(value),
@@ -510,6 +524,28 @@ export class ApiClient {
 
   deleteVirtualAddress(id: string, version: string) {
     return this.request(`/api/v1/config/virtualAddresses/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { 'If-Match': `"${id}.${version}"` } }, true);
+  }
+
+  notificationChannels() {
+    return this.request<SavedList<NotificationChannel>>('/api/v1/config/notifications/channels');
+  }
+
+  notificationChannel(id: string) {
+    return this.request<SavedObject<NotificationChannel>>(`/api/v1/config/notifications/channels/${encodeURIComponent(id)}`);
+  }
+
+  saveNotificationChannel(channel: NotificationChannelWrite, saved?: SavedObject<NotificationChannel>) {
+    return this.save('/api/v1/config/notifications/channels', channel, saved);
+  }
+
+  deleteNotificationChannel(id: string, version: string) {
+    return this.request(`/api/v1/config/notifications/channels/${encodeURIComponent(id)}`, {
+      method: 'DELETE', headers: { 'If-Match': `"${id}.${version}"` },
+    }, true);
+  }
+
+  testNotificationChannel(id: string) {
+    return this.request<{ job: string }>(`/api/v1/notifications/channels/${encodeURIComponent(id)}/test`, { method: 'POST' }, true);
   }
 
   rules() {
@@ -593,6 +629,21 @@ export class ApiClient {
     return this.request(`/api/v1/config/dhcp6/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { 'If-Match': `"${id}.${version}"` } }, true);
   }
 
+  async management(): Promise<SavedObject<ManagementConfig> | null> {
+    try {
+      return await this.request<SavedObject<ManagementConfig>>('/api/v1/config/management');
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) return null;
+      throw error;
+    }
+  }
+
+  saveManagement(value: ManagementConfig, version: string) {
+    return this.request<SavedObject<ManagementConfig>>('/api/v1/config/management', {
+      method: 'PUT', headers: { 'If-Match': `"management.${version}"` }, body: JSON.stringify(value),
+    }, true);
+  }
+
   async dns(): Promise<SavedObject<DnsService> | null> {
     try {
       return await this.request<SavedObject<DnsService>>('/api/v1/config/dns');
@@ -651,6 +702,16 @@ export class ApiClient {
     return this.request<Page<AuditEvent>>(`/api/v1/audit/events?${query}`);
   }
 
+  async exportAudit(cursor = '', limit = 100, order: 'asc' | 'desc' = 'desc'): Promise<AuditExportDownload> {
+    const query = new URLSearchParams({ order, limit: String(limit) });
+    if (cursor) query.set('cursor', cursor);
+    const { blob, headers } = await this.requestBlob(`/api/v1/audit/export?${query}`, {}, false, 'application/json');
+    return {
+      blob,
+      filename: filenameFromDisposition(headers.get('Content-Disposition'), 'andaru-audit.json'),
+    };
+  }
+
   updateStatus() {
     return this.request<UpdateStatus>('/api/v1/system/update');
   }
@@ -679,19 +740,24 @@ export class ApiClient {
     return this.request<void>(`/api/v1/notifications/${id}/dismiss`, { method: 'POST' }, true);
   }
 
-  async createBackup(options: BackupCreateOptions): Promise<BackupDownload> {
-    const { response, cleanup } = await this.send(
-      '/api/v1/backups',
-      { method: 'POST', body: JSON.stringify(options) },
-      true,
-      'application/zip, application/octet-stream, application/json',
-    );
+  private async requestBlob(
+    path: string,
+    init: RequestInit,
+    csrf: boolean,
+    accept: string,
+  ): Promise<{ blob: Blob; headers: Headers }> {
+    const { response, carried, callerSignal, signal, cleanup } = await this.send(path, init, csrf, accept);
     try {
       if (!response.ok) {
         let body: unknown;
         try {
           body = await response.json();
-        } catch {
+        } catch (err) {
+          if (callerSignal?.aborted) {
+            input ||= carried;
+            throw err;
+          }
+          if (signal?.aborted) throw this.disconnectedError();
           body = undefined;
         }
         throw this.toApiError(response, body);
@@ -699,20 +765,34 @@ export class ApiClient {
       let blob: Blob;
       try {
         blob = await response.blob();
-      } catch {
+      } catch (err) {
+        if (callerSignal?.aborted) {
+          input ||= carried;
+          throw err;
+        }
         throw this.disconnectedError();
       }
-      const contentType = response.headers.get('Content-Type') ?? 'application/octet-stream';
-      return {
-        blob,
-        encrypted: contentType.toLowerCase().startsWith('application/octet-stream'),
-        savedVersion: response.headers.get('Andaru-Saved-Version') ?? '',
-        identityRevision: response.headers.get('Andaru-Identity-Revision') ?? '',
-        capturedAt: response.headers.get('Andaru-Captured-At') ?? '',
-      };
+      return { blob, headers: response.headers };
     } finally {
       cleanup();
     }
+  }
+
+  async createBackup(options: BackupCreateOptions): Promise<BackupDownload> {
+    const { blob, headers } = await this.requestBlob(
+      '/api/v1/backups',
+      { method: 'POST', body: JSON.stringify(options) },
+      true,
+      'application/zip, application/octet-stream, application/json',
+    );
+    const contentType = headers.get('Content-Type') ?? 'application/octet-stream';
+    return {
+      blob,
+      encrypted: contentType.toLowerCase().startsWith('application/octet-stream'),
+      savedVersion: headers.get('Andaru-Saved-Version') ?? '',
+      identityRevision: headers.get('Andaru-Identity-Revision') ?? '',
+      capturedAt: headers.get('Andaru-Captured-At') ?? '',
+    };
   }
 
   private postRestoreForm<T>(path: string, archive: Blob, options: Record<string, unknown>) {

@@ -71,19 +71,96 @@ type linkView struct {
 	link
 	Password *secretView `json:"password,omitempty"`
 }
+type channelView struct {
+	channel
+	Webhook  *webhookView  `json:"webhook,omitempty"`
+	Ntfy     *ntfyView     `json:"ntfy,omitempty"`
+	Pushover *pushoverView `json:"pushover,omitempty"`
+	Telegram *telegramView `json:"telegram,omitempty"`
+	Email    *emailView    `json:"email,omitempty"`
+}
+type webhookView struct {
+	URL           *secretView `json:"url"`
+	Authorization *secretView `json:"authorization,omitempty"`
+}
+type ntfyView struct {
+	Server string      `json:"server"`
+	Topic  string      `json:"topic"`
+	Token  *secretView `json:"token,omitempty"`
+}
+type pushoverView struct {
+	Token *secretView `json:"token"`
+	User  *secretView `json:"user"`
+}
+type telegramView struct {
+	Token  *secretView `json:"token"`
+	ChatID string      `json:"chatId"`
+}
+type emailView struct {
+	email
+	Password *secretView `json:"password,omitempty"`
+}
 
+// viewSecret is a reference's view: whether it is set, and its version, never its value.
+func viewSecret(ref *secretReference, secrets secretDocument) (*secretView, error) {
+	if ref == nil {
+		return nil, nil
+	}
+	meta, ok := secrets.Scopes["core"][ref.Secret]
+	if !ok && !ref.Unresolved {
+		return nil, fault("STORE_UNAVAILABLE", "", "Secret reference is unavailable.")
+	}
+	if !ok {
+		meta.Version = "0"
+	}
+	return &secretView{Secret: ref.Secret, IsSet: !ref.Unresolved, UpdatedAt: meta.UpdatedAt, Version: meta.Version, Unresolved: ref.Unresolved}, nil
+}
 func viewObject(v any, version Version, secrets secretDocument) (ObjectView, error) {
-	if l, ok := v.(*link); ok {
-		view := linkView{link: *l}
-		if l.Password != nil {
-			meta, ok := secrets.Scopes["core"][l.Password.Secret]
-			if !ok && !l.Password.Unresolved {
-				return ObjectView{}, fault("STORE_UNAVAILABLE", "", "Secret reference is unavailable.")
+	var e error
+	switch x := v.(type) {
+	case *link:
+		view := linkView{link: *x}
+		if view.Password, e = viewSecret(x.Password, secrets); e != nil {
+			return ObjectView{}, e
+		}
+		v = view
+	case *channel:
+		view := channelView{channel: *x}
+		if x.Webhook != nil {
+			view.Webhook = &webhookView{}
+			if view.Webhook.URL, e = viewSecret(&x.Webhook.URL, secrets); e != nil {
+				return ObjectView{}, e
 			}
-			if !ok {
-				meta.Version = "0"
+			if view.Webhook.Authorization, e = viewSecret(x.Webhook.Authorization, secrets); e != nil {
+				return ObjectView{}, e
 			}
-			view.Password = &secretView{Secret: l.Password.Secret, IsSet: !l.Password.Unresolved, UpdatedAt: meta.UpdatedAt, Version: meta.Version, Unresolved: l.Password.Unresolved}
+		}
+		if x.Ntfy != nil {
+			view.Ntfy = &ntfyView{Server: x.Ntfy.Server, Topic: x.Ntfy.Topic}
+			if view.Ntfy.Token, e = viewSecret(x.Ntfy.Token, secrets); e != nil {
+				return ObjectView{}, e
+			}
+		}
+		if x.Pushover != nil {
+			view.Pushover = &pushoverView{}
+			if view.Pushover.Token, e = viewSecret(&x.Pushover.Token, secrets); e != nil {
+				return ObjectView{}, e
+			}
+			if view.Pushover.User, e = viewSecret(&x.Pushover.User, secrets); e != nil {
+				return ObjectView{}, e
+			}
+		}
+		if x.Telegram != nil {
+			view.Telegram = &telegramView{ChatID: x.Telegram.ChatID}
+			if view.Telegram.Token, e = viewSecret(&x.Telegram.Token, secrets); e != nil {
+				return ObjectView{}, e
+			}
+		}
+		if x.Email != nil {
+			view.Email = &emailView{email: *x.Email}
+			if view.Email.Password, e = viewSecret(x.Email.Password, secrets); e != nil {
+				return ObjectView{}, e
+			}
 		}
 		v = view
 	}
@@ -98,7 +175,6 @@ func viewObject(v any, version Version, secrets secretDocument) (ObjectView, err
 }
 func publicSnapshot(s savedState) (SnapshotView, error) {
 	links := make([]json.RawMessage, 0, len(s.Config.Links))
-	used := map[string]bool{}
 	for i := range s.Config.Links {
 		l := &s.Config.Links[i]
 		v, e := viewObject(l, s.Versions[objectKey{"links", l.ID}].Version, s.Secrets)
@@ -106,11 +182,23 @@ func publicSnapshot(s savedState) (SnapshotView, error) {
 			return SnapshotView{}, e
 		}
 		links = append(links, v.Value)
-		if l.Password != nil && !l.Password.Unresolved {
-			used[l.Password.Secret] = true
+	}
+	channels := make([]json.RawMessage, 0, len(s.Config.Notifications.Channels))
+	for i := range s.Config.Notifications.Channels {
+		c := &s.Config.Notifications.Channels[i]
+		v, e := viewObject(c, s.Versions[objectKey{"notifications.channels", c.ID}].Version, s.Secrets)
+		if e != nil {
+			return SnapshotView{}, e
+		}
+		channels = append(channels, v.Value)
+	}
+	used := map[string]bool{}
+	for _, h := range heldSecrets(&s.Config) {
+		if !h.ref.Unresolved {
+			used[h.ref.Secret] = true
 		}
 	}
-	// The whole declaration, every section included, with each link as its secret-free view.
+	// The whole declaration, every section included, with each link and channel as its secret-free view.
 	var d map[string]json.RawMessage
 	whole, e := json.Marshal(s.Config)
 	if e == nil {
@@ -121,6 +209,11 @@ func publicSnapshot(s savedState) (SnapshotView, error) {
 	}
 	if d["links"], e = json.Marshal(links); e != nil {
 		return SnapshotView{}, e
+	}
+	if len(channels) > 0 {
+		if d["notifications"], e = json.Marshal(map[string]any{"channels": channels}); e != nil {
+			return SnapshotView{}, e
+		}
 	}
 	roles := append(authz.BuiltIns(), s.Config.Roles...)
 	if d["roles"], e = json.Marshal(roles); e != nil {

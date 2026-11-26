@@ -154,16 +154,23 @@ type zone struct {
 // name to change, and a rule names it as its destination to reach the firewall.
 const firewallZone = "zon_firewall"
 
-// address is an address alias: one host, network or range, or a group of those.
+// address is an address alias: one host, network or range, a group of those, or a list fetched from a URL or
+// resolved from host names every refreshSeconds, whose members are not saved.
 type address struct {
 	identity
-	Kind    string   `json:"kind"`
-	Address string   `json:"address,omitempty"`
-	Prefix  string   `json:"prefix,omitempty"`
-	First   string   `json:"first,omitempty"`
-	Last    string   `json:"last,omitempty"`
-	Members []string `json:"members,omitempty"`
+	Kind           string   `json:"kind"`
+	Address        string   `json:"address,omitempty"`
+	Prefix         string   `json:"prefix,omitempty"`
+	First          string   `json:"first,omitempty"`
+	Last           string   `json:"last,omitempty"`
+	Members        []string `json:"members,omitempty"`
+	URL            string   `json:"url,omitempty"`
+	Names          []string `json:"names,omitempty"`
+	RefreshSeconds int      `json:"refreshSeconds,omitempty"`
 }
+
+// dynamic reports an alias whose members are fetched or resolved: it may hold either family.
+func (a address) dynamic() bool { return a.Kind == "url" || a.Kind == "hostnames" }
 
 // portAlias is a port alias: tcp or udp ports, icmp or icmpv6 types, or a group of those. Its ID keeps the
 // svc_ prefix of the services it was saved as.
@@ -358,6 +365,88 @@ type declaration struct {
 	DNS           *dnsService  `json:"dns,omitempty"`
 	// VirtualAddresses are held by the firewall on no LAN, for its own services.
 	VirtualAddresses []virtualAddress `json:"virtualAddresses,omitzero"`
+	Notifications    notifications    `json:"notifications,omitzero"`
+}
+
+type notifications struct {
+	Channels []channel `json:"channels,omitempty"`
+}
+
+// channel is where notifications are sent. Enabled and the filter's minimum severity get their defaults on save.
+type channel struct {
+	identity
+	Enabled  *bool         `json:"enabled,omitempty"`
+	Kind     string        `json:"kind"`
+	Filter   channelFilter `json:"filter"`
+	Webhook  *webhook      `json:"webhook,omitempty"`
+	Ntfy     *ntfy         `json:"ntfy,omitempty"`
+	Pushover *pushover     `json:"pushover,omitempty"`
+	Telegram *telegram     `json:"telegram,omitempty"`
+	Email    *email        `json:"email,omitempty"`
+}
+type channelFilter struct {
+	MinSeverity string   `json:"minSeverity,omitempty"`
+	Sources     []string `json:"sources,omitempty"`
+}
+
+// webhook's URL is a secret, since webhook URLs carry tokens; Authorization is the Authorization header's value.
+type webhook struct {
+	URL           secretReference  `json:"url"`
+	Authorization *secretReference `json:"authorization,omitempty"`
+}
+
+// ntfy is a topic on an ntfy server; Token, when set, is sent as a bearer token.
+type ntfy struct {
+	Server string           `json:"server"`
+	Topic  string           `json:"topic"`
+	Token  *secretReference `json:"token,omitempty"`
+}
+
+// pushover is a Pushover application's token and the user key it sends to.
+type pushover struct {
+	Token secretReference `json:"token"`
+	User  secretReference `json:"user"`
+}
+
+// telegram is a Telegram bot's token and the chat it sends to.
+type telegram struct {
+	Token  secretReference `json:"token"`
+	ChatID string          `json:"chatId"`
+}
+
+// email is an SMTP server, reached over implicit TLS or STARTTLS, and the addresses a message is sent from and to.
+// Username and Password are both set or both left out.
+type email struct {
+	Host     string           `json:"host"`
+	Port     int              `json:"port"`
+	Security string           `json:"security"`
+	Username string           `json:"username,omitempty"`
+	Password *secretReference `json:"password,omitempty"`
+	From     string           `json:"from"`
+	To       []string         `json:"to"`
+}
+
+// channelSecret is one of a channel's secret references, at its path below the channel; an optional one left out is nil.
+type channelSecret struct {
+	path string
+	ref  *secretReference
+}
+
+// secrets are c's secret references, with the optional ones it leaves out.
+func (c *channel) secrets() []channelSecret {
+	switch {
+	case c.Webhook != nil:
+		return []channelSecret{{"/webhook/url", &c.Webhook.URL}, {"/webhook/authorization", c.Webhook.Authorization}}
+	case c.Ntfy != nil:
+		return []channelSecret{{"/ntfy/token", c.Ntfy.Token}}
+	case c.Pushover != nil:
+		return []channelSecret{{"/pushover/token", &c.Pushover.Token}, {"/pushover/user", &c.Pushover.User}}
+	case c.Telegram != nil:
+		return []channelSecret{{"/telegram/token", &c.Telegram.Token}}
+	case c.Email != nil:
+		return []channelSecret{{"/email/password", c.Email.Password}}
+	}
+	return nil
 }
 
 // virtualAddress is an address the firewall holds on its dummy interface, answered on every segment the filter lets reach it.

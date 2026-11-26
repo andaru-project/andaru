@@ -157,7 +157,7 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
                 </ScrollArea>
               )}
               {editing && (
-                <AliasEditor key={typeof editing === 'string' ? editing : editing.item.value.id} api={api} editing={editing} rows={rows} onClose={() => setEditing(undefined)} onSessionLost={onSessionLost} onAbandoned={setError} onRefused={() => void resource.reload()}
+                <AliasEditor key={typeof editing === 'string' ? editing : editing.item.value.id} api={api} editing={editing} rows={rows} onClose={() => setEditing(undefined)} onSessionLost={onSessionLost} onAbandoned={setError} onRefused={() => void resource.reload()} onAliasCreated={() => { onSaved(); void resource.reload(); }}
                   onSave={async (kind, alias, saved) => {
                     try {
                       await api.saveAlias(kind, alias, saved);

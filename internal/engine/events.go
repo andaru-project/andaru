@@ -61,13 +61,16 @@ const (
 
 // busGrants are what each client of the bus may publish and subscribe to, by user name.
 var busGrants = map[string]bus.Grants{
-	"realize":         {Publish: []string{"apply/+"}},
-	"andaru-outbound": {Publish: []string{"notification/delivery"}, Subscribe: []string{"delivery/#"}},
+	"realize":    {Publish: []string{"apply/+"}},
+	outboundUser: {Publish: []string{"notification/delivery"}, Subscribe: []string{"delivery/#"}},
 }
+
+// outboundUser is andaru-outbound's user, and the name it has on the bus.
+const outboundUser = "andaru-outbound"
 
 // serviceUsers are the users that may use the services socket. Each is a static sysusers.d user, not a DynamicUser=:
 // with cgo off, user names are read from /etc/passwd alone.
-var serviceUsers = []string{"andaru-outbound"}
+var serviceUsers = []string{outboundUser}
 
 // startBus serves the root socket and, when services is not empty, the services socket.
 func startBus(path, socket, services string, lost bool) (*bus.Bus, func() error, error) {

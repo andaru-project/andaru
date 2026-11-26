@@ -1,10 +1,14 @@
-import { Badge, Group, Paper, Stack, Table, Text, Title } from '@mantine/core';
-import { useCallback, useState, type ReactNode } from 'react';
+import { Alert, Badge, Button, Group, Modal, Paper, Stack, Table, Text, TextInput, Title } from '@mantine/core';
+import { useCallback, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link } from 'react-router';
+import { ApiClient, apiErrorMessage, reportError } from '../api';
 import { bytes, duration, firmwareDate, plural } from '../format';
 import type { SystemInfo, UpdateStatus } from '../types';
 import { useVisiblePoll, type Resource } from '../useResource';
 import { Loaded } from './Loaded';
+
+const hostnamePattern = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+const hostnameError = 'Use 1 to 63 lowercase letters, digits, or hyphens; cannot start or end with a hyphen.';
 
 type System = Resource<{ info: SystemInfo; loadedAt: number } | undefined>;
 
@@ -151,14 +155,120 @@ export function SystemFacts({ info, loadedAt }: { info: SystemInfo; loadedAt: nu
   );
 }
 
-export function SystemDetailsScreen({ system }: { system: System }) {
+export function SystemDetailsScreen({
+  system,
+  api,
+  canRename = false,
+  onSessionLost,
+}: {
+  system: System;
+  api?: ApiClient;
+  canRename?: boolean;
+  onSessionLost?: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [fieldError, setFieldError] = useState('');
+  const [submitError, setSubmitError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [busy, setBusy] = useState(false);
+  const submittingRef = useRef(false);
+
+  const currentHostname = system.data?.info.hostname ?? '';
+  const normalizedDraft = draft.trim().toLowerCase();
+  const liveInvalid = normalizedDraft !== '' && !hostnamePattern.test(normalizedDraft);
+  const unchanged = normalizedDraft !== '' && normalizedDraft === currentHostname;
+
+  function openRename() {
+    setDraft(currentHostname);
+    setFieldError('');
+    setSubmitError('');
+    setNotice('');
+    setEditing(true);
+  }
+
+  function closeRename() {
+    if (submittingRef.current) return;
+    setEditing(false);
+    setFieldError('');
+    setSubmitError('');
+  }
+
+  async function saveHostname(event: FormEvent) {
+    event.preventDefault();
+    if (!api || submittingRef.current) return;
+    if (!normalizedDraft || !hostnamePattern.test(normalizedDraft)) {
+      setFieldError(hostnameError);
+      return;
+    }
+    if (normalizedDraft === currentHostname) {
+      setFieldError('Enter a different hostname.');
+      return;
+    }
+    submittingRef.current = true;
+    setBusy(true);
+    setFieldError('');
+    setSubmitError('');
+    try {
+      const updated = await api.setHostname(normalizedDraft);
+      void system.reload();
+      setEditing(false);
+      setNotice(`Hostname updated to ${updated.hostname}.`);
+    } catch (error) {
+      if (onSessionLost) reportError(error, onSessionLost, setSubmitError);
+      else setSubmitError(apiErrorMessage(error));
+    } finally {
+      submittingRef.current = false;
+      setBusy(false);
+    }
+  }
+
   return (
-    <Stack>
-      <div>
-        <Title order={2}>System details</Title>
-        <Text c="dimmed">What the box is made of and what it runs.</Text>
-      </div>
+    <Stack className="details">
+      <Group justify="space-between" align="flex-end" wrap="wrap">
+        <div>
+          <Title order={2}>System details</Title>
+          <Text c="dimmed">What the box is made of and what it runs.</Text>
+        </div>
+        {api && canRename && system.data && (
+          <Button size="xs" variant="default" onClick={openRename}>Change hostname</Button>
+        )}
+      </Group>
+      {notice && <Alert color="green" role="status">{notice}</Alert>}
       <Loaded resource={system} what="the system description">{(loaded) => loaded && <SystemFacts info={loaded.info} loadedAt={loaded.loadedAt} />}</Loaded>
+      <Modal
+        opened={editing}
+        onClose={closeRename}
+        closeOnClickOutside={!busy}
+        closeOnEscape={!busy}
+        closeButtonProps={{ 'aria-label': 'Close', disabled: busy }}
+        lockScroll={false}
+        title="Change hostname"
+      >
+        <form onSubmit={saveHostname} noValidate>
+          <Stack>
+            {submitError && <Alert color="red" role="alert" title="Hostname was not changed">{submitError}</Alert>}
+            <TextInput
+              data-autofocus
+              label="Hostname"
+              description="1 to 63 lowercase letters, digits, or hyphens. Applied immediately to the appliance."
+              value={draft}
+              disabled={busy}
+              required
+              error={fieldError || (liveInvalid ? hostnameError : undefined)}
+              onChange={(event) => {
+                setDraft(event.currentTarget.value);
+                setFieldError('');
+                setSubmitError('');
+              }}
+            />
+            <Group justify="flex-end" gap="xs">
+              <Button variant="default" disabled={busy} onClick={closeRename}>Cancel</Button>
+              <Button type="submit" loading={busy} disabled={unchanged}>Save hostname</Button>
+            </Group>
+          </Stack>
+        </form>
+      </Modal>
     </Stack>
   );
 }

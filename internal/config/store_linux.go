@@ -129,7 +129,7 @@ func Open(ctx context.Context, stateDir string) (*Store, error) {
 		return nil, diagnostic("open-secret", e)
 	}
 	// Additive history tables let older stores accept newer configuration collections.
-	if _, e = cfg.ExecContext(ctx, policyDDL+serviceDDL+natDDL+dhcp6DDL+vipDDL+roleDDL+firewallDDL+writerDDL); e != nil {
+	if _, e = cfg.ExecContext(ctx, policyDDL+serviceDDL+natDDL+dhcp6DDL+vipDDL+roleDDL+firewallDDL+writerDDL+notificationDDL); e != nil {
 		cfg.Close()
 		sec.Close()
 		return nil, diagnostic("open-config-policy-table", e)

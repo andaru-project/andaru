@@ -51,23 +51,7 @@ func (b *Bus) attach(name, filter string) (*attachment, int64, bool, error) {
 	var stored string
 	err = tx.QueryRow(`SELECT cursor, gap, filter FROM consumers WHERE name = ?`, name).Scan(&cursor, &gap, &stored)
 	if errors.Is(err, sql.ErrNoRows) {
-		// A consumer that expired, or that the store lost when it was replaced, comes back to a gap; a new one
-		// starts at the end of the log.
-		var res sql.Result
-		if res, err = tx.Exec(`DELETE FROM expired WHERE name = ?`, name); err == nil {
-			var n, lostUntil int64
-			if n, err = res.RowsAffected(); err == nil {
-				err = tx.QueryRow(`SELECT coalesce((SELECT value FROM meta WHERE key = 'lost_until'), 0)`).Scan(&lostUntil)
-			}
-			if err == nil {
-				if gap = n > 0 || now < lostUntil; !gap {
-					err = tx.QueryRow(`SELECT coalesce((SELECT seq FROM sqlite_sequence WHERE name = 'events'), 0)`).Scan(&cursor)
-				}
-			}
-		}
-		if err == nil {
-			_, err = tx.Exec(`INSERT INTO consumers (name, filter, cursor, gap, seen, owner) VALUES (?, ?, ?, ?, ?, ?)`, name, filter, cursor, gap, now, owner)
-		}
+		cursor, gap, err = create(tx, name, filter, now, owner)
 	} else if err == nil {
 		// Events the old filter skipped may match the new one: they are not coming back.
 		gap = gap || stored != filter
@@ -96,6 +80,51 @@ func (b *Bus) attach(name, filter string) (*attachment, int64, bool, error) {
 	b.attached[name] = a
 	b.mu.Unlock()
 	return a, cursor, gap, nil
+}
+
+// create adds the consumer name. One that expired, or that the store lost when it was replaced, comes back to a
+// gap; a new one starts at the end of the log.
+func create(tx *sql.Tx, name, filter string, now, owner int64) (cursor int64, gap bool, err error) {
+	var res sql.Result
+	if res, err = tx.Exec(`DELETE FROM expired WHERE name = ?`, name); err == nil {
+		var n, lostUntil int64
+		if n, err = res.RowsAffected(); err == nil {
+			err = tx.QueryRow(`SELECT coalesce((SELECT value FROM meta WHERE key = 'lost_until'), 0)`).Scan(&lostUntil)
+		}
+		if err == nil {
+			if gap = n > 0 || now < lostUntil; !gap {
+				err = tx.QueryRow(`SELECT coalesce((SELECT seq FROM sqlite_sequence WHERE name = 'events'), 0)`).Scan(&cursor)
+			}
+		}
+	}
+	if err == nil {
+		_, err = tx.Exec(`INSERT INTO consumers (name, filter, cursor, gap, seen, owner) VALUES (?, ?, ?, ?, ?, ?)`, name, filter, cursor, gap, now, owner)
+	}
+	return cursor, gap, err
+}
+
+// Declare creates the client consumer name of user with filter, as its first attach would, unless it exists. The
+// client then reads every event published after Declare, though it attaches later.
+func (b *Bus) Declare(user, name, filter string) error {
+	if !validFilter(filter) {
+		return fmt.Errorf("bus: invalid filter %q", filter)
+	}
+	b.attachMu.Lock()
+	defer b.attachMu.Unlock()
+	tx, err := b.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var exists bool
+	name = clientConsumer(user, name)
+	if err = tx.QueryRow(`SELECT count(*) > 0 FROM consumers WHERE name = ?`, name).Scan(&exists); err != nil || exists {
+		return err
+	}
+	if _, _, err = create(tx, name, filter, time.Now().Unix(), 0); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // detach ends the attachment; b.mu is held.

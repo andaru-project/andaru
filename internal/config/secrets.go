@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -93,6 +94,8 @@ func validateSecrets(doc secretDocument, head Version) error {
 	return nil
 }
 
+// checkResolvedReferences gates an apply, so it covers links alone: channels take effect without an apply. A channel
+// a restore left unresolved may be saved with that reference unchanged, and sends nothing until the secret is set.
 func checkResolvedReferences(d *declaration) error {
 	var details []FieldError
 	for i, l := range d.Links {
@@ -102,6 +105,69 @@ func checkResolvedReferences(d *declaration) error {
 	}
 	if len(details) != 0 {
 		return &Fault{Code: "VALIDATION_FAILED", Details: details}
+	}
+	return nil
+}
+
+// heldSecret is a secret reference of a declaration, with the object that holds it and its path.
+type heldSecret struct {
+	key  objectKey
+	path string
+	ref  *secretReference
+}
+
+// heldSecrets are every secret reference of d.
+func heldSecrets(d *declaration) []heldSecret {
+	var out []heldSecret
+	for i := range d.Links {
+		if l := &d.Links[i]; l.Password != nil {
+			out = append(out, heldSecret{objectKey{"links", l.ID}, fmt.Sprintf("/links/%d/password", i), l.Password})
+		}
+	}
+	for i := range d.Notifications.Channels {
+		c := &d.Notifications.Channels[i]
+		for _, s := range c.secrets() {
+			if s.ref != nil {
+				out = append(out, heldSecret{objectKey{"notifications.channels", c.ID}, fmt.Sprintf("/notifications/channels/%d%s", i, s.path), s.ref})
+			}
+		}
+	}
+	return out
+}
+
+// secretField is a place in a written object that may hold a secret reference: parent[name], at path below the object.
+type secretField struct {
+	path   string
+	parent map[string]any
+	name   string
+}
+
+// secretKind is the kind of secret a collection holds. A secret is bound to its kind: a link's password and a channel's
+// secrets are changed with different capabilities, so neither may reach the other's.
+func secretKind(collection string) string {
+	if collection == "notifications.channels" {
+		return "notification"
+	}
+	return "password"
+}
+
+func secretFields(collection string, value map[string]any) []secretField {
+	switch collection {
+	case "links":
+		return []secretField{{"/password", value, "password"}}
+	case "notifications.channels":
+		var out []secretField
+		for _, kind := range []struct {
+			name   string
+			fields []string
+		}{{"webhook", []string{"url", "authorization"}}, {"ntfy", []string{"token"}}, {"pushover", []string{"token", "user"}}, {"telegram", []string{"token"}}, {"email", []string{"password"}}} {
+			if w, ok := value[kind.name].(map[string]any); ok {
+				for _, f := range kind.fields {
+					out = append(out, secretField{"/" + kind.name + "/" + f, w, f})
+				}
+			}
+		}
+		return out
 	}
 	return nil
 }

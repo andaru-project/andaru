@@ -6,6 +6,23 @@ export interface Session {
   idleTimeoutSeconds: number;
 }
 
+export interface WebSessionItem {
+  id: string;
+  createdAt: string;
+  lastSeenAt: string;
+  expiresAt: string;
+  current: boolean;
+}
+
+export interface WebSessionPage {
+  items: WebSessionItem[];
+}
+
+export interface AuditExportDownload {
+  blob: Blob;
+  filename: string;
+}
+
 export interface User {
   id: string;
   login: string;
@@ -486,6 +503,11 @@ export interface Zone {
   color?: ZoneColor;
 }
 
+export interface ManagementConfig {
+  segment: string;
+  allowedSources?: string[];
+}
+
 export interface Snapshot {
   state: 'saved';
   savedVersion: string;
@@ -494,7 +516,7 @@ export interface Snapshot {
     links: SavedLink[];
     segments: Segment[];
     zones: Zone[];
-    management?: { segment: string; allowedSources?: string[] };
+    management?: ManagementConfig;
     dhcp?: Dhcp4Entry[];
     dhcp6?: Dhcp6Entry[];
     dns?: DnsService;
@@ -681,6 +703,81 @@ export interface Notification {
 
 export interface NotificationList {
   items: Notification[];
+}
+
+export type KnownNotificationChannelKind = 'webhook' | 'ntfy' | 'pushover' | 'telegram';
+export type NotificationChannelKind = KnownNotificationChannelKind | (string & {});
+
+export interface NotificationChannelFilter {
+  minSeverity?: NotificationSeverity;
+  sources?: string[];
+}
+
+export interface WebhookChannelConfig {
+  url: SecretView;
+  authorization?: SecretView;
+}
+
+export interface NtfyChannelConfig {
+  server: string;
+  topic: string;
+  token?: SecretView;
+}
+
+export interface PushoverChannelConfig {
+  token: SecretView;
+  user: SecretView;
+}
+
+export interface TelegramChannelConfig {
+  token: SecretView;
+  chatId: string;
+}
+
+export interface NotificationChannel {
+  id: string;
+  name: string;
+  description?: string;
+  enabled?: boolean;
+  kind: NotificationChannelKind;
+  filter?: NotificationChannelFilter;
+  webhook?: WebhookChannelConfig;
+  ntfy?: NtfyChannelConfig;
+  pushover?: PushoverChannelConfig;
+  telegram?: TelegramChannelConfig;
+  [extraKind: string]: unknown;
+}
+
+export interface SecretWrite {
+  secret: string;
+  set?: string;
+  expectedVersion?: string;
+  unresolved?: boolean;
+}
+
+export interface NotificationChannelWrite {
+  name: string;
+  description?: string;
+  enabled?: boolean;
+  kind: NotificationChannelKind;
+  filter?: NotificationChannelFilter;
+  webhook?: {
+    url: SecretWrite;
+    authorization?: SecretWrite;
+  };
+  ntfy?: {
+    server: string;
+    topic: string;
+    token?: SecretWrite;
+  };
+  pushover?: {
+    token: SecretWrite;
+    user: SecretWrite;
+  };
+  telegram?: {
+    token: SecretWrite;
+    chatId: string;
+  };
 }
 
 export type BackupStore = 'configuration' | 'configurationSecrets' | 'users' | 'userCredentials';

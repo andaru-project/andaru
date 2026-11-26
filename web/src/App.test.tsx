@@ -74,19 +74,21 @@ it('shows every branch to an administrator and starts on the dashboard', async (
   const navigation = await screen.findByRole('navigation', { name: 'Main navigation' });
   // A branch label is a button, so the keyboard reaches it; it says whether it is open. The dashboard is in none.
   const branch = (label: string) => within(navigation).getByRole('button', { name: label });
-  for (const label of ['Network', 'Firewall', 'Changes', 'System']) expect(branch(label)).toHaveAttribute('aria-expanded', 'false');
+  for (const label of ['Network', 'Firewall', 'Diagnostics', 'Changes', 'System']) expect(branch(label)).toHaveAttribute('aria-expanded', 'false');
   expect(within(navigation).getAllByRole('link').map((link) => link.textContent)).toEqual(['Dashboard']);
   expect(await screen.findByRole('heading', { name: 'Dashboard' })).toBeInTheDocument();
   expect(window.location.pathname).toBe('/');
 
   // Opening a branch closes the one that was open.
   await userEvent.click(branch('System'));
-  expect(within(navigation).getAllByRole('link').map((link) => link.textContent)).toEqual(['Dashboard', 'Details', 'Updates', 'Users', 'Roles', 'Tokens', 'Audit']);
+  expect(within(navigation).getAllByRole('link').map((link) => link.textContent)).toEqual(['Dashboard', 'Details', 'Updates', 'Notifications', 'Users', 'Roles', 'Tokens', 'Audit']);
   await userEvent.click(branch('Firewall'));
   expect(branch('System')).toHaveAttribute('aria-expanded', 'false');
   expect(within(navigation).getAllByRole('link').map((link) => link.textContent)).toEqual(['Dashboard', 'Rules', 'NAT', 'Aliases', 'Zones']);
+  await userEvent.click(branch('Diagnostics'));
+  expect(within(navigation).getAllByRole('link').map((link) => link.textContent)).toEqual(['Dashboard', 'Traffic simulator', 'Tools & events']);
   await userEvent.click(branch('Network'));
-  expect(within(navigation).getAllByRole('link').map((link) => link.textContent)).toEqual(['Dashboard', 'Interfaces', 'DHCP', 'DNS', 'Virtual IPs', 'Topology', 'VLANs & Segments', 'VLAN Flow', 'Devices', 'Clients', 'Diagnostics']);
+  expect(within(navigation).getAllByRole('link').map((link) => link.textContent)).toEqual(['Dashboard', 'Interfaces', 'DHCP', 'DNS', 'Virtual IPs', 'Topology', 'VLANs & Segments', 'VLAN Flow', 'Devices', 'Clients']);
 
   await userEvent.click(within(navigation).getByRole('link', { name: 'Interfaces' }));
   expect(await screen.findByRole('heading', { name: 'Interfaces', level: 2 })).toBeInTheDocument();

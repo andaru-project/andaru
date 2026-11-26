@@ -698,6 +698,7 @@ export function NatScreen({ api, session, onSaved, onSessionLost }: NatScreenPro
                   onClose={() => setEditingForward(undefined)}
                   onSessionLost={onSessionLost}
                   onAbandoned={setError}
+                  onAliasCreated={() => { onSaved(); void resource.reload(); }}
                   onSave={async (value) => {
                     try {
                       await api.savePortForward(value, editingForward === 'new' ? undefined : editingForward);
@@ -720,6 +721,7 @@ export function NatScreen({ api, session, onSaved, onSessionLost }: NatScreenPro
                   onClose={() => setEditingOneToOne(undefined)}
                   onSessionLost={onSessionLost}
                   onAbandoned={setError}
+                  onAliasCreated={() => { onSaved(); void resource.reload(); }}
                   onSave={async (value) => {
                     try {
                       await api.saveOneToOneNat(value, editingOneToOne === 'new' ? undefined : editingOneToOne);

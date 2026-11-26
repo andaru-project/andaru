@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -81,6 +83,118 @@ func TestBackupDocumentsRejectMalformedScopes(t *testing.T) {
 	} {
 		if err := ValidateBackupDocuments(input); err == nil {
 			t.Fatal("accepted malformed portable documents")
+		}
+	}
+}
+
+// Notification channels persist, and a backup carries their secrets or, without them, restores them unresolved.
+func TestNotificationChannelsPersistAndBackUp(t *testing.T) {
+	ctx := context.Background()
+	path := ownedDir(t)
+	s := openTestStore(t, path)
+	create, err := ObjectChange("create", "notifications.channels", "", nil, []byte(opsChannel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := s.Save(ctx, systemRootActor, create)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, err := s.Version(ctx, saved.SavedVersion); err != nil || len(v.Changes) != 1 || v.Changes[0].Collection != "notifications.channels" || !v.Changes[0].Created {
+		t.Fatalf("changes %+v %v", v.Changes, err)
+	}
+	s.Close()
+	s = openTestStore(t, path)
+	list, err := s.List(ctx, "notifications.channels")
+	if err != nil || len(list.Items) != 1 || !bytes.Contains(list.Items[0].Value, []byte(`"url":{"secret":"OPS_URL","isSet":true`)) {
+		t.Fatalf("reopened list %+v %v", list, err)
+	}
+	exported, err := s.Export(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var portable struct {
+		Secrets struct{ Core map[string]map[string]string }
+	}
+	if err = json.Unmarshal(exported.ConfigurationSecrets, &portable); err != nil || portable.Secrets.Core["OPS_URL"]["value"] != "https://hooks.example/CHANNEL_SECRET_TOKEN" || portable.Secrets.Core["OPS_AUTH"]["value"] != "Bearer CHANNEL_SECRET_AUTH" {
+		t.Fatalf("backup secrets %s %v", exported.ConfigurationSecrets, err)
+	}
+
+	whole := openTestStore(t, ownedDir(t))
+	if _, err = whole.Restore(ctx, rootRestoreActor, "0", RestoreDocuments{Configuration: exported.Configuration, ConfigurationSecrets: exported.ConfigurationSecrets}); err != nil {
+		t.Fatal(err)
+	}
+	if list, err = whole.List(ctx, "notifications.channels"); err != nil || len(list.Items) != 1 || bytes.Contains(list.Items[0].Value, []byte("unresolved")) {
+		t.Fatalf("restored with secrets %+v %v", list, err)
+	}
+	bare := openTestStore(t, ownedDir(t))
+	result, err := bare.Restore(ctx, rootRestoreActor, "0", RestoreDocuments{Configuration: exported.Configuration})
+	if err != nil || !slices.Equal(result.UnresolvedSecrets, []string{"OPS_AUTH", "OPS_URL"}) {
+		t.Fatalf("restored without secrets %+v %v", result, err)
+	}
+	if snap, err := bare.Snapshot(ctx); err != nil || !bytes.Contains(snap.Value, []byte(`"unresolved":true`)) {
+		t.Fatalf("snapshot %v", err)
+	}
+	if got, err := bare.NotificationChannels(ctx); err != nil || len(got) != 1 || !got[0].Unresolved {
+		t.Fatalf("restored without secrets, channels %+v %v", got, err)
+	}
+
+	// The engine reads the channels with their secrets, and the defaults saved.
+	off, err := ObjectChange("create", "notifications.channels", "", nil, []byte(`{"name":"off","enabled":false,"kind":"webhook","webhook":{"url":{"secret":"OPS_URL"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Save(ctx, systemRootActor, off); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.NotificationChannels(ctx)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("channels %+v %v", got, err)
+	}
+	ops, second := got[0], got[1]
+	if ops.Name != "ops" {
+		ops, second = second, ops
+	}
+	if ops.Name != "ops" || !ops.Enabled || ops.Kind != "webhook" || ops.MinSeverity != "warning" || !slices.Equal(ops.Sources, []string{"apply", "upgrade"}) ||
+		ops.URL != "https://hooks.example/CHANNEL_SECRET_TOKEN" || ops.Authorization != "Bearer CHANNEL_SECRET_AUTH" || ops.Unresolved || ops.ID == "" {
+		t.Fatalf("ops %+v", ops)
+	}
+	if second.Name != "off" || second.Enabled || second.MinSeverity != "info" || second.URL != ops.URL || second.Authorization != "" || second.Unresolved {
+		t.Fatalf("off %+v", second)
+	}
+
+	// ntfy, Pushover, Telegram and e-mail channels are read with their own targets.
+	for _, body := range []string{
+		`{"name":"n","kind":"ntfy","ntfy":{"server":"https://ntfy.example","topic":"alerts","token":{"secret":"N_TOKEN","set":"tk","expectedVersion":"0"}}}`,
+		`{"name":"p","kind":"pushover","pushover":{"token":{"secret":"P_APP","set":"app","expectedVersion":"0"},"user":{"secret":"P_USER","set":"usr","expectedVersion":"0"}}}`,
+		`{"name":"t","kind":"telegram","telegram":{"token":{"secret":"T_BOT","set":"1:bot","expectedVersion":"0"},"chatId":"-100"}}`,
+		`{"name":"e","kind":"email","email":{"host":"smtp.example","port":465,"security":"tls","username":"u","password":{"secret":"E_PASS","set":"pw","expectedVersion":"0"},"from":"a@example.com","to":["ops@example.com"]}}`,
+	} {
+		c, err := ObjectChange("create", "notifications.channels", "", nil, []byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = s.Save(ctx, systemRootActor, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, err = s.NotificationChannels(ctx); err != nil || len(got) != 6 {
+		t.Fatalf("channels %+v %v", got, err)
+	}
+	byName := map[string]NotificationChannel{}
+	for _, c := range got {
+		c.ID, c.Sources = "", nil
+		byName[c.Name] = c
+	}
+	for name, want := range map[string]NotificationChannel{
+		"n": {Name: "n", Enabled: true, Kind: "ntfy", MinSeverity: "info", Server: "https://ntfy.example", Topic: "alerts", Token: "tk"},
+		"p": {Name: "p", Enabled: true, Kind: "pushover", MinSeverity: "info", Token: "app", User: "usr"},
+		"t": {Name: "t", Enabled: true, Kind: "telegram", MinSeverity: "info", Token: "1:bot", ChatID: "-100"},
+		"e": {Name: "e", Enabled: true, Kind: "email", MinSeverity: "info", Host: "smtp.example", Port: 465, Security: "tls",
+			Username: "u", Password: "pw", From: "a@example.com", To: []string{"ops@example.com"}},
+	} {
+		if !reflect.DeepEqual(byName[name], want) {
+			t.Errorf("%s: %+v", name, byName[name])
 		}
 	}
 }

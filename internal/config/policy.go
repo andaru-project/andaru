@@ -3,9 +3,11 @@ package config
 import (
 	"fmt"
 	"net/netip"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // maxRuleLines caps the nft lines one rule renders to.
@@ -28,6 +30,10 @@ var icmpTypes = map[string][]string{
 	"icmp":   {"echo-request", "echo-reply", "destination-unreachable", "time-exceeded", "parameter-problem", "timestamp-request", "timestamp-reply"},
 	"icmpv6": {"echo-request", "echo-reply", "destination-unreachable", "packet-too-big", "time-exceeded", "parameter-problem"},
 }
+
+// negatedDynamic refuses a URL or host-name alias on a side that leaves it out: its set is empty until its list is
+// fetched, and leaving out an empty set lets every address through.
+const negatedDynamic = "An alias fed from a URL or from host names cannot be left out yet: until its list is fetched it is empty, and leaving it out would let every address through."
 
 // validatePolicy checks the aliases, the rules and the management section against each other and the topology.
 // It reports limit errors at most.
@@ -70,10 +76,12 @@ func validatePolicy(d *declaration, limit int) []FieldError {
 		a := &d.Aliases.Addresses[i]
 		p := fmt.Sprintf("/aliases/addresses/%d", i)
 		f := map[int]bool{}
-		fields := map[string]bool{"address": a.Address != "", "prefix": a.Prefix != "", "first": a.First != "" || a.Last != "", "members": a.Members != nil}
-		want := map[string]string{"host": "address", "network": "prefix", "range": "first", "group": "members"}[a.Kind]
+		fields := map[string]bool{"address": a.Address != "", "prefix": a.Prefix != "", "first": a.First != "" || a.Last != "", "members": a.Members != nil,
+			"url": a.URL != "", "names": a.Names != nil, "refreshSeconds": a.RefreshSeconds != 0}
+		want := map[string][]string{"host": {"address"}, "network": {"prefix"}, "range": {"first"}, "group": {"members"},
+			"url": {"url", "refreshSeconds"}, "hostnames": {"names", "refreshSeconds"}}[a.Kind]
 		for field, set := range fields {
-			if set && field != want {
+			if set && !slices.Contains(want, field) {
 				bad(p+"/"+field, "Not used by this kind of address.")
 			}
 		}
@@ -111,8 +119,40 @@ func validatePolicy(d *declaration, limit int) []FieldError {
 				member, ok := addresses[m]
 				if !ok || member.Kind == "group" {
 					bad(fmt.Sprintf("%s/members/%d", p, j), "Members must be existing address aliases that are not groups.")
+				} else if member.dynamic() {
+					bad(fmt.Sprintf("%s/members/%d", p, j), "An alias fed from a URL or from host names cannot be a group's member yet.")
 				}
 			}
+		case "url":
+			if !aliasURL(a.URL) {
+				bad(p+"/url", "Expected an https or http URL with a host, a valid port if any, no user name or password, and no spaces or invisible characters.")
+			}
+		case "hostnames":
+			for j, name := range a.Names {
+				lower := strings.ToLower(name)
+				labels := strings.Split(lower, ".")
+				// A resolver reads a name whose last label is a number, such as 127.1 or 0x7f.1, as an address.
+				last := labels[len(labels)-1]
+				_, numeric := strconv.ParseUint(last, 10, 64)
+				if hex, ok := strings.CutPrefix(last, "0x"); ok {
+					_, numeric = strconv.ParseUint(hex, 16, 64)
+				}
+				if _, e := netip.ParseAddr(name); e == nil || !searchDomain.MatchString(lower) || numeric == nil {
+					bad(fmt.Sprintf("%s/names/%d", p, j), "Expected a host name, such as vpn.example.com, not an address.")
+				} else if slices.ContainsFunc(a.Names[:j], func(n string) bool { return strings.EqualFold(n, name) }) {
+					bad(fmt.Sprintf("%s/names/%d", p, j), "Host name is listed twice.")
+				}
+			}
+		}
+		if a.dynamic() {
+			if a.RefreshSeconds < 60 || a.RefreshSeconds > 86400 {
+				bad(p+"/refreshSeconds", "Expected a refresh interval from 60 to 86400 seconds.")
+			}
+			if a.Kind == "hostnames" && len(a.Names) == 0 {
+				bad(p+"/names", "Expected at least one host name.")
+			}
+			// Its members are known only once fetched or resolved.
+			f[4], f[6] = true, true
 		}
 		families[a.ID] = f
 	}
@@ -213,6 +253,11 @@ func validatePolicy(d *declaration, limit int) []FieldError {
 				if len(s.Addresses) == 0 {
 					bad(fmt.Sprintf("%s/%s/not", p, field), "Name the addresses to leave out.")
 				}
+				for j, ref := range s.Addresses {
+					if a := addresses[ref]; a != nil && a.dynamic() {
+						bad(fmt.Sprintf("%s/%s/addresses/%d", p, field, j), negatedDynamic)
+					}
+				}
 				if len(s.Addresses) > maxLeftOut {
 					bad(fmt.Sprintf("%s/%s/addresses", p, field), fmt.Sprintf("A side leaves out at most %d aliases. Put more of them in a group.", maxLeftOut))
 				}
@@ -283,6 +328,8 @@ func validatePolicy(d *declaration, limit int) []FieldError {
 		for j, ref := range m.AllowedSources {
 			if addresses[ref] == nil {
 				bad(fmt.Sprintf("/management/allowedSources/%d", j), "Expected an existing address alias.")
+			} else if addresses[ref].dynamic() {
+				bad(fmt.Sprintf("/management/allowedSources/%d", j), "An alias fed from a URL or from host names cannot be a management source yet.")
 			}
 		}
 	}
@@ -290,4 +337,19 @@ func validatePolicy(d *declaration, limit int) []FieldError {
 		bad("/nat/outbound/mode", "Expected none or automatic.")
 	}
 	return out
+}
+
+// aliasURL reports whether s is a URL an alias may be fed from: https or http, a host, a port in range when one is
+// given, no credentials, and nothing a reader cannot see.
+func aliasURL(s string) bool {
+	u, e := url.Parse(s)
+	if e != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" || u.User != nil ||
+		invalidText(s, true) || strings.ContainsFunc(s, unicode.IsSpace) {
+		return false
+	}
+	if u.Port() == "" {
+		return true
+	}
+	port, e := strconv.Atoi(u.Port())
+	return e == nil && port >= 1 && port <= 65535
 }

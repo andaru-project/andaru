@@ -13,6 +13,7 @@ import (
 const topUsage = `usage: andaru engine [OPTIONS]
        andaru ctl [--socket PATH] COMMAND [ARGUMENTS]
        andaru realize [--state-dir PATH] VERB [ARGUMENTS]
+       andaru outbound [--bus-socket PATH] [--cache-dir PATH]
 `
 
 const topHelp = `Andaru is a Free Software firewall platform. The engine owns the saved
@@ -21,9 +22,10 @@ makes saved networking live on the host.
 
 ` + topUsage + `
 Commands:
-  engine   Run the engine: the local API, saved configuration and identities
-  ctl      Read and change the configuration through the running engine
-  realize  Privileged host steps the engine and systemd units run
+  engine    Run the engine: the local API, saved configuration and identities
+  ctl       Read and change the configuration through the running engine
+  realize   Privileged host steps the engine and systemd units run
+  outbound  The unprivileged service that sends notifications
 
 Run 'andaru <command> --help' for the options of a command.
 `
@@ -83,6 +85,20 @@ Options:
                      confirm and rollback; without it, the bus is not told
 `
 
+const outboundUsage = "usage: andaru outbound [--bus-socket PATH] [--cache-dir PATH]\n"
+
+const outboundHelp = `Run andaru-outbound, the unprivileged service that talks to the outside world
+for the engine: it reads delivery jobs from the event bus and sends them.
+Its systemd unit runs it as the andaru-outbound user.
+
+` + outboundUsage + `
+Options:
+  --bus-socket PATH  the bus socket for Andaru's services
+                     (default /run/andaru-services/bus.sock)
+  --cache-dir PATH   where sent job IDs and jobs waiting for a retry are kept
+                     (default $CACHE_DIRECTORY, else /var/cache/andaru-outbound)
+`
+
 const ctlUsage = "usage: andaru ctl [--socket PATH] COMMAND [ARGUMENTS]\n"
 
 // ctlCommand is the help of one `andaru ctl` command: a one-line summary for the command
@@ -131,7 +147,8 @@ Commands:
   changes  Save the batch of changes on stdin, all or nothing
 
 Collections: links, segments, zones, aliases/addresses, aliases/ports, dhcp,
-  dhcp6, virtualAddresses, rules, nat/port-forwards, nat/one-to-one
+  dhcp6, virtualAddresses, notifications/channels, rules, nat/port-forwards,
+  nat/one-to-one
 Singletons: management, nat/outbound, dns
 Lists: rules, nat/port-forwards, nat/one-to-one
 

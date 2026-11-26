@@ -22,7 +22,7 @@ type family int
 type filter struct {
 	r        *renderer
 	sets     []string
-	families map[string]map[family][]string // address ID -> family -> nft elements
+	families map[string]map[family][]string // address ID -> family -> nft elements; a family it has no set for is absent
 	services map[string]service
 	// reflection is set once any NAT entry reflects; it adds the internal sets and the hairpin masquerade.
 	reflection bool
@@ -268,13 +268,23 @@ func (f *filter) addresses() {
 				elements[fam] = append(elements[fam], e)
 			}
 		}
+		if a.Kind == "url" || a.Kind == "hostnames" {
+			// Filled after each load from the last fetched list; an alias that never fetched matches nothing.
+			elements[4], elements[6] = []string{}, []string{}
+		}
 		f.families[a.ID] = elements
 		for _, fam := range []family{4, 6} {
-			if len(elements[fam]) > 0 {
+			if f.has(a.ID, fam) {
 				f.set(setName(a.ID)+fmt.Sprintf("_%d", fam), map[family]string{4: "ipv4_addr", 6: "ipv6_addr"}[fam], "interval", elements[fam])
 			}
 		}
 	}
+}
+
+// has reports that an address object renders a set of this family.
+func (f *filter) has(id string, fam family) bool {
+	_, ok := f.families[id][fam]
+	return ok
 }
 
 func familyOf(a netip.Addr) family {
@@ -311,7 +321,7 @@ func (f *filter) rule(r rule) []string {
 			for _, fam := range []family{4, 6} {
 				var none []string
 				for _, ref := range s.Addresses {
-					if len(f.families[ref][fam]) > 0 {
+					if f.has(ref, fam) {
 						none = append(none, fmt.Sprintf("%s %s != @%s_%d", ipKey(fam), dir, setName(ref), fam))
 					}
 				}
@@ -324,7 +334,7 @@ func (f *filter) rule(r rule) []string {
 		default:
 			for _, ref := range s.Addresses {
 				for _, fam := range []family{4, 6} {
-					if len(f.families[ref][fam]) > 0 {
+					if f.has(ref, fam) {
 						addresses = append(addresses, match{fmt.Sprintf("%s %s @%s_%d", ipKey(fam), dir, setName(ref), fam), fam})
 					}
 				}

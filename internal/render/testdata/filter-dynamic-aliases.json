@@ -1,0 +1,183 @@
+{
+  "schemaVersion": 4,
+  "links": [
+    {
+      "id": "lnk_00000001-0000-4000-8000-000000000001",
+      "name": "wan0",
+      "kind": "ethernet",
+      "mtu": 1500,
+      "enabled": true,
+      "permanentMac": "52:54:00:aa:bb:01"
+    },
+    {
+      "id": "lnk_00000002-0000-4000-8000-000000000002",
+      "name": "lan0",
+      "kind": "ethernet",
+      "mtu": 1500,
+      "enabled": true,
+      "permanentMac": "52:54:00:aa:bb:02"
+    }
+  ],
+  "segments": [
+    {
+      "id": "seg_00000001-0000-4000-8000-000000000001",
+      "name": "wan",
+      "link": "lnk_00000001-0000-4000-8000-000000000001",
+      "zone": "zon_00000001-0000-4000-8000-000000000001",
+      "addressing": {
+        "ipv4": {
+          "mode": "dhcp"
+        },
+        "ipv6": {
+          "mode": "dhcp6",
+          "requestPrefixLength": 56
+        }
+      }
+    },
+    {
+      "id": "seg_00000002-0000-4000-8000-000000000002",
+      "name": "lan",
+      "link": "lnk_00000002-0000-4000-8000-000000000002",
+      "zone": "zon_00000002-0000-4000-8000-000000000002",
+      "addressing": {
+        "ipv4": {
+          "mode": "static",
+          "addresses": [
+            "192.0.2.1/24"
+          ]
+        },
+        "ipv6": {
+          "mode": "delegated",
+          "from": "seg_00000001-0000-4000-8000-000000000001",
+          "subnetId": "beef",
+          "ra": {
+            "enabled": true,
+            "managed": false,
+            "otherInfo": true
+          }
+        }
+      }
+    }
+  ],
+  "zones": [
+    {
+      "id": "zon_00000001-0000-4000-8000-000000000001",
+      "name": "wan"
+    },
+    {
+      "id": "zon_00000002-0000-4000-8000-000000000002",
+      "name": "lan"
+    }
+  ],
+  "aliases": {
+    "addresses": [
+      {
+        "id": "adr_00000001-0000-4000-8000-000000000001",
+        "name": "cloudflare",
+        "kind": "url",
+        "url": "https://www.cloudflare.com/ips-v4",
+        "refreshSeconds": 3600
+      },
+      {
+        "id": "adr_00000002-0000-4000-8000-000000000002",
+        "name": "vpn",
+        "kind": "hostnames",
+        "names": [
+          "vpn.example.com"
+        ],
+        "refreshSeconds": 300
+      }
+    ],
+    "ports": [
+      {
+        "id": "svc_00000001-0000-4000-8000-000000000001",
+        "name": "web",
+        "protocol": "tcp",
+        "ports": [
+          "443"
+        ]
+      }
+    ]
+  },
+  "rules": [
+    {
+      "id": "rul_00000001-0000-4000-8000-000000000001",
+      "name": "cloudflare to vpn",
+      "enabled": true,
+      "action": "accept",
+      "from": {
+        "zones": [
+          "zon_00000001-0000-4000-8000-000000000001"
+        ],
+        "addresses": [
+          "adr_00000001-0000-4000-8000-000000000001"
+        ]
+      },
+      "to": {
+        "zones": [
+          "zon_00000002-0000-4000-8000-000000000002"
+        ],
+        "addresses": [
+          "adr_00000002-0000-4000-8000-000000000002"
+        ]
+      },
+      "ports": [
+        "svc_00000001-0000-4000-8000-000000000001"
+      ],
+      "log": false
+    },
+    {
+      "id": "rul_00000002-0000-4000-8000-000000000002",
+      "name": "not vpn",
+      "enabled": true,
+      "action": "drop",
+      "from": {
+        "zones": [
+          "zon_00000002-0000-4000-8000-000000000002"
+        ],
+        "addresses": [
+          "adr_00000002-0000-4000-8000-000000000002"
+        ],
+        "not": true
+      },
+      "to": {
+        "zones": [],
+        "addresses": []
+      },
+      "ports": [],
+      "log": false
+    }
+  ],
+  "nat": {
+    "outbound": {
+      "mode": "automatic"
+    },
+    "portForwards": [
+      {
+        "id": "pfw_00000001-0000-4000-8000-000000000001",
+        "name": "web",
+        "enabled": true,
+        "ingressZones": [
+          "zon_00000001-0000-4000-8000-000000000001"
+        ],
+        "protocol": "tcp",
+        "from": [
+          "adr_00000001-0000-4000-8000-000000000001"
+        ],
+        "to": {
+          "self": true
+        },
+        "filterRule": "auto",
+        "ports": "8443",
+        "target": {
+          "address": "192.0.2.10"
+        },
+        "targetPort": 443,
+        "log": false
+      }
+    ]
+  },
+  "management": {
+    "segment": "seg_00000002-0000-4000-8000-000000000002"
+  }
+}

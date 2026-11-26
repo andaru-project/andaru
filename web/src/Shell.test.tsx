@@ -9,7 +9,7 @@ import { openStreams } from './test/events';
 import { setTimeZone } from './timezone';
 import { fetchRoutes, jsonResponse } from './test/fetch';
 import { apply, pointers, session } from './test/fixtures';
-import { act, render, screen } from './test/render';
+import { act, render, screen, waitFor } from './test/render';
 import userEvent from '@testing-library/user-event';
 
 const reader = session(['configuration.read']);
@@ -221,16 +221,33 @@ it('has the aliases as a page beside the rules', async () => {
 });
 
 it('has a page for what the box is made of, under System', async () => {
+  let hostname = 'edge';
   fetchRoutes({
-    '/api/v1/status/system': { version: '0.5.0-a.4', hostname: 'edge', kernel: '6.17', architecture: 'x86_64', time: '2026-11-21T12:00:00Z', bootedAt: null, memoryBytes: 0, guest: '', iommu: false,
+    '/api/v1/status/system': () => jsonResponse(200, { version: '0.5.0-a.4', hostname, kernel: '6.17', architecture: 'x86_64', time: '2026-11-21T12:00:00Z', bootedAt: null, memoryBytes: 0, guest: '', iommu: false,
       cpu: { model: 'Test CPU', cores: 2, threads: 2, microcode: '', level: '', features: { cryptography: [], security: [], virtualization: [] }, vulnerabilities: [] },
-      hardware: { vendor: '', product: '', serial: '', boardVendor: '', board: '', biosVendor: '', biosVersion: '', biosDate: '' } },
+      hardware: { vendor: '', product: '', serial: '', boardVendor: '', board: '', biosVendor: '', biosVersion: '', biosDate: '' } }),
+    'POST /api/v1/system/hostname': () => {
+      hostname = 'core-gw';
+      return jsonResponse(200, { hostname });
+    },
     '/api/v1/applies': unapplied,
     '/api/v1/versions?': { state: 'saved', items: [] },
   });
-  render(<MemoryRouter initialEntries={['/system/details']}><Shell api={new ApiClient('csrf')} session={session(['status.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} /></MemoryRouter>);
+  const { unmount } = render(<MemoryRouter initialEntries={['/system/details']}><Shell api={new ApiClient('csrf')} session={session(['status.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} /></MemoryRouter>);
   expect(await screen.findByRole('heading', { name: 'System details' })).toBeInTheDocument();
   expect(await screen.findByRole('region', { name: 'Processor' })).toHaveTextContent('Test CPU, 2 cores');
+  expect(screen.queryByRole('button', { name: 'Change hostname' })).not.toBeInTheDocument();
+  unmount();
+
+  const user = userEvent.setup();
+  render(<MemoryRouter initialEntries={['/system/details']}><Shell api={new ApiClient('csrf')} session={session(['status.read', 'configuration.apply'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} /></MemoryRouter>);
+  await user.click(await screen.findByRole('button', { name: 'Change hostname' }));
+  const input = await screen.findByLabelText(/Hostname/i, { selector: 'input' });
+  await user.clear(input);
+  await user.type(input, 'core-gw');
+  await user.click(screen.getByRole('button', { name: 'Save hostname' }));
+  expect(await screen.findByText('Hostname updated to core-gw.')).toBeInTheDocument();
+  await waitFor(() => expect(document.title).toContain('core-gw'));
 });
 
 it('reads the box again each minute, so an upgrade behind an open tab shows', async () => {
@@ -713,6 +730,23 @@ it('shows the 503 state in the header and on the Notifications page', async () =
   expect(alert).toHaveTextContent('Notifications are temporarily unavailable.');
 });
 
+it('lets a configuration.read-only account open /system/notifications to view channels without the header bell', async () => {
+  fetchRoutes({
+    '/api/v1/applies': unapplied,
+    '/api/v1/versions?': { state: 'saved', items: [] },
+    '/api/v1/config/notifications/channels': { state: 'saved', savedVersion: '10', items: [] },
+  });
+  render(
+    <MemoryRouter initialEntries={['/system/notifications']}>
+      <Shell api={new ApiClient('csrf')} session={session(['configuration.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} />
+    </MemoryRouter>,
+  );
+  expect(await screen.findByRole('heading', { name: 'Notifications' })).toBeInTheDocument();
+  expect(await screen.findByText('No notification channels')).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'Notifications' })).toBeInTheDocument();
+  expect(document.querySelector('.notification-button')).toBeNull();
+});
+
 it('shows System -> Backups only when the session has backup capabilities', async () => {
   fetchRoutes({});
   const first = render(
@@ -749,4 +783,21 @@ it('shows Network -> Virtual IPs when the session can read configuration', async
   expect(await screen.findByRole('heading', { name: 'Virtual IPs' })).toBeInTheDocument();
   expect(screen.getByRole('link', { name: 'Virtual IPs' })).toHaveAttribute('aria-current', 'page');
   expect(document.title).toBe('Virtual IPs — Andaru');
+});
+
+it('shows Diagnostics -> Traffic simulator when the session can read configuration', async () => {
+  fetchRoutes({
+    '/api/v1/applies': unapplied,
+    '/api/v1/versions?': { state: 'saved', items: [] },
+    '/api/v1/upgrade/preview': { questions: [] },
+    '/api/v1/config': { state: 'saved', savedVersion: '1', value: { links: [], segments: [], zones: [] } },
+  });
+  render(
+    <MemoryRouter initialEntries={['/diagnostics/traffic-flow']}>
+      <Shell api={new ApiClient('csrf')} session={session(['configuration.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} />
+    </MemoryRouter>,
+  );
+  expect(await screen.findByRole('heading', { name: 'Traffic simulator' })).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'Traffic simulator' })).toHaveAttribute('aria-current', 'page');
+  expect(document.title).toBe('Traffic simulator — Andaru');
 });

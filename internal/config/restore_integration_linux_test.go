@@ -389,3 +389,27 @@ func TestRestoreConcurrentSavePrecondition(t *testing.T) {
 		t.Fatal("concurrent operations advanced or lost the head", err)
 	}
 }
+
+// A restore keeps the binding a save keeps: a link cannot come back holding a secret of the notification kind.
+func TestRestoreKeepsSecretKinds(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t, ownedDir(t))
+	if _, err := s.Save(ctx, systemRootActor, networkInput(t)); err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.Export(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	swapped := bytes.ReplaceAll(before.ConfigurationSecrets, []byte(`"kind":"password"`), []byte(`"kind":"notification"`))
+	if bytes.Equal(swapped, before.ConfigurationSecrets) {
+		t.Fatal("no password secret to swap")
+	}
+	input := RestoreDocuments{ConfigurationSecrets: json.RawMessage(swapped)}
+	preview, err := s.PreviewRestore(ctx, input)
+	if err != nil || !slices.Contains(preview.BlockingSecrets, "WAN_PASSWORD") {
+		t.Fatalf("preview %+v %v", preview, err)
+	}
+	_, err = s.Restore(ctx, rootRestoreActor, before.SavedVersion, input)
+	requireFault(t, err, "VALIDATION_FAILED")
+}

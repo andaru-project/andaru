@@ -2,6 +2,7 @@
 # CoreOS's own presets say. These lines sort first, so they win. Setup decides when SSH is enabled; Andaru drives updates.
 enable systemd-networkd.service
 enable andaru-engine.service
+enable andaru-outbound.service
 enable andaru-network-boot.service
 enable andaru-factory-reset.service
 enable andaru-install-cleanup.service

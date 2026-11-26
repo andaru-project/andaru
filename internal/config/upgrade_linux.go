@@ -80,7 +80,7 @@ func (s *Store) Upgrade(ctx context.Context, actor authz.Actor, expected Version
 		return SaveResult{}, err
 	}
 	if len(preview.BlockingSecrets) != 0 {
-		return SaveResult{}, fault("VALIDATION_FAILED", "/choices", "The answered settings name a secret the store does not hold.")
+		return SaveResult{}, fault("VALIDATION_FAILED", "/choices", "The answered settings name a secret the store does not hold, or one of another kind.")
 	}
 	saved, err := p.publish(ctx)
 	if err == nil {

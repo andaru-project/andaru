@@ -376,6 +376,33 @@ func TestClientConsume(t *testing.T) {
 	nothing(t, web.Messages())
 }
 
+// A declared consumer reads what was published before its first attach; declaring it again moves nothing.
+func TestDeclaredConsumerKeepsEarlyEvents(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.publish("config/head", `"before"`, true)
+	if err := h.bus.Declare("web", "ui", "config/#"); err != nil {
+		t.Fatal(err)
+	}
+	h.publish("config/head", "1", true)
+	if err := h.bus.Declare("web", "ui", "config/#"); err != nil {
+		t.Fatal(err)
+	}
+	h.publish("config/head", "2", true)
+	if err := h.bus.Declare("web", "ui", "config/#/x"); err == nil {
+		t.Fatal("declared an invalid filter")
+	}
+	web := h.dial("web")
+	if err := web.Consume(ctx(t), "ui", "config/#"); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"1", "2"} {
+		if d := receive(t, web.Messages()); string(d.Payload) != want || d.Gap {
+			t.Fatalf("got %+v, want %s", d, want)
+		}
+	}
+	nothing(t, web.Messages())
+}
+
 // A consumer gets at most window events before it acks.
 func TestClientConsumeWindow(t *testing.T) {
 	h := newHarness(t, Options{})
