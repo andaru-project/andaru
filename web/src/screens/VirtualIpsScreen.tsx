@@ -291,7 +291,9 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
               {shown.length === 0 ? (
                 <Alert role="status" title="No virtual IPs">
                   {sorted.length === 0
-                    ? 'No virtual IP is saved yet. Add one here to give firewall services such as DNS or port forwards their own address.'
+                    ? (canWrite
+                      ? 'No virtual IP is saved yet. Add one here to give firewall services such as DNS or port forwards their own address.'
+                      : 'No virtual IP is saved yet.')
                     : 'No virtual IP matches the filter.'}
                 </Alert>
               ) : (
@@ -349,7 +351,7 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
                 </ScrollArea>
               )}
 
-              {editing && !(editing === 'new' && atLimit) && (
+              {editing && (
                 <VirtualIpEditor
                   key={editing === 'new' ? 'new' : editing.value.id}
                   saved={editingSaved}
