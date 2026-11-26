@@ -70,20 +70,33 @@ func leaseTimes(cltt int64, valid int) (*time.Time, *time.Time) {
 	return &t, nil
 }
 
+func parseAddrKey(s string) (netip.Addr, int, bool) {
+	if strings.ContainsRune(s, '/') {
+		if p, err := netip.ParsePrefix(s); err == nil {
+			return p.Addr(), p.Bits(), true
+		}
+		return netip.Addr{}, -1, false
+	}
+	if a, err := netip.ParseAddr(s); err == nil {
+		return a, -1, true
+	}
+	return netip.Addr{}, -1, false
+}
+
 func compareAddrText(a, b string) int {
-	if strings.ContainsRune(a, '/') && strings.ContainsRune(b, '/') {
-		if pa, ea := netip.ParsePrefix(a); ea == nil {
-			if pb, eb := netip.ParsePrefix(b); eb == nil {
-				return cmp.Or(pa.Addr().Compare(pb.Addr()), cmp.Compare(pa.Bits(), pb.Bits()))
-			}
+	aa, abits, okA := parseAddrKey(a)
+	ba, bbits, okB := parseAddrKey(b)
+	switch {
+	case okA && okB:
+		return cmp.Or(aa.Compare(ba), cmp.Compare(abits, bbits))
+	case okA != okB:
+		if okA {
+			return -1
 		}
+		return 1
+	default:
+		return cmp.Compare(a, b)
 	}
-	if aa, ea := netip.ParseAddr(a); ea == nil {
-		if ab, eb := netip.ParseAddr(b); eb == nil {
-			return aa.Compare(ab)
-		}
-	}
-	return cmp.Compare(a, b)
 }
 
 func buildLease4Views(cfg keaConfig, leases []keaLease) []Lease4View {
