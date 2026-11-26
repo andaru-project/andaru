@@ -80,8 +80,8 @@ func validateChannels(d *declaration, bad func(string, string)) {
 			bad(p+"/name", "Name already exists in this collection.")
 		}
 		seen[c.ID], seen["name:"+c.Name] = true, true
-		if c.Ntfy != nil && !webhookURL(c.Ntfy.Server) {
-			bad(p+"/ntfy/server", "Expected an http or https URL with a host.")
+		if c.Ntfy != nil && !ntfyServer(c.Ntfy.Server) {
+			bad(p+"/ntfy/server", "Expected an http or https URL of a server, with no query, fragment or credentials.")
 		}
 		for j, source := range c.Filter.Sources {
 			if invalidText(source, true) {
@@ -89,4 +89,11 @@ func validateChannels(d *declaration, bad func(string, string)) {
 			}
 		}
 	}
+}
+
+// ntfyServer reports whether s is an ntfy server's base URL, which may sit under a path behind a proxy. It is not a
+// secret, so it may not hold credentials, and the publish path is added to it, so it has no query or fragment.
+func ntfyServer(s string) bool {
+	u, e := url.Parse(s)
+	return e == nil && webhookURL(s) && u.User == nil && u.RawQuery == "" && !u.ForceQuery && u.Fragment == ""
 }

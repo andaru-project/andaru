@@ -160,3 +160,17 @@ func TestAppSenders(t *testing.T) {
 		})
 	}
 }
+
+// A credential with a control character, as a pasted token's trailing newline, is given up at once, not retried for
+// an hour: every attempt would fail alike.
+func TestControlCharacterInCredentialIsPermanent(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls++ }))
+	defer srv.Close()
+	job := delivery.Job{ID: "e:c", Kind: delivery.Ntfy, Message: delivery.Message{Subject: "s"},
+		Ntfy: &delivery.NtfyTarget{Server: srv.URL, Topic: "t", Token: "tk_abc\n"}}
+	err := sendNtfy(context.Background(), srv.Client(), job)
+	if !isPermanent(err) || calls != 0 || strings.Contains(err.Error(), "tk_abc") {
+		t.Fatalf("%v, %d calls", err, calls)
+	}
+}

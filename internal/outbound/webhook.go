@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
+	"unicode"
 
 	"github.com/andaru-project/andaru/internal/delivery"
 )
@@ -41,6 +43,14 @@ func sendWebhook(ctx context.Context, client *http.Client, job delivery.Job) err
 // 408, 429 and 5xx are retried; anything else, a redirect included (it is not followed), comes back the same on a
 // retry. The body comes from the network: no more than a little is read, and none of it is shown.
 func post(client *http.Client, req *http.Request, service string, accepted func(body []byte) bool) error {
+	// A header value with a control character, as a pasted token's newline, fails every attempt alike.
+	for _, values := range req.Header {
+		for _, v := range values {
+			if strings.ContainsFunc(v, unicode.IsControl) {
+				return permanent(fmt.Errorf("a %s credential holds a control character", service))
+			}
+		}
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return redact(err)

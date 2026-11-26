@@ -108,6 +108,9 @@ func TestChannelRefusals(t *testing.T) {
 		"other kind":            {`{"name":"x","kind":"email","webhook":{"url":{"secret":"U","set":"https://h/","expectedVersion":"0"}}}`, "/kind"},
 		"no webhook":            {`{"name":"x","kind":"webhook"}`, ""},
 		"ntfy without ntfy":     {`{"name":"x","kind":"ntfy","webhook":{"url":{"secret":"U","set":"https://h/","expectedVersion":"0"}}}`, ""},
+		"ntfy credentials":      {`{"name":"x","kind":"ntfy","ntfy":{"server":"https://alice:hunter2@ntfy.example","topic":"t"}}`, "/ntfy/server"},
+		"ntfy query":            {`{"name":"x","kind":"ntfy","ntfy":{"server":"https://ntfy.example/?a=b","topic":"t"}}`, "/ntfy/server"},
+		"ntfy fragment":         {`{"name":"x","kind":"ntfy","ntfy":{"server":"https://ntfy.example/#f","topic":"t"}}`, "/ntfy/server"},
 		"ntfy and webhook":      {`{"name":"x","kind":"ntfy","ntfy":{"server":"https://ntfy.sh","topic":"t"},"webhook":{"url":{"secret":"U","set":"https://h/","expectedVersion":"0"}}}`, ""},
 		"ntfy bad topic":        {`{"name":"x","kind":"ntfy","ntfy":{"server":"https://ntfy.sh","topic":"a/b"}}`, "/ntfy/topic"},
 		"ntfy long topic":       {`{"name":"x","kind":"ntfy","ntfy":{"server":"https://ntfy.sh","topic":"` + strings.Repeat("a", 65) + `"}}`, "/ntfy/topic"},
@@ -326,5 +329,21 @@ func TestRecoveryCopyWithChannelsRestores(t *testing.T) {
 	}
 	if e = ValidateBackupDocuments(docs); e != nil || bytes.Contains(docs.Configuration, []byte("notifications")) {
 		t.Fatalf("%#v %s", e, docs.Configuration)
+	}
+}
+
+// A restored channel of any kind may be edited with its unresolved secret sent back unchanged.
+func TestRestoredUnresolvedAppChannelCanBeEdited(t *testing.T) {
+	s := seededState(t)
+	body := `{"name":"t","kind":"telegram","telegram":{"token":{"secret":"TG_TOKEN","set":"123:abc","expectedVersion":"0"},"chatId":"-100"}}`
+	p, e := channelChange(t, &s, "create", "", "", body, "8")
+	if e != nil {
+		t.Fatal(e)
+	}
+	ch := &p.State.Config.Notifications.Channels[0]
+	ch.Telegram.Token.Unresolved = true
+	echo := `{"name":"t","enabled":false,"kind":"telegram","telegram":{"token":{"secret":"TG_TOKEN","unresolved":true},"chatId":"-100"}}`
+	if _, e := channelChange(t, &p.State, "replace", ch.ID, "8", echo, "9"); e != nil {
+		t.Fatalf("disabling it: %#v", e)
 	}
 }

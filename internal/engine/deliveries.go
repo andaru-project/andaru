@@ -20,7 +20,7 @@ type channelReader func(context.Context) ([]config.NotificationChannel, error)
 // deliverNotifications publishes a delivery job for each raise to each enabled channel whose filter passes it. A
 // job's ID is the event's and the channel's, so a raise handed on again makes the same jobs, which andaru-outbound
 // sends once.
-func deliverNotifications(events *bus.Bus, channels channelReader, log *slog.Logger) notify.Deliver {
+func deliverNotifications(events *bus.Bus, channels channelReader, origin string, log *slog.Logger) notify.Deliver {
 	return func(e bus.Event, r notify.Raise, payload []byte) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -44,7 +44,7 @@ func deliverNotifications(events *bus.Bus, channels channelReader, log *slog.Log
 				raised = now
 			}
 			// One channel's failure keeps no other from its job.
-			failed = errors.Join(failed, publishJob(events, c, e.ID+":"+c.ID, e.Source, raised, r, payload))
+			failed = errors.Join(failed, publishJob(events, c, origin, e.ID+":"+c.ID, e.Source, raised, r, payload))
 		}
 		return failed
 	}
@@ -58,8 +58,8 @@ func passes(c config.NotificationChannel, source, severity string) bool {
 }
 
 // publishJob publishes, durably, the job sending r to c. event is the notification's own event.
-func publishJob(events *bus.Bus, c config.NotificationChannel, id, source string, raised time.Time, r notify.Raise, event []byte) error {
-	job := delivery.Job{ID: id, Channel: c.ID, Name: c.Name, Kind: c.Kind, Event: event, Message: delivery.Message{
+func publishJob(events *bus.Bus, c config.NotificationChannel, origin, id, source string, raised time.Time, r notify.Raise, event []byte) error {
+	job := delivery.Job{ID: id, Origin: origin, Channel: c.ID, Name: c.Name, Kind: c.Kind, Event: event, Message: delivery.Message{
 		Source: source, Key: r.Key, Severity: r.Severity, Subject: r.Subject, Detail: r.Detail, Link: r.Link, Raised: raised}}
 	switch c.Kind {
 	case delivery.Webhook:
