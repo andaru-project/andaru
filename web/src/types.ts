@@ -689,7 +689,8 @@ export interface NotificationList {
   items: Notification[];
 }
 
-export type NotificationChannelKind = 'webhook';
+export type KnownNotificationChannelKind = 'webhook' | 'ntfy' | 'pushover' | 'telegram';
+export type NotificationChannelKind = KnownNotificationChannelKind | (string & {});
 
 export interface NotificationChannelFilter {
   minSeverity?: NotificationSeverity;
@@ -701,6 +702,22 @@ export interface WebhookChannelConfig {
   authorization?: SecretView;
 }
 
+export interface NtfyChannelConfig {
+  server: string;
+  topic: string;
+  token?: SecretView;
+}
+
+export interface PushoverChannelConfig {
+  token: SecretView;
+  user: SecretView;
+}
+
+export interface TelegramChannelConfig {
+  token: SecretView;
+  chatId: string;
+}
+
 export interface NotificationChannel {
   id: string;
   name: string;
@@ -709,6 +726,10 @@ export interface NotificationChannel {
   kind: NotificationChannelKind;
   filter?: NotificationChannelFilter;
   webhook?: WebhookChannelConfig;
+  ntfy?: NtfyChannelConfig;
+  pushover?: PushoverChannelConfig;
+  telegram?: TelegramChannelConfig;
+  [extraKind: string]: unknown;
 }
 
 export interface SecretWrite {
@@ -727,6 +748,19 @@ export interface NotificationChannelWrite {
   webhook?: {
     url: SecretWrite;
     authorization?: SecretWrite;
+  };
+  ntfy?: {
+    server: string;
+    topic: string;
+    token?: SecretWrite;
+  };
+  pushover?: {
+    token: SecretWrite;
+    user: SecretWrite;
+  };
+  telegram?: {
+    token: SecretWrite;
+    chatId: string;
   };
 }
 
