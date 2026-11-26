@@ -8,7 +8,7 @@ import { render } from '../test/render';
 import { setTimeZone } from '../timezone';
 import type { Dhcp4Entry, Dhcp6Entry, LeaseView, Snapshot } from '../types';
 import {
-  checkDhcp4, dhcp4Payload, ipv6SuffixOf, leaseMatchesStatic4, leaseMatchesStatic6, newRowKey, suggestedIpv4Range,
+  checkDhcp4, checkDhcp6, dhcp4Payload, draft6Of, ipv6SuffixOf, leaseMatchesStatic4, leaseMatchesStatic6, newRowKey, suggestedIpv4Range,
 } from '../dhcpEdit';
 import { DhcpScreen } from './DhcpScreen';
 
@@ -544,5 +544,25 @@ describe('dhcpEdit helpers', () => {
     expect(ipv6SuffixOf('2001:db8::192.0.2.1')).toBe('');
     expect(ipv6SuffixOf('2001::db8::1')).toBe('');
     expect(ipv6SuffixOf('1:2:3:4::5:6:7:8')).toBe('');
+  });
+
+  it('validates delegated DHCPv6 prefix lengths against the pool length rather than 48', () => {
+    const delegatedDraft = {
+      ...draft6Of(undefined, guestSeg),
+      pdEnabled: true,
+      pdSubnetId: '1',
+      pdLength: '40',
+      pdDelegatedLength: '44',
+    };
+    expect(checkDhcp6(delegatedDraft, true).size).toBe(0);
+    expect(checkDhcp6({ ...delegatedDraft, pdDelegatedLength: '39' }, true).get('prefixDelegation/delegatedLength')).toBe('Expected 40 to 64.');
+
+    const staticDraft = {
+      ...draft6Of(undefined, lanSeg),
+      pdEnabled: true,
+      pdPrefix: 'fd00:beef::/32',
+      pdDelegatedLength: '44',
+    };
+    expect(checkDhcp6(staticDraft, false).get('prefixDelegation/delegatedLength')).toBe('Expected 48 to 64.');
   });
 });

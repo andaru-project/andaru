@@ -347,13 +347,22 @@ export function checkDhcp6(draft: Dhcp6Draft, delegated: boolean): Map<string, s
   });
   if (draft.pdEnabled) {
     const dlen = parseDecimalInt(draft.pdDelegatedLength);
-    if (!Number.isInteger(dlen) || dlen < 48 || dlen > 64) found.set('prefixDelegation/delegatedLength', 'Expected 48 to 64.');
     if (delegated) {
       if (!draft.pdSubnetId.trim()) found.set('prefixDelegation/subnetId', 'Enter a hex subnet ID.');
       const len = parseDecimalInt(draft.pdLength);
-      if (!Number.isInteger(len) || len < 1 || len > 64) found.set('prefixDelegation/length', 'Enter the pool prefix length.');
-    } else if (!draft.pdPrefix.trim()) {
-      found.set('prefixDelegation/prefix', 'Enter an IPv6 pool prefix, such as fd00:beef:1::/48.');
+      const validLen = Number.isInteger(len) && len >= 1 && len <= 64;
+      if (!validLen) found.set('prefixDelegation/length', 'Enter the pool prefix length.');
+      const minDlen = validLen ? len : 1;
+      if (!Number.isInteger(dlen) || dlen < minDlen || dlen > 64) {
+        found.set('prefixDelegation/delegatedLength', `Expected ${minDlen} to 64.`);
+      }
+    } else {
+      if (!draft.pdPrefix.trim()) {
+        found.set('prefixDelegation/prefix', 'Enter an IPv6 pool prefix, such as fd00:beef:1::/48.');
+      }
+      if (!Number.isInteger(dlen) || dlen < 48 || dlen > 64) {
+        found.set('prefixDelegation/delegatedLength', 'Expected 48 to 64.');
+      }
     }
   }
   draft.staticLeases.forEach((l, i) => {
