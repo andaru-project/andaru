@@ -38,10 +38,10 @@ func ReadLLDPNeighbors(ctx context.Context) ([]LLDPNeighbor, error) {
 }
 
 func readLLDPNeighbors(ctx context.Context, run func(context.Context, string, ...string) ([]byte, error)) ([]LLDPNeighbor, error) {
-	// networkctl fails outright while networkd is stopped.
+	// networkctl fails outright while networkd is stopped (LSB exit 3=inactive, 4=no such unit).
 	if _, err := run(ctx, "/usr/bin/systemctl", "is-active", "--quiet", "systemd-networkd.service"); err != nil {
 		var exit *exec.ExitError
-		if errors.As(err, &exit) {
+		if errors.As(err, &exit) && (exit.ExitCode() == 3 || exit.ExitCode() == 4) {
 			return []LLDPNeighbor{}, nil
 		}
 		return nil, err

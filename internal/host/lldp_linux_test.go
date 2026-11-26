@@ -96,10 +96,10 @@ func TestParseLLDPNeighborsPopulatedSanitizedAndFallbacks(t *testing.T) {
 }
 
 func TestReadLLDPNeighborsWhenNetworkdStopped(t *testing.T) {
-	exitErr := exec.Command("false").Run()
+	inactiveErr := exec.Command("sh", "-c", "exit 3").Run()
 	got, err := readLLDPNeighbors(context.Background(), func(_ context.Context, name string, _ ...string) ([]byte, error) {
 		if name == "/usr/bin/systemctl" {
-			return nil, exitErr
+			return nil, inactiveErr
 		}
 		t.Fatalf("networkctl must not run when networkd is stopped, got %s", name)
 		return nil, nil
@@ -109,6 +109,14 @@ func TestReadLLDPNeighborsWhenNetworkdStopped(t *testing.T) {
 	}
 	if got == nil || len(got) != 0 {
 		t.Fatalf("want empty non-nil slice, got %#v", got)
+	}
+
+	// Operational systemctl failures (exit 1) propagate as errors instead of masking as empty.
+	opErr := exec.Command("sh", "-c", "exit 1").Run()
+	if _, err := readLLDPNeighbors(context.Background(), func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, opErr
+	}); err == nil {
+		t.Fatal("expected operational systemctl exit 1 to propagate error")
 	}
 }
 
