@@ -296,7 +296,6 @@ const emailMaxRecipients = 20;
 const dnsHostnamePattern = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/i;
 const ipv4Pattern = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
 const forbiddenEmailAddrChars = /[ <>"\\()[\],;:]/;
-const quotedDisplayNamePattern = /^"(?:[^"\\]|\\.)*"$/;
 const unquotedDisplaySpecials = /[()<>@,;:\\"[\]]/;
 
 function isValidIPv4(value: string): boolean {
@@ -449,11 +448,45 @@ function decodeRfc2047Words(input: string): string {
   ));
 }
 
-function parsedDisplayName(raw: string): string {
-  if (quotedDisplayNamePattern.test(raw)) {
-    return raw.slice(1, -1).replace(/\\(.)/g, '$1');
+function parseDisplayPhrase(raw: string): string | undefined {
+  const words: Array<{ text: string; encodedWord: boolean }> = [];
+  let i = 0;
+  while (i < raw.length) {
+    while (i < raw.length && /\s/.test(raw[i])) i += 1;
+    if (i >= raw.length) break;
+    if (raw[i] === '"') {
+      i += 1;
+      let buf = '';
+      let closed = false;
+      while (i < raw.length) {
+        const ch = raw[i++];
+        if (ch === '\\') {
+          if (i >= raw.length) return undefined;
+          buf += raw[i++];
+        } else if (ch === '"') {
+          closed = true;
+          break;
+        } else {
+          buf += ch;
+        }
+      }
+      if (!closed) return undefined;
+      words.push({ text: buf, encodedWord: false });
+    } else {
+      const start = i;
+      while (i < raw.length && !/\s/.test(raw[i]) && !unquotedDisplaySpecials.test(raw[i])) i += 1;
+      if (i === start) return undefined;
+      const token = raw.slice(start, i);
+      const isEncoded = /^=\?[A-Za-z0-9_-]+\?[QqBb]\?[^?\s]*\?=$/.test(token);
+      words.push({ text: isEncoded ? decodeRfc2047Words(token) : token, encodedWord: isEncoded });
+    }
   }
-  return decodeRfc2047Words(raw.replace(/\s+/g, ' '));
+  let out = '';
+  for (let k = 0; k < words.length; k += 1) {
+    if (k > 0 && !(words[k - 1].encodedWord && words[k].encodedWord)) out += ' ';
+    out += words[k].text;
+  }
+  return out;
 }
 
 function validateDisplayName(decoded: string): string | undefined {
@@ -491,11 +524,12 @@ export function parseEmailAddress(raw: string): { address: string } | { error: s
       return { error: 'Enter one e-mail address, such as Andaru <alerts@example.com>.' };
     }
     const displayName = uncommented.slice(0, lt).trim();
-    if (displayName && !quotedDisplayNamePattern.test(displayName) && unquotedDisplaySpecials.test(displayName)) {
-      return { error: 'Quote display names containing special characters, or use a plain address.' };
-    }
     if (displayName) {
-      const nameErr = validateDisplayName(parsedDisplayName(displayName));
+      const parsed = parseDisplayPhrase(displayName);
+      if (parsed === undefined) {
+        return { error: 'Quote display names containing special characters, or use a plain address.' };
+      }
+      const nameErr = validateDisplayName(parsed);
       if (nameErr) return { error: nameErr };
     }
     addr = uncommented.slice(lt + 1, -1);

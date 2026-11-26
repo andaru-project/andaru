@@ -394,6 +394,9 @@ describe('notificationChannels', () => {
     const rfc2047TooLong = `=?UTF-8?Q?${'=C3=A9'.repeat(33)}?=`;
     expect(parseEmailAddress(`${rfc2047Ok} <ops@example.com>`)).toEqual({ address: 'ops@example.com' });
     expect(parseEmailAddress(`ops@example.com (${rfc2047Ok})`)).toEqual({ address: 'ops@example.com' });
+    expect(parseEmailAddress('"Doe," Jane <jane@example.com>')).toEqual({ address: 'jane@example.com' });
+    expect(parseEmailAddress('"Ops" "Team" <ops@example.com>')).toEqual({ address: 'ops@example.com' });
+    expect(parseEmailAddress('"Ops" =?UTF-8?Q?=C3=A9?= <ops@example.com>')).toEqual({ address: 'ops@example.com' });
     expect('error' in parseEmailAddress(`${rfc2047TooLong} <ops@example.com>`)).toBe(true);
     expect('error' in parseEmailAddress(`"${rfc2047Ok}" <ops@example.com>`)).toBe(true);
     expect('error' in parseEmailAddress('=?UTF-8?Q?Hi=0D=0A?= <ops@example.com>')).toBe(true);
