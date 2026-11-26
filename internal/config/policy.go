@@ -1,13 +1,13 @@
 package config
 
 import (
-	"cmp"
 	"fmt"
 	"net/netip"
 	"net/url"
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // maxRuleLines caps the nft lines one rule renders to.
@@ -344,9 +344,12 @@ func validatePolicy(d *declaration, limit int) []FieldError {
 func aliasURL(s string) bool {
 	u, e := url.Parse(s)
 	if e != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" || u.User != nil ||
-		invalidText(s, true) || strings.ContainsAny(s, " \t") {
+		invalidText(s, true) || strings.ContainsFunc(s, unicode.IsSpace) {
 		return false
 	}
-	port, e := strconv.Atoi(cmp.Or(u.Port(), "443"))
+	if u.Port() == "" {
+		return true
+	}
+	port, e := strconv.Atoi(u.Port())
 	return e == nil && port >= 1 && port <= 65535
 }

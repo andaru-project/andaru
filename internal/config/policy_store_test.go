@@ -230,7 +230,8 @@ func TestDynamicAliases(t *testing.T) {
 		"a URL that does not parse":     {create(`{"name":"x","kind":"url","url":"http://[::1","refreshSeconds":60}`), "/operations/0/value/url"},
 		"left out of a forward's destination": {`{"operations":[{"op":"create","collection":"nat.portForwards","value":{"name":"n","enabled":true,"ingressZones":["` + s.Config.Zones[0].ID + `"],"protocol":"tcp","from":[],"to":{"address":"` + cf + `"},"toNegated":true,"ports":"8443","target":{"address":"192.0.2.10"}}}]}`,
 			"/operations/0/value/to/address"},
-		"a URL with a bad port": {create(`{"name":"x","kind":"url","url":"https://lists.example:99999/v4","refreshSeconds":60}`), "/operations/0/value/url"},
+		"a URL with a no-break space": {create(`{"name":"x","kind":"url","url":"https://lists.example/v4\u00a0x","refreshSeconds":60}`), "/operations/0/value/url"},
+		"a URL with a bad port":       {create(`{"name":"x","kind":"url","url":"https://lists.example:99999/v4","refreshSeconds":60}`), "/operations/0/value/url"},
 		"left out of a rule": {`{"operations":[{"op":"create","collection":"rules","value":{"name":"n","enabled":true,"action":"drop","from":{"zones":[],"addresses":["` + cf + `"],"not":true},"to":{"zones":[],"addresses":[]},"ports":[],"log":false}}]}`,
 			"/operations/0/value/from/addresses/0"},
 		"left out of a port forward": {`{"operations":[{"op":"create","collection":"nat.portForwards","value":{"name":"n","enabled":true,"ingressZones":["` + s.Config.Zones[0].ID + `"],"protocol":"tcp","from":["` + cf + `"],"fromNegated":true,"to":{"self":true},"ports":"8443","target":{"address":"192.0.2.10"}}}]}`,
@@ -243,7 +244,9 @@ func TestDynamicAliases(t *testing.T) {
 			state := s
 			_, e := run(t, &state, tc.batch)
 			f := requireFault(t, e, "VALIDATION_FAILED")
-			if !slices.ContainsFunc(f.Details, func(d FieldError) bool { return d.Path == tc.path }) {
+			if !slices.ContainsFunc(f.Details, func(d FieldError) bool {
+				return d.Path == tc.path && (!strings.HasPrefix(name, "left out") || d.Message == negatedDynamic)
+			}) {
 				t.Fatalf("want an error at %s, got %+v", tc.path, f.Details)
 			}
 		})
