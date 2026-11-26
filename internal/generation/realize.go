@@ -326,6 +326,21 @@ func (o observation) connected() (names []string, route bool) {
 	return names, route
 }
 
+// asksIPv4 says whether a .network file gives its interface an IPv4 address of its own.
+func asksIPv4(data []byte) bool {
+	for line := range strings.SplitSeq(string(data), "\n") {
+		if value, ok := strings.CutPrefix(line, "DHCP="); ok && (value == "yes" || value == "ipv4") {
+			return true
+		}
+		if value, ok := strings.CutPrefix(line, "Address="); ok {
+			if p, err := netip.ParsePrefix(value); err != nil || p.Addr().Is4() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // unmet says why the host does not yet run the generation; "" means it does.
 func (o observation) unmet(set []placed, names []string, route bool) string {
 	for _, f := range set {
@@ -428,10 +443,15 @@ func (r Realizer) Activate(ctx context.Context, id int) (result error) {
 		return err
 	}
 	names, route := before.connected()
-	// A session the new set drops is stopped: its interface is not expected back.
 	names = slices.DeleteFunc(names, func(name string) bool {
-		l, _ := before.link(name)
-		return l.Kind == "ppp" && !slices.Contains(pppSessions(next), name)
+		// A session the new set drops is stopped: its interface is not expected back.
+		if l, _ := before.link(name); l.Kind == "ppp" {
+			return !slices.Contains(pppSessions(next), name)
+		}
+		// Nor is an IPv4 address the new file no longer asks for, as when the interface becomes a PPPoE parent.
+		m := before.managed[slices.IndexFunc(before.managed, func(m host.Managed) bool { return m.Name == name })]
+		i := slices.IndexFunc(next, func(f placed) bool { return f.path == m.NetworkFile })
+		return i >= 0 && !asksIPv4(next[i].data)
 	})
 
 	// State first: a kill before the pointer moves leaves a generation that was never pending.

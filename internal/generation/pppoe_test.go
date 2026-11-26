@@ -162,3 +162,38 @@ func TestBootStartsSessions(t *testing.T) {
 		t.Fatalf("options: %v %v", info, err)
 	}
 }
+
+// Moving a DHCP uplink to PPPoE on the same interface: the parent gives up its address, and the session must carry the
+// default route instead.
+func TestDHCPUplinkMovesToPPPoE(t *testing.T) {
+	parent := "[Match]\nName=eth0\n\n[Network]\nLinkLocalAddressing=no\n"
+	for _, password := range []string{"one", "wrong"} {
+		b := newBench(t)
+		b.live(one)
+		b.dialer()
+		delete(b.net.ppp, "pp0")
+		delete(b.net.devices, "pp0")
+		b.net.apply()
+		b.r.VerifyWait = 100 * b.r.Poll
+		files := session("password \"" + password + "\"\n")
+		files["50-andaru-eth0.network"] = parent
+		err := b.applyConfirmed(files)
+		if password == "one" && err != nil {
+			t.Fatalf("move to PPPoE: %v", err)
+		}
+		if password == "wrong" && (err == nil || !strings.Contains(err.Error(), "the IPv4 default route is gone")) {
+			t.Fatalf("session that never comes up: %v, want the lost default route", err)
+		}
+	}
+}
+
+func TestAsksIPv4(t *testing.T) {
+	for data, want := range map[string]bool{
+		"DHCP=yes\n": true, "DHCP=ipv4\n": true, "Address=192.0.2.1/24\n": true, "Address=nonsense\n": true,
+		"DHCP=ipv6\n": false, "DHCP=no\n": false, "Address=2001:db8::1/64\n": false, "": false,
+	} {
+		if got := asksIPv4([]byte("[Network]\n" + data)); got != want {
+			t.Errorf("asksIPv4(%q) = %v, want %v", data, got, want)
+		}
+	}
+}

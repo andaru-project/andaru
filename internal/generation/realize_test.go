@@ -274,10 +274,18 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 		}
 		return []byte(out), nil
 	case command == "ip -j route show default":
-		if f.noRoute || f.noAddress || len(f.address["eth0"]) == 0 {
+		if f.noRoute || f.noAddress {
 			return []byte("[]"), nil
 		}
-		return []byte(`[{"dst":"default","gateway":"10.0.0.1","dev":"eth0"}]`), nil
+		if len(f.address["eth0"]) > 0 {
+			return []byte(`[{"dst":"default","gateway":"10.0.0.1","dev":"eth0"}]`), nil
+		}
+		for _, device := range slices.Sorted(maps.Keys(f.ppp)) {
+			if len(f.address[device]) > 0 {
+				return []byte(`[{"dst":"default","dev":"` + device + `"}]`), nil
+			}
+		}
+		return []byte("[]"), nil
 	}
 	return nil, nil
 }
