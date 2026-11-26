@@ -878,3 +878,21 @@ func TestAnUnsentClearIsSentAgain(t *testing.T) {
 		t.Fatalf("notices %q", got)
 	}
 }
+
+// A load that fails asks the run loop to try again after loadRetry, without waiting for a result or an apply.
+func TestAFailedLoadIsTriedAgainLater(t *testing.T) {
+	b := newFeedBench(t)
+	defer func(d time.Duration) { loadRetry = d }(loadRetry)
+	loadRetry = time.Millisecond
+	b.f.realize = func(context.Context) error { return fmt.Errorf("nft failed") }
+	b.f.owed.Store(true)
+	b.f.fill()
+	select {
+	case <-b.f.applied:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the failed load was not asked for again")
+	}
+	if !b.f.owed.Load() {
+		t.Fatal("the failed load is not owed")
+	}
+}

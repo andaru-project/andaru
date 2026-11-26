@@ -43,6 +43,9 @@ const (
 	refreshEvery = 10 * time.Second
 )
 
+// loadRetry is how long after a failed load the run loop tries it again.
+var loadRetry = time.Minute
+
 // source is one alias's URL or set of names, by its hash: the members belong to it, in its own state file.
 type source struct{ alias, hash string }
 
@@ -158,12 +161,17 @@ func (f *aliasFeeds) apply() {
 	// A load still owed, as one a failed activation's lock refused, is tried again whatever went live.
 	if f.lastLive.Swap(live) != live || live == 0 || f.owed.Load() {
 		f.owed.Store(true)
-		select {
-		case f.applied <- struct{}{}:
-		default:
-		}
+		f.askLoad()
 	}
 	f.nudge()
+}
+
+// askLoad asks the run loop for a load.
+func (f *aliasFeeds) askLoad() {
+	select {
+	case f.applied <- struct{}{}:
+	default:
+	}
 }
 
 // run schedules at start, at each nudge, and when the next source is due, and loads the lists after each apply, off
@@ -347,10 +355,12 @@ func (f *aliasFeeds) fill() {
 	ctx, cancel := context.WithTimeout(f.life, 200*time.Second) // longer than realize's RuntimeMaxSec
 	defer cancel()
 	if err := f.realize(ctx); err != nil {
-		// The next result or apply tries again, and every load of the filter fills the sets.
+		// The run loop tries again after loadRetry, as does the next result or apply, and every load of the filter
+		// fills the sets.
 		f.owed.Store(true)
 		if f.life.Err() == nil { // stopping, the engine owes the load to its next start
 			f.log.Error("alias lists not loaded into the filter", "error", err)
+			time.AfterFunc(loadRetry, f.askLoad)
 		}
 	}
 }
