@@ -295,6 +295,8 @@ const emailMaxRecipients = 20;
 const dnsHostnamePattern = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/i;
 const ipv4Pattern = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
 const forbiddenEmailAddrChars = /[ <>"\\()[\],;:]/;
+const quotedDisplayNamePattern = /^"(?:[^"\\]|\\.)*"$/;
+const unquotedDisplaySpecials = /[()<>@,;:\\"[\]]/;
 
 function isValidIPv4(value: string): boolean {
   const match = ipv4Pattern.exec(value);
@@ -305,8 +307,8 @@ function isValidIPv4(value: string): boolean {
 function isValidIPv6(value: string): boolean {
   if (!value.includes(':') || /[\s[\]%/?#@\\]/.test(value)) return false;
   try {
-    const parsed = new URL(`http://[${value}]`);
-    return parsed.hostname.startsWith('[') && parsed.hostname.endsWith(']') && parsed.port === '';
+    new URL(`http://[${value}]`);
+    return true;
   } catch {
     return false;
   }
@@ -354,36 +356,42 @@ export function parseEmailAddress(raw: string): { address: string } | { error: s
   }
 
   let addr = trimmed;
-  if (trimmed.includes('<') || trimmed.includes('>')) {
-    const lt = trimmed.indexOf('<');
-    const gt = trimmed.lastIndexOf('>');
-    if (lt < 0 || gt !== trimmed.length - 1 || trimmed.indexOf('<', lt + 1) !== -1 || trimmed.indexOf('>') !== gt) {
+  if (trimmed.endsWith('>')) {
+    const lt = trimmed.lastIndexOf('<');
+    if (lt < 0) {
       return { error: 'Enter one e-mail address, such as Andaru <alerts@example.com>.' };
     }
-    addr = trimmed.slice(lt + 1, gt).trim();
+    const displayName = trimmed.slice(0, lt).trim();
+    if (displayName && !quotedDisplayNamePattern.test(displayName) && unquotedDisplaySpecials.test(displayName)) {
+      return { error: 'Quote display names containing special characters, or use a plain address.' };
+    }
+    addr = trimmed.slice(lt + 1, -1);
+  } else if (trimmed.includes('<') || trimmed.includes('>')) {
+    return { error: 'Enter one e-mail address, such as Andaru <alerts@example.com>.' };
   }
 
   const at = addr.indexOf('@');
+  const local = at > 0 ? addr.slice(0, at) : '';
+  const domain = at > 0 ? addr.slice(at + 1) : '';
   if (
-    at <= 0
-    || at === addr.length - 1
+    !local
+    || !domain
     || addr.indexOf('@', at + 1) !== -1
     || forbiddenEmailAddrChars.test(addr)
     || /\s/.test(addr)
+    || local.startsWith('.')
+    || local.endsWith('.')
+    || local.includes('..')
+    || domain.startsWith('.')
+    || domain.endsWith('.')
+    || domain.includes('..')
   ) {
     return { error: 'Enter one e-mail address without a quoted local part, such as ops@example.com.' };
   }
   return { address: addr.toLowerCase() };
 }
 
-export function normalizeEmailRecipients(raw: string[]): string[] {
-  const out: string[] = [];
-  for (const item of raw) {
-    const trimmed = item.trim();
-    if (trimmed) out.push(trimmed);
-  }
-  return out;
-}
+const normalizeEmailRecipients = (raw: string[]) => raw.map((item) => item.trim()).filter(Boolean);
 
 function validateSecretValue(raw: string, articleLabel: string, fieldLabel: string, required: boolean): string | undefined {
   const trimmed = raw.trim();
@@ -491,8 +499,14 @@ export function validateChannelDraft(
       if (pwErr) errors.set('emailPassword', pwErr);
     }
 
-    if (username && !willSendPassword && !errors.has('emailPassword')) {
-      errors.set('emailPassword', 'A username requires a password.');
+    if (username && !willSendPassword) {
+      if (draft.removeEmailPassword) {
+        if (!errors.has('emailUsername')) {
+          errors.set('emailUsername', 'Clear the username, or uncheck "Remove password" to keep SMTP authentication.');
+        }
+      } else if (!errors.has('emailPassword')) {
+        errors.set('emailPassword', 'A username requires a password.');
+      }
     } else if (!username && willSendPassword && !errors.has('emailUsername')) {
       errors.set(
         'emailUsername',

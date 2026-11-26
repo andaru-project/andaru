@@ -340,8 +340,11 @@ describe('notificationChannels', () => {
     expect(validateEmailHost('localhost')).toBeUndefined();
     expect(validateEmailHost('192.0.2.10')).toBeUndefined();
     expect(validateEmailHost('2001:db8::1')).toBeUndefined();
+    expect(validateEmailHost('::ffff:192.0.2.1')).toBeUndefined();
     expect(validateEmailHost('::1')).toBeUndefined();
     expect(validateEmailHost('')).toMatch(/Enter an SMTP host/);
+    expect(validateEmailHost('smtp.example.com.')).toMatch(/host name or IP/i);
+    expect(validateEmailHost('12345')).toMatch(/host name or IP/i);
     expect(validateEmailHost('192.168.1.300')).toMatch(/host name or IP/i);
     expect(validateEmailHost('01.2.3.4')).toMatch(/host name or IP/i);
     expect(validateEmailHost('https://smtp.example.com')).toMatch(/no scheme, port, or path/i);
@@ -349,20 +352,33 @@ describe('notificationChannels', () => {
     expect(validateEmailHost('smtp.example.com/path')).toMatch(/no scheme, port, or path/i);
     expect(validateEmailHost('fe80::1%eth0')).toMatch(/host name or IP/i);
     expect(validateEmailHost('[::1]')).toMatch(/host name or IP/i);
+    expect(validateEmailHost(`${'a.'.repeat(127)}a`)).toMatch(/253 characters/);
 
     expect(validateEmailPort('465')).toBeUndefined();
     expect(validateEmailPort('587')).toBeUndefined();
     expect(validateEmailPort('0')).toMatch(/1 to 65535/);
     expect(validateEmailPort('65536')).toMatch(/1 to 65535/);
+    expect(validateEmailPort('100000')).toMatch(/1 to 65535/);
     expect(validateEmailPort('465.5')).toMatch(/1 to 65535/);
 
     expect(parseEmailAddress('ops@example.com')).toEqual({ address: 'ops@example.com' });
     expect(parseEmailAddress('Andaru <Alerts@Example.com>')).toEqual({ address: 'alerts@example.com' });
+    expect(parseEmailAddress('"Doe, Jane" <jane@example.com>')).toEqual({ address: 'jane@example.com' });
+    expect(parseEmailAddress('"Ops <1>" <ops@example.com>')).toEqual({ address: 'ops@example.com' });
     expect('error' in parseEmailAddress('"a b"@example.com')).toBe(true);
     expect('error' in parseEmailAddress('a@b@example.com')).toBe(true);
+    expect('error' in parseEmailAddress('a@b.com, Ops <c@d.com>')).toBe(true);
+    expect('error' in parseEmailAddress('Bad, Name <a@b.com>')).toBe(true);
+    expect('error' in parseEmailAddress('Foo@Bar <a@b.com>')).toBe(true);
+    expect('error' in parseEmailAddress('"Unclosed <a@b.com>')).toBe(true);
+    expect('error' in parseEmailAddress('Andaru < a@b.com >')).toBe(true);
+    expect('error' in parseEmailAddress('.@.')).toBe(true);
+    expect('error' in parseEmailAddress('a..b@example.com')).toBe(true);
+    expect('error' in parseEmailAddress('a@.example.com')).toBe(true);
+    expect('error' in parseEmailAddress('a@example.com.')).toBe(true);
     expect('error' in parseEmailAddress('ops@example.com\r\nBcc: evil@example.com')).toBe(true);
 
-    // Username without password, duplicate recipients (case-insensitive), bad from/host/port.
+    // Username without password, duplicate recipients (case-insensitive), empty/overflow recipients.
     const badAuth = validateChannelDraft(
       {
         ...channelDraftOf(),
@@ -379,6 +395,25 @@ describe('notificationChannels', () => {
     );
     expect(badAuth.get('emailPassword')).toMatch(/username requires a password/i);
     expect(badAuth.get('emailTo')).toMatch(/unique/i);
+
+    const emptyAndOverflow = validateChannelDraft(
+      { ...channelDraftOf(), name: 'SMTP', kind: 'email', emailHost: 'smtp.example.com', emailPort: '465', emailFrom: 'a@b.com', emailTo: [] },
+      undefined,
+    );
+    expect(emptyAndOverflow.get('emailTo')).toMatch(/at least one recipient/i);
+    const tooMany = validateChannelDraft(
+      {
+        ...channelDraftOf(),
+        name: 'SMTP',
+        kind: 'email',
+        emailHost: 'smtp.example.com',
+        emailPort: '465',
+        emailFrom: 'a@b.com',
+        emailTo: Array.from({ length: 21 }, (_, i) => `u${i}@example.com`),
+      },
+      undefined,
+    );
+    expect(tooMany.get('emailTo')).toMatch(/At most 20/);
 
     const passwordOnly = validateChannelDraft(
       {
@@ -423,7 +458,7 @@ describe('notificationChannels', () => {
       },
     });
 
-    // Authenticated build allocates fresh PASSWORD secret; edit preserves or removes credentials cleanly.
+    // Authenticated build allocates fresh PASSWORD secret; edit preserves, rotates, or removes credentials cleanly.
     const authWrite = buildChannelWrite(
       {
         ...channelDraftOf(),
@@ -470,11 +505,24 @@ describe('notificationChannels', () => {
     // Clearing username without checking removeEmailPassword flags username with clear guidance.
     const clearedUserOnly = validateChannelDraft({ ...channelDraftOf(savedEmail), emailUsername: '' }, savedEmail);
     expect(clearedUserOnly.get('emailUsername')).toMatch(/Remove password/i);
-    // Keeping existing unresolved password echoes unresolved: true.
+    // Checking removeEmailPassword while username is still set flags the focusable emailUsername field, not disabled password.
+    const removedPwOnly = validateChannelDraft({ ...channelDraftOf(savedEmail), removeEmailPassword: true }, savedEmail);
+    expect(removedPwOnly.get('emailUsername')).toMatch(/Clear the username/i);
+    expect(removedPwOnly.has('emailPassword')).toBe(false);
+    // Keeping existing unresolved password echoes unresolved: true; rotating allocates fresh expectedVersion '0'.
     expect(buildChannelWrite({ ...channelDraftOf(savedEmail), enabled: false }, savedEmail).email?.password).toEqual({
       secret: 'SMTP_PW',
       unresolved: true,
     });
+    expect(buildChannelWrite({ ...channelDraftOf(savedEmail), emailPassword: 'new-pw' }, savedEmail).email?.password).toEqual({
+      secret: 'NOTIFY_SMTP_AUTH_PASSWORD',
+      set: 'new-pw',
+      expectedVersion: '0',
+    });
+    // Switching from email to webhook drops email sub-object.
+    const switchedToWebhook = buildChannelWrite({ ...channelDraftOf(savedEmail), kind: 'webhook', webhookUrl: 'https://hooks.example/x' }, savedEmail);
+    expect('email' in switchedToWebhook).toBe(false);
+    expect(switchedToWebhook.webhook?.url.set).toBe('https://hooks.example/x');
     // Clearing username AND checking removeEmailPassword strips both credentials.
     const strippedAuth = buildChannelWrite(
       { ...channelDraftOf(savedEmail), emailUsername: '', removeEmailPassword: true },

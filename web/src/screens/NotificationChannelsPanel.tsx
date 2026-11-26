@@ -110,7 +110,7 @@ function channelTargetSummary(ch: NotificationChannel): string | undefined {
   if (ch.kind === 'ntfy' && ch.ntfy) return `${ch.ntfy.server.replace(/\/+$/, '')}/${ch.ntfy.topic}`;
   if (ch.kind === 'telegram' && ch.telegram) return ch.telegram.chatId;
   if (ch.kind === 'email' && ch.email) {
-    const host = ch.email.host.includes(':') ? `[${ch.email.host}]` : ch.email.host;
+    const host = ch.email.host.includes(':') && !ch.email.host.startsWith('[') ? `[${ch.email.host}]` : ch.email.host;
     return `${host}:${ch.email.port}`;
   }
   return undefined;
@@ -642,6 +642,7 @@ function NotificationChannelEditor({
                             : draft.emailPort;
                         patch({ emailSecurity: value, emailPort: nextPort });
                         clearFieldError('emailSecurity');
+                        if (nextPort !== draft.emailPort) clearFieldError('emailPort');
                       }
                     }}
                   />
@@ -650,7 +651,6 @@ function NotificationChannelEditor({
                     description="Port from 1 to 65535 (465 for implicit TLS, 587 for STARTTLS)."
                     placeholder={draft.emailSecurity === 'tls' ? '465' : '587'}
                     inputMode="numeric"
-                    maxLength={5}
                     required
                     value={draft.emailPort}
                     error={errors.get('emailPort')}
@@ -676,6 +676,7 @@ function NotificationChannelEditor({
                     label="Recipients"
                     description="1 to 20 distinct recipient e-mail addresses. Press Enter after each address."
                     placeholder="ops@example.com"
+                    splitChars={[]}
                     required
                     clearable
                     value={draft.emailTo}
@@ -702,7 +703,7 @@ function NotificationChannelEditor({
                   <SecretField
                     label="SMTP password"
                     unresolvedTitle="SMTP password needs to be restored"
-                    unresolvedBody={`The SMTP password secret (${existingEmailPassword?.secret ?? ''}) was left unresolved by a restore. Enter a new password to resolve it, or remove SMTP credentials below.`}
+                    unresolvedBody={`The SMTP password secret (${existingEmailPassword?.secret ?? ''}) was left unresolved by a restore. Enter a new password to resolve it, or clear the username and remove the password below.`}
                     existing={existingEmailPassword}
                     sharedHolders={sharedFor(existingEmailPassword)}
                     freshDescription="Optional SMTP password (required when a username is set). Stored in the secret store and never shown again."

@@ -612,7 +612,7 @@ describe('NotificationChannelsPanel', () => {
     });
   });
 
-  it('creates an e-mail (SMTP) channel with STARTTLS port prefill', async () => {
+  it('creates an e-mail (SMTP) channel with STARTTLS/TLS port prefill and quoted-comma recipient support', async () => {
     const user = userEvent.setup();
     let postPayload: unknown;
 
@@ -628,7 +628,7 @@ describe('NotificationChannelsPanel', () => {
     render(<NotificationChannelsPanel api={new ApiClient('csrf')} canManage onSessionLost={vi.fn()} />);
     await screen.findByText('No notification channels');
 
-    // Switching Security to STARTTLS prefills port 587.
+    // Switching Security prefills 465 <-> 587 and preserves custom ports.
     await user.click(screen.getByRole('button', { name: 'Add channel' }));
     const dialog = await screen.findByRole('dialog', { name: 'Add notification channel' });
     await user.click(within(dialog).getByLabelText(/^Channel kind/, { selector: 'input' }));
@@ -638,13 +638,31 @@ describe('NotificationChannelsPanel', () => {
     await user.click(within(dialog).getByLabelText(/^Security/, { selector: 'input' }));
     await user.click(await screen.findByRole('option', { name: 'STARTTLS (port 587)' }));
     expect(portInput).toHaveValue('587');
+    await user.click(within(dialog).getByLabelText(/^Security/, { selector: 'input' }));
+    await user.click(await screen.findByRole('option', { name: 'Implicit TLS (port 465)' }));
+    expect(portInput).toHaveValue('465');
+    await user.clear(portInput);
+    await user.click(portInput);
+    await user.paste('2525');
+    await user.click(within(dialog).getByLabelText(/^Security/, { selector: 'input' }));
+    await user.click(await screen.findByRole('option', { name: 'STARTTLS (port 587)' }));
+    expect(portInput).toHaveValue('2525');
 
-    await user.type(within(dialog).getByLabelText(/^Name/, { selector: 'input' }), 'ops-smtp');
-    await user.type(within(dialog).getByLabelText(/^SMTP host/, { selector: 'input' }), 'smtp.example.com');
-    await user.type(within(dialog).getByLabelText(/^From/, { selector: 'input' }), 'Andaru <alerts@example.com>');
-    await user.type(within(dialog).getByLabelText(/^Recipients/, { selector: 'input' }), 'ops@example.com{Enter}');
-    await user.type(within(dialog).getByLabelText(/^SMTP username/, { selector: 'input' }), 'alerts@example.com');
-    await user.type(within(dialog).getByLabelText(/^SMTP password/, { selector: 'input' }), 'smtp-secret');
+    const pasteInto = async (input: HTMLElement, text: string) => {
+      await user.click(input);
+      await user.paste(text);
+    };
+    const usernameInput = within(dialog).getByLabelText(/^SMTP username/, { selector: 'input' });
+    expect(usernameInput).toHaveAttribute('autocomplete', 'off');
+    await pasteInto(within(dialog).getByLabelText(/^Name/, { selector: 'input' }), 'ops-smtp');
+    await pasteInto(within(dialog).getByLabelText(/^SMTP host/, { selector: 'input' }), 'smtp.example.com');
+    await pasteInto(within(dialog).getByLabelText(/^From/, { selector: 'input' }), 'Andaru <alerts@example.com>');
+    // Quoted display name with comma stays a single recipient tag on paste (splitChars={[]}); Enter adds typed addresses.
+    const recipientsInput = within(dialog).getByLabelText(/^Recipients/, { selector: 'input' });
+    await pasteInto(recipientsInput, '"Doe, Jane" <jane@example.com>');
+    await user.type(recipientsInput, 'ops@example.com{Enter}');
+    await pasteInto(usernameInput, 'alerts@example.com');
+    await pasteInto(within(dialog).getByLabelText(/^SMTP password/, { selector: 'input' }), 'smtp-secret');
     await user.click(within(dialog).getByRole('button', { name: 'Add channel' }));
     await waitFor(() => expect(postPayload).toBeDefined());
     expect(postPayload).toEqual({
@@ -654,19 +672,20 @@ describe('NotificationChannelsPanel', () => {
       filter: { minSeverity: 'info' },
       email: {
         host: 'smtp.example.com',
-        port: 587,
+        port: 2525,
         security: 'starttls',
         username: 'alerts@example.com',
         password: { secret: 'NOTIFY_OPS_SMTP_PASSWORD', set: 'smtp-secret', expectedVersion: '0' },
         from: 'Andaru <alerts@example.com>',
-        to: ['ops@example.com'],
+        to: ['"Doe, Jane" <jane@example.com>', 'ops@example.com'],
       },
     });
   });
 
-  it('renders IPv6 SMTP targets and removes existing e-mail credentials cleanly on edit', async () => {
+  it('renders IPv6 SMTP targets, focuses SMTP username when removing password with username set, and removes credentials cleanly', async () => {
     const user = userEvent.setup();
     let putPayload: unknown;
+    let reject422Once = true;
 
     const existingEmail: SavedObject<NotificationChannel> = {
       version: '3',
@@ -693,6 +712,16 @@ describe('NotificationChannelsPanel', () => {
       'GET /api/v1/config/notifications/channels/ntf_mail': () => jsonResponse(200, { state: 'saved', savedVersion: '10', ...existingEmail }),
       'GET /api/v1/config': () => jsonResponse(200, { state: 'saved', savedVersion: '10', value: { links: [], segments: [], zones: [] } }),
       'PUT /api/v1/config/notifications/channels/ntf_mail': (init) => {
+        if (reject422Once) {
+          reject422Once = false;
+          return jsonResponse(422, {
+            error: {
+              code: 'VALIDATION_FAILED',
+              message: 'Invalid.',
+              details: [{ path: '/email/to/0', message: 'Recipient rejected.' }],
+            },
+          });
+        }
         putPayload = JSON.parse(String(init?.body ?? '{}'));
         return jsonResponse(200, { state: 'saved', savedVersion: '12', version: '12', value: existingEmail.value });
       },
@@ -704,9 +733,22 @@ describe('NotificationChannelsPanel', () => {
 
     await user.click(screen.getByRole('button', { name: 'Edit ops-mail' }));
     const dialog = await screen.findByRole('dialog', { name: 'Edit channel: ops-mail' });
-    await user.clear(within(dialog).getByLabelText(/^SMTP username/, { selector: 'input' }));
+
+    // Checking Remove password while username is still filled focuses SMTP username (enabled), not disabled password.
     await user.click(within(dialog).getByLabelText('Remove password'));
     expect(within(dialog).getByLabelText(/^SMTP password/, { selector: 'input' })).toBeDisabled();
+    await user.click(within(dialog).getByRole('button', { name: 'Save channel' }));
+    expect(await within(dialog).findByText(/Clear the username/i)).toBeInTheDocument();
+    const usernameInput = within(dialog).getByLabelText(/^SMTP username/, { selector: 'input' });
+    expect(usernameInput).toHaveAttribute('aria-invalid', 'true');
+    expect(usernameInput).toHaveFocus();
+
+    // Clear username, hit server 422 on /email/to/0 (verifies aria-invalid on TagsInput), then succeed.
+    await user.clear(usernameInput);
+    await user.click(within(dialog).getByRole('button', { name: 'Save channel' }));
+    expect(await within(dialog).findByText('Recipient rejected.')).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(/^Recipients/, { selector: 'input' })).toHaveAttribute('aria-invalid', 'true');
+
     await user.click(within(dialog).getByRole('button', { name: 'Save channel' }));
     await waitFor(() => expect(putPayload).toBeDefined());
     expect(putPayload).toEqual({
