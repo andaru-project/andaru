@@ -566,3 +566,39 @@ func TestAliasLoadStopsWithTheEngine(t *testing.T) {
 		t.Fatalf("load ran with %v", got)
 	}
 }
+
+// The notification is the alias's: raised while any wanted source of it keeps failing, cleared once none does, so a
+// warning raised for an old URL goes once the fixed one is live.
+func TestAliasNotificationFollowsTheAlias(t *testing.T) {
+	b := newFeedBench(t)
+	warn, clear := []string{"alias/" + urlAlias + " warning"}, []string{"alias/" + urlAlias + " "}
+	for range aliasFailures {
+		b.answer(urlAlias, aliasfeed.Result{Request: b.ask(urlAlias), Error: "status 404"})
+	}
+	if got := b.notices(); !slices.Equal(got, warn) {
+		t.Fatalf("notices %q", got)
+	}
+	// The fixed URL, saved, answers; the live one still fails, and the warning stays.
+	b.list[0].URL = "https://lists.example/v4"
+	b.f.schedule(t.Context())
+	b.requests()
+	b.answer(urlAlias, aliasfeed.Result{Request: b.ask(urlAlias), OK: true, Members: []string{"192.0.2.1"}})
+	if got := b.notices(); len(got) != 0 {
+		t.Fatalf("cleared while the live source fails: %q", got)
+	}
+	// Applied, the old source is no longer wanted: the warning is cleared, once.
+	b.live = slices.Clone(b.list)
+	b.f.schedule(t.Context())
+	b.f.schedule(t.Context())
+	if got := b.notices(); !slices.Equal(got, clear) {
+		t.Fatalf("notices %q", got)
+	}
+	// The new source fails in turn, then answers: raised, then cleared.
+	for range aliasFailures {
+		b.answer(urlAlias, aliasfeed.Result{Request: b.ask(urlAlias), Error: "timeout"})
+	}
+	b.answer(urlAlias, aliasfeed.Result{Request: b.ask(urlAlias), OK: true})
+	if got := b.notices(); !slices.Equal(got, append(warn, clear...)) {
+		t.Fatalf("notices %q", got)
+	}
+}
