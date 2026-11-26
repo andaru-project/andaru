@@ -22,7 +22,7 @@ func TestRenderedFilesStorable(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			files := render(t, fixture(t, name)).Files
 			// The apply refuses an enabled PPPoE link (APPLY_UNSUPPORTED), so its files never reach the store.
-			if slices.ContainsFunc(files, func(f File) bool { return strings.HasPrefix(f.Path, "/run/andaru/ppp/") }) {
+			if slices.ContainsFunc(files, func(f File) bool { return strings.HasPrefix(f.Path, "/run/andaru-ppp/") }) {
 				t.Skip("an enabled PPPoE link")
 			}
 			var m generation.Manifest

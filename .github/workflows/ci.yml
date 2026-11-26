@@ -166,6 +166,8 @@ jobs:
             "$build/andaru" "$build/config.test" "$build/engine.test" "$build/generation.test" "$build/identity.test" \
             "$build/audit.test" "$build/ctl.test" "$build/render.test" "$build/reset.test"
           # They run where the image's packages are: Fedora's nftables, Kea and Unbound. A missing tool fails.
+          # The PPPoE session test needs the kernel's PPP; a container cannot load modules.
+          sudo modprobe -a ppp_generic pppoe
           sudo podman run --rm --privileged --network host -v "$art:$art" -v "$PWD/scripts/ci:/ci:ro" \
             registry.fedoraproject.org/fedora:44 sh /ci/root-tests.sh "$art"
 

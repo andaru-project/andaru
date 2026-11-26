@@ -45,10 +45,6 @@ func applyFindings(in gateInput) []render.Finding {
 	}
 
 	var declared struct {
-		Links []struct {
-			Kind    string `json:"kind"`
-			Enabled bool   `json:"enabled"`
-		} `json:"links"`
 		Segments []struct {
 			ID         string `json:"id"`
 			Addressing struct {
@@ -69,12 +65,6 @@ func applyFindings(in gateInput) []render.Finding {
 	}
 	// The renderer decoded the same bytes already; an undecodable declaration never gets here.
 	_ = json.Unmarshal(in.Declaration, &declared)
-	const filter = " It is not supported by the packet filter yet."
-	for i, l := range declared.Links {
-		if l.Kind == "pppoe" && l.Enabled {
-			refuse("APPLY_UNSUPPORTED", fmt.Sprintf("/links/%d", i), "PPPoE links cannot be applied yet."+filter)
-		}
-	}
 	for i, s := range declared.Segments {
 		ra := s.Addressing.IPv6.RA
 		advertised := ra != nil && ra.Mode != "disabled" && (ra.Mode != "" || ra.Enabled)
