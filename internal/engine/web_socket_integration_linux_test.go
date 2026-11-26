@@ -224,7 +224,7 @@ func TestWebSocketReplacesOnlyADeadLeftover(t *testing.T) {
 		deadSocket(t, path)
 		stop := served(t, path)
 		// While it serves, its live socket is not a leftover to anyone else.
-		refused(t, path, "another engine serves this web socket")
+		refused(t, path, "another engine serves this web engine socket")
 		if err := get(path); err != nil {
 			t.Fatalf("the first engine stopped serving: %v", err)
 		}
