@@ -606,15 +606,24 @@ func TestAliasNotificationFollowsTheAlias(t *testing.T) {
 }
 
 // A result whose source cannot be told, the store failing, is dropped rather than tried again: it would hold up every
-// later result. The next schedule asks again.
+// later result. The source is due again, so the next schedule asks for it, not one interval later.
 func TestAliasResultIsDroppedWhenTheStoreFails(t *testing.T) {
 	b := newFeedBench(t)
+	b.f.schedule(t.Context())
+	b.requests()
 	req := b.ask(urlAlias)
+	aliases := b.f.aliases
 	b.f.aliases = func(context.Context) ([]config.DynamicAlias, []config.DynamicAlias, error) {
 		return nil, nil, fmt.Errorf("store fenced")
 	}
-	if s := b.answer(urlAlias, aliasfeed.Result{Request: req, OK: true, Members: []string{"192.0.2.1"}}); len(s.Members) != 0 || len(s.Pending) != 1 {
+	if s := b.answer(urlAlias, aliasfeed.Result{Request: req, OK: true, Members: []string{"192.0.2.1"}}); len(s.Members) != 0 || len(s.Pending) != 2 || !s.LastAttempt.IsZero() {
 		t.Fatalf("state %+v", s)
+	}
+	b.f.aliases = aliases
+	b.now = b.now.Add(time.Minute)
+	b.f.schedule(t.Context())
+	if got := b.requests(); !slices.ContainsFunc(got, func(r aliasfeed.Request) bool { return r.Alias == urlAlias }) {
+		t.Fatalf("requests %+v", got)
 	}
 }
 

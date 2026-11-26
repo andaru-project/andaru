@@ -344,8 +344,10 @@ func (f *aliasFeeds) record(m bus.Message) error {
 	}
 	want, err := f.want(ctx)
 	if err != nil {
-		// Dropped, not tried again, so it holds up no later result: the next schedule asks again.
+		// Dropped, not tried again, so it holds up no later result: the source is due again, and the next schedule
+		// asks for it rather than waiting a full interval.
 		f.log.Warn("alias result dropped: the saved and the live aliases do not read", "alias", id, "error", err)
+		f.retry(source{id, r.Hash}, r.Request)
 		return nil
 	}
 	src := source{id, r.Hash}
@@ -396,6 +398,23 @@ func (f *aliasFeeds) record(m bus.Message) error {
 		}
 	}
 	return nil
+}
+
+// retry clears the last attempt of a source with a state file that waits for request, so the source is due now.
+func (f *aliasFeeds) retry(src source, request string) {
+	if !slices.Contains(aliasfeed.Sources(f.stateDir)[src.alias], src.hash) {
+		return
+	}
+	s := f.load(src)
+	if !slices.Contains(s.Pending, request) {
+		return
+	}
+	s.LastAttempt = time.Time{}
+	if err := f.save(src, s); err != nil {
+		f.log.Warn("ask again for an alias's dropped result", "alias", src.alias, "error", err)
+		return
+	}
+	f.nudge()
 }
 
 // apply records r in s and returns why it failed, or "" for a success. A failure never replaces the last good list.
