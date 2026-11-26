@@ -631,3 +631,25 @@ func TestExpiredQueuedJobIsGivenUp(t *testing.T) {
 		t.Fatalf("sent %d times", n)
 	}
 }
+
+// After a restart, a failure does not clear a warning a previous run raised: only a success does.
+func TestRestartedFailureKeepsTheChannelWarning(t *testing.T) {
+	b := newBench(t)
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(404) }))
+	defer dead.Close()
+	b.run(&Service{})
+	b.publish(job("e1:ch", "ch", dead.URL)) // a 404 is given up at once
+	b.publish(job("e2:ch", "ch", dead.URL))
+	time.Sleep(100 * time.Millisecond)
+	for {
+		select {
+		case r := <-b.raised:
+			if r.key == "channel/ch" {
+				t.Fatalf("a failure published %s for the channel", r.typ)
+			}
+			continue
+		default:
+		}
+		break
+	}
+}

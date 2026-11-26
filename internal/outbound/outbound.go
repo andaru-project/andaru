@@ -338,7 +338,10 @@ func (s *Service) channelNotice(ctx context.Context, c *bus.Client, job delivery
 	n, err := s.failures[job.Channel], s.lastErr[job.Channel]
 	s.mu.Unlock()
 	want := n >= failuresToRaise
-	if was, known := s.channelRaised[job.Channel]; known && was == want {
+	was, known := s.channelRaised[job.Channel]
+	// Known, nothing changes; unknown, only a success may clear: a warning from before a restart stands while the
+	// channel still fails.
+	if known && was == want || !known && !want && n > 0 {
 		return
 	}
 	r := notify.Raise{Key: "channel/" + job.Channel}
