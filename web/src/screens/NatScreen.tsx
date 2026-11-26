@@ -270,7 +270,7 @@ export function NatScreen({ api, session, onSaved, onSessionLost }: NatScreenPro
     | { kind: 'port-forward'; item: SavedObject<PortForward>; position: number }
     | { kind: 'one-to-one'; item: SavedObject<OneToOneNat>; position: number }
   >();
-  const [moved, setMoved] = useState<{ tab: string; order: string[] }>();
+  const [moved, setMoved] = useState<{ tab: 'port-forwards' | 'one-to-one'; order: string[] }>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -332,9 +332,9 @@ export function NatScreen({ api, session, onSaved, onSessionLost }: NatScreenPro
       setOutboundOverride({ value: saved, afterSeq: readSeq.current });
       setOutboundMode(saved.value.mode);
       setOutboundBaseVersion(saved.version);
+      setOutboundDirty(false);
       onSaved();
       await resource.reload();
-      if (mounted.current) setOutboundDirty(false);
     } catch (requestError) {
       if (requestError instanceof ApiError && requestError.status === 401) return onSessionLost();
       if (mounted.current) setError(saveFailure(requestError, new Map(), 'outbound NAT setting'));
@@ -656,7 +656,7 @@ export function NatScreen({ api, session, onSaved, onSessionLost }: NatScreenPro
                         <Group gap="xs">
                           <Button
                             loading={busy}
-                            disabled={outboundMode === savedOutboundMode && !outboundDirty}
+                            disabled={outboundRemoteChanged || (outboundMode === savedOutboundMode && !outboundDirty)}
                             onClick={() => void saveOutbound()}
                           >
                             Save outbound NAT

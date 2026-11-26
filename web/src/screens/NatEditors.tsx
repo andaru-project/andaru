@@ -17,7 +17,7 @@ interface Option {
 
 function withMissingOptions(options: Option[], selected: string[]): Option[] {
   const known = new Set(options.map((o) => o.value));
-  const missing = selected.filter((id) => id && !known.has(id)).map((id) => ({ value: id, label: `${id} (missing)` }));
+  const missing = [...new Set(selected)].filter((id) => id && !known.has(id)).map((id) => ({ value: id, label: `${id} (missing)` }));
   return missing.length > 0 ? [...options, ...missing] : options;
 }
 
