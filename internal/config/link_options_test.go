@@ -27,7 +27,7 @@ func TestBridgeAndBondOptionsValidation(t *testing.T) {
 	validBridge := []byte(`{
 		"name":"LAN bridge","kind":"bridge","mtu":1500,"enabled":true,"members":[],
 		"stp":true,"stpPriority":4096,"forwardDelay":15,"helloTime":2,"maxAge":20,
-		"multicastSnooping":false,"vlanFiltering":true
+		"multicastSnooping":false
 	}`)
 	if err := linkSchema.Validate(unmarshal(validBridge)); err != nil {
 		t.Fatalf("expected valid bridge options, got: %v", err)
@@ -108,6 +108,20 @@ func TestBridgeAndBondOptionsValidation(t *testing.T) {
 			wantPath: "/links/0/maxAge",
 		},
 		{
+			name: "maxAge too small for helloTime",
+			links: []link{
+				{identity: identity{ID: brID, Name: "br0"}, Kind: "bridge", MTU: 1500, Enabled: true, Members: &empty, STP: boolPtr(true), HelloTime: intPtr(10), MaxAge: intPtr(20)},
+			},
+			wantPath: "/links/0/maxAge",
+		},
+		{
+			name: "forwardDelay too small for maxAge",
+			links: []link{
+				{identity: identity{ID: brID, Name: "br0"}, Kind: "bridge", MTU: 1500, Enabled: true, Members: &empty, STP: boolPtr(true), ForwardDelay: intPtr(10), MaxAge: intPtr(20)},
+			},
+			wantPath: "/links/0/forwardDelay",
+		},
+		{
 			name: "lacpRate on active-backup",
 			links: []link{
 				{identity: identity{ID: ethID, Name: "eth0"}, Kind: "ethernet", MTU: 1500, Enabled: true, PermanentMAC: "52:54:00:00:00:01"},
@@ -124,15 +138,23 @@ func TestBridgeAndBondOptionsValidation(t *testing.T) {
 			wantPath: "/links/1/transmitHashPolicy",
 		},
 		{
+			name: "transmitHashPolicy on balance-tlb rejected",
+			links: []link{
+				{identity: identity{ID: ethID, Name: "eth0"}, Kind: "ethernet", MTU: 1500, Enabled: true, PermanentMAC: "52:54:00:00:00:01"},
+				{identity: identity{ID: boID, Name: "bond0"}, Kind: "bond", MTU: 1500, Enabled: true, Members: &members, Mode: "balance-tlb", TransmitHashPolicy: "layer3+4"},
+			},
+			wantPath: "/links/1/transmitHashPolicy",
+		},
+		{
 			name: "valid stp bridge and 802.3ad bond",
 			links: []link{
 				{identity: identity{ID: ethID, Name: "eth0"}, Kind: "ethernet", MTU: 1500, Enabled: true, PermanentMAC: "52:54:00:00:00:01"},
 				{identity: identity{ID: boID, Name: "bond0"}, Kind: "bond", MTU: 1500, Enabled: true, Members: &members, Mode: "802.3ad", LACPRate: "fast", MIIMonitorMs: intPtr(100), TransmitHashPolicy: "layer3+4"},
-				{identity: identity{ID: brID, Name: "br0"}, Kind: "bridge", MTU: 1500, Enabled: true, Members: &empty, STP: boolPtr(true), STPPriority: intPtr(4096), ForwardDelay: intPtr(15), HelloTime: intPtr(2), MaxAge: intPtr(20), MulticastSnooping: boolPtr(false), VLANFiltering: boolPtr(true)},
+				{identity: identity{ID: brID, Name: "br0"}, Kind: "bridge", MTU: 1500, Enabled: true, Members: &empty, STP: boolPtr(true), STPPriority: intPtr(4096), ForwardDelay: intPtr(15), HelloTime: intPtr(2), MaxAge: intPtr(20), MulticastSnooping: boolPtr(false)},
 			},
 		},
 		{
-			name: "valid balance-xor and balance-tlb hash policy",
+			name: "valid balance-xor hash policy",
 			links: []link{
 				{identity: identity{ID: ethID, Name: "eth0"}, Kind: "ethernet", MTU: 1500, Enabled: true, PermanentMAC: "52:54:00:00:00:01"},
 				{identity: identity{ID: boID, Name: "bond0"}, Kind: "bond", MTU: 1500, Enabled: true, Members: &members, Mode: "balance-xor", TransmitHashPolicy: "layer2+3", MIIMonitorMs: intPtr(0)},
@@ -164,7 +186,7 @@ func TestBridgeAndBondOptionsValidation(t *testing.T) {
 	if err := json.Unmarshal(validBridge, &parsed); err != nil {
 		t.Fatal(err)
 	}
-	if parsed.STP == nil || !*parsed.STP || parsed.STPPriority == nil || *parsed.STPPriority != 4096 || parsed.MulticastSnooping == nil || *parsed.MulticastSnooping || parsed.VLANFiltering == nil || !*parsed.VLANFiltering {
+	if parsed.STP == nil || !*parsed.STP || parsed.STPPriority == nil || *parsed.STPPriority != 4096 || parsed.MulticastSnooping == nil || *parsed.MulticastSnooping {
 		t.Fatalf("unexpected bridge unmarshal: %+v", parsed)
 	}
 }

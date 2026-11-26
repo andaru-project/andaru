@@ -70,7 +70,6 @@ type link struct {
 	HelloTime          *int             `json:"helloTime,omitempty"`
 	MaxAge             *int             `json:"maxAge,omitempty"`
 	MulticastSnooping  *bool            `json:"multicastSnooping,omitempty"`
-	VLANFiltering      *bool            `json:"vlanFiltering,omitempty"`
 	LACPRate           string           `json:"lacpRate,omitempty"`
 	MIIMonitorMs       *int             `json:"miiMonitorMs,omitempty"`
 	TransmitHashPolicy string           `json:"transmitHashPolicy,omitempty"`

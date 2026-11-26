@@ -25,7 +25,6 @@ type link struct {
 	HelloTime          *int     `json:"helloTime"`
 	MaxAge             *int     `json:"maxAge"`
 	MulticastSnooping  *bool    `json:"multicastSnooping"`
-	VLANFiltering      *bool    `json:"vlanFiltering"`
 	LACPRate           string   `json:"lacpRate"`
 	MIIMonitorMs       *int     `json:"miiMonitorMs"`
 	TransmitHashPolicy string   `json:"transmitHashPolicy"`

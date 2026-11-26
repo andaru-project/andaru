@@ -278,9 +278,6 @@
             "multicastSnooping": {
               "type": "boolean"
             },
-            "vlanFiltering": {
-              "type": "boolean"
-            },
             "kind": {
               "const": "bridge"
             }

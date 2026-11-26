@@ -278,10 +278,9 @@ func (r *renderer) networkd(i int) {
 			if l.MulticastSnooping != nil {
 				bridge = append(bridge, "MulticastSnooping="+yesNo(*l.MulticastSnooping))
 			}
-			if l.VLANFiltering != nil {
-				bridge = append(bridge, "VLANFiltering="+yesNo(*l.VLANFiltering))
+			if len(bridge) > 0 {
+				kind = []section{{"Bridge", bridge}}
 			}
-			kind = []section{{"Bridge", bridge}}
 		case "bond":
 			bond := []string{"Mode=" + l.Mode}
 			if l.TransmitHashPolicy != "" {

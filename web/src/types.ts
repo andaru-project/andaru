@@ -228,7 +228,6 @@ export interface SavedLink {
   helloTime?: number;
   maxAge?: number;
   multicastSnooping?: boolean;
-  vlanFiltering?: boolean;
   lacpRate?: LacpRate;
   miiMonitorMs?: number;
   transmitHashPolicy?: TransmitHashPolicy;

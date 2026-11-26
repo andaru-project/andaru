@@ -1,4 +1,4 @@
-import { Alert, Button, Drawer, Fieldset, Group, List, MultiSelect, NativeSelect, Select, Stack, Switch, Text, TextInput } from '@mantine/core';
+import { Alert, Button, Drawer, Fieldset, Group, List, MultiSelect, NativeSelect, Select, SimpleGrid, Stack, Switch, Text, TextInput } from '@mantine/core';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, saveFailure } from '../api';
 import { bondModes, draftOf, hashPolicyModes, interfaceErrors, interfaceOperations, ipv4Modes, ipv6Modes, lacpRates, memberLinkOptions, newZoneOption, removeOperations, transmitHashPolicies, vlanParentOptions, type InterfaceDraft } from '../interfaceEdit';
@@ -118,6 +118,13 @@ export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClos
       checkOptionalInt(draft.forwardDelay, 2, 30, 'forwardDelay', 'From 2 to 30 seconds.');
       checkOptionalInt(draft.helloTime, 1, 10, 'helloTime', 'From 1 to 10 seconds.');
       checkOptionalInt(draft.maxAge, 6, 40, 'maxAge', 'From 6 to 40 seconds.');
+      if (!found.has('forwardDelay') && !found.has('helloTime') && !found.has('maxAge') && (draft.forwardDelay.trim() || draft.helloTime.trim() || draft.maxAge.trim())) {
+        const hello = draft.helloTime.trim() ? Number(draft.helloTime.trim()) : 2;
+        const fwd = draft.forwardDelay.trim() ? Number(draft.forwardDelay.trim()) : 15;
+        const maxAge = draft.maxAge.trim() ? Number(draft.maxAge.trim()) : 20;
+        if (maxAge < 2 * (hello + 1)) found.set('maxAge', 'Max age must be at least 2 × (hello time + 1) seconds.');
+        if (2 * (fwd - 1) < maxAge) found.set('forwardDelay', 'Forward delay must satisfy 2 × (forward delay − 1) ≥ max age.');
+      }
     } else if (draft.kind === 'bond') {
       if (!draft.bondMode) found.set('bondMode', 'Choose a bond mode.');
       if (draft.members.length === 0) found.set('members', 'A bond needs at least one Ethernet member.');
@@ -233,19 +240,14 @@ export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClos
                         onChange={(value) => set({ members: value })} />
                       <Switch label="Spanning Tree Protocol (STP)" description="Prevents Ethernet loops across bridged ports." checked={draft.stp} error={errors.get('stp')} onChange={(event) => set({ stp: event.currentTarget.checked })} />
                       {draft.stp && (
-                        <>
-                          <Group grow align="flex-start">
-                            <TextInput classNames={mono} label="STP priority" description="Lower prefers this bridge as root (0–65535)." inputMode="numeric" placeholder="32768" value={draft.stpPriority} error={errors.get('stpPriority')} onChange={(event) => set({ stpPriority: event.currentTarget.value })} />
-                            <TextInput classNames={mono} label="Forward delay (s)" description="Listening/learning time (2–30s)." inputMode="numeric" placeholder="15" value={draft.forwardDelay} error={errors.get('forwardDelay')} onChange={(event) => set({ forwardDelay: event.currentTarget.value })} />
-                          </Group>
-                          <Group grow align="flex-start">
-                            <TextInput classNames={mono} label="Hello time (s)" description="BPDU interval (1–10s)." inputMode="numeric" placeholder="2" value={draft.helloTime} error={errors.get('helloTime')} onChange={(event) => set({ helloTime: event.currentTarget.value })} />
-                            <TextInput classNames={mono} label="Max age (s)" description="BPDU expiry (6–40s)." inputMode="numeric" placeholder="20" value={draft.maxAge} error={errors.get('maxAge')} onChange={(event) => set({ maxAge: event.currentTarget.value })} />
-                          </Group>
-                        </>
+                        <SimpleGrid cols={{ base: 1, xs: 2 }} spacing="xs" role="group" aria-label="STP timers">
+                          <TextInput classNames={mono} label="STP priority" description="Lower prefers root (0–65535, default 32768)." inputMode="numeric" placeholder="32768" value={draft.stpPriority} error={errors.get('stpPriority')} onChange={(event) => set({ stpPriority: event.currentTarget.value })} />
+                          <TextInput classNames={mono} label="Forward delay (s)" description="2–30s (default 15)." inputMode="numeric" placeholder="15" value={draft.forwardDelay} error={errors.get('forwardDelay')} onChange={(event) => set({ forwardDelay: event.currentTarget.value })} />
+                          <TextInput classNames={mono} label="Hello time (s)" description="1–10s (default 2)." inputMode="numeric" placeholder="2" value={draft.helloTime} error={errors.get('helloTime')} onChange={(event) => set({ helloTime: event.currentTarget.value })} />
+                          <TextInput classNames={mono} label="Max age (s)" description="6–40s (default 20)." inputMode="numeric" placeholder="20" value={draft.maxAge} error={errors.get('maxAge')} onChange={(event) => set({ maxAge: event.currentTarget.value })} />
+                        </SimpleGrid>
                       )}
                       <Switch label="IGMP/MLD multicast snooping" description="Limits multicast flooding to subscribed bridge ports." checked={draft.multicastSnooping} error={errors.get('multicastSnooping')} onChange={(event) => set({ multicastSnooping: event.currentTarget.checked })} />
-                      <Switch label="VLAN filtering" description="Enforces 802.1Q VLAN membership on bridge ports." checked={draft.vlanFiltering} error={errors.get('vlanFiltering')} onChange={(event) => set({ vlanFiltering: event.currentTarget.checked })} />
                     </>
                   )}
                   {draft.kind === 'bond' && (
@@ -260,7 +262,7 @@ export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClos
                       {draft.bondMode && hashPolicyModes.has(draft.bondMode) && (
                         <NativeSelect label="Transmit hash policy" description="Packet header fields hashed to choose a member link." data={transmitHashPolicies} value={draft.transmitHashPolicy} error={errors.get('transmitHashPolicy')} onChange={(event) => set({ transmitHashPolicy: event.currentTarget.value as TransmitHashPolicy | '' })} />
                       )}
-                      <TextInput classNames={mono} label="MII monitor interval (ms)" description="Link carrier check interval in milliseconds (0–60000). Empty uses the kernel default." inputMode="numeric" placeholder="0" value={draft.miiMonitorMs} error={errors.get('miiMonitorMs')} onChange={(event) => set({ miiMonitorMs: event.currentTarget.value })} />
+                      <TextInput classNames={mono} label="MII monitor interval (ms)" description="Link carrier check interval (0–60000 ms). 0 or empty disables MII monitoring; 100 ms is typical for LACP and failover." inputMode="numeric" placeholder="100" value={draft.miiMonitorMs} error={errors.get('miiMonitorMs')} onChange={(event) => set({ miiMonitorMs: event.currentTarget.value })} />
                     </>
                   )}
                   {/* A saved link shows the MAC it names, if any; a port being added, the one it will be saved with. */}

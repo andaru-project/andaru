@@ -105,26 +105,38 @@ func validateTopology(d *declaration) []FieldError {
 			}
 			vlans[key] = true
 		}
-		if l.Kind == "bridge" && (l.STP == nil || !*l.STP) {
-			if l.STPPriority != nil {
-				bad(p+"/stpPriority", "Requires STP to be enabled.")
-			}
-			if l.ForwardDelay != nil {
-				bad(p+"/forwardDelay", "Requires STP to be enabled.")
-			}
-			if l.HelloTime != nil {
-				bad(p+"/helloTime", "Requires STP to be enabled.")
-			}
-			if l.MaxAge != nil {
-				bad(p+"/maxAge", "Requires STP to be enabled.")
+		if l.Kind == "bridge" {
+			if l.STP == nil || !*l.STP {
+				if l.STPPriority != nil {
+					bad(p+"/stpPriority", "Requires STP to be enabled.")
+				}
+				if l.ForwardDelay != nil {
+					bad(p+"/forwardDelay", "Requires STP to be enabled.")
+				}
+				if l.HelloTime != nil {
+					bad(p+"/helloTime", "Requires STP to be enabled.")
+				}
+				if l.MaxAge != nil {
+					bad(p+"/maxAge", "Requires STP to be enabled.")
+				}
+			} else if l.ForwardDelay != nil || l.HelloTime != nil || l.MaxAge != nil {
+				hello := cmp.Or(ptrValue(l.HelloTime), 2)
+				fwd := cmp.Or(ptrValue(l.ForwardDelay), 15)
+				maxAge := cmp.Or(ptrValue(l.MaxAge), 20)
+				if maxAge < 2*(hello+1) {
+					bad(p+"/maxAge", "Max age must be at least 2 × (hello time + 1) seconds.")
+				}
+				if 2*(fwd-1) < maxAge {
+					bad(p+"/forwardDelay", "Forward delay must satisfy 2 × (forward delay − 1) ≥ max age.")
+				}
 			}
 		}
 		if l.Kind == "bond" {
 			if l.LACPRate != "" && l.Mode != "802.3ad" {
 				bad(p+"/lacpRate", "LACP transmit rate requires 802.3ad bond mode.")
 			}
-			if l.TransmitHashPolicy != "" && !slices.Contains([]string{"balance-xor", "802.3ad", "balance-tlb"}, l.Mode) {
-				bad(p+"/transmitHashPolicy", "Transmit hash policy requires balance-xor, 802.3ad, or balance-tlb mode.")
+			if l.TransmitHashPolicy != "" && !slices.Contains([]string{"balance-xor", "802.3ad"}, l.Mode) {
+				bad(p+"/transmitHashPolicy", "Transmit hash policy requires balance-xor or 802.3ad mode.")
 			}
 		}
 		if invalidText(l.Username, false) {

@@ -125,9 +125,8 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
     if (link.kind === 'vlan') return `VLAN ${link.vlanId} on ${link.parent ? linkName(link.parent) : 'its parent'}`;
     if (link.kind === 'pppoe') return `PPPoE on ${link.parent ? linkName(link.parent) : 'its parent'}`;
     if (link.kind === 'bridge') {
-      const flags = [link.stp ? 'STP' : undefined, link.vlanFiltering ? 'VLAN filtering' : undefined].filter(Boolean);
       const names = (link.members ?? []).map(linkName);
-      const detail = [...flags, names.length > 0 ? names.join(', ') : 'no members'].join(' · ');
+      const detail = [link.stp ? 'STP' : undefined, names.length > 0 ? names.join(', ') : 'no members'].filter(Boolean).join(' · ');
       return `Bridge (${detail})`;
     }
     if (link.kind === 'bond') {

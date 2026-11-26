@@ -445,7 +445,7 @@ it('creates a bond and shows bridge/bond details in the table', async () => {
   await vi.waitFor(() => expect(sent).toHaveBeenCalled());
   expect(JSON.parse(String(sent.mock.calls[0][0]?.body))).toEqual({
     operations: [
-      { op: 'create', collection: 'links', localId: 'link', value: { name: 'Uplink', kind: 'bond', mode: '802.3ad', members: [free1, free2], mtu: 1500, enabled: true } },
+      { op: 'create', collection: 'links', localId: 'link', value: { name: 'Uplink', kind: 'bond', mode: '802.3ad', members: [free1, free2], mtu: 1500, enabled: true, miiMonitorMs: 100 } },
     ],
   });
 });
@@ -554,7 +554,7 @@ it('validates duplicate VLAN IDs and parent MTU ceiling, and clamps default MTU 
   expect(sent).not.toHaveBeenCalled();
 });
 
-it('creates a bridge with STP, timers, and L2 options and shows STP in the table', async () => {
+it('creates a bridge with STP, timers, and L2 options, enforces IEEE 802.1D timer relations, and shows STP in the table', async () => {
   const user = userEvent.setup();
   const free1 = 'lnk_77777777-7777-4777-8777-777777777777';
   const brId = 'lnk_99999999-9999-4999-8999-999999999999';
@@ -563,14 +563,14 @@ it('creates a bridge with STP, timers, and L2 options and shows STP in the table
     links: [
       ethernet(lanPort, 'LAN port', '52:54:00:aa:bb:01'),
       ethernet(free1, 'Port A', '52:54:00:aa:bb:11'),
-      { id: brId, name: 'Existing bridge', kind: 'bridge', mtu: 1500, enabled: true, members: [free1], stp: true, vlanFiltering: true },
+      { id: brId, name: 'Existing bridge', kind: 'bridge', mtu: 1500, enabled: true, members: [free1], stp: true },
     ],
     findings: [],
     extra: { 'POST /api/v1/config/changes': sent },
   });
   render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={vi.fn()} onSessionLost={vi.fn()} />);
 
-  expect(await screen.findByText(/Bridge \(STP · VLAN filtering · Port A\)/)).toBeInTheDocument();
+  expect(await screen.findByText(/Bridge \(STP · Port A\)/)).toBeInTheDocument();
 
   await user.click(screen.getByRole('button', { name: 'Add virtual interface' }));
   await user.click(await screen.findByRole('menuitem', { name: 'Bridge' }));
@@ -579,9 +579,15 @@ it('creates a bridge with STP, timers, and L2 options and shows STP in the table
   await user.click(within(panel).getByRole('switch', { name: /Carries a segment/ }));
   await user.click(within(panel).getByRole('switch', { name: /Spanning Tree Protocol \(STP\)/ }));
   await user.type(within(panel).getByLabelText(/^STP priority/), '4096');
-  await user.type(within(panel).getByLabelText(/^Forward delay/), '12');
+  const fwdInput = within(panel).getByLabelText(/^Forward delay/);
+  await user.type(fwdInput, '10');
+  await user.click(within(panel).getByRole('button', { name: 'Save interface' }));
+  expect(await within(panel).findByText(/2 × \(forward delay − 1\) ≥ max age/)).toBeInTheDocument();
+  expect(sent).not.toHaveBeenCalled();
+
+  await user.clear(fwdInput);
+  await user.type(fwdInput, '12');
   await user.click(within(panel).getByRole('switch', { name: /IGMP\/MLD multicast snooping/ }));
-  await user.click(within(panel).getByRole('switch', { name: /VLAN filtering/ }));
   await user.click(within(panel).getByRole('button', { name: 'Save interface' }));
 
   await vi.waitFor(() => expect(sent).toHaveBeenCalled());
@@ -601,7 +607,6 @@ it('creates a bridge with STP, timers, and L2 options and shows STP in the table
           stpPriority: 4096,
           forwardDelay: 12,
           multicastSnooping: false,
-          vlanFiltering: true,
         },
       },
     ],
@@ -631,7 +636,10 @@ it('creates an 802.3ad bond with LACP rate, hash policy, and MII monitor interva
   await user.click(await screen.findByRole('option', { name: 'Port A' }));
   await user.selectOptions(within(panel).getByLabelText(/^LACP rate/), 'fast');
   await user.selectOptions(within(panel).getByLabelText(/^Transmit hash policy/), 'layer3+4');
-  await user.type(within(panel).getByLabelText(/^MII monitor interval/), '100');
+  const miiInput = within(panel).getByLabelText(/^MII monitor interval/);
+  expect(miiInput).toHaveValue('100');
+  await user.clear(miiInput);
+  await user.type(miiInput, '250');
   await user.click(within(panel).getByRole('button', { name: 'Save interface' }));
 
   await vi.waitFor(() => expect(sent).toHaveBeenCalled());
@@ -650,7 +658,7 @@ it('creates an 802.3ad bond with LACP rate, hash policy, and MII monitor interva
           enabled: true,
           lacpRate: 'fast',
           transmitHashPolicy: 'layer3+4',
-          miiMonitorMs: 100,
+          miiMonitorMs: 250,
         },
       },
     ],

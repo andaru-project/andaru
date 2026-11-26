@@ -15,7 +15,6 @@ func TestBridgeSTPOptionsRender(t *testing.T) {
 		br["helloTime"] = 2
 		br["maxAge"] = 18
 		br["multicastSnooping"] = false
-		br["vlanFiltering"] = true
 	})
 	res := render(t, in)
 	if !res.Realizable {
@@ -36,7 +35,6 @@ ForwardDelaySec=12s
 HelloTimeSec=2s
 MaxAgeSec=18s
 MulticastSnooping=no
-VLANFiltering=yes
 `
 	if res.Files[idx].Content != want {
 		t.Fatalf("bridge .netdev mismatch:\ngot:\n%s\nwant:\n%s", res.Files[idx].Content, want)

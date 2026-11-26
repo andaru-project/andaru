@@ -132,8 +132,9 @@ it('builds create and replace operations for VLAN, bridge, and bond links', () =
   const bondDraft = draftOf(undefined, undefined, undefined, 'bond');
   expect(bondDraft.assigned).toBe(false);
   expect(bondDraft.bondMode).toBe('802.3ad');
+  expect(bondDraft.miiMonitorMs).toBe('100');
   expect(interfaceOperations({ ...bondDraft, name: 'Uplink bond', bondMode: 'active-backup', members: ['lnk_b', 'lnk_c'] }, undefined, undefined, undefined)).toEqual([
-    { op: 'create', collection: 'links', localId: 'link', value: { name: 'Uplink bond', kind: 'bond', mode: 'active-backup', members: ['lnk_b', 'lnk_c'], mtu: 1500, enabled: true } },
+    { op: 'create', collection: 'links', localId: 'link', value: { name: 'Uplink bond', kind: 'bond', mode: 'active-backup', members: ['lnk_b', 'lnk_c'], mtu: 1500, enabled: true, miiMonitorMs: 100 } },
   ]);
 
   // Editing an existing VLAN without changes sends nothing; changing its tag replaces only the link.
@@ -195,7 +196,7 @@ it('filters eligible VLAN parents and bridge/bond members according to link rule
 });
 
 it('serializes bridge STP/L2 options and bond L2 options, and strips mode-incompatible fields', () => {
-  // Bridge with STP + timers + multicastSnooping=false + vlanFiltering=true.
+  // Bridge with STP + timers + multicastSnooping=false.
   const brDraft = {
     ...draftOf(undefined, undefined, undefined, 'bridge'),
     name: 'Core bridge',
@@ -206,7 +207,6 @@ it('serializes bridge STP/L2 options and bond L2 options, and strips mode-incomp
     helloTime: '2',
     maxAge: '18',
     multicastSnooping: false,
-    vlanFiltering: true,
   };
   expect(interfaceOperations(brDraft, undefined, undefined, undefined)).toEqual([
     {
@@ -225,7 +225,6 @@ it('serializes bridge STP/L2 options and bond L2 options, and strips mode-incomp
         helloTime: 2,
         maxAge: 18,
         multicastSnooping: false,
-        vlanFiltering: true,
       },
     },
   ]);

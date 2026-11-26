@@ -17,7 +17,6 @@ export interface InterfaceDraft {
   helloTime: string;
   maxAge: string;
   multicastSnooping: boolean;
-  vlanFiltering: boolean;
   lacpRate: LacpRate | '';
   miiMonitorMs: string;
   transmitHashPolicy: TransmitHashPolicy | '';
@@ -65,7 +64,7 @@ export const transmitHashPolicies: Array<{ value: '' | TransmitHashPolicy; label
   { value: 'encap3+4', label: 'Encapsulated Layer 3+4' },
 ];
 
-export const hashPolicyModes = new Set<BondMode>(['balance-xor', '802.3ad', 'balance-tlb']);
+export const hashPolicyModes = new Set<BondMode>(['balance-xor', '802.3ad']);
 
 // How a segment gets its addresses, in the words the panel and the table use.
 export const ipv4Modes = [{ value: 'none', label: 'None' }, { value: 'dhcp', label: 'DHCP client' }, { value: 'static', label: 'Static' }, { value: 'ppp', label: 'PPP' }];
@@ -206,9 +205,8 @@ export function draftOf(link: SavedLink | undefined, segment: Segment | undefine
     helloTime: text(link?.helloTime),
     maxAge: text(link?.maxAge),
     multicastSnooping: link?.multicastSnooping ?? true,
-    vlanFiltering: link?.vlanFiltering ?? false,
     lacpRate: link?.lacpRate ?? '',
-    miiMonitorMs: text(link?.miiMonitorMs),
+    miiMonitorMs: link ? text(link.miiMonitorMs) : kind === 'bond' ? '100' : '',
     transmitHashPolicy: link?.transmitHashPolicy ?? '',
     assigned: link ? Boolean(segment) : kind !== 'bond',
     segmentName: segment?.name ?? link?.name ?? live?.name ?? '',
@@ -334,7 +332,6 @@ export function interfaceOperations(draft: InterfaceDraft, link: SavedObject<Sav
       delete linkValue.maxAge;
     }
     putOptionalBool(linkValue, saved, 'multicastSnooping', draft.multicastSnooping, true);
-    putOptionalBool(linkValue, saved, 'vlanFiltering', draft.vlanFiltering, false);
   } else if (draft.kind === 'bond') {
     linkValue.mode = draft.bondMode;
     linkValue.members = [...draft.members];
@@ -393,16 +390,15 @@ const fieldOf: Record<string, Array<[RegExp, string]>> = {
     [/^\/vlanId/, 'vlanId'],
     [/^\/members/, 'members'],
     [/^\/mode/, 'bondMode'],
-    [/^\/stpPriority/, 'stpPriority'],
-    [/^\/forwardDelay/, 'forwardDelay'],
-    [/^\/helloTime/, 'helloTime'],
-    [/^\/maxAge/, 'maxAge'],
-    [/^\/stp/, 'stp'],
-    [/^\/multicastSnooping/, 'multicastSnooping'],
-    [/^\/vlanFiltering/, 'vlanFiltering'],
-    [/^\/lacpRate/, 'lacpRate'],
-    [/^\/miiMonitorMs/, 'miiMonitorMs'],
-    [/^\/transmitHashPolicy/, 'transmitHashPolicy'],
+    [/^\/stpPriority(\/|$)/, 'stpPriority'],
+    [/^\/forwardDelay(\/|$)/, 'forwardDelay'],
+    [/^\/helloTime(\/|$)/, 'helloTime'],
+    [/^\/maxAge(\/|$)/, 'maxAge'],
+    [/^\/stp(\/|$)/, 'stp'],
+    [/^\/multicastSnooping(\/|$)/, 'multicastSnooping'],
+    [/^\/lacpRate(\/|$)/, 'lacpRate'],
+    [/^\/miiMonitorMs(\/|$)/, 'miiMonitorMs'],
+    [/^\/transmitHashPolicy(\/|$)/, 'transmitHashPolicy'],
   ],
   segments: [
     [/^\/name/, 'segmentName'], [/^\/zone/, 'zone'],
