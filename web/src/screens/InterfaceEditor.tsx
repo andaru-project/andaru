@@ -204,11 +204,15 @@ export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClos
                         onChange={(value) => {
                           const parentId = value ?? '';
                           const parent = snapshot.value.links.find((item) => item.id === parentId);
-                          setDraft((current) => ({
-                            ...current,
-                            parent: parentId,
-                            ...(!link && parent && current.mtu === '1500' && parent.mtu < 1500 ? { mtu: String(parent.mtu) } : {}),
-                          }));
+                          setDraft((current) => {
+                            const prevParent = snapshot.value.links.find((item) => item.id === current.parent);
+                            const prevDefault = String(Math.min(1500, prevParent?.mtu ?? 1500));
+                            return {
+                              ...current,
+                              parent: parentId,
+                              ...(!link && parent && current.mtu === prevDefault ? { mtu: String(Math.min(1500, parent.mtu)) } : {}),
+                            };
+                          });
                         }} />
                       <TextInput classNames={mono} label="VLAN ID" description="802.1Q tag from 1 to 4094." inputMode="numeric" required placeholder="20" value={draft.vlanId} error={errors.get('vlanId')} onChange={(event) => set({ vlanId: event.currentTarget.value })} />
                     </>

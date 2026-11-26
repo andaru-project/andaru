@@ -101,7 +101,7 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
   };
   const createVirtual = async (kind: VirtualLinkKind) => {
     if (opening) return;
-    setOpening('new');
+    setOpening('new:');
     setError('');
     try {
       const snapshot = await api.config();
@@ -178,7 +178,7 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
           {editable && (
             <Menu position="bottom-end">
               <Menu.Target>
-                <Button size="xs" rightSection={<ComboboxChevron size="xs" style={{ color: 'currentColor' }} />} loading={opening === 'new'} disabled={Boolean(opening) && opening !== 'new'}>Add virtual interface</Button>
+                <Button size="xs" rightSection={<ComboboxChevron size="xs" style={{ color: 'currentColor' }} />} loading={opening === 'new:'} disabled={Boolean(opening) && opening !== 'new:'}>Add virtual interface</Button>
               </Menu.Target>
               <Menu.Dropdown>
                 <Menu.Item onClick={() => void createVirtual('vlan')}>VLAN</Menu.Item>
