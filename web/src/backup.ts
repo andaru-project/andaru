@@ -2,6 +2,8 @@ import type { BackupStore, RestorePreviewResponse } from './types';
 
 // Leaves 80 KiB (backupOptionsMax + multipart framing) below internal/web/proxy.go's 17 MiB maxProxyBody.
 export const maxBackupUploadBytes = 17 * 1024 * 1024 - 80 * 1024;
+// Floored display label so the stated limit never exceeds the enforced byte cap.
+export const maxBackupUploadLabel = `${(Math.floor((maxBackupUploadBytes / (1024 * 1024)) * 10) / 10).toFixed(1)} MiB`;
 export const maxPassphraseBytes = 1024;
 
 export interface BackupStoreInfo {

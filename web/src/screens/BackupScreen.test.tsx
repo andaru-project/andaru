@@ -228,6 +228,53 @@ describe('BackupScreen', () => {
     expect(screen.getByLabelText(/^Archive passphrase/)).toHaveValue('');
   });
 
+  it('omits post-restore navigation links when the account lacks configuration.read and status.read', async () => {
+    const user = userEvent.setup();
+    fetchRoutes({
+      'POST /api/v1/restores/preview': (init) => {
+        const form = init?.body as FormData;
+        const opts = JSON.parse(String(form.get('options'))) as Record<string, unknown>;
+        if (!Array.isArray(opts.stores) || opts.stores.length === 0) {
+          return jsonResponse(200, { state: 'inspection', manifest: sampleManifest });
+        }
+        return jsonResponse(200, {
+          state: 'restore-preview',
+          manifest: sampleManifest,
+          expectedSavedVersion: '1',
+          expectedIdentityRevision: 1,
+          configurationChanges: { created: 0, updated: 1, deleted: 0 },
+          secretChanges: { created: 0, updated: 0, deleted: 0 },
+          userChanges: { created: 0, updated: 0, deleted: 0 },
+          credentialChanges: { created: 0, updated: 0, deleted: 0 },
+          unresolvedSecrets: ['WAN_PASSWORD'],
+          blockingSecrets: [],
+          missingRoleIds: [],
+          requiresRootAdministrator: false,
+          recoveryAdministrators: [],
+          hardwareFindings: [],
+        });
+      },
+      'POST /api/v1/restores': () => jsonResponse(200, {
+        state: 'saved',
+        savedVersion: '2',
+        unresolvedSecrets: ['WAN_PASSWORD'],
+        replayed: false,
+      }),
+    });
+    renderScreen(['backups.restore']);
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    await user.upload(fileInput, new File(['zip'], 'backup.zip', { type: 'application/zip' }));
+    await user.click(screen.getByRole('button', { name: 'Inspect archive' }));
+    await user.click(await screen.findByRole('button', { name: 'Preview restore' }));
+    await user.click(await screen.findByRole('button', { name: 'Restore selected data…' }));
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Confirm restore' }));
+
+    expect(await screen.findByText('Backup restored')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Open Review and apply' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Open Interfaces' })).not.toBeInTheDocument();
+    expect(screen.getByText(/An operator with configuration access must review and apply them/)).toBeInTheDocument();
+  });
+
   it('blocks restore on blocking secrets/roles/root-console and handles SETTINGS_UPGRADE_PENDING, RESTORE_ABANDONED, and 401', async () => {
     const user = userEvent.setup();
     const onSessionLost = vi.fn();

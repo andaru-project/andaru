@@ -25,6 +25,7 @@ import {
   backupStoreOrder,
   backupStores,
   maxBackupUploadBytes,
+  maxBackupUploadLabel,
   restoreBlockers,
   validateBackupPassphrase,
 } from '../backup';
@@ -59,13 +60,13 @@ function triggerDownload(blob: Blob, filename: string) {
   document.body.appendChild(link);
   link.click();
   link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), downloadRevokeMilliseconds);
+  setTimeout(() => URL.revokeObjectURL?.(url), downloadRevokeMilliseconds);
 }
 
 function archiveFileError(file: File | null): string | undefined {
   if (!file) return 'Choose a backup archive file first.';
   if (file.size === 0) return 'The selected archive file is empty.';
-  if (file.size > maxBackupUploadBytes) return `Archive exceeds the ${bytes(maxBackupUploadBytes)} upload limit.`;
+  if (file.size > maxBackupUploadBytes) return `Archive exceeds the ${maxBackupUploadLabel} upload limit.`;
   return undefined;
 }
 
@@ -459,7 +460,7 @@ export function BackupScreen({ api, session, hostname, onRestored, onSessionLost
               <Stack gap="xs">
                 <FileInput
                   label="Backup archive"
-                  description={`Select a .zip or encrypted .age backup file (up to ${bytes(maxBackupUploadBytes)}).`}
+                  description={`Select a .zip or encrypted .age backup file (up to ${maxBackupUploadLabel}).`}
                   placeholder="Choose a backup file…"
                   accept=".zip,.age,application/zip,application/octet-stream"
                   clearable
@@ -627,9 +628,11 @@ export function BackupScreen({ api, session, hostname, onRestored, onSessionLost
       <Modal
         opened={confirming && preview !== null}
         onClose={() => { if (!restoreFlowBusy) setConfirming(false); }}
+        closeOnClickOutside={!restoreFlowBusy}
+        closeOnEscape={!restoreFlowBusy}
         title="Confirm backup restore"
         centered
-        closeButtonProps={{ 'aria-label': 'Close' }}
+        closeButtonProps={{ 'aria-label': 'Close', disabled: restoreFlowBusy }}
       >
         <Stack>
           <Text size="sm">
