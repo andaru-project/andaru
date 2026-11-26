@@ -56,7 +56,7 @@ export function SessionScreen({ api, session, onSessionLost }: SessionScreenProp
         return;
       }
       if (!mountedRef.current) return;
-      // Close the confirmation modal so the background error alert is visible and focused.
+      // Close the confirmation modal so the background error alert is visible and announced.
       setConfirmCurrent(null);
       reportError(requestError, onSessionLost, setError);
     } finally {

@@ -2,7 +2,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ApiClient } from '../api';
 import { fetchQueue, jsonResponse } from '../test/fetch';
-import { render, screen } from '../test/render';
+import { render, screen, waitFor } from '../test/render';
 import { AuditScreen } from './AuditScreen';
 
 const origCreateObjectURL = Object.getOwnPropertyDescriptor(URL, 'createObjectURL');
@@ -11,7 +11,9 @@ const origRevokeObjectURL = Object.getOwnPropertyDescriptor(URL, 'revokeObjectUR
 afterEach(() => {
   vi.restoreAllMocks();
   if (origCreateObjectURL) Object.defineProperty(URL, 'createObjectURL', origCreateObjectURL);
+  else delete (URL as unknown as Record<string, unknown>).createObjectURL;
   if (origRevokeObjectURL) Object.defineProperty(URL, 'revokeObjectURL', origRevokeObjectURL);
+  else delete (URL as unknown as Record<string, unknown>).revokeObjectURL;
 });
 
 it('loads bounded audit pages newest first, then older ones by the server cursor', async () => {
@@ -74,11 +76,12 @@ it('exports audit JSON via /api/v1/audit/export with filename and blob, announce
   await screen.findByText('login.success');
 
   await user.click(screen.getByRole('button', { name: 'Export JSON' }));
+  expect(await screen.findByText('Exported latest audit page to audit-2026.json.')).toBeInTheDocument();
   expect(fetchMock).toHaveBeenLastCalledWith('/api/v1/audit/export?order=desc&limit=100', expect.anything());
   expect(createObjectURL).toHaveBeenCalledTimes(1);
   expect(clickSpy).toHaveBeenCalledTimes(1);
   expect(capturedDownload).toBe('audit-2026.json');
-  expect(capturedBlob).not.toBeNull();
+  expect(capturedBlob).toBeInstanceOf(Blob);
   const blobText = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result));
@@ -86,11 +89,10 @@ it('exports audit JSON via /api/v1/audit/export with filename and blob, announce
     reader.readAsText(capturedBlob!);
   });
   expect(blobText).toBe(exportedBody);
-  expect(await screen.findByText('Exported latest audit page to audit-2026.json.')).toBeInTheDocument();
 
   await user.click(screen.getByRole('button', { name: 'Export JSON' }));
   expect(await screen.findByText('Audit store offline.')).toBeInTheDocument();
 
   await user.click(screen.getByRole('button', { name: 'Export JSON' }));
-  expect(onSessionLost).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(onSessionLost).toHaveBeenCalledTimes(1));
 });

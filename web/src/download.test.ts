@@ -29,6 +29,7 @@ describe('filenameFromDisposition', () => {
 
 describe('triggerDownload', () => {
   it('creates an object URL, clicks a hidden anchor with download name, and removes it even if click throws', () => {
+    vi.useFakeTimers();
     const origCreate = Object.getOwnPropertyDescriptor(URL, 'createObjectURL');
     const origRevoke = Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL');
     const createObjectURL = vi.fn(() => 'blob:test');
@@ -37,9 +38,11 @@ describe('triggerDownload', () => {
     Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, writable: true, value: revokeObjectURL });
     let capturedDownload = '';
     let capturedHidden = false;
+    let shouldThrow = false;
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
       capturedDownload = this.download;
       capturedHidden = Boolean(this.hidden);
+      if (shouldThrow) throw new Error('blocked click');
     });
     try {
       triggerDownload(new Blob(['{}']), 'audit.json');
@@ -47,10 +50,20 @@ describe('triggerDownload', () => {
       expect(capturedDownload).toBe('audit.json');
       expect(capturedHidden).toBe(true);
       expect(document.querySelector('a[download="audit.json"]')).toBeNull();
+
+      shouldThrow = true;
+      expect(() => triggerDownload(new Blob(['{}']), 'failing.json')).toThrow('blocked click');
+      expect(document.querySelector('a[download="failing.json"]')).toBeNull();
+
+      vi.runAllTimers();
+      expect(revokeObjectURL).toHaveBeenCalledTimes(2);
     } finally {
+      vi.useRealTimers();
       clickSpy.mockRestore();
       if (origCreate) Object.defineProperty(URL, 'createObjectURL', origCreate);
+      else delete (URL as unknown as Record<string, unknown>).createObjectURL;
       if (origRevoke) Object.defineProperty(URL, 'revokeObjectURL', origRevoke);
+      else delete (URL as unknown as Record<string, unknown>).revokeObjectURL;
     }
   });
 });
