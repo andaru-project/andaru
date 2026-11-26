@@ -64,6 +64,9 @@ type fakeNetworkd struct {
 	ppp     map[string]string       // PPPoE interfaces and the address pppd holds on each, which networkd keeps
 	// pppLoaded makes systemd report the PPPoE session units loaded; otherwise they are not found.
 	pppLoaded bool
+	// offloads are the features every device asks for, which ethtool -K changes; each -K call joins offloadSets.
+	offloads    map[string]bool
+	offloadSets []string
 }
 
 func (f *fakeNetworkd) netFiles() map[string]string {
@@ -130,6 +133,17 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 		return nil, errors.New(command + ": " + cmp.Or(f.failWith, "injected failure"))
 	}
 	switch {
+	case filepath.Base(name) == "ethtool" && len(args) == 3 && args[0] == "--json":
+		entry := map[string]any{"ifname": args[2]}
+		for feature, on := range f.offloads {
+			entry[feature] = map[string]any{"active": on, "fixed": false, "requested": on}
+		}
+		return json.Marshal([]any{entry})
+	case filepath.Base(name) == "ethtool" && len(args) > 2 && args[0] == "-K":
+		f.offloadSets = append(f.offloadSets, strings.Join(args[1:], " "))
+		for i := 2; i+1 < len(args); i += 2 {
+			f.offloads[args[i]] = args[i+1] == "on"
+		}
 	case strings.HasPrefix(command, "ip -6 route replace ") && len(args) == 10:
 		if f.routes == nil {
 			f.routes = map[string]string{}

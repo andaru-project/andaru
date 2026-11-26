@@ -1,0 +1,313 @@
+[ {
+        "ifname": "eth0",
+        "rx-checksumming": {
+            "active": true,
+            "fixed": false,
+            "requested": true
+        },
+        "tx-checksumming": {
+            "active": true,
+            "fixed": null,
+            "requested": null
+        },
+        "tx-checksum-ipv4": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "tx-checksum-ip-generic": {
+            "active": true,
+            "fixed": false,
+            "requested": true
+        },
+        "tx-checksum-ipv6": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "tx-checksum-fcoe-crc": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "tx-checksum-sctp": {
+            "active": true,
+            "fixed": false,
+            "requested": true
+        },
+        "scatter-gather": {
+            "active": true,
+            "fixed": null,
+            "requested": null
+        },
+        "tx-scatter-gather": {
+            "active": true,
+            "fixed": false,
+            "requested": true
+        },
+        "tx-scatter-gather-fraglist": {
+            "active": true,
+            "fixed": false,
+            "requested": true
+        },
+        "tcp-segmentation-offload": {
+            "active": true,
+            "fixed": null,
+            "requested": null
+        },
+        "tx-tcp-segmentation": {
+            "active": true,
+            "fixed": false,
+            "requested": true
+        },
+        "tx-tcp-ecn-segmentation": {
+            "active": true,
+            "fixed": false,
+            "requested": true
+        },
+        "tx-tcp-mangleid-segmentation": {
+            "active": true,
+            "fixed": false,
+            "requested": true
+        },
+        "tx-tcp6-segmentation": {
+            "active": true,
+            "fixed": false,
+            "requested": true
+        },
+        "generic-segmentation-offload": {
+            "active": true,
+            "fixed": false,
+            "requested": true
+        },
+        "generic-receive-offload": {
+            "active": true,
+            "fixed": false,
+            "requested": true
+        },
+        "large-receive-offload": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "rx-vlan-offload": {
+            "active": false,
+            "fixed": false,
+            "requested": false
+        },
+        "tx-vlan-offload": {
+            "active": true,
+            "fixed": false,
+            "requested": true
+        },
+        "ntuple-filters": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "receive-hashing": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "highdma": {
+            "active": true,
+            "fixed": false,
+            "requested": true
+        },
+        "rx-vlan-filter": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "vlan-challenged": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "tx-gso-robust": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "tx-fcoe-segmentation": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "tx-gre-segmentation": {
+            "active": true,
+            "fixed": false,
+            "requested": true
+        },
+        "tx-gre-csum-segmentation": {
+            "active": true,
+            "fixed": false,
+            "requested": true
+        },
+        "tx-ipxip4-segmentation": {
+            "active": true,
+            "fixed": false,
+            "requested": true
+        },
+        "tx-ipxip6-segmentation": {
+            "active": true,
+            "fixed": false,
+            "requested": true
+        },
+        "tx-udp_tnl-segmentation": {
+            "active": true,
+            "fixed": false,
+            "requested": true
+        },
+        "tx-udp_tnl-csum-segmentation": {
+            "active": true,
+            "fixed": false,
+            "requested": true
+        },
+        "tx-gso-partial": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "tx-tunnel-remcsum-segmentation": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "tx-sctp-segmentation": {
+            "active": true,
+            "fixed": false,
+            "requested": true
+        },
+        "tx-esp-segmentation": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "tx-udp-segmentation": {
+            "active": true,
+            "fixed": false,
+            "requested": true
+        },
+        "tx-gso-list": {
+            "active": true,
+            "fixed": false,
+            "requested": true
+        },
+        "tx-nocache-copy": {
+            "active": false,
+            "fixed": false,
+            "requested": false
+        },
+        "loopback": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "rx-fcs": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "rx-all": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "tx-vlan-stag-hw-insert": {
+            "active": true,
+            "fixed": false,
+            "requested": true
+        },
+        "rx-vlan-stag-hw-parse": {
+            "active": true,
+            "fixed": false,
+            "requested": true
+        },
+        "rx-vlan-stag-filter": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "l2-fwd-offload": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "hw-tc-offload": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "esp-hw-offload": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "esp-tx-csum-hw-offload": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "rx-udp_tunnel-port-offload": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "tls-hw-tx-offload": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "tls-hw-rx-offload": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "rx-gro-hw": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "tls-hw-record": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "rx-gro-list": {
+            "active": false,
+            "fixed": false,
+            "requested": false
+        },
+        "macsec-hw-offload": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "rx-udp-gro-forwarding": {
+            "active": false,
+            "fixed": false,
+            "requested": false
+        },
+        "hsr-tag-ins-offload": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "hsr-tag-rm-offload": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "hsr-fwd-offload": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        },
+        "hsr-dup-offload": {
+            "active": false,
+            "fixed": true,
+            "requested": false
+        }
+    } ]

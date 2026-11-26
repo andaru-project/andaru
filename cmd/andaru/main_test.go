@@ -499,6 +499,19 @@ func TestCtlLeases(t *testing.T) {
 	}
 }
 
+// andaru ctl offloads prints the engine's device offload view.
+func TestCtlOffloads(t *testing.T) {
+	var asked string
+	path := replySocket(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = r.URL.Path
+		_, _ = io.WriteString(w, `{"items":[{"interface":"wan","permanentAddress":"52:54:00:00:00:01","offloads":{"largeReceive":{"active":false,"fixed":true}}}]}`)
+	}))
+	var out, diag bytes.Buffer
+	if code := run(context.Background(), []string{"ctl", "--socket", path, "offloads"}, strings.NewReader(""), &out, &diag); code != 0 || asked != "/api/v1/status/offloads" || !strings.Contains(out.String(), `"largeReceive"`) {
+		t.Fatalf("%d %q %q %q", code, asked, out.String(), diag.String())
+	}
+}
+
 // andaru ctl lldp prints the engine's LLDP neighbor view, and nothing that is not one.
 func TestCtlLLDP(t *testing.T) {
 	var asked string

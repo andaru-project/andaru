@@ -75,6 +75,7 @@ type link struct {
 	TransmitHashPolicy string           `json:"transmitHashPolicy,omitempty"`
 	LLDP               string           `json:"lldp,omitempty"`
 	EmitLLDP           string           `json:"emitLldp,omitempty"`
+	Offloads           map[string]bool  `json:"offloads,omitempty"`
 	Username           string           `json:"username,omitempty"`
 	Password           *secretReference `json:"password,omitempty"`
 }

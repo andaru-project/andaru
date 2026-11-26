@@ -96,6 +96,12 @@ func (r Realizer) copyKeptFirst(ctx context.Context, id int) {
 
 // Boot puts the confirmed generation into /run before networkd starts. It renders nothing.
 func (r Realizer) Boot(ctx context.Context) (result error) {
+	// Before any .link file applies, what each Ethernet device runs is its driver's default. It runs before the lock,
+	// which the disaster path never takes; the record is written atomically.
+	// Short: the unit's 30s start limit must leave the restore its own restoreLimit.
+	note, stop := context.WithTimeout(ctx, offloadRecordLimit)
+	r.noteOffloadDefaults(note)
+	stop()
 	if _, statErr := os.Lstat(r.StateDir); os.IsNotExist(statErr) {
 		return r.disasterBoot(ctx)
 	}
@@ -200,11 +206,15 @@ func (r Realizer) Boot(ctx context.Context) (result error) {
 			if err := r.place(links, nil); err != nil {
 				failures = append(failures, err)
 			}
+			// udev applied the offloads those files set: the devices go back to their defaults.
+			r.applyOffloads(ctx, nil)
 			continue
 		}
 		if err := r.place(nil, set); err != nil {
 			return err
 		}
+		// udev set what the files declare; the rest as a verb would, LRO off included, before anything forwards.
+		r.applyOffloads(ctx, set)
 		if err := r.sessions(ctx, nil, set); err != nil {
 			slog.Error("start the PPPoE sessions", "error", err)
 		}
