@@ -410,7 +410,7 @@ func TestRedirectIsNotFollowed(t *testing.T) {
 	}
 	b.wantRaised(notify.RaisedType, "channel/ch")
 	if n := elsewhere.Load(); n != 0 || b.queued() != 0 || b.sentHas("e1:ch") {
-		t.Fatalf("the redirect target was called %d times, %d queued", n, b.queued())
+		t.Fatalf("the redirect target was called %d times, %d queued, e1 sent %v", n, b.queued(), b.sentHas("e1:ch"))
 	}
 }
 
@@ -526,6 +526,8 @@ func TestFailedQueueWriteIsRetriedFromMemory(t *testing.T) {
 	}
 	h.wait(t, 100)
 	b.waitSent("a1:a")
+	// Sent, a1 is no longer held in memory only.
+	b.wantRaised(notify.ClearedType, "queue")
 }
 
 // A crash between recording a retried job as sent and taking it out of the queue does not send it again.

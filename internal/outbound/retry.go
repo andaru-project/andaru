@@ -26,13 +26,14 @@ type retry struct {
 }
 
 type retries struct {
-	mu    sync.Mutex
-	dir   string
-	items map[string]*retry // by job ID
+	mu      sync.Mutex
+	dir     string
+	items   map[string]*retry // by job ID
+	unsaved map[string]error  // the jobs whose last write failed, kept in memory only, with that failure
 }
 
 func openRetries(dir string) (*retries, error) {
-	r := &retries{dir: filepath.Join(dir, "retry"), items: map[string]*retry{}}
+	r := &retries{dir: filepath.Join(dir, "retry"), items: map[string]*retry{}, unsaved: map[string]error{}}
 	if err := os.MkdirAll(r.dir, 0o700); err != nil {
 		return nil, err
 	}
@@ -71,19 +72,35 @@ func (r *retries) has(id string) bool {
 
 // save keeps item and writes it. It is kept even when the write fails, so its next attempt still waits its turn.
 func (r *retries) save(item *retry) error {
-	r.mu.Lock()
-	r.items[item.Job.ID] = item
-	r.mu.Unlock()
 	data, err := json.Marshal(item)
+	if err == nil {
+		err = writeFile(r.file(item.Job.ID), data)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.items[item.Job.ID] = item
 	if err != nil {
+		r.unsaved[item.Job.ID] = err
+	} else {
+		delete(r.unsaved, item.Job.ID)
+	}
+	return err
+}
+
+// memoryOnly is one of the failures that leave jobs in memory only, or nil when every queued job is on disk.
+func (r *retries) memoryOnly() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, err := range r.unsaved {
 		return err
 	}
-	return writeFile(r.file(item.Job.ID), data)
+	return nil
 }
 
 func (r *retries) remove(id string) error {
 	r.mu.Lock()
 	delete(r.items, id)
+	delete(r.unsaved, id)
 	r.mu.Unlock()
 	if err := os.Remove(r.file(id)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err

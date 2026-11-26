@@ -38,14 +38,15 @@ type Service struct {
 	// Ready, if set, is called each time the consumer is attached.
 	Ready func()
 
-	sent     *sent
-	retries  *retries
-	mu       sync.Mutex
-	failures map[string]int      // jobs each channel gave up in a row
-	working  map[string]bool     // channels that sent a job since the service started
-	sending  map[string]struct{} // the IDs of the jobs being sent from the bus
-	// queueFailing is whether the last write to the retry queue failed.
-	queueFailing bool
+	sent         *sent
+	retries      *retries
+	mu           sync.Mutex
+	failures     map[string]int      // jobs each channel gave up in a row
+	working      map[string]bool     // channels that sent a job since the service started
+	sending      map[string]struct{} // the IDs of the jobs being sent from the bus
+	noticeMu     sync.Mutex
+	noticeKnown  bool // whether noticeRaised says what the queue's notification is
+	noticeRaised bool
 }
 
 // Run serves until ctx ends, reconnecting to the bus whenever the connection is lost.
@@ -98,6 +99,7 @@ func (s *Service) session(ctx context.Context) error {
 		return err
 	}
 	s.Log.Info("reading delivery jobs", "socket", s.Socket)
+	s.queueNotice(ctx, c)
 	if s.Ready != nil {
 		s.Ready()
 	}
@@ -231,6 +233,7 @@ func (s *Service) retryOnce(ctx context.Context, c *bus.Client, item *retry) {
 		if err := s.retries.remove(item.Job.ID); err != nil {
 			s.Log.Warn("remove a finished retry", "job", item.Job.ID, "error", err)
 		}
+		s.queueNotice(ctx, c)
 		return
 	}
 	err := s.send(ctx, item.Job)
@@ -251,24 +254,34 @@ func (s *Service) retryOnce(ctx context.Context, c *bus.Client, item *retry) {
 	if err := s.retries.remove(item.Job.ID); err != nil {
 		s.Log.Warn("remove a finished retry", "job", item.Job.ID, "error", err)
 	}
+	s.queueNotice(ctx, c)
 }
 
-// queued reports a write to the retry queue: a failure raises the queue's notification, the next success clears it.
+// queued logs a failed write to the retry queue and brings the queue's notification up to date.
 func (s *Service) queued(ctx context.Context, c *bus.Client, job delivery.Job, err error) {
-	s.mu.Lock()
-	was := s.queueFailing
-	s.queueFailing = err != nil
-	s.mu.Unlock()
-	switch {
-	case err != nil:
+	if err != nil {
 		s.Log.Error("write to the retry queue", "job", job.ID, "error", err)
-		if !was {
-			s.raise(ctx, c, notify.Raise{Key: "queue", Severity: notify.Warning,
-				Subject: "andaru-outbound cannot write its retry queue",
-				Detail:  notify.Detail(fmt.Sprintf("Notifications waiting for a retry are kept in memory only, and a restart loses them. The error: %v", err))})
-		}
-	case was:
-		s.raise(ctx, c, notify.Raise{Key: "queue"})
+	}
+	s.queueNotice(ctx, c)
+}
+
+// queueNotice raises the queue's notification while jobs are held in memory only, and clears it once none are. It
+// holds its own lock across the publish, so two calls cannot cross, and a publish that fails is tried by the next call.
+// Its state starts unknown, so the first call after a start clears a notification a previous run raised.
+func (s *Service) queueNotice(ctx context.Context, c *bus.Client) {
+	s.noticeMu.Lock()
+	defer s.noticeMu.Unlock()
+	err := s.retries.memoryOnly()
+	if s.noticeKnown && s.noticeRaised == (err != nil) {
+		return
+	}
+	r := notify.Raise{Key: "queue"}
+	if err != nil {
+		r = notify.Raise{Key: "queue", Severity: notify.Warning, Subject: "andaru-outbound cannot write its retry queue",
+			Detail: notify.Detail(fmt.Sprintf("Notifications waiting for a retry are kept in memory only, and a restart loses them. The error: %v", err))}
+	}
+	if s.raise(ctx, c, r) {
+		s.noticeKnown, s.noticeRaised = true, err != nil
 	}
 }
 
@@ -310,8 +323,9 @@ func (s *Service) giveUp(ctx context.Context, c *bus.Client, job delivery.Job, a
 		Detail:  notify.Detail(fmt.Sprintf("The last %d notifications for this channel could not be sent. The last error: %v", n, err))})
 }
 
-// raise publishes one of andaru-outbound's own notifications, or clears it when r has no severity.
-func (s *Service) raise(ctx context.Context, c *bus.Client, r notify.Raise) {
+// raise publishes one of andaru-outbound's own notifications, or clears it when r has no severity, and says whether
+// the bus took it.
+func (s *Service) raise(ctx context.Context, c *bus.Client, r notify.Raise) bool {
 	topic, payload, err := notify.Event(delivery.Source, r)
 	if err == nil {
 		err = c.Publish(ctx, topic, payload, true)
@@ -319,6 +333,7 @@ func (s *Service) raise(ctx context.Context, c *bus.Client, r notify.Raise) {
 	if err != nil {
 		s.Log.Error("raise a notification", "key", r.Key, "error", err)
 	}
+	return err == nil
 }
 
 // redact drops the URL from a failed request's error: a webhook's URL is often its secret, and the error goes to the
