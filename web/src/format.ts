@@ -37,6 +37,8 @@ export function formatAddressAlias(alias: Partial<AddressAlias>, names: Map<stri
   if (alias.kind === 'network') return alias.prefix;
   if (alias.kind === 'range' && alias.first && alias.last) return `${alias.first} to ${alias.last}`;
   if (alias.kind === 'group') return alias.members?.length ? alias.members.map((id) => names.get(id) ?? 'unknown alias').join(', ') : '';
+  if (alias.kind === 'url') return alias.url;
+  if (alias.kind === 'hostnames') return alias.names?.join(', ') ?? '';
   return undefined;
 }
 

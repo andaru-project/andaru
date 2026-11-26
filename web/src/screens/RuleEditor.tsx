@@ -1,7 +1,8 @@
 import { Alert, Anchor, Button, Drawer, Fieldset, Group, MultiSelect, SegmentedControl, Stack, Switch, Text, Textarea, TextInput } from '@mantine/core';
 import { useCallback, useEffect, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react';
 import { ApiClient, ApiError, fieldErrors, saveFailure } from '../api';
-import { firewallZone, type Rule, type RuleSide, type Snapshot } from '../types';
+import { useDynamicAliasTracker } from '../dynamicAlias';
+import { firewallZone, isDynamicAddressAlias, type Rule, type RuleSide, type Snapshot } from '../types';
 import { zoneColorMap } from '../zones';
 import { AliasMultiSelect } from './AliasPicker';
 import { ZonePill, ZoneSelectionPill } from './ZoneBadge';
@@ -50,7 +51,9 @@ export function RuleEditor({ api, rule, snapshot, onClose, onSessionLost, onAban
   const option = (item: { id: string; name: string }) => ({ value: item.id, label: item.name });
   const zones = snapshot.value.zones.map(option);
   const zoneColors = zoneColorMap(snapshot.value.zones);
-  const addresses = (snapshot.value.aliases?.addresses ?? []).map(option);
+  const addressAliases = snapshot.value.aliases?.addresses ?? [];
+  const addressById = new Map(addressAliases.map((a) => [a.id, a]));
+  const addresses = addressAliases.map(option);
   const portAliases = (snapshot.value.aliases?.ports ?? []).map(option);
   const toFirewall = to.zones.includes(firewallZone);
 
@@ -81,21 +84,29 @@ export function RuleEditor({ api, rule, snapshot, onClose, onSessionLost, onAban
     }
   }
 
+  const { onItemsResolved, isDynamicId } = useDynamicAliasTracker(addressById);
+
   // One side of the rule: where, and within that, who.
-  const sideFields = (label: string, key: 'from' | 'to', value: RuleSide, set: Dispatch<SetStateAction<RuleSide>>, zoneOptions: Array<{ value: string; label: string }>, zoneHelp: string) => (
-    <Fieldset legend={label}>
-      <Stack gap="xs">
-        <MultiSelect label={`${label}: zones`} description={zoneHelp} data={zoneOptions} value={value.zones} error={errors.get(`${key}/zones`)} searchable clearable nothingFoundMessage="No zone by that name."
-          renderPill={(input) => <ZoneSelectionPill {...input} colors={zoneColors} />} renderOption={({ option }) => option.value === firewallZone ? option.label : <ZonePill name={option.label} color={zoneColors.get(option.value)} />}
-          // The firewall stands alone as a destination: choosing it leaves the other zones, and choosing another leaves it.
-          onChange={(next) => set((prev) => ({ ...prev, zones: next.includes(firewallZone) && !prev.zones.includes(firewallZone) ? [firewallZone] : next.length > 1 ? next.filter((id) => id !== firewallZone) : next }))} />
-        <AliasMultiSelect api={api} aliasType="addresses" label={`${label}: addresses`} description="Aliases or literal IPs, CIDRs, or ranges within those zones. Empty is every address." placeholder="Alias name, 192.168.1.50, or 10.0.0.0/24" initialOptions={addresses} value={value.addresses} error={errors.get(`${key}/addresses`)} clearable onAliasCreated={onAliasCreated} onCreatingChange={onCreatingChange} onSessionLost={onSessionLost}
-          onChange={(next) => set((prev) => ({ ...prev, addresses: next }))} />
-        <Switch label={`${label}: except these addresses`} description="Matches every other address in the chosen zones. Name an address first." checked={Boolean(value.not)} disabled={value.addresses.length === 0} error={errors.get(`${key}/not`)}
-          onChange={(event) => { const checked = event.currentTarget.checked; set((prev) => ({ ...prev, not: checked })); }} />
-      </Stack>
-    </Fieldset>
-  );
+  const sideFields = (label: string, key: 'from' | 'to', value: RuleSide, set: Dispatch<SetStateAction<RuleSide>>, zoneOptions: Array<{ value: string; label: string }>, zoneHelp: string) => {
+    const hasDynamic = value.addresses.some(isDynamicId);
+    const sideInitialOptions = value.not
+      ? addressAliases.filter((a) => !isDynamicAddressAlias(a) || value.addresses.includes(a.id)).map(option)
+      : addresses;
+    return (
+      <Fieldset legend={label}>
+        <Stack gap="xs">
+          <MultiSelect label={`${label}: zones`} description={zoneHelp} data={zoneOptions} value={value.zones} error={errors.get(`${key}/zones`)} searchable clearable nothingFoundMessage="No zone by that name."
+            renderPill={(input) => <ZoneSelectionPill {...input} colors={zoneColors} />} renderOption={({ option }) => option.value === firewallZone ? option.label : <ZonePill name={option.label} color={zoneColors.get(option.value)} />}
+            // The firewall stands alone as a destination: choosing it leaves the other zones, and choosing another leaves it.
+            onChange={(next) => set((prev) => ({ ...prev, zones: next.includes(firewallZone) && !prev.zones.includes(firewallZone) ? [firewallZone] : next.length > 1 ? next.filter((id) => id !== firewallZone) : next }))} />
+          <AliasMultiSelect api={api} aliasType="addresses" excludeDynamic={Boolean(value.not)} label={`${label}: addresses`} description="Aliases or literal IPs, CIDRs, or ranges within those zones. Empty is every address." placeholder="Alias name, 192.168.1.50, or 10.0.0.0/24" initialOptions={sideInitialOptions} value={value.addresses} error={errors.get(`${key}/addresses`)} clearable onAliasCreated={onAliasCreated} onCreatingChange={onCreatingChange} onItemsResolved={onItemsResolved} onSessionLost={onSessionLost}
+            onChange={(next) => set((prev) => ({ ...prev, addresses: next, ...(next.length === 0 ? { not: false } : {}) }))} />
+          <Switch label={`${label}: except these addresses`} description={hasDynamic ? 'URL and host-name aliases cannot be left out yet.' : 'Matches every other address in the chosen zones. Name an address first.'} checked={Boolean(value.not)} disabled={value.addresses.length === 0 || (hasDynamic && !value.not)} error={errors.get(`${key}/not`)}
+            onChange={(event) => { const checked = event.currentTarget.checked; set((prev) => ({ ...prev, not: checked })); }} />
+        </Stack>
+      </Fieldset>
+    );
+  };
 
   return (
     <Drawer opened onClose={onClose} position="right" size="md" title={rule ? `Edit rule: ${rule.name}` : 'Add rule'} lockScroll={false} closeButtonProps={{ 'aria-label': 'Close' }}>

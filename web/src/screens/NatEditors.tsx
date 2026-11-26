@@ -1,10 +1,11 @@
 import { Alert, Button, Drawer, Fieldset, Group, MultiSelect, SegmentedControl, Select, Stack, Switch, Text, Textarea, TextInput } from '@mantine/core';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiClient, ApiError, saveFailure } from '../api';
+import { useDynamicAliasTracker } from '../dynamicAlias';
 import {
   addressAliasesForFamily, checkOneToOne, checkPortForward, oneToOneDraftOf, oneToOneErrors, oneToOnePayload, portForwardDraftOf, portForwardErrors, portForwardPayload, type OneToOneDraft, type PortForwardDraft,
 } from '../natEdit';
-import type { OneToOneNat, PortForward, Snapshot } from '../types';
+import { type OneToOneNat, type PortForward, type Snapshot } from '../types';
 import { zoneColorMap } from '../zones';
 import { AliasMultiSelect, AliasSelect } from './AliasPicker';
 import { ZonePill, ZoneSelectionPill } from './ZoneBadge';
@@ -99,6 +100,24 @@ interface PortForwardEditorProps {
   onSave(value: Omit<PortForward, 'id'>): Promise<void>;
 }
 
+function withSelectedLabels(
+  options: Array<{ value: string; label: string }>,
+  selected: string[],
+  addressById: Map<string, { id: string; name: string }>,
+): Array<{ value: string; label: string }> {
+  const seen = new Set(options.map((o) => o.value));
+  const extra: Array<{ value: string; label: string }> = [];
+  for (const id of selected) {
+    if (!id || seen.has(id)) continue;
+    const found = addressById.get(id);
+    if (found) {
+      seen.add(id);
+      extra.push({ value: found.id, label: found.name });
+    }
+  }
+  return extra.length > 0 ? [...options, ...extra] : options;
+}
+
 export function PortForwardEditor({ api, entry, snapshot, onClose, onSessionLost, onAbandoned, onAliasCreated, onSave }: PortForwardEditorProps) {
   const wanZone = snapshot.value.zones.find((z) => z.name.toLowerCase() === 'wan')?.id ?? snapshot.value.zones[0]?.id;
   const [draft, setDraft] = useState<PortForwardDraft>(() => portForwardDraftOf(entry, wanZone));
@@ -107,7 +126,13 @@ export function PortForwardEditor({ api, entry, snapshot, onClose, onSessionLost
   const patch = (next: Partial<PortForwardDraft>) => setDraft((prev) => ({ ...prev, ...next }));
   const baseZones = snapshot.value.zones.map((z) => ({ value: z.id, label: z.name }));
   const zoneColors = zoneColorMap(snapshot.value.zones);
-  const baseAddresses = addressAliasesForFamily(snapshot.value.aliases?.addresses ?? [], draft.family);
+  const addressAliases = snapshot.value.aliases?.addresses ?? [];
+  const addressById = new Map(addressAliases.map((a) => [a.id, a]));
+  const { onItemsResolved, isDynamicId } = useDynamicAliasTracker(addressById);
+  const baseAddresses = addressAliasesForFamily(addressAliases, draft.family);
+  const staticAddresses = addressAliasesForFamily(addressAliases, draft.family, true);
+  const fromHasDynamic = draft.from.some(isDynamicId);
+  const toIsDynamic = draft.toKind === 'address' && Boolean(draft.toAddress) && isDynamicId(draft.toAddress);
   const zones = withMissingOptions(baseZones, draft.ingressZones);
 
   function submit(event: FormEvent) {
@@ -197,18 +222,27 @@ export function PortForwardEditor({ api, entry, snapshot, onClose, onSessionLost
                     api={api}
                     aliasType="addresses"
                     family={draft.family}
+                    excludeDynamic={draft.fromNegated}
                     label="Source addresses (optional)"
                     placeholder="Any source (alias or IP/CIDR)"
-                    initialOptions={baseAddresses}
+                    initialOptions={draft.fromNegated ? withSelectedLabels(staticAddresses, draft.from, addressById) : baseAddresses}
                     value={draft.from}
                     error={errors.get('from')}
                     onAliasCreated={onAliasCreated}
                     onCreatingChange={onCreatingChange}
+                    onItemsResolved={onItemsResolved}
                     onSessionLost={onSessionLost}
                     onChange={(from) => patch({ from, ...(from.length === 0 ? { fromNegated: false } : {}) })}
                   />
                   {draft.from.length > 0 && (
-                    <Switch size="xs" label="Invert source match (not these addresses)" checked={draft.fromNegated} onChange={(e) => patch({ fromNegated: e.currentTarget.checked })} />
+                    <Switch
+                      size="xs"
+                      label="Invert source match (not these addresses)"
+                      description={fromHasDynamic ? 'URL and host-name aliases cannot be inverted yet.' : undefined}
+                      checked={draft.fromNegated}
+                      disabled={fromHasDynamic && !draft.fromNegated}
+                      onChange={(e) => patch({ fromNegated: e.currentTarget.checked })}
+                    />
                   )}
                   <Stack gap={4}>
                     <Text size="sm" fw={500}>Destination address</Text>
@@ -216,7 +250,15 @@ export function PortForwardEditor({ api, entry, snapshot, onClose, onSessionLost
                       size="xs"
                       aria-label="Destination address mode"
                       value={draft.toKind}
-                      onChange={(value) => patch({ toKind: value as 'self' | 'address' })}
+                      onChange={(value) => {
+                        const nextKind = value as 'self' | 'address';
+                        patch({
+                          toKind: nextKind,
+                          ...(nextKind === 'address' && draft.toNegated && draft.toAddress && isDynamicId(draft.toAddress)
+                            ? { toAddress: '' }
+                            : {}),
+                        });
+                      }}
                       data={[
                         { value: 'self', label: 'This firewall' },
                         { value: 'address', label: 'Address alias' },
@@ -228,13 +270,15 @@ export function PortForwardEditor({ api, entry, snapshot, onClose, onSessionLost
                       api={api}
                       aliasType="addresses"
                       family={draft.family}
+                      excludeDynamic={draft.toNegated}
                       label="Destination alias"
                       placeholder="Choose an alias or type IP/CIDR"
-                      initialOptions={baseAddresses}
+                      initialOptions={draft.toNegated ? withSelectedLabels(staticAddresses, draft.toAddress ? [draft.toAddress] : [], addressById) : baseAddresses}
                       value={draft.toAddress || null}
                       error={errors.get('to')}
                       onAliasCreated={onAliasCreated}
                       onCreatingChange={onCreatingChange}
+                      onItemsResolved={onItemsResolved}
                       onSessionLost={onSessionLost}
                       onChange={(value) => patch({ toAddress: value ?? '' })}
                     />
@@ -242,8 +286,17 @@ export function PortForwardEditor({ api, entry, snapshot, onClose, onSessionLost
                   <Switch
                     size="xs"
                     label="Invert destination match (not this destination)"
+                    description={toIsDynamic ? 'URL and host-name aliases cannot be inverted yet.' : undefined}
                     checked={draft.toNegated}
-                    onChange={(e) => patch({ toNegated: e.currentTarget.checked, ...(e.currentTarget.checked ? { reflection: false } : {}) })}
+                    disabled={toIsDynamic && !draft.toNegated}
+                    onChange={(e) => {
+                      const checked = e.currentTarget.checked;
+                      patch({
+                        toNegated: checked,
+                        ...(checked ? { reflection: false } : {}),
+                        ...(checked && draft.toKind === 'self' && draft.toAddress && isDynamicId(draft.toAddress) ? { toAddress: '' } : {}),
+                      });
+                    }}
                   />
                 </Stack>
               </Fieldset>
@@ -352,7 +405,12 @@ export function OneToOneEditor({ api, entry, snapshot, onClose, onSessionLost, o
   const patch = (next: Partial<OneToOneDraft>) => setDraft((prev) => ({ ...prev, ...next }));
   const baseZones = snapshot.value.zones.map((z) => ({ value: z.id, label: z.name }));
   const zoneColors = zoneColorMap(snapshot.value.zones);
-  const baseAddresses = addressAliasesForFamily(snapshot.value.aliases?.addresses ?? [], 'ipv4');
+  const addressAliases = snapshot.value.aliases?.addresses ?? [];
+  const addressById = new Map(addressAliases.map((a) => [a.id, a]));
+  const { onItemsResolved, isDynamicId } = useDynamicAliasTracker(addressById);
+  const baseAddresses = addressAliasesForFamily(addressAliases, 'ipv4');
+  const staticAddresses = addressAliasesForFamily(addressAliases, 'ipv4', true);
+  const destHasDynamic = draft.destination.some(isDynamicId);
   const zones = withMissingOptions(baseZones, draft.zone ? [draft.zone] : []);
 
   function submit(event: FormEvent) {
@@ -417,13 +475,15 @@ export function OneToOneEditor({ api, entry, snapshot, onClose, onSessionLost, o
                     api={api}
                     aliasType="addresses"
                     family="ipv4"
+                    excludeDynamic={draft.destinationNegated}
                     label="Destination addresses (optional)"
                     placeholder="Any destination (alias or IPv4/CIDR)"
-                    initialOptions={baseAddresses}
+                    initialOptions={draft.destinationNegated ? withSelectedLabels(staticAddresses, draft.destination, addressById) : baseAddresses}
                     value={draft.destination}
                     error={errors.get('destination')}
                     onAliasCreated={onAliasCreated}
                     onCreatingChange={onCreatingChange}
+                    onItemsResolved={onItemsResolved}
                     onSessionLost={onSessionLost}
                     onChange={(destination) => patch({ destination, ...(destination.length === 0 ? { destinationNegated: false } : {}) })}
                   />
@@ -431,7 +491,9 @@ export function OneToOneEditor({ api, entry, snapshot, onClose, onSessionLost, o
                     <Switch
                       size="xs"
                       label="Invert destination match (not these addresses)"
+                      description={destHasDynamic ? 'URL and host-name aliases cannot be inverted yet.' : undefined}
                       checked={draft.destinationNegated}
+                      disabled={destHasDynamic && !draft.destinationNegated}
                       error={errors.get('destinationNegated')}
                       onChange={(e) => patch({ destinationNegated: e.currentTarget.checked })}
                     />

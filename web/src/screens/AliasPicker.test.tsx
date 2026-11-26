@@ -410,4 +410,56 @@ describe('AliasPicker', () => {
     await user.click(await screen.findByText('Use TCP 443'));
     expect(await screen.findByText('tcp/443', { selector: 'span' })).toBeInTheDocument();
   });
+
+  it('hides dynamic url and hostnames aliases from remote search when excludeDynamic is set and reports resolved items', async () => {
+    const user = userEvent.setup();
+    const onResolved = vi.fn();
+    fetchRoutes({
+      '/api/v1/config/aliases/search': () => jsonResponse(200, {
+        state: 'saved',
+        savedVersion: '5',
+        items: [
+          { id: 'adr_lan', name: 'lan-net', kind: 'network', summary: '192.0.2.0/24', score: 900, highlights: [{ text: 'lan-net', match: true }] },
+          { id: 'adr_grp', name: 'lan-grp', kind: 'group', summary: 'lan-net', score: 850, highlights: [{ text: 'lan-grp', match: true }] },
+          { id: 'adr_url', name: 'lan-feed', kind: 'url', summary: 'https://example.com/ips', score: 800, highlights: [{ text: 'lan-feed', match: true }] },
+          { id: 'adr_dns', name: 'lan-vpn', kind: 'hostnames', summary: 'vpn.example.com', score: 750, highlights: [{ text: 'lan-vpn', match: true }] },
+        ],
+      }),
+    });
+
+    function DynamicFilterHarness({ api }: { api: ApiClient }) {
+      const [selected, setSelected] = useState<string[]>([]);
+      const [single, setSingle] = useState<string | null>(null);
+      return (
+        <MantineProvider>
+          <AliasMultiSelect api={api} aliasType="addresses" excludeDynamic debounceMs={10} label="Addresses" initialOptions={[]} value={selected} onChange={setSelected} onItemsResolved={onResolved} />
+          <AliasSelect api={api} aliasType="addresses" excludeDynamic debounceMs={10} label="Single address" initialOptions={[]} value={single} onChange={setSingle} onItemsResolved={onResolved} />
+        </MantineProvider>
+      );
+    }
+
+    render(<DynamicFilterHarness api={new ApiClient('csrf')} />);
+    await user.type(screen.getByLabelText('Addresses', { selector: 'input' }), 'lan');
+    const options = await waitFor(() => {
+      const found = screen.getAllByRole('option', { hidden: true });
+      expect(found.length).toBe(2);
+      return found;
+    });
+    expect(options.map((o) => o.textContent)).toEqual(['lan-net192.0.2.0/24', 'lan-grplan-net']);
+    expect(screen.queryByText('lan-feed')).not.toBeInTheDocument();
+    expect(screen.queryByText('lan-vpn')).not.toBeInTheDocument();
+    expect(onResolved).toHaveBeenCalledWith(expect.arrayContaining([
+      expect.objectContaining({ id: 'adr_url', kind: 'url' }),
+      expect.objectContaining({ id: 'adr_dns', kind: 'hostnames' }),
+    ]));
+
+    // AliasSelect with excludeDynamic also omits url and hostnames from remote search.
+    const singleInput = screen.getByLabelText('Single address', { selector: 'input' });
+    await user.type(singleInput, 'lan');
+    const singleListbox = document.getElementById(singleInput.getAttribute('aria-controls')!)!;
+    await waitFor(() => {
+      const opts = Array.from(singleListbox.querySelectorAll('[role="option"]'));
+      expect(opts.map((o) => o.textContent)).toEqual(['lan-net192.0.2.0/24', 'lan-grplan-net']);
+    });
+  });
 });

@@ -269,6 +269,85 @@ describe('NatScreen', () => {
     expect(screen.queryByText('Outbound NAT changed elsewhere')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save outbound NAT' })).toBeEnabled();
   });
+
+  it('hides dynamic aliases when NAT negation is enabled and clears dynamic destination across self/negated switches', async () => {
+    const snapWithDynamic: Snapshot = {
+      ...sampleSnapshot,
+      value: {
+        ...sampleSnapshot.value,
+        aliases: {
+          addresses: [
+            { id: 'adr_trusted', name: 'trusted-clients', kind: 'network', prefix: '203.0.113.0/24' },
+            { id: 'adr_url', name: 'cf-feed', kind: 'url', url: 'https://www.cloudflare.com/ips-v4', refreshSeconds: 3600 },
+            { id: 'adr_dns', name: 'vpn-dns', kind: 'hostnames', names: ['vpn.example.com'], refreshSeconds: 300 },
+          ],
+          ports: [],
+        },
+      },
+    };
+    fetchRoutes({
+      '/api/v1/config': snapWithDynamic,
+      '/api/v1/config/nat/port-forwards': { state: 'saved', savedVersion: '5', version: '1', items: [] },
+      '/api/v1/config/nat/one-to-one': { state: 'saved', savedVersion: '5', version: '1', items: [] },
+      '/api/v1/config/nat/outbound': { state: 'saved', savedVersion: '5', version: '1', value: { mode: 'automatic' } },
+    });
+    renderNat();
+
+    // Port forward: pick dynamic destination alias -> invert destination is disabled; switch to "This firewall",
+    // enable invert, switch back to "Address alias" -> stale dynamic alias was cleared and excluded from options.
+    fireEvent.click(await screen.findByRole('button', { name: 'Add port forward' }));
+    const pfDrawer = await screen.findByRole('dialog', { name: 'Add port forward' });
+    const matchSection = within(pfDrawer).getByRole('group', { name: 'Match' });
+    fireEvent.click(within(matchSection).getByRole('radio', { name: 'Address alias' }));
+    const destAliasInput = within(matchSection).getByLabelText('Destination alias', { selector: 'input' });
+    fireEvent.click(destAliasInput);
+    let destListbox = document.getElementById(destAliasInput.getAttribute('aria-controls')!)!;
+    expect(within(destListbox).getAllByRole('option', { hidden: true }).map((o) => o.textContent)).toContain('cf-feed');
+    fireEvent.click(within(destListbox).getByRole('option', { name: 'cf-feed', hidden: true }));
+
+    const invertDest = within(matchSection).getByRole('switch', { name: /^Invert destination match/ });
+    expect(invertDest).toBeDisabled();
+
+    fireEvent.click(within(matchSection).getByRole('radio', { name: 'This firewall' }));
+    expect(invertDest).toBeEnabled();
+    fireEvent.click(invertDest);
+    expect(invertDest).toBeChecked();
+
+    fireEvent.click(within(matchSection).getByRole('radio', { name: 'Address alias' }));
+    const destAliasAfter = within(matchSection).getByLabelText('Destination alias', { selector: 'input' }) as HTMLInputElement;
+    expect(destAliasAfter.value).toBe('');
+    fireEvent.click(destAliasAfter);
+    destListbox = document.getElementById(destAliasAfter.getAttribute('aria-controls')!)!;
+    const destOptions = within(destListbox).getAllByRole('option', { hidden: true }).map((o) => o.textContent);
+    expect(destOptions).toEqual(['trusted-clients']);
+    fireEvent.click(within(pfDrawer).getByRole('button', { name: 'Cancel' }));
+
+    // 1:1 NAT: choosing dynamic destination disables invert; choosing static + enabling invert hides dynamic aliases.
+    fireEvent.click(screen.getByRole('tab', { name: '1:1 NAT (0)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add 1:1 entry' }));
+    const o2oDrawer = await screen.findByRole('dialog', { name: 'Add 1:1 NAT entry' });
+    const o2oDest = within(o2oDrawer).getByLabelText('Destination addresses (optional)', { selector: 'input' });
+    fireEvent.click(o2oDest);
+    let o2oListbox = document.getElementById(o2oDest.getAttribute('aria-controls')!)!;
+    fireEvent.click(within(o2oListbox).getByRole('option', { name: 'vpn-dns', hidden: true }));
+    expect(within(o2oDrawer).getByRole('switch', { name: /^Invert destination match/ })).toBeDisabled();
+
+    // Remove dynamic pill, pick static alias, invert, and verify dynamic aliases disappear.
+    const removePill = o2oDest.closest('.mantine-MultiSelect-wrapper')?.querySelector('button[aria-label], button') as HTMLButtonElement | null;
+    expect(removePill).not.toBeNull();
+    fireEvent.click(removePill!);
+    fireEvent.click(o2oDest);
+    o2oListbox = document.getElementById(o2oDest.getAttribute('aria-controls')!)!;
+    fireEvent.click(within(o2oListbox).getByRole('option', { name: 'trusted-clients', hidden: true }));
+    const o2oInvert = within(o2oDrawer).getByRole('switch', { name: /^Invert destination match/ });
+    expect(o2oInvert).toBeEnabled();
+    fireEvent.click(o2oInvert);
+    fireEvent.click(o2oDest);
+    o2oListbox = document.getElementById(o2oDest.getAttribute('aria-controls')!)!;
+    const o2oNegatedOpts = within(o2oListbox).getAllByRole('option', { hidden: true }).map((o) => o.textContent);
+    expect(o2oNegatedOpts).not.toContain('cf-feed');
+    expect(o2oNegatedOpts).not.toContain('vpn-dns');
+  });
 });
 
 describe('natEdit helpers', () => {

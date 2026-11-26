@@ -1,6 +1,6 @@
 import { fieldErrors } from './api';
 import { parseDecimalInt } from './dhcpEdit';
-import type { AddressAlias, OneToOneNat, PortForward } from './types';
+import { isDynamicAddressAlias, type AddressAlias, type OneToOneNat, type PortForward } from './types';
 
 export interface PortForwardDraft {
   name: string;
@@ -209,11 +209,13 @@ export function oneToOneErrors(error: unknown, draft: OneToOneDraft): Map<string
 export function addressAliasesForFamily(
   aliases: Array<Partial<AddressAlias> & { id: string; name: string }>,
   family: 'ipv4' | 'ipv6',
+  excludeDynamic = false,
 ): Array<{ value: string; label: string }> {
   const byId = new Map(aliases.map((a) => [a.id, a]));
   const matches = (id: string, nested: boolean): boolean => {
     const a = byId.get(id);
     if (!a) return false;
+    if (isDynamicAddressAlias(a)) return !excludeDynamic;
     if (a.kind === 'group') {
       if (nested || !a.members || a.members.length === 0) return !nested && a.members === undefined;
       return a.members.some((m) => matches(m, true));

@@ -2,6 +2,7 @@ import { Alert, Anchor, Badge, Button, Group, Modal, ScrollArea, SegmentedContro
 import { useCallback, useState } from 'react';
 import { Link } from 'react-router';
 import { ApiError, reportError, type ApiClient } from '../api';
+import { formatRefreshInterval, isInsecureHttpUrl } from '../dynamicAlias';
 import { formatAddressAlias, formatPortAlias } from '../format';
 import type { AddressAlias, AliasKinds, PortAlias, SavedObject, Session, Snapshot } from '../types';
 import { useResource } from '../useResource';
@@ -15,7 +16,14 @@ type Kind = keyof AliasKinds;
 // One row of the page: an alias of either kind, with the version that guards it.
 export type Row = { kind: 'addresses'; item: SavedObject<AddressAlias> } | { kind: 'ports'; item: SavedObject<PortAlias> };
 
-const kinds: Record<AddressAlias['kind'], string> = { host: 'Host', network: 'Network', range: 'Range', group: 'Address group' };
+const kinds: Record<AddressAlias['kind'], string> = {
+  host: 'Host',
+  network: 'Network',
+  range: 'Range',
+  group: 'Address group',
+  url: 'URL list',
+  hostnames: 'Host names',
+};
 const kindLabel = (row: Row) => (row.kind === 'addresses' ? kinds[row.item.value.kind] : row.item.value.protocol === 'group' ? 'Port group' : 'Port');
 
 // What an address alias holds, with addresses in their own type so they break only where they may.
@@ -25,6 +33,29 @@ function Holds({ row, names }: { row: Row; names: Map<string, string> }) {
     if (alias.kind === 'host' && alias.address) return <Address value={alias.address} />;
     if (alias.kind === 'network' && alias.prefix) return <Address value={alias.prefix} />;
     if (alias.kind === 'range' && alias.first && alias.last) return <Group gap={4} wrap="wrap"><Address value={alias.first} />{' '}<Text size="sm">to</Text>{' '}<Address value={alias.last} /></Group>;
+    if (alias.kind === 'url') {
+      return (
+        <Stack gap={2} align="flex-start">
+          {alias.url && <Text size="sm" className="channel-target">{alias.url}</Text>}
+          {alias.refreshSeconds !== undefined && (
+            <Text size="xs" c="dimmed">Refreshes every {formatRefreshInterval(alias.refreshSeconds)}</Text>
+          )}
+          {alias.url && isInsecureHttpUrl(alias.url) && (
+            <Text size="xs" className="warning-text">Not secure: anyone on the path can change the list.</Text>
+          )}
+        </Stack>
+      );
+    }
+    if (alias.kind === 'hostnames') {
+      return (
+        <Stack gap={2} align="flex-start">
+          <Text size="sm" className="channel-target">{(alias.names ?? []).join(', ')}</Text>
+          {alias.refreshSeconds !== undefined && (
+            <Text size="xs" c="dimmed">Refreshes every {formatRefreshInterval(alias.refreshSeconds)}</Text>
+          )}
+        </Stack>
+      );
+    }
   }
   return <Text size="sm">{holds(row, names)}</Text>;
 }
@@ -157,7 +188,7 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
                 </ScrollArea>
               )}
               {editing && (
-                <AliasEditor key={typeof editing === 'string' ? editing : editing.item.value.id} api={api} editing={editing} rows={rows} onClose={() => setEditing(undefined)} onSessionLost={onSessionLost} onAbandoned={setError} onRefused={() => void resource.reload()} onAliasCreated={() => { onSaved(); void resource.reload(); }}
+                <AliasEditor key={typeof editing === 'string' ? editing : editing.item.value.id} api={api} editing={editing} rows={rows} snapshot={snapshot} onClose={() => setEditing(undefined)} onSessionLost={onSessionLost} onAbandoned={setError} onRefused={() => void resource.reload()} onAliasCreated={() => { onSaved(); void resource.reload(); }}
                   onSave={async (kind, alias, saved) => {
                     try {
                       await api.saveAlias(kind, alias, saved);
