@@ -87,14 +87,6 @@ func (c *Client) Ack(name string, seq int64) error {
 }
 
 // Close ends the connection; deliveries not yet read are dropped.
-// Err is why the connection ended, or nil while it lasts: a request refused on a live connection is the bus's answer to
-// that request, not a lost connection.
-func (c *Client) Err() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.err
-}
-
 func (c *Client) Close() error {
 	c.once.Do(func() { close(c.closing) })
 	return c.nc.Close()

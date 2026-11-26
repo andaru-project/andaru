@@ -401,23 +401,34 @@ func TestAliasRefreshDuringFetch(t *testing.T) {
 	}
 }
 
-// A result the bus refuses on a live connection is dropped and its request acked: the bus would refuse it again, and
-// ending the session would loop and cut off the notifications being sent.
-func TestRefusedAliasResultIsDropped(t *testing.T) {
+// A result too large for the bus is sent as a failure, so the engine records it, and its request is acked; the
+// session goes on. A request whose result topic the bus would refuse is skipped.
+func TestRefusedAliasResultIsSentAsAFailure(t *testing.T) {
 	b := newAliasBench(t)
+	var many []string // more than the bus's 512 KiB as JSON
+	for i := range 20000 {
+		many = append(many, fmt.Sprintf("2001:db8:ffff:ffff:ffff:ffff:%x:1", i))
+	}
 	srv := serve(t, false, body("192.0.2.1\n"))
 	var log logBuf
-	b.run(&Service{Log: log.logger()})
-	b.send(aliasfeed.Request{ID: "r", Alias: "a/b", Hash: "h", Kind: "url", URL: srv.URL}) // alias-result/+ refuses a/b
-	eventually(t, "the refusal was not logged", func() bool { return log.count("alias result refused by the bus") > 0 })
-	// The session goes on: the next request is answered without a reconnect.
+	b.run(&Service{Lookup: fakeLookup(map[string][]string{"many.example": many}), Log: log.logger()})
+	b.send(aliasfeed.Request{ID: "skipped", Alias: "a/b", Hash: "h", Kind: "url", URL: srv.URL})
+	b.send(aliasfeed.Request{ID: "r", Alias: "a", Hash: "h", Kind: "hostnames", Names: []string{"many.example"}})
+	if _, r := b.next(10 * time.Second); r.Request != "r" || r.Hash != "h" || r.OK || !strings.Contains(r.Error, "512 KiB") {
+		t.Fatalf("%+v", r)
+	}
 	b.send(aliasfeed.Request{ID: "r2", Alias: "a", Hash: "h", Kind: "url", URL: srv.URL})
 	if _, r := b.next(10 * time.Second); r.Request != "r2" || !r.OK {
 		t.Fatalf("%+v", r)
 	}
-	if log.count("bus connection lost") != 0 {
-		t.Fatal("the session ended")
+	if log.count("bus connection lost") != 0 || log.count("alias request unreadable") != 1 {
+		t.Fatal("the session ended, or a/b was not skipped")
 	}
+	// All three were acked: a new session gets none of them again.
+	b.none(200 * time.Millisecond) // the acks go out after the results
+	b.stop()
+	b.run(&Service{Log: slog.New(slog.DiscardHandler)})
+	b.none(300 * time.Millisecond)
 }
 
 // A session that ends during a fetch publishes nothing; the next one fetches again.
