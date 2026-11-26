@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/andaru-project/andaru/internal/aliasfeed"
 	"github.com/andaru-project/andaru/internal/audit"
 	"github.com/andaru-project/andaru/internal/bus"
 	"github.com/andaru-project/andaru/internal/config"
@@ -104,7 +105,9 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 		return len(view.Questions) > 0, err
 	})
 	head := publishHead(events)
-	store.OnSave(func(v config.Version) { head(v); sources.nudge() })
+	runner := newSystemdRunner(stateDir, busSocket)
+	feeds := newAliasFeeds(stateDir, events, store.DynamicAliases, func(ctx context.Context) error { return runner.Realize(ctx, "aliases", 0) })
+	store.OnSave(func(v config.Version) { head(v); sources.nudge(); feeds.nudge() })
 	// Without its store the layer does not read: notifications wait in the bus's log, for its retention, until a
 	// start that opens it, and the API answers that they are unavailable.
 	// A link in a notification is a path in the web UI: sent as a full URL from the first management origin.
@@ -117,6 +120,14 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	if err := events.Declare(outboundUser, delivery.Consumer, delivery.Filter); err != nil {
 		slog.Error("notification deliveries may be missed until andaru-outbound attaches", "error", err)
 	}
+	if err := events.Declare(outboundUser, aliasfeed.Consumer, aliasfeed.Filter); err != nil {
+		slog.Error("alias fetches may be missed until andaru-outbound attaches", "error", err)
+	}
+	stopResults, err := events.Consume(aliasfeed.ResultConsumer, aliasfeed.ResultFilter, feeds.handle)
+	if err != nil {
+		return fmt.Errorf("read alias results: %w", err)
+	}
+	defer stopResults()
 	var active []notify.Notification
 	notifications := slog.Default().With("component", "notifications")
 	if layer, err := notify.Open(filepath.Join(stateDir, "notifications.db"), events, notifications, deliverNotifications(events, store.NotificationChannels, origin, notifications)); err != nil {
@@ -145,7 +156,7 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	}()
 	defer func() { cancel(context.Canceled); <-stopped }()
 	read := hostReader{Links: host.ReadLinks, Facts: host.ReadRealizerFacts, Managed: host.ReadManaged, BootUnit: host.ReadBootUnit}
-	applies := newAppliesHandler(store.ApplyInput, store.Roles, read, newSystemdRunner(stateDir, busSocket), stateDir, identities, coordinator, publishApply(events, "engine"))
+	applies := newAppliesHandler(store.ApplyInput, store.Roles, read, runner, stateDir, identities, coordinator, publishApply(events, "engine"))
 	identityAPI := newIdentityAPI(identities, store, coordinator)
 	auditAPI := newAuditAPI(coordinator)
 	backups := newBackupHandler(store, identities, coordinator, stateDir, host.ReadLinks)
@@ -173,6 +184,9 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	noticed := make(chan struct{})
 	go func() { defer close(noticed); sources.run(lifetime, active) }()
 	defer func() { cancel(context.Canceled); <-noticed }()
+	fed := make(chan struct{})
+	go func() { defer close(fed); feeds.run(lifetime) }()
+	defer func() { cancel(context.Canceled); <-fed }()
 	// The traffic history fills for as long as the engine serves, and the sampler is gone before this returns.
 	sampled := make(chan struct{})
 	go func() { defer close(sampled); sampleTraffic(lifetime, traffic, systemRoot) }()
@@ -198,7 +212,7 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	setupCodeAPI := newSetupCodeHandler(identities, setupCodes)
 	hostnameAPI := newHostnameHandler(nil)
 	updateAPI := newUpdateAPI(stateDir, nil)
-	rootAPI := newHandlerWithAllServices(host.ReadLinks, newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, applies, backups), identityAPI, auditAPI, fleetAPI, updateAPI, setupCodeAPI, hostnameAPI, notificationsHandler)
+	rootAPI := newHandlerWithAllServices(host.ReadLinks, newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, applies, backups), identityAPI, auditAPI, fleetAPI, updateAPI, setupCodeAPI, hostnameAPI, notificationsHandler, aliasesAPI{feeds: feeds})
 	if web == nil {
 		err = serveUnix(lifetime, socketPath, rootAPI)
 	} else {

@@ -86,6 +86,8 @@ func buildEngineRoutes() []routeCapability {
 	add(authz.ConfigurationWrite, "/api/v1/config/aliases/{kind}", http.MethodPost)
 	add(authz.ConfigurationRead, "/api/v1/config/aliases/{kind}/{id}", read...)
 	add(authz.ConfigurationWrite, "/api/v1/config/aliases/{kind}/{id}", http.MethodPut, http.MethodDelete)
+	add(authz.ConfigurationRead, "/api/v1/aliases/addresses/status", read...)
+	add(authz.ConfigurationWrite, "/api/v1/aliases/addresses/{id}/refresh", http.MethodPost)
 	add(authz.ConfigurationRead, "/api/v1/config/notifications/channels", read...)
 	add(authz.NotificationsManage, "/api/v1/config/notifications/channels", http.MethodPost)
 	add(authz.ConfigurationRead, "/api/v1/config/notifications/channels/{id}", read...)

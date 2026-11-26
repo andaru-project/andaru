@@ -1,12 +1,15 @@
 package generation
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/andaru-project/andaru/internal/aliasfeed"
 )
 
 func script(sum string) string {
@@ -372,5 +375,69 @@ func TestBootRemovesTheLinksOfAnUnusableCandidate(t *testing.T) {
 	}
 	if b.exists(netDir + link) {
 		t.Fatal("the unusable candidate's .link file stayed")
+	}
+}
+
+// dynamicScript is a filter with the empty sets of one alias fed from a URL and another never fetched.
+func dynamicScript(sum string) string {
+	return strings.Replace(script(sum), "\tcomment", "\tset adr_0001_aa_4 { type ipv4_addr; flags interval; auto-merge; }\n"+
+		"\tset adr_0001_aa_6 { type ipv6_addr; flags interval; auto-merge; }\n"+
+		"\tset adr_0002_bb_4 { type ipv4_addr; flags interval; auto-merge; }\n"+
+		"\tset adr_0003_cc_4 { type ipv4_addr; flags interval; auto-merge; elements = { 192.0.2.1 }; }\n\tcomment", 1)
+}
+
+func (b *bench) aliasState(id string, members ...string) {
+	b.t.Helper()
+	data, _ := json.Marshal(aliasfeed.State{Members: members})
+	writeFile(b.t, aliasfeed.Path(b.r.StateDir, id), string(data))
+}
+
+func TestAliasFill(t *testing.T) {
+	b := newBench(t)
+	b.aliasState("adr_0001-aa", "198.51.100.0/24", "2001:db8::/32", "192.0.2.7")
+	b.aliasState("adr_0003-cc", "203.0.113.1") // a static set is never filled
+	want := "flush set inet andaru adr_0001_aa_4\n" +
+		"add element inet andaru adr_0001_aa_4 { 192.0.2.7, 198.51.100.0/24 }\n" +
+		"flush set inet andaru adr_0001_aa_6\n" +
+		"add element inet andaru adr_0001_aa_6 { 2001:db8::/32 }\n" +
+		"flush set inet andaru adr_0002_bb_4\n"
+	if got := string(aliasFill(b.r.StateDir, []byte(dynamicScript("aa")))); got != want {
+		t.Fatalf("got\n%s\nwant\n%s", got, want)
+	}
+	// A state that does not read, or holds what is not a list, flushes only.
+	writeFile(t, aliasfeed.Path(b.r.StateDir, "adr_0001-aa"), `{"members":["not an address"]}`)
+	if got := string(aliasFill(b.r.StateDir, []byte(dynamicScript("aa")))); strings.Contains(got, "add element") {
+		t.Fatalf("got\n%s", got)
+	}
+	if got := aliasFill(b.r.StateDir, []byte(script("aa"))); got != nil {
+		t.Fatalf("a filter without such sets: %q", got)
+	}
+}
+
+// Every load of the filter fills the aliases' sets in the same transaction.
+func TestFilterLoadFillsAliases(t *testing.T) {
+	b := newBench(t)
+	b.aliasState("adr_0001-aa", "198.51.100.0/24")
+	g := b.gen(map[string]string{"50-andaru-eth0.network": uplinkDHCP, filterEntry: dynamicScript("bb")})
+	if err := b.r.Activate(t.Context(), g); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(b.net.script, "}\nflush set inet andaru adr_0001_aa_4\nadd element inet andaru adr_0001_aa_4 { 198.51.100.0/24 }\n"+
+		"flush set inet andaru adr_0001_aa_6\nflush set inet andaru adr_0002_bb_4\n") || !strings.HasPrefix(b.net.script, "table inet andaru {}") {
+		t.Fatalf("loaded %q", b.net.script)
+	}
+	// realize aliases fills the live filter's sets again from the state files.
+	b.aliasState("adr_0001-aa", "2001:db8::1")
+	b.net.script = ""
+	if err := b.r.FillAliases(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if want := "flush set inet andaru adr_0001_aa_4\nflush set inet andaru adr_0001_aa_6\nadd element inet andaru adr_0001_aa_6 { 2001:db8::1 }\nflush set inet andaru adr_0002_bb_4\n"; b.net.script != want {
+		t.Fatalf("filled %q", b.net.script)
+	}
+	// Without the table there is nothing to fill.
+	b.net.table, b.net.script = "", ""
+	if err := b.r.FillAliases(t.Context()); err != nil || b.net.script != "" {
+		t.Fatalf("filled %q: %v", b.net.script, err)
 	}
 }

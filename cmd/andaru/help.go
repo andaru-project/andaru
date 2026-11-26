@@ -55,7 +55,7 @@ Options:
 
 const realizeUsage = `usage: andaru realize [OPTIONS] activate|confirm N
        andaru realize [OPTIONS] rollback N REASON
-       andaru realize [OPTIONS] boot|leases|prefixes|factory-reset
+       andaru realize [OPTIONS] boot|leases|prefixes|aliases|factory-reset
        andaru realize [OPTIONS] update-check|update-stage
        andaru realize [OPTIONS] update-rollback|update-reboot
        andaru realize [OPTIONS] set-hostname NAME
@@ -72,6 +72,7 @@ Verbs:
   boot               Copy the confirmed generation into /run at boot
   leases             Publish DHCP lease names and route delegated prefixes
   prefixes           Follow the delegated IPv6 prefix into the DHCPv6 server
+  aliases            Load the fetched URL and host-name alias lists into nft
   factory-reset      Run or resume the factory reset ctl factory-reset planned
   update-check       Check for signed appliance image updates and cache status
   update-stage       Download and stage the next signed appliance image

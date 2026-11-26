@@ -22,6 +22,7 @@ type realizeRunner interface {
 	Arm(ctx context.Context, id, seconds int) error
 	// Disarm stops the timer. A timer that fires anyway finds nothing to do.
 	Disarm(ctx context.Context, id int)
+	// Realize runs verb on generation id, or on none when id is 0.
 	Realize(ctx context.Context, verb string, id int, extra ...string) error
 }
 
@@ -42,8 +43,13 @@ func newSystemdRunner(stateDir, busSocket string) realizeRunner {
 	}}
 }
 
+// command runs verb on generation id; id 0 is a verb on no generation.
 func (s systemdRunner) command(verb string, id int, extra ...string) []string {
-	return append([]string{andaruBinary, "realize", "--state-dir", s.stateDir, "--bus-socket", s.busSocket, verb, strconv.Itoa(id)}, extra...)
+	argv := []string{andaruBinary, "realize", "--state-dir", s.stateDir, "--bus-socket", s.busSocket, verb}
+	if id != 0 {
+		argv = append(argv, strconv.Itoa(id))
+	}
+	return append(argv, extra...)
 }
 
 func (s systemdRunner) Arm(ctx context.Context, id, seconds int) error {
@@ -64,6 +70,10 @@ func (s systemdRunner) Realize(ctx context.Context, verb string, id int, extra .
 		return errors.New("realize needs a verb")
 	}
 	// The name differs from the timer's service: systemd refuses a transient unit whose name is already loaded.
-	args := []string{"--quiet", "--wait", "--collect", "--unit=andaru-realize-" + verb + "-" + strconv.Itoa(id), "-p", realizeRuntime}
+	unit := "andaru-realize-" + verb
+	if id != 0 {
+		unit += "-" + strconv.Itoa(id)
+	}
+	args := []string{"--quiet", "--wait", "--collect", "--unit=" + unit, "-p", realizeRuntime}
 	return s.exec(ctx, "/usr/bin/systemd-run", append(args, s.command(verb, id, extra...)...)...)
 }

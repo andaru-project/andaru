@@ -54,7 +54,8 @@ func (r Realizer) filter(g Generation) (path, comment string, ok bool, err error
 	return "", "", false, nil
 }
 
-// loadFilter replaces table inet andaru with the generation's in one transaction, then checks the kernel has it.
+// loadFilter replaces table inet andaru with the generation's in one transaction, with its dynamic aliases' saved
+// members, then checks the kernel has it.
 func (r Realizer) loadFilter(ctx context.Context, path, comment string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -64,19 +65,14 @@ func (r Realizer) loadFilter(ctx context.Context, path, comment string) error {
 	if err != nil {
 		return fmt.Errorf("load the packet filter: %w", err)
 	}
-	if !bytes.Equal(renamed, data) {
-		f, err := os.CreateTemp(r.dir(), "filter-*.nft")
-		if err != nil {
-			return err
-		}
-		defer os.Remove(f.Name())
-		_, err = f.Write(renamed)
-		if err = errors.Join(err, f.Close()); err != nil {
-			return err
-		}
-		path = f.Name()
+	// The sets of aliases fed from a URL or from host names are filled in the same transaction, never empty between.
+	renamed = append(renamed, aliasFill(r.StateDir, renamed)...)
+	if bytes.Equal(renamed, data) {
+		_, err = r.Run(ctx, "/usr/sbin/nft", "-f", path)
+	} else {
+		err = r.loadScript(ctx, renamed)
 	}
-	if _, err := r.Run(ctx, "/usr/sbin/nft", "-f", path); err != nil {
+	if err != nil {
 		return fmt.Errorf("load the packet filter: %w", err)
 	}
 	out, err := r.Run(ctx, "/usr/sbin/nft", "-j", "list", "table", "inet", "andaru")

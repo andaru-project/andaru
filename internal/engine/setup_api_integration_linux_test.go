@@ -48,7 +48,7 @@ func TestWebSetupBootstrapEndToEnd(t *testing.T) {
 	coordinator := newSecurityCoordinator(identities, audits, dir)
 	codes := newSetupCodeStore(dir)
 	codeHandler := newSetupCodeHandler(identities, codes)
-	rootAPI := newHandlerWithAllServices(nil, http.NotFoundHandler(), nil, nil, nil, nil, codeHandler, nil, nil)
+	rootAPI := newHandlerWithAllServices(nil, http.NotFoundHandler(), nil, nil, nil, nil, codeHandler, nil, nil, nil)
 	webHandler, err := newWebAPIWithSetupCodes(identities, cfgStore, coordinator, rootAPI, nil, codes, dir, []string{"https://andaru.local"})
 	if err != nil {
 		t.Fatalf("newWebAPIWithSetupCodes: %v", err)

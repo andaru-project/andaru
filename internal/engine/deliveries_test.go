@@ -188,7 +188,7 @@ func TestLayerDeliversToChannels(t *testing.T) {
 
 func TestTestChannel(t *testing.T) {
 	events, ch := jobBus(t)
-	h := newHandlerWithAllServices(nil, http.NotFoundHandler(), nil, nil, nil, nil, nil, nil, notificationsAPI{channels: someChannels, events: events})
+	h := newHandlerWithAllServices(nil, http.NotFoundHandler(), nil, nil, nil, nil, nil, nil, notificationsAPI{channels: someChannels, events: events}, nil)
 	call := func(method, path string, capabilities ...authz.Capability) *httptest.ResponseRecorder {
 		t.Helper()
 		actor := requestActor{Actor: authz.Actor{Kind: authz.ActorAccount, ID: "00000000-0000-4000-8000-000000000001"},

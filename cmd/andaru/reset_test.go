@@ -83,7 +83,7 @@ func TestResetUsage(t *testing.T) {
 func TestFenceDuringReset(t *testing.T) {
 	b := newResetBench(t)
 	b.plan(t, reset.TornDown, true)
-	for _, verb := range []string{"leases", "prefixes", "activate 3", "confirm 3", "rollback 3 timer"} {
+	for _, verb := range []string{"leases", "prefixes", "aliases", "activate 3", "confirm 3", "rollback 3 timer"} {
 		verbs := &fakeVerbs{}
 		var stderr bytes.Buffer
 		if code := realizeCommand(context.Background(), strings.Fields(verb), nil, &stderr, func(string, string) (realizeVerbs, error) { return verbs, nil }); code != 0 || len(verbs.calls) != 0 {

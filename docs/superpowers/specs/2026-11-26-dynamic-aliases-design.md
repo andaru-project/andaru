@@ -44,5 +44,5 @@ For each URL or host-name alias: when it last succeeded, how many entries it hol
 ## The work, in order
 
 1. The two kinds in the saved configuration, their validation, and their empty sets in the rendered filter.
-2. The state files, `realize aliases`, the fill after each load, the engine's scheduler, result handling, notifications, the status API and "Refresh now".
+2. The state files, `realize aliases`, the fill after each load, the engine's scheduler, result handling, notifications, the status API and "Refresh now". Built.
 3. The fetcher and resolver in `andaru-outbound`.

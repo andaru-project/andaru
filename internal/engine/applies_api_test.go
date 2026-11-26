@@ -560,6 +560,13 @@ func TestSystemdRunnerUnitNamesAreDistinct(t *testing.T) {
 	if !slices.Equal(argv[4], []string{"/usr/bin/systemctl", "stop", "andaru-rollback-3.timer"}) {
 		t.Fatalf("disarm = %q", argv[4])
 	}
+	// A verb on no generation names none.
+	if err := runner.Realize(t.Context(), "aliases", 0); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(argv[5], " "); !strings.Contains(got, " --unit=andaru-realize-aliases ") || !strings.HasSuffix(got, "--bus-socket /run/andaru/bus.sock aliases") {
+		t.Fatalf("aliases = %q", got)
+	}
 }
 
 func TestOpenAPIDescribesApplies(t *testing.T) {
