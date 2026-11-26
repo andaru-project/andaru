@@ -314,13 +314,12 @@ describe('AliasPicker', () => {
 
   it('reuses a matching alias on 422 collision, refuses mismatched 422 aliases, and handles AliasSelect failure without leaking synthetic labels', async () => {
     const user = userEvent.setup();
-    let searchCalls = 0;
+    let createAttempted = false;
     let collisionKind: 'matching' | 'mismatched' | 'fail' = 'matching';
 
     const fetchMock = fetchRoutes({
       '/api/v1/config/aliases/search': () => {
-        searchCalls += 1;
-        if (searchCalls === 1) {
+        if (!createAttempted) {
           return jsonResponse(200, { state: 'saved', savedVersion: '5', items: [] });
         }
         if (collisionKind === 'mismatched') {
@@ -336,11 +335,12 @@ describe('AliasPicker', () => {
           items: [{ id: 'adr_existing', name: '10.0.0.9', kind: 'host', summary: '10.0.0.9', score: 1000, highlights: [{ text: '10.0.0.9', match: true }] }],
         });
       },
-      'POST /api/v1/config/aliases/addresses': () => (
-        collisionKind === 'fail'
+      'POST /api/v1/config/aliases/addresses': () => {
+        createAttempted = true;
+        return collisionKind === 'fail'
           ? jsonResponse(500, { error: { code: 'INTERNAL', message: 'Storage unavailable.' } })
-          : jsonResponse(422, { error: { code: 'VALIDATION_FAILED', message: 'Duplicate name.' } })
-      ),
+          : jsonResponse(422, { error: { code: 'VALIDATION_FAILED', message: 'Duplicate name.' } });
+      },
     });
 
     const api = new ApiClient('csrf');
@@ -353,7 +353,7 @@ describe('AliasPicker', () => {
 
     // 422 where existing alias has same name but different kind/summary -> refuses silent bind and shows error.
     collisionKind = 'mismatched';
-    searchCalls = 0;
+    createAttempted = false;
     await user.type(input, '10.0.0.11');
     await user.click(await screen.findByText('Use 10.0.0.11'));
     expect(await screen.findByText(/already exists with different values/i)).toBeInTheDocument();
@@ -363,7 +363,7 @@ describe('AliasPicker', () => {
     // AliasSelect creation error restores prior selection label instead of leaving "Use ..." in the input,
     // and never fires a search for the synthetic "Use ..." label.
     collisionKind = 'fail';
-    searchCalls = 0;
+    createAttempted = false;
     render(<SingleHarness api={api} initial="adr_lan" />);
     const singleInput = screen.getByLabelText('Destination alias', { selector: 'input' });
     await user.clear(singleInput);
@@ -376,12 +376,11 @@ describe('AliasPicker', () => {
 
   it('reuses a matching port alias on 422 collision using protocol (without kind)', async () => {
     const user = userEvent.setup();
-    let searchCalls = 0;
+    let createAttempted = false;
 
     fetchRoutes({
       '/api/v1/config/aliases/search': () => {
-        searchCalls += 1;
-        if (searchCalls === 1) {
+        if (!createAttempted) {
           return jsonResponse(200, { state: 'saved', savedVersion: '5', items: [] });
         }
         return jsonResponse(200, {
@@ -390,7 +389,10 @@ describe('AliasPicker', () => {
           items: [{ id: 'svc_existing_443', name: 'tcp/443', protocol: 'tcp', summary: 'TCP 443', score: 1000, highlights: [{ text: 'tcp/443', match: true }] }],
         });
       },
-      'POST /api/v1/config/aliases/ports': () => jsonResponse(422, { error: { code: 'VALIDATION_FAILED', message: 'Duplicate name.' } }),
+      'POST /api/v1/config/aliases/ports': () => {
+        createAttempted = true;
+        return jsonResponse(422, { error: { code: 'VALIDATION_FAILED', message: 'Duplicate name.' } });
+      },
     });
 
     function PortHarness({ api }: { api: ApiClient }) {
