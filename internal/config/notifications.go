@@ -151,7 +151,7 @@ func validateEmail(m *email, p string, bad func(string, string)) {
 func emailAddress(s string) (string, bool) {
 	a, e := mail.ParseAddress(s)
 	// An address a MAIL or RCPT command cannot carry as it is (a quoted local part with spaces or brackets) is refused.
-	if e != nil || invalidText(s, true) || invalidText(a.Name, true) || invalidText(a.Address, true) || strings.ContainsAny(a.Address, " <>\"\\()[],;:") {
+	if e != nil || invalidText(s, true) || invalidText(a.Name, true) || invalidText(a.Address, true) || strings.ContainsAny(a.Address, " <>\"\\()[],;:") || strings.Count(a.Address, "@") != 1 {
 		return "", false
 	}
 	return a.Address, true

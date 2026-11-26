@@ -30,9 +30,11 @@ var (
 )
 
 // sendEmail sends the message to the SMTP server over implicit TLS or STARTTLS, never in the clear, with the server's
-// certificate verified against its host name. A 4xx answer and a network failure are retried; a 5xx answer, a failed
-// verification and a server without STARTTLS are not.
-func sendEmail(ctx context.Context, job delivery.Job) error {
+// certificate verified against its host name, logging in with AUTH PLAIN or, failing that, AUTH LOGIN. A 4xx answer and
+// a network failure are retried; a 5xx answer, a failed verification and a server without STARTTLS are not. A
+// recipient refused for good keeps no other from the message: then the message is sent, and a partialError says who
+// was refused.
+func sendEmail(ctx context.Context, job delivery.Job) (result error) {
 	t := job.Email
 	if t == nil || t.Host == "" || len(t.To) == 0 || (t.Security != "tls" && t.Security != "starttls") {
 		return permanent(errors.New("an e-mail job without its server, security or recipients"))
@@ -85,6 +87,9 @@ func sendEmail(ctx context.Context, job delivery.Job) error {
 	}
 	if t.Username != "" {
 		ok, mechanisms := c.Extension("AUTH")
+		if legacy, more := c.Extension("AUTH=LOGIN"); !ok && legacy { // older servers: AUTH=LOGIN PLAIN
+			ok, mechanisms = true, "LOGIN "+more
+		}
 		var auth smtp.Auth
 		switch {
 		case !ok:
@@ -93,7 +98,7 @@ func sendEmail(ctx context.Context, job delivery.Job) error {
 			// The connection is TLS, which PlainAuth requires of a server other than localhost.
 			auth = smtp.PlainAuth("", t.Username, t.Password, t.Host)
 		case slices.Contains(strings.Fields(strings.ToUpper(mechanisms)), "LOGIN"):
-			auth = loginAuth{t.Username, t.Password}
+			auth = loginAuth{t.Username, t.Password, new(int)}
 		default:
 			return permanent(errors.New("the SMTP server offers neither AUTH PLAIN nor AUTH LOGIN"))
 		}
@@ -119,6 +124,11 @@ func sendEmail(ctx context.Context, job delivery.Job) error {
 	if accepted == 0 {
 		return refused
 	}
+	defer func() {
+		if result == nil && refused != nil {
+			result = partialError{refused}
+		}
+	}()
 	w, err := c.Data()
 	if err == nil {
 		_, err = w.Write(emailMessage(job, from, to, time.Now()))
@@ -142,11 +152,19 @@ func smtpError(err error) error {
 		return permanent(fmt.Errorf("the SMTP server answered %w", err))
 	}
 	// A certificate that fails verification, or a server that does not speak TLS where the channel says it does (implicit
-	// TLS on a STARTTLS port), is answered the same on every retry.
+	// TLS on a STARTTLS port), is answered the same on every retry. A middlebox answering in plain text during an outage
+	// is taken for the latter: a misconfigured channel is the likelier cause.
 	if errors.As(err, new(*tls.CertificateVerificationError)) || errors.As(err, new(tls.RecordHeaderError)) {
 		return permanent(err)
 	}
 	return err
+}
+
+// partialError is a message sent to some recipients only: the others were refused for good.
+type partialError struct{ refused error }
+
+func (e partialError) Error() string {
+	return "sent, but a recipient was refused: " + e.refused.Error()
 }
 
 // helloName is the name to greet the server with: this host's name when it is a full one, else its address as a
@@ -164,22 +182,27 @@ func helloName(conn net.Conn) string {
 	return "localhost"
 }
 
-// loginAuth is AUTH LOGIN, for servers that offer no AUTH PLAIN. It runs over TLS only, as sendEmail ensures.
-type loginAuth struct{ user, password string }
+// loginAuth is AUTH LOGIN, for servers that offer no AUTH PLAIN. It runs over TLS only, as sendEmail ensures. It
+// answers by step, the user name and then the password, since servers word their prompts as they please.
+type loginAuth struct {
+	user, password string
+	step           *int
+}
 
 func (a loginAuth) Start(*smtp.ServerInfo) (string, []byte, error) { return "LOGIN", nil, nil }
 
-func (a loginAuth) Next(challenge []byte, more bool) ([]byte, error) {
+func (a loginAuth) Next(_ []byte, more bool) ([]byte, error) {
 	if !more {
 		return nil, nil
 	}
-	switch strings.ToLower(strings.TrimSpace(string(challenge))) {
-	case "username:":
+	*a.step++
+	switch *a.step {
+	case 1:
 		return []byte(a.user), nil
-	case "password:":
+	case 2:
 		return []byte(a.password), nil
 	}
-	return nil, errors.New("unexpected AUTH LOGIN challenge")
+	return nil, permanent(errors.New("the SMTP server asked AUTH LOGIN for more than a user name and a password"))
 }
 
 // emailMessage is the message as plain text: the subject as the subject, then the detail, the link (a full URL when the

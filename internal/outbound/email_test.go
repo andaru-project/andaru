@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"errors"
 	"io"
 	"math/big"
 	"mime"
@@ -237,6 +238,7 @@ func TestEmailFailures(t *testing.T) {
 		"4xx on RCPT":       {&fakeSMTP{starttls: true, reply: map[string]string{"RCPT": "452 4.2.2 mailbox full"}}, "starttls", false, false},
 		"5xx":               {&fakeSMTP{implicit: true, reply: map[string]string{"RCPT": "550 5.1.1 no such user"}}, "tls", true, false},
 		"421 greeting":      {&fakeSMTP{implicit: true, reply: map[string]string{"EHLO": "421 4.3.2 busy", "HELO": "421 4.3.2 busy"}}, "tls", false, false},
+		"all refused":       {&fakeSMTP{implicit: true, rcpt: map[string]string{"ops@example.com": "550 5.1.1 no", "two@example.com": "550 5.1.1 no"}}, "tls", true, false},
 		"refused at end":    {&fakeSMTP{implicit: true, dataEnd: "554 5.7.1 spam"}, "tls", true, false},
 		"no PLAIN or LOGIN": {&fakeSMTP{implicit: true, auth: "CRAM-MD5"}, "tls", true, false},
 		"auth failure":      {&fakeSMTP{implicit: true, reply: map[string]string{"AUTH": "535 5.7.8 Authentication failed"}}, "tls", true, false},
@@ -305,12 +307,27 @@ func TestEmailAuthLogin(t *testing.T) {
 func TestEmailRefusedRecipientKeepsTheOthers(t *testing.T) {
 	f := &fakeSMTP{implicit: true, rcpt: map[string]string{"two@example.com": "550 5.1.1 no such user"}}
 	f.start(t)
-	if err := sendEmail(context.Background(), emailJob("tls")); err != nil {
-		t.Fatal(err)
+	var partial partialError
+	if err := sendEmail(context.Background(), emailJob("tls")); !errors.As(err, &partial) || !strings.Contains(err.Error(), "no such user") {
+		t.Fatalf("%v, want the refused recipient named", err)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.data == "" {
-		t.Fatal("nothing was sent")
+	if f.data == "" || !slices.ContainsFunc(f.commands, func(c string) bool { return strings.Contains(c, "RCPT TO:<ops@example.com>") }) {
+		t.Fatal("not sent to the accepted recipient")
+	}
+}
+
+// A login prompt worded as the server pleases is answered by step.
+func TestEmailAuthLoginByStep(t *testing.T) {
+	a := loginAuth{"u", "p", new(int)}
+	if first, _ := a.Next([]byte("User Name"), true); string(first) != "u" {
+		t.Fatalf("first %q", first)
+	}
+	if second, _ := a.Next([]byte(""), true); string(second) != "p" {
+		t.Fatalf("second %q", second)
+	}
+	if _, err := a.Next([]byte("more?"), true); !isPermanent(err) {
+		t.Fatalf("third %v", err)
 	}
 }

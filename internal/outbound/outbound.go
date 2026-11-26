@@ -310,7 +310,13 @@ func (s *Service) send(ctx context.Context, job delivery.Job) error {
 	case delivery.Telegram:
 		return sendTelegram(ctx, s.HTTP, job)
 	case delivery.Email:
-		return sendEmail(ctx, job)
+		err := sendEmail(ctx, job)
+		var partial partialError
+		if errors.As(err, &partial) { // sent: the refused address is the operator's to fix
+			s.Log.Warn("e-mail sent, but a recipient was refused", "job", job.ID, "channel", job.Channel, "error", partial.refused)
+			return nil
+		}
+		return err
 	}
 	return permanent(fmt.Errorf("unknown channel kind %q", job.Kind))
 }
