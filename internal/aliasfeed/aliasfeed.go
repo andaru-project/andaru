@@ -162,7 +162,10 @@ func Load(stateDir, alias, hash string) (State, error) {
 	}
 	path := Path(stateDir, alias, hash)
 	aside := path + Corrupt + strconv.FormatInt(time.Now().Unix(), 10)
-	return State{}, errors.Join(fmt.Errorf("%w, moved to %s", err, aside), os.Rename(path, aside))
+	if moved := os.Rename(path, aside); moved != nil {
+		return State{}, fmt.Errorf("%w, left in place: %w", err, moved)
+	}
+	return State{}, fmt.Errorf("%w, moved to %s", err, aside)
 }
 
 // Corrupt is what a state file moved aside has after its name, before the unix seconds it was moved at.

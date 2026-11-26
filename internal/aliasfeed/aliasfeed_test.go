@@ -5,7 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestMembers(t *testing.T) {
@@ -75,5 +78,32 @@ func TestLoadMovesAsideWhatDoesNotDecode(t *testing.T) {
 	}
 	if got := Sources(dir); len(got) != 0 {
 		t.Fatalf("a moved file is a source: %v", got)
+	}
+}
+
+// A state that cannot be moved aside is left in place, and the error says so, not that it moved.
+func TestLoadSaysWhenTheStateStays(t *testing.T) {
+	dir := t.TempDir()
+	h := Hash("url", "https://x.example/list", nil)
+	path := Path(dir, "adr_1", h)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A directory that is not empty at each name it may be moved to fails the rename, for root too.
+	now := time.Now().Unix()
+	for _, at := range []int64{now, now + 1, now + 2} {
+		if err := os.MkdirAll(filepath.Join(path+Corrupt+strconv.FormatInt(at, 10), "x"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := Load(dir, "adr_1", h)
+	if err == nil || strings.Contains(err.Error(), "moved to") || !strings.Contains(err.Error(), "left in place") {
+		t.Fatalf("error %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("the state moved: %v", err)
 	}
 }
