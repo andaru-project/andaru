@@ -665,9 +665,10 @@ it('creates an 802.3ad bond with LACP rate, hash policy, and MII monitor interva
   });
 });
 
-it('configures per-link LLDP options and displays live LLDP neighbors on the LLDP tab', async () => {
+it('configures per-link LLDP options on Ethernet only and displays live LLDP neighbors with error retry', async () => {
   const user = userEvent.setup();
   const sent = vi.fn<(init: RequestInit | undefined) => Response>(() => jsonResponse(200, { savedVersion: '8' }));
+  let lldpCalls = 0;
   routes({
     links: [
       { ...ethernet(lanPort, 'LAN port', '52:54:00:aa:bb:01'), lldp: 'receive', emitLldp: 'nearest-bridge' },
@@ -676,18 +677,24 @@ it('configures per-link LLDP options and displays live LLDP neighbors on the LLD
     findings: [],
     extra: {
       [`/api/v1/config/links/${lanPort}`]: { version: '4', value: { ...ethernet(lanPort, 'LAN port', '52:54:00:aa:bb:01'), lldp: 'receive', emitLldp: 'nearest-bridge' } },
+      [`/api/v1/config/links/${guestVlan}`]: { version: '2', value: { id: guestVlan, name: 'Guest VLAN', kind: 'vlan', mtu: 1500, enabled: true, parent: lanPort, vlanId: 20 } },
       '/api/v1/config/segments/seg_lan': { version: '6', value: { id: 'seg_lan', name: 'LAN', link: lanPort, zone: 'zon_lan', addressing: { ipv4: { mode: 'static', addresses: ['192.168.1.1/24'] }, ipv6: { mode: 'none' } } } },
-      '/api/v1/status/lldp': {
-        items: [{
-          ifIndex: 2,
-          interface: 'enp1s0',
-          chassisId: 'aa:bb:cc:11:22:33',
-          portId: 'gi1/0/24',
-          portDescription: 'Uplink to router',
-          systemName: 'core-sw-1',
-          systemDescription: 'Managed L2/L3 Switch',
-          capabilities: ['bridge', 'router'],
-        }],
+      '/api/v1/config/segments/seg_guest': { version: '3', value: { id: 'seg_guest', name: 'Guest', link: guestVlan, zone: 'zon_guest', addressing: { ipv4: { mode: 'dhcp' }, ipv6: { mode: 'slaac' } } } },
+      '/api/v1/status/lldp': () => {
+        lldpCalls += 1;
+        if (lldpCalls === 1) return jsonResponse(503, { error: { code: 'INVENTORY_UNAVAILABLE', message: 'LLDP temporarily unavailable.', details: [] } });
+        return jsonResponse(200, {
+          items: [{
+            ifIndex: 2,
+            interface: 'enp1s0',
+            chassisId: 'aa:bb:cc:11:22:33',
+            portId: 'gi1/0/24',
+            portDescription: 'Uplink to router',
+            systemName: 'core-sw-1',
+            systemDescription: 'Managed L2/L3 Switch',
+            capabilities: ['bridge', 'router'],
+          }],
+        });
       },
       'POST /api/v1/config/changes': sent,
     },
@@ -696,9 +703,15 @@ it('configures per-link LLDP options and displays live LLDP neighbors on the LLD
 
   expect(await screen.findByText(/LLDP rx\/tx/)).toBeInTheDocument();
 
-  // Edit LLDP settings on LAN port.
+  // Virtual VLAN editor omits LLDP controls.
+  await user.click(screen.getByRole('button', { name: 'Edit Guest VLAN' }));
+  let panel = await screen.findByRole('dialog');
+  expect(within(panel).queryByLabelText(/^LLDP reception/)).not.toBeInTheDocument();
+  await user.click(within(panel).getByRole('button', { name: 'Cancel' }));
+
+  // Edit LLDP settings on Ethernet LAN port.
   await user.click(screen.getByRole('button', { name: 'Edit LAN port' }));
-  const panel = await screen.findByRole('dialog');
+  panel = await screen.findByRole('dialog');
   await user.selectOptions(within(panel).getByLabelText(/^LLDP reception/), 'routers-only');
   await user.selectOptions(within(panel).getByLabelText(/^LLDP emission/), 'off');
   await user.click(within(panel).getByRole('button', { name: 'Save interface' }));
@@ -709,8 +722,10 @@ it('configures per-link LLDP options and displays live LLDP neighbors on the LLD
     ],
   });
 
-  // Switch to LLDP neighbors tab and verify discovered neighbor details.
+  // Switch to LLDP neighbors tab: initial error keeps Refresh button visible and retries cleanly.
   await user.click(screen.getByRole('tab', { name: 'LLDP neighbors' }));
+  expect(await screen.findByText('LLDP temporarily unavailable.')).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Refresh neighbors' }));
   expect(await screen.findByText('core-sw-1')).toBeInTheDocument();
   expect(screen.getByText('Managed L2/L3 Switch')).toBeInTheDocument();
   expect(screen.getByText('aa:bb:cc:11:22:33')).toBeInTheDocument();

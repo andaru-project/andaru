@@ -26,9 +26,8 @@ func TestLLDPLinkSchemaAndSafePointer(t *testing.T) {
 	validCases := []string{
 		`{"name":"eth0","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"52:54:00:00:00:01","lldp":"receive","emitLldp":"nearest-bridge"}`,
 		`{"name":"eth1","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"52:54:00:00:00:02","lldp":"routers-only","emitLldp":"customer-bridge"}`,
-		`{"name":"vl10","kind":"vlan","mtu":1500,"enabled":true,"parent":"@p0","vlanId":10,"lldp":"off","emitLldp":"non-tpmr-bridge"}`,
-		`{"name":"br0","kind":"bridge","mtu":1500,"enabled":true,"members":[],"lldp":"receive","emitLldp":"off"}`,
-		`{"name":"bo0","kind":"bond","mtu":1500,"enabled":true,"members":["@p0"],"mode":"802.3ad","lldp":"receive","emitLldp":"nearest-bridge"}`,
+		`{"name":"eth2","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"52:54:00:00:00:03","lldp":"off","emitLldp":"non-tpmr-bridge"}`,
+		`{"name":"eth3","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"52:54:00:00:00:04","lldp":"off","emitLldp":"off"}`,
 	}
 	for _, raw := range validCases {
 		if err := linkSchema.Validate(unmarshal([]byte(raw))); err != nil {
@@ -44,7 +43,7 @@ func TestLLDPLinkSchemaAndSafePointer(t *testing.T) {
 		t.Fatalf("unexpected LLDP unmarshal: %+v", parsed)
 	}
 
-	// PPPoE links do not accept LLDP fields; invalid enum values return exact safePointer paths.
+	// Non-ethernet links do not accept LLDP fields; invalid enum values return exact safePointer paths.
 	invalidCases := []struct {
 		name     string
 		raw      string
@@ -52,6 +51,9 @@ func TestLLDPLinkSchemaAndSafePointer(t *testing.T) {
 	}{
 		{"bad lldp enum", `{"name":"eth0","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"52:54:00:00:00:01","lldp":"all"}`, "/lldp"},
 		{"bad emitLldp enum", `{"name":"eth0","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"52:54:00:00:00:01","emitLldp":"everywhere"}`, "/emitLldp"},
+		{"lldp on vlan", `{"name":"vl10","kind":"vlan","mtu":1500,"enabled":true,"parent":"@p0","vlanId":10,"lldp":"receive"}`, ""},
+		{"emitLldp on bridge", `{"name":"br0","kind":"bridge","mtu":1500,"enabled":true,"members":[],"emitLldp":"nearest-bridge"}`, ""},
+		{"lldp on bond", `{"name":"bo0","kind":"bond","mtu":1500,"enabled":true,"members":["@p0"],"mode":"802.3ad","lldp":"receive"}`, ""},
 		{"lldp on pppoe", `{"name":"isp","kind":"pppoe","mtu":1492,"enabled":true,"parent":"@p0","username":"u","lldp":"receive"}`, ""},
 	}
 	for _, tc := range invalidCases {

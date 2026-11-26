@@ -265,7 +265,7 @@ export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClos
                       <TextInput classNames={mono} label="MII monitor interval (ms)" description="Link carrier check interval (0–60000 ms). 0 or empty disables MII monitoring; 100 ms is typical for LACP and failover." inputMode="numeric" placeholder="0" value={draft.miiMonitorMs} error={errors.get('miiMonitorMs')} onChange={(event) => set({ miiMonitorMs: event.currentTarget.value })} />
                     </>
                   )}
-                  {draft.kind !== 'pppoe' && (
+                  {draft.kind === 'ethernet' && (
                     <SimpleGrid cols={{ base: 1, xs: 2 }} spacing="xs" role="group" aria-label="LLDP">
                       <NativeSelect label="LLDP reception" description="Listen for neighbor advertisements." data={lldpReceiveModes} value={draft.lldp} error={errors.get('lldp')} onChange={(event) => set({ lldp: event.currentTarget.value as LldpReceiveMode })} />
                       <NativeSelect label="LLDP emission" description="Advertise this host over LLDP. Keep off on untrusted links." data={lldpEmitModes} value={draft.emitLldp} error={errors.get('emitLldp')} onChange={(event) => set({ emitLldp: event.currentTarget.value as LldpEmitMode })} />

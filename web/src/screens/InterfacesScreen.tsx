@@ -55,6 +55,7 @@ const lldpCapabilityLabel: Record<string, string> = {
 };
 
 function lldpBadgeLabel(link: SavedLink): string | undefined {
+  if (link.kind !== 'ethernet') return undefined;
   const rx = Boolean(link.lldp && link.lldp !== 'off');
   const tx = Boolean(link.emitLldp && link.emitLldp !== 'off');
   if (rx && tx) return 'LLDP rx/tx';
@@ -73,13 +74,11 @@ function LldpNeighborsPanel({ api, onSessionLost, deviceNames, hasLldpEnabled }:
   const resource = useResource(load, onSessionLost);
   useVisiblePoll(resource.refresh, 10_000);
 
-  if (!resource.data) {
-    return resource.error
-      ? <Alert color="red" role="alert" title="LLDP neighbors request failed">{resource.error}</Alert>
-      : <Loader aria-label="Loading LLDP neighbors" />;
+  if (!resource.data && !resource.error) {
+    return <div role="status" aria-label="Loading LLDP neighbors"><Loader /></div>;
   }
 
-  const items: LldpNeighbor[] = resource.data;
+  const items: LldpNeighbor[] = resource.data ?? [];
   return (
     <Stack>
       <Group justify="space-between" align="center">
@@ -87,22 +86,22 @@ function LldpNeighborsPanel({ api, onSessionLost, deviceNames, hasLldpEnabled }:
         <Button size="xs" variant="default" loading={resource.loading} onClick={() => void resource.reload()}>Refresh neighbors</Button>
       </Group>
       {resource.error && <Alert color="red" role="alert" title="LLDP neighbors request failed">{resource.error}</Alert>}
-      {items.length === 0 ? (
+      {resource.data && (items.length === 0 ? (
         <Alert role="status">
           {hasLldpEnabled
             ? 'No LLDP neighbors reported yet.'
-            : 'No LLDP neighbors discovered yet. Enable LLDP reception on an interface to listen for neighboring switches, routers, or access points.'}
+            : 'No LLDP neighbors discovered yet. Enable LLDP reception on an Ethernet interface to listen for neighboring switches, routers, or access points.'}
         </Alert>
       ) : (
         <ScrollArea>
-          <Table verticalSpacing="sm" withTableBorder className="data-table">
+          <Table verticalSpacing="sm" withTableBorder className="data-table" aria-label="LLDP neighbors">
             <Table.Thead>
               <Table.Tr>
-                <Table.Th>Interface</Table.Th>
-                <Table.Th>Neighbor</Table.Th>
-                <Table.Th>Chassis ID</Table.Th>
-                <Table.Th>Remote port</Table.Th>
-                <Table.Th>Capabilities</Table.Th>
+                <Table.Th scope="col">Interface</Table.Th>
+                <Table.Th scope="col">Neighbor</Table.Th>
+                <Table.Th scope="col">Chassis ID</Table.Th>
+                <Table.Th scope="col">Remote port</Table.Th>
+                <Table.Th scope="col">Capabilities</Table.Th>
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
@@ -138,7 +137,7 @@ function LldpNeighborsPanel({ api, onSessionLost, deviceNames, hasLldpEnabled }:
             </Table.Tbody>
           </Table>
         </ScrollArea>
-      )}
+      ))}
     </Stack>
   );
 }
@@ -279,7 +278,7 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
   for (const row of configured) {
     if (row.live && row.saved) deviceNames.set(row.live.name, row.saved.name);
   }
-  const hasLldpEnabled = Boolean(saved?.snapshot.value.links.some((link) => link.lldp && link.lldp !== 'off'));
+  const hasLldpEnabled = Boolean(saved?.snapshot.value.links.some((link) => link.kind === 'ethernet' && link.lldp && link.lldp !== 'off'));
 
   return (
     <Stack>

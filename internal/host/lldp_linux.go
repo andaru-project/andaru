@@ -1,13 +1,17 @@
 package host
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
+	"os/exec"
 	"slices"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -25,11 +29,24 @@ type LLDPNeighbor struct {
 
 var lldpArgs = []string{"lldp", "--json=short"}
 
-// ReadLLDPNeighbors queries systemd-networkd's LLDP neighbor table via networkctl.
+// ReadLLDPNeighbors queries systemd-networkd's LLDP neighbor table via networkctl;
+// returns an empty slice when systemd-networkd is stopped.
 func ReadLLDPNeighbors(ctx context.Context) ([]LLDPNeighbor, error) {
 	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
-	data, err := readCommand(ctx, "/usr/bin/networkctl", lldpArgs...)
+	return readLLDPNeighbors(ctx, readCommand)
+}
+
+func readLLDPNeighbors(ctx context.Context, run func(context.Context, string, ...string) ([]byte, error)) ([]LLDPNeighbor, error) {
+	// networkctl fails outright while networkd is stopped.
+	if _, err := run(ctx, "/usr/bin/systemctl", "is-active", "--quiet", "systemd-networkd.service"); err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			return []LLDPNeighbor{}, nil
+		}
+		return nil, err
+	}
+	data, err := run(ctx, "/usr/bin/networkctl", lldpArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -51,10 +68,6 @@ type toolLLDPInterface struct {
 	InterfaceIndex int                `json:"InterfaceIndex"`
 	InterfaceName  string             `json:"InterfaceName"`
 	Neighbors      []toolLLDPNeighbor `json:"Neighbors"`
-}
-
-type toolLLDPOutput struct {
-	Neighbors []toolLLDPInterface `json:"Neighbors"`
 }
 
 // IEEE 802.1AB System Capabilities TLV bit order (bits 0..10).
@@ -82,28 +95,60 @@ func decodeLLDPCapabilities(mask int) []string {
 	return out
 }
 
-// formatRawLLDPID renders raw TLV bytes when networkctl omits the textual ChassisID or PortID.
-// When the TLV subtype byte matches a 6-byte MAC address (chassis subtype 4, port subtype 3),
-// it formats the trailing 6 bytes as colon-separated lowercase hex.
-func formatRawLLDPID(raw []int, macSubtype int) (string, error) {
-	if len(raw) == 0 {
-		return "", nil
+// sanitizeLLDPText strips terminal/control and Unicode bidi/format characters from untrusted L2 peer TLVs
+// and collapses line breaks and repeated whitespace to single spaces.
+func sanitizeLLDPText(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r == '\r' || r == '\n' || r == '\t':
+			b.WriteByte(' ')
+		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r):
+			continue
+		default:
+			b.WriteRune(r)
+		}
 	}
-	bytes := make([]byte, len(raw))
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+func formatColonHex(raw []int) string {
+	parts := make([]string, len(raw))
 	for i, v := range raw {
+		parts[i] = fmt.Sprintf("%02x", v)
+	}
+	return strings.Join(parts, ":")
+}
+
+// formatRawLLDPID decodes raw IEEE 802.1AB ChassisID / PortID TLV bytes (leading subtype byte + payload)
+// when networkctl omits the textual ID.
+func formatRawLLDPID(raw []int, macSubtype, addrSubtype int) (string, error) {
+	for _, v := range raw {
 		if v < 0 || v > 255 {
 			return "", fmt.Errorf("invalid raw LLDP identifier byte %d", v)
 		}
-		bytes[i] = byte(v)
 	}
-	if len(bytes) == 7 && int(bytes[0]) == macSubtype {
-		return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6]), nil
+	if len(raw) < 2 {
+		return "", nil
 	}
-	parts := make([]string, len(bytes))
-	for i, b := range bytes {
-		parts[i] = fmt.Sprintf("%02x", b)
+	subtype, payload := raw[0], raw[1:]
+	if subtype == macSubtype && len(payload) == 6 {
+		return formatColonHex(payload), nil
 	}
-	return strings.Join(parts, ":"), nil
+	if subtype == addrSubtype && len(payload) >= 2 {
+		family, addrRaw := payload[0], payload[1:]
+		if (family == 1 && len(addrRaw) == 4) || (family == 2 && len(addrRaw) == 16) {
+			addrBytes := make([]byte, len(addrRaw))
+			for i, v := range addrRaw {
+				addrBytes[i] = byte(v)
+			}
+			if addr, ok := netip.AddrFromSlice(addrBytes); ok {
+				return addr.String(), nil
+			}
+		}
+	}
+	return fmt.Sprintf("subtype-%d:%s", subtype, formatColonHex(payload)), nil
 }
 
 // ParseLLDPNeighbors decodes `networkctl lldp --json=short`.
@@ -111,34 +156,45 @@ func ParseLLDPNeighbors(data []byte) ([]LLDPNeighbor, error) {
 	if !utf8.Valid(data) {
 		return nil, errors.New("LLDP neighbor output contains invalid UTF-8")
 	}
-	var raw toolLLDPOutput
-	if err := json.Unmarshal(data, &raw); err != nil {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
 		return nil, fmt.Errorf("decode LLDP neighbors: %w", err)
 	}
-	if raw.Neighbors == nil {
+	rawNeighbors, ok := top["Neighbors"]
+	if !ok {
 		return nil, errors.New("LLDP neighbor output missing Neighbors array")
 	}
 	out := []LLDPNeighbor{}
-	for i, iface := range raw.Neighbors {
+	if bytes.Equal(bytes.TrimSpace(rawNeighbors), []byte("null")) {
+		return out, nil
+	}
+	var ifaces []toolLLDPInterface
+	if err := json.Unmarshal(rawNeighbors, &ifaces); err != nil {
+		return nil, fmt.Errorf("decode LLDP neighbors: %w", err)
+	}
+	for i, iface := range ifaces {
 		if iface.InterfaceIndex <= 0 || iface.InterfaceName == "" {
 			return nil, fmt.Errorf("LLDP interface entry %d has invalid metadata", i)
 		}
 		for j, n := range iface.Neighbors {
-			chassis := n.ChassisID
+			chassis := sanitizeLLDPText(n.ChassisID)
 			if chassis == "" {
 				var err error
-				chassis, err = formatRawLLDPID(n.RawChassisID, 4)
+				chassis, err = formatRawLLDPID(n.RawChassisID, 4, 5)
 				if err != nil {
 					return nil, fmt.Errorf("LLDP neighbor %d on %s: %w", j, iface.InterfaceName, err)
 				}
 			}
-			port := n.PortID
+			port := sanitizeLLDPText(n.PortID)
 			if port == "" {
 				var err error
-				port, err = formatRawLLDPID(n.RawPortID, 3)
+				port, err = formatRawLLDPID(n.RawPortID, 3, 4)
 				if err != nil {
 					return nil, fmt.Errorf("LLDP neighbor %d on %s: %w", j, iface.InterfaceName, err)
 				}
+			}
+			if chassis == "" || port == "" {
+				continue
 			}
 			caps := []string{}
 			if n.EnabledCapabilities != nil {
@@ -152,9 +208,9 @@ func ParseLLDPNeighbors(data []byte) ([]LLDPNeighbor, error) {
 				Interface:         iface.InterfaceName,
 				ChassisID:         chassis,
 				PortID:            port,
-				PortDescription:   n.PortDescription,
-				SystemName:        n.SystemName,
-				SystemDescription: n.SystemDescription,
+				PortDescription:   sanitizeLLDPText(n.PortDescription),
+				SystemName:        sanitizeLLDPText(n.SystemName),
+				SystemDescription: sanitizeLLDPText(n.SystemDescription),
 				Capabilities:      caps,
 			})
 		}
@@ -167,6 +223,8 @@ func ParseLLDPNeighbors(data []byte) ([]LLDPNeighbor, error) {
 			cmp.Compare(a.ChassisID, b.ChassisID),
 			cmp.Compare(a.PortID, b.PortID),
 			cmp.Compare(a.PortDescription, b.PortDescription),
+			cmp.Compare(a.SystemDescription, b.SystemDescription),
+			slices.Compare(a.Capabilities, b.Capabilities),
 		)
 	})
 	return out, nil

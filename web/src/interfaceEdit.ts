@@ -358,9 +358,12 @@ export function interfaceOperations(draft: InterfaceDraft, link: SavedObject<Sav
     else delete linkValue.transmitHashPolicy;
     putOptionalInt(linkValue, 'miiMonitorMs', draft.miiMonitorMs);
   }
-  if (draft.kind !== 'pppoe') {
+  if (draft.kind === 'ethernet') {
     putOptionalDefault(linkValue, saved, 'lldp', draft.lldp, 'off');
     putOptionalDefault(linkValue, saved, 'emitLldp', draft.emitLldp, 'off');
+  } else {
+    delete linkValue.lldp;
+    delete linkValue.emitLldp;
   }
   if (!link) operations.push({ op: 'create', collection: 'links', localId: 'link', value: linkValue });
   else if (!same(linkValue, saved)) operations.push({ op: 'replace', collection: 'links', id: link.value.id, expectedVersion: link.version, value: linkValue });

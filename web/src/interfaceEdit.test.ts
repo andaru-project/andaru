@@ -280,6 +280,12 @@ it('serializes per-link LLDP options and maps LLDP refusal paths', () => {
     { op: 'replace', collection: 'links', id: 'lnk_a', expectedVersion: '5', value: { ...link.value } },
   ]);
 
+  // Non-ethernet links omit LLDP fields even if draft state carries non-default values.
+  const vlanDraft = { ...draftOf(undefined, undefined, undefined, 'vlan'), name: 'Guest', parent: 'lnk_a', vlanId: '20', assigned: false, lldp: 'receive' as const, emitLldp: 'nearest-bridge' as const };
+  expect(interfaceOperations(vlanDraft, undefined, undefined, undefined)).toEqual([
+    { op: 'create', collection: 'links', localId: 'link', value: { name: 'Guest', kind: 'vlan', mtu: 1500, enabled: true, parent: 'lnk_a', vlanId: 20 } },
+  ]);
+
   const error = new ApiError(422, 'VALIDATION_FAILED', 'Refused.', [
     { path: '/operations/0/value/lldp', message: 'Bad lldp.' },
     { path: '/operations/0/value/emitLldp', message: 'Bad emitLldp.' },

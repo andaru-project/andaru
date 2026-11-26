@@ -171,7 +171,9 @@ func newHandlerWithAllServices(readLinks func(context.Context) ([]host.LinkStatu
 		if r.URL.Path == "/api/v1/status/lldp" {
 			neighbors, err := readLLDP(r.Context())
 			if err != nil {
-				slog.ErrorContext(r.Context(), "LLDP neighbors unavailable", "error", err)
+				if r.Context().Err() == nil {
+					slog.ErrorContext(r.Context(), "LLDP neighbors unavailable", "error", err)
+				}
 				writeError(w, r, http.StatusServiceUnavailable, "INVENTORY_UNAVAILABLE", "LLDP neighbors are unavailable; inspect the engine journal.")
 				return
 			}
