@@ -27,6 +27,11 @@ export const channelKindLabel: Record<NotificationChannelKind, string> = {
 };
 
 const controlChars = /\p{Cc}/u;
+const controlOrFormatChars = /[\p{Cc}\p{Cf}]/u;
+const utf8Encoder = new TextEncoder();
+const secretByteLimit = 4096;
+const descriptionCharLimit = 4096;
+const utf8ByteLength = (value: string) => utf8Encoder.encode(value).length;
 
 export function channelDraftOf(channel?: NotificationChannel): NotificationChannelDraft {
   return {
@@ -72,12 +77,18 @@ export function nextChannelSecretName(channelName: string, suffix: 'URL' | 'AUTH
 export function validateWebhookUrl(raw: string, required: boolean): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) return required ? 'Enter a webhook URL.' : undefined;
-  if (!/^https?:\/\/[^/\s]/i.test(trimmed)) {
+  if (controlChars.test(trimmed) || /\s/.test(trimmed)) {
+    return 'Webhook URL cannot contain whitespace or control characters.';
+  }
+  if (utf8ByteLength(trimmed) > secretByteLimit) {
+    return `Webhook URL must be ${secretByteLimit} bytes or fewer.`;
+  }
+  if (!/^https?:\/\/[^/?#\\]/i.test(trimmed) || /^https?:\/\/[^/?#]*\\/i.test(trimmed)) {
     return 'Use an http:// or https:// URL with a host.';
   }
   try {
     const parsed = new URL(trimmed);
-    if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || !parsed.host) {
+    if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || !parsed.hostname) {
       return 'Use an http:// or https:// URL with a host.';
     }
   } catch {
@@ -104,8 +115,8 @@ export function validateChannelDraft(
   const name = draft.name.trim();
   if (!name) {
     errors.set('name', 'Enter a channel name.');
-  } else if (controlChars.test(name)) {
-    errors.set('name', 'Control characters are not allowed.');
+  } else if (controlOrFormatChars.test(name)) {
+    errors.set('name', 'Control or format characters are not allowed.');
   } else if (name.length > 128) {
     errors.set('name', 'Channel name must be 128 characters or fewer.');
   } else {
@@ -119,20 +130,27 @@ export function validateChannelDraft(
 
   if (controlChars.test(draft.description)) {
     errors.set('description', 'Control characters are not allowed.');
+  } else if (draft.description.trim().length > descriptionCharLimit) {
+    errors.set('description', `Description must be ${descriptionCharLimit} characters or fewer.`);
   }
 
   const sources = normalizeSources(draft.sources);
   if (sources.length > 64) {
     errors.set('sources', 'At most 64 sources can be selected.');
-  } else if (sources.some((s) => s.length > 64 || controlChars.test(s))) {
-    errors.set('sources', 'Each source must be 1 to 64 characters without control characters.');
+  } else if (sources.some((s) => s.length > 64 || controlOrFormatChars.test(s))) {
+    errors.set('sources', 'Each source must be 1 to 64 characters without control or format characters.');
   }
 
-  const urlErr = validateWebhookUrl(draft.webhookUrl, !saved);
+  const urlErr = validateWebhookUrl(draft.webhookUrl, !saved?.webhook?.url);
   if (urlErr) errors.set('webhookUrl', urlErr);
 
-  if (!draft.removeAuth && draft.webhookAuth.includes('\0')) {
-    errors.set('webhookAuth', 'Authorization header cannot contain null bytes.');
+  if (!draft.removeAuth) {
+    const trimmedAuth = draft.webhookAuth.trim();
+    if (controlChars.test(trimmedAuth)) {
+      errors.set('webhookAuth', 'Authorization header cannot contain control characters or line breaks.');
+    } else if (utf8ByteLength(trimmedAuth) > secretByteLimit) {
+      errors.set('webhookAuth', `Authorization header must be ${secretByteLimit} bytes or fewer.`);
+    }
   }
 
   return errors;

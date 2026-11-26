@@ -19,22 +19,36 @@ describe('notificationChannels', () => {
     expect(nextChannelSecretName(`${'a'.repeat(39)} b`, 'URL')).toBe(`NOTIFY_${'A'.repeat(39)}_URL`);
   });
 
-  it('validates webhook URLs, duplicate names, and sources', () => {
+  it('validates webhook URLs, duplicate names, format chars, byte limits, and sources', () => {
     expect(validateWebhookUrl('', true)).toBe('Enter a webhook URL.');
     expect(validateWebhookUrl('', false)).toBeUndefined();
     expect(validateWebhookUrl('ftp://hooks.example/x', true)).toMatch(/http:\/\/ or https:\/\//);
     expect(validateWebhookUrl('https:///path', true)).toMatch(/http:\/\/ or https:\/\//);
+    expect(validateWebhookUrl('https://\\hooks.example/x', true)).toMatch(/http:\/\/ or https:\/\//);
+    expect(validateWebhookUrl('https://:8080/path', true)).toMatch(/http:\/\/ or https:\/\//);
+    expect(validateWebhookUrl('http://user@/path', true)).toMatch(/http:\/\/ or https:\/\//);
+    expect(validateWebhookUrl('https://hooks.example/a\nb', true)).toMatch(/whitespace or control/i);
+    expect(validateWebhookUrl('https://hooks.example/a\0b', true)).toMatch(/whitespace or control/i);
+    expect(validateWebhookUrl(`https://hooks.example/${'a'.repeat(4096)}`, true)).toMatch(/4096 bytes/);
     expect(validateWebhookUrl('https://hooks.example:8443/notify', true)).toBeUndefined();
 
     const errors = validateChannelDraft(
-      { ...channelDraftOf(), name: 'ops', sources: ['bad\x07src'], webhookUrl: 'not-a-url', webhookAuth: 'bad\0tok' },
+      { ...channelDraftOf(), name: 'ops', description: 'd'.repeat(4097), sources: ['bad\u200bsrc'], webhookUrl: 'not-a-url', webhookAuth: 'Bearer a\r\nb' },
       undefined,
       ['ops'],
     );
     expect(errors.get('name')).toMatch(/already has this name/i);
-    expect(errors.get('sources')).toMatch(/control characters/i);
+    expect(errors.get('description')).toMatch(/4096 characters/);
+    expect(errors.get('sources')).toMatch(/control or format characters/i);
     expect(errors.get('webhookUrl')).toMatch(/http:\/\/ or https:\/\//);
-    expect(errors.get('webhookAuth')).toMatch(/null bytes/i);
+    expect(errors.get('webhookAuth')).toMatch(/control characters or line breaks/i);
+
+    const formatNameErr = validateChannelDraft(
+      { ...channelDraftOf(), name: 'ops\u202e', webhookUrl: 'https://hooks.example/ok', webhookAuth: 'x'.repeat(4097) },
+      undefined,
+    );
+    expect(formatNameErr.get('name')).toMatch(/control or format characters/i);
+    expect(formatNameErr.get('webhookAuth')).toMatch(/4096 bytes/);
   });
 
   it('builds create, unchanged keep, unresolved echo, secret rotation, and auth removal payloads', () => {
@@ -89,6 +103,16 @@ describe('notificationChannels', () => {
     );
     expect(resolvedAndRemoved.webhook).toEqual({
       url: { secret: 'OPS_URL', set: 'https://hooks.example/new', expectedVersion: '0' },
+    });
+
+    // Rotating an existing secret (or resolving a pre-existing versioned unresolved secret) preserves its version.
+    const rotated = buildChannelWrite(
+      { ...channelDraftOf(saved), webhookAuth: 'Bearer rotated' },
+      saved,
+    );
+    expect(rotated.webhook).toEqual({
+      url: { secret: 'OPS_URL', unresolved: true },
+      authorization: { secret: 'OPS_AUTH', set: 'Bearer rotated', expectedVersion: '8' },
     });
   });
 

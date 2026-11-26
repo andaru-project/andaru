@@ -44,6 +44,7 @@ describe('NotificationChannelsPanel', () => {
     const user = userEvent.setup();
     const onSaved = vi.fn();
     let createdPayload: unknown;
+    let createCsrf: string | null = null;
     let items: Array<SavedObject<NotificationChannel>> = [];
 
     fetchRoutes({
@@ -55,6 +56,7 @@ describe('NotificationChannelsPanel', () => {
         value: { links: [], segments: [], zones: [] },
       }),
       'POST /api/v1/config/notifications/channels': (init) => {
+        createCsrf = new Headers(init?.headers).get('X-Andaru-CSRF');
         createdPayload = JSON.parse(String(init?.body ?? '{}'));
         items = [opsChannel];
         return jsonResponse(201, { state: 'saved', savedVersion: '11', ...opsChannel });
@@ -79,6 +81,7 @@ describe('NotificationChannelsPanel', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Add channel' }));
 
     await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    expect(createCsrf).toBe('csrf-tok');
     expect(createdPayload).toEqual({
       name: 'ops',
       description: 'On-call alerts',
@@ -99,8 +102,8 @@ describe('NotificationChannelsPanel', () => {
   it('edits an existing channel, removes authorization, handles restored unresolved secrets, and deletes with If-Match', async () => {
     const user = userEvent.setup();
     const onSaved = vi.fn();
-    const putCalls: Array<{ url: string; ifMatch: string | null; body: unknown }> = [];
-    const deleteCalls: Array<{ url: string; ifMatch: string | null }> = [];
+    const putCalls: Array<{ url: string; ifMatch: string | null; csrf: string | null; body: unknown }> = [];
+    const deleteCalls: Array<{ url: string; ifMatch: string | null; csrf: string | null }> = [];
     let items: Array<SavedObject<NotificationChannel>> = [opsChannel, unresolvedChannel];
 
     fetchRoutes({
@@ -112,6 +115,7 @@ describe('NotificationChannelsPanel', () => {
         putCalls.push({
           url: '/api/v1/config/notifications/channels/ntf_ops',
           ifMatch: new Headers(init?.headers).get('If-Match'),
+          csrf: new Headers(init?.headers).get('X-Andaru-CSRF'),
           body: JSON.parse(String(init?.body ?? '{}')),
         });
         return jsonResponse(200, { state: 'saved', savedVersion: '11', version: '11', value: opsChannel.value });
@@ -120,6 +124,7 @@ describe('NotificationChannelsPanel', () => {
         putCalls.push({
           url: '/api/v1/config/notifications/channels/ntf_restored',
           ifMatch: new Headers(init?.headers).get('If-Match'),
+          csrf: new Headers(init?.headers).get('X-Andaru-CSRF'),
           body: JSON.parse(String(init?.body ?? '{}')),
         });
         return jsonResponse(200, { state: 'saved', savedVersion: '12', version: '12', value: unresolvedChannel.value });
@@ -128,9 +133,10 @@ describe('NotificationChannelsPanel', () => {
         deleteCalls.push({
           url: '/api/v1/config/notifications/channels/ntf_ops',
           ifMatch: new Headers(init?.headers).get('If-Match'),
+          csrf: new Headers(init?.headers).get('X-Andaru-CSRF'),
         });
         items = [unresolvedChannel];
-        return new Response(null, { status: 204 });
+        return jsonResponse(200, { state: 'saved', savedVersion: '13' });
       },
     });
 
@@ -147,6 +153,7 @@ describe('NotificationChannelsPanel', () => {
     expect(putCalls[0]).toEqual({
       url: '/api/v1/config/notifications/channels/ntf_ops',
       ifMatch: '"ntf_ops.8"',
+      csrf: 'csrf',
       body: {
         name: 'ops',
         description: 'Primary on-call webhook',
@@ -169,6 +176,7 @@ describe('NotificationChannelsPanel', () => {
     expect(putCalls[1]).toEqual({
       url: '/api/v1/config/notifications/channels/ntf_restored',
       ifMatch: '"ntf_restored.5"',
+      csrf: 'csrf',
       body: {
         name: 'restored',
         enabled: true,
@@ -185,14 +193,15 @@ describe('NotificationChannelsPanel', () => {
     await screen.findByRole('dialog', { name: 'Delete notification channel' });
     await user.click(screen.getByRole('button', { name: 'Delete channel' }));
     await waitFor(() => expect(deleteCalls).toHaveLength(1));
-    expect(deleteCalls[0]).toEqual({ url: '/api/v1/config/notifications/channels/ntf_ops', ifMatch: '"ntf_ops.8"' });
+    expect(deleteCalls[0]).toEqual({ url: '/api/v1/config/notifications/channels/ntf_ops', ifMatch: '"ntf_ops.8"', csrf: 'csrf' });
     expect(onSaved).toHaveBeenCalledTimes(3);
   });
 
-  it('surfaces 422 secret-kind errors beside fields, handles 412 conflict reload, and signs out on 401', async () => {
+  it('surfaces 422 secret-kind errors with aria-invalid on PasswordInput, handles PUT 404/412 and DELETE 412/404 reloads, and signs out on 401', async () => {
     const user = userEvent.setup();
     const onSessionLost = vi.fn();
-    let putMode: 'invalid' | 'conflict' | 'unauth' = 'invalid';
+    let putMode: 'invalid' | 'missing' | 'conflict' | 'unauth' = 'invalid';
+    let deleteStatus = 412;
     let listReads = 0;
 
     fetchRoutes({
@@ -212,39 +221,63 @@ describe('NotificationChannelsPanel', () => {
             },
           });
         }
+        if (putMode === 'missing') {
+          return jsonResponse(404, { error: { code: 'NOT_FOUND', message: 'Not Found' } });
+        }
         if (putMode === 'conflict') {
           return jsonResponse(412, { error: { code: 'CONFLICT', message: 'Version mismatch.' } });
         }
         return jsonResponse(401, { error: { code: 'UNAUTHENTICATED', message: 'Expired.' } });
       },
+      'DELETE /api/v1/config/notifications/channels/ntf_ops': () => jsonResponse(deleteStatus, {
+        error: { code: deleteStatus === 412 ? 'CONFLICT' : 'NOT_FOUND', message: deleteStatus === 412 ? 'Precondition Failed' : 'Not Found' },
+      }),
     });
 
     render(<NotificationChannelsPanel api={new ApiClient('csrf')} canManage onSessionLost={onSessionLost} />);
     await screen.findByText('ops');
     await user.click(screen.getByRole('button', { name: 'Edit ops' }));
-    await screen.findByRole('dialog', { name: 'Edit channel: ops' });
+    const editDialog = await screen.findByRole('dialog', { name: 'Edit channel: ops' });
 
     const beforeReads = listReads;
-    await user.click(screen.getByRole('button', { name: 'Save channel' }));
+    await user.click(within(editDialog).getByRole('button', { name: 'Save channel' }));
     expect(await screen.findByText('This secret belongs to another kind of object.')).toBeInTheDocument();
+    const urlInput = within(editDialog).getByLabelText(/^Webhook URL/, { selector: 'input' });
+    expect(urlInput).toHaveAttribute('aria-invalid', 'true');
+    expect(urlInput).toHaveAttribute('autocomplete', 'new-password');
 
-    putMode = 'conflict';
-    await user.click(screen.getByRole('button', { name: 'Save channel' }));
-    expect(await screen.findByText(/changed by someone else/i)).toBeInTheDocument();
+    putMode = 'missing';
+    await user.click(within(editDialog).getByRole('button', { name: 'Save channel' }));
+    expect(await screen.findByText(/deleted by someone else/i)).toBeInTheDocument();
     await waitFor(() => expect(listReads).toBeGreaterThan(beforeReads));
 
+    putMode = 'conflict';
+    await user.click(within(editDialog).getByRole('button', { name: 'Save channel' }));
+    expect(await screen.findByText(/changed by someone else/i)).toBeInTheDocument();
+
     putMode = 'unauth';
-    await user.click(screen.getByRole('button', { name: 'Save channel' }));
+    await user.click(within(editDialog).getByRole('button', { name: 'Save channel' }));
     await waitFor(() => expect(onSessionLost).toHaveBeenCalledTimes(1));
+
+    // Close drawer and verify DELETE 412 and 404 friendly messages + reload.
+    await user.click(within(editDialog).getByRole('button', { name: 'Cancel' }));
+    await user.click(screen.getByRole('button', { name: 'Delete ops' }));
+    await user.click(screen.getByRole('button', { name: 'Delete channel' }));
+    expect(await screen.findByText(/changed elsewhere while the confirmation was open/i)).toBeInTheDocument();
+
+    deleteStatus = 404;
+    await user.click(screen.getByRole('button', { name: 'Delete ops' }));
+    await user.click(screen.getByRole('button', { name: 'Delete channel' }));
+    expect(await screen.findByText(/already deleted elsewhere/i)).toBeInTheDocument();
   });
 
-  it('shows the Channels tab on NotificationsScreen when the account has configuration.read', async () => {
+  it('shows the Channels tab on NotificationsScreen with notifications.read + configuration.read, and Channels-only with configuration.read alone', async () => {
     const user = userEvent.setup();
     fetchRoutes({
       'GET /api/v1/config/notifications/channels': () => jsonResponse(200, { state: 'saved', savedVersion: '10', items: [opsChannel] }),
     });
 
-    render(
+    const bothView = render(
       <MemoryRouter>
         <NotificationsScreen
           api={new ApiClient('csrf')}
@@ -258,5 +291,21 @@ describe('NotificationChannelsPanel', () => {
     expect(screen.getByRole('tab', { name: 'Active' })).toBeInTheDocument();
     await user.click(screen.getByRole('tab', { name: 'Channels' }));
     expect(await screen.findByText('Primary on-call webhook')).toBeInTheDocument();
+    bothView.unmount();
+
+    // configuration.read alone renders Channels directly without Active tab or edit actions.
+    render(
+      <MemoryRouter>
+        <NotificationsScreen
+          api={new ApiClient('csrf')}
+          session={session(['configuration.read'])}
+          notifications={{ data: undefined, error: '', loading: false, reload: vi.fn(async () => undefined), refresh: vi.fn() }}
+          onSessionLost={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByRole('tab', { name: 'Active' })).not.toBeInTheDocument();
+    expect(await screen.findByText('Primary on-call webhook')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add channel' })).not.toBeInTheDocument();
   });
 });

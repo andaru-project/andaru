@@ -19,7 +19,7 @@ import {
   VisuallyHidden,
 } from '@mantine/core';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { ApiClient, ApiError, reportError, saveFailure } from '../api';
+import { ApiClient, ApiError, apiErrorMessage, saveFailure } from '../api';
 import {
   buildChannelWrite,
   channelDraftOf,
@@ -115,6 +115,9 @@ function NotificationChannelEditor({
     if (invalid) {
       invalid.scrollIntoView?.({ block: 'nearest' });
       invalid.focus?.();
+    } else {
+      failureRef.current?.scrollIntoView?.({ block: 'nearest' });
+      failureRef.current?.focus?.();
     }
   }, [errorFocusTick]);
 
@@ -157,9 +160,7 @@ function NotificationChannelEditor({
         onSessionLost();
         return;
       }
-      if (error instanceof ApiError && error.status === 412) {
-        onRefresh();
-      }
+      onRefresh();
       if (!openRef.current) return;
       const fields = channelFieldErrors(error);
       setErrors(fields);
@@ -196,6 +197,7 @@ function NotificationChannelEditor({
                 data-autofocus
                 label="Name"
                 placeholder="ops-webhook"
+                maxLength={128}
                 required
                 value={draft.name}
                 error={errors.get('name')}
@@ -207,6 +209,7 @@ function NotificationChannelEditor({
               <TextInput
                 label="Description"
                 placeholder="Optional note about where this channel delivers"
+                maxLength={4096}
                 value={draft.description}
                 error={errors.get('description')}
                 onChange={(event) => {
@@ -270,7 +273,11 @@ function NotificationChannelEditor({
                       : `Stored securely (${existingUrl.secret}). Leave blank to keep the current URL.`
                     : 'Must be an http:// or https:// URL with a host. Stored in the secret store and never shown again.'
                 }
-                placeholder={existingUrl ? 'Leave blank to keep existing URL' : 'https://hooks.example/services/...'}
+                placeholder={existingUrl && !existingUrl.unresolved ? 'Leave blank to keep existing URL' : 'https://hooks.example/services/...'}
+                autoComplete="new-password"
+                visibilityToggleFocusable
+                visibilityToggleButtonProps={{ 'aria-label': 'Toggle webhook URL visibility' }}
+                aria-invalid={errors.has('webhookUrl') || undefined}
                 required={!existingUrl}
                 value={draft.webhookUrl}
                 error={errors.get('webhookUrl')}
@@ -293,7 +300,11 @@ function NotificationChannelEditor({
                       : `Optional HTTP Authorization header (${existingAuth.secret}). Leave blank to keep the current value.`
                     : 'Optional HTTP Authorization header value (for example, Bearer <token>). Stored in the secret store.'
                 }
-                placeholder={existingAuth ? 'Leave blank to keep existing header' : 'Bearer ...'}
+                placeholder={existingAuth && !existingAuth.unresolved ? 'Leave blank to keep existing header' : 'Bearer ...'}
+                autoComplete="new-password"
+                visibilityToggleFocusable
+                visibilityToggleButtonProps={{ 'aria-label': 'Toggle authorization header visibility' }}
+                aria-invalid={errors.has('webhookAuth') || undefined}
                 disabled={draft.removeAuth}
                 value={draft.webhookAuth}
                 error={errors.get('webhookAuth')}
@@ -319,7 +330,7 @@ function NotificationChannelEditor({
             </Stack>
           </Fieldset>
           <Group justify="flex-end" gap="xs" className="drawer-actions">
-            <Button variant="default" disabled={busy} onClick={onClose}>Cancel</Button>
+            <Button variant="default" disabled={busy} onClick={() => { if (!submittingRef.current) onClose(); }}>Cancel</Button>
             <Button type="submit" loading={busy}>{saved ? 'Save channel' : 'Add channel'}</Button>
           </Group>
         </Stack>
@@ -345,15 +356,12 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
     return () => { mountedRef.current = false; };
   }, []);
 
-  async function readExistingSecrets(channels: NotificationChannel[]): Promise<string[]> {
-    let snapshot: Snapshot | undefined;
-    try {
-      snapshot = await api.config();
-    } catch (error) {
+  function readOptionalSnapshot(): Promise<Snapshot | undefined> {
+    return api.config().catch((error: unknown) => {
       if (error instanceof ApiError && error.status === 401) throw error;
       // Non-fatal: still avoid colliding with loaded channel secret names.
-    }
-    return existingChannelSecretsOf(channels, snapshot);
+      return undefined;
+    });
   }
 
   async function openCreate() {
@@ -362,13 +370,12 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
     setOpeningId('new');
     setActionError('');
     try {
-      const list = await api.notificationChannels();
+      const [list, snapshot] = await Promise.all([api.notificationChannels(), readOptionalSnapshot()]);
       const channels = list.items.map((item) => item.value);
-      const existingSecrets = await readExistingSecrets(channels);
       if (!mountedRef.current) return;
       setEditor({
         existingNames: channels.map((c) => c.name),
-        existingSecrets,
+        existingSecrets: existingChannelSecretsOf(channels, snapshot),
       });
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
@@ -376,7 +383,7 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
         return;
       }
       if (!mountedRef.current) return;
-      reportError(error, onSessionLost, setActionError);
+      setActionError(apiErrorMessage(error));
     } finally {
       openingRef.current = false;
       if (mountedRef.current) setOpeningId(null);
@@ -389,14 +396,17 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
     setOpeningId(id);
     setActionError('');
     try {
-      const [current, list] = await Promise.all([api.notificationChannel(id), api.notificationChannels()]);
+      const [current, list, snapshot] = await Promise.all([
+        api.notificationChannel(id),
+        api.notificationChannels(),
+        readOptionalSnapshot(),
+      ]);
       const channels = list.items.map((item) => item.value);
-      const existingSecrets = await readExistingSecrets(channels);
       if (!mountedRef.current) return;
       setEditor({
         saved: current,
         existingNames: channels.map((c) => c.name),
-        existingSecrets,
+        existingSecrets: existingChannelSecretsOf(channels, snapshot),
       });
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
@@ -406,8 +416,10 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
       if (!mountedRef.current) return;
       if (error instanceof ApiError && error.status === 404) {
         void resource.reload();
+        setActionError('This notification channel was deleted elsewhere. The list has been refreshed.');
+      } else {
+        setActionError(apiErrorMessage(error));
       }
-      reportError(error, onSessionLost, setActionError);
     } finally {
       openingRef.current = false;
       if (mountedRef.current) setOpeningId(null);
@@ -417,7 +429,7 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
   async function saveChannel(value: NotificationChannelWrite, saved?: SavedObject<NotificationChannel>) {
     await api.saveNotificationChannel(value, saved);
     onSaved?.();
-    void resource.reload();
+    if (mountedRef.current) await resource.reload();
   }
 
   async function confirmDelete() {
@@ -428,20 +440,27 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
     try {
       await api.deleteNotificationChannel(deleting.value.id, deleting.version);
       onSaved?.();
-      if (!mountedRef.current) return;
-      setDeleting(null);
-      await resource.reload();
+      if (mountedRef.current) await resource.reload();
+      if (mountedRef.current) setDeleting(null);
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         onSessionLost();
         return;
       }
+      if (error instanceof ApiError && (error.status === 404 || error.status === 412)) {
+        if (mountedRef.current) await resource.reload();
+        if (!mountedRef.current) return;
+        setDeleting(null);
+        setActionError(
+          error.status === 412
+            ? 'This notification channel was changed elsewhere while the confirmation was open. Review the updated list and try again.'
+            : 'This notification channel was already deleted elsewhere. The list has been refreshed.',
+        );
+        return;
+      }
       if (!mountedRef.current) return;
       setDeleting(null);
-      if (error instanceof ApiError && (error.status === 404 || error.status === 412)) {
-        void resource.reload();
-      }
-      reportError(error, onSessionLost, setActionError);
+      setActionError(apiErrorMessage(error));
     } finally {
       deletingRef.current = false;
       if (mountedRef.current) setDeletingBusy(false);
@@ -595,7 +614,7 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
           existingSecrets={editor.existingSecrets}
           onSave={saveChannel}
           onClose={() => setEditor(null)}
-          onRefresh={() => void resource.reload()}
+          onRefresh={() => { if (mountedRef.current) void resource.reload(); }}
           onSessionLost={onSessionLost}
         />
       )}
@@ -614,7 +633,7 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
             Delete <Text span fw={600}>{deleting?.value.name}</Text>? Notifications will no longer be delivered to this channel.
           </Text>
           <Group justify="flex-end" gap="xs">
-            <Button variant="default" disabled={deletingBusy} onClick={() => setDeleting(null)}>Cancel</Button>
+            <Button variant="default" disabled={deletingBusy} onClick={() => { if (!deletingRef.current) setDeleting(null); }}>Cancel</Button>
             <Button color="red" loading={deletingBusy} onClick={() => void confirmDelete()}>Delete channel</Button>
           </Group>
         </Stack>

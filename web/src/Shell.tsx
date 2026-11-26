@@ -246,7 +246,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
         { to: '/system/details', label: 'Details', visible: canReadStatus },
         { to: '/system/updates', label: 'Updates', visible: canReadStatus },
         { to: '/system/backups', label: 'Backups', visible: capabilities.has('backups.create') || capabilities.has('backups.restore') },
-        { to: '/system/notifications', label: 'Notifications', visible: canReadNotifications || (canReadChanges && capabilities.has('notifications.manage')) },
+        { to: '/system/notifications', label: 'Notifications', visible: canReadNotifications || canReadChanges },
         { to: '/system/users', label: 'Users', visible: capabilities.has('users.read') },
         { to: '/system/roles', label: 'Roles', visible: capabilities.has('users.read') || canReadChanges },
         { to: '/system/tokens', label: 'Tokens', visible: capabilities.has('tokens.manageSelf') || capabilities.has('tokens.manageAll') },
