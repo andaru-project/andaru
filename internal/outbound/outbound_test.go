@@ -611,3 +611,23 @@ func TestBusyRetryIsNotDueTwice(t *testing.T) {
 		t.Fatalf("due %d then %d", len(first), len(second))
 	}
 }
+
+// A queued job whose hour ran out while the service was down is given up, not sent late.
+func TestExpiredQueuedJobIsGivenUp(t *testing.T) {
+	b := newBench(t)
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls.Add(1) }))
+	defer srv.Close()
+	q, err := openRetries(b.cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := q.save(&retry{Job: job("e1:ch", "ch", srv.URL), First: time.Now().Add(-2 * time.Hour), Attempts: 3}); err != nil {
+		t.Fatal(err)
+	}
+	b.run(&Service{RetryFor: time.Hour})
+	b.waitQueued(0)
+	if n := calls.Load(); n != 0 || b.sentHas("e1:ch") {
+		t.Fatalf("sent %d times", n)
+	}
+}

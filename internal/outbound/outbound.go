@@ -42,11 +42,13 @@ type Service struct {
 	retries      *retries
 	mu           sync.Mutex
 	failures     map[string]int      // jobs each channel gave up in a row
-	working      map[string]bool     // channels that sent a job since the service started
+	lastErr      map[string]error    // why each channel's last job was given up
 	sending      map[string]struct{} // the IDs of the jobs being sent from the bus
 	noticeMu     sync.Mutex
 	noticeKnown  bool // whether noticeRaised says what the queue's notification is
 	noticeRaised bool
+	// channelRaised is each channel's notification, once this run published it.
+	channelRaised map[string]bool
 }
 
 // Run serves until ctx ends, reconnecting to the bus whenever the connection is lost.
@@ -72,7 +74,7 @@ func (s *Service) Run(ctx context.Context) error {
 	if s.retries, err = openRetries(s.CacheDir); err != nil {
 		return fmt.Errorf("read the jobs waiting for a retry: %w", err)
 	}
-	s.failures, s.working, s.sending = map[string]int{}, map[string]bool{}, map[string]struct{}{}
+	s.failures, s.lastErr, s.sending, s.channelRaised = map[string]int{}, map[string]error{}, map[string]struct{}{}, map[string]bool{}
 	for attempt := 0; ; attempt++ {
 		err := s.session(ctx)
 		if ctx.Err() != nil {
@@ -189,6 +191,10 @@ func (s *Service) handle(ctx context.Context, c *bus.Client, m bus.Message) bool
 		delete(s.sending, job.ID)
 		s.mu.Unlock()
 	}()
+	// Again, now that this copy owns the ID: one that finished in between has recorded the job.
+	if s.retries.has(job.ID) || s.sent.seen(job.ID, time.Now()) {
+		return true
+	}
 	now := time.Now()
 	err = s.send(ctx, job)
 	switch {
@@ -230,6 +236,14 @@ func (s *Service) retryLoop(ctx context.Context, c *bus.Client, running *sync.Wa
 
 func (s *Service) retryOnce(ctx context.Context, c *bus.Client, item *retry) {
 	if s.sent.seen(item.Job.ID, time.Now()) { // sent before a crash took it out of the queue
+		if err := s.retries.remove(item.Job.ID); err != nil {
+			s.Log.Warn("remove a finished retry", "job", item.Job.ID, "error", err)
+		}
+		s.queueNotice(ctx, c)
+		return
+	}
+	if time.Since(item.First) > s.RetryFor { // its hour ran out while the service was down
+		s.giveUp(ctx, c, item.Job, item.Attempts, errors.New("the retry window ran out before the service was back"))
 		if err := s.retries.remove(item.Job.ID); err != nil {
 			s.Log.Warn("remove a finished retry", "job", item.Job.ID, "error", err)
 		}
@@ -298,14 +312,9 @@ func (s *Service) sentOK(ctx context.Context, c *bus.Client, job delivery.Job) {
 		s.Log.Warn("record a sent job", "job", job.ID, "error", err)
 	}
 	s.mu.Lock()
-	failed, known := s.failures[job.Channel] >= failuresToRaise, s.working[job.Channel]
 	delete(s.failures, job.Channel)
-	s.working[job.Channel] = true
 	s.mu.Unlock()
-	// The channel's notification may stand from before a restart, when nothing here remembers it.
-	if failed || !known {
-		s.raise(ctx, c, notify.Raise{Key: "channel/" + job.Channel})
-	}
+	s.channelNotice(ctx, c, job)
 }
 
 // giveUp logs a job given up; the third in a row for its channel raises the channel's notification.
@@ -313,14 +322,34 @@ func (s *Service) giveUp(ctx context.Context, c *bus.Client, job delivery.Job, a
 	s.Log.Error("delivery given up", "job", job.ID, "channel", job.Channel, "attempts", attempts, "error", err)
 	s.mu.Lock()
 	s.failures[job.Channel]++
-	n := s.failures[job.Channel]
+	s.lastErr[job.Channel] = err
 	s.mu.Unlock()
-	if n != failuresToRaise {
+	s.channelNotice(ctx, c, job)
+}
+
+// channelNotice makes the channel's notification match its failures: raised from the third job given up in a row
+// until a job is sent. Like queueNotice it holds noticeMu across the publish and reads the count there, so a success
+// and a failure cannot publish out of order; and it starts unknown, so the first call after a start clears a
+// notification a previous run raised.
+func (s *Service) channelNotice(ctx context.Context, c *bus.Client, job delivery.Job) {
+	s.noticeMu.Lock()
+	defer s.noticeMu.Unlock()
+	s.mu.Lock()
+	n, err := s.failures[job.Channel], s.lastErr[job.Channel]
+	s.mu.Unlock()
+	want := n >= failuresToRaise
+	if was, known := s.channelRaised[job.Channel]; known && was == want {
 		return
 	}
-	s.raise(ctx, c, notify.Raise{Key: "channel/" + job.Channel, Severity: notify.Warning, Link: "/system/notifications",
-		Subject: notify.Subject(fmt.Sprintf("Notifications to %s are failing", cmp.Or(job.Name, job.Channel))),
-		Detail:  notify.Detail(fmt.Sprintf("The last %d notifications for this channel could not be sent. The last error: %v", n, err))})
+	r := notify.Raise{Key: "channel/" + job.Channel}
+	if want {
+		r = notify.Raise{Key: r.Key, Severity: notify.Warning, Link: "/system/notifications",
+			Subject: notify.Subject(fmt.Sprintf("Notifications to %s are failing", cmp.Or(job.Name, job.Channel))),
+			Detail:  notify.Detail(fmt.Sprintf("The last %d notifications for this channel could not be sent. The last error: %v", n, err))}
+	}
+	if s.raise(ctx, c, r) {
+		s.channelRaised[job.Channel] = want
+	}
 }
 
 // raise publishes one of andaru-outbound's own notifications, or clears it when r has no severity, and says whether
