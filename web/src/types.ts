@@ -206,12 +206,20 @@ export const stateColor: Record<string, string> = { UP: 'green', DOWN: 'red', LO
 // stateLabel is a link's operational state in words: the kernel's own, but for the one it runs together.
 export const stateLabel = (operState: string) => operState === 'LOWERLAYERDOWN' ? 'lower layer down' : operState.toLowerCase();
 
-export type VirtualLinkKind = 'vlan' | 'bridge' | 'bond';
+export type VirtualLinkKind = 'vlan' | 'bridge' | 'bond' | 'pppoe';
 export type BondMode = 'balance-rr' | 'active-backup' | 'balance-xor' | 'broadcast' | '802.3ad' | 'balance-tlb' | 'balance-alb';
 export type LacpRate = 'slow' | 'fast';
 export type TransmitHashPolicy = 'layer2' | 'layer2+3' | 'layer3+4' | 'encap2+3' | 'encap3+4';
 export type LldpReceiveMode = 'off' | 'receive' | 'routers-only';
 export type LldpEmitMode = 'off' | 'nearest-bridge' | 'non-tpmr-bridge' | 'customer-bridge';
+
+export interface SecretView {
+  secret: string;
+  isSet: boolean;
+  updatedAt?: string;
+  version: string;
+  unresolved?: boolean;
+}
 
 export interface LldpNeighbor {
   ifIndex: number;
@@ -233,6 +241,8 @@ export interface SavedLink {
   permanentMac?: string;
   parent?: string;
   vlanId?: number;
+  username?: string;
+  password?: SecretView;
   members?: string[];
   mode?: BondMode;
   stp?: boolean;
@@ -448,6 +458,7 @@ export interface Zone {
 export interface Snapshot {
   state: 'saved';
   savedVersion: string;
+  unusedSecrets?: string[];
   value: {
     links: SavedLink[];
     segments: Segment[];

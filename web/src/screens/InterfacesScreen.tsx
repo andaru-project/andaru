@@ -15,13 +15,13 @@ interface InterfacesScreenProps { api: ApiClient; session: Session; onSaved(): v
 // It keeps the snapshot it opened with, so a poll that fails to read the configuration does not close it.
 interface Editing { link?: SavedObject<SavedLink>; segment?: SavedObject<Segment>; live?: LinkStatus; newKind?: VirtualLinkKind; snapshot: Snapshot }
 
-const unboundLabel: Record<string, string> = { HARDWARE_MISSING: 'Missing', HARDWARE_AMBIGUOUS: 'Unresolved' };
+const unboundLabel: Record<string, string> = { HARDWARE_MISSING: 'Missing', HARDWARE_AMBIGUOUS: 'Unresolved', SECRET_UNRESOLVED: 'Unresolved' };
 
 interface Row { key: string; live?: LinkStatus; saved?: SavedLink; state?: string; finding?: string; conflict?: boolean }
 
 function join(links: LinkStatus[], snapshot: Snapshot, preview: Preview): Row[] {
   const resolved = new Map(preview.resolved.map((item) => [item.link, item.interface]));
-  const findings = bindingFindings(preview);
+  const findings = bindingFindings(preview, snapshot);
   const onDevice = new Map<string, SavedLink[]>();
   const unbound: Row[] = [];
   snapshot.value.links.forEach((link, index) => {
@@ -226,7 +226,10 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
   // What a link is, said only when it is not a plain Ethernet port.
   const kindLine = (link: SavedLink) => {
     if (link.kind === 'vlan') return `VLAN ${link.vlanId} on ${link.parent ? linkName(link.parent) : 'its parent'}`;
-    if (link.kind === 'pppoe') return `PPPoE on ${link.parent ? linkName(link.parent) : 'its parent'}`;
+    if (link.kind === 'pppoe') {
+      const base = `PPPoE on ${link.parent ? linkName(link.parent) : 'its parent'}`;
+      return link.password?.unresolved ? `${base} · Password unresolved` : base;
+    }
     if (link.kind === 'bridge') {
       const names = (link.members ?? []).map(linkName);
       const detail = [link.stp ? 'STP' : undefined, names.length > 0 ? names.join(', ') : 'no members'].filter(Boolean).join(' · ');
@@ -294,6 +297,7 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
                 <Menu.Item onClick={() => void createVirtual('vlan')}>VLAN</Menu.Item>
                 <Menu.Item onClick={() => void createVirtual('bridge')}>Bridge</Menu.Item>
                 <Menu.Item onClick={() => void createVirtual('bond')}>Bond</Menu.Item>
+                <Menu.Item onClick={() => void createVirtual('pppoe')}>PPPoE</Menu.Item>
               </Menu.Dropdown>
             </Menu>
           )}

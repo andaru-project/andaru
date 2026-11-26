@@ -9,6 +9,8 @@ export interface InterfaceDraft {
   mtu: string;
   parent: string;
   vlanId: string;
+  pppoeUsername: string;
+  pppoePassword: string;
   members: string[];
   bondMode: BondMode | '';
   stp: boolean;
@@ -199,19 +201,59 @@ export function memberLinkOptions(snapshot: Snapshot, kind: 'bridge' | 'bond', s
   return withSelectedLinks(options, selected, links);
 }
 
+const utf8Encoder = new TextEncoder();
+const pppoeCredentialByteLimit = 255;
+const controlChars = /\p{Cc}/u;
+const utf8ByteLength = (value: string) => utf8Encoder.encode(value).length;
+
+export function validatePppoeUsername(raw: string): string | undefined {
+  const username = raw.trim();
+  if (!username) return 'Enter the PPPoE username.';
+  if (controlChars.test(username)) return 'Username cannot contain control characters.';
+  if (utf8ByteLength(username) > pppoeCredentialByteLimit) return `Username must be ${pppoeCredentialByteLimit} bytes or fewer.`;
+  return undefined;
+}
+
+export function validatePppoePassword(password: string, required: boolean): string | undefined {
+  if (required && password.length === 0) return 'Enter the PPPoE password.';
+  if (password.includes('\0')) return 'Password cannot contain null bytes.';
+  if (utf8ByteLength(password) > pppoeCredentialByteLimit) return `Password must be ${pppoeCredentialByteLimit} bytes or fewer.`;
+  return undefined;
+}
+
+export function existingSecretsOf(snapshot: Snapshot | undefined): string[] {
+  if (!snapshot) return [];
+  const used = snapshot.value.links.flatMap((item) => (item.password?.secret ? [item.password.secret] : []));
+  return [...used, ...(snapshot.unusedSecrets ?? [])];
+}
+
+// Allocate a collision-free core secret name matching ^[A-Za-z_][A-Za-z0-9_]{0,63}$.
+export function nextPppoeSecretName(name: string, existingSecrets: Iterable<string> = []): string {
+  const used = new Set(existingSecrets);
+  const slug = name.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40).replace(/_+$/, '');
+  const base = slug ? `PPPOE_${slug}_PASSWORD` : 'PPPOE_PASSWORD';
+  if (!used.has(base)) return base;
+  for (let i = 2; ; i += 1) {
+    const candidate = `${base}_${i}`;
+    if (!used.has(candidate)) return candidate;
+  }
+}
+
 export function draftOf(link: SavedLink | undefined, segment: Segment | undefined, live: LinkStatus | undefined, newKind?: VirtualLinkKind): InterfaceDraft {
   const kind: SavedLink['kind'] = link?.kind ?? newKind ?? 'ethernet';
   const addressing = (segment?.addressing ?? {}) as Fields;
-  const ipv4 = (addressing.ipv4 ?? { mode: 'none' }) as Fields;
+  const ipv4 = (addressing.ipv4 ?? { mode: kind === 'pppoe' ? 'ppp' : 'none' }) as Fields;
   const ipv6 = (addressing.ipv6 ?? { mode: 'none' }) as Fields;
   const dns = (addressing.dns ?? {}) as Fields;
   return {
     kind,
     name: link?.name ?? live?.name ?? '',
     enabled: link?.enabled ?? true,
-    mtu: String(link?.mtu ?? live?.mtu ?? 1500),
+    mtu: String(link?.mtu ?? live?.mtu ?? (kind === 'pppoe' ? 1492 : 1500)),
     parent: link?.parent ?? '',
     vlanId: link?.vlanId !== undefined ? String(link.vlanId) : '',
+    pppoeUsername: link?.username ?? '',
+    pppoePassword: '',
     members: link?.members ? [...link.members] : [],
     bondMode: link?.mode ?? (kind === 'bond' ? '802.3ad' : ''),
     stp: link?.stp ?? false,
@@ -271,9 +313,9 @@ function ipv6Of(draft: InterfaceDraft, saved: Fields | undefined): Fields {
   const out = family(saved, draft.ipv6Mode, ['ra']);
   if (out.ra) {
     const ra: Fields = { ...(out.ra as Fields) };
-    // Without IPv6 there is nothing to advertise, and the engine refuses advertisements on such a network: they are
+    // Without IPv6 or on a PPPoE segment, router advertisements cannot be sent: they are
     // turned off, their other settings kept for when IPv6 returns. The older form says it with enabled.
-    if (draft.ipv6Mode === 'none') {
+    if (draft.ipv6Mode === 'none' || draft.kind === 'pppoe') {
       if ('enabled' in ra) ra.enabled = false;
       else ra.mode = 'disabled';
     }
@@ -322,7 +364,13 @@ function putOptionalInt(target: Fields, key: string, raw: string) {
 
 // interfaceOperations is the one batch that makes the configuration say what the panel says: a new zone, the link,
 // and its segment created, replaced or deleted. Only what changed is sent, so an unchanged link is not rewritten.
-export function interfaceOperations(draft: InterfaceDraft, link: SavedObject<SavedLink> | undefined, segment: SavedObject<Segment> | undefined, live: LinkStatus | undefined): ConfigBatchOperation[] {
+export function interfaceOperations(
+  draft: InterfaceDraft,
+  link: SavedObject<SavedLink> | undefined,
+  segment: SavedObject<Segment> | undefined,
+  live: LinkStatus | undefined,
+  snapshot?: Snapshot,
+): ConfigBatchOperation[] {
   const operations: ConfigBatchOperation[] = [];
   // A PPPoE password is read as its state, not its value: left out of a replace, the engine keeps it.
   const saved: Fields = { ...link?.value };
@@ -334,6 +382,16 @@ export function interfaceOperations(draft: InterfaceDraft, link: SavedObject<Sav
   if (draft.kind === 'vlan') {
     linkValue.parent = draft.parent;
     linkValue.vlanId = Number(draft.vlanId);
+  } else if (draft.kind === 'pppoe') {
+    linkValue.parent = draft.parent;
+    linkValue.username = draft.pppoeUsername.trim();
+    if (!link || draft.pppoePassword !== '') {
+      linkValue.password = {
+        secret: link?.value.password?.secret || nextPppoeSecretName(draft.name.trim(), existingSecretsOf(snapshot)),
+        set: draft.pppoePassword,
+        expectedVersion: link?.value.password?.version || '0',
+      };
+    }
   } else if (draft.kind === 'bridge') {
     linkValue.members = [...draft.members];
     putOptionalDefault(linkValue, saved, 'stp', draft.stp, false);
@@ -412,6 +470,8 @@ const fieldOf: Record<string, Array<[RegExp, string]>> = {
     [/^\/mtu/, 'mtu'],
     [/^\/parent/, 'parent'],
     [/^\/vlanId/, 'vlanId'],
+    [/^\/username(\/|$)/, 'pppoeUsername'],
+    [/^\/password(\/|$)/, 'pppoePassword'],
     [/^\/members/, 'members'],
     [/^\/mode/, 'bondMode'],
     [/^\/stpPriority(\/|$)/, 'stpPriority'],

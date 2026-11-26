@@ -1,7 +1,7 @@
-import { Alert, Button, Drawer, Fieldset, Group, List, MultiSelect, NativeSelect, Select, SimpleGrid, Stack, Switch, Text, TextInput } from '@mantine/core';
+import { Alert, Button, Drawer, Fieldset, Group, List, MultiSelect, NativeSelect, PasswordInput, Select, SimpleGrid, Stack, Switch, Text, TextInput } from '@mantine/core';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, saveFailure } from '../api';
-import { bondModes, draftOf, hashPolicyModes, interfaceErrors, interfaceOperations, ipv4Modes, ipv6Modes, lacpRates, lldpEmitModes, lldpReceiveModes, memberLinkOptions, newZoneOption, removeOperations, transmitHashPolicies, vlanParentOptions, type InterfaceDraft } from '../interfaceEdit';
+import { bondModes, draftOf, hashPolicyModes, interfaceErrors, interfaceOperations, ipv4Modes, ipv6Modes, lacpRates, lldpEmitModes, lldpReceiveModes, memberLinkOptions, modeLabel, newZoneOption, removeOperations, transmitHashPolicies, validatePppoePassword, validatePppoeUsername, vlanParentOptions, type InterfaceDraft } from '../interfaceEdit';
 import type { BondMode, ConfigBatchOperation, LacpRate, LinkStatus, LldpEmitMode, LldpReceiveMode, SavedLink, SavedObject, Segment, Snapshot, TransmitHashPolicy, VirtualLinkKind } from '../types';
 import { ZonePill } from './ZoneBadge';
 
@@ -21,7 +21,7 @@ interface InterfaceEditorProps {
 // Addresses, gateways and IDs read in a fixed-width face, as they do in the table, so 0 and O, 1 and l differ.
 const mono = { input: 'mono-input' };
 const placeholderOption = { value: '', label: 'Choose…', disabled: true };
-const newKindTitle: Record<VirtualLinkKind, string> = { vlan: 'Add VLAN', bridge: 'Add bridge', bond: 'Add bond' };
+const newKindTitle: Record<VirtualLinkKind, string> = { vlan: 'Add VLAN', bridge: 'Add bridge', bond: 'Add bond', pppoe: 'Add PPPoE' };
 
 // Walk member links to the top-level master (e.g. ethernet -> bond -> bridge), guarded against cycles.
 function topMasterOf(links: SavedLink[], id: string): SavedLink | undefined {
@@ -82,10 +82,25 @@ export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClos
   const zones = [...snapshot.value.zones.map((zone) => ({ value: zone.id, label: zone.name })), { value: newZoneOption, label: 'New zone…' }];
   // A delegated prefix comes from another segment's DHCPv6 client.
   const delegators = snapshot.value.segments.filter((item) => item.id !== segment?.value.id && item.addressing.ipv6.mode === 'dhcp6').map((item) => ({ value: item.id, label: item.name }));
-  // PPP is offered only where it can be: on a PPPoE link.
-  const modes4 = ipv4Modes.filter((mode) => mode.value !== 'ppp' || draft.kind === 'pppoe');
-  const parentOptions = draft.kind === 'vlan' ? vlanParentOptions(snapshot, link?.value.id, draft.parent) : [];
+  // PPPoE segments negotiate IPv4 via PPP (or none) and IPv6 via SLAAC, DHCPv6, or none.
+  const allowedModes4 = draft.kind === 'pppoe'
+    ? ipv4Modes.filter((mode) => mode.value === 'ppp' || mode.value === 'none')
+    : ipv4Modes.filter((mode) => mode.value !== 'ppp');
+  const modes4 = draft.ipv4Mode && !allowedModes4.some((mode) => mode.value === draft.ipv4Mode)
+    ? [{ value: draft.ipv4Mode, label: `${modeLabel(ipv4Modes, draft.ipv4Mode)} (unsupported)`, disabled: true }, ...allowedModes4]
+    : allowedModes4;
+  const allowedModes6 = draft.kind === 'pppoe'
+    ? ipv6Modes.filter((mode) => mode.value === 'none' || mode.value === 'slaac' || mode.value === 'dhcp6')
+    : ipv6Modes;
+  const modes6 = draft.ipv6Mode && !allowedModes6.some((mode) => mode.value === draft.ipv6Mode)
+    ? [{ value: draft.ipv6Mode, label: `${modeLabel(ipv6Modes, draft.ipv6Mode)} (unsupported on PPPoE)`, disabled: true }, ...allowedModes6]
+    : allowedModes6;
+  const parentOptions = draft.kind === 'vlan' || draft.kind === 'pppoe' ? vlanParentOptions(snapshot, link?.value.id, draft.parent) : [];
   const memberOptions = draft.kind === 'bridge' || draft.kind === 'bond' ? memberLinkOptions(snapshot, draft.kind, link?.value.id, draft.members) : [];
+  const pppoeParentHasDhcp4 = draft.kind === 'pppoe' && Boolean(draft.parent)
+    && snapshot.value.segments.some((item) => item.link === draft.parent && item.addressing.ipv4.mode === 'dhcp');
+  const pppoePasswordUnresolved = draft.kind === 'pppoe' && Boolean(link?.value.password?.unresolved);
+  const pppoePasswordRequired = draft.kind === 'pppoe' && (!link || (pppoePasswordUnresolved && draft.enabled));
   const blockers = link ? removalBlockers(snapshot, link.value, segment?.value) : [];
   const dropsSegment = Boolean(segment) && !draft.assigned;
 
@@ -113,6 +128,14 @@ export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClos
         const duplicate = snapshot.value.links.find((item) => item.kind === 'vlan' && item.id !== link?.value.id && item.parent === draft.parent && item.vlanId === vlanId);
         if (duplicate) found.set('vlanId', `VLAN ${vlanId} already exists on this parent (${duplicate.name}).`);
       }
+    } else if (draft.kind === 'pppoe') {
+      const parent = snapshot.value.links.find((item) => item.id === draft.parent);
+      if (!draft.parent) found.set('parent', 'Choose the parent interface.');
+      else if (parent && !found.has('mtu') && mtu > parent.mtu - 8) found.set('mtu', `Cannot exceed parent MTU minus 8 bytes for PPPoE (${parent.mtu - 8}).`);
+      const usernameErr = validatePppoeUsername(draft.pppoeUsername);
+      if (usernameErr) found.set('pppoeUsername', usernameErr);
+      const passwordErr = validatePppoePassword(draft.pppoePassword, pppoePasswordRequired);
+      if (passwordErr) found.set('pppoePassword', passwordErr);
     } else if (draft.kind === 'bridge' && draft.stp) {
       checkOptionalInt(draft.stpPriority, 0, 65535, 'stpPriority', 'From 0 to 65535.');
       checkOptionalInt(draft.forwardDelay, 2, 30, 'forwardDelay', 'From 2 to 30 seconds.');
@@ -135,13 +158,21 @@ export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClos
     if (!draft.zone) found.set('zone', 'Choose the zone this segment is in.');
     if (draft.zone === newZoneOption && !draft.newZone.trim()) found.set('newZone', 'Name the new zone.');
     if (!draft.ipv4Mode) found.set('ipv4', 'Choose how this segment gets its IPv4 address.');
+    else if (!allowedModes4.some((mode) => mode.value === draft.ipv4Mode)) found.set('ipv4', draft.kind === 'pppoe' ? 'IPv4 on a PPPoE segment can be PPP or None.' : 'PPP is only supported on a PPPoE interface.');
     else if (draft.ipv4Mode === 'static' && !draft.ipv4Addresses.trim()) found.set('ipv4Addresses', 'A static address needs at least one address, such as 192.168.2.1/24.');
     if (!draft.ipv6Mode) found.set('ipv6', 'Choose how this segment gets its IPv6 address.');
+    else if (!allowedModes6.some((mode) => mode.value === draft.ipv6Mode)) found.set('ipv6', 'IPv6 on a PPPoE segment can be None, SLAAC, or DHCPv6.');
     else if (draft.ipv6Mode === 'static' && !draft.ipv6Addresses.trim()) found.set('ipv6Addresses', 'A static address needs at least one address, such as 2001:db8::1/64.');
     else if (draft.ipv6Mode === 'dhcp6' && draft.ipv6PrefixLength.trim() && !/^([1-9]|[1-5][0-9]|6[0-4])$/.test(draft.ipv6PrefixLength.trim())) found.set('ipv6PrefixLength', 'A prefix length is a whole number from 1 to 64.');
     else if (draft.ipv6Mode === 'delegated') {
       if (!draft.ipv6From) found.set('ipv6From', 'Choose the segment whose prefix is delegated.');
       if (!draft.ipv6SubnetId.trim()) found.set('ipv6SubnetId', 'Give a subnet ID, such as 1.');
+    }
+    if (draft.kind === 'pppoe' && draft.ipv4Mode === 'none' && draft.ipv6Mode === 'none') {
+      found.set('ipv4', 'A PPPoE segment needs IPv4 (PPP) or IPv6.');
+    }
+    if (draft.ipv6Mode && draft.ipv6Mode !== 'none' && !found.has('mtu') && mtu < 1280) {
+      found.set('mtu', 'IPv6 requires an MTU of at least 1280.');
     }
     return found;
   }
@@ -172,7 +203,7 @@ export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClos
       setFailure('');
       return;
     }
-    void send(interfaceOperations(draft, link, segment, live));
+    void send(interfaceOperations(draft, link, segment, live, snapshot));
   }
 
   function remove() {
@@ -217,20 +248,44 @@ export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClos
                       }} />
                     <TextInput w="6rem" classNames={mono} label="MTU" inputMode="numeric" required value={draft.mtu} error={errors.get('mtu')} onChange={(event) => { mtuEdited.current = true; set({ mtu: event.currentTarget.value }); }} />
                   </Group>
+                  {(draft.kind === 'vlan' || draft.kind === 'pppoe') && (
+                    <Select label="Parent interface" placeholder="Choose…" required searchable allowDeselect={false} data={parentOptions} value={draft.parent || null} error={errors.get('parent')} nothingFoundMessage="No eligible interface by that name."
+                      description={parentOptions.length === 0
+                        ? 'No eligible non-PPPoE parent interface is available yet.'
+                        : draft.kind === 'vlan'
+                          ? 'The interface that carries tagged traffic for this VLAN.'
+                          : 'The Ethernet, VLAN, bridge, or bond interface carrying PPPoE frames.'}
+                      onChange={(value) => {
+                        const parentId = value ?? '';
+                        const parent = snapshot.value.links.find((item) => item.id === parentId);
+                        const overhead = draft.kind === 'pppoe' ? 8 : 0;
+                        setDraft((current) => ({
+                          ...current,
+                          parent: parentId,
+                          ...(!link && !mtuEdited.current && parent ? { mtu: String(Math.min(1500 - overhead, Math.max(68, parent.mtu - overhead))) } : {}),
+                        }));
+                      }} />
+                  )}
                   {draft.kind === 'vlan' && (
+                    <TextInput classNames={mono} label="VLAN ID" description="802.1Q tag from 1 to 4094." inputMode="numeric" required placeholder="20" value={draft.vlanId} error={errors.get('vlanId')} onChange={(event) => set({ vlanId: event.currentTarget.value })} />
+                  )}
+                  {draft.kind === 'pppoe' && (
                     <>
-                      <Select label="Parent interface" placeholder="Choose…" required searchable allowDeselect={false} data={parentOptions} value={draft.parent || null} error={errors.get('parent')} nothingFoundMessage="No eligible interface by that name."
-                        description={parentOptions.length === 0 ? 'No eligible non-PPPoE parent interface is available yet.' : 'The interface that carries tagged traffic for this VLAN.'}
-                        onChange={(value) => {
-                          const parentId = value ?? '';
-                          const parent = snapshot.value.links.find((item) => item.id === parentId);
-                          setDraft((current) => ({
-                            ...current,
-                            parent: parentId,
-                            ...(!link && !mtuEdited.current && parent ? { mtu: String(Math.min(1500, parent.mtu)) } : {}),
-                          }));
-                        }} />
-                      <TextInput classNames={mono} label="VLAN ID" description="802.1Q tag from 1 to 4094." inputMode="numeric" required placeholder="20" value={draft.vlanId} error={errors.get('vlanId')} onChange={(event) => set({ vlanId: event.currentTarget.value })} />
+                      {pppoeParentHasDhcp4 && (
+                        <Alert color="yellow" role="status" title="Parent currently uses DHCPv4">
+                          Switching a live DHCPv4 port directly to PPPoE in one apply currently rolls back. Remove DHCPv4 from the parent and apply first, or use a dedicated VLAN/port.
+                        </Alert>
+                      )}
+                      <TextInput classNames={mono} label="PPPoE username" autoComplete="off" required value={draft.pppoeUsername} error={errors.get('pppoeUsername')} onChange={(event) => set({ pppoeUsername: event.currentTarget.value })} />
+                      {pppoePasswordUnresolved && (
+                        <Alert color="yellow" role="status" title="Password unresolved">
+                          The stored secret (<Text span ff="monospace" inherit>{link?.value.password?.secret}</Text>) is missing after restore. Enter the PPPoE password to resolve it before applying.
+                        </Alert>
+                      )}
+                      <PasswordInput classNames={mono} label="PPPoE password" autoComplete="new-password" required={pppoePasswordRequired}
+                        placeholder={link && !pppoePasswordUnresolved ? 'Leave empty to keep saved password' : undefined}
+                        description={link?.value.password?.isSet ? `Stored in secret ${link.value.password.secret}. Enter a new password only to replace it.` : undefined}
+                        value={draft.pppoePassword} error={errors.get('pppoePassword')} onChange={(event) => set({ pppoePassword: event.currentTarget.value })} />
                     </>
                   )}
                   {draft.kind === 'bridge' && (
@@ -279,6 +334,11 @@ export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClos
               </Fieldset>
               <Switch label="Carries a segment" checked={draft.assigned} disabled={managed || (Boolean(master) && !segment)} onChange={(event) => set({ assigned: event.currentTarget.checked })}
                 description={assignedDescription} />
+              {draft.kind === 'pppoe' && !draft.assigned && (
+                <Alert color="yellow" role="status">
+                  A PPPoE interface needs a segment to dial and negotiate IPv4 or IPv6.
+                </Alert>
+              )}
               {dropsSegment && (
                 <Alert color="red" role="alert" title={`Saving removes the segment ${segment?.value.name}`}>
                   Its zone, IPv4 and IPv6 addresses, DNS and router advertisement settings go with it.
@@ -308,7 +368,7 @@ export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClos
                   </Fieldset>
                   <Fieldset legend="IPv6">
                     <Stack gap="xs">
-                      <NativeSelect label="IPv6 method" data={draft.ipv6Mode ? ipv6Modes : [placeholderOption, ...ipv6Modes]} value={draft.ipv6Mode} error={errors.get('ipv6')} onChange={(event) => set({ ipv6Mode: event.currentTarget.value })} />
+                      <NativeSelect label="IPv6 method" data={draft.ipv6Mode ? modes6 : [placeholderOption, ...modes6]} value={draft.ipv6Mode} error={errors.get('ipv6')} onChange={(event) => set({ ipv6Mode: event.currentTarget.value })} />
                       {draft.ipv6Mode === 'static' && (
                         <>
                           <TextInput classNames={mono} label="IPv6 addresses" description="With prefix length; separate several with commas." required placeholder="2001:db8::1/64" value={draft.ipv6Addresses} error={errors.get('ipv6Addresses')} onChange={(event) => set({ ipv6Addresses: event.currentTarget.value })} />
