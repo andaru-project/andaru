@@ -732,3 +732,21 @@ it('shows System -> Backups only when the session has backup capabilities', asyn
   expect(screen.getByRole('link', { name: 'Backups' })).toHaveAttribute('aria-current', 'page');
   expect(document.title).toBe('Backup & restore — Andaru');
 });
+
+it('shows Network -> Virtual IPs when the session can read configuration', async () => {
+  fetchRoutes({
+    '/api/v1/applies': unapplied,
+    '/api/v1/versions?': { state: 'saved', items: [] },
+    '/api/v1/upgrade/preview': { questions: [] },
+    '/api/v1/config/virtualAddresses': { state: 'saved', savedVersion: '1', items: [] },
+    '/api/v1/config': { state: 'saved', savedVersion: '1', value: { links: [], segments: [], zones: [] } },
+  });
+  render(
+    <MemoryRouter initialEntries={['/network/virtual-ips']}>
+      <Shell api={new ApiClient('csrf')} session={session(['configuration.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} />
+    </MemoryRouter>,
+  );
+  expect(await screen.findByRole('heading', { name: 'Virtual IPs' })).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'Virtual IPs' })).toHaveAttribute('aria-current', 'page');
+  expect(document.title).toBe('Virtual IPs — Andaru');
+});

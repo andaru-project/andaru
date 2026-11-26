@@ -484,9 +484,12 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
                       </Stack>
                     )}
 
-                    {showVirtualAddresses && (
+                    {showVirtualAddresses ? (
                       <Stack gap="xs" mt="xs">
-                        <Text size="sm" fw={600}>Virtual addresses</Text>
+                        <Group justify="space-between" align="center" wrap="wrap">
+                          <Text size="sm" fw={600}>Virtual addresses</Text>
+                          <Anchor component={Link} to="/network/virtual-ips" size="xs">{canWrite ? 'Manage virtual IPs' : 'View virtual IPs'}</Anchor>
+                        </Group>
                         <Text size="xs" c="dimmed">Optional firewall virtual addresses that the DNS service also listens on.</Text>
                         {errors.get('virtualAddresses') && <Text size="xs" className="error-text">{errors.get('virtualAddresses')}</Text>}
                         {virtualAddresses.map((vip) => (
@@ -510,7 +513,11 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
                           </Group>
                         ))}
                       </Stack>
-                    )}
+                    ) : canWrite ? (
+                      <Text size="xs" c="dimmed" mt="xs">
+                        Need a standalone DNS listener address? <Anchor component={Link} to="/network/virtual-ips" size="xs">Add a virtual IP</Anchor>.
+                      </Text>
+                    ) : null}
                   </Stack>
                 </Fieldset>
 
