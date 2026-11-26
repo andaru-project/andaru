@@ -186,6 +186,7 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
   const setAliasError = (message: string) => { setNotice(''); setError({ title: 'The aliases were not changed', message }); };
   const setRefreshError = (message: string) => { setNotice(''); setError({ title: 'Could not refresh alias', message }); };
   const actionInFlight = useRef(false);
+  const reloadInFlight = useRef(false);
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -255,12 +256,15 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
   }
 
   async function reloadStatus() {
+    if (actionInFlight.current || reloadInFlight.current) return;
+    reloadInFlight.current = true;
     setError(undefined);
     setNotice('');
     setReloadingStatus(true);
     try {
       await resource.reload();
     } finally {
+      reloadInFlight.current = false;
       if (mounted.current) setReloadingStatus(false);
     }
   }

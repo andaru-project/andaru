@@ -4,7 +4,7 @@ import { expect, it, vi } from 'vitest';
 import { ApiClient } from '../api';
 import { fetchRoutes, jsonResponse } from '../test/fetch';
 import { session } from '../test/fixtures';
-import { render, screen, waitFor, within } from '../test/render';
+import { act, render, screen, waitFor, within } from '../test/render';
 import { AliasesScreen } from './AliasesScreen';
 
 const addresses = [
@@ -524,6 +524,7 @@ it('shows dynamic alias fetch status, failure streaks, per-name resolutions, fil
     { id: 'adr_vpn', name: 'vpn-peers', kind: 'hostnames', names: ['vpn.example.com', 'dead.example.com', 'pending.example.com'], refreshSeconds: 300 },
     { id: 'adr_warn', name: 'warn-feed', kind: 'url', url: 'https://lists.example/warn', refreshSeconds: 600 },
     { id: 'adr_new', name: 'fresh-feed', kind: 'url', url: 'https://lists.example/new', refreshSeconds: 600 },
+    { id: 'adr_switched', name: 'switched-feed', kind: 'url', url: 'https://lists.example/switched', refreshSeconds: 600 },
   ];
   show({
     '/api/v1/config/aliases/addresses': list(dynamicAddresses),
@@ -574,7 +575,7 @@ it('shows dynamic alias fetch status, failure streaks, per-name resolutions, fil
             entries: 0,
             failures: 0,
           },
-          // Stale kind mismatch (backend still reporting hostnames for a static alias) must be ignored.
+          // Stale kind mismatches (both static and dynamic-to-dynamic) must be ignored.
           {
             id: 'adr_nas',
             name: 'nas',
@@ -584,6 +585,17 @@ it('shows dynamic alias fetch status, failure streaks, per-name resolutions, fil
             entries: 0,
             lastError: 'stale-mismatch-error',
             failures: 5,
+          },
+          {
+            id: 'adr_switched',
+            name: 'switched-feed',
+            kind: 'hostnames',
+            lastSuccess: '2026-11-26T20:00:00Z',
+            lastAttempt: '2026-11-26T20:00:00Z',
+            entries: 2,
+            lastError: 'stale-dynamic-kind-error',
+            failures: 2,
+            names: [{ name: 'old.example.com', addresses: ['198.51.100.9'], resolvedAt: '2026-11-26T20:00:00Z' }],
           },
         ],
       });
@@ -608,6 +620,8 @@ it('shows dynamic alias fetch status, failure streaks, per-name resolutions, fil
   expect(screen.getByText(/Not resolved yet/)).toBeInTheDocument();
   expect(screen.getByText('Not fetched yet — matches nothing until its first fetch.')).toBeInTheDocument();
   expect(screen.queryByText(/stale-mismatch-error/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/stale-dynamic-kind-error/)).not.toBeInTheDocument();
+  expect(screen.queryByText('198.51.100.9')).not.toBeInTheDocument();
 
   // Filter matches resolved IPs and per-name errors, and ignores stale mismatched status.
   const filterInput = screen.getByLabelText('Filter aliases');
@@ -619,7 +633,7 @@ it('shows dynamic alias fetch status, failure streaks, per-name resolutions, fil
   expect(rows()).toHaveLength(1);
   expect(rows()[0]).toHaveTextContent('vpn-peers');
   await user.clear(filterInput);
-  await user.type(filterInput, 'stale-mismatch-error');
+  await user.type(filterInput, 'stale-dynamic-kind-error');
   expect(screen.getByText('No alias matches the filter.')).toBeInTheDocument();
   await user.clear(filterInput);
 
@@ -639,7 +653,7 @@ it('requests an immediate dynamic alias refresh without marking config unsaved, 
     ...addresses,
     { id: 'adr_cf', name: 'cf-feed', kind: 'url', url: 'https://www.cloudflare.com/ips-v4', refreshSeconds: 3600 },
   ];
-  let mode: 'hold' | '404' | '503' | '401' = 'hold';
+  let mode: 'hold' | '404' | '503' = 'hold';
   let releaseRefresh: ((res: Response) => void) | undefined;
   let statusCalls = 0;
 
@@ -664,8 +678,7 @@ it('requests an immediate dynamic alias refresh without marking config unsaved, 
     'POST /api/v1/aliases/addresses/adr_cf/refresh': () => {
       if (mode === 'hold') return new Promise<Response>((resolve) => { releaseRefresh = resolve; });
       if (mode === '404') return jsonResponse(404, { error: { code: 'NOT_FOUND', message: 'Gone.' } });
-      if (mode === '503') return jsonResponse(503, { error: { code: 'ALIASES_UNAVAILABLE', message: 'Aliases are temporarily unavailable.' } });
-      return jsonResponse(401, { error: { code: 'UNAUTHENTICATED', message: 'Expired.' } });
+      return jsonResponse(503, { error: { code: 'ALIASES_UNAVAILABLE', message: 'Aliases are temporarily unavailable.' } });
     },
   });
 
@@ -675,8 +688,10 @@ it('requests an immediate dynamic alias refresh without marking config unsaved, 
 
   // Synchronous double-click fires only one POST, and all row/reload controls lock while in flight.
   const refreshBtn = screen.getByRole('button', { name: 'Refresh address alias cf-feed' });
-  refreshBtn.click();
-  refreshBtn.click();
+  act(() => {
+    refreshBtn.click();
+    refreshBtn.click();
+  });
   await waitFor(() => expect(releaseRefresh).toBeDefined());
   expect(sent(fetch, 'POST')).toHaveLength(1);
   expect(screen.getByRole('button', { name: 'Refresh address alias cf-feed' })).toBeDisabled();
