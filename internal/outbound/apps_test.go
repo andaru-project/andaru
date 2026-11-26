@@ -194,3 +194,23 @@ func TestControlCharacterInCredentialIsPermanent(t *testing.T) {
 		t.Fatal("a tab was refused")
 	}
 }
+
+// A 2xx whose body is cut off has not said whether the message was taken: it is retried, not given up.
+func TestCutOffAnswerIsRetried(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"ok":`))
+		hj, _ := w.(http.Hijacker)
+		if c, _, err := hj.Hijack(); err == nil {
+			c.Close()
+		}
+	}))
+	defer srv.Close()
+	defer func(tg string) { telegramAPI = tg }(telegramAPI)
+	telegramAPI = srv.URL
+	err := sendTelegram(context.Background(), srv.Client(), delivery.Job{Message: delivery.Message{Subject: "s"}, Telegram: &delivery.TelegramTarget{Token: "1:x", ChatID: "-1"}})
+	if err == nil || isPermanent(err) {
+		t.Fatalf("%v", err)
+	}
+}

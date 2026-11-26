@@ -64,8 +64,11 @@ func post(client *http.Client, req *http.Request, service string, accepted func(
 		return redact(err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	switch {
+	case resp.StatusCode/100 == 2 && accepted != nil && readErr != nil:
+		// The answer was cut off before it said whether the message was taken: try again, at the risk of a repeat.
+		return fmt.Errorf("%s answer cut off: %w", service, readErr)
 	case resp.StatusCode/100 == 2 && (accepted == nil || accepted(body)):
 		return nil
 	case resp.StatusCode/100 == 2:
