@@ -275,6 +275,10 @@ func TestPublishJobTargetsEachKind(t *testing.T) {
 			delivery.Job{Pushover: &delivery.PushoverTarget{Token: "app", User: "usr"}}},
 		{config.NotificationChannel{Kind: delivery.Telegram, Token: "1:bot", ChatID: "-100"},
 			delivery.Job{Telegram: &delivery.TelegramTarget{Token: "1:bot", ChatID: "-100"}}},
+		{config.NotificationChannel{Kind: delivery.Email, Host: "smtp.example.com", Port: 587, Security: "starttls", Username: "u",
+			Password: "pw", From: "a@example.com", To: []string{"ops@example.com"}},
+			delivery.Job{Email: &delivery.EmailTarget{Host: "smtp.example.com", Port: 587, Security: "starttls", Username: "u",
+				Password: "pw", From: "a@example.com", To: []string{"ops@example.com"}}}},
 	} {
 		row.c.ID = "ntf_" + row.c.Kind
 		if err := publishJob(events, row.c, "", "e:"+row.c.ID, "apply", time.Unix(1, 0), notify.Raise{Key: "k", Severity: notify.Info, Subject: "s"}, []byte(`{}`)); err != nil {
@@ -285,7 +289,7 @@ func TestPublishJobTargetsEachKind(t *testing.T) {
 			t.Fatalf("%s: jobs %+v", row.c.Kind, got)
 		}
 		j := got[0].job
-		if j.Kind != row.c.Kind || fmt.Sprint(j.Webhook, j.Ntfy, j.Pushover, j.Telegram) != fmt.Sprint(row.want.Webhook, row.want.Ntfy, row.want.Pushover, row.want.Telegram) {
+		if j.Kind != row.c.Kind || fmt.Sprint(j.Webhook, j.Ntfy, j.Pushover, j.Telegram, j.Email) != fmt.Sprint(row.want.Webhook, row.want.Ntfy, row.want.Pushover, row.want.Telegram, row.want.Email) {
 			t.Errorf("%s: job %+v", row.c.Kind, j)
 		}
 	}

@@ -160,7 +160,7 @@ func secretFields(collection string, value map[string]any) []secretField {
 		for _, kind := range []struct {
 			name   string
 			fields []string
-		}{{"webhook", []string{"url", "authorization"}}, {"ntfy", []string{"token"}}, {"pushover", []string{"token", "user"}}, {"telegram", []string{"token"}}} {
+		}{{"webhook", []string{"url", "authorization"}}, {"ntfy", []string{"token"}}, {"pushover", []string{"token", "user"}}, {"telegram", []string{"token"}}, {"email", []string{"password"}}} {
 			if w, ok := value[kind.name].(map[string]any); ok {
 				for _, f := range kind.fields {
 					out = append(out, secretField{"/" + kind.name + "/" + f, w, f})

@@ -96,7 +96,10 @@ func TestChannelLifecycle(t *testing.T) {
 	}
 }
 
+const emailChannel = `{"name":"x","kind":"email","email":{"host":"smtp.example.com","port":465,"security":"tls","username":"a@example.com","password":{"secret":"P","set":"pw","expectedVersion":"0"},"from":"Andaru <a@example.com>","to":["ops@example.com"]}}`
+
 func TestChannelRefusals(t *testing.T) {
+	refusals := map[string]struct{ body, path string }{}
 	for name, c := range map[string]struct{ body, path string }{
 		"missing secret":        {`{"name":"x","kind":"webhook","webhook":{"url":{"secret":"NOPE"}}}`, "/webhook/url"},
 		"not a url":             {`{"name":"x","kind":"webhook","webhook":{"url":{"secret":"WAN_PASSWORD"}}}`, "/webhook/url"},
@@ -122,8 +125,43 @@ func TestChannelRefusals(t *testing.T) {
 		"telegram no token":     {`{"name":"x","kind":"telegram","telegram":{"chatId":"-100"}}`, ""},
 		"telegram bad chat":     {`{"name":"x","kind":"telegram","telegram":{"token":{"secret":"T","set":"1:a","expectedVersion":"0"},"chatId":"12a"}}`, "/telegram/chatId"},
 		"telegram plain token":  {`{"name":"x","kind":"telegram","telegram":{"token":"1:a","chatId":"-100"}}`, ""},
+		"email without email":   {`{"name":"x","kind":"email"}`, ""},
 		"duplicate setter":      {`{"name":"x","kind":"webhook","webhook":{"url":{"secret":"U","set":"https://h/","expectedVersion":"0"},"authorization":{"secret":"U","set":"https://h/","expectedVersion":"0"}}}`, "/webhook/authorization"},
 	} {
+		refusals[name] = c
+	}
+	for name, c := range map[string]struct{ old, new, path string }{
+		"email scheme host":      {"smtp.example.com", "smtp://smtp.example.com", "/email/host"},
+		"email host port":        {"smtp.example.com", "smtp.example.com:465", "/email/host"},
+		"email host zone":        {"smtp.example.com", "fe80::1%eth0", "/email/host"},
+		"email host newline":     {"smtp.example.com", `smtp.example.com\nx`, "/email/host"},
+		"email port 0":           {`"port":465`, `"port":0`, "/email/port"},
+		"email security none":    {`"tls"`, `"none"`, "/email/security"},
+		"email from no address":  {"Andaru <a@example.com>", "nobody", "/email/from"},
+		"email from two":         {"Andaru <a@example.com>", "a@example.com, b@example.com", "/email/from"},
+		"email from CRLF":        {"Andaru <a@example.com>", `Andaru\r\nBcc: e@example.com <a@example.com>`, "/email/from"},
+		"email from encoded LF":  {"Andaru <a@example.com>", "=?utf-8?q?A=0D=0AB?= <a@example.com>", "/email/from"},
+		"email quoted local":     {"Andaru <a@example.com>", `\"x> SIZE=999 RET=FULL\"@example.com`, "/email/from"},
+		"email long name":        {"Andaru <a@example.com>", "ééééééééééééééééééééééééééééééééé <a@example.com>", "/email/from"},
+		"email quoted at":        {"Andaru <a@example.com>", `\"ops@internal\"@example.com`, "/email/from"},
+		"email numeric host":     {"smtp.example.com", "192.168.1.300", "/email/host"},
+		"email to empty":         {`["ops@example.com"]`, `[]`, "/email/to"},
+		"email to too many":      {`["ops@example.com"]`, `["` + strings.Repeat(`a@example.com","`, 20) + `ops@example.com"]`, "/email/to"},
+		"email to duplicate":     {`["ops@example.com"]`, `["ops@example.com","ops@example.com"]`, "/email/to"},
+		"email to same address":  {`["ops@example.com"]`, `["ops@example.com","Ops <OPS@example.com>"]`, "/email/to/1"},
+		"email to bad":           {`["ops@example.com"]`, `["ops"]`, "/email/to/0"},
+		"email to CR":            {`["ops@example.com"]`, `["ops@example.com\r"]`, "/email/to/0"},
+		"email username CR":      {`"username":"a@example.com"`, `"username":"a\r@example.com"`, "/email/username"},
+		"email no password":      {`,"password":{"secret":"P","set":"pw","expectedVersion":"0"}`, "", "/email/password"},
+		"email no username":      {`"username":"a@example.com",`, "", "/email/username"},
+		"email password of link": {`{"secret":"P","set":"pw","expectedVersion":"0"}`, `{"secret":"WAN_PASSWORD"}`, "/email/password"},
+	} {
+		if !strings.Contains(emailChannel, c.old) {
+			t.Fatalf("%s: no %s", name, c.old)
+		}
+		refusals[name] = struct{ body, path string }{strings.Replace(emailChannel, c.old, c.new, 1), c.path}
+	}
+	for name, c := range refusals {
 		t.Run(name, func(t *testing.T) {
 			s := seededState(t)
 			_, e := channelChange(t, &s, "create", "", "", c.body, "8")
@@ -160,6 +198,10 @@ func TestAppChannelKinds(t *testing.T) {
 			"T_BOT", `"telegram":{"token":{"secret":"T_BOT","isSet":true,`},
 		{`{"name":"t","kind":"telegram","telegram":{"token":{"secret":"T_BOT","set":"1:bot_CHANNEL_SECRET","expectedVersion":"0"},"chatId":"@andaru_alerts"}}`,
 			"T_BOT", `"chatId":"@andaru_alerts"}`},
+		{`{"name":"e","kind":"email","email":{"host":"smtp.example.com","port":465,"security":"tls","username":"alerts@example.com","password":{"secret":"E_PASS","set":"pw_CHANNEL_SECRET","expectedVersion":"0"},"from":"Andaru <alerts@example.com>","to":["ops@example.com","Two <two@example.com>"]}}`,
+			"E_PASS", `"email":{"host":"smtp.example.com","port":465,"security":"tls","username":"alerts@example.com","from":"Andaru \u003calerts@example.com\u003e","to":["ops@example.com","Two \u003ctwo@example.com\u003e"],"password":{"secret":"E_PASS","isSet":true,`},
+		{`{"name":"e","kind":"email","email":{"host":"192.0.2.25","port":587,"security":"starttls","from":"a@example.com","to":["ops@example.com"]}}`,
+			"", `"email":{"host":"192.0.2.25","port":587,"security":"starttls","from":"a@example.com","to":["ops@example.com"]}`},
 	} {
 		s := seededState(t)
 		p, e := channelChange(t, &s, "create", "", "", row.body, "8")

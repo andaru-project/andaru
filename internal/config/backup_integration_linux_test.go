@@ -163,11 +163,12 @@ func TestNotificationChannelsPersistAndBackUp(t *testing.T) {
 		t.Fatalf("off %+v", second)
 	}
 
-	// ntfy, Pushover and Telegram channels are read with their own targets.
+	// ntfy, Pushover, Telegram and e-mail channels are read with their own targets.
 	for _, body := range []string{
 		`{"name":"n","kind":"ntfy","ntfy":{"server":"https://ntfy.example","topic":"alerts","token":{"secret":"N_TOKEN","set":"tk","expectedVersion":"0"}}}`,
 		`{"name":"p","kind":"pushover","pushover":{"token":{"secret":"P_APP","set":"app","expectedVersion":"0"},"user":{"secret":"P_USER","set":"usr","expectedVersion":"0"}}}`,
 		`{"name":"t","kind":"telegram","telegram":{"token":{"secret":"T_BOT","set":"1:bot","expectedVersion":"0"},"chatId":"-100"}}`,
+		`{"name":"e","kind":"email","email":{"host":"smtp.example","port":465,"security":"tls","username":"u","password":{"secret":"E_PASS","set":"pw","expectedVersion":"0"},"from":"a@example.com","to":["ops@example.com"]}}`,
 	} {
 		c, err := ObjectChange("create", "notifications.channels", "", nil, []byte(body))
 		if err != nil {
@@ -177,7 +178,7 @@ func TestNotificationChannelsPersistAndBackUp(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got, err = s.NotificationChannels(ctx); err != nil || len(got) != 5 {
+	if got, err = s.NotificationChannels(ctx); err != nil || len(got) != 6 {
 		t.Fatalf("channels %+v %v", got, err)
 	}
 	byName := map[string]NotificationChannel{}
@@ -189,6 +190,8 @@ func TestNotificationChannelsPersistAndBackUp(t *testing.T) {
 		"n": {Name: "n", Enabled: true, Kind: "ntfy", MinSeverity: "info", Server: "https://ntfy.example", Topic: "alerts", Token: "tk"},
 		"p": {Name: "p", Enabled: true, Kind: "pushover", MinSeverity: "info", Token: "app", User: "usr"},
 		"t": {Name: "t", Enabled: true, Kind: "telegram", MinSeverity: "info", Token: "1:bot", ChatID: "-100"},
+		"e": {Name: "e", Enabled: true, Kind: "email", MinSeverity: "info", Host: "smtp.example", Port: 465, Security: "tls",
+			Username: "u", Password: "pw", From: "a@example.com", To: []string{"ops@example.com"}},
 	} {
 		if !reflect.DeepEqual(byName[name], want) {
 			t.Errorf("%s: %+v", name, byName[name])

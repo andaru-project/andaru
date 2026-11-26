@@ -77,6 +77,7 @@ type channelView struct {
 	Ntfy     *ntfyView     `json:"ntfy,omitempty"`
 	Pushover *pushoverView `json:"pushover,omitempty"`
 	Telegram *telegramView `json:"telegram,omitempty"`
+	Email    *emailView    `json:"email,omitempty"`
 }
 type webhookView struct {
 	URL           *secretView `json:"url"`
@@ -94,6 +95,10 @@ type pushoverView struct {
 type telegramView struct {
 	Token  *secretView `json:"token"`
 	ChatID string      `json:"chatId"`
+}
+type emailView struct {
+	email
+	Password *secretView `json:"password,omitempty"`
 }
 
 // viewSecret is a reference's view: whether it is set, and its version, never its value.
@@ -148,6 +153,12 @@ func viewObject(v any, version Version, secrets secretDocument) (ObjectView, err
 		if x.Telegram != nil {
 			view.Telegram = &telegramView{ChatID: x.Telegram.ChatID}
 			if view.Telegram.Token, e = viewSecret(&x.Telegram.Token, secrets); e != nil {
+				return ObjectView{}, e
+			}
+		}
+		if x.Email != nil {
+			view.Email = &emailView{email: *x.Email}
+			if view.Email.Password, e = viewSecret(x.Email.Password, secrets); e != nil {
 				return ObjectView{}, e
 			}
 		}

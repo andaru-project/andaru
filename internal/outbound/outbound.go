@@ -198,6 +198,8 @@ func (s *Service) handle(ctx context.Context, c *bus.Client, m bus.Message) bool
 	now := time.Now()
 	err = s.send(ctx, job)
 	switch {
+	case isPartial(err):
+		s.sentPartly(ctx, c, job, err)
 	case err == nil:
 		s.sentOK(ctx, c, job)
 	case ctx.Err() != nil:
@@ -252,6 +254,8 @@ func (s *Service) retryOnce(ctx context.Context, c *bus.Client, item *retry) {
 	}
 	err := s.send(ctx, item.Job)
 	switch {
+	case isPartial(err):
+		s.sentPartly(ctx, c, item.Job, err)
 	case err == nil:
 		s.sentOK(ctx, c, item.Job)
 	case ctx.Err() != nil:
@@ -309,6 +313,8 @@ func (s *Service) send(ctx context.Context, job delivery.Job) error {
 		return sendPushover(ctx, s.HTTP, job)
 	case delivery.Telegram:
 		return sendTelegram(ctx, s.HTTP, job)
+	case delivery.Email:
+		return sendEmail(ctx, job)
 	}
 	return permanent(fmt.Errorf("unknown channel kind %q", job.Kind))
 }
@@ -322,6 +328,22 @@ func (s *Service) sentOK(ctx context.Context, c *bus.Client, job delivery.Job) {
 	s.mu.Unlock()
 	s.channelNotice(ctx, c, job)
 }
+
+// sentPartly records a job sent to some of its recipients only. It is not sent again, but it counts as one of the
+// channel's failures: a recipient refused every time raises the channel's notification as a dead channel does.
+func (s *Service) sentPartly(ctx context.Context, c *bus.Client, job delivery.Job, err error) {
+	if err := s.sent.add(job.ID, time.Now()); err != nil {
+		s.Log.Warn("record a sent job", "job", job.ID, "error", err)
+	}
+	s.Log.Warn("sent, but a recipient was refused", "job", job.ID, "channel", job.Channel, "error", err)
+	s.mu.Lock()
+	s.failures[job.Channel]++
+	s.lastErr[job.Channel] = err
+	s.mu.Unlock()
+	s.channelNotice(ctx, c, job)
+}
+
+func isPartial(err error) bool { return errors.As(err, new(partialError)) }
 
 // giveUp logs a job given up; the third in a row for its channel raises the channel's notification.
 func (s *Service) giveUp(ctx context.Context, c *bus.Client, job delivery.Job, attempts int, err error) {

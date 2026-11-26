@@ -26,6 +26,7 @@ const (
 	Ntfy     = "ntfy"
 	Pushover = "pushover"
 	Telegram = "telegram"
+	Email    = "email"
 )
 
 // Job is one notification for one channel, with what the channel needs to send it, credentials included.
@@ -43,10 +44,11 @@ type Job struct {
 	Event json.RawMessage `json:"event"`
 	// Webhook is set for Kind Webhook.
 	Webhook *WebhookTarget `json:"webhook,omitempty"`
-	// Ntfy, Pushover and Telegram are set for their kinds.
+	// Ntfy, Pushover, Telegram and Email are set for their kinds.
 	Ntfy     *NtfyTarget     `json:"ntfy,omitempty"`
 	Pushover *PushoverTarget `json:"pushover,omitempty"`
 	Telegram *TelegramTarget `json:"telegram,omitempty"`
+	Email    *EmailTarget    `json:"email,omitempty"`
 }
 
 // Message is the notification a job sends.
@@ -83,4 +85,16 @@ type PushoverTarget struct {
 type TelegramTarget struct {
 	Token  string `json:"token"`
 	ChatID string `json:"chatId"`
+}
+
+// EmailTarget is an SMTP server, its credentials when it takes any, and the addresses a message is sent from and to.
+// Security is "tls", implicit TLS, or "starttls".
+type EmailTarget struct {
+	Host     string   `json:"host"`
+	Port     int      `json:"port"`
+	Security string   `json:"security"`
+	Username string   `json:"username,omitempty"`
+	Password string   `json:"password,omitempty"`
+	From     string   `json:"from"`
+	To       []string `json:"to"`
 }

@@ -73,6 +73,9 @@ func publishJob(events *bus.Bus, c config.NotificationChannel, origin, id, sourc
 		job.Pushover = &delivery.PushoverTarget{Token: c.Token, User: c.User}
 	case delivery.Telegram:
 		job.Telegram = &delivery.TelegramTarget{Token: c.Token, ChatID: c.ChatID}
+	case delivery.Email:
+		job.Email = &delivery.EmailTarget{Host: c.Host, Port: c.Port, Security: c.Security, Username: c.Username,
+			Password: c.Password, From: c.From, To: c.To}
 	}
 	payload, err := bus.NewEvent(delivery.JobType, "notifications", job)
 	if err == nil {
