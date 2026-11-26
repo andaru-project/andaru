@@ -222,8 +222,8 @@ function ZoneEditor({
                             outlineOffset: 2,
                           }}
                         >
-                          <ColorSwatch color={`var(--mantine-color-${shade}-6)`} size={22}>
-                            {selected && <CheckIcon style={{ width: 11, height: 11, color: '#fff' }} />}
+                          <ColorSwatch color={`var(--mantine-color-${shade}-7)`} size={22}>
+                            {selected && <CheckIcon aria-hidden="true" style={{ width: 11, height: 11, color: shade === 'lime' ? '#111' : '#fff' }} />}
                           </ColorSwatch>
                         </UnstyledButton>
                       </Tooltip>
@@ -261,6 +261,10 @@ export function ZonesScreen({ api, session, onSaved, onSessionLost }: ZonesScree
   const [deletingId, setDeletingId] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+
+  if (deletingId && resource.data && !resource.data.zones.items.some((item) => item.value.id === deletingId)) {
+    setDeletingId(undefined);
+  }
 
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
