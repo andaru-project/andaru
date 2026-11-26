@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { ApiError } from './api';
-import { addressLines, draftOf, existingSecretsOf, interfaceErrors, interfaceOperations, memberLinkOptions, newZoneOption, nextPppoeSecretName, removeOperations, validatePppoePassword, validatePppoeUsername, vlanParentOptions } from './interfaceEdit';
+import { addressLines, draftOf, existingSecretsOf, interfaceErrors, interfaceOperations, memberLinkOptions, newZoneOption, nextPppoeSecretName, raModeFrom, removeOperations, validatePppoePassword, validatePppoeUsername, validatePref64, vlanParentOptions } from './interfaceEdit';
 import type { LinkStatus, SavedLink, SavedObject, Segment, Snapshot } from './types';
 
 const port: LinkStatus = { ifIndex: 3, name: 'enp2s0', linkType: 'ether', mtu: 1500, operState: 'UP', flags: [], linkAddress: '02:00:00:00:00:99', permanentAddress: '52:54:00:AA:BB:02', addresses: [] };
@@ -425,5 +425,137 @@ it('allocates unique PPPoE secret names, creates/updates PPPoE links, and maps c
   expect(interfaceErrors(error, [{ op: 'create', collection: 'links', value: {} }])).toEqual(new Map([
     ['pppoeUsername', 'Bad username.'],
     ['pppoePassword', 'Bad password.'],
+  ]));
+});
+
+it('serializes IPv6 router advertisements, preserves unchanged legacy RA, validates PREF64, and maps RA errors', () => {
+  expect(raModeFrom(undefined)).toBe('disabled');
+  expect(raModeFrom({ enabled: true, managed: true, otherInfo: false })).toBe('managed');
+  expect(raModeFrom({ enabled: true, managed: false, otherInfo: true })).toBe('stateless');
+  expect(raModeFrom({ enabled: true, managed: false, otherInfo: false })).toBe('unmanaged');
+  expect(raModeFrom({ enabled: false, managed: true, otherInfo: true })).toBe('disabled');
+
+  expect(validatePref64('')).toBeUndefined();
+  expect(validatePref64('64:ff9b::/96')).toBeUndefined();
+  expect(validatePref64('2001:db8:ab00::/40')).toBeUndefined();
+  expect(validatePref64('2001:db8:0:ab00::/56')).toBeUndefined();
+  expect(validatePref64('64:ff9b::1/96')).toMatch(/Host bits/);
+  expect(validatePref64('2001:db8:ab01::/40')).toMatch(/Host bits/);
+  expect(validatePref64('64:ff9b::/72')).toMatch(/length 32, 40, 48, 56, 64, or 96/);
+  expect(validatePref64('::ffff:0:0/96')).toMatch(/length 32, 40, 48, 56, 64, or 96/);
+  expect(validatePref64('64:ff9b::/96%eth0')).toMatch(/length 32, 40, 48, 56, 64, or 96/);
+
+  const staticSeg: SavedObject<Segment> = {
+    version: '4',
+    value: {
+      id: 'seg_lan',
+      name: 'LAN',
+      link: 'lnk_a',
+      zone: 'zon_lan',
+      addressing: {
+        ipv4: { mode: 'static', addresses: ['192.168.1.1/24'] },
+        ipv6: { mode: 'static', addresses: ['fd00:1::1/64'] },
+      },
+    },
+  };
+  // Unchanged segment with no RA emits no ops.
+  expect(interfaceOperations(draftOf(link.value, staticSeg.value, undefined), link, staticSeg, undefined)).toEqual([]);
+
+  // Enabling RA with full options on a static segment serializes modern RA object.
+  const fullRaDraft = {
+    ...draftOf(link.value, staticSeg.value, undefined),
+    raMode: 'assisted' as const,
+    raPriority: 'high' as const,
+    raRouterLifetime: '1200',
+    raValidLifetime: '7200',
+    raPreferredLifetime: '3600',
+    raPref64: '64:ff9b::/96',
+    raDnsOverride: true,
+    raDnsServers: 'fd00:53::53, 2606:4700:4700::1111',
+    raDnsSearchDomains: 'home.arpa, lab.example',
+  };
+  expect(interfaceOperations(fullRaDraft, link, staticSeg, undefined)[0].value?.addressing).toMatchObject({
+    ipv6: {
+      mode: 'static',
+      addresses: ['fd00:1::1/64'],
+      ra: {
+        mode: 'assisted',
+        priority: 'high',
+        routerLifetime: 1200,
+        validLifetime: 7200,
+        preferredLifetime: 3600,
+        pref64: '64:ff9b::/96',
+        dns: { servers: ['fd00:53::53', '2606:4700:4700::1111'], searchDomains: ['home.arpa', 'lab.example'] },
+      },
+    },
+  });
+
+  // Custom RA DNS with empty servers explicitly emits dns: { servers: [] } to suppress automatic DNS.
+  const silentDnsDraft = {
+    ...draftOf(link.value, staticSeg.value, undefined),
+    raMode: 'unmanaged' as const,
+    raDnsOverride: true,
+    raDnsServers: '',
+    raDnsSearchDomains: '',
+  };
+  expect(interfaceOperations(silentDnsDraft, link, staticSeg, undefined)[0].value?.addressing).toMatchObject({
+    ipv6: { mode: 'static', addresses: ['fd00:1::1/64'], ra: { mode: 'unmanaged', dns: { servers: [] } } },
+  });
+
+  // Delegated segment omits validLifetime/preferredLifetime even if draft carried them from static.
+  const delegatedRaDraft = {
+    ...fullRaDraft,
+    ipv6Mode: 'delegated',
+    ipv6From: 'seg_wan',
+    ipv6SubnetId: '1',
+  };
+  const delIpv6 = (interfaceOperations(delegatedRaDraft, link, staticSeg, undefined)[0].value?.addressing as { ipv6: Record<string, unknown> }).ipv6;
+  expect(delIpv6.ra).toEqual({
+    mode: 'assisted',
+    priority: 'high',
+    routerLifetime: 1200,
+    pref64: '64:ff9b::/96',
+    dns: { servers: ['fd00:53::53', '2606:4700:4700::1111'], searchDomains: ['home.arpa', 'lab.example'] },
+  });
+
+  // Legacy RA untouched emits zero operations; editing mode normalizes it to the modern form.
+  const legacySeg: SavedObject<Segment> = {
+    version: '5',
+    value: {
+      ...staticSeg.value,
+      addressing: {
+        ...staticSeg.value.addressing,
+        ipv6: { mode: 'static', addresses: ['fd00:1::1/64'], ra: { enabled: true, managed: false, otherInfo: true } },
+      },
+    },
+  };
+  const legacyDraft = draftOf(link.value, legacySeg.value, undefined);
+  expect(legacyDraft.raMode).toBe('stateless');
+  expect(interfaceOperations(legacyDraft, link, legacySeg, undefined)).toEqual([]);
+  expect(interfaceOperations({ ...legacyDraft, raMode: 'disabled' }, link, legacySeg, undefined)[0].value?.addressing).toEqual({
+    ipv4: { mode: 'static', addresses: ['192.168.1.1/24'] },
+    ipv6: { mode: 'static', addresses: ['fd00:1::1/64'] },
+  });
+
+  // RA error paths map cleanly to individual RA fields.
+  const raError = new ApiError(422, 'VALIDATION_FAILED', 'Refused.', [
+    { path: '/operations/0/value/addressing/ipv6/ra/mode', message: 'Bad mode.' },
+    { path: '/operations/0/value/addressing/ipv6/ra/priority', message: 'Bad priority.' },
+    { path: '/operations/0/value/addressing/ipv6/ra/routerLifetime', message: 'Bad router lifetime.' },
+    { path: '/operations/0/value/addressing/ipv6/ra/validLifetime', message: 'Bad valid lifetime.' },
+    { path: '/operations/0/value/addressing/ipv6/ra/preferredLifetime', message: 'Bad preferred lifetime.' },
+    { path: '/operations/0/value/addressing/ipv6/ra/pref64', message: 'Bad PREF64.' },
+    { path: '/operations/0/value/addressing/ipv6/ra/dns/servers/0', message: 'Bad RDNSS.' },
+    { path: '/operations/0/value/addressing/ipv6/ra/dns/searchDomains/0', message: 'Bad DNSSL.' },
+  ]);
+  expect(interfaceErrors(raError, [{ op: 'replace', collection: 'segments', id: 'seg_lan', expectedVersion: '4', value: {} }])).toEqual(new Map([
+    ['raMode', 'Bad mode.'],
+    ['raPriority', 'Bad priority.'],
+    ['raRouterLifetime', 'Bad router lifetime.'],
+    ['raValidLifetime', 'Bad valid lifetime.'],
+    ['raPreferredLifetime', 'Bad preferred lifetime.'],
+    ['raPref64', 'Bad PREF64.'],
+    ['raDnsServers', 'Bad RDNSS.'],
+    ['raDnsSearchDomains', 'Bad DNSSL.'],
   ]));
 });

@@ -212,6 +212,21 @@ export type LacpRate = 'slow' | 'fast';
 export type TransmitHashPolicy = 'layer2' | 'layer2+3' | 'layer3+4' | 'encap2+3' | 'encap3+4';
 export type LldpReceiveMode = 'off' | 'receive' | 'routers-only';
 export type LldpEmitMode = 'off' | 'nearest-bridge' | 'non-tpmr-bridge' | 'customer-bridge';
+export type RaMode = 'disabled' | 'router' | 'unmanaged' | 'managed' | 'assisted' | 'stateless';
+export type RaPriority = 'low' | 'medium' | 'high';
+
+export interface RaConfig {
+  mode?: string;
+  priority?: string;
+  routerLifetime?: number;
+  validLifetime?: number;
+  preferredLifetime?: number;
+  dns?: { servers: string[]; searchDomains?: string[] };
+  pref64?: string;
+  enabled?: boolean;
+  managed?: boolean;
+  otherInfo?: boolean;
+}
 
 export interface SecretView {
   secret: string;
@@ -272,7 +287,7 @@ export interface Segment {
       from?: string;
       subnetId?: string;
       requestPrefixLength?: number;
-      ra?: { mode?: string; enabled?: boolean; managed?: boolean; otherInfo?: boolean };
+      ra?: RaConfig;
     };
     dns?: { servers?: string[]; searchDomains?: string[] };
   };

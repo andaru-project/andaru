@@ -1,7 +1,7 @@
 import { Alert, Badge, Button, ComboboxChevron, Group, Loader, Menu, ScrollArea, Stack, Table, Tabs, Text, Title, VisuallyHidden } from '@mantine/core';
 import { useCallback, useState } from 'react';
 import { ApiClient, reportError } from '../api';
-import { addressLines, isPort } from '../interfaceEdit';
+import { addressLines, isPort, raModeFrom, supportsRouterAdvertisements } from '../interfaceEdit';
 import { stateColor, stateLabel, type ConfigBatchOperation, type LinkStatus, type LldpNeighbor, type Preview, type SavedLink, type SavedObject, type Segment, type Session, type Snapshot, type VirtualLinkKind } from '../types';
 import { useResource, useVisiblePoll } from '../useResource';
 import { bindingFindings, kernelName } from '../zones';
@@ -242,12 +242,17 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
     }
     return undefined;
   };
-  const addressesCell = (live: LinkStatus | undefined, segment: Segment | undefined) => {
+  const addressesCell = (live: LinkStatus | undefined, segment: Segment | undefined, linkKind?: SavedLink['kind']) => {
     const lines = addressLines(live, segment);
     if (lines.length === 0) return <Text c="dimmed">—</Text>;
+    const raMode = segment && supportsRouterAdvertisements(linkKind ?? 'ethernet', segment.addressing.ipv6.mode)
+      ? raModeFrom(segment.addressing.ipv6.ra)
+      : 'disabled';
     return lines.map((line) => (
       <div key={line.family} className="address-line">
-        <Text size="xs" c="dimmed">{line.method ? `${line.family} · ${line.method}` : line.family}</Text>
+        <Text size="xs" c="dimmed">
+          {[line.family, line.method, line.family === 'IPv6' && raMode !== 'disabled' ? `RA ${raMode}` : undefined].filter(Boolean).join(' · ')}
+        </Text>
         {line.addresses.map((address) => <Address key={address} value={address} />)}
         {line.pending.length > 0 && <Group gap={6} align="baseline"><Badge size="xs" color="yellow" variant="light" style={{ '--badge-color': 'var(--mantine-color-text)' }}>Pending</Badge><div>{line.pending.map((address) => <Address key={address} value={address} />)}</div></Group>}
       </div>
@@ -354,7 +359,7 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
                             {/* Applied, a disabled link is down: only while it is still up is the change waiting. */}
                             {live && !link.enabled && live.flags.some((flag) => flag.toUpperCase() === 'UP') && <Text size="xs" c="dimmed">Pending: off</Text>}
                           </Table.Td>
-                          <Table.Td data-label="Addresses">{addressesCell(live, segment)}</Table.Td>
+                          <Table.Td data-label="Addresses">{addressesCell(live, segment, link.kind)}</Table.Td>
                           {editable && <Table.Td>{actionButton(key, 'Edit', `Edit ${link.name}`, () => void edit(key, live, link, segment), 'default')}</Table.Td>}
                         </Table.Tr>
                       );
