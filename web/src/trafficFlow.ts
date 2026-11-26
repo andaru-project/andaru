@@ -1,6 +1,6 @@
 import { parseIpv6Groups } from './dhcpEdit';
 import { parsePortSpan } from './natEdit';
-import { firewallZone, type AddressAlias, type LinkStatus, type PortAlias, type PortForward, type RuleSide, type SavedLink, type Segment, type Snapshot } from './types';
+import { firewallZone, type AddressAlias, type Lease6, type LinkStatus, type PortAlias, type PortForward, type RuleSide, type SavedLink, type Segment, type Snapshot } from './types';
 import { kernelName } from './zones';
 
 export type TrafficProtocol = 'tcp' | 'udp' | 'icmp' | 'icmpv6';
@@ -570,7 +570,7 @@ export function simulateTrafficFlow(
   probe: TrafficProbe,
   snapshot: Snapshot['value'],
   liveLinks: LinkStatus[] = [],
-  options: { evaluatingSavedDiffersFromLive?: boolean } = {},
+  options: { evaluatingSavedDiffersFromLive?: boolean; liveLeases6?: Lease6[] } = {},
 ): TrafficSimulation {
   const srcIp = parseIp(probe.srcIp)!;
   const origDstIp = parseIp(probe.dstIp)!;
@@ -964,28 +964,81 @@ export function simulateTrafficFlow(
         bestConnected = { segment: entry.segment, prefix: entry.prefix };
       }
     }
-    // Unreachable routes installed for static DHCPv6 prefix-delegation pools (internal/render/networkd.go:221-227).
+    // Active DHCPv6 prefix-delegation lease routes (internal/generation/pdroutes.go:243-293) and
+    // unreachable pool routes (internal/render/networkd.go:221-227).
+    let bestDelegated: { segment: Segment; prefix: ParsedPrefix; hostname: string } | undefined;
     let bestUnreachable: { segment: Segment; entryName: string; prefix: ParsedPrefix } | undefined;
     if (effectiveDstIp.family === 6) {
+      const dhcp6BySegment = new Map<string, Array<{ name: string; pool?: ParsedPrefix }>>();
       for (const e of snapshot.dhcp6 ?? []) {
-        if (!e.prefixDelegation?.prefix) continue;
+        if (!e.prefixDelegation) continue;
         const seg = segmentsById.get(e.segment);
         if (!seg || !isLinkUsable(seg.link, linksById)) continue;
-        const p = parsePrefix(e.prefixDelegation.prefix);
+        const pool = e.prefixDelegation.prefix ? parsePrefix(e.prefixDelegation.prefix) : null;
+        if (pool && pool.family === 6) {
+          if (prefixContains(pool, effectiveDstIp) && (!bestUnreachable || pool.bits > bestUnreachable.prefix.bits)) {
+            bestUnreachable = { segment: seg, entryName: e.name, prefix: pool };
+          }
+          dhcp6BySegment.set(e.segment, [...(dhcp6BySegment.get(e.segment) ?? []), { name: e.name, pool }]);
+        } else if (!e.prefixDelegation.prefix) {
+          dhcp6BySegment.set(e.segment, [...(dhcp6BySegment.get(e.segment) ?? []), { name: e.name }]);
+        }
+      }
+      for (const lease of options.liveLeases6 ?? []) {
+        if (lease.type !== 'prefix' || lease.state !== 'active') continue;
+        const seg = segmentsById.get(lease.segment);
+        const pools = dhcp6BySegment.get(lease.segment);
+        if (!seg || !pools) continue;
+        const p = parsePrefix(lease.address);
         if (!p || p.family !== 6 || !prefixContains(p, effectiveDstIp)) continue;
-        if (!bestUnreachable || p.bits > bestUnreachable.prefix.bits) {
-          bestUnreachable = { segment: seg, entryName: e.name, prefix: p };
+        const servedByPool = pools.some((entry) => !entry.pool || (p.bits >= entry.pool.bits && prefixContains(entry.pool, p.ip)));
+        if (!servedByPool) continue;
+        if (!bestDelegated || p.bits > bestDelegated.prefix.bits) {
+          bestDelegated = { segment: seg, prefix: p, hostname: lease.hostname };
         }
       }
     }
-    if (bestUnreachable && (!bestConnected || bestUnreachable.prefix.bits > bestConnected.prefix.bits)) {
+    // Longest-prefix match: connected > active PD lease (replaces equal-length pool unreachable per pdroutes.go:278) > unreachable pool.
+    const delegatedBeatsConnected = Boolean(bestDelegated && (!bestConnected || bestDelegated.prefix.bits > bestConnected.prefix.bits));
+    const unreachableWins = Boolean(
+      bestUnreachable
+      && (!bestConnected || bestUnreachable.prefix.bits > bestConnected.prefix.bits)
+      && (!bestDelegated || bestUnreachable.prefix.bits > bestDelegated.prefix.bits),
+    );
+    if (unreachableWins && bestUnreachable) {
+      if (options.liveLeases6 === undefined) {
+        warnings.push(`Active DHCPv6 prefix-delegation leases were unavailable; assuming ${effectiveDstIp.canonical} inside ${bestUnreachable.prefix.raw} is unleased.`);
+      }
       return stopUnroutable(
         `Matched unreachable route ${bestUnreachable.prefix.raw} for DHCPv6 delegation pool "${bestUnreachable.entryName}" on ${bestUnreachable.segment.name}.`,
         `Destination falls in unleased DHCPv6 delegation pool ${bestUnreachable.prefix.raw} (unreachable route).`,
         { label: `DHCPv6 ${bestUnreachable.entryName}`, to: '/network/dhcp' },
       );
     }
-    if (bestConnected) {
+    if (delegatedBeatsConnected && bestDelegated) {
+      if ((isLinkLocalIpv6(srcIp) || isLinkLocalIpv6(effectiveDstIp)) && bestDelegated.segment.id !== ingressSegment.id) {
+        return stopUnroutable(
+          `IPv6 link-local traffic cannot be forwarded from ${ingressSegment.name} to ${bestDelegated.segment.name} (RFC 4291).`,
+          'Packet cannot be forwarded across links (link-local scope).',
+        );
+      }
+      if (options.evaluatingSavedDiffersFromLive) {
+        warnings.push(`Delegated prefix ${bestDelegated.prefix.raw} is read from active live DHCPv6 leases.`);
+      }
+      chain = 'forward';
+      egressSegment = bestDelegated.segment;
+      egressZoneId = egressSegment.zone;
+      const ez = zonesById.get(egressZoneId);
+      steps.push({
+        stage: 'routing',
+        title: 'Routing',
+        summary: `Delegated IPv6 prefix ${bestDelegated.prefix.raw}${bestDelegated.hostname ? ` (${bestDelegated.hostname})` : ''} via ${egressSegment.name} (zone ${ez?.name ?? egressZoneId}).`,
+        outcome: 'pass',
+        decidedBy: { label: `DHCPv6 PD lease (${egressSegment.name})`, to: '/network/dhcp' },
+        zone: ez ? { name: ez.name, color: ez.color } : undefined,
+        detail: 'Chain: forward',
+      });
+    } else if (bestConnected) {
       if ((isLinkLocalIpv6(srcIp) || isLinkLocalIpv6(effectiveDstIp)) && bestConnected.segment.id !== ingressSegment.id) {
         return stopUnroutable(
           `IPv6 link-local traffic cannot be forwarded from ${ingressSegment.name} to ${bestConnected.segment.name} (RFC 4291).`,

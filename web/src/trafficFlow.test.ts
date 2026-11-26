@@ -647,12 +647,49 @@ describe('simulateTrafficFlow', () => {
         prefixDelegation: { prefix: '2001:db8:100::/56', delegatedLength: 60 },
       }],
     };
-    const unleasedPd = simulateTrafficFlow(
+    const unleasedPdNoData = simulateTrafficFlow(
       { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '2001:db8:100::50', dstIp: '2001:db8:100:20::99', dstPort: 443 },
       dhcp6Pool,
     );
-    expect(unleasedPd.verdict).toBe('no_route');
-    expect(unleasedPd.decidedBy).toEqual({ label: 'DHCPv6 LAN PD', to: '/network/dhcp' });
+    expect(unleasedPdNoData.verdict).toBe('no_route');
+    expect(unleasedPdNoData.decidedBy).toEqual({ label: 'DHCPv6 LAN PD', to: '/network/dhcp' });
+    expect(unleasedPdNoData.warnings.some((w) => w.includes('prefix-delegation leases were unavailable'))).toBe(true);
+
+    // When active DHCPv6 PD leases are loaded and cover the destination, route forward via the delegating segment and evaluate firewall rules.
+    const leasedPd = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_wan', protocol: 'tcp', srcIp: '2001:db8:1::99', dstIp: '2001:db8:100:20::99', dstPort: 443 },
+      {
+        ...dhcp6Pool,
+        rules: [
+          ...dhcp6Pool.rules!,
+          { id: 'rul_wan_lan6', name: 'Allow WAN to LAN PD', enabled: true, action: 'accept', from: { zones: ['zon_wan'], addresses: [] }, to: { zones: ['zon_lan'], addresses: [] }, ports: ['svc_https'], log: false },
+        ],
+      },
+      [],
+      {
+        liveLeases6: [{
+          segment: 'seg_lan',
+          type: 'prefix',
+          address: '2001:db8:100:20::/60',
+          duid: '00:01:00:01:aa:bb',
+          hostname: 'lab-router',
+          state: 'active',
+        }],
+      },
+    );
+    expect(leasedPd.verdict).toBe('accept');
+    expect(leasedPd.chain).toBe('forward');
+    expect(leasedPd.steps.find((s) => s.stage === 'routing')?.summary).toMatch(/Delegated IPv6 prefix 2001:db8:100:20::\/60/);
+
+    // When live leases are loaded but do not cover the destination, no_route is returned without the unavailable-leases warning.
+    const unleasedPdWithData = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '2001:db8:100::50', dstIp: '2001:db8:100:30::99', dstPort: 443 },
+      dhcp6Pool,
+      [],
+      { liveLeases6: [] },
+    );
+    expect(unleasedPdWithData.verdict).toBe('no_route');
+    expect(unleasedPdWithData.warnings.some((w) => w.includes('prefix-delegation leases were unavailable'))).toBe(false);
 
     // A more specific connected /64 inside the /56 pool still beats the covering unreachable route.
     const connectedInsidePool = simulateTrafficFlow(
