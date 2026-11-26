@@ -538,39 +538,38 @@ describe('NotificationChannelsPanel', () => {
     let postPayload: unknown;
     let putPayload: unknown;
 
-    const futureEmailChannel: SavedObject<NotificationChannel> = {
+    const futurePagerDutyChannel: SavedObject<NotificationChannel> = {
       version: '7',
       value: {
-        id: 'ntf_email',
-        name: 'ops-email',
+        id: 'ntf_pd',
+        name: 'ops-pd',
         enabled: true,
-        kind: 'email',
+        kind: 'pagerduty',
         filter: { minSeverity: 'critical' },
-        email: {
-          host: 'smtp.example',
-          from: 'andaru@example.com',
-          password: { secret: 'SMTP_PASS', isSet: true, version: '7' },
+        pagerduty: {
+          region: 'us',
+          routingKey: { secret: 'PD_KEY', isSet: true, version: '7' },
         },
       },
     };
 
     fetchRoutes({
-      'GET /api/v1/config/notifications/channels': () => jsonResponse(200, { state: 'saved', savedVersion: '10', items: [futureEmailChannel] }),
-      'GET /api/v1/config/notifications/channels/ntf_email': () => jsonResponse(200, { state: 'saved', savedVersion: '10', ...futureEmailChannel }),
+      'GET /api/v1/config/notifications/channels': () => jsonResponse(200, { state: 'saved', savedVersion: '10', items: [futurePagerDutyChannel] }),
+      'GET /api/v1/config/notifications/channels/ntf_pd': () => jsonResponse(200, { state: 'saved', savedVersion: '10', ...futurePagerDutyChannel }),
       'GET /api/v1/config': () => jsonResponse(200, { state: 'saved', savedVersion: '10', value: { links: [], segments: [], zones: [] } }),
       'POST /api/v1/config/notifications/channels': (init) => {
         postPayload = JSON.parse(String(init?.body ?? '{}'));
         return jsonResponse(201, { state: 'saved', savedVersion: '11', version: '11', value: { id: 'ntf_po', ...(postPayload as object) } });
       },
-      'PUT /api/v1/config/notifications/channels/ntf_email': (init) => {
+      'PUT /api/v1/config/notifications/channels/ntf_pd': (init) => {
         putPayload = JSON.parse(String(init?.body ?? '{}'));
-        return jsonResponse(200, { state: 'saved', savedVersion: '12', version: '12', value: futureEmailChannel.value });
+        return jsonResponse(200, { state: 'saved', savedVersion: '12', version: '12', value: futurePagerDutyChannel.value });
       },
     });
 
     render(<NotificationChannelsPanel api={new ApiClient('csrf')} canManage onSessionLost={vi.fn()} />);
-    expect(await screen.findByText('email')).toBeInTheDocument();
-    expect(screen.getByText(/password:\s*set/i)).toBeInTheDocument();
+    expect(await screen.findByText('pagerduty')).toBeInTheDocument();
+    expect(screen.getByText(/routingKey:\s*set/i)).toBeInTheDocument();
 
     // Create a Pushover channel.
     await user.click(screen.getByRole('button', { name: 'Add channel' }));
@@ -593,23 +592,134 @@ describe('NotificationChannelsPanel', () => {
       },
     });
 
-    // Edit unknown future kind (email): kind selector disabled, read-only alert shown, disable echoes email sub-object intact.
-    await user.click(screen.getByRole('button', { name: 'Edit ops-email' }));
-    dialog = await screen.findByRole('dialog', { name: 'Edit channel: ops-email' });
+    // Edit unknown future kind (pagerduty): kind selector disabled, read-only alert shown, disable echoes sub-object intact.
+    await user.click(screen.getByRole('button', { name: 'Edit ops-pd' }));
+    dialog = await screen.findByRole('dialog', { name: 'Edit channel: ops-pd' });
     expect(within(dialog).getByText('Delivery settings are read-only')).toBeInTheDocument();
     expect(within(dialog).getByLabelText(/^Channel kind/, { selector: 'input' })).toBeDisabled();
     await user.click(within(dialog).getByRole('switch'));
     await user.click(within(dialog).getByRole('button', { name: 'Save channel' }));
     await waitFor(() => expect(putPayload).toBeDefined());
     expect(putPayload).toEqual({
-      name: 'ops-email',
+      name: 'ops-pd',
       enabled: false,
-      kind: 'email',
+      kind: 'pagerduty',
       filter: { minSeverity: 'critical' },
+      pagerduty: {
+        region: 'us',
+        routingKey: { secret: 'PD_KEY' },
+      },
+    });
+  });
+
+  it('creates an e-mail (SMTP) channel with STARTTLS port prefill', async () => {
+    const user = userEvent.setup();
+    let postPayload: unknown;
+
+    fetchRoutes({
+      'GET /api/v1/config/notifications/channels': () => jsonResponse(200, { state: 'saved', savedVersion: '10', items: [] }),
+      'GET /api/v1/config': () => jsonResponse(200, { state: 'saved', savedVersion: '10', value: { links: [], segments: [], zones: [] } }),
+      'POST /api/v1/config/notifications/channels': (init) => {
+        postPayload = JSON.parse(String(init?.body ?? '{}'));
+        return jsonResponse(201, { state: 'saved', savedVersion: '11', version: '11', value: { id: 'ntf_mail2', ...(postPayload as object) } });
+      },
+    });
+
+    render(<NotificationChannelsPanel api={new ApiClient('csrf')} canManage onSessionLost={vi.fn()} />);
+    await screen.findByText('No notification channels');
+
+    // Switching Security to STARTTLS prefills port 587.
+    await user.click(screen.getByRole('button', { name: 'Add channel' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add notification channel' });
+    await user.click(within(dialog).getByLabelText(/^Channel kind/, { selector: 'input' }));
+    await user.click(await screen.findByRole('option', { name: 'E-mail (SMTP)' }));
+    const portInput = within(dialog).getByLabelText(/^SMTP port/, { selector: 'input' });
+    expect(portInput).toHaveValue('465');
+    await user.click(within(dialog).getByLabelText(/^Security/, { selector: 'input' }));
+    await user.click(await screen.findByRole('option', { name: 'STARTTLS (port 587)' }));
+    expect(portInput).toHaveValue('587');
+
+    await user.type(within(dialog).getByLabelText(/^Name/, { selector: 'input' }), 'ops-smtp');
+    await user.type(within(dialog).getByLabelText(/^SMTP host/, { selector: 'input' }), 'smtp.example.com');
+    await user.type(within(dialog).getByLabelText(/^From/, { selector: 'input' }), 'Andaru <alerts@example.com>');
+    await user.type(within(dialog).getByLabelText(/^Recipients/, { selector: 'input' }), 'ops@example.com{Enter}');
+    await user.type(within(dialog).getByLabelText(/^SMTP username/, { selector: 'input' }), 'alerts@example.com');
+    await user.type(within(dialog).getByLabelText(/^SMTP password/, { selector: 'input' }), 'smtp-secret');
+    await user.click(within(dialog).getByRole('button', { name: 'Add channel' }));
+    await waitFor(() => expect(postPayload).toBeDefined());
+    expect(postPayload).toEqual({
+      name: 'ops-smtp',
+      enabled: true,
+      kind: 'email',
+      filter: { minSeverity: 'info' },
       email: {
-        host: 'smtp.example',
-        from: 'andaru@example.com',
-        password: { secret: 'SMTP_PASS' },
+        host: 'smtp.example.com',
+        port: 587,
+        security: 'starttls',
+        username: 'alerts@example.com',
+        password: { secret: 'NOTIFY_OPS_SMTP_PASSWORD', set: 'smtp-secret', expectedVersion: '0' },
+        from: 'Andaru <alerts@example.com>',
+        to: ['ops@example.com'],
+      },
+    });
+  });
+
+  it('renders IPv6 SMTP targets and removes existing e-mail credentials cleanly on edit', async () => {
+    const user = userEvent.setup();
+    let putPayload: unknown;
+
+    const existingEmail: SavedObject<NotificationChannel> = {
+      version: '3',
+      value: {
+        id: 'ntf_mail',
+        name: 'ops-mail',
+        enabled: true,
+        kind: 'email',
+        filter: { minSeverity: 'warning' },
+        email: {
+          host: '2001:db8::1',
+          port: 465,
+          security: 'tls',
+          username: 'alerts@example.com',
+          password: { secret: 'SMTP_PASS', isSet: true, version: '3' },
+          from: 'Andaru <alerts@example.com>',
+          to: ['ops@example.com'],
+        },
+      },
+    };
+
+    fetchRoutes({
+      'GET /api/v1/config/notifications/channels': () => jsonResponse(200, { state: 'saved', savedVersion: '10', items: [existingEmail] }),
+      'GET /api/v1/config/notifications/channels/ntf_mail': () => jsonResponse(200, { state: 'saved', savedVersion: '10', ...existingEmail }),
+      'GET /api/v1/config': () => jsonResponse(200, { state: 'saved', savedVersion: '10', value: { links: [], segments: [], zones: [] } }),
+      'PUT /api/v1/config/notifications/channels/ntf_mail': (init) => {
+        putPayload = JSON.parse(String(init?.body ?? '{}'));
+        return jsonResponse(200, { state: 'saved', savedVersion: '12', version: '12', value: existingEmail.value });
+      },
+    });
+
+    render(<NotificationChannelsPanel api={new ApiClient('csrf')} canManage onSessionLost={vi.fn()} />);
+    expect(await screen.findByText('[2001:db8::1]:465')).toBeInTheDocument();
+    expect(screen.getByText(/Password:\s*set/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Edit ops-mail' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit channel: ops-mail' });
+    await user.clear(within(dialog).getByLabelText(/^SMTP username/, { selector: 'input' }));
+    await user.click(within(dialog).getByLabelText('Remove password'));
+    expect(within(dialog).getByLabelText(/^SMTP password/, { selector: 'input' })).toBeDisabled();
+    await user.click(within(dialog).getByRole('button', { name: 'Save channel' }));
+    await waitFor(() => expect(putPayload).toBeDefined());
+    expect(putPayload).toEqual({
+      name: 'ops-mail',
+      enabled: true,
+      kind: 'email',
+      filter: { minSeverity: 'warning' },
+      email: {
+        host: '2001:db8::1',
+        port: 465,
+        security: 'tls',
+        from: 'Andaru <alerts@example.com>',
+        to: ['ops@example.com'],
       },
     });
   });

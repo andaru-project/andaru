@@ -1,5 +1,6 @@
 import { fieldErrors } from './api';
 import type {
+  EmailChannelSecurity,
   KnownNotificationChannelKind,
   NotificationChannel,
   NotificationChannelKind,
@@ -28,6 +29,14 @@ export interface NotificationChannelDraft {
   pushoverUser: string;
   telegramToken: string;
   telegramChatId: string;
+  emailHost: string;
+  emailPort: string;
+  emailSecurity: EmailChannelSecurity;
+  emailUsername: string;
+  emailPassword: string;
+  removeEmailPassword: boolean;
+  emailFrom: string;
+  emailTo: string[];
 }
 
 export const knownNotificationSources = ['engine', 'apply', 'upgrade', 'disk', 'delivery', 'notifications'];
@@ -37,6 +46,7 @@ export const channelKindLabel: Record<KnownNotificationChannelKind, string> = {
   ntfy: 'ntfy',
   pushover: 'Pushover',
   telegram: 'Telegram',
+  email: 'E-mail',
 };
 
 export function isKnownChannelKind(kind: string): kind is KnownNotificationChannelKind {
@@ -114,7 +124,10 @@ export function channelSecretsOf(channel: NotificationChannel): ChannelSecretEnt
   if (channel.kind === 'telegram') {
     return channel.telegram?.token ? [{ label: 'Bot token', view: channel.telegram.token }] : [];
   }
-  // Forward-compatible recursive scan of unknown kind sub-objects (e.g. future email kind).
+  if (channel.kind === 'email') {
+    return channel.email?.password ? [{ label: 'Password', view: channel.email.password, optional: true }] : [];
+  }
+  // Forward-compatible recursive scan of unknown kind sub-objects.
   const out: ChannelSecretEntry[] = [];
   if (!topLevelChannelKeys.has(channel.kind) && !forbiddenObjectKeys.has(channel.kind) && Object.hasOwn(channel, channel.kind)) {
     collectUnknownSecrets(channel[channel.kind], '', out);
@@ -157,6 +170,14 @@ export function channelDraftOf(channel?: NotificationChannel): NotificationChann
     pushoverUser: '',
     telegramToken: '',
     telegramChatId: channel?.telegram?.chatId ?? '',
+    emailHost: channel?.email?.host ?? '',
+    emailPort: channel?.email ? String(channel.email.port) : '465',
+    emailSecurity: channel?.email?.security ?? 'tls',
+    emailUsername: channel?.email?.username ?? '',
+    emailPassword: '',
+    removeEmailPassword: false,
+    emailFrom: channel?.email?.from ?? '',
+    emailTo: [...(channel?.email?.to ?? [])],
   };
 }
 
@@ -179,7 +200,7 @@ export function existingChannelSecretsOf(channels: NotificationChannel[], snapsh
 // Allocate a collision-free core secret name matching ^[A-Za-z_][A-Za-z0-9_]{0,63}$.
 export function nextChannelSecretName(
   channelName: string,
-  suffix: 'URL' | 'AUTH' | 'TOKEN' | 'USER',
+  suffix: 'URL' | 'AUTH' | 'TOKEN' | 'USER' | 'PASSWORD',
   existingSecrets: Iterable<string> = [],
 ): string {
   const used = new Set(existingSecrets);
@@ -267,6 +288,103 @@ export function validateTelegramChatId(raw: string): string | undefined {
   return undefined;
 }
 
+const emailHostCharLimit = 253;
+const emailUsernameCharLimit = 256;
+const emailAddressCharLimit = 512;
+const emailMaxRecipients = 20;
+const dnsHostnamePattern = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/i;
+const ipv4Pattern = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+const forbiddenEmailAddrChars = /[ <>"\\()[\],;:]/;
+
+function isValidIPv4(value: string): boolean {
+  const match = ipv4Pattern.exec(value);
+  if (!match) return false;
+  return match.slice(1).every((part) => (part === '0' || !part.startsWith('0')) && Number(part) <= 255);
+}
+
+function isValidIPv6(value: string): boolean {
+  if (!value.includes(':') || /[\s[\]%/?#@\\]/.test(value)) return false;
+  try {
+    const parsed = new URL(`http://[${value}]`);
+    return parsed.hostname.startsWith('[') && parsed.hostname.endsWith(']') && parsed.port === '';
+  } catch {
+    return false;
+  }
+}
+
+export function validateEmailHost(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return 'Enter an SMTP host.';
+  if (controlOrFormatChars.test(trimmed) || /\s/.test(trimmed)) {
+    return 'SMTP host cannot contain whitespace, control, or format characters.';
+  }
+  if (trimmed.length > emailHostCharLimit) {
+    return `SMTP host must be ${emailHostCharLimit} characters or fewer.`;
+  }
+  if (isValidIPv4(trimmed) || isValidIPv6(trimmed)) return undefined;
+  const labels = trimmed.split('.');
+  const lastLabel = labels[labels.length - 1];
+  if (dnsHostnamePattern.test(trimmed) && !/^\d+$/.test(lastLabel)) {
+    return undefined;
+  }
+  return 'Enter a host name or IP address, with no scheme, port, or path.';
+}
+
+export function validateEmailPort(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return 'Enter an SMTP port.';
+  if (!/^\d+$/.test(trimmed)) return 'Port must be a whole number from 1 to 65535.';
+  const port = Number(trimmed);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+    return 'Port must be a whole number from 1 to 65535.';
+  }
+  return undefined;
+}
+
+// Parse one RFC 5322 address ("ops@example.com" or "Display Name <ops@example.com>")
+// suitable for SMTP MAIL FROM / RCPT TO (no quoted local part, no control/format chars, exactly one '@').
+export function parseEmailAddress(raw: string): { address: string } | { error: string } {
+  const trimmed = raw.trim();
+  if (!trimmed) return { error: 'Enter an e-mail address.' };
+  if (controlOrFormatChars.test(trimmed)) {
+    return { error: 'Control or format characters are not allowed.' };
+  }
+  if (trimmed.length < 3 || trimmed.length > emailAddressCharLimit) {
+    return { error: `E-mail address must be 3 to ${emailAddressCharLimit} characters.` };
+  }
+
+  let addr = trimmed;
+  if (trimmed.includes('<') || trimmed.includes('>')) {
+    const lt = trimmed.indexOf('<');
+    const gt = trimmed.lastIndexOf('>');
+    if (lt < 0 || gt !== trimmed.length - 1 || trimmed.indexOf('<', lt + 1) !== -1 || trimmed.indexOf('>') !== gt) {
+      return { error: 'Enter one e-mail address, such as Andaru <alerts@example.com>.' };
+    }
+    addr = trimmed.slice(lt + 1, gt).trim();
+  }
+
+  const at = addr.indexOf('@');
+  if (
+    at <= 0
+    || at === addr.length - 1
+    || addr.indexOf('@', at + 1) !== -1
+    || forbiddenEmailAddrChars.test(addr)
+    || /\s/.test(addr)
+  ) {
+    return { error: 'Enter one e-mail address without a quoted local part, such as ops@example.com.' };
+  }
+  return { address: addr.toLowerCase() };
+}
+
+export function normalizeEmailRecipients(raw: string[]): string[] {
+  const out: string[] = [];
+  for (const item of raw) {
+    const trimmed = item.trim();
+    if (trimmed) out.push(trimmed);
+  }
+  return out;
+}
+
 function validateSecretValue(raw: string, articleLabel: string, fieldLabel: string, required: boolean): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) return required ? `Enter ${articleLabel}.` : undefined;
@@ -350,6 +468,65 @@ export function validateChannelDraft(
     if (tokErr) errors.set('telegramToken', tokErr);
     const chatErr = validateTelegramChatId(draft.telegramChatId);
     if (chatErr) errors.set('telegramChatId', chatErr);
+  } else if (draft.kind === 'email') {
+    const hostErr = validateEmailHost(draft.emailHost);
+    if (hostErr) errors.set('emailHost', hostErr);
+    const portErr = validateEmailPort(draft.emailPort);
+    if (portErr) errors.set('emailPort', portErr);
+
+    const username = draft.emailUsername.trim();
+    if (username && controlOrFormatChars.test(username)) {
+      errors.set('emailUsername', 'Control or format characters are not allowed.');
+    } else if (username.length > emailUsernameCharLimit) {
+      errors.set('emailUsername', `Username must be ${emailUsernameCharLimit} characters or fewer.`);
+    }
+
+    const existingPassword = sameKind ? saved?.email?.password : undefined;
+    const hasNewPassword = !draft.removeEmailPassword && draft.emailPassword.trim() !== '';
+    const keepsExistingPassword = Boolean(existingPassword) && !draft.removeEmailPassword;
+    const willSendPassword = hasNewPassword || keepsExistingPassword;
+
+    if (!draft.removeEmailPassword) {
+      const pwErr = validateSecretValue(draft.emailPassword, 'a password', 'Password', false);
+      if (pwErr) errors.set('emailPassword', pwErr);
+    }
+
+    if (username && !willSendPassword && !errors.has('emailPassword')) {
+      errors.set('emailPassword', 'A username requires a password.');
+    } else if (!username && willSendPassword && !errors.has('emailUsername')) {
+      errors.set(
+        'emailUsername',
+        keepsExistingPassword && !hasNewPassword
+          ? 'Enter a username, or check "Remove password" to disable SMTP authentication.'
+          : 'A password requires a username.',
+      );
+    }
+
+    const parsedFrom = parseEmailAddress(draft.emailFrom);
+    if ('error' in parsedFrom) {
+      errors.set('emailFrom', parsedFrom.error);
+    }
+
+    const recipients = normalizeEmailRecipients(draft.emailTo);
+    if (recipients.length === 0) {
+      errors.set('emailTo', 'Enter at least one recipient e-mail address.');
+    } else if (recipients.length > emailMaxRecipients) {
+      errors.set('emailTo', `At most ${emailMaxRecipients} recipients can be configured.`);
+    } else {
+      const seen = new Set<string>();
+      for (const recipient of recipients) {
+        const parsed = parseEmailAddress(recipient);
+        if ('error' in parsed) {
+          errors.set('emailTo', parsed.error);
+          break;
+        }
+        if (seen.has(parsed.address)) {
+          errors.set('emailTo', 'Each recipient address must be unique.');
+          break;
+        }
+        seen.add(parsed.address);
+      }
+    }
   }
 
   return errors;
@@ -375,7 +552,7 @@ function writeOptionalSecret(
   rawValue: string,
   remove: boolean,
   channelName: string,
-  suffix: 'URL' | 'AUTH' | 'TOKEN' | 'USER',
+  suffix: 'URL' | 'AUTH' | 'TOKEN' | 'USER' | 'PASSWORD',
   existing: SecretView | undefined,
   used: Set<string>,
 ): SecretWrite | undefined {
@@ -481,6 +658,29 @@ export function buildChannelWrite(
       },
     };
   }
+  if (draft.kind === 'email') {
+    const username = draft.emailUsername.trim();
+    const password = writeOptionalSecret(
+      draft.emailPassword,
+      draft.removeEmailPassword,
+      name,
+      'PASSWORD',
+      sameKind ? saved?.email?.password : undefined,
+      used,
+    );
+    return {
+      ...base,
+      email: {
+        host: draft.emailHost.trim(),
+        port: Number(draft.emailPort.trim()),
+        security: draft.emailSecurity,
+        ...(username ? { username } : {}),
+        ...(password ? { password } : {}),
+        from: draft.emailFrom.trim(),
+        to: normalizeEmailRecipients(draft.emailTo),
+      },
+    };
+  }
 
   // Unknown future kind: preserve its own sub-object unchanged (stripping SecretView metadata).
   if (
@@ -513,6 +713,13 @@ export function channelFieldErrors(error: unknown): Map<string, string> {
     if (clean === '/pushover/user' || clean.startsWith('/pushover/user/')) return 'pushoverUser';
     if (clean === '/telegram/token' || clean.startsWith('/telegram/token/')) return 'telegramToken';
     if (clean === '/telegram/chatId') return 'telegramChatId';
+    if (clean === '/email/host') return 'emailHost';
+    if (clean === '/email/port') return 'emailPort';
+    if (clean === '/email/security') return 'emailSecurity';
+    if (clean === '/email/username') return 'emailUsername';
+    if (clean === '/email/password' || clean.startsWith('/email/password/')) return 'emailPassword';
+    if (clean === '/email/from') return 'emailFrom';
+    if (clean === '/email/to' || clean.startsWith('/email/to/')) return 'emailTo';
     return '';
   });
 }

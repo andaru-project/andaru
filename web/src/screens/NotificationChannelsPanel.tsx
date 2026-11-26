@@ -35,6 +35,7 @@ import {
 } from '../notificationChannels';
 import { severityColor } from '../notifications';
 import type {
+  EmailChannelSecurity,
   NotificationChannel,
   NotificationChannelKind,
   NotificationChannelWrite,
@@ -65,6 +66,12 @@ const kindOptions: Array<{ value: NotificationChannelKind; label: string }> = [
   { value: 'ntfy', label: 'ntfy' },
   { value: 'pushover', label: 'Pushover' },
   { value: 'telegram', label: 'Telegram' },
+  { value: 'email', label: 'E-mail (SMTP)' },
+];
+
+const emailSecurityOptions: Array<{ value: EmailChannelSecurity; label: string }> = [
+  { value: 'tls', label: 'Implicit TLS (port 465)' },
+  { value: 'starttls', label: 'STARTTLS (port 587)' },
 ];
 
 const kindSpecificErrorFields = [
@@ -78,6 +85,13 @@ const kindSpecificErrorFields = [
   'pushoverUser',
   'telegramToken',
   'telegramChatId',
+  'emailHost',
+  'emailPort',
+  'emailSecurity',
+  'emailUsername',
+  'emailPassword',
+  'emailFrom',
+  'emailTo',
 ] as const;
 
 const severityOptions: Array<{ value: NotificationSeverity; label: string }> = [
@@ -95,6 +109,10 @@ function severitySummary(minSeverity: NotificationSeverity | undefined): { sever
 function channelTargetSummary(ch: NotificationChannel): string | undefined {
   if (ch.kind === 'ntfy' && ch.ntfy) return `${ch.ntfy.server.replace(/\/+$/, '')}/${ch.ntfy.topic}`;
   if (ch.kind === 'telegram' && ch.telegram) return ch.telegram.chatId;
+  if (ch.kind === 'email' && ch.email) {
+    const host = ch.email.host.includes(':') ? `[${ch.email.host}]` : ch.email.host;
+    return `${host}:${ch.email.port}`;
+  }
   return undefined;
 }
 
@@ -250,6 +268,7 @@ function NotificationChannelEditor({
   const existingPushoverToken = sameKind ? saved?.value.pushover?.token : undefined;
   const existingPushoverUser = sameKind ? saved?.value.pushover?.user : undefined;
   const existingTelegramToken = sameKind ? saved?.value.telegram?.token : undefined;
+  const existingEmailPassword = sameKind ? saved?.value.email?.password : undefined;
 
   const sharedFor = (view?: SecretView) => (view?.secret ? (sharedHoldersBySecret.get(view.secret) ?? []) : []);
   const selectKindOptions = unknownKind
@@ -587,6 +606,124 @@ function NotificationChannelEditor({
                     onChange={(event) => {
                       patch({ telegramChatId: event.currentTarget.value });
                       clearFieldError('telegramChatId');
+                    }}
+                  />
+                </>
+              )}
+              {draft.kind === 'email' && (
+                <>
+                  <TextInput
+                    label="SMTP host"
+                    description="Host name or IP address, with no scheme, port, or path."
+                    placeholder="smtp.example.com"
+                    maxLength={253}
+                    required
+                    value={draft.emailHost}
+                    error={errors.get('emailHost')}
+                    onChange={(event) => {
+                      patch({ emailHost: event.currentTarget.value });
+                      clearFieldError('emailHost');
+                    }}
+                  />
+                  <Select
+                    label="Security"
+                    description="Encrypted TLS is required (no plaintext SMTP)."
+                    allowDeselect={false}
+                    data={emailSecurityOptions}
+                    value={draft.emailSecurity}
+                    error={errors.get('emailSecurity')}
+                    onChange={(value) => {
+                      if (value === 'tls' || value === 'starttls') {
+                        const port = draft.emailPort.trim();
+                        const nextPort = value === 'tls' && port === '587'
+                          ? '465'
+                          : value === 'starttls' && port === '465'
+                            ? '587'
+                            : draft.emailPort;
+                        patch({ emailSecurity: value, emailPort: nextPort });
+                        clearFieldError('emailSecurity');
+                      }
+                    }}
+                  />
+                  <TextInput
+                    label="SMTP port"
+                    description="Port from 1 to 65535 (465 for implicit TLS, 587 for STARTTLS)."
+                    placeholder={draft.emailSecurity === 'tls' ? '465' : '587'}
+                    inputMode="numeric"
+                    maxLength={5}
+                    required
+                    value={draft.emailPort}
+                    error={errors.get('emailPort')}
+                    onChange={(event) => {
+                      patch({ emailPort: event.currentTarget.value });
+                      clearFieldError('emailPort');
+                    }}
+                  />
+                  <TextInput
+                    label="From"
+                    description="Sender e-mail address (optional display name, no quoted local part)."
+                    placeholder="Andaru <alerts@example.com>"
+                    maxLength={512}
+                    required
+                    value={draft.emailFrom}
+                    error={errors.get('emailFrom')}
+                    onChange={(event) => {
+                      patch({ emailFrom: event.currentTarget.value });
+                      clearFieldError('emailFrom');
+                    }}
+                  />
+                  <TagsInput
+                    label="Recipients"
+                    description="1 to 20 distinct recipient e-mail addresses. Press Enter after each address."
+                    placeholder="ops@example.com"
+                    required
+                    clearable
+                    value={draft.emailTo}
+                    error={errors.get('emailTo')}
+                    onChange={(value) => {
+                      patch({ emailTo: value });
+                      clearFieldError('emailTo');
+                    }}
+                  />
+                  <TextInput
+                    label="SMTP username"
+                    description="Optional. Provide both username and password, or leave both empty."
+                    placeholder="alerts@example.com"
+                    autoComplete="off"
+                    maxLength={256}
+                    value={draft.emailUsername}
+                    error={errors.get('emailUsername')}
+                    onChange={(event) => {
+                      patch({ emailUsername: event.currentTarget.value });
+                      clearFieldError('emailUsername');
+                      clearFieldError('emailPassword');
+                    }}
+                  />
+                  <SecretField
+                    label="SMTP password"
+                    unresolvedTitle="SMTP password needs to be restored"
+                    unresolvedBody={`The SMTP password secret (${existingEmailPassword?.secret ?? ''}) was left unresolved by a restore. Enter a new password to resolve it, or remove SMTP credentials below.`}
+                    existing={existingEmailPassword}
+                    sharedHolders={sharedFor(existingEmailPassword)}
+                    freshDescription="Optional SMTP password (required when a username is set). Stored in the secret store and never shown again."
+                    optionalPrefix="Optional SMTP password"
+                    unresolvedHint="Enter a password to resolve."
+                    freshPlaceholder="SMTP password"
+                    keepPlaceholder="Leave blank to keep existing password"
+                    toggleLabel="Toggle SMTP password visibility"
+                    value={draft.emailPassword}
+                    error={errors.get('emailPassword')}
+                    onChange={(value) => {
+                      patch({ emailPassword: value });
+                      clearFieldError('emailPassword');
+                      clearFieldError('emailUsername');
+                    }}
+                    removeLabel="Remove password"
+                    removed={draft.removeEmailPassword}
+                    onRemoveChange={(checked) => {
+                      patch({ removeEmailPassword: checked, ...(checked ? { emailPassword: '' } : {}) });
+                      clearFieldError('emailPassword');
+                      clearFieldError('emailUsername');
                     }}
                   />
                 </>
