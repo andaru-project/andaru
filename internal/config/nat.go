@@ -40,6 +40,11 @@ func validateNAT(d *declaration) []FieldError {
 		}
 	}
 	ref := func(path, id string) { refFamily(path, id, false) }
+	leftOut := func(path, id string) {
+		if a, ok := addresses[id]; ok && a.dynamic() {
+			bad(path, negatedDynamic)
+		}
+	}
 	unique := func(prefix string, i int, v identity, seen map[string]bool) {
 		if seen[v.ID] {
 			bad(fmt.Sprintf("%s/%d/id", prefix, i), "Duplicate object identity.")
@@ -76,9 +81,15 @@ func validateNAT(d *declaration) []FieldError {
 		}
 		for j, a := range f.From {
 			refFamily(fmt.Sprintf("%s/from/%d", p, j), a, six)
+			if f.FromNegated {
+				leftOut(fmt.Sprintf("%s/from/%d", p, j), a)
+			}
 		}
 		if f.To.Address != "" {
 			refFamily(p+"/to/address", f.To.Address, six)
+			if f.ToNegated {
+				leftOut(p+"/to/address", f.To.Address)
+			}
 		}
 		if f.ToNegated && f.Reflection {
 			bad(p+"/reflection", "A negated destination names no outside address for internal clients to ask, so it has no reflection.")
@@ -214,6 +225,9 @@ func validateNAT(d *declaration) []FieldError {
 		}
 		for j, a := range o.Destination {
 			ref(fmt.Sprintf("%s/destination/%d", p, j), a)
+			if o.DestinationNegated {
+				leftOut(fmt.Sprintf("%s/destination/%d", p, j), a)
+			}
 		}
 		if o.DestinationNegated {
 			if len(o.Destination) == 0 && !o.NoBinat {

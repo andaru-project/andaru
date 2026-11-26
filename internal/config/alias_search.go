@@ -95,7 +95,8 @@ func searchAliasesInSet(ctx context.Context, set *aliasSet, savedVersion Version
 			if query.Exclude != "" && a.ID == query.Exclude {
 				continue
 			}
-			if query.ExcludeGroups && a.Kind == "group" {
+			// The picker for a group's members: neither a group nor an alias fed from a URL or host names can be one.
+			if query.ExcludeGroups && (a.Kind == "group" || a.dynamic()) {
 				continue
 			}
 			if query.Kind != "" && a.Kind != query.Kind {

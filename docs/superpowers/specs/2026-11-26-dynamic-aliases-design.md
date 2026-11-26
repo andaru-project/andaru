@@ -13,13 +13,13 @@ Two more kinds of address alias, beside `host`, `network`, `range` and `group`:
 
 Their members are not saved: a refresh is not a configuration change, so it needs no apply, makes no generation and asks for no confirmation.
 
-In this first version a URL or host-name alias may be referred to by rules and port forwards, but not be a group's member nor a management source. Groups and the management sets copy their members' addresses into sets of their own, which a refresh would have to follow; that comes when asked for.
+In this first version a URL or host-name alias may be referred to by rules, port forwards and 1:1 destinations, but not be a group's member nor a management source, and not be left out (a rule's `not`, a forward's negated source or destination, a negated 1:1 destination): its set is empty until a list is fetched, and leaving out an empty set lets every address through. Groups and the management sets copy their members' addresses into sets of their own, which a refresh would have to follow; that comes when asked for.
 
 ## How it reaches nftables
 
-A URL or host-name alias always renders both of its family sets, `adr_<id>_4` and `adr_<id>_6`, declared with `flags interval` and no elements, so a rule naming it has a line for each family whatever the list holds. An alias that never fetched matches nothing.
+A URL or host-name alias always renders both of its family sets, `adr_<id>_4` and `adr_<id>_6`, declared with `flags interval` and no elements, so a rule naming it has a line for each family whatever the list holds. An alias that never fetched matches nothing, which is why it may not be left out.
 
-The engine keeps each alias's last good list in `/var/lib/andaru/aliases/<id>.json`. A root `andaru realize aliases` verb flushes each dynamic alias's sets and adds the saved members, in one `nft -f` transaction. Every load of the filter (activate, rollback, boot) runs the same fill right after it, since a load empties the sets.
+The engine keeps each alias's last good list in `/var/lib/andaru/aliases/<id>.json`. A root `andaru realize aliases` verb flushes each dynamic alias's sets and adds the saved members, in one `nft -f` transaction. Every load of the filter (activate, rollback, boot) adds the saved members to the same transaction as the new table, so the sets are never empty between a load and a fill.
 
 ## Who fetches
 

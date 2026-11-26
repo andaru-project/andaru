@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cmp"
 	"fmt"
 	"net/netip"
 	"net/url"
@@ -32,6 +33,10 @@ var icmpTypes = map[string][]string{
 
 // validatePolicy checks the aliases, the rules and the management section against each other and the topology.
 // It reports limit errors at most.
+// negatedDynamic refuses a URL or host-name alias on a side that leaves it out: its set is empty until its list is
+// fetched, and leaving out an empty set lets every address through.
+const negatedDynamic = "An alias fed from a URL or from host names cannot be left out yet: until its list is fetched it is empty, and leaving it out would let every address through."
+
 func validatePolicy(d *declaration, limit int) []FieldError {
 	var out []FieldError
 	bad := func(path, msg string) {
@@ -120,13 +125,22 @@ func validatePolicy(d *declaration, limit int) []FieldError {
 			}
 		case "url":
 			u, e := url.Parse(a.URL)
-			if e != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" || u.User != nil {
+			port, portErr := strconv.Atoi(cmp.Or(u.Port(), "443"))
+			if e != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" || u.User != nil ||
+				portErr != nil || port < 1 || port > 65535 || invalidText(a.URL, true) || strings.ContainsAny(a.URL, " \t") {
 				bad(p+"/url", "Expected an https or http URL with a host and no user name or password.")
 			}
 		case "hostnames":
 			for j, name := range a.Names {
 				lower := strings.ToLower(name)
-				if _, e := netip.ParseAddr(name); e == nil || !searchDomain.MatchString(lower) {
+				labels := strings.Split(lower, ".")
+				// A resolver reads a name whose last label is a number, such as 127.1 or 0x7f.1, as an address.
+				last := labels[len(labels)-1]
+				_, numeric := strconv.ParseUint(last, 10, 64)
+				if hex, ok := strings.CutPrefix(last, "0x"); ok {
+					_, numeric = strconv.ParseUint(hex, 16, 64)
+				}
+				if _, e := netip.ParseAddr(name); e == nil || !searchDomain.MatchString(lower) || numeric == nil {
 					bad(fmt.Sprintf("%s/names/%d", p, j), "Expected a host name, such as vpn.example.com, not an address.")
 				} else if slices.ContainsFunc(a.Names[:j], func(n string) bool { return strings.EqualFold(n, name) }) {
 					bad(fmt.Sprintf("%s/names/%d", p, j), "Host name is listed twice.")
@@ -241,6 +255,11 @@ func validatePolicy(d *declaration, limit int) []FieldError {
 			if s.Not {
 				if len(s.Addresses) == 0 {
 					bad(fmt.Sprintf("%s/%s/not", p, field), "Name the addresses to leave out.")
+				}
+				for j, ref := range s.Addresses {
+					if a := addresses[ref]; a != nil && a.dynamic() {
+						bad(fmt.Sprintf("%s/%s/addresses/%d", p, field, j), negatedDynamic)
+					}
 				}
 				if len(s.Addresses) > maxLeftOut {
 					bad(fmt.Sprintf("%s/%s/addresses", p, field), fmt.Sprintf("A side leaves out at most %d aliases. Put more of them in a group.", maxLeftOut))

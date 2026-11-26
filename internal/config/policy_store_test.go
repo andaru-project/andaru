@@ -170,6 +170,8 @@ func TestDynamicAliases(t *testing.T) {
 		{"op":"create","collection":"aliases.addresses","localId":"vpn","value":{"name":"vpn","kind":"hostnames","names":["vpn.example.com","VPN2.example.com"],"refreshSeconds":300}},
 		{"op":"create","collection":"aliases.addresses","localId":"v6","value":{"name":"v6","kind":"network","prefix":"2001:db8::/64"}},
 		{"op":"create","collection":"rules","value":{"name":"r","enabled":true,"action":"accept","from":{"zones":[],"addresses":["@cf"]},"to":{"zones":[],"addresses":["@vpn","@v6"]},"ports":[],"log":false}},
+		{"op":"create","collection":"aliases.addresses","localId":"h4","value":{"name":"h4","kind":"host","address":"192.0.2.7"}},
+		{"op":"create","collection":"rules","value":{"name":"mixed","enabled":true,"action":"accept","from":{"zones":[],"addresses":["@cf","@h4"]},"to":{"zones":[],"addresses":["@v6"]},"ports":[],"log":false}},
 		{"op":"create","collection":"nat.portForwards","value":{"name":"web","enabled":true,"ingressZones":["`+s.Config.Zones[0].ID+`"],"protocol":"tcp","from":["@cf"],"to":{"self":true},"ports":"443","target":{"address":"192.0.2.10"}}},
 		{"op":"replace","collection":"management","expectedVersion":"0","value":{"segment":"`+seg+`"}}]}`)
 	cf, vpn := p.Created["cf"], p.Created["vpn"]
@@ -205,21 +207,32 @@ func TestDynamicAliases(t *testing.T) {
 	for i := range names {
 		names[i] = `"h` + strconv.Itoa(i) + `.example.com"`
 	}
+	// A TLD that spells a hex number is still a name.
+	mustRun(t, &s, create(`{"name":"cafe","kind":"hostnames","names":["menu.cafe","ad.ad"],"refreshSeconds":60}`))
 	for name, tc := range map[string]struct{ batch, path string }{
-		"ftp URL":              {create(`{"name":"x","kind":"url","url":"ftp://lists.example/v4","refreshSeconds":60}`), "/operations/0/value/url"},
-		"URL with a user":      {create(`{"name":"x","kind":"url","url":"https://me:pw@lists.example/v4","refreshSeconds":60}`), "/operations/0/value/url"},
-		"URL without a host":   {create(`{"name":"x","kind":"url","url":"https:///v4","refreshSeconds":60}`), "/operations/0/value/url"},
-		"no refreshSeconds":    {create(`{"name":"x","kind":"url","url":"https://lists.example/v4"}`), "/operations/0/value/refreshSeconds"},
-		"refreshSeconds 59":    {create(`{"name":"x","kind":"url","url":"https://lists.example/v4","refreshSeconds":59}`), "/operations/0/value/refreshSeconds"},
-		"refreshSeconds 86401": {create(`{"name":"x","kind":"hostnames","names":["a.example"],"refreshSeconds":86401}`), "/operations/0/value/refreshSeconds"},
-		"names on a url alias": {create(`{"name":"x","kind":"url","url":"https://lists.example/v4","names":["a.example"],"refreshSeconds":60}`), "/operations/0/value/names"},
-		"a url on a host":      {create(`{"name":"x","kind":"host","address":"192.0.2.1","url":"https://lists.example/v4"}`), "/operations/0/value/url"},
-		"no names":             {create(`{"name":"x","kind":"hostnames","refreshSeconds":60}`), "/operations/0/value/names"},
-		"21 names":             {create(`{"name":"x","kind":"hostnames","names":[` + strings.Join(names, ",") + `],"refreshSeconds":60}`), "/operations/0/value/names"},
-		"duplicate names":      {create(`{"name":"x","kind":"hostnames","names":["a.example","A.example"],"refreshSeconds":60}`), "/operations/0/value/names/1"},
-		"an address as a name": {create(`{"name":"x","kind":"hostnames","names":["192.0.2.1"],"refreshSeconds":60}`), "/operations/0/value/names/0"},
-		"a trailing dot":       {create(`{"name":"x","kind":"hostnames","names":["a.example."],"refreshSeconds":60}`), "/operations/0/value/names/0"},
-		"a group member":       {create(`{"name":"x","kind":"group","members":["` + cf + `"]}`), "/operations/0/value/members/0"},
+		"ftp URL":                       {create(`{"name":"x","kind":"url","url":"ftp://lists.example/v4","refreshSeconds":60}`), "/operations/0/value/url"},
+		"URL with a user":               {create(`{"name":"x","kind":"url","url":"https://me:pw@lists.example/v4","refreshSeconds":60}`), "/operations/0/value/url"},
+		"URL without a host":            {create(`{"name":"x","kind":"url","url":"https:///v4","refreshSeconds":60}`), "/operations/0/value/url"},
+		"no refreshSeconds":             {create(`{"name":"x","kind":"url","url":"https://lists.example/v4"}`), "/operations/0/value/refreshSeconds"},
+		"refreshSeconds 59":             {create(`{"name":"x","kind":"url","url":"https://lists.example/v4","refreshSeconds":59}`), "/operations/0/value/refreshSeconds"},
+		"refreshSeconds 86401":          {create(`{"name":"x","kind":"hostnames","names":["a.example"],"refreshSeconds":86401}`), "/operations/0/value/refreshSeconds"},
+		"names on a url alias":          {create(`{"name":"x","kind":"url","url":"https://lists.example/v4","names":["a.example"],"refreshSeconds":60}`), "/operations/0/value/names"},
+		"a url on a host":               {create(`{"name":"x","kind":"host","address":"192.0.2.1","url":"https://lists.example/v4"}`), "/operations/0/value/url"},
+		"no names":                      {create(`{"name":"x","kind":"hostnames","refreshSeconds":60}`), "/operations/0/value/names"},
+		"21 names":                      {create(`{"name":"x","kind":"hostnames","names":[` + strings.Join(names, ",") + `],"refreshSeconds":60}`), "/operations/0/value/names"},
+		"duplicate names":               {create(`{"name":"x","kind":"hostnames","names":["a.example","A.example"],"refreshSeconds":60}`), "/operations/0/value/names/1"},
+		"an address as a name":          {create(`{"name":"x","kind":"hostnames","names":["192.0.2.1"],"refreshSeconds":60}`), "/operations/0/value/names/0"},
+		"a trailing dot":                {create(`{"name":"x","kind":"hostnames","names":["a.example."],"refreshSeconds":60}`), "/operations/0/value/names/0"},
+		"a numeric name":                {create(`{"name":"x","kind":"hostnames","names":["127.1"],"refreshSeconds":60}`), "/operations/0/value/names/0"},
+		"a hex name":                    {create(`{"name":"x","kind":"hostnames","names":["0x7f.1"],"refreshSeconds":60}`), "/operations/0/value/names/0"},
+		"a URL with a space":            {create(`{"name":"x","kind":"url","url":"https://lists.example/v4 ","refreshSeconds":60}`), "/operations/0/value/url"},
+		"a URL with a format character": {create(`{"name":"x","kind":"url","url":"https://lists.example/\u202etxt","refreshSeconds":60}`), "/operations/0/value/url"},
+		"a URL with a bad port":         {create(`{"name":"x","kind":"url","url":"https://lists.example:99999/v4","refreshSeconds":60}`), "/operations/0/value/url"},
+		"left out of a rule": {`{"operations":[{"op":"create","collection":"rules","value":{"name":"n","enabled":true,"action":"drop","from":{"zones":[],"addresses":["` + cf + `"],"not":true},"to":{"zones":[],"addresses":[]},"ports":[],"log":false}}]}`,
+			"/operations/0/value/from/addresses/0"},
+		"left out of a port forward": {`{"operations":[{"op":"create","collection":"nat.portForwards","value":{"name":"n","enabled":true,"ingressZones":["` + s.Config.Zones[0].ID + `"],"protocol":"tcp","from":["` + cf + `"],"fromNegated":true,"to":{"self":true},"ports":"8443","target":{"address":"192.0.2.10"}}}]}`,
+			"/operations/0/value/from/0"},
+		"a group member": {create(`{"name":"x","kind":"group","members":["` + cf + `"]}`), "/operations/0/value/members/0"},
 		"a management source": {`{"operations":[{"op":"replace","collection":"management","expectedVersion":"` + string(s.Versions[listKey("management")].Version) + `","value":{"segment":"` + seg + `","allowedSources":["` + vpn + `"]}}]}`,
 			"/operations/0/value/allowedSources/0"},
 	} {
