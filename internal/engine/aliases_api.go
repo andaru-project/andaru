@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -79,20 +80,29 @@ func (h aliasesAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h aliasesAPI) status(w http.ResponseWriter, r *http.Request) {
-	h.feeds.mu.Lock()
-	defer h.feeds.mu.Unlock()
-	list, _, err := h.feeds.aliases(r.Context())
+	// Written once the lock is released: a client that does not read holds up no schedule or result.
+	items, err := h.statusItems(r.Context())
 	if err != nil {
 		slog.ErrorContext(r.Context(), "read the saved aliases", "error", err)
 		writeError(w, r, http.StatusServiceUnavailable, "ALIASES_UNAVAILABLE", "Aliases are temporarily unavailable.")
 		return
+	}
+	writeJSON(w, r, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h aliasesAPI) statusItems(ctx context.Context) ([]aliasStatus, error) {
+	h.feeds.mu.Lock()
+	defer h.feeds.mu.Unlock()
+	list, _, err := h.feeds.aliases(ctx)
+	if err != nil {
+		return nil, err
 	}
 	items := []aliasStatus{}
 	for _, a := range list {
 		// Read only: a state that does not decode is moved aside by the engine's next write, not by a read.
 		s, err := aliasfeed.Read(h.feeds.stateDir, a.ID, sourceOf(a).hash)
 		if err != nil {
-			slog.WarnContext(r.Context(), "read an alias source's state", "alias", a.ID, "error", err)
+			slog.WarnContext(ctx, "read an alias source's state", "alias", a.ID, "error", err)
 		}
 		item := aliasStatus{ID: a.ID, Name: a.Name, Kind: a.Kind, LastSuccess: when(s.LastSuccess), LastAttempt: when(s.LastAttempt),
 			Entries: len(s.Members), LastError: s.LastError, Failures: s.Failures}
@@ -107,5 +117,5 @@ func (h aliasesAPI) status(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, item)
 	}
-	writeJSON(w, r, http.StatusOK, map[string]any{"items": items})
+	return items, nil
 }

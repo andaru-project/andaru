@@ -797,3 +797,33 @@ func TestAnOwedLoadIsTriedAgainOnAnyApply(t *testing.T) {
 		t.Fatal("an owed load was not tried again")
 	}
 }
+
+// blockedWriter is a client that stops reading: each write waits until release is closed.
+type blockedWriter struct {
+	*httptest.ResponseRecorder
+	writing, release chan struct{}
+}
+
+func (w blockedWriter) Write(p []byte) (int, error) {
+	close(w.writing)
+	<-w.release
+	return w.ResponseRecorder.Write(p)
+}
+
+// The status is written once the lock is released: a client that stops reading holds up no schedule or result.
+func TestAliasStatusIsWrittenWithoutTheLock(t *testing.T) {
+	b := newFeedBench(t)
+	w := blockedWriter{httptest.NewRecorder(), make(chan struct{}), make(chan struct{})}
+	done := make(chan struct{})
+	go func() { defer close(done); aliasesAPI{feeds: b.f}.status(w, httptest.NewRequest(http.MethodGet, aliasesPath+"/status", nil)) }()
+	<-w.writing
+	locked := b.f.mu.TryLock()
+	if locked {
+		b.f.mu.Unlock()
+	}
+	close(w.release)
+	<-done
+	if !locked {
+		t.Fatal("the status held the lock while it was written")
+	}
+}
