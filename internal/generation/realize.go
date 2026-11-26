@@ -297,9 +297,12 @@ func (r Realizer) dropStaleIPv6(ctx context.Context, to []placed) {
 				continue
 			}
 			address := netip.PrefixFrom(ip, a.PrefixLength)
+			if slices.Contains(declared, address) { // networkd may not have made it static yet
+				continue
+			}
 			r.ip(ctx, l.Name, address, "address", "del", address.String(), "dev", l.Name)
-			// A /128 has no prefix route, and one the new file still numbers stays.
-			if route := address.Masked(); route.Bits() < 128 && !routes[route] && !slices.ContainsFunc(declared, route.Overlaps) {
+			// A /128 has no prefix route, and the prefix of an address the new file declares keeps its own.
+			if route := address.Masked(); route.Bits() < 128 && !routes[route] && !slices.ContainsFunc(declared, func(p netip.Prefix) bool { return p.Masked() == route }) {
 				routes[route] = true
 				r.ip(ctx, l.Name, address, "route", "del", route.String(), "dev", l.Name)
 			}
@@ -328,7 +331,8 @@ func declaredPrefixes(data []byte) []netip.Prefix {
 }
 
 // takesDynamicIPv6 says whether a rendered .network file may get IPv6 addresses from DHCPv6, delegation or router
-// advertisements, which networkd accepts unless told not to, or belongs to a PPP session.
+// advertisements, which networkd accepts unless told not to, or belongs to a PPP session. It errs towards true: a
+// stale address it keeps only lives until its lifetime ends.
 func takesDynamicIPv6(data []byte) bool {
 	lines := strings.Split(string(data), "\n")
 	return pppNetwork(data) || !slices.Contains(lines, "IPv6AcceptRA=no") ||

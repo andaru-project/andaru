@@ -80,15 +80,20 @@ func TestTakesDynamicIPv6(t *testing.T) {
 	}
 }
 
-// The prefix route of an address the new file still declares stays, and one prefix is removed only once.
+// The prefix route of an address the new file still declares stays, and so does that address; one prefix is removed
+// only once.
 func TestStaleRouteKeepsADeclaredPrefix(t *testing.T) {
 	b := staleBench(t, lanDelegated)
-	b.net.dynamic["eth1"] = []string{"fd00:a5d::1/64", "fd00:a5d::2/64", "fd00:b::1/64", "fd00:c::1/128"}
-	static := "[Match]\nName=eth1\n\n[Network]\nLinkLocalAddressing=no\nIPv6AcceptRA=no\nAddress=fd00:b::9/64\n"
+	b.net.dynamic["eth1"] = []string{"fd00:a5d::1/64", "fd00:a5d::2/64", "fd00:b::1/64", "fd00:c::1/128", "fd00:d::/60", "fd00:e::1/64"}
+	// fd00:d:0:1::1/64 sits inside the stale /60 without being it; fd00:e::1/64 is declared as it is.
+	static := "[Match]\nName=eth1\n\n[Network]\nLinkLocalAddressing=no\nIPv6AcceptRA=no\nAddress=fd00:b::9/64\nAddress=fd00:d:0:1::1/64\nAddress=fd00:e::1/64\n"
 	if err := b.applyConfirmed(map[string]string{"50-andaru-eth0.network": uplinkDHCP, "50-andaru-eth1.network": static}); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"eth1 fd00:a5d::/64"}; !slices.Equal(b.net.staleRoutes, want) {
+	if want := []string{"eth1 fd00:a5d::/64", "eth1 fd00:d::/60"}; !slices.Equal(b.net.staleRoutes, want) {
 		t.Fatalf("routes removed %q, want %q", b.net.staleRoutes, want)
+	}
+	if want := []string{"fd00:e::1/64"}; !slices.Equal(b.net.dynamic["eth1"], want) {
+		t.Fatalf("eth1 keeps %q, want %q", b.net.dynamic["eth1"], want)
 	}
 }
