@@ -281,11 +281,15 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 			return
 		}
 		// The channels are the notifications' settings: whichever route carries a change to them, it takes
-		// notifications.manage, and configuration.read too, since a channel is sent the applies and upgrade decisions
-		// only that capability sees.
-		if slices.ContainsFunc(changes.Operations, func(o config.Operation) bool { return o.Collection == "notifications.channels" }) &&
-			!(hasCapability(actor, authz.NotificationsManage) && hasCapability(actor, authz.ConfigurationRead)) {
-			writeError(w, r, http.StatusForbidden, "FORBIDDEN", "Changing notification channels requires notifications.manage and configuration.read.")
+		// notifications.manage, and configuration.read too to create or replace one, since a channel is sent the applies
+		// and upgrade decisions only that capability sees. shortcut: checked when a channel is saved, not when its
+		// saver later loses the capability, nor for other capabilities a notification may require; check per raise if
+		// channels get owners.
+		channelOp := func(o config.Operation) bool { return o.Collection == "notifications.channels" }
+		sends := func(o config.Operation) bool { return channelOp(o) && o.Op != "delete" } // deleting one sends nothing
+		if slices.ContainsFunc(changes.Operations, channelOp) && !hasCapability(actor, authz.NotificationsManage) ||
+			slices.ContainsFunc(changes.Operations, sends) && !hasCapability(actor, authz.ConfigurationRead) {
+			writeError(w, r, http.StatusForbidden, "FORBIDDEN", "Changing notification channels requires notifications.manage, and configuration.read unless deleting.")
 			return
 		}
 		result, e := store.Save(r.Context(), actor.Actor, changes)

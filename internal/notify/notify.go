@@ -214,7 +214,6 @@ func (l *Layer) handle(m bus.Message) error {
 		l.log.Warn("notifications may have been missed")
 		r = Raise{Key: "missed", Severity: Warning, Subject: "Notifications may have been missed",
 			Detail: "Some notifications were lost before Andaru could record them. Check the engine journal for what happened."}
-		// shortcut: a gap is not marked seen, so one whose delivery fails is not sent on its retry; mark it if it matters.
 		e = bus.Event{ID: uuid.NewString(), Type: RaisedType, Time: time.Now().UTC(), Source: "notifications", Data: r}
 		if change, err = raise(tx, e.Source, r, e.Time); err == nil && change {
 			payload, err = json.Marshal(e)

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -24,6 +25,7 @@ func deliverNotifications(events *bus.Bus, channels channelReader, log *slog.Log
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		list, err := channels(ctx)
+		var failed error
 		if err != nil {
 			return fmt.Errorf("read the notification channels: %w", err)
 		}
@@ -41,11 +43,10 @@ func deliverNotifications(events *bus.Bus, channels channelReader, log *slog.Log
 			if now := time.Now().UTC(); raised.After(now) {
 				raised = now
 			}
-			if err = publishJob(events, c, e.ID+":"+c.ID, e.Source, raised, r, payload); err != nil {
-				return err
-			}
+			// One channel's failure keeps no other from its job.
+			failed = errors.Join(failed, publishJob(events, c, e.ID+":"+c.ID, e.Source, raised, r, payload))
 		}
-		return nil
+		return failed
 	}
 }
 

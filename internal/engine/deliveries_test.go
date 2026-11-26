@@ -236,3 +236,25 @@ func TestTestChannel(t *testing.T) {
 		t.Fatalf("jobs %+v", got)
 	}
 }
+
+// A job one channel cannot be given keeps no other channel from its job.
+func TestOneChannelFailureKeepsTheOthers(t *testing.T) {
+	events, ch := jobBus(t)
+	broken := plainChannel
+	broken.ID = "ntf_#" // no topic can hold it
+	list := func(context.Context) ([]config.NotificationChannel, error) {
+		return []config.NotificationChannel{broken, opsChannel}, nil
+	}
+	r := notify.Raise{Key: "k", Severity: notify.Critical, Subject: "s"}
+	payload, _ := bus.NewEvent(notify.RaisedType, "engine", r)
+	var e bus.Event
+	if err := json.Unmarshal(payload, &e); err != nil {
+		t.Fatal(err)
+	}
+	if err := deliverNotifications(events, list, slog.New(slog.DiscardHandler))(e, r, payload); err == nil {
+		t.Fatal("the broken channel's failure was not reported")
+	}
+	if got := jobs(t, ch); len(got) != 1 || got[0].job.Channel != opsChannel.ID {
+		t.Fatalf("jobs %+v", got)
+	}
+}

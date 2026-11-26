@@ -194,7 +194,7 @@ printf '%s\n' '{"name":"ops","kind":"webhook","filter":{"minSeverity":"warning",
   | sudo andaru ctl config create notifications/channels
 ```
 
-- **Who:** reading them takes `configuration.read`; creating, replacing or deleting one takes `notifications.manage` and `configuration.read` (a channel is sent the applies and upgrade decisions that only `configuration.read` sees), on these routes and in a batch on `/api/v1/config/changes` alike.
+- **Who:** reading them takes `configuration.read`; creating, replacing or deleting one takes `notifications.manage`, and creating or replacing one `configuration.read` as well (a channel is sent the applies and upgrade decisions that only `configuration.read` sees; the check is made when the channel is saved), on these routes and in a batch on `/api/v1/config/changes` alike.
 - **`kind`:** `webhook` only, for now.
 - **`enabled`:** defaults to `true` when omitted.
 - **`filter`:** `minSeverity` is `info` (the default), `warning` or `critical`; `sources` names the sources to send, and an empty or absent list means all of them.

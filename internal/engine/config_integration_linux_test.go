@@ -953,4 +953,16 @@ func TestNotificationChannelsNeedNotificationsManage(t *testing.T) {
 			t.Fatalf("capabilities %v: %d %s", s.capabilities, w.Code, w.Body)
 		}
 	}
+	// Deleting one sends nothing, so it takes notifications.manage alone.
+	del := `{"operations":[{"op":"delete","collection":"notifications.channels","id":"ntf_00000000-0000-4000-8000-000000000009","expectedVersion":"1"}]}`
+	r := httptest.NewRequest("POST", "/api/v1/config/changes", strings.NewReader(del))
+	r.Header.Set("Content-Type", "application/json")
+	r = r.WithContext(context.WithValue(r.Context(), authenticatedActorKey{}, requestActor{
+		Actor: authz.Actor{Kind: authz.ActorAccount, ID: "00000000-0000-4000-8000-000000000001"}, AccountID: "00000000-0000-4000-8000-000000000001",
+		Source: "unix", Capabilities: []authz.Capability{authz.ConfigurationWrite, authz.NotificationsManage}}))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code == 403 {
+		t.Fatalf("delete refused: %s", w.Body)
+	}
 }
