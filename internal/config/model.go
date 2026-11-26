@@ -367,10 +367,13 @@ type notifications struct {
 // channel is where notifications are sent. Enabled and the filter's minimum severity get their defaults on save.
 type channel struct {
 	identity
-	Enabled *bool         `json:"enabled,omitempty"`
-	Kind    string        `json:"kind"`
-	Filter  channelFilter `json:"filter"`
-	Webhook *webhook      `json:"webhook,omitempty"`
+	Enabled  *bool         `json:"enabled,omitempty"`
+	Kind     string        `json:"kind"`
+	Filter   channelFilter `json:"filter"`
+	Webhook  *webhook      `json:"webhook,omitempty"`
+	Ntfy     *ntfy         `json:"ntfy,omitempty"`
+	Pushover *pushover     `json:"pushover,omitempty"`
+	Telegram *telegram     `json:"telegram,omitempty"`
 }
 type channelFilter struct {
 	MinSeverity string   `json:"minSeverity,omitempty"`
@@ -381,6 +384,46 @@ type channelFilter struct {
 type webhook struct {
 	URL           secretReference  `json:"url"`
 	Authorization *secretReference `json:"authorization,omitempty"`
+}
+
+// ntfy is a topic on an ntfy server; Token, when set, is sent as a bearer token.
+type ntfy struct {
+	Server string           `json:"server"`
+	Topic  string           `json:"topic"`
+	Token  *secretReference `json:"token,omitempty"`
+}
+
+// pushover is a Pushover application's token and the user key it sends to.
+type pushover struct {
+	Token secretReference `json:"token"`
+	User  secretReference `json:"user"`
+}
+
+// telegram is a Telegram bot's token and the chat it sends to.
+type telegram struct {
+	Token  secretReference `json:"token"`
+	ChatID string          `json:"chatId"`
+}
+
+// channelSecret is one of a channel's secret references, at its path below the channel; an optional one left out is nil.
+type channelSecret struct {
+	path string
+	ref  *secretReference
+}
+
+// secrets are c's secret references, with the optional ones it leaves out.
+func (c *channel) secrets() []channelSecret {
+	switch {
+	case c.Webhook != nil:
+		return []channelSecret{{"/webhook/url", &c.Webhook.URL}, {"/webhook/authorization", c.Webhook.Authorization}}
+	case c.Ntfy != nil:
+		return []channelSecret{{"/ntfy/token", c.Ntfy.Token}}
+	case c.Pushover != nil:
+		return []channelSecret{{"/pushover/token", &c.Pushover.Token}, {"/pushover/user", &c.Pushover.User}}
+	case c.Telegram != nil:
+		return []channelSecret{{"/telegram/token", &c.Telegram.Token}}
+	}
+	return nil
 }
 
 // virtualAddress is an address the firewall holds on its dummy interface, answered on every segment the filter lets reach it.

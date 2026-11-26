@@ -3889,7 +3889,10 @@
             },
             "kind": {
               "enum": [
-                "webhook"
+                "webhook",
+                "ntfy",
+                "pushover",
+                "telegram"
               ]
             },
             "filter": {
@@ -3917,8 +3920,61 @@
             }
           },
           "required": [
-            "kind",
-            "webhook"
+            "kind"
+          ],
+          "oneOf": [
+            {
+              "properties": {
+                "kind": {
+                  "const": "webhook"
+                },
+                "ntfy": false,
+                "pushover": false,
+                "telegram": false
+              },
+              "required": [
+                "webhook"
+              ]
+            },
+            {
+              "properties": {
+                "kind": {
+                  "const": "ntfy"
+                },
+                "webhook": false,
+                "pushover": false,
+                "telegram": false
+              },
+              "required": [
+                "ntfy"
+              ]
+            },
+            {
+              "properties": {
+                "kind": {
+                  "const": "pushover"
+                },
+                "webhook": false,
+                "ntfy": false,
+                "telegram": false
+              },
+              "required": [
+                "pushover"
+              ]
+            },
+            {
+              "properties": {
+                "kind": {
+                  "const": "telegram"
+                },
+                "webhook": false,
+                "ntfy": false,
+                "pushover": false
+              },
+              "required": [
+                "telegram"
+              ]
+            }
           ]
         }
       ]
@@ -3943,6 +3999,57 @@
               },
               "required": [
                 "url"
+              ],
+              "additionalProperties": false
+            },
+            "ntfy": {
+              "type": "object",
+              "properties": {
+                "server": {
+                  "$ref": "#/$defs/ntfyServer"
+                },
+                "topic": {
+                  "$ref": "#/$defs/ntfyTopic"
+                },
+                "token": {
+                  "$ref": "#/$defs/secretRef"
+                }
+              },
+              "required": [
+                "server",
+                "topic"
+              ],
+              "additionalProperties": false
+            },
+            "pushover": {
+              "type": "object",
+              "properties": {
+                "token": {
+                  "$ref": "#/$defs/secretRef"
+                },
+                "user": {
+                  "$ref": "#/$defs/secretRef"
+                }
+              },
+              "required": [
+                "token",
+                "user"
+              ],
+              "additionalProperties": false
+            },
+            "telegram": {
+              "type": "object",
+              "properties": {
+                "token": {
+                  "$ref": "#/$defs/secretRef"
+                },
+                "chatId": {
+                  "$ref": "#/$defs/telegramChatID"
+                }
+              },
+              "required": [
+                "token",
+                "chatId"
               ],
               "additionalProperties": false
             }
@@ -3976,6 +4083,57 @@
                 "url"
               ],
               "additionalProperties": false
+            },
+            "ntfy": {
+              "type": "object",
+              "properties": {
+                "server": {
+                  "$ref": "#/$defs/ntfyServer"
+                },
+                "topic": {
+                  "$ref": "#/$defs/ntfyTopic"
+                },
+                "token": {
+                  "$ref": "#/$defs/secretWrite"
+                }
+              },
+              "required": [
+                "server",
+                "topic"
+              ],
+              "additionalProperties": false
+            },
+            "pushover": {
+              "type": "object",
+              "properties": {
+                "token": {
+                  "$ref": "#/$defs/secretWrite"
+                },
+                "user": {
+                  "$ref": "#/$defs/secretWrite"
+                }
+              },
+              "required": [
+                "token",
+                "user"
+              ],
+              "additionalProperties": false
+            },
+            "telegram": {
+              "type": "object",
+              "properties": {
+                "token": {
+                  "$ref": "#/$defs/secretWrite"
+                },
+                "chatId": {
+                  "$ref": "#/$defs/telegramChatID"
+                }
+              },
+              "required": [
+                "token",
+                "chatId"
+              ],
+              "additionalProperties": false
             }
           }
         }
@@ -4004,6 +4162,57 @@
                 "url"
               ],
               "additionalProperties": false
+            },
+            "ntfy": {
+              "type": "object",
+              "properties": {
+                "server": {
+                  "$ref": "#/$defs/ntfyServer"
+                },
+                "topic": {
+                  "$ref": "#/$defs/ntfyTopic"
+                },
+                "token": {
+                  "$ref": "#/$defs/secretView"
+                }
+              },
+              "required": [
+                "server",
+                "topic"
+              ],
+              "additionalProperties": false
+            },
+            "pushover": {
+              "type": "object",
+              "properties": {
+                "token": {
+                  "$ref": "#/$defs/secretView"
+                },
+                "user": {
+                  "$ref": "#/$defs/secretView"
+                }
+              },
+              "required": [
+                "token",
+                "user"
+              ],
+              "additionalProperties": false
+            },
+            "telegram": {
+              "type": "object",
+              "properties": {
+                "token": {
+                  "$ref": "#/$defs/secretView"
+                },
+                "chatId": {
+                  "$ref": "#/$defs/telegramChatID"
+                }
+              },
+              "required": [
+                "token",
+                "chatId"
+              ],
+              "additionalProperties": false
             }
           },
           "required": [
@@ -4012,6 +4221,19 @@
         }
       ],
       "unevaluatedProperties": false
+    },
+    "ntfyServer": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048
+    },
+    "ntfyTopic": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+    },
+    "telegramChatID": {
+      "type": "string",
+      "pattern": "^(-?[0-9]{1,63}|@[A-Za-z0-9_]{1,63})$"
     }
   }
 }

@@ -98,16 +98,31 @@ func TestChannelLifecycle(t *testing.T) {
 
 func TestChannelRefusals(t *testing.T) {
 	for name, c := range map[string]struct{ body, path string }{
-		"missing secret":   {`{"name":"x","kind":"webhook","webhook":{"url":{"secret":"NOPE"}}}`, "/webhook/url"},
-		"not a url":        {`{"name":"x","kind":"webhook","webhook":{"url":{"secret":"WAN_PASSWORD"}}}`, "/webhook/url"},
-		"ftp":              {`{"name":"x","kind":"webhook","webhook":{"url":{"secret":"U","set":"ftp://hooks.example/","expectedVersion":"0"}}}`, "/webhook/url"},
-		"no host":          {`{"name":"x","kind":"webhook","webhook":{"url":{"secret":"U","set":"https:///path","expectedVersion":"0"}}}`, "/webhook/url"},
-		"bad severity":     {`{"name":"x","kind":"webhook","filter":{"minSeverity":"debug"},"webhook":{"url":{"secret":"U","set":"https://h/","expectedVersion":"0"}}}`, "/filter/minSeverity"},
-		"empty source":     {`{"name":"x","kind":"webhook","filter":{"sources":[""]},"webhook":{"url":{"secret":"U","set":"https://h/","expectedVersion":"0"}}}`, "/filter/sources/0"},
-		"control source":   {`{"name":"x","kind":"webhook","filter":{"sources":["a\u0007"]},"webhook":{"url":{"secret":"U","set":"https://h/","expectedVersion":"0"}}}`, "/filter/sources/0"},
-		"other kind":       {`{"name":"x","kind":"email","webhook":{"url":{"secret":"U","set":"https://h/","expectedVersion":"0"}}}`, "/kind"},
-		"no webhook":       {`{"name":"x","kind":"webhook"}`, ""},
-		"duplicate setter": {`{"name":"x","kind":"webhook","webhook":{"url":{"secret":"U","set":"https://h/","expectedVersion":"0"},"authorization":{"secret":"U","set":"https://h/","expectedVersion":"0"}}}`, "/webhook/authorization"},
+		"missing secret":        {`{"name":"x","kind":"webhook","webhook":{"url":{"secret":"NOPE"}}}`, "/webhook/url"},
+		"not a url":             {`{"name":"x","kind":"webhook","webhook":{"url":{"secret":"WAN_PASSWORD"}}}`, "/webhook/url"},
+		"ftp":                   {`{"name":"x","kind":"webhook","webhook":{"url":{"secret":"U","set":"ftp://hooks.example/","expectedVersion":"0"}}}`, "/webhook/url"},
+		"no host":               {`{"name":"x","kind":"webhook","webhook":{"url":{"secret":"U","set":"https:///path","expectedVersion":"0"}}}`, "/webhook/url"},
+		"bad severity":          {`{"name":"x","kind":"webhook","filter":{"minSeverity":"debug"},"webhook":{"url":{"secret":"U","set":"https://h/","expectedVersion":"0"}}}`, "/filter/minSeverity"},
+		"empty source":          {`{"name":"x","kind":"webhook","filter":{"sources":[""]},"webhook":{"url":{"secret":"U","set":"https://h/","expectedVersion":"0"}}}`, "/filter/sources/0"},
+		"control source":        {`{"name":"x","kind":"webhook","filter":{"sources":["a\u0007"]},"webhook":{"url":{"secret":"U","set":"https://h/","expectedVersion":"0"}}}`, "/filter/sources/0"},
+		"other kind":            {`{"name":"x","kind":"email","webhook":{"url":{"secret":"U","set":"https://h/","expectedVersion":"0"}}}`, "/kind"},
+		"no webhook":            {`{"name":"x","kind":"webhook"}`, ""},
+		"ntfy without ntfy":     {`{"name":"x","kind":"ntfy","webhook":{"url":{"secret":"U","set":"https://h/","expectedVersion":"0"}}}`, ""},
+		"ntfy credentials":      {`{"name":"x","kind":"ntfy","ntfy":{"server":"https://alice:hunter2@ntfy.example","topic":"t"}}`, "/ntfy/server"},
+		"ntfy query":            {`{"name":"x","kind":"ntfy","ntfy":{"server":"https://ntfy.example/?a=b","topic":"t"}}`, "/ntfy/server"},
+		"ntfy fragment":         {`{"name":"x","kind":"ntfy","ntfy":{"server":"https://ntfy.example/#f","topic":"t"}}`, "/ntfy/server"},
+		"ntfy and webhook":      {`{"name":"x","kind":"ntfy","ntfy":{"server":"https://ntfy.sh","topic":"t"},"webhook":{"url":{"secret":"U","set":"https://h/","expectedVersion":"0"}}}`, ""},
+		"ntfy bad topic":        {`{"name":"x","kind":"ntfy","ntfy":{"server":"https://ntfy.sh","topic":"a/b"}}`, "/ntfy/topic"},
+		"ntfy long topic":       {`{"name":"x","kind":"ntfy","ntfy":{"server":"https://ntfy.sh","topic":"` + strings.Repeat("a", 65) + `"}}`, "/ntfy/topic"},
+		"ntfy bad server":       {`{"name":"x","kind":"ntfy","ntfy":{"server":"ftp://ntfy.sh","topic":"t"}}`, "/ntfy/server"},
+		"ntfy no topic":         {`{"name":"x","kind":"ntfy","ntfy":{"server":"https://ntfy.sh"}}`, ""},
+		"ntfy password token":   {`{"name":"x","kind":"ntfy","ntfy":{"server":"https://ntfy.sh","topic":"t","token":{"secret":"WAN_PASSWORD"}}}`, "/ntfy/token"},
+		"pushover no user":      {`{"name":"x","kind":"pushover","pushover":{"token":{"secret":"T","set":"a","expectedVersion":"0"}}}`, ""},
+		"pushover missing user": {`{"name":"x","kind":"pushover","pushover":{"token":{"secret":"T","set":"a","expectedVersion":"0"},"user":{"secret":"NOPE"}}}`, "/pushover/user"},
+		"telegram no token":     {`{"name":"x","kind":"telegram","telegram":{"chatId":"-100"}}`, ""},
+		"telegram bad chat":     {`{"name":"x","kind":"telegram","telegram":{"token":{"secret":"T","set":"1:a","expectedVersion":"0"},"chatId":"12a"}}`, "/telegram/chatId"},
+		"telegram plain token":  {`{"name":"x","kind":"telegram","telegram":{"token":"1:a","chatId":"-100"}}`, ""},
+		"duplicate setter":      {`{"name":"x","kind":"webhook","webhook":{"url":{"secret":"U","set":"https://h/","expectedVersion":"0"},"authorization":{"secret":"U","set":"https://h/","expectedVersion":"0"}}}`, "/webhook/authorization"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := seededState(t)
@@ -129,6 +144,48 @@ func TestChannelRefusals(t *testing.T) {
 	_, e = channelChange(t, &s, "create", "", "", `{"name":"ops","kind":"webhook","webhook":{"url":{"secret":"OPS_URL"}}}`, "9")
 	if f := requireFault(t, e, "VALIDATION_FAILED"); f.Details[0].Path != "/name" {
 		t.Fatalf("duplicate name %+v", f.Details)
+	}
+}
+
+// ntfy, Pushover and Telegram channels hold their tokens as secrets of the kind notification, shown as set and
+// versioned only.
+func TestAppChannelKinds(t *testing.T) {
+	for _, row := range []struct{ body, secrets, view string }{
+		{`{"name":"n","kind":"ntfy","ntfy":{"server":"https://ntfy.example","topic":"andaru-alerts","token":{"secret":"N_TOKEN","set":"tk_CHANNEL_SECRET","expectedVersion":"0"}}}`,
+			"N_TOKEN", `"ntfy":{"server":"https://ntfy.example","topic":"andaru-alerts","token":{"secret":"N_TOKEN","isSet":true,`},
+		{`{"name":"n","kind":"ntfy","ntfy":{"server":"http://ntfy.lan:8080/sub","topic":"a_b-C"}}`, "", `"ntfy":{"server":"http://ntfy.lan:8080/sub","topic":"a_b-C"}`},
+		{`{"name":"p","kind":"pushover","pushover":{"token":{"secret":"P_APP","set":"app_CHANNEL_SECRET","expectedVersion":"0"},"user":{"secret":"P_USER","set":"usr_CHANNEL_SECRET","expectedVersion":"0"}}}`,
+			"P_APP P_USER", `"pushover":{"token":{"secret":"P_APP","isSet":true,`},
+		{`{"name":"t","kind":"telegram","telegram":{"token":{"secret":"T_BOT","set":"1:bot_CHANNEL_SECRET","expectedVersion":"0"},"chatId":"-1001234567890"}}`,
+			"T_BOT", `"telegram":{"token":{"secret":"T_BOT","isSet":true,`},
+		{`{"name":"t","kind":"telegram","telegram":{"token":{"secret":"T_BOT","set":"1:bot_CHANNEL_SECRET","expectedVersion":"0"},"chatId":"@andaru_alerts"}}`,
+			"T_BOT", `"chatId":"@andaru_alerts"}`},
+	} {
+		s := seededState(t)
+		p, e := channelChange(t, &s, "create", "", "", row.body, "8")
+		if e != nil {
+			t.Fatalf("%s: %v", row.body, e)
+		}
+		for _, name := range strings.Fields(row.secrets) {
+			if v := p.State.Secrets.Scopes["core"][name]; v.Kind != "notification" || !strings.Contains(v.Value, "CHANNEL_SECRET") || v.Version != "8" {
+				t.Fatalf("secret %s %+v", name, v)
+			}
+		}
+		result, e := resultView(p)
+		if e != nil {
+			t.Fatal(e)
+		}
+		raw, _ := json.Marshal(result)
+		if bytes.Contains(raw, []byte("CHANNEL_SECRET")) || bytes.Contains(p.ConfigBody, []byte("CHANNEL_SECRET")) || !bytes.Contains(raw, []byte(row.view)) {
+			t.Fatalf("view %s", raw)
+		}
+		d, e := decodeDeclaration(p.ConfigBody)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if again, _ := canonical(d); !bytes.Equal(again, p.ConfigBody) {
+			t.Fatalf("round trip\n%s\n%s", p.ConfigBody, again)
+		}
 	}
 }
 
@@ -272,5 +329,21 @@ func TestRecoveryCopyWithChannelsRestores(t *testing.T) {
 	}
 	if e = ValidateBackupDocuments(docs); e != nil || bytes.Contains(docs.Configuration, []byte("notifications")) {
 		t.Fatalf("%#v %s", e, docs.Configuration)
+	}
+}
+
+// A restored channel of any kind may be edited with its unresolved secret sent back unchanged.
+func TestRestoredUnresolvedAppChannelCanBeEdited(t *testing.T) {
+	s := seededState(t)
+	body := `{"name":"t","kind":"telegram","telegram":{"token":{"secret":"TG_TOKEN","set":"123:abc","expectedVersion":"0"},"chatId":"-100"}}`
+	p, e := channelChange(t, &s, "create", "", "", body, "8")
+	if e != nil {
+		t.Fatal(e)
+	}
+	ch := &p.State.Config.Notifications.Channels[0]
+	ch.Telegram.Token.Unresolved = true
+	echo := `{"name":"t","enabled":false,"kind":"telegram","telegram":{"token":{"secret":"TG_TOKEN","unresolved":true},"chatId":"-100"}}`
+	if _, e := channelChange(t, &p.State, "replace", ch.ID, "8", echo, "9"); e != nil {
+		t.Fatalf("disabling it: %#v", e)
 	}
 }

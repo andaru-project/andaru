@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -100,7 +101,7 @@ func someChannels(context.Context) ([]config.NotificationChannel, error) {
 // makes again.
 func TestDeliverNotifications(t *testing.T) {
 	events, ch := jobBus(t)
-	deliver := deliverNotifications(events, someChannels, slog.New(slog.DiscardHandler))
+	deliver := deliverNotifications(events, someChannels, "", slog.New(slog.DiscardHandler))
 	r := notify.Raise{Key: "apply/3", Severity: notify.Warning, Subject: "Apply 3 failed", Detail: "why", Link: "/applies/3"}
 	payload, _ := bus.NewEvent(notify.RaisedType, "engine", r)
 	var e bus.Event
@@ -143,7 +144,7 @@ func TestDeliverNotifications(t *testing.T) {
 // A channel's own failure is sent to every other channel but not to it.
 func TestChannelFailureNotSentToIt(t *testing.T) {
 	events, ch := jobBus(t)
-	deliver := deliverNotifications(events, someChannels, slog.New(slog.DiscardHandler))
+	deliver := deliverNotifications(events, someChannels, "", slog.New(slog.DiscardHandler))
 	r := notify.Raise{Key: "channel/ntf_ops", Severity: notify.Warning, Subject: "Channel ops is failing"}
 	payload, _ := bus.NewEvent(notify.RaisedType, delivery.Source, r)
 	var e bus.Event
@@ -159,7 +160,7 @@ func TestChannelFailureNotSentToIt(t *testing.T) {
 // A channel list that cannot be read retries the raise.
 func TestDeliverRetriesUnreadChannels(t *testing.T) {
 	events, _ := jobBus(t)
-	deliver := deliverNotifications(events, func(context.Context) ([]config.NotificationChannel, error) { return nil, errors.New("busy") }, slog.New(slog.DiscardHandler))
+	deliver := deliverNotifications(events, func(context.Context) ([]config.NotificationChannel, error) { return nil, errors.New("busy") }, "", slog.New(slog.DiscardHandler))
 	if err := deliver(bus.Event{ID: "x", Source: "s"}, notify.Raise{Severity: notify.Info}, nil); err == nil {
 		t.Fatal("no error")
 	}
@@ -169,7 +170,7 @@ func TestDeliverRetriesUnreadChannels(t *testing.T) {
 func TestLayerDeliversToChannels(t *testing.T) {
 	events, ch := jobBus(t)
 	layer, err := notify.Open(filepath.Join(t.TempDir(), "notifications.db"), events, slog.New(slog.DiscardHandler),
-		deliverNotifications(events, someChannels, slog.New(slog.DiscardHandler)))
+		deliverNotifications(events, someChannels, "", slog.New(slog.DiscardHandler)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,10 +252,59 @@ func TestOneChannelFailureKeepsTheOthers(t *testing.T) {
 	if err := json.Unmarshal(payload, &e); err != nil {
 		t.Fatal(err)
 	}
-	if err := deliverNotifications(events, list, slog.New(slog.DiscardHandler))(e, r, payload); err == nil {
+	if err := deliverNotifications(events, list, "", slog.New(slog.DiscardHandler))(e, r, payload); err == nil {
 		t.Fatal("the broken channel's failure was not reported")
 	}
 	if got := jobs(t, ch); len(got) != 1 || got[0].job.Channel != opsChannel.ID {
+		t.Fatalf("jobs %+v", got)
+	}
+}
+
+// Each kind of channel's job carries its own target, and no other.
+func TestPublishJobTargetsEachKind(t *testing.T) {
+	events, ch := jobBus(t)
+	for _, row := range []struct {
+		c    config.NotificationChannel
+		want delivery.Job
+	}{
+		{config.NotificationChannel{Kind: delivery.Webhook, URL: "https://hook.example/T", Authorization: "Bearer A"},
+			delivery.Job{Webhook: &delivery.WebhookTarget{URL: "https://hook.example/T", Headers: map[string]string{"Authorization": "Bearer A"}}}},
+		{config.NotificationChannel{Kind: delivery.Ntfy, Server: "https://ntfy.sh", Topic: "alerts", Token: "tk"},
+			delivery.Job{Ntfy: &delivery.NtfyTarget{Server: "https://ntfy.sh", Topic: "alerts", Token: "tk"}}},
+		{config.NotificationChannel{Kind: delivery.Pushover, Token: "app", User: "usr"},
+			delivery.Job{Pushover: &delivery.PushoverTarget{Token: "app", User: "usr"}}},
+		{config.NotificationChannel{Kind: delivery.Telegram, Token: "1:bot", ChatID: "-100"},
+			delivery.Job{Telegram: &delivery.TelegramTarget{Token: "1:bot", ChatID: "-100"}}},
+	} {
+		row.c.ID = "ntf_" + row.c.Kind
+		if err := publishJob(events, row.c, "", "e:"+row.c.ID, "apply", time.Unix(1, 0), notify.Raise{Key: "k", Severity: notify.Info, Subject: "s"}, []byte(`{}`)); err != nil {
+			t.Fatal(err)
+		}
+		got := jobs(t, ch)
+		if len(got) != 1 {
+			t.Fatalf("%s: jobs %+v", row.c.Kind, got)
+		}
+		j := got[0].job
+		if j.Kind != row.c.Kind || fmt.Sprint(j.Webhook, j.Ntfy, j.Pushover, j.Telegram) != fmt.Sprint(row.want.Webhook, row.want.Ntfy, row.want.Pushover, row.want.Telegram) {
+			t.Errorf("%s: job %+v", row.c.Kind, j)
+		}
+	}
+}
+
+// A job carries the management origin, so a channel can send the notification's link as a full URL.
+func TestJobCarriesTheOrigin(t *testing.T) {
+	events, ch := jobBus(t)
+	list := func(context.Context) ([]config.NotificationChannel, error) { return []config.NotificationChannel{opsChannel}, nil }
+	r := notify.Raise{Key: "k", Severity: notify.Critical, Subject: "s", Link: "/system"}
+	payload, _ := bus.NewEvent(notify.RaisedType, "engine", r)
+	var e bus.Event
+	if err := json.Unmarshal(payload, &e); err != nil {
+		t.Fatal(err)
+	}
+	if err := deliverNotifications(events, list, "https://fw.example", slog.New(slog.DiscardHandler))(e, r, payload); err != nil {
+		t.Fatal(err)
+	}
+	if got := jobs(t, ch); len(got) != 1 || got[0].job.Origin != "https://fw.example" {
 		t.Fatalf("jobs %+v", got)
 	}
 }

@@ -22,6 +22,7 @@ type notificationsAPI struct {
 	layer    *notify.Layer
 	channels channelReader
 	events   *bus.Bus
+	origin   string // the management origin a notification's link is sent from
 }
 
 func (h notificationsAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -144,7 +145,7 @@ func (h notificationsAPI) test(w http.ResponseWriter, r *http.Request, path stri
 	}
 	job := "test:" + e.ID + ":" + c.ID
 	if err == nil {
-		err = publishJob(h.events, c, job, e.Source, e.Time, raise, payload)
+		err = publishJob(h.events, c, h.origin, job, e.Source, e.Time, raise, payload)
 	}
 	if err != nil {
 		slog.ErrorContext(r.Context(), "send a test notification", "channel", c.ID, "error", err)

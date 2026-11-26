@@ -126,13 +126,10 @@ func heldSecrets(d *declaration) []heldSecret {
 	}
 	for i := range d.Notifications.Channels {
 		c := &d.Notifications.Channels[i]
-		if c.Webhook == nil {
-			continue
-		}
-		key, p := objectKey{"notifications.channels", c.ID}, fmt.Sprintf("/notifications/channels/%d/webhook", i)
-		out = append(out, heldSecret{key, p + "/url", &c.Webhook.URL})
-		if c.Webhook.Authorization != nil {
-			out = append(out, heldSecret{key, p + "/authorization", c.Webhook.Authorization})
+		for _, s := range c.secrets() {
+			if s.ref != nil {
+				out = append(out, heldSecret{objectKey{"notifications.channels", c.ID}, fmt.Sprintf("/notifications/channels/%d%s", i, s.path), s.ref})
+			}
 		}
 	}
 	return out
@@ -159,9 +156,18 @@ func secretFields(collection string, value map[string]any) []secretField {
 	case "links":
 		return []secretField{{"/password", value, "password"}}
 	case "notifications.channels":
-		if w, ok := value["webhook"].(map[string]any); ok {
-			return []secretField{{"/webhook/url", w, "url"}, {"/webhook/authorization", w, "authorization"}}
+		var out []secretField
+		for _, kind := range []struct {
+			name   string
+			fields []string
+		}{{"webhook", []string{"url", "authorization"}}, {"ntfy", []string{"token"}}, {"pushover", []string{"token", "user"}}, {"telegram", []string{"token"}}} {
+			if w, ok := value[kind.name].(map[string]any); ok {
+				for _, f := range kind.fields {
+					out = append(out, secretField{"/" + kind.name + "/" + f, w, f})
+				}
+			}
 		}
+		return out
 	}
 	return nil
 }
