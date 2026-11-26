@@ -187,18 +187,20 @@ or promise forensic removal from WALs, snapshots, SSDs or backups.
 
 ### Notification channels
 
-Where notifications are sent, and which: the collection `notifications.channels` (`andaru ctl config … notifications/channels`, `/api/v1/config/notifications/channels`). Design: [Notifications](../superpowers/specs/2026-11-23-notifications-design.md) ([#175](https://github.com/andaru-project/andaru/issues/175)). Channels take effect when saved, without an apply. This release saves them; sending comes later.
+Where notifications are sent, and which: the collection `notifications.channels` (`andaru ctl config … notifications/channels`, `/api/v1/config/notifications/channels`). Design: [Notifications](../superpowers/specs/2026-11-23-notifications-design.md) ([#175](https://github.com/andaru-project/andaru/issues/175)). Channels take effect when saved, without an apply: each raise a channel's filter passes is sent to it by `andaru-outbound`.
 
 ```sh
 printf '%s\n' '{"name":"ops","kind":"webhook","filter":{"minSeverity":"warning","sources":["apply"]},"webhook":{"url":{"secret":"OPS_WEBHOOK_URL","set":"https://hooks.example/T0K3N","expectedVersion":"0"},"authorization":{"secret":"OPS_WEBHOOK_AUTH","set":"Bearer TOKEN","expectedVersion":"0"}}}' \
   | sudo andaru ctl config create notifications/channels
 ```
 
-- **Who:** reading them takes `configuration.read`; creating, replacing or deleting one takes `notifications.manage`, on these routes and in a batch on `/api/v1/config/changes` alike.
+- **Who:** reading them takes `configuration.read`; creating, replacing or deleting one takes `notifications.manage`, and creating or replacing one `configuration.read` as well (a channel is sent the applies and upgrade decisions that only `configuration.read` sees; the check is made when the channel is saved; disabling one is a replace, so it takes both), on these routes and in a batch on `/api/v1/config/changes` alike.
 - **`kind`:** `webhook` only, for now.
 - **`enabled`:** defaults to `true` when omitted.
 - **`filter`:** `minSeverity` is `info` (the default), `warning` or `critical`; `sources` names the sources to send, and an empty or absent list means all of them.
 - **`webhook`:** `url` is a named secret, since webhook URLs carry tokens; its value must be an `http` or `https` URL with a host. `authorization`, optional, is a named secret sent as the `Authorization` header's value. Both are written and read like a PPPoE password; replacing a channel without `authorization` removes its reference. A channel's secrets are of the kind `notification`, a link's of the kind `password`: an object holds and sets only secrets of its own kind, whether or not another object still holds them, so neither capability reaches the other's secrets. A client cannot save a channel secret as `unresolved`, but may send back unchanged one a restore left unresolved. The URL is checked for the channels a save writes, or whose URL it sets.
+- **Sending:** for each raise the notification layer records (not a clear, nor a raise that changes nothing), the engine publishes one durable job on `delivery/<channel id>` for each enabled channel whose filter passes it, with the job ID `<event id>:<channel id>`; a raise delivered again after a crash publishes the same jobs, which `andaru-outbound` sends once. A webhook is a POST of the notification's own event, with the `Authorization` header when one is set. A channel whose secrets are unresolved is skipped, with a warning in the engine journal. A channel's own failure (`delivery`, `channel/<id>`) is not sent to it. Handing a raise on is not retried when it fails (the engine journal says so), since that would hold up every notification after it; and an event delivered again after a crash is handed on again even if it first changed nothing.
+- **`POST /api/v1/notifications/channels/{id}/test`** (`notifications.manage`, no body) sends an info notification, source `notifications`, key `test`, to the channel, enabled or not, through the same path, without recording it among the notifications. It answers `202 {"job": "test:<event id>:<channel id>"}` once the job is published, `404` for an unknown channel, and `409 CHANNEL_SECRETS_UNRESOLVED` when the channel's secrets have no value. A failure to send shows as the channel's `delivery` notification.
 
 ### Settings across Andaru versions
 

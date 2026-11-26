@@ -144,7 +144,7 @@ func TestConfigurationHTTPContract(t *testing.T) {
 		"/api/v1/users/{id}/password": {"put"}, "/api/v1/tokens": {"get", "head", "post"},
 		"/api/v1/tokens/{selector}": {"delete"}, "/api/v1/audit/events": {"get", "head"},
 		"/api/v1/audit/export":  {"get", "head"},
-		"/api/v1/notifications": {"get", "head"}, "/api/v1/notifications/{id}/dismiss": {"post"},
+		"/api/v1/notifications": {"get", "head"}, "/api/v1/notifications/{id}/dismiss": {"post"}, "/api/v1/notifications/channels/{id}/test": {"post"},
 		"/api/v1/session": {"get", "post", "delete"}, "/api/v1/sessions": {"get"}, "/api/v1/session/preferences": {"get", "put"},
 		"/api/v1/sessions/{id}": {"delete"}, "/api/v1/startup-status": {"get", "head"}, "/api/v1/events": {"get"},
 		"/api/v1/fleet/state": {"get", "head"}, "/api/v1/fleet/devices": {"get", "head"},
@@ -938,7 +938,9 @@ func TestNotificationChannelsNeedNotificationsManage(t *testing.T) {
 		refused      bool
 	}{
 		{[]authz.Capability{authz.ConfigurationWrite}, true},
-		{[]authz.Capability{authz.ConfigurationWrite, authz.NotificationsManage}, false},
+		// A channel is sent the applies and upgrade decisions, which configuration.read alone sees.
+		{[]authz.Capability{authz.ConfigurationWrite, authz.NotificationsManage}, true},
+		{[]authz.Capability{authz.ConfigurationWrite, authz.NotificationsManage, authz.ConfigurationRead}, false},
 	} {
 		r := httptest.NewRequest("POST", "/api/v1/config/changes", strings.NewReader(batch))
 		r.Header.Set("Content-Type", "application/json")
@@ -950,5 +952,28 @@ func TestNotificationChannelsNeedNotificationsManage(t *testing.T) {
 		if (w.Code == 403) != s.refused {
 			t.Fatalf("capabilities %v: %d %s", s.capabilities, w.Code, w.Body)
 		}
+	}
+	// Deleting one sends nothing, so it takes notifications.manage alone.
+	listed := configCall(h, "GET", "/api/v1/config/notifications/channels", "", "")
+	var collection struct {
+		Items []struct {
+			Value   struct{ ID string }
+			Version string
+		}
+	}
+	if e := json.Unmarshal(listed.Body.Bytes(), &collection); e != nil || len(collection.Items) != 1 {
+		t.Fatalf("channels %s %v", listed.Body, e)
+	}
+	del := fmt.Sprintf(`{"operations":[{"op":"delete","collection":"notifications.channels","id":%q,"expectedVersion":%q}]}`,
+		collection.Items[0].Value.ID, collection.Items[0].Version)
+	r := httptest.NewRequest("POST", "/api/v1/config/changes", strings.NewReader(del))
+	r.Header.Set("Content-Type", "application/json")
+	r = r.WithContext(context.WithValue(r.Context(), authenticatedActorKey{}, requestActor{
+		Actor: authz.Actor{Kind: authz.ActorAccount, ID: "00000000-0000-4000-8000-000000000001"}, AccountID: "00000000-0000-4000-8000-000000000001",
+		Source: "unix", Capabilities: []authz.Capability{authz.ConfigurationWrite, authz.NotificationsManage}}))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code/100 != 2 {
+		t.Fatalf("delete %d %s", w.Code, w.Body)
 	}
 }

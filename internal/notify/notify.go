@@ -17,6 +17,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 
 	"github.com/andaru-project/andaru/internal/authz"
@@ -71,15 +72,22 @@ type Notification struct {
 
 // Layer is the notifications' reader and store.
 type Layer struct {
-	db     *sql.DB
-	events *bus.Bus
-	stop   func()
-	log    *slog.Logger
+	db      *sql.DB
+	events  *bus.Bus
+	stop    func()
+	log     *slog.Logger
+	deliver Deliver
 }
 
-// Open opens the store at path and starts reading notifications from events. It attaches its consumer before it
-// returns, so a list read after Open never misses a notification published after it.
-func Open(path string, events *bus.Bus, log *slog.Logger) (*Layer, error) {
+// Deliver hands a raise on to the channels that send it: e is its event, and payload that event as the bus carried
+// it. It is called once the raise is recorded, and again for an event delivered again, so what it publishes must be
+// known by e.ID. An error retries the event.
+type Deliver func(e bus.Event, r Raise, payload []byte) error
+
+// Open opens the store at path and starts reading notifications from events, handing each raise to deliver, if not
+// nil. It attaches its consumer before it returns, so a list read after Open never misses a notification published
+// after it.
+func Open(path string, events *bus.Bus, log *slog.Logger, deliver Deliver) (*Layer, error) {
 	db, err := sql.Open("sqlite", "file:"+(&url.URL{Path: path}).EscapedPath()+"?_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, err
@@ -103,7 +111,7 @@ func Open(path string, events *bus.Bus, log *slog.Logger) (*Layer, error) {
 		db.Close()
 		return nil, err
 	}
-	l := &Layer{db: db, events: events, log: log}
+	l := &Layer{db: db, events: events, log: log, deliver: deliver}
 	if l.stop, err = events.Consume(consumer, Filter, l.handle); err != nil {
 		db.Close()
 		return nil, err
@@ -197,15 +205,22 @@ func (l *Layer) handle(m bus.Message) error {
 		return err
 	}
 	defer tx.Rollback()
-	var change bool
+	var change, send bool
+	var r Raise
+	e := bus.Event{Data: &r}
+	payload := m.Payload
 	if m.Gap {
 		// Notifications aged out of the bus, or its store was replaced: some may never have reached the layer.
 		l.log.Warn("notifications may have been missed")
-		change, err = raise(tx, "notifications", Raise{Key: "missed", Severity: Warning,
-			Subject: "Notifications may have been missed",
-			Detail:  "Some notifications were lost before Andaru could record them. Check the engine journal for what happened."}, time.Now())
+		r = Raise{Key: "missed", Severity: Warning, Subject: "Notifications may have been missed",
+			Detail: "Some notifications were lost before Andaru could record them. Check the engine journal for what happened."}
+		e = bus.Event{ID: uuid.NewString(), Type: RaisedType, Time: time.Now().UTC(), Source: "notifications", Data: r}
+		if change, err = raise(tx, e.Source, r, e.Time); err == nil && change {
+			payload, err = json.Marshal(e)
+			send = err == nil
+		}
 	} else {
-		change, err = l.apply(tx, m)
+		change, send, err = l.apply(tx, m, &e)
 	}
 	if err != nil {
 		return err
@@ -216,36 +231,45 @@ func (l *Layer) handle(m bus.Message) error {
 	if change {
 		l.changed()
 	}
+	// The channels hear of the raise once it is recorded, and again if it comes again: their jobs keep its ID. A
+	// failure is logged, not retried: retrying the event would hold up every notification after it.
+	if send && l.deliver != nil {
+		if err := l.deliver(e, r, payload); err != nil {
+			l.log.Error("notification not handed on to its channels", "source", e.Source, "key", r.Key, "error", err)
+		}
+	}
 	return nil
 }
 
-// apply records the event in m. An event it cannot read is logged and skipped: retrying it would hold up every
-// notification after it.
-func (l *Layer) apply(tx *sql.Tx, m bus.Message) (bool, error) {
-	var r Raise
-	e := bus.Event{Data: &r}
-	err := json.Unmarshal(m.Payload, &e)
+// apply records the event in m, decoded into e, and says whether the list changed and whether the event is a raise
+// the channels should hear of: one that changed the list, or one seen before. An event it cannot read is logged and
+// skipped: retrying it would hold up every notification after it.
+func (l *Layer) apply(tx *sql.Tx, m bus.Message, e *bus.Event) (change, send bool, err error) {
+	r := e.Data.(*Raise)
+	err = json.Unmarshal(m.Payload, e)
 	if err == nil {
-		err = validate(m.Topic, e, r)
+		err = validate(m.Topic, *e, *r)
 	}
 	if err != nil {
 		l.log.Error("notification skipped", "topic", m.Topic, "seq", m.Seq, "error", err)
-		return false, nil
+		return false, false, nil
 	}
+	raised := e.Type == RaisedType
 	// An event seen before is one delivered again after a crash: it changes nothing twice.
 	res, err := tx.Exec(`INSERT INTO seen (source, event, time) VALUES (?, ?, ?) ON CONFLICT DO NOTHING`, e.Source, e.ID, time.Now().UnixMilli())
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	if n, err := res.RowsAffected(); err != nil || n == 0 {
-		return false, err
+		return false, raised, err
 	}
 	if _, err = tx.Exec(expire, expiry()); err != nil {
-		return false, err
+		return false, false, err
 	}
 	l.log.Info("notification", "type", e.Type, "source", e.Source, "key", r.Key, "severity", r.Severity, "subject", r.Subject)
-	if e.Type == ClearedType {
-		return end(tx, `source = ? AND key = ?`, []any{e.Source, r.Key}, "")
+	if !raised {
+		change, err = end(tx, `source = ? AND key = ?`, []any{e.Source, r.Key}, "")
+		return change, false, err
 	}
 	// An event from the future is dated now: a source does not keep its notification on top by its clock. One read
 	// late, from a backlog, keeps the time it happened.
@@ -253,7 +277,8 @@ func (l *Layer) apply(tx *sql.Tx, m bus.Message) (bool, error) {
 	if e.Time.Before(at) {
 		at = e.Time
 	}
-	return raise(tx, e.Source, r, at)
+	change, err = raise(tx, e.Source, *r, at)
+	return change, change, err
 }
 
 // text is valid UTF-8 of at most max bytes with no control character but the line breaks lines allows, and no

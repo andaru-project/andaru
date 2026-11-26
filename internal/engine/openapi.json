@@ -6962,6 +6962,23 @@
         }
       }
     },
+    "/api/v1/notifications/channels/{id}/test": {
+      "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+      "post": {
+        "operationId": "testNotificationChannel",
+        "x-required-capability": "notifications.manage",
+        "summary": "Send a test notification to a channel",
+        "description": "Publishes one delivery job for the saved channel, enabled or not, with an info notification from the source notifications and the key test, through the same delivery path as any other notification. The test is not recorded among the notifications. The job is sent by andaru-outbound; a failure to send shows as its notification delivery/channel/{id}.",
+        "responses": {
+          "202": {"description": "The job was published", "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false, "required": ["job"], "properties": {"job": {"type": "string", "description": "The job's ID: test:{event id}:{channel id}"}}}}}},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"description": "Structured failure; no secret values", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+          "405": {"$ref": "#/components/responses/MethodNotAllowed"},
+          "409": {"description": "CHANNEL_SECRETS_UNRESOLVED: a secret the channel references has no value, as after a restore without secrets", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}},
+          "503": {"description": "Structured failure; no secret values", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}
+        }
+      }
+    },
     "/api/v1/audit/events": {
       "get": {
         "operationId": "listAuditEvents",

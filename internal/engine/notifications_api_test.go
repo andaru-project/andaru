@@ -24,7 +24,7 @@ func TestNotificationsAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer events.Close()
-	layer, err := notify.Open(filepath.Join(dir, "notifications.db"), events, slog.New(slog.DiscardHandler))
+	layer, err := notify.Open(filepath.Join(dir, "notifications.db"), events, slog.New(slog.DiscardHandler), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

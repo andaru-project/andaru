@@ -134,4 +134,31 @@ func TestNotificationChannelsPersistAndBackUp(t *testing.T) {
 	if snap, err := bare.Snapshot(ctx); err != nil || !bytes.Contains(snap.Value, []byte(`"unresolved":true`)) {
 		t.Fatalf("snapshot %v", err)
 	}
+	if got, err := bare.NotificationChannels(ctx); err != nil || len(got) != 1 || !got[0].Unresolved {
+		t.Fatalf("restored without secrets, channels %+v %v", got, err)
+	}
+
+	// The engine reads the channels with their secrets, and the defaults saved.
+	off, err := ObjectChange("create", "notifications.channels", "", nil, []byte(`{"name":"off","enabled":false,"kind":"webhook","webhook":{"url":{"secret":"OPS_URL"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Save(ctx, systemRootActor, off); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.NotificationChannels(ctx)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("channels %+v %v", got, err)
+	}
+	ops, second := got[0], got[1]
+	if ops.Name != "ops" {
+		ops, second = second, ops
+	}
+	if ops.Name != "ops" || !ops.Enabled || ops.Kind != "webhook" || ops.MinSeverity != "warning" || !slices.Equal(ops.Sources, []string{"apply", "upgrade"}) ||
+		ops.URL != "https://hooks.example/CHANNEL_SECRET_TOKEN" || ops.Authorization != "Bearer CHANNEL_SECRET_AUTH" || ops.Unresolved || ops.ID == "" {
+		t.Fatalf("ops %+v", ops)
+	}
+	if second.Name != "off" || second.Enabled || second.MinSeverity != "info" || second.URL != ops.URL || second.Authorization != "" || second.Unresolved {
+		t.Fatalf("off %+v", second)
+	}
 }
