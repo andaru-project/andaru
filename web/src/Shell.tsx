@@ -18,6 +18,7 @@ import { DhcpScreen } from './screens/DhcpScreen';
 import { DnsScreen } from './screens/DnsScreen';
 import { InterfacesScreen } from './screens/InterfacesScreen';
 import { Bell } from './screens/Marks';
+import { NatScreen } from './screens/NatScreen';
 import { NotificationsScreen } from './screens/NotificationsScreen';
 import { PasswordDialog } from './screens/PasswordDialog';
 import { RolesScreen } from './screens/RolesScreen';
@@ -56,6 +57,7 @@ const pageTitles: Record<string, string> = {
   '/network/clients': 'Clients',
   '/network/diagnostics': 'Diagnostics',
   '/firewall/rules': 'Rules',
+  '/firewall/nat': 'NAT',
   '/firewall/aliases': 'Aliases',
   '/changes': 'Review and apply',
   '/system/details': 'System details',
@@ -221,7 +223,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
         { to: '/network/diagnostics', label: 'Diagnostics', visible: canReadStatus },
       ],
     },
-    { label: 'Firewall', items: [{ to: '/firewall/rules', label: 'Rules', visible: canReadChanges }, { to: '/firewall/aliases', label: 'Aliases', visible: canReadChanges }] },
+    { label: 'Firewall', items: [{ to: '/firewall/rules', label: 'Rules', visible: canReadChanges }, { to: '/firewall/nat', label: 'NAT', visible: canReadChanges }, { to: '/firewall/aliases', label: 'Aliases', visible: canReadChanges }] },
     { label: 'Changes', items: [{ to: '/changes', label: 'Review and apply', visible: canReadChanges }] },
     {
       label: 'System',
@@ -288,6 +290,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
     ['/network/dhcp', <DhcpScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/network/dns', <DnsScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/firewall/rules', <RulesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
+    ['/firewall/nat', <NatScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/firewall/aliases', <AliasesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/changes', <ChangesScreen api={api} session={session} state={changes.data} stateError={changes.error} connected={connected} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/system/details', <SystemDetailsScreen system={system} />],

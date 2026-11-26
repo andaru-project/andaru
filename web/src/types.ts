@@ -360,6 +360,49 @@ export interface LeaseView {
   v6: Lease6[];
 }
 
+export type OutboundNatMode = 'automatic' | 'none';
+
+export interface OutboundNat {
+  mode: OutboundNatMode;
+}
+
+export type NatAddress = { self: true; address?: never } | { address: string; self?: never };
+
+export interface PortForward {
+  id: string;
+  name: string;
+  description?: string;
+  enabled: boolean;
+  family?: 'ipv4' | 'ipv6';
+  ingressZones: string[];
+  protocol: 'tcp' | 'udp' | 'tcp-udp';
+  from: string[];
+  fromNegated?: boolean;
+  to: NatAddress;
+  toNegated?: boolean;
+  ports: string;
+  noRedirect?: boolean;
+  target?: NatAddress;
+  targetPort?: number;
+  filterRule?: 'auto' | 'none';
+  reflection?: boolean;
+  log?: boolean;
+}
+
+export interface OneToOneNat {
+  id: string;
+  name: string;
+  description?: string;
+  enabled: boolean;
+  zone: string;
+  external?: string;
+  internal: string;
+  destination: string[];
+  destinationNegated?: boolean;
+  noBinat?: boolean;
+  reflection?: boolean;
+}
+
 export interface Snapshot {
   state: 'saved';
   savedVersion: string;
@@ -378,8 +421,9 @@ export interface Snapshot {
     };
     rules?: Rule[];
     nat?: {
-      portForwards?: Array<{ id: string; name: string; enabled: boolean; noRedirect?: boolean; filterRule?: string; from?: string[]; to?: { address?: string } }>;
-      oneToOne?: Array<{ id: string; name: string; destination?: string[] }>;
+      outbound?: OutboundNat;
+      portForwards?: PortForward[];
+      oneToOne?: OneToOneNat[];
     };
   };
 }

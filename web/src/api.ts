@@ -14,7 +14,10 @@ import type {
   LeaseView,
   LinkStatus,
   NotificationList,
+  OneToOneNat,
   OrderedList,
+  OutboundNat,
+  PortForward,
   SetupBootstrapRequest,
   Page,
   PrefixView,
@@ -414,6 +417,53 @@ export class ApiClient {
   // The whole order, every rule once, guarded by the list's version: a 412 means someone else reordered.
   orderRules(ids: string[], version: string) {
     return this.request('/api/v1/config/rules/order', { method: 'PUT', headers: { 'If-Match': `"order.${version}"` }, body: JSON.stringify(ids) }, true);
+  }
+
+  async outboundNat(): Promise<SavedObject<OutboundNat> | null> {
+    try {
+      return await this.request<SavedObject<OutboundNat>>('/api/v1/config/nat/outbound');
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) return null;
+      throw error;
+    }
+  }
+
+  saveOutboundNat(value: OutboundNat, version: string) {
+    return this.request<SavedObject<OutboundNat>>('/api/v1/config/nat/outbound', {
+      method: 'PUT', headers: { 'If-Match': `"nat.outbound.${version}"` }, body: JSON.stringify(value),
+    }, true);
+  }
+
+  portForwards() {
+    return this.request<OrderedList<PortForward>>('/api/v1/config/nat/port-forwards');
+  }
+
+  savePortForward(entry: Omit<PortForward, 'id'>, saved?: SavedObject<PortForward>) {
+    return this.save('/api/v1/config/nat/port-forwards', entry, saved);
+  }
+
+  deletePortForward(id: string, version: string) {
+    return this.request(`/api/v1/config/nat/port-forwards/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { 'If-Match': `"${id}.${version}"` } }, true);
+  }
+
+  orderPortForwards(ids: string[], version: string) {
+    return this.request('/api/v1/config/nat/port-forwards/order', { method: 'PUT', headers: { 'If-Match': `"order.${version}"` }, body: JSON.stringify(ids) }, true);
+  }
+
+  oneToOneNats() {
+    return this.request<OrderedList<OneToOneNat>>('/api/v1/config/nat/one-to-one');
+  }
+
+  saveOneToOneNat(entry: Omit<OneToOneNat, 'id'>, saved?: SavedObject<OneToOneNat>) {
+    return this.save('/api/v1/config/nat/one-to-one', entry, saved);
+  }
+
+  deleteOneToOneNat(id: string, version: string) {
+    return this.request(`/api/v1/config/nat/one-to-one/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { 'If-Match': `"${id}.${version}"` } }, true);
+  }
+
+  orderOneToOneNats(ids: string[], version: string) {
+    return this.request('/api/v1/config/nat/one-to-one/order', { method: 'PUT', headers: { 'If-Match': `"order.${version}"` }, body: JSON.stringify(ids) }, true);
   }
 
   saveDhcp4(entry: Omit<Dhcp4Entry, 'id'>, saved?: SavedObject<Dhcp4Entry>) {
