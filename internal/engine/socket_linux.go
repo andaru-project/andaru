@@ -105,8 +105,20 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 		return len(view.Questions) > 0, err
 	})
 	head := publishHead(events)
+	// The engine serves for as long as lifetime: a store failure ends it.
+	lifetime, cancel := context.WithCancelCause(ctx)
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		select {
+		case err := <-store.Failure():
+			cancel(err)
+		case <-lifetime.Done():
+		}
+	}()
+	defer func() { cancel(context.Canceled); <-stopped }()
 	runner := newSystemdRunner(stateDir, busSocket)
-	feeds := newAliasFeeds(stateDir, events, savedAndLive(stateDir, store), func(ctx context.Context) error { return runner.Realize(ctx, "aliases", 0) })
+	feeds := newAliasFeeds(lifetime, stateDir, events, savedAndLive(stateDir, store), func(ctx context.Context) error { return runner.Realize(ctx, "aliases", 0) })
 	store.OnSave(func(v config.Version) { head(v); sources.nudge(); feeds.nudge() })
 	// Without its store the layer does not read: notifications wait in the bus's log, for its retention, until a
 	// start that opens it, and the API answers that they are unavailable.
@@ -128,6 +140,8 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 		return fmt.Errorf("read alias results: %w", err)
 	}
 	defer stopResults()
+	// A load the consumer waits on stops before the consumer is waited for.
+	defer cancel(context.Canceled)
 	var active []notify.Notification
 	notifications := slog.Default().With("component", "notifications")
 	if layer, err := notify.Open(filepath.Join(stateDir, "notifications.db"), events, notifications, deliverNotifications(events, store.NotificationChannels, origin, notifications)); err != nil {
@@ -144,17 +158,6 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 		}
 	}
 	coordinator := newSecurityCoordinator(identities, audits, stateDir)
-	lifetime, cancel := context.WithCancelCause(ctx)
-	stopped := make(chan struct{})
-	go func() {
-		defer close(stopped)
-		select {
-		case err := <-store.Failure():
-			cancel(err)
-		case <-lifetime.Done():
-		}
-	}()
-	defer func() { cancel(context.Canceled); <-stopped }()
 	read := hostReader{Links: host.ReadLinks, Facts: host.ReadRealizerFacts, Managed: host.ReadManaged, BootUnit: host.ReadBootUnit}
 	applies := newAppliesHandler(store.ApplyInput, store.Roles, read, runner, stateDir, identities, coordinator, publishApply(events, "engine"))
 	identityAPI := newIdentityAPI(identities, store, coordinator)
@@ -176,7 +179,7 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 		slog.Info("settings saved in the current schema", "version", saved)
 	}
 	// The engine states its notifications once the head is in the current schema, and again as applies and saves go.
-	stopApplies, err := events.Subscribe("apply/+", func(string, []byte) { sources.nudge(); feeds.nudge() })
+	stopApplies, err := events.Subscribe("apply/+", func(string, []byte) { sources.nudge(); feeds.apply() })
 	if err != nil {
 		return fmt.Errorf("follow applies for notifications: %w", err)
 	}

@@ -45,7 +45,7 @@ func newFeedBench(t *testing.T) *feedBench {
 		{ID: urlAlias, Name: "cloudflare", Kind: "url", URL: "https://www.cloudflare.com/ips-v4", RefreshSeconds: 3600},
 		{ID: hostAlias, Name: "vpn", Kind: "hostnames", Names: []string{"a.example", "b.example"}, RefreshSeconds: 60},
 	}}
-	b.f = &aliasFeeds{stateDir: t.TempDir(), log: slog.New(slog.DiscardHandler), poke: make(chan struct{}, 1),
+	b.f = &aliasFeeds{life: t.Context(), stateDir: t.TempDir(), log: slog.New(slog.DiscardHandler), poke: make(chan struct{}, 1), applied: make(chan struct{}, 1),
 		aliases: func(context.Context) ([]config.DynamicAlias, []config.DynamicAlias, error) {
 			return slices.Clone(b.list), slices.Clone(b.live), nil
 		},
@@ -320,8 +320,9 @@ func TestSavedChangesKeepTheLiveSource(t *testing.T) {
 	if newer < 0 || got[newer].URL != b.list[0].URL {
 		t.Fatalf("the saved source not prefetched: %+v", got)
 	}
-	// Its list is kept, and the live filter not loaded: it does not hold the new source's sets.
-	if s := b.answer(urlAlias, aliasfeed.Result{Request: got[newer].ID, OK: true, Members: []string{"198.51.100.0/24"}}); len(s.Members) != 1 || b.realized != 1 {
+	// Its list is kept, and loaded: the load fills the sets the live filter names, which may already be this
+	// source's, by an apply gone live since.
+	if s := b.answer(urlAlias, aliasfeed.Result{Request: got[newer].ID, OK: true, Members: []string{"198.51.100.0/24"}}); len(s.Members) != 1 || b.realized != 2 {
 		t.Fatalf("state %+v realized %d", s, b.realized)
 	}
 	if s := b.f.load(live); !slices.Equal(s.Members, []string{"192.0.2.1"}) {
@@ -520,5 +521,48 @@ func TestAliasLoadIsRetried(t *testing.T) {
 	b.answer(urlAlias, aliasfeed.Result{Request: b.ask(urlAlias), OK: false, Error: "timeout"})
 	if b.realized != 2 {
 		t.Fatalf("realized %d times", b.realized)
+	}
+}
+
+// A result recorded while an apply activates, after its filter was filled and before it went live, is the saved
+// head's only: the apply that follows loads the lists, so the new live sets do not stay empty.
+func TestAnApplyLoadsTheLists(t *testing.T) {
+	b := newFeedBench(t)
+	b.answer(urlAlias, aliasfeed.Result{Request: b.ask(urlAlias), OK: true, Members: []string{"192.0.2.1"}})
+	b.list[0].URL = "https://lists.example/v4"
+	b.f.schedule(t.Context())
+	b.requests()
+	// Answered while the live generation still names the old URL.
+	newer := []string{"198.51.100.0/24"}
+	b.answer(urlAlias, aliasfeed.Result{Request: b.ask(urlAlias), OK: true, Members: newer})
+	before := b.realized
+	// It goes live; the same list again changes nothing, but the apply is owed a load.
+	b.live = slices.Clone(b.list)
+	b.f.apply()
+	b.answer(urlAlias, aliasfeed.Result{Request: b.ask(urlAlias), OK: true, Members: newer})
+	if b.realized != before+1 {
+		t.Fatalf("realized %d, %d before the apply", b.realized, before)
+	}
+	// Without a result, the apply asks the run loop for the load.
+	b.f.apply()
+	<-b.f.applied
+	b.f.fill()
+	if b.realized != before+2 || b.f.owed.Load() {
+		t.Fatalf("realized %d", b.realized)
+	}
+}
+
+// A load stops with the engine, and stays owed.
+func TestAliasLoadStopsWithTheEngine(t *testing.T) {
+	b := newFeedBench(t)
+	life, stop := context.WithCancel(t.Context())
+	b.f.life = life
+	stop()
+	var got error
+	b.f.realize = func(ctx context.Context) error { got = ctx.Err(); return got }
+	b.f.owed.Store(true)
+	b.f.fill()
+	if got == nil || !b.f.owed.Load() {
+		t.Fatalf("load ran with %v", got)
 	}
 }

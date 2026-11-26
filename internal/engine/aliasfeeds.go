@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -61,6 +62,8 @@ type wanted struct {
 type aliasFeeds struct {
 	mu       sync.Mutex
 	stateDir string
+	// life is the engine's: a load stops with it.
+	life context.Context
 	// aliases returns those of the saved head, and those of the live generation's saved version.
 	aliases func(context.Context) (saved, live []config.DynamicAlias, err error)
 	publish func(topic string, payload []byte, durable bool) error
@@ -69,9 +72,13 @@ type aliasFeeds struct {
 	now     func() time.Time
 	log     *slog.Logger
 	poke    chan struct{}
-	// owed says the sets may not hold what the state files do: a load failed, or none ran since this start, which
-	// may follow a crash between a state write and its load.
-	owed bool
+	// applied asks the run loop for a load: a generation went live.
+	applied chan struct{}
+	// owed says the sets may not hold what the state files do: a list changed, a load failed, a generation went live,
+	// or none ran since this start, which may follow a crash between a state write and its load. filling serializes
+	// the loads.
+	owed    atomic.Bool
+	filling sync.Mutex
 	// refreshed is each alias's last "Refresh now", and the request it published; cleared, the aliases no wanted
 	// generation names any more whose notification was cleared since this start.
 	refreshed map[string]refresh
@@ -83,10 +90,12 @@ type refresh struct {
 	request string
 }
 
-func newAliasFeeds(stateDir string, events *bus.Bus, aliases func(context.Context) ([]config.DynamicAlias, []config.DynamicAlias, error), realize func(context.Context) error) *aliasFeeds {
-	return &aliasFeeds{stateDir: stateDir, aliases: aliases, publish: events.Publish, realize: realize, now: time.Now,
-		log: slog.Default().With("component", "aliases"), poke: make(chan struct{}, 1), owed: true,
+func newAliasFeeds(life context.Context, stateDir string, events *bus.Bus, aliases func(context.Context) ([]config.DynamicAlias, []config.DynamicAlias, error), realize func(context.Context) error) *aliasFeeds {
+	f := &aliasFeeds{life: life, stateDir: stateDir, aliases: aliases, publish: events.Publish, realize: realize, now: time.Now,
+		log: slog.Default().With("component", "aliases"), poke: make(chan struct{}, 1), applied: make(chan struct{}, 1),
 		refreshed: map[string]refresh{}, cleared: map[string]bool{}}
+	f.owed.Store(true)
+	return f
 }
 
 // savedAndLive returns the dynamic aliases of the saved head and of the generation that is live, by the saved version
@@ -119,7 +128,19 @@ func (f *aliasFeeds) nudge() {
 	}
 }
 
-// run schedules at start, at each nudge, and when the next source is due.
+// apply follows an apply: the live generation may have changed, and with it the sources its filter's sets are filled
+// from. A result recorded while it activated, after its filter was filled and before it went live, was saved for a
+// source the live generation did not name yet: the load fills the sets again from the state files.
+func (f *aliasFeeds) apply() {
+	f.owed.Store(true)
+	select {
+	case f.applied <- struct{}{}:
+	default:
+	}
+	f.nudge()
+}
+
+// run schedules at start, at each nudge, and when the next source is due, and loads the lists after each apply.
 func (f *aliasFeeds) run(ctx context.Context) {
 	timer := time.NewTimer(0)
 	defer timer.Stop()
@@ -127,6 +148,9 @@ func (f *aliasFeeds) run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-f.applied:
+			f.fill()
+			continue
 		case <-f.poke:
 		case <-timer.C:
 		}
@@ -262,24 +286,30 @@ func (f *aliasFeeds) refresh(ctx context.Context, id string) (request string, ok
 	return request, true, nil
 }
 
-// handle takes one result from andaru-outbound, then loads the lists into the filter if they may have changed. The
-// bus calls it from one goroutine, which alone touches owed; the load runs without the lock, so the API is not held up.
+// handle takes one result from andaru-outbound, then loads the lists into the filter if they may have changed.
 func (f *aliasFeeds) handle(m bus.Message) error {
 	if err := f.record(m); err != nil {
 		return err
 	}
-	if !f.owed {
-		return nil
+	f.fill()
+	return nil
+}
+
+// fill loads the lists into the filter when owed. The load runs without the lock, so the API is not held up; it is
+// idempotent, filling the sets the live filter names from the state files.
+func (f *aliasFeeds) fill() {
+	f.filling.Lock()
+	defer f.filling.Unlock()
+	if !f.owed.Swap(false) {
+		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Second) // longer than realize's RuntimeMaxSec
+	ctx, cancel := context.WithTimeout(f.life, 200*time.Second) // longer than realize's RuntimeMaxSec
 	defer cancel()
 	if err := f.realize(ctx); err != nil {
-		// The next result tries again, and every load of the filter fills the sets.
+		// The next result or apply tries again, and every load of the filter fills the sets.
+		f.owed.Store(true)
 		f.log.Error("alias lists not loaded into the filter", "error", err)
-		return nil
 	}
-	f.owed = false
-	return nil
 }
 
 // record keeps one result in its source's state. A result for a source no wanted generation names, or for a request
@@ -330,8 +360,12 @@ func (f *aliasFeeds) record(m bus.Message) error {
 		return err // unsaved, the result is tried again
 	}
 	f.tell(a, s, failures)
+	// Any change loads: a source only the saved head names may be one the live filter was rendered for, by an apply
+	// that went live after want was read.
+	if changed {
+		f.owed.Store(true)
+	}
 	if changed && w.live {
-		f.owed = true
 		payload, err := bus.NewEvent("alias.members.v1", "engine", map[string]any{"id": id, "members": s.Members})
 		if err == nil {
 			err = f.publish("alias/"+id, payload, false)
