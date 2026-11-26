@@ -35,6 +35,7 @@ type fakeNetworkd struct {
 	bound    map[string]string
 	address  map[string][]string
 	devices  map[string]bool
+	noLease  bool // DHCP servers stay silent
 	state    string
 	fail     string // commands starting with this fail
 	failWith string // the failure's text, "injected failure" when empty
@@ -100,7 +101,7 @@ func (f *fakeNetworkd) apply() {
 				if a, ok := strings.CutPrefix(l, "Address="); ok {
 					f.address[iface] = append(f.address[iface], a)
 				}
-				if strings.HasPrefix(l, "DHCP=") {
+				if strings.HasPrefix(l, "DHCP=") && !f.noLease {
 					f.address[iface] = append(f.address[iface], "10.0.1.19/20")
 				}
 				if server, ok := strings.CutPrefix(l, "DNS="); ok {
@@ -274,10 +275,18 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 		}
 		return []byte(out), nil
 	case command == "ip -j route show default":
-		if f.noRoute || f.noAddress || len(f.address["eth0"]) == 0 {
+		if f.noRoute || f.noAddress {
 			return []byte("[]"), nil
 		}
-		return []byte(`[{"dst":"default","gateway":"10.0.0.1","dev":"eth0"}]`), nil
+		if len(f.address["eth0"]) > 0 {
+			return []byte(`[{"dst":"default","gateway":"10.0.0.1","dev":"eth0"}]`), nil
+		}
+		for _, device := range slices.Sorted(maps.Keys(f.ppp)) {
+			if len(f.address[device]) > 0 {
+				return []byte(`[{"dst":"default","dev":"` + device + `"}]`), nil
+			}
+		}
+		return []byte("[]"), nil
 	}
 	return nil, nil
 }

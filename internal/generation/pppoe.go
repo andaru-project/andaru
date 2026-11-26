@@ -30,6 +30,21 @@ func pppSessions(set []placed) []string {
 	return names
 }
 
+// pppParents lists the interfaces a set's PPPoE sessions run over.
+func pppParents(set []placed) []string {
+	var names []string
+	for _, f := range set {
+		if pppOptions.MatchString(f.path) {
+			for line := range strings.SplitSeq(string(f.data), "\n") {
+				if name, ok := strings.CutPrefix(line, "nic-"); ok {
+					names = append(names, name)
+				}
+			}
+		}
+	}
+	return names
+}
+
 func pppUnitName(name string) string { return "andaru-pppoe-" + name + ".service" }
 
 // pppStamp is where Andaru records what a session's pppd was last started on.
