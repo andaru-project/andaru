@@ -615,9 +615,11 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 			}
 		}
 	}
-	// A reference this batch writes must name a secret of its collection's kind (secretKind).
+	// A reference this batch writes must name a secret of its collection's kind (secretKind), unresolved or not. The
+	// refusal tells a client that a secret of another kind exists, as a version precondition already does; never its value.
 	for _, h := range heldSecrets(&d) {
-		if _, written := writes[h.key]; written && !h.ref.Unresolved && current.Secrets.Scopes["core"][h.ref.Secret].Kind != secretKind(h.key.Collection) {
+		entry, exists := current.Secrets.Scopes["core"][h.ref.Secret]
+		if _, written := writes[h.key]; written && (exists || !h.ref.Unresolved) && entry.Kind != secretKind(h.key.Collection) {
 			return empty, rebaseValidation(validationError{{h.path, "This secret belongs to another kind of object."}}, &d, origins, input)
 		}
 	}

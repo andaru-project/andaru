@@ -254,13 +254,16 @@ func prepareRestoration(current *savedState, decoded decodedBackup, next Version
 	unresolved, blocked := map[string]bool{}, map[string]bool{}
 	for _, h := range heldSecrets(&candidate) {
 		reference := h.ref
-		_, exists := secrets.Scopes["core"][reference.Secret]
+		entry, exists := secrets.Scopes["core"][reference.Secret]
 		if decoded.configuration != nil && !decoded.ownSecrets && (decoded.secrets == nil || !exists) {
 			reference.Unresolved = true
 		}
-		if reference.Unresolved {
+		switch {
+		case exists && entry.Kind != secretKind(h.key.Collection):
+			blocked[reference.Secret] = true // a restore keeps the binding a save keeps: a channel never holds a password
+		case reference.Unresolved:
 			unresolved[reference.Secret] = true
-		} else if !exists {
+		case !exists:
 			blocked[reference.Secret] = true
 		}
 	}

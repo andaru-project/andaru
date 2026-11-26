@@ -219,3 +219,24 @@ func TestBadChannelURLBlocksOnlyItsChannel(t *testing.T) {
 		t.Fatalf("saving the channel itself: %#v", e)
 	}
 }
+
+// An unresolved reference is bound to its kind too: a link cannot point at a channel's secret, even unresolved.
+func TestUnresolvedLinkReferenceKeepsItsKind(t *testing.T) {
+	s := seededState(t)
+	p, e := channelChange(t, &s, "create", "", "", opsChannel, "8")
+	if e != nil {
+		t.Fatal(e)
+	}
+	i := slices.IndexFunc(p.State.Config.Links, func(l link) bool { return l.Password != nil })
+	l := p.State.Config.Links[i]
+	l.Password = &secretReference{Secret: "OPS_URL", Unresolved: true}
+	body, _ := json.Marshal(l)
+	version := p.State.Versions[objectKey{"links", l.ID}].Version
+	c, e := ObjectChange("replace", "links", l.ID, &version, body)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = prepareChanges(&p.State, c, "9", fixedTime); e == nil || !strings.Contains(fmt.Sprintf("%#v", e), "another kind of object") {
+		t.Fatalf("%#v", e)
+	}
+}
