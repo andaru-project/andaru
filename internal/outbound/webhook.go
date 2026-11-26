@@ -29,7 +29,7 @@ func sendWebhook(ctx context.Context, client *http.Client, job delivery.Job) err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.URL, bytes.NewReader(job.Event))
 	if err != nil {
-		return permanent(err)
+		return permanent(errors.New("the webhook request cannot be built")) // its error would show the URL
 	}
 	for k, v := range t.Headers {
 		req.Header.Set(k, v)
@@ -37,12 +37,16 @@ func sendWebhook(ctx context.Context, client *http.Client, job delivery.Job) err
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return redact(err)
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
-	if resp.StatusCode/100 != 2 {
+	switch {
+	case resp.StatusCode/100 == 2:
+		return nil
+	case resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode/100 == 5:
 		return fmt.Errorf("the webhook answered %s", resp.Status)
 	}
-	return nil
+	// A redirect is not followed, and a client error comes back the same on a retry.
+	return permanent(fmt.Errorf("the webhook answered %s", resp.Status))
 }

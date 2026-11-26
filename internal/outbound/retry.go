@@ -41,6 +41,10 @@ func openRetries(dir string) (*retries, error) {
 		return nil, err
 	}
 	for _, e := range entries {
+		if filepath.Ext(e.Name()) != ".json" { // a .tmp a crash left before its rename
+			_ = os.RemoveAll(filepath.Join(r.dir, e.Name()))
+			continue
+		}
 		data, err := os.ReadFile(filepath.Join(r.dir, e.Name()))
 		var item retry
 		if err != nil || json.Unmarshal(data, &item) != nil || item.Job.ID == "" {
@@ -65,23 +69,16 @@ func (r *retries) has(id string) bool {
 	return ok
 }
 
-// save writes item and keeps it.
+// save keeps item and writes it. It is kept even when the write fails, so its next attempt still waits its turn.
 func (r *retries) save(item *retry) error {
+	r.mu.Lock()
+	r.items[item.Job.ID] = item
+	r.mu.Unlock()
 	data, err := json.Marshal(item)
 	if err != nil {
 		return err
 	}
-	path := r.file(item.Job.ID)
-	if err := os.WriteFile(path+".tmp", data, 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(path+".tmp", path); err != nil {
-		return err
-	}
-	r.mu.Lock()
-	r.items[item.Job.ID] = item
-	r.mu.Unlock()
-	return nil
+	return writeFile(r.file(item.Job.ID), data)
 }
 
 func (r *retries) remove(id string) error {

@@ -167,7 +167,8 @@ func (s *Service) handle(ctx context.Context, c *bus.Client, m bus.Message) bool
 		return true
 	}
 	job := e.Data
-	if s.sent.seen(job.ID, time.Now()) || s.retries.has(job.ID) {
+	// Queued first: a retry that succeeds records the job as sent before it leaves the queue.
+	if s.retries.has(job.ID) || s.sent.seen(job.ID, time.Now()) {
 		return true
 	}
 	// A copy delivered again while the first is being sent is done: the first is sent or queued, and if the session
@@ -195,10 +196,9 @@ func (s *Service) handle(ctx context.Context, c *bus.Client, m bus.Message) bool
 		s.giveUp(ctx, c, job, 1, err)
 	default:
 		s.Log.Warn("delivery failed; will retry", "job", job.ID, "channel", job.Channel, "error", err)
-		if err := s.retries.save(&retry{Job: job, First: now, Attempts: 1, Next: time.Now().Add(s.Backoff(0))}); err != nil {
-			// Without the queue, the job waits unacked for the next session.
-			s.Log.Error("queue a delivery for a retry", "job", job.ID, "error", err)
-			return false
+		if err := s.retries.save(&retry{Job: job, First: now, Attempts: 1, Next: now.Add(s.Backoff(0))}); err != nil {
+			// The queue keeps it in memory all the same: only a crash before a later write succeeds loses it.
+			s.Log.Error("write a delivery to the retry queue", "job", job.ID, "error", err)
 		}
 	}
 	return true
@@ -226,18 +226,21 @@ func (s *Service) retryLoop(ctx context.Context, c *bus.Client, running *sync.Wa
 }
 
 func (s *Service) retryOnce(ctx context.Context, c *bus.Client, item *retry) {
-	err := s.send(ctx, item.Job)
+	var err error
+	if !s.sent.seen(item.Job.ID, time.Now()) { // sent before a crash took it out of the queue
+		err = s.send(ctx, item.Job)
+	}
 	switch {
 	case err == nil:
 		s.sentOK(ctx, c, item.Job)
 	case ctx.Err() != nil:
 		return // the entry stays as it was, for the next session
-	case isPermanent(err) || time.Since(item.First)+s.Backoff(item.Attempts) > s.RetryFor:
+	case isPermanent(err) || time.Since(item.First)+s.Backoff(item.Attempts-1) > s.RetryFor:
 		s.giveUp(ctx, c, item.Job, item.Attempts+1, err)
 	default:
 		s.Log.Warn("delivery failed; will retry", "job", item.Job.ID, "channel", item.Job.Channel, "attempt", item.Attempts+1, "error", err)
 		next := &retry{Job: item.Job, First: item.First, Attempts: item.Attempts + 1}
-		next.Next = time.Now().Add(s.Backoff(next.Attempts))
+		next.Next = time.Now().Add(s.Backoff(next.Attempts - 1))
 		if err := s.retries.save(next); err != nil {
 			s.Log.Error("requeue a delivery", "job", item.Job.ID, "error", err)
 		}
@@ -251,7 +254,7 @@ func (s *Service) retryOnce(ctx context.Context, c *bus.Client, item *retry) {
 func (s *Service) send(ctx context.Context, job delivery.Job) error {
 	switch job.Kind {
 	case delivery.Webhook:
-		return redact(sendWebhook(ctx, s.HTTP, job))
+		return sendWebhook(ctx, s.HTTP, job)
 	}
 	return permanent(fmt.Errorf("unknown channel kind %q", job.Kind))
 }

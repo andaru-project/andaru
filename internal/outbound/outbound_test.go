@@ -400,9 +400,11 @@ func TestRedirectIsNotFollowed(t *testing.T) {
 	defer srv.Close()
 	b.run(&Service{Backoff: func(int) time.Duration { return time.Hour }})
 	b.publish(job("e1:ch", "ch", srv.URL))
-	b.waitQueued(1)
-	if n := elsewhere.Load(); n != 0 {
-		t.Fatalf("the redirect target was called %d times", n)
+	b.publish(job("e2:ch", "ch", "http://"+srv.Listener.Addr().String()+"/x"))
+	// A 3xx comes back the same on a retry: the job is given up at once, not queued.
+	time.Sleep(100 * time.Millisecond)
+	if n := elsewhere.Load(); n != 0 || b.queued() != 0 {
+		t.Fatalf("the redirect target was called %d times, %d queued", n, b.queued())
 	}
 }
 
@@ -490,5 +492,113 @@ func TestOrderAcksOnlyAPrefix(t *testing.T) {
 		if got := o.finish(s.finish); got != s.want {
 			t.Fatalf("finish(%d) = %d, want %d", s.finish, got, s.want)
 		}
+	}
+}
+
+// A queue write that fails loses nothing while the service runs: the job is retried from memory, and the other jobs
+// go through.
+func TestFailedQueueWriteIsRetriedFromMemory(t *testing.T) {
+	b := newBench(t)
+	var tries atomic.Int32
+	flaky := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if tries.Add(1) <= 2 {
+			w.WriteHeader(503)
+		}
+	}))
+	defer flaky.Close()
+	h, url := newHook(t)
+	b.run(&Service{Backoff: func(int) time.Duration { return time.Millisecond }})
+	// The queue file's temporary name is taken by a directory: every write of this job fails.
+	q := &retries{dir: filepath.Join(b.cache, "retry")}
+	if err := os.MkdirAll(filepath.Join(q.file("a1:a")+".tmp", "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	b.publish(job("a1:a", "a", flaky.URL))
+	for i := range 100 {
+		b.publish(job("b"+strings.Repeat("x", i)+":b", "b", url))
+	}
+	h.wait(t, 100)
+	b.waitSent("a1:a")
+}
+
+// A crash between recording a retried job as sent and taking it out of the queue does not send it again.
+func TestSentJobLeftInTheQueueIsNotSentAgain(t *testing.T) {
+	b := newBench(t)
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls.Add(1) }))
+	defer srv.Close()
+	q, err := openRetries(b.cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := q.save(&retry{Job: job("e1:ch", "ch", srv.URL), First: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	sent, _ := openSent(b.cache)
+	if err := sent.add("e1:ch", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	b.run(&Service{})
+	b.waitQueued(0)
+	if n := calls.Load(); n != 0 {
+		t.Fatalf("sent %d times", n)
+	}
+}
+
+// A job the bus delivers again while it waits in the queue is not sent from the bus a second time.
+func TestQueuedJobIsNotSentAgainFromTheBus(t *testing.T) {
+	b := newBench(t)
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(503)
+	}))
+	defer srv.Close()
+	b.run(&Service{Backoff: func(int) time.Duration { return time.Hour }})
+	b.publish(job("e1:ch", "ch", srv.URL))
+	b.waitQueued(1)
+	b.publish(job("e1:ch", "ch", srv.URL))
+	time.Sleep(100 * time.Millisecond)
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("tried %d times", n)
+	}
+}
+
+// What a crash leaves in the queue: a damaged entry and a temporary file are removed, not sent.
+func TestDamagedQueueEntriesAreRemoved(t *testing.T) {
+	dir := t.TempDir()
+	q, err := openRetries(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	good := &retry{Job: job("e1:ch", "ch", "http://example.invalid/")}
+	if err := q.save(good); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(q.file("e1:ch"))
+	for name, body := range map[string][]byte{"bad.json": []byte("{"), q.file("e2:ch")[len(q.dir)+1:] + ".tmp": data} {
+		if err := os.WriteFile(filepath.Join(q.dir, name), body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if q, err = openRetries(dir); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := os.ReadDir(q.dir)
+	if len(q.items) != 1 || !q.has("e1:ch") || len(entries) != 1 {
+		t.Fatalf("%d kept, %d files", len(q.items), len(entries))
+	}
+}
+
+func TestBusyRetryIsNotDueTwice(t *testing.T) {
+	q, err := openRetries(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := q.save(&retry{Job: job("e1:ch", "ch", "http://example.invalid/")}); err != nil {
+		t.Fatal(err)
+	}
+	if first, second := q.due(time.Now()), q.due(time.Now()); len(first) != 1 || len(second) != 0 {
+		t.Fatalf("due %d then %d", len(first), len(second))
 	}
 }

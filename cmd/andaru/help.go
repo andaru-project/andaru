@@ -95,7 +95,7 @@ Its systemd unit runs it as the andaru-outbound user.
 Options:
   --bus-socket PATH  the bus socket for Andaru's services
                      (default /run/andaru-services/bus.sock)
-  --cache-dir PATH   where the IDs of sent jobs are kept
+  --cache-dir PATH   where sent job IDs and jobs waiting for a retry are kept
                      (default $CACHE_DIRECTORY, else /var/cache/andaru-outbound)
 `
 

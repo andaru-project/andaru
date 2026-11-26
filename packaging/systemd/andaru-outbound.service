@@ -15,7 +15,8 @@ CacheDirectoryMode=0700
 UMask=0077
 Restart=always
 RestartSec=5s
-# The network, and nothing else: no capabilities, no secret store, no state beyond the IDs of sent jobs.
+# The network, and nothing else: no capabilities and no secret store. Its cache holds sent job IDs and the jobs
+# waiting for a retry, with their credentials, 0600 in this 0700 directory.
 NoNewPrivileges=yes
 CapabilityBoundingSet=
 AmbientCapabilities=
