@@ -171,23 +171,25 @@ it('filters eligible VLAN parents and bridge/bond members according to link rule
         { id: 'lnk_seg', name: 'Segmented eth', kind: 'ethernet', mtu: 1500, enabled: true, permanentMac: '52:54:00:00:00:02' },
         { id: 'lnk_trunk', name: 'Trunk eth', kind: 'ethernet', mtu: 1500, enabled: true, permanentMac: '52:54:00:00:00:03' },
         { id: 'lnk_vlan', name: 'VLAN 10', kind: 'vlan', mtu: 1500, enabled: true, parent: 'lnk_trunk', vlanId: 10 },
-        { id: 'lnk_pppoe', name: 'ISP PPPoE', kind: 'pppoe', mtu: 1492, enabled: true, parent: 'lnk_trunk', username: 'u' },
+        { id: 'lnk_pppoe', name: 'ISP PPPoE', kind: 'pppoe', mtu: 1492, enabled: true, parent: 'lnk_trunk' },
         { id: 'lnk_bond_member', name: 'Bond member eth', kind: 'ethernet', mtu: 1500, enabled: true, permanentMac: '52:54:00:00:00:04' },
         { id: 'lnk_bond', name: 'Bond 0', kind: 'bond', mtu: 1500, enabled: true, mode: '802.3ad', members: ['lnk_bond_member'] },
         { id: 'lnk_br', name: 'Bridge 0', kind: 'bridge', mtu: 1500, enabled: true, members: [] },
+        { id: 'lnk_br_vlan', name: 'Bridge VLAN 50', kind: 'vlan', mtu: 1500, enabled: true, parent: 'lnk_br', vlanId: 50 },
       ],
       segments: [{ id: 'seg_1', name: 'LAN', link: 'lnk_seg', zone: 'zon_1', addressing: { ipv4: { mode: 'dhcp' }, ipv6: { mode: 'none' } } }],
       zones: [{ id: 'zon_1', name: 'LAN' }],
     },
   };
 
-  // VLAN parents exclude PPPoE, enslaved members, self, and dependents of self.
-  expect(vlanParentOptions(snapshot, undefined, '').map((o) => o.value)).toEqual(['lnk_free', 'lnk_seg', 'lnk_trunk', 'lnk_vlan', 'lnk_bond', 'lnk_br']);
-  expect(vlanParentOptions(snapshot, 'lnk_trunk', '').map((o) => o.value)).toEqual(['lnk_free', 'lnk_seg', 'lnk_bond', 'lnk_br']);
+  // VLAN parents exclude PPPoE, enslaved members, self, and direct/transitive dependents of self.
+  expect(vlanParentOptions(snapshot, undefined, '').map((o) => o.value)).toEqual(['lnk_free', 'lnk_seg', 'lnk_trunk', 'lnk_vlan', 'lnk_bond', 'lnk_br', 'lnk_br_vlan']);
+  expect(vlanParentOptions(snapshot, 'lnk_trunk', '').map((o) => o.value)).toEqual(['lnk_free', 'lnk_seg', 'lnk_bond', 'lnk_br', 'lnk_br_vlan']);
+  expect(vlanParentOptions(snapshot, 'lnk_br', '').map((o) => o.value)).toEqual(['lnk_free', 'lnk_seg', 'lnk_trunk', 'lnk_vlan', 'lnk_bond']);
 
-  // Bridge members allow unassigned Ethernet, VLAN, and bond links with no children or other master.
+  // Bridge members allow unassigned Ethernet, VLAN, and bond links with no children or other master, excluding dependents (lnk_br_vlan depends on lnk_br).
   expect(memberLinkOptions(snapshot, 'bridge', 'lnk_br', []).map((o) => o.value)).toEqual(['lnk_free', 'lnk_vlan', 'lnk_bond']);
-  // Bond members allow only unassigned Ethernet ports with no children or other master, while keeping current members of self.
+  // Bond members allow only unassigned Ethernet ports with no children or other master, keeping and deduplicating current members of self.
   expect(memberLinkOptions(snapshot, 'bond', undefined, []).map((o) => o.value)).toEqual(['lnk_free']);
-  expect(memberLinkOptions(snapshot, 'bond', 'lnk_bond', ['lnk_bond_member']).map((o) => o.value)).toEqual(['lnk_free', 'lnk_bond_member']);
+  expect(memberLinkOptions(snapshot, 'bond', 'lnk_bond', ['lnk_bond_member', 'lnk_missing', 'lnk_missing']).map((o) => o.value)).toEqual(['lnk_free', 'lnk_bond_member', 'lnk_missing']);
 });

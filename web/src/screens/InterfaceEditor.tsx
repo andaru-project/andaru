@@ -2,7 +2,7 @@ import { Alert, Button, Drawer, Fieldset, Group, List, MultiSelect, NativeSelect
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, saveFailure } from '../api';
 import { bondModes, draftOf, interfaceErrors, interfaceOperations, ipv4Modes, ipv6Modes, memberLinkOptions, newZoneOption, removeOperations, vlanParentOptions, type InterfaceDraft } from '../interfaceEdit';
-import type { ConfigBatchOperation, LinkStatus, SavedLink, SavedObject, Segment, Snapshot, VirtualLinkKind } from '../types';
+import type { BondMode, ConfigBatchOperation, LinkStatus, SavedLink, SavedObject, Segment, Snapshot, VirtualLinkKind } from '../types';
 import { ZonePill } from './ZoneBadge';
 
 interface InterfaceEditorProps {
@@ -22,6 +22,20 @@ interface InterfaceEditorProps {
 const mono = { input: 'mono-input' };
 const placeholderOption = { value: '', label: 'Choose…', disabled: true };
 const newKindTitle: Record<VirtualLinkKind, string> = { vlan: 'Add VLAN', bridge: 'Add bridge', bond: 'Add bond' };
+
+// Walk member links to the top-level master (e.g. ethernet -> bond -> bridge), guarded against cycles.
+function topMasterOf(links: SavedLink[], id: string): SavedLink | undefined {
+  let currentId = id;
+  let master: SavedLink | undefined;
+  const visited = new Set<string>([id]);
+  while (true) {
+    const next = links.find((item) => item.members?.includes(currentId));
+    if (!next || visited.has(next.id)) return master;
+    visited.add(next.id);
+    master = next;
+    currentId = next.id;
+  }
+}
 
 // What keeps an interface from being removed, as far as the saved configuration says; the engine has the last word.
 function removalBlockers(snapshot: Snapshot, link: SavedLink, segment: Segment | undefined) {
@@ -63,7 +77,7 @@ export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClos
 
   const set = (next: Partial<InterfaceDraft>) => setDraft((current) => ({ ...current, ...next }));
   const managed = segment !== undefined && snapshot.value.management?.segment === segment.value.id;
-  const master = link ? snapshot.value.links.find((item) => item.members?.includes(link.value.id)) : undefined;
+  const master = link ? topMasterOf(snapshot.value.links, link.value.id) : undefined;
   const zones = [...snapshot.value.zones.map((zone) => ({ value: zone.id, label: zone.name })), { value: newZoneOption, label: 'New zone…' }];
   // A delegated prefix comes from another segment's DHCPv6 client.
   const delegators = snapshot.value.segments.filter((item) => item.id !== segment?.value.id && item.addressing.ipv6.mode === 'dhcp6').map((item) => ({ value: item.id, label: item.name }));
@@ -80,12 +94,18 @@ export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClos
     if (!draft.name.trim()) found.set('name', 'An interface needs a name.');
     const rawMtu = draft.mtu.trim();
     const mtu = Number(rawMtu);
-    if (!/^\d+$/.test(rawMtu) || !Number.isInteger(mtu) || mtu < 68 || mtu > 65535) found.set('mtu', 'From 68 to 65535.');
+    if (!/^\d+$/.test(rawMtu) || mtu < 68 || mtu > 65535) found.set('mtu', 'From 68 to 65535.');
     if (draft.kind === 'vlan') {
+      const parent = snapshot.value.links.find((item) => item.id === draft.parent);
       if (!draft.parent) found.set('parent', 'Choose the parent interface.');
+      else if (parent && !found.has('mtu') && mtu > parent.mtu) found.set('mtu', `Cannot exceed parent MTU (${parent.mtu}).`);
       const rawVlan = draft.vlanId.trim();
       const vlanId = Number(rawVlan);
-      if (!/^\d+$/.test(rawVlan) || !Number.isInteger(vlanId) || vlanId < 1 || vlanId > 4094) found.set('vlanId', 'A VLAN ID is a whole number from 1 to 4094.');
+      if (!/^\d+$/.test(rawVlan) || vlanId < 1 || vlanId > 4094) found.set('vlanId', 'A VLAN ID is a whole number from 1 to 4094.');
+      else if (draft.parent) {
+        const duplicate = snapshot.value.links.find((item) => item.kind === 'vlan' && item.id !== link?.value.id && item.parent === draft.parent && item.vlanId === vlanId);
+        if (duplicate) found.set('vlanId', `VLAN ${vlanId} already exists on this parent (${duplicate.name}).`);
+      }
     } else if (draft.kind === 'bond') {
       if (!draft.bondMode) found.set('bondMode', 'Choose a bond mode.');
       if (draft.members.length === 0) found.set('members', 'A bond needs at least one Ethernet member.');
@@ -163,7 +183,7 @@ export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClos
               A change here can cut this browser off. When you apply it, confirm from the new address in time; otherwise the apply rolls back on its own.
             </Alert>
           )}
-          {!link && <Text size="sm" c="dimmed">{newKind ? 'Saving adds the virtual interface to the configuration. Nothing changes on the box until the change is applied.' : 'Saving adds the port to the configuration. Nothing changes on the box until the change is applied.'}</Text>}
+          {!link && <Text size="sm" c="dimmed">Saving adds the {newKind ? 'virtual interface' : 'port'} to the configuration. Nothing changes on the box until the change is applied.</Text>}
           {/* While a removal waits for its confirmation, nothing else is edited. */}
           <Fieldset variant="unstyled" disabled={busy || removing}>
             <Stack>
@@ -173,27 +193,35 @@ export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClos
                     <TextInput className="grow" data-autofocus={managed ? undefined : true} label="Name" maxLength={128} required value={draft.name} error={errors.get('name')}
                       onChange={(event) => {
                         const name = event.currentTarget.value;
-                        set(!link && !live && draft.segmentName === draft.name ? { name, segmentName: name } : { name });
+                        setDraft((current) => ({ ...current, name, ...(!link && !live && current.segmentName === current.name ? { segmentName: name } : {}) }));
                       }} />
                     <TextInput w="6rem" classNames={mono} label="MTU" inputMode="numeric" required value={draft.mtu} error={errors.get('mtu')} onChange={(event) => set({ mtu: event.currentTarget.value })} />
                   </Group>
                   {draft.kind === 'vlan' && (
                     <>
-                      <Select label="Parent interface" required searchable allowDeselect={false} data={parentOptions} value={draft.parent || null} error={errors.get('parent')} disabled={parentOptions.length === 0}
-                        description={parentOptions.length === 0 ? 'Add an Ethernet, bridge, or bond interface first.' : 'The interface that carries tagged traffic for this VLAN.'}
-                        onChange={(value) => set({ parent: value ?? '' })} />
+                      <Select label="Parent interface" placeholder="Choose…" required searchable allowDeselect={false} data={parentOptions} value={draft.parent || null} error={errors.get('parent')} nothingFoundMessage="No eligible interface by that name."
+                        description={parentOptions.length === 0 ? 'No eligible non-PPPoE parent interface is available yet.' : 'The interface that carries tagged traffic for this VLAN.'}
+                        onChange={(value) => {
+                          const parentId = value ?? '';
+                          const parent = snapshot.value.links.find((item) => item.id === parentId);
+                          setDraft((current) => ({
+                            ...current,
+                            parent: parentId,
+                            ...(!link && parent && current.mtu === '1500' && parent.mtu < 1500 ? { mtu: String(parent.mtu) } : {}),
+                          }));
+                        }} />
                       <TextInput classNames={mono} label="VLAN ID" description="802.1Q tag from 1 to 4094." inputMode="numeric" required placeholder="20" value={draft.vlanId} error={errors.get('vlanId')} onChange={(event) => set({ vlanId: event.currentTarget.value })} />
                     </>
                   )}
                   {draft.kind === 'bridge' && (
-                    <MultiSelect label="Member interfaces" searchable clearable data={memberOptions} value={draft.members} error={errors.get('members')} nothingFoundMessage="No eligible interface by that name."
+                    <MultiSelect label="Member interfaces" searchable clearable clearButtonProps={{ 'aria-label': 'Clear member interfaces' }} data={memberOptions} value={draft.members} error={errors.get('members')} nothingFoundMessage="No eligible interface by that name."
                       description={memberOptions.length === 0 ? 'No unassigned eligible interfaces are available yet. A bridge can start empty.' : 'Unassigned Ethernet, VLAN, or bond interfaces bridged together. Leave empty for an isolated bridge.'}
                       onChange={(value) => set({ members: value })} />
                   )}
                   {draft.kind === 'bond' && (
                     <>
-                      <Select label="Bond mode" required allowDeselect={false} data={bondModes} value={draft.bondMode || null} error={errors.get('bondMode')} onChange={(value) => set({ bondMode: value ?? '' })} />
-                      <MultiSelect label="Member interfaces" required searchable clearable data={memberOptions} value={draft.members} error={errors.get('members')} nothingFoundMessage="No eligible Ethernet port by that name."
+                      <Select label="Bond mode" required allowDeselect={false} data={bondModes} value={draft.bondMode || null} error={errors.get('bondMode')} onChange={(value) => set({ bondMode: (value ?? '') as BondMode | '' })} />
+                      <MultiSelect label="Member interfaces" required searchable clearable clearButtonProps={{ 'aria-label': 'Clear member interfaces' }} data={memberOptions} value={draft.members} error={errors.get('members')} nothingFoundMessage="No eligible Ethernet port by that name."
                         description={memberOptions.length === 0 ? 'Add at least one unassigned Ethernet port without VLANs first.' : 'Unassigned Ethernet ports aggregated in this bond.'}
                         onChange={(value) => set({ members: value })} />
                     </>

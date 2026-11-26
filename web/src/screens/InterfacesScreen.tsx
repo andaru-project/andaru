@@ -101,7 +101,7 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
   };
   const createVirtual = async (kind: VirtualLinkKind) => {
     if (opening) return;
-    setOpening(`new:${kind}`);
+    setOpening('new');
     setError('');
     try {
       const snapshot = await api.config();
@@ -178,7 +178,7 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
           {editable && (
             <Menu position="bottom-end">
               <Menu.Target>
-                <Button size="xs" rightSection={<ComboboxChevron />} loading={opening.startsWith('new:')} disabled={Boolean(opening) && !opening.startsWith('new:')}>Add virtual interface</Button>
+                <Button size="xs" rightSection={<ComboboxChevron size="xs" style={{ color: 'currentColor' }} />} loading={opening === 'new'} disabled={Boolean(opening) && opening !== 'new'}>Add virtual interface</Button>
               </Menu.Target>
               <Menu.Dropdown>
                 <Menu.Item onClick={() => void createVirtual('vlan')}>VLAN</Menu.Item>
@@ -248,7 +248,7 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
         </>
       )}
       {editing && (
-        <InterfaceEditor key={editing.link?.value.id ?? editing.live?.name ?? editing.newKind} {...editing} onClose={() => setEditing(undefined)}
+        <InterfaceEditor key={editing.link ? `link:${editing.link.value.id}` : editing.live ? `live:${editing.live.name}` : `new:${editing.newKind}`} {...editing} onClose={() => setEditing(undefined)}
           onSessionLost={onSessionLost} onAbandoned={setSaveError} onSave={save} />
       )}
     </Stack>

@@ -10,7 +10,7 @@ export interface InterfaceDraft {
   parent: string;
   vlanId: string;
   members: string[];
-  bondMode: string;
+  bondMode: BondMode | '';
   // Whether the interface carries a network of its own: a segment, with a zone and addressing.
   // A link without one still serves as a VLAN trunk's parent or a bridge member.
   assigned: boolean;
@@ -93,32 +93,34 @@ export interface LinkOption {
   label: string;
 }
 
-// Links that depend directly or transitively on selfId (via parent or members) cannot become selfId's parent or member without a cycle.
+// selfId and every link that depends directly or transitively on it (via parent or members) cannot become selfId's parent or member without a cycle.
 function dependentsOf(links: SavedLink[], selfId: string | undefined): Set<string> {
-  const seen = new Set<string>();
-  if (!selfId) return seen;
-  const reverse = new Map<string, string[]>();
-  for (const item of links) {
-    if (item.parent) reverse.set(item.parent, [...(reverse.get(item.parent) ?? []), item.id]);
-    for (const member of item.members ?? []) reverse.set(member, [...(reverse.get(member) ?? []), item.id]);
-  }
-  const queue = [selfId];
-  while (queue.length > 0) {
-    const id = queue.shift()!;
-    for (const dependent of reverse.get(id) ?? []) {
-      if (!seen.has(dependent)) {
-        seen.add(dependent);
-        queue.push(dependent);
+  const blocked = new Set<string>();
+  if (!selfId) return blocked;
+  blocked.add(selfId);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const item of links) {
+      if (blocked.has(item.id)) continue;
+      if ((item.parent && blocked.has(item.parent)) || item.members?.some((member) => blocked.has(member))) {
+        blocked.add(item.id);
+        grew = true;
       }
     }
   }
-  return seen;
+  return blocked;
 }
 
 function withSelectedLinks(options: LinkOption[], selected: string[], links: SavedLink[]): LinkOption[] {
   const byId = new Map(links.map((item) => [item.id, item.name]));
   const present = new Set(options.map((item) => item.value));
-  const missing = selected.filter((id) => id && !present.has(id)).map((id) => ({ value: id, label: byId.get(id) ?? id }));
+  const missing: LinkOption[] = [];
+  for (const id of selected) {
+    if (!id || present.has(id)) continue;
+    present.add(id);
+    missing.push({ value: id, label: byId.get(id) ?? id });
+  }
   return missing.length > 0 ? [...options, ...missing] : options;
 }
 
@@ -128,30 +130,28 @@ export function vlanParentOptions(snapshot: Snapshot, selfId: string | undefined
   const enslaved = new Set(links.flatMap((item) => item.members ?? []));
   const blocked = dependentsOf(links, selfId);
   const options = links
-    .filter((item) => item.id !== selfId && item.kind !== 'pppoe' && !enslaved.has(item.id) && !blocked.has(item.id))
+    .filter((item) => item.kind !== 'pppoe' && !enslaved.has(item.id) && !blocked.has(item.id))
     .map((item) => ({ value: item.id, label: item.name }));
   return withSelectedLinks(options, selected ? [selected] : [], links);
 }
 
-// Bridge/bond members cannot be PPPoE or bridges (bonds allow Ethernet only), cannot already belong to another master,
+// Bridge/bond members allow Ethernet/VLAN/bond for bridges (Ethernet only for bonds), cannot already belong to another master,
 // cannot carry a segment or child VLAN/PPPoE links, and cannot depend on this link.
 export function memberLinkOptions(snapshot: Snapshot, kind: 'bridge' | 'bond', selfId: string | undefined, selected: string[]): LinkOption[] {
   const links = snapshot.value.links;
-  const masterOf = new Map<string, string>();
+  const otherMasters = new Set<string>();
   const parents = new Set<string>();
   for (const item of links) {
-    for (const member of item.members ?? []) masterOf.set(member, item.id);
+    if (item.id !== selfId) for (const member of item.members ?? []) otherMasters.add(member);
     if (item.parent) parents.add(item.parent);
   }
   const segmented = new Set(snapshot.value.segments.map((item) => item.link));
   const blocked = dependentsOf(links, selfId);
   const options = links
     .filter((item) => {
-      if (item.id === selfId || blocked.has(item.id)) return false;
-      if (kind === 'bond' ? item.kind !== 'ethernet' : item.kind === 'pppoe' || item.kind === 'bridge') return false;
-      const master = masterOf.get(item.id);
-      if (master && master !== selfId) return false;
-      if (segmented.has(item.id) || parents.has(item.id)) return false;
+      if (blocked.has(item.id)) return false;
+      if (kind === 'bond' ? item.kind !== 'ethernet' : item.kind !== 'ethernet' && item.kind !== 'vlan' && item.kind !== 'bond') return false;
+      if (otherMasters.has(item.id) || segmented.has(item.id) || parents.has(item.id)) return false;
       return true;
     })
     .map((item) => ({ value: item.id, label: item.name }));

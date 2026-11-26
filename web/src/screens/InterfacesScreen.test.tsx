@@ -494,3 +494,47 @@ it('edits an existing VLAN tag and locks segment assignment on a bridge member',
   expect(within(panel).getByRole('switch', { name: /Carries a segment/ })).toBeDisabled();
   expect(panel).toHaveTextContent('this interface is a member of LAN bridge');
 });
+
+it('validates duplicate VLAN IDs and parent MTU ceiling, and clamps default MTU for sub-1500 parents', async () => {
+  const user = userEvent.setup();
+  const smallParent = 'lnk_77777777-7777-4777-8777-777777777777';
+  const sent = vi.fn<(init: RequestInit | undefined) => Response>(() => jsonResponse(200, { savedVersion: '8' }));
+  routes({
+    links: [
+      ethernet(lanPort, 'LAN port', '52:54:00:aa:bb:01'),
+      { id: guestVlan, name: 'Guest VLAN', kind: 'vlan', mtu: 1500, enabled: true, parent: lanPort, vlanId: 20 },
+      { ...ethernet(smallParent, 'Small port', '52:54:00:aa:bb:11'), mtu: 1400 },
+    ],
+    findings: [],
+    extra: { 'POST /api/v1/config/changes': sent },
+  });
+  render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={vi.fn()} onSessionLost={vi.fn()} />);
+
+  await user.click(await screen.findByRole('button', { name: 'Add virtual interface' }));
+  await user.click(await screen.findByRole('menuitem', { name: 'VLAN' }));
+  const panel = await screen.findByRole('dialog');
+  await user.type(within(panel).getByLabelText(/^Name/), 'Dup VLAN');
+  await user.click(within(panel).getByRole('switch', { name: /Carries a segment/ }));
+
+  // Selecting sub-1500 parent clamps default 1500 MTU to parent MTU.
+  const parentInput = within(panel).getByLabelText(/^Parent interface/, { selector: 'input' });
+  await user.click(parentInput);
+  await user.click(await screen.findByRole('option', { name: 'Small port' }));
+  const mtuInput = within(panel).getByLabelText(/^MTU/);
+  expect(mtuInput).toHaveValue('1400');
+
+  // Raising MTU above parent MTU is rejected client-side.
+  await user.clear(mtuInput);
+  await user.type(mtuInput, '1450');
+  await user.type(within(panel).getByLabelText(/^VLAN ID/), '20');
+  await user.click(within(panel).getByRole('button', { name: 'Save interface' }));
+  expect(await within(panel).findByText('Cannot exceed parent MTU (1400).')).toBeInTheDocument();
+  expect(sent).not.toHaveBeenCalled();
+
+  // Duplicate (parent, vlanId) on LAN port is rejected client-side.
+  await user.click(parentInput);
+  await user.click(await screen.findByRole('option', { name: 'LAN port' }));
+  await user.click(within(panel).getByRole('button', { name: 'Save interface' }));
+  expect(await within(panel).findByText('VLAN 20 already exists on this parent (Guest VLAN).')).toBeInTheDocument();
+  expect(sent).not.toHaveBeenCalled();
+});

@@ -220,7 +220,6 @@ export interface SavedLink {
   vlanId?: number;
   members?: string[];
   mode?: BondMode;
-  username?: string;
 }
 
 export interface Segment {
