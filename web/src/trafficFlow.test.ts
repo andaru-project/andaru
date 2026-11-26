@@ -741,6 +741,16 @@ describe('simulateTrafficFlow', () => {
     expect(dynUnleased.verdict).toBe('no_route');
     expect(dynUnleased.decidedBy).toEqual({ label: 'DHCPv6 LAN dynamic PD', to: '/network/dhcp' });
 
+    // Unused subnet inside the WAN's held delegated prefix (outside LAN's /64 and any PD pool) hits the WAN delegated-prefix unreachable route.
+    const unusedWanDelegated = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '2001:db8:aa00::50', dstIp: '2001:db8:aa00:ff::10', dstPort: 443 },
+      dynamicPdPool,
+      pdLiveLinks,
+      { liveLeases6: [], livePrefixes: pdLivePrefixes },
+    );
+    expect(unusedWanDelegated.verdict).toBe('no_route');
+    expect(unusedWanDelegated.decidedBy).toEqual({ label: 'Delegated prefix on WAN', to: '/network/interfaces' });
+
     // Saved config changing pool length from /60 to /62 derives 2001:db8:aa00:4::/62 from WAN current.prefix rather than stale live pools.
     const savedNarrowedPool: Snapshot['value'] = {
       ...dynamicPdPool,

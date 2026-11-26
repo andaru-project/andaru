@@ -996,9 +996,24 @@ export function simulateTrafficFlow(
     // Active DHCPv6 prefix-delegation lease routes (internal/generation/pdroutes.go:243-293) and
     // unreachable pool routes (internal/render/networkd.go:221-227 + pdroutes.go:188-197,277-284).
     let bestDelegated: { segment: Segment; prefix: ParsedPrefix; hostname: string } | undefined;
-    let bestUnreachable: { segment: Segment; entryName: string; prefix: ParsedPrefix } | undefined;
+    let bestUnreachable: { segment: Segment; label: string; to: string; prefix: ParsedPrefix } | undefined;
     let hasUnresolvedDynamicPool = false;
     if (effectiveDstIp.family === 6) {
+      // systemd-networkd installs an unreachable route for each WAN's delegated IPv6 prefix to prevent routing loops (prefixes.go:104-108).
+      if (options.livePrefixes) {
+        for (const seg of snapshot.segments) {
+          if (!isLinkUsable(seg.link, linksById)) continue;
+          if (seg.addressing.ipv6.mode !== 'dhcp6' && seg.addressing.ipv6.requestPrefixLength === undefined) continue;
+          const link = linksById.get(seg.link);
+          const iface = findLiveLink(link, liveLinks)?.name
+            ?? (link && link.kind !== 'ethernet' ? kernelName(link, new Map()) : undefined);
+          const wanView = iface ? options.livePrefixes.wans.find((w) => w.interface === iface) : undefined;
+          const held = wanView?.current?.prefix ? parsePrefix(wanView.current.prefix) : null;
+          if (held && held.family === 6 && prefixContains(held, effectiveDstIp) && (!bestUnreachable || held.bits > bestUnreachable.prefix.bits)) {
+            bestUnreachable = { segment: seg, label: `Delegated prefix on ${seg.name}`, to: '/network/interfaces', prefix: held };
+          }
+        }
+      }
       const dhcp6BySegment = new Map<string, Array<{ name: string; pool?: ParsedPrefix; dynamic?: boolean }>>();
       for (const e of snapshot.dhcp6 ?? []) {
         if (!e.prefixDelegation) continue;
@@ -1008,7 +1023,7 @@ export function simulateTrafficFlow(
           const pool = parsePrefix(e.prefixDelegation.prefix);
           if (pool && pool.family === 6) {
             if (prefixContains(pool, effectiveDstIp) && (!bestUnreachable || pool.bits > bestUnreachable.prefix.bits)) {
-              bestUnreachable = { segment: seg, entryName: e.name, prefix: pool };
+              bestUnreachable = { segment: seg, label: `DHCPv6 ${e.name}`, to: '/network/dhcp', prefix: pool };
             }
             dhcp6BySegment.set(e.segment, [...(dhcp6BySegment.get(e.segment) ?? []), { name: e.name, pool }]);
           }
@@ -1033,7 +1048,7 @@ export function simulateTrafficFlow(
         }
         const pool = placeIpv6Prefix(base, BigInt(`0x${rawSubnetId}`), poolLength);
         if (pool && prefixContains(pool, effectiveDstIp) && (!bestUnreachable || pool.bits > bestUnreachable.prefix.bits)) {
-          bestUnreachable = { segment: seg, entryName: e.name, prefix: pool };
+          bestUnreachable = { segment: seg, label: `DHCPv6 ${e.name}`, to: '/network/dhcp', prefix: pool };
         }
       }
       for (const lease of options.liveLeases6 ?? []) {
@@ -1058,13 +1073,13 @@ export function simulateTrafficFlow(
       && (!bestDelegated || bestUnreachable.prefix.bits > bestDelegated.prefix.bits),
     );
     if (unreachableWins && bestUnreachable) {
-      if (options.liveLeases6 === undefined) {
+      if (options.liveLeases6 === undefined && bestUnreachable.to === '/network/dhcp') {
         warnings.push(`Active DHCPv6 prefix-delegation leases were unavailable; assuming ${effectiveDstIp.canonical} inside ${bestUnreachable.prefix.raw} is unleased.`);
       }
       return stopUnroutable(
-        `Matched unreachable route ${bestUnreachable.prefix.raw} for DHCPv6 delegation pool "${bestUnreachable.entryName}" on ${bestUnreachable.segment.name}.`,
-        `Destination falls in unleased DHCPv6 delegation pool ${bestUnreachable.prefix.raw} (unreachable route).`,
-        { label: `DHCPv6 ${bestUnreachable.entryName}`, to: '/network/dhcp' },
+        `Matched unreachable route ${bestUnreachable.prefix.raw} (${bestUnreachable.label} on ${bestUnreachable.segment.name}).`,
+        `Destination falls in unallocated IPv6 prefix ${bestUnreachable.prefix.raw} (unreachable route).`,
+        { label: bestUnreachable.label, to: bestUnreachable.to },
       );
     }
     if (delegatedBeatsConnected && bestDelegated) {
