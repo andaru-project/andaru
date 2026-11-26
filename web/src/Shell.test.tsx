@@ -9,7 +9,7 @@ import { openStreams } from './test/events';
 import { setTimeZone } from './timezone';
 import { fetchRoutes, jsonResponse } from './test/fetch';
 import { apply, pointers, session } from './test/fixtures';
-import { act, render, screen } from './test/render';
+import { act, render, screen, waitFor } from './test/render';
 import userEvent from '@testing-library/user-event';
 
 const reader = session(['configuration.read']);
@@ -221,16 +221,33 @@ it('has the aliases as a page beside the rules', async () => {
 });
 
 it('has a page for what the box is made of, under System', async () => {
+  let hostname = 'edge';
   fetchRoutes({
-    '/api/v1/status/system': { version: '0.5.0-a.4', hostname: 'edge', kernel: '6.17', architecture: 'x86_64', time: '2026-11-21T12:00:00Z', bootedAt: null, memoryBytes: 0, guest: '', iommu: false,
+    '/api/v1/status/system': () => jsonResponse(200, { version: '0.5.0-a.4', hostname, kernel: '6.17', architecture: 'x86_64', time: '2026-11-21T12:00:00Z', bootedAt: null, memoryBytes: 0, guest: '', iommu: false,
       cpu: { model: 'Test CPU', cores: 2, threads: 2, microcode: '', level: '', features: { cryptography: [], security: [], virtualization: [] }, vulnerabilities: [] },
-      hardware: { vendor: '', product: '', serial: '', boardVendor: '', board: '', biosVendor: '', biosVersion: '', biosDate: '' } },
+      hardware: { vendor: '', product: '', serial: '', boardVendor: '', board: '', biosVendor: '', biosVersion: '', biosDate: '' } }),
+    'POST /api/v1/system/hostname': () => {
+      hostname = 'core-gw';
+      return jsonResponse(200, { hostname });
+    },
     '/api/v1/applies': unapplied,
     '/api/v1/versions?': { state: 'saved', items: [] },
   });
-  render(<MemoryRouter initialEntries={['/system/details']}><Shell api={new ApiClient('csrf')} session={session(['status.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} /></MemoryRouter>);
+  const { unmount } = render(<MemoryRouter initialEntries={['/system/details']}><Shell api={new ApiClient('csrf')} session={session(['status.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} /></MemoryRouter>);
   expect(await screen.findByRole('heading', { name: 'System details' })).toBeInTheDocument();
   expect(await screen.findByRole('region', { name: 'Processor' })).toHaveTextContent('Test CPU, 2 cores');
+  expect(screen.queryByRole('button', { name: 'Change hostname' })).not.toBeInTheDocument();
+  unmount();
+
+  const user = userEvent.setup();
+  render(<MemoryRouter initialEntries={['/system/details']}><Shell api={new ApiClient('csrf')} session={session(['status.read', 'configuration.apply'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} /></MemoryRouter>);
+  await user.click(await screen.findByRole('button', { name: 'Change hostname' }));
+  const input = await screen.findByLabelText(/Hostname/i, { selector: 'input' });
+  await user.clear(input);
+  await user.type(input, 'core-gw');
+  await user.click(screen.getByRole('button', { name: 'Save hostname' }));
+  expect(await screen.findByText('Hostname updated to core-gw.')).toBeInTheDocument();
+  await waitFor(() => expect(document.title).toContain('core-gw'));
 });
 
 it('reads the box again each minute, so an upgrade behind an open tab shows', async () => {
