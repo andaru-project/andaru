@@ -47,6 +47,7 @@ import type {
   Usage,
   User,
   VersionDetail,
+  VirtualAddress,
   Zone,
 } from './types';
 
@@ -492,6 +493,18 @@ export class ApiClient {
 
   deleteZone(id: string, version: string) {
     return this.request(`/api/v1/config/zones/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { 'If-Match': `"${id}.${version}"` } }, true);
+  }
+
+  virtualAddresses() {
+    return this.request<SavedList<VirtualAddress>>('/api/v1/config/virtualAddresses');
+  }
+
+  saveVirtualAddress(vip: Omit<VirtualAddress, 'id'>, saved?: SavedObject<VirtualAddress>) {
+    return this.save('/api/v1/config/virtualAddresses', vip, saved);
+  }
+
+  deleteVirtualAddress(id: string, version: string) {
+    return this.request(`/api/v1/config/virtualAddresses/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { 'If-Match': `"${id}.${version}"` } }, true);
   }
 
   rules() {
