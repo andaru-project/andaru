@@ -374,6 +374,7 @@ type channel struct {
 	Ntfy     *ntfy         `json:"ntfy,omitempty"`
 	Pushover *pushover     `json:"pushover,omitempty"`
 	Telegram *telegram     `json:"telegram,omitempty"`
+	Email    *email        `json:"email,omitempty"`
 }
 type channelFilter struct {
 	MinSeverity string   `json:"minSeverity,omitempty"`
@@ -405,6 +406,18 @@ type telegram struct {
 	ChatID string          `json:"chatId"`
 }
 
+// email is an SMTP server, reached over implicit TLS or STARTTLS, and the addresses a message is sent from and to.
+// Username and Password are both set or both left out.
+type email struct {
+	Host     string           `json:"host"`
+	Port     int              `json:"port"`
+	Security string           `json:"security"`
+	Username string           `json:"username,omitempty"`
+	Password *secretReference `json:"password,omitempty"`
+	From     string           `json:"from"`
+	To       []string         `json:"to"`
+}
+
 // channelSecret is one of a channel's secret references, at its path below the channel; an optional one left out is nil.
 type channelSecret struct {
 	path string
@@ -422,6 +435,8 @@ func (c *channel) secrets() []channelSecret {
 		return []channelSecret{{"/pushover/token", &c.Pushover.Token}, {"/pushover/user", &c.Pushover.User}}
 	case c.Telegram != nil:
 		return []channelSecret{{"/telegram/token", &c.Telegram.Token}}
+	case c.Email != nil:
+		return []channelSecret{{"/email/password", c.Email.Password}}
 	}
 	return nil
 }

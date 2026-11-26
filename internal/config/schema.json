@@ -3892,7 +3892,8 @@
                 "webhook",
                 "ntfy",
                 "pushover",
-                "telegram"
+                "telegram",
+                "email"
               ]
             },
             "filter": {
@@ -3930,7 +3931,8 @@
                 },
                 "ntfy": false,
                 "pushover": false,
-                "telegram": false
+                "telegram": false,
+                "email": false
               },
               "required": [
                 "webhook"
@@ -3943,7 +3945,8 @@
                 },
                 "webhook": false,
                 "pushover": false,
-                "telegram": false
+                "telegram": false,
+                "email": false
               },
               "required": [
                 "ntfy"
@@ -3956,7 +3959,8 @@
                 },
                 "webhook": false,
                 "ntfy": false,
-                "telegram": false
+                "telegram": false,
+                "email": false
               },
               "required": [
                 "pushover"
@@ -3969,10 +3973,25 @@
                 },
                 "webhook": false,
                 "ntfy": false,
-                "pushover": false
+                "pushover": false,
+                "email": false
               },
               "required": [
                 "telegram"
+              ]
+            },
+            {
+              "properties": {
+                "kind": {
+                  "const": "email"
+                },
+                "webhook": false,
+                "ntfy": false,
+                "pushover": false,
+                "telegram": false
+              },
+              "required": [
+                "email"
               ]
             }
           ]
@@ -4050,6 +4069,53 @@
               "required": [
                 "token",
                 "chatId"
+              ],
+              "additionalProperties": false
+            },
+            "email": {
+              "type": "object",
+              "properties": {
+                "host": {
+                  "$ref": "#/$defs/emailHost"
+                },
+                "port": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65535
+                },
+                "security": {
+                  "enum": [
+                    "tls",
+                    "starttls"
+                  ]
+                },
+                "username": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "password": {
+                  "$ref": "#/$defs/secretRef"
+                },
+                "from": {
+                  "$ref": "#/$defs/emailAddress"
+                },
+                "to": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 20,
+                  "uniqueItems": true,
+                  "items": {
+                    "$ref": "#/$defs/emailAddress"
+                  }
+                }
+              },
+              "required": [
+                "host",
+                "port",
+                "security",
+                "from",
+                "to"
               ],
               "additionalProperties": false
             }
@@ -4134,6 +4200,53 @@
                 "chatId"
               ],
               "additionalProperties": false
+            },
+            "email": {
+              "type": "object",
+              "properties": {
+                "host": {
+                  "$ref": "#/$defs/emailHost"
+                },
+                "port": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65535
+                },
+                "security": {
+                  "enum": [
+                    "tls",
+                    "starttls"
+                  ]
+                },
+                "username": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "password": {
+                  "$ref": "#/$defs/secretWrite"
+                },
+                "from": {
+                  "$ref": "#/$defs/emailAddress"
+                },
+                "to": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 20,
+                  "uniqueItems": true,
+                  "items": {
+                    "$ref": "#/$defs/emailAddress"
+                  }
+                }
+              },
+              "required": [
+                "host",
+                "port",
+                "security",
+                "from",
+                "to"
+              ],
+              "additionalProperties": false
             }
           }
         }
@@ -4213,6 +4326,53 @@
                 "chatId"
               ],
               "additionalProperties": false
+            },
+            "email": {
+              "type": "object",
+              "properties": {
+                "host": {
+                  "$ref": "#/$defs/emailHost"
+                },
+                "port": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65535
+                },
+                "security": {
+                  "enum": [
+                    "tls",
+                    "starttls"
+                  ]
+                },
+                "username": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "password": {
+                  "$ref": "#/$defs/secretView"
+                },
+                "from": {
+                  "$ref": "#/$defs/emailAddress"
+                },
+                "to": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 20,
+                  "uniqueItems": true,
+                  "items": {
+                    "$ref": "#/$defs/emailAddress"
+                  }
+                }
+              },
+              "required": [
+                "host",
+                "port",
+                "security",
+                "from",
+                "to"
+              ],
+              "additionalProperties": false
             }
           },
           "required": [
@@ -4234,6 +4394,16 @@
     "telegramChatID": {
       "type": "string",
       "pattern": "^(-?[0-9]{1,63}|@[A-Za-z0-9_]{1,63})$"
+    },
+    "emailHost": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253
+    },
+    "emailAddress": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 512
     }
   }
 }

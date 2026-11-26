@@ -309,6 +309,8 @@ func (s *Service) send(ctx context.Context, job delivery.Job) error {
 		return sendPushover(ctx, s.HTTP, job)
 	case delivery.Telegram:
 		return sendTelegram(ctx, s.HTTP, job)
+	case delivery.Email:
+		return sendEmail(ctx, job)
 	}
 	return permanent(fmt.Errorf("unknown channel kind %q", job.Kind))
 }
