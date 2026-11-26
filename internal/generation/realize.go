@@ -383,8 +383,10 @@ func (o observation) unmet(set []placed, names []string, route bool) string {
 	if route && o.route == "" {
 		why := "the IPv4 default route is gone"
 		for _, name := range pppSessions(set) {
-			if l, ok := o.link(name); !ok || !globalIPv4(l) {
+			if l, ok := o.link(name); !ok {
 				why += "; PPPoE session " + name + " is not up"
+			} else if !globalIPv4(l) {
+				why += "; PPPoE session " + name + " has no IPv4 address"
 			}
 		}
 		return why
@@ -459,7 +461,7 @@ func (r Realizer) Activate(ctx context.Context, id int) (result error) {
 			return false
 		}
 		i := slices.IndexFunc(next, func(f placed) bool { return filepath.Base(f.path) == "50-andaru-"+name+".network" })
-		return i < 0 || !asksIPv4(next[i].data)
+		return i >= 0 && !asksIPv4(next[i].data)
 	})
 
 	// State first: a kill before the pointer moves leaves a generation that was never pending.
