@@ -14,7 +14,7 @@ import (
 )
 
 // The live aliases are those of the saved version the live generation was applied from, not the saved head's; a
-// saved version that does not read is taken as the saved head.
+// saved version that does not read gives none.
 func TestSavedAndLiveAliases(t *testing.T) {
 	requireRoot(t)
 	ctx := context.Background()
@@ -58,9 +58,9 @@ func TestSavedAndLiveAliases(t *testing.T) {
 	if err != nil || len(saved) != 2 || len(got) != 1 || got[0].Name != "cloudflare" {
 		t.Fatalf("live at %s: %+v %+v %v", versions[0], saved, got, err)
 	}
-	// A version the store no longer has.
+	// A version the store no longer has: none, so no source is published as the live one.
 	live("999")
-	if saved, got, err = aliases(ctx); err != nil || len(saved) != 2 || len(got) != 2 {
+	if saved, got, err = aliases(ctx); err != nil || len(saved) != 2 || got != nil {
 		t.Fatalf("live at a version gone: %+v %+v %v", saved, got, err)
 	}
 }

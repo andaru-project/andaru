@@ -19,6 +19,7 @@ import (
 	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/bus"
 	"github.com/andaru-project/andaru/internal/config"
+	"github.com/andaru-project/andaru/internal/generation"
 	"github.com/andaru-project/andaru/internal/notify"
 )
 
@@ -390,6 +391,44 @@ func TestUnwantedSourcesAreRemovedByAge(t *testing.T) {
 	}
 	if _, err := os.Stat(aliasfeed.Path(b.f.stateDir, hostAlias, b.src(0).hash)); err != nil {
 		t.Fatalf("a wanted state removed: %v", err)
+	}
+}
+
+// goLive makes a generation live whose filter fills alias id's sets from the source hash.
+func (b *feedBench) goLive(id, hash string) {
+	b.t.Helper()
+	set := "\tset " + strings.ReplaceAll(id, "-", "_") + "_4 { type ipv4_addr; flags interval; auto-merge; comment \"feed:" + hash + "\"; }\n"
+	dir := generation.Dir(b.f.stateDir)
+	g, err := generation.Create(dir, generation.Manifest{Files: []generation.FileEntry{{Path: generation.FilterEntry, Mode: "0644"}}},
+		map[string][]byte{generation.FilterEntry: []byte("table inet andaru {\n" + set + "}\n")})
+	if err == nil {
+		err = os.WriteFile(filepath.Join(dir, "pointers.json"), []byte(`{"confirmed":null,"lastKnownGood":null,"pending":null,"live":`+strconv.Itoa(g)+`}`), 0o600)
+	}
+	if err != nil {
+		b.t.Fatal(err)
+	}
+}
+
+// A live generation whose saved version does not read names no live aliases, but the sources its filter fills its
+// sets from stay: their state is never removed, and a saved source is not published as the live one.
+func TestTheLiveFilterKeepsItsSources(t *testing.T) {
+	b := newFeedBench(t)
+	old := b.src(0)
+	b.answer(urlAlias, aliasfeed.Result{Request: b.ask(urlAlias), OK: true, Members: []string{"192.0.2.1"}})
+	b.goLive(urlAlias, old.hash)
+	b.list[0].URL = "https://lists.example/v4"
+	b.live = nil
+	b.f.schedule(t.Context())
+	b.requests()
+	b.sent = nil
+	b.answer(urlAlias, aliasfeed.Result{Request: b.ask(urlAlias), OK: true, Members: []string{"198.51.100.0/24"}})
+	if slices.ContainsFunc(b.sent, func(p published) bool { return p.topic == "alias/"+urlAlias }) {
+		t.Fatal("a saved source published as the live one")
+	}
+	b.now = b.now.Add(keepUnwanted + time.Hour)
+	b.f.schedule(t.Context())
+	if s := b.f.load(old); !slices.Equal(s.Members, []string{"192.0.2.1"}) {
+		t.Fatalf("the live filter's source lost its list: %+v", s)
 	}
 }
 

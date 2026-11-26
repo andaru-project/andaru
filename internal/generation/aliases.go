@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/andaru-project/andaru/internal/aliasfeed"
@@ -15,10 +16,12 @@ import (
 // with the hash of the source it was rendered for: the renderer gives every other address set its elements.
 var dynamicSet = regexp.MustCompile(`(?m)^\tset (adr_[0-9a-z_]+)_([46]) \{ type ipv[46]_addr; flags interval; auto-merge; comment "feed:([0-9a-f]{16})"; \}$`)
 
-// aliasFill returns the nft commands that load each such set script declares with the last good members of the
-// source its comment names, from that source's state file: a source without one, or one that cannot be read, has its
-// sets flushed only, so they match nothing.
-func aliasFill(stateDir string, script []byte) []byte {
+// feedSet is a set dynamicSet matched: its name and family, the hash of its source, and the alias it is for by the
+// state directory, "" when no state file names it.
+type feedSet struct{ name, family, id, hash string }
+
+// feedSets returns each set script declares for an alias fed from a URL or from host names.
+func feedSets(stateDir string, script []byte) []feedSet {
 	sets := dynamicSet.FindAllSubmatch(script, -1)
 	if len(sets) == 0 {
 		return nil
@@ -28,20 +31,63 @@ func aliasFill(stateDir string, script []byte) []byte {
 	for id := range aliasfeed.Sources(stateDir) {
 		ids[strings.ReplaceAll(id, "-", "_")] = id
 	}
+	out := make([]feedSet, len(sets))
+	for i, m := range sets {
+		out[i] = feedSet{string(m[1]) + "_" + string(m[2]), string(m[2]), ids[string(m[1])], string(m[3])}
+	}
+	return out
+}
+
+// LiveFeeds returns the hashes of the sources the live generation's filter fills its alias sets from, by alias, for
+// those with a state file: none without a live generation, or one without a filter.
+func LiveFeeds(stateDir string) (map[string][]string, error) {
+	dir := Dir(stateDir)
+	p, err := readPointers(dir)
+	if err != nil || p.Live == nil {
+		return nil, err
+	}
+	g, err := read(dir, *p.Live, p)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]string{}
+	for _, f := range g.Files {
+		if f.Path != filterEntry {
+			continue
+		}
+		data, err := g.content(dir, f)
+		if err != nil {
+			return nil, err
+		}
+		for _, s := range feedSets(stateDir, data) {
+			if s.id != "" && !slices.Contains(out[s.id], s.hash) {
+				out[s.id] = append(out[s.id], s.hash)
+			}
+		}
+	}
+	return out, nil
+}
+
+// aliasFill returns the nft commands that load each such set script declares with the last good members of the
+// source its comment names, from that source's state file: a source without one, or one that cannot be read, has its
+// sets flushed only, so they match nothing.
+func aliasFill(stateDir string, script []byte) []byte {
+	sets := feedSets(stateDir, script)
+	if len(sets) == 0 {
+		return nil
+	}
 	var out strings.Builder
-	for _, m := range sets {
-		alias, family, hash := string(m[1]), string(m[2]), string(m[3])
+	for _, set := range sets {
 		var list []string
-		if id, ok := ids[alias]; ok {
-			v4, v6 := readMembers(stateDir, id, hash)
-			if list = v4; family == "6" {
+		if set.id != "" {
+			v4, v6 := readMembers(stateDir, set.id, set.hash)
+			if list = v4; set.family == "6" {
 				list = v6
 			}
 		}
-		set := alias + "_" + family
-		out.WriteString("flush set inet andaru " + set + "\n")
+		out.WriteString("flush set inet andaru " + set.name + "\n")
 		if len(list) > 0 {
-			out.WriteString("add element inet andaru " + set + " { " + strings.Join(list, ", ") + " }\n")
+			out.WriteString("add element inet andaru " + set.name + " { " + strings.Join(list, ", ") + " }\n")
 		}
 	}
 	return []byte(out.String())

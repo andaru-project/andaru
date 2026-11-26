@@ -100,7 +100,8 @@ func newAliasFeeds(life context.Context, stateDir string, events *bus.Bus, alias
 
 // savedAndLive returns the dynamic aliases of the saved head and of the generation that is live, by the saved version
 // it was applied from: none before the first apply. A saved version that does not read (gone after an update's
-// rollback, or a restore) is taken as the saved head, so every schedule and result does not fail on it.
+// rollback, or a restore) gives none, so every schedule and result does not fail on it: the sources the live filter
+// names are still kept, by forget, but cannot be fetched without their URL or names.
 func savedAndLive(stateDir string, store *config.Store) func(context.Context) ([]config.DynamicAlias, []config.DynamicAlias, error) {
 	return func(ctx context.Context) ([]config.DynamicAlias, []config.DynamicAlias, error) {
 		saved, err := store.DynamicAliases(ctx)
@@ -118,9 +119,9 @@ func savedAndLive(stateDir string, store *config.Store) func(context.Context) ([
 		}
 		live, err := store.DynamicAliasesAt(ctx, config.Version(g.SavedVersion))
 		if fault := (*config.Fault)(nil); errors.As(err, &fault) && fault.Code == "NOT_FOUND" {
-			slog.Warn("the live generation's saved version does not read; its aliases are taken as the saved head's",
+			slog.Warn("the live generation's saved version does not read; its alias lists are kept but not fetched",
 				"component", "aliases", "generation", g.ID, "version", g.SavedVersion, "error", err)
-			return saved, saved, nil
+			return saved, nil, nil
 		}
 		return saved, live, err
 	}
@@ -530,11 +531,16 @@ func (f *aliasFeeds) failing(id string, want map[source]wanted) (inUse, stale bo
 	return inUse, stale
 }
 
-// forget removes the state of each source no wanted generation names whose last attempt is older than keepUnwanted,
-// and each state moved aside longer ago, and clears the notification of each alias whose failing sources are no
+// forget removes the state of each source no wanted generation and not the live filter names whose last attempt is
+// older than keepUnwanted, and each state moved aside longer ago, and clears the notification of each alias whose failing sources are no
 // longer wanted, once since this start or its last raise.
 func (f *aliasFeeds) forget(want map[source]wanted) {
 	sources := aliasfeed.Sources(f.stateDir)
+	// The live filter's sets are filled from these, whatever saved version it was applied from.
+	kept, keptErr := generation.LiveFeeds(f.stateDir)
+	if keptErr != nil {
+		f.log.Warn("read the live filter's alias sources; no source's state is removed", "error", keptErr)
+	}
 	dirs, _ := os.ReadDir(aliasfeed.Dir(f.stateDir))
 	for _, d := range dirs {
 		id := d.Name()
@@ -544,7 +550,7 @@ func (f *aliasFeeds) forget(want map[source]wanted) {
 		inUse, stale := f.failing(id, want)
 		for _, hash := range sources[id] {
 			src := source{id, hash}
-			if _, ok := want[src]; ok {
+			if _, ok := want[src]; ok || keptErr != nil || slices.Contains(kept[id], hash) {
 				continue
 			}
 			if s := f.load(src); f.now().Sub(s.LastAttempt) < keepUnwanted {
