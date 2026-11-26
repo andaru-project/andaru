@@ -7,10 +7,12 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/andaru-project/andaru/internal/authz"
 	"github.com/andaru-project/andaru/internal/config"
@@ -85,6 +87,9 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 				route, id = "object", rest[0]
 				allowed = []string{"GET", "HEAD", "PUT", "DELETE"}
 			}
+		case len(parts) == 3 && parts[0] == "config" && parts[1] == "aliases" && parts[2] == "search":
+			route = "aliases-search"
+			allowed = []string{"GET", "HEAD"}
 		case len(parts) >= 3 && parts[0] == "config" && parts[1] == "aliases" && (parts[2] == "addresses" || parts[2] == "ports"):
 			collection = "aliases." + parts[2]
 			if len(parts) == 3 {
@@ -153,6 +158,19 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 					w.Header().Set("ETag", `"`+id+"."+string(v.Version)+`"`)
 					w.Header().Set("Andaru-Saved-Version", string(head))
 				}
+				send(200, v, e)
+			case "aliases-search":
+				values, parseErr := url.ParseQuery(r.URL.RawQuery)
+				if parseErr != nil {
+					writeError(w, r, 400, "INVALID_REQUEST", "Invalid alias search query encoding.")
+					return
+				}
+				q, msg := parseAliasSearchQuery(values)
+				if msg != "" {
+					writeError(w, r, 400, "INVALID_REQUEST", msg)
+					return
+				}
+				v, e := store.SearchAliases(r.Context(), q)
 				send(200, v, e)
 			case "history":
 				limit := 50
@@ -429,4 +447,65 @@ func writeRecovery(ctx context.Context, store *config.Store) error {
 		return err
 	}
 	return keptStore.Put(ctx, "recovery", body, true)
+}
+
+func parseAliasSearchQuery(values url.Values) (config.AliasSearchQuery, string) {
+	allowed := map[string]bool{
+		"type": true, "q": true, "kind": true, "family": true,
+		"excludeGroups": true, "exclude": true, "limit": true,
+	}
+	for key, vals := range values {
+		if !allowed[key] || len(vals) != 1 {
+			return config.AliasSearchQuery{}, "Invalid alias search query."
+		}
+	}
+	out := config.AliasSearchQuery{
+		Type:    values.Get("type"),
+		Query:   values.Get("q"),
+		Kind:    values.Get("kind"),
+		Family:  values.Get("family"),
+		Exclude: values.Get("exclude"),
+		Limit:   20,
+	}
+	if out.Type != "addresses" && out.Type != "ports" {
+		return config.AliasSearchQuery{}, "Alias search type must be addresses or ports."
+	}
+	if !utf8.ValidString(out.Query) || utf8.RuneCountInString(out.Query) > 256 {
+		return config.AliasSearchQuery{}, "Alias search query is invalid or too long."
+	}
+	if !utf8.ValidString(out.Exclude) || utf8.RuneCountInString(out.Exclude) > 128 {
+		return config.AliasSearchQuery{}, "Alias search exclude ID is invalid or too long."
+	}
+	if out.Kind != "" {
+		validKinds := []string{"host", "network", "range", "group"}
+		if out.Type == "ports" {
+			validKinds = []string{"tcp", "udp", "icmp", "icmpv6", "group"}
+		}
+		if !slices.Contains(validKinds, out.Kind) {
+			return config.AliasSearchQuery{}, "Invalid alias kind for this search type."
+		}
+	}
+	if out.Family != "" {
+		if out.Type != "addresses" || (out.Family != "ipv4" && out.Family != "ipv6") {
+			return config.AliasSearchQuery{}, "Invalid alias family filter."
+		}
+	}
+	if raw, ok := values["excludeGroups"]; ok {
+		switch raw[0] {
+		case "true":
+			out.ExcludeGroups = true
+		case "false":
+			out.ExcludeGroups = false
+		default:
+			return config.AliasSearchQuery{}, "Invalid excludeGroups flag."
+		}
+	}
+	if raw, ok := values["limit"]; ok {
+		n, err := strconv.Atoi(raw[0])
+		if err != nil || n < 1 || n > 50 {
+			return config.AliasSearchQuery{}, "Alias search limit must be between 1 and 50."
+		}
+		out.Limit = n
+	}
+	return out, ""
 }

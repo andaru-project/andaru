@@ -1,10 +1,11 @@
 import { Alert, Button, Drawer, Fieldset, Group, MultiSelect, SegmentedControl, Select, Stack, Switch, Text, Textarea, TextInput } from '@mantine/core';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { ApiError, saveFailure } from '../api';
+import { ApiClient, ApiError, saveFailure } from '../api';
 import {
-  checkOneToOne, checkPortForward, oneToOneDraftOf, oneToOneErrors, oneToOnePayload, portForwardDraftOf, portForwardErrors, portForwardPayload, type OneToOneDraft, type PortForwardDraft,
+  addressAliasesForFamily, checkOneToOne, checkPortForward, oneToOneDraftOf, oneToOneErrors, oneToOnePayload, portForwardDraftOf, portForwardErrors, portForwardPayload, type OneToOneDraft, type PortForwardDraft,
 } from '../natEdit';
 import type { OneToOneNat, PortForward, Snapshot } from '../types';
+import { AliasMultiSelect, AliasSelect } from './AliasPicker';
 import { ZonePill, ZoneSelectionPill } from './ZoneBadge';
 
 const mono = { input: 'mono-input' };
@@ -84,6 +85,7 @@ function useDrawerForm({
 }
 
 interface PortForwardEditorProps {
+  api: ApiClient;
   entry?: PortForward;
   snapshot: Snapshot;
   onClose(): void;
@@ -92,17 +94,15 @@ interface PortForwardEditorProps {
   onSave(value: Omit<PortForward, 'id'>): Promise<void>;
 }
 
-export function PortForwardEditor({ entry, snapshot, onClose, onSessionLost, onAbandoned, onSave }: PortForwardEditorProps) {
+export function PortForwardEditor({ api, entry, snapshot, onClose, onSessionLost, onAbandoned, onSave }: PortForwardEditorProps) {
   const wanZone = snapshot.value.zones.find((z) => z.name.toLowerCase() === 'wan')?.id ?? snapshot.value.zones[0]?.id;
   const [draft, setDraft] = useState<PortForwardDraft>(() => portForwardDraftOf(entry, wanZone));
   const { errors, failure, busy, failureRef, formRef, runSubmit } = useDrawerForm({ noun: 'port forward', onClose, onSessionLost, onAbandoned });
 
   const patch = (next: Partial<PortForwardDraft>) => setDraft((prev) => ({ ...prev, ...next }));
   const baseZones = snapshot.value.zones.map((z) => ({ value: z.id, label: z.name }));
-  const baseAddresses = (snapshot.value.aliases?.addresses ?? []).map((a) => ({ value: a.id, label: a.name }));
+  const baseAddresses = addressAliasesForFamily(snapshot.value.aliases?.addresses ?? [], draft.family);
   const zones = withMissingOptions(baseZones, draft.ingressZones);
-  const fromAddresses = withMissingOptions(baseAddresses, draft.from);
-  const toAddresses = withMissingOptions(baseAddresses, draft.toAddress ? [draft.toAddress] : []);
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -187,14 +187,17 @@ export function PortForwardEditor({ entry, snapshot, onClose, onSessionLost, onA
                       onChange={(e) => patch({ ports: e.currentTarget.value })}
                     />
                   </Group>
-                  <MultiSelect
+                  <AliasMultiSelect
+                    api={api}
+                    aliasType="addresses"
+                    family={draft.family}
                     label="Source addresses (optional)"
                     placeholder="Any source"
-                    searchable
                     nothingFoundMessage={noAlias}
-                    data={fromAddresses}
+                    initialOptions={baseAddresses}
                     value={draft.from}
                     error={errors.get('from')}
+                    onSessionLost={onSessionLost}
                     onChange={(from) => patch({ from, ...(from.length === 0 ? { fromNegated: false } : {}) })}
                   />
                   {draft.from.length > 0 && (
@@ -214,14 +217,17 @@ export function PortForwardEditor({ entry, snapshot, onClose, onSessionLost, onA
                     />
                   </Stack>
                   {draft.toKind === 'address' && (
-                    <Select
+                    <AliasSelect
+                      api={api}
+                      aliasType="addresses"
+                      family={draft.family}
                       label="Destination alias"
                       placeholder="Choose an address alias"
-                      searchable
                       nothingFoundMessage={noAlias}
-                      data={toAddresses}
+                      initialOptions={baseAddresses}
                       value={draft.toAddress || null}
                       error={errors.get('to')}
+                      onSessionLost={onSessionLost}
                       onChange={(value) => patch({ toAddress: value ?? '' })}
                     />
                   )}
@@ -320,6 +326,7 @@ export function PortForwardEditor({ entry, snapshot, onClose, onSessionLost, onA
 }
 
 interface OneToOneEditorProps {
+  api: ApiClient;
   entry?: OneToOneNat;
   snapshot: Snapshot;
   onClose(): void;
@@ -328,16 +335,15 @@ interface OneToOneEditorProps {
   onSave(value: Omit<OneToOneNat, 'id'>): Promise<void>;
 }
 
-export function OneToOneEditor({ entry, snapshot, onClose, onSessionLost, onAbandoned, onSave }: OneToOneEditorProps) {
+export function OneToOneEditor({ api, entry, snapshot, onClose, onSessionLost, onAbandoned, onSave }: OneToOneEditorProps) {
   const wanZone = snapshot.value.zones.find((z) => z.name.toLowerCase() === 'wan')?.id ?? snapshot.value.zones[0]?.id;
   const [draft, setDraft] = useState<OneToOneDraft>(() => oneToOneDraftOf(entry, wanZone));
   const { errors, failure, busy, failureRef, formRef, runSubmit } = useDrawerForm({ noun: '1:1 NAT entry', onClose, onSessionLost, onAbandoned });
 
   const patch = (next: Partial<OneToOneDraft>) => setDraft((prev) => ({ ...prev, ...next }));
   const baseZones = snapshot.value.zones.map((z) => ({ value: z.id, label: z.name }));
-  const baseAddresses = (snapshot.value.aliases?.addresses ?? []).map((a) => ({ value: a.id, label: a.name }));
+  const baseAddresses = addressAliasesForFamily(snapshot.value.aliases?.addresses ?? [], 'ipv4');
   const zones = withMissingOptions(baseZones, draft.zone ? [draft.zone] : []);
-  const destinations = withMissingOptions(baseAddresses, draft.destination);
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -397,14 +403,17 @@ export function OneToOneEditor({ entry, snapshot, onClose, onSessionLost, onAban
                     error={errors.get('external')}
                     onChange={(e) => patch({ external: e.currentTarget.value })}
                   />
-                  <MultiSelect
+                  <AliasMultiSelect
+                    api={api}
+                    aliasType="addresses"
+                    family="ipv4"
                     label="Destination addresses (optional)"
                     placeholder="Any destination"
-                    searchable
                     nothingFoundMessage={noAlias}
-                    data={destinations}
+                    initialOptions={baseAddresses}
                     value={draft.destination}
                     error={errors.get('destination')}
+                    onSessionLost={onSessionLost}
                     onChange={(destination) => patch({ destination, ...(destination.length === 0 ? { destinationNegated: false } : {}) })}
                   />
                   {draft.destination.length > 0 && (

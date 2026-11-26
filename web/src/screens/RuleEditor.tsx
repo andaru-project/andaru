@@ -1,10 +1,12 @@
 import { Alert, Anchor, Button, Drawer, Fieldset, Group, MultiSelect, SegmentedControl, Stack, Switch, Text, Textarea, TextInput } from '@mantine/core';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { ApiError, fieldErrors, saveFailure } from '../api';
+import { ApiClient, ApiError, fieldErrors, saveFailure } from '../api';
 import { firewallZone, type Rule, type RuleSide, type Snapshot } from '../types';
+import { AliasMultiSelect } from './AliasPicker';
 import { ZonePill, ZoneSelectionPill } from './ZoneBadge';
 
 interface RuleEditorProps {
+  api: ApiClient;
   rule?: Rule;
   snapshot: Snapshot;
   onClose(): void;
@@ -22,7 +24,7 @@ const noAlias = 'No alias by that name. Aliases are made under Firewall ▸ Alia
 const field = /^\/(name|description|action|ports|(?:from|to)\/(?:zones|addresses|not))(?:\/|$)/;
 
 // The editor is a panel beside the list, so the order stays in view while a rule is written.
-export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onAbandoned, onSave }: RuleEditorProps) {
+export function RuleEditor({ api, rule, snapshot, onClose, onSessionLost, onAbandoned, onSave }: RuleEditorProps) {
   const [name, setName] = useState(rule?.name ?? '');
   const [description, setDescription] = useState(rule?.description ?? '');
   const [enabled, setEnabled] = useState(rule?.enabled ?? true);
@@ -82,7 +84,7 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onAbandoned
           renderPill={(input) => <ZoneSelectionPill {...input} />} renderOption={({ option }) => option.value === firewallZone ? option.label : <ZonePill name={option.label} />}
           // The firewall stands alone as a destination: choosing it leaves the other zones, and choosing another leaves it.
           onChange={(next) => set({ ...value, zones: next.includes(firewallZone) && !value.zones.includes(firewallZone) ? [firewallZone] : next.length > 1 ? next.filter((id) => id !== firewallZone) : next })} />
-        <MultiSelect label={`${label}: addresses`} description="Address aliases within those zones. Empty is every address." data={addresses} value={value.addresses} error={errors.get(`${key}/addresses`)} searchable clearable nothingFoundMessage={noAlias}
+        <AliasMultiSelect api={api} aliasType="addresses" label={`${label}: addresses`} description="Address aliases within those zones. Empty is every address." initialOptions={addresses} value={value.addresses} error={errors.get(`${key}/addresses`)} clearable nothingFoundMessage={noAlias} onSessionLost={onSessionLost}
           onChange={(next) => set({ ...value, addresses: next })} />
         <Switch label={`${label}: except these addresses`} description="Matches every other address in the chosen zones. Name an address first." checked={Boolean(value.not)} disabled={value.addresses.length === 0} error={errors.get(`${key}/not`)}
           onChange={(event) => set({ ...value, not: event.currentTarget.checked })} />
@@ -112,7 +114,7 @@ export function RuleEditor({ rule, snapshot, onClose, onSessionLost, onAbandoned
           {sideFields('From', 'from', from, setFrom, zones, 'Empty is any network.')}
           {sideFields('To', 'to', to, setTo, [{ value: firewallZone, label: 'This firewall' }, ...zones], 'Empty is any network, never this firewall: choose This firewall for traffic to the box itself.')}
           {toFirewall && <Text size="sm" c="dimmed">To this firewall: the rule decides what may reach the box itself, and lets nothing through it.</Text>}
-          <MultiSelect label="Ports" description="Port aliases. Empty is any protocol and port." data={portAliases} value={ports} error={errors.get('ports')} searchable clearable nothingFoundMessage={noAlias} onChange={setPorts} />
+          <AliasMultiSelect api={api} aliasType="ports" label="Ports" description="Port aliases. Empty is any protocol and port." initialOptions={portAliases} value={ports} error={errors.get('ports')} clearable nothingFoundMessage={noAlias} onSessionLost={onSessionLost} onChange={setPorts} />
           <Text size="xs" c="dimmed">Need a new address or port alias? <Anchor href="/firewall/aliases" target="_blank" rel="noopener noreferrer" size="xs">Open Firewall ▸ Aliases in a new tab</Anchor> so this draft stays open.</Text>
           <Switch label="Log what this rule matches" checked={log} onChange={(event) => setLog(event.currentTarget.checked)} />
             </Stack>

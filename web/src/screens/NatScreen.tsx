@@ -686,6 +686,7 @@ export function NatScreen({ api, session, onSaved, onSessionLost }: NatScreenPro
               {editingForward && (
                 <PortForwardEditor
                   key={editingForward === 'new' ? 'new' : `${editingForward.value.id}:${editingForward.version}`}
+                  api={api}
                   entry={editingForward === 'new' ? undefined : editingForward.value}
                   snapshot={snapshot}
                   onClose={() => setEditingForward(undefined)}
@@ -707,6 +708,7 @@ export function NatScreen({ api, session, onSaved, onSessionLost }: NatScreenPro
               {editingOneToOne && (
                 <OneToOneEditor
                   key={editingOneToOne === 'new' ? 'new' : `${editingOneToOne.value.id}:${editingOneToOne.version}`}
+                  api={api}
                   entry={editingOneToOne === 'new' ? undefined : editingOneToOne.value}
                   snapshot={snapshot}
                   onClose={() => setEditingOneToOne(undefined)}

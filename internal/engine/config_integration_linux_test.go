@@ -131,6 +131,7 @@ func TestConfigurationHTTPContract(t *testing.T) {
 		"/api/v1/applies": {"get", "head", "post"}, "/api/v1/applies/{id}": {"get", "head"},
 		"/api/v1/applies/{id}/confirmation": {"post"}, "/api/v1/applies/{id}/rollback": {"post"},
 		"/api/v1/config/rules": {"get", "head", "post"}, "/api/v1/config/rules/{id}": {"get", "head", "put", "delete"},
+		"/api/v1/config/aliases/search": {"get", "head"},
 		"/api/v1/config/aliases/{kind}": {"get", "head", "post"}, "/api/v1/config/aliases/{kind}/{id}": {"get", "head", "put", "delete"},
 		"/api/v1/config/rules/order": {"put"}, "/api/v1/config/nat/{list}": {"get", "head", "post"},
 		"/api/v1/config/nat/{list}/{id}": {"get", "head", "put", "delete"}, "/api/v1/config/nat/{list}/order": {"put"},

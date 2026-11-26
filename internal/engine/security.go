@@ -79,6 +79,7 @@ func buildEngineRoutes() []routeCapability {
 	add(authz.ConfigurationRead, "/api/v1/config/rules/{id}", read...)
 	add(authz.ConfigurationWrite, "/api/v1/config/rules/{id}", http.MethodPut, http.MethodDelete)
 	add(authz.ConfigurationWrite, "/api/v1/config/rules/order", http.MethodPut)
+	add(authz.ConfigurationRead, "/api/v1/config/aliases/search", read...)
 	add(authz.ConfigurationRead, "/api/v1/config/aliases/{kind}", read...)
 	add(authz.ConfigurationWrite, "/api/v1/config/aliases/{kind}", http.MethodPost)
 	add(authz.ConfigurationRead, "/api/v1/config/aliases/{kind}/{id}", read...)
