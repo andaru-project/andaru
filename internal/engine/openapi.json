@@ -7494,6 +7494,14 @@
             "type": "string",
             "description": "Current link-layer address if supplied, not a permanent MAC promise"
           },
+          "kind": {
+            "type": "string",
+            "description": "Kernel link kind (vlan, bridge, bond, veth, ...); omitted for a physical device"
+          },
+          "permanentAddress": {
+            "type": "string",
+            "description": "Hardware address the device cannot change, which saved Ethernet links name; a virtual link reports the one it inherits or its current address"
+          },
           "addresses": {
             "type": "array",
             "items": {

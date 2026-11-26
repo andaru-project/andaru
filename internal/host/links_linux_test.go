@@ -270,9 +270,15 @@ func TestParseLinksObservesKindAndPermanentAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, leaked := range []string{"Kind", "PermanentAddress", "permaddr", "52:54:00:aa:bb:02", "dummy"} {
+	// The web UI tells hardware from virtual links by kind, and saves a port by its permanent address.
+	for _, served := range []string{`"permanentAddress":"52:54:00:aa:bb:02"`, `"kind":"dummy"`} {
+		if !strings.Contains(string(body), served) {
+			t.Fatalf("status response lacks %s: %s", served, body)
+		}
+	}
+	for _, leaked := range []string{"Kind", "PermanentAddress", "permaddr"} {
 		if strings.Contains(string(body), leaked) {
-			t.Fatalf("status response changed: found %q", leaked)
+			t.Fatalf("status response uses an internal name: found %q", leaked)
 		}
 	}
 }

@@ -278,7 +278,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   }
 
   const pages: Array<[string, ReactNode]> = [
-    ['/network/interfaces', <InterfacesScreen api={api} session={session} onSessionLost={onSessionLost} />],
+    ['/network/interfaces', <InterfacesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/firewall/rules', <RulesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/firewall/aliases', <AliasesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/changes', <ChangesScreen api={api} session={session} state={changes.data} stateError={changes.error} connected={connected} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />],

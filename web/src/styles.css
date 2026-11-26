@@ -515,6 +515,34 @@ path.traffic-sent {
     content: none;
   }
 
+  /* An interface on a narrow screen: its name and state on one line, then the device and the addresses. */
+  .interfaces tr {
+    align-items: start;
+    display: grid;
+    gap: 0.25rem var(--mantine-spacing-xs);
+    grid-template-columns: 1fr auto;
+  }
+
+  .interfaces td {
+    grid-column: 1 / -1;
+  }
+
+  .interfaces td:first-child {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .interfaces td[data-label="State"] {
+    grid-column: 2;
+    grid-row: 1;
+    text-align: end;
+  }
+
+  .interfaces td:first-child::before,
+  .interfaces td[data-label="State"]::before {
+    content: none;
+  }
+
   .mantine-Modal-inner {
     padding: 0;
   }
@@ -647,6 +675,16 @@ path.traffic-sent {
 
 .grow {
   flex: 1 1 14rem;
+}
+
+/* Each address family in the interfaces table: its method above its addresses. */
+.address-line + .address-line {
+  margin-top: 0.375rem;
+}
+
+/* Addresses, gateways and IDs typed into a form read as they do in the tables. */
+.mono-input {
+  font-family: var(--mantine-font-family-monospace);
 }
 
 .notification-detail {

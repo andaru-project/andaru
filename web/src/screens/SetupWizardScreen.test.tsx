@@ -10,8 +10,9 @@ import { SetupWizardScreen } from './SetupWizardScreen';
 
 const sampleLinks = [
   { name: 'lo', index: 1, operState: 'unknown', linkType: 'loopback', linkAddress: '00:00:00:00:00:00', mtu: 65536, addresses: [] },
-  { name: 'enp1s0', index: 2, operState: 'up', linkType: 'ether', linkAddress: '52:54:00:aa:bb:01', mtu: 1500, addresses: [{ family: 'ipv4', address: '192.168.1.1', prefixLength: 24 }] },
-  { name: 'enp2s0', index: 3, operState: 'up', linkType: 'ether', linkAddress: '52:54:00:aa:bb:02', mtu: 1500, addresses: [] },
+  { name: 'docker0', index: 4, operState: 'up', linkType: 'ether', kind: 'bridge', linkAddress: '02:42:ac:11:00:01', permanentAddress: '02:42:ac:11:00:01', mtu: 1500, addresses: [] },
+  { name: 'enp1s0', index: 2, operState: 'up', linkType: 'ether', linkAddress: '52:54:00:aa:bb:01', permanentAddress: '52:54:00:aa:bb:01', mtu: 1500, addresses: [{ family: 'ipv4', address: '192.168.1.1', prefixLength: 24 }] },
+  { name: 'enp2s0', index: 3, operState: 'up', linkType: 'ether', linkAddress: '02:00:00:00:00:99', permanentAddress: '52:54:00:aa:bb:02', mtu: 1500, addresses: [] },
 ];
 
 describe('SetupBootstrapScreen & SetupWizardScreen', () => {
@@ -97,6 +98,9 @@ describe('SetupBootstrapScreen & SetupWizardScreen', () => {
     expect(await screen.findByText(/Configuration applied — confirm connectivity/i)).toBeInTheDocument();
     expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/config/changes')).toHaveLength(1);
     expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/system/hostname')).toHaveLength(1);
+    // Ports are saved by their permanent address, and a bridge is no port to assign.
+    const changes = JSON.parse(String(fetchMock.mock.calls.find(([url]) => url === '/api/v1/config/changes')?.[1]?.body)) as { operations: Array<{ collection: string; value: { permanentMac?: string } }> };
+    expect(changes.operations.filter((op) => op.collection === 'links').map((op) => op.value.permanentMac)).toEqual(['52:54:00:aa:bb:01', '52:54:00:aa:bb:02']);
 
     await userEvent.click(screen.getByRole('button', { name: /Confirm apply/i }));
     await vi.waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
