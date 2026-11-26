@@ -139,7 +139,7 @@ func (s *Store) prepareRestore(ctx context.Context, actor authz.Actor, expected 
 		return nil, empty, err
 	}
 	if len(preview.BlockingSecrets) != 0 {
-		return nil, empty, fault("VALIDATION_FAILED", "/configurationSecrets", "Restoration would remove secrets required by bound references; edit the references or select a paired restore.")
+		return nil, empty, fault("VALIDATION_FAILED", "/configurationSecrets", "Restoration would leave bound references without their secret, or holding a secret of another kind (a link's password, a channel's notification secret); edit or rename the references, or select a paired restore.")
 	}
 	if ctx.Err() != nil {
 		return nil, empty, unavailable()

@@ -240,3 +240,15 @@ func TestUnresolvedLinkReferenceKeepsItsKind(t *testing.T) {
 		t.Fatalf("%#v", e)
 	}
 }
+
+// A save may not create a secret under a name an object of the other kind holds unresolved: that object could then
+// never be saved or applied.
+func TestNewSecretTakesNoNameOfTheOtherKind(t *testing.T) {
+	s := seededState(t)
+	i := slices.IndexFunc(s.Config.Links, func(l link) bool { return l.Password != nil })
+	s.Config.Links[i].Password = &secretReference{Secret: "RESTORED_X", Unresolved: true}
+	body := `{"name":"c","kind":"webhook","webhook":{"url":{"secret":"RESTORED_X","set":"https://hooks.example/x","expectedVersion":"0"}}}`
+	if _, e := channelChange(t, &s, "create", "", "", body, "8"); e == nil || !strings.Contains(fmt.Sprintf("%#v", e), "Another kind of object holds") {
+		t.Fatalf("%#v", e)
+	}
+}

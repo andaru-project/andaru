@@ -619,8 +619,15 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 	// refusal tells a client that a secret of another kind exists, as a version precondition already does; never its value.
 	for _, h := range heldSecrets(&d) {
 		entry, exists := current.Secrets.Scopes["core"][h.ref.Secret]
-		if _, written := writes[h.key]; written && (exists || !h.ref.Unresolved) && entry.Kind != secretKind(h.key.Collection) {
+		if !exists && h.ref.Unresolved || entry.Kind == secretKind(h.key.Collection) {
+			continue
+		}
+		if _, written := writes[h.key]; written {
 			return empty, rebaseValidation(validationError{{h.path, "This secret belongs to another kind of object."}}, &d, origins, input)
+		}
+		// A secret this batch creates may not take a name an unwritten object of the other kind holds unresolved.
+		if setter, set := setters[h.ref.Secret]; set && changedSecrets[h.ref.Secret] {
+			return empty, fault("VALIDATION_FAILED", input.path(origins[setter.key], setter.path, true), "Another kind of object holds this secret's name.")
 		}
 	}
 	// A webhook URL is checked where its value is known: for the channels this batch writes, or whose URL it sets.
