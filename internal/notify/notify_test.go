@@ -449,8 +449,9 @@ func TestRaisesAreDelivered(t *testing.T) {
 	}
 }
 
-// A raise the channels could not be told of is retried, and recorded once.
-func TestDeliveryFailureRetries(t *testing.T) {
+// A raise the channels could not be told of is logged, not retried: the notifications after it are still recorded
+// and handed on.
+func TestDeliveryFailureHoldsNothingUp(t *testing.T) {
 	b := newBench(t)
 	b.layer.Close()
 	fails := 1
@@ -467,10 +468,12 @@ func TestDeliveryFailureRetries(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.publish("disk", full)
-	if got := receiveSent(t, b.sent); got.raise != full {
+	next := Raise{Key: "temp", Severity: Critical, Subject: "The CPU is hot"}
+	b.publish("sensors", next)
+	if got := receiveSent(t, b.sent); got.raise != next {
 		t.Fatalf("sent %+v", got)
 	}
-	if got := b.active(); len(got) != 1 {
+	if got := b.active(); len(got) != 2 {
 		t.Fatalf("active %+v", got)
 	}
 }

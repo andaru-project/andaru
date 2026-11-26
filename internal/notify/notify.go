@@ -232,9 +232,12 @@ func (l *Layer) handle(m bus.Message) error {
 	if change {
 		l.changed()
 	}
-	// The channels hear of the raise once it is recorded, and again if it comes again: their jobs keep its ID.
+	// The channels hear of the raise once it is recorded, and again if it comes again: their jobs keep its ID. A
+	// failure is logged, not retried: retrying the event would hold up every notification after it.
 	if send && l.deliver != nil {
-		return l.deliver(e, r, payload)
+		if err := l.deliver(e, r, payload); err != nil {
+			l.log.Error("notification not handed on to its channels", "source", e.Source, "key", r.Key, "error", err)
+		}
 	}
 	return nil
 }

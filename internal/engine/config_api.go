@@ -281,10 +281,11 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 			return
 		}
 		// The channels are the notifications' settings: whichever route carries a change to them, it takes
-		// notifications.manage.
+		// notifications.manage, and configuration.read too, since a channel is sent the applies and upgrade decisions
+		// only that capability sees.
 		if slices.ContainsFunc(changes.Operations, func(o config.Operation) bool { return o.Collection == "notifications.channels" }) &&
-			!hasCapability(actor, authz.NotificationsManage) {
-			writeError(w, r, http.StatusForbidden, "FORBIDDEN", "Changing notification channels requires notifications.manage.")
+			!(hasCapability(actor, authz.NotificationsManage) && hasCapability(actor, authz.ConfigurationRead)) {
+			writeError(w, r, http.StatusForbidden, "FORBIDDEN", "Changing notification channels requires notifications.manage and configuration.read.")
 			return
 		}
 		result, e := store.Save(r.Context(), actor.Actor, changes)

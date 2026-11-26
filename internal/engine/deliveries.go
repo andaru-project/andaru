@@ -21,7 +21,9 @@ type channelReader func(context.Context) ([]config.NotificationChannel, error)
 // sends once.
 func deliverNotifications(events *bus.Bus, channels channelReader, log *slog.Logger) notify.Deliver {
 	return func(e bus.Event, r notify.Raise, payload []byte) error {
-		list, err := channels(context.Background())
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		list, err := channels(ctx)
 		if err != nil {
 			return fmt.Errorf("read the notification channels: %w", err)
 		}
@@ -34,7 +36,12 @@ func deliverNotifications(events *bus.Bus, channels channelReader, log *slog.Log
 				log.Warn("notification not sent: the channel's secrets have no value", "channel", c.ID, "name", c.Name, "source", e.Source, "key", r.Key)
 				continue
 			}
-			if err = publishJob(events, c, e.ID+":"+c.ID, e.Source, e.Time, r, payload); err != nil {
+			// The layer records a raise from the future as raised now; the job says the same.
+			raised := e.Time
+			if now := time.Now().UTC(); raised.After(now) {
+				raised = now
+			}
+			if err = publishJob(events, c, e.ID+":"+c.ID, e.Source, raised, r, payload); err != nil {
 				return err
 			}
 		}

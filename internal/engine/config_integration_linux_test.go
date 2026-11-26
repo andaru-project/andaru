@@ -938,7 +938,9 @@ func TestNotificationChannelsNeedNotificationsManage(t *testing.T) {
 		refused      bool
 	}{
 		{[]authz.Capability{authz.ConfigurationWrite}, true},
-		{[]authz.Capability{authz.ConfigurationWrite, authz.NotificationsManage}, false},
+		// A channel is sent the applies and upgrade decisions, which configuration.read alone sees.
+		{[]authz.Capability{authz.ConfigurationWrite, authz.NotificationsManage}, true},
+		{[]authz.Capability{authz.ConfigurationWrite, authz.NotificationsManage, authz.ConfigurationRead}, false},
 	} {
 		r := httptest.NewRequest("POST", "/api/v1/config/changes", strings.NewReader(batch))
 		r.Header.Set("Content-Type", "application/json")
