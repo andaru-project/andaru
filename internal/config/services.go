@@ -7,11 +7,17 @@ import (
 	"net/netip"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 )
 
 // dnsLabel is one name label: what a static lease's hostname may be and what a lease name is cut to.
 var dnsLabel = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
+
+var (
+	dhcpHexPlain = regexp.MustCompile(`^([0-9A-Fa-f]{2})+$`)
+	dhcpHexColon = regexp.MustCompile(`^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2})*$`)
+)
 
 // servedPrefix is a segment's first static IPv4 address with its prefix; ok is false for any other segment.
 func servedPrefix(d *declaration, id string) (netip.Prefix, bool) {
@@ -65,7 +71,8 @@ func validateServices(d *declaration) []FieldError {
 	seen := map[string]bool{}
 	// Static lease names share the local domain, so one name names one device across every segment.
 	names := map[string]bool{}
-	for i, e := range d.DHCP {
+	for i := range d.DHCP {
+		e := &d.DHCP[i]
 		p := fmt.Sprintf("/dhcp/%d", i)
 		if seen[e.ID] {
 			bad(p+"/id", "Duplicate object identity.")
@@ -127,6 +134,39 @@ func validateServices(d *declaration) []FieldError {
 				bad(fmt.Sprintf("%s/dnsServers/%d", p, j), "Expected an IPv4 address.")
 			}
 		}
+		if e.Gateway != "" {
+			if a, err := netip.ParseAddr(e.Gateway); err != nil || !a.Is4() || !subnet.Contains(a) || edge(a) {
+				bad(p+"/gateway", "Expected a host IPv4 address inside the segment's subnet.")
+			} else {
+				e.Gateway = a.String()
+			}
+		}
+		if e.DomainName != "" && !searchDomain.MatchString(e.DomainName) {
+			bad(p+"/domainName", "Invalid domain name.")
+		}
+		for j, name := range e.DomainSearch {
+			if !searchDomain.MatchString(name) {
+				bad(fmt.Sprintf("%s/domainSearch/%d", p, j), "Invalid search domain.")
+			}
+		}
+		for j, raw := range e.NTPServers {
+			if a, err := netip.ParseAddr(raw); err != nil || !a.Is4() {
+				bad(fmt.Sprintf("%s/ntpServers/%d", p, j), "Expected an IPv4 address.")
+			} else {
+				e.NTPServers[j] = a.String()
+			}
+		}
+		if e.NextServer != "" {
+			if a, err := netip.ParseAddr(e.NextServer); err != nil || !a.Is4() {
+				bad(p+"/nextServer", "Expected an IPv4 address.")
+			} else {
+				e.NextServer = a.String()
+			}
+		}
+		if e.BootFileName != "" && !printableASCII(e.BootFileName) {
+			bad(p+"/bootFileName", "Expected printable ASCII characters.")
+		}
+		validateDHCPOptions(e.Options, false, p, bad)
 		macs, addresses := map[string]bool{}, map[netip.Addr]bool{}
 		for j, l := range e.StaticLeases {
 			lp := fmt.Sprintf("%s/staticLeases/%d", p, j)
@@ -319,6 +359,7 @@ func validateDHCP6(d *declaration, bad func(string, string)) {
 				bad(fmt.Sprintf("%s/dnsServers/%d", p, j), "Expected a unicast IPv6 address that is not link-local.")
 			}
 		}
+		validateDHCP6Options(e.DomainSearch, e.NTPServers, e.Options, p, bad)
 		var pool netip.Prefix
 		if pd := e.PrefixDelegation; pd != nil {
 			pp := p + "/prefixDelegation"
@@ -432,4 +473,119 @@ func listensOn(d *declaration, a netip.Addr) bool {
 	return slices.ContainsFunc(d.DNS.VirtualAddresses, func(id string) bool {
 		return slices.ContainsFunc(d.VirtualAddresses, func(v virtualAddress) bool { return v.ID == id && sameAddress(v.Address, a.String()) })
 	})
+}
+
+func printableASCII(s string) bool {
+	for i := range len(s) {
+		if s[i] < 0x20 || s[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+func validateDHCP6Options(domainSearch, ntpServers []string, options []dhcpOption, p string, bad func(string, string)) {
+	for j, name := range domainSearch {
+		if !searchDomain.MatchString(name) {
+			bad(fmt.Sprintf("%s/domainSearch/%d", p, j), "Invalid search domain.")
+		}
+	}
+	for j, raw := range ntpServers {
+		if a, err := netip.ParseAddr(raw); err != nil || !a.Is6() || a.Is4In6() || a.Zone() != "" || a.IsLinkLocalUnicast() || !validUnicast(a) {
+			bad(fmt.Sprintf("%s/ntpServers/%d", p, j), "Expected a unicast IPv6 address that is not link-local.")
+		} else {
+			ntpServers[j] = a.String()
+		}
+	}
+	validateDHCPOptions(options, true, p, bad)
+}
+
+var (
+	reservedDHCP4Codes = []int{1, 3, 6, 15, 42, 50, 51, 53, 54, 55, 57, 58, 59, 61, 67, 82, 119}
+	reservedDHCP6Codes = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 18, 23, 24, 25, 26, 31, 39}
+)
+
+func validateDHCPOptions(options []dhcpOption, v6 bool, p string, bad func(string, string)) {
+	seen := map[int]bool{}
+	maxCode := 254
+	reserved := reservedDHCP4Codes
+	if v6 {
+		maxCode = 65535
+		reserved = reservedDHCP6Codes
+	}
+	for j := range options {
+		opt := &options[j]
+		op := fmt.Sprintf("%s/options/%d", p, j)
+		switch {
+		case opt.Code < 1 || opt.Code > maxCode:
+			bad(op+"/code", fmt.Sprintf("Expected an option code between 1 and %d.", maxCode))
+		case slices.Contains(reserved, opt.Code):
+			bad(op+"/code", "This option code is managed by Andaru or reserved by the DHCP protocol.")
+		case seen[opt.Code]:
+			bad(op+"/code", "This option code is already declared on this entry.")
+		default:
+			seen[opt.Code] = true
+		}
+		switch opt.Type {
+		case "string":
+			if opt.Data == "" || invalidText(opt.Data, true) || len(opt.Data) > 255 {
+				bad(op+"/data", "Expected text up to 255 bytes without control characters.")
+			}
+		case "ip":
+			parts := strings.Split(opt.Data, ",")
+			maxAddrs := 63
+			if v6 {
+				maxAddrs = 15
+			}
+			var addrs []string
+			ok := len(parts) > 0 && len(parts) <= maxAddrs
+			for _, part := range parts {
+				a, err := netip.ParseAddr(strings.TrimSpace(part))
+				if err != nil || a.Zone() != "" || (!v6 && !a.Is4()) || (v6 && (!a.Is6() || a.Is4In6())) {
+					ok = false
+					break
+				}
+				addrs = append(addrs, a.String())
+			}
+			if !ok {
+				if v6 {
+					bad(op+"/data", "Expected one or more IPv6 addresses separated by commas (at most 15).")
+				} else {
+					bad(op+"/data", "Expected one or more IPv4 addresses separated by commas (at most 63).")
+				}
+			} else {
+				opt.Data = strings.Join(addrs, ", ")
+			}
+		case "uint8":
+			if v, err := strconv.ParseUint(opt.Data, 10, 8); err != nil {
+				bad(op+"/data", "Expected an integer from 0 to 255.")
+			} else {
+				opt.Data = strconv.FormatUint(v, 10)
+			}
+		case "uint16":
+			if v, err := strconv.ParseUint(opt.Data, 10, 16); err != nil {
+				bad(op+"/data", "Expected an integer from 0 to 65535.")
+			} else {
+				opt.Data = strconv.FormatUint(v, 10)
+			}
+		case "uint32":
+			if v, err := strconv.ParseUint(opt.Data, 10, 32); err != nil {
+				bad(op+"/data", "Expected an integer from 0 to 4294967295.")
+			} else {
+				opt.Data = strconv.FormatUint(v, 10)
+			}
+		case "boolean":
+			if opt.Data != "true" && opt.Data != "false" {
+				bad(op+"/data", "Expected true or false.")
+			}
+		case "hex":
+			if !dhcpHexPlain.MatchString(opt.Data) && !dhcpHexColon.MatchString(opt.Data) {
+				bad(op+"/data", "Expected an even number of hexadecimal digits, optionally separated by colons.")
+			} else if clean := strings.ToLower(strings.ReplaceAll(opt.Data, ":", "")); len(clean)/2 > 255 {
+				bad(op+"/data", "Expected at most 255 bytes of hexadecimal data.")
+			} else {
+				opt.Data = clean
+			}
+		}
+	}
 }

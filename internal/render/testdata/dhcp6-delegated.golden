@@ -76,7 +76,8 @@
         "andaru": {
           "domain": "home.arpa",
           "names": true,
-          "register": true
+          "register": true,
+          "segment": "seg_00000002-0000-4000-8000-000000000002"
         }
       }
     }

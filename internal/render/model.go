@@ -145,11 +145,21 @@ type declaration struct {
 	} `json:"virtualAddresses"`
 }
 
+type dhcpOption struct {
+	Code       int    `json:"code"`
+	Type       string `json:"type"`
+	Data       string `json:"data"`
+	AlwaysSend bool   `json:"alwaysSend"`
+}
+
 type dhcp6Entry struct {
 	ID, Segment  string
 	Ranges       []struct{ First, Last string }
 	LeaseTime    int
 	DNSServers   []string
+	DomainSearch []string `json:"domainSearch"`
+	NTPServers   []string `json:"ntpServers"`
+	Options      []dhcpOption
 	StaticLeases []struct {
 		DUID, Address, Prefix, PrefixID, Hostname string
 	}

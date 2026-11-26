@@ -123,7 +123,7 @@ func TestConfigurationHTTPContract(t *testing.T) {
 		t.Fatal(e)
 	}
 	expected := map[string][]string{
-		"/api/v1/status/links": {"get", "head"}, "/api/v1/status/prefixes": {"get", "head"}, "/api/v1/status/system": {"get", "head"}, "/api/v1/status/usage": {"get", "head"}, "/api/v1/status/traffic": {"get", "head"}, "/api/v1/openapi.json": {"get", "head"},
+		"/api/v1/status/links": {"get", "head"}, "/api/v1/status/prefixes": {"get", "head"}, "/api/v1/status/leases": {"get", "head"}, "/api/v1/status/system": {"get", "head"}, "/api/v1/status/usage": {"get", "head"}, "/api/v1/status/traffic": {"get", "head"}, "/api/v1/openapi.json": {"get", "head"},
 		"/api/v1/schema": {"get", "head"}, "/api/v1/config": {"get", "head"}, "/api/v1/config/{collection}": {"get", "head", "post"},
 		"/api/v1/config/{collection}/{id}": {"get", "head", "put", "delete"}, "/api/v1/config/changes": {"post"},
 		"/api/v1/config/upgrade": {"post"}, "/api/v1/config/upgrade/preview": {"post"},

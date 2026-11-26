@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cmp"
 	"encoding/json"
 	"encoding/json/jsontext"
 	"net/netip"
@@ -90,6 +91,16 @@ func normalizeDeclaration(d *declaration) {
 		e := &d.DHCP[i]
 		slices.SortFunc(e.Ranges, func(a, b dhcpRange) int { return compareAddr(a.First, b.First) })
 		slices.SortFunc(e.StaticLeases, func(a, b staticLease) int { return strings.Compare(a.MAC, b.MAC) })
+		slices.SortFunc(e.Options, func(a, b dhcpOption) int { return cmp.Compare(a.Code, b.Code) })
+		if len(e.DomainSearch) == 0 {
+			e.DomainSearch = nil
+		}
+		if len(e.NTPServers) == 0 {
+			e.NTPServers = nil
+		}
+		if len(e.Options) == 0 {
+			e.Options = nil
+		}
 		if e.LeaseTime == 0 {
 			e.LeaseTime = 7200
 		}
@@ -111,6 +122,16 @@ func normalizeDeclaration(d *declaration) {
 		e := &d.DHCP6[i]
 		slices.SortFunc(e.Ranges, func(a, b dhcpRange) int { return compareAddr(a.First, b.First) })
 		slices.SortFunc(e.StaticLeases, func(a, b staticLease6) int { return strings.Compare(a.DUID, b.DUID) })
+		slices.SortFunc(e.Options, func(a, b dhcpOption) int { return cmp.Compare(a.Code, b.Code) })
+		if len(e.DomainSearch) == 0 {
+			e.DomainSearch = nil
+		}
+		if len(e.NTPServers) == 0 {
+			e.NTPServers = nil
+		}
+		if len(e.Options) == 0 {
+			e.Options = nil
+		}
 		if e.LeaseTime == 0 {
 			e.LeaseTime = 7200
 		}

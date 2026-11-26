@@ -33,6 +33,7 @@ type keaConfig struct {
 			} `json:"reservations"`
 			UserContext struct {
 				Andaru struct {
+					Segment  string `json:"segment"`
 					Domain   string `json:"domain"`
 					Register bool   `json:"register"`
 				} `json:"andaru"`
@@ -45,6 +46,9 @@ type keaLease struct {
 	Address   string `json:"ip-address"`
 	PrefixLen int    `json:"prefix-len"`
 	Type      string `json:"type"` // DHCPv6 only: IA_NA or IA_PD
+	MAC       string `json:"hw-address"`
+	ClientID  string `json:"client-id"`
+	DUID      string `json:"duid"`
 	Hostname  string `json:"hostname"`
 	State     int    `json:"state"`
 	Subnet    int    `json:"subnet-id"`
@@ -174,14 +178,17 @@ func (r Realizer) syncLeases(ctx context.Context) error {
 		}
 	}
 	// Its routes are reconciled whatever the DHCPv4 server does.
-	v6, static6, err6 := r.syncKea6(ctx, staticNames4(cfg))
+	v6, static6, view6, ok6, err6 := r.syncKea6(ctx, staticNames4(cfg))
 	if err6 != nil {
 		v6, failed = r.publishedNames(true), err6
 	}
 	records := []string{}
+	var view4 []Lease4View
+	ok4 := false
 	switch {
 	case os.IsNotExist(err):
 		// No DHCP server: nothing to publish.
+		ok4 = true
 	case err != nil:
 		failed, records = errors.Join(err, failed), r.publishedNames(false)
 	default:
@@ -189,6 +196,20 @@ func (r Realizer) syncLeases(ctx context.Context) error {
 			r.afterLeaseRead()
 		}
 		records = leaseRecords(cfg, leases, static6)
+		view4 = buildLease4Views(cfg, leases)
+		ok4 = true
+	}
+	if !ok4 || !ok6 {
+		prev, _ := readStoredLeaseView(r.Root)
+		if !ok4 {
+			view4 = prev.V4
+		}
+		if !ok6 {
+			view6 = prev.V6
+		}
+	}
+	if err := writeLeaseView(r.Root, view4, view6); err != nil {
+		failed = errors.Join(failed, err)
 	}
 	records = append(records, v6...)
 	body := "server:\n"

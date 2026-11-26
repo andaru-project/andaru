@@ -99,6 +99,11 @@ func (r Realizer) services(ctx context.Context, from, to []placed) error {
 		if err := writeAtomic(r.Root+leasesDir+"/leases.conf", []byte("server:\n"), 0o644); err != nil {
 			return err
 		}
+		if !kea && !kea6 {
+			if err := writeLeaseView(r.Root, nil, nil); err != nil {
+				return err
+			}
+		}
 	}
 	if unbound || hadUnbound {
 		if unbound {
