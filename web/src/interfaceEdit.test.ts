@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { ApiError } from './api';
-import { addressLines, draftOf, existingSecretsOf, interfaceErrors, interfaceOperations, memberLinkOptions, newZoneOption, nextPppoeSecretName, raModeFrom, removeOperations, validatePppoePassword, validatePppoeUsername, validatePref64, vlanParentOptions } from './interfaceEdit';
+import { addressLines, draftOf, existingSecretsOf, foldHiddenRaErrors, interfaceErrors, interfaceOperations, memberLinkOptions, newZoneOption, nextPppoeSecretName, raModeFrom, removeOperations, validatePppoePassword, validatePppoeUsername, validatePref64, validateRaDnsServers, vlanParentOptions } from './interfaceEdit';
 import type { LinkStatus, SavedLink, SavedObject, Segment, Snapshot } from './types';
 
 const port: LinkStatus = { ifIndex: 3, name: 'enp2s0', linkType: 'ether', mtu: 1500, operState: 'UP', flags: [], linkAddress: '02:00:00:00:00:99', permanentAddress: '52:54:00:AA:BB:02', addresses: [] };
@@ -30,11 +30,11 @@ it('sends nothing for an unchanged interface, and keeps what the panel does not 
   } }]);
 });
 
-it('starts a new mode over, keeping only the router advertisements', () => {
+it('starts a new mode over, turning off router advertisements when moving to an upstream mode', () => {
   const draft = { ...draftOf(link.value, segment.value, undefined), ipv6Mode: 'slaac', mtu: '9000' };
   const operations = interfaceOperations(draft, link, segment, undefined);
   expect(operations[0]).toEqual({ op: 'replace', collection: 'links', id: 'lnk_a', expectedVersion: '4', value: { ...link.value, mtu: 9000 } });
-  expect(operations[1].value?.addressing).toEqual({ ipv4: { mode: 'dhcp' }, ipv6: { mode: 'slaac', ra } });
+  expect(operations[1].value?.addressing).toEqual({ ipv4: { mode: 'dhcp' }, ipv6: { mode: 'slaac', ra: { mode: 'disabled' } } });
 });
 
 it('takes the network off a port that keeps its link, and removes both when asked', () => {
@@ -442,8 +442,22 @@ it('serializes IPv6 router advertisements, preserves unchanged legacy RA, valida
   expect(validatePref64('64:ff9b::1/96')).toMatch(/Host bits/);
   expect(validatePref64('2001:db8:ab01::/40')).toMatch(/Host bits/);
   expect(validatePref64('64:ff9b::/72')).toMatch(/length 32, 40, 48, 56, 64, or 96/);
+  expect(validatePref64('64:ff9b::/096')).toMatch(/length 32, 40, 48, 56, 64, or 96/);
+  expect(validatePref64('64:ff9b:: /96')).toMatch(/length 32, 40, 48, 56, 64, or 96/);
   expect(validatePref64('::ffff:0:0/96')).toMatch(/length 32, 40, 48, 56, 64, or 96/);
   expect(validatePref64('64:ff9b::/96%eth0')).toMatch(/length 32, 40, 48, 56, 64, or 96/);
+
+  expect(validateRaDnsServers('')).toBeUndefined();
+  expect(validateRaDnsServers('fd00:53::53, 2606:4700:4700::1111')).toBeUndefined();
+  expect(validateRaDnsServers('1.1.1.1')).toMatch(/IPv6 DNS servers only/);
+  expect(validateRaDnsServers('foo:bar')).toMatch(/IPv6 DNS servers only/);
+  expect(validateRaDnsServers('::ffff:1.2.3.4')).toMatch(/IPv6 DNS servers only/);
+  expect(validateRaDnsServers('::ffff:102:304')).toMatch(/IPv6 DNS servers only/);
+  expect(validateRaDnsServers('fe80::1')).toMatch(/unicast IPv6/);
+  expect(validateRaDnsServers('::1')).toMatch(/unicast IPv6/);
+  expect(validateRaDnsServers('fd00:53::53/128')).toMatch(/bare IPv6/);
+  expect(validateRaDnsServers('fd00:53::53, FD00:0053::0053')).toMatch(/listed twice/);
+  expect(validateRaDnsServers('fd00::1 fd00::2 fd00::3 fd00::4 fd00::5 fd00::6 fd00::7 fd00::8 fd00::9')).toMatch(/At most 8/);
 
   const staticSeg: SavedObject<Segment> = {
     version: '4',
@@ -558,4 +572,70 @@ it('serializes IPv6 router advertisements, preserves unchanged legacy RA, valida
     ['raDnsServers', 'Bad RDNSS.'],
     ['raDnsSearchDomains', 'Bad DNSSL.'],
   ]));
+
+  // routerLifetime === 0 round-trips as numeric 0, and router mode omits prefix lifetimes.
+  const routerZeroDraft = {
+    ...draftOf(link.value, staticSeg.value, undefined),
+    raMode: 'router' as const,
+    raRouterLifetime: '0',
+    raValidLifetime: '7200',
+    raPreferredLifetime: '3600',
+  };
+  expect((interfaceOperations(routerZeroDraft, link, staticSeg, undefined)[0].value?.addressing as { ipv6: Record<string, unknown> }).ipv6.ra).toEqual({
+    mode: 'router',
+    routerLifetime: 0,
+  });
+
+  // Unknown saved priority stays untouched on no-op save; hidden draft sub-fields do not cause spurious ops.
+  const unknownPrioSeg: SavedObject<Segment> = {
+    version: '6',
+    value: {
+      ...staticSeg.value,
+      addressing: {
+        ...staticSeg.value.addressing,
+        ipv6: { mode: 'static', addresses: ['fd00:1::1/64'], ra: { mode: 'unmanaged', priority: 'urgent' } },
+      },
+    },
+  };
+  expect(interfaceOperations(draftOf(link.value, unknownPrioSeg.value, undefined), link, unknownPrioSeg, undefined)).toEqual([]);
+  expect(interfaceOperations({ ...legacyDraft, raDnsOverride: false, raDnsServers: 'fd00::1' }, link, legacySeg, undefined)).toEqual([]);
+  const disabledSaved: SavedObject<Segment> = {
+    version: '6',
+    value: {
+      ...staticSeg.value,
+      addressing: {
+        ...staticSeg.value.addressing,
+        ipv6: { mode: 'static', addresses: ['fd00:1::1/64'], ra: { mode: 'disabled' } },
+      },
+    },
+  };
+  expect(interfaceOperations({ ...draftOf(link.value, disabledSaved.value, undefined), raRouterLifetime: '1200' }, link, disabledSaved, undefined)).toEqual([]);
+
+  // Switching static with active RA to slaac or dhcp6 disables RA so it is never stranded active while hidden.
+  const activeStatic: SavedObject<Segment> = {
+    version: '6',
+    value: {
+      ...staticSeg.value,
+      addressing: {
+        ...staticSeg.value.addressing,
+        ipv6: { mode: 'static', addresses: ['fd00:1::1/64'], ra: { mode: 'unmanaged' } },
+      },
+    },
+  };
+  expect((interfaceOperations({ ...draftOf(link.value, activeStatic.value, undefined), ipv6Mode: 'dhcp6' }, link, activeStatic, undefined)[0].value?.addressing as { ipv6: Record<string, unknown> }).ipv6).toEqual({
+    mode: 'dhcp6',
+    ra: { mode: 'disabled' },
+  });
+
+  // Unrendered RA errors fold into the top banner ("") instead of disappearing behind hidden fields.
+  const foldedDelegated = foldHiddenRaErrors(
+    new Map([['raValidLifetime', 'Delegated lifetimes are upstream-controlled.'], ['raDnsServers', 'Bad DNS.']]),
+    { ...draftOf(link.value, staticSeg.value, undefined), ipv6Mode: 'delegated', raMode: 'unmanaged', raDnsOverride: false },
+  );
+  expect(foldedDelegated).toEqual(new Map([['', 'Delegated lifetimes are upstream-controlled. Bad DNS.']]));
+  const foldedDisabled = foldHiddenRaErrors(
+    new Map([['raRouterLifetime', 'Bad lifetime.'], ['raMode', 'Mode refused.']]),
+    { ...draftOf(link.value, staticSeg.value, undefined), ipv6Mode: 'static', raMode: 'disabled' },
+  );
+  expect(foldedDisabled).toEqual(new Map([['raMode', 'Mode refused.'], ['', 'Bad lifetime.']]));
 });

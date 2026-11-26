@@ -1,6 +1,8 @@
 import { fieldErrors } from './api';
-import { parseIpv6Groups } from './dhcpEdit';
+import { parseIpv6Groups, raModeFrom } from './dhcpEdit';
 import type { BondMode, ConfigBatchOperation, LacpRate, LinkStatus, LldpEmitMode, LldpReceiveMode, RaConfig, RaMode, RaPriority, SavedLink, SavedObject, Segment, Snapshot, TransmitHashPolicy, VirtualLinkKind } from './types';
+
+export { raModeFrom };
 
 // What the interface panel edits: the link, and the segment that puts a network on it.
 export interface InterfaceDraft {
@@ -118,33 +120,28 @@ export const raPriorities: Array<{ value: '' | RaPriority; label: string }> = [
   { value: 'high', label: 'High' },
 ];
 
-const knownRaModes = new Set<string>(raModes.map((item) => item.value));
 const knownRaPriorities = new Set<string>(['low', 'medium', 'high']);
 
-export function raModeFrom(ra?: RaConfig): RaMode {
-  if (!ra) return 'disabled';
-  if (ra.mode) return knownRaModes.has(ra.mode) ? (ra.mode as RaMode) : 'disabled';
-  if (!ra.enabled) return 'disabled';
-  if (ra.managed) return 'managed';
-  if (ra.otherInfo) return 'stateless';
-  return 'unmanaged';
+export function raPriorityFrom(ra?: RaConfig): '' | RaPriority {
+  return ra?.priority && knownRaPriorities.has(ra.priority) ? (ra.priority as RaPriority) : '';
 }
 
-const validPref64Lengths = new Set([32, 40, 48, 56, 64, 96]);
+const isIpv4Mapped = (groups: string[]) => groups.slice(0, 5).every((g) => g === '0') && groups[5] === 'ffff';
 
-// Matches internal/config/validate.go: masked IPv6 prefix of length 32, 40, 48, 56, 64, or 96 (no zone or IPv4-mapped).
+// Matches internal/config/validate.go: masked IPv6 prefix of length 32, 40, 48, 56, 64, or 96 (no whitespace, zone, or IPv4-mapped).
 export function validatePref64(raw: string): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) return undefined;
   const invalid = 'Expected an IPv6 prefix of length 32, 40, 48, 56, 64, or 96 (e.g. 64:ff9b::/96).';
+  if (/\s/.test(trimmed) || trimmed.includes('%')) return invalid;
   const slash = trimmed.indexOf('/');
-  if (slash <= 0 || trimmed.indexOf('/', slash + 1) !== -1 || trimmed.includes('%')) return invalid;
+  if (slash <= 0 || trimmed.indexOf('/', slash + 1) !== -1) return invalid;
   const addr = trimmed.slice(0, slash);
   const lenStr = trimmed.slice(slash + 1);
-  if (!/^\d+$/.test(lenStr)) return invalid;
-  const bits = Number(lenStr);
+  if (!/^(?:32|40|48|56|64|96)$/.test(lenStr)) return invalid;
   const groups = parseIpv6Groups(addr);
-  if (!groups || !validPref64Lengths.has(bits) || (groups.slice(0, 5).every((g) => g === '0') && groups[5] === 'ffff')) return invalid;
+  if (!groups || isIpv4Mapped(groups)) return invalid;
+  const bits = Number(lenStr);
   for (let i = 0; i < 8; i += 1) {
     const groupStart = i * 16;
     if (groupStart >= bits) {
@@ -153,6 +150,28 @@ export function validatePref64(raw: string): string | undefined {
       const mask = (1 << (groupStart + 16 - bits)) - 1;
       if ((parseInt(groups[i], 16) & mask) !== 0) return 'Host bits in the PREF64 prefix must be zero.';
     }
+  }
+  return undefined;
+}
+
+// Validate RDNSS server list (0..8 unique bare unicast IPv6 addresses, no link-local/loopback/multicast/unspecified/IPv4-mapped).
+export function validateRaDnsServers(raw: string): string | undefined {
+  const servers = words(raw);
+  if (servers.length > 8) return 'At most 8 IPv6 DNS servers.';
+  const seen = new Set<string>();
+  for (const item of servers) {
+    if (item.includes('/') || item.includes('%')) return 'Router advertisements carry bare IPv6 DNS server addresses only.';
+    const groups = parseIpv6Groups(item);
+    if (!groups || isIpv4Mapped(groups)) return 'Router advertisements carry IPv6 DNS servers only.';
+    const first = parseInt(groups[0], 16);
+    const isUnspecified = groups.every((g) => g === '0');
+    const isLoopback = groups.slice(0, 7).every((g) => g === '0') && groups[7] === '1';
+    if (isUnspecified || isLoopback || (first & 0xffc0) === 0xfe80 || (first & 0xff00) === 0xff00) {
+      return 'DNS server must be a unicast IPv6 address (not loopback, link-local, multicast, or unspecified).';
+    }
+    const canonical = groups.join(':');
+    if (seen.has(canonical)) return 'DNS server is listed twice.';
+    seen.add(canonical);
   }
   return undefined;
 }
@@ -206,7 +225,7 @@ type Fields = Record<string, unknown>;
 
 const list = (value: unknown) => (Array.isArray(value) ? value.join(', ') : '');
 const text = (value: unknown) => (value === undefined ? '' : String(value));
-const words = (raw: string) => raw.split(/[\s,]+/).filter(Boolean);
+export const words = (raw: string) => raw.split(/[\s,]+/).filter(Boolean);
 
 export interface LinkOption {
   value: string;
@@ -359,7 +378,7 @@ export function draftOf(link: SavedLink | undefined, segment: Segment | undefine
     ipv6From: text(ipv6.from),
     ipv6SubnetId: text(ipv6.subnetId),
     raMode: raModeFrom(ra),
-    raPriority: ra?.priority && knownRaPriorities.has(ra.priority) ? (ra.priority as RaPriority) : '',
+    raPriority: raPriorityFrom(ra),
     raRouterLifetime: text(ra?.routerLifetime),
     raValidLifetime: text(ra?.validLifetime),
     raPreferredLifetime: text(ra?.preferredLifetime),
@@ -401,22 +420,26 @@ function ipv6Of(draft: InterfaceDraft, saved: Fields | undefined): Fields {
   const savedRa = saved?.ra as RaConfig | undefined;
   if (supportsRouterAdvertisements(draft.kind, draft.ipv6Mode)) {
     const showPrefixLifetimes = draft.ipv6Mode === 'static' && draft.raMode !== 'router';
-    const raUnchanged = draft.raMode === raModeFrom(savedRa)
-      && draft.raPriority === (savedRa?.priority ?? '')
-      && draft.raRouterLifetime.trim() === text(savedRa?.routerLifetime)
-      && (!showPrefixLifetimes || (
-        draft.raValidLifetime.trim() === text(savedRa?.validLifetime)
-        && draft.raPreferredLifetime.trim() === text(savedRa?.preferredLifetime)
-      ))
-      && draft.raPref64.trim() === text(savedRa?.pref64)
-      && draft.raDnsOverride === Boolean(savedRa?.dns)
-      && same(words(draft.raDnsServers), savedRa?.dns?.servers ?? [])
-      && same(words(draft.raDnsSearchDomains), savedRa?.dns?.searchDomains ?? []);
+    const raUnchanged = draft.raMode === 'disabled'
+      ? raModeFrom(savedRa) === 'disabled'
+      : draft.raMode === raModeFrom(savedRa)
+        && draft.raPriority === raPriorityFrom(savedRa)
+        && draft.raRouterLifetime.trim() === text(savedRa?.routerLifetime)
+        && (!showPrefixLifetimes || (
+          draft.raValidLifetime.trim() === text(savedRa?.validLifetime)
+          && draft.raPreferredLifetime.trim() === text(savedRa?.preferredLifetime)
+        ))
+        && draft.raPref64.trim() === text(savedRa?.pref64)
+        && draft.raDnsOverride === Boolean(savedRa?.dns)
+        && (!draft.raDnsOverride || (
+          same(words(draft.raDnsServers), savedRa?.dns?.servers ?? [])
+          && same(words(draft.raDnsSearchDomains), savedRa?.dns?.searchDomains ?? [])
+        ));
     if (raUnchanged) {
       if (savedRa) {
         const ra: Fields = { ...(savedRa as Fields) };
-        // A delegated prefix's lifetimes are the upstream lease's, and the engine refuses them set by hand.
-        if (draft.ipv6Mode === 'delegated') {
+        // A delegated prefix's lifetimes are the upstream lease's, and router mode announces no prefixes.
+        if (!showPrefixLifetimes && draft.raMode !== 'disabled') {
           delete ra.validLifetime;
           delete ra.preferredLifetime;
         }
@@ -444,9 +467,9 @@ function ipv6Of(draft: InterfaceDraft, saved: Fields | undefined): Fields {
     }
   } else if (out.ra) {
     const ra: Fields = { ...(out.ra as Fields) };
-    // Without IPv6 or on a PPPoE segment, router advertisements cannot be sent: they are
-    // turned off, their other settings kept for when IPv6 returns. The older form says it with enabled.
-    if (draft.ipv6Mode === 'none' || draft.kind === 'pppoe') {
+    // Router advertisements cannot be sent without IPv6, on PPPoE, or on upstream-facing (SLAAC/DHCPv6) segments:
+    // turn them off when changing into an unsupported mode (or on none/PPPoE) so active RAs never stay hidden.
+    if (draft.ipv6Mode === 'none' || draft.kind === 'pppoe' || saved?.mode !== draft.ipv6Mode) {
       if ('enabled' in ra) ra.enabled = false;
       else ra.mode = 'disabled';
     }
@@ -617,7 +640,6 @@ const fieldOf: Record<string, Array<[RegExp, string]>> = {
     [/^\/addressing\/ipv4\/addresses/, 'ipv4Addresses'], [/^\/addressing\/ipv4\/gateway/, 'ipv4Gateway'], [/^\/addressing\/ipv4/, 'ipv4'],
     [/^\/addressing\/ipv6\/addresses/, 'ipv6Addresses'], [/^\/addressing\/ipv6\/gateway/, 'ipv6Gateway'], [/^\/addressing\/ipv6\/requestPrefixLength/, 'ipv6PrefixLength'],
     [/^\/addressing\/ipv6\/from/, 'ipv6From'], [/^\/addressing\/ipv6\/subnetId/, 'ipv6SubnetId'],
-    [/^\/addressing\/ipv6\/ra\/mode(\/|$)/, 'raMode'],
     [/^\/addressing\/ipv6\/ra\/priority(\/|$)/, 'raPriority'],
     [/^\/addressing\/ipv6\/ra\/routerLifetime(\/|$)/, 'raRouterLifetime'],
     [/^\/addressing\/ipv6\/ra\/validLifetime(\/|$)/, 'raValidLifetime'],
@@ -638,4 +660,40 @@ export function interfaceErrors(error: unknown, operations: ConfigBatchOperation
     const fields = match ? fieldOf[operations[Number(match[1])]?.collection] : undefined;
     return fields?.find(([pattern]) => pattern.test(match?.[2] ?? ''))?.[1] ?? '';
   });
+}
+
+const raErrorKeys = new Set(['raMode', 'raPriority', 'raRouterLifetime', 'raValidLifetime', 'raPreferredLifetime', 'raPref64', 'raDnsServers', 'raDnsSearchDomains']);
+
+// Fold errors targeting RA fields that are not currently rendered into the top banner ("") so refusals are never swallowed.
+export function foldHiddenRaErrors(fields: Map<string, string>, draft: InterfaceDraft): Map<string, string> {
+  const showRa = draft.assigned && supportsRouterAdvertisements(draft.kind, draft.ipv6Mode);
+  const showOptions = showRa && draft.raMode !== 'disabled';
+  const showLifetimes = showOptions && draft.ipv6Mode === 'static' && draft.raMode !== 'router';
+  const showDns = showOptions && draft.raDnsOverride;
+  const visible = new Set<string>();
+  if (showRa) visible.add('raMode');
+  if (showOptions) {
+    visible.add('raPriority');
+    visible.add('raRouterLifetime');
+    visible.add('raPref64');
+  }
+  if (showLifetimes) {
+    visible.add('raValidLifetime');
+    visible.add('raPreferredLifetime');
+  }
+  if (showDns) {
+    visible.add('raDnsServers');
+    visible.add('raDnsSearchDomains');
+  }
+  const out = new Map<string, string>();
+  const hidden: string[] = [];
+  for (const [key, message] of fields) {
+    if (raErrorKeys.has(key) && !visible.has(key)) hidden.push(message);
+    else out.set(key, message);
+  }
+  if (hidden.length > 0) {
+    const existing = out.get('');
+    out.set('', existing ? [existing, ...hidden].join(' ') : hidden.join(' '));
+  }
+  return out;
 }

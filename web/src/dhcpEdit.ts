@@ -1,6 +1,6 @@
 import { fieldErrors } from './api';
 import type {
-  Dhcp4Entry, Dhcp6Entry, DhcpOption, DhcpOptionType, DhcpRange, Lease4, Lease6, Segment, Snapshot,
+  Dhcp4Entry, Dhcp6Entry, DhcpOption, DhcpOptionType, DhcpRange, Lease4, Lease6, RaConfig, RaMode, Segment, Snapshot,
 } from './types';
 
 let nextRowKey = 1;
@@ -185,14 +185,19 @@ export function isDelegatedIpv6(segment: Segment): boolean {
   return segment.addressing.ipv6.mode === 'delegated' && Boolean(segment.addressing.ipv6.from);
 }
 
-export function raModeOf(segment: Segment): string {
-  const ra = segment.addressing.ipv6.ra;
+const knownRaModes = new Set<string>(['disabled', 'router', 'unmanaged', 'managed', 'assisted', 'stateless']);
+
+export function raModeFrom(ra?: RaConfig): RaMode {
   if (!ra) return 'disabled';
-  if (ra.mode) return ra.mode;
+  if (ra.mode) return knownRaModes.has(ra.mode) ? (ra.mode as RaMode) : 'disabled';
   if (!ra.enabled) return 'disabled';
   if (ra.managed) return 'managed';
   if (ra.otherInfo) return 'stateless';
   return 'unmanaged';
+}
+
+export function raModeOf(segment: Segment): RaMode {
+  return raModeFrom(segment.addressing.ipv6.ra);
 }
 
 export function formatLeaseTime(seconds?: number): string {

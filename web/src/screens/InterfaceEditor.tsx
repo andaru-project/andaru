@@ -1,7 +1,7 @@
 import { Alert, Button, Drawer, Fieldset, Group, List, MultiSelect, NativeSelect, PasswordInput, Select, SimpleGrid, Stack, Switch, Text, TextInput } from '@mantine/core';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, saveFailure } from '../api';
-import { bondModes, draftOf, hashPolicyModes, interfaceErrors, interfaceOperations, ipv4Modes, ipv6Modes, lacpRates, lldpEmitModes, lldpReceiveModes, memberLinkOptions, modeLabel, newZoneOption, raModeDescription, raModes, raPriorities, removeOperations, supportsRouterAdvertisements, transmitHashPolicies, validatePppoePassword, validatePppoeUsername, validatePref64, vlanParentOptions, type InterfaceDraft } from '../interfaceEdit';
+import { bondModes, draftOf, foldHiddenRaErrors, hashPolicyModes, interfaceErrors, interfaceOperations, ipv4Modes, ipv6Modes, lacpRates, lldpEmitModes, lldpReceiveModes, memberLinkOptions, modeLabel, newZoneOption, raModeDescription, raModes, raPriorities, removeOperations, supportsRouterAdvertisements, transmitHashPolicies, validatePppoePassword, validatePppoeUsername, validatePref64, validateRaDnsServers, vlanParentOptions, words, type InterfaceDraft } from '../interfaceEdit';
 import type { BondMode, ConfigBatchOperation, LacpRate, LinkStatus, LldpEmitMode, LldpReceiveMode, RaMode, RaPriority, SavedLink, SavedObject, Segment, Snapshot, TransmitHashPolicy, VirtualLinkKind } from '../types';
 import { ZonePill } from './ZoneBadge';
 
@@ -175,12 +175,8 @@ export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClos
       found.set('mtu', 'IPv6 requires an MTU of at least 1280.');
     }
     if (supportsRouterAdvertisements(draft.kind, draft.ipv6Mode) && draft.raMode !== 'disabled') {
-      const rawRouterLife = draft.raRouterLifetime.trim();
-      if (rawRouterLife) {
-        const value = Number(rawRouterLife);
-        if (!/^\d+$/.test(rawRouterLife) || (value !== 0 && (value < 4 || value > 9000))) {
-          found.set('raRouterLifetime', 'Expected 0, or 4 to 9000 seconds.');
-        }
+      if (draft.raRouterLifetime.trim() !== '0') {
+        checkOptionalInt(draft.raRouterLifetime, 4, 9000, 'raRouterLifetime', 'Expected 0, or 4 to 9000 seconds.');
       }
       if (draft.ipv6Mode === 'static' && draft.raMode !== 'router') {
         checkOptionalInt(draft.raValidLifetime, 1, 4294967294, 'raValidLifetime', 'Expected 1 to 4294967294 seconds.');
@@ -196,11 +192,9 @@ export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClos
       const pref64Err = validatePref64(draft.raPref64);
       if (pref64Err) found.set('raPref64', pref64Err);
       if (draft.raDnsOverride) {
-        const raServers = draft.raDnsServers.split(/[\s,]+/).filter(Boolean);
-        if (raServers.length > 8) found.set('raDnsServers', 'At most 8 IPv6 DNS servers.');
-        else if (raServers.some((item) => !item.includes(':'))) found.set('raDnsServers', 'Router advertisements carry IPv6 DNS servers only.');
-        const raDomains = draft.raDnsSearchDomains.split(/[\s,]+/).filter(Boolean);
-        if (raDomains.length > 8) found.set('raDnsSearchDomains', 'At most 8 search domains.');
+        const dnsErr = validateRaDnsServers(draft.raDnsServers);
+        if (dnsErr) found.set('raDnsServers', dnsErr);
+        if (words(draft.raDnsSearchDomains).length > 8) found.set('raDnsSearchDomains', 'At most 8 search domains.');
       }
     }
     return found;
@@ -216,7 +210,7 @@ export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClos
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) return onSessionLost();
       if (!open.current) return onAbandoned(saveFailure(error, new Map(), 'interface'));
-      const fields = interfaceErrors(error, operations);
+      const fields = foldHiddenRaErrors(interfaceErrors(error, operations), draft);
       setErrors(fields);
       setFailure(saveFailure(error, fields, 'interface'));
     } finally {
