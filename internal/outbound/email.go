@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"mime"
@@ -87,8 +88,12 @@ func sendEmail(ctx context.Context, job delivery.Job) (result error) {
 	}
 	if t.Username != "" {
 		ok, mechanisms := c.Extension("AUTH")
-		if legacy, more := c.Extension("AUTH=LOGIN"); !ok && legacy { // older servers: AUTH=LOGIN PLAIN
-			ok, mechanisms = true, "LOGIN "+more
+		// Older servers say AUTH=LOGIN PLAIN, or AUTH=PLAIN LOGIN. shortcut: net/smtp matches the keyword's case as the
+		// server wrote it, so a lower-case auth= line is missed; scan the raw reply if one turns up.
+		for _, legacy := range []string{"LOGIN", "PLAIN"} {
+			if found, more := c.Extension("AUTH=" + legacy); !ok && found {
+				ok, mechanisms = true, legacy+" "+more
+			}
 		}
 		var auth smtp.Auth
 		switch {
@@ -118,7 +123,7 @@ func sendEmail(ctx context.Context, job delivery.Job) (result error) {
 		} else if !isPermanent(err) {
 			return err
 		} else {
-			refused = err
+			refused = errors.Join(refused, fmt.Errorf("%s: %w", a.Address, err))
 		}
 	}
 	if accepted == 0 {
@@ -154,7 +159,9 @@ func smtpError(err error) error {
 	// A certificate that fails verification, or a server that does not speak TLS where the channel says it does (implicit
 	// TLS on a STARTTLS port), is answered the same on every retry. A middlebox answering in plain text during an outage
 	// is taken for the latter: a misconfigured channel is the likelier cause.
-	if errors.As(err, new(*tls.CertificateVerificationError)) || errors.As(err, new(tls.RecordHeaderError)) {
+	// A login prompt that is not base64 is sent the same way every time, too.
+	if errors.As(err, new(*tls.CertificateVerificationError)) || errors.As(err, new(tls.RecordHeaderError)) ||
+		errors.As(err, new(base64.CorruptInputError)) {
 		return permanent(err)
 	}
 	return err

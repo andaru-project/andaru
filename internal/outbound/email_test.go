@@ -23,7 +23,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/andaru-project/andaru/internal/bus"
 	"github.com/andaru-project/andaru/internal/delivery"
+	"github.com/andaru-project/andaru/internal/notify"
 )
 
 // fakeSMTP is an SMTP server for mail.test, enough of one for net/smtp: EHLO, STARTTLS, AUTH PLAIN, MAIL, RCPT, DATA.
@@ -329,5 +331,26 @@ func TestEmailAuthLoginByStep(t *testing.T) {
 	}
 	if _, err := a.Next([]byte("more?"), true); !isPermanent(err) {
 		t.Fatalf("third %v", err)
+	}
+}
+
+// A recipient refused on every message raises the channel's notification, as a dead channel does, while the others
+// still get each message.
+func TestRefusedRecipientRaisesTheChannelNotification(t *testing.T) {
+	f := &fakeSMTP{implicit: true, rcpt: map[string]string{"two@example.com": "550 5.1.1 no such user"}}
+	f.start(t)
+	b := newBench(t)
+	b.run(&Service{})
+	for _, id := range []string{"e1", "e2", "e3"} {
+		j := emailJob("tls")
+		j.ID, j.Channel = id+":ch", "ch"
+		event, _ := bus.NewEvent(notify.RaisedType, "apply", notify.Raise{Key: "k", Severity: notify.Warning, Subject: "s"})
+		j.Event = event
+		b.publish(j)
+		b.waitSent(j.ID)
+	}
+	r := b.wantRaised(notify.RaisedType, "channel/ch")
+	if !strings.Contains(r.detail, "two@example.com") {
+		t.Fatalf("detail %q", r.detail)
 	}
 }
