@@ -1,5 +1,7 @@
 package outbound
 
+import "slices"
+
 // order acks a consumer's events in sequence while they are handled concurrently: the cursor moves past an event only
 // once it and every event before it are done, so a crash never skips one still being sent.
 type order struct {
@@ -8,6 +10,9 @@ type order struct {
 }
 
 func (o *order) start(seq int64) { o.pending = append(o.pending, seq) }
+
+// has says whether seq is being handled.
+func (o *order) has(seq int64) bool { return slices.Contains(o.pending, seq) }
 
 // finish marks seq done and returns the sequence number the cursor may now move to, or 0.
 func (o *order) finish(seq int64) int64 {

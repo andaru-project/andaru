@@ -2,7 +2,10 @@
 // each notification a channel's filter passes, and andaru-outbound, which sends it.
 package delivery
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 const (
 	// Filter is what andaru-outbound's consumer, Consumer, reads.
@@ -30,6 +33,8 @@ type Job struct {
 	Name    string  `json:"name"` // the channel's name, for the operator
 	Kind    string  `json:"kind"`
 	Message Message `json:"message"`
+	// Event is the notification's own event on the bus, which the webhook sends as it is.
+	Event json.RawMessage `json:"event"`
 	// Webhook is set for Kind Webhook.
 	Webhook *WebhookTarget `json:"webhook,omitempty"`
 }

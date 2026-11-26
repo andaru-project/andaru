@@ -17,7 +17,10 @@ import (
 
 	"github.com/andaru-project/andaru/internal/bus"
 	"github.com/andaru-project/andaru/internal/delivery"
+	"github.com/andaru-project/andaru/internal/notify"
 )
+
+type raised struct{ typ, key, detail string }
 
 type bench struct {
 	t       *testing.T
@@ -25,7 +28,7 @@ type bench struct {
 	bus     *bus.Bus
 	socket  string
 	cache   string
-	raised  chan string // "<type> <key>" of each notification andaru-outbound publishes
+	raised  chan raised // what andaru-outbound publishes about itself
 	cancel  context.CancelFunc
 	stopped chan struct{}
 }
@@ -36,7 +39,7 @@ func newBench(t *testing.T) *bench {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
-	b := &bench{t: t, dir: dir, cache: filepath.Join(dir, "cache"), raised: make(chan string, 64)}
+	b := &bench{t: t, dir: dir, cache: filepath.Join(dir, "cache"), raised: make(chan raised, 256)}
 	if err := os.Mkdir(b.cache, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -64,12 +67,12 @@ func (b *bench) open(lost bool) {
 	}
 	b.t.Cleanup(func() { b.bus.Close() })
 	if _, err := b.bus.Subscribe("notification/#", func(_ string, payload []byte) {
-		var e bus.Event
-		var r struct{ Key string }
+		var e struct {
+			Type string
+			Data notify.Raise
+		}
 		_ = json.Unmarshal(payload, &e)
-		data, _ := json.Marshal(e.Data)
-		_ = json.Unmarshal(data, &r)
-		b.raised <- e.Type + " " + r.Key
+		b.raised <- raised{e.Type, e.Data.Key, e.Data.Detail}
 	}); err != nil {
 		b.t.Fatal(err)
 	}
@@ -79,6 +82,9 @@ func (b *bench) run(s *Service) {
 	ctx, cancel := context.WithCancel(context.Background())
 	b.cancel, b.stopped = cancel, make(chan struct{})
 	s.Socket, s.CacheDir = b.socket, b.cache
+	if s.Backoff == nil {
+		s.Backoff = func(int) time.Duration { return time.Millisecond }
+	}
 	// A new consumer starts at the end of the log: publish only once it is attached.
 	ready := make(chan struct{}, 1)
 	s.Ready = func() {
@@ -87,16 +93,6 @@ func (b *bench) run(s *Service) {
 		default:
 		}
 	}
-	defer func() {
-		select {
-		case <-ready:
-		case <-time.After(10 * time.Second):
-			b.t.Fatal("andaru-outbound did not attach")
-		}
-	}()
-	if s.Backoff == nil {
-		s.Backoff = func(int) time.Duration { return time.Millisecond }
-	}
 	go func() {
 		defer close(b.stopped)
 		if err := s.Run(ctx); err != nil {
@@ -104,6 +100,11 @@ func (b *bench) run(s *Service) {
 		}
 	}()
 	b.t.Cleanup(b.stop)
+	select {
+	case <-ready:
+	case <-time.After(10 * time.Second):
+		b.t.Fatal("andaru-outbound did not attach")
+	}
 }
 
 func (b *bench) stop() {
@@ -125,6 +126,37 @@ func (b *bench) publish(job delivery.Job) {
 	}
 }
 
+// wantRaised waits for andaru-outbound to publish typ for key, skipping anything else, and returns it.
+func (b *bench) wantRaised(typ, key string) raised {
+	b.t.Helper()
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case r := <-b.raised:
+			if r.typ == typ && r.key == key {
+				return r
+			}
+		case <-deadline:
+			b.t.Fatalf("no %s for %q", typ, key)
+		}
+	}
+}
+
+// noRaise checks nothing raised key so far.
+func (b *bench) noRaise(key string) {
+	b.t.Helper()
+	for {
+		select {
+		case r := <-b.raised:
+			if r.typ == notify.RaisedType && r.key == key {
+				b.t.Fatalf("%q raised too early", key)
+			}
+		default:
+			return
+		}
+	}
+}
+
 // waitSent waits until andaru-outbound has recorded id as sent.
 func (b *bench) waitSent(id string) {
 	b.t.Helper()
@@ -137,29 +169,34 @@ func (b *bench) waitSent(id string) {
 	b.t.Fatalf("%s was not recorded as sent", id)
 }
 
-func (b *bench) wantRaised(want string) {
+// queued is how many jobs wait in the retry queue.
+func (b *bench) queued() int {
+	entries, _ := os.ReadDir(filepath.Join(b.cache, "retry"))
+	return len(entries)
+}
+
+func (b *bench) waitQueued(n int) {
 	b.t.Helper()
-	select {
-	case got := <-b.raised:
-		if got != want {
-			b.t.Fatalf("raised %q, want %q", got, want)
+	for range 1000 {
+		if b.queued() == n {
+			return
 		}
-	case <-time.After(10 * time.Second):
-		b.t.Fatalf("nothing raised, want %q", want)
+		time.Sleep(5 * time.Millisecond)
 	}
+	b.t.Fatalf("%d jobs queued, want %d", b.queued(), n)
 }
 
 // hook is a webhook receiver that answers each request with the next status in its list, then 204.
 type hook struct {
 	mu       sync.Mutex
 	statuses []int
-	bodies   []delivery.Message
+	subjects []string
 	headers  []string
 	got      chan struct{}
 }
 
 func newHook(t *testing.T, statuses ...int) (*hook, string) {
-	h := &hook{statuses: statuses, got: make(chan struct{}, 64)}
+	h := &hook{statuses: statuses, got: make(chan struct{}, 256)}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.mu.Lock()
 		status := http.StatusNoContent
@@ -167,9 +204,7 @@ func newHook(t *testing.T, statuses ...int) (*hook, string) {
 			status, h.statuses = h.statuses[0], h.statuses[1:]
 		}
 		if status/100 == 2 {
-			var m delivery.Message
-			_ = json.NewDecoder(r.Body).Decode(&m)
-			h.bodies = append(h.bodies, m)
+			h.subjects = append(h.subjects, subjectOf(r))
 			h.headers = append(h.headers, r.Header.Get("Authorization"))
 		}
 		h.mu.Unlock()
@@ -178,6 +213,19 @@ func newHook(t *testing.T, statuses ...int) (*hook, string) {
 	}))
 	t.Cleanup(srv.Close)
 	return h, srv.URL
+}
+
+// subjectOf reads the subject from a webhook's body: the notification's event as the bus carries it.
+func subjectOf(r *http.Request) string {
+	var e struct {
+		Type string
+		Data notify.Raise
+	}
+	_ = json.NewDecoder(r.Body).Decode(&e)
+	if e.Type != notify.RaisedType {
+		return "not a notification event"
+	}
+	return e.Data.Subject
 }
 
 func (h *hook) wait(t *testing.T, n int) {
@@ -191,19 +239,17 @@ func (h *hook) wait(t *testing.T, n int) {
 	}
 }
 
-func (h *hook) subjects() []string {
+func (h *hook) sent() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	var out []string
-	for _, m := range h.bodies {
-		out = append(out, m.Subject)
-	}
-	return out
+	return slices.Clone(h.subjects)
 }
 
 func job(id, channel, url string) delivery.Job {
-	return delivery.Job{ID: id, Channel: channel, Name: "Ops", Kind: delivery.Webhook,
-		Message: delivery.Message{Source: "apply", Key: "k", Severity: "warning", Subject: "subject " + id, Raised: time.Unix(1, 0).UTC()},
+	r := notify.Raise{Key: "k", Severity: notify.Warning, Subject: "subject " + id}
+	event, _ := bus.NewEvent(notify.RaisedType, "apply", r)
+	return delivery.Job{ID: id, Channel: channel, Name: "Ops", Kind: delivery.Webhook, Event: event,
+		Message: delivery.Message{Source: "apply", Key: r.Key, Severity: r.Severity, Subject: r.Subject, Raised: time.Unix(1, 0).UTC()},
 		Webhook: &delivery.WebhookTarget{URL: url, Headers: map[string]string{"Authorization": "Bearer t"}}}
 }
 
@@ -216,9 +262,8 @@ func TestWebhookJobIsSentOnce(t *testing.T) {
 	// The same job again, as after a crash of the layer between publishing and its ack, is not sent twice; a new one is.
 	b.publish(job("e1:ch", "ch", url))
 	b.publish(job("e2:ch", "ch", url))
-	h.wait(t, 1)
-	time.Sleep(50 * time.Millisecond)
-	if got := h.subjects(); !slices.Equal(got, []string{"subject e1:ch", "subject e2:ch"}) || h.headers[0] != "Bearer t" {
+	b.waitSent("e2:ch")
+	if got := h.sent(); !slices.Equal(got, []string{"subject e1:ch", "subject e2:ch"}) || h.headers[0] != "Bearer t" {
 		t.Fatalf("sent %q with %q", got, h.headers)
 	}
 }
@@ -228,15 +273,13 @@ func TestSentJobsSurviveARestart(t *testing.T) {
 	h, url := newHook(t)
 	b.run(&Service{})
 	b.publish(job("e1:ch", "ch", url))
-	h.wait(t, 1)
 	b.waitSent("e1:ch")
 	b.stop()
 	b.run(&Service{})
 	b.publish(job("e1:ch", "ch", url))
 	b.publish(job("e2:ch", "ch", url))
-	h.wait(t, 1)
-	time.Sleep(50 * time.Millisecond)
-	if got := h.subjects(); !slices.Equal(got, []string{"subject e1:ch", "subject e2:ch"}) {
+	b.waitSent("e2:ch")
+	if got := h.sent(); !slices.Equal(got, []string{"subject e1:ch", "subject e2:ch"}) {
 		t.Fatalf("sent %q", got)
 	}
 }
@@ -246,48 +289,130 @@ func TestFailedSendIsRetried(t *testing.T) {
 	h, url := newHook(t, 500, 503)
 	b.run(&Service{})
 	b.publish(job("e1:ch", "ch", url))
-	h.wait(t, 3)
-	if got := h.subjects(); !slices.Equal(got, []string{"subject e1:ch"}) {
+	b.waitSent("e1:ch")
+	b.waitQueued(0)
+	if got := h.sent(); !slices.Equal(got, []string{"subject e1:ch"}) {
 		t.Fatalf("sent %q", got)
 	}
 }
 
-// Three jobs given up in a row raise the channel's notification; the next success clears it.
+// A queued job is retried after a restart, from the queue: the bus has its ack already.
+func TestQueuedJobSurvivesARestart(t *testing.T) {
+	b := newBench(t)
+	var down atomic.Bool
+	down.Store(true)
+	var subjects []string
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if down.Load() {
+			w.WriteHeader(503)
+			return
+		}
+		mu.Lock()
+		subjects = append(subjects, subjectOf(r))
+		mu.Unlock()
+	}))
+	defer srv.Close()
+	b.run(&Service{Backoff: func(int) time.Duration { return time.Hour }})
+	b.publish(job("e1:ch", "ch", srv.URL))
+	b.waitQueued(1)
+	b.stop()
+	down.Store(false)
+	b.run(&Service{})
+	b.waitSent("e1:ch")
+	b.waitQueued(0)
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(subjects, []string{"subject e1:ch"}) {
+		t.Fatalf("sent %q", subjects)
+	}
+}
+
+// One dead channel holds up no other: more jobs than the bus's window go through while it fails.
+func TestDeadChannelDoesNotHoldUpOthers(t *testing.T) {
+	b := newBench(t)
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) }))
+	defer dead.Close()
+	h, url := newHook(t)
+	b.run(&Service{Backoff: func(int) time.Duration { return time.Hour }})
+	b.publish(job("a1:a", "a", dead.URL))
+	for i := range 100 {
+		b.publish(job("b"+strings.Repeat("x", i)+":b", "b", url))
+	}
+	h.wait(t, 100)
+}
+
+// Three jobs given up in a row raise the channel's notification, not fewer; the next success clears it. The error
+// in the notification does not show the webhook's URL, which is often its secret.
 func TestFailingChannelRaisesItsNotification(t *testing.T) {
 	b := newBench(t)
-	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) }))
-	defer failing.Close()
+	dead := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	deadURL := dead.URL + "/hooks/SECRETTOKEN?k=QSECRET"
+	dead.Close() // refused connections: Go's error names the URL
 	h, url := newHook(t)
 	b.run(&Service{RetryFor: 5 * time.Millisecond, Backoff: func(int) time.Duration { return 3 * time.Millisecond }})
-	for _, id := range []string{"e1", "e2", "e3"} {
-		b.publish(job(id+":ch", "ch", failing.URL))
+	for _, id := range []string{"e1", "e2"} {
+		b.publish(job(id+":ch", "ch", deadURL))
+		b.waitQueued(1)
+		b.waitQueued(0)
 	}
-	b.wantRaised("notification.raised.v1 channel/ch")
+	time.Sleep(20 * time.Millisecond)
+	b.noRaise("channel/ch")
+	b.publish(job("e3:ch", "ch", deadURL))
+	r := b.wantRaised(notify.RaisedType, "channel/ch")
+	if strings.Contains(r.detail, "SECRET") || !strings.Contains(r.detail, "connection refused") {
+		t.Fatalf("detail %q", r.detail)
+	}
 	b.publish(job("e4:ch", "ch", url))
 	h.wait(t, 1)
-	b.wantRaised("notification.cleared.v1 channel/ch")
+	b.wantRaised(notify.ClearedType, "channel/ch")
+}
+
+// After a restart nothing remembers the channel's notification: its first success clears it anyway.
+func TestFirstSuccessClearsAChannelNotification(t *testing.T) {
+	b := newBench(t)
+	_, url := newHook(t)
+	b.run(&Service{})
+	b.publish(job("e1:ch", "ch", url))
+	b.wantRaised(notify.ClearedType, "channel/ch")
 }
 
 func TestUnusableJobIsGivenUpAtOnce(t *testing.T) {
 	b := newBench(t)
 	h, url := newHook(t)
 	b.run(&Service{RetryFor: time.Hour})
-	bad := job("e1:ch", "ch", "ftp://example.invalid/")
-	b.publish(bad)
+	b.publish(job("e1:ch", "ch", "ftp://example.invalid/"))
 	b.publish(job("e2:ch", "ch", url))
-	h.wait(t, 1)
-	if got := h.subjects(); !slices.Equal(got, []string{"subject e2:ch"}) {
-		t.Fatalf("sent %q", got)
+	b.waitSent("e2:ch")
+	time.Sleep(20 * time.Millisecond)
+	if got := h.sent(); !slices.Equal(got, []string{"subject e2:ch"}) || b.queued() != 0 {
+		t.Fatalf("sent %q, %d queued", got, b.queued())
 	}
 }
 
-// Jobs the bus lost before andaru-outbound read them raise a notification of their own.
+// A redirect is not followed: the job's headers stay with the host it names, and a 3xx is no delivery.
+func TestRedirectIsNotFollowed(t *testing.T) {
+	b := newBench(t)
+	var elsewhere atomic.Int32
+	other := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { elsewhere.Add(1) }))
+	defer other.Close()
+	srv := httptest.NewServer(http.RedirectHandler(other.URL, http.StatusTemporaryRedirect))
+	defer srv.Close()
+	b.run(&Service{Backoff: func(int) time.Duration { return time.Hour }})
+	b.publish(job("e1:ch", "ch", srv.URL))
+	b.waitQueued(1)
+	if n := elsewhere.Load(); n != 0 {
+		t.Fatalf("the redirect target was called %d times", n)
+	}
+}
+
+// Jobs the bus lost before andaru-outbound read them raise a notification of their own, and the consumer goes on.
 func TestGapRaisesMissedDeliveries(t *testing.T) {
 	b := newBench(t)
 	h, url := newHook(t)
 	b.run(&Service{})
 	b.publish(job("e1:ch", "ch", url))
-	h.wait(t, 1)
+	b.waitSent("e1:ch")
 	b.stop()
 	b.bus.Close()
 	// The store is lost and replaced: the consumer comes back to an empty log.
@@ -296,7 +421,12 @@ func TestGapRaisesMissedDeliveries(t *testing.T) {
 	}
 	b.open(true)
 	b.run(&Service{})
-	b.wantRaised("notification.raised.v1 missed")
+	b.wantRaised(notify.RaisedType, "missed")
+	b.publish(job("e2:ch", "ch", url))
+	b.waitSent("e2:ch")
+	if got := h.sent(); !slices.Equal(got, []string{"subject e1:ch", "subject e2:ch"}) {
+		t.Fatalf("sent %q", got)
+	}
 }
 
 // A slow job does not hold up the next, and the cursor waits for it: stopped then, the slow job comes back.
@@ -305,9 +435,7 @@ func TestSlowJobIsNotSkipped(t *testing.T) {
 	var slowCalls atomic.Int32
 	fastDone := make(chan struct{}, 4)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var m delivery.Message
-		_ = json.NewDecoder(r.Body).Decode(&m)
-		if m.Subject == "subject slow:ch" {
+		if subjectOf(r) == "subject slow:ch" {
 			if slowCalls.Add(1) == 1 {
 				<-r.Context().Done() // the first attempt never finishes
 			}
@@ -329,18 +457,6 @@ func TestSlowJobIsNotSkipped(t *testing.T) {
 	}
 }
 
-func TestOrderAcksOnlyAPrefix(t *testing.T) {
-	var o order
-	for _, seq := range []int64{1, 2, 3} {
-		o.start(seq)
-	}
-	for _, s := range []struct{ finish, want int64 }{{2, 0}, {1, 2}, {3, 3}} {
-		if got := o.finish(s.finish); got != s.want {
-			t.Fatalf("finish(%d) = %d, want %d", s.finish, got, s.want)
-		}
-	}
-}
-
 // A copy of a job delivered while the first is still being sent is not sent again.
 func TestCopyInFlightIsNotSentTwice(t *testing.T) {
 	b := newBench(t)
@@ -359,5 +475,20 @@ func TestCopyInFlightIsNotSentTwice(t *testing.T) {
 	b.waitSent("e1:ch")
 	if n := calls.Load(); n != 1 {
 		t.Fatalf("sent %d times", n)
+	}
+}
+
+func TestOrderAcksOnlyAPrefix(t *testing.T) {
+	var o order
+	for _, seq := range []int64{1, 2, 3} {
+		o.start(seq)
+	}
+	if !o.has(2) || o.has(4) {
+		t.Fatal("has")
+	}
+	for _, s := range []struct{ finish, want int64 }{{2, 0}, {1, 2}, {3, 3}} {
+		if got := o.finish(s.finish); got != s.want {
+			t.Fatalf("finish(%d) = %d, want %d", s.finish, got, s.want)
+		}
 	}
 }
