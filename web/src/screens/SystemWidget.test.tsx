@@ -1,8 +1,12 @@
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { afterEach, expect, it, vi } from 'vitest';
-import { act, render, screen } from '../test/render';
+import { ApiClient } from '../api';
+import { fetchRoutes, jsonResponse } from '../test/fetch';
+import { act, render, screen, waitFor } from '../test/render';
 import type { SystemInfo } from '../types';
-import { SystemFacts as Both, SystemWidget } from './SystemWidget';
+import type { Resource } from '../useResource';
+import { SystemDetailsScreen, SystemFacts as Both, SystemWidget } from './SystemWidget';
 
 const hardware: SystemInfo = {
   version: '0.5.0-a.4', hostname: 'edge', kernel: '6.17.8-300.fc43.x86_64', architecture: 'x86_64',
@@ -17,7 +21,10 @@ const hardware: SystemInfo = {
 
 const value = (label: string) => screen.getByRole('rowheader', { name: label }).nextElementSibling?.textContent;
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 it('shows what the box is, a line for each fact it reports', () => {
   render(<Both info={hardware} loadedAt={Date.now()} />);
@@ -140,4 +147,66 @@ it('shows a clickable upgrade notification pill beside the version when an updat
   );
   const rebootPill = screen.getByRole('link', { name: 'Reboot to apply 0.5.0-a.5' });
   expect(rebootPill).toHaveAttribute('href', '/system/updates');
+});
+
+it('lets authorized operators change the appliance hostname from System details and hides the action when read-only', async () => {
+  const user = userEvent.setup();
+  const reload = vi.fn().mockResolvedValue(undefined);
+  const onSessionLost = vi.fn();
+  const system: Resource<{ info: SystemInfo; loadedAt: number } | undefined> = {
+    data: { info: hardware, loadedAt: Date.now() },
+    error: '',
+    loading: false,
+    reload,
+    refresh: vi.fn(),
+  };
+
+  let mode: 'ok' | 'fail' | 'unauth' = 'ok';
+  const bodies: string[] = [];
+  const csrfHeaders: Array<string | null> = [];
+  fetchRoutes({
+    'POST /api/v1/system/hostname': (init) => {
+      bodies.push(String(init?.body ?? ''));
+      csrfHeaders.push(new Headers(init?.headers).get('X-Andaru-CSRF'));
+      if (mode === 'fail') return jsonResponse(502, { error: { code: 'HOSTNAME_FAILED', message: 'Could not apply the new hostname.' } });
+      if (mode === 'unauth') return jsonResponse(401, { error: { code: 'UNAUTHENTICATED', message: 'Expired.' } });
+      return jsonResponse(200, { hostname: 'edge-gw' });
+    },
+  });
+
+  const api = new ApiClient('csrf-tok');
+  const { rerender } = render(<SystemDetailsScreen system={system} api={api} canRename={false} onSessionLost={onSessionLost} />);
+  expect(screen.queryByRole('button', { name: 'Change hostname' })).not.toBeInTheDocument();
+
+  rerender(<SystemDetailsScreen system={system} api={api} canRename onSessionLost={onSessionLost} />);
+  await user.click(screen.getByRole('button', { name: 'Change hostname' }));
+  const input = await screen.findByLabelText(/Hostname/i, { selector: 'input' });
+  expect((input as HTMLInputElement).value).toBe('edge');
+  expect(screen.getByRole('button', { name: 'Save hostname' })).toBeDisabled();
+
+  await user.clear(input);
+  await user.type(input, '-bad.name-');
+  expect(screen.getByText(/cannot start or end with a hyphen/i)).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Save hostname' }));
+  expect(bodies).toHaveLength(0);
+
+  await user.clear(input);
+  await user.type(input, '  Edge-GW  ');
+  await user.click(screen.getByRole('button', { name: 'Save hostname' }));
+  expect(await screen.findByText('Hostname updated to edge-gw.')).toBeInTheDocument();
+  expect(bodies).toEqual([JSON.stringify({ hostname: 'edge-gw' })]);
+  expect(csrfHeaders).toEqual(['csrf-tok']);
+  expect(reload).toHaveBeenCalledTimes(1);
+
+  mode = 'fail';
+  await user.click(screen.getByRole('button', { name: 'Change hostname' }));
+  const input2 = await screen.findByLabelText(/Hostname/i, { selector: 'input' });
+  await user.clear(input2);
+  await user.type(input2, 'core-gw');
+  await user.click(screen.getByRole('button', { name: 'Save hostname' }));
+  expect(await screen.findByText('Could not apply the new hostname.')).toBeInTheDocument();
+
+  mode = 'unauth';
+  await user.click(screen.getByRole('button', { name: 'Save hostname' }));
+  await waitFor(() => expect(onSessionLost).toHaveBeenCalledTimes(1));
 });
