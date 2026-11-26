@@ -403,11 +403,67 @@ function stripRfc5322Comments(input: string): { text: string; comments: Array<{ 
   return inQuotes || commentDepth !== 0 ? undefined : { text: out.trim(), comments };
 }
 
+const rfc2047WordPattern = /=\?([A-Za-z0-9_-]+)\?([QqBb])\?([^?\s]*)\?=/g;
+
+function decodeRfc2047Word(charset: string, encoding: string, payload: string): string | undefined {
+  const cs = charset.toLowerCase();
+  let bytes: Uint8Array;
+  if (encoding.toLowerCase() === 'b') {
+    try {
+      const bin = atob(payload);
+      bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+    } catch {
+      return undefined;
+    }
+  } else {
+    const out: number[] = [];
+    for (let i = 0; i < payload.length; i += 1) {
+      const ch = payload[i];
+      if (ch === '_') {
+        out.push(0x20);
+      } else if (ch === '=' && /^[0-9A-Fa-f]{2}$/.test(payload.slice(i + 1, i + 3))) {
+        out.push(Number.parseInt(payload.slice(i + 1, i + 3), 16));
+        i += 2;
+      } else if (ch === '=') {
+        return undefined;
+      } else {
+        out.push(ch.charCodeAt(0));
+      }
+    }
+    bytes = new Uint8Array(out);
+  }
+  if (cs === 'utf-8' || cs === 'utf8' || cs === 'us-ascii') {
+    return new TextDecoder('utf-8').decode(bytes);
+  }
+  if (cs === 'iso-8859-1' || cs === 'latin1') {
+    return Array.from(bytes, (b) => String.fromCharCode(b)).join('');
+  }
+  return undefined;
+}
+
+function decodeRfc2047Words(input: string): string {
+  const collapsed = input.replace(/(\?=)\s+(?==\?[A-Za-z0-9_-]+\?[QqBb]\?[^?\s]*\?=)/g, '$1');
+  return collapsed.replace(rfc2047WordPattern, (full, charset: string, encoding: string, payload: string) => (
+    decodeRfc2047Word(charset, encoding, payload) ?? full
+  ));
+}
+
 function parsedDisplayName(raw: string): string {
   if (quotedDisplayNamePattern.test(raw)) {
     return raw.slice(1, -1).replace(/\\(.)/g, '$1');
   }
-  return raw.replace(/\s+/g, ' ');
+  return decodeRfc2047Words(raw.replace(/\s+/g, ' '));
+}
+
+function validateDisplayName(decoded: string): string | undefined {
+  if (controlOrFormatChars.test(decoded)) {
+    return 'Control or format characters are not allowed.';
+  }
+  if (utf8ByteLength(decoded) > emailDisplayNameByteLimit) {
+    return `Display name must be ${emailDisplayNameByteLimit} bytes or fewer.`;
+  }
+  return undefined;
 }
 
 // Parse one RFC 5322 address ("ops@example.com", "Display Name <ops@example.com>", or with RFC 5322 comments)
@@ -438,8 +494,9 @@ export function parseEmailAddress(raw: string): { address: string } | { error: s
     if (displayName && !quotedDisplayNamePattern.test(displayName) && unquotedDisplaySpecials.test(displayName)) {
       return { error: 'Quote display names containing special characters, or use a plain address.' };
     }
-    if (displayName && utf8ByteLength(parsedDisplayName(displayName)) > emailDisplayNameByteLimit) {
-      return { error: `Display name must be ${emailDisplayNameByteLimit} bytes or fewer.` };
+    if (displayName) {
+      const nameErr = validateDisplayName(parsedDisplayName(displayName));
+      if (nameErr) return { error: nameErr };
     }
     addr = uncommented.slice(lt + 1, -1);
   } else if (uncommented.includes('<') || uncommented.includes('>')) {
@@ -448,9 +505,8 @@ export function parseEmailAddress(raw: string): { address: string } | { error: s
     if (stripped.comments.some((c) => !c.afterText)) {
       return { error: 'Enter one e-mail address, such as Andaru <alerts@example.com>.' };
     }
-    if (utf8ByteLength(stripped.comments[0].text) > emailDisplayNameByteLimit) {
-      return { error: `Display name must be ${emailDisplayNameByteLimit} bytes or fewer.` };
-    }
+    const nameErr = validateDisplayName(decodeRfc2047Words(stripped.comments[0].text));
+    if (nameErr) return { error: nameErr };
   }
 
   const at = addr.indexOf('@');

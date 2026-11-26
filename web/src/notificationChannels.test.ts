@@ -389,6 +389,14 @@ describe('notificationChannels', () => {
     expect('error' in parseEmailAddress(`ops@example.com (${'A'.repeat(65)})`)).toBe(true);
     expect('error' in parseEmailAddress(`ops@example.com (${'é'.repeat(33)})`)).toBe(true);
     expect('error' in parseEmailAddress('(Lead) ops@example.com')).toBe(true);
+    // RFC 2047 encoded display names are measured after decoding (not by encoded token length).
+    const rfc2047Ok = `=?UTF-8?Q?${'=C3=A9'.repeat(10)}?=`;
+    const rfc2047TooLong = `=?UTF-8?Q?${'=C3=A9'.repeat(33)}?=`;
+    expect(parseEmailAddress(`${rfc2047Ok} <ops@example.com>`)).toEqual({ address: 'ops@example.com' });
+    expect(parseEmailAddress(`ops@example.com (${rfc2047Ok})`)).toEqual({ address: 'ops@example.com' });
+    expect('error' in parseEmailAddress(`${rfc2047TooLong} <ops@example.com>`)).toBe(true);
+    expect('error' in parseEmailAddress(`"${rfc2047Ok}" <ops@example.com>`)).toBe(true);
+    expect('error' in parseEmailAddress('=?UTF-8?Q?Hi=0D=0A?= <ops@example.com>')).toBe(true);
 
     // Username without password, duplicate recipients (case-insensitive), empty/overflow recipients.
     const badAuth = validateChannelDraft(
