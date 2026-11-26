@@ -60,6 +60,9 @@ func sendPushover(ctx context.Context, client *http.Client, job delivery.Job) er
 	if t == nil || t.Token == "" || t.User == "" {
 		return permanent(errors.New("a Pushover job without its token and user key"))
 	}
+	if err := errors.Join(credential("Pushover", t.Token), credential("Pushover", t.User)); err != nil {
+		return err
+	}
 	m := job.Message
 	// Pushover's limits are 250 characters for a title, 1024 for a message and 512 for a URL.
 	form := url.Values{"token": {t.Token}, "user": {t.User}, "title": {cut(m.Subject, 250)}, "message": {cut(text(m), 1024)},
@@ -84,6 +87,9 @@ func sendTelegram(ctx context.Context, client *http.Client, job delivery.Job) er
 	t := job.Telegram
 	if t == nil || t.Token == "" || t.ChatID == "" {
 		return permanent(errors.New("a Telegram job without its bot token and chat ID"))
+	}
+	if err := credential("Telegram", t.Token); err != nil {
+		return err
 	}
 	l := link(job)
 	if l == "" {

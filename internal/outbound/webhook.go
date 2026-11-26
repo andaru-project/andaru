@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"unicode"
 
 	"github.com/andaru-project/andaru/internal/delivery"
 )
@@ -42,12 +41,21 @@ func sendWebhook(ctx context.Context, client *http.Client, job delivery.Job) err
 // post sends req and judges the answer. A 2xx is acceptance, when accepted, given the answer's first 64 KiB, says so;
 // 408, 429 and 5xx are retried; anything else, a redirect included (it is not followed), comes back the same on a
 // retry. The body comes from the network: no more than a little is read, and none of it is shown.
+// credential refuses, for good, a credential with a control character other than a tab: HTTP refuses it, and a
+// service answers it no better on a retry.
+func credential(service, v string) error {
+	if strings.ContainsFunc(v, func(c rune) bool { return c < 0x20 && c != '\t' || c == 0x7f }) {
+		return permanent(fmt.Errorf("%s: a credential holds a control character", service))
+	}
+	return nil
+}
+
 func post(client *http.Client, req *http.Request, service string, accepted func(body []byte) bool) error {
 	// A header value with a control character, as a pasted token's newline, fails every attempt alike.
 	for _, values := range req.Header {
 		for _, v := range values {
-			if strings.ContainsFunc(v, unicode.IsControl) {
-				return permanent(fmt.Errorf("a %s credential holds a control character", service))
+			if err := credential(service, v); err != nil {
+				return err
 			}
 		}
 	}

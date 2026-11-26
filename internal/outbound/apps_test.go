@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -164,13 +165,32 @@ func TestAppSenders(t *testing.T) {
 // A credential with a control character, as a pasted token's trailing newline, is given up at once, not retried for
 // an hour: every attempt would fail alike.
 func TestControlCharacterInCredentialIsPermanent(t *testing.T) {
-	var calls int
-	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls++ }))
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls.Add(1) }))
 	defer srv.Close()
-	job := delivery.Job{ID: "e:c", Kind: delivery.Ntfy, Message: delivery.Message{Subject: "s"},
-		Ntfy: &delivery.NtfyTarget{Server: srv.URL, Topic: "t", Token: "tk_abc\n"}}
-	err := sendNtfy(context.Background(), srv.Client(), job)
-	if !isPermanent(err) || calls != 0 || strings.Contains(err.Error(), "tk_abc") {
-		t.Fatalf("%v, %d calls", err, calls)
+	defer func(p, tg string) { pushoverAPI, telegramAPI = p, tg }(pushoverAPI, telegramAPI)
+	pushoverAPI, telegramAPI = srv.URL, srv.URL
+	m := delivery.Message{Subject: "s"}
+	for _, send := range []func() error{
+		func() error {
+			return sendNtfy(context.Background(), srv.Client(), delivery.Job{Message: m, Ntfy: &delivery.NtfyTarget{Server: srv.URL, Topic: "t", Token: "tk_abc\n"}})
+		},
+		func() error {
+			return sendPushover(context.Background(), srv.Client(), delivery.Job{Message: m, Pushover: &delivery.PushoverTarget{Token: "tk_abc\n", User: "u"}})
+		},
+		func() error {
+			return sendTelegram(context.Background(), srv.Client(), delivery.Job{Message: m, Telegram: &delivery.TelegramTarget{Token: "1:tk_abc\n", ChatID: "-1"}})
+		},
+	} {
+		if err := send(); !isPermanent(err) || strings.Contains(err.Error(), "tk_abc") {
+			t.Fatalf("%v", err)
+		}
+	}
+	if n := calls.Load(); n != 0 {
+		t.Fatalf("%d calls", n)
+	}
+	// A tab is a valid header character.
+	if credential("x", "Bearer\tabc") != nil {
+		t.Fatal("a tab was refused")
 	}
 }
