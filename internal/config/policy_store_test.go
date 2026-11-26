@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -155,5 +156,80 @@ func TestFilterFaultsRebaseToTheWritingOperation(t *testing.T) {
 	f = requireFault(t, e, "VALIDATION_FAILED")
 	if len(f.Details) != 1 || f.Details[0].Path != "/operations/1/value/mode" {
 		t.Fatalf("singleton fault not rebased to its operation: %+v", f.Details)
+	}
+}
+
+// Aliases fed from a URL or from host names are saved, replaced and read back like any alias; their members are
+// never saved, so they may stand in rules and port forwards, of either family, but not in groups nor among the
+// management sources.
+func TestDynamicAliases(t *testing.T) {
+	s := seededState(t)
+	seg := s.Config.Segments[0].ID
+	p := mustRun(t, &s, `{"operations":[
+		{"op":"create","collection":"aliases.addresses","localId":"cf","value":{"name":"cloudflare","kind":"url","url":"https://www.cloudflare.com/ips-v4","refreshSeconds":3600}},
+		{"op":"create","collection":"aliases.addresses","localId":"vpn","value":{"name":"vpn","kind":"hostnames","names":["vpn.example.com","VPN2.example.com"],"refreshSeconds":300}},
+		{"op":"create","collection":"aliases.addresses","localId":"v6","value":{"name":"v6","kind":"network","prefix":"2001:db8::/64"}},
+		{"op":"create","collection":"rules","value":{"name":"r","enabled":true,"action":"accept","from":{"zones":[],"addresses":["@cf"]},"to":{"zones":[],"addresses":["@vpn","@v6"]},"ports":[],"log":false}},
+		{"op":"create","collection":"nat.portForwards","value":{"name":"web","enabled":true,"ingressZones":["`+s.Config.Zones[0].ID+`"],"protocol":"tcp","from":["@cf"],"to":{"self":true},"ports":"443","target":{"address":"192.0.2.10"}}},
+		{"op":"replace","collection":"management","expectedVersion":"0","value":{"segment":"`+seg+`"}}]}`)
+	cf, vpn := p.Created["cf"], p.Created["vpn"]
+	version := func(id string) string { return string(s.Versions[objectKey{"aliases.addresses", id}].Version) }
+	mustRun(t, &s, `{"operations":[
+		{"op":"replace","collection":"aliases.addresses","id":"`+cf+`","expectedVersion":"`+version(cf)+`","value":{"name":"cloudflare","kind":"url","url":"http://lists.example/v4.txt","refreshSeconds":86400}},
+		{"op":"replace","collection":"aliases.addresses","id":"`+vpn+`","expectedVersion":"`+version(vpn)+`","value":{"name":"vpn","kind":"hostnames","names":["vpn.example.com"],"refreshSeconds":60}}]}`)
+
+	raw, err := canonical(s.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`{"id":"` + cf + `","kind":"url","name":"cloudflare","refreshSeconds":86400,"url":"http://lists.example/v4.txt"}`,
+		`{"id":"` + vpn + `","kind":"hostnames","name":"vpn","names":["vpn.example.com"],"refreshSeconds":60}`,
+	} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("missing %s in %s", want, raw)
+		}
+	}
+	again, err := decodeDeclaration(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back, _ := canonical(again); string(back) != string(raw) {
+		t.Fatalf("round trip changed the declaration:\n%s\n%s", raw, back)
+	}
+
+	create := func(value string) string {
+		return `{"operations":[{"op":"create","collection":"aliases.addresses","value":` + value + `}]}`
+	}
+	names := make([]string, 21)
+	for i := range names {
+		names[i] = `"h` + strconv.Itoa(i) + `.example.com"`
+	}
+	for name, tc := range map[string]struct{ batch, path string }{
+		"ftp URL":              {create(`{"name":"x","kind":"url","url":"ftp://lists.example/v4","refreshSeconds":60}`), "/operations/0/value/url"},
+		"URL with a user":      {create(`{"name":"x","kind":"url","url":"https://me:pw@lists.example/v4","refreshSeconds":60}`), "/operations/0/value/url"},
+		"URL without a host":   {create(`{"name":"x","kind":"url","url":"https:///v4","refreshSeconds":60}`), "/operations/0/value/url"},
+		"no refreshSeconds":    {create(`{"name":"x","kind":"url","url":"https://lists.example/v4"}`), "/operations/0/value/refreshSeconds"},
+		"refreshSeconds 59":    {create(`{"name":"x","kind":"url","url":"https://lists.example/v4","refreshSeconds":59}`), "/operations/0/value/refreshSeconds"},
+		"refreshSeconds 86401": {create(`{"name":"x","kind":"hostnames","names":["a.example"],"refreshSeconds":86401}`), "/operations/0/value/refreshSeconds"},
+		"names on a url alias": {create(`{"name":"x","kind":"url","url":"https://lists.example/v4","names":["a.example"],"refreshSeconds":60}`), "/operations/0/value/names"},
+		"a url on a host":      {create(`{"name":"x","kind":"host","address":"192.0.2.1","url":"https://lists.example/v4"}`), "/operations/0/value/url"},
+		"no names":             {create(`{"name":"x","kind":"hostnames","refreshSeconds":60}`), "/operations/0/value/names"},
+		"21 names":             {create(`{"name":"x","kind":"hostnames","names":[` + strings.Join(names, ",") + `],"refreshSeconds":60}`), "/operations/0/value/names"},
+		"duplicate names":      {create(`{"name":"x","kind":"hostnames","names":["a.example","A.example"],"refreshSeconds":60}`), "/operations/0/value/names/1"},
+		"an address as a name": {create(`{"name":"x","kind":"hostnames","names":["192.0.2.1"],"refreshSeconds":60}`), "/operations/0/value/names/0"},
+		"a trailing dot":       {create(`{"name":"x","kind":"hostnames","names":["a.example."],"refreshSeconds":60}`), "/operations/0/value/names/0"},
+		"a group member":       {create(`{"name":"x","kind":"group","members":["` + cf + `"]}`), "/operations/0/value/members/0"},
+		"a management source": {`{"operations":[{"op":"replace","collection":"management","expectedVersion":"` + string(s.Versions[listKey("management")].Version) + `","value":{"segment":"` + seg + `","allowedSources":["` + vpn + `"]}}]}`,
+			"/operations/0/value/allowedSources/0"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			state := s
+			_, e := run(t, &state, tc.batch)
+			f := requireFault(t, e, "VALIDATION_FAILED")
+			if !slices.ContainsFunc(f.Details, func(d FieldError) bool { return d.Path == tc.path }) {
+				t.Fatalf("want an error at %s, got %+v", tc.path, f.Details)
+			}
+		})
 	}
 }

@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net/netip"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -70,10 +71,12 @@ func validatePolicy(d *declaration, limit int) []FieldError {
 		a := &d.Aliases.Addresses[i]
 		p := fmt.Sprintf("/aliases/addresses/%d", i)
 		f := map[int]bool{}
-		fields := map[string]bool{"address": a.Address != "", "prefix": a.Prefix != "", "first": a.First != "" || a.Last != "", "members": a.Members != nil}
-		want := map[string]string{"host": "address", "network": "prefix", "range": "first", "group": "members"}[a.Kind]
+		fields := map[string]bool{"address": a.Address != "", "prefix": a.Prefix != "", "first": a.First != "" || a.Last != "", "members": a.Members != nil,
+			"url": a.URL != "", "names": a.Names != nil, "refreshSeconds": a.RefreshSeconds != 0}
+		want := map[string][]string{"host": {"address"}, "network": {"prefix"}, "range": {"first"}, "group": {"members"},
+			"url": {"url", "refreshSeconds"}, "hostnames": {"names", "refreshSeconds"}}[a.Kind]
 		for field, set := range fields {
-			if set && field != want {
+			if set && !slices.Contains(want, field) {
 				bad(p+"/"+field, "Not used by this kind of address.")
 			}
 		}
@@ -111,8 +114,34 @@ func validatePolicy(d *declaration, limit int) []FieldError {
 				member, ok := addresses[m]
 				if !ok || member.Kind == "group" {
 					bad(fmt.Sprintf("%s/members/%d", p, j), "Members must be existing address aliases that are not groups.")
+				} else if member.dynamic() {
+					bad(fmt.Sprintf("%s/members/%d", p, j), "An alias fed from a URL or from host names cannot be a group's member yet.")
 				}
 			}
+		case "url":
+			u, e := url.Parse(a.URL)
+			if e != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" || u.User != nil {
+				bad(p+"/url", "Expected an https or http URL with a host and no user name or password.")
+			}
+		case "hostnames":
+			for j, name := range a.Names {
+				lower := strings.ToLower(name)
+				if _, e := netip.ParseAddr(name); e == nil || !searchDomain.MatchString(lower) {
+					bad(fmt.Sprintf("%s/names/%d", p, j), "Expected a host name, such as vpn.example.com, not an address.")
+				} else if slices.ContainsFunc(a.Names[:j], func(n string) bool { return strings.EqualFold(n, name) }) {
+					bad(fmt.Sprintf("%s/names/%d", p, j), "Host name is listed twice.")
+				}
+			}
+		}
+		if a.dynamic() {
+			if a.RefreshSeconds < 60 || a.RefreshSeconds > 86400 {
+				bad(p+"/refreshSeconds", "Expected a refresh interval from 60 to 86400 seconds.")
+			}
+			if a.Kind == "hostnames" && len(a.Names) == 0 {
+				bad(p+"/names", "Expected at least one host name.")
+			}
+			// Its members are known only once fetched or resolved.
+			f[4], f[6] = true, true
 		}
 		families[a.ID] = f
 	}
@@ -283,6 +312,8 @@ func validatePolicy(d *declaration, limit int) []FieldError {
 		for j, ref := range m.AllowedSources {
 			if addresses[ref] == nil {
 				bad(fmt.Sprintf("/management/allowedSources/%d", j), "Expected an existing address alias.")
+			} else if addresses[ref].dynamic() {
+				bad(fmt.Sprintf("/management/allowedSources/%d", j), "An alias fed from a URL or from host names cannot be a management source yet.")
 			}
 		}
 	}

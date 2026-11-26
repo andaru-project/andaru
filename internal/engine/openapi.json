@@ -3455,7 +3455,7 @@
           "name": "kind",
           "in": "query",
           "required": false,
-          "description": "Filter by alias sub-kind: host, network, range, or group when type=addresses; tcp, udp, icmp, icmpv6, or group when type=ports.",
+          "description": "Filter by alias sub-kind: host, network, range, group, url, or hostnames when type=addresses; tcp, udp, icmp, icmpv6, or group when type=ports.",
           "schema": {
             "type": "string",
             "enum": [
@@ -3463,6 +3463,8 @@
               "network",
               "range",
               "group",
+              "url",
+              "hostnames",
               "tcp",
               "udp",
               "icmp",
@@ -8865,7 +8867,9 @@
               "host",
               "network",
               "range",
-              "group"
+              "group",
+              "url",
+              "hostnames"
             ]
           },
           "protocol": {

@@ -127,3 +127,35 @@ func TestNoClampForAnUnusableSession(t *testing.T) {
 		t.Fatalf("%d clamps for a session whose parent is disabled", n)
 	}
 }
+
+// An alias fed from a URL or from host names declares both family sets, empty, and a rule naming it renders a
+// line for each family, whatever its fetched list will hold.
+func TestDynamicAliasRendersBothEmptySets(t *testing.T) {
+	const id, set, rule = "adr_00000009-0000-4000-8000-000000000009", "adr_00000009_0000_4000_8000_000000000009", "rul_00000009-0000-4000-8000-000000000009"
+	for kind, fields := range map[string]map[string]any{
+		"url":       {"url": "https://www.cloudflare.com/ips-v4"},
+		"hostnames": {"names": []any{"vpn.example.com"}},
+	} {
+		t.Run(kind, func(t *testing.T) {
+			in := change(t, fixture(t, "filter-objects"), func(d map[string]any) {
+				alias := map[string]any{"id": id, "name": "dynamic", "kind": kind, "refreshSeconds": 300}
+				for k, v := range fields {
+					alias[k] = v
+				}
+				aliases := d["aliases"].(map[string]any)
+				aliases["addresses"] = append(aliases["addresses"].([]any), alias)
+				d["rules"] = append(d["rules"].([]any), map[string]any{"id": rule, "name": "from dynamic", "enabled": true, "action": "accept",
+					"from": map[string]any{"zones": []any{}, "addresses": []any{id}}, "to": map[string]any{"zones": []any{}, "addresses": []any{}}, "ports": []any{}, "log": false})
+			})
+			f, ok := nftFile(t, render(t, in))
+			if !ok {
+				t.Fatal("no filter rendered")
+			}
+			lines(t, f.Content,
+				"\tset "+set+"_4 { type ipv4_addr; flags interval; auto-merge; }",
+				"\tset "+set+"_6 { type ipv6_addr; flags interval; auto-merge; }",
+				"\t\tip saddr @"+set+"_4 accept comment \""+rule+"\"",
+				"\t\tip6 saddr @"+set+"_6 accept comment \""+rule+"\"")
+		})
+	}
+}
