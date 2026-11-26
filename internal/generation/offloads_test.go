@@ -56,8 +56,8 @@ func TestOffloadsFollowTheLinkFileAndReturnToTheDefaults(t *testing.T) {
 	link := placed{path: "/run/systemd/network/50-andaru-wan.link", data: []byte(wanLink + "GenericReceiveOffload=no\nGenericReceiveOffloadHardware=yes\nReceiveVLANCTAGHardwareAcceleration=yes\n")}
 
 	r.applyOffloads(context.Background(), []placed{link})
-	// GRO-HW is fixed and VLAN acceleration already runs as declared: only GRO changes.
-	if want := [][]string{{"wan", "generic-receive-offload", "off"}}; !reflect.DeepEqual(h.set, want) {
+	// GRO-HW is fixed and VLAN acceleration already runs as declared: GRO changes, and LRO, never on unless declared.
+	if want := [][]string{{"wan", "generic-receive-offload", "off", "large-receive-offload", "off"}}; !reflect.DeepEqual(h.set, want) {
 		t.Fatalf("set %v, want %v", h.set, want)
 	}
 
@@ -75,11 +75,11 @@ func TestOffloadsFollowTheLinkFileAndReturnToTheDefaults(t *testing.T) {
 		t.Fatalf("recorded defaults: %s, want %s", data, want)
 	}
 
-	// The kernel turned LRO off once the device forwarded: no default turns it back on.
-	h.requested["large-receive-offload"] = false
+	// LRO runs only while declared.
+	r.applyOffloads(context.Background(), []placed{{path: link.path, data: []byte(wanLink + "LargeReceiveOffload=yes\n")}})
 	r.applyOffloads(context.Background(), nil)
-	if len(h.set) != 2 {
-		t.Fatalf("set %v, want no further call", h.set)
+	if want := [][]string{{"wan", "large-receive-offload", "on"}, {"wan", "large-receive-offload", "off"}}; !reflect.DeepEqual(h.set[2:], want) {
+		t.Fatalf("set %v, want LRO on then off", h.set)
 	}
 }
 
@@ -88,7 +88,7 @@ func TestOffloadsOfADeviceSeenUnderALinkFileAreNotItsDefaults(t *testing.T) {
 	r := Realizer{Root: t.TempDir(), Run: h.run}
 	// The device appeared while this file was in place: udev turned GRO off.
 	writeFile(t, filepath.Join(r.Root, "run/systemd/network/50-andaru-wan.link"), wanLink+"GenericReceiveOffload=no\n")
-	h.requested["generic-receive-offload"] = false
+	h.requested["generic-receive-offload"], h.requested["large-receive-offload"] = false, false
 	r.noteOffloadDefaults(context.Background())
 	r.applyOffloads(context.Background(), nil)
 	if len(h.set) != 0 {
@@ -101,8 +101,13 @@ func TestADamagedOffloadRecordStillAppliesTheDeclaredOffloads(t *testing.T) {
 	r := Realizer{Root: t.TempDir(), Run: h.run}
 	writeFile(t, r.Root+offloadDefaultsPath, "{")
 	r.applyOffloads(context.Background(), []placed{{path: "/run/systemd/network/50-andaru-wan.link", data: []byte(wanLink + "GenericReceiveOffload=no\n")}})
-	if want := [][]string{{"wan", "generic-receive-offload", "off"}}; !reflect.DeepEqual(h.set, want) {
+	if want := [][]string{{"wan", "generic-receive-offload", "off", "large-receive-offload", "off"}}; !reflect.DeepEqual(h.set, want) {
 		t.Fatalf("set %v, want %v", h.set, want)
+	}
+	// A fresh record replaced the damaged one.
+	var record map[string]map[string]bool
+	if _, err := readJSON(r.Root+offloadDefaultsPath, &record); err != nil || record["52:54:00:aa:00:01"] == nil {
+		t.Fatalf("record %v, %v", record, err)
 	}
 }
 
@@ -156,5 +161,75 @@ func TestBootRecordsOffloadsBeforeTheLinkFiles(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(b.net.root, offloadDefaultsPath))
 	if err != nil || !strings.Contains(string(data), `"generic-receive-offload":true`) {
 		t.Fatalf("recorded %s, %v", data, err)
+	}
+}
+
+// udev applies a .link file's offloads when a device appears, which the fake does not: this does it at the trigger.
+func (b *bench) udevAppliesOffloads() {
+	b.net.onRun = func(command string) {
+		if command != "udevadm trigger --settle --action=add --subsystem-match=net" {
+			return
+		}
+		for feature, on := range declaredOffloads([]placed{{path: eth0Link, data: []byte(b.net.netFiles()[eth0Link])}})["02:00:00:00:00:01"] {
+			b.net.offloads[feature] = on
+		}
+	}
+}
+
+func TestBootRestoresTheOffloadsOfAnUnusableCandidate(t *testing.T) {
+	b := newBench(t)
+	b.net.offloads = map[string]bool{"generic-receive-offload": true}
+	id := b.gen(filtered(map[string]string{"50-andaru-eth0.network": uplinkDHCP, eth0Link: "[Match]\nPermanentMACAddress=02:00:00:00:00:01\n\n[Link]\nName=eth0\nGenericReceiveOffload=no\n"}, "aa"))
+	if err := b.r.Activate(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.r.Confirm(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	b.reboot()
+	b.net.offloads["generic-receive-offload"] = true
+	b.net.offloadSets = nil
+	b.udevAppliesOffloads()
+	b.net.fail = "nft -f"
+	if err := b.r.Boot(t.Context()); err == nil {
+		t.Fatal("boot reported success with nothing usable")
+	}
+	if !b.net.offloads["generic-receive-offload"] {
+		t.Fatalf("GRO stayed as the dropped candidate set it: %q", b.net.offloadSets)
+	}
+}
+
+// Rollback and reset record a device not seen yet before they remove the files udev applied to it.
+func TestVerbsRecordBeforeTheyReplaceTheLinkFiles(t *testing.T) {
+	for _, verb := range []string{"rollback", "reset"} {
+		t.Run(verb, func(t *testing.T) {
+			b := newBench(t)
+			b.net.offloads = map[string]bool{"generic-receive-offload": true}
+			b.live(one)
+			next := maps.Clone(two)
+			next[eth0Link] = "[Match]\nPermanentMACAddress=02:00:00:00:00:01\n\n[Link]\nName=eth0\nGenericReceiveOffload=no\n"
+			id := b.gen(next)
+			if err := b.r.Activate(t.Context(), id); err != nil {
+				t.Fatal(err)
+			}
+			// The device is plugged in under the new files: udev turned GRO off, and nothing recorded it yet.
+			if err := os.Remove(filepath.Join(b.net.root, offloadDefaultsPath)); err != nil {
+				t.Fatal(err)
+			}
+			b.net.offloads["generic-receive-offload"] = false
+			var err error
+			if verb == "rollback" {
+				err = b.timerFires(id)
+			} else {
+				err = b.r.Teardown(t.Context())
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(filepath.Join(b.net.root, offloadDefaultsPath))
+			if err != nil || strings.Contains(string(data), "generic-receive-offload") {
+				t.Fatalf("recorded %s, %v: GRO off came from the .link file", data, err)
+			}
+		})
 	}
 }

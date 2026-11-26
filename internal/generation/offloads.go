@@ -17,7 +17,7 @@ import (
 const offloadDefaultsPath = "/run/andaru-offloads/defaults.json"
 
 // neverRestored is the feature a default never brings back: the kernel turns LRO off on a device that forwards, and
-// turning a driver's LRO back on would break forwarding. It runs only where the operator turns it on.
+// turning a driver's LRO back on would break forwarding. It runs only where the operator turns it on, off elsewhere.
 const neverRestored = "large-receive-offload"
 
 // recordOffloadDefaults records every Ethernet device not recorded yet, as it runs now, and returns the record and
@@ -79,6 +79,8 @@ func (r Realizer) recordOffloadDefaults(ctx context.Context) (map[string]map[str
 }
 
 // noteOffloadDefaults records the devices not recorded yet before a verb replaces the files udev applied to them.
+// shortcut: a device this cannot read is recorded after the files change, judged by the new ones; a device hot-plugged
+// under a file that set an offload, then unreadable here, records that offload as its default until the next boot.
 func (r Realizer) noteOffloadDefaults(ctx context.Context) {
 	if _, _, err := r.recordOffloadDefaults(ctx); err != nil {
 		slog.Warn("record the device offloads", "error", err)
@@ -127,7 +129,7 @@ func (r Realizer) applyOffloads(ctx context.Context, set []placed) {
 	declared := declaredOffloads(set)
 	for _, l := range links {
 		mac := strings.ToLower(l.PermanentAddress)
-		want := map[string]bool{}
+		want := map[string]bool{neverRestored: false}
 		maps.Copy(want, record[mac])
 		maps.Copy(want, declared[mac])
 		features, err := host.ReadFeatures(ctx, r.Run, l.Name)
