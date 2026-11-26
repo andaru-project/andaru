@@ -651,3 +651,89 @@ export interface Notification {
 export interface NotificationList {
   items: Notification[];
 }
+
+export type BackupStore = 'configuration' | 'configurationSecrets' | 'users' | 'userCredentials';
+
+export interface BackupCreateOptions {
+  includeSecrets: boolean;
+  includeCredentials?: boolean;
+  passphrase?: string;
+  password?: string;
+}
+
+export interface BackupDownload {
+  blob: Blob;
+  encrypted: boolean;
+  savedVersion: string;
+  identityRevision: string;
+  capturedAt: string;
+}
+
+export interface BackupPayloadInfo {
+  schemaVersion: number;
+  size: number;
+  sha256: string;
+}
+
+export interface BackupManifest {
+  formatVersion: number;
+  backupId: string;
+  createdAt: string;
+  andaruVersion: string;
+  savedVersion: string;
+  scopes: BackupStore[];
+  payloads: Record<string, BackupPayloadInfo>;
+  network: {
+    live: number | null;
+    pending: number | null;
+    liveSavedVersion: string;
+  };
+  savedButUnappliedAreas: string[];
+}
+
+export interface BackupInspectionResponse {
+  state: 'inspection';
+  manifest: BackupManifest;
+}
+
+export interface RestoreCounts {
+  created: number;
+  updated: number;
+  deleted: number;
+}
+
+export interface HardwareFinding {
+  code: string;
+  path: string;
+  message: string;
+}
+
+export interface RecoveryAdministrator {
+  id: string;
+  login: string;
+}
+
+export interface RestorePreviewResponse {
+  state: 'restore-preview';
+  manifest: BackupManifest;
+  expectedSavedVersion?: string;
+  expectedIdentityRevision: number;
+  configurationChanges: RestoreCounts;
+  secretChanges: RestoreCounts;
+  userChanges: RestoreCounts;
+  credentialChanges: RestoreCounts;
+  unresolvedSecrets: string[];
+  blockingSecrets: string[];
+  missingRoleIds: string[];
+  requiresRootAdministrator: boolean;
+  recoveryAdministrators: RecoveryAdministrator[];
+  hardwareFindings: HardwareFinding[];
+}
+
+export interface RestoreSavedResponse {
+  state: 'saved';
+  savedVersion?: string;
+  identityRevision?: number;
+  unresolvedSecrets: string[];
+  replayed: boolean;
+}

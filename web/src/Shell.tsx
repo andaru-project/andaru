@@ -12,6 +12,7 @@ import { FleetWorkspace } from './netplane/FleetWorkspace';
 import { formatTimestamp, setTimeZone, timeZoneOptions, useTimeZone } from './timezone';
 import { AliasesScreen } from './screens/AliasesScreen';
 import { AuditScreen } from './screens/AuditScreen';
+import { BackupScreen } from './screens/BackupScreen';
 import { ChangesScreen } from './screens/ChangesScreen';
 import { DashboardScreen } from './screens/DashboardScreen';
 import { DhcpScreen } from './screens/DhcpScreen';
@@ -64,6 +65,7 @@ const pageTitles: Record<string, string> = {
   '/changes': 'Review and apply',
   '/system/details': 'System details',
   '/system/updates': 'Software updates',
+  '/system/backups': 'Backup & restore',
   '/system/notifications': 'Notifications',
   '/system/users': 'Users',
   '/system/roles': 'Roles',
@@ -232,6 +234,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
       items: [
         { to: '/system/details', label: 'Details', visible: canReadStatus },
         { to: '/system/updates', label: 'Updates', visible: canReadStatus },
+        { to: '/system/backups', label: 'Backups', visible: capabilities.has('backups.create') || capabilities.has('backups.restore') },
         { to: '/system/notifications', label: 'Notifications', visible: canReadNotifications },
         { to: '/system/users', label: 'Users', visible: capabilities.has('users.read') },
         { to: '/system/roles', label: 'Roles', visible: capabilities.has('users.read') || canReadChanges },
@@ -298,6 +301,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
     ['/changes', <ChangesScreen api={api} session={session} state={changes.data} stateError={changes.error} connected={connected} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/system/details', <SystemDetailsScreen system={system} />],
     ['/system/updates', <UpdatesScreen api={api} session={session} update={update} onSessionLost={onSessionLost} />],
+    ['/system/backups', <BackupScreen api={api} session={session} hostname={hostname} onRestored={() => { void reloadChanges(); void reloadNotifications(); }} onSessionLost={onSessionLost} />],
     ['/system/notifications', <NotificationsScreen api={api} session={session} notifications={notifications} onSessionLost={onSessionLost} />],
     ['/system/users', <UsersScreen api={api} session={session} onSessionLost={onSessionLost} />],
     ['/system/roles', <RolesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
