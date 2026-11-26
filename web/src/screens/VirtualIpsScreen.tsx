@@ -1,10 +1,11 @@
-import { Alert, Anchor, Badge, Button, Drawer, Fieldset, Group, Modal, ScrollArea, Stack, Table, Text, Textarea, TextInput, Title } from '@mantine/core';
+import { Alert, Anchor, Badge, Button, Drawer, Fieldset, Group, Modal, ScrollArea, Stack, Table, Text, Textarea, TextInput, Title, VisuallyHidden } from '@mantine/core';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
 import { ApiClient, ApiError, fieldErrors, reportError, saveFailure } from '../api';
 import { useResource } from '../useResource';
 import type { SavedObject, Session, VirtualAddress } from '../types';
 import { checkVirtualIp, ipFamily, maxVirtualAddresses, virtualAddressUses, type VirtualIpUse } from '../virtualIps';
+import { Address } from './Address';
 import { Loaded } from './Loaded';
 
 interface VirtualIpsScreenProps {
@@ -23,7 +24,6 @@ function VirtualIpEditor({
   addressLocks,
   onClose,
   onSessionLost,
-  onAbandoned,
   onRefused,
   onSave,
 }: {
@@ -32,7 +32,6 @@ function VirtualIpEditor({
   addressLocks: VirtualIpUse[];
   onClose(): void;
   onSessionLost(): void;
-  onAbandoned(message: string): void;
   onRefused(): void;
   onSave(vip: Omit<VirtualAddress, 'id'>, saved?: SavedObject<VirtualAddress>): Promise<void>;
 }) {
@@ -42,15 +41,27 @@ function VirtualIpEditor({
   const [errors, setErrors] = useState(new Map<string, string>());
   const [failure, setFailure] = useState('');
   const [busy, setBusy] = useState(false);
+  const [errorFocusTick, setErrorFocusTick] = useState(0);
 
   const open = useRef(true);
   useEffect(() => { open.current = true; return () => { open.current = false; }; }, []);
+  const formRef = useRef<HTMLFormElement>(null);
   const failureRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     if (!failure) return;
     failureRef.current?.scrollIntoView?.({ block: 'nearest' });
     if (errors.size === 0 || errors.has('')) failureRef.current?.focus?.();
   }, [failure, errors]);
+
+  useEffect(() => {
+    if (errorFocusTick === 0) return;
+    const invalid = formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]:not(:disabled)');
+    if (invalid) {
+      invalid.scrollIntoView?.({ block: 'nearest' });
+      invalid.focus?.();
+    }
+  }, [errorFocusTick]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -59,6 +70,7 @@ function VirtualIpEditor({
     const { errors: localErrors, duplicate } = checkVirtualIp(name, address, existingVips, saved?.value.id);
     if (localErrors.size > 0) {
       setErrors(localErrors);
+      setErrorFocusTick((tick) => tick + 1);
       if (duplicate) onRefused();
       return;
     }
@@ -75,14 +87,17 @@ function VirtualIpEditor({
       if (open.current) onClose();
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) return onSessionLost();
-      if (!open.current) return onAbandoned(saveFailure(error, new Map(), 'virtual IP'));
+      if (!open.current) return;
       const fields = fieldErrors(error, vipFieldPattern);
       setErrors(fields);
       setFailure(saveFailure(error, fields, 'virtual IP'));
+      if (fields.size > 0 && !fields.has('')) setErrorFocusTick((tick) => tick + 1);
     } finally {
       if (open.current) setBusy(false);
     }
   }
+
+  const singleLock = addressLocks.length === 1;
 
   return (
     <Drawer
@@ -97,7 +112,7 @@ function VirtualIpEditor({
       lockScroll={false}
       closeButtonProps={{ 'aria-label': 'Close' }}
     >
-      <form onSubmit={submit} noValidate>
+      <form ref={formRef} onSubmit={submit} noValidate>
         <Stack>
           {failure && <Alert ref={failureRef} tabIndex={-1} color="red" role="alert" title="The virtual IP was not saved">{failure}</Alert>}
           <Fieldset variant="unstyled" disabled={busy}>
@@ -123,8 +138,12 @@ function VirtualIpEditor({
                 onChange={(event) => setAddress(event.currentTarget.value)}
               />
               {saved && addressLocks.length > 0 && (
-                <Alert color="yellow" role="status" title="Address in use by port forward">
-                  {addressLocks.map((u) => u.label).join(', ')} targets this address. You can still rename or describe it, but changing the address requires updating or removing the port forward first.
+                <Alert
+                  color="yellow"
+                  role="status"
+                  title={singleLock ? 'Address in use by port forward' : 'Address in use by port forwards'}
+                >
+                  {addressLocks.map((u) => u.label).join(', ')} {singleLock ? 'targets' : 'target'} this address. You can still rename or describe it, but changing the address requires updating or removing {singleLock ? 'the port forward' : 'those port forwards'} first.
                 </Alert>
               )}
               <Textarea
@@ -178,21 +197,34 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
     if (!canWrite || busy) return;
     setBusy(true);
     setError('');
+    let sessionLost = false;
     try {
       await api.deleteVirtualAddress(item.value.id, item.version);
       onSaved();
     } catch (requestError) {
-      if (requestError instanceof ApiError && requestError.status === 412) {
-        setError(`Virtual IP ${item.value.name} changed elsewhere. The list now shows what is saved.`);
-      } else {
-        reportError(requestError, onSessionLost, setError);
+      if (requestError instanceof ApiError && requestError.status === 401) {
+        sessionLost = true;
+        onSessionLost();
+      } else if (mounted.current) {
+        if (requestError instanceof ApiError && requestError.status === 412) {
+          setError(`Virtual IP ${item.value.name} changed elsewhere. The list now shows what is saved.`);
+        } else if (requestError instanceof ApiError && requestError.status === 404) {
+          setError(`Virtual IP ${item.value.name} was already deleted elsewhere. The list now shows what is saved.`);
+        } else if (requestError instanceof ApiError && requestError.status === 422) {
+          const portForwardDetail = requestError.details.find((d) => d.path === '/id' && d.message)?.message;
+          setError(portForwardDetail ?? `Virtual IP ${item.value.name} is in use and cannot be deleted. The list now shows current references.`);
+        } else {
+          reportError(requestError, onSessionLost, setError);
+        }
       }
-      if (requestError instanceof ApiError && requestError.status === 401) return;
-    }
-    await resource.reload();
-    if (mounted.current) {
-      setDeletingId(undefined);
-      setBusy(false);
+    } finally {
+      if (!sessionLost && mounted.current) {
+        await resource.reload();
+      }
+      if (mounted.current) {
+        setDeletingId(undefined);
+        setBusy(false);
+      }
     }
   }
 
@@ -210,7 +242,7 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
         <Group gap="xs">
           <Button size="xs" variant="default" loading={resource.loading} onClick={() => void resource.reload()}>Refresh</Button>
           {canWrite && (
-            <Button size="xs" disabled={atLimit} onClick={() => setEditing('new')}>Add virtual IP</Button>
+            <Button size="xs" disabled={!resource.data || atLimit} onClick={() => setEditing('new')}>Add virtual IP</Button>
           )}
         </Group>
       </Group>
@@ -231,16 +263,17 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
             const haystack = [v.name, v.address, family ?? '', v.description ?? '', ...uses.map((u) => u.label)].join(' ').toLowerCase();
             return words.every((w) => haystack.includes(w));
           });
-          const deleting = deletingId ? virtualAddresses.items.find((item) => item.value.id === deletingId) : undefined;
-          const blockers = deleting ? virtualAddressUses(deleting.value, snapshot) : [];
+          const deletingRow = deletingId ? rows.find((r) => r.item.value.id === deletingId) : undefined;
+          const deleting = deletingRow?.item;
+          const blockers = deletingRow?.uses ?? [];
           const editingSaved = editing && editing !== 'new' ? editing : undefined;
           const editingAddressLocks = editingSaved
-            ? virtualAddressUses(editingSaved.value, snapshot).filter((u) => u.locksAddress)
+            ? (rows.find((r) => r.item.value.id === editingSaved.value.id)?.uses ?? []).filter((u) => u.locksAddress)
             : [];
 
           return (
             <Stack>
-              {sorted.length >= maxVirtualAddresses && (
+              {canWrite && atLimit && (
                 <Alert role="status" title="Virtual IP limit reached">
                   All {maxVirtualAddresses} virtual IP slots are in use. Delete an unused virtual IP before adding another.
                 </Alert>
@@ -269,7 +302,7 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
                         <Table.Th>Name</Table.Th>
                         <Table.Th>Address</Table.Th>
                         <Table.Th>Used by</Table.Th>
-                        {canWrite && <Table.Th><span className="sr-only">Actions</span></Table.Th>}
+                        {canWrite && <Table.Th><VisuallyHidden>Actions</VisuallyHidden></Table.Th>}
                       </Table.Tr>
                     </Table.Thead>
                     <Table.Tbody>
@@ -277,19 +310,19 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
                         const v = item.value;
                         return (
                           <Table.Tr key={v.id}>
-                            <Table.Td>
+                            <Table.Td data-label="Name">
                               <Stack gap={2} align="flex-start">
                                 <Text size="sm" fw={600}>{v.name}</Text>
                                 {v.description && <Text size="xs" c="dimmed">{v.description}</Text>}
                               </Stack>
                             </Table.Td>
-                            <Table.Td>
-                              <Group gap="xs" wrap="nowrap">
-                                <Text size="sm" ff="monospace">{v.address}</Text>
+                            <Table.Td data-label="Address">
+                              <Group gap="xs" wrap="wrap">
+                                <Address value={v.address} />
                                 {family && <Badge size="xs" variant="light" color={family === 'IPv6' ? 'violet' : 'blue'}>{family}</Badge>}
                               </Group>
                             </Table.Td>
-                            <Table.Td>
+                            <Table.Td data-label="Used by">
                               {uses.length === 0 ? (
                                 <Text size="sm" c="dimmed">Not used</Text>
                               ) : (
@@ -316,7 +349,7 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
                 </ScrollArea>
               )}
 
-              {editing && (
+              {editing && !(editing === 'new' && atLimit) && (
                 <VirtualIpEditor
                   key={editing === 'new' ? 'new' : editing.value.id}
                   saved={editingSaved}
@@ -324,18 +357,19 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
                   addressLocks={editingAddressLocks}
                   onClose={() => setEditing(undefined)}
                   onSessionLost={onSessionLost}
-                  onAbandoned={setError}
-                  onRefused={() => void resource.reload()}
+                  onRefused={() => { if (mounted.current) void resource.reload(); }}
                   onSave={async (vip, saved) => {
                     try {
                       await api.saveVirtualAddress(vip, saved);
                     } catch (requestError) {
-                      if (!(requestError instanceof ApiError && requestError.status === 401)) await resource.reload();
+                      if (!(requestError instanceof ApiError && requestError.status === 401) && mounted.current) {
+                        await resource.reload();
+                      }
                       throw requestError;
                     }
                     onSaved();
-                    if (!saved) setFilter('');
-                    await resource.reload();
+                    if (!saved && mounted.current) setFilter('');
+                    if (mounted.current) await resource.reload();
                   }}
                 />
               )}
