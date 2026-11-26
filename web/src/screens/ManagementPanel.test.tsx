@@ -218,4 +218,34 @@ describe('ManagementPanel', () => {
     await user.click(screen.getByRole('button', { name: 'Save management access' }));
     await waitFor(() => expect(onSessionLost).toHaveBeenCalledTimes(1));
   });
+
+  it('keeps the open editor drawer mounted with unsaved edits if the parent snapshot temporarily disappears', async () => {
+    const user = userEvent.setup();
+    fetchRoutes({
+      '/api/v1/config/management': () => jsonResponse(200, {
+        state: 'saved',
+        savedVersion: '10',
+        version: '3',
+        value: { segment: 'seg_lan', allowedSources: ['adr_admin'] },
+      }),
+      '/api/v1/config': () => jsonResponse(200, baseSnapshot),
+    });
+
+    const api = new ApiClient('csrf');
+    const { rerender } = render(
+      <ManagementPanel api={api} snapshot={baseSnapshot} canWrite onSaved={vi.fn()} onSessionLost={vi.fn()} />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Edit management access' }));
+    await screen.findByRole('dialog', { name: 'Edit management access' });
+    const segmentSelect = screen.getByLabelText(/^Management segment/, { selector: 'input' });
+    await user.click(segmentSelect);
+    await user.click(await screen.findByRole('option', { name: /DMZ/ }));
+    expect(await screen.findByText('Moving management segment')).toBeInTheDocument();
+
+    // Transient poll failure clears parent snapshot; drawer and unsaved edits must stay mounted.
+    rerender(<ManagementPanel api={api} snapshot={undefined} canWrite onSaved={vi.fn()} onSessionLost={vi.fn()} />);
+    expect(screen.getByRole('dialog', { name: 'Edit management access' })).toBeInTheDocument();
+    expect(screen.getByText('Moving management segment')).toBeInTheDocument();
+  });
 });

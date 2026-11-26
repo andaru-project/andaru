@@ -8,7 +8,7 @@ import { ZoneBadge } from './ZoneBadge';
 
 interface ManagementPanelProps {
   api: ApiClient;
-  snapshot: Snapshot;
+  snapshot?: Snapshot;
   canWrite: boolean;
   onSaved(): void;
   onRefresh?(): void;
@@ -245,10 +245,10 @@ export function ManagementPanel({ api, snapshot, canWrite, onSaved, onRefresh, o
     return () => { mountedRef.current = false; };
   }, []);
 
-  const mgmt = snapshot.value.management;
-  const segmentsById = new Map(snapshot.value.segments.map((s) => [s.id, s]));
-  const zonesById = new Map(snapshot.value.zones.map((z) => [z.id, z]));
-  const aliasesById = new Map((snapshot.value.aliases?.addresses ?? []).map((a) => [a.id, a.name]));
+  const mgmt = snapshot?.value.management;
+  const segmentsById = new Map((snapshot?.value.segments ?? []).map((s) => [s.id, s]));
+  const zonesById = new Map((snapshot?.value.zones ?? []).map((z) => [z.id, z]));
+  const aliasesById = new Map((snapshot?.value.aliases?.addresses ?? []).map((a) => [a.id, a.name]));
 
   const mgmtSegment = mgmt ? segmentsById.get(mgmt.segment) : undefined;
   const mgmtZone = mgmtSegment ? zonesById.get(mgmtSegment.zone) : undefined;
@@ -281,63 +281,67 @@ export function ManagementPanel({ api, snapshot, canWrite, onSaved, onRefresh, o
     }
   }
 
-  const canConfigure = canWrite && (snapshot.value.segments.length > 0 || Boolean(mgmt));
+  const canConfigure = Boolean(snapshot && canWrite && (snapshot.value.segments.length > 0 || Boolean(mgmt)));
 
   return (
-    <Paper withBorder p="md">
-      <Stack gap="sm">
-        <Group justify="space-between" align="flex-end" wrap="wrap">
-          <div>
-            <Title order={3} size="h4">Management access</Title>
-            <Text size="sm" c="dimmed">Which segment administers Andaru, and which address aliases are permitted by the fixed SSH anti-lockout rule.</Text>
-          </div>
-          {canConfigure && (
-            <Button size="xs" variant="default" loading={opening} onClick={() => void openEditor()}>
-              {mgmt ? 'Edit management access' : 'Configure management access'}
-            </Button>
-          )}
-        </Group>
-
-        {openError && <Alert color="red" role="alert" title="Management access error" withCloseButton onClose={() => setOpenError('')}>{openError}</Alert>}
-
-        {!mgmt ? (
-          <Alert color="orange" role="status" title="No management segment is set">
-            Firewall rules, NAT, and IP forwarding stay inactive until a management segment is configured.
-          </Alert>
-        ) : (
-          <Stack gap="xs">
-            <Group gap="xs" wrap="wrap">
-              <Text size="sm" c="dimmed">Segment:</Text>
-              {mgmtSegment ? (
-                <>
-                  <Text size="sm" fw={600}>{mgmtSegment.name}</Text>
-                  <ZoneBadge name={mgmtZone?.name ?? mgmtSegment.zone} color={mgmtZone?.color} />
-                </>
-              ) : (
-                <Text size="sm" className="error-text" ff="monospace">{mgmt.segment} (missing)</Text>
+    <>
+      {snapshot && (
+        <Paper withBorder p="md">
+          <Stack gap="sm">
+            <Group justify="space-between" align="flex-end" wrap="wrap">
+              <div>
+                <Title order={3} size="h4">Management access</Title>
+                <Text size="sm" c="dimmed">Which segment administers Andaru, and which address aliases are permitted by the fixed SSH anti-lockout rule.</Text>
+              </div>
+              {canConfigure && (
+                <Button size="xs" variant="default" loading={opening} onClick={() => void openEditor()}>
+                  {mgmt ? 'Edit management access' : 'Configure management access'}
+                </Button>
               )}
             </Group>
-            <Group gap="xs" wrap="wrap">
-              <Text size="sm" c="dimmed">Allowed SSH sources:</Text>
-              {sources.length === 0 ? (
-                <Text size="sm">Any address on the management segment</Text>
-              ) : (
-                <>
-                  {sources.map((id, idx) => {
-                    const name = aliasesById.get(id);
-                    return (
-                      <Badge key={`${id}-${idx}`} variant={name ? 'default' : 'light'} color={name ? undefined : 'red'} className={name ? 'alias' : 'alias error-text'} tt="none">
-                        {name ?? `${id} (missing)`}
-                      </Badge>
-                    );
-                  })}
-                  <AliasesLink>Manage aliases</AliasesLink>
-                </>
-              )}
-            </Group>
+
+            {openError && <Alert color="red" role="alert" title="Management access error" withCloseButton onClose={() => setOpenError('')}>{openError}</Alert>}
+
+            {!mgmt ? (
+              <Alert color="orange" role="status" title="No management segment is set">
+                Firewall rules, NAT, and IP forwarding stay inactive until a management segment is configured.
+              </Alert>
+            ) : (
+              <Stack gap="xs">
+                <Group gap="xs" wrap="wrap">
+                  <Text size="sm" c="dimmed">Segment:</Text>
+                  {mgmtSegment ? (
+                    <>
+                      <Text size="sm" fw={600}>{mgmtSegment.name}</Text>
+                      <ZoneBadge name={mgmtZone?.name ?? mgmtSegment.zone} color={mgmtZone?.color} />
+                    </>
+                  ) : (
+                    <Text size="sm" className="error-text" ff="monospace">{mgmt.segment} (missing)</Text>
+                  )}
+                </Group>
+                <Group gap="xs" wrap="wrap">
+                  <Text size="sm" c="dimmed">Allowed SSH sources:</Text>
+                  {sources.length === 0 ? (
+                    <Text size="sm">Any address on the management segment</Text>
+                  ) : (
+                    <>
+                      {sources.map((id, idx) => {
+                        const name = aliasesById.get(id);
+                        return (
+                          <Badge key={`${id}-${idx}`} variant={name ? 'default' : 'light'} color={name ? undefined : 'red'} className={name ? 'alias' : 'alias error-text'} tt="none">
+                            {name ?? `${id} (missing)`}
+                          </Badge>
+                        );
+                      })}
+                      <AliasesLink>Manage aliases</AliasesLink>
+                    </>
+                  )}
+                </Group>
+              </Stack>
+            )}
           </Stack>
-        )}
-      </Stack>
+        </Paper>
+      )}
 
       {editing && (
         <ManagementEditor
@@ -352,6 +356,6 @@ export function ManagementPanel({ api, snapshot, canWrite, onSaved, onRefresh, o
           onSessionLost={onSessionLost}
         />
       )}
-    </Paper>
+    </>
   );
 }
