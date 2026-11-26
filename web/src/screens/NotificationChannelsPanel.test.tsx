@@ -318,4 +318,44 @@ describe('NotificationChannelsPanel', () => {
     expect(await screen.findByText('Primary on-call webhook')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Add channel' })).not.toBeInTheDocument();
   });
+
+  it('discloses shared URL secrets and saves a separate secret so sibling channels are not overwritten', async () => {
+    const user = userEvent.setup();
+    const sibling: SavedObject<NotificationChannel> = {
+      version: '9',
+      value: {
+        id: 'ntf_sibling',
+        name: 'pager',
+        enabled: true,
+        kind: 'webhook',
+        webhook: { url: { secret: 'OPS_URL', isSet: true, version: '8' } },
+      },
+    };
+    let savedBody: unknown;
+    fetchRoutes({
+      'GET /api/v1/config/notifications/channels': () => jsonResponse(200, { state: 'saved', savedVersion: '10', items: [opsChannel, sibling] }),
+      'GET /api/v1/config/notifications/channels/ntf_ops': () => jsonResponse(200, { state: 'saved', savedVersion: '10', ...opsChannel }),
+      'GET /api/v1/config': () => jsonResponse(200, { state: 'saved', savedVersion: '10', value: { links: [], segments: [], zones: [] } }),
+      'PUT /api/v1/config/notifications/channels/ntf_ops': (init) => {
+        savedBody = JSON.parse(String(init?.body ?? '{}'));
+        return jsonResponse(200, { state: 'saved', savedVersion: '11', version: '11', value: opsChannel.value });
+      },
+    });
+
+    render(<NotificationChannelsPanel api={new ApiClient('csrf')} canManage onSessionLost={vi.fn()} />);
+    await screen.findByText('pager');
+    await user.click(screen.getByRole('button', { name: 'Edit ops' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit channel: ops' });
+    expect(within(dialog).getByText(/shared with pager/i)).toBeInTheDocument();
+
+    await user.type(within(dialog).getByLabelText(/^Webhook URL/, { selector: 'input' }), 'https://hooks.example/ops-only');
+    await user.click(within(dialog).getByRole('button', { name: 'Save channel' }));
+    await waitFor(() => expect(savedBody).toBeDefined());
+    expect(savedBody).toMatchObject({
+      webhook: {
+        url: { secret: 'NOTIFY_OPS_URL', set: 'https://hooks.example/ops-only', expectedVersion: '0' },
+        authorization: { secret: 'OPS_AUTH' },
+      },
+    });
+  });
 });

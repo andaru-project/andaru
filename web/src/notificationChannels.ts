@@ -156,23 +156,42 @@ export function validateChannelDraft(
   return errors;
 }
 
+export function sharedSecretHolders(
+  secretName: string | undefined,
+  selfId: string | undefined,
+  channels: NotificationChannel[],
+): string[] {
+  if (!secretName) return [];
+  const holders: string[] = [];
+  for (const ch of channels) {
+    if (ch.id === selfId) continue;
+    if (ch.webhook?.url?.secret === secretName || ch.webhook?.authorization?.secret === secretName) {
+      holders.push(ch.name);
+    }
+  }
+  return holders.sort((a, b) => a.localeCompare(b));
+}
+
 export function buildChannelWrite(
   draft: NotificationChannelDraft,
   saved: NotificationChannel | undefined,
   existingSecrets: Iterable<string> = [],
+  sharedSecrets: Iterable<string> = [],
 ): NotificationChannelWrite {
   const name = draft.name.trim();
   const description = draft.description.trim();
   const sources = normalizeSources(draft.sources);
   const used = new Set(existingSecrets);
+  const shared = new Set(sharedSecrets);
 
   const existingUrl = saved?.webhook?.url;
   const trimmedUrl = draft.webhookUrl.trim();
   let urlWrite: SecretWrite;
   if (trimmedUrl !== '') {
-    const secret = existingUrl?.secret || nextChannelSecretName(name, 'URL', used);
+    const allocateFresh = !existingUrl?.secret || shared.has(existingUrl.secret);
+    const secret = allocateFresh ? nextChannelSecretName(name, 'URL', used) : existingUrl.secret;
     used.add(secret);
-    urlWrite = { secret, set: trimmedUrl, expectedVersion: existingUrl?.version || '0' };
+    urlWrite = { secret, set: trimmedUrl, expectedVersion: allocateFresh ? '0' : (existingUrl.version || '0') };
   } else if (existingUrl) {
     used.add(existingUrl.secret);
     urlWrite = { secret: existingUrl.secret, ...(existingUrl.unresolved ? { unresolved: true } : {}) };
@@ -187,9 +206,10 @@ export function buildChannelWrite(
   let authWrite: SecretWrite | undefined;
   if (!draft.removeAuth) {
     if (trimmedAuth !== '') {
-      const secret = existingAuth?.secret || nextChannelSecretName(name, 'AUTH', used);
+      const allocateFresh = !existingAuth?.secret || shared.has(existingAuth.secret);
+      const secret = allocateFresh ? nextChannelSecretName(name, 'AUTH', used) : existingAuth.secret;
       used.add(secret);
-      authWrite = { secret, set: trimmedAuth, expectedVersion: existingAuth?.version || '0' };
+      authWrite = { secret, set: trimmedAuth, expectedVersion: allocateFresh ? '0' : (existingAuth.version || '0') };
     } else if (existingAuth) {
       authWrite = { secret: existingAuth.secret, ...(existingAuth.unresolved ? { unresolved: true } : {}) };
     }

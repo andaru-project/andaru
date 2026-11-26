@@ -6,6 +6,7 @@ import {
   channelFieldErrors,
   existingChannelSecretsOf,
   nextChannelSecretName,
+  sharedSecretHolders,
   validateChannelDraft,
   validateWebhookUrl,
 } from './notificationChannels';
@@ -113,6 +114,26 @@ describe('notificationChannels', () => {
     expect(rotated.webhook).toEqual({
       url: { secret: 'OPS_URL', unresolved: true },
       authorization: { secret: 'OPS_AUTH', set: 'Bearer rotated', expectedVersion: '8' },
+    });
+
+    // Editing a secret shared with another channel allocates a fresh secret so the other channel is untouched.
+    const second: NotificationChannel = {
+      id: 'ntf_2',
+      name: 'Secondary',
+      enabled: true,
+      kind: 'webhook',
+      webhook: { url: { secret: 'OPS_URL', isSet: true, version: '8' } },
+    };
+    expect(sharedSecretHolders('OPS_URL', saved.id, [saved, second])).toEqual(['Secondary']);
+    const separated = buildChannelWrite(
+      { ...channelDraftOf(saved), webhookUrl: 'https://hooks.example/separate' },
+      saved,
+      existingChannelSecretsOf([saved, second]),
+      ['OPS_URL'],
+    );
+    expect(separated.webhook).toEqual({
+      url: { secret: 'NOTIFY_OPS_SLACK_URL', set: 'https://hooks.example/separate', expectedVersion: '0' },
+      authorization: { secret: 'OPS_AUTH' },
     });
   });
 

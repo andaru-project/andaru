@@ -27,6 +27,7 @@ import {
   channelKindLabel,
   existingChannelSecretsOf,
   knownNotificationSources,
+  sharedSecretHolders,
   validateChannelDraft,
   type NotificationChannelDraft,
 } from '../notificationChannels';
@@ -53,6 +54,8 @@ interface EditorState {
   saved?: SavedObject<NotificationChannel>;
   existingNames: string[];
   existingSecrets: string[];
+  sharedUrlHolders: string[];
+  sharedAuthHolders: string[];
 }
 
 const kindOptions: Array<{ value: NotificationChannelKind; label: string }> = [
@@ -75,6 +78,8 @@ function NotificationChannelEditor({
   saved,
   existingNames,
   existingSecrets,
+  sharedUrlHolders,
+  sharedAuthHolders,
   onSave,
   onClose,
   onRefresh,
@@ -83,6 +88,8 @@ function NotificationChannelEditor({
   saved?: SavedObject<NotificationChannel>;
   existingNames: string[];
   existingSecrets: string[];
+  sharedUrlHolders: string[];
+  sharedAuthHolders: string[];
   onSave(value: NotificationChannelWrite, saved?: SavedObject<NotificationChannel>): Promise<void>;
   onClose(): void;
   onRefresh(): void;
@@ -151,7 +158,10 @@ function NotificationChannelEditor({
     submittingRef.current = true;
     setBusy(true);
     setErrors(new Map());
-    const payload = buildChannelWrite(draft, saved?.value, existingSecrets);
+    const sharedSecrets: string[] = [];
+    if (existingUrl?.secret && sharedUrlHolders.length > 0) sharedSecrets.push(existingUrl.secret);
+    if (existingAuth?.secret && sharedAuthHolders.length > 0) sharedSecrets.push(existingAuth.secret);
+    const payload = buildChannelWrite(draft, saved?.value, existingSecrets, sharedSecrets);
     try {
       await onSave(payload, saved);
       if (openRef.current) onClose();
@@ -269,8 +279,10 @@ function NotificationChannelEditor({
                 description={
                   existingUrl
                     ? existingUrl.unresolved
-                      ? `Unresolved secret (${existingUrl.secret}). Enter an http:// or https:// URL to resolve.`
-                      : `Stored securely (${existingUrl.secret}). Leave blank to keep the current URL.`
+                      ? `Unresolved secret (${existingUrl.secret}${sharedUrlHolders.length > 0 ? `, shared with ${sharedUrlHolders.join(', ')}` : ''}). ${sharedUrlHolders.length > 0 ? 'Entering an http:// or https:// URL saves a separate secret for this channel so other channels are not changed.' : 'Enter an http:// or https:// URL to resolve.'}`
+                      : sharedUrlHolders.length > 0
+                        ? `Stored securely (${existingUrl.secret}, shared with ${sharedUrlHolders.join(', ')}). Entering a new URL saves a separate secret for this channel so other channels are not changed.`
+                        : `Stored securely (${existingUrl.secret}). Leave blank to keep the current URL.`
                     : 'Must be an http:// or https:// URL with a host. Stored in the secret store and never shown again.'
                 }
                 placeholder={existingUrl && !existingUrl.unresolved ? 'Leave blank to keep existing URL' : 'https://hooks.example/services/...'}
@@ -296,8 +308,10 @@ function NotificationChannelEditor({
                 description={
                   existingAuth
                     ? existingAuth.unresolved
-                      ? `Optional HTTP Authorization header (${existingAuth.secret}, unresolved). Enter a value to resolve.`
-                      : `Optional HTTP Authorization header (${existingAuth.secret}). Leave blank to keep the current value.`
+                      ? `Optional HTTP Authorization header (${existingAuth.secret}, unresolved${sharedAuthHolders.length > 0 ? `, shared with ${sharedAuthHolders.join(', ')}` : ''}). ${sharedAuthHolders.length > 0 ? 'Entering a value saves a separate secret for this channel so other channels are not changed.' : 'Enter a value to resolve.'}`
+                      : sharedAuthHolders.length > 0
+                        ? `Optional HTTP Authorization header (${existingAuth.secret}, shared with ${sharedAuthHolders.join(', ')}). Entering a new value saves a separate secret for this channel so other channels are not changed.`
+                        : `Optional HTTP Authorization header (${existingAuth.secret}). Leave blank to keep the current value.`
                     : 'Optional HTTP Authorization header value (for example, Bearer <token>). Stored in the secret store.'
                 }
                 placeholder={existingAuth && !existingAuth.unresolved ? 'Leave blank to keep existing header' : 'Bearer ...'}
@@ -376,6 +390,8 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
       setEditor({
         existingNames: channels.map((c) => c.name),
         existingSecrets: existingChannelSecretsOf(channels, snapshot),
+        sharedUrlHolders: [],
+        sharedAuthHolders: [],
       });
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
@@ -407,6 +423,8 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
         saved: current,
         existingNames: channels.map((c) => c.name),
         existingSecrets: existingChannelSecretsOf(channels, snapshot),
+        sharedUrlHolders: sharedSecretHolders(current.value.webhook?.url?.secret, current.value.id, channels),
+        sharedAuthHolders: sharedSecretHolders(current.value.webhook?.authorization?.secret, current.value.id, channels),
       });
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
@@ -612,6 +630,8 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
           saved={editor.saved}
           existingNames={editor.existingNames}
           existingSecrets={editor.existingSecrets}
+          sharedUrlHolders={editor.sharedUrlHolders}
+          sharedAuthHolders={editor.sharedAuthHolders}
           onSave={saveChannel}
           onClose={() => setEditor(null)}
           onRefresh={() => { if (mountedRef.current) void resource.reload(); }}
