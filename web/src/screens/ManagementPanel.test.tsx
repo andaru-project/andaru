@@ -169,7 +169,7 @@ describe('ManagementPanel', () => {
       '/api/v1/config/management': () => (
         getMode === 'fail'
           ? jsonResponse(503, { error: { code: 'UNAVAILABLE', message: 'Store unavailable.' } })
-          : jsonResponse(200, { state: 'saved', savedVersion: '10', version: '3', value: { segment: 'seg_lan' } })
+          : jsonResponse(200, { state: 'saved', savedVersion: '10', version: '3', value: { segment: 'seg_lan', allowedSources: ['adr_admin'] } })
       ),
       '/api/v1/config': () => jsonResponse(200, baseSnapshot),
       'PUT /api/v1/config/management': () => {
@@ -207,10 +207,11 @@ describe('ManagementPanel', () => {
     expect(await screen.findByText('Segment must be enabled.')).toBeInTheDocument();
     expect(screen.getByText('Alias does not exist.')).toBeInTheDocument();
 
-    // 412 conflict calls onRefresh so parent snapshot reloads.
+    // 412 conflict calls onRefresh so parent snapshot reloads and keeps the conflict alert visible.
     putMode = 'conflict';
     await user.click(screen.getByRole('button', { name: 'Save management access' }));
     await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(/changed by someone else/i)).toBeInTheDocument();
 
     // 401 signs out.
     putMode = 'unauth';

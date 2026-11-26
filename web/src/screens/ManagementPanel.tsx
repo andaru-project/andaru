@@ -89,7 +89,18 @@ function ManagementEditor({ api, initial, snapshot, onClose, onSaved, onRefresh,
   const movingSegment = Boolean(initial?.value.segment && segmentId && initial.value.segment !== segmentId);
   const disabledSegment = Boolean(selectedSegment && !isLinkChainEnabled(selectedSegment.link, linksById));
   const dynamicAddressSegment = Boolean(
-    selectedSegment && (selectedSegment.addressing.ipv4.mode === 'dhcp' || selectedSegment.addressing.ipv4.mode === 'ppp'),
+    selectedSegment && (
+      selectedSegment.addressing.ipv4.mode === 'dhcp'
+      || selectedSegment.addressing.ipv4.mode === 'ppp'
+      || (
+        selectedSegment.addressing.ipv4.mode === 'none'
+        && (
+          selectedSegment.addressing.ipv6.mode === 'slaac'
+          || selectedSegment.addressing.ipv6.mode === 'dhcp6'
+          || selectedSegment.addressing.ipv6.mode === 'delegated'
+        )
+      )
+    ),
   );
   const unaddressedSegment = Boolean(
     selectedSegment && selectedSegment.addressing.ipv4.mode === 'none' && selectedSegment.addressing.ipv6.mode === 'none',
@@ -181,7 +192,7 @@ function ManagementEditor({ api, initial, snapshot, onClose, onSaved, onRefresh,
               )}
               {dynamicAddressSegment && (
                 <Alert color="yellow" role="status" title="Dynamic management address">
-                  A DHCP or PPPoE management segment does not have a fixed address in advance; if upstream addressing fails you will need local console access.
+                  A dynamically addressed management segment (DHCP, PPPoE, SLAAC, DHCPv6, or delegated IPv6 prefix) does not have a fixed address in advance; if upstream addressing fails you will need local console access.
                 </Alert>
               )}
               {unaddressedSegment && (
