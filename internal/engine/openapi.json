@@ -166,6 +166,49 @@
         }
       }
     },
+    "/api/v1/status/leases": {
+      "get": {
+        "operationId": "readLeases",
+        "summary": "Read the DHCPv4 and DHCPv6 leases last reported by the DHCP servers",
+        "description": "Reads the lease snapshot written by andaru realize leases. Active leases whose expiry has passed are reported as expired.",
+        "responses": {
+          "200": {
+            "description": "The DHCPv4 and DHCPv6 lease lists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeasesResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/InventoryUnavailable"
+          }
+        }
+      },
+      "head": {
+        "operationId": "headLeases",
+        "summary": "Check the lease view without returning a body",
+        "responses": {
+          "200": {
+            "description": "The view was read; no body"
+          },
+          "403": {
+            "description": "Peer denied; no body"
+          },
+          "503": {
+            "description": "The view is unavailable; no body"
+          }
+        }
+      }
+    },
     "/api/v1/status/prefixes": {
       "get": {
         "operationId": "readDelegatedPrefixes",
@@ -7292,6 +7335,122 @@
               }
             },
             "description": "From the firmware's DMI table. The serial is the product's, or the board's when the product has none. A field the vendor left as a placeholder is empty"
+          }
+        }
+      },
+      "LeasesResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "v4",
+          "v6"
+        ],
+        "properties": {
+          "v4": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "segment",
+                "address",
+                "mac",
+                "hostname",
+                "state"
+              ],
+              "properties": {
+                "segment": {
+                  "type": "string"
+                },
+                "address": {
+                  "type": "string"
+                },
+                "mac": {
+                  "type": "string"
+                },
+                "clientId": {
+                  "type": "string"
+                },
+                "hostname": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "active",
+                    "declined",
+                    "expired",
+                    "released",
+                    "unknown"
+                  ]
+                },
+                "cltt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "expiresAt": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            }
+          },
+          "v6": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "segment",
+                "type",
+                "address",
+                "duid",
+                "hostname",
+                "state"
+              ],
+              "properties": {
+                "segment": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "address",
+                    "prefix"
+                  ]
+                },
+                "address": {
+                  "type": "string"
+                },
+                "duid": {
+                  "type": "string"
+                },
+                "mac": {
+                  "type": "string"
+                },
+                "hostname": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "active",
+                    "declined",
+                    "expired",
+                    "released",
+                    "unknown"
+                  ]
+                },
+                "cltt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "expiresAt": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            }
           }
         }
       },

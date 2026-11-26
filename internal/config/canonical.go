@@ -1,10 +1,12 @@
 package config
 
 import (
+	"cmp"
 	"encoding/json"
 	"encoding/json/jsontext"
 	"net/netip"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/andaru-project/andaru/internal/authz"
@@ -90,6 +92,13 @@ func normalizeDeclaration(d *declaration) {
 		e := &d.DHCP[i]
 		slices.SortFunc(e.Ranges, func(a, b dhcpRange) int { return compareAddr(a.First, b.First) })
 		slices.SortFunc(e.StaticLeases, func(a, b staticLease) int { return strings.Compare(a.MAC, b.MAC) })
+		if a, err := netip.ParseAddr(e.Gateway); err == nil {
+			e.Gateway = a.String()
+		}
+		if a, err := netip.ParseAddr(e.NextServer); err == nil {
+			e.NextServer = a.String()
+		}
+		normalizeDHCPOptions(&e.DomainSearch, &e.NTPServers, &e.Options)
 		if e.LeaseTime == 0 {
 			e.LeaseTime = 7200
 		}
@@ -111,6 +120,7 @@ func normalizeDeclaration(d *declaration) {
 		e := &d.DHCP6[i]
 		slices.SortFunc(e.Ranges, func(a, b dhcpRange) int { return compareAddr(a.First, b.First) })
 		slices.SortFunc(e.StaticLeases, func(a, b staticLease6) int { return strings.Compare(a.DUID, b.DUID) })
+		normalizeDHCPOptions(&e.DomainSearch, &e.NTPServers, &e.Options)
 		if e.LeaseTime == 0 {
 			e.LeaseTime = 7200
 		}
@@ -132,4 +142,50 @@ func compareAddr(a, b string) int {
 	x, _ := netip.ParseAddr(a)
 	y, _ := netip.ParseAddr(b)
 	return x.Compare(y)
+}
+
+func normalizeDHCPOptions(domainSearch, ntpServers *[]string, options *[]dhcpOption) {
+	if len(*domainSearch) == 0 {
+		*domainSearch = nil
+	}
+	if len(*ntpServers) == 0 {
+		*ntpServers = nil
+	} else {
+		for i, raw := range *ntpServers {
+			if a, err := netip.ParseAddr(raw); err == nil {
+				(*ntpServers)[i] = a.String()
+			}
+		}
+	}
+	if len(*options) == 0 {
+		*options = nil
+		return
+	}
+	for i := range *options {
+		opt := &(*options)[i]
+		switch opt.Type {
+		case "ip":
+			parts := strings.Split(opt.Data, ",")
+			var addrs []string
+			ok := true
+			for _, part := range parts {
+				a, err := netip.ParseAddr(strings.TrimSpace(part))
+				if err != nil {
+					ok = false
+					break
+				}
+				addrs = append(addrs, a.String())
+			}
+			if ok && len(addrs) > 0 {
+				opt.Data = strings.Join(addrs, ", ")
+			}
+		case "uint8", "uint16", "uint32":
+			if v, err := strconv.ParseUint(opt.Data, 10, 32); err == nil {
+				opt.Data = strconv.FormatUint(v, 10)
+			}
+		case "hex":
+			opt.Data = strings.ToLower(strings.ReplaceAll(opt.Data, ":", ""))
+		}
+	}
+	slices.SortFunc(*options, func(a, b dhcpOption) int { return cmp.Compare(a.Code, b.Code) })
 }

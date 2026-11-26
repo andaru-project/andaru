@@ -51,6 +51,12 @@ type errorResponse struct {
 // prefixesRoot is where the prefix view reads the host's files; tests point it elsewhere.
 var prefixesRoot = ""
 
+// leasesRoot is where the lease view reads the host's files; tests point it elsewhere.
+var leasesRoot = ""
+
+// leasesNow supplies the clock used to evaluate lease expiry; tests pin it.
+var leasesNow = time.Now
+
 // systemRoot is where the system description reads the kernel's files; tests point it elsewhere.
 var systemRoot = ""
 
@@ -118,7 +124,7 @@ func newHandlerWithAllServices(readLinks func(context.Context) ([]host.LinkStatu
 			return
 		}
 		switch r.URL.Path {
-		case "/api/v1/status/links", "/api/v1/status/prefixes", "/api/v1/status/system", "/api/v1/status/usage", "/api/v1/status/traffic", "/api/v1/openapi.json":
+		case "/api/v1/status/links", "/api/v1/status/prefixes", "/api/v1/status/leases", "/api/v1/status/system", "/api/v1/status/usage", "/api/v1/status/traffic", "/api/v1/openapi.json":
 		default:
 			writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Resource not found.")
 			return
@@ -140,6 +146,16 @@ func newHandlerWithAllServices(readLinks func(context.Context) ([]host.LinkStatu
 			if err != nil {
 				slog.ErrorContext(r.Context(), "delegated prefixes unavailable", "error", err)
 				writeError(w, r, http.StatusServiceUnavailable, "INVENTORY_UNAVAILABLE", "The delegated prefixes are unavailable; inspect the engine journal.")
+				return
+			}
+			writeJSON(w, r, http.StatusOK, view)
+			return
+		}
+		if r.URL.Path == "/api/v1/status/leases" {
+			view, err := generation.ReadLeaseView(leasesRoot, leasesNow())
+			if err != nil {
+				slog.ErrorContext(r.Context(), "DHCP leases unavailable", "error", err)
+				writeError(w, r, http.StatusServiceUnavailable, "INVENTORY_UNAVAILABLE", "The DHCP leases are unavailable; inspect the engine journal.")
 				return
 			}
 			writeJSON(w, r, http.StatusOK, view)

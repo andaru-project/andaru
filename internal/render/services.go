@@ -1,6 +1,8 @@
 package render
 
 import (
+	"cmp"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -25,8 +27,15 @@ type dhcpEntry struct {
 	ID           string `json:"id"`
 	Segment      string `json:"segment"`
 	Ranges       []struct{ First, Last string }
-	LeaseTime    int      `json:"leaseTime"`
-	DNSServers   []string `json:"dnsServers"`
+	LeaseTime    int          `json:"leaseTime"`
+	Gateway      string       `json:"gateway"`
+	DNSServers   []string     `json:"dnsServers"`
+	DomainName   string       `json:"domainName"`
+	DomainSearch []string     `json:"domainSearch"`
+	NTPServers   []string     `json:"ntpServers"`
+	NextServer   string       `json:"nextServer"`
+	BootFileName string       `json:"bootFileName"`
+	Options      []dhcpOption `json:"options"`
 	StaticLeases []struct {
 		MAC, Address, Hostname string
 	} `json:"staticLeases"`
@@ -108,15 +117,24 @@ func (r *renderer) services() {
 		if len(servers) == 0 {
 			r.find("warning", "DHCP_WITHOUT_DNS", fmt.Sprintf("/dhcp/%d/dnsServers", i), "Clients get no DNS server: the DNS service does not serve this segment and none is listed.")
 		}
-		options := []map[string]any{{"name": "routers", "data": own.Addr().String()}}
+		options := []map[string]any{{"name": "routers", "data": cmp.Or(e.Gateway, own.Addr().String())}}
 		if len(servers) > 0 {
 			options = append(options, map[string]any{"name": "domain-name-servers", "data": strings.Join(servers, ", ")})
 		}
 		domain := ""
 		if d.DNS != nil {
 			domain = d.DNS.LocalDomain
-			options = append(options, map[string]any{"name": "domain-name", "data": domain})
 		}
+		if optDomain := cmp.Or(e.DomainName, domain); optDomain != "" {
+			options = append(options, map[string]any{"name": "domain-name", "data": optDomain})
+		}
+		if len(e.DomainSearch) > 0 {
+			options = append(options, map[string]any{"name": "domain-search", "data": strings.Join(e.DomainSearch, ", ")})
+		}
+		if len(e.NTPServers) > 0 {
+			options = append(options, map[string]any{"name": "ntp-servers", "data": strings.Join(e.NTPServers, ", ")})
+		}
+		options = append(options, customDHCPOptions(e.Options)...)
 		pools := []map[string]any{}
 		for _, rg := range e.Ranges {
 			pools = append(pools, map[string]any{"pool": rg.First + " - " + rg.Last})
@@ -133,12 +151,19 @@ func (r *renderer) services() {
 			}
 			reservations = append(reservations, res)
 		}
-		subnets = append(subnets, map[string]any{
+		subnet := map[string]any{
 			"id": subnetID(e.Segment, ids), "subnet": own.Masked().String(), "pools": pools, "valid-lifetime": e.LeaseTime,
 			"reservations": reservations, "option-data": options,
 			// The lease sync reads this, so it needs nothing but Kea's own configuration.
-			"user-context": map[string]any{"andaru": map[string]any{"domain": domain, "register": register && dnsServes(e.Segment)}},
-		})
+			"user-context": map[string]any{"andaru": map[string]any{"segment": e.Segment, "domain": domain, "register": register && dnsServes(e.Segment)}},
+		}
+		if e.NextServer != "" {
+			subnet["next-server"] = e.NextServer
+		}
+		if e.BootFileName != "" {
+			subnet["boot-file-name"] = e.BootFileName
+		}
+		subnets = append(subnets, subnet)
 	}
 	if len(subnets) > 0 {
 		kea := map[string]any{"Dhcp4": map[string]any{
@@ -377,8 +402,17 @@ func (r *renderer) dhcp6(dnsServes func(string) bool, register bool) (names []st
 		domain := ""
 		if d.DNS != nil {
 			domain = d.DNS.LocalDomain
+		}
+		switch {
+		case len(e.DomainSearch) > 0:
+			options = append(options, map[string]any{"name": "domain-search", "data": strings.Join(e.DomainSearch, ", ")})
+		case d.DNS != nil:
 			options = append(options, map[string]any{"name": "domain-search", "data": strings.Join(append([]string{domain}, d.DNS.SearchDomains...), ", ")})
 		}
+		if len(e.NTPServers) > 0 {
+			options = append(options, map[string]any{"name": "sntp-servers", "data": strings.Join(e.NTPServers, ", ")})
+		}
+		options = append(options, customDHCPOptions(e.Options)...)
 		pools := []map[string]any{}
 		for _, rg := range e.Ranges {
 			pools = append(pools, map[string]any{"pool": rg.First + " - " + rg.Last})
@@ -388,7 +422,7 @@ func (r *renderer) dhcp6(dnsServes func(string) bool, register bool) (names []st
 				ID: subnetID(e.Segment, ids), Interface: name, Uplink: uplink, SubnetID: subnetHex, Ranges: []delegation.TemplateRange{},
 				Reservations: []delegation.TemplateReservation{}, Valid: e.LeaseTime, Preferred: e.LeaseTime * 5 / 8, Options: options,
 				// names: the DNS service serves the segment, so the lease sync publishes its static names.
-				UserContext: map[string]any{"andaru": map[string]any{"domain": domain, "register": register && dnsServes(e.Segment), "names": dnsServes(e.Segment)}},
+				UserContext: map[string]any{"andaru": map[string]any{"segment": e.Segment, "domain": domain, "register": register && dnsServes(e.Segment), "names": dnsServes(e.Segment)}},
 			}
 			for _, rg := range e.Ranges {
 				sub.Ranges = append(sub.Ranges, delegation.TemplateRange{First: rg.First, Last: rg.Last})
@@ -433,7 +467,7 @@ func (r *renderer) dhcp6(dnsServes func(string) bool, register bool) (names []st
 			"id": subnetID(e.Segment, ids), "subnet": own.Masked().String(), "interface": name, "pools": pools, "reservations": reservations,
 			// Kea's default ratio: the preferred lifetime is five-eighths of the valid one.
 			"valid-lifetime": e.LeaseTime, "preferred-lifetime": e.LeaseTime * 5 / 8, "option-data": options,
-			"user-context": map[string]any{"andaru": map[string]any{"domain": domain, "register": register && dnsServes(e.Segment)}},
+			"user-context": map[string]any{"andaru": map[string]any{"segment": e.Segment, "domain": domain, "register": register && dnsServes(e.Segment)}},
 		}
 		if pdPools != nil {
 			subnet["pd-pools"] = pdPools
@@ -471,4 +505,52 @@ func (r *renderer) raMode(id string) string {
 		}
 	}
 	return "disabled"
+}
+
+func customDHCPOptions(opts []dhcpOption) []map[string]any {
+	var out []map[string]any
+	for _, opt := range opts {
+		entry := map[string]any{
+			"code":       opt.Code,
+			"csv-format": false,
+			"data":       encodeDHCPOptionHex(opt),
+		}
+		if opt.AlwaysSend {
+			entry["always-send"] = true
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+func encodeDHCPOptionHex(opt dhcpOption) string {
+	switch opt.Type {
+	case "string":
+		return hex.EncodeToString([]byte(opt.Data))
+	case "ip":
+		var b []byte
+		for part := range strings.SplitSeq(opt.Data, ",") {
+			if a, err := netip.ParseAddr(strings.TrimSpace(part)); err == nil {
+				b = append(b, a.AsSlice()...)
+			}
+		}
+		return hex.EncodeToString(b)
+	case "uint8":
+		v, _ := strconv.ParseUint(opt.Data, 10, 8)
+		return fmt.Sprintf("%02x", v)
+	case "uint16":
+		v, _ := strconv.ParseUint(opt.Data, 10, 16)
+		return fmt.Sprintf("%04x", v)
+	case "uint32":
+		v, _ := strconv.ParseUint(opt.Data, 10, 32)
+		return fmt.Sprintf("%08x", v)
+	case "boolean":
+		if opt.Data == "true" {
+			return "01"
+		}
+		return "00"
+	case "hex":
+		return strings.ToLower(strings.ReplaceAll(opt.Data, ":", ""))
+	}
+	return ""
 }

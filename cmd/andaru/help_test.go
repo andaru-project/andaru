@@ -156,7 +156,7 @@ func TestDocumentedCtlFormsParse(t *testing.T) {
 	t.Cleanup(func() { identityEUID, resetEUID = oldIdentity, oldReset })
 	const uuid = "00000000-0000-4000-8000-000000000000"
 	forms := []string{
-		"links", "prefixes", "openapi", "setup-code", "setup-code --rotate",
+		"links", "prefixes", "leases", "openapi", "setup-code", "setup-code --rotate",
 		"config show", "config list zones", "config create zones", "config get zones zon_" + uuid,
 		"config replace --version 3 zones zon_" + uuid, "config delete --version 3 zones zon_" + uuid,
 		"config get dns", "config replace --version 0 dns", "config replace --version 3 nat/outbound", "config delete --version 3 management",

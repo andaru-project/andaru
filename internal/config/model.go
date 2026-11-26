@@ -253,6 +253,9 @@ type dhcp6Entry struct {
 	Ranges           []dhcpRange       `json:"ranges,omitempty"`
 	LeaseTime        int               `json:"leaseTime,omitzero"`
 	DNSServers       []string          `json:"dnsServers,omitempty"`
+	DomainSearch     []string          `json:"domainSearch,omitempty"`
+	NTPServers       []string          `json:"ntpServers,omitempty"`
+	Options          []dhcpOption      `json:"options,omitempty"`
 	StaticLeases     []staticLease6    `json:"staticLeases,omitempty"`
 	PrefixDelegation *prefixDelegation `json:"prefixDelegation,omitempty"`
 }
@@ -281,8 +284,21 @@ type dhcpEntry struct {
 	Segment      string        `json:"segment"`
 	Ranges       []dhcpRange   `json:"ranges"`
 	LeaseTime    int           `json:"leaseTime,omitzero"`
+	Gateway      string        `json:"gateway,omitempty"`
 	DNSServers   []string      `json:"dnsServers,omitempty"`
+	DomainName   string        `json:"domainName,omitempty"`
+	DomainSearch []string      `json:"domainSearch,omitempty"`
+	NTPServers   []string      `json:"ntpServers,omitempty"`
+	NextServer   string        `json:"nextServer,omitempty"`
+	BootFileName string        `json:"bootFileName,omitempty"`
+	Options      []dhcpOption  `json:"options,omitempty"`
 	StaticLeases []staticLease `json:"staticLeases,omitempty"`
+}
+type dhcpOption struct {
+	Code       int    `json:"code"`
+	Type       string `json:"type"`
+	Data       string `json:"data"`
+	AlwaysSend bool   `json:"alwaysSend,omitempty"`
 }
 type dhcpRange struct {
 	First string `json:"first"`

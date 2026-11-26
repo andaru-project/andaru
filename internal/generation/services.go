@@ -99,6 +99,25 @@ func (r Realizer) services(ctx context.Context, from, to []placed) error {
 		if err := writeAtomic(r.Root+leasesDir+"/leases.conf", []byte("server:\n"), 0o644); err != nil {
 			return err
 		}
+		// Drop any stopped family's leases immediately instead of waiting for the async lease sync.
+		if !kea && !kea6 {
+			if err := writeLeaseView(r.Root, nil, nil); err != nil {
+				return err
+			}
+		} else if prev, readErr := readStoredLeaseView(r.Root); readErr != nil {
+			slog.Warn("read stored lease view before clearing stopped family", "error", readErr)
+		} else {
+			v4, v6 := prev.V4, prev.V6
+			if !kea && hadKea {
+				v4 = nil
+			}
+			if !kea6 && hadKea6 {
+				v6 = nil
+			}
+			if err := writeLeaseView(r.Root, v4, v6); err != nil {
+				return err
+			}
+		}
 	}
 	if unbound || hadUnbound {
 		if unbound {

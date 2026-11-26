@@ -56,7 +56,8 @@
         "user-context": {
           "andaru": {
             "domain": "lan.example",
-            "register": false
+            "register": false,
+            "segment": "seg_00000002-0000-4000-8000-000000000002"
           }
         },
         "valid-lifetime": 3600

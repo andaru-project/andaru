@@ -90,6 +90,7 @@ func validateDelegatedDHCP6(d *declaration, wan segment, e dhcp6Entry, p string,
 			bad(fmt.Sprintf("%s/dnsServers/%d", p, j), "Expected a unicast IPv6 address that is not link-local.")
 		}
 	}
+	validateDHCP6Options(e.DomainSearch, e.NTPServers, e.Options, p, bad)
 	idBits := -1 // the bits a prefixId has in the pool; -1 without a pool
 	if pd := e.PrefixDelegation; pd != nil {
 		pp := p + "/prefixDelegation"

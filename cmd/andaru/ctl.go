@@ -82,6 +82,10 @@ func ctlOperation(args []string, stderr io.Writer) (ctlRequest, error) {
 			req.path = "/api/v1/status/prefixes"
 			req.kind = "prefixes"
 			return req, nil
+		case "leases":
+			req.path = "/api/v1/status/leases"
+			req.kind = "leases"
+			return req, nil
 		case "openapi":
 			req.path = "/api/v1/openapi.json"
 			req.kind = "openapi"
@@ -507,6 +511,9 @@ func validEnvelope(kind string, body []byte) bool {
 	case "prefixes":
 		var wans []json.RawMessage
 		return json.Unmarshal(document["wans"], &wans) == nil && wans != nil
+	case "leases":
+		var v4, v6 []json.RawMessage
+		return json.Unmarshal(document["v4"], &v4) == nil && v4 != nil && json.Unmarshal(document["v6"], &v6) == nil && v6 != nil
 	case "setup-code":
 		var required bool
 		return json.Unmarshal(document["setupRequired"], &required) == nil

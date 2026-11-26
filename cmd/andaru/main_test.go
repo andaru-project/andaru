@@ -480,6 +480,25 @@ func TestCtlPrefixes(t *testing.T) {
 	}
 }
 
+// andaru ctl leases prints the engine's lease view, and nothing that is not one.
+func TestCtlLeases(t *testing.T) {
+	var asked string
+	reply := `{"v4":[],"v6":[]}`
+	path := replySocket(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = r.URL.Path
+		_, _ = io.WriteString(w, reply)
+	}))
+	var out, diag bytes.Buffer
+	if code := run(context.Background(), []string{"ctl", "--socket", path, "leases"}, strings.NewReader(""), &out, &diag); code != 0 || asked != "/api/v1/status/leases" || !strings.Contains(out.String(), `"v4"`) {
+		t.Fatalf("%d %q %q %q", code, asked, out.String(), diag.String())
+	}
+	reply = `{"wans":[]}`
+	out.Reset()
+	if code := run(context.Background(), []string{"ctl", "--socket", path, "leases"}, strings.NewReader(""), &out, &diag); code != 1 || out.Len() != 0 {
+		t.Fatal("a reply without v4/v6 became success")
+	}
+}
+
 func TestConfigVirtualAddresses(t *testing.T) {
 	id := "vip_00000001-0000-4000-8000-000000000001"
 	for args, want := range map[string]ctlRequest{
