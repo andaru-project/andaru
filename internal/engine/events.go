@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
+	"os/user"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -29,9 +31,9 @@ var eventsHeartbeat = 25 * time.Second
 // andaru realize publishes the state of each apply there. A store the bus cannot open is moved aside and the bus
 // starts with an empty one, rather than stopping the engine: every durable consumer that comes back is then told
 // of a gap, the bus's signal that it may have missed events.
-func openBus(stateDir, socket string) (*bus.Bus, func() error, error) {
+func openBus(stateDir, socket, services string) (*bus.Bus, func() error, error) {
 	path := filepath.Join(stateDir, "bus.db")
-	events, closeEvents, err := startBus(path, socket, false)
+	events, closeEvents, err := startBus(path, socket, services, false)
 	if !errors.Is(err, bus.ErrStore) {
 		return events, closeEvents, err
 	}
@@ -43,31 +45,90 @@ func openBus(stateDir, socket string) (*bus.Bus, func() error, error) {
 			return nil, nil, errors.Join(err, renameErr)
 		}
 	}
-	events, closeEvents, retryErr := startBus(path, socket, true)
+	events, closeEvents, retryErr := startBus(path, socket, services, true)
 	if retryErr != nil {
 		return nil, nil, errors.Join(err, retryErr)
 	}
 	return events, closeEvents, nil
 }
 
-func startBus(path, socket string, lost bool) (*bus.Bus, func() error, error) {
+// ServicesSocket is where Andaru's unprivileged services reach the bus. Its directory comes from tmpfiles.d, with the
+// group servicesGroup the services are in.
+const (
+	ServicesSocket = "/run/andaru-services/bus.sock"
+	servicesGroup  = "andaru-services"
+)
+
+// busGrants are what each client of the bus may publish and subscribe to, by user name.
+var busGrants = map[string]bus.Grants{
+	"realize":         {Publish: []string{"apply/+"}},
+	"andaru-outbound": {Publish: []string{"notification/delivery"}, Subscribe: []string{"delivery/#"}},
+}
+
+// serviceUsers are the users that may use the services socket. Each is a static sysusers.d user, not a DynamicUser=:
+// with cgo off, user names are read from /etc/passwd alone.
+var serviceUsers = []string{"andaru-outbound"}
+
+// startBus serves the root socket and, when services is not empty, the services socket.
+func startBus(path, socket, services string, lost bool) (*bus.Bus, func() error, error) {
 	listener, closeListener, err := listenRootSocket(socket, "bus")
 	if err != nil {
 		return nil, nil, err
 	}
+	peers, closePeers := map[string]net.Listener{}, func() error { return nil }
+	if services != "" {
+		if l, closeServices, err := servicesListener(services); err != nil {
+			slog.Warn("no bus socket for unprivileged services", "socket", services, "error", err)
+		} else {
+			peers["services"], closePeers = l, closeServices
+		}
+	}
+	closeAll := func() error { return errors.Join(closeListener(), closePeers()) }
 	events, err := bus.Open(bus.Options{
 		Path:   path,
-		Grants: map[string]bus.Grants{"realize": {Publish: []string{"apply/+"}}},
+		Grants: busGrants,
 		// The socket is root's alone, so whoever connects is trusted with the grants of the name it gives.
-		Authenticate: func(_, _ string) bool { return true },
-		Listeners:    map[string]net.Listener{"root": listener},
-		LostHistory:  lost,
-		Logger:       slog.Default().With("component", "bus"),
+		Authenticate:  func(_, _ string) bool { return true },
+		Listeners:     map[string]net.Listener{"root": listener},
+		PeerListeners: peers,
+		PeerUser:      serviceUser,
+		LostHistory:   lost,
+		Logger:        slog.Default().With("component", "bus"),
 	})
 	if err != nil {
-		return nil, nil, errors.Join(err, closeListener())
+		return nil, nil, errors.Join(err, closeAll())
 	}
-	return events, func() error { return errors.Join(events.Close(), closeListener()) }, nil
+	return events, func() error { return errors.Join(events.Close(), closeAll()) }, nil
+}
+
+// serviceUser names a services socket client by its user ID, if it is one of serviceUsers.
+func serviceUser(uid uint32) (string, error) {
+	u, err := user.LookupId(strconv.FormatUint(uint64(uid), 10))
+	if err != nil {
+		return "", err
+	}
+	return u.Username, isService(u.Username)
+}
+
+func isService(name string) error {
+	if !slices.Contains(serviceUsers, name) {
+		return fmt.Errorf("%s is not one of Andaru's services", name)
+	}
+	return nil
+}
+
+// servicesListener binds the services socket for the services group. Run outside its unit, the engine may lack the
+// group (the unit itself does not start without it); then the bus serves root alone.
+func servicesListener(socket string) (net.Listener, func() error, error) {
+	group, err := user.LookupGroup(servicesGroup)
+	if err != nil {
+		return nil, nil, err
+	}
+	gid, err := strconv.ParseUint(group.Gid, 10, 32)
+	if err != nil {
+		return nil, nil, err
+	}
+	return listenGroupSocket(socket, uint32(gid), servicesGroup, "services bus")
 }
 
 // publishHead tells subscribers of each new saved head. It is not durable: a subscriber reads the head when it

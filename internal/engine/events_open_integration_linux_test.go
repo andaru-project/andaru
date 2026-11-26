@@ -24,7 +24,7 @@ func TestUnreadableBusStoreIsMovedAside(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(dir, "bus.db"), []byte("not a database, not even close to one"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	events, closeEvents, err := openBus(dir, filepath.Join(dir, "run", "bus.sock"))
+	events, closeEvents, err := openBus(dir, filepath.Join(dir, "run", "bus.sock"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestUnreadableBusStoreIsMovedAside(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(dir, "run", "bus.sock"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err = openBus(dir, filepath.Join(dir, "run", "bus.sock")); err == nil {
+	if _, _, err = openBus(dir, filepath.Join(dir, "run", "bus.sock"), ""); err == nil {
 		t.Fatal("the bus started over a file at its socket")
 	}
 	if _, err = os.Stat(filepath.Join(dir, "bus.db")); err != nil {

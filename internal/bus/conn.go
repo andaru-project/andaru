@@ -47,6 +47,7 @@ var writeTimeout = 10 * time.Second
 type conn struct {
 	b      *Bus
 	nc     net.Conn
+	peer   bool // on a PeerListener: known by its peer user ID, not its token
 	grants Grants
 	user   string
 	out    chan []byte
@@ -99,7 +100,7 @@ func (r *reading) expectGap(token int64) {
 	r.mu.Unlock()
 }
 
-func (b *Bus) serve(l net.Listener) {
+func (b *Bus) serve(l net.Listener, peer bool) {
 	defer b.done.Done()
 	for {
 		nc, err := l.Accept()
@@ -111,7 +112,7 @@ func (b *Bus) serve(l net.Listener) {
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
-		c := &conn{b: b, nc: nc, out: make(chan []byte, queued), gone: make(chan struct{}), reads: map[string]*reading{}}
+		c := &conn{b: b, nc: nc, peer: peer, out: make(chan []byte, queued), gone: make(chan struct{}), reads: map[string]*reading{}}
 		b.mu.Lock()
 		select {
 		case <-b.closed:
@@ -196,6 +197,27 @@ func (c *conn) reply(id int64, err error) {
 	c.send(frame{Op: "ok", ID: id})
 }
 
+// authorized says whether a hello's user name is the client's: by its token, or on a PeerListener by its peer user ID.
+func (c *conn) authorized(hello frame) bool {
+	if !c.peer {
+		return c.b.opt.Authenticate != nil && c.b.opt.Authenticate(hello.User, hello.Token)
+	}
+	if c.b.opt.PeerUser == nil {
+		return false
+	}
+	uid, err := PeerUID(c.nc)
+	if err != nil {
+		c.b.log.Warn("bus peer credentials", "error", err)
+		return false
+	}
+	name, err := c.b.opt.PeerUser(uid)
+	if err != nil || name != hello.User {
+		c.b.log.Warn("bus client refused: its user name is not its peer's", "user", hello.User, "uid", uid, "error", err)
+		return false
+	}
+	return true
+}
+
 func (c *conn) read() {
 	defer c.b.done.Done()
 	defer c.close()
@@ -207,7 +229,7 @@ func (c *conn) read() {
 		return
 	}
 	grants, known := c.b.opt.Grants[hello.User]
-	if !known || c.b.opt.Authenticate == nil || !c.b.opt.Authenticate(hello.User, hello.Token) {
+	if !known || !c.authorized(hello) {
 		// Written here, not queued: the connection closes next, and the client is owed the reason.
 		if line, err := json.Marshal(frame{Op: "error", ID: hello.ID, Message: "not authorized"}); err == nil {
 			_ = c.nc.SetWriteDeadline(time.Now().Add(writeTimeout))
