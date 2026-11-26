@@ -350,7 +350,7 @@ func TestFailingChannelRaisesItsNotification(t *testing.T) {
 	deadURL := dead.URL + "/hooks/SECRETTOKEN?k=QSECRET"
 	dead.Close() // refused connections: Go's error names the URL
 	h, url := newHook(t)
-	b.run(&Service{RetryFor: 5 * time.Millisecond, Backoff: func(int) time.Duration { return 3 * time.Millisecond }})
+	b.run(&Service{RetryFor: 100 * time.Millisecond, Backoff: func(int) time.Duration { return 20 * time.Millisecond }})
 	for _, id := range []string{"e1", "e2"} {
 		b.publish(job(id+":ch", "ch", deadURL))
 		b.waitQueued(1)
