@@ -202,8 +202,24 @@ export function memberLinkOptions(snapshot: Snapshot, kind: 'bridge' | 'bond', s
 }
 
 const utf8Encoder = new TextEncoder();
-export const pppoeCredentialByteLimit = 255;
-export const utf8ByteLength = (value: string) => utf8Encoder.encode(value).length;
+const pppoeCredentialByteLimit = 255;
+const controlChars = /\p{Cc}/u;
+const utf8ByteLength = (value: string) => utf8Encoder.encode(value).length;
+
+export function validatePppoeUsername(raw: string): string | undefined {
+  const username = raw.trim();
+  if (!username) return 'Enter the PPPoE username.';
+  if (controlChars.test(username)) return 'Username cannot contain control characters.';
+  if (utf8ByteLength(username) > pppoeCredentialByteLimit) return `Username must be ${pppoeCredentialByteLimit} bytes or fewer.`;
+  return undefined;
+}
+
+export function validatePppoePassword(password: string, required: boolean): string | undefined {
+  if (required && password.length === 0) return 'Enter the PPPoE password.';
+  if (password.includes('\0')) return 'Password cannot contain null bytes.';
+  if (utf8ByteLength(password) > pppoeCredentialByteLimit) return `Password must be ${pppoeCredentialByteLimit} bytes or fewer.`;
+  return undefined;
+}
 
 export function existingSecretsOf(snapshot: Snapshot | undefined): string[] {
   if (!snapshot) return [];
@@ -214,7 +230,7 @@ export function existingSecretsOf(snapshot: Snapshot | undefined): string[] {
 // Allocate a collision-free core secret name matching ^[A-Za-z_][A-Za-z0-9_]{0,63}$.
 export function nextPppoeSecretName(name: string, existingSecrets: Iterable<string> = []): string {
   const used = new Set(existingSecrets);
-  const slug = name.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
+  const slug = name.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40).replace(/_+$/, '');
   const base = slug ? `PPPOE_${slug}_PASSWORD` : 'PPPOE_PASSWORD';
   if (!used.has(base)) return base;
   for (let i = 2; ; i += 1) {
@@ -226,7 +242,7 @@ export function nextPppoeSecretName(name: string, existingSecrets: Iterable<stri
 export function draftOf(link: SavedLink | undefined, segment: Segment | undefined, live: LinkStatus | undefined, newKind?: VirtualLinkKind): InterfaceDraft {
   const kind: SavedLink['kind'] = link?.kind ?? newKind ?? 'ethernet';
   const addressing = (segment?.addressing ?? {}) as Fields;
-  const ipv4 = (addressing.ipv4 ?? { mode: !link && kind === 'pppoe' ? 'ppp' : 'none' }) as Fields;
+  const ipv4 = (addressing.ipv4 ?? { mode: kind === 'pppoe' ? 'ppp' : 'none' }) as Fields;
   const ipv6 = (addressing.ipv6 ?? { mode: 'none' }) as Fields;
   const dns = (addressing.dns ?? {}) as Fields;
   return {
@@ -297,9 +313,9 @@ function ipv6Of(draft: InterfaceDraft, saved: Fields | undefined): Fields {
   const out = family(saved, draft.ipv6Mode, ['ra']);
   if (out.ra) {
     const ra: Fields = { ...(out.ra as Fields) };
-    // Without IPv6 there is nothing to advertise, and the engine refuses advertisements on such a network: they are
+    // Without IPv6 or on a PPPoE segment, router advertisements cannot be sent: they are
     // turned off, their other settings kept for when IPv6 returns. The older form says it with enabled.
-    if (draft.ipv6Mode === 'none') {
+    if (draft.ipv6Mode === 'none' || draft.kind === 'pppoe') {
       if ('enabled' in ra) ra.enabled = false;
       else ra.mode = 'disabled';
     }
@@ -369,17 +385,11 @@ export function interfaceOperations(
   } else if (draft.kind === 'pppoe') {
     linkValue.parent = draft.parent;
     linkValue.username = draft.pppoeUsername.trim();
-    if (!link) {
+    if (!link || draft.pppoePassword !== '') {
       linkValue.password = {
-        secret: nextPppoeSecretName(draft.name.trim(), existingSecretsOf(snapshot)),
+        secret: link?.value.password?.secret || nextPppoeSecretName(draft.name.trim(), existingSecretsOf(snapshot)),
         set: draft.pppoePassword,
-        expectedVersion: '0',
-      };
-    } else if (draft.pppoePassword !== '') {
-      linkValue.password = {
-        secret: link.value.password?.secret || nextPppoeSecretName(draft.name.trim(), existingSecretsOf(snapshot)),
-        set: draft.pppoePassword,
-        expectedVersion: link.value.password?.version ?? '0',
+        expectedVersion: link?.value.password?.version || '0',
       };
     }
   } else if (draft.kind === 'bridge') {

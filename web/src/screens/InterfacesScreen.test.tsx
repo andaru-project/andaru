@@ -770,7 +770,9 @@ it('creates a PPPoE interface with MTU clamping, restricted modes, and DHCP pare
         management: { segment: 'seg_lan' },
       },
     },
-    findings: [],
+    findings: [
+      { severity: 'error', code: 'SECRET_UNRESOLVED', path: '/links/3/password', message: 'The secret reference is unresolved; explicitly bind or set it before applying.' },
+    ],
     extra: {
       [`/api/v1/config/links/${existingPpp}`]: {
         version: '3',
@@ -791,6 +793,8 @@ it('creates a PPPoE interface with MTU clamping, restricted modes, and DHCP pare
   render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={vi.fn()} onSessionLost={vi.fn()} />);
 
   expect(await screen.findByText(/PPPoE on WAN port · Password unresolved/)).toBeInTheDocument();
+  expect(screen.getByText('The secret reference is unresolved; explicitly bind or set it before applying.')).toBeInTheDocument();
+  expect(within(row('Restored DSL')).getByText('Unresolved')).toBeInTheDocument();
 
   // Add PPPoE via menu.
   await user.click(screen.getByRole('button', { name: 'Add virtual interface' }));
@@ -854,17 +858,44 @@ it('creates a PPPoE interface with MTU clamping, restricted modes, and DHCP pare
     ],
   });
 
-  // Resolve the restored PPPoE link's missing password.
+  // Resolve or disable the restored PPPoE link's missing password.
   await user.click(screen.getByRole('button', { name: 'Edit Restored DSL' }));
   panel = await screen.findByRole('dialog');
   expect(within(panel).getByText(/Password unresolved/)).toBeInTheDocument();
   await user.click(within(panel).getByRole('button', { name: 'Save interface' }));
   expect(await within(panel).findByText('Enter the PPPoE password.')).toBeInTheDocument();
+  // Toggling Enabled off allows saving without supplying a password.
+  await user.click(within(panel).getByRole('switch', { name: 'Enabled' }));
+  await user.click(within(panel).getByRole('button', { name: 'Save interface' }));
+  await vi.waitFor(() => expect(sent).toHaveBeenCalledTimes(2));
+  expect(JSON.parse(String(sent.mock.calls[1][0]?.body))).toEqual({
+    operations: [
+      {
+        op: 'replace',
+        collection: 'links',
+        id: existingPpp,
+        expectedVersion: '3',
+        value: {
+          id: existingPpp,
+          name: 'Restored DSL',
+          kind: 'pppoe',
+          mtu: 1492,
+          enabled: false,
+          parent: wanPort,
+          username: 'restored@isp',
+        },
+      },
+    ],
+  });
+
+  // Re-open and resolve the password while enabled.
+  await user.click(screen.getByRole('button', { name: 'Edit Restored DSL' }));
+  panel = await screen.findByRole('dialog');
   await user.type(within(panel).getByLabelText(/^PPPoE password/), 'resolved-pass');
   await user.click(within(panel).getByRole('button', { name: 'Save interface' }));
 
-  await vi.waitFor(() => expect(sent).toHaveBeenCalledTimes(2));
-  expect(JSON.parse(String(sent.mock.calls[1][0]?.body))).toEqual({
+  await vi.waitFor(() => expect(sent).toHaveBeenCalledTimes(3));
+  expect(JSON.parse(String(sent.mock.calls[2][0]?.body))).toEqual({
     operations: [
       {
         op: 'replace',
@@ -882,6 +913,86 @@ it('creates a PPPoE interface with MTU clamping, restricted modes, and DHCP pare
           password: { secret: 'DSL_PASSWORD', set: 'resolved-pass', expectedVersion: '0' },
         },
       },
+    ],
+  });
+});
+
+it('handles resolved PPPoE editing, stale unsupported IPv6 modes, and PPPoE client validations', async () => {
+  const user = userEvent.setup();
+  const wanPort = 'lnk_77777777-7777-4777-8777-777777777777';
+  const pppId = 'lnk_99999999-9999-4999-8999-999999999999';
+  const sent = vi.fn<(init: RequestInit | undefined) => Response>(() => jsonResponse(200, { savedVersion: '8' }));
+  const pppLink = {
+    id: pppId,
+    name: 'ISP PPPoE',
+    kind: 'pppoe',
+    mtu: 1492,
+    enabled: true,
+    parent: wanPort,
+    username: 'user@isp',
+    password: { secret: 'WAN_PASSWORD', isSet: true, version: '5', updatedAt: '2026-01-01T00:00:00Z' },
+  };
+  const pppSeg = {
+    id: 'seg_ppp',
+    name: 'ISP PPPoE',
+    link: pppId,
+    zone: 'zon_wan',
+    addressing: { ipv4: { mode: 'ppp' }, ipv6: { mode: 'static', addresses: ['2001:db8::2/64'] } },
+  };
+  routes({
+    config: {
+      state: 'saved',
+      savedVersion: '7',
+      unusedSecrets: [],
+      value: {
+        links: [ethernet(lanPort, 'LAN port', '52:54:00:aa:bb:01'), ethernet(wanPort, 'WAN port', '52:54:00:aa:bb:02'), pppLink],
+        segments: [
+          { id: 'seg_lan', name: 'LAN', link: lanPort, zone: 'zon_lan', addressing: { ipv4: { mode: 'static', addresses: ['192.168.1.1/24'] }, ipv6: { mode: 'none' } } },
+          pppSeg,
+        ],
+        zones: [{ id: 'zon_lan', name: 'LAN' }, { id: 'zon_wan', name: 'WAN' }],
+        management: { segment: 'seg_lan' },
+      },
+    },
+    findings: [],
+    extra: {
+      [`/api/v1/config/links/${pppId}`]: { version: '4', value: pppLink },
+      '/api/v1/config/segments/seg_ppp': { version: '6', value: pppSeg },
+      'POST /api/v1/config/changes': sent,
+    },
+  });
+  render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={vi.fn()} onSessionLost={vi.fn()} />);
+
+  await user.click(await screen.findByRole('button', { name: 'Edit ISP PPPoE' }));
+  const panel = await screen.findByRole('dialog');
+  expect(within(panel).getByPlaceholderText('Leave empty to keep saved password')).toBeInTheDocument();
+
+  // Stale static IPv6 mode is preserved as a disabled option and rejected on save until changed.
+  const ipv6Select = within(panel).getByLabelText(/^IPv6 method/) as HTMLSelectElement;
+  expect(ipv6Select).toHaveValue('static');
+  await user.click(within(panel).getByRole('button', { name: 'Save interface' }));
+  expect(await within(panel).findByText('IPv6 on a PPPoE segment can be None, SLAAC, or DHCPv6.')).toBeInTheDocument();
+
+  // MTU > parent.mtu - 8 and ipv4=none + ipv6=none are rejected client-side.
+  const mtuInput = within(panel).getByLabelText(/^MTU/);
+  await user.clear(mtuInput);
+  await user.type(mtuInput, '1500');
+  await user.selectOptions(within(panel).getByLabelText(/^IPv4 method/), 'none');
+  await user.selectOptions(ipv6Select, 'none');
+  await user.click(within(panel).getByRole('button', { name: 'Save interface' }));
+  expect(await within(panel).findByText('Cannot exceed parent MTU minus 8 bytes for PPPoE (1492).')).toBeInTheDocument();
+  expect(within(panel).getByText('A PPPoE segment needs IPv4 (PPP) or IPv6.')).toBeInTheDocument();
+
+  // Fix MTU and switch back to PPP + None; leaving password blank omits password from the replace op.
+  await user.clear(mtuInput);
+  await user.type(mtuInput, '1480');
+  await user.selectOptions(within(panel).getByLabelText(/^IPv4 method/), 'ppp');
+  await user.click(within(panel).getByRole('button', { name: 'Save interface' }));
+  await vi.waitFor(() => expect(sent).toHaveBeenCalledTimes(1));
+  expect(JSON.parse(String(sent.mock.calls[0][0]?.body))).toEqual({
+    operations: [
+      { op: 'replace', collection: 'links', id: pppId, expectedVersion: '4', value: { id: pppId, name: 'ISP PPPoE', kind: 'pppoe', mtu: 1480, enabled: true, parent: wanPort, username: 'user@isp' } },
+      { op: 'replace', collection: 'segments', id: 'seg_ppp', expectedVersion: '6', value: { ...pppSeg, addressing: { ipv4: { mode: 'ppp' }, ipv6: { mode: 'none' } } } },
     ],
   });
 });

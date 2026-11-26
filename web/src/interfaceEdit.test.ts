@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { ApiError } from './api';
-import { addressLines, draftOf, interfaceErrors, interfaceOperations, memberLinkOptions, newZoneOption, nextPppoeSecretName, removeOperations, vlanParentOptions } from './interfaceEdit';
+import { addressLines, draftOf, existingSecretsOf, interfaceErrors, interfaceOperations, memberLinkOptions, newZoneOption, nextPppoeSecretName, removeOperations, validatePppoePassword, validatePppoeUsername, vlanParentOptions } from './interfaceEdit';
 import type { LinkStatus, SavedLink, SavedObject, Segment, Snapshot } from './types';
 
 const port: LinkStatus = { ifIndex: 3, name: 'enp2s0', linkType: 'ether', mtu: 1500, operState: 'UP', flags: [], linkAddress: '02:00:00:00:00:99', permanentAddress: '52:54:00:AA:BB:02', addresses: [] };
@@ -301,13 +301,32 @@ it('allocates unique PPPoE secret names, creates/updates PPPoE links, and maps c
   expect(nextPppoeSecretName('Fiber WAN', ['PPPOE_FIBER_WAN_PASSWORD', 'PPPOE_FIBER_WAN_PASSWORD_2'])).toBe('PPPOE_FIBER_WAN_PASSWORD_3');
   expect(nextPppoeSecretName('123!!!', [])).toBe('PPPOE_123_PASSWORD');
   expect(nextPppoeSecretName('---', [])).toBe('PPPOE_PASSWORD');
+  // 40-char slice ending on '_' trims trailing underscore (no double '__PASSWORD').
+  expect(nextPppoeSecretName(`${'a'.repeat(39)} b`, [])).toBe(`PPPOE_${'A'.repeat(39)}_PASSWORD`);
 
+  // Shared credential validators: multi-byte UTF-8 > 255 bytes, control chars, and null bytes.
+  expect(validatePppoeUsername('user\x07name')).toBe('Username cannot contain control characters.');
+  expect(validatePppoeUsername('é'.repeat(128))).toBe('Username must be 255 bytes or fewer.');
+  expect(validatePppoePassword('pass\0word', true)).toBe('Password cannot contain null bytes.');
+  expect(validatePppoePassword('€'.repeat(86), true)).toBe('Password must be 255 bytes or fewer.');
+
+  const activePpp: SavedLink = {
+    id: 'lnk_active',
+    name: 'Active PPP',
+    kind: 'pppoe',
+    mtu: 1492,
+    enabled: true,
+    parent: 'lnk_a',
+    username: 'u',
+    password: { secret: 'PPPOE_FIBER_WAN_PASSWORD_2', isSet: true, version: '2', updatedAt: '2026-01-01T00:00:00Z' },
+  };
   const snapshot: Snapshot = {
     state: 'saved',
     savedVersion: '4',
     unusedSecrets: ['PPPOE_FIBER_WAN_PASSWORD'],
-    value: { links: [link.value], segments: [], zones: [{ id: 'zon_wan', name: 'WAN' }] },
+    value: { links: [link.value, activePpp], segments: [], zones: [{ id: 'zon_wan', name: 'WAN' }] },
   };
+  expect(existingSecretsOf(snapshot)).toEqual(['PPPOE_FIBER_WAN_PASSWORD_2', 'PPPOE_FIBER_WAN_PASSWORD']);
   const createDraft = {
     ...draftOf(undefined, undefined, undefined, 'pppoe'),
     name: 'Fiber WAN',
@@ -333,7 +352,7 @@ it('allocates unique PPPoE secret names, creates/updates PPPoE links, and maps c
         enabled: true,
         parent: 'lnk_a',
         username: 'user@isp.example',
-        password: { secret: 'PPPOE_FIBER_WAN_PASSWORD_2', set: 'secret-value', expectedVersion: '0' },
+        password: { secret: 'PPPOE_FIBER_WAN_PASSWORD_3', set: 'secret-value', expectedVersion: '0' },
       },
     },
     {
@@ -343,7 +362,7 @@ it('allocates unique PPPoE secret names, creates/updates PPPoE links, and maps c
     },
   ]);
 
-  // Updating an existing PPPoE password uses the stored secret name and expectedVersion.
+  // Existing unassigned PPPoE link defaults IPv4 to 'ppp' when toggling a segment on, and disables stale active RA.
   const existing: SavedObject<SavedLink> = {
     version: '7',
     value: {
@@ -357,6 +376,29 @@ it('allocates unique PPPoE secret names, creates/updates PPPoE links, and maps c
       password: { secret: 'DSL_PASSWORD', isSet: true, version: '3', updatedAt: '2026-01-01T00:00:00Z' },
     },
   };
+  expect(draftOf(existing.value, undefined, undefined).ipv4Mode).toBe('ppp');
+  const pppSegWithRa: SavedObject<Segment> = {
+    version: '4',
+    value: {
+      id: 'seg_p',
+      name: 'DSL',
+      link: 'lnk_p',
+      zone: 'zon_wan',
+      addressing: { ipv4: { mode: 'ppp' }, ipv6: { mode: 'dhcp6', ra: { mode: 'router' } } },
+    },
+  };
+  expect(interfaceOperations(draftOf(existing.value, pppSegWithRa.value, undefined), existing, pppSegWithRa, undefined, snapshot)).toEqual([
+    {
+      op: 'replace',
+      collection: 'segments',
+      id: 'seg_p',
+      expectedVersion: '4',
+      value: {
+        ...pppSegWithRa.value,
+        addressing: { ipv4: { mode: 'ppp' }, ipv6: { mode: 'dhcp6', ra: { mode: 'disabled' } } },
+      },
+    },
+  ]);
   expect(interfaceOperations({ ...draftOf(existing.value, undefined, undefined), assigned: false, pppoePassword: 'rotated' }, existing, undefined, undefined, snapshot)).toEqual([
     {
       op: 'replace',

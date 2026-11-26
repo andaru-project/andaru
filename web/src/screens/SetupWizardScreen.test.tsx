@@ -165,6 +165,9 @@ describe('SetupBootstrapScreen & SetupWizardScreen', () => {
       wanIpv4Mode: 'static',
       wanIpv4Address: '203.0.113.2/30',
       wanIpv4Gateway: '203.0.113.1',
+      wanPppoeUsername: '',
+      wanPppoePassword: '',
+      wanPppoeVlanId: '',
       wanIpv6Mode: 'none',
       wanIpv6Address: '',
       wanIpv6Gateway: '',
@@ -245,16 +248,18 @@ describe('SetupBootstrapScreen & SetupWizardScreen', () => {
       mode: 'delegated', from: '@wan_seg', subnetId: '0', ra: { mode: 'unmanaged' },
     });
 
-    // Untagged PPPoE omits wan_vlan and attaches directly to @wan_port.
-    const untaggedOps = buildSetupOperations({ ...basePppoe, wanPppoeVlanId: '' });
+    // Untagged PPPoE omits wan_vlan, attaches directly to @wan_port, and ignores stale static IPv6 / wanDnsServers.
+    const untaggedOps = buildSetupOperations({ ...basePppoe, wanPppoeVlanId: '', wanIpv6Mode: 'static', wanDnsServers: '1.1.1.1' });
     expect(untaggedOps.find((o) => o.localId === 'wan_vlan')).toBeUndefined();
     expect(untaggedOps.find((o) => o.localId === 'wan_link')?.value?.parent).toBe('@wan_port');
+    expect((untaggedOps.find((o) => o.localId === 'wan_seg')?.value?.addressing as Record<string, unknown>).ipv6).toEqual({ mode: 'none' });
+    expect(untaggedOps.find((o) => o.collection === 'dns')?.value).toEqual({ mode: 'recursive', segments: ['@mgmt_seg'] });
 
-    // Interactive wizard PPPoE flow.
+    // Interactive wizard PPPoE flow (including existing secret collision avoidance, static IPv6 reset, and VLAN ID validation).
     const fetchMock = fetchRoutes({
       '/api/v1/status/system': { version: '0.5.0-a.5', hostname: 'andaru-gw', time: '2026-11-24T17:00:00Z', bootedAt: null },
       '/api/v1/status/links': { items: sampleLinks },
-      '/api/v1/config': { savedVersion: '0', unusedSecrets: [], value: { links: [], segments: [], zones: [], roles: [] } },
+      '/api/v1/config': { savedVersion: '0', unusedSecrets: ['PPPOE_WAN_PASSWORD'], value: { links: [], segments: [], zones: [], roles: [] } },
       'POST /api/v1/config/changes': () => new Response(JSON.stringify({ savedVersion: '1' }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
       '/api/v1/preview/network?savedVersion=1': { savedVersion: '1', resolved: [], findings: [] },
       'POST /api/v1/applies': () => new Response(JSON.stringify({ id: '1', state: 'awaiting_confirmation', savedVersion: '1', deadline: '2026-11-24T17:03:00Z' }), { status: 201, headers: { 'Content-Type': 'application/json' } }),
@@ -266,13 +271,22 @@ describe('SetupBootstrapScreen & SetupWizardScreen', () => {
     await userEvent.click(screen.getByRole('button', { name: /Next: Management LAN/i }));
     await userEvent.click(await screen.findByRole('button', { name: /Next: WAN/i }));
 
+    // Selecting Static IPv6 then switching WAN IPv4 to PPPoE resets IPv6 to None and disables Static IPv6.
+    const staticRadios = screen.getAllByRole('radio', { name: 'Static' });
+    await userEvent.click(staticRadios[1]);
     await userEvent.click(screen.getByRole('radio', { name: 'PPPoE' }));
+    expect(staticRadios[1]).toBeDisabled();
     const nextReview = screen.getByRole('button', { name: /Next: Review & Apply/i });
     expect(nextReview).toBeDisabled();
 
     await userEvent.type(screen.getByLabelText(/^PPPoE username/i), 'fiber@isp.example');
     await userEvent.type(screen.getByLabelText(/^PPPoE password/i), 'super-secret');
-    await userEvent.type(screen.getByLabelText(/^WAN VLAN ID/i), '35');
+    const vlanInput = screen.getByLabelText(/^WAN VLAN ID/i);
+    await userEvent.type(vlanInput, '006');
+    expect(screen.getByText('A VLAN ID is a whole number from 1 to 4094.')).toBeInTheDocument();
+    expect(nextReview).toBeDisabled();
+    await userEvent.clear(vlanInput);
+    await userEvent.type(vlanInput, '35');
     expect(nextReview).toBeEnabled();
 
     await userEvent.click(nextReview);
@@ -286,7 +300,7 @@ describe('SetupBootstrapScreen & SetupWizardScreen', () => {
       kind: 'pppoe',
       parent: '@wan_vlan',
       username: 'fiber@isp.example',
-      password: { secret: 'PPPOE_WAN_PASSWORD', set: 'super-secret', expectedVersion: '0' },
+      password: { secret: 'PPPOE_WAN_PASSWORD_2', set: 'super-secret', expectedVersion: '0' },
     });
   });
 });

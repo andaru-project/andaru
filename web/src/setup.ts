@@ -18,9 +18,9 @@ export interface SetupNetworkDraft {
   wanIpv4Mode: 'dhcp' | 'pppoe' | 'static' | 'none';
   wanIpv4Address: string;
   wanIpv4Gateway: string;
-  wanPppoeUsername?: string;
-  wanPppoePassword?: string;
-  wanPppoeVlanId?: string;
+  wanPppoeUsername: string;
+  wanPppoePassword: string;
+  wanPppoeVlanId: string;
   wanIpv6Mode: 'none' | 'dhcp6' | 'slaac' | 'static';
   wanIpv6Address: string;
   wanIpv6Gateway: string;
@@ -70,12 +70,13 @@ export function buildSetupOperations(
   ];
 
   const hasWan = Boolean(draft.wanMac);
+  const isPppoe = draft.wanIpv4Mode === 'pppoe';
+  const effectiveWanIpv6Mode = isPppoe && draft.wanIpv6Mode === 'static' ? 'none' : draft.wanIpv6Mode;
+  const wanHasStatic = draft.wanIpv4Mode === 'static' || effectiveWanIpv6Mode === 'static';
   const servingDns = draft.mgmtIpv4Mode === 'static' && draft.serveDns;
   const dnsList = parseDnsServers(draft.wanDnsServers);
 
   if (hasWan) {
-    const isPppoe = draft.wanIpv4Mode === 'pppoe';
-    const effectiveWanIpv6Mode = isPppoe && draft.wanIpv6Mode === 'static' ? 'none' : draft.wanIpv6Mode;
     const wanIpv4: Record<string, unknown> =
       isPppoe
         ? { mode: 'ppp' }
@@ -94,20 +95,22 @@ export function buildSetupOperations(
     const wanAddressing: Record<string, unknown> = { ipv4: wanIpv4, ipv6: wanIpv6 };
     // When the DNS service is enabled, Andaru requires upstream DNS servers on dns.upstreams
     // rather than on the WAN segment.
-    if (!servingDns && (draft.wanIpv4Mode === 'static' || effectiveWanIpv6Mode === 'static') && dnsList.length > 0) {
+    if (!servingDns && wanHasStatic && dnsList.length > 0) {
       wanAddressing.dns = { servers: dnsList };
     }
-    ops.push({ op: 'create', collection: 'zones', localId: 'wan_zone', value: { name: 'WAN' } });
-    if (isPppoe) {
-      const wanBaseName = draft.wanName || 'wan0';
-      ops.push({
+    const wanBaseName = draft.wanName || 'wan0';
+    ops.push(
+      { op: 'create', collection: 'zones', localId: 'wan_zone', value: { name: 'WAN' } },
+      {
         op: 'create',
         collection: 'links',
-        localId: 'wan_port',
+        localId: isPppoe ? 'wan_port' : 'wan_link',
         value: { name: wanBaseName, kind: 'ethernet', permanentMac: draft.wanMac.toLowerCase(), mtu: 1500, enabled: true },
-      });
-      const rawVlan = (draft.wanPppoeVlanId ?? '').trim();
-      const vlanId = /^\d+$/.test(rawVlan) ? Number(rawVlan) : 0;
+      },
+    );
+    if (isPppoe) {
+      const rawVlan = draft.wanPppoeVlanId.trim();
+      const vlanId = /^[1-9]\d*$/.test(rawVlan) ? Number(rawVlan) : 0;
       let pppoeParent = '@wan_port';
       if (vlanId >= 1 && vlanId <= 4094) {
         ops.push({
@@ -128,20 +131,13 @@ export function buildSetupOperations(
           parent: pppoeParent,
           mtu: 1492,
           enabled: true,
-          username: (draft.wanPppoeUsername ?? '').trim(),
+          username: draft.wanPppoeUsername.trim(),
           password: {
             secret: nextPppoeSecretName('WAN', versions.existingSecrets),
-            set: draft.wanPppoePassword ?? '',
+            set: draft.wanPppoePassword,
             expectedVersion: '0',
           },
         },
-      });
-    } else {
-      ops.push({
-        op: 'create',
-        collection: 'links',
-        localId: 'wan_link',
-        value: { name: draft.wanName || 'wan0', kind: 'ethernet', permanentMac: draft.wanMac.toLowerCase(), mtu: 1500, enabled: true },
       });
     }
     ops.push({
@@ -191,7 +187,6 @@ export function buildSetupOperations(
     });
   }
   if (servingDns) {
-    const wanHasStatic = draft.wanIpv4Mode === 'static' || (draft.wanIpv4Mode !== 'pppoe' && draft.wanIpv6Mode === 'static');
     const useForward = hasWan && wanHasStatic && dnsList.length > 0;
     ops.push({
       op: 'replace',

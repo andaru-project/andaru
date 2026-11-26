@@ -15,7 +15,7 @@ interface InterfacesScreenProps { api: ApiClient; session: Session; onSaved(): v
 // It keeps the snapshot it opened with, so a poll that fails to read the configuration does not close it.
 interface Editing { link?: SavedObject<SavedLink>; segment?: SavedObject<Segment>; live?: LinkStatus; newKind?: VirtualLinkKind; snapshot: Snapshot }
 
-const unboundLabel: Record<string, string> = { HARDWARE_MISSING: 'Missing', HARDWARE_AMBIGUOUS: 'Unresolved' };
+const unboundLabel: Record<string, string> = { HARDWARE_MISSING: 'Missing', HARDWARE_AMBIGUOUS: 'Unresolved', SECRET_UNRESOLVED: 'Unresolved' };
 
 interface Row { key: string; live?: LinkStatus; saved?: SavedLink; state?: string; finding?: string; conflict?: boolean }
 

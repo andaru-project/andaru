@@ -10,7 +10,7 @@ export function kernelName(link: SavedLink, resolved: Map<string, string>) {
 }
 
 // These findings mean the renderer will not put the link on any device, whatever its name matches.
-const bindingCode = /^(HARDWARE_|NAME_COLLISION$|DEPENDENCY_UNAVAILABLE$)/;
+const bindingCode = /^(HARDWARE_|NAME_COLLISION$|DEPENDENCY_UNAVAILABLE$|SECRET_UNRESOLVED$|UNSUPPORTED_COMBINATION$|INTERFACE_NAME_UNSUPPORTED$)/;
 
 // bindingFindings is the first such finding of each saved link, by the link's place in the configuration.
 export function bindingFindings(preview: Preview) {
