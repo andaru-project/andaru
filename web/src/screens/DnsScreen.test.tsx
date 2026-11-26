@@ -2,8 +2,9 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router';
 import { ApiClient, ApiError } from '../api';
+import { newRowKey } from '../dhcpEdit';
 import {
-  checkDns, dnsErrors, dnsListenAddresses, dnsPayload, isDnsEligibleSegment, newDnsRowKey, servedDnsIpv6,
+  checkDns, dnsErrors, dnsListenAddresses, dnsPayload, isDnsEligibleSegment, pruneDnsDraft, servedDnsIpv6,
 } from '../dnsEdit';
 import { fetchRoutes, jsonResponse } from '../test/fetch';
 import { session } from '../test/fixtures';
@@ -217,35 +218,119 @@ describe('DnsScreen', () => {
     expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Disable DNS…' })).not.toBeInTheDocument();
   });
+
+  it('hides Enable button in off state for read-only accounts', async () => {
+    fetchRoutes({
+      '/api/v1/config': sampleSnapshot,
+      '/api/v1/config/dns': () => jsonResponse(404, { error: { code: 'NOT_FOUND', message: 'Not configured.', details: [] } }),
+    });
+    renderDns(roCaps);
+
+    expect(await screen.findByText('DNS service is off')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Enable DNS service' })).not.toBeInTheDocument();
+  });
+
+  it('renders dangling segment and virtual address IDs for removal and warns when management segment is missing', async () => {
+    const dnsWithDangling: DnsService = {
+      mode: 'recursive',
+      segments: ['seg_lan', 'seg_deleted'],
+      virtualAddresses: ['vip_deleted'],
+      localDomain: 'home.arpa',
+      registerLeases: true,
+    };
+    const noMgmtSnapshot: Snapshot = {
+      ...sampleSnapshot,
+      value: { ...sampleSnapshot.value, management: undefined, virtualAddresses: [], dns: dnsWithDangling },
+    };
+    let putBody: Record<string, unknown> | undefined;
+    fetchRoutes({
+      '/api/v1/config': noMgmtSnapshot,
+      '/api/v1/config/dns': { state: 'saved', savedVersion: '8', version: '4', value: dnsWithDangling },
+      'PUT /api/v1/config/dns': (init) => {
+        putBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return jsonResponse(200, { state: 'saved', savedVersion: '9', version: '5', value: putBody });
+      },
+    });
+    renderDns();
+
+    expect(await screen.findByText('Virtual addresses require a management segment')).toBeInTheDocument();
+    expect(screen.getByText('Missing segment')).toBeInTheDocument();
+    expect(screen.getByText('Missing virtual address')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'seg_deleted' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'vip_deleted' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(putBody).toBeDefined());
+    expect(putBody).toEqual({
+      mode: 'recursive',
+      segments: ['seg_lan'],
+      localDomain: 'home.arpa',
+      registerLeases: true,
+    });
+  });
+
+  it('surfaces cross-collection 422 errors in the top banner and warns on remote version change while dirty', async () => {
+    let version = '4';
+    fetchRoutes({
+      '/api/v1/config': { ...sampleSnapshot, value: { ...sampleSnapshot.value, dns: existingDns } },
+      '/api/v1/config/dns': () => jsonResponse(200, { state: 'saved', savedVersion: '8', version, value: existingDns }),
+      'PUT /api/v1/config/dns': () => jsonResponse(422, {
+        error: {
+          code: 'VALIDATION_FAILED',
+          message: 'Validation failed.',
+          details: [{ path: '/segments/0/addressing/dns', message: 'The DNS service is declared: move these servers to its upstreams.' }],
+        },
+      }),
+    });
+    renderDns();
+
+    const domainInput = await screen.findByLabelText('Local domain');
+    fireEvent.change(domainInput, { target: { value: 'lan.example' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByText('The DNS service is declared: move these servers to its upstreams.')).toBeInTheDocument();
+
+    // Simulate a remote update arriving on Refresh while edits are dirty.
+    version = '5';
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(await screen.findByText('Saved DNS configuration changed elsewhere')).toBeInTheDocument();
+  });
 });
 
 describe('dnsEdit helpers', () => {
-  it('computes eligible segments and listen addresses matching engine rules', () => {
+  it('computes eligible segments and listen addresses strictly matching engine rules', () => {
     expect(isDnsEligibleSegment(wanSeg)).toBe(false);
     expect(dnsListenAddresses(lanSeg)).toEqual(['192.168.10.1', 'fd00:10::1']);
     const delegatedWithUla: Segment = {
       ...guestSeg,
       addressing: {
         ipv4: { mode: 'none' },
-        ipv6: { mode: 'delegated', from: 'seg_wan', subnetId: '2', addresses: ['fe80::1/64', 'fd00:20::1/64'] },
+        ipv6: { mode: 'delegated', from: 'seg_wan', subnetId: '2', addresses: ['fe80::1/64', '::1/128', 'ff02::1/64', 'not-an-ip/64', 'fd00:20::1/64'] },
       },
     };
     expect(servedDnsIpv6(delegatedWithUla)).toBe('fd00:20::1');
     expect(isDnsEligibleSegment(delegatedWithUla)).toBe(true);
   });
 
-  it('validates forward mode requirements and omits upstreams in recursive payload', () => {
+  it('prunes do53 rows with residual tlsName, strips tlsName in do53 payload, and omits upstreams in recursive payload', () => {
     const draft = {
       mode: 'forward' as const,
-      protocol: 'dot' as const,
-      upstreams: [{ key: newDnsRowKey(), address: '1.1.1.1', tlsName: '' }],
+      protocol: 'do53' as const,
+      upstreams: [
+        { key: newRowKey(), address: '', tlsName: 'leftover.example' },
+        { key: newRowKey(), address: '1.1.1.1', tlsName: 'leftover.example' },
+      ],
       segments: ['seg_lan'],
       virtualAddresses: [],
       localDomain: 'home.arpa',
       searchDomains: 'home.arpa, lab.example',
       registerLeases: false,
     };
-    expect(checkDns(draft).get('upstreams/0/tlsName')).toBe('DNS over TLS needs the certificate hostname.');
+    const pruned = pruneDnsDraft(draft);
+    expect(pruned.upstreams).toHaveLength(1);
+    expect(checkDns(pruned).size).toBe(0);
+    expect(dnsPayload(pruned).upstreams).toEqual([{ address: '1.1.1.1', protocol: 'do53' }]);
     expect(dnsPayload({ ...draft, mode: 'recursive' })).toEqual({
       mode: 'recursive',
       segments: ['seg_lan'],
@@ -255,17 +340,21 @@ describe('dnsEdit helpers', () => {
     });
   });
 
-  it('maps server DNS error pointers cleanly', () => {
+  it('maps server DNS error pointers and falls back unrendered paths to top-level banner', () => {
     const err = new ApiError(422, 'VALIDATION_FAILED', 'Validation failed.', [
       { path: '/dns/upstreams/0/tlsName', message: 'Bad TLS name' },
+      { path: '/dns/upstreams/0/protocol', message: 'Mixed protocol' },
       { path: '/dns/searchDomains/2', message: 'Invalid search domain.' },
       { path: '/dns/segments/0', message: 'Expected static segment.' },
       { path: '/dns/virtualAddresses/0', message: 'Unknown virtual address.' },
+      { path: '/segments/0/addressing/dns', message: 'Move per-segment DNS.' },
     ]);
-    const mapped = dnsErrors(err);
+    const mapped = dnsErrors(err, 'dot');
     expect(mapped.get('upstreams/0/tlsName')).toBe('Bad TLS name');
+    expect(mapped.get('upstreams')).toBe('Mixed protocol');
     expect(mapped.get('searchDomains')).toBe('Invalid search domain.');
     expect(mapped.get('segments')).toBe('Expected static segment.');
     expect(mapped.get('virtualAddresses')).toBe('Unknown virtual address.');
+    expect(mapped.get('')).toBe('Move per-segment DNS.');
   });
 });

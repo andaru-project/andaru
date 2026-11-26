@@ -502,20 +502,26 @@ export function leaseMatchesStatic6(lease: Lease6, snapshot?: Snapshot): boolean
     && (lease.type === 'prefix' ? Boolean(s.prefix || s.prefixId) : Boolean(s.address)));
 }
 
-// Extract the low 64-bit interface identifier suffix (e.g. "::1234:5678") from a full IPv6 address.
-export function ipv6SuffixOf(address: string): string {
+// Parse a strict IPv6 address (no IPv4-embedded form, stripping optional /prefix or %zone) into 8 canonical hex groups.
+export function parseIpv6Groups(address: string): string[] | null {
   const host = address.split('/')[0].split('%')[0].trim();
-  if (!host.includes(':') || host.includes('.')) return '';
+  if (!host.includes(':') || host.includes('.')) return null;
   const halves = host.split('::');
-  if (halves.length > 2) return '';
+  if (halves.length > 2) return null;
   const left = halves[0] ? halves[0].split(':') : [];
   const right = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
   const validGroup = (g: string) => /^[0-9a-fA-F]{1,4}$/.test(g);
-  if (!left.every(validGroup) || !right.every(validGroup)) return '';
+  if (!left.every(validGroup) || !right.every(validGroup)) return null;
   const missing = halves.length === 2 ? 8 - left.length - right.length : 0;
-  if (halves.length === 2 ? missing < 1 : left.length !== 8) return '';
+  if (halves.length === 2 ? missing < 1 : left.length !== 8) return null;
   const full = [...left, ...Array<string>(missing).fill('0'), ...right].map((g) => parseInt(g, 16).toString(16));
-  if (full.length !== 8) return '';
+  return full.length === 8 ? full : null;
+}
+
+// Extract the low 64-bit interface identifier suffix (e.g. "::1234:5678") from a full IPv6 address.
+export function ipv6SuffixOf(address: string): string {
+  const full = parseIpv6Groups(address);
+  if (!full) return '';
   const tail = full.slice(4);
   if (tail.every((g) => g === '0')) return '::';
   let i = 0;

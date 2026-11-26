@@ -2,8 +2,9 @@ import { Alert, Anchor, Badge, Button, Checkbox, Fieldset, Group, Loader, Paper,
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
 import { ApiClient, ApiError, saveFailure } from '../api';
+import { newRowKey } from '../dhcpEdit';
 import {
-  checkDns, dnsDraftOf, dnsErrors, dnsListenAddresses, dnsPayload, isDnsEligibleSegment, newDnsRowKey, pruneDnsDraft, segmentsWithHostDns, type DnsDraft,
+  checkDns, dnsDraftOf, dnsErrors, dnsListenAddresses, dnsPayload, isDnsEligibleSegment, pruneDnsDraft, type DnsDraft,
 } from '../dnsEdit';
 import type { DnsMode, DnsService, DnsUpstreamProtocol, SavedObject, Session, Snapshot } from '../types';
 import { useResource } from '../useResource';
@@ -30,6 +31,7 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
 
   const [enabling, setEnabling] = useState(false);
   const [draft, setDraft] = useState<DnsDraft | null>(null);
+  const [baseVersion, setBaseVersion] = useState('0');
   const [dirty, setDirty] = useState(false);
   const [seenData, setSeenData] = useState<{ snapshot: Snapshot; dns: SavedObject<DnsService> | null } | undefined>();
   const [errors, setErrors] = useState(new Map<string, string>());
@@ -43,19 +45,35 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
   const failureRef = useRef<HTMLDivElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const keepRef = useRef<HTMLButtonElement>(null);
+  const disableRef = useRef<HTMLButtonElement>(null);
+  const wasDisabling = useRef(false);
   useEffect(() => { if (failure) failureRef.current?.scrollIntoView?.({ block: 'nearest' }); }, [failure]);
   useEffect(() => {
     if (errorFocusTick === 0) return;
     formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.scrollIntoView?.({ block: 'center' });
     formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]:not(:disabled)')?.focus();
   }, [errorFocusTick]);
-  useEffect(() => { if (disabling) keepRef.current?.focus(); }, [disabling]);
+  useEffect(() => {
+    if (disabling) keepRef.current?.focus();
+    else if (wasDisabling.current) disableRef.current?.focus();
+    wasDisabling.current = disabling;
+  }, [disabling]);
 
   if (resource.data !== seenData) {
     setSeenData(resource.data);
-    if (resource.data && (!dirty || draft === null)) {
-      setDraft(dnsDraftOf(resource.data.dns?.value, resource.data.snapshot));
-      if (resource.data.dns) setEnabling(false);
+    if (resource.data) {
+      const serverVersion = resource.data.dns?.version ?? '0';
+      if (!dirty || draft === null) {
+        setDraft(dnsDraftOf(resource.data.dns?.value, resource.data.snapshot));
+        setBaseVersion(serverVersion);
+        if (resource.data.dns) setEnabling(false);
+      } else if (!resource.data.dns && !enabling) {
+        // Remote delete while editing: clear stale dirty state so the Off card renders cleanly.
+        setDraft(dnsDraftOf(null, resource.data.snapshot));
+        setBaseVersion('0');
+        setDirty(false);
+        setDisabling(false);
+      }
     }
   }
 
@@ -66,16 +84,26 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
   }
 
   const { snapshot, dns } = resource.data;
+  const serverVersion = dns?.version ?? '0';
   const activeDraft = draft ?? dnsDraftOf(dns?.value, snapshot);
+  const remoteChanged = dirty && serverVersion !== baseVersion;
   const segments = snapshot.value.segments;
+  const segmentById = new Map(segments.map((s) => [s.id, s]));
   const zones = new Map(snapshot.value.zones.map((z) => [z.id, z.name]));
   const dhcp4Served = new Set((snapshot.value.dhcp ?? []).filter((d) => !d.dnsServers?.length).map((d) => d.segment));
   const dhcp6Served = new Set((snapshot.value.dhcp6 ?? []).filter((d) => !d.dnsServers?.length).map((d) => d.segment));
-  const hostDnsSegments = segmentsWithHostDns(segments);
+  const hostDnsSegments = segments.filter((s) => Boolean(s.addressing.dns));
+
   const selectedSegmentSet = new Set(activeDraft.segments);
-  const selectableSegments = segments.filter((s) => isDnsEligibleSegment(s) || selectedSegmentSet.has(s.id));
+  const retainedSegmentIds = new Set([...(dns?.value.segments ?? []), ...activeDraft.segments]);
+  const selectableSegments = segments.filter((s) => isDnsEligibleSegment(s) || retainedSegmentIds.has(s.id));
+  const danglingSegmentIds = Array.from(retainedSegmentIds).filter((id) => !segmentById.has(id));
+
   const virtualAddresses = snapshot.value.virtualAddresses ?? [];
-  const showVirtualAddresses = virtualAddresses.length > 0 || activeDraft.virtualAddresses.length > 0;
+  const vipById = new Map(virtualAddresses.map((v) => [v.id, v]));
+  const retainedVipIds = new Set([...(dns?.value.virtualAddresses ?? []), ...activeDraft.virtualAddresses]);
+  const danglingVipIds = Array.from(retainedVipIds).filter((id) => !vipById.has(id));
+  const showVirtualAddresses = virtualAddresses.length > 0 || danglingVipIds.length > 0;
   const needsManagementForVips = activeDraft.virtualAddresses.length > 0 && !snapshot.value.management?.segment;
   const showForm = Boolean(dns) || enabling;
 
@@ -86,6 +114,7 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
 
   function startEnable() {
     setDraft(dnsDraftOf(null, snapshot));
+    setBaseVersion('0');
     setEnabling(true);
     setDirty(false);
     setErrors(new Map());
@@ -95,6 +124,7 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
 
   function resetForm() {
     setDraft(dnsDraftOf(dns?.value, snapshot));
+    setBaseVersion(serverVersion);
     setDirty(false);
     setErrors(new Map());
     setFailure('');
@@ -106,7 +136,7 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
     setDraft((prev) => {
       const base = prev ?? activeDraft;
       const upstreams = mode === 'forward' && base.upstreams.length === 0
-        ? [{ key: newDnsRowKey(), address: '', tlsName: '' }]
+        ? [{ key: newRowKey(), address: '', tlsName: '' }]
         : base.upstreams;
       return { ...base, mode, upstreams };
     });
@@ -152,17 +182,18 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
     setErrors(new Map());
     setFailure('');
     try {
-      await api.saveDns(dnsPayload(pruned), dns?.version ?? '0');
+      const saved = await api.saveDns(dnsPayload(pruned), baseVersion);
       if (!mounted.current) return;
+      setBaseVersion(saved.version);
       setDirty(false);
-      setEnabling(false);
       setDisabling(false);
       onSaved();
-      void resource.reload();
+      await resource.reload();
+      if (mounted.current) setEnabling(false);
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) return onSessionLost();
       if (!mounted.current) return;
-      const fields = dnsErrors(error);
+      const fields = dnsErrors(error, pruned.protocol);
       setErrors(fields);
       if (fields.size > 0) setErrorFocusTick((n) => n + 1);
       setFailure(saveFailure(error, fields, 'DNS service'));
@@ -181,17 +212,17 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
     setErrors(new Map());
     setFailure('');
     try {
-      await api.deleteDns(dns.version);
+      await api.deleteDns(baseVersion);
       if (!mounted.current) return;
       setDirty(false);
       setEnabling(false);
       setDisabling(false);
       onSaved();
-      void resource.reload();
+      await resource.reload();
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) return onSessionLost();
       if (!mounted.current) return;
-      const fields = dnsErrors(error);
+      const fields = dnsErrors(error, activeDraft.protocol);
       setErrors(fields);
       setFailure(saveFailure(error, fields, 'DNS service'));
     } finally {
@@ -219,6 +250,12 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
       </Group>
 
       {resource.error && <Alert color="red" role="alert" title="DNS request failed">{resource.error}</Alert>}
+
+      {remoteChanged && (
+        <Alert color="yellow" role="status" title="Saved DNS configuration changed elsewhere">
+          A newer saved DNS version was loaded while you have unsaved edits. Click Reset to discard your edits and load the latest version.
+        </Alert>
+      )}
 
       {hostDnsSegments.length > 0 && (
         <Alert color="yellow" title="Per-segment DNS servers must be moved first">
@@ -296,7 +333,7 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
                               variant="light"
                               disabled={activeDraft.upstreams.length >= 8}
                               onClick={() => patchDraft({
-                                upstreams: [...activeDraft.upstreams, { key: newDnsRowKey(), address: '', tlsName: '' }],
+                                upstreams: [...activeDraft.upstreams, { key: newRowKey(), address: '', tlsName: '' }],
                               })}
                             >
                               Add upstream
@@ -370,7 +407,7 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
                       Segments where the DNS service listens on port 53. Requires a static IPv4 or static IPv6 address on the segment.
                     </Text>
                     {errors.get('segments') && <Text size="xs" className="error-text">{errors.get('segments')}</Text>}
-                    {selectableSegments.length === 0 ? (
+                    {selectableSegments.length === 0 && danglingSegmentIds.length === 0 ? (
                       <Text size="sm" c="dimmed">
                         No segments have a static IPv4 or IPv6 address. Configure addressing on{' '}
                         <Anchor component={Link} to="/network/interfaces">Interfaces</Anchor>.
@@ -404,6 +441,16 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
                             </Group>
                           );
                         })}
+                        {danglingSegmentIds.map((id) => (
+                          <Group key={id} justify="space-between" align="center" wrap="wrap" className="dhcp-repeat-row">
+                            <Checkbox
+                              checked={selectedSegmentSet.has(id)}
+                              onChange={(e) => toggleSegment(id, e.currentTarget.checked)}
+                              label={<Text fw={600} size="sm" ff="monospace">{id}</Text>}
+                            />
+                            <Text size="xs" className="warning-text">Missing segment</Text>
+                          </Group>
+                        ))}
                       </Stack>
                     )}
 
@@ -420,6 +467,16 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
                               label={<Text fw={600} size="sm">{vip.name}</Text>}
                             />
                             <Text size="xs" c="dimmed" ff="monospace">{vip.address}</Text>
+                          </Group>
+                        ))}
+                        {danglingVipIds.map((id) => (
+                          <Group key={id} justify="space-between" align="center" wrap="wrap" className="dhcp-repeat-row">
+                            <Checkbox
+                              checked={activeDraft.virtualAddresses.includes(id)}
+                              onChange={(e) => toggleVirtualAddress(id, e.currentTarget.checked)}
+                              label={<Text fw={600} size="sm" ff="monospace">{id}</Text>}
+                            />
+                            <Text size="xs" className="warning-text">Missing virtual address</Text>
                           </Group>
                         ))}
                       </Stack>
@@ -467,7 +524,7 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
               <Group justify="space-between">
                 <div>
                   {dns && !disabling && (
-                    <Button variant="subtle" color="red" disabled={busy} onClick={() => void confirmDisable()}>Disable DNS…</Button>
+                    <Button ref={disableRef} variant="subtle" color="red" disabled={busy} onClick={() => void confirmDisable()}>Disable DNS…</Button>
                   )}
                   {disabling && (
                     <Button color="red" loading={busy} onClick={() => void confirmDisable()}>Disable DNS</Button>

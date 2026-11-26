@@ -1,11 +1,6 @@
 import { fieldErrors } from './api';
-import { parseDecimalInt, servedIpv4 } from './dhcpEdit';
+import { newRowKey, parseDecimalInt, parseIpv6Groups, servedIpv4 } from './dhcpEdit';
 import type { DnsMode, DnsService, DnsUpstreamProtocol, Segment, Snapshot } from './types';
-
-let nextDnsRowKey = 1;
-export function newDnsRowKey(): number {
-  return nextDnsRowKey++;
-}
 
 export interface DnsUpstreamDraft {
   key: number;
@@ -33,10 +28,16 @@ export function servedDnsIpv6(segment: Segment): string | null {
   const sorted = [...(segment.addressing.ipv6.addresses ?? [])].sort();
   for (const raw of sorted) {
     const [addr, bitsRaw] = raw.split('/');
-    if (!addr || !bitsRaw || !addr.includes(':') || addr.includes('.')) continue;
+    if (!addr || !bitsRaw || addr.includes('%')) continue;
     const bits = parseDecimalInt(bitsRaw);
     if (!Number.isInteger(bits) || bits < 0 || bits > 128) continue;
-    if (/^fe[89ab][0-9a-f](:|$)/i.test(addr)) continue;
+    const groups = parseIpv6Groups(addr);
+    if (!groups) continue;
+    const first = parseInt(groups[0], 16);
+    // Reject link-local fe80::/10, multicast ff00::/8, unspecified ::, and loopback ::1.
+    if ((first & 0xffc0) === 0xfe80 || (first & 0xff00) === 0xff00) continue;
+    const allZeroPrefix = groups.slice(0, 7).every((g) => g === '0');
+    if (allZeroPrefix && (groups[7] === '0' || groups[7] === '1')) continue;
     return addr;
   }
   return null;
@@ -56,20 +57,17 @@ export function isDnsEligibleSegment(segment: Segment): boolean {
   return dnsListenAddresses(segment).length > 0;
 }
 
-export function segmentsWithHostDns(segments: Segment[]): Segment[] {
-  return segments.filter((s) => Boolean(s.addressing.dns));
-}
-
 export function defaultDnsSegments(snapshot: Snapshot): string[] {
   const zones = new Map(snapshot.value.zones.map((z) => [z.id, z.name.toLowerCase()]));
   return snapshot.value.segments
     .filter((s) => isDnsEligibleSegment(s) && zones.get(s.zone) !== 'wan')
+    .slice(0, 64)
     .map((s) => s.id);
 }
 
 export function dnsDraftOf(dns: DnsService | null | undefined, snapshot: Snapshot): DnsDraft {
   const upstreams = (dns?.upstreams ?? []).map((u) => ({
-    key: newDnsRowKey(),
+    key: newRowKey(),
     address: u.address,
     tlsName: u.tlsName ?? '',
   }));
@@ -85,12 +83,13 @@ export function dnsDraftOf(dns: DnsService | null | undefined, snapshot: Snapsho
   };
 }
 
-const isBlankUpstream = (u: DnsUpstreamDraft) => !u.address.trim() && !u.tlsName.trim();
+const isBlankUpstream = (u: DnsUpstreamDraft, protocol: DnsUpstreamProtocol) => !u.address.trim()
+  && (protocol !== 'dot' || !u.tlsName.trim());
 
 // Drop blank upstream rows in forward mode before validation and submission so indices match server errors 1:1.
 export function pruneDnsDraft(draft: DnsDraft): DnsDraft {
   if (draft.mode !== 'forward') return draft;
-  const nonBlank = draft.upstreams.filter((u) => !isBlankUpstream(u));
+  const nonBlank = draft.upstreams.filter((u) => !isBlankUpstream(u, draft.protocol));
   return {
     ...draft,
     upstreams: nonBlank.length > 0 ? nonBlank : draft.upstreams.slice(0, 1),
@@ -112,6 +111,12 @@ export function checkDns(draft: DnsDraft): Map<string, string> {
       }
     });
   }
+  if (draft.segments.length > 64) {
+    found.set('segments', 'At most 64 segments can be served.');
+  }
+  if (draft.virtualAddresses.length > 64) {
+    found.set('virtualAddresses', 'At most 64 virtual addresses can be selected.');
+  }
   if (draft.localDomain.trim().length > 189) {
     found.set('localDomain', 'Domain name must be 189 characters or fewer.');
   }
@@ -129,7 +134,7 @@ export function dnsPayload(draft: DnsDraft): DnsService {
   };
   if (draft.mode === 'forward') {
     const upstreams = draft.upstreams
-      .filter((u) => !isBlankUpstream(u))
+      .filter((u) => !isBlankUpstream(u, draft.protocol))
       .map((u) => ({
         address: u.address.trim(),
         protocol: draft.protocol,
@@ -146,11 +151,16 @@ export function dnsPayload(draft: DnsDraft): DnsService {
   return value;
 }
 
-// Map engine JSON pointer error paths (e.g. "/dns/upstreams/0/address" or "/upstreams/0/tlsName") to field keys.
-export function dnsErrors(error: unknown): Map<string, string> {
+// Map engine JSON pointer error paths onto rendered field keys; anything unrendered maps to "" for the top banner.
+export function dnsErrors(error: unknown, protocol?: DnsUpstreamProtocol): Map<string, string> {
   return fieldErrors(error, (path) => {
+    if (!path || path === '/dns' || path.startsWith('/segments/')) return '';
     const clean = path.replace(/^\/dns\//, '').replace(/^\//, '');
-    if (/^(searchDomains|segments|virtualAddresses)\/\d+$/.test(clean)) return clean.split('/')[0];
-    return clean;
+    if (/^(searchDomains|segments|virtualAddresses)(\/\d+)?$/.test(clean)) return clean.split('/')[0];
+    if (/^upstreams(\/\d+(\/protocol)?)?$/.test(clean)) return 'upstreams';
+    if (/^upstreams\/\d+\/address$/.test(clean)) return clean;
+    if (/^upstreams\/\d+\/tlsName$/.test(clean)) return protocol === 'do53' ? 'upstreams' : clean;
+    if (clean === 'mode' || clean === 'localDomain' || clean === 'registerLeases') return clean;
+    return '';
   });
 }
