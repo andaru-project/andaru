@@ -378,6 +378,7 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
                   snapshot={saved.snapshot}
                   canWrite={editable}
                   onSaved={() => { onSaved(); void resource.reload(); }}
+                  onRefresh={() => void resource.reload()}
                   onSessionLost={onSessionLost}
                 />
               </>

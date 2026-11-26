@@ -18,10 +18,13 @@ const baseSnapshot: Snapshot = {
     links: [
       { id: 'lnk_lan', name: 'LAN port', kind: 'ethernet', mtu: 1500, enabled: true },
       { id: 'lnk_dmz', name: 'DMZ port', kind: 'ethernet', mtu: 1500, enabled: true },
+      { id: 'lnk_parent_off', name: 'Disabled trunk', kind: 'ethernet', mtu: 1500, enabled: false },
+      { id: 'lnk_vlan_off', name: 'VLAN 20', kind: 'vlan', parent: 'lnk_parent_off', vlanId: 20, mtu: 1500, enabled: true },
     ],
     segments: [
       { id: 'seg_lan', name: 'LAN', link: 'lnk_lan', zone: 'zon_lan', addressing: { ipv4: { mode: 'static', addresses: ['192.168.1.1/24'] }, ipv6: { mode: 'none' } } },
       { id: 'seg_dmz', name: 'DMZ', link: 'lnk_dmz', zone: 'zon_dmz', addressing: { ipv4: { mode: 'dhcp' }, ipv6: { mode: 'none' } } },
+      { id: 'seg_off', name: 'Mgmt VLAN', link: 'lnk_vlan_off', zone: 'zon_lan', addressing: { ipv4: { mode: 'none' }, ipv6: { mode: 'none' } } },
     ],
     zones: [
       { id: 'zon_lan', name: 'LAN', color: 'green' },
@@ -39,7 +42,7 @@ const baseSnapshot: Snapshot = {
 };
 
 describe('ManagementPanel', () => {
-  it('shows configured management segment and allowed sources, opens editor with fresh version, warns on move/DHCP, and saves PUT with If-Match', async () => {
+  it('shows configured management segment and allowed SSH sources, warns on move/DHCP/disabled parent/SSH restriction, and saves PUT with If-Match', async () => {
     const user = userEvent.setup();
     const onSaved = vi.fn();
     let savedBody: unknown;
@@ -74,12 +77,19 @@ describe('ManagementPanel', () => {
     expect(screen.getByText('Admin workstation')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Edit management access' }));
     expect(await screen.findByRole('dialog', { name: 'Edit management access' })).toBeInTheDocument();
+    expect(screen.getByText('Verify SSH access before applying')).toBeInTheDocument();
 
-    // Moving management to DHCP DMZ shows both move and DHCP warnings.
+    // Selecting a VLAN with a disabled parent link shows disabled + unaddressed warnings.
+    await user.click(screen.getByLabelText(/^Management segment/, { selector: 'input' }));
+    await user.click(await screen.findByRole('option', { name: /Mgmt VLAN/ }));
+    expect(await screen.findByText('Selected link is disabled')).toBeInTheDocument();
+    expect(screen.getByText('Unaddressed management segment')).toBeInTheDocument();
+
+    // Moving management to DHCP DMZ shows move and dynamic-address warnings.
     await user.click(screen.getByLabelText(/^Management segment/, { selector: 'input' }));
     await user.click(await screen.findByRole('option', { name: /DMZ/ }));
     expect(await screen.findByText('Moving management segment')).toBeInTheDocument();
-    expect(screen.getByText('DHCP management segment')).toBeInTheDocument();
+    expect(screen.getByText('Dynamic management address')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Save management access' }));
     await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
@@ -87,18 +97,27 @@ describe('ManagementPanel', () => {
     expect(savedBody).toEqual({ segment: 'seg_dmz', allowedSources: ['adr_admin'] });
   });
 
-  it('shows unset management status alert, hides edit button for read-only users, and saves with version 0 when unset', async () => {
+  it('requires explicit segment selection when unset, hides Configure for read-only or empty segments, and omits empty allowedSources', async () => {
     const user = userEvent.setup();
     const onSaved = vi.fn();
     const unsetSnapshot: Snapshot = {
       ...baseSnapshot,
       value: { ...baseSnapshot.value, management: undefined },
     };
+    const emptySegmentsSnapshot: Snapshot = {
+      ...unsetSnapshot,
+      value: { ...unsetSnapshot.value, segments: [] },
+    };
 
     const { rerender } = render(
       <ManagementPanel api={new ApiClient('csrf')} snapshot={unsetSnapshot} canWrite={false} onSaved={onSaved} onSessionLost={vi.fn()} />,
     );
     expect(screen.getByText('No management segment is set')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /management access/i })).not.toBeInTheDocument();
+
+    rerender(
+      <ManagementPanel api={new ApiClient('csrf')} snapshot={emptySegmentsSnapshot} canWrite onSaved={onSaved} onSessionLost={vi.fn()} />,
+    );
     expect(screen.queryByRole('button', { name: /management access/i })).not.toBeInTheDocument();
 
     let ifMatch: string | null = null;
@@ -117,44 +136,84 @@ describe('ManagementPanel', () => {
       <ManagementPanel api={new ApiClient('csrf')} snapshot={unsetSnapshot} canWrite onSaved={onSaved} onSessionLost={vi.fn()} />,
     );
     await user.click(screen.getByRole('button', { name: 'Configure management access' }));
+
+    // Submitting without choosing a segment fails client validation instead of auto-selecting segments[0].
     await user.click(await screen.findByRole('button', { name: 'Save management access' }));
+    expect(await screen.findByText('Choose a management segment.')).toBeInTheDocument();
+    expect(onSaved).not.toHaveBeenCalled();
+
+    await user.click(screen.getByLabelText(/^Management segment/, { selector: 'input' }));
+    await user.click(await screen.findByRole('option', { name: /^LAN \(/ }));
+    await user.click(screen.getByRole('button', { name: 'Save management access' }));
     await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
     expect(ifMatch).toBe('"management.0"');
     expect(savedBody).toEqual({ segment: 'seg_lan' });
   });
 
-  it('shows 422 field errors and triggers onSessionLost on 401', async () => {
+  it('handles unprefixed 422 field errors, 412 conflict refresh, open errors, dangling IDs, and 401 session loss', async () => {
     const user = userEvent.setup();
     const onSessionLost = vi.fn();
-    let mode: 'invalid' | 'unauth' = 'invalid';
+    const onRefresh = vi.fn();
+    let getMode: 'fail' | 'ok' = 'fail';
+    let putMode: 'invalid' | 'conflict' | 'unauth' = 'invalid';
+
+    const danglingSnapshot: Snapshot = {
+      ...baseSnapshot,
+      value: {
+        ...baseSnapshot.value,
+        management: { segment: 'seg_gone', allowedSources: ['adr_gone'] },
+      },
+    };
 
     fetchRoutes({
-      '/api/v1/config/management': () => jsonResponse(200, {
-        state: 'saved',
-        savedVersion: '10',
-        version: '3',
-        value: { segment: 'seg_lan' },
-      }),
+      '/api/v1/config/management': () => (
+        getMode === 'fail'
+          ? jsonResponse(503, { error: { code: 'UNAVAILABLE', message: 'Store unavailable.' } })
+          : jsonResponse(200, { state: 'saved', savedVersion: '10', version: '3', value: { segment: 'seg_lan' } })
+      ),
       '/api/v1/config': () => jsonResponse(200, baseSnapshot),
-      'PUT /api/v1/config/management': () => (
-        mode === 'invalid'
-          ? jsonResponse(422, {
+      'PUT /api/v1/config/management': () => {
+        if (putMode === 'invalid') {
+          return jsonResponse(422, {
             error: {
               code: 'VALIDATION_FAILED',
               message: 'Invalid management config.',
-              details: [{ path: '/management/segment', message: 'Segment must be enabled.' }],
+              details: [
+                { path: '/segment', message: 'Segment must be enabled.' },
+                { path: '/allowedSources/0', message: 'Alias does not exist.' },
+              ],
             },
-          })
-          : jsonResponse(401, { error: { code: 'UNAUTHENTICATED', message: 'Expired.' } })
-      ),
+          });
+        }
+        if (putMode === 'conflict') {
+          return jsonResponse(412, { error: { code: 'CONFLICT', message: 'Version mismatch.' } });
+        }
+        return jsonResponse(401, { error: { code: 'UNAUTHENTICATED', message: 'Expired.' } });
+      },
     });
 
-    render(<ManagementPanel api={new ApiClient('csrf')} snapshot={baseSnapshot} canWrite onSaved={vi.fn()} onSessionLost={onSessionLost} />);
+    render(<ManagementPanel api={new ApiClient('csrf')} snapshot={danglingSnapshot} canWrite onSaved={vi.fn()} onRefresh={onRefresh} onSessionLost={onSessionLost} />);
+    expect(screen.getByText('seg_gone (missing)')).toBeInTheDocument();
+    expect(screen.getByText('adr_gone (missing)')).toBeInTheDocument();
+
+    // Open error surfaces inline.
+    await user.click(screen.getByRole('button', { name: 'Edit management access' }));
+    expect(await screen.findByText('Store unavailable.')).toBeInTheDocument();
+
+    // Retry open -> succeeds, then 422 maps unprefixed /segment and /allowedSources/0.
+    getMode = 'ok';
     await user.click(screen.getByRole('button', { name: 'Edit management access' }));
     await user.click(await screen.findByRole('button', { name: 'Save management access' }));
     expect(await screen.findByText('Segment must be enabled.')).toBeInTheDocument();
+    expect(screen.getByText('Alias does not exist.')).toBeInTheDocument();
 
-    mode = 'unauth';
+    // 412 conflict calls onRefresh so parent snapshot reloads.
+    putMode = 'conflict';
+    await user.click(screen.getByRole('button', { name: 'Save management access' }));
+    await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(1));
+
+    // 401 signs out.
+    putMode = 'unauth';
     await user.click(screen.getByRole('button', { name: 'Save management access' }));
     await waitFor(() => expect(onSessionLost).toHaveBeenCalledTimes(1));
   });

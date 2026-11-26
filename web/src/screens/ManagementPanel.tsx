@@ -11,6 +11,7 @@ interface ManagementPanelProps {
   snapshot: Snapshot;
   canWrite: boolean;
   onSaved(): void;
+  onRefresh?(): void;
   onSessionLost(): void;
 }
 
@@ -23,10 +24,21 @@ function AliasesLink({ children }: { children: string }) {
     : <Anchor href="/firewall/aliases" size="sm">{children}</Anchor>;
 }
 
+function isLinkChainEnabled(linkId: string, linksById: Map<string, SavedLink>): boolean {
+  const seen = new Set<string>();
+  let current = linksById.get(linkId);
+  while (current) {
+    if (!current.enabled) return false;
+    if (seen.has(current.id)) break;
+    seen.add(current.id);
+    current = current.parent ? linksById.get(current.parent) : undefined;
+  }
+  return true;
+}
+
 function segmentSummaryLabel(segment: Segment, zonesById: Map<string, string>, linksById: Map<string, SavedLink>): string {
-  const link = linksById.get(segment.link);
-  const zone = zonesById.get(segment.zone);
-  const parts = [zone, link && !link.enabled ? 'disabled' : undefined].filter(Boolean);
+  const zone = zonesById.get(segment.zone) ?? segment.zone;
+  const parts = [zone, !isLinkChainEnabled(segment.link, linksById) ? 'disabled' : undefined].filter(Boolean);
   return parts.length > 0 ? `${segment.name} (${parts.join(' · ')})` : segment.name;
 }
 
@@ -36,20 +48,31 @@ interface ManagementEditorProps {
   snapshot: Snapshot;
   onClose(): void;
   onSaved(): void;
+  onRefresh?(): void;
+  onAbandoned(message: string): void;
   onSessionLost(): void;
 }
 
-function ManagementEditor({ api, initial, snapshot, onClose, onSaved, onSessionLost }: ManagementEditorProps) {
-  const [segmentId, setSegmentId] = useState(initial?.value.segment ?? snapshot.value.segments[0]?.id ?? '');
-  const [allowedSources, setAllowedSources] = useState<string[]>(initial?.value.allowedSources ?? []);
+function ManagementEditor({ api, initial, snapshot, onClose, onSaved, onRefresh, onAbandoned, onSessionLost }: ManagementEditorProps) {
+  const [segmentId, setSegmentId] = useState(initial?.value.segment ?? '');
+  const [allowedSources, setAllowedSources] = useState<string[]>(() => Array.from(new Set(initial?.value.allowedSources ?? [])));
   const [errors, setErrors] = useState(new Map<string, string>());
+  const [errorFocusTick, setErrorFocusTick] = useState(0);
   const [failure, setFailure] = useState('');
   const [busy, setBusy] = useState(false);
 
   const open = useRef(true);
+  const submitting = useRef(false);
   useEffect(() => { open.current = true; return () => { open.current = false; }; }, []);
   const failureRef = useRef<HTMLDivElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
   useEffect(() => { if (failure) failureRef.current?.scrollIntoView?.({ block: 'nearest' }); }, [failure]);
+  useEffect(() => {
+    if (errorFocusTick === 0) return;
+    const invalid = formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]:not(:disabled)');
+    invalid?.scrollIntoView?.({ block: 'nearest' });
+    invalid?.focus?.();
+  }, [errorFocusTick]);
 
   const zonesById = new Map(snapshot.value.zones.map((z) => [z.id, z.name]));
   const linksById = new Map(snapshot.value.links.map((l) => [l.id, l]));
@@ -63,24 +86,32 @@ function ManagementEditor({ api, initial, snapshot, onClose, onSaved, onSessionL
   const addressOptions = (snapshot.value.aliases?.addresses ?? []).map((a) => ({ value: a.id, label: a.name }));
 
   const selectedSegment = snapshot.value.segments.find((s) => s.id === segmentId);
-  const selectedLink = selectedSegment ? linksById.get(selectedSegment.link) : undefined;
   const movingSegment = Boolean(initial?.value.segment && segmentId && initial.value.segment !== segmentId);
-  const dhcpSegment = selectedSegment?.addressing.ipv4.mode === 'dhcp';
-  const disabledSegment = Boolean(selectedLink && !selectedLink.enabled);
+  const disabledSegment = Boolean(selectedSegment && !isLinkChainEnabled(selectedSegment.link, linksById));
+  const dynamicAddressSegment = Boolean(
+    selectedSegment && (selectedSegment.addressing.ipv4.mode === 'dhcp' || selectedSegment.addressing.ipv4.mode === 'ppp'),
+  );
+  const unaddressedSegment = Boolean(
+    selectedSegment && selectedSegment.addressing.ipv4.mode === 'none' && selectedSegment.addressing.ipv6.mode === 'none',
+  );
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (submitting.current) return;
     if (!segmentId) {
       setErrors(new Map([['segment', 'Choose a management segment.']]));
       setFailure('');
+      setErrorFocusTick((t) => t + 1);
       return;
     }
+    submitting.current = true;
     setBusy(true);
     setErrors(new Map());
     setFailure('');
+    const uniqueSources = Array.from(new Set(allowedSources));
     const payload: ManagementConfig = {
       segment: segmentId,
-      ...(allowedSources.length > 0 ? { allowedSources } : {}),
+      ...(uniqueSources.length > 0 ? { allowedSources: uniqueSources } : {}),
     };
     try {
       await api.saveManagement(payload, initial?.version ?? '0');
@@ -91,11 +122,19 @@ function ManagementEditor({ api, initial, snapshot, onClose, onSaved, onSessionL
         onSessionLost();
         return;
       }
-      if (!open.current) return;
+      if (error instanceof ApiError && error.status === 412) {
+        onRefresh?.();
+      }
+      if (!open.current) {
+        onAbandoned(saveFailure(error, new Map(), 'management access'));
+        return;
+      }
       const fields = fieldErrors(error, fieldPattern);
       setErrors(fields);
       setFailure(saveFailure(error, fields, 'management access'));
+      if (fields.size > 0) setErrorFocusTick((t) => t + 1);
     } finally {
+      submitting.current = false;
       if (open.current) setBusy(false);
     }
   }
@@ -103,24 +142,28 @@ function ManagementEditor({ api, initial, snapshot, onClose, onSaved, onSessionL
   return (
     <Drawer
       opened
-      onClose={onClose}
+      onClose={() => { if (!submitting.current) onClose(); }}
+      closeOnClickOutside={!busy}
+      closeOnEscape={!busy}
       position="right"
       size="md"
       title={initial ? 'Edit management access' : 'Configure management access'}
       lockScroll={false}
-      closeButtonProps={{ 'aria-label': 'Close' }}
+      closeButtonProps={{ 'aria-label': 'Close', disabled: busy }}
     >
-      <form onSubmit={submit} noValidate>
+      <form ref={formRef} onSubmit={submit} noValidate>
         <Stack>
           {failure && <Alert ref={failureRef} color="red" role="alert" title="Management access was not saved">{failure}</Alert>}
           <Fieldset variant="unstyled" disabled={busy}>
             <Stack>
               <Select
+                data-autofocus
                 label="Management segment"
-                description="Andaru enables the firewall, NAT, and IP forwarding only when a management segment is configured."
+                description="Andaru enables the packet filter, NAT, and IP forwarding only when a management segment is configured."
                 placeholder="Choose a segment"
                 required
                 searchable
+                allowDeselect={false}
                 data={segmentOptions}
                 value={segmentId || null}
                 error={errors.get('segment')}
@@ -133,30 +176,40 @@ function ManagementEditor({ api, initial, snapshot, onClose, onSaved, onSessionL
               )}
               {disabledSegment && (
                 <Alert color="orange" role="status" title="Selected link is disabled">
-                  This segment&apos;s interface is currently disabled. Enable the interface before applying, or firewall rules and NAT will remain inactive.
+                  This segment&apos;s interface (or its parent link) is disabled. Applying changes will be refused until the link is enabled.
                 </Alert>
               )}
-              {dhcpSegment && (
-                <Alert color="yellow" role="status" title="DHCP management segment">
-                  A DHCP management segment does not have a fixed address in advance; if DHCP is unavailable you will need local console access.
+              {dynamicAddressSegment && (
+                <Alert color="yellow" role="status" title="Dynamic management address">
+                  A DHCP or PPPoE management segment does not have a fixed address in advance; if upstream addressing fails you will need local console access.
+                </Alert>
+              )}
+              {unaddressedSegment && (
+                <Alert color="orange" role="status" title="Unaddressed management segment">
+                  This segment has neither IPv4 nor IPv6 addressing configured; you may not be able to reach Andaru over it.
                 </Alert>
               )}
               <AliasMultiSelect
                 api={api}
                 aliasType="addresses"
-                label="Allowed sources"
-                description="Restrict SSH and web UI access on the management segment to these address aliases. Leave empty to allow any address on the management segment."
+                label="Allowed SSH sources"
+                description="Restricts the fixed SSH anti-lockout rule on the management segment to these address aliases. Leave empty to allow SSH from any address on the management segment. Web UI access is governed by firewall rules."
                 placeholder="Any address on the management segment"
                 initialOptions={addressOptions}
                 value={allowedSources}
                 error={errors.get('allowedSources')}
                 clearable
                 onSessionLost={onSessionLost}
-                onChange={setAllowedSources}
+                onChange={(next) => setAllowedSources(Array.from(new Set(next)))}
               />
+              {allowedSources.length > 0 && (
+                <Alert color="yellow" role="status" title="Verify SSH access before applying">
+                  Make sure your current client address and IP family are covered by the selected aliases, or SSH anti-lockout access will be dropped on apply.
+                </Alert>
+              )}
               <Text size="xs" c="dimmed">
-                Manage address objects under{' '}
-                <Anchor href="/firewall/aliases" target="_blank" rel="noopener noreferrer" size="xs">Firewall ▸ Aliases</Anchor>.
+                Need a new address alias?{' '}
+                <Anchor href="/firewall/aliases" target="_blank" rel="noopener noreferrer" size="xs">Open Firewall ▸ Aliases in a new tab</Anchor>.
               </Text>
             </Stack>
           </Fieldset>
@@ -170,10 +223,16 @@ function ManagementEditor({ api, initial, snapshot, onClose, onSaved, onSessionL
   );
 }
 
-export function ManagementPanel({ api, snapshot, canWrite, onSaved, onSessionLost }: ManagementPanelProps) {
+export function ManagementPanel({ api, snapshot, canWrite, onSaved, onRefresh, onSessionLost }: ManagementPanelProps) {
   const [opening, setOpening] = useState(false);
   const [openError, setOpenError] = useState('');
   const [editing, setEditing] = useState<{ current: SavedObject<ManagementConfig> | null; freshSnapshot: Snapshot } | null>(null);
+  const openingRef = useRef(false);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const mgmt = snapshot.value.management;
   const segmentsById = new Map(snapshot.value.segments.map((s) => [s.id, s]));
@@ -185,16 +244,29 @@ export function ManagementPanel({ api, snapshot, canWrite, onSaved, onSessionLos
   const sources = mgmt?.allowedSources ?? [];
 
   async function openEditor() {
-    if (opening) return;
+    if (openingRef.current) return;
+    openingRef.current = true;
     setOpening(true);
     setOpenError('');
     try {
-      const [current, freshSnapshot] = await Promise.all([api.management(), api.config()]);
+      let current: SavedObject<ManagementConfig> | null = null;
+      let freshSnapshot!: Snapshot;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        [current, freshSnapshot] = await Promise.all([api.management(), api.config()]);
+        if (JSON.stringify(current?.value ?? null) === JSON.stringify(freshSnapshot.value.management ?? null)) break;
+      }
+      if (!mountedRef.current) return;
       setEditing({ current, freshSnapshot });
     } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        onSessionLost();
+        return;
+      }
+      if (!mountedRef.current) return;
       reportError(error, onSessionLost, setOpenError);
     } finally {
-      setOpening(false);
+      openingRef.current = false;
+      if (mountedRef.current) setOpening(false);
     }
   }
 
@@ -206,7 +278,7 @@ export function ManagementPanel({ api, snapshot, canWrite, onSaved, onSessionLos
         <Group justify="space-between" align="flex-end" wrap="wrap">
           <div>
             <Title order={3} size="h4">Management access</Title>
-            <Text size="sm" c="dimmed">Which segment administers Andaru, and which address aliases may reach SSH and the web UI there.</Text>
+            <Text size="sm" c="dimmed">Which segment administers Andaru, and which address aliases are permitted by the fixed SSH anti-lockout rule.</Text>
           </div>
           {canConfigure && (
             <Button size="xs" variant="default" loading={opening} onClick={() => void openEditor()}>
@@ -215,7 +287,7 @@ export function ManagementPanel({ api, snapshot, canWrite, onSaved, onSessionLos
           )}
         </Group>
 
-        {openError && <Alert color="red" role="alert" title="Could not open management access">{openError}</Alert>}
+        {openError && <Alert color="red" role="alert" title="Management access error" withCloseButton onClose={() => setOpenError('')}>{openError}</Alert>}
 
         {!mgmt ? (
           <Alert color="orange" role="status" title="No management segment is set">
@@ -228,22 +300,22 @@ export function ManagementPanel({ api, snapshot, canWrite, onSaved, onSessionLos
               {mgmtSegment ? (
                 <>
                   <Text size="sm" fw={600}>{mgmtSegment.name}</Text>
-                  {mgmtZone && <ZoneBadge name={mgmtZone.name} color={mgmtZone.color} />}
+                  <ZoneBadge name={mgmtZone?.name ?? mgmtSegment.zone} color={mgmtZone?.color} />
                 </>
               ) : (
-                <Text size="sm" c="red" ff="monospace">{mgmt.segment} (missing)</Text>
+                <Text size="sm" className="error-text" ff="monospace">{mgmt.segment} (missing)</Text>
               )}
             </Group>
             <Group gap="xs" wrap="wrap">
-              <Text size="sm" c="dimmed">Allowed sources:</Text>
+              <Text size="sm" c="dimmed">Allowed SSH sources:</Text>
               {sources.length === 0 ? (
                 <Text size="sm">Any address on the management segment</Text>
               ) : (
                 <>
-                  {sources.map((id) => {
+                  {sources.map((id, idx) => {
                     const name = aliasesById.get(id);
                     return (
-                      <Badge key={id} variant="default" className="alias" tt="none" color={name ? undefined : 'red'}>
+                      <Badge key={`${id}-${idx}`} variant={name ? 'default' : 'light'} color={name ? undefined : 'red'} className={name ? 'alias' : 'alias error-text'} tt="none">
                         {name ?? `${id} (missing)`}
                       </Badge>
                     );
@@ -264,6 +336,8 @@ export function ManagementPanel({ api, snapshot, canWrite, onSaved, onSessionLos
           snapshot={editing.freshSnapshot}
           onClose={() => setEditing(null)}
           onSaved={onSaved}
+          onRefresh={onRefresh}
+          onAbandoned={setOpenError}
           onSessionLost={onSessionLost}
         />
       )}

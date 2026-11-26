@@ -604,12 +604,6 @@ export class ApiClient {
     }, true);
   }
 
-  deleteManagement(version: string) {
-    return this.request('/api/v1/config/management', {
-      method: 'DELETE', headers: { 'If-Match': `"management.${version}"` },
-    }, true);
-  }
-
   async dns(): Promise<SavedObject<DnsService> | null> {
     try {
       return await this.request<SavedObject<DnsService>>('/api/v1/config/dns');
