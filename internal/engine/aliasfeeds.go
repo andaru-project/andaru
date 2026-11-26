@@ -181,6 +181,10 @@ func (f *aliasFeeds) run(ctx context.Context) {
 	defer timer.Stop()
 	var loads sync.WaitGroup
 	defer loads.Wait()
+	// A load owed from before this start, as one that failed before the engine stopped, is run at once.
+	if f.owed.Load() {
+		loads.Go(f.fill)
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -620,10 +624,17 @@ func (f *aliasFeeds) forget(want map[source]wanted) {
 			}
 		}
 		f.forgetCorrupt(id)
-		// Empty, the alias's directory goes too; with any file left, it stays.
-		_ = os.Remove(filepath.Join(aliasfeed.Dir(f.stateDir), id))
-		if !inUse && (stale || f.unsent[id]) && !f.cleared[id] {
+		// Once per start, and again after a clear that did not publish, an alias with no failing source in use is told
+		// it is well: a warning a previous run raised, or whose clear was lost, does not stand. A clear of a warning
+		// that is not raised changes nothing.
+		_ = stale
+		if !inUse && !f.cleared[id] {
 			f.tell(config.DynamicAlias{ID: id}, aliasfeed.State{})
+		}
+		// Empty, the alias's directory goes too, but only once its clear is out: the directory is how a later schedule
+		// finds the alias again.
+		if inUse || f.cleared[id] {
+			_ = os.Remove(filepath.Join(aliasfeed.Dir(f.stateDir), id))
 		}
 	}
 }

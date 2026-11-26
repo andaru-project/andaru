@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -110,6 +111,12 @@ func (b *feedBench) answer(id string, r aliasfeed.Result) aliasfeed.State {
 }
 
 // notices returns the alias notifications published since the last call: the key and the severity, "" for a clear.
+// noticesFor is notices for one alias: each start also tells every alias without a failing source that it is well,
+// which a test about another alias need not see.
+func (b *feedBench) noticesFor(id string) []string {
+	return slices.DeleteFunc(b.notices(), func(n string) bool { return !strings.HasPrefix(n, "alias/"+id+" ") })
+}
+
 func (b *feedBench) notices() []string {
 	var out []string
 	for _, p := range b.sent {
@@ -342,7 +349,7 @@ func TestSavedChangesKeepTheLiveSource(t *testing.T) {
 	if got = b.requests(); !slices.ContainsFunc(got, func(r aliasfeed.Request) bool { return r.Hash == live.hash }) {
 		t.Fatalf("requests %+v", got)
 	}
-	if _, err := os.Stat(aliasfeed.Path(b.f.stateDir, live.alias, live.hash)); err != nil || len(b.notices()) != 0 {
+	if _, err := os.Stat(aliasfeed.Path(b.f.stateDir, live.alias, live.hash)); err != nil {
 		t.Fatalf("live state: %v", err)
 	}
 }
@@ -354,18 +361,18 @@ func TestUnwantedSourcesAreRemovedByAge(t *testing.T) {
 	for range aliasFailures {
 		b.answer(urlAlias, aliasfeed.Result{Request: b.ask(urlAlias), Error: "timeout"})
 	}
-	b.notices()
+	b.noticesFor(urlAlias)
 	gone := b.src(0)
 	b.list, b.live = b.list[1:], b.live[1:]
 	b.f.schedule(t.Context())
 	if _, err := os.Stat(aliasfeed.Path(b.f.stateDir, gone.alias, gone.hash)); err != nil {
 		t.Fatalf("state removed at once: %v", err)
 	}
-	if got := b.notices(); !slices.Equal(got, []string{"alias/" + urlAlias + " "}) {
+	if got := b.noticesFor(urlAlias); !slices.Equal(got, []string{"alias/" + urlAlias + " "}) {
 		t.Fatalf("notices %q", got)
 	}
 	b.f.schedule(t.Context())
-	if got := b.notices(); len(got) != 0 {
+	if got := b.noticesFor(urlAlias); len(got) != 0 {
 		t.Fatalf("cleared again: %q", got)
 	}
 	if _, ok, err := b.f.refresh(t.Context(), urlAlias); ok || err != nil {
@@ -663,7 +670,7 @@ func TestAliasNotificationFollowsTheAlias(t *testing.T) {
 	for range aliasFailures {
 		b.answer(urlAlias, aliasfeed.Result{Request: b.ask(urlAlias), Error: "status 404"})
 	}
-	if got := b.notices(); !slices.Equal(got, warn) {
+	if got := b.noticesFor(urlAlias); !slices.Equal(got, warn) {
 		t.Fatalf("notices %q", got)
 	}
 	// The fixed URL, saved, answers; the live one still fails, and the warning stays.
@@ -671,14 +678,14 @@ func TestAliasNotificationFollowsTheAlias(t *testing.T) {
 	b.f.schedule(t.Context())
 	b.requests()
 	b.answer(urlAlias, aliasfeed.Result{Request: b.ask(urlAlias), OK: true, Members: []string{"192.0.2.1"}})
-	if got := b.notices(); len(got) != 0 {
+	if got := b.noticesFor(urlAlias); len(got) != 0 {
 		t.Fatalf("cleared while the live source fails: %q", got)
 	}
 	// Applied, the old source is no longer wanted: the warning is cleared, once.
 	b.live = slices.Clone(b.list)
 	b.f.schedule(t.Context())
 	b.f.schedule(t.Context())
-	if got := b.notices(); !slices.Equal(got, clear) {
+	if got := b.noticesFor(urlAlias); !slices.Equal(got, clear) {
 		t.Fatalf("notices %q", got)
 	}
 	// The new source fails in turn, then answers: raised, then cleared.
@@ -686,7 +693,7 @@ func TestAliasNotificationFollowsTheAlias(t *testing.T) {
 		b.answer(urlAlias, aliasfeed.Result{Request: b.ask(urlAlias), Error: "timeout"})
 	}
 	b.answer(urlAlias, aliasfeed.Result{Request: b.ask(urlAlias), OK: true})
-	if got := b.notices(); !slices.Equal(got, append(warn, clear...)) {
+	if got := b.noticesFor(urlAlias); !slices.Equal(got, append(warn, clear...)) {
 		t.Fatalf("notices %q", got)
 	}
 }
@@ -853,7 +860,7 @@ func TestTheLiveFilterKeepsItsWarning(t *testing.T) {
 	b.requests()
 	b.answer(urlAlias, aliasfeed.Result{Request: b.ask(urlAlias), OK: true, Members: []string{"192.0.2.1"}})
 	b.f.schedule(t.Context())
-	if got := b.notices(); !slices.Equal(got, []string{"alias/" + urlAlias + " warning"}) {
+	if got := b.noticesFor(urlAlias); !slices.Equal(got, []string{"alias/" + urlAlias + " warning"}) {
 		t.Fatalf("notices %q", got)
 	}
 }
@@ -864,7 +871,7 @@ func TestAnUnsentClearIsSentAgain(t *testing.T) {
 	for range aliasFailures {
 		b.answer(urlAlias, aliasfeed.Result{Request: b.ask(urlAlias), Error: "status 404"})
 	}
-	b.notices()
+	b.noticesFor(urlAlias)
 	publish := b.f.publish
 	b.f.publish = func(topic string, payload []byte, durable bool) error {
 		if topic == "notification/"+aliasSource {
@@ -876,7 +883,7 @@ func TestAnUnsentClearIsSentAgain(t *testing.T) {
 	b.f.publish = publish
 	b.f.schedule(t.Context())
 	b.f.schedule(t.Context())
-	if got := b.notices(); !slices.Equal(got, []string{"alias/" + urlAlias + " "}) {
+	if got := b.noticesFor(urlAlias); !slices.Equal(got, []string{"alias/" + urlAlias + " "}) {
 		t.Fatalf("notices %q", got)
 	}
 }
@@ -896,5 +903,42 @@ func TestAFailedLoadIsTriedAgainLater(t *testing.T) {
 	}
 	if !b.f.owed.Load() {
 		t.Fatal("the failed load is not owed")
+	}
+}
+
+// A load owed from before this start, as one that failed before the engine stopped, runs as soon as the feeds do.
+func TestAnOwedLoadRunsAtStart(t *testing.T) {
+	b := newFeedBench(t)
+	var loads atomic.Int32
+	b.f.realize = func(context.Context) error { loads.Add(1); return nil }
+	b.f.owed.Store(true)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { b.f.run(ctx); close(done) }()
+	deadline := time.After(5 * time.Second)
+	for loads.Load() == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("the owed load did not run")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	cancel()
+	<-done
+}
+
+// A warning a previous run raised, whose clear a restart lost, is cleared by the next start once the alias is well.
+func TestEachStartClearsAWellAlias(t *testing.T) {
+	b := newFeedBench(t)
+	b.answer(urlAlias, aliasfeed.Result{Request: b.ask(urlAlias), OK: true, Members: []string{"192.0.2.1"}})
+	b.notices()
+	b.f.cleared = map[string]bool{} // a new start knows nothing of what it cleared before
+	b.f.schedule(t.Context())
+	if got := b.noticesFor(urlAlias); !slices.Equal(got, []string{"alias/" + urlAlias + " "}) {
+		t.Fatalf("notices %q", got)
+	}
+	b.f.schedule(t.Context())
+	if got := b.noticesFor(urlAlias); len(got) != 0 {
+		t.Fatalf("cleared twice in one start: %q", got)
 	}
 }
