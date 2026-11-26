@@ -999,7 +999,7 @@ export function simulateTrafficFlow(
     let bestUnreachable: { segment: Segment; entryName: string; prefix: ParsedPrefix } | undefined;
     let hasUnresolvedDynamicPool = false;
     if (effectiveDstIp.family === 6) {
-      const dhcp6BySegment = new Map<string, Array<{ name: string; pool?: ParsedPrefix }>>();
+      const dhcp6BySegment = new Map<string, Array<{ name: string; pool?: ParsedPrefix; dynamic?: boolean }>>();
       for (const e of snapshot.dhcp6 ?? []) {
         if (!e.prefixDelegation) continue;
         const seg = segmentsById.get(e.segment);
@@ -1015,6 +1015,8 @@ export function simulateTrafficFlow(
           continue;
         }
         // Dynamically derived pool (subnetId/length): place inside the selected upstream WAN's observed prefix (delegation.go:Place).
+        // Record as dynamic so active leases under a still-valid replaced WAN prefix stay routable during renumbering (pdroutes.go:replacedPools).
+        dhcp6BySegment.set(e.segment, [...(dhcp6BySegment.get(e.segment) ?? []), { name: e.name, dynamic: true }]);
         const wanSeg = seg.addressing.ipv6.mode === 'delegated' && seg.addressing.ipv6.from
           ? segmentsById.get(seg.addressing.ipv6.from)
           : undefined;
@@ -1027,15 +1029,11 @@ export function simulateTrafficFlow(
         const poolLength = e.prefixDelegation.length;
         if (!base || !/^[0-9a-fA-F]+$/.test(rawSubnetId) || poolLength === undefined) {
           hasUnresolvedDynamicPool = true;
-          dhcp6BySegment.set(e.segment, [...(dhcp6BySegment.get(e.segment) ?? []), { name: e.name }]);
           continue;
         }
         const pool = placeIpv6Prefix(base, BigInt(`0x${rawSubnetId}`), poolLength);
-        if (pool) {
-          if (prefixContains(pool, effectiveDstIp) && (!bestUnreachable || pool.bits > bestUnreachable.prefix.bits)) {
-            bestUnreachable = { segment: seg, entryName: e.name, prefix: pool };
-          }
-          dhcp6BySegment.set(e.segment, [...(dhcp6BySegment.get(e.segment) ?? []), { name: e.name, pool }]);
+        if (pool && prefixContains(pool, effectiveDstIp) && (!bestUnreachable || pool.bits > bestUnreachable.prefix.bits)) {
+          bestUnreachable = { segment: seg, entryName: e.name, prefix: pool };
         }
       }
       for (const lease of options.liveLeases6 ?? []) {
@@ -1045,7 +1043,7 @@ export function simulateTrafficFlow(
         if (!seg || !pools) continue;
         const p = parsePrefix(lease.address);
         if (!p || p.family !== 6 || !prefixContains(p, effectiveDstIp)) continue;
-        const servedByPool = pools.some((entry) => !entry.pool || (p.bits >= entry.pool.bits && prefixContains(entry.pool, p.ip)));
+        const servedByPool = pools.some((entry) => entry.dynamic || !entry.pool || (p.bits >= entry.pool.bits && prefixContains(entry.pool, p.ip)));
         if (!servedByPool) continue;
         if (!bestDelegated || p.bits > bestDelegated.prefix.bits) {
           bestDelegated = { segment: seg, prefix: p, hostname: lease.hostname };

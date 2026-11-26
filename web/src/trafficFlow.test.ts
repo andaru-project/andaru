@@ -767,6 +767,40 @@ describe('simulateTrafficFlow', () => {
     );
     expect(dynNoPrefixes.warnings.some((w) => w.includes('Dynamic DHCPv6 prefix-delegation pool prefixes were unavailable'))).toBe(true);
 
+    // During WAN prefix renumbering, active leases under the previous valid WAN prefix still route via the downstream segment (pdroutes.go:replacedPools).
+    const renumberedLease = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_wan', protocol: 'tcp', srcIp: '2001:db8:1::99', dstIp: '2001:db8:aa00:10::99', dstPort: 443 },
+      {
+        ...dynamicPdPool,
+        rules: [
+          ...dynamicPdPool.rules!,
+          { id: 'rul_wan_lan_renum', name: 'Allow WAN to LAN', enabled: true, action: 'accept', from: { zones: ['zon_wan'], addresses: [] }, to: { zones: ['zon_lan'], addresses: [] }, ports: ['svc_https'], log: false },
+        ],
+      },
+      pdLiveLinks,
+      {
+        liveLeases6: [{
+          segment: 'seg_lan',
+          type: 'prefix',
+          address: '2001:db8:aa00:10::/64',
+          duid: '00:01:00:01:aa:bb',
+          hostname: 'downstream-rtr',
+          state: 'active',
+        }],
+        livePrefixes: {
+          wans: [{
+            interface: 'enp1s0',
+            current: { prefix: '2001:db8:bb00::/56' },
+            segments: [{ interface: 'enp2s0', subnetId: '0', prefix: '2001:db8:bb00::/64' }],
+            pools: [{ interface: 'enp2s0', subnetId: '1', prefix: '2001:db8:bb00:10::/60' }],
+            notFitting: [],
+          }],
+        },
+      },
+    );
+    expect(renumberedLease.verdict).toBe('accept');
+    expect(renumberedLease.steps.find((s) => s.stage === 'routing')?.summary).toMatch(/Delegated IPv6 prefix 2001:db8:aa00:10::\/64/);
+
     // IPv6 target.self redirect drops when ingress segment has ipv6.mode === 'none'.
     const ipv6LessDmz: Snapshot['value'] = {
       ...baseConfig,
