@@ -602,3 +602,64 @@ func TestAliasNotificationFollowsTheAlias(t *testing.T) {
 		t.Fatalf("notices %q", got)
 	}
 }
+
+// A result whose source cannot be told, the store failing, is dropped rather than tried again: it would hold up every
+// later result. The next schedule asks again.
+func TestAliasResultIsDroppedWhenTheStoreFails(t *testing.T) {
+	b := newFeedBench(t)
+	req := b.ask(urlAlias)
+	b.f.aliases = func(context.Context) ([]config.DynamicAlias, []config.DynamicAlias, error) {
+		return nil, nil, fmt.Errorf("store fenced")
+	}
+	if s := b.answer(urlAlias, aliasfeed.Result{Request: req, OK: true, Members: []string{"192.0.2.1"}}); len(s.Members) != 0 || len(s.Pending) != 1 {
+		t.Fatalf("state %+v", s)
+	}
+}
+
+// Host names match whatever their case: in a result, in the kept state, and in the status.
+func TestHostNamesMatchWhateverTheirCase(t *testing.T) {
+	b := newFeedBench(t)
+	b.list[1].Names = []string{"A.Example", "b.example"}
+	b.live = slices.Clone(b.list)
+	s := b.answer(hostAlias, aliasfeed.Result{Request: b.ask(hostAlias), OK: true, Names: map[string]aliasfeed.NameResult{
+		"a.example": {Addresses: []string{"192.0.2.1"}}, "B.EXAMPLE": {Addresses: []string{"192.0.2.2"}}}})
+	if !slices.Equal(s.Members, []string{"192.0.2.1", "192.0.2.2"}) || s.Failures != 0 {
+		t.Fatalf("state %+v", s)
+	}
+	// Spelled otherwise, the names are the same source, and keep what they resolved to.
+	b.list[1].Names = []string{"a.example", "B.example"}
+	b.live = slices.Clone(b.list)
+	s = b.answer(hostAlias, aliasfeed.Result{Request: b.ask(hostAlias), Names: map[string]aliasfeed.NameResult{
+		"a.example": {Error: "NXDOMAIN"}, "b.example": {Addresses: []string{"192.0.2.3"}}}})
+	if !slices.Equal(s.Members, []string{"192.0.2.1", "192.0.2.3"}) || s.Names[0].Name != "a.example" || s.Names[1].Name != "B.example" {
+		t.Fatalf("state %+v", s)
+	}
+	// Spelled otherwise again, before any result: the status finds what each name resolved to.
+	b.list[1].Names = []string{"A.EXAMPLE", "b.example"}
+	w := httptest.NewRecorder()
+	aliasesAPI{feeds: b.f}.status(w, httptest.NewRequest(http.MethodGet, aliasesPath+"/status", nil))
+	if !strings.Contains(w.Body.String(), `{"name":"A.EXAMPLE","addresses":["192.0.2.1"],"error":"NXDOMAIN"`) {
+		t.Fatalf("status %s", w.Body)
+	}
+}
+
+// Once the saved source's request is out, a refresh stands even if the live source's cannot be sent.
+func TestAliasRefreshStandsOnceTheSavedSourceIsAsked(t *testing.T) {
+	b := newFeedBench(t)
+	b.list[0].URL = "https://lists.example/v4"
+	sent := 0
+	b.f.publish = func(topic string, payload []byte, durable bool) error {
+		if sent++; sent > 1 {
+			return fmt.Errorf("bus closed")
+		}
+		b.sent = append(b.sent, published{topic, payload, durable})
+		return nil
+	}
+	first, ok, err := b.f.refresh(t.Context(), urlAlias)
+	if got := b.requests(); err != nil || !ok || len(got) != 1 || got[0].ID != first || got[0].Hash != b.src(0).hash {
+		t.Fatalf("requests %+v %v", got, err)
+	}
+	if again, _, err := b.f.refresh(t.Context(), urlAlias); again != first || err != nil || sent != 2 {
+		t.Fatalf("not limited: %s %v", again, err)
+	}
+}

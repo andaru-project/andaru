@@ -281,10 +281,13 @@ func (f *aliasFeeds) refresh(ctx context.Context, id string) (request string, ok
 	}
 	for i, src := range append(saved, live...) {
 		r, err := f.request(src, want[src].alias, f.load(src))
-		if err != nil {
+		switch {
+		case err != nil && i == 0:
 			return "", true, err
-		}
-		if i == 0 {
+		case err != nil:
+			// The saved source's request is out: the refresh stands, and the live one is asked for on its interval.
+			f.log.Warn("ask for an alias's live list", "alias", id, "error", err)
+		case i == 0:
 			request = r
 		}
 	}
@@ -320,7 +323,8 @@ func (f *aliasFeeds) fill() {
 
 // record keeps one result in its source's state. A result for a source no wanted generation names, or for a request
 // its source no longer waits for (answered already, or pushed out), is dropped; one that cannot be decoded too, since
-// trying it again would not change it.
+// trying it again would not change it, and one whose source cannot be told. Only a state that cannot be saved is
+// tried again.
 func (f *aliasFeeds) record(m bus.Message) error {
 	if m.Gap {
 		f.log.Warn("alias results may have been missed; the aliases are fetched again on their interval")
@@ -338,7 +342,9 @@ func (f *aliasFeeds) record(m bus.Message) error {
 	}
 	want, err := f.want(ctx)
 	if err != nil {
-		return err // the store comes back; the result is tried again
+		// Dropped, not tried again, so it holds up no later result: the next schedule asks again.
+		f.log.Warn("alias result dropped: the saved and the live aliases do not read", "alias", id, "error", err)
+		return nil
 	}
 	src := source{id, r.Hash}
 	w, ok := want[src]
@@ -416,11 +422,13 @@ func apply(a config.DynamicAlias, s *aliasfeed.State, r aliasfeed.Result, now ti
 	var failed []string
 	var all []string
 	for i, name := range a.Names {
-		names[i] = aliasfeed.Name{Name: name, Addresses: []string{}}
-		if j := slices.IndexFunc(s.Names, func(n aliasfeed.Name) bool { return n.Name == name }); j >= 0 {
+		// Names match whatever their case, as the source's hash does; the alias's spelling is kept.
+		names[i] = aliasfeed.Name{Addresses: []string{}}
+		if j := slices.IndexFunc(s.Names, func(n aliasfeed.Name) bool { return strings.EqualFold(n.Name, name) }); j >= 0 {
 			names[i] = s.Names[j]
 		}
-		got, ok := r.Names[name]
+		names[i].Name = name
+		got, ok := nameResult(r.Names, name)
 		switch {
 		case !ok:
 			got.Error = "no answer"
@@ -452,6 +460,19 @@ func apply(a config.DynamicAlias, s *aliasfeed.State, r aliasfeed.Result, now ti
 	}
 	s.LastSuccess = at
 	return ""
+}
+
+// nameResult returns a result's outcome for a name, whatever its case.
+func nameResult(results map[string]aliasfeed.NameResult, name string) (aliasfeed.NameResult, bool) {
+	if got, ok := results[name]; ok {
+		return got, true
+	}
+	for n, got := range results {
+		if strings.EqualFold(n, name) {
+			return got, true
+		}
+	}
+	return aliasfeed.NameResult{}, false
 }
 
 // tell raises the alias's notification for a source that keeps failing, or clears it for an empty state.

@@ -99,7 +99,7 @@ func (h aliasesAPI) status(w http.ResponseWriter, r *http.Request) {
 		for _, name := range a.Names {
 			n := nameStatus{Name: name, Addresses: []string{}}
 			for _, kept := range s.Names {
-				if kept.Name == name {
+				if strings.EqualFold(kept.Name, name) {
 					n.Addresses, n.Error, n.ResolvedAt = kept.Addresses, kept.Error, when(kept.ResolvedAt)
 				}
 			}
