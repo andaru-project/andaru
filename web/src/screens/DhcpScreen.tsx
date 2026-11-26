@@ -40,6 +40,59 @@ type UnifiedLease =
   | { key: string; family: 'v4'; lease: Lease4 }
   | { key: string; family: 'v6'; lease: Lease6 };
 
+function DhcpStatusCell({ serving, active, canReadStatus }: { serving: boolean; active: number; canReadStatus: boolean }) {
+  return (
+    <Table.Td data-label="Status">
+      {serving ? (
+        <Group gap="xs">
+          <Badge variant="dot" color="green">Serving</Badge>
+          {canReadStatus && active > 0 && <Text size="xs" c="dimmed" className="tabular">{active} active</Text>}
+        </Group>
+      ) : (
+        <Badge variant="dot" color="gray">Off</Badge>
+      )}
+    </Table.Td>
+  );
+}
+
+function DhcpExtrasCell({ serving, extras }: { serving: boolean; extras: string[] }) {
+  return (
+    <Table.Td data-label="Options & static">
+      {serving ? (
+        extras.length > 0
+          ? <Text size="sm">{extras.join(' · ')}</Text>
+          : <Text size="sm" c="dimmed">Defaults</Text>
+      ) : <Text c="dimmed">—</Text>}
+    </Table.Td>
+  );
+}
+
+function DhcpActionCell({
+  family, segmentName, serving, rowKey, opening, onClick,
+}: {
+  family: 'DHCPv4' | 'DHCPv6';
+  segmentName: string;
+  serving: boolean;
+  rowKey: string;
+  opening: string;
+  onClick(): void;
+}) {
+  return (
+    <Table.Td>
+      <Button
+        size="xs"
+        variant={serving ? 'default' : 'light'}
+        loading={opening === rowKey}
+        disabled={Boolean(opening) && opening !== rowKey}
+        aria-label={serving ? `Edit ${family} on ${segmentName}` : `Enable ${family} on ${segmentName}`}
+        onClick={onClick}
+      >
+        {serving ? 'Edit' : 'Enable'}
+      </Button>
+    </Table.Td>
+  );
+}
+
 export function DhcpScreen({ api, session, onSaved, onSessionLost }: DhcpScreenProps) {
   const canReadConfig = session.capabilities.includes('configuration.read');
   const canWrite = canReadConfig && session.capabilities.includes('configuration.write');
@@ -95,6 +148,9 @@ export function DhcpScreen({ api, session, onSaved, onSessionLost }: DhcpScreenP
   }
 
   const { snapshot, leases, configError, leasesError } = resource.data;
+  const activeTab = (tab === 'servers' && canReadConfig) || (tab === 'leases' && canReadStatus)
+    ? tab
+    : (canReadConfig ? 'servers' : 'leases');
   const segments = snapshot?.value.segments ?? [];
   const zones = new Map((snapshot?.value.zones ?? []).map((z) => [z.id, z.name]));
   const segmentById = new Map(segments.map((s) => [s.id, s]));
@@ -115,11 +171,19 @@ export function DhcpScreen({ api, session, onSaved, onSessionLost }: DhcpScreenP
     setError('');
     try {
       if (family === 'v4') {
-        const saved = existingId ? await api.configObject<Dhcp4Entry>('dhcp', existingId) : undefined;
-        setEditing({ family: 'v4', segment, saved });
+        const [freshSnapshot, saved] = await Promise.all([
+          api.config(),
+          existingId ? api.configObject<Dhcp4Entry>('dhcp', existingId) : Promise.resolve(undefined),
+        ]);
+        const freshSegment = freshSnapshot.value.segments.find((s) => s.id === segment.id) ?? segment;
+        setEditing({ family: 'v4', segment: freshSegment, snapshot: freshSnapshot, saved });
       } else {
-        const saved = existingId ? await api.configObject<Dhcp6Entry>('dhcp6', existingId) : undefined;
-        setEditing({ family: 'v6', segment, saved });
+        const [freshSnapshot, saved] = await Promise.all([
+          api.config(),
+          existingId ? api.configObject<Dhcp6Entry>('dhcp6', existingId) : Promise.resolve(undefined),
+        ]);
+        const freshSegment = freshSnapshot.value.segments.find((s) => s.id === segment.id) ?? segment;
+        setEditing({ family: 'v6', segment: freshSegment, snapshot: freshSnapshot, saved });
       }
     } catch (failure) {
       reportError(failure, onSessionLost, setError);
@@ -155,13 +219,14 @@ export function DhcpScreen({ api, session, onSaved, onSessionLost }: DhcpScreenP
     ...(leases?.v6 ?? []).map((lease): UnifiedLease => ({ key: `v6:${lease.segment}:${lease.type}:${lease.address}:${lease.duid}`, family: 'v6', lease })),
   ];
   const leaseSegmentIds = Array.from(new Set(allLeases.map((item) => item.lease.segment).filter(Boolean)));
+  const activeSegmentFilter = segmentFilter && leaseSegmentIds.includes(segmentFilter) ? segmentFilter : '';
   const searchTerms = search.toLowerCase().split(/\s+/).filter(Boolean);
   const hiddenInactiveCount = allLeases.filter((item) => item.lease.state === 'expired' || item.lease.state === 'released').length;
 
   const filteredLeases = allLeases.filter((item) => {
     if (!showInactive && (item.lease.state === 'expired' || item.lease.state === 'released')) return false;
     if (familyFilter !== 'all' && item.family !== familyFilter) return false;
-    if (segmentFilter && item.lease.segment !== segmentFilter) return false;
+    if (activeSegmentFilter && item.lease.segment !== activeSegmentFilter) return false;
     if (searchTerms.length === 0) return true;
     const segName = segmentById.get(item.lease.segment)?.name ?? item.lease.segment;
     const haystack = [
@@ -191,7 +256,7 @@ export function DhcpScreen({ api, session, onSaved, onSessionLost }: DhcpScreenP
       {configError && <Alert color="red" role="alert" title="The saved configuration could not be read">{configError}</Alert>}
       {leasesError && <Alert color="red" role="alert" title="Live leases could not be read">{leasesError}</Alert>}
 
-      <Tabs value={tab} onChange={(next) => next && setTab(next)}>
+      <Tabs value={activeTab} onChange={(next) => next && setTab(next)}>
         <Tabs.List>
           {canReadConfig && <Tabs.Tab value="servers">Servers</Tabs.Tab>}
           {canReadStatus && (
@@ -233,11 +298,9 @@ export function DhcpScreen({ api, session, onSaved, onSessionLost }: DhcpScreenP
                           {v4Eligible.map((segment) => {
                             const entry = dhcp4BySegment.get(segment.id);
                             const info = servedIpv4(segment);
-                            const active = activeCount4(segment.id);
-                            const extras = entry ? summarizeDhcp4Extras(entry) : [];
-                            const key = `v4:${segment.id}`;
+                            const rowKey = `v4:${segment.id}`;
                             return (
-                              <Table.Tr key={key}>
+                              <Table.Tr key={rowKey}>
                                 <Table.Td data-label="Segment">
                                   <Group gap="xs">
                                     <Text fw={600}>{segment.name}</Text>
@@ -245,16 +308,7 @@ export function DhcpScreen({ api, session, onSaved, onSessionLost }: DhcpScreenP
                                   </Group>
                                   {info && <Text size="sm" c="dimmed" ff="monospace">{info.subnet}</Text>}
                                 </Table.Td>
-                                <Table.Td data-label="Status">
-                                  {entry ? (
-                                    <Group gap="xs">
-                                      <Badge variant="dot" color="green">Serving</Badge>
-                                      {canReadStatus && active > 0 && <Text size="xs" c="dimmed" className="tabular">{active} active</Text>}
-                                    </Group>
-                                  ) : (
-                                    <Badge variant="dot" color="gray">Off</Badge>
-                                  )}
-                                </Table.Td>
+                                <DhcpStatusCell serving={Boolean(entry)} active={activeCount4(segment.id)} canReadStatus={canReadStatus} />
                                 <Table.Td data-label="Ranges & lease">
                                   {entry ? (
                                     <Stack gap={2}>
@@ -269,26 +323,16 @@ export function DhcpScreen({ api, session, onSaved, onSessionLost }: DhcpScreenP
                                     </Stack>
                                   ) : <Text c="dimmed">—</Text>}
                                 </Table.Td>
-                                <Table.Td data-label="Options & static">
-                                  {entry ? (
-                                    extras.length > 0
-                                      ? <Text size="sm">{extras.join(' · ')}</Text>
-                                      : <Text size="sm" c="dimmed">Defaults</Text>
-                                  ) : <Text c="dimmed">—</Text>}
-                                </Table.Td>
+                                <DhcpExtrasCell serving={Boolean(entry)} extras={entry ? summarizeDhcp4Extras(entry) : []} />
                                 {editable && (
-                                  <Table.Td>
-                                    <Button
-                                      size="xs"
-                                      variant={entry ? 'default' : 'light'}
-                                      loading={opening === key}
-                                      disabled={Boolean(opening) && opening !== key}
-                                      aria-label={entry ? `Edit DHCPv4 on ${segment.name}` : `Enable DHCPv4 on ${segment.name}`}
-                                      onClick={() => void openEditor('v4', segment, entry?.id)}
-                                    >
-                                      {entry ? 'Edit' : 'Enable'}
-                                    </Button>
-                                  </Table.Td>
+                                  <DhcpActionCell
+                                    family="DHCPv4"
+                                    segmentName={segment.name}
+                                    serving={Boolean(entry)}
+                                    rowKey={rowKey}
+                                    opening={opening}
+                                    onClick={() => void openEditor('v4', segment, entry?.id)}
+                                  />
                                 )}
                               </Table.Tr>
                             );
@@ -323,11 +367,9 @@ export function DhcpScreen({ api, session, onSaved, onSessionLost }: DhcpScreenP
                             const delegated = isDelegatedIpv6(segment);
                             const raMode = raModeOf(segment);
                             const raUnannounced = Boolean(entry?.ranges?.length) && raMode !== 'managed' && raMode !== 'assisted';
-                            const active = activeCount6(segment.id);
-                            const extras = entry ? summarizeDhcp6Extras(entry) : [];
-                            const key = `v6:${segment.id}`;
+                            const rowKey = `v6:${segment.id}`;
                             return (
-                              <Table.Tr key={key}>
+                              <Table.Tr key={rowKey}>
                                 <Table.Td data-label="Segment">
                                   <Group gap="xs">
                                     <Text fw={600}>{segment.name}</Text>
@@ -340,16 +382,7 @@ export function DhcpScreen({ api, session, onSaved, onSessionLost }: DhcpScreenP
                                     <Text size="xs" className="warning-text">RA mode is {raMode}; clients may not request DHCPv6 addresses.</Text>
                                   )}
                                 </Table.Td>
-                                <Table.Td data-label="Status">
-                                  {entry ? (
-                                    <Group gap="xs">
-                                      <Badge variant="dot" color="green">Serving</Badge>
-                                      {canReadStatus && active > 0 && <Text size="xs" c="dimmed" className="tabular">{active} active</Text>}
-                                    </Group>
-                                  ) : (
-                                    <Badge variant="dot" color="gray">Off</Badge>
-                                  )}
-                                </Table.Td>
+                                <DhcpStatusCell serving={Boolean(entry)} active={activeCount6(segment.id)} canReadStatus={canReadStatus} />
                                 <Table.Td data-label="Ranges & delegation">
                                   {entry ? (
                                     <Stack gap={2}>
@@ -372,26 +405,16 @@ export function DhcpScreen({ api, session, onSaved, onSessionLost }: DhcpScreenP
                                     </Stack>
                                   ) : <Text c="dimmed">—</Text>}
                                 </Table.Td>
-                                <Table.Td data-label="Options & static">
-                                  {entry ? (
-                                    extras.length > 0
-                                      ? <Text size="sm">{extras.join(' · ')}</Text>
-                                      : <Text size="sm" c="dimmed">Defaults</Text>
-                                  ) : <Text c="dimmed">—</Text>}
-                                </Table.Td>
+                                <DhcpExtrasCell serving={Boolean(entry)} extras={entry ? summarizeDhcp6Extras(entry) : []} />
                                 {editable && (
-                                  <Table.Td>
-                                    <Button
-                                      size="xs"
-                                      variant={entry ? 'default' : 'light'}
-                                      loading={opening === key}
-                                      disabled={Boolean(opening) && opening !== key}
-                                      aria-label={entry ? `Edit DHCPv6 on ${segment.name}` : `Enable DHCPv6 on ${segment.name}`}
-                                      onClick={() => void openEditor('v6', segment, entry?.id)}
-                                    >
-                                      {entry ? 'Edit' : 'Enable'}
-                                    </Button>
-                                  </Table.Td>
+                                  <DhcpActionCell
+                                    family="DHCPv6"
+                                    segmentName={segment.name}
+                                    serving={Boolean(entry)}
+                                    rowKey={rowKey}
+                                    opening={opening}
+                                    onClick={() => void openEditor('v6', segment, entry?.id)}
+                                  />
                                 )}
                               </Table.Tr>
                             );
@@ -430,7 +453,7 @@ export function DhcpScreen({ api, session, onSaved, onSessionLost }: DhcpScreenP
                 {leaseSegmentIds.length > 1 && (
                   <NativeSelect
                     label="Segment"
-                    value={segmentFilter}
+                    value={activeSegmentFilter}
                     onChange={(e) => setSegmentFilter(e.currentTarget.value)}
                     data={[
                       { value: '', label: 'All segments' },
@@ -450,7 +473,7 @@ export function DhcpScreen({ api, session, onSaved, onSessionLost }: DhcpScreenP
                 <Alert role="status" title="No matching leases">
                   {allLeases.length === 0
                     ? 'The DHCP servers have not reported any leases yet.'
-                    : !showInactive && hiddenInactiveCount > 0 && searchTerms.length === 0 && familyFilter === 'all' && !segmentFilter
+                    : !showInactive && hiddenInactiveCount > 0 && searchTerms.length === 0 && familyFilter === 'all' && !activeSegmentFilter
                       ? `All ${hiddenInactiveCount} reported ${hiddenInactiveCount === 1 ? 'lease is' : 'leases are'} expired or released.`
                       : 'No lease matches the current filter.'}
                 </Alert>
@@ -551,11 +574,10 @@ export function DhcpScreen({ api, session, onSaved, onSessionLost }: DhcpScreenP
         )}
       </Tabs>
 
-      {editing && snapshot && (
+      {editing && (
         <DhcpEditor
           key={`${editing.family}:${editing.segment.id}:${editing.saved?.version ?? 'new'}`}
           target={editing}
-          snapshot={snapshot}
           onClose={() => setEditing(undefined)}
           onSessionLost={onSessionLost}
           onAbandoned={setSaveError}
@@ -568,6 +590,7 @@ export function DhcpScreen({ api, session, onSaved, onSessionLost }: DhcpScreenP
 
       {promoting && (
         <MakeStaticModal
+          key={`${promoting.family}:${promoting.entryId}:${promoting.lease.address}`}
           api={api}
           target={promoting}
           onClose={() => setPromoting(undefined)}
@@ -576,6 +599,7 @@ export function DhcpScreen({ api, session, onSaved, onSessionLost }: DhcpScreenP
             void resource.reload();
           }}
           onSessionLost={onSessionLost}
+          onAbandoned={setSaveError}
         />
       )}
     </Stack>

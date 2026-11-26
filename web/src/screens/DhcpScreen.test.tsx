@@ -7,6 +7,9 @@ import { session } from '../test/fixtures';
 import { render } from '../test/render';
 import { setTimeZone } from '../timezone';
 import type { Dhcp4Entry, Dhcp6Entry, LeaseView, Snapshot } from '../types';
+import {
+  checkDhcp4, dhcp4Payload, ipv6SuffixOf, leaseMatchesStatic4, leaseMatchesStatic6, newRowKey, suggestedIpv4Range,
+} from '../dhcpEdit';
 import { DhcpScreen } from './DhcpScreen';
 
 const fullCaps = ['configuration.read', 'configuration.write', 'status.read'];
@@ -353,5 +356,192 @@ describe('DhcpScreen', () => {
     expect(await screen.findByText('laptop.home.arpa')).toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: 'Servers' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Make .* static/ })).not.toBeInTheDocument();
+  });
+
+  it('prunes blank custom-option rows on submit so server 422 indices align and disclosure opens', async () => {
+    fetchRoutes({
+      '/api/v1/config/dhcp/dhp_lan': { value: existingDhcp4, version: '9' },
+      '/api/v1/config': sampleSnapshot,
+      '/api/v1/status/leases': sampleLeases,
+      'PUT /api/v1/config/dhcp/dhp_lan': () => jsonResponse(422, {
+        error: {
+          code: 'VALIDATION_FAILED',
+          message: 'Configuration validation failed.',
+          details: [{ path: '/dhcp/0/options/0/code', message: 'Option code 3 is reserved.' }],
+        },
+      }),
+    });
+    renderDhcp();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit DHCPv4 on lan' }));
+    const drawer = await screen.findByRole('dialog', { name: 'DHCPv4: lan' });
+    // Add a blank option row first, then a populated option row with reserved code 3.
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Add option' }));
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Add option' }));
+    const codeInputs = within(drawer).getAllByLabelText('Code');
+    const valueInputs = within(drawer).getAllByLabelText('Value');
+    fireEvent.change(codeInputs[1], { target: { value: '3' } });
+    fireEvent.change(valueInputs[1], { target: { value: 'custom' } });
+
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Save' }));
+    expect(await within(drawer).findByText('Option code 3 is reserved.')).toBeInTheDocument();
+    // Blank row was pruned so the remaining row holds code "3" with the server error attached.
+    expect(within(drawer).getAllByLabelText('Code')).toHaveLength(1);
+    expect(within(drawer).getByLabelText('Code')).toHaveValue('3');
+  });
+
+  it('merges a DHCPv6 prefix lease into an existing static lease sharing the same DUID', async () => {
+    const sharedDuid = '00:01:00:01:aa:bb:cc:dd:ee:02';
+    const dhcp6WithAddr: Dhcp6Entry = {
+      ...existingDhcp6,
+      staticLeases: [{ duid: sharedDuid, address: 'fd00:10::50', hostname: 'subrouter' }],
+    };
+    const snap: Snapshot = {
+      ...sampleSnapshot,
+      value: { ...sampleSnapshot.value, dhcp6: [dhcp6WithAddr] },
+    };
+    const leases: LeaseView = {
+      v4: [],
+      v6: [
+        {
+          segment: 'seg_lan',
+          type: 'address',
+          address: 'fd00:10::50',
+          duid: sharedDuid,
+          hostname: 'subrouter',
+          state: 'active',
+          cltt: '2026-06-01T12:30:00Z',
+          expiresAt: '2026-06-01T14:30:00Z',
+        },
+        {
+          segment: 'seg_lan',
+          type: 'prefix',
+          address: 'fd00:beef:1:100::/56',
+          duid: sharedDuid,
+          hostname: 'subrouter',
+          state: 'active',
+          cltt: '2026-06-01T12:30:00Z',
+          expiresAt: '2026-06-01T14:30:00Z',
+        },
+      ],
+    };
+    let putBody: Record<string, unknown> | undefined;
+    fetchRoutes({
+      '/api/v1/config/dhcp6/dh6_lan': { value: dhcp6WithAddr, version: '4' },
+      '/api/v1/config': snap,
+      '/api/v1/status/leases': leases,
+      'PUT /api/v1/config/dhcp6/dh6_lan': (init) => {
+        putBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return jsonResponse(200, { value: { id: 'dh6_lan', ...putBody }, version: '5' });
+      },
+    });
+    const onSaved = vi.fn();
+    renderDhcp(fullCaps, onSaved);
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Leases (2)' }));
+    // Address lease is already static, but prefix lease with the same DUID still offers Make static.
+    expect(screen.queryByRole('button', { name: 'Make fd00:10::50 static' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Make fd00:beef:1:100::/56 static' }));
+    const modal = await screen.findByRole('dialog', { name: 'Make static lease on lan' });
+    fireEvent.click(within(modal).getByRole('button', { name: 'Save static lease' }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    expect(putBody?.staticLeases).toEqual([
+      { duid: sharedDuid, address: 'fd00:10::50', prefix: 'fd00:beef:1:100::/56', hostname: 'subrouter' },
+    ]);
+  });
+
+  it('recovers when a selected segment filter vanishes on reload', async () => {
+    let call = 0;
+    const twoSegLeases: LeaseView = {
+      v4: [
+        sampleLeases.v4[1],
+        {
+          segment: 'seg_guest',
+          address: '192.168.20.150',
+          mac: 'bc:24:11:26:08:cc',
+          hostname: 'guestphone',
+          state: 'active',
+          cltt: '2026-06-01T12:30:00Z',
+          expiresAt: '2026-06-01T14:30:00Z',
+        },
+      ],
+      v6: [],
+    };
+    const oneSegLeases: LeaseView = { v4: [sampleLeases.v4[1]], v6: [] };
+    fetchRoutes({
+      '/api/v1/config': sampleSnapshot,
+      '/api/v1/status/leases': () => {
+        call += 1;
+        return jsonResponse(200, call === 1 ? twoSegLeases : oneSegLeases);
+      },
+    });
+    renderDhcp();
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Leases (2)' }));
+    fireEvent.change(screen.getByLabelText('Segment'), { target: { value: 'seg_guest' } });
+    expect(screen.getByText('guestphone')).toBeInTheDocument();
+    expect(screen.queryByText('laptop.home.arpa')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(await screen.findByText('laptop.home.arpa')).toBeInTheDocument();
+  });
+});
+
+describe('dhcpEdit helpers', () => {
+  it('avoids secondary own IPv4 addresses when suggesting a dynamic range', () => {
+    const dualIpSeg = {
+      ...lanSeg,
+      addressing: {
+        ...lanSeg.addressing,
+        ipv4: { mode: 'static' as const, addresses: ['192.168.10.1/24', '192.168.10.200/24'] },
+      },
+    };
+    expect(suggestedIpv4Range(dualIpSeg)).toEqual({ first: '192.168.10.2', last: '192.168.10.127' });
+  });
+
+  it('rejects non-decimal option codes and preserves spaces in string option data', () => {
+    const draft = {
+      name: 'lan',
+      leaseTime: '7200',
+      ranges: [{ key: newRowKey(), first: '192.168.10.100', last: '192.168.10.200' }],
+      gateway: '',
+      dnsServers: '',
+      domainName: '',
+      domainSearch: '',
+      ntpServers: '',
+      nextServer: '',
+      bootFileName: '',
+      options: [
+        { key: newRowKey(), code: '0x10', type: 'string' as const, data: ' padded ', alwaysSend: false },
+      ],
+      staticLeases: [],
+    };
+    expect(checkDhcp4(draft).get('options/0/code')).toBe('Code must be 1 to 254.');
+    draft.options[0].code = '252';
+    expect(checkDhcp4(draft).size).toBe(0);
+    expect(dhcp4Payload(draft, 'seg_lan').options).toEqual([{ code: 252, type: 'string', data: ' padded ' }]);
+  });
+
+  it('matches static leases by client identity and IPv6 lease kind', () => {
+    expect(leaseMatchesStatic4(
+      { ...sampleLeases.v4[0], mac: 'aa:bb:cc:dd:ee:ff' },
+      sampleSnapshot,
+    )).toBe(false);
+    const snapWithAddrOnly: Snapshot = {
+      ...sampleSnapshot,
+      value: {
+        ...sampleSnapshot.value,
+        dhcp6: [{ ...existingDhcp6, staticLeases: [{ duid: '00:01:00:01:aa:bb:cc:dd:ee:02', address: 'fd00:10::50' }] }],
+      },
+    };
+    expect(leaseMatchesStatic6(sampleLeases.v6[1], snapWithAddrOnly)).toBe(false);
+  });
+
+  it('extracts IPv6 interface suffixes strictly', () => {
+    expect(ipv6SuffixOf('2001:db8:1:2::1005/128')).toBe('::1005');
+    expect(ipv6SuffixOf('2001:db8:1:2::%eth0')).toBe('::');
+    expect(ipv6SuffixOf('2001:db8::192.0.2.1')).toBe('');
+    expect(ipv6SuffixOf('2001::db8::1')).toBe('');
   });
 });

@@ -2,17 +2,16 @@ import { Alert, Button, Checkbox, Drawer, Fieldset, Group, NativeSelect, Stack, 
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, saveFailure } from '../api';
 import {
-  checkDhcp4, checkDhcp6, dhcp4Payload, dhcp6Payload, dhcpErrors, dhcpOptionTypes, draft4Of, draft6Of, formatLeaseTime, isDelegatedIpv6, optionPlaceholder, raModeOf, servedIpv4, servedIpv6Static, type Dhcp4Draft, type Dhcp6Draft, type DhcpOptionDraft,
+  checkDhcp4, checkDhcp6, dhcp4Payload, dhcp6Payload, dhcpErrors, dhcpOptionTypes, draft4Of, draft6Of, formatLeaseTime, isDelegatedIpv6, newRowKey, optionPlaceholder, parseDecimalInt, pruneDhcp4Draft, pruneDhcp6Draft, raModeOf, servedIpv4, servedIpv6Static, type Dhcp4Draft, type Dhcp6Draft, type DhcpCommonDraft, type DhcpOptionDraft,
 } from '../dhcpEdit';
 import type { Dhcp4Entry, Dhcp6Entry, DhcpOptionType, SavedObject, Segment, Snapshot } from '../types';
 
 export type DhcpEditorTarget =
-  | { family: 'v4'; segment: Segment; saved?: SavedObject<Dhcp4Entry> }
-  | { family: 'v6'; segment: Segment; saved?: SavedObject<Dhcp6Entry> };
+  | { family: 'v4'; segment: Segment; snapshot: Snapshot; saved?: SavedObject<Dhcp4Entry> }
+  | { family: 'v6'; segment: Segment; snapshot: Snapshot; saved?: SavedObject<Dhcp6Entry> };
 
 interface DhcpEditorProps {
   target: DhcpEditorTarget;
-  snapshot: Snapshot;
   onClose(): void;
   onSessionLost(): void;
   onAbandoned(message: string): void;
@@ -23,6 +22,13 @@ interface DhcpEditorProps {
 }
 
 const mono = { input: 'mono-input' };
+
+function hasAdvancedErrors(errors: Map<string, string>): boolean {
+  for (const key of errors.keys()) {
+    if (key === 'nextServer' || key === 'bootFileName' || key.startsWith('options/')) return true;
+  }
+  return false;
+}
 
 function CustomOptionsSection({
   family,
@@ -56,14 +62,14 @@ function CustomOptionsSection({
         <Button
           size="compact-xs"
           variant="light"
-          onClick={() => onChange([...options, { code: '', type: 'string', data: '', alwaysSend: false }])}
+          onClick={() => onChange([...options, { key: newRowKey(), code: '', type: 'string', data: '', alwaysSend: false }])}
         >
           Add option
         </Button>
       </Group>
       {options.length === 0 && <Text size="xs" c="dimmed">No custom options configured.</Text>}
       {options.map((opt, i) => (
-        <Stack key={i} gap="xs" className="dhcp-repeat-row">
+        <Stack key={opt.key} gap="xs" className="dhcp-repeat-row">
           <Group align="flex-start" gap="xs" wrap="wrap">
             <TextInput
               w="5.5rem"
@@ -127,15 +133,27 @@ function CustomOptionsSection({
 }
 
 export function DhcpEditor({
-  target, snapshot, onClose, onSessionLost, onAbandoned, onSaveV4, onDeleteV4, onSaveV6, onDeleteV6,
+  target, onClose, onSessionLost, onAbandoned, onSaveV4, onDeleteV4, onSaveV6, onDeleteV6,
 }: DhcpEditorProps) {
+  const { snapshot } = target;
   const isV4 = target.family === 'v4';
   const delegated = !isV4 && isDelegatedIpv6(target.segment);
   const [draft4, setDraft4] = useState<Dhcp4Draft>(() => draft4Of(isV4 ? target.saved?.value : undefined, target.segment));
   const [draft6, setDraft6] = useState<Dhcp6Draft>(() => draft6Of(!isV4 ? target.saved?.value : undefined, target.segment));
   const set4 = (patch: Partial<Dhcp4Draft>) => setDraft4((d) => ({ ...d, ...patch }));
   const set6 = (patch: Partial<Dhcp6Draft>) => setDraft6((d) => ({ ...d, ...patch }));
+  const common: DhcpCommonDraft = isV4 ? draft4 : draft6;
+  const setCommon = (patch: Partial<DhcpCommonDraft>) => (isV4 ? set4(patch) : set6(patch));
+  const updateCommon = (fn: (d: DhcpCommonDraft) => Partial<DhcpCommonDraft>) => {
+    if (isV4) setDraft4((d) => ({ ...d, ...fn(d) }));
+    else setDraft6((d) => ({ ...d, ...fn(d) }));
+  };
+
+  const [advancedOpen, setAdvancedOpen] = useState(() => (isV4
+    ? Boolean(draft4.nextServer || draft4.bootFileName || draft4.options.length > 0)
+    : draft6.options.length > 0));
   const [errors, setErrors] = useState(new Map<string, string>());
+  const [errorFocusTick, setErrorFocusTick] = useState(0);
   const [failure, setFailure] = useState('');
   const [busy, setBusy] = useState(false);
   const [disabling, setDisabling] = useState(false);
@@ -144,12 +162,14 @@ export function DhcpEditor({
   useEffect(() => { open.current = true; return () => { open.current = false; }; }, []);
   const failureRef = useRef<HTMLDivElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
+  const keepRef = useRef<HTMLButtonElement>(null);
   useEffect(() => { if (failure) failureRef.current?.scrollIntoView?.({ block: 'nearest' }); }, [failure]);
   useEffect(() => {
-    if (errors.size === 0) return;
+    if (errorFocusTick === 0) return;
     formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.scrollIntoView?.({ block: 'center' });
     formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]:not(:disabled)')?.focus();
-  }, [errors]);
+  }, [errorFocusTick]);
+  useEffect(() => { if (disabling) keepRef.current?.focus(); }, [disabling]);
 
   const dnsServes = Boolean(snapshot.value.dns?.segments.includes(target.segment.id));
   const localDomain = snapshot.value.dns?.localDomain || 'home.arpa';
@@ -158,8 +178,12 @@ export function DhcpEditor({
   const raMode = !isV4 ? raModeOf(target.segment) : 'disabled';
   const showRaWarning = !isV4 && draft6.ranges.some((r) => r.first.trim() || r.last.trim()) && raMode !== 'managed' && raMode !== 'assisted';
   const showNoDnsWarning = isV4 && !dnsServes && !draft4.dnsServers.trim();
-  const hasAdvancedV4 = Boolean(draft4.nextServer || draft4.bootFileName || draft4.options.length > 0);
-  const hasAdvancedV6 = draft6.options.length > 0;
+
+  function showValidationErrors(fields: Map<string, string>) {
+    setErrors(fields);
+    if (hasAdvancedErrors(fields)) setAdvancedOpen(true);
+    if (fields.size > 0) setErrorFocusTick((n) => n + 1);
+  }
 
   async function runSave(action: () => Promise<void>) {
     setBusy(true);
@@ -173,32 +197,36 @@ export function DhcpEditor({
       const noun = isV4 ? 'DHCPv4 server' : 'DHCPv6 server';
       if (!open.current) return onAbandoned(saveFailure(error, new Map(), noun));
       const fields = dhcpErrors(error);
-      setErrors(fields);
+      showValidationErrors(fields);
       setFailure(saveFailure(error, fields, noun));
     } finally {
-      setBusy(false);
+      if (open.current) setBusy(false);
     }
   }
 
   function submit(event: FormEvent) {
     event.preventDefault();
     if (isV4) {
-      const found = checkDhcp4(draft4);
+      const pruned = pruneDhcp4Draft(draft4);
+      setDraft4(pruned);
+      const found = checkDhcp4(pruned);
       if (found.size > 0) {
-        setErrors(found);
+        showValidationErrors(found);
         setFailure('');
         return;
       }
-      const payload = dhcp4Payload(draft4, target.segment.id, target.saved?.value);
+      const payload = dhcp4Payload(pruned, target.segment.id, target.saved?.value);
       void runSave(() => onSaveV4(payload, target.saved));
     } else {
-      const found = checkDhcp6(draft6, delegated);
+      const pruned = pruneDhcp6Draft(draft6);
+      setDraft6(pruned);
+      const found = checkDhcp6(pruned, delegated);
       if (found.size > 0) {
-        setErrors(found);
+        showValidationErrors(found);
         setFailure('');
         return;
       }
-      const payload = dhcp6Payload(draft6, target.segment.id, delegated, target.saved?.value);
+      const payload = dhcp6Payload(pruned, target.segment.id, delegated, target.saved?.value);
       void runSave(() => onSaveV6(payload, target.saved));
     }
   }
@@ -220,7 +248,10 @@ export function DhcpEditor({
       ? `Delegated IPv6 prefix · subnet ID ${target.segment.addressing.ipv6.subnetId ?? '0'}`
       : (v6Static ? `Static IPv6 ${v6Static.prefix}` : 'Static IPv6 segment');
 
-  const leasePreview = formatLeaseTime(Number(isV4 ? draft4.leaseTime : draft6.leaseTime));
+  const leaseNum = parseDecimalInt(common.leaseTime);
+  const leasePreview = Number.isInteger(leaseNum) && leaseNum >= 300 && leaseNum <= 604800
+    ? `=${formatLeaseTime(leaseNum)}`
+    : '300–604800';
 
   return (
     <Drawer opened onClose={onClose} position="right" size="lg" title={title} lockScroll={false} closeButtonProps={{ 'aria-label': 'Close' }}>
@@ -253,28 +284,20 @@ export function DhcpEditor({
                       label="Name"
                       maxLength={128}
                       required
-                      value={isV4 ? draft4.name : draft6.name}
+                      value={common.name}
                       error={errors.get('name')}
-                      onChange={(e) => {
-                        const name = e.currentTarget.value;
-                        if (isV4) set4({ name });
-                        else set6({ name });
-                      }}
+                      onChange={(e) => setCommon({ name: e.currentTarget.value })}
                     />
                     <TextInput
                       w="10rem"
                       classNames={mono}
                       label="Lease time (s)"
-                      description={Number.isInteger(Number(isV4 ? draft4.leaseTime : draft6.leaseTime)) && Number(isV4 ? draft4.leaseTime : draft6.leaseTime) >= 300 ? `=${leasePreview}` : '300–604800'}
+                      description={leasePreview}
                       inputMode="numeric"
                       required
-                      value={isV4 ? draft4.leaseTime : draft6.leaseTime}
+                      value={common.leaseTime}
                       error={errors.get('leaseTime')}
-                      onChange={(e) => {
-                        const leaseTime = e.currentTarget.value;
-                        if (isV4) set4({ leaseTime });
-                        else set6({ leaseTime });
-                      }}
+                      onChange={(e) => setCommon({ leaseTime: e.currentTarget.value })}
                     />
                   </Group>
 
@@ -286,19 +309,17 @@ export function DhcpEditor({
                     <Button
                       size="compact-xs"
                       variant="light"
-                      onClick={() => (isV4
-                        ? setDraft4((d) => ({ ...d, ranges: [...d.ranges, { first: '', last: '' }] }))
-                        : setDraft6((d) => ({ ...d, ranges: [...d.ranges, { first: '', last: '' }] })))}
+                      onClick={() => updateCommon((d) => ({ ranges: [...d.ranges, { key: newRowKey(), first: '', last: '' }] }))}
                     >
                       Add range
                     </Button>
                   </Group>
                   {errors.get('ranges') && <Text size="xs" className="error-text">{errors.get('ranges')}</Text>}
-                  {(isV4 ? draft4.ranges : draft6.ranges).length === 0 && !isV4 && (
+                  {common.ranges.length === 0 && !isV4 && (
                     <Text size="xs" c="dimmed">No dynamic ranges. DHCPv6 will serve stateless options or prefix delegation only.</Text>
                   )}
-                  {(isV4 ? draft4.ranges : draft6.ranges).map((rg, i) => (
-                    <Stack key={i} gap={4}>
+                  {common.ranges.map((rg, i) => (
+                    <Stack key={rg.key} gap={4}>
                       <Group align="flex-start" gap="xs" wrap="wrap">
                         <TextInput
                           className="grow"
@@ -310,8 +331,7 @@ export function DhcpEditor({
                           error={errors.get(`ranges/${i}/first`) ?? (errors.get(`ranges/${i}`) ? ' ' : undefined)}
                           onChange={(e) => {
                             const first = e.currentTarget.value;
-                            if (isV4) setDraft4((d) => ({ ...d, ranges: d.ranges.map((item, idx) => (idx === i ? { ...item, first } : item)) }));
-                            else setDraft6((d) => ({ ...d, ranges: d.ranges.map((item, idx) => (idx === i ? { ...item, first } : item)) }));
+                            updateCommon((d) => ({ ranges: d.ranges.map((item, idx) => (idx === i ? { ...item, first } : item)) }));
                           }}
                         />
                         <TextInput
@@ -324,20 +344,17 @@ export function DhcpEditor({
                           error={errors.get(`ranges/${i}/last`) ?? (errors.get(`ranges/${i}`) ? ' ' : undefined)}
                           onChange={(e) => {
                             const last = e.currentTarget.value;
-                            if (isV4) setDraft4((d) => ({ ...d, ranges: d.ranges.map((item, idx) => (idx === i ? { ...item, last } : item)) }));
-                            else setDraft6((d) => ({ ...d, ranges: d.ranges.map((item, idx) => (idx === i ? { ...item, last } : item)) }));
+                            updateCommon((d) => ({ ranges: d.ranges.map((item, idx) => (idx === i ? { ...item, last } : item)) }));
                           }}
                         />
-                        {(!isV4 || draft4.ranges.length > 1) && (
+                        {(!isV4 || common.ranges.length > 1) && (
                           <Button
                             size="compact-xs"
                             variant="subtle"
                             color="red"
                             mt={i === 0 ? 28 : 6}
                             aria-label={`Remove range ${i + 1}`}
-                            onClick={() => (isV4
-                              ? setDraft4((d) => ({ ...d, ranges: d.ranges.filter((_, idx) => idx !== i) }))
-                              : setDraft6((d) => ({ ...d, ranges: d.ranges.filter((_, idx) => idx !== i) })))}
+                            onClick={() => updateCommon((d) => ({ ranges: d.ranges.filter((_, idx) => idx !== i) }))}
                           >
                             Remove
                           </Button>
@@ -369,13 +386,9 @@ export function DhcpEditor({
                       ? 'Leave blank to hand out Andaru DNS on this segment. Separate multiple addresses with commas.'
                       : 'Comma-separated IP addresses.'}
                     placeholder={isV4 ? (dnsServes && v4Info ? v4Info.own : '192.168.1.1, 1.1.1.1') : (dnsServes && v6Static ? v6Static.own : 'fd00:1::1')}
-                    value={isV4 ? draft4.dnsServers : draft6.dnsServers}
+                    value={common.dnsServers}
                     error={errors.get('dnsServers')}
-                    onChange={(e) => {
-                      const dnsServers = e.currentTarget.value;
-                      if (isV4) set4({ dnsServers });
-                      else set6({ dnsServers });
-                    }}
+                    onChange={(e) => setCommon({ dnsServers: e.currentTarget.value })}
                   />
                   {isV4 && (
                     <TextInput
@@ -393,26 +406,18 @@ export function DhcpEditor({
                       ? 'Optional DHCP option 119 DNS search list, comma-separated.'
                       : `Leave blank to use ${localDomain} and global DNS search domains.`}
                     placeholder="home.arpa, lab.example"
-                    value={isV4 ? draft4.domainSearch : draft6.domainSearch}
+                    value={common.domainSearch}
                     error={errors.get('domainSearch')}
-                    onChange={(e) => {
-                      const domainSearch = e.currentTarget.value;
-                      if (isV4) set4({ domainSearch });
-                      else set6({ domainSearch });
-                    }}
+                    onChange={(e) => setCommon({ domainSearch: e.currentTarget.value })}
                   />
                   <TextInput
                     classNames={mono}
                     label={isV4 ? 'NTP servers' : 'SNTP servers'}
                     description="Optional comma-separated time server addresses."
                     placeholder={isV4 ? '192.168.1.1, 192.168.1.2' : 'fd00:1::123'}
-                    value={isV4 ? draft4.ntpServers : draft6.ntpServers}
+                    value={common.ntpServers}
                     error={errors.get('ntpServers')}
-                    onChange={(e) => {
-                      const ntpServers = e.currentTarget.value;
-                      if (isV4) set4({ ntpServers });
-                      else set6({ ntpServers });
-                    }}
+                    onChange={(e) => setCommon({ ntpServers: e.currentTarget.value })}
                   />
                 </Stack>
               </Fieldset>
@@ -516,8 +521,8 @@ export function DhcpEditor({
                       size="compact-xs"
                       variant="light"
                       onClick={() => (isV4
-                        ? setDraft4((d) => ({ ...d, staticLeases: [...d.staticLeases, { mac: '', address: '', hostname: '' }] }))
-                        : setDraft6((d) => ({ ...d, staticLeases: [...d.staticLeases, { duid: '', address: '', prefix: '', prefixId: '', hostname: '' }] })))}
+                        ? setDraft4((d) => ({ ...d, staticLeases: [...d.staticLeases, { key: newRowKey(), mac: '', address: '', hostname: '' }] }))
+                        : setDraft6((d) => ({ ...d, staticLeases: [...d.staticLeases, { key: newRowKey(), duid: '', address: '', prefix: '', prefixId: '', hostname: '' }] })))}
                     >
                       Add static lease
                     </Button>
@@ -527,7 +532,7 @@ export function DhcpEditor({
                   )}
                   {isV4
                     ? draft4.staticLeases.map((lease, i) => (
-                      <Group key={i} align="flex-start" gap="xs" wrap="wrap" className="dhcp-repeat-row">
+                      <Group key={lease.key} align="flex-start" gap="xs" wrap="wrap" className="dhcp-repeat-row">
                         <TextInput
                           className="grow"
                           classNames={mono}
@@ -576,7 +581,7 @@ export function DhcpEditor({
                       </Group>
                     ))
                     : draft6.staticLeases.map((lease, i) => (
-                      <Stack key={i} gap="xs" className="dhcp-repeat-row">
+                      <Stack key={lease.key} gap="xs" className="dhcp-repeat-row">
                         <TextInput
                           classNames={mono}
                           label="Client DUID"
@@ -657,7 +662,11 @@ export function DhcpEditor({
                 </Stack>
               </Fieldset>
 
-              <details className="dhcp-disclosure" open={isV4 ? hasAdvancedV4 : hasAdvancedV6}>
+              <details
+                className="dhcp-disclosure"
+                open={advancedOpen}
+                onToggle={(e) => setAdvancedOpen(e.currentTarget.open)}
+              >
                 <summary>{isV4 ? 'Boot / PXE & custom options' : 'Custom DHCPv6 options'}</summary>
                 <Stack gap="sm" mt="xs">
                   {isV4 && (
@@ -685,11 +694,9 @@ export function DhcpEditor({
                   )}
                   <CustomOptionsSection
                     family={target.family}
-                    options={isV4 ? draft4.options : draft6.options}
+                    options={common.options}
                     errors={errors}
-                    onChange={(next) => (isV4
-                      ? setDraft4((d) => ({ ...d, options: next }))
-                      : setDraft6((d) => ({ ...d, options: next })))}
+                    onChange={(options) => setCommon({ options })}
                   />
                 </Stack>
               </details>
@@ -712,7 +719,7 @@ export function DhcpEditor({
               )}
             </div>
             <Group gap="xs">
-              <Button variant="default" disabled={busy} onClick={() => (disabling ? setDisabling(false) : onClose())}>
+              <Button ref={keepRef} variant="default" disabled={busy} onClick={() => (disabling ? setDisabling(false) : onClose())}>
                 {disabling ? 'Keep server' : 'Cancel'}
               </Button>
               {!disabling && (

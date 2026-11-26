@@ -1,7 +1,7 @@
 import { Alert, Button, Group, Modal, Stack, Text, TextInput } from '@mantine/core';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, saveFailure, type ApiClient } from '../api';
-import { dhcpErrors, isDelegatedIpv6 } from '../dhcpEdit';
+import { dhcpErrors, ipv6SuffixOf, isDelegatedIpv6 } from '../dhcpEdit';
 import type { Dhcp4Entry, Dhcp6Entry, Lease4, Lease6, Segment } from '../types';
 
 export type MakeStaticTarget =
@@ -14,6 +14,7 @@ interface MakeStaticModalProps {
   onClose(): void;
   onSaved(): void;
   onSessionLost(): void;
+  onAbandoned(message: string): void;
 }
 
 const mono = { input: 'mono-input' };
@@ -24,25 +25,7 @@ function cleanLabel(hostname: string): string {
   return /^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(first) ? first : '';
 }
 
-// Extract the low 64-bit interface identifier suffix (e.g. "::1234:5678") from a full IPv6 address.
-function ipv6SuffixOf(address: string): string {
-  const host = address.split('/')[0];
-  if (!host.includes(':')) return '';
-  const halves = host.split('::');
-  if (halves.length > 2) return '';
-  const left = halves[0] ? halves[0].split(':') : [];
-  const right = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
-  const missing = 8 - left.length - right.length;
-  if (missing < 0) return '';
-  const full = [...left, ...Array<string>(missing).fill('0'), ...right].map((g) => parseInt(g || '0', 16).toString(16));
-  if (full.length !== 8 || full.some((g) => g === 'NaN')) return '';
-  const tail = full.slice(4);
-  let i = 0;
-  while (i < tail.length - 1 && tail[i] === '0') i++;
-  return `::${tail.slice(i).join(':')}`;
-}
-
-export function MakeStaticModal({ api, target, onClose, onSaved, onSessionLost }: MakeStaticModalProps) {
+export function MakeStaticModal({ api, target, onClose, onSaved, onSessionLost, onAbandoned }: MakeStaticModalProps) {
   const isV4 = target.family === 'v4';
   const delegated = !isV4 && isDelegatedIpv6(target.segment);
   const isPrefix6 = !isV4 && target.lease.type === 'prefix';
@@ -60,13 +43,17 @@ export function MakeStaticModal({ api, target, onClose, onSaved, onSessionLost }
   const [failure, setFailure] = useState('');
   const [busy, setBusy] = useState(false);
 
+  const open = useRef(true);
+  useEffect(() => { open.current = true; return () => { open.current = false; }; }, []);
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     const found = new Map<string, string>();
     if (!identifier.trim()) found.set('id', isV4 ? 'Enter a MAC address.' : 'Enter a DUID.');
     if (isV4 && !address.trim()) found.set('address', 'Enter an IPv4 address.');
-    if (!isV4 && !delegated && !address.trim() && !prefix.trim()) found.set('address', 'Enter an IPv6 address or prefix.');
-    if (!isV4 && delegated && !address.trim() && !prefixId.trim()) found.set('address', 'Enter a suffix address or prefix ID.');
+    if (!isV4 && !isPrefix6 && !address.trim()) found.set('address', delegated ? 'Enter an interface suffix.' : 'Enter an IPv6 address.');
+    if (!isV4 && isPrefix6 && !delegated && !prefix.trim()) found.set('prefix', 'Enter a delegated prefix.');
+    if (!isV4 && isPrefix6 && delegated && !prefixId.trim()) found.set('prefixId', 'Enter a hex prefix ID.');
     if (found.size > 0) {
       setErrors(found);
       return;
@@ -75,15 +62,18 @@ export function MakeStaticModal({ api, target, onClose, onSaved, onSessionLost }
     setBusy(true);
     setErrors(new Map());
     setFailure('');
+    let targetIdx = 0;
     try {
       if (isV4) {
         const saved = await api.configObject<Dhcp4Entry>('dhcp', target.entryId);
         const { id: _ignored, ...rest } = saved.value;
         void _ignored;
+        const existing = rest.staticLeases ?? [];
+        targetIdx = existing.length;
         const next: Omit<Dhcp4Entry, 'id'> = {
           ...rest,
           staticLeases: [
-            ...(rest.staticLeases ?? []),
+            ...existing,
             {
               mac: identifier.trim(),
               address: address.trim(),
@@ -96,38 +86,55 @@ export function MakeStaticModal({ api, target, onClose, onSaved, onSessionLost }
         const saved = await api.configObject<Dhcp6Entry>('dhcp6', target.entryId);
         const { id: _ignored, ...rest } = saved.value;
         void _ignored;
-        const next: Omit<Dhcp6Entry, 'id'> = {
-          ...rest,
-          staticLeases: [
-            ...(rest.staticLeases ?? []),
-            {
-              duid: identifier.trim(),
-              ...(address.trim() ? { address: address.trim() } : {}),
-              ...(!delegated && prefix.trim() ? { prefix: prefix.trim() } : {}),
-              ...(delegated && prefixId.trim() ? { prefixId: prefixId.trim() } : {}),
-              ...(hostname.trim() ? { hostname: hostname.trim() } : {}),
-            },
-          ],
-        };
-        await api.saveDhcp6(next, saved);
+        const existing = rest.staticLeases ?? [];
+        const duidLower = identifier.trim().toLowerCase();
+        const existingIdx = existing.findIndex((s) => s.duid.toLowerCase() === duidLower);
+        const mergedHost = hostname.trim() || (existingIdx >= 0 ? existing[existingIdx].hostname : undefined);
+        const nextList = [...existing];
+        if (existingIdx >= 0) {
+          targetIdx = existingIdx;
+          const prev = existing[existingIdx];
+          nextList[existingIdx] = {
+            ...prev,
+            duid: identifier.trim(),
+            ...(!isPrefix6 && address.trim() ? { address: address.trim() } : {}),
+            ...(isPrefix6 && !delegated && prefix.trim() ? { prefix: prefix.trim() } : {}),
+            ...(isPrefix6 && delegated && prefixId.trim() ? { prefixId: prefixId.trim() } : {}),
+            ...(mergedHost ? { hostname: mergedHost } : {}),
+          };
+        } else {
+          targetIdx = existing.length;
+          nextList.push({
+            duid: identifier.trim(),
+            ...(!isPrefix6 && address.trim() ? { address: address.trim() } : {}),
+            ...(isPrefix6 && !delegated && prefix.trim() ? { prefix: prefix.trim() } : {}),
+            ...(isPrefix6 && delegated && prefixId.trim() ? { prefixId: prefixId.trim() } : {}),
+            ...(hostname.trim() ? { hostname: hostname.trim() } : {}),
+          });
+        }
+        await api.saveDhcp6({ ...rest, staticLeases: nextList }, saved);
       }
       onSaved();
-      onClose();
+      if (open.current) onClose();
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) return onSessionLost();
+      if (!open.current) return onAbandoned(saveFailure(error, new Map(), 'static lease'));
       const rawFields = dhcpErrors(error);
       const mapped = new Map<string, string>();
+      const rowPrefix = `staticLeases/${targetIdx}`;
+      const entryFallback = isPrefix6 ? (delegated ? 'prefixId' : 'prefix') : 'address';
       for (const [key, msg] of rawFields.entries()) {
-        if (key.endsWith('/mac') || key.endsWith('/duid')) mapped.set('id', msg);
-        else if (key.endsWith('/address')) mapped.set('address', msg);
-        else if (key.endsWith('/prefix')) mapped.set('prefix', msg);
-        else if (key.endsWith('/prefixId')) mapped.set('prefixId', msg);
-        else if (key.endsWith('/hostname')) mapped.set('hostname', msg);
+        if (key === `${rowPrefix}/mac` || key === `${rowPrefix}/duid`) mapped.set('id', msg);
+        else if (key === `${rowPrefix}/address`) mapped.set('address', msg);
+        else if (key === `${rowPrefix}/prefix`) mapped.set('prefix', msg);
+        else if (key === `${rowPrefix}/prefixId`) mapped.set('prefixId', msg);
+        else if (key === `${rowPrefix}/hostname`) mapped.set('hostname', msg);
+        else if (key === rowPrefix) mapped.set(entryFallback, msg);
       }
       setErrors(mapped);
       setFailure(saveFailure(error, mapped, 'static lease'));
     } finally {
-      setBusy(false);
+      if (open.current) setBusy(false);
     }
   }
 
@@ -152,7 +159,7 @@ export function MakeStaticModal({ api, target, onClose, onSaved, onSessionLost }
               classNames={mono}
               label={isV4 ? 'IPv4 address' : delegated ? 'IPv6 interface suffix' : 'IPv6 address'}
               description={!isV4 ? 'Static DHCPv6 addresses must lie outside dynamic ranges.' : undefined}
-              required={isV4}
+              required
               value={address}
               error={errors.get('address')}
               onChange={(e) => setAddress(e.currentTarget.value)}
