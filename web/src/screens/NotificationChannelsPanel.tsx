@@ -367,7 +367,7 @@ function NotificationChannelEditor({
                 value={draft.kind}
                 error={errors.get('kind')}
                 onChange={(value) => {
-                  if (value && isKnownChannelKind(value)) {
+                  if (value && value !== draft.kind && isKnownChannelKind(value)) {
                     patch({ kind: value });
                     const hadKindError = kindSpecificErrorFields.some((field) => errors.has(field));
                     if (hadKindError) {
