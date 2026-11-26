@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/andaru-project/andaru/internal/host"
 )
@@ -15,6 +16,9 @@ import (
 // offloadDefaultsPath records, per permanent MAC, the offloads each Ethernet device ran before Andaru set any. It is
 // under /run because a device's defaults are whatever its driver chose this boot.
 const offloadDefaultsPath = "/run/andaru-offloads/defaults.json"
+
+// offloadRecordLimit bounds the record at boot, inside the network boot unit's 30s start limit.
+const offloadRecordLimit = 5 * time.Second
 
 // neverRestored is the feature a default never brings back: the kernel turns LRO off on a device that forwards, and
 // turning a driver's LRO back on would break forwarding. It runs only where the operator turns it on, off elsewhere.

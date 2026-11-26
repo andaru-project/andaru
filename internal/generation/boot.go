@@ -98,7 +98,8 @@ func (r Realizer) copyKeptFirst(ctx context.Context, id int) {
 func (r Realizer) Boot(ctx context.Context) (result error) {
 	// Before any .link file applies, what each Ethernet device runs is its driver's default. It runs before the lock,
 	// which the disaster path never takes; the record is written atomically.
-	note, stop := context.WithTimeout(ctx, restoreLimit)
+	// Short: the unit's 30s start limit must leave the restore its own restoreLimit.
+	note, stop := context.WithTimeout(ctx, offloadRecordLimit)
 	r.noteOffloadDefaults(note)
 	stop()
 	if _, statErr := os.Lstat(r.StateDir); os.IsNotExist(statErr) {
