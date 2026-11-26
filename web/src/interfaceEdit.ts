@@ -439,7 +439,7 @@ function ipv6Of(draft: InterfaceDraft, saved: Fields | undefined): Fields {
       if (savedRa) {
         const ra: Fields = { ...(savedRa as Fields) };
         // A delegated prefix's lifetimes are the upstream lease's, and router mode announces no prefixes.
-        if (!showPrefixLifetimes && draft.raMode !== 'disabled') {
+        if (draft.ipv6Mode === 'delegated' || (!showPrefixLifetimes && draft.raMode !== 'disabled')) {
           delete ra.validLifetime;
           delete ra.preferredLifetime;
         }
@@ -470,8 +470,8 @@ function ipv6Of(draft: InterfaceDraft, saved: Fields | undefined): Fields {
     // Router advertisements cannot be sent without IPv6, on PPPoE, or on upstream-facing (SLAAC/DHCPv6) segments:
     // turn them off when changing into an unsupported mode (or on none/PPPoE) so active RAs never stay hidden.
     if (draft.ipv6Mode === 'none' || draft.kind === 'pppoe' || saved?.mode !== draft.ipv6Mode) {
+      if ('mode' in ra || !('enabled' in ra)) ra.mode = 'disabled';
       if ('enabled' in ra) ra.enabled = false;
-      else ra.mode = 'disabled';
     }
     out.ra = ra;
   }

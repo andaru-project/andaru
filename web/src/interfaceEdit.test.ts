@@ -627,6 +627,29 @@ it('serializes IPv6 router advertisements, preserves unchanged legacy RA, valida
     ra: { mode: 'disabled' },
   });
 
+  // Switching from disabled RA carrying stale lifetimes to delegated strips lifetimes so backend accepts it.
+  const disabledWithLifetimes: SavedObject<Segment> = {
+    version: '6',
+    value: {
+      ...staticSeg.value,
+      addressing: {
+        ...staticSeg.value.addressing,
+        ipv6: { mode: 'none', ra: { mode: 'disabled', validLifetime: 7200, preferredLifetime: 3600 } },
+      },
+    },
+  };
+  expect((interfaceOperations({
+    ...draftOf(link.value, disabledWithLifetimes.value, undefined),
+    ipv6Mode: 'delegated',
+    ipv6From: 'seg_wan',
+    ipv6SubnetId: '1',
+  }, link, disabledWithLifetimes, undefined)[0].value?.addressing as { ipv6: Record<string, unknown> }).ipv6).toEqual({
+    mode: 'delegated',
+    from: 'seg_wan',
+    subnetId: '1',
+    ra: { mode: 'disabled' },
+  });
+
   // Unrendered RA errors fold into the top banner ("") instead of disappearing behind hidden fields.
   const foldedDelegated = foldHiddenRaErrors(
     new Map([['raValidLifetime', 'Delegated lifetimes are upstream-controlled.'], ['raDnsServers', 'Bad DNS.']]),
