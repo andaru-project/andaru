@@ -381,6 +381,10 @@ describe('notificationChannels', () => {
     expect('error' in parseEmailAddress('a@.example.com')).toBe(true);
     expect('error' in parseEmailAddress('a@example.com.')).toBe(true);
     expect('error' in parseEmailAddress('ops@example.com\r\nBcc: evil@example.com')).toBe(true);
+    expect(parseEmailAddress(`${'A'.repeat(64)} <ops@example.com>`)).toEqual({ address: 'ops@example.com' });
+    expect(parseEmailAddress(`"${'A'.repeat(64)}" <ops@example.com>`)).toEqual({ address: 'ops@example.com' });
+    expect('error' in parseEmailAddress(`${'A'.repeat(65)} <ops@example.com>`)).toBe(true);
+    expect('error' in parseEmailAddress(`${'é'.repeat(33)} <ops@example.com>`)).toBe(true);
 
     // Username without password, duplicate recipients (case-insensitive), empty/overflow recipients.
     const badAuth = validateChannelDraft(
@@ -462,7 +466,7 @@ describe('notificationChannels', () => {
       },
     });
 
-    // Authenticated build preserves leading/trailing whitespace in SMTP passwords and allocates fresh PASSWORD secret.
+    // Authenticated build preserves leading/trailing whitespace in SMTP username and password and allocates fresh PASSWORD secret.
     const authWrite = buildChannelWrite(
       {
         ...channelDraftOf(),
@@ -471,7 +475,7 @@ describe('notificationChannels', () => {
         emailHost: 'smtp.example.com',
         emailPort: '465',
         emailSecurity: 'tls',
-        emailUsername: 'alerts@example.com',
+        emailUsername: ' alerts@example.com ',
         emailPassword: ' hunter2 ',
         emailFrom: 'Andaru <alerts@example.com>',
         emailTo: ['ops@example.com'],
@@ -482,7 +486,7 @@ describe('notificationChannels', () => {
       host: 'smtp.example.com',
       port: 465,
       security: 'tls',
-      username: 'alerts@example.com',
+      username: ' alerts@example.com ',
       password: { secret: 'NOTIFY_SMTP_AUTH_PASSWORD', set: ' hunter2 ', expectedVersion: '0' },
       from: 'Andaru <alerts@example.com>',
       to: ['ops@example.com'],

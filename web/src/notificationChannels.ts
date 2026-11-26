@@ -291,6 +291,7 @@ export function validateTelegramChatId(raw: string): string | undefined {
 const emailHostCharLimit = 253;
 const emailUsernameCharLimit = 256;
 const emailAddressCharLimit = 512;
+const emailDisplayNameByteLimit = 64;
 const emailMaxRecipients = 20;
 const dnsHostnamePattern = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/i;
 const ipv4Pattern = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
@@ -388,6 +389,13 @@ function stripRfc5322Comments(input: string): string | undefined {
   return inQuotes || commentDepth !== 0 ? undefined : out.trim();
 }
 
+function parsedDisplayName(raw: string): string {
+  if (quotedDisplayNamePattern.test(raw)) {
+    return raw.slice(1, -1).replace(/\\(.)/g, '$1');
+  }
+  return raw.replace(/\s+/g, ' ');
+}
+
 // Parse one RFC 5322 address ("ops@example.com", "Display Name <ops@example.com>", or with RFC 5322 comments)
 // suitable for SMTP MAIL FROM / RCPT TO (no quoted local part, no control/format chars, exactly one '@').
 export function parseEmailAddress(raw: string): { address: string } | { error: string } {
@@ -414,6 +422,9 @@ export function parseEmailAddress(raw: string): { address: string } | { error: s
     const displayName = uncommented.slice(0, lt).trim();
     if (displayName && !quotedDisplayNamePattern.test(displayName) && unquotedDisplaySpecials.test(displayName)) {
       return { error: 'Quote display names containing special characters, or use a plain address.' };
+    }
+    if (displayName && utf8ByteLength(parsedDisplayName(displayName)) > emailDisplayNameByteLimit) {
+      return { error: `Display name must be ${emailDisplayNameByteLimit} bytes or fewer.` };
     }
     addr = uncommented.slice(lt + 1, -1);
   } else if (uncommented.includes('<') || uncommented.includes('>')) {
@@ -538,7 +549,7 @@ export function validateChannelDraft(
     const portErr = validateEmailPort(draft.emailPort);
     if (portErr) errors.set('emailPort', portErr);
 
-    const username = draft.emailUsername.trim();
+    const username = draft.emailUsername;
     if (username && controlOrFormatChars.test(username)) {
       errors.set('emailUsername', 'Control or format characters are not allowed.');
     } else if (username.length > emailUsernameCharLimit) {
@@ -730,7 +741,7 @@ export function buildChannelWrite(
     };
   }
   if (draft.kind === 'email') {
-    const username = draft.emailUsername.trim();
+    const username = draft.emailUsername;
     const password = writeOptionalSecret(
       draft.emailPassword,
       draft.removeEmailPassword,
