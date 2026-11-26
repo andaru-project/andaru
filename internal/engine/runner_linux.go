@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"strconv"
+	"time"
 )
 
 const (
@@ -70,9 +71,10 @@ func (s systemdRunner) Realize(ctx context.Context, verb string, id int, extra .
 		return errors.New("realize needs a verb")
 	}
 	// The name differs from the timer's service: systemd refuses a transient unit whose name is already loaded.
-	unit := "andaru-realize-" + verb
+	// A verb on no generation is named for its run: one that hangs does not block the next.
+	unit := "andaru-realize-" + verb + "-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 	if id != 0 {
-		unit += "-" + strconv.Itoa(id)
+		unit = "andaru-realize-" + verb + "-" + strconv.Itoa(id)
 	}
 	args := []string{"--quiet", "--wait", "--collect", "--unit=" + unit, "-p", realizeRuntime}
 	return s.exec(ctx, "/usr/bin/systemd-run", append(args, s.command(verb, id, extra...)...)...)

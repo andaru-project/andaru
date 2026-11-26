@@ -86,7 +86,9 @@ func TestFenceDuringReset(t *testing.T) {
 	for _, verb := range []string{"leases", "prefixes", "aliases", "activate 3", "confirm 3", "rollback 3 timer"} {
 		verbs := &fakeVerbs{}
 		var stderr bytes.Buffer
-		if code := realizeCommand(context.Background(), strings.Fields(verb), nil, &stderr, func(string, string) (realizeVerbs, error) { return verbs, nil }); code != 0 || len(verbs.calls) != 0 {
+		// The alias fill fails, so the engine keeps owing it.
+		want := map[bool]int{false: 0, true: 1}[verb == "aliases"]
+		if code := realizeCommand(context.Background(), strings.Fields(verb), nil, &stderr, func(string, string) (realizeVerbs, error) { return verbs, nil }); code != want || len(verbs.calls) != 0 {
 			t.Fatalf("%s ran during the wipe: code %d calls %v", verb, code, verbs.calls)
 		}
 	}
