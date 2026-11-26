@@ -44,6 +44,8 @@ type Service struct {
 	failures map[string]int      // jobs each channel gave up in a row
 	working  map[string]bool     // channels that sent a job since the service started
 	sending  map[string]struct{} // the IDs of the jobs being sent from the bus
+	// queueFailing is whether the last write to the retry queue failed.
+	queueFailing bool
 }
 
 // Run serves until ctx ends, reconnecting to the bus whenever the connection is lost.
@@ -196,10 +198,9 @@ func (s *Service) handle(ctx context.Context, c *bus.Client, m bus.Message) bool
 		s.giveUp(ctx, c, job, 1, err)
 	default:
 		s.Log.Warn("delivery failed; will retry", "job", job.ID, "channel", job.Channel, "error", err)
-		if err := s.retries.save(&retry{Job: job, First: now, Attempts: 1, Next: now.Add(s.Backoff(0))}); err != nil {
-			// The queue keeps it in memory all the same: only a crash before a later write succeeds loses it.
-			s.Log.Error("write a delivery to the retry queue", "job", job.ID, "error", err)
-		}
+		// Acked even when the write fails, since holding the cursor would hold up every channel: the queue keeps the
+		// job in memory, and only a restart before a later write succeeds loses it, which the operator is told.
+		s.queued(ctx, c, job, s.retries.save(&retry{Job: job, First: now, Attempts: 1, Next: now.Add(s.Backoff(0))}))
 	}
 	return true
 }
@@ -226,28 +227,48 @@ func (s *Service) retryLoop(ctx context.Context, c *bus.Client, running *sync.Wa
 }
 
 func (s *Service) retryOnce(ctx context.Context, c *bus.Client, item *retry) {
-	var err error
-	if !s.sent.seen(item.Job.ID, time.Now()) { // sent before a crash took it out of the queue
-		err = s.send(ctx, item.Job)
+	if s.sent.seen(item.Job.ID, time.Now()) { // sent before a crash took it out of the queue
+		if err := s.retries.remove(item.Job.ID); err != nil {
+			s.Log.Warn("remove a finished retry", "job", item.Job.ID, "error", err)
+		}
+		return
 	}
+	err := s.send(ctx, item.Job)
 	switch {
 	case err == nil:
 		s.sentOK(ctx, c, item.Job)
 	case ctx.Err() != nil:
 		return // the entry stays as it was, for the next session
-	case isPermanent(err) || time.Since(item.First)+s.Backoff(item.Attempts-1) > s.RetryFor:
+	case isPermanent(err) || time.Since(item.First)+s.Backoff(item.Attempts) > s.RetryFor:
 		s.giveUp(ctx, c, item.Job, item.Attempts+1, err)
 	default:
 		s.Log.Warn("delivery failed; will retry", "job", item.Job.ID, "channel", item.Job.Channel, "attempt", item.Attempts+1, "error", err)
 		next := &retry{Job: item.Job, First: item.First, Attempts: item.Attempts + 1}
-		next.Next = time.Now().Add(s.Backoff(next.Attempts - 1))
-		if err := s.retries.save(next); err != nil {
-			s.Log.Error("requeue a delivery", "job", item.Job.ID, "error", err)
-		}
+		next.Next = time.Now().Add(s.Backoff(item.Attempts))
+		s.queued(ctx, c, item.Job, s.retries.save(next))
 		return
 	}
 	if err := s.retries.remove(item.Job.ID); err != nil {
 		s.Log.Warn("remove a finished retry", "job", item.Job.ID, "error", err)
+	}
+}
+
+// queued reports a write to the retry queue: a failure raises the queue's notification, the next success clears it.
+func (s *Service) queued(ctx context.Context, c *bus.Client, job delivery.Job, err error) {
+	s.mu.Lock()
+	was := s.queueFailing
+	s.queueFailing = err != nil
+	s.mu.Unlock()
+	switch {
+	case err != nil:
+		s.Log.Error("write to the retry queue", "job", job.ID, "error", err)
+		if !was {
+			s.raise(ctx, c, notify.Raise{Key: "queue", Severity: notify.Warning,
+				Subject: "andaru-outbound cannot write its retry queue",
+				Detail:  notify.Detail(fmt.Sprintf("Notifications waiting for a retry are kept in memory only, and a restart loses them. The error: %v", err))})
+		}
+	case was:
+		s.raise(ctx, c, notify.Raise{Key: "queue"})
 	}
 }
 

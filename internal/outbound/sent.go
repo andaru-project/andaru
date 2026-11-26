@@ -70,13 +70,18 @@ func writeFile(path string, data []byte) error {
 	if err == nil {
 		err = f.Sync()
 	}
-	if err = errors.Join(err, f.Close()); err != nil {
+	if err = errors.Join(err, f.Close()); err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		_ = os.Remove(tmp) // it may hold a job's credentials
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		return err
-	}
-	dir, err := os.Open(filepath.Dir(path))
+	return syncDir(filepath.Dir(path))
+}
+
+func syncDir(path string) error {
+	dir, err := os.Open(path)
 	if err != nil {
 		return err
 	}

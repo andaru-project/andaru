@@ -169,6 +169,11 @@ func (b *bench) waitSent(id string) {
 	b.t.Fatalf("%s was not recorded as sent", id)
 }
 
+func (b *bench) sentHas(id string) bool {
+	data, _ := os.ReadFile(filepath.Join(b.cache, "sent.json"))
+	return strings.Contains(string(data), `"`+id+`"`)
+}
+
 // queued is how many jobs wait in the retry queue.
 func (b *bench) queued() int {
 	entries, _ := os.ReadDir(filepath.Join(b.cache, "retry"))
@@ -399,11 +404,12 @@ func TestRedirectIsNotFollowed(t *testing.T) {
 	srv := httptest.NewServer(http.RedirectHandler(other.URL, http.StatusTemporaryRedirect))
 	defer srv.Close()
 	b.run(&Service{Backoff: func(int) time.Duration { return time.Hour }})
-	b.publish(job("e1:ch", "ch", srv.URL))
-	b.publish(job("e2:ch", "ch", "http://"+srv.Listener.Addr().String()+"/x"))
-	// A 3xx comes back the same on a retry: the job is given up at once, not queued.
-	time.Sleep(100 * time.Millisecond)
-	if n := elsewhere.Load(); n != 0 || b.queued() != 0 {
+	// A 3xx comes back the same on a retry: each job is given up at once, so three raise the channel's notification.
+	for _, id := range []string{"e1", "e2", "e3"} {
+		b.publish(job(id+":ch", "ch", srv.URL))
+	}
+	b.wantRaised(notify.RaisedType, "channel/ch")
+	if n := elsewhere.Load(); n != 0 || b.queued() != 0 || b.sentHas("e1:ch") {
 		t.Fatalf("the redirect target was called %d times, %d queued", n, b.queued())
 	}
 }
@@ -514,6 +520,7 @@ func TestFailedQueueWriteIsRetriedFromMemory(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.publish(job("a1:a", "a", flaky.URL))
+	b.wantRaised(notify.RaisedType, "queue")
 	for i := range 100 {
 		b.publish(job("b"+strings.Repeat("x", i)+":b", "b", url))
 	}

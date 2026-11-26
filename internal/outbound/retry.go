@@ -88,7 +88,7 @@ func (r *retries) remove(id string) error {
 	if err := os.Remove(r.file(id)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	return nil
+	return syncDir(r.dir) // or a power loss brings a job given up back
 }
 
 // due marks and returns the retries whose time has come and that no attempt is sending.
