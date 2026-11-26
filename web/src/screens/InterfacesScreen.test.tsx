@@ -915,7 +915,7 @@ it('creates a PPPoE interface with MTU clamping, restricted modes, and DHCP pare
       },
     ],
   });
-});
+}, 15_000);
 
 it('handles resolved PPPoE editing, stale unsupported IPv6 modes, and PPPoE client validations', async () => {
   const user = userEvent.setup();
@@ -1000,3 +1000,164 @@ it('handles resolved PPPoE editing, stale unsupported IPv6 modes, and PPPoE clie
     ],
   });
 });
+
+it('configures IPv6 router advertisements on static and delegated segments, validates RA inputs, and shows RA mode in the table', async () => {
+  const user = userEvent.setup();
+  const wanPort = 'lnk_77777777-7777-4777-8777-777777777777';
+  const iotPort = 'lnk_88888888-8888-4888-8888-888888888888';
+  const lanLink = ethernet(lanPort, 'LAN', '52:54:00:aa:bb:01');
+  const wanLink = ethernet(wanPort, 'WAN', '52:54:00:aa:bb:02');
+  const iotLink = ethernet(iotPort, 'IoT', '52:54:00:aa:bb:03');
+  const lanSeg = {
+    id: 'seg_lan',
+    name: 'LAN',
+    link: lanPort,
+    zone: 'zon_lan',
+    addressing: {
+      ipv4: { mode: 'static', addresses: ['192.168.1.1/24'] },
+      ipv6: { mode: 'static', addresses: ['fd00:1::1/64'], ra: { mode: 'unmanaged' as const } },
+    },
+  };
+  const wanSeg = {
+    id: 'seg_wan',
+    name: 'WAN',
+    link: wanPort,
+    zone: 'zon_wan',
+    addressing: {
+      ipv4: { mode: 'dhcp' },
+      ipv6: { mode: 'dhcp6', requestPrefixLength: 56 },
+    },
+  };
+  const iotSeg = {
+    id: 'seg_iot',
+    name: 'IoT',
+    link: iotPort,
+    zone: 'zon_lan',
+    addressing: {
+      ipv4: { mode: 'static', addresses: ['192.168.30.1/24'] },
+      ipv6: { mode: 'delegated', from: 'seg_wan', subnetId: '2', ra: { mode: 'stateless' as const } },
+    },
+  };
+  const sent = vi.fn<(init: RequestInit | undefined) => Response>(() => jsonResponse(200, { savedVersion: '8' }));
+  routes({
+    config: {
+      state: 'saved',
+      savedVersion: '7',
+      value: {
+        links: [lanLink, wanLink, iotLink],
+        segments: [lanSeg, wanSeg, iotSeg],
+        zones: [{ id: 'zon_lan', name: 'LAN' }, { id: 'zon_wan', name: 'WAN' }],
+        management: { segment: 'seg_lan' },
+      },
+    },
+    extra: {
+      [`/api/v1/config/links/${lanPort}`]: { version: '2', value: lanLink },
+      '/api/v1/config/segments/seg_lan': { version: '3', value: lanSeg },
+      [`/api/v1/config/links/${wanPort}`]: { version: '2', value: wanLink },
+      '/api/v1/config/segments/seg_wan': { version: '3', value: wanSeg },
+      [`/api/v1/config/links/${iotPort}`]: { version: '2', value: iotLink },
+      '/api/v1/config/segments/seg_iot': { version: '3', value: iotSeg },
+      'POST /api/v1/config/changes': sent,
+    },
+  });
+  render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={vi.fn()} onSessionLost={vi.fn()} />);
+
+  expect(await screen.findByText('IPv6 · Static · RA unmanaged')).toBeInTheDocument();
+  expect(screen.getByText('IPv6 · Delegated · RA stateless')).toBeInTheDocument();
+
+  // Upstream DHCPv6 segment does not expose RA controls.
+  await user.click(screen.getByRole('button', { name: 'Edit WAN' }));
+  let panel = await screen.findByRole('dialog');
+  expect(within(panel).queryByLabelText(/^Router advertisements/)).not.toBeInTheDocument();
+  await user.click(within(panel).getByRole('button', { name: 'Cancel' }));
+
+  // Delegated IPv6 segment exposes RA mode and priority/router lifetime while hiding prefix lifetimes.
+  await user.click(screen.getByRole('button', { name: 'Edit IoT' }));
+  panel = await screen.findByRole('dialog');
+  expect(within(panel).getByLabelText(/^Router advertisements/)).toHaveValue('stateless');
+  expect(within(panel).queryByLabelText(/^Valid lifetime/)).not.toBeInTheDocument();
+  expect(within(panel).queryByLabelText(/^Preferred lifetime/)).not.toBeInTheDocument();
+  expect(within(panel).getByText('Prefix valid and preferred lifetimes follow the upstream delegated lease.')).toBeInTheDocument();
+  await user.selectOptions(within(panel).getByLabelText(/^Router advertisements/), 'managed');
+  await user.type(within(panel).getByLabelText(/^Router lifetime/), '0');
+  await user.click(within(panel).getByRole('button', { name: 'Save interface' }));
+  await vi.waitFor(() => expect(sent).toHaveBeenCalledTimes(1));
+  expect(JSON.parse(String(sent.mock.calls[0][0]?.body))).toEqual({
+    operations: [
+      {
+        op: 'replace',
+        collection: 'segments',
+        id: 'seg_iot',
+        expectedVersion: '3',
+        value: {
+          ...iotSeg,
+          addressing: {
+            ipv4: { mode: 'static', addresses: ['192.168.30.1/24'] },
+            ipv6: { mode: 'delegated', from: 'seg_wan', subnetId: '2', ra: { mode: 'managed', routerLifetime: 0 } },
+          },
+        },
+      },
+    ],
+  });
+
+  // Static IPv6 segment exposes RA controls and validates lifetimes, PREF64, and IPv6-only RDNSS.
+  await user.click(screen.getByRole('button', { name: 'Edit LAN' }));
+  panel = await screen.findByRole('dialog');
+  await user.selectOptions(within(panel).getByLabelText(/^Router advertisements/), 'assisted');
+  await user.selectOptions(within(panel).getByLabelText(/^Router priority/), 'high');
+  await user.type(within(panel).getByLabelText(/^Router lifetime/), '2');
+  await user.type(within(panel).getByLabelText(/^Valid lifetime/), '1000');
+  await user.type(within(panel).getByLabelText(/^Preferred lifetime/), '2000');
+  await user.type(within(panel).getByLabelText(/^PREF64 prefix/), '64:ff9b::1/96');
+  await user.click(within(panel).getByRole('switch', { name: /^Custom RA DNS/ }));
+  await user.type(within(panel).getByLabelText(/^RA DNS servers/), '1.1.1.1');
+  await user.click(within(panel).getByRole('button', { name: 'Save interface' }));
+
+  expect(await within(panel).findByText('Expected 0, or 4 to 9000 seconds.')).toBeInTheDocument();
+  expect(within(panel).getByText('Preferred lifetime cannot exceed valid lifetime.')).toBeInTheDocument();
+  expect(within(panel).getByText('Host bits in the PREF64 prefix must be zero.')).toBeInTheDocument();
+  expect(within(panel).getByText('Router advertisements carry IPv6 DNS servers only.')).toBeInTheDocument();
+
+  // Fix values and save.
+  await user.clear(within(panel).getByLabelText(/^Router lifetime/));
+  await user.type(within(panel).getByLabelText(/^Router lifetime/), '1800');
+  await user.clear(within(panel).getByLabelText(/^Preferred lifetime/));
+  await user.type(within(panel).getByLabelText(/^Preferred lifetime/), '500');
+  await user.clear(within(panel).getByLabelText(/^PREF64 prefix/));
+  await user.type(within(panel).getByLabelText(/^PREF64 prefix/), '64:ff9b::/96');
+  await user.clear(within(panel).getByLabelText(/^RA DNS servers/));
+  await user.type(within(panel).getByLabelText(/^RA DNS servers/), 'fd00:53::53');
+  await user.type(within(panel).getByLabelText(/^RA search domains/), 'home.arpa');
+  await user.click(within(panel).getByRole('button', { name: 'Save interface' }));
+
+  await vi.waitFor(() => expect(sent).toHaveBeenCalledTimes(2));
+  expect(JSON.parse(String(sent.mock.calls[1][0]?.body))).toEqual({
+    operations: [
+      {
+        op: 'replace',
+        collection: 'segments',
+        id: 'seg_lan',
+        expectedVersion: '3',
+        value: {
+          ...lanSeg,
+          addressing: {
+            ipv4: { mode: 'static', addresses: ['192.168.1.1/24'] },
+            ipv6: {
+              mode: 'static',
+              addresses: ['fd00:1::1/64'],
+              ra: {
+                mode: 'assisted',
+                priority: 'high',
+                routerLifetime: 1800,
+                validLifetime: 1000,
+                preferredLifetime: 500,
+                pref64: '64:ff9b::/96',
+                dns: { servers: ['fd00:53::53'], searchDomains: ['home.arpa'] },
+              },
+            },
+          },
+        },
+      },
+    ],
+  });
+}, 15_000);

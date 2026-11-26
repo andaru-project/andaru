@@ -1,8 +1,8 @@
 import { Alert, Button, Drawer, Fieldset, Group, List, MultiSelect, NativeSelect, PasswordInput, Select, SimpleGrid, Stack, Switch, Text, TextInput } from '@mantine/core';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, saveFailure } from '../api';
-import { bondModes, draftOf, hashPolicyModes, interfaceErrors, interfaceOperations, ipv4Modes, ipv6Modes, lacpRates, lldpEmitModes, lldpReceiveModes, memberLinkOptions, modeLabel, newZoneOption, removeOperations, transmitHashPolicies, validatePppoePassword, validatePppoeUsername, vlanParentOptions, type InterfaceDraft } from '../interfaceEdit';
-import type { BondMode, ConfigBatchOperation, LacpRate, LinkStatus, LldpEmitMode, LldpReceiveMode, SavedLink, SavedObject, Segment, Snapshot, TransmitHashPolicy, VirtualLinkKind } from '../types';
+import { bondModes, draftOf, foldHiddenRaErrors, hashPolicyModes, interfaceErrors, interfaceOperations, ipv4Modes, ipv6Modes, lacpRates, lldpEmitModes, lldpReceiveModes, memberLinkOptions, modeLabel, newZoneOption, raModeDescription, raModes, raPriorities, removeOperations, supportsRouterAdvertisements, transmitHashPolicies, validatePppoePassword, validatePppoeUsername, validatePref64, validateRaDnsServers, vlanParentOptions, words, type InterfaceDraft } from '../interfaceEdit';
+import type { BondMode, ConfigBatchOperation, LacpRate, LinkStatus, LldpEmitMode, LldpReceiveMode, RaMode, RaPriority, SavedLink, SavedObject, Segment, Snapshot, TransmitHashPolicy, VirtualLinkKind } from '../types';
 import { ZonePill } from './ZoneBadge';
 
 interface InterfaceEditorProps {
@@ -53,7 +53,7 @@ function removalBlockers(snapshot: Snapshot, link: SavedLink, segment: Segment |
 }
 
 // The panel edits an interface as the configuration holds it: the link, and the segment that puts a network on it.
-// What it does not show (router advertisements, DHCPv6 options) is kept as saved.
+// What it does not show (DHCPv6 client options) is kept as saved.
 export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClose, onSessionLost, onAbandoned, onSave }: InterfaceEditorProps) {
   const [draft, setDraft] = useState<InterfaceDraft>(() => draftOf(link?.value, segment?.value, live, newKind));
   const [errors, setErrors] = useState(new Map<string, string>());
@@ -174,6 +174,29 @@ export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClos
     if (draft.ipv6Mode && draft.ipv6Mode !== 'none' && !found.has('mtu') && mtu < 1280) {
       found.set('mtu', 'IPv6 requires an MTU of at least 1280.');
     }
+    if (supportsRouterAdvertisements(draft.kind, draft.ipv6Mode) && draft.raMode !== 'disabled') {
+      if (draft.raRouterLifetime.trim() !== '0') {
+        checkOptionalInt(draft.raRouterLifetime, 4, 9000, 'raRouterLifetime', 'Expected 0, or 4 to 9000 seconds.');
+      }
+      if (draft.ipv6Mode === 'static' && draft.raMode !== 'router') {
+        checkOptionalInt(draft.raValidLifetime, 1, 4294967294, 'raValidLifetime', 'Expected 1 to 4294967294 seconds.');
+        checkOptionalInt(draft.raPreferredLifetime, 1, 4294967294, 'raPreferredLifetime', 'Expected 1 to 4294967294 seconds.');
+        if (!found.has('raValidLifetime') && !found.has('raPreferredLifetime') && (draft.raValidLifetime.trim() || draft.raPreferredLifetime.trim())) {
+          const valid = draft.raValidLifetime.trim() ? Number(draft.raValidLifetime.trim()) : 86400;
+          const preferred = draft.raPreferredLifetime.trim() ? Number(draft.raPreferredLifetime.trim()) : 14400;
+          if (preferred > valid) {
+            found.set('raPreferredLifetime', 'Preferred lifetime cannot exceed valid lifetime.');
+          }
+        }
+      }
+      const pref64Err = validatePref64(draft.raPref64);
+      if (pref64Err) found.set('raPref64', pref64Err);
+      if (draft.raDnsOverride) {
+        const dnsErr = validateRaDnsServers(draft.raDnsServers);
+        if (dnsErr) found.set('raDnsServers', dnsErr);
+        if (words(draft.raDnsSearchDomains).length > 8) found.set('raDnsSearchDomains', 'At most 8 search domains.');
+      }
+    }
     return found;
   }
 
@@ -187,7 +210,7 @@ export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClos
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) return onSessionLost();
       if (!open.current) return onAbandoned(saveFailure(error, new Map(), 'interface'));
-      const fields = interfaceErrors(error, operations);
+      const fields = foldHiddenRaErrors(interfaceErrors(error, operations), draft);
       setErrors(fields);
       setFailure(saveFailure(error, fields, 'interface'));
     } finally {
@@ -385,6 +408,109 @@ export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClos
                             onChange={(value) => set({ ipv6From: value ?? '' })} />
                           <TextInput classNames={mono} label="Subnet ID" description="Hexadecimal, 1 to 4 digits: which /64 of the delegated prefix." required placeholder="1" value={draft.ipv6SubnetId} error={errors.get('ipv6SubnetId')} onChange={(event) => set({ ipv6SubnetId: event.currentTarget.value })} />
                           <TextInput classNames={mono} label="Static IPv6 addresses" description="Optional, beside the delegated prefix, such as a unique local address. The DNS service answers on the first." placeholder="fd00:1::1/64" value={draft.ipv6Addresses} error={errors.get('ipv6Addresses')} onChange={(event) => set({ ipv6Addresses: event.currentTarget.value })} />
+                        </>
+                      )}
+                      {supportsRouterAdvertisements(draft.kind, draft.ipv6Mode) && (
+                        <>
+                          <NativeSelect
+                            label="Router advertisements (RA)"
+                            description={raModeDescription[draft.raMode]}
+                            data={raModes}
+                            value={draft.raMode}
+                            error={errors.get('raMode')}
+                            onChange={(event) => set({ raMode: event.currentTarget.value as RaMode })}
+                          />
+                          {draft.raMode !== 'disabled' && (
+                            <Stack gap="xs" role="group" aria-label="Router advertisement options">
+                              <SimpleGrid cols={{ base: 1, xs: 2 }} spacing="xs">
+                                <NativeSelect
+                                  label="Router priority"
+                                  description="Default router preference (RFC 4191)."
+                                  data={raPriorities}
+                                  value={draft.raPriority}
+                                  error={errors.get('raPriority')}
+                                  onChange={(event) => set({ raPriority: event.currentTarget.value as '' | RaPriority })}
+                                />
+                                <TextInput
+                                  classNames={mono}
+                                  label="Router lifetime (s)"
+                                  description="0 (not a default router) or 4–9000s (default 1800)."
+                                  inputMode="numeric"
+                                  placeholder="1800"
+                                  value={draft.raRouterLifetime}
+                                  error={errors.get('raRouterLifetime')}
+                                  onChange={(event) => set({ raRouterLifetime: event.currentTarget.value })}
+                                />
+                              </SimpleGrid>
+                              {draft.ipv6Mode === 'static' && draft.raMode !== 'router' && (
+                                <SimpleGrid cols={{ base: 1, xs: 2 }} spacing="xs">
+                                  <TextInput
+                                    classNames={mono}
+                                    label="Valid lifetime (s)"
+                                    description="Prefix validity (default 86400s)."
+                                    inputMode="numeric"
+                                    placeholder="86400"
+                                    value={draft.raValidLifetime}
+                                    error={errors.get('raValidLifetime')}
+                                    onChange={(event) => set({ raValidLifetime: event.currentTarget.value })}
+                                  />
+                                  <TextInput
+                                    classNames={mono}
+                                    label="Preferred lifetime (s)"
+                                    description="Preferred duration ≤ valid (default 14400s)."
+                                    inputMode="numeric"
+                                    placeholder="14400"
+                                    value={draft.raPreferredLifetime}
+                                    error={errors.get('raPreferredLifetime')}
+                                    onChange={(event) => set({ raPreferredLifetime: event.currentTarget.value })}
+                                  />
+                                </SimpleGrid>
+                              )}
+                              {draft.ipv6Mode === 'delegated' && draft.raMode !== 'router' && (
+                                <Text size="xs" c="dimmed">Prefix valid and preferred lifetimes follow the upstream delegated lease.</Text>
+                              )}
+                              <TextInput
+                                classNames={mono}
+                                label="PREF64 prefix"
+                                description="Optional NAT64 prefix (RFC 8781), length /32, /40, /48, /56, /64, or /96."
+                                placeholder="64:ff9b::/96"
+                                maxLength={64}
+                                value={draft.raPref64}
+                                error={errors.get('raPref64')}
+                                onChange={(event) => set({ raPref64: event.currentTarget.value })}
+                              />
+                              <Switch
+                                label="Custom RA DNS"
+                                description={draft.raDnsOverride
+                                  ? 'Advertise only the IPv6 DNS servers and search domains below (leave empty to advertise none).'
+                                  : 'Off: automatically advertise Andaru DNS when enabled on this segment.'}
+                                checked={draft.raDnsOverride}
+                                onChange={(event) => set({ raDnsOverride: event.currentTarget.checked })}
+                              />
+                              {draft.raDnsOverride && (
+                                <>
+                                  <TextInput
+                                    classNames={mono}
+                                    label="RA DNS servers (RDNSS)"
+                                    description="Up to 8 IPv6 addresses, separated by commas. Leave empty to advertise no DNS servers."
+                                    placeholder="2606:4700:4700::1111, 2001:4860:4860::8888"
+                                    value={draft.raDnsServers}
+                                    error={errors.get('raDnsServers')}
+                                    onChange={(event) => set({ raDnsServers: event.currentTarget.value })}
+                                  />
+                                  <TextInput
+                                    classNames={mono}
+                                    label="RA search domains (DNSSL)"
+                                    description="Optional DNS search list (up to 8 domains), separated by commas."
+                                    placeholder="home.arpa, lab.example"
+                                    value={draft.raDnsSearchDomains}
+                                    error={errors.get('raDnsSearchDomains')}
+                                    onChange={(event) => set({ raDnsSearchDomains: event.currentTarget.value })}
+                                  />
+                                </>
+                              )}
+                            </Stack>
+                          )}
                         </>
                       )}
                     </Stack>
