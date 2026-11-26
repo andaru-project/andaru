@@ -300,6 +300,7 @@ describe('DnsScreen', () => {
   it('keeps newly enabled DNS state visible even if an earlier refresh resolves during PUT and post-PUT reload fails', async () => {
     let configCalls = 0;
     let releaseOverlapRefresh!: () => void;
+    let releasePut!: () => void;
     fetchRoutes({
       '/api/v1/config': () => {
         configCalls += 1;
@@ -312,26 +313,34 @@ describe('DnsScreen', () => {
         return jsonResponse(503, { error: { code: 'UNAVAILABLE', message: 'Temporary read error.', details: [] } });
       },
       '/api/v1/config/dns': () => jsonResponse(404, { error: { code: 'NOT_FOUND', message: 'Not configured.', details: [] } }),
-      'PUT /api/v1/config/dns': (init) => {
-        // Resolve the overlapping pre-mutation refresh while PUT is in flight.
-        releaseOverlapRefresh();
+      'PUT /api/v1/config/dns': (init) => new Promise<Response>((resolve) => {
         const body = JSON.parse(String(init?.body)) as DnsService;
-        return jsonResponse(200, { state: 'saved', savedVersion: '9', version: '1', value: body });
-      },
+        releasePut = () => resolve(jsonResponse(200, { state: 'saved', savedVersion: '9', version: '1', value: body }));
+      }),
     });
     renderDns();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Enable DNS service' }));
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(releaseOverlapRefresh).toBeDefined());
     fireEvent.click(screen.getByRole('button', { name: 'Enable DNS' }));
+    await waitFor(() => expect(releasePut).toBeDefined());
 
-    expect(await screen.findByText('Serving')).toBeInTheDocument();
+    // Finish the earlier refresh while PUT is in flight, then complete PUT (whose follow-up reload fails with 503).
+    releaseOverlapRefresh();
+    await waitFor(() => expect(configCalls).toBe(2));
+    releasePut();
+
+    expect(await screen.findByText('Temporary read error.')).toBeInTheDocument();
+    await waitFor(() => expect(configCalls).toBe(3));
+    expect(screen.getByText('Serving')).toBeInTheDocument();
     expect(screen.queryByText('DNS service is off')).not.toBeInTheDocument();
   });
 
   it('keeps disabled DNS state visible even if an earlier refresh resolves during DELETE and post-DELETE reload fails', async () => {
     let configCalls = 0;
     let releaseOverlapRefresh!: () => void;
+    let releaseDelete!: () => void;
     fetchRoutes({
       '/api/v1/config': () => {
         configCalls += 1;
@@ -344,18 +353,26 @@ describe('DnsScreen', () => {
         return jsonResponse(503, { error: { code: 'UNAVAILABLE', message: 'Temporary read error.', details: [] } });
       },
       '/api/v1/config/dns': () => jsonResponse(200, { state: 'saved', savedVersion: '8', version: '4', value: existingDns }),
-      'DELETE /api/v1/config/dns': () => {
-        releaseOverlapRefresh();
-        return new Response(null, { status: 204 });
-      },
+      'DELETE /api/v1/config/dns': () => new Promise<Response>((resolve) => {
+        releaseDelete = () => resolve(new Response(null, { status: 204 }));
+      }),
     });
     renderDns();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Disable DNS…' }));
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(releaseOverlapRefresh).toBeDefined());
     fireEvent.click(screen.getByRole('button', { name: 'Disable DNS' }));
+    await waitFor(() => expect(releaseDelete).toBeDefined());
 
-    expect(await screen.findByText('DNS service is off')).toBeInTheDocument();
+    // Finish the earlier refresh while DELETE is in flight, then complete DELETE (whose follow-up reload fails with 503).
+    releaseOverlapRefresh();
+    await waitFor(() => expect(configCalls).toBe(2));
+    releaseDelete();
+
+    expect(await screen.findByText('Temporary read error.')).toBeInTheDocument();
+    await waitFor(() => expect(configCalls).toBe(3));
+    expect(screen.getByText('DNS service is off')).toBeInTheDocument();
     expect(screen.queryByText('Serving')).not.toBeInTheDocument();
   });
 });
