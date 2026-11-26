@@ -14,7 +14,7 @@ import (
 type AliasSearchQuery struct {
 	Type          string // "addresses" or "ports"
 	Query         string
-	Kind          string // optional sub-kind (host/network/range/group) or protocol (tcp/udp/icmp/icmpv6/group)
+	Kind          string // optional sub-kind (host/network/range/group/url/hostnames) or protocol (tcp/udp/icmp/icmpv6/group)
 	Family        string // optional "ipv4" or "ipv6" (addresses only)
 	ExcludeGroups bool
 	Exclude       string // optional alias ID to omit (for example, self when editing a group)
@@ -95,7 +95,8 @@ func searchAliasesInSet(ctx context.Context, set *aliasSet, savedVersion Version
 			if query.Exclude != "" && a.ID == query.Exclude {
 				continue
 			}
-			if query.ExcludeGroups && a.Kind == "group" {
+			// The picker for a group's members: neither a group nor an alias fed from a URL or host names can be one.
+			if query.ExcludeGroups && (a.Kind == "group" || a.dynamic()) {
 				continue
 			}
 			if query.Kind != "" && a.Kind != query.Kind {
@@ -163,6 +164,9 @@ func addressMatchesFamily(byID map[string]address, id string, six, nested bool) 
 	if !ok {
 		return false
 	}
+	if a.dynamic() {
+		return true
+	}
 	if a.Kind == "group" {
 		return !nested && slices.ContainsFunc(a.Members, func(m string) bool {
 			return addressMatchesFamily(byID, m, six, true)
@@ -191,6 +195,10 @@ func addressSummary(a address, byID map[string]address) string {
 		return a.Prefix
 	case "range":
 		return a.First + "–" + a.Last
+	case "url":
+		return a.URL
+	case "hostnames":
+		return strings.Join(a.Names, ", ")
 	case "group":
 		return groupMemberSummary(a.Members, func(id string) string {
 			if m, ok := byID[id]; ok {

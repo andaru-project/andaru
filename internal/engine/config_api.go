@@ -490,7 +490,7 @@ func parseAliasSearchQuery(values url.Values) (config.AliasSearchQuery, string) 
 		return config.AliasSearchQuery{}, "Alias search exclude ID is invalid or too long."
 	}
 	if out.Kind != "" {
-		validKinds := []string{"host", "network", "range", "group"}
+		validKinds := []string{"host", "network", "range", "group", "url", "hostnames"}
 		if out.Type == "ports" {
 			validKinds = []string{"tcp", "udp", "icmp", "icmpv6", "group"}
 		}

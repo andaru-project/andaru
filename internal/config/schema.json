@@ -2861,7 +2861,9 @@
                 "host",
                 "network",
                 "range",
-                "group"
+                "group",
+                "url",
+                "hostnames"
               ]
             },
             "address": {
@@ -2887,6 +2889,25 @@
               },
               "minItems": 0,
               "maxItems": 1000
+            },
+            "url": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "names": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 253
+              },
+              "minItems": 1,
+              "maxItems": 20
+            },
+            "refreshSeconds": {
+              "type": "integer",
+              "minimum": 60,
+              "maximum": 86400
             }
           },
           "required": [

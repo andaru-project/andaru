@@ -153,16 +153,23 @@ type zone struct {
 // name to change, and a rule names it as its destination to reach the firewall.
 const firewallZone = "zon_firewall"
 
-// address is an address alias: one host, network or range, or a group of those.
+// address is an address alias: one host, network or range, a group of those, or a list fetched from a URL or
+// resolved from host names every refreshSeconds, whose members are not saved.
 type address struct {
 	identity
-	Kind    string   `json:"kind"`
-	Address string   `json:"address,omitempty"`
-	Prefix  string   `json:"prefix,omitempty"`
-	First   string   `json:"first,omitempty"`
-	Last    string   `json:"last,omitempty"`
-	Members []string `json:"members,omitempty"`
+	Kind           string   `json:"kind"`
+	Address        string   `json:"address,omitempty"`
+	Prefix         string   `json:"prefix,omitempty"`
+	First          string   `json:"first,omitempty"`
+	Last           string   `json:"last,omitempty"`
+	Members        []string `json:"members,omitempty"`
+	URL            string   `json:"url,omitempty"`
+	Names          []string `json:"names,omitempty"`
+	RefreshSeconds int      `json:"refreshSeconds,omitempty"`
 }
+
+// dynamic reports an alias whose members are fetched or resolved: it may hold either family.
+func (a address) dynamic() bool { return a.Kind == "url" || a.Kind == "hostnames" }
 
 // portAlias is a port alias: tcp or udp ports, icmp or icmpv6 types, or a group of those. Its ID keeps the
 // svc_ prefix of the services it was saved as.
