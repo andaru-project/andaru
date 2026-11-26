@@ -23,7 +23,7 @@ CREATE TABLE versions(id INTEGER PRIMARY KEY,parent_id INTEGER REFERENCES versio
 CREATE TABLE pointers(name TEXT PRIMARY KEY CHECK(name='saved'),version_id INTEGER NOT NULL REFERENCES versions(id));
 CREATE TABLE object_changes(collection TEXT NOT NULL CHECK(collection IN ('links','segments','zones')),object_id TEXT NOT NULL,version_id INTEGER NOT NULL REFERENCES versions(id),created INTEGER NOT NULL CHECK(created IN (0,1)),deleted INTEGER NOT NULL CHECK(deleted IN (0,1)),CHECK(NOT(created AND deleted)),PRIMARY KEY(collection,object_id,version_id));
 CREATE UNIQUE INDEX creation_identity ON object_changes(object_id) WHERE created=1;
-` + policyDDL + serviceDDL + natDDL + dhcp6DDL + vipDDL + roleDDL + firewallDDL + writerDDL
+` + policyDDL + serviceDDL + natDDL + dhcp6DDL + vipDDL + roleDDL + firewallDDL + writerDDL + notificationDDL
 
 // policyDDL holds the versions of the filter's objects, lists and singletons. It is added beside
 // object_changes rather than widening that table's CHECK, so an existing store gains it with one
@@ -42,6 +42,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS nat_creation_identity ON nat_changes(object_id
 // vipDDL holds the versions of the virtual addresses, added beside the others as dhcp6_changes was.
 const vipDDL = `CREATE TABLE IF NOT EXISTS vip_changes(collection TEXT NOT NULL CHECK(collection IN ('virtualAddresses')),object_id TEXT NOT NULL,version_id INTEGER NOT NULL REFERENCES versions(id),created INTEGER NOT NULL CHECK(created IN (0,1)),deleted INTEGER NOT NULL CHECK(deleted IN (0,1)),CHECK(NOT(created AND deleted)),PRIMARY KEY(collection,object_id,version_id));
 CREATE UNIQUE INDEX IF NOT EXISTS vip_creation_identity ON vip_changes(object_id) WHERE created=1;`
+
+// notificationDDL holds the versions of the notification channels, added beside the others as vip_changes was.
+const notificationDDL = `CREATE TABLE IF NOT EXISTS notification_changes(collection TEXT NOT NULL CHECK(collection IN ('notifications.channels')),object_id TEXT NOT NULL,version_id INTEGER NOT NULL REFERENCES versions(id),created INTEGER NOT NULL CHECK(created IN (0,1)),deleted INTEGER NOT NULL CHECK(deleted IN (0,1)),CHECK(NOT(created AND deleted)),PRIMARY KEY(collection,object_id,version_id));
+CREATE UNIQUE INDEX IF NOT EXISTS notification_creation_identity ON notification_changes(object_id) WHERE created=1;`
 
 // dhcp6DDL holds the versions of the DHCPv6 entries, added beside the others as policy_changes was.
 const dhcp6DDL = `CREATE TABLE IF NOT EXISTS dhcp6_changes(collection TEXT NOT NULL CHECK(collection IN ('dhcp6')),object_id TEXT NOT NULL,version_id INTEGER NOT NULL REFERENCES versions(id),created INTEGER NOT NULL CHECK(created IN (0,1)),deleted INTEGER NOT NULL CHECK(deleted IN (0,1)),CHECK(NOT(created AND deleted)),PRIMARY KEY(collection,object_id,version_id));
@@ -68,7 +72,7 @@ const writerDDL = `CREATE TABLE IF NOT EXISTS version_writers(version_id INTEGER
 var Writer = "development"
 
 // changeTables are all the tables object versions are recorded in.
-var changeTables = []string{"object_changes", "policy_changes", "service_changes", "nat_changes", "dhcp6_changes", "vip_changes", "role_changes", "firewall_changes"}
+var changeTables = []string{"object_changes", "policy_changes", "service_changes", "nat_changes", "dhcp6_changes", "vip_changes", "role_changes", "firewall_changes", "notification_changes"}
 
 // changeTable is where a collection's object versions are recorded.
 func changeTable(collection string) string {
@@ -83,6 +87,9 @@ func changeTable(collection string) string {
 	}
 	if collection == "virtualAddresses" {
 		return "vip_changes"
+	}
+	if collection == "notifications.channels" {
+		return "notification_changes"
 	}
 	if collection == "dhcp6" {
 		return "dhcp6_changes"

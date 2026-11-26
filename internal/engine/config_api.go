@@ -90,8 +90,9 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 		case len(parts) == 3 && parts[0] == "config" && parts[1] == "aliases" && parts[2] == "search":
 			route = "aliases-search"
 			allowed = []string{"GET", "HEAD"}
-		case len(parts) >= 3 && parts[0] == "config" && parts[1] == "aliases" && (parts[2] == "addresses" || parts[2] == "ports"):
-			collection = "aliases." + parts[2]
+		case len(parts) >= 3 && parts[0] == "config" && (parts[1] == "aliases" && (parts[2] == "addresses" || parts[2] == "ports") ||
+			parts[1] == "notifications" && parts[2] == "channels"):
+			collection = parts[1] + "." + parts[2]
 			if len(parts) == 3 {
 				route = "collection"
 				allowed = []string{"GET", "HEAD", "POST"}
@@ -277,6 +278,13 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 		actor, ok := actorFromRequest(r)
 		if !ok {
 			writeError(w, r, http.StatusForbidden, "FORBIDDEN", "A verified actor is required.")
+			return
+		}
+		// The channels are the notifications' settings: whichever route carries a change to them, it takes
+		// notifications.manage.
+		if slices.ContainsFunc(changes.Operations, func(o config.Operation) bool { return o.Collection == "notifications.channels" }) &&
+			!hasCapability(actor, authz.NotificationsManage) {
+			writeError(w, r, http.StatusForbidden, "FORBIDDEN", "Changing notification channels requires notifications.manage.")
 			return
 		}
 		result, e := store.Save(r.Context(), actor.Actor, changes)

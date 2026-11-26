@@ -191,6 +191,30 @@ func KeptDeclaration(body []byte) (RestoreDocuments, error) {
 		if err = json.Unmarshal(declarationBody, &d); err != nil {
 			return RestoreDocuments{}, err
 		}
+		// The copy keeps the network reachable, and holds only the links' secrets: notification channels, whose
+		// secrets it lacks, are set up again after the recovery.
+		delete(d, "notifications")
+		// A view shows a link's password with its state; a declaration holds only the reference.
+		if raw, ok := d["links"]; ok {
+			var links []map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &links); err != nil {
+				return RestoreDocuments{}, err
+			}
+			for _, l := range links {
+				var ref secretReference
+				if pw, ok := l["password"]; ok {
+					if err := json.Unmarshal(pw, &ref); err != nil {
+						return RestoreDocuments{}, err
+					}
+					if l["password"], err = json.Marshal(ref); err != nil {
+						return RestoreDocuments{}, err
+					}
+				}
+			}
+			if d["links"], err = json.Marshal(links); err != nil {
+				return RestoreDocuments{}, err
+			}
+		}
 		if raw, ok := d["roles"]; ok {
 			var roles []map[string]json.RawMessage
 			if err := json.Unmarshal(raw, &roles); err != nil {

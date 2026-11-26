@@ -115,6 +115,21 @@ func normalizeDeclaration(d *declaration) {
 			d.VirtualAddresses[i].Address = a.String() // one spelling, so the renderer and forwards agree
 		}
 	}
+	if len(d.Notifications.Channels) == 0 {
+		d.Notifications.Channels = nil // absent, so a declaration without channels keeps its form
+	}
+	slices.SortFunc(d.Notifications.Channels, func(a, b channel) int { return strings.Compare(a.ID, b.ID) })
+	for i := range d.Notifications.Channels {
+		c := &d.Notifications.Channels[i]
+		if c.Enabled == nil {
+			enabled := true
+			c.Enabled = &enabled
+		}
+		if c.Filter.MinSeverity == "" {
+			c.Filter.MinSeverity = "info"
+		}
+		slices.Sort(c.Filter.Sources)
+	}
 	slices.SortFunc(d.DHCP6, func(a, b dhcp6Entry) int { return strings.Compare(a.ID, b.ID) })
 	for i := range d.DHCP6 {
 		e := &d.DHCP6[i]

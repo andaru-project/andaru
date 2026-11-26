@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"testing"
 )
 
@@ -82,5 +83,55 @@ func TestBackupDocumentsRejectMalformedScopes(t *testing.T) {
 		if err := ValidateBackupDocuments(input); err == nil {
 			t.Fatal("accepted malformed portable documents")
 		}
+	}
+}
+
+// Notification channels persist, and a backup carries their secrets or, without them, restores them unresolved.
+func TestNotificationChannelsPersistAndBackUp(t *testing.T) {
+	ctx := context.Background()
+	path := ownedDir(t)
+	s := openTestStore(t, path)
+	create, err := ObjectChange("create", "notifications.channels", "", nil, []byte(opsChannel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := s.Save(ctx, systemRootActor, create)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, err := s.Version(ctx, saved.SavedVersion); err != nil || len(v.Changes) != 1 || v.Changes[0].Collection != "notifications.channels" || !v.Changes[0].Created {
+		t.Fatalf("changes %+v %v", v.Changes, err)
+	}
+	s.Close()
+	s = openTestStore(t, path)
+	list, err := s.List(ctx, "notifications.channels")
+	if err != nil || len(list.Items) != 1 || !bytes.Contains(list.Items[0].Value, []byte(`"url":{"secret":"OPS_URL","isSet":true`)) {
+		t.Fatalf("reopened list %+v %v", list, err)
+	}
+	exported, err := s.Export(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var portable struct {
+		Secrets struct{ Core map[string]map[string]string }
+	}
+	if err = json.Unmarshal(exported.ConfigurationSecrets, &portable); err != nil || portable.Secrets.Core["OPS_URL"]["value"] != "https://hooks.example/CHANNEL_SECRET_TOKEN" || portable.Secrets.Core["OPS_AUTH"]["value"] != "Bearer CHANNEL_SECRET_AUTH" {
+		t.Fatalf("backup secrets %s %v", exported.ConfigurationSecrets, err)
+	}
+
+	whole := openTestStore(t, ownedDir(t))
+	if _, err = whole.Restore(ctx, rootRestoreActor, "0", RestoreDocuments{Configuration: exported.Configuration, ConfigurationSecrets: exported.ConfigurationSecrets}); err != nil {
+		t.Fatal(err)
+	}
+	if list, err = whole.List(ctx, "notifications.channels"); err != nil || len(list.Items) != 1 || bytes.Contains(list.Items[0].Value, []byte("unresolved")) {
+		t.Fatalf("restored with secrets %+v %v", list, err)
+	}
+	bare := openTestStore(t, ownedDir(t))
+	result, err := bare.Restore(ctx, rootRestoreActor, "0", RestoreDocuments{Configuration: exported.Configuration})
+	if err != nil || !slices.Equal(result.UnresolvedSecrets, []string{"OPS_AUTH", "OPS_URL"}) {
+		t.Fatalf("restored without secrets %+v %v", result, err)
+	}
+	if snap, err := bare.Snapshot(ctx); err != nil || !bytes.Contains(snap.Value, []byte(`"unresolved":true`)) {
+		t.Fatalf("snapshot %v", err)
 	}
 }

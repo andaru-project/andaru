@@ -1258,6 +1258,9 @@
         },
         {
           "$ref": "#/$defs/roleWrite"
+        },
+        {
+          "$ref": "#/$defs/channelWrite"
         }
       ]
     },
@@ -1451,6 +1454,19 @@
           "items": {
             "$ref": "#/$defs/virtualAddressStored"
           }
+        },
+        "notifications": {
+          "type": "object",
+          "properties": {
+            "channels": {
+              "type": "array",
+              "maxItems": 64,
+              "items": {
+                "$ref": "#/$defs/channelStored"
+              }
+            }
+          },
+          "additionalProperties": false
         }
       },
       "required": [
@@ -1587,6 +1603,19 @@
           "items": {
             "$ref": "#/$defs/virtualAddressStored"
           }
+        },
+        "notifications": {
+          "type": "object",
+          "properties": {
+            "channels": {
+              "type": "array",
+              "maxItems": 64,
+              "items": {
+                "$ref": "#/$defs/channelView"
+              }
+            }
+          },
+          "additionalProperties": false
         }
       },
       "required": [
@@ -2530,6 +2559,86 @@
                   "id"
                 ],
                 "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "create"
+                  },
+                  "collection": {
+                    "enum": [
+                      "notifications.channels"
+                    ]
+                  },
+                  "localId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9_]{0,31}$"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/channelWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "replace"
+                  },
+                  "collection": {
+                    "enum": [
+                      "notifications.channels"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/channelWrite"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "const": "delete"
+                  },
+                  "collection": {
+                    "enum": [
+                      "notifications.channels"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "$ref": "#/$defs/version"
+                  }
+                },
+                "required": [
+                  "op",
+                  "collection",
+                  "id"
+                ],
+                "additionalProperties": false
               }
             ]
           },
@@ -2591,6 +2700,9 @@
         },
         {
           "$ref": "#/$defs/roleView"
+        },
+        {
+          "$ref": "#/$defs/channelView"
         }
       ]
     },
@@ -3753,6 +3865,150 @@
       "allOf": [
         {
           "$ref": "#/$defs/virtualAddressFields"
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "channelID": {
+      "type": "string",
+      "pattern": "^ntf_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "channelFields": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/identity"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/channelID"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "kind": {
+              "enum": [
+                "webhook"
+              ]
+            },
+            "filter": {
+              "type": "object",
+              "properties": {
+                "minSeverity": {
+                  "enum": [
+                    "info",
+                    "warning",
+                    "critical"
+                  ]
+                },
+                "sources": {
+                  "type": "array",
+                  "maxItems": 64,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "kind",
+            "webhook"
+          ]
+        }
+      ]
+    },
+    "channelStored": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/channelFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "webhook": {
+              "type": "object",
+              "properties": {
+                "url": {
+                  "$ref": "#/$defs/secretRef"
+                },
+                "authorization": {
+                  "$ref": "#/$defs/secretRef"
+                }
+              },
+              "required": [
+                "url"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "channelWrite": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/channelFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "webhook": {
+              "type": "object",
+              "properties": {
+                "url": {
+                  "$ref": "#/$defs/secretWrite"
+                },
+                "authorization": {
+                  "$ref": "#/$defs/secretWrite"
+                }
+              },
+              "required": [
+                "url"
+              ],
+              "additionalProperties": false
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "channelView": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/channelFields"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "webhook": {
+              "type": "object",
+              "properties": {
+                "url": {
+                  "$ref": "#/$defs/secretView"
+                },
+                "authorization": {
+                  "$ref": "#/$defs/secretView"
+                }
+              },
+              "required": [
+                "url"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "id"
+          ]
         }
       ],
       "unevaluatedProperties": false

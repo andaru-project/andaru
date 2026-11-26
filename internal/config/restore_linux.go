@@ -139,7 +139,7 @@ func (s *Store) prepareRestore(ctx context.Context, actor authz.Actor, expected 
 		return nil, empty, err
 	}
 	if len(preview.BlockingSecrets) != 0 {
-		return nil, empty, fault("VALIDATION_FAILED", "/configurationSecrets", "Restoration would remove secrets required by bound references; edit the references or select a paired restore.")
+		return nil, empty, fault("VALIDATION_FAILED", "/configurationSecrets", "Restoration would leave bound references without their secret, or holding a secret of another kind (a link's password, a channel's notification secret); edit or rename the references, or select a paired restore.")
 	}
 	if ctx.Err() != nil {
 		return nil, empty, unavailable()
@@ -252,18 +252,18 @@ func prepareRestoration(current *savedState, decoded decodedBackup, next Version
 		}
 	}
 	unresolved, blocked := map[string]bool{}, map[string]bool{}
-	for i := range candidate.Links {
-		reference := candidate.Links[i].Password
-		if reference == nil {
-			continue
-		}
-		_, exists := secrets.Scopes["core"][reference.Secret]
+	for _, h := range heldSecrets(&candidate) {
+		reference := h.ref
+		entry, exists := secrets.Scopes["core"][reference.Secret]
 		if decoded.configuration != nil && !decoded.ownSecrets && (decoded.secrets == nil || !exists) {
 			reference.Unresolved = true
 		}
-		if reference.Unresolved {
+		switch {
+		case exists && entry.Kind != secretKind(h.key.Collection):
+			blocked[reference.Secret] = true // a restore keeps the binding a save keeps: a channel never holds a password
+		case reference.Unresolved:
 			unresolved[reference.Secret] = true
-		} else if !exists {
+		case !exists:
 			blocked[reference.Secret] = true
 		}
 	}
@@ -337,11 +337,10 @@ func prepareRestoration(current *savedState, decoded decodedBackup, next Version
 		}
 	}
 	if decoded.secrets != nil {
-		for _, l := range candidate.Links {
-			if l.Password != nil && !l.Password.Unresolved {
-				key := objectKey{"links", l.ID}
-				if _, changed := changes[key]; !changed {
-					changes[key] = objectChange{Collection: key.Collection, ID: key.ID}
+		for _, h := range heldSecrets(&candidate) {
+			if !h.ref.Unresolved {
+				if _, changed := changes[h.key]; !changed {
+					changes[h.key] = objectChange{Collection: h.key.Collection, ID: h.key.ID}
 				}
 			}
 		}
