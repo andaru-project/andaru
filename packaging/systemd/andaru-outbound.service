@@ -1,0 +1,48 @@
+[Unit]
+Description=Andaru outbound service: sends notifications for the engine
+After=andaru-engine.service
+Wants=andaru-engine.service
+
+[Service]
+Type=exec
+# A static user from sysusers.d, not DynamicUser=: the engine names the bus's peers from /etc/passwd.
+User=andaru-outbound
+Group=andaru-outbound
+SupplementaryGroups=andaru-services
+ExecStart=/usr/bin/andaru outbound --bus-socket /run/andaru-services/bus.sock
+CacheDirectory=andaru-outbound
+CacheDirectoryMode=0700
+UMask=0077
+Restart=always
+RestartSec=5s
+# The network, and nothing else: no capabilities, no secret store, no state beyond the IDs of sent jobs.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=andaru-outbound
+
+[Install]
+WantedBy=multi-user.target

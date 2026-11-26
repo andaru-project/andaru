@@ -37,6 +37,7 @@ for p in systemd-networkd kea kea-hooks unbound ppp openvpn qemu-guest-agent ipu
 done
 grep -q "^u andaru-diag " /usr/lib/sysusers.d/andaru.conf || fail "andaru-diag, the user diagnostics run as, is not declared"
 grep -q "^g andaru-services " /usr/lib/sysusers.d/andaru.conf || fail "andaru-services, the group of the services bus socket, is not declared"
+grep -q "^m andaru-outbound andaru-services" /usr/lib/sysusers.d/andaru.conf || fail "andaru-outbound is not in andaru-services"
 for p in moby-engine containerd; do
 	! rpm -q --quiet "$p" || fail "$p is installed"
 done
@@ -63,7 +64,7 @@ state() {
 	got=$(systemctl is-enabled "$1" 2>/dev/null || true)
 	[ "$got" = "$2" ] || fail "$1 is $got, not $2"
 }
-for u in systemd-networkd.service andaru-engine.service andaru-network-boot.service andaru-factory-reset.service andaru-install-cleanup.service \
+for u in systemd-networkd.service andaru-engine.service andaru-outbound.service andaru-network-boot.service andaru-factory-reset.service andaru-install-cleanup.service \
 	andaru-leases.path andaru-prefixes.path andaru-prefixes.timer andaru-update-check.timer kea-dhcp4.service kea-dhcp6.service unbound.service; do
 	state "$u" enabled
 done

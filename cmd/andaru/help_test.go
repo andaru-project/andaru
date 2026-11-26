@@ -117,7 +117,7 @@ func TestUsageErrorsShowTheCommandAndAHint(t *testing.T) {
 func TestEveryHelpTextFitsIn80Columns(t *testing.T) {
 	var list bytes.Buffer
 	ctlHelp(&list)
-	for _, text := range []string{topHelp, engineHelp, realizeHelp, list.String()} {
+	for _, text := range []string{topHelp, engineHelp, realizeHelp, outboundHelp, list.String()} {
 		checkWidth(t, "help", text)
 	}
 	for _, c := range ctlCommands {
