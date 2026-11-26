@@ -30,35 +30,12 @@ func validateNAT(d *declaration) []FieldError {
 	for _, a := range d.Aliases.Addresses {
 		addresses[a.ID] = a
 	}
-	// has says whether an address object can match the family six selects. Groups hold no groups (the
-	// policy validator refuses them, but this runs regardless), so one level is followed and never more.
-	var has func(id string, six, nested bool) bool
-	has = func(id string, six, nested bool) bool {
-		a, ok := addresses[id]
-		var v netip.Addr
-		var e error
-		switch {
-		case !ok:
-			return false
-		case a.Kind == "group":
-			return !nested && slices.ContainsFunc(a.Members, func(m string) bool { return has(m, six, true) })
-		case a.Kind == "network":
-			var p netip.Prefix
-			p, e = netip.ParsePrefix(a.Prefix)
-			v = p.Addr()
-		case a.Kind == "range":
-			v, e = netip.ParseAddr(a.First)
-		default:
-			v, e = netip.ParseAddr(a.Address)
-		}
-		return e == nil && (six && v.Is6() && !v.Is4In6() || !six && v.Is4())
-	}
 	refFamily := func(path, id string, six bool) {
 		if _, ok := addresses[id]; !ok {
 			bad(path, "Expected an existing address alias.")
-		} else if six && !has(id, true, false) {
+		} else if six && !addressMatchesFamily(addresses, id, true, false) {
 			bad(path, "Expected an address with IPv6 addresses for an IPv6 port forward.")
-		} else if !six && !has(id, false, false) {
+		} else if !six && !addressMatchesFamily(addresses, id, false, false) {
 			bad(path, "Expected an address with IPv4 addresses; inbound NAT is IPv4 only.")
 		}
 	}

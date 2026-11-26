@@ -48,15 +48,30 @@ type AliasSearchView struct {
 }
 
 // SearchAliases searches saved aliases by similarity and returns ranked matches with highlight segments.
-func (s *Store) SearchAliases(ctx context.Context, query AliasSearchQuery) (result AliasSearchView, err error) {
-	err = s.read(ctx, "", nil, func(state savedState, _ VersionInfo) error {
-		result = searchAliasesInDeclaration(&state.Config, state.Version, query)
+// It copies the alias slices under the store read lock and runs similarity scoring after releasing it.
+func (s *Store) SearchAliases(ctx context.Context, query AliasSearchQuery) (AliasSearchView, error) {
+	var snapshot aliasSet
+	var savedVersion Version
+	if err := s.read(ctx, "", nil, func(state savedState, _ VersionInfo) error {
+		savedVersion = state.Version
+		if query.Type == "addresses" {
+			snapshot.Addresses = slices.Clone(state.Config.Aliases.Addresses)
+		} else if query.Type == "ports" {
+			snapshot.Ports = slices.Clone(state.Config.Aliases.Ports)
+		}
 		return nil
-	})
-	return
+	}); err != nil {
+		return AliasSearchView{}, err
+	}
+	return searchAliasesInSet(ctx, &snapshot, savedVersion, query)
 }
 
 func searchAliasesInDeclaration(d *declaration, savedVersion Version, query AliasSearchQuery) AliasSearchView {
+	res, _ := searchAliasesInSet(context.Background(), &d.Aliases, savedVersion, query)
+	return res
+}
+
+func searchAliasesInSet(ctx context.Context, set *aliasSet, savedVersion Version, query AliasSearchQuery) (AliasSearchView, error) {
 	limit := query.Limit
 	if limit <= 0 {
 		limit = 20
@@ -69,11 +84,14 @@ func searchAliasesInDeclaration(d *declaration, savedVersion Version, query Alia
 	items := make([]AliasSearchItem, 0)
 	switch query.Type {
 	case "addresses":
-		byID := make(map[string]address, len(d.Aliases.Addresses))
-		for _, a := range d.Aliases.Addresses {
+		byID := make(map[string]address, len(set.Addresses))
+		for _, a := range set.Addresses {
 			byID[a.ID] = a
 		}
-		for _, a := range d.Aliases.Addresses {
+		for _, a := range set.Addresses {
+			if err := ctx.Err(); err != nil {
+				return AliasSearchView{}, unavailable()
+			}
 			if query.Exclude != "" && a.ID == query.Exclude {
 				continue
 			}
@@ -93,11 +111,14 @@ func searchAliasesInDeclaration(d *declaration, savedVersion Version, query Alia
 			}
 		}
 	case "ports":
-		byID := make(map[string]portAlias, len(d.Aliases.Ports))
-		for _, p := range d.Aliases.Ports {
+		byID := make(map[string]portAlias, len(set.Ports))
+		for _, p := range set.Ports {
 			byID[p.ID] = p
 		}
-		for _, p := range d.Aliases.Ports {
+		for _, p := range set.Ports {
+			if err := ctx.Err(); err != nil {
+				return AliasSearchView{}, unavailable()
+			}
 			if query.Exclude != "" && p.ID == query.Exclude {
 				continue
 			}
@@ -134,7 +155,7 @@ func searchAliasesInDeclaration(d *declaration, savedVersion Version, query Alia
 		State:        "saved",
 		SavedVersion: savedVersion,
 		Items:        items,
-	}
+	}, nil
 }
 
 func addressMatchesFamily(byID map[string]address, id string, six, nested bool) bool {
@@ -368,30 +389,48 @@ func scoreName(name string, qRunes []rune) (int, []bool) {
 		return 550 + clampInt(40-idx, 0, 40) + clampInt(30-(n-m), 0, 30), mask
 	}
 
-	// 5. Optimal fuzzy subsequence match.
-	if subScore, subMask, ok := scoreSubsequence(orig, lower, qRunes); ok {
-		return subScore, subMask
-	}
+	// Cap fuzzy and typo tiers to keep scoring linear-fast even on long pasted strings.
+	if m <= 64 {
+		// 5. Optimal fuzzy subsequence match (O(m*n) with O(m+n) pre-check).
+		if subScore, subMask, ok := scoreSubsequence(orig, lower, qRunes); ok {
+			return subScore, subMask
+		}
 
-	// 6. Typo-tolerant fallback (Damerau-Levenshtein) for queries of 3+ characters.
-	if m >= 3 {
-		if typoScore, typoMask, ok := scoreTypo(orig, lower, qRunes); ok {
-			return typoScore, typoMask
+		// 6. Typo-tolerant fallback (Damerau-Levenshtein) for queries of 3..64 characters.
+		if m >= 3 {
+			if typoScore, typoMask, ok := scoreTypo(orig, lower, qRunes); ok {
+				return typoScore, typoMask
+			}
 		}
 	}
 
 	return 0, nil
 }
 
+func isSubsequenceRunes(haystack, needle []rune) bool {
+	if len(needle) > len(haystack) {
+		return false
+	}
+	i := 0
+	for j := 0; j < len(haystack) && i < len(needle); j++ {
+		if haystack[j] == needle[i] {
+			i++
+		}
+	}
+	return i == len(needle)
+}
+
 func scoreSubsequence(orig, lower, qRunes []rune) (int, []bool, bool) {
 	n := len(lower)
 	m := len(qRunes)
-	if m > n {
+	if !isSubsequenceRunes(lower, qRunes) {
 		return 0, nil, false
 	}
 	const negInf = -1 << 28
 
-	// dp[i*n + j] = best score matching qRunes[0..i] with qRunes[i] aligned to lower[j].
+	// O(m*n) DP: dp[i*n+j] is the best score matching qRunes[0..i] ending at lower[j].
+	// For each row i, track running best over k < j-1 with a flat gap penalty (-4) plus
+	// exact consecutive transition from k == j-1 (+22), avoiding any O(n) inner loop.
 	dp := make([]int, m*n)
 	prev := make([]int, m*n)
 	for i := range dp {
@@ -414,31 +453,44 @@ func scoreSubsequence(orig, lower, qRunes []rune) (int, []bool, bool) {
 	}
 
 	for i := 1; i < m; i++ {
+		bestGap := negInf
+		bestGapIdx := -1
 		for j := i; j < n; j++ {
+			// Advance the running non-adjacent best (k <= j-2), applying a linear gap decay (-2 per skipped char).
+			if bestGap != negInf {
+				bestGap -= 2
+			}
+			if j-2 >= i-1 {
+				candGap := dp[(i-1)*n+(j-2)]
+				if candGap != negInf {
+					candGap -= 2 // gap of 1 skipped rune (j-1)
+					if candGap > bestGap {
+						bestGap = candGap
+						bestGapIdx = j - 2
+					}
+				}
+			}
 			if lower[j] != qRunes[i] {
 				continue
 			}
 			best := negInf
 			bestK := -1
-			for k := i - 1; k < j; k++ {
-				if dp[(i-1)*n+k] == negInf {
-					continue
-				}
-				cand := dp[(i-1)*n+k] + 10
-				if k == j-1 {
-					cand += 22
-				} else {
-					cand -= min(j-k-1, 12)
-				}
-				if isBoundary(orig, j) {
-					cand += 18
-				}
-				if cand > best {
-					best = cand
-					bestK = k
-				}
+			if adj := dp[(i-1)*n+(j-1)]; adj != negInf {
+				best = adj + 22
+				bestK = j - 1
 			}
-			dp[i*n+j] = best
+			if bestGap > best {
+				best = bestGap
+				bestK = bestGapIdx
+			}
+			if best == negInf {
+				continue
+			}
+			score := best + 10
+			if isBoundary(orig, j) {
+				score += 18
+			}
+			dp[i*n+j] = score
 			prev[i*n+j] = bestK
 		}
 	}
@@ -450,7 +502,6 @@ func scoreSubsequence(orig, lower, qRunes []rune) (int, []bool, bool) {
 		if v == negInf {
 			continue
 		}
-		// Slight preference for shorter trailing unmatched suffix.
 		adj := v - min(n-1-j, 15)
 		if adj > bestVal {
 			bestVal = adj
@@ -468,7 +519,6 @@ func scoreSubsequence(orig, lower, qRunes []rune) (int, []bool, bool) {
 		pos = prev[i*n+pos]
 	}
 
-	// Map raw DP score cleanly into [250, 499].
 	maxPossible := m * 50
 	if maxPossible <= 0 {
 		maxPossible = 1
@@ -489,10 +539,10 @@ func scoreTypo(orig, lower, qRunes []rune) (int, []bool, bool) {
 		start, end int
 		full       bool
 	}
-	candidates := make([]window, 0, 8)
+	candidates := make([]window, 0, 10)
 	candidates = append(candidates, window{0, n, true})
-	// Prefix windows around the query length so typo prefixes like "pritn" match "printers".
-	for _, delta := range []int{0, 1, -1} {
+	// Prefix windows across {-maxDist..+maxDist} so typo prefixes like "pritn" or "dtbase" match.
+	for delta := -maxDist; delta <= maxDist; delta++ {
 		end := m + delta
 		if end >= 3 && end < n {
 			candidates = append(candidates, window{0, end, false})

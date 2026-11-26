@@ -60,6 +60,7 @@ function SingleHarness({ api, initial = null }: { api: ApiClient; initial?: stri
         value={value}
         onChange={setValue}
       />
+      <button type="button" onClick={() => setValue('adr_lan')}>Reset external</button>
     </MantineProvider>
   );
 }
@@ -178,6 +179,9 @@ describe('AliasPicker', () => {
     });
     await user.click(opt);
     expect((singleInput as HTMLInputElement).value).toBe('db-primary');
+    // External value changes sync the single-select display input cleanly.
+    await user.click(screen.getByRole('button', { name: 'Reset external' }));
+    expect((singleInput as HTMLInputElement).value).toBe('lan-net');
     unmount();
 
     mode = 'fail';

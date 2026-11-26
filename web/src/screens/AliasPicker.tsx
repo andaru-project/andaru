@@ -36,6 +36,20 @@ export interface AliasSelectProps extends AliasSearchBaseProps {
   onChange(value: string | null): void;
 }
 
+function truncateUtf8(text: string, maxBytes: number): string {
+  const encoder = new TextEncoder();
+  if (encoder.encode(text).length <= maxBytes) return text;
+  let out = '';
+  let bytes = 0;
+  for (const ch of text) {
+    const len = encoder.encode(ch).length;
+    if (bytes + len > maxBytes) break;
+    out += ch;
+    bytes += len;
+  }
+  return out;
+}
+
 function Highlighted({ segments }: { segments: TextSegment[] }) {
   return (
     <>
@@ -80,6 +94,8 @@ function useAliasSearch({
     if (!singleSelected) return undefined;
     return initialOptions.find((o) => o.value === singleSelected)?.label ?? knownLabels[singleSelected] ?? `${singleSelected} (missing)`;
   }, [singleSelected, initialOptions, knownLabels]);
+  const singleKey = `${singleSelected ?? ''}|${singleSelectedLabel ?? ''}`;
+  const [seenSingleKey, setSeenSingleKey] = useState(singleKey);
   const [searchValue, setSearchValue] = useState(singleSelectedLabel ?? '');
   const [remote, setRemote] = useState<{ query: string; items: AliasSearchItem[] } | null>(null);
   const [loading, setLoading] = useState(false);
@@ -92,6 +108,13 @@ function useAliasSearch({
 
   if (scopeKey !== seenScope) {
     setSeenScope(scopeKey);
+    setSeenSingleKey(singleKey);
+    setRemote(null);
+    setLoading(false);
+    setSearchError('');
+    setSearchValue(singleSelectedLabel ?? '');
+  } else if (singleKey !== seenSingleKey) {
+    setSeenSingleKey(singleKey);
     setRemote(null);
     setLoading(false);
     setSearchError('');
@@ -124,13 +147,14 @@ function useAliasSearch({
   function handleSearchChange(next: string) {
     setSearchValue(next);
     cancelPending();
-    const trimmed = next.trim();
+    const trimmed = truncateUtf8(next.trim(), 256);
     if (trimmed === '' || (singleSelectedLabel !== undefined && next === singleSelectedLabel)) {
       setRemote(null);
       setLoading(false);
       setSearchError('');
       return;
     }
+    setRemote(null);
     setLoading(true);
     setSearchError('');
     const seq = seqRef.current;
@@ -333,6 +357,7 @@ export function AliasSelect({
   onSessionLost,
 }: AliasSelectProps) {
   const selected = useMemo(() => (value ? [value] : []), [value]);
+  const lastPickedRef = useRef<{ value: string | null; label: string } | null>(null);
 
   const {
     data, searchValue, loading, filter, emptyMessage, handleSearchChange, renderOption, resetSearch,
@@ -364,7 +389,11 @@ export function AliasSelect({
       searchValue={searchValue}
       onSearchChange={handleSearchChange}
       onDropdownClose={() => {
-        const chosen = value ? data.find((o) => o.value === value)?.label ?? '' : '';
+        const picked = lastPickedRef.current;
+        lastPickedRef.current = null;
+        const chosen = picked
+          ? picked.label
+          : (value ? data.find((o) => o.value === value)?.label ?? '' : '');
         resetSearch(chosen);
       }}
       filter={filter}
@@ -372,8 +401,9 @@ export function AliasSelect({
       rightSection={loading ? <Loader size="xs" /> : undefined}
       nothingFoundMessage={emptyMessage}
       onChange={(next) => {
-        onChange(next);
         const chosen = next ? data.find((o) => o.value === next)?.label ?? '' : '';
+        lastPickedRef.current = { value: next, label: chosen };
+        onChange(next);
         resetSearch(chosen);
       }}
     />

@@ -104,6 +104,29 @@ function operationID() {
 
 const readTimeoutMilliseconds = 30_000;
 
+function combineSignals(caller?: AbortSignal, timeout?: AbortSignal): { signal?: AbortSignal; cleanup(): void } {
+  if (!caller) return { signal: timeout, cleanup: () => {} };
+  if (!timeout) return { signal: caller, cleanup: () => {} };
+  if (typeof AbortSignal.any === 'function') {
+    return { signal: AbortSignal.any([caller, timeout]), cleanup: () => {} };
+  }
+  const controller = new AbortController();
+  const forward = () => controller.abort();
+  if (caller.aborted || timeout.aborted) {
+    controller.abort();
+    return { signal: controller.signal, cleanup: () => {} };
+  }
+  caller.addEventListener('abort', forward, { once: true });
+  timeout.addEventListener('abort', forward, { once: true });
+  return {
+    signal: controller.signal,
+    cleanup() {
+      caller.removeEventListener('abort', forward);
+      timeout.removeEventListener('abort', forward);
+    },
+  };
+}
+
 // A read with no user input since the previous request is a poll: the engine does not count it as activity, so a
 // screen left open still signs out after the idle timeout. Loading the page counts as input.
 // The first request after input carries it to the engine; the others it starts can go as polls.
@@ -145,34 +168,42 @@ export class ApiClient {
     // Combine an optional caller AbortSignal so cancelling a superseded search never marks the session disconnected.
     const callerSignal = init.signal ?? undefined;
     const timeoutSignal = read ? AbortSignal.timeout(readTimeoutMilliseconds) : undefined;
-    const signal = callerSignal && timeoutSignal
-      ? AbortSignal.any([callerSignal, timeoutSignal])
-      : (callerSignal ?? timeoutSignal);
+    const { signal, cleanup } = combineSignals(callerSignal, timeoutSignal);
     const disconnected = () => {
       this.onConnection?.(false);
       return new ApiError(0, 'DISCONNECTED', 'Cannot reach the Andaru service. Check the connection and try again.');
     };
     let response: Response;
-    try {
-      response = await fetch(path, { ...init, headers, signal, credentials: 'same-origin', cache: 'no-store' });
-    } catch (err) {
-      if (callerSignal?.aborted) throw err;
-      // Most likely the engine never received it, so the input waits for the next request. A read that timed out
-      // may have reached it, and restoring there would let one hung read keep the session alive.
-      if (!signal?.aborted) input ||= carried;
-      throw disconnected();
-    }
-
-    this.onConnection?.(true);
-    if (response.status === 204) return undefined as T;
     let body: unknown;
     try {
-      body = await response.json();
-    } catch (err) {
-      if (callerSignal?.aborted) throw err;
-      // The limit can also pass while the body arrives; that is no answer, not an empty one.
-      if (signal?.aborted) throw disconnected();
-      body = undefined;
+      try {
+        response = await fetch(path, { ...init, headers, signal, credentials: 'same-origin', cache: 'no-store' });
+      } catch (err) {
+        if (callerSignal?.aborted) {
+          input ||= carried;
+          throw err;
+        }
+        // Most likely the engine never received it, so the input waits for the next request. A read that timed out
+        // may have reached it, and restoring there would let one hung read keep the session alive.
+        if (!signal?.aborted) input ||= carried;
+        throw disconnected();
+      }
+
+      this.onConnection?.(true);
+      if (response.status === 204) return undefined as T;
+      try {
+        body = await response.json();
+      } catch (err) {
+        if (callerSignal?.aborted) {
+          input ||= carried;
+          throw err;
+        }
+        // The limit can also pass while the body arrives; that is no answer, not an empty one.
+        if (signal?.aborted) throw disconnected();
+        body = undefined;
+      }
+    } finally {
+      cleanup();
     }
     if (!response.ok) {
       const envelope = body as ErrorEnvelope | undefined;

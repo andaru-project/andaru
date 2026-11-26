@@ -119,6 +119,24 @@ func TestAliasSearchSubsequenceTypoAndSummary(t *testing.T) {
 	if len(byDesc.Items) != 1 || byDesc.Items[0].ID != "adr_printers" {
 		t.Fatalf("description search = %+v, want adr_printers", byDesc.Items)
 	}
+
+	// Distance-2 prefix typo ("dtbase" -> "database_prod") and Unicode case-folding safety (İ).
+	extra := &declaration{
+		Aliases: aliasSet{
+			Addresses: []address{
+				{identity: identity{ID: "adr_db", Name: "database_prod"}, Kind: "host", Address: "10.0.0.10"},
+				{identity: identity{ID: "adr_uni", Name: "İstanbul-edge"}, Kind: "host", Address: "10.0.0.11"},
+			},
+		},
+	}
+	db := searchAliasesInDeclaration(extra, "1", AliasSearchQuery{Type: "addresses", Query: "dtbase"})
+	if len(db.Items) != 1 || db.Items[0].ID != "adr_db" {
+		t.Fatalf("dist-2 prefix typo = %+v, want adr_db", db.Items)
+	}
+	uni := searchAliasesInDeclaration(extra, "1", AliasSearchQuery{Type: "addresses", Query: "edge"})
+	if len(uni.Items) != 1 || joinSegments(uni.Items[0].Highlights) != "İstanbul-edge" || boldText(uni.Items[0].Highlights) != "İstanbul-[edge]" {
+		t.Fatalf("unicode highlights = %+v", uni.Items)
+	}
 }
 
 func TestAliasSearchFiltersAndEmptyQuery(t *testing.T) {

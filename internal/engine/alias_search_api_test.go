@@ -39,6 +39,8 @@ func TestParseAliasSearchQuery(t *testing.T) {
 		{"family on ports", url.Values{"type": {"ports"}, "family": {"ipv4"}}},
 		{"bad family", url.Values{"type": {"addresses"}, "family": {"ipv5"}}},
 		{"bad excludeGroups", url.Values{"type": {"addresses"}, "excludeGroups": {"yes"}}},
+		{"numeric excludeGroups", url.Values{"type": {"addresses"}, "excludeGroups": {"1"}}},
+		{"exclude too long", url.Values{"type": {"addresses"}, "exclude": {strings.Repeat("x", 129)}}},
 		{"limit zero", url.Values{"type": {"addresses"}, "limit": {"0"}}},
 		{"limit too large", url.Values{"type": {"addresses"}, "limit": {"51"}}},
 		{"query too long", url.Values{"type": {"addresses"}, "q": {strings.Repeat("a", 257)}}},

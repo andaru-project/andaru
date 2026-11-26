@@ -467,6 +467,9 @@ func parseAliasSearchQuery(values url.Values) (config.AliasSearchQuery, string) 
 	if len(out.Query) > 256 {
 		return config.AliasSearchQuery{}, "Alias search query is too long."
 	}
+	if len(out.Exclude) > 128 {
+		return config.AliasSearchQuery{}, "Alias search exclude ID is too long."
+	}
 	if out.Kind != "" {
 		validKinds := []string{"host", "network", "range", "group"}
 		if out.Type == "ports" {
@@ -482,11 +485,14 @@ func parseAliasSearchQuery(values url.Values) (config.AliasSearchQuery, string) 
 		}
 	}
 	if raw, ok := values["excludeGroups"]; ok {
-		b, err := strconv.ParseBool(raw[0])
-		if err != nil {
+		switch raw[0] {
+		case "true":
+			out.ExcludeGroups = true
+		case "false":
+			out.ExcludeGroups = false
+		default:
 			return config.AliasSearchQuery{}, "Invalid excludeGroups flag."
 		}
-		out.ExcludeGroups = b
 	}
 	if raw, ok := values["limit"]; ok {
 		n, err := strconv.Atoi(raw[0])

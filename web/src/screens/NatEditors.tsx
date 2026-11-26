@@ -2,7 +2,7 @@ import { Alert, Button, Drawer, Fieldset, Group, MultiSelect, SegmentedControl, 
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiClient, ApiError, saveFailure } from '../api';
 import {
-  checkOneToOne, checkPortForward, oneToOneDraftOf, oneToOneErrors, oneToOnePayload, portForwardDraftOf, portForwardErrors, portForwardPayload, type OneToOneDraft, type PortForwardDraft,
+  addressAliasesForFamily, checkOneToOne, checkPortForward, oneToOneDraftOf, oneToOneErrors, oneToOnePayload, portForwardDraftOf, portForwardErrors, portForwardPayload, type OneToOneDraft, type PortForwardDraft,
 } from '../natEdit';
 import type { OneToOneNat, PortForward, Snapshot } from '../types';
 import { AliasMultiSelect, AliasSelect } from './AliasPicker';
@@ -101,7 +101,7 @@ export function PortForwardEditor({ api, entry, snapshot, onClose, onSessionLost
 
   const patch = (next: Partial<PortForwardDraft>) => setDraft((prev) => ({ ...prev, ...next }));
   const baseZones = snapshot.value.zones.map((z) => ({ value: z.id, label: z.name }));
-  const baseAddresses = (snapshot.value.aliases?.addresses ?? []).map((a) => ({ value: a.id, label: a.name }));
+  const baseAddresses = addressAliasesForFamily(snapshot.value.aliases?.addresses ?? [], draft.family);
   const zones = withMissingOptions(baseZones, draft.ingressZones);
 
   function submit(event: FormEvent) {
@@ -342,7 +342,7 @@ export function OneToOneEditor({ api, entry, snapshot, onClose, onSessionLost, o
 
   const patch = (next: Partial<OneToOneDraft>) => setDraft((prev) => ({ ...prev, ...next }));
   const baseZones = snapshot.value.zones.map((z) => ({ value: z.id, label: z.name }));
-  const baseAddresses = (snapshot.value.aliases?.addresses ?? []).map((a) => ({ value: a.id, label: a.name }));
+  const baseAddresses = addressAliasesForFamily(snapshot.value.aliases?.addresses ?? [], 'ipv4');
   const zones = withMissingOptions(baseZones, draft.zone ? [draft.zone] : []);
 
   function submit(event: FormEvent) {

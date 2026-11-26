@@ -1,6 +1,6 @@
 import { fieldErrors } from './api';
 import { parseDecimalInt } from './dhcpEdit';
-import type { OneToOneNat, PortForward } from './types';
+import type { AddressAlias, OneToOneNat, PortForward } from './types';
 
 export interface PortForwardDraft {
   name: string;
@@ -203,4 +203,25 @@ export function oneToOneErrors(error: unknown, draft: OneToOneDraft): Map<string
     if (clean === 'name' || clean === 'description' || clean === 'zone' || clean === 'internal') return clean;
     return '';
   });
+}
+
+// Mirrors internal/config.addressMatchesFamily for initial dropdown options before a search query is typed.
+export function addressAliasesForFamily(
+  aliases: Array<Partial<AddressAlias> & { id: string; name: string }>,
+  family: 'ipv4' | 'ipv6',
+): Array<{ value: string; label: string }> {
+  const byId = new Map(aliases.map((a) => [a.id, a]));
+  const matches = (id: string, nested: boolean): boolean => {
+    const a = byId.get(id);
+    if (!a) return false;
+    if (a.kind === 'group') {
+      if (nested || !a.members || a.members.length === 0) return !nested && a.members === undefined;
+      return a.members.some((m) => matches(m, true));
+    }
+    const sample = a.kind === 'network' ? a.prefix : a.kind === 'range' ? a.first : a.address;
+    if (!sample) return true;
+    const isV6 = sample.includes(':');
+    return family === 'ipv6' ? isV6 : !isV6;
+  };
+  return aliases.filter((a) => matches(a.id, false)).map((a) => ({ value: a.id, label: a.name }));
 }
