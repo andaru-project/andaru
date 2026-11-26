@@ -86,7 +86,7 @@ The actual OpenAPI 3.1 document is embedded from [`internal/engine/openapi.json`
 | `GET /api/v1/versions/{id}` | Secret-free immutable saved snapshot |
 | `GET /api/v1/preview/network` | Files a saved version would hand to systemd-networkd and pppd on this host, redacted, with findings; `state:"preview"`; optional `?savedVersion=N` |
 | `GET/POST /api/v1/config/aliases/{addresses\|ports}`, `…/{id}` | Address aliases and port aliases, which rules, NAT entries and the management section name |
-| `GET /api/v1/config/aliases/search` | Similarity search over saved address or port aliases (`type`, optional `q`, `kind`, `family`, `excludeGroups`, `exclude`, `limit`); when `q` is omitted or blank, returns eligible aliases ordered by name up to `limit`, otherwise returns ranked matches with highlight segments |
+| `GET /api/v1/config/aliases/search` | Similarity search over saved address or port aliases (`type`, optional `q`, `kind`, `family`, `excludeGroups` (for a group's member picker: it also leaves out address aliases fed from a URL or host names, which cannot be members), `exclude`, `limit`); when `q` is omitted or blank, returns eligible aliases ordered by name up to `limit`, otherwise returns ranked matches with highlight segments |
 | `GET/POST /api/v1/config/rules` | The firewall rules in execution order with the list's `version`; `POST ?before=<rule id>` places a new rule |
 | `GET/PUT/DELETE /api/v1/config/rules/{id}` | One rule, version-checked like any object |
 | `PUT /api/v1/config/rules/order` | Reorder the rules: every rule ID once, `If-Match: "order.N"`; replies with the new `order` and its `version` |

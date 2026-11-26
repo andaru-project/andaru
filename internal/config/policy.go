@@ -31,12 +31,12 @@ var icmpTypes = map[string][]string{
 	"icmpv6": {"echo-request", "echo-reply", "destination-unreachable", "packet-too-big", "time-exceeded", "parameter-problem"},
 }
 
-// validatePolicy checks the aliases, the rules and the management section against each other and the topology.
-// It reports limit errors at most.
 // negatedDynamic refuses a URL or host-name alias on a side that leaves it out: its set is empty until its list is
 // fetched, and leaving out an empty set lets every address through.
 const negatedDynamic = "An alias fed from a URL or from host names cannot be left out yet: until its list is fetched it is empty, and leaving it out would let every address through."
 
+// validatePolicy checks the aliases, the rules and the management section against each other and the topology.
+// It reports limit errors at most.
 func validatePolicy(d *declaration, limit int) []FieldError {
 	var out []FieldError
 	bad := func(path, msg string) {
@@ -124,11 +124,8 @@ func validatePolicy(d *declaration, limit int) []FieldError {
 				}
 			}
 		case "url":
-			u, e := url.Parse(a.URL)
-			port, portErr := strconv.Atoi(cmp.Or(u.Port(), "443"))
-			if e != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" || u.User != nil ||
-				portErr != nil || port < 1 || port > 65535 || invalidText(a.URL, true) || strings.ContainsAny(a.URL, " \t") {
-				bad(p+"/url", "Expected an https or http URL with a host and no user name or password.")
+			if !aliasURL(a.URL) {
+				bad(p+"/url", "Expected an https or http URL with a host, a valid port if any, no user name or password, and no spaces or invisible characters.")
 			}
 		case "hostnames":
 			for j, name := range a.Names {
@@ -340,4 +337,16 @@ func validatePolicy(d *declaration, limit int) []FieldError {
 		bad("/nat/outbound/mode", "Expected none or automatic.")
 	}
 	return out
+}
+
+// aliasURL reports whether s is a URL an alias may be fed from: https or http, a host, a port in range when one is
+// given, no credentials, and nothing a reader cannot see.
+func aliasURL(s string) bool {
+	u, e := url.Parse(s)
+	if e != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" || u.User != nil ||
+		invalidText(s, true) || strings.ContainsAny(s, " \t") {
+		return false
+	}
+	port, e := strconv.Atoi(cmp.Or(u.Port(), "443"))
+	return e == nil && port >= 1 && port <= 65535
 }
