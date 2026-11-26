@@ -762,7 +762,6 @@ func TestAliasRefreshStandsOnceTheSavedSourceIsAsked(t *testing.T) {
 	}
 }
 
-
 // Due again after a dropped result is not the same as long unwanted: forget keeps such a source's state.
 func TestARetriedSourceIsNotForgotten(t *testing.T) {
 	b := newFeedBench(t)
@@ -823,7 +822,10 @@ func TestAliasStatusIsWrittenWithoutTheLock(t *testing.T) {
 	b := newFeedBench(t)
 	w := blockedWriter{httptest.NewRecorder(), make(chan struct{}), make(chan struct{})}
 	done := make(chan struct{})
-	go func() { defer close(done); aliasesAPI{feeds: b.f}.status(w, httptest.NewRequest(http.MethodGet, aliasesPath+"/status", nil)) }()
+	go func() {
+		defer close(done)
+		aliasesAPI{feeds: b.f}.status(w, httptest.NewRequest(http.MethodGet, aliasesPath+"/status", nil))
+	}()
 	<-w.writing
 	locked := b.f.mu.TryLock()
 	if locked {
