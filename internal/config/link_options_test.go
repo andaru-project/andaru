@@ -41,26 +41,46 @@ func TestBridgeAndBondOptionsValidation(t *testing.T) {
 		t.Fatalf("expected valid bond options, got: %v", err)
 	}
 
-	// Schema range / enum rejections.
+	// Schema range / enum rejections, including verified safePointer paths returned by schemaErrors.
 	schemaBad := []struct {
-		name string
-		body string
+		name     string
+		body     string
+		wantPath string
 	}{
-		{"stpPriority out of range", `{"name":"br","kind":"bridge","mtu":1500,"enabled":true,"members":[],"stp":true,"stpPriority":70000}`},
-		{"forwardDelay below min", `{"name":"br","kind":"bridge","mtu":1500,"enabled":true,"members":[],"stp":true,"forwardDelay":1}`},
-		{"helloTime above max", `{"name":"br","kind":"bridge","mtu":1500,"enabled":true,"members":[],"stp":true,"helloTime":11}`},
-		{"maxAge below min", `{"name":"br","kind":"bridge","mtu":1500,"enabled":true,"members":[],"stp":true,"maxAge":5}`},
-		{"bridge field on ethernet", `{"name":"eth0","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"52:54:00:00:00:01","stp":true}`},
-		{"bond field on bridge", `{"name":"br","kind":"bridge","mtu":1500,"enabled":true,"members":[],"lacpRate":"fast"}`},
-		{"bad lacpRate", `{"name":"bo","kind":"bond","mtu":1500,"enabled":true,"members":["@p0"],"mode":"802.3ad","lacpRate":"turbo"}`},
-		{"bad transmitHashPolicy", `{"name":"bo","kind":"bond","mtu":1500,"enabled":true,"members":["@p0"],"mode":"802.3ad","transmitHashPolicy":"layer5"}`},
-		{"miiMonitorMs negative", `{"name":"bo","kind":"bond","mtu":1500,"enabled":true,"members":["@p0"],"mode":"802.3ad","miiMonitorMs":-1}`},
-		{"miiMonitorMs above max", `{"name":"bo","kind":"bond","mtu":1500,"enabled":true,"members":["@p0"],"mode":"802.3ad","miiMonitorMs":60001}`},
+		{"stpPriority out of range", `{"name":"br","kind":"bridge","mtu":1500,"enabled":true,"members":[],"stp":true,"stpPriority":70000}`, "/stpPriority"},
+		{"forwardDelay below min", `{"name":"br","kind":"bridge","mtu":1500,"enabled":true,"members":[],"stp":true,"forwardDelay":1}`, "/forwardDelay"},
+		{"helloTime above max", `{"name":"br","kind":"bridge","mtu":1500,"enabled":true,"members":[],"stp":true,"helloTime":11}`, "/helloTime"},
+		{"maxAge below min", `{"name":"br","kind":"bridge","mtu":1500,"enabled":true,"members":[],"stp":true,"maxAge":5}`, "/maxAge"},
+		{"stp wrong type", `{"name":"br","kind":"bridge","mtu":1500,"enabled":true,"members":[],"stp":"yes"}`, "/stp"},
+		{"multicastSnooping wrong type", `{"name":"br","kind":"bridge","mtu":1500,"enabled":true,"members":[],"multicastSnooping":"no"}`, "/multicastSnooping"},
+		{"bridge field on ethernet", `{"name":"eth0","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"52:54:00:00:00:01","stp":true}`, ""},
+		{"bond field on bridge", `{"name":"br","kind":"bridge","mtu":1500,"enabled":true,"members":[],"lacpRate":"fast"}`, ""},
+		{"bad lacpRate", `{"name":"bo","kind":"bond","mtu":1500,"enabled":true,"members":["@p0"],"mode":"802.3ad","lacpRate":"turbo"}`, "/lacpRate"},
+		{"bad transmitHashPolicy", `{"name":"bo","kind":"bond","mtu":1500,"enabled":true,"members":["@p0"],"mode":"802.3ad","transmitHashPolicy":"layer5"}`, "/transmitHashPolicy"},
+		{"miiMonitorMs negative", `{"name":"bo","kind":"bond","mtu":1500,"enabled":true,"members":["@p0"],"mode":"802.3ad","miiMonitorMs":-1}`, "/miiMonitorMs"},
+		{"miiMonitorMs above max", `{"name":"bo","kind":"bond","mtu":1500,"enabled":true,"members":["@p0"],"mode":"802.3ad","miiMonitorMs":60001}`, "/miiMonitorMs"},
 	}
 	for _, tc := range schemaBad {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := linkSchema.Validate(unmarshal([]byte(tc.body))); err == nil {
+			err := linkSchema.Validate(unmarshal([]byte(tc.body)))
+			if err == nil {
 				t.Fatalf("expected schema error for %s", tc.name)
+			}
+			if tc.wantPath != "" {
+				ve, ok := schemaErrors(err).(validationError)
+				if !ok {
+					t.Fatalf("expected validationError, got %T", schemaErrors(err))
+				}
+				found := false
+				for _, d := range ve {
+					if d.Path == tc.wantPath {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Fatalf("expected schemaErrors path %q, got %+v", tc.wantPath, ve)
+				}
 			}
 		})
 	}
