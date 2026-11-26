@@ -440,10 +440,13 @@ describe('NotificationChannelsPanel', () => {
     await user.click(screen.getByRole('button', { name: 'Send test to ops' }));
     expect(await screen.findByText('Notifications are temporarily unavailable.')).toBeInTheDocument();
 
-    // Unmounting mid-flight settles cleanly without state errors.
+    // Unmounting mid-flight suppresses post-unmount reload side effects.
+    beforeReads = listReads;
     await user.click(screen.getByRole('button', { name: 'Send test to backup-hook' }));
     view.unmount();
-    resolveDisabledTest(jsonResponse(202, { job: 'test:unmounted:ntf_disabled' }));
+    resolveDisabledTest(jsonResponse(404, { error: { code: 'NOT_FOUND', message: 'Resource not found.' } }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(listReads).toBe(beforeReads);
 
     // 401 signs out.
     testMode = 'unauth';
