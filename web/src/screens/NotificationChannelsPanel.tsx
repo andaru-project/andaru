@@ -46,6 +46,7 @@ import { Loaded } from './Loaded';
 interface NotificationChannelsPanelProps {
   api: ApiClient;
   canManage: boolean;
+  canEdit?: boolean;
   onSaved?(): void;
   onSessionLost(): void;
 }
@@ -350,16 +351,19 @@ function NotificationChannelEditor({
   );
 }
 
-export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLost }: NotificationChannelsPanelProps) {
+export function NotificationChannelsPanel({ api, canManage, canEdit = canManage, onSaved, onSessionLost }: NotificationChannelsPanelProps) {
   const load = useCallback(() => api.notificationChannels(), [api]);
   const resource = useResource(load, onSessionLost);
 
   const [openingId, setOpeningId] = useState<string | null>(null);
+  const [testingId, setTestingId] = useState<string | null>(null);
+  const [testNotice, setTestNotice] = useState('');
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [deleting, setDeleting] = useState<SavedObject<NotificationChannel> | null>(null);
   const [deletingBusy, setDeletingBusy] = useState(false);
   const [actionError, setActionError] = useState('');
   const openingRef = useRef(false);
+  const testingRef = useRef(false);
   const deletingRef = useRef(false);
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -376,10 +380,11 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
   }
 
   async function openCreate() {
-    if (openingRef.current) return;
+    if (!canEdit || openingRef.current) return;
     openingRef.current = true;
     setOpeningId('new');
     setActionError('');
+    setTestNotice('');
     try {
       const [list, snapshot] = await Promise.all([api.notificationChannels(), readOptionalSnapshot()]);
       const channels = list.items.map((item) => item.value);
@@ -404,10 +409,11 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
   }
 
   async function openEdit(id: string) {
-    if (openingRef.current) return;
+    if (!canEdit || openingRef.current) return;
     openingRef.current = true;
     setOpeningId(id);
     setActionError('');
+    setTestNotice('');
     try {
       const [current, list, snapshot] = await Promise.all([
         api.notificationChannel(id),
@@ -438,6 +444,37 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
     } finally {
       openingRef.current = false;
       if (mountedRef.current) setOpeningId(null);
+    }
+  }
+
+  async function sendTest(channel: NotificationChannel) {
+    if (!canManage || testingRef.current) return;
+    testingRef.current = true;
+    setTestingId(channel.id);
+    setActionError('');
+    setTestNotice('');
+    try {
+      const result = await api.testNotificationChannel(channel.id);
+      if (!mountedRef.current) return;
+      setTestNotice(`Queued test notification for ${channel.name} (${result.job}). Delivery runs in the background; repeated failures appear under Active notifications.`);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        onSessionLost();
+        return;
+      }
+      if (!mountedRef.current) return;
+      if (error instanceof ApiError && error.status === 404) {
+        void resource.reload();
+        setActionError('This notification channel was deleted elsewhere. The list has been refreshed.');
+      } else {
+        if (error instanceof ApiError && error.status === 409) {
+          void resource.reload();
+        }
+        setActionError(apiErrorMessage(error));
+      }
+    } finally {
+      testingRef.current = false;
+      if (mountedRef.current) setTestingId(null);
     }
   }
 
@@ -482,6 +519,8 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
     }
   }
 
+  const showActions = canManage || canEdit;
+
   return (
     <Stack>
       <Group justify="space-between" align="flex-end" wrap="wrap">
@@ -489,7 +528,7 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
           External delivery targets for appliance notifications. Changes take effect when saved, without applying network configuration.
         </Text>
         <Group gap="xs">
-          {canManage && (
+          {canEdit && (
             <Button
               size="xs"
               loading={openingId === 'new'}
@@ -499,14 +538,20 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
               Add channel
             </Button>
           )}
-          <Button size="xs" variant="default" loading={resource.loading} onClick={() => { setActionError(''); void resource.reload(); }}>
+          <Button size="xs" variant="default" loading={resource.loading} onClick={() => { setActionError(''); setTestNotice(''); void resource.reload(); }}>
             Refresh
           </Button>
         </Group>
       </Group>
 
+      {testNotice && (
+        <Alert color="blue" role="status" title="Test notification queued" withCloseButton onClose={() => setTestNotice('')}>
+          {testNotice}
+        </Alert>
+      )}
+
       {actionError && (
-        <Alert color="red" role="alert" title="Notification channels were not changed" withCloseButton onClose={() => setActionError('')}>
+        <Alert color="red" role="alert" title="Notification channel action failed" withCloseButton onClose={() => setActionError('')}>
           {actionError}
         </Alert>
       )}
@@ -517,7 +562,7 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
           if (sorted.length === 0) {
             return (
               <Alert role="status" title="No notification channels">
-                {canManage
+                {canEdit
                   ? 'No delivery channels are configured yet. Add a webhook channel to forward alerts outside the appliance.'
                   : 'No delivery channels are configured yet.'}
               </Alert>
@@ -534,7 +579,7 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
                     <Table.Th>Status</Table.Th>
                     <Table.Th>Filter</Table.Th>
                     <Table.Th>Secrets</Table.Th>
-                    {canManage && <Table.Th><VisuallyHidden>Actions</VisuallyHidden></Table.Th>}
+                    {showActions && <Table.Th><VisuallyHidden>Actions</VisuallyHidden></Table.Th>}
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
@@ -585,29 +630,45 @@ export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLo
                             )}
                           </Stack>
                         </Table.Td>
-                        {canManage && (
+                        {showActions && (
                           <Table.Td>
                             <Group gap="xs" wrap="nowrap">
-                              <Button
-                                size="xs"
-                                variant="default"
-                                loading={openingId === ch.id}
-                                disabled={openingId !== null && openingId !== ch.id}
-                                aria-label={`Edit ${ch.name}`}
-                                onClick={() => void openEdit(ch.id)}
-                              >
-                                Edit
-                              </Button>
-                              <Button
-                                size="xs"
-                                variant="light"
-                                color="red"
-                                disabled={openingId !== null}
-                                aria-label={`Delete ${ch.name}`}
-                                onClick={() => { setActionError(''); setDeleting(item); }}
-                              >
-                                Delete
-                              </Button>
+                              {canManage && (
+                                <Button
+                                  size="xs"
+                                  variant="default"
+                                  loading={testingId === ch.id}
+                                  disabled={(testingId !== null && testingId !== ch.id) || openingId !== null}
+                                  aria-label={`Send test to ${ch.name}`}
+                                  onClick={() => void sendTest(ch)}
+                                >
+                                  Send test
+                                </Button>
+                              )}
+                              {canEdit && (
+                                <Button
+                                  size="xs"
+                                  variant="default"
+                                  loading={openingId === ch.id}
+                                  disabled={(openingId !== null && openingId !== ch.id) || testingId !== null}
+                                  aria-label={`Edit ${ch.name}`}
+                                  onClick={() => void openEdit(ch.id)}
+                                >
+                                  Edit
+                                </Button>
+                              )}
+                              {canManage && (
+                                <Button
+                                  size="xs"
+                                  variant="light"
+                                  color="red"
+                                  disabled={openingId !== null || testingId !== null}
+                                  aria-label={`Delete ${ch.name}`}
+                                  onClick={() => { setActionError(''); setTestNotice(''); setDeleting(item); }}
+                                >
+                                  Delete
+                                </Button>
+                              )}
                             </Group>
                           </Table.Td>
                         )}

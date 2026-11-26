@@ -130,12 +130,12 @@ export function NotificationsScreen({ api, session, notifications, onSaved, onSe
           <Tabs.Panel value="active">{activeContent}</Tabs.Panel>
           <Tabs.Panel value="channels">
             {tab === 'channels' && (
-              <NotificationChannelsPanel api={api} canManage={canManage} onSaved={onSaved} onSessionLost={onSessionLost} />
+              <NotificationChannelsPanel api={api} canManage={canManage} canEdit={canManage && canReadChannels} onSaved={onSaved} onSessionLost={onSessionLost} />
             )}
           </Tabs.Panel>
         </Tabs>
       ) : canReadChannels && !canReadActive ? (
-        <NotificationChannelsPanel api={api} canManage={canManage} onSaved={onSaved} onSessionLost={onSessionLost} />
+        <NotificationChannelsPanel api={api} canManage={canManage} canEdit={canManage && canReadChannels} onSaved={onSaved} onSessionLost={onSessionLost} />
       ) : (
         activeContent
       )}

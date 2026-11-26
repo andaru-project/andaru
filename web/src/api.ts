@@ -539,6 +539,10 @@ export class ApiClient {
     }, true);
   }
 
+  testNotificationChannel(id: string) {
+    return this.request<{ job: string }>(`/api/v1/notifications/channels/${encodeURIComponent(id)}/test`, { method: 'POST' }, true);
+  }
+
   rules() {
     return this.request<OrderedList<Rule>>('/api/v1/config/rules');
   }

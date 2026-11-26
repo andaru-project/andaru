@@ -358,4 +358,82 @@ describe('NotificationChannelsPanel', () => {
       },
     });
   });
+
+  it('queues a test notification (including on disabled channels), enforces edit vs manage capability split, and handles 409/404/503/401', async () => {
+    const user = userEvent.setup();
+    const onSessionLost = vi.fn();
+    let listReads = 0;
+    let testMode: 'ok' | 'unresolved' | 'missing' | 'unavailable' | 'unauth' = 'ok';
+    const testCalls: Array<{ url: string; csrf: string | null; body: BodyInit | null | undefined }> = [];
+
+    const disabledChannel: SavedObject<NotificationChannel> = {
+      version: '9',
+      value: {
+        ...opsChannel.value,
+        id: 'ntf_disabled',
+        name: 'backup-hook',
+        enabled: false,
+      },
+    };
+
+    fetchRoutes({
+      'GET /api/v1/config/notifications/channels': () => {
+        listReads += 1;
+        return jsonResponse(200, { state: 'saved', savedVersion: '10', items: [opsChannel, disabledChannel] });
+      },
+      'POST /api/v1/notifications/channels/ntf_disabled/test': (init) => {
+        testCalls.push({ url: '/api/v1/notifications/channels/ntf_disabled/test', csrf: new Headers(init?.headers).get('X-Andaru-CSRF'), body: init?.body });
+        return jsonResponse(202, { job: 'test:abc-123:ntf_disabled' });
+      },
+      'POST /api/v1/notifications/channels/ntf_ops/test': (init) => {
+        testCalls.push({ url: '/api/v1/notifications/channels/ntf_ops/test', csrf: new Headers(init?.headers).get('X-Andaru-CSRF'), body: init?.body });
+        if (testMode === 'unresolved') {
+          return jsonResponse(409, { error: { code: 'CHANNEL_SECRETS_UNRESOLVED', message: "The channel's secrets have no value, as after a restore without secrets; set them, then send a test." } });
+        }
+        if (testMode === 'missing') {
+          return jsonResponse(404, { error: { code: 'NOT_FOUND', message: 'Resource not found.' } });
+        }
+        if (testMode === 'unavailable') {
+          return jsonResponse(503, { error: { code: 'NOTIFICATIONS_UNAVAILABLE', message: 'Notifications are temporarily unavailable.' } });
+        }
+        return jsonResponse(401, { error: { code: 'UNAUTHENTICATED', message: 'Expired.' } });
+      },
+    });
+
+    // canManage without canEdit hides Add/Edit while keeping Send test and Delete.
+    render(<NotificationChannelsPanel api={new ApiClient('csrf-tok')} canManage canEdit={false} onSessionLost={onSessionLost} />);
+    await screen.findByText('backup-hook');
+    expect(screen.queryByRole('button', { name: 'Add channel' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit ops' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Delete ops' })).toBeInTheDocument();
+
+    // Works on a disabled channel with no body and CSRF header.
+    await user.click(screen.getByRole('button', { name: 'Send test to backup-hook' }));
+    expect(await screen.findByText(/Queued test notification for backup-hook \(test:abc-123:ntf_disabled\)/)).toBeInTheDocument();
+    expect(testCalls[0]).toEqual({ url: '/api/v1/notifications/channels/ntf_disabled/test', csrf: 'csrf-tok', body: undefined });
+
+    // 409 CHANNEL_SECRETS_UNRESOLVED shows explanation and reloads list.
+    testMode = 'unresolved';
+    let beforeReads = listReads;
+    await user.click(screen.getByRole('button', { name: 'Send test to ops' }));
+    expect(await screen.findByText(/secrets have no value/i)).toBeInTheDocument();
+    await waitFor(() => expect(listReads).toBeGreaterThan(beforeReads));
+
+    // 404 shows friendly deleted message and reloads list.
+    testMode = 'missing';
+    beforeReads = listReads;
+    await user.click(screen.getByRole('button', { name: 'Send test to ops' }));
+    expect(await screen.findByText(/deleted elsewhere/i)).toBeInTheDocument();
+    await waitFor(() => expect(listReads).toBeGreaterThan(beforeReads));
+
+    // 503 surfaces unavailable message.
+    testMode = 'unavailable';
+    await user.click(screen.getByRole('button', { name: 'Send test to ops' }));
+    expect(await screen.findByText('Notifications are temporarily unavailable.')).toBeInTheDocument();
+
+    // 401 signs out.
+    testMode = 'unauth';
+    await user.click(screen.getByRole('button', { name: 'Send test to ops' }));
+    await waitFor(() => expect(onSessionLost).toHaveBeenCalledTimes(1));
+  });
 });
