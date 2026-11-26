@@ -90,7 +90,8 @@ const words = (raw: string) => raw.split(/[\s,]+/).filter(Boolean);
 
 export function parseDecimalInt(raw: string): number {
   const s = raw.trim();
-  return /^\d+$/.test(s) ? Number(s) : Number.NaN;
+  const n = /^\d+$/.test(s) ? Number(s) : Number.NaN;
+  return Number.isSafeInteger(n) ? n : Number.NaN;
 }
 
 // Parse an IPv4 CIDR such as "192.168.1.1/24" into its host IP, network integer and prefix length.
@@ -503,7 +504,7 @@ export function ipv6SuffixOf(address: string): string {
   const validGroup = (g: string) => /^[0-9a-fA-F]{1,4}$/.test(g);
   if (!left.every(validGroup) || !right.every(validGroup)) return '';
   const missing = halves.length === 2 ? 8 - left.length - right.length : 0;
-  if (missing < 0 || (halves.length === 1 && left.length !== 8)) return '';
+  if (halves.length === 2 ? missing < 1 : left.length !== 8) return '';
   const full = [...left, ...Array<string>(missing).fill('0'), ...right].map((g) => parseInt(g, 16).toString(16));
   if (full.length !== 8) return '';
   const tail = full.slice(4);

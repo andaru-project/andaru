@@ -662,12 +662,10 @@ export function DhcpEditor({
                 </Stack>
               </Fieldset>
 
-              <details
-                className="dhcp-disclosure"
-                open={advancedOpen}
-                onToggle={(e) => setAdvancedOpen(e.currentTarget.open)}
-              >
-                <summary>{isV4 ? 'Boot / PXE & custom options' : 'Custom DHCPv6 options'}</summary>
+              <details className="dhcp-disclosure" open={advancedOpen}>
+                <summary onClick={(e) => { e.preventDefault(); setAdvancedOpen((v) => !v); }}>
+                  {isV4 ? 'Boot / PXE & custom options' : 'Custom DHCPv6 options'}
+                </summary>
                 <Stack gap="sm" mt="xs">
                   {isV4 && (
                     <Group align="flex-start" gap="xs" wrap="wrap">

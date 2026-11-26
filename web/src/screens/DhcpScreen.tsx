@@ -141,6 +141,17 @@ export function DhcpScreen({ api, session, onSaved, onSessionLost }: DhcpScreenP
   const resource = useResource(load, onSessionLost);
   useVisiblePoll(resource.refresh, 10_000, canReadStatus);
 
+  const loadedLeases = resource.data?.leases;
+  const [seenLeases, setSeenLeases] = useState<LeaseView | null | undefined>();
+  if (loadedLeases !== seenLeases) {
+    setSeenLeases(loadedLeases);
+    if (segmentFilter && loadedLeases
+      && !loadedLeases.v4.some((l) => l.segment === segmentFilter)
+      && !loadedLeases.v6.some((l) => l.segment === segmentFilter)) {
+      setSegmentFilter('');
+    }
+  }
+
   if (!resource.data) {
     return resource.error
       ? <Alert color="red" role="alert" title="DHCP request failed">{resource.error}</Alert>

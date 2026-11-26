@@ -543,5 +543,6 @@ describe('dhcpEdit helpers', () => {
     expect(ipv6SuffixOf('2001:db8:1:2::%eth0')).toBe('::');
     expect(ipv6SuffixOf('2001:db8::192.0.2.1')).toBe('');
     expect(ipv6SuffixOf('2001::db8::1')).toBe('');
+    expect(ipv6SuffixOf('1:2:3:4::5:6:7:8')).toBe('');
   });
 });

@@ -94,14 +94,18 @@ export function MakeStaticModal({ api, target, onClose, onSaved, onSessionLost, 
         if (existingIdx >= 0) {
           targetIdx = existingIdx;
           const prev = existing[existingIdx];
-          nextList[existingIdx] = {
-            ...prev,
-            duid: identifier.trim(),
-            ...(!isPrefix6 && address.trim() ? { address: address.trim() } : {}),
-            ...(isPrefix6 && !delegated && prefix.trim() ? { prefix: prefix.trim() } : {}),
-            ...(isPrefix6 && delegated && prefixId.trim() ? { prefixId: prefixId.trim() } : {}),
-            ...(mergedHost ? { hostname: mergedHost } : {}),
-          };
+          const updated: typeof prev = { ...prev, duid: identifier.trim() };
+          if (!isPrefix6 && address.trim()) updated.address = address.trim();
+          if (isPrefix6 && !delegated && prefix.trim()) {
+            updated.prefix = prefix.trim();
+            delete updated.prefixId;
+          }
+          if (isPrefix6 && delegated && prefixId.trim()) {
+            updated.prefixId = prefixId.trim();
+            delete updated.prefix;
+          }
+          if (mergedHost) updated.hostname = mergedHost;
+          nextList[existingIdx] = updated;
         } else {
           targetIdx = existing.length;
           nextList.push({
@@ -125,9 +129,9 @@ export function MakeStaticModal({ api, target, onClose, onSaved, onSessionLost, 
       const entryFallback = isPrefix6 ? (delegated ? 'prefixId' : 'prefix') : 'address';
       for (const [key, msg] of rawFields.entries()) {
         if (key === `${rowPrefix}/mac` || key === `${rowPrefix}/duid`) mapped.set('id', msg);
-        else if (key === `${rowPrefix}/address`) mapped.set('address', msg);
-        else if (key === `${rowPrefix}/prefix`) mapped.set('prefix', msg);
-        else if (key === `${rowPrefix}/prefixId`) mapped.set('prefixId', msg);
+        else if (!isPrefix6 && key === `${rowPrefix}/address`) mapped.set('address', msg);
+        else if (isPrefix6 && !delegated && key === `${rowPrefix}/prefix`) mapped.set('prefix', msg);
+        else if (isPrefix6 && delegated && key === `${rowPrefix}/prefixId`) mapped.set('prefixId', msg);
         else if (key === `${rowPrefix}/hostname`) mapped.set('hostname', msg);
         else if (key === rowPrefix) mapped.set(entryFallback, msg);
       }
