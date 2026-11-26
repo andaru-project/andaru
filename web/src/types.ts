@@ -220,7 +220,117 @@ export interface Segment {
   name: string;
   link: string;
   zone: string;
-  addressing: { ipv4: { mode: string }; ipv6: { mode: string } };
+  addressing: {
+    ipv4: { mode: string; addresses?: string[]; gateway?: string };
+    ipv6: {
+      mode: string;
+      addresses?: string[];
+      gateway?: string;
+      from?: string;
+      subnetId?: string;
+      requestPrefixLength?: number;
+      ra?: { mode?: string; enabled?: boolean; managed?: boolean; otherInfo?: boolean };
+    };
+  };
+}
+
+export type DhcpOptionType = 'string' | 'ip' | 'uint8' | 'uint16' | 'uint32' | 'boolean' | 'hex';
+
+export interface DhcpOption {
+  code: number;
+  type: DhcpOptionType;
+  data: string;
+  alwaysSend?: boolean;
+}
+
+export interface DhcpRange {
+  first: string;
+  last: string;
+}
+
+export interface DhcpStaticLease {
+  mac: string;
+  address: string;
+  hostname?: string;
+}
+
+export interface Dhcp4Entry {
+  id: string;
+  name: string;
+  description?: string;
+  segment: string;
+  ranges: DhcpRange[];
+  leaseTime?: number;
+  gateway?: string;
+  dnsServers?: string[];
+  domainName?: string;
+  domainSearch?: string[];
+  ntpServers?: string[];
+  nextServer?: string;
+  bootFileName?: string;
+  options?: DhcpOption[];
+  staticLeases?: DhcpStaticLease[];
+}
+
+export interface Dhcp6StaticLease {
+  duid: string;
+  address?: string;
+  prefix?: string;
+  prefixId?: string;
+  hostname?: string;
+}
+
+export interface Dhcp6PrefixDelegation {
+  prefix?: string;
+  subnetId?: string;
+  length?: number;
+  delegatedLength: number;
+  excludedPrefix?: string;
+}
+
+export interface Dhcp6Entry {
+  id: string;
+  name: string;
+  description?: string;
+  segment: string;
+  ranges?: DhcpRange[];
+  leaseTime?: number;
+  dnsServers?: string[];
+  domainSearch?: string[];
+  ntpServers?: string[];
+  options?: DhcpOption[];
+  staticLeases?: Dhcp6StaticLease[];
+  prefixDelegation?: Dhcp6PrefixDelegation;
+}
+
+export type LeaseState = 'active' | 'declined' | 'expired' | 'released' | 'unknown';
+
+export interface Lease4 {
+  segment: string;
+  address: string;
+  mac: string;
+  clientId?: string;
+  hostname: string;
+  state: LeaseState;
+  cltt?: string;
+  expiresAt?: string;
+}
+
+export interface Lease6 {
+  segment: string;
+  type: 'address' | 'prefix';
+  address: string;
+  duid: string;
+  mac?: string;
+  hostname: string;
+  state: LeaseState;
+  cltt?: string;
+  expiresAt?: string;
+}
+
+export interface LeaseView {
+  v4: Lease4[];
+  v6: Lease6[];
 }
 
 export interface Snapshot {
@@ -231,6 +341,9 @@ export interface Snapshot {
     segments: Segment[];
     zones: Array<{ id: string; name: string }>;
     management?: { segment: string; allowedSources?: string[] };
+    dhcp?: Dhcp4Entry[];
+    dhcp6?: Dhcp6Entry[];
+    dns?: { mode: string; segments: string[]; localDomain?: string; searchDomains?: string[]; registerLeases?: boolean };
     aliases?: {
       addresses: Array<Partial<AddressAlias> & { id: string; name: string }>;
       ports: Array<Partial<PortAlias> & { id: string; name: string }>;

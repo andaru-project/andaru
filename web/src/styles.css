@@ -690,3 +690,17 @@ path.traffic-sent {
 .notification-detail {
   white-space: pre-wrap;
 }
+
+.dhcp-disclosure > summary {
+  cursor: pointer;
+  font-size: var(--mantine-font-size-sm);
+  font-weight: 600;
+  padding: 0.25rem 0;
+}
+
+.dhcp-repeat-row {
+  align-items: flex-start;
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: var(--mantine-radius-default);
+  padding: var(--mantine-spacing-xs);
+}
