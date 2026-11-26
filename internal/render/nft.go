@@ -139,8 +139,8 @@ func (r *renderer) filterChains() {
 	}
 	// A forward's own rule comes before the rules, so no later rule can shadow it.
 	input = append(input, boundInput...)
-	forward := append([]string{"ct state established,related accept", "ct state invalid drop"}, f.clampMSS()...)
-	forward = append(forward, boundForward...)
+	// The clamp comes first: conntrack counts a SYN-ACK as established, and the accept would skip it.
+	forward := slices.Concat(f.clampMSS(), []string{"ct state established,related accept", "ct state invalid drop"}, boundForward)
 	// One list, two chains: a rule to the firewall is an input rule, any other a forward rule. A packet meets
 	// only one chain, so each chain keeps the list's order and nothing else of it matters.
 	for _, rule := range d.Rules {
@@ -198,11 +198,12 @@ func (f *filter) clampMSS() []string {
 		}
 		for _, side := range []string{"iifname", "oifname"} {
 			for _, v := range []struct {
-				proto string
-				mss   int
-			}{{"ipv4", l.MTU - 40}, {"ipv6", l.MTU - 60}} {
+				proto    string
+				overhead int // IP and TCP headers
+			}{{"ipv4", 40}, {"ipv6", 60}} {
+				mss := l.MTU - v.overhead
 				lines = append(lines, fmt.Sprintf("%s %q meta nfproto %s tcp flags syn / syn,rst tcp option maxseg size > %d tcp option maxseg size set %d",
-					side, f.r.name[l.ID], v.proto, v.mss, v.mss))
+					side, f.r.name[l.ID], v.proto, mss, mss))
 			}
 		}
 	}

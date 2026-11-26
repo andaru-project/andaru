@@ -428,6 +428,11 @@ func (r Realizer) Activate(ctx context.Context, id int) (result error) {
 		return err
 	}
 	names, route := before.connected()
+	// A session the new set drops is stopped: its interface is not expected back.
+	names = slices.DeleteFunc(names, func(name string) bool {
+		l, _ := before.link(name)
+		return l.Kind == "ppp" && !slices.Contains(pppSessions(next), name)
+	})
 
 	// State first: a kill before the pointer moves leaves a generation that was never pending.
 	if err := r.writeState("activate:state-activating", id, State{State: Activating, Previous: p.Live}); err != nil {

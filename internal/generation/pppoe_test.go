@@ -12,6 +12,7 @@ const (
 	pppUnitPath    = "/run/systemd/system/andaru-pppoe-pp0.service"
 	pppOptionsPath = "/run/andaru-ppp/pp0.options"
 	pppNetworkBody = "[Match]\nName=pp0\nType=ppp\n\n[Network]\nKeepConfiguration=yes\n"
+	pppUnit0       = "andaru-pppoe-pp0.service"
 )
 
 func session(options string) map[string]string {
@@ -30,28 +31,54 @@ func (b *bench) sessionCommands(from int) []string {
 	})
 }
 
+// dialer makes the fake pppd: a stop takes pp0 away, and a start brings it up only on the password "one".
+func (b *bench) dialer() {
+	b.net.devices["pp0"] = true
+	b.net.ppp = map[string]string{"pp0": "203.0.113.7/32"}
+	b.net.apply()
+	b.net.onRun = func(command string) {
+		switch command {
+		case "systemctl stop " + pppUnit0:
+			delete(b.net.ppp, "pp0")
+			delete(b.net.devices, "pp0")
+			delete(b.net.address, "pp0")
+		case "systemctl start --no-block " + pppUnit0:
+			if data, _ := os.ReadFile(filepath.Join(b.net.root, pppOptionsPath)); strings.Contains(string(data), `"one"`) {
+				b.net.devices["pp0"] = true
+				b.net.ppp["pp0"] = "203.0.113.7/32"
+				b.net.address["pp0"] = []string{"203.0.113.7/32"}
+			}
+		}
+	}
+}
+
+func (b *bench) applyConfirmed(files map[string]string) error {
+	b.t.Helper()
+	id := b.gen(files)
+	if err := b.r.Activate(b.t.Context(), id); err != nil {
+		return err
+	}
+	return b.r.Confirm(b.t.Context(), id)
+}
+
 func TestSessionsRestartOnlyWhenTheirFilesChange(t *testing.T) {
 	b := newBench(t)
 	b.live(one)
-	const unit = "andaru-pppoe-pp0.service"
-	steps := []struct {
+	reload, stop, start := "systemctl daemon-reload", "systemctl stop "+pppUnit0, "systemctl start --no-block "+pppUnit0
+	for _, s := range []struct {
 		name  string
 		files map[string]string
 		want  []string
 	}{
-		{"new", session("password \"one\"\n"), []string{"systemctl daemon-reload", "systemctl restart --no-block " + unit}},
-		{"unchanged", session("password \"one\"\n"), []string{"systemctl daemon-reload", "systemctl start --no-block " + unit}},
-		{"new password", session("password \"two\"\n"), []string{"systemctl daemon-reload", "systemctl restart --no-block " + unit}},
-		{"dropped", one, []string{"systemctl stop " + unit, "systemctl daemon-reload"}},
+		{"new", session("password \"one\"\n"), []string{reload, stop, start}},
+		{"unchanged", session("password \"one\"\n"), []string{reload, start}},
+		// The old pppd is stopped and gone before the new one starts, so verification never sees the old session.
+		{"new password", session("password \"two\"\n"), []string{reload, stop, start}},
+		{"dropped", one, []string{stop, reload}},
 		{"none before or after", one, nil},
-	}
-	for _, s := range steps {
+	} {
 		from := len(b.net.argv)
-		id := b.gen(s.files)
-		if err := b.r.Activate(t.Context(), id); err != nil {
-			t.Fatalf("%s: %v", s.name, err)
-		}
-		if err := b.r.Confirm(t.Context(), id); err != nil {
+		if err := b.applyConfirmed(s.files); err != nil {
 			t.Fatalf("%s: %v", s.name, err)
 		}
 		// The session's interface does not exist in the fake: its .network is not waited for.
@@ -65,7 +92,7 @@ func TestSessionsRestartOnlyWhenTheirFilesChange(t *testing.T) {
 			}
 		}
 	}
-	for _, path := range []string{pppUnitPath, pppOptionsPath, pppStamp(unit)} {
+	for _, path := range []string{pppUnitPath, pppOptionsPath, pppStamp("pp0")} {
 		if b.exists(path) {
 			t.Fatalf("%s is still there after the session was dropped", path)
 		}
@@ -75,46 +102,56 @@ func TestSessionsRestartOnlyWhenTheirFilesChange(t *testing.T) {
 func TestSessionThatWasUpMustComeBack(t *testing.T) {
 	b := newBench(t)
 	b.live(session("password \"one\"\n"))
-	// The session is up: networkd manages pp0 and pppd gave it an address.
-	b.net.devices["pp0"] = true
-	b.net.ppp = map[string]string{"pp0": "203.0.113.7/32"}
-	b.net.apply()
+	b.dialer()
 	b.r.VerifyWait = 100 * b.r.Poll
-	b.net.onRun = func(command string) {
-		switch {
-		case command == "systemctl restart --no-block andaru-pppoe-pp0.service" && b.net.ppp["pp0"] != "":
-			// The new password is refused: pppd never gets an address again.
-			b.net.ppp["pp0"], b.net.address["pp0"] = "", nil
-		case command == "systemctl restart --no-block andaru-pppoe-pp0.service":
-			b.net.ppp["pp0"] = "203.0.113.7/32" // the restore redials on the old password
-		}
-	}
 	id := b.gen(session("password \"wrong\"\n"))
 	if err := b.r.Activate(t.Context(), id); err == nil || !strings.Contains(err.Error(), "pp0 lost its IPv4 address") {
 		t.Fatalf("activate = %v, want a failure for the lost session", err)
 	}
-	// Restored: the old options are back and the session is restarted on them.
+	// Restored: the old options are back and the session redialled on them.
 	data, _ := os.ReadFile(filepath.Join(b.net.root, pppOptionsPath))
 	if string(data) != "password \"one\"\n" || b.net.ppp["pp0"] == "" {
 		t.Fatalf("options after the restore = %q, session %q", data, b.net.ppp["pp0"])
 	}
 }
 
+func TestSessionThatWasUpMayBeDropped(t *testing.T) {
+	b := newBench(t)
+	b.live(session("password \"one\"\n"))
+	b.dialer()
+	if err := b.applyConfirmed(one); err != nil {
+		t.Fatalf("dropping a session that was up: %v", err)
+	}
+	if b.net.devices["pp0"] {
+		t.Fatal("pp0 is still up")
+	}
+}
+
+// A unit systemd never loaded cannot be stopped, and is not running: as after a crash between placing the files and
+// the reload, or a reset run again after one.
+func TestStoppingAnUnloadedSessionIsNoError(t *testing.T) {
+	for _, active := range []bool{false, true} {
+		b := newBench(t)
+		b.live(session("password \"one\"\n"))
+		b.net.fail, b.net.pppActive = "systemctl stop "+pppUnit0, active
+		err := b.applyConfirmed(one)
+		if active == (err == nil) {
+			t.Fatalf("active %v: apply = %v", active, err)
+		}
+	}
+}
+
 func TestBootStartsSessions(t *testing.T) {
 	b := newBench(t)
 	b.live(one)
-	id := b.gen(session("password \"one\"\n"))
-	if err := b.r.Activate(t.Context(), id); err != nil {
-		t.Fatal(err)
-	}
-	if err := b.r.Confirm(t.Context(), id); err != nil {
+	if err := b.applyConfirmed(session("password \"one\"\n")); err != nil {
 		t.Fatal(err)
 	}
 	b.reboot()
 	if err := b.r.Boot(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"systemctl daemon-reload", "systemctl restart --no-block andaru-pppoe-pp0.service"}
+	want := []string{"systemctl daemon-reload", "systemctl stop " + pppUnit0, "systemctl start --no-block " + pppUnit0}
 	if got := b.sessionCommands(0); !slices.Equal(got, want) {
 		t.Fatalf("commands = %q, want %q", got, want)
 	}

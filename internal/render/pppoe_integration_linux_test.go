@@ -32,16 +32,19 @@ func TestPPPoESessionInNamespaces(t *testing.T) {
 		t.Skip("network namespaces need root")
 	}
 	const user, password = `kpn "q" \ # b`, `TEST_ONLY "x" \ #`
-	cases := []struct{ fixture, parent, mtu string }{
-		{"pppoe-ethernet", "enx-1.2", "1492"},
+	cases := []struct {
+		fixture, parent string
+		mtu             int
+	}{
+		{"pppoe-ethernet", "enx-1.2", 1492},
 		// RFC 4638: a 1500-byte session needs 1508 on the parent.
-		{"owner", "vl000000020000", "1500"},
+		{"owner", "vl000000020000", 1500},
 	}
 	for _, tc := range cases {
 		t.Run(tc.fixture, func(t *testing.T) {
 			isp, box := namespace(t), namespace(t)
-			mtu, _ := strconv.Atoi(tc.mtu)
-			ip(t, "link", "add", "isp0", "netns", isp, "mtu", strconv.Itoa(mtu+8), "type", "veth", "peer", "name", tc.parent, "netns", box, "mtu", strconv.Itoa(mtu+8))
+			mtu, parent := strconv.Itoa(tc.mtu), strconv.Itoa(tc.mtu+8)
+			ip(t, "link", "add", "isp0", "netns", isp, "mtu", parent, "type", "veth", "peer", "name", tc.parent, "netns", box, "mtu", parent)
 			ip(t, "-n", isp, "link", "set", "isp0", "up")
 			ip(t, "-n", box, "link", "set", tc.parent, "up")
 
@@ -49,7 +52,7 @@ func TestPPPoESessionInNamespaces(t *testing.T) {
 			etc := workDir(t)
 			// Written by hand, not with quoteOption: the same mistake on both sides would still authenticate.
 			write(t, filepath.Join(etc, "chap-secrets"), `"kpn \"q\" \\ # b" * "TEST_ONLY \"x\" \\ #" *`+"\n")
-			write(t, filepath.Join(etc, "server"), "require-chap\nlcp-echo-interval 5\nlcp-echo-failure 3\nmtu "+tc.mtu+"\nmru "+tc.mtu+"\n")
+			write(t, filepath.Join(etc, "server"), "require-chap\nlcp-echo-interval 5\nlcp-echo-failure 3\nmtu "+mtu+"\nmru "+mtu+"\n")
 			start(t, "ip", "netns", "exec", isp, "unshare", "-m", "sh", "-c",
 				`mount --bind "$1" /etc/ppp && exec pppoe-server -F -I isp0 -L 10.64.0.1 -R 10.64.0.10 -N 4 -O /etc/ppp/server`, "sh", etc)
 
@@ -77,8 +80,8 @@ func TestPPPoESessionInNamespaces(t *testing.T) {
 				if link == nil {
 					t.Fatalf("%s never got its address:\n%s", name, log)
 				}
-				if got := strconv.Itoa(int(link["mtu"].(float64))); got != tc.mtu {
-					t.Fatalf("MTU %s, want %s:\n%s", got, tc.mtu, log)
+				if got := int(link["mtu"].(float64)); got != tc.mtu {
+					t.Fatalf("MTU %d, want %d:\n%s", got, tc.mtu, log)
 				}
 				// The realizer counts a session that was up only if the kernel calls it a ppp link.
 				if kind, _ := link["linkinfo"].(map[string]any)["info_kind"].(string); kind != "ppp" {

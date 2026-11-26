@@ -147,7 +147,7 @@ RestartSec=5
 table inet andaru {}
 delete table inet andaru
 table inet andaru {
-	comment "sha256:eb8f07026ca8af7f9ac5f41081de0a23d765f68b06fe4b83b743e7e0795045eb"
+	comment "sha256:512c6bc99067e13e2a10b034f3b687f646dd6b9f7af613cfbfce5a99e17f9fa7"
 	set zon_00000001_0000_4000_8000_000000000001 { type ifname; elements = { "pp000000020000" }; }
 	set zon_00000002_0000_4000_8000_000000000002 { type ifname; elements = { "ens19" }; }
 	set uplinks { type ifname; elements = { "pp000000020000" }; }
@@ -163,12 +163,12 @@ table inet andaru {
 	}
 	chain forward {
 		type filter hook forward priority filter; policy drop;
-		ct state established,related accept
-		ct state invalid drop
 		iifname "pp000000020000" meta nfproto ipv4 tcp flags syn / syn,rst tcp option maxseg size > 1452 tcp option maxseg size set 1452
 		iifname "pp000000020000" meta nfproto ipv6 tcp flags syn / syn,rst tcp option maxseg size > 1432 tcp option maxseg size set 1432
 		oifname "pp000000020000" meta nfproto ipv4 tcp flags syn / syn,rst tcp option maxseg size > 1452 tcp option maxseg size set 1452
 		oifname "pp000000020000" meta nfproto ipv6 tcp flags syn / syn,rst tcp option maxseg size > 1432 tcp option maxseg size set 1432
+		ct state established,related accept
+		ct state invalid drop
 		iifname @zon_00000002_0000_4000_8000_000000000002 accept comment "rul_00000001-0000-4000-8000-000000000001"
 	}
 	chain postrouting {

@@ -58,6 +58,8 @@ type fakeNetworkd struct {
 	editDNS func([]string) []string // distorts that report
 	offered map[string][]string     // servers resolved has from DHCP, for links whose file declares none
 	ppp     map[string]string       // PPPoE interfaces and the address pppd holds on each, which networkd keeps
+	// pppActive makes systemctl is-active report the PPPoE session units active.
+	pppActive bool
 }
 
 func (f *fakeNetworkd) netFiles() map[string]string {
@@ -156,6 +158,10 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 			out.WriteString(p + " via " + f.routes[p] + " metric 1024 pref medium\n")
 		}
 		return []byte(out.String()), nil
+	case strings.HasPrefix(command, "systemctl is-active --quiet andaru-pppoe-"):
+		if !f.pppActive {
+			return nil, errors.New("inactive")
+		}
 	case command == "systemctl is-active --quiet systemd-networkd.service":
 		if f.stopped {
 			return nil, errors.New("inactive")
