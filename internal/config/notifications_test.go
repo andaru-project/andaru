@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -128,5 +129,61 @@ func TestChannelRefusals(t *testing.T) {
 	_, e = channelChange(t, &s, "create", "", "", `{"name":"ops","kind":"webhook","webhook":{"url":{"secret":"OPS_URL"}}}`, "9")
 	if f := requireFault(t, e, "VALIDATION_FAILED"); f.Details[0].Path != "/name" {
 		t.Fatalf("duplicate name %+v", f.Details)
+	}
+}
+
+// A secret is held by links or by channels, not both: otherwise configuration.write could redirect a channel through a
+// link's password, and notifications.manage could reach a link's password through a channel.
+func TestChannelsAndLinksShareNoSecret(t *testing.T) {
+	s := seededState(t)
+	viaChannel := `{"name":"leak","kind":"webhook","webhook":{"url":{"secret":"LEAK_URL","set":"https://evil.example/","expectedVersion":"0"},"authorization":{"secret":"WAN_PASSWORD"}}}`
+	if _, e := channelChange(t, &s, "create", "", "", viaChannel, "8"); e == nil || !strings.Contains(e.Error(), "VALIDATION_FAILED") {
+		t.Fatalf("a channel holding a link's secret: %v", e)
+	}
+	p, e := channelChange(t, &s, "create", "", "", opsChannel, "8")
+	if e != nil {
+		t.Fatal(e)
+	}
+	i := slices.IndexFunc(p.State.Config.Links, func(l link) bool { return l.Password != nil })
+	l := p.State.Config.Links[i]
+	l.Password = &secretReference{Secret: "OPS_URL"}
+	body, _ := json.Marshal(l)
+	version := p.State.Versions[objectKey{"links", l.ID}].Version
+	c, e := ObjectChange("replace", "links", l.ID, &version, body)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e := prepareChanges(&p.State, c, "9", fixedTime); e == nil || !strings.Contains(e.Error(), "VALIDATION_FAILED") {
+		t.Fatalf("a link holding a channel's secret: %v", e)
+	}
+}
+
+// Only a restore leaves a channel's secret unresolved; a client may not, or the channel would skip its checks.
+func TestChannelSecretCannotBeWrittenUnresolved(t *testing.T) {
+	s := seededState(t)
+	body := `{"name":"x","kind":"webhook","webhook":{"url":{"secret":"NOPE","unresolved":true}}}`
+	if _, e := channelChange(t, &s, "create", "", "", body, "8"); e == nil {
+		t.Fatal("an unresolved channel secret was saved")
+	}
+}
+
+// A channel URL that no longer holds a URL, as a restore may leave it, blocks saves of that channel only.
+func TestBadChannelURLBlocksOnlyItsChannel(t *testing.T) {
+	s := seededState(t)
+	p, e := channelChange(t, &s, "create", "", "", opsChannel, "8")
+	if e != nil {
+		t.Fatal(e)
+	}
+	entry := p.State.Secrets.Scopes["core"]["OPS_URL"]
+	entry.Value = "Bearer not-a-url"
+	p.State.Secrets.Scopes["core"]["OPS_URL"] = entry
+	other := `{"name":"other","kind":"webhook","webhook":{"url":{"secret":"OTHER_URL","set":"https://hooks.example/o","expectedVersion":"0"}}}`
+	if _, e := channelChange(t, &p.State, "create", "", "", other, "9"); e != nil {
+		t.Fatalf("an unrelated save: %v", e)
+	}
+	id := p.State.Config.Notifications.Channels[0].ID
+	replace := `{"name":"ops","kind":"webhook","webhook":{"url":{"secret":"OPS_URL"}}}`
+	if _, e := channelChange(t, &p.State, "replace", id, "8", replace, "9"); e == nil || !strings.Contains(fmt.Sprintf("%#v", e), "http or https") {
+		t.Fatalf("saving the channel itself: %#v", e)
 	}
 }

@@ -198,7 +198,7 @@ printf '%s\n' '{"name":"ops","kind":"webhook","filter":{"minSeverity":"warning",
 - **`kind`:** `webhook` only, for now.
 - **`enabled`:** defaults to `true` when omitted.
 - **`filter`:** `minSeverity` is `info` (the default), `warning` or `critical`; `sources` names the sources to send, and an empty or absent list means all of them.
-- **`webhook`:** `url` is a named secret, since webhook URLs carry tokens; its value must be an `http` or `https` URL with a host, which is checked on every save. `authorization`, optional, is a named secret sent as the `Authorization` header's value. Both are written and read like a PPPoE password; replacing a channel without `authorization` removes its reference.
+- **`webhook`:** `url` is a named secret, since webhook URLs carry tokens; its value must be an `http` or `https` URL with a host, which is checked on every save. `authorization`, optional, is a named secret sent as the `Authorization` header's value. Both are written and read like a PPPoE password; replacing a channel without `authorization` removes its reference. A secret a channel holds cannot also be held by a link, nor a link's by a channel, so neither capability reaches the other's secrets; a client cannot save a channel secret as `unresolved`. The URL is checked for the channels a save writes, or whose URL it sets.
 
 ### Settings across Andaru versions
 

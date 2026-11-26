@@ -482,6 +482,10 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 				}
 				reference := map[string]any{"secret": name}
 				if pw["unresolved"] == true {
+					// Only a restore leaves a channel's secret unresolved: a channel saved so would skip its checks.
+					if op.Collection == "notifications.channels" {
+						return empty, fault("VALIDATION_FAILED", input.path(i, f.path, true), "A notification channel's secret must be set or exist.")
+					}
 					reference["unresolved"] = true
 				}
 				f.parent[f.name] = reference
@@ -605,9 +609,24 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 			}
 		}
 	}
-	// A webhook URL is checked where its value is known: here, whichever operation set it.
+	// A secret is held by links or by channels, not both: a channel's secrets are changed only with notifications.manage,
+	// and a link's only with configuration.write, so neither may reach the other's.
+	holders := map[string]string{}
+	for _, h := range heldSecrets(&d) {
+		if other, ok := holders[h.ref.Secret]; ok && other != h.key.Collection {
+			return empty, rebaseValidation(validationError{{h.path, "A secret a notification channel holds cannot be held by a link, nor a link's by a channel."}}, &d, origins, input)
+		}
+		holders[h.ref.Secret] = h.key.Collection
+	}
+	// A webhook URL is checked where its value is known: for the channels this batch writes, or whose URL it sets.
 	for i, c := range d.Notifications.Channels {
-		if c.Webhook != nil && !c.Webhook.URL.Unresolved && !webhookURL(current.Secrets.Scopes["core"][c.Webhook.URL.Secret].Value) {
+		if c.Webhook == nil || c.Webhook.URL.Unresolved {
+			continue
+		}
+		if _, written := writes[objectKey{"notifications.channels", c.ID}]; !written && !changedSecrets[c.Webhook.URL.Secret] {
+			continue
+		}
+		if !webhookURL(current.Secrets.Scopes["core"][c.Webhook.URL.Secret].Value) {
 			path := fmt.Sprintf("/notifications/channels/%d/webhook/url", i)
 			return empty, rebaseValidation(validationError{{path, "Expected the secret to hold an http or https URL with a host."}}, &d, origins, input)
 		}
@@ -944,15 +963,20 @@ func rebaseValidation(details validationError, d *declaration, origins map[objec
 
 // rebaseSecrets blames the earliest batch operation whose own secret entry fails validation.
 func rebaseSecrets(failure validationError, doc secretDocument, head Version, setters map[string]heldSecret, origins map[objectKey]int, input Changes) *Fault {
-	best, path := -1, "/password"
+	best, path := -1, ""
 	for name, setter := range setters {
 		one := secretDocument{SchemaVersion: doc.SchemaVersion, Scopes: map[string]map[string]secretEntry{"core": {name: doc.Scopes["core"][name]}}}
 		if validateSecrets(one, head) != nil && (best < 0 || origins[setter.key] < best) {
 			best, path = origins[setter.key], setter.path
 		}
 	}
-	if best < 0 {
-		best = 0
+	if best < 0 { // no one entry fails, as when the document as a whole is too large: blame the first setter
+		best, path = 0, ""
+		for _, setter := range setters {
+			if i := origins[setter.key]; path == "" || i < best {
+				best, path = i, setter.path
+			}
+		}
 	}
 	return fault("VALIDATION_FAILED", input.path(best, path, true), failure[0].Message)
 }

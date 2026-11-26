@@ -94,6 +94,8 @@ func validateSecrets(doc secretDocument, head Version) error {
 	return nil
 }
 
+// checkResolvedReferences gates an apply, so it covers links alone: channels take effect without an apply, and one
+// whose secret is unresolved cannot be saved again until it is set.
 func checkResolvedReferences(d *declaration) error {
 	var details []FieldError
 	for i, l := range d.Links {
