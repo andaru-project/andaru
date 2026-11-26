@@ -79,6 +79,8 @@ type aliasFeeds struct {
 	// the loads.
 	owed    atomic.Bool
 	filling sync.Mutex
+	// lastLive is the live generation the last apply event found: 0 before the first since this start, -1 for none.
+	lastLive atomic.Int64
 	// refreshed is each alias's last "Refresh now", and the request it published; cleared, the aliases whose
 	// notification was cleared since this start and not raised since.
 	refreshed map[string]refresh
@@ -135,14 +137,24 @@ func (f *aliasFeeds) nudge() {
 	}
 }
 
-// apply follows an apply: the live generation may have changed, and with it the sources its filter's sets are filled
-// from. A result recorded while it activated, after its filter was filled and before it went live, was saved for a
-// source the live generation did not name yet: the load fills the sets again from the state files.
+// apply follows an apply event: the live generation may have changed, and with it the sources its filter's sets are
+// filled from. A result recorded while it activated, after its filter was filled and before it went live, was saved
+// for a source the live generation did not name yet: the load fills the sets again from the state files. Every status
+// change is an event, so only one that finds another live generation than the last, or the first since this start,
+// loads; one whose pointers do not read loads too.
 func (f *aliasFeeds) apply() {
-	f.owed.Store(true)
-	select {
-	case f.applied <- struct{}{}:
-	default:
+	live := int64(-1)
+	if p, err := generation.ReadPointers(generation.Dir(f.stateDir)); err != nil {
+		live = 0
+	} else if p.Live != nil {
+		live = int64(*p.Live)
+	}
+	if f.lastLive.Swap(live) != live || live == 0 {
+		f.owed.Store(true)
+		select {
+		case f.applied <- struct{}{}:
+		default:
+		}
 	}
 	f.nudge()
 }

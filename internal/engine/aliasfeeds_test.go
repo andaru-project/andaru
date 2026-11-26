@@ -582,12 +582,22 @@ func TestAnApplyLoadsTheLists(t *testing.T) {
 	if b.realized != before+1 {
 		t.Fatalf("realized %d, %d before the apply", b.realized, before)
 	}
-	// Without a result, the apply asks the run loop for the load.
+	// Without a result, an apply that finds another live generation asks the run loop for the load.
+	b.goLive(urlAlias, b.src(0).hash)
 	b.f.apply()
 	<-b.f.applied
 	b.f.fill()
 	if b.realized != before+2 || b.f.owed.Load() {
 		t.Fatalf("realized %d", b.realized)
+	}
+	// A status change of the same live generation loads nothing.
+	b.f.apply()
+	if b.f.owed.Load() || len(b.f.applied) != 0 {
+		t.Fatal("a load owed with the same live generation")
+	}
+	b.goLive(urlAlias, b.src(0).hash)
+	if b.f.apply(); !b.f.owed.Load() || len(b.f.applied) != 1 {
+		t.Fatal("no load owed for a new live generation")
 	}
 }
 
