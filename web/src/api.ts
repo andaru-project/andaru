@@ -7,6 +7,7 @@ import type {
   ConfigChangesResult,
   Dhcp4Entry,
   Dhcp6Entry,
+  DnsService,
   ErrorDetail,
   Finding,
   History,
@@ -429,6 +430,25 @@ export class ApiClient {
 
   deleteDhcp6(id: string, version: string) {
     return this.request(`/api/v1/config/dhcp6/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { 'If-Match': `"${id}.${version}"` } }, true);
+  }
+
+  async dns(): Promise<SavedObject<DnsService> | null> {
+    try {
+      return await this.request<SavedObject<DnsService>>('/api/v1/config/dns');
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) return null;
+      throw error;
+    }
+  }
+
+  saveDns(value: DnsService, version: string) {
+    return this.request<SavedObject<DnsService>>('/api/v1/config/dns', {
+      method: 'PUT', headers: { 'If-Match': `"dns.${version}"` }, body: JSON.stringify(value),
+    }, true);
+  }
+
+  deleteDns(version: string) {
+    return this.request('/api/v1/config/dns', { method: 'DELETE', headers: { 'If-Match': `"dns.${version}"` } }, true);
   }
 
   // The head's questions after an upgrade, with the choices given so far. It saves nothing.

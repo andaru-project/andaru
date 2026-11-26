@@ -231,7 +231,34 @@ export interface Segment {
       requestPrefixLength?: number;
       ra?: { mode?: string; enabled?: boolean; managed?: boolean; otherInfo?: boolean };
     };
+    dns?: { servers?: string[]; searchDomains?: string[] };
   };
+}
+
+export type DnsMode = 'recursive' | 'forward';
+export type DnsUpstreamProtocol = 'do53' | 'dot';
+
+export interface DnsUpstream {
+  address: string;
+  protocol: DnsUpstreamProtocol;
+  tlsName?: string;
+}
+
+export interface DnsService {
+  mode: DnsMode;
+  upstreams?: DnsUpstream[];
+  segments: string[];
+  localDomain?: string;
+  searchDomains?: string[];
+  registerLeases?: boolean;
+  virtualAddresses?: string[];
+}
+
+export interface VirtualAddress {
+  id: string;
+  name: string;
+  description?: string;
+  address: string;
 }
 
 export type DhcpOptionType = 'string' | 'ip' | 'uint8' | 'uint16' | 'uint32' | 'boolean' | 'hex';
@@ -343,7 +370,8 @@ export interface Snapshot {
     management?: { segment: string; allowedSources?: string[] };
     dhcp?: Dhcp4Entry[];
     dhcp6?: Dhcp6Entry[];
-    dns?: { mode: string; segments: string[]; localDomain?: string; searchDomains?: string[]; registerLeases?: boolean };
+    dns?: DnsService;
+    virtualAddresses?: VirtualAddress[];
     aliases?: {
       addresses: Array<Partial<AddressAlias> & { id: string; name: string }>;
       ports: Array<Partial<PortAlias> & { id: string; name: string }>;

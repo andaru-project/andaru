@@ -15,6 +15,7 @@ import { AuditScreen } from './screens/AuditScreen';
 import { ChangesScreen } from './screens/ChangesScreen';
 import { DashboardScreen } from './screens/DashboardScreen';
 import { DhcpScreen } from './screens/DhcpScreen';
+import { DnsScreen } from './screens/DnsScreen';
 import { InterfacesScreen } from './screens/InterfacesScreen';
 import { Bell } from './screens/Marks';
 import { NotificationsScreen } from './screens/NotificationsScreen';
@@ -47,6 +48,7 @@ const pageTitles: Record<string, string> = {
   '/setup': 'Setup assistant',
   '/network/interfaces': 'Interfaces',
   '/network/dhcp': 'DHCP',
+  '/network/dns': 'DNS',
   '/network/topology': 'Topology',
   '/network/vlans': 'VLANs & Segments',
   '/network/vlans/flow': 'VLAN Flow',
@@ -210,6 +212,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
       items: [
         { to: '/network/interfaces', label: 'Interfaces', visible: canReadStatus },
         { to: '/network/dhcp', label: 'DHCP', visible: canReadChanges || canReadStatus },
+        { to: '/network/dns', label: 'DNS', visible: canReadChanges },
         { to: '/network/topology', label: 'Topology', visible: canReadStatus },
         { to: '/network/vlans', label: 'VLANs & Segments', visible: canReadStatus },
         { to: '/network/vlans/flow', label: 'VLAN Flow', visible: canReadStatus },
@@ -283,6 +286,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   const pages: Array<[string, ReactNode]> = [
     ['/network/interfaces', <InterfacesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/network/dhcp', <DhcpScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
+    ['/network/dns', <DnsScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/firewall/rules', <RulesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/firewall/aliases', <AliasesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/changes', <ChangesScreen api={api} session={session} state={changes.data} stateError={changes.error} connected={connected} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />],
