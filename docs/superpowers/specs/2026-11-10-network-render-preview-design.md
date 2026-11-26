@@ -99,7 +99,7 @@ networkd has no PPPoE client and will not get one: systemd#481 has been open sin
 
 A PPPoE link is rendered when it is enabled and has a segment. Supported segment addressing is IPv4 `ppp` or `none` and IPv6 `none`, `slaac` or `dhcp6`, with at least one family in use and RA off. Anything else the saved model permits on a PPPoE segment (IPv6 `static` or `delegated`, RA, both families `none`) is an `UNSUPPORTED_COMBINATION` error and the link is not rendered. A PPPoE link without a segment is not rendered and gets the same code as a warning. A parent interface whose kernel name contains anything outside `[A-Za-z0-9_.:-]` is refused with `INTERFACE_NAME_UNSUPPORTED`: the name is written into a unit, a device-unit name and a pppd word, which each quote differently, and predictable interface names never need it. Each rendered link produces three files.
 
-1. **`/run/andaru/ppp/<pp-name>.options`**, mode `0600`, marked secret:
+1. **`/run/andaru-ppp/<pp-name>.options`**, mode `0600`, marked secret:
 
    ```
    plugin pppoe.so
@@ -145,7 +145,7 @@ A PPPoE link is rendered when it is enabled and has a segment. Supported segment
    [Service]
    Type=notify
    ExecStartPre=/usr/lib/systemd/systemd-networkd-wait-online --interface=<parent>:carrier --timeout=60
-   ExecStart=/usr/sbin/pppd file /run/andaru/ppp/<pp-name>.options nodetach up_sdnotify
+   ExecStart=/usr/sbin/pppd file /run/andaru-ppp/<pp-name>.options nodetach up_sdnotify
    ExecReload=/bin/kill -HUP $MAINPID
    SuccessExitStatus=5
    Restart=on-failure

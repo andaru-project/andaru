@@ -401,7 +401,7 @@ The response has `state: "preview"`, the `savedVersion` rendered, `realizable` (
 What is rendered:
 
 - **Ethernet, VLAN, bridge, bond:** `/run/systemd/network/50-andaru-<name>.netdev` and `.network`. Physical NICs are matched by `PermanentMACAddress=`, and a `.link` file keeps the name each has now across reboots: the boot service has udev apply Andaru's before networkd starts. Virtual links get a derived name: `vl`, `br`, `bo` or `pp` plus the first 12 hex digits of the link ID. Your own `name` and `description` never appear in a rendered file.
-- **PPPoE:** pppd runs the session and owns IPv4; networkd keeps IPv6 (router discovery, DHCPv6, prefix delegation) on the PPP interface. Three files: `/run/andaru/ppp/<pp-name>.options` (mode `0600`, secret), `/run/systemd/system/andaru-pppoe-<pp-name>.service`, and a `.network` with `KeepConfiguration=yes` so networkd leaves pppd's address and default route alone. The split follows [systemd#481](https://github.com/systemd/systemd/issues/481).
+- **PPPoE:** pppd runs the session and owns IPv4; networkd keeps IPv6 (router discovery, DHCPv6, prefix delegation) on the PPP interface. Three files: `/run/andaru-ppp/<pp-name>.options` (mode `0600`, secret), `/run/systemd/system/andaru-pppoe-<pp-name>.service`, and a `.network` with `KeepConfiguration=yes` so networkd leaves pppd's address and default route alone. The split follows [systemd#481](https://github.com/systemd/systemd/issues/481).
 - Provider-offered DNS, NTP, hostname and search domains are ignored on purpose; those are later areas.
 
 | Finding | Severity | Meaning and remedy |
@@ -422,21 +422,15 @@ What is rendered:
 | `RA_DNS_UNAVAILABLE` | warning | The DNS service serves a delegated segment that has no static IPv6 address, so its advertisements carry no DNS server. |
 | `DNS_NOT_APPLIED` | warning | A segment declares DNS servers, but this host's `/etc/resolv.conf` is not managed by systemd-resolved, so they are saved and not used. |
 
-### Trying a PPPoE line by hand
+### PPPoE sessions
 
-The preview is not exercised against a live line. Until apply and rollback exist you can try one by hand, as root, on a host running the standard Debian kernel with `ppp` installed and systemd-networkd active. **This changes live networking with no rollback and no Andaru packet filter. Do it from the console, not over the network you are about to change.**
+An apply starts each PPPoE session's unit after networkd has reloaded, and boot starts them after it copies the confirmed generation into `/run`. A running session is restarted only when its unit or options changed since Andaru last started it, because a redial drops every connection through it and may change the public address. `/run/andaru-ppp` carries pppd's SELinux type (`pppd_etc_t`) so pppd may read the options there.
 
-- pppd installs an IPv4 default route. It can replace the route your management session uses.
-- Write **only the WAN-side files**: the WAN NIC's `.network`, the VLAN's `.netdev` and `.network`, the `pp…` `.network`, the `.options` file and the `.service`. Do not write a LAN `.network` that has `IPv6SendRA=yes` or `DHCPPrefixDelegation=yes`: it turns on IPv6 forwarding and announces a prefix, and nothing filters the forwarded traffic yet.
-- Do not stop or restart `andaru-engine` during the test. `/run/andaru` is its runtime directory, and systemd deletes it, including `ppp/*.options`, when the engine stops.
+Verification treats a session like an interface with an address: a session that was up before the apply, holding an IPv4 address or the default route, must be up again before the verification time runs out, or the apply is rolled back. A new session is not waited for, so a line that is still being provisioned does not block an apply. Watch it with `journalctl -fu andaru-pppoe-<pp-name>.service` and `networkctl status <pp-name>`.
 
-Steps:
+When the packet filter is on, TCP handshakes through a session have their MSS lowered to fit its MTU, both ways (MTU minus 40 for IPv4, minus 60 for IPv6).
 
-1. Write each chosen file to its `path` with its `mode`, creating `/run/andaru/ppp` as `0700`. In the `.options` file replace the word `<redacted>` with the password, keeping the quotes; escape `\` and `"` with a backslash.
-2. `networkctl reload`, then `systemctl daemon-reload` and `systemctl start andaru-pppoe-<pp-name>.service`.
-3. Watch `journalctl -fu andaru-pppoe-<pp-name>.service` and `networkctl status <pp-name>`.
-
-To undo: stop the unit, delete the files you wrote, `systemctl daemon-reload`, `networkctl reload`, and `networkctl delete` the `vl…` device. Everything is under `/run`, so a reboot also clears it. Expect the `[DHCPv6]` keys to be the part that depends on your provider.
+`TestPPPoESessionInNamespaces` (in `internal/render`, run by CI's root suites) dials the rendered options against rp-pppoe's `pppoe-server` in a second network namespace: the credentials reach the server intact, the interface gets its name, MTU, address and default route, and a wrong password stays down. DHCPv6 prefix delegation over a session, reboot and reset are qualified on the lab image.
 
 ## Applying
 
@@ -466,7 +460,7 @@ Boot needs `andaru-network-boot.service` ([unit](../../packaging/systemd/andaru-
 | `MANAGEMENT_REQUIRED` | Rules or outbound NAT are declared without `management.segment`, or the management segment's interface is unavailable. |
 | `DHCP_WITHOUT_DNS` | (warning) A DHCP server hands out no DNS server: the DNS service does not serve its segment and `dnsServers` is empty. |
 | `FOREIGN_FILTER` | `nftables.service`, `firewalld` or `ufw` is enabled and would replace or override Andaru's filter. |
-| `APPLY_UNSUPPORTED` | PPPoE links wait for the firewall; router advertisement modes `managed`, `assisted` and `stateless` need a `dhcp6` entry for the segment; advertisements and delegated prefixes need the packet filter, so a management segment, since IPv6 forwarding stays off without it. |
+| `APPLY_UNSUPPORTED` | Router advertisement modes `managed`, `assisted` and `stateless` need a `dhcp6` entry for the segment; advertisements and delegated prefixes need the packet filter, so a management segment, since IPv6 forwarding stays off without it. |
 | `NETDEV_CHANGE_UNSUPPORTED` | An existing VLAN, bridge or bond would change. Remove it in one apply and add it again in the next. |
 | `BOOT_UNIT_DISABLED` | `andaru-network-boot.service` is not enabled, so a confirmed configuration would not return after a reboot. |
 
@@ -769,7 +763,7 @@ Executed as root on that VM:
 - **systemd:** `systemd-analyze verify` accepted each rendered unit with no output, the `BindsTo=` device name equalled `systemd-escape --path`, and an unknown key produced a warning.
 - **networkd:** a private `systemd-networkd` in its own network and mount namespaces logged `Successfully loaded.` for every rendered `.netdev` and `.network` of all seven fixtures with no parse complaint, and reported an injected unknown key. Host links were identical before and after.
 - **Installed path:** a synthetic topology was saved through the CLI: the VM's real `eth0` MAC as a 1508-byte WAN NIC, VLAN 6, PPPoE at 1500 with `kpn@internet`, and a LAN NIC with an absent MAC. `andaru ctl preview network` resolved the WAN NIC to `eth0`; rendered its `.network`, the VLAN `.netdev`/`.network`, the pppd options (password shown as `<redacted>`), the service unit and the PPP `.network`; reported `FOREIGN_CONFIGURATION` for both netplan files, `HARDWARE_MISSING` for the LAN NIC and `DEPENDENCY_UNAVAILABLE` for what depends on it; and raised neither `TOOL_MISSING` nor `KERNEL_SUPPORT_MISSING`. A UID 65534 caller got exit 1 and no output.
-- The stateless nft ruleset, both forwarding sysctls, interface addresses, `/run/systemd/network` and the absence of `/run/andaru/ppp` and of any Andaru unit were identical before and after. The synthetic objects were deleted, leaving saved version 9 with an empty topology; two unused test secrets remain under the retention policy.
+- The stateless nft ruleset, both forwarding sysctls, interface addresses, `/run/systemd/network` and the absence of `/run/andaru-ppp` and of any Andaru unit were identical before and after. The synthetic objects were deleted, leaving saved version 9 with an empty topology; two unused test secrets remain under the retention policy.
 
 After the adversarial review, code commit `1ec0a3aa91a29fe34cba5ee6569049544abb7acf` (`vcs.modified=false`, SHA-256 `909f9822d6e1b809f14d4f775c02ec517ca5211853647608d9df50312566daa2`) replaced that binary. The tagged engine and render suites passed again on the VM, including the private networkd load of the changed SLAAC output, and the installed CLI previewed the empty saved topology with only the two netplan findings. After the bot review, code commit `5ebcebbe9f828b23f384a357db9d8755f7e4a900` (SHA-256 `6791d4927bec7fcfe984edc0413b2cc522c9b702915cdef57deea033bfda1b24`) replaced it in turn; the tagged CLI and engine suites passed on the VM and `--saved-version ""` exited 2.
 

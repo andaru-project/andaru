@@ -75,14 +75,25 @@ type Generation struct {
 
 var (
 	ownPath = regexp.MustCompile(`^/run/systemd/network/50-andaru-[^/]+\.(network|netdev|link)$`)
-	idName  = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
+	// A PPPoE session is pppd's options and the unit that runs pppd on them, named after the session's interface.
+	pppOptions = regexp.MustCompile(`^` + pppDir + `[A-Za-z0-9_.:-]+\.options$`)
+	pppUnit    = regexp.MustCompile(`^` + pppUnitPrefix + `[A-Za-z0-9_.:-]+\.service$`)
+	idName     = regexp.MustCompile(`^[1-9][0-9]{0,8}$`)
 )
 
 // Dir is where generations live under the engine's state directory.
 func Dir(stateDir string) string { return filepath.Join(stateDir, "generations") }
 
 func allowed(path string) bool {
-	return ownPath.MatchString(path) || path == catchAllPath || path == filterEntry || path == keaFile || path == kea6File || path == kea6Template || path == unboundFile || path == resolvedFile
+	return ownPath.MatchString(path) || pppOptions.MatchString(path) || pppUnit.MatchString(path) || path == catchAllPath || path == filterEntry || path == keaFile || path == kea6File || path == kea6Template || path == unboundFile || path == resolvedFile
+}
+
+// modeFor is the one mode a generation file may have: pppd's options hold the PPPoE password.
+func modeFor(path string) string {
+	if pppOptions.MatchString(path) {
+		return "0600"
+	}
+	return "0644"
 }
 
 func is(p *int, id int) bool { return p != nil && *p == id }
@@ -196,7 +207,7 @@ func Create(dir string, m Manifest, contents map[string][]byte) (int, error) {
 	}
 	for i, f := range m.Files {
 		data, ok := contents[f.Path]
-		if !ok || !allowed(f.Path) || f.Mode != "0644" {
+		if !ok || !allowed(f.Path) || f.Mode != modeFor(f.Path) {
 			return 0, fmt.Errorf("generation file %q (mode %q) is not one Andaru may write", f.Path, f.Mode)
 		}
 		m.Files[i].SHA256 = sum(data)
@@ -316,7 +327,7 @@ func List(dir string) (Pointers, []Generation, error) {
 
 // content returns one stored file after checking it against the manifest.
 func (g Generation) content(dir string, f FileEntry) ([]byte, error) {
-	if !allowed(f.Path) || f.Mode != "0644" {
+	if !allowed(f.Path) || f.Mode != modeFor(f.Path) {
 		return nil, fmt.Errorf("generation %d names %q, which Andaru may not write", g.ID, f.Path)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, strconv.Itoa(g.ID), "files", filepath.Base(f.Path)))

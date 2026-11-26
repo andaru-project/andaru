@@ -142,7 +142,7 @@ func TestApplyFindings(t *testing.T) {
 				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"enabled":false,"managed":true,"otherInfo":true}}}},
 				{"addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","ra":{"mode":"router"}}}}]}`)
 			return in
-		}, []want{{"APPLY_UNSUPPORTED", "/links/1"}}},
+		}, nil},
 		// Without the filter IPv6 forwarding stays off, so an advertised default router would drop everything.
 		"advertisements without the filter": {func() gateInput {
 			in := taken()

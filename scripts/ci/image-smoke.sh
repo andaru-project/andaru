@@ -85,5 +85,7 @@ done
 for f in /run/andaru-unbound/andaru.conf /run/andaru-leases/leases.conf; do
 	matchpathcon "$f" | grep -q ":named_conf_t:" || fail "$f would not be readable by Unbound: $(matchpathcon "$f")"
 done
+matchpathcon /run/andaru-ppp/pp0.options | grep -q ":pppd_etc_t:" ||
+	fail "PPPoE options would not be readable by pppd: $(matchpathcon /run/andaru-ppp/pp0.options)"
 echo "image-smoke: $VERSION ok"
 '

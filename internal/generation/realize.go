@@ -168,7 +168,11 @@ func (r Realizer) files(g Generation) ([]placed, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, placed{path: f.Path, mode: 0o644, uid: -1, gid: -1, data: data})
+		mode := fs.FileMode(0o644)
+		if f.Mode == "0600" {
+			mode = 0o600
+		}
+		out = append(out, placed{path: f.Path, mode: mode, uid: -1, gid: -1, data: data})
 	}
 	return out, nil
 }
@@ -242,6 +246,9 @@ func (r Realizer) settle(ctx context.Context, from, to []placed) error {
 			slog.Warn("delete network device", "device", name, "error", err)
 		}
 	}
+	if err := r.sessions(ctx, from, to); err != nil {
+		return err
+	}
 	return r.services(ctx, from, to)
 }
 
@@ -307,10 +314,11 @@ func globalIPv4(l host.LinkStatus) bool {
 	return slices.ContainsFunc(l.Addresses, func(a host.AddressStatus) bool { return a.Family == "ipv4" && a.Scope == "global" })
 }
 
-// connected lists the physical interfaces networkd gives a global IPv4 address, and whether one carries the default route.
+// connected lists the physical interfaces and PPPoE sessions networkd manages with a global IPv4 address, and whether
+// one carries the default route: each must still have one after a change.
 func (o observation) connected() (names []string, route bool) {
 	for _, m := range o.managed {
-		if l, ok := o.link(m.Name); ok && l.Kind == "" && globalIPv4(l) {
+		if l, ok := o.link(m.Name); ok && (l.Kind == "" || l.Kind == "ppp") && globalIPv4(l) {
 			names = append(names, m.Name)
 		}
 		route = route || (o.route != "" && o.route == m.Name)
@@ -321,8 +329,8 @@ func (o observation) connected() (names []string, route bool) {
 // unmet says why the host does not yet run the generation; "" means it does.
 func (o observation) unmet(set []placed, names []string, route bool) string {
 	for _, f := range set {
-		// The catch-all binds only links no generation names, and there may be none.
-		if !strings.HasSuffix(f.path, ".network") || f.path == catchAllPath {
+		// The catch-all binds only links no generation names, and there may be none. A PPPoE interface exists only while its session is up; connected decides whether it had to be.
+		if !strings.HasSuffix(f.path, ".network") || f.path == catchAllPath || pppNetwork(f.data) {
 			continue
 		}
 		i := slices.IndexFunc(o.managed, func(m host.Managed) bool { return m.NetworkFile == f.path })
@@ -420,6 +428,11 @@ func (r Realizer) Activate(ctx context.Context, id int) (result error) {
 		return err
 	}
 	names, route := before.connected()
+	// A session the new set drops is stopped: its interface is not expected back.
+	names = slices.DeleteFunc(names, func(name string) bool {
+		l, _ := before.link(name)
+		return l.Kind == "ppp" && !slices.Contains(pppSessions(next), name)
+	})
 
 	// State first: a kill before the pointer moves leaves a generation that was never pending.
 	if err := r.writeState("activate:state-activating", id, State{State: Activating, Previous: p.Live}); err != nil {

@@ -33,7 +33,7 @@ func create(t *testing.T, dir string, m Manifest, files map[string]string) int {
 		if name == filterEntry {
 			path = name // the filter is a generation entry, not a file under /run
 		}
-		m.Files = append(m.Files, FileEntry{Path: path, Mode: "0644"})
+		m.Files = append(m.Files, FileEntry{Path: path, Mode: modeFor(path)})
 		contents[path] = []byte(body)
 	}
 	id, err := Create(dir, m, contents)
@@ -89,17 +89,22 @@ func TestCreateNumbersAndReadsBack(t *testing.T) {
 }
 
 func TestCreateRefusesForeignPath(t *testing.T) {
-	for _, path := range []string{
-		"/etc/passwd",
-		"/run/systemd/network/10-netplan-eth0.network",
-		"/run/systemd/network/50-andaru-x/../../etc/y.network",
-		"/run/systemd/system/andaru-pppoe-x.service",
-		"/run/systemd/network/50-andaru-a.conf",
+	for path, mode := range map[string]string{
+		"/etc/passwd": "0644",
+		"/run/systemd/network/10-netplan-eth0.network":         "0644",
+		"/run/systemd/network/50-andaru-x/../../etc/y.network": "0644",
+		"/run/systemd/system/sshd.service":                     "0644",
+		"/run/systemd/system/andaru-pppoe-x/../sshd.service":   "0644",
+		"/run/systemd/network/50-andaru-a.conf":                "0644",
 		// Only the catch-all's exact path is Andaru's, not its prefix.
-		"/run/systemd/network/51-andaru-other.network",
+		"/run/systemd/network/51-andaru-other.network": "0644",
+		// A session's password file is private, and only it may be.
+		"/run/andaru-ppp/pp0.options":                  "0644",
+		"/run/systemd/system/andaru-pppoe-pp0.service": "0600",
+		"/run/andaru-ppp/pp0.started":                  "0600",
 	} {
 		dir := Dir(t.TempDir())
-		_, err := Create(dir, Manifest{Files: []FileEntry{{Path: path, Mode: "0644"}}}, map[string][]byte{path: []byte("x")})
+		_, err := Create(dir, Manifest{Files: []FileEntry{{Path: path, Mode: mode}}}, map[string][]byte{path: []byte("x")})
 		if err == nil || len(numbered(t, dir)) != 0 {
 			t.Fatalf("%s: err=%v, left %v", path, err, numbered(t, dir))
 		}

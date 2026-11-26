@@ -1,4 +1,4 @@
-### /run/andaru/ppp/pp000000030000.options 0600 secret=true sources=/links/2,/segments/0
+### /run/andaru-ppp/pp000000030000.options 0600 secret=true sources=/links/2,/segments/0
 plugin pppoe.so
 nic-vl000000020000
 ifname pp000000030000
@@ -20,7 +20,7 @@ defaultroute
 +ipv6
 ipv6cp-use-persistent
 
-### /run/andaru/ppp/pp000000030000.options (as shown)
+### /run/andaru-ppp/pp000000030000.options (as shown)
 plugin pppoe.so
 nic-vl000000020000
 ifname pp000000030000
@@ -191,7 +191,7 @@ After=sys-subsystem-net-devices-vl000000020000.device systemd-networkd.service
 [Service]
 Type=notify
 ExecStartPre=/usr/lib/systemd/systemd-networkd-wait-online --interface=vl000000020000:carrier --timeout=60
-ExecStart=/usr/sbin/pppd file /run/andaru/ppp/pp000000030000.options nodetach up_sdnotify
+ExecStart=/usr/sbin/pppd file /run/andaru-ppp/pp000000030000.options nodetach up_sdnotify
 ExecReload=/bin/kill -HUP $MAINPID
 SuccessExitStatus=5
 Restart=on-failure

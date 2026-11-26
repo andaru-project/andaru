@@ -4,7 +4,7 @@
 set -eu
 
 art=${1:?directory of test binaries}
-dnf -yq install nftables kea kea-hooks unbound iproute iputils traceroute procps-ng python3 >/dev/null
+dnf -yq install nftables kea kea-hooks unbound iproute iputils traceroute procps-ng python3 ppp rp-pppoe >/dev/null
 # Fedora's Unbound configuration names a trust anchor that unbound-checkconf requires.
 unbound-anchor -a /var/lib/unbound/root.key || test -s /var/lib/unbound/root.key
 export ANDARU_TEST_REQUIRE_TOOLS=1
@@ -15,5 +15,6 @@ ANDARU_TEST_BINARY="$art/andaru" "$art/engine.test" -test.v -test.timeout=120s
 "$art/audit.test" -test.v -test.timeout=120s
 "$art/ctl.test" -test.v -test.timeout=120s
 "$art/reset.test" -test.v -test.timeout=120s
-# The pppd and networkd tool proofs in this binary are lab proofs; CI runs the filter ones.
-"$art/render.test" -test.v -test.timeout=120s -test.run "FilterInNamespace|NftScriptIsValid|ServiceGoldensPassTheirTools|DHCPv6GoldensPassKea"
+# The networkd and systemd tool proofs in this binary are lab proofs; CI runs the filter ones and dials PPPoE between
+# namespaces, which needs the host's ppp_generic and pppoe modules.
+"$art/render.test" -test.v -test.timeout=180s -test.run "FilterInNamespace|NftScriptIsValid|ServiceGoldensPassTheirTools|DHCPv6GoldensPassKea|PPPoESessionInNamespaces"

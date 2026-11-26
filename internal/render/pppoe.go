@@ -113,7 +113,7 @@ func (r *renderer) pppoe(i int) {
 		return strings.Join(lines, "\n") + "\n"
 	}
 	sources := []string{linkPath(i, ""), fmt.Sprintf("/segments/%d", si)}
-	optionsPath := "/run/andaru/ppp/" + name + ".options"
+	optionsPath := "/run/andaru-ppp/" + name + ".options"
 	r.result.Files = append(r.result.Files, File{Path: optionsPath, Mode: "0600", Secret: true,
 		Content: options(quoteOption(redacted)), real: options(quoteOption(password)), Sources: sources})
 

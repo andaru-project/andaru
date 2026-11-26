@@ -1,4 +1,4 @@
-### /run/andaru/ppp/pp000000020000.options 0600 secret=true sources=/links/1,/segments/0
+### /run/andaru-ppp/pp000000020000.options 0600 secret=true sources=/links/1,/segments/0
 plugin pppoe.so
 nic-enx-1.2
 ifname pp000000020000
@@ -19,7 +19,7 @@ noipdefault
 defaultroute
 noipv6
 
-### /run/andaru/ppp/pp000000020000.options (as shown)
+### /run/andaru-ppp/pp000000020000.options (as shown)
 plugin pppoe.so
 nic-enx-1.2
 ifname pp000000020000
@@ -96,7 +96,7 @@ After=sys-subsystem-net-devices-enx\x2d1.2.device systemd-networkd.service
 [Service]
 Type=notify
 ExecStartPre=/usr/lib/systemd/systemd-networkd-wait-online --interface=enx-1.2:carrier --timeout=60
-ExecStart=/usr/sbin/pppd file /run/andaru/ppp/pp000000020000.options nodetach up_sdnotify
+ExecStart=/usr/sbin/pppd file /run/andaru-ppp/pp000000020000.options nodetach up_sdnotify
 ExecReload=/bin/kill -HUP $MAINPID
 SuccessExitStatus=5
 Restart=on-failure

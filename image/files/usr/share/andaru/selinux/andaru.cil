@@ -2,3 +2,5 @@
 ; names into these directories, so they carry Unbound's configuration type; files created in them inherit it.
 (filecon "/run/andaru-unbound(/.*)?" any (system_u object_r named_conf_t ((s0) (s0))))
 (filecon "/run/andaru-leases(/.*)?" any (system_u object_r named_conf_t ((s0) (s0))))
+; pppd runs as pppd_t, which reads its configuration type. Andaru writes each PPPoE session's options here.
+(filecon "/run/andaru-ppp(/.*)?" any (system_u object_r pppd_etc_t ((s0) (s0))))

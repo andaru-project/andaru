@@ -57,6 +57,9 @@ type fakeNetworkd struct {
 	dns     map[string][]string     // what resolved reports per interface
 	editDNS func([]string) []string // distorts that report
 	offered map[string][]string     // servers resolved has from DHCP, for links whose file declares none
+	ppp     map[string]string       // PPPoE interfaces and the address pppd holds on each, which networkd keeps
+	// pppLoaded makes systemd report the PPPoE session units loaded; otherwise they are not found.
+	pppLoaded bool
 }
 
 func (f *fakeNetworkd) netFiles() map[string]string {
@@ -78,6 +81,9 @@ func (f *fakeNetworkd) apply() {
 		if device, ok := strings.CutSuffix(name, ".netdev"); ok {
 			f.devices[strings.TrimPrefix(device, "50-andaru-")] = true
 		}
+	}
+	for device, a := range f.ppp {
+		f.address[device] = []string{a}
 	}
 	f.dns = map[string][]string{}
 	for _, name := range slices.Sorted(maps.Keys(files)) {
@@ -152,6 +158,8 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 			out.WriteString(p + " via " + f.routes[p] + " metric 1024 pref medium\n")
 		}
 		return []byte(out.String()), nil
+	case strings.HasPrefix(command, "systemctl show -p LoadState --value andaru-pppoe-"):
+		return []byte(map[bool]string{false: "not-found\n", true: "loaded\n"}[f.pppLoaded]), nil
 	case command == "systemctl is-active --quiet systemd-networkd.service":
 		if f.stopped {
 			return nil, errors.New("inactive")
@@ -232,7 +240,9 @@ func (f *fakeNetworkd) run(_ context.Context, name string, args ...string) ([]by
 		var links []map[string]any
 		for i, device := range slices.Sorted(maps.Keys(f.devices)) {
 			link := map[string]any{"ifindex": i + 2, "ifname": device, "link_type": "ether", "operstate": "UP", "mtu": 1500, "flags": []string{}, "address": "02:00:00:00:00:01", "permaddr": "02:00:00:00:00:01"}
-			if device != "eth0" && device != "eth1" {
+			if _, ok := f.ppp[device]; ok {
+				link["linkinfo"] = map[string]string{"info_kind": "ppp"}
+			} else if device != "eth0" && device != "eth1" {
 				link["linkinfo"] = map[string]string{"info_kind": "vlan"}
 			}
 			addresses := []map[string]any{}

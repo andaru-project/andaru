@@ -139,7 +139,8 @@ func (r *renderer) filterChains() {
 	}
 	// A forward's own rule comes before the rules, so no later rule can shadow it.
 	input = append(input, boundInput...)
-	forward := append([]string{"ct state established,related accept", "ct state invalid drop"}, boundForward...)
+	// The clamp comes first: conntrack counts a SYN-ACK as established, and the accept would skip it.
+	forward := slices.Concat(f.clampMSS(), []string{"ct state established,related accept", "ct state invalid drop"}, boundForward)
 	// One list, two chains: a rule to the firewall is an input rule, any other a forward rule. A packet meets
 	// only one chain, so each chain keeps the list's order and nothing else of it matters.
 	for _, rule := range d.Rules {
@@ -185,6 +186,28 @@ func (r *renderer) filterChains() {
 	}
 	script := cards.String() + head + "\tcomment \"sha256:" + hex.EncodeToString(sum[:]) + "\"\n" + body.String() + "}\n"
 	r.file(nftPath, "0644", script, []string{"/rules", "/aliases", "/nat", "/management"})
+}
+
+// clampMSS lowers the MSS of TCP handshakes through each PPPoE session to fit its MTU, both ways: many hosts
+// behind a firewall never learn the smaller path MTU, as ICMP is dropped on the way.
+func (f *filter) clampMSS() []string {
+	var lines []string
+	for _, l := range f.r.d.Links {
+		if l.Kind != "pppoe" || !f.r.usable[l.ID] {
+			continue
+		}
+		for _, side := range []string{"iifname", "oifname"} {
+			for _, v := range []struct {
+				proto    string
+				overhead int // IP and TCP headers
+			}{{"ipv4", 40}, {"ipv6", 60}} {
+				mss := l.MTU - v.overhead
+				lines = append(lines, fmt.Sprintf("%s %q meta nfproto %s tcp flags syn / syn,rst tcp option maxseg size > %d tcp option maxseg size set %d",
+					side, f.r.name[l.ID], v.proto, mss, mss))
+			}
+		}
+	}
+	return lines
 }
 
 func quoted(names []string) []string {
