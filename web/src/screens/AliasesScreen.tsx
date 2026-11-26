@@ -29,19 +29,27 @@ const kindLabel = (row: Row) => (row.kind === 'addresses' ? kinds[row.item.value
 const formatEntryCount = (count: number) => (count === 1 ? '1 entry' : `${count} entries`);
 
 function DynamicStatus({ status, timeZone }: { status: DynamicAliasStatus; timeZone: string }) {
+  const cleanError = (status.lastError ?? '').trim().replace(/\.+$/, '').trim();
+  const hasFailure = Boolean(cleanError) || status.failures > 0;
   const summary = status.lastSuccess
     ? `${formatEntryCount(status.entries)} · Last updated ${formatTimestamp(status.lastSuccess, timeZone)}`
     : status.lastAttempt
-      ? `${formatEntryCount(status.entries)} · ${status.lastError ? 'Last attempt' : 'Fetch requested'} ${formatTimestamp(status.lastAttempt, timeZone)}`
-      : 'Not fetched yet';
+      ? `${formatEntryCount(status.entries)} · ${hasFailure ? 'Last attempt' : 'Fetch requested'} ${formatTimestamp(status.lastAttempt, timeZone)} — matches nothing until its first fetch.`
+      : 'Not fetched yet — matches nothing until its first fetch.';
 
   let failureLine = '';
-  if (status.lastError || status.failures > 0) {
+  if (hasFailure) {
+    const whenFailed = status.lastSuccess && status.lastAttempt ? ` at ${formatTimestamp(status.lastAttempt, timeZone)}` : '';
     const streak = status.failures > 0 ? ` (${plural(status.failures, 'failure')} in a row)` : '';
-    const detail = status.lastError ? `: ${status.lastError.replace(/\.+$/, '')}.` : '.';
+    const punctuated = cleanError ? (/[!?]$/.test(cleanError) ? cleanError : `${cleanError}.`) : '';
+    const detail = punctuated ? `: ${punctuated}` : '.';
     const kept = status.lastSuccess ? ' Keeping the last good list.' : '';
-    failureLine = `Last refresh failed${streak}${detail}${kept}`;
+    failureLine = `Last refresh failed${whenFailed}${streak}${detail}${kept}`;
   }
+
+  const nameEntries = Array.isArray(status.names) ? status.names : [];
+  const resolvedCount = nameEntries.filter((entry) => Array.isArray(entry.addresses) && entry.addresses.length > 0).length;
+  const failedCount = nameEntries.filter((entry) => Boolean(entry.error?.trim())).length;
 
   return (
     <>
@@ -49,26 +57,34 @@ function DynamicStatus({ status, timeZone }: { status: DynamicAliasStatus; timeZ
       {failureLine && (
         <Text size="xs" className={status.failures >= 3 ? 'error-text' : 'warning-text'}>{failureLine}</Text>
       )}
-      {status.kind === 'hostnames' && status.names && status.names.length > 0 && (
+      {status.kind === 'hostnames' && nameEntries.length > 0 && (
         <details>
-          <summary>Resolved names ({status.names.length})</summary>
+          <summary>
+            <Text component="span" size="xs" className={failedCount > 0 ? 'warning-text' : undefined}>
+              Resolved names ({resolvedCount}/{nameEntries.length}{failedCount > 0 ? `, ${plural(failedCount, 'error')}` : ''})
+            </Text>
+          </summary>
           <ul className="fixed-rules">
-            {status.names.map((entry) => (
-              <li key={entry.name}>
-                <strong>{entry.name}</strong>
-                {': '}
-                {entry.addresses.length > 0 && (
-                  <span className="channel-target">{entry.addresses.join(', ')}</span>
-                )}
-                {entry.error && (
-                  <span className="error-text">{entry.addresses.length > 0 ? ` (${entry.error})` : entry.error}</span>
-                )}
-                {entry.addresses.length === 0 && !entry.error && 'Not resolved yet'}
-                {entry.resolvedAt && (
-                  <span className="tabular"> · {formatTimestamp(entry.resolvedAt, timeZone)}</span>
-                )}
-              </li>
-            ))}
+            {nameEntries.map((entry) => {
+              const addresses = Array.isArray(entry.addresses) ? entry.addresses : [];
+              const entryError = entry.error?.trim() ?? '';
+              return (
+                <li key={entry.name}>
+                  <strong>{entry.name}</strong>
+                  {': '}
+                  {addresses.length > 0 && (
+                    <span className="channel-target">{addresses.join(', ')}</span>
+                  )}
+                  {entryError && (
+                    <span className="error-text">{addresses.length > 0 ? ` (${entryError})` : entryError}</span>
+                  )}
+                  {addresses.length === 0 && !entryError && 'Not resolved yet'}
+                  {entry.resolvedAt && (
+                    <span className="tabular"> · {formatTimestamp(entry.resolvedAt, timeZone)}</span>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         </details>
       )}
@@ -148,12 +164,10 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
         if (addresses.items.some((item) => isDynamicAddressAlias(item.value))) {
           try {
             const status = await api.dynamicAliasStatus();
-            statusById = new Map(status.items.map((item) => [item.id, item]));
+            statusById = new Map((status?.items ?? []).map((item) => [item.id, item]));
           } catch (requestError) {
             if (requestError instanceof ApiError && requestError.status === 401) throw requestError;
-            if (!(requestError instanceof ApiError && requestError.status === 404)) {
-              statusError = apiErrorMessage(requestError);
-            }
+            statusError = apiErrorMessage(requestError);
           }
         }
         return { addresses, ports, snapshot, statusById, statusError };
@@ -166,10 +180,12 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
   const [deleting, setDeleting] = useState<Row>();
   const [busy, setBusy] = useState(false);
   const [refreshingId, setRefreshingId] = useState<string>();
+  const [reloadingStatus, setReloadingStatus] = useState(false);
   const [error, setError] = useState<{ title: string; message: string }>();
   const [notice, setNotice] = useState('');
-  const setAliasError = (message: string) => setError({ title: 'The aliases were not changed', message });
-  const setRefreshError = (message: string) => setError({ title: 'Could not refresh alias', message });
+  const setAliasError = (message: string) => { setNotice(''); setError({ title: 'The aliases were not changed', message }); };
+  const setRefreshError = (message: string) => { setNotice(''); setError({ title: 'Could not refresh alias', message }); };
+  const actionInFlight = useRef(false);
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -177,28 +193,41 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
   }, []);
 
   async function remove(row: Row) {
+    if (actionInFlight.current) return;
+    actionInFlight.current = true;
     setBusy(true);
     setError(undefined);
     setNotice('');
     try {
-      await api.deleteAlias(row.kind, row.item.value.id, row.item.version);
-      onSaved();
-    } catch (requestError) {
-      if (requestError instanceof ApiError && requestError.status === 412) setAliasError('The alias was changed by someone else. The list now shows what is saved; nothing was deleted.');
-      // Refused as in use: something began to name it after this page read the configuration.
-      else if (requestError instanceof ApiError && requestError.status === 422) setAliasError('Something began to name this alias, so it was not deleted. The list now shows what names it.');
-      else if (requestError instanceof ApiError && requestError.status === 404) setAliasError('The alias was already deleted by someone else.');
-      else reportError(requestError, onSessionLost, setAliasError);
-      if (requestError instanceof ApiError && requestError.status === 401) return;
+      try {
+        await api.deleteAlias(row.kind, row.item.value.id, row.item.version);
+        onSaved();
+      } catch (requestError) {
+        if (requestError instanceof ApiError && requestError.status === 401) {
+          onSessionLost();
+          return;
+        }
+        if (!mounted.current) return;
+        if (requestError instanceof ApiError && requestError.status === 412) setAliasError('The alias was changed by someone else. The list now shows what is saved; nothing was deleted.');
+        // Refused as in use: something began to name it after this page read the configuration.
+        else if (requestError instanceof ApiError && requestError.status === 422) setAliasError('Something began to name this alias, so it was not deleted. The list now shows what names it.');
+        else if (requestError instanceof ApiError && requestError.status === 404) setAliasError('The alias was already deleted by someone else.');
+        else reportError(requestError, onSessionLost, setAliasError);
+      }
+      if (!mounted.current) return;
+      await resource.reload();
+      if (!mounted.current) return;
+      // The dialog may have been closed and another opened meanwhile: that one stays.
+      setDeleting((current) => (current === row ? undefined : current));
+    } finally {
+      actionInFlight.current = false;
+      if (mounted.current) setBusy(false);
     }
-    await resource.reload();
-    if (!mounted.current) return;
-    // The dialog may have been closed and another opened meanwhile: that one stays.
-    setDeleting((current) => (current === row ? undefined : current));
-    setBusy(false);
   }
 
   async function refresh(row: Row) {
+    if (actionInFlight.current) return;
+    actionInFlight.current = true;
     setRefreshingId(row.item.value.id);
     setError(undefined);
     setNotice('');
@@ -208,6 +237,10 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
       setNotice(`Refresh requested for ${row.item.value.name}. Its status updates once the fetch finishes.`);
       await resource.reload();
     } catch (requestError) {
+      if (requestError instanceof ApiError && requestError.status === 401) {
+        onSessionLost();
+        return;
+      }
       if (!mounted.current) return;
       if (requestError instanceof ApiError && requestError.status === 404) {
         setRefreshError('This alias was deleted or is no longer fed from a URL or host names.');
@@ -216,7 +249,19 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
         reportError(requestError, onSessionLost, setRefreshError);
       }
     } finally {
+      actionInFlight.current = false;
       if (mounted.current) setRefreshingId(undefined);
+    }
+  }
+
+  async function reloadStatus() {
+    setError(undefined);
+    setNotice('');
+    setReloadingStatus(true);
+    try {
+      await resource.reload();
+    } finally {
+      if (mounted.current) setReloadingStatus(false);
     }
   }
 
@@ -227,18 +272,22 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
     <Stack>
       <Group justify="space-between" align="flex-end">
         <div><Title order={2}>Aliases</Title><Text c="dimmed">Names for addresses and for ports, which rules and NAT refer to. Change an alias and everything that names it follows.</Text></div>
-        {canWrite && resource.data && (
+        {resource.data && (hasDynamic || canWrite) && (
           <Group gap="xs">
             {hasDynamic && (
-              <Button size="xs" variant="default" loading={resource.loading} disabled={actionBusy} onClick={() => void resource.reload()}>Reload status</Button>
+              <Button size="xs" variant="default" loading={reloadingStatus} disabled={actionBusy} onClick={() => void reloadStatus()}>Reload status</Button>
             )}
-            <Button size="xs" onClick={() => setEditing('addresses')}>Add address alias</Button>
-            <Button size="xs" onClick={() => setEditing('ports')}>Add port alias</Button>
+            {canWrite && (
+              <>
+                <Button size="xs" onClick={() => setEditing('addresses')}>Add address alias</Button>
+                <Button size="xs" onClick={() => setEditing('ports')}>Add port alias</Button>
+              </>
+            )}
           </Group>
         )}
       </Group>
-      {error && <Alert color="red" role="alert" title={error.title} withCloseButton onClose={() => setError(undefined)}>{error.message}</Alert>}
-      {notice && <Alert color="blue" role="status" title="Refresh requested" withCloseButton onClose={() => setNotice('')}>{notice}</Alert>}
+      {error && <Alert color="red" role="alert" title={error.title} withCloseButton closeButtonLabel="Dismiss error" onClose={() => setError(undefined)}>{error.message}</Alert>}
+      {notice && <Alert color="blue" role="status" title="Refresh requested" withCloseButton closeButtonLabel="Dismiss refresh notice" onClose={() => setNotice('')}>{notice}</Alert>}
       <Loaded resource={resource} what="aliases">
         {({ addresses, ports, snapshot, statusById, statusError }) => {
           const rows: Row[] = [
@@ -246,11 +295,18 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
             ...ports.items.map((item): Row => ({ kind: 'ports', item })),
           ].sort((a, b) => a.item.value.name.localeCompare(b.item.value.name));
           const names = new Map(rows.map((row) => [row.item.value.id, row.item.value.name]));
+          const statusFor = (row: Row): DynamicAliasStatus | undefined => {
+            if (row.kind !== 'addresses' || !isDynamicAddressAlias(row.item.value)) return undefined;
+            const raw = statusById.get(row.item.value.id);
+            return raw && raw.kind === row.item.value.kind ? raw : undefined;
+          };
           // Every word of the filter must be somewhere in what the row shows.
           const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
           const matches = (row: Row) => {
-            const status = row.kind === 'addresses' ? statusById.get(row.item.value.id) : undefined;
-            const text = [row.item.value.name, row.item.value.description ?? '', kindLabel(row), holds(row, names) ?? '', status?.lastError ?? ''].join(' ').toLowerCase();
+            const status = statusFor(row);
+            const nameStatusWords = (Array.isArray(status?.names) ? status.names : [])
+              .flatMap((entry) => [...(Array.isArray(entry.addresses) ? entry.addresses : []), entry.error ?? '']);
+            const text = [row.item.value.name, row.item.value.description ?? '', kindLabel(row), holds(row, names) ?? '', status?.lastError ?? '', ...nameStatusWords].join(' ').toLowerCase();
             return words.every((word) => text.includes(word));
           };
           const shown = rows.filter((row) => (show === 'all' || row.kind === show) && matches(row));
@@ -260,7 +316,7 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
           return (
             <Stack>
               {statusError && (
-                <Alert color="yellow" role="status" title="Dynamic alias status unavailable">{statusError}</Alert>
+                <Alert color="orange" role="alert" title="Dynamic alias status unavailable">{statusError}</Alert>
               )}
               {rows.length > 0 && (
                 <Group align="flex-end" gap="sm">
@@ -278,11 +334,11 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
                         const alias = row.item.value;
                         const used = usedBy(row);
                         const dynamic = row.kind === 'addresses' && isDynamicAddressAlias(row.item.value);
-                        const status = dynamic ? statusById.get(alias.id) : undefined;
+                        const status = statusFor(row);
                         return (
                           <Table.Tr key={alias.id}>
                             <Table.Td data-label="Name"><Text size="sm" fw={600}>{alias.name}</Text>{alias.description && <Text size="sm" c="dimmed">{alias.description}</Text>}</Table.Td>
-                            <Table.Td data-label="Kind"><Badge variant={row.kind === 'addresses' ? 'default' : 'light'} color="gray" className="alias" tt="none">{kindLabel(row)}</Badge></Table.Td>
+                            <Table.Td data-label="Kind"><Badge variant={row.kind === 'addresses' ? 'default' : 'light'} color="gray" className="alias">{kindLabel(row)}</Badge></Table.Td>
                             <Table.Td data-label="Holds"><Holds row={row} names={names} status={status} timeZone={timeZone} /></Table.Td>
                             <Table.Td data-label="Used by">
                               {used.length === 0 ? <Text size="sm" c="dimmed">nothing</Text> : (
@@ -291,9 +347,9 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
                             </Table.Td>
                             {canWrite && (
                               <Table.Td>
-                                <Group gap="xs" wrap="nowrap">
+                                <Group gap="xs" wrap="wrap">
                                   {dynamic && (
-                                    <Button size="compact-xs" variant="default" loading={refreshingId === alias.id} disabled={actionBusy} aria-label={`Refresh ${noun(row)} ${alias.name}`} onClick={() => void refresh(row)}>Refresh now</Button>
+                                    <Button size="compact-xs" variant="default" loading={refreshingId === alias.id} disabled={actionBusy} aria-label={`Refresh ${noun(row)} ${alias.name}`} onClick={() => void refresh(row)}>Refresh</Button>
                                   )}
                                   <Button size="compact-xs" variant="default" disabled={actionBusy} aria-label={`Edit ${noun(row)} ${alias.name}`} onClick={() => setEditing(row)}>Edit</Button>
                                   <Button size="compact-xs" variant="subtle" color="red" disabled={actionBusy} aria-label={`Delete ${noun(row)} ${alias.name}`} onClick={() => setDeleting(row)}>Delete</Button>
@@ -317,6 +373,8 @@ export function AliasesScreen({ api, session, onSaved, onSessionLost }: AliasesS
                       if (!(requestError instanceof ApiError && requestError.status === 401)) await resource.reload();
                       throw requestError;
                     }
+                    setError(undefined);
+                    setNotice('');
                     onSaved();
                     // An alias just added is not hidden by the kind the table was narrowed to.
                     if (!saved && show !== kind) setShow('all');

@@ -508,7 +508,7 @@ export class ApiClient {
   }
 
   refreshDynamicAlias(id: string) {
-    return this.request<{ request: string }>(`/api/v1/aliases/addresses/${encodeURIComponent(id)}/refresh`, { method: 'POST' }, true);
+    return this.request<{ request?: string } | undefined>(`/api/v1/aliases/addresses/${encodeURIComponent(id)}/refresh`, { method: 'POST' }, true);
   }
 
   zones() {
