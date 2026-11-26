@@ -34,6 +34,8 @@ const (
 	aliasesPage   = "/firewall/aliases"
 	// maxPending bounds the requests a source keeps waiting for, while andaru-outbound does not answer.
 	maxPending = 16
+	// maxRefreshSeconds is the longest interval an alias may have.
+	maxRefreshSeconds = 86400
 	// keepUnwanted is how long the state of a source no wanted generation names is kept after its last attempt: a
 	// rollback, or a boot of a kept generation, finds its list for as long.
 	keepUnwanted = 30 * 24 * time.Hour
@@ -79,8 +81,11 @@ type aliasFeeds struct {
 	// the loads.
 	owed    atomic.Bool
 	filling sync.Mutex
-	// lastLive is the live generation the last apply event found: 0 before the first since this start, -1 for none.
+	// lastLive is the live generation the last apply event found: 0 before the first since this start or when the
+	// pointers did not read (so every event loads), -1 for none.
 	lastLive atomic.Int64
+	// keptWarned is when forget last said the live filter's sources did not read.
+	keptWarned time.Time
 	// refreshed is each alias's last "Refresh now", and the request it published; cleared, the aliases whose
 	// notification was cleared since this start and not raised since.
 	refreshed map[string]refresh
@@ -149,7 +154,8 @@ func (f *aliasFeeds) apply() {
 	} else if p.Live != nil {
 		live = int64(*p.Live)
 	}
-	if f.lastLive.Swap(live) != live || live == 0 {
+	// A load still owed, as one a failed activation's lock refused, is tried again whatever went live.
+	if f.lastLive.Swap(live) != live || live == 0 || f.owed.Load() {
 		f.owed.Store(true)
 		select {
 		case f.applied <- struct{}{}:
@@ -196,6 +202,15 @@ func (f *aliasFeeds) want(ctx context.Context) (map[source]wanted, error) {
 			}
 			w.saved, w.live = w.saved || i == 0, w.live || i == 1
 			out[sourceOf(a)] = w
+		}
+	}
+	// What the live filter fills its sets from is live, even when its saved version no longer reads.
+	if kept, err := generation.LiveFeeds(f.stateDir); err == nil {
+		for src, w := range out {
+			if slices.Contains(kept[src.alias], src.hash) {
+				w.live = true
+				out[src] = w
+			}
 		}
 	}
 	return out, nil
@@ -425,7 +440,8 @@ func (f *aliasFeeds) retry(src source, request string) {
 	if !slices.Contains(s.Pending, request) {
 		return
 	}
-	s.LastAttempt = time.Time{}
+	// Due at once, yet recent: a zero time would read as 30 days unwanted and let forget remove a kept list.
+	s.LastAttempt = f.now().UTC().Add(-time.Duration(maxRefreshSeconds) * time.Second)
 	if err := f.save(src, s); err != nil {
 		f.log.Warn("ask again for an alias's dropped result", "alias", src.alias, "error", err)
 		return
@@ -553,7 +569,8 @@ func (f *aliasFeeds) forget(want map[source]wanted) {
 	sources := aliasfeed.Sources(f.stateDir)
 	// The live filter's sets are filled from these, whatever saved version it was applied from.
 	kept, keptErr := generation.LiveFeeds(f.stateDir)
-	if keptErr != nil {
+	if keptErr != nil && f.now().Sub(f.keptWarned) >= time.Hour { // at most hourly: schedules run every minute or so
+		f.keptWarned = f.now()
 		f.log.Warn("read the live filter's alias sources; no source's state is removed", "error", keptErr)
 	}
 	dirs, _ := os.ReadDir(aliasfeed.Dir(f.stateDir))

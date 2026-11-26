@@ -694,7 +694,8 @@ func TestAliasResultIsDroppedWhenTheStoreFails(t *testing.T) {
 	b.f.aliases = func(context.Context) ([]config.DynamicAlias, []config.DynamicAlias, error) {
 		return nil, nil, fmt.Errorf("store fenced")
 	}
-	if s := b.answer(urlAlias, aliasfeed.Result{Request: req, OK: true, Members: []string{"192.0.2.1"}}); len(s.Members) != 0 || len(s.Pending) != 2 || !s.LastAttempt.IsZero() {
+	if s := b.answer(urlAlias, aliasfeed.Result{Request: req, OK: true, Members: []string{"192.0.2.1"}}); len(s.Members) != 0 || len(s.Pending) != 2 ||
+		!s.LastAttempt.Equal(b.f.now().UTC().Add(-maxRefreshSeconds*time.Second)) {
 		t.Fatalf("state %+v", s)
 	}
 	b.f.aliases = aliases
@@ -750,5 +751,49 @@ func TestAliasRefreshStandsOnceTheSavedSourceIsAsked(t *testing.T) {
 	}
 	if again, _, err := b.f.refresh(t.Context(), urlAlias); again != first || err != nil || sent != 2 {
 		t.Fatalf("not limited: %s %v", again, err)
+	}
+}
+
+
+// Due again after a dropped result is not the same as long unwanted: forget keeps such a source's state.
+func TestARetriedSourceIsNotForgotten(t *testing.T) {
+	b := newFeedBench(t)
+	b.f.schedule(t.Context())
+	b.requests()
+	req := b.ask(urlAlias)
+	b.f.aliases = func(context.Context) ([]config.DynamicAlias, []config.DynamicAlias, error) {
+		return nil, nil, fmt.Errorf("store fenced")
+	}
+	b.answer(urlAlias, aliasfeed.Result{Request: req, OK: true, Members: []string{"192.0.2.1"}})
+	// Now unwanted by every generation: only its age may remove it.
+	b.f.aliases = func(context.Context) ([]config.DynamicAlias, []config.DynamicAlias, error) { return nil, nil, nil }
+	b.f.forget(map[source]wanted{})
+	if len(aliasfeed.Sources(b.f.stateDir)[urlAlias]) == 0 {
+		t.Fatal("a retried source's state was removed")
+	}
+}
+
+// A load still owed, as one an activation's lock refused, is tried again on the next apply event even when the same
+// generation stays live.
+func TestAnOwedLoadIsTriedAgainOnAnyApply(t *testing.T) {
+	b := newFeedBench(t)
+	b.f.apply()
+	select {
+	case <-b.f.applied:
+	default:
+	}
+	b.f.owed.Store(false)
+	b.f.apply()
+	select {
+	case <-b.f.applied:
+		t.Fatal("loaded although nothing changed or was owed")
+	default:
+	}
+	b.f.owed.Store(true)
+	b.f.apply()
+	select {
+	case <-b.f.applied:
+	default:
+		t.Fatal("an owed load was not tried again")
 	}
 }
