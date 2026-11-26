@@ -145,3 +145,18 @@ func TestSyncLeasesUpdatesSnapshotWhenDNSUnchanged(t *testing.T) {
 		t.Fatalf("leases.json missing unnamed lease: %v %s", err, raw)
 	}
 }
+
+func TestSyncLeasesPreservesCorruptSnapshotOnPartialFailure(t *testing.T) {
+	b := newBench(t)
+	// DHCPv4 config exists without a running socket (ok4=false), while DHCPv6 is absent (ok6=true).
+	writeFile(t, filepath.Join(b.net.root, keaFile), leaseKea)
+	writeFile(t, filepath.Join(b.net.root, leasesViewFile), "{corrupt")
+	err := b.r.SyncLeases(t.Context())
+	if err == nil {
+		t.Fatal("expected error from missing v4 socket and corrupt snapshot")
+	}
+	raw, readErr := os.ReadFile(filepath.Join(b.net.root, leasesViewFile))
+	if readErr != nil || string(raw) != "{corrupt" {
+		t.Fatalf("corrupt snapshot was overwritten: %q (%v)", raw, readErr)
+	}
+}

@@ -201,17 +201,25 @@ func (r Realizer) syncLeases(ctx context.Context) error {
 	}
 	if ok4 || k6.ok {
 		view6 := k6.view
+		publish := true
 		if !ok4 || !k6.ok {
-			prev, _ := readStoredLeaseView(r.Root)
-			if !ok4 {
-				view4 = prev.V4
-			}
-			if !k6.ok {
-				view6 = prev.V6
+			prev, readErr := readStoredLeaseView(r.Root)
+			if readErr != nil {
+				publish = false
+				failed = errors.Join(failed, readErr)
+			} else {
+				if !ok4 {
+					view4 = prev.V4
+				}
+				if !k6.ok {
+					view6 = prev.V6
+				}
 			}
 		}
-		if err := writeLeaseView(r.Root, view4, view6); err != nil {
-			failed = errors.Join(failed, err)
+		if publish {
+			if err := writeLeaseView(r.Root, view4, view6); err != nil {
+				failed = errors.Join(failed, err)
+			}
 		}
 	}
 	records = append(records, k6.records...)
