@@ -412,17 +412,17 @@ describe('simulateTrafficFlow', () => {
     expect(dynOut.finalTuple).toBe('TCP 198.51.100.77 → 1.1.1.1:443');
     expect(dynOut.warnings.some((w) => w.includes('Dynamic DHCP/PPPoE/SLAAC'))).toBe(true);
 
-    // Disabled management link disables firewall & NAT.
+    // Disabled management link disables firewall, NAT, and IP forwarding.
     const disabledMgmt: Snapshot['value'] = {
       ...baseConfig,
       links: baseConfig.links.map((l) => (l.id === 'lnk_lan' ? { ...l, enabled: false } : l)),
     };
-    const unfiltered = simulateTrafficFlow(
+    const unfilteredForward = simulateTrafficFlow(
       { ingressSegmentId: 'seg_dmz', protocol: 'tcp', srcIp: '10.20.0.10', dstIp: '1.1.1.1', dstPort: 80 },
       disabledMgmt,
     );
-    expect(unfiltered.verdict).toBe('accept');
-    expect(unfiltered.warnings.some((w) => w.includes('No usable management segment'))).toBe(true);
+    expect(unfilteredForward.verdict).toBe('drop');
+    expect(unfilteredForward.warnings.some((w) => w.includes('No usable management segment'))).toBe(true);
 
     // No IPv6 uplink reports no_route.
     const noV6 = simulateTrafficFlow(
@@ -608,5 +608,58 @@ describe('simulateTrafficFlow', () => {
     );
     expect(viaConnected.verdict).toBe('accept');
     expect(viaConnected.finalTuple).toBe('TCP 10.0.0.2 → 10.0.0.50:443');
+
+    // Without a usable management segment, local input passes unfiltered but transit forwarding is disabled.
+    const noMgmt: Snapshot['value'] = {
+      ...baseConfig,
+      management: undefined,
+    };
+    const noMgmtForward = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '192.168.1.50', dstIp: '10.20.0.15', dstPort: 443 },
+      noMgmt,
+    );
+    expect(noMgmtForward.verdict).toBe('drop');
+    expect(noMgmtForward.steps.find((s) => s.stage === 'filter')?.summary).toMatch(/forwarding is disabled/i);
+
+    const noMgmtInput = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '192.168.1.50', dstIp: '192.168.1.1', dstPort: 443 },
+      noMgmt,
+    );
+    expect(noMgmtInput.verdict).toBe('accept');
+    expect(noMgmtInput.steps.find((s) => s.stage === 'filter')?.outcome).toBe('warn');
+
+    // Static DHCPv6 prefix-delegation pool installs an unreachable route so unleased destinations do not follow the IPv6 uplink.
+    const dhcp6Pool: Snapshot['value'] = {
+      ...baseConfig,
+      segments: baseConfig.segments.map((s) => {
+        if (s.id === 'seg_wan') {
+          return { ...s, addressing: { ...s.addressing, ipv6: { mode: 'static', addresses: ['2001:db8:1::2/64'], gateway: '2001:db8:1::1' } } };
+        }
+        if (s.id === 'seg_lan') {
+          return { ...s, addressing: { ...s.addressing, ipv6: { mode: 'static', addresses: ['2001:db8:100::1/64'] } } };
+        }
+        return s;
+      }),
+      dhcp6: [{
+        id: 'dh6_lan',
+        name: 'LAN PD',
+        segment: 'seg_lan',
+        prefixDelegation: { prefix: '2001:db8:100::/56', delegatedLength: 60 },
+      }],
+    };
+    const unleasedPd = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '2001:db8:100::50', dstIp: '2001:db8:100:20::99', dstPort: 443 },
+      dhcp6Pool,
+    );
+    expect(unleasedPd.verdict).toBe('no_route');
+    expect(unleasedPd.decidedBy).toEqual({ label: 'DHCPv6 LAN PD', to: '/network/dhcp' });
+
+    // A more specific connected /64 inside the /56 pool still beats the covering unreachable route.
+    const connectedInsidePool = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '2001:db8:100::50', dstIp: '2001:db8:100::99', dstPort: 443 },
+      dhcp6Pool,
+    );
+    expect(connectedInsidePool.chain).toBe('forward');
+    expect(connectedInsidePool.steps.find((s) => s.stage === 'routing')?.summary).toMatch(/Directly connected subnet 2001:db8:100::1\/64/);
   });
 });

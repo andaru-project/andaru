@@ -429,10 +429,20 @@ function evaluateFilter(params: {
   } = params;
 
   if (!hasManagement) {
+    if (chain === 'forward') {
+      return {
+        verdict: 'drop',
+        decidedBy: { label: 'Management segment missing', to: '/network/interfaces' },
+        summary: 'IP forwarding is disabled without a usable management segment so traffic cannot route unfiltered.',
+        outcome: 'drop',
+        logged: false,
+        rejectTcpReset: false,
+      };
+    }
     return {
       verdict: 'accept',
       decidedBy: { label: 'Management segment missing', to: '/network/interfaces' },
-      summary: 'Packet filter is not loaded without a usable management segment; packet passes unfiltered.',
+      summary: 'Packet filter is not loaded without a usable management segment; local input passes unfiltered.',
       outcome: 'warn',
       logged: false,
       rejectTcpReset: false,
@@ -569,10 +579,11 @@ export function simulateTrafficFlow(
   const origDstPort = probe.protocol === 'tcp' || probe.protocol === 'udp' ? probe.dstPort : undefined;
 
   const linksById = new Map(snapshot.links.map((l) => [l.id, l]));
+  const segmentsById = new Map(snapshot.segments.map((s) => [s.id, s]));
   const zonesById = new Map(snapshot.zones.map((z) => [z.id, z]));
   const addressesById = new Map((snapshot.aliases?.addresses ?? []).map((a) => [a.id, a]));
   const portsById = new Map((snapshot.aliases?.ports ?? []).map((p) => [p.id, p]));
-  const ingressSegment = snapshot.segments.find((s) => s.id === probe.ingressSegmentId)!;
+  const ingressSegment = segmentsById.get(probe.ingressSegmentId)!;
   const ingressLink = linksById.get(ingressSegment.link);
   const ingressUsable = isLinkUsable(ingressSegment.link, linksById);
   const ingressZone = zonesById.get(ingressSegment.zone);
@@ -587,11 +598,11 @@ export function simulateTrafficFlow(
     warnings.push(`Ingress interface ${ingressLink?.name ?? ingressSegment.name} (or its parent) is disabled in this configuration.`);
   }
   const mgmtSegment = snapshot.management?.segment
-    ? snapshot.segments.find((s) => s.id === snapshot.management?.segment)
+    ? segmentsById.get(snapshot.management.segment)
     : undefined;
   const hasManagement = Boolean(mgmtSegment && isLinkUsable(mgmtSegment.link, linksById));
   if (!hasManagement) {
-    warnings.push('No usable management segment is configured: Andaru does not load firewall rules or NAT without one.');
+    warnings.push('No usable management segment is configured: Andaru does not load firewall rules, NAT, or IP forwarding without one.');
   }
 
   // Gather usable segment prefixes and firewall-owned addresses (static + virtual + dynamic live).
@@ -914,9 +925,12 @@ export function simulateTrafficFlow(
     ? { label: `This firewall (${ingressSegment.name})`, to: '/network/interfaces', segmentId: ingressSegment.id, isVirtual: false }
     : findLocalOwner(effectiveDstIp);
 
-  const stopUnroutable = (summary: string, verdictSummary: string): TrafficSimulation => {
+  const stopUnroutable = (
+    summary: string,
+    verdictSummary: string,
+    decidedBy: DecidingRef = { label: 'Routing table (Interfaces)', to: '/network/interfaces' },
+  ): TrafficSimulation => {
     const finalTuple = formatTuple(probe.protocol, srcIp, srcPort, effectiveDstIp, effectiveDstPort, icmpType);
-    const decidedBy: DecidingRef = { label: 'Routing table (Interfaces)', to: '/network/interfaces' };
     steps.push({ stage: 'routing', title: 'Routing', summary, outcome: 'drop', decidedBy });
     steps.push({ stage: 'verdict', title: 'Verdict', summary: verdictSummary, outcome: 'drop', decidedBy, detail: finalTuple });
     return { verdict: 'no_route', verdictLabel: 'No route', chain: 'none', originalTuple, finalTuple, decidedBy, warnings, steps };
@@ -949,6 +963,27 @@ export function simulateTrafficFlow(
       if (!bestConnected || entry.prefix.bits > bestConnected.prefix.bits) {
         bestConnected = { segment: entry.segment, prefix: entry.prefix };
       }
+    }
+    // Unreachable routes installed for static DHCPv6 prefix-delegation pools (internal/render/networkd.go:221-227).
+    let bestUnreachable: { segment: Segment; entryName: string; prefix: ParsedPrefix } | undefined;
+    if (effectiveDstIp.family === 6) {
+      for (const e of snapshot.dhcp6 ?? []) {
+        if (!e.prefixDelegation?.prefix) continue;
+        const seg = segmentsById.get(e.segment);
+        if (!seg || !isLinkUsable(seg.link, linksById)) continue;
+        const p = parsePrefix(e.prefixDelegation.prefix);
+        if (!p || p.family !== 6 || !prefixContains(p, effectiveDstIp)) continue;
+        if (!bestUnreachable || p.bits > bestUnreachable.prefix.bits) {
+          bestUnreachable = { segment: seg, entryName: e.name, prefix: p };
+        }
+      }
+    }
+    if (bestUnreachable && (!bestConnected || bestUnreachable.prefix.bits > bestConnected.prefix.bits)) {
+      return stopUnroutable(
+        `Matched unreachable route ${bestUnreachable.prefix.raw} for DHCPv6 delegation pool "${bestUnreachable.entryName}" on ${bestUnreachable.segment.name}.`,
+        `Destination falls in unleased DHCPv6 delegation pool ${bestUnreachable.prefix.raw} (unreachable route).`,
+        { label: `DHCPv6 ${bestUnreachable.entryName}`, to: '/network/dhcp' },
+      );
     }
     if (bestConnected) {
       if ((isLinkLocalIpv6(srcIp) || isLinkLocalIpv6(effectiveDstIp)) && bestConnected.segment.id !== ingressSegment.id) {
