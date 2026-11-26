@@ -664,3 +664,58 @@ it('creates an 802.3ad bond with LACP rate, hash policy, and MII monitor interva
     ],
   });
 });
+
+it('configures per-link LLDP options and displays live LLDP neighbors on the LLDP tab', async () => {
+  const user = userEvent.setup();
+  const sent = vi.fn<(init: RequestInit | undefined) => Response>(() => jsonResponse(200, { savedVersion: '8' }));
+  routes({
+    links: [
+      { ...ethernet(lanPort, 'LAN port', '52:54:00:aa:bb:01'), lldp: 'receive', emitLldp: 'nearest-bridge' },
+      { id: guestVlan, name: 'Guest VLAN', kind: 'vlan', mtu: 1500, enabled: true, parent: lanPort, vlanId: 20 },
+    ],
+    findings: [],
+    extra: {
+      [`/api/v1/config/links/${lanPort}`]: { version: '4', value: { ...ethernet(lanPort, 'LAN port', '52:54:00:aa:bb:01'), lldp: 'receive', emitLldp: 'nearest-bridge' } },
+      '/api/v1/config/segments/seg_lan': { version: '6', value: { id: 'seg_lan', name: 'LAN', link: lanPort, zone: 'zon_lan', addressing: { ipv4: { mode: 'static', addresses: ['192.168.1.1/24'] }, ipv6: { mode: 'none' } } } },
+      '/api/v1/status/lldp': {
+        items: [{
+          ifIndex: 2,
+          interface: 'enp1s0',
+          chassisId: 'aa:bb:cc:11:22:33',
+          portId: 'gi1/0/24',
+          portDescription: 'Uplink to router',
+          systemName: 'core-sw-1',
+          systemDescription: 'Managed L2/L3 Switch',
+          capabilities: ['bridge', 'router'],
+        }],
+      },
+      'POST /api/v1/config/changes': sent,
+    },
+  });
+  render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={vi.fn()} onSessionLost={vi.fn()} />);
+
+  expect(await screen.findByText(/LLDP rx\/tx/)).toBeInTheDocument();
+
+  // Edit LLDP settings on LAN port.
+  await user.click(screen.getByRole('button', { name: 'Edit LAN port' }));
+  const panel = await screen.findByRole('dialog');
+  await user.selectOptions(within(panel).getByLabelText(/^LLDP reception/), 'routers-only');
+  await user.selectOptions(within(panel).getByLabelText(/^LLDP emission/), 'off');
+  await user.click(within(panel).getByRole('button', { name: 'Save interface' }));
+  await vi.waitFor(() => expect(sent).toHaveBeenCalled());
+  expect(JSON.parse(String(sent.mock.calls[0][0]?.body))).toEqual({
+    operations: [
+      { op: 'replace', collection: 'links', id: lanPort, expectedVersion: '4', value: { ...ethernet(lanPort, 'LAN port', '52:54:00:aa:bb:01'), lldp: 'routers-only' } },
+    ],
+  });
+
+  // Switch to LLDP neighbors tab and verify discovered neighbor details.
+  await user.click(screen.getByRole('tab', { name: 'LLDP neighbors' }));
+  expect(await screen.findByText('core-sw-1')).toBeInTheDocument();
+  expect(screen.getByText('Managed L2/L3 Switch')).toBeInTheDocument();
+  expect(screen.getByText('aa:bb:cc:11:22:33')).toBeInTheDocument();
+  expect(screen.getByText('gi1/0/24')).toBeInTheDocument();
+  expect(screen.getByText('Uplink to router')).toBeInTheDocument();
+  expect(screen.getByText('Bridge')).toBeInTheDocument();
+  expect(screen.getByText('Router')).toBeInTheDocument();
+});

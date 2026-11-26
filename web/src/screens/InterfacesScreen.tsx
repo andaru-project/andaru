@@ -1,8 +1,8 @@
-import { Alert, Badge, Button, ComboboxChevron, Group, Loader, Menu, ScrollArea, Stack, Table, Text, Title, VisuallyHidden } from '@mantine/core';
+import { Alert, Badge, Button, ComboboxChevron, Group, Loader, Menu, ScrollArea, Stack, Table, Tabs, Text, Title, VisuallyHidden } from '@mantine/core';
 import { useCallback, useState } from 'react';
 import { ApiClient, reportError } from '../api';
 import { addressLines, isPort } from '../interfaceEdit';
-import { stateColor, stateLabel, type ConfigBatchOperation, type LinkStatus, type Preview, type SavedLink, type SavedObject, type Segment, type Session, type Snapshot, type VirtualLinkKind } from '../types';
+import { stateColor, stateLabel, type ConfigBatchOperation, type LinkStatus, type LldpNeighbor, type Preview, type SavedLink, type SavedObject, type Segment, type Session, type Snapshot, type VirtualLinkKind } from '../types';
 import { useResource, useVisiblePoll } from '../useResource';
 import { bindingFindings, kernelName } from '../zones';
 import { Address } from './Address';
@@ -40,9 +40,113 @@ function join(links: LinkStatus[], snapshot: Snapshot, preview: Preview): Row[] 
   ];
 }
 
+const lldpCapabilityLabel: Record<string, string> = {
+  other: 'Other',
+  repeater: 'Repeater',
+  bridge: 'Bridge',
+  'wlan-ap': 'WLAN AP',
+  router: 'Router',
+  telephone: 'Telephone',
+  docsis: 'DOCSIS',
+  station: 'Station',
+  'customer-vlan': 'C-VLAN',
+  'service-vlan': 'S-VLAN',
+  tpmr: 'TPMR',
+};
+
+function lldpBadgeLabel(link: SavedLink): string | undefined {
+  const rx = Boolean(link.lldp && link.lldp !== 'off');
+  const tx = Boolean(link.emitLldp && link.emitLldp !== 'off');
+  if (rx && tx) return 'LLDP rx/tx';
+  if (rx) return 'LLDP rx';
+  if (tx) return 'LLDP tx';
+  return undefined;
+}
+
+function LldpNeighborsPanel({ api, onSessionLost, deviceNames, hasLldpEnabled }: {
+  api: ApiClient;
+  onSessionLost(): void;
+  deviceNames: Map<string, string>;
+  hasLldpEnabled: boolean;
+}) {
+  const load = useCallback(async () => (await api.lldpNeighbors()).items, [api]);
+  const resource = useResource(load, onSessionLost);
+  useVisiblePoll(resource.refresh, 10_000);
+
+  if (!resource.data) {
+    return resource.error
+      ? <Alert color="red" role="alert" title="LLDP neighbors request failed">{resource.error}</Alert>
+      : <Loader aria-label="Loading LLDP neighbors" />;
+  }
+
+  const items: LldpNeighbor[] = resource.data;
+  return (
+    <Stack>
+      <Group justify="space-between" align="center">
+        <Text c="dimmed" size="sm">Live Link Layer Discovery Protocol (802.1AB) neighbors reported by systemd-networkd.</Text>
+        <Button size="xs" variant="default" loading={resource.loading} onClick={() => void resource.reload()}>Refresh neighbors</Button>
+      </Group>
+      {resource.error && <Alert color="red" role="alert" title="LLDP neighbors request failed">{resource.error}</Alert>}
+      {items.length === 0 ? (
+        <Alert role="status">
+          {hasLldpEnabled
+            ? 'No LLDP neighbors reported yet.'
+            : 'No LLDP neighbors discovered yet. Enable LLDP reception on an interface to listen for neighboring switches, routers, or access points.'}
+        </Alert>
+      ) : (
+        <ScrollArea>
+          <Table verticalSpacing="sm" withTableBorder className="data-table">
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>Interface</Table.Th>
+                <Table.Th>Neighbor</Table.Th>
+                <Table.Th>Chassis ID</Table.Th>
+                <Table.Th>Remote port</Table.Th>
+                <Table.Th>Capabilities</Table.Th>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {items.map((item, idx) => {
+                const configuredName = deviceNames.get(item.interface);
+                return (
+                  <Table.Tr key={`${item.ifIndex}-${item.chassisId}-${item.portId}-${idx}`}>
+                    <Table.Td data-label="Interface">
+                      <Text ff="monospace" fw={600}>{item.interface}</Text>
+                      {configuredName && configuredName !== item.interface && <Text size="sm" c="dimmed">{configuredName}</Text>}
+                    </Table.Td>
+                    <Table.Td data-label="Neighbor">
+                      <Text fw={600}>{item.systemName || '—'}</Text>
+                      {item.systemDescription && <Text size="sm" c="dimmed">{item.systemDescription}</Text>}
+                    </Table.Td>
+                    <Table.Td data-label="Chassis ID">
+                      <Text ff="monospace" size="sm">{item.chassisId || '—'}</Text>
+                    </Table.Td>
+                    <Table.Td data-label="Remote port">
+                      <Text ff="monospace" size="sm">{item.portId || '—'}</Text>
+                      {item.portDescription && item.portDescription !== item.portId && <Text size="sm" c="dimmed">{item.portDescription}</Text>}
+                    </Table.Td>
+                    <Table.Td data-label="Capabilities">
+                      {item.capabilities.length > 0 ? (
+                        <Group gap={4}>
+                          {item.capabilities.map((cap) => <Badge key={cap} size="xs" variant="light">{lldpCapabilityLabel[cap] ?? cap}</Badge>)}
+                        </Group>
+                      ) : <Text c="dimmed">—</Text>}
+                    </Table.Td>
+                  </Table.Tr>
+                );
+              })}
+            </Table.Tbody>
+          </Table>
+        </ScrollArea>
+      )}
+    </Stack>
+  );
+}
+
 export function InterfacesScreen({ api, session, onSaved, onSessionLost }: InterfacesScreenProps) {
   const canReadConfig = session.capabilities.includes('configuration.read');
   const canWrite = canReadConfig && session.capabilities.includes('configuration.write');
+  const [tab, setTab] = useState<'interfaces' | 'lldp'>('interfaces');
   const [editing, setEditing] = useState<Editing>();
   const [opening, setOpening] = useState('');
   const [error, setError] = useState('');
@@ -171,12 +275,18 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
     </Table.Tbody></Table></ScrollArea>
   );
 
+  const deviceNames = new Map<string, string>();
+  for (const row of configured) {
+    if (row.live && row.saved) deviceNames.set(row.live.name, row.saved.name);
+  }
+  const hasLldpEnabled = Boolean(saved?.snapshot.value.links.some((link) => link.lldp && link.lldp !== 'off'));
+
   return (
     <Stack>
       <Group justify="space-between" align="flex-end">
         <div><Title order={2}>Interfaces</Title><Text c="dimmed">{saved ? 'Configured network interfaces and their live state.' : 'Network links the box reports now.'}</Text></div>
         <Group gap="xs">
-          {editable && (
+          {editable && tab === 'interfaces' && (
             <Menu position="bottom-end">
               <Menu.Target>
                 <Button size="xs" rightSection={<ComboboxChevron size="xs" style={{ color: 'currentColor' }} />} loading={opening === 'new:'} disabled={Boolean(opening) && opening !== 'new:'}>Add virtual interface</Button>
@@ -188,66 +298,80 @@ export function InterfacesScreen({ api, session, onSaved, onSessionLost }: Inter
               </Menu.Dropdown>
             </Menu>
           )}
-          <Button size="xs" variant="default" loading={resource.loading} onClick={() => void resource.reload()}>Refresh</Button>
+          {tab === 'interfaces' && <Button size="xs" variant="default" loading={resource.loading} onClick={() => void resource.reload()}>Refresh</Button>}
         </Group>
       </Group>
-      {error && <Alert color="red" role="alert" title="The interface could not be opened" withCloseButton onClose={() => setError('')}>{error}</Alert>}
-      {saveError && <Alert color="red" role="alert" title="The interface was not saved" withCloseButton onClose={() => setSaveError('')}>{saveError}</Alert>}
-      {resource.error && <Alert color="red" role="alert" title="Interfaces request failed">{resource.error}</Alert>}
-      {savedError && <Alert color="red" role="alert" title="The saved configuration could not be read">{savedError} Only live links are shown.</Alert>}
-      {!canReadConfig && <Alert color="gray" role="status">Your account cannot read the saved configuration, so only live links are shown.</Alert>}
-      {all.length === 0 ? <Alert role="status">The box reports no network links.</Alert> : !saved ? othersTable : (
-        <>
-          {configured.length === 0 ? <Alert role="status">The configuration names no interfaces yet.</Alert> : (
-            <ScrollArea><Table verticalSpacing="sm" withTableBorder className="data-table interfaces"><Table.Thead><Table.Tr><Table.Th>Interface</Table.Th><Table.Th>Device</Table.Th><Table.Th>State</Table.Th><Table.Th>Addresses</Table.Th>{editable && <Table.Th><VisuallyHidden>Actions</VisuallyHidden></Table.Th>}</Table.Tr></Table.Thead><Table.Tbody>
-              {configured.map(({ key, live, saved: link, state, finding, conflict }) => {
-                if (!link) return null;
-                const segment = segmentOf(link);
-                const management = segment !== undefined && saved.snapshot.value.management?.segment === segment.id;
-                const kind = kindLine(link);
-                const mtu = live && live.mtu !== link.mtu ? `MTU ${live.mtu} → ${link.mtu}` : link.mtu !== 1500 ? `MTU ${link.mtu}` : undefined;
-                return (
-                  <Table.Tr key={key}>
-                    {/* The interface as configured: its name, zone and role; its kind and segment only when unusual. */}
-                    <Table.Td data-label="Interface">
-                      <Group gap="xs">
-                        <Text fw={600}>{link.name}</Text>
-                        {segment && <ZoneBadge name={zoneName(segment.zone)} color={zoneOf(segment.zone)?.color} />}
-                        {conflict && <Badge color="red" variant="light">Conflict: several saved links</Badge>}
-                      </Group>
-                      {/* Under the name: the interface's role, and its kind and segment when they are not the usual. */}
-                      {(management || kind || !segment || segment.name !== link.name) && (
-                        <Group gap="xs" mt={4}>
-                          {management && <Badge variant="light">Management</Badge>}
-                          {(kind || !segment || segment.name !== link.name) && <Text c="dimmed" size="sm">{[kind, !segment ? 'No segment' : segment.name !== link.name ? `Segment ${segment.name}` : undefined].filter(Boolean).join(' · ')}</Text>}
-                        </Group>
-                      )}
-                      {finding && <Text size="sm" className="error-text">{finding}</Text>}
-                    </Table.Td>
-                    <Table.Td data-label="Device">
-                      {live ? <Text ff="monospace">{live.name}</Text> : <Text c="dimmed">No device</Text>}
-                      {(live?.linkAddress || link.permanentMac || mtu) && <Text c="dimmed" size="sm"><Text span ff="monospace" inherit>{live?.linkAddress || link.permanentMac}</Text>{mtu && <>{(live?.linkAddress || link.permanentMac) && ' · '}{mtu}</>}</Text>}
-                    </Table.Td>
-                    <Table.Td data-label="State">
-                      {stateBadge(live, state)}
-                      {/* Applied, a disabled link is down: only while it is still up is the change waiting. */}
-                      {live && !link.enabled && live.flags.some((flag) => flag.toUpperCase() === 'UP') && <Text size="xs" c="dimmed">Pending: off</Text>}
-                    </Table.Td>
-                    <Table.Td data-label="Addresses">{addressesCell(live, segment)}</Table.Td>
-                    {editable && <Table.Td>{actionButton(key, 'Edit', `Edit ${link.name}`, () => void edit(key, live, link, segment), 'default')}</Table.Td>}
-                  </Table.Tr>
-                );
-              })}
-            </Table.Tbody></Table></ScrollArea>
-          )}
-          {others.length > 0 && (
-            <>
-              <div><Title order={3} size="h4">Not in the configuration</Title><Text c="dimmed" size="sm">Links on the box the configuration does not name. A hardware port can be added.</Text></div>
-              {othersTable}
-            </>
-          )}
-        </>
-      )}
+      <Tabs value={tab} onChange={(value) => setTab(value === 'lldp' ? 'lldp' : 'interfaces')}>
+        <Tabs.List mb="md">
+          <Tabs.Tab value="interfaces">Interfaces</Tabs.Tab>
+          <Tabs.Tab value="lldp">LLDP neighbors</Tabs.Tab>
+        </Tabs.List>
+        <Tabs.Panel value="interfaces">
+          <Stack>
+            {error && <Alert color="red" role="alert" title="The interface could not be opened" withCloseButton onClose={() => setError('')}>{error}</Alert>}
+            {saveError && <Alert color="red" role="alert" title="The interface was not saved" withCloseButton onClose={() => setSaveError('')}>{saveError}</Alert>}
+            {resource.error && <Alert color="red" role="alert" title="Interfaces request failed">{resource.error}</Alert>}
+            {savedError && <Alert color="red" role="alert" title="The saved configuration could not be read">{savedError} Only live links are shown.</Alert>}
+            {!canReadConfig && <Alert color="gray" role="status">Your account cannot read the saved configuration, so only live links are shown.</Alert>}
+            {all.length === 0 ? <Alert role="status">The box reports no network links.</Alert> : !saved ? othersTable : (
+              <>
+                {configured.length === 0 ? <Alert role="status">The configuration names no interfaces yet.</Alert> : (
+                  <ScrollArea><Table verticalSpacing="sm" withTableBorder className="data-table interfaces"><Table.Thead><Table.Tr><Table.Th>Interface</Table.Th><Table.Th>Device</Table.Th><Table.Th>State</Table.Th><Table.Th>Addresses</Table.Th>{editable && <Table.Th><VisuallyHidden>Actions</VisuallyHidden></Table.Th>}</Table.Tr></Table.Thead><Table.Tbody>
+                    {configured.map(({ key, live, saved: link, state, finding, conflict }) => {
+                      if (!link) return null;
+                      const segment = segmentOf(link);
+                      const management = segment !== undefined && saved.snapshot.value.management?.segment === segment.id;
+                      const kind = kindLine(link);
+                      const lldpTag = lldpBadgeLabel(link);
+                      const mtu = live && live.mtu !== link.mtu ? `MTU ${live.mtu} → ${link.mtu}` : link.mtu !== 1500 ? `MTU ${link.mtu}` : undefined;
+                      return (
+                        <Table.Tr key={key}>
+                          {/* The interface as configured: its name, zone and role; its kind and segment only when unusual. */}
+                          <Table.Td data-label="Interface">
+                            <Group gap="xs">
+                              <Text fw={600}>{link.name}</Text>
+                              {segment && <ZoneBadge name={zoneName(segment.zone)} color={zoneOf(segment.zone)?.color} />}
+                              {conflict && <Badge color="red" variant="light">Conflict: several saved links</Badge>}
+                            </Group>
+                            {/* Under the name: the interface's role, and its kind and segment when they are not the usual. */}
+                            {(management || kind || lldpTag || !segment || segment.name !== link.name) && (
+                              <Group gap="xs" mt={4}>
+                                {management && <Badge variant="light">Management</Badge>}
+                                {(kind || lldpTag || !segment || segment.name !== link.name) && <Text c="dimmed" size="sm">{[kind, lldpTag, !segment ? 'No segment' : segment.name !== link.name ? `Segment ${segment.name}` : undefined].filter(Boolean).join(' · ')}</Text>}
+                              </Group>
+                            )}
+                            {finding && <Text size="sm" className="error-text">{finding}</Text>}
+                          </Table.Td>
+                          <Table.Td data-label="Device">
+                            {live ? <Text ff="monospace">{live.name}</Text> : <Text c="dimmed">No device</Text>}
+                            {(live?.linkAddress || link.permanentMac || mtu) && <Text c="dimmed" size="sm"><Text span ff="monospace" inherit>{live?.linkAddress || link.permanentMac}</Text>{mtu && <>{(live?.linkAddress || link.permanentMac) && ' · '}{mtu}</>}</Text>}
+                          </Table.Td>
+                          <Table.Td data-label="State">
+                            {stateBadge(live, state)}
+                            {/* Applied, a disabled link is down: only while it is still up is the change waiting. */}
+                            {live && !link.enabled && live.flags.some((flag) => flag.toUpperCase() === 'UP') && <Text size="xs" c="dimmed">Pending: off</Text>}
+                          </Table.Td>
+                          <Table.Td data-label="Addresses">{addressesCell(live, segment)}</Table.Td>
+                          {editable && <Table.Td>{actionButton(key, 'Edit', `Edit ${link.name}`, () => void edit(key, live, link, segment), 'default')}</Table.Td>}
+                        </Table.Tr>
+                      );
+                    })}
+                  </Table.Tbody></Table></ScrollArea>
+                )}
+                {others.length > 0 && (
+                  <>
+                    <div><Title order={3} size="h4">Not in the configuration</Title><Text c="dimmed" size="sm">Links on the box the configuration does not name. A hardware port can be added.</Text></div>
+                    {othersTable}
+                  </>
+                )}
+              </>
+            )}
+          </Stack>
+        </Tabs.Panel>
+        <Tabs.Panel value="lldp">
+          {tab === 'lldp' && <LldpNeighborsPanel api={api} onSessionLost={onSessionLost} deviceNames={deviceNames} hasLldpEnabled={hasLldpEnabled} />}
+        </Tabs.Panel>
+      </Tabs>
       {editing && (
         <InterfaceEditor key={editing.link ? `link:${editing.link.value.id}` : editing.live ? `live:${editing.live.name}` : `new:${editing.newKind}`} {...editing} onClose={() => setEditing(undefined)}
           onSessionLost={onSessionLost} onAbandoned={setSaveError} onSave={save} />

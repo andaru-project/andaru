@@ -186,10 +186,33 @@
         }
       ]
     },
+    "lldpFields": {
+      "type": "object",
+      "properties": {
+        "lldp": {
+          "enum": [
+            "off",
+            "receive",
+            "routers-only"
+          ]
+        },
+        "emitLldp": {
+          "enum": [
+            "off",
+            "nearest-bridge",
+            "non-tpmr-bridge",
+            "customer-bridge"
+          ]
+        }
+      }
+    },
     "ethernetFields": {
       "allOf": [
         {
           "$ref": "#/$defs/linkCommon"
+        },
+        {
+          "$ref": "#/$defs/lldpFields"
         },
         {
           "type": "object",
@@ -213,6 +236,9 @@
       "allOf": [
         {
           "$ref": "#/$defs/linkCommon"
+        },
+        {
+          "$ref": "#/$defs/lldpFields"
         },
         {
           "type": "object",
@@ -240,6 +266,9 @@
       "allOf": [
         {
           "$ref": "#/$defs/linkCommon"
+        },
+        {
+          "$ref": "#/$defs/lldpFields"
         },
         {
           "type": "object",
@@ -292,6 +321,9 @@
       "allOf": [
         {
           "$ref": "#/$defs/linkCommon"
+        },
+        {
+          "$ref": "#/$defs/lldpFields"
         },
         {
           "type": "object",

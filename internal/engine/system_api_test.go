@@ -72,7 +72,7 @@ func TestStatusRoutesNeedStatusRead(t *testing.T) {
 			}
 		}
 	}
-	if seen != 12 {
-		t.Fatalf("%d status routes, want links, prefixes, leases, system, usage and traffic, each for GET and HEAD", seen)
+	if seen != 14 {
+		t.Fatalf("%d status routes, want links, prefixes, leases, lldp, system, usage and traffic, each for GET and HEAD", seen)
 	}
 }

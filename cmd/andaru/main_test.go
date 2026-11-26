@@ -499,6 +499,25 @@ func TestCtlLeases(t *testing.T) {
 	}
 }
 
+// andaru ctl lldp prints the engine's LLDP neighbor view, and nothing that is not one.
+func TestCtlLLDP(t *testing.T) {
+	var asked string
+	reply := `{"items":[{"ifIndex":2,"interface":"enp1s0","chassisId":"52:54:00:aa:bb:01","portId":"gi1/0/1","systemName":"core-sw","capabilities":["bridge"]}]}`
+	path := replySocket(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = r.URL.Path
+		_, _ = io.WriteString(w, reply)
+	}))
+	var out, diag bytes.Buffer
+	if code := run(context.Background(), []string{"ctl", "--socket", path, "lldp"}, strings.NewReader(""), &out, &diag); code != 0 || asked != "/api/v1/status/lldp" || !strings.Contains(out.String(), `"core-sw"`) {
+		t.Fatalf("%d %q %q %q", code, asked, out.String(), diag.String())
+	}
+	reply = `{"wans":[]}`
+	out.Reset()
+	if code := run(context.Background(), []string{"ctl", "--socket", path, "lldp"}, strings.NewReader(""), &out, &diag); code != 1 || out.Len() != 0 {
+		t.Fatal("a reply without items became success")
+	}
+}
+
 func TestConfigVirtualAddresses(t *testing.T) {
 	id := "vip_00000001-0000-4000-8000-000000000001"
 	for args, want := range map[string]ctlRequest{

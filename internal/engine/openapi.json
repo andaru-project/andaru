@@ -209,6 +209,49 @@
         }
       }
     },
+    "/api/v1/status/lldp": {
+      "get": {
+        "operationId": "readLLDPNeighbors",
+        "summary": "Read live LLDP neighbors discovered by systemd-networkd",
+        "description": "Queries systemd-networkd's LLDP neighbor table across interfaces with LLDP reception enabled.",
+        "responses": {
+          "200": {
+            "description": "The discovered LLDP neighbors",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LLDPResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/InventoryUnavailable"
+          }
+        }
+      },
+      "head": {
+        "operationId": "headLLDPNeighbors",
+        "summary": "Check the LLDP neighbor view without returning a body",
+        "responses": {
+          "200": {
+            "description": "The LLDP neighbors were read; no body"
+          },
+          "403": {
+            "description": "Peer denied; no body"
+          },
+          "503": {
+            "description": "The LLDP neighbors are unavailable; no body"
+          }
+        }
+      }
+    },
     "/api/v1/status/prefixes": {
       "get": {
         "operationId": "readDelegatedPrefixes",
@@ -7486,6 +7529,62 @@
               }
             },
             "description": "From the firmware's DMI table. The serial is the product's, or the board's when the product has none. A field the vendor left as a placeholder is empty"
+          }
+        }
+      },
+      "LLDPNeighbor": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ifIndex",
+          "interface",
+          "chassisId",
+          "portId",
+          "capabilities"
+        ],
+        "properties": {
+          "ifIndex": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "interface": {
+            "type": "string"
+          },
+          "chassisId": {
+            "type": "string"
+          },
+          "portId": {
+            "type": "string"
+          },
+          "portDescription": {
+            "type": "string"
+          },
+          "systemName": {
+            "type": "string"
+          },
+          "systemDescription": {
+            "type": "string"
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "LLDPResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LLDPNeighbor"
+            }
           }
         }
       },

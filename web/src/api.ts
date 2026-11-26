@@ -15,6 +15,7 @@ import type {
   History,
   LeaseView,
   LinkStatus,
+  LldpNeighbor,
   NotificationList,
   OneToOneNat,
   OrderedList,
@@ -408,6 +409,10 @@ export class ApiClient {
 
   leases() {
     return this.request<LeaseView>('/api/v1/status/leases');
+  }
+
+  lldpNeighbors() {
+    return this.request<{ items: LldpNeighbor[] }>('/api/v1/status/lldp');
   }
 
   preferences() {

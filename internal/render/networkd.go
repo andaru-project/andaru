@@ -304,7 +304,21 @@ func (r *renderer) networkd(i int) {
 	if !l.Enabled {
 		settings = append(settings, "ActivationPolicy=always-down")
 	}
-	network := []string{"LLDP=no"}
+	lldpValue := "no"
+	switch l.LLDP {
+	case "receive":
+		lldpValue = "yes"
+	case "routers-only":
+		lldpValue = "routers-only"
+	}
+	network := []string{"LLDP=" + lldpValue}
+	if l.EmitLLDP != "" {
+		emitValue := l.EmitLLDP
+		if emitValue == "off" {
+			emitValue = "no"
+		}
+		network = append(network, "EmitLLDP="+emitValue)
+	}
 	var vlans []string
 	for _, child := range r.d.Links {
 		if child.Kind == "vlan" && child.Parent == l.ID && r.rendered[child.ID] {
