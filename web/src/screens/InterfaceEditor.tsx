@@ -262,7 +262,7 @@ export function InterfaceEditor({ link, segment, live, newKind, snapshot, onClos
                       {draft.bondMode && hashPolicyModes.has(draft.bondMode) && (
                         <NativeSelect label="Transmit hash policy" description="Packet header fields hashed to choose a member link." data={transmitHashPolicies} value={draft.transmitHashPolicy} error={errors.get('transmitHashPolicy')} onChange={(event) => set({ transmitHashPolicy: event.currentTarget.value as TransmitHashPolicy | '' })} />
                       )}
-                      <TextInput classNames={mono} label="MII monitor interval (ms)" description="Link carrier check interval (0–60000 ms). 0 or empty disables MII monitoring; 100 ms is typical for LACP and failover." inputMode="numeric" placeholder="100" value={draft.miiMonitorMs} error={errors.get('miiMonitorMs')} onChange={(event) => set({ miiMonitorMs: event.currentTarget.value })} />
+                      <TextInput classNames={mono} label="MII monitor interval (ms)" description="Link carrier check interval (0–60000 ms). 0 or empty disables MII monitoring; 100 ms is typical for LACP and failover." inputMode="numeric" placeholder="0" value={draft.miiMonitorMs} error={errors.get('miiMonitorMs')} onChange={(event) => set({ miiMonitorMs: event.currentTarget.value })} />
                     </>
                   )}
                   {/* A saved link shows the MAC it names, if any; a port being added, the one it will be saved with. */}
