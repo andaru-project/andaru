@@ -3,7 +3,7 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiClient } from '../api';
 import { fetchRoutes, jsonResponse } from '../test/fetch';
-import { render, screen, waitFor } from '../test/render';
+import { render, screen, waitFor, within } from '../test/render';
 import type { Snapshot } from '../types';
 import { ManagementPanel } from './ManagementPanel';
 
@@ -247,5 +247,43 @@ describe('ManagementPanel', () => {
     rerender(<ManagementPanel api={api} snapshot={undefined} canWrite onSaved={vi.fn()} onSessionLost={vi.fn()} />);
     expect(screen.getByRole('dialog', { name: 'Edit management access' })).toBeInTheDocument();
     expect(screen.getByText('Moving management segment')).toBeInTheDocument();
+  });
+
+  it('excludes dynamic url and hostnames aliases from Allowed SSH sources', async () => {
+    const user = userEvent.setup();
+    const snapWithDynamic = {
+      ...baseSnapshot,
+      value: {
+        ...baseSnapshot.value,
+        aliases: {
+          addresses: [
+            ...(baseSnapshot.value.aliases?.addresses ?? []),
+            { id: 'adr_url', name: 'cf-feed', kind: 'url' as const, url: 'https://www.cloudflare.com/ips-v4', refreshSeconds: 3600 },
+            { id: 'adr_dns', name: 'vpn-dns', kind: 'hostnames' as const, names: ['vpn.example.com'], refreshSeconds: 300 },
+          ],
+          ports: [],
+        },
+      },
+    };
+    fetchRoutes({
+      '/api/v1/config/management': () => jsonResponse(200, {
+        state: 'saved',
+        savedVersion: '10',
+        version: '3',
+        value: { segment: 'seg_lan', allowedSources: [] },
+      }),
+      '/api/v1/config': () => jsonResponse(200, snapWithDynamic),
+    });
+
+    render(<ManagementPanel api={new ApiClient('csrf')} snapshot={snapWithDynamic} canWrite onSaved={vi.fn()} onSessionLost={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'Edit management access' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit management access' });
+    const sourcesInput = within(dialog).getByLabelText(/^Allowed SSH sources/, { selector: 'input' });
+    await user.click(sourcesInput);
+    const listbox = document.getElementById(sourcesInput.getAttribute('aria-controls')!)!;
+    const labels = within(listbox).getAllByRole('option', { hidden: true }).map((o) => o.textContent);
+    expect(labels).toContain('Admin workstation');
+    expect(labels).not.toContain('cf-feed');
+    expect(labels).not.toContain('vpn-dns');
   });
 });

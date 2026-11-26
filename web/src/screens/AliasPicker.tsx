@@ -2,7 +2,7 @@ import { Loader, MultiSelect, Select, Text, type ComboboxItem, type ComboboxPars
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { parseAliasLiterals, type LiteralAliasCandidate } from '../aliasLiteral';
 import { ApiClient, ApiError, apiErrorMessage } from '../api';
-import type { AliasKinds, AliasSearchItem, TextSegment } from '../types';
+import { isDynamicAddressAlias, type AliasKinds, type AliasSearchItem, type TextSegment } from '../types';
 
 const createOptionPrefix = '__create_alias__:';
 
@@ -17,6 +17,7 @@ interface AliasSearchBaseProps {
   kind?: string;
   family?: 'ipv4' | 'ipv6';
   excludeGroups?: boolean;
+  excludeDynamic?: boolean;
   exclude?: string;
   initialOptions: AliasOption[];
   label: string;
@@ -68,6 +69,7 @@ function useAliasSearch({
   kind,
   family,
   excludeGroups,
+  excludeDynamic,
   exclude,
   initialOptions,
   selected,
@@ -83,6 +85,7 @@ function useAliasSearch({
   kind?: string;
   family?: 'ipv4' | 'ipv6';
   excludeGroups?: boolean;
+  excludeDynamic?: boolean;
   exclude?: string;
   initialOptions: AliasOption[];
   selected: string[];
@@ -93,7 +96,7 @@ function useAliasSearch({
   onCreatingChange?: (creating: boolean) => void;
   onSessionLost?: () => void;
 }) {
-  const scopeKey = `${aliasType}|${kind ?? ''}|${family ?? ''}|${excludeGroups ? '1' : '0'}|${exclude ?? ''}`;
+  const scopeKey = `${aliasType}|${kind ?? ''}|${family ?? ''}|${excludeGroups ? '1' : '0'}|${excludeDynamic ? '1' : '0'}|${exclude ?? ''}`;
   const resetKey = `${scopeKey}|${singleSelected ?? ''}`;
   const [seenAliasType, setSeenAliasType] = useState(aliasType);
   const [seenResetKey, setSeenResetKey] = useState(resetKey);
@@ -215,8 +218,11 @@ function useAliasSearch({
       abortRef.current = controller;
       void search(trimmed, controller.signal).then((res) => {
         if (!mountedRef.current || seq !== seqRef.current) return;
-        setRemote({ query: trimmed, items: res.items });
-        rememberLabels(res.items);
+        const items = aliasType === 'addresses' && (excludeDynamic || excludeGroups)
+          ? res.items.filter((item) => !isDynamicAddressAlias(item))
+          : res.items;
+        setRemote({ query: trimmed, items });
+        rememberLabels(items);
         setLoading(false);
         setSearchError('');
       }).catch((err: unknown) => {
@@ -393,7 +399,7 @@ function useAliasSearch({
 
 export function AliasMultiSelect(props: AliasMultiSelectProps) {
   const {
-    api, aliasType, kind, family, excludeGroups, exclude, initialOptions, value, onChange,
+    api, aliasType, kind, family, excludeGroups, excludeDynamic, exclude, initialOptions, value, onChange,
     label, description, placeholder, error, clearable, nothingFoundMessage, debounceMs,
     onAliasCreated, onCreatingChange, onSessionLost,
   } = props;
@@ -412,6 +418,7 @@ export function AliasMultiSelect(props: AliasMultiSelectProps) {
     kind,
     family,
     excludeGroups,
+    excludeDynamic,
     exclude,
     initialOptions,
     selected: value,
@@ -464,7 +471,7 @@ export function AliasMultiSelect(props: AliasMultiSelectProps) {
 
 export function AliasSelect(props: AliasSelectProps) {
   const {
-    api, aliasType, kind, family, excludeGroups, exclude, initialOptions, value, onChange,
+    api, aliasType, kind, family, excludeGroups, excludeDynamic, exclude, initialOptions, value, onChange,
     label, description, placeholder, error, clearable, nothingFoundMessage, debounceMs,
     onAliasCreated, onCreatingChange, onSessionLost,
   } = props;
@@ -485,6 +492,7 @@ export function AliasSelect(props: AliasSelectProps) {
     kind,
     family,
     excludeGroups,
+    excludeDynamic,
     exclude,
     initialOptions,
     selected,

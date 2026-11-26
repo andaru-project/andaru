@@ -4,7 +4,7 @@ import { ApiClient, ApiError, saveFailure } from '../api';
 import {
   addressAliasesForFamily, checkOneToOne, checkPortForward, oneToOneDraftOf, oneToOneErrors, oneToOnePayload, portForwardDraftOf, portForwardErrors, portForwardPayload, type OneToOneDraft, type PortForwardDraft,
 } from '../natEdit';
-import type { OneToOneNat, PortForward, Snapshot } from '../types';
+import { isDynamicAddressAlias, type OneToOneNat, type PortForward, type Snapshot } from '../types';
 import { zoneColorMap } from '../zones';
 import { AliasMultiSelect, AliasSelect } from './AliasPicker';
 import { ZonePill, ZoneSelectionPill } from './ZoneBadge';
@@ -107,7 +107,12 @@ export function PortForwardEditor({ api, entry, snapshot, onClose, onSessionLost
   const patch = (next: Partial<PortForwardDraft>) => setDraft((prev) => ({ ...prev, ...next }));
   const baseZones = snapshot.value.zones.map((z) => ({ value: z.id, label: z.name }));
   const zoneColors = zoneColorMap(snapshot.value.zones);
-  const baseAddresses = addressAliasesForFamily(snapshot.value.aliases?.addresses ?? [], draft.family);
+  const addressAliases = snapshot.value.aliases?.addresses ?? [];
+  const addressById = new Map(addressAliases.map((a) => [a.id, a]));
+  const baseAddresses = addressAliasesForFamily(addressAliases, draft.family);
+  const staticAddresses = addressAliasesForFamily(addressAliases, draft.family, true);
+  const fromHasDynamic = draft.from.some((id) => isDynamicAddressAlias(addressById.get(id)));
+  const toIsDynamic = draft.toKind === 'address' && isDynamicAddressAlias(addressById.get(draft.toAddress));
   const zones = withMissingOptions(baseZones, draft.ingressZones);
 
   function submit(event: FormEvent) {
@@ -197,9 +202,10 @@ export function PortForwardEditor({ api, entry, snapshot, onClose, onSessionLost
                     api={api}
                     aliasType="addresses"
                     family={draft.family}
+                    excludeDynamic={draft.fromNegated}
                     label="Source addresses (optional)"
                     placeholder="Any source (alias or IP/CIDR)"
-                    initialOptions={baseAddresses}
+                    initialOptions={draft.fromNegated ? staticAddresses : baseAddresses}
                     value={draft.from}
                     error={errors.get('from')}
                     onAliasCreated={onAliasCreated}
@@ -208,7 +214,14 @@ export function PortForwardEditor({ api, entry, snapshot, onClose, onSessionLost
                     onChange={(from) => patch({ from, ...(from.length === 0 ? { fromNegated: false } : {}) })}
                   />
                   {draft.from.length > 0 && (
-                    <Switch size="xs" label="Invert source match (not these addresses)" checked={draft.fromNegated} onChange={(e) => patch({ fromNegated: e.currentTarget.checked })} />
+                    <Switch
+                      size="xs"
+                      label="Invert source match (not these addresses)"
+                      description={fromHasDynamic && !draft.fromNegated ? 'URL and host-name aliases cannot be inverted yet.' : undefined}
+                      checked={draft.fromNegated}
+                      disabled={fromHasDynamic && !draft.fromNegated}
+                      onChange={(e) => patch({ fromNegated: e.currentTarget.checked })}
+                    />
                   )}
                   <Stack gap={4}>
                     <Text size="sm" fw={500}>Destination address</Text>
@@ -228,9 +241,10 @@ export function PortForwardEditor({ api, entry, snapshot, onClose, onSessionLost
                       api={api}
                       aliasType="addresses"
                       family={draft.family}
+                      excludeDynamic={draft.toNegated}
                       label="Destination alias"
                       placeholder="Choose an alias or type IP/CIDR"
-                      initialOptions={baseAddresses}
+                      initialOptions={draft.toNegated ? staticAddresses : baseAddresses}
                       value={draft.toAddress || null}
                       error={errors.get('to')}
                       onAliasCreated={onAliasCreated}
@@ -242,7 +256,9 @@ export function PortForwardEditor({ api, entry, snapshot, onClose, onSessionLost
                   <Switch
                     size="xs"
                     label="Invert destination match (not this destination)"
+                    description={toIsDynamic && !draft.toNegated ? 'URL and host-name aliases cannot be inverted yet.' : undefined}
                     checked={draft.toNegated}
+                    disabled={toIsDynamic && !draft.toNegated}
                     onChange={(e) => patch({ toNegated: e.currentTarget.checked, ...(e.currentTarget.checked ? { reflection: false } : {}) })}
                   />
                 </Stack>
@@ -352,7 +368,11 @@ export function OneToOneEditor({ api, entry, snapshot, onClose, onSessionLost, o
   const patch = (next: Partial<OneToOneDraft>) => setDraft((prev) => ({ ...prev, ...next }));
   const baseZones = snapshot.value.zones.map((z) => ({ value: z.id, label: z.name }));
   const zoneColors = zoneColorMap(snapshot.value.zones);
-  const baseAddresses = addressAliasesForFamily(snapshot.value.aliases?.addresses ?? [], 'ipv4');
+  const addressAliases = snapshot.value.aliases?.addresses ?? [];
+  const addressById = new Map(addressAliases.map((a) => [a.id, a]));
+  const baseAddresses = addressAliasesForFamily(addressAliases, 'ipv4');
+  const staticAddresses = addressAliasesForFamily(addressAliases, 'ipv4', true);
+  const destHasDynamic = draft.destination.some((id) => isDynamicAddressAlias(addressById.get(id)));
   const zones = withMissingOptions(baseZones, draft.zone ? [draft.zone] : []);
 
   function submit(event: FormEvent) {
@@ -417,9 +437,10 @@ export function OneToOneEditor({ api, entry, snapshot, onClose, onSessionLost, o
                     api={api}
                     aliasType="addresses"
                     family="ipv4"
+                    excludeDynamic={draft.destinationNegated}
                     label="Destination addresses (optional)"
                     placeholder="Any destination (alias or IPv4/CIDR)"
-                    initialOptions={baseAddresses}
+                    initialOptions={draft.destinationNegated ? staticAddresses : baseAddresses}
                     value={draft.destination}
                     error={errors.get('destination')}
                     onAliasCreated={onAliasCreated}
@@ -431,7 +452,9 @@ export function OneToOneEditor({ api, entry, snapshot, onClose, onSessionLost, o
                     <Switch
                       size="xs"
                       label="Invert destination match (not these addresses)"
+                      description={destHasDynamic && !draft.destinationNegated ? 'URL and host-name aliases cannot be inverted yet.' : undefined}
                       checked={draft.destinationNegated}
+                      disabled={destHasDynamic && !draft.destinationNegated}
                       error={errors.get('destinationNegated')}
                       onChange={(e) => patch({ destinationNegated: e.currentTarget.checked })}
                     />

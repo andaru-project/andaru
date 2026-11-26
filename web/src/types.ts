@@ -539,12 +539,19 @@ export interface AddressAlias {
   id: string;
   name: string;
   description?: string;
-  kind: 'host' | 'network' | 'range' | 'group';
+  kind: 'host' | 'network' | 'range' | 'group' | 'url' | 'hostnames';
   address?: string;
   prefix?: string;
   first?: string;
   last?: string;
   members?: string[];
+  url?: string;
+  names?: string[];
+  refreshSeconds?: number;
+}
+
+export function isDynamicAddressAlias(alias: { kind?: string } | undefined): boolean {
+  return alias?.kind === 'url' || alias?.kind === 'hostnames';
 }
 
 // A port alias: TCP or UDP ports, ICMP or ICMPv6 types, or a group of other port aliases.

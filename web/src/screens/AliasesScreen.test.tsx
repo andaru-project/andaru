@@ -380,3 +380,66 @@ it('filters by every word of what a row shows, beside the kind', async () => {
   await user.type(filter, 'nothing like it');
   expect(screen.getByText('No alias matches the filter.')).toBeInTheDocument();
 });
+
+it('creates and displays URL list (with HTTP warning) and host-name aliases, and excludes them from groups', async () => {
+  const user = userEvent.setup();
+  const created: unknown[] = [];
+  const dynamicAddresses = [
+    ...addresses,
+    { id: 'adr_http', name: 'unencrypted-feed', kind: 'url', url: 'http://lists.example/ips.txt', refreshSeconds: 3600 },
+    { id: 'adr_vpn', name: 'vpn-peers', kind: 'hostnames', names: ['vpn.example.com', 'backup.example.com'], refreshSeconds: 300 },
+  ];
+
+  show({
+    '/api/v1/config/aliases/addresses': list(dynamicAddresses),
+    'POST /api/v1/config/aliases/addresses': (init) => {
+      const body = JSON.parse(String(init?.body ?? '{}'));
+      created.push(body);
+      return jsonResponse(201, { value: { id: `adr_new_${created.length}`, ...body }, version: '11' });
+    },
+  });
+
+  // Row shows URL, refresh cadence, and HTTP warning; hostnames row shows names and refresh cadence.
+  expect(await screen.findByText('http://lists.example/ips.txt')).toBeInTheDocument();
+  expect(screen.getByText(/Not secure: anyone on the path can change the list/i)).toBeInTheDocument();
+  expect(screen.getByText('Refreshes every 1 hour')).toBeInTheDocument();
+  expect(screen.getByText('vpn.example.com, backup.example.com')).toBeInTheDocument();
+  expect(screen.getByText('Refreshes every 5 minutes')).toBeInTheDocument();
+
+  // Group Members picker excludes both groups and dynamic (url/hostnames) aliases.
+  await user.click(screen.getByRole('button', { name: 'Edit address alias servers' }));
+  let panel = await screen.findByRole('dialog', { name: 'Edit address alias: servers' });
+  const membersInput = within(panel).getByLabelText('Members', { selector: 'input' });
+  await user.click(membersInput);
+  expect(within(document.getElementById(membersInput.getAttribute('aria-controls')!)!).getAllByRole('option', { hidden: true }).map((o) => o.textContent))
+    .toEqual(['lab', 'nas', 'pool']);
+  await user.click(within(panel).getByRole('button', { name: 'Cancel' }));
+
+  // Create a URL list alias: http:// shows warning in form, https:// clears it.
+  await user.click(screen.getByRole('button', { name: 'Add address alias' }));
+  panel = await screen.findByRole('dialog', { name: 'Add address alias' });
+  await user.selectOptions(within(panel).getByLabelText('Kind'), 'url');
+  const pasteInto = async (el: HTMLElement, text: string) => { await user.click(el); await user.paste(text); };
+  await pasteInto(within(panel).getByLabelText(/^Name/), 'cf-ips');
+  const urlInput = within(panel).getByLabelText(/^URL/);
+  await pasteInto(urlInput, 'http://lists.example/ips');
+  expect(within(panel).getByText('HTTP is not secure')).toBeInTheDocument();
+  await user.clear(urlInput);
+  await pasteInto(urlInput, 'https://www.cloudflare.com/ips-v4');
+  expect(within(panel).queryByText('HTTP is not secure')).not.toBeInTheDocument();
+  expect(within(panel).getByLabelText(/^Refresh interval/)).toHaveValue('3600');
+  await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
+  await waitFor(() => expect(created).toHaveLength(1));
+  expect(created[0]).toEqual({ name: 'cf-ips', kind: 'url', url: 'https://www.cloudflare.com/ips-v4', refreshSeconds: 3600 });
+
+  // Create a host-name alias: switching kind to hostnames prefills 300s default.
+  await user.click(screen.getByRole('button', { name: 'Add address alias' }));
+  panel = await screen.findByRole('dialog', { name: 'Add address alias' });
+  await user.selectOptions(within(panel).getByLabelText('Kind'), 'hostnames');
+  expect(within(panel).getByLabelText(/^Refresh interval/)).toHaveValue('300');
+  await pasteInto(within(panel).getByLabelText(/^Name/), 'remote-office');
+  await user.type(within(panel).getByLabelText(/^Host names/, { selector: 'input' }), 'office.example.com{Enter}');
+  await user.click(within(panel).getByRole('button', { name: 'Save alias' }));
+  await waitFor(() => expect(created).toHaveLength(2));
+  expect(created[1]).toEqual({ name: 'remote-office', kind: 'hostnames', names: ['office.example.com'], refreshSeconds: 300 });
+});

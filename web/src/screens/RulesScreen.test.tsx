@@ -370,3 +370,47 @@ it('edits a rule that names a zone the configuration no longer has, showing its 
   const pill = within(panel).getByText('zon_gone').closest<HTMLElement>('.mantine-Pill-root')!;
   expect(pill.style.background).toBe('');
 });
+
+it('hides dynamic aliases when rule side negation is enabled and disables negation when a dynamic alias is chosen', async () => {
+  const user = userEvent.setup();
+  show({
+    '/api/v1/config': config({
+      aliases: {
+        addresses: [
+          { id: 'adr_printers', name: 'printers', kind: 'group' },
+          { id: 'adr_url', name: 'cf-feed', kind: 'url', url: 'https://www.cloudflare.com/ips-v4', refreshSeconds: 3600 },
+          { id: 'adr_dns', name: 'vpn-dns', kind: 'hostnames', names: ['vpn.example.com'], refreshSeconds: 300 },
+        ],
+        ports: [{ id: 'svc_https', name: 'HTTPS', protocol: 'tcp' }],
+      },
+    }),
+  });
+  await user.click(await screen.findByRole('button', { name: 'Add rule' }));
+  const panel = await screen.findByRole('dialog', { name: 'Add rule' });
+  const fromInput = within(panel).getByLabelText('From: addresses', { selector: 'input' });
+
+  // Initially (not negated), dynamic aliases are selectable.
+  await user.click(fromInput);
+  let listbox = document.getElementById(fromInput.getAttribute('aria-controls')!)!;
+  expect(within(listbox).getAllByRole('option', { hidden: true }).map((o) => o.textContent)).toContain('cf-feed');
+  await user.click(within(listbox).getByRole('option', { name: 'cf-feed', hidden: true }));
+
+  // Selecting a dynamic alias disables "From: except these addresses".
+  const fromNot = within(panel).getByRole('switch', { name: /^From: except these addresses/ });
+  expect(fromNot).toBeDisabled();
+  expect(within(panel).getByText(/URL and host-name aliases cannot be left out yet/i)).toBeInTheDocument();
+
+  // Replacing with a static alias enables negation; toggling negation hides dynamic aliases from the picker.
+  const clearBtn = fromInput.closest('.mantine-MultiSelect-wrapper')?.querySelector('button[aria-label], button') as HTMLButtonElement | null;
+  if (clearBtn) await user.click(clearBtn);
+  await user.click(fromInput);
+  listbox = document.getElementById(fromInput.getAttribute('aria-controls')!)!;
+  await user.click(within(listbox).getByRole('option', { name: 'printers', hidden: true }));
+  expect(fromNot).toBeEnabled();
+  await user.click(fromNot);
+  await user.click(fromInput);
+  listbox = document.getElementById(fromInput.getAttribute('aria-controls')!)!;
+  const negatedOptions = within(listbox).getAllByRole('option', { hidden: true }).map((o) => o.textContent);
+  expect(negatedOptions).not.toContain('cf-feed');
+  expect(negatedOptions).not.toContain('vpn-dns');
+});

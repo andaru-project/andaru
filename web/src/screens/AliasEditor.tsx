@@ -1,8 +1,17 @@
-import { Alert, Button, Drawer, Fieldset, Group, MultiSelect, NativeSelect, Stack, Textarea, TextInput } from '@mantine/core';
+import { Alert, Button, Drawer, Fieldset, Group, MultiSelect, NativeSelect, Stack, TagsInput, Textarea, TextInput } from '@mantine/core';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { icmpTypes } from '../aliasLiteral';
 import { ApiClient, ApiError, fieldErrors, saveFailure } from '../api';
-import type { AddressAlias, AliasKinds, PortAlias, SavedObject } from '../types';
+import {
+  defaultHostnamesRefreshSeconds,
+  defaultUrlRefreshSeconds,
+  isInsecureHttpUrl,
+  normalizeAliasHostnames,
+  validateAliasHostnames,
+  validateAliasRefreshSeconds,
+  validateAliasUrl,
+} from '../dynamicAlias';
+import { isDynamicAddressAlias, type AddressAlias, type AliasKinds, type PortAlias, type SavedObject } from '../types';
 import { AliasMultiSelect } from './AliasPicker';
 import type { Row } from './AliasesScreen';
 
@@ -21,7 +30,7 @@ interface AliasEditorProps {
   onSave<K extends keyof AliasKinds>(kind: K, alias: Omit<AliasKinds[K], 'id'>, saved?: SavedObject<AliasKinds[K]>): Promise<void>;
 }
 
-const field = /^\/(name|description|kind|protocol|address|prefix|first|last|members|ports|types)(?:\/|$)/;
+const field = /^\/(name|description|kind|protocol|address|prefix|first|last|members|url|names|refreshSeconds|ports|types)(?:\/|$)/;
 
 export function AliasEditor({ api, editing, rows, onClose, onSessionLost, onAbandoned, onRefused, onAliasCreated, onSave }: AliasEditorProps) {
   const kind = typeof editing === 'string' ? editing : editing.kind;
@@ -37,6 +46,13 @@ export function AliasEditor({ api, editing, rows, onClose, onSessionLost, onAban
   const [what, setWhat] = useState<string>(address?.kind ?? port?.protocol ?? (kind === 'addresses' ? 'host' : 'tcp'));
   const [value, setValue] = useState(address?.address ?? address?.prefix ?? address?.first ?? '');
   const [last, setLast] = useState(address?.last ?? '');
+  const [url, setUrl] = useState(address?.url ?? '');
+  const [hostnames, setHostnames] = useState<string[]>(address?.names ?? []);
+  const [refreshSeconds, setRefreshSeconds] = useState(
+    address?.refreshSeconds !== undefined
+      ? String(address.refreshSeconds)
+      : String(address?.kind === 'hostnames' ? defaultHostnamesRefreshSeconds : defaultUrlRefreshSeconds),
+  );
   const [ports, setPorts] = useState((port?.ports ?? []).join(', '));
   const [types, setTypes] = useState(port?.types ?? []);
   const [members, setMembers] = useState(saved?.item.value.members ?? []);
@@ -54,14 +70,38 @@ export function AliasEditor({ api, editing, rows, onClose, onSessionLost, onAban
   const failureRef = useRef<HTMLDivElement>(null);
   useEffect(() => { if (failure) failureRef.current?.scrollIntoView?.({ block: 'nearest' }); }, [failure]);
 
-  // A group holds aliases of its own kind that are not groups, and never itself.
-  const candidates = rows.filter((row) => row.kind === kind && row.item.value.id !== saved?.item.value.id && (row.kind === 'addresses' ? row.item.value.kind : row.item.value.protocol) !== 'group')
+  // A group holds aliases of its own kind that are not groups (and for addresses, not dynamic url/hostnames), and never itself.
+  const candidates = rows
+    .filter((row) => (
+      row.kind === kind
+      && row.item.value.id !== saved?.item.value.id
+      && (row.kind === 'addresses'
+        ? row.item.value.kind !== 'group' && !isDynamicAddressAlias(row.item.value)
+        : row.item.value.protocol !== 'group')
+    ))
     .map((row) => ({ value: row.item.value.id, label: row.item.value.name }));
+
+  function clearError(key: string) {
+    setErrors((cur) => {
+      if (!cur.has(key)) return cur;
+      const next = new Map(cur);
+      next.delete(key);
+      return next;
+    });
+  }
 
   // Another kind shows other fields: what was said of the old ones goes with them, and the rest stays.
   function change(next: string) {
+    if (kind === 'addresses') {
+      const currentRefresh = refreshSeconds.trim();
+      if (next === 'hostnames' && currentRefresh === String(defaultUrlRefreshSeconds)) {
+        setRefreshSeconds(String(defaultHostnamesRefreshSeconds));
+      } else if (next === 'url' && currentRefresh === String(defaultHostnamesRefreshSeconds)) {
+        setRefreshSeconds(String(defaultUrlRefreshSeconds));
+      }
+    }
     setWhat(next);
-    setErrors(new Map([...errors].filter(([name]) => name === 'name' || name === 'description')));
+    setErrors(new Map([...errors].filter(([k]) => k === 'name' || k === 'description')));
   }
 
   async function submit(event: FormEvent) {
@@ -77,20 +117,53 @@ export function AliasEditor({ api, editing, rows, onClose, onSessionLost, onAban
       onRefused();
       return;
     }
-    // A group holds no groups, so an alias that is in one cannot become one.
-    const holder = saved && what === 'group' ? rows.find((row) => row.item.value.members?.includes(saved.item.value.id)) : undefined;
+    // A group holds no groups nor dynamic aliases, so an alias that is in one cannot become one.
+    const nextIsDisallowedMember = what === 'group' || (kind === 'addresses' && (what === 'url' || what === 'hostnames'));
+    const holder = saved && nextIsDisallowedMember ? rows.find((row) => row.item.value.members?.includes(saved.item.value.id)) : undefined;
     if (holder) {
-      setErrors(new Map([[kind === 'addresses' ? 'kind' : 'protocol', `This alias is in the group ${holder.item.value.name}, and a group cannot hold a group.`]]));
+      const reason = what === 'group'
+        ? `This alias is in the group ${holder.item.value.name}, and a group cannot hold a group.`
+        : `This alias is in the group ${holder.item.value.name}, and a group cannot hold a URL or host-name alias yet.`;
+      setErrors(new Map([[kind === 'addresses' ? 'kind' : 'protocol', reason]]));
       onRefused();
       return;
+    }
+    if (kind === 'addresses' && (what === 'url' || what === 'hostnames')) {
+      const localErrors = new Map<string, string>();
+      if (what === 'url') {
+        const urlErr = validateAliasUrl(url);
+        if (urlErr) localErrors.set('url', urlErr);
+      } else {
+        const namesErr = validateAliasHostnames(hostnames);
+        if (namesErr) localErrors.set('names', namesErr);
+      }
+      const refreshErr = validateAliasRefreshSeconds(refreshSeconds);
+      if (refreshErr) localErrors.set('refreshSeconds', refreshErr);
+      if (localErrors.size > 0) {
+        setErrors(localErrors);
+        return;
+      }
     }
     setBusy(true);
     setErrors(new Map());
     const identity = { name: name.trim(), ...(description ? { description } : {}) };
     try {
       if (kind === 'addresses') {
-        const body: Omit<AddressAlias, 'id'> = { ...identity, kind: what as AddressAlias['kind'],
-          ...(what === 'host' ? { address: value.trim() } : what === 'network' ? { prefix: value.trim() } : what === 'range' ? { first: value.trim(), last: last.trim() } : { members }) };
+        const body: Omit<AddressAlias, 'id'> = {
+          ...identity,
+          kind: what as AddressAlias['kind'],
+          ...(what === 'host'
+            ? { address: value.trim() }
+            : what === 'network'
+              ? { prefix: value.trim() }
+              : what === 'range'
+                ? { first: value.trim(), last: last.trim() }
+                : what === 'url'
+                  ? { url: url.trim(), refreshSeconds: Number(refreshSeconds.trim()) }
+                  : what === 'hostnames'
+                    ? { names: normalizeAliasHostnames(hostnames), refreshSeconds: Number(refreshSeconds.trim()) }
+                    : { members }),
+        };
         await onSave('addresses', body, savedAddress);
       } else {
         const body: Omit<PortAlias, 'id'> = { ...identity, protocol: what as PortAlias['protocol'],
@@ -118,18 +191,78 @@ export function AliasEditor({ api, editing, rows, onClose, onSessionLost, onAban
           {/* What is sent is what the form held when Save was pressed: nothing is typed over it meanwhile. */}
           <Fieldset variant="unstyled" disabled={busy}>
             <Stack>
-          <TextInput data-autofocus label="Name" maxLength={128} required value={name} error={errors.get('name')} onChange={(event) => setName(event.currentTarget.value)} />
-          <Textarea autosize label="Description" maxLength={4096} minRows={1} maxRows={4} value={description} error={errors.get('description')} onChange={(event) => setDescription(event.currentTarget.value)} />
+          <TextInput data-autofocus label="Name" maxLength={128} required value={name} error={errors.get('name')} onChange={(event) => { setName(event.currentTarget.value); clearError('name'); }} />
+          <Textarea autosize label="Description" maxLength={4096} minRows={1} maxRows={4} value={description} error={errors.get('description')} onChange={(event) => { setDescription(event.currentTarget.value); clearError('description'); }} />
           {kind === 'addresses' ? (
             <>
               <NativeSelect label="Kind" value={what} error={errors.get('kind')} onChange={(event) => change(event.currentTarget.value)}
-                data={[{ value: 'host', label: 'One address' }, { value: 'network', label: 'A network' }, { value: 'range', label: 'A range of addresses' }, { value: 'group', label: 'A group of address aliases' }]} />
+                data={[
+                  { value: 'host', label: 'One address' },
+                  { value: 'network', label: 'A network' },
+                  { value: 'range', label: 'A range of addresses' },
+                  { value: 'group', label: 'A group of address aliases' },
+                  { value: 'url', label: 'A list from a URL' },
+                  { value: 'hostnames', label: 'Host names (DNS)' },
+                ]} />
               {what === 'host' && <TextInput label="Address" description="IPv4 or IPv6." placeholder="192.168.1.10" value={value} error={errors.get('address')} onChange={(event) => setValue(event.currentTarget.value)} />}
               {what === 'network' && <TextInput label="Network" description="A prefix with its length." placeholder="192.168.1.0/24" value={value} error={errors.get('prefix')} onChange={(event) => setValue(event.currentTarget.value)} />}
               {what === 'range' && (
                 <>
                   <TextInput label="First address" placeholder="192.168.1.100" value={value} error={errors.get('first')} onChange={(event) => setValue(event.currentTarget.value)} />
                   <TextInput label="Last address" description="The same family as the first address, and not below it." placeholder="192.168.1.199" value={last} error={errors.get('last')} onChange={(event) => setLast(event.currentTarget.value)} />
+                </>
+              )}
+              {what === 'url' && (
+                <>
+                  <TextInput
+                    label="URL"
+                    description="https:// or http:// URL returning IPv4/IPv6 addresses or prefixes, one per line (# comments and blank lines ignored)."
+                    placeholder="https://www.cloudflare.com/ips-v4"
+                    maxLength={2048}
+                    required
+                    value={url}
+                    error={errors.get('url')}
+                    onChange={(event) => { setUrl(event.currentTarget.value); clearError('url'); }}
+                  />
+                  {isInsecureHttpUrl(url) && (
+                    <Alert color="orange" role="status" title="HTTP is not secure">
+                      Not secure: anyone on the path can change the list, and with it what your rules allow.
+                    </Alert>
+                  )}
+                  <TextInput
+                    label="Refresh interval (seconds)"
+                    description="From 60 to 86400 seconds (24 hours)."
+                    placeholder="3600"
+                    inputMode="numeric"
+                    required
+                    value={refreshSeconds}
+                    error={errors.get('refreshSeconds')}
+                    onChange={(event) => { setRefreshSeconds(event.currentTarget.value); clearError('refreshSeconds'); }}
+                  />
+                </>
+              )}
+              {what === 'hostnames' && (
+                <>
+                  <TagsInput
+                    label="Host names"
+                    description="1 to 20 distinct host names resolved for A and AAAA records (not IP addresses). Press Enter after each name."
+                    placeholder="vpn.example.com"
+                    required
+                    clearable
+                    value={hostnames}
+                    error={errors.get('names')}
+                    onChange={(next) => { setHostnames(next); clearError('names'); }}
+                  />
+                  <TextInput
+                    label="Refresh interval (seconds)"
+                    description="From 60 to 86400 seconds (24 hours)."
+                    placeholder="300"
+                    inputMode="numeric"
+                    required
+                    value={refreshSeconds}
+                    error={errors.get('refreshSeconds')}
+                    onChange={(event) => { setRefreshSeconds(event.currentTarget.value); clearError('refreshSeconds'); }}
+                  />
                 </>
               )}
             </>
@@ -148,7 +281,7 @@ export function AliasEditor({ api, editing, rows, onClose, onSessionLost, onAban
               excludeGroups
               exclude={saved?.item.value.id}
               label="Members"
-              description={kind === 'addresses' ? 'Address aliases or literal IPs, CIDRs, or ranges (not groups).' : 'Port aliases or literal ports (not groups).'}
+              description={kind === 'addresses' ? 'Address aliases or literal IPs, CIDRs, or ranges (not groups, URL lists, or host-name aliases).' : 'Port aliases or literal ports (not groups).'}
               placeholder={kind === 'addresses' ? 'Alias name, 192.168.1.50, or 10.0.0.0/24' : 'Alias name, 443, or tcp/8000-8080'}
               initialOptions={candidates}
               value={members}

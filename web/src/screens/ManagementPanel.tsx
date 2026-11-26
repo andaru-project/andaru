@@ -2,7 +2,7 @@ import { Alert, Anchor, Badge, Button, Drawer, Fieldset, Group, Paper, Select, S
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useInRouterContext } from 'react-router';
 import { ApiClient, ApiError, fieldErrors, reportError, saveFailure } from '../api';
-import type { ManagementConfig, SavedLink, SavedObject, Segment, Snapshot } from '../types';
+import { isDynamicAddressAlias, type ManagementConfig, type SavedLink, type SavedObject, type Segment, type Snapshot } from '../types';
 import { AliasMultiSelect } from './AliasPicker';
 import { ZoneBadge } from './ZoneBadge';
 
@@ -83,7 +83,9 @@ function ManagementEditor({ api, initial, snapshot, onClose, onSaved, onRefresh,
   if (segmentId && !segmentOptions.some((o) => o.value === segmentId)) {
     segmentOptions.push({ value: segmentId, label: `${segmentId} (missing)` });
   }
-  const addressOptions = (snapshot.value.aliases?.addresses ?? []).map((a) => ({ value: a.id, label: a.name }));
+  const addressOptions = (snapshot.value.aliases?.addresses ?? [])
+    .filter((a) => !isDynamicAddressAlias(a))
+    .map((a) => ({ value: a.id, label: a.name }));
 
   const selectedSegment = snapshot.value.segments.find((s) => s.id === segmentId);
   const movingSegment = Boolean(initial?.value.segment && segmentId && initial.value.segment !== segmentId);
@@ -203,6 +205,7 @@ function ManagementEditor({ api, initial, snapshot, onClose, onSaved, onRefresh,
               <AliasMultiSelect
                 api={api}
                 aliasType="addresses"
+                excludeDynamic
                 label="Allowed SSH sources"
                 description="Restricts the fixed SSH anti-lockout rule on the management segment to these address aliases. Leave empty to allow SSH from any address on the management segment. Web UI access is governed by firewall rules."
                 placeholder="Any address on the management segment"
