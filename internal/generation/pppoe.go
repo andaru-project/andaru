@@ -51,13 +51,15 @@ func (r Realizer) pppSum(name string) (string, error) {
 // stopSession stops a session's pppd and waits for it to exit, so its interface is gone when this returns.
 func (r Realizer) stopSession(ctx context.Context, name string) error {
 	unit := pppUnitName(name)
-	if _, err := r.Run(ctx, "/usr/bin/systemctl", "stop", unit); err != nil {
-		// A unit systemd never loaded, as after a crash before the reload, is not running either.
-		if _, active := r.Run(ctx, "/usr/bin/systemctl", "is-active", "--quiet", unit); active == nil {
-			return fmt.Errorf("stop the PPPoE session %s: %w", unit, err)
-		}
+	_, err := r.Run(ctx, "/usr/bin/systemctl", "stop", unit)
+	if err == nil {
+		return nil
 	}
-	return nil
+	// A unit systemd does not know, as after a reload once its file is gone, is not running either.
+	if state, showErr := r.Run(ctx, "/usr/bin/systemctl", "show", "-p", "LoadState", "--value", unit); showErr == nil && strings.TrimSpace(string(state)) == "not-found" {
+		return nil
+	}
+	return fmt.Errorf("stop the PPPoE session %s: %w", unit, err)
 }
 
 // sessions stops the PPPoE sessions the new set dropped and starts the ones it carries. pppd reads its options only

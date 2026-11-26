@@ -130,13 +130,16 @@ func TestSessionThatWasUpMayBeDropped(t *testing.T) {
 // A unit systemd never loaded cannot be stopped, and is not running: as after a crash between placing the files and
 // the reload, or a reset run again after one.
 func TestStoppingAnUnloadedSessionIsNoError(t *testing.T) {
-	for _, active := range []bool{false, true} {
+	for _, loaded := range []bool{false, true} {
 		b := newBench(t)
 		b.live(session("password \"one\"\n"))
-		b.net.fail, b.net.pppActive = "systemctl stop "+pppUnit0, active
+		b.net.fail, b.net.pppLoaded = "systemctl stop "+pppUnit0, loaded
 		err := b.applyConfirmed(one)
-		if active == (err == nil) {
-			t.Fatalf("active %v: apply = %v", active, err)
+		if !loaded && err != nil {
+			t.Fatalf("not loaded: apply = %v", err)
+		}
+		if loaded && (err == nil || !strings.Contains(err.Error(), "stop the PPPoE session "+pppUnit0)) {
+			t.Fatalf("loaded: apply = %v, want the failed stop", err)
 		}
 	}
 }
