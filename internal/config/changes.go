@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -469,21 +470,26 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 		for _, f := range secretFields(op.Collection, value) {
 			if pw, ok := f.parent[f.name].(map[string]any); ok {
 				name, _ := pw["secret"].(string)
-				if set, ok := pw["set"].(string); ok {
+				set, setting := pw["set"].(string)
+				if setting {
 					if _, dup := setters[name]; dup {
 						return empty, fault("VALIDATION_FAILED", input.path(i, f.path, true), "Duplicate secret set command.")
 					}
 					setters[name] = heldSecret{key: key, path: f.path}
 					old, exists := current.Secrets.Scopes["core"][name]
+					if exists && old.Kind != secretKind(op.Collection) {
+						return empty, fault("VALIDATION_FAILED", input.path(i, f.path, true), "This secret belongs to another kind of object.")
+					}
 					if !exists || old.Value != set {
-						current.Secrets.Scopes["core"][name] = secretEntry{Kind: "password", Value: set, UpdatedAt: now.UTC().Format(time.RFC3339Nano), Version: next}
+						current.Secrets.Scopes["core"][name] = secretEntry{Kind: secretKind(op.Collection), Value: set, UpdatedAt: now.UTC().Format(time.RFC3339Nano), Version: next}
 						changedSecrets[name] = true
 					}
 				}
 				reference := map[string]any{"secret": name}
-				if pw["unresolved"] == true {
-					// Only a restore leaves a channel's secret unresolved: a channel saved so would skip its checks.
-					if op.Collection == "notifications.channels" {
+				if pw["unresolved"] == true && !setting { // a set resolves it
+					// Only a restore leaves a channel's secret unresolved, which a client may echo back unchanged; a new
+					// unresolved one would skip the channel's checks.
+					if op.Collection == "notifications.channels" && !heldUnresolved(before[key], f.path, name) {
 						return empty, fault("VALIDATION_FAILED", input.path(i, f.path, true), "A notification channel's secret must be set or exist.")
 					}
 					reference["unresolved"] = true
@@ -609,14 +615,11 @@ func prepareChanges(current *savedState, input Changes, next Version, now time.T
 			}
 		}
 	}
-	// A secret is held by links or by channels, not both: a channel's secrets are changed only with notifications.manage,
-	// and a link's only with configuration.write, so neither may reach the other's.
-	holders := map[string]string{}
+	// A reference this batch writes must name a secret of its collection's kind (secretKind).
 	for _, h := range heldSecrets(&d) {
-		if other, ok := holders[h.ref.Secret]; ok && other != h.key.Collection {
-			return empty, rebaseValidation(validationError{{h.path, "A secret a notification channel holds cannot be held by a link, nor a link's by a channel."}}, &d, origins, input)
+		if _, written := writes[h.key]; written && !h.ref.Unresolved && current.Secrets.Scopes["core"][h.ref.Secret].Kind != secretKind(h.key.Collection) {
+			return empty, rebaseValidation(validationError{{h.path, "This secret belongs to another kind of object."}}, &d, origins, input)
 		}
-		holders[h.ref.Secret] = h.key.Collection
 	}
 	// A webhook URL is checked where its value is known: for the channels this batch writes, or whose URL it sets.
 	for i, c := range d.Notifications.Channels {
@@ -961,10 +964,21 @@ func rebaseValidation(details validationError, d *declaration, origins map[objec
 	return f
 }
 
+// heldUnresolved says whether old, a channel before the batch, holds name unresolved at path.
+func heldUnresolved(old any, path, name string) bool {
+	c, ok := old.(*channel)
+	if !ok || c.Webhook == nil {
+		return false
+	}
+	ref := map[string]*secretReference{"/webhook/url": &c.Webhook.URL, "/webhook/authorization": c.Webhook.Authorization}[path]
+	return ref != nil && ref.Secret == name && ref.Unresolved
+}
+
 // rebaseSecrets blames the earliest batch operation whose own secret entry fails validation.
 func rebaseSecrets(failure validationError, doc secretDocument, head Version, setters map[string]heldSecret, origins map[objectKey]int, input Changes) *Fault {
 	best, path := -1, ""
-	for name, setter := range setters {
+	for _, name := range slices.Sorted(maps.Keys(setters)) {
+		setter := setters[name]
 		one := secretDocument{SchemaVersion: doc.SchemaVersion, Scopes: map[string]map[string]secretEntry{"core": {name: doc.Scopes["core"][name]}}}
 		if validateSecrets(one, head) != nil && (best < 0 || origins[setter.key] < best) {
 			best, path = origins[setter.key], setter.path
@@ -972,7 +986,8 @@ func rebaseSecrets(failure validationError, doc secretDocument, head Version, se
 	}
 	if best < 0 { // no one entry fails, as when the document as a whole is too large: blame the first setter
 		best, path = 0, ""
-		for _, setter := range setters {
+		for _, name := range slices.Sorted(maps.Keys(setters)) {
+			setter := setters[name]
 			if i := origins[setter.key]; path == "" || i < best {
 				best, path = i, setter.path
 			}

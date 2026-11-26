@@ -35,7 +35,7 @@ func TestChannelLifecycle(t *testing.T) {
 	if !strings.HasPrefix(id, "ntf_") || len(c) != 1 || !*c[0].Enabled || c[0].Filter.MinSeverity != "warning" || !slices.Equal(c[0].Filter.Sources, []string{"apply", "upgrade"}) {
 		t.Fatalf("created %s %+v", id, c)
 	}
-	if v := p.State.Secrets.Scopes["core"]["OPS_URL"]; v.Value != "https://hooks.example/CHANNEL_SECRET_TOKEN" || v.Kind != "password" || v.Version != "8" {
+	if v := p.State.Secrets.Scopes["core"]["OPS_URL"]; v.Value != "https://hooks.example/CHANNEL_SECRET_TOKEN" || v.Kind != "notification" || v.Version != "8" {
 		t.Fatalf("url secret %+v", v)
 	}
 	result, e := resultView(p)
@@ -132,14 +132,24 @@ func TestChannelRefusals(t *testing.T) {
 	}
 }
 
-// A secret is held by links or by channels, not both: otherwise configuration.write could redirect a channel through a
-// link's password, and notifications.manage could reach a link's password through a channel.
+// A secret is bound to its kind: configuration.write cannot redirect a channel through a link's password, and
+// notifications.manage cannot reach a link's password through a channel, even once the link is gone.
 func TestChannelsAndLinksShareNoSecret(t *testing.T) {
+	refused := func(what string, e error) {
+		t.Helper()
+		if e == nil || !strings.Contains(fmt.Sprintf("%#v", e), "another kind of object") {
+			t.Fatalf("%s: %#v", what, e)
+		}
+	}
 	s := seededState(t)
 	viaChannel := `{"name":"leak","kind":"webhook","webhook":{"url":{"secret":"LEAK_URL","set":"https://evil.example/","expectedVersion":"0"},"authorization":{"secret":"WAN_PASSWORD"}}}`
-	if _, e := channelChange(t, &s, "create", "", "", viaChannel, "8"); e == nil || !strings.Contains(e.Error(), "VALIDATION_FAILED") {
-		t.Fatalf("a channel holding a link's secret: %v", e)
-	}
+	_, e := channelChange(t, &s, "create", "", "", viaChannel, "8")
+	refused("a channel holding a link's secret", e)
+	overwrite := `{"name":"leak","kind":"webhook","webhook":{"url":{"secret":"LEAK2_URL","set":"https://evil.example/","expectedVersion":"0"},"authorization":{"secret":"WAN_PASSWORD","set":"x","expectedVersion":"7"}}}`
+	fresh := seededState(t) // a refused batch may leave its secret writes in the state it was given
+	_, e = channelChange(t, &fresh, "create", "", "", overwrite, "8")
+	refused("a channel setting a link's secret", e)
+	s = seededState(t)
 	p, e := channelChange(t, &s, "create", "", "", opsChannel, "8")
 	if e != nil {
 		t.Fatal(e)
@@ -153,17 +163,39 @@ func TestChannelsAndLinksShareNoSecret(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if _, e := prepareChanges(&p.State, c, "9", fixedTime); e == nil || !strings.Contains(e.Error(), "VALIDATION_FAILED") {
-		t.Fatalf("a link holding a channel's secret: %v", e)
+	_, e = prepareChanges(&p.State, c, "9", fixedTime)
+	refused("a link holding a channel's secret", e)
+	if !strings.Contains(fmt.Sprintf("%#v", e), "/password") {
+		t.Fatalf("blamed %#v, want the link's password", e)
 	}
+	// A link's secret outlives the link, held by nothing: a channel still cannot hold it.
+	orphan := seededState(t)
+	orphan.Secrets.Scopes["core"]["ORPHAN"] = secretEntry{Kind: "password", Value: "TEST_ONLY", Version: "7"}
+	_, e = channelChange(t, &orphan, "create", "", "", strings.ReplaceAll(viaChannel, "WAN_PASSWORD", "ORPHAN"), "8")
+	refused("a channel holding an orphaned link secret", e)
 }
 
 // Only a restore leaves a channel's secret unresolved; a client may not, or the channel would skip its checks.
 func TestChannelSecretCannotBeWrittenUnresolved(t *testing.T) {
 	s := seededState(t)
 	body := `{"name":"x","kind":"webhook","webhook":{"url":{"secret":"NOPE","unresolved":true}}}`
-	if _, e := channelChange(t, &s, "create", "", "", body, "8"); e == nil {
-		t.Fatal("an unresolved channel secret was saved")
+	if _, e := channelChange(t, &s, "create", "", "", body, "8"); e == nil || !strings.Contains(fmt.Sprintf("%#v", e), "must be set or exist") {
+		t.Fatalf("an unresolved channel secret: %#v", e)
+	}
+}
+
+// A channel a restore left unresolved can still be edited, as a client echoes the reference it read.
+func TestRestoredUnresolvedChannelCanBeEdited(t *testing.T) {
+	s := seededState(t)
+	p, e := channelChange(t, &s, "create", "", "", opsChannel, "8")
+	if e != nil {
+		t.Fatal(e)
+	}
+	ch := &p.State.Config.Notifications.Channels[0]
+	ch.Webhook.URL.Unresolved = true
+	echo := `{"name":"ops","enabled":false,"kind":"webhook","webhook":{"url":{"secret":"OPS_URL","unresolved":true}}}`
+	if _, e := channelChange(t, &p.State, "replace", ch.ID, "8", echo, "9"); e != nil {
+		t.Fatalf("disabling it: %#v", e)
 	}
 }
 

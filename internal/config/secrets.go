@@ -145,6 +145,15 @@ type secretField struct {
 	name   string
 }
 
+// secretKind is the kind of secret a collection holds. A secret is bound to its kind: a link's password and a channel's
+// secrets are changed with different capabilities, so neither may reach the other's.
+func secretKind(collection string) string {
+	if collection == "notifications.channels" {
+		return "notification"
+	}
+	return "password"
+}
+
 func secretFields(collection string, value map[string]any) []secretField {
 	switch collection {
 	case "links":
