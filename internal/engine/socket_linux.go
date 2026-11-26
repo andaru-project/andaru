@@ -16,6 +16,7 @@ import (
 	"github.com/andaru-project/andaru/internal/audit"
 	"github.com/andaru-project/andaru/internal/bus"
 	"github.com/andaru-project/andaru/internal/config"
+	"github.com/andaru-project/andaru/internal/delivery"
 	"github.com/andaru-project/andaru/internal/host"
 	"github.com/andaru-project/andaru/internal/identity"
 	"github.com/andaru-project/andaru/internal/notify"
@@ -106,9 +107,14 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	store.OnSave(func(v config.Version) { head(v); sources.nudge() })
 	// Without its store the layer does not read: notifications wait in the bus's log, for its retention, until a
 	// start that opens it, and the API answers that they are unavailable.
-	notificationsHandler := notificationsAPI{}
+	notificationsHandler := notificationsAPI{channels: store.NotificationChannels, events: events}
+	// andaru-outbound's consumer exists before the first job, which it would otherwise start after.
+	if err := events.Declare(outboundUser, delivery.Consumer, delivery.Filter); err != nil {
+		slog.Error("notification deliveries may be missed until andaru-outbound attaches", "error", err)
+	}
 	var active []notify.Notification
-	if layer, err := notify.Open(filepath.Join(stateDir, "notifications.db"), events, slog.Default().With("component", "notifications"), nil); err != nil {
+	notifications := slog.Default().With("component", "notifications")
+	if layer, err := notify.Open(filepath.Join(stateDir, "notifications.db"), events, notifications, deliverNotifications(events, store.NotificationChannels, notifications)); err != nil {
 		slog.Error("notifications unavailable", "error", err)
 	} else {
 		defer func() {
