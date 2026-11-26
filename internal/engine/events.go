@@ -107,10 +107,14 @@ func serviceUser(uid uint32) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !slices.Contains(serviceUsers, u.Username) {
-		return "", fmt.Errorf("%s is not one of Andaru's services", u.Username)
+	return u.Username, isService(u.Username)
+}
+
+func isService(name string) error {
+	if !slices.Contains(serviceUsers, name) {
+		return fmt.Errorf("%s is not one of Andaru's services", name)
 	}
-	return u.Username, nil
+	return nil
 }
 
 // servicesListener binds the services socket for the services group. Run outside its unit, the engine may lack the

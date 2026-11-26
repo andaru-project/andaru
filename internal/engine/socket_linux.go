@@ -497,7 +497,7 @@ func claimWebSocket(path, name string) (_ *os.File, err error) {
 	}
 	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, errors.New("another engine serves this web socket")
+			return nil, errors.New("another engine serves this " + name + " socket")
 		}
 		return nil, fmt.Errorf("lock %s socket: %w", name, err)
 	}
@@ -521,7 +521,7 @@ func claimWebSocket(path, name string) (_ *os.File, err error) {
 	if !errors.Is(dialErr, syscall.ECONNREFUSED) {
 		return nil, fmt.Errorf("%s socket path already exists and cannot be shown dead: %w", name, dialErr)
 	}
-	slog.Warn("removing the web socket a previous engine left behind", "path", path)
+	slog.Warn("removing the "+name+" socket a previous engine left behind", "path", path)
 	if err = os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("remove stale %s socket: %w", name, err)
 	}
