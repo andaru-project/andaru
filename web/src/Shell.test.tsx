@@ -712,3 +712,23 @@ it('shows the 503 state in the header and on the Notifications page', async () =
   expect(alert).toHaveTextContent('The notifications could not be read');
   expect(alert).toHaveTextContent('Notifications are temporarily unavailable.');
 });
+
+it('shows System -> Backups only when the session has backup capabilities', async () => {
+  fetchRoutes({});
+  const first = render(
+    <MemoryRouter initialEntries={['/system/session']}>
+      <Shell api={new ApiClient('csrf')} session={session(['status.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} />
+    </MemoryRouter>,
+  );
+  expect(screen.queryByRole('link', { name: 'Backups' })).not.toBeInTheDocument();
+  first.unmount();
+
+  render(
+    <MemoryRouter initialEntries={['/system/backups']}>
+      <Shell api={new ApiClient('csrf')} session={session(['backups.create'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} />
+    </MemoryRouter>,
+  );
+  expect(await screen.findByRole('heading', { name: 'Backup & restore' })).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'Backups' })).toHaveAttribute('aria-current', 'page');
+  expect(document.title).toBe('Backup & restore — Andaru');
+});

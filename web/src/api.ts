@@ -5,6 +5,10 @@ import type {
   Applies,
   Apply,
   AuditEvent,
+  BackupCreateOptions,
+  BackupDownload,
+  BackupInspectionResponse,
+  BackupStore,
   ConfigBatchOperation,
   ConfigChangesResult,
   Dhcp4Entry,
@@ -26,6 +30,8 @@ import type {
   PrefixView,
   Preferences,
   Preview,
+  RestorePreviewResponse,
+  RestoreSavedResponse,
   Role,
   Rule,
   SavedList,
@@ -163,7 +169,7 @@ export class ApiClient {
   private async request<T>(path: string, init: RequestInit = {}, csrf = false): Promise<T> {
     const headers = new Headers(init.headers);
     headers.set('Accept', 'application/json');
-    if (init.body) headers.set('Content-Type', 'application/json');
+    if (init.body && !(init.body instanceof FormData)) headers.set('Content-Type', 'application/json');
     if (csrf && this.csrfToken) headers.set('X-Andaru-CSRF', this.csrfToken);
     // No caller passes a signal or names GET, so a request without a method is a read.
     const read = !init.method;
@@ -640,5 +646,82 @@ export class ApiClient {
 
   dismissNotification(id: number) {
     return this.request<void>(`/api/v1/notifications/${id}/dismiss`, { method: 'POST' }, true);
+  }
+
+  async createBackup(options: BackupCreateOptions): Promise<BackupDownload> {
+    const headers = new Headers({
+      Accept: 'application/zip, application/octet-stream, application/json',
+      'Content-Type': 'application/json',
+    });
+    if (this.csrfToken) headers.set('X-Andaru-CSRF', this.csrfToken);
+    const carried = input;
+    input = false;
+    let response: Response;
+    try {
+      response = await fetch('/api/v1/backups', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(options),
+        credentials: 'same-origin',
+        cache: 'no-store',
+      });
+    } catch {
+      input ||= carried;
+      this.onConnection?.(false);
+      throw new ApiError(0, 'DISCONNECTED', 'Cannot reach the Andaru service. Check the connection and try again.');
+    }
+    this.onConnection?.(true);
+    if (!response.ok) {
+      let body: unknown;
+      try {
+        body = await response.json();
+      } catch {
+        body = undefined;
+      }
+      const envelope = body as ErrorEnvelope | undefined;
+      const code = envelope?.error?.code ?? `HTTP_${response.status}`;
+      const message = envelope?.error?.message ?? 'The server refused the request.';
+      if (response.status === 401) this.clearSession();
+      throw new ApiError(response.status, code, message, envelope?.error?.details ?? [], envelope?.error?.findings ?? []);
+    }
+    const contentType = response.headers.get('Content-Type') ?? 'application/octet-stream';
+    return {
+      blob: await response.blob(),
+      contentType,
+      encrypted: contentType.toLowerCase().startsWith('application/octet-stream'),
+      savedVersion: response.headers.get('Andaru-Saved-Version') ?? '',
+      identityRevision: response.headers.get('Andaru-Identity-Revision') ?? '',
+      capturedAt: response.headers.get('Andaru-Captured-At') ?? '',
+    };
+  }
+
+  inspectBackup(archive: Blob, passphrase?: string) {
+    const body = new FormData();
+    body.append('archive', archive);
+    body.append('options', JSON.stringify(passphrase ? { passphrase } : {}));
+    return this.request<BackupInspectionResponse>('/api/v1/restores/preview', { method: 'POST', body }, true);
+  }
+
+  previewRestore(archive: Blob, options: { passphrase?: string; stores: BackupStore[] }) {
+    const body = new FormData();
+    body.append('archive', archive);
+    body.append('options', JSON.stringify(options));
+    return this.request<RestorePreviewResponse>('/api/v1/restores/preview', { method: 'POST', body }, true);
+  }
+
+  executeRestore(
+    archive: Blob,
+    options: {
+      passphrase?: string;
+      stores: BackupStore[];
+      operationId: string;
+      expectedSavedVersion?: string;
+      expectedIdentityRevision?: number;
+    },
+  ) {
+    const body = new FormData();
+    body.append('archive', archive);
+    body.append('options', JSON.stringify(options));
+    return this.request<RestoreSavedResponse>('/api/v1/restores', { method: 'POST', body }, true);
   }
 }
