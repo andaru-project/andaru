@@ -142,6 +142,7 @@ func TestChannelRefusals(t *testing.T) {
 		"email from CRLF":        {"Andaru <a@example.com>", `Andaru\r\nBcc: e@example.com <a@example.com>`, "/email/from"},
 		"email from encoded LF":  {"Andaru <a@example.com>", "=?utf-8?q?A=0D=0AB?= <a@example.com>", "/email/from"},
 		"email quoted local":     {"Andaru <a@example.com>", `\"x> SIZE=999 RET=FULL\"@example.com`, "/email/from"},
+		"email long name":        {"Andaru <a@example.com>", "ééééééééééééééééééééééééééééééééé <a@example.com>", "/email/from"},
 		"email quoted at":        {"Andaru <a@example.com>", `\"ops@internal\"@example.com`, "/email/from"},
 		"email numeric host":     {"smtp.example.com", "192.168.1.300", "/email/host"},
 		"email to empty":         {`["ops@example.com"]`, `[]`, "/email/to"},
