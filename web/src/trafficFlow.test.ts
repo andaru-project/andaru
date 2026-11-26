@@ -698,5 +698,54 @@ describe('simulateTrafficFlow', () => {
     );
     expect(connectedInsidePool.chain).toBe('forward');
     expect(connectedInsidePool.steps.find((s) => s.stage === 'routing')?.summary).toMatch(/Directly connected subnet 2001:db8:100::1\/64/);
+
+    // Dynamically derived PD pool (subnetId/length) resolved from livePrefixes returns no_route when unleased and warns when livePrefixes is absent.
+    const dynamicPdPool: Snapshot['value'] = {
+      ...baseConfig,
+      segments: baseConfig.segments.map((s) => {
+        if (s.id === 'seg_wan') {
+          return { ...s, addressing: { ...s.addressing, ipv6: { mode: 'dhcp6', requestPrefixLength: 56 } } };
+        }
+        if (s.id === 'seg_lan') {
+          return { ...s, addressing: { ...s.addressing, ipv6: { mode: 'delegated', from: 'seg_wan', subnetId: '0' } } };
+        }
+        return s;
+      }),
+      dhcp6: [{
+        id: 'dh6_lan_dyn',
+        name: 'LAN dynamic PD',
+        segment: 'seg_lan',
+        prefixDelegation: { subnetId: '1', length: 60, delegatedLength: 64 },
+      }],
+    };
+    const lanLiveLinks: LinkStatus[] = [
+      { ifIndex: 2, name: 'enp2s0', linkType: 'ether', mtu: 1500, operState: 'UP', flags: ['UP'], permanentAddress: '52:54:00:aa:bb:02', addresses: [{ family: 'ipv6', address: '2001:db8:aa00::1', prefixLength: 64, scope: 'global' }] },
+    ];
+    const dynUnleased = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '2001:db8:aa00::50', dstIp: '2001:db8:aa10::99', dstPort: 443 },
+      dynamicPdPool,
+      lanLiveLinks,
+      {
+        liveLeases6: [],
+        livePrefixes: {
+          wans: [{
+            interface: 'enp1s0',
+            current: { prefix: '2001:db8:aa00::/56' },
+            segments: [{ interface: 'enp2s0', subnetId: '0', prefix: '2001:db8:aa00::/64' }],
+            pools: [{ interface: 'enp2s0', subnetId: '1', prefix: '2001:db8:aa10::/60' }],
+            notFitting: [],
+          }],
+        },
+      },
+    );
+    expect(dynUnleased.verdict).toBe('no_route');
+    expect(dynUnleased.decidedBy).toEqual({ label: 'DHCPv6 LAN dynamic PD', to: '/network/dhcp' });
+
+    const dynNoPrefixes = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '2001:db8:aa00::50', dstIp: '2001:db8:aa10::99', dstPort: 443 },
+      dynamicPdPool,
+      lanLiveLinks,
+    );
+    expect(dynNoPrefixes.warnings.some((w) => w.includes('Dynamic DHCPv6 prefix-delegation pool prefixes were unavailable'))).toBe(true);
   });
 });

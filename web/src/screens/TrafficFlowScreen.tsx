@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { Link } from 'react-router';
 import { ApiClient, ApiError } from '../api';
 import { simulateTrafficFlow, validateProbe, type FlowStep, type FlowVerdict, type StepOutcome, type TrafficProbe, type TrafficProtocol } from '../trafficFlow';
-import type { Lease6, LinkStatus, Session, Snapshot } from '../types';
+import type { Lease6, LinkStatus, PrefixView, Session, Snapshot } from '../types';
 import { useResource } from '../useResource';
 import { Loaded } from './Loaded';
 import { ZoneBadge, ZonePill } from './ZoneBadge';
@@ -46,6 +46,7 @@ interface LoadedContext {
   liveSnapshot: Snapshot['value'] | null;
   liveLinks: LinkStatus[];
   liveLeases6: Lease6[] | null;
+  livePrefixes: PrefixView | null;
 }
 
 function optional<T>(promise: Promise<T>, fallback: T): Promise<T> {
@@ -111,11 +112,12 @@ export function TrafficFlowScreen({ api, session, onSessionLost }: TrafficFlowSc
   const canReadStatus = session.capabilities.includes('status.read');
 
   const load = useCallback(async (): Promise<LoadedContext> => {
-    const [saved, applies, liveLinks, liveLeases6] = await Promise.all([
+    const [saved, applies, liveLinks, liveLeases6, livePrefixes] = await Promise.all([
       api.config(),
       optional(api.listApplies(), null),
       canReadStatus ? optional(api.links().then((res) => res.items), []) : Promise.resolve([]),
       canReadStatus ? optional(api.leases().then((res) => res.v6), null) : Promise.resolve(null),
+      canReadStatus ? optional(api.prefixes(), null) : Promise.resolve(null),
     ]);
 
     const liveApplyId = applies?.pointers.live;
@@ -127,7 +129,7 @@ export function TrafficFlowScreen({ api, session, onSessionLost }: TrafficFlowSc
       ? await optional(api.version(liveVersion).then((detail) => normalizeConfigValue(detail.value)), null)
       : null;
 
-    return { saved, liveVersion, liveSnapshot, liveLinks, liveLeases6 };
+    return { saved, liveVersion, liveSnapshot, liveLinks, liveLeases6, livePrefixes };
   }, [api, canReadStatus]);
 
   const resource = useResource(load, onSessionLost);
@@ -174,6 +176,7 @@ export function TrafficFlowScreen({ api, session, onSessionLost }: TrafficFlowSc
       simulation: simulateTrafficFlow(submittedProbe, activeConfig, data.liveLinks, {
         evaluatingSavedDiffersFromLive: effectiveSource === 'saved' && canCompareLive,
         liveLeases6: data.liveLeases6 ?? undefined,
+        livePrefixes: data.livePrefixes ?? undefined,
       }),
       probeStaleInSource: false,
     };

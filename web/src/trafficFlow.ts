@@ -1,6 +1,6 @@
 import { parseIpv6Groups } from './dhcpEdit';
 import { parsePortSpan } from './natEdit';
-import { firewallZone, type AddressAlias, type Lease6, type LinkStatus, type PortAlias, type PortForward, type RuleSide, type SavedLink, type Segment, type Snapshot } from './types';
+import { firewallZone, type AddressAlias, type Lease6, type LinkStatus, type PortAlias, type PortForward, type PrefixView, type RuleSide, type SavedLink, type Segment, type Snapshot } from './types';
 import { kernelName } from './zones';
 
 export type TrafficProtocol = 'tcp' | 'udp' | 'icmp' | 'icmpv6';
@@ -570,7 +570,7 @@ export function simulateTrafficFlow(
   probe: TrafficProbe,
   snapshot: Snapshot['value'],
   liveLinks: LinkStatus[] = [],
-  options: { evaluatingSavedDiffersFromLive?: boolean; liveLeases6?: Lease6[] } = {},
+  options: { evaluatingSavedDiffersFromLive?: boolean; liveLeases6?: Lease6[]; livePrefixes?: PrefixView } = {},
 ): TrafficSimulation {
   const srcIp = parseIp(probe.srcIp)!;
   const origDstIp = parseIp(probe.dstIp)!;
@@ -965,23 +965,47 @@ export function simulateTrafficFlow(
       }
     }
     // Active DHCPv6 prefix-delegation lease routes (internal/generation/pdroutes.go:243-293) and
-    // unreachable pool routes (internal/render/networkd.go:221-227).
+    // unreachable pool routes (internal/render/networkd.go:221-227 + pdroutes.go:188-197,277-284).
     let bestDelegated: { segment: Segment; prefix: ParsedPrefix; hostname: string } | undefined;
     let bestUnreachable: { segment: Segment; entryName: string; prefix: ParsedPrefix } | undefined;
+    let hasUnresolvedDynamicPool = false;
     if (effectiveDstIp.family === 6) {
       const dhcp6BySegment = new Map<string, Array<{ name: string; pool?: ParsedPrefix }>>();
       for (const e of snapshot.dhcp6 ?? []) {
         if (!e.prefixDelegation) continue;
         const seg = segmentsById.get(e.segment);
         if (!seg || !isLinkUsable(seg.link, linksById)) continue;
-        const pool = e.prefixDelegation.prefix ? parsePrefix(e.prefixDelegation.prefix) : null;
-        if (pool && pool.family === 6) {
-          if (prefixContains(pool, effectiveDstIp) && (!bestUnreachable || pool.bits > bestUnreachable.prefix.bits)) {
-            bestUnreachable = { segment: seg, entryName: e.name, prefix: pool };
+        if (e.prefixDelegation.prefix) {
+          const pool = parsePrefix(e.prefixDelegation.prefix);
+          if (pool && pool.family === 6) {
+            if (prefixContains(pool, effectiveDstIp) && (!bestUnreachable || pool.bits > bestUnreachable.prefix.bits)) {
+              bestUnreachable = { segment: seg, entryName: e.name, prefix: pool };
+            }
+            dhcp6BySegment.set(e.segment, [...(dhcp6BySegment.get(e.segment) ?? []), { name: e.name, pool }]);
           }
-          dhcp6BySegment.set(e.segment, [...(dhcp6BySegment.get(e.segment) ?? []), { name: e.name, pool }]);
-        } else if (!e.prefixDelegation.prefix) {
+          continue;
+        }
+        // Dynamically derived pool (subnetId/length): resolve from /api/v1/status/prefixes when available.
+        const link = linksById.get(seg.link);
+        const segIface = findLiveLink(link, liveLinks)?.name
+          ?? (link && link.kind !== 'ethernet' ? kernelName(link, new Map()) : undefined);
+        if (!options.livePrefixes || !segIface) {
+          hasUnresolvedDynamicPool = true;
           dhcp6BySegment.set(e.segment, [...(dhcp6BySegment.get(e.segment) ?? []), { name: e.name }]);
+          continue;
+        }
+        const wantSubnetId = e.prefixDelegation.subnetId ? Number.parseInt(e.prefixDelegation.subnetId, 16) : Number.NaN;
+        for (const wan of options.livePrefixes.wans) {
+          for (const place of wan.pools) {
+            if (!place.prefix || place.interface !== segIface) continue;
+            if (!Number.isNaN(wantSubnetId) && Number.parseInt(place.subnetId, 16) !== wantSubnetId) continue;
+            const pool = parsePrefix(place.prefix);
+            if (!pool || pool.family !== 6) continue;
+            if (prefixContains(pool, effectiveDstIp) && (!bestUnreachable || pool.bits > bestUnreachable.prefix.bits)) {
+              bestUnreachable = { segment: seg, entryName: e.name, prefix: pool };
+            }
+            dhcp6BySegment.set(e.segment, [...(dhcp6BySegment.get(e.segment) ?? []), { name: e.name, pool }]);
+          }
         }
       }
       for (const lease of options.liveLeases6 ?? []) {
@@ -1084,6 +1108,9 @@ export function simulateTrafficFlow(
         }
         if (uplinks.length > 1) {
           warnings.push(`Multiple IPv${effectiveDstIp.family} uplinks exist (${uplinks.map((u) => u.name).join(', ')}); assuming default route via ${egressSegment.name}.`);
+        }
+        if (hasUnresolvedDynamicPool) {
+          warnings.push('Dynamic DHCPv6 prefix-delegation pool prefixes were unavailable; unleased destinations in those pools may be unreachable.');
         }
         steps.push({
           stage: 'routing',
