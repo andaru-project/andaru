@@ -13,6 +13,8 @@ import (
 	"net/mail"
 	"net/smtp"
 	"net/textproto"
+	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -69,6 +71,10 @@ func sendEmail(ctx context.Context, job delivery.Job) error {
 	if err != nil {
 		return smtpError(err)
 	}
+	// Greet now, so a failed greeting is told apart from a missing extension, which Extension cannot do.
+	if err = c.Hello(helloName(conn)); err != nil {
+		return smtpError(err)
+	}
 	if t.Security == "starttls" {
 		if ok, _ := c.Extension("STARTTLS"); !ok {
 			return permanent(errors.New("the SMTP server does not offer STARTTLS"))
@@ -78,21 +84,40 @@ func sendEmail(ctx context.Context, job delivery.Job) error {
 		}
 	}
 	if t.Username != "" {
-		if ok, _ := c.Extension("AUTH"); !ok {
+		ok, mechanisms := c.Extension("AUTH")
+		var auth smtp.Auth
+		switch {
+		case !ok:
 			return permanent(errors.New("the SMTP server does not offer AUTH"))
+		case slices.Contains(strings.Fields(strings.ToUpper(mechanisms)), "PLAIN"):
+			// The connection is TLS, which PlainAuth requires of a server other than localhost.
+			auth = smtp.PlainAuth("", t.Username, t.Password, t.Host)
+		case slices.Contains(strings.Fields(strings.ToUpper(mechanisms)), "LOGIN"):
+			auth = loginAuth{t.Username, t.Password}
+		default:
+			return permanent(errors.New("the SMTP server offers neither AUTH PLAIN nor AUTH LOGIN"))
 		}
-		// The connection is TLS, which PlainAuth requires of a server other than localhost.
-		if err = c.Auth(smtp.PlainAuth("", t.Username, t.Password, t.Host)); err != nil {
+		if err = c.Auth(auth); err != nil {
 			return smtpError(err)
 		}
 	}
 	if err = c.Mail(from.Address); err != nil {
 		return smtpError(err)
 	}
+	// A recipient the server refuses for good keeps no other from the message; a 4xx retries it for all.
+	var refused error
+	accepted := 0
 	for _, a := range to {
-		if err = c.Rcpt(a.Address); err != nil {
-			return smtpError(err)
+		if err = smtpError(c.Rcpt(a.Address)); err == nil {
+			accepted++
+		} else if !isPermanent(err) {
+			return err
+		} else {
+			refused = err
 		}
+	}
+	if accepted == 0 {
+		return refused
 	}
 	w, err := c.Data()
 	if err == nil {
@@ -116,10 +141,45 @@ func smtpError(err error) error {
 		}
 		return permanent(fmt.Errorf("the SMTP server answered %w", err))
 	}
-	if errors.As(err, new(*tls.CertificateVerificationError)) {
+	// A certificate that fails verification, or a server that does not speak TLS where the channel says it does (implicit
+	// TLS on a STARTTLS port), is answered the same on every retry.
+	if errors.As(err, new(*tls.CertificateVerificationError)) || errors.As(err, new(tls.RecordHeaderError)) {
 		return permanent(err)
 	}
 	return err
+}
+
+// helloName is the name to greet the server with: this host's name when it is a full one, else its address as a
+// literal, as some servers refuse a bare name such as localhost.
+func helloName(conn net.Conn) string {
+	if name, err := os.Hostname(); err == nil && strings.Contains(name, ".") {
+		return name
+	}
+	if a, ok := conn.LocalAddr().(*net.TCPAddr); ok {
+		if a.IP.To4() != nil {
+			return "[" + a.IP.String() + "]"
+		}
+		return "[IPv6:" + a.IP.String() + "]"
+	}
+	return "localhost"
+}
+
+// loginAuth is AUTH LOGIN, for servers that offer no AUTH PLAIN. It runs over TLS only, as sendEmail ensures.
+type loginAuth struct{ user, password string }
+
+func (a loginAuth) Start(*smtp.ServerInfo) (string, []byte, error) { return "LOGIN", nil, nil }
+
+func (a loginAuth) Next(challenge []byte, more bool) ([]byte, error) {
+	if !more {
+		return nil, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(string(challenge))) {
+	case "username:":
+		return []byte(a.user), nil
+	case "password:":
+		return []byte(a.password), nil
+	}
+	return nil, errors.New("unexpected AUTH LOGIN challenge")
 }
 
 // emailMessage is the message as plain text: the subject as the subject, then the detail, the link (a full URL when the
@@ -138,9 +198,10 @@ func emailMessage(job delivery.Job, from *mail.Address, to []*mail.Address, now 
 		return '-'
 	}, job.ID)
 	var b bytes.Buffer
-	for _, h := range [][2]string{{"From", from.String()}, {"To", strings.Join(recipients, ", ")},
+	domain := from.Address[strings.LastIndex(from.Address, "@")+1:]
+	for _, h := range [][2]string{{"From", from.String()}, {"To", strings.Join(recipients, ",\r\n ")}, // folded: 20 names exceed a line
 		{"Subject", mime.QEncoding.Encode("utf-8", cut(m.Subject, 200))}, {"Date", now.Format(time.RFC1123Z)},
-		{"Message-ID", "<" + id + "@andaru>"}, {"MIME-Version", "1.0"},
+		{"Message-ID", "<" + id + "@" + domain + ">"}, {"MIME-Version", "1.0"},
 		{"Content-Type", "text/plain; charset=utf-8"}, {"Content-Transfer-Encoding", "quoted-printable"}} {
 		b.WriteString(h[0] + ": " + h[1] + "\r\n")
 	}

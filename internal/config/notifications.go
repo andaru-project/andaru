@@ -6,6 +6,7 @@ import (
 	"net/mail"
 	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -116,7 +117,9 @@ func ntfyServer(s string) bool {
 // validateEmail checks an e-mail channel's server and addresses. No field may hold a control character, so none can
 // add a header or an SMTP command.
 func validateEmail(m *email, p string, bad func(string, string)) {
-	if a, e := netip.ParseAddr(m.Host); (e != nil || a.Zone() != "") && !searchDomain.MatchString(strings.ToLower(m.Host)) {
+	labels := strings.Split(m.Host, ".")
+	_, numeric := strconv.Atoi(labels[len(labels)-1])
+	if a, e := netip.ParseAddr(m.Host); (e != nil || a.Zone() != "") && (!searchDomain.MatchString(strings.ToLower(m.Host)) || numeric == nil) {
 		bad(p+"/host", "Expected a host name or an IP address, with no scheme, port or path.")
 	}
 	if invalidText(m.Username, true) {
@@ -147,7 +150,8 @@ func validateEmail(m *email, p string, bad func(string, string)) {
 // emailAddress is s's address, when s is one RFC 5322 address with no control or format character, its name included.
 func emailAddress(s string) (string, bool) {
 	a, e := mail.ParseAddress(s)
-	if e != nil || invalidText(s, true) || invalidText(a.Name, true) || invalidText(a.Address, true) {
+	// An address a MAIL or RCPT command cannot carry as it is (a quoted local part with spaces or brackets) is refused.
+	if e != nil || invalidText(s, true) || invalidText(a.Name, true) || invalidText(a.Address, true) || strings.ContainsAny(a.Address, " <>\"\\()[],;:") {
 		return "", false
 	}
 	return a.Address, true
