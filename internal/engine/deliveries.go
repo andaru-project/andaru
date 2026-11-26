@@ -25,10 +25,10 @@ func deliverNotifications(events *bus.Bus, channels channelReader, log *slog.Log
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		list, err := channels(ctx)
-		var failed error
 		if err != nil {
 			return fmt.Errorf("read the notification channels: %w", err)
 		}
+		var failed error
 		for _, c := range list {
 			// A channel's own failure is not sent to it.
 			if !c.Enabled || !passes(c, e.Source, r.Severity) || e.Source == delivery.Source && r.Key == "channel/"+c.ID {

@@ -954,7 +954,18 @@ func TestNotificationChannelsNeedNotificationsManage(t *testing.T) {
 		}
 	}
 	// Deleting one sends nothing, so it takes notifications.manage alone.
-	del := `{"operations":[{"op":"delete","collection":"notifications.channels","id":"ntf_00000000-0000-4000-8000-000000000009","expectedVersion":"1"}]}`
+	listed := configCall(h, "GET", "/api/v1/config/notifications/channels", "", "")
+	var collection struct {
+		Items []struct {
+			Value   struct{ ID string }
+			Version string
+		}
+	}
+	if e := json.Unmarshal(listed.Body.Bytes(), &collection); e != nil || len(collection.Items) != 1 {
+		t.Fatalf("channels %s %v", listed.Body, e)
+	}
+	del := fmt.Sprintf(`{"operations":[{"op":"delete","collection":"notifications.channels","id":%q,"expectedVersion":%q}]}`,
+		collection.Items[0].Value.ID, collection.Items[0].Version)
 	r := httptest.NewRequest("POST", "/api/v1/config/changes", strings.NewReader(del))
 	r.Header.Set("Content-Type", "application/json")
 	r = r.WithContext(context.WithValue(r.Context(), authenticatedActorKey{}, requestActor{
@@ -962,7 +973,7 @@ func TestNotificationChannelsNeedNotificationsManage(t *testing.T) {
 		Source: "unix", Capabilities: []authz.Capability{authz.ConfigurationWrite, authz.NotificationsManage}}))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
-	if w.Code == 403 {
-		t.Fatalf("delete refused: %s", w.Body)
+	if w.Code/100 != 2 {
+		t.Fatalf("delete %d %s", w.Code, w.Body)
 	}
 }
