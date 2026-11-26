@@ -918,3 +918,37 @@ func TestNotificationChannelRoutes(t *testing.T) {
 		}
 	}
 }
+
+// The channels are the notifications' settings: changing them takes notifications.manage, on their own routes and in a
+// batch alike.
+func TestNotificationChannelsNeedNotificationsManage(t *testing.T) {
+	for path, methods := range map[string][]string{
+		"/api/v1/config/notifications/channels": {"POST"}, "/api/v1/config/notifications/channels/ntf_x": {"PUT", "DELETE"},
+	} {
+		for _, method := range methods {
+			if route, ok := routeForRequest(method, path); !ok || route.Capability != authz.NotificationsManage {
+				t.Errorf("%s %s takes %s", method, path, route.Capability)
+			}
+		}
+	}
+	h, _ := configurationFixture(t)
+	batch := `{"operations":[{"op":"create","collection":"notifications.channels","localId":"c","value":{"name":"ops","kind":"webhook","webhook":{"url":{"secret":"OPS_URL","set":"https://hooks.example/x","expectedVersion":"0"}}}}]}`
+	for _, s := range []struct {
+		capabilities []authz.Capability
+		refused      bool
+	}{
+		{[]authz.Capability{authz.ConfigurationWrite}, true},
+		{[]authz.Capability{authz.ConfigurationWrite, authz.NotificationsManage}, false},
+	} {
+		r := httptest.NewRequest("POST", "/api/v1/config/changes", strings.NewReader(batch))
+		r.Header.Set("Content-Type", "application/json")
+		r = r.WithContext(context.WithValue(r.Context(), authenticatedActorKey{}, requestActor{
+			Actor: authz.Actor{Kind: authz.ActorAccount, ID: "00000000-0000-4000-8000-000000000001"}, AccountID: "00000000-0000-4000-8000-000000000001",
+			Source: "unix", Capabilities: s.capabilities}))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if (w.Code == 403) != s.refused {
+			t.Fatalf("capabilities %v: %d %s", s.capabilities, w.Code, w.Body)
+		}
+	}
+}

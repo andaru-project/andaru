@@ -280,6 +280,13 @@ func newConfigurationHandler(store *config.Store) http.Handler {
 			writeError(w, r, http.StatusForbidden, "FORBIDDEN", "A verified actor is required.")
 			return
 		}
+		// The channels are the notifications' settings: whichever route carries a change to them, it takes
+		// notifications.manage.
+		if slices.ContainsFunc(changes.Operations, func(o config.Operation) bool { return o.Collection == "notifications.channels" }) &&
+			!hasCapability(actor, authz.NotificationsManage) {
+			writeError(w, r, http.StatusForbidden, "FORBIDDEN", "Changing notification channels requires notifications.manage.")
+			return
+		}
 		result, e := store.Save(r.Context(), actor.Actor, changes)
 		if e != nil {
 			writeConfigurationError(w, r, e)
