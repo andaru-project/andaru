@@ -267,3 +267,31 @@ it('serializes bridge STP/L2 options and bond L2 options, and strips mode-incomp
     ['transmitHashPolicy', 'Unsupported mode.'],
   ]));
 });
+
+it('serializes per-link LLDP options and maps LLDP refusal paths', () => {
+  const draft = { ...draftOf(link.value, segment.value, undefined), lldp: 'receive' as const, emitLldp: 'nearest-bridge' as const };
+  expect(interfaceOperations(draft, link, segment, undefined)).toEqual([
+    { op: 'replace', collection: 'links', id: 'lnk_a', expectedVersion: '4', value: { ...link.value, lldp: 'receive', emitLldp: 'nearest-bridge' } },
+  ]);
+
+  const savedWithLldp: SavedObject<SavedLink> = { version: '5', value: { ...link.value, lldp: 'routers-only', emitLldp: 'customer-bridge' } };
+  expect(interfaceOperations(draftOf(savedWithLldp.value, undefined, undefined), savedWithLldp, undefined, undefined)).toEqual([]);
+  expect(interfaceOperations({ ...draftOf(savedWithLldp.value, undefined, undefined), lldp: 'off', emitLldp: 'off' }, savedWithLldp, undefined, undefined)).toEqual([
+    { op: 'replace', collection: 'links', id: 'lnk_a', expectedVersion: '5', value: { ...link.value } },
+  ]);
+
+  // Non-ethernet links omit LLDP fields even if draft state carries non-default values.
+  const vlanDraft = { ...draftOf(undefined, undefined, undefined, 'vlan'), name: 'Guest', parent: 'lnk_a', vlanId: '20', assigned: false, lldp: 'receive' as const, emitLldp: 'nearest-bridge' as const };
+  expect(interfaceOperations(vlanDraft, undefined, undefined, undefined)).toEqual([
+    { op: 'create', collection: 'links', localId: 'link', value: { name: 'Guest', kind: 'vlan', mtu: 1500, enabled: true, parent: 'lnk_a', vlanId: 20 } },
+  ]);
+
+  const error = new ApiError(422, 'VALIDATION_FAILED', 'Refused.', [
+    { path: '/operations/0/value/lldp', message: 'Bad lldp.' },
+    { path: '/operations/0/value/emitLldp', message: 'Bad emitLldp.' },
+  ]);
+  expect(interfaceErrors(error, [{ op: 'replace', collection: 'links', value: {} }])).toEqual(new Map([
+    ['lldp', 'Bad lldp.'],
+    ['emitLldp', 'Bad emitLldp.'],
+  ]));
+});

@@ -210,6 +210,19 @@ export type VirtualLinkKind = 'vlan' | 'bridge' | 'bond';
 export type BondMode = 'balance-rr' | 'active-backup' | 'balance-xor' | 'broadcast' | '802.3ad' | 'balance-tlb' | 'balance-alb';
 export type LacpRate = 'slow' | 'fast';
 export type TransmitHashPolicy = 'layer2' | 'layer2+3' | 'layer3+4' | 'encap2+3' | 'encap3+4';
+export type LldpReceiveMode = 'off' | 'receive' | 'routers-only';
+export type LldpEmitMode = 'off' | 'nearest-bridge' | 'non-tpmr-bridge' | 'customer-bridge';
+
+export interface LldpNeighbor {
+  ifIndex: number;
+  interface: string;
+  chassisId: string;
+  portId: string;
+  portDescription?: string;
+  systemName?: string;
+  systemDescription?: string;
+  capabilities: string[];
+}
 
 export interface SavedLink {
   id: string;
@@ -231,6 +244,8 @@ export interface SavedLink {
   lacpRate?: LacpRate;
   miiMonitorMs?: number;
   transmitHashPolicy?: TransmitHashPolicy;
+  lldp?: LldpReceiveMode;
+  emitLldp?: LldpEmitMode;
 }
 
 export interface Segment {

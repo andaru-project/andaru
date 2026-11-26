@@ -73,6 +73,8 @@ type link struct {
 	LACPRate           string           `json:"lacpRate,omitempty"`
 	MIIMonitorMs       *int             `json:"miiMonitorMs,omitempty"`
 	TransmitHashPolicy string           `json:"transmitHashPolicy,omitempty"`
+	LLDP               string           `json:"lldp,omitempty"`
+	EmitLLDP           string           `json:"emitLldp,omitempty"`
 	Username           string           `json:"username,omitempty"`
 	Password           *secretReference `json:"password,omitempty"`
 }

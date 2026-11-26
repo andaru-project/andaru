@@ -1,5 +1,5 @@
 import { fieldErrors } from './api';
-import type { BondMode, ConfigBatchOperation, LacpRate, LinkStatus, SavedLink, SavedObject, Segment, Snapshot, TransmitHashPolicy, VirtualLinkKind } from './types';
+import type { BondMode, ConfigBatchOperation, LacpRate, LinkStatus, LldpEmitMode, LldpReceiveMode, SavedLink, SavedObject, Segment, Snapshot, TransmitHashPolicy, VirtualLinkKind } from './types';
 
 // What the interface panel edits: the link, and the segment that puts a network on it.
 export interface InterfaceDraft {
@@ -20,6 +20,8 @@ export interface InterfaceDraft {
   lacpRate: LacpRate | '';
   miiMonitorMs: string;
   transmitHashPolicy: TransmitHashPolicy | '';
+  lldp: LldpReceiveMode;
+  emitLldp: LldpEmitMode;
   // Whether the interface carries a network of its own: a segment, with a zone and addressing.
   // A link without one still serves as a VLAN trunk's parent or a bridge member.
   assigned: boolean;
@@ -65,6 +67,19 @@ export const transmitHashPolicies: Array<{ value: '' | TransmitHashPolicy; label
 ];
 
 export const hashPolicyModes = new Set<BondMode>(['balance-xor', '802.3ad']);
+
+export const lldpReceiveModes: Array<{ value: LldpReceiveMode; label: string }> = [
+  { value: 'off', label: 'Off' },
+  { value: 'receive', label: 'Receive all neighbors' },
+  { value: 'routers-only', label: 'Routers only' },
+];
+
+export const lldpEmitModes: Array<{ value: LldpEmitMode; label: string }> = [
+  { value: 'off', label: 'Off' },
+  { value: 'nearest-bridge', label: 'Nearest bridge' },
+  { value: 'non-tpmr-bridge', label: 'Non-TPMR bridge' },
+  { value: 'customer-bridge', label: 'Customer bridge' },
+];
 
 // How a segment gets its addresses, in the words the panel and the table use.
 export const ipv4Modes = [{ value: 'none', label: 'None' }, { value: 'dhcp', label: 'DHCP client' }, { value: 'static', label: 'Static' }, { value: 'ppp', label: 'PPP' }];
@@ -208,6 +223,8 @@ export function draftOf(link: SavedLink | undefined, segment: Segment | undefine
     lacpRate: link?.lacpRate ?? '',
     miiMonitorMs: link ? text(link.miiMonitorMs) : kind === 'bond' ? '100' : '',
     transmitHashPolicy: link?.transmitHashPolicy ?? '',
+    lldp: link?.lldp ?? 'off',
+    emitLldp: link?.emitLldp ?? 'off',
     assigned: link ? Boolean(segment) : kind !== 'bond',
     segmentName: segment?.name ?? link?.name ?? live?.name ?? '',
     zone: segment?.zone ?? '',
@@ -291,7 +308,7 @@ function same(a: unknown, b: unknown): boolean {
   return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
 }
 
-function putOptionalBool(target: Fields, saved: Fields, key: string, value: boolean, defaultValue: boolean) {
+function putOptionalDefault<T>(target: Fields, saved: Fields, key: string, value: T, defaultValue: T) {
   if (value !== defaultValue) target[key] = value;
   else if (saved[key] === defaultValue) target[key] = defaultValue;
   else delete target[key];
@@ -319,7 +336,7 @@ export function interfaceOperations(draft: InterfaceDraft, link: SavedObject<Sav
     linkValue.vlanId = Number(draft.vlanId);
   } else if (draft.kind === 'bridge') {
     linkValue.members = [...draft.members];
-    putOptionalBool(linkValue, saved, 'stp', draft.stp, false);
+    putOptionalDefault(linkValue, saved, 'stp', draft.stp, false);
     if (draft.stp) {
       putOptionalInt(linkValue, 'stpPriority', draft.stpPriority);
       putOptionalInt(linkValue, 'forwardDelay', draft.forwardDelay);
@@ -331,7 +348,7 @@ export function interfaceOperations(draft: InterfaceDraft, link: SavedObject<Sav
       delete linkValue.helloTime;
       delete linkValue.maxAge;
     }
-    putOptionalBool(linkValue, saved, 'multicastSnooping', draft.multicastSnooping, true);
+    putOptionalDefault(linkValue, saved, 'multicastSnooping', draft.multicastSnooping, true);
   } else if (draft.kind === 'bond') {
     linkValue.mode = draft.bondMode;
     linkValue.members = [...draft.members];
@@ -340,6 +357,13 @@ export function interfaceOperations(draft: InterfaceDraft, link: SavedObject<Sav
     if (draft.bondMode && hashPolicyModes.has(draft.bondMode) && draft.transmitHashPolicy) linkValue.transmitHashPolicy = draft.transmitHashPolicy;
     else delete linkValue.transmitHashPolicy;
     putOptionalInt(linkValue, 'miiMonitorMs', draft.miiMonitorMs);
+  }
+  if (draft.kind === 'ethernet') {
+    putOptionalDefault(linkValue, saved, 'lldp', draft.lldp, 'off');
+    putOptionalDefault(linkValue, saved, 'emitLldp', draft.emitLldp, 'off');
+  } else {
+    delete linkValue.lldp;
+    delete linkValue.emitLldp;
   }
   if (!link) operations.push({ op: 'create', collection: 'links', localId: 'link', value: linkValue });
   else if (!same(linkValue, saved)) operations.push({ op: 'replace', collection: 'links', id: link.value.id, expectedVersion: link.version, value: linkValue });
@@ -399,6 +423,8 @@ const fieldOf: Record<string, Array<[RegExp, string]>> = {
     [/^\/lacpRate(\/|$)/, 'lacpRate'],
     [/^\/miiMonitorMs(\/|$)/, 'miiMonitorMs'],
     [/^\/transmitHashPolicy(\/|$)/, 'transmitHashPolicy'],
+    [/^\/lldp(\/|$)/, 'lldp'],
+    [/^\/emitLldp(\/|$)/, 'emitLldp'],
   ],
   segments: [
     [/^\/name/, 'segmentName'], [/^\/zone/, 'zone'],

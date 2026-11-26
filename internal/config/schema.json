@@ -199,6 +199,21 @@
               "minLength": 11,
               "maxLength": 32
             },
+            "lldp": {
+              "enum": [
+                "off",
+                "receive",
+                "routers-only"
+              ]
+            },
+            "emitLldp": {
+              "enum": [
+                "off",
+                "nearest-bridge",
+                "non-tpmr-bridge",
+                "customer-bridge"
+              ]
+            },
             "kind": {
               "const": "ethernet"
             }
