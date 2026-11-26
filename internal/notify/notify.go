@@ -173,15 +173,22 @@ func (l *Layer) Dismiss(id int64, by string, sees func(requires string) bool) (b
 // Publish raises or clears a notification of source: r with an empty Severity is a clear of r.Key. The event is
 // durable, and in the bus's log when Publish returns.
 func Publish(events *bus.Bus, source string, r Raise) error {
+	topic, payload, err := Event(source, r)
+	if err != nil {
+		return err
+	}
+	return events.Publish(topic, payload, true)
+}
+
+// Event is the topic and payload that raise or clear a notification of source, as Publish sends them, for a process
+// that publishes through a bus.Client.
+func Event(source string, r Raise) (topic string, payload []byte, err error) {
 	typ, data := RaisedType, any(r)
 	if r.Severity == "" {
 		typ, data = ClearedType, map[string]string{"key": r.Key}
 	}
-	payload, err := bus.NewEvent(typ, source, data)
-	if err != nil {
-		return err
-	}
-	return events.Publish("notification/"+source, payload, true)
+	payload, err = bus.NewEvent(typ, source, data)
+	return "notification/" + source, payload, err
 }
 
 func (l *Layer) handle(m bus.Message) error {
@@ -266,15 +273,20 @@ func banned(c rune, lines bool) bool {
 
 // Detail makes s, such as an error a tool wrote, a detail the layer accepts: what text may not hold becomes a space,
 // and it is cut to the detail's limit.
-func Detail(s string) string {
+func Detail(s string) string { return clean(s, detailMax, true) }
+
+// Subject makes s a subject the layer accepts, as Detail does a detail: one line of at most 256 bytes.
+func Subject(s string) string { return clean(s, 256, false) }
+
+func clean(s string, max int, lines bool) string {
 	s = strings.Map(func(c rune) rune {
-		if banned(c, true) {
+		if banned(c, lines) {
 			return ' '
 		}
 		return c
 	}, strings.ToValidUTF8(s, "\uFFFD"))
-	if len(s) > detailMax {
-		s = strings.ToValidUTF8(s[:detailMax], "") // drops a character the cut split
+	if len(s) > max {
+		s = strings.ToValidUTF8(s[:max], "") // drops a character the cut split
 	}
 	return s
 }

@@ -71,7 +71,7 @@ COPY image/signing/andaru.yaml /etc/containers/registries.d/andaru.yaml
 RUN sed -i "s|@NAMESPACE@|${SIGNED_NAMESPACE}|" /etc/containers/policy.json /etc/containers/registries.d/andaru.yaml && \
     chmod 0755 /usr/bin/andaru /usr/bin/andaru-web /usr/share/kea/scripts/andaru-lease-event && \
     semodule -i /usr/share/andaru/selinux/andaru.cil && \
-    systemctl enable systemd-networkd.service andaru-engine.service andaru-network-boot.service \
+    systemctl enable systemd-networkd.service andaru-engine.service andaru-outbound.service andaru-network-boot.service \
         andaru-factory-reset.service andaru-install-cleanup.service andaru-leases.path andaru-prefixes.path andaru-prefixes.timer \
         andaru-update-check.timer kea-dhcp4.service kea-dhcp6.service unbound.service && \
     systemctl disable sshd.service zincati.service andaru-web.service && \

@@ -41,6 +41,9 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if args[0] == "realize" {
 		return realizeCommand(ctx, args[1:], stdout, stderr, newRealizer)
 	}
+	if args[0] == "outbound" {
+		return outboundCommand(ctx, args[1:], stdout, stderr)
+	}
 	if args[0] != "engine" && args[0] != "ctl" {
 		return usageError(stderr, topUsage, "andaru")
 	}
