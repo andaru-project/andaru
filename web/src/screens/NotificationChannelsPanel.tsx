@@ -46,7 +46,6 @@ import { Loaded } from './Loaded';
 interface NotificationChannelsPanelProps {
   api: ApiClient;
   canManage: boolean;
-  canEdit?: boolean;
   onSaved?(): void;
   onSessionLost(): void;
 }
@@ -351,19 +350,17 @@ function NotificationChannelEditor({
   );
 }
 
-export function NotificationChannelsPanel({ api, canManage, canEdit = canManage, onSaved, onSessionLost }: NotificationChannelsPanelProps) {
+export function NotificationChannelsPanel({ api, canManage, onSaved, onSessionLost }: NotificationChannelsPanelProps) {
   const load = useCallback(() => api.notificationChannels(), [api]);
   const resource = useResource(load, onSessionLost);
 
-  const [openingId, setOpeningId] = useState<string | null>(null);
-  const [testingId, setTestingId] = useState<string | null>(null);
+  const [busy, setBusy] = useState<{ kind: 'open' | 'test'; id: string } | null>(null);
   const [testNotice, setTestNotice] = useState('');
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [deleting, setDeleting] = useState<SavedObject<NotificationChannel> | null>(null);
   const [deletingBusy, setDeletingBusy] = useState(false);
   const [actionError, setActionError] = useState('');
-  const openingRef = useRef(false);
-  const testingRef = useRef(false);
+  const busyRef = useRef(false);
   const deletingRef = useRef(false);
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -380,9 +377,9 @@ export function NotificationChannelsPanel({ api, canManage, canEdit = canManage,
   }
 
   async function openCreate() {
-    if (!canEdit || openingRef.current) return;
-    openingRef.current = true;
-    setOpeningId('new');
+    if (!canManage || busyRef.current || deletingRef.current) return;
+    busyRef.current = true;
+    setBusy({ kind: 'open', id: 'new' });
     setActionError('');
     setTestNotice('');
     try {
@@ -403,15 +400,15 @@ export function NotificationChannelsPanel({ api, canManage, canEdit = canManage,
       if (!mountedRef.current) return;
       setActionError(apiErrorMessage(error));
     } finally {
-      openingRef.current = false;
-      if (mountedRef.current) setOpeningId(null);
+      busyRef.current = false;
+      if (mountedRef.current) setBusy(null);
     }
   }
 
   async function openEdit(id: string) {
-    if (!canEdit || openingRef.current) return;
-    openingRef.current = true;
-    setOpeningId(id);
+    if (!canManage || busyRef.current || deletingRef.current) return;
+    busyRef.current = true;
+    setBusy({ kind: 'open', id });
     setActionError('');
     setTestNotice('');
     try {
@@ -442,21 +439,21 @@ export function NotificationChannelsPanel({ api, canManage, canEdit = canManage,
         setActionError(apiErrorMessage(error));
       }
     } finally {
-      openingRef.current = false;
-      if (mountedRef.current) setOpeningId(null);
+      busyRef.current = false;
+      if (mountedRef.current) setBusy(null);
     }
   }
 
   async function sendTest(channel: NotificationChannel) {
-    if (!canManage || testingRef.current) return;
-    testingRef.current = true;
-    setTestingId(channel.id);
+    if (!canManage || busyRef.current || deletingRef.current) return;
+    busyRef.current = true;
+    setBusy({ kind: 'test', id: channel.id });
     setActionError('');
     setTestNotice('');
     try {
       const result = await api.testNotificationChannel(channel.id);
       if (!mountedRef.current) return;
-      setTestNotice(`Queued test notification for ${channel.name} (${result.job}). Delivery runs in the background; repeated failures appear under Active notifications.`);
+      setTestNotice(`Queued test notification for ${channel.name} (${result.job}). Delivery runs in the background; repeated delivery failures raise a notification.`);
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         onSessionLost();
@@ -473,8 +470,8 @@ export function NotificationChannelsPanel({ api, canManage, canEdit = canManage,
         setActionError(apiErrorMessage(error));
       }
     } finally {
-      testingRef.current = false;
-      if (mountedRef.current) setTestingId(null);
+      busyRef.current = false;
+      if (mountedRef.current) setBusy(null);
     }
   }
 
@@ -485,7 +482,7 @@ export function NotificationChannelsPanel({ api, canManage, canEdit = canManage,
   }
 
   async function confirmDelete() {
-    if (!deleting || deletingRef.current) return;
+    if (!deleting || deletingRef.current || busyRef.current) return;
     deletingRef.current = true;
     setDeletingBusy(true);
     setActionError('');
@@ -519,7 +516,7 @@ export function NotificationChannelsPanel({ api, canManage, canEdit = canManage,
     }
   }
 
-  const showActions = canManage || canEdit;
+  const isBusyFor = (kind: 'open' | 'test', id: string) => busy?.kind === kind && busy.id === id;
 
   return (
     <Stack>
@@ -528,11 +525,11 @@ export function NotificationChannelsPanel({ api, canManage, canEdit = canManage,
           External delivery targets for appliance notifications. Changes take effect when saved, without applying network configuration.
         </Text>
         <Group gap="xs">
-          {canEdit && (
+          {canManage && (
             <Button
               size="xs"
-              loading={openingId === 'new'}
-              disabled={openingId !== null && openingId !== 'new'}
+              loading={isBusyFor('open', 'new')}
+              disabled={busy !== null && !isBusyFor('open', 'new')}
               onClick={() => void openCreate()}
             >
               Add channel
@@ -545,13 +542,13 @@ export function NotificationChannelsPanel({ api, canManage, canEdit = canManage,
       </Group>
 
       {testNotice && (
-        <Alert color="blue" role="status" title="Test notification queued" withCloseButton onClose={() => setTestNotice('')}>
+        <Alert color="blue" role="status" title="Test notification queued" withCloseButton closeButtonLabel="Dismiss test notification notice" onClose={() => setTestNotice('')}>
           {testNotice}
         </Alert>
       )}
 
       {actionError && (
-        <Alert color="red" role="alert" title="Notification channel action failed" withCloseButton onClose={() => setActionError('')}>
+        <Alert color="red" role="alert" title="Notification channel action failed" withCloseButton closeButtonLabel="Dismiss error" onClose={() => setActionError('')}>
           {actionError}
         </Alert>
       )}
@@ -562,7 +559,7 @@ export function NotificationChannelsPanel({ api, canManage, canEdit = canManage,
           if (sorted.length === 0) {
             return (
               <Alert role="status" title="No notification channels">
-                {canEdit
+                {canManage
                   ? 'No delivery channels are configured yet. Add a webhook channel to forward alerts outside the appliance.'
                   : 'No delivery channels are configured yet.'}
               </Alert>
@@ -579,7 +576,7 @@ export function NotificationChannelsPanel({ api, canManage, canEdit = canManage,
                     <Table.Th>Status</Table.Th>
                     <Table.Th>Filter</Table.Th>
                     <Table.Th>Secrets</Table.Th>
-                    {showActions && <Table.Th><VisuallyHidden>Actions</VisuallyHidden></Table.Th>}
+                    {canManage && <Table.Th><VisuallyHidden>Actions</VisuallyHidden></Table.Th>}
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
@@ -630,45 +627,44 @@ export function NotificationChannelsPanel({ api, canManage, canEdit = canManage,
                             )}
                           </Stack>
                         </Table.Td>
-                        {showActions && (
+                        {canManage && (
                           <Table.Td>
                             <Group gap="xs" wrap="nowrap">
-                              {canManage && (
-                                <Button
-                                  size="xs"
-                                  variant="default"
-                                  loading={testingId === ch.id}
-                                  disabled={(testingId !== null && testingId !== ch.id) || openingId !== null}
-                                  aria-label={`Send test to ${ch.name}`}
-                                  onClick={() => void sendTest(ch)}
-                                >
-                                  Send test
-                                </Button>
-                              )}
-                              {canEdit && (
-                                <Button
-                                  size="xs"
-                                  variant="default"
-                                  loading={openingId === ch.id}
-                                  disabled={(openingId !== null && openingId !== ch.id) || testingId !== null}
-                                  aria-label={`Edit ${ch.name}`}
-                                  onClick={() => void openEdit(ch.id)}
-                                >
-                                  Edit
-                                </Button>
-                              )}
-                              {canManage && (
-                                <Button
-                                  size="xs"
-                                  variant="light"
-                                  color="red"
-                                  disabled={openingId !== null || testingId !== null}
-                                  aria-label={`Delete ${ch.name}`}
-                                  onClick={() => { setActionError(''); setTestNotice(''); setDeleting(item); }}
-                                >
-                                  Delete
-                                </Button>
-                              )}
+                              <Button
+                                size="xs"
+                                variant="default"
+                                loading={isBusyFor('test', ch.id)}
+                                disabled={busy !== null && !isBusyFor('test', ch.id)}
+                                aria-label={`Send test to ${ch.name}`}
+                                onClick={() => void sendTest(ch)}
+                              >
+                                Send test
+                              </Button>
+                              <Button
+                                size="xs"
+                                variant="default"
+                                loading={isBusyFor('open', ch.id)}
+                                disabled={busy !== null && !isBusyFor('open', ch.id)}
+                                aria-label={`Edit ${ch.name}`}
+                                onClick={() => void openEdit(ch.id)}
+                              >
+                                Edit
+                              </Button>
+                              <Button
+                                size="xs"
+                                variant="light"
+                                color="red"
+                                disabled={busy !== null}
+                                aria-label={`Delete ${ch.name}`}
+                                onClick={() => {
+                                  if (busyRef.current || deletingRef.current) return;
+                                  setActionError('');
+                                  setTestNotice('');
+                                  setDeleting(item);
+                                }}
+                              >
+                                Delete
+                              </Button>
                             </Group>
                           </Table.Td>
                         )}

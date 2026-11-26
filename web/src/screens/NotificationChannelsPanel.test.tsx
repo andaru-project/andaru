@@ -317,6 +317,9 @@ describe('NotificationChannelsPanel', () => {
     expect(screen.queryByRole('tab', { name: 'Active' })).not.toBeInTheDocument();
     expect(await screen.findByText('Primary on-call webhook')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Add channel' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Send test to ops' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit ops' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete ops' })).not.toBeInTheDocument();
   });
 
   it('discloses shared URL secrets and saves a separate secret so sibling channels are not overwritten', async () => {
@@ -359,12 +362,13 @@ describe('NotificationChannelsPanel', () => {
     });
   });
 
-  it('queues a test notification (including on disabled channels), enforces edit vs manage capability split, and handles 409/404/503/401', async () => {
+  it('queues a test notification (including on disabled channels), locks actions while in flight, and handles 409/404/503/401', async () => {
     const user = userEvent.setup();
     const onSessionLost = vi.fn();
     let listReads = 0;
-    let testMode: 'ok' | 'unresolved' | 'missing' | 'unavailable' | 'unauth' = 'ok';
+    let testMode: 'unresolved' | 'missing' | 'unavailable' | 'unauth' = 'unresolved';
     const testCalls: Array<{ url: string; csrf: string | null; body: BodyInit | null | undefined }> = [];
+    let resolveDisabledTest!: (res: Response) => void;
 
     const disabledChannel: SavedObject<NotificationChannel> = {
       version: '9',
@@ -383,7 +387,7 @@ describe('NotificationChannelsPanel', () => {
       },
       'POST /api/v1/notifications/channels/ntf_disabled/test': (init) => {
         testCalls.push({ url: '/api/v1/notifications/channels/ntf_disabled/test', csrf: new Headers(init?.headers).get('X-Andaru-CSRF'), body: init?.body });
-        return jsonResponse(202, { job: 'test:abc-123:ntf_disabled' });
+        return new Promise<Response>((resolve) => { resolveDisabledTest = resolve; });
       },
       'POST /api/v1/notifications/channels/ntf_ops/test': (init) => {
         testCalls.push({ url: '/api/v1/notifications/channels/ntf_ops/test', csrf: new Headers(init?.headers).get('X-Andaru-CSRF'), body: init?.body });
@@ -400,16 +404,20 @@ describe('NotificationChannelsPanel', () => {
       },
     });
 
-    // canManage without canEdit hides Add/Edit while keeping Send test and Delete.
-    render(<NotificationChannelsPanel api={new ApiClient('csrf-tok')} canManage canEdit={false} onSessionLost={onSessionLost} />);
+    const view = render(<NotificationChannelsPanel api={new ApiClient('csrf-tok')} canManage onSessionLost={onSessionLost} />);
     await screen.findByText('backup-hook');
-    expect(screen.queryByRole('button', { name: 'Add channel' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Edit ops' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Delete ops' })).toBeInTheDocument();
 
-    // Works on a disabled channel with no body and CSRF header.
+    // Works on a disabled channel with no body and CSRF header; locks sibling/Add/Edit/Delete controls while in flight.
     await user.click(screen.getByRole('button', { name: 'Send test to backup-hook' }));
+    expect(testCalls).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Add channel' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Send test to ops' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Edit backup-hook' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Delete backup-hook' })).toBeDisabled();
+
+    resolveDisabledTest(jsonResponse(202, { job: 'test:abc-123:ntf_disabled' }));
     expect(await screen.findByText(/Queued test notification for backup-hook \(test:abc-123:ntf_disabled\)/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Dismiss test notification notice' })).toBeInTheDocument();
     expect(testCalls[0]).toEqual({ url: '/api/v1/notifications/channels/ntf_disabled/test', csrf: 'csrf-tok', body: undefined });
 
     // 409 CHANNEL_SECRETS_UNRESOLVED shows explanation and reloads list.
@@ -417,6 +425,7 @@ describe('NotificationChannelsPanel', () => {
     let beforeReads = listReads;
     await user.click(screen.getByRole('button', { name: 'Send test to ops' }));
     expect(await screen.findByText(/secrets have no value/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Dismiss error' })).toBeInTheDocument();
     await waitFor(() => expect(listReads).toBeGreaterThan(beforeReads));
 
     // 404 shows friendly deleted message and reloads list.
@@ -431,8 +440,15 @@ describe('NotificationChannelsPanel', () => {
     await user.click(screen.getByRole('button', { name: 'Send test to ops' }));
     expect(await screen.findByText('Notifications are temporarily unavailable.')).toBeInTheDocument();
 
+    // Unmounting mid-flight settles cleanly without state errors.
+    await user.click(screen.getByRole('button', { name: 'Send test to backup-hook' }));
+    view.unmount();
+    resolveDisabledTest(jsonResponse(202, { job: 'test:unmounted:ntf_disabled' }));
+
     // 401 signs out.
     testMode = 'unauth';
+    render(<NotificationChannelsPanel api={new ApiClient('csrf-tok')} canManage onSessionLost={onSessionLost} />);
+    await screen.findByText('ops');
     await user.click(screen.getByRole('button', { name: 'Send test to ops' }));
     await waitFor(() => expect(onSessionLost).toHaveBeenCalledTimes(1));
   });
