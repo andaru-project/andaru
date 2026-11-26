@@ -533,8 +533,13 @@ func TestAliasesAPI(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if w = call(http.MethodGet, aliasesPath+"/status", authz.ConfigurationRead); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"entries":0`) {
+	w = call(http.MethodGet, aliasesPath+"/status", authz.ConfigurationRead)
+	var shown struct{ Items []aliasStatus }
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &shown) != nil {
 		t.Fatalf("status: %d %s", w.Code, w.Body)
+	}
+	if i := slices.IndexFunc(shown.Items, func(a aliasStatus) bool { return a.ID == hostAlias }); i < 0 || shown.Items[i].Entries != 0 {
+		t.Fatalf("the state that does not decode: %s", w.Body)
 	}
 	if aside, _ := filepath.Glob(path + aliasfeed.Corrupt + "*"); len(aside) != 0 {
 		t.Fatalf("moved aside: %v", aside)
@@ -578,13 +583,16 @@ func TestAnApplyLoadsTheLists(t *testing.T) {
 	// It goes live; the same list again changes nothing, but the apply is owed a load.
 	b.live = slices.Clone(b.list)
 	b.f.apply()
+	<-b.f.applied
 	b.answer(urlAlias, aliasfeed.Result{Request: b.ask(urlAlias), OK: true, Members: newer})
 	if b.realized != before+1 {
 		t.Fatalf("realized %d, %d before the apply", b.realized, before)
 	}
 	// Without a result, an apply that finds another live generation asks the run loop for the load.
 	b.goLive(urlAlias, b.src(0).hash)
-	b.f.apply()
+	if b.f.apply(); len(b.f.applied) != 1 {
+		t.Fatal("no load asked of the run loop")
+	}
 	<-b.f.applied
 	b.f.fill()
 	if b.realized != before+2 || b.f.owed.Load() {
