@@ -205,7 +205,7 @@ func (c *conn) authorized(hello frame) bool {
 	if c.b.opt.PeerUser == nil {
 		return false
 	}
-	uid, err := peerUID(c.nc)
+	uid, err := PeerUID(c.nc)
 	if err != nil {
 		c.b.log.Warn("bus peer credentials", "error", err)
 		return false

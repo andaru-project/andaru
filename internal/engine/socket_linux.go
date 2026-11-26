@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/andaru-project/andaru/internal/audit"
+	"github.com/andaru-project/andaru/internal/bus"
 	"github.com/andaru-project/andaru/internal/config"
 	"github.com/andaru-project/andaru/internal/host"
 	"github.com/andaru-project/andaru/internal/identity"
@@ -88,7 +89,7 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 		}
 	}()
 	busSocket := filepath.Join(filepath.Dir(socketPath), "bus.sock")
-	events, closeEvents, err := openBus(stateDir, busSocket)
+	events, closeEvents, err := openBus(stateDir, busSocket, ServicesSocket)
 	if err != nil {
 		return fmt.Errorf("start the event bus: %w", err)
 	}
@@ -236,7 +237,7 @@ func serveUnix(ctx context.Context, socketPath string, handler http.Handler) (re
 		if !ok {
 			return ctx
 		}
-		uid, err := peerUID(unix)
+		uid, err := bus.PeerUID(unix)
 		if err != nil {
 			slog.Error("read engine peer credentials", "error", err)
 			return ctx
@@ -293,7 +294,7 @@ func listenRootSocket(socketPath, name string) (_ *net.UnixListener, closeListen
 // listenGroupSocket binds a socket of mode 0660 for one group, in a root-owned directory of mode 0710 with that group,
 // which it creates if needed, and takes it over from a killed engine (claimWebSocket). closeListener closes it,
 // removes the socket file and gives the claim back.
-func listenGroupSocket(socketPath string, gid uint32, name string) (_ *net.UnixListener, closeListener func() error, result error) {
+func listenGroupSocket(socketPath string, gid uint32, group, name string) (*net.UnixListener, func() error, error) {
 	if !filepath.IsAbs(socketPath) || filepath.Clean(socketPath) != socketPath || len(socketPath) >= 108 {
 		return nil, nil, errors.New(name + " socket requires a canonical absolute path shorter than 108 bytes")
 	}
@@ -306,7 +307,7 @@ func listenGroupSocket(socketPath string, gid uint32, name string) (_ *net.UnixL
 		created = true
 		if err = os.Chown(parent, 0, int(gid)); err != nil {
 			_ = os.Remove(parent)
-			return nil, nil, fmt.Errorf("set %s runtime directory group: %w", name, webGroupHint(err, gid))
+			return nil, nil, fmt.Errorf("set %s runtime directory group: %w", name, webGroupHint(err, gid, group))
 		}
 		if err = os.Chmod(parent, 0710); err != nil {
 			_ = os.Remove(parent)
@@ -326,7 +327,7 @@ func listenGroupSocket(socketPath string, gid uint32, name string) (_ *net.UnixL
 		}
 		return nil, nil, errors.New(name + " socket parent must be a root-owned 0710 directory with the configured group, not a symlink")
 	}
-	claim, err := claimWebSocket(socketPath)
+	claim, err := claimWebSocket(socketPath, name)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -342,29 +343,26 @@ func listenGroupSocket(socketPath string, gid uint32, name string) (_ *net.UnixL
 		_ = claim.Close()
 		return nil, nil, errors.New("cannot establish ownership of the bound " + name + " socket")
 	}
-	closeListener = func() error {
+	closeListener := func() error {
 		_ = listener.Close()
-		err := removeOwnedSocket(socketPath, bound)
-		return errors.Join(err, claim.Close())
+		return errors.Join(removeOwnedSocket(socketPath, bound), claim.Close())
 	}
-	defer func() {
-		if result != nil {
-			_ = closeListener()
-		}
-	}()
+	fail := func(err error) (*net.UnixListener, func() error, error) {
+		return nil, nil, errors.Join(err, closeListener())
+	}
 	if err = os.Chown(socketPath, 0, int(gid)); err != nil {
-		return nil, nil, fmt.Errorf("set %s socket group: %w", name, webGroupHint(err, gid))
+		return fail(fmt.Errorf("set %s socket group: %w", name, webGroupHint(err, gid, group)))
 	}
 	if err = os.Chmod(socketPath, 0660); err != nil {
-		return nil, nil, fmt.Errorf("protect %s socket: %w", name, err)
+		return fail(fmt.Errorf("protect %s socket: %w", name, err))
 	}
 	owned, err := os.Lstat(socketPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("inspect bound %s socket: %w", name, err)
+		return fail(fmt.Errorf("inspect bound %s socket: %w", name, err))
 	}
 	socketStat, statOK := owned.Sys().(*syscall.Stat_t)
 	if owned.Mode()&os.ModeSocket == 0 || owned.Mode().Perm() != 0660 || !securefs.RootOwned(owned) || !os.SameFile(bound, owned) || !statOK || socketStat.Gid != gid {
-		return nil, nil, errors.New("cannot establish ownership and mode of the bound " + name + " socket")
+		return fail(errors.New("cannot establish ownership and mode of the bound " + name + " socket"))
 	}
 	return listener, closeListener, nil
 }
@@ -376,7 +374,7 @@ func serveWebUnix(ctx context.Context, web WebSocketOptions, handler http.Handle
 	if ctx.Err() != nil {
 		return nil
 	}
-	listener, closeListener, err := listenGroupSocket(web.SocketPath, web.GID, "web engine")
+	listener, closeListener, err := listenGroupSocket(web.SocketPath, web.GID, "andaru-web", "web engine")
 	if err != nil {
 		return err
 	}
@@ -402,7 +400,7 @@ func (l *webPeerListener) Accept() (net.Conn, error) {
 		if err != nil {
 			return nil, err
 		}
-		uid, credentialErr := peerUID(connection)
+		uid, credentialErr := bus.PeerUID(connection)
 		if credentialErr != nil || uid != l.uid {
 			_ = connection.Close()
 			continue
@@ -470,43 +468,22 @@ func removeOwnedSocket(path string, owned os.FileInfo) error {
 	return nil
 }
 
-func peerUID(connection *net.UnixConn) (uint32, error) {
-	raw, err := connection.SyscallConn()
-	if err != nil {
-		return 0, err
-	}
-	var credentials *syscall.Ucred
-	var credentialErr error
-	if err := raw.Control(func(fd uintptr) {
-		credentials, credentialErr = syscall.GetsockoptUcred(int(fd), syscall.SOL_SOCKET, syscall.SO_PEERCRED)
-	}); err != nil {
-		return 0, err
-	}
-	if credentialErr != nil {
-		return 0, credentialErr
-	}
-	if credentials == nil {
-		return 0, errors.New("missing Unix peer credentials")
-	}
-	return credentials.Uid, nil
-}
-
-// webGroupHint explains a refused chgrp: without CAP_CHOWN the engine may hand files only to a group it is in.
-func webGroupHint(err error, gid uint32) error {
+// webGroupHint explains a refused chgrp to group: without CAP_CHOWN the engine may hand files only to a group it is in.
+func webGroupHint(err error, gid uint32, group string) error {
 	if errors.Is(err, fs.ErrPermission) {
-		return fmt.Errorf("%w (the engine must be a member of group %d: SupplementaryGroups=andaru-web in its unit)", err, gid)
+		return fmt.Errorf("%w (the engine must be a member of group %d: SupplementaryGroups=%s in its unit)", err, gid, group)
 	}
 	return err
 }
 
-// claimWebSocket takes the web socket's path for this engine and clears what a killed engine left there: systemd
+// claimWebSocket takes a group socket's path for this engine and clears what a killed engine left there: systemd
 // restarts the engine, but the socket's directory comes from tmpfiles.d, so nothing else removes the file.
 // The lock beside the socket is held for the engine's life, so a socket found under it has no owner among engines
 // that take the lock. The lock file stays; it is root's, 0600.
-func claimWebSocket(path string) (_ *os.File, err error) {
+func claimWebSocket(path, name string) (_ *os.File, err error) {
 	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0600)
 	if err != nil {
-		return nil, fmt.Errorf("open web engine socket lock: %w", err)
+		return nil, fmt.Errorf("open %s socket lock: %w", name, err)
 	}
 	// Every refusal below gives the lock back; a return sets the results before this runs, so it closes the file itself.
 	defer func() {
@@ -516,37 +493,37 @@ func claimWebSocket(path string) (_ *os.File, err error) {
 	}()
 	// An existing lock file must be what this engine would have made: one another user can open could be held against it.
 	if info, statErr := lock.Stat(); statErr != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || !securefs.RootOwned(info) {
-		return nil, errors.New("web engine socket lock must be a root-owned 0600 regular file")
+		return nil, errors.New(name + " socket lock must be a root-owned 0600 regular file")
 	}
 	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		if errors.Is(err, syscall.EWOULDBLOCK) {
 			return nil, errors.New("another engine serves this web socket")
 		}
-		return nil, fmt.Errorf("lock web engine socket: %w", err)
+		return nil, fmt.Errorf("lock %s socket: %w", name, err)
 	}
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
 		return lock, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("inspect web engine socket path: %w", err)
+		return nil, fmt.Errorf("inspect %s socket path: %w", name, err)
 	}
 	if !rootOwnedSocket(info) {
-		return nil, errors.New("web engine socket path already exists and is not a root-owned socket; investigate it rather than replacing it")
+		return nil, errors.New(name + " socket path already exists and is not a root-owned socket; investigate it rather than replacing it")
 	}
 	// A listener that answers does not hold the lock (an engine from before the lock existed): leave it its socket.
 	// Only a refused connection says nothing listens: a full backlog or another socket type must not read as dead.
 	connection, dialErr := net.DialTimeout("unix", path, time.Second)
 	if dialErr == nil {
 		_ = connection.Close()
-		return nil, errors.New("web engine socket path already exists and something listens on it without holding its lock")
+		return nil, errors.New(name + " socket path already exists and something listens on it without holding its lock")
 	}
 	if !errors.Is(dialErr, syscall.ECONNREFUSED) {
-		return nil, fmt.Errorf("web engine socket path already exists and cannot be shown dead: %w", dialErr)
+		return nil, fmt.Errorf("%s socket path already exists and cannot be shown dead: %w", name, dialErr)
 	}
 	slog.Warn("removing the web socket a previous engine left behind", "path", path)
 	if err = os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("remove stale web engine socket: %w", err)
+		return nil, fmt.Errorf("remove stale %s socket: %w", name, err)
 	}
 	return lock, nil
 }

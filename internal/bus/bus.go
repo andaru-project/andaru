@@ -146,14 +146,19 @@ func Open(o Options) (*Bus, error) {
 	}
 	b.done.Add(1)
 	go b.pruneEvery(pruneInterval)
-	for peer, listeners := range map[bool]map[string]net.Listener{false: o.Listeners, true: o.PeerListeners} {
-		for _, l := range listeners {
-			b.listeners = append(b.listeners, l)
-			b.done.Add(1)
-			go b.serve(l, peer)
-		}
+	for _, l := range o.Listeners {
+		b.listen(l, false)
+	}
+	for _, l := range o.PeerListeners {
+		b.listen(l, true)
 	}
 	return b, nil
+}
+
+func (b *Bus) listen(l net.Listener, peer bool) {
+	b.listeners = append(b.listeners, l)
+	b.done.Add(1)
+	go b.serve(l, peer)
 }
 
 func openStore(path string) (*sql.DB, error) {
