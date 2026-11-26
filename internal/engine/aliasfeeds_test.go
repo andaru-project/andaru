@@ -55,7 +55,7 @@ func newFeedBench(t *testing.T) *feedBench {
 			return nil
 		},
 		realize: func(context.Context) error { b.realized++; return nil },
-		now:     func() time.Time { return b.now }, refreshed: map[string]refresh{}, cleared: map[string]bool{}}
+		now:     func() time.Time { return b.now }, refreshed: map[string]refresh{}, cleared: map[string]bool{}, unsent: map[string]bool{}}
 	// Applied: the live generation names what the saved head does.
 	b.live = slices.Clone(b.list)
 	return b
@@ -833,5 +833,48 @@ func TestAliasStatusIsWrittenWithoutTheLock(t *testing.T) {
 	<-done
 	if !locked {
 		t.Fatal("the status held the lock while it was written")
+	}
+}
+
+// The warning of a source the live filter fills its sets from stays, even when the live generation's saved version
+// does not read: the filter still uses its last good list.
+func TestTheLiveFilterKeepsItsWarning(t *testing.T) {
+	b := newFeedBench(t)
+	old := b.src(0)
+	for range aliasFailures {
+		b.answer(urlAlias, aliasfeed.Result{Request: b.ask(urlAlias), Error: "status 404"})
+	}
+	b.goLive(urlAlias, old.hash)
+	b.list[0].URL = "https://lists.example/v4"
+	b.live = nil
+	b.f.schedule(t.Context())
+	b.requests()
+	b.answer(urlAlias, aliasfeed.Result{Request: b.ask(urlAlias), OK: true, Members: []string{"192.0.2.1"}})
+	b.f.schedule(t.Context())
+	if got := b.notices(); !slices.Equal(got, []string{"alias/" + urlAlias + " warning"}) {
+		t.Fatalf("notices %q", got)
+	}
+}
+
+// A clear that does not publish is published again by the next schedule, without the result again.
+func TestAnUnsentClearIsSentAgain(t *testing.T) {
+	b := newFeedBench(t)
+	for range aliasFailures {
+		b.answer(urlAlias, aliasfeed.Result{Request: b.ask(urlAlias), Error: "status 404"})
+	}
+	b.notices()
+	publish := b.f.publish
+	b.f.publish = func(topic string, payload []byte, durable bool) error {
+		if topic == "notification/"+aliasSource {
+			return fmt.Errorf("bus closed")
+		}
+		return publish(topic, payload, durable)
+	}
+	b.answer(urlAlias, aliasfeed.Result{Request: b.ask(urlAlias), OK: true, Members: []string{"192.0.2.1"}})
+	b.f.publish = publish
+	b.f.schedule(t.Context())
+	b.f.schedule(t.Context())
+	if got := b.notices(); !slices.Equal(got, []string{"alias/" + urlAlias + " "}) {
+		t.Fatalf("notices %q", got)
 	}
 }

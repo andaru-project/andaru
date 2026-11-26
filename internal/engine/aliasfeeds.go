@@ -87,9 +87,10 @@ type aliasFeeds struct {
 	// keptWarned is when forget last said the live filter's sources did not read.
 	keptWarned time.Time
 	// refreshed is each alias's last "Refresh now", and the request it published; cleared, the aliases whose
-	// notification was cleared since this start and not raised since.
+	// notification was cleared since this start and not raised since; unsent, those whose clear did not publish.
 	refreshed map[string]refresh
 	cleared   map[string]bool
+	unsent    map[string]bool
 }
 
 type refresh struct {
@@ -100,7 +101,7 @@ type refresh struct {
 func newAliasFeeds(life context.Context, stateDir string, events *bus.Bus, aliases func(context.Context) ([]config.DynamicAlias, []config.DynamicAlias, error), realize func(context.Context) error) *aliasFeeds {
 	f := &aliasFeeds{life: life, stateDir: stateDir, aliases: aliases, publish: events.Publish, realize: realize, now: time.Now,
 		log: slog.Default().With("component", "aliases"), poke: make(chan struct{}, 1), applied: make(chan struct{}, 1),
-		refreshed: map[string]refresh{}, cleared: map[string]bool{}}
+		refreshed: map[string]refresh{}, cleared: map[string]bool{}, unsent: map[string]bool{}}
 	f.owed.Store(true)
 	return f
 }
@@ -410,7 +411,8 @@ func (f *aliasFeeds) record(m bus.Message) error {
 	if s.Failures >= aliasFailures {
 		f.tell(a, s)
 	} else if reason == "" {
-		if inUse, stale := f.failing(id, want); !inUse && (failures >= aliasFailures || stale && !f.cleared[id]) {
+		used, _ := f.used(want)
+		if inUse, stale := f.failing(id, aliasfeed.Sources(f.stateDir)[id], used); !inUse && (failures >= aliasFailures || stale && !f.cleared[id]) {
 			f.tell(a, aliasfeed.State{})
 		}
 	}
@@ -542,8 +544,12 @@ func (f *aliasFeeds) tell(a config.DynamicAlias, s aliasfeed.State) {
 	}
 	if err != nil {
 		f.log.Warn("alias notification not published", "alias", a.ID, "error", err)
+		if r.Severity == "" { // the next schedule clears it again
+			f.unsent[a.ID] = true
+		}
 		return
 	}
+	delete(f.unsent, a.ID)
 	if r.Severity == "" {
 		f.cleared[a.ID] = true
 	} else {
@@ -551,11 +557,22 @@ func (f *aliasFeeds) tell(a config.DynamicAlias, s aliasfeed.State) {
 	}
 }
 
-// failing reports whether a source of alias id that keeps failing is wanted (inUse), and whether one is not (stale).
-func (f *aliasFeeds) failing(id string, want map[source]wanted) (inUse, stale bool) {
-	for _, hash := range aliasfeed.Sources(f.stateDir)[id] {
+// used returns whether a source is wanted or fills the live filter's sets, and the error reading the latter: while
+// they do not read, every source is used.
+func (f *aliasFeeds) used(want map[source]wanted) (func(source) bool, error) {
+	kept, err := generation.LiveFeeds(f.stateDir)
+	return func(src source) bool {
+		_, ok := want[src]
+		return ok || err != nil || slices.Contains(kept[src.alias], src.hash)
+	}, err
+}
+
+// failing reports whether a source of alias id, among its hashes, that keeps failing is used (inUse), and whether one
+// is not (stale).
+func (f *aliasFeeds) failing(id string, hashes []string, used func(source) bool) (inUse, stale bool) {
+	for _, hash := range hashes {
 		if src := (source{id, hash}); f.load(src).Failures >= aliasFailures {
-			_, ok := want[src]
+			ok := used(src)
 			inUse, stale = inUse || ok, stale || !ok
 		}
 	}
@@ -567,8 +584,8 @@ func (f *aliasFeeds) failing(id string, want map[source]wanted) (inUse, stale bo
 // longer wanted, once since this start or its last raise.
 func (f *aliasFeeds) forget(want map[source]wanted) {
 	sources := aliasfeed.Sources(f.stateDir)
-	// The live filter's sets are filled from these, whatever saved version it was applied from.
-	kept, keptErr := generation.LiveFeeds(f.stateDir)
+	// The live filter's sets are filled from its sources, whatever saved version it was applied from.
+	used, keptErr := f.used(want)
 	if keptErr != nil && f.now().Sub(f.keptWarned) >= time.Hour { // at most hourly: schedules run every minute or so
 		f.keptWarned = f.now()
 		f.log.Warn("read the live filter's alias sources; no source's state is removed", "error", keptErr)
@@ -579,10 +596,10 @@ func (f *aliasFeeds) forget(want map[source]wanted) {
 		if !d.IsDir() {
 			continue
 		}
-		inUse, stale := f.failing(id, want)
+		inUse, stale := f.failing(id, sources[id], used)
 		for _, hash := range sources[id] {
 			src := source{id, hash}
-			if _, ok := want[src]; ok || keptErr != nil || slices.Contains(kept[id], hash) {
+			if used(src) {
 				continue
 			}
 			if s := f.load(src); f.now().Sub(s.LastAttempt) < keepUnwanted {
@@ -595,7 +612,7 @@ func (f *aliasFeeds) forget(want map[source]wanted) {
 		f.forgetCorrupt(id)
 		// Empty, the alias's directory goes too; with any file left, it stays.
 		_ = os.Remove(filepath.Join(aliasfeed.Dir(f.stateDir), id))
-		if !inUse && stale && !f.cleared[id] {
+		if !inUse && (stale || f.unsent[id]) && !f.cleared[id] {
 			f.tell(config.DynamicAlias{ID: id}, aliasfeed.State{})
 		}
 	}
