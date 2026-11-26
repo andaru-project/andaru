@@ -13,11 +13,25 @@ export function kernelName(link: SavedLink, resolved: Map<string, string>) {
 const bindingCode = /^(HARDWARE_|NAME_COLLISION$|DEPENDENCY_UNAVAILABLE$|SECRET_UNRESOLVED$|UNSUPPORTED_COMBINATION$|INTERFACE_NAME_UNSUPPORTED$)/;
 
 // bindingFindings is the first such finding of each saved link, by the link's place in the configuration.
-export function bindingFindings(preview: Preview) {
+export function bindingFindings(preview: Preview, snapshot?: Snapshot) {
   const findings = new Map<number, Finding>();
+  const linkIndexById = snapshot ? new Map(snapshot.value.links.map((link, index) => [link.id, index])) : undefined;
   for (const finding of preview.findings) {
-    const index = /^\/links\/(\d+)(\/|$)/.exec(finding.path)?.[1];
-    if (index !== undefined && bindingCode.test(finding.code) && !findings.has(Number(index))) findings.set(Number(index), finding);
+    if (!bindingCode.test(finding.code)) continue;
+    const linkMatch = /^\/links\/(\d+)(\/|$)/.exec(finding.path)?.[1];
+    if (linkMatch !== undefined) {
+      const idx = Number(linkMatch);
+      if (!findings.has(idx)) findings.set(idx, finding);
+      continue;
+    }
+    if (snapshot && linkIndexById && finding.code === 'UNSUPPORTED_COMBINATION') {
+      const segMatch = /^\/segments\/(\d+)(\/|$)/.exec(finding.path)?.[1];
+      const seg = segMatch !== undefined ? snapshot.value.segments[Number(segMatch)] : undefined;
+      const idx = seg ? linkIndexById.get(seg.link) : undefined;
+      if (idx !== undefined && snapshot.value.links[idx]?.kind === 'pppoe' && !findings.has(idx)) {
+        findings.set(idx, finding);
+      }
+    }
   }
   return findings;
 }
@@ -28,7 +42,7 @@ export function bindingFindings(preview: Preview) {
 // claims the same interface, enabled or not: two links on one interface is a conflict to sort out, not a zone.
 export function zonesByInterface(snapshot: Snapshot, preview: Preview) {
   const resolved = new Map(preview.resolved.map((item) => [item.link, item.interface]));
-  const findings = bindingFindings(preview);
+  const findings = bindingFindings(preview, snapshot);
   const zones = new Map<string, string>();
   const claimed = new Set<string>();
   const contested = new Set<string>();

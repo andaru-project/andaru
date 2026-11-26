@@ -954,7 +954,9 @@ it('handles resolved PPPoE editing, stale unsupported IPv6 modes, and PPPoE clie
         management: { segment: 'seg_lan' },
       },
     },
-    findings: [],
+    findings: [
+      { severity: 'error', code: 'UNSUPPORTED_COMBINATION', path: '/segments/1/addressing/ipv6/mode', message: 'Not rendered: IPv6 on a PPPoE segment can be none, slaac or dhcp6.' },
+    ],
     extra: {
       [`/api/v1/config/links/${pppId}`]: { version: '4', value: pppLink },
       '/api/v1/config/segments/seg_ppp': { version: '6', value: pppSeg },
@@ -963,7 +965,9 @@ it('handles resolved PPPoE editing, stale unsupported IPv6 modes, and PPPoE clie
   });
   render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={vi.fn()} onSessionLost={vi.fn()} />);
 
-  await user.click(await screen.findByRole('button', { name: 'Edit ISP PPPoE' }));
+  expect(await screen.findByText('Not rendered: IPv6 on a PPPoE segment can be none, slaac or dhcp6.')).toBeInTheDocument();
+  expect(within(row('ISP PPPoE')).getByText('Not realized')).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Edit ISP PPPoE' }));
   const panel = await screen.findByRole('dialog');
   expect(within(panel).getByPlaceholderText('Leave empty to keep saved password')).toBeInTheDocument();
 

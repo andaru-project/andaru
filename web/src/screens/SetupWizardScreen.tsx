@@ -363,7 +363,7 @@ export function SetupWizardScreen({ api, onComplete, onSessionLost }: SetupWizar
                       updateDraft({
                         mgmtMac: mac,
                         mgmtName: found?.name ?? draft.mgmtName,
-                        wanMac: draft.wanMac === mac ? '' : draft.wanMac,
+                        ...(draft.wanMac === mac ? { wanMac: '', wanPppoePassword: '' } : {}),
                       });
                     }}
                   />

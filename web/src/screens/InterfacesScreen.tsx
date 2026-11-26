@@ -21,7 +21,7 @@ interface Row { key: string; live?: LinkStatus; saved?: SavedLink; state?: strin
 
 function join(links: LinkStatus[], snapshot: Snapshot, preview: Preview): Row[] {
   const resolved = new Map(preview.resolved.map((item) => [item.link, item.interface]));
-  const findings = bindingFindings(preview);
+  const findings = bindingFindings(preview, snapshot);
   const onDevice = new Map<string, SavedLink[]>();
   const unbound: Row[] = [];
   snapshot.value.links.forEach((link, index) => {
