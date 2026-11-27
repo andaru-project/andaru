@@ -13,6 +13,7 @@ andaru engine [\-\-socket PATH] [\-\-state\-dir PATH]
 Run the Andaru engine: it owns the state directory and serves the root\-only local API on a Unix socket. The web options also serve a dedicated socket to andaru\-web: give \-\-web\-socket and at least one \-\-web\-origin, and \-\-web\-uid and \-\-web\-gid unless /etc/andaru/engine\-web\-peer holds them.
 .SH OPTIONS
 .nf
+.in 0
   \-\-socket PATH        absolute local engine socket path
                        (default /run/andaru/engine.sock)
   \-\-state\-dir PATH     absolute private state directory
@@ -23,3 +24,4 @@ Run the Andaru engine: it owns the state directory and serves the root\-only loc
   \-\-web\-origin HTTPS_ORIGIN
                        exact HTTPS management origin; repeat for each origin
 .fi
+.in

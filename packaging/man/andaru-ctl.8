@@ -75,6 +75,7 @@ The LLDP neighbors systemd\-networkd currently reports, as JSON on stdout.
 .fi
 .SS andaru ctl offloads
 .nf
+.in 0
 Show the live offloads of the Ethernet devices.
 
 usage: andaru ctl offloads
@@ -82,6 +83,7 @@ usage: andaru ctl offloads
 Whether each offload Andaru manages runs on each Ethernet device, and whether
 the device can change it, as JSON on stdout.
 .fi
+.in
 .SS andaru ctl openapi
 .nf
 Print the engine API\(aqs OpenAPI description.
@@ -98,6 +100,7 @@ Prints the one\-time setup code while no administrator account exists.
 .fi
 .SS andaru ctl config
 .nf
+.in 0
 Read and change the saved configuration.
 
 usage: andaru ctl config show
@@ -132,6 +135,7 @@ Options:
 Example:
   printf \(aq%s\en\(aq \(aq{"name":"lan"}\(aq | sudo andaru ctl config create zones
 .fi
+.in
 .SS andaru ctl versions
 .nf
 List the saved versions and show one.
@@ -149,6 +153,7 @@ Options:
 .fi
 .SS andaru ctl preview
 .nf
+.in 0
 Show the files a saved version would give the network.
 
 usage: andaru ctl preview network [\-\-saved\-version N]
@@ -159,8 +164,10 @@ stop them working. It changes nothing.
 Options:
   \-\-saved\-version N  saved version to render (default: the saved head)
 .fi
+.in
 .SS andaru ctl apply
 .nf
+.in 0
 Make the saved network live behind a rollback timer.
 
 usage: andaru ctl apply network \-\-saved\-version N [\-\-confirm\-timeout S]
@@ -176,6 +183,7 @@ Example:
   sudo andaru ctl apply network \-\-saved\-version 12
   sudo andaru ctl applies confirm 1   # from a NEW session
 .fi
+.in
 .SS andaru ctl applies
 .nf
 List applies; confirm or roll one back.
@@ -192,6 +200,7 @@ Commands:
 .fi
 .SS andaru ctl backup
 .nf
+.in 0
 Create, inspect and restore portable backups.
 
 usage: andaru ctl backup create \-\-output FILE [\-\-include\-secrets]
@@ -222,6 +231,7 @@ passphrase twice and encrypts the file; reading it asks for it again.
 Example:
   sudo andaru ctl backup restore \-\-input andaru.zip \-\-stores configuration
 .fi
+.in
 .SS andaru ctl kept
 .nf
 Keep the saved network for after a factory reset.
@@ -234,6 +244,7 @@ Commands:
 .fi
 .SS andaru ctl users
 .nf
+.in 0
 Manage user accounts.
 
 usage: andaru ctl users bootstrap\-admin \-\-login LOGIN [\-\-display\-name NAME]
@@ -273,8 +284,10 @@ Options:
 
 These commands require root.
 .fi
+.in
 .SS andaru ctl tokens
 .nf
+.in 0
 Manage API tokens.
 
 usage: andaru ctl tokens create \-\-account\-id ID \-\-name NAME \-\-scope CAP,...
@@ -301,6 +314,7 @@ Options:
 
 These commands require root.
 .fi
+.in
 .SS andaru ctl audit
 .nf
 List the audit log.
@@ -315,6 +329,7 @@ This command requires root.
 .fi
 .SS andaru ctl factory\-reset
 .nf
+.in 0
 Erase Andaru\(aqs state and start over.
 
 usage: andaru ctl factory\-reset run|abort|status
@@ -328,3 +343,4 @@ Commands:
 
 These commands require root.
 .fi
+.in

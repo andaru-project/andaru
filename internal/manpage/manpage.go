@@ -4,13 +4,14 @@ package manpage
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // Section is a part of a page with a title of its own, as one subcommand's help.
 type Section struct{ Title, Help string }
 
-// Page renders help as the man page of name in section, with summary for its NAME line. The help's paragraphs
-// before its usage are the description, the usage is the synopsis, and every later paragraph, a "Heading:" block
+// Page renders help as the man page of name in section, with summary for its NAME line. Every help has a usage.
+// The help's paragraphs before its usage are the description, the usage is the synopsis, and every later paragraph, a "Heading:" block
 // or not, is kept as preformatted text, as --help prints it. Each of more follows under COMMANDS IN DETAIL.
 func Page(name, section, summary, help string, more ...Section) []byte {
 	var b strings.Builder
@@ -18,11 +19,6 @@ func Page(name, section, summary, help string, more ...Section) []byte {
 	// Unhyphenated and ragged: paths and options must read as they are typed.
 	fmt.Fprintf(&b, ".nh\n.ad l\n.SH NAME\n%s \\- %s\n", escape(name), escape(summary))
 	var description []string
-	describe := func() {
-		if len(description) > 0 {
-			b.WriteString(".SH DESCRIPTION\n" + strings.Join(description, ".PP\n"))
-		}
-	}
 	synopsis := false
 	for _, p := range strings.Split(strings.Trim(help, "\n"), "\n\n") {
 		switch {
@@ -30,7 +26,9 @@ func Page(name, section, summary, help string, more ...Section) []byte {
 			synopsis = true
 			b.WriteString(".SH SYNOPSIS\n")
 			preformatted(&b, strings.TrimPrefix(p, "usage: "), "       ")
-			describe()
+			if len(description) > 0 {
+				b.WriteString(".SH DESCRIPTION\n" + strings.Join(description, ".PP\n"))
+			}
 		case !synopsis:
 			description = append(description, escape(strings.Join(strings.Fields(p), " "))+"\n")
 		default:
@@ -43,9 +41,6 @@ func Page(name, section, summary, help string, more ...Section) []byte {
 			preformatted(&b, p, "")
 		}
 	}
-	if !synopsis {
-		describe()
-	}
 	if len(more) > 0 {
 		b.WriteString(".SH COMMANDS IN DETAIL\n")
 	}
@@ -56,16 +51,28 @@ func Page(name, section, summary, help string, more ...Section) []byte {
 	return []byte(b.String())
 }
 
-// preformatted writes text as it is, line for line, without the indent cut from each continuation line.
+// preformatted writes text as it is, line for line, without the indent cut from each continuation line. A block
+// with a line too wide for man's indent within 80 columns, as help is written, goes to the left margin instead.
 func preformatted(b *strings.Builder, text, indent string) {
-	b.WriteString(".nf\n")
-	for i, line := range strings.Split(text, "\n") {
+	lines := strings.Split(text, "\n")
+	wide := false
+	for i, line := range lines {
 		if i > 0 {
-			line = strings.TrimPrefix(line, indent)
+			lines[i] = strings.TrimPrefix(line, indent)
 		}
+		wide = wide || utf8.RuneCountInString(lines[i]) > 80-7
+	}
+	b.WriteString(".nf\n")
+	if wide {
+		b.WriteString(".in 0\n")
+	}
+	for _, line := range lines {
 		b.WriteString(escape(line) + "\n")
 	}
 	b.WriteString(".fi\n")
+	if wide {
+		b.WriteString(".in\n")
+	}
 }
 
 // escape keeps text literal in roff: backslashes; hyphens, quotes, carets and tildes, which a terminal would show

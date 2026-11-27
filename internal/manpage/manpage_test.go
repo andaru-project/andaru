@@ -6,11 +6,13 @@ func TestPage(t *testing.T) {
 	help := `Run the thing. It does
 one job.
 
+A second paragraph.
+
 usage: tool [--flag] ARG
        tool other
 
 Options:
-  --flag  a \ backslash
+  --flag  a \ backslash; this line is wider than man's indent leaves, at 75
 .dot  at a line's start, 'quoted' ~ ^ ` + "`" + `
 `
 	got := string(Page("tool", "8", "run the thing", help, Section{"tool other", "Other.\n\nusage: tool other\n"}))
@@ -26,11 +28,15 @@ tool other
 .fi
 .SH DESCRIPTION
 Run the thing. It does one job.
+.PP
+A second paragraph.
 .SH OPTIONS
 .nf
-  \-\-flag  a \e backslash
+.in 0
+  \-\-flag  a \e backslash; this line is wider than man\(aqs indent leaves, at 75
 \&.dot  at a line\(aqs start, \(aqquoted\(aq \(ti \(ha \(ga
 .fi
+.in
 .SH COMMANDS IN DETAIL
 .SS tool other
 .nf

@@ -14,11 +14,13 @@ andaru outbound [\-\-bus\-socket PATH] [\-\-cache\-dir PATH]
 Andaru is a Free Software firewall platform. The engine owns the saved configuration and serves a root\-only local API; ctl drives that API; realize makes saved networking live on the host.
 .SH COMMANDS
 .nf
+.in 0
   engine    Run the engine: the local API, saved configuration and identities
   ctl       Read and change the configuration through the running engine
   realize   Privileged host steps the engine and systemd units run
   outbound  The unprivileged service that sends notifications and fetches lists
 .fi
+.in
 .PP
 .nf
 Run \(aqandaru <command> \-\-help\(aq for the options of a command.
