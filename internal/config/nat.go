@@ -215,7 +215,7 @@ func validateNAT(d *declaration) []FieldError {
 	// direction.
 	var virtual []netip.Prefix
 	for _, v := range d.VirtualAddresses {
-		if x, ok := vipPrefix(v); ok && x.Addr().Is4() && !v.proxied() {
+		if x, ok := vipPrefix(v); ok && x.Addr().Is4() && v.held() {
 			virtual = append(virtual, x)
 		}
 	}
