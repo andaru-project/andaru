@@ -136,7 +136,7 @@ func (r *renderer) filterChains() {
 		v := f.virtual4()
 		// A held block is a prefix, which only an interval set takes.
 		flags := ""
-		if slices.ContainsFunc(v, func(e string) bool { return strings.Contains(e, "/") }) {
+		if slices.ContainsFunc(r.held4(), func(x netip.Prefix) bool { return !x.IsSingleIP() }) {
 			flags = "interval"
 		}
 		f.set("internal_4", "ipv4_addr", flags, append(own, v...), "")

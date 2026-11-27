@@ -339,7 +339,7 @@ func (f *filter) oneToOne() (prerouting, postrouting []string) {
 
 func prefixOf(s string) netip.Prefix {
 	if a, e := netip.ParseAddr(s); e == nil {
-		return netip.PrefixFrom(a, 32)
+		return netip.PrefixFrom(a, a.BitLen())
 	}
 	p, _ := netip.ParsePrefix(s)
 	return p
