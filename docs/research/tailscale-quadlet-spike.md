@@ -119,3 +119,8 @@ Simulated `andaru-engine` listening on `/run/andaru-addons/bus.sock` inside a sy
   - `/proc/cmdline` contained `andaru.safe=1` and SELinux remained `Enforcing`.
   - `andaru-addon-tailscale.service` was skipped (`ActiveState=inactive`, `ConditionResult=no`, journal: `skipped, unmet condition check ConditionKernelCommandLine=!andaru.safe=1`).
   - `podman ps -a` showed zero containers, while `ens18` (`10.0.1.12/16`) and `table inet andaru` came up normally.
+
+## Post-spike path refinements in the design spec
+
+- **Dedicated bus socket directory (`/run/andaru-addons/bus-socket`):** To ensure `andaru-engine` restarts recreating `bus.sock` propagate to already-running containers without pinning a stale inode, the design spec bind-mounts `/run/andaru-addons/bus-socket:/run/andaru/bus-socket` (`ANDARU_BUS_SOCKET=/run/andaru/bus-socket/bus.sock`) with `(filecon "/run/andaru-addons/bus-socket(/.*)?" any (system_u object_r container_file_t ((s0) (s0))))`.
+- **Boot-lifetime safe-mode directory (`/run/andaru-boot/`):** Because `andaru-engine.service` owns `/run/andaru` via `RuntimeDirectory=andaru` (wiped on engine stop/restart), the implemented safe-mode runtime flags live at `/run/andaru-boot/safe-mode` and `/run/andaru-boot/addons-held`.
