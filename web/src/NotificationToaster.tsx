@@ -111,15 +111,16 @@ export function NotificationToaster({ notifications, hostname }: NotificationToa
       }
     }
 
-    const changed = diffNotifications(previous, notifications.items);
-    if (changed.length === 0) return;
-
     const prefs = getNotificationPrefs();
     const browserGranted = getBrowserNotificationSupport() === 'granted';
     if (prefs.browser && !browserGranted) {
       // Sync subscribers immediately when permission was revoked while the tab stayed hidden or focused.
       syncBrowserNotificationSupport();
     }
+
+    const changed = diffNotifications(previous, notifications.items);
+    if (changed.length === 0) return;
+
     const activeInTab = document.visibilityState === 'visible' && Date.now() - lastActivityRef.current < activeIdleMs;
     const useBrowser = prefs.browser && browserGranted && !activeInTab;
 
@@ -158,11 +159,11 @@ export function NotificationToaster({ notifications, hostname }: NotificationToa
   return (
     <>
       {/* Persistent visually-hidden live regions ensure AT announces every new toast without reading CloseButton labels. */}
-      <VisuallyHidden aria-live="polite" aria-atomic="false">
-        {politeToasts.map((toast) => <span key={toast.id}>{toastAnnouncement(toast)}</span>)}
+      <VisuallyHidden component="div" aria-live="polite" aria-atomic="false">
+        {politeToasts.map((toast) => <div key={toast.id}>{toastAnnouncement(toast)}</div>)}
       </VisuallyHidden>
-      <VisuallyHidden aria-live="assertive" aria-atomic="false">
-        {assertiveToasts.map((toast) => <span key={toast.id}>{toastAnnouncement(toast)}</span>)}
+      <VisuallyHidden component="div" aria-live="assertive" aria-atomic="false">
+        {assertiveToasts.map((toast) => <div key={toast.id}>{toastAnnouncement(toast)}</div>)}
       </VisuallyHidden>
       {toasts.length > 0 && (
         <section className="notification-toast-stack" aria-label="Live notifications">

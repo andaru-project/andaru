@@ -12,6 +12,7 @@ import {
   pauseNotificationToast,
   pushNotificationToast,
   requestBrowserNotificationPermission,
+  resumeHiddenNotificationToasts,
   resumeNotificationToast,
   setNotificationPrefs,
   showBrowserNotification,
@@ -270,6 +271,21 @@ describe('notifications helpers', () => {
       });
       // Old visible timer was cleared so the updated toast waits until the tab returns.
       expect(screen.getByTestId('queue')).toHaveTextContent('7:Updated while hidden');
+
+      // Resuming a paused toast while still hidden does not arm its timer until the tab returns.
+      act(() => {
+        pauseNotificationToast(7);
+        resumeNotificationToast(7);
+        vi.advanceTimersByTime(10_000);
+      });
+      expect(screen.getByTestId('queue')).toHaveTextContent('7:Updated while hidden');
+
+      visibility = 'visible';
+      act(() => {
+        resumeHiddenNotificationToasts();
+        vi.advanceTimersByTime(6_000);
+      });
+      expect(screen.getByTestId('queue')).toHaveTextContent('');
     } finally {
       if (originalVisibility) Object.defineProperty(document, 'visibilityState', originalVisibility);
       else Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
