@@ -11,6 +11,7 @@ andaru ctl [\-\-socket PATH] COMMAND [ARGUMENTS]
 Read and change Andaru\(aqs configuration through the running engine. Success is JSON on stdout, except for kept and factory\-reset, which print text; diagnostics go to stderr.
 .SH COMMANDS
 .nf
+.in 0
   links          Show the host\(aqs network interfaces and their addresses
   prefixes       Show the delegated IPv6 prefixes and how they are used
   leases         Show the DHCPv4 and DHCPv6 leases
@@ -30,6 +31,7 @@ Read and change Andaru\(aqs configuration through the running engine. Success is
   audit          List the audit log
   factory\-reset  Erase Andaru\(aqs state and start over
 .fi
+.in
 .SH OPTIONS
 .nf
   \-\-socket PATH  absolute local engine socket path
@@ -67,12 +69,14 @@ The DHCPv4 and DHCPv6 leases snapshot, as JSON on stdout.
 .fi
 .SS andaru ctl lldp
 .nf
+.in 0
 Show live LLDP neighbors discovered on host interfaces.
 
 usage: andaru ctl lldp
 
 The LLDP neighbors systemd\-networkd currently reports, as JSON on stdout.
 .fi
+.in
 .SS andaru ctl offloads
 .nf
 .in 0
@@ -133,7 +137,7 @@ Options:
                that is not set yet
 
 Example:
-  printf \(aq%s\en\(aq \(aq{"name":"lan"}\(aq | sudo andaru ctl config create zones
+  printf \(aq%s\en\(aq \(aq{\(dqname\(dq:\(dqlan\(dq}\(aq | sudo andaru ctl config create zones
 .fi
 .in
 .SS andaru ctl versions
@@ -186,6 +190,7 @@ Example:
 .in
 .SS andaru ctl applies
 .nf
+.in 0
 List applies; confirm or roll one back.
 
 usage: andaru ctl applies list
@@ -198,6 +203,7 @@ Commands:
   confirm   Keep a pending apply; run it from a new session
   rollback  Undo a pending apply without waiting for its timer
 .fi
+.in
 .SS andaru ctl backup
 .nf
 .in 0
@@ -234,6 +240,7 @@ Example:
 .in
 .SS andaru ctl kept
 .nf
+.in 0
 Keep the saved network for after a factory reset.
 
 usage: andaru ctl kept store\-recovery
@@ -242,6 +249,7 @@ Commands:
   store\-recovery  Keep the saved head\(aqs network as the network a factory
                   reset brings the box back on
 .fi
+.in
 .SS andaru ctl users
 .nf
 .in 0

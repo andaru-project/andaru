@@ -41,6 +41,9 @@ func Page(name, section, summary, help string, more ...Section) []byte {
 			preformatted(&b, p, "")
 		}
 	}
+	if !synopsis {
+		panic("manpage: the help of " + name + " has no usage paragraph")
+	}
 	if len(more) > 0 {
 		b.WriteString(".SH COMMANDS IN DETAIL\n")
 	}
@@ -52,7 +55,7 @@ func Page(name, section, summary, help string, more ...Section) []byte {
 }
 
 // preformatted writes text as it is, line for line, without the indent cut from each continuation line. A block
-// with a line too wide for man's indent within 80 columns, as help is written, goes to the left margin instead.
+// with a line too wide for man's 7-column indent within its 78-column line, goes to the left margin instead.
 func preformatted(b *strings.Builder, text, indent string) {
 	lines := strings.Split(text, "\n")
 	wide := false
@@ -60,7 +63,7 @@ func preformatted(b *strings.Builder, text, indent string) {
 		if i > 0 {
 			lines[i] = strings.TrimPrefix(line, indent)
 		}
-		wide = wide || utf8.RuneCountInString(lines[i]) > 80-7
+		wide = wide || utf8.RuneCountInString(lines[i]) > 78-7
 	}
 	b.WriteString(".nf\n")
 	if wide {
@@ -75,10 +78,11 @@ func preformatted(b *strings.Builder, text, indent string) {
 	}
 }
 
-// escape keeps text literal in roff: backslashes; hyphens, quotes, carets and tildes, which a terminal would show
-// as their typographic forms and so break a copied command; and a line that would start with a dot.
+// escape keeps text literal in roff: backslashes; double quotes, which would split a macro's arguments; hyphens,
+// quotes, carets and tildes, which a terminal would show as their typographic forms and so break a copied command;
+// and a line that would start with a dot.
 func escape(s string) string {
-	s = strings.NewReplacer(`\`, `\e`, "-", `\-`, "'", `\(aq`, "`", `\(ga`, "^", `\(ha`, "~", `\(ti`).Replace(s)
+	s = strings.NewReplacer(`\`, `\e`, `"`, `\(dq`, "-", `\-`, "'", `\(aq`, "`", `\(ga`, "^", `\(ha`, "~", `\(ti`).Replace(s)
 	if strings.HasPrefix(s, ".") { // a quote, the other control character, is \(aq by now
 		s = `\&` + s
 	}

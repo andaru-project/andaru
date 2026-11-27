@@ -13,6 +13,7 @@ andaru\-web \-\-listen ADDR \-\-tls\-cert FILE \-\-tls\-key FILE
 Serve the Andaru web interface over HTTPS: the static assets, and /api/ requests passed to the engine\(aqs dedicated web socket. Every option is required.
 .SH OPTIONS
 .nf
+.in 0
   \-\-listen ADDR            explicit non\-wildcard IP address and port
   \-\-tls\-cert FILE          absolute TLS certificate path
   \-\-tls\-key FILE           absolute TLS private key path
@@ -21,3 +22,4 @@ Serve the Andaru web interface over HTTPS: the static assets, and /api/ requests
   \-\-backend\-socket PATH    absolute dedicated engine web socket path
   \-\-assets\-dir DIR         absolute prebuilt static asset directory
 .fi
+.in

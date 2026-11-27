@@ -32,7 +32,7 @@ LABEL org.opencontainers.image.title="Andaru" \
 
 # Add Andaru's services, Fedora's firewall packages and traceroute (the base has ping but not traceroute, which the
 # fleet's diagnostics run on the box), ethtool, which reads and sets device offloads, and man-db for Andaru's man pages
-# (man only: their whatis index is built at no dnf transaction, so apropos does not find them); drop Docker, whose own
+# (man only: the whatis index goes with /var/cache below, so apropos finds no page on the box); drop Docker, whose own
 # firewall rules Andaru cannot own.
 # /run and /tmp are tmpfs here: since Fedora 45, the transaction runs systemd-tmpfiles --create, which fills them.
 # systemd and the boot stack stay at the base's versions: Fedora CoreOS removes or patches their files when composing

@@ -9,6 +9,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/andaru-project/andaru/internal/manpage"
@@ -43,7 +44,7 @@ func checkManPages(t *testing.T, pages map[string][]byte) {
 		t.Fatal(err)
 	}
 	for _, f := range files {
-		if _, ok := pages[f.Name()]; !ok && f.Name() != "andaru-web.8" {
+		if _, ok := pages[f.Name()]; !ok && strings.HasSuffix(f.Name(), ".8") && f.Name() != "andaru-web.8" {
 			t.Errorf("%s/%s is the page of no command: remove it", dir, f.Name())
 		}
 	}
