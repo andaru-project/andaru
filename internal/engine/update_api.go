@@ -199,7 +199,7 @@ func (u *updateAPI) currentStageProgress(st update.Status, stageStartedAt time.T
 	if prog, err := update.ReadProgress(u.stateDir); err == nil && prog != nil && !prog.StartedAt.Before(stageStartedAt.Add(-2*time.Second)) {
 		copyProg := *prog
 		u.mu.Lock()
-		if u.busyOp == update.StateStaging && u.stageStartedAt.Equal(stageStartedAt) {
+		if u.busyOp == update.StateStaging && u.stageStartedAt.Equal(stageStartedAt) && (u.lastProgress == nil || !copyProg.UpdatedAt.Before(u.lastProgress.UpdatedAt)) {
 			u.lastProgress = &copyProg
 		}
 		u.mu.Unlock()

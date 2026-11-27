@@ -110,7 +110,9 @@ function clampPercent(done: number, total: number): number {
 }
 
 function phaseMeta(progress?: UpdateProgress): { badge: string; title: string; fallbackDetail: string } {
-  const known = progress?.phase ? progressPhases[progress.phase] : progressPhases.starting;
+  const known = progress?.phase
+    ? (Object.hasOwn(progressPhases, progress.phase) ? progressPhases[progress.phase] : undefined)
+    : progressPhases.starting;
   if (known) return known;
   return {
     badge: 'Downloading…',

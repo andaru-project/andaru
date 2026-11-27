@@ -378,7 +378,7 @@ func (m Manager) Stage(ctx context.Context) (Status, error) {
 		if !ok {
 			return
 		}
-		reachedFull := next.BytesTotal > 0 && next.Bytes >= next.BytesTotal && cur.Bytes < cur.BytesTotal
+		reachedFull := next.BytesTotal > 0 && next.Bytes >= next.BytesTotal && !(cur.BytesTotal > 0 && cur.Bytes >= cur.BytesTotal)
 		important := next.Phase != cur.Phase || next.Steps != cur.Steps || reachedFull
 		cur = next
 		if important || now.Sub(lastWrite) >= progressWriteInterval {
