@@ -176,7 +176,7 @@ Before calling this stage complete: update OpenAPI, CLI help, backup/restore and
 
 ## Remaining issue stages, not part of this implementation
 
-The approved roadmap still includes independent users/credentials, extension restoration, filesystem/S3/SFTP/FTPS destinations, disabled-until-configured daily jobs, visible failures and per-job default retention of 30 successful backups. Their secret, trust, reauthentication and backup-password recovery policies remain in force. This foundation must not pretend those capabilities exist or lock in fake empty representations for them.
+The approved roadmap still includes extension restoration (users and their credentials came in format 2), filesystem/S3/SFTP/FTPS destinations, disabled-until-configured daily jobs, visible failures and per-job default retention of 30 successful backups. Their secret, trust, reauthentication and backup-password recovery policies remain in force. This foundation must not pretend those capabilities exist or lock in fake empty representations for them.
 
 ## Author calls for approval
 
