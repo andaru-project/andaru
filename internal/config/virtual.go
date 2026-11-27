@@ -354,6 +354,8 @@ func validateProxyNDP(d *declaration, i int, p string, own []netip.Prefix, taken
 		bad(p+"/hostSegment", "Expected an existing segment.")
 	case v.HostSegment == v.Segment:
 		bad(p+"/hostSegment", "Expected a segment other than the one the firewall answers on.")
+	case d.Segments[host].Addressing.IPv6.Mode == "none":
+		bad(p+"/hostSegment", "Expected a segment with IPv6: without it the host has no link-local address of the firewall and no router advertisements to route back by.")
 	}
 	a, e := netip.ParseAddr(v.Address)
 	// Before i, every kind; after it, all but proxy NDP entries, which refuse the overlap themselves.

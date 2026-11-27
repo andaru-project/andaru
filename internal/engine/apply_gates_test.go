@@ -257,7 +257,7 @@ func TestProxyNDPGate(t *testing.T) {
 		in.Declaration = []byte(declaration)
 		return applyFindings(in)
 	}
-	plain := `"links":[{"kind":"ethernet","enabled":true}],"segments":[{"id":"seg_a","addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","addresses":["2001:db8:1::2/64"]}}},{"id":"seg_b","addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"none"}}}]`
+	plain := `"links":[{"kind":"ethernet","enabled":true}],"segments":[{"id":"seg_a","addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","addresses":["2001:db8:1::2/64"]}}},{"id":"seg_b","addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","addresses":["fd00:2::1/64"]}}}]`
 	vips := `"virtualAddresses":[{"address":"172.16.53.53"},{"kind":"proxyNdp","segment":"seg_a","hostSegment":"seg_b","address":"2001:db8:1::50"}]`
 	got := gate(`{` + plain + `,` + vips + `}`)
 	if len(got) != 1 || got[0].Code != "APPLY_UNSUPPORTED" || got[0].Path != "/virtualAddresses/1/kind" || got[0].Message != "Proxy NDP entries need the packet filter, which needs a management segment. Set management.segment." {

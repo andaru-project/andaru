@@ -715,6 +715,9 @@ func TestProxyNDPValidation(t *testing.T) {
 		"unknown host segment": {func(d map[string]any) {
 			item(vips(d), 2)["hostSegment"] = "seg_00000009-0000-4000-8000-000000000009"
 		}, p + "/hostSegment", "Expected an existing segment."},
+		"a host segment without IPv6": {func(d map[string]any) {
+			item(segmentsOf(d), 1)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "none"}
+		}, p + "/hostSegment", "Expected a segment with IPv6"},
 		"the same segment twice": {func(d map[string]any) { item(vips(d), 2)["hostSegment"] = item(vips(d), 2)["segment"] }, p + "/hostSegment", "Expected a segment other than the one the firewall answers on."},
 		"off the static subnet":  {func(d map[string]any) { item(vips(d), 2)["address"] = "2001:db8:2::50" }, p + "/address", "Expected an address on one of the segment's static IPv6 subnets."},
 		"a firewall address":     {func(d map[string]any) { item(vips(d), 2)["address"] = "2001:db8:1::2" }, p + "/address", "This address is one of the firewall's own addresses."},
@@ -773,7 +776,7 @@ func TestProxyNDPValidation(t *testing.T) {
 func TestProxyNDPSegmentsByLabel(t *testing.T) {
 	c, e := DecodeChanges([]byte(`{"operations":[{"op":"create","collection":"links","localId":"uplink","value":{"name":"uplink","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"52:54:00:00:00:01"}},{"op":"create","collection":"links","localId":"inside","value":{"name":"inside","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"52:54:00:00:00:02"}},{"op":"create","collection":"zones","localId":"wan","value":{"name":"wan"}},{"op":"create","collection":"zones","localId":"lan","value":{"name":"lan"}},
 		{"op":"create","collection":"segments","localId":"up","value":{"name":"wan","link":"@uplink","zone":"@wan","addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","addresses":["2001:db8:1::2/64"]}}}},
-		{"op":"create","collection":"segments","localId":"in","value":{"name":"lan","link":"@inside","zone":"@lan","addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"none"}}}},
+		{"op":"create","collection":"segments","localId":"in","value":{"name":"lan","link":"@inside","zone":"@lan","addressing":{"ipv4":{"mode":"none"},"ipv6":{"mode":"static","addresses":["fd00:2::1/64"]}}}},
 		{"op":"create","collection":"virtualAddresses","localId":"v","value":{"name":"host","kind":"proxyNdp","segment":"@up","hostSegment":"@in","address":"2001:db8:1::50"}}]}`))
 	if e != nil {
 		t.Fatal(e)
