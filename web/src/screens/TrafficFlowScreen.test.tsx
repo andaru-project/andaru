@@ -61,6 +61,7 @@ describe('TrafficFlowScreen', () => {
       '/api/v1/config': savedSnapshot,
       '/api/v1/applies': {
         pointers: { ...pointers, live: 'app_live', confirmed: 'app_live' },
+        unapplied: true,
         items: [apply({ id: 'app_live', savedVersion: '4', state: 'confirmed' })],
       },
       '/api/v1/versions/4': {
@@ -131,7 +132,7 @@ describe('TrafficFlowScreen', () => {
   it('shows empty-config prompt without status.read and propagates 401 session loss', async () => {
     fetchRoutes({
       '/api/v1/config': { state: 'saved', savedVersion: '1', value: { links: [], segments: [], zones: [] } },
-      '/api/v1/applies': { pointers, items: [] },
+      '/api/v1/applies': { pointers, unapplied: true, items: [] },
     });
     const first = render(
       <MemoryRouter>

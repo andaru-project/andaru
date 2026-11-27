@@ -35,7 +35,7 @@ export function pendingNotice({ applies, head }: ChangeState): Notice {
   if (latest?.state === 'awaiting_confirmation') return { kind: 'awaiting', apply: latest };
   if (latest?.state === 'activating') return { kind: 'activating', apply: latest };
   if (latest && (latest.state === 'failed' || latest.state === 'rolled_back') && !newer(head, latest.savedVersion)) return { kind: latest.state, apply: latest };
-  if (newer(head, liveApply(applies)?.savedVersion ?? '0')) return { kind: 'unapplied' };
+  if (applies.unapplied) return { kind: 'unapplied' };
   return null;
 }
 

@@ -15,29 +15,29 @@ function notice(state: ChangeState, who: Session = admin, onChanged = vi.fn()) {
   return <MemoryRouter><PendingNotice api={new ApiClient('csrf')} session={who} state={state} onChanged={onChanged} onSessionLost={vi.fn()} /></MemoryRouter>;
 }
 
-const awaiting = (deadline: string, id = '2'): ChangeState => ({ applies: { pointers: { ...pointers, live: id, pending: id }, items: [apply({ id, state: 'awaiting_confirmation', deadline })] }, head: '3' });
+const awaiting = (deadline: string, id = '2'): ChangeState => ({ applies: { pointers: { ...pointers, live: id, pending: id }, unapplied: false, items: [apply({ id, state: 'awaiting_confirmation', deadline })] }, head: '3' });
 
 afterEach(() => vi.useRealTimers());
 
-it('says saved changes are not applied when the saved head is newer than the live generation', () => {
-  render(notice({ applies: { pointers: { ...pointers, live: '1' }, items: [apply({})] }, head: '4' }));
+it('says saved changes are not applied when the engine reports unapplied changes', () => {
+  render(notice({ applies: { pointers: { ...pointers, live: '1' }, unapplied: true, items: [apply({})] }, head: '4' }));
   expect(screen.getByRole('status')).toHaveTextContent('Saved changes are not applied yet');
   expect(screen.getByRole('link', { name: 'Review and apply' })).toHaveAttribute('href', '/changes');
 });
 
-it('compares the saved head with the live generation, not with the newest apply', () => {
-  // Apply 2 of version 5 is confirmed, but a boot fell back to apply 1 of version 3.
-  render(notice({ applies: { pointers: { ...pointers, confirmed: '2', live: '1' }, items: [apply({ id: '2', savedVersion: '5' }), apply({})] }, head: '5' }));
-  expect(screen.getByRole('status')).toHaveTextContent('Saved changes are not applied yet');
+it('says nothing when a newer saved version takes effect without an apply', () => {
+  // Saving a notification channel advances the saved head without leaving anything unapplied.
+  render(notice({ applies: { pointers: { ...pointers, live: '1' }, unapplied: false, items: [apply({})] }, head: '4' }));
+  expect(screen.queryByRole('status')).not.toBeInTheDocument();
 });
 
 it('says nothing when the live generation runs the saved head', () => {
-  render(notice({ applies: { pointers: { ...pointers, live: '1' }, items: [apply({})] }, head: '3' }));
+  render(notice({ applies: { pointers: { ...pointers, live: '1' }, unapplied: false, items: [apply({})] }, head: '3' }));
   expect(screen.queryByRole('status')).not.toBeInTheDocument();
 });
 
 it('says an apply is activating, with nothing to act on', () => {
-  render(notice({ applies: { pointers: { ...pointers, live: '1' }, items: [apply({ id: '2', savedVersion: '4', state: 'activating' }), apply({})] }, head: '4' }));
+  render(notice({ applies: { pointers: { ...pointers, live: '1' }, unapplied: true, items: [apply({ id: '2', savedVersion: '4', state: 'activating' }), apply({})] }, head: '4' }));
   expect(screen.getByRole('status')).toHaveTextContent('Applying saved version 4…');
   expect(screen.queryByRole('link')).not.toBeInTheDocument();
   expect(screen.queryByRole('button')).not.toBeInTheDocument();
@@ -66,7 +66,7 @@ it('counts down to the server deadline and offers Confirm and Roll back', async 
 it('counts down correctly from the first render after a deadline appears', () => {
   vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
   vi.setSystemTime(new Date('2026-11-21T10:00:00Z'));
-  const { rerender } = render(notice({ applies: { pointers: { ...pointers, live: '1' }, items: [apply({})] }, head: '3' }));
+  const { rerender } = render(notice({ applies: { pointers: { ...pointers, live: '1' }, unapplied: false, items: [apply({})] }, head: '3' }));
   vi.setSystemTime(new Date('2026-11-21T10:05:00Z'));
   rerender(notice(awaiting('2026-11-21T10:06:00Z')));
   expect(screen.getByText('1:00 left')).toBeInTheDocument();
@@ -113,12 +113,17 @@ it.each([
   ['failed', 'The last apply failed'],
   ['rolled_back', 'The last apply was rolled back'],
 ] as const)('reports a %s apply while nothing newer is saved', (state, title) => {
-  render(notice({ applies: { pointers: { ...pointers, live: '1' }, items: [apply({ id: '2', savedVersion: '4', state }), apply({})] }, head: '4' }));
+  render(notice({ applies: { pointers: { ...pointers, live: '1' }, unapplied: true, items: [apply({ id: '2', savedVersion: '4', state }), apply({})] }, head: '4' }));
   expect(screen.getByRole('status')).toHaveTextContent(title);
   expect(screen.getByRole('link', { name: 'See its details' })).toHaveAttribute('href', '/changes');
 });
 
-it('moves on from a failed apply to unapplied changes once something newer is saved', () => {
-  render(notice({ applies: { pointers: { ...pointers, live: '1' }, items: [apply({ id: '2', savedVersion: '4', state: 'failed' }), apply({})] }, head: '5' }));
+it('moves on from a failed apply to unapplied changes once something newer needing apply is saved', () => {
+  render(notice({ applies: { pointers: { ...pointers, live: '1' }, unapplied: true, items: [apply({ id: '2', savedVersion: '4', state: 'failed' }), apply({})] }, head: '5' }));
   expect(screen.getByRole('status')).toHaveTextContent('Saved changes are not applied yet');
+});
+
+it('clears a failed apply notice without showing unapplied changes when a newer save needs no apply', () => {
+  render(notice({ applies: { pointers: { ...pointers, live: '1' }, unapplied: false, items: [apply({ id: '2', savedVersion: '4', state: 'failed' }), apply({})] }, head: '5' }));
+  expect(screen.queryByRole('status')).not.toBeInTheDocument();
 });

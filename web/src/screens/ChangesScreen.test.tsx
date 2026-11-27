@@ -9,7 +9,7 @@ import type { Session } from '../types';
 import { ChangesScreen } from './ChangesScreen';
 
 const admin = session(['configuration.read', 'configuration.apply', 'configuration.confirm']);
-const live = { pointers: { ...pointers, confirmed: '1', live: '1' }, items: [apply({})] };
+const live = { pointers: { ...pointers, confirmed: '1', live: '1' }, unapplied: true, items: [apply({})] };
 const unapplied: ChangeState = { applies: live, head: '5' };
 
 const info = (id: string) => ({ id, createdAt: '2026-11-21T11:00:00Z', actor: 'admin', changedObjectCount: 1 });
@@ -184,7 +184,7 @@ it('blocks the apply on a preview error and lists its path', async () => {
   expect(screen.getByRole('button', { name: 'Apply saved version 5' })).toBeDisabled();
 });
 
-const awaitingApplies = { pointers: { ...pointers, confirmed: '1', live: '2', pending: '2' }, items: [apply({ id: '2', savedVersion: '5', state: 'awaiting_confirmation', deadline: '2026-11-21T12:05:00Z' }), apply({})] };
+const awaitingApplies = { pointers: { ...pointers, confirmed: '1', live: '2', pending: '2' }, unapplied: false, items: [apply({ id: '2', savedVersion: '5', state: 'awaiting_confirmation', deadline: '2026-11-21T12:05:00Z' }), apply({})] };
 const awaiting: ChangeState = { applies: awaitingApplies, head: '5' };
 
 it('confirms an apply awaiting confirmation and reports the server answer', async () => {
@@ -228,7 +228,7 @@ it('shows the review read-only without the apply and confirm capabilities', asyn
 });
 
 it('says the factory network runs when nothing was applied', async () => {
-  const none = { pointers, items: [] };
+  const none = { pointers, unapplied: false, items: [] };
   routes({ '/api/v1/applies': none, '/api/v1/versions?': history('0') });
   show({ applies: none, head: '0' });
 
@@ -238,7 +238,7 @@ it('says the factory network runs when nothing was applied', async () => {
 });
 
 it('lists the last 20 applies', async () => {
-  const many = { pointers: { ...pointers, confirmed: '25', live: '25' }, items: Array.from({ length: 25 }, (_, index) => apply({ id: String(25 - index), savedVersion: '5' })) };
+  const many = { pointers: { ...pointers, confirmed: '25', live: '25' }, unapplied: false, items: Array.from({ length: 25 }, (_, index) => apply({ id: String(25 - index), savedVersion: '5' })) };
   routes({ '/api/v1/applies': many });
   show({ applies: many, head: '5' });
 
@@ -253,7 +253,7 @@ const refusal = failure(422, 'APPLY_REFUSED', 'This configuration cannot be appl
 
 it('is not stale when the review saw a newer apply than the shell last polled', async () => {
   // Another session applied version 4 after the shell's last poll, which still shows apply 1 of version 3.
-  const reapplied = { pointers: { ...pointers, confirmed: '2', live: '2' }, items: [apply({ id: '2', savedVersion: '4' }), apply({})] };
+  const reapplied = { pointers: { ...pointers, confirmed: '2', live: '2' }, unapplied: true, items: [apply({ id: '2', savedVersion: '4' }), apply({})] };
   routes({ '/api/v1/applies': reapplied });
   show(unapplied);
 

@@ -13,7 +13,7 @@ import { act, render, screen, waitFor } from './test/render';
 import userEvent from '@testing-library/user-event';
 
 const reader = session(['configuration.read']);
-const unapplied = { pointers: { ...pointers, confirmed: '1', live: '1' }, items: [apply({})] };
+const unapplied = { pointers: { ...pointers, confirmed: '1', live: '1' }, unapplied: true, items: [apply({})] };
 
 function routes() {
   return fetchRoutes({
@@ -122,7 +122,7 @@ it('reads the change state every 15 seconds while an apply is under way, and not
   vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
   let state: Apply['state'] = 'awaiting_confirmation';
   const fetchMock = fetchRoutes({
-    '/api/v1/applies': () => jsonResponse(200, { pointers, items: [apply({ state })] }),
+    '/api/v1/applies': () => jsonResponse(200, { pointers, unapplied: false, items: [apply({ state })] }),
     '/api/v1/versions?': { state: 'saved', items: [] },
   });
   mount('/system/session');
