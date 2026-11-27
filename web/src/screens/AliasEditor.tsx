@@ -1,5 +1,5 @@
 import { Alert, Button, Drawer, Fieldset, Group, MultiSelect, NativeSelect, Stack, TagsInput, Textarea, TextInput } from '@mantine/core';
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { icmpTypes } from '../aliasLiteral';
 import { ApiClient, ApiError, fieldErrors, saveFailure } from '../api';
 import {
@@ -27,7 +27,6 @@ interface AliasEditorProps {
   onAbandoned(message: string): void;
   // The panel refused a save from the aliases it was given: they may be stale, and are read again.
   onRefused(): void;
-  onAliasCreated?(): void;
   onSave<K extends keyof AliasKinds>(kind: K, alias: Omit<AliasKinds[K], 'id'>, saved?: SavedObject<AliasKinds[K]>): Promise<void>;
 }
 
@@ -60,7 +59,7 @@ function forbiddenDynamicPlacement(id: string, rows: Row[], snapshot?: Snapshot)
   return undefined;
 }
 
-export function AliasEditor({ api, editing, rows, snapshot, onClose, onSessionLost, onAbandoned, onRefused, onAliasCreated, onSave }: AliasEditorProps) {
+export function AliasEditor({ api, editing, rows, snapshot, onClose, onSessionLost, onAbandoned, onRefused, onSave }: AliasEditorProps) {
   const kind = typeof editing === 'string' ? editing : editing.kind;
   const saved = typeof editing === 'string' ? undefined : editing;
   const savedAddress = saved?.kind === 'addresses' ? saved.item : undefined;
@@ -89,10 +88,6 @@ export function AliasEditor({ api, editing, rows, snapshot, onClose, onSessionLo
   const [errorFocusTick, setErrorFocusTick] = useState(0);
   const [failure, setFailure] = useState('');
   const [busy, setBusy] = useState(false);
-  const [creatingAliases, setCreatingAliases] = useState(0);
-  const onCreatingChange = useCallback((creating: boolean) => {
-    setCreatingAliases((count) => Math.max(0, count + (creating ? 1 : -1)));
-  }, []);
   // A save may answer after this panel was closed and another opened: it then closes nothing.
   const open = useRef(true);
   useEffect(() => { open.current = true; return () => { open.current = false; }; }, []);
@@ -326,8 +321,6 @@ export function AliasEditor({ api, editing, rows, snapshot, onClose, onSessionLo
               value={members}
               error={errors.get('members')}
               clearable
-              onAliasCreated={onAliasCreated}
-              onCreatingChange={onCreatingChange}
               onSessionLost={onSessionLost}
               onChange={setMembers}
             />
@@ -336,7 +329,7 @@ export function AliasEditor({ api, editing, rows, snapshot, onClose, onSessionLo
           </Fieldset>
           <Group justify="flex-end" className="drawer-actions">
             <Button variant="default" onClick={onClose}>Cancel</Button>
-            <Button loading={busy} disabled={creatingAliases > 0} type="submit">Save alias</Button>
+            <Button loading={busy} type="submit">Save alias</Button>
           </Group>
         </Stack>
       </form>

@@ -406,3 +406,47 @@ func TestLeftOutCapLoads(t *testing.T) {
 	})
 	l.load(in)
 }
+
+func TestInlineLiteralsLoad(t *testing.T) {
+	l := newLab(t)
+	const maxLeftOut = 40
+	leftOutV6 := make([]any, maxLeftOut)
+	for i := range maxLeftOut {
+		leftOutV6[i] = fmt.Sprintf("2001:db8:%x::/47", (i+1)*2)
+	}
+	in := change(t, fixture(t, "nat-port-forwards"), func(d map[string]any) {
+		d["management"].(map[string]any)["allowedSources"] = []any{"10.0.0.1", "10.0.0.0/24", "10.0.1.1-10.0.1.5", "2001:db8::1"}
+		d["rules"] = append(d["rules"].([]any),
+			map[string]any{
+				"id": "rul_00000011-0000-4000-8000-000000000011", "name": "lit", "enabled": true, "action": "accept",
+				"from":  map[string]any{"zones": []any{}, "addresses": []any{"10.0.0.1", "10.0.0.10-10.0.0.20"}},
+				"to":    map[string]any{"zones": []any{}, "addresses": []any{"198.51.100.0/24", "198.51.100.10-198.51.100.20"}, "not": true},
+				"ports": []any{"tcp/443", "udp/53,5353", "tcp/8000-8080", "icmp", "icmp/echo-request"},
+				"log":   false,
+			},
+			map[string]any{
+				"id": "rul_00000012-0000-4000-8000-000000000012", "name": "lit-v6", "enabled": true, "action": "reject",
+				"from":  map[string]any{"zones": []any{}, "addresses": []any{"2001:db8::1-2001:db8::ff"}, "not": true},
+				"to":    map[string]any{"zones": []any{}, "addresses": []any{"2001:db8::/64"}},
+				"ports": []any{"tcp/443", "icmpv6"},
+				"log":   false,
+			},
+		)
+		pfs := d["nat"].(map[string]any)["portForwards"].([]any)
+		pf0 := pfs[0].(map[string]any)
+		pf0["from"] = []any{"198.51.100.7"}
+		pf0["to"] = map[string]any{"address": "203.0.113.5"}
+		// Heaviest port forward line with 40 negated non-byte-aligned IPv6 CIDRs must stay under the kernel rule size cap.
+		pf2 := pfs[2].(map[string]any)
+		pf2["family"], pf2["from"], pf2["fromNegated"], pf2["protocol"], pf2["log"] = "ipv6", leftOutV6, true, "tcp-udp", true
+		pf2["to"], pf2["toNegated"], pf2["target"] = map[string]any{"address": "2001:db8:fe::/47"}, true, map[string]any{"self": true}
+		d["nat"].(map[string]any)["oneToOne"] = []any{
+			map[string]any{
+				"id": "oto_00000015-0000-4000-8000-000000000015", "name": "lit-o2o", "enabled": true,
+				"zone": "zon_00000001-0000-4000-8000-000000000001", "external": "203.0.113.50", "internal": "192.0.2.50",
+				"destination": []any{"198.51.100.9", "198.51.100.10-198.51.100.20"}, "destinationNegated": true,
+			},
+		}
+	})
+	l.load(in)
+}

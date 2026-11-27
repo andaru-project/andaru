@@ -80,10 +80,14 @@ func (r *renderer) filterChains() {
 		r.find("error", "MANAGEMENT_REQUIRED", "/management/segment", "The management segment's interface is unavailable, so SSH would not be reachable.")
 		return
 	}
-	var allowed [2][]string
+	allowed := map[family][]string{}
 	for _, id := range d.Management.AllowedSources {
-		for i, fam := range []family{4, 6} {
-			allowed[i] = append(allowed[i], f.families[id][fam]...)
+		if fams, ok := f.families[id]; ok {
+			for _, fam := range []family{4, 6} {
+				allowed[fam] = append(allowed[fam], fams[fam]...)
+			}
+		} else if fam, elem := parseAddrLiteral(id); fam != 0 {
+			allowed[fam] = append(allowed[fam], elem)
 		}
 	}
 	input := []string{
@@ -113,10 +117,10 @@ func (r *renderer) filterChains() {
 	if len(d.Management.AllowedSources) == 0 {
 		input = append(input, fmt.Sprintf("iifname %q tcp dport 22 accept", mgmt))
 	}
-	for i, fam := range []family{4, 6} {
-		if len(allowed[i]) > 0 {
+	for _, fam := range []family{4, 6} {
+		if len(allowed[fam]) > 0 {
 			set := fmt.Sprintf("mgmt_%d", fam)
-			f.set(set, map[family]string{4: "ipv4_addr", 6: "ipv6_addr"}[fam], "interval", allowed[i], "")
+			f.set(set, map[family]string{4: "ipv4_addr", 6: "ipv6_addr"}[fam], "interval", allowed[fam], "")
 			input = append(input, fmt.Sprintf("iifname %q %s saddr @%s tcp dport 22 accept", mgmt, ipKey(fam), set))
 		}
 	}
@@ -267,17 +271,18 @@ func (f *filter) addresses() {
 	}
 	for _, a := range f.r.d.Aliases.Addresses {
 		elements := map[family][]string{}
-		members := []address{a}
 		if a.Kind == "group" {
-			members = members[:0]
 			for _, m := range a.Members {
-				members = append(members, byID[m])
+				if member, ok := byID[m]; ok {
+					if fam, e := single(member); fam != 0 {
+						elements[fam] = append(elements[fam], e)
+					}
+				} else if fam, e := parseAddrLiteral(m); fam != 0 {
+					elements[fam] = append(elements[fam], e)
+				}
 			}
-		}
-		for _, m := range members {
-			if fam, e := single(m); fam != 0 {
-				elements[fam] = append(elements[fam], e)
-			}
+		} else if fam, e := single(a); fam != 0 {
+			elements[fam] = append(elements[fam], e)
 		}
 		comment := ""
 		if a.Kind == "url" || a.Kind == "hostnames" {
@@ -298,6 +303,132 @@ func (f *filter) addresses() {
 func (f *filter) has(id string, fam family) bool {
 	_, ok := f.families[id][fam]
 	return ok
+}
+
+// addrExpr returns the nftables RHS for an address alias (@set) or inline address literal matching fam.
+func (f *filter) addrExpr(ref string, fam family) (string, bool) {
+	if f.has(ref, fam) {
+		return fmt.Sprintf("@%s_%d", setName(ref), fam), true
+	}
+	if lfam, elem := parseAddrLiteral(ref); lfam == fam {
+		return elem, true
+	}
+	return "", false
+}
+
+// negatedAddrMatches renders negated matches for refs of fam on dir ("saddr" or "daddr").
+// Multiple inline literals are grouped into one anonymous set so negated non-byte-aligned CIDRs
+// stay well within the kernel's per-rule expression-byte limit (config.maxLeftOut).
+// When failClosed is true (NAT), an unresolved ref emits @<id>_<fam> so nft refuses it loudly.
+func (f *filter) negatedAddrMatches(refs []string, fam family, dir string, failClosed bool) []string {
+	var parts, lits []string
+	prefix := fmt.Sprintf("%s %s != ", ipKey(fam), dir)
+	for _, ref := range refs {
+		if f.has(ref, fam) {
+			parts = append(parts, fmt.Sprintf("%s@%s_%d", prefix, setName(ref), fam))
+		} else if lfam, elem := parseAddrLiteral(ref); lfam == fam {
+			if !slices.Contains(lits, elem) {
+				lits = append(lits, elem)
+			}
+		} else if failClosed {
+			parts = append(parts, fmt.Sprintf("%s@%s_%d", prefix, setName(ref), fam))
+		}
+	}
+	if len(lits) == 1 {
+		parts = append(parts, prefix+lits[0])
+	} else if len(lits) > 1 {
+		parts = append(parts, prefix+"{ "+strings.Join(lits, ", ")+" }")
+	}
+	return parts
+}
+
+func (f *filter) resolveService(ref string) (service, bool) {
+	if s, ok := f.services[ref]; ok {
+		return s, true
+	}
+	return parsePortLiteralService(ref)
+}
+
+func parseAddrLiteral(s string) (family, string) {
+	if s == "" {
+		return 0, ""
+	}
+	if strings.Contains(s, "/") {
+		p, e := netip.ParsePrefix(s)
+		if e != nil || p.Addr().Is4In6() || p.Addr().Zone() != "" || p != p.Masked() {
+			return 0, ""
+		}
+		return familyOf(p.Addr()), p.String()
+	}
+	if lo, hi, isRange := strings.Cut(s, "-"); isRange {
+		first, e1 := netip.ParseAddr(lo)
+		last, e2 := netip.ParseAddr(hi)
+		if e1 != nil || e2 != nil || first.Zone() != "" || last.Zone() != "" ||
+			first.Is4In6() || last.Is4In6() || first.Is4() != last.Is4() || last.Less(first) {
+			return 0, ""
+		}
+		return familyOf(first), first.String() + "-" + last.String()
+	}
+	a, e := netip.ParseAddr(s)
+	if e != nil || a.Zone() != "" || a.Is4In6() {
+		return 0, ""
+	}
+	return familyOf(a), a.String()
+}
+
+var renderICMPTypes = map[string][]string{
+	"icmp":   {"echo-request", "echo-reply", "destination-unreachable", "time-exceeded", "parameter-problem", "timestamp-request", "timestamp-reply"},
+	"icmpv6": {"echo-request", "echo-reply", "destination-unreachable", "packet-too-big", "time-exceeded", "parameter-problem"},
+}
+
+func parsePortLiteralService(s string) (service, bool) {
+	if s == "icmp" || s == "icmpv6" {
+		return service{Protocol: s}, true
+	}
+	proto, rest, ok := strings.Cut(s, "/")
+	if !ok || rest == "" {
+		return service{}, false
+	}
+	switch proto {
+	case "tcp", "udp":
+		parts := strings.Split(rest, ",")
+		if len(parts) > 64 {
+			return service{}, false
+		}
+		out := make([]string, 0, len(parts))
+		for _, part := range parts {
+			a, b := spanOf(part)
+			canonical := fmt.Sprintf("%d", a)
+			if b != a {
+				canonical = fmt.Sprintf("%d-%d", a, b)
+			}
+			want := part
+			if a < 1 || b > 65535 || a > b || (want != canonical && want != fmt.Sprintf("%d-%d", a, b)) {
+				return service{}, false
+			}
+			if !slices.Contains(out, canonical) {
+				out = append(out, canonical)
+			}
+		}
+		return service{Protocol: proto, Ports: out}, true
+	case "icmp", "icmpv6":
+		parts := strings.Split(rest, ",")
+		if len(parts) > 32 {
+			return service{}, false
+		}
+		out := make([]string, 0, len(parts))
+		for _, part := range parts {
+			if !slices.Contains(renderICMPTypes[proto], part) {
+				return service{}, false
+			}
+			if !slices.Contains(out, part) {
+				out = append(out, part)
+			}
+		}
+		return service{Protocol: proto, Types: out}, true
+	default:
+		return service{}, false
+	}
 }
 
 func familyOf(a netip.Addr) family {
@@ -332,12 +463,7 @@ func (f *filter) rule(r rule) []string {
 			addresses = []match{{}}
 		case s.Not:
 			for _, fam := range []family{4, 6} {
-				var none []string
-				for _, ref := range s.Addresses {
-					if f.has(ref, fam) {
-						none = append(none, fmt.Sprintf("%s %s != @%s_%d", ipKey(fam), dir, setName(ref), fam))
-					}
-				}
+				none := f.negatedAddrMatches(s.Addresses, fam, dir, false)
 				if len(none) == 0 {
 					// Nothing of this family is left out, so all of it matches.
 					none = []string{fmt.Sprintf("meta nfproto ipv%d", fam)}
@@ -347,8 +473,8 @@ func (f *filter) rule(r rule) []string {
 		default:
 			for _, ref := range s.Addresses {
 				for _, fam := range []family{4, 6} {
-					if f.has(ref, fam) {
-						addresses = append(addresses, match{fmt.Sprintf("%s %s @%s_%d", ipKey(fam), dir, setName(ref), fam), fam})
+					if expr, ok := f.addrExpr(ref, fam); ok {
+						addresses = append(addresses, match{fmt.Sprintf("%s %s %s", ipKey(fam), dir, expr), fam})
 					}
 				}
 			}
@@ -376,13 +502,18 @@ func (f *filter) rule(r rule) []string {
 	if len(r.Ports) > 0 {
 		services = nil
 		for _, id := range r.Ports {
-			s := f.services[id]
+			s, ok := f.resolveService(id)
+			if !ok {
+				continue
+			}
 			if s.Protocol != "group" {
 				services = append(services, s)
 				continue
 			}
 			for _, m := range s.Members {
-				services = append(services, f.services[m])
+				if ms, ok := f.resolveService(m); ok {
+					services = append(services, ms)
+				}
 			}
 		}
 	}

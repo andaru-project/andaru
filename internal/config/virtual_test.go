@@ -825,3 +825,16 @@ func TestProxyNDPSegmentsByLabel(t *testing.T) {
 		t.Fatalf("segments %q %q, created %v", v.Segment, v.HostSegment, p.Created)
 	}
 }
+
+func TestProxyARPRefusesLiteralManagementSource(t *testing.T) {
+	for _, src := range []string{"192.0.2.57", "192.0.2.60/30", "192.0.2.57-192.0.2.59"} {
+		t.Run(src, func(t *testing.T) {
+			d := proxyFixture(t)
+			d["management"] = map[string]any{
+				"segment":        item(segmentsOf(d), 1)["id"],
+				"allowedSources": []any{src},
+			}
+			refusedWith(t, d, "/virtualAddresses/3/address", "This range holds a management source address.")
+		})
+	}
+}

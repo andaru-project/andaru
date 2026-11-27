@@ -249,3 +249,29 @@ func TestKeptRecoveryOfSchema3WithoutCustomRolesRestores(t *testing.T) {
 		t.Fatalf("kept schema 3 copy refused: %v\n%s", err, docs.Configuration)
 	}
 }
+
+func TestKeptLANPreservesLiteralAllowedSources(t *testing.T) {
+	d := policyFixture(t)
+	d["management"] = map[string]any{
+		"segment":        item(segmentsOf(d), 1)["id"],
+		"allowedSources": []any{"192.0.2.50", "192.0.2.0/24"},
+	}
+	decl, err := decodeMap(t, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := managementLAN(decl, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	docs, err := KeptDeclaration(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateBackupDocuments(docs); err != nil {
+		t.Fatalf("kept LAN with literal allowedSources failed: %v\n%s", err, docs.Configuration)
+	}
+	if !strings.Contains(string(docs.Configuration), `"192.0.2.50"`) {
+		t.Fatalf("literal source missing from kept declaration: %s", docs.Configuration)
+	}
+}

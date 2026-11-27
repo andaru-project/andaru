@@ -215,10 +215,9 @@ describe('AliasPicker', () => {
     await waitFor(() => expect(onSessionLost).toHaveBeenCalledTimes(1));
   });
 
-  it('creates and selects literal address and port aliases inline in AliasMultiSelect and AliasSelect', async () => {
+  it('accepts literal addresses and ports directly by click, Enter, or blur without creating aliases', async () => {
     const user = userEvent.setup();
-    const onCreated = vi.fn();
-    const createdBodies: Array<{ url: string; body: unknown }> = [];
+    const postCalls: string[] = [];
 
     fetchRoutes({
       '/api/v1/config/aliases/search': () => jsonResponse(200, {
@@ -226,34 +225,30 @@ describe('AliasPicker', () => {
         savedVersion: '5',
         items: [],
       }),
-      'POST /api/v1/config/aliases/addresses': (init) => {
-        const parsed = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
-        createdBodies.push({ url: '/api/v1/config/aliases/addresses', body: parsed });
-        const id = parsed.kind === 'network' ? 'adr_new_net' : 'adr_new_host';
-        return jsonResponse(201, { state: 'saved', savedVersion: '6', version: '1', value: { id, ...parsed } });
+      'POST /api/v1/config/aliases/addresses': () => {
+        postCalls.push('/api/v1/config/aliases/addresses');
+        return jsonResponse(500, {});
       },
-      'POST /api/v1/config/aliases/ports': (init) => {
-        const parsed = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
-        createdBodies.push({ url: '/api/v1/config/aliases/ports', body: parsed });
-        return jsonResponse(201, { state: 'saved', savedVersion: '7', version: '1', value: { id: 'svc_new_443', ...parsed } });
+      'POST /api/v1/config/aliases/ports': () => {
+        postCalls.push('/api/v1/config/aliases/ports');
+        return jsonResponse(500, {});
       },
     });
 
     function LiteralHarness({ api }: { api: ApiClient }) {
-      const [addrs, setAddrs] = useState<string[]>([]);
+      const [addrs, setAddrs] = useState<string[]>(['10.0.0.99']);
       const [ports, setPorts] = useState<string[]>([]);
-      const [single, setSingle] = useState<string | null>(null);
+      const [single, setSingle] = useState<string | null>('10.1.0.0/24');
       return (
         <MantineProvider>
           <AliasMultiSelect
             api={api}
             aliasType="addresses"
             family="ipv4"
-            debounceMs={10}
+            debounceMs={200}
             label="Multi addresses"
             initialOptions={[]}
             value={addrs}
-            onAliasCreated={onCreated}
             onChange={setAddrs}
           />
           <AliasMultiSelect
@@ -263,7 +258,6 @@ describe('AliasPicker', () => {
             label="Multi ports"
             initialOptions={[]}
             value={ports}
-            onAliasCreated={onCreated}
             onChange={setPorts}
           />
           <AliasSelect
@@ -274,9 +268,10 @@ describe('AliasPicker', () => {
             label="Single address"
             initialOptions={[]}
             value={single}
-            onAliasCreated={onCreated}
             onChange={setSingle}
           />
+          <output data-testid="state">{JSON.stringify({ addrs, ports, single })}</output>
+          <button type="button">Outside</button>
         </MantineProvider>
       );
     }
@@ -284,131 +279,121 @@ describe('AliasPicker', () => {
     const api = new ApiClient('csrf');
     render(<LiteralHarness api={api} />);
 
-    // 1. Literal IPv4 host in AliasMultiSelect
-    const addrInput = screen.getByLabelText('Multi addresses', { selector: 'input' });
-    await user.type(addrInput, '192.168.1.50');
-    const hostOpt = await screen.findByText('Use 192.168.1.50');
-    await user.click(hostOpt);
-    expect(await screen.findByText('192.168.1.50', { selector: 'span' })).toBeInTheDocument();
+    // Pre-populated literals display cleanly without "(missing)".
+    expect(screen.getByText('10.0.0.99', { selector: 'span' })).toBeInTheDocument();
+    expect(screen.queryByText(/\(missing\)/)).not.toBeInTheDocument();
+    const singleInput = screen.getByLabelText('Single address', { selector: 'input' }) as HTMLInputElement;
+    expect(singleInput.value).toBe('10.1.0.0/24');
 
-    // 2. Bare port in AliasMultiSelect offers TCP and UDP; choosing TCP creates tcp/443
+    // 1. Literal IPv4 host entered immediately via Enter (before 200ms search debounce finishes).
+    const addrInput = screen.getByLabelText('Multi addresses', { selector: 'input' });
+    await user.type(addrInput, '10.0.0.1{Enter}');
+    expect(screen.getByText('10.0.0.1', { selector: 'span' })).toBeInTheDocument();
+
+    // 2. Literal CIDR clicked from dropdown (no "Create alias" hint).
+    await user.type(addrInput, '192.168.1.0/24');
+    expect(screen.queryByText(/creates/i)).not.toBeInTheDocument();
+    await user.click(await screen.findByText('IPv4 network'));
+    expect(screen.getByText('192.168.1.0/24', { selector: 'span' })).toBeInTheDocument();
+
+    // 3. Literal range committed on blur; Escape cancels without committing.
+    await user.type(addrInput, '10.0.0.20');
+    await user.keyboard('{Escape}');
+    await user.click(screen.getByRole('button', { name: 'Outside' }));
+    expect(screen.queryByText('10.0.0.20', { selector: 'span' })).not.toBeInTheDocument();
+
+    await user.type(addrInput, '10.0.0.10-10.0.0.15');
+    await user.click(screen.getByRole('button', { name: 'Outside' }));
+    expect(screen.getByText('10.0.0.10-10.0.0.15', { selector: 'span' })).toBeInTheDocument();
+
+    // 4. Bare port in AliasMultiSelect offers TCP and UDP; choosing TCP stores tcp/443 directly.
     const portInput = screen.getByLabelText('Multi ports', { selector: 'input' });
     await user.type(portInput, '443');
-    expect(await screen.findByText('Use UDP 443')).toBeInTheDocument();
-    await user.click(screen.getByText('Use TCP 443'));
-    expect(await screen.findByText('tcp/443', { selector: 'span' })).toBeInTheDocument();
+    expect(await screen.findByText('UDP 443')).toBeInTheDocument();
+    await user.click(screen.getByText('TCP 443'));
+    expect(screen.getByText('tcp/443', { selector: 'span' })).toBeInTheDocument();
 
-    // 3. Literal CIDR in AliasSelect
-    const singleInput = screen.getByLabelText('Single address', { selector: 'input' });
-    await user.type(singleInput, '10.5.0.0/24');
-    await user.click(await screen.findByText('Use 10.5.0.0/24'));
-    await waitFor(() => expect((singleInput as HTMLInputElement).value).toBe('10.5.0.0/24'));
+    // Explicit protocol/port commits on Enter.
+    await user.type(portInput, 'udp/53{Enter}');
+    expect(screen.getByText('udp/53', { selector: 'span' })).toBeInTheDocument();
 
-    expect(createdBodies).toEqual([
-      { url: '/api/v1/config/aliases/addresses', body: { name: '192.168.1.50', kind: 'host', address: '192.168.1.50' } },
-      { url: '/api/v1/config/aliases/ports', body: { name: 'tcp/443', protocol: 'tcp', ports: ['443'] } },
-      { url: '/api/v1/config/aliases/addresses', body: { name: '10.5.0.0/24', kind: 'network', prefix: '10.5.0.0/24' } },
-    ]);
-    expect(onCreated).toHaveBeenCalledTimes(3);
-  });
-
-  it('reuses a matching alias on 422 collision, refuses mismatched 422 aliases, and handles AliasSelect failure without leaking synthetic labels', async () => {
-    const user = userEvent.setup();
-    let createAttempted = false;
-    let collisionKind: 'matching' | 'mismatched' | 'fail' = 'matching';
-
-    const fetchMock = fetchRoutes({
-      '/api/v1/config/aliases/search': () => {
-        if (!createAttempted) {
-          return jsonResponse(200, { state: 'saved', savedVersion: '5', items: [] });
-        }
-        if (collisionKind === 'mismatched') {
-          return jsonResponse(200, {
-            state: 'saved',
-            savedVersion: '5',
-            items: [{ id: 'adr_wrong', name: '10.0.0.11', kind: 'network', summary: '0.0.0.0/0', score: 1000, highlights: [{ text: '10.0.0.11', match: true }] }],
-          });
-        }
-        return jsonResponse(200, {
-          state: 'saved',
-          savedVersion: '5',
-          items: [{ id: 'adr_existing', name: '10.0.0.9', kind: 'host', summary: '10.0.0.9', score: 1000, highlights: [{ text: '10.0.0.9', match: true }] }],
-        });
-      },
-      'POST /api/v1/config/aliases/addresses': () => {
-        createAttempted = true;
-        return collisionKind === 'fail'
-          ? jsonResponse(500, { error: { code: 'INTERNAL', message: 'Storage unavailable.' } })
-          : jsonResponse(422, { error: { code: 'VALIDATION_FAILED', message: 'Duplicate name.' } });
-      },
-    });
-
-    const api = new ApiClient('csrf');
-    const { unmount } = render(<MultiHarness api={api} family="ipv4" />);
-
-    const input = screen.getByLabelText('Addresses', { selector: 'input' });
-    await user.type(input, '10.0.0.9');
-    await user.click(await screen.findByText('Use 10.0.0.9'));
-    expect(await screen.findByText('10.0.0.9', { selector: 'span' })).toBeInTheDocument();
-
-    // 422 where existing alias has same name but different kind/summary -> refuses silent bind and shows error.
-    collisionKind = 'mismatched';
-    createAttempted = false;
-    await user.type(input, '10.0.0.11');
-    await user.click(await screen.findByText('Use 10.0.0.11'));
-    expect(await screen.findByText(/already exists with different values/i)).toBeInTheDocument();
-    expect(screen.queryByText('10.0.0.11', { selector: 'span' })).not.toBeInTheDocument();
-    unmount();
-
-    // AliasSelect creation error restores prior selection label instead of leaving "Use ..." in the input,
-    // and never fires a search for the synthetic "Use ..." label.
-    collisionKind = 'fail';
-    createAttempted = false;
-    render(<SingleHarness api={api} initial="adr_lan" />);
-    const singleInput = screen.getByLabelText('Destination alias', { selector: 'input' });
+    // 5. Literal CIDR in AliasSelect via Enter, followed by editing and committing on blur.
     await user.clear(singleInput);
-    await user.type(singleInput, '10.0.0.10');
-    await user.click(await screen.findByText('Use 10.0.0.10'));
-    expect(await screen.findByText('Storage unavailable.')).toBeInTheDocument();
-    await waitFor(() => expect((singleInput as HTMLInputElement).value).toBe('lan-net'));
-    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('Use+'))).toBe(false);
+    await user.type(singleInput, '10.5.0.0/24{Enter}');
+    expect(singleInput.value).toBe('10.5.0.0/24');
+    await user.clear(singleInput);
+    await user.type(singleInput, '10.6.0.0/24');
+    await user.click(screen.getByRole('button', { name: 'Outside' }));
+    expect(singleInput.value).toBe('10.6.0.0/24');
+
+    expect(JSON.parse(screen.getByTestId('state').textContent ?? '{}')).toEqual({
+      addrs: ['10.0.0.99', '10.0.0.1', '192.168.1.0/24', '10.0.0.10-10.0.0.15'],
+      ports: ['tcp/443', 'udp/53'],
+      single: '10.6.0.0/24',
+    });
+    expect(postCalls).toEqual([]);
   });
 
-  it('reuses a matching port alias on 422 collision using protocol (without kind)', async () => {
+  it('prevents Enter on an invalid literal from submitting an enclosing form and does not re-add after Clear + blur', async () => {
     const user = userEvent.setup();
-    let createAttempted = false;
-
+    const onSubmit = vi.fn((e: React.FormEvent) => e.preventDefault());
     fetchRoutes({
-      '/api/v1/config/aliases/search': () => {
-        if (!createAttempted) {
-          return jsonResponse(200, { state: 'saved', savedVersion: '5', items: [] });
-        }
-        return jsonResponse(200, {
-          state: 'saved',
-          savedVersion: '5',
-          items: [{ id: 'svc_existing_443', name: 'tcp/443', protocol: 'tcp', summary: 'TCP 443', score: 1000, highlights: [{ text: 'tcp/443', match: true }] }],
-        });
-      },
-      'POST /api/v1/config/aliases/ports': () => {
-        createAttempted = true;
-        return jsonResponse(422, { error: { code: 'VALIDATION_FAILED', message: 'Duplicate name.' } });
-      },
+      '/api/v1/config/aliases/search': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [] }),
     });
 
-    function PortHarness({ api }: { api: ApiClient }) {
-      const [ports, setPorts] = useState<string[]>([]);
+    function FormHarness({ api }: { api: ApiClient }) {
+      const [addrs, setAddrs] = useState<string[]>(['10.0.0.1']);
       return (
         <MantineProvider>
-          <AliasMultiSelect api={api} aliasType="ports" debounceMs={10} label="Ports" initialOptions={[]} value={ports} onChange={setPorts} />
+          <form onSubmit={onSubmit}>
+            <AliasMultiSelect
+              api={api}
+              aliasType="addresses"
+              family="ipv4"
+              debounceMs={10}
+              label="Addresses"
+              clearable
+              initialOptions={[]}
+              value={addrs}
+              onChange={setAddrs}
+            />
+            <button type="submit">Save</button>
+            <button type="button">Outside</button>
+          </form>
+          <output data-testid="addrs">{JSON.stringify(addrs)}</output>
         </MantineProvider>
       );
     }
 
-    render(<PortHarness api={new ApiClient('csrf')} />);
-    const input = screen.getByLabelText('Ports', { selector: 'input' });
-    await user.type(input, '443');
-    await user.click(await screen.findByText('Use TCP 443'));
-    expect(await screen.findByText('tcp/443', { selector: 'span' })).toBeInTheDocument();
+    const { container } = render(<FormHarness api={new ApiClient('csrf')} />);
+    const input = screen.getByLabelText('Addresses', { selector: 'input' });
+
+    // Typing an invalid CIDR (non-zero host bits) and pressing Enter must not submit the form.
+    await user.type(input, '10.0.0.5/24{Enter}');
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    // Removing the existing pill while a valid literal is typed and then blurring must not re-commit that literal.
+    await user.clear(input);
+    await user.type(input, '10.0.0.9');
+    const removePill = container.querySelector<HTMLButtonElement>('.mantine-Pill-remove')!;
+    expect(removePill).not.toBeNull();
+    await user.click(removePill);
+    await user.click(screen.getByRole('button', { name: 'Outside' }));
+    expect(JSON.parse(screen.getByTestId('addrs').textContent ?? '[]')).toEqual([]);
+  });
+
+  it('still accepts literal addresses when the alias search endpoint fails', async () => {
+    const user = userEvent.setup();
+    fetchRoutes({
+      '/api/v1/config/aliases/search': () => jsonResponse(500, { error: { code: 'INTERNAL', message: 'Boom.' } }),
+    });
+
+    const api = new ApiClient('csrf');
+    render(<MultiHarness api={api} family="ipv4" />);
+
+    const input = screen.getByLabelText('Addresses', { selector: 'input' });
+    await user.type(input, '10.0.0.1{Enter}');
+    expect(screen.getByText('10.0.0.1', { selector: 'span' })).toBeInTheDocument();
   });
 
   it('hides dynamic url and hostnames aliases from remote search when excludeDynamic is set and reports resolved items', async () => {

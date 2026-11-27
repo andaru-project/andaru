@@ -286,4 +286,58 @@ describe('ManagementPanel', () => {
     expect(labels).not.toContain('cf-feed');
     expect(labels).not.toContain('vpn-dns');
   });
+
+  it('accepts literal addresses in Allowed SSH sources directly without creating an alias and displays them normally', async () => {
+    const user = userEvent.setup();
+    let savedBody: unknown;
+    let aliasCreateCalls = 0;
+
+    const snapWithLiteral = {
+      ...baseSnapshot,
+      value: {
+        ...baseSnapshot.value,
+        management: { segment: 'seg_lan', allowedSources: ['10.0.0.1', 'adr_admin'] },
+      },
+    };
+
+    fetchRoutes({
+      '/api/v1/config/aliases/search': () => jsonResponse(200, { state: 'saved', savedVersion: '10', items: [] }),
+      'POST /api/v1/config/aliases/addresses': () => {
+        aliasCreateCalls += 1;
+        return jsonResponse(500, {});
+      },
+      '/api/v1/config/management': () => jsonResponse(200, {
+        state: 'saved',
+        savedVersion: '10',
+        version: '3',
+        value: { segment: 'seg_lan', allowedSources: [] },
+      }),
+      'PUT /api/v1/config/management': (init) => {
+        savedBody = JSON.parse(String(init?.body ?? '{}'));
+        return jsonResponse(200, { state: 'saved', savedVersion: '11', version: '4', value: savedBody });
+      },
+      '/api/v1/config': () => jsonResponse(200, snapWithLiteral),
+    });
+
+    const onSaved = vi.fn();
+    render(<ManagementPanel api={new ApiClient('csrf')} snapshot={snapWithLiteral} canWrite onSaved={onSaved} onSessionLost={vi.fn()} />);
+
+    // Saved literal displays as a normal badge (not "(missing)" and not red error-text).
+    const litBadge = screen.getByText('10.0.0.1');
+    expect(litBadge).toBeInTheDocument();
+    expect(litBadge.closest('.error-text')).toBeNull();
+    expect(screen.queryByText('10.0.0.1 (missing)')).not.toBeInTheDocument();
+
+    // Typing a literal IP and saving sends it directly without creating any alias.
+    await user.click(screen.getByRole('button', { name: 'Edit management access' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit management access' });
+    const sourcesInput = within(dialog).getByLabelText(/^Allowed SSH sources/, { selector: 'input' });
+    await user.type(sourcesInput, '10.0.0.1{Enter}');
+    await user.type(sourcesInput, '10.0.0.0/24');
+    await user.click(within(dialog).getByRole('button', { name: 'Save management access' }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    expect(aliasCreateCalls).toBe(0);
+    expect(savedBody).toEqual({ segment: 'seg_lan', allowedSources: ['10.0.0.1', '10.0.0.0/24'] });
+  });
 });

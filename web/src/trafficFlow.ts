@@ -1,3 +1,4 @@
+import { parseAddressLiteralValue, parsePortLiteralValue } from './aliasLiteral';
 import { parseIpv6Groups } from './dhcpEdit';
 import { parsePortSpan } from './natEdit';
 import { firewallZone, type AddressAlias, type Lease6, type LinkStatus, type PortAlias, type PortForward, type PrefixView, type RuleSide, type SavedLink, type Segment, type Snapshot } from './types';
@@ -240,7 +241,9 @@ function aliasHasFamily(aliasId: string, family: 4 | 6, byId: Map<string, Partia
   if (seen.has(aliasId)) return false;
   seen.add(aliasId);
   const alias = byId.get(aliasId);
-  if (!alias) return false;
+  if (!alias) {
+    return parseAddressLiteralValue(aliasId)?.family === family;
+  }
   switch (alias.kind) {
     case 'host':
       return parseIp(alias.address ?? '')?.family === family;
@@ -259,7 +262,13 @@ function matchesAddressAlias(aliasId: string, ip: ParsedIp, byId: Map<string, Pa
   if (seen.has(aliasId)) return false;
   seen.add(aliasId);
   const alias = byId.get(aliasId);
-  if (!alias) return false;
+  if (!alias) {
+    const lit = parseAddressLiteralValue(aliasId);
+    if (!lit || lit.family !== ip.family) return false;
+    if (lit.kind === 'host') return lit.value === ip.value;
+    if (lit.kind === 'network') return (ip.value & lit.mask) === lit.network;
+    return ip.value >= lit.first && ip.value <= lit.last;
+  }
   switch (alias.kind) {
     case 'host': {
       const host = parseIp(alias.address ?? '');
@@ -306,7 +315,7 @@ function matchesPortAlias(
 ): boolean {
   if (seen.has(aliasId)) return false;
   seen.add(aliasId);
-  const alias = byId.get(aliasId);
+  const alias: Partial<PortAlias> | undefined = byId.get(aliasId) ?? parsePortLiteralValue(aliasId) ?? undefined;
   if (!alias) return false;
   if (alias.protocol === 'group') {
     return (alias.members ?? []).some((m) => matchesPortAlias(m, protocol, dstPort, icmpType, byId, seen));

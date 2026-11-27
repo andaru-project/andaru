@@ -4,6 +4,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { ActionIcon, Alert, Anchor, Badge, Button, Group, Modal, Paper, ScrollArea, Stack, Switch, Table, Text, TextInput, Title } from '@mantine/core';
 import { useCallback, useState } from 'react';
 import { Link } from 'react-router';
+import { formatAddressRef, formatPortRef, isAddressLiteral, isPortLiteral } from '../aliasLiteral';
 import { ApiError, reportError, type ApiClient } from '../api';
 import { formatAddressAlias, formatPortAlias } from '../format';
 import { firewallZone, type Rule, type RuleSide, type SavedObject, type Session, type Snapshot } from '../types';
@@ -65,7 +66,15 @@ function Side({ side, names: known }: { side: RuleSide; names: Names }) {
       {toFirewall && <Badge variant="filled" color="dark" tt="none">This firewall</Badge>}
       {side.zones.filter((id) => id !== firewallZone).map((id) => <ZoneBadge key={id} name={known.zones.get(id) ?? 'unknown zone'} color={known.zoneColors.get(id)} />)}
       {side.not && <Text size="sm" fw={600}>not</Text>}
-      {side.addresses.map((id) => <Badge key={id} className="alias" variant="default" tt="none" title={known.addressSummary.get(id)}>{known.addresses.get(id) ?? 'unknown alias'}</Badge>)}
+      {side.addresses.map((id, idx) => {
+        const aliasName = known.addresses.get(id);
+        const literal = !aliasName && isAddressLiteral(id);
+        return (
+          <Badge key={`${id}-${idx}`} className={literal ? undefined : 'alias'} ff={literal ? 'monospace' : undefined} variant="default" tt="none" title={known.addressSummary.get(id)}>
+            {aliasName ?? (literal ? id : 'unknown alias')}
+          </Badge>
+        );
+      })}
     </Group>
   );
 }
@@ -102,7 +111,19 @@ function Row({ item, position, names: known, canWrite, unlocked, busy, onToggle,
       <Table.Td data-label="From"><Side side={rule.from} names={known} /></Table.Td>
       <Table.Td data-label="To"><Side side={rule.to} names={known} /></Table.Td>
       <Table.Td data-label="Ports">
-        {rule.ports.length === 0 ? <Text size="sm" c="dimmed">any</Text> : <Group gap={6}>{rule.ports.map((id) => <Badge key={id} className="alias" variant="default" tt="none" title={known.portSummary.get(id)}>{known.ports.get(id) ?? 'unknown alias'}</Badge>)}</Group>}
+        {rule.ports.length === 0 ? <Text size="sm" c="dimmed">any</Text> : (
+          <Group gap={6}>
+            {rule.ports.map((id, idx) => {
+              const aliasName = known.ports.get(id);
+              const literal = !aliasName && isPortLiteral(id);
+              return (
+                <Badge key={`${id}-${idx}`} className={literal ? undefined : 'alias'} ff={literal ? 'monospace' : undefined} variant="default" tt="none" title={known.portSummary.get(id)}>
+                  {aliasName ?? (literal ? id : 'unknown alias')}
+                </Badge>
+              );
+            })}
+          </Group>
+        )}
       </Table.Td>
       <Table.Td data-label="Name"><Text size="sm" fw={600}>{rule.name}</Text>{rule.description && <Text size="sm" c="dimmed">{rule.description}</Text>}</Table.Td>
       {canWrite && (
@@ -182,8 +203,8 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
           const matches = (rule: Rule) => {
             const row = [rule.name, rule.description ?? '', rule.action, rule.log ? 'logs' : '', rule.from.not || rule.to.not ? 'not' : '',
               ...[...rule.from.zones, ...rule.to.zones].map((id) => (id === firewallZone ? 'this firewall' : known.zones.get(id) ?? 'unknown zone')),
-              ...[...rule.from.addresses, ...rule.to.addresses].map((id) => known.addresses.get(id) ?? 'unknown alias'),
-              ...rule.ports.map((id) => known.ports.get(id) ?? 'unknown alias')].join(' ').toLowerCase();
+              ...[...rule.from.addresses, ...rule.to.addresses].map((id) => formatAddressRef(id, known.addresses)),
+              ...rule.ports.map((id) => formatPortRef(id, known.ports))].join(' ').toLowerCase();
             return words.every((word) => row.includes(word));
           };
           const shown = items.map((item, index) => ({ item, position: index + 1 })).filter(({ item }) => matches(item.value));
@@ -256,7 +277,6 @@ export function RulesScreen({ api, session, onSaved, onSessionLost }: RulesScree
               )}
               {editing && (
                 <RuleEditor key={editing === 'new' ? 'new' : editing.value.id} api={api} rule={editing === 'new' ? undefined : editing.value} snapshot={snapshot} onClose={() => setEditing(undefined)} onSessionLost={onSessionLost} onAbandoned={setError}
-                  onAliasCreated={() => { onSaved(); void resource.reload(); }}
                   onSave={async (rule) => {
                     try {
                       await api.saveRule(rule, editing === 'new' ? undefined : editing);

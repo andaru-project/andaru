@@ -4,6 +4,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { ActionIcon, Alert, Anchor, Badge, Button, Group, Modal, Paper, ScrollArea, SegmentedControl, Stack, Switch, Table, Tabs, Text, TextInput, Title, VisuallyHidden } from '@mantine/core';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
+import { formatAddressRef, isAddressLiteral } from '../aliasLiteral';
 import { ApiError, reportError, saveFailure, type ApiClient } from '../api';
 import type { OneToOneNat, OutboundNat, OutboundNatMode, PortForward, SavedObject, Session, Snapshot } from '../types';
 import { zoneColorMap } from '../zones';
@@ -124,11 +125,11 @@ function PortForwardRow({
           <Group gap={4} wrap="wrap">
             {pf.from.length > 0 && (
               <Text size="xs" c="dimmed">
-                from {pf.fromNegated ? 'not ' : ''}{pf.from.map((id) => addresses.get(id) ?? 'unknown alias').join(', ')}
+                from {pf.fromNegated ? 'not ' : ''}{pf.from.map((id) => formatAddressRef(id, addresses)).join(', ')}
               </Text>
             )}
             <Text size="xs" c="dimmed">
-              to {pf.toNegated ? 'not ' : ''}{pf.to.self ? 'this firewall' : (addresses.get(pf.to.address ?? '') ?? 'unknown alias')}
+              to {pf.toNegated ? 'not ' : ''}{pf.to.self ? 'this firewall' : formatAddressRef(pf.to.address ?? '', addresses)}
             </Text>
           </Group>
         </Stack>
@@ -222,7 +223,15 @@ function OneToOneRow({
           ) : (
             <>
               {entry.destinationNegated && <Text size="sm" fw={600}>not</Text>}
-              {entry.destination.map((id) => <Badge key={id} className="alias" variant="default" tt="none">{addresses.get(id) ?? 'unknown alias'}</Badge>)}
+              {entry.destination.map((id, idx) => {
+                const aliasName = addresses.get(id);
+                const literal = !aliasName && isAddressLiteral(id);
+                return (
+                  <Badge key={`${id}-${idx}`} className={literal ? undefined : 'alias'} ff={literal ? 'monospace' : undefined} variant="default" tt="none">
+                    {aliasName ?? (literal ? id : 'unknown alias')}
+                  </Badge>
+                );
+              })}
             </>
           )}
           {entry.reflection && <Badge size="xs" variant="outline" color="gray">Reflection</Badge>}
@@ -397,8 +406,8 @@ export function NatScreen({ api, session, onSaved, onSessionLost }: NatScreenPro
                 pf.target?.address ?? (pf.target?.self ? 'this firewall' : ''),
                 pf.targetPort !== undefined ? String(pf.targetPort) : '',
                 ...pf.ingressZones.map((id) => zones.get(id) ?? ''),
-                ...pf.from.map((id) => addresses.get(id) ?? ''),
-                pf.to.address ? (addresses.get(pf.to.address) ?? '') : 'this firewall',
+                ...pf.from.map((id) => formatAddressRef(id, addresses, '')),
+                pf.to.address ? formatAddressRef(pf.to.address, addresses, '') : 'this firewall',
               ].join(' ').toLowerCase();
               return words.every((w) => text.includes(w));
             });
@@ -416,7 +425,7 @@ export function NatScreen({ api, session, onSaved, onSessionLost }: NatScreenPro
               const text = [
                 entry.name, entry.description ?? '', entry.external ?? '', entry.internal,
                 zones.get(entry.zone) ?? '',
-                ...entry.destination.map((id) => addresses.get(id) ?? ''),
+                ...entry.destination.map((id) => formatAddressRef(id, addresses, '')),
               ].join(' ').toLowerCase();
               return words.every((w) => text.includes(w));
             });
@@ -698,7 +707,6 @@ export function NatScreen({ api, session, onSaved, onSessionLost }: NatScreenPro
                   onClose={() => setEditingForward(undefined)}
                   onSessionLost={onSessionLost}
                   onAbandoned={setError}
-                  onAliasCreated={() => { onSaved(); void resource.reload(); }}
                   onSave={async (value) => {
                     try {
                       await api.savePortForward(value, editingForward === 'new' ? undefined : editingForward);
@@ -721,7 +729,6 @@ export function NatScreen({ api, session, onSaved, onSessionLost }: NatScreenPro
                   onClose={() => setEditingOneToOne(undefined)}
                   onSessionLost={onSessionLost}
                   onAbandoned={setError}
-                  onAliasCreated={() => { onSaved(); void resource.reload(); }}
                   onSave={async (value) => {
                     try {
                       await api.saveOneToOneNat(value, editingOneToOne === 'new' ? undefined : editingOneToOne);

@@ -286,3 +286,111 @@ func TestRuleToTheFirewall(t *testing.T) {
 		t.Fatalf("a side's addresses are not sorted: %v", got.Rules[0].From.Addresses)
 	}
 }
+
+// Inline literal addresses and ports are accepted without creating alias objects, canonicalized on save,
+// and checked with the same family and format rules as aliases.
+func TestInlineAddressAndPortLiterals(t *testing.T) {
+	d := policyFixture(t)
+	seg := item(segmentsOf(d), 0)["id"]
+	d["management"] = map[string]any{
+		"segment":        seg,
+		"allowedSources": []any{"10.0.0.1", "10.0.0.0/24", "10.0.1.1-10.0.1.10", "2001:0db8::0001", adrHost},
+	}
+	r0 := item(d["rules"].([]any), 0)
+	r0["from"] = side(nil, "192.0.2.10", "192.0.2.0/24", "192.0.2.50-192.0.2.60", adrHost)
+	r0["to"] = map[string]any{"zones": []any{}, "addresses": []any{"198.51.100.1"}, "not": true}
+	r0["ports"] = []any{"tcp/443-443,443", "udp/53,5353", "tcp/8000-8080", "icmp", "icmp/echo-request,echo-request", svcDNS}
+	// Groups may hold literals alongside aliases.
+	aliases := d["aliases"].(map[string]any)
+	addrList := aliases["addresses"].([]any)
+	for _, raw := range addrList {
+		m := raw.(map[string]any)
+		if m["kind"] == "group" {
+			m["members"] = []any{adrHost, "10.9.9.9", "2001:0db8:0002::/64"}
+		}
+	}
+	portList := aliases["ports"].([]any)
+	for _, raw := range portList {
+		m := raw.(map[string]any)
+		if m["protocol"] == "group" {
+			m["members"] = []any{svcDNS, "udp/53", "icmp/echo-reply"}
+		}
+	}
+	got, err := decodeMap(t, d)
+	if err != nil {
+		t.Fatalf("inline literals refused: %v", err)
+	}
+	// IPv6 host literal is canonicalized.
+	if !slices.Contains(got.Management.AllowedSources, "2001:db8::1") {
+		t.Fatalf("allowedSources not canonicalized: %v", got.Management.AllowedSources)
+	}
+	if !slices.Contains(got.Management.AllowedSources, "10.0.0.1") {
+		t.Fatalf("literal host missing from allowedSources: %v", got.Management.AllowedSources)
+	}
+	if got.Rules[0].Ports[0] != "tcp/443" || got.Rules[0].Ports[4] != "icmp/echo-request" {
+		t.Fatalf("port literals not canonicalized: %v", got.Rules[0].Ports)
+	}
+
+	// Invalid inline literals and family mismatches are refused at the right paths.
+	cases := []struct {
+		name string
+		edit func(map[string]any)
+		path string
+	}{
+		{"host bits in management CIDR", func(d map[string]any) {
+			d["management"].(map[string]any)["allowedSources"] = []any{"10.0.0.1/24"}
+		}, "/management/allowedSources/0"},
+		{"reversed range in management", func(d map[string]any) {
+			d["management"].(map[string]any)["allowedSources"] = []any{"10.0.0.10-10.0.0.1"}
+		}, "/management/allowedSources/0"},
+		{"mixed family range in rule", func(d map[string]any) {
+			item(d["rules"].([]any), 0)["from"] = side(nil, "10.0.0.1-2001:db8::1")
+		}, "/rules/0/from/addresses/0"},
+		{"junk string in rule addresses", func(d map[string]any) {
+			item(d["rules"].([]any), 0)["from"] = side(nil, "not-an-address")
+		}, "/rules/0/from/addresses/0"},
+		{"IPv4 literal to IPv6 literal never matches", func(d map[string]any) {
+			r := item(d["rules"].([]any), 0)
+			r["from"] = side(nil, "10.0.0.1")
+			r["to"] = side(nil, "2001:db8::1")
+		}, "/rules/0/to/addresses"},
+		{"IPv4 literal with icmpv6 literal never matches", func(d map[string]any) {
+			r := item(d["rules"].([]any), 0)
+			r["from"] = side(nil, "10.0.0.1")
+			r["to"] = side(nil)
+			r["ports"] = []any{"icmpv6/echo-request"}
+		}, "/rules/0/ports"},
+		{"bare port without protocol refused", func(d map[string]any) {
+			item(d["rules"].([]any), 0)["ports"] = []any{"443"}
+		}, "/rules/0/ports/0"},
+		{"bad port range refused", func(d map[string]any) {
+			item(d["rules"].([]any), 0)["ports"] = []any{"tcp/8080-8000"}
+		}, "/rules/0/ports/0"},
+		{"unknown icmp type refused", func(d map[string]any) {
+			item(d["rules"].([]any), 0)["ports"] = []any{"icmp/not-a-type"}
+		}, "/rules/0/ports/0"},
+		{"bad literal in address group member", func(d map[string]any) {
+			for _, raw := range d["aliases"].(map[string]any)["addresses"].([]any) {
+				m := raw.(map[string]any)
+				if m["kind"] == "group" {
+					m["members"] = []any{"10.0.0.1/24"}
+				}
+			}
+		}, "/aliases/addresses/0/members/0"},
+		{"bad literal in port group member", func(d map[string]any) {
+			for _, raw := range d["aliases"].(map[string]any)["ports"].([]any) {
+				m := raw.(map[string]any)
+				if m["protocol"] == "group" {
+					m["members"] = []any{"tcp/0"}
+				}
+			}
+		}, "/aliases/ports/1/members/0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := policyFixture(t)
+			tc.edit(m)
+			refusedAt(t, m, tc.path)
+		})
+	}
+}

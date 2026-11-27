@@ -1,3 +1,4 @@
+import { formatAddressRef, formatPortRef } from './aliasLiteral';
 import type { AddressAlias, PortAlias } from './types';
 
 // scaled writes a quantity in the largest unit that keeps it readable: one decimal below ten, none from ten up.
@@ -36,7 +37,7 @@ export function formatAddressAlias(alias: Partial<AddressAlias>, names: Map<stri
   if (alias.kind === 'host') return alias.address;
   if (alias.kind === 'network') return alias.prefix;
   if (alias.kind === 'range' && alias.first && alias.last) return `${alias.first} to ${alias.last}`;
-  if (alias.kind === 'group') return alias.members?.length ? alias.members.map((id) => names.get(id) ?? 'unknown alias').join(', ') : '';
+  if (alias.kind === 'group') return alias.members?.length ? alias.members.map((id) => formatAddressRef(id, names)).join(', ') : '';
   if (alias.kind === 'url') return alias.url;
   if (alias.kind === 'hostnames') return alias.names?.join(', ') ?? '';
   return undefined;
@@ -44,7 +45,7 @@ export function formatAddressAlias(alias: Partial<AddressAlias>, names: Map<stri
 
 export function formatPortAlias(alias: Partial<PortAlias>, names: Map<string, string>): string | undefined {
   if (!alias.protocol) return undefined;
-  if (alias.protocol === 'group') return alias.members?.length ? alias.members.map((id) => names.get(id) ?? 'unknown alias').join(', ') : '';
+  if (alias.protocol === 'group') return alias.members?.length ? alias.members.map((id) => formatPortRef(id, names)).join(', ') : '';
   const items = alias.ports ?? alias.types ?? [];
   return `${protocolLabels[alias.protocol]} ${items.length > 0 ? items.join(', ') : 'any type'}`;
 }

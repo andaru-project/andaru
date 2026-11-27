@@ -1325,4 +1325,103 @@ describe('simulateTrafficFlow', () => {
     expect(sameSegment.chain).toBe('forward');
     expect(sameSegment.steps.find((s) => s.stage === 'routing')?.decidedBy).toEqual({ label: 'Virtual IP Inside v6 host', to: '/network/virtual-ips' });
   });
+
+  it('matches inline literal addresses and ports in management SSH sources and firewall rules', () => {
+    const withLiterals: Snapshot['value'] = {
+      ...baseConfig,
+      management: { segment: 'seg_lan', allowedSources: ['192.168.1.99'] },
+      rules: [
+        {
+          id: 'rul_lit',
+          name: 'Allow literal HTTPS',
+          enabled: true,
+          action: 'accept',
+          from: { zones: ['zon_lan'], addresses: ['192.168.1.50-192.168.1.60'] },
+          to: { zones: ['zon_wan'], addresses: ['198.51.100.0/24'] },
+          ports: ['tcp/443', 'icmp/echo-request'],
+          log: false,
+        },
+      ],
+    };
+
+    const sshAllowed = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '192.168.1.99', dstIp: '192.168.1.1', dstPort: 22 },
+      withLiterals,
+    );
+    expect(sshAllowed.verdict).toBe('accept');
+    expect(sshAllowed.decidedBy?.label).toBe('Management SSH (LAN)');
+
+    const sshDenied = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '192.168.1.100', dstIp: '192.168.1.1', dstPort: 22 },
+      withLiterals,
+    );
+    expect(sshDenied.verdict).toBe('drop');
+
+    const litRuleHit = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '192.168.1.55', dstIp: '198.51.100.20', dstPort: 443 },
+      withLiterals,
+    );
+    expect(litRuleHit.verdict).toBe('accept');
+    expect(litRuleHit.decidedBy?.label).toBe('Rule #1 (Allow literal HTTPS)');
+
+    const litIcmpHit = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'icmp', srcIp: '192.168.1.55', dstIp: '198.51.100.20', icmpType: 'echo-request' },
+      withLiterals,
+    );
+    expect(litIcmpHit.verdict).toBe('accept');
+    expect(litIcmpHit.decidedBy?.label).toBe('Rule #1 (Allow literal HTTPS)');
+
+    // Negated literal, literal group member, and NAT port forward with literal source/destination.
+    const withGroupAndNat: Snapshot['value'] = {
+      ...baseConfig,
+      aliases: {
+        addresses: [
+          ...(baseConfig.aliases?.addresses ?? []),
+          { id: 'adr_lit_grp', name: 'lit-grp', kind: 'group', members: ['192.168.1.77'] },
+        ],
+        ports: baseConfig.aliases?.ports ?? [],
+      },
+      rules: [
+        {
+          id: 'rul_neg',
+          name: 'Allow except blocked',
+          enabled: true,
+          action: 'accept',
+          from: { zones: ['zon_lan'], addresses: ['adr_lit_grp'] },
+          to: { zones: ['zon_wan'], addresses: ['198.51.100.1'], not: true },
+          ports: ['tcp/443-443'],
+          log: false,
+        },
+      ],
+      nat: {
+        ...baseConfig.nat,
+        portForwards: [
+          {
+            id: 'pfw_lit',
+            name: 'Literal forward',
+            enabled: true,
+            ingressZones: ['zon_wan'],
+            protocol: 'tcp',
+            from: ['198.51.100.88'],
+            to: { address: '203.0.113.10' },
+            ports: '443',
+            target: { address: '192.168.1.50' },
+            filterRule: 'auto',
+          },
+        ],
+      },
+    };
+    expect(simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '192.168.1.77', dstIp: '198.51.100.2', dstPort: 443 },
+      withGroupAndNat,
+    ).verdict).toBe('accept');
+    expect(simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '192.168.1.77', dstIp: '198.51.100.1', dstPort: 443 },
+      withGroupAndNat,
+    ).verdict).toBe('drop');
+    expect(simulateTrafficFlow(
+      { ingressSegmentId: 'seg_wan', protocol: 'tcp', srcIp: '198.51.100.88', dstIp: '203.0.113.10', dstPort: 443 },
+      withGroupAndNat,
+    ).verdict).toBe('accept');
+  });
 });
