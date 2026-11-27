@@ -997,5 +997,33 @@ describe('simulateTrafficFlow', () => {
       dhcpProxy,
     );
     expect(ignoredOnDhcp.decidedBy).not.toEqual({ label: 'Virtual IP WAN extra /29', to: '/network/virtual-ips' });
+
+    // Internal whitespace in CIDR input is rejected by parsePrefix.
+    expect(parsePrefix('203.0.113.56 /29')).toBeNull();
+
+    // If DNAT translates a destination into a proxyArp prefix, the drop summary describes translated traffic.
+    const dnatToProxy: Snapshot['value'] = {
+      ...withProxyArp,
+      nat: {
+        ...withProxyArp.nat,
+        oneToOne: [
+          {
+            id: 'oto_bad',
+            name: 'Bad 1:1 to proxy',
+            enabled: true,
+            zone: 'zon_wan',
+            external: '203.0.113.50',
+            internal: '203.0.113.58',
+            destination: [],
+          },
+        ],
+      },
+    };
+    const translatedToProxy = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_wan', protocol: 'tcp', srcIp: '198.51.100.10', dstIp: '203.0.113.50', dstPort: 443 },
+      dnatToProxy,
+    );
+    expect(translatedToProxy.verdict).toBe('no_route');
+    expect(translatedToProxy.steps.find((s) => s.stage === 'verdict')?.summary).toMatch(/Traffic translated to a proxy ARP address/);
   });
 });

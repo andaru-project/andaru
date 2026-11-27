@@ -144,7 +144,7 @@ describe('VirtualIpsScreen helpers', () => {
       expect(checkVirtualIp('Proxy v6', v6, [], undefined, { kind: 'proxyArp', segment: 'seg_wan', segments }).errors.get('address'))
         .toBe('Proxy NDP is not offered yet (#43).');
     }
-    for (const badV4 of ['::ffff:203.0.113.50', '::ffff:203.0.113.50/128', '203.0.113.56 /29', '203.0.113.56/029', '127.0.0.1', '169.254.1.1', '224.0.0.1']) {
+    for (const badV4 of ['::ffff:203.0.113.50', '::ffff:203.0.113.50/128', '::ffff:cb00:7132/128', '203.0.113.56 /29', '203.0.113.56/029', '127.0.0.1', '169.254.1.1', '224.0.0.1']) {
       expect(checkVirtualIp('Bad v4', badV4, [], undefined, { kind: 'proxyArp', segment: 'seg_wan', segments }).errors.get('address'))
         .toMatch(/unicast IPv4/);
     }
@@ -643,9 +643,11 @@ describe('VirtualIpsScreen', () => {
     await user.selectOptions(within(drawer).getByLabelText(/^Kind/), 'proxyArp');
     expect(within(drawer).getByText('Address in use by DNS service')).toBeInTheDocument();
 
-    // Switch back to held address: server /segment 422 must appear in the top alert instead of being swallowed.
+    // Switch back to held address: server /segment 422 must appear in the top alert and receive focus.
     await user.selectOptions(within(drawer).getByLabelText(/^Kind/), 'address');
     await user.click(within(drawer).getByRole('button', { name: 'Save virtual IP' }));
-    expect(await within(drawer).findByRole('alert')).toHaveTextContent('Only a proxy ARP entry names a segment.');
+    const alert = await within(drawer).findByRole('alert');
+    expect(alert).toHaveTextContent('Only a proxy ARP entry names a segment.');
+    expect(alert).toHaveFocus();
   });
 });

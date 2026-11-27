@@ -277,6 +277,7 @@ export function checkVirtualIp(
         }
         if (!errors.has('address') && segments) {
           const hitsGateway = segments.some((seg) => {
+            if (seg.addressing.ipv4.mode !== 'static') return false;
             const gw = seg.addressing.ipv4.gateway ? parseIpv4Octets(seg.addressing.ipv4.gateway) : null;
             return gw !== null && prefixContainsIpv4(parsed, ipv4Number(gw));
           });
