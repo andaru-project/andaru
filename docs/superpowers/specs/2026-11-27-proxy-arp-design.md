@@ -45,23 +45,35 @@ Kernel 6.12, systemd 257 (Debian 13), 2026-11-27, in network namespaces: an ISP 
 - IPv4 only: "Proxy NDP is not offered yet (#43)." at `/address`.
 - Inside a static IPv4 subnet of its segment: "Expected an address on one of the segment's static IPv4 subnets." A segment addressed by DHCP or PPPoE has no known subnet and is refused at `/segment`.
 - It contains none of any segment's static addresses or gateways, no `address` virtual address, and overlaps no other `proxyArp` entry. A gateway inside it would be routed to `andaru-vip`, cutting the uplink off: "This range holds a segment's gateway."
+- It holds no other host the declaration names, whose traffic the route to `andaru-vip` would take over, nor its subnet's network or broadcast address. One message for each, at `/address`:
+  - an address in a `dhcp` range: "This range overlaps a DHCP range."
+  - a `dhcp` static lease: "This range holds a DHCP static lease."
+  - a `dhcp` `gateway` option: "This range holds a DHCP entry's gateway."
+  - a segment's `addressing.dns.servers`: "This range holds a segment's DNS server."
+  - a `dns` upstream: "This range holds a DNS upstream."
+  - a host address in the aliases `management.allowedSources` uses, through groups: "This range holds a management source address."
+  - the network or broadcast address of a static IPv4 subnet shorter than /31: "This range holds its subnet's network address." or "This range holds its subnet's broadcast address."
 - `dns.virtualAddresses` may not name it: the firewall holds no such address.
 - `address` entries keep their rules; the one against a segment's subnet already keeps them out of every `proxyArp` entry.
 - The 64-entry limit covers both kinds.
+- A `/32` written with its length is stored bare, so each entry has one form.
+
+At apply, `proxyArp` entries without the packet filter are refused, as `dns.virtualAddresses` is: the kernel proxies ARP only for a route it forwards to, and forwarding is rendered only with the filter. `APPLY_UNSUPPORTED` at `/virtualAddresses/<i>/kind`: "Proxy ARP entries need the packet filter, which needs a management segment. Set management.segment."
 
 A port forward target or a 1:1 `internal` address inside a `proxyArp` entry is refused: no host holds it, and its traffic would follow the route to `andaru-vip`. "This address is answered by proxy ARP and held by no host."
 
 ## Realization
 
 - **`andaru-vip`** is rendered when there is any virtual address of either kind. Its `.network` gains one `[Route]` with `Destination=<address or prefix>` per `proxyArp` entry: the route that leaves by another interface.
-- **The segment's link** gets `IPv4ProxyARP=yes` in its `.network` when one or more `proxyArp` entries name it. Without entries, the key is absent and the kernel default (off) holds.
+- **The segment's link** gets `IPv4ProxyARP=yes` in its `.network` when one or more `proxyArp` entries name it. Without entries the key is absent; networkd does not reset `proxy_arp` when it is removed, so it stays at 1 until a reboot. That is harmless: `medium_id` scopes it to routes on `andaru-vip`, and none are left.
 - **`medium_id`** comes from a static file the image ships, `/usr/lib/sysctl.d/50-andaru-proxy-arp.conf`:
   ```
   net.ipv4.conf.default.medium_id = 1
   net.ipv4.conf.*.medium_id = 1
   net.ipv4.conf.andaru-vip.medium_id = 2
   ```
-  `medium_id` changes nothing but proxy ARP, which is off everywhere Andaru does not turn it on, so the file is not rendered per generation.
+  `medium_id` changes nothing but proxy ARP, which is off everywhere Andaru does not turn it on, so the file is not rendered per generation. The glob also matches `default`, so the first line only states the intent.
+- **`medium_id` does not scope answers by segment.** A link with proxy ARP on answers for every `proxyArp` entry, whichever segment it names, when a neighbour on it treats that entry's subnet as on-link. The traffic then dead-ends on the dummy, unless a 1:1 entry translates it.
 - **Traffic to a proxied address** that no 1:1 entry or forward translates follows the route to `andaru-vip`, a dummy, and goes nowhere.
 - **`PROXY_ARP_REQUIRED`** is not raised for an external address a `proxyArp` entry on that segment covers.
 
@@ -75,7 +87,7 @@ A port forward target or a 1:1 `internal` address inside a `proxyArp` entry is r
 
 - Validation: every refusal above, at its path; existing declarations validate and render byte for byte as before.
 - Render goldens: `andaru-vip.network` with routes; a WAN `.network` with `IPv4ProxyARP=yes`; the warning gone for a covered 1:1 external address and kept for an uncovered one.
-- The namespace probe above as a root integration test: the WAN neighbour reaches the inside host through a proxied address and a proxied subnet, and gets no answer for a LAN address.
+- The namespace probe above as a root integration test: the WAN neighbour reaches the inside host through a proxied address and a proxied subnet, and gets no answer for a LAN address or for a route on an interface created later. It applies the image's file with `systemd-sysctl`, and to `andaru-vip` with `--prefix` as udev does; CI runs it.
 
 ### Lab (Proxmox)
 
