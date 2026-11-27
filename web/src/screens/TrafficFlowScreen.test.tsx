@@ -143,6 +143,26 @@ describe('TrafficFlowScreen', () => {
     expect(screen.getByRole('link', { name: 'Interfaces' })).toHaveAttribute('href', '/network/interfaces');
     first.unmount();
 
+    // When applies.unapplied is false despite savedVersion > liveVersion, do not fetch live version or show a divergent switcher.
+    const fetchMock = fetchRoutes({
+      '/api/v1/config': savedSnapshot,
+      '/api/v1/applies': {
+        pointers: { ...pointers, live: 'app_live', confirmed: 'app_live' },
+        unapplied: false,
+        items: [apply({ id: 'app_live', savedVersion: '4', state: 'confirmed' })],
+      },
+      '/api/v1/status/links': { items: [] },
+    });
+    const synced = render(
+      <MemoryRouter>
+        <TrafficFlowScreen api={new ApiClient('csrf')} session={session(['configuration.read', 'status.read'])} onSessionLost={vi.fn()} />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText('Saved & live (v5)')).toBeInTheDocument();
+    expect(screen.queryByRole('radiogroup', { name: 'Configuration to evaluate' })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url) === '/api/v1/versions/4')).toBe(false);
+    synced.unmount();
+
     const onSessionLost = vi.fn();
     fetchRoutes({
       '/api/v1/config': () => jsonResponse(401, { error: { code: 'UNAUTHENTICATED', message: 'Expired.' } }),

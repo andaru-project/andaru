@@ -169,6 +169,17 @@ it('shows the pending notice everywhere but on Review and apply', async () => {
   expect(await screen.findByText('Saved changes are not applied yet')).toBeInTheDocument();
 });
 
+it('hides the pending notice and nav badge when a newer saved version has unapplied: false', async () => {
+  fetchRoutes({
+    '/api/v1/applies': { pointers: { ...pointers, confirmed: '1', live: '1' }, unapplied: false, items: [apply({})] },
+    '/api/v1/versions?': { state: 'saved', items: [{ id: '5', createdAt: '2026-11-21T11:00:00Z', actor: 'admin', changedObjectCount: 1 }] },
+  });
+  mount('/system/session');
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'Current session' })).toBeInTheDocument());
+  expect(screen.queryByText('Saved changes are not applied yet')).not.toBeInTheDocument();
+  expect(screen.queryByText('Pending')).not.toBeInTheDocument();
+});
+
 it('says so when the change state cannot be read: no news must not look like nothing pending', async () => {
   fetchRoutes({ '/api/v1/applies': () => jsonResponse(503, { error: { code: 'STORE_UNAVAILABLE', message: 'The applies are unavailable.', details: [] } }), '/api/v1/versions?': { state: 'saved', items: [] } });
   mount('/system/session');

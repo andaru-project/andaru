@@ -307,3 +307,14 @@ it('drops the findings of a refused apply on confirm or roll back', async () => 
   expect(await screen.findByText('Apply 2: Confirmed.')).toBeInTheDocument();
   expect(screen.queryByText('Applying would unconfigure enp1s0.')).not.toBeInTheDocument();
 });
+
+it('treats immediate-effect saves (unapplied: false) as already live and skips preview and Apply', async () => {
+  const synced = { pointers: { ...pointers, confirmed: '1', live: '1' }, unapplied: false, items: [apply({})] };
+  const fetchMock = routes({ '/api/v1/applies': synced });
+  show({ applies: synced, head: '5' });
+
+  expect(screen.getByRole('status', { name: 'Confirmed' })).toHaveTextContent('Apply 1 of saved version 3 is confirmed.');
+  expect(await screen.findByText('Nothing to apply: every saved change is live.')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /Apply saved version/ })).not.toBeInTheDocument();
+  expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/v1/preview/network'))).toBe(false);
+});

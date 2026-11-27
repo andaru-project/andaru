@@ -49,6 +49,7 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
     // The newest apply the review saw; a newer one in the shell's change state means live may have moved.
     const lastApply = applies.items[0]?.id ?? '0';
     const reviewed = first.items[0]?.id ?? '0';
+    if (!applies.unapplied) return { lastApply, reviewed, changes: null };
     const saved: VersionInfo[] = [];
     let page = first;
     collect: for (;;) {
@@ -159,7 +160,7 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
       )}
       {latest?.state === 'activating' && <Alert color="blue" role="status" title="Activating">Applying saved version {latest.savedVersion}…{latest.reason && ` ${latest.reason}`}</Alert>}
       {(latest?.state === 'failed' || latest?.state === 'rolled_back') && <Alert color="red" role="status" title={latest.state === 'failed' ? 'The last apply failed' : 'The last apply was rolled back'}>Apply {latest.id} of saved version {latest.savedVersion}.{latest.reason && ` ${latest.reason}`}</Alert>}
-      {latest?.state === 'confirmed' && latest.id === live?.id && !newer(state.head, live.savedVersion) && <Alert color="green" role="status" title="Confirmed">Apply {latest.id} of saved version {latest.savedVersion} is confirmed.</Alert>}
+      {latest?.state === 'confirmed' && latest.id === live?.id && !state.applies.unapplied && <Alert color="green" role="status" title="Confirmed">Apply {latest.id} of saved version {latest.savedVersion} is confirmed.</Alert>}
 
       <Paper withBorder p="md">
         <Title order={3} size="h4">What is live</Title>

@@ -25,6 +25,12 @@ it('says saved changes are not applied when the engine reports unapplied changes
   expect(screen.getByRole('link', { name: 'Review and apply' })).toHaveAttribute('href', '/changes');
 });
 
+it('trusts applies.unapplied even when head is not newer than the newest apply (e.g. boot fallback)', () => {
+  // Apply 2 of version 5 is confirmed, but a boot fell back to apply 1 of version 3.
+  render(notice({ applies: { pointers: { ...pointers, confirmed: '2', live: '1' }, unapplied: true, items: [apply({ id: '2', savedVersion: '5' }), apply({})] }, head: '5' }));
+  expect(screen.getByRole('status')).toHaveTextContent('Saved changes are not applied yet');
+});
+
 it('says nothing when a newer saved version takes effect without an apply', () => {
   // Saving a notification channel advances the saved head without leaving anything unapplied.
   render(notice({ applies: { pointers: { ...pointers, live: '1' }, unapplied: false, items: [apply({})] }, head: '4' }));
@@ -123,7 +129,7 @@ it('moves on from a failed apply to unapplied changes once something newer needi
   expect(screen.getByRole('status')).toHaveTextContent('Saved changes are not applied yet');
 });
 
-it('clears a failed apply notice without showing unapplied changes when a newer save needs no apply', () => {
+it('clears a failed apply notice without showing unapplied changes when a newer save leaves nothing unapplied', () => {
   render(notice({ applies: { pointers: { ...pointers, live: '1' }, unapplied: false, items: [apply({ id: '2', savedVersion: '4', state: 'failed' }), apply({})] }, head: '5' }));
   expect(screen.queryByRole('status')).not.toBeInTheDocument();
 });
