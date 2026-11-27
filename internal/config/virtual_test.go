@@ -373,6 +373,25 @@ func TestProxyARPValidation(t *testing.T) {
 		"holds a DNS upstream": {func(d map[string]any) {
 			d["dns"] = map[string]any{"mode": "forward", "segments": []any{}, "upstreams": []any{map[string]any{"address": "192.0.2.50:5353", "protocol": "do53"}}}
 		}, p + "/address", "This range holds a DNS upstream."},
+		"holds a DHCP DNS server": {func(d map[string]any) {
+			d["dhcp"] = []any{lanDHCP(d, map[string]any{"dnsServers": []any{"192.0.2.57"}})}
+		}, q + "/address", "This range holds a DHCP entry's DNS server."},
+		"holds a DHCP NTP server": {func(d map[string]any) {
+			d["dhcp"] = []any{lanDHCP(d, map[string]any{"ntpServers": []any{"192.0.2.58"}})}
+		}, q + "/address", "This range holds a DHCP entry's NTP server."},
+		"holds a DHCP next server": {func(d map[string]any) { d["dhcp"] = []any{lanDHCP(d, map[string]any{"nextServer": "192.0.2.61"})} }, q + "/address", "This range holds a DHCP entry's next server."},
+		"holds a management source network": {func(d map[string]any) {
+			const net = "adr_00000005-0000-4000-8000-000000000005"
+			objs := d["aliases"].(map[string]any)
+			objs["addresses"] = append(objs["addresses"].([]any), map[string]any{"id": net, "name": "admin-net", "kind": "network", "prefix": "192.0.2.60/30"})
+			d["management"] = map[string]any{"segment": item(segmentsOf(d), 1)["id"], "allowedSources": []any{net}}
+		}, q + "/address", "This range holds a management source address."},
+		"holds a management source range": {func(d map[string]any) {
+			const r = "adr_00000006-0000-4000-8000-000000000006"
+			objs := d["aliases"].(map[string]any)
+			objs["addresses"] = append(objs["addresses"].([]any), map[string]any{"id": r, "name": "admin-range", "kind": "range", "first": "192.0.2.40", "last": "192.0.2.57"})
+			d["management"] = map[string]any{"segment": item(segmentsOf(d), 1)["id"], "allowedSources": []any{r}}
+		}, q + "/address", "This range holds a management source address."},
 		"holds a management source in a group": {func(d map[string]any) {
 			const host, group = "adr_00000003-0000-4000-8000-000000000003", "adr_00000004-0000-4000-8000-000000000004"
 			objs := d["aliases"].(map[string]any)

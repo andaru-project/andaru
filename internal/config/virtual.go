@@ -148,6 +148,13 @@ func claims(d *declaration) []claim {
 			one(l.Address, "This range holds a DHCP static lease.")
 		}
 		one(e.Gateway, "This range holds a DHCP entry's gateway.")
+		for _, raw := range e.DNSServers {
+			one(raw, "This range holds a DHCP entry's DNS server.")
+		}
+		for _, raw := range e.NTPServers {
+			one(raw, "This range holds a DHCP entry's NTP server.")
+		}
+		one(e.NextServer, "This range holds a DHCP entry's next server.")
 	}
 	if d.DNS != nil {
 		for _, u := range d.DNS.Upstreams {
@@ -164,8 +171,20 @@ func claims(d *declaration) []claim {
 			if a := byID[pending[0]]; !seen[a.ID] {
 				seen[a.ID] = true
 				pending = append(pending, a.Members...)
-				if a.Kind == "host" {
-					one(a.Address, "This range holds a management source address.")
+				const message = "This range holds a management source address."
+				switch a.Kind {
+				case "host":
+					one(a.Address, message)
+				case "network":
+					if p, e := netip.ParsePrefix(a.Prefix); e == nil && p.Addr().Is4() {
+						out = append(out, claim{p.Masked().Addr(), lastOf(p), message})
+					}
+				case "range":
+					first, e1 := netip.ParseAddr(a.First)
+					last, e2 := netip.ParseAddr(a.Last)
+					if e1 == nil && e2 == nil && first.Is4() && last.Is4() {
+						out = append(out, claim{first, last, message})
+					}
 				}
 			}
 		}
