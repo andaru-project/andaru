@@ -17,8 +17,8 @@ func addonStageVerb(ctx context.Context, verb, stateDir, target string, stderr i
 	}
 	stager := addon.Stager{
 		StateDir: stateDir,
-		ReferencedImages: func() (map[string]bool, error) {
-			return generation.ReferencedAddonImages(stateDir)
+		WithUnstageLock: func(ctx context.Context, fn func(map[string]bool) error) error {
+			return generation.WithAddonImageLock(ctx, stateDir, fn)
 		},
 	}
 	var err error

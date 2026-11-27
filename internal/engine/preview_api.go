@@ -79,7 +79,7 @@ func newPreviewHandler(store *config.Store, readLinks func(context.Context) ([]h
 			writeError(w, r, http.StatusServiceUnavailable, "INVENTORY_UNAVAILABLE", "Interface inventory is unavailable; inspect the engine journal.")
 			return
 		}
-		result, err := render.Network(render.Input{Declaration: input.Value, Secrets: input.Secrets, AddonSecrets: input.AddonSecrets, Catalog: store.Catalog(), Links: links, Facts: facts})
+		result, err := render.Network(render.Input{Declaration: input.Value, Secrets: input.Secrets, AddonSecrets: input.AddonSecrets, Catalog: store.Catalog(), StateDir: store.StateDir(), Links: links, Facts: facts})
 		if err != nil {
 			// The error describes JSON structure only; secret values are not part of the declaration.
 			slog.ErrorContext(r.Context(), "saved declaration could not be rendered", "error", err)

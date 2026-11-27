@@ -287,15 +287,21 @@ func TestAddonActivateHealthFailureRollbackAndSafeMode(t *testing.T) {
 		t.Fatalf("Confirm gen 4: %v", err)
 	}
 
-	// 6. ReleaseAddonsHold restores addons-held fail-closed if starting live add-ons fails.
+	// 6. ReleaseAddonsHold stops any already-started add-ons and restores addons-held fail-closed if starting fails.
+	var failMu sync.Mutex
+	var failStopped []string
 	failR := r
 	failR.Run = func(_ context.Context, name string, args ...string) ([]byte, error) {
-		if filepath.Base(name) == "systemctl" && len(args) > 0 && args[0] == "daemon-reload" {
-			return nil, errors.New("systemd busy")
+		if filepath.Base(name) == "systemctl" && len(args) >= 2 && args[0] == "stop" {
+			failMu.Lock()
+			failStopped = append(failStopped, args[1])
+			failMu.Unlock()
+		}
+		if filepath.Base(name) == "systemctl" && len(args) >= 3 && args[0] == "start" && args[2] == "andaru-addon-tailscale.service" {
+			return nil, errors.New("start failed")
 		}
 		return nil, nil
 	}
-	// Restore gen 3 as live so ReleaseAddonsHold actually attempts to start an add-on.
 	if err := os.WriteFile(root+AddonsHeldFile, []byte("1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -312,10 +318,16 @@ func TestAddonActivateHealthFailureRollbackAndSafeMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := failR.ReleaseAddonsHold(t.Context()); err == nil {
-		t.Fatal("expected ReleaseAddonsHold failure on daemon-reload error")
+		t.Fatal("expected ReleaseAddonsHold failure on unit start error")
 	}
 	if _, err := os.Stat(root + AddonsHeldFile); err != nil {
 		t.Fatalf("expected AddonsHeldFile restored fail-closed after ReleaseAddonsHold failure, err=%v", err)
+	}
+	failMu.Lock()
+	wasStopped := slices.Contains(failStopped, "andaru-addon-tailscale.service")
+	failMu.Unlock()
+	if !wasStopped {
+		t.Fatalf("expected failed ReleaseAddonsHold to stop live add-on units before restoring hold; stopped=%v", failStopped)
 	}
 
 	// 7. Teardown removes per-add-on runtime dirs while preserving bus-socket.

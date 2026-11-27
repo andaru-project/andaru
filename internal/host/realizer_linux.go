@@ -45,17 +45,31 @@ type RealizerFacts struct {
 	PodmanTool bool
 	// StagedImages holds sorted immutable image digests verified in local Podman storage.
 	StagedImages []string
+	// StagedImagesErr records any read/decode error on addons-staged.json so preview/apply reports it directly.
+	StagedImagesErr string
 }
 
 // competingFilters flush or own the whole ruleset; Debian's nftables.service starts with "flush ruleset".
 var competingFilters = []string{"nftables.service", "firewalld.service", "ufw.service"}
 
-// ReadRealizerFacts inspects the host without changing it.
+// ReadRealizerFacts inspects the host without changing it, using the default state directory.
 func ReadRealizerFacts() (RealizerFacts, error) {
-	return readRealizerFacts("/etc/systemd/network", "/run/systemd/network", "/usr/sbin/pppd", "/usr/lib64/pppd/*/pppoe.so", "/dev/ppp", "")
+	return ReadRealizerFactsFor("/var/lib/andaru")
+}
+
+// ReadRealizerFactsFor inspects the host without changing it, reading add-on staged state from stateDir.
+func ReadRealizerFactsFor(stateDir string) (RealizerFacts, error) {
+	if stateDir == "" {
+		stateDir = "/var/lib/andaru"
+	}
+	return readRealizerFactsWithState("/etc/systemd/network", "/run/systemd/network", "/usr/sbin/pppd", "/usr/lib64/pppd/*/pppoe.so", "/dev/ppp", "", stateDir)
 }
 
 func readRealizerFacts(etcDir, runDir, pppd, pluginGlob, device, root string) (RealizerFacts, error) {
+	return readRealizerFactsWithState(etcDir, runDir, pppd, pluginGlob, device, root, root+"/var/lib/andaru")
+}
+
+func readRealizerFactsWithState(etcDir, runDir, pppd, pluginGlob, device, root, stateDir string) (RealizerFacts, error) {
 	facts := RealizerFacts{ForeignFiles: []string{}}
 	for _, dir := range []string{etcDir, runDir} {
 		entries, err := os.ReadDir(dir)
@@ -97,11 +111,12 @@ func readRealizerFacts(etcDir, runDir, pppd, pluginGlob, device, root string) (R
 	}
 	facts.UnboundTool = exists(root + "/usr/sbin/unbound")
 	facts.PodmanTool = exists(root + "/usr/bin/podman")
-	facts.Delegated, _ = delegation.ReadState(root + "/var/lib/andaru/delegated-prefixes.json")
-	if staged, err := addon.ReadStagedState(root + "/var/lib/andaru"); err == nil {
+	facts.Delegated, _ = delegation.ReadState(filepath.Join(stateDir, "delegated-prefixes.json"))
+	if staged, err := addon.ReadStagedState(stateDir); err == nil {
 		facts.StagedImages = staged.Digests()
 	} else {
 		facts.StagedImages = []string{}
+		facts.StagedImagesErr = err.Error()
 	}
 	facts.FilterUnits = []string{}
 	bases := []string{"/etc/systemd/system/", "/run/systemd/system/"}

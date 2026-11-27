@@ -2,6 +2,9 @@
 
 package addon
 
-import "os"
+import (
+	"context"
+	"os"
+)
 
-func lockFile(_ *os.File) error { return nil }
+func lockFile(ctx context.Context, _ *os.File) error { return ctx.Err() }

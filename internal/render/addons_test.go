@@ -186,6 +186,7 @@ func TestRenderAddonQuadletEnvSecretsAndNFTZone(t *testing.T) {
 		"Network=host",
 		"NoNewPrivileges=true",
 		"DropCapability=ALL",
+		"StopTimeout=5",
 		"AddCapability=NET_ADMIN",
 		"AddDevice=/dev/net/tun",
 		"Volume=/var/lib/andaru/addons/tailscale/state:/var/lib/tailscale:Z,U",
@@ -193,8 +194,8 @@ func TestRenderAddonQuadletEnvSecretsAndNFTZone(t *testing.T) {
 		"Volume=/run/andaru-addons/tailscale/bus:/run/andaru/bus:ro,Z,U",
 		"Volume=/run/andaru-addons/bus-socket:/run/andaru/bus-socket:z",
 		"EnvironmentFile=/run/andaru-addons/tailscale/andaru-addon-tailscale.env",
-		`Exec="--accept-routes" "--tag" "tag:edge" "--tag" "tag:$100% \"quoted\""`,
-		"TimeoutStopSec=5",
+		`Exec="--accept-routes" "--tag" "tag:edge" "--tag" "tag:$$100%% \"quoted\""`,
+		"TimeoutStopSec=15",
 	} {
 		if !strings.Contains(ctr.Content, want) {
 			t.Errorf("container missing %q\nfull:\n%s", want, ctr.Content)
@@ -240,12 +241,12 @@ func TestRenderAddonQuadletEnvSecretsAndNFTZone(t *testing.T) {
 		t.Fatalf("Real() = %q", secFile.Real())
 	}
 
-	// 4. nftables zone interface-name set includes tailscale0.
+	// 4. nftables zone interface-name set includes tailscale0 specifically in zon_vpn.
 	nft, ok := byPath[nftPath]
 	if !ok {
 		t.Fatal("missing nftables file")
 	}
-	if !strings.Contains(nft.Content, `set zon_vpn`) || !strings.Contains(nft.Content, `"tailscale0"`) {
+	if !strings.Contains(nft.Content, `set zon_vpn { type ifname; elements = { "tailscale0" }; }`) {
 		t.Fatalf("nft missing tailscale0 in zon_vpn:\n%s", nft.Content)
 	}
 }
@@ -341,33 +342,60 @@ func TestRenderAddonBlockingFindingsAndNoBusMountWhenDenied(t *testing.T) {
 }
 
 func TestRenderAddonHardeningNewlineLiteralEnvEntrypointAndHealthCmd(t *testing.T) {
-	// Newlines in env-bound or arg-bound settings must fail closed with ADDON_SETTING_INVALID and emit no unit/env files.
+	// Test unsafe env value and unsafe argument value independently, asserting ADDON_SETTING_INVALID
+	// at the exact property path and verifying no add-on files are emitted.
 	cat := testAddonCatalog(t, renderTestTailscaleManifest)
 	facts := allFacts
 	facts.PodmanTool = true
 	facts.StagedImages = []string{renderTestTailscaleDigest}
-	injected := json.RawMessage(`{
-		"links": [], "segments": [], "zones": [{"id":"zon_vpn"}],
-		"addons": [{
-			"id": "org.andaru.tailscale",
-			"enabled": true,
-			"settings": {
-				"hostname": "good\nINJECTED=evil",
-				"tags": ["ok\n[Service]\nExecStart=/bin/sh"]
+	for _, tc := range []struct {
+		name     string
+		settings string
+		wantPath string
+	}{
+		{name: "env newline", settings: `{"hostname": "good\nINJECTED=evil"}`, wantPath: "/addons/0/settings/hostname"},
+		{name: "arg newline", settings: `{"tags": ["ok\n[Service]\nExecStart=/bin/sh"]}`, wantPath: "/addons/0/settings/tags"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decl := json.RawMessage(`{"links":[],"segments":[],"zones":[{"id":"zon_vpn"}],"addons":[{"id":"org.andaru.tailscale","enabled":true,"settings":` + tc.settings + `}]}`)
+			res, err := Network(Input{Declaration: decl, Catalog: cat, Facts: facts})
+			if err != nil {
+				t.Fatal(err)
 			}
-		}]
-	}`)
-	res, err := Network(Input{Declaration: injected, Catalog: cat, Facts: facts})
+			if res.Realizable {
+				t.Fatalf("expected Realizable=false for %s", tc.name)
+			}
+			found := slices.ContainsFunc(res.Findings, func(f Finding) bool {
+				return f.Code == "ADDON_SETTING_INVALID" && f.Path == tc.wantPath
+			})
+			if !found {
+				t.Fatalf("expected ADDON_SETTING_INVALID at %s, got %+v", tc.wantPath, res.Findings)
+			}
+			for _, f := range res.Files {
+				if strings.Contains(f.Path, "tailscale") {
+					t.Fatalf("must not emit add-on files on unsafe setting: %s", f.Path)
+				}
+			}
+		})
+	}
+
+	// Unreadable staged-image index reports ADDON_STAGED_STATE_UNREADABLE instead of ADDON_IMAGE_NOT_STAGED.
+	badFacts := facts
+	badFacts.StagedImages = nil
+	badFacts.StagedImagesErr = "decode staged add-on images: corrupt JSON"
+	badRes, err := Network(Input{
+		Declaration: json.RawMessage(`{"links":[],"segments":[],"zones":[],"addons":[{"id":"org.andaru.tailscale","enabled":true,"settings":{}}]}`),
+		Catalog:     cat,
+		Facts:       badFacts,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Realizable {
-		t.Fatal("expected Realizable=false for newline-injected settings")
+	if !slices.ContainsFunc(badRes.Findings, func(f Finding) bool { return f.Code == "ADDON_STAGED_STATE_UNREADABLE" }) {
+		t.Fatalf("expected ADDON_STAGED_STATE_UNREADABLE, got %+v", badRes.Findings)
 	}
-	for _, f := range res.Files {
-		if strings.Contains(f.Path, "tailscale") {
-			t.Fatalf("must not emit add-on files on unsafe setting: %s", f.Path)
-		}
+	if slices.ContainsFunc(badRes.Findings, func(f Finding) bool { return f.Code == "ADDON_IMAGE_NOT_STAGED" }) {
+		t.Fatalf("must not emit ADDON_IMAGE_NOT_STAGED when staged index is unreadable: %+v", badRes.Findings)
 	}
 
 	// Literal Podman --env-file (spaces/empty unquoted), raw Entrypoint=, JSON array HealthCmd=, default env binding name.

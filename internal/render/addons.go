@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,7 +16,6 @@ import (
 const (
 	addonQuadletDir       = "/run/containers/systemd/"
 	addonRuntimeDir       = "/run/andaru-addons/"
-	addonStorageDir       = "/var/lib/andaru/addons/"
 	addonBusSocketHostDir = "/run/andaru-addons/bus-socket"
 	addonBusSocketContDir = "/run/andaru/bus-socket"
 	addonBusSocketCont    = "/run/andaru/bus-socket/bus.sock"
@@ -75,7 +75,9 @@ func (r *renderer) addons() {
 		if !r.in.Facts.PodmanTool {
 			r.find("error", "TOOL_MISSING", basePath, "podman is not installed; add-ons require Podman.")
 		}
-		if !slices.Contains(r.in.Facts.StagedImages, m.Runtime.Image) {
+		if r.in.Facts.StagedImagesErr != "" {
+			r.find("error", "ADDON_STAGED_STATE_UNREADABLE", basePath, fmt.Sprintf("Staged add-on image index is unreadable: %s", r.in.Facts.StagedImagesErr))
+		} else if !slices.Contains(r.in.Facts.StagedImages, m.Runtime.Image) {
 			r.find("error", "ADDON_IMAGE_NOT_STAGED", basePath, fmt.Sprintf("Add-on %q image %s is not staged locally; stage the image before applying.", m.Name, m.Runtime.Image))
 		}
 		r.renderAddon(i, a, m)
@@ -223,21 +225,27 @@ func (r *renderer) renderAddon(idx int, a addonEntry, m *addon.Manifest) {
 		}
 	}
 
+	stateDir := cmp.Or(r.in.StateDir, "/var/lib/andaru")
+	storageRoot := filepath.Join(stateDir, "addons") + "/"
+	safeModeNext := filepath.Join(stateDir, "safe-mode-next")
+
 	unitLines := []string{
 		"Description=Andaru Add-on: " + sanitizeUnitLine(m.Name),
 		"After=andaru-network-boot.service systemd-networkd.service andaru-engine.service",
 		"ConditionPathExists=!/run/andaru-boot/safe-mode",
-		"ConditionPathExists=!/var/lib/andaru/safe-mode-next",
+		"ConditionPathExists=!" + safeModeNext,
 		"ConditionPathExists=!/run/andaru-boot/addons-held",
 		"ConditionKernelCommandLine=!andaru.safe=1",
 	}
 
+	stopSec := deref(m.Runtime.StopTimeoutSeconds, 5)
 	containerLines := []string{
 		"Image=" + m.Runtime.Image,
 		"Pull=never",
 		"Network=host",
 		"NoNewPrivileges=true",
 		"DropCapability=ALL",
+		fmt.Sprintf("StopTimeout=%d", stopSec),
 	}
 	for _, capName := range m.Runtime.Capabilities {
 		containerLines = append(containerLines, "AddCapability="+capName)
@@ -250,7 +258,7 @@ func (r *renderer) renderAddon(idx int, a addonEntry, m *addon.Manifest) {
 		if st.ReadOnly {
 			opts = "ro,Z,U"
 		}
-		hostDir := addonStorageDir + m.Slug + "/" + st.Name
+		hostDir := storageRoot + m.Slug + "/" + st.Name
 		containerLines = append(containerLines, fmt.Sprintf("Volume=%s:%s:%s", hostDir, st.MountPath, opts))
 	}
 	if len(secrets) > 0 {
@@ -287,7 +295,8 @@ func (r *renderer) renderAddon(idx int, a addonEntry, m *addon.Manifest) {
 	serviceLines := []string{
 		"Restart=on-failure",
 		"RestartSec=5",
-		fmt.Sprintf("TimeoutStopSec=%d", deref(m.Runtime.StopTimeoutSeconds, 5)),
+		// Allow 10s beyond Podman's StopTimeout so podman stop finishes container cleanup before systemd SIGKILLs it.
+		fmt.Sprintf("TimeoutStopSec=%d", stopSec+10),
 	}
 
 	content := header.String() + ini(
@@ -404,12 +413,12 @@ func formatEnvFile(envMap map[string]string) string {
 	return b.String()
 }
 
-// joinQuadletWords quotes each argument word for Quadlet Exec= (Quadlet parses double-quoted
-// words and performs systemd specifier/variable escaping when generating ExecStart=).
+// joinQuadletWords quotes each argument word for Quadlet Exec= and escapes systemd % specifiers
+// and $ variables so ExecStart= passes the literal values to the container.
 func joinQuadletWords(words []string) string {
 	quoted := make([]string, len(words))
 	for i, w := range words {
-		quoted[i] = quoteOption(w)
+		quoted[i] = quoteOption(strings.NewReplacer("%", "%%", "$", "$$").Replace(w))
 	}
 	return strings.Join(quoted, " ")
 }

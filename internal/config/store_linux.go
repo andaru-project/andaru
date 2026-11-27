@@ -46,6 +46,9 @@ func (s *Store) SetCatalog(cat *addon.Catalog) { s.catalog = cat }
 // Catalog returns the attached add-on catalog, or nil if unset.
 func (s *Store) Catalog() *addon.Catalog { return s.catalog }
 
+// StateDir returns the state directory backing this store.
+func (s *Store) StateDir() string { return s.root }
+
 func unavailable() *Fault {
 	return fault("STORE_UNAVAILABLE", "", "Configuration storage is unavailable; inspect the engine journal.")
 }

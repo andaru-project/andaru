@@ -248,6 +248,7 @@ type Input struct {
 	Secrets      map[string]string
 	AddonSecrets map[string]map[string]string
 	Catalog      *addon.Catalog
+	StateDir     string
 	Links        []host.LinkStatus
 	Facts        host.RealizerFacts
 }

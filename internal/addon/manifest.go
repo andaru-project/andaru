@@ -797,11 +797,11 @@ func validateManifest(m *Manifest) []FieldError {
 		if m.Health.IntervalSeconds < 0 {
 			bad("/health/intervalSeconds", "intervalSeconds must be >= 0")
 		}
-		if m.Health.TimeoutSeconds < 0 {
-			bad("/health/timeoutSeconds", "timeoutSeconds must be >= 0")
+		if m.Health.TimeoutSeconds < 0 || m.Health.TimeoutSeconds > 10 {
+			bad("/health/timeoutSeconds", "timeoutSeconds must be between 0 and 10")
 		}
-		if m.Health.StartPeriodSeconds < 0 {
-			bad("/health/startPeriodSeconds", "startPeriodSeconds must be >= 0")
+		if m.Health.StartPeriodSeconds < 0 || m.Health.StartPeriodSeconds > 25 {
+			bad("/health/startPeriodSeconds", "startPeriodSeconds must be between 0 and 25")
 		}
 		if m.Health.IntervalSeconds > 0 && m.Health.TimeoutSeconds > m.Health.IntervalSeconds {
 			bad("/health/timeoutSeconds", "timeoutSeconds must be <= intervalSeconds")

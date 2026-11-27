@@ -102,6 +102,13 @@ func addonSum(slug string, set []placed) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+func (r Realizer) addonStoragePrefix() string {
+	if r.StateDir != "" && r.Root == "" {
+		return filepath.Join(r.StateDir, "addons") + "/"
+	}
+	return addonStoragePrefix
+}
+
 func (r Realizer) addonStorageRoot() string {
 	if r.Root != "" {
 		return filepath.Join(r.Root, "var", "lib", "andaru", "addons")
@@ -115,13 +122,14 @@ func (r Realizer) addonStorageRoot() string {
 // ensureAddonDirs creates host storage and bus-mount directories referenced by Volume= lines in .container files.
 func (r Realizer) ensureAddonDirs(set []placed) error {
 	base := r.addonStorageRoot()
+	volPrefix := r.addonStoragePrefix()
 	for _, f := range set {
 		m := addonContainer.FindStringSubmatch(f.path)
 		if len(m) != 2 {
 			continue
 		}
 		slug := m[1]
-		storagePrefix := "Volume=" + addonStoragePrefix + slug + "/"
+		storagePrefix := "Volume=" + volPrefix + slug + "/"
 		busTokenPrefix := "Volume=" + addonRuntimeDir + slug + "/bus:"
 		busSocketPrefix := "Volume=" + addonBusSocketHostDir + ":"
 		for line := range strings.SplitSeq(string(f.data), "\n") {
@@ -342,7 +350,16 @@ func (r Realizer) verifyAddons(ctx context.Context, next []placed) string {
 	if len(bySlug) == 0 {
 		return ""
 	}
-	budget := defaultAddonVerifyWait
+	needed := defaultAddonVerifyWait
+	for _, spec := range bySlug {
+		if want := spec.startPeriod + spec.timeout + 5*time.Second; want > needed {
+			needed = want
+		}
+	}
+	if needed > 30*time.Second {
+		needed = 30 * time.Second
+	}
+	budget := needed
 	if r.VerifyWait > 0 && r.VerifyWait < budget {
 		budget = r.VerifyWait
 	}
@@ -452,7 +469,17 @@ func (r Realizer) startLiveAddonsLocked(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return r.addons(ctx, nil, set)
+	if err := r.addons(ctx, nil, set); err != nil {
+		// Use a detached bounded context so cleanup stops queued add-ons even if ctx was canceled/timed out.
+		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), restoreLimit)
+		defer cancel()
+		for _, slug := range addonSlugs(set) {
+			_ = r.stopAddon(stopCtx, slug)
+			_ = os.Remove(r.Root + addonStampPath(slug))
+		}
+		return err
+	}
+	return nil
 }
 
 // AddonControl runs start, stop, or restart on an add-on unit present in the applied (live) generation.
@@ -474,6 +501,10 @@ func (r Realizer) AddonControl(ctx context.Context, action, slug string) error {
 		return err
 	}
 	defer unlock()
+	// Re-check under lock in case ReleaseAddonsHold restored the hold while waiting for the lock.
+	if ReadSafeMode(r.Root, r.StateDir).Active {
+		return ErrSafeModeActive
+	}
 	p, err := readPointers(r.dir())
 	if err != nil {
 		return err
@@ -504,41 +535,69 @@ func sameRegularFile(path string, want []byte, mode fs.FileMode) bool {
 	return err == nil && string(got) == string(want)
 }
 
-// ReferencedAddonImages returns all immutable Image= digests referenced by Confirmed, LastKnownGood, Pending, or Live generations.
-// Acquires generations/lock with a bounded non-blocking retry loop when the generations directory exists.
+// ReferencedAddonImages returns all immutable Image= digests referenced by Confirmed, LastKnownGood, Pending, Live,
+// or newly created un-activated generations.
 func ReferencedAddonImages(stateDir string) (map[string]bool, error) {
-	refs := map[string]bool{}
+	var out map[string]bool
+	err := WithAddonImageLock(context.Background(), stateDir, func(refs map[string]bool) error {
+		out = refs
+		return nil
+	})
+	return out, err
+}
+
+// WithAddonImageLock serializes add-on image unstaging against generation publication and activation by
+// acquiring generations/lock first, collecting all referenced add-on Image= digests (Confirmed, LastKnownGood,
+// Pending, Live, plus any newly created un-activated generation awaiting Activate), and invoking fn while the lock is held.
+func WithAddonImageLock(ctx context.Context, stateDir string, fn func(refs map[string]bool) error) error {
 	dir := Dir(stateDir)
-	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
-		return refs, nil
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
 	}
 	lockFile, err := os.OpenFile(filepath.Join(dir, "lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer lockFile.Close()
-	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("lock generations: %w", err)
+		}
 		err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {
 			break
 		}
 		if (!errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EINTR)) || time.Now().After(deadline) {
-			return nil, fmt.Errorf("lock generations: %w", err)
+			return fmt.Errorf("lock generations: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("lock generations: %w", ctx.Err())
+		case <-time.After(100 * time.Millisecond):
 		}
 	}
+	refs, err := referencedAddonImagesLocked(dir)
+	if err != nil {
+		return err
+	}
+	return fn(refs)
+}
+
+func referencedAddonImagesLocked(dir string) (map[string]bool, error) {
+	refs := map[string]bool{}
 	p, err := readPointers(dir)
 	if err != nil {
 		return nil, err
 	}
 	seenID := map[int]bool{}
-	for _, id := range []*int{p.Confirmed, p.LastKnownGood, p.Pending, p.Live} {
-		if id == nil || seenID[*id] {
-			continue
+	collect := func(id int) error {
+		if seenID[id] {
+			return nil
 		}
-		seenID[*id] = true
-		g, err := read(dir, *id, p)
+		seenID[id] = true
+		g, err := read(dir, id, p)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		for _, f := range g.Files {
 			if !addonContainer.MatchString(f.Path) {
@@ -546,12 +605,40 @@ func ReferencedAddonImages(stateDir string) (map[string]bool, error) {
 			}
 			data, err := g.content(dir, f)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			for line := range strings.SplitSeq(string(data), "\n") {
 				if img, ok := strings.CutPrefix(strings.TrimSpace(line), "Image="); ok && img != "" {
 					refs[img] = true
 				}
+			}
+		}
+		return nil
+	}
+	for _, id := range []*int{p.Confirmed, p.LastKnownGood, p.Pending, p.Live} {
+		if id != nil {
+			if err := collect(*id); err != nil {
+				return nil, err
+			}
+		}
+	}
+	// Also protect generations just published by generation.Create that have not yet been picked up by Activate.
+	allIDs, err := ids(dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range allIDs {
+		if seenID[id] {
+			continue
+		}
+		var st State
+		present, rerr := readJSON(filepath.Join(dir, strconv.Itoa(id), "state.json"), &st)
+		if rerr != nil {
+			continue
+		}
+		if !present || st.State == "" || st.State == Activating || st.State == Awaiting {
+			if err := collect(id); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return nil, err
 			}
 		}
 	}
@@ -570,11 +657,17 @@ func (r Realizer) cleanupAddonsOnTeardownIfPresent(ctx context.Context) error {
 				break
 			}
 		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("scan add-on runtime directory: %w", err)
 	}
 	hasStaged := false
 	if r.StateDir != "" {
 		_, err := os.Stat(filepath.Join(r.StateDir, addon.StagedStateFile))
-		hasStaged = err == nil
+		if err == nil {
+			hasStaged = true
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("stat staged add-on index: %w", err)
+		}
 	}
 	if len(matches) == 0 && !hasRuntime && !hasStaged {
 		return nil
@@ -587,18 +680,23 @@ func (r Realizer) cleanupAddonsOnTeardownIfPresent(ctx context.Context) error {
 func (r Realizer) cleanupAddonsOnTeardown(ctx context.Context) error {
 	var errs []error
 	matches, _ := filepath.Glob(r.Root + addonQuadletPrefix + "*.container")
+	removedQuadlet := false
 	for _, match := range matches {
 		rel := strings.TrimPrefix(match, r.Root)
 		if slug, ok := addonSlugFromPath(rel); ok {
 			if err := r.stopAddon(ctx, slug); err != nil {
+				// Keep the Quadlet on disk so a teardown retry can rediscover and stop the unit.
 				errs = append(errs, err)
+				continue
 			}
 		}
 		if err := os.Remove(match); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			errs = append(errs, err)
+			continue
 		}
+		removedQuadlet = true
 	}
-	if len(matches) > 0 && r.Run != nil {
+	if removedQuadlet && r.Run != nil {
 		if _, err := r.Run(ctx, "/usr/bin/systemctl", "daemon-reload"); err != nil {
 			errs = append(errs, err)
 		}
@@ -613,6 +711,8 @@ func (r Realizer) cleanupAddonsOnTeardown(ctx context.Context) error {
 				errs = append(errs, rerr)
 			}
 		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		errs = append(errs, fmt.Errorf("scan add-on runtime directory: %w", err))
 	}
 	if r.StateDir != "" {
 		if err := addon.RemoveAllManagedImages(ctx, r.StateDir, r.Run); err != nil {

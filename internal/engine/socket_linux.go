@@ -159,7 +159,8 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 		}
 	}
 	coordinator := newSecurityCoordinator(identities, audits, stateDir)
-	read := hostReader{Links: host.ReadLinks, Facts: host.ReadRealizerFacts, Managed: host.ReadManaged, BootUnit: host.ReadBootUnit, Catalog: catalog}
+	readFacts := func() (host.RealizerFacts, error) { return host.ReadRealizerFactsFor(stateDir) }
+	read := hostReader{Links: host.ReadLinks, Facts: readFacts, Managed: host.ReadManaged, BootUnit: host.ReadBootUnit, Catalog: catalog, StateDir: stateDir}
 	applies := newAppliesHandler(store.ApplyInput, store.RealizationInput, store.Roles, read, runner, stateDir, identities, coordinator, publishApply(events, "engine"))
 	identityAPI := newIdentityAPI(identities, store, coordinator)
 	auditAPI := newAuditAPI(coordinator)
@@ -232,7 +233,7 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	updateAPI := newUpdateAPI(stateDir, nil)
 	rootAPI := newHandlerWithDeps(handlerDeps{
 		readLinks:        host.ReadLinks,
-		configuration:    newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, applies, backups),
+		configuration:    newSavedHandler(store, host.ReadLinks, readFacts, applies, backups),
 		identityAPI:      identityAPI,
 		auditAPI:         auditAPI,
 		fleetAPI:         fleetAPI,

@@ -163,4 +163,17 @@ func TestRemoveAllManagedImages(t *testing.T) {
 	if !slices.Equal(st.Digests(), []string{d2}) {
 		t.Fatalf("expected failed digest %s retained for retry, got %v", d2, st.Digests())
 	}
+
+	// Probe failure (e.g. canceled context / non-absence error) must retain the record rather than assuming absence.
+	canceledCtx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := RemoveAllManagedImages(canceledCtx, stateDir, func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, context.Canceled
+	}); err == nil {
+		t.Fatal("expected error when RemoveAllManagedImages runs with canceled context")
+	}
+	st, rerr = ReadStagedState(stateDir)
+	if rerr != nil || !slices.Equal(st.Digests(), []string{d2}) {
+		t.Fatalf("expected digest %s retained on canceled context, got %v (err=%v)", d2, st.Digests(), rerr)
+	}
 }
