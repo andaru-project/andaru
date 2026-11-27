@@ -184,4 +184,34 @@ it('clears the rebooting banner and re-enables controls once the appliance retur
   rerender(<UpdatesScreen api={api} session={mgr} update={makeResource(bootedNew)} onSessionLost={noopSessionLost} />);
   expect(screen.queryByText('Rebooting appliance')).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Check for updates' })).toBeEnabled();
+
+  // Once cleared, a later poll without booted info does not falsely re-enter the rebooting state.
+  rerender(<UpdatesScreen api={api} session={mgr} update={makeResource({ supported: true, state: 'unchecked', rebootNeeded: false })} onSessionLost={noopSessionLost} />);
+  expect(screen.queryByText('Rebooting appliance')).not.toBeInTheDocument();
+});
+
+it('shows Active on Running image with Queueing rollback on rollback card, and falls back when secondary cards are absent', () => {
+  const api = new ApiClient('csrf-tok');
+  const mgr = session(['status.read', 'configuration.apply']);
+  const makeResource = (data: UpdateStatus) => ({
+    data,
+    loading: false,
+    error: '',
+    refresh: () => Promise.resolve(),
+    reload: () => Promise.resolve(),
+  });
+
+  const rollingBack: UpdateStatus = {
+    ...availableStatus,
+    state: 'rolling_back',
+    available: undefined,
+    rebootNeeded: false,
+  };
+  const { rerender } = render(<UpdatesScreen api={api} session={mgr} update={makeResource(rollingBack)} onSessionLost={noopSessionLost} />);
+  expect(within(screen.getByRole('region', { name: 'Running image' })).getByText('Active')).toBeInTheDocument();
+  expect(within(screen.getByRole('region', { name: 'Previous image (rollback)' })).getByText('Queueing rollback…')).toBeInTheDocument();
+
+  // If a state has no secondary card rendered, Running image preserves the state label instead of hiding it behind Active.
+  rerender(<UpdatesScreen api={api} session={mgr} update={makeResource({ supported: true, state: 'staged', booted: availableStatus.booted, rebootNeeded: false })} onSessionLost={noopSessionLost} />);
+  expect(within(screen.getByRole('region', { name: 'Running image' })).getByText('Staged — reboot required')).toBeInTheDocument();
 });

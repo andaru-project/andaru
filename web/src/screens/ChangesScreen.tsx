@@ -137,7 +137,7 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
   return (
     <Stack>
       <div><Title order={2}>Review and apply</Title><Text c="dimmed">Saved changes take effect only when applied, and stay only when confirmed.</Text></div>
-      {stateError && (connected || !state) && <Alert color="red" role="alert" title="Changes request failed">{stateError}</Alert>}
+      {stateError && connected && <Alert color="red" role="alert" title="Changes request failed">{stateError}</Alert>}
       {review.error && (connected || !detail) && <Alert color="red" role="alert" title="Review request failed"><Stack gap="xs"><Text size="sm">{review.error}</Text><Group><Button size="xs" variant="default" loading={review.loading} onClick={reload}>Reload</Button></Group></Stack></Alert>}
       {stale && !review.error && <Alert color="yellow" role="status" title={stale}><Button size="xs" variant="default" loading={review.loading} onClick={reload}>Reload</Button></Alert>}
       {message && <Alert color="blue" role="status">{message}</Alert>}
@@ -171,7 +171,7 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
         <Paper withBorder p="md">
           <Stack>
             <Title order={3} size="h4">What would change</Title>
-            {!detail ? <Loader aria-label="Loading the review" /> : !changes ? (!review.error && <Text role="status">Nothing to apply: every saved change is live.</Text>) : (
+            {!detail ? <Loader aria-label="Loading the review" /> : !changes ? (!(review.error && connected) && <Text role="status">Nothing to apply: every saved change is live.</Text>) : (
               <>
                 <Stack gap="xs">{changes.versions.map((version) => <div key={version.id}><Text fw={600} className="tabular">Saved version {version.id} by {version.actor} at {formatTimestamp(version.createdAt, timeZone)}</Text><Text size="sm" c="dimmed">{version.changes.length === 1 ? '1 changed object' : `${version.changes.length} changed objects`}</Text></div>)}</Stack>
                 {changed.length === 0 ? <Text role="status">The saved versions end where the live one started.</Text> : changed.map((item) => (

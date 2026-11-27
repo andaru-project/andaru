@@ -260,8 +260,8 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
   }
 
   return (
-    <Stack>
-      <Group justify="space-between" align="flex-end">
+    <Stack className="details">
+      <Group justify="space-between" align="flex-end" wrap="wrap" gap="sm">
         <div>
           <Group gap="xs" align="center">
             <Title order={2}>DNS</Title>
@@ -278,7 +278,7 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
         <Button size="xs" variant="default" loading={resource.loading} onClick={() => void resource.reload()}>Refresh</Button>
       </Group>
 
-      {resource.error && (connected || !resource.data) && <Alert color="red" role="alert" title="DNS request failed">{resource.error}</Alert>}
+      {resource.error && connected && <Alert color="red" role="alert" title="DNS request failed">{resource.error}</Alert>}
 
       {notice && (
         <Alert color="yellow" role="status" withCloseButton onClose={() => setNotice('')}>{notice}</Alert>
@@ -291,7 +291,7 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
       )}
 
       {hostDnsSegments.length > 0 && (
-        <Alert color="yellow" title="Per-segment DNS servers must be moved first">
+        <Alert color="yellow" role="status" title="Per-segment DNS servers must be moved first">
           {hostDnsSegments.map((s) => s.name).join(', ')}{' '}
           {hostDnsSegments.length === 1 ? 'declares' : 'declare'} static DNS servers under interface addressing. Remove them on{' '}
           <Anchor component={Link} to="/network/interfaces">Interfaces</Anchor> before saving the DNS service, and place any upstream servers here instead.
@@ -320,7 +320,7 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
             )}
             {failure && <Alert ref={failureRef} color="red" role="alert" title="The DNS service was not saved">{failure}</Alert>}
             {needsManagementForVips && (
-              <Alert color="yellow" title="Virtual addresses require a management segment">
+              <Alert color="yellow" role="status" title="Virtual addresses require a management segment">
                 Applying DNS on virtual addresses requires the packet filter, which needs a management segment configured first.
               </Alert>
             )}

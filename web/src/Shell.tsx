@@ -124,7 +124,15 @@ function HeaderNotifications({ notifications }: { notifications: Resource<Notifi
   );
 }
 
-export function Shell({ api, session, connected, onLogout, onSessionLost }: ShellProps) {
+export function Shell(props: ShellProps) {
+  return (
+    <ConnectionContext.Provider value={props.connected}>
+      <ShellBody {...props} />
+    </ConnectionContext.Provider>
+  );
+}
+
+function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellProps) {
   const { colorScheme, setColorScheme } = useMantineColorScheme();
   const timeZone = useTimeZone();
   const [timeZoneAt, setTimeZoneAt] = useState<number | null>(null);
@@ -186,14 +194,15 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   const loadUpgrade = useCallback(() => (canReadChanges && head !== undefined ? api.upgradePreview() : Promise.resolve(undefined)), [api, canReadChanges, head, build]); // eslint-disable-line react-hooks/exhaustive-deps
   const upgrade = useResource(loadUpgrade, onSessionLost);
   const upgradeError = upgrade.error;
+  const refreshUpgrade = upgrade.refresh;
   const reloadUpgrade = upgrade.reload;
   // A check that failed is tried again every 15 seconds, and with each answered read of the change state, until it
   // reads: a healthy stream may bring no other event.
   useVisiblePoll(upgrade.refresh, retryMilliseconds, upgradeError !== '');
   const read = changes.data;
   useEffect(() => {
-    if (upgradeError && read) void reloadUpgrade();
-  }, [read, upgradeError, reloadUpgrade]);
+    if (upgradeError && read) refreshUpgrade();
+  }, [read, upgradeError, refreshUpgrade]);
   const upgradePending = (upgrade.data?.questions.length ?? 0) > 0;
   const onUpgradePage = useMatch('/system/upgrade') !== null;
   // The visit opens on the questions once, so the dashboard stays reachable for those who cannot answer.
@@ -204,21 +213,20 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
     if (pathname === '/') navigate('/system/upgrade', { replace: true });
   }, [upgradePending, pathname, navigate]);
 
-  // When the API answers again, show what the server says rather than what was last seen.
-  const reloadSystem = system.reload;
-  const reloadUpdate = update.reload;
+  // When the API answers again, refresh resources that did not already fail (errored ones recover inside useResource).
+  const refreshNotifications = notifications.refresh;
+  const refreshSystem = system.refresh;
+  const refreshUpdate = update.refresh;
   const wasConnected = useRef(connected);
   useEffect(() => {
     if (connected && !wasConnected.current) {
       void reloadChanges();
-      void reloadNotifications();
-      void reloadSystem();
-      void reloadUpdate();
-      // A check that failed while disconnected is tried again; the head may not have moved.
-      if (upgradeError) void reloadUpgrade();
+      refreshNotifications();
+      refreshSystem();
+      refreshUpdate();
     }
     wasConnected.current = connected;
-  }, [connected, reloadChanges, reloadNotifications, reloadSystem, reloadUpdate, upgradeError, reloadUpgrade]);
+  }, [connected, reloadChanges, refreshNotifications, refreshSystem, refreshUpdate]);
 
   const groups = [
     {
@@ -327,7 +335,6 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
   ];
 
   return (
-    <ConnectionContext.Provider value={connected}>
     <AppShell className="app-shell" data-nav-open={opened || undefined} header={{ height: 56 }} navbar={{ width: 240, breakpoint: 900, collapsed: { mobile: !opened } }} padding="md">
       <AppShell.Header className="app-header">
         <Group h="100%" px="md" justify="space-between" wrap="nowrap">
@@ -431,7 +438,7 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
         </Stack>
       </AppShell.Main>
       {passwordUser && <PasswordDialog user={passwordUser} selfAccountId={session.account.id} onClose={() => setPasswordUser(null)} onSessionLost={onSessionLost} onSave={async (currentPassword, newPassword) => { await api.changePassword(passwordUser.id, { currentPassword, newPassword, expectedRevision: passwordUser.revision }); }} />}
-      <Modal opened={timeZoneAt !== null} onClose={() => setTimeZoneAt(null)} title="Display time zone" centered closeButtonProps={{ 'aria-label': 'Close' }}>
+      <Modal opened={timeZoneAt !== null} onClose={() => setTimeZoneAt(null)} title="Display time zone" centered lockScroll={false} closeButtonProps={{ 'aria-label': 'Close' }}>
         <Stack>
           <Text size="sm" c="dimmed">Used to display timestamps across Andaru in this browser. The appliance clock on the dashboard stays in UTC.</Text>
           <Select label="Time zone" data={zoneChoices} value={timeZone} searchable allowDeselect={false} onChange={(value) => { if (value) setTimeZone(value); }} />
@@ -440,6 +447,5 @@ export function Shell({ api, session, connected, onLogout, onSessionLost }: Shel
         </Stack>
       </Modal>
     </AppShell>
-    </ConnectionContext.Provider>
   );
 }

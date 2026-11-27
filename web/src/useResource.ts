@@ -20,29 +20,64 @@ export interface Resource<T> {
 // useResource loads data with the given function on mount and whenever the function changes.
 // A failed reload keeps the last data, so a poll that loses the connection does not blank the page.
 export function useResource<T>(load: () => Promise<T>, onSessionLost: () => void): Resource<T> {
-  const [state, setState] = useState<{ data?: T; error: string; loading: boolean }>({ error: '', loading: true });
+  const connected = useConnected();
+  const [state, setState] = useState<{ data?: T; error: string; disconnected: boolean; loading: boolean }>({
+    error: '',
+    disconnected: false,
+    loading: true,
+  });
+  const [prevConnected, setPrevConnected] = useState(connected);
+  if (connected !== prevConnected) {
+    setPrevConnected(connected);
+    if (connected && state.disconnected) {
+      setState((current) => (current.disconnected ? { ...current, error: '', disconnected: false } : current));
+    }
+  }
   const latest = useRef(0);
   const out = useRef(0);
+  const hasError = useRef(false);
 
-  const reload = useCallback(async () => {
+  const fetchInto = useCallback(() => {
     const request = ++latest.current;
-    setState((current) => ({ ...current, loading: true }));
     out.current++;
-    try {
-      const data = await load();
-      if (request === latest.current) setState({ data, error: '', loading: false });
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 401) onSessionLost();
-      if (request === latest.current) setState((current) => ({ ...current, error: apiErrorMessage(error), loading: false }));
-    } finally {
+    return load().then(
+      (data) => {
+        if (request === latest.current) {
+          hasError.current = false;
+          setState({ data, error: '', disconnected: false, loading: false });
+        }
+      },
+      (error: unknown) => {
+        if (error instanceof ApiError && error.status === 401) onSessionLost();
+        if (request === latest.current) {
+          hasError.current = true;
+          const message = apiErrorMessage(error);
+          const disconnected = error instanceof ApiError && error.status === 0;
+          setState((current) => ({ ...current, error: message, disconnected, loading: false }));
+        }
+      },
+    ).finally(() => {
       out.current--;
-    }
+    });
   }, [load, onSessionLost]);
+  const reload = useCallback(() => {
+    setState((current) => ({ ...current, loading: true }));
+    return fetchInto();
+  }, [fetchInto]);
   const refresh = useCallback(() => { if (out.current === 0) void reload(); }, [reload]);
 
-  useEffect(() => { void reload(); }, [reload]);
+  useEffect(() => { void fetchInto(); }, [fetchInto]);
 
-  return { ...state, reload, refresh };
+  // Retry errored resources automatically on reconnect (stale disconnect errors are cleared during render above).
+  const wasConnected = useRef(connected);
+  useEffect(() => {
+    if (connected && !wasConnected.current && hasError.current && out.current === 0) {
+      void fetchInto();
+    }
+    wasConnected.current = connected;
+  }, [connected, fetchInto]);
+
+  return { data: state.data, error: state.error, loading: state.loading, reload, refresh };
 }
 
 // usePolledResource is a resource that is read again on a timer while the tab is visible.

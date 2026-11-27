@@ -9,7 +9,7 @@ import { openStreams } from './test/events';
 import { setTimeZone } from './timezone';
 import { fetchRoutes, jsonResponse } from './test/fetch';
 import { apply, pointers, session } from './test/fixtures';
-import { act, render, screen, waitFor } from './test/render';
+import { act, render, screen, waitFor, within } from './test/render';
 import userEvent from '@testing-library/user-event';
 
 const reader = session(['configuration.read']);
@@ -188,20 +188,23 @@ it('says so when the change state cannot be read: no news must not look like not
   expect(await screen.findByText('Could not check pending changes')).toBeInTheDocument();
 });
 
-it('suppresses duplicate connection-lost banners and stale Loaded errors when disconnected, and reloads system and updates on reconnect', async () => {
-  let down = false;
+it('suppresses duplicate connection-lost banners and stale Loaded errors when disconnected, and recovers on reconnect', async () => {
+  let failApplies = false;
+  let failUpgrade = true;
+  let failUpdate = false;
   const fetchMock = fetchRoutes({
-    '/api/v1/applies': () => (down ? Promise.reject(new TypeError('offline')) : jsonResponse(200, unapplied)),
+    '/api/v1/applies': () => (failApplies ? Promise.reject(new TypeError('offline')) : jsonResponse(200, unapplied)),
     '/api/v1/versions?': { state: 'saved', items: [{ id: '5', createdAt: '2026-11-21T11:00:00Z', actor: 'admin', changedObjectCount: 1 }] },
-    '/api/v1/status/system': () => (down ? Promise.reject(new TypeError('offline')) : jsonResponse(200, { version: '0.5.0-a.4', hostname: 'edge', time: '2026-11-21T12:00:00Z', bootedAt: null })),
-    '/api/v1/system/update': () => (down ? Promise.reject(new TypeError('offline')) : jsonResponse(200, {
+    '/api/v1/status/system': () => jsonResponse(200, { version: '0.5.0-a.4', hostname: 'edge', time: '2026-11-21T12:00:00Z', bootedAt: null }),
+    '/api/v1/system/update': () => (failUpdate ? Promise.reject(new TypeError('offline')) : jsonResponse(200, {
       supported: true,
       state: 'staged',
       booted: { version: '0.5.0-a.4', signature: 'containerPolicy' },
       staged: { version: '0.5.0-a.5', signature: 'containerPolicy' },
       rebootNeeded: true,
     })),
-    'POST /api/v1/config/upgrade/preview': () => (down ? Promise.reject(new TypeError('offline')) : jsonResponse(200, { savedVersion: '5', questions: [] })),
+    'POST /api/v1/system/update/check': () => Promise.reject(new TypeError('offline')),
+    'POST /api/v1/config/upgrade/preview': () => (failUpgrade ? Promise.reject(new TypeError('offline')) : jsonResponse(200, { savedVersion: '5', questions: [] })),
   });
   const api = new ApiClient('csrf');
   const full = session(['configuration.read', 'status.read', 'configuration.apply']);
@@ -215,28 +218,41 @@ it('suppresses duplicate connection-lost banners and stale Loaded errors when di
   const view = render(shell(true));
   expect(await screen.findByText('0.5.0-a.4')).toBeInTheDocument();
 
-  // Drop connection and trigger failed reads via event stream error.
-  down = true;
-  view.rerender(shell(false));
+  // Trigger real failures on all three resources (changes, upgrade, and Loaded update) while connected=true first
+  // so we prove each error actually exists before verifying connected=false suppresses all of them.
+  failApplies = true;
+  failUpdate = true;
   act(() => { openStreams()[0].fail(false); });
-  await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/applies').length).toBeGreaterThanOrEqual(2));
+  await userEvent.click(screen.getByRole('button', { name: 'Check for updates' }));
+  expect(await screen.findByText('Could not check pending changes')).toBeInTheDocument();
+  expect(await screen.findByText('Could not check upgrade status')).toBeInTheDocument();
+  // Loaded renders update.error alongside Update action failed when connected=true.
+  expect(screen.getAllByText(/Cannot reach the Andaru service/i).length).toBeGreaterThanOrEqual(3);
 
-  // Only the header badge indicates Connection lost; no redundant alert banners or inline disconnect error.
-  expect(screen.getByText('Connection lost', { selector: '.mantine-Badge-label' })).toBeInTheDocument();
+  // Once connected=false, only the header badge owns the offline state: redundant shell banners and Loaded error hide.
+  view.rerender(shell(false));
+  expect(within(screen.getByRole('banner')).getByRole('status')).toHaveTextContent('Connection lost');
   expect(screen.queryByText(/The box does not answer/i)).not.toBeInTheDocument();
   expect(screen.queryByText('Could not check pending changes')).not.toBeInTheDocument();
   expect(screen.queryByText('Could not check upgrade status')).not.toBeInTheDocument();
-  expect(screen.queryByText(/Cannot reach the Andaru service/i)).not.toBeInTheDocument();
+  // The Loaded region on UpdatesScreen hides its disconnect error while cached data is visible.
+  expect(screen.queryAllByText(/Cannot reach the Andaru service/i)).toHaveLength(1); // only actionError from clicking Check
 
-  // Reconnecting reloads system and update status automatically.
+  // Reconnecting clears disconnect errors and refreshes update, system, changes, and upgrade automatically.
   const updateReadsBefore = fetchMock.mock.calls.filter(([url]) => url === '/api/v1/system/update').length;
   const systemReadsBefore = fetchMock.mock.calls.filter(([url]) => url === '/api/v1/status/system').length;
-  down = false;
+  const upgradeReadsBefore = fetchMock.mock.calls.filter(([url]) => url === '/api/v1/config/upgrade/preview').length;
+  failApplies = false;
+  failUpgrade = false;
+  failUpdate = false;
   view.rerender(shell(true));
   await waitFor(() => {
     expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/system/update').length).toBe(updateReadsBefore + 1);
     expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/status/system').length).toBe(systemReadsBefore + 1);
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/config/upgrade/preview').length).toBe(upgradeReadsBefore + 1);
   });
+  expect(screen.queryByText('Could not check pending changes')).not.toBeInTheDocument();
+  expect(screen.queryByText('Could not check upgrade status')).not.toBeInTheDocument();
 });
 
 it.each(['/changes', '/changes/'])('leaves the apply controls to the Review and apply page at %s', async (path) => {
