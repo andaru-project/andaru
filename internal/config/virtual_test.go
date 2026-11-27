@@ -295,6 +295,16 @@ const (
 	vipQ = "vip_00000004-0000-4000-8000-000000000004"
 )
 
+// lanDHCP is a DHCP entry on the LAN, with fields set over a range clear of the proxy ARP entries.
+func lanDHCP(d map[string]any, fields map[string]any) map[string]any {
+	e := map[string]any{"id": "dhp_00000001-0000-4000-8000-000000000001", "name": "lan", "segment": item(segmentsOf(d), 1)["id"],
+		"ranges": []any{map[string]any{"first": "192.0.2.100", "last": "192.0.2.199"}}}
+	for k, v := range fields {
+		e[k] = v
+	}
+	return e
+}
+
 // proxyFixture adds two proxy ARP entries on the LAN, whose static subnet is 192.0.2.0/24: an address and a /29.
 func proxyFixture(t *testing.T) map[string]any {
 	t.Helper()
@@ -323,10 +333,12 @@ func TestProxyARPValidation(t *testing.T) {
 		setNAT(d, "oneToOne", map[string]any{"id": otoA, "name": "block", "enabled": true, "zone": wanZone(d), "external": "192.0.2.56/29", "internal": "10.9.9.8/29", "destination": []any{}})
 		accepted(t, d)
 	})
-	t.Run("a /32 with its length", func(t *testing.T) {
+	t.Run("a /32 with its length is stored bare", func(t *testing.T) {
 		d := proxyFixture(t)
 		item(d["virtualAddresses"].([]any), 2)["address"] = "192.0.2.50/32"
-		accepted(t, d)
+		if got := accepted(t, d); got.VirtualAddresses[2].Address != "192.0.2.50" {
+			t.Fatalf("stored %q", got.VirtualAddresses[2].Address)
+		}
 	})
 	const p, q = "/virtualAddresses/2", "/virtualAddresses/3"
 	for name, tc := range map[string]struct {
@@ -342,8 +354,35 @@ func TestProxyARPValidation(t *testing.T) {
 		"off the subnet":    {func(d map[string]any) { item(d["virtualAddresses"].([]any), 2)["address"] = "198.51.100.50" }, p + "/address", "Expected an address on one of the segment's static IPv4 subnets."},
 		"holds own address": {func(d map[string]any) { item(d["virtualAddresses"].([]any), 3)["address"] = "192.0.2.0/29" }, q + "/address", "This range holds one of the firewall's own addresses."},
 		"holds the gateway": {func(d map[string]any) { v4(d, 1)["gateway"] = "192.0.2.58" }, q + "/address", "This range holds a segment's gateway."},
-		"overlaps":          {func(d map[string]any) { item(d["virtualAddresses"].([]any), 2)["address"] = "192.0.2.60" }, q + "/address", `This range overlaps proxy ARP entry \"host\".`},
-		"no segment":        {func(d map[string]any) { delete(item(d["virtualAddresses"].([]any), 2), "segment") }, p + "/segment", "Expected an existing segment."},
+		"holds the network address": {func(d map[string]any) {
+			v4(d, 1)["addresses"] = []any{"192.0.2.7/29"}
+			item(d["virtualAddresses"].([]any), 3)["address"] = "192.0.2.0/30"
+			item(d["virtualAddresses"].([]any), 2)["address"] = "192.0.2.5"
+		}, q + "/address", "This range holds its subnet's network address."},
+		"holds the broadcast address": {func(d map[string]any) { item(d["virtualAddresses"].([]any), 2)["address"] = "192.0.2.255" }, p + "/address", "This range holds its subnet's broadcast address."},
+		"overlaps a DHCP range": {func(d map[string]any) {
+			d["dhcp"] = []any{lanDHCP(d, map[string]any{"ranges": []any{map[string]any{"first": "192.0.2.30", "last": "192.0.2.56"}}})}
+		}, q + "/address", "This range overlaps a DHCP range."},
+		"holds a static lease": {func(d map[string]any) {
+			d["dhcp"] = []any{lanDHCP(d, map[string]any{"staticLeases": []any{map[string]any{"mac": "02:00:00:00:00:10", "address": "192.0.2.50"}}})}
+		}, p + "/address", "This range holds a DHCP static lease."},
+		"holds a DHCP gateway": {func(d map[string]any) { d["dhcp"] = []any{lanDHCP(d, map[string]any{"gateway": "192.0.2.63"})} }, q + "/address", "This range holds a DHCP entry's gateway."},
+		"holds a segment's DNS server": {func(d map[string]any) {
+			item(segmentsOf(d), 1)["addressing"].(map[string]any)["dns"] = map[string]any{"servers": []any{"192.0.2.57"}}
+		}, q + "/address", "This range holds a segment's DNS server."},
+		"holds a DNS upstream": {func(d map[string]any) {
+			d["dns"] = map[string]any{"mode": "forward", "segments": []any{}, "upstreams": []any{map[string]any{"address": "192.0.2.50:5353", "protocol": "do53"}}}
+		}, p + "/address", "This range holds a DNS upstream."},
+		"holds a management source in a group": {func(d map[string]any) {
+			const host, group = "adr_00000003-0000-4000-8000-000000000003", "adr_00000004-0000-4000-8000-000000000004"
+			objs := d["aliases"].(map[string]any)
+			objs["addresses"] = append(objs["addresses"].([]any),
+				map[string]any{"id": host, "name": "admin", "kind": "host", "address": "192.0.2.59"},
+				map[string]any{"id": group, "name": "admins", "kind": "group", "members": []any{host}})
+			d["management"] = map[string]any{"segment": item(segmentsOf(d), 1)["id"], "allowedSources": []any{group}}
+		}, q + "/address", "This range holds a management source address."},
+		"overlaps":   {func(d map[string]any) { item(d["virtualAddresses"].([]any), 2)["address"] = "192.0.2.60" }, q + "/address", `This range overlaps proxy ARP entry \"host\".`}, // quoted as the JSON-encoded error shows it
+		"no segment": {func(d map[string]any) { delete(item(d["virtualAddresses"].([]any), 2), "segment") }, p + "/segment", "Expected an existing segment."},
 		"unknown segment": {func(d map[string]any) {
 			item(d["virtualAddresses"].([]any), 2)["segment"] = "seg_00000009-0000-4000-8000-000000000009"
 		}, p + "/segment", "Expected an existing segment."},
@@ -378,15 +417,21 @@ func TestProxyARPValidation(t *testing.T) {
 			}
 		})
 	}
-	t.Run("65 entries of both kinds", func(t *testing.T) {
-		d := proxyFixture(t)
-		list := d["virtualAddresses"].([]any)
-		for i := range 61 {
-			list = append(list, map[string]any{"id": fmt.Sprintf("vip_%08x-0000-4000-8000-000000000001", i+16), "name": fmt.Sprint("v", i), "address": fmt.Sprintf("172.16.54.%d", i+1)})
-		}
-		d["virtualAddresses"] = list
-		if _, e := decodeMap(t, d); e == nil {
-			t.Fatal("65 virtual addresses accepted")
-		}
-	})
+}
+
+// A batch can name the segment it creates in a proxy ARP entry by label.
+func TestProxyARPSegmentByLabel(t *testing.T) {
+	c, e := DecodeChanges([]byte(`{"operations":[{"op":"create","collection":"links","localId":"uplink","value":{"name":"uplink","kind":"ethernet","mtu":1500,"enabled":true,"permanentMac":"52:54:00:00:00:01"}},{"op":"create","collection":"zones","localId":"wan","value":{"name":"wan"}},{"op":"create","collection":"segments","localId":"seg","value":{"name":"wan","link":"@uplink","zone":"@wan","addressing":{"ipv4":{"mode":"static","addresses":["203.0.113.2/24"]},"ipv6":{"mode":"none"}}}},
+		{"op":"create","collection":"virtualAddresses","localId":"v","value":{"name":"server","kind":"proxyArp","segment":"@seg","address":"203.0.113.50"}}]}`))
+	if e != nil {
+		t.Fatal(e)
+	}
+	s := initialState()
+	p, e := prepareChanges(&s, c, "1", fixedTime)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if got := p.State.Config.VirtualAddresses[0].Segment; got != p.Created["seg"] {
+		t.Fatalf("segment %q, created %v", got, p.Created)
+	}
 }

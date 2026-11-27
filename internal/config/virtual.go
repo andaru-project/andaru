@@ -29,6 +29,7 @@ func validateVirtual(d *declaration, bad func(string, string)) {
 	seen := map[string]bool{}
 	held := map[netip.Addr]bool{}
 	var proxies []virtualAddress
+	taken := claims(d)
 	for i, v := range d.VirtualAddresses {
 		p := fmt.Sprintf("/virtualAddresses/%d", i)
 		if seen[v.ID] {
@@ -42,7 +43,7 @@ func validateVirtual(d *declaration, bad func(string, string)) {
 		}
 		seen[v.ID], seen["name:"+v.Name] = true, true
 		if v.proxied() {
-			if validateProxy(d, v, p, proxies, bad) {
+			if validateProxy(d, v, p, subnets, taken, proxies, bad) {
 				proxies = append(proxies, v)
 			}
 			continue
@@ -96,24 +97,104 @@ func proxyPrefix(v virtualAddress) (netip.Prefix, bool) {
 	return p, e == nil
 }
 
-// validateProxy checks one proxy ARP entry against its segment and the entries before it; it says whether v is valid.
-func validateProxy(d *declaration, v virtualAddress, p string, before []virtualAddress, bad func(string, string)) bool {
+// claim is a span of addresses the declaration gives to a host, or to the subnet itself: no proxy ARP entry may cover it.
+type claim struct {
+	first, last netip.Addr
+	message     string
+}
+
+// claims are the addresses the declaration names for hosts other than the firewall: a proxy ARP entry's route to
+// andaru-vip would take them over.
+func claims(d *declaration) []claim {
+	var out []claim
+	one := func(raw, message string) {
+		a, e := netip.ParseAddr(raw)
+		if e != nil {
+			ap, e2 := netip.ParseAddrPort(raw)
+			a, e = ap.Addr(), e2
+		}
+		if e == nil && a.Unmap().Is4() {
+			out = append(out, claim{a.Unmap(), a.Unmap(), message})
+		}
+	}
+	for _, s := range d.Segments {
+		// Its route to andaru-vip would take the uplink's next hop with it.
+		one(s.Addressing.IPv4.Gateway, "This range holds a segment's gateway.")
+		if s.Addressing.DNS != nil {
+			for _, raw := range s.Addressing.DNS.Servers {
+				one(raw, "This range holds a segment's DNS server.")
+			}
+		}
+		if s.Addressing.IPv4.Mode != "static" {
+			continue
+		}
+		for _, raw := range s.Addressing.IPv4.Addresses {
+			if p, e := netip.ParsePrefix(raw); e == nil && p.Addr().Is4() && p.Bits() < 31 {
+				out = append(out, claim{p.Masked().Addr(), p.Masked().Addr(), "This range holds its subnet's network address."})
+				b := lastOf(p.Masked())
+				out = append(out, claim{b, b, "This range holds its subnet's broadcast address."})
+			}
+		}
+	}
+	for _, e := range d.DHCP {
+		for _, r := range e.Ranges {
+			first, e1 := netip.ParseAddr(r.First)
+			last, e2 := netip.ParseAddr(r.Last)
+			if e1 == nil && e2 == nil && first.Is4() && last.Is4() {
+				out = append(out, claim{first, last, "This range overlaps a DHCP range."})
+			}
+		}
+		for _, l := range e.StaticLeases {
+			one(l.Address, "This range holds a DHCP static lease.")
+		}
+		one(e.Gateway, "This range holds a DHCP entry's gateway.")
+	}
+	if d.DNS != nil {
+		for _, u := range d.DNS.Upstreams {
+			one(u.Address, "This range holds a DNS upstream.")
+		}
+	}
+	if d.Management != nil {
+		byID := map[string]address{}
+		for _, a := range d.Aliases.Addresses {
+			byID[a.ID] = a
+		}
+		seen := map[string]bool{}
+		for pending := slices.Clone(d.Management.AllowedSources); len(pending) > 0; pending = pending[1:] {
+			if a := byID[pending[0]]; !seen[a.ID] {
+				seen[a.ID] = true
+				pending = append(pending, a.Members...)
+				if a.Kind == "host" {
+					one(a.Address, "This range holds a management source address.")
+				}
+			}
+		}
+	}
+	return out
+}
+
+// lastOf is the last address of an IPv4 prefix.
+func lastOf(p netip.Prefix) netip.Addr {
+	b := p.Masked().Addr().As4()
+	n := uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+	n |= 1<<(32-p.Bits()) - 1
+	return netip.AddrFrom4([4]byte{byte(n >> 24), byte(n >> 16), byte(n >> 8), byte(n)})
+}
+
+// validateProxy checks one proxy ARP entry against its segment, the firewall's static addresses (own), the hosts the
+// declaration names, and the entries before it; it says whether v is valid.
+func validateProxy(d *declaration, v virtualAddress, p string, own []netip.Prefix, taken []claim, before []virtualAddress, bad func(string, string)) bool {
 	seg := slices.IndexFunc(d.Segments, func(s segment) bool { return s.ID == v.Segment })
 	if seg < 0 {
 		bad(p+"/segment", "Expected an existing segment.")
 	}
 	x, ok := proxyPrefix(v)
 	a := x.Addr()
-	var own []netip.Prefix
-	for _, s := range d.Segments {
-		own = append(own, staticPrefixes(s)...)
+	var last netip.Addr
+	if ok && a.Is4() {
+		last = lastOf(x)
 	}
-	var gateways []netip.Addr
-	for _, s := range d.Segments {
-		if g, e := netip.ParseAddr(s.Addressing.IPv4.Gateway); e == nil {
-			gateways = append(gateways, g)
-		}
-	}
+	claimed := slices.IndexFunc(taken, func(c claim) bool { return !c.last.Less(a) && !last.Less(c.first) })
 	overlap := slices.IndexFunc(before, func(o virtualAddress) bool { y, _ := proxyPrefix(o); return y.Overlaps(x) })
 	switch {
 	case ok && a.Is6() && !a.Is4In6():
@@ -127,9 +208,8 @@ func validateProxy(d *declaration, v virtualAddress, p string, before []virtualA
 		bad(p+"/address", "Expected an address on one of the segment's static IPv4 subnets.")
 	case slices.ContainsFunc(own, func(s netip.Prefix) bool { return x.Contains(s.Addr()) }):
 		bad(p+"/address", "This range holds one of the firewall's own addresses.")
-	case slices.ContainsFunc(gateways, x.Contains):
-		// Its route to andaru-vip would take the uplink's next hop with it.
-		bad(p+"/address", "This range holds a segment's gateway.")
+	case claimed >= 0:
+		bad(p+"/address", taken[claimed].message)
 	case overlap >= 0:
 		bad(p+"/address", fmt.Sprintf("This range overlaps proxy ARP entry %q.", before[overlap].Name))
 	default:
