@@ -66,6 +66,7 @@ type updateAPI struct {
 
 	mu             sync.Mutex
 	busyOp         string
+	stageStartedAt time.Time
 	rebootingUntil time.Time
 	lastErr        string
 	lastErrAt      time.Time
@@ -129,6 +130,7 @@ func reconcileBootedStatus(st update.Status) update.Status {
 		st.Rollback = prev
 		st.Staged = nil
 		st.Available = nil
+		st.Download = nil
 		st.RollbackQueued = false
 		st.RebootNeeded = false
 		st.State = update.StateUpToDate
@@ -140,6 +142,7 @@ func reconcileBootedStatus(st update.Status) update.Status {
 		st.Booted = st.Rollback
 		st.Rollback = prev
 		st.Staged = nil
+		st.Download = nil
 		st.RollbackQueued = false
 		st.RebootNeeded = false
 		st.State = update.StateUpToDate
@@ -167,6 +170,7 @@ func (u *updateAPI) handleStatus(w http.ResponseWriter, r *http.Request) {
 	u.mu.Lock()
 	u.expireRebootLocked(now)
 	busy := u.busyOp
+	stageStartedAt := u.stageStartedAt
 	lastErr := u.lastErr
 	lastErrAt := u.lastErrAt
 	if lastErr != "" && st.Error == "" && st.CheckedAt != nil && st.CheckedAt.After(lastErrAt) {
@@ -178,6 +182,18 @@ func (u *updateAPI) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if busy != "" && busy != "rebooting" {
 		st.State = busy
 		st.Error = ""
+		if busy == update.StateStaging {
+			if prog, err := update.ReadProgress(u.stateDir); err == nil && prog != nil {
+				st.Progress = prog
+			} else if !stageStartedAt.IsZero() {
+				st.Progress = &update.Progress{
+					Phase:       "starting",
+					Description: "Preparing update",
+					StartedAt:   stageStartedAt,
+					UpdatedAt:   stageStartedAt,
+				}
+			}
+		}
 	} else if lastErr != "" && st.Error == "" {
 		st.State = update.StateError
 		st.Error = lastErr
@@ -255,6 +271,12 @@ func (u *updateAPI) handleStage(w http.ResponseWriter, r *http.Request) {
 	if !u.beginOp(w, r, update.StateStaging, true) {
 		return
 	}
+	now := u.clock().UTC()
+	update.ClearProgress(u.stateDir)
+	u.mu.Lock()
+	u.stageStartedAt = now
+	u.mu.Unlock()
+
 	st, err := update.ReadStatus(u.stateDir)
 	if err != nil {
 		st = update.Status{Supported: true}
@@ -262,13 +284,21 @@ func (u *updateAPI) handleStage(w http.ResponseWriter, r *http.Request) {
 	st = reconcileBootedStatus(st)
 	st.State = update.StateStaging
 	st.Error = ""
+	st.Progress = &update.Progress{
+		Phase:       "starting",
+		Description: "Preparing update",
+		StartedAt:   now,
+		UpdatedAt:   now,
+	}
 
 	bgCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 16*time.Minute)
 	go func() {
 		defer cancel()
 		err := u.runner.RunVerb(bgCtx, "update-stage")
+		update.ClearProgress(u.stateDir)
 		u.mu.Lock()
 		u.busyOp = ""
+		u.stageStartedAt = time.Time{}
 		if err != nil {
 			slog.Warn("software update stage failed", "error", err)
 			u.lastErr = err.Error()
