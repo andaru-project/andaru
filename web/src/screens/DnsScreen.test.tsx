@@ -274,6 +274,38 @@ describe('DnsScreen', () => {
     expect(screen.queryByRole('checkbox', { name: 'wan-proxy' })).not.toBeInTheDocument();
   });
 
+  it('retains an already-referenced proxyArp virtual address with a warning so it can be unchecked', async () => {
+    const dnsWithProxy: DnsService = { ...existingDns, virtualAddresses: ['vip_proxy'] };
+    const snapshotWithRetainedProxy: Snapshot = {
+      ...sampleSnapshot,
+      value: {
+        ...sampleSnapshot.value,
+        virtualAddresses: [
+          { id: 'vip_proxy', name: 'wan-proxy', kind: 'proxyArp', segment: 'seg_wan', address: '203.0.113.50' },
+        ],
+        dns: dnsWithProxy,
+      },
+    };
+    let putBody: Record<string, unknown> | undefined;
+    fetchRoutes({
+      '/api/v1/config': snapshotWithRetainedProxy,
+      '/api/v1/config/dns': { state: 'saved', savedVersion: '8', version: '4', value: dnsWithProxy },
+      'PUT /api/v1/config/dns': (init) => {
+        putBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return jsonResponse(200, { state: 'saved', savedVersion: '9', version: '5', value: putBody });
+      },
+    });
+    renderDns();
+
+    const checkbox = await screen.findByRole('checkbox', { name: 'wan-proxy' });
+    expect(checkbox).toBeChecked();
+    expect(screen.getByText('Proxy ARP (cannot listen)')).toBeInTheDocument();
+    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(putBody).toBeDefined());
+    expect(putBody).not.toHaveProperty('virtualAddresses');
+  });
+
   it('renders dangling segment and virtual address IDs for removal and warns when management segment is missing', async () => {
     const dnsWithDangling: DnsService = {
       mode: 'recursive',

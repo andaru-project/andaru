@@ -50,6 +50,7 @@ function ipv4Mask(bits: number): number {
 }
 
 interface ParsedIpv4Cidr {
+  octets: [number, number, number, number];
   ip: number;
   network: number;
   bits: number;
@@ -58,13 +59,13 @@ interface ParsedIpv4Cidr {
 
 function parseIpv4Cidr(raw: string): ParsedIpv4Cidr | null {
   const s = raw.trim();
-  if (!s || s.includes('%')) return null;
+  if (!s || /\s/.test(s) || s.includes('%')) return null;
   const slash = s.indexOf('/');
   if (slash < 0) {
     const octets = parseIpv4Octets(s);
     if (!octets) return null;
     const ip = ipv4Number(octets);
-    return { ip, network: ip, bits: 32, hasSlash: false };
+    return { octets, ip, network: ip, bits: 32, hasSlash: false };
   }
   const addrPart = s.slice(0, slash);
   const bitsPart = s.slice(slash + 1);
@@ -74,7 +75,7 @@ function parseIpv4Cidr(raw: string): ParsedIpv4Cidr | null {
   const octets = parseIpv4Octets(addrPart);
   if (!octets) return null;
   const ip = ipv4Number(octets);
-  return { ip, network: (ip & ipv4Mask(bits)) >>> 0, bits, hasSlash: true };
+  return { octets, ip, network: (ip & ipv4Mask(bits)) >>> 0, bits, hasSlash: true };
 }
 
 function prefixContainsIpv4(prefix: { network: number; bits: number }, ip: number): boolean {
@@ -93,7 +94,7 @@ function prefixesOverlapIpv4(a: { network: number; bits: number }, b: { network:
 // Parse a bare IPv6 address (no prefix, zone, or IPv4-mapped form) into its 8 lowercase canonical hex groups.
 function parseBareIpv6Groups(raw: string): string[] | null {
   const s = raw.trim();
-  if (!s || s.includes('/') || s.includes('%')) return null;
+  if (!s || /\s/.test(s) || s.includes('/') || s.includes('%')) return null;
   const groups = parseIpv6Groups(s);
   if (!groups) return null;
   // Reject pure-hex IPv4-mapped IPv6 (::ffff:0:0/96), matching netip.Addr.Is4In6().
@@ -101,10 +102,11 @@ function parseBareIpv6Groups(raw: string): string[] | null {
   return groups;
 }
 
-// Detect any IPv6 address or prefix (including IPv4-mapped forms) for proxy ARP's IPv6 refusal.
-function isIpv6Input(raw: string): boolean {
+// Detect pure IPv6 address or prefix (excluding IPv4-mapped forms) for proxy ARP's Proxy NDP refusal,
+// matching internal/config/virtual.go: a.Is6() && !a.Is4In6().
+function isPureIpv6Input(raw: string): boolean {
   const s = raw.trim();
-  if (!s || s.includes('%') || !s.includes(':')) return false;
+  if (!s || /\s/.test(s) || s.includes('%') || !s.includes(':')) return false;
   const slash = s.indexOf('/');
   const addrPart = slash >= 0 ? s.slice(0, slash) : s;
   if (slash >= 0) {
@@ -112,18 +114,7 @@ function isIpv6Input(raw: string): boolean {
     if (!/^(?:0|[1-9]\d{0,2})$/.test(bitsPart)) return false;
     if (Number(bitsPart) > 128) return false;
   }
-  if (parseIpv6Groups(addrPart) !== null) return true;
-  // Handle dotted-quad IPv4-embedded IPv6 such as ::ffff:203.0.113.50.
-  const lastColon = addrPart.lastIndexOf(':');
-  if (lastColon >= 0) {
-    const tail = parseIpv4Octets(addrPart.slice(lastColon + 1));
-    if (tail) {
-      const hi = ((tail[0] << 8) | tail[1]).toString(16);
-      const lo = ((tail[2] << 8) | tail[3]).toString(16);
-      return parseIpv6Groups(`${addrPart.slice(0, lastColon + 1)}${hi}:${lo}`) !== null;
-    }
-  }
-  return false;
+  return parseBareIpv6Groups(addrPart) !== null;
 }
 
 export function ipFamily(address: string): 'IPv4' | 'IPv6' | undefined {
@@ -150,22 +141,25 @@ export function staticIpv4Subnets(segment: Segment): StaticIpv4Subnet[] {
   return out;
 }
 
+// A /32 static address leaves no room for another address on the subnet (the only IP is the segment's own).
 export function isProxyArpEligibleSegment(segment: Segment): boolean {
-  return staticIpv4Subnets(segment).length > 0;
+  return staticIpv4Subnets(segment).some((sub) => sub.bits < 32);
+}
+
+function isAllowedIpv4Octets(octets: [number, number, number, number]): boolean {
+  const [o0, o1, o2, o3] = octets;
+  if (o0 === 0 && o1 === 0 && o2 === 0 && o3 === 0) return false; // unspecified
+  if (o0 === 127) return false; // loopback
+  if (o0 === 169 && o1 === 254) return false; // link-local unicast
+  if ((o0 & 0xf0) === 0xe0) return false; // multicast
+  if (o0 === 255 && o1 === 255 && o2 === 255 && o3 === 255) return false; // limited broadcast
+  return true;
 }
 
 // Matches internal/config/virtual.go: validUnicast(a) && !a.IsLinkLocalUnicast() && !a.Is4In6().
 function isAllowedVirtualAddress(address: string): boolean {
   const v4 = parseIpv4Octets(address);
-  if (v4) {
-    const [o0, o1, o2, o3] = v4;
-    if (o0 === 0 && o1 === 0 && o2 === 0 && o3 === 0) return false; // unspecified
-    if (o0 === 127) return false; // loopback
-    if (o0 === 169 && o1 === 254) return false; // link-local unicast
-    if ((o0 & 0xf0) === 0xe0) return false; // multicast
-    if (o0 === 255 && o1 === 255 && o2 === 255 && o3 === 255) return false; // limited broadcast
-    return true;
-  }
+  if (v4) return isAllowedIpv4Octets(v4);
   const v6 = parseBareIpv6Groups(address);
   if (v6) {
     if (v6.every((g) => g === '0')) return false; // unspecified (::)
@@ -224,18 +218,20 @@ export function checkVirtualIp(
     segment?: string;
     segments?: Segment[];
   },
-): { errors: Map<string, string>; duplicate: boolean } {
+): { errors: Map<string, string>; duplicate: boolean; stale: boolean } {
   const kind: VirtualAddressKind = options?.kind === 'proxyArp' ? 'proxyArp' : 'address';
   const trimmedName = name.trim();
   const trimmedAddress = address.trim();
   const errors = new Map<string, string>();
   let duplicate = false;
+  let stale = false;
 
   if (!trimmedName) {
     errors.set('name', 'A virtual IP needs a name.');
   } else if (existingVips.some((v) => v.value.id !== editingId && v.value.name === trimmedName)) {
     errors.set('name', 'Another virtual IP has this name.');
     duplicate = true;
+    stale = true;
   }
 
   const others = existingVips.filter((v) => v.value.id !== editingId);
@@ -244,38 +240,49 @@ export function checkVirtualIp(
     const segmentId = (options?.segment ?? '').trim();
     const segments = options?.segments;
     const chosenSegment = segments?.find((s) => s.id === segmentId);
+    const chosenSubnets = chosenSegment ? staticIpv4Subnets(chosenSegment).filter((sub) => sub.bits < 32) : [];
 
     if (!segmentId) {
       errors.set('segment', 'Choose a segment with a static IPv4 subnet.');
-    } else if (segments && (!chosenSegment || !isProxyArpEligibleSegment(chosenSegment))) {
+    } else if (segments && chosenSubnets.length === 0) {
       errors.set('segment', 'Choose a segment with a static IPv4 subnet.');
+      stale = true;
     }
 
     if (!trimmedAddress) {
       errors.set('address', 'A proxy ARP entry needs an IPv4 address or prefix.');
     } else if (trimmedAddress.includes('%')) {
       errors.set('address', 'Enter an address without an interface zone.');
-    } else if (isIpv6Input(trimmedAddress)) {
+    } else if (isPureIpv6Input(trimmedAddress)) {
       errors.set('address', 'Proxy NDP is not offered yet (#43).');
     } else {
       const parsed = parseIpv4Cidr(trimmedAddress);
-      if (!parsed) {
-        errors.set('address', 'Enter an IPv4 address or a /24–/32 prefix (for example 203.0.113.50 or 203.0.113.56/29).');
-      } else if (parsed.bits < 24 || parsed.bits > 32) {
+      if (!parsed || !isAllowedIpv4Octets(parsed.octets)) {
+        errors.set('address', 'Enter a unicast IPv4 address or a /24–/32 prefix (not loopback, link-local, multicast, or unspecified).');
+      } else if (parsed.bits < 24) {
         errors.set('address', 'Proxy ARP prefixes must be between /24 and /32.');
       } else if (parsed.hasSlash && parsed.ip !== parsed.network) {
         errors.set('address', 'Prefix host bits must be zero.');
       } else {
-        if (chosenSegment && isProxyArpEligibleSegment(chosenSegment)) {
-          const chosenSubnets = staticIpv4Subnets(chosenSegment);
-          if (!chosenSubnets.some((sub) => prefixContainsPrefixIpv4(sub, parsed))) {
-            errors.set('address', "Expected an address on one of the segment's static IPv4 subnets.");
-          }
+        if (chosenSubnets.length > 0 && !chosenSubnets.some((sub) => prefixContainsPrefixIpv4(sub, parsed))) {
+          errors.set('address', "Expected an address on one of the segment's static IPv4 subnets.");
+          stale = true;
         }
         if (!errors.has('address') && segments) {
           const hitsStatic = segments.some((seg) => staticIpv4Subnets(seg).some((sub) => prefixContainsIpv4(parsed, sub.hostIp)));
           if (hitsStatic) {
             errors.set('address', 'Proxy ARP cannot include a static address held by a segment.');
+            stale = true;
+          }
+        }
+        if (!errors.has('address') && segments) {
+          const hitsGateway = segments.some((seg) => {
+            const gw = seg.addressing.ipv4.gateway ? parseIpv4Octets(seg.addressing.ipv4.gateway) : null;
+            return gw !== null && prefixContainsIpv4(parsed, ipv4Number(gw));
+          });
+          if (hitsGateway) {
+            errors.set('address', "This range holds a segment's gateway.");
+            stale = true;
           }
         }
         if (!errors.has('address')) {
@@ -285,6 +292,7 @@ export function checkVirtualIp(
               if (otherPrefix && prefixesOverlapIpv4(parsed, otherPrefix)) {
                 errors.set('address', 'This address or prefix overlaps another proxy ARP entry.');
                 duplicate = true;
+                stale = true;
                 break;
               }
             } else {
@@ -292,6 +300,7 @@ export function checkVirtualIp(
               if (otherOctets && prefixContainsIpv4(parsed, ipv4Number(otherOctets))) {
                 errors.set('address', 'This prefix includes an existing held virtual IP.');
                 duplicate = true;
+                stale = true;
                 break;
               }
             }
@@ -300,7 +309,7 @@ export function checkVirtualIp(
       }
     }
 
-    return { errors, duplicate };
+    return { errors, duplicate, stale };
   }
 
   if (!trimmedAddress) {
@@ -314,6 +323,7 @@ export function checkVirtualIp(
   } else if (others.some((v) => virtualAddressKind(v.value) === 'address' && sameIpAddress(v.value.address, trimmedAddress))) {
     errors.set('address', 'Another virtual IP already has this address.');
     duplicate = true;
+    stale = true;
   } else {
     const octets = parseIpv4Octets(trimmedAddress);
     if (octets) {
@@ -326,9 +336,10 @@ export function checkVirtualIp(
       if (hitsProxy) {
         errors.set('address', 'This address falls inside a proxy ARP virtual IP.');
         duplicate = true;
+        stale = true;
       }
     }
   }
 
-  return { errors, duplicate };
+  return { errors, duplicate, stale };
 }

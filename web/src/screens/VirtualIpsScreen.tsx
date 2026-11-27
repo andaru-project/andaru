@@ -37,7 +37,7 @@ function VirtualIpEditor({
   saved,
   existingVips,
   segments,
-  addressLocks,
+  uses,
   onClose,
   onSessionLost,
   onRefused,
@@ -46,7 +46,7 @@ function VirtualIpEditor({
   saved?: SavedObject<VirtualAddress>;
   existingVips: Array<SavedObject<VirtualAddress>>;
   segments: Segment[];
-  addressLocks: VirtualIpUse[];
+  uses: VirtualIpUse[];
   onClose(): void;
   onSessionLost(): void;
   onRefused(): void;
@@ -89,7 +89,7 @@ function VirtualIpEditor({
   const segmentOptions = (() => {
     const items = eligibleSegments.map((s) => ({
       value: s.id,
-      label: `${s.name} (${staticIpv4Subnets(s).map((sub) => sub.cidr).join(', ')})`,
+      label: `${s.name} (${staticIpv4Subnets(s).filter((sub) => sub.bits < 32).map((sub) => sub.cidr).join(', ')})`,
     }));
     if (segment && !eligibleSegments.some((s) => s.id === segment)) {
       const found = segments.find((s) => s.id === segment);
@@ -124,7 +124,7 @@ function VirtualIpEditor({
     event.preventDefault();
     if (busy) return;
     setFailure('');
-    const { errors: localErrors, duplicate } = checkVirtualIp(name, address, existingVips, saved?.value.id, {
+    const { errors: localErrors, stale } = checkVirtualIp(name, address, existingVips, saved?.value.id, {
       kind,
       segment,
       segments,
@@ -132,7 +132,7 @@ function VirtualIpEditor({
     if (localErrors.size > 0) {
       setErrors(localErrors);
       setErrorFocusTick((tick) => tick + 1);
-      if (duplicate) onRefused();
+      if (stale) onRefused();
       return;
     }
 
@@ -150,7 +150,10 @@ function VirtualIpEditor({
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) return onSessionLost();
       if (!open.current) return;
-      const fields = fieldErrors(error, vipFieldPattern);
+      const fields = fieldErrors(error, (path) => {
+        const field = vipFieldPattern.exec(path)?.[1] ?? '';
+        return field === 'segment' && kind !== 'proxyArp' ? '' : field;
+      });
       setErrors(fields);
       setFailure(saveFailure(error, fields, 'virtual IP'));
       if (fields.size > 0 && !fields.has('')) setErrorFocusTick((tick) => tick + 1);
@@ -159,6 +162,8 @@ function VirtualIpEditor({
     }
   }
 
+  const addressLocks = uses.filter((u) => u.locksAddress);
+  const usedByDns = uses.some((u) => u.key === 'dns');
   const singleLock = addressLocks.length === 1;
   const isProxyArp = kind === 'proxyArp';
 
@@ -223,6 +228,17 @@ function VirtualIpEditor({
                 error={errors.get('address')}
                 onChange={(event) => setAddress(event.currentTarget.value)}
               />
+              {saved && usedByDns && isProxyArp && (
+                <Alert
+                  color="yellow"
+                  role="status"
+                  title="Address in use by DNS service"
+                >
+                  The DNS service listens on this virtual IP. Remove it from{' '}
+                  <Anchor component={Link} to="/network/dns" size="sm" onClick={onClose}>DNS service</Anchor>{' '}
+                  before switching it to Proxy ARP.
+                </Alert>
+              )}
               {saved && addressLocks.length > 0 && (
                 <Alert
                   color="yellow"
@@ -371,8 +387,8 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
           const deleting = deletingRow?.item;
           const blockers = deletingRow?.uses ?? [];
           const editingSaved = editing && editing !== 'new' ? editing : undefined;
-          const editingAddressLocks = editingSaved
-            ? (rows.find((r) => r.item.value.id === editingSaved.value.id)?.uses ?? []).filter((u) => u.locksAddress)
+          const editingUses = editingSaved
+            ? (rows.find((r) => r.item.value.id === editingSaved.value.id)?.uses ?? [])
             : [];
 
           return (
@@ -475,7 +491,7 @@ export function VirtualIpsScreen({ api, session, onSaved, onSessionLost }: Virtu
                   saved={editingSaved}
                   existingVips={virtualAddresses.items}
                   segments={snapshot.value.segments}
-                  addressLocks={editingAddressLocks}
+                  uses={editingUses}
                   onClose={() => setEditing(undefined)}
                   onSessionLost={onSessionLost}
                   onRefused={() => { if (mounted.current) void resource.reload(); }}

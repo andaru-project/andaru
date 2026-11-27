@@ -279,6 +279,7 @@ body {
 
 /* A state is a word or two, and so is what a rule names: they are never cut short to fit a column. */
 .data-table td[data-label="State"] .mantine-Badge-root,
+.data-table td[data-label="Kind"] .mantine-Badge-root,
 .rules .mantine-Badge-root {
   min-width: max-content;
 }

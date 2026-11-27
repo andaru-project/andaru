@@ -928,5 +928,74 @@ describe('simulateTrafficFlow', () => {
     );
     expect(untranslated.verdict).toBe('no_route');
     expect(untranslated.decidedBy).toEqual({ label: 'Virtual IP WAN extra /29', to: '/network/virtual-ips' });
+
+    // Port forward with to.self does not match a proxyArp address; explicit to.address (alias) does.
+    const withPortForwards: Snapshot['value'] = {
+      ...withProxyArp,
+      aliases: {
+        ...withProxyArp.aliases,
+        addresses: [
+          ...(withProxyArp.aliases?.addresses ?? []),
+          { id: 'adr_proxy50', name: 'Proxy 50', kind: 'host', address: '203.0.113.50' },
+        ],
+        ports: withProxyArp.aliases?.ports ?? [],
+      },
+      nat: {
+        ...withProxyArp.nat,
+        oneToOne: [],
+        portForwards: [
+          {
+            id: 'pfw_self',
+            name: 'Self only',
+            enabled: true,
+            family: 'ipv4',
+            ingressZones: ['zon_wan'],
+            protocol: 'tcp',
+            from: [],
+            to: { self: true },
+            ports: '8080',
+            target: { address: '192.168.1.20' },
+          },
+          {
+            id: 'pfw_explicit',
+            name: 'Explicit proxy IP',
+            enabled: true,
+            family: 'ipv4',
+            ingressZones: ['zon_wan'],
+            protocol: 'tcp',
+            from: [],
+            to: { address: 'adr_proxy50' },
+            ports: '8443',
+            target: { address: '192.168.1.20' },
+          },
+        ],
+      },
+    };
+    const selfMissed = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_wan', protocol: 'tcp', srcIp: '198.51.100.10', dstIp: '203.0.113.50', dstPort: 8080 },
+      withPortForwards,
+    );
+    expect(selfMissed.verdict).toBe('no_route');
+    expect(selfMissed.decidedBy).toEqual({ label: 'Virtual IP WAN extra 50', to: '/network/virtual-ips' });
+
+    const explicitHit = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_wan', protocol: 'tcp', srcIp: '198.51.100.10', dstIp: '203.0.113.50', dstPort: 8443 },
+      withPortForwards,
+    );
+    expect(explicitHit.verdict).toBe('accept');
+    expect(explicitHit.finalTuple).toBe('TCP 198.51.100.10 → 192.168.1.20:8443');
+
+    // A proxyArp entry on a segment switched to DHCP is ignored in routing.
+    const dhcpProxy: Snapshot['value'] = {
+      ...withProxyArp,
+      segments: withProxyArp.segments.map((s) => (s.id === 'seg_wan'
+        ? { ...s, addressing: { ipv4: { mode: 'dhcp' }, ipv6: { mode: 'none' } } }
+        : s)),
+    };
+    const ignoredOnDhcp = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '192.168.1.50', dstIp: '203.0.113.58', dstPort: 443 },
+      dhcpProxy,
+    );
+    expect(ignoredOnDhcp.decidedBy).not.toEqual({ label: 'Virtual IP WAN extra /29', to: '/network/virtual-ips' });
   });
 });
