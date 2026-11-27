@@ -32,9 +32,9 @@ Kernel 6.12, systemd 257 (Debian 13), 2026-11-27, in network namespaces. The pro
 - `address` is one IPv6 address, global unicast: not unique local, link-local, multicast, loopback, unspecified or IPv4-mapped. A length is refused, because the kernel's proxy table holds single addresses: "Expected one global unicast IPv6 address, without a length."
 - `segment` and `hostSegment` exist and differ.
 - `segment` is not on a PPPoE link, refused at `/segment`: a point-to-point link has no neighbours to answer, and a prefix the provider routes over it belongs on a held block.
-- `hostSegment` is an inside segment, its IPv6 `static` or `delegated`: the host routes back by the firewall's link-local address, which the firewall's router advertisements there give it. A segment with no IPv6, or one facing upstream (SLAAC, DHCPv6), where the firewall sends none, is refused at `/hostSegment`.
-- `segment` has IPv6: with mode `none` its link has no address to answer neighbour discovery from. Refused at `/segment`.
-- When the segment has static IPv6 addresses, the address lies on one of their subnets. For a segment addressed by SLAAC or DHCPv6, the renderer warns instead (below).
+- `hostSegment` is an inside segment, its IPv6 `static` or `delegated`: the host routes back by the firewall's link-local address, which the firewall's router advertisements there give it, or a default route set on the host. A segment with no IPv6, or one facing upstream (SLAAC, DHCPv6), where the firewall sends none, is refused at `/hostSegment`.
+- `segment` is the uplink: its IPv6 not `none`, where its link has no address to answer neighbour discovery from, nor `delegated`, an inside segment with no provider to ask for the address. Refused at `/segment`.
+- When the segment has static IPv6 addresses, the address lies on one of their subnets. For a segment addressed by SLAAC or DHCPv6, the renderer warns instead (below) once the link's prefix is known.
 - The address is none of a segment's addresses and overlaps no other virtual address of any kind. It is not inside the static subnets of any segment but `segment`, the host segment's included: a host there already has a route.
 - It is no segment's gateway: the route would take the router's traffic to the host's segment. A DNS upstream or management source at the address is the inside host, which the route leads to, so it stays allowed.
 - It lies in no `dhcp6` delegation pool.

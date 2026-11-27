@@ -731,6 +731,12 @@ func TestProxyNDPValidation(t *testing.T) {
 				}
 			}
 		}, p + "/segment", "Expected a segment with IPv6"},
+		"an inside answering segment": {func(d map[string]any) {
+			// The LAN takes a /64 of the uplink's delegated prefix, and the entry answers there.
+			item(segmentsOf(d), 0)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "dhcp6", "requestPrefixLength": 48}
+			item(segmentsOf(d), 1)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "delegated", "from": item(segmentsOf(d), 0)["id"], "subnetId": "1"}
+			item(vips(d), 2)["segment"], item(vips(d), 2)["hostSegment"] = item(segmentsOf(d), 1)["id"], item(segmentsOf(d), 0)["id"]
+		}, p + "/segment", "Expected the uplink whose prefix the address is on"},
 		"the same segment twice": {func(d map[string]any) { item(vips(d), 2)["hostSegment"] = item(vips(d), 2)["segment"] }, p + "/hostSegment", "Expected a segment other than the one the firewall answers on."},
 		"off the static subnet":  {func(d map[string]any) { item(vips(d), 2)["address"] = "2001:db8:2::50" }, p + "/address", "Expected an address on one of the segment's static IPv6 subnets."},
 		"a firewall address":     {func(d map[string]any) { item(vips(d), 2)["address"] = "2001:db8:1::2" }, p + "/address", "This address is one of the firewall's own addresses."},

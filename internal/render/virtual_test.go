@@ -147,7 +147,10 @@ func TestProxyNDPOffSubnet(t *testing.T) {
 	if r := render(t, in); findingAt(r, "PROXY_NDP_OFF_SUBNET", one) || !r.Realizable {
 		t.Fatalf("nothing learned, yet %+v", r.Findings)
 	}
-	in.Links[0].Addresses = []host.AddressStatus{{Family: "ipv6", Address: "2001:db8:1::abcd", PrefixLength: 128, Scope: "global"}}
+	in.Links[0].Addresses = []host.AddressStatus{
+		{Family: "ipv6", Address: "fe80::1", PrefixLength: 64, Scope: "link"},
+		{Family: "ipv6", Address: "2001:db8:1::abcd", PrefixLength: 128, Scope: "global"},
+	}
 	if r := render(t, in); findingAt(r, "PROXY_NDP_OFF_SUBNET", one) {
 		t.Fatalf("a DHCPv6 /128 alone warned: %+v", r.Findings)
 	}
