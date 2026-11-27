@@ -258,6 +258,11 @@ func (f *fakeVerbs) AddonControl(_ context.Context, action, slug string) error {
 	return f.err
 }
 
+func (f *fakeVerbs) SyncAddonBusTokens(_ context.Context, tokens map[string]string) error {
+	f.calls = append(f.calls, fmt.Sprintf("addon-bus-tokens %d", len(tokens)))
+	return f.err
+}
+
 func (f *fakeVerbs) Fence(_ context.Context, denyAll bool) error {
 	f.calls = append(f.calls, fmt.Sprint("fence ", denyAll))
 	return f.err

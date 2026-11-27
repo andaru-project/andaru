@@ -47,8 +47,8 @@ TimeoutStopSec=5
 	env := "ANDARU_ADDON_SLUG=tailscale\n" + extraEnv
 	secret := "tskey-secret-value"
 	files := map[string][]byte{
-		"/run/containers/systemd/andaru-addon-tailscale.container":                   []byte(container),
-		"/run/andaru-addons/tailscale/andaru-addon-tailscale.env":                    []byte(env),
+		"/run/containers/systemd/andaru-addon-tailscale.container":                    []byte(container),
+		"/run/andaru-addons/tailscale/andaru-addon-tailscale.env":                     []byte(env),
 		"/run/andaru-addons/tailscale/secrets/andaru-addon-tailscale-auth_key.secret": []byte(secret),
 	}
 	m := Manifest{
@@ -76,9 +76,9 @@ func TestAddonActivateHealthFailureRollbackAndSafeMode(t *testing.T) {
 	healthCode := 200
 
 	r := Realizer{
-		StateDir: dir,
-		Root:     root,
-		Now:      time.Now,
+		StateDir:   dir,
+		Root:       root,
+		Now:        time.Now,
 		VerifyWait: 250 * time.Millisecond,
 		Poll:       25 * time.Millisecond,
 		LockWait:   time.Second,
@@ -354,5 +354,77 @@ func TestAddonActivateHealthFailureRollbackAndSafeMode(t *testing.T) {
 	}
 	if _, err := os.Stat(root + addonBusSocketHostDir); err != nil {
 		t.Fatalf("expected bus-socket preserved on teardown, err=%v", err)
+	}
+}
+
+func TestSyncAddonBusTokens(t *testing.T) {
+	root := t.TempDir()
+	state := t.TempDir()
+	r := Realizer{
+		Root:     root,
+		StateDir: state,
+	}
+
+	// Empty sync on clean host is a no-op and does not create /run/andaru-addons.
+	if err := r.SyncAddonBusTokens(t.Context(), nil); err != nil {
+		t.Fatalf("empty sync: %v", err)
+	}
+	if _, err := os.Stat(root + "/run/andaru-addons"); !os.IsNotExist(err) {
+		t.Fatalf("empty sync created /run/andaru-addons: err=%v", err)
+	}
+
+	// Create bus-socket dir to confirm it is never touched.
+	busSockDir := root + addonBusSocketHostDir
+	if err := os.MkdirAll(busSockDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(busSockDir, "bus.sock"), []byte("sock"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write two tokens and verify mode 0400 and content.
+	if err := r.SyncAddonBusTokens(t.Context(), map[string]string{
+		"alpha": "tok-alpha-1",
+		"beta":  "tok-beta-1",
+	}); err != nil {
+		t.Fatalf("SyncAddonBusTokens: %v", err)
+	}
+	for slug, want := range map[string]string{"alpha": "tok-alpha-1", "beta": "tok-beta-1"} {
+		p := root + "/run/andaru-addons/" + slug + "/bus/token"
+		info, err := os.Lstat(p)
+		if err != nil {
+			t.Fatalf("stat %s: %v", p, err)
+		}
+		if info.Mode().Perm() != 0o400 {
+			t.Fatalf("%s mode = %o, want 0400", p, info.Mode().Perm())
+		}
+		got, err := os.ReadFile(p)
+		if err != nil || string(got) != want {
+			t.Fatalf("%s content = %q, err=%v; want %q", p, got, err, want)
+		}
+	}
+
+	// Rotate alpha and revoke beta: beta's token is removed, alpha's is replaced, bus-socket untouched.
+	if err := r.SyncAddonBusTokens(t.Context(), map[string]string{
+		"alpha": "tok-alpha-2",
+	}); err != nil {
+		t.Fatalf("SyncAddonBusTokens rotate: %v", err)
+	}
+	if got, err := os.ReadFile(root + "/run/andaru-addons/alpha/bus/token"); err != nil || string(got) != "tok-alpha-2" {
+		t.Fatalf("alpha rotated = %q, err=%v", got, err)
+	}
+	if _, err := os.Stat(root + "/run/andaru-addons/beta/bus/token"); !os.IsNotExist(err) {
+		t.Fatalf("expected beta token removed, err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(busSockDir, "bus.sock")); err != nil {
+		t.Fatalf("bus-socket touched: %v", err)
+	}
+
+	// Invalid slug or token rejected before modifying files.
+	if err := r.SyncAddonBusTokens(t.Context(), map[string]string{"Bad": "tok"}); err == nil {
+		t.Fatal("expected error for invalid slug")
+	}
+	if err := r.SyncAddonBusTokens(t.Context(), map[string]string{"alpha": "line1\nline2"}); err == nil {
+		t.Fatal("expected error for newline in token")
 	}
 }

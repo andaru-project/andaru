@@ -31,9 +31,9 @@ var eventsHeartbeat = 25 * time.Second
 // andaru realize publishes the state of each apply there. A store the bus cannot open is moved aside and the bus
 // starts with an empty one, rather than stopping the engine: every durable consumer that comes back is then told
 // of a gap, the bus's signal that it may have missed events.
-func openBus(stateDir, socket, services string) (*bus.Bus, func() error, error) {
+func openBus(stateDir, socket, services, addons string) (*bus.Bus, func() error, error) {
 	path := filepath.Join(stateDir, "bus.db")
-	events, closeEvents, err := startBus(path, socket, services, false)
+	events, closeEvents, err := startBus(path, socket, services, addons, false)
 	if !errors.Is(err, bus.ErrStore) {
 		return events, closeEvents, err
 	}
@@ -45,7 +45,7 @@ func openBus(stateDir, socket, services string) (*bus.Bus, func() error, error) 
 			return nil, nil, errors.Join(err, renameErr)
 		}
 	}
-	events, closeEvents, retryErr := startBus(path, socket, services, true)
+	events, closeEvents, retryErr := startBus(path, socket, services, addons, true)
 	if retryErr != nil {
 		return nil, nil, errors.Join(err, retryErr)
 	}
@@ -53,10 +53,12 @@ func openBus(stateDir, socket, services string) (*bus.Bus, func() error, error) 
 }
 
 // ServicesSocket is where Andaru's unprivileged services reach the bus. Its directory comes from tmpfiles.d, with the
-// group servicesGroup the services are in.
+// group servicesGroup the services are in. AddonsBusSocket is where containerized add-ons reach the token-authenticated
+// add-on bus listener via a directory bind mount of /run/andaru-addons/bus-socket.
 const (
-	ServicesSocket = "/run/andaru-services/bus.sock"
-	servicesGroup  = "andaru-services"
+	ServicesSocket  = "/run/andaru-services/bus.sock"
+	servicesGroup   = "andaru-services"
+	AddonsBusSocket = "/run/andaru-addons/bus-socket/bus.sock"
 )
 
 // busGrants are what each client of the bus may publish and subscribe to, by user name.
@@ -72,8 +74,8 @@ const outboundUser = "andaru-outbound"
 // with cgo off, user names are read from /etc/passwd alone.
 var serviceUsers = []string{outboundUser}
 
-// startBus serves the root socket and, when services is not empty, the services socket.
-func startBus(path, socket, services string, lost bool) (*bus.Bus, func() error, error) {
+// startBus serves the root socket, and when configured, the services peer socket and the add-on token socket.
+func startBus(path, socket, services, addons string, lost bool) (*bus.Bus, func() error, error) {
 	listener, closeListener, err := listenRootSocket(socket, "bus")
 	if err != nil {
 		return nil, nil, err
@@ -86,17 +88,27 @@ func startBus(path, socket, services string, lost bool) (*bus.Bus, func() error,
 			peers["services"], closePeers = l, closeServices
 		}
 	}
-	closeAll := func() error { return errors.Join(closeListener(), closePeers()) }
+	tokens, closeTokens := map[string]net.Listener{}, func() error { return nil }
+	if addons != "" {
+		lockPath := filepath.Join(filepath.Dir(socket), "addons-bus.sock.lock")
+		if l, closeAddons, err := listenAddonsBusSocket(addons, lockPath); err != nil {
+			slog.Warn("no bus socket for add-ons", "socket", addons, "error", err)
+		} else {
+			tokens["addons"], closeTokens = l, closeAddons
+		}
+	}
+	closeAll := func() error { return errors.Join(closeListener(), closePeers(), closeTokens()) }
 	events, err := bus.Open(bus.Options{
 		Path:   path,
 		Grants: busGrants,
 		// The socket is root's alone, so whoever connects is trusted with the grants of the name it gives.
-		Authenticate:  func(_, _ string) bool { return true },
-		Listeners:     map[string]net.Listener{"root": listener},
-		PeerListeners: peers,
-		PeerUser:      serviceUser,
-		LostHistory:   lost,
-		Logger:        slog.Default().With("component", "bus"),
+		Authenticate:   func(_, _ string) bool { return true },
+		Listeners:      map[string]net.Listener{"root": listener},
+		PeerListeners:  peers,
+		PeerUser:       serviceUser,
+		TokenListeners: tokens,
+		LostHistory:    lost,
+		Logger:         slog.Default().With("component", "bus"),
 	})
 	if err != nil {
 		return nil, nil, errors.Join(err, closeAll())

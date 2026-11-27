@@ -35,6 +35,7 @@ type realizeVerbs interface {
 	FillAliases(ctx context.Context) error
 	ReleaseAddonsHold(ctx context.Context) error
 	AddonControl(ctx context.Context, action, slug string) error
+	SyncAddonBusTokens(ctx context.Context, tokens map[string]string) error
 	Fence(ctx context.Context, denyAll bool) error
 }
 
@@ -88,7 +89,7 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 	verb := flags.Arg(0)
 	want := map[string]int{
 		"activate": 1, "rollback": 2, "confirm": 1, "boot": 0, "leases": 0, "prefixes": 0, "aliases": 0, "addons-release-hold": 0, "factory-reset": 0,
-		"addon-stage": 1, "addon-unstage": 1, "addon-ctl": 2,
+		"addon-stage": 1, "addon-unstage": 1, "addon-ctl": 2, "addon-bus-tokens": 1,
 		"update-check": 0, "update-stage": 0, "update-rollback": 0, "update-reboot": 0, "set-hostname": 1,
 	}
 	n, known := want[verb]
@@ -122,6 +123,10 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 		if (rest[0] != "start" && rest[0] != "stop" && rest[0] != "restart") || !addon.ValidSlug(rest[1]) {
 			return usageError(stderr, realizeUsage, "andaru realize")
 		}
+	case "addon-bus-tokens":
+		if !filepath.IsAbs(rest[0]) || filepath.Clean(rest[0]) != rest[0] {
+			return usageError(stderr, realizeUsage, "andaru realize")
+		}
 	}
 	if verb == "factory-reset" {
 		return factoryResetVerb(ctx, stderr)
@@ -132,7 +137,7 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 		fmt.Fprintln(stderr, "a factory reset is in progress; "+verb+" waits for it")
 		// The engine keeps owing these: it tries them again after the reset.
 		switch verb {
-		case "set-hostname", "aliases", "addons-release-hold", "addon-stage", "addon-unstage", "addon-ctl":
+		case "set-hostname", "aliases", "addons-release-hold", "addon-stage", "addon-unstage", "addon-ctl", "addon-bus-tokens":
 			return 1
 		}
 		return 0
@@ -182,6 +187,11 @@ func realizeCommand(ctx context.Context, args []string, stdout, stderr io.Writer
 		err = verbs.ReleaseAddonsHold(ctx)
 	case "addon-ctl":
 		err = verbs.AddonControl(ctx, rest[0], rest[1])
+	case "addon-bus-tokens":
+		var tokens map[string]string
+		if tokens, err = readAddonBusTokensFile(rest[0]); err == nil {
+			err = verbs.SyncAddonBusTokens(ctx, tokens)
+		}
 	}
 	// A verb on a generation may change its state even when it fails, so the bus hears of each one.
 	if id != 0 && *busSocket != "" {

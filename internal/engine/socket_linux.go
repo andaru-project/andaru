@@ -97,7 +97,7 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 		}
 	}()
 	busSocket := filepath.Join(filepath.Dir(socketPath), "bus.sock")
-	events, closeEvents, err := openBus(stateDir, busSocket, ServicesSocket)
+	events, closeEvents, err := openBus(stateDir, busSocket, ServicesSocket, AddonsBusSocket)
 	if err != nil {
 		return fmt.Errorf("start the event bus: %w", err)
 	}
@@ -126,7 +126,16 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	defer func() { cancel(context.Canceled); <-stopped }()
 	runner := newSystemdRunner(stateDir, busSocket)
 	feeds := newAliasFeeds(lifetime, stateDir, events, savedAndLive(stateDir, store), func(ctx context.Context) error { return runner.Realize(ctx, "aliases", 0) })
-	hold := newAddonsHold(systemRoot, upgradePending, func(ctx context.Context) error { return runner.Realize(ctx, "addons-release-hold", 0) })
+	addonBus := newAddonBusSync(systemRoot, stateDir, filepath.Dir(busSocket), catalog, events, store.AddonBusGrantsAt, func(ctx context.Context, tokensFile string) error {
+		return runner.Realize(ctx, "addon-bus-tokens", 0, tokensFile)
+	})
+	hold := newAddonsHold(systemRoot, func(ctx context.Context) (bool, error) {
+		if !addonBus.isReady() {
+			return false, errors.New("waiting for initial add-on event bus token sync")
+		}
+		return upgradePending(ctx)
+	}, func(ctx context.Context) error { return runner.Realize(ctx, "addons-release-hold", 0) })
+	addonBus.onReady = hold.nudge
 	store.OnSave(func(v config.Version) { head(v); sources.nudge(); feeds.nudge(); hold.nudge() })
 	// Without its store the layer does not read: notifications wait in the bus's log, for its retention, until a
 	// start that opens it, and the API answers that they are unavailable.
@@ -162,6 +171,7 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	readFacts := func() (host.RealizerFacts, error) { return host.ReadRealizerFactsFor(stateDir) }
 	read := hostReader{Links: host.ReadLinks, Facts: readFacts, Managed: host.ReadManaged, BootUnit: host.ReadBootUnit, Catalog: catalog, StateDir: stateDir}
 	applies := newAppliesHandler(store.ApplyInput, store.RealizationInput, store.Roles, read, runner, stateDir, identities, coordinator, publishApply(events, "engine"))
+	applies.addonBus = addonBus
 	identityAPI := newIdentityAPI(identities, store, coordinator)
 	auditAPI := newAuditAPI(coordinator)
 	backups := newBackupHandler(store, identities, coordinator, stateDir, host.ReadLinks)
@@ -189,7 +199,7 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	// A load the consumer waits on stops before the consumer is waited for.
 	defer cancel(context.Canceled)
 	// The engine states its notifications once the head is in the current schema, and again as applies and saves go.
-	stopApplies, err := events.Subscribe("apply/+", func(string, []byte) { sources.nudge(); feeds.apply() })
+	stopApplies, err := events.Subscribe("apply/+", func(string, []byte) { sources.nudge(); feeds.apply(); addonBus.nudge() })
 	if err != nil {
 		return fmt.Errorf("follow applies for notifications: %w", err)
 	}
@@ -200,6 +210,12 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	fed := make(chan struct{})
 	go func() { defer close(fed); feeds.run(lifetime) }()
 	defer func() { cancel(context.Canceled); <-fed }()
+	// Sync live add-on bus tokens and grants synchronously before releasing the boot add-on hold so
+	// add-ons starting at boot find their runtime token file and registered bus client already in place.
+	initialBusRetry := addonBus.sync(lifetime)
+	busSynced := make(chan struct{})
+	go func() { defer close(busSynced); addonBus.runWithInitial(lifetime, initialBusRetry) }()
+	defer func() { cancel(context.Canceled); <-busSynced }()
 	// Evaluate and release the boot add-on hold synchronously before serving API requests so an early
 	// Activate never mistakes boot startup for a pending settings hold.
 	initialHoldRetry := hold.check(lifetime)
@@ -383,44 +399,18 @@ func listenGroupSocket(socketPath string, gid uint32, group, name string) (*net.
 		}
 		return nil, nil, errors.New(name + " socket parent must be a root-owned 0710 directory with the configured group, not a symlink")
 	}
-	claim, err := claimWebSocket(socketPath, name)
-	if err != nil {
-		return nil, nil, err
-	}
-	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
-	if err != nil {
-		_ = claim.Close()
-		return nil, nil, fmt.Errorf("listen on %s socket: %w", name, err)
-	}
-	listener.SetUnlinkOnClose(false)
-	bound, err := os.Lstat(socketPath)
-	if err != nil || bound.Mode()&os.ModeSocket == 0 || !securefs.RootOwned(bound) {
-		_ = listener.Close()
-		_ = claim.Close()
-		return nil, nil, errors.New("cannot establish ownership of the bound " + name + " socket")
-	}
-	closeListener := func() error {
-		_ = listener.Close()
-		return errors.Join(removeOwnedSocket(socketPath, bound), claim.Close())
-	}
-	fail := func(err error) (*net.UnixListener, func() error, error) {
-		return nil, nil, errors.Join(err, closeListener())
-	}
-	if err = os.Chown(socketPath, 0, int(gid)); err != nil {
-		return fail(fmt.Errorf("set %s socket group: %w", name, webGroupHint(err, gid, group)))
-	}
-	if err = os.Chmod(socketPath, 0660); err != nil {
-		return fail(fmt.Errorf("protect %s socket: %w", name, err))
-	}
-	owned, err := os.Lstat(socketPath)
-	if err != nil {
-		return fail(fmt.Errorf("inspect bound %s socket: %w", name, err))
-	}
-	socketStat, statOK := owned.Sys().(*syscall.Stat_t)
-	if owned.Mode()&os.ModeSocket == 0 || owned.Mode().Perm() != 0660 || !securefs.RootOwned(owned) || !os.SameFile(bound, owned) || !statOK || socketStat.Gid != gid {
-		return fail(errors.New("cannot establish ownership and mode of the bound " + name + " socket"))
-	}
-	return listener, closeListener, nil
+	return bindClaimedSocket(socketPath, socketPath+".lock", name, 0o660,
+		func(p string) error {
+			if err := os.Chown(p, 0, int(gid)); err != nil {
+				return fmt.Errorf("set %s socket group: %w", name, webGroupHint(err, gid, group))
+			}
+			return nil
+		},
+		func(owned os.FileInfo) bool {
+			socketStat, ok := owned.Sys().(*syscall.Stat_t)
+			return ok && socketStat.Gid == gid
+		},
+	)
 }
 
 func serveWebUnix(ctx context.Context, web WebSocketOptions, handler http.Handler) (result error) {
@@ -532,12 +522,105 @@ func webGroupHint(err error, gid uint32, group string) error {
 	return err
 }
 
-// claimWebSocket takes a group socket's path for this engine and clears what a killed engine left there: systemd
-// restarts the engine, but the socket's directory comes from tmpfiles.d, so nothing else removes the file.
-// The lock beside the socket is held for the engine's life, so a socket found under it has no owner among engines
-// that take the lock. The lock file stays; it is root's, 0600.
-func claimWebSocket(path, name string) (_ *os.File, err error) {
-	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0600)
+// listenAddonsBusSocket binds the token-authenticated add-on event bus socket (mode 0666) inside a root-owned
+// 0755 socket directory whose parent (/run/andaru-addons) is a root-owned 0700 directory so host non-root users
+// cannot traverse it while containers mounting the socket directory can connect regardless of container UID.
+// Its claim lock is stored at lockPath (in the engine's private /run/andaru dir), never inside the mounted socket dir.
+func listenAddonsBusSocket(socketPath, lockPath string) (*net.UnixListener, func() error, error) {
+	if !filepath.IsAbs(socketPath) || filepath.Clean(socketPath) != socketPath || len(socketPath) >= 108 {
+		return nil, nil, errors.New("add-ons bus socket requires a canonical absolute path shorter than 108 bytes")
+	}
+	if !filepath.IsAbs(lockPath) || filepath.Clean(lockPath) != lockPath {
+		return nil, nil, errors.New("add-ons bus socket lock requires a canonical absolute path")
+	}
+	parent := filepath.Dir(socketPath)
+	grandparent := filepath.Dir(parent)
+	if err := securefs.CheckAncestors(filepath.Dir(grandparent)); err != nil {
+		return nil, nil, err
+	}
+	if err := securefs.CheckAncestors(filepath.Dir(lockPath)); err != nil {
+		return nil, nil, err
+	}
+	if err := os.Mkdir(grandparent, 0o700); err != nil && !os.IsExist(err) {
+		return nil, nil, fmt.Errorf("create add-ons runtime directory: %w", err)
+	}
+	gpInfo, err := os.Lstat(grandparent)
+	if err != nil {
+		return nil, nil, fmt.Errorf("inspect add-ons runtime directory: %w", err)
+	}
+	if !gpInfo.IsDir() || gpInfo.Mode().Perm() != 0o700 || !securefs.RootOwned(gpInfo) {
+		return nil, nil, errors.New("add-ons runtime directory must be a root-owned 0700 directory, not a symlink")
+	}
+	createdParent := false
+	if err := os.Mkdir(parent, 0o755); err == nil {
+		createdParent = true
+		if err = os.Chmod(parent, 0o755); err != nil {
+			_ = os.Remove(parent)
+			return nil, nil, fmt.Errorf("protect add-ons bus socket directory: %w", err)
+		}
+	} else if !os.IsExist(err) {
+		return nil, nil, fmt.Errorf("create add-ons bus socket directory: %w", err)
+	}
+	info, err := os.Lstat(parent)
+	if err != nil {
+		return nil, nil, fmt.Errorf("inspect add-ons bus socket directory: %w", err)
+	}
+	if !info.IsDir() || info.Mode().Perm() != 0o755 || !securefs.RootOwned(info) {
+		if createdParent {
+			_ = os.Remove(parent)
+		}
+		return nil, nil, errors.New("add-ons bus socket directory must be a root-owned 0755 directory, not a symlink")
+	}
+	return bindClaimedSocket(socketPath, lockPath, "add-ons bus", 0o666, nil, nil)
+}
+
+func bindClaimedSocket(socketPath, lockPath, name string, mode os.FileMode, chgrp func(string) error, checkExtra func(os.FileInfo) bool) (*net.UnixListener, func() error, error) {
+	claim, err := claimSocket(socketPath, lockPath, name)
+	if err != nil {
+		return nil, nil, err
+	}
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
+	if err != nil {
+		_ = claim.Close()
+		return nil, nil, fmt.Errorf("listen on %s socket: %w", name, err)
+	}
+	listener.SetUnlinkOnClose(false)
+	bound, err := os.Lstat(socketPath)
+	if err != nil || bound.Mode()&os.ModeSocket == 0 || !securefs.RootOwned(bound) {
+		_ = listener.Close()
+		_ = claim.Close()
+		return nil, nil, errors.New("cannot establish ownership of the bound " + name + " socket")
+	}
+	closeListener := func() error {
+		_ = listener.Close()
+		return errors.Join(removeOwnedSocket(socketPath, bound), claim.Close())
+	}
+	fail := func(err error) (*net.UnixListener, func() error, error) {
+		return nil, nil, errors.Join(err, closeListener())
+	}
+	if chgrp != nil {
+		if err = chgrp(socketPath); err != nil {
+			return fail(err)
+		}
+	}
+	if err = os.Chmod(socketPath, mode); err != nil {
+		return fail(fmt.Errorf("protect %s socket: %w", name, err))
+	}
+	owned, err := os.Lstat(socketPath)
+	if err != nil {
+		return fail(fmt.Errorf("inspect bound %s socket: %w", name, err))
+	}
+	if owned.Mode()&os.ModeSocket == 0 || owned.Mode().Perm() != mode || !securefs.RootOwned(owned) || !os.SameFile(bound, owned) || (checkExtra != nil && !checkExtra(owned)) {
+		return fail(errors.New("cannot establish ownership and mode of the bound " + name + " socket"))
+	}
+	return listener, closeListener, nil
+}
+
+// claimSocket takes a socket's path for this engine using lockPath and clears what a killed engine left there:
+// systemd restarts the engine, but tmpfiles.d socket directories persist, so nothing else removes a stale socket.
+// The lock file is held for the engine's life; it is root's, 0600.
+func claimSocket(path, lockPath, name string) (_ *os.File, err error) {
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("open %s socket lock: %w", name, err)
 	}

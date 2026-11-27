@@ -1,7 +1,9 @@
 package config
 
 import (
+	"context"
 	"fmt"
+	"maps"
 	"net/netip"
 	"os"
 	"regexp"
@@ -10,6 +12,31 @@ import (
 
 	"github.com/andaru-project/andaru/internal/addon"
 )
+
+// AddonBusGrant holds one configured add-on's identity, enabled state, and declared bus grant decisions
+// at a saved configuration version.
+type AddonBusGrant struct {
+	ID        string
+	Enabled   bool
+	Publish   map[string]string
+	Subscribe map[string]string
+}
+
+// AddonBusGrantsAt returns the add-on bus grants of a saved version; an empty version is the saved head.
+func (s *Store) AddonBusGrantsAt(ctx context.Context, version Version) (result []AddonBusGrant, err error) {
+	err = s.read(ctx, version, nil, func(state savedState, _ VersionInfo) error {
+		for _, a := range state.Config.Addons {
+			result = append(result, AddonBusGrant{
+				ID:        a.ID,
+				Enabled:   a.Enabled,
+				Publish:   maps.Clone(a.BusGrants.Publish),
+				Subscribe: maps.Clone(a.BusGrants.Subscribe),
+			})
+		}
+		return nil
+	})
+	return
+}
 
 var (
 	zoneIDPattern     = regexp.MustCompile(`^zon_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)

@@ -161,12 +161,14 @@ type appliesHandler struct {
 	// stored hears of each generation once it is stored, before realize runs it, and again once realize returns;
 	// realize also tells of what it does, but only on a best-effort basis.
 	stored func(id int)
+	// addonBus keeps add-on event bus tokens and grants synchronized before and after realize transitions.
+	addonBus *addonBusSync
 	// mu keeps two requests from preparing generations against the same host state.
 	mu sync.Mutex
 }
 
 // newAppliesHandler serves applies: the engine renders, gates and stores; realize, run by PID 1, changes the host.
-func newAppliesHandler(input, realization func(context.Context, *config.Version) (config.RealizationInput, error), roles func(context.Context, config.Version) ([]authz.Role, error), read hostReader, runner realizeRunner, stateDir string, identities applyIdentity, coordinator *securityCoordinator, stored func(id int)) http.Handler {
+func newAppliesHandler(input, realization func(context.Context, *config.Version) (config.RealizationInput, error), roles func(context.Context, config.Version) ([]authz.Role, error), read hostReader, runner realizeRunner, stateDir string, identities applyIdentity, coordinator *securityCoordinator, stored func(id int)) *appliesHandler {
 	return &appliesHandler{
 		input: input, realization: realization, roles: roles, read: read, runner: runner, dir: generation.Dir(stateDir), stateDir: stateDir,
 		identities: identities, coordinator: coordinator, stored: stored,
@@ -501,7 +503,14 @@ func (h *appliesHandler) create(w http.ResponseWriter, r *http.Request) {
 		h.unavailable(w, r, "authorize generation activation", err)
 		return
 	}
+	var finishAddonBus func(context.Context)
+	if h.addonBus != nil {
+		finishAddonBus = h.addonBus.beginPrepare(ctx, id)
+	}
 	runErr := h.runner.Realize(ctx, "activate", id)
+	if finishAddonBus != nil {
+		finishAddonBus(ctx)
+	}
 	h.stored(id)
 	g, err := generation.Read(h.dir, id)
 	if err != nil || (g.State.State == generation.Failed && g.Reason == "never started") {
@@ -589,7 +598,18 @@ func (h *appliesHandler) finish(w http.ResponseWriter, r *http.Request, id int, 
 			}
 		}
 	}
+	var finishAddonBus func(context.Context)
+	if h.addonBus != nil && verb == "rollback" {
+		prevID := 0
+		if before.Previous != nil {
+			prevID = *before.Previous
+		}
+		finishAddonBus = h.addonBus.beginPrepare(ctx, prevID)
+	}
 	runErr := h.runner.Realize(ctx, verb, id, extra...)
+	if finishAddonBus != nil {
+		finishAddonBus(ctx)
+	}
 	h.stored(id)
 	g, err := generation.Read(h.dir, id)
 	if err != nil {

@@ -198,6 +198,24 @@ func TestAddonConfigSecretsZonesBackupAndUninstall(t *testing.T) {
 		t.Fatal("SameRealization returned true after changing addon secret")
 	}
 
+	// AddonBusGrantsAt reads the exact bus grant state at a historical saved version.
+	grantsV1, err := store.AddonBusGrantsAt(ctx, v1)
+	if err != nil {
+		t.Fatalf("AddonBusGrantsAt(v1): %v", err)
+	}
+	if len(grantsV1) != 1 || grantsV1[0].ID != "org.andaru.tailscale" || !grantsV1[0].Enabled ||
+		grantsV1[0].Publish["notification/addon.tailscale"] != "granted" ||
+		grantsV1[0].Subscribe["config/head"] != "denied" {
+		t.Fatalf("grantsV1 = %+v", grantsV1)
+	}
+	grantsV2, err := store.AddonBusGrantsAt(ctx, res2.SavedVersion)
+	if err != nil {
+		t.Fatalf("AddonBusGrantsAt(v2): %v", err)
+	}
+	if len(grantsV2) != 1 || grantsV2[0].Subscribe["config/head"] != "" {
+		t.Fatalf("grantsV2 = %+v", grantsV2)
+	}
+
 	// Backup & restore with secrets preserves scoped addon secret; without secrets marks it unresolved and blocks apply.
 	withSecrets, err := store.Export(ctx, true)
 	if err != nil {

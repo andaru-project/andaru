@@ -22,9 +22,10 @@ CapabilityBoundingSet=
 # No capability is needed to hand the web socket to the andaru-web group: an owner may chgrp to a group it is in
 # (internal/engine/socket_linux.go). The group comes from sysusers.d; without it the unit does not start.
 # ProtectSystem=strict makes /run read-only; tmpfiles.d creates /run/andaru-web, and the engine starts without it.
-# The same holds for the services bus socket in /run/andaru-services and the andaru-services group.
+# The same holds for the services bus socket in /run/andaru-services (andaru-services group)
+# and the add-on event bus socket in /run/andaru-addons/bus-socket.
 SupplementaryGroups=andaru-web andaru-services
-ReadWritePaths=-/run/andaru-web -/run/andaru-services
+ReadWritePaths=-/run/andaru-web -/run/andaru-services -/run/andaru-addons/bus-socket
 AmbientCapabilities=
 ProtectSystem=strict
 ProtectHome=yes
