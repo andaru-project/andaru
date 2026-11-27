@@ -309,6 +309,50 @@ describe('DnsScreen', () => {
     expect(putBody).not.toHaveProperty('virtualAddresses');
   });
 
+  it('excludes held routed blocks from DNS listener choices and retains an already-referenced block with a warning', async () => {
+    const withBlocksSnapshot: Snapshot = {
+      ...sampleSnapshot,
+      value: {
+        ...sampleSnapshot.value,
+        virtualAddresses: [
+          { id: 'vip_dns', name: 'dns-vip', address: '172.16.53.53' },
+          { id: 'vip_blk4', name: 'routed-v4', address: '198.51.100.0/29' },
+          { id: 'vip_blk6', name: 'routed-v6', address: '2001:db8:53::/64' },
+        ],
+      },
+    };
+    fetchRoutes({
+      '/api/v1/config': withBlocksSnapshot,
+      '/api/v1/config/dns': { state: 'saved', savedVersion: '8', version: '4', value: existingDns },
+    });
+    const firstRender = renderDns();
+
+    expect(await screen.findByRole('checkbox', { name: 'dns-vip' })).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'routed-v4' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'routed-v6' })).not.toBeInTheDocument();
+    firstRender.unmount();
+
+    const dnsWithBlock: DnsService = { ...existingDns, virtualAddresses: ['vip_blk4'] };
+    let putBody: Record<string, unknown> | undefined;
+    fetchRoutes({
+      '/api/v1/config': { ...withBlocksSnapshot, value: { ...withBlocksSnapshot.value, dns: dnsWithBlock } },
+      '/api/v1/config/dns': { state: 'saved', savedVersion: '8', version: '4', value: dnsWithBlock },
+      'PUT /api/v1/config/dns': (init) => {
+        putBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return jsonResponse(200, { state: 'saved', savedVersion: '9', version: '5', value: putBody });
+      },
+    });
+    renderDns();
+
+    const checkbox = await screen.findByRole('checkbox', { name: 'routed-v4' });
+    expect(checkbox).toBeChecked();
+    expect(screen.getByText('Block (cannot listen)')).toBeInTheDocument();
+    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(putBody).toBeDefined());
+    expect(putBody).not.toHaveProperty('virtualAddresses');
+  });
+
   it('renders dangling segment and virtual address IDs for removal and warns when management segment is missing', async () => {
     const dnsWithDangling: DnsService = {
       mode: 'recursive',

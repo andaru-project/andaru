@@ -1025,4 +1025,113 @@ describe('simulateTrafficFlow', () => {
     expect(translatedToProxy.verdict).toBe('no_route');
     expect(translatedToProxy.steps.find((s) => s.stage === 'verdict')?.summary).toMatch(/Traffic translated to a proxy ARP address/);
   });
+
+  it('treats addresses inside held routed blocks as the firewall own addresses across routing, port forwards, and reflection', () => {
+    const withRoutedBlocks: Snapshot['value'] = {
+      ...baseConfig,
+      virtualAddresses: [
+        ...(baseConfig.virtualAddresses ?? []),
+        { id: 'vip_blk4', name: 'Routed v4 /29', address: '198.51.100.0/29' },
+        { id: 'vip_blk6', name: 'Routed v6 /64', address: '2001:db8:53::/64' },
+      ],
+      aliases: {
+        ...baseConfig.aliases,
+        addresses: [
+          ...(baseConfig.aliases?.addresses ?? []),
+          { id: 'adr_blk4', name: 'Routed v4 alias', kind: 'network', prefix: '198.51.100.0/29' },
+        ],
+        ports: baseConfig.aliases?.ports ?? [],
+      },
+      nat: {
+        ...baseConfig.nat,
+        portForwards: [
+          {
+            id: 'pfw_to_blk',
+            name: 'Forward into held block',
+            enabled: true,
+            family: 'ipv4',
+            ingressZones: ['zon_wan'],
+            protocol: 'tcp',
+            from: [],
+            to: { self: true },
+            ports: '8443',
+            target: { address: '198.51.100.5' },
+            targetPort: 443,
+            filterRule: 'auto',
+            reflection: true,
+          },
+          {
+            id: 'pfw_from_blk',
+            name: 'Forward from held block alias',
+            enabled: true,
+            family: 'ipv4',
+            ingressZones: ['zon_wan'],
+            protocol: 'tcp',
+            from: [],
+            to: { address: 'adr_blk4' },
+            ports: '8080',
+            target: { address: '192.168.1.20' },
+            reflection: true,
+          },
+        ],
+      },
+      rules: [
+        {
+          id: 'rul_in_wan',
+          name: 'Allow WAN to firewall',
+          enabled: true,
+          action: 'accept',
+          from: { zones: ['zon_wan'], addresses: [] },
+          to: { zones: [firewallZone], addresses: [] },
+          ports: [],
+          log: false,
+        },
+        ...(baseConfig.rules ?? []),
+      ],
+    };
+
+    // Direct traffic to an IPv4 inside a held block enters input chain owned by the Virtual IP.
+    const directV4 = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_wan', protocol: 'icmp', srcIp: '203.0.113.50', dstIp: '198.51.100.5' },
+      withRoutedBlocks,
+    );
+    expect(directV4.verdict).toBe('accept');
+    expect(directV4.chain).toBe('input');
+    expect(directV4.steps.find((s) => s.stage === 'routing')?.decidedBy).toEqual({ label: 'Virtual IP Routed v4 /29', to: '/network/virtual-ips' });
+
+    // Direct traffic to an IPv6 inside a held block also enters input chain owned by the Virtual IP.
+    const directV6 = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_wan', protocol: 'icmpv6', srcIp: '2001:db8:99::1', dstIp: '2001:db8:53::42' },
+      withRoutedBlocks,
+    );
+    expect(directV6.verdict).toBe('accept');
+    expect(directV6.chain).toBe('input');
+    expect(directV6.steps.find((s) => s.stage === 'routing')?.decidedBy).toEqual({ label: 'Virtual IP Routed v6 /64', to: '/network/virtual-ips' });
+
+    // Port forward targeting an address inside a held block uses input chain (auto-rule accepts without any WAN->firewall rule).
+    const withoutWanInputRule: Snapshot['value'] = { ...withRoutedBlocks, rules: baseConfig.rules ?? [] };
+    const forwardedToBlock = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_wan', protocol: 'tcp', srcIp: '203.0.113.50', dstIp: '198.51.100.3', dstPort: 8443 },
+      withoutWanInputRule,
+    );
+    expect(forwardedToBlock.verdict).toBe('accept');
+    expect(forwardedToBlock.chain).toBe('input');
+    expect(forwardedToBlock.finalTuple).toBe('TCP 203.0.113.50 → 198.51.100.5:443');
+    expect(forwardedToBlock.steps.find((s) => s.stage === 'filter')?.decidedBy).toEqual({ label: 'Port forward #1 auto rule (Forward into held block)', to: '/firewall/nat' });
+
+    // Internal reflection does NOT trigger for traffic addressed to a held block (internalOwn4 / virtual4 exclusion).
+    const noReflectSelf = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '192.168.1.50', dstIp: '198.51.100.3', dstPort: 8443 },
+      withRoutedBlocks,
+    );
+    expect(noReflectSelf.chain).toBe('input');
+    expect(noReflectSelf.finalTuple).toBe('TCP 192.168.1.50 → 198.51.100.3:8443');
+
+    const noReflectAlias = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '192.168.1.50', dstIp: '198.51.100.3', dstPort: 8080 },
+      withRoutedBlocks,
+    );
+    expect(noReflectAlias.chain).toBe('input');
+    expect(noReflectAlias.finalTuple).toBe('TCP 192.168.1.50 → 198.51.100.3:8080');
+  });
 });

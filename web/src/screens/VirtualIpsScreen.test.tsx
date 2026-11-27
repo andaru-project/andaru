@@ -7,7 +7,7 @@ import { fetchRoutes, jsonResponse } from '../test/fetch';
 import { session } from '../test/fixtures';
 import { render } from '../test/render';
 import type { SavedObject, Snapshot, VirtualAddress } from '../types';
-import { checkVirtualIp, ipFamily, isProxyArpEligibleSegment, maxVirtualAddresses, sameIpAddress, virtualAddressFamily, virtualAddressKind } from '../virtualIps';
+import { checkVirtualIp, ipFamily, isProxyArpEligibleSegment, isSingleVirtualAddress, maxVirtualAddresses, sameIpAddress, virtualAddressFamily, virtualAddressKind, virtualAddressUses } from '../virtualIps';
 import { VirtualIpsScreen } from './VirtualIpsScreen';
 
 afterEach(() => {
@@ -83,13 +83,81 @@ describe('VirtualIpsScreen helpers', () => {
   });
 
   it('rejects non-unicast, loopback, link-local, multicast, broadcast, unspecified, and zone-scoped inputs', () => {
-    for (const bad of ['0.0.0.0', '127.0.0.1', '169.254.1.1', '224.0.0.1', '255.255.255.255', '::', '::1', 'fe80::1', 'ff02::1', '::ffff:102:304']) {
+    for (const bad of ['0.0.0.0', '0.0.0.0/24', '127.0.0.1', '127.0.0.0/24', '169.254.1.1', '169.254.1.0/24', '224.0.0.1', '224.0.0.0/24', '255.255.255.255', '255.255.255.0/24', '::', '::/64', '::1', '::1/128', 'fe80::1', 'fe80::/64', 'ff02::1', 'ff02::/64', '::ffff:102:304', '::ffff:0:0/96']) {
       expect(checkVirtualIp('test', bad, []).errors.get('address')).toMatch(/unicast/);
     }
     expect(checkVirtualIp('test', 'fe80::1%eth0', []).errors.get('address')).toMatch(/interface zone/);
-    expect(checkVirtualIp('test', '172.16.53.1/32', []).errors.get('address')).toMatch(/prefix length/);
+    expect(checkVirtualIp('test', '198.51.100.0/23', []).errors.get('address')).toMatch(/\/24 and \/32/);
+    expect(checkVirtualIp('test', '2001:db8:53::/47', []).errors.get('address')).toMatch(/\/48 and \/128/);
+    expect(checkVirtualIp('test', '198.51.100.1/29', []).errors.get('address')).toMatch(/host bits must be zero/);
+    expect(checkVirtualIp('test', '2001:db8:53::1/64', []).errors.get('address')).toMatch(/host bits must be zero/);
     expect(checkVirtualIp('', '', []).errors.get('name')).toMatch(/needs a name/);
     expect(checkVirtualIp('', '', []).errors.get('address')).toMatch(/needs an address/);
+  });
+
+  it('validates held routed blocks, /32 and /128 single addresses, segment subnet overlap, and block-targeted uses', () => {
+    for (const valid of ['172.16.53.53', '172.16.53.53/32', '198.51.100.0/29', '198.51.100.0/24', 'fd00:53::53', 'fd00:53::53/128', '2001:db8:53::/64', '2001:db8:53::/48']) {
+      expect(checkVirtualIp('Held ok', valid, []).errors.size).toBe(0);
+    }
+
+    expect(virtualAddressFamily({ address: '198.51.100.0/29' })).toBe('IPv4');
+    expect(virtualAddressFamily({ address: '2001:db8:53::/64' })).toBe('IPv6');
+    expect(isSingleVirtualAddress({ address: '172.16.53.53' })).toBe(true);
+    expect(isSingleVirtualAddress({ address: '172.16.53.53/32' })).toBe(true);
+    expect(isSingleVirtualAddress({ address: 'fd00:53::53' })).toBe(true);
+    expect(isSingleVirtualAddress({ address: 'fd00:53::53/128' })).toBe(true);
+    expect(isSingleVirtualAddress({ address: '198.51.100.0/29' })).toBe(false);
+    expect(isSingleVirtualAddress({ address: '2001:db8:53::/64' })).toBe(false);
+    expect(isSingleVirtualAddress({ kind: 'proxyArp', address: '203.0.113.50' })).toBe(false);
+
+    const lanSeg = {
+      id: 'seg_lan',
+      name: 'LAN',
+      link: 'lnk_1',
+      zone: 'zon_lan',
+      addressing: {
+        ipv4: { mode: 'static' as const, addresses: ['192.168.1.1/24'] },
+        ipv6: { mode: 'static' as const, addresses: ['2001:db8:1::1/64'] },
+      },
+    };
+    expect(checkVirtualIp('On v4 subnet', '192.168.1.0/29', [], undefined, { kind: 'address', segments: [lanSeg] }).errors.get('address')).toMatch(/segment's subnet/);
+    expect(checkVirtualIp('On v6 subnet', '2001:db8:1::/64', [], undefined, { kind: 'address', segments: [lanSeg] }).errors.get('address')).toMatch(/segment's subnet/);
+
+    const existingBlocks: Array<SavedObject<VirtualAddress>> = [
+      { value: { id: 'vip_b4', name: 'Routed v4', address: '198.51.100.0/29' }, version: '1' },
+      { value: { id: 'vip_b6', name: 'Routed v6', address: '2001:db8:53::/64' }, version: '1' },
+    ];
+    expect(checkVirtualIp('Dup v4 inside block', '198.51.100.5', existingBlocks).errors.get('address')).toMatch(/overlaps another virtual IP/);
+    expect(checkVirtualIp('Dup v6 inside block', '2001:db8:53::42', existingBlocks).errors.get('address')).toMatch(/overlaps another virtual IP/);
+    expect(checkVirtualIp('Dup v4 /32', '172.16.53.53/32', fixtureVips).errors.get('address')).toMatch(/already has this address/);
+    expect(checkVirtualIp('Proxy over held block', '198.51.100.4/30', existingBlocks, undefined, { kind: 'proxyArp', segment: 'seg_x' }).errors.get('address')).toMatch(/overlaps an existing held virtual IP/);
+
+    const snapshotWithBlockPf: Snapshot = {
+      ...sampleSnapshot,
+      value: {
+        ...sampleSnapshot.value,
+        nat: {
+          portForwards: [
+            {
+              id: 'pfw_blk',
+              name: 'Block service',
+              enabled: true,
+              family: 'ipv4',
+              ingressZones: ['zon_wan'],
+              protocol: 'tcp',
+              from: [],
+              to: { self: true },
+              ports: '443',
+              target: { address: '198.51.100.5' },
+            },
+          ],
+        },
+      },
+    };
+    const uses = virtualAddressUses(existingBlocks[0].value, snapshotWithBlockPf);
+    expect(uses).toEqual([
+      { key: 'pfw:pfw_blk', label: 'Port forward 1 (Block service)', to: '/firewall/nat', locksAddress: true },
+    ]);
   });
 
   it('validates proxyArp entries, segment eligibility, IPv6 refusal, prefixes, gateways, and cross-kind overlaps', () => {
@@ -178,7 +246,7 @@ describe('VirtualIpsScreen helpers', () => {
     expect(includesHeld.duplicate).toBe(true);
 
     const heldInsideProxy = checkVirtualIp('Held inside', '203.0.113.58', existing, undefined, { kind: 'address' });
-    expect(heldInsideProxy.errors.get('address')).toMatch(/inside a proxy ARP/);
+    expect(heldInsideProxy.errors.get('address')).toMatch(/proxy ARP/);
     expect(heldInsideProxy.duplicate).toBe(true);
   });
 });
@@ -244,14 +312,14 @@ describe('VirtualIpsScreen', () => {
     await user.click(await screen.findByRole('button', { name: 'Add virtual IP' }));
     const addDrawer = await screen.findByRole('dialog', { name: 'Add virtual IP' });
 
-    // Rejects CIDR prefix and duplicate name, focusing first invalid input.
+    // Rejects non-zero host bits and duplicate name, focusing first invalid input.
     const nameInput = within(addDrawer).getByLabelText(/^Name/);
-    const addrInput = within(addDrawer).getByRole('textbox', { name: /^Address/ });
+    const addrInput = within(addDrawer).getByRole('textbox', { name: /^Address or prefix/ });
     await user.type(nameInput, 'DNS v4');
-    await user.type(addrInput, '172.16.53.10/32');
+    await user.type(addrInput, '198.51.100.1/29');
     await user.click(within(addDrawer).getByRole('button', { name: 'Add virtual IP' }));
     expect(await within(addDrawer).findByText('Another virtual IP has this name.')).toBeInTheDocument();
-    expect(within(addDrawer).getByText('Enter a single address without a prefix length.')).toBeInTheDocument();
+    expect(within(addDrawer).getByText('Prefix host bits must be zero.')).toBeInTheDocument();
     expect(nameInput).toHaveFocus();
 
     // Rejects canonical IPv6 duplicate.
@@ -649,5 +717,40 @@ describe('VirtualIpsScreen', () => {
     const alert = await within(drawer).findByRole('alert');
     expect(alert).toHaveTextContent('Only a proxy ARP entry names a segment.');
     expect(alert).toHaveFocus();
+  });
+
+  it('creates a held routed block and warns when changing a DNS-referenced VIP to a block', async () => {
+    const user = userEvent.setup();
+    let postedBody: Record<string, unknown> | undefined;
+    fetchRoutes({
+      '/api/v1/config/virtualAddresses': { state: 'saved', savedVersion: '9', items: fixtureVips },
+      '/api/v1/config': sampleSnapshot,
+      'POST /api/v1/config/virtualAddresses': (init) => {
+        postedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return jsonResponse(201, { value: { id: 'vip_blk', ...postedBody }, version: '10' });
+      },
+    });
+    const { onSaved } = renderVirtualIps();
+
+    await user.click(await screen.findByRole('button', { name: 'Add virtual IP' }));
+    const addDrawer = await screen.findByRole('dialog', { name: 'Add virtual IP' });
+    await user.type(within(addDrawer).getByLabelText(/^Name/), 'Routed v4 block');
+    await user.type(within(addDrawer).getByRole('textbox', { name: /^Address or prefix/ }), '198.51.100.0/29');
+    await user.click(within(addDrawer).getByRole('button', { name: 'Add virtual IP' }));
+
+    await waitFor(() => expect(postedBody).toEqual({
+      name: 'Routed v4 block',
+      address: '198.51.100.0/29',
+    }));
+    expect(onSaved).toHaveBeenCalledTimes(1);
+
+    // Editing a DNS-referenced VIP to a block shows the single-address DNS warning.
+    await user.click(screen.getByRole('button', { name: 'Edit virtual IP DNS v4' }));
+    const editDrawer = await screen.findByRole('dialog', { name: 'Edit virtual IP: DNS v4' });
+    const addrInput = within(editDrawer).getByRole('textbox', { name: /^Address or prefix/ });
+    await user.clear(addrInput);
+    await user.type(addrInput, '198.51.100.0/29');
+    expect(within(editDrawer).getByText('Address in use by DNS service')).toBeInTheDocument();
+    expect(within(editDrawer).getByText(/name one address, not a block/)).toBeInTheDocument();
   });
 });

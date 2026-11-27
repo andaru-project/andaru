@@ -8,7 +8,7 @@ import {
 } from '../dnsEdit';
 import type { DnsMode, DnsService, DnsUpstreamProtocol, SavedObject, Session, Snapshot } from '../types';
 import { useConnected, useResource } from '../useResource';
-import { virtualAddressKind } from '../virtualIps';
+import { isSingleVirtualAddress, virtualAddressKind } from '../virtualIps';
 import { zoneColorMap } from '../zones';
 import { ZoneBadge } from './ZoneBadge';
 
@@ -121,7 +121,7 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
   const allVirtualAddresses = snapshot.value.virtualAddresses ?? [];
   const allVipById = new Map(allVirtualAddresses.map((v) => [v.id, v]));
   const retainedVipIds = new Set([...(dns?.value.virtualAddresses ?? []), ...activeDraft.virtualAddresses]);
-  const virtualAddresses = allVirtualAddresses.filter((v) => virtualAddressKind(v) === 'address' || retainedVipIds.has(v.id));
+  const virtualAddresses = allVirtualAddresses.filter((v) => isSingleVirtualAddress(v) || retainedVipIds.has(v.id));
   const danglingVipIds = Array.from(retainedVipIds).filter((id) => !allVipById.has(id));
   const showVirtualAddresses = virtualAddresses.length > 0 || danglingVipIds.length > 0;
   const needsManagementForVips = activeDraft.virtualAddresses.length > 0 && !snapshot.value.management?.segment;
@@ -506,7 +506,9 @@ export function DnsScreen({ api, session, onSaved, onSessionLost }: DnsScreenPro
                             />
                             <Group gap="xs" wrap="wrap">
                               <Text size="xs" c="dimmed" ff="monospace">{vip.address}</Text>
-                              {virtualAddressKind(vip) === 'proxyArp' && <Text size="xs" className="warning-text">Proxy ARP (cannot listen)</Text>}
+                              {virtualAddressKind(vip) === 'proxyArp'
+                                ? <Text size="xs" className="warning-text">Proxy ARP (cannot listen)</Text>
+                                : !isSingleVirtualAddress(vip) && <Text size="xs" className="warning-text">Block (cannot listen)</Text>}
                             </Group>
                           </Group>
                         ))}
