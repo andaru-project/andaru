@@ -923,6 +923,14 @@ func validDigestImage(ref string) bool {
 	host := registry
 	if h, port, hasPort := strings.Cut(registry, ":"); hasPort {
 		host = h
+		if port == "" || port[0] < '1' || port[0] > '9' {
+			return false
+		}
+		for _, c := range port {
+			if c < '0' || c > '9' {
+				return false
+			}
+		}
 		p, err := strconv.Atoi(port)
 		if err != nil || p < 1 || p > 65535 {
 			return false
@@ -940,7 +948,7 @@ func validDigestImage(ref string) bool {
 }
 
 func validURLPath(p string) bool {
-	if !strings.HasPrefix(p, "/") {
+	if !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") || strings.ContainsAny(p, `\#`) {
 		return false
 	}
 	for _, r := range p {
@@ -1200,6 +1208,8 @@ func validateBinding(prop *Property, p string, usedEnv, usedArg, usedSecretFile 
 		if isMulti {
 			if b.Encoding == nil || b.Encoding.Mode != "join" || b.Encoding.Separator == "" {
 				bad(p+"/encoding", `multi-value environment binding requires encoding { "mode": "join", "separator": "..." }`)
+			} else if strings.ContainsRune(b.Encoding.Separator, 0) || strings.ContainsAny(b.Encoding.Separator, "\r\n") {
+				bad(p+"/encoding/separator", "join separator must not contain NUL bytes or newlines")
 			} else {
 				checkEnumJoinSeparator(prop, p, b.Encoding.Separator, bad)
 			}
@@ -1232,6 +1242,8 @@ func validateBinding(prop *Property, p string, usedEnv, usedArg, usedSecretFile 
 			} else if b.Encoding.Mode == "join" {
 				if b.Encoding.Separator == "" {
 					bad(p+"/encoding/separator", "join encoding requires a non-empty separator")
+				} else if strings.ContainsRune(b.Encoding.Separator, 0) {
+					bad(p+"/encoding/separator", "join separator must not contain NUL bytes")
 				} else {
 					checkEnumJoinSeparator(prop, p, b.Encoding.Separator, bad)
 				}
@@ -1264,6 +1276,9 @@ func validateBinding(prop *Property, p string, usedEnv, usedArg, usedSecretFile 
 		}
 		if b.Env != "" {
 			reserveEnv(b.Env, p+"/env", usedEnv, bad)
+			if strings.ContainsRune(b.Prefix, 0) || strings.ContainsAny(b.Prefix, "\r\n") {
+				bad(p+"/prefix", "prefix must not contain NUL bytes or newlines")
+			}
 		} else if b.Prefix != "" {
 			bad(p+"/prefix", "prefix requires env to be set")
 		}

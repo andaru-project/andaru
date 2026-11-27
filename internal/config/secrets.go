@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -118,7 +119,7 @@ func checkResolvedReferences(d *declaration) error {
 		}
 		for _, k := range addonSettingSecretKeys(a.Settings) {
 			if ref, ok := addonSecretRef(a.Settings[k]); ok && ref.Unresolved {
-				details = append(details, FieldError{Path: fmt.Sprintf("/addons/%d/settings/%s", i, k), Message: "Secret " + ref.Secret + " is unresolved; explicitly bind or set it before applying."})
+				details = append(details, FieldError{Path: fmt.Sprintf("/addons/%d/settings/%s", i, escapeJSONPointer(k)), Message: "Secret " + ref.Secret + " is unresolved; explicitly bind or set it before applying."})
 			}
 		}
 	}
@@ -172,7 +173,7 @@ func heldSecrets(d *declaration) []heldSecret {
 			out = append(out, heldSecret{
 				key:   objectKey{"addons", a.ID},
 				scope: scope,
-				path:  fmt.Sprintf("/addons/%d/settings/%s", i, k),
+				path:  fmt.Sprintf("/addons/%d/settings/%s", i, escapeJSONPointer(k)),
 				ref:   ref,
 				markUnresolved: func() {
 					m["unresolved"] = true
@@ -232,9 +233,18 @@ func secretFields(collection string, value map[string]any) []secretField {
 		if !ok {
 			return nil
 		}
+		// Every JSON object in add-on settings is a secretWrite/secretRef (no other v1 property type is an object),
+		// so routing all object entries through secretFields ensures malformed secret objects never bypass validation.
+		var keys []string
+		for k, v := range settings {
+			if _, isObj := v.(map[string]any); isObj {
+				keys = append(keys, k)
+			}
+		}
+		slices.Sort(keys)
 		var out []secretField
-		for _, k := range addonSettingSecretKeys(settings) {
-			out = append(out, secretField{"/settings/" + k, settings, k})
+		for _, k := range keys {
+			out = append(out, secretField{"/settings/" + escapeJSONPointer(k), settings, k})
 		}
 		return out
 	}

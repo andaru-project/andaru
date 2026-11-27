@@ -542,7 +542,11 @@ func realized(value json.RawMessage) []byte {
 	var links []map[string]json.RawMessage
 	if json.Unmarshal(d["links"], &links) == nil {
 		for _, l := range links {
-			stripped, err := stripSecretViewMeta(l["password"], false)
+			rawPass, ok := l["password"]
+			if !ok {
+				continue
+			}
+			stripped, err := stripSecretViewMeta(rawPass, false)
 			if err != nil {
 				return value
 			}

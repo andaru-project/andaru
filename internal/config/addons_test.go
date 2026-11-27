@@ -312,10 +312,12 @@ func TestAddonRecoveryDisabledZoneMalformedSecretAndReinstall(t *testing.T) {
 	}
 	tsZone, fbZone := zRes.Created["ts"], zRes.Created["fb"]
 
-	// Malformed secretWrite (non-string set / unknown field) must be rejected, never silently stripped.
+	// Malformed secretWrite (non-string set / unknown field / missing or non-string secret key) must be rejected.
 	for _, bad := range []string{
 		`{"id":"org.andaru.tailscale","enabled":false,"settings":{"authKey":{"secret":"auth_key","set":123,"expectedVersion":"0"}}}`,
 		`{"id":"org.andaru.tailscale","enabled":false,"settings":{"authKey":{"secret":"auth_key","bogus":1}}}`,
+		`{"id":"org.andaru.tailscale","enabled":false,"settings":{"authKey":{"secret":123,"set":"plaintext","expectedVersion":"0"}}}`,
+		`{"id":"org.andaru.tailscale","enabled":false,"settings":{"authKey":{"set":"plaintext"}}}`,
 		`{"id":"org.andaru.tailscale","enabled":false,"settings":{"hostname":{"secret":"not_a_secret_prop","set":"x","expectedVersion":"0"}}}`,
 	} {
 		if _, err := store.Save(ctx, actor, Changes{Operations: []Operation{
