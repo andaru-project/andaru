@@ -144,6 +144,9 @@ type applyIdentity interface {
 
 type appliesHandler struct {
 	input       func(context.Context, *config.Version) (config.RealizationInput, error)
+	// realization reads a saved version as input does, but also one held for upgrade decisions: it only tells
+	// whether the head needs an apply.
+	realization func(context.Context, *config.Version) (config.RealizationInput, error)
 	roles       func(context.Context, config.Version) ([]authz.Role, error)
 	read        hostReader
 	runner      realizeRunner
@@ -159,9 +162,9 @@ type appliesHandler struct {
 }
 
 // newAppliesHandler serves applies: the engine renders, gates and stores; realize, run by PID 1, changes the host.
-func newAppliesHandler(input func(context.Context, *config.Version) (config.RealizationInput, error), roles func(context.Context, config.Version) ([]authz.Role, error), read hostReader, runner realizeRunner, stateDir string, identities applyIdentity, coordinator *securityCoordinator, stored func(id int)) http.Handler {
+func newAppliesHandler(input, realization func(context.Context, *config.Version) (config.RealizationInput, error), roles func(context.Context, config.Version) ([]authz.Role, error), read hostReader, runner realizeRunner, stateDir string, identities applyIdentity, coordinator *securityCoordinator, stored func(id int)) http.Handler {
 	return &appliesHandler{
-		input: input, roles: roles, read: read, runner: runner, dir: generation.Dir(stateDir), stateDir: stateDir,
+		input: input, realization: realization, roles: roles, read: read, runner: runner, dir: generation.Dir(stateDir), stateDir: stateDir,
 		identities: identities, coordinator: coordinator, stored: stored,
 	}
 }
@@ -222,34 +225,36 @@ func (h *appliesHandler) list(w http.ResponseWriter, r *http.Request) {
 	for _, g := range items {
 		view.Items = append(view.Items, viewApply(g))
 	}
-	view.Unapplied = h.unapplied(r.Context(), p.Live, items)
+	live := ""
+	if i := slices.IndexFunc(items, func(g generation.Generation) bool { return p.Live != nil && g.ID == *p.Live }); i >= 0 {
+		live = items[i].SavedVersion
+	}
+	same, err := realizes(r.Context(), h.realization, nil, config.Version(live))
+	if err != nil {
+		slog.WarnContext(r.Context(), "compare the saved head with the live generation", "error", err)
+	}
+	view.Unapplied = !same
 	writeJSON(w, r, http.StatusOK, view)
 }
 
-// unapplied reports whether the saved head holds something the live generation does not realize. With no live
-// generation, the factory network runs: any saved version is unapplied. A version it cannot read is unapplied too.
-func (h *appliesHandler) unapplied(ctx context.Context, live *int, items []generation.Generation) bool {
-	head, err := h.input(ctx, nil)
+// realizes reports whether the network made from saved version live realizes saved version head, the saved head
+// when nil: an apply of head would change nothing. No live generation ("") is the factory network, version 0.
+func realizes(ctx context.Context, read func(context.Context, *config.Version) (config.RealizationInput, error), head *config.Version, live config.Version) (bool, error) {
+	if live == "" {
+		live = "0"
+	}
+	if head != nil && *head == live {
+		return true, nil
+	}
+	a, err := read(ctx, head)
+	if err != nil || a.SavedVersion == live {
+		return err == nil, err
+	}
+	b, err := read(ctx, &live)
 	if err != nil {
-		slog.WarnContext(ctx, "read the saved head", "error", err)
-		return true
+		return false, err
 	}
-	i := -1
-	if live != nil {
-		i = slices.IndexFunc(items, func(g generation.Generation) bool { return g.ID == *live })
-	}
-	if i < 0 {
-		return head.SavedVersion != "0"
-	}
-	if v := config.Version(items[i].SavedVersion); v != head.SavedVersion {
-		running, err := h.input(ctx, &v)
-		if err != nil {
-			slog.WarnContext(ctx, "read the live generation's saved version", "version", v, "error", err)
-			return true
-		}
-		return !config.SameRealization(head, running)
-	}
-	return false
+	return config.SameRealization(a, b), nil
 }
 
 // show writes one apply and reports whether it existed.

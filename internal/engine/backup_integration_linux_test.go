@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -450,5 +451,73 @@ func TestCredentialBackupRequiresHumanReauthenticationAndEncryption(t *testing.T
 				t.Fatalf("credential selection=%+v err=%v", decoded.Manifest.Scopes, err)
 			}
 		})
+	}
+}
+
+// A backup taken after only a notification channel was saved over the live generation's version reports nothing
+// unapplied; one taken after a zone was saved reports the network.
+func TestBackupUnappliedIgnoresSavedChannels(t *testing.T) {
+	requireRoot(t)
+	stateDir := filepath.Join(privateTestDir(t), "state")
+	store, err := config.Open(context.Background(), stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identities, err := identity.Open(context.Background(), stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer identities.Close()
+	audits, err := audit.Open(context.Background(), stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer audits.Close()
+	generationDir := generation.Dir(stateDir)
+	if err := os.Mkdir(generationDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	backups := newBackupHandler(store, identities, newSecurityCoordinator(identities, audits, stateDir), stateDir, func(context.Context) ([]host.LinkStatus, error) { return []host.LinkStatus{}, nil })
+	handler := newHandler(func(context.Context) ([]host.LinkStatus, error) { return []host.LinkStatus{}, nil },
+		newSavedHandler(store, func(context.Context) ([]host.LinkStatus, error) { return []host.LinkStatus{}, nil },
+			func() (host.RealizerFacts, error) { return host.RealizerFacts{}, nil }, http.NotFoundHandler(), backups))
+	areas := func() []string {
+		t.Helper()
+		response := httptest.NewRecorder()
+		request := rootRequest(http.MethodPost, backupPath)
+		request.Header.Set("Content-Type", "application/json")
+		request.Body = io.NopCloser(strings.NewReader(`{"includeSecrets":false}`))
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("backup: %d %s", response.Code, response.Body)
+		}
+		archive, err := backup.Decode(context.Background(), response.Body.Bytes(), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return archive.Manifest.SavedButUnappliedAreas
+	}
+
+	if saved := configCall(handler, http.MethodPost, "/api/v1/config/zones", `{"name":"lan"}`, ""); saved.Code != http.StatusCreated {
+		t.Fatalf("save zone: %d %s", saved.Code, saved.Body)
+	}
+	if _, err := generation.Create(generationDir, generation.Manifest{SavedVersion: "1", CreatedAt: time.Now().UTC()}, map[string][]byte{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(generationDir, "pointers.json"), []byte(`{"confirmed":1,"lastKnownGood":null,"pending":null,"live":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if saved := configCall(handler, http.MethodPost, "/api/v1/config/notifications/channels", `{"name":"ops","kind":"webhook","webhook":{"url":{"secret":"OPS_URL","set":"https://hooks.example/x","expectedVersion":"0"}}}`, ""); saved.Code != http.StatusCreated {
+		t.Fatalf("save channel: %d %s", saved.Code, saved.Body)
+	}
+	if got := areas(); len(got) != 0 {
+		t.Fatalf("a saved channel left %q unapplied", got)
+	}
+	if saved := configCall(handler, http.MethodPost, "/api/v1/config/zones", `{"name":"dmz"}`, ""); saved.Code != http.StatusCreated {
+		t.Fatalf("save zone: %d %s", saved.Code, saved.Body)
+	}
+	if got := areas(); !slices.Equal(got, []string{"network"}) {
+		t.Fatalf("a saved zone left %q unapplied", got)
 	}
 }
