@@ -338,6 +338,14 @@ func TestNATInlineAddressLiterals(t *testing.T) {
 	refusedAt(t, d, "/nat/portForwards/0/to/address")
 
 	d = natFixture(t)
+	setNAT(d, "oneToOne", map[string]any{
+		"id": "oto_00000001-0000-4000-8000-000000000001", "name": "srv", "enabled": true,
+		"zone": item(d["zones"].([]any), 0)["id"], "external": "203.0.113.50", "internal": "192.0.2.50",
+		"destination": []any{"2001:db8::1"},
+	})
+	refusedAt(t, d, "/nat/oneToOne/0/destination/0")
+
+	d = natFixture(t)
 	setNAT(d, "portForwards", forward(d, map[string]any{
 		"family": "ipv6",
 		"from":   []any{"10.0.0.1"},
@@ -345,10 +353,10 @@ func TestNATInlineAddressLiterals(t *testing.T) {
 	}))
 	refusedAt(t, d, "/nat/portForwards/0/from/0")
 
-	// Canonical IPv6 overlap detection catches differently-spelled identical literals.
+	// Canonical IPv6 overlap detection catches differently-spelled and duplicate identical literals.
 	d = natFixture(t)
 	setNAT(d, "portForwards",
-		forward(d, map[string]any{"id": "pfw_00000001-0000-4000-8000-000000000001", "name": "a", "family": "ipv6", "from": []any{"2001:0db8::0001"}, "target": map[string]any{"self": true}}),
+		forward(d, map[string]any{"id": "pfw_00000001-0000-4000-8000-000000000001", "name": "a", "family": "ipv6", "from": []any{"2001:0db8::0001", "2001:db8::1"}, "target": map[string]any{"self": true}}),
 		forward(d, map[string]any{"id": "pfw_00000002-0000-4000-8000-000000000002", "name": "b", "family": "ipv6", "from": []any{"2001:db8::1"}, "target": map[string]any{"self": true}}),
 	)
 	refusedAt(t, d, "/nat/portForwards/1/ports")

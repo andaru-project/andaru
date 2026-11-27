@@ -7,20 +7,20 @@ import {
   parseAddressLiteral,
   parseAliasLiterals,
   parsePortLiteral,
+  parsePortLiteralValue,
 } from './aliasLiteral';
+import { addressAliasesForFamily } from './natEdit';
 
 describe('parseAddressLiteral', () => {
   it('parses canonical IPv4 and IPv6 host addresses and honors family/kind filters', () => {
     expect(parseAddressLiteral('192.168.1.50')).toEqual([{
       value: '192.168.1.50',
-      label: '192.168.1.50',
       optionLabel: '192.168.1.50',
       hint: 'IPv4 address',
     }]);
 
     expect(parseAddressLiteral('2001:0db8:0000:0000::50')).toEqual([{
       value: '2001:db8::50',
-      label: '2001:db8::50',
       optionLabel: '2001:db8::50',
       hint: 'IPv6 address',
     }]);
@@ -44,7 +44,6 @@ describe('parseAddressLiteral', () => {
   it('parses masked CIDR networks including /0, /32, /128 and rejects non-zero host bits', () => {
     expect(parseAddressLiteral('192.168.10.0/24')).toEqual([{
       value: '192.168.10.0/24',
-      label: '192.168.10.0/24',
       optionLabel: '192.168.10.0/24',
       hint: 'IPv4 network',
     }]);
@@ -61,7 +60,6 @@ describe('parseAddressLiteral', () => {
   it('parses same-family IPv4 and IPv6 ranges and rejects backwards or mixed-family ranges', () => {
     expect(parseAddressLiteral('10.20.0.10 - 10.20.0.20')).toEqual([{
       value: '10.20.0.10-10.20.0.20',
-      label: '10.20.0.10-10.20.0.20',
       optionLabel: '10.20.0.10-10.20.0.20',
       hint: 'IPv4 range',
     }]);
@@ -75,43 +73,40 @@ describe('parsePortLiteral', () => {
   it('offers TCP and UDP for bare ports/ranges, deduplicates and collapses equal bounds', () => {
     const bare = parsePortLiteral('443');
     expect(bare).toEqual([
-      { value: 'tcp/443', label: 'tcp/443', optionLabel: 'TCP 443', hint: 'TCP port' },
-      { value: 'udp/443', label: 'udp/443', optionLabel: 'UDP 443', hint: 'UDP port' },
+      { value: 'tcp/443', optionLabel: 'TCP 443', hint: 'TCP port' },
+      { value: 'udp/443', optionLabel: 'UDP 443', hint: 'UDP port' },
     ]);
 
     expect(parsePortLiteral('TCP/80, 443-443, 80, 8000 - 8080')).toEqual([{
       value: 'tcp/80,443,8000-8080',
-      label: 'tcp/80,443,8000-8080',
       optionLabel: 'TCP 80,443,8000-8080',
       hint: 'TCP ports',
     }]);
 
     expect(parsePortLiteral('udp 53')[0]?.value).toBe('udp/53');
     expect(parsePortLiteral('443', { kind: 'udp' })).toEqual([
-      { value: 'udp/443', label: 'udp/443', optionLabel: 'UDP 443', hint: 'UDP port' },
+      { value: 'udp/443', optionLabel: 'UDP 443', hint: 'UDP port' },
     ]);
   });
 
   it('parses bare and typed ICMP/ICMPv6 literals and rejects invalid ports or unknown types', () => {
     expect(parseAliasLiterals('ports', 'icmp')).toEqual([{
       value: 'icmp',
-      label: 'icmp',
       optionLabel: 'ICMP (any type)',
       hint: 'ICMP protocol',
     }]);
     expect(parseAliasLiterals('ports', 'icmpv6')).toEqual([{
       value: 'icmpv6',
-      label: 'icmpv6',
       optionLabel: 'ICMPv6 (any type)',
       hint: 'ICMPv6 protocol',
     }]);
     expect(parseAliasLiterals('ports', 'icmp/echo-request, echo-request')).toEqual([{
       value: 'icmp/echo-request',
-      label: 'icmp/echo-request',
       optionLabel: 'ICMP echo-request',
       hint: 'ICMP type',
     }]);
     expect(parseAliasLiterals('ports', 'icmpv6/packet-too-big')[0]?.value).toBe('icmpv6/packet-too-big');
+    expect(parsePortLiteralValue('tcp/443-443,443')).toEqual({ protocol: 'tcp', ports: ['443'] });
     expect(parsePortLiteral('0')).toEqual([]);
     expect(parsePortLiteral('65536')).toEqual([]);
     expect(parsePortLiteral('90-80')).toEqual([]);
@@ -133,5 +128,14 @@ describe('parsePortLiteral', () => {
     expect(formatPortRef('svc_1', ports)).toBe('https');
     expect(formatPortRef('tcp/443', ports)).toBe('tcp/443');
     expect(formatPortRef('svc_gone', ports)).toBe('unknown alias');
+  });
+
+  it('includes address groups with literal members in addressAliasesForFamily', () => {
+    const aliases = [
+      { id: 'adr_v4_grp', name: 'lit-v4-group', kind: 'group' as const, members: ['10.0.0.1', '10.0.0.0/24'] },
+      { id: 'adr_v6_grp', name: 'lit-v6-group', kind: 'group' as const, members: ['2001:db8::/64'] },
+    ];
+    expect(addressAliasesForFamily(aliases, 'ipv4')).toEqual([{ value: 'adr_v4_grp', label: 'lit-v4-group' }]);
+    expect(addressAliasesForFamily(aliases, 'ipv6')).toEqual([{ value: 'adr_v6_grp', label: 'lit-v6-group' }]);
   });
 });

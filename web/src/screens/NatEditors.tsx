@@ -254,7 +254,7 @@ export function PortForwardEditor({ api, entry, snapshot, onClose, onSessionLost
                       }}
                       data={[
                         { value: 'self', label: 'This firewall' },
-                        { value: 'address', label: 'Address alias' },
+                        { value: 'address', label: 'Address or alias' },
                       ]}
                     />
                   </Stack>
@@ -264,7 +264,7 @@ export function PortForwardEditor({ api, entry, snapshot, onClose, onSessionLost
                       aliasType="addresses"
                       family={draft.family}
                       excludeDynamic={draft.toNegated}
-                      label="Destination alias"
+                      label="Destination address or alias"
                       placeholder="Choose an alias or type IP/CIDR"
                       initialOptions={draft.toNegated ? withSelectedLabels(staticAddresses, draft.toAddress ? [draft.toAddress] : [], addressById) : baseAddresses}
                       value={draft.toAddress || null}

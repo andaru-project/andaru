@@ -66,11 +66,11 @@ function Side({ side, names: known }: { side: RuleSide; names: Names }) {
       {toFirewall && <Badge variant="filled" color="dark" tt="none">This firewall</Badge>}
       {side.zones.filter((id) => id !== firewallZone).map((id) => <ZoneBadge key={id} name={known.zones.get(id) ?? 'unknown zone'} color={known.zoneColors.get(id)} />)}
       {side.not && <Text size="sm" fw={600}>not</Text>}
-      {side.addresses.map((id) => {
+      {side.addresses.map((id, idx) => {
         const aliasName = known.addresses.get(id);
         const literal = !aliasName && isAddressLiteral(id);
         return (
-          <Badge key={id} className={literal ? undefined : 'alias'} ff={literal ? 'monospace' : undefined} variant="default" tt="none" title={known.addressSummary.get(id)}>
+          <Badge key={`${id}-${idx}`} className={literal ? undefined : 'alias'} ff={literal ? 'monospace' : undefined} variant="default" tt="none" title={known.addressSummary.get(id)}>
             {aliasName ?? (literal ? id : 'unknown alias')}
           </Badge>
         );
@@ -113,11 +113,11 @@ function Row({ item, position, names: known, canWrite, unlocked, busy, onToggle,
       <Table.Td data-label="Ports">
         {rule.ports.length === 0 ? <Text size="sm" c="dimmed">any</Text> : (
           <Group gap={6}>
-            {rule.ports.map((id) => {
+            {rule.ports.map((id, idx) => {
               const aliasName = known.ports.get(id);
               const literal = !aliasName && isPortLiteral(id);
               return (
-                <Badge key={id} className={literal ? undefined : 'alias'} ff={literal ? 'monospace' : undefined} variant="default" tt="none" title={known.portSummary.get(id)}>
+                <Badge key={`${id}-${idx}`} className={literal ? undefined : 'alias'} ff={literal ? 'monospace' : undefined} variant="default" tt="none" title={known.portSummary.get(id)}>
                   {aliasName ?? (literal ? id : 'unknown alias')}
                 </Badge>
               );

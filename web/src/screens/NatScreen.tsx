@@ -223,11 +223,11 @@ function OneToOneRow({
           ) : (
             <>
               {entry.destinationNegated && <Text size="sm" fw={600}>not</Text>}
-              {entry.destination.map((id) => {
+              {entry.destination.map((id, idx) => {
                 const aliasName = addresses.get(id);
                 const literal = !aliasName && isAddressLiteral(id);
                 return (
-                  <Badge key={id} className={literal ? undefined : 'alias'} ff={literal ? 'monospace' : undefined} variant="default" tt="none">
+                  <Badge key={`${id}-${idx}`} className={literal ? undefined : 'alias'} ff={literal ? 'monospace' : undefined} variant="default" tt="none">
                     {aliasName ?? (literal ? id : 'unknown alias')}
                   </Badge>
                 );

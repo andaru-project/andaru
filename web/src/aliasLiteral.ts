@@ -4,19 +4,18 @@ import type { AliasKinds } from './types';
 
 export interface LiteralOption {
   value: string;
-  label: string;
   optionLabel: string;
   hint: string;
 }
 
 export type ParsedAddressLiteral =
   | { kind: 'host'; family: 4 | 6; value: bigint; canonical: string }
-  | { kind: 'network'; family: 4 | 6; network: bigint; mask: bigint; bits: number; canonical: string }
+  | { kind: 'network'; family: 4 | 6; network: bigint; mask: bigint; canonical: string }
   | { kind: 'range'; family: 4 | 6; first: bigint; last: bigint; canonical: string };
 
 export type ParsedPortLiteral =
-  | { protocol: 'tcp' | 'udp'; ports: string[]; canonical: string }
-  | { protocol: 'icmp' | 'icmpv6'; types: string[]; canonical: string };
+  | { protocol: 'tcp' | 'udp'; ports: string[] }
+  | { protocol: 'icmp' | 'icmpv6'; types: string[] };
 
 // The types an ICMP or ICMPv6 alias or literal may name, matching internal/config/policy.go.
 export const icmpTypes: Record<'icmp' | 'icmpv6', readonly string[]> = {
@@ -102,15 +101,14 @@ export function parseAddressLiteralValue(raw: string): ParsedAddressLiteral | nu
     if (bits < 0 || bits > maxBits) return null;
     // Mirrors internal/config/policy.go — network prefixes must have zero host bits.
     const hostBits = maxBits - bits;
-    if (hostBits > 0 && (parsed.value & ((1n << BigInt(hostBits)) - 1n)) !== 0n) return null;
+    const hostMask = (1n << BigInt(hostBits)) - 1n;
+    if ((parsed.value & hostMask) !== 0n) return null;
     const allOnes = parsed.family === 4 ? ipv4Max : ipv6Max;
-    const mask = bits === 0 ? 0n : (allOnes << BigInt(hostBits)) & allOnes;
     return {
       kind: 'network',
       family: parsed.family,
-      network: parsed.value & mask,
-      mask,
-      bits,
+      network: parsed.value,
+      mask: allOnes ^ hostMask,
       canonical: `${parsed.canonical}/${bits}`,
     };
   }
@@ -165,7 +163,7 @@ export function parsePortLiteralValue(raw: string): ParsedPortLiteral | null {
   if (!trimmed || trimmed.length > 256) return null;
 
   if (trimmed === 'icmp' || trimmed === 'icmpv6') {
-    return { protocol: trimmed, types: [], canonical: trimmed };
+    return { protocol: trimmed, types: [] };
   }
 
   const slash = trimmed.indexOf('/');
@@ -175,24 +173,27 @@ export function parsePortLiteralValue(raw: string): ParsedPortLiteral | null {
 
   if (proto === 'tcp' || proto === 'udp') {
     const parts = rest.split(',');
-    if (parts.length === 0 || parts.length > 64) return null;
+    if (parts.length > 64) return null;
+    const ports: string[] = [];
     for (const part of parts) {
       const span = parsePortSpan(part);
       if (!span) return null;
       const canonical = span.first === span.last ? String(span.first) : `${span.first}-${span.last}`;
-      if (canonical !== part) return null;
+      if (!ports.includes(canonical)) ports.push(canonical);
     }
-    return { protocol: proto, ports: parts, canonical: trimmed };
+    return { protocol: proto, ports };
   }
 
   if (proto === 'icmp' || proto === 'icmpv6') {
     const parts = rest.split(',');
-    if (parts.length === 0 || parts.length > 32) return null;
+    if (parts.length > 32) return null;
     const allowed = icmpTypes[proto];
+    const types: string[] = [];
     for (const part of parts) {
       if (!allowed.includes(part)) return null;
+      if (!types.includes(part)) types.push(part);
     }
-    return { protocol: proto, types: parts, canonical: trimmed };
+    return { protocol: proto, types };
   }
 
   return null;
@@ -222,7 +223,6 @@ function buildPortOption(protocol: 'tcp' | 'udp', ports: string[]): LiteralOptio
   const isPlural = ports.length > 1 || ports[0].includes('-');
   return {
     value,
-    label: value,
     optionLabel: `${upper} ${joined}`,
     hint: isPlural ? `${upper} ports` : `${upper} port`,
   };
@@ -241,7 +241,6 @@ export function parseAddressLiteral(
   const kindLabel = parsed.kind === 'host' ? 'address' : parsed.kind === 'network' ? 'network' : 'range';
   return [{
     value: parsed.canonical,
-    label: parsed.canonical,
     optionLabel: parsed.canonical,
     hint: `${famLabel} ${kindLabel}`,
   }];
@@ -260,7 +259,6 @@ export function parsePortLiteral(
     const label = lower === 'icmp' ? 'ICMP' : 'ICMPv6';
     return [{
       value: lower,
-      label: lower,
       optionLabel: `${label} (any type)`,
       hint: `${label} protocol`,
     }];
@@ -293,7 +291,6 @@ export function parsePortLiteral(
     const summaryPrefix = protocol === 'icmp' ? 'ICMP' : 'ICMPv6';
     return [{
       value,
-      label: value,
       optionLabel: `${summaryPrefix} ${joined}`,
       hint: `${summaryPrefix} ${uniqueTypes.length === 1 ? 'type' : 'types'}`,
     }];

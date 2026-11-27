@@ -123,6 +123,8 @@ function useAliasSearch({
   const abortRef = useRef<AbortController | undefined>(undefined);
   const seqRef = useRef(0);
   const mountedRef = useRef(true);
+  const dirtyRef = useRef(false);
+  const escapeRef = useRef(false);
   const onItemsResolvedRef = useRef(onItemsResolved);
   const onSessionLostRef = useRef(onSessionLost);
 
@@ -189,6 +191,8 @@ function useAliasSearch({
 
   function resetSearch(next = '') {
     cancelPending();
+    dirtyRef.current = false;
+    escapeRef.current = false;
     if (!mountedRef.current) return;
     setSearchValue(next);
     setRemote(null);
@@ -203,6 +207,8 @@ function useAliasSearch({
       return;
     }
     cancelPending();
+    dirtyRef.current = true;
+    escapeRef.current = false;
     setSearchValue(next);
     setRemote(null);
     setLoading(true);
@@ -266,7 +272,7 @@ function useAliasSearch({
     for (const option of literalOptions) {
       if (!seen.has(option.value)) {
         seen.add(option.value);
-        extras.push({ value: option.value, label: option.label });
+        extras.push({ value: option.value, label: option.value });
       }
     }
     for (const id of new Set(selected)) {
@@ -282,11 +288,8 @@ function useAliasSearch({
     if (trimmed === '' || (singleSelectedLabel !== undefined && searchValue === singleSelectedLabel)) {
       return options;
     }
-    if (remote) {
+    if (remote || loading) {
       return options.filter((o: ComboboxParsedItem) => 'value' in o && (remoteById.has(o.value) || literalByValue.has(o.value)));
-    }
-    if (loading) {
-      return options.filter((o: ComboboxParsedItem) => 'value' in o && literalByValue.has(o.value));
     }
     return options;
   };
@@ -320,19 +323,56 @@ function useAliasSearch({
     return option.label;
   }
 
+  function disarmLiteral() {
+    dirtyRef.current = false;
+  }
+
+  function flushLiteral(commit: (literalValue: string) => void): boolean {
+    if (escapeRef.current) {
+      escapeRef.current = false;
+      dirtyRef.current = false;
+      return false;
+    }
+    if (dirtyRef.current && literalOptions.length === 1) {
+      dirtyRef.current = false;
+      commit(literalOptions[0].value);
+      return true;
+    }
+    return false;
+  }
+
+  function handleLiteralKeyDown(event: KeyboardEvent<HTMLInputElement>, commit: (literalValue: string) => void) {
+    if (event.key === 'Escape') {
+      escapeRef.current = true;
+      dirtyRef.current = false;
+      return;
+    }
+    if (event.key !== 'Enter') return;
+    if (event.currentTarget.getAttribute('aria-activedescendant')) return;
+    if (literalOptions.length === 1) {
+      event.preventDefault();
+      dirtyRef.current = false;
+      commit(literalOptions[0].value);
+    } else if (searchValue.trim() !== '' && (singleSelectedLabel === undefined || searchValue !== singleSelectedLabel)) {
+      // Prevent Enter from submitting an enclosing form while typing an invalid literal, ambiguous port, or partial alias name.
+      event.preventDefault();
+    }
+  }
+
   const emptyMessage = searchError || (loading ? 'Searching aliases…' : nothingFoundMessage);
 
   return {
     data,
     searchValue,
-    singleSelectedLabel,
     loading,
-    literalOptions,
     filter,
     emptyMessage,
     handleSearchChange,
     renderOption,
     resetSearch,
+    disarmLiteral,
+    flushLiteral,
+    handleLiteralKeyDown,
   };
 }
 
@@ -342,10 +382,10 @@ export function AliasMultiSelect(props: AliasMultiSelectProps) {
     label, description, placeholder, error, clearable, nothingFoundMessage, debounceMs,
     onItemsResolved, onSessionLost,
   } = props;
-  const escapeRef = useRef(false);
 
   const {
-    data, searchValue, loading, literalOptions, filter, emptyMessage, handleSearchChange, renderOption, resetSearch,
+    data, searchValue, loading, filter, emptyMessage, handleSearchChange, renderOption, resetSearch,
+    disarmLiteral, flushLiteral, handleLiteralKeyDown,
   } = useAliasSearch({
     api,
     aliasType,
@@ -362,46 +402,11 @@ export function AliasMultiSelect(props: AliasMultiSelectProps) {
     onSessionLost,
   });
 
-  const pendingLiteralRef = useRef<LiteralOption | null>(null);
-  useLayoutEffect(() => {
-    pendingLiteralRef.current = literalOptions.length === 1 ? literalOptions[0] : null;
-  });
-
   function commitLiteral(literalValue: string) {
-    pendingLiteralRef.current = null;
     if (!value.includes(literalValue)) {
       onChange([...value, literalValue]);
     }
     resetSearch('');
-  }
-
-  function flushPendingLiteral() {
-    const escaped = escapeRef.current;
-    escapeRef.current = false;
-    const pending = pendingLiteralRef.current;
-    pendingLiteralRef.current = null;
-    if (!escaped && pending) {
-      commitLiteral(pending.value);
-      return true;
-    }
-    return false;
-  }
-
-  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === 'Escape') {
-      escapeRef.current = true;
-      pendingLiteralRef.current = null;
-      return;
-    }
-    if (event.key !== 'Enter') return;
-    if (event.currentTarget.getAttribute('aria-activedescendant')) return;
-    if (literalOptions.length === 1) {
-      event.preventDefault();
-      commitLiteral(literalOptions[0].value);
-    } else if (literalOptions.length > 1) {
-      // Bare port (e.g. "443") offers TCP and UDP; keep the dropdown open instead of submitting the form.
-      event.preventDefault();
-    }
   }
 
   return (
@@ -415,21 +420,18 @@ export function AliasMultiSelect(props: AliasMultiSelectProps) {
       searchable
       clearable={clearable}
       searchValue={searchValue}
-      onSearchChange={(next) => {
-        escapeRef.current = false;
-        handleSearchChange(next);
-      }}
-      onKeyDown={handleKeyDown}
-      onBlur={() => { flushPendingLiteral(); }}
+      onSearchChange={handleSearchChange}
+      onKeyDown={(event) => handleLiteralKeyDown(event, commitLiteral)}
+      onBlur={() => { flushLiteral(commitLiteral); }}
       onDropdownClose={() => {
-        if (!flushPendingLiteral()) resetSearch('');
+        if (!flushLiteral(commitLiteral)) resetSearch('');
       }}
       filter={filter}
       renderOption={renderOption}
       rightSection={loading ? <Loader size="xs" /> : undefined}
       nothingFoundMessage={emptyMessage}
       onChange={(next) => {
-        pendingLiteralRef.current = null;
+        disarmLiteral();
         onChange(Array.from(new Set(next)));
       }}
     />
@@ -444,10 +446,10 @@ export function AliasSelect(props: AliasSelectProps) {
   } = props;
   const selected = useMemo(() => (value ? [value] : []), [value]);
   const lastPickedLabelRef = useRef<string | null>(null);
-  const escapeRef = useRef(false);
 
   const {
-    data, searchValue, singleSelectedLabel, loading, literalOptions, filter, emptyMessage, handleSearchChange, renderOption, resetSearch,
+    data, searchValue, loading, filter, emptyMessage, handleSearchChange, renderOption, resetSearch,
+    disarmLiteral, flushLiteral, handleLiteralKeyDown,
   } = useAliasSearch({
     api,
     aliasType,
@@ -465,52 +467,12 @@ export function AliasSelect(props: AliasSelectProps) {
     onSessionLost,
   });
 
-  const pendingLiteralRef = useRef<LiteralOption | null>(null);
-  useLayoutEffect(() => {
-    pendingLiteralRef.current = searchValue !== singleSelectedLabel && literalOptions.length === 1 ? literalOptions[0] : null;
-  });
-
   function handleChange(next: string | null) {
-    pendingLiteralRef.current = null;
+    disarmLiteral();
     const chosen = next ? data.find((o) => o.value === next)?.label ?? next : '';
-    lastPickedLabelRef.current = chosen;
+    lastPickedLabelRef.current = next ? chosen : null;
     onChange(next);
     resetSearch(chosen);
-  }
-
-  function commitSingleLiteral(option: LiteralOption) {
-    pendingLiteralRef.current = null;
-    lastPickedLabelRef.current = option.label;
-    onChange(option.value);
-    resetSearch(option.label);
-  }
-
-  function flushPendingLiteral() {
-    const escaped = escapeRef.current;
-    escapeRef.current = false;
-    const pending = pendingLiteralRef.current;
-    pendingLiteralRef.current = null;
-    if (!escaped && lastPickedLabelRef.current === null && pending) {
-      commitSingleLiteral(pending);
-      return true;
-    }
-    return false;
-  }
-
-  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === 'Escape') {
-      escapeRef.current = true;
-      pendingLiteralRef.current = null;
-      return;
-    }
-    if (event.key !== 'Enter') return;
-    if (event.currentTarget.getAttribute('aria-activedescendant')) return;
-    if (literalOptions.length === 1) {
-      event.preventDefault();
-      commitSingleLiteral(literalOptions[0]);
-    } else if (literalOptions.length > 1) {
-      event.preventDefault();
-    }
   }
 
   return (
@@ -525,14 +487,16 @@ export function AliasSelect(props: AliasSelectProps) {
       clearable={clearable}
       searchValue={searchValue}
       onSearchChange={(next) => {
-        escapeRef.current = false;
+        lastPickedLabelRef.current = null;
         handleSearchChange(next);
       }}
-      onKeyDown={handleKeyDown}
-      onBlur={() => { flushPendingLiteral(); }}
+      onKeyDown={(event) => handleLiteralKeyDown(event, handleChange)}
+      onBlur={() => {
+        if (lastPickedLabelRef.current === null) flushLiteral(handleChange);
+      }}
       onDropdownOpen={() => { lastPickedLabelRef.current = null; }}
       onDropdownClose={() => {
-        if (flushPendingLiteral()) return;
+        if (lastPickedLabelRef.current === null && flushLiteral(handleChange)) return;
         const picked = lastPickedLabelRef.current;
         lastPickedLabelRef.current = null;
         const chosen = picked ?? (value ? data.find((o) => o.value === value)?.label ?? value : '');

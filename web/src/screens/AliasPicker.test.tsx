@@ -317,17 +317,69 @@ describe('AliasPicker', () => {
     await user.type(portInput, 'udp/53{Enter}');
     expect(screen.getByText('udp/53', { selector: 'span' })).toBeInTheDocument();
 
-    // 5. Literal CIDR in AliasSelect via Enter.
+    // 5. Literal CIDR in AliasSelect via Enter, followed by editing and committing on blur.
     await user.clear(singleInput);
     await user.type(singleInput, '10.5.0.0/24{Enter}');
     expect(singleInput.value).toBe('10.5.0.0/24');
+    await user.clear(singleInput);
+    await user.type(singleInput, '10.6.0.0/24');
+    await user.click(screen.getByRole('button', { name: 'Outside' }));
+    expect(singleInput.value).toBe('10.6.0.0/24');
 
     expect(JSON.parse(screen.getByTestId('state').textContent ?? '{}')).toEqual({
       addrs: ['10.0.0.99', '10.0.0.1', '192.168.1.0/24', '10.0.0.10-10.0.0.15'],
       ports: ['tcp/443', 'udp/53'],
-      single: '10.5.0.0/24',
+      single: '10.6.0.0/24',
     });
     expect(postCalls).toEqual([]);
+  });
+
+  it('prevents Enter on an invalid literal from submitting an enclosing form and does not re-add after Clear + blur', async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn((e: React.FormEvent) => e.preventDefault());
+    fetchRoutes({
+      '/api/v1/config/aliases/search': () => jsonResponse(200, { state: 'saved', savedVersion: '5', items: [] }),
+    });
+
+    function FormHarness({ api }: { api: ApiClient }) {
+      const [addrs, setAddrs] = useState<string[]>(['10.0.0.1']);
+      return (
+        <MantineProvider>
+          <form onSubmit={onSubmit}>
+            <AliasMultiSelect
+              api={api}
+              aliasType="addresses"
+              family="ipv4"
+              debounceMs={10}
+              label="Addresses"
+              clearable
+              initialOptions={[]}
+              value={addrs}
+              onChange={setAddrs}
+            />
+            <button type="submit">Save</button>
+            <button type="button">Outside</button>
+          </form>
+          <output data-testid="addrs">{JSON.stringify(addrs)}</output>
+        </MantineProvider>
+      );
+    }
+
+    const { container } = render(<FormHarness api={new ApiClient('csrf')} />);
+    const input = screen.getByLabelText('Addresses', { selector: 'input' });
+
+    // Typing an invalid CIDR (non-zero host bits) and pressing Enter must not submit the form.
+    await user.type(input, '10.0.0.5/24{Enter}');
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    // Removing the existing pill while a valid literal is typed and then blurring must not re-commit that literal.
+    await user.clear(input);
+    await user.type(input, '10.0.0.9');
+    const removePill = container.querySelector<HTMLButtonElement>('.mantine-Pill-remove')!;
+    expect(removePill).not.toBeNull();
+    await user.click(removePill);
+    await user.click(screen.getByRole('button', { name: 'Outside' }));
+    expect(JSON.parse(screen.getByTestId('addrs').textContent ?? '[]')).toEqual([]);
   });
 
   it('still accepts literal addresses when the alias search endpoint fails', async () => {

@@ -298,8 +298,8 @@ describe('NatScreen', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Add port forward' }));
     const pfDrawer = await screen.findByRole('dialog', { name: 'Add port forward' });
     const matchSection = within(pfDrawer).getByRole('group', { name: 'Match' });
-    fireEvent.click(within(matchSection).getByRole('radio', { name: 'Address alias' }));
-    const destAliasInput = within(matchSection).getByLabelText('Destination alias', { selector: 'input' });
+    fireEvent.click(within(matchSection).getByRole('radio', { name: 'Address or alias' }));
+    const destAliasInput = within(matchSection).getByLabelText('Destination address or alias', { selector: 'input' });
     fireEvent.click(destAliasInput);
     let destListbox = document.getElementById(destAliasInput.getAttribute('aria-controls')!)!;
     expect(within(destListbox).getAllByRole('option', { hidden: true }).map((o) => o.textContent)).toContain('cf-feed');
@@ -313,8 +313,8 @@ describe('NatScreen', () => {
     fireEvent.click(invertDest);
     expect(invertDest).toBeChecked();
 
-    fireEvent.click(within(matchSection).getByRole('radio', { name: 'Address alias' }));
-    const destAliasAfter = within(matchSection).getByLabelText('Destination alias', { selector: 'input' }) as HTMLInputElement;
+    fireEvent.click(within(matchSection).getByRole('radio', { name: 'Address or alias' }));
+    const destAliasAfter = within(matchSection).getByLabelText('Destination address or alias', { selector: 'input' }) as HTMLInputElement;
     expect(destAliasAfter.value).toBe('');
     fireEvent.click(destAliasAfter);
     destListbox = document.getElementById(destAliasAfter.getAttribute('aria-controls')!)!;

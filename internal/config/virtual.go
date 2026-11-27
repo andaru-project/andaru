@@ -291,7 +291,7 @@ func claims(d *declaration) []claim {
 			} else if lit, ok := parseAddressLiteral(entry); ok {
 				switch lit.kind {
 				case "host":
-					one(lit.addr.String(), message)
+					one(lit.canonical, message)
 				case "network":
 					span(lit.prefix, message)
 					out[len(out)-1].whole = true

@@ -1,3 +1,4 @@
+import { parseAddressLiteralValue } from './aliasLiteral';
 import { fieldErrors } from './api';
 import { parseDecimalInt } from './dhcpEdit';
 import { isDynamicAddressAlias, type AddressAlias, type OneToOneNat, type PortForward } from './types';
@@ -84,7 +85,7 @@ export function checkPortForward(draft: PortForwardDraft): Map<string, string> {
   if (draft.fromNegated && draft.from.length > 32) {
     found.set('from', 'A port forward leaves out at most 32 sources. Put more of them in a group.');
   }
-  if (draft.toKind === 'address' && !draft.toAddress) found.set('to', 'Choose a destination address alias.');
+  if (draft.toKind === 'address' && !draft.toAddress) found.set('to', 'Choose or enter a destination address or alias.');
   const span = parsePortSpan(draft.ports);
   if (!span) found.set('ports', 'Expected a port or a first-last range within 1-65535.');
   if (!draft.noRedirect) {
@@ -214,7 +215,10 @@ export function addressAliasesForFamily(
   const byId = new Map(aliases.map((a) => [a.id, a]));
   const matches = (id: string, nested: boolean): boolean => {
     const a = byId.get(id);
-    if (!a) return false;
+    if (!a) {
+      const lit = parseAddressLiteralValue(id);
+      return lit !== null && (family === 'ipv6' ? lit.family === 6 : lit.family === 4);
+    }
     if (isDynamicAddressAlias(a)) return !excludeDynamic;
     if (a.kind === 'group') {
       if (nested || !a.members || a.members.length === 0) return !nested && a.members === undefined;

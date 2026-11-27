@@ -315,21 +315,8 @@ function matchesPortAlias(
 ): boolean {
   if (seen.has(aliasId)) return false;
   seen.add(aliasId);
-  const alias = byId.get(aliasId);
-  if (!alias) {
-    const lit = parsePortLiteralValue(aliasId);
-    if (!lit || lit.protocol !== protocol) return false;
-    if ('ports' in lit) {
-      if (dstPort === undefined) return false;
-      return lit.ports.some((entry) => {
-        const span = parsePortSpan(entry);
-        return span !== null && dstPort >= span.first && dstPort <= span.last;
-      });
-    }
-    if (lit.types.length === 0) return true;
-    if (!icmpType) return false;
-    return lit.types.includes(icmpType.trim().toLowerCase());
-  }
+  const alias: Partial<PortAlias> | undefined = byId.get(aliasId) ?? parsePortLiteralValue(aliasId) ?? undefined;
+  if (!alias) return false;
   if (alias.protocol === 'group') {
     return (alias.members ?? []).some((m) => matchesPortAlias(m, protocol, dstPort, icmpType, byId, seen));
   }

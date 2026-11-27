@@ -299,7 +299,7 @@ func TestInlineAddressAndPortLiterals(t *testing.T) {
 	r0 := item(d["rules"].([]any), 0)
 	r0["from"] = side(nil, "192.0.2.10", "192.0.2.0/24", "192.0.2.50-192.0.2.60", adrHost)
 	r0["to"] = map[string]any{"zones": []any{}, "addresses": []any{"198.51.100.1"}, "not": true}
-	r0["ports"] = []any{"tcp/443", "udp/53,5353", "tcp/8000-8080", "icmp", "icmp/echo-request", svcDNS}
+	r0["ports"] = []any{"tcp/443-443,443", "udp/53,5353", "tcp/8000-8080", "icmp", "icmp/echo-request,echo-request", svcDNS}
 	// Groups may hold literals alongside aliases.
 	aliases := d["aliases"].(map[string]any)
 	addrList := aliases["addresses"].([]any)
@@ -326,6 +326,9 @@ func TestInlineAddressAndPortLiterals(t *testing.T) {
 	}
 	if !slices.Contains(got.Management.AllowedSources, "10.0.0.1") {
 		t.Fatalf("literal host missing from allowedSources: %v", got.Management.AllowedSources)
+	}
+	if got.Rules[0].Ports[0] != "tcp/443" || got.Rules[0].Ports[4] != "icmp/echo-request" {
+		t.Fatalf("port literals not canonicalized: %v", got.Rules[0].Ports)
 	}
 
 	// Invalid inline literals and family mismatches are refused at the right paths.

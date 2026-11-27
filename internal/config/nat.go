@@ -176,7 +176,7 @@ func validateNAT(d *declaration) []FieldError {
 			canonicalFrom[k] = canonicalAddressRef(v)
 		}
 		slices.Sort(canonicalFrom)
-		from := strings.Join(canonicalFrom, ",")
+		from := strings.Join(slices.Compact(canonicalFrom), ",")
 		protocols := []string{f.Protocol}
 		if f.Protocol == "tcp-udp" {
 			protocols = []string{"tcp", "udp"}

@@ -68,46 +68,44 @@ func (f *filter) portForwards() (prerouting, forward, input []string) {
 		first, last := spanOf(pf.Ports)
 		// An IPv6 forward reaches only the firewall itself; everything else matches IPv4.
 		six := pf.Family == "ipv6"
-		ip, famNum, nfproto := "ip", family(4), "meta nfproto ipv4"
+		ip, fam, famNum, nfproto := "ip", "_4", family(4), "meta nfproto ipv4"
 		if six {
-			ip, famNum, nfproto = "ip6", family(6), "meta nfproto ipv6"
+			ip, fam, famNum, nfproto = "ip6", "_6", family(6), "meta nfproto ipv6"
+		}
+		addrRHS := func(id string) string {
+			if expr, ok := f.addrExpr(id, famNum); ok {
+				return expr
+			}
+			return "@" + setName(id) + fam
 		}
 		// Alternatives on one side need one line each; excluded sources all go on every line.
 		froms := []string{""}
 		if len(pf.From) > 0 {
 			if pf.FromNegated {
-				var parts []string
-				for _, id := range pf.From {
-					if expr, ok := f.addrExpr(id, famNum); ok {
-						parts = append(parts, ip+" saddr != "+expr)
-					}
-				}
-				froms = []string{strings.Join(parts, " ")}
+				froms = []string{strings.Join(f.negatedAddrMatches(pf.From, famNum, "saddr", true), " ")}
 			} else {
 				froms = froms[:0]
 				for _, id := range pf.From {
-					if expr, ok := f.addrExpr(id, famNum); ok {
-						froms = append(froms, ip+" saddr "+expr)
-					}
+					froms = append(froms, ip+" saddr "+addrRHS(id))
 				}
 			}
 		}
 		// fib matches either family: the guard keeps an IPv4 forward to self off the firewall's IPv6 addresses.
-		to := nfproto + " fib daddr . iif type local"
-		if !pf.To.Self {
-			if expr, ok := f.addrExpr(pf.To.Address, famNum); ok {
-				to = ip + " daddr " + expr
+		var to string
+		if pf.To.Self {
+			if pf.ToNegated {
+				to = nfproto + " fib daddr . iif type != local"
+			} else {
+				to = nfproto + " fib daddr . iif type local"
 			}
+		} else if pf.ToNegated {
+			to = ip + " daddr != " + addrRHS(pf.To.Address)
+		} else {
+			to = ip + " daddr " + addrRHS(pf.To.Address)
 		}
 		// A negated destination is the complement among unicast destinations: broadcasts and multicasts, such as
 		// service discovery, are never forwarded to one host. Without iif, a directed broadcast of any subnet counts.
 		if pf.ToNegated {
-			to = nfproto + " fib daddr . iif type != local"
-			if !pf.To.Self {
-				if expr, ok := f.addrExpr(pf.To.Address, famNum); ok {
-					to = ip + " daddr != " + expr
-				}
-			}
 			to += " fib daddr type != { broadcast, multicast }"
 		}
 		// ct status dnat says a connection was translated, not by whom: each forward marks what it translates in the
@@ -319,16 +317,19 @@ func (f *filter) oneToOne() (prerouting, postrouting []string) {
 		// Each destination object is an alternative, one line each; none means any peer. Negated, one line names them all.
 		sources, peers := []string{""}, []string{""}
 		if len(o.Destination) > 0 {
-			sources, peers = nil, nil
-			op := map[bool]string{false: "", true: "!= "}[o.DestinationNegated]
-			for _, id := range o.Destination {
-				if expr, ok := f.addrExpr(id, 4); ok {
-					sources = append(sources, "ip saddr "+op+expr)
-					peers = append(peers, "ip daddr "+op+expr)
-				}
-			}
 			if o.DestinationNegated {
-				sources, peers = []string{strings.Join(sources, " ")}, []string{strings.Join(peers, " ")}
+				sources = []string{strings.Join(f.negatedAddrMatches(o.Destination, 4, "saddr", true), " ")}
+				peers = []string{strings.Join(f.negatedAddrMatches(o.Destination, 4, "daddr", true), " ")}
+			} else {
+				sources, peers = nil, nil
+				for _, id := range o.Destination {
+					expr, ok := f.addrExpr(id, 4)
+					if !ok {
+						expr = "@" + setName(id) + "_4"
+					}
+					sources = append(sources, "ip saddr "+expr)
+					peers = append(peers, "ip daddr "+expr)
+				}
 			}
 		}
 		for _, s := range sources {
