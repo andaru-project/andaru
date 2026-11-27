@@ -524,16 +524,22 @@ func realized(value json.RawMessage) []byte {
 	// A link password's view says when its secret last changed; the secret itself is compared in SameRealization, so a
 	// password changed and changed back realizes as before.
 	var links []map[string]json.RawMessage
+	var err error
 	if json.Unmarshal(d["links"], &links) == nil {
 		for _, l := range links {
 			var p map[string]json.RawMessage
-			if json.Unmarshal(l["password"], &p) == nil && p != nil {
+			if json.Unmarshal(l["password"], &p) == nil && p != nil && err == nil {
 				delete(p, "updatedAt")
 				delete(p, "version")
-				l["password"], _ = json.Marshal(p)
+				l["password"], err = json.Marshal(p)
 			}
 		}
-		d["links"], _ = json.Marshal(links)
+		if err == nil {
+			d["links"], err = json.Marshal(links)
+		}
+	}
+	if err != nil {
+		return value
 	}
 	out, err := json.Marshal(d) // with its keys sorted, so both read alike
 	if err != nil {

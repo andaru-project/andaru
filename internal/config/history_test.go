@@ -21,7 +21,7 @@ func TestSameRealization(t *testing.T) {
 		{"a channel added", in(`{"notifications":{"channels":[{"id":"c"}]},"rules":[{"id":"r1"}],`+link+`}`, map[string]string{"WAN": "a"}), true},
 		{"no notifications", in(`{"rules":[{"id":"r1"}],`+link+`}`, map[string]string{"WAN": "a"}), true},
 		{"a rule changed", in(`{"rules":[{"id":"r2"}],"notifications":{"channels":[]},`+link+`}`, map[string]string{"WAN": "a"}), false},
-		{"a password changed and changed back", in(`{"rules":[{"id":"r1"}],"links":[{"id":"l1","password":{"secret":"WAN","isSet":true,"updatedAt":"2026-11-27T00:00:00Z","version":"9"}}]}`, map[string]string{"WAN": "a"}), true},
+		{"a password changed and changed back", in(`{"rules":[{"id":"r1"}],"notifications":{"channels":[]},"links":[{"id":"l1","password":{"secret":"WAN","isSet":true,"updatedAt":"2026-11-27T00:00:00Z","version":"9"}}]}`, map[string]string{"WAN": "a"}), true},
 		{"a link secret changed", in(`{"rules":[{"id":"r1"}],"notifications":{"channels":[]},`+link+`}`, map[string]string{"WAN": "b"}), false},
 	} {
 		if got := SameRealization(base, c.other); got != c.same {
