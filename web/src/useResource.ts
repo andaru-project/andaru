@@ -27,6 +27,11 @@ export function useResource<T>(load: () => Promise<T>, onSessionLost: () => void
     disconnected: false,
     loading: true,
   });
+  const [prevLoad, setPrevLoad] = useState(() => load);
+  if (load !== prevLoad) {
+    setPrevLoad(() => load);
+    if (!state.loading) setState((current) => ({ ...current, loading: true }));
+  }
   const [prevConnected, setPrevConnected] = useState(connected);
   if (connected !== prevConnected) {
     setPrevConnected(connected);

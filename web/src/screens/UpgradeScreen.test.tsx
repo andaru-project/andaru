@@ -130,3 +130,28 @@ it('clears answers given for an earlier head when the saved settings move', asyn
   await vi.waitFor(() => expect(previews.at(-1)).toEqual({}));
   expect(screen.getByRole('button', { name: 'Save the answers' })).toBeDisabled();
 });
+
+it('disables saving while a new preview is loading after an answer changes', async () => {
+  let resolveNext: ((response: Response) => void) | undefined;
+  fetchRoutes({
+    'POST /api/v1/config/upgrade/preview': (init) => {
+      const { choices: given } = JSON.parse(String(init?.body)) as { choices: Record<string, string> };
+      if (given.first === 'mark') {
+        return new Promise<Response>((resolve) => { resolveNext = resolve; });
+      }
+      return jsonResponse(200, { savedVersion: '7', questions: [{ ...first, answered: 'first' in given, choice: given.first ?? 'keep' }] });
+    },
+  });
+  render(<UpgradeScreen api={new ApiClient('csrf')} session={session(['configuration.read', 'configuration.write'])} onFinished={vi.fn()} onSessionLost={vi.fn()} />);
+
+  const save = await screen.findByRole('button', { name: 'Save the answers' });
+  await userEvent.click(screen.getByRole('radio', { name: /Keep the zones/ }));
+  await vi.waitFor(() => expect(save).toBeEnabled());
+
+  await userEvent.click(screen.getByRole('radio', { name: /Mark them/ }));
+  expect(save).toBeDisabled();
+
+  resolveNext?.(jsonResponse(200, { savedVersion: '7', questions: [{ ...first, answered: true, choice: 'mark' }, second] }));
+  expect(await screen.findByText('And the marked ones?')).toBeInTheDocument();
+  expect(save).toBeDisabled();
+});
