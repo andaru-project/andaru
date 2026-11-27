@@ -149,6 +149,7 @@ func TestProxyNDPOffSubnet(t *testing.T) {
 	}
 	in.Links[0].Addresses = []host.AddressStatus{
 		{Family: "ipv6", Address: "fe80::1", PrefixLength: 64, Scope: "link"},
+		{Family: "ipv6", Address: "fd00:1::2", PrefixLength: 64, Scope: "global"}, // a ULA tells nothing of the global prefix
 		{Family: "ipv6", Address: "2001:db8:1::abcd", PrefixLength: 128, Scope: "global"},
 	}
 	if r := render(t, in); findingAt(r, "PROXY_NDP_OFF_SUBNET", one) {

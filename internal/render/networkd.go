@@ -481,7 +481,8 @@ func (r *renderer) proxyNDPOnLink() {
 			for _, x := range l.Addresses {
 				if y, e := netip.ParseAddr(x.Address); e == nil {
 					subnets = append(subnets, netip.PrefixFrom(y, x.PrefixLength))
-					known = known || y.Is6() && !y.IsLinkLocalUnicast() && x.PrefixLength < 128 // every link has its fe80::/64
+					// Only a global prefix tells the provider's: every link has its fe80::/64, and a ULA says nothing either.
+					known = known || y.Is6() && y.IsGlobalUnicast() && !y.IsPrivate() && x.PrefixLength < 128
 				}
 			}
 		}

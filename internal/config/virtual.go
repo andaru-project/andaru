@@ -355,7 +355,7 @@ func validateProxyNDP(d *declaration, i int, p string, own []netip.Prefix, taken
 	case d.Segments[seg].Addressing.IPv6.Mode == "none":
 		bad(p+"/segment", "Expected a segment with IPv6: without it the link has no address to answer neighbour discovery from.")
 	case d.Segments[seg].Addressing.IPv6.Mode == "delegated":
-		bad(p+"/segment", "Expected the uplink whose prefix the address is on: a delegated segment is inside, with no provider to ask for it.")
+		bad(p+"/segment", "Expected a segment other than a delegated one: a delegated segment is inside, with no provider to ask for the address.")
 	}
 	switch {
 	case host < 0:
@@ -364,7 +364,7 @@ func validateProxyNDP(d *declaration, i int, p string, own []netip.Prefix, taken
 		bad(p+"/hostSegment", "Expected a segment other than the one the firewall answers on.")
 	case d.Segments[host].Addressing.IPv6.Mode != "static" && d.Segments[host].Addressing.IPv6.Mode != "delegated":
 		// SLAAC and DHCPv6 segments face upstream: the firewall sends no router advertisements there.
-		bad(p+"/hostSegment", "Expected an inside segment with static or delegated IPv6: the host routes back by the firewall's link-local address, which the firewall's router advertisements there give it, or a default route set on the host.")
+		bad(p+"/hostSegment", "Expected an inside segment with static or delegated IPv6: the host routes back by the firewall's link-local address, which the firewall's router advertisements there give it.")
 	}
 	a, e := netip.ParseAddr(v.Address)
 	// Before i, every kind; after it, all but proxy NDP entries, which refuse the overlap themselves.
