@@ -52,7 +52,11 @@ while True: s.accept()[0].close()
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
-	time.Sleep(300 * time.Millisecond)
+	for end := time.Now().Add(3 * time.Second); !l.connects(l.fw, "203.0.113.3", 25); time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(end) {
+			t.Fatal("the service on 203.0.113.3 never listened")
+		}
+	}
 
 	l.must(l.wan, "ip", "route", "add", "203.0.113.0/29", "via", "10.1.0.1")
 	// The fixture's policy lets the WAN reach no address of the firewall: only the forward's own rule, in the input
@@ -69,6 +73,14 @@ while True: s.accept()[0].close()
 	}
 	if !l.connects(l.wan, "203.0.113.3", 25) {
 		t.Error("the WAN did not reach the service on an address of the block")
+	}
+	// IPv6 answers on every address of its block too; a service there binds :: or uses IPV6_FREEBIND, since binding
+	// one address of a local route is refused (EADDRNOTAVAIL).
+	l.must(l.fw, "ip", "-6", "addr", "add", "fd00:1::1/64", "dev", "ens18", "nodad")
+	l.must(l.wan, "ip", "-6", "addr", "add", "fd00:1::2/64", "dev", "w0", "nodad")
+	l.must(l.wan, "ip", "-6", "route", "add", "2001:db8:53::/64", "via", "fd00:1::1")
+	if !l.pings(l.wan, "2001:db8:53::5") {
+		t.Error("the firewall did not answer a ping to an address of the IPv6 block")
 	}
 	if out, _ := l.run(l.fw, "ip", "route", "get", "203.0.113.7"); !strings.HasPrefix(out, "local ") {
 		t.Errorf("the block's last address is not local: %s", out)
