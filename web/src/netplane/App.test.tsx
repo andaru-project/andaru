@@ -2,25 +2,18 @@
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { afterEach, expect, it } from 'vitest';
+import { emptyFleet } from '../test/fleet';
 import { fetchRoutes, jsonResponse } from '../test/fetch';
 import { render, screen, waitFor, within } from '../test/render';
 import { configureNetplaneApi, signOut } from './api';
 import { App } from './App';
 import { setRoutePrefix } from './routing';
 
-const bodies: Record<string, object> = {
-  '/api/v1/state': { devices: [], links: [], lag_groups: [], segments: [], zones: [], gateways: [], routes: [], vpns: [], firewalls: [], radios: [], wireless_uplinks: [], clients: [] },
-  '/api/v1/topology': { generated_at: '2026-01-01T00:00:00Z', root_ids: [], nodes: [], edges: [] },
-  '/api/v1/vlans/flow': { generated_at: '2026-01-01T00:00:00Z', vlans: [], findings: [] },
-  '/api/v1/targets': { items: [] },
-  '/api/v1/diagnostics': { items: [] },
-};
-
-// A server started with a token answers only a browser holding it in the cookie.
-function server(token: { current: string | null }) {
-  return fetchRoutes(Object.fromEntries(Object.entries(bodies).map(([path, body]) => [
-    path,
-    () => token.current === null || document.cookie.split('; ').includes(`netplane_token=${token.current}`)
+// A server started with a token answers only a browser that sends it in the cookie.
+function server(token: { current: string | null }, root = '') {
+  return fetchRoutes(Object.fromEntries(Object.entries(emptyFleet).map(([path, body]) => [
+    `${root}${path}`,
+    (init: RequestInit | undefined) => token.current === null || (init?.credentials !== 'omit' && document.cookie.split('; ').includes(`netplane_token=${token.current}`))
       ? jsonResponse(200, body)
       : jsonResponse(401, { error: { code: 'UNAUTHORIZED', message: 'valid bearer token required' } }),
   ])));
@@ -28,6 +21,8 @@ function server(token: { current: string | null }) {
 
 afterEach(() => {
   signOut();
+  document.cookie = 'netplane_token=; path=/; Max-Age=0';
+  document.head.querySelectorAll('base').forEach((el) => el.remove());
   configureNetplaneApi(null);
   setRoutePrefix('');
 });
@@ -81,4 +76,43 @@ it('shows no sign-in and no sign out when the server has no token', async () => 
   expect(await screen.findByRole('heading', { name: 'Overview' })).toBeInTheDocument();
   expect(screen.queryByLabelText(/^API token/)).not.toBeInTheDocument();
   expect(within(await openAccount()).queryByRole('menuitem', { name: 'Sign out' })).not.toBeInTheDocument();
+});
+
+it('asks for the token when the server starts wanting one, without blaming a stored token', async () => {
+  const token = { current: null as string | null };
+  server(token);
+  render(<MemoryRouter><App /></MemoryRouter>);
+  await screen.findByRole('heading', { name: 'Overview' });
+
+  token.current = 'secret';
+  await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('This Netplane server requires an API token.');
+});
+
+it('clears a stored token the server does not need, and offers no sign out', async () => {
+  document.cookie = 'netplane_token=old; path=/; SameSite=Strict';
+  server({ current: null });
+  render(<MemoryRouter><App /></MemoryRouter>);
+  expect(await screen.findByRole('heading', { name: 'Overview' })).toBeInTheDocument();
+  expect(document.cookie).not.toContain('netplane_token=');
+  expect(within(await openAccount()).queryByRole('menuitem', { name: 'Sign out' })).not.toBeInTheDocument();
+});
+
+it('offers no sign out for a token at a parent path, which signing out could not clear', async () => {
+  const base = document.createElement('base');
+  base.setAttribute('href', '/netplane/');
+  document.head.appendChild(base);
+  document.cookie = 'netplane_token=old; path=/; SameSite=Strict';
+  server({ current: null }, '/netplane');
+  render(<MemoryRouter><App /></MemoryRouter>);
+  expect(await screen.findByRole('heading', { name: 'Overview' })).toBeInTheDocument();
+  expect(within(await openAccount()).queryByRole('menuitem', { name: 'Sign out' })).not.toBeInTheDocument();
+});
+
+it('opens the shell when the server cannot be reached at start-up', async () => {
+  fetchRoutes({ '/api/v1': new TypeError('Failed to fetch') });
+  render(<MemoryRouter><App /></MemoryRouter>);
+  expect(await screen.findByRole('heading', { name: 'Overview' })).toBeInTheDocument();
+  expect(await screen.findByText('Connection lost')).toBeInTheDocument();
+  expect(screen.queryByLabelText(/^API token/)).not.toBeInTheDocument();
 });

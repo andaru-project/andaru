@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { ApiError } from '../api';
 import { apiBasePath } from './routing';
 
 export interface SensorReading {
@@ -453,6 +454,8 @@ function formatErrorMessage(status: number, text: string): string {
   return `HTTP ${status}`;
 }
 
+const readTimeoutMs = 30_000;
+
 // The standalone server's API token is kept in a SameSite=Strict cookie, which fetch and EventSource both send;
 // EventSource cannot set an Authorization header. It is scoped to the app's base path, so other apps on the origin
 // (e.g. other HA ingress add-ons) never get it.
@@ -462,10 +465,18 @@ function setTokenCookie(value: string, maxAge?: number): void {
   document.cookie = `netplane_token=${encodeURIComponent(value)}; path=${apiBasePath()}; SameSite=Strict${age}${secure}`;
 }
 
+function storedToken(): string | undefined {
+  return document.cookie.split(';').map((cookie) => cookie.trim()).find((cookie) => cookie.startsWith('netplane_token='));
+}
+
 /** Whether this browser holds a token for the standalone server. */
 export function hasToken(): boolean {
-  return document.cookie.split(';').some((cookie) => cookie.trim().startsWith('netplane_token='));
+  return storedToken() !== undefined;
 }
+
+// Bumped on each sign-in. A 401 to a request sent before it, or with another token than the one now stored (another
+// tab signed in), is stale: it must not sign the new token out.
+let signInGen = 0;
 
 export function signOut(): void {
   setTokenCookie('', 0);
@@ -475,21 +486,27 @@ export function signOut(): void {
  * Whether the standalone server answers this browser, with its token if it holds one. A server without a token
  * answers everyone. Throws when the server cannot be reached.
  */
-export async function hasAccess(): Promise<boolean> {
-  const resp = await fetch(buildApiUrl('/diagnostics?limit=1', null), { credentials: 'same-origin', cache: 'no-store' });
+export async function hasAccess(credentials: RequestCredentials = 'same-origin'): Promise<boolean> {
+  const resp = await fetch(buildApiUrl('/diagnostics?limit=1', null), { credentials, cache: 'no-store', signal: AbortSignal.timeout(readTimeoutMs) });
   return resp.status !== 401;
 }
 
-/** Stores the token and checks the server accepts it; a token it refuses is not kept. */
+/** Stores the token and checks the server accepts it; a token it refuses, or could not check, is not kept. */
 export async function signIn(token: string): Promise<void> {
-  setTokenCookie(token);
-  if (!(await hasAccess())) {
+  signInGen++;
+  setTokenCookie(token.trim());
+  let accepted: boolean;
+  try {
+    accepted = await hasAccess();
+  } catch {
     signOut();
-    throw new Error('The server did not accept this token.');
+    throw new ApiError(0, 'DISCONNECTED', 'Could not reach the Netplane server.');
+  }
+  if (!accepted) {
+    signOut();
+    throw new ApiError(401, 'UNAUTHORIZED', 'The server did not accept this token.');
   }
 }
-
-const readTimeoutMs = 30_000;
 
 interface FetchOptions {
   background?: boolean;
@@ -498,9 +515,12 @@ interface FetchOptions {
 async function fetchJSON<T>(
   path: string,
   init?: RequestInit,
-  cfg: NetplaneApiConfig | null = apiConfig,
   opts?: FetchOptions,
 ): Promise<T> {
+  // The configuration when the request is sent answers it, whatever is configured by the time it returns.
+  const cfg = apiConfig;
+  const sentGen = signInGen;
+  const sentToken = storedToken();
   const method = (init?.method ?? 'GET').toUpperCase();
   const isRead = method === 'GET' || method === 'HEAD';
   const headers: Record<string, string> = {
@@ -535,7 +555,7 @@ async function fetchJSON<T>(
   }
   cfg?.onConnection?.(true);
   if (resp.status === 401 && cfg?.onUnauthorized) {
-    cfg.onUnauthorized();
+    if (sentGen === signInGen && sentToken === storedToken()) cfg.onUnauthorized();
     throw new Error('HTTP 401: authentication required');
   }
   if (!resp.ok) {
@@ -546,14 +566,14 @@ async function fetchJSON<T>(
 }
 
 export const api = {
-  getState: (opts?: FetchOptions) => fetchJSON<NetworkState>('/state', undefined, apiConfig, opts),
-  getDevice: (id: string, opts?: FetchOptions) => fetchJSON<DeviceDetail>(`/devices/${encodeURIComponent(id)}`, undefined, apiConfig, opts),
-  getTopology: (opts?: FetchOptions) => fetchJSON<TopologyGraph>('/topology', undefined, apiConfig, opts),
-  getVLANFlow: (opts?: FetchOptions) => fetchJSON<VLANFlow>('/vlans/flow', undefined, apiConfig, opts),
-  listTargets: (opts?: FetchOptions) => fetchJSON<{ items: TargetConfig[] }>('/targets', undefined, apiConfig, opts).then((r) => r.items),
+  getState: (opts?: FetchOptions) => fetchJSON<NetworkState>('/state', undefined, opts),
+  getDevice: (id: string, opts?: FetchOptions) => fetchJSON<DeviceDetail>(`/devices/${encodeURIComponent(id)}`, undefined, opts),
+  getTopology: (opts?: FetchOptions) => fetchJSON<TopologyGraph>('/topology', undefined, opts),
+  getVLANFlow: (opts?: FetchOptions) => fetchJSON<VLANFlow>('/vlans/flow', undefined, opts),
+  listTargets: (opts?: FetchOptions) => fetchJSON<{ items: TargetConfig[] }>('/targets', undefined, opts).then((r) => r.items),
   pollTarget: (id: string) => fetchJSON<unknown>(`/targets/${encodeURIComponent(id)}/poll`, { method: 'POST' }),
   listDiagnostics: (limit = 30, opts?: FetchOptions) =>
-    fetchJSON<{ items: DiagnosticResult[] }>(`/diagnostics?limit=${limit}`, undefined, apiConfig, opts).then((r) => r.items),
+    fetchJSON<{ items: DiagnosticResult[] }>(`/diagnostics?limit=${limit}`, undefined, opts).then((r) => r.items),
   runDiagnostic: (req: { kind: string; device_id?: string; target: string; params?: Record<string, string> }) =>
     fetchJSON<DiagnosticResult>('/diagnostics', { method: 'POST', body: JSON.stringify(req) }),
 };
