@@ -507,6 +507,27 @@ type RealizationInput struct {
 	Authorization authz.Snapshot
 }
 
+// SameRealization reports whether two saved versions realize the same network: their declarations agree except
+// for the settings that take effect when saved, notifications, and the secrets their links use agree. An apply of
+// one over the other would change nothing, so the other needs no apply (#218).
+func SameRealization(a, b RealizationInput) bool {
+	return maps.Equal(a.Secrets, b.Secrets) && bytes.Equal(realized(a.Value), realized(b.Value))
+}
+
+// realized is a declaration without the settings an apply does not realize; one it cannot read is kept whole.
+func realized(value json.RawMessage) []byte {
+	var d map[string]json.RawMessage
+	if json.Unmarshal(value, &d) != nil {
+		return value
+	}
+	delete(d, "notifications")
+	out, err := json.Marshal(d) // with its keys sorted, so both read alike
+	if err != nil {
+		return value
+	}
+	return out
+}
+
 // RealizationInput returns one saved version with the secrets its links
 // reference. A nil version means the saved head.
 func (s *Store) RealizationInput(ctx context.Context, version *Version) (result RealizationInput, err error) {

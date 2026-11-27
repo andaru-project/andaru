@@ -747,3 +747,34 @@ func TestUnchangedRolesKeepTheLiveDigestFromAnOlderRelease(t *testing.T) {
 		t.Fatalf("authorization state moved from %+v to %+v though no role changed", before, after)
 	}
 }
+
+// The applies say the head is unapplied only when it differs from the live generation's saved version in something
+// an apply realizes: a saved notification channel is not.
+func TestUnappliedIgnoresSettingsThatTakeEffectWhenSaved(t *testing.T) {
+	values := map[config.Version]string{
+		"5": `{"rules":[{"id":"r1"}]}`,
+		"6": `{"rules":[{"id":"r1"}],"notifications":{"channels":[{"id":"c"}]}}`,
+		"7": `{"rules":[{"id":"r2"}],"notifications":{"channels":[{"id":"c"}]}}`,
+	}
+	for _, c := range []struct {
+		head, live string // live "" is no live generation
+		want       bool
+	}{{"5", "5", false}, {"6", "5", false}, {"7", "5", true}, {"7", "6", true}, {"0", "", false}, {"5", "", true}} {
+		h := &appliesHandler{input: func(_ context.Context, v *config.Version) (config.RealizationInput, error) {
+			id := config.Version(c.head)
+			if v != nil {
+				id = *v
+			}
+			return config.RealizationInput{SavedVersion: id, Value: json.RawMessage(values[id])}, nil
+		}}
+		var live *int
+		items := []generation.Generation{}
+		if c.live != "" {
+			live = new(4)
+			items = append(items, generation.Generation{ID: 4, SavedVersion: c.live})
+		}
+		if got := h.unapplied(t.Context(), live, items); got != c.want {
+			t.Errorf("head %s, live %q: %v", c.head, c.live, got)
+		}
+	}
+}

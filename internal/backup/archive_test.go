@@ -321,3 +321,29 @@ func TestV1ArchiveRemainsReadableWithoutIdentityMembers(t *testing.T) {
 		t.Fatalf("v1 archive: %+v %v", decoded, err)
 	}
 }
+
+// A live generation that realizes the saved version, made from an older one, leaves nothing unapplied; with no live
+// generation, the network is unapplied whatever the engine says. Both archives read back.
+func TestRealizedSavedVersionIsNotUnapplied(t *testing.T) {
+	for _, c := range []struct {
+		live bool
+		want []string
+	}{{true, []string{}}, {false, []string{"network"}}} {
+		source := sourceFixture()
+		source.Realized = true
+		if !c.live {
+			source.Network = NetworkObservation{}
+		}
+		raw, err := Encode(context.Background(), source, Documents{Configuration: json.RawMessage(configJSON)}, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		archive, err := Decode(context.Background(), raw, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := archive.Manifest.SavedButUnappliedAreas; !slices.Equal(got, c.want) {
+			t.Fatalf("live %v: %q", c.live, got)
+		}
+	}
+}

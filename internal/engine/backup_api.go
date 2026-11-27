@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -250,6 +251,7 @@ func (h *backupHandler) create(w http.ResponseWriter, r *http.Request) {
 		SavedVersion:  string(documents.SavedVersion),
 		CapturedAt:    captured,
 		Network:       backup.NetworkObservation{Live: observed.Live, Pending: observed.Pending, LiveSavedVersion: observed.LiveSavedVersion},
+		Realized:      observed.Live != nil && h.realizes(r.Context(), documents.SavedVersion, config.Version(observed.LiveSavedVersion)),
 	}, backup.Documents{Configuration: documents.Configuration, ConfigurationSecrets: documents.ConfigurationSecrets, Users: identityDocuments.Users, UserCredentials: identityDocuments.UserCredentials}, options.Passphrase)
 	if err != nil {
 		writeBackupError(w, r, err)
@@ -633,4 +635,23 @@ func writeRestoreError(w http.ResponseWriter, r *http.Request, err error) {
 	default:
 		writeConfigurationError(w, r, err)
 	}
+}
+
+// realizes reports whether the live generation, made from saved version live, realizes saved version head. One it
+// cannot read does not.
+func (h *backupHandler) realizes(ctx context.Context, head, live config.Version) bool {
+	if head == live {
+		return true
+	}
+	a, err := h.store.RealizationInput(ctx, &head)
+	if err != nil {
+		slog.WarnContext(ctx, "read the saved version for the backup", "version", head, "error", err)
+		return false
+	}
+	b, err := h.store.RealizationInput(ctx, &live)
+	if err != nil {
+		slog.WarnContext(ctx, "read the live generation's saved version for the backup", "version", live, "error", err)
+		return false
+	}
+	return config.SameRealization(a, b)
 }

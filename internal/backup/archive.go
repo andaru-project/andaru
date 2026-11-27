@@ -46,6 +46,9 @@ type Source struct {
 	AndaruVersion, SavedVersion string
 	CapturedAt                  time.Time
 	Network                     NetworkObservation
+	// Realized says the live generation realizes the saved version although it was made from an older one: what
+	// changed since takes effect when saved, as notifications do.
+	Realized bool
 }
 
 type Payload struct {
@@ -95,7 +98,7 @@ func validSource(source Source) bool {
 }
 
 func unapplied(source Source) []string {
-	if source.Network.Live == nil || source.Network.LiveSavedVersion != source.SavedVersion {
+	if source.Network.Live == nil || source.Network.LiveSavedVersion != source.SavedVersion && !source.Realized {
 		return []string{"network"}
 	}
 	return []string{}
@@ -249,7 +252,9 @@ func decodeManifest(raw []byte) (Manifest, error) {
 		return Manifest{}, &Error{Code: "UNSUPPORTED_SCHEMA"}
 	}
 	id, err := hex.DecodeString(manifest.BackupID)
-	source := Source{AndaruVersion: manifest.AndaruVersion, SavedVersion: manifest.SavedVersion, CapturedAt: manifest.CreatedAt, Network: manifest.Network}
+	// An archive may say a live generation realizes its saved version; only the engine that made it could tell.
+	source := Source{AndaruVersion: manifest.AndaruVersion, SavedVersion: manifest.SavedVersion, CapturedAt: manifest.CreatedAt, Network: manifest.Network,
+		Realized: manifest.SavedButUnappliedAreas != nil && len(manifest.SavedButUnappliedAreas) == 0}
 	_, offset := manifest.CreatedAt.Zone()
 	if err != nil || len(id) != 16 || !validSource(source) || offset != 0 || manifest.Scopes == nil || manifest.SavedButUnappliedAreas == nil || !slices.Equal(manifest.SavedButUnappliedAreas, unapplied(source)) {
 		return Manifest{}, invalid

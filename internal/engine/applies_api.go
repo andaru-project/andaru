@@ -114,6 +114,9 @@ type appliesView struct {
 		Live *string `json:"live"`
 	} `json:"pointers"`
 	Items []applyView `json:"items"`
+	// Unapplied says the saved head holds something the live generation does not realize, so an apply would change
+	// the network. A save that takes effect at once, as of notifications, leaves it false.
+	Unapplied bool `json:"unapplied"`
 }
 
 func idString(id *int) *string {
@@ -219,7 +222,34 @@ func (h *appliesHandler) list(w http.ResponseWriter, r *http.Request) {
 	for _, g := range items {
 		view.Items = append(view.Items, viewApply(g))
 	}
+	view.Unapplied = h.unapplied(r.Context(), p.Live, items)
 	writeJSON(w, r, http.StatusOK, view)
+}
+
+// unapplied reports whether the saved head holds something the live generation does not realize. With no live
+// generation, the factory network runs: any saved version is unapplied. A version it cannot read is unapplied too.
+func (h *appliesHandler) unapplied(ctx context.Context, live *int, items []generation.Generation) bool {
+	head, err := h.input(ctx, nil)
+	if err != nil {
+		slog.WarnContext(ctx, "read the saved head", "error", err)
+		return true
+	}
+	i := -1
+	if live != nil {
+		i = slices.IndexFunc(items, func(g generation.Generation) bool { return g.ID == *live })
+	}
+	if i < 0 {
+		return head.SavedVersion != "0"
+	}
+	if v := config.Version(items[i].SavedVersion); v != head.SavedVersion {
+		running, err := h.input(ctx, &v)
+		if err != nil {
+			slog.WarnContext(ctx, "read the live generation's saved version", "version", v, "error", err)
+			return true
+		}
+		return !config.SameRealization(head, running)
+	}
+	return false
 }
 
 // show writes one apply and reports whether it existed.
