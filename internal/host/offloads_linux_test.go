@@ -39,6 +39,15 @@ func TestManagedOffloadsFoldsFeatures(t *testing.T) {
 	if len(got) != len(Offloads) {
 		t.Errorf("a veth reports every managed offload, got %d of %d", len(got), len(Offloads))
 	}
+
+	mixed := ManagedOffloads(map[string]Feature{
+		"tx-checksum-ipv4": {Active: true, Requested: true, Fixed: true},
+		"tx-checksum-sctp": {Active: false, Requested: false, Fixed: false},
+	})
+	wantMixed := OffloadState{Active: true, Fixed: false, FixedActive: true}
+	if mixed["transmitChecksum"] != wantMixed {
+		t.Errorf("mixed transmitChecksum = %+v, want %+v", mixed["transmitChecksum"], wantMixed)
+	}
 }
 
 func TestParseFeaturesRejectsBadInput(t *testing.T) {

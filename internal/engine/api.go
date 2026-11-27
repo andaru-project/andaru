@@ -206,7 +206,12 @@ func newHandlerWithAllServices(readLinks func(context.Context) ([]host.LinkStatu
 				writeError(w, r, http.StatusServiceUnavailable, "INVENTORY_UNAVAILABLE", "Device offloads are unavailable; inspect the engine journal.")
 				return
 			}
-			generation.FillOffloadDefaults(offloadsRoot, devices)
+			if devices == nil {
+				devices = []host.DeviceOffloads{}
+			}
+			if r.Method != http.MethodHead {
+				generation.FillOffloadDefaults(offloadsRoot, devices)
+			}
 			writeJSON(w, r, http.StatusOK, offloadsResponse{Items: devices})
 			return
 		}

@@ -24,6 +24,19 @@ const offloadRecordLimit = 5 * time.Second
 // turning a driver's LRO back on would break forwarding. It runs only where the operator turns it on, off elsewhere.
 const neverRestored = "large-receive-offload"
 
+// readOffloadRecord reads /run/andaru-offloads/defaults.json under root, falling back to an empty map if absent or damaged.
+func readOffloadRecord(root string) map[string]map[string]bool {
+	record := map[string]map[string]bool{}
+	if _, err := readJSON(root+offloadDefaultsPath, &record); err != nil {
+		slog.Warn("read the recorded device offloads", "error", err)
+		return map[string]map[string]bool{}
+	}
+	if record == nil {
+		return map[string]map[string]bool{}
+	}
+	return record
+}
+
 // onDiskLinkFiles reads the Andaru .link files currently in /run/systemd/network under root.
 func onDiskLinkFiles(root string) []placed {
 	var onDisk []placed
@@ -37,56 +50,52 @@ func onDiskLinkFiles(root string) []placed {
 }
 
 // FillOffloadDefaults populates each reported offload's Default on devices from the recorded driver defaults and
-// active .link files under root. Fixed offloads keep their active state; non-fixed LRO defaults to off; an offload
-// already declared before the device was recorded has no known driver default and stays nil.
+// active .link files under root. Fixed offloads keep their active state; a multi-feature offload with a fixed-active
+// sub-feature defaults to on; non-fixed LRO defaults to off; an unrecorded device uses its live active state for
+// undeclared offloads; an offload already declared before the device was recorded has no known default and stays nil.
 func FillOffloadDefaults(root string, devices []host.DeviceOffloads) {
-	record := map[string]map[string]bool{}
-	if _, err := readJSON(root+offloadDefaultsPath, &record); err != nil {
-		slog.Warn("read the recorded device offloads", "error", err)
-		record = map[string]map[string]bool{}
+	if len(devices) == 0 {
+		return
 	}
-	applied := declaredOffloads(onDiskLinkFiles(root))
+	record := readOffloadRecord(root)
+	var applied map[string]map[string]bool
 	for i := range devices {
 		mac := strings.ToLower(devices[i].PermanentAddress)
 		rec, hasRec := record[mac]
-		decl := applied[mac]
+		var decl map[string]bool
+		if !hasRec {
+			if applied == nil {
+				applied = declaredOffloads(onDiskLinkFiles(root))
+			}
+			decl = applied[mac]
+		}
 		for _, o := range host.Offloads {
 			state, ok := devices[i].Offloads[o.Key]
-			if !ok || state.Default != nil {
+			if !ok {
 				continue
 			}
+			var val, known bool
 			switch {
 			case state.Fixed:
-				v := state.Active
-				state.Default = &v
+				val, known = state.Active, true
+			case state.FixedActive:
+				val, known = true, true
 			case slices.Contains(o.Features, neverRestored):
-				v := false
-				state.Default = &v
+				val, known = false, true
 			case hasRec:
-				seen, on := false, false
 				for _, name := range o.Features {
 					if v, recorded := rec[name]; recorded {
-						seen = true
-						on = on || v
+						known = true
+						val = val || v
 					}
 				}
-				if seen {
-					state.Default = &on
-				}
-			default:
-				declared := false
-				for _, name := range o.Features {
-					if _, isDeclared := decl[name]; isDeclared {
-						declared = true
-						break
-					}
-				}
-				if !declared {
-					v := state.Active
-					state.Default = &v
-				}
+			case !slices.ContainsFunc(o.Features, func(name string) bool { _, declared := decl[name]; return declared }):
+				val, known = state.Active, true
 			}
-			devices[i].Offloads[o.Key] = state
+			if known {
+				state.Default = &val
+				devices[i].Offloads[o.Key] = state
+			}
 		}
 	}
 }
@@ -101,12 +110,8 @@ func (r Realizer) recordOffloadDefaults(ctx context.Context) (map[string]map[str
 		return nil, nil, err
 	}
 	path := r.Root + offloadDefaultsPath
-	record := map[string]map[string]bool{}
-	if _, err := readJSON(path, &record); err != nil {
-		// Rewritten below: a device whose defaults are lost only keeps what it runs until the next boot.
-		slog.Warn("read the recorded device offloads", "error", err)
-		record = map[string]map[string]bool{}
-	}
+	// Rewritten below: a device whose defaults are lost only keeps what it runs until the next boot.
+	record := readOffloadRecord(r.Root)
 	applied := declaredOffloads(onDiskLinkFiles(r.Root))
 	changed := false
 	for _, l := range links {

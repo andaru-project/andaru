@@ -256,7 +256,7 @@
       "get": {
         "operationId": "readDeviceOffloads",
         "summary": "Read the live offloads of the Ethernet devices",
-        "description": "Reads, with ethtool, the offloads Andaru manages on each Ethernet device: whether each runs, and whether the device can change it.",
+        "description": "Reads, with ethtool, the offloads Andaru manages on each Ethernet device: whether each runs, whether the device can change it, and what leaving it at Default runs on that device when known.",
         "responses": {
           "200": {
             "description": "The device offloads",

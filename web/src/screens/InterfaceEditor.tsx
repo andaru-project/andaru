@@ -21,9 +21,14 @@ interface InterfaceEditorProps {
   onSave(operations: ConfigBatchOperation[]): Promise<void>;
 }
 
+const offloadModesUnknown = [{ value: 'default', label: 'Default' }, { value: 'on', label: 'On' }, { value: 'off', label: 'Off' }];
+const offloadModesOn = [{ value: 'default', label: 'Default (On)' }, { value: 'on', label: 'On' }, { value: 'off', label: 'Off' }];
+const offloadModesOff = [{ value: 'default', label: 'Default (Off)' }, { value: 'on', label: 'On' }, { value: 'off', label: 'Off' }];
+
 function offloadModeOptions(cardDefault?: boolean) {
-  const defaultLabel = cardDefault === undefined ? 'Default' : `Default (${cardDefault ? 'On' : 'Off'})`;
-  return [{ value: 'default', label: defaultLabel }, { value: 'on', label: 'On' }, { value: 'off', label: 'Off' }];
+  if (cardDefault === true) return offloadModesOn;
+  if (cardDefault === false) return offloadModesOff;
+  return offloadModesUnknown;
 }
 
 // Each managed offload: what the device runs now, and whether the saved link turns it on, off or leaves the default.
@@ -53,7 +58,7 @@ function OffloadSettings({ api, mac, value, error, onSessionLost, onChange }: {
         {live.error && <Text size="sm" c="red" role="alert">Live offload state is unavailable: {live.error}</Text>}
         {live.data === null && <Text size="sm" c="dimmed">The device is not present: its live state is unknown.</Text>}
         {error && <Text size="sm" c="red" role="alert">{error}</Text>}
-        <div className={showLive ? 'offload-list offload-list--live' : 'offload-list'}>
+        <div className={showLive ? 'offload-list--live' : undefined}>
           <div className="offload-header" aria-hidden="true">
             <span>Offload</span>
             {showLive && <span>Current</span>}
@@ -63,8 +68,9 @@ function OffloadSettings({ api, mac, value, error, onSessionLost, onChange }: {
             const state = live.data?.offloads[key];
             const saved = value[key];
             const id = `${idPrefix}-${key}`;
+            const liveId = showLive ? `${id}-live` : undefined;
             const noteId = state?.fixed ? `${id}-note` : undefined;
-            const cardDefault = state?.default ?? (state?.fixed ? state.active : undefined);
+            const describedBy = [liveId, noteId].filter(Boolean).join(' ') || undefined;
             return (
               <div key={key} className="offload-row">
                 <div className="offload-name">
@@ -72,7 +78,8 @@ function OffloadSettings({ api, mac, value, error, onSessionLost, onChange }: {
                   {state?.fixed && <Text id={noteId} size="xs" c="dimmed">Not configurable</Text>}
                 </div>
                 {showLive && (
-                  <div className="offload-live">
+                  <div id={liveId} className="offload-live">
+                    <span className="offload-live-label">Current: </span>
                     {state ? (
                       <Badge variant="dot" color={state.active ? 'green' : 'gray'} className="plain-badge">
                         {state.active ? 'On' : 'Off'}
@@ -86,9 +93,9 @@ function OffloadSettings({ api, mac, value, error, onSessionLost, onChange }: {
                 )}
                 <NativeSelect
                   id={id}
-                  aria-describedby={noteId}
+                  attributes={describedBy ? { input: { 'aria-describedby': describedBy } } : undefined}
                   className="offload-select"
-                  data={offloadModeOptions(cardDefault)}
+                  data={offloadModeOptions(state?.default)}
                   value={saved === undefined ? 'default' : saved ? 'on' : 'off'}
                   disabled={Boolean(state?.fixed) && saved === undefined}
                   onChange={(event) => choose(key, event.currentTarget.value)}

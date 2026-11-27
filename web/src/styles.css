@@ -892,12 +892,12 @@ path.traffic-sent {
   align-items: center;
   display: grid;
   gap: var(--mantine-spacing-xs);
-  grid-template-columns: minmax(0, 1fr) 8.75rem;
+  grid-template-columns: minmax(0, 1fr) 9.25rem;
 }
 
 .offload-list--live .offload-header,
 .offload-list--live .offload-row {
-  grid-template-columns: minmax(0, 1fr) 4.25rem 8.75rem;
+  grid-template-columns: minmax(0, 1fr) minmax(4.75rem, auto) 9.25rem;
 }
 
 .offload-header {
@@ -930,13 +930,23 @@ path.traffic-sent {
 .offload-live {
   align-items: center;
   display: flex;
+  gap: 0.35rem;
 }
 
 .offload-live .mantine-Badge-root {
   min-width: max-content;
 }
 
-@media (max-width: 26em) {
+/* Visually hidden above the stacking breakpoint where the column header carries "Current"; read by assistive tech. */
+.offload-live-label {
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  width: 1px;
+}
+
+@media (max-width: 28em) {
   .offload-header {
     display: none;
   }
@@ -951,5 +961,15 @@ path.traffic-sent {
 
   .offload-list--live .offload-select {
     grid-column: 1 / -1;
+  }
+
+  .offload-live-label {
+    clip-path: none;
+    color: var(--mantine-color-dimmed);
+    font-size: var(--mantine-font-size-xs);
+    height: auto;
+    overflow: visible;
+    position: static;
+    width: auto;
   }
 }

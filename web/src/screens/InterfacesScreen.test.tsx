@@ -1193,13 +1193,15 @@ it('shows live offloads on Ethernet and saves the ones changed', async () => {
   const panel = await screen.findByRole('dialog');
 
   const rowOf = (label: RegExp) => within(panel).getByLabelText(label).closest('.offload-row') as HTMLElement;
+  const liveCellOf = (label: RegExp) => rowOf(label).querySelector('.offload-live') as HTMLElement;
   const defaultOptionText = (label: RegExp) => (within(panel).getByLabelText(label) as HTMLSelectElement).options[0]?.textContent;
 
-  // Wait for live offloads to render their badges and card defaults.
+  // Wait for live offloads to render their badges, card defaults, and accessible descriptions.
   const lroSelect = within(panel).getByLabelText(/^Large receive \(LRO\)/);
   await vi.waitFor(() => expect(lroSelect).toBeDisabled());
   expect(rowOf(/^Large receive \(LRO\)/)).toHaveTextContent('Not configurable');
-  expect(rowOf(/^Large receive \(LRO\)/)).toHaveTextContent('Off');
+  expect(liveCellOf(/^Large receive \(LRO\)/)).toHaveTextContent(/^Current:\s*Off$/);
+  expect(lroSelect).toHaveAccessibleDescription('Current: Off Not configurable');
   expect(defaultOptionText(/^Large receive \(LRO\)/)).toBe('Default (Off)');
   expect(panel).not.toHaveTextContent('fixed by the device');
 
@@ -1207,17 +1209,20 @@ it('shows live offloads on Ethernet and saves the ones changed', async () => {
   const groHwSelect = within(panel).getByLabelText(/^Hardware generic receive \(GRO-HW\)/);
   expect(groHwSelect).not.toBeDisabled();
   expect(rowOf(/^Hardware generic receive \(GRO-HW\)/)).toHaveTextContent('Not configurable');
+  expect(liveCellOf(/^Hardware generic receive \(GRO-HW\)/)).toHaveTextContent(/^Current:\s*Off$/);
   expect(defaultOptionText(/^Hardware generic receive \(GRO-HW\)/)).toBe('Default (Off)');
 
   // Overridden GRO runs Off now, while its card default is On.
-  expect(rowOf(/^Generic receive \(GRO\)/)).toHaveTextContent('Off');
+  expect(liveCellOf(/^Generic receive \(GRO\)/)).toHaveTextContent(/^Current:\s*Off$/);
+  expect(within(panel).getByLabelText(/^Generic receive \(GRO\)/)).toHaveAccessibleDescription('Current: Off');
   expect(defaultOptionText(/^Generic receive \(GRO\)/)).toBe('Default (On)');
 
   // TSO runs On now with card default On; n-tuple has unknown default so shows plain Default; unreported shows Not reported.
-  expect(rowOf(/^TCP segmentation \(TSO\)/)).toHaveTextContent('On');
+  expect(liveCellOf(/^TCP segmentation \(TSO\)/)).toHaveTextContent(/^Current:\s*On$/);
   expect(defaultOptionText(/^TCP segmentation \(TSO\)/)).toBe('Default (On)');
+  expect(liveCellOf(/^N-tuple filters/)).toHaveTextContent(/^Current:\s*Off$/);
   expect(defaultOptionText(/^N-tuple filters/)).toBe('Default');
-  expect(rowOf(/^Receive checksum/)).toHaveTextContent('Not reported');
+  expect(liveCellOf(/^Receive checksum/)).toHaveTextContent(/^Current:\s*Not reported$/);
 
   await user.selectOptions(within(panel).getByLabelText(/^Generic receive \(GRO\)/), 'default');
   await user.selectOptions(groHwSelect, 'default');
@@ -1231,7 +1236,7 @@ it('shows live offloads on Ethernet and saves the ones changed', async () => {
   });
 });
 
-it('says when the device of a saved Ethernet link is not present', async () => {
+it('says when the device of a saved Ethernet link is not present or live offloads fail', async () => {
   const user = userEvent.setup();
   const port = ethernet(lanPort, 'LAN port', '52:54:00:aa:bb:01');
   routes({
@@ -1243,9 +1248,27 @@ it('says when the device of a saved Ethernet link is not present', async () => {
       '/api/v1/status/offloads': { items: [] },
     },
   });
+  const { unmount } = render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={vi.fn()} onSessionLost={vi.fn()} />);
+  await user.click(await screen.findByRole('button', { name: 'Edit LAN port' }));
+  let panel = await screen.findByRole('dialog');
+  expect(await within(panel).findByText('The device is not present: its live state is unknown.')).toBeInTheDocument();
+  expect(panel.querySelector('.offload-live')).toBeNull();
+  expect((within(panel).getByLabelText(/^TCP segmentation \(TSO\)/) as HTMLSelectElement).options[0]?.textContent).toBe('Default');
+  unmount();
+
+  routes({
+    links: [port],
+    findings: [],
+    extra: {
+      [`/api/v1/config/links/${lanPort}`]: { version: '4', value: port },
+      '/api/v1/config/segments/seg_lan': { version: '6', value: { id: 'seg_lan', name: 'LAN', link: lanPort, zone: 'zon_lan', addressing: { ipv4: { mode: 'static', addresses: ['192.168.1.1/24'] }, ipv6: { mode: 'none' } } } },
+      '/api/v1/status/offloads': () => jsonResponse(503, { error: { code: 'INVENTORY_UNAVAILABLE', message: 'ethtool failed.' } }),
+    },
+  });
   render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={vi.fn()} onSessionLost={vi.fn()} />);
   await user.click(await screen.findByRole('button', { name: 'Edit LAN port' }));
-  const panel = await screen.findByRole('dialog');
-  expect(await within(panel).findByText('The device is not present: its live state is unknown.')).toBeInTheDocument();
+  panel = await screen.findByRole('dialog');
+  expect(await within(panel).findByText(/Live offload state is unavailable: ethtool failed\./)).toBeInTheDocument();
+  expect(panel.querySelector('.offload-live')).toBeNull();
   expect((within(panel).getByLabelText(/^TCP segmentation \(TSO\)/) as HTMLSelectElement).options[0]?.textContent).toBe('Default');
 });

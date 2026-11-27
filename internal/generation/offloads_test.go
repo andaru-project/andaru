@@ -267,15 +267,26 @@ func TestFillOffloadDefaults(t *testing.T) {
 				"largeReceive":    {Active: true, Fixed: true},
 			},
 		},
+		{
+			Interface:        "opt",
+			PermanentAddress: "52:54:00:AA:00:03",
+			Offloads:         nil,
+		},
 	}
 
 	FillOffloadDefaults(root, devices)
 
+	fmtBool := func(v *bool) string {
+		if v == nil {
+			return "nil"
+		}
+		return fmt.Sprintf("%t", *v)
+	}
 	check := func(dev host.DeviceOffloads, key string, want *bool) {
 		t.Helper()
 		got := dev.Offloads[key].Default
 		if (got == nil) != (want == nil) || (got != nil && *got != *want) {
-			t.Errorf("%s.%s default = %v, want %v", dev.Interface, key, got, want)
+			t.Errorf("%s.%s default = %s, want %s", dev.Interface, key, fmtBool(got), fmtBool(want))
 		}
 	}
 	on, off := true, false
@@ -291,14 +302,32 @@ func TestFillOffloadDefaults(t *testing.T) {
 	check(devices[1], "tcpSegmentation", &on)
 	check(devices[1], "largeReceive", &on)
 
-	// A damaged defaults file falls back cleanly without panicking or dropping undeclared defaults.
-	damaged := t.TempDir()
-	writeFile(t, damaged+offloadDefaultsPath, "{")
-	fallback := []host.DeviceOffloads{{
-		Interface:        "wan",
-		PermanentAddress: "52:54:00:aa:00:01",
-		Offloads:         map[string]host.OffloadState{"genericReceive": {Active: true}},
+	// Mixed transmitChecksum (one fixed-on sub-feature + one mutable-off sub-feature): still defaults to On.
+	mixedRoot := t.TempDir()
+	writeFile(t, mixedRoot+offloadDefaultsPath, `{"52:54:00:aa:00:04":{"tx-checksum-sctp":false}}`)
+	mixed := []host.DeviceOffloads{{
+		Interface:        "mix",
+		PermanentAddress: "52:54:00:aa:00:04",
+		Offloads:         map[string]host.OffloadState{"transmitChecksum": {Active: true, Fixed: false, FixedActive: true}},
 	}}
-	FillOffloadDefaults(damaged, fallback)
-	check(fallback[0], "genericReceive", &on)
+	FillOffloadDefaults(mixedRoot, mixed)
+	check(mixed[0], "transmitChecksum", &on)
+
+	// A damaged or JSON-null defaults file falls back cleanly while still honoring active .link declarations.
+	for _, raw := range []string{"{", "null"} {
+		damaged := t.TempDir()
+		writeFile(t, damaged+offloadDefaultsPath, raw)
+		writeFile(t, filepath.Join(damaged, "run/systemd/network/50-andaru-wan.link"), wanLink+"GenericReceiveOffload=no\n")
+		fallback := []host.DeviceOffloads{{
+			Interface:        "wan",
+			PermanentAddress: "52:54:00:aa:00:01",
+			Offloads: map[string]host.OffloadState{
+				"genericReceive":  {Active: false},
+				"tcpSegmentation": {Active: true},
+			},
+		}}
+		FillOffloadDefaults(damaged, fallback)
+		check(fallback[0], "genericReceive", nil)
+		check(fallback[0], "tcpSegmentation", &on)
+	}
 }

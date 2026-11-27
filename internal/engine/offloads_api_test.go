@@ -31,7 +31,11 @@ func TestOffloadsAPI(t *testing.T) {
 
 	readOffloads = func(context.Context) ([]host.DeviceOffloads, error) {
 		return []host.DeviceOffloads{{Interface: "wan", PermanentAddress: "52:54:00:00:00:01",
-			Offloads: map[string]host.OffloadState{"largeReceive": {Fixed: true}, "genericReceive": {Active: false}}}}, nil
+			Offloads: map[string]host.OffloadState{
+				"largeReceive":    {Fixed: true},
+				"genericReceive":  {Active: false},
+				"tcpSegmentation": {Active: false},
+			}}}, nil
 	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, rootRequest(http.MethodGet, "/api/v1/status/offloads"))
@@ -47,6 +51,21 @@ func TestOffloadsAPI(t *testing.T) {
 	lro := body.Items[0].Offloads["largeReceive"]
 	if !lro.Fixed || lro.Default == nil || *lro.Default {
 		t.Fatalf("largeReceive = %+v, want fixed=true default=false", lro)
+	}
+	// tcpSegmentation was absent from the recorded defaults, so default is omitted (not null) on the wire.
+	if tso := body.Items[0].Offloads["tcpSegmentation"]; tso.Default != nil {
+		t.Fatalf("tcpSegmentation = %+v, want nil default", tso)
+	}
+	var raw struct {
+		Items []struct {
+			Offloads map[string]map[string]any `json:"offloads"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := raw.Items[0].Offloads["tcpSegmentation"]["default"]; present {
+		t.Fatalf("tcpSegmentation serialized default key: %s", rec.Body)
 	}
 
 	head := httptest.NewRecorder()
