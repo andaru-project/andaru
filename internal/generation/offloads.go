@@ -24,6 +24,73 @@ const offloadRecordLimit = 5 * time.Second
 // turning a driver's LRO back on would break forwarding. It runs only where the operator turns it on, off elsewhere.
 const neverRestored = "large-receive-offload"
 
+// onDiskLinkFiles reads the Andaru .link files currently in /run/systemd/network under root.
+func onDiskLinkFiles(root string) []placed {
+	var onDisk []placed
+	files, _ := filepath.Glob(root + "/run/systemd/network/50-andaru-*.link")
+	for _, file := range files {
+		if data, err := os.ReadFile(file); err == nil {
+			onDisk = append(onDisk, placed{path: file, data: data})
+		}
+	}
+	return onDisk
+}
+
+// FillOffloadDefaults populates each reported offload's Default on devices from the recorded driver defaults and
+// active .link files under root. Fixed offloads keep their active state; non-fixed LRO defaults to off; an offload
+// already declared before the device was recorded has no known driver default and stays nil.
+func FillOffloadDefaults(root string, devices []host.DeviceOffloads) {
+	record := map[string]map[string]bool{}
+	if _, err := readJSON(root+offloadDefaultsPath, &record); err != nil {
+		slog.Warn("read the recorded device offloads", "error", err)
+		record = map[string]map[string]bool{}
+	}
+	applied := declaredOffloads(onDiskLinkFiles(root))
+	for i := range devices {
+		mac := strings.ToLower(devices[i].PermanentAddress)
+		rec, hasRec := record[mac]
+		decl := applied[mac]
+		for _, o := range host.Offloads {
+			state, ok := devices[i].Offloads[o.Key]
+			if !ok || state.Default != nil {
+				continue
+			}
+			switch {
+			case state.Fixed:
+				v := state.Active
+				state.Default = &v
+			case slices.Contains(o.Features, neverRestored):
+				v := false
+				state.Default = &v
+			case hasRec:
+				seen, on := false, false
+				for _, name := range o.Features {
+					if v, recorded := rec[name]; recorded {
+						seen = true
+						on = on || v
+					}
+				}
+				if seen {
+					state.Default = &on
+				}
+			default:
+				declared := false
+				for _, name := range o.Features {
+					if _, isDeclared := decl[name]; isDeclared {
+						declared = true
+						break
+					}
+				}
+				if !declared {
+					v := state.Active
+					state.Default = &v
+				}
+			}
+			devices[i].Offloads[o.Key] = state
+		}
+	}
+}
+
 // recordOffloadDefaults records every Ethernet device not recorded yet, as it runs now, and returns the record and
 // the devices. udev applies an Andaru .link file when a device appears, so the features the files on disk declare
 // for a device say nothing of its driver and are left out: at boot there are none yet; a verb records before it
@@ -40,14 +107,7 @@ func (r Realizer) recordOffloadDefaults(ctx context.Context) (map[string]map[str
 		slog.Warn("read the recorded device offloads", "error", err)
 		record = map[string]map[string]bool{}
 	}
-	var onDisk []placed
-	files, _ := filepath.Glob(r.Root + "/run/systemd/network/50-andaru-*.link")
-	for _, file := range files {
-		if data, err := os.ReadFile(file); err == nil {
-			onDisk = append(onDisk, placed{path: file, data: data})
-		}
-	}
-	applied := declaredOffloads(onDisk)
+	applied := declaredOffloads(onDiskLinkFiles(r.Root))
 	changed := false
 	for _, l := range links {
 		mac := strings.ToLower(l.PermanentAddress)

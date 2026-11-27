@@ -8373,6 +8373,10 @@
           },
           "fixed": {
             "type": "boolean"
+          },
+          "default": {
+            "type": "boolean",
+            "description": "What leaving this offload at Default runs on this device; omitted when unknown."
           }
         }
       },

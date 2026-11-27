@@ -885,3 +885,71 @@ path.traffic-sent {
     transform: rotate(90deg);
   }
 }
+
+/* Each Ethernet offload: its name, its live state badge, and its saved mode on one aligned line. */
+.offload-header,
+.offload-row {
+  align-items: center;
+  display: grid;
+  gap: var(--mantine-spacing-xs);
+  grid-template-columns: minmax(0, 1fr) 8.75rem;
+}
+
+.offload-list--live .offload-header,
+.offload-list--live .offload-row {
+  grid-template-columns: minmax(0, 1fr) 4.25rem 8.75rem;
+}
+
+.offload-header {
+  color: var(--mantine-color-dimmed);
+  font-size: var(--mantine-font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding-bottom: 0.25rem;
+  text-transform: uppercase;
+}
+
+.offload-row {
+  border-top: 1px solid var(--mantine-color-default-border);
+  padding-block: 0.45rem;
+}
+
+.offload-name {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.offload-label {
+  font-size: var(--mantine-font-size-sm);
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.offload-live {
+  align-items: center;
+  display: flex;
+}
+
+.offload-live .mantine-Badge-root {
+  min-width: max-content;
+}
+
+@media (max-width: 26em) {
+  .offload-header {
+    display: none;
+  }
+
+  .offload-row {
+    grid-template-columns: 1fr;
+  }
+
+  .offload-list--live .offload-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .offload-list--live .offload-select {
+    grid-column: 1 / -1;
+  }
+}

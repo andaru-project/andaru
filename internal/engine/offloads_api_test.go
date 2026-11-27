@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/andaru-project/andaru/internal/host"
@@ -13,18 +15,38 @@ import (
 
 func TestOffloadsAPI(t *testing.T) {
 	orig := readOffloads
-	t.Cleanup(func() { readOffloads = orig })
+	origRoot := offloadsRoot
+	offloadsRoot = t.TempDir()
+	t.Cleanup(func() {
+		readOffloads = orig
+		offloadsRoot = origRoot
+	})
+	if err := os.MkdirAll(filepath.Join(offloadsRoot, "run/andaru-offloads"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(offloadsRoot, "run/andaru-offloads/defaults.json"), []byte(`{"52:54:00:00:00:01":{"generic-receive-offload":true}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	h := newHandler(nil, nil)
 
 	readOffloads = func(context.Context) ([]host.DeviceOffloads, error) {
 		return []host.DeviceOffloads{{Interface: "wan", PermanentAddress: "52:54:00:00:00:01",
-			Offloads: map[string]host.OffloadState{"largeReceive": {Fixed: true}, "genericReceive": {Active: true}}}}, nil
+			Offloads: map[string]host.OffloadState{"largeReceive": {Fixed: true}, "genericReceive": {Active: false}}}}, nil
 	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, rootRequest(http.MethodGet, "/api/v1/status/offloads"))
 	var body offloadsResponse
-	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &body) != nil || len(body.Items) != 1 || !body.Items[0].Offloads["genericReceive"].Active {
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &body) != nil || len(body.Items) != 1 {
 		t.Fatalf("GET: %d %s", rec.Code, rec.Body)
+	}
+	validResponse(t, "OffloadsResponse", rec.Body.Bytes())
+	gro := body.Items[0].Offloads["genericReceive"]
+	if gro.Active || gro.Default == nil || !*gro.Default {
+		t.Fatalf("genericReceive = %+v, want active=false default=true", gro)
+	}
+	lro := body.Items[0].Offloads["largeReceive"]
+	if !lro.Fixed || lro.Default == nil || *lro.Default {
+		t.Fatalf("largeReceive = %+v, want fixed=true default=false", lro)
 	}
 
 	head := httptest.NewRecorder()

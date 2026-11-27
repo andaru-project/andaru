@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/andaru-project/andaru/internal/host"
 )
 
 // offloadHost fakes ip and ethtool for one Ethernet device whose features change as ethtool -K asks.
@@ -232,4 +234,71 @@ func TestVerbsRecordBeforeTheyReplaceTheLinkFiles(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFillOffloadDefaults(t *testing.T) {
+	root := t.TempDir()
+	// Recorded device: GRO defaulted on (even though currently off), tx-checksum-ip-generic defaulted on,
+	// tcpSegmentation was pre-declared so absent from the record.
+	writeFile(t, root+offloadDefaultsPath, `{"52:54:00:aa:00:01":{"generic-receive-offload":true,"tx-checksum-ip-generic":true,"ntuple-filters":false}}`)
+	// Unrecorded device has a .link file declaring GRO, so only undeclared features fall back to live state.
+	writeFile(t, filepath.Join(root, "run/systemd/network/50-andaru-lan.link"), "[Match]\nPermanentMACAddress=52:54:00:AA:00:02\n\n[Link]\nName=lan\nGenericReceiveOffload=no\n")
+
+	devices := []host.DeviceOffloads{
+		{
+			Interface:        "wan",
+			PermanentAddress: "52:54:00:AA:00:01",
+			Offloads: map[string]host.OffloadState{
+				"genericReceive":         {Active: false, Fixed: false},
+				"transmitChecksum":       {Active: false, Fixed: false},
+				"ntupleFilter":           {Active: true, Fixed: false},
+				"tcpSegmentation":        {Active: false, Fixed: false},
+				"genericReceiveHardware": {Active: false, Fixed: true},
+				"receiveChecksum":        {Active: true, Fixed: true},
+				"largeReceive":           {Active: true, Fixed: false},
+			},
+		},
+		{
+			Interface:        "lan",
+			PermanentAddress: "52:54:00:AA:00:02",
+			Offloads: map[string]host.OffloadState{
+				"genericReceive":  {Active: false, Fixed: false},
+				"tcpSegmentation": {Active: true, Fixed: false},
+				"largeReceive":    {Active: true, Fixed: true},
+			},
+		},
+	}
+
+	FillOffloadDefaults(root, devices)
+
+	check := func(dev host.DeviceOffloads, key string, want *bool) {
+		t.Helper()
+		got := dev.Offloads[key].Default
+		if (got == nil) != (want == nil) || (got != nil && *got != *want) {
+			t.Errorf("%s.%s default = %v, want %v", dev.Interface, key, got, want)
+		}
+	}
+	on, off := true, false
+	check(devices[0], "genericReceive", &on)
+	check(devices[0], "transmitChecksum", &on)
+	check(devices[0], "ntupleFilter", &off)
+	check(devices[0], "tcpSegmentation", nil)
+	check(devices[0], "genericReceiveHardware", &off)
+	check(devices[0], "receiveChecksum", &on)
+	check(devices[0], "largeReceive", &off)
+
+	check(devices[1], "genericReceive", nil)
+	check(devices[1], "tcpSegmentation", &on)
+	check(devices[1], "largeReceive", &on)
+
+	// A damaged defaults file falls back cleanly without panicking or dropping undeclared defaults.
+	damaged := t.TempDir()
+	writeFile(t, damaged+offloadDefaultsPath, "{")
+	fallback := []host.DeviceOffloads{{
+		Interface:        "wan",
+		PermanentAddress: "52:54:00:aa:00:01",
+		Offloads:         map[string]host.OffloadState{"genericReceive": {Active: true}},
+	}}
+	FillOffloadDefaults(damaged, fallback)
+	check(fallback[0], "genericReceive", &on)
 }

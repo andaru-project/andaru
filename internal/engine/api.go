@@ -71,6 +71,9 @@ var readLLDP = host.ReadLLDPNeighbors
 // readOffloads reads the live offloads of the Ethernet devices; tests swap it.
 var readOffloads = host.ReadOffloads
 
+// offloadsRoot is where the offload view reads recorded defaults and .link files; tests point it elsewhere.
+var offloadsRoot = ""
+
 // systemRoot is where the system description reads the kernel's files; tests point it elsewhere.
 var systemRoot = ""
 
@@ -203,6 +206,7 @@ func newHandlerWithAllServices(readLinks func(context.Context) ([]host.LinkStatu
 				writeError(w, r, http.StatusServiceUnavailable, "INVENTORY_UNAVAILABLE", "Device offloads are unavailable; inspect the engine journal.")
 				return
 			}
+			generation.FillOffloadDefaults(offloadsRoot, devices)
 			writeJSON(w, r, http.StatusOK, offloadsResponse{Items: devices})
 			return
 		}

@@ -1165,7 +1165,7 @@ it('configures IPv6 router advertisements on static and delegated segments, vali
 it('shows live offloads on Ethernet and saves the ones changed', async () => {
   const user = userEvent.setup();
   const sent = vi.fn<(init: RequestInit | undefined) => Response>(() => jsonResponse(200, { savedVersion: '8' }));
-  const port = { ...ethernet(lanPort, 'LAN port', '52:54:00:aa:bb:01'), offloads: { genericReceive: false } };
+  const port = { ...ethernet(lanPort, 'LAN port', '52:54:00:aa:bb:01'), offloads: { genericReceive: false, genericReceiveHardware: true } };
   routes({
     links: [port],
     findings: [],
@@ -1173,7 +1173,17 @@ it('shows live offloads on Ethernet and saves the ones changed', async () => {
       [`/api/v1/config/links/${lanPort}`]: { version: '4', value: port },
       '/api/v1/config/segments/seg_lan': { version: '6', value: { id: 'seg_lan', name: 'LAN', link: lanPort, zone: 'zon_lan', addressing: { ipv4: { mode: 'static', addresses: ['192.168.1.1/24'] }, ipv6: { mode: 'none' } } } },
       '/api/v1/status/offloads': {
-        items: [{ interface: 'enp1s0', permanentAddress: '52:54:00:AA:BB:01', offloads: { genericReceive: { active: false, fixed: false }, largeReceive: { active: false, fixed: true }, tcpSegmentation: { active: true, fixed: false } } }],
+        items: [{
+          interface: 'enp1s0',
+          permanentAddress: '52:54:00:AA:BB:01',
+          offloads: {
+            genericReceive: { active: false, fixed: false, default: true },
+            genericReceiveHardware: { active: false, fixed: true, default: false },
+            largeReceive: { active: false, fixed: true, default: false },
+            tcpSegmentation: { active: true, fixed: false, default: true },
+            ntupleFilter: { active: false, fixed: false },
+          },
+        }],
       },
       'POST /api/v1/config/changes': sent,
     },
@@ -1181,12 +1191,36 @@ it('shows live offloads on Ethernet and saves the ones changed', async () => {
   render(<InterfacesScreen api={new ApiClient()} session={writer} onSaved={vi.fn()} onSessionLost={vi.fn()} />);
   await user.click(await screen.findByRole('button', { name: 'Edit LAN port' }));
   const panel = await screen.findByRole('dialog');
-  expect(await within(panel).findByText('Off now, fixed by the device')).toBeInTheDocument();
-  expect(within(panel).getByText('On now')).toBeInTheDocument();
-  // A fixed offload left at the default cannot be set.
-  expect(within(panel).getByLabelText(/^Large receive \(LRO\)/)).toBeDisabled();
+
+  const rowOf = (label: RegExp) => within(panel).getByLabelText(label).closest('.offload-row') as HTMLElement;
+  const defaultOptionText = (label: RegExp) => (within(panel).getByLabelText(label) as HTMLSelectElement).options[0]?.textContent;
+
+  // Wait for live offloads to render their badges and card defaults.
+  const lroSelect = within(panel).getByLabelText(/^Large receive \(LRO\)/);
+  await vi.waitFor(() => expect(lroSelect).toBeDisabled());
+  expect(rowOf(/^Large receive \(LRO\)/)).toHaveTextContent('Not configurable');
+  expect(rowOf(/^Large receive \(LRO\)/)).toHaveTextContent('Off');
+  expect(defaultOptionText(/^Large receive \(LRO\)/)).toBe('Default (Off)');
+  expect(panel).not.toHaveTextContent('fixed by the device');
+
+  // A non-configurable offload with an existing saved override stays enabled so the user can return it to Default.
+  const groHwSelect = within(panel).getByLabelText(/^Hardware generic receive \(GRO-HW\)/);
+  expect(groHwSelect).not.toBeDisabled();
+  expect(rowOf(/^Hardware generic receive \(GRO-HW\)/)).toHaveTextContent('Not configurable');
+  expect(defaultOptionText(/^Hardware generic receive \(GRO-HW\)/)).toBe('Default (Off)');
+
+  // Overridden GRO runs Off now, while its card default is On.
+  expect(rowOf(/^Generic receive \(GRO\)/)).toHaveTextContent('Off');
+  expect(defaultOptionText(/^Generic receive \(GRO\)/)).toBe('Default (On)');
+
+  // TSO runs On now with card default On; n-tuple has unknown default so shows plain Default; unreported shows Not reported.
+  expect(rowOf(/^TCP segmentation \(TSO\)/)).toHaveTextContent('On');
+  expect(defaultOptionText(/^TCP segmentation \(TSO\)/)).toBe('Default (On)');
+  expect(defaultOptionText(/^N-tuple filters/)).toBe('Default');
+  expect(rowOf(/^Receive checksum/)).toHaveTextContent('Not reported');
 
   await user.selectOptions(within(panel).getByLabelText(/^Generic receive \(GRO\)/), 'default');
+  await user.selectOptions(groHwSelect, 'default');
   await user.selectOptions(within(panel).getByLabelText(/^TCP segmentation \(TSO\)/), 'off');
   await user.click(within(panel).getByRole('button', { name: 'Save interface' }));
   await vi.waitFor(() => expect(sent).toHaveBeenCalled());
@@ -1213,4 +1247,5 @@ it('says when the device of a saved Ethernet link is not present', async () => {
   await user.click(await screen.findByRole('button', { name: 'Edit LAN port' }));
   const panel = await screen.findByRole('dialog');
   expect(await within(panel).findByText('The device is not present: its live state is unknown.')).toBeInTheDocument();
+  expect((within(panel).getByLabelText(/^TCP segmentation \(TSO\)/) as HTMLSelectElement).options[0]?.textContent).toBe('Default');
 });

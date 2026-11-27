@@ -63,9 +63,11 @@ func ParseFeatures(data []byte) (map[string]Feature, error) {
 }
 
 // OffloadState is one managed offload as a device runs it. Fixed: the device cannot change it.
+// Default is what leaving the offload at the default runs on this device; nil when unknown.
 type OffloadState struct {
-	Active bool `json:"active"`
-	Fixed  bool `json:"fixed"`
+	Active  bool  `json:"active"`
+	Fixed   bool  `json:"fixed"`
+	Default *bool `json:"default,omitempty"`
 }
 
 // DeviceOffloads is the live offload state of one Ethernet device.
