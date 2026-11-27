@@ -189,9 +189,17 @@ export interface TrafficSample { at: string; rxBytes: number; txBytes: number; r
 // complete says the answer is the whole history, to replace what is held, and not readings to add to it.
 export interface Traffic { intervalSeconds: number; complete: boolean; interfaces: Array<{ name: string; samples: TrafficSample[] }> }
 
+export type SafeModeReason = 'boot' | 'kernelArg' | 'settingsHold';
+
+export interface SafeModeStatus {
+  active: boolean;
+  reasons: SafeModeReason[];
+}
+
 // What the box is, as GET /api/v1/status/system serves it.
 export interface SystemInfo {
   version: string;
+  safeMode?: SafeModeStatus;
   hostname: string;
   kernel: string;
   architecture: string;

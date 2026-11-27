@@ -100,10 +100,11 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 			result = err
 		}
 	}()
-	sources := newNotices(events, stateDir, func(ctx context.Context) (bool, error) {
+	upgradePending := func(ctx context.Context) (bool, error) {
 		view, err := store.UpgradePreview(ctx, nil)
 		return len(view.Questions) > 0, err
-	})
+	}
+	sources := newNotices(events, stateDir, upgradePending)
 	head := publishHead(events)
 	// The engine serves for as long as lifetime: a store failure ends it.
 	lifetime, cancel := context.WithCancelCause(ctx)
@@ -119,7 +120,8 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	defer func() { cancel(context.Canceled); <-stopped }()
 	runner := newSystemdRunner(stateDir, busSocket)
 	feeds := newAliasFeeds(lifetime, stateDir, events, savedAndLive(stateDir, store), func(ctx context.Context) error { return runner.Realize(ctx, "aliases", 0) })
-	store.OnSave(func(v config.Version) { head(v); sources.nudge(); feeds.nudge() })
+	hold := newAddonsHold(systemRoot, upgradePending, func(ctx context.Context) error { return runner.Realize(ctx, "addons-release-hold", 0) })
+	store.OnSave(func(v config.Version) { head(v); sources.nudge(); feeds.nudge(); hold.nudge() })
 	// Without its store the layer does not read: notifications wait in the bus's log, for its retention, until a
 	// start that opens it, and the API answers that they are unavailable.
 	// A link in a notification is a path in the web UI: sent as a full URL from the first management origin.
@@ -191,6 +193,9 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	fed := make(chan struct{})
 	go func() { defer close(fed); feeds.run(lifetime) }()
 	defer func() { cancel(context.Canceled); <-fed }()
+	held := make(chan struct{})
+	go func() { defer close(held); hold.run(lifetime) }()
+	defer func() { cancel(context.Canceled); <-held }()
 	// The traffic history fills for as long as the engine serves, and the sampler is gone before this returns.
 	sampled := make(chan struct{})
 	go func() { defer close(sampled); sampleTraffic(lifetime, traffic, systemRoot) }()
@@ -216,7 +221,19 @@ func serveEngine(ctx context.Context, socketPath, stateDir string, web *WebSocke
 	setupCodeAPI := newSetupCodeHandler(identities, setupCodes)
 	hostnameAPI := newHostnameHandler(nil)
 	updateAPI := newUpdateAPI(stateDir, nil)
-	rootAPI := newHandlerWithAllServices(host.ReadLinks, newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, applies, backups), identityAPI, auditAPI, fleetAPI, updateAPI, setupCodeAPI, hostnameAPI, notificationsHandler, aliasesAPI{feeds: feeds})
+	rootAPI := newHandlerWithDeps(handlerDeps{
+		readLinks:        host.ReadLinks,
+		configuration:    newSavedHandler(store, host.ReadLinks, host.ReadRealizerFacts, applies, backups),
+		identityAPI:      identityAPI,
+		auditAPI:         auditAPI,
+		fleetAPI:         fleetAPI,
+		updateAPI:        updateAPI,
+		setupCodeAPI:     setupCodeAPI,
+		hostnameAPI:      hostnameAPI,
+		notificationsAPI: notificationsHandler,
+		aliasesAPI:       aliasesAPI{feeds: feeds},
+		stateDir:         stateDir,
+	})
 	if web == nil {
 		err = serveUnix(lifetime, socketPath, rootAPI)
 	} else {

@@ -8104,6 +8104,7 @@
         "additionalProperties": false,
         "required": [
           "version",
+          "safeMode",
           "hostname",
           "kernel",
           "architecture",
@@ -8119,6 +8120,30 @@
           "version": {
             "type": "string",
             "description": "The Andaru version that serves this"
+          },
+          "safeMode": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "active",
+              "reasons"
+            ],
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "reasons": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "boot",
+                    "kernelArg",
+                    "settingsHold"
+                  ]
+                }
+              }
+            }
           },
           "hostname": {
             "type": "string"

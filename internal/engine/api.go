@@ -1,8 +1,6 @@
 package engine
 
 import (
-	"github.com/andaru-project/andaru/internal/generation"
-
 	"context"
 	_ "embed"
 	"encoding/json"
@@ -14,6 +12,7 @@ import (
 	"time"
 
 	"github.com/andaru-project/andaru/internal/config"
+	"github.com/andaru-project/andaru/internal/generation"
 	"github.com/andaru-project/andaru/internal/host"
 	"github.com/andaru-project/andaru/internal/render"
 )
@@ -76,7 +75,8 @@ var systemRoot = ""
 
 // systemResponse is the box's description beside the Andaru version that serves it.
 type systemResponse struct {
-	Version string `json:"version"`
+	Version  string                    `json:"version"`
+	SafeMode generation.SafeModeStatus `json:"safeMode"`
 	host.SystemInfo
 }
 
@@ -96,7 +96,38 @@ func newHandlerWithServices(readLinks func(context.Context) ([]host.LinkStatus, 
 	return newHandlerWithAllServices(readLinks, configuration, identityAPI, auditAPI, fleetAPI, updateAPI, nil, nil, nil, nil)
 }
 
+type handlerDeps struct {
+	readLinks        func(context.Context) ([]host.LinkStatus, error)
+	configuration    http.Handler
+	identityAPI      http.Handler
+	auditAPI         http.Handler
+	fleetAPI         http.Handler
+	updateAPI        http.Handler
+	setupCodeAPI     http.Handler
+	hostnameAPI      http.Handler
+	notificationsAPI http.Handler
+	aliasesAPI       http.Handler
+	stateDir         string
+}
+
 func newHandlerWithAllServices(readLinks func(context.Context) ([]host.LinkStatus, error), configuration, identityAPI, auditAPI, fleetAPI, updateAPI, setupCodeAPI, hostnameAPI, notificationsAPI, aliasesAPI http.Handler) http.Handler {
+	return newHandlerWithDeps(handlerDeps{
+		readLinks:        readLinks,
+		configuration:    configuration,
+		identityAPI:      identityAPI,
+		auditAPI:         auditAPI,
+		fleetAPI:         fleetAPI,
+		updateAPI:        updateAPI,
+		setupCodeAPI:     setupCodeAPI,
+		hostnameAPI:      hostnameAPI,
+		notificationsAPI: notificationsAPI,
+		aliasesAPI:       aliasesAPI,
+	})
+}
+
+func newHandlerWithDeps(d handlerDeps) http.Handler {
+	readLinks, configuration, identityAPI, auditAPI, fleetAPI, updateAPI, setupCodeAPI, hostnameAPI, notificationsAPI, aliasesAPI, stateDir :=
+		d.readLinks, d.configuration, d.identityAPI, d.auditAPI, d.fleetAPI, d.updateAPI, d.setupCodeAPI, d.hostnameAPI, d.notificationsAPI, d.aliasesAPI, d.stateDir
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
@@ -243,7 +274,7 @@ func newHandlerWithAllServices(readLinks func(context.Context) ([]host.LinkStatu
 				writeError(w, r, http.StatusServiceUnavailable, "INVENTORY_UNAVAILABLE", "The system description is unavailable; inspect the engine journal.")
 				return
 			}
-			writeJSON(w, r, http.StatusOK, systemResponse{Version: buildVersion, SystemInfo: info})
+			writeJSON(w, r, http.StatusOK, systemResponse{Version: buildVersion, SafeMode: generation.ReadSafeMode(systemRoot, stateDir), SystemInfo: info})
 			return
 		}
 		links, err := readLinks(r.Context())

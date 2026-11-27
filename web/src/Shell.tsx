@@ -29,7 +29,7 @@ import { TokensScreen } from './screens/TokensScreen';
 import { TrafficFlowScreen } from './screens/TrafficFlowScreen';
 import { UpgradeScreen } from './screens/UpgradeScreen';
 import { UpdatesScreen } from './screens/UpdatesScreen';
-import { SystemDetailsScreen, updateNotice } from './screens/SystemWidget';
+import { formatSafeModeReasons, SystemDetailsScreen, updateNotice } from './screens/SystemWidget';
 import { UsersScreen } from './screens/UsersScreen';
 import { VirtualIpsScreen } from './screens/VirtualIpsScreen';
 import { ZonesScreen } from './screens/ZonesScreen';
@@ -193,6 +193,11 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
     if (upgradeError && read) refreshUpgrade();
   }, [read, upgradeError, refreshUpgrade]);
   const upgradePending = (upgrade.data?.questions.length ?? 0) > 0;
+  // Once upgrade decisions are confirmed clear, addons-release-hold removes /run/andaru-boot/addons-held
+  // asynchronously; refresh system status promptly until settingsHold disappears.
+  const waitingHoldRelease = upgrade.data !== undefined && upgrade.data.questions.length === 0
+    && (system.data?.info.safeMode?.reasons.includes('settingsHold') ?? false);
+  useVisiblePoll(system.refresh, 2_000, canReadStatus && connected && waitingHoldRelease);
   const onUpgradePage = useMatch('/system/upgrade') !== null;
   // The visit opens on the questions once, so the dashboard stays reachable for those who cannot answer.
   const openedUpgrade = useRef(false);
@@ -277,7 +282,7 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
     ['/changes', <ChangesScreen api={api} session={session} state={changes.data} stateError={changes.error} connected={connected} onChanged={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/system/details', <SystemDetailsScreen system={system} api={api} canRename={capabilities.has('configuration.apply')} onSessionLost={onSessionLost} />],
     ['/system/updates', <UpdatesScreen api={api} session={session} update={update} onSessionLost={onSessionLost} />],
-    ['/system/backups', <BackupScreen api={api} session={session} hostname={hostname} onRestored={() => { void reloadChanges(); void reloadNotifications(); }} onSessionLost={onSessionLost} />],
+    ['/system/backups', <BackupScreen api={api} session={session} hostname={hostname} onRestored={() => { void reloadChanges(); void reloadNotifications(); void system.reload(); }} onSessionLost={onSessionLost} />],
     ['/system/notifications', <NotificationsScreen api={api} session={session} notifications={notifications} hostname={hostname} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/system/users', <UsersScreen api={api} session={session} onSessionLost={onSessionLost} />],
     ['/system/roles', <RolesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
@@ -327,6 +332,14 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
         {connected && !onChangesPage && changes.error && <Alert color="orange" role="alert" title="Could not check pending changes">{changes.error}</Alert>}
         {connected && upgrade.error && !onUpgradePage && <Alert color="orange" role="alert" title="Could not check upgrade status">{upgrade.error}</Alert>}
         {upgradePending && !onUpgradePage && <Alert color="orange" role="status" title="Finish the upgrade">The saved settings need decisions before anything can be saved or applied. <Anchor component={Link} to="/system/upgrade">Answer the questions</Anchor></Alert>}
+        {system.data?.info.safeMode?.active && (() => {
+          const reasons = formatSafeModeReasons(system.data.info.safeMode);
+          return (
+            <Alert color="orange" role="status" title="Safe mode active">
+              Add-ons are disabled{reasons ? ` (${reasons})` : ''}.
+            </Alert>
+          );
+        })()}
         {capabilities.has('configuration.apply') && changes.data?.head === '0' && pathname !== '/setup' && (
           <Alert color="blue" role="status" title="Initial setup">
             This appliance has no saved network configuration yet. <Anchor component={Link} to="/setup">Open setup assistant</Anchor>
@@ -352,7 +365,7 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
               }
             />
           )}
-          {canReadChanges && <Route path="/system/upgrade" element={<UpgradeScreen api={api} session={session} onFinished={() => { void reloadUpgrade(); void reloadChanges(); }} onSessionLost={onSessionLost} />} />}
+          {canReadChanges && <Route path="/system/upgrade" element={<UpgradeScreen api={api} session={session} onFinished={() => { void reloadUpgrade(); void reloadChanges(); void system.reload(); }} onSessionLost={onSessionLost} />} />}
           {pages.filter(([path]) => visible.has(path)).map(([path, element]) => <Route key={path} path={path} element={element} />)}
           {canReadStatus && (
             <Route
