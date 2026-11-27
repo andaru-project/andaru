@@ -289,6 +289,29 @@ func TestAddonWebUIRejectsManagementHost(t *testing.T) {
 	}}); err == nil {
 		t.Fatalf("expected rejection when webui hostnameSetting matches host %q", host)
 	}
+
+	// Restoring a backup whose add-on WebUI hostname matches this appliance's hostname must also be rejected
+	// by both PreviewRestore and Restore.
+	snap, err := store.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflictingBackup := json.RawMessage(`{"schemaVersion":4,"links":[],"segments":[],"zones":[{"id":"` + tsZone + `","name":"VPN"}],"addons":[{"id":"org.andaru.tailscale","enabled":false,"settings":{"hostname":"` + host + `"},"interfaces":[{"name":"tailscale0","zone":"` + tsZone + `"}]}]}`)
+	if _, err := store.PreviewRestore(ctx, RestoreDocuments{Configuration: conflictingBackup}); err == nil {
+		t.Fatalf("expected PreviewRestore rejection when restored webui hostnameSetting matches host %q", host)
+	}
+	if _, err := store.Restore(ctx, actor, snap.SavedVersion, RestoreDocuments{Configuration: conflictingBackup}); err == nil {
+		t.Fatalf("expected Restore rejection when restored webui hostnameSetting matches host %q", host)
+	}
+
+	// Restoring a backup carrying a write-only secretWrite ("set") inside add-on settings must be rejected.
+	smuggledSecret := json.RawMessage(`{"schemaVersion":4,"links":[],"segments":[],"zones":[{"id":"` + tsZone + `","name":"VPN"}],"addons":[{"id":"org.andaru.tailscale","enabled":false,"settings":{"authKey":{"secret":"auth_key","set":"plaintext"}},"interfaces":[{"name":"tailscale0","zone":"` + tsZone + `"}]}]}`)
+	if _, err := store.PreviewRestore(ctx, RestoreDocuments{Configuration: smuggledSecret}); err == nil {
+		t.Fatal("expected PreviewRestore rejection for smuggled plaintext secret write")
+	}
+	if _, err := store.Restore(ctx, actor, snap.SavedVersion, RestoreDocuments{Configuration: smuggledSecret}); err == nil {
+		t.Fatal("expected Restore rejection for smuggled plaintext secret write")
+	}
 }
 
 func TestAddonRecoveryDisabledZoneMalformedSecretAndReinstall(t *testing.T) {

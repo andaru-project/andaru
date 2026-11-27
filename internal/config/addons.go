@@ -157,6 +157,31 @@ func validateAddons(d *declaration) []FieldError {
 			if v == nil {
 				bad(sp, "Null setting values are not allowed.")
 			}
+			if obj, ok := v.(map[string]any); ok {
+				objKeys := make([]string, 0, len(obj))
+				for fk := range obj {
+					objKeys = append(objKeys, fk)
+				}
+				slices.Sort(objKeys)
+				for _, fk := range objKeys {
+					fv := obj[fk]
+					switch fk {
+					case "secret":
+						if name, ok := fv.(string); !ok || !secretNamePattern.MatchString(name) {
+							bad(sp+"/secret", "Invalid secret name.")
+						}
+					case "unresolved":
+						if _, ok := fv.(bool); !ok {
+							bad(sp+"/unresolved", "unresolved must be a boolean.")
+						}
+					default:
+						bad(sp+"/"+escapeJSONPointer(fk), "Unknown field in stored secret reference.")
+					}
+				}
+				if _, hasSecret := obj["secret"]; !hasSecret {
+					bad(sp+"/secret", "Stored secret reference requires secret.")
+				}
+			}
 		}
 		pubTopics := make([]string, 0, len(a.BusGrants.Publish))
 		for topic := range a.BusGrants.Publish {
@@ -276,13 +301,34 @@ func validateAddonsAgainstCatalog(cat *addon.Catalog, d *declaration, written ma
 				}
 			}
 		}
-		// Always verify WebUI hostname separation against current management/DNS settings, even if the add-on
-		// itself was not modified in this batch.
-		if ok && m.WebUI != nil && m.WebUI.HostnameSetting != "" {
-			propName := strings.TrimPrefix(m.WebUI.HostnameSetting, "/")
-			if rawHost, exists := a.Settings[propName].(string); exists && rawHost != "" {
-				if matchesManagementHost(d, rawHost) {
-					bad(p+"/settings/"+escapeJSONPointer(propName), "Add-on WebUI hostname must not match Andaru's management hostname or IP address.")
+	}
+	for _, fe := range validateAddonsWebUISeparation(cat, d) {
+		bad(fe.Path, fe.Message)
+	}
+	return out
+}
+
+// validateAddonsWebUISeparation verifies every cataloged add-on's WebUI hostnameSetting does not match
+// Andaru's management hostname, local management FQDN, or management segment IP addresses.
+func validateAddonsWebUISeparation(cat *addon.Catalog, d *declaration) []FieldError {
+	if cat == nil || len(d.Addons) == 0 {
+		return nil
+	}
+	var out []FieldError
+	for i := range d.Addons {
+		a := &d.Addons[i]
+		m, ok := cat.ByID(a.ID)
+		if !ok || m.WebUI == nil || m.WebUI.HostnameSetting == "" {
+			continue
+		}
+		propName := strings.TrimPrefix(m.WebUI.HostnameSetting, "/")
+		if rawHost, exists := a.Settings[propName].(string); exists && rawHost != "" {
+			if matchesManagementHost(d, rawHost) {
+				if len(out) < 100 {
+					out = append(out, FieldError{
+						Path:    fmt.Sprintf("/addons/%d/settings/%s", i, escapeJSONPointer(propName)),
+						Message: "Add-on WebUI hostname must not match Andaru's management hostname or IP address.",
+					})
 				}
 			}
 		}

@@ -69,4 +69,31 @@ func TestValidateAddonsNonRoot(t *testing.T) {
 	if errs := validateAddons(d); len(errs) == 0 {
 		t.Fatal("expected rejection for explicit null setting")
 	}
+	delete(d.Addons[0].Settings, "nullField")
+
+	// Stored settings must reject write-only secret commands and malformed objects (e.g. during restore).
+	for _, badObj := range []map[string]any{
+		{"secret": "auth_key", "set": "plaintext"},
+		{"secret": "auth_key", "expectedVersion": "0"},
+		{"secret": "auth_key", "extra": true},
+		{"unresolved": true},
+		{"secret": 123},
+		{"secret": "auth_key", "unresolved": "yes"},
+	} {
+		d.Addons[0].Settings["authKey"] = badObj
+		if errs := validateAddons(d); len(errs) == 0 {
+			t.Fatalf("expected validateAddons rejection for object setting %#v", badObj)
+		}
+	}
+	d.Addons[0].Settings["authKey"] = map[string]any{"secret": "auth_key", "unresolved": true}
+	if errs := validateAddons(d); len(errs) != 0 {
+		t.Fatalf("expected valid unresolved stored secret ref, got %+v", errs)
+	}
+}
+
+func TestValidateBackupDocumentsRejectsSecretWriteInAddonSettings(t *testing.T) {
+	raw := []byte(`{"schemaVersion":4,"links":[],"segments":[],"zones":[],"addons":[{"id":"org.andaru.tailscale","enabled":false,"settings":{"authKey":{"secret":"auth_key","set":"plaintext"}}}]}`)
+	if err := ValidateBackupDocuments(RestoreDocuments{Configuration: raw}); err == nil {
+		t.Fatal("expected ValidateBackupDocuments to reject plaintext secret write in restored add-on settings")
+	}
 }

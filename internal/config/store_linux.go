@@ -389,7 +389,7 @@ func (s *Store) MigrateHead(ctx context.Context) (Version, error) {
 	}
 	// A restore of nothing saves the head as it reads now: in the current form, with the rules and aliases it
 	// renamed recorded as changed.
-	if p.prepared, _, err = prepareRestoration(&current, decodedBackup{}, next, time.Now().UTC()); err != nil {
+	if p.prepared, _, err = prepareRestoration(&current, decodedBackup{}, next, time.Now().UTC(), s.catalog); err != nil {
 		return "", err
 	}
 	saved, err := p.publish(ctx)
@@ -415,7 +415,7 @@ func (s *Store) fallBack(ctx context.Context) error {
 		return err
 	}
 	defer p.Close()
-	prepared, _, err := prepareRestoration(&current, decodedBackup{}, next, time.Now().UTC())
+	prepared, _, err := prepareRestoration(&current, decodedBackup{}, next, time.Now().UTC(), s.catalog)
 	if err != nil {
 		return err
 	}
