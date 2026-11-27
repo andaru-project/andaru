@@ -21,7 +21,18 @@ func TestDNSUpstreamIsTheFirewall(t *testing.T) {
 			refusedAt(t, d, "/dns/upstreams/0/address")
 		})
 	}
-	// Unbound always listens on loopback; only addresses it listens on, port 53, would loop.
+	// A listener written as a /32 is the same address: validation runs before it is stored bare.
+	t.Run("a virtual address written as a /32", func(t *testing.T) {
+		d := vipFixture(t)
+		for _, v := range d["virtualAddresses"].([]any) {
+			if v.(map[string]any)["address"] == "172.16.53.53" {
+				v.(map[string]any)["address"] = "172.16.53.53/32"
+			}
+		}
+		d["dns"] = map[string]any{"mode": "forward", "segments": []any{item(segmentsOf(d), 1)["id"]}, "virtualAddresses": []any{vipA, vipB}, "upstreams": []any{map[string]any{"address": "172.16.53.53", "protocol": "do53"}}}
+		refusedAt(t, d, "/dns/upstreams/0/address")
+	})
+		// Unbound always listens on loopback; only addresses it listens on, port 53, would loop.
 	for name, upstream := range map[string]string{
 		"loopback":        "127.0.0.1",
 		"loopback v6":     "::1",

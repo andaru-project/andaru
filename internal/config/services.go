@@ -474,7 +474,11 @@ func listensOn(d *declaration, a netip.Addr) bool {
 		}
 	}
 	return slices.ContainsFunc(d.DNS.VirtualAddresses, func(id string) bool {
-		return slices.ContainsFunc(d.VirtualAddresses, func(v virtualAddress) bool { return v.ID == id && sameAddress(v.Address, a.String()) })
+		// Validation runs before normalization: a listener may still be written as a /32 or /128.
+		return slices.ContainsFunc(d.VirtualAddresses, func(v virtualAddress) bool {
+			x, ok := vipPrefix(v)
+			return v.ID == id && ok && x.IsSingleIP() && x.Addr() == a
+		})
 	})
 }
 
