@@ -7,7 +7,7 @@ import { fetchRoutes, jsonResponse } from '../test/fetch';
 import { session } from '../test/fixtures';
 import { render } from '../test/render';
 import type { SavedObject, Snapshot, VirtualAddress } from '../types';
-import { checkVirtualIp, ipFamily, maxVirtualAddresses, sameIpAddress } from '../virtualIps';
+import { checkVirtualIp, ipFamily, isProxyArpEligibleSegment, maxVirtualAddresses, sameIpAddress, virtualAddressFamily, virtualAddressKind } from '../virtualIps';
 import { VirtualIpsScreen } from './VirtualIpsScreen';
 
 afterEach(() => {
@@ -90,6 +90,96 @@ describe('VirtualIpsScreen helpers', () => {
     expect(checkVirtualIp('test', '172.16.53.1/32', []).errors.get('address')).toMatch(/prefix length/);
     expect(checkVirtualIp('', '', []).errors.get('name')).toMatch(/needs a name/);
     expect(checkVirtualIp('', '', []).errors.get('address')).toMatch(/needs an address/);
+  });
+
+  it('validates proxyArp entries, segment eligibility, IPv6 refusal, prefixes, gateways, and cross-kind overlaps', () => {
+    const wanStatic = {
+      id: 'seg_wan',
+      name: 'WAN',
+      link: 'lnk_wan',
+      zone: 'zon_wan',
+      addressing: { ipv4: { mode: 'static', addresses: ['203.0.113.2/24'], gateway: '203.0.113.1' }, ipv6: { mode: 'none' } },
+    };
+    const wanHostOnly = {
+      id: 'seg_host32',
+      name: 'WAN /32',
+      link: 'lnk_host32',
+      zone: 'zon_wan',
+      addressing: { ipv4: { mode: 'static', addresses: ['198.51.100.10/32'] }, ipv6: { mode: 'none' } },
+    };
+    const wanDhcp = {
+      id: 'seg_dhcp',
+      name: 'WAN DHCP',
+      link: 'lnk_dhcp',
+      zone: 'zon_wan',
+      addressing: { ipv4: { mode: 'dhcp' }, ipv6: { mode: 'none' } },
+    };
+    const wanPppoe = {
+      id: 'seg_pppoe',
+      name: 'WAN PPPoE',
+      link: 'lnk_pppoe',
+      zone: 'zon_wan',
+      addressing: { ipv4: { mode: 'pppoe' }, ipv6: { mode: 'none' } },
+    };
+    const segments = [wanStatic, wanHostOnly, wanDhcp, wanPppoe];
+
+    expect(isProxyArpEligibleSegment(wanStatic)).toBe(true);
+    expect(isProxyArpEligibleSegment(wanHostOnly)).toBe(false);
+    expect(isProxyArpEligibleSegment(wanDhcp)).toBe(false);
+    expect(isProxyArpEligibleSegment(wanPppoe)).toBe(false);
+    expect(virtualAddressKind({ kind: 'proxyArp' })).toBe('proxyArp');
+    expect(virtualAddressKind({})).toBe('address');
+    expect(virtualAddressFamily({ kind: 'proxyArp', address: '203.0.113.56/29' })).toBe('IPv4');
+    expect(virtualAddressFamily({ kind: 'proxyArp', address: '203.0.113.50' })).toBe('IPv4');
+
+    // Missing, DHCP, or /32-only segment refused at segment.
+    expect(checkVirtualIp('Proxy 1', '203.0.113.50', [], undefined, { kind: 'proxyArp', segment: '', segments }).errors.get('segment')).toMatch(/static IPv4/);
+    const dhcpRefusal = checkVirtualIp('Proxy 1', '203.0.113.50', [], undefined, { kind: 'proxyArp', segment: 'seg_dhcp', segments });
+    expect(dhcpRefusal.errors.get('segment')).toMatch(/static IPv4/);
+    expect(dhcpRefusal.stale).toBe(true);
+    expect(checkVirtualIp('Proxy 1', '198.51.100.10', [], undefined, { kind: 'proxyArp', segment: 'seg_host32', segments }).errors.get('segment')).toMatch(/static IPv4/);
+
+    // Pure IPv6 refused with exact Proxy NDP message; 4in6, internal whitespace, and non-unicast IPv4 rejected as invalid IPv4.
+    for (const v6 of ['2001:db8::50', '2001:DB8::/64']) {
+      expect(checkVirtualIp('Proxy v6', v6, [], undefined, { kind: 'proxyArp', segment: 'seg_wan', segments }).errors.get('address'))
+        .toBe('Proxy NDP is not offered yet (#43).');
+    }
+    for (const badV4 of ['::ffff:203.0.113.50', '::ffff:203.0.113.50/128', '::ffff:cb00:7132/128', '203.0.113.56 /29', '203.0.113.56/029', '127.0.0.1', '169.254.1.1', '224.0.0.1']) {
+      expect(checkVirtualIp('Bad v4', badV4, [], undefined, { kind: 'proxyArp', segment: 'seg_wan', segments }).errors.get('address'))
+        .toMatch(/unicast IPv4/);
+    }
+
+    // Prefix bounds, host bits, subnet membership, static address, and gateway collisions.
+    expect(checkVirtualIp('Zero len', '0.0.0.0/0', [], undefined, { kind: 'proxyArp', segment: 'seg_wan', segments }).errors.get('address')).toMatch(/unicast IPv4/);
+    expect(checkVirtualIp('Too wide', '203.0.112.0/23', [], undefined, { kind: 'proxyArp', segment: 'seg_wan', segments }).errors.get('address')).toMatch(/\/24 and \/32/);
+    expect(checkVirtualIp('Host bits', '203.0.113.57/29', [], undefined, { kind: 'proxyArp', segment: 'seg_wan', segments }).errors.get('address')).toMatch(/host bits must be zero/);
+    expect(checkVirtualIp('Wrong net', '198.51.100.50', [], undefined, { kind: 'proxyArp', segment: 'seg_wan', segments }).errors.get('address')).toMatch(/static IPv4 subnets/);
+    expect(checkVirtualIp('Hits static', '203.0.113.0/29', [], undefined, { kind: 'proxyArp', segment: 'seg_wan', segments }).errors.get('address')).toMatch(/static address/);
+    expect(checkVirtualIp('Hits gateway', '203.0.113.1', [], undefined, { kind: 'proxyArp', segment: 'seg_wan', segments }).errors.get('address')).toMatch(/gateway/);
+
+    // Valid single IPv4, explicit /32, /31, and /29 prefixes.
+    for (const valid of ['203.0.113.50', '203.0.113.50/32', '203.0.113.52/31', '203.0.113.56/29']) {
+      expect(checkVirtualIp('Proxy ok', valid, [], undefined, { kind: 'proxyArp', segment: 'seg_wan', segments }).errors.size).toBe(0);
+    }
+
+    // Cross-entry overlap checks (both directions) and self-exclusion when editing.
+    const existing: Array<SavedObject<VirtualAddress>> = [
+      { value: { id: 'vip_p1', name: 'Block 1', kind: 'proxyArp', segment: 'seg_wan', address: '203.0.113.56/29' }, version: '1' },
+      { value: { id: 'vip_h1', name: 'Held 1', address: '203.0.113.99' }, version: '1' },
+    ];
+    expect(checkVirtualIp('Block 1', '203.0.113.56/29', existing, 'vip_p1', { kind: 'proxyArp', segment: 'seg_wan', segments }).errors.size).toBe(0);
+
+    const overlapProxy = checkVirtualIp('Overlap', '203.0.113.60', existing, undefined, { kind: 'proxyArp', segment: 'seg_wan', segments });
+    expect(overlapProxy.errors.get('address')).toMatch(/overlaps another proxy ARP/);
+    expect(overlapProxy.duplicate).toBe(true);
+
+    const includesHeld = checkVirtualIp('Covers held', '203.0.113.96/29', existing, undefined, { kind: 'proxyArp', segment: 'seg_wan', segments });
+    expect(includesHeld.errors.get('address')).toMatch(/existing held virtual IP/);
+    expect(includesHeld.duplicate).toBe(true);
+
+    const heldInsideProxy = checkVirtualIp('Held inside', '203.0.113.58', existing, undefined, { kind: 'address' });
+    expect(heldInsideProxy.errors.get('address')).toMatch(/inside a proxy ARP/);
+    expect(heldInsideProxy.duplicate).toBe(true);
   });
 });
 
@@ -345,5 +435,219 @@ describe('VirtualIpsScreen', () => {
     renderVirtualIps();
     expect(await screen.findByText('Virtual IP limit reached')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add virtual IP' })).toBeDisabled();
+  });
+
+  it('displays proxyArp kind, segment, and IPv4 CIDR badge in the list and filters by kind and segment', async () => {
+    const user = userEvent.setup();
+    const proxyVip: SavedObject<VirtualAddress> = {
+      value: {
+        id: 'vip_proxy',
+        name: 'ISP block',
+        kind: 'proxyArp',
+        segment: 'seg_wan',
+        address: '203.0.113.56/29',
+        description: 'Extra routed block',
+      },
+      version: '4',
+    };
+    const multiSnapshot: Snapshot = {
+      ...sampleSnapshot,
+      value: {
+        ...sampleSnapshot.value,
+        segments: [
+          ...sampleSnapshot.value.segments,
+          { id: 'seg_wan', name: 'Uplink', link: 'lnk_1', zone: 'zon_wan', addressing: { ipv4: { mode: 'static', addresses: ['203.0.113.2/24'] }, ipv6: { mode: 'none' } } },
+        ],
+        virtualAddresses: [...sampleSnapshot.value.virtualAddresses!, proxyVip.value],
+      },
+    };
+    fetchRoutes({
+      '/api/v1/config/virtualAddresses': { state: 'saved', savedVersion: '9', items: [...fixtureVips, proxyVip] },
+      '/api/v1/config': multiSnapshot,
+    });
+    renderVirtualIps();
+
+    expect(await screen.findByText('ISP block')).toBeInTheDocument();
+    const row = screen.getByText('ISP block').closest('tr')!;
+    expect(within(row).getByText('Proxy ARP')).toBeInTheDocument();
+    expect(within(row).getByText('203.0.113.56/29')).toBeInTheDocument();
+    expect(within(row).getByText('IPv4')).toBeInTheDocument();
+    expect(within(row).getByText('Uplink')).toBeInTheDocument();
+
+    const heldRow = screen.getByText('DNS v4').closest('tr')!;
+    expect(within(heldRow).getByText('Held address')).toBeInTheDocument();
+
+    const filter = screen.getByLabelText('Filter virtual IPs');
+    await user.type(filter, 'proxy arp');
+    expect(screen.getByText('ISP block')).toBeInTheDocument();
+    expect(screen.queryByText('DNS v4')).not.toBeInTheDocument();
+
+    // Filter by segment name ("uplink"), which does not appear in the VIP's name or description.
+    await user.clear(filter);
+    await user.type(filter, 'uplink');
+    expect(screen.getByText('ISP block')).toBeInTheDocument();
+    expect(screen.queryByText('DNS v4')).not.toBeInTheDocument();
+  });
+
+  it('creates a proxyArp entry on a static IPv4 segment, excludes DHCP/PPPoE segments, and maps server segment errors', async () => {
+    const user = userEvent.setup();
+    let postedBody: Record<string, unknown> | undefined;
+    let rejectSegment = false;
+    const multiSnapshot: Snapshot = {
+      ...sampleSnapshot,
+      value: {
+        ...sampleSnapshot.value,
+        segments: [
+          ...sampleSnapshot.value.segments,
+          { id: 'seg_wan', name: 'WAN', link: 'lnk_1', zone: 'zon_wan', addressing: { ipv4: { mode: 'static', addresses: ['203.0.113.2/24'] }, ipv6: { mode: 'none' } } },
+          { id: 'seg_dhcp', name: 'Cable DHCP', link: 'lnk_1', zone: 'zon_wan', addressing: { ipv4: { mode: 'dhcp' }, ipv6: { mode: 'none' } } },
+        ],
+      },
+    };
+    fetchRoutes({
+      '/api/v1/config/virtualAddresses': { state: 'saved', savedVersion: '9', items: fixtureVips },
+      '/api/v1/config': multiSnapshot,
+      'POST /api/v1/config/virtualAddresses': (init) => {
+        if (rejectSegment) {
+          return jsonResponse(422, {
+            error: {
+              code: 'VALIDATION_FAILED',
+              message: 'Validation failed.',
+              details: [{ path: '/virtualAddresses/3/segment', message: 'Segment has no static IPv4 subnet.' }],
+            },
+          });
+        }
+        postedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return jsonResponse(201, { value: { id: 'vip_proxy_new', ...postedBody }, version: '10' });
+      },
+    });
+    const { onSaved } = renderVirtualIps();
+
+    await user.click(await screen.findByRole('button', { name: 'Add virtual IP' }));
+    const drawer = await screen.findByRole('dialog', { name: 'Add virtual IP' });
+
+    // Segment picker is hidden for Held address and appears for Proxy ARP.
+    expect(within(drawer).queryByLabelText(/^Segment/)).not.toBeInTheDocument();
+    await user.selectOptions(within(drawer).getByLabelText(/^Kind/), 'proxyArp');
+
+    const segmentSelect = within(drawer).getByLabelText(/^Segment/);
+    const optionTexts = within(segmentSelect).getAllByRole('option').map((o) => o.textContent);
+    expect(optionTexts).toContain('WAN (203.0.113.2/24)');
+    expect(optionTexts.some((t) => t?.includes('Cable DHCP'))).toBe(false);
+
+    // IPv6 input shows exact Proxy NDP refusal locally.
+    await user.type(within(drawer).getByLabelText(/^Name/), 'WAN NAT block');
+    await user.selectOptions(segmentSelect, 'seg_wan');
+    const addrInput = within(drawer).getByRole('textbox', { name: /^Address or prefix/ });
+    await user.type(addrInput, '2001:db8::50');
+    await user.click(within(drawer).getByRole('button', { name: 'Add virtual IP' }));
+    expect(await within(drawer).findByText('Proxy NDP is not offered yet (#43).')).toBeInTheDocument();
+
+    // Server /segment 422 maps directly to the Segment field and focuses it.
+    await user.clear(addrInput);
+    await user.type(addrInput, '203.0.113.56/29');
+    rejectSegment = true;
+    await user.click(within(drawer).getByRole('button', { name: 'Add virtual IP' }));
+    expect(await within(drawer).findByText('Segment has no static IPv4 subnet.')).toBeInTheDocument();
+    expect(segmentSelect).toHaveAttribute('aria-invalid', 'true');
+    expect(segmentSelect).toHaveFocus();
+
+    // Valid submit sends kind and segment.
+    rejectSegment = false;
+    await user.click(within(drawer).getByRole('button', { name: 'Add virtual IP' }));
+    await waitFor(() => expect(postedBody).toEqual({
+      name: 'WAN NAT block',
+      kind: 'proxyArp',
+      segment: 'seg_wan',
+      address: '203.0.113.56/29',
+    }));
+    expect(onSaved).toHaveBeenCalledTimes(1);
+  });
+
+  it('edits a proxyArp entry in-place and switches back to held address without sending segment', async () => {
+    const user = userEvent.setup();
+    let putBody: Record<string, unknown> | undefined;
+    const proxyVip: SavedObject<VirtualAddress> = {
+      value: { id: 'vip_proxy', name: 'WAN extra', kind: 'proxyArp', segment: 'seg_wan', address: '203.0.113.50' },
+      version: '4',
+    };
+    const multiSnapshot: Snapshot = {
+      ...sampleSnapshot,
+      value: {
+        ...sampleSnapshot.value,
+        segments: [
+          ...sampleSnapshot.value.segments,
+          { id: 'seg_wan', name: 'WAN', link: 'lnk_1', zone: 'zon_wan', addressing: { ipv4: { mode: 'static', addresses: ['203.0.113.2/24'] }, ipv6: { mode: 'none' } } },
+        ],
+        virtualAddresses: [proxyVip.value],
+      },
+    };
+    fetchRoutes({
+      '/api/v1/config/virtualAddresses': { state: 'saved', savedVersion: '9', items: [proxyVip] },
+      '/api/v1/config': multiSnapshot,
+      'PUT /api/v1/config/virtualAddresses/vip_proxy': (init) => {
+        putBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return jsonResponse(200, { value: { id: 'vip_proxy', ...putBody }, version: '5' });
+      },
+    });
+    renderVirtualIps();
+
+    // Edit in-place keeping kind: proxyArp.
+    await user.click(await screen.findByRole('button', { name: 'Edit virtual IP WAN extra' }));
+    const drawer = await screen.findByRole('dialog', { name: 'Edit virtual IP: WAN extra' });
+    await user.type(within(drawer).getByLabelText('Description'), 'Dedicated IP');
+    await user.click(within(drawer).getByRole('button', { name: 'Save virtual IP' }));
+    await waitFor(() => expect(putBody).toEqual({
+      name: 'WAN extra',
+      kind: 'proxyArp',
+      segment: 'seg_wan',
+      address: '203.0.113.50',
+      description: 'Dedicated IP',
+    }));
+
+    // Switch back to held address and omit segment/kind.
+    await user.click(await screen.findByRole('button', { name: 'Edit virtual IP WAN extra' }));
+    const editAgain = await screen.findByRole('dialog', { name: 'Edit virtual IP: WAN extra' });
+    await user.selectOptions(within(editAgain).getByLabelText(/^Kind/), 'address');
+    expect(within(editAgain).queryByLabelText(/^Segment/)).not.toBeInTheDocument();
+    const addrInput = within(editAgain).getByRole('textbox', { name: /^Address/ });
+    await user.clear(addrInput);
+    await user.type(addrInput, '172.16.53.100');
+    await user.click(within(editAgain).getByRole('button', { name: 'Save virtual IP' }));
+
+    await waitFor(() => expect(putBody).toEqual({
+      name: 'WAN extra',
+      address: '172.16.53.100',
+    }));
+  });
+
+  it('warns when switching a DNS-referenced VIP to Proxy ARP and surfaces unrendered /segment 422s in the top banner', async () => {
+    const user = userEvent.setup();
+    fetchRoutes({
+      '/api/v1/config/virtualAddresses': { state: 'saved', savedVersion: '9', items: fixtureVips },
+      '/api/v1/config': sampleSnapshot,
+      'PUT /api/v1/config/virtualAddresses/vip_dns4': () => jsonResponse(422, {
+        error: {
+          code: 'VALIDATION_FAILED',
+          message: 'Validation failed.',
+          details: [{ path: '/virtualAddresses/0/segment', message: 'Only a proxy ARP entry names a segment.' }],
+        },
+      }),
+    });
+    renderVirtualIps();
+
+    await user.click(await screen.findByRole('button', { name: 'Edit virtual IP DNS v4' }));
+    const drawer = await screen.findByRole('dialog', { name: 'Edit virtual IP: DNS v4' });
+    expect(within(drawer).queryByText('Address in use by DNS service')).not.toBeInTheDocument();
+
+    await user.selectOptions(within(drawer).getByLabelText(/^Kind/), 'proxyArp');
+    expect(within(drawer).getByText('Address in use by DNS service')).toBeInTheDocument();
+
+    // Switch back to held address: server /segment 422 must appear in the top alert and receive focus.
+    await user.selectOptions(within(drawer).getByLabelText(/^Kind/), 'address');
+    await user.click(within(drawer).getByRole('button', { name: 'Save virtual IP' }));
+    const alert = await within(drawer).findByRole('alert');
+    expect(alert).toHaveTextContent('Only a proxy ARP entry names a segment.');
+    expect(alert).toHaveFocus();
   });
 });

@@ -70,5 +70,8 @@ describe('referenceNames and resolveReferences', () => {
     expect(resolveReferences({ id: 'lnk_1', name: 'zon_lan', username: 'zon_firewall', parent: 'zon_lan' }, names, 'links')).toEqual({
       id: 'lnk_1', name: 'zon_lan', username: 'zon_firewall', parent: 'Trusted',
     });
+    expect(resolveReferences({ id: 'vip_1', name: 'Proxy', kind: 'proxyArp', segment: 'seg_wan', address: '203.0.113.50' }, new Map([['seg_wan', 'WAN']]), 'virtualAddresses')).toEqual({
+      id: 'vip_1', name: 'Proxy', kind: 'proxyArp', segment: 'WAN', address: '203.0.113.50',
+    });
   });
 });

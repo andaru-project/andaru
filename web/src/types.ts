@@ -346,11 +346,15 @@ export interface DnsService {
   virtualAddresses?: string[];
 }
 
+export type VirtualAddressKind = 'address' | 'proxyArp';
+
 export interface VirtualAddress {
   id: string;
   name: string;
   description?: string;
+  kind?: VirtualAddressKind;
   address: string;
+  segment?: string;
 }
 
 export type DhcpOptionType = 'string' | 'ip' | 'uint8' | 'uint16' | 'uint32' | 'boolean' | 'hex';

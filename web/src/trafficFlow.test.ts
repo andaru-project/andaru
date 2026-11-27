@@ -874,4 +874,155 @@ describe('simulateTrafficFlow', () => {
     );
     expect(noIpv4ViaPppoe6.verdict).toBe('no_route');
   });
+
+  it('does not treat proxyArp virtual addresses as local firewall owners and drops untranslated proxyArp traffic', () => {
+    const withProxyArp: Snapshot['value'] = {
+      ...baseConfig,
+      virtualAddresses: [
+        ...(baseConfig.virtualAddresses ?? []),
+        { id: 'vip_proxy_single', name: 'WAN extra 50', kind: 'proxyArp', segment: 'seg_wan', address: '203.0.113.50' },
+        { id: 'vip_proxy_block', name: 'WAN extra /29', kind: 'proxyArp', segment: 'seg_wan', address: '203.0.113.56/29' },
+      ],
+      nat: {
+        ...baseConfig.nat,
+        oneToOne: [
+          {
+            id: 'oto_1',
+            name: 'Server 1:1',
+            enabled: true,
+            zone: 'zon_wan',
+            external: '203.0.113.50',
+            internal: '192.168.1.10',
+            destination: [],
+          },
+        ],
+      },
+      rules: [
+        {
+          id: 'rul_allow_srv',
+          name: 'Allow WAN to server',
+          enabled: true,
+          action: 'accept',
+          from: { zones: ['zon_wan'], addresses: [] },
+          to: { zones: ['zon_lan'], addresses: [] },
+          ports: [],
+          log: false,
+        },
+        ...(baseConfig.rules ?? []),
+      ],
+    };
+
+    // Translated 1:1 traffic to the proxied address forwards to LAN rather than being treated as local firewall input.
+    const translated = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_wan', protocol: 'tcp', srcIp: '198.51.100.10', dstIp: '203.0.113.50', dstPort: 443 },
+      withProxyArp,
+    );
+    expect(translated.verdict).toBe('accept');
+    expect(translated.chain).toBe('forward');
+    expect(translated.finalTuple).toBe('TCP 198.51.100.10 → 192.168.1.10:443');
+
+    // Untranslated traffic to an address inside a proxyArp prefix routes to dummy andaru-vip (no_route).
+    const untranslated = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_wan', protocol: 'tcp', srcIp: '198.51.100.10', dstIp: '203.0.113.58', dstPort: 443 },
+      withProxyArp,
+    );
+    expect(untranslated.verdict).toBe('no_route');
+    expect(untranslated.decidedBy).toEqual({ label: 'Virtual IP WAN extra /29', to: '/network/virtual-ips' });
+
+    // Port forward with to.self does not match a proxyArp address; explicit to.address (alias) does.
+    const withPortForwards: Snapshot['value'] = {
+      ...withProxyArp,
+      aliases: {
+        ...withProxyArp.aliases,
+        addresses: [
+          ...(withProxyArp.aliases?.addresses ?? []),
+          { id: 'adr_proxy50', name: 'Proxy 50', kind: 'host', address: '203.0.113.50' },
+        ],
+        ports: withProxyArp.aliases?.ports ?? [],
+      },
+      nat: {
+        ...withProxyArp.nat,
+        oneToOne: [],
+        portForwards: [
+          {
+            id: 'pfw_self',
+            name: 'Self only',
+            enabled: true,
+            family: 'ipv4',
+            ingressZones: ['zon_wan'],
+            protocol: 'tcp',
+            from: [],
+            to: { self: true },
+            ports: '8080',
+            target: { address: '192.168.1.20' },
+          },
+          {
+            id: 'pfw_explicit',
+            name: 'Explicit proxy IP',
+            enabled: true,
+            family: 'ipv4',
+            ingressZones: ['zon_wan'],
+            protocol: 'tcp',
+            from: [],
+            to: { address: 'adr_proxy50' },
+            ports: '8443',
+            target: { address: '192.168.1.20' },
+          },
+        ],
+      },
+    };
+    const selfMissed = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_wan', protocol: 'tcp', srcIp: '198.51.100.10', dstIp: '203.0.113.50', dstPort: 8080 },
+      withPortForwards,
+    );
+    expect(selfMissed.verdict).toBe('no_route');
+    expect(selfMissed.decidedBy).toEqual({ label: 'Virtual IP WAN extra 50', to: '/network/virtual-ips' });
+
+    const explicitHit = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_wan', protocol: 'tcp', srcIp: '198.51.100.10', dstIp: '203.0.113.50', dstPort: 8443 },
+      withPortForwards,
+    );
+    expect(explicitHit.verdict).toBe('accept');
+    expect(explicitHit.finalTuple).toBe('TCP 198.51.100.10 → 192.168.1.20:8443');
+
+    // A proxyArp route on andaru-vip still intercepts traffic even when its associated segment link is disabled.
+    const disabledWanProxy: Snapshot['value'] = {
+      ...withProxyArp,
+      links: withProxyArp.links.map((l) => (l.id === 'lnk_wan' ? { ...l, enabled: false } : l)),
+    };
+    const stillDroppedOnDisabledLink = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_lan', protocol: 'tcp', srcIp: '192.168.1.50', dstIp: '203.0.113.58', dstPort: 443 },
+      disabledWanProxy,
+    );
+    expect(stillDroppedOnDisabledLink.verdict).toBe('no_route');
+    expect(stillDroppedOnDisabledLink.decidedBy).toEqual({ label: 'Virtual IP WAN extra /29', to: '/network/virtual-ips' });
+
+    // Internal whitespace in CIDR input is rejected by parsePrefix.
+    expect(parsePrefix('203.0.113.56 /29')).toBeNull();
+
+    // If DNAT translates a destination into a proxyArp prefix, the drop summary describes translated traffic.
+    const dnatToProxy: Snapshot['value'] = {
+      ...withProxyArp,
+      nat: {
+        ...withProxyArp.nat,
+        oneToOne: [
+          {
+            id: 'oto_bad',
+            name: 'Bad 1:1 to proxy',
+            enabled: true,
+            zone: 'zon_wan',
+            external: '203.0.113.50',
+            internal: '203.0.113.58',
+            destination: [],
+          },
+        ],
+      },
+    };
+    const translatedToProxy = simulateTrafficFlow(
+      { ingressSegmentId: 'seg_wan', protocol: 'tcp', srcIp: '198.51.100.10', dstIp: '203.0.113.50', dstPort: 443 },
+      dnatToProxy,
+    );
+    expect(translatedToProxy.verdict).toBe('no_route');
+    expect(translatedToProxy.steps.find((s) => s.stage === 'verdict')?.summary).toMatch(/Traffic translated to a proxy ARP address/);
+  });
 });

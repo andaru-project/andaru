@@ -230,6 +230,82 @@ describe('DnsScreen', () => {
     expect(screen.queryByRole('button', { name: 'Enable DNS service' })).not.toBeInTheDocument();
   });
 
+  it('excludes proxyArp virtual addresses from DNS listener choices', async () => {
+    const withProxySnapshot: Snapshot = {
+      ...sampleSnapshot,
+      value: {
+        ...sampleSnapshot.value,
+        virtualAddresses: [
+          { id: 'vip_dns', name: 'dns-vip', address: '172.16.53.53' },
+          { id: 'vip_proxy', name: 'wan-proxy', kind: 'proxyArp', segment: 'seg_wan', address: '203.0.113.50' },
+        ],
+      },
+    };
+    fetchRoutes({
+      '/api/v1/config': withProxySnapshot,
+      '/api/v1/config/dns': { state: 'saved', savedVersion: '8', version: '4', value: existingDns },
+    });
+    renderDns();
+
+    expect(await screen.findByRole('checkbox', { name: 'dns-vip' })).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'wan-proxy' })).not.toBeInTheDocument();
+    expect(screen.queryByText('203.0.113.50')).not.toBeInTheDocument();
+  });
+
+  it('hides the virtual addresses listener section when only proxyArp entries exist', async () => {
+    const onlyProxySnapshot: Snapshot = {
+      ...sampleSnapshot,
+      value: {
+        ...sampleSnapshot.value,
+        virtualAddresses: [
+          { id: 'vip_proxy', name: 'wan-proxy', kind: 'proxyArp', segment: 'seg_wan', address: '203.0.113.50' },
+        ],
+        dns: { ...existingDns, virtualAddresses: [] },
+      },
+    };
+    fetchRoutes({
+      '/api/v1/config': onlyProxySnapshot,
+      '/api/v1/config/dns': { state: 'saved', savedVersion: '8', version: '4', value: { ...existingDns, virtualAddresses: [] } },
+    });
+    renderDns();
+
+    expect(await screen.findByRole('checkbox', { name: /lan/i })).toBeInTheDocument();
+    expect(screen.queryByText('Optional firewall virtual addresses that the DNS service also listens on.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'wan-proxy' })).not.toBeInTheDocument();
+  });
+
+  it('retains an already-referenced proxyArp virtual address with a warning so it can be unchecked', async () => {
+    const dnsWithProxy: DnsService = { ...existingDns, virtualAddresses: ['vip_proxy'] };
+    const snapshotWithRetainedProxy: Snapshot = {
+      ...sampleSnapshot,
+      value: {
+        ...sampleSnapshot.value,
+        virtualAddresses: [
+          { id: 'vip_proxy', name: 'wan-proxy', kind: 'proxyArp', segment: 'seg_wan', address: '203.0.113.50' },
+        ],
+        dns: dnsWithProxy,
+      },
+    };
+    let putBody: Record<string, unknown> | undefined;
+    fetchRoutes({
+      '/api/v1/config': snapshotWithRetainedProxy,
+      '/api/v1/config/dns': { state: 'saved', savedVersion: '8', version: '4', value: dnsWithProxy },
+      'PUT /api/v1/config/dns': (init) => {
+        putBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return jsonResponse(200, { state: 'saved', savedVersion: '9', version: '5', value: putBody });
+      },
+    });
+    renderDns();
+
+    const checkbox = await screen.findByRole('checkbox', { name: 'wan-proxy' });
+    expect(checkbox).toBeChecked();
+    expect(screen.getByText('Proxy ARP (cannot listen)')).toBeInTheDocument();
+    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(putBody).toBeDefined());
+    expect(putBody).not.toHaveProperty('virtualAddresses');
+  });
+
   it('renders dangling segment and virtual address IDs for removal and warns when management segment is missing', async () => {
     const dnsWithDangling: DnsService = {
       mode: 'recursive',
