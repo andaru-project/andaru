@@ -32,7 +32,7 @@ Kernel 6.12, systemd 257 (Debian 13), 2026-11-27, in network namespaces. The pro
 - `address` is one IPv6 address, global unicast: not unique local, link-local, multicast, loopback, unspecified or IPv4-mapped. A length is refused, because the kernel's proxy table holds single addresses: "Expected one global unicast IPv6 address, without a length."
 - `segment` and `hostSegment` exist and differ.
 - When the segment has static IPv6 addresses, the address lies on one of their subnets. For a segment addressed by SLAAC, DHCPv6 or PPPoE, the renderer warns instead (below).
-- The address is none of a segment's addresses and overlaps no other virtual address of any kind. It is not inside the host segment's static subnets: a host there already has a route.
+- The address is none of a segment's addresses and overlaps no other virtual address of any kind. It is not inside the static subnets of any segment but `segment`, the host segment's included: a host there already has a route.
 - It is no segment's gateway: the route would take the router's traffic to the host's segment. A DNS upstream or management source at the address is the inside host, which the route leads to, so it stays allowed.
 - It lies in no `dhcp6` delegation pool.
 - `dns.virtualAddresses` may not name it, and no port forward targets it: the firewall does not hold it.

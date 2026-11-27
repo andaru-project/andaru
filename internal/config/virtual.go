@@ -378,8 +378,11 @@ func validateProxyNDP(d *declaration, i int, p string, own []netip.Prefix, taken
 		bad(p+"/address", "This address is one of the firewall's own addresses.")
 	case other >= 0:
 		bad(p+"/address", fmt.Sprintf("This address overlaps virtual address %q.", d.VirtualAddresses[other].Name))
-	case host >= 0 && slices.ContainsFunc(v6(host), func(x netip.Prefix) bool { return x.Contains(a) }):
-		bad(p+"/address", "This address is on the host segment's subnet, where a host already has a route.")
+	case slices.ContainsFunc(d.Segments, func(s segment) bool {
+		return s.ID != v.Segment && slices.ContainsFunc(staticPrefixes(s), func(x netip.Prefix) bool { return x.Contains(a) })
+	}):
+		// A host there already has a route, which this one would take to the host segment.
+		bad(p+"/address", "This address is on another segment's subnet, where a host already has a route.")
 	case claimed >= 0:
 		bad(p+"/address", ndpClaims[taken[claimed].message])
 	}

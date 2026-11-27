@@ -730,7 +730,13 @@ func TestProxyNDPValidation(t *testing.T) {
 		"on the host segment's subnet": {func(d map[string]any) {
 			item(segmentsOf(d), 0)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "dhcp6", "requestPrefixLength": 48}
 			v6(d, 1)["addresses"] = []any{"fd00:1::1/64", "2001:db8:1::1/64"}
-		}, p + "/address", "This address is on the host segment's subnet, where a host already has a route."},
+		}, p + "/address", "This address is on another segment's subnet, where a host already has a route."},
+		"on a third segment's subnet": {func(d map[string]any) {
+			item(segmentsOf(d), 0)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "dhcp6", "requestPrefixLength": 48}
+			d["links"] = append(linksOf(d), map[string]any{"id": "lnk_00000000-0000-4000-8000-000000000009", "name": "dmz", "kind": "ethernet", "mtu": 1500, "enabled": true, "permanentMac": "52:54:00:aa:bb:09"})
+			d["segments"] = append(segmentsOf(d), map[string]any{"id": "seg_00000000-0000-4000-8000-000000000009", "name": "dmz", "link": "lnk_00000000-0000-4000-8000-000000000009",
+				"zone": item(segmentsOf(d), 1)["zone"], "addressing": map[string]any{"ipv4": map[string]any{"mode": "none"}, "ipv6": map[string]any{"mode": "static", "addresses": []any{"2001:db8:1::1/64"}}}})
+		}, p + "/address", "This address is on another segment's subnet, where a host already has a route."},
 		"in a DHCPv6 delegation pool": {func(d map[string]any) {
 			d["dhcp6"] = []any{map[string]any{"id": "dh6_00000001-0000-4000-8000-000000000001", "name": "lan6", "segment": item(segmentsOf(d), 1)["id"],
 				"ranges": []any{map[string]any{"first": "fd00:1::1000", "last": "fd00:1::1fff"}}, "prefixDelegation": map[string]any{"prefix": "2001:db8:1::/56", "delegatedLength": 64}}}
