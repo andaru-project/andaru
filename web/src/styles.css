@@ -432,7 +432,8 @@ path.traffic-sent {
     min-height: 2.75rem;
   }
 
-  .mantine-ActionIcon-root {
+  .mantine-ActionIcon-root,
+  .notification-toast-close {
     min-width: 2.75rem;
   }
 
@@ -695,6 +696,80 @@ path.traffic-sent {
 
 .notification-detail {
   white-space: pre-wrap;
+}
+
+/* Live notification toast stack: strict-CSP safe, fixed bottom-right, severity accent along the left edge. */
+.notification-toast-stack {
+  bottom: var(--mantine-spacing-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--mantine-spacing-xs);
+  pointer-events: none;
+  position: fixed;
+  right: var(--mantine-spacing-md);
+  width: min(24rem, calc(100vw - 2 * var(--mantine-spacing-md)));
+  z-index: 400;
+}
+
+.notification-toast {
+  align-items: flex-start;
+  background: var(--mantine-color-body);
+  border: 1px solid var(--mantine-color-default-border);
+  border-left: 4px solid var(--mantine-color-blue-filled);
+  border-radius: var(--mantine-radius-default);
+  box-shadow: var(--mantine-shadow-md);
+  display: flex;
+  gap: var(--mantine-spacing-xs);
+  padding: var(--mantine-spacing-xs) var(--mantine-spacing-sm);
+  pointer-events: auto;
+}
+
+.notification-toast[data-severity="warning"] {
+  border-left-color: var(--mantine-color-orange-filled);
+}
+
+.notification-toast[data-severity="critical"] {
+  border-left-color: var(--mantine-color-red-filled);
+}
+
+.notification-toast-body {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  font: inherit;
+  gap: 0.2rem;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+}
+
+.notification-toast-body:focus-visible {
+  border-radius: var(--mantine-radius-xs);
+  outline: 2px solid var(--mantine-primary-color-filled);
+  outline-offset: 2px;
+}
+
+.notification-toast-subject,
+.notification-toast-source {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.notification-toast-detail {
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.notification-toast-close {
+  flex-shrink: 0;
 }
 
 .dhcp-disclosure > summary {

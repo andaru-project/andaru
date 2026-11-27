@@ -5,6 +5,7 @@ import type { Apply } from './types';
 import { configureNetplaneApi } from './netplane/api';
 import { setRoutePrefix } from './netplane/routing';
 import { Shell } from './Shell';
+import { clearNotificationToasts, defaultNotificationPrefs, setNotificationPrefs } from './notifications';
 import { openStreams } from './test/events';
 import { setTimeZone } from './timezone';
 import { fetchRoutes, jsonResponse } from './test/fetch';
@@ -34,11 +35,19 @@ function mount(path: string) {
 let visibility: DocumentVisibilityState = 'visible';
 Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
 
+const originalNotification = window.Notification;
+const originalIsSecureContext = Object.getOwnPropertyDescriptor(window, 'isSecureContext');
+
 afterEach(() => {
   visibility = 'visible';
   configureNetplaneApi(null);
   setRoutePrefix('');
   setTimeZone('local');
+  clearNotificationToasts();
+  setNotificationPrefs(defaultNotificationPrefs);
+  if (originalIsSecureContext) Object.defineProperty(window, 'isSecureContext', originalIsSecureContext);
+  else Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
+  Object.defineProperty(window, 'Notification', { configurable: true, writable: true, value: originalNotification });
   vi.useRealTimers();
 });
 
@@ -901,4 +910,94 @@ it('shows Diagnostics -> Traffic simulator when the session can read configurati
   expect(await screen.findByRole('heading', { name: 'Traffic simulator' })).toBeInTheDocument();
   expect(screen.getByRole('link', { name: 'Traffic simulator' })).toHaveAttribute('aria-current', 'page');
   expect(document.title).toBe('Traffic simulator — Andaru');
+});
+
+it('keeps the event stream open while hidden when browser notifications are enabled and granted, and delivers native alerts', async () => {
+  const answered = () => act(async () => { await new Promise((resolve) => setTimeout(resolve)); });
+  const shown: string[] = [];
+  class FakeNotification {
+    close = vi.fn();
+    onclick: (() => void) | null = null;
+    constructor(title: string) { shown.push(title); }
+    static get permission(): NotificationPermission { return 'granted'; }
+    static requestPermission = vi.fn(async () => 'granted' as NotificationPermission);
+  }
+  Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
+  Object.defineProperty(window, 'Notification', { configurable: true, writable: true, value: FakeNotification });
+  setNotificationPrefs({ browser: true });
+
+  let list = [notification(1, 'info', 'Initial alert')];
+  fetchRoutes({
+    '/api/v1/notifications': () => jsonResponse(200, { items: list }),
+  });
+
+  render(
+    <MemoryRouter initialEntries={['/system/session']}>
+      <Shell api={new ApiClient('csrf')} session={session(['notifications.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} />
+    </MemoryRouter>,
+  );
+  await answered();
+  expect(openStreams()).toHaveLength(1);
+  expect(shown).toHaveLength(0);
+
+  // Hiding the tab keeps the stream open because browser notifications are active.
+  visibility = 'hidden';
+  act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+  expect(openStreams()).toHaveLength(1);
+
+  list = [notification(2, 'critical', 'WAN link down'), notification(1, 'info', 'Initial alert')];
+  act(() => { openStreams()[0].message({ type: 'notifications.changed' }); });
+  await answered();
+  expect(shown).toEqual(['WAN link down']);
+
+  // Turning browser notifications off closes the hidden tab's stream.
+  act(() => { setNotificationPrefs({ browser: false }); });
+  expect(openStreams()).toHaveLength(0);
+});
+
+it('retries failed notification reads while hidden when browser notifications are active', async () => {
+  const answered = () => act(async () => { await new Promise((resolve) => setTimeout(resolve)); });
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  const shown: string[] = [];
+  class FakeNotification {
+    close = vi.fn();
+    onclick: (() => void) | null = null;
+    constructor(title: string) { shown.push(title); }
+    static get permission(): NotificationPermission { return 'granted'; }
+    static requestPermission = vi.fn(async () => 'granted' as NotificationPermission);
+  }
+  Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
+  Object.defineProperty(window, 'Notification', { configurable: true, writable: true, value: FakeNotification });
+  setNotificationPrefs({ browser: true });
+
+  let fail = false;
+  let list = [notification(1, 'info', 'Initial alert')];
+  fetchRoutes({
+    '/api/v1/notifications': () => (fail
+      ? jsonResponse(503, { error: { code: 'NOTIFICATIONS_UNAVAILABLE', message: 'Unavailable.' } })
+      : jsonResponse(200, { items: list })),
+  });
+
+  render(
+    <MemoryRouter initialEntries={['/system/session']}>
+      <Shell api={new ApiClient('csrf')} session={session(['notifications.read'])} connected onLogout={vi.fn()} onSessionLost={vi.fn()} />
+    </MemoryRouter>,
+  );
+  await answered();
+
+  visibility = 'hidden';
+  act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+
+  // A notification read triggered while hidden fails transiently.
+  fail = true;
+  list = [notification(2, 'critical', 'Recovered alert'), notification(1, 'info', 'Initial alert')];
+  act(() => { openStreams()[0].message({ type: 'notifications.changed' }); });
+  await answered();
+  expect(shown).toEqual([]);
+
+  // The 15s retry runs while still hidden and delivers the native alert once the backend recovers.
+  fail = false;
+  act(() => { vi.advanceTimersByTime(15_000); });
+  await answered();
+  expect(shown).toEqual(['Recovered alert']);
 });

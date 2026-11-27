@@ -5,7 +5,8 @@ import { ApiClient, reportError } from './api';
 import { AppFrame } from './AppFrame';
 import { loadChangeState, pendingNotice } from './changes';
 import { plural } from './format';
-import { highestSeverity, severityColor } from './notifications';
+import { highestSeverity, severityColor, useBrowserNotificationsActive } from './notifications';
+import { NotificationToaster } from './NotificationToaster';
 import { PendingNotice } from './PendingNotice';
 import { FleetWorkspace } from './netplane/FleetWorkspace';
 import { AliasesScreen } from './screens/AliasesScreen';
@@ -138,6 +139,7 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
   const reloadChanges = changes.reload;
 
   const canReadNotifications = capabilities.has('notifications.read');
+  const browserAlertsActive = useBrowserNotificationsActive();
   const loadNotifications = useCallback(() => (canReadNotifications ? api.notifications() : Promise.resolve(undefined)), [api, canReadNotifications]);
   const notifications = useResource(loadNotifications, onSessionLost, true);
   const reloadNotifications = notifications.reload;
@@ -163,14 +165,14 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
     if (!noticed) void reloadChanges();
     if (!changed) void reloadNotifications();
   }, [reloadChanges, reloadNotifications]);
-  useEvents(handleEvent, canReadChanges || canReadNotifications);
+  useEvents(handleEvent, canReadChanges || canReadNotifications, canReadNotifications && browserAlertsActive);
   // The change state is read again every 15 seconds while a read has failed, until one answers, and while an apply is
   // activating or awaits confirmation: a healthy stream may bring no other event, and the events are not durable, so
   // a lost one must not hide the confirmation an apply waits for.
   const latestState = changes.data?.applies.items[0]?.state;
   const applying = latestState === 'activating' || latestState === 'awaiting_confirmation';
   useVisiblePoll(changes.refresh, retryMilliseconds, canReadChanges && (changes.error !== '' || applying));
-  useVisiblePoll(notifications.refresh, retryMilliseconds, canReadNotifications && notifications.error !== '');
+  useVisiblePoll(notifications.refresh, retryMilliseconds, canReadNotifications && notifications.error !== '', browserAlertsActive);
 
   // Whether the saved settings wait for decisions after an upgrade (settings safe mode). It changes only with a new
   // saved head (an upgrade, a restore, the answers), so it is read again when the head moves, never on a timer:
@@ -276,7 +278,7 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
     ['/system/details', <SystemDetailsScreen system={system} api={api} canRename={capabilities.has('configuration.apply')} onSessionLost={onSessionLost} />],
     ['/system/updates', <UpdatesScreen api={api} session={session} update={update} onSessionLost={onSessionLost} />],
     ['/system/backups', <BackupScreen api={api} session={session} hostname={hostname} onRestored={() => { void reloadChanges(); void reloadNotifications(); }} onSessionLost={onSessionLost} />],
-    ['/system/notifications', <NotificationsScreen api={api} session={session} notifications={notifications} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
+    ['/system/notifications', <NotificationsScreen api={api} session={session} notifications={notifications} hostname={hostname} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/system/users', <UsersScreen api={api} session={session} onSessionLost={onSessionLost} />],
     ['/system/roles', <RolesScreen api={api} session={session} onSaved={() => void reloadChanges()} onSessionLost={onSessionLost} />],
     ['/system/tokens', <TokensScreen api={api} session={session} onSessionLost={onSessionLost} />],
@@ -369,6 +371,7 @@ function ShellBody({ api, session, connected, onLogout, onSessionLost }: ShellPr
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Stack>
+      {canReadNotifications && <NotificationToaster notifications={notifications.data} hostname={hostname} />}
       {passwordUser && <PasswordDialog user={passwordUser} selfAccountId={session.account.id} onClose={() => setPasswordUser(null)} onSessionLost={onSessionLost} onSave={async (currentPassword, newPassword) => { await api.changePassword(passwordUser.id, { currentPassword, newPassword, expectedRevision: passwordUser.revision }); }} />}
     </AppFrame>
   );

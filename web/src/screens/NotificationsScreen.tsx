@@ -1,8 +1,18 @@
-import { Alert, Anchor, Badge, Button, Group, Loader, Paper, Stack, Tabs, Text, Title } from '@mantine/core';
+import { Alert, Anchor, Badge, Button, Group, Loader, Paper, Stack, Switch, Tabs, Text, Title } from '@mantine/core';
 import { useState } from 'react';
-import { Link } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { ApiClient, ApiError, reportError } from '../api';
-import { isSafeAppLink, severityColor } from '../notifications';
+import {
+  isSafeAppLink,
+  pushNotificationToast,
+  requestBrowserNotificationPermission,
+  setNotificationPrefs,
+  severityColor,
+  showBrowserNotification,
+  useBrowserNotificationSupport,
+  useNotificationPrefs,
+  type BrowserNotificationSupport,
+} from '../notifications';
 import { formatTimestamp, useTimeZone } from '../timezone';
 import type { Notification, NotificationList, NotificationSeverity, Session } from '../types';
 import { useConnected, type Resource } from '../useResource';
@@ -13,17 +23,123 @@ interface NotificationsScreenProps {
   api: ApiClient;
   session: Session;
   notifications: Resource<NotificationList | undefined>;
+  hostname?: string;
   onSaved?(): void;
   onSessionLost(): void;
 }
 
 const widgetLimit = 5;
 
+const browserSupportHint: Partial<Record<BrowserNotificationSupport, string>> = {
+  insecure: 'Browser notifications require HTTPS (or localhost). In-page alerts still work here.',
+  unsupported: 'This browser does not support native notifications. In-page alerts still work here.',
+  denied: "Browser notifications are blocked for this site. Allow them in your browser's site settings to turn them on.",
+};
+
 function SeverityBadge({ severity }: { severity: NotificationSeverity }) {
   return <Badge size="sm" className="plain-badge" color={severityColor[severity]} variant={severity === 'critical' ? 'filled' : 'light'}>{severity}</Badge>;
 }
 
-export function NotificationsScreen({ api, session, notifications, onSaved, onSessionLost }: NotificationsScreenProps) {
+function BrowserAlertsCard({ hostname }: { hostname?: string }) {
+  const navigate = useNavigate();
+  const prefs = useNotificationPrefs();
+  const support = useBrowserNotificationSupport();
+  const [requesting, setRequesting] = useState(false);
+  const [testNote, setTestNote] = useState('');
+
+  const browserEnabled = prefs.browser && support === 'granted';
+  const hint = browserSupportHint[support];
+
+  async function toggleBrowser(enabled: boolean) {
+    setTestNote('');
+    if (!enabled) {
+      setNotificationPrefs({ browser: false });
+      return;
+    }
+    setRequesting(true);
+    try {
+      // Request permission directly inside the click handler so Safari allows the prompt.
+      const next = await requestBrowserNotificationPermission();
+      setNotificationPrefs({ browser: next === 'granted' });
+    } finally {
+      setRequesting(false);
+    }
+  }
+
+  function sendTest() {
+    setTestNote('');
+    const item = {
+      id: `test-${Date.now()}`,
+      severity: 'info' as const,
+      source: 'browser',
+      subject: 'Test notification',
+      detail: 'Notifications are working in this browser.',
+      link: '/system/notifications',
+    };
+    if (browserEnabled) {
+      const notice = showBrowserNotification(item, {
+        hostname,
+        onOpen: (target) => { void navigate(target); },
+      });
+      if (notice) {
+        if (prefs.toasts) {
+          pushNotificationToast({ ...item, detail: 'Sent a test browser notification.' });
+        } else {
+          setTestNote('Test browser notification sent.');
+        }
+        return;
+      }
+      setTestNote(
+        prefs.toasts
+          ? 'This browser blocked native notifications here. In-page alerts will be used instead.'
+          : 'This browser blocked native notifications here. Enable in-page alerts to see notifications in this tab.',
+      );
+    }
+    if (prefs.toasts) {
+      pushNotificationToast(item);
+    }
+  }
+
+  return (
+    <Paper withBorder p="md">
+      <Stack gap="xs">
+        <Group justify="space-between" align="center" wrap="wrap" gap="xs">
+          <Text fw={600} size="sm">This browser</Text>
+          <Button
+            size="xs"
+            variant="default"
+            disabled={!prefs.toasts && !browserEnabled}
+            onClick={sendTest}
+          >
+            Send test
+          </Button>
+        </Group>
+        <Group gap="lg" wrap="wrap" align="flex-start">
+          <Switch
+            label="In-page alerts"
+            description="Pop up new alerts while this tab is open"
+            checked={prefs.toasts}
+            onChange={(event) => {
+              setTestNote('');
+              setNotificationPrefs({ toasts: event.currentTarget.checked });
+            }}
+          />
+          <Switch
+            label="Browser notifications"
+            description="Use OS alerts when this tab is in the background or idle"
+            checked={browserEnabled}
+            disabled={requesting || hint !== undefined}
+            onChange={(event) => void toggleBrowser(event.currentTarget.checked)}
+          />
+        </Group>
+        {hint && <Text size="xs" c={support === 'denied' ? undefined : 'dimmed'} className={support === 'denied' ? 'warning-text' : undefined}>{hint}</Text>}
+        {testNote && <Text size="xs" c="dimmed" role="status">{testNote}</Text>}
+      </Stack>
+    </Paper>
+  );
+}
+
+export function NotificationsScreen({ api, session, notifications, hostname, onSaved, onSessionLost }: NotificationsScreenProps) {
   const connected = useConnected();
   const timeZone = useTimeZone();
   const canReadActive = session.capabilities.includes('notifications.read');
@@ -58,6 +174,7 @@ export function NotificationsScreen({ api, session, notifications, onSaved, onSe
   const showNotificationsError = Boolean(notifications.error) && (connected || notifications.data === undefined);
   const activeContent = (
     <Stack>
+      <BrowserAlertsCard hostname={hostname} />
       {showNotificationsError && <Alert color="orange" role="alert" title="The notifications could not be read">{notifications.error}</Alert>}
       {dismissError && <Alert color="red" role="alert" title="Could not dismiss the notification">{dismissError}</Alert>}
       {notifications.data === undefined

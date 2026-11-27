@@ -100,18 +100,20 @@ export function usePolledResource<T>(load: () => Promise<T>, onSessionLost: () =
   return resource;
 }
 
-// useVisiblePoll calls reload on a timer and when the tab becomes visible, and never while it is hidden.
-export function useVisiblePoll(reload: () => void, milliseconds: number, enabled = true) {
+// useVisiblePoll calls reload on a timer and when the tab becomes visible. While hidden it ticks only when
+// includeHidden is set (used to retry failed notification reads when background browser alerts are active).
+export function useVisiblePoll(reload: () => void, milliseconds: number, enabled = true, includeHidden = false) {
   useEffect(() => {
     if (!enabled) return;
-    const visible = () => { if (document.visibilityState === 'visible') reload(); };
-    const timer = setInterval(visible, milliseconds);
-    document.addEventListener('visibilitychange', visible);
+    const poll = () => { if (includeHidden || document.visibilityState === 'visible') reload(); };
+    const onVisible = () => { if (document.visibilityState === 'visible') reload(); };
+    const timer = setInterval(poll, milliseconds);
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       clearInterval(timer);
-      document.removeEventListener('visibilitychange', visible);
+      document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [enabled, milliseconds, reload]);
+  }, [enabled, includeHidden, milliseconds, reload]);
 }
 
 const reopenMilliseconds = 15_000;
@@ -131,9 +133,17 @@ function eventType(data: string): string | undefined {
 // events say only that something changed, and onEvent fetches what. On open or a stream failure (once until it opens
 // again) type is undefined so every subscribed resource refreshes; on a typed event, type names the bus event so
 // only what changed reloads. The browser reopens a stream that drops; one the server refuses (the session ended,
-// the engine is down) is opened again 15 seconds later. A hidden tab holds no stream: a browser allows six
-// connections to a host, and each stream keeps one.
-export function useEvents(onEvent: (type?: string) => void, enabled = true) {
+// the engine is down) is opened again 15 seconds later. A hidden tab normally holds no stream (browsers cap
+// connections per host), unless keepOpenWhenHidden is set so background browser notifications arrive in real time.
+export function useEvents(onEvent: (type?: string) => void, enabled = true, keepOpenWhenHidden = false) {
+  const keepOpenRef = useRef(keepOpenWhenHidden);
+  const syncRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    keepOpenRef.current = keepOpenWhenHidden;
+    syncRef.current?.();
+  }, [keepOpenWhenHidden]);
+
   useEffect(() => {
     if (!enabled) return;
     let source: EventSource | undefined;
@@ -143,6 +153,7 @@ export function useEvents(onEvent: (type?: string) => void, enabled = true) {
       source?.close();
       source = undefined;
       clearTimeout(timer);
+      timer = undefined;
     };
     const open = () => {
       close();
@@ -157,15 +168,27 @@ export function useEvents(onEvent: (type?: string) => void, enabled = true) {
       opened.onerror = () => {
         if (!failed) onEvent();
         failed = true;
-        if (opened.readyState === EventSource.CLOSED) timer = setTimeout(open, reopenMilliseconds);
+        if (opened.readyState === EventSource.CLOSED) {
+          source = undefined;
+          clearTimeout(timer);
+          timer = setTimeout(open, reopenMilliseconds);
+        }
       };
       source = opened;
     };
-    const follow = () => { if (document.visibilityState === 'visible') open(); else close(); };
-    follow();
-    document.addEventListener('visibilitychange', follow);
+    const sync = () => {
+      if (keepOpenRef.current || document.visibilityState === 'visible') {
+        if (!source && timer === undefined) open();
+      } else {
+        close();
+      }
+    };
+    syncRef.current = sync;
+    sync();
+    document.addEventListener('visibilitychange', sync);
     return () => {
-      document.removeEventListener('visibilitychange', follow);
+      syncRef.current = null;
+      document.removeEventListener('visibilitychange', sync);
       close();
     };
   }, [enabled, onEvent]);
