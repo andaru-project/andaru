@@ -290,9 +290,12 @@ jobs:
           for arch in amd64 arm64; do
             podman manifest add netplane:index "docker://$NETPLANE_IMAGE@$(cat "netplane-digest-$arch")"
           done
+          # The index goes up under a staging tag nothing follows; its digest is what gets signed: a tag can move.
           podman manifest push --all --digestfile digest netplane:index "docker://$NETPLANE_IMAGE:staging-$VERSION"
           digest=$(cat digest)
+          # Recursive: a pull of one architecture fetches its own manifest, which needs a signature of its own.
           cosign sign --yes --recursive --key env://COSIGN_PRIVATE_KEY "$NETPLANE_IMAGE@$digest"
+          # The published key must verify what users pull.
           cosign verify --key image/cosign.pub "$NETPLANE_IMAGE@$digest" >/dev/null
           for arch in amd64 arm64; do
             cosign verify --key image/cosign.pub "$NETPLANE_IMAGE@$(cat "netplane-digest-$arch")" >/dev/null

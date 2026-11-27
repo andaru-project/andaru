@@ -48,9 +48,10 @@ for s in $(grep -o '\${[A-Z0-9_]*}' cmd/netplane/netplane.example.yaml | tr -d '
 done
 
 # With no token configured, serve must refuse to start, not serve an open API on its non-loopback listen.
-if out=$(timeout 60 "$engine" run --rm -v "$work/no-token.yaml:/config/netplane.yaml:ro" "$@" "$image" 2>&1); then
-	fail "it started without a token"
-fi
+# A server that starts runs on until timeout stops the client (124); the name lets cleanup remove it.
+out=$(timeout 60 "$engine" run --rm --name "$name" -v "$work/no-token.yaml:/config/netplane.yaml:ro" "$@" "$image" 2>&1) &&
+	rc=0 || rc=$?
+[ "$rc" -ne 0 ] && [ "$rc" -ne 124 ] || fail "it started without a token"
 case $out in *"refusing to serve unauthenticated"*) ;; *) fail "without a token, it failed for another reason: $out" ;; esac
 
 start() {
