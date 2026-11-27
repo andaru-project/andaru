@@ -118,3 +118,44 @@ func TestHeldAddressOnLearnedSubnet(t *testing.T) {
 		t.Fatalf("a neighbouring subnet warned: %+v", r.Findings)
 	}
 }
+
+// A proxy NDP entry is on no andaru-vip: with no other virtual address there is no dummy device.
+func TestProxyNDPIsNotOnTheDummy(t *testing.T) {
+	r := render(t, change(t, fixture(t, "proxy-ndp"), func(d map[string]any) {
+		d["virtualAddresses"] = d["virtualAddresses"].([]any)[1:]
+	}))
+	if slices.ContainsFunc(r.Files, func(f File) bool { return strings.Contains(f.Path, "andaru-vip") }) {
+		t.Fatalf("andaru-vip rendered:\n%s", golden(r))
+	}
+	if !strings.Contains(fileEnding(t, r, "ens18.network").Content, "IPv6ProxyNDPAddress=2001:db8:1::50\n") {
+		t.Fatalf("no proxy entry:\n%s", golden(r))
+	}
+}
+
+// A proxy NDP address on no subnet its segment's link has, declared or learned, is warned about; one on a subnet the
+// link learned is not, and a subnet another link learned does not count.
+func TestProxyNDPOffSubnet(t *testing.T) {
+	const one, two = "/virtualAddresses/1/address", "/virtualAddresses/2/address"
+	in := fixture(t, "proxy-ndp")
+	if r := render(t, in); findingAt(r, "PROXY_NDP_OFF_SUBNET", one) || findingAt(r, "PROXY_NDP_OFF_SUBNET", two) {
+		t.Fatalf("on the static subnet, yet %+v", r.Findings)
+	}
+	in = change(t, in, func(d map[string]any) {
+		item(d, "segments", 0)["addressing"].(map[string]any)["ipv6"] = map[string]any{"mode": "dhcp6", "requestPrefixLength": 56}
+	})
+	r := render(t, in)
+	if !findingAt(r, "PROXY_NDP_OFF_SUBNET", one) || !findingAt(r, "PROXY_NDP_OFF_SUBNET", two) || !r.Realizable {
+		t.Fatalf("nothing learned, yet %+v", r.Findings)
+	}
+	in.Links[1].Addresses = []host.AddressStatus{{Family: "ipv6", Address: "2001:db8:1::9", PrefixLength: 64, Scope: "global"}}
+	if r := render(t, in); !findingAt(r, "PROXY_NDP_OFF_SUBNET", one) {
+		t.Fatalf("the LAN's subnet counted: %+v", r.Findings)
+	}
+	in.Links[0].Addresses = []host.AddressStatus{
+		{Family: "ipv6", Address: "fe80::1", PrefixLength: 64, Scope: "link"},
+		{Family: "ipv6", Address: "2001:db8:1::2", PrefixLength: 64, Scope: "global"},
+	}
+	if r := render(t, in); findingAt(r, "PROXY_NDP_OFF_SUBNET", one) || findingAt(r, "PROXY_NDP_OFF_SUBNET", two) {
+		t.Fatalf("on the learned subnet, yet %+v", r.Findings)
+	}
+}

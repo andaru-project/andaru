@@ -1,0 +1,138 @@
+### /run/systemd/network/50-andaru-andaru-vip.netdev 0644 secret=false sources=/virtualAddresses
+[NetDev]
+Name=andaru-vip
+Kind=dummy
+
+### /run/systemd/network/50-andaru-andaru-vip.network 0644 secret=false sources=/virtualAddresses
+[Match]
+Name=andaru-vip
+
+[Link]
+RequiredForOnline=no
+
+[Network]
+LinkLocalAddressing=no
+LLDP=no
+Address=172.16.53.53/32
+
+### /run/systemd/network/50-andaru-ens18.link 0644 secret=false sources=/links/0
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:01
+
+[Link]
+Name=ens18
+
+### /run/systemd/network/50-andaru-ens18.network 0644 secret=false sources=/links/0,/segments/0,/virtualAddresses
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:01
+
+[Link]
+RequiredForOnline=no
+MTUBytes=1500
+
+[Network]
+LLDP=no
+IPv4Forwarding=yes
+IPv6Forwarding=yes
+IPv6ProxyNDPAddress=2001:db8:1::50
+IPv6ProxyNDPAddress=2001:db8:1::51
+Address=10.0.1.19/16
+Address=2001:db8:1::2/64
+Gateway=10.0.0.1
+Gateway=2001:db8:1::1
+IPv6AcceptRA=no
+
+### /run/systemd/network/50-andaru-ens19.link 0644 secret=false sources=/links/1
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:02
+
+[Link]
+Name=ens19
+
+### /run/systemd/network/50-andaru-ens19.network 0644 secret=false sources=/links/1,/segments/1,/virtualAddresses
+[Match]
+PermanentMACAddress=52:54:00:aa:bb:02
+
+[Link]
+RequiredForOnline=no
+MTUBytes=1500
+
+[Network]
+LLDP=no
+IPv4Forwarding=yes
+IPv6Forwarding=yes
+Address=192.0.2.1/24
+Address=fd00:2::1/64
+IPv6AcceptRA=no
+IPv6SendRA=yes
+
+[IPv6SendRA]
+RouterPreference=medium
+RouterLifetimeSec=1800
+Managed=no
+OtherInformation=no
+EmitDNS=no
+EmitDomains=no
+
+[IPv6Prefix]
+Prefix=fd00:2::/64
+ValidLifetimeSec=86400
+PreferredLifetimeSec=14400
+
+[Route]
+Destination=2001:db8:1::50/128
+
+[Route]
+Destination=2001:db8:1::51/128
+
+### /run/systemd/network/51-andaru-unclassified.network 0644 secret=false sources=
+[Match]
+Name=en*
+
+[Link]
+ActivationPolicy=down
+RequiredForOnline=no
+
+[Network]
+LinkLocalAddressing=no
+DHCP=no
+IPv6AcceptRA=no
+
+### nft:inet/andaru 0644 secret=false sources=/aliases,/management,/nat,/rules
+# interface ens18 52:54:00:aa:bb:01
+# interface ens19 52:54:00:aa:bb:02
+table inet andaru {}
+delete table inet andaru
+table inet andaru {
+	comment "sha256:b815c67d34bfbe0970b2338b49b9dc33776a72813f21ea8fad6288aaca1a8daf"
+	set zon_00000001_0000_4000_8000_000000000001 { type ifname; elements = { "ens18" }; }
+	set zon_00000002_0000_4000_8000_000000000002 { type ifname; elements = { "ens19" }; }
+	set uplinks { type ifname; elements = { "ens18" }; }
+	chain input {
+		type filter hook input priority filter; policy drop;
+		ct state established,related accept
+		ct state invalid drop
+		iif lo accept
+		icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept
+		ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept
+		ip6 saddr fe80::/10 icmpv6 type { mld-listener-query, mld-listener-report, mld-listener-done, mld2-listener-report } accept
+		iifname "ens19" tcp dport 22 accept
+		iifname @zon_00000002_0000_4000_8000_000000000002 icmp type { echo-request } accept comment "rul_00000001-0000-4000-8000-000000000001"
+		iifname @zon_00000002_0000_4000_8000_000000000002 udp dport { 53 } accept comment "rul_00000002-0000-4000-8000-000000000002"
+		iifname @zon_00000002_0000_4000_8000_000000000002 tcp dport { 53 } accept comment "rul_00000002-0000-4000-8000-000000000002"
+	}
+	chain forward {
+		type filter hook forward priority filter; policy drop;
+		ct state established,related accept
+		ct state invalid drop
+		iifname @zon_00000002_0000_4000_8000_000000000002 accept comment "rul_00000003-0000-4000-8000-000000000003"
+	}
+	chain postrouting {
+		type nat hook postrouting priority srcnat;
+		fib saddr type != local oifname @uplinks meta nfproto ipv4 masquerade
+	}
+}
+
+### resolved lnk_00000001-0000-4000-8000-000000000001 -> ens18
+### resolved lnk_00000002-0000-4000-8000-000000000002 -> ens19
+### realizable=true

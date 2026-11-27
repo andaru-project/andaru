@@ -354,6 +354,23 @@ func (r *renderer) networkd(i int) {
 		network = append(network, "IPv4ProxyARP=yes")
 		sources = append(sources, "/virtualAddresses")
 	}
+	if segmented {
+		// The firewall answers neighbour discovery on the uplink for each inside host, and routes it to the host's link.
+		id, ndp := r.d.Segments[seg].ID, false
+		for _, v := range r.d.VirtualAddresses {
+			a, e := netip.ParseAddr(v.Address)
+			switch {
+			case v.Kind != "proxyNdp" || e != nil:
+			case v.Segment == id:
+				network, ndp = append(network, "IPv6ProxyNDPAddress="+a.String()), true
+			case v.HostSegment == id:
+				sections, ndp = append(sections, section{"Route", []string{"Destination=" + netip.PrefixFrom(a, 128).String()}}), true
+			}
+		}
+		if ndp && !slices.Contains(sources, "/virtualAddresses") {
+			sources = append(sources, "/virtualAddresses")
+		}
+	}
 	sections[0].lines = append(network, sections[0].lines...)
 	r.file(networkDir+name+".network", "0644", ini(append([]section{{"Match", []string{match}}, {"Link", settings}}, sections...)...), append(sources, self))
 }
@@ -369,7 +386,9 @@ func deref(p *int, fallback int) int {
 // virtualAddresses renders the dummy device holding the virtual addresses: networkd owns it entirely, on any
 // host kind. Without virtual addresses there are no files, and the apply deletes the device.
 func (r *renderer) virtualAddresses() {
-	if len(r.d.VirtualAddresses) == 0 {
+	r.proxyNDPOnLink()
+	// A proxy NDP entry is not the firewall's, and is on no andaru-vip.
+	if !slices.ContainsFunc(r.d.VirtualAddresses, func(v virtualAddress) bool { return v.Kind != "proxyNdp" }) {
 		return
 	}
 	var addresses []string
@@ -377,7 +396,7 @@ func (r *renderer) virtualAddresses() {
 	for _, v := range r.d.VirtualAddresses {
 		x := prefixOf(v.Address)
 		switch {
-		case !x.IsValid():
+		case !x.IsValid() || v.Kind == "proxyNdp":
 		case v.proxied():
 			// The route that leaves by another interface, without which the kernel proxies no ARP for it.
 			routes = append(routes, section{"Route", []string{"Destination=" + x.String()}})
@@ -420,7 +439,7 @@ func (r *renderer) heldOnLearned() {
 	}
 	for i, v := range r.d.VirtualAddresses {
 		x := prefixOf(v.Address)
-		if v.proxied() || !x.IsValid() {
+		if !v.held() || !x.IsValid() {
 			continue
 		}
 		// A single address takes one host's traffic, harmless inside a delegated prefix no segment uses.
@@ -435,6 +454,38 @@ func (r *renderer) heldOnLearned() {
 			r.find("warning", "HELD_ADDRESS_ON_LEARNED_SUBNET", fmt.Sprintf("/virtualAddresses/%d/address", i), "This address is on "+pool[j].String()+", a subnet of one of the firewall's interfaces, so the firewall answers for it there and cannot reach a host that has it. Choose an address on no subnet the firewall is on.")
 		default:
 			r.find("warning", "HELD_ADDRESS_ON_LEARNED_SUBNET", fmt.Sprintf("/virtualAddresses/%d/address", i), "This block overlaps "+pool[j].String()+", a subnet of one of the firewall's interfaces or a prefix delegated to it, so its local route takes traffic for that subnet, the gateway's included. Name a block the provider routes to the firewall.")
+		}
+	}
+}
+
+// proxyNDPOnLink warns about a proxy NDP entry on no subnet its segment's link has, declared or at run time: nothing
+// on the uplink would ask for it there.
+func (r *renderer) proxyNDPOnLink() {
+	for i, v := range r.d.VirtualAddresses {
+		a, e := netip.ParseAddr(v.Address)
+		seg := slices.IndexFunc(r.d.Segments, func(s segment) bool { return s.ID == v.Segment })
+		if v.Kind != "proxyNdp" || e != nil || seg < 0 {
+			continue
+		}
+		s := r.d.Segments[seg]
+		var subnets []netip.Prefix
+		for _, raw := range s.Addressing.IPv6.Addresses {
+			if p, e := netip.ParsePrefix(raw); e == nil {
+				subnets = append(subnets, p.Masked())
+			}
+		}
+		for _, l := range r.in.Links {
+			if l.Name != r.name[s.Link] {
+				continue
+			}
+			for _, x := range l.Addresses {
+				if y, e := netip.ParseAddr(x.Address); e == nil && x.Scope == "global" {
+					subnets = append(subnets, netip.PrefixFrom(y, x.PrefixLength).Masked())
+				}
+			}
+		}
+		if !slices.ContainsFunc(subnets, func(p netip.Prefix) bool { return p.Contains(a) }) {
+			r.find("warning", "PROXY_NDP_OFF_SUBNET", fmt.Sprintf("/virtualAddresses/%d/address", i), "This address is on no subnet the segment's link has, so nothing there asks for it. Name an address of the uplink's prefix, or check that the link has its address.")
 		}
 	}
 }

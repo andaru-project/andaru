@@ -38,7 +38,7 @@ func (r *renderer) ownStatic() []netip.Prefix {
 func (r *renderer) held4() []netip.Prefix {
 	var out []netip.Prefix
 	for _, v := range r.d.VirtualAddresses {
-		if x := prefixOf(v.Address); x.IsValid() && x.Addr().Is4() && !v.proxied() {
+		if x := prefixOf(v.Address); x.IsValid() && x.Addr().Is4() && v.held() {
 			out = append(out, x)
 		}
 	}
