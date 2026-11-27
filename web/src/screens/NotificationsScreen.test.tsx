@@ -2,6 +2,8 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ApiClient } from '../api';
+import { NotificationToaster } from '../NotificationToaster';
+import { clearNotificationToasts, resetNotificationPrefsForTests } from '../notifications';
 import { fetchRoutes, jsonResponse } from '../test/fetch';
 import { session } from '../test/fixtures';
 import { render, screen, within } from '../test/render';
@@ -9,6 +11,9 @@ import { setTimeZone } from '../timezone';
 import type { Notification, NotificationList } from '../types';
 import type { Resource } from '../useResource';
 import { NotificationsScreen, NotificationsWidget } from './NotificationsScreen';
+
+const originalNotification = window.Notification;
+const originalIsSecureContext = Object.getOwnPropertyDescriptor(window, 'isSecureContext');
 
 const sample = (overrides: Partial<Notification> = {}): Notification => ({
   id: 1,
@@ -34,6 +39,11 @@ const resourceOf = (fields: Partial<Resource<NotificationList | undefined>> = {}
 
 afterEach(() => {
   setTimeZone('local');
+  clearNotificationToasts();
+  resetNotificationPrefsForTests();
+  if (originalIsSecureContext) Object.defineProperty(window, 'isSecureContext', originalIsSecureContext);
+  else Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
+  Object.defineProperty(window, 'Notification', { configurable: true, writable: true, value: originalNotification });
 });
 
 it('lists subject, severity badge, source, formatted timestamp, plain-text detail and in-app link', () => {
@@ -183,4 +193,85 @@ it('renders empty and unavailable states in NotificationsWidget', () => {
 
   render(<NotificationsWidget resource={resourceOf({ data: undefined, error: 'Notifications are temporarily unavailable.' })} />);
   expect(screen.getByRole('alert')).toHaveTextContent('Notifications are temporarily unavailable.');
+});
+
+it('lets the user configure in-page alerts, opt into browser notifications, and send a test alert', async () => {
+  const user = userEvent.setup();
+  let permission: NotificationPermission = 'default';
+  const shown: Array<{ title: string; body?: string }> = [];
+  class FakeNotification {
+    close = vi.fn();
+    onclick: (() => void) | null = null;
+    constructor(title: string, opts?: NotificationOptions) {
+      shown.push({ title, body: opts?.body });
+    }
+    static get permission() { return permission; }
+    static requestPermission = vi.fn(async () => {
+      permission = 'granted';
+      return permission;
+    });
+  }
+  Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
+  Object.defineProperty(window, 'Notification', { configurable: true, writable: true, value: FakeNotification });
+
+  render(
+    <MemoryRouter>
+      <NotificationsScreen api={new ApiClient('csrf')} session={session(['notifications.read'])} notifications={resourceOf({ data: { items: [] } })} hostname="gw01" onSessionLost={vi.fn()} />
+      <NotificationToaster notifications={{ items: [] }} hostname="gw01" />
+    </MemoryRouter>,
+  );
+
+  const inPageSwitch = screen.getByRole('switch', { name: /In-page alerts/ });
+  const browserSwitch = screen.getByRole('switch', { name: /Browser notifications/ });
+  const testButton = screen.getByRole('button', { name: 'Send test' });
+
+  expect(inPageSwitch).toBeChecked();
+  expect(browserSwitch).not.toBeChecked();
+  expect(testButton).toBeEnabled();
+
+  // Send test while only in-page alerts are enabled pops an in-page toast.
+  await user.click(testButton);
+  expect(screen.getByText('Test notification')).toBeInTheDocument();
+  expect(shown).toHaveLength(0);
+
+  // Enabling browser notifications asks permission and turns the switch on.
+  await user.click(browserSwitch);
+  expect(FakeNotification.requestPermission).toHaveBeenCalledTimes(1);
+  expect(browserSwitch).toBeChecked();
+
+  // Send test now dispatches a native OS notification.
+  await user.click(testButton);
+  expect(shown).toHaveLength(1);
+  expect(shown[0].title).toBe('Test notification — gw01');
+
+  // Turning both switches off disables the Send test button.
+  await user.click(browserSwitch);
+  await user.click(inPageSwitch);
+  expect(testButton).toBeDisabled();
+});
+
+it('explains why browser notifications are unavailable on plain HTTP or when denied', () => {
+  Object.defineProperty(window, 'isSecureContext', { configurable: true, value: false });
+  const insecure = render(
+    <MemoryRouter>
+      <NotificationsScreen api={new ApiClient('csrf')} session={session(['notifications.read'])} notifications={resourceOf({ data: { items: [] } })} onSessionLost={vi.fn()} />
+    </MemoryRouter>,
+  );
+  expect(screen.getByRole('switch', { name: /Browser notifications/ })).toBeDisabled();
+  expect(screen.getByText(/require HTTPS/)).toBeInTheDocument();
+  insecure.unmount();
+
+  Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
+  Object.defineProperty(window, 'Notification', {
+    configurable: true,
+    writable: true,
+    value: { permission: 'denied', requestPermission: vi.fn() },
+  });
+  render(
+    <MemoryRouter>
+      <NotificationsScreen api={new ApiClient('csrf')} session={session(['notifications.read'])} notifications={resourceOf({ data: { items: [] } })} onSessionLost={vi.fn()} />
+    </MemoryRouter>,
+  );
+  expect(screen.getByRole('switch', { name: /Browser notifications/ })).toBeDisabled();
+  expect(screen.getByText(/blocked for this site/)).toBeInTheDocument();
 });

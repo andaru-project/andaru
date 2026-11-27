@@ -131,9 +131,17 @@ function eventType(data: string): string | undefined {
 // events say only that something changed, and onEvent fetches what. On open or a stream failure (once until it opens
 // again) type is undefined so every subscribed resource refreshes; on a typed event, type names the bus event so
 // only what changed reloads. The browser reopens a stream that drops; one the server refuses (the session ended,
-// the engine is down) is opened again 15 seconds later. A hidden tab holds no stream: a browser allows six
-// connections to a host, and each stream keeps one.
-export function useEvents(onEvent: (type?: string) => void, enabled = true) {
+// the engine is down) is opened again 15 seconds later. A hidden tab normally holds no stream (browsers cap
+// connections per host), unless keepOpenWhenHidden is set so background browser notifications arrive in real time.
+export function useEvents(onEvent: (type?: string) => void, enabled = true, keepOpenWhenHidden = false) {
+  const keepOpenRef = useRef(keepOpenWhenHidden);
+  const syncRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    keepOpenRef.current = keepOpenWhenHidden;
+    syncRef.current?.();
+  }, [keepOpenWhenHidden]);
+
   useEffect(() => {
     if (!enabled) return;
     let source: EventSource | undefined;
@@ -161,11 +169,19 @@ export function useEvents(onEvent: (type?: string) => void, enabled = true) {
       };
       source = opened;
     };
-    const follow = () => { if (document.visibilityState === 'visible') open(); else close(); };
-    follow();
-    document.addEventListener('visibilitychange', follow);
+    const sync = () => {
+      if (keepOpenRef.current || document.visibilityState === 'visible') {
+        if (!source) open();
+      } else {
+        close();
+      }
+    };
+    syncRef.current = sync;
+    sync();
+    document.addEventListener('visibilitychange', sync);
     return () => {
-      document.removeEventListener('visibilitychange', follow);
+      syncRef.current = null;
+      document.removeEventListener('visibilitychange', sync);
       close();
     };
   }, [enabled, onEvent]);
