@@ -13,7 +13,7 @@ import { act, render, screen, waitFor } from './test/render';
 import userEvent from '@testing-library/user-event';
 
 const reader = session(['configuration.read']);
-const unapplied = { pointers: { ...pointers, confirmed: '1', live: '1' }, items: [apply({})] };
+const unapplied = { pointers: { ...pointers, confirmed: '1', live: '1' }, unapplied: true, items: [apply({})] };
 
 function routes() {
   return fetchRoutes({
@@ -122,7 +122,7 @@ it('reads the change state every 15 seconds while an apply is under way, and not
   vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
   let state: Apply['state'] = 'awaiting_confirmation';
   const fetchMock = fetchRoutes({
-    '/api/v1/applies': () => jsonResponse(200, { pointers, items: [apply({ state })] }),
+    '/api/v1/applies': () => jsonResponse(200, { pointers, unapplied: false, items: [apply({ state })] }),
     '/api/v1/versions?': { state: 'saved', items: [] },
   });
   mount('/system/session');
@@ -167,6 +167,19 @@ it('shows the pending notice everywhere but on Review and apply', async () => {
   routes();
   mount('/system/session');
   expect(await screen.findByText('Saved changes are not applied yet')).toBeInTheDocument();
+});
+
+it('hides the pending notice and nav badge when a newer saved version has unapplied: false', async () => {
+  const fetchMock = fetchRoutes({
+    '/api/v1/applies': { pointers: { ...pointers, confirmed: '1', live: '1' }, unapplied: false, items: [apply({})] },
+    '/api/v1/versions?': { state: 'saved', items: [{ id: '5', createdAt: '2026-11-21T11:00:00Z', actor: 'admin', changedObjectCount: 1 }] },
+    'POST /api/v1/config/upgrade/preview': { savedVersion: '5', questions: [] },
+  });
+  mount('/system/session');
+  // upgradePreview only fires after loadChangeState commits changes.data.head.
+  await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url === '/api/v1/config/upgrade/preview')).toBe(true));
+  expect(screen.queryByText('Saved changes are not applied yet')).not.toBeInTheDocument();
+  expect(screen.queryByText('Pending')).not.toBeInTheDocument();
 });
 
 it('says so when the change state cannot be read: no news must not look like nothing pending', async () => {

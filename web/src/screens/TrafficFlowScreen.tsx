@@ -43,6 +43,7 @@ const verdictColor: Record<FlowVerdict, string> = {
 interface LoadedContext {
   saved: Snapshot;
   liveVersion: string | null;
+  hasUnapplied: boolean;
   liveSnapshot: Snapshot['value'] | null;
   liveLinks: LinkStatus[];
   liveLeases6: Lease6[] | null;
@@ -138,12 +139,13 @@ export function TrafficFlowScreen({ api, session, onSessionLost }: TrafficFlowSc
     const liveVersion = liveApplyId
       ? (applies?.items.find((item) => item.id === liveApplyId)?.savedVersion ?? null)
       : null;
+    const hasUnapplied = applies?.unapplied ?? false;
 
-    const liveSnapshot = liveVersion && liveVersion !== saved.savedVersion
+    const liveSnapshot = liveVersion && liveVersion !== saved.savedVersion && hasUnapplied
       ? await optional(api.version(liveVersion).then((detail) => normalizeConfigValue(detail.value)), null)
       : null;
 
-    return { saved, liveVersion, liveSnapshot, liveLinks, liveLeases6, livePrefixes, liveStatusVersionMismatch };
+    return { saved, liveVersion, hasUnapplied, liveSnapshot, liveLinks, liveLeases6, livePrefixes, liveStatusVersionMismatch };
   }, [api, canReadStatus]);
 
   const resource = useResource(load, onSessionLost);
@@ -212,7 +214,7 @@ export function TrafficFlowScreen({ api, session, onSessionLost }: TrafficFlowSc
       </Group>
 
       <Loaded resource={resource} what="configuration">
-        {({ saved, liveVersion }) => {
+        {({ saved, liveVersion, hasUnapplied }) => {
           if (!activeConfig) return null;
           const zonesById = new Map(activeConfig.zones.map((z) => [z.id, z]));
           const linksById = new Map(activeConfig.links.map((l) => [l.id, l]));
@@ -268,7 +270,7 @@ export function TrafficFlowScreen({ api, session, onSessionLost }: TrafficFlowSc
             />
           ) : (
             <Badge size="sm" variant="light" color="blue">
-              {liveVersion === saved.savedVersion ? `Saved & live (v${saved.savedVersion})` : activeVersionLabel}
+              {liveVersion && !hasUnapplied ? `Saved & live (v${saved.savedVersion})` : activeVersionLabel}
             </Badge>
           );
 

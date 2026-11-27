@@ -61,6 +61,7 @@ describe('TrafficFlowScreen', () => {
       '/api/v1/config': savedSnapshot,
       '/api/v1/applies': {
         pointers: { ...pointers, live: 'app_live', confirmed: 'app_live' },
+        unapplied: true,
         items: [apply({ id: 'app_live', savedVersion: '4', state: 'confirmed' })],
       },
       '/api/v1/versions/4': {
@@ -131,7 +132,7 @@ describe('TrafficFlowScreen', () => {
   it('shows empty-config prompt without status.read and propagates 401 session loss', async () => {
     fetchRoutes({
       '/api/v1/config': { state: 'saved', savedVersion: '1', value: { links: [], segments: [], zones: [] } },
-      '/api/v1/applies': { pointers, items: [] },
+      '/api/v1/applies': { pointers, unapplied: true, items: [] },
     });
     const first = render(
       <MemoryRouter>
@@ -149,5 +150,21 @@ describe('TrafficFlowScreen', () => {
     });
     renderSimulator(['configuration.read'], onSessionLost);
     await waitFor(() => expect(onSessionLost).toHaveBeenCalledTimes(1));
+  });
+
+  it('treats saved and live as synced when applies.unapplied is false despite newer savedVersion', async () => {
+    const fetchMock = fetchRoutes({
+      '/api/v1/config': savedSnapshot,
+      '/api/v1/applies': {
+        pointers: { ...pointers, live: 'app_live', confirmed: 'app_live' },
+        unapplied: false,
+        items: [apply({ id: 'app_live', savedVersion: '4', state: 'confirmed' })],
+      },
+      '/api/v1/status/links': { items: [] },
+    });
+    renderSimulator();
+    expect(await screen.findByText('Saved & live (v5)')).toBeInTheDocument();
+    expect(screen.queryByRole('radiogroup', { name: 'Configuration to evaluate' })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url) === '/api/v1/versions/4')).toBe(false);
   });
 });

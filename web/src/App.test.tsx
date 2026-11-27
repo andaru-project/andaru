@@ -61,7 +61,7 @@ it('shows only the navigation the capabilities allow and routes between pages', 
 it('shows every branch to an administrator and starts on the dashboard', async () => {
   fetchRoutes({
     '/api/v1/session': session(['status.read', 'configuration.read', 'configuration.apply', 'users.read', 'tokens.manageSelf', 'audit.read']),
-    '/api/v1/applies': { pointers: { confirmed: null, lastKnownGood: null, pending: null, live: null }, items: [] },
+    '/api/v1/applies': { pointers: { confirmed: null, lastKnownGood: null, pending: null, live: null }, unapplied: false, items: [] },
     '/api/v1/versions?': { state: 'saved', items: [{ id: '0', createdAt: '2026-11-21T10:00:00Z', actor: 'system.root', changedObjectCount: 0 }] },
     '/api/v1/status/links': { items: [] },
     '/api/v1/status/prefixes': { wans: [] },

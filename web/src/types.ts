@@ -106,6 +106,7 @@ export interface Apply {
 
 export interface Applies {
   pointers: { confirmed: string | null; lastKnownGood: string | null; pending: string | null; live: string | null };
+  unapplied: boolean;
   items: Apply[];
 }
 

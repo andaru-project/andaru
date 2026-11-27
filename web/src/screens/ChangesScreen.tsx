@@ -49,6 +49,7 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
     // The newest apply the review saw; a newer one in the shell's change state means live may have moved.
     const lastApply = applies.items[0]?.id ?? '0';
     const reviewed = first.items[0]?.id ?? '0';
+    if (!applies.unapplied) return { lastApply, reviewed, unapplied: false, changes: null };
     const saved: VersionInfo[] = [];
     let page = first;
     collect: for (;;) {
@@ -59,10 +60,10 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
       if (!page.nextBefore) break;
       page = await api.versions(100, page.nextBefore);
     }
-    if (saved.length === 0) return { lastApply, reviewed, changes: null };
+    if (saved.length === 0) return { lastApply, reviewed, unapplied: applies.unapplied, changes: null };
     // shortcut: one request per saved version since the live one; a server-side difference (spec call 10) replaces it.
     const [baseline, preview, ...versions] = await Promise.all([api.version(liveSaved), api.previewNetwork(reviewed), ...saved.map((info) => api.version(info.id))]);
-    return { lastApply, reviewed, changes: { baseline, preview, versions } };
+    return { lastApply, reviewed, unapplied: applies.unapplied, changes: { baseline, preview, versions } };
   }, [api]);
   const review = useResource(load, onSessionLost);
   const reloadReview = review.reload;
@@ -125,7 +126,7 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
   const changes = detail?.changes;
   // Stale only when the shell has seen something newer than the review; a review newer than the
   // shell's last read (another session applied meanwhile) is not stale.
-  const stale = !detail ? '' : newer(state.head, detail.reviewed) ? `Saved version ${state.head} arrived since this review.` : newer(latest?.id ?? '0', detail.lastApply) ? 'The live configuration changed since this review.' : '';
+  const stale = !detail ? '' : newer(state.head, detail.reviewed) ? `Saved version ${state.head} arrived since this review.` : state.applies.unapplied && !detail.unapplied ? `Saved version ${state.head} has unapplied changes since this review.` : newer(latest?.id ?? '0', detail.lastApply) ? 'The live configuration changed since this review.' : '';
   const changed = changes ? differences(changes.baseline.value, changes.versions[0].value, changes.versions.flatMap((version) => version.changes)) : [];
   const names = changes ? referenceNames(changes.baseline.value, changes.versions[0].value) : new Map<string, string>();
   const errors = changes?.preview.findings.filter((finding) => finding.severity === 'error') ?? [];
@@ -159,7 +160,7 @@ export function ChangesScreen({ api, session, state, stateError, connected, onCh
       )}
       {latest?.state === 'activating' && <Alert color="blue" role="status" title="Activating">Applying saved version {latest.savedVersion}…{latest.reason && ` ${latest.reason}`}</Alert>}
       {(latest?.state === 'failed' || latest?.state === 'rolled_back') && <Alert color="red" role="status" title={latest.state === 'failed' ? 'The last apply failed' : 'The last apply was rolled back'}>Apply {latest.id} of saved version {latest.savedVersion}.{latest.reason && ` ${latest.reason}`}</Alert>}
-      {latest?.state === 'confirmed' && latest.id === live?.id && !newer(state.head, live.savedVersion) && <Alert color="green" role="status" title="Confirmed">Apply {latest.id} of saved version {latest.savedVersion} is confirmed.</Alert>}
+      {latest?.state === 'confirmed' && latest.id === live?.id && !state.applies.unapplied && <Alert color="green" role="status" title="Confirmed">Apply {latest.id} of saved version {latest.savedVersion} is confirmed.</Alert>}
 
       <Paper withBorder p="md">
         <Title order={3} size="h4">What is live</Title>
