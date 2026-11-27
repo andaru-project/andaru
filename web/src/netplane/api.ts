@@ -514,18 +514,26 @@ export async function answersWithoutToken(): Promise<boolean> {
 
 /** Stores the token and checks the server accepts it; a token it refuses, or could not check, is not kept. */
 export async function signIn(token: string): Promise<void> {
+  const trimmed = token.trim();
+  if (trimmed === '') throw new ApiError(400, 'VALIDATION_FAILED', 'Enter the API token.');
   signInGen++;
-  setTokenCookie(token.trim());
-  let accepted: boolean;
+  setTokenCookie(trimmed);
+  // Only a plain success accepts the token: a 401 refuses it, and an error or a redirect (a proxy's login page) says
+  // nothing about it, so it is not kept either.
+  let resp: Response;
   try {
-    accepted = await hasAccess();
+    resp = await fetch(buildApiUrl('/diagnostics?limit=1', null), { credentials: 'same-origin', cache: 'no-store', signal: readSignal() });
   } catch {
     signOut();
     throw new ApiError(0, 'DISCONNECTED', 'Could not reach the Netplane server.');
   }
-  if (!accepted) {
+  if (resp.status === 401) {
     signOut();
     throw new ApiError(401, 'UNAUTHORIZED', 'The server did not accept this token.');
+  }
+  if (!resp.ok || resp.redirected) {
+    signOut();
+    throw new ApiError(resp.status, 'UNAVAILABLE', `The server could not check this token (HTTP ${resp.status}${resp.redirected ? ', redirected' : ''}). Try again.`);
   }
 }
 

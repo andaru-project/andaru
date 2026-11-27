@@ -43,6 +43,14 @@ it('takes the server for one without a token only on a plain success without the
   expect(await answersWithoutToken()).toBe(false); // a proxy's login page
 });
 
+it('keeps no token on an answer that neither accepts nor refuses it, and asks for one that is empty', async () => {
+  fetchRoutes({ '/api/v1/diagnostics': jsonResponse(502, {}) });
+  await expect(signIn('secret')).rejects.toThrow('could not check this token');
+  expect(document.cookie).not.toContain('netplane_token=');
+  await expect(signIn('  \n')).rejects.toThrow('Enter the API token.');
+  expect(document.cookie).not.toContain('netplane_token=');
+});
+
 it('keeps no token it could not check, and says the server is unreachable', async () => {
   fetchRoutes({ '/api/v1/diagnostics': new TypeError('Failed to fetch') });
   await expect(signIn('secret')).rejects.toThrow('Could not reach the Netplane server.');
