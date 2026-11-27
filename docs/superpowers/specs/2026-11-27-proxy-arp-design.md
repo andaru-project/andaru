@@ -42,7 +42,7 @@ Kernel 6.12, systemd 257 (Debian 13), 2026-11-27, in network namespaces: an ISP 
 | `segment` | `proxyArp` only, required: the segment on whose link the firewall answers ARP. |
 
 **Validation of a `proxyArp` entry:**
-- IPv4 only: "Proxy NDP is not offered yet (#43)." at `/address`.
+- IPv4 only: "Expected an IPv4 address; for an IPv6 host on the uplink's prefix, use a proxyNdp entry." at `/address`. Proxy NDP is its own kind ([design](2026-11-27-proxy-ndp-design.md)).
 - Inside a static IPv4 subnet of its segment: "Expected an address on one of the segment's static IPv4 subnets." A segment addressed by DHCP or PPPoE has no known subnet and is refused at `/segment`.
 - It contains none of any segment's static addresses or gateways, no `address` virtual address, and overlaps no other `proxyArp` entry. A gateway inside it would be routed to `andaru-vip`, cutting the uplink off: "This range holds a segment's gateway."
 - It holds no other host the declaration names, whose traffic the route to `andaru-vip` would take over, nor its subnet's network or broadcast address. One message for each, at `/address`:
