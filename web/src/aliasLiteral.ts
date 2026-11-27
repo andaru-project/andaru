@@ -179,6 +179,7 @@ export function parsePortLiteralValue(raw: string): ParsedPortLiteral | null {
       const span = parsePortSpan(part);
       if (!span) return null;
       const canonical = span.first === span.last ? String(span.first) : `${span.first}-${span.last}`;
+      if (part !== canonical && part !== `${span.first}-${span.last}`) return null;
       if (!ports.includes(canonical)) ports.push(canonical);
     }
     return { protocol: proto, ports };

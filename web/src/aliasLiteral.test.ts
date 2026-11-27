@@ -107,6 +107,8 @@ describe('parsePortLiteral', () => {
     }]);
     expect(parseAliasLiterals('ports', 'icmpv6/packet-too-big')[0]?.value).toBe('icmpv6/packet-too-big');
     expect(parsePortLiteralValue('tcp/443-443,443')).toEqual({ protocol: 'tcp', ports: ['443'] });
+    expect(parsePortLiteralValue('tcp/ 443')).toBeNull();
+    expect(parsePortLiteralValue('tcp/80, 443')).toBeNull();
     expect(parsePortLiteral('0')).toEqual([]);
     expect(parsePortLiteral('65536')).toEqual([]);
     expect(parsePortLiteral('90-80')).toEqual([]);
